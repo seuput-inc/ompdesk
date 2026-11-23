@@ -22,7 +22,7 @@ afterAll(runCleanups, CLEANUP_MS);
 
 /**
  * A report another session sends (`ompdesk_report`) reaches a busy receiver between its steps, not after its turn:
- * main's delivery (`deliveryFor`) through the bridge's `agent_control.mail` on the installed omp, with a scripted
+ * the delivery frames from the core's mailbox through `agent_control.mail` on the installed omp, with a scripted
  * OpenAI-compatible provider on loopback (no model spend).
  *
  * Reported on 21 Oct 2026: an orchestrating session sat in a long `wait` on a background job while four child reports

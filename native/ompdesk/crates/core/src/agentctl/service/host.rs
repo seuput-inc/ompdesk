@@ -19,7 +19,7 @@ use super::fail::{Fail, R, SavedFolder};
 use super::types::{
     AgentMessage, BranchEvidence, BranchFacts, ClosedChild, ControlDevice, ControlTab,
     LandingFacts, MergeOutcome, OpenedChild, RpcCommand, RpcResponse, SafeRemoval, ScheduleCreated,
-    ScheduleDraft, SchedulesState, SessionSummary, SpawnRequest, Spawned, StoredSession,
+    ScheduleDraft, SchedulesState, SessionSummary, SpawnRequest, Spawned, StoredSession, Tool,
     WorktreeRef, WorktreeRemoval,
 };
 use crate::agentctl::app::AppState;
@@ -280,6 +280,29 @@ pub enum Deadline {
     None,
 }
 
+#[derive(Serialize)]
+struct ParseArgs<'a> {
+    tool: &'static str,
+    args: &'a Value,
+    loose: bool,
+}
+
+#[derive(Deserialize)]
+struct PartialSchedule {
+    action: String,
+    fields: HashMap<String, bool>,
+}
+
+#[derive(Deserialize)]
+struct ParsedArgs {
+    ok: bool,
+    #[serde(default)]
+    args: Value,
+    #[serde(default)]
+    error: String,
+    schedule: Option<PartialSchedule>,
+}
+
 /// A typed wrapper over the port: main's snapshot, its asks and its tells.
 #[derive(Clone)]
 pub struct Host {
@@ -405,29 +428,50 @@ impl Host {
         Ok(self.port.ask(method, &args).await?)
     }
 
-    /// `args.parse {tool, args, loose}` → `{ok: true, args}` | `{ok: false, error}`: `looseArgs` and the tool's zod
-    /// schema (`tools.ts` `ARGS`), which stay in TypeScript beside the tools' JSON schemas.
-    pub async fn parse_args(
-        &self,
-        tool: &str,
-        args: &Value,
-        loose: bool,
-    ) -> R<Result<Value, String>> {
-        let answer: Value = self
-            .ask(
-                "args.parse",
-                json!({ "tool": tool, "args": args, "loose": loose }),
-            )
-            .await?;
-        Ok(if answer.get("ok").and_then(Value::as_bool) == Some(true) {
-            Ok(answer.get("args").cloned().unwrap_or(Value::Null))
+    /// Zod and JavaScript's string coercions run in main. Schedule action checks follow every
+    /// continuable field error, before the caller is resolved or a schedule is touched.
+    pub async fn parse_args(&self, tool: Tool, args: &Value, loose: bool) -> R<Value> {
+        let request = ParseArgs {
+            tool: tool.name(),
+            args,
+            loose,
+        };
+        let answer: ParsedArgs = self.port.ask("args.parse", &request).await?;
+        let mut issues = answer.error;
+        if tool == Tool::Schedule {
+            let issue = |message: &str| {
+                if !issues.is_empty() {
+                    issues.push_str("; ");
+                }
+                issues.push_str(message);
+            };
+            if answer.ok {
+                let action = answer.args["action"].as_str().unwrap_or("");
+                super::schedules::action_issues(
+                    action,
+                    |key| answer.args.get(key).map(|value| value.as_str() != Some("")),
+                    issue,
+                );
+            } else if let Some(partial) = answer.schedule {
+                super::schedules::action_issues(
+                    &partial.action,
+                    |key| partial.fields.get(key).copied(),
+                    issue,
+                );
+            }
+        }
+        if answer.ok && issues.is_empty() {
+            Ok(answer.args)
+        } else if issues.is_empty() {
+            Err(Fail::Tool("invalid arguments".to_owned()))
+        } else if loose {
+            Err(Fail::Tool(format!(
+                "Invalid arguments for {}: {issues}",
+                tool.name()
+            )))
         } else {
-            Err(answer
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("invalid arguments")
-                .to_owned())
-        })
+            Err(Fail::Tool(format!("Invalid arguments: {issues}")))
+        }
     }
 
     /// `mail(tabId, content, details, delivery)`: one report into a session. A queued aside is journaled at the

@@ -11,7 +11,7 @@ use super::super::host::Deadline;
 use super::super::sessions::CloseHow;
 use super::super::types::{
     AppArgs, AppListArgs, AutopilotArgs, ControlDevice, ControlTab, RpcCommand, RpcResponse,
-    SpawnRequest,
+    SpawnRequest, Tool,
 };
 use super::super::util::{Flight, join};
 use super::super::{AgentControl, Inner, TAB_GONE};
@@ -346,14 +346,7 @@ impl AgentControl {
         let (Some(tabs), Some(caller)) = (tabs, caller) else {
             return fail(TAB_GONE);
         };
-        let parsed = match self
-            .host
-            .parse_args("ompdesk_autopilot", raw, false)
-            .await?
-        {
-            Ok(parsed) => parsed,
-            Err(message) => return fail(message),
-        };
+        let parsed = self.host.parse_args(Tool::Autopilot, raw, false).await?;
         let args: AutopilotArgs = serde_json::from_value(parsed).map_err(|error| {
             Fail::other(format!(
                 "ompdesk_autopilot: arguments as validated could not be read: {error}"

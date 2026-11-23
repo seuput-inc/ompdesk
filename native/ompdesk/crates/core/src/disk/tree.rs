@@ -129,7 +129,7 @@ fn remove_tree(target: &Path, scope: &Scope) -> Result<(), Removal> {
 }
 
 #[cfg(not(windows))]
-fn unlink(target: &Path, _meta: &fs::Metadata) -> io::Result<()> {
+pub(crate) fn unlink(target: &Path, _meta: &fs::Metadata) -> io::Result<()> {
     fs::remove_file(target)
 }
 
@@ -140,7 +140,7 @@ fn unlink(target: &Path, _meta: &fs::Metadata) -> io::Result<()> {
     clippy::permissions_set_readonly_false,
     reason = "Windows only: it clears the read-only attribute, it makes nothing world-writable"
 )]
-fn unlink(target: &Path, meta: &fs::Metadata) -> io::Result<()> {
+pub(crate) fn unlink(target: &Path, meta: &fs::Metadata) -> io::Result<()> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
     if meta.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {
@@ -301,6 +301,17 @@ pub fn write_atomic_if(
     dir_mode: u32,
     commit: &dyn Fn() -> bool,
 ) -> Result<bool, Fault> {
+    write_atomic_with_retries(file, bytes, mode, dir_mode, commit, &RENAME_RETRY_MS)
+}
+
+pub(crate) fn write_atomic_with_retries(
+    file: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+    dir_mode: u32,
+    commit: &dyn Fn() -> bool,
+    waits: &[u64],
+) -> Result<bool, Fault> {
     if let Some(dir) = file.parent() {
         make_dirs(dir, dir_mode)?;
     }
@@ -314,7 +325,7 @@ pub fn write_atomic_if(
         if let Some(mode) = mode {
             chmod(&temp, mode)?;
         }
-        for wait in RENAME_RETRY_MS.iter().map(Some).chain([None]) {
+        for wait in waits.iter().map(Some).chain([None]) {
             if !commit() {
                 return Ok(false);
             }

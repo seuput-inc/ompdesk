@@ -61,6 +61,23 @@ import { TERMINAL_READ_DEFINITION } from "./terminal/agent-tool";
 
 /** `ctx.send` from GUI-side handlers: stock commands such as `get_entries` on a long session. */
 const LOCAL_SEND_TIMEOUT_MS = 120_000;
+const GUI_BRIDGE_COMMANDS: Record<string, true> = {
+	get_advisor_stats: true,
+	regenerate_session_title: true,
+	abort_maintenance: true,
+	get_force_tool: true,
+	get_context_report: true,
+	preview_share_session: true,
+	get_copy_targets: true,
+	get_last_link: true,
+	get_settings_schema: true,
+	get_model_role_metadata: true,
+	get_model_setup_facts: true,
+	get_session_spend: true,
+	get_recent_models: true,
+	get_next_prompt: true,
+	worktree_lifecycle_settings: true,
+};
 const QUEUE_COMMANDS: Record<string, true> = {
 	get_queue: true,
 	queue_remove: true,
@@ -641,7 +658,7 @@ class BridgeRelay implements BridgeClient {
 		return this.#request("sidecar.bridge", { method, params }, options);
 	}
 
-	guiCommand(command: "get_advisor_stats" | "regenerate_session_title"): Promise<unknown> {
+	guiCommand(command: RpcCommand["type"]): Promise<unknown> {
 		return this.#request("sidecar.guiBridge", { command });
 	}
 
@@ -1133,7 +1150,7 @@ export class SidecarManager extends EventEmitter {
 				const type = command.type;
 				const read = type === "get_turn_edits" ? new AbortController() : undefined;
 				const handler =
-					type === "get_advisor_stats" || type === "regenerate_session_title"
+					GUI_BRIDGE_COMMANDS[type] === true
 						? () => relay.guiCommand(type)
 						: read
 							? () => relay.turnEdits(read.signal)

@@ -9,7 +9,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { parseDocument } from "yaml";
 import type { RpcCommand, RpcResponse } from "../../../shared/rpc-types";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "../../bridge-client";
-import { OMP_COMMAND, INSTALLED_OMP as omp } from "../../test-bridge-probe";
+import { OMP_COMMAND, INSTALLED_OMP as omp, stockFixtureEnv } from "../../test-bridge-probe";
 import { writeFakeBin } from "../../test-fake-omp";
 import { StockRpc } from "../../test-stock-rpc";
 import type { LocalCommandContext } from "../types";
@@ -82,9 +82,7 @@ describe.skipIf(!existsSync(omp))("installed stock worktree bridge", () => {
 			{
 				cwd: repo,
 				env: {
-					...process.env,
-					PI_CODING_AGENT_DIR: agent,
-					PI_CONFIG_DIR: path.relative(os.homedir(), scratch),
+					...stockFixtureEnv(scratch),
 					OMP_GUI_BRIDGE: address,
 					OMP_WORKTREE_DIR: "",
 					OMP_TEST_PR: payload,
@@ -177,13 +175,24 @@ describe.skipIf(!existsSync(omp))("installed stock worktree bridge", () => {
 				cwd: string;
 			};
 			expect(await fs.realpath(moved.cwd)).toBe(relative);
+			await fs.writeFile(path.join(relative, "ordinary.txt"), "file");
+			for (const [input, reason] of [
+				["ordinary.txt", "Not a directory"],
+				["missing", "Directory does not exist"],
+				[path.join("ordinary.txt", "child"), "Directory does not exist"],
+			] as const) {
+				const target = await bridge.request<{ path: string }>("workspace.resolve_path", { path: input });
+				await expect(workspace.move_session({ type: "move_session", path: input }, ctx)).rejects.toEqual(
+					new Error(`${reason}: ${target.path}`),
+				);
+			}
 			const movedUrl = (await workspace.move_session(
 				{ type: "move_session", path: pathToFileURL(repo).href },
 				ctx,
 			)) as { cwd: string };
 			expect(await fs.realpath(movedUrl.cwd)).toBe(repo);
 			const movedHome = (await workspace.move_session({ type: "move_session", path: "~" }, ctx)) as { cwd: string };
-			expect(await fs.realpath(movedHome.cwd)).toBe(await fs.realpath(os.homedir()));
+			expect(await fs.realpath(movedHome.cwd)).toBe(scratch);
 		} finally {
 			bridge.close();
 			rpc.rejectAll("test teardown");

@@ -10,14 +10,14 @@ src/main/agent-control/branches.test.ts	exception	Asserts the commits, changed f
 src/main/agent-control/branches.ts	port	Runs the pre-merge hook before allowing git.mergeBranch and the post-merge hook after success; coordinates archival before discard.
 src/main/agent-control/host.test.ts	exception	Tests session visibility, permissions, opening and delivery through AgentControlRuntime with host dependencies.
 src/main/agent-control/host.ts	port	Resolves local or paired folders and routes session creation, confirmations, worktree requests and mail to their owning windows or devices.
-src/main/agent-control/mail.ts	port	deliveryFor decides which report kinds start a turn as an aside and which only notify the receiver.
+src/main/agent-control/mail.ts	exception	MAIL_KINDS is tool schema vocabulary; MailDelivery is the host callback type. agentctl/service/mod.rs calls Rust delivery_for before mail_attached; the stock bridge tests supply example frames.
 src/main/agent-control/service.test.ts	exception	Exercises agent-control commands across sessions, asks, visibility, branch operations and reports using a test host.
-src/main/agent-control/service.ts	port	Reopens the agentControl service after loss, caches a last host snapshot and chooses which host data and actions to expose to Rust.
+src/main/agent-control/service.ts	port	Core owns schedule action constraints and socket status. Main still reopens the service after core loss, snapshots host state and handles JS field parsing (including Date.parse and Zod issue ordering).
 src/main/agent-control/skill-drift.test.ts	exception	Compares documented tool names, parameters and enum values against the host tool definitions.
 src/main/agent-control/target-answer.test.ts	exception	Tests ordering and refusal when delivering notes, attachments and answers to an open question.
-src/main/agent-control/target-answer.ts	port	Deduplicates completed and in-flight answers, claims the question or plan and sequences checks, notes and answer delivery.
+src/main/agent-control/target-answer.ts	port	Hub batch, §1.3(c): sidecar-pool.ts and remote/host-services.ts own the open question and plan claims. TargetAnswer claims before its first await, then attaches the note and answers the same claim. Move the transaction with those owners; never interpose an RPC before the exclusive claim.
 src/main/agent-control/tools.test.ts	exception	Tests tool registration, accepted arguments and exclusion of account or permission controls.
-src/main/agent-control/tools.ts	port	Coerces stringified booleans, numbers, arrays and objects recursively according to each tool schema before strict argument parsing.
+src/main/agent-control/tools.ts	mixed	Core validates schedule action/field combinations before dispatch. Stock reads tool definitions synchronously at set_host_tools; Zod field constraints and JS number/JSON coercions stay with that schema.
 src/main/ai-memory/ambiguous-names.test.ts	exception	Tests guarded project renaming and collision handling when the server refuses a name.
 src/main/ai-memory/ambiguous-names.ts	native-client	Registers the client callbacks for upkeep.renameAmbiguous and returns the Rust rename report.
 src/main/ai-memory/backfill.test.ts	exception	Tests which journal replies become redacted conclusions and how the pass maps them to projects.
@@ -60,18 +60,18 @@ src/main/cli-tools/plans.test.ts	exception	Checks package-manager executable sel
 src/main/cli-tools/plans.ts	port	Selects owner-specific check and update commands, parses latest versions and decides when running tools must wait.
 src/main/cli-tools/updater.test.ts	exception	Exercises provider filtering, supervised updates and post-update detection using controlled dependencies.
 src/main/cli-tools/updater.ts	port	Schedules detection and version checks, defers busy tools, runs updates and manages temporary package directories for probes.
-src/main/control-socket/backend.ts	port	Hides private tabs and maps waiting, starting, stopped, busy and idle states for socket callers.
+src/main/control-socket/backend.ts	native-client	The backend supplies already-visible host facts at the pool event and forwards outside calls. The core projects socket state both for a resolved target and for numbered updates.
 src/main/control-socket/cli-install.test.ts	exception	Checks launcher contents, PATH updates and when a packaged install may replace a launcher.
-src/main/control-socket/cli-install.ts	port	Generates shell and Windows launchers, protects foreign launchers in the Bun bin folder and adds the app bin directory to the supplied PATH.
+src/main/control-socket/cli-install.ts	native-client	control.installCli writes the launchers; the startup adapter supplies the local platform and bin directories, appends the latter to the host PATH, and logs a failed install without stopping app startup.
 src/main/control-socket/cli.test.ts	exception	Drives the CLI with arguments and stdin and checks caller identity, text output and JSON output.
 src/main/control-socket/control-test-rig.ts	exception	Supplies a fake control backend, temporary endpoints and a line-oriented client for socket tests.
-src/main/control-socket/endpoint.ts	port	Chooses random named pipes on Windows or short hashed socket directories on Unix when the normal path exceeds 103 bytes.
-src/main/control-socket/env.ts	port	Stores the live endpoint, removes inherited control variables and disables access in foreign child environments.
+src/main/control-socket/endpoint.ts	port	Hub batch, §1.3(a,c): control-socket/index.ts computes the random pipe or short Unix socket before its first await. sidecar-factory.ts can already read the published endpoint for a spawn while prepareDir runs. Move naming with controlEnvFor's synchronous consumers.
+src/main/control-socket/env.ts	port	Hub batch, §1.3(a,c): sidecar-factory.ts and terminal/ipc.ts read controlEnvFor at spawn time; sidecar.ts and stock-helper.ts strip inherited variables synchronously. The native spawn owners must take all of these reads before the endpoint state moves.
 src/main/control-socket/events.test.ts	exception	Tests live subscription boundaries, sequence ordering and turn-end events over a socket connection.
-src/main/control-socket/index.ts	port	Publishes the endpoint before listen, orders directory and token preparation, and withdraws the endpoint on failed start or close.
+src/main/control-socket/index.ts	port	Hub batch, §1.3(c): ipc.ts calls startControlSocket without awaiting it. The endpoint is set before directory/token preparation and withdrawn on failed listen or close. Move startup with the spawn-time readers in sidecar-factory.ts; Rust already prepares the directory, token and listener.
 src/main/control-socket/router.test.ts	exception	Tests request routing, successful frames carrying tool errors and unknown-session responses.
 src/main/control-socket/server.test.ts	exception	Exercises socket handshake, caller defaults and tool calls over real connections.
-src/main/control-socket/server.ts	port	Restarts the Rust listener after a lost core, releases tracked outside callers and fences late backend replies by listener epoch.
+src/main/control-socket/server.ts	port	Restarts the listener after core loss, releases outside callers, fences late replies by listener epoch, and takes its synchronous pool snapshot before numbering a push (§1.3c). The core computes the reported statuses.
 src/main/core/answer-fence.test.ts	exception	Verifies that replies to remote-byte and memory-sync questions go only to the core generation that asked.
 src/main/core/hub.bench.ts	exception	Benchmark of a synchronous hub call that publishes an item; not application startup code.
 src/main/core/hub.test.ts	exception	Exercises nested calls, synchronous questions and asynchronous answers on the hub connection.
@@ -153,18 +153,18 @@ src/main/github-auth/service.ts	port	Owns the gh login state machine, including 
 src/main/github-auth/test-fake-gh.ts	exception	Writes a fake gh executable and seeds account records for sign-in tests.
 src/main/local/agent-control.ts	port	Enforces attachment path versus image-index exclusivity and size limits on messages and images before calling the stock bridge.
 src/main/local/agent-files.test.ts	exception	Tests creating, overwriting, renaming and protecting agent definition files in test directories.
-src/main/local/agent-files.ts	port	Confines edits to user or project agent directories, validates frontmatter names and writes files atomically without replacing another agent.
+src/main/local/agent-files.ts	mixed	fs.agentFile authorizes direct paths and owns file mutations. Stock supplies the directories and validates Markdown. Main reads existing regular files without a size cap or a second whole-file wire buffer; the page shares template and name rules (§1.3d).
 src/main/local/auto-mode.test.ts	exception	Tests applying plan and goal decisions and routing the associated stock commands.
 src/main/local/auto-mode.ts	port	Applies a mode decision by enabling stock plan mode or creating a goal and undoes each differently.
 src/main/local/autopilot.test.ts	exception	Tests read-only ahead/behind counts and refusals for invalid roots and option-like refs.
 src/main/local/autopilot.ts	port	Checks refs before git.autopilotBranchStatus, restricts bridge methods and refuses set_autopilot outside the local window.
 src/main/local/composer.test.ts	exception	Tests merging stock state with bridge extras, fast-mode handling and defaults when the bridge is down.
-src/main/local/composer.ts	port	Merges stock and bridge state with bounded reads, filters reasoning levels, refuses busy context clears and routes composer actions.
+src/main/local/composer.ts	mixed	Rust sidecar.guiBridge forwards maintenance abort, forced tool, context report and share preview. TS still merges stock/bridge state, filters reasoning levels, guards busy context clears and validates parameterized actions.
 src/main/local/copy-targets.test.ts	exception	Tests message and command ranking, fenced quote exclusion and handoff fallback for copy targets.
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
 src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
 src/main/local/extensions.ts	port	Verifies transcript journal tails, expands referenced images and notifies sessions of MCP changes.
-src/main/local/git.ts	port	Dispatches local SCM and PR commands and verifies repository ownership before restoring a worktree. Compare native-root-mini-intake's local_dispatch/ candidate with the current command, result and refusal contracts before reuse.
+src/main/local/git.ts	mixed	sidecar.guiBridge reads worktree lifecycle settings from the requesting spawn. Main dispatches SCM and PR commands and verifies repository ownership before restoring a worktree.
 src/main/local/git/changes.test.ts	exception	Tests net tracked changes, rename counts and treatment of untracked or binary files in real checkouts.
 src/main/local/git/changes.ts	native-client	Forwards repository reads to git.*. git.diff validates the path before reporting missing git or reading the checkout.
 src/main/local/git/exec-brew.test.ts	exception	Tests macOS gh discovery with a temporary shell and Homebrew bin directory.
@@ -173,15 +173,14 @@ src/main/local/git/exec.test.ts	exception	Tests rediscovery after a missing bina
 src/main/local/git/exec.ts	port	Resolves binaries and their environments, runs bounded child processes and serializes or cancels mutating steps under per-repository locks.
 src/main/local/git/git-env.test.ts	exception	Injects Git repository selectors and verifies reads and writes stay in the intended checkout unless explicitly overridden.
 src/main/local/git/github.test.ts	exception	Tests GitHub request validation, quiet gh invocation and classification of missing remotes versus a signed-out user.
-src/main/local/git/github.ts	port	Validates each GitHub operation and host/repo syntax, rejects flag-like inputs and resolves clone destinations before gh.github.
+src/main/local/git/github.ts	port	gh.github executes the validated request. The host checks shared repo and host syntax before looking up gh (§1.3d). For a Windows verbatim UNC share root, Node dirname returns the server path while Rust Path::parent returns None. Keep path.resolve and dirname together for clone admission and its errors.
 src/main/local/git/origin.test.ts	exception	Tests project identity and worktree classification for ordinary, Autopilot and agent checkouts.
-src/main/local/git/origin.ts	port	Canonicalizes roots, coalesces lookups and caches known and unknown origins with separate expirations around git.originFacts.
-src/main/local/git/parse.test.ts	exception	Tests path confinement, slug generation, conditional PR templates and draft extraction from noisy model output.
-src/main/local/git/parse.ts	port	Validates refs and input slugs, renders PR prompts and extracts a title and body from model output. Repository path checks and worktree name allocation run in core.
+src/main/local/git/origin.ts	native-client	git.cachedProjectOrigin checks folder presence and the native cache before the host resolves git. git.projectOrigin coalesces misses and canonicalizes the checkout; only shared page naming and the uncached git.originFacts client remain.
+src/main/local/git/parse.test.ts	exception	Tests path containment, ref validity and worktree slug generation.
+src/main/local/git/parse.ts	port	Validates refs and worktree slugs and checks path containment for host callers. PR prompt rendering is native; draft reply extraction stays with the guarded host model call.
 src/main/local/git/pr-create-stock.test.ts	exception	Compares the gh pr create arguments and resulting PR number with stock behavior.
-src/main/local/git/pr-draft-system.md	exception	Static instructions for the draft model's title, body sections and JSON reply format.
-src/main/local/git/pr-draft-user.md	exception	Static model prompt template for a branch's commit list, changed files and optional diff statistics.
-src/main/local/git/pr.ts	port	Builds a PR drafting prompt from Rust facts, invokes stock omp and extracts draft fields; also checks PR numbers and review text.
+src/main/local/git/pr-draft.test.ts	exception	Exercises gh.prDraftPrompt with a disposable checkout, the real Credit use wrapper and a stand-in model run. Covers a policy change during lookup and redaction of error output.
+src/main/local/git/pr.ts	mixed	gh.prDraftPrompt reads git and renders the prompt. The tab's guarded omp.run reads Credit use immediately before spawning the model (§1.3c); draft output is parsed where it arrives. PR number/review validation and stock bridge checkout remain.
 src/main/local/git/repo-lock.test.ts	exception	Tests independent repo locks, serial mutations per repository and fencing of work from a stopped holder.
 src/main/local/git/scm-history.test.ts	exception	Tests branch mutations, occupied branches and conflict continuation or abort against real repositories.
 src/main/local/git/scm.test.ts	exception	Tests working-tree and index effects of staging, unstaging, discard and other SCM commands.
@@ -193,7 +192,7 @@ src/main/local/git/test-repos.ts	exception	Builds and copies reusable temporary 
 src/main/local/git/unlanded.test.ts	exception	Tests comparison against the merge base and remote default branch, including main and detached HEAD exclusions.
 src/main/local/git/unlanded.ts	native-client	Delegates the whole comparison to the Rust core method git.unlanded through coreGit.
 src/main/local/git/worktree-seed.test.ts	exception	Tests include patterns, ignored and tracked file handling and the worktree seeding size budget.
-src/main/local/git/worktree-seed.ts	port	Executes setup and merge hook scripts with a timeout, writes their output logs and combines setup results with Rust seeding results.
+src/main/local/git/worktree-seed.ts	port	Setup batch owns runWorktreeHook with its standalone supervisor: main holds the child's stdin lease across a core restart (§1.3c). Local keeps seedWorktree (git.worktreeSeed client), prepareWorktree (joins seed failure and the later host hook result) and synchronous describePreparation (including a paired host's result); none can move independently of its consumer.
 src/main/local/git/worktree.test.ts	exception	Tests real Git creation and removal, occupied folders and branches, exact branch names, exhaustion, rollback guards and checkout spelling.
 src/main/local/git/worktree.ts	port	Validates input and stock's location, locks the repository and invokes preparation. git.worktreePlan preserves checkout spelling; git.worktreeAdd chooses and creates the first free path and branch. Git absent: gitRunner throws before heldAnswer sends git.worktreeRemoval (exec.ts); runLocalCommand reports “git is not installed or not on PATH” without a code even for an outside path. No removal plan, lock or deletion executes. With Git available an outside target still fails worktree_outside_root.
 src/main/local/image-blobs.test.ts	exception	Tests restoration of stock blob references on subagent and bridge transcript reads.
@@ -203,25 +202,26 @@ src/main/local/index.ts	port	Rejects duplicate local commands, looks up local ha
 src/main/local/judge-assist.ts	port	Accepts only error or blank preview findings and treats judge bridge failures as unjudged or unavailable.
 src/main/local/mcp-live-changes.test.ts	exception	Tests which successful MCP operations propagate a server-specific or full reload to other sessions.
 src/main/local/misc.test.ts	exception	Tests filtering stock plugin doctor output and confirms that only the host, not a local handler, installs omp updates.
-src/main/local/misc.ts	port	Runs plugin doctor and update checks through the omp CLI, parses their output and turns invalid responses into local errors.
+src/main/local/misc.ts	mixed	omp.pluginDoctor and omp.checkUpdate execute and project stock reports. Main passes the resolved CLI launch and routes session-bound bridge calls; the security-validation follow-up still goes to the live session.
 src/main/local/modes.ts	port	Distinguishes goal creation, replacement, resumption and dropping, applies time limits and starts objective turns when idle.
 src/main/local/next-prompt.test.ts	exception	Tests bridge routing, invalid draft flags and handling of suggestion and inline completion commands.
-src/main/local/next-prompt.ts	port	Enforces child-count, title, draft and request-ID limits and admissible refresh and cancel values before calling stock suggestion methods.
+src/main/local/next-prompt.ts	mixed	sidecar.guiBridge reads prompt suggestion state. Main validates parameterized requests against the shared draft, title, child and request-ID limits before calling stock.
 src/main/local/prompt-origin.test.ts	exception	Tests prompt provenance validation and which person-typed messages are noted to the bridge.
 src/main/local/prompt-origin.ts	port	Selects person-authored prompt and steer commands and caps the wait for recording their text at 500 ms.
 src/main/local/queue.test.ts	exception	Drives edits through the real Rust sidecar, checks chip identity across queue updates, and verifies that direct stock commands still bypass GUI edits.
 src/main/local/session-dump.test.ts	exception	Tests stock archive requests, redaction, removal of non-text entries and cleanup of the original file.
 src/main/local/session-dump.ts	port	Rebuilds a private redacted ZIP, omits binary entries, removes the original and permits deletion only for recorded output paths.
-src/main/local/session-extras.ts	port	Restricts foreign import sources and combines stock session stats with a separate usage-history request.
-src/main/local/session-files.ts	port	Checks an offline session exists, runs a short-lived stock rename and retries with a default model only on a restore failure.
+src/main/local/session-extras.ts	mixed	Rust sidecar.guiBridge forwards copy targets and last link. TS restricts foreign import sources and combines stock session stats with a separate usage-history request.
+src/main/local/session-files.test.ts	exception	Renames synthetic sessions through the core with a stand-in stock CLI; checks argv, stdin, matched replies, missing files and the single restore retry.
+src/main/local/session-files.ts	native-client	omp.renameStoredSession checks the file and runs stock's fixed offline rename RPC in the temp directory; main supplies only the resolved launcher and environment.
 src/main/local/sessions.test.ts	exception	Tests paged transcript reads, stale snapshot cursors and retries when a live tail changes.
 src/main/local/sessions.ts	port	Encodes snapshot-bound transcript cursors, caches tails, shrinks oversized backward pages and retries stale uncursored tail reads.
 src/main/local/settings.test.ts	exception	Tests model catalog availability without optional metadata and merging stock and bridge account data.
-src/main/local/settings.ts	port	Merges stock logout accounts and bridge usage data and cancels browser login via a timed loopback callback.
+src/main/local/settings.ts	mixed	Rust sidecar.guiBridge forwards schema, role metadata, setup facts, spend and recent models. TS merges logout accounts and usage data, routes parameterized settings and cancels browser login via a timed loopback callback.
 src/main/local/slash.ts	port	Caches builtin slash names and aliases per bridge and rejects a command not offered by the running stock version.
 src/main/local/subagent-journal-tail.test.ts	exception	Tests reading journal deltas with tail tokens and resetting when a journal is replaced.
 src/main/local/types.ts	exception	Defines stock, bridge and handler contracts plus the coded LocalCommandError wrapper; no independent command implementation.
-src/main/local/workspace.ts	port	Refuses moves while streaming, validates and stats the target directory, runs stock /move and verifies the resulting primary cwd.
+src/main/local/workspace.ts	mixed	fs.stat checks the path stock resolved before /move. The host refuses streaming moves and checks the resulting session cwd. Only stock can resolve its live session paths, change cwd and reload the associated settings (§1.3d).
 src/main/ponytail/pack-drift.test.ts	exception	Test coverage for pinned Ponytail documents and license.
 src/main/ponytail/ponytail-stock.test.ts	exception	Test coverage for Ponytail hook registration in stock omp.
 src/main/power/lid-awake-runtime.ts	port	Selects the platform backend, spawns caffeinate, queries pmset or Windows battery state, and executes powercfg.
@@ -276,7 +276,7 @@ src/main/setup/plans.ts	port	Selects installers by tool, platform and presence, 
 src/main/setup/runner.test.ts	exception	Tests streamed output and the outcomes for success, nonzero exit and spawn failure.
 src/main/setup/runner.ts	port	Enforces one installer at a time, drains output after exit, distinguishes spawn and exit failures and closes stdin to cancel.
 src/main/setup/service.test.ts	exception	Checks launch-time install order and preservation or restoration of the prior compiled omp launcher.
-src/main/setup/service.ts	port	Queues required and optional installations, enforces retry backoff, executes plans, refreshes detection and handles cancellation and update outcomes.
+src/main/setup/service.ts	port	Queues installations, retry backoff, plan execution, detection and cancellation. latestOmp retains setup's runner and cleanup on failure; omp.parseUpdateCheck supplies the same native parser as the local update command.
 src/main/setup/supervisor.ts	port	Builds isolated launches and log redirection, including the Windows Bun launcher and command-line quoting, before starting ompdesk-core --supervise.
 src/main/setup/test-mirror.ts	exception	Starts and stops controlled HTTP mirrors for installer release and download tests.
 src/main/ssh/client.ts	port	Starts native ssh.* operations but buffers early events, keeps prompts and reports dropped runs when the core restarts.
@@ -297,13 +297,13 @@ src/main/tailscale/tailnet.ts	port	Delegates status/whois to Rust but recreates 
 src/main/tailscale/test-fake-tailscale.ts	exception	Test substitute CLI models status, serve configuration and relay responses.
 src/main/tailscale/whois.ts	exception	Declares the TailnetPeer whois response type only.
 src/main/terminal/agent-tool.test.ts	exception	Test coverage for terminal listing and snapshot selection.
-src/main/terminal/agent-tool.ts	port	Selects a terminal snapshot, strips overwritten text and formats a bounded tail for gui_terminal_read.
-src/main/terminal/ipc.ts	port	Routes local versus remote terminal operations, tracks tab ownership and enforces viewer leases before dispatch.
+src/main/terminal/agent-tool.ts	port	Remote-web batch: formatTerminalRead selects and formats the requested tail at the source of terminal.request. A separate formatter would send whole snapshots back over the wire. Stock still needs the read-only tool definition.
+src/main/terminal/ipc.ts	port	Remote-web batch with terminal:request and host-services (§1.3c). The host checks the tab owner and applies the viewer lease before it enqueues the PTY request. Pool release clears that owner's leases and disposes its terminals.
 src/main/terminal/lease.test.ts	exception	Test coverage for terminal viewer lease arbitration.
-src/main/terminal/lease.ts	port	Tracks viewer presence and idle expiry to arbitrate terminal control and resizing.
-src/main/terminal/requests.ts	port	Validates operation shape, dimensions and write size; restricts requested shells before stock-helper dispatch.
+src/main/terminal/lease.ts	port	Remote-web batch with terminal/ipc.ts (§1.3c). A resize reads the lease or a claim changes it in the same tick as the PTY request. Pool release forgets the owner's leases. No separate lease RPC.
+src/main/terminal/requests.ts	port	Remote-web batch, §1.3(c): paired remote/host-services checks the owner and immediately enqueues terminal.request, then can enqueue terminal.dispose for a closed tab. Awaiting a shell lookup before enqueue can create a shell after disposal. Move admission with the owner.
 src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ordering and deduplication.
-src/main/terminal/shells.ts	port	Probes installed platform shells, reads /etc/shells, deduplicates entries and orders the login shell first.
+src/main/terminal/shells.ts	port	Remote-web batch, §1.3(c): terminal/requests uses the same live shell list as the picker to allow only exact installed paths at create admission, before the owner can be disposed. Move both uses together with paired terminal admission.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.
 src/main/terminal/terminal-service.test.ts	exception	Test coverage for stock PTY spawn, input, resize and exit.
 src/main/update-release.fixtures/v0.131.0/PROVENANCE.md	exception	Records the source commit and license of the frozen updater compatibility fixtures.

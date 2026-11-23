@@ -15,6 +15,7 @@ runs:
         bunx vitest run --project=node
         src/main/core/process.test.ts
         src/main/initial-cwd.test.ts
+        src/main/open-path.test.ts
         src/main/hang-watchdog.test.ts
         src/main/agent-browsers.test.ts
         src/main/preview/visuals.test.ts
@@ -35,7 +36,12 @@ runs:
         src/main/setup/service.test.ts
         src/main/setup/omp-update-install.test.ts
         src/main/omp-runtime.test.ts
+        src/main/local/misc.test.ts
+        src/main/local/agent-files.test.ts
+        src/main/local/session-files.test.ts
+        src/main/agent-worktrees.test.ts
         src/main/stock-helper.test.ts
+        src/main/control-socket/cli-install.test.ts
         src/main/models-config.test.ts
         src/main/bridge-input-history.test.ts
         src/main/omp-availability.test.ts
@@ -87,7 +93,12 @@ runs:
         src/main/local/git/session-worktree.test.ts
         src/main/local/git/worktree-seed.test.ts
         src/main/local/git/exec-gh.test.ts
+        src/main/local/git/pr-draft.test.ts
+        src/main/local/git/origin.test.ts
+        src/main/local/git/stock-bridge.test.ts
         src/main/workspace-fs*.test.ts
+        src/main/media-stream.test.ts
+        src/main/workspace-search.test.ts
         src/main/disk/*.test.ts
         src/main/sidecar.test.ts
         src/main/local/queue.test.ts

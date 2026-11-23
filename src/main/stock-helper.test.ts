@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "../../resources/gui-bridge/stock-helper/dispatch";
 import type { TerminalOperation, TerminalSnapshot } from "../shared/terminal-types";
 import { core } from "./core/process";
-import { ompInstallStampFiles, StockHelper, type StockHelperOptions } from "./stock-helper";
+import { StockHelper, type StockHelperOptions } from "./stock-helper";
 
 let dir: string;
 const helpers: StockHelper[] = [];
@@ -72,14 +72,14 @@ input.on("line", line => {
 async function helperOnWorker(
 	requestTimeoutMs: number,
 	options: Omit<StockHelperOptions, "launch"> = {},
-	ompRoot?: string,
+	ompRoot: string = dir,
 ) {
 	const script = await workerScript();
 	const pids = path.join(dir, `pids-${helpers.length}`);
 	// What stands for omp's package.json: its time and size are what identifies the installed omp.
-	const stampFile = ompRoot ? path.join(ompRoot, "package.json") : path.join(dir, "omp-package.json");
+	const stampFile = path.join(ompRoot, "package.json");
 	let installs = 0;
-	const install = (version: string) => fs.writeFile(stampFile, version + " ".repeat(++installs));
+	const install = (version: string) => fs.writeFile(stampFile, JSON.stringify({ version }) + " ".repeat(++installs));
 	await install("18.18.9");
 	const helper = new StockHelper(dir, {
 		requestTimeoutMs,
@@ -87,8 +87,7 @@ async function helperOnWorker(
 		launch: async () => ({
 			bin: "bun",
 			args: [script],
-			env: { ...process.env, WORKER_PIDS: pids },
-			stampFiles: ompRoot ? await ompInstallStampFiles(ompRoot) : [stampFile],
+			env: { ...process.env, WORKER_PIDS: pids, OMP_PACKAGE_ROOT: ompRoot },
 		}),
 	});
 	helpers.push(helper);

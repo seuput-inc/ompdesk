@@ -431,7 +431,7 @@ export class SetupService {
 			},
 		);
 		const { code, output } = await promise;
-		const parsed = code === 0 ? parseUpdateCheck(output) : null;
+		const parsed = code === 0 ? await parseUpdateCheck(output) : null;
 		if (!parsed) throw new Error(updateDetail(output) ?? `omp update --check exited with code ${code}`);
 		return parsed.latestVersion;
 	}

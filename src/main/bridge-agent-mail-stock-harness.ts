@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { expect } from "vitest";
 import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contracts";
-import { deliveryFor, type MailKind } from "./agent-control/mail";
+import type { MailDelivery, MailKind } from "./agent-control/mail";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { removeWhenFree } from "./test-folders";
@@ -386,10 +386,21 @@ export const shown = (frames: readonly Frame[], id: string) =>
 			frame.message.details?.id === id,
 	);
 
+const quiet = { triggerTurn: false };
+const aside = { triggerTurn: true, deliverAs: "aside" } as const;
+const delivery = {
+	progress: quiet,
+	note: quiet,
+	done: aside,
+	blocked: aside,
+	question: aside,
+	review: aside,
+} satisfies Record<MailKind, MailDelivery>;
+
 export function mail(kind: MailKind, id: string) {
 	return {
 		content: `<ompdesk-mail from="child" title="Child" kind="${kind}">\n${id}\n</ompdesk-mail>`,
 		details: { id, from: "child", fromTitle: "Child", kind, text: id },
-		...deliveryFor(kind),
+		...delivery[kind],
 	};
 }

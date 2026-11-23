@@ -1917,8 +1917,42 @@ describe("a caller outside OMPdesk (the control socket)", () => {
 			state: "idle",
 		});
 		await expect(backend.resolve(outside, "hide0003")).rejects.toThrow("hid this session");
-		expect(backend.views().map(view => view.session)).toEqual(["main0001", "work0002"]);
-		expect(backend.view("hide0003")).toBeNull();
+		expect(backend.snapshots().map(tab => tab.tabId)).toEqual(["main0001", "work0002"]);
+	});
+
+	it("keeps private card and session data out of the socket's resolved view and watch snapshot", async () => {
+		const { backend } = outsideSetup({
+			tabs: [{ tabId: "busy0002", title: "Worker", task: "private task", sessionPath: "/private/work.jsonl" }],
+			requests: [
+				{
+					tabId: "busy0002",
+					request: {
+						type: "extension_ui_request",
+						method: "confirm",
+						id: "private-id",
+						title: "private question",
+						message: "private message",
+					},
+				},
+			],
+		});
+		expect(await backend.resolve(outside, "Worker")).toEqual({
+			session: "busy0002",
+			title: "Worker",
+			state: "blocked",
+		});
+		expect(backend.snapshots()).toEqual([
+			{
+				tabId: "busy0002",
+				title: "Worker",
+				status: "ready",
+				busy: true,
+				hidden: false,
+				resuming: false,
+				hasAsk: true,
+				hasPlan: false,
+			},
+		]);
 	});
 });
 

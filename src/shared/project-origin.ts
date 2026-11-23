@@ -3,7 +3,7 @@
  * for. The checkouts OMPdesk makes (`~/.omp/wt/gui-<name>-<hash7>`) are named after a run or a hash, so showing the
  * folder name tells the person nothing; the origin is the main checkout's folder name (`git rev-parse
  * --git-common-dir`) and the branch says what the worktree is (`autopilot/<run>`, `omp/agent/<slug>`).
- * Dependency-free: main derives it (`main/local/git/origin.ts`), the renderer words it.
+ * The local core identifies the checkout. The page and its host share the branch and folder naming rules.
  */
 
 export type WorktreeKind = "autopilot" | "agent" | "other";
@@ -82,32 +82,6 @@ export interface OriginFacts {
 	toplevel: string | null;
 	/** The first entry of `git worktree list`: where the common dir does not say (a bare or relocated git dir). */
 	primary: string | null;
-}
-
-/** The main checkout's path from the common git dir: `<main>/.git`, else the first listed worktree. */
-function mainRoot(facts: OriginFacts): string | null {
-	const common = facts.commonDir.replace(/[\\/]+$/, "");
-	if (pathBaseName(common) === ".git") return common.slice(0, common.length - ".git".length).replace(/[\\/]+$/, "");
-	return facts.primary;
-}
-
-/** Pure part of the lookup: the facts git gave for one folder, or null when they do not name a project. */
-export function deriveProjectOrigin(facts: OriginFacts): ProjectOrigin | null {
-	const root = mainRoot(facts);
-	if (!root) return null;
-	const project = pathBaseName(root).replace(/\.git$/, "") || pathBaseName(root);
-	if (!project) return null;
-	const same = (a: string, b: string) => a.replace(/[\\/]+$/, "") === b.replace(/[\\/]+$/, "");
-	if (same(facts.gitDir, facts.commonDir)) return { project, root, worktree: null };
-	return {
-		project,
-		root,
-		worktree: {
-			kind: worktreeKindOf(facts.branch),
-			branch: facts.branch,
-			slug: worktreeFolderSlug(facts.toplevel ?? facts.gitDir),
-		},
-	};
 }
 
 /** What the worktree is called beside its project: the kind's word, the child's title, or the plain branch. */

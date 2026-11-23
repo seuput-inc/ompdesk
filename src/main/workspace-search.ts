@@ -1,16 +1,11 @@
 /**
- * Files panel content search (C46/C47): the project's text through stock's own
- * pi-natives `grep` (the agent's search engine; .gitignore-aware, hidden files
- * skipped) in the stock helper worker. Main turns the panel's plain query,
- * Match case / Whole word / Regex and glob into one grep call and caps it.
- * Shared by the local IPC handler and the remote host. Never throws.
+ * Files panel content search for the local IPC handler and remote host. Invalid input is refused
+ * before asking stock to start. Regex syntax and the error shown to the user are V8's, not Bun's.
+ * The core sets grep's options on the existing stock request; pi-natives does the search.
  */
 import { z } from "zod";
 import type { IpcErrorCode } from "../shared/ipc-error-codes";
 import type { IpcFsSearchRequest, IpcFsSearchResult } from "../shared/ipc-types";
-
-/** Matches a search returns; the panel says when there are more. */
-export const SEARCH_MAX_MATCHES = 500;
 
 const SearchRequestSchema = z.object({
 	query: z.string().min(1).max(1000),
@@ -60,9 +55,8 @@ export async function searchWorkspace(
 		const result = (await helper("search.text", {
 			root,
 			pattern,
-			ignoreCase: !parsed.data.matchCase,
+			matchCase: parsed.data.matchCase,
 			glob: parsed.data.glob.trim() || undefined,
-			maxCount: SEARCH_MAX_MATCHES,
 		})) as HelperResult;
 		return { ok: true, matches: result.matches, files: result.files, limited: result.limited };
 	} catch (err) {

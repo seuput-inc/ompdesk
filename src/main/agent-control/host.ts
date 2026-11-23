@@ -40,6 +40,7 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
+import type { SessionStatus } from "../../shared/control-protocol";
 import type {
 	HostView,
 	IpcSpawnTabPayload,
@@ -321,6 +322,13 @@ export interface OutsideCaller {
 	title: string;
 	/** Where a session it opens without a folder starts. */
 	cwd: string;
+}
+
+/** Only the facts that a control socket watch needs. Never serialize the full host tab. */
+export interface ControlTabSnapshot extends Pick<ControlTab, "tabId" | "title" | "status" | "busy" | "hidden"> {
+	resuming: boolean;
+	hasAsk: boolean;
+	hasPlan: boolean;
 }
 
 export class AgentControlRuntime {
@@ -643,15 +651,29 @@ export class AgentControlRuntime {
 	}
 
 	/** The open session `name` names for an outside caller, by the tools' own name rules (hidden refused). */
-	async resolveOutside(caller: OutsideCaller, name: string): Promise<ControlTab> {
+	async resolveOutside(caller: OutsideCaller, name: string): Promise<SessionStatus> {
 		const entered = this.#enterOutside(caller);
 		if (entered) throw new Error(entered);
 		return this.control.openTarget(caller.id, name);
 	}
 
-	/** Every open tab of the app as the tools see it, from no session's window (the control socket's waits). */
-	controlTabs(): ControlTab[] {
-		return this.#hostTabs().map(({ window: _window, ...tab }) => tab);
+	/** Visible tabs at this pool edge, before a later activity can change them. */
+	controlTabs(): ControlTabSnapshot[] {
+		const tabs: ControlTabSnapshot[] = [];
+		for (const tab of this.#hostTabs()) {
+			if (tab.hidden) continue;
+			tabs.push({
+				tabId: tab.tabId,
+				title: tab.title,
+				status: tab.status,
+				busy: tab.busy,
+				hidden: tab.hidden,
+				resuming: tab.resuming === true,
+				hasAsk: tab.asks.length > 0,
+				hasPlan: tab.plan !== undefined,
+			});
+		}
+		return tabs;
 	}
 
 	onOutsideMail(listener: (callerId: string, text: string) => void): () => void {

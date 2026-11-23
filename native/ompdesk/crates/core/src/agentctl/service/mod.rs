@@ -414,7 +414,7 @@ impl AgentControl {
 
     /// `openTarget`: the open session `session` names for `caller_tab_id`, by the tools' own name rules, refused when
     /// hidden from agents (the control socket's waits).
-    pub async fn open_target(&self, caller_tab_id: &str, session: &str) -> R<ControlTab> {
+    pub async fn open_target(&self, caller_tab_id: &str, session: &str) -> R<crate::control::View> {
         let state = self.host.state();
         if !state.enabled {
             return fail(TURNED_OFF);
@@ -435,7 +435,7 @@ impl AgentControl {
             )
             .await?;
         self.refuse_hidden(&target, &caller)?;
-        Ok(target)
+        Ok(target.into())
     }
 
     /// `run`: one control-tool call. `call` is the host tool call: its id (stock's, the same when a paired host
@@ -818,8 +818,7 @@ impl AgentControl {
         }
     }
 
-    /// `#dispatch`: validates the arguments (in TypeScript: `looseArgs` and the tool's zod schema) and routes the
-    /// tool to its family function.
+    /// Validate before resolving the caller, then move the parsed arguments to their tool body.
     async fn dispatch(
         &self,
         caller_tab_id: &str,
@@ -827,15 +826,11 @@ impl AgentControl {
         tool: Tool,
         given: Value,
     ) -> R<String> {
-        let parsed = match self.host.parse_args(tool.name(), &given, true).await? {
-            Ok(parsed) => parsed,
-            Err(message) => return fail(message),
-        };
+        let parsed = self.host.parse_args(tool, &given, true).await?;
         let state = self.host.state();
         let Some(caller) = self.caller_of(&state, caller_tab_id, tabs) else {
             return fail(TAB_GONE);
         };
-        let args = |_: Tool| -> R<Value> { Ok(parsed.clone()) };
         fn typed<T: serde::de::DeserializeOwned>(value: Value, tool: Tool) -> R<T> {
             serde_json::from_value(value).map_err(|error| {
                 Fail::other(format!(
@@ -845,18 +840,15 @@ impl AgentControl {
             })
         }
         match tool {
-            Tool::List => self.list(&caller, tabs, typed(args(tool)?, tool)?).await,
-            Tool::Open => {
-                self.open_tool(&caller, tabs, typed(args(tool)?, tool)?)
-                    .await
-            }
+            Tool::List => self.list(&caller, tabs, typed(parsed, tool)?).await,
+            Tool::Open => self.open_tool(&caller, tabs, typed(parsed, tool)?).await,
             Tool::Send => {
-                let args: types::SendArgs = typed(args(tool)?, tool)?;
+                let args: types::SendArgs = typed(parsed, tool)?;
                 let target = self.send_target(&caller, tabs, &args.session).await?;
                 self.send(&caller, &target, &args).await
             }
             Tool::Result => {
-                let args: types::ResultArgs = typed(args(tool)?, tool)?;
+                let args: types::ResultArgs = typed(parsed, tool)?;
                 let several = args.sessions.is_some();
                 let ids: Vec<String> = match (&args.sessions, &args.session) {
                     (Some(sessions), _) => sessions.clone(),
@@ -877,7 +869,7 @@ impl AgentControl {
                 self.result(&caller, targets, args, several).await
             }
             Tool::Read => {
-                let args: types::ReadArgs = typed(args(tool)?, tool)?;
+                let args: types::ReadArgs = typed(parsed, tool)?;
                 match self
                     .resolve_any(tabs, &args.session, &caller, "read", None)
                     .await?
@@ -887,7 +879,7 @@ impl AgentControl {
                 }
             }
             Tool::Answer => {
-                let args: types::AnswerArgs = typed(args(tool)?, tool)?;
+                let args: types::AnswerArgs = typed(parsed, tool)?;
                 let target = self
                     .open(
                         tabs,
@@ -900,7 +892,7 @@ impl AgentControl {
                 self.answer(&caller, &target, &args).await
             }
             Tool::Focus => {
-                let args: types::FocusArgs = typed(args(tool)?, tool)?;
+                let args: types::FocusArgs = typed(parsed, tool)?;
                 let options = resolve::OpenOptions {
                     allow_self: true,
                     reach: false,
@@ -914,7 +906,7 @@ impl AgentControl {
                 Ok(format!("Showing {} ({how}).", text::label(&target)))
             }
             Tool::Notify => {
-                let args: types::NotifyArgs = typed(args(tool)?, tool)?;
+                let args: types::NotifyArgs = typed(parsed, tool)?;
                 self.host.notify(
                     &caller.tab_id,
                     &args.title,
@@ -923,7 +915,7 @@ impl AgentControl {
                 Ok("Notification shown.".to_owned())
             }
             Tool::Stop => {
-                let args: types::StopArgs = typed(args(tool)?, tool)?;
+                let args: types::StopArgs = typed(parsed, tool)?;
                 let device = match &args.device {
                     None => None,
                     Some(wanted) => Some(self.device(wanted)?),
@@ -964,13 +956,13 @@ impl AgentControl {
                 }
             }
             Tool::Compare => {
-                let args: types::CompareArgs = typed(args(tool)?, tool)?;
+                let args: types::CompareArgs = typed(parsed, tool)?;
                 self.compare(&caller, tabs, args.sessions, args.criteria)
                     .await
             }
-            Tool::Report => self.report(&caller, tabs, typed(args(tool)?, tool)?).await,
+            Tool::Report => self.report(&caller, tabs, typed(parsed, tool)?).await,
             Tool::Merge => {
-                let args: types::MergeArgs = typed(args(tool)?, tool)?;
+                let args: types::MergeArgs = typed(parsed, tool)?;
                 let target = self
                     .open(
                         tabs,
@@ -982,13 +974,10 @@ impl AgentControl {
                     .await?;
                 self.merge(&caller, &target).await
             }
-            Tool::Schedule => self.schedule(&caller, typed(args(tool)?, tool)?).await,
-            Tool::Autopilot => {
-                self.autopilot(&caller, tabs, typed(args(tool)?, tool)?)
-                    .await
-            }
-            Tool::AppList => self.app_list(typed(args(tool)?, tool)?).await,
-            Tool::App => self.app(&caller, typed(args(tool)?, tool)?).await,
+            Tool::Schedule => self.schedule(&caller, typed(parsed, tool)?).await,
+            Tool::Autopilot => self.autopilot(&caller, tabs, typed(parsed, tool)?).await,
+            Tool::AppList => self.app_list(typed(parsed, tool)?).await,
+            Tool::App => self.app(&caller, typed(parsed, tool)?).await,
         }
     }
 

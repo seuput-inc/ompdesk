@@ -304,6 +304,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/local/sessions.ts",
 			"src/main/local/session-extras.ts",
 			"native/ompdesk/crates/core/src/sidecar/lane.rs",
+			"native/ompdesk/crates/core/src/omp/rename.rs",
 		],
 		stock: [
 			"omp://rpc.md#new_session",
@@ -318,7 +319,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"handoff",
 			"export_html",
 		],
-		tests: ["src/main/local/sessions.test.ts"],
+		tests: ["src/main/local/sessions.test.ts", "src/main/local/session-files.test.ts"],
 	},
 	{
 		id: "Q06",

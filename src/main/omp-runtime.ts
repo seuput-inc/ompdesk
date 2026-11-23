@@ -100,13 +100,8 @@ interface OmpUpdateCheck {
  * (`update.channel`) and, for a standalone binary, the build service: its answer is the one
  * `omp update` acts on.
  */
-export function parseUpdateCheck(output: string): OmpUpdateCheck | null {
-	const current = /Current version:\s*(\d+\.\d+\.\d+\S*)/.exec(output)?.[1];
-	if (!current) return null;
-	const latest =
-		/New version available:\s*(\d+\.\d+\.\d+\S*)/.exec(output)?.[1] ??
-		(/Already up to date/.test(output) ? current : undefined);
-	return latest ? { currentVersion: current, latestVersion: latest } : null;
+export async function parseUpdateCheck(output: string): Promise<OmpUpdateCheck | null> {
+	return (await core().call<OmpUpdateCheck | null>("omp.parseUpdateCheck", { output })).result;
 }
 
 /**

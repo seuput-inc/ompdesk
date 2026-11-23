@@ -204,10 +204,13 @@ export async function coreGit<T>(method: string, params: object, rounds: number,
 
 /** `coreGit` with the answer's `bin` tail (file contents the request read). */
 export function coreGitAnswer<T>(method: string, params: object, rounds: number, slowMs = 0): Promise<CoreAnswer<T>> {
-	// git.diff rejects the path before reporting a missing git; other requests require the runner as before.
+	// A diff checks its path first; an unknown project is cached even when git is unavailable.
 	return heldAnswer(
 		method,
-		async () => ({ ...params, git: await (method === "git.diff" ? availableGitRunner() : gitRunner()) }),
+		async () => ({
+			...params,
+			git: await (method === "git.diff" || method === "git.projectOrigin" ? availableGitRunner() : gitRunner()),
+		}),
 		rounds * DEFAULT_TIMEOUT_MS + slowMs,
 	);
 }

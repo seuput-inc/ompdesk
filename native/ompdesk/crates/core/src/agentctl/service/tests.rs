@@ -689,9 +689,7 @@ async fn an_invalid_call_is_answered_with_main_s_validation_and_a_valid_one_runs
                 if args["tool"] == "ompdesk_notify"
                     && args["args"].as_object().is_some_and(Map::is_empty) =>
             {
-                Ok(
-                    json!({ "ok": false, "error": "Invalid arguments for ompdesk_notify: title: Required" }),
-                )
+                Ok(json!({ "ok": false, "error": "title: Required" }))
             }
             other => plain_main(other, args),
         },
@@ -724,6 +722,38 @@ async fn an_invalid_call_is_answered_with_main_s_validation_and_a_valid_one_runs
         listing.text.starts_with("1 session in this window:\n- a "),
         "{}",
         listing.text
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn schedule_action_checks_refuse_before_any_host_effect() {
+    let state = state_with(vec![session_tab("a", "/s/x_1.jsonl")], &[("a", "w")]);
+    let (control, asked) = rig(7_250, state, Files::default(), plain_main);
+    for (args, reason) in [
+        (
+            json!({"action":"list","prompt":"p","in_minutes":2}),
+            "list takes only id (and device)",
+        ),
+        (
+            json!({"action":"update","days":[2],"every_minutes":1,"in_minutes":2}),
+            "days goes with daily_at; update needs id; update takes at most one of every_minutes, daily_at, at, in_minutes or on",
+        ),
+        (json!({"action":"cancel"}), "cancel needs id"),
+    ] {
+        let outcome = control.run("a", "ompdesk_schedule", args, None).await;
+        assert!(outcome.is_error);
+        assert_eq!(
+            outcome.text,
+            format!("Invalid arguments for ompdesk_schedule: {reason}")
+        );
+    }
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(method, _)| method == "args.parse")
     );
     control.host.port().close();
 }

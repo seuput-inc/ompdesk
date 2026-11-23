@@ -18,7 +18,7 @@ resources/gui-bridge/stock-helper/host.ts	mixed	Dispatch and worker lifetime can
 resources/gui-bridge/stock-helper/images.ts	exception	Converts unsupported formats and sizes images through stock's Bun image pipeline, not a desktop image decoder.
 resources/gui-bridge/stock-helper/memory.ts	mixed	The worker reads stock journals and derives prompt facts and completed assistant turns. It also serves the core's recall tokenizer request using the bridge's contentTerms.
 resources/gui-bridge/stock-helper/models.ts	mixed	Stock owns ModelsConfigSchema. The worker extracts schema literals and shapes answers without reimplementing stock validation.
-resources/gui-bridge/stock-helper/search.ts	mixed	Keep pi-natives grep in the installed stock worker. Its adapter maps matches and truncation to the Files panel response.
+resources/gui-bridge/stock-helper/search.ts	mixed	The worker calls installed pi-natives grep and maps its matches and truncation to the Files panel reply; core/src/stock/search.rs supplies its capped options.
 resources/gui-bridge/stock-helper/sessions.ts	mixed	Stock owns enumeration, message loading, moves, deletion and leases. First-prompt and prompt-origin fills use stock's streaming reader. Core owns activity and typed-name titles; Bun parses only batched noncanonical timestamp strings from restored journals.
 resources/gui-bridge/stock-helper/terminal-service.ts	mixed	The core retains scrollback and computes each viewer's slice. Bun holds pending chunks, stream ends, long polls, PTY handles, IDs, owner checks and restart generations.
 resources/gui-bridge/stock-helper/terminals.ts	mixed	Loads the installed stock PtySession and supplies launch options. Transfers the owner's terminal rows and new output to the core in the existing reply.

@@ -18,6 +18,7 @@
 
 mod auth;
 mod center;
+mod draft;
 mod json;
 mod pr;
 
@@ -267,15 +268,6 @@ struct DiffParams {
     path: String,
 }
 
-#[derive(Deserialize)]
-struct DraftParams {
-    #[serde(flatten)]
-    runners: Runners,
-    cwd: String,
-    base: Option<String>,
-    head: Option<String>,
-}
-
 /// `timeoutMs`: `gh pr create`'s or `gh pr merge`'s timeout, main's to choose.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -444,21 +436,7 @@ pub fn register(registry: &mut Registry) {
             tools.gh.answer(outcome.and_then(|diff| Reply::json(&diff)))
         })
     });
-    registry.add("gh.prDraftFacts", |call| {
-        Box::pin(async move {
-            let DraftParams {
-                runners,
-                cwd,
-                base,
-                head,
-            } = call.params()?;
-            let tools = Tools::new(runners, call.scope);
-            let outcome = pr::draft_facts(&tools, &cwd, base, head).await;
-            tools
-                .gh
-                .answer(outcome.and_then(|facts| Reply::json(&facts)))
-        })
-    });
+    draft::register(registry);
     registry.add("gh.prCreate", |call| {
         Box::pin(async move {
             let CreateParams {

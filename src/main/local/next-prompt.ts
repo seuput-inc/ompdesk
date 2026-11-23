@@ -28,7 +28,6 @@ const inlineCommand = z.object({
 });
 
 export const handlers: Record<string, LocalHandler> = {
-	get_next_prompt: (_command, ctx) => ctx.bridge.request("next_prompt_state"),
 	set_next_prompt_draft: async (command, ctx) =>
 		ctx.bridge.request("next_prompt_draft", { empty: draftCommand.parse(command).empty }),
 	refresh_next_prompt: async (command, ctx) =>

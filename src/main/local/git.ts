@@ -76,8 +76,6 @@ export const handlers: Record<string, LocalHandler> = {
 			if (!mine) throw new LocalCommandError(`No saved worktree ${id} in this repository.`, "not_saved");
 			return restoreSavedWorktree(id, savedWorktreeStore());
 		}),
-	// worktree-lifecycle.ts reads `worktree.onExit` from the closing tab's live session.
-	worktree_lifecycle_settings: (_command, ctx) => ctx.bridge.request("worktree_lifecycle_settings"),
 	pr_repo: (_command, ctx) => prRepo(ctx.cwd),
 	// Agents › GitHub: issues, Actions, releases, notifications, repositories (request validated in github.ts).
 	github: (command, ctx) => githubCommand(ctx.cwd, command.request),

@@ -41,6 +41,7 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
+import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type { IpcSavedFolder, IpcTabRunOutcome, IpcTabWorktree, TabStatus } from "../../shared/ipc-types";
 import type {
@@ -521,11 +522,6 @@ export class SessionFolderMissing extends Error {
 	}
 }
 
-/** The session waits on someone: an open ask or approval, or a plan proposal awaiting approval (the control socket's `blocked`). */
-export function waits(tab: ControlTab): boolean {
-	return tab.asks.length > 0 || tab.plan !== undefined;
-}
-
 /** What the core waits for, in ms; every field defaults to the TypeScript service's own value (`tuning.rs`). */
 export type Tuning = Partial<
 	Record<
@@ -645,6 +641,20 @@ function told(run: () => void): void {
 
 function issueText(issue: { path: PropertyKey[]; message: string }): string {
 	return issue.path.length > 0 ? `${issue.path.join(".")}: ${issue.message}` : issue.message;
+}
+
+// On a rejected schedule only, let Zod decide if its action refinement still runs. Never return rejected field values.
+function partialSchedule(input: unknown) {
+	let partial: { action: string; fields: Record<string, boolean> } | undefined;
+	ARGS.ompdesk_schedule
+		.superRefine(value => {
+			partial = {
+				action: value.action,
+				fields: Object.fromEntries(Object.entries(value).map(([key, field]) => [key, field !== ""])),
+			};
+		})
+		.safeParse(input);
+	return partial;
 }
 
 /** The core's `agentRuntime.*`: what the host did over the service's own state, by one service's port. */
@@ -824,7 +834,7 @@ export class AgentControl {
 	 * The open session `session` names for `callerTabId`, by the tools' own name rules, refused when hidden from
 	 * agents (the control socket's waits). Rejects with the tools' own message.
 	 */
-	openTarget(callerTabId: string, session: string): Promise<ControlTab> {
+	openTarget(callerTabId: string, session: string): Promise<SessionStatus> {
 		return this.#call("openTarget", { callerTabId, session });
 	}
 
@@ -1039,15 +1049,13 @@ export class AgentControl {
 		return {
 			"args.parse": ({ tool, args, loose }: { tool: AgentControlToolName; args: unknown; loose: boolean }) =>
 				coded(() => {
-					// A model's JSON written as text is read as what it spells, for every tool and nesting; the
-					// parser's output (trimmed, defaults applied) is what the tool body reads.
-					const parsed = ARGS[tool].safeParse(loose ? (looseArgs(tool, args) ?? {}) : args);
+					const input = loose ? (looseArgs(tool, args) ?? {}) : args;
+					const parsed = ARGS[tool].safeParse(input);
 					if (parsed.success) return { ok: true, args: parsed.data };
 					return {
 						ok: false,
-						error: loose
-							? `Invalid arguments for ${tool}: ${parsed.error.issues.map(issueText).join("; ")}`
-							: `Invalid arguments: ${parsed.error.issues.map(issue => issue.message).join("; ")}`,
+						error: parsed.error.issues.map(loose ? issueText : issue => issue.message).join("; "),
+						schedule: tool === "ompdesk_schedule" ? partialSchedule(input) : undefined,
 					};
 				}),
 			mail: ({

@@ -17,6 +17,33 @@ use crate::server::{registry, serve};
 const FAKE: &str = "OMPDESK_FAKE_OMP";
 const LIMITS: &str = "{\"type\":\"ready\",\"supportedProtocolVersions\":[1,2],\"maxFrameBytes\":1048576,\"maxReassembledFrameBytes\":67108864}";
 
+#[test]
+fn parameterless_gui_commands_keep_the_bridge_method_and_absent_params() {
+    for (command, method) in [
+        ("abort_maintenance", "composer.abort_maintenance"),
+        ("get_force_tool", "composer.get_force_tool"),
+        ("get_context_report", "composer.context_report"),
+        ("preview_share_session", "composer.share_preview"),
+        ("get_copy_targets", "composer.copy_targets"),
+        ("get_last_link", "composer.last_link"),
+        ("get_settings_schema", "settings_schema"),
+        ("get_model_role_metadata", "model_role_metadata"),
+        ("get_model_setup_facts", "model_setup_facts"),
+        ("get_session_spend", "session_spend"),
+        ("get_recent_models", "recent_models"),
+        ("get_next_prompt", "next_prompt_state"),
+        ("worktree_lifecycle_settings", "worktree_lifecycle_settings"),
+    ] {
+        let gui: super::GuiBridgeParams = serde_json::from_value(json!({
+            "command": command, "tab": "tab", "seq": 3, "spawnId": 7
+        }))
+        .unwrap();
+        let bridge = super::BridgeParams::from(gui);
+        assert_eq!(bridge.method, method);
+        assert!(bridge.params.is_none(), "{command}");
+    }
+}
+
 /// The stand-in omp. Run as a test it does nothing; run with `OMPDESK_FAKE_OMP` set it speaks omp's side of the wire
 /// until its stdin ends (exit 0), or as its mode says.
 #[test]

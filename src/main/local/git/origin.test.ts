@@ -2,14 +2,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readProjectOrigin, resetProjectOriginCache } from "./origin";
+import { readProjectOrigin } from "./origin";
 import { gitSync, initRepo } from "./test-repos";
 
 let root: string;
 let repo: string;
 
 beforeEach(async () => {
-	resetProjectOriginCache();
 	root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-origin-")));
 	repo = path.join(root, "acme-web");
 	await initRepo(repo);
@@ -94,7 +93,7 @@ describe("readProjectOrigin", () => {
 		const first = await readProjectOrigin(dir, () => clock);
 		gitSync(dir, "switch", "-q", "-c", "omp/agent/renamed");
 		clock += 1_000;
-		expect(await readProjectOrigin(dir, () => clock)).toBe(first);
+		expect(await readProjectOrigin(dir, () => clock)).toEqual(first);
 		clock += 60_000;
 		expect((await readProjectOrigin(dir, () => clock))?.worktree?.kind).toBe("agent");
 	});

@@ -42,10 +42,6 @@ export const handlers: Record<string, LocalHandler> = {
 				.parse(command.url),
 		}),
 
-	get_copy_targets: async (_command, ctx) => ctx.bridge.request("composer.copy_targets"),
-
-	get_last_link: async (_command, ctx) => ctx.bridge.request("composer.last_link"),
-
 	get_command_arg_completions: async (command, ctx) => {
 		const { command: name, prefix } = z.object({ command: z.string(), prefix: z.string() }).parse(command);
 		return ctx.bridge.request("sessions.arg_completions", { cwd: ctx.cwd, command: name, prefix });
