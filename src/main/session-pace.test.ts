@@ -401,7 +401,10 @@ describe("session-pace", () => {
 			const look = call("p", "read", { path: "proc://bg_1/streams/0" });
 			const begun = [
 				user(0),
-				msg(1, { role: "assistant", content: [look, call("b", "bash", { command: "bunx vitest run", async: true })] }),
+				msg(1, {
+					role: "assistant",
+					content: [look, call("b", "bash", { command: "bunx vitest run", async: true })],
+				}),
 				start(1, "b"),
 				msg(2, { role: "toolResult", toolName: "bash", toolCallId: "b", details: { async: { jobId: "bg_1" } } }),
 			];
@@ -416,7 +419,9 @@ describe("session-pace", () => {
 					toolCallId: "w",
 					useless: true,
 					details: { op: "wait", jobs: [{ id: "bg_1", type: "bash", status: "running", durationMs: 2_000 }] },
-					content: [{ text: "log\nompdesk check: 20261113-021600-cd34: passed in 3s — reuse saved about 1m (60 s)" }],
+					content: [
+						{ text: "log\nompdesk check: 20261113-021600-cd34: passed in 3s — reuse saved about 1m (60 s)" },
+					],
 				}),
 			];
 			await appendFile(file, rest.join("\n"));
