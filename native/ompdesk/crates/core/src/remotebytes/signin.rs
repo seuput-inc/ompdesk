@@ -46,7 +46,7 @@ fn unavailable() -> Fault {
     )
 }
 
-fn replay_url(params: &ReplayParams) -> Result<url::Url, Fault> {
+fn callback_url(value: &str) -> Result<url::Url, Fault> {
     // WHATWG Fetch's bad ports are refused even on loopback. Stock's callback uses a high port.
     const BAD_PORTS: &[u16] = &[
         1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101,
@@ -55,13 +55,18 @@ fn replay_url(params: &ReplayParams) -> Result<url::Url, Fault> {
         989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665,
         6666, 6667, 6668, 6669, 6679, 6697, 10080,
     ];
-    let mut url = url::Url::parse(&params.url).map_err(|_| unavailable())?;
+    let url = url::Url::parse(value).map_err(|_| unavailable())?;
     if BAD_PORTS
         .binary_search(&url.port().ok_or_else(unavailable)?)
         .is_ok()
     {
         return Err(unavailable());
     }
+    Ok(url)
+}
+
+fn replay_url(params: &ReplayParams) -> Result<url::Url, Fault> {
+    let mut url = callback_url(&params.url)?;
     let query = params.query.as_str();
     url.set_query((!query.is_empty()).then(|| query.strip_prefix('?').unwrap_or(query)));
     url.set_fragment(None);
@@ -140,6 +145,34 @@ pub(super) async fn replay(call: Call) -> Result<Reply, Fault> {
         () = crate::clock::sleep(Duration::from_secs(10)) => Err(unavailable()),
         page = replay_page(&params) => page,
     }
+}
+
+pub(super) async fn cancel(call: Call) -> Result<Reply, Fault> {
+    #[derive(Deserialize)]
+    struct Cancel {
+        url: String,
+        state: Option<String>,
+    }
+    let Cancel { url, state } = call.params()?;
+    if let Ok(mut url) = callback_url(&url) {
+        url.set_query(None);
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("error", "access_denied");
+            query.append_pair("error_description", "Sign-in cancelled in OMPdesk");
+            if let Some(state) = state {
+                query.append_pair("state", &state);
+            }
+        }
+        // Only stock's advertised callback may receive the denial; never follow its Location.
+        tokio::select! {
+            biased;
+            () = call.scope.on_cancel() => return Err(Fault::cancelled()),
+            () = crate::clock::sleep(Duration::from_secs(5)) => {}
+            _ = crate::http::loopback_get_once(&url) => {}
+        }
+    }
+    Reply::json(&())
 }
 
 struct Relay {

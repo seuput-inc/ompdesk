@@ -87,6 +87,9 @@ pub fn register(registry: &mut Registry) {
     registry.add("omp.renameStoredSession", |call| {
         Box::pin(rename::run(call))
     });
+    registry.add("omp.pluginCount", |call| {
+        Box::pin(facts::plugin_count(call))
+    });
     registry.add("omp.pluginDoctor", |call| {
         Box::pin(facts::plugin_doctor(call))
     });

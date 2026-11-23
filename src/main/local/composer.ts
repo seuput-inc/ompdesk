@@ -25,6 +25,8 @@ import type {
 	RpcToolSource,
 	ThinkingLevel,
 } from "../../shared/rpc-types";
+import { core } from "../core/process";
+import { ompRunEnv } from "../omp-runtime";
 import { runSlashCommand } from "./slash";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
@@ -80,19 +82,14 @@ function reasoningLevels(levels: readonly string[] | undefined): ThinkingLevel[]
 	return (levels ?? []).filter((level): level is ThinkingLevel => level !== "off");
 }
 
-/** `omp plugin list --json` → installed plugin count; 0 when the CLI fails. */
-async function pluginCount(ctx: LocalCommandContext): Promise<number> {
-	const { code, stdout } = await ctx.omp.run(["plugin", "list", "--json"], { cwd: ctx.cwd, timeoutMs: 30_000 });
-	if (code !== 0) return 0;
-	try {
-		const parsed: unknown = JSON.parse(stdout);
-		if (typeof parsed !== "object" || parsed === null) return 0;
-		let count = 0;
-		for (const list of Object.values(parsed)) if (Array.isArray(list)) count += list.length;
-		return count;
-	} catch {
-		return 0;
-	}
+async function pluginCount({ omp, cwd }: LocalCommandContext): Promise<number> {
+	if (omp.basePath === undefined) throw new Error("No resolved omp launcher for omp.pluginCount");
+	const { result } = await core().call<number>(
+		"omp.pluginCount",
+		{ bin: omp.bin, env: ompRunEnv(omp.bin, omp.basePath), cwd },
+		{ timeoutMs: 40_000 },
+	);
+	return result;
 }
 
 const evalCommand = z.object({

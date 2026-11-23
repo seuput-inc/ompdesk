@@ -9,7 +9,7 @@ src/main/agent-control/branches-worktrees.test.ts	exception	Tests worktree remov
 src/main/agent-control/branches.test.ts	exception	Asserts the commits, changed files and parent checkout state reported by branchFacts.
 src/main/agent-control/branches.ts	port	Runs the pre-merge hook before allowing git.mergeBranch and the post-merge hook after success; coordinates archival before discard.
 src/main/agent-control/host.test.ts	exception	Tests session visibility, permissions, opening and delivery through AgentControlRuntime with host dependencies.
-src/main/agent-control/host.ts	port	Resolves local or paired folders and routes session creation, confirmations, worktree requests and mail to their owning windows or devices.
+src/main/agent-control/host.ts	mixed	fs.stat follows links for a scheduled wake's session file and an explicitly requested local spawn folder. The host keeps the caller's path spelling and never stats a paired folder locally. Wake receipts, parent registration, window and pool ownership are read in the same turn (§1.3c).
 src/main/agent-control/mail.ts	exception	MAIL_KINDS is tool schema vocabulary; MailDelivery is the host callback type. agentctl/service/mod.rs calls Rust delivery_for before mail_attached; the stock bridge tests supply example frames.
 src/main/agent-control/service.test.ts	exception	Exercises agent-control commands across sessions, asks, visibility, branch operations and reports using a test host.
 src/main/agent-control/service.ts	port	Core owns schedule action constraints and socket status. Main still reopens the service after core loss, snapshots host state and handles JS field parsing (including Date.parse and Zod issue ordering).
@@ -158,7 +158,7 @@ src/main/local/auto-mode.ts	port	Applies a mode decision by enabling stock plan 
 src/main/local/autopilot.test.ts	exception	Tests read-only ahead/behind counts and refusals for invalid roots and option-like refs.
 src/main/local/autopilot.ts	port	Checks refs before git.autopilotBranchStatus, restricts bridge methods and refuses set_autopilot outside the local window.
 src/main/local/composer.test.ts	exception	Tests merging stock state with bridge extras, fast-mode handling and defaults when the bridge is down.
-src/main/local/composer.ts	mixed	Rust sidecar.guiBridge forwards maintenance abort, forced tool, context report and share preview. TS still merges stock/bridge state, filters reasoning levels, guards busy context clears and validates parameterized actions.
+src/main/local/composer.ts	mixed	omp.pluginCount runs stock's plugin list in the tab's workspace and returns only the count. sidecar.guiBridge forwards maintenance abort, forced tool, context report and share preview. Stock owns live composer state; main combines its optional replies and maps busy clears to errors (§1.3b,d).
 src/main/local/copy-targets.test.ts	exception	Tests message and command ranking, fenced quote exclusion and handoff fallback for copy targets.
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
 src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
@@ -169,7 +169,7 @@ src/main/local/git/changes.ts	native-client	Forwards repository reads to git.*. 
 src/main/local/git/exec-brew.test.ts	exception	Tests macOS gh discovery with a temporary shell and Homebrew bin directory.
 src/main/local/git/exec-gh.test.ts	exception	Tests core gh stdout, exit and timeout behavior and verifies token values do not escape into errors or logs.
 src/main/local/git/exec.test.ts	exception	Tests rediscovery after a missing binary, spawn diagnostics and git executable selection.
-src/main/local/git/exec.ts	port	Resolves binaries and their environments, runs bounded child processes and serializes or cancels mutating steps under per-repository locks.
+src/main/local/git/exec.ts	mixed	Core supervises every Git and gh command. Main selects the launcher and login PATH, fences the request against the current serial-chain step before sending it, and keeps onEnded until its child exits (§1.3c). macOS developer-directory lookup is cached with that launcher.
 src/main/local/git/git-env.test.ts	exception	Injects Git repository selectors and verifies reads and writes stay in the intended checkout unless explicitly overridden.
 src/main/local/git/github.test.ts	exception	Tests GitHub request validation, quiet gh invocation and classification of missing remotes versus a signed-out user.
 src/main/local/git/github.ts	port	gh.github executes the validated request. The host checks shared repo and host syntax before looking up gh (§1.3d). For a Windows verbatim UNC share root, Node dirname returns the server path while Rust Path::parent returns None. Keep path.resolve and dirname together for clone admission and its errors.
@@ -183,7 +183,7 @@ src/main/local/git/pr.ts	mixed	gh.prDraftPrompt reads git and renders the prompt
 src/main/local/git/repo-lock.test.ts	exception	Tests independent repo locks, serial mutations per repository and fencing of work from a stopped holder.
 src/main/local/git/scm-history.test.ts	exception	Tests branch mutations, occupied branches and conflict continuation or abort against real repositories.
 src/main/local/git/scm.test.ts	exception	Tests working-tree and index effects of staging, unstaging, discard and other SCM commands.
-src/main/local/git/scm.ts	port	Locks mutations, removes discarded untracked files through fenced-fs and runs stock commit-message generation. Core validates all selected paths before running git.
+src/main/local/git/scm.ts	mixed	Core validates selected paths and runs Git. Main's fenced-fs admits each untracked-file removal against the live lock signal (§1.3c): a core cancel frame can arrive after Stop. The 247 s Git deadline ends before removal; the 20 min holder deadline spans both. Stock commit-message generation uses the tab's guarded omp.run.
 src/main/local/git/session-worktree.test.ts	exception	Tests worktree exit choices, branch movement and dirty versus ignored files in snapshots.
 src/main/local/git/session-worktree.ts	native-client	Supplies the exit policy to git.sessionWorktreeSnapshot and uses the checked native removal plan under the repository lock. The lifecycle caller still asks the person and checks a fresh fingerprint before removal; compare native-root-mini-intake's worktree_lifecycle/ candidate against those contracts before further reuse.
 src/main/local/git/stock-bridge.test.ts	exception	Integration fixture drives stock omp to test worktree paths, checkout removal, session movement and PR metadata.
@@ -216,7 +216,7 @@ src/main/local/session-files.ts	native-client	omp.renameStoredSession checks the
 src/main/local/sessions.test.ts	exception	Tests paged transcript reads, stale snapshot cursors and retries when a live tail changes.
 src/main/local/sessions.ts	port	Hub batch with sidecar: BridgeRelay fences each stock replay by tab, seq, generation and spawnId. Cursors, shrinking and retry belong with that transaction; the per-bridge tail cache returns the same page object for the same version, limit and image form (§1.3a,c). Stock owns replay and session mutations (§1.3d).
 src/main/local/settings.test.ts	exception	Tests model catalog availability without optional metadata and merging stock and bridge account data.
-src/main/local/settings.ts	mixed	Rust sidecar.guiBridge forwards schema, role metadata, setup facts, spend and recent models. TS merges logout accounts and usage data, routes parameterized settings and cancels browser login via a timed loopback callback.
+src/main/local/settings.ts	mixed	remotebytes.signInCancel sends the timed denial to stock's loopback callback. Relay setup shares the synchronous URL parser (§1.3a). sidecar.guiBridge supplies settings and model metadata. Joining logout accounts to stock's usage reply has no independent I/O (§1.3b,d).
 src/main/local/slash.ts	port	Caches builtin slash names and aliases per bridge and rejects a command not offered by the running stock version.
 src/main/local/subagent-journal-tail.test.ts	exception	Tests reading journal deltas with tail tokens and resetting when a journal is replaced.
 src/main/local/types.ts	exception	Defines stock, bridge and handler contracts plus the coded LocalCommandError wrapper; no independent command implementation.
