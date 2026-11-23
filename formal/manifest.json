@@ -53,7 +53,7 @@
 				"native/ompdesk/crates/shell/src/main.rs:344-363",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "4941e523a2552a2de9b99868e0e41784f3a80a39"
+			"syncCommit": "72091c33a6cc57e1a43e211fc42d8ddfbb5da481"
 		},
 		{
 			"id": "turn-resume",
