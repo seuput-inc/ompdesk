@@ -712,6 +712,18 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		const url = await until("Node's inspector did not report its URL", () => inspectorUrl(stderr));
 		inspector = await Inspector.connect(url, Math.max(1_000, deadline - Date.now()));
 		await until(`WebView2 opened no DevTools port ${debugPort}`, () => devToolsAnswers(debugPort));
+		const late = info !== undefined && info.repeatEachIndex % 2 === 1;
+		console.log(`[startup-probe] repeat=${info?.repeatEachIndex} attach=${late ? "after-app" : "at-port"}`);
+		if (late) {
+			await until("first app document did not commit before CDP attach", async () => {
+				const targets = await devToolsTargets(debugPort);
+				if (!targets.startsWith("[")) return undefined;
+				const app = (JSON.parse(targets) as string[]).some(
+					target => target.startsWith("page http://app.localhost/") && !target.includes("/__profile/migrate"),
+				);
+				return app ? true : undefined;
+			});
+		}
 		for (let attempt = 0; ; attempt++) {
 			try {
 				browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {
