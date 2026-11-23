@@ -750,7 +750,8 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: windows-latest
-    timeout-minutes: 40
+    # 60, not 40: a cold memory binary build alone took 22 min in v0.141.3's 45278857420, and the job ran out in its post steps.
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read # lists this run's artifacts and jobs while `build` runs; the failure report reads the jobs
