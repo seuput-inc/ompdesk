@@ -68,6 +68,7 @@ runs:
         src/main/agent-desktop.test.ts
         src/main/setup/detect-git-shell.test.ts
         src/main/setup/detect-agent-desktop.test.ts
+        src/main/setup/detect-brew.test.ts
         src/main/local-engines.test.ts
         src/main/cli-tools/detect.test.ts
         src/main/cli-tools/plans.test.ts

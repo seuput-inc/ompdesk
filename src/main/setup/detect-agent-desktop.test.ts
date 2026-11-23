@@ -24,6 +24,18 @@ async function install(toolsDir: string, body: string): Promise<string> {
 	return exe;
 }
 
+it.runIf(process.platform === "win32")("reads the managed executable's version on Windows", async () => {
+	const toolsDir = await tools();
+	const exe = managedAgentDesktop(toolsDir, "win32");
+	await fs.mkdir(path.dirname(exe), { recursive: true });
+	await fs.link(process.execPath, exe).catch(() => fs.copyFile(process.execPath, exe));
+	expect(await detectAgentDesktop("win32", toolsDir, process.env)).toEqual({
+		kind: "present",
+		version: process.versions.bun ?? process.versions.node,
+		path: exe,
+	});
+});
+
 describe.skipIf(process.platform === "win32")("machine setup's agent-desktop detection", () => {
 	it("counts only the copy in the managed tools dir: one on PATH is the user's", async () => {
 		const toolsDir = await tools();

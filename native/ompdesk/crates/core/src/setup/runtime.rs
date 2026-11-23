@@ -83,13 +83,24 @@ async fn installed_version(cwd: &Path, bin: &str) -> Option<String> {
 
 pub(super) async fn read_pipe(pipe: impl AsyncRead + Unpin, max: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    pipe.take(max.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() as u64 > max {
-        return Err(io::Error::other("version output exceeded maxBuffer"));
-    }
+    read_stream(pipe, max, &mut bytes, "output").await?;
     Ok(bytes)
+}
+
+async fn read_stream(
+    pipe: impl AsyncRead + Unpin,
+    max: u64,
+    bytes: &mut Vec<u8>,
+    stream: &str,
+) -> io::Result<()> {
+    pipe.take(max.saturating_add(1)).read_to_end(bytes).await?;
+    if bytes.len() as u64 > max {
+        bytes.pop();
+        return Err(io::Error::other(format!(
+            "{stream} maxBuffer length exceeded"
+        )));
+    }
+    Ok(())
 }
 
 // A located file is literal. Do not let cmd expand it or change the quoted command.
@@ -139,11 +150,17 @@ pub(super) async fn version_output(
     drop(child.stdin.take());
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
-    let read =
-        async { tokio::try_join!(child.wait(), read_pipe(stdout, max), read_pipe(stderr, max)) };
-    let fault = tokio::select! {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let read = async {
+        tokio::try_join!(
+            child.wait(),
+            read_stream(stdout, max, &mut out, "stdout"),
+            read_stream(stderr, max, &mut err, "stderr")
+        )
+    };
+    let mut fault = tokio::select! {
         result = read => match result {
-            Ok((status, out, err)) => return Ok((status.success(), out, err)),
+            Ok((status, (), ())) => return Ok((status.success(), out, err)),
             Err(e) => Fault::new("io_error", e.to_string()),
         },
         () = scope.on_cancel() => Fault::cancelled(),
@@ -163,7 +180,82 @@ pub(super) async fn version_output(
     } else {
         cleanup.await;
     }
+    if matches!(mode, VersionMode::ExecFile) && fault.code != "cancelled" {
+        if !err.is_empty() {
+            fault.message = js_trim(&String::from_utf8_lossy(&err))
+                .split('\n')
+                .next()
+                .unwrap_or("")
+                .to_owned();
+        } else if fault.code == "omp_timeout" {
+            fault.message = format!("Command failed: {bin} --version");
+        }
+    }
     Err(fault)
+}
+
+#[derive(Deserialize)]
+struct Tool {
+    bin: String,
+    cwd: String,
+    env: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum ToolVersion<'a> {
+    Present { version: Option<&'a str> },
+    Broken { detail: &'a str },
+}
+
+pub(super) async fn tool_version(call: Call) -> Result<Reply, Fault> {
+    let Tool { bin, cwd, env } = call.params()?;
+    let name = Path::new(&bin).file_name().and_then(|n| n.to_str());
+    let tools: &[&str] = if cfg!(windows) {
+        &[
+            "bun.exe",
+            "git.exe",
+            "gh.exe",
+            "node.exe",
+            "agent-desktop.exe",
+        ]
+    } else {
+        &["bun", "git", "gh", "node", "agent-desktop"]
+    };
+    if !name.is_some_and(|n| {
+        tools.iter().any(|&t| {
+            if cfg!(windows) {
+                n.eq_ignore_ascii_case(t)
+            } else {
+                n == t
+            }
+        })
+    }) {
+        return Err(Fault::new(
+            "invalid_params",
+            "Not a machine setup version probe",
+        ));
+    }
+    let detail = match version_output(&bin, &cwd, &env, &call.scope, VersionMode::ExecFile).await {
+        Ok((true, out, _)) => {
+            let text = String::from_utf8_lossy(&out);
+            return Reply::json(&ToolVersion::Present {
+                version: version_in(&text),
+            });
+        }
+        Ok((false, _, err)) if !err.is_empty() => {
+            return Reply::json(&ToolVersion::Broken {
+                detail: js_trim(&String::from_utf8_lossy(&err))
+                    .split('\n')
+                    .next()
+                    .unwrap_or(""),
+            });
+        }
+        Err(e) if e.code == "cancelled" => return Err(e),
+        Err(e) => e.message,
+        Ok(_) => format!("Command failed: {bin} --version"),
+    };
+    Reply::json(&ToolVersion::Broken { detail: &detail })
 }
 
 pub(super) async fn probe(call: Call) -> Result<Reply, Fault> {
