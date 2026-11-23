@@ -383,7 +383,9 @@ describe("a tab on a paired host", () => {
 			truncated: true,
 		});
 
-		await expect(saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false })).resolves.toMatchObject({
+		await expect(
+			saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false }),
+		).resolves.toMatchObject({
 			ok: false,
 			code: "file_too_large",
 		});

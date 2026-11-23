@@ -290,7 +290,7 @@ src/main/mac-permissions.ts	port	2	MacPermissions queries accessibility and scre
 src/main/machine-services.test.ts	tooling	-	Vitest suite: machineFor.
 src/main/machine-services.ts	mixed	3	LocalMachine owns caller-scoped benchmark/model setup runners and local settings operations; RemoteMachine validates and forwards host requests. ModelSetupRunner delegates execution to core models.setupRun; TS retains routing and runner maps.
 src/main/machine-state.test.ts	tooling	-	Vitest suite: machine state around a stall.
-src/main/machine-state.ts	port	2	MachineState retains recent resource samples and emits before/after stall reports; readOwn and ownFacts calculate process-level facts.
+src/main/machine-state.ts	port	2	§1.3a,c: MachineState.sample returns main's CPU, loop delay and windowed facts synchronously. stalled("core-loss") needs the pre-loss history while the core is unavailable. Receiver: shell watchdog with main's event-loop and process owner, not the process being diagnosed.
 src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
 src/main/mail-accounts.ts	mixed	2	The native email source asks pollAccount for connection settings; the Settings test calls routines.readMailbox. Main still reads account state and keystore availability synchronously (§1.3c). Receiver: shell keystore and account-state owner.
 src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
@@ -305,7 +305,7 @@ src/main/memory-prompt.test.ts	tooling	-	Vitest suite: promptTitle.
 src/main/memory-record.test.ts	tooling	-	Vitest suite: who uses the memory.
 src/main/memory-record.ts	mixed	1	procs.pressureRecord scans and ranks in core, asks main for live owners after the scan and returns only the bounded record. RecordClock is read in the same memory-watch sample that admits a log. Receiver: idle-release/pool owner (§1.3c).
 src/main/memory-sampler.test.ts	tooling	-	Vitest suite: the core's reading of this computer.
-src/main/memory-sampler.ts	mixed	1	Reads memory and process rows from core. The periodic watch also receives native idle-tree facts; testMemoryReading reads the fixture override.
+src/main/memory-sampler.ts	mixed	1	Production memory, process rows and idle-tree facts come from core. testMemoryReading reads only the fixture override; the memory watch consumes its answer in the same tick (§1.3c).
 src/main/memory-watch.test.ts	tooling	-	Checks that the watch makes release decisions from the live tabs after sampling and ignores failed process snapshots.
 src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses and procs.pressureRecord run in core. After sampling, main reads current tab quiet state, calls MachineState.sample, then invokes SidecarPool.releaseIdle in that turn. Move with idle release and the pool (§1.3a,c).
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions.

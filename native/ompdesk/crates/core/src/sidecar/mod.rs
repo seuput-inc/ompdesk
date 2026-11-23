@@ -40,8 +40,8 @@ mod stream;
 mod tests;
 
 pub(crate) use frames::strip_vt_control_characters;
-pub(crate) use launch::{MAX_RESTART_ATTEMPTS, restart_delay};
 use lane::{Command, Msg, OpenParams, Plan, StockReply};
+pub(crate) use launch::{MAX_RESTART_ATTEMPTS, restart_delay};
 use process::Start;
 pub(crate) use process::omp_command;
 

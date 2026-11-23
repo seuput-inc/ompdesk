@@ -48,7 +48,8 @@ export class LogWatcher {
 				const offLines = core().on("logs.lines", (data, _bin, generation) => {
 					const { watcher, batch, changes, retained } = data as Update;
 					if (watcher !== this.#id || generation !== this.#generation) return;
-					const saved: Checkpoint = (this.#checkpoint ??= { files: {}, lines: [] });
+					this.#checkpoint ??= { files: {}, lines: [] };
+					const saved = this.#checkpoint;
 					for (const [name, mark] of Object.entries(changes)) {
 						if (mark === null) delete saved.files[name];
 						else saved.files[name] = mark;
