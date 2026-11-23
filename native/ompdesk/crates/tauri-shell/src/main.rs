@@ -33,7 +33,11 @@ use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
 pub mod host;
+#[cfg(not(all(windows, feature = "test-automation")))]
 #[path = "../../shell/src/log.rs"]
+pub mod log;
+#[cfg(all(windows, feature = "test-automation"))]
+#[path = "nav_probe_log.rs"]
 pub mod log;
 #[path = "../../shell/src/node.rs"]
 pub mod node;
@@ -1734,6 +1738,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&user_data)?;
     log::start_clock();
     log::open_file(&user_data.join("tauri-shell.jsonl"));
+    #[cfg(all(windows, feature = "test-automation"))]
+    log::open_probe(&user_data);
     log_start(&argv, relaunched_by.as_deref());
     #[cfg(windows)]
     let instance_name = startup::pipe_name(&user_data);

@@ -76,6 +76,18 @@ jobs:
         with:
           name: ${{ inputs.out-artifact }}
           path: out
+      - name: Prepare isolated WebView2 observation folders
+        shell: pwsh
+        run: |
+          $private = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/nav-private"
+          $stages = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/nav-stages"
+          "OMPDESK_NAV_PRIVATE=$($private.FullName)" >> $env:GITHUB_ENV
+          "OMPDESK_NAV_STAGES=$($stages.FullName)" >> $env:GITHUB_ENV
+          "OMP_GUI_TEST_FIRST_NAV_NET=default" >> $env:GITHUB_ENV
+      - name: Start WebView2 process timeline
+        id: process_trace
+        shell: pwsh
+        run: ./scripts/nav-process.ps1 start
       - name: Playwright, this shard's spec files
         run: |
           set -euo pipefail
@@ -91,6 +103,23 @@ jobs:
           fi
           test -s "$list"
           bunx playwright test --global-timeout=2100000 --test-list "$list"
+      - name: Finish WebView2 process timeline
+        if: ${{ always() && steps.process_trace.outcome == 'success' }}
+        shell: pwsh
+        run: ./scripts/nav-process.ps1 stop
+      - name: Correlate first navigations with network stages
+        if: ${{ always() && env.OMPDESK_NAV_STAGES != '' }}
+        run: bun scripts/nav-stages.ts
+      - name: Upload only the sanitized timelines, including passing shards
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nav-stages-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/nav-stages/navigation.jsonl
+            ${{ runner.temp }}/nav-stages/process-timeline.jsonl
+          if-no-files-found: error
+          retention-days: 3
       - if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

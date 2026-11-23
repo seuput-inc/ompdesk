@@ -87,13 +87,9 @@ pub fn browser_args() -> Result<Vec<String>, String> {
         static ANNOUNCED: std::sync::Once = std::sync::Once::new();
         ANNOUNCED.call_once(|| eprintln!("[tauri-shell] test WebView2 debugging port {port}"));
         args.push(format!("--remote-debugging-port={port}"));
-        if std::env::var_os("OMP_GUI_TEST_FIRST_NAV_NET").is_some() {
-            let file = crate::runtime().user_data.join(format!("net-{}.json", std::process::id()));
-            args.push(format!("--log-net-log=\"{}\"", file.display()));
-            if std::env::var("OMP_GUI_TEST_FIRST_NAV_NET").as_deref() == Ok("bypass") {
-                args.push("--proxy-bypass-list=app.localhost".into());
-            }
-        }
+    }
+    if let Some(file) = crate::log::probe_netlog() {
+        args.push(format!("--log-net-log=\"{}\"", file.display()));
     }
     args.extend(SWITCHES.lock().expect("switches").iter().cloned());
     Ok(args)

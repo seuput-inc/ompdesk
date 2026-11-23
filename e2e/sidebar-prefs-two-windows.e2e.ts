@@ -11,71 +11,10 @@ import type { ElectronApplication, Page } from "playwright";
 import { exitApp, launchApp } from "./harness";
 
 let app: ElectronApplication | undefined;
-
-// Only event names and relative times leave this disposable launch profile.
-async function networkStages(desktop: string, native: string): Promise<void> {
-	const nativeEvents = native
-		.trim()
-		.split("\n")
-		.filter(Boolean)
-		.map(line => JSON.parse(line));
-	const start = nativeEvents.find(event => event.event === "shell.started");
-	if (!start) return;
-	const files = (await fs.readdir(desktop)).filter(file => file.startsWith("net-"));
-	const file = `net-${start.pid}.json`;
-	if (!files.includes(file)) {
-		console.log("[network] missing first host log");
-		return;
-	}
-	const data = await fs.readFile(path.join(desktop, file), "utf8");
-	const net = JSON.parse(data) as {
-		constants: {
-			logEventTypes: Record<string, number>;
-			timeTickOffset: string;
-			clientInfo?: { command_line?: string };
-		};
-		events: { time: string; type: number; phase: number; source: { id: number }; params?: { url?: string } }[];
-	};
-	const names = new Map(Object.entries(net.constants.logEventTypes).map(([name, id]) => [id, name]));
-	const matches = net.events.filter(
-		row => row.params?.url?.split("?")[0] === "http://app.localhost/__profile/migrate",
-	);
-	const sources = new Set(matches.map(row => row.source.id));
-	const relative = (time: string) => Number(time) + Number(net.constants.timeTickOffset) - start.at + start.t;
-	const phases = (type: string, bootstrapOnly: boolean) =>
-		net.events
-			.filter(row => names.get(row.type) === type && (!bootstrapOnly || sources.has(row.source.id)))
-			.map(row => [row.source.id, row.phase, relative(row.time)]);
-	console.log(
-		"[nav-compare]",
-		JSON.stringify({
-			rep: test.info().repeatEachIndex,
-			arm: test.info().repeatEachIndex % 2 ? "bypass" : "default",
-			flag: net.constants.clientInfo?.command_line?.includes("--proxy-bypass-list=app.localhost") ?? null,
-			starts: nativeEvents
-				.filter(row => row.event === "probe.nav.start" && row.kind === "bootstrap")
-				.map(row => row.t),
-			resources: nativeEvents.filter(row => row.event === "probe.nav.resource").map(row => row.t),
-			waitPAC: phases("PROXY_RESOLUTION_SERVICE_WAITING_FOR_INIT_PAC", true),
-			cookieLoad: phases("COOKIE_PERSISTENT_STORE_LOAD", false),
-			stalls: nativeEvents.filter(row => row.event === "profile.migrate.stalled").map(row => row.t),
-		}),
-	);
-}
 let root = "";
 
 test.afterEach(async () => {
 	if (app) await exitApp(app);
-	if (root) {
-		const text = await fs.readFile(path.join(root, "desktop", "tauri-shell.jsonl"), "utf8").catch(() => "");
-		for (const line of text.split("\n")) {
-			if (line.includes('"event":"probe.nav.') || line.includes('"event":"profile.migrate.stalled"'))
-				console.log(line);
-		}
-		await networkStages(path.join(root, "desktop"), text).catch(error =>
-			console.log(`[network] ${error.name}: log unavailable`),
-		);
-	}
 	app = undefined;
 	if (root) await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	root = "";
@@ -119,25 +58,7 @@ test("an order one window sets survives what another window, which read the side
 	await seed(agent, "s-1", project, "Alpha plan", 1);
 	await seed(agent, "s-2", project, "Bravo plan", 2);
 	await seed(agent, "s-3", project, "Charlie plan", 3);
-	const launch = async () => {
-		const exists = (file: string) =>
-			fs.stat(path.join(desktop, file)).then(
-				() => true,
-				() => false,
-			);
-		const [view, journal] = await Promise.all([exists("tauri-webview"), exists("tauri-local-storage-import.json")]);
-		console.log(`[nav-profile] rep=${test.info().repeatEachIndex} webviewDir=${view} journal=${journal}`);
-		return launchApp({
-			project,
-			desktop,
-			agent,
-			profile: root,
-			env: {
-				OMP_GUI_TEST_SESSION_FILES: "1",
-				OMP_GUI_TEST_FIRST_NAV_NET: test.info().repeatEachIndex % 2 ? "bypass" : "default",
-			},
-		});
-	};
+	const launch = () => launchApp({ project, desktop, agent, profile: root, env: { OMP_GUI_TEST_SESSION_FILES: "1" } });
 	app = await launch();
 	const first = await app.firstWindow();
 	await first.waitForFunction(() => window.omp?.rpc != null);
