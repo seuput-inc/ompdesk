@@ -142,12 +142,18 @@ const FRAME_PROBE = `(() => {
 	window.__deviceFrames = frames;
 	const tick = () => {
 		const row = document.querySelector("[data-sidebar-local-device] [data-session-path]");
+		const section = document.querySelector("[data-sidebar-device]");
 		frames.push({
 			top: row ? row.getBoundingClientRect().top : null,
 			pending: document.querySelector("[data-device-pending]") !== null,
 			online: document.querySelector('[data-sidebar-device][data-device-state="online"]') !== null,
 			hostRows: document.querySelectorAll("[data-sidebar-device] [data-device-session]").length,
-			section: document.querySelector("[data-sidebar-device]") !== null,
+			section: section !== null,
+			state: section?.getAttribute("data-device-state") ?? null,
+			groups: section?.querySelectorAll("[data-device-group]").length ?? 0,
+			empty: !!section?.querySelector("[data-device-empty]"),
+			expanded: section?.querySelector("[data-sidebar-device-toggle]")?.getAttribute("aria-expanded") ?? null,
+			live: !!section?.querySelector("[data-device-session][data-live]"),
 		});
 		requestAnimationFrame(tick);
 	};
@@ -160,6 +166,11 @@ interface DeviceFrame {
 	online: boolean;
 	section: boolean;
 	hostRows: number;
+	state: string | null;
+	groups: number;
+	empty: boolean;
+	expanded: string | null;
+	live: boolean;
 }
 
 declare global {
@@ -245,14 +256,20 @@ test("the local rows do not move across the first remote read of a relaunch", as
 					before.top !== frame.top ||
 					before.pending !== frame.pending ||
 					before.online !== frame.online ||
-					before.hostRows !== frame.hostRows;
+					before.hostRows !== frame.hostRows ||
+					before.state !== frame.state ||
+					before.groups !== frame.groups ||
+					before.empty !== frame.empty ||
+					before.expanded !== frame.expanded ||
+					before.live !== frame.live;
 				return moved
 					? [
-							`#${index} top=${frame.top} pending=${frame.pending} online=${frame.online} hostRows=${frame.hostRows}`,
+							`#${index} top=${frame.top} pending=${frame.pending} online=${frame.online} hostRows=${frame.hostRows} state=${frame.state} groups=${frame.groups} empty=${frame.empty} expanded=${frame.expanded} live=${frame.live}`,
 						]
 					: [];
 			})
 			.join("\n");
+		console.log(`device-order stages:\n${changes}`);
 		const first = tops[0] as number;
 		expect(Math.max(...tops) - first, changes).toBeLessThanOrEqual(1);
 		expect(first - Math.min(...tops), changes).toBeLessThanOrEqual(1);

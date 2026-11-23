@@ -92,6 +92,7 @@ for (const [language, theme] of variants([
 		const env = {
 			...process.env,
 			OMP_GUI_HEADLESS: "1",
+			OMP_GUI_TEST_PREVIEW_RECOVERY_PROBE: "1",
 			PI_CODING_AGENT_DIR: agent,
 			OMP_GUI_OMP: await fixtureOmp(profile),
 			// Run from the dev `Electron` binary, Electron logs its own security warning (no
@@ -117,13 +118,14 @@ for (const [language, theme] of variants([
 			});
 		};
 		/** Act on the preview page's own webContents in main: the page starts a download, or its renderer is crashed. */
-		const child = (op: "zoom" | "download" | "crash") =>
+		const child = (op: "zoom" | "download" | "crash" | "document") =>
 			app.evaluate(
 				async ({ webContents }, source) => {
 					const contents = webContents
 						.getAllWebContents()
 						.find(candidate => candidate.getURL().startsWith(`http://${source.host}/`));
 					if (!contents) throw new Error("No preview page");
+					if (source.op === "document") return Number(await contents.executeJavaScript("performance.timeOrigin"));
 					if (source.op === "download")
 						await contents.executeJavaScript(
 							"(() => { const a = document.createElement('a'); a.href = '/file.zip'; document.body.append(a); a.click(); })()",
@@ -232,12 +234,14 @@ for (const [language, theme] of variants([
 			expect((await fs.readFile(pdf)).subarray(0, 4).toString()).toBe("%PDF");
 
 			// C126: a crashed page offers a restore that reloads it.
+			const priorDocument = await child("document");
 			await child("crash");
 			await expect(aside.getByRole("alert")).toContainText(label.crashed);
 			await capture("preview-crashed");
 			await aside.getByRole("button", { name: label.restore, exact: true }).click();
 			await expect(aside.getByRole("alert")).toHaveCount(0);
 			await expect(status).toContainText("w=");
+			expect(await child("document")).toBeGreaterThan(priorDocument);
 
 			// C119: a target=_blank link opens a preview tab; the strip switches and closes tabs.
 			await addressBar.fill(`${host}/popup`);
@@ -275,6 +279,10 @@ for (const [language, theme] of variants([
 		} finally {
 			await exitApp(app);
 			server.close();
+			const log = await fs.readFile(path.join(desktop, "tauri-shell.jsonl"), "utf8").catch(() => "");
+			for (const line of log.split("\n")) {
+				if (/"event":"preview\.recovery\.(call|commit)"/.test(line)) console.log(line);
+			}
 			await fs.rm(profile, { recursive: true, force: true });
 		}
 	});
