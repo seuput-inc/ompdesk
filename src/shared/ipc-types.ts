@@ -645,7 +645,7 @@ export type RuntimeErrorSource =
 	 * (`details.end: true`), and at start a previous run that left no end line (killed, crashed, power lost).
 	 */
 	| "app-quit"
-	/** The pre-rename profile moved into userData (src/main/legacy-user-data.ts). */
+	/** The pre-rename profile moved or was copied into userData. */
 	| "user-data-migration"
 	/**
 	 * Machine setup (src/main/setup/detect.ts, service.ts): `message` names the finding or the Git Mandatory ASLR
