@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	linkSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,6 +86,66 @@ describe("saveCopy of a file on this computer", () => {
 		).resolves.toEqual({ ok: true, savedTo: dest });
 		expect(pick).toHaveBeenCalledWith("report.bin");
 		expect(new Uint8Array(readFileSync(dest))).toEqual(bytes);
+	});
+
+	it("keeps the source bytes when the destination is the source or a hard link to it", async () => {
+		const abs = join(source, "report.bin");
+		const alias = join(out, "alias.bin");
+		writeFileSync(abs, "original");
+		linkSync(abs, alias);
+		for (const dest of [abs, alias]) {
+			await expect(
+				saveCopy({ name: "report.bin", pickDestination: picks(dest), source: { kind: "local", abs } }),
+			).resolves.toEqual({ ok: true, savedTo: dest });
+			expect(readFileSync(abs, "utf8")).toBe("original");
+			expect(readFileSync(dest, "utf8")).toBe("original");
+		}
+	});
+
+	it("overwrites the chosen file in place, including the bytes seen through its other name", async () => {
+		const abs = join(source, "report.bin");
+		const dest = join(out, "copy.bin");
+		const alias = join(out, "existing-link.bin");
+		writeFileSync(dest, "previous longer contents");
+		linkSync(dest, alias);
+		const pickDestination = async () => {
+			writeFileSync(abs, "new");
+			return dest;
+		};
+		await expect(saveCopy({ name: "report.bin", pickDestination, source: { kind: "local", abs } })).resolves.toEqual({
+			ok: true,
+			savedTo: dest,
+		});
+		expect(readFileSync(dest, "utf8")).toBe("new");
+		expect(readFileSync(alias, "utf8")).toBe("new");
+	});
+
+	it("keeps a missing destination folder distinct from a missing source", async () => {
+		const abs = join(source, "report.bin");
+		const dest = join(out, "missing", "copy.bin");
+		writeFileSync(abs, "original");
+		await expect(
+			saveCopy({ name: "report.bin", pickDestination: picks(dest), source: { kind: "local", abs } }),
+		).resolves.toEqual({ ok: false, error: `ENOENT: no such file or directory, copyfile '${abs}' -> '${dest}'` });
+		expect(readdirSync(out)).toEqual([]);
+	});
+
+	it("reports a dangling source link as Node's access check would", async () => {
+		const target = join(source, "removed");
+		const abs = join(source, "link");
+		const dest = join(out, "copy.bin");
+		mkdirSync(target);
+		symlinkSync(target, abs, "junction");
+		rmSync(target, { recursive: true });
+		writeFileSync(dest, "previous");
+		const result = await saveCopy({ name: "link", pickDestination: picks(dest), source: { kind: "local", abs } });
+		const reason = process.platform === "win32" ? "EPERM: operation not permitted" : "ENOENT: no such file or directory";
+		expect(result).toEqual({
+			ok: false,
+			error: `${reason}, copyfile '${abs}' -> '${dest}'`,
+			...(process.platform === "win32" ? {} : { code: "file_not_found" }),
+		});
+		expect(readFileSync(dest, "utf8")).toBe("previous");
 	});
 
 	it("writes nothing when the dialog is cancelled", async () => {
@@ -185,6 +254,20 @@ describe("saveCopy of a file on a paired host", () => {
 		});
 		expect(result).toMatchObject({ ok: false, code: "remote_offline" });
 		expect(readdirSync(out)).toEqual([]);
+	});
+
+	it("keeps an existing destination untouched after the peer drops", async () => {
+		const dest = join(out, "big.bin");
+		writeFileSync(dest, "original");
+		const remote = hostOf(pattern(5));
+		remote.readRange
+			.mockResolvedValueOnce(slice(pattern(5), 0, 5, PART + 10))
+			.mockRejectedValueOnce(codedError("remote_offline", "The link dropped"));
+		await expect(
+			saveCopy({ name: "big.bin", pickDestination: picks(dest), source: remoteSource(remote) }),
+		).resolves.toMatchObject({ ok: false, code: "remote_offline" });
+		expect(readFileSync(dest, "utf8")).toBe("original");
+		expect(readdirSync(out)).toEqual(["big.bin"]);
 	});
 
 	it("treats a host's in-band refusal mid-file the same way", async () => {

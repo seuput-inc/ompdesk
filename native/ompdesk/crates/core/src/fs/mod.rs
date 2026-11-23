@@ -18,6 +18,7 @@ mod mutate;
 pub(crate) mod order;
 pub(crate) mod path;
 mod read;
+pub(crate) mod save_copy;
 
 use serde_json::Value;
 
@@ -74,6 +75,9 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("editor.finish", |call| {
         Box::pin(blocking(move || editor::finish(call)))
+    });
+    registry.add("fs.saveCopy", |call| {
+        Box::pin(blocking(move || save_copy::save(call.params()?)))
     });
 }
 
