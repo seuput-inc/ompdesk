@@ -56,7 +56,7 @@ src/main/background-work.ts	port	3	askBackgroundWork queries member bridges unde
 src/main/benchmark-runner.test.ts	tooling	-	Vitest suite: benchmark runner contract.
 src/main/benchmark-runner.ts	port	2	BenchmarkRunner spawns/cancels the benchmark child, enforces a timeout and parses its summary for the live IPC feature.
 src/main/boot-model.test.ts	tooling	-	Vitest suite: recognizes every stock no-model boot failure.
-src/main/boot-model.ts	port	2	isNoModelBootFailure detects stock startup errors; bootModelSelector spawns the catalog probe and caches its answer per install/version.
+src/main/boot-model.ts	mixed	2	models.bootSelector caches the installed Bun catalog probe in core. §1.3(a), hub batch: sidecar.ts reads isNoModelBootFailure before choosing its exit plan. Stock's catalog stays in Bun; main supplies its launch environment.
 src/main/bridge-account-credits.test.ts	tooling	-	Vitest suite: account credits from stock's usage limits.
 src/main/bridge-account-rotation-stock.test.ts	tooling	-	Vitest suite: moves an automatic warm pin only when stock ranks another account first by more than the margin, never an explicit one, and never flip-flops.
 src/main/bridge-account-rotation.test.ts	tooling	-	Vitest suite: gui-bridge account rotation.

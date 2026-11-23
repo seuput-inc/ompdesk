@@ -41,6 +41,7 @@ runs:
         src/main/setup/service.test.ts
         src/main/setup/omp-update-install.test.ts
         src/main/omp-runtime.test.ts
+        src/main/boot-model.test.ts
         src/main/local/misc.test.ts
         src/main/local/agent-files.test.ts
         src/main/local/session-files.test.ts
