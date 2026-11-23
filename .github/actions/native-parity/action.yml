@@ -40,6 +40,9 @@ runs:
         src/main/local/image-blobs.test.ts
         src/main/local/agent-files.test.ts
         src/main/local/session-files.test.ts
+        src/main/local/session-dump.test.ts
+        src/main/diagnostic-bundle.test.ts
+        src/main/bridge-dump-stock.test.ts
         src/main/local/subagent-journal-tail.test.ts
         src/main/agent-worktrees.test.ts
         src/main/stock-helper.test.ts

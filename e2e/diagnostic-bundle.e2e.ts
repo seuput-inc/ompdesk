@@ -1,6 +1,6 @@
 /**
- * "Save diagnostic bundle" on the fake omp (e2e/fixture/rpc-ui.ts answers the bridge's `session_dump` with a real
- * zip in the temp dir): the session row's menu saves stock's dump members plus ompdesk-diagnostics.txt where the
+ * "Save diagnostic bundle" on the fake omp (e2e/fixture/rpc-ui.ts answers `session_dump_redacted` in a core-owned
+ * temp folder): the session row's menu saves stock's dump members plus ompdesk-diagnostics.txt where the
  * (stubbed) save dialog points, and Option/Alt takes the anonymized archive (the menu has one item, not a twin);
  * the temp archive is gone afterwards. The real bridge method against stock is src/main/bridge-dump-stock.test.ts.
  */
@@ -16,7 +16,9 @@ async function members(file: string): Promise<string[]> {
 }
 
 async function tempArchives(): Promise<string[]> {
-	return (await fs.readdir(os.tmpdir())).filter(name => /^omp-dump-.*\.zip$/.test(name));
+	return (await fs.readdir(os.tmpdir())).filter(name =>
+		/^(?:omp-dump-.*\.zip|ompdesk-archive-[a-f0-9]{32})$/.test(name),
+	);
 }
 
 test("the session row menu saves a diagnostic bundle, anonymized with Alt", async () => {

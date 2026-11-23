@@ -1,23 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import type { SessionArchive } from "../shared/diagnostic-bundle";
-import { handlers } from "./local/session-dump";
-import type { LocalCommandContext } from "./local/types";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { core } from "./core/process";
+import { OMP_COMMAND, INSTALLED_OMP as omp, stockFixtureEnv, stopOmpDaemon } from "./test-bridge-probe";
 
-/**
- * "Save diagnostic bundle" on the installed omp (bridge `session_dump`, resources/gui-bridge/session-dump.ts), in
- * an empty private agent dir and temp dir (no model call). The bridge method calls the session methods stock's
- * `/dump all` and `/dump anon` run and returns their archive, so the GUI can copy the zip: over stock RPC the slash
- * command only prints the path inside a `command_output` text frame, which is why the method exists.
- */
+/** Exercises the installed stock dump methods and the bridge that redacts their ZIP before it answers. */
 
 const SEED = `
+const outputs = JSON.parse(process.env.OMP_GUI_TEST_DUMP_OUTPUTS);
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const user = content => ({ role: "user", content, timestamp: Date.now() });
 const reply = text => ({ role: "assistant", content: [{ type: "text", text }], api: "openai-responses", provider: "openai", model: "gpt-probe", usage, stopReason: "stop", timestamp: Date.now() });
@@ -40,10 +35,10 @@ export default function (pi) {
   try {
    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
    const env = { pi, session: () => session, context: () => undefined, emit: () => {} };
-   const empty = await methods.session_dump({}, env);
+   const empty = await methods.session_dump_redacted({ output: outputs[0] }, env);
    await seed(session);
-   const all = await methods.session_dump({}, env);
-   const anon = await methods.session_dump({ anonymized: true }, env);
+   const all = await methods.session_dump_redacted({ output: outputs[0] }, env);
+   const anon = await methods.session_dump_redacted({ output: outputs[1], anonymized: true }, env);
    console.error("DUMP_PROBE=" + JSON.stringify({ empty, all, anon }));
   } catch (err) {
    console.error("DUMP_PROBE_ERROR=" + String((err && err.stack) || err));
@@ -76,7 +71,10 @@ const SECRET_LINE = `deploy with ${SECRETS[0]} and ${SECRETS[1]}, header Bearer 
 
 /** The main transcript and one subagent transcript (stored next to the session file, as stock keeps them) carry every secret. */
 const PRIVACY_PROBE = `
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { encodeArchive, readArchiveEntries } from "@oh-my-pi/pi-utils/ar";
 import { methods } from "./session-dump";
 ${SEED}
 export default function (pi) {
@@ -89,9 +87,41 @@ export default function (pi) {
    const dir = file.slice(0, -6);
    mkdirSync(dir, { recursive: true });
    writeFileSync(dir + "/Probe.jsonl", readFileSync(file, "utf8").replaceAll("MAIN ", "SUBAGENT "));
-   const all = await methods.session_dump({}, env);
-   const anon = await methods.session_dump({ anonymized: true }, env);
-   console.error("DUMP_PROBE=" + JSON.stringify({ all, anon }));
+   const originals = [];
+   let rawHadSecrets = false;
+   env.session = () => ({
+    dumpSessionArchiveToTmpDir: async () => {
+     const raw = await session.dumpSessionArchiveToTmpDir();
+     originals.push(raw.path);
+     const entries = await readArchiveEntries(raw.path);
+     rawHadSecrets = ["session.md", "llm-request.json", "subagents/Probe.md"].every(
+      name => new TextDecoder().decode(entries.get(name)).includes(${JSON.stringify(SECRETS[3])}));
+     return raw;
+    },
+    dumpAnonymizedArchiveToTmpDir: async () => {
+     const raw = await session.dumpAnonymizedArchiveToTmpDir();
+     originals.push(raw.path);
+     return raw;
+    },
+   });
+   const all = await methods.session_dump_redacted({ output: outputs[0] }, env);
+   const anon = await methods.session_dump_redacted({ output: outputs[1], anonymized: true }, env);
+   const fixture = join(tmpdir(), "synthetic-stock.zip");
+   const fixtureArchive = { path: fixture, files: [], subagentCount: 0 };
+   env.session = () => ({
+    dumpSessionArchiveToTmpDir: async () => fixtureArchive,
+    dumpAnonymizedArchiveToTmpDir: async () => fixtureArchive,
+   });
+   writeFileSync(fixture, await encodeArchive("zip", [["invalid.bin", new Uint8Array([255])], ["nul.txt", "a\\0b"]]));
+   const dropped = await methods.session_dump_redacted({ output: outputs[2] }, env);
+   writeFileSync(fixture, "not a zip");
+   const corruptFailed = await methods.session_dump_redacted({ output: outputs[2] }, env).then(() => false, () => true);
+   writeFileSync(fixture, await encodeArchive("zip", [["session.md", "sample"]]));
+   const previous = readFileSync(outputs[2]);
+   const reusedFailed = await methods.session_dump_redacted({ output: outputs[2] }, env).then(() => false, () => true);
+   console.error("DUMP_PROBE=" + JSON.stringify({ all, anon, dropped, rawHadSecrets, corruptFailed,
+    reservationRefused: reusedFailed && readFileSync(outputs[2]).equals(previous),
+    originalsGone: [...originals, fixture].every(path => !existsSync(path)) }));
   } catch (err) {
    console.error("DUMP_PROBE_ERROR=" + String((err && err.stack) || err));
   }
@@ -107,28 +137,11 @@ async function texts(file: string): Promise<Record<string, string>> {
 	return out;
 }
 
-/** `dump_session_archive` (the step on the machine that runs the omp) over a bridge that answers with `archive`. */
-function handlerOver(archive: Omit<SessionArchive, "redacted">) {
-	const ctx = {
-		cwd: "/repo",
-		bridge: { connected: true, request: async () => archive },
-	} as unknown as LocalCommandContext;
-	const handler = handlers.dump_session_archive;
-	if (!handler) throw new Error("no dump_session_archive handler");
-	return handler({ type: "dump_session_archive", anonymized: archive.anonymized }, ctx) as Promise<SessionArchive>;
-}
-
-interface Archive {
-	path: string;
-	files: string[];
-	subagentCount: number;
-	anonymized: boolean;
-}
-
-function isolatedRun(
+async function isolatedRun(
 	probe: string,
 	file: string,
 	input: string,
+	destinations: number,
 	body: (dirs: { temp: string }, result: { stdout: string; stderr: string }) => Promise<void>,
 ): Promise<void> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-dump-"));
@@ -138,43 +151,53 @@ function isolatedRun(
 	cpSync(resolve("resources/gui-bridge"), join(isolated, "bridge"), { recursive: true });
 	const extension = join(isolated, "bridge", file);
 	writeFileSync(extension, probe);
-	const env: Record<string, string | undefined> = {
-		...process.env,
-		PI_CODING_AGENT_DIR: isolated,
-		PI_CONFIG_DIR: configDirName(isolated),
+	const env = {
+		...stockFixtureEnv(isolated),
+		TMP: temp,
+		TEMP: temp,
 		TMPDIR: temp,
-		OMP_PROFILE: "",
-		PI_PROFILE: "",
 		OPENAI_API_KEY: "probe-not-a-real-key",
+		OMP_GUI_TEST_DUMP_OUTPUTS: "[]",
 	};
-	for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]) {
-		Reflect.deleteProperty(env, key);
+	const grants: Array<{ path: string; receipt: string }> = [];
+	try {
+		for (let i = 0; i < destinations; i++)
+			grants.push((await core().call<{ path: string; receipt: string }>("archive.prepare", {})).result);
+		env.OMP_GUI_TEST_DUMP_OUTPUTS = JSON.stringify(grants.map(grant => grant.path));
+		const result = spawnSync(
+			OMP_COMMAND.file,
+			[...OMP_COMMAND.args, "--mode", "rpc", "--no-extensions", "--no-skills", "--no-rules", "-e", extension],
+			{
+				cwd: isolated,
+				env,
+				encoding: "utf8",
+				timeout: 120_000,
+				maxBuffer: 4 * 1024 * 1024,
+				input,
+			},
+		);
+		await body({ temp }, result);
+	} finally {
+		try {
+			await Promise.all(grants.map(grant => core().call("archive.discard", grant)));
+		} finally {
+			stopOmpDaemon(isolated, env);
+			rmSync(isolated, { recursive: true, force: true });
+		}
 	}
-	const result = spawnSync(
-		OMP_COMMAND.file,
-		[...OMP_COMMAND.args, "--mode", "rpc", "--no-extensions", "--no-skills", "--no-rules", "-e", extension],
-		{
-			env,
-			encoding: "utf8",
-			timeout: 120_000,
-			maxBuffer: 4 * 1024 * 1024,
-			input,
-		},
-	);
-	return body({ temp }, result).finally(() => rmSync(isolated, { recursive: true, force: true }));
 }
 
 const members = async (file: string) => Object.keys((await JSZip.loadAsync(await readFile(file))).files).sort();
 
 describe.skipIf(!existsSync(omp))("session dump on stock omp", () => {
 	it("hands back stock's `/dump all` and `/dump anon` zips: session.md for all, session.jsonl for anon, null while empty", async () => {
-		await isolatedRun(BRIDGE_PROBE, "dump-probe.ts", "", async (_dirs, { stderr }) => {
+		await isolatedRun(BRIDGE_PROBE, "dump-probe.ts", "", 2, async (_dirs, { stderr }) => {
 			const line = stderr.split("\n").find(value => value.startsWith("DUMP_PROBE="));
 			expect(line, stderr.slice(-2500)).toMatch(/^DUMP_PROBE=/);
 			const out = JSON.parse(line?.slice("DUMP_PROBE=".length) ?? "{}") as {
 				empty: null;
-				all: Archive;
-				anon: Archive;
+				all: SessionArchive;
+				anon: SessionArchive;
 			};
 			expect(out.empty).toBeNull();
 			expect(out.all.anonymized).toBe(false);
@@ -192,7 +215,7 @@ describe.skipIf(!existsSync(omp))("session dump on stock omp", () => {
 
 	it("answers `/dump all` over RPC with a command_output text frame only: no structured archive to copy", async () => {
 		const input = `${JSON.stringify({ id: "d1", type: "prompt", message: "/dump all" })}\n`;
-		await isolatedRun(RPC_PROBE, "rpc-probe.ts", input, async ({ temp }, { stdout }) => {
+		await isolatedRun(RPC_PROBE, "rpc-probe.ts", input, 0, async ({ temp }, { stdout }) => {
 			const frames = stdout
 				.split("\n")
 				.filter(value => value.startsWith("{"))
@@ -208,18 +231,26 @@ describe.skipIf(!existsSync(omp))("session dump on stock omp", () => {
 	}, 130_000);
 
 	it("hides every secret in every member of both bundles, and leaves no stock archive behind", async () => {
-		await isolatedRun(PRIVACY_PROBE, "privacy-probe.ts", "", async (_dirs, { stderr }) => {
+		await isolatedRun(PRIVACY_PROBE, "privacy-probe.ts", "", 3, async (_dirs, { stderr }) => {
 			const line = stderr.split("\n").find(value => value.startsWith("DUMP_PROBE="));
 			expect(line, stderr.slice(-2500)).toMatch(/^DUMP_PROBE=/);
-			const out = JSON.parse(line?.slice("DUMP_PROBE=".length) ?? "{}") as { all: Archive; anon: Archive };
-
-			// Stock's own `/dump all` carries them in the transcript, the subagent transcript and the LLM request.
-			const raw = await texts(out.all.path);
-			expect(Object.keys(raw).sort()).toEqual(["llm-request.json", "session.md", "subagents/Probe.md"]);
-			for (const text of Object.values(raw)) expect(text).toContain(SECRETS[3]);
-
-			for (const stock of [out.all, out.anon]) {
-				const bundle = await handlerOver(stock);
+			const out = JSON.parse(line?.slice("DUMP_PROBE=".length) ?? "{}") as {
+				all: SessionArchive;
+				anon: SessionArchive;
+				dropped: SessionArchive;
+				corruptFailed: boolean;
+				reservationRefused: boolean;
+				rawHadSecrets: boolean;
+				originalsGone: boolean;
+			};
+			expect(out.rawHadSecrets).toBe(true);
+			expect(out.originalsGone).toBe(true);
+			expect(out.corruptFailed).toBe(true);
+			expect(out.reservationRefused).toBe(true);
+			expect(out.dropped.dropped).toEqual(["invalid.bin", "nul.txt"]);
+			expect(await members(out.dropped.path)).toEqual([]);
+			for (const bundle of [out.all, out.anon]) {
+				expect(bundle.redacted).toBe(true);
 				const members = await texts(bundle.path);
 				expect(Object.keys(members).sort()).toEqual([...bundle.files].sort());
 				for (const [name, text] of Object.entries(members)) {
@@ -229,7 +260,6 @@ describe.skipIf(!existsSync(omp))("session dump on stock omp", () => {
 					if (name.endsWith(".jsonl"))
 						for (const row of text.split("\n").filter(Boolean)) expect(() => JSON.parse(row)).not.toThrow();
 				}
-				await expect(access(stock.path)).rejects.toThrow();
 			}
 		});
 	}, 130_000);

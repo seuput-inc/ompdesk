@@ -243,6 +243,7 @@ pub fn registry() -> Registry {
     let mut registry = Registry::default();
     registry.add("core.echo", |call| Box::pin(echo(call)));
     crate::aimemory::register(&mut registry);
+    crate::archive::register(&mut registry);
     crate::browsers::register(&mut registry);
     crate::clock::register(&mut registry);
     crate::disk::register(&mut registry);

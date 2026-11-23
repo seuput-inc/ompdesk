@@ -10,6 +10,7 @@ import * as path from "node:path";
 import type { BrowserWindow } from "electron";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
+import { redactedDumpMembers } from "../../resources/gui-bridge/session-dump-core";
 import { DIAGNOSTICS_MEMBER, type DiagnosticBundleResult } from "../shared/diagnostic-bundle";
 import type { IpcFsReadBinaryResult } from "../shared/ipc-types";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
@@ -50,14 +51,16 @@ async function membersOf(file: string): Promise<Record<string, string>> {
 
 type Members = Record<string, string | Uint8Array>;
 
-/** A tab's omp: the local handlers over a bridge that writes stock's members (or `members`) into `dumpDir`. */
-function fakeTab(options: { dumpDir: string; messages?: boolean; device?: string; members?: Members }) {
+/** A tab's local handlers over a bridge fixture that writes only redacted stock members. */
+function fakeTab(options: { messages?: boolean; device?: string; members?: Members }) {
 	const commands: RpcCommand[] = [];
 	const asked: { anonymized: boolean }[] = [];
 	const bridge: LocalCommandContext["bridge"] = {
 		connected: true,
 		async request<T>(method: string, params?: unknown): Promise<T> {
-			if (method !== "session_dump") throw new Error(`unexpected bridge method ${method}`);
+			if (method !== "session_dump_redacted") throw new Error(`unexpected bridge method ${method}`);
+			if (!params || typeof params !== "object" || !("output" in params) || typeof params.output !== "string")
+				throw new Error("missing output");
 			const anonymized =
 				typeof params === "object" && params !== null && "anonymized" in params && params.anonymized === true;
 			asked.push({ anonymized });
@@ -67,11 +70,24 @@ function fakeTab(options: { dumpDir: string; messages?: boolean; device?: string
 				(anonymized
 					? { "session.jsonl": '{"type":"session"}\n' }
 					: { "session.md": "# transcript\n", "llm-request.json": "{}\n" });
+			const { members: clean, dropped } = await redactedDumpMembers(
+				Object.keys(members).map(path => ({ path, isDirectory: false })),
+				async name => {
+					const content = members[name]!;
+					return typeof content === "string" ? Buffer.from(content) : content;
+				},
+			);
 			const zip = new JSZip();
-			for (const [name, content] of Object.entries(members)) zip.file(name, content);
-			const file = path.join(options.dumpDir, `omp-dump-${anonymized ? "anon-" : ""}${asked.length}.zip`);
-			await fs.writeFile(file, await zip.generateAsync({ type: "nodebuffer" }));
-			return { path: file, files: Object.keys(members), subagentCount: 0, anonymized } as T;
+			for (const [name, text] of clean) zip.file(name, text, { createFolders: false });
+			await fs.writeFile(params.output, await zip.generateAsync({ type: "nodebuffer" }));
+			return {
+				path: params.output,
+				files: [...clean.keys()],
+				subagentCount: 0,
+				anonymized,
+				redacted: true,
+				dropped,
+			} as T;
 		},
 	};
 	const ctx: LocalCommandContext = {
@@ -351,7 +367,9 @@ describe("a tab on a paired host", () => {
 			"session.md",
 		]);
 		expect(remoteReads).toEqual([expect.stringMatching(/ompdesk-dump-[\w-]+\.zip$/)]);
-		expect(path.dirname(remoteReads[0] ?? "")).toBe(root);
+		const privateDir = path.dirname(remoteReads[0] ?? "");
+		expect(path.basename(privateDir)).toMatch(/^ompdesk-archive-[0-9a-f]{32}$/);
+		await expect(fs.access(privateDir)).rejects.toMatchObject({ code: "ENOENT" });
 		expect(commands.map(command => command.type)).toEqual(["dump_session_archive", "discard_session_archive"]);
 		expect(result.path).toBe(target);
 		expect(dialogs).toHaveLength(1);

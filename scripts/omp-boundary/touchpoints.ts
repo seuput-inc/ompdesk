@@ -1614,8 +1614,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"resources/gui-bridge/session-dump.ts",
 			"src/main/local/session-dump.ts",
 			"resources/gui-bridge/capabilities.ts",
+			"resources/gui-bridge/health.ts",
+			"resources/gui-bridge/omp/pi-utils/ar.ts",
 		],
-		stock: ["/dump all", "/dump anon"],
+		stock: ["/dump all", "/dump anon", "@oh-my-pi/pi-utils/ar"],
 		tests: ["src/main/bridge-dump-stock.test.ts", "src/main/local/session-dump.test.ts"],
 	},
 	{
