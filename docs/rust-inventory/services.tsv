@@ -216,7 +216,7 @@ src/main/local/session-files.ts	native-client	omp.renameStoredSession checks the
 src/main/local/sessions.test.ts	exception	Tests paged transcript reads, stale snapshot cursors and retries when a live tail changes.
 src/main/local/sessions.ts	port	Hub batch with sidecar: BridgeRelay fences each stock replay by tab, seq, generation and spawnId. Cursors, shrinking and retry belong with that transaction; the per-bridge tail cache returns the same page object for the same version, limit and image form (§1.3a,c). Stock owns replay and session mutations (§1.3d).
 src/main/local/settings.test.ts	exception	Tests model catalog availability without optional metadata and merging stock and bridge account data.
-src/main/local/settings.ts	mixed	Rust sidecar.guiBridge forwards schema, role metadata, setup facts, spend and recent models. TS merges logout accounts and usage data, routes parameterized settings and cancels browser login via a timed loopback callback.
+src/main/local/settings.ts	mixed	remotebytes.signInCancel sends the timed denial to stock's loopback callback. Relay setup shares the synchronous URL parser (§1.3a). sidecar.guiBridge supplies settings and model metadata. Joining logout accounts to stock's usage reply has no independent I/O (§1.3b,d).
 src/main/local/slash.ts	port	Caches builtin slash names and aliases per bridge and rejects a command not offered by the running stock version.
 src/main/local/subagent-journal-tail.test.ts	exception	Tests reading journal deltas with tail tokens and resetting when a journal is replaced.
 src/main/local/types.ts	exception	Defines stock, bridge and handler contracts plus the coded LocalCommandError wrapper; no independent command implementation.

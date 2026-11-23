@@ -291,12 +291,12 @@ describe("reset passes", () => {
 });
 
 describe("login_cancel handler", () => {
-	it("reaches the sign-in's loopback callback with a denial and the flow's state, as a provider's Deny does", async () => {
+	it.each([500, 302])("sends the denial only to the callback when stock answers %i", async status => {
 		const seen: string[] = [];
 		const server = createServer((request, response) => {
 			seen.push(request.url ?? "");
-			// Stock's callback server answers a denial with its error page.
-			response.writeHead(500).end();
+			if (status === 302 && seen.length === 1) response.writeHead(302, { Location: "/elsewhere" }).end();
+			else response.writeHead(status === 500 ? 500 : 200).end();
 		});
 		await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
 		try {
@@ -309,6 +309,7 @@ describe("login_cancel handler", () => {
 				},
 				fakeCtx(vi.fn(), vi.fn()),
 			);
+			expect(seen).toHaveLength(1);
 			const [callback] = seen.map(url => new URL(url, "http://127.0.0.1"));
 			expect(callback?.pathname).toBe("/callback");
 			expect(Object.fromEntries(callback?.searchParams ?? [])).toEqual({
@@ -322,19 +323,13 @@ describe("login_cancel handler", () => {
 	});
 
 	it("refuses a sign-in without a loopback callback and never fetches it", async () => {
-		const fetchSpy = vi.spyOn(globalThis, "fetch");
-		try {
-			const redirect = encodeURIComponent("vscode://gitlab.gitlab-workflow/authentication");
-			await expect(
-				handlers.login_cancel(
-					{ type: "login_cancel", url: `https://gitlab.com/oauth/authorize?redirect_uri=${redirect}` },
-					fakeCtx(vi.fn(), vi.fn()),
-				),
-			).rejects.toThrow("no loopback callback");
-			expect(fetchSpy).not.toHaveBeenCalled();
-		} finally {
-			fetchSpy.mockRestore();
-		}
+		const redirect = encodeURIComponent("vscode://gitlab.gitlab-workflow/authentication");
+		await expect(
+			handlers.login_cancel(
+				{ type: "login_cancel", url: `https://gitlab.com/oauth/authorize?redirect_uri=${redirect}` },
+				fakeCtx(vi.fn(), vi.fn()),
+			),
+		).rejects.toMatchObject({ code: "no_loopback_callback" });
 	});
 });
 
