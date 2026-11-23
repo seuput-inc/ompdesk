@@ -1,6 +1,8 @@
 #[path = "../../../shell/src/facts/app_icon.rs"]
 mod app_icon;
 mod clipboard;
+#[path = "../../src/diagnostic_bundle_name.rs"]
+mod diagnostic_bundle_name;
 #[path = "../../src/js_date.rs"]
 mod js_date;
 #[path = "../../src/launch_protection.rs"]
@@ -39,6 +41,9 @@ fn main() -> io::Result<()> {
                 params["headless"].as_str().map(std::ffi::OsStr::new),
             ),
             "hang.consume" => marker::consume_reports(Path::new(params["path"].as_str().unwrap())),
+            "app.diagnosticBundleFileName" => {
+                Value::String(diagnostic_bundle_name::file_name(params).unwrap())
+            }
             "app.previousRunEnd" => log_tail::previous_run_end(
                 std::fs::File::open(params["path"].as_str().unwrap()),
                 u32::try_from(params["ownPid"].as_u64().unwrap()).unwrap(),

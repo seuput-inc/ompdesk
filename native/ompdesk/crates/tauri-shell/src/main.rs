@@ -3,6 +3,7 @@
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+mod diagnostic_bundle_name;
 mod evaluate;
 mod gpu;
 mod js_date;
@@ -1152,6 +1153,13 @@ fn dispatch(call: host::Call) {
                 pid,
             ))
         });
+        return;
+    }
+    if call.method == "app.diagnosticBundleFileName" {
+        match diagnostic_bundle_name::file_name(&call.params) {
+            Ok(name) => call.ok(Value::String(name)),
+            Err(error) => call.err("invalid", error.to_string()),
+        }
         return;
     }
     if call.method == "app.diagnosticLog" {

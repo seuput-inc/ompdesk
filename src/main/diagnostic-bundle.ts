@@ -17,7 +17,6 @@ import path from "node:path";
 import JSZip from "jszip";
 import { z } from "zod";
 import {
-	bundleFileName,
 	DIAGNOSTICS_MEMBER,
 	type DiagnosticBundleRequest,
 	type DiagnosticBundleResult,
@@ -45,6 +44,7 @@ export interface DiagnosticBundleDeps {
 	diagnosticsText(): Promise<string>;
 	/** A file on the paired host `device` (`host.fs.readBinary`: the host's cap applies). */
 	readHostFile(tab: BundleTab & { device: string }, file: string): Promise<IpcFsReadBinaryResult>;
+	fileName(params: { title: string; localDate: [number, number, number]; anonymized: boolean }): Promise<string>;
 	/** The native save dialog; null when the person cancelled. */
 	chooseFile(caller: IpcCaller, defaultPath: string): Promise<string | null>;
 	downloadsDir(): string;
@@ -102,10 +102,8 @@ async function destinationFile(
 	deps: DiagnosticBundleDeps,
 	caller: IpcCaller,
 	request: z.infer<typeof Request>,
-	name: string,
 ): Promise<{ file: string } | { result: DiagnosticBundleResult }> {
 	const destination = request.destination ?? { kind: "dialog" };
-	if (destination.kind === "downloads") return { file: await freeFile(deps.downloadsDir(), name) };
 	if (destination.kind === "path") {
 		if (!path.isAbsolute(destination.path)) {
 			return { result: failure("not_absolute_path", "The bundle's path must be absolute") };
@@ -113,8 +111,18 @@ async function destinationFile(
 		const file = /\.zip$/i.test(destination.path) ? destination.path : `${destination.path}.zip`;
 		return { file: path.normalize(file) };
 	}
-	if (!caller.browserWindow) return { result: failure("no_window", "No window to show the save dialog in") };
-	const chosen = await deps.chooseFile(caller, path.join(deps.downloadsDir(), name));
+	if (destination.kind === "dialog" && !caller.browserWindow) {
+		return { result: failure("no_window", "No window to show the save dialog in") };
+	}
+	const day = deps.now?.() ?? new Date();
+	const name = await deps.fileName({
+		title: request.title?.toWellFormed() ?? "",
+		localDate: [day.getFullYear(), day.getMonth() + 1, day.getDate()],
+		anonymized: request.anonymized,
+	});
+	const dir = deps.downloadsDir();
+	if (destination.kind === "downloads") return { file: await freeFile(dir, name) };
+	const chosen = await deps.chooseFile(caller, path.join(dir, name));
 	return chosen === null ? { result: { ok: false, cancelled: true } } : { file: chosen };
 }
 
@@ -180,8 +188,7 @@ export async function saveDiagnosticBundle(
 			: failure("session_not_open", "That session is not open in a tab");
 	}
 	try {
-		const name = bundleFileName(request.title, (deps.now ?? (() => new Date()))(), request.anonymized);
-		const target = await destinationFile(deps, caller, request, name);
+		const target = await destinationFile(deps, caller, request);
 		if ("result" in target) return target.result;
 		const built = await bundledBytes(deps, tab, request.anonymized);
 		if ("ok" in built) return built;

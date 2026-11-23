@@ -1,7 +1,7 @@
 /**
  * "Save diagnostic bundle": stock's `/dump all|anon` zip of one open session, every member redacted, plus OMPdesk's
- * own redacted diagnostics text, saved where the person chose. Dependency-free: main, the renderer and a paired web
- * page's shim share these shapes and the default file name.
+ * own redacted diagnostics text, saved where the person chose. Main and the pages share the wire types. The paired
+ * page names its own save sheet; the desktop and Downloads use the Rust shell's name.
  */
 import type { IpcErrorCode } from "./ipc-error-codes";
 
@@ -83,7 +83,7 @@ export function bundleFileName(title: string | undefined, date: Date, anonymized
 		.replace(/[^\p{L}\p{N}._]+/gu, "-")
 		.replace(/^[-._]+|[-._]+$/g, "")
 		.slice(0, TITLE_CHARS)
-		.replace(/[-._]+$/g, "");
+		.replace(/[-._\p{Surrogate}]+$/u, "");
 	const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 	return ["omp-dump", slug, day, anonymized ? "anon" : ""].filter(Boolean).join("-").concat(".zip");
 }

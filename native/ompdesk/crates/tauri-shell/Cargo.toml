@@ -29,6 +29,9 @@ tokio = { version = "1", features = ["time", "sync", "net", "io-util", "rt", "ma
 sha2 = "0.11"
 shell_core = { package = "ompdesk-shell", path = "../shell", default-features = false }
 url = "2"
+# Diagnostic bundle names use the paired page's NFC and Unicode Letter/Number rules.
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+icu_properties = "2"
 # Tauri's own tray-icon: a second muda would define its Objective-C classes twice (fat LTO refuses to link that on macOS).
 tray-icon = "0.25"
 shell_preview = { package = "ompdesk-shell-preview", path = "../shell-preview" }

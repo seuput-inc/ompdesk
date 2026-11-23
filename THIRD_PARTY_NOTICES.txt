@@ -38617,7 +38617,7 @@ authors as stated in the repository listed above.
 
 OMPdesk's Tauri shell: statically linked Rust crates
 
-Cargo.lock SHA-256: 6c9c800ca1c550c152cdf1b542d380fc383e22866909896b57a7323dba8550a9
+Cargo.lock SHA-256: c7573666ebf3b2ed776786bef33c28760fe1954d8875598f2f4765636eb04e01
 
 The Tauri 2 shell and rollback launcher OMPdesk builds from native/ompdesk/crates/tauri-shell link the
 crates below. The OS supplies WKWebView or WebView2; no CEF runtime is part of this shell.
