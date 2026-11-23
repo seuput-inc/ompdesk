@@ -714,8 +714,8 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 		await until(`WebView2 opened no DevTools port ${debugPort}`, () => devToolsAnswers(debugPort));
 		const late = info !== undefined && info.repeatEachIndex % 2 === 1;
 		console.log(`[startup-probe] repeat=${info?.repeatEachIndex} attach=${late ? "after-app" : "at-port"}`);
-		if (late) {
-			await until("first app document did not commit before CDP attach", async () => {
+		const waitForApp = () =>
+			until("first app document did not commit without CDP", async () => {
 				const targets = await devToolsTargets(debugPort);
 				if (!targets.startsWith("[")) return undefined;
 				const app = (JSON.parse(targets) as string[]).some(
@@ -723,7 +723,7 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 				);
 				return app ? true : undefined;
 			});
-		}
+		if (late) await waitForApp();
 		for (let attempt = 0; ; attempt++) {
 			try {
 				browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {
@@ -734,6 +734,28 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 			} catch (error) {
 				if (attempt >= 20 || Date.now() > deadline) throw error;
 				await Promise.race([sleep(100), exitedEarly.promise]);
+			}
+		}
+		if (!late) {
+			const nativeLog = path.join(userData, "tauri-shell.jsonl");
+			const outcome = await until("no profile verdict from early attachment", () => {
+				if (browser?.contexts().some(context => context.pages().some(isAppPage))) return "app";
+				if (!fs.existsSync(nativeLog)) return undefined;
+				const contents = fs.readFileSync(nativeLog, "utf8");
+				const launch = contents.slice(contents.lastIndexOf('"event":"shell.started"'));
+				if (launch.includes('"event":"profile.migrate.request"')) return "requested";
+				if (launch.includes('"event":"profile.migrate.stalled"')) return "stalled";
+				return undefined;
+			});
+			console.log(`[startup-probe] pid=${child.pid} early=${outcome}`);
+			if (outcome === "stalled") {
+				await browser.close();
+				console.log(`[startup-probe] pid=${child.pid} closed only the Playwright transport`);
+				await waitForApp();
+				console.log(`[startup-probe] pid=${child.pid} committed while detached`);
+				browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {
+					noDefaults: options.colorScheme === null,
+				});
 			}
 		}
 		if (options.colorScheme === null) keepFocusEmulation(browser);
