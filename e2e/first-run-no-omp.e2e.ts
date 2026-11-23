@@ -290,6 +290,17 @@ for (const language of variants(["en", "ko"] as const)) {
 					setupToWizardMs: (marks["first-run-visible"] ?? 0) - (marks["omp-ready"] ?? 0),
 				});
 			} finally {
+				console.log(
+					"[retry-probe]",
+					JSON.stringify(
+						await launched.app.evaluate(() =>
+							performance
+								.getEntriesByType("mark")
+								.filter(e => e.name.startsWith("probe-retry:"))
+								.map(e => [e.name, e.startTime]),
+						),
+					),
+				);
 				await launched.close();
 			}
 		});
