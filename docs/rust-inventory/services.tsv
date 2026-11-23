@@ -15,7 +15,7 @@ src/main/agent-control/service.test.ts	exception	Exercises agent-control command
 src/main/agent-control/service.ts	port	Reopens the agentControl service after loss, caches a last host snapshot and chooses which host data and actions to expose to Rust.
 src/main/agent-control/skill-drift.test.ts	exception	Compares documented tool names, parameters and enum values against the host tool definitions.
 src/main/agent-control/target-answer.test.ts	exception	Tests ordering and refusal when delivering notes, attachments and answers to an open question.
-src/main/agent-control/target-answer.ts	port	Deduplicates completed and in-flight answers, claims the question or plan and sequences checks, notes and answer delivery.
+src/main/agent-control/target-answer.ts	port	Hub batch, §1.3(c): sidecar-pool.ts and remote/host-services.ts own the open question and plan claims. TargetAnswer claims before its first await, then attaches the note and answers the same claim. Move the transaction with those owners; never interpose an RPC before the exclusive claim.
 src/main/agent-control/tools.test.ts	exception	Tests tool registration, accepted arguments and exclusion of account or permission controls.
 src/main/agent-control/tools.ts	port	Coerces stringified booleans, numbers, arrays and objects recursively according to each tool schema before strict argument parsing.
 src/main/ai-memory/ambiguous-names.test.ts	exception	Tests guarded project renaming and collision handling when the server refuses a name.
@@ -65,10 +65,10 @@ src/main/control-socket/cli-install.test.ts	exception	Checks launcher contents, 
 src/main/control-socket/cli-install.ts	port	Generates shell and Windows launchers, protects foreign launchers in the Bun bin folder and adds the app bin directory to the supplied PATH.
 src/main/control-socket/cli.test.ts	exception	Drives the CLI with arguments and stdin and checks caller identity, text output and JSON output.
 src/main/control-socket/control-test-rig.ts	exception	Supplies a fake control backend, temporary endpoints and a line-oriented client for socket tests.
-src/main/control-socket/endpoint.ts	port	Chooses random named pipes on Windows or short hashed socket directories on Unix when the normal path exceeds 103 bytes.
-src/main/control-socket/env.ts	port	Stores the live endpoint, removes inherited control variables and disables access in foreign child environments.
+src/main/control-socket/endpoint.ts	port	Hub batch, §1.3(a,c): control-socket/index.ts computes the random pipe or short Unix socket before its first await. sidecar-factory.ts can already read the published endpoint for a spawn while prepareDir runs. Move naming with controlEnvFor's synchronous consumers.
+src/main/control-socket/env.ts	port	Hub batch, §1.3(a,c): sidecar-factory.ts and terminal/ipc.ts read controlEnvFor at spawn time; sidecar.ts and stock-helper.ts strip inherited variables synchronously. The native spawn owners must take all of these reads before the endpoint state moves.
 src/main/control-socket/events.test.ts	exception	Tests live subscription boundaries, sequence ordering and turn-end events over a socket connection.
-src/main/control-socket/index.ts	port	Publishes the endpoint before listen, orders directory and token preparation, and withdraws the endpoint on failed start or close.
+src/main/control-socket/index.ts	port	Hub batch, §1.3(c): ipc.ts calls startControlSocket without awaiting it. The endpoint is set before directory/token preparation and withdrawn on failed listen or close. Move startup with the spawn-time readers in sidecar-factory.ts; Rust already prepares the directory, token and listener.
 src/main/control-socket/router.test.ts	exception	Tests request routing, successful frames carrying tool errors and unknown-session responses.
 src/main/control-socket/server.test.ts	exception	Exercises socket handshake, caller defaults and tool calls over real connections.
 src/main/control-socket/server.ts	port	Restarts the Rust listener after a lost core, releases tracked outside callers and fences late backend replies by listener epoch.
