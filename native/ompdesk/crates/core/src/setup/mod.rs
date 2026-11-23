@@ -15,6 +15,7 @@ mod desktop;
 mod download;
 mod launcher;
 mod net;
+mod registry_path;
 mod runtime;
 #[cfg(test)]
 mod tests;
@@ -42,6 +43,7 @@ pub fn register(registry: &mut Registry) {
     registry.add("setup.resolveTailscale", |call| {
         Box::pin(async move { resolve_tailscale_method(call).await })
     });
+    registry_path::register(registry);
 }
 
 #[derive(Deserialize)]
