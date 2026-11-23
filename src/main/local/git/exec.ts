@@ -170,7 +170,11 @@ async function heldRequest<T>(method: string, params: () => Promise<object>, tim
 }
 
 /** `heldRequest` with the answer's `bin` tail. */
-async function heldAnswer<T>(method: string, params: () => Promise<object>, timeoutMs: number): Promise<CoreAnswer<T>> {
+export async function heldAnswer<T>(
+	method: string,
+	params: () => Promise<object>,
+	timeoutMs: number,
+): Promise<CoreAnswer<T>> {
 	const hold = currentStepSignal();
 	if (hold?.aborted) throw hold.reason;
 	const request = await params();

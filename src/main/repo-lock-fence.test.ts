@@ -391,22 +391,75 @@ describe("every caller of withRepoLock that touches the disk", () => {
 		SLOW,
 	);
 
-	it("saved-worktree record: an update held at its read never writes saved.json under the next holder", async () => {
-		const dir = path.join(root, "saved");
-		await promises.mkdir(dir);
-		const store = new SavedWorktreeStore(dir);
+	const savedRecord = () => ({
+		id: "test-save",
+		path: path.join(root, "closed"),
+		repo,
+		branch: null,
+		head: "abc",
+		savedBranch: null,
+		removedAt: 1,
+		archivedFiles: 0,
+		archivedBytes: 0,
+	});
+
+	it("a late removal proof cannot publish a saved record under the next holder", async () => {
+		const store = new SavedWorktreeStore(path.join(root, "saved"));
 		const key = "/repo/fence-saved";
-		const held = hold("readFile", path.join(dir, "saved.json"));
-		const old = caught(withRepoLock(key, () => store.update(records => records)));
-		const next = withRepoLock(key, async () => {});
-		await held.reached;
+		const proof = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const attempted = Promise.withResolvers<void>();
+		const old = caught(
+			withRepoLock(key, async () => {
+				started.resolve();
+				await proof.promise;
+				try {
+					await store.settle(savedRecord(), true);
+				} finally {
+					attempted.resolve();
+				}
+			}),
+		);
+		await started.promise;
+		const next = withRepoLock(key, () => store.settle({ ...savedRecord(), id: "next" }, true));
 		await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
 		expect(await old).toBeInstanceOf(StepStalledError);
-		held.release();
 		await next;
-		await settle();
-		await expect(promises.stat(path.join(dir, "saved.json"))).rejects.toThrow();
+		proof.resolve();
+		await attempted.promise;
+		expect((await store.list(repo)).map(row => row.id)).toEqual(["next"]);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"a cancelled native saved-record read drains before handover and never renames",
+		async () => {
+			const store = new SavedWorktreeStore(path.join(root, "saved"));
+			await promises.mkdir(store.dir);
+			const file = path.join(store.dir, "saved.json");
+			execFileSync("mkfifo", [file]);
+			const key = "/repo/fence-saved-read";
+			const caller = new SerialChain({ name: "caller", maxStepMs: 1_000, log: () => {} });
+			const old = caught(caller.run(() => withRepoLock(key, () => store.settle(savedRecord(), true))));
+			const writer = await promises.open(file, "w"); // The real Rust reader has opened its end.
+			let handedOver = false;
+			const next = withRepoLock(key, async () => {
+				handedOver = true;
+			});
+			try {
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(await old).toBeInstanceOf(StepStalledError);
+				// A later frame answered: the core has read the cancel but is still waiting on its OS read.
+				await new SavedWorktreeStore(path.join(root, "empty")).find({ id: "absent" });
+				expect(handedOver).toBe(false);
+				await writer.writeFile("[]");
+			} finally {
+				await writer.close();
+			}
+			await next;
+			expect((await promises.lstat(file)).isFIFO()).toBe(true);
+		},
+		SLOW,
+	);
 
 	it(
 		"worktree create: a stopped native add cannot create a branch or checkout under the next holder",

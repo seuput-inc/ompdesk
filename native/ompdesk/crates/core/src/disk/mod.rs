@@ -14,6 +14,7 @@ mod facts;
 mod regenerable;
 mod run_state;
 mod saved;
+mod saved_records;
 pub(crate) mod saves;
 mod scratch;
 mod sizes;
@@ -118,60 +119,8 @@ struct ScratchParams {
 
 #[derive(Serialize)]
 struct Complete {
+    bytes: usize,
     complete: bool,
-}
-
-#[derive(Deserialize)]
-struct WorkParams {
-    git: Runner,
-    #[serde(flatten)]
-    save: saved::Save,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RollbackParams {
-    git: Runner,
-    primary: String,
-    branch: Option<String>,
-    sha: Option<String>,
-    archive_dir: String,
-}
-
-#[derive(Deserialize)]
-struct RemoveParams {
-    git: Runner,
-    primary: String,
-    path: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchiveParams {
-    git: Runner,
-    worktree: String,
-    entries: Vec<String>,
-    archive_dir: String,
-}
-
-#[derive(Serialize)]
-struct ArchiveDone {
-    files: usize,
-    bytes: u64,
-    head: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchiveAtParams {
-    worktree: String,
-    archive_dir: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ForgetParams {
-    archive_dir: String,
 }
 
 #[derive(Deserialize)]
@@ -181,15 +130,10 @@ struct CheckoutParams {
     record: saved::Checkout,
 }
 
-#[derive(Serialize)]
-struct Restored {
-    restored: usize,
-    skipped: usize,
-}
-
 pub fn register(registry: &mut Registry) {
     run_state::register(registry);
     registry.add("disk.usage", |call| Box::pin(usage::handle(call)));
+    saved_records::register(registry);
     registry.add("disk.sizesOpen", |call| {
         Box::pin(async move {
             let OpenParams { file, now } = call.params()?;
@@ -348,71 +292,11 @@ pub fn register(registry: &mut Registry) {
             } = call.params()?;
             let git = Git::new(git, call.scope);
             let (complete, bytes) = saved::staged_blob(&git, &worktree, &path).await?;
-            Ok(Reply::json(&Complete { complete })?.with_bin(bytes))
-        })
-    });
-    registry.add("disk.saveWork", |call| {
-        Box::pin(async move {
-            let WorkParams { git, save } = call.params()?;
-            let scope = call.scope.clone();
-            let git = Git::new(git, call.scope);
-            Reply::json(&saved::work(&git, save, &scope).await?)
-        })
-    });
-    registry.add("disk.saveRollback", |call| {
-        Box::pin(async move {
-            let RollbackParams {
-                git,
-                primary,
-                branch,
-                sha,
-                archive_dir,
-            } = call.params()?;
-            let scope = call.scope.clone();
-            let git = Git::new(git, call.scope);
-            saved::rollback(
-                &git,
-                &primary,
-                branch.as_deref(),
-                sha.as_deref(),
-                &archive_dir,
-                &scope,
-            )
-            .await;
-            Reply::json(&())
-        })
-    });
-    registry.add("disk.forceRemove", |call| {
-        Box::pin(async move {
-            let RemoveParams { git, primary, path } = call.params()?;
-            let git = Git::new(git, call.scope);
-            Reply::json(&saved::force_remove(&git, &primary, &path).await?)
-        })
-    });
-    registry.add("disk.archive", |call| {
-        Box::pin(async move {
-            let ArchiveParams {
-                git,
-                worktree,
-                entries,
-                archive_dir,
-            } = call.params()?;
-            let scope = call.scope.clone();
-            let git = Git::new(git, call.scope);
-            let done = saved::archive(&git, worktree, entries, archive_dir, &scope)
-                .await?
-                .map(|(files, bytes, head)| ArchiveDone { files, bytes, head });
-            Reply::json(&done)
-        })
-    });
-    registry.add("disk.settleArchive", |call| {
-        Box::pin(async move {
-            let ArchiveAtParams {
-                worktree,
-                archive_dir,
-            } = call.params()?;
-            let scope = call.scope;
-            Reply::json(&blocking(move || saved::settle(&worktree, &archive_dir, &scope)).await??)
+            Ok(Reply::json(&Complete {
+                complete,
+                bytes: bytes.len(),
+            })?
+            .with_bin(bytes))
         })
     });
     registry.add("disk.restoreCheckout", |call| {
@@ -420,26 +304,6 @@ pub fn register(registry: &mut Registry) {
             let CheckoutParams { git, record } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&saved::checkout(&git, record).await?)
-        })
-    });
-    registry.add("disk.restoreFiles", |call| {
-        Box::pin(async move {
-            let ArchiveAtParams {
-                worktree,
-                archive_dir,
-            } = call.params()?;
-            let scope = call.scope;
-            let (restored, skipped) =
-                blocking(move || saved::restore(&worktree, &archive_dir, &scope)).await??;
-            Reply::json(&Restored { restored, skipped })
-        })
-    });
-    registry.add("disk.forgetArchive", |call| {
-        Box::pin(async move {
-            let ForgetParams { archive_dir } = call.params()?;
-            let scope = call.scope;
-            blocking(move || saved::forget(&archive_dir, &scope)).await??;
-            Reply::json(&())
         })
     });
 }

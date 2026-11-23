@@ -102,6 +102,8 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 # errno values for node's error codes (`ENOENT: no such file or directory, stat '…'`), and the SIGTERM that asks a
 # git past its timeout or its output cap to end (`sys.rs`).
 libc = "0.2"
+# Restore inside an opened directory without following links made by a worktree hook.
+rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 # A rename's "is the target the source itself" (a case-only rename) needs the file's identity, which std keeps

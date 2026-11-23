@@ -665,7 +665,7 @@ describe("LocalHostServices", () => {
 
 		const store = new SavedWorktreeStore(join(workDir, "disk-care"));
 		setSavedWorktreeStore(store);
-		await store.update(() => [
+		await store.settle(
 			{
 				id: "sv1",
 				path: worktree,
@@ -677,7 +677,8 @@ describe("LocalHostServices", () => {
 				archivedFiles: 0,
 				archivedBytes: 0,
 			},
-		]);
+			true,
+		);
 		expect(await ask(false)).toEqual({
 			folder: worktree,
 			missing: true,

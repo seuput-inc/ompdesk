@@ -70,7 +70,7 @@ describe("discardNewWorktree", () => {
 		const store = new SavedWorktreeStore(path.join(root, "care"));
 		expect(await discardNewWorktree(wt, archiveBeforeRemove(store, null))).toBe("removed");
 		await expect(fs.stat(wt.path)).rejects.toThrow();
-		const [record] = await store.list();
+		const [record] = await store.list(repo);
 		expect(record).toMatchObject({
 			path: await fs.realpath(path.dirname(wt.path)).then(dir => path.join(dir, "wt-seeded")),
 			archivedFiles: 1,

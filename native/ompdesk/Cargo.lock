@@ -1468,6 +1468,7 @@ dependencies = [
  "ompdesk-checks",
  "p256",
  "rcgen",
+ "rustix",
  "rustls",
  "rustls-platform-verifier",
  "same-file",

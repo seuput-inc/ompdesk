@@ -25,7 +25,7 @@ src/main/ai-memory/backfill.ts	native-client	Sends journal and prompt callbacks 
 src/main/ai-memory/care.test.ts	exception	Tests which care unit runs per tick, when unfinished units resume and when failed units retry.
 src/main/ai-memory/care.ts	mixed	Native readiness starts care after five minutes and schedules the repeat. The client supplies current per-tick host settings and exposes summary and undo to the page.
 src/main/ai-memory/client.test.ts	exception	Exercises memory configuration, token reads and HTTP results against controlled server responses.
-src/main/ai-memory/client.ts	port	Forwards HTTP operations to aimemory.* but chooses null or false after failed token, status and health requests.
+src/main/ai-memory/client.ts	mixed	aimemory owns HTTP, including health checks. §1.3: server() reads current URL/dataDir synchronously for each caller; token/status/health also report when the core itself is unreachable, which only its caller can observe.
 src/main/ai-memory/core-asks.test.ts	exception	Checks the omp launch environment and arguments before and after configuring model spending.
 src/main/ai-memory/core-asks.ts	mixed	Core reads journal and prompt facts through the stock worker. Main supplies the installed omp launch environment, credit preferences, current settings and a launch-wide repair claim; injected test drivers answer explicitly requested fake asks.
 src/main/ai-memory/curate.test.ts	exception	Tests which page a curation judgment retires, including its successor and skipped projects.
@@ -36,7 +36,7 @@ src/main/ai-memory/fake-server-test-rig.ts	exception	Starts a loopback HTTP serv
 src/main/ai-memory/freshness.test.ts	exception	Tests retirement for deleted paths, partial disappearance and unchanged references against Git checkouts.
 src/main/ai-memory/freshness.ts	native-client	Passes the repository runner, project and flagged versions to care.freshness and applies the returned version map.
 src/main/ai-memory/ipc.test.ts	exception	Exercises memory IPC handlers, including background refresh and retry without blocking the caller.
-src/main/ai-memory/ipc.ts	port	Restricts browser opening to loopback HTTP and clears the copied password after a minute only if the clipboard still holds it.
+src/main/ai-memory/ipc.ts	port	The IPC handler reads service.state() before opening a loopback URL. The platform clipboard must clear a copied password after a minute only if unchanged. Receiver: shell, which owns clipboard reads and writes; core must not hold an extra copy.
 src/main/ai-memory/memory-capture-stock.test.ts	exception	Tests stock omp capture with terminal wiring and with the root supplied by OMPdesk.
 src/main/ai-memory/memory-judge.test.ts	exception	Checks pair batching, model cost reporting and abstention on an unparseable or failed answer.
 src/main/ai-memory/memory-judge.ts	native-client	Production care/units.rs chooses the native judge chain. Only tests call these typed clients; the core skips empty batches and disabled Jev before requesting a launch.
@@ -46,10 +46,10 @@ src/main/ai-memory/recall-terms.test.ts	exception	Tests incremental term counts,
 src/main/ai-memory/retitle.test.ts	exception	Checks session naming, dry runs and idempotence when retitling pages.
 src/main/ai-memory/retitle.ts	native-client	Sends the client callbacks, locale and dry-run flag to upkeep.retitle and returns the report.
 src/main/ai-memory/service.test.ts	exception	Tests staging and setup of the bundled server, ownership of its extension root and startup ordering.
-src/main/ai-memory/service.ts	port	Runs supervised memory setup commands, reads disabled-extension config and reopens a started service after the core process dies.
+src/main/ai-memory/service.ts	mixed	The core owns readiness and maintenance clocks. SetupRunner still launches setup --yes with isolated Windows handles outside core's lifetime. The yaml reader distinguishes an absent list from an explicit empty list; Rust applies precedence. Receivers: shared setup supervisor and host config reader. The launch host reopens the service after core loss.
 src/main/ai-memory/staging.ts	exception	Declares the macOS staging directory key and the signing requirement derived from the pinned certificate; it does not stage or verify a binary.
 src/main/ai-memory/sync.test.ts	exception	Exercises paired memory stores, including no-op repeat rounds and preserving concurrently changed host pages.
-src/main/ai-memory/sync.ts	port	For memsync.ask, TypeScript redacts conclusion text and issues the requested host-link operation; Rust owns sync rounds and cursors.
+src/main/ai-memory/sync.ts	mixed	The core owns sync rounds and cursors. §1.3(d): the stock bridge shares the same conclusion redactor; do not fork its privacy rules in Rust. Receiver: remote-web for the RemoteDevices host-link request.
 src/main/ai-memory/upkeep.test.ts	exception	Checks learning from paused conversations and which pages upkeep writes or skips.
 src/main/ai-memory/upkeep.ts	mixed	Native readiness schedules repair and upkeep and cancels pending ticks on pause. The repair claim belongs to this app launch, not to a replaceable core; the client reads current host settings.
 src/main/cli-tools/catalog.ts	port	Filters the catalog by connected provider IDs and includes machine-setup tools without a matching provider. Before reusing native-root-mini-intake's machine/ candidate, compare its output and order with this caller contract.
@@ -91,12 +91,12 @@ src/main/disk/disk-care-saving.test.ts	exception	Tests archive rollback on parti
 src/main/disk/disk-care-scratch.test.ts	exception	Tests deletion and retention of scratch folders for held sessions and files cited in replies.
 src/main/disk/disk-care-shared-listing.test.ts	exception	Tests preserving worktrees changed after listing and saving one whose contents stayed unchanged.
 src/main/disk/disk-care.test.ts	exception	Exercises usage measurements, saving and restoring idle worktrees, and retaining ones still in use.
-src/main/disk/saved-worktrees.ts	port	Persists saved-worktree records, separates secret files into the archive, rechecks before removal and coordinates rollback and restoration.
+src/main/disk/saved-worktrees.ts	mixed	Core owns saved.json, recovery copies and fenced filesystem mutations. Main supplies the last live removal claim, the stock redactor and the restore hook. Receiver: checkout and tab-spawn owners (§1.3c).
 src/main/disk/scratch.ts	mixed	Rust checks links, idle age, copies of moved sessions and process facts before sweeping. §1.3: Node checks SessionProcesses.held() again immediately before dispatch and updates the ownership records read synchronously by SessionScratch.open().
 src/main/disk/tree-sizes.test.ts	exception	Tests reuse of directory measurements, changed subtrees and hard-link deduplication.
 src/main/disk/tree-sizes.ts	mixed	The core owns walks, breakdown, expiry and the retained tree. DiskCare reads sizes.reused and sizes.work synchronously to log the completed pass; if core cannot open the reading, the client requests full walks.
 src/main/disk/worktree-facts.test.ts	exception	Checks actual activity timestamps from stock-named session folders and tracked, untracked and non-regenerable ignored files.
-src/main/disk/worktree-facts.ts	port	disk.lastActivity locates the session folder under the supplied profile and combines its timestamps with Git and filesystem activity. TS still tests process-folder occupancy and excludes unreadable, oversized or credential-bearing files from commits.
+src/main/disk/worktree-facts.ts	mixed	Core reads activity, process folders and bounded file bytes. Main applies the same stock redactor to staged and working bytes and checks occupancy in the current removal claim. Receiver: the checkout owner (§1.3c).
 src/main/ecc/ecc-stock.test.ts	exception	Test coverage for stock SDK skill discovery and prompt cost.
 src/main/ecc/pack-drift.test.ts	exception	Test coverage for ECC pack pin and file integrity.
 src/main/ecc/stock-probe.ts	exception	Test probe launches a stock SDK session to measure skill visibility, slash commands and context cost.
