@@ -230,6 +230,10 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 								parseDefaultBrowser(deps.defaultBrowserPref?.()),
 								await agentBrowserStatus().catch(() => undefined),
 							),
+						defaultBrowserFallback: () => {
+							const browser = resolveAgentBrowser(parseDefaultBrowser(deps.defaultBrowserPref?.()), undefined);
+							return browser.kind === "unavailable" ? browser : undefined;
+						},
 						egoBrowserDir: async () => {
 							const bin = await resolveEgoBrowser();
 							return bin ? dirname(bin) : null;
