@@ -9,14 +9,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { BrowserWindow } from "electron";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
-import { DIAGNOSTICS_MEMBER, type DiagnosticBundleResult } from "../shared/diagnostic-bundle";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { bundleFileName, DIAGNOSTICS_MEMBER, type DiagnosticBundleResult } from "../shared/diagnostic-bundle";
 import type { IpcFsReadBinaryResult } from "../shared/ipc-types";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { type BundleTab, type DiagnosticBundleDeps, poolTabFor, saveDiagnosticBundle } from "./diagnostic-bundle";
 import { runLocalCommand } from "./local";
 import { handlers } from "./local/session-dump";
 import type { LocalCommandContext } from "./local/types";
+import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 import type { ClientWindow } from "./web/client-window";
 import type { IpcCaller } from "./web/ipc-registry";
 
@@ -24,6 +25,14 @@ const DIAGNOSTICS = "OMPdesk diagnostics\nversion 0.35.1\n";
 const NOW = new Date(2026, 9, 19, 12, 0, 0);
 
 const roots: string[] = [];
+let fixture: ShellPolicyFixture;
+beforeAll(prepareShellPolicyFixture, 180_000);
+beforeAll(async () => {
+	fixture = await shellPolicyFixture();
+});
+afterAll(async () => {
+	await fixture?.close();
+});
 
 async function tmp(): Promise<string> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bundle-"));
@@ -125,6 +134,7 @@ function setup(options: {
 			const data = await fs.readFile(file);
 			return { ok: true, data, mime: "application/zip", size: data.length, truncated: false };
 		},
+		fileName: params => fixture.call("app.diagnosticBundleFileName", params),
 		chooseFile: async (_caller, defaultPath) => {
 			dialogs.push(defaultPath);
 			return options.chosen ?? null;
@@ -173,6 +183,33 @@ describe("saving through the dialog", () => {
 		expect(result.anonymized).toBe(true);
 		expect(Object.keys(await membersOf(target)).sort()).toEqual([DIAGNOSTICS_MEMBER, "session.jsonl"]);
 		expect(dialogs).toEqual([path.join(root, "Downloads", "omp-dump-2026-10-19-anon.zip")]);
+	});
+
+	it("offers the paired page's name on the caller's local day, without splitting a letter at the UTF-16 cap", async () => {
+		const root = await tmp();
+		const { deps, dialogs } = setup({ dumpDir: root });
+		vi.stubEnv("TZ", "Pacific/Honolulu");
+		try {
+			const now = new Date("2026-10-01T00:15:00Z");
+			deps.now = () => now;
+			const letter = "\u{10400}";
+			const prefix = "x".repeat(38);
+			for (const [title, slug] of [
+				[".._Cafe\u0301/\\\u1100\u1161_Ⅷ.²\u{1F600}\u093Eend.__", "Café-가_Ⅷ.²-end"],
+				["x\uD800y\uDC00z", "x-y-z"],
+				[`${prefix}${letter}z`, `${prefix}${letter}`],
+				[`${prefix}x${letter}z`, `${prefix}x`],
+				[`${prefix}_${letter}`, prefix],
+			] as const) {
+				const expected = `omp-dump-${slug}-2026-09-30-anon.zip`;
+				expect(bundleFileName(title, now, true)).toBe(expected);
+				const result = await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", title, anonymized: true });
+				expect(result).toEqual({ ok: false, cancelled: true });
+				expect(dialogs.pop()).toBe(path.join(root, "Downloads", expected));
+			}
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("does nothing when the person cancels the dialog: no dump is made", async () => {

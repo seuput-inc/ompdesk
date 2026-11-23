@@ -12,6 +12,8 @@ name = "shell-policy-fixture"
 path = "fixture.rs"
 
 [dependencies]
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+icu_properties = "2"
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"

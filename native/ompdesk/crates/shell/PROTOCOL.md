@@ -98,6 +98,7 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `app.launchEvent` | Node | `{op: "identity"\|"healthy"\|"stable"}` | Tauri: `null` or `{log}` after recording the GPU or launch stability. |
 | `app.previousRunEnd` | Node | `{ownPid: number}` | Tauri: the previous run's unclean-end report or `null`. Reads only this profile's runtime log. |
 | `app.consumeHangReports` | Node | `{}` | Tauri: zero to two log records from the previous main-thread hang. The primary instance consumes the marker before starting its new heartbeat. |
+| `app.diagnosticBundleFileName` | Node | `{title, localDate: [year, month, day], anonymized}` | Tauri returns the suggested `.zip` filename for the save dialog or Downloads. The month is 1-based. The title slug fits 40 UTF-16 code units without splitting a character. |
 | `app.secondInstance` (event) | shell→Node | `{kind:"url", url}` / `{kind:"path", path}` / `{kind:"focus"}` | after skipping the executable, the first `omp://` URL wins; otherwise the first non-switch directory in the running shell’s cwd, else focus. A relative path is passed unchanged and ignored by main, not resolved in the second launch’s cwd. |
 | `app.openUrl` (event) | shell→Node | `{url}` | macOS `kAEGetURL` (and Windows protocol launches arrive as `secondInstance`). |
 | `app.openFile` (event) | shell→Node | `{path}` | macOS `kAEOpenDocuments`. |

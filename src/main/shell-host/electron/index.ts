@@ -6,6 +6,7 @@
  */
 import { IPC_COMMANDS } from "../../../shared/ipc-types";
 import { shutdownCore } from "../../core/process";
+import type { DiagnosticBundleDeps } from "../../diagnostic-bundle";
 import type { DiagnosticsDeps } from "../../diagnostics";
 import type { WatchdogSignal } from "../../hang-watchdog";
 import { exitReport } from "../../quit-log";
@@ -41,6 +42,9 @@ export function consumeHangReports(): Promise<RuntimeLogReport[]> {
 export function postWatchdog(signal: WatchdogSignal): void {
 	void client.call("app.watchdog", signal).catch((error: unknown) => console.warn("[hang-watchdog]", error));
 }
+
+export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params =>
+	client.call("app.diagnosticBundleFileName", params);
 
 export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client.call("app.diagnosticLog", selection);
 

@@ -205,6 +205,7 @@ import {
 	appIconPath,
 	clipboard,
 	consumeHangReports,
+	diagnosticBundleFileName,
 	openPageExternal,
 	postWatchdog,
 	readDiagnosticLog,
@@ -1743,6 +1744,7 @@ app.whenReady().then(async () => {
 					HOST_FS_READ_BINARY_TIMEOUT_MS,
 				),
 			),
+		fileName: diagnosticBundleFileName,
 		chooseFile: async (caller, defaultPath) => {
 			if (!caller.browserWindow) return null;
 			const chosen = await dialog.showSaveDialog(caller.browserWindow, {
