@@ -226,9 +226,9 @@ src/main/deleted-sessions-disk-full.test.ts	tooling	-	Vitest suite: stores that 
 src/main/deleted-sessions.ts	port	2	DeletedSessions loads and persists bounded per-device/path tombstones through AtomicSaver to prevent deleted sessions reopening.
 src/main/delivery-ledger.test.ts	tooling	-	Vitest suite: deliverOnce.
 src/main/delivery-ledger.ts	port	2	§1.3: ipc.ts and remote/host-services.ts share the in-flight transport Promise itself on duplicate delivery. Receiver: remote-web, with those transports.
-src/main/desktop-slot-exit.ts	mixed	3	Desktop exit receipt: combines the spawn-bound native wait with read-only OS presence checks for the bridge process behind a launcher; move OS observations with the host.
+src/main/desktop-slot-exit.ts	mixed	3	Hub batch with sidecar.ts, §1.3(a,c): desktopSlotProcess captures the current spawn and bridge generation synchronously. A replacement core cannot attest to the old holder's exit; keep the receipt and its read-only OS observations with the captured process.
 src/main/desktop-slot-host.test.ts	tooling	-	Vitest suite: DesktopSlotHost.
-src/main/desktop-slot-host.ts	mixed	3	hub/desktop_slot.rs decides ownership. DesktopSlotHost still maps captured omp executions to UI tab ids, delivers bridge effects, records Stops and broadcasts state; remove with main IPC.
+src/main/desktop-slot-host.ts	mixed	3	Hub batch with lane/IPC removal, §1.3(a,c): hub/desktop_slot.rs owns arbitration; ipc.ts attaches the sidecar and routes frames synchronously. Revoke/kill must check the captured client, not the tab's replacement, before delivering effects.
 src/main/desktop-slot.test.ts	tooling	-	Vitest suite: DesktopSlot.
 src/main/desktop-slot.ts	native-client	3	DesktopSlot drives hub desktopSlot; core/src/hub/desktop_slot.rs owns FIFO, lease, revoke, retry and generation-specific confirmations. JS retains only the last acknowledged checkpoint and executes effects.
 src/main/diagnostic-bundle.test.ts	tooling	-	Vitest suite: saving through the dialog.
