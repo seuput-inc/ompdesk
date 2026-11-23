@@ -78,6 +78,7 @@ runs:
         src/main/ai-memory/recall-terms.test.ts
         src/main/remote/host-services.test.ts
         src/main/routines/*.test.ts
+        src/main/mail-accounts.test.ts
         src/main/local/autopilot*.test.ts
         src/main/local/git/changes.test.ts
         src/main/local/git/scm.test.ts

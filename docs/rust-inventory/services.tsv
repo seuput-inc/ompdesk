@@ -241,7 +241,7 @@ src/main/routines/git.ts	port	git.routineHead now decides whether to retain or r
 src/main/routines/github.test.ts	exception	Test coverage for GitHub event baselines across relaunch.
 src/main/routines/github.ts	port	Core reads GitHub events and returns a persistable mark only on success. Node validates the repository, orders polls and commits each successful mark before waking the routine.
 src/main/routines/imap.test.ts	exception	Test coverage for IMAP exchanges against a fake server.
-src/main/routines/imap.ts	port	Executes the IMAP login, examine, UID search and fetch sequence; parses literals and decodes MIME snippets.
+src/main/routines/imap.ts	mixed	routines.readMailbox owns TLS, the read-only UID exchange and MIME decoding. MailAccounts in Node still supplies the endpoint, credentials and cursor; no native account caller yet.
 src/main/routines/marks.test.ts	exception	Test coverage for configuration-keyed marks across relaunch.
 src/main/routines/marks.ts	port	Keys marks by trigger configuration; migrating persistence requires preserving ordering between in-flight atomic saves and the final shutdown write.
 src/main/routines/ports.ts	port	Uses Node recursive fs.watch and adapts pool activity and session facts in addition to calling native Git and file methods.

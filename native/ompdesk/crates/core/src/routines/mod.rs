@@ -1,9 +1,9 @@
 //! Routine triggers' reads and rules (unit 4e). Main keeps each trigger's live part: the schedule service's state, the
-//! poll and burst timers, the file watcher, the tab pool's activity, the marks file and the email trigger with its
-//! IMAP client; this module answers what a trigger reads and says.
+//! poll and burst timers, the file watcher, the tab pool's activity, the marks file and the email account store.
 //!
 //! - `routines.github`: one read of one kind of a GitHub trigger (`github.rs`), gh run as main's `ghRunner` says.
 //! - `routines.filesScan`: a files trigger's listing and what changed while OMPdesk was closed (`files.rs`).
+//! - `routines.readMailbox`: the read-only IMAP exchange and MIME decoding (`imap`).
 //! - The git trigger's two reads are `git.routineHead` and `git.routineCommits` (`git/triggers.rs`), whose line is
 //!   `text.rs`' `describe_commits`.
 //!
@@ -12,6 +12,7 @@
 
 mod files;
 pub(crate) mod github;
+mod imap;
 pub(crate) mod text;
 
 use serde::{Deserialize, Serialize};
@@ -81,6 +82,7 @@ struct ScanParams {
 }
 
 pub fn register(registry: &mut Registry) {
+    imap::register(registry);
     registry.add("routines.github", |call| {
         Box::pin(async move {
             let params: GithubParams = call.params()?;

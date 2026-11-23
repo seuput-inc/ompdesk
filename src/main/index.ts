@@ -164,7 +164,7 @@ import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
 import { MachineState } from "./machine-state";
-import { MailAccounts, plainImapConnect } from "./mail-accounts";
+import { MailAccounts } from "./mail-accounts";
 import { installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
@@ -2271,7 +2271,7 @@ app.whenReady().then(async () => {
 		dir: app.getPath("userData"),
 		...(keychainWouldAskForTests ? { rememberSaved: false } : {}),
 		// A test launch reaches its fake IMAP server over plain TCP on this computer; a real launch always uses TLS.
-		...(process.env.OMP_GUI_TEST_IMAP_PLAIN ? { connect: plainImapConnect } : {}),
+		plainLoopback: Boolean(process.env.OMP_GUI_TEST_IMAP_PLAIN),
 		box: {
 			available: () => safeStorage.isEncryptionAvailable(),
 			blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),

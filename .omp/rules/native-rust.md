@@ -52,6 +52,8 @@ globs:
 
 ### Ledger
 
+- **Routine mail reads.** `routines.readMailbox` (`crates/core/src/routines/imap`) connects over verified TLS, baselines by UIDVALIDITY, and fetches at most twenty new messages without marking them read. MIME headers and snippets use the WHATWG charset decoder. `MailAccounts` still owns synchronous account state and the shell keystore; its password travels only on the private core request. Differences: the platform TLS verifier and its error text replace Node TLS, response fragments are capped at 64 MiB, and the client cancels a poll after ten minutes. Plain TCP for the fixture can connect only to IPv4 loopback. Native parity includes `routines/{email,imap}.test.ts` and `mail-accounts.test.ts`; Rust tests cover TLS, cancellation and MIME decoding.
+
 - **Update feed.** `updateFeed.resolve` (`crates/core/src/update_feed`) selects a GitHub release and checks its comment, file, SHA-512 format, tag, asset size and declared Darwin minimum. `src/main/update-release.ts` is its typed client. Main retains HTTP/auth, delivery of the resolved installer to electron-updater, and the current OS check required by synchronous `resolveFiles`. Native parity runs `update-release.test.ts`, `update-provider.test.ts` and `update-compatibility.test.ts`, including the frozen v0.131 consumer and the publish step's generated comment.
   - The admitted macOS response also names the versioned local DMG. Manual and relaunch downloads retain that response for its version, API URL, size and digest. Windows keeps the version-free NSIS asset.
 

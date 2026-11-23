@@ -9,9 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { connect as netConnect, type Socket } from "node:net";
 import { join } from "node:path";
-import { type TLSSocket, connect as tlsConnect } from "node:tls";
 import { codedError } from "../shared/ipc-error-codes";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import {
@@ -24,7 +22,7 @@ import {
 	mailAccountProblem,
 } from "../shared/mail-accounts";
 import { writeFileAtomicSync } from "./atomic-file";
-import { type ImapConnect, type MailboxRead, type MailCursor, readMailbox } from "./routines/imap";
+import { type MailboxRead, type MailCursor, readMailbox } from "./routines/imap";
 
 /** The OS keystore as the store uses it. */
 export interface SecretBox {
@@ -42,8 +40,8 @@ export interface MailAccountsOptions {
 	/** `<userData>`. */
 	dir: string;
 	box: SecretBox;
-	/** How a connection to an account's server is made (TLS in the app; the tests' fake server is plain TCP). */
-	connect?: (account: Pick<MailAccount, "host" | "port">) => ImapConnect;
+	/** Test launches connect only to IPv4 loopback without TLS. */
+	plainLoopback?: boolean;
 	/**
 	 * Whether a password saved this run is kept in memory (default). The parity sheet's launch turns it off so an
 	 * account it saves reads as one whose password was not opened yet (`OMP_GUI_TEST_KEYCHAIN_WOULD_ASK`, index.ts).
@@ -54,39 +52,6 @@ export interface MailAccountsOptions {
 }
 
 type Stored = Omit<MailAccount, "hasPassword" | "address" | "needsReentry">;
-
-const CONNECT_TIMEOUT_MS = 20_000;
-
-/** A TLS connection to `host:port` that checks the server's certificate against `host`. */
-export function tlsImapConnect(account: Pick<MailAccount, "host" | "port">): ImapConnect {
-	return () => {
-		const { promise, resolve, reject } = Promise.withResolvers<TLSSocket>();
-		const socket = tlsConnect({ host: account.host, port: account.port, servername: account.host });
-		const timer = setTimeout(() => {
-			socket.destroy();
-			reject(new Error(`could not reach ${account.host}:${account.port} in time`));
-		}, CONNECT_TIMEOUT_MS);
-		socket.once("secureConnect", () => {
-			clearTimeout(timer);
-			resolve(socket);
-		});
-		socket.once("error", (error: Error) => {
-			clearTimeout(timer);
-			reject(new Error(`could not reach ${account.host}:${account.port}: ${error.message}`));
-		});
-		return promise;
-	};
-}
-
-/** Plain TCP to `127.0.0.1:port`: only a test launch (`OMP_GUI_TEST_IMAP_PLAIN`) uses it, for its fake server. */
-export function plainImapConnect(account: Pick<MailAccount, "host" | "port">): ImapConnect {
-	return () => {
-		const { promise, resolve, reject } = Promise.withResolvers<Socket>();
-		const socket = netConnect(account.port, "127.0.0.1", () => resolve(socket));
-		socket.once("error", reject);
-		return promise;
-	};
-}
 
 export class MailAccounts {
 	readonly #options: MailAccountsOptions;
@@ -206,9 +171,8 @@ export class MailAccounts {
 	/** One poll of the account's mailbox past `cursor` (none: the baseline). */
 	async read(id: string, cursor: MailCursor | null): Promise<MailboxRead> {
 		const account = this.#find(id);
-		const connect = (this.#options.connect ?? tlsImapConnect)(account);
 		return readMailbox(
-			connect,
+			{ host: account.host, port: account.port, plainLoopback: this.#options.plainLoopback ?? false },
 			{ username: account.username, password: this.#password(id), mailbox: account.mailbox },
 			cursor,
 		);

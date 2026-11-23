@@ -32,6 +32,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "sy
 # JavaScript listed them); the CLI crate asks for it too, so every build of the workspace already had it.
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip", "preserve_order"] }
+# MIME headers and snippets use the same charset labels as TextDecoder.
+encoding_rs = "0.8"
 # Listings sort as the page's `Intl.Collator(locale, { numeric: true })` does: ICU's collation, same algorithm and data.
 icu_collator = "2"
 # The folder picker's filter lowercases as `toLocaleLowerCase()` does (Turkish, Azeri and Lithuanian rules included).

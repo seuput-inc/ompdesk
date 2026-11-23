@@ -294,7 +294,7 @@ src/main/machine-services.ts	mixed	3	LocalMachine owns caller-scoped benchmark/m
 src/main/machine-state.test.ts	tooling	-	Vitest suite: machine state around a stall.
 src/main/machine-state.ts	port	2	MachineState retains recent resource samples and emits before/after stall reports; readOwn and ownFacts calculate process-level facts.
 src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
-src/main/mail-accounts.ts	port	2	MailAccounts persists account metadata and encrypted per-account passwords, decrypts on read/test and opens TLS or plain IMAP sockets.
+src/main/mail-accounts.ts	mixed	2	MailAccounts.read delegates the connection and IMAP poll to routines.readMailbox. Account state, encrypted password files and synchronous keystore reads remain in main.
 src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
 src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
 src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.

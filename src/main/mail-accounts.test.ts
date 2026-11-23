@@ -103,10 +103,10 @@ describe("MailAccounts", () => {
 		server.state.password = 'pa55 "word"';
 		server.mail.push({ uid: 1, headers: "Subject: one" }, { uid: 2, headers: "Subject: two" });
 		const keystore = box();
-		const accounts = new MailAccounts({ dir, box: keystore, connect: () => server.connect });
+		const accounts = new MailAccounts({ dir, box: keystore, plainLoopback: true });
 		const id = accounts.save(draft({ host: "127.0.0.1", port: server.port })).accounts[0]?.id ?? "";
 
-		const reloaded = new MailAccounts({ dir, box: keystore, connect: () => server.connect });
+		const reloaded = new MailAccounts({ dir, box: keystore, plainLoopback: true });
 		expect(await reloaded.test(id)).toEqual({ ok: true, messages: 2 });
 		expect(await reloaded.test(id)).toEqual({ ok: true, messages: 2 });
 		// One keystore read, then the password is kept in memory.
@@ -173,21 +173,14 @@ describe("MailAccounts when the keychain would ask", () => {
 	});
 
 	it("never logs in: a poll fails before it connects, and the keychain is not asked again", async () => {
-		twoStored();
+		imap = await startFakeImap();
+		const stored = new MailAccounts({ dir, box: box() });
+		const id = stored.save(draft({ host: "127.0.0.1", port: imap.port })).accounts[0]?.id ?? "";
 		const keystore = wouldAskBox();
-		let connected = 0;
-		const accounts = new MailAccounts({
-			dir,
-			box: keystore,
-			connect: () => () => {
-				connected += 1;
-				return Promise.reject(new Error("must not connect"));
-			},
-		});
-		const [work] = accounts.state().accounts;
-		await expect(accounts.read(work?.id ?? "", null)).rejects.toThrow(/enter it again in Settings/);
-		expect(await accounts.test(work?.id ?? "")).toMatchObject({ ok: false });
-		expect(connected).toBe(0);
+		const accounts = new MailAccounts({ dir, box: keystore, plainLoopback: true });
+		await expect(accounts.read(id, null)).rejects.toThrow(/enter it again in Settings/);
+		expect(await accounts.test(id)).toMatchObject({ ok: false });
+		expect(imap.connections).toBe(0);
 		expect(keystore.fetches).toBe(1);
 	});
 

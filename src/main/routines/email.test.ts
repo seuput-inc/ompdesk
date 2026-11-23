@@ -41,7 +41,7 @@ async function rig(
 				: null;
 		},
 		read: (_id, cursor) =>
-			readMailbox(imap.connect, { username: imap.state.user, password: PASSWORD, mailbox: "INBOX" }, cursor),
+			readMailbox(imap.endpoint, { username: imap.state.user, password: PASSWORD, mailbox: "INBOX" }, cursor),
 	};
 	const polls = (count: number) => {
 		if (started >= count) return Promise.resolve();
