@@ -19,6 +19,7 @@ import {
 	nativeImage,
 	nativeTheme,
 	net,
+	Notification,
 	powerMonitor,
 	powerSaveBlocker,
 	protocol,
@@ -107,7 +108,6 @@ import { RecallTermsIndex } from "./ai-memory/recall-terms";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
-import { appIconPath, appNotification, holdTestNotifications } from "./app-icon";
 import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
@@ -215,6 +215,7 @@ import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
 import {
+	appIconPath,
 	consumeHangReports,
 	openPageExternal,
 	postWatchdog,
@@ -293,7 +294,7 @@ app.setName("ompdesk");
 // The Windows toast and taskbar group are keyed on this id: electron-builder gives the Start-menu shortcut the
 // appId, so the same id there makes a toast wear the shortcut's name and icon (the dev run has no shortcut).
 if (process.platform === "win32") app.setAppUserModelId("com.seuput.ompdesk");
-app.setAboutPanelOptions({ applicationName: "OMPdesk", iconPath: appIconPath() });
+app.setAboutPanelOptions({ applicationName: "OMPdesk", iconPath: appIconPath });
 
 // Honor Electron's explicit profile before acquiring its instance lock.
 const userDataDirectory = app.commandLine.getSwitchValue("user-data-dir");
@@ -390,7 +391,6 @@ if (process.env.OMP_GUI_HEADLESS === "1") {
 		win.setSkipTaskbar(true);
 		win.setFocusable(false);
 	});
-	holdTestNotifications();
 }
 // A test launch ends with the Playwright worker that launched it, even one that died running no handler.
 exitWithLauncher(process.env, () => app.exit(0));
@@ -840,7 +840,7 @@ app.whenReady().then(async () => {
 	// A full disk is told once, by one notification that goes when the files are saved; the writers retry on their own.
 	bindDiskFullNotice(diskFull, {
 		show: notice => {
-			const shown = appNotification(notice);
+			const shown = new Notification(notice);
 			shown.show();
 			return { close: () => shown.close() };
 		},
@@ -1018,7 +1018,7 @@ app.whenReady().then(async () => {
 			// The tabs of one loss reach the bound within moments of each other: one notification counts them all.
 			setTimeout(() => {
 				stuckTabs = null;
-				appNotification({
+				new Notification({
 					title: mainT("recovery.stuckTitle"),
 					body: mainT("recovery.stuckBody", undefined, { count: burst.count, minutes: burst.minutes }),
 				}).show();
@@ -1448,7 +1448,7 @@ app.whenReady().then(async () => {
 			: {}),
 		// One notification per wait: the turn of a paired device's session stands in a call only that device runs.
 		hostWaiting: ({ device, title }) =>
-			appNotification({
+			new Notification({
 				title: mainT("remote.hostWait.title", undefined, { device }),
 				body: title
 					? mainT("remote.hostWait.body", undefined, { session: title, device })
@@ -1900,7 +1900,7 @@ app.whenReady().then(async () => {
 						: notice.days > 0
 							? "ompHold.bodyDays"
 							: "ompHold.body";
-				appNotification({
+				new Notification({
 					title: mainT(
 						notice.reason === "verifying" ? "ompHold.verifyingTitle" : "ompHold.title",
 						undefined,
@@ -2324,7 +2324,7 @@ app.whenReady().then(async () => {
 		// macOS: the Dock icon is the way back and needs no explanation.
 		if (process.platform === "darwin" || prefs.get(CLOSE_TO_TRAY_NOTICE_PREF) === true) return;
 		prefs.set(CLOSE_TO_TRAY_NOTICE_PREF, true);
-		appNotification({ title: mainT("tray.keepsRunningTitle"), body: mainT("tray.keepsRunningBody") }).show();
+		new Notification({ title: mainT("tray.keepsRunningTitle"), body: mainT("tray.keepsRunningBody") }).show();
 	};
 	const workAwake = new KeepAwakePolicy({
 		blocker: keepAwakeBlocker("work"),
@@ -2689,7 +2689,7 @@ app.whenReady().then(async () => {
 		confirmNewDevices: () => mobileWebService?.confirmNewDevices() ?? false,
 		whois: address => mobileWebService?.whois(address) ?? Promise.resolve(null),
 		onUnpairedAuth: () =>
-			appNotification({ title: mainT("web.unknownDevice.title"), body: mainT("web.unknownDevice.body") }).show(),
+			new Notification({ title: mainT("web.unknownDevice.title"), body: mainT("web.unknownDevice.body") }).show(),
 		language: () => getMainLanguage(),
 		// Routine webhooks: `POST /hooks/<schedule id>` (web/server.ts) is answered by the schedule service.
 		hooks: () => scheduleService,

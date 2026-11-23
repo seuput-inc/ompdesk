@@ -45,6 +45,7 @@ const FACTS: HostFacts = {
 	},
 	exe: "C:/app/OMPdesk.exe",
 	resourcesPath: "C:/app/resources",
+	appIcon: { path: "C:/app/resources/app-icon.png", notifications: "appIcon" },
 	// A path of the machine the test runs on: loadFile resolves against it, as against a real app folder.
 	appPath: join(tmpdir(), "ompdesk-app", "resources", "app"),
 	isPackaged: true,
@@ -1727,6 +1728,33 @@ describe("menus, dialogs and the small modules", () => {
 		expect(() => image.toJPEG(80)).toThrow(/encodeImage/);
 		expect(nativeImage.createFromPath("C:/no/such.png").isEmpty()).toBe(true);
 		expect(nativeImage.createFromDataURL("data:text/plain,hi").isEmpty()).toBe(true);
+	});
+});
+
+describe("notification defaults from the shell", () => {
+	it.each(["off", "systemIcon", "appIcon"] as const)("shows notifications with policy %s", async notifications => {
+		await boot({ ...FACTS, appIcon: { ...FACTS.appIcon, notifications } });
+		await ready();
+		const { Notification } = electron;
+		const show = vi.spyOn(Notification.prototype, "show");
+		new Notification({ title: "From PC-B" }).show();
+		new Notification({ title: "Autopilot ended", icon: "custom.png" }).show();
+		await settle();
+		expect(show).toHaveBeenCalledTimes(2);
+		const shown = fake.callsOf("notification.show").map(call => call.params);
+		expect(shown).toEqual(
+			notifications === "off"
+				? []
+				: [
+						{
+							id: 1,
+							title: "From PC-B",
+							body: "",
+							...(notifications === "appIcon" ? { icon: FACTS.appIcon.path } : {}),
+						},
+						{ id: 2, title: "Autopilot ended", body: "", icon: "custom.png" },
+					],
+		);
 	});
 });
 
