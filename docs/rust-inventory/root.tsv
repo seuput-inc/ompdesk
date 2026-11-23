@@ -276,8 +276,7 @@ src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain l
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
 src/main/launch-profile-store.test.ts	tooling	-	Vitest suite: launch profile store.
 src/main/launch-profile-store.ts	port	2	§1.3(a,c), shell batch: local IPC and remote host-services synchronously patch one SafeStore launchProfiles map; index.ts supplies that same map to the sidecar's spawn-time flags. Move with the prefs owner to preserve atomic per-workspace patches.
-src/main/legacy-user-data.test.ts	tooling	-	Vitest suite: migrateLegacyUserData.
-src/main/legacy-user-data.ts	port	1	migrateLegacyUserData checks the destination profile is fresh before renaming or copying the old seucode profile.
+src/main/legacy-user-data.test.ts	tooling	-	Runs the Tauri host on an isolated profile; shell-batch-checks tauri-native supplies the executable on macOS and Windows.
 src/main/line-budget.ts	port	1	LineBudget.take enforces an hourly allowance and counts suppressed lines for the next admitted report.
 src/main/local-engines-core.test.ts	tooling	-	Vitest suite: engineAction.
 src/main/local-engines-core.ts	port	1	engineAction maps one local engine's availability and provider facts to the action its detector should take.

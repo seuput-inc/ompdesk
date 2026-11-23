@@ -41,15 +41,15 @@ pub fn user_data_switch(args: &[String]) -> Option<String> {
     found.filter(|v| !v.is_empty())
 }
 
+pub fn user_data_override(args: &[String], env_value: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    user_data_switch(args)
+        .map(PathBuf::from)
+        .or_else(|| env_value.filter(|dir| !dir.is_empty()).map(PathBuf::from))
+}
+
 /// The switch, else the test seam's env value, else `default` (Electron's own rule for `app.getPath("userData")`).
 pub fn resolve_user_data(args: &[String], env_value: Option<&str>, default: PathBuf) -> PathBuf {
-    if let Some(dir) = user_data_switch(args) {
-        return PathBuf::from(dir);
-    }
-    match env_value {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => default,
-    }
+    user_data_override(args, env_value.map(std::ffi::OsStr::new)).unwrap_or(default)
 }
 
 /// The folder Electron used for `userData` without a switch: `<roaming app data>\ompdesk` (Windows), `~/Library/Application Support/ompdesk` (macOS).

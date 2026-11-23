@@ -154,7 +154,6 @@ import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { markLaunchStable, startLaunchGuard } from "./launch-guard";
 import { CRASH_LOOP_LAUNCHES, STABLE_AFTER_MS } from "./launch-guard-core";
-import { migrateLegacyUserData } from "./legacy-user-data";
 import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngineDetector, localEngineSettings, probeLocalEngine } from "./local-engines";
@@ -290,20 +289,6 @@ if (userDataDirectory) {
 	const directory = resolve(userDataDirectory);
 	mkdirSync(directory, { recursive: true });
 	app.setPath("userData", directory);
-} else {
-	// The pre-rename profile (a sibling of userData) moves in before the GPU
-	// marker, the instance lock, prefs or window state read userData.
-	try {
-		const migration = migrateLegacyUserData(app.getPath("userData"));
-		if (migration !== "skipped") {
-			writeRuntimeLog({ source: "user-data-migration", message: `Legacy profile ${migration} into userData` });
-		}
-	} catch (error) {
-		writeRuntimeLog({
-			source: "user-data-migration",
-			message: `Legacy profile migration failed: ${error instanceof Error ? error.message : String(error)}`,
-		});
-	}
 }
 
 // Players stream audio/video through `omp-media://` (range requests); the agent's visuals load in the Preview

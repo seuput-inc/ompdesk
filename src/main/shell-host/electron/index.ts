@@ -80,6 +80,13 @@ process.stdin.resume();
 
 const electron = createElectron(client, hello.facts, { patchProcess: true });
 electronApp = electron.app;
+if (hello.facts.legacyUserDataMigration) {
+	appendRuntimeLogAtPath(
+		runtimeLogFile(electron.app.getPath("userData")),
+		{ source: "user-data-migration", message: hello.facts.legacyUserDataMigration },
+		{ appVersion: electron.app.getVersion(), platform: process.platform, pid: process.pid },
+	);
+}
 electron.app.once("quit", () => {
 	ended = true;
 });
