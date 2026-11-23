@@ -653,6 +653,12 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         }
         // Node's own handler (`will-navigate`) sees every navigation the page starts, as Electron's did, and may refuse it.
         let prevented = url.as_str() != "about:blank" && node_prevents_navigation(wc, url);
+        if profile_bootstrap(url.as_str()) {
+            log::log(
+                "profile.migrate.navigation",
+                json!({"wcId":wc,"allowed":allowed && !prevented}),
+            );
+        }
         allowed && !prevented
     })
     .on_new_window(|_, _| NewWindowResponse::Deny)
@@ -1843,9 +1849,13 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let app = builder
         .invoke_handler(tauri::generate_handler![omp_ipc])
         .register_asynchronous_uri_scheme_protocol("app", |context, request, responder| {
+            let bootstrap = assets::is_bootstrap(request.uri());
+            if bootstrap {
+                log::log("profile.migrate.request", json!({"webview":context.webview_label()}));
+            }
             let label = context.webview_label().to_owned();
             std::thread::spawn(move || {
-                if !assets::is_bootstrap(request.uri()) {
+                if !bootstrap {
                     return responder.respond(assets::serve(&runtime().renderer, request, &runtime().content_policy));
                 }
                 #[cfg(feature = "test-automation")]
