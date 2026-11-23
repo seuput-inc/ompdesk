@@ -31,20 +31,20 @@ permissions:
 
 jobs:
   e2e:
-    name: e2e (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    name: Cookie I/O (shard ${{ matrix.shard }}/20)
     runs-on: windows-latest
     # Windows setup (install, the Tauri test host) takes about 20 minutes before Playwright's 35-minute global timeout.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.specs != '' && '[1]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]') }}
+        shard: [4, 19]
     defaults:
       run:
         shell: bash
     env:
       SHARD: ${{ matrix.shard }}
-      SHARDS: ${{ strategy.job-total }}
+      SHARDS: "20"
       SPECS_INPUT: ${{ inputs.specs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,31 +78,46 @@ jobs:
           path: out
       - name: Prepare isolated WebView2 observation folders
         shell: pwsh
+        env:
+          PROBE_RUNNER: ${{ runner.environment }}
         run: |
           $private = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/nav-private"
           $stages = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/nav-stages"
           "OMPDESK_NAV_PRIVATE=$($private.FullName)" >> $env:GITHUB_ENV
           "OMPDESK_NAV_STAGES=$($stages.FullName)" >> $env:GITHUB_ENV
+          if ($env:PROBE_RUNNER -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          "RUNNER_ENVIRONMENT=$env:PROBE_RUNNER" >> $env:GITHUB_ENV
           "OMP_GUI_TEST_FIRST_NAV_NET=default" >> $env:GITHUB_ENV
+      - name: List the original shard workload before tracing starts
+        run: |
+          bun scripts/e2e-shard.ts "$SHARD/$SHARDS" > "$RUNNER_TEMP/e2e-shard.txt"
+          test -s "$RUNNER_TEMP/e2e-shard.txt"
       - name: Start WebView2 process timeline
         id: process_trace
         shell: pwsh
         run: ./scripts/nav-process.ps1 start
+      - name: Start synthetic cookie file I/O measurements
+        id: file_io
+        shell: pwsh
+        run: ./scripts/nav-cookie-io.ps1 start
+      - name: Start Defender performance observation
+        id: defender
+        shell: pwsh
+        run: ./scripts/nav-defender.ps1 start
       - name: Playwright, this shard's spec files
+        run: bunx playwright test --global-timeout=2100000 --test-list "$RUNNER_TEMP/e2e-shard.txt"
+      - name: Stop both recorders before decoding either trace
+        if: always()
+        env:
+          FILE_STARTED: ${{ steps.file_io.outcome }}
+          DEFENDER_STARTED: ${{ steps.defender.outcome }}
         run: |
-          set -euo pipefail
-          list="$RUNNER_TEMP/e2e-shard.txt"
-          if [ -n "$SPECS_INPUT" ]; then
-            read -r -a SPECS <<< "$SPECS_INPUT"
-            for spec in "${SPECS[@]}"; do
-              [[ "$spec" =~ ^e2e/([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.e2e\.ts$ && -f "$spec" ]] || { echo "::error::not an e2e spec file: $spec"; exit 1; }
-              printf '%s\n' "${spec#e2e/}"
-            done > "$list"
-          else
-            bun scripts/e2e-shard.ts "$SHARD/$SHARDS" > "$list"
-          fi
-          test -s "$list"
-          bunx playwright test --global-timeout=2100000 --test-list "$list"
+          pids=()
+          if [[ "$FILE_STARTED" == success ]]; then pwsh -File scripts/nav-cookie-io.ps1 stop & pids+=($!); fi
+          if [[ "$DEFENDER_STARTED" == success ]]; then pwsh -File scripts/nav-defender.ps1 stop & pids+=($!); fi
+          status=0
+          for pid in "${pids[@]}"; do wait "$pid" || status=$?; done
+          exit "$status"
       - name: Finish WebView2 process timeline
         if: ${{ always() && steps.process_trace.outcome == 'success' }}
         shell: pwsh
@@ -118,6 +133,8 @@ jobs:
           path: |
             ${{ runner.temp }}/nav-stages/navigation.jsonl
             ${{ runner.temp }}/nav-stages/process-timeline.jsonl
+            ${{ runner.temp }}/nav-stages/cookie-io.jsonl
+            ${{ runner.temp }}/nav-stages/defender-cost.jsonl
           if-no-files-found: error
           retention-days: 3
       - if: failure() || cancelled()

@@ -40,6 +40,12 @@ pub(super) fn open_probe(profile: &Path) {
         return;
     }
     let key = format!("{}-{}", std::process::id(), crate::wall_clock_ms());
+    if std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted")
+        && profile.components().any(|c| c.as_os_str().to_string_lossy().starts_with("ompdesk-run-"))
+        && let Ok(mut file) = File::create_new(private.join(format!("profile-{key}.json")))
+    {
+        let _ = serde_json::to_writer(&mut file, &json!({"profile":profile}));
+    }
     let native = File::create_new(private.join(format!("native-{key}.jsonl"))).ok();
     let _ = PROBE.set(Probe {
         netlog: private.join(format!("net-{key}.json")),
