@@ -90,6 +90,9 @@ pub fn browser_args() -> Result<Vec<String>, String> {
         if std::env::var_os("OMP_GUI_TEST_FIRST_NAV_NET").is_some() {
             let file = crate::runtime().user_data.join(format!("net-{}.json", std::process::id()));
             args.push(format!("--log-net-log=\"{}\"", file.display()));
+            if std::env::var("OMP_GUI_TEST_FIRST_NAV_NET").as_deref() == Ok("bypass") {
+                args.push("--proxy-bypass-list=app.localhost".into());
+            }
         }
     }
     args.extend(SWITCHES.lock().expect("switches").iter().cloned());

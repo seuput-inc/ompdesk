@@ -29,7 +29,11 @@ async function networkStages(desktop: string, native: string): Promise<void> {
 	}
 	const data = await fs.readFile(path.join(desktop, file), "utf8");
 	const net = JSON.parse(data) as {
-		constants: { logEventTypes: Record<string, number>; timeTickOffset: string };
+		constants: {
+			logEventTypes: Record<string, number>;
+			timeTickOffset: string;
+			clientInfo?: { command_line?: string };
+		};
 		events: { time: string; type: number; phase: number; source: { id: number }; params?: { url?: string } }[];
 	};
 	const names = new Map(Object.entries(net.constants.logEventTypes).map(([name, id]) => [id, name]));
@@ -38,21 +42,25 @@ async function networkStages(desktop: string, native: string): Promise<void> {
 	);
 	const sources = new Set(matches.map(row => row.source.id));
 	const relative = (time: string) => Number(time) + Number(net.constants.timeTickOffset) - start.at + start.t;
+	const phases = (type: string, bootstrapOnly: boolean) =>
+		net.events
+			.filter(row => names.get(row.type) === type && (!bootstrapOnly || sources.has(row.source.id)))
+			.map(row => [row.source.id, row.phase, relative(row.time)]);
 	console.log(
-		`[network] rows=${net.events.length} bootstrap_sources=${sources.size} first_ms=${matches[0] && relative(matches[0].time)}`,
+		"[nav-compare]",
+		JSON.stringify({
+			rep: test.info().repeatEachIndex,
+			arm: test.info().repeatEachIndex % 2 ? "bypass" : "default",
+			flag: net.constants.clientInfo?.command_line?.includes("--proxy-bypass-list=app.localhost") ?? null,
+			starts: nativeEvents
+				.filter(row => row.event === "probe.nav.start" && row.kind === "bootstrap")
+				.map(row => row.t),
+			resources: nativeEvents.filter(row => row.event === "probe.nav.resource").map(row => row.t),
+			waitPAC: phases("PROXY_RESOLUTION_SERVICE_WAITING_FOR_INIT_PAC", true),
+			cookieLoad: phases("COOKIE_PERSISTENT_STORE_LOAD", false),
+			stalls: nativeEvents.filter(row => row.event === "profile.migrate.stalled").map(row => row.t),
+		}),
 	);
-	if (!native.includes('"event":"profile.migrate.stalled"')) return;
-	const began = new Map<string, number>();
-	for (const row of net.events) {
-		const name = names.get(row.type);
-		const time = relative(row.time);
-		if (time > 39_000) break;
-		const key = `${row.source.id}.${row.type}`;
-		if (row.phase === 1) began.set(key, time);
-		const duration = row.phase === 2 && began.has(key) ? time - Number(began.get(key)) : 0;
-		if (sources.has(row.source.id) || duration >= 500)
-			console.log(`[network] ${time}ms ${name} phase=${row.phase} source=${row.source.id} duration=${duration}ms`);
-	}
 }
 let root = "";
 
@@ -111,14 +119,25 @@ test("an order one window sets survives what another window, which read the side
 	await seed(agent, "s-1", project, "Alpha plan", 1);
 	await seed(agent, "s-2", project, "Bravo plan", 2);
 	await seed(agent, "s-3", project, "Charlie plan", 3);
-	const launch = () =>
-		launchApp({
+	const launch = async () => {
+		const exists = (file: string) =>
+			fs.stat(path.join(desktop, file)).then(
+				() => true,
+				() => false,
+			);
+		const [view, journal] = await Promise.all([exists("tauri-webview"), exists("tauri-local-storage-import.json")]);
+		console.log(`[nav-profile] rep=${test.info().repeatEachIndex} webviewDir=${view} journal=${journal}`);
+		return launchApp({
 			project,
 			desktop,
 			agent,
 			profile: root,
-			env: { OMP_GUI_TEST_SESSION_FILES: "1", OMP_GUI_TEST_FIRST_NAV_NET: "1" },
+			env: {
+				OMP_GUI_TEST_SESSION_FILES: "1",
+				OMP_GUI_TEST_FIRST_NAV_NET: test.info().repeatEachIndex % 2 ? "bypass" : "default",
+			},
 		});
+	};
 	app = await launch();
 	const first = await app.firstWindow();
 	await first.waitForFunction(() => window.omp?.rpc != null);
