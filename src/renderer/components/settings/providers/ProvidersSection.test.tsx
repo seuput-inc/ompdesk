@@ -1059,6 +1059,25 @@ describe("ProvidersSection", () => {
 			expect(cancelledIds()).toEqual(["code-1"]);
 		});
 
+		it("allows reconnect only after the host ends the cancelled login", async () => {
+			viewer.web = true;
+			await startSignIn(undefined);
+			const cancellation = Promise.withResolvers<RpcResponse>();
+			cancelLogin.mockReturnValueOnce(cancellation.promise);
+			const connect = () => button(translate("providers.picker.connect", { provider: "Claude" }));
+			await act(async () => button(translate("common.cancel"))?.click());
+			await act(async () => connect()?.click());
+			expect(login).toHaveBeenCalledTimes(1);
+
+			await act(async () => cancellation.resolve({ type: "response", command: "login_cancel", success: true }));
+			expect(connect()?.disabled).toBe(true);
+			await act(async () =>
+				pendingLogin.resolve({ type: "response", command: "login", success: false, error: "Cancelled" }),
+			);
+			await act(async () => connect()?.click());
+			expect(login).toHaveBeenCalledTimes(2);
+		});
+
 		it("cancel ends stock's login through its callback instead of answering the paste request", async () => {
 			await startSignIn(undefined, <ExtensionDialog />);
 			await act(async () => button(translate("common.cancel"))?.click());
