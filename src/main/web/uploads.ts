@@ -10,29 +10,9 @@ import { CoreError, core } from "../core/process";
 
 export const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** The folder of files attached to this computer's own tabs with no path here (ipc.ts FS_UPLOAD_TO_HOST). */
-export const LOCAL_UPLOAD_DEVICE = "this-computer";
-
-/**
- * A file attached to a prompt of this computer's own tab that has no path here (pasted, dragged out of another app):
- * kept like a phone's upload, so the agent reads it by its path. Too large and over the day's limit come back as the
- * codes the composer words.
- */
-export async function attachHere(
-	uploads: Pick<UploadStore, "store">,
-	name: string,
-	bytes: Uint8Array,
-): Promise<{ ok: true; path: string } | { ok: false; error: string; code?: "file_too_large" | "upload_refused" }> {
-	try {
-		return { ok: true, path: (await uploads.store(LOCAL_UPLOAD_DEVICE, name, bytes)).path };
-	} catch (error) {
-		if (error instanceof UploadError && error.status === 413)
-			return { ok: false, error: error.message, code: "file_too_large" };
-		if (error instanceof UploadError && error.status === 429)
-			return { ok: false, error: error.message, code: "upload_refused" };
-		return { ok: false, error: error instanceof Error ? error.message : String(error) };
-	}
-}
+type LocalAttachment =
+	| { ok: true; path: string }
+	| { ok: false; error: string; code?: "file_too_large" | "upload_refused" };
 
 export class UploadError extends Error {
 	readonly status: number;
@@ -78,6 +58,15 @@ export class UploadStore {
 	async store(deviceId: string, name: string, bytes: Uint8Array): Promise<StoredUpload> {
 		return (await this.#call<StoredUpload>("web.uploads.store", { deviceId, name, ...this.writeOptions() }, bytes))
 			.result;
+	}
+
+	async attachHere(name: string, bytes: Uint8Array): Promise<LocalAttachment> {
+		try {
+			return (await this.#call<LocalAttachment>("web.uploads.attachHere", { name, ...this.writeOptions() }, bytes))
+				.result;
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
 	}
 
 	/**

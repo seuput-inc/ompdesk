@@ -2625,7 +2625,7 @@ app.whenReady().then(async () => {
 		checkoutFilesRef,
 		relaunchContinuation: tabId => turnResume.relaunchContinuation(tabId),
 		mediaStreams,
-		uploads: { store: (deviceId, name, bytes) => hostUploads().store(deviceId, name, bytes) },
+		uploads: { attachHere: (name, bytes) => hostUploads().attachHere(name, bytes) },
 		schedules: () => scheduleService,
 		mailAccounts: () => mailAccounts,
 		sidebarProjects,

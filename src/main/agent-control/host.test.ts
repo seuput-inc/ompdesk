@@ -1023,11 +1023,11 @@ describe("AgentControlRuntime", () => {
 		});
 
 		it("carries a file to the receiver: it lands in this computer's upload folder and the prompt names its path", async () => {
-			const store = vi.fn(async (_device: string, name: string) => ({ path: `/uploads/${name}` }));
+			const attachHere = vi.fn(async (name: string) => ({ ok: true as const, path: `/uploads/${name}` }));
 			const { runtime, win, commands } = setup({
 				tabs: [{ tabId: "main0001" }, { tabId: "recv0002", sessionPath: "/s/recv.jsonl" }],
 				reads: { "/repo/notes.pdf": { name: "notes.pdf", mimeType: "application/pdf", dataBase64: "JVBERi0=" } },
-				uploads: { store } as never,
+				uploads: { attachHere },
 			});
 			const sent = await runtime.run(win, "main0001", T.send, {
 				session: "recv0002",
@@ -1036,17 +1036,17 @@ describe("AgentControlRuntime", () => {
 			});
 			expect(sent.isError, sent.text).toBe(false);
 			expect(sent.text).toContain("attached: 1 (1 file at /uploads/notes.pdf)");
-			expect(store).toHaveBeenCalledTimes(1);
+			expect(attachHere).toHaveBeenCalledTimes(1);
 			const prompt = commands.find(entry => entry.command.type === "prompt");
 			expect(prompt?.tabId).toBe("recv0002");
 			expect(JSON.stringify(prompt?.command)).toContain("Attached: /uploads/notes.pdf");
 		});
 
 		it("refuses the whole send when an attachment cannot be read, and puts nothing on the receiver", async () => {
-			const store = vi.fn(async (_device: string, name: string) => ({ path: `/uploads/${name}` }));
+			const attachHere = vi.fn(async (name: string) => ({ ok: true as const, path: `/uploads/${name}` }));
 			const { runtime, win, commands } = setup({
 				tabs: [{ tabId: "main0001" }, { tabId: "recv0002", sessionPath: "/s/recv.jsonl" }],
-				uploads: { store } as never,
+				uploads: { attachHere },
 			});
 			const sent = await runtime.run(win, "main0001", T.send, {
 				session: "recv0002",
@@ -1055,7 +1055,7 @@ describe("AgentControlRuntime", () => {
 			});
 			expect(sent.isError).toBe(true);
 			expect(sent.text).toContain("Nothing was delivered.");
-			expect(store).not.toHaveBeenCalled();
+			expect(attachHere).not.toHaveBeenCalled();
 			expect(commands.some(entry => entry.command.type === "prompt")).toBe(false);
 		});
 

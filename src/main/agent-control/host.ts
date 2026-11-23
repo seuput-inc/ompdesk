@@ -86,7 +86,7 @@ import type { SidecarLike } from "../sidecar-types";
 import { recordTurnStop } from "../turn-stop-log";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
 import type { FileEditReports } from "../web/file-edit-reports";
-import { attachHere, type UploadStore } from "../web/uploads";
+import type { UploadStore } from "../web/uploads";
 import { sessionOpenFolders } from "../worktree-orphans";
 import {
 	type BranchEvidence,
@@ -223,7 +223,7 @@ export interface AgentControlHostDeps {
 	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
 	attachmentsDir?: string | null;
 	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
-	uploads?: Pick<UploadStore, "store">;
+	uploads?: Pick<UploadStore, "attachHere">;
 	/** Where sent messages wait for their receiver's journal (`send-outbox`); absent: kept in memory only. */
 	sendOutboxFile?: string | null;
 	/** Where the control-tool calls that change something are recorded (`call-journal`); absent: in memory only. */
@@ -1396,7 +1396,7 @@ export class AgentControlRuntime {
 		if (!device) {
 			if (!deps.uploads)
 				return { ok: false, error: "This computer does not take attached files", code: "unsupported" };
-			return attachHere(deps.uploads, name, bytes);
+			return deps.uploads.attachHere(name, bytes);
 		}
 		const remote = deps.remote;
 		if (!remote) return { ok: false, error: "No link to that computer", code: "unsupported" };

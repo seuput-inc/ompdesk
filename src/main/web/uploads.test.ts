@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CoreError, core } from "../core/process";
-import { attachHere, LOCAL_UPLOAD_DEVICE, type StoredUpload, UPLOAD_TTL_MS, UploadError, UploadStore } from "./uploads";
+import { type StoredUpload, UPLOAD_TTL_MS, UploadError, UploadStore } from "./uploads";
 
 let userData: string;
 let root: string;
@@ -173,20 +173,23 @@ describe("UploadStore", () => {
 describe("attachHere", () => {
 	it("keeps a pathless file of this computer's own tab in its own folder, and says why when it cannot", async () => {
 		const uploads = store();
-		const kept = await attachHere(uploads, "clip.bin", new Uint8Array([1, 0, 2]));
+		const kept = await uploads.attachHere("clip.bin", new Uint8Array([1, 0, 2]));
 		if (!kept.ok) throw new Error(kept.error);
-		expect(kept.path).toContain(join(root, LOCAL_UPLOAD_DEVICE));
+		expect(kept.path).toContain(join(root, "this-computer"));
 		expect([...readFileSync(kept.path)]).toEqual([1, 0, 2]);
 
-		expect(await attachHere(uploads, "big.bin", new Uint8Array(fileMaxBytes + 1))).toMatchObject({
+		expect(await uploads.attachHere("empty.bin", new Uint8Array())).toEqual({ ok: false, error: "empty file" });
+		expect(await uploads.attachHere("big.bin", new Uint8Array(fileMaxBytes + 1))).toEqual({
 			ok: false,
+			error: "file too large",
 			code: "file_too_large",
 		});
-		await attachHere(uploads, "a.bin", new Uint8Array(fileMaxBytes));
-		await attachHere(uploads, "b.bin", new Uint8Array(fileMaxBytes));
+		await uploads.attachHere("a.bin", new Uint8Array(fileMaxBytes));
+		await uploads.attachHere("b.bin", new Uint8Array(fileMaxBytes));
 		// The day's room is spent: the composer says so instead of a raw error.
-		expect(await attachHere(uploads, "c.bin", new Uint8Array(fileMaxBytes))).toMatchObject({
+		expect(await uploads.attachHere("c.bin", new Uint8Array(fileMaxBytes))).toEqual({
 			ok: false,
+			error: "daily upload limit reached",
 			code: "upload_refused",
 		});
 	});
