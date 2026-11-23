@@ -36,6 +36,7 @@ runs:
         src/main/session-processes.test.ts
         src/main/setup/runner.test.ts
         src/main/setup/download.test.ts
+        src/main/setup/paths.test.ts
         src/main/setup/archives.test.ts
         src/main/setup/compiled-launcher.test.ts
         src/main/setup/service.test.ts

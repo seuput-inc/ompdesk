@@ -4,10 +4,10 @@
  * Homebrew, PortableGit on Windows), the Windows registry PATH that installers
  * change while the app runs, and Git Bash discovery on Windows.
  */
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SetupPlatform } from "../../shared/setup";
+import { core } from "../core/process";
 import { resetLoginShellEnvCache } from "../shell-env";
 
 export type Exists = (file: string) => boolean;
@@ -138,31 +138,7 @@ export function findGitBash(env: NodeJS.ProcessEnv, exists: Exists = existsSync)
 	return null;
 }
 
-/** The value of `name` in `reg query … /v <name>` output, or null. */
-export function parseRegQueryValue(output: string, name: string): string | null {
-	for (const line of output.split(/\r?\n/)) {
-		const match = /^\s+(\S+)\s+REG_(?:EXPAND_)?SZ\s+(.*)$/.exec(line);
-		if (match && match[1]?.toLowerCase() === name.toLowerCase()) return match[2]?.trim() ?? "";
-	}
-	return null;
-}
-
-/** Expand `%VAR%` references the way Windows does for REG_EXPAND_SZ (names case-insensitive; unknown ones stay). */
-export function expandWindowsEnv(value: string, env: NodeJS.ProcessEnv): string {
-	const lookup = new Map(Object.entries(env).map(([key, entry]) => [key.toLowerCase(), entry]));
-	return value.replace(/%([^%;]+)%/g, (whole, name: string) => lookup.get(name.toLowerCase()) ?? whole);
-}
-
-const MACHINE_ENV_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
-const USER_ENV_KEY = "HKCU\\Environment";
-
-function regQuery(key: string): Promise<string> {
-	const { promise, resolve } = Promise.withResolvers<string>();
-	execFile("reg.exe", ["query", key, "/v", "Path"], { windowsHide: true, timeout: 10_000 }, (error, stdout) =>
-		resolve(error ? "" : stdout),
-	);
-	return promise;
-}
+type RegistryPathPart = string | { name: string };
 
 /**
  * Pick up PATH changes an installer just made, without an app restart. macOS:
@@ -173,11 +149,17 @@ function regQuery(key: string): Promise<string> {
  */
 export async function refreshPath(platform: SetupPlatform, toolsDir: string): Promise<void> {
 	if (platform === "win32") {
-		const [machine, user] = await Promise.all([regQuery(MACHINE_ENV_KEY), regQuery(USER_ENV_KEY)]);
-		const additions = [parseRegQueryValue(machine, "Path"), parseRegQueryValue(user, "Path")]
-			.filter((value): value is string => value !== null)
-			.map(value => expandWindowsEnv(value, process.env));
-		process.env.PATH = mergePathLists(process.env.PATH ?? "", additions, platform);
+		// A failed registry read never prevents reapplying the managed tools.
+		const parts = await core()
+			.call<RegistryPathPart[]>("setup.registryPath", { cwd: process.cwd(), env: process.env })
+			.then(({ result }) => result)
+			.catch(() => []);
+		// An installer or another refresh may have changed main's environment while reg.exe was running.
+		const env = new Map(Object.entries(process.env).map(([key, value]) => [key.toLowerCase(), value]));
+		const addition = parts
+			.map(part => (typeof part === "string" ? part : (env.get(part.name.toLowerCase()) ?? `%${part.name}%`)))
+			.join("");
+		process.env.PATH = mergePathLists(process.env.PATH ?? "", [addition], platform);
 	} else {
 		resetLoginShellEnvCache();
 	}
