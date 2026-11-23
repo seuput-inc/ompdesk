@@ -1078,6 +1078,18 @@ fn dispatch(call: host::Call) {
         });
         return;
     }
+    if call.method == "app.previousRunEnd" {
+        let Some(pid) = call.params["ownPid"].as_u64().and_then(|n| u32::try_from(n).ok()) else {
+            return call.err("invalid", "expected Node's process id");
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            call.ok(native_services::diagnostic_logs::previous_run_end(
+                &runtime().feedback_profile,
+                pid,
+            ))
+        });
+        return;
+    }
     if call.method == "app.diagnosticLog" {
         native_services::diagnostic_logs::handle(call, &runtime().user_data);
         return;

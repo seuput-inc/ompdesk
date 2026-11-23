@@ -17,10 +17,10 @@ import {
 	updateRestartConfirmation,
 	type WindowTabFact,
 } from "./quit-guard";
-import { exitReport, type QuitAsk, type QuitAsker, quitAskedReport, uncleanEndReport } from "./quit-log";
+import { exitReport, type QuitAsk, type QuitAsker, quitAskedReport } from "./quit-log";
 import { QuitWatchdog, type QuitWatchdogReason } from "./quit-watchdog";
-import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
-import { tailLogLines } from "./runtime-log-core";
+import { writeRuntimeLog } from "./runtime-log";
+import type { RuntimeLogReport } from "./runtime-log-core";
 
 const latch = new QuitLatch();
 let asking = false;
@@ -91,9 +91,8 @@ export function askQuit(asker: QuitAsker): void {
  * At start: the line for a previous run that left no end line, this run's end line on `quit` (every exit goes through
  * `app.exit`, which emits it), and the signals a script or a terminal sends, which quit as Electron quit on them.
  */
-export function startQuitLog(): void {
-	void tailLogLines(runtimeLogPath(), 400).then(lines => {
-		const report = uncleanEndReport(lines, process.pid);
+export function startQuitLog(previousEnd: Promise<RuntimeLogReport | null>): void {
+	void previousEnd.then(report => {
 		if (report) writeRuntimeLog(report);
 	});
 	app.on("quit", (_event, code) => writeRuntimeLog(exitReport(code)));

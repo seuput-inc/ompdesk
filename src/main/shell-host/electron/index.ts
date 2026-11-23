@@ -90,6 +90,13 @@ electron.app.once("quit", () => {
 	ended = true;
 });
 
+export function readPreviousRunEnd(): Promise<RuntimeLogReport | null> {
+	return client.call<RuntimeLogReport | null>("app.previousRunEnd", { ownPid: process.pid }).catch((error: unknown) => {
+		console.warn("[app-quit]", error);
+		return null;
+	});
+}
+
 // The e2e harness (OMP_GUI_TEST_NODE_INSPECT=1: main runs under `--inspect`) evaluates specs' functions against this
 // object through the inspector, where Electron's `app.evaluate` handed them the module.
 if (process.env.OMP_GUI_TEST_NODE_INSPECT === "1") {

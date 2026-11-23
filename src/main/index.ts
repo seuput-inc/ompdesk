@@ -216,6 +216,7 @@ import {
 	openPageExternal,
 	postWatchdog,
 	readDiagnosticLog,
+	readPreviousRunEnd,
 	registerRuntimeLogIpc,
 } from "./shell-host/electron/index";
 import {
@@ -340,7 +341,7 @@ if (!gotLock) {
 	app.quit();
 }
 // Before anything else is logged: how the last run ended, and this run's end line when it exits.
-if (gotLock) startQuitLog();
+if (gotLock) startQuitLog(readPreviousRunEnd());
 
 // Crash-loop guard (launch-guard-core.ts): when the last launches all ended within seconds, this one starts in
 // safe mode (software rendering, no automatic relaunch, machine setup and memory setup paused). Packaged runs
