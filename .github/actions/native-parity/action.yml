@@ -49,6 +49,7 @@ runs:
         src/main/tailscale/service-restart.test.ts
         src/main/tailscale/tailnet.test.ts
         src/main/ssh/*.test.ts
+        src/main/power/lid-backend-windows.test.ts
         src/main/ext-update/mcp.test.ts
         src/main/ext-update/classify.test.ts
         src/main/ext-update/running.test.ts

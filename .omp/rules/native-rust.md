@@ -60,6 +60,8 @@ globs:
 
 - **8c follow-up. Save a paired device's upload.** `web.host.save` checks the source against the native upload store for the authenticated device and host profile before copying. The page supplies neither identity. Inline saves and overwrite semantics are unchanged. The former same-tick `UploadStore.owns` reader is gone. Native parity runs `web/host-actions.test.ts` and `web/uploads.test.ts`; `web/save.rs` also checks destination errors, overwrite and links.
 
+- **Windows battery presence.** `keepAwake.windowsBattery` runs the read-only `Win32_Battery` query with the existing 30 s deadline and 1 MiB limit on each output pipe. Query failure does not enable a lid hold. `power/lid-backend-windows.test.ts` runs against the core with a stand-in executable and simulated AC/DC settings. The lid hold, recovery marker and synchronous quit restoration stay together for the reasons in `services.tsv`; this unit does not change a power plan.
+
 - **Update feed.** `updateFeed.resolve` (`crates/core/src/update_feed`) selects a GitHub release and checks its comment, file, SHA-512 format, tag, asset size and declared Darwin minimum. `src/main/update-release.ts` is its typed client. Main retains HTTP/auth, delivery of the resolved installer to electron-updater, and the current OS check required by synchronous `resolveFiles`. Native parity runs `update-release.test.ts`, `update-provider.test.ts` and `update-compatibility.test.ts`, including the frozen v0.131 consumer and the publish step's generated comment.
   - The admitted macOS response also names the versioned local DMG. Manual and relaunch downloads retain that response for its version, API URL, size and digest. Windows keeps the version-free NSIS asset.
 

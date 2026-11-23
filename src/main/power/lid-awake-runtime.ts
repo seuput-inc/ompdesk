@@ -3,11 +3,21 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { core } from "../core/process";
 import { LidAwake, type LidAwakeLog, type LidBackend } from "./lid-awake";
 import { MacLidBackend } from "./lid-backend-mac";
 import { WindowsLidBackend } from "./lid-backend-windows";
 
 const run = promisify(execFile);
+
+export async function windowsHasBattery(file: string, prefix: readonly string[] = []): Promise<boolean> {
+	const { result } = await core().call<boolean>(
+		"keepAwake.windowsBattery",
+		{ file, prefix, env: process.env, cwd: process.cwd() },
+		{ timeoutMs: 37_000 },
+	);
+	return result;
+}
 
 function backendFor(userData: string): LidBackend | null {
 	if (process.platform === "darwin") {
@@ -29,19 +39,7 @@ function backendFor(userData: string): LidBackend | null {
 				run: async args => (await run(powercfg, [...args], { encoding: "utf8", windowsHide: true })).stdout,
 				runSync: args => execFileSync(powercfg, [...args], { encoding: "utf8", windowsHide: true, timeout: 5000 }),
 			},
-			hasBattery: async () => {
-				const { stdout } = await run(
-					join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"),
-					[
-						"-NoProfile",
-						"-NonInteractive",
-						"-Command",
-						"(Get-CimInstance -ClassName Win32_Battery | Measure-Object).Count",
-					],
-					{ encoding: "utf8", windowsHide: true, timeout: 30_000 },
-				);
-				return Number.parseInt(stdout.trim(), 10) > 0;
-			},
+			hasBattery: () => windowsHasBattery(join(system32, "WindowsPowerShell", "v1.0", "powershell.exe")),
 			markerFile: join(userData, "lid-awake.json"),
 			now: Date.now,
 		});
