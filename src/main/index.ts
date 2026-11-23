@@ -111,15 +111,8 @@ import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { CliUpdater, psCommands, registerCliUpdateIpc } from "./cli-tools/updater";
-import {
-	answersWithin,
-	ConnectivityMonitor,
-	PROBE_TIMEOUT_MS,
-	probeTarget,
-	reaches,
-	tcpConnects,
-} from "./connectivity";
-import { CONSOLE_POLL_MS, type ConsoleWindow, ConsoleWindowWatch } from "./console-window-watch";
+import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
+import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
 import { installCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
@@ -176,7 +169,7 @@ import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "
 import { followSetupState } from "./omp-availability";
 import { OmpCompatSource } from "./omp-compat-source";
 import { heldSince, holdNotice, OMP_HELD_SEEN_PREF, OMP_HOLD_TOLD_PREF, parseHoldTold } from "./omp-hold-notice";
-import { creditSpendRun, SESSION_TAG_ENV } from "./omp-launch";
+import { creditSpendRun } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
 import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp } from "./omp-runtime";
 import { OmpUpdater, registerOmpUpdateIpc } from "./omp-updater";
@@ -193,7 +186,6 @@ import { readoptHostTabs } from "./remote/readopt";
 import { migrateRetiredPrefs } from "./retired-prefs";
 import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
-import { tailLogLines } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
@@ -239,7 +231,7 @@ import { exitWithLauncher } from "./test-launcher-exit";
 import { createTray, destroyTray, hasTray } from "./tray";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
-import { TurnWaitWatch, WAIT_JOURNAL_BYTES, WAIT_JOURNAL_LINES, WAIT_SWEEP_MS } from "./turn-wait-watch";
+import { journalWait, TurnWaitWatch, WAIT_SWEEP_MS } from "./turn-wait-watch";
 import {
 	appAutoUpdatePrefChanged,
 	appVersion,
@@ -2308,13 +2300,11 @@ app.whenReady().then(async () => {
 				? Promise.resolve(false)
 				: answersWithin(
 						agentProxyUrl().then(proxy =>
-							reaches(probeTarget(host ?? "example.com", proxy), {
-								resolve: async name =>
-									(await net.resolveHost(name, { cacheUsage: "disallowed" })).endpoints.map(
-										endpoint => endpoint.address,
-									),
-								connect: (address, port) => tcpConnects(address, port, PROBE_TIMEOUT_MS),
-							}),
+							reaches(probeTarget(host ?? "example.com", proxy), async name =>
+								(await net.resolveHost(name, { cacheUsage: "disallowed" })).endpoints.map(
+									endpoint => endpoint.address,
+								),
+							),
 						),
 						PROBE_TIMEOUT_MS,
 					),
@@ -2341,7 +2331,7 @@ app.whenReady().then(async () => {
 		tabs: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()],
 		facts: tabId => sidecarPool.settleFacts(tabId),
 		status: tabId => sidecarPool.sidecarOf(tabId)?.status,
-		journal: file => tailLogLines(file, WAIT_JOURNAL_LINES, WAIT_JOURNAL_BYTES),
+		journal: journalWait,
 		log: details => writeRuntimeLog({ source: "turn-wait", message: "still waiting", details }),
 	});
 	const turnResume = new TurnResume({
@@ -2476,9 +2466,7 @@ app.whenReady().then(async () => {
 	if (process.platform === "win32") {
 		// A console window that shows on the desktop says whose it is (console-window-watch.ts).
 		const consoleWindows = new ConsoleWindowWatch({
-			list: async (known, roots, sinceMs) =>
-				(await core().call<ConsoleWindow[]>("procs.consoles", { known, roots, env: SESSION_TAG_ENV, sinceMs }))
-					.result,
+			list: listConsoleWindows,
 			own: () => {
 				const corePid = core().pid;
 				return [

@@ -26,6 +26,11 @@ pub(super) struct Acquire {
     pub former_ids: Option<Vec<String>>,
 }
 
+enum AcquireSlot {
+    New,
+    Seeded(usize),
+}
+
 impl Ctx {
     // ---- the window's "closed" listeners ----------------------------------------------------------------------
 
@@ -98,100 +103,132 @@ impl Ctx {
 
     /// `#notifyWindowTabsChanged`: the persistence hook hears the window's layout, except while a restore builds it.
     pub(super) async fn notify_window_tabs_changed(&self, win: i64) -> R<()> {
+        self.notify_layout(win, None).await
+    }
+
+    async fn notify_layout(&self, win: i64, acquire: Option<&str>) -> R<()> {
         let skip = self.with(|pool| !pool.window_tabs_hook || pool.restoring.contains(&win));
         if skip {
             return Ok(());
         }
         let layout = self.tab_layout_for_window(win).await?;
-        self.ask("onWindowTabsChanged", json!({"win": win, "layout": layout}))
-            .await?;
+        self.ask(
+            "onWindowTabsChanged",
+            json!({"win": win, "layout": layout, "acquire": acquire}),
+        )
+        .await?;
         Ok(())
     }
 
     // ---- acquiring ----------------------------------------------------------------------------------------------
 
+    async fn acquire_slot(
+        &self,
+        tab: &str,
+        win: i64,
+        device: Option<&str>,
+        hosted: bool,
+        query: Value,
+    ) -> R<Option<AcquireSlot>> {
+        let blocked = self.ask("blocked", query).await?.as_bool() == Some(true);
+        let slot = self.with(|pool| {
+            let Some(at) = pool.index(tab) else {
+                return Some(AcquireSlot::New);
+            };
+            let entry = &mut pool.entries[at];
+            if !entry.recovering_acquire
+                || entry.win_id != win
+                || entry.device.as_deref() != device
+                || entry.hosted_view != hosted
+            {
+                return None;
+            }
+            entry.recovering_acquire = false;
+            Some(AcquireSlot::Seeded(at))
+        });
+        if blocked {
+            if matches!(slot, Some(AcquireSlot::Seeded(_))) {
+                self.release_entry(tab).await?;
+            }
+            return Ok(None);
+        }
+        Ok(slot)
+    }
+
+    fn new_acquire_entry(&self, tab: String, win: i64, kind: String, status: String) -> usize {
+        self.with(|pool| {
+            let at = pool.entries.len();
+            let seq = pool.next_seq();
+            pool.entries.push(Entry::new(seq, tab, win, kind, status));
+            at
+        })
+    }
+
     /// `acquire`: true when the tab was created (main holds its sidecar then); `added` says whether the pool holds an
     /// entry even though a step after it threw, as the TypeScript's `catch` left it.
     pub(super) async fn acquire(&self, args: Acquire) -> R<(bool, bool)> {
-        let blocked = self
-            .ask(
-                "blocked",
-                json!({"sessionPath": args.session_path, "device": args.device, "cwd": args.cwd}),
-            )
-            .await?;
-        if blocked.as_bool() == Some(true) {
-            return Ok((false, false));
-        }
-        let tab = args.tab.clone();
-        let outcome = self.acquire_inner(args).await;
-        let added = self.with(|pool| pool.has(&tab));
-        Ok((outcome.is_ok(), added))
-    }
-
-    async fn acquire_inner(&self, args: Acquire) -> R<()> {
-        let tab = args.tab.clone();
-        let spawned = self
-            .ask(
-                "spawn",
+        let Some(slot) = self
+            .acquire_slot(
+                &args.tab,
+                args.win,
+                args.device.as_deref(),
+                false,
                 json!({
-                    "tab": tab, "win": args.win, "cwd": args.cwd, "kind": args.kind, "fresh": args.fresh,
-                    "device": args.device, "sessionPath": args.session_path, "worktree": args.worktree,
-                    "placeholder": args.placeholder, "deferStart": args.defer_start,
+                    "tab": args.tab, "sessionPath": args.session_path, "device": args.device, "cwd": args.cwd,
                 }),
             )
-            .await?;
-        let status = spawned["status"].as_str().unwrap_or("asleep").to_string();
-        let seq = self.with(|pool| {
-            let seq = pool.next_seq();
-            let mut entry = Entry::new(seq, args.tab.clone(), args.win, args.kind.clone(), status);
-            entry.device = args.device.clone();
+            .await?
+        else {
+            return Ok((false, self.with(|pool| pool.has(&args.tab))));
+        };
+        let tab = args.tab;
+        let at = match slot {
+            AcquireSlot::Seeded(at) => at,
+            AcquireSlot::New => {
+                let Ok(spawned) = self
+                    .ask(
+                        "spawn",
+                        json!({
+                            "tab": tab, "win": args.win, "cwd": args.cwd, "kind": args.kind, "fresh": args.fresh,
+                            "device": args.device, "sessionPath": args.session_path, "worktree": args.worktree,
+                            "placeholder": args.placeholder, "deferStart": args.defer_start,
+                        }),
+                    )
+                    .await
+                else {
+                    return Ok((false, self.with(|pool| pool.has(&tab))));
+                };
+                let status = spawned["status"].as_str().unwrap_or("asleep").to_string();
+                self.new_acquire_entry(tab.clone(), args.win, args.kind, status)
+            }
+        };
+        let (seq, needs_file) = self.with(|pool| {
+            let entry = &mut pool.entries[at];
+            entry.device = args.device;
             entry.placeholder = args.placeholder;
             entry.unstarted = args.session_path.is_none();
-            entry.worktree = args.worktree.clone();
-            if let Some(title) = &args.title
-                && !title.is_empty()
-            {
-                entry.title = Some(Some(title.clone()));
-            }
-            if let Some(task) = &args.task
-                && !task.is_empty()
-            {
-                entry.task = Some(task.clone());
-            }
-            if let (Some(ids), Some(path)) = (&args.former_ids, &args.session_path)
+            entry.worktree = args.worktree;
+            entry.title = args.title.filter(|title| !title.is_empty()).map(Some);
+            entry.task = args.task.filter(|task| !task.is_empty());
+            if let (Some(ids), Some(path)) = (args.former_ids, &args.session_path)
                 && !path.is_empty()
             {
-                entry.former = Some((path.clone(), ids.clone()));
+                entry.former = Some((path.clone(), ids));
             }
-            pool.entries.push(entry);
-            seq
+            (entry.seq, entry.session_file.is_none())
         });
-        self.ask("acquired", json!({"tab": tab})).await?;
-        // F-OWN: a spawn-with-sessionPath attaches immediately: the owner is registered before any duplicate attach
-        // can slip past the IPC guard. A deferred tab registers too.
-        if let Some(path) = args.session_path.as_ref().filter(|path| !path.is_empty()) {
-            self.register_session_file(&tab, path).await?;
-        }
-        if !args.defer_start {
-            let claim = self.with(|pool| {
-                if pool.active_by_window.contains(&args.win) {
-                    false
-                } else {
-                    pool.active_by_window.insert(args.win, tab.clone());
-                    pool.visible_by_window.insert(args.win, vec![tab.clone()]);
-                    true
-                }
-            });
-            if claim {
-                self.sync_full_wiring(args.win).await?;
-            }
-        }
-        self.when_closed(args.win, Closer::Entry(seq));
-        if !args.defer_start {
-            self.ensure_started(&tab).await?;
-        }
-        self.notify_window_tabs_changed(args.win).await?;
-        Ok(())
+        let outcome = self
+            .finish_acquire(
+                &tab,
+                args.win,
+                seq,
+                args.session_path
+                    .as_deref()
+                    .filter(|path| needs_file && !path.is_empty()),
+                args.defer_start,
+            )
+            .await;
+        Ok((outcome.is_ok(), self.with(|pool| pool.has(&tab))))
     }
 
     /// `acquireHostedView`: false when the session was deleted.
@@ -204,45 +241,76 @@ impl Ctx {
         reading: Option<Value>,
         session_path: String,
     ) -> R<bool> {
-        let deleted = self
-            .ask(
-                "blocked",
-                json!({"sessionPath": session_path, "cwd": "", "hosted": true}),
+        let Some(slot) = self
+            .acquire_slot(
+                &tab,
+                win,
+                None,
+                true,
+                json!({"tab": tab, "sessionPath": session_path, "cwd": "", "hosted": true}),
             )
-            .await?;
-        if deleted.as_bool() == Some(true) {
+            .await?
+        else {
             return Ok(false);
-        }
-        let seq = self.with(|pool| {
-            let seq = pool.next_seq();
-            let mut entry = Entry::new(seq, tab.clone(), win, kind, status);
+        };
+        let at = match slot {
+            AcquireSlot::New => self.new_acquire_entry(tab.clone(), win, kind, status),
+            AcquireSlot::Seeded(at) => at,
+        };
+        let (seq, needs_file) = self.with(|pool| {
+            let entry = &mut pool.entries[at];
             entry.hosted_view = true;
             // The device's tab may be mid-turn as this window joins it: its events so far reached nobody here.
             if let Some(reading) = &reading {
                 entry.tracking.run = super::run::RunState::from_reading(reading, None, pool.now);
             }
-            pool.entries.push(entry);
-            seq
+            (entry.seq, entry.session_file.is_none())
         });
-        self.ask("wire", json!({"tab": tab, "track": false}))
-            .await?;
-        self.register_session_file(&tab, &session_path).await?;
-        let claim = self.with(|pool| {
-            if pool.active_by_window.contains(&win) {
-                false
-            } else {
-                pool.active_by_window.insert(win, tab.clone());
-                pool.visible_by_window.insert(win, vec![tab.clone()]);
+        self.finish_acquire(
+            &tab,
+            win,
+            seq,
+            needs_file.then_some(session_path.as_str()),
+            false,
+        )
+        .await?;
+        Ok(true)
+    }
+
+    async fn finish_acquire(
+        &self,
+        tab: &str,
+        win: i64,
+        seq: u64,
+        session_path: Option<&str>,
+        defer_start: bool,
+    ) -> R<()> {
+        // On replay the handle can already have listeners, a newer file and a saved layout.
+        let saved = self.ask("acquired", json!({"tab": tab})).await?.as_bool() == Some(true);
+        if let Some(path) = session_path {
+            self.register_session_file(tab, path).await?;
+        }
+        if !defer_start {
+            let active = self.with(|pool| {
+                if let Some(active) = pool.active_by_window.get(&win) {
+                    return active == tab;
+                }
+                pool.active_by_window.insert(win, tab.to_string());
+                pool.visible_by_window.insert(win, vec![tab.to_string()]);
                 true
+            });
+            if active {
+                self.sync_full_wiring(win).await?;
             }
-        });
-        if claim {
-            self.sync_full_wiring(win).await?;
         }
         self.when_closed(win, Closer::Entry(seq));
-        self.ensure_started(&tab).await?;
-        self.notify_window_tabs_changed(win).await?;
-        Ok(true)
+        if !defer_start {
+            self.ensure_started(tab).await?;
+        }
+        if !saved {
+            self.notify_layout(win, Some(tab)).await?;
+        }
+        Ok(())
     }
 
     // ---- the full channel, by window --------------------------------------------------------------------------

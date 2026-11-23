@@ -34,6 +34,7 @@ runs:
         src/main/omp-processes.test.ts
         src/main/omp-log-tail.test.ts
         src/main/session-processes.test.ts
+        src/main/console-window-watch.test.ts
         src/main/setup/runner.test.ts
         src/main/setup/download.test.ts
         src/main/setup/archives.test.ts
@@ -117,6 +118,11 @@ runs:
         src/main/workspace-fs*.test.ts
         src/main/media-stream.test.ts
         src/main/workspace-search.test.ts
+        src/main/save-copy.test.ts
+        src/main/sidebar-projects.test.ts
+        src/main/worktree-orphans*.test.ts
+        src/main/turn-wait-watch.test.ts
+        src/main/session-pace*.test.ts
         src/main/disk/*.test.ts
         src/main/sidecar.test.ts
         src/main/local/queue.test.ts

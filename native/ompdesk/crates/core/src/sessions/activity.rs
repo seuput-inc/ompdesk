@@ -89,6 +89,19 @@ fn message_time(line: &[u8], dates: &mut Vec<String>) -> Option<i64> {
     None
 }
 
+pub(super) fn read_window(
+    file: &mut File,
+    start: u64,
+    end: u64,
+    buffer: &mut Vec<u8>,
+) -> io::Result<()> {
+    file.seek(SeekFrom::Start(start))?;
+    buffer.clear();
+    buffer.reserve_exact((end - start) as usize);
+    file.take(end - start).read_to_end(buffer)?;
+    Ok(())
+}
+
 /// Dates for Bun precede the numeric/ISO fallback in newest-to-oldest journal order.
 pub(super) fn last_activity(
     file: &mut File,
@@ -99,10 +112,7 @@ pub(super) fn last_activity(
     let mut end = size;
     for window in [FIRST_WINDOW, FIRST_WINDOW * 4, FIRST_WINDOW * 16, LIMIT] {
         let start = size.saturating_sub(window);
-        file.seek(SeekFrom::Start(start))?;
-        buffer.clear();
-        buffer.reserve_exact((end - start) as usize);
-        file.take(end - start).read_to_end(&mut buffer)?;
+        read_window(file, start, end, &mut buffer)?;
         let mut lines = buffer.split(|&b| b == b'\n');
         if start != 0 {
             // Even a line-looking prefix may start inside a message. Only this fragment

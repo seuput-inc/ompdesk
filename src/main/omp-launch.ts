@@ -5,7 +5,6 @@
  * that lacks an extension, a setting or the session the tab is on. `SidecarManager` gathers the facts per spawn;
  * src/main/session-launch-parity.test.ts drives every start path and compares what they launch.
  */
-import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { CREDIT_SPEND_ENV } from "../../resources/gui-bridge/credit-spend-core";
 import { GH_BIN_DIR, GH_GUARD_ENV } from "../../resources/gui-bridge/gh-guard-core";
@@ -80,27 +79,8 @@ export function withoutSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	return own;
 }
 
-/** What a tab knows about its session before a spawn. */
-export interface TabSession {
-	/** The session the tab is on: the file it was asked to open, then the one its omp reported (`get_state`). */
-	readonly path: string | null;
-	/** A new tab that has not booted yet: stock's `autoResume` must not reopen another session in its folder. */
-	readonly isNew: boolean;
-}
-
 /** `{ session }`: `--session <file>`; `new`: a new session in the folder (`autoResume` pinned off); `default`: omp's own. */
 export type SessionOpen = { readonly session: string } | "new" | "default";
-
-/**
- * A written session is reopened. A session stock never wrote (it writes a new session's file at the first answer:
- * a tab restored or restarted before its first turn ended) opens nothing, and `--session` on it only fails ("Session
- * not found"), so the tab starts a new session in its folder, as a new tab does. Only a tab with no session at all (it
- * moved to another folder) leaves the choice to omp.
- */
-export function sessionOpen(tab: TabSession, written: (path: string) => boolean = existsSync): SessionOpen {
-	if (tab.path && written(tab.path)) return { session: tab.path };
-	return tab.isNew || tab.path ? "new" : "default";
-}
 
 /** OMPdesk's own extension arguments and variables for a spawn. */
 export interface BuiltinLaunch {

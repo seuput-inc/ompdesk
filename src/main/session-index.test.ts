@@ -66,6 +66,21 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
+it("refuses to move a session into a file or missing folder and leaves its journal intact", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-move-"));
+	tempDirs.push(root);
+	const file = await writeSession(root, "stay");
+	const before = await fs.readFile(file);
+	const index = new SessionIndex(root, root);
+	indexes.push(index);
+	for (const destination of [file, path.join(root, "missing")]) {
+		await expect(index.moveSession(file, destination)).rejects.toThrow(
+			`[not_a_directory] Not a directory: ${destination}`,
+		);
+	}
+	expect(await fs.readFile(file)).toEqual(before);
+});
+
 it("searches only listed candidates, in caller order, and quotes original conversation text", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-search-"));
 	tempDirs.push(root);
