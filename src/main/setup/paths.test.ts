@@ -44,8 +44,10 @@ if (key === ${JSON.stringify("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session 
 } else process.exit(1);`,
 			);
 			const script = `import { refreshPath } from ${JSON.stringify(join(__dirname, "paths.ts"))};
-import { stopCore } from ${JSON.stringify(join(__dirname, "../core/process.ts"))};
-import { renameSync } from "node:fs";
+import { core, stopCore } from ${JSON.stringify(join(__dirname, "../core/process.ts"))};
+import { nativeBinPath } from ${JSON.stringify(join(__dirname, "../native-bin.ts"))};
+import { lstatSync, realpathSync, renameSync, statSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 const results = [];
 try {
 	for (const mode of ["ok", "exit", "stdout", "stderr", "timeout", "suffix", "missing"]) {
@@ -61,6 +63,28 @@ try {
 		await pending;
 		results.push(process.env.PATH);
 	}
+	const reg = ${JSON.stringify(reg)};
+	const original = ${JSON.stringify(process.execPath)};
+	const args = ["query", "HKCU\\\\Environment", "/v", "Path"];
+	process.env.PATH = ${JSON.stringify(bin)};
+	process.env.REG_RESULT = "ok";
+	const diagnostic = async name => {
+		console.error("paths-probe", name, JSON.stringify({
+			dir: process.cwd(), realDir: realpathSync("."), node: original, reg: realpathSync(reg),
+			mode: statSync(reg).mode.toString(8), symlink: lstatSync(reg).isSymbolicLink(),
+			PATH: process.env.PATH, PATHEXT: process.env.PATHEXT, coreBin: nativeBinPath("ompdesk-core"),
+			xattrs: spawnSync("/usr/bin/xattr", [reg], {encoding:"utf8"}).stdout?.trim()
+		}));
+		for (const file of [original, reg, "reg.exe"]) {
+			const r = spawnSync(file,args,{encoding:"utf8",timeout:5000});
+			console.error("paths-probe direct",name,file,r.status,r.signal,r.error?.code,r.stdout,r.stderr);
+		}
+		try { const r = await core().call("setup.registryPath",{cwd:process.cwd(),env:process.env}); console.error("paths-probe core",name,JSON.stringify(r.result)); }
+		catch (err) { console.error("paths-probe coreError",name,err.message); }
+	};
+	await diagnostic("original-fixture");
+	renameSync(reg, reg+".old"); symlinkSync(original,reg);
+	await diagnostic("symlink");
 	console.log(JSON.stringify(results));
 } finally { await stopCore(); }`;
 			expect(bun).toBeTruthy();
@@ -83,6 +107,7 @@ try {
 				timeout: 30_000,
 				windowsHide: true,
 			});
+			console.error(result.stderr);
 			expect(result.status, result.stderr).toBe(0);
 			const userOnly = `Base;BASE;C:\\Users\\First Last\\.bun\\bin;c:\\program files\\git\\cmd\\;%NOPE%\\x;${managed}`;
 			const both = `Base;BASE;C:\\Program Files\\Git\\cmd;C:\\Users\\First Last\\.bun\\bin;%NOPE%\\x;${managed}`;
