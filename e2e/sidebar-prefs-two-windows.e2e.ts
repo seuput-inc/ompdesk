@@ -11,6 +11,49 @@ import type { ElectronApplication, Page } from "playwright";
 import { exitApp, launchApp } from "./harness";
 
 let app: ElectronApplication | undefined;
+
+// Only event names and relative times leave this disposable launch profile.
+async function networkStages(desktop: string, native: string): Promise<void> {
+	const nativeEvents = native
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map(line => JSON.parse(line));
+	const start = nativeEvents.find(event => event.event === "shell.started");
+	if (!start) return;
+	const files = (await fs.readdir(desktop)).filter(file => file.startsWith("net-"));
+	const file = `net-${start.pid}.json`;
+	if (!files.includes(file)) {
+		console.log("[network] missing first host log");
+		return;
+	}
+	const data = await fs.readFile(path.join(desktop, file), "utf8");
+	const net = JSON.parse(data) as {
+		constants: { logEventTypes: Record<string, number>; timeTickOffset: string };
+		events: { time: string; type: number; phase: number; source: { id: number }; params?: { url?: string } }[];
+	};
+	const names = new Map(Object.entries(net.constants.logEventTypes).map(([name, id]) => [id, name]));
+	const matches = net.events.filter(
+		row => row.params?.url?.split("?")[0] === "http://app.localhost/__profile/migrate",
+	);
+	const sources = new Set(matches.map(row => row.source.id));
+	const relative = (time: string) => Number(time) + Number(net.constants.timeTickOffset) - start.at + start.t;
+	console.log(
+		`[network] rows=${net.events.length} bootstrap_sources=${sources.size} first_ms=${matches[0] && relative(matches[0].time)}`,
+	);
+	if (!native.includes('"event":"profile.migrate.stalled"')) return;
+	const began = new Map<string, number>();
+	for (const row of net.events) {
+		const name = names.get(row.type);
+		const time = relative(row.time);
+		if (time > 39_000) break;
+		const key = `${row.source.id}.${row.type}`;
+		if (row.phase === 1) began.set(key, time);
+		const duration = row.phase === 2 && began.has(key) ? time - Number(began.get(key)) : 0;
+		if (sources.has(row.source.id) || duration >= 500)
+			console.log(`[network] ${time}ms ${name} phase=${row.phase} source=${row.source.id} duration=${duration}ms`);
+	}
+}
 let root = "";
 
 test.afterEach(async () => {
@@ -21,6 +64,9 @@ test.afterEach(async () => {
 			if (line.includes('"event":"probe.nav.') || line.includes('"event":"profile.migrate.stalled"'))
 				console.log(line);
 		}
+		await networkStages(path.join(root, "desktop"), text).catch(error =>
+			console.log(`[network] ${error.name}: log unavailable`),
+		);
 	}
 	app = undefined;
 	if (root) await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -65,7 +111,14 @@ test("an order one window sets survives what another window, which read the side
 	await seed(agent, "s-1", project, "Alpha plan", 1);
 	await seed(agent, "s-2", project, "Bravo plan", 2);
 	await seed(agent, "s-3", project, "Charlie plan", 3);
-	const launch = () => launchApp({ project, desktop, agent, profile: root, env: { OMP_GUI_TEST_SESSION_FILES: "1" } });
+	const launch = () =>
+		launchApp({
+			project,
+			desktop,
+			agent,
+			profile: root,
+			env: { OMP_GUI_TEST_SESSION_FILES: "1", OMP_GUI_TEST_FIRST_NAV_NET: "1" },
+		});
 	app = await launch();
 	const first = await app.firstWindow();
 	await first.waitForFunction(() => window.omp?.rpc != null);
