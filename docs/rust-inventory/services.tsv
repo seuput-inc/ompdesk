@@ -270,7 +270,7 @@ src/main/setup/ipc.test.ts	exception	Checks the setup IPC channels and rejects u
 src/main/setup/ipc.ts	port	Rejects unknown setup IDs and Git mitigation actions and starts valid retries in the background through the TypeScript setup service.
 src/main/setup/omp-update-install.test.ts	exception	Exercises updates of the selected omp installation rather than unrelated executables on PATH.
 src/main/setup/paths.test.ts	exception	Checks PATH refresh against the real core, plus synchronous managed paths and Git Bash selection.
-src/main/setup/paths.ts	mixed	2	setup.registryPath queries and parses the machine and user registry values. After it returns, refreshPath binds variables from the current process.env and publishes PATH synchronously; managedToolEnv and cli-install share the same synchronous merge (§1.3a,c).
+src/main/setup/paths.ts	mixed	setup.registryPath queries and parses the machine and user registry values. After it returns, refreshPath binds variables from the current process.env and publishes PATH synchronously; managedToolEnv and cli-install share the same synchronous merge (§1.3a,c).
 src/main/setup/plans.test.ts	exception	Checks the selected installer methods, generated commands and unsupported or already-present tools.
 src/main/setup/plans.ts	port	Selects installers by tool, platform and presence, and builds the download, verification and install commands or manual instructions.
 src/main/setup/runner.test.ts	exception	Tests streamed output and the outcomes for success, nonzero exit and spawn failure.
