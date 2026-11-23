@@ -675,7 +675,6 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         worker: Mutex::default(),
         closed: watch::channel(false).0,
     });
-    service.inner().quality = quality.map(|clients| quality::Schedule::new(clients, &service));
     {
         let mut services = locked(&SERVICES);
         if services.contains_key(&name) {
@@ -684,6 +683,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
                 "Memory's service is open already",
             ));
         }
+        service.inner().quality = quality.map(|clients| quality::Schedule::new(clients, &service));
         services.insert(name, Arc::clone(&service));
     }
     *locked(&service.worker) = Some(tokio::spawn(work(Arc::clone(&service), queued)));

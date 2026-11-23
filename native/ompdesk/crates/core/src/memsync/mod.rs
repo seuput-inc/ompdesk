@@ -23,13 +23,13 @@
 //!   capture and diagnostics read it too, and the ai-memory build embeds it).
 //!
 //! Methods: `memsync.servePull`, `memsync.servePush`, `memsync.serveConclusionPull`, `memsync.serveConclusionPush`
-//! (the host's side, one each), `memsync.refreshRecallTerms` (the local recall corpus), `memsync.start`, `memsync.sync`,
+//! (the host's side, one each), `memsync.start`, `memsync.sync`,
 //! `memsync.hostOnline`, `memsync.syncAll`, `memsync.dispose` (a device's sync, named by main's `sync` number; each
 //! carries its state file, interval and whether it was started, so a core that started again picks it up),
 //! `memsync.answer`. Events: `memsync.ask`, `memsync.log` (a line main writes to its runtime log, source
 //! `memory-sync`).
 
-mod corpus;
+pub(crate) mod corpus;
 mod device;
 mod host;
 mod state;
@@ -511,9 +511,6 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("memsync.serveConclusionPush", |call| {
         Box::pin(serve_conclusion_push(call))
-    });
-    registry.add("memsync.refreshRecallTerms", |call| {
-        Box::pin(corpus::refresh(call))
     });
     registry.add("memsync.start", |call| Box::pin(start(call)));
     registry.add("memsync.sync", |call| Box::pin(sync_call(call)));

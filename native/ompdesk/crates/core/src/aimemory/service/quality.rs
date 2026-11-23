@@ -1,10 +1,12 @@
-//! One schedule per ready stretch. The same service clock drives production and the test's manual timers.
+//! Care and learning use ready stretches. Recall's ten-minute clock stays anchored to service open.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::Service;
 use crate::aimemory::client::Server;
@@ -12,9 +14,11 @@ use crate::server::{Fault, Scope};
 use crate::upkeep::asks::Asker;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct Clients {
     care: String,
     upkeep: String,
+    recall_terms_file: Option<PathBuf>,
 }
 
 pub(super) struct Schedule {
@@ -22,16 +26,51 @@ pub(super) struct Schedule {
     service: Weak<Service>,
     active: Option<Scope>,
     repaired: bool,
+    recall_slot: Arc<Mutex<()>>,
 }
 
 impl Schedule {
     pub(super) fn new(clients: Clients, service: &Arc<Service>) -> Self {
+        if clients.recall_terms_file.is_some() {
+            let service = Arc::clone(service);
+            tokio::spawn(async move {
+                let mut closed = service.closed.subscribe();
+                tokio::select! {
+                    biased;
+                    _ = closed.wait_for(|closed| *closed) => (),
+                    () = service.every(10 * 60_000, |service| {
+                        if let Some(schedule) = &service.inner().quality {
+                            schedule.recall(service);
+                        }
+                    }) => (),
+                }
+            });
+        }
         Self {
             clients,
             service: Arc::downgrade(service),
             active: None,
             repaired: false,
+            recall_slot: Arc::default(),
         }
+    }
+
+    fn recall(&self, service: &Arc<Service>) {
+        let (Some(file), Some(epoch)) = (&self.clients.recall_terms_file, &self.active) else {
+            return;
+        };
+        let Ok(turn) = Arc::clone(&self.recall_slot).try_lock_owned() else {
+            return;
+        };
+        Work::Recall {
+            file: file.clone(),
+            _turn: turn,
+        }
+        .start(
+            service,
+            epoch,
+            &Asker::new(&self.clients.upkeep, service.events.clone()),
+        );
     }
 
     pub(super) fn ready(&mut self, ready: bool) {
@@ -49,6 +88,7 @@ impl Schedule {
         };
         let epoch = Scope::detached();
         self.active = Some(epoch.clone());
+        self.recall(&service);
         let care = Asker::new(&self.clients.care, service.events.clone());
         let upkeep = Asker::new(&self.clients.upkeep, service.events.clone());
         if !self.repaired {
@@ -80,28 +120,29 @@ impl Schedule {
     }
 }
 
-#[derive(Clone, Copy)]
 enum Work {
     Repair,
     Learn,
     Care,
+    Recall {
+        file: PathBuf,
+        _turn: OwnedMutexGuard<()>,
+    },
 }
 
 impl Work {
-    fn start(self, service: &Arc<Service>, epoch: &Scope, host: &Asker) {
+    fn start(mut self, service: &Arc<Service>, epoch: &Scope, host: &Asker) {
         let (service, epoch, host) = (Arc::clone(service), epoch.clone(), host.clone());
         tokio::spawn(async move {
             let mut closed = service.closed.subscribe();
-            let minutes = match self {
-                Self::Repair => 10,
-                Self::Learn => 5,
-                Self::Care => 30,
+            let timeout = match self {
+                Self::Repair => Duration::from_secs(10 * 60),
+                Self::Learn => Duration::from_secs(5 * 60),
+                Self::Care => Duration::from_secs(30 * 60),
+                Self::Recall { .. } => Duration::from_millis(i32::MAX as u64),
             };
             let scope = Scope::detached();
-            let bounded = tokio::time::timeout(
-                Duration::from_secs(minutes * 60),
-                self.run(&service, &epoch, &host, &scope),
-            );
+            let bounded = tokio::time::timeout(timeout, self.run(&service, &epoch, &host, &scope));
             let result = tokio::select! {
                 biased;
                 _ = closed.wait_for(|closed| *closed) => {
@@ -119,6 +160,7 @@ impl Work {
                 }
             };
             match self {
+                Self::Recall { .. } => service.log("recall-terms-failed", json!({ "error": detail })),
                 Self::Care => host.log("care-failed", json!({ "unit": "tick", "detail": detail })),
                 Self::Repair | Self::Learn => host.log(
                     "failed",
@@ -129,21 +171,26 @@ impl Work {
     }
 
     async fn run(
-        self,
+        &mut self,
         service: &Service,
         epoch: &Scope,
         host: &Asker,
         scope: &Scope,
     ) -> Result<(), Fault> {
+        // Recall was admitted when the ready trigger took its slot. A bounce joins that pass.
+        let recall = matches!(self, Self::Recall { .. });
         let settings = tokio::select! {
             biased;
-            () = epoch.on_cancel() => return Ok(()),
+            () = epoch.on_cancel(), if !recall => return Ok(()),
+            () = tokio::time::sleep(Duration::from_secs(30)), if recall => {
+                return Err(Fault::new("memory_facts", "Memory recall stock host did not answer"));
+            }
             settings = host.ask("settings", Value::Null) => settings?,
         };
         // Pause withdraws unstarted work, even after another ready. Once admitted, a unit must persist its undo journal.
         let server = {
             let mut inner = service.inner();
-            if inner.disposed || inner.state.phase != "ready" || epoch.cancelled() {
+            if inner.disposed || (!recall && (inner.state.phase != "ready" || epoch.cancelled())) {
                 return Ok(());
             }
             if matches!(self, Self::Repair) {
@@ -160,6 +207,19 @@ impl Work {
             }
         };
         match self {
+            Self::Recall { file, .. } => {
+                let stock_host = settings["stockHost"].as_str().ok_or_else(|| {
+                    Fault::new("memory_facts", "Memory recall has no stock worker host")
+                })?;
+                crate::memsync::corpus::refresh(
+                    std::mem::take(file),
+                    server,
+                    &service.events,
+                    stock_host,
+                    scope.clone(),
+                )
+                .await
+            }
             Self::Care => {
                 crate::care::scheduled_tick(&settings, server, &service.events, scope.clone()).await
             }

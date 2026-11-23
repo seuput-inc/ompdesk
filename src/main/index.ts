@@ -103,7 +103,6 @@ import { MemoryCare } from "./ai-memory/care";
 import { AiMemoryClient } from "./ai-memory/client";
 import { configureModelRuns, ompLaunch } from "./ai-memory/core-asks";
 import { registerAiMemoryIpc } from "./ai-memory/ipc";
-import { RecallTermsIndex } from "./ai-memory/recall-terms";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
@@ -591,8 +590,6 @@ let aiMemoryService: AiMemoryService | null = null;
 let aiMemoryUpkeep: MemoryUpkeep | null = null;
 let aiMemoryCare: MemoryCare | null = null;
 let aiMemorySync: MemorySync | null = null;
-let recallTerms: RecallTermsIndex | null = null;
-const RECALL_TERMS_REFRESH_MS = 10 * 60_000;
 let extensionUpdater: ExtensionUpdater | null = null;
 let githubAuthService: GithubAuthService | null = null;
 let scheduleService: ScheduleService | null = null;
@@ -2011,7 +2008,7 @@ app.whenReady().then(async () => {
 			: {}),
 		quality: () => {
 			if (!aiMemoryCare || !aiMemoryUpkeep) throw new Error("Memory quality clients are not initialized");
-			return { care: aiMemoryCare.service, upkeep: aiMemoryUpkeep.service };
+			return { care: aiMemoryCare.service, upkeep: aiMemoryUpkeep.service, recallTermsFile };
 		},
 		onState: state => {
 			for (const win of BrowserWindow.getAllWindows()) {
@@ -2020,7 +2017,6 @@ app.whenReady().then(async () => {
 			// Memory just came up: catch up with the computers this one is connected to.
 			if (state.phase === "ready" && aiMemoryPhase !== "ready") {
 				aiMemorySync?.syncAll();
-				void recallTerms?.refresh();
 			}
 			aiMemoryPhase = state.phase;
 		},
@@ -2158,15 +2154,6 @@ app.whenReady().then(async () => {
 			);
 	});
 	aiMemorySync.start();
-	// The term corpus of memory recall's coverage gate: read at memory-ready (onState above) and every ten minutes.
-	recallTerms = new RecallTermsIndex({
-		server: () => memoryClient.server(),
-		file: recallTermsFile,
-		log: (message, details) => writeRuntimeLog({ source: "ai-memory", message, details }),
-	});
-	setInterval(() => {
-		if (memoryReady()) void recallTerms?.refresh();
-	}, RECALL_TERMS_REFRESH_MS).unref();
 	registerAiMemoryIpc(ipc, aiMemory, {
 		openExternal: url => shell.openExternal(url),
 		openPath: path => shell.openPath(path),

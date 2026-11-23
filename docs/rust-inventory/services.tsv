@@ -43,7 +43,6 @@ src/main/ai-memory/memory-judge.ts	native-client	Production care/units.rs choose
 src/main/ai-memory/memory-store-test-rig.ts	exception	Implements fake page and conclusion HTTP routes over an injected memory store for sync tests.
 src/main/ai-memory/no-self-update.test.ts	exception	Checks that the bundled memory CLI has no upgrade command or upstream release fetch.
 src/main/ai-memory/recall-terms.test.ts	exception	Tests incremental term counts, cursor resets and preservation of the prior index after a failed read.
-src/main/ai-memory/recall-terms.ts	mixed	The core reads both local streams, rebuilds and writes the corpus. Node schedules and coalesces calls and supplies the memory server and stock worker host.
 src/main/ai-memory/retitle.test.ts	exception	Checks session naming, dry runs and idempotence when retitling pages.
 src/main/ai-memory/retitle.ts	native-client	Sends the client callbacks, locale and dry-run flag to upkeep.retitle and returns the report.
 src/main/ai-memory/service.test.ts	exception	Tests staging and setup of the bundled server, ownership of its extension root and startup ordering.
