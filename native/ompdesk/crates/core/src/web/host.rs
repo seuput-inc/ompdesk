@@ -94,6 +94,7 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         call.events.clone(),
         params.router,
         stores.devices.clone(),
+        Arc::clone(&blobs),
     );
     let assets = Arc::new(Built {
         root: params.static_root,

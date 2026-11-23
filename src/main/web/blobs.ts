@@ -140,8 +140,8 @@ export class BlobStore {
 		});
 	}
 
-	addBytes(deviceId: string, bytes: Uint8Array, mime: string, name = "file"): string {
-		return this.#add(deviceId, { kind: "bytes", mime, name }, bytes);
+	addBytes(deviceId: string, bytes: Uint8Array, mime: string, name = "file", pictureTab?: string): string {
+		return this.#add(deviceId, { kind: "bytes", mime, name, pictureTab }, bytes);
 	}
 
 	/** A stream main's `MediaStreams` serves (`url` is its `omp-media://` address); `open` answers a range request. */
@@ -186,6 +186,7 @@ export class BlobStore {
 			mime: string;
 			name: string;
 			download?: boolean;
+			pictureTab?: string | undefined;
 			abs?: string;
 			url?: string;
 		},

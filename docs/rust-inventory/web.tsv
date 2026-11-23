@@ -1,7 +1,7 @@
 path	current_owner	consumer	remaining_unit_or_reason	status
 src/main/web/asset-archive.test.ts	Vitest (node)	core web.start and web.stop	Keep disk retention, expiry and ordered replacement parity; the edge owns the index and serves the previous builds directly.	tooling
 src/main/web/blobs.test.ts	Vitest (node)	BlobStore and core web/blobs.rs	Keep device isolation, expiry, ranges and response-header parity.	tooling
-src/main/web/blobs.ts	core web/blobs.rs; TS token and media adapter	WsRouter, PageImages, createHostActions	Move token issuance with frame preparation. Move media response pumping with MediaStreams; URLs currently return synchronously.	mixed
+src/main/web/blobs.ts	core web/blobs.rs; TS token and media adapter	WsRouter, PageImages, createHostActions	Rust associates picture bytes with the authenticated device and tab in the original add request. A synchronous token replaces the image before the page frame is serialized. Media response pumping stays with MediaStreams (§1.3a,c).	mixed
 src/main/web/blocks-store.test.ts	Vitest (node)	WebBlocks	Keep block persistence and visitor verdict cases.	tooling
 src/main/web/blocks-store.ts	core web/store.rs; TS block mirror	WebHost and remote/devices.ts	Move synchronous block checks with the computer sharing gate and block mutations with desktop device administration.	mixed
 src/main/web/client-window.ts	TS ClientWindow interface and isWebWindow predicate	SidecarPool, tab-spawn.ts and IpcRegistry	Replace the interface and negative-id convention with the native window registry when pool and IPC callers move.	exception
@@ -14,9 +14,9 @@ src/main/web/host-actions.ts	core fs/list.rs, fs/read.rs and web/save.rs; TS she
 src/main/web/ipc-policy.test.ts	Vitest (node)	IPC_POLICY and the registered channels	Keep complete direction and grant classification against createOmpApi.	tooling
 src/main/web/ipc-policy.ts	TS channel contract; core web/router.rs enforces it	WsRouter.config and index.ts	Retain the typed channel table until native IPC registration owns the corresponding handlers; do not duplicate its names in Rust.	mixed
 src/main/web/ipc-registry.test.ts	Vitest (node)	IpcRegistry	Keep native-window and paired caller dispatch parity.	tooling
-src/main/web/ipc-registry.ts	TS host IPC registry	index.ts, ipc.ts and WsRouter	Move registration and caller resolution with the main IPC handlers and native window registry.	port
-src/main/web/page-images.test.ts	Vitest (node)	PageImages.lift/tabsChanged	Keep image threshold, queue exception and tab-scoped release tests.	tooling
-src/main/web/page-images.ts	TS frame shaping; core web/blobs.rs holds bytes	WsRouter	Move transcript image lifting and per-tab tracking into the existing native deliver/reply path, without a new call per frame.	mixed
+src/main/web/ipc-registry.ts	TS host IPC registry	index.ts, ipc.ts and WsRouter	Desktop handlers read caller.win by resolving event.sender on demand; web callers use a live WebClientWindow. Move with the handlers and shell window registry, not a serialized window id that outlives the window (§1.3a,c).	port
+src/main/web/page-images.test.ts	Vitest (node)	PageImages.lift	Covers the inline threshold and queue exception. ws-router.test.ts covers tab-scoped retirement and device isolation on the actual router.	tooling
+src/main/web/page-images.ts	TS pre-serialization image lift; core web/blobs.rs and web/router.rs own retirement	WsRouter	The stock transcript can join arbitrarily many bridge pages. Lift images before JSON serialization: an after-serialization Rust walker cannot accept a transcript larger than V8's string limit. Rust retires blobs on tab and device removal without a second frame or callback (§1.3c).	mixed
 src/main/web/pairing.test.ts	Vitest (node)	PairingConfirmations	Keep desktop approval, refusal and expiry tests.	tooling
 src/main/web/pairing.ts	core web/pairing.rs; TS desktop prompt adapter	WebServer.answerAsk and WebHost.confirmations	Rust owns pending approvals, expiry, first response and teardown for each host. Main notifies the desktop and forwards its answer.	native-client
 src/main/web/preview-dialog.test.ts	Vitest (node)	dialogChannel and dialogReturnValue	Keep dialog replies and withdrawals against a synthetic stream.	tooling
@@ -51,4 +51,4 @@ src/main/web/web-tab-layouts.ts	TS webTabLayouts preference adapter	index.ts per
 src/main/web/webhook.test.ts	Vitest (node)	WebHost loopback webhook and ScheduleService	Keep webhook delivery tests against the edge and schedule service.	tooling
 src/main/web/ws-router-test-rig.ts	TS synthetic page connection fixture	ws-router.test.ts and e2e/fixture/preview-stream-main.ts	Keep test-only web.router.test.* client for controlled frames and timers.	tooling
 src/main/web/ws-router.test.ts	Vitest (node)	WsRouter and core web/router.rs	Keep synthetic socket dispatch, resync, grants and delivery-order tests.	tooling
-src/main/web/ws-router.ts	core web/router.rs; TS IPC and payload adapter	WebHost and WebServer	Move shaping, upload landing, quota and IPC invocation with their owners. Keep stock image conversion in the stock helper.	mixed
+src/main/web/ws-router.ts	core web/router.rs; TS IPC and payload adapter	WebHost and WebServer	The core filters delivery and retires tab pictures even while the device is disconnected. Main lifts images before serialization, checks current grants and reserves quota before invoking the live IPC caller. Stock supplies image conversion after the upload is claimed (§1.3a,c,d).	mixed

@@ -4,7 +4,8 @@
 //! web-only channels and the device's grants before main runs them.
 //!
 //! Main hands the router what its windows push to a device (`web.deliver {host, device, ch}` with the data's JSON as
-//! `bin`; with no `ch`, a push main did not send because the device had no connection then), answers a page's call
+//! `bin`; with no `ch`, the device missed a push). A `tabs` list releases the pictures of its closed tabs, even
+//! while disconnected; `onlyTabs` skips counting another missed push. Main answers a page's call
 //! (`web.reply {host, call, ok, e}` with the value's JSON as `bin`), says a resync was prepared (`web.resynced {host,
 //! conn}`) and closes a device's sockets (`web.closeDevice`). The router tells main which connections a device has and
 //! which of them show their page (`web.conns`), asks it to prepare a page's resync (`web.resync`) and hands it each call
@@ -25,6 +26,7 @@ use serde::de::{Deserializer, MapAccess, Visitor};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
+use super::blobs::BlobStore;
 use super::deps::{BoxFuture, Connection, Outbox, Outgoing, Router};
 use crate::server::{Call, Events, Fault, PushCall, Registry, Reply};
 
@@ -598,6 +600,7 @@ pub struct Host {
     events: Mutex<Events>,
     config: Config,
     grants: Arc<dyn Grants>,
+    blobs: Arc<BlobStore>,
     /// The first successful listen with a renderer starts one archive copy for this host.
     pub(super) archive_copy: OnceLock<tokio::sync::watch::Receiver<()>>,
     clock: Clock,
@@ -647,13 +650,19 @@ fn uuid() -> String {
 
 /// The router of `host`, made at its first start; a later start keeps it (resume entries outlive a stop) and takes
 /// the newer events and configuration's build.
-pub fn open(host: u64, events: Events, config: Config, grants: Arc<dyn Grants>) -> Arc<Host> {
+pub fn open(
+    host: u64,
+    events: Events,
+    config: Config,
+    grants: Arc<dyn Grants>,
+    blobs: Arc<BlobStore>,
+) -> Arc<Host> {
     let mut all = hosts();
     if let Some(existing) = all.get(&host) {
         *existing.events.lock().unwrap_or_else(|e| e.into_inner()) = events;
         return Arc::clone(existing);
     }
-    let made = Host::new(host, events, config, grants, Arc::new(now_ms), false);
+    let made = Host::new(host, events, config, grants, blobs, Arc::new(now_ms), false);
     all.insert(host, Arc::clone(&made));
     made
 }
@@ -670,6 +679,7 @@ impl Host {
         events: Events,
         config: Config,
         grants: Arc<dyn Grants>,
+        blobs: Arc<BlobStore>,
         clock: Clock,
         manual: bool,
     ) -> Arc<Host> {
@@ -678,6 +688,7 @@ impl Host {
             events: Mutex::new(events),
             config,
             grants,
+            blobs,
             archive_copy: OnceLock::new(),
             clock,
             manual,
@@ -1436,11 +1447,15 @@ impl Router for Host {
 // What main sends.
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DeliverParams {
     host: u64,
     device: String,
     #[serde(default)]
     ch: Option<String>,
+    tabs: Option<std::collections::HashSet<String>>,
+    #[serde(default)]
+    only_tabs: bool,
 }
 
 #[derive(Deserialize)]
@@ -1473,6 +1488,12 @@ fn deliver(push: PushCall) {
     let Some(host) = host_of(params.host) else {
         return;
     };
+    if let Some(tabs) = &params.tabs {
+        host.blobs.tabs_changed(&params.device, tabs);
+    }
+    if params.only_tabs {
+        return;
+    }
     let pushed = params.ch.map(|ch| {
         let data = push
             .bin
@@ -1603,6 +1624,7 @@ mod test_hooks {
         host: u64,
         now: i64,
         manual_timers: bool,
+        blob_user_data: Option<std::path::PathBuf>,
         config: Config,
     }
 
@@ -1643,6 +1665,13 @@ mod test_hooks {
             call.events.clone(),
             params.config,
             devices,
+            match params.blob_user_data {
+                Some(path) => super::super::blobs::open(&path),
+                None => Arc::new(BlobStore::new(
+                    String::new(),
+                    super::super::blobs::IDLE_TTL_MS,
+                )),
+            },
             clock,
             params.manual_timers,
         );
