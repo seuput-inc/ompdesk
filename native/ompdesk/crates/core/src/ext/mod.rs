@@ -2,7 +2,7 @@
 //! `src/main/ext-update/`): what an MCP server's configured launch is (`ext.mcpClasses`), the row each marketplace,
 //! plugin, skill and MCP server gets, with the method that keeps it current or the reason it is left alone
 //! (`ext.seeds`), what the file a server's command resolves to says about itself (`ext.binaryFacts`), whether an
-//! update must wait for a running server (`ext.defersWhileRunning`, `ext.serverRunning`), and the newest version in a
+//! update must wait for a running server or CLI (`ext.defersWhileRunning`, `ext.cliWaitsForIdle`, `ext.updateRunning`), and the newest version in a
 //! registry lookup's output (`ext.pipLatest`, `ext.registryLatest`).
 //!
 //! Main keeps the schedule, the stock helper's inventory and upgrades, the lookups and updates it runs, and what it
@@ -85,8 +85,11 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&running::defers(params.method.as_deref(), params.script))
         })
     });
-    registry.add("ext.serverRunning", |call| {
-        Box::pin(async move { Reply::json(&running::server_running(&params(&call.params)?)) })
+    registry.add("ext.cliWaitsForIdle", |call| {
+        Box::pin(async move { Reply::json(&running::cli_defers(params(&call.params)?)) })
+    });
+    registry.add("ext.updateRunning", |call| {
+        Box::pin(async move { Reply::json(&running::update_running(params(&call.params)?).await) })
     });
     registry.add("ext.pipLatest", |call| {
         Box::pin(async move {

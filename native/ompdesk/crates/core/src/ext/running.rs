@@ -2,8 +2,7 @@
 //! a later `require` reads the new version's file, files only the old version had are gone), Homebrew removes the old
 //! keg, and pipx, `uv tool` and pip rewrite site-packages in place: a script (shebang, an interpreter loading its
 //! modules lazily) that runs while that happens can load a file of the other version or find it missing, so its
-//! update waits. A native binary (Mach-O/ELF/PE) keeps running from its old inode and updates at once. Main lists the
-//! processes (`ps`, macOS only) and hands their command lines in.
+//! update waits. Only the boolean result of the bounded macOS process scan leaves core.
 
 use serde::Deserialize;
 
@@ -21,12 +20,34 @@ pub fn defers(method: Option<&str>, script: bool) -> bool {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliPolicy {
+    method: String,
+    lazy_loads: bool,
+}
+
+pub fn cli_defers(policy: CliPolicy) -> bool {
+    match policy.method.as_str() {
+        "npm" | "bun" => true,
+        "brew" | "brew-cask" => policy.lazy_loads,
+        _ => false,
+    }
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    Cli,
+    Mcp,
+}
+
+#[derive(Deserialize)]
 pub struct Params {
-    /// `ps` command lines, one process a line.
-    commands: String,
-    /// The server's `command` as configured.
+    kind: Kind,
     command: String,
     binary: Binary,
+    // Deterministic parity inputs. Production never transports command lines.
+    commands: Option<String>,
 }
 
 /// What main found of the command's binary (`McpBinary`): where it is and who owns it.
@@ -63,14 +84,15 @@ fn mentions(text: &str, needle: &str) -> bool {
     false
 }
 
-/// Whether a process of this server runs: its executable, its package dir, or its command name as the program.
-pub fn server_running(params: &Params) -> bool {
+fn matches_process(commands: &str, params: &Params) -> bool {
     let Params {
-        commands,
+        kind,
         command,
         binary,
+        ..
     } = params;
-    let name = command_name(command);
+    let cli = matches!(kind, Kind::Cli);
+    let name = (!cli).then(|| command_name(command));
     // The directory, or the keg, an update of this owner replaces.
     let (dir, fragment) = match &binary.owner {
         Some(owner) => match owner.method.as_str() {
@@ -89,11 +111,7 @@ pub fn server_running(params: &Params) -> bool {
         },
         None => (None, None),
     };
-    let paths: Vec<&str> = [Some(binary.real.as_str()), Some(binary.path.as_str()), dir]
-        .into_iter()
-        .flatten()
-        .filter(|path| !path.is_empty())
-        .collect();
+    let paths = [Some(binary.real.as_str()), Some(binary.path.as_str()), dir];
     commands.split('\n').any(|line| {
         let text = js_trim(line);
         let Some(first) = text
@@ -104,12 +122,75 @@ pub fn server_running(params: &Params) -> bool {
             return false;
         };
         first == command
-            || command_name(first) == name
-            || paths.iter().any(|path| mentions(text, path))
+            || if cli {
+                first.rsplit('/').next() == Some(command.as_str())
+                    || paths.iter().flatten().any(|p| text.contains(*p))
+            } else {
+                Some(command_name(first)) == name
+                    || paths
+                        .iter()
+                        .flatten()
+                        .any(|p| !p.is_empty() && mentions(text, p))
+            }
             || fragment
                 .as_ref()
                 .is_some_and(|fragment| text.contains(fragment.as_str()))
     })
+}
+
+#[cfg(any(target_os = "macos", test))]
+async fn read_output(
+    reader: impl tokio::io::AsyncRead + Unpin,
+    status: impl Future<Output = std::io::Result<std::process::ExitStatus>>,
+    limit: u64,
+    deadline: std::time::Duration,
+) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+
+    tokio::time::timeout(deadline, async {
+        let mut bytes = Vec::new();
+        reader.take(limit + 1).read_to_end(&mut bytes).await.ok()?;
+        if bytes.len() as u64 > limit || !status.await.ok()?.success() {
+            return None;
+        }
+        Some(bytes)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+pub async fn update_running(params: Params) -> bool {
+    if let Some(commands) = &params.commands {
+        return matches_process(commands, &params);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::{process::Stdio, time::Duration};
+        use tokio::process::Command;
+
+        let Ok(mut child) = Command::new("/bin/ps")
+            .args(["-axww", "-o", "command="])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+        else {
+            return false;
+        };
+        let stdout = child.stdout.take().expect("ps stdout was piped");
+        read_output(
+            stdout,
+            child.wait(),
+            16 * 1024 * 1024,
+            Duration::from_secs(10),
+        )
+        .await
+        .is_some_and(|bytes| matches_process(&String::from_utf8_lossy(&bytes), &params))
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 #[cfg(test)]
@@ -134,10 +215,45 @@ mod tests {
     fn finds_a_running_server_as_the_typescript_did() {
         for row in captured("running") {
             let params: Params = serde_json::from_value(
-                json!({ "commands": row[0], "command": row[1], "binary": row[2] }),
+                json!({ "kind": "mcp", "command": row[1], "binary": row[2] }),
             )
             .unwrap();
-            assert_eq!(server_running(&params), row[3].as_bool().unwrap(), "{row}");
+            assert_eq!(
+                matches_process(row[0].as_str().unwrap(), &params),
+                row[3].as_bool().unwrap(),
+                "{row}"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn only_complete_successful_output_can_match() {
+        use std::{future::ready, process::ExitStatus, time::Duration};
+        use tokio::io::{AsyncWriteExt, duplex};
+
+        let ok = || ready(Ok(ExitStatus::default()));
+        let bound = Duration::from_secs(1);
+        assert_eq!(
+            read_output(&b"tool"[..], ok(), 4, bound).await.as_deref(),
+            Some(&b"tool"[..])
+        );
+        assert!(read_output(&b"tool+"[..], ok(), 4, bound).await.is_none());
+        assert!(
+            read_output(
+                &b"tool"[..],
+                ready(Err(std::io::Error::other("failed"))),
+                4,
+                bound
+            )
+            .await
+            .is_none()
+        );
+        let (mut writer, reader) = duplex(16);
+        writer.write_all(b"tool").await.unwrap();
+        assert!(
+            read_output(reader, ok(), 4, Duration::from_millis(1))
+                .await
+                .is_none()
+        );
     }
 }

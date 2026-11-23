@@ -112,7 +112,8 @@ import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, 
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
-import { CliUpdater, psCommands, registerCliUpdateIpc } from "./cli-tools/updater";
+import { runningIn } from "./cli-tools/plans";
+import { CliUpdater, registerCliUpdateIpc } from "./cli-tools/updater";
 import {
 	answersWithin,
 	ConnectivityMonitor,
@@ -139,6 +140,7 @@ import { ScratchCare } from "./disk/scratch";
 import { diskFull } from "./disk-full";
 import { bindDiskFullNotice, bindDiskFullPush, describeFiles } from "./disk-full-notice";
 import { registerExtensionUpdateIpc } from "./ext-update/ipc";
+import { runningServer } from "./ext-update/running";
 import { ExtensionUpdater } from "./ext-update/updater";
 import { EMPTY_APPLY_PLAN } from "./extension-reload";
 import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ipc";
@@ -1916,7 +1918,7 @@ app.whenReady().then(async () => {
 		testInstaller,
 		managedLatest: item => setup.latestManaged(item),
 		runUpdate: request => setup.runToolUpdate(request),
-		processes: psCommands,
+		running: testInstaller ? (detection, owner) => runningIn(detection, owner, "") : runningIn,
 		onState: state => {
 			for (const win of BrowserWindow.getAllWindows()) {
 				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.CLI_UPDATE_STATE, state);
@@ -1945,7 +1947,7 @@ app.whenReady().then(async () => {
 		// While omp is installed the stock helper is stopped; a request would start it again.
 		blocked: () => updater.state().phase !== "idle",
 		runUpdate: request => setup.runToolUpdate(request),
-		processes: psCommands,
+		running: testInstaller ? (command, binary) => runningServer(command, binary, "") : runningServer,
 		apply: plan => {
 			sidecarPool.applyExtensionUpdate(plan);
 			hostServices.applyExtensionUpdate(plan);

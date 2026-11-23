@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExtensionMethod } from "../../shared/extension-update";
 import type { McpBinary, McpOwner } from "./mcp-owner";
-import { deferForRunning, runningServer, scansProcesses } from "./running";
+import { deferForRunning, runningServer as scanServer, scansProcesses } from "./running";
 
 describe("deferForRunning", () => {
 	const owners: ExtensionMethod[] = ["npm", "bun", "brew", "brew-cask", "pipx", "uv", "pip"];
@@ -40,6 +40,8 @@ function binary(owner: McpOwner | null, over: Partial<McpBinary> = {}): McpBinar
 }
 
 describe("runningServer", () => {
+	const runningServer = (commands: string, { command }: { command: string }, target: McpBinary) =>
+		scanServer(command, target, commands);
 	const npm: McpOwner = {
 		method: "npm",
 		name: "thing",
