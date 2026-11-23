@@ -8,7 +8,7 @@
 //! event names the caller main registered (`asker`) and main answers with `remotebytes.answer`.
 //!
 //! Methods: `remotebytes.readJournal`, `remotebytes.page`, `remotebytes.keepPage`, `remotebytes.resolveBlobs`,
-//! `remotebytes.signInStart`, `remotebytes.signInReplay`, `remotebytes.relayOpen`, `remotebytes.answer`. Pushes: `remotebytes.signInClose`,
+//! `remotebytes.signInStart`, `remotebytes.signInReplay`, `remotebytes.signInCancel`, `remotebytes.relayOpen`, `remotebytes.answer`. Pushes: `remotebytes.signInClose`,
 //! `remotebytes.relaySend`, `remotebytes.relayClose`. Events: `remotebytes.ask` (`journal`, `blob`, `signIn`),
 //! `remotebytes.signInEnded`, `remotebytes.relay`.
 
@@ -45,6 +45,9 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("remotebytes.signInReplay", |call| {
         Box::pin(signin::replay(call))
+    });
+    registry.add("remotebytes.signInCancel", |call| {
+        Box::pin(signin::cancel(call))
     });
     registry.add_push("remotebytes.signInClose", signin::close);
     registry.add("remotebytes.relayOpen", |call| Box::pin(relay::open(call)));

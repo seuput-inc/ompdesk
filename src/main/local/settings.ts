@@ -15,6 +15,7 @@ import type {
 	ResetPassRedeemResult,
 	UsageLimit,
 } from "../../shared/rpc-types";
+import { core } from "../core/process";
 import { getModelReleaseDates } from "../model-release-dates";
 import { loopbackCallback } from "../sign-in-callback";
 import { stockHelperRequest } from "../stock-helper";
@@ -112,12 +113,7 @@ const historySearch = historyRead.extend({ query: z.string() });
 export async function cancelBrowserLogin(authorizationUrl: string): Promise<void> {
 	const flow = loopbackCallback(authorizationUrl);
 	if (!flow) throw new LocalCommandError("This sign-in has no loopback callback to end", "no_loopback_callback");
-	const callback = new URL(flow.url);
-	callback.searchParams.set("error", "access_denied");
-	callback.searchParams.set("error_description", "Sign-in cancelled in OMPdesk");
-	if (flow.state) callback.searchParams.set("state", flow.state);
-	// Stock answers a denial with its error page (500); a closed server means the login already ended.
-	await fetch(callback, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
+	await core().call("remotebytes.signInCancel", { url: flow.url.href, state: flow.state });
 }
 
 export const handlers: Record<string, LocalHandler> = {

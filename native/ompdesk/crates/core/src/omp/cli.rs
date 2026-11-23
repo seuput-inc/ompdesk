@@ -54,6 +54,17 @@ pub(super) async fn run<const N: usize>(
     execute(launch, args, scope, timeout, Input::Report).await
 }
 
+pub(super) async fn plugin_list(launch: &Launch, scope: Scope) -> Result<Output, Fault> {
+    execute(
+        launch,
+        ["plugin", "list", "--json"],
+        scope,
+        Duration::from_secs(30),
+        Input::PluginList,
+    )
+    .await
+}
+
 pub(super) async fn rename(
     launch: &Launch,
     session_path: &str,
@@ -89,6 +100,7 @@ pub(super) async fn rename(
 #[derive(Clone, Copy)]
 enum Input<'a> {
     Report,
+    PluginList,
     Rename { frame: &'a str, default_model: bool },
 }
 
@@ -119,6 +131,7 @@ async fn execute<const N: usize>(
         omp_command(bin, &args, false, cwd, env)
     };
     let text = match input {
+        Input::PluginList => None,
         Input::Report => {
             cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
             None

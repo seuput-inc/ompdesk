@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StepStalledError } from "../../serial-chain";
 import { DIES_WITH_TEST } from "../../test-fake-omp";
-import { execBin, REPO_LOCK_HOLD_MS, withRepoLock } from "./exec";
+import { gh, REPO_LOCK_HOLD_MS, withRepoLock } from "./exec";
 
 const NEVER = () => Promise.withResolvers<never>().promise;
 
@@ -20,7 +20,7 @@ function alive(pid: number): boolean {
 describe("withRepoLock", () => {
 	let dir: string;
 	beforeEach(async () => {
-		vi.useFakeTimers();
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-lock-"));
 	});
 	afterEach(async () => {
@@ -62,40 +62,36 @@ describe("withRepoLock", () => {
 		expect(await next).toBe("ran");
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"ends the process a stopped holder still runs, and the next call goes on",
-		async () => {
-			const pidFile = path.join(dir, "pid");
-			const script = `${DIES_WITH_TEST} require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1e9)`;
-			const stopped = withRepoLock("/repo/child", () =>
-				execBin(process.execPath, ["-e", script, pidFile], { cwd: dir, timeoutMs: 24 * 60 * 60_000 }),
-			).then(
-				() => null,
-				error => error,
-			);
-			const next = withRepoLock("/repo/child", async () => "ran");
-			let pid = 0;
-			await vi.waitFor(
-				async () => {
-					pid = Number(await fs.readFile(pidFile, "utf8"));
-					expect(pid).toBeGreaterThan(0);
-				},
-				{ timeout: 20_000, interval: 20 },
-			);
-			expect(alive(pid)).toBe(true);
-			await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
-			expect(await stopped).toBeInstanceOf(StepStalledError);
-			expect(await next).toBe("ran");
-			await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 20_000, interval: 20 });
-		},
-	);
+	it("ends the process a stopped holder still runs, and the next call goes on", async () => {
+		const pidFile = path.join(dir, "pid");
+		const script = `${DIES_WITH_TEST} require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1e9)`;
+		const stopped = withRepoLock("/repo/child", () =>
+			gh(dir, process.execPath, ["-e", script, pidFile], { timeoutMs: 24 * 60 * 60_000 }),
+		).then(
+			() => null,
+			error => error,
+		);
+		let pid = 0;
+		await vi.waitFor(
+			async () => {
+				pid = Number(await fs.readFile(pidFile, "utf8"));
+				expect(pid).toBeGreaterThan(0);
+			},
+			{ timeout: 20_000, interval: 20 },
+		);
+		expect(alive(pid)).toBe(true);
+		const next = withRepoLock("/repo/child", async () => alive(pid));
+		await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
+		expect(await stopped).toBeInstanceOf(StepStalledError);
+		expect(await next).toBe(false);
+	}, 20_000);
 
 	it("a process a stopped holder starts later never starts", async () => {
 		const release = Promise.withResolvers<void>();
-		const caught = Promise.withResolvers<unknown>();
+		const late = Promise.withResolvers<string>();
 		const stopped = withRepoLock("/repo/late", async () => {
 			await release.promise;
-			await execBin(process.execPath, ["-e", "process.exit(0)"], { cwd: dir }).catch(caught.resolve);
+			late.resolve(gh(dir, process.execPath, ["-e", 'require("node:fs").writeFileSync("late", "")']));
 		}).then(
 			() => null,
 			error => error,
@@ -103,6 +99,7 @@ describe("withRepoLock", () => {
 		await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
 		expect(await stopped).toBeInstanceOf(StepStalledError);
 		release.resolve();
-		expect(await caught.promise).toBeInstanceOf(StepStalledError);
+		await expect(late.promise).rejects.toBeInstanceOf(StepStalledError);
+		await expect(fs.stat(path.join(dir, "late"))).rejects.toMatchObject({ code: "ENOENT" });
 	});
 });

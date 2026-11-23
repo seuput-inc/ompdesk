@@ -1,9 +1,12 @@
-//! Stock owns plugin diagnoses and the update channel. Project its two read-only reports for the page.
+//! Read-only facts from the installed stock CLI.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 use super::cli;
 use crate::aimemory::value::iso_now;
@@ -42,6 +45,42 @@ fn doctor_checks(stdout: &[u8]) -> Option<Vec<Value>> {
         true
     });
     Some(rows)
+}
+
+// Byte keys keep distinct lone UTF-16 surrogate escapes distinct, as Object.values did.
+#[derive(Deserialize, Eq, Hash, PartialEq)]
+#[serde(transparent)]
+struct PluginKey<'a>(#[serde(borrow)] Cow<'a, [u8]>);
+
+fn installed_plugins(stdout: &[u8]) -> usize {
+    let text = String::from_utf8_lossy(stdout);
+    let count = |raw: &RawValue| {
+        if !raw.get().starts_with('[') {
+            return 0;
+        }
+        serde_json::from_str::<Vec<serde::de::IgnoredAny>>(raw.get()).map_or(0, |items| items.len())
+    };
+    match text
+        .trim_start_matches([' ', '\n', '\r', '\t'])
+        .as_bytes()
+        .first()
+    {
+        Some(b'{') => serde_json::from_str::<HashMap<PluginKey<'_>, &RawValue>>(&text)
+            .map_or(0, |fields| fields.into_values().map(count).sum()),
+        Some(b'[') => serde_json::from_str::<Vec<&RawValue>>(&text)
+            .map_or(0, |rows| rows.into_iter().map(count).sum()),
+        _ => 0,
+    }
+}
+
+pub(super) async fn plugin_count(call: Call) -> Result<Reply, Fault> {
+    let launch = call.params()?;
+    let output = cli::plugin_list(&launch, call.scope).await?;
+    Reply::json(&if output.code == 0 {
+        installed_plugins(&output.stdout)
+    } else {
+        0
+    })
 }
 
 pub(super) async fn plugin_doctor(call: Call) -> Result<Reply, Fault> {
@@ -141,6 +180,22 @@ pub(super) async fn check_update(call: Call) -> Result<Reply, Fault> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn counts_only_immediate_array_values_after_duplicate_keys_resolve() {
+        for (text, expected) in [
+            (
+                r#"{"a":[0,1],"\u0061":[],"b":[1e999],"c":{"nested":[2]}}"#,
+                1,
+            ),
+            (r#"{"\ud800":[1],"\ud801":[2]}"#, 2),
+            ("[[],[1,2],[[]],null]", 3),
+            (r#"{"installed":[1]}trailing"#, 0),
+            ("null", 0),
+        ] {
+            assert_eq!(installed_plugins(text.as_bytes()), expected, "{text}");
+        }
+    }
 
     #[test]
     fn only_stock_rows_are_checks_and_an_empty_array_is_valid() {

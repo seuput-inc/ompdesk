@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { RM_TEMP, writeFakeOmp } from "../test-fake-omp";
 import { handlers } from "./composer";
 import { type BridgeClient, type LocalCommandContext, LocalCommandError } from "./types";
 
@@ -165,6 +169,38 @@ describe("stock composer authority", () => {
 			],
 		});
 	});
+});
+
+it("refreshes plugin counts from stock in the session directory with the inherited colors", async () => {
+	const cwd = realpathSync(mkdtempSync(join(tmpdir(), "omp plugin count ")));
+	onTestFinished(() => rmSync(cwd, RM_TEMP));
+	vi.stubEnv("FORCE_COLOR", "2");
+	onTestFinished(() => {
+		vi.unstubAllEnvs();
+	});
+	const bin = await writeFakeOmp(
+		cwd,
+		`
+		import { readFileSync } from "node:fs";
+		if (process.argv.slice(2).join(" ") !== "plugin list --json" || process.env.FORCE_COLOR !== "2") process.exit(2);
+		const exit = Number(readFileSync("exit", "utf8"));
+		process.stdout.write(JSON.stringify({ installed: [1, 2], other: [3], nested: { ignored: [4] } }));
+		process.exitCode = exit;
+		`,
+	);
+	const ctx = fakeContext({
+		bridge: { "composer.skill_count": { skills: 7 } },
+		stock: { get_available_commands: { commands: [{ name: "reload-plugins", source: "builtin" }] }, prompt: {} },
+	});
+	ctx.cwd = cwd;
+	ctx.omp = { ...ctx.omp, bin, basePath: process.env.PATH ?? "" };
+	const refresh = () => handlers.reload_plugins({ type: "reload_plugins" }, ctx);
+	writeFileSync(join(cwd, "exit"), "0");
+	await expect(refresh()).resolves.toEqual({ plugins: 3, skills: 7, commands: 1 });
+	writeFileSync(join(cwd, "exit"), "1");
+	await expect(refresh()).resolves.toEqual({ plugins: 0, skills: 7, commands: 1 });
+	ctx.omp = { ...ctx.omp, bin: join(cwd, "missing") };
+	await expect(refresh()).rejects.toThrow(/ENOENT/);
 });
 
 describe("composer actions", () => {
