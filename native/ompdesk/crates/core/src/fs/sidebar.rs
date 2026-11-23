@@ -58,11 +58,8 @@ fn linked_root(cwd: &Path) -> Option<String> {
         let mut components = path.components();
         match components.next() {
             Some(Component::Prefix(drive)) if !path.has_root() => {
-                if Path::new(cwd)
-                    .components()
-                    .next()
-                    .is_some_and(|base| base.as_os_str().eq_ignore_ascii_case(drive.as_os_str()))
-                {
+                let base = Path::new(cwd).components().next()?.as_os_str();
+                if base.eq_ignore_ascii_case(drive.as_os_str()) {
                     components.as_path().to_str()?
                 } else {
                     absolute = std::path::absolute(path).ok()?;
