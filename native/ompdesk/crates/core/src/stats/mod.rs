@@ -29,11 +29,31 @@ struct Launch {
     env: std::collections::BTreeMap<String, String>,
 }
 
+struct Endpoint {
+    listener: TcpListener,
+    queries: mpsc::Sender<page::Query>,
+}
+
+impl Endpoint {
+    async fn fetch(&self, p: front::Fetch) -> Result<Box<serde_json::value::RawValue>, Fault> {
+        let port = self
+            .listener
+            .local_addr()
+            .map_err(|e| Fault::new("stats_api_error", e.to_string()))?
+            .port();
+        // Pin the port against reuse, but don't wait on its backlog after the serving task ends.
+        tokio::select! {
+            result = front::fetch(port, p) => result,
+            _ = self.queries.closed() => Err(Fault::new("stats_api_error", "Stats server is not answering")),
+        }
+    }
+}
+
 #[derive(Default)]
 enum Phase {
     #[default]
     Pending,
-    Ready(Arc<TcpListener>),
+    Ready(Arc<Endpoint>),
     Idle,
 }
 
@@ -154,16 +174,17 @@ async fn serving(host: &Host, input: ChildStdin, output: ChildStdout) -> io::Res
         }
         buf.clear();
     };
-    let listener = Arc::new(TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?);
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     eprintln!("[stats-server] ready on http://{}", listener.local_addr()?);
+    let (queries, rx) = mpsc::channel(16);
+    let endpoint = Arc::new(Endpoint { listener, queries });
     {
         let mut state = host.state.lock().unwrap();
         state.budget.note_ready();
-        state.phase = Phase::Ready(listener.clone());
+        state.phase = Phase::Ready(endpoint.clone());
     }
-    let (tx, rx) = mpsc::channel(16);
     tokio::select! {
-        result = front::serve(listener, upstream, tx) => result,
+        result = front::serve(&endpoint.listener, upstream, &endpoint.queries) => result,
         result = database(input, output, rx) => result,
     }
 }
@@ -244,14 +265,14 @@ fn start(call: Call) -> Result<Reply, Fault> {
 
 async fn fetch(call: Call) -> Result<Reply, Fault> {
     let p: front::Fetch = call.params()?;
-    let listener = {
+    let endpoint = {
         let hosts = HOSTS.lock().unwrap();
         let Some(running) = hosts.get(&p.id) else {
             return Reply::json(&json!({"ready": false, "exhausted": true}));
         };
         let mut state = running.host.state.lock().unwrap();
-        if let Phase::Ready(listener) = &state.phase {
-            listener.clone()
+        if let Phase::Ready(endpoint) = &state.phase {
+            endpoint.clone()
         } else {
             let revive = state.revive(Instant::now());
             if revive == "scheduled" {
@@ -260,13 +281,8 @@ async fn fetch(call: Call) -> Result<Reply, Fault> {
             return Reply::json(&json!({"ready": false, "exhausted": revive == "exhausted"}));
         }
     };
-    // Pin the port across the read: a replacement process cannot bind it if this host exits mid-request.
-    let port = listener
-        .local_addr()
-        .map_err(|e| Fault::new("stats_api_error", e.to_string()))?
-        .port();
     let data = tokio::select! {
-        result = front::fetch(port, p) => result?,
+        result = endpoint.fetch(p) => result?,
         _ = call.scope.on_cancel() => return Err(Fault::cancelled()),
     };
     #[derive(serde::Serialize)]
@@ -336,6 +352,26 @@ mod tests {
         ] {
             assert_eq!(ready_port(line), None);
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_read_pinning_the_old_listener_ends_when_its_worker_exits() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (queries, worker) = mpsc::channel(1);
+        let endpoint = Endpoint { listener, queries };
+        let p = serde_json::from_value(json!({"id": 1, "path": "/api/status"})).unwrap();
+        let read = endpoint.fetch(p);
+        tokio::pin!(read);
+        tokio::select! {
+            biased;
+            result = &mut read => panic!("read finished before accept: {result:?}"),
+            _ = std::future::ready(()) => {}
+        }
+        drop(worker);
+        assert_eq!(
+            read.await.unwrap_err(),
+            Fault::new("stats_api_error", "Stats server is not answering")
+        );
     }
 
     #[test]

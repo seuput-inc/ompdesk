@@ -48,7 +48,8 @@ process.stdout.write(port.slice(-1) + "\\x1b[39m\\n");
 	const manager = new StatsServerManager({ command: "bun", args: [script] });
 	hosts.push(manager);
 	await manager.start();
-	return { manager, started, bind: () => fs.writeFile(gate, "") };
+	const readPid = () => fs.readFile(started, "utf8").then(Number, () => 0);
+	return { manager, readPid, bind: () => fs.writeFile(gate, ""), unbind: () => fs.unlink(gate) };
 }
 
 async function pid(manager: StatsServerManager) {
@@ -75,23 +76,24 @@ test("a late, split loopback announcement enables reads without starting a secon
 });
 
 test("a crash clears readiness and a later read reopens a host whose core ended", async () => {
-	const { manager, bind } = await host();
+	const { manager, readPid, bind, unbind } = await host();
 	await bind();
 	await expect.poll(() => pid(manager), { timeout: 5000 }).toBeTypeOf("number");
 	const first = await pid(manager);
+	await unbind();
 	await manager.fetch("/api/status", { exit: "1" }).catch(() => {});
-	await expect.poll(() => pid(manager).catch(() => null)).toBeNull();
-	await expect.poll(() => pid(manager), { timeout: 5000 }).toBeTypeOf("number");
-	expect(await pid(manager)).not.toBe(first);
-	const second = await pid(manager);
+	await expect.poll(readPid, { timeout: 5000 }).toSatisfy(next => next > 0 && next !== first);
+	const second = await readPid();
+	await expect(manager.fetch("/api/status")).resolves.toEqual({ ready: false, exhausted: false });
+	await bind();
+	await expect.poll(() => pid(manager), { timeout: 5000 }).toBe(second);
 	await stopCore();
 	await expect.poll(() => pid(manager), { timeout: 5000 }).toBeTypeOf("number");
 	expect(await pid(manager)).not.toBe(second);
 });
 
 test("stopping during startup cannot leave a listener or restart it on a later read", async () => {
-	const { manager, started, bind } = await host();
-	const readPid = () => fs.readFile(started, "utf8").then(Number, () => 0);
+	const { manager, readPid, bind } = await host();
 	await expect.poll(readPid, { timeout: 5000 }).toBeGreaterThan(0);
 	const child = await readPid();
 	await manager.kill();

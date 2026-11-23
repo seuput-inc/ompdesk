@@ -96,9 +96,9 @@ async fn route(
 }
 
 pub(super) async fn serve(
-    listener: std::sync::Arc<TcpListener>,
+    listener: &TcpListener,
     upstream: u16,
-    db: mpsc::Sender<Query>,
+    db: &mpsc::Sender<Query>,
 ) -> std::io::Result<()> {
     let port = listener.local_addr()?.port();
     let mut connections = JoinSet::new();
