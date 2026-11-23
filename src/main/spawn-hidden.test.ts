@@ -20,7 +20,6 @@ const WINDOWLESS: Record<string, string> = {
 	"src/main/updater.ts: command": "hdiutil, ditto and codesign, macOS only",
 	'src/main/updater.ts: "/bin/bash"': "the relaunch swap, macOS only",
 	'src/main/power/lid-awake-runtime.ts: "/usr/bin/caffeinate"': "macOS only",
-	'src/main/cli-tools/updater.ts: "/bin/ps"': "macOS and Linux only",
 };
 
 function sources(folder: string): string[] {

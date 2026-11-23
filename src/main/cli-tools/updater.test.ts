@@ -438,9 +438,10 @@ describe("CliUpdater", () => {
 		const h = harness({ now: () => Date.now() });
 		h.outcome.value = { kind: "cancelled" };
 		h.updater.start();
-		await vi.advanceTimersByTimeAsync(0);
+		await h.updater.rescan(); // Wait behind the pass, including its real core idle check.
 		expect(h.updates).toHaveLength(1);
 		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		await h.updater.rescan();
 		expect(h.updates).toHaveLength(2);
 		h.updater.dispose();
 	});
