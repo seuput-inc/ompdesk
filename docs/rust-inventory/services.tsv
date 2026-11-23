@@ -10,7 +10,7 @@ src/main/agent-control/branches.test.ts	exception	Asserts the commits, changed f
 src/main/agent-control/branches.ts	port	Runs the pre-merge hook before allowing git.mergeBranch and the post-merge hook after success; coordinates archival before discard.
 src/main/agent-control/host.test.ts	exception	Tests session visibility, permissions, opening and delivery through AgentControlRuntime with host dependencies.
 src/main/agent-control/host.ts	port	Resolves local or paired folders and routes session creation, confirmations, worktree requests and mail to their owning windows or devices.
-src/main/agent-control/mail.ts	port	deliveryFor decides which report kinds start a turn as an aside and which only notify the receiver.
+src/main/agent-control/mail.ts	exception	MAIL_KINDS is tool schema vocabulary; MailDelivery is the host callback type. agentctl/service/mod.rs calls Rust delivery_for before mail_attached; the stock bridge tests supply example frames.
 src/main/agent-control/service.test.ts	exception	Exercises agent-control commands across sessions, asks, visibility, branch operations and reports using a test host.
 src/main/agent-control/service.ts	port	Reopens the agentControl service after loss, caches a last host snapshot and chooses which host data and actions to expose to Rust.
 src/main/agent-control/skill-drift.test.ts	exception	Compares documented tool names, parameters and enum values against the host tool definitions.
