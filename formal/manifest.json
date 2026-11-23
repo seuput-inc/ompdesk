@@ -168,7 +168,7 @@
 				"native/ompdesk/crates/core/src/sidecar/launch.rs",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "be94a6bc4fe0b18c1336d58c086a773e51da079f",
+			"syncCommit": "d0e83f711ce8443cce494bd736fa26b980403f5c",
 			"verifySkill": ".omp/skills/tab-session-verify/SKILL.md"
 		},
 		{
