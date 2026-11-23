@@ -4412,7 +4412,7 @@ describe("SidecarPool and a lost core", () => {
 		const { pool, sidecars } = fakePool();
 		const owner = fakeWindow(1);
 		const sessionPath = "/s/a.jsonl";
-		const onAcquire = vi.fn().mockImplementationOnce(() => core().abandon("drop acquire before session registration"));
+		const onAcquire = vi.fn().mockImplementationOnce(() => core().abandon("lost before session registration"));
 		pool.onAcquire = onAcquire;
 
 		const acquired = pool.acquire("/a", owner.win, "tab-a", sessionPath);
