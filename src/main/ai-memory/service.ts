@@ -126,6 +126,8 @@ export interface AiMemoryServiceDeps {
 	unit?: ServiceControl;
 	spawnEnv: () => Promise<NodeJS.ProcessEnv>;
 	onState: (state: AiMemoryState) => void;
+	/** The clients that supply the native care and upkeep engines' current settings. */
+	quality?: () => { care: string; upkeep: string };
 	/** Wait for something before the first wiring (the first tab boots before ai-memory competes with it). */
 	beforeStart?: () => Promise<void>;
 	/**
@@ -458,6 +460,7 @@ export class AiMemoryService {
 		}
 		const deps = this.#deps;
 		await this.#call("aimemory.service.open", {
+			quality: deps.quality?.(),
 			deps: {
 				platform: deps.platform,
 				arch: deps.arch,

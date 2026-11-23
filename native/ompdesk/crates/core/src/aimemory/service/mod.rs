@@ -35,6 +35,7 @@
 
 mod binary;
 mod pass;
+mod quality;
 mod root;
 mod terminal;
 #[cfg(test)]
@@ -188,6 +189,7 @@ struct Resolved {
 struct Inner {
     state: State,
     disposed: bool,
+    quality: Option<quality::Schedule>,
     resolved: Option<Resolved>,
     down_polls: u32,
     last_rewire: i64,
@@ -462,6 +464,12 @@ impl Service {
                 inner.state.detail.clone(),
             );
             change(&mut inner.state);
+            if inner.state.phase != before.0 && !inner.disposed {
+                let ready = inner.state.phase == "ready";
+                if let Some(quality) = &mut inner.quality {
+                    quality.ready(ready);
+                }
+            }
             if let Some(url) = inner.state.server_url.clone().filter(|url| !url.is_empty()) {
                 inner.state.web_url = Some(format!("{url}/web"));
             }
@@ -505,6 +513,9 @@ impl Service {
         let (retry, poll) = {
             let mut inner = self.inner();
             inner.disposed = true;
+            if let Some(mut schedule) = inner.quality.take() {
+                schedule.ready(false);
+            }
             (inner.retry.take(), inner.poll.take())
         };
         let worker = locked(&self.worker).take();
@@ -600,12 +611,14 @@ fn asked(call: &Call) -> Result<Arc<Service>, Fault> {
 struct OpenParams {
     service: String,
     deps: Deps,
+    quality: Option<quality::Clients>,
 }
 
 fn open(call: &Call) -> Result<Reply, Fault> {
     let OpenParams {
         service: name,
         deps,
+        quality,
     } = call.params()?;
     let unit = (!deps.unit_asks).then(|| {
         if deps.platform == "win32" {
@@ -639,6 +652,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
                 unsupported: None,
             },
             disposed: false,
+            quality: None,
             resolved: None,
             down_polls: 0,
             last_rewire: 0,
@@ -661,6 +675,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         worker: Mutex::default(),
         closed: watch::channel(false).0,
     });
+    service.inner().quality = quality.map(|clients| quality::Schedule::new(clients, &service));
     {
         let mut services = locked(&SERVICES);
         if services.contains_key(&name) {

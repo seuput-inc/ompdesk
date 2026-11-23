@@ -2020,17 +2020,13 @@ app.whenReady().then(async () => {
 		...(platform === "win32"
 			? { bunPresent: async () => findBun({ ...process.env, ...(await shellSpawnEnv()) }) !== null }
 			: {}),
+		quality: () => {
+			if (!aiMemoryCare || !aiMemoryUpkeep) throw new Error("Memory quality clients are not initialized");
+			return { care: aiMemoryCare.service, upkeep: aiMemoryUpkeep.service };
+		},
 		onState: state => {
 			for (const win of BrowserWindow.getAllWindows()) {
 				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.AI_MEMORY_STATE, state);
-			}
-			// The repair and the learning run only while the server answers.
-			if (state.phase === "ready") {
-				aiMemoryUpkeep?.ready();
-				aiMemoryCare?.ready();
-			} else {
-				aiMemoryUpkeep?.pause();
-				aiMemoryCare?.pause();
 			}
 			// Memory just came up: catch up with the computers this one is connected to.
 			if (state.phase === "ready" && aiMemoryPhase !== "ready") {

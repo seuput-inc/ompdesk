@@ -23,11 +23,11 @@ src/main/ai-memory/ambiguous-names.ts	native-client	Registers the client callbac
 src/main/ai-memory/backfill.test.ts	exception	Tests which journal replies become redacted conclusions and how the pass maps them to projects.
 src/main/ai-memory/backfill.ts	native-client	Sends journal and prompt callbacks plus cursor state to care.backfill and copies back the returned memo.
 src/main/ai-memory/care.test.ts	exception	Tests which care unit runs per tick, when unfinished units resume and when failed units retry.
-src/main/ai-memory/care.ts	port	Starts the first care tick after five minutes and repeats every fifteen minutes; pause and dispose cancel both timers.
+src/main/ai-memory/care.ts	mixed	Native readiness starts care after five minutes and schedules the repeat. The client supplies current per-tick host settings and exposes summary and undo to the page.
 src/main/ai-memory/client.test.ts	exception	Exercises memory configuration, token reads and HTTP results against controlled server responses.
 src/main/ai-memory/client.ts	port	Forwards HTTP operations to aimemory.* but chooses null or false after failed token, status and health requests.
 src/main/ai-memory/core-asks.test.ts	exception	Checks the omp launch environment and arguments before and after configuring model spending.
-src/main/ai-memory/core-asks.ts	port	Builds the omp launch environment with credit-spend overrides and fulfills upkeep.ask journal and prompt-fact requests in TypeScript.
+src/main/ai-memory/core-asks.ts	mixed	Core reads journal and prompt facts through the stock worker. Main supplies the installed omp launch environment, credit preferences, current settings and a launch-wide repair claim; injected test drivers answer explicitly requested fake asks.
 src/main/ai-memory/curate.test.ts	exception	Tests which page a curation judgment retires, including its successor and skipped projects.
 src/main/ai-memory/curate.ts	native-client	Passes page, judge and rules callbacks, limits and dry-run options to care.curate and returns its report.
 src/main/ai-memory/distill-model.test.ts	exception	Checks the smol invocation, prompt input, result accounting and command failure behavior.
@@ -52,7 +52,7 @@ src/main/ai-memory/staging.ts	exception	Declares the macOS staging directory key
 src/main/ai-memory/sync.test.ts	exception	Exercises paired memory stores, including no-op repeat rounds and preserving concurrently changed host pages.
 src/main/ai-memory/sync.ts	port	For memsync.ask, TypeScript redacts conclusion text and issues the requested host-link operation; Rust owns sync rounds and cursors.
 src/main/ai-memory/upkeep.test.ts	exception	Checks learning from paused conversations and which pages upkeep writes or skips.
-src/main/ai-memory/upkeep.ts	port	Runs repair once on first readiness, schedules the delayed and repeating upkeep ticks, and cancels them on pause.
+src/main/ai-memory/upkeep.ts	mixed	Native readiness schedules repair and upkeep and cancels pending ticks on pause. The repair claim belongs to this app launch, not to a replaceable core; the client reads current host settings.
 src/main/cli-tools/catalog.ts	port	Filters the catalog by connected provider IDs and includes machine-setup tools without a matching provider. Before reusing native-root-mini-intake's machine/ candidate, compare its output and order with this caller contract.
 src/main/cli-tools/detect.test.ts	exception	Tests attribution of CLI installs to Homebrew, Bun and npm using their actual directory layouts.
 src/main/cli-tools/detect.ts	port	Resolves executable shims, classifies package-manager ownership, checks write access and probes installed versions.
