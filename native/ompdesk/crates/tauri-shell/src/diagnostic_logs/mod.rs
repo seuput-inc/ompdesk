@@ -1,6 +1,7 @@
 mod feedback;
 mod files;
 mod reader;
+mod recent;
 
 use crate::host::Call;
 use reader::Selection;
@@ -10,14 +11,13 @@ use std::path::Path;
 pub(crate) use feedback::{FeedbackRead, feedback_profile};
 
 pub(crate) fn handle(call: Call, profile: &'static Path) {
-    let selection = match call.params.as_str() {
-        Some("current") => Selection::Current,
-        Some("archive") => Selection::Archive,
-        Some("probes") => Selection::Probes,
+    let read = match call.params.as_str() {
+        Some("recent") => recent::read as fn(&Path) -> Vec<String>,
+        Some("probes") => |profile| reader::lines(profile, Selection::Probes),
         _ => return call.err("invalid", "unknown diagnostic log selection"),
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let lines = reader::lines(profile, selection);
+        let lines = read(profile);
         call.ok(Value::Array(lines.into_iter().map(Value::String).collect()));
     });
 }
