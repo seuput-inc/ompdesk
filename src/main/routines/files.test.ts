@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { core } from "../core/process";
@@ -9,6 +9,21 @@ import { fixture, until } from "./test-context";
 const scanPath = async (path: string, mark?: unknown) =>
 	(await core().call("routines.filesScan", { path, ignored: [".git", "node_modules"], mark })).result;
 const listing = (entries: Record<string, string>, complete = true) => ({ entries, complete });
+
+function seededWatchTree(parent: string, names: readonly string[]) {
+	const staging = join(parent, "staging");
+	for (const name of names) {
+		const file = join(staging, "tree", name);
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(file, "0");
+	}
+	// On NTFS the first listing can report directory timestamp changes from setup.
+	readdirSync(staging, { recursive: true, withFileTypes: true });
+	// Move the parent, not the watched directory: delayed FSEvents for setup have no paths inside the watch.
+	const ready = join(parent, "ready");
+	renameSync(staging, ready);
+	return join(ready, "tree");
+}
 
 describe("a native file source", () => {
 	it("merges an offline comparison with a live burst and never replays the new baseline", async () => {
@@ -37,23 +52,25 @@ describe("a native file source", () => {
 	it("reports only an unspecified change for different names outside a partial listing", async () => {
 		const ready = Promise.withResolvers<void>();
 		const f = await fixture({ ready: ready.promise });
-		writeFileSync(join(f.work, "z.txt"), "new");
-		const id = await f.add({ source: "files", path: f.work });
+		const path = seededWatchTree(f.work, ["z.txt"]);
+		const id = await f.add({ source: "files", path });
 		f.seed(id, { listing: listing({ "b.txt": "1:1" }, false) });
 		ready.resolve();
-		await until(() => expect(f.fired).toEqual([`Something under ${f.work} changed`]));
+		await until(() => expect(f.fired).toHaveLength(1));
+		expect(f.fired).toEqual([`Something under ${path} changed`]);
 	});
 
 	it("baselines silently, deduplicates names and shows ten with a count of the rest", async () => {
 		const f = await fixture();
-		const dir = join(f.work, "sub");
-		mkdirSync(dir);
-		const id = await f.add({ source: "files", path: f.work });
-		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing({}) }));
+		const names = Array.from({ length: 13 }, (_, i) => `sub/f${i}`);
+		const path = seededWatchTree(f.work, names);
+		const entries = Object.fromEntries(names.map(name => [name, expect.stringMatching(/:1$/)]));
+		const id = await f.add({ source: "files", path });
+		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing(entries) }));
 		expect(f.fired).toEqual([]);
-		for (let i = 0; i < 13; i++) {
-			writeFileSync(join(dir, `f${i}`), "a");
-			writeFileSync(join(dir, `f${i}`), "b");
+		for (const name of names) {
+			writeFileSync(join(path, name), "a", { flag: "r+" });
+			writeFileSync(join(path, name), "b", { flag: "r+" });
 		}
 		await until(() => expect(f.fired).toHaveLength(1));
 		// Platforms may batch the native notifications in different orders.
@@ -66,12 +83,25 @@ describe("a native file source", () => {
 
 	it("ignores .git and node_modules at any depth but not .gitignore", async () => {
 		const f = await fixture();
-		for (const sub of [".git", "src/.git", "web/node_modules/x"]) mkdirSync(join(f.work, sub), { recursive: true });
+		const names = [".git/index.lock", "src/.git/HEAD", "web/node_modules/x/index.js", "src/.gitignore"];
+		const path = seededWatchTree(f.work, names);
+		const id = await f.add({ source: "files", path });
+		const entries = { "src/.gitignore": expect.stringMatching(/:1$/) };
+		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing(entries) }));
+		for (const name of names) writeFileSync(join(path, name), "x", { flag: "r+" });
+		await until(() => expect(f.fired).toEqual(["src/.gitignore changed"]));
+	});
+
+	it("reports the creation and removal of an empty directory", async () => {
+		const f = await fixture();
 		const id = await f.add({ source: "files", path: f.work });
 		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing({}) }));
-		for (const file of [".git/index.lock", "src/.git/HEAD", "web/node_modules/x/index.js", "src/.gitignore"])
-			writeFileSync(join(f.work, file), "x");
-		await until(() => expect(f.fired).toEqual(["src/.gitignore changed"]));
+		const dir = join(f.work, "folder");
+		mkdirSync(dir);
+		await until(() => expect(f.fired).toEqual(["folder changed"]));
+		await until(() => expect(f.service.latest.runs[0]?.status).toBe("succeeded"));
+		rmSync(dir, { recursive: true });
+		await until(() => expect(f.fired).toEqual(["folder changed", "folder changed"]));
 	});
 
 	it("records its own writes without firing during the run or its three-second quiet window", async () => {
