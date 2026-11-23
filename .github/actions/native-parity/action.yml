@@ -95,6 +95,7 @@ runs:
         src/main/local/git/exec-gh.test.ts
         src/main/local/git/pr-draft.test.ts
         src/main/local/git/origin.test.ts
+        src/main/local/git/stock-bridge.test.ts
         src/main/workspace-fs*.test.ts
         src/main/media-stream.test.ts
         src/main/workspace-search.test.ts

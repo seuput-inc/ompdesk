@@ -221,7 +221,7 @@ src/main/local/settings.ts	mixed	Rust sidecar.guiBridge forwards schema, role me
 src/main/local/slash.ts	port	Caches builtin slash names and aliases per bridge and rejects a command not offered by the running stock version.
 src/main/local/subagent-journal-tail.test.ts	exception	Tests reading journal deltas with tail tokens and resetting when a journal is replaced.
 src/main/local/types.ts	exception	Defines stock, bridge and handler contracts plus the coded LocalCommandError wrapper; no independent command implementation.
-src/main/local/workspace.ts	port	Refuses moves while streaming, validates and stats the target directory, runs stock /move and verifies the resulting primary cwd.
+src/main/local/workspace.ts	mixed	fs.stat checks the path stock resolved before /move. The host refuses streaming moves and checks the resulting session cwd. Only stock can resolve its live session paths, change cwd and reload the associated settings (§1.3d).
 src/main/ponytail/pack-drift.test.ts	exception	Test coverage for pinned Ponytail documents and license.
 src/main/ponytail/ponytail-stock.test.ts	exception	Test coverage for Ponytail hook registration in stock omp.
 src/main/power/lid-awake-runtime.ts	port	Selects the platform backend, spawns caffeinate, queries pmset or Windows battery state, and executes powercfg.
