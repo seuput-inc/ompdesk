@@ -174,7 +174,7 @@ import type { MediaStreams } from "./media-stream";
 import { createMenu } from "./menu";
 import { modelsPath } from "./models-config";
 import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notification-batch";
-import { createNotifyHandler } from "./notify-triage";
+import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
 import { registerPreviewHost } from "./preview/host";
@@ -249,6 +249,7 @@ function agentCaller(win: ClientWindow): IpcCaller {
 
 export interface IpcDeps {
 	openPageExternal(url: string): Promise<void>;
+	admitNotification: AdmitNotification;
 	/** What paired web pages report about unsaved Files edits (WebHost forgets a page's report when it drops). */
 	fileEditReports: FileEditReports;
 	/** Where every handler here registers (index.ts's one table). */
@@ -2050,8 +2051,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 	);
 
-	// Repeat filter and the judge triage of a completion (notify-triage.ts); main hands the notice on.
+	// The shell admits one reporter; only main can ask that window's local sidecar and deliver to its batch.
 	const notifyHandler = createNotifyHandler({
+		admit: deps.admitNotification,
 		now: Date.now,
 		isShared: tabId => sidecarPool.isShared(tabId),
 		judgeEnabled: () => judgeAssistEnabled(prefsStore.get(JUDGE_ASSIST_PREF)),
@@ -2061,20 +2063,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 		needsYouTitle: title => mainT("notify.needsInput", undefined, { title }),
 		deliver: (win, winId, notice) => {
-			if (win && !notifyBatchedWindows.has(winId)) {
+			if (win && !win.isDestroyed() && !notifyBatchedWindows.has(winId)) {
 				notifyBatchedWindows.add(winId);
 				win.once("closed", () => {
 					notifyBatchedWindows.delete(winId);
 					notificationBatcher.dropWindow(winId);
 				});
 			}
-			// Bursts fold into one summary (notification-batch.ts).
-			notificationBatcher.notify(winId, {
-				title: notice.title,
-				body: notice.body,
-				tabId: notice.tabId,
-				kind: notice.kind,
-			});
+			notificationBatcher.notify(winId, notice);
 		},
 	});
 	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, (caller, payload: IpcNotifyPayload) => notifyHandler(caller, payload));

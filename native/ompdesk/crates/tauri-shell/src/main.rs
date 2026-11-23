@@ -12,6 +12,7 @@ mod migrate_watch;
 mod native_chrome;
 mod native_services;
 mod network;
+mod notify_triage;
 mod page_watch;
 mod preview_protocol;
 pub use native_chrome::menu;
@@ -83,6 +84,7 @@ struct Runtime {
     app_initializations: Mutex<HashMap<u64, AppInitialization>>,
     navigation_watch: Mutex<HashSet<u64>>,
     host_navigations: Mutex<HashMap<u64, String>>,
+    notify_triage: Mutex<notify_triage::NotifyTriage>,
     preload: String,
     user_data: PathBuf,
     packaged: bool,
@@ -1128,6 +1130,18 @@ fn dispatch(call: host::Call) {
         call.ok(result);
         return;
     }
+    if call.method == "app.admitNotification" {
+        let plan = runtime()
+            .notify_triage
+            .lock()
+            .expect("notification triage")
+            .admit(&call.params);
+        match plan {
+            Some(plan) => call.ok(plan),
+            None => call.err("invalid", "invalid notification admission"),
+        }
+        return;
+    }
     if call.method == "app.watchdog" {
         native_services::watchdog::handle(call, &runtime().user_data);
         return;
@@ -1867,6 +1881,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     app_initializations: Mutex::new(HashMap::new()),
                     navigation_watch: Mutex::new(HashSet::new()),
                     host_navigations: Mutex::new(HashMap::new()),
+                    notify_triage: Mutex::default(),
                     preload,
                     user_data,
                     packaged,

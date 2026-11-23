@@ -202,6 +202,7 @@ import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
 import {
+	admitNotification,
 	appIconPath,
 	clipboard,
 	consumeHangReports,
@@ -2541,6 +2542,7 @@ app.whenReady().then(async () => {
 	const fileEditReports = new FileEditReports();
 	registerIpcHandlers({
 		openPageExternal,
+		admitNotification,
 		fileEditReports,
 		ipc,
 		macPermissions,
