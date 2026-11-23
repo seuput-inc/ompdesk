@@ -98,9 +98,6 @@ describe("UploadStore", () => {
 			expect(statSync(stored.path).mode & 0o777).toBe(0o600);
 			expect(statSync(join(stored.path, "..")).mode & 0o777).toBe(0o700);
 		}
-		expect(uploads.owns("dev1", stored.path)).toBe(true);
-		expect(uploads.owns("dev2", stored.path)).toBe(false);
-		expect(uploads.owns("dev1", join(root, "dev1", "..", "dev2", "x"))).toBe(false);
 	});
 
 	it("never lets a file name leave its folder", async () => {

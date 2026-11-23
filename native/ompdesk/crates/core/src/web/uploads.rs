@@ -370,6 +370,20 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
 }
 
 impl UploadStore {
+    /// The host resolves the path in its working directory. Compare the spelling even on Windows,
+    /// as the page's save contract did, and never let a parent segment reach the copy.
+    pub(super) fn owns(&self, device: &str, file: &str) -> bool {
+        let mut folder = self.inner.device_dir(device).into_os_string();
+        folder.push(std::path::MAIN_SEPARATOR_STR);
+        let Some(rest) = folder.to_str().and_then(|prefix| file.strip_prefix(prefix)) else {
+            return false;
+        };
+        !rest.is_empty()
+            && Path::new(rest)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+    }
+
     /// How much of the device's day is spoken for, reserved before anything is read or written.
     async fn reserve(
         &self,

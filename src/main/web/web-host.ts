@@ -144,7 +144,7 @@ export class WebHost {
 			quota: this.quota,
 			webChannels: createHostActions({
 				devices: this.devices,
-				uploads: this.uploads,
+				userData: deps.userData,
 				blobs: this.blobs,
 				cwdFor: (context, tabId) => deps.tabs.cwd(context.win, tabId),
 				openPath: deps.shell.openPath,

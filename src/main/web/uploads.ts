@@ -6,15 +6,12 @@
  * main calls: a paired computer's attachment (`store`), a picture a call names (`take`, read and deleted at
  * once), a revoked device's folder (`removeDevice`), the daily sweep.
  */
-import { join, resolve, sep } from "node:path";
 import { CoreError, core } from "../core/process";
 
 export const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** The folder of files attached to this computer's own tabs with no path here (ipc.ts FS_UPLOAD_TO_HOST). */
 export const LOCAL_UPLOAD_DEVICE = "this-computer";
-
-const UPLOAD_FOLDER = "web-uploads";
 
 /**
  * A file attached to a prompt of this computer's own tab that has no path here (pasted, dragged out of another app):
@@ -54,7 +51,6 @@ export interface StoredUpload {
 
 export class UploadStore {
 	readonly #userData: string;
-	readonly #root: string;
 	readonly #now: () => number;
 	readonly #limits: { fileMaxBytes?: number; dailyMaxBytes?: number; ttlMs?: number };
 
@@ -66,15 +62,8 @@ export class UploadStore {
 		ttlMs?: number;
 	}) {
 		this.#userData = opts.userData;
-		this.#root = resolve(opts.userData, UPLOAD_FOLDER);
 		this.#now = opts.now ?? Date.now;
 		this.#limits = { fileMaxBytes: opts.fileMaxBytes, dailyMaxBytes: opts.dailyMaxBytes, ttlMs: opts.ttlMs };
-	}
-
-	/** Whether `file` is inside this device's upload folder. */
-	owns(deviceId: string, file: string): boolean {
-		const folder = join(this.#root, deviceId) + sep;
-		return resolve(file).startsWith(folder);
 	}
 
 	/** A paired transfer finishes in this same store, with the same clock and limits. */

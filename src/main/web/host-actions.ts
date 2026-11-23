@@ -24,7 +24,6 @@ import { isOpenableExternalUrl } from "../external-url";
 import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin, sniffMime } from "../workspace-fs";
 import type { BlobStore } from "./blobs";
 import type { WebDevices } from "./devices-store";
-import type { UploadStore } from "./uploads";
 import type { WebCallContext, WebChannelTable } from "./ws-router";
 
 /** A device's own interface preferences: capped so a page cannot fill the devices file. */
@@ -34,7 +33,7 @@ const SAVE_INLINE_MAX_CHARS = 1_000_000;
 
 export interface HostActionsDeps {
 	devices: Pick<WebDevices, "setUiPrefs">;
-	uploads: Pick<UploadStore, "owns">;
+	userData: string;
 	blobs: Pick<BlobStore, "addFile" | "release">;
 	/** The folder a tab works in on this computer, for a relative path; null when unknown. */
 	cwdFor(context: WebCallContext, tabId: string | undefined): string | null;
@@ -148,13 +147,16 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		}
 		const dir = expandHome(request.dir, home());
 		if (!path.isAbsolute(dir)) return { ok: false, error: "Not an absolute path", code: "not_absolute_path" };
-		const upload = request.uploadPath === undefined ? undefined : path.resolve(request.uploadPath);
 		const source =
-			upload === undefined
+			request.uploadPath === undefined
 				? "inline"
-				: deps.uploads.owns(context.deviceId, upload)
-					? { ownedUpload: upload }
-					: "denied";
+				: {
+						upload: {
+							path: path.resolve(request.uploadPath),
+							deviceId: context.deviceId,
+							userData: deps.userData,
+						},
+					};
 		const target = path.join(path.resolve(dir), request.name);
 		try {
 			const { result } = await core().call<WebHostSaveResult>(

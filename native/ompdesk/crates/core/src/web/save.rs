@@ -1,5 +1,4 @@
-//! Host file saves from paired devices. Only main's upload-ownership check can supply `ownedUpload`;
-//! a failed check crosses the wire as `denied`, without the path the device asked to read.
+//! Host file saves from paired devices. Check uploads against the authenticated device's store before copying.
 
 #[cfg(all(test, windows))]
 use std::fs;
@@ -7,18 +6,27 @@ use std::fs::File;
 #[cfg(unix)]
 use std::fs::{self, FileTimes, OpenOptions};
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::uploads;
 use crate::fs::{disk, error::NodeError};
 use crate::server::{Call, Fault, Registry, Reply};
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 enum Source {
     Inline,
-    OwnedUpload(String),
-    Denied,
+    Upload {
+        path: String,
+        device_id: String,
+        user_data: PathBuf,
+    },
 }
 
 #[derive(Deserialize)]
@@ -119,14 +127,21 @@ fn save(call: Call) -> Result<Reply, Fault> {
         return refused("Not a folder", Some("not_a_directory"));
     }
     let saved = match (&p.source, call.bin.as_deref()) {
-        (Source::Denied, None) => {
-            return refused(
-                "Not one of this device's uploads",
-                Some("path_escapes_roots"),
-            );
-        }
         (Source::Inline, Some(bytes)) => write_inline(&p.target, p.overwrite, bytes),
-        (Source::OwnedUpload(source), None) => {
+        (
+            Source::Upload {
+                path: source,
+                device_id,
+                user_data,
+            },
+            None,
+        ) => {
+            if !uploads::open(user_data).owns(device_id, source) {
+                return refused(
+                    "Not one of this device's uploads",
+                    Some("path_escapes_roots"),
+                );
+            }
             if source.contains('\0') {
                 Err(NodeError::nul_in_path("src", source))
             } else {
@@ -164,7 +179,7 @@ pub(super) fn register(registry: &mut Registry) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use serde_json::{Value, json};
 
@@ -176,6 +191,16 @@ mod tests {
     impl Folder {
         fn new() -> Self {
             Self(disk::make_temp_dir("ompdesk-web-save-").unwrap())
+        }
+
+        fn upload(&self, name: &str) -> PathBuf {
+            let folder = self.0.join("web-uploads").join("dev1").join("fixture");
+            fs::create_dir_all(&folder).unwrap();
+            folder.join(name)
+        }
+
+        fn source(&self, file: &Path) -> Value {
+            json!({ "upload": { "path": file, "userData": self.0, "deviceId": "dev1" } })
         }
     }
 
@@ -230,22 +255,36 @@ mod tests {
         fs::write(&secret, b"private").unwrap();
         for bad in [&secret, &dir.0.join("missing")] {
             assert_eq!(
-                request(params(bad, json!("denied"), true), None).unwrap(),
+                request(params(bad, dir.source(&secret), true), None).unwrap(),
                 json!({
                     "ok": false, "code": "not_a_directory", "error": "Not a folder"
                 })
             );
         }
-        let denied = params(&dir.0, json!("denied"), true);
+        let denied = params(&dir.0, dir.source(&secret), true);
         assert_eq!(
-            request(denied.clone(), None).unwrap(),
+            request(denied, None).unwrap(),
             json!({
                 "ok": false, "code": "path_escapes_roots", "error": "Not one of this device's uploads"
             })
         );
-        let mut spoofed = denied;
+        let mut spoofed = params(&dir.0, json!("inline"), true);
         spoofed["uploadPath"] = json!(secret);
-        assert_eq!(request(spoofed, None).unwrap_err().code, "invalid_params");
+        assert_eq!(
+            request(spoofed, Some(b"x")).unwrap_err().code,
+            "invalid_params"
+        );
+        let escaped = dir.upload("..").join("..").join("other-device");
+        assert_eq!(
+            request(params(&dir.0, dir.source(&escaped), true), None).unwrap()["code"],
+            "path_escapes_roots"
+        );
+        assert_eq!(
+            request(params(&dir.0, json!({ "ownedUpload": secret }), true), None)
+                .unwrap_err()
+                .code,
+            "invalid_params"
+        );
         assert_eq!(
             request(params(&dir.0, json!(secret), true), None)
                 .unwrap_err()
@@ -258,9 +297,9 @@ mod tests {
     #[test]
     fn an_upload_copies_exclusively_and_a_missing_source_precedes_a_collision() {
         let dir = Folder::new();
-        let source = dir.0.join("upload");
+        let source = dir.upload("upload");
         let target = dir.0.join("saved");
-        let own = json!({ "ownedUpload": source });
+        let own = dir.source(&source);
         fs::write(&source, b"first").unwrap();
         let new = params(&dir.0, own.clone(), false);
         let ok = json!({ "ok": true, "path": target });
@@ -286,18 +325,19 @@ mod tests {
     #[test]
     fn copying_over_the_upload_or_its_hard_link_does_not_truncate_it() {
         let dir = Folder::new();
-        let target = dir.0.join("saved");
-        let alias = dir.0.join("alias");
+        let target = dir.upload("saved");
+        let alias = dir.upload("alias");
+        let dest = target.parent().unwrap();
         fs::write(&target, b"keep").unwrap();
         fs::hard_link(&target, &alias).unwrap();
         for source in [&target, &alias] {
-            let own = json!({ "ownedUpload": source });
+            let own = dir.source(source);
             assert_eq!(
-                request(params(&dir.0, own.clone(), false), None).unwrap()["code"],
+                request(params(dest, own.clone(), false), None).unwrap()["code"],
                 "exists"
             );
             assert_eq!(
-                request(params(&dir.0, own, true), None).unwrap(),
+                request(params(dest, own, true), None).unwrap(),
                 json!({ "ok": true, "path": target })
             );
             assert_eq!(fs::read(&target).unwrap(), b"keep");
@@ -310,17 +350,17 @@ mod tests {
         use std::os::windows::fs::OpenOptionsExt;
 
         let dir = Folder::new();
-        let source = dir.0.join("upload");
+        let source = dir.upload("upload");
         let target = dir.0.join("saved");
         fs::write(&source, b"new").unwrap();
-        fs::write(dir.0.join("upload:note"), b"extra").unwrap();
+        fs::write(dir.upload("upload:note"), b"extra").unwrap();
         fs::write(&target, b"old").unwrap();
         let held = File::options()
             .read(true)
             .share_mode(0)
             .open(&target)
             .unwrap();
-        let save = params(&dir.0, json!({ "ownedUpload": source }), true);
+        let save = params(&dir.0, dir.source(&source), true);
         assert_eq!(request(save.clone(), None).unwrap()["ok"], false);
         drop(held);
         assert_eq!(fs::read(&target).unwrap(), b"old");
@@ -337,7 +377,7 @@ mod tests {
 
         let dir = Folder::new();
         let target = dir.0.join("saved");
-        let source = dir.0.join("upload");
+        let source = dir.upload("upload");
         let backing = dir.0.join("backing");
         fs::write(&source, b"new").unwrap();
         fs::write(&backing, b"previous").unwrap();
@@ -345,7 +385,7 @@ mod tests {
         let stamp = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         File::open(&source).unwrap().set_modified(stamp).unwrap();
         symlink(&backing, &target).unwrap();
-        let save = params(&dir.0, json!({ "ownedUpload": source }), true);
+        let save = params(&dir.0, dir.source(&source), true);
         assert_eq!(request(save, None).unwrap()["ok"], true);
         assert!(target.is_symlink());
         assert_eq!(fs::read(&backing).unwrap(), b"new");
