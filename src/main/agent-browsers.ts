@@ -4,10 +4,7 @@
  * browsers in their standard install places, each with whether the omp Browser Relay extension is loaded in one of
  * its profiles (stock's `omp browser-relay install` writes it; Chrome forbids installing it for the user).
  *
- * The Chromium browsers are the core process's (`native/ompdesk/crates/core/src/browsers/`): finding them, reading
- * their profiles and relays, writing the extension's copy and opening a browser at its extensions page. This file is
- * its client; it hands over the browsers' names and relay ports, where this machine keeps things and how omp runs,
- * and keeps the PATH lookup (`findOnPath`, which omp's own lookup shares) and the answer held for the launch.
+ * The core owns executable discovery and its positive cache. Main supplies the login-shell PATH on a cache miss.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -24,37 +21,24 @@ import { core } from "./core/process";
 import type { OmpRuntime } from "./local/types";
 import { ompRunEnv, systemOmp } from "./omp-runtime";
 import { spawnPath } from "./shell-env";
-import { findOnPath } from "./spawn";
 
-const BIN = "ego-browser";
+let egoRequest: Promise<string | null> | null = null;
 
-let cachedEgo: Promise<string | null> | null = null;
+async function lookupEgo(): Promise<string | null> {
+	const host = core();
+	const cached = (await host.call<string | null>("browsers.cachedEgo", {})).result;
+	if (cached !== null) return cached;
+	const pathEnv = await spawnPath();
+	const params = { pathEnv, home: homedir(), cwd: process.cwd() };
+	return (await host.call<string | null>("browsers.resolveEgo", params)).result;
+}
 
-/** Absolute path to `ego-browser`, or null when not installed. Found once per launch; a miss is re-probed next call. */
+/** Concurrent callers share the same lookup. A miss or error leaves the next caller free to retry. */
 export function resolveEgoBrowser(): Promise<string | null> {
-	if (!cachedEgo) {
-		const platform = process.platform;
-		const names = platform === "win32" ? [`${BIN}.exe`, `${BIN}.cmd`, BIN] : [BIN];
-		const localBin = join(homedir(), ".local", "bin");
-		const pending = spawnPath().then(pathEnv =>
-			findOnPath(
-				names,
-				pathEnv,
-				platform,
-				names.map(name => join(localBin, name)),
-			),
-		);
-		cachedEgo = pending;
-		void pending.then(
-			bin => {
-				if (!bin && cachedEgo === pending) cachedEgo = null;
-			},
-			() => {
-				if (cachedEgo === pending) cachedEgo = null;
-			},
-		);
-	}
-	return cachedEgo;
+	egoRequest ??= lookupEgo().finally(() => {
+		egoRequest = null;
+	});
+	return egoRequest;
 }
 
 export async function egoBrowserInstalled(): Promise<boolean> {
