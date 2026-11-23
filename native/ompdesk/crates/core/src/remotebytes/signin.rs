@@ -119,8 +119,8 @@ async fn replay_page(params: &ReplayParams) -> Result<Reply, Fault> {
     let mut prefix = Vec::new();
     while let Some(frame) = body.frame().await {
         if let Ok(data) = frame.map_err(|_| unavailable())?.into_data() {
-            // Three UTF-8 bytes per UTF-16 unit, plus a BOM. Drain the rest: a late read error still fails the replay.
-            let keep = data.len().min(3 * PAGE_UNITS + 3 - prefix.len());
+            // Allow a BOM and a four-byte scalar starting at the final UTF-16 unit. Still drain to catch late errors.
+            let keep = data.len().min(3 + 3 * (PAGE_UNITS - 1) + 4 - prefix.len());
             prefix.extend_from_slice(&data[..keep]);
         }
     }

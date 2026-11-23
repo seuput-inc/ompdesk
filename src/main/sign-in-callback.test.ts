@@ -67,11 +67,11 @@ describe("host sign-in callback replay", () => {
 	});
 
 	it("keeps the denial status, the first 200 type characters and the first 65536 UTF-16 units", async () => {
-		expect(await replay("/denied")).toEqual({
-			status: 500,
-			contentType: longType.slice(0, 200),
-			body: `${beforeSplit}\ud83d`,
-		});
+		const { body, ...headers } = await replay("/denied");
+		expect(headers).toEqual({ status: 500, contentType: longType.slice(0, 200) });
+		expect(body.length).toBe(SIGN_IN_PAGE_MAX_CHARS);
+		expect(body.charCodeAt(body.length - 1)).toBe(0xd83d);
+		expect(body.slice(0, -1)).toBe(beforeSplit);
 	});
 
 	it("uses UTF-8 replacement and a plain-text fallback for an unsupported or missing type", async () => {
