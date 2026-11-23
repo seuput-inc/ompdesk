@@ -7,7 +7,7 @@ src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a sessi
 src/main/agent-desktop.ts	port	2	agentDesktopToRun compares bundled and managed executable versions; computerUseSpawn selects the engine and spawn environment.
 src/main/agent-paths.ts	port	1	agentDir resolves PI_CODING_AGENT_DIR or the user's .omp/agent path.
 src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
-src/main/agent-power-migration.ts	port	2	migrateAgentPowers applies a versioned one-time preferences and stock config.yml migration.
+src/main/agent-power-migration.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore synchronously migrates the new SafeStore before its first read; the same migration patches stock config.yml without losing comments. Move with the prefs bootstrap, not as a second writer.
 src/main/agent-worktrees.test.ts	tooling	-	Exercises list and orphan-only clear through the core against an isolated stock CLI.
 src/main/agent-worktrees.ts	native-client	1	Forwards the resolved executable, environment and cwd once to omp.worktrees. Rust starts stock and interprets its reply; stock decides which worktrees are orphaned.
 src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.
@@ -241,7 +241,7 @@ src/main/editor.ts	mixed	1	editor.prepare/finish own the temporary draft, conten
 src/main/emoji-stock.test.ts	tooling	-	Vitest suite: ships stock's shortcode table byte for byte.
 src/main/event-batcher.ts	port	2	SidecarManager.#dispatchFrame flushes the current batch before a settling event or response is emitted; a separate timer RPC would permit replay after the snapshot. Move with the ordered sidecar event producer and beforeResponse listeners (§1.3a,c).
 src/main/extension-reload.test.ts	tooling	-	Vitest suite: mergeApplyPlans.
-src/main/extension-reload.ts	port	1	mergeApplyPlans merges restart/reload/reconnect requirements; extensionApplyDecision chooses immediate, deferred or skipped application from tab facts.
+src/main/extension-reload.ts	port	1	§1.3(a,b,c), hub batch: host-services.ts consumes the decision and changes tab.extensionPending before returning its apply count. sidecar-pool.ts and ext-update/updater.ts use the same merge. No independent I/O; move with hosted tab state.
 src/main/extension-specs.test.ts	tooling	-	Vitest suite: isPinnedNpmSpec.
 src/main/external-url.test.ts	tooling	-	Vitest suite: isOpenableExternalUrl.
 src/main/external-url.ts	port	1	Shell batch, §1.3(a,b): ipc.ts and web/host-actions.ts check the page URL immediately before OS dispatch. Move the allowlist into the page-only open command, not a standalone validation RPC; keep general shell.openExternal available to trusted native callers.
@@ -275,7 +275,7 @@ src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain launch-history.json and safe-mode state; noteGpuRelaunch records cross-process cooldown.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
 src/main/launch-profile-store.test.ts	tooling	-	Vitest suite: launch profile store.
-src/main/launch-profile-store.ts	port	2	readLaunchProfile and updateLaunchProfile read and merge per-workspace launch flags in GUI preferences.
+src/main/launch-profile-store.ts	port	2	§1.3(a,c), shell batch: local IPC and remote host-services synchronously patch one SafeStore launchProfiles map; index.ts supplies that same map to the sidecar's spawn-time flags. Move with the prefs owner to preserve atomic per-workspace patches.
 src/main/legacy-user-data.test.ts	tooling	-	Vitest suite: migrateLegacyUserData.
 src/main/legacy-user-data.ts	port	1	migrateLegacyUserData checks the destination profile is fresh before renaming or copying the old seucode profile.
 src/main/line-budget.ts	port	1	LineBudget.take enforces an hourly allowance and counts suppressed lines for the next admitted report.
@@ -336,7 +336,7 @@ src/main/nsis-updater.ts	port	4	OmpNsisUpdater customizes electron-updater's dow
 src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
 src/main/omp-auto-takeover.ts	port	2	OmpAutoTakeover reads/writes stock update.auto via the omp CLI and uses takeoverStep and the stored record to manage ownership of automatic updates.
 src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
-src/main/omp-availability.ts	port	2	followSetupState maintains the shared machine-level omp availability gate; refuseWithoutOmp distinguishes setup unavailability from a failed worker request.
+src/main/omp-availability.ts	port	2	§1.3(a,b,c), shell batch: stock-helper.ts records a refused call before admission; index.ts consumes that bit synchronously in followSetupState before restarting tabs and relisting. Move with setup events and worker admission, not across a second state mirror.
 src/main/omp-compat-source.test.ts	tooling	-	Vitest suite: OmpCompatSource.
 src/main/omp-compat-source.ts	port	2	OmpCompatSource fetches the verified-version feed, throttles reads and retains a last-good disk cache for offline launches.
 src/main/omp-config-stock.test.ts	tooling	-	Vitest suite: reads stock's default, writes both values, and reads back what it wrote.
@@ -375,7 +375,7 @@ src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recove
 src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesChanged and shouldRestartForChangedResources decide recovery from process failure or changed app resources; hangRestartNotifies rate-limits notices.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
 src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
-src/main/retired-prefs.ts	port	2	migrateRetiredPrefs applies retired-key and panel-view migrations and updates associated settings/schedule storage.
+src/main/retired-prefs.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore migrates the in-memory SafeStore before returning it or reading themes. Port with prefs initialization so readers cannot see retired keys or stale schedule preferences during a migration.
 src/main/rpc-client.ts	mixed	3	RpcClient.command assigns GUI IDs, tries local handlers and times them out; stock() uses the tab lane's core sidecar.command and refuses sends after retire().
 src/main/runtime-log-core.test.ts	tooling	-	Vitest suite: runtime crash log.
 src/main/runtime-log-core.ts	port	1	normalizeRuntimeErrorReport validates renderer reports, appendRuntimeLogAtPath appends structured records, and tailLogLines bounds reads by count and bytes.
