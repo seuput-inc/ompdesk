@@ -297,7 +297,7 @@ src/main/tailscale/tailnet.ts	port	Delegates status/whois to Rust but recreates 
 src/main/tailscale/test-fake-tailscale.ts	exception	Test substitute CLI models status, serve configuration and relay responses.
 src/main/tailscale/whois.ts	exception	Declares the TailnetPeer whois response type only.
 src/main/terminal/agent-tool.test.ts	exception	Test coverage for terminal listing and snapshot selection.
-src/main/terminal/agent-tool.ts	port	Selects a terminal snapshot, strips overwritten text and formats a bounded tail for gui_terminal_read.
+src/main/terminal/agent-tool.ts	port	Remote-web batch: formatTerminalRead selects and formats the requested tail at the source of terminal.request. A separate formatter would send whole snapshots back over the wire. Stock still needs the read-only tool definition.
 src/main/terminal/ipc.ts	port	Remote-web batch with terminal:request and host-services (§1.3c). The host checks the tab owner and applies the viewer lease before it enqueues the PTY request. Pool release clears that owner's leases and disposes its terminals.
 src/main/terminal/lease.test.ts	exception	Test coverage for terminal viewer lease arbitration.
 src/main/terminal/lease.ts	port	Remote-web batch with terminal/ipc.ts (§1.3c). A resize reads the lease or a claim changes it in the same tick as the PTY request. Pool release forgets the owner's leases. No separate lease RPC.
