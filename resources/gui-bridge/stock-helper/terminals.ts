@@ -76,6 +76,14 @@ export const methods: HelperMethods = {
 	},
 	"terminal.dispose": async (params, frame) => {
 		const { owner } = params as { owner: string };
+		// Join the same startup as an earlier create, or a close during the first import leaves that PTY running.
+		if (starting) {
+			try {
+				await starting;
+			} catch {
+				return frame({});
+			}
+		}
 		return frame({ forget: service?.dispose(owner) });
 	},
 };

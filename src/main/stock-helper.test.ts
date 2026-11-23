@@ -468,6 +468,16 @@ export class PtySession {
 		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("xx");
 	});
 
+	it("closes a paired tab's first PTY when it is disposed during worker startup", async () => {
+		const owner = "peer:fixture:tab";
+		await Promise.all([
+			request({ action: "create", cols: 80, rows: 24 }, owner),
+			helper.request("terminal.dispose", { owner }),
+		]);
+		expect(await request({ action: "list" }, owner)).toEqual([]);
+		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("x");
+	});
+
 	it("reads each viewer's UTF-16 budget across worker replies, restarts, clears and retention cuts", async () => {
 		const [{ id }] = await request({ action: "create", cols: 80, rows: 24 });
 		const list = (from: number, budget: number) => request({ action: "list", offsets: { [id]: from }, budget });
