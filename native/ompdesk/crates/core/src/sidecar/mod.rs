@@ -508,6 +508,17 @@ struct GuiBridgeParams {
 enum GuiBridgeCommand {
     GetAdvisorStats,
     RegenerateSessionTitle,
+    AbortMaintenance,
+    GetForceTool,
+    GetContextReport,
+    PreviewShareSession,
+    GetCopyTargets,
+    GetLastLink,
+    GetSettingsSchema,
+    GetModelRoleMetadata,
+    GetModelSetupFacts,
+    GetSessionSpend,
+    GetRecentModels,
 }
 
 impl From<GuiBridgeParams> for BridgeParams {
@@ -518,6 +529,17 @@ impl From<GuiBridgeParams> for BridgeParams {
                 Some(RawValue::from_string("{}".into()).expect("empty JSON object")),
             ),
             GuiBridgeCommand::RegenerateSessionTitle => ("regenerate_title", None),
+            GuiBridgeCommand::AbortMaintenance => ("composer.abort_maintenance", None),
+            GuiBridgeCommand::GetForceTool => ("composer.get_force_tool", None),
+            GuiBridgeCommand::GetContextReport => ("composer.context_report", None),
+            GuiBridgeCommand::PreviewShareSession => ("composer.share_preview", None),
+            GuiBridgeCommand::GetCopyTargets => ("composer.copy_targets", None),
+            GuiBridgeCommand::GetLastLink => ("composer.last_link", None),
+            GuiBridgeCommand::GetSettingsSchema => ("settings_schema", None),
+            GuiBridgeCommand::GetModelRoleMetadata => ("model_role_metadata", None),
+            GuiBridgeCommand::GetModelSetupFacts => ("model_setup_facts", None),
+            GuiBridgeCommand::GetSessionSpend => ("session_spend", None),
+            GuiBridgeCommand::GetRecentModels => ("recent_models", None),
         };
         Self {
             tab: gui.tab,

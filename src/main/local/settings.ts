@@ -121,7 +121,6 @@ export async function cancelBrowserLogin(authorizationUrl: string): Promise<void
 }
 
 export const handlers: Record<string, LocalHandler> = {
-	get_settings_schema: (_command, ctx) => ctx.bridge.request("settings_schema"),
 	get_settings: (command, ctx) => ctx.bridge.request("settings_get", { paths: command.paths }),
 	set_setting: (command, ctx) => ctx.bridge.request("settings_set", { path: command.path, value: command.value }),
 	get_available_models: (command, ctx) =>
@@ -166,13 +165,9 @@ export const handlers: Record<string, LocalHandler> = {
 	get_model_roles: (command, ctx) => ctx.bridge.request("model_roles", { compact: command.compact === true }),
 	set_model_role: (command, ctx) =>
 		ctx.bridge.request("model_role_set", { role: command.role, modelId: command.modelId ?? null }),
-	get_model_role_metadata: (_command, ctx) => ctx.bridge.request("model_role_metadata"),
-	get_model_setup_facts: (_command, ctx) => ctx.bridge.request("model_setup_facts"),
-	get_session_spend: (_command, ctx) => ctx.bridge.request("session_spend"),
 	get_compaction_points: (command, ctx) =>
 		ctx.bridge.request("compaction_points", command.selector === undefined ? {} : { selector: command.selector }),
 	compaction_limits: (command, ctx) => ctx.bridge.request("compaction_limits", command),
-	get_recent_models: (_command, ctx) => ctx.bridge.request("recent_models"),
 	set_output_style: async (command, ctx) =>
 		ctx.bridge.request("output_style_set", { style: z.object({ style: z.string() }).parse(command).style }),
 	// The draft holds stock's idle compaction and idle recap back (gui-bridge idle-maintenance.ts).

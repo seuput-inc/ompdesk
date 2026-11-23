@@ -177,9 +177,6 @@ export const handlers: Record<string, LocalHandler> = {
 	set_ultrafast_mode: async (command, ctx) =>
 		ctx.bridge.request("composer.set_ultrafast", { enabled: ultrafastCommand.parse(command).enabled }),
 
-	// Esc during a manual /compact or handoff (stock's serial queue holds a plain `abort` behind it).
-	abort_maintenance: (_command, ctx) => ctx.bridge.request("composer.abort_maintenance"),
-
 	// Stock `bash` ignores `excluded`; only the context-excluded (`!!`) form needs the session.
 	bash: async (command, ctx) => {
 		const { command: line, excluded } = bashCommand.parse(command);
@@ -245,8 +242,6 @@ export const handlers: Record<string, LocalHandler> = {
 		return ctx.bridge.request("composer.set_force_tool", clear === true ? { clear: true } : { tool });
 	},
 
-	get_force_tool: async (_command, ctx) => ctx.bridge.request("composer.get_force_tool"),
-
 	// Arming is stock /prewalk (its resolution/auth failures print as command output); disarming needs the session.
 	set_prewalk: async (command, ctx) => {
 		const enabled = z.boolean().parse(command.enabled);
@@ -276,8 +271,6 @@ export const handlers: Record<string, LocalHandler> = {
 		};
 	},
 
-	get_context_report: async (_command, ctx) => ctx.bridge.request("composer.context_report"),
-
 	// Context inspector (bridge context-inspect.ts): every entry of the live context with its tokens.
 	get_context_inspect: async (command, ctx) =>
 		ctx.bridge.request("context.inspect", { entries: z.boolean().optional().parse(command.entries) !== false }),
@@ -300,8 +293,6 @@ export const handlers: Record<string, LocalHandler> = {
 
 	cancel_job: async (command, ctx) =>
 		ctx.bridge.request("composer.cancel_job", { id: z.string().min(1).parse(command.jobId) }),
-
-	preview_share_session: async (_command, ctx) => ctx.bridge.request("composer.share_preview"),
 
 	share_session: async (command, ctx) =>
 		ctx.bridge.request("composer.share", { snapshotId: z.string().optional().parse(command.snapshotId) }),

@@ -159,7 +159,7 @@ src/main/local/auto-mode.ts	port	Applies a mode decision by enabling stock plan 
 src/main/local/autopilot.test.ts	exception	Tests read-only ahead/behind counts and refusals for invalid roots and option-like refs.
 src/main/local/autopilot.ts	port	Checks refs before git.autopilotBranchStatus, restricts bridge methods and refuses set_autopilot outside the local window.
 src/main/local/composer.test.ts	exception	Tests merging stock state with bridge extras, fast-mode handling and defaults when the bridge is down.
-src/main/local/composer.ts	port	Merges stock and bridge state with bounded reads, filters reasoning levels, refuses busy context clears and routes composer actions.
+src/main/local/composer.ts	mixed	Rust sidecar.guiBridge forwards maintenance abort, forced tool, context report and share preview. TS still merges stock/bridge state, filters reasoning levels, guards busy context clears and validates parameterized actions.
 src/main/local/copy-targets.test.ts	exception	Tests message and command ranking, fenced quote exclusion and handoff fallback for copy targets.
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
 src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
@@ -212,12 +212,12 @@ src/main/local/prompt-origin.ts	port	Selects person-authored prompt and steer co
 src/main/local/queue.test.ts	exception	Drives edits through the real Rust sidecar, checks chip identity across queue updates, and verifies that direct stock commands still bypass GUI edits.
 src/main/local/session-dump.test.ts	exception	Tests stock archive requests, redaction, removal of non-text entries and cleanup of the original file.
 src/main/local/session-dump.ts	port	Rebuilds a private redacted ZIP, omits binary entries, removes the original and permits deletion only for recorded output paths.
-src/main/local/session-extras.ts	port	Restricts foreign import sources and combines stock session stats with a separate usage-history request.
+src/main/local/session-extras.ts	mixed	Rust sidecar.guiBridge forwards copy targets and last link. TS restricts foreign import sources and combines stock session stats with a separate usage-history request.
 src/main/local/session-files.ts	port	Checks an offline session exists, runs a short-lived stock rename and retries with a default model only on a restore failure.
 src/main/local/sessions.test.ts	exception	Tests paged transcript reads, stale snapshot cursors and retries when a live tail changes.
 src/main/local/sessions.ts	port	Encodes snapshot-bound transcript cursors, caches tails, shrinks oversized backward pages and retries stale uncursored tail reads.
 src/main/local/settings.test.ts	exception	Tests model catalog availability without optional metadata and merging stock and bridge account data.
-src/main/local/settings.ts	port	Merges stock logout accounts and bridge usage data and cancels browser login via a timed loopback callback.
+src/main/local/settings.ts	mixed	Rust sidecar.guiBridge forwards schema, role metadata, setup facts, spend and recent models. TS merges logout accounts and usage data, routes parameterized settings and cancels browser login via a timed loopback callback.
 src/main/local/slash.ts	port	Caches builtin slash names and aliases per bridge and rejects a command not offered by the running stock version.
 src/main/local/subagent-journal-tail.test.ts	exception	Tests reading journal deltas with tail tokens and resetting when a journal is replaced.
 src/main/local/types.ts	exception	Defines stock, bridge and handler contracts plus the coded LocalCommandError wrapper; no independent command implementation.

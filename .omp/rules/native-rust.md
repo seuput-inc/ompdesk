@@ -52,6 +52,8 @@ globs:
 
 ### Ledger
 
+- **Parameterless GUI commands.** `sidecar.guiBridge` on the requesting spawn now translates eleven composer, session and settings actions to their live bridge method with absent params. Main selects the GUI route before raw stock RPC; the extension still reads its own live state. `sidecar/tests.rs` records the prior method and parameter shape for each, and `sidecar.test.ts` exercises normal versus direct-stock dispatch through the actual core.
+
 - **Opening a local file link.** `fs.isLauncherPath` checks the supplied name, then its resolved target and POSIX executable bits on the core's blocking pool. Main awaits that answer before calling the shell to open or reveal the file. A failed core request never opens a file. `open-path.test.ts` exercises the real core, including executable files, symlinks and the fallback when no app handles a document; the Rust table records the previous host's platform-specific name decisions.
 
 - **Mail delivery.** The running mailbox already uses `agentctl::rules::mail::delivery_for` before calling `mail_attached`. Removed the unused production TypeScript copy. `agent-control/mail.ts` supplies only the tool-schema enum and host callback types. `agent-control/service.test.ts` checks deliveries from the core; the stock mail suites check how the receiving bridge handles those frames.
