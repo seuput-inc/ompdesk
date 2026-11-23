@@ -1,5 +1,15 @@
 /** Korean text for backend-provided settings enum labels and descriptions. */
 export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
+	Fallback: "백그라운드 입력 불가 시 전환",
+	Foreground: "포그라운드",
+	"Background first; a call whose background route is unavailable briefly brings the target forward, then returns focus to your app (on macOS even if you kept typing). The agent may also ask for takeover on a call":
+		"먼저 백그라운드로 입력해요. 불가능하면 대상 창을 잠시 앞으로 가져왔다가 사용하던 앱으로 포커스를 돌려줘요(macOS에서는 계속 타이핑 중이어도 마찬가지예요). 에이전트가 개별 호출에서 입력 전환을 요청할 수도 있어요.",
+	"Never take over: a call whose background route is unavailable fails, and the agent's own takeover, raise, activating open, desktop input and macOS menus (context menus, popup and menu buttons; they take your keyboard while open) are refused too":
+		"입력을 전환하지 않아요. 백그라운드 입력이 불가능하면 호출이 실패해요. 에이전트가 직접 입력을 전환하거나 창을 앞으로 가져오거나 활성화해서 여는 동작과 데스크톱 입력도 차단해요. macOS에서는 열려 있는 동안 키보드 입력을 가로채는 컨텍스트 메뉴, 팝업 버튼, 메뉴 버튼도 차단해요.",
+	"omp, never the agent, decides: take over every window and element input call, bringing the target forward for that call and then returning focus to your app":
+		"에이전트가 아니라 omp가 결정해요. 창이나 요소에 입력할 때마다 대상을 앞으로 가져오고, 입력이 끝나면 사용하던 앱으로 포커스를 돌려줘요.",
+	"omp, never the agent, decides: take over input to a window already in front of you, and a call whose background route is unavailable; stay in the background otherwise":
+		"에이전트가 아니라 omp가 결정해요. 대상 창이 이미 맨 앞에 있거나 백그라운드 입력이 불가능할 때만 입력을 전환해요. 그 밖에는 백그라운드로 입력해요.",
 	"All Commands": "모든 명령",
 	"Binary Ninja": "Binary Ninja",
 	"Binary Ninja via its headless Python API (needs a headless-capable licence); never chosen by Auto; analysis disabled when no install is found":

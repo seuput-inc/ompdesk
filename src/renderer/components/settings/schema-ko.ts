@@ -84,6 +84,10 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		description:
 			"일시정지된 프로바이더의 로그인·토큰 갱신·저장된 인증 정보를 다시 사용해요. 각 중지 사유에 표시된 계정 위험을 수락하는 설정이에요. 프로젝트 설정으로는 켤 수 없어요.",
 	},
+	"todo.backend": {
+		label: "할 일 목록 연동",
+		description: "할 일 목록을 복사할 확장 기능을 선택해요. 네이티브를 선택하면 목록을 세션 안에만 보관해요.",
+	},
 	"todo.midRunNudges": {
 		label: "작업 중 할 일 알림",
 		description: "긴 턴에서 수정이나 명령을 계속 실행하는 동안 할 일 목록 갱신을 얼마나 자주 알릴지 정해요.",
@@ -1056,6 +1060,11 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	"computer.enabled": {
 		label: "데스크톱 제어",
 		description: "스크립트로 호스트 데스크톱을 다루는 eval 프렐류드(스크린샷, 입력, 접근성)를 사용해요",
+	},
+	"computer.takeover": {
+		label: "데스크톱 입력 전환",
+		description:
+			"창에 백그라운드로 입력하는 대신 실제 포인터와 키보드를 사용할 때를 정해요. Esc 키를 누르면 제어가 멈춰요.",
 	},
 	"computer.display": {
 		label: "데스크톱 제어 디스플레이",
