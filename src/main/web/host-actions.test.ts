@@ -27,7 +27,7 @@ function rig(cwd: string | null = null) {
 	const spies = {
 		openPath: vi.fn(async () => {}),
 		reveal: vi.fn(),
-		openExternal: vi.fn(async () => {}),
+		openPageExternal: vi.fn(async () => {}),
 		setUiPrefs: vi.fn(() => true),
 		modelsRead: vi.fn(() => ({ path: "/agent/models.yml", text: "providers: {}\n", exists: true, stamp: "s1" })),
 		modelsWrite: vi.fn(async (_text: string, _stamp: string) => "s2"),
@@ -39,7 +39,7 @@ function rig(cwd: string | null = null) {
 		cwdFor: () => cwd,
 		openPath: spies.openPath,
 		reveal: spies.reveal,
-		openExternal: spies.openExternal,
+		openPageExternal: spies.openPageExternal,
 		models: { read: spies.modelsRead, write: spies.modelsWrite },
 		homedir: () => home,
 	});
@@ -220,12 +220,16 @@ describe("the host's screen", () => {
 		expect(openPath).toHaveBeenCalledTimes(1);
 	});
 
-	it("opens only web pages and mail drafts in the host's browser", async () => {
-		const { call, openExternal } = rig();
+	it("routes page links through the page-only shell command", async () => {
+		const { call, openPageExternal } = rig();
 		await call(WEB_HOST_CHANNELS.OPEN_EXTERNAL, { url: "https://example.com/a" });
 		await call(WEB_HOST_CHANNELS.OPEN_EXTERNAL, { url: "file:///etc/passwd" });
 		await call(WEB_HOST_CHANNELS.OPEN_EXTERNAL, { url: "javascript:alert(1)" });
-		expect(openExternal.mock.calls).toEqual([["https://example.com/a"]]);
+		expect(openPageExternal.mock.calls).toEqual([
+			["https://example.com/a"],
+			["file:///etc/passwd"],
+			["javascript:alert(1)"],
+		]);
 	});
 });
 

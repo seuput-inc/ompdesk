@@ -1,61 +1,39 @@
-import { Notification } from "electron";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { appNotification, holdTestNotifications } from "./app-icon";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 
-// What reached the OS: the fake Notification below records each real `show`.
-const os = vi.hoisted(() => ({ posted: [] as string[] }));
-
-vi.mock("electron", () => {
-	class Notification {
-		constructor(readonly options: { title: string; icon?: string }) {}
-		get title(): string {
-			return this.options.title;
-		}
-		show(): void {
-			os.posted.push(this.options.title);
-		}
-	}
-	return { app: { isPackaged: false }, Notification };
+let fixture: ShellPolicyFixture;
+beforeAll(prepareShellPolicyFixture, 180_000);
+beforeAll(async () => {
+	fixture = await shellPolicyFixture();
+});
+afterAll(async () => {
+	await fixture?.close();
 });
 
-const realShow = Notification.prototype.show;
+const resources = join("installation", "resources");
+const rendererRoot = join("pinned", "out", "renderer");
 
-describe("notifications of a test launch", () => {
-	afterEach(() => {
-		Notification.prototype.show = realShow;
-		os.posted.length = 0;
-		vi.unstubAllEnvs();
+function appIcon(packaged: boolean, windows: boolean, headless?: string) {
+	return fixture.call("appIcon", { resources, rendererRoot, packaged, windows, headless });
+}
+
+describe("the shell's app icon", () => {
+	it("uses the packaged resource and defaults Windows toasts to it", async () => {
+		expect(await appIcon(true, true)).toEqual({ path: join(resources, "app-icon.png"), notifications: "appIcon" });
 	});
 
-	// macOS files an unpackaged run's notification under node_modules' Electron.app (com.github.Electron), so
-	// it reached the user's Notification Center wearing the Electron logo: "Autopilot ended" from
-	// autopilot-cycles.e2e.ts and "From PC-B" from agent-control-across.e2e.ts, read from this Mac's
-	// usernoted database on 21 Oct 2026.
-	it("posts nothing to the OS (OMP_GUI_HEADLESS)", () => {
-		vi.stubEnv("OMP_GUI_HEADLESS", "1");
-		holdTestNotifications();
-		appNotification({ title: "Autopilot ended" }).show();
-		expect(os.posted).toEqual([]);
+	it("uses the running dev bundle's icon and leaves the system toast icon alone off Windows", async () => {
+		expect(await appIcon(false, false, "0")).toEqual({
+			path: join("pinned", "resources", "brand", "app-icon.png"),
+			notifications: "systemIcon",
+		});
 	});
 
-	it("still lets a spec see each notification through Notification.prototype.show", () => {
-		vi.stubEnv("OMP_GUI_HEADLESS", "1");
-		holdTestNotifications();
-		const seen: string[] = [];
-		const held = Notification.prototype.show;
-		Notification.prototype.show = function (this: Electron.Notification) {
-			seen.push(this.title);
-			return held.call(this);
-		};
-		appNotification({ title: "From PC-B" }).show();
-		expect(seen).toEqual(["From PC-B"]);
-		expect(os.posted).toEqual([]);
-	});
-
-	it("leaves a launch that is no test alone", () => {
-		vi.stubEnv("OMP_GUI_HEADLESS", "");
-		holdTestNotifications();
-		appNotification({ title: "Done" }).show();
-		expect(os.posted).toEqual(["Done"]);
+	it.each([true, false])("suppresses headless notifications regardless of the OS (Windows: %s)", async windows => {
+		expect(await appIcon(false, windows, "1")).toEqual({
+			path: join("pinned", "resources", "brand", "app-icon.png"),
+			notifications: "off",
+		});
 	});
 });

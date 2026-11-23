@@ -45,6 +45,7 @@ const FACTS: HostFacts = {
 	},
 	exe: "C:/app/OMPdesk.exe",
 	resourcesPath: "C:/app/resources",
+	appIcon: { path: "C:/app/resources/app-icon.png", notifications: "appIcon" },
 	// A path of the machine the test runs on: loadFile resolves against it, as against a real app folder.
 	appPath: join(tmpdir(), "ompdesk-app", "resources", "app"),
 	isPackaged: true,
@@ -95,6 +96,8 @@ function fakeShell(shell: ShellClient) {
 	>();
 	const methods = [
 		"app.init",
+		"app.startLaunchProtection",
+		"app.launchEvent",
 		"app.exit",
 		"app.setAsDefaultProtocolClient",
 		"app.getGPUInfo",
@@ -111,6 +114,7 @@ function fakeShell(shell: ShellClient) {
 		"dialog.messageBox",
 		"clipboard.readText",
 		"clipboard.writeText",
+		"clipboard.writePassword",
 		"net.fetch",
 		"shell.openPath",
 		"theme.setSource",
@@ -202,6 +206,25 @@ describe("app", () => {
 		commandLine.appendSwitch("blink-settings", "foo=1,dnsPrefetchingEnabled=false");
 		commandLine.appendSwitch("disable-renderer-backgrounding");
 		expect(commandLine.getSwitchValue("blink-settings")).toBe("foo=1,dnsPrefetchingEnabled=false");
+	});
+
+	it("waits for launch history and the GPU decision before sending the pre-ready flags", async () => {
+		const { app } = electron;
+		const saved = Promise.withResolvers<{ software: boolean }>();
+		fake.answers.set("app.startLaunchProtection", () => saved.promise);
+		app.commandLine.appendSwitch("enable-gpu");
+		const start = app.startLaunchProtection(true);
+		await settle();
+		expect(fake.callsOf("app.startLaunchProtection")[0]?.params).toEqual({
+			primary: true,
+			enableGpu: true,
+			disableGpu: false,
+		});
+		expect(fake.callsOf("app.init")).toHaveLength(0);
+		saved.resolve({ software: true });
+		await start;
+		await settle();
+		expect(fake.callsOf("app.init")[0]?.params.disableHardwareAcceleration).toBe(true);
 	});
 
 	it("sends one app.init after main's top level, with its switches, schemes and flags; ready follows the shell's event", async () => {
@@ -312,6 +335,27 @@ describe("the quit sequence", () => {
 	beforeEach(async () => {
 		await boot();
 		await ready();
+	});
+
+	it("finishes the stable write between the will-quit listeners on either side of it", async () => {
+		const { app } = electron;
+		const saved = Promise.withResolvers<void>();
+		const order: string[] = [];
+		fake.answers.set("app.launchEvent", ({ op }) => {
+			order.push(String(op));
+			return saved.promise;
+		});
+		app.once("will-quit", () => order.push("earlier"));
+		app.stabilizeOnCleanQuit();
+		app.once("will-quit", () => order.push("later"));
+		app.quit();
+		await settle();
+		expect(order).toEqual(["earlier", "stable"]);
+		expect(exited).toEqual([]);
+		saved.resolve();
+		await settle();
+		expect(order).toEqual(["earlier", "stable", "later"]);
+		expect(exited).toEqual([0]);
 	});
 
 	it("runs before-quit, closes the windows, will-quit and quit, then exits", async () => {
@@ -1565,6 +1609,14 @@ describe("menus, dialogs and the small modules", () => {
 		expect(await shellModule.openPath("C:/x")).toBe("");
 	});
 
+	it("waits for the password clipboard write and reports a refused write", async () => {
+		fake.answers.set("clipboard.writePassword", () => {
+			throw new Error("clipboard unavailable");
+		});
+		await expect(electron.clipboard.writePassword("fixture-password")).rejects.toThrow("clipboard unavailable");
+		expect(fake.callsOf("clipboard.writePassword").map(call => call.params)).toEqual([{ text: "fixture-password" }]);
+	});
+
 	it("a message box whose signal aborts is closed by the shell and resolves to the shell's cancelled answer", async () => {
 		const { dialog, BrowserWindow } = electron;
 		const win = new BrowserWindow({});
@@ -1727,6 +1779,33 @@ describe("menus, dialogs and the small modules", () => {
 		expect(() => image.toJPEG(80)).toThrow(/encodeImage/);
 		expect(nativeImage.createFromPath("C:/no/such.png").isEmpty()).toBe(true);
 		expect(nativeImage.createFromDataURL("data:text/plain,hi").isEmpty()).toBe(true);
+	});
+});
+
+describe("notification defaults from the shell", () => {
+	it.each(["off", "systemIcon", "appIcon"] as const)("shows notifications with policy %s", async notifications => {
+		await boot({ ...FACTS, appIcon: { ...FACTS.appIcon, notifications } });
+		await ready();
+		const { Notification } = electron;
+		const show = vi.spyOn(Notification.prototype, "show");
+		new Notification({ title: "From PC-B" }).show();
+		new Notification({ title: "Autopilot ended", icon: "custom.png" }).show();
+		await settle();
+		expect(show).toHaveBeenCalledTimes(2);
+		const shown = fake.callsOf("notification.show").map(call => call.params);
+		expect(shown).toEqual(
+			notifications === "off"
+				? []
+				: [
+						{
+							id: 1,
+							title: "From PC-B",
+							body: "",
+							...(notifications === "appIcon" ? { icon: FACTS.appIcon.path } : {}),
+						},
+						{ id: 2, title: "Autopilot ended", body: "", icon: "custom.png" },
+					],
+		);
 	});
 });
 

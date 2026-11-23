@@ -3,15 +3,17 @@
 
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{GlobalFree, HANDLE};
+use windows_sys::Win32::Foundation::{GlobalFree, HANDLE, HWND};
 use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-    SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardOwner,
+    GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{
     GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
 };
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
+
+use crate::clipboard_password::PasswordCopy;
 
 const OPEN_ATTEMPTS: u32 = 20;
 const OPEN_PAUSE: Duration = Duration::from_millis(10);
@@ -20,11 +22,11 @@ const OPEN_PAUSE: Duration = Duration::from_millis(10);
 struct Open;
 
 impl Open {
-    fn new() -> Result<Self, String> {
+    fn new(owner: HWND) -> Result<Self, String> {
         let mut last = String::new();
         for attempt in 0..OPEN_ATTEMPTS {
-            // SAFETY: a null owner window opens the clipboard for the current task.
-            if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
+            // SAFETY: the caller supplies a live shell window or null for this task.
+            if unsafe { OpenClipboard(owner) } != 0 {
                 return Ok(Self);
             }
             last = std::io::Error::last_os_error().to_string();
@@ -45,7 +47,7 @@ impl Drop for Open {
 
 /// The clipboard's text, `""` when it holds none.
 pub fn read_text() -> Result<String, String> {
-    let _open = Open::new()?;
+    let _open = Open::new(std::ptr::null_mut())?;
     // SAFETY: a plain format query.
     if unsafe { IsClipboardFormatAvailable(u32::from(CF_UNICODETEXT)) } == 0 {
         return Ok(String::new());
@@ -80,9 +82,13 @@ pub fn read_text() -> Result<String, String> {
 
 /// Replaces the clipboard's content with `text`.
 pub fn write_text(text: &str) -> Result<(), String> {
+    store_text(text, std::ptr::null_mut())
+}
+
+fn store_text(text: &str, owner: HWND) -> Result<(), String> {
     let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     let bytes = units.len() * 2;
-    let _open = Open::new()?;
+    let _open = Open::new(owner)?;
     // SAFETY: the clipboard is open; EmptyClipboard takes ownership for this task.
     if unsafe { EmptyClipboard() } == 0 {
         return Err(format!(
@@ -115,4 +121,31 @@ pub fn write_text(text: &str) -> Result<(), String> {
         return Err(format!("writing the clipboard: {error}"));
     }
     Ok(())
+}
+
+pub fn write_password(text: &str) -> Result<PasswordCopy, String> {
+    let owner = super::desk::hwnd();
+    if owner.is_null() {
+        return Err("the clipboard owner window is unavailable".into());
+    }
+    store_text(text, owner)?;
+    // SAFETY: query the completed write after CloseClipboard has published every format.
+    let revision = unsafe { GetClipboardSequenceNumber() };
+    Ok(PasswordCopy(i64::from(revision)))
+}
+
+pub fn expire(copy: PasswordCopy) {
+    let Ok(_open) = Open::new(std::ptr::null_mut()) else {
+        return;
+    };
+    // SAFETY: opening excludes other writers through the ownership check and EmptyClipboard.
+    unsafe {
+        let owner = GetClipboardOwner();
+        let revision = GetClipboardSequenceNumber();
+        if !owner.is_null() && owner == super::desk::hwnd() && revision != 0 {
+            copy.expire(i64::from(revision), || {
+                EmptyClipboard();
+            });
+        }
+    }
 }

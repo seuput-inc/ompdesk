@@ -981,7 +981,8 @@ async fn execute(
             let reply = browser
                 .submit_command(method, command_params, Some(&session))
                 .map_err(wire)?;
-            if awaits_cdp_script(params) {
+            // A crashed renderer can leave its reply pending until timeout. Restore needs the FIFO meanwhile.
+            if method == "Page.crash" || awaits_cdp_script(params) {
                 return Ok(Execution::Awaiting(Evaluation {
                     reply,
                     identity,

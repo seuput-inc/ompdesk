@@ -14,8 +14,7 @@ src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock 
 src/main/agents-md.test.ts	tooling	-	Vitest suite: AGENTS.md and the area rules.
 src/main/app-auto-update.test.ts	tooling	-	Vitest suite: quietMoment.
 src/main/app-auto-update.ts	port	3	AutoInstallScheduler owns idle/card/compaction gating, countdown and automatic restart timing from injected app/session facts.
-src/main/app-icon.test.ts	tooling	-	Vitest suite: notifications of a test launch.
-src/main/app-icon.ts	port	4	appIconPath and appNotification choose packaged/dev icon and construct Electron notifications; holdTestNotifications suppresses test toasts.
+src/main/app-icon.test.ts	tooling	-	Vitest checks packaged/development icon paths and notification defaults against the shell's Rust launch fact.
 src/main/app-quit-failure.test.ts	tooling	-	Vitest suite: exits with failure when the last core stop cannot establish that its processes ended.
 src/main/app-quit.test.ts	tooling	-	Vitest suite: who asked to quit, in gui-runtime.jsonl.
 src/main/app-quit.ts	port	4	installQuitGuard and requestQuit arbitrate Electron before-quit, dialogs, approved restarts, watchdog and exit reporting.
@@ -54,7 +53,7 @@ src/main/autopilot.ts	native-client	3	Autopilot opens the run via autopilot.open
 src/main/background-work.test.ts	tooling	-	Vitest suite: summarizeJobRows.
 src/main/background-work.ts	port	3	askBackgroundWork queries member bridges under deadline and aggregates named subagents, jobs and unknown sessions for restart confirmation.
 src/main/benchmark-runner.test.ts	tooling	-	Vitest suite: benchmark runner contract.
-src/main/benchmark-runner.ts	port	2	Shell launch batch, §1.3a,c: MachineServices reads running and aborts per caller synchronously. resolveOmp also accepts versioned OMP_GUI_OMP wrappers without a package manifest (test-fake-omp.ts). Running a guessed package entry bypasses wrapper behavior; do not route model arguments through a new general-purpose shell RPC.
+src/main/benchmark-runner.ts	port	2	MachineServices reads running and aborts synchronously (§1.3a,c). Run the selected launcher: an explicit Windows .cmd even beside .cmd.exe, or a versioned OMP_GUI_OMP wrapper without a manifest. A guessed entry bypasses the wrapper. The native supervisor must distinguish spawn failure from exit and preserve null exitCode on signals; no general shell RPC.
 src/main/boot-model.test.ts	tooling	-	Vitest suite: recognizes every stock no-model boot failure.
 src/main/boot-model.ts	mixed	2	models.bootSelector caches the installed Bun catalog probe in core. §1.3(a), hub batch: sidecar.ts reads isNoModelBootFailure before choosing its exit plan. Stock's catalog stays in Bun; main supplies its launch environment.
 src/main/bridge-account-credits.test.ts	tooling	-	Vitest suite: account credits from stock's usage limits.
@@ -230,7 +229,7 @@ src/main/desktop-slot-host.ts	mixed	3	Hub batch with lane/IPC removal, §1.3(a,c
 src/main/desktop-slot.test.ts	tooling	-	Vitest suite: DesktopSlot.
 src/main/desktop-slot.ts	native-client	3	DesktopSlot drives hub desktopSlot; core/src/hub/desktop_slot.rs owns FIFO, lease, revoke, retry and generation-specific confirmations. JS retains only the last acknowledged checkpoint and executes effects.
 src/main/diagnostic-bundle.test.ts	tooling	-	Vitest suite: saving through the dialog.
-src/main/diagnostic-bundle.ts	mixed	3	diagnosticBundle.save assembles and publishes the redacted ZIP in core. Main still checks tab ownership and hidden sessions before asking stock for a dump, runs the native dialog and discards the temporary archive on its host. Receiver: shell/peer tab dispatch.
+src/main/diagnostic-bundle.ts	mixed	3	The shell names dialog and Downloads exports; diagnosticBundle.save assembles and publishes the redacted ZIP in core. Main checks tab ownership and hidden sessions, asks stock for the dump, opens the dialog and discards the temporary archive on its host. Receiver: shell/peer tab dispatch.
 src/main/diagnostics.test.ts	tooling	-	Vitest suite: buildDiagnosticsReport.
 src/main/diagnostics.ts	mixed	2	app.diagnosticLog selects probes and folds recent entries across rotation in the shell without starting the core. Main combines live setup, peer and display state and applies the stock extension's shared redactor. Receiver: shell report builder with those state owners (§1.3a,c,d).
 src/main/disk-full-notice.ts	port	3	§1.3: index.ts supplies live window/phone targets, synchronous notification handles and localised text. Move with the shell notification and window routers, not behind a second notification state.
@@ -243,8 +242,7 @@ src/main/event-batcher.ts	port	2	SidecarManager.#dispatchFrame flushes the curre
 src/main/extension-reload.test.ts	tooling	-	Vitest suite: mergeApplyPlans.
 src/main/extension-reload.ts	port	1	§1.3(a,b,c), hub batch: host-services.ts consumes the decision and changes tab.extensionPending before returning its apply count. sidecar-pool.ts and ext-update/updater.ts use the same merge. No independent I/O; move with hosted tab state.
 src/main/extension-specs.test.ts	tooling	-	Vitest suite: isPinnedNpmSpec.
-src/main/external-url.test.ts	tooling	-	Vitest suite: isOpenableExternalUrl.
-src/main/external-url.ts	port	1	Shell batch, §1.3(a,b): ipc.ts and web/host-actions.ts check the page URL immediately before OS dispatch. Move the allowlist into the page-only open command, not a standalone validation RPC; keep general shell.openExternal available to trusted native callers.
+src/main/external-url.test.ts	tooling	-	Vitest exercises the Rust page-link allow-list before the platform opener.
 src/main/fenced-fs.ts	port	1	fs proxies Node promise filesystem methods through fencedEffect so a stopped serial-chain step cannot issue later operations.
 src/main/frame-bookkeeping.test.ts	tooling	-	Vitest suite: withoutFrameBookkeeping.
 src/main/frame-bookkeeping.ts	port	1	withoutFrameBookkeeping removes redundant turn_end payload and assistant request bookkeeping before live frames reach clients.
@@ -253,15 +251,14 @@ src/main/gh-guard-stock.test.ts	tooling	-	Vitest suite: serves a finished attemp
 src/main/gh-guard.test.ts	tooling	-	Vitest suite: what a gh command costs.
 src/main/git-fingerprints.test.ts	tooling	-	Vitest suite: GitFingerprints.
 src/main/git-fingerprints.ts	mixed	2	git.watchedFingerprint owns recursive watches and concurrent sample reuse on macOS and Windows. Main still supplies the runner and serves get_git_fingerprint; no non-Node panel caller yet.
-src/main/gpu-fallback-core.ts	port	1	gpuMarkerDecision, gpuChange and markerForTrial determine software fallback and hardware retrial from persisted GPU identity and age.
 src/main/gpu-fallback-loop.test.ts	tooling	-	Vitest suite: GPU crash relaunch.
 src/main/gpu-fallback.test.ts	tooling	-	Vitest suite: isGpuProcessCrash.
-src/main/gpu-fallback.ts	mixed	4	applyGpuFallbackIfNeeded and handleGpuProcessGone manage the marker, flags and relaunch; tauri-shell/src/gpu.rs supplies app.getGPUInfo and process_failed.rs emits app.childProcessGone.
-src/main/hang-watchdog.test.ts	tooling	-	Vitest suite: reportPreviousHang.
-src/main/hang-watchdog.ts	mixed	4	Posts Node heartbeat, step and lifecycle signals to app.watchdog and formats the previous stall for the runtime log. The Tauri watchdog writes and consumes its own marker.
+src/main/gpu-fallback.ts	mixed	4	The shell owns markers, trial, cooldown and crash-loop decisions. Node logs the decision, issues its relaunch/exit sequence and samples the compositor for callers; move these with process and window ownership.
+src/main/hang-watchdog.test.ts	tooling	-	Vitest consumes an actual marker through the Rust watchdog and checks both JSONL records.
+src/main/hang-watchdog.ts	mixed	4	The Tauri watchdog owns marker I/O and report formatting. The observed Node event loop must send its own heartbeat, synchronous markMainStep and lifecycle signals until index.ts and app-quit.ts move (§1.3c).
 src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
-src/main/i18n-text.ts	port	1	MAIN_TEXT holds the bilingual menu, dialog and failure-message table consumed by main.
-src/main/i18n.ts	port	1	getMainLanguage chooses the stored language or app locale; mainT interpolates MAIN_TEXT and ompFailureText maps runtime failures to messages.
+src/main/i18n-text.ts	port	1	mainT, notification-batch and web-push-notifier format messages directly from MAIN_TEXT. Move the catalog with its last formatter, not one RPC per label.
+src/main/i18n.ts	port	1	menu.createMenu and WindowManager.createWindow consume getMainLanguage, mainT and editLabels synchronously; move with menu, dialog and prefs ownership. Keep shared uiLanguageFromLocale and fillText.
 src/main/idle-release.test.ts	tooling	-	Vitest suite: memoryShort.
 src/main/idle-release.ts	port	3	IdleRelease tracks quiet time and uses the native snapshot’s idle facts to select a quiet tab to release under memory pressure; does not perform the release.
 src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup and session services; routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
@@ -270,9 +267,7 @@ src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path 
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
 src/main/installer-spawn.ts	port	1	Shell updater batch, §1.3c: NsisUpdater holds the verified download and elevation decision in its own process and OmpNsisUpdater orders quit after the installer starts. Move that verified handoff with the updater; do not expose detached execution of an arbitrary path through core RPC.
 src/main/ipc.ts	mixed	4	registerIpcHandlers still routes session commands and renderer events. Desktop runtime:log-path and runtime:log-tail bypass Node; paired requests use the same Tauri reader after the workspace permission check. Clipboard and image conversion already use the shell and stock worker.
-src/main/launch-guard-core.ts	port	1	parseLaunchHistory, crashLoopDetected and gpuRelaunchDecision implement launch-history and relaunch cooldown policy.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
-src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain launch-history.json and safe-mode state; noteGpuRelaunch records cross-process cooldown.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
 src/main/launch-profile-store.test.ts	tooling	-	Vitest suite: launch profile store.
 src/main/launch-profile-store.ts	port	2	§1.3(a,c), shell batch: local IPC and remote host-services synchronously patch one SafeStore launchProfiles map; index.ts supplies that same map to the sidecar's spawn-time flags. Move with the prefs owner to preserve atomic per-workspace patches.
@@ -293,7 +288,7 @@ src/main/machine-state.ts	port	2	§1.3a,c: MachineState.sample returns main's CP
 src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
 src/main/mail-accounts.ts	mixed	2	The native email source asks pollAccount for connection settings; the Settings test calls routines.readMailbox. Main still reads account state and keystore availability synchronously (§1.3c). Receiver: shell keystore and account-state owner.
 src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
-src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
+src/main/main-failures.ts	port	4	Node's uncaughtExceptionMonitor and uncaughtException inspect the same exception, log its stack and return or call process.exit(1) synchronously. Move with Node process lifetime, not an RPC to the core after its shutdown.
 src/main/mcp-hub-lifetime.test.ts	tooling	-	Checks actual child priority, crash recovery with the old tab binding, endpoint contention and shutdown.
 src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.
 src/main/mcp-hub.ts	mixed	2	mcpHub.env/stop start and supervise the child in Rust. The app retains only the authenticated binding already injected into running omps, so a replacement core can serve those tabs. Receiver: shell launch owner; never persist or log that binding.
@@ -329,7 +324,7 @@ src/main/native-labels.test.ts	tooling	-	Vitest suite: native menu roles.
 src/main/notification-batch.test.ts	tooling	-	Vitest suite: NotificationBatcher.
 src/main/notification-batch.ts	port	2	The first notice immediately returns a closable window notification; retract, dropWindow and will-quit cancel the same live batch. Desktop IPC and WebPushNotifier share it. Move with those notification sinks, not an asynchronous timer RPC per notice (§1.3a,c).
 src/main/notify-triage.test.ts	tooling	-	Vitest suite: a completion the judge says waits for the person.
-src/main/notify-triage.ts	port	3	Shell batch with SYSTEM_NOTIFY (§1.3c). The handler deduplicates a shared tab's notice before asking the judge and reads window focus again after the answer. No separate triage RPC.
+src/main/notify-triage.ts	mixed	3	The shell owns repeat admission and the judge deadline. §1.3(a,c): the window's local bridge is a live capability; its focus must be read after the judge result with no yield before enqueueing the notice.
 src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
 src/main/nsis-updater.ts	port	4	OmpNsisUpdater customizes electron-updater's download session and delays quitAndInstall teardown until the detached installer spawn resolves.
 src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
@@ -364,14 +359,14 @@ src/main/process-alive.ts	port	1	processAlive uses signal zero and treats EPERM 
 src/main/quit-guard.test.ts	tooling	-	Vitest suite: quit guard risk assessment.
 src/main/quit-guard.ts	port	3	assessQuitRisk aggregates tab work; lastWindowCloseAction, updateRestartConfirmation and QuitLatch decide close, approval and restart behavior.
 src/main/quit-log.test.ts	tooling	-	Vitest suite: app-quit lines.
-src/main/quit-log.ts	port	1	quitAskedReport and exitReport produce structured end-of-run records; uncleanEndReport identifies a prior run without an end line.
+src/main/quit-log.ts	mixed	1	The shell reads and classifies the previous log tail (app.previousRunEnd). app-quit writes quitAskedReport before app.quit(); endMain uses exitReport even after the shell disconnects. Move those with the exit events and their writer.
 src/main/quit-watchdog.test.ts	tooling	-	Vitest suite: quit watchdog.
-src/main/quit-watchdog.ts	port	2	QuitWatchdog arms or cancels the bounded forced-exit timer after a committed quit or update, reporting its reason before exit.
+src/main/quit-watchdog.ts	port	2	installQuitGuard arms after teardown starts; updater error handlers disarm in the same tick. Expiry runs the staged swap hook before app.exit(0). Move with quit approval, update cancellation and force-exit hooks.
 src/main/quota-reset-stock.test.ts	tooling	-	Vitest suite: never waits for a failure stock calls a billing cap, and waits for the limits stock lets pass with time.
 src/main/raw-imports.d.ts	tooling	-	Ambient declarations type Vite *.md?raw and *.png?inline imports in the main bundle; no runtime implementation.
 src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credentials.
 src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recovery.
-src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesChanged and shouldRestartForChangedResources decide recovery from process failure or changed app resources; hangRestartNotifies rate-limits notices.
+src/main/renderer-recovery.ts	port	1	WindowManager consumes and clears endedForHang and advances the window's recovery timestamp before reloading. It owns timer cancellation, the resource identity check and the one restart dialog; move with that window state.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
 src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
 src/main/retired-prefs.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore migrates the in-memory SafeStore before returning it or reading themes. Port with prefs initialization so readers cannot see retired keys or stale schedule preferences during a migration.
@@ -418,6 +413,7 @@ src/main/settle-watch.test.ts	tooling	-	Vitest suite: settle watch.
 src/main/settle-watch.ts	port	2	SettleWatch arms a diagnostic timer and samples get_state when a tab remains settling.
 src/main/shell-env.test.ts	tooling	-	Vitest suite: resolveLoginShellEnv.
 src/main/shell-env.ts	port	2	resolveLoginShellEnv caches shell exports; shellSpawnEnv/spawnPath resolve the launch environment for GUI child processes.
+src/main/shell-policy-test-rig.ts	tooling	-	Vitest drives the Rust shell policies in a test-only process without starting a WebView.
 src/main/sidebar-layout.ts	port	1	SidebarLayoutScope restricts project and session reorders to sender-visible entries without displacing hidden slots.
 src/main/sidebar-prefs.test.ts	tooling	-	Vitest suite: updateSidebarPrefs.
 src/main/sidebar-prefs.ts	port	2	updateSidebarPrefs applies individual validated sidebar changes to current storage; moveSidebarPin updates pinned identities.
@@ -463,7 +459,7 @@ src/main/subagent-frames.test.ts	tooling	-	Vitest suite: createSubagentFrameBatc
 src/main/subagent-frames.ts	port	1	slimSubagentFrame and createSubagentFrameBatcher shrink streaming frames and coalesce visible-tab IPC deliveries.
 src/main/supply-chain.test.ts	tooling	-	Vitest suite: supply chain.
 src/main/system-languages.test.ts	tooling	-	Vitest suite: system languages.
-src/main/system-languages.ts	port	4	acceptLanguages, seedSpellchecker and applyAcceptLanguages apply system language ordering and spellchecker policy through the Electron-compatible session API on the Tauri host.
+src/main/system-languages.ts	port	4	preview/host.sessionsOf sets the partition's UA, Accept-Language and dictionary before returning it. Startup seeds the default session too; move with session creation and its UA/dictionary snapshot.
 src/main/system-version.test.ts	tooling	-	Vitest suite: systemVersion.
 src/main/system-version.ts	port	1	systemVersion maps OS kernel release to display version; shellEngine derives the shell label from runtime versions.
 src/main/tab-layout.test.ts	tooling	-	Vitest suite: persisted tab layout.
@@ -491,7 +487,7 @@ src/main/test-turn-edits-omp.ts	tooling	-	Stand-in omp serves a synthetic transc
 src/main/tls-test-rig.ts	tooling	-	testCertificates signs a loopback server certificate with a temporary test authority.
 src/main/tool-approval-stock.test.ts	tooling	-	Vitest suite: reads every approval select stock sends over RPC, and each option means what the card says.
 src/main/tray-labels.test.ts	tooling	-	Vitest suite: tray menu.
-src/main/tray-labels.ts	port	1	trayMenuTemplate, aggregateTrayStatus and menuSignature derive tray labels, progress and menu rebuild decisions.
+src/main/tray-labels.ts	port	1	tray.refreshMenu reads the live updater status, visibility, menuIsOpen and installedSignature before binding click actions. Move with tray/menu state and action ownership.
 src/main/tray.ts	port	4	createTray/setTrayState/destroyTray own the Electron tray handle, menu installation and window/app actions.
 src/main/turn-resume-ends.test.ts	tooling	-	Vitest suite: the end table and formal/turn-resume name the same rows and checks.
 src/main/turn-resume-ends.ts	tooling	-	HOLD_CHECKS/HOLD_ENDS expose core/src/resume/hold-ends.json for parity tests; core/src/resume/ends.rs makes the runtime decision.
@@ -522,11 +518,11 @@ src/main/updater-state.test.ts	tooling	-	Vitest suite: update repository access.
 src/main/updater-state.ts	port	2	stageBundleFromDmg, SWAP_SCRIPT and settleFailedUpdateCheck implement installer staging, replacement and status transitions.
 src/main/updater.ts	port	4	checkForUpdate/downloadUpdate/restartIntoUpdate orchestrate electron-updater, Electron networking, platform installers, app quit and relaunch.
 src/main/window-chrome.test.ts	tooling	-	Vitest suite: windowChromeOptions.
-src/main/window-chrome.ts	port	1	windowChromeOptions selects platform caption layout; sanitizeChromeColors and nativeThemeSource normalize renderer theme inputs.
+src/main/window-chrome.ts	port	1	WindowManager.createWindow consumes chrome options and sends the same Mica decision to the renderer. WINDOW_CHROME_SET validates unknown input before setTitleBarOverlay. Move with window creation and trusted IPC dispatch.
 src/main/window-show.test.ts	tooling	-	Vitest suite: showOnFirstPaint.
 src/main/window-show.ts	port	4	showOnFirstPaint races window ready-to-show with content load to reveal a hidden Electron window.
 src/main/window-spawn-target.test.ts	tooling	-	Vitest suite: resolveWindowSpawnTarget.
-src/main/window-spawn-target.ts	port	1	resolveWindowSpawnTarget chooses idle placeholder versus a fresh or restored session launch target.
+src/main/window-spawn-target.ts	port	1	After both cwd and workspace lookups, spawnWindow hands the result directly to WindowManager.createWindow and sidecarPool.acquire. The selector owns no I/O; move it with launch orchestration.
 src/main/window.ts	mixed	4	WindowManager creates windows and persists geometry, dialogs, themes and lifetimes. Tauri win.create restores saved bounds using the shell's current display snapshot (tauri-shell/src/window_bounds.rs).
 src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name order.
 src/main/workspace-fs.test.ts	tooling	-	Vitest suite: workspace file reads, MIME detection, confinement and mutations.

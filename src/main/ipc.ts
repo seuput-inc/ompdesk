@@ -12,7 +12,7 @@
 import { existsSync, promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { app, BrowserWindow, dialog, type Notification, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, Notification, screen, shell } from "electron";
 import { AUTO_TITLE_EVOLVE_PREF, AUTO_TITLE_PREF } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { DELEGATION_PREF, isDelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
 import { JUDGE_ASSIST_PREF, judgeAssistEnabled } from "../../resources/gui-bridge/modes/judge-assist-contracts";
@@ -143,7 +143,6 @@ import {
 } from "./agent-browsers";
 import { AgentControlRuntime, CARD_TIMEOUT_MS } from "./agent-control/host";
 import type { AnswerStep } from "./agent-control/target-answer";
-import { appNotification } from "./app-icon";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
@@ -161,7 +160,6 @@ import { deliverOnce } from "./delivery-ledger";
 import { DesktopSlotHost } from "./desktop-slot-host";
 import { savedWorktreesForSpawn } from "./disk/saved-worktrees";
 import { openInExternalEditor } from "./editor";
-import { isOpenableExternalUrl } from "./external-url";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "./launch-profile-store";
@@ -176,7 +174,7 @@ import type { MediaStreams } from "./media-stream";
 import { createMenu } from "./menu";
 import { modelsPath } from "./models-config";
 import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notification-batch";
-import { createNotifyHandler } from "./notify-triage";
+import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
 import { registerPreviewHost } from "./preview/host";
@@ -250,6 +248,8 @@ function agentCaller(win: ClientWindow): IpcCaller {
 }
 
 export interface IpcDeps {
+	openPageExternal(url: string): Promise<void>;
+	admitNotification: AdmitNotification;
 	/** What paired web pages report about unsaved Files edits (WebHost forgets a page's report when it drops). */
 	fileEditReports: FileEditReports;
 	/** Where every handler here registers (index.ts's one table). */
@@ -467,7 +467,7 @@ const notifyBatchedWindows = new Set<number>();
 /** One OS notification; one about a tab switches to it on click. */
 function showNotification(windowId: number, notice: ShownNotice): { close: () => void } {
 	const win = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.id === windowId);
-	const notification = appNotification({ title: notice.title, body: notice.body });
+	const notification = new Notification({ title: notice.title, body: notice.body });
 	const { tabId } = notice;
 	if (win && tabId) {
 		// Held until clicked or dismissed: a collected Notification drops its click.
@@ -1251,7 +1251,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				webPush: (tabId, event) => deps.webTabNotice.current?.(tabId, event),
 				banner: event => {
 					if (prefsStore.get("notifications") !== false)
-						appNotification({ title: event.title, body: event.body }).show();
+						new Notification({ title: event.title, body: event.body }).show();
 				},
 			},
 			host,
@@ -1969,7 +1969,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		node: process.versions.node ?? "?",
 	}));
 	ipc.handle(IPC_COMMANDS.SYSTEM_OPEN_EXTERNAL, async (_caller, url: unknown) => {
-		if (isOpenableExternalUrl(url)) await shell.openExternal(url);
+		if (typeof url === "string") await deps.openPageExternal(url);
 	});
 
 	// Tool-card and reply path links: open in the system editor, or reveal the
@@ -2051,8 +2051,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 	);
 
-	// Repeat filter and the judge triage of a completion (notify-triage.ts); main hands the notice on.
+	// The shell admits one reporter; only main can ask that window's local sidecar and deliver to its batch.
 	const notifyHandler = createNotifyHandler({
+		admit: deps.admitNotification,
 		now: Date.now,
 		isShared: tabId => sidecarPool.isShared(tabId),
 		judgeEnabled: () => judgeAssistEnabled(prefsStore.get(JUDGE_ASSIST_PREF)),
@@ -2062,20 +2063,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 		needsYouTitle: title => mainT("notify.needsInput", undefined, { title }),
 		deliver: (win, winId, notice) => {
-			if (win && !notifyBatchedWindows.has(winId)) {
+			if (win && !win.isDestroyed() && !notifyBatchedWindows.has(winId)) {
 				notifyBatchedWindows.add(winId);
 				win.once("closed", () => {
 					notifyBatchedWindows.delete(winId);
 					notificationBatcher.dropWindow(winId);
 				});
 			}
-			// Bursts fold into one summary (notification-batch.ts).
-			notificationBatcher.notify(winId, {
-				title: notice.title,
-				body: notice.body,
-				tabId: notice.tabId,
-				kind: notice.kind,
-			});
+			notificationBatcher.notify(winId, notice);
 		},
 	});
 	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, (caller, payload: IpcNotifyPayload) => notifyHandler(caller, payload));
@@ -2891,7 +2886,7 @@ function executeGuiHostTool(name: string, args: Record<string, unknown>): string
 		case "gui_notify": {
 			const title = typeof args.title === "string" ? args.title : "Notification";
 			const body = typeof args.body === "string" ? args.body : "";
-			appNotification({ title, body }).show();
+			new Notification({ title, body }).show();
 			return "Notification shown";
 		}
 		case "gui_clipboard_read": {
