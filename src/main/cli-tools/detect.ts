@@ -9,7 +9,7 @@ import { accessSync, constants, existsSync, readFileSync, realpathSync } from "n
 import { dirname, join, win32 } from "node:path";
 import type { CliSkipReason, CliToolId } from "../../shared/cli-update";
 import { isNewer } from "../../shared/version";
-import { bundledAgentDesktop } from "../agent-desktop";
+import { pickAgentDesktop } from "../agent-desktop";
 import { parseOmpVersion } from "../omp-runtime";
 import { managedBinDirs } from "../setup/paths";
 import { brewBinDirs } from "../shell-env";
@@ -221,7 +221,7 @@ export async function detectCliTool(id: CliToolId, deps: DetectDeps): Promise<Cl
 	const { ctx } = deps;
 	const bundled =
 		id === "agent-desktop" && ctx.agentDesktopBundle
-			? bundledAgentDesktop(ctx.agentDesktopBundle, ctx.platform)
+			? await pickAgentDesktop(ctx.platform, ctx.agentDesktopBundle)
 			: null;
 	if (!bundled || (found?.installed && !isNewer(bundled.version, found.installed))) return found;
 	// The managed tools dir may not exist yet: the update creates it under its nearest existing parent.

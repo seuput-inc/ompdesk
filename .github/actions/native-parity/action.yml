@@ -62,6 +62,9 @@ runs:
         src/main/power/lid-backend-windows.test.ts
         src/main/ext-update/mcp.test.ts
         src/main/ext-update/classify.test.ts
+        src/main/agent-desktop.test.ts
+        src/main/setup/detect-agent-desktop.test.ts
+        src/main/cli-tools/detect.test.ts
         src/main/ext-update/running.test.ts
         src/main/ext-update/mcp-owner.test.ts
         src/main/ext-update/mcp-plans.test.ts

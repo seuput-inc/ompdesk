@@ -9,20 +9,13 @@
  * in the managed tools dir (src/main/setup/paths.ts `managedAgentDesktop`). The managed copy runs when its version is
  * at least the bundled one's, so an update is picked up and a stale managed copy never shadows a newer app.
  */
-import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { AGENT_DESKTOP_ENV, COMPUTER_USE_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
 import { parseComputerUseEngine } from "../shared/computer-use";
 import type { SetupPlatform } from "../shared/setup";
-import { isNewer } from "../shared/version";
-import { parseOmpVersion } from "./omp-runtime";
+import { core } from "./core/process";
 import { AGENT_DESKTOP_MIN_VERSION } from "./setup/archives";
 import { managedAgentDesktop } from "./setup/paths";
-
-/** The record `bun run build:agent-desktop` writes beside the bundled binaries (scripts/build-agent-desktop.ts). */
-export const AGENT_DESKTOP_BUILD_RECORD = "agent-desktop.build.json";
 
 /** An agent-desktop OMPdesk can run, and where it came from. */
 export interface AgentDesktopCopy {
@@ -31,60 +24,20 @@ export interface AgentDesktopCopy {
 	version: string;
 }
 
-/**
- * The copy shipped in the app, from its build record. Null when the folder, its record or the executable is missing:
- * a dev run that never ran `bun run build:agent-desktop`, or a damaged install.
- */
-export function bundledAgentDesktop(bundleDir: string, platform: SetupPlatform): AgentDesktopCopy | null {
-	if (platform === "other") return null;
-	const path = join(bundleDir, platform === "win32" ? "agent-desktop.exe" : "agent-desktop");
-	let version: unknown;
-	try {
-		const record: unknown = JSON.parse(readFileSync(join(bundleDir, AGENT_DESKTOP_BUILD_RECORD), "utf8"));
-		version = typeof record === "object" && record !== null && "version" in record ? record.version : undefined;
-	} catch {
-		return null;
-	}
-	if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version) || !existsSync(path)) return null;
-	return { source: "bundled", path, version };
-}
-
-/**
- * Which copy runs: the managed one when it answers a version of at least `AGENT_DESKTOP_MIN_VERSION` and the bundled
- * one's, else the bundled one; null when neither can.
- */
-export function pickAgentDesktop(
-	managed: { path: string; version: string } | null,
-	bundled: AgentDesktopCopy | null,
-): AgentDesktopCopy | null {
-	if (
-		managed &&
-		!isNewer(AGENT_DESKTOP_MIN_VERSION, managed.version) &&
-		(!bundled || !isNewer(bundled.version, managed.version))
-	) {
-		return { source: "managed", ...managed };
-	}
-	return bundled;
-}
-
-/** `--version` of each executable, kept while the file is the same (size, mtime, inode): one run per installed copy. */
-const versions = new Map<string, { identity: string; version: string }>();
-
-/** The version `exe --version` prints; null when it does not exist, fails or prints none. */
-export async function agentDesktopVersion(exe: string): Promise<string | null> {
-	const info = await stat(exe).catch(() => null);
-	if (!info) return null;
-	const identity = `${info.size}:${info.mtimeMs}:${info.ino}`;
-	const known = versions.get(exe);
-	if (known?.identity === identity) return known.version;
-	const { promise, resolve } = Promise.withResolvers<string | null>();
-	execFile(exe, ["--version"], { timeout: 15_000, windowsHide: true }, (error, stdout) =>
-		resolve(error ? null : parseOmpVersion(stdout)),
-	);
-	const version = await promise;
-	// A failure is not kept: a scan holding the file or a slow first start can pass by the next spawn.
-	if (version) versions.set(exe, { identity, version });
-	return version;
+/** The core checks the bundle's build record and chooses the newest usable copy. */
+export async function pickAgentDesktop(
+	platform: "darwin" | "win32",
+	bundleDir: string | undefined,
+	managed?: { path: string; version: string } | { path: string; cwd: string; env: NodeJS.ProcessEnv },
+): Promise<AgentDesktopCopy | null> {
+	return (
+		await core().call<AgentDesktopCopy | null>("setup.pickAgentDesktop", {
+			platform,
+			bundleDir,
+			managed,
+			minimum: AGENT_DESKTOP_MIN_VERSION,
+		})
+	).result;
 }
 
 export interface AgentDesktopSources {
@@ -92,20 +45,17 @@ export interface AgentDesktopSources {
 	/** `<resources>/agent-desktop-bin` (packaged), `resources/agent-desktop-bin/<platform>-<arch>` (dev). */
 	bundleDir: string;
 	platform: SetupPlatform;
-	/** Test seam for the managed copy's `--version`. */
-	version?: (exe: string) => Promise<string | null>;
 }
 
 /** The copy a session started now runs (`pickAgentDesktop` over the managed and the bundled copy). */
 export async function agentDesktopToRun(sources: AgentDesktopSources): Promise<AgentDesktopCopy | null> {
-	const { toolsDir, bundleDir, platform, version = agentDesktopVersion } = sources;
+	const { toolsDir, bundleDir, platform } = sources;
 	if (platform === "other") return null;
-	const exe = managedAgentDesktop(toolsDir, platform);
-	const managedVersion = await version(exe);
-	return pickAgentDesktop(
-		managedVersion ? { path: exe, version: managedVersion } : null,
-		bundledAgentDesktop(bundleDir, platform),
-	);
+	return pickAgentDesktop(platform, bundleDir, {
+		path: managedAgentDesktop(toolsDir, platform),
+		cwd: process.cwd(),
+		env: process.env,
+	});
 }
 
 export interface ComputerUseSpawn {

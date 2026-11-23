@@ -4,7 +4,7 @@ src/main/account-rotation.ts	port	3	Hub batch, §1.3(a,c): index.ts wires one sy
 src/main/agent-browsers.test.ts	tooling	-	Vitest suite: findChromiumBrowsers.
 src/main/agent-browsers.ts	mixed	2	browsers.find/status/installRelay/openExtensions dispatch in crates/core/src/browsers/mod.rs; resolveEgoBrowser, systemBrowserPlaces and the launch cache/reprobe remain in TS.
 src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a session runs.
-src/main/agent-desktop.ts	port	2	agentDesktopToRun compares bundled and managed executable versions; computerUseSpawn selects the engine and spawn environment.
+src/main/agent-desktop.ts	native-client	2	setup.pickAgentDesktop checks the bundle, probes the managed executable once per file identity and selects the copy. The client maps this result and the existing shared pref/bridge contract to session spawn args and env.
 src/main/agent-paths.ts	port	1	agentDir resolves PI_CODING_AGENT_DIR or the user's .omp/agent path.
 src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
 src/main/agent-power-migration.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore synchronously migrates the new SafeStore before its first read; the same migration patches stock config.yml without losing comments. Move with the prefs bootstrap, not as a second writer.

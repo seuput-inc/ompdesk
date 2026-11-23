@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { GitShellProblem, SetupItemId, SetupPlatform, SetupPresence } from "../../shared/setup";
 import { isNewer } from "../../shared/version";
-import { bundledAgentDesktop, pickAgentDesktop } from "../agent-desktop";
+import { pickAgentDesktop } from "../agent-desktop";
 import { ompBunMinimum, ompPackageRoot, parseOmpVersion, refreshSystemOmp, systemOmp } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
 import { brewBinDirs, spawnPath } from "../shell-env";
@@ -225,9 +225,10 @@ export async function detectAgentDesktop(
 			managed = { kind: "broken", detail: error instanceof Error ? error.message : String(error), path: exe };
 		}
 	}
-	const copy = pickAgentDesktop(
-		managed.kind === "present" && managed.version ? { path: exe, version: managed.version } : null,
-		bundleDir ? bundledAgentDesktop(bundleDir, platform) : null,
+	const copy = await pickAgentDesktop(
+		platform,
+		bundleDir,
+		managed.kind === "present" && managed.version ? { path: exe, version: managed.version } : undefined,
 	);
 	return copy ? { kind: "present", version: copy.version, path: copy.path } : managed;
 }
