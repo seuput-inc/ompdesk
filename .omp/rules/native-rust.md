@@ -56,6 +56,8 @@ globs:
 
 - **4c, installed omp version.** `setup.probeOmp` checks the package launcher's Bun floor, reads its canonical installed manifest or runs `omp --version`, and applies the omp floor. The core's 15 s probes preserve the first refusal, multi-line version parsing and the Bun output cap. A Windows command shim with control characters, quotes, `!` or paired `%` in its literal filename is refused rather than expanded by cmd. Main still needs `ompPackageRoot` for its synchronous stats-server start and supplies the general-purpose stock runner. `setup::runtime`, `tailscale::text` and native parity's `omp-runtime.test.ts` cover this boundary.
 
+- **4c, verified omp cache.** `setup.readCompatCache` and `setup.saveCompatCache` read and replace `<userData>/omp-compat.json`. The core accepts at most 1 MiB of UTF-8 and uses `disk::saves::write_kept` for both ENOSPC and EDQUOT. Main keeps the release validator, proxy-aware fetch, and the latest unconfirmed bytes so a replacement core can finish a save. Native parity's `omp-compat-source.test.ts` covers offline reads, replacement and save ordering; `disk::saves` tests the retry.
+
 - **4c, Apple's git trampoline.** `setup.appleDeveloperDir` runs only `/usr/bin/xcode-select -p` with the caller's environment. Setup retains its 15 s budget; sign-in and git resolution retain 5 s. No installer runs to discover Git. `setup/detect-git-shell.test.ts` compares the native reply to the command on macOS and expects no result on other platforms.
 
 

@@ -338,7 +338,7 @@ src/main/omp-auto-takeover.ts	port	2	Shell updater batch, §1.3a,c: OmpUpdater.s
 src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
 src/main/omp-availability.ts	port	2	§1.3(a,b,c), shell batch: stock-helper.ts records a refused call before admission; index.ts consumes that bit synchronously in followSetupState before restarting tabs and relisting. Move with setup events and worker admission, not across a second state mirror.
 src/main/omp-compat-source.test.ts	tooling	-	Vitest suite: OmpCompatSource.
-src/main/omp-compat-source.ts	port	2	Shell updater batch after durable-save parity: AtomicSaver retries the verified list on ENOSPC and EDQUOT; core disk/saves.rs retries only ENOSPC, and core exit drops its pending bytes. Losing a newer list can revive a superseded approval offline. Keep net.fetch's proxy behavior and the release tool's one validator (§1.3d).
+src/main/omp-compat-source.ts	mixed	2	setup.readCompatCache and setup.saveCompatCache own the verified list on disk. Shell updater batch retains net.fetch (system proxy), the release tool's shared validator and the newest unconfirmed bytes across core replacement (§1.3d).
 src/main/omp-config-stock.test.ts	tooling	-	Vitest suite: reads stock's default, writes both values, and reads back what it wrote.
 src/main/omp-daemon-folder-stock.test.ts	tooling	-	Vitest suite: is removed once that omp ended, while another session's omp keeps running.
 src/main/omp-exits.ts	port	3	noteOmpExit records exit promises by cwd; ompsExitedIn bounds the wait before an opened worktree can be removed.

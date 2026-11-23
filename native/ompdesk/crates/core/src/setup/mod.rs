@@ -11,6 +11,7 @@
 //! - `mirror` is a test's server on 127.0.0.1 standing in for every host (`net::routed`).
 
 mod archives;
+mod compat;
 mod desktop;
 mod download;
 mod launcher;
@@ -29,6 +30,7 @@ use net::Http;
 use crate::server::{Call, Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
+    compat::register(registry);
     launcher::register(registry);
     registry.add("setup.pickAgentDesktop", |call| {
         Box::pin(desktop::select(call))

@@ -4,8 +4,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { existsSync, mkdirSync, openAsBlob } from "node:fs";
 import { homedir, release } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -1785,15 +1784,16 @@ app.whenReady().then(async () => {
 	const followVerified = () => prefs.get(OMP_FOLLOW_VERIFIED_PREF) === true;
 	const testCompat = app.isPackaged ? undefined : process.env.OMP_GUI_TEST_OMP_COMPAT;
 	const compatSource = new OmpCompatSource({
-		file: join(app.getPath("userData"), "omp-compat.json"),
+		cache: { userData: app.getPath("userData"), host: core() },
 		fetch:
 			testCompat !== undefined || testInstaller
 				? async () =>
 						testCompat && existsSync(testCompat)
-							? new Response(await readFile(testCompat, "utf8"))
+							? new Response(await openAsBlob(testCompat))
 							: new Response(null, { status: 404 })
 				: (url, init) => net.fetch(url, init),
 	});
+	app.once("will-quit", () => compatSource.dispose());
 	// OMPdesk is the one owner of omp updates while it follows the verified list: stock's own `update.auto` is taken
 	// while that pref and "Keep tools up to date" are on and given back when either goes off (omp-auto-takeover.ts),
 	// through stock's settings command on the omp OMPdesk runs. Only a launch that updates omp on its own touches it
