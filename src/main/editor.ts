@@ -33,18 +33,16 @@ export async function openInExternalEditor(content: string): Promise<EditorRound
 		// cmd expands the quoted variable once. The generated filename is never part of the configured command.
 		const windows = process.platform === "win32";
 		if (windows && /["\r\n]/.test(draft.file)) throw new Error("Invalid Windows editor draft path");
-		const child = windows
-			? spawn(
-					process.env.ComSpec || "cmd.exe",
-					["/d", "/v:off", "/s", "/c", `"${editorCmd} "%OMPDESK_EDITOR_DRAFT%""`],
-					{
-						stdio: "ignore",
-						windowsHide: true,
-						windowsVerbatimArguments: true,
-						env: { ...env, OMPDESK_EDITOR_DRAFT: draft.file },
-					},
-				)
-			: spawn(editor, [...args, draft.file], { stdio: "ignore", env });
+		const child = spawn(
+			windows ? process.env.ComSpec || "cmd.exe" : editor,
+			windows ? ["/d", "/v:off", "/s", "/c", `"${editorCmd} "%OMPDESK_EDITOR_DRAFT%""`] : [...args, draft.file],
+			{
+				stdio: "ignore",
+				windowsHide: true,
+				windowsVerbatimArguments: windows,
+				env: windows ? { ...env, OMPDESK_EDITOR_DRAFT: draft.file } : env,
+			},
+		);
 		const { promise, reject, resolve } = Promise.withResolvers<number>();
 		child.once("exit", (code, signal) => resolve(code ?? (signal ? -1 : 0)));
 		child.once("error", error => reject(error));
