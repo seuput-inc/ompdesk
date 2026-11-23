@@ -14,11 +14,10 @@ import * as path from "node:path";
 import type { RpcWorktreeCreateResult } from "../../../shared/rpc-types";
 import { GUI_WORKTREE_BRANCH_PREFIX, worktreeBranchPrefix } from "../../../shared/worktree-branch";
 import { CoreError } from "../../core/process";
-import { fs } from "../../fenced-fs";
 import { SerialChain } from "../../serial-chain";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
-import { coreGit, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
+import { coreGit, coreHeld, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
 import { worktreeSlug } from "./parse";
 import { prepareWorktree, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 
@@ -135,8 +134,14 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 		throw new LocalCommandError(`Invalid worktree branch prefix "${input.branchPrefix}".`, "invalid_name");
 	}
 	const baseCwd = input.baseCwd ?? sessionCwd;
-	// A folder that is gone fails git's spawn with git's own ENOENT; say what is missing instead.
-	if (!(await fs.stat(baseCwd).catch(() => null))?.isDirectory()) {
+	// Check before resolving Git so a missing base still names the folder when Git is unavailable.
+	const stat = await coreHeld<{ directory: boolean }>("fs.stat", { path: baseCwd }, PLAN_AND_ADD_MS).catch(
+		(error: unknown) => {
+			if (error instanceof CoreError && ["file_not_found", "io", "exists"].includes(error.code)) return null;
+			throw error;
+		},
+	);
+	if (!stat?.directory) {
 		throw new LocalCommandError(`The folder "${baseCwd}" does not exist.`, "file_not_found");
 	}
 	// The repository, its main checkout, and the commit a new branch starts at (`HEAD`, `default`, or a ref it has).

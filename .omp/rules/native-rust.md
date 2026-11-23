@@ -85,6 +85,8 @@ globs:
 
 - **Moving a session.** `move_session` checks the directory with `fs.stat` after stock resolves the target and before it sends `/move`. Missing paths and files keep their distinct refusals. Stock changes the session's working directory and settings; the host checks the cwd it reports. `local/git/stock-bridge.test.ts` drives a real stock session and the core.
 
+- **Worktree base folder.** `worktree_create` checks `fs.stat` through `coreHeld` before looking up Git. A missing or non-directory base keeps `file_not_found` and the caller's path spelling; core loss is not a missing folder. `local/git/worktree.test.ts` exercises creation, missing folders and Windows short paths against the core.
+
 - **Subagent journal tails.** `sessions.journalTail` reads at most 64 bytes before the offset returned by stock and returns the existing offset/hash token, never file contents. A short read or an open failure returns no token; offset zero needs no file. Stock still resolves the journal and reads its messages. `local/subagent-journal-tail.test.ts` exercises append and replacement through the core; `sessions::journal::tests` pins the previous tokens at the window edges.
 
 - **Pictures in a saved transcript.** Stock's `sessions.messages` hashes large inline pictures into their existing content addresses before replying to a paired host read. Local reads still return bytes. Both use the same stock loader and session-root check; neither writes a blob. `session-store-enrichment.test.ts` checks both reads and the outside-root refusal. The paired web page keeps its separate per-device blob URLs, using the same synchronous image walker.
