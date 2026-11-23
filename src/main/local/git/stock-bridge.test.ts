@@ -181,8 +181,9 @@ describe.skipIf(!existsSync(omp))("installed stock worktree bridge", () => {
 				["missing", "Directory does not exist"],
 				[path.join("ordinary.txt", "child"), "Directory does not exist"],
 			] as const) {
+				const target = await bridge.request<{ path: string }>("workspace.resolve_path", { path: input });
 				await expect(workspace.move_session({ type: "move_session", path: input }, ctx)).rejects.toEqual(
-					new Error(`${reason}: ${path.join(relative, input)}`),
+					new Error(`${reason}: ${target.path}`),
 				);
 			}
 			const movedUrl = (await workspace.move_session(
