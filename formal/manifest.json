@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:83-84",
+				"src/main/shell-host/electron/index.ts:90-91",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
@@ -76,7 +76,7 @@
 				"src/main/turn-resume.ts:174-265",
 				"src/main/turn-resume.ts:818-832",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2491-2495",
+				"src/main/index.ts:2492-2496",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
@@ -278,7 +278,7 @@
 				"native/ompdesk/crates/core/src/remote/kept_calls.rs",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
-				"src/main/ipc.ts:652-671"
+				"src/main/ipc.ts:653-672"
 			],
 			"syncCommit": "337ce3c14d62ae3f5e998cd4f7f7ee0e110b2b1e"
 		},
