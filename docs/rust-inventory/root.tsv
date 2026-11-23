@@ -14,8 +14,7 @@ src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock 
 src/main/agents-md.test.ts	tooling	-	Vitest suite: AGENTS.md and the area rules.
 src/main/app-auto-update.test.ts	tooling	-	Vitest suite: quietMoment.
 src/main/app-auto-update.ts	port	3	AutoInstallScheduler owns idle/card/compaction gating, countdown and automatic restart timing from injected app/session facts.
-src/main/app-icon.test.ts	tooling	-	Vitest suite: notifications of a test launch.
-src/main/app-icon.ts	port	4	appIconPath and appNotification choose packaged/dev icon and construct Electron notifications; holdTestNotifications suppresses test toasts.
+src/main/app-icon.test.ts	tooling	-	Vitest checks packaged/development icon paths and notification defaults against the shell's Rust launch fact.
 src/main/app-quit-failure.test.ts	tooling	-	Vitest suite: exits with failure when the last core stop cannot establish that its processes ended.
 src/main/app-quit.test.ts	tooling	-	Vitest suite: who asked to quit, in gui-runtime.jsonl.
 src/main/app-quit.ts	port	4	installQuitGuard and requestQuit arbitrate Electron before-quit, dialogs, approved restarts, watchdog and exit reporting.

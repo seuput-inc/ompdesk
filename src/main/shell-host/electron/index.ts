@@ -29,6 +29,8 @@ const hello = await client.call<{ protocol: number; facts: HostFacts }>("hello",
 });
 if (hello.protocol !== 1) throw new Error(`The shell speaks host protocol ${hello.protocol}, this main speaks 1`);
 
+export const appIconPath = hello.facts.appIcon.path;
+
 export function consumeHangReports(): Promise<RuntimeLogReport[]> {
 	return client.call<RuntimeLogReport[]>("app.consumeHangReports").catch((error: unknown) => {
 		console.warn("[hang-watchdog]", error);

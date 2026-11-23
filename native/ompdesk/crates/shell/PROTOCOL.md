@@ -55,6 +55,7 @@ pushed event.
            pictures, videos, logs, crashDumps },        // every name app.getPath serves; absolute
   exe: string,                  // the shell's executable (`app.getPath("exe")`, what a relaunch starts)
   resourcesPath: string,        // `process.resourcesPath`: packaged <install>/resources, unpackaged: <appDir>/resources
+  appIcon: { path: string, notifications: "off" | "appIcon" | "systemIcon" }, // headless posts nothing; Windows toasts default to this PNG
   appPath: string,              // `app.getAppPath()`: the folder holding out/main/index.js (package.json beside it)
   isPackaged: boolean,
   rendererRoot?: string,        // the renderer folder served as app://ompdesk/ (dirname(entry)/../renderer); absent: <appPath>/out/renderer

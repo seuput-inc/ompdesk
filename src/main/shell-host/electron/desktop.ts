@@ -106,7 +106,8 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 
 		constructor(options: { title?: string; body?: string; [key: string]: unknown } = {}) {
 			super();
-			this.#options = options;
+			this.#options =
+				host.facts.appIcon.notifications === "appIcon" ? { icon: host.facts.appIcon.path, ...options } : options;
 			this.title = options.title ?? "";
 			this.body = options.body ?? "";
 		}
@@ -116,6 +117,7 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		}
 
 		show(): void {
+			if (host.facts.appIcon.notifications === "off") return;
 			notifications.set(this.#id, this);
 			host.post("notification.show", { ...this.#options, id: this.#id, title: this.title, body: this.body });
 		}
