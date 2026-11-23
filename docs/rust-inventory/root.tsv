@@ -430,7 +430,7 @@ src/main/sidecar-factory.test.ts	tooling	-	Vitest suite: localSidecarFactory.
 src/main/sidecar-factory.ts	port	3	The pool spawn callback and paired host need a SidecarManager immediately to attach gates, overlay and frame listeners before start. Installed-omp, settings and builtin pack inputs come from the services injected into the factory; the actual lane is native.
 src/main/sidecar-os-shutdown.test.ts	tooling	-	Vitest suite: omp ended by the Windows session.
 src/main/sidecar-pool.test.ts	tooling	-	Vitest suite: SidecarPool session kind.
-src/main/sidecar-pool.ts	mixed	3	SidecarPool dispatches acquire and release decisions to the pool hub in core/src/pool/mod.rs; TS still holds live window/sidecar handles, event forwarders, activity listeners, timers and release promises.
+src/main/sidecar-pool.ts	mixed	3	The core owns pool membership and Stop waiter tokens. Main holds live handles, forwards events, and cancels the Stop deadline synchronously when sessionSettled arrives. Moving the timer alone could expire a Stop between two frames that FrameReader.push delivers in one JS turn (§1.3a,c).
 src/main/sidecar-run-state.test.ts	tooling	-	Vitest suite: a retry saga across a reading.
 src/main/sidecar-run-state.ts	port	3	LocalHostServices updates the hosted run in its events/settle listener and compares runBusy before leaving that delivery. Hosted resume facts and restartOnNewOmp read it immediately; the local pool's own tracker is native pool/run.rs.
 src/main/sidecar-types.ts	port	3	RemoteSidecar and HostedTabView emit VIEW_ENDED_EVENT; the pool and LocalHostServices detach the matching view during delivery. Other exports are types for those handles; there is no process implementation to port separately.
@@ -499,7 +499,7 @@ src/main/turn-resume-ends.ts	tooling	-	HOLD_CHECKS/HOLD_ENDS expose core/src/res
 src/main/turn-resume-limit.test.ts	tooling	-	Vitest suite: a turn stock gave up on at a provider limit.
 src/main/turn-resume-test-rig.ts	tooling	-	TurnResumeWorld drives discrete network, tab, retry and move events against formal resume invariants.
 src/main/turn-resume.test.ts	tooling	-	Vitest suite: deriveMarkers.
-src/main/turn-resume.ts	mixed	3	TurnResume delegates resume decisions to resume hub launch and other methods in core/src/resume/mod.rs; TS still owns InterruptedTurnStore, in-flight move promises, timers, listeners and RPC command execution.
+src/main/turn-resume.ts	mixed	3	The resume hub owns retry policy; main owns in-flight moves, marker mirrors, listeners, commands and timer delivery. A timer callback cannot run during a synchronous Stop or prompt; a nested hub ask can read pre-Stop facts within that same call. Move the readers with the scheduler (§1.3a,c).
 src/main/turn-stages-log.ts	port	1	turnStagesReport validates a bridge turn_stages frame and builds a runtime-log record.
 src/main/turn-stop-log.test.ts	tooling	-	Vitest suite: dispatchedCommand.
 src/main/turn-stop-log.ts	port	1	dispatchedCommand/recordTurnStop log the origin of stop commands without message text.
