@@ -27,7 +27,7 @@ describe("checkLandCandidate", () => {
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000); // the bound the assertion holds; on a busy runner the whole case took over 5 s (ci 45242399001)
 
 	// A Finder-launched app has launchd's bare PATH; the cycle's command ran in the session's bash, whose PATH is the
 	// login shell's (shellSpawnEnv), so `bun run check` passed there and must find `bun` here too.
