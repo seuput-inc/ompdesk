@@ -3,11 +3,10 @@
  * the exact process that runs. Everything here is fixed by main; the renderer
  * can name an item, never a command.
  */
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, win32 } from "node:path";
 import type { SetupItemId, SetupMethod, SetupPlatform, SetupPresence } from "../../shared/setup";
-import type { CliToolSpec } from "../cli-tools/catalog";
-import { classifyInstall, cmdShimTarget } from "../cli-tools/detect";
+import { readInstall } from "../cli-tools/detect";
 import { npmFor } from "../cli-tools/plans";
 import { needsShell, spawnArgs, spawnCommand } from "../spawn";
 import { managedAgentDesktopDir, managedGitRoot } from "./paths";
@@ -47,40 +46,25 @@ export interface OmpNpmOwner {
 	prefix: string;
 }
 
-/** omp as `classifyInstall` reads a tool: no updater of its own to defer to, nothing machine setup manages. */
-const OMP_INSTALL: CliToolSpec = { bin: "omp", providers: [], lazyLoads: true };
-
 /**
  * The npm install that owns the omp launcher `bin`, or null for any other omp (Bun's, a checkout's, a compiled
  * one) and for an npm install no npm can be found for. Only npm's own layout counts, by the rules the vendor CLIs
- * are classified with (`classifyInstall`): on POSIX the launcher is a link into
- * `<prefix>/lib/node_modules/@oh-my-pi/pi-coding-agent`, on Windows a `.cmd` shim whose text names
- * `<prefix>\node_modules\…` (`cmdShimTarget`). On Windows the shim must sit in the prefix itself, as a global
+ * are classified with: on POSIX the launcher is a link into `<prefix>/lib/node_modules/@oh-my-pi/pi-coding-agent`;
+ * on Windows a `.cmd` shim names `<prefix>\node_modules\…`. The shim must sit in the prefix itself, as a global
  * install's does: a project's `node_modules\.bin\omp.cmd` names a package too, and `npm install -g --prefix`
  * there would write into that project.
  */
-export function ompNpmOwner(
+export async function ompNpmOwner(
 	bin: string,
 	where: { platform: SetupPlatform; toolsDir: string; pathEnv: string },
-): OmpNpmOwner | null {
+): Promise<OmpNpmOwner | null> {
 	if (where.platform === "other") return null;
 	const win = where.platform === "win32";
-	let launcher = bin;
-	let real = bin;
-	try {
-		launcher = realpathSync(bin);
-		real =
-			win && /\.cmd$/i.test(launcher)
-				? (cmdShimTarget(launcher, readFileSync(launcher, "utf8")) ?? launcher)
-				: launcher;
-	} catch {
-		// A dangling link or an unreadable shim names no package: its own path is classified, which owns nothing.
-	}
-	const { owner } = classifyInstall(real, OMP_INSTALL, {
-		platform: where.platform,
-		toolsDir: where.toolsDir,
-		brew: null,
-	});
+	const { launcher, owner } = await readInstall(
+		bin,
+		{ platform: where.platform, toolsDir: where.toolsDir, brew: null },
+		{ kind: "omp" },
+	);
 	if (owner?.method !== "npm" || owner.name !== OMP_PACKAGE) return null;
 	if (win && win32.normalize(win32.dirname(launcher)).toLowerCase() !== win32.normalize(owner.prefix).toLowerCase()) {
 		return null;

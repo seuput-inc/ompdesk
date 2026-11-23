@@ -608,13 +608,23 @@ pub fn listening_ports(_pids: &[u32]) -> std::collections::HashMap<u32, Vec<u16>
 /// links and asks with the real user.
 #[cfg(unix)]
 pub fn may_execute(path: &std::path::Path) -> bool {
+    may_access(path, libc::X_OK)
+}
+
+#[cfg(unix)]
+pub fn may_write(path: &std::path::Path) -> bool {
+    may_access(path, libc::W_OK)
+}
+
+#[cfg(unix)]
+fn may_access(path: &std::path::Path, mode: libc::c_int) -> bool {
     use std::os::unix::ffi::OsStrExt;
 
     let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
         return false;
     };
     // SAFETY: `path` is a NUL-terminated string that lives through the call, which only reads it.
-    unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
+    unsafe { libc::access(path.as_ptr(), mode) == 0 }
 }
 
 /// Puts this process in a new job object that kills every process in it once its last handle closes, which is when

@@ -5,12 +5,11 @@
 //! update must wait for a running server or CLI (`ext.defersWhileRunning`, `ext.cliWaitsForIdle`, `ext.updateRunning`), and the newest version in a
 //! registry lookup's output (`ext.pipLatest`, `ext.registryLatest`).
 //!
-//! Main keeps the schedule, the stock helper's inventory and upgrades, the lookups and updates it runs, and what it
-//! shares with the tool CLIs and machine setup: finding a command along the spawn PATH and telling which package
-//! manager owns an install. Those answer synchronously while omp is found and repaired, before this process can be
-//! counted on.
+//! Main keeps the schedule, stock's inventory and upgrades, the spawn PATH lookup and package-manager commands.
+//! CLI updates, MCP updates and setup all read installed package ownership through `ext.binaryFacts`.
 
 mod binary;
+mod install;
 mod latest;
 mod mcp;
 mod running;
@@ -72,8 +71,8 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("ext.binaryFacts", |call| {
         Box::pin(async move {
-            let params: binary::Params = params(&call.params)?;
-            let facts = tokio::task::spawn_blocking(move || binary::facts(&params))
+            let params: install::Params = params(&call.params)?;
+            let facts = tokio::task::spawn_blocking(move || install::facts(&params))
                 .await
                 .map_err(|_| Fault::new("internal", "The file read panicked"))?;
             Reply::json(&facts)

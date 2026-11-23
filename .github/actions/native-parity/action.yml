@@ -35,6 +35,7 @@ runs:
         src/main/setup/archives.test.ts
         src/main/setup/compiled-launcher.test.ts
         src/main/setup/service.test.ts
+        src/main/setup/plans.test.ts
         src/main/setup/omp-update-install.test.ts
         src/main/omp-runtime.test.ts
         src/main/omp-compat-source.test.ts
