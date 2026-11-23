@@ -86,8 +86,8 @@ impl Hook {
         let mut answer = [0; 1 + 2 * TAIL_UNITS];
         answer[0] = u8::from(timed_out);
         let bytes = 1 + tail.len() * 2;
-        for (pair, unit) in answer[1..bytes].chunks_exact_mut(2).zip(tail) {
-            pair.copy_from_slice(&unit.to_le_bytes());
+        for (pair, unit) in answer[1..bytes].as_chunks_mut::<2>().0.iter_mut().zip(tail) {
+            *pair = unit.to_le_bytes();
         }
         let mut stdout = io::stdout().lock();
         let _ = stdout

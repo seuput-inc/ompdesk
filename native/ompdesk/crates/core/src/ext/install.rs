@@ -419,10 +419,9 @@ fn cmd_target(shim: &str, mut text: &str) -> Option<String> {
 }
 
 fn bun_target(exe: &str, bytes: &[u8]) -> Option<String> {
-    let end = bytes.chunks_exact(2).position(|u| u == [b'"', 0])?;
-    let units = bytes[..end * 2]
-        .chunks_exact(2)
-        .map(|u| u16::from_le_bytes([u[0], u[1]]));
+    let (pairs, _) = bytes.as_chunks::<2>();
+    let end = pairs.iter().position(|u| *u == [b'"', 0])?;
+    let units = pairs[..end].iter().copied().map(u16::from_le_bytes);
     let target: String = char::decode_utf16(units)
         .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect();
