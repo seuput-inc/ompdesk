@@ -24,6 +24,7 @@
 //! The clock is the system's, read at every check. A test's service is opened `manual`: then the core keeps no timer,
 //! every request says what time it is and `schedules.tick` is the check.
 
+mod draft;
 mod engine;
 mod launch;
 pub(crate) mod rules;

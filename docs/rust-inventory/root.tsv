@@ -390,7 +390,7 @@ src/main/save-copy.ts	port	3	saveCopy coordinates destination selection, local c
 src/main/saved-layouts.test.ts	tooling	-	Vitest suite: layoutsToSave.
 src/main/saved-layouts.ts	port	1	layoutsToSave decides whether quit teardown or an empty window should overwrite the saved desktop.
 src/main/schedules.test.ts	tooling	-	Vitest suite: ScheduleService.
-src/main/schedules.ts	mixed	2	ScheduleService uses schedules.open/command/launch in core/src/schedules/mod.rs for timers, journals and supervised runs; TS still cleans drafts, serializes requests and supplies quota, wake and omp launch callbacks.
+src/main/schedules.ts	mixed	2	The core normalizes every draft at save and owns timers, journals and supervised runs. Node serializes requests, mirrors state for synchronous readers, and supplies quota, wake and omp launch callbacks.
 src/main/serial-chain.test.ts	tooling	-	Vitest suite: SerialChain.
 src/main/serial-chain.ts	port	2	§1.3: local/git/exec and tailscale/cli take the current AbortSignal synchronously before starting OS effects. Receiver: local with local/git/exec; remote-web removes the tailscale/cli use.
 src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.

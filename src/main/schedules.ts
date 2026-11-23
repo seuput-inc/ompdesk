@@ -10,8 +10,7 @@
  *   (`state()`: the routine triggers read it as each change arrives);
  * - what the core asks for: whether a paired device has a model request left (`reserve`, main's `PeerQuota`), a
  *   session's own wake-up (`wake`, the control tools), and a run's omp with its environment and extensions, which
- *   `ompRunLauncher` resolves and hands to the core's launcher;
- * - the cleaning of a draft the page or an agent sent (`cleanDraft`), before the core checks and saves it.
+ *   `ompRunLauncher` resolves and hands to the core's launcher.
  *
  * Requests go to the core one after the other, in the order they were made here, because the core takes requests
  * side by side: two saves, or an event and the end of the run it came during, keep their order.
@@ -29,7 +28,6 @@ import {
 	type Schedule,
 	type ScheduleCreated,
 	type ScheduleDraft,
-	type ScheduleFrequency,
 	type SchedulesRequest,
 	type SchedulesState,
 } from "../shared/schedules";
@@ -107,67 +105,6 @@ interface StartAsk {
 
 /** Names a service and a launched omp to the core; one counter for this process. */
 let sequence = 0;
-
-/** A draft's timing as stored: unknown fields dropped. A webhook's key stays as sent (empty: the core makes or keeps one). */
-function cleanFrequency(frequency: ScheduleFrequency | undefined): ScheduleFrequency {
-	switch (frequency?.kind) {
-		case "daily":
-			return { kind: "daily", time: String(frequency.time), days: [...new Set(frequency.days)].toSorted() };
-		case "once":
-			return { kind: "once", at: String(frequency.at) };
-		case "event": {
-			const event = frequency.event;
-			switch (event?.source) {
-				case "webhook":
-					return { kind: "event", event: { source: "webhook", key: String(event.key ?? "") } };
-				case "github":
-					return {
-						kind: "event",
-						event: { source: "github", repo: String(event.repo), events: [...new Set(event.events)].toSorted() },
-					};
-				case "files":
-					return { kind: "event", event: { source: "files", path: String(event.path) } };
-				case "git":
-					return {
-						kind: "event",
-						event: { source: "git", repo: String(event.repo), branch: String(event.branch) },
-					};
-				case "session":
-					return {
-						kind: "event",
-						event: {
-							source: "session",
-							events: [...new Set(event.events)].toSorted(),
-							...(typeof event.folder === "string" && event.folder.trim()
-								? { folder: event.folder.trim() }
-								: {}),
-						},
-					};
-				default:
-					return frequency;
-			}
-		}
-		default:
-			return { kind: "interval", minutes: Number(frequency?.minutes) };
-	}
-}
-
-/**
- * What a draft the page, an agent or a paired device sent is saved as: every member of its own type, in the order the
- * journal keeps them. The core checks it (`scheduleDraftProblem`'s rule) and adds what the schedule already had.
- */
-function cleanDraft(draft: ScheduleDraft): ScheduleDraft {
-	return {
-		name: String(draft.name ?? "").trim(),
-		prompt: String(draft.prompt ?? ""),
-		cwd: String(draft.cwd ?? ""),
-		frequency: cleanFrequency(draft.frequency),
-		model: typeof draft.model === "string" && draft.model.trim() ? draft.model.trim() : null,
-		autoApprove: draft.autoApprove === true,
-		enabled: draft.enabled === true,
-		...(draft.wakeSession == null ? {} : { wakeSession: String(draft.wakeSession) }),
-	};
-}
 
 /** A refusal of the core as the service threw it: a plain error with its words, the device's limit with its code. */
 function refusal(error: unknown): unknown {
@@ -367,8 +304,7 @@ export class ScheduleService {
 	 * A run now from a device is charged to that device and refused past its limit.
 	 */
 	async command(request: SchedulesRequest, origin?: string): Promise<SchedulesState> {
-		const sent = request.action === "save" ? { ...request, draft: cleanDraft(request.draft) } : request;
-		return this.#send<SchedulesState>("schedules.command", { request: sent, origin });
+		return this.#send<SchedulesState>("schedules.command", { request, origin });
 	}
 
 	/**
@@ -376,7 +312,7 @@ export class ScheduleService {
 	 * could share. `origin`: the paired device it is made for (its runs count against that device), as in `command`.
 	 */
 	async create(draft: ScheduleDraft, origin?: string): Promise<ScheduleCreated> {
-		return this.#send<ScheduleCreated>("schedules.create", { draft: cleanDraft(draft), origin });
+		return this.#send<ScheduleCreated>("schedules.create", { draft, origin });
 	}
 
 	/** The run's captured output, from its end when long. */

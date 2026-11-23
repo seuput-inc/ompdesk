@@ -509,8 +509,6 @@ impl Engine {
         Ok(id)
     }
 
-    /// `draft` is what main's `cleanDraft` made of what the page sent: every member of its own type, a webhook's key
-    /// as sent (empty: make one, or keep the schedule's).
     fn save(
         &mut self,
         draft: &Value,
@@ -525,7 +523,7 @@ impl Engine {
             ),
             None => None,
         };
-        let mut clean = draft.as_object().cloned().unwrap_or_default();
+        let mut clean = super::draft::clean(draft);
         // A saved edit keeps what the Settings dialog does not show: the session a wake-up goes to.
         if !clean.contains_key("wakeSession")
             && let Some(kept) = existing.and_then(|at| self.schedules[at].get("wakeSession"))
@@ -545,7 +543,6 @@ impl Engine {
             );
         }
         let draft = Value::Object(clean);
-        // Main's cleaning leaves nothing the rule throws over; a draft that came another way is no schedule.
         let problem = rules::draft_problem(&draft, self.zone.as_ref()).unwrap_or(Some("interval"));
         if let Some(problem) = problem {
             return Err(fault(format!("Invalid schedule: {problem}")));
