@@ -11,10 +11,9 @@
  */
 import type { CustomProviderInput } from "../shared/ipc-types";
 import { LOCAL_ENGINES, type LocalEngineSpec, type LocalEnginesLedger } from "../shared/local-engines";
+import { core } from "./core/process";
 import { type EngineAction, engineAction } from "./local-engines-core";
 
-/** `fetch` of an engine's model list never waits longer than this. */
-export const LOCAL_ENGINE_PROBE_TIMEOUT_MS = 2_000;
 export const LOCAL_ENGINE_INTERVAL_MS = 60_000;
 
 /** The engine table and the pause between passes of this launch. */
@@ -49,20 +48,9 @@ export function localEngineSettings(env: NodeJS.ProcessEnv, packaged: boolean): 
 	return { engines, intervalMs: Number.isFinite(interval) && interval > 0 ? interval : LOCAL_ENGINE_INTERVAL_MS };
 }
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
-
-/** True when `GET <baseUrl>/models` answers like an OpenAI model list. Any error, and any address off loopback, is down. */
-export async function probeLocalEngine(baseUrl: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
-	try {
-		const url = new URL(`${baseUrl.replace(/\/+$/, "")}/models`);
-		if (url.protocol !== "http:" || !LOOPBACK_HOSTS.has(url.hostname)) return false;
-		const response = await fetchImpl(url, { signal: AbortSignal.timeout(LOCAL_ENGINE_PROBE_TIMEOUT_MS) });
-		if (!response.ok) return false;
-		const body: unknown = await response.json();
-		return typeof body === "object" && body !== null && "data" in body && Array.isArray(body.data);
-	} catch {
-		return false;
-	}
+/** Null means the reply could not be inspected. Neither that nor a failed core request proves an engine is down. */
+export async function probeLocalEngine(baseUrl: string): Promise<boolean | null> {
+	return (await core().call<boolean | null>("models.probeLocalEngine", { baseUrl })).result;
 }
 
 /** The provider entry of one engine; its models come from stock's `/models` discovery. */
@@ -82,7 +70,7 @@ export interface LocalEngineDetectorDeps {
 	ledger: { get(): LocalEnginesLedger; set(value: LocalEnginesLedger): void };
 	/** The pref `LOCAL_ENGINE_DETECT_PREF`, read now. */
 	enabled(): boolean;
-	probe(baseUrl: string): Promise<boolean>;
+	probe(baseUrl: string): Promise<boolean | null>;
 	providers: {
 		ids(): Promise<Set<string>>;
 		/** Writes the entry only while none has its id, in one turn of models.yml's mutation chain; false: one does. */
@@ -172,11 +160,11 @@ export class LocalEngineDetector {
 		if (!this.#live()) return;
 		const { engines, providers } = this.#deps;
 		let present: Set<string>;
-		let up: boolean[];
+		let up: (boolean | null)[];
 		try {
 			[present, up] = await Promise.all([
 				providers.ids(),
-				Promise.all(engines.map(engine => this.#deps.probe(engine.baseUrl).catch(() => false))),
+				Promise.all(engines.map(engine => this.#deps.probe(engine.baseUrl))),
 			]);
 		} catch (error) {
 			this.#deps.failed?.(error);
@@ -188,7 +176,7 @@ export class LocalEngineDetector {
 			if (!this.#live()) break;
 			const ledger = this.#deps.ledger.get();
 			const action = engineAction({
-				up: up[index] ?? false,
+				up: up[index] ?? null,
 				present: present.has(engine.id),
 				registered: ledger.registered.includes(engine.id),
 				removed: ledger.removed.includes(engine.id),

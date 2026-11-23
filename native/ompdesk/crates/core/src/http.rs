@@ -241,6 +241,21 @@ async fn exchange_at(
         .map_err(|_| Failure::Broken)
 }
 
+/// One GET to these exact sockets, without a DNS lookup or an automatic redirect.
+pub(crate) async fn get_at(
+    url: &Url,
+    addresses: &[SocketAddr],
+) -> Result<hyper::Response<Incoming>, Failure> {
+    exchange_at(
+        url,
+        &[("accept-encoding", "gzip, deflate")],
+        None,
+        machine_tls,
+        Some(addresses),
+    )
+    .await
+}
+
 /// Sends `request`, following its redirects, and answers at the last head; the body is still to be read.
 async fn exchange(request: &Request<'_>, tls: Tls) -> Result<hyper::Response<Incoming>, Failure> {
     let mut url = Url::parse(request.url).map_err(|_| Failure::Request)?;
