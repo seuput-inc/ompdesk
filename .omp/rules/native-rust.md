@@ -114,6 +114,8 @@ globs:
 - **Update feed.** `updateFeed.resolve` (`crates/core/src/update_feed`) selects a GitHub release and checks its comment, file, SHA-512 format, tag, asset size and declared Darwin minimum. `src/main/update-release.ts` is its typed client. Main retains HTTP/auth, delivery of the resolved installer to electron-updater, and the current OS check required by synchronous `resolveFiles`. Native parity runs `update-release.test.ts`, `update-provider.test.ts` and `update-compatibility.test.ts`, including the frozen v0.131 consumer and the publish step's generated comment.
   - The admitted macOS response also names the versioned local DMG. Manual and relaunch downloads retain that response for its version, API URL, size and digest. Windows keeps the version-free NSIS asset.
 
+- **Boot model.** `models.bootSelector` caches one Bun catalog probe and its fallback per executable and version; a restarted core reads the catalog again. Main supplies the installed package root and environment on a cache miss. The catalog remains stock's (§1.3d). The hub still reads `isNoModelBootFailure` synchronously when `sidecar.ts` chooses the exit plan (§1.3a). `models::boot` has the captured results; native parity runs `boot-model.test.ts`.
+
 - **MCP hub boundary.** `ompdesk-core --mcp-hub` serves `/memory` on one authenticated loopback listener, in a separate process with no core RPC server. Closing the parent’s stdin stops the hub.
 
 - **Slow session starts and disk care.** `omp.logTail` reads the stalled process's own log. `disk.usage` computes the breakdown over the existing size-walk cache, including SQLite sidecars. The TypeScript callers still decide when a session is slow and when to show disk care. Parity: `omp-log-tail.test.ts` and `disk/*.test.ts`.
