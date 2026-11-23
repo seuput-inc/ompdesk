@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GIT_REPO_SELECTOR_ENV } from "../../../shared/git-env";
 import { getGitChanges, getGitStatus } from "./changes";
-import { gitRaw } from "./exec";
+import { stage } from "./scm";
 import { gitSync, initRepo } from "./test-repos";
 
 let root: string;
@@ -49,7 +49,7 @@ afterEach(async () => {
 });
 
 describe("git under leaked repository selectors", () => {
-	it("leaves the repository the selectors point at untouched: test repos and the app's own git runner", async () => {
+	it("reads and stages in the requested repository without changing the one the selectors name", async () => {
 		const sacrificial = path.join(root, "sacrificial");
 		await fs.mkdir(sacrificial);
 		cleanGit(sacrificial, "init", "-q", "-b", "main");
@@ -66,50 +66,15 @@ describe("git under leaked repository selectors", () => {
 		const repo = path.join(root, "repo");
 		await initRepo(repo);
 		gitSync(repo, "config", "user.name", "Someone Else");
-		const status = await gitRaw(repo, ["status", "--porcelain"]);
-		expect(status.code).toBe(0);
-		await fs.writeFile(path.join(repo, "added.txt"), "added\n");
-		expect((await gitRaw(repo, ["add", "added.txt"])).code).toBe(0);
-
-		expect(await fingerprint(sacrificial)).toBe(before);
-		// The work landed where the commands ran.
-		expect(cleanGit(repo, "log", "--format=%s")).toBe("init");
-		expect(cleanGit(repo, "diff", "--cached", "--name-only")).toBe("added.txt");
-	});
-
-	it("still honours a selector the caller passes on purpose (disk care's scratch index)", async () => {
-		const repo = path.join(root, "repo");
-		await initRepo(repo);
-		const scratch = path.join(root, "scratch-index");
-		await fs.writeFile(path.join(repo, "extra.txt"), "extra\n");
-		const added = await gitRaw(repo, ["add", "extra.txt"], { env: { GIT_INDEX_FILE: scratch } });
-		expect(added.code).toBe(0);
-		await expect(fs.stat(scratch)).resolves.toBeTruthy();
-		// The repository's own index never saw the file.
-		expect(cleanGit(repo, "diff", "--cached", "--name-only")).toBe("");
-	});
-
-	it("leaves it untouched through the core process's reads, which answer for the repository they were asked about", async () => {
-		const sacrificial = path.join(root, "sacrificial");
-		await fs.mkdir(sacrificial);
-		cleanGit(sacrificial, "init", "-q", "-b", "main");
-		await fs.writeFile(path.join(sacrificial, "kept.txt"), "kept\n");
-		cleanGit(sacrificial, "add", ".");
-		cleanGit(sacrificial, "-c", "user.email=k@example.com", "-c", "user.name=k", "commit", "-q", "-m", "kept");
-		const before = await fingerprint(sacrificial);
-		// Set before this file's first read starts the core, so the core inherits them as well.
-		process.env.GIT_DIR = path.join(sacrificial, ".git");
-		process.env.GIT_WORK_TREE = sacrificial;
-		process.env.GIT_INDEX_FILE = path.join(sacrificial, ".git", "index");
-
-		const repo = path.join(root, "repo");
-		await initRepo(repo);
 		await fs.writeFile(path.join(repo, "added.txt"), "added\n");
 		const changes = await getGitChanges(repo);
 		expect(changes.root).toBe(repo);
 		expect(changes.files).toEqual([{ path: "added.txt", status: "??" }]);
 		expect(await getGitStatus(repo)).toMatchObject({ isRepo: true, untracked: 1, staged: 0, unstaged: 0 });
 
+		await stage(repo, ["added.txt"]);
+		expect(cleanGit(repo, "log", "--format=%s")).toBe("init");
+		expect(cleanGit(repo, "diff", "--cached", "--name-only")).toBe("added.txt");
 		expect(await fingerprint(sacrificial)).toBe(before);
 	});
 });

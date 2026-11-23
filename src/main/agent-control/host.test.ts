@@ -2093,6 +2093,9 @@ describe("a session's own wake-up", () => {
 		await expect(runtime.wakeSession(wakeable(`${file}.gone`), "run-5")).rejects.toThrow(
 			"The session to wake is gone",
 		);
+		await expect(runtime.wakeSession(wakeable(path.dirname(file)), "run-dir")).rejects.toThrow(
+			"The session to wake is gone",
+		);
 		await expect(runtime.wakeSession(wakeable(file, { wakeSession: undefined }), "run-6")).rejects.toThrow(
 			"wakes no session",
 		);

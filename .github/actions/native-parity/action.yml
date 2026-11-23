@@ -117,12 +117,16 @@ runs:
         src/main/routines/*.test.ts
         src/main/mail-accounts.test.ts
         src/main/local/autopilot*.test.ts
+        src/main/local/composer.test.ts
         src/main/local/git/changes.test.ts
         src/main/local/git/scm.test.ts
         src/main/local/git/worktree.test.ts
         src/main/local/git/session-worktree.test.ts
         src/main/local/git/worktree-seed.test.ts
         src/main/local/git/exec-gh.test.ts
+        src/main/local/git/exec.test.ts
+        src/main/local/git/git-env.test.ts
+        src/main/local/git/repo-lock.test.ts
         src/main/local/git/pr-draft.test.ts
         src/main/local/git/origin.test.ts
         src/main/local/git/stock-bridge.test.ts

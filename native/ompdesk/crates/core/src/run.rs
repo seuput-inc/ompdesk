@@ -300,7 +300,11 @@ async fn supervise(mut child: Child, end: &Notify, scope: &Scope) -> i32 {
 /// A spawn that failed because its working folder is gone says so: the OS reports a missing `cwd` as the program's
 /// own ENOENT (`spawn /…/git ENOENT`), which reads as a missing git.
 fn spawn_fault(bin: &str, cwd: &str, error: &std::io::Error) -> Fault {
-    if !std::path::Path::new(cwd).is_dir() {
+    let missing = match std::fs::metadata(cwd) {
+        Ok(meta) => !meta.is_dir(),
+        Err(e) => matches!(uv_code(&e), "ENOENT" | "ENOTDIR"),
+    };
+    if missing {
         return Fault::new(
             "spawn_failed",
             format!("working folder {cwd} does not exist"),

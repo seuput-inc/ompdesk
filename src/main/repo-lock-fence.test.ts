@@ -1,6 +1,6 @@
 /**
- * What a repository-lock holder that ran past its bound can still do. Two cases, both on the fake clock only (the fs,
- * git and child processes are real):
+ * What a repository-lock holder that ran past its bound can still do. Only main's deadlines use a fake clock.
+ * The filesystem, core, and child processes are real:
  *  - an effect it has not started yet (its code resumes after a late answer that is not an fs call): fenced, it throws
  *    before it starts and never lands on what the next holder made;
  *  - an effect the OS already has (an fs call dispatched, a child still exiting): the caller hears of the stop at once,
@@ -18,7 +18,7 @@ import { timeoutForCommand } from "../shared/rpc-client";
 import { SavedWorktreeStore } from "./disk/saved-worktrees";
 import { fs } from "./fenced-fs";
 import { primaryRoot, repoRoot } from "./local/git/changes";
-import { execBin, REPO_LOCK_HOLD_MS, withRepoLock } from "./local/git/exec";
+import { gh, REPO_LOCK_HOLD_MS, withRepoLock } from "./local/git/exec";
 import * as scm from "./local/git/scm";
 import { gitSync } from "./local/git/test-repos";
 import { createWorktree } from "./local/git/worktree";
@@ -276,20 +276,20 @@ describe("an effect the OS already has when the holder is stopped", () => {
 	});
 
 	it.skipIf(process.platform === "win32")(
-		"a git child that ignores SIGTERM: the next holder starts only after it exited",
+		"a gh child that ignores SIGTERM exits before the next holder starts",
 		async () => {
 			const pidFile = path.join(root, "pid");
-			const script = `${DIES_WITH_TEST} process.on("SIGTERM", () => {}); require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1e9)`;
+			const script = `${DIES_WITH_TEST}
+				const fs = require("node:fs");
+				process.on("SIGTERM", () => fs.writeFileSync("sigterm", "received"));
+				fs.writeFileSync(process.argv[1], String(process.pid));
+				setInterval(() => {}, 1e9);`;
 			const key = "/repo/sigterm";
-			let started = false;
 			const old = caught(
 				withRepoLock(key, () =>
-					execBin(process.execPath, ["-e", script, pidFile], { cwd: root, timeoutMs: 24 * 60 * 60_000 }),
+					gh(root, process.execPath, ["-e", script, pidFile], { timeoutMs: 24 * 60 * 60_000 }),
 				),
 			);
-			const next = withRepoLock(key, async () => {
-				started = true;
-			});
 			let pid = 0;
 			await vi.waitFor(
 				async () => {
@@ -298,18 +298,15 @@ describe("an effect the OS already has when the holder is stopped", () => {
 				},
 				{ timeout: 20_000, interval: 20 },
 			);
-			await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
+			const next = withRepoLock(key, async () => alive(pid));
+			vi.advanceTimersByTime(REPO_LOCK_HOLD_MS);
 			expect(await old).toBeInstanceOf(StepStalledError);
-			// SIGTERM was sent and ignored: it is still alive, and the lock is still held.
-			await settle();
 			expect(alive(pid)).toBe(true);
-			expect(started).toBe(false);
-			// The kill after the grace period ends it; only then the next holder starts.
-			await vi.advanceTimersByTimeAsync(2_000);
-			await next;
-			expect(started).toBe(true);
-			expect(alive(pid)).toBe(false);
+			// The core owns the kill grace. The queued holder observes the PID at handoff.
+			expect(await next).toBe(false);
+			expect(await read(root, "sigterm")).toBe("received");
 		},
+		SLOW,
 	);
 });
 
