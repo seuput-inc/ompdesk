@@ -19,9 +19,8 @@ import type {
 	RpcPrRepo,
 	RpcPrReviewEvent,
 } from "../../../shared/rpc-types";
-import type { OmpCliLaunch } from "../../agent-worktrees";
 import { CoreError } from "../../core/process";
-import { ompRunEnv } from "../../omp-runtime";
+import { scrubUpdateText } from "../../update-log-core";
 import type { BridgeClient, OmpRuntime } from "../types";
 import { LocalCommandError } from "../types";
 import { coreGh, DEFAULT_TIMEOUT_MS, GH_TEXT_TIMEOUT_MS } from "./exec";
@@ -107,19 +106,66 @@ export function prDiff(cwd: string, input: { number: number; path: string }): Pr
 	return ghRequest("gh.prDiff", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }
 
+/** The first title/body object, including an object inside malformed surrounding model prose. */
+function readDraft(output: string): RpcPrDraftResult | null {
+	for (let start = output.indexOf("{"); start !== -1; start = output.indexOf("{", start + 1)) {
+		let depth = 0;
+		let quoted = false;
+		for (let i = start; i < output.length; i++) {
+			const ch = output[i];
+			if (quoted) {
+				if (ch === "\\") i++;
+				else if (ch === '"') quoted = false;
+			} else if (ch === '"') quoted = true;
+			else if (ch === "{") depth++;
+			else if (ch === "}" && --depth === 0) {
+				try {
+					const row: unknown = JSON.parse(output.slice(start, i + 1));
+					if (
+						row &&
+						typeof row === "object" &&
+						"title" in row &&
+						typeof row.title === "string" &&
+						"body" in row &&
+						typeof row.body === "string"
+					) {
+						return { title: row.title.trim(), body: row.body.trim() };
+					}
+				} catch {}
+				break;
+			}
+		}
+	}
+	return null;
+}
+
 /** AI-draft title/body from the head branch's commits + change summary, via stock `omp -p`. */
-export function prDraft(
+export async function prDraft(
 	cwd: string,
-	omp: Pick<OmpRuntime, "bin" | "basePath">,
+	omp: Pick<OmpRuntime, "run">,
 	input: { base?: string; head?: string },
 ): Promise<RpcPrDraftResult> {
-	const launch: OmpCliLaunch | null =
-		omp.basePath === undefined ? null : { bin: omp.bin, env: ompRunEnv(omp.bin, omp.basePath) };
-	return ghRequest(
-		"gh.prDraft",
-		{ cwd, ...input, omp: launch, timeoutMs: DRAFT_TIMEOUT_MS },
-		GITHUB_REPO_MS + 6 * DEFAULT_TIMEOUT_MS + DRAFT_TIMEOUT_MS,
+	const { root, prompt } = await ghRequest<{ root: string; prompt: string }>(
+		"gh.prDraftPrompt",
+		{ cwd, ...input },
+		GITHUB_REPO_MS + 6 * DEFAULT_TIMEOUT_MS,
 	);
+	// The tab's guarded run reads Credit use at launch, after the checkout lookup, not before it.
+	const output = await omp
+		.run(["-p", "--no-session", "--no-tools", "--no-lsp"], { cwd: root, input: prompt, timeoutMs: DRAFT_TIMEOUT_MS })
+		.catch((error: unknown) => {
+			throw new LocalCommandError(`Draft failed: ${errorText(error)}`, "pr_draft_failed");
+		});
+	const draft = output.code === 0 ? readDraft(output.stdout) : null;
+	if (draft) return draft;
+	const { GH_TOKEN, GITHUB_TOKEN, GH_ENTERPRISE_TOKEN, GITHUB_ENTERPRISE_TOKEN } = process.env;
+	const detail = scrubUpdateText((output.stderr || output.stdout).trim(), [
+		GH_TOKEN,
+		GITHUB_TOKEN,
+		GH_ENTERPRISE_TOKEN,
+		GITHUB_ENTERPRISE_TOKEN,
+	]);
+	throw new LocalCommandError(`The model did not return a draft${detail ? `: ${detail}` : ""}`, "pr_draft_failed");
 }
 
 /**

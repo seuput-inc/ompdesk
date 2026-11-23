@@ -1,24 +1,14 @@
-//! Draft a PR from the checkout's commits and changed files. Only the installed stock omp writes the draft.
+//! Collect/render the prompt before main checks the live credit policy and launches the model.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 
-use super::{Gh, Runners, Tools, pr};
+use super::{Runners, Tools, pr};
 use crate::fs::order::js_trim;
 use crate::git::run::Git;
-use crate::json::{utf16_prefix, whole_surrogates};
-use crate::omp::cli::{Launch, pr_draft};
-use crate::server::{Fault, Registry, Reply, Scope};
-
-#[derive(Deserialize)]
-struct Model {
-    bin: String,
-    env: BTreeMap<String, String>,
-}
+use crate::json::utf16_prefix;
+use crate::server::{Fault, Registry, Reply};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,32 +18,19 @@ struct Params {
     cwd: String,
     base: Option<String>,
     head: Option<String>,
-    omp: Option<Model>,
-    timeout_ms: u64,
 }
 
 pub(super) fn register(registry: &mut Registry) {
-    registry.add("gh.prDraft", |call| {
+    registry.add("gh.prDraftPrompt", |call| {
         Box::pin(async move {
             let Params {
                 runners,
                 cwd,
                 base,
                 head,
-                omp,
-                timeout_ms,
             } = call.params()?;
-            let tools = Tools::new(runners, call.scope.clone());
-            let outcome = draft(
-                &tools,
-                &cwd,
-                base,
-                head,
-                omp,
-                call.scope,
-                Duration::from_millis(timeout_ms),
-            )
-            .await;
+            let tools = Tools::new(runners, call.scope);
+            let outcome = draft(&tools, &cwd, base, head).await;
             tools.gh.answer(outcome)
         })
     });
@@ -77,14 +54,17 @@ async fn resolve_rev(git: &Git, root: &str, name: &str) -> Result<String, Fault>
     ))
 }
 
+#[derive(Serialize)]
+struct Prepared {
+    root: String,
+    prompt: String,
+}
+
 async fn draft(
     tools: &Tools,
     cwd: &str,
     base: Option<String>,
     head: Option<String>,
-    omp: Option<Model>,
-    scope: Scope,
-    timeout: Duration,
 ) -> Result<Reply, Fault> {
     let found = pr::repo(tools, cwd).await?;
     let git = tools.git()?;
@@ -114,30 +94,7 @@ async fn draft(
         git.text(&root, &stat_args)
     )?;
     let prompt = prompt(&base, head, &log, &names, &stat)?;
-    let Model { bin, env } = omp.ok_or_else(|| {
-        Fault::new(
-            "pr_draft_failed",
-            "Draft failed: No resolved omp launcher for pr_draft",
-        )
-    })?;
-    let launch = Launch {
-        bin,
-        env,
-        cwd: root,
-    };
-    let output = pr_draft(&launch, scope, timeout, &prompt)
-        .await
-        .map_err(|fault| {
-            if fault == Fault::cancelled() {
-                fault
-            } else {
-                Fault::new(
-                    "pr_draft_failed",
-                    format!("Draft failed: {}", fault.message),
-                )
-            }
-        })?;
-    answer(&tools.gh, output.code, &output.stdout, &output.stderr)
+    Reply::json(&Prepared { root, prompt })
 }
 
 fn nonempty_lines(text: &str) -> Cow<'_, str> {
@@ -181,120 +138,9 @@ fn prompt(base: &str, head: &str, log: &str, names: &str, stat: &str) -> Result<
     ))
 }
 
-#[derive(Serialize)]
-struct Draft<'a> {
-    title: &'a str,
-    body: &'a str,
-}
-
-fn answer(gh: &Gh, code: i32, stdout: &[u8], stderr: &[u8]) -> Result<Reply, Fault> {
-    if code == 0 {
-        let text = String::from_utf8_lossy(stdout);
-        let text = whole_surrogates(&text);
-        // Try each opening, even inside an earlier malformed object or a valid wrapper without a draft.
-        for (start, _) in text.match_indices('{') {
-            // Leave extra fields raw. Their nesting and numeric range do not constrain a title or body.
-            let mut objects = serde_json::Deserializer::from_str(&text[start..])
-                .into_iter::<BTreeMap<String, &RawValue>>();
-            let Some(Ok(row)) = objects.next() else {
-                continue;
-            };
-            let string = |key: &str| serde_json::from_str::<String>(row.get(key)?.get()).ok();
-            if let (Some(title), Some(body)) = (string("title"), string("body")) {
-                return Reply::json(&Draft {
-                    title: js_trim(&title),
-                    body: js_trim(&body),
-                });
-            }
-        }
-    }
-    let detail = gh.scrub(
-        String::from_utf8_lossy(if stderr.is_empty() { stdout } else { stderr }).into_owned(),
-    );
-    let detail = utf16_prefix(js_trim(&detail), 300);
-    Err(Fault::new(
-        "pr_draft_failed",
-        if detail.is_empty() {
-            "The model did not return a draft".to_owned()
-        } else {
-            format!("The model did not return a draft: {detail}")
-        },
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
-
-    fn read(code: i32, out: &str, err: &str) -> Result<Value, Fault> {
-        let gh = Gh::new(None, Scope::detached());
-        answer(&gh, code, out.as_bytes(), err.as_bytes())
-            .map(|reply| serde_json::from_str(reply.result.get()).unwrap())
-    }
-
-    #[test]
-    fn first_draft_in_noisy_model_output() {
-        let object = r###"{"title":"t {x}","body":"## S\n- a"}"###;
-        let expected = json!({"title":"t {x}","body":"## S\n- a"});
-        for text in [
-            format!("Working...\n```json\n{object}\n```"),
-            format!("{{broken [{object}"),
-            format!("{{\"wrapped\":{object}}}more"),
-        ] {
-            assert_eq!(read(0, &text, "ignored").unwrap(), expected);
-        }
-        for (out, title, body) in [
-            (
-                r#"{"title":null,"body":"x"} {"title":"a\"b","body":"\\}"}"#,
-                "a\"b",
-                "\\}",
-            ),
-            (r#"{"title":"A","body":"B","title":"Z"}"#, "Z", "B"),
-            (r#"{"title":" ","body":""}"#, "", ""),
-            (
-                r#"{"title":"\ufeff A ","body":"\nB ","nested":{"title":"x","body":"y"}}"#,
-                "A",
-                "B",
-            ),
-        ] {
-            assert_eq!(
-                read(0, out, "").unwrap(),
-                json!({ "title": title, "body": body })
-            );
-        }
-        let deep = format!(
-            r#"{{"trace":{}1e999{},"title":"t","body":"b"}}"#,
-            "[".repeat(200),
-            "]".repeat(200)
-        );
-        assert_eq!(read(0, &deep, "").unwrap(), json!({"title":"t","body":"b"}));
-    }
-
-    #[test]
-    fn reports_stderr_before_stdout_and_never_accepts_a_failed_models_draft() {
-        for (code, out, err, detail) in [
-            (0, "null", "", ": null"),
-            (0, "{bad} nothing", "", ": {bad} nothing"),
-            (1, r#"{"title":"A","body":"B"}"#, " err ", ": err"),
-            (1, r#"{"title":"A","body":"B"}"#, "  ", ""),
-            (0, "", "", ""),
-        ] {
-            assert_eq!(
-                read(code, out, err),
-                Err(Fault::new(
-                    "pr_draft_failed",
-                    format!("The model did not return a draft{detail}")
-                ))
-            );
-        }
-        let long = "x".repeat(299);
-        assert_eq!(
-            read(0, &format!("{long}😀!"), "").unwrap_err().message,
-            format!("The model did not return a draft: {long}�")
-        );
-    }
-
     #[test]
     fn renders_only_template_placeholders_with_optional_stats() {
         for (stat, rendered) in [("", ""), (" $& {{head}} ", "\nDiff stat:\n$& {{head}}\n")] {

@@ -54,22 +54,6 @@ pub(super) async fn run<const N: usize>(
     execute(launch, args, scope, timeout, Input::Report).await
 }
 
-pub(crate) async fn pr_draft(
-    launch: &Launch,
-    scope: Scope,
-    timeout: Duration,
-    prompt: &str,
-) -> Result<Output, Fault> {
-    execute(
-        launch,
-        ["-p", "--no-session", "--no-tools", "--no-lsp"],
-        scope,
-        timeout,
-        Input::Draft(prompt),
-    )
-    .await
-}
-
 pub(super) async fn rename(
     launch: &Launch,
     session_path: &str,
@@ -105,7 +89,6 @@ pub(super) async fn rename(
 #[derive(Clone, Copy)]
 enum Input<'a> {
     Report,
-    Draft(&'a str),
     Rename { frame: &'a str, default_model: bool },
 }
 
@@ -140,7 +123,6 @@ async fn execute<const N: usize>(
             cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
             None
         }
-        Input::Draft(prompt) => Some(prompt),
         Input::Rename {
             frame,
             default_model,
@@ -202,8 +184,7 @@ async fn execute<const N: usize>(
             let _ = child.kill().await;
         }
     };
-    if fault.code == "omp_timeout" && !matches!(input, Input::Draft(_)) {
-        // Only a draft holds its repository step until reaped.
+    if fault.code == "omp_timeout" {
         tokio::spawn(cleanup);
     } else {
         cleanup.await;
@@ -214,30 +195,6 @@ async fn execute<const N: usize>(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn a_draft_timeout_holds_the_request_until_its_child_exits() {
-        let dir = crate::fs::disk::make_temp_dir("ompdesk-draft-timeout-").unwrap();
-        let launch = Launch {
-            bin: "/bin/sh".into(),
-            cwd: dir.to_string_lossy().into_owned(),
-            env: BTreeMap::new(),
-        };
-        let (scope, gone) = Scope::watched();
-        let outcome = execute(
-            &launch,
-            ["-c", "trap '' TERM; echo $$ > started; exec /bin/sleep 30"],
-            scope,
-            Duration::from_millis(500),
-            Input::Draft("a draft"),
-        )
-        .await;
-        gone.wait().await;
-        let pid = std::fs::read_to_string(dir.join("started")).unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
-        assert_eq!(outcome.err().unwrap().code, "omp_timeout");
-        assert!(!crate::sys::alive(pid.trim().parse().unwrap()));
-    }
 
     #[tokio::test]
     async fn an_omp_that_closes_stdin_still_returns_its_own_result() {
@@ -251,7 +208,10 @@ mod tests {
             ["-c", "exec 0<&-; printf refused >&2; exit 9"],
             Scope::detached(),
             Duration::from_secs(10),
-            Input::Draft(&"a".repeat(1024 * 1024)),
+            Input::Rename {
+                frame: &"a".repeat(1024 * 1024),
+                default_model: false,
+            },
         )
         .await
         .unwrap();
@@ -260,8 +220,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_reaps_omp_while_a_prompt_write_is_blocked() {
-        let dir = crate::fs::disk::make_temp_dir("ompdesk-draft-cancel-").unwrap();
+    async fn cancellation_reaps_omp_while_stdin_is_blocked() {
+        let dir = crate::fs::disk::make_temp_dir("ompdesk-rename-cancel-").unwrap();
         let launch = Launch {
             bin: "/bin/sh".into(),
             cwd: dir.to_string_lossy().into_owned(),
@@ -275,7 +235,10 @@ mod tests {
                 ["-c", "echo $$ > started; exec /bin/sleep 30"],
                 scope.clone(),
                 Duration::from_secs(10),
-                Input::Draft(&prompt),
+                Input::Rename {
+                    frame: &prompt,
+                    default_model: false
+                },
             ),
             async {
                 let marker = dir.join("started");

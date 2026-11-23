@@ -177,10 +177,10 @@ src/main/local/git/github.ts	port	Validates each GitHub operation and host/repo 
 src/main/local/git/origin.test.ts	exception	Tests project identity and worktree classification for ordinary, Autopilot and agent checkouts.
 src/main/local/git/origin.ts	native-client	git.cachedProjectOrigin checks folder presence and the native cache before the host resolves git. git.projectOrigin coalesces misses and canonicalizes the checkout; only shared page naming and the uncached git.originFacts client remain.
 src/main/local/git/parse.test.ts	exception	Tests path containment, ref validity and worktree slug generation.
-src/main/local/git/parse.ts	port	Validates refs and worktree slugs and checks path containment for host callers. PR prompt rendering and draft extraction moved to gh.prDraft.
+src/main/local/git/parse.ts	port	Validates refs and worktree slugs and checks path containment for host callers. PR prompt rendering is native; draft reply extraction stays with the guarded host model call.
 src/main/local/git/pr-create-stock.test.ts	exception	Compares the gh pr create arguments and resulting PR number with stock behavior.
-src/main/local/git/pr-draft.test.ts	exception	Exercises the real gh.prDraft core with a disposable checkout and fixed stock launcher, including error redaction.
-src/main/local/git/pr.ts	mixed	PR draft preparation and stock invocation run in gh.prDraft. Host-side PR number and review validation and the stock bridge checkout remain.
+src/main/local/git/pr-draft.test.ts	exception	Exercises gh.prDraftPrompt with a disposable checkout, the real Credit use wrapper and a stand-in model run. Covers a policy change during lookup and redaction of error output.
+src/main/local/git/pr.ts	mixed	gh.prDraftPrompt reads git and renders the prompt. The tab's guarded omp.run reads Credit use immediately before spawning the model (§1.3c); draft output is parsed where it arrives. PR number/review validation and stock bridge checkout remain.
 src/main/local/git/repo-lock.test.ts	exception	Tests independent repo locks, serial mutations per repository and fencing of work from a stopped holder.
 src/main/local/git/scm-history.test.ts	exception	Tests branch mutations, occupied branches and conflict continuation or abort against real repositories.
 src/main/local/git/scm.test.ts	exception	Tests working-tree and index effects of staging, unstaging, discard and other SCM commands.

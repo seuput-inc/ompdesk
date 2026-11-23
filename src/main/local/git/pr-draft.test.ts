@@ -1,8 +1,11 @@
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { expect, it, vi } from "vitest";
-import { RM_TEMP, writeFakeBin, writeFakeOmp } from "../../test-fake-omp";
+import { withCreditSpendRuns } from "../../omp-launch";
+import { RM_TEMP, writeFakeBin } from "../../test-fake-omp";
+import type { OmpRuntime } from "../types";
 import { resolveBin } from "./exec";
 import { prDraft } from "./pr";
 import { gitSync, initRepo } from "./test-repos";
@@ -14,65 +17,68 @@ it("drafts from the checkout root with stock's print flags and literal stdin", a
 		const sub = path.join(repo, "sub");
 		const bin = path.join(dir, "bin");
 		await fs.mkdir(bin);
+		const policyOff = path.join(dir, "policy-off");
 		const gh = await writeFakeBin(
 			bin,
 			"gh",
 			`
 if (process.argv.slice(2).join(" ") !== "repo view --json nameWithOwner,defaultBranchRef") process.exit(1);
+await Bun.write(${JSON.stringify(policyOff)}, "");
 process.stdout.write('{"nameWithOwner":"o/r","defaultBranchRef":{"name":"main"}}');`,
 		);
 		const basePath = `${bin}${path.delimiter}${process.env.PATH ?? ""}`;
 		vi.stubEnv("PATH", basePath);
 		vi.stubEnv("OMP_GUI_TEST_BREW_DIRS", "");
-		vi.stubEnv("FORCE_COLOR", "2");
 		expect(await resolveBin("gh")).toBe(gh);
-		const seen = path.join(dir, "seen.json");
-		const fail = path.join(dir, "fail");
-		const omp = {
-			bin: await writeFakeOmp(
-				dir,
-				`
-const input = await Bun.stdin.text();
-await Bun.write(${JSON.stringify(seen)}, JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),input,color:process.env.FORCE_COLOR}));
-if (await Bun.file(${JSON.stringify(fail)}).exists()) {
-	process.stderr.write("failure: " + process.env.GH_TOKEN);
-	process.exitCode = 9;
-}
-process.stdout.write('noise {bad} '+JSON.stringify({nested:{title:' T {x} ',body:' B\\nline '}}));`,
-			),
-			basePath,
-		};
+		const run = vi.fn<OmpRuntime["run"]>().mockResolvedValue({
+			code: 0,
+			stdout: 'noise {bad} {"nested":{"title":" T {x} ","body":" B\\nline "}}',
+			stderr: "",
+		});
+		const omp = withCreditSpendRuns(
+			{ bin: "fixture-omp", basePath, version: "test", run },
+			{
+				bridgeDir: bin,
+				enabled: () => !existsSync(policyOff),
+				commitCheck: async () => {},
+			},
+		);
 		await expect(prDraft(dir, omp, {})).rejects.toMatchObject({ code: "not_a_repo" });
-		await expect(fs.stat(seen)).rejects.toMatchObject({ code: "ENOENT" });
+		expect(run).not.toHaveBeenCalled();
 		await initRepo(repo);
 		await expect(prDraft(repo, omp, {})).rejects.toMatchObject({
 			code: "pr_draft_failed",
 			message: "No changes between main and main",
 		});
-		await expect(fs.stat(seen)).rejects.toMatchObject({ code: "ENOENT" });
+		expect(run).not.toHaveBeenCalled();
 		gitSync(repo, "checkout", "-qb", "topic");
 		await fs.mkdir(sub);
 		await fs.writeFile(path.join(sub, "a.txt"), "a\n");
 		gitSync(repo, "add", ".");
 		const subject = 'Use %PATH% & "$1 {{files}}"';
 		gitSync(repo, "commit", "-qm", subject);
+		await fs.rm(policyOff);
 		expect(await prDraft(sub, omp, {})).toEqual({ title: "T {x}", body: "B\nline" });
 		const system = await fs.readFile(path.resolve("native/ompdesk/crates/core/src/gh/pr-draft-system.md"), "utf8");
 		const user = `Base: main — Head: topic\n\nCommits (1):\n${subject}\n\nChanged files (1):\nsub/a.txt\n\n\nDiff stat:\n1\t0\tsub/a.txt\n\n\nDraft the PR title and body as the JSON object.\n`;
-		expect(JSON.parse(await fs.readFile(seen, "utf8"))).toEqual({
-			args: ["-p", "--no-session", "--no-tools", "--no-lsp"],
-			cwd: repo,
-			input: `${system.trim()}\n\n---\n\n${user}`,
-			color: "2",
-		});
-		await fs.writeFile(fail, "");
+		expect(run).toHaveBeenCalledWith(
+			["-p", "--no-session", "--no-tools", "--no-lsp", "-e", path.join(bin, "credit-spend-run.ts")],
+			{
+				cwd: repo,
+				input: `${system.trim()}\n\n---\n\n${user}`,
+				timeoutMs: 170_000,
+				env: { OMP_GUI_CREDIT_SPEND: "0" },
+			},
+		);
+		run.mockResolvedValueOnce({ code: 9, stderr: "failure: fake-draft-error-token", stdout: "" });
 		vi.stubEnv("GH_TOKEN", "fake-draft-error-token");
 		await expect(prDraft(sub, omp, {})).rejects.toMatchObject({
 			code: "pr_draft_failed",
-			message: "The model did not return a draft: failure: ***",
+			message: "The model did not return a draft: failure: <token>",
 		});
 		const missing = path.join(bin, "missing-omp.exe");
-		await expect(prDraft(sub, { bin: missing, basePath }, {})).rejects.toMatchObject({
+		run.mockRejectedValueOnce(new Error(`spawn ${missing} ENOENT`));
+		await expect(prDraft(sub, omp, {})).rejects.toMatchObject({
 			code: "pr_draft_failed",
 			message: `Draft failed: spawn ${missing} ENOENT`,
 		});
