@@ -28,7 +28,7 @@ src/main/web/preview-pacer.ts	TS frame pacing and profile selection	PageStream a
 src/main/web/preview-stream.test.ts	Vitest (node)	PageStream	Keep paint, poll, idle and dialog lifecycle parity.	tooling
 src/main/web/preview-stream.ts	TS PageStream over the offscreen preview	preview/host.ts	Move stream state, paint delivery and held polls together with the native preview owner.	port
 src/main/web/push.test.ts	Vitest (node)	PushSender and coreTransport	Keep send status, payload limit and transport parity.	tooling
-src/main/web/push.ts	core web/push.rs; TS send result and size policy	WebHost and WebPushNotifier	Move payload limits and refusal classification with notification delivery; encryption, signing and HTTPS already run in Rust.	mixed
+src/main/web/push.ts	core web/push.rs; TS typed client	WebHost and WebPushNotifier	The core checks the UTF-8 payload size and classifies delivery in the same request that encrypts and sends it; main passes on the result and log message.	native-client
 src/main/web/serve-secret.test.ts	Vitest (node)	ServeSecretStore	Keep first use, reload and bad-file parity against the core.	tooling
 src/main/web/serve-secret.ts	core web/store.rs; TS synchronous copy	WebHost.serveSecret	Retire the copy with serve target publication; callers read synchronously after ready().	native-client
 src/main/web/server.test.ts	Vitest (node)	WebHost and the loopback Rust HTTP and WebSocket edge	Keep the synthetic-peer integration suite, including the build value in the first hello.	tooling
@@ -42,7 +42,7 @@ src/main/web/web-client-window.ts	TS virtual window registry	WebHost, WsRouter a
 src/main/web/web-edge-p256.test.ts	Vitest and Playwright browsers	WebCrypto proof fixture for core web/proof_browsers.rs	Keep cross-runtime verification tooling; browser signatures are produced by the browsers.	tooling
 src/main/web/web-host.ts	TS host composition; core web/host.rs owns page build identity and asset archiving	index.ts constructs WebHost	Move admin handlers, revocation, tab notices and sweep scheduling with their services. Archive copy and stop barrier run with the listener; main holds no archive roots.	mixed
 src/main/web/web-push-notifier.test.ts	Vitest (node)	WebPushNotifier	Keep tab activity, category, visibility and batching cases.	tooling
-src/main/web/web-push-notifier.ts	TS tab notification policy	WebHost.tabActivity/tabNotice	Move with the common notification batcher, tab facts and visibility state so desktop and phone decisions still agree.	port
+src/main/web/web-push-notifier.ts	TS tab notification policy	WebHost.tabActivity/tabNotice	§1.3(a,c,d): tabActivity, tabNotice, device revocation and visibility change synchronously. Move them with the desktop NotificationBatcher in ipc.ts; the page also uses the shared notification summary. Core delivery already returns sent/gone/failed.	port
 src/main/web/web-push.integration.test.ts	Vitest (node)	WebHost edge and notifier with an injected push transport	Keep paired subscription and notification delivery integration coverage.	tooling
 src/main/web/web-stores-client.test.ts	Vitest (node)	StoresChannel device snapshots	Keep snapshot, acknowledgement and restart ordering parity.	tooling
 src/main/web/web-stores-client.ts	TS ordered mirror of core web/store.rs	WebBlocks and WebDevices	Drop the mirror once the synchronous quota, gate and desktop administration consumers use the native stores.	mixed
