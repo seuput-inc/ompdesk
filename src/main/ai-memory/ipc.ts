@@ -5,15 +5,11 @@ import type { IpcRegistry } from "../web/ipc-registry";
 import type { MemoryCare } from "./care";
 import type { AiMemoryService } from "./service";
 
-/** The password the /web console asks for stays on the clipboard this long, unless something else replaced it. */
-const CLIPBOARD_CLEAR_MS = 60_000;
-
 export interface AiMemoryIpcDeps {
 	/** http(s) only; main checks the host before calling. */
 	openExternal: (url: string) => Promise<void>;
 	openPath: (path: string) => Promise<string>;
-	readClipboard: () => string | Promise<string>;
-	writeClipboard: (text: string) => void;
+	copyPassword: (text: string) => Promise<void>;
 	/** Memory's own upkeep (care.ts): its Maintenance line and undo; null until created. */
 	care: () => Pick<MemoryCare, "summary" | "undo"> | null;
 }
@@ -108,12 +104,7 @@ export function registerAiMemoryIpc(
 	ipc.handle(IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD, async () => {
 		const token = await service.token();
 		if (!token) throw new Error("Memory has no token yet");
-		deps.writeClipboard(token);
-		setTimeout(() => {
-			void (async () => {
-				if ((await deps.readClipboard()) === token) deps.writeClipboard("");
-			})().catch(() => undefined);
-		}, CLIPBOARD_CLEAR_MS).unref();
+		await deps.copyPassword(token);
 	});
 	ipc.handle(IPC_COMMANDS.AI_MEMORY_REVEAL_DATA, async () => {
 		const { dataDir } = service.state();

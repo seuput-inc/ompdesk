@@ -5,7 +5,9 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{class, msg_send};
-use objc2_foundation::NSString;
+use objc2_foundation::{NSArray, NSString};
+
+use crate::clipboard_password::PasswordCopy;
 
 const TEXT_TYPE: &str = "public.utf8-plain-text";
 
@@ -36,4 +38,41 @@ pub fn write_text(text: &str) -> Result<(), String> {
     } else {
         Err("the pasteboard refused the text".into())
     }
+}
+
+// Use the declaring receiver for the later ownership-checked write. Only the UI thread accesses it.
+thread_local! {
+    static PASSWORD_BOARD: Retained<AnyObject> = pasteboard();
+}
+
+pub fn write_password(text: &str) -> Result<PasswordCopy, String> {
+    PASSWORD_BOARD.with(|board| {
+        let kind = NSString::from_str(TEXT_TYPE);
+        let types = NSArray::from_slice(&[&*kind]);
+        // SAFETY: nil owner is valid when we supply all declared types immediately.
+        let revision: isize = unsafe {
+            msg_send![&**board, declareTypes: &*types, owner: std::ptr::null::<AnyObject>()]
+        };
+        let value = NSString::from_str(text);
+        // SAFETY: the receiver declared this NSString type above.
+        let stored: bool = unsafe { msg_send![&**board, setString: &*value, forType: &*kind] };
+        if stored {
+            Ok(PasswordCopy(revision as i64))
+        } else {
+            Err("the pasteboard refused the text".into())
+        }
+    })
+}
+
+pub fn expire(copy: PasswordCopy) {
+    PASSWORD_BOARD.with(|board| {
+        // SAFETY: changeCount reads the pasteboard's generation without requesting its contents.
+        let revision: isize = unsafe { msg_send![&**board, changeCount] };
+        copy.expire(revision as i64, || {
+            let empty = NSString::from_str("");
+            let kind = NSString::from_str(TEXT_TYPE);
+            // SAFETY: setString:forType: refuses changed ownership. clearContents would take it back.
+            let _: bool = unsafe { msg_send![&**board, setString: &*empty, forType: &*kind] };
+        });
+    });
 }

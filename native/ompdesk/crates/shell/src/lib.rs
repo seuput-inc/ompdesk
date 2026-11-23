@@ -3,6 +3,7 @@
 pub mod accelerator;
 pub mod childproc;
 pub mod chunks;
+pub mod clipboard_password;
 pub mod color;
 pub mod conn;
 pub mod desk_state;

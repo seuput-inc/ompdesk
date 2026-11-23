@@ -74,6 +74,9 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		writeText(text: string): void {
 			host.post("clipboard.writeText", { text });
 		},
+		async writePassword(text: string): Promise<void> {
+			await client.call("clipboard.writePassword", { text });
+		},
 	};
 
 	// --- shell ---
