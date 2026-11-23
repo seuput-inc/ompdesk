@@ -15,9 +15,9 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, win32 } from "node:path";
-import { promises as fs } from "original-fs";
 import type { WorktreeSetupReport } from "../../shared/rpc-types";
 import type { WorktreeHook } from "../local/git/worktree-seed";
 import { nativeBinPath } from "../native-bin";
