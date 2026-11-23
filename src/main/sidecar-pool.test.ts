@@ -4367,6 +4367,31 @@ describe("SidecarPool device views (a paired device viewing a tab of a window he
 });
 
 describe("SidecarPool and a lost core", () => {
+	it("keeps one started tab when the acquire reply is lost", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.onAcquire = (_tab, sidecar) => vi.spyOn(sidecar, "start");
+		let startedAtLoss = false;
+		pool.onWindowTabsChanged = () => {
+			// The core has added and started the tab, but cannot reply to acquire until this hook returns.
+			startedAtLoss = sidecars[0]?.started === true;
+			pool.onWindowTabsChanged = null;
+			core().abandon("drop the acquire reply");
+		};
+
+		const acquired = pool.acquire("/a", win, "tab-a");
+		expect(startedAtLoss).toBe(true);
+		expect(pool.size).toBe(1);
+		expect(pool.tabsForWindow(win).map(tab => tab.tabId)).toEqual(["tab-a"]);
+		expect(sidecars).toHaveLength(1);
+		expect(acquired).toBe(sidecars[0]);
+		expect(pool.sidecarForTab(win, "tab-a")).toBe(acquired);
+		expect(sidecars[0]?.start).toHaveBeenCalledTimes(1);
+		expect(pool.releaseTab("tab-a")).toBe(true);
+		expect(sidecars[0]?.disposed).toBe(true);
+		expect(pool.size).toBe(0);
+	});
+
 	it("seeds the next core with the tabs main holds, and its windows keep their tabs", () => {
 		const { pool } = fakePool();
 		const fw = fakeWindow(1);
