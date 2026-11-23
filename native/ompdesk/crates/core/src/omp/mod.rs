@@ -23,6 +23,7 @@
 pub(crate) mod cli;
 mod facts;
 mod log_tail;
+mod rename;
 mod worktrees;
 
 use std::fmt::Write as _;
@@ -83,6 +84,9 @@ struct Entry {
 
 pub fn register(registry: &mut Registry) {
     registry.add("omp.worktrees", |call| Box::pin(worktrees::run(call)));
+    registry.add("omp.renameStoredSession", |call| {
+        Box::pin(rename::run(call))
+    });
     registry.add("omp.pluginDoctor", |call| {
         Box::pin(facts::plugin_doctor(call))
     });

@@ -212,7 +212,8 @@ src/main/local/queue.test.ts	exception	Drives edits through the real Rust sideca
 src/main/local/session-dump.test.ts	exception	Tests stock archive requests, redaction, removal of non-text entries and cleanup of the original file.
 src/main/local/session-dump.ts	port	Rebuilds a private redacted ZIP, omits binary entries, removes the original and permits deletion only for recorded output paths.
 src/main/local/session-extras.ts	mixed	Rust sidecar.guiBridge forwards copy targets and last link. TS restricts foreign import sources and combines stock session stats with a separate usage-history request.
-src/main/local/session-files.ts	port	Checks an offline session exists, runs a short-lived stock rename and retries with a default model only on a restore failure.
+src/main/local/session-files.test.ts	exception	Renames synthetic sessions through the core with a stand-in stock CLI; checks argv, stdin, matched replies, missing files and the single restore retry.
+src/main/local/session-files.ts	native-client	omp.renameStoredSession checks the file and runs stock's fixed offline rename RPC in the temp directory; main supplies only the resolved launcher and environment.
 src/main/local/sessions.test.ts	exception	Tests paged transcript reads, stale snapshot cursors and retries when a live tail changes.
 src/main/local/sessions.ts	port	Encodes snapshot-bound transcript cursors, caches tails, shrinks oversized backward pages and retries stale uncursored tail reads.
 src/main/local/settings.test.ts	exception	Tests model catalog availability without optional metadata and merging stock and bridge account data.

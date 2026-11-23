@@ -1,4 +1,4 @@
-//! Shared supervisor for stock CLI actions. The caller supplies fixed arguments, never arguments from a request.
+//! Shared supervisor for fixed stock CLI operations. No request supplies an argument list.
 
 use std::collections::BTreeMap;
 use std::fmt::Arguments;
@@ -51,7 +51,7 @@ pub(super) async fn run<const N: usize>(
     scope: Scope,
     timeout: Duration,
 ) -> Result<Output, Fault> {
-    execute(launch, args, scope, timeout, None).await
+    execute(launch, args, scope, timeout, Input::Report).await
 }
 
 pub(crate) async fn pr_draft(
@@ -65,27 +65,68 @@ pub(crate) async fn pr_draft(
         ["-p", "--no-session", "--no-tools", "--no-lsp"],
         scope,
         timeout,
-        Some(prompt),
+        Input::Draft(prompt),
     )
     .await
 }
 
+pub(super) async fn rename(
+    launch: &Launch,
+    session_path: &str,
+    input: &str,
+    default_model: bool,
+    scope: Scope,
+) -> Result<Output, Fault> {
+    let args = [
+        "--mode",
+        "rpc",
+        "--no-tools",
+        "--no-extensions",
+        "--no-skills",
+        "--no-rules",
+        "--no-lsp",
+        "--no-title",
+        "--session",
+        session_path,
+    ];
+    execute(
+        launch,
+        args,
+        scope,
+        Duration::from_secs(30),
+        Input::Rename {
+            frame: input,
+            default_model,
+        },
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum Input<'a> {
+    Report,
+    Draft(&'a str),
+    Rename { frame: &'a str, default_model: bool },
+}
+
 async fn execute<const N: usize>(
     launch: &Launch,
-    args: [&'static str; N],
+    args: [&str; N],
     scope: Scope,
     timeout: Duration,
-    prompt: Option<&str>,
+    input: Input<'_>,
 ) -> Result<Output, Fault> {
     if scope.cancelled() {
         return Err(Fault::cancelled());
     }
     let Launch { bin, cwd, env } = launch;
     #[cfg(windows)]
-    let shell = std::path::Path::new(bin)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
+    // A rename carries a path, not just fixed flags. Let std escape it for a batch shim.
+    let shell = !matches!(input, Input::Rename { .. })
+        && std::path::Path::new(bin)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
     #[cfg(not(windows))]
     let shell = false;
     let mut cmd = if shell {
@@ -94,10 +135,23 @@ async fn execute<const N: usize>(
     } else {
         omp_command(bin, &args, false, cwd, env)
     };
-    // Only the plain stock reports requested these overrides. Model calls inherit the launch environment.
-    if prompt.is_none() {
-        cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
-    }
+    let text = match input {
+        Input::Report => {
+            cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+            None
+        }
+        Input::Draft(prompt) => Some(prompt),
+        Input::Rename {
+            frame,
+            default_model,
+        } => {
+            if default_model {
+                cmd.args(["--model", "@default"]);
+            }
+            cmd.env("PI_NOTIFICATIONS", "off");
+            Some(frame)
+        }
+    };
     cmd.kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
@@ -106,8 +160,8 @@ async fn execute<const N: usize>(
         .map_err(|e| Fault::new("spawn_failed", format!("spawn {bin} {}", uv_code(&e))))?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     let feed = async move {
-        if let Some(prompt) = prompt
-            && let Err(error) = stdin.write_all(prompt.as_bytes()).await
+        if let Some(text) = text
+            && let Err(error) = stdin.write_all(text.as_bytes()).await
             && error.kind() != std::io::ErrorKind::BrokenPipe
         {
             return Err(error);
@@ -148,8 +202,8 @@ async fn execute<const N: usize>(
             let _ = child.kill().await;
         }
     };
-    if fault.code == "omp_timeout" && prompt.is_none() {
-        // Plain reports answer at the deadline. A PR draft holds its repository step until reaped.
+    if fault.code == "omp_timeout" && !matches!(input, Input::Draft(_)) {
+        // Only a draft holds its repository step until reaped.
         tokio::spawn(cleanup);
     } else {
         cleanup.await;
@@ -175,7 +229,7 @@ mod tests {
             ["-c", "trap '' TERM; echo $$ > started; exec /bin/sleep 30"],
             scope,
             Duration::from_millis(500),
-            Some("a draft"),
+            Input::Draft("a draft"),
         )
         .await;
         gone.wait().await;
@@ -197,7 +251,7 @@ mod tests {
             ["-c", "exec 0<&-; printf refused >&2; exit 9"],
             Scope::detached(),
             Duration::from_secs(10),
-            Some(&"a".repeat(1024 * 1024)),
+            Input::Draft(&"a".repeat(1024 * 1024)),
         )
         .await
         .unwrap();
@@ -221,7 +275,7 @@ mod tests {
                 ["-c", "echo $$ > started; exec /bin/sleep 30"],
                 scope.clone(),
                 Duration::from_secs(10),
-                Some(&prompt),
+                Input::Draft(&prompt),
             ),
             async {
                 let marker = dir.join("started");
