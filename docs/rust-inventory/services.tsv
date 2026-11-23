@@ -163,7 +163,7 @@ src/main/local/composer.ts	mixed	Rust sidecar.guiBridge forwards maintenance abo
 src/main/local/copy-targets.test.ts	exception	Tests message and command ranking, fenced quote exclusion and handoff fallback for copy targets.
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
 src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
-src/main/local/extensions.ts	port	Verifies transcript journal tails, expands referenced images and notifies sessions of MCP changes.
+src/main/local/extensions.ts	mixed	sessions.journalTail fingerprints the bytes before stock's journal offset. Stock still selects the child and reads its messages. Main checks the kept token before replay, expands image references and notifies sessions of MCP changes.
 src/main/local/git.ts	mixed	sidecar.guiBridge reads worktree lifecycle settings from the requesting spawn. Main dispatches SCM and PR commands and verifies repository ownership before restoring a worktree.
 src/main/local/git/changes.test.ts	exception	Tests net tracked changes, rename counts and treatment of untracked or binary files in real checkouts.
 src/main/local/git/changes.ts	native-client	Forwards repository reads to git.*. git.diff validates the path before reporting missing git or reading the checkout.

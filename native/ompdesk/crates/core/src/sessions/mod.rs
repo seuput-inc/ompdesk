@@ -12,6 +12,7 @@
 
 mod activity;
 mod enrich;
+mod journal;
 mod rules;
 mod search;
 mod snippet;
@@ -71,6 +72,9 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move { close(&call) })
     });
     registry.add("sessions.enrich", |call| Box::pin(enrich::listed(call)));
+    registry.add("sessions.journalTail", |call| {
+        Box::pin(journal::read_tail(call))
+    });
     registry.add("sessions.listed", |call| {
         Box::pin(blocking(move || listed(call.params()?)))
     });
@@ -391,7 +395,7 @@ mod tests {
 
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
+    pub(super) fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "ompdesk-core-sessions-{name}-{}",
             std::process::id()

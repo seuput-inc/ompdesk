@@ -39,6 +39,7 @@ runs:
         src/main/local/misc.test.ts
         src/main/local/agent-files.test.ts
         src/main/local/session-files.test.ts
+        src/main/local/subagent-journal-tail.test.ts
         src/main/agent-worktrees.test.ts
         src/main/stock-helper.test.ts
         src/main/control-socket/cli-install.test.ts
