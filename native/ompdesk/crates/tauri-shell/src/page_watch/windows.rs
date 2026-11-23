@@ -27,6 +27,10 @@ use windows::core::{BOOL, HSTRING, Interface};
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
+#[cfg(feature = "test-automation")]
+#[path = "navigation_probe.rs"]
+mod navigation_probe;
+
 thread_local! {
     /// Each app page's main-frame renderer, learned while it answered. UI thread only, where every WebView2 call and
     /// answer runs.
@@ -275,6 +279,12 @@ fn end(wc: u64, call: Call, renderer: Result<i32, String>, how: &str) {
 /// the browser's other processes are WebView2's to recover.
 pub fn watch_failures(window: &WebviewWindow, wc: u64) -> tauri::Result<()> {
     window.with_webview(move |view| {
+        #[cfg(feature = "test-automation")]
+        if let Err(error) = unsafe { view.controller().CoreWebView2() }
+            .and_then(|core| navigation_probe::watch(&core, wc))
+        {
+            crate::log::log("probe.nav.failed", serde_json::json!({"error":error.to_string()}));
+        }
         let handler = ProcessFailedEventHandler::create(Box::new(move |_, failure| {
             let Some(failure) = failure else {
                 return Ok(());

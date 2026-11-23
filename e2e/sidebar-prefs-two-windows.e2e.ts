@@ -15,6 +15,13 @@ let root = "";
 
 test.afterEach(async () => {
 	if (app) await exitApp(app);
+	if (root) {
+		const text = await fs.readFile(path.join(root, "desktop", "tauri-shell.jsonl"), "utf8").catch(() => "");
+		for (const line of text.split("\n")) {
+			if (line.includes('"event":"probe.nav.') || line.includes('"event":"profile.migrate.stalled"'))
+				console.log(line);
+		}
+	}
 	app = undefined;
 	if (root) await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	root = "";
