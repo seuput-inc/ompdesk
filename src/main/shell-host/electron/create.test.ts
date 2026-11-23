@@ -214,7 +214,11 @@ describe("app", () => {
 		app.commandLine.appendSwitch("enable-gpu");
 		const start = app.startLaunchProtection(true);
 		await settle();
-		expect(fake.callsOf("app.startLaunchProtection")[0]?.params).toEqual({ primary: true, enableGpu: true, disableGpu: false });
+		expect(fake.callsOf("app.startLaunchProtection")[0]?.params).toEqual({
+			primary: true,
+			enableGpu: true,
+			disableGpu: false,
+		});
 		expect(fake.callsOf("app.init")).toHaveLength(0);
 		saved.resolve({ software: true });
 		await start;

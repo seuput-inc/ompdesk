@@ -110,7 +110,10 @@ fn gpu_process_gone(mut details: Value) {
         let mut crash = details.clone();
         crash["now"] = json!(wall_clock_ms());
         crash["testLaunch"] = json!(std::env::var("OMP_GUI_HEADLESS").as_deref() == Ok("1"));
-        details["launchDecision"] = launch.lock().expect("launch protection").apply("crash", &crash);
+        details["launchDecision"] = launch
+            .lock()
+            .expect("launch protection")
+            .apply("crash", &crash);
     }
     host::event("app.childProcessGone", details);
 }
@@ -1094,7 +1097,8 @@ fn dispatch(call: host::Call) {
             &runtime().user_data,
             wall_clock_ms(),
             call.params["primary"] == true
-                && ((runtime().packaged && std::env::var("OMP_GUI_HEADLESS").as_deref() != Ok("1"))
+                && ((runtime().packaged
+                    && std::env::var("OMP_GUI_HEADLESS").as_deref() != Ok("1"))
                     || std::env::var("OMP_GUI_LAUNCH_GUARD").as_deref() == Ok("1")),
             call.params["enableGpu"] == true,
             call.params["disableGpu"] == true,
@@ -1110,9 +1114,15 @@ fn dispatch(call: host::Call) {
         };
         let mut launch = launch.lock().expect("launch protection");
         let result = match call.params["op"].as_str() {
-            Some("identity") => launch.apply("identity", &json!({"devices":gpu::info()["info"]["gpuDevice"]})),
+            Some("identity") => launch.apply(
+                "identity",
+                &json!({"devices":gpu::info()["info"]["gpuDevice"]}),
+            ),
             Some(op @ ("stable" | "healthy")) => launch.apply(op, &Value::Null),
-            _ => { call.err("invalid", "unknown launch signal"); return; }
+            _ => {
+                call.err("invalid", "unknown launch signal");
+                return;
+            }
         };
         call.ok(result);
         return;
@@ -1130,7 +1140,10 @@ fn dispatch(call: host::Call) {
         return;
     }
     if call.method == "app.previousRunEnd" {
-        let Some(pid) = call.params["ownPid"].as_u64().and_then(|n| u32::try_from(n).ok()) else {
+        let Some(pid) = call.params["ownPid"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+        else {
             return call.err("invalid", "expected Node's process id");
         };
         tauri::async_runtime::spawn_blocking(move || {

@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import { release } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, nativeTheme, Notification, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, Notification, nativeTheme, shell } from "electron";
 import type Store from "electron-store";
 import type { RunProgressState, SessionKind } from "../shared/ipc-types";
 import { askQuit, quitRisk, requestQuit } from "./app-quit";

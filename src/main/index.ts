@@ -16,10 +16,10 @@ import {
 	dialog,
 	globalShortcut,
 	ipcMain,
+	Notification,
 	nativeImage,
 	nativeTheme,
 	net,
-	Notification,
 	powerMonitor,
 	powerSaveBlocker,
 	protocol,
@@ -203,7 +203,6 @@ import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
 import {
-	app as shellApp,
 	appIconPath,
 	consumeHangReports,
 	openPageExternal,
@@ -211,6 +210,7 @@ import {
 	readDiagnosticLog,
 	readPreviousRunEnd,
 	registerRuntimeLogIpc,
+	app as shellApp,
 } from "./shell-host/electron/index";
 import {
 	accessibilityTrusted,
