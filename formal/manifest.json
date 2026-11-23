@@ -186,7 +186,7 @@
 				"src/main/checkout-peers.ts#CheckoutPeerCoordinator.#retire",
 				"src/main/checkout-peers.ts#CheckoutPeerCoordinator.#send"
 			],
-			"syncCommit": "688b4829fbc260da7176559fec1a5acfca7c1b09",
+			"syncCommit": "75faee6b04e3e5379712783c6c35c9cad0be54d4",
 			"verifySkill": ".omp/skills/checkout-claims-verify/SKILL.md"
 		},
 		{
