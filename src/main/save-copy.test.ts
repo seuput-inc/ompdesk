@@ -139,7 +139,8 @@ describe("saveCopy of a file on this computer", () => {
 		rmSync(target, { recursive: true });
 		writeFileSync(dest, "previous");
 		const result = await saveCopy({ name: "link", pickDestination: picks(dest), source: { kind: "local", abs } });
-		const reason = process.platform === "win32" ? "EPERM: operation not permitted" : "ENOENT: no such file or directory";
+		const reason =
+			process.platform === "win32" ? "EPERM: operation not permitted" : "ENOENT: no such file or directory";
 		expect(result).toEqual({
 			ok: false,
 			error: `${reason}, copyfile '${abs}' -> '${dest}'`,
