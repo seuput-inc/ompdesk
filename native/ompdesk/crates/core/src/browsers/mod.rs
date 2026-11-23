@@ -291,37 +291,9 @@ struct OpenParams {
     url: String,
 }
 
-/// Starts the browser's exe at `url`, detached as node's `spawn(…, { detached: true })` started it, and out of the
-/// job this process lives in (`sys.rs` `end_children_with_this_process`): a browser that was not running becomes the
-/// browser the person keeps, which must outlive OMPdesk. The only start in this process that leaves the job. A job
-/// around OMPdesk that forbids it fails the start as any other failed start, never runs the browser inside the job.
-/// Answered once it started, not when it ends.
 #[cfg(windows)]
 async fn open(params: OpenParams, _scope: Scope) -> Result<(), Fault> {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
-
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    // Its stdio is NUL (never this process's pipes, which std would otherwise duplicate for it), and nothing of main's
-    // pipes is inheritable when it starts: a browser outliving this process must not keep main from seeing it end.
-    static PIPES_KEPT: std::sync::Once = std::sync::Once::new();
-    PIPES_KEPT.call_once(crate::sys::stdio_not_inherited);
-    Command::new(&params.app)
-        .arg(&params.url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
-        .spawn()
-        .map(drop)
-        .map_err(|error| {
-            Fault::new(
-                "spawn_failed",
-                format!("spawn {} {}", params.app, crate::fs::error::uv_code(&error)),
-            )
-        })
+    crate::user_app::launch(std::process::Command::new(params.app).arg(params.url))
 }
 
 /// `open -a <app> <url>`, answered once `open` exits, as `execFile` answered it.

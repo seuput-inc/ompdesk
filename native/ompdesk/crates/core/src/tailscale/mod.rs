@@ -580,6 +580,8 @@ struct StartParams {
     stand_in: Option<String>,
     /// The located CLI's app bundle.
     app: Option<String>,
+    #[cfg(windows)]
+    path: String,
     rules: Rules,
 }
 
@@ -589,8 +591,18 @@ struct Started {
     line: Option<String>,
 }
 
-/// Starts the Tailscale app: `open -a <bundle>` on macOS. Windows' tray app has to outlive OMPdesk, and every
-/// process this one starts ends with it, so main starts that one itself.
+#[cfg(any(windows, test))]
+fn tray_path(mut cli: String) -> String {
+    if let Some(at) = cli.len().checked_sub("tailscale.exe".len())
+        && cli
+            .get(at..)
+            .is_some_and(|s| s.eq_ignore_ascii_case("tailscale.exe"))
+    {
+        cli.replace_range(at.., "tailscale-ipn.exe");
+    }
+    cli
+}
+
 async fn start_app(params: StartParams, scope: Scope) -> Result<Started, Fault> {
     let ran = match (params.stand_in, params.platform, params.app) {
         (Some(stand_in), ..) => params.rules.cli(&stand_in, scope).run(&[], None).await?,
@@ -608,9 +620,23 @@ async fn start_app(params: StartParams, scope: Scope) -> Result<Started, Fault> 
             });
         }
         (None, locate::Platform::Win32, _) => {
+            #[cfg(windows)]
+            {
+                let path = tray_path(params.path);
+                crate::user_app::launch(
+                    std::process::Command::new(path)
+                        .env_clear()
+                        .envs(params.rules.env),
+                )?;
+                return Ok(Started {
+                    code: Some(0),
+                    line: None,
+                });
+            }
+            #[cfg(not(windows))]
             return Err(Fault::new(
                 "unsupported",
-                "Windows' Tailscale app is started by main",
+                "The Tailscale tray app requires Windows",
             ));
         }
     };
@@ -651,6 +677,20 @@ mod tests {
     use serde::de::DeserializeOwned;
 
     use super::*;
+
+    #[test]
+    fn tray_sibling_matches_the_located_cli_suffix() {
+        for (cli, tray) in [
+            (
+                "C:/Tailscale/TAILSCALE.EXE",
+                "C:/Tailscale/tailscale-ipn.exe",
+            ),
+            ("XtailScale.exe", "Xtailscale-ipn.exe"),
+            ("C:/custom", "C:/custom"),
+        ] {
+            assert_eq!(tray_path(cli.into()), tray);
+        }
+    }
 
     /// A table of `captured.json`: what the TypeScript answered for the same inputs before it was deleted.
     pub fn captured<T: DeserializeOwned>(table: &str) -> T {

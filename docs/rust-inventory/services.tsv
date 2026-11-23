@@ -285,7 +285,7 @@ src/main/ssh/service.test.ts	exception	Test coverage for SSH prompts, forwarding
 src/main/ssh/service.ts	port	Restores and saves forwards, tracks active watches and retries dropped connections after checking port availability.
 src/main/ssh/test-fake-ssh.ts	exception	Test fixture writes a substitute SSH executable for controlled process interactions.
 src/main/tailscale/cli.test.ts	exception	Test coverage for native Tailscale CLI responses.
-src/main/tailscale/cli.ts	port	Calls native tailscale methods but still locates the sibling Windows tray executable and spawns it detached.
+src/main/tailscale/cli.ts	native-client	Supplies main's environment and step cancellation to native tailscale methods. Rust starts the Windows tray app outside the core job.
 src/main/tailscale/locate.test.ts	exception	Test coverage for Tailscale executable lookup precedence.
 src/main/tailscale/locate.ts	native-client	Supplies platform, preferences and environment to tailscale.locate; Rust selects the executable.
 src/main/tailscale/service-restart.test.ts	exception	Test coverage for mobile web recovery after core exit.

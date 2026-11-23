@@ -46,6 +46,8 @@ pub mod tailscale;
 mod turn_edits;
 mod update_feed;
 pub mod upkeep;
+#[cfg(windows)]
+mod user_app;
 mod visuals;
 pub mod web;
 pub mod wire;
