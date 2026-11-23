@@ -57,6 +57,7 @@ function catalogOf(providers: ProviderInfo[]): ProviderCatalog {
 function fakeLogin(): ProviderLogin & { start: ReturnType<typeof vi.fn> } {
 	return {
 		state: { providerId: null, running: false },
+		busy: false,
 		start: vi.fn(async () => true),
 		submit: vi.fn(),
 		cancel: vi.fn(),

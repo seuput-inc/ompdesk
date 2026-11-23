@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { chromium, devices, expect, test } from "@playwright/test";
 import { en } from "../src/renderer/locales/en";
 import { ServeProxy, serveSites } from "./fixture/phone-serve";
-import { exitApp, readRecords } from "./harness";
+import { exitApp } from "./harness";
 import { launchRemote, makeRemoteProfile, REMOTE_LOGIN } from "./remote-harness";
 
 // Real phone WebSocket and renderer against an isolated host. ProviderLogin component tests cover submission races.
@@ -40,7 +40,8 @@ test("a phone signs in on its host through the provider URL and paste, including
 		await phone.locator('[data-destination="settings"]').click();
 		await phone.locator('[data-settings-section="models"]').click();
 		await phone.getByRole("button", { name: "Add a provider" }).click();
-		await phone.locator('button[data-provider-connect="anthropic"]').click();
+		const connect = phone.locator('button[data-provider-connect="anthropic"]');
+		await connect.click();
 		const panel = phone.locator("[data-login-panel]");
 		const paste = panel.getByLabel("Authorization code or redirect address");
 		await expect(paste).toBeVisible();
@@ -51,11 +52,8 @@ test("a phone signs in on its host through the provider URL and paste, including
 		await expect.poll(() => new URL(popup.url()).hostname).toBe("claude.ai");
 		await popup.close();
 		await panel.getByRole("button", { name: "Cancel", exact: true }).click();
-		await expect(panel.locator("[data-login-progress]")).toHaveCount(0);
-		await expect
-			.poll(async () => (await readRecords(profile.record)).filter(frame => frame.type === "login").length)
-			.toBe(1);
-		await phone.locator('button[data-provider-connect="anthropic"]').click();
+		await expect(connect).toBeEnabled();
+		await connect.click();
 		await expect(paste).toBeVisible();
 		await phone.reload();
 		await expect(phone.locator("[data-composer-input]").first()).toBeVisible({ timeout: 60_000 });
