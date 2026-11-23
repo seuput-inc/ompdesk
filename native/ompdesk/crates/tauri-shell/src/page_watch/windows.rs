@@ -15,15 +15,16 @@ use tauri::webview::PlatformWebview;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, COREWEBVIEW2_PROCESS_KIND,
-    COREWEBVIEW2_PROCESS_KIND_RENDERER, ICoreWebView2_20, ICoreWebView2Environment13,
-    ICoreWebView2FrameInfo2, ICoreWebView2ProcessExtendedInfo,
+    COREWEBVIEW2_PROCESS_KIND_RENDERER, ICoreWebView2, ICoreWebView2_20,
+    ICoreWebView2Environment13, ICoreWebView2FrameInfo2, ICoreWebView2ProcessExtendedInfo,
     ICoreWebView2ProcessExtendedInfoCollection, ICoreWebView2ProcessFailedEventArgs2,
 };
 use webview2_com::{
     ExecuteScriptCompletedHandler, GetProcessExtendedInfosCompletedHandler,
-    ProcessFailedEventHandler,
+    NavigationCompletedEventHandler, NavigationStartingEventHandler, ProcessFailedEventHandler,
+    take_pwstr,
 };
-use windows::core::{BOOL, HSTRING, Interface};
+use windows::core::{BOOL, HSTRING, Interface, PWSTR};
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
@@ -271,6 +272,58 @@ fn end(wc: u64, call: Call, renderer: Result<i32, String>, how: &str) {
     super::crash_answer(wc, call, ended.map_err(crate::failed));
 }
 
+/// WebView2 may wait for its cookie store between admitting a navigation and invoking our scheme handler.
+fn watch_migration(core: &ICoreWebView2, wc: u64) -> windows::core::Result<()> {
+    let mut token = 0;
+    // SAFETY: the view owns these handlers; their event arguments are live on its UI thread.
+    unsafe {
+        core.add_NavigationCompleted(
+            &NavigationCompletedEventHandler::create(Box::new(move |_, event| {
+                if let Some(event) = event {
+                    let mut success = BOOL::default();
+                    event.IsSuccess(&mut success)?;
+                    if !success.as_bool() {
+                        let mut id = 0;
+                        event.NavigationId(&mut id)?;
+                        crate::runtime()
+                            .migration
+                            .lock()
+                            .expect("migration")
+                            .watches
+                            .navigation_failed(wc, id);
+                    }
+                }
+                Ok(())
+            })),
+            &mut token,
+        )?;
+        core.add_NavigationStarting(
+            &NavigationStartingEventHandler::create(Box::new(move |_, event| {
+                if let Some(event) = event {
+                    let mut uri = PWSTR::null();
+                    event.Uri(&mut uri)?;
+                    if crate::profile_bootstrap(&take_pwstr(uri)) {
+                        let mut cancelled = BOOL::default();
+                        event.Cancel(&mut cancelled)?;
+                        if !cancelled.as_bool() {
+                            let mut id = 0;
+                            event.NavigationId(&mut id)?;
+                            crate::runtime()
+                                .migration
+                                .lock()
+                                .expect("migration")
+                                .watches
+                                .navigation_started(wc, id);
+                        }
+                    }
+                }
+                Ok(())
+            })),
+            &mut token,
+        )
+    }
+}
+
 /// Reports the page's renderer ending, and WebView2's own verdict that it is unresponsive. A subframe's renderer and
 /// the browser's other processes are WebView2's to recover.
 pub fn watch_failures(window: &WebviewWindow, wc: u64) -> tauri::Result<()> {
@@ -300,8 +353,19 @@ pub fn watch_failures(window: &WebviewWindow, wc: u64) -> tauri::Result<()> {
         let mut token = 0;
         // SAFETY: Tauri hands this closure the live controller on the owning UI thread; WebView2 retains the handler
         // for the view's life.
-        let added = unsafe { view.controller().CoreWebView2() }
-            .and_then(|core| unsafe { core.add_ProcessFailed(&handler, &mut token) });
+        let added = unsafe { view.controller().CoreWebView2() }.and_then(|core| {
+            unsafe { core.add_ProcessFailed(&handler, &mut token) }?;
+            if crate::runtime()
+                .migration
+                .lock()
+                .expect("migration")
+                .profile
+                .pending()
+            {
+                watch_migration(&core, wc)?;
+            }
+            Ok(())
+        });
         if let Err(error) = added {
             crate::log::log(
                 "page.watch_failed",
