@@ -449,11 +449,10 @@ src/main/spawn-hidden.test.ts	tooling	-	Vitest suite: starts without a console w
 src/main/spawn.test.ts	tooling	-	Vitest suite: Windows shims.
 src/main/spawn.ts	port	1	spawnCommand/spawnArgs choose platform launch behavior; findOnPath checks executable candidates.
 src/main/startup-timing.ts	port	2	markStartup records each launch milestone once on main's clock, including validated renderer marks.
-src/main/stats-client.ts	port	2	StatsClient validates API paths and sends bounded HTTP requests to the private bundled dashboard server.
 src/main/stats-host-stock.test.ts	tooling	-	Vitest suite: ingests the sessions on disk and every reply written after it started, with no dashboard page open.
 src/main/stats-host.test.ts	tooling	-	Vitest suite: exits when stdin closes while stock's server never finishes starting.
 src/main/stats-server.test.ts	tooling	-	Vitest suite: a live listener is never respawned by a demand-driven revive.
-src/main/stats-server.ts	port	2	StatsServerManager spawns stock's dashboard host, tracks private port readiness and terminates the child on quit.
+src/main/stats-server.ts	mixed	2	stats.start/fetch/stop own the listener, child, backoff and requests. Main resolves the installed omp package and restarts the client on demand after a core replacement. Receiver: machine-services' local stats dispatcher.
 src/main/stock-helper-accounts.test.ts	tooling	-	Vitest suite: accounts.providers.
 src/main/session-store-enrichment.test.ts	tooling	-	Global and directory stock listings through native activity/title enrichment.
 src/main/stock-helper-extensions.test.ts	tooling	-	Vitest suite: extensions worker on a fake install.

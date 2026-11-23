@@ -1,91 +1,101 @@
 import * as fs from "node:fs/promises";
-import * as http from "node:http";
-import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
-import { StatsClient } from "./stats-client";
+import { afterEach, expect, test } from "vitest";
+import { stopCore } from "./core/process";
 import { StatsServerManager } from "./stats-server";
 
-afterEach(() => vi.restoreAllMocks());
+const hosts: StatsServerManager[] = [];
+const dirs: string[] = [];
+afterEach(async () => {
+	await Promise.all(hosts.splice(0).map(host => host.kill()));
+	await Promise.all(dirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
 
-test("a live listener is never respawned by a demand-driven revive", async () => {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stats-revive-"));
-	const script = path.join(directory, "stats-live.ts");
+async function host() {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stats-"));
+	dirs.push(dir);
+	const script = path.join(dir, "server.ts");
+	const gate = path.join(dir, "bind");
+	const started = path.join(dir, "pid");
 	await fs.writeFile(
 		script,
-		`process.stdout.write("Dashboard available at: http://127.0.0.1:55123\\n");
-await Bun.sleep(5000);
+		`
+import { existsSync, watch } from "node:fs";
+process.stdin.on("end", () => process.exit(0));
+process.stdin.resume();
+await Bun.write(${JSON.stringify(started)}, String(process.pid));
+const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+	const url = new URL(req.url);
+	if (url.searchParams.has("exit")) setImmediate(() => process.exit(1));
+	if (url.pathname === "/api/sync" && req.method !== "POST") return new Response(null, {status: 405});
+	if (url.searchParams.has("redirect")) return Response.redirect("https://example.invalid/");
+	return Response.json({ pid: process.pid, method: req.method, q: url.searchParams.get("q") });
+}});
+const gate = ${JSON.stringify(gate)};
+const bound = Promise.withResolvers<void>();
+const watcher = watch(${JSON.stringify(dir)}, ready);
+function ready() { if (existsSync(gate)) { watcher.close(); bound.resolve(); } }
+ready();
+await bound.promise;
+const port = String(server.port);
+const split = Promise.withResolvers<void>();
+process.stdout.write("\\x1b[32mompdesk-stats-ready http://127.0.0.1:" + port.slice(0, -1), split.resolve);
+await split.promise;
+process.stdout.write(port.slice(-1) + "\\x1b[39m\\n");
 `,
 	);
-	// Launched like the app launches stats-host.ts: `bun <script>` (no shebang exec on Windows).
-	const server = new StatsServerManager({ command: "bun", args: [script] });
-	try {
-		server.start();
-		await expect.poll(() => server.port, { timeout: 5000 }).toBe(55123);
-		// Every open dashboard polls; a revive that ignored the live child would
-		// stack listeners and hand the client a port nobody owns after the first exit.
-		expect(server.ensureRunning()).toBe("already-pending");
-		expect(server.port).toBe(55123);
-	} finally {
-		server.kill();
-		await fs.rm(directory, { recursive: true, force: true });
-	}
-});
+	const manager = new StatsServerManager({ command: "bun", args: [script] });
+	hosts.push(manager);
+	await manager.start();
+	return { manager, started, bind: () => fs.writeFile(gate, "") };
+}
 
-test("stats does not contact an unrelated default server before its own listener is ready", async () => {
-	const fetch = vi.spyOn(globalThis, "fetch");
-	const client = new StatsClient();
-	await expect(client.fetch("/api/stats/requests")).rejects.toThrow("not ready");
-	expect(fetch).not.toHaveBeenCalled();
-});
+async function pid(manager: StatsServerManager) {
+	const reply = await manager.fetch("/api/status");
+	const data = reply.ready ? reply.data : null;
+	return data && typeof data === "object" && "pid" in data && typeof data.pid === "number" ? data.pid : null;
+}
 
-test("split numeric loopback readiness selects the bundled listener and resets after exit", async () => {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stats-ready-"));
-	const script = path.join(directory, "stats.ts");
-	await fs.writeFile(
-		script,
-		`process.stdout.write("\\x1b[32mDashboard available at: http://127.0.0.1:54");
-await Bun.sleep(30);
-process.stdout.write("321\\x1b[39m\\n");
-await Bun.sleep(100);
-process.exit(1);
-`,
-	);
-	const server = new StatsServerManager({ command: "bun", args: [script] });
-	const ports: number[] = [];
-	const exits: number[] = [];
-	server.on("ready", port => ports.push(port));
-	server.on("exit", () => exits.push(server.port));
-	try {
-		server.start();
-		await expect.poll(() => ports, { timeout: 5000 }).toEqual([54321]);
-		await expect.poll(() => exits, { timeout: 5000 }).toEqual([0]);
-	} finally {
-		server.kill();
-		await fs.rm(directory, { recursive: true, force: true });
-	}
-});
-
-test("fetch sends POST for /api/sync, which 405s a plain GET", async () => {
-	const methods: string[] = [];
-	const server = http.createServer((req, res) => {
-		methods.push(`${req.method} ${req.url}`);
-		if (req.url === "/api/sync" && req.method !== "POST") {
-			res.writeHead(405).end(JSON.stringify({ error: "POST required" }));
-			return;
-		}
-		res.writeHead(200, { "content-type": "application/json" }).end("{}");
+test("a late, split loopback announcement enables reads without starting a second listener", async () => {
+	const { manager, bind } = await host();
+	await expect(manager.fetch("/api/status")).resolves.toEqual({ ready: false, exhausted: false });
+	await bind();
+	await expect.poll(() => pid(manager), { timeout: 5000 }).toBeTypeOf("number");
+	const first = await pid(manager);
+	await manager.start();
+	expect(await Promise.all([pid(manager), pid(manager)])).toEqual([first, first]);
+	await expect(manager.fetch("/api/request/123", { q: "a & + b" })).resolves.toMatchObject({
+		ready: true,
+		data: { method: "GET", q: "a & + b" },
 	});
-	const listening = Promise.withResolvers<void>();
-	server.listen(0, "127.0.0.1", () => listening.resolve());
-	await listening.promise;
-	try {
-		const client = new StatsClient((server.address() as AddressInfo).port);
-		await expect(client.fetch("/api/sync")).resolves.toEqual({});
-		await client.fetch("/api/stats/models");
-		expect(methods).toEqual(["POST /api/sync", "GET /api/stats/models"]);
-	} finally {
-		server.close();
-	}
+	await expect(manager.fetch("/api/sync")).resolves.toMatchObject({ ready: true, data: { method: "POST" } });
+	await expect(manager.fetch("//example.invalid/")).rejects.toThrow("[invalid_stats_path]");
+	await expect(manager.fetch("/api/status", { redirect: "1" })).rejects.toThrow("[stats_api_error]");
+});
+
+test("a crash clears readiness and a later read reopens a host whose core ended", async () => {
+	const { manager, bind } = await host();
+	await bind();
+	await expect.poll(() => pid(manager), { timeout: 5000 }).toBeTypeOf("number");
+	const first = await pid(manager);
+	await manager.fetch("/api/status", { exit: "1" }).catch(() => {});
+	await expect.poll(() => pid(manager).catch(() => null)).toBeNull();
+	await expect.poll(() => pid(manager), { timeout: 5000 }).toBeTypeOf("number");
+	expect(await pid(manager)).not.toBe(first);
+	const second = await pid(manager);
+	await stopCore();
+	await expect.poll(() => pid(manager), { timeout: 5000 }).toBeTypeOf("number");
+	expect(await pid(manager)).not.toBe(second);
+});
+
+test("stopping during startup cannot leave a listener or restart it on a later read", async () => {
+	const { manager, started, bind } = await host();
+	const readPid = () => fs.readFile(started, "utf8").then(Number, () => 0);
+	await expect.poll(readPid, { timeout: 5000 }).toBeGreaterThan(0);
+	const child = await readPid();
+	await manager.kill();
+	expect(() => process.kill(child, 0)).toThrow();
+	await bind();
+	await expect(manager.fetch("/api/status")).resolves.toEqual({ ready: false, exhausted: true });
 });

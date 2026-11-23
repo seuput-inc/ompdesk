@@ -7,7 +7,7 @@ resources/gui-bridge/omp-package.ts	exception	Resolves and imports modules of th
 resources/gui-bridge/prompt-origin-contracts.ts	exception	The same journal entry name and prompt-origin wire format are consumed by the stock extension and the list reader.
 resources/gui-bridge/redactor.ts	mixed	Privacy rules are shared with stock. Native journal or diagnostic readers must match the existing redaction before removing their Bun caller.
 resources/gui-bridge/session-list-contracts.ts	exception	The worker and the page share a wire sentinel for a message without text. It is not a host service.
-resources/gui-bridge/stats-host.ts	mixed	Stock serves the dashboard and reads messages by id; OMPdesk owns the front server, cursor, page limits and requests query. Moving the latter does not replace stock's dashboard.
+resources/gui-bridge/stats-host.ts	mixed	The Rust front listener validates paths and owns cursor paging. Bun loads installed omp-stats, starts stock live ingest and runs the fixed DB requests from its private stdin. Keep those stock APIs in their runtime (§1.3d).
 resources/gui-bridge/stock-helper/accounts.ts	mixed	Bun opens and reloads stock AuthStorage. The worker filters provider names before returning them; do not move credential contents across the boundary.
 resources/gui-bridge/stock-helper/dispatch.ts	port	The worker grants execution to an unqueued read or a serial request and withdraws cancelled work. Move admission and withdrawal together before deleting the worker queue.
 resources/gui-bridge/stock-helper/extension-specs.ts	port	Linked and pinned plugin eligibility is OMPdesk policy. The stock upgrade calls must still honor that decision at mutation time.

@@ -230,7 +230,6 @@ import { SidecarPool } from "./sidecar-pool";
 import { installSlowSteps, loopMaxMs } from "./slow-steps";
 import { nextSnowflake } from "./snowflake";
 import { markStartup } from "./startup-timing";
-import { StatsClient } from "./stats-client";
 import { StatsServerManager } from "./stats-server";
 import { stockHelperRequest, stopStockHelper } from "./stock-helper";
 import { seedSpellchecker } from "./system-languages";
@@ -566,7 +565,6 @@ let ompProcesses: OmpProcesses | null = null;
 /** The startup omp resolution that creates `statsServer` has finished (with or without one). */
 let statsLaunchSettled = false;
 let sessionIndex: SessionIndex;
-let statsClient: StatsClient;
 let logWatcher: LogWatcher;
 let remoteDevices: RemoteDevices | null = null;
 let worktreePrompts: WorktreePrompts | null = null;
@@ -1228,7 +1226,6 @@ app.whenReady().then(async () => {
 	sidecarPool.onTabReleased = (tabId, exited) => lifecycle.released(tabId, exited);
 	// This computer's models.yml, stats server and `omp bench`, for its own
 	// windows and for the devices that use it as their host.
-	statsClient = new StatsClient();
 	// FreeToken and colibri on loopback are listed as providers by themselves (src/main/local-engines.ts). A test
 	// launch never probes the developer's real ports unless its spec names a table (OMP_GUI_TEST_LOCAL_ENGINES).
 	const hostModelsChanged = { current: () => {} };
@@ -1264,10 +1261,8 @@ app.whenReady().then(async () => {
 	localEngines = detector;
 	if (app.isPackaged || process.env.OMP_GUI_TEST_LOCAL_ENGINES !== undefined) detector.start();
 	const machine = new LocalMachine({
-		stats: statsClient,
-		// Until omp is resolved below there is no manager yet, but one is coming: a read in
-		// that window waits like a booting server instead of hearing "stopped for good".
-		statsRestart: () => statsServer?.ensureRunning() ?? (statsLaunchSettled ? "exhausted" : "already-pending"),
+		stats: (path, params) =>
+			statsServer?.fetch(path, params) ?? Promise.resolve({ ready: false, exhausted: statsLaunchSettled }),
 		statsText: mainT,
 		benchmarkOmp: systemOmp,
 		benchmarkEnv: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
@@ -1620,21 +1615,15 @@ app.whenReady().then(async () => {
 				}
 				statsServer = new StatsServerManager({
 					command: "bun",
-					args: [join(bridgeDir, "stats-host.ts"), "127.0.0.1", "0"],
+					args: [join(bridgeDir, "stats-host.ts")],
 					env: { PATH: ompPathEnv(resolution.runtime.bin, basePath), OMP_PACKAGE_ROOT: packageRoot },
 				});
-				statsServer.on("ready", (port: number) => {
-					statsClient.port = port;
-				});
-				statsServer.on("exit", () => {
-					statsClient.port = 0;
-				});
-				statsServer.start();
+				return statsServer.start();
 			})
 			.finally(() => {
 				statsLaunchSettled = true;
 			});
-	void launchStats();
+	void launchStats().catch(error => console.warn("[stats-server] could not start", error));
 	// Accessibility and Screen Recording cannot be granted by an app: macOS checks OMPdesk's grant for both engines.
 	// After the first tab is up, a missing one OMPdesk never asked for gets macOS's own prompt; Settings › Agent
 	// behavior › Computer use and a failed computer-use step keep the state and the button.
@@ -1852,7 +1841,6 @@ app.whenReady().then(async () => {
 		releaseHelpers: async () => {
 			const stats = statsServer;
 			statsServer = null;
-			statsClient.port = 0;
 			await Promise.all([stats?.kill(), stopStockHelper()]);
 		},
 		resume: async updated => {
@@ -2891,6 +2879,7 @@ installQuitGuard(
 	() => (sidecarPool ? sidecarPool.tabInventory() : []),
 	() => {
 		// Each step is named to the hang watchdog first: a stalled quit then names the step that never returned.
+		let statsStopped = Promise.resolve();
 		const steps: Array<[string, () => void]> = [
 			[
 				"connectivity",
@@ -2901,7 +2890,7 @@ installQuitGuard(
 					connectivityMonitor?.stop();
 				},
 			],
-			["stats-server", () => void statsServer?.kill()],
+			["stats-server", () => { statsStopped = statsServer?.kill() ?? Promise.resolve(); }],
 			["mcp-hub", () => void mcpHub?.kill()],
 			["omp-updater", () => ompUpdater?.dispose()],
 			["local-engines", () => localEngines?.dispose()],
