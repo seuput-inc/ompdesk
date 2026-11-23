@@ -1,5 +1,7 @@
 //! One output reader per worker generation. A worker hands off only the chunks since its previous
 //! reply; it owns the PTY handles and names only the rows the caller may read.
+mod text;
+
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -7,6 +9,9 @@ use std::io::Write;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+
+use crate::server::{Fault, Registry, Reply};
+use text::{Read, State};
 
 const LIMIT: usize = 1_000_000;
 
@@ -26,6 +31,8 @@ struct Transfer<'a> {
     rows: Option<Vec<Row<'a>>>,
     forget: Option<Vec<&'a str>>,
     budget: Option<usize>,
+    #[serde(borrow)]
+    read: Option<Read<'a>>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +60,20 @@ struct Row<'a> {
     delta: Option<Delta<'a>>,
 }
 
+pub(super) fn register(registry: &mut Registry) {
+    registry.add("terminal.projectLegacy", |call| {
+        Box::pin(async move {
+            let input = call
+                .bin
+                .as_deref()
+                .ok_or_else(|| Fault::new("invalid_params", "Missing legacy terminal rows"))?;
+            let result = text::legacy(input)
+                .map_err(|error| Fault::new("invalid_params", error.to_string()))?;
+            Ok(Reply::json(&())?.with_bin(result))
+        })
+    });
+}
+
 impl Scrollback {
     pub(super) fn project(&mut self, input: &[u8]) -> Result<Vec<u8>, serde_json::Error> {
         let Frame { id, terminal } = serde_json::from_slice(input)?;
@@ -60,12 +81,13 @@ impl Scrollback {
             self.0.remove(removed);
         }
         let mut reply = format!("{{\"id\":{id}").into_bytes();
-        if let Some(rows) = terminal.rows {
-            reply.extend_from_slice(b",\"result\":[");
-            for (index, mut row) in rows.into_iter().enumerate() {
-                if index != 0 {
-                    reply.push(b',');
-                }
+        if terminal.rows.is_some() || terminal.read.is_some() {
+            let mut rows = terminal.rows.unwrap_or_default();
+            reply.extend_from_slice(b",\"result\":");
+            if terminal.read.is_none() {
+                reply.push(b'[');
+            }
+            for (index, row) in rows.iter_mut().enumerate() {
                 if let Some(delta) = row.delta.take() {
                     let ring = if self.0.contains_key(row.id) {
                         self.0.get_mut(row.id).expect("present")
@@ -93,6 +115,12 @@ impl Scrollback {
                 let base = row.offset.checked_sub(len as u64).ok_or_else(|| {
                     <serde_json::Error as serde::de::Error>::custom("invalid terminal offset")
                 })?;
+                if terminal.read.is_some() {
+                    continue;
+                }
+                if index != 0 {
+                    reply.push(b',');
+                }
                 let from = row.from.unwrap_or(row.offset).clamp(base, row.offset);
                 let start = (from - base) as usize;
                 let mut end = len;
@@ -104,7 +132,7 @@ impl Scrollback {
                     }
                 }
                 row.offset = base + end as u64;
-                serde_json::to_writer(&mut reply, &row)?;
+                serde_json::to_writer(&mut reply, row)?;
                 reply.pop();
                 reply.extend_from_slice(b",\"output\":\"");
                 if let Some(ring) = ring {
@@ -112,7 +140,20 @@ impl Scrollback {
                 }
                 reply.extend_from_slice(b"\"}");
             }
-            reply.push(b']');
+            if let Some(read) = terminal.read {
+                let ring = read
+                    .index()
+                    .and_then(|i| rows.get(i))
+                    .and_then(|row| self.0.get(row.id));
+                let states = rows.iter().map(|row| State {
+                    exited: row.exited,
+                    exit_code: row.exit_code,
+                    error: row.error,
+                });
+                read.write(&mut reply, states, ring)?;
+            } else {
+                reply.push(b']');
+            }
         }
         reply.push(b'}');
         Ok(reply)
@@ -153,5 +194,31 @@ mod tests {
         assert!(second.contains(r#""offset":5"#));
         assert!(read(r#""from":3"#, 1).contains(r#""output":"\ude00""#));
         assert!(read(r#""from":2"#, 1).contains(r#""offset":2"#));
+    }
+
+    #[test]
+    fn invalid_pick_ingests_deltas_and_read_folds_crs_across_frames() {
+        let mut history = Scrollback::default();
+        let first = br#"{"id":1,"terminal":{"read":{"pick":"1e+21","lines":2},"rows":[{"id":"a","exited":false,"cols":80,"rows":24,"offset":5,"delta":"old\r\r"},{"id":"b","exited":true,"exitCode":7,"cols":80,"rows":24,"offset":4,"delta":"keep"}]}}"#;
+        let invalid: serde_json::Value =
+            serde_json::from_slice(&history.project(first).unwrap()).unwrap();
+        assert_eq!(
+            invalid["result"],
+            "Terminal 1: running\nTerminal 2: exited 7\n\nThere is no terminal 1e+21."
+        );
+        let next = br#"{"id":2,"terminal":{"read":{"pick":"1","lines":2},"rows":[{"id":"a","exited":false,"cols":80,"rows":24,"offset":10,"delta":"\n\u0085\n\ufeff\n"}]}}"#;
+        let reply: serde_json::Value =
+            serde_json::from_slice(&history.project(next).unwrap()).unwrap();
+        assert_eq!(
+            reply["result"],
+            "Terminal 1: running\n\nTerminal 1, 2 lines:\nold\n\u{85}"
+        );
+        let other = br#"{"id":3,"terminal":{"read":{"pick":"1","lines":1},"rows":[{"id":"b","exited":true,"cols":80,"rows":24,"offset":4}]}}"#;
+        let reply: serde_json::Value =
+            serde_json::from_slice(&history.project(other).unwrap()).unwrap();
+        assert_eq!(
+            reply["result"],
+            "Terminal 1: exited ?\n\nTerminal 1, 1 lines:\nkeep"
+        );
     }
 }

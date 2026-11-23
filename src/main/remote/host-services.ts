@@ -37,13 +37,12 @@
  * one research run per device, aborted when it drops.
  */
 import { randomUUID } from "node:crypto";
-import { promises as fsp } from "node:fs";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
 import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
-import { codedError, isIpcErrorCode } from "../../shared/ipc-error-codes";
+import { codedError, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	HOST_UPDATE_ACTIONS,
 	type IpcScheduledRetry,
@@ -75,7 +74,6 @@ import { type AnswerStep, TargetAnswer } from "../agent-control/target-answer";
 import { AtomicSaver } from "../atomic-file";
 import type { BackgroundWorkMember } from "../background-work";
 import type { BridgeConnectResult } from "../bridge-health";
-import { canonicalCwd } from "../canonical-cwd";
 import type { CheckoutMember } from "../checkout-peers";
 import { controlEnvFor } from "../control-socket/env";
 import { CoreError, core } from "../core/process";
@@ -121,7 +119,8 @@ import { type LoopbackCallback, loopbackCallback, replaySignInCallback } from ".
 import { stockHelperRequest } from "../stock-helper";
 import { MAX_FORMER_TAB_IDS } from "../tab-layout";
 import { sessionFolderState } from "../tab-spawn";
-import { disposeTerminals, terminalRequest } from "../terminal/requests";
+import { MAX_TERMINAL_READ_LINES } from "../terminal/agent-tool";
+import { disposeTerminals, readTerminalOutput, terminalRequest } from "../terminal/requests";
 import { detectShells } from "../terminal/shells";
 import {
 	MovesInFlight,
@@ -592,6 +591,16 @@ const AccountRotationSetParams = z.object({ mode: z.enum(ACCOUNT_ROTATION_MODES)
 const LocalEnginesSetParams = z.object({ enabled: z.boolean() });
 const CreditSpendSetParams = z.object({ enabled: z.boolean() });
 const TerminalParams = z.object({ rtab: Rtab, operation: z.object({ action: z.string() }).passthrough() });
+const TerminalReadParams = z.object({
+	rtab: Rtab,
+	read: z.object({
+		pick: z
+			.string()
+			.max(32)
+			.refine(value => Number.isInteger(Number(value)) && String(Number(value)) === value),
+		lines: z.number().int().min(1).max(MAX_TERMINAL_READ_LINES),
+	}),
+});
 const DesktopUpdateParams = z.object({ action: z.enum(HOST_UPDATE_ACTIONS) });
 /** A session's worktree binding (`IpcTabWorktree`), as the device's agent names it for `host.git.*`. */
 const GitWorktree = z.object({
@@ -627,11 +636,12 @@ function parse<T extends z.ZodTypeAny>(schema: T, method: string, params: unknow
 
 async function directory(cwd: string): Promise<string> {
 	try {
-		if ((await fsp.stat(cwd)).isDirectory()) return canonicalCwd(cwd);
-	} catch {
-		throw codedError("file_not_found", `Directory not found: ${cwd}`);
+		return (await core().call<string>("fs.directory", { path: cwd })).result;
+	} catch (error) {
+		if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "not_a_directory"))
+			throw codedError(error.code, error.message);
+		throw error;
 	}
-	throw codedError("not_a_directory", `Not a directory: ${cwd}`);
 }
 
 /** Tokens one assistant reply used (its `message_end` usage), for the device's daily count. */
@@ -1403,15 +1413,18 @@ export class LocalHostServices implements HostServices {
 			case "terminal.request": {
 				const { rtab, operation } = parse(TerminalParams, method, params);
 				const tab = this.#tab(peer, rtab);
-				const owner = terminalOwner(peer.deviceId, rtab);
 				// A paired device's terminal here is never told where this computer's control socket is.
-				const snapshots = await terminalRequest(
-					owner,
+				return terminalRequest(
+					{ deviceId: peer.deviceId, rtab },
 					tab.sidecar.cwd,
 					operation as TerminalOperation,
 					controlEnvFor(true),
 				);
-				return snapshots;
+			}
+			case "terminal.read": {
+				const { rtab, read } = parse(TerminalReadParams, method, params);
+				const tab = this.#tab(peer, rtab);
+				return readTerminalOutput({ deviceId: peer.deviceId, rtab }, tab.sidecar.cwd, read);
 			}
 			// The device's Preview page is driven by this tab's agent through the relay on this computer's loopback: the
 			// device never names an address, only the tab (see PreviewRelayTunnels).
@@ -2132,7 +2145,9 @@ export class LocalHostServices implements HostServices {
 					: null;
 			this.#checkOpenSession(params.sessionPath);
 			cwd = recorded
-				? await directory(recorded).catch(async () => {
+				? await directory(recorded).catch(async (error: unknown) => {
+						const code = ipcErrorCode(error);
+						if (code !== "file_not_found" && code !== "not_a_directory") throw error;
 						const saved = await savedWorktreesForSpawn.find(recorded).catch(() => null);
 						this.#checkOpenSession(params.sessionPath);
 						throw codedError(
@@ -2183,7 +2198,7 @@ export class LocalHostServices implements HostServices {
 		this.#stopRelay(this.#key(tab.peerId, tab.rtab));
 		this.#tabs.delete(this.#key(tab.peerId, tab.rtab));
 		// Terminals are owned by rtab; the device lost the old one with its previous launch.
-		disposeTerminals(terminalOwner(tab.peerId, tab.rtab));
+		disposeTerminals({ deviceId: tab.peerId, rtab: tab.rtab });
 		tab.formerRtabs = [tab.rtab, ...tab.formerRtabs].slice(0, MAX_FORMER_TAB_IDS);
 		tab.rtab = params.rtab;
 		this.#tabs.set(this.#key(peer.deviceId, params.rtab), tab);
@@ -3127,17 +3142,12 @@ export class LocalHostServices implements HostServices {
 			});
 		}
 		this.#relays.forget(key);
-		disposeTerminals(terminalOwner(tab.peerId, tab.rtab));
+		disposeTerminals({ deviceId: tab.peerId, rtab: tab.rtab });
 		if (runBusy(tab.run)) this.#runningChanged();
 		this.#resume?.sync();
 		this.workChanged();
 		this.listingChanged();
 	}
-}
-
-/** Terminal owner of a paired device's tab here; local windows use `<webContentsId>:<tabId>`. */
-function terminalOwner(deviceId: string, rtab: string): string {
-	return `peer:${deviceId}:${rtab}`;
 }
 
 /** A hosted tab's id for this computer's resume coordinator, beside the local tabs' ids (its first rtab). */

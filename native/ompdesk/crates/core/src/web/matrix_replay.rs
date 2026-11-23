@@ -141,9 +141,9 @@ impl Whois for Fakes {
 }
 
 impl Desktop for Fakes {
-    fn confirm_new_devices(&self) -> BoxFuture<'_, bool> {
+    fn confirm_new_devices(&self) -> BoxFuture<'_, Option<bool>> {
         let asked = self.confirm.is_some();
-        Box::pin(async move { asked })
+        Box::pin(async move { Some(asked) })
     }
 
     fn confirm(&self, _details: PairingDetails) -> BoxFuture<'_, PairingOutcome> {
@@ -166,8 +166,6 @@ impl Desktop for Fakes {
     fn unpaired_auth(&self, _address: &str) {
         self.recorder.effects.lock().unwrap().unpaired += 1;
     }
-
-    fn decline_all(&self) {}
 }
 
 impl Hooks for Fakes {

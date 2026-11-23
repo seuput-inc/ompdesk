@@ -16,26 +16,26 @@ export interface PushOptions {
 	urgency: PushUrgency;
 }
 
+type Delivery = { outcome: "sent" | "gone" } | { outcome: "failed"; message: string };
+export type PushResult = Delivery["outcome"];
+
 /** The wire: delivers `body` (UTF-8 JSON) to the push service behind `subscription`, encrypted and VAPID signed. */
 export interface PushTransport {
 	send(
 		subscription: WebPushSubscriptionJson,
 		body: string,
 		options: PushOptions & { timeoutMs: number },
-	): Promise<{ statusCode: number }>;
+	): Promise<Delivery>;
 }
 
 /** The core waits `timeoutMs` for the push service; this side waits a little longer for the core's answer. */
 const CORE_SLACK_MS = 5_000;
 
-/**
- * The real transport: the core over HTTPS. A non-2xx answer comes back as its status, not as an exception; a request
- * that got no answer (no connection, TLS, timeout) rejects with the core's coded fault.
- */
+/** The core classifies HTTP replies and oversized payloads. An attempt without an HTTP reply rejects. */
 export function coreTransport(userData: string): PushTransport {
 	return {
 		async send(subscription, body, options) {
-			const answer = await core().call<{ statusCode: number }>(
+			const answer = await core().call<Delivery>(
 				"push.send",
 				{
 					userData,
@@ -52,11 +52,7 @@ export function coreTransport(userData: string): PushTransport {
 	};
 }
 
-/** A push service accepts up to 4096 bytes after encryption (RFC 8291 spends 103 on its header and tag). */
-export const PUSH_PAYLOAD_MAX_BYTES = 3800;
 const SEND_TIMEOUT_MS = 10_000;
-
-export type PushResult = "sent" | "gone" | "failed";
 
 export interface PushSenderDeps {
 	/** The folder the core keeps the VAPID keypair in (`web-push.json`). */
@@ -81,19 +77,13 @@ export class PushSender {
 		options: PushOptions,
 	): Promise<PushResult> {
 		const body = JSON.stringify(payload);
-		if (Buffer.byteLength(body) > PUSH_PAYLOAD_MAX_BYTES) {
-			this.#deps.log?.(`web push not sent: payload of ${Buffer.byteLength(body)} bytes is over the limit`);
-			return "failed";
-		}
 		try {
-			const { statusCode } = await this.#transport.send(subscription, body, {
+			const result = await this.#transport.send(subscription, body, {
 				...options,
 				timeoutMs: SEND_TIMEOUT_MS,
 			});
-			if (statusCode >= 200 && statusCode < 300) return "sent";
-			if (statusCode === 404 || statusCode === 410) return "gone";
-			this.#deps.log?.(`web push refused with status ${statusCode}`);
-			return "failed";
+			if (result.outcome === "failed") this.#deps.log?.(result.message);
+			return result.outcome;
 		} catch (error) {
 			this.#deps.log?.(`web push failed: ${error instanceof Error ? error.message : String(error)}`);
 			return "failed";

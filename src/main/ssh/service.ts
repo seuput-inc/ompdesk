@@ -10,7 +10,6 @@
  */
 
 import { randomBytes } from "node:crypto";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
 import {
@@ -25,8 +24,7 @@ import {
 	type SshToolsRequest,
 	type SshToolsState,
 } from "../../shared/ssh-tools";
-import { writeFileAtomic } from "../atomic-file";
-import { CoreError } from "../core/process";
+import { CoreError, core } from "../core/process";
 import { SshCore, type SshFailure, type SshRun } from "./client";
 
 /** How often, and how far apart, the local port is asked for again behind this forward's own ssh that just closed. */
@@ -60,19 +58,11 @@ const requestSchema: z.ZodType<SshToolsRequest> = z.discriminatedUnion("action",
 	z.object({ action: z.literal("createKey") }),
 	z.object({ action: z.literal("loadKeys") }),
 ]);
-const storeSchema = z.object({
-	graceMs: z.number().int().min(SSH_GRACE_MIN_MS).max(SSH_GRACE_MAX_MS),
-	forwards: z.array(
-		z.object({
-			id: z.string(),
-			server: z.string(),
-			target: targetSchema,
-			localPort: z.number(),
-			remotePort: z.number(),
-			active: z.boolean(),
-		}),
-	),
-});
+
+interface ForwardStore {
+	graceMs: number;
+	forwards: (Omit<SshForward, "status"> & { active: boolean })[];
+}
 
 interface ForwardRuntime {
 	forward: SshForward;
@@ -119,47 +109,40 @@ export interface SshToolsDeps {
 
 export class SshTools {
 	readonly #deps: SshToolsDeps;
-	readonly #storeFile: string;
 	readonly #core: SshCore;
 	readonly #forwards = new Map<string, ForwardRuntime>();
 	readonly #watches = new Map<string, WatchRuntime>();
 	#graceMs = SSH_GRACE_DEFAULT_MS;
 	#loaded: Promise<void> | null = null;
-	/** Saves run one after another, so an older snapshot never lands after a newer one. */
-	#saving: Promise<void> = Promise.resolve();
+	/** A timed-out read can still quarantine a file; a timed-out save can still replace it. */
+	#storeIdle: Promise<void> = Promise.resolve();
 	#disposed = false;
 	/** Connects in flight and halted ssh processes that have not closed yet: what `settled()` waits for. */
 	readonly #inFlight = new Set<Promise<unknown>>();
 
 	constructor(deps: SshToolsDeps) {
 		this.#deps = deps;
-		this.#storeFile = path.join(deps.userData, "ssh-forwards.json");
 		this.#core = new SshCore(path.join(deps.userData, "ssh"), prompts => deps.broadcast("prompt", prompts));
 	}
 
 	/** Load the saved forwards and start the ones that were running (launch restore). */
 	start(): Promise<void> {
-		this.#loaded ??= (async () => {
-			const text = await fs.readFile(this.#storeFile, "utf8").catch(() => null);
-			if (text === null) return;
-			let data: z.infer<typeof storeSchema> | null = null;
-			try {
-				const parsed = storeSchema.safeParse(JSON.parse(text));
-				if (parsed.success) data = parsed.data;
-			} catch {}
-			if (!data) {
-				// Keep an unreadable store aside: the next save would otherwise overwrite the user's forwards.
-				await fs.rename(this.#storeFile, `${this.#storeFile}.corrupt`).catch(() => {});
-				return;
-			}
-			this.#graceMs = data.graceMs;
-			for (const saved of data.forwards) {
-				const runtime = forwardRuntime({ ...saved, status: { kind: "stopped", error: null } }, saved.active);
-				this.#forwards.set(saved.id, runtime);
-				if (saved.active) this.#background(this.#connect(runtime));
-			}
-			this.#changed();
-		})().catch(() => {});
+		this.#loaded ??= this.#storeCall<ForwardStore | null>("ssh.readStore").then(
+			data => {
+				if (!data || this.#disposed) return;
+				this.#graceMs = data.graceMs;
+				for (const saved of data.forwards) {
+					const runtime = forwardRuntime({ ...saved, status: { kind: "stopped", error: null } }, saved.active);
+					this.#forwards.set(saved.id, runtime);
+					if (saved.active) this.#background(this.#connect(runtime));
+				}
+				this.#changed();
+			},
+			error => {
+				this.#loaded = null;
+				throw error;
+			},
+		);
 		return this.#loaded;
 	}
 
@@ -246,23 +229,27 @@ export class SshTools {
 		this.#deps.broadcast("state", this.state());
 	}
 
+	#storeCall<T>(method: "ssh.readStore" | "ssh.saveStore", data?: ForwardStore): Promise<T> {
+		const ended = Promise.withResolvers<void>();
+		const answer = this.#storeIdle.then(() =>
+			core().call<T>(method, { userData: this.#deps.userData, data }, { onEnded: ended.resolve }),
+		);
+		this.#storeIdle = ended.promise;
+		return answer.then(({ result }) => result);
+	}
+
 	#save(): Promise<void> {
-		const write = this.#saving.then(async () => {
-			const data = {
-				graceMs: this.#graceMs,
-				forwards: [...this.#forwards.values()].map(({ forward, active }) => ({
-					id: forward.id,
-					server: forward.server,
-					target: forward.target,
-					localPort: forward.localPort,
-					remotePort: forward.remotePort,
-					active,
-				})),
-			};
-			await writeFileAtomic(this.#storeFile, JSON.stringify(data, null, "\t"));
+		return this.#storeCall<void>("ssh.saveStore", {
+			graceMs: this.#graceMs,
+			forwards: [...this.#forwards.values()].map(({ forward, active }) => ({
+				id: forward.id,
+				server: forward.server,
+				target: forward.target,
+				localPort: forward.localPort,
+				remotePort: forward.remotePort,
+				active,
+			})),
 		});
-		this.#saving = write.catch(() => {});
-		return write;
 	}
 
 	/** For the places nobody awaits (a close handler, a background connect): a failed save is not an unhandled rejection. */

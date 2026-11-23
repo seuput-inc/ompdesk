@@ -380,6 +380,92 @@ pub fn stat(params: &PathParams) -> Result<Reply, Fault> {
     })
 }
 
+/// The cwd a paired device opens or restarts. Stat the supplied path before resolving any `..`.
+pub(super) fn directory(params: &PathParams) -> Result<Reply, Fault> {
+    let path = &params.path;
+    let meta = disk::stat(path)
+        .map_err(|_| Fault::new("file_not_found", format!("Directory not found: {path}")))?;
+    if !meta.is_dir() {
+        return Err(Fault::new(
+            "not_a_directory",
+            format!("Not a directory: {path}"),
+        ));
+    }
+    #[cfg(unix)]
+    if let Some(resolved) = node_cwd(path) {
+        return Reply::json(&resolved.to_string_lossy());
+    }
+    Reply::json(path)
+}
+
+/// Node's realpathSync folds `..` before following links, including in each link's target.
+/// The kernel's canonicalize follows the link first and can return a different project.
+#[cfg(unix)]
+fn node_cwd(path: &str) -> Option<std::path::PathBuf> {
+    use crate::git::read::resolve;
+    use std::collections::{HashMap, HashSet, hash_map::Entry};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::path::{Component, Path, PathBuf};
+
+    let mut path = PathBuf::from(resolve("/", std::path::absolute(path).ok()?.to_str()?));
+    let mut out = PathBuf::new();
+    let mut links: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut hard = HashSet::new();
+    let mut targets = HashMap::new();
+    let mut pipe_or_socket = false;
+    'walk: loop {
+        let mut parts = path.components();
+        while let Some(part) = parts.next() {
+            out.push(part);
+            if part == Component::RootDir {
+                continue;
+            }
+            if hard.contains(&out) {
+                // realpathSync stops on reaching a known prefix after a link to a pipe or socket.
+                if pipe_or_socket {
+                    let tails = links.iter().rev().map(|(_, tail)| tail.as_path());
+                    for tail in std::iter::once(parts.as_path()).chain(tails) {
+                        if !tail.as_os_str().is_empty() {
+                            out.push(tail);
+                        }
+                    }
+                    return Some(out);
+                }
+                continue;
+            }
+            let meta = std::fs::symlink_metadata(&out).ok()?;
+            if !meta.is_symlink() {
+                if !targets.is_empty() {
+                    hard.insert(out.clone());
+                }
+                continue;
+            }
+            if links.iter().any(|(link, _)| *link == out) {
+                return None;
+            }
+            if targets.is_empty() {
+                hard.extend(out.ancestors().skip(1).map(Path::to_path_buf));
+            }
+            let target = match targets.entry((meta.dev(), meta.ino())) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let kind = std::fs::metadata(&out).ok()?.file_type();
+                    pipe_or_socket = kind.is_fifo() || kind.is_socket();
+                    entry.insert(std::fs::read_link(&out).ok()?)
+                }
+            };
+            let next = resolve(out.parent()?.to_str()?, &target.to_string_lossy());
+            links.push((std::mem::take(&mut out), parts.as_path().to_owned()));
+            path = next.into();
+            continue 'walk;
+        }
+        let Some((_, tail)) = links.pop() else {
+            return Some(out);
+        };
+        path = tail;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Byte strings and what node's `Buffer.toString("utf8")` made of them (code points), captured from node 24.

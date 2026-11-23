@@ -6,10 +6,10 @@ import {
 	TERMINAL_OUTPUT_BUDGET,
 	TERMINAL_POLL_MAX_WAIT_MS,
 	type TerminalOperation,
+	type TerminalRead,
 	type TerminalSnapshot,
 } from "../../shared/terminal-types";
 import { stockHelperRequest } from "../stock-helper";
-import { detectShells } from "./shells";
 
 export function validTerminalOperation(value: TerminalOperation): boolean {
 	if (!value || typeof value !== "object") return false;
@@ -43,30 +43,49 @@ export function validTerminalOperation(value: TerminalOperation): boolean {
 	);
 }
 
+type TerminalOwner = string | { deviceId: string; rtab: string };
+
 /**
  * One operation on `owner`'s terminals, a new one started in `cwd` with `env` over the worker's own (the control
  * socket's variables, `controlEnvFor`: a terminal of a tab run for another device is told control is off).
  */
 export function terminalRequest(
-	owner: string,
+	owner: TerminalOwner,
 	cwd: string,
 	operation: TerminalOperation,
 	env: Record<string, string>,
+	viewer?: number,
 ): Promise<TerminalSnapshot[]> {
 	if (!validTerminalOperation(operation)) return Promise.reject(new Error("Invalid terminal operation"));
-	return stockHelperRequest<TerminalSnapshot[]>("terminal.request", {
+	if (viewer !== undefined)
+		return stockHelperRequest<TerminalSnapshot[]>("terminal.viewerRequest", {
+			owner,
+			cwd,
+			operation,
+			env,
+			viewer,
+			now: Date.now(),
+		});
+	const method =
+		operation.action === "create" && operation.shell
+			? "terminal.create"
+			: typeof owner === "string"
+				? "terminal.request"
+				: "terminal.peerRequest";
+	return stockHelperRequest<TerminalSnapshot[]>(method, { owner, cwd, operation, env });
+}
+
+export function readTerminalOutput(owner: TerminalOwner, cwd: string, read: TerminalRead): Promise<string | null> {
+	return stockHelperRequest(typeof owner === "string" ? "terminal.request" : "terminal.peerRequest", {
 		owner,
 		cwd,
-		operation,
-		env,
-		// Only a shell this computer lists starts; an unknown or missing one falls back to the default.
-		shell:
-			operation.action === "create" && operation.shell
-				? detectShells().find(shell => shell.path === operation.shell)
-				: undefined,
+		operation: { action: "list" },
+		read,
 	});
 }
 
-export function disposeTerminals(owner: string): void {
-	void stockHelperRequest("terminal.dispose", { owner }).catch(() => {});
+export function disposeTerminals(owner: TerminalOwner): void {
+	void stockHelperRequest(typeof owner === "string" ? "terminal.dispose" : "terminal.peerDispose", { owner }).catch(
+		() => {},
+	);
 }

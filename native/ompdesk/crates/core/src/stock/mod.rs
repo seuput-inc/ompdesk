@@ -36,10 +36,13 @@
 //! group on POSIX.
 
 mod install_stamp;
+mod lease;
 mod scrollback;
 mod search;
+mod shells;
+mod terminal;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,7 +58,7 @@ use tokio::sync::{Notify, mpsc, oneshot, watch};
 use crate::fs::error::uv_code;
 use crate::json::whole_surrogates;
 use crate::run::{Runner, terminate};
-use crate::server::{Call, Events, Fault, Registry, Reply};
+use crate::server::{Call, Events, Fault, Registry, Reply, at_once};
 
 /// How long past its timeout a stock request may stay unanswered before its worker counts as hung.
 const RECYCLE_GRACE: Duration = Duration::from_secs(30);
@@ -72,7 +75,10 @@ const CLOSE_WAIT: Duration = Duration::from_secs(2);
 const READ_BUFFER: usize = 64 * 1024;
 
 pub fn register(registry: &mut Registry) {
+    shells::register(registry);
+    scrollback::register(registry);
     registry.add("stock.request", enqueue);
+    registry.add("terminal.viewerSeen", viewer_seen);
     registry.add("stock.launched", |call| {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || launched(&call))
@@ -190,12 +196,20 @@ enum Msg {
     Request {
         id: u64,
         method: String,
-        line: Vec<u8>,
+        input: Input,
         timeout: Duration,
         tuning: Tuning,
         events: Events,
         reply: oneshot::Sender<Answer>,
     },
+    ViewerSeen {
+        owner: String,
+        viewer: i64,
+        ids: Vec<Box<RawValue>>,
+        now: i64,
+        reply: oneshot::Sender<Vec<&'static str>>,
+    },
+    ShellReady(u64, Result<Vec<u8>, Fault>),
     /// The request's caller stopped waiting: its timeout passed (or main withdrew the call).
     GaveUp(u64),
     Launched {
@@ -223,6 +237,71 @@ enum Msg {
     Stop(oneshot::Sender<Vec<watch::Receiver<bool>>>),
 }
 
+enum Input {
+    Line(Vec<u8>),
+    Create(Vec<u8>),
+    Viewer(Vec<u8>),
+    Dispose(Option<Vec<u8>>),
+}
+
+impl Input {
+    fn new(id: u64, method: &str, params: Option<Vec<u8>>) -> Result<Self, Fault> {
+        Ok(match method {
+            "terminal.create" => Self::Create(params.unwrap_or_default()),
+            "terminal.viewerRequest" => Self::Viewer(params.unwrap_or_default()),
+            "terminal.dispose" => Self::Dispose(params),
+            "terminal.peerRequest" | "terminal.peerDispose" => Self::Line(terminal::frame(
+                id,
+                params.as_deref().unwrap_or_default(),
+                method == "terminal.peerDispose",
+                false,
+            )?),
+            "search.text" => {
+                let bytes = params.as_deref().unwrap_or_default();
+                Self::Line(search::request_line(id, bytes)?)
+            }
+            _ => Self::Line(request_line(id, method, params.as_deref())),
+        })
+    }
+
+    fn prepare(self, id: u64, lane: &mut Lane) -> Result<Option<Vec<u8>>, Fault> {
+        let create = match self {
+            Self::Line(line) => return Ok(Some(line)),
+            Self::Dispose(params) => {
+                #[derive(Deserialize)]
+                struct Local<'a> {
+                    #[serde(borrow)]
+                    owner: std::borrow::Cow<'a, str>,
+                }
+                if let Some(Local { owner }) = params
+                    .as_deref()
+                    .and_then(|p| serde_json::from_slice(p).ok())
+                {
+                    lane.leases.forget_owner(&owner);
+                }
+                return Ok(Some(request_line(
+                    id,
+                    "terminal.dispose",
+                    params.as_deref(),
+                )));
+            }
+            Self::Viewer(bytes) => {
+                if let Some(line) = terminal::viewer_frame(id, &bytes, &mut lane.leases)? {
+                    return Ok(Some(line));
+                }
+                bytes
+            }
+            Self::Create(bytes) => bytes,
+        };
+        let inbox = lane.inbox.clone();
+        tokio::task::spawn_blocking(move || {
+            let prepared = terminal::frame(id, &create, false, true);
+            let _ = inbox.send(Msg::ShellReady(id, prepared));
+        });
+        Ok(None)
+    }
+}
+
 struct Entry {
     inbox: mpsc::UnboundedSender<Msg>,
     /// The output of the lane's last request: what tells whose lane it is when a connection ends.
@@ -245,12 +324,12 @@ struct Placed {
 /// a caller sent one after the other reach a serial lane in that order. The body of an `async fn` runs only once its
 /// future is polled, in a task of its own, and two such tasks start in either order: a mutation sent after a scan
 /// ran before it (main's `stock-helper.test.ts`, "never runs a queued mutation", run 43357570260).
-fn enqueue(call: Call) -> crate::server::Answer {
-    let placed = place(&call);
+fn enqueue(mut call: Call) -> crate::server::Answer {
+    let placed = place(&mut call);
     Box::pin(async move { wait(call, placed?).await })
 }
 
-fn place(call: &Call) -> Result<Placed, Fault> {
+fn place(call: &mut Call) -> Result<Placed, Fault> {
     let RequestParams {
         host,
         method,
@@ -271,11 +350,7 @@ fn place(call: &Call) -> Result<Placed, Fault> {
     let worker = tuning.worker.unwrap_or_else(|| Worker::of(&method));
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let timeout = Duration::from_millis(timeout_ms);
-    let line = if method == "search.text" {
-        search::request_line(id, call.bin.as_deref().unwrap_or_default())?
-    } else {
-        request_line(id, &method, call.bin.as_deref())
-    };
+    let input = Input::new(id, &method, call.bin.take())?;
     let (reply, answer) = oneshot::channel();
     let inbox = {
         // Sent under the table's lock, so a stop that takes the lane out never leaves a request behind it.
@@ -289,7 +364,7 @@ fn place(call: &Call) -> Result<Placed, Fault> {
         entry.events = call.events.clone();
         let _ = entry.inbox.send(Msg::Request {
             id,
-            line,
+            input,
             method,
             timeout,
             tuning,
@@ -304,6 +379,44 @@ fn place(call: &Call) -> Result<Placed, Fault> {
         timeout,
         answer,
     })
+}
+
+/// Place the receipt of the snapshot after all earlier claims/disposals, without starting a worker.
+fn viewer_seen(call: Call) -> crate::server::Answer {
+    #[derive(Deserialize)]
+    struct Seen {
+        host: String,
+        owner: String,
+        viewer: i64,
+        ids: Vec<Box<RawValue>>,
+        now: i64,
+    }
+    let Seen {
+        host,
+        owner,
+        viewer,
+        ids,
+        now,
+    } = match call.params() {
+        Ok(seen) => seen,
+        Err(fault) => return at_once(Err(fault)),
+    };
+    if ids.iter().any(|id| !id.get().starts_with('"')) {
+        return at_once(Err(Fault::new("invalid_params", "Expected terminal ids")));
+    }
+    let lanes = locked(&LANES);
+    let Some(entry) = lanes.get(&(host, Worker::Terminals)) else {
+        return at_once(Reply::json(&vec!["free"; ids.len()]));
+    };
+    let (reply, answer) = oneshot::channel();
+    let _ = entry.inbox.send(Msg::ViewerSeen {
+        owner,
+        viewer,
+        ids,
+        now,
+        reply,
+    });
+    Box::pin(async move { Reply::json(&answer.await.map_err(|_| stopped())?) })
 }
 
 async fn wait(call: Call, placed: Placed) -> Result<Reply, Fault> {
@@ -515,11 +628,12 @@ struct Lane {
     worker: Worker,
     inbox: mpsc::UnboundedSender<Msg>,
     tuning: Tuning,
+    leases: lease::Leases,
     events: Events,
     /// Requests whose caller still waits.
     pending: HashMap<u64, Pending>,
-    /// Those that wait for a worker to start, in the order they came.
-    waiting: Vec<u64>,
+    /// Arrival order, including a create whose selected shell has not been resolved yet.
+    waiting: VecDeque<u64>,
     /// The start main was asked for and has not answered.
     launching: Option<u64>,
     running: Option<Running>,
@@ -538,9 +652,10 @@ impl Lane {
             worker,
             inbox: inbox.clone(),
             tuning: Tuning::default(),
+            leases: lease::Leases::default(),
             events,
             pending: HashMap::new(),
-            waiting: Vec::new(),
+            waiting: VecDeque::new(),
             launching: None,
             running: None,
             generations: 0,
@@ -553,21 +668,56 @@ impl Lane {
                     Msg::Request {
                         id,
                         method,
-                        line,
+                        input,
                         timeout,
                         tuning,
                         events,
                         reply,
                     } => {
+                        let line = match input.prepare(id, &mut lane) {
+                            Ok(line) => line,
+                            Err(fault) => {
+                                let _ = reply.send(Err(fault));
+                                continue;
+                            }
+                        };
                         lane.tuning = tuning;
                         lane.events = events;
                         let pending = Pending {
                             method,
-                            line: Some(line),
+                            line,
                             timeout,
                             reply,
                         };
                         lane.request(id, pending);
+                    }
+                    Msg::ViewerSeen {
+                        owner,
+                        viewer,
+                        ids,
+                        now,
+                        reply,
+                    } => {
+                        let states = ids
+                            .iter()
+                            .map(|id| lane.leases.seen(&owner, id.get(), viewer, now))
+                            .collect();
+                        let _ = reply.send(states);
+                    }
+                    Msg::ShellReady(id, result) => {
+                        match result {
+                            Ok(line) => {
+                                if let Some(pending) = lane.pending.get_mut(&id) {
+                                    pending.line = Some(line);
+                                }
+                            }
+                            Err(error) => {
+                                if let Some(pending) = lane.pending.remove(&id) {
+                                    let _ = pending.reply.send(Err(error));
+                                }
+                            }
+                        }
+                        lane.flush();
                     }
                     Msg::GaveUp(id) => lane.gave_up(id),
                     Msg::Launched { launch, how } => lane.launched(launch, how),
@@ -588,6 +738,7 @@ impl Lane {
     fn request(&mut self, id: u64, pending: Pending) {
         // A request keeps the worker up: the idle exit is armed again once this one is answered.
         self.idle_epoch += 1;
+        self.waiting.push_back(id);
         self.pending.insert(id, pending);
         if self.outlived_its_omp() {
             eprintln!(
@@ -597,10 +748,9 @@ impl Lane {
             self.let_go();
         }
         if self.running.is_some() {
-            self.write(id);
+            self.flush();
             return;
         }
-        self.waiting.push(id);
         if self.launching.is_none() {
             // Named apart from every other start ever asked for, so a late answer to one asked before a stop is
             // never taken for the answer to this one.
@@ -642,13 +792,20 @@ impl Lane {
         Some(running)
     }
 
-    fn write(&mut self, id: u64) {
-        let (Some(running), Some(pending)) = (&mut self.running, self.pending.get_mut(&id)) else {
+    /// A later dispose cannot pass a create whose shell is still being checked.
+    fn flush(&mut self) {
+        let Some(running) = &mut self.running else {
             return;
         };
-        if let Some(line) = pending.line.take() {
-            running.unanswered.insert(id);
-            let _ = running.stdin.send(line);
+        while let Some(&id) = self.waiting.front() {
+            if let Some(pending) = self.pending.get_mut(&id) {
+                let Some(line) = pending.line.take() else {
+                    break;
+                };
+                running.unanswered.insert(id);
+                let _ = running.stdin.send(line);
+            }
+            self.waiting.pop_front();
         }
     }
 
@@ -668,9 +825,7 @@ impl Lane {
         match how.and_then(|launch| self.spawn(launch)) {
             Ok(running) => {
                 self.running = Some(running);
-                for id in std::mem::take(&mut self.waiting) {
-                    self.write(id);
-                }
+                self.flush();
                 // Every request that waited for it timed out meanwhile: nothing will answer and arm it.
                 self.arm_idle_exit();
             }
@@ -790,6 +945,10 @@ impl Lane {
         let Some(running) = &mut self.running else {
             return;
         };
+        if !running.unanswered.contains(&id) {
+            self.flush();
+            return;
+        }
         let _ = running
             .stdin
             .send(format!("{{\"cancel\":{id}}}\n").into_bytes());
@@ -964,6 +1123,7 @@ pub(crate) async fn request_in_process(
         serde_json::to_vec(params).map_err(|error| Fault::new("internal", error.to_string()))?;
     let worker = Worker::of(method);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let input = Input::new(id, method, Some(text))?;
     let (reply, answer) = oneshot::channel();
     let inbox = {
         // Sent under the table's lock, so a stop that takes the lane out never leaves a request behind it.
@@ -977,7 +1137,7 @@ pub(crate) async fn request_in_process(
         entry.events = events.clone();
         let _ = entry.inbox.send(Msg::Request {
             id,
-            line: request_line(id, method, Some(&text)),
+            input,
             method: method.to_owned(),
             timeout,
             tuning: Tuning::default(),

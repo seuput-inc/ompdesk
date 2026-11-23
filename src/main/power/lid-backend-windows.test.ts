@@ -1,7 +1,10 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { stopCore } from "../core/process";
+import { LidAwake } from "./lid-awake";
+import { windowsHasBattery } from "./lid-awake-runtime";
 import { type PowercfgRunner, parseActiveScheme, parseAcValue, WindowsLidBackend } from "./lid-backend-windows";
 
 const BALANCED = "381b4222-f694-41f0-9685-ff5bb260df2e";
@@ -58,11 +61,11 @@ function fakePowercfg(initial: { ac: number; dc: number }) {
 }
 
 let dir: string;
-function backend(powercfg: { runner: PowercfgRunner }) {
+function backend(powercfg: { runner: PowercfgRunner }, hasBattery = async () => true) {
 	dir = mkdtempSync(join(tmpdir(), "lid-awake-"));
 	return new WindowsLidBackend({
 		powercfg: powercfg.runner,
-		hasBattery: async () => true,
+		hasBattery,
 		markerFile: join(dir, "lid-awake.json"),
 		now: () => 1000,
 	});
@@ -70,6 +73,54 @@ function backend(powercfg: { runner: PowercfgRunner }) {
 
 afterEach(() => {
 	if (dir) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("Windows battery detection through the core", () => {
+	afterAll(() => stopCore());
+
+	const args = [
+		"-NoProfile",
+		"-NonInteractive",
+		"-Command",
+		"(Get-CimInstance -ClassName Win32_Battery | Measure-Object).Count",
+	];
+	const probe = (script: string) =>
+		windowsHasBattery(process.execPath, [
+			"-e",
+			`require('node:assert/strict').deepEqual(process.argv.slice(1), ${JSON.stringify(args)}); ${script}`,
+			"--",
+		]);
+
+	it.each([
+		["\uFEFF +002\r\n", true],
+		["0\r\n", false],
+		["no count", false],
+	] as const)("holds the AC setting only when the query reports a battery (%s)", async (count, laptop) => {
+		const powercfg = fakePowercfg({ ac: 2, dc: 1 });
+		const lid = new LidAwake({
+			onAc: true,
+			backend: backend(powercfg, () => probe(`process.stdout.write(${JSON.stringify(count)})`)),
+			log: () => {},
+		});
+		lid.wrap({ start: () => 1, stop: () => {} }, "work").start();
+		await lid.settled();
+		expect(powercfg.state).toMatchObject({ ac: laptop ? 0 : 2, dc: 1 });
+		expect(existsSync(join(dir, "lid-awake.json"))).toBe(laptop);
+		lid.dispose();
+		expect(powercfg.state).toMatchObject({ ac: 2, dc: 1 });
+		expect(existsSync(join(dir, "lid-awake.json"))).toBe(false);
+	});
+
+	it("refuses a positive count when the command failed or either pipe overflowed", async () => {
+		await expect(probe("console.log(1); console.error('fixture failure'); process.exitCode = 1")).rejects.toThrow(
+			/\nfixture failure\r?\n$/,
+		);
+		for (const pipe of ["stdout", "stderr"]) {
+			await expect(probe(`console.log(1); process.${pipe}.write('1'.repeat(1024 * 1024 + 1))`)).rejects.toThrow(
+				`${pipe} maxBuffer length exceeded`,
+			);
+		}
+	});
 });
 
 describe("powercfg parsing", () => {

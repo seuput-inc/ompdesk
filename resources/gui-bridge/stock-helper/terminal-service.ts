@@ -104,7 +104,7 @@ export class TerminalService {
 			this.#entries.set(randomUUID(), entry);
 			this.#start(entry);
 		} else if (operation.action === "claim") {
-			// Main moved the size lease to the claiming viewer; the others' polls answer with their new standing.
+			// Wake other viewers so their pending polls report the new size holder.
 			this.#wake(true);
 		} else if (operation.action !== "list") {
 			const entry = this.#entries.get(operation.id);

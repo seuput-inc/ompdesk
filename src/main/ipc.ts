@@ -215,7 +215,7 @@ import { stockHelperRequest } from "./stock-helper";
 import { shellEngine } from "./system-version";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
-import { formatTerminalRead, TERMINAL_READ_TOOL } from "./terminal/agent-tool";
+import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
 import { closeTabTerminals, readTabTerminals, registerTerminalIpc } from "./terminal/ipc";
 import { setTrayState } from "./tray";
 import { aggregateProgress, aggregateTrayStatus } from "./tray-labels";
@@ -225,7 +225,7 @@ import { appVersion } from "./updater";
 import { type ClientWindow, isWebWindow } from "./web/client-window";
 import { type FileEditReports, parseFileEditReport } from "./web/file-edit-reports";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
-import { attachHere, type UploadStore } from "./web/uploads";
+import type { UploadStore } from "./web/uploads";
 import type { SpawnWindow, WindowManager } from "./window";
 import { sanitizeChromeColors, TOP_BAR_HEIGHT } from "./window-chrome";
 import {
@@ -309,7 +309,7 @@ export interface IpcDeps {
 	 * Where a file attached to a prompt of this computer's own tab lands when it has no path here (pasted, dragged out
 	 * of another app): the phones' upload folder (web/uploads.ts), its limits and its 24-hour lifetime.
 	 */
-	uploads?: Pick<UploadStore, "store">;
+	uploads?: Pick<UploadStore, "attachHere">;
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
@@ -616,8 +616,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				cwd: sidecar.cwd,
 				device: sidecar.device,
 			};
-			void readTabTerminals(remoteDevices, target).then(
-				snapshots => reply(formatTerminalRead(snapshots, request.arguments), false),
+			void readTabTerminals(remoteDevices, target, request.arguments).then(
+				text => reply(text ?? "The user has no terminal open in this tab's Terminal panel.", false),
 				error =>
 					reply(`Couldn't read the terminals: ${error instanceof Error ? error.message : String(error)}`, true),
 			);
@@ -2717,7 +2717,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 					return { ok: false, error: "This tab runs on this computer", code: "invalid_path" };
 				if (!deps.uploads)
 					return { ok: false, error: "This computer does not take attached files", code: "unsupported" };
-				return attachHere(deps.uploads, payload.name, data);
+				return deps.uploads.attachHere(payload.name, data);
 			}
 			const device = target.device;
 			return uploadToHost(

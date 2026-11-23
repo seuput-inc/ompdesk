@@ -31,8 +31,8 @@ impl Whois for Idle {
 }
 
 impl Desktop for Idle {
-    fn confirm_new_devices(&self) -> BoxFuture<'_, bool> {
-        Box::pin(async { false })
+    fn confirm_new_devices(&self) -> BoxFuture<'_, Option<bool>> {
+        Box::pin(async { Some(false) })
     }
 
     fn confirm(&self, _details: PairingDetails) -> BoxFuture<'_, PairingOutcome> {
@@ -42,8 +42,6 @@ impl Desktop for Idle {
     fn device_connected(&self, _device: &Device) {}
 
     fn unpaired_auth(&self, _address: &str) {}
-
-    fn decline_all(&self) {}
 }
 
 impl Hooks for Idle {

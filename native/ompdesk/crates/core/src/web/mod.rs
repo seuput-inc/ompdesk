@@ -10,6 +10,7 @@ pub mod deps;
 pub mod devices;
 pub mod host;
 pub mod limits;
+mod pairing;
 pub mod push;
 pub mod refusal;
 pub mod relay;

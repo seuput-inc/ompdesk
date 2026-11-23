@@ -3,12 +3,14 @@
  * call dispatch and its policy and grant checks, error shaping, the quota on model commands, event batching and
  * merging, presence, the limits and the heartbeat. The core's timers and clock are the test's.
  */
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import { WEB_PERMISSIONS, WEB_PROTOCOL_VERSION, type WebPermission } from "../../shared/web-protocol";
+import { core } from "../core/process";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
 import { FileEditReports, parseFileEditReport } from "./file-edit-reports";
@@ -64,7 +66,8 @@ async function rig(options: RigOptions = {}) {
 		reserve: vi.fn(options.reserve ?? (() => ({ ok: true as const, refund }))),
 		record: vi.fn(),
 	};
-	const blobs = new BlobStore();
+	const userData = `private:${randomUUID()}`;
+	const blobs = new BlobStore({ userData });
 	/** This device's uploads by host path; `take` hands one over once. */
 	const uploaded = new Map<string, Buffer>();
 	const uploads = {
@@ -85,20 +88,23 @@ async function rig(options: RigOptions = {}) {
 	const ended: { deviceId: string; connId: string }[] = [];
 	let routerRef: WsRouter | null = null;
 	const windows = new WebWindows((id, channel, payload) => routerRef?.deliver(id, channel, payload));
-	const host = await TestRouterHost.open({
-		registry: { invoke, send },
-		devices: { get: id => (id === current?.deviceId ? current : undefined) },
-		windows,
-		quota,
-		webChannels: options.webChannels ?? {},
-		features: () => ({ push: false, preview: false, upload: true, passkey: false }),
-		activeTab: () => "tab-active",
-		blobs,
-		uploads,
-		toModelImage,
-		onResync: deviceId => resyncs.push(deviceId),
-		onConnectionEnded: (deviceId, connId) => ended.push({ deviceId, connId }),
-	});
+	const host = await TestRouterHost.open(
+		{
+			registry: { invoke, send },
+			devices: { get: id => (id === current?.deviceId ? current : undefined) },
+			windows,
+			quota,
+			webChannels: options.webChannels ?? {},
+			features: () => ({ push: false, preview: false, upload: true, passkey: false }),
+			activeTab: () => "tab-active",
+			blobs,
+			uploads,
+			toModelImage,
+			onResync: deviceId => resyncs.push(deviceId),
+			onConnectionEnded: (deviceId, connId) => ended.push({ deviceId, connId }),
+		},
+		{ blobUserData: userData },
+	);
 	const router = host.router;
 	routerRef = router;
 	await host.device("dev1", current.grants);
@@ -124,6 +130,7 @@ async function rig(options: RigOptions = {}) {
 		callers,
 		windows,
 		blobs,
+		userData,
 		uploaded,
 		uploads,
 		toModelImage,
@@ -1139,6 +1146,18 @@ describe("pictures of a transcript", () => {
 		await vi.waitFor(async () => expect(await r.blobs.count()).toBe(0));
 	});
 
+	it("releases a closed tab's blobs even after the device's disconnected push was already counted", async () => {
+		const r = await rig();
+		const win = r.windows.windowFor("dev1");
+		win.webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		await r.host.flush();
+		expect(await r.blobs.count()).toBe(1);
+		await r.connection.dispose();
+		win.webContents.send(IPC_EVENTS.TAB_STATUS, { tabId: "tab-a", status: "ready" });
+		win.webContents.send(IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [] });
+		await vi.waitFor(async () => expect(await r.blobs.count()).toBe(0));
+	});
+
 	it("makes no blob for a page that is hidden, whose streamed pushes the core drops", async () => {
 		const r = await rig();
 		await r.frame({ t: "presence", visible: false });
@@ -1170,5 +1189,75 @@ describe("virtual windows", () => {
 		expect(r.windows.has("dev1")).toBe(false);
 		const fresh = r.windows.windowFor("dev1");
 		expect(fresh).not.toBe(a);
+	});
+});
+
+const atThreshold = Buffer.alloc((PAGE_IMAGE_MIN_CHARS * 3) / 4, 0x5a).toString("base64");
+const picture = { type: "image", mimeType: "image/jpeg", data: atThreshold };
+
+function serve(userData: string, deviceId: string, target: string) {
+	return core().call<{ status: number; headers: [string, string][] }>("web.blobs.serve", {
+		userData,
+		deviceId,
+		target,
+	});
+}
+
+describe("transcript pictures at the page socket", () => {
+	it("lifts stock's image positions at the threshold without changing other records or the original", async () => {
+		const r = await rig();
+		const small = { ...picture, data: atThreshold.slice(4) };
+		const queue = { type: "queue_update", steering: [{ images: [picture] }] };
+		const malformed = { ...picture, mimeType: "text/html", images: [picture] };
+		const message = {
+			content: [picture, small, malformed],
+			details: { images: [{ data: atThreshold, mimeType: "image/webp", blobUrl: "old" }] },
+			notes: [picture, queue, "x\ud800"],
+		};
+		r.invoke.mockResolvedValueOnce(message);
+		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_MESSAGES, a: [] });
+		await r.settle();
+		const url = expect.stringMatching(/^\/blob\/[\w-]{32}$/);
+		expect(r.socket.frames("res")[0]).toMatchObject({
+			ok: true,
+			v: {
+				content: [{ ...picture, data: "", blobUrl: url }, small, malformed],
+				details: { images: [{ data: "", mimeType: "image/webp", blobUrl: url }] },
+				notes: message.notes,
+			},
+		});
+		expect(picture.data).toBe(atThreshold);
+		r.router.deliver("dev1", IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [] });
+		expect(await r.blobs.count()).toBe(2);
+		r.blobs.releaseDevice("dev1");
+		expect(await r.blobs.count()).toBe(0);
+	});
+
+	it("serves each device's own URL and releases only that device's closed tabs", async () => {
+		const r = await rig();
+		await r.host.device("dev2", []);
+		const other = await r.host.attach("dev2");
+		if (!other) throw new Error("second device did not connect");
+		const batch = { tabId: "same", payload: [{ content: [picture] }] };
+		for (const device of ["dev1", "dev2"]) r.router.deliver(device, IPC_EVENTS.SUBAGENT_FRAMES, batch);
+		await r.host.flush();
+		const urls = [r.socket, other.socket].map(socket => {
+			const event = socket.frames("evt")[0]?.d as { payload: { content: { blobUrl: string }[] }[] };
+			return event.payload[0]?.content[0]?.blobUrl ?? "";
+		});
+		const [first = "", second = ""] = urls;
+		expect(first).not.toBe(second);
+		const got = await serve(r.userData, "dev1", first);
+		expect(got.result.status).toBe(200);
+		expect(got.result.headers).toContainEqual(["content-type", "image/jpeg"]);
+		expect(Buffer.from(got.bin ?? []).toString("base64")).toBe(atThreshold);
+		expect((await serve(r.userData, "dev2", first)).result.status).toBe(404);
+		r.router.deliver("dev1", IPC_EVENTS.TAB_LIST_CHANGED, { tabs: false });
+		expect(await r.blobs.count()).toBe(2);
+		r.router.deliver("dev1", IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [null, { tabId: 42 }] });
+		expect((await serve(r.userData, "dev1", first)).result.status).toBe(404);
+		expect((await serve(r.userData, "dev2", second)).result.status).toBe(200);
+		r.blobs.releaseDevice("dev2");
+		expect((await serve(r.userData, "dev2", second)).result.status).toBe(404);
 	});
 });

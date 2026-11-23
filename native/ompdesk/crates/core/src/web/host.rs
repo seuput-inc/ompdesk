@@ -18,7 +18,7 @@ use super::auth::Policy;
 use super::relay::Relay;
 use super::router;
 use super::server::{Deps, Edge, Running, SERVER_HOST};
-use crate::server::{Call, Fault, Registry, Reply};
+use crate::server::{Answer, Call, Fault, Registry, Reply, at_once};
 
 static RUNNING: LazyLock<Mutex<HashMap<u64, Running>>> = LazyLock::new(Mutex::default);
 
@@ -94,6 +94,7 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         call.events.clone(),
         params.router,
         stores.devices.clone(),
+        Arc::clone(&blobs),
     );
     let assets = Arc::new(Built {
         root: params.static_root,
@@ -172,14 +173,22 @@ struct StopParams {
     host: u64,
 }
 
-async fn stop(call: Call) -> Result<Reply, Fault> {
-    let params: StopParams = call.params()?;
-    let started = running().remove(&params.host);
+fn stop(call: Call) -> Answer {
+    let params: StopParams = match call.params() {
+        Ok(params) => params,
+        Err(error) => return at_once(Err(error)),
+    };
+    // Drain on receipt, before a later desktop answer or computer visit can be read.
+    super::pairing::decline_all(params.host);
+    Box::pin(stop_listener(params.host))
+}
+
+async fn stop_listener(host: u64) -> Result<Reply, Fault> {
+    let started = running().remove(&host);
     if let Some(started) = started {
         started.stop().await;
     }
-    if let Some(mut done) =
-        router::host_of(params.host).and_then(|host| host.archive_copy.get().cloned())
+    if let Some(mut done) = router::host_of(host).and_then(|host| host.archive_copy.get().cloned())
     {
         let _ = done.changed().await;
     }
@@ -188,7 +197,8 @@ async fn stop(call: Call) -> Result<Reply, Fault> {
 
 pub fn register(registry: &mut Registry) {
     registry.add("web.start", |call| Box::pin(start(call)));
-    registry.add("web.stop", |call| Box::pin(stop(call)));
+    registry.add("web.stop", stop);
+    super::pairing::register(registry);
     super::save::register(registry);
     super::relay::register(registry);
 }

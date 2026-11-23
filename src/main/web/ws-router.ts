@@ -238,15 +238,15 @@ function isCommandWithType(command: unknown): command is Parameters<typeof comma
 	return typeof command === "object" && command !== null && "type" in command && typeof command.type === "string";
 }
 
-/** The tab ids a `TAB_LIST_CHANGED` payload names; null when it is not the list. */
-function listedTabs(payload: unknown): ReadonlySet<string> | null {
+/** The tab ids a `TAB_LIST_CHANGED` payload names, absent when it is not a list. */
+function listedTabs(payload: unknown): string[] | undefined {
 	if (typeof payload !== "object" || payload === null || !("tabs" in payload) || !Array.isArray(payload.tabs)) {
-		return null;
+		return undefined;
 	}
-	const ids = new Set<string>();
+	const ids: string[] = [];
 	for (const tab of payload.tabs as unknown[]) {
 		if (typeof tab === "object" && tab !== null && "tabId" in tab && typeof tab.tabId === "string")
-			ids.add(tab.tabId);
+			ids.push(tab.tabId);
 	}
 	return ids;
 }
@@ -308,7 +308,6 @@ export class WsRouter {
 	readonly #texts = new WeakMap<object, Uint8Array>();
 	/** Devices told of a push they had no connection for: until one connects, one word is all the core needs. */
 	readonly #unsent = new Set<string>();
-	/** The pictures of transcripts this router sent as blob URLs, by device and tab (page-images.ts). */
 	readonly #pictures: PageImages;
 	/** The generation of the core whose router this host started in (`started`); 0 before the first start. */
 	#startedIn = 0;
@@ -316,11 +315,6 @@ export class WsRouter {
 	constructor(deps: WsRouterDeps) {
 		this.#deps = deps;
 		this.#pictures = new PageImages(deps.blobs);
-	}
-
-	/** The device's blobs went with it (`BlobStore.releaseDevice`): what this router tracked of them goes too. */
-	forgetDevice(deviceId: string): void {
-		this.#pictures.forgetDevice(deviceId);
 	}
 
 	get deps(): WsRouterDeps {
@@ -377,10 +371,6 @@ export class WsRouter {
 	/** A push the pool or a handler made to the device's window. */
 	deliver(deviceId: string, channel: string, payload: unknown): void {
 		this.#recordTokens(deviceId, channel, payload);
-		if (channel === IPC_EVENTS.TAB_LIST_CHANGED) {
-			const listed = listedTabs(payload);
-			if (listed) this.#pictures.tabsChanged(deviceId, listed);
-		}
 		const policy = Object.hasOwn(IPC_POLICY, channel) ? IPC_POLICY[channel as keyof typeof IPC_POLICY] : undefined;
 		if (policy?.dir !== "push" || policy.mode === "client" || Object.hasOwn(DESKTOP_ONLY_PUSH, channel)) return;
 		if (
@@ -389,25 +379,27 @@ export class WsRouter {
 		)
 			return;
 		if (!this.#open()) return;
+		const tabs = channel === IPC_EVENTS.TAB_LIST_CHANGED ? listedTabs(payload) : undefined;
 		if (!this.#connections.has(deviceId)) {
 			// Counted, so a page that comes back is not told it missed nothing; its data would reach no socket.
-			if (this.#unsent.has(deviceId)) return;
+			const alreadyMissed = this.#unsent.has(deviceId);
+			if (alreadyMissed && !tabs) return;
 			this.#unsent.add(deviceId);
-			core().push("web.deliver", { host: this.host, device: deviceId });
+			core().push("web.deliver", { host: this.host, device: deviceId, tabs, onlyTabs: alreadyMissed });
 			return;
 		}
 		let data: Uint8Array | undefined;
 		try {
-			// The core drops a hidden page's streamed pushes (it reloads on return), so no blob is made for those.
 			const pictured =
 				Object.hasOwn(PICTURE_CHANNELS, channel) && this.isDeviceVisible(deviceId)
 					? this.#pictures.lift(deviceId, isTabBatch(payload) ? payload.tabId : undefined, payload)
 					: payload;
 			data = this.#dataBytes(channel, pictured);
 		} catch {
+			if (tabs) core().push("web.deliver", { host: this.host, device: deviceId, tabs, onlyTabs: true });
 			return;
 		}
-		core().push("web.deliver", { host: this.host, device: deviceId, ch: channel }, data);
+		core().push("web.deliver", { host: this.host, device: deviceId, ch: channel, tabs }, data);
 	}
 
 	/** `JSON.stringify(payload)`'s bytes; a stream's made once per push object. Throws as `JSON.stringify` does. */

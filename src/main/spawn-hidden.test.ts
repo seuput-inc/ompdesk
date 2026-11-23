@@ -16,7 +16,6 @@ const START = /(^|[^.\w#])(spawn|spawnSync|execFile|execFileSync|exec|execSync|f
 /** The starts that pass no `windowsHide`, as `file: first argument`, each with why it opens no console window. */
 const WINDOWLESS: Record<string, string> = {
 	"src/main/installer-spawn.ts: workerData.command": "the NSIS setup, a window program whose own window must show",
-	"src/main/tailscale/cli.ts: ipn": "Tailscale's tray app, a window program",
 	"src/main/shell-env.ts: shell": "the login shell's environment, macOS and Linux only",
 	"src/main/updater.ts: command": "hdiutil, ditto and codesign, macOS only",
 	'src/main/updater.ts: "/bin/bash"': "the relaunch swap, macOS only",

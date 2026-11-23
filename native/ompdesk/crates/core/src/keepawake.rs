@@ -11,6 +11,8 @@
 //! comes on the policy's own schedule and not inside an `update` or a `dispose`. The quiet period waits on
 //! `crate::clock`, so a test moves it.
 
+mod battery;
+
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
@@ -198,6 +200,9 @@ pub fn register(registry: &mut Registry) {
     registry.add("keepAwake.open", |call| Box::pin(open_call(call)));
     registry.add("keepAwake.update", |call| Box::pin(update_call(call)));
     registry.add("keepAwake.dispose", |call| Box::pin(dispose_call(call)));
+    registry.add("keepAwake.windowsBattery", |call| {
+        Box::pin(battery::query(call))
+    });
 }
 
 /// The quiet period main gave when it did not name one: a minute, as `KEEP_AWAKE_RELEASE_MS` was.

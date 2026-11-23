@@ -1,4 +1,5 @@
 import { createECDH, createPublicKey, randomBytes, verify } from "node:crypto";
+import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
@@ -8,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebPushPayload, WebPushSubscriptionJson } from "../../shared/web-push";
 import { CoreError } from "../core/process";
-import { coreTransport, PUSH_PAYLOAD_MAX_BYTES, type PushOptions, PushSender, type PushTransport } from "./push";
+import { coreTransport, type PushOptions, PushSender, type PushTransport } from "./push";
 import { loadVapid } from "./vapid-store";
 
 const require = createRequire(import.meta.url);
@@ -41,20 +42,20 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("PushSender", () => {
-	function sender(statusCode: number | Error, log: string[] = []) {
+	function sender(error?: Error, log: string[] = []) {
 		const calls: Parameters<PushTransport["send"]>[] = [];
 		const transport: PushTransport = {
 			send: async (...args) => {
 				calls.push(args);
-				if (statusCode instanceof Error) throw statusCode;
-				return { statusCode };
+				if (error) throw error;
+				return { outcome: "sent" };
 			},
 		};
 		return { push: new PushSender({ userData: dir, transport, log: message => log.push(message) }), calls };
 	}
 
 	it("sends the payload as JSON with the TTL and the urgency", async () => {
-		const { push, calls } = sender(201);
+		const { push, calls } = sender();
 		const { subscription } = browser();
 		expect(await push.send(subscription, payload, { ttl: 21600, urgency: "high" })).toBe("sent");
 		const [sentTo, body, sentOptions] = calls[0] ?? [];
@@ -64,20 +65,24 @@ describe("PushSender", () => {
 	});
 
 	it("says `gone` for 404 and 410 so the caller forgets the subscription, and logs nothing", async () => {
+		await loadVapid(dir);
 		for (const status of [404, 410]) {
 			const log: string[] = [];
-			const { push } = sender(status, log);
-			expect(await push.send(browser().subscription, payload, options)).toBe("gone");
+			const { endpoint } = await pushService(status);
+			const push = new PushSender({ userData: dir, log: message => log.push(message) });
+			expect(await push.send(browser(endpoint).subscription, payload, options)).toBe("gone");
 			expect(log).toEqual([]);
 		}
 	});
 
 	it("logs any other refusal and makes one attempt only", async () => {
-		for (const status of [400, 401, 413, 429, 500, 503]) {
+		await loadVapid(dir);
+		for (const status of [300, 400, 401, 413, 429, 500, 503]) {
 			const log: string[] = [];
-			const { push, calls } = sender(status, log);
-			expect(await push.send(browser().subscription, payload, options)).toBe("failed");
-			expect(calls).toHaveLength(1);
+			const { endpoint, seen } = await pushService(status);
+			const push = new PushSender({ userData: dir, log: message => log.push(message) });
+			expect(await push.send(browser(endpoint).subscription, payload, options)).toBe("failed");
+			expect(seen.requests).toBe(1);
 			expect(log).toEqual([`web push refused with status ${status}`]);
 		}
 	});
@@ -92,41 +97,46 @@ describe("PushSender", () => {
 
 	it("does not send a payload a push service would refuse", async () => {
 		const log: string[] = [];
-		const { push, calls } = sender(201, log);
-		const big = { ...payload, body: "가".repeat(Math.ceil(PUSH_PAYLOAD_MAX_BYTES / 3) + 1) };
-		expect(await push.send(browser().subscription, big, options)).toBe("failed");
-		expect(calls).toHaveLength(0);
-		expect(log[0]).toMatch(/over the limit/);
+		const { endpoint, seen } = await pushService(201);
+		const { subscription } = browser(endpoint);
+		const push = new PushSender({ userData: dir, log: message => log.push(message) });
+		const exact = { ...payload, body: '가𝄞\n"' };
+		exact.body += "x".repeat(3800 - Buffer.byteLength(JSON.stringify(exact)));
+		expect(await push.send(subscription, { ...exact, body: `${exact.body}x` }, options)).toBe("failed");
+		expect(seen.requests).toBe(0);
+		expect(log).toEqual(["web push not sent: payload of 3801 bytes is over the limit"]);
+		await loadVapid(dir);
+		expect(await push.send(subscription, exact, options)).toBe("sent");
+		expect(seen.requests).toBe(1);
+		expect(log).toHaveLength(1);
 	});
 });
 
-describe("coreTransport (the real core, against a push service of its own on loopback)", () => {
-	const services: http.Server[] = [];
-	afterEach(() => {
-		for (const server of services.splice(0)) server.close();
-	});
+const services: http.Server[] = [];
+afterEach(() => {
+	for (const server of services.splice(0)) server.close();
+});
 
-	/** A push service on 127.0.0.1 that keeps the one request it gets and answers `statusCode`. */
-	async function pushService(statusCode: number) {
-		const seen: { method?: string; url?: string; headers: http.IncomingHttpHeaders; body: Buffer } = {
-			headers: {},
-			body: Buffer.alloc(0),
-		};
-		const server = http.createServer((request, response) => {
-			const chunks: Buffer[] = [];
-			request.on("data", (chunk: Buffer) => chunks.push(chunk));
-			request.on("end", () => {
-				Object.assign(seen, { method: request.method, url: request.url, headers: request.headers });
-				seen.body = Buffer.concat(chunks);
-				response.writeHead(statusCode).end();
-			});
+async function pushService(statusCode: number) {
+	const seen = { requests: 0, headers: {} as http.IncomingHttpHeaders, body: Buffer.alloc(0) };
+	const server = http.createServer((request, response) => {
+		seen.requests++;
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", () => {
+			Object.assign(seen, { method: request.method, url: request.url, headers: request.headers });
+			seen.body = Buffer.concat(chunks);
+			response.writeHead(statusCode).end();
 		});
-		services.push(server);
-		await new Promise<void>(listening => server.listen(0, "127.0.0.1", listening));
-		const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-		return { seen, origin, endpoint: `${origin}/send/abc` };
-	}
+	});
+	services.push(server);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	return { seen, origin, endpoint: `${origin}/send/abc` };
+}
 
+describe("coreTransport (the real core, against a push service of its own on loopback)", () => {
 	const send = (subscription: WebPushSubscriptionJson, ttl = 3600, urgency: PushOptions["urgency"] = "high") =>
 		coreTransport(dir).send(subscription, JSON.stringify(payload), { ttl, urgency, timeoutMs: 10_000 });
 
@@ -135,7 +145,7 @@ describe("coreTransport (the real core, against a push service of its own on loo
 		const { publicKey, subject } = await loadVapid(dir);
 		const { ecdh, auth, subscription } = browser(endpoint);
 		const result = await send(subscription);
-		expect(result).toEqual({ statusCode: 201 });
+		expect(result).toEqual({ outcome: "sent" });
 		expect(seen).toMatchObject({ method: "POST", url: "/send/abc" });
 		const headers = seen.headers;
 		expect(Number(headers.ttl)).toBe(3600);
@@ -177,10 +187,10 @@ describe("coreTransport (the real core, against a push service of its own on loo
 		expect(JSON.parse(clear.toString("utf8"))).toEqual(payload);
 	});
 
-	it("returns a refusal's status instead of throwing", async () => {
+	it("returns a gone subscription instead of throwing", async () => {
 		const { endpoint } = await pushService(410);
 		await loadVapid(dir);
-		expect(await send(browser(endpoint).subscription, 60, "normal")).toEqual({ statusCode: 410 });
+		expect(await send(browser(endpoint).subscription, 60, "normal")).toEqual({ outcome: "gone" });
 	});
 
 	it("rejects with the core's fault when no push service answers, naming no endpoint", async () => {

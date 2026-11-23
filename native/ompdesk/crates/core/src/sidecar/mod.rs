@@ -39,6 +39,7 @@ mod stream;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use frames::strip_vt_control_characters;
 use lane::{Command, Msg, OpenParams, Plan, StockReply};
 use process::Start;
 pub(crate) use process::omp_command;

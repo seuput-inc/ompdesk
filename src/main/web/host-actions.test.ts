@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	WEB_DEVICE_CHANNELS,
@@ -13,6 +13,7 @@ import { FS_BINARY_LOCAL_MAX_BYTES } from "../workspace-fs";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
 import { createHostActions, DEVICE_UI_PREFS_MAX_BYTES } from "./host-actions";
+import { UploadStore } from "./uploads";
 import type { WebCallContext } from "./ws-router";
 
 let home: string;
@@ -31,10 +32,9 @@ function rig(cwd: string | null = null) {
 		modelsRead: vi.fn(() => ({ path: "/agent/models.yml", text: "providers: {}\n", exists: true, stamp: "s1" })),
 		modelsWrite: vi.fn(async (_text: string, _stamp: string) => "s2"),
 	};
-	const owned = new Set<string>();
 	const table = createHostActions({
 		devices: { setUiPrefs: spies.setUiPrefs },
-		uploads: { owns: (_device, file) => owned.has(file) },
+		userData: home,
 		blobs,
 		cwdFor: () => cwd,
 		openPath: spies.openPath,
@@ -53,7 +53,7 @@ function rig(cwd: string | null = null) {
 		if (!entry) throw new Error(`no ${channel}`);
 		return (await entry.handler(context, args)) as T;
 	};
-	return { table, call, blobs, owned, ...spies };
+	return { table, call, blobs, ...spies };
 }
 
 describe("web-only channels", () => {
@@ -140,26 +140,42 @@ describe("saving on the computer", () => {
 	});
 
 	it("copies one of the device's own uploads and refuses any other file", async () => {
-		const upload = join(home, "uploaded.bin");
+		const uploads = new UploadStore({ userData: home });
+		const upload = await uploads.store("dev1", "uploaded.bin", Buffer.from("bytes"));
+		const other = await uploads.store("dev10", "foreign.bin", Buffer.from("other device"));
+		const foreignHome = join(home, "foreign-profile");
+		const otherProfile = new UploadStore({ userData: foreignHome });
+		const foreign = await otherProfile.store("dev1", "foreign.bin", Buffer.from("other profile"));
 		const secret = join(home, "secret.txt");
-		writeFileSync(upload, "bytes");
 		writeFileSync(secret, "no");
 		mkdirSync(join(home, "out"));
-		const { call, owned } = rig();
-		owned.add(upload);
+		const { call } = rig();
 		const copied = await call<WebHostSaveResult>(WEB_HOST_CHANNELS.SAVE, {
 			dir: join(home, "out"),
 			name: "c.bin",
-			uploadPath: upload,
+			uploadPath: upload.path,
 		});
 		expect(copied).toMatchObject({ ok: true });
 		expect(readFileSync(join(home, "out", "c.bin"), "utf8")).toBe("bytes");
-		const stolen = await call<WebHostSaveResult>(WEB_HOST_CHANNELS.SAVE, {
-			dir: join(home, "out"),
-			name: "s.txt",
-			uploadPath: secret,
-		});
-		expect(stolen).toMatchObject({ ok: false, code: "path_escapes_roots" });
+		const ownFolder = join(home, "web-uploads", "dev1");
+		const escaped = ownFolder + sep + relative(ownFolder, other.path);
+		for (const source of [
+			{ uploadPath: secret },
+			{ uploadPath: other.path, deviceId: "dev10" },
+			{ uploadPath: upload.path.replace(`${sep}dev1${sep}`, `${sep}DEV1${sep}`) },
+			{ uploadPath: escaped },
+			{ uploadPath: ownFolder },
+			{ uploadPath: foreign.path, userData: foreignHome },
+		]) {
+			const stolen = await call<WebHostSaveResult>(WEB_HOST_CHANNELS.SAVE, {
+				dir: join(home, "out"),
+				name: "c.bin",
+				overwrite: true,
+				...source,
+			});
+			expect(stolen).toMatchObject({ ok: false, code: "path_escapes_roots" });
+		}
+		expect(readFileSync(join(home, "out", "c.bin"), "utf8")).toBe("bytes");
 	});
 
 	it("refuses a name with a path in it, both or neither source, a relative folder and a file as the folder", async () => {

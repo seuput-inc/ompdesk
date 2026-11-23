@@ -76,12 +76,12 @@
 				"src/main/turn-resume.ts:174-265",
 				"src/main/turn-resume.ts:818-832",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2237-2241",
+				"src/main/index.ts:2358-2362",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "36afdcdbfa812dd0c02b57f4d9d79cd1fc12528c",
+			"syncCommit": "15b4e1f579cca566d960108b90c2533243de293c",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -128,7 +128,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "e7a46fec9876fa0c17b83be1b726b55c72f48934",
+			"syncCommit": "9325adcb6854f11526ce6cffcf207e14c1be1832",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -148,11 +148,11 @@
 				"native/ompdesk/crates/core/src/web/router.rs#dispatch",
 				"src/main/web/ws-router.ts#WsRouter.connections",
 				"src/main/web/ws-router.ts#WsRouter.call",
-				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:138-177",
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:204-247",
 				"src/main/tab-release.ts#closeWindowTab",
 				"src/main/agent-control/host.ts:1234-1241"
 			],
-			"syncCommit": "e7a46fec9876fa0c17b83be1b726b55c72f48934",
+			"syncCommit": "72bb7f8c89edd247b03b832964ec127f189e24ee",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -243,7 +243,7 @@
 			"covers": [
 				"native/ompdesk/crates/core/src/stock/mod.rs"
 			],
-			"syncCommit": "e7a46fec9876fa0c17b83be1b726b55c72f48934",
+			"syncCommit": "15b4e1f579cca566d960108b90c2533243de293c",
 			"verifySkill": ".omp/skills/stock-lane-verify/SKILL.md"
 		},
 		{
@@ -279,7 +279,7 @@
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
 				"src/main/ipc.ts:654-671"
 			],
-			"syncCommit": "e7a46fec9876fa0c17b83be1b726b55c72f48934"
+			"syncCommit": "451c141451f190c59b0a07ada1616141f15ad21e"
 		},
 		{
 			"id": "open-first-message",

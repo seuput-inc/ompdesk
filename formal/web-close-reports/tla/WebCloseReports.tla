@@ -22,9 +22,9 @@ Dirty == Tabs \cup {None}
 \* Mutation switch: the report's handler runs in a later step than the frame's receive (an `await` in between).
 SplitDispatch == FALSE
 
-\* @code src/main/web/file-edit-reports.ts:30-33 report: one connection's entry
+\* @code src/main/web/file-edit-reports.ts:47-50 report: one connection's entry
 Write(s, c, v) == [s EXCEPT ![c] = v]
-\* @code src/main/web/file-edit-reports.ts:36-38 forget: one connection's entry
+\* @code src/main/web/file-edit-reports.ts:53-55 forget: one connection's entry
 Forget(s, c) == [s EXCEPT ![c] = Absent]
 
 VARIABLES
@@ -73,7 +73,7 @@ Init ==
     /\ refused = FALSE
 
 \* What main's store says about a tab of the window.
-\* @code src/main/web/file-edit-reports.ts:40-48 edits
+\* @code src/main/web/file-edit-reports.ts:57-65 edits
 Edits(t) ==
     LET reported == {c \in ConnIds : store[c] # Absent}
     IN IF \E c \in reported : store[c] = t THEN "dirty"
@@ -107,7 +107,7 @@ Edit(p, v) ==
     /\ UNCHANGED <<conn, live, greeted, handoff, store, deciding, released, bad, late, refused>>
 
 \* A fresh socket: the router serves a new connection (a new random id) for the page.
-\* @code native/ompdesk/crates/core/src/web/router.rs:720-761 attach_conn
+\* @code native/ompdesk/crates/core/src/web/router.rs:742-783 attach_conn
 Connect(p) ==
     /\ conn[p] < MaxConn
     /\ conn[p] = 0 \/ Current(p) \notin live
@@ -126,7 +126,9 @@ Greet(p) ==
     /\ UNCHANGED <<edit, conn, live, handoff, store, deciding, released, edits, bad, late, refused>>
 
 \* The socket ends (closed, timed out, retired, revoked): detach, onConnectionEnded, forget, in one synchronous run.
-\* @code native/ompdesk/crates/core/src/web/router.rs:825-862 finish -> web.conns end; src/main/web/ws-router.ts:383-394 connections -> onConnectionEnded; src/main/index.ts:2297 forget
+\* @code native/ompdesk/crates/core/src/web/router.rs:847-884 finish -> web.conns end
+\* @code src/main/web/ws-router.ts:435-445 connections -> onConnectionEnded
+\* @code src/main/index.ts:2660 forget
 Drop(c) ==
     /\ c \in live
     /\ live' = live \ {c}
@@ -134,7 +136,11 @@ Drop(c) ==
     /\ UNCHANGED <<edit, conn, greeted, q, handoff, deciding, released, edits, bad, late, refused>>
 
 \* A report frame reaches main: an ended connection refuses it; a live one hands it to the handler in the same run.
-\* @code native/ompdesk/crates/core/src/web/router.rs:1009-1018 receive (closed -> ignored); native/ompdesk/crates/core/src/web/router.rs:1140-1222 dispatch -> web.call; src/main/web/ws-router.ts:414-434 call -> #dispatch; ws-router.ts:476 registry.invoke; src/main/ipc.ts:1693-1697 FILE_EDIT_REPORT
+\* @code native/ompdesk/crates/core/src/web/router.rs:1031-1040 receive refuses an ended connection
+\* @code native/ompdesk/crates/core/src/web/router.rs:1162-1243 dispatch -> web.call
+\* @code src/main/web/ws-router.ts:469-488 call -> #dispatch
+\* @code src/main/web/ws-router.ts:547 registry.invoke
+\* @code src/main/ipc.ts:1780-1784 FILE_EDIT_REPORT
 Deliver(c) ==
     /\ q[c] # <<>>
     /\ q' = [q EXCEPT ![c] = Tail(@)]
@@ -154,7 +160,7 @@ Handle(c) ==
     /\ UNCHANGED <<edit, conn, live, greeted, q, deciding, released, edits, bad, late, refused>>
 
 \* An agent's close reads the tab (its `webEdits` from the store) and decides.
-\* @code native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:138-177 close_tab: snapshot, tab_close_step, keep or start the release
+\* @code native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:204-232 close_tab: snapshot, tab_close_step, keep or start the release
 CloseDecide(t) ==
     /\ t \notin released \cup deciding
     /\ IF CloseStep(t) = "release"

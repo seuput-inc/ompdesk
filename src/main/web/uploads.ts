@@ -6,36 +6,13 @@
  * main calls: a paired computer's attachment (`store`), a picture a call names (`take`, read and deleted at
  * once), a revoked device's folder (`removeDevice`), the daily sweep.
  */
-import { join, resolve, sep } from "node:path";
 import { CoreError, core } from "../core/process";
 
 export const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** The folder of files attached to this computer's own tabs with no path here (ipc.ts FS_UPLOAD_TO_HOST). */
-export const LOCAL_UPLOAD_DEVICE = "this-computer";
-
-const UPLOAD_FOLDER = "web-uploads";
-
-/**
- * A file attached to a prompt of this computer's own tab that has no path here (pasted, dragged out of another app):
- * kept like a phone's upload, so the agent reads it by its path. Too large and over the day's limit come back as the
- * codes the composer words.
- */
-export async function attachHere(
-	uploads: Pick<UploadStore, "store">,
-	name: string,
-	bytes: Uint8Array,
-): Promise<{ ok: true; path: string } | { ok: false; error: string; code?: "file_too_large" | "upload_refused" }> {
-	try {
-		return { ok: true, path: (await uploads.store(LOCAL_UPLOAD_DEVICE, name, bytes)).path };
-	} catch (error) {
-		if (error instanceof UploadError && error.status === 413)
-			return { ok: false, error: error.message, code: "file_too_large" };
-		if (error instanceof UploadError && error.status === 429)
-			return { ok: false, error: error.message, code: "upload_refused" };
-		return { ok: false, error: error instanceof Error ? error.message : String(error) };
-	}
-}
+type LocalAttachment =
+	| { ok: true; path: string }
+	| { ok: false; error: string; code?: "file_too_large" | "upload_refused" };
 
 export class UploadError extends Error {
 	readonly status: number;
@@ -54,7 +31,6 @@ export interface StoredUpload {
 
 export class UploadStore {
 	readonly #userData: string;
-	readonly #root: string;
 	readonly #now: () => number;
 	readonly #limits: { fileMaxBytes?: number; dailyMaxBytes?: number; ttlMs?: number };
 
@@ -66,15 +42,8 @@ export class UploadStore {
 		ttlMs?: number;
 	}) {
 		this.#userData = opts.userData;
-		this.#root = resolve(opts.userData, UPLOAD_FOLDER);
 		this.#now = opts.now ?? Date.now;
 		this.#limits = { fileMaxBytes: opts.fileMaxBytes, dailyMaxBytes: opts.dailyMaxBytes, ttlMs: opts.ttlMs };
-	}
-
-	/** Whether `file` is inside this device's upload folder. */
-	owns(deviceId: string, file: string): boolean {
-		const folder = join(this.#root, deviceId) + sep;
-		return resolve(file).startsWith(folder);
 	}
 
 	/** A paired transfer finishes in this same store, with the same clock and limits. */
@@ -89,6 +58,15 @@ export class UploadStore {
 	async store(deviceId: string, name: string, bytes: Uint8Array): Promise<StoredUpload> {
 		return (await this.#call<StoredUpload>("web.uploads.store", { deviceId, name, ...this.writeOptions() }, bytes))
 			.result;
+	}
+
+	async attachHere(name: string, bytes: Uint8Array): Promise<LocalAttachment> {
+		try {
+			return (await this.#call<LocalAttachment>("web.uploads.attachHere", { name, ...this.writeOptions() }, bytes))
+				.result;
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
 	}
 
 	/**

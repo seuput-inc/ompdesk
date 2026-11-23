@@ -224,12 +224,12 @@ src/main/local/types.ts	exception	Defines stock, bridge and handler contracts pl
 src/main/local/workspace.ts	mixed	fs.stat checks the path stock resolved before /move. The host refuses streaming moves and checks the resulting session cwd. Only stock can resolve its live session paths, change cwd and reload the associated settings (§1.3d).
 src/main/ponytail/pack-drift.test.ts	exception	Test coverage for pinned Ponytail documents and license.
 src/main/ponytail/ponytail-stock.test.ts	exception	Test coverage for Ponytail hook registration in stock omp.
-src/main/power/lid-awake-runtime.ts	port	Selects the platform backend, spawns caffeinate, queries pmset or Windows battery state, and executes powercfg.
+src/main/power/lid-awake-runtime.ts	mixed	The core probes Windows battery presence. Keep the platform power handles with LidAwake: index.ts disposes them before will-quit returns (§1.3a,c).
 src/main/power/lid-awake.test.ts	exception	Test coverage for lid hold recovery and AC/work transitions.
-src/main/power/lid-awake.ts	port	Reconciles active work, AC power and laptop detection to acquire or release a lid hold after recovery.
-src/main/power/lid-backend-mac.ts	port	Detects InternalBattery in pmset output and owns the caffeinate handle until release.
+src/main/power/lid-awake.ts	port	The host/work wrappers and will-quit share the live backend; dispose calls releaseNow before returning. Move with the shell quit owner (§1.3a,c).
+src/main/power/lid-backend-mac.ts	port	The synchronous quit path kills this caffeinate handle; pmset has no time limit while every core request has a deadline. Move with the shell power owner (§1.3a,c).
 src/main/power/lid-backend-windows.test.ts	exception	Test coverage for Windows powercfg parsing and restoration.
-src/main/power/lid-backend-windows.ts	port	Persists the previous AC lid action before changing powercfg; conditionally restores it on release or recovery.
+src/main/power/lid-backend-windows.ts	port	Async AC reconciliation and synchronous quit restoration read one saved previous value. Each of the three powercfg calls at quit may take 5 s; the synchronous core hub allows 2 s. Move both paths together (§1.3a,c).
 src/main/pstack/pack-drift.test.ts	exception	Test coverage for pstack pack pins and integrity.
 src/main/routines/email.test.ts	exception	Test coverage for mail trigger cursors across relaunch.
 src/main/routines/email.ts	port	Polls the mailbox, filters automated and self replies, saves the cursor and constructs the wake message.
@@ -279,33 +279,33 @@ src/main/setup/service.test.ts	exception	Checks launch-time install order and pr
 src/main/setup/service.ts	port	Queues installations, retry backoff, plan execution, detection and cancellation. latestOmp retains setup's runner and cleanup on failure; omp.parseUpdateCheck supplies the same native parser as the local update command.
 src/main/setup/supervisor.ts	port	Builds isolated launches and log redirection, including the Windows Bun launcher and command-line quoting, before starting ompdesk-core --supervise.
 src/main/setup/test-mirror.ts	exception	Starts and stops controlled HTTP mirrors for installer release and download tests.
-src/main/ssh/client.ts	port	Starts native ssh.* operations but buffers early events, keeps prompts and reports dropped runs when the core restarts.
-src/main/ssh/ipc.ts	port	Starts and disposes SshTools with Electron, and broadcasts state and prompts to every live window.
+src/main/ssh/client.ts	mixed	Rust owns ssh processes, prompts and tool I/O. SshTools reads prompts synchronously and attaches listeners after start; this client queues early events and tells those listeners when their core died. Move the event consumer with SshTools (§1.3a,c).
+src/main/ssh/ipc.ts	port	registerSshToolsIpc enumerates the live windows for each state/prompt broadcast and disposes SshTools inside will-quit. Move with the shell window and quit owners (§1.3a,c).
 src/main/ssh/service.test.ts	exception	Test coverage for SSH prompts, forwarding, reconnect and restore.
-src/main/ssh/service.ts	port	Restores and saves forwards, tracks active watches and retries dropped connections after checking port availability.
+src/main/ssh/service.ts	mixed	ssh.readStore/saveStore own forward file validation, quarantine, persistence and disk-full retry. The live watch/forward map and grace timers remain with same-tick state broadcasts and will-quit disposal (§1.3a,c).
 src/main/ssh/test-fake-ssh.ts	exception	Test fixture writes a substitute SSH executable for controlled process interactions.
 src/main/tailscale/cli.test.ts	exception	Test coverage for native Tailscale CLI responses.
-src/main/tailscale/cli.ts	port	Calls native tailscale methods but still locates the sibling Windows tray executable and spawns it detached.
+src/main/tailscale/cli.ts	native-client	Supplies main's environment and step cancellation to native tailscale methods. Rust starts the Windows tray app outside the core job.
 src/main/tailscale/locate.test.ts	exception	Test coverage for Tailscale executable lookup precedence.
 src/main/tailscale/locate.ts	native-client	Supplies platform, preferences and environment to tailscale.locate; Rust selects the executable.
 src/main/tailscale/service-restart.test.ts	exception	Test coverage for mobile web recovery after core exit.
 src/main/tailscale/service.test.ts	exception	Test coverage for mobile web serve publication and cleanup.
-src/main/tailscale/service.ts	port	Schedules refreshes, serializes actions, and services core requests to change preferences, start servers and open settings.
+src/main/tailscale/service.ts	mixed	The core decides mobile web phases, actions and poll delays. state() joins the desktop setup snapshot and live preferences synchronously; dispose and coreLost clear the refresh timer before the server is stopped or reopened. Move that lifecycle with its desktop callers (§1.3a,c).
 src/main/tailscale/status.ts	exception	Declares status and node wire types, a minimum version and fixed admin URLs; no status processing.
 src/main/tailscale/tailnet.test.ts	exception	Test coverage for tailnet identity cache expiry.
-src/main/tailscale/tailnet.ts	port	Delegates status/whois to Rust but recreates stale native handles and selects fallback results on core errors.
+src/main/tailscale/tailnet.ts	native-client	remote.tailnet owns status/whois, lookup caching and shareable reads. The client supplies the CLI launch arguments and invalidates process-local handles on core exit; a core that cannot answer gives a conservative result.
 src/main/tailscale/test-fake-tailscale.ts	exception	Test substitute CLI models status, serve configuration and relay responses.
 src/main/tailscale/whois.ts	exception	Declares the TailnetPeer whois response type only.
-src/main/terminal/agent-tool.test.ts	exception	Test coverage for terminal listing and snapshot selection.
-src/main/terminal/agent-tool.ts	port	Remote-web batch: formatTerminalRead selects and formats the requested tail at the source of terminal.request. A separate formatter would send whole snapshots back over the wire. Stock still needs the read-only tool definition.
-src/main/terminal/ipc.ts	port	Remote-web batch with terminal:request and host-services (§1.3c). The host checks the tab owner and applies the viewer lease before it enqueues the PTY request. Pool release clears that owner's leases and disposes its terminals.
-src/main/terminal/lease.test.ts	exception	Test coverage for terminal viewer lease arbitration.
-src/main/terminal/lease.ts	port	Remote-web batch with terminal/ipc.ts (§1.3c). A resize reads the lease or a claim changes it in the same tick as the PTY request. Pool release forgets the owner's leases. No separate lease RPC.
-src/main/terminal/requests.ts	port	Remote-web batch, §1.3(c): paired remote/host-services checks the owner and immediately enqueues terminal.request, then can enqueue terminal.dispose for a closed tab. Awaiting a shell lookup before enqueue can create a shell after disposal. Move admission with the owner.
+src/main/terminal/agent-tool.test.ts	tooling	Reads synthetic PTYs through the real stock lane and exercises both versions of the paired read contract.
+src/main/terminal/agent-tool.ts	native-client	Defines the read-only stock host tool and normalizes its arguments. The native owner projects the selected terminal's output before answering.
+src/main/terminal/ipc.ts	mixed	The native stock lane arbitrates PTY size. Main gets the live pool target, attaches the owning sender's destroyed listener and enqueues work before yielding. Tab release removes that binding before releasing the sidecar, and an outstanding reply rechecks it. Move these shell bindings with the window and pool callback (§1.3a,c).
+src/main/terminal/lease.test.ts	tooling	Two viewers of the real stock lane compete over one synthetic PTY. Exercises returned geometry, arrival order, timed takeover, close and owner disposal.
+src/main/terminal/requests.ts	mixed	The stock lane chooses an allowed shell, derives the paired PTY owner and applies viewer operations before forwarding. Main validates incoming shapes before binding the sender or dispatching to an older paired host (§1.3a,c).
 src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ordering and deduplication.
-src/main/terminal/shells.ts	port	Remote-web batch, §1.3(c): terminal/requests uses the same live shell list as the picker to allow only exact installed paths at create admission, before the owner can be disposed. Move both uses together with paired terminal admission.
+src/main/terminal/shells.ts	native-client	terminal.shells lists installed shells in preference order. The same Rust probe restricts a named shell when the stock lane processes a create.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.
 src/main/terminal/terminal-service.test.ts	exception	Test coverage for stock PTY spawn, input, resize and exit.
+src/main/terminal/test-helper.ts	tooling	The real stock terminal worker loads a test PTY implementation; startup and disposal never launch an interactive shell.
 src/main/update-release.fixtures/v0.131.0/PROVENANCE.md	exception	Records the source commit and license of the frozen updater compatibility fixtures.
 src/main/update-release.fixtures/v0.131.0/update-provider.ts	exception	Frozen v0.131.0 provider that translates release data into updater metadata and file URLs for compatibility tests.
 src/main/update-release.fixtures/v0.131.0/update-release.ts	exception	Frozen v0.131.0 release metadata parser and platform asset selector used as a compatibility fixture.

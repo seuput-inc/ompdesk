@@ -4,6 +4,9 @@
 //! open. Each accepted socket runs the host's handshake; who may connect and the device record are the devices
 //! instance's (`devices/gate.rs`, the host's number is its instance's), the hello's answer is main's (`open`).
 
+#[path = "host_hello.rs"]
+mod host_hello;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -380,6 +383,7 @@ impl HostSide for Asks {
 
     async fn open(&self, device_id: &str, hello: &Value) -> Option<Opened> {
         let (peer, waited) = super::devices::arriving(self.host, self.link)?;
+        let hello = host_hello::parse(hello)?;
         // Registered before main hears of the link, so what it sends as it takes the connection waits for the link.
         let (handle, queue) = super::link::channel();
         super::state().links.insert(self.link, handle);
@@ -397,33 +401,19 @@ impl HostSide for Asks {
             }),
         )
         .await;
-        let Some(fields) = answer
-            .as_ref()
-            .and_then(|a| a.get("hello"))
-            .and_then(Value::as_object)
-            .cloned()
+        let Some(Value::Object(fields)) =
+            answer.and_then(|mut value| value.as_object_mut()?.remove("hello"))
         else {
             super::forget_link(self.link);
             *self.queue.lock().unwrap_or_else(|p| p.into_inner()) = None;
             return None;
         };
-        let answer = answer.unwrap_or(Value::Null);
         self.opened.store(true, Ordering::SeqCst);
-        super::devices::opened(
-            self.host,
-            self.link,
-            answer.get("deviceName").and_then(Value::as_str),
-        );
+        super::devices::opened(self.host, self.link, Some(hello.name));
         Some(Opened {
             hello: fields,
-            deflate: answer
-                .get("deflate")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            context: answer
-                .get("context")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            deflate: hello.slim.deflate,
+            context: hello.slim.deflate_context,
         })
     }
 }

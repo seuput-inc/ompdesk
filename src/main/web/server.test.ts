@@ -48,7 +48,7 @@ let port: number;
 let handlers: Map<string, Handler>;
 let desktopSent: { channel: string; payload: unknown }[];
 let unpaired: Mock<NonNullable<WebHostDeps["onUnpairedAuth"]>>;
-let confirmNew: boolean;
+let confirmNew: boolean | null;
 let approve: boolean;
 let sockets: WebSocket[];
 let peers: Map<string, TailnetPeer>;
@@ -126,7 +126,10 @@ beforeEach(async () => {
 		openMedia: async () => new Response(null, { status: 404 }),
 		shell: { openPath: async () => {}, reveal: () => {}, openExternal: async () => {} },
 		allowedUsers: () => allowed,
-		confirmNewDevices: () => confirmNew,
+		confirmNewDevices: () => {
+			if (confirmNew === null) throw new Error("settings unavailable");
+			return confirmNew;
+		},
 		whois: async address => {
 			whoisAsked.push(address);
 			await whoisHeld.get(address);
@@ -533,6 +536,30 @@ describe("connecting a device", () => {
 		expect(await response.json()).toEqual({ error: "declined" });
 		expect(host.devices.list()).toEqual([]);
 		expect(sent(WEB_DEVICE_CONNECTED)).toEqual([]);
+	});
+
+	it("declines without enrolling a device when its approval setting cannot be read", async () => {
+		confirmNew = null;
+		const response = await post("/api/pair", { name: "x" });
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "declined" });
+		expect(host.devices.list()).toEqual([]);
+		expect(sent(WEB_PAIRING_REQUEST)).toEqual([]);
+	});
+
+	it("stop refuses a held phone and an approval sent after stop began", async () => {
+		confirmNew = true;
+		holdDesktop = true;
+		const phone = post("/api/pair", { name: "x" });
+		await vi.waitFor(() => expect(sent(WEB_PAIRING_REQUEST)).toHaveLength(1));
+		const [request] = sent(WEB_PAIRING_REQUEST) as WebPairingRequest[];
+		const stopping = host.stop();
+		expect(await host.confirmations.respond({ id: request?.id ?? "", approve: true })).toBe(false);
+		const response = await phone;
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "declined" });
+		await stopping;
+		expect(host.devices.list()).toEqual([]);
 	});
 
 	it("rejects a malformed body, a wrong content type and a private key", async () => {
@@ -1237,9 +1264,17 @@ describe("after the core restarts", () => {
 		const waiting = post("/api/pair", { name: "x" }).catch(() => null);
 		await vi.waitFor(() => expect(sent(WEB_PAIRING_REQUEST)).toHaveLength(1));
 		const [request] = sent(WEB_PAIRING_REQUEST) as WebPairingRequest[];
+		const computer = host.confirmations.request({
+			kind: "computer",
+			name: "peer",
+			userAgent: "",
+			tailscaleLogin: LOGIN,
+			ip: PEER_IP,
+		});
 		await restartCore();
-		expect(host.confirmations.pending()).toEqual([]);
-		expect(host.confirmations.respond({ id: request?.id ?? "", approve: true })).toBe(false);
+		await expect(computer).resolves.toEqual({ approved: false, reason: "declined" });
+		expect(await host.confirmations.pending()).toEqual([]);
+		expect(await host.confirmations.respond({ id: request?.id ?? "", approve: true })).toBe(false);
 		await waiting;
 		expect(host.devices.list()).toEqual([]);
 	}, 20_000);

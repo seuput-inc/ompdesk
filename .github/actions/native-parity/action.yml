@@ -42,6 +42,9 @@ runs:
         src/main/agent-worktrees.test.ts
         src/main/stock-helper.test.ts
         src/main/control-socket/cli-install.test.ts
+        src/main/terminal/shells.test.ts
+        src/main/terminal/lease.test.ts
+        src/main/terminal/agent-tool.test.ts
         src/main/models-config.test.ts
         src/main/bridge-input-history.test.ts
         src/main/omp-availability.test.ts
@@ -55,6 +58,7 @@ runs:
         src/main/tailscale/service-restart.test.ts
         src/main/tailscale/tailnet.test.ts
         src/main/ssh/*.test.ts
+        src/main/power/lid-backend-windows.test.ts
         src/main/ext-update/mcp.test.ts
         src/main/ext-update/classify.test.ts
         src/main/ext-update/running.test.ts
@@ -114,8 +118,10 @@ runs:
         src/main/remote/crypto.test.ts
         src/main/remote/devices.test.ts
         src/main/web/server.test.ts
+        src/main/web/pairing.test.ts
         src/main/web/host-actions.test.ts
         src/main/web/ws-router.test.ts
+        src/main/web/page-images.test.ts
         src/main/web/push.test.ts
         src/main/web/vapid-store.test.ts
         src/main/web/web-push-notifier.test.ts
@@ -130,6 +136,7 @@ runs:
         src/main/remote/transcript-cache.test.ts
         src/main/remote/image-blob-cache.test.ts
         src/main/remote/sign-in-relay.test.ts
+        src/main/sign-in-callback.test.ts
         src/main/remote/link-traffic-images.test.ts
         src/main/remote/link-events-core.test.ts
         src/main/remote/link-traffic-report.test.ts

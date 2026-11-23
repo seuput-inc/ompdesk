@@ -132,10 +132,6 @@ export class WebHost {
 		this.uploads = new UploadStore({ userData: deps.userData, now });
 		this.blocks = new WebBlocks(deps.userData, now);
 		this.#serveSecret = new ServeSecretStore(deps.userData);
-		this.confirmations = new PairingConfirmations({
-			notify: request => this.#toDesktop(WEB_PAIRING_REQUEST, request),
-			now,
-		});
 		this.windows = new WebWindows((deviceId, channel, payload) => this.router.deliver(deviceId, channel, payload));
 		this.router = new WsRouter({
 			registry: deps.ipc,
@@ -144,7 +140,7 @@ export class WebHost {
 			quota: this.quota,
 			webChannels: createHostActions({
 				devices: this.devices,
-				uploads: this.uploads,
+				userData: deps.userData,
 				blobs: this.blobs,
 				cwdFor: (context, tabId) => deps.tabs.cwd(context.win, tabId),
 				openPath: deps.shell.openPath,
@@ -162,6 +158,10 @@ export class WebHost {
 			onConnectionsChanged: () => this.devices.notifyChanged(),
 			onConnectionEnded: (_deviceId, connId) => deps.onPageConnectionEnded?.(connId),
 			onResync: deviceId => deps.tabs.resnapshot(this.windows.windowFor(deviceId)),
+		});
+		this.confirmations = new PairingConfirmations(this.router.host, {
+			notify: request => this.#toDesktop(WEB_PAIRING_REQUEST, request),
+			now,
 		});
 		this.notifier = new WebPushNotifier({
 			devices: this.devices,
@@ -337,7 +337,6 @@ export class WebHost {
 		this.router.closeDevice(deviceId, CLOSE_REVOKED, "revoked");
 		this.windows.destroy(deviceId);
 		this.blobs.releaseDevice(deviceId);
-		this.router.forgetDevice(deviceId);
 		void this.uploads.removeDevice(deviceId).catch(() => {});
 	}
 
@@ -373,8 +372,8 @@ export class WebHost {
 			this.devices.notifyChanged();
 			return this.list();
 		});
-		ipc.handle(WEB_PAIRING_RESPOND, (_caller, response: unknown) => {
-			this.confirmations.respond(PairingResponse.parse(response));
+		ipc.handle(WEB_PAIRING_RESPOND, async (_caller, response: unknown) => {
+			await this.confirmations.respond(PairingResponse.parse(response));
 		});
 	}
 }

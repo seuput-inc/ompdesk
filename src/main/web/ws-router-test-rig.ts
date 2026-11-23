@@ -88,7 +88,7 @@ export class TestRouterHost {
 	/** A router whose core side has no edge; `timers: "real"` lets the core batch and ping on its own. */
 	static async open(
 		deps: WsRouterDeps,
-		options: { now?: number; timers?: "manual" | "real" } = {},
+		options: { now?: number; timers?: "manual" | "real"; blobUserData?: string } = {},
 	): Promise<TestRouterHost> {
 		listen();
 		const router = new WsRouter(deps);
@@ -97,6 +97,7 @@ export class TestRouterHost {
 			host: router.host,
 			now: host.clock.now,
 			manualTimers: options.timers !== "real",
+			blobUserData: options.blobUserData,
 			config: router.config(),
 		});
 		router.started(generation);

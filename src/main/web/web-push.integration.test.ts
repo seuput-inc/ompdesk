@@ -5,10 +5,13 @@
  * produces exactly the pushes the rules allow. Only Electron, omp and the push service are faked.
  */
 import { createECDH, randomBytes } from "node:crypto";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { WEB_PAIRING_REQUEST, type WebPairingRequest } from "../../shared/mobile-web";
@@ -18,7 +21,7 @@ import { SidecarPool } from "../sidecar-pool";
 import type { SidecarLike } from "../sidecar-types";
 import type { ClientWindow } from "./client-window";
 import type { IpcCaller } from "./ipc-registry";
-import type { PushTransport } from "./push";
+import { coreTransport, type PushTransport } from "./push";
 import { WebHost } from "./web-host";
 import { COMPLETION_DEBOUNCE_MS } from "./web-push-notifier";
 
@@ -92,6 +95,8 @@ let port: number;
 let sockets: WebSocket[];
 let calls: PushCall[];
 let pushStatus: number;
+let pushService: Server;
+const pending: Promise<unknown>[] = [];
 let timers: Map<number, { at: number; fn: () => void }>;
 let clock: number;
 
@@ -113,12 +118,10 @@ function advance(ms: number): void {
 	clock = target;
 }
 
-/** Let the sender's promise chain (a fake push service answers in a microtask) finish. */
-const flush = () => {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	setImmediate(resolve);
-	return promise;
-};
+async function flush(): Promise<void> {
+	await Promise.all(pending.splice(0));
+	await nextTurn(); // Let the notifier apply a gone subscription to the device store.
+}
 
 /** Resolves once `done(frames)` holds: checked now and again on each frame the socket brings, never by a count of turns. */
 function arrived(socket: WebSocket, frames: unknown[], done: (frames: unknown[]) => boolean): Promise<void> {
@@ -155,15 +158,26 @@ beforeEach(async () => {
 		return omp as unknown as SidecarLike;
 	});
 	const handlers = new Map<string, (caller: IpcCaller, ...args: unknown[]) => unknown>();
+	pushService = createServer((request, response) => {
+		request.resume();
+		response.writeHead(pushStatus).end();
+	});
+	pushService.listen(0, "127.0.0.1");
+	await once(pushService, "listening");
+	const pushOrigin = `http://127.0.0.1:${(pushService.address() as AddressInfo).port}`;
+	const sender = coreTransport(userData);
 	const transport: PushTransport = {
-		send: async (subscription, body, options) => {
+		send: (subscription, body, options) => {
 			calls.push({
 				endpoint: subscription.endpoint,
 				payload: JSON.parse(body) as WebPushPayload,
 				ttl: options.ttl,
 				urgency: options.urgency,
 			});
-			return { statusCode: pushStatus };
+			const endpoint = `${pushOrigin}${new URL(subscription.endpoint).pathname}`;
+			const delivery = sender.send({ ...subscription, endpoint }, body, options);
+			pending.push(delivery);
+			return delivery;
 		},
 	};
 	const desktop: ClientWindow = {
@@ -217,6 +231,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	for (const socket of sockets) socket.terminate();
+	await flush();
+	pushService.close();
 	await host.stop();
 	// A store's atomic write may still land after stop; on Windows that fails the rm with ENOTEMPTY, so retry.
 	rmSync(userData, { recursive: true, force: true, maxRetries: 5 });
