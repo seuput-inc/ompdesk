@@ -21,7 +21,7 @@ async function fixture() {
 		`import { appendFileSync, realpathSync, unlinkSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
-appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input, cwd: realpathSync(process.cwd()), notifications: process.env.PI_NOTIFICATIONS, telemetry: process.env.OTEL_SDK_DISABLED }) + "\\n");
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input, cwd: realpathSync.native(process.cwd()), notifications: process.env.PI_NOTIFICATIONS, telemetry: process.env.OTEL_SDK_DISABLED }) + "\\n");
 const file = args[args.indexOf("--session") + 1];
 const replies = await Bun.file(file).json();
 const reply = replies[args.includes("--model") ? 1 : 0];

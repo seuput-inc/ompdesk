@@ -76,12 +76,13 @@ it.each([
 	["New version available: 18.7.0-canary.3", "18.7.0-canary.3", true],
 ])("checks this install without changing it: %s", async (stock, latestVersion, updateAvailable) => {
 	const { cwd, call } = await fixture(`
+import { realpathSync } from "node:fs";
 import { delimiter, dirname } from "node:path";
 if (JSON.stringify(process.argv.slice(2)) !== '["update","--check"]'
   || process.env.NO_COLOR !== "1" || process.env.FORCE_COLOR !== "0"
   || process.env.OTEL_SDK_DISABLED !== "true" || (await Bun.stdin.text()) !== ""
-  || process.env.PATH.split(delimiter)[0] !== dirname(import.meta.path)
-  || process.env.BUN_INSTALL !== process.cwd()) throw new Error("wrong launch");
+  || realpathSync.native(process.env.PATH.split(delimiter)[0]) !== realpathSync.native(dirname(import.meta.path))
+  || realpathSync.native(process.env.BUN_INSTALL) !== realpathSync.native(process.cwd())) throw new Error("wrong launch");
 console.log(${JSON.stringify(`Current version: 18.6.1\r\n${stock}`)});`);
 	const pkg = join(cwd, "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent");
 	mkdirSync(pkg, { recursive: true });
