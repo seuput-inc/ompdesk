@@ -1,147 +1,70 @@
-/**
- * The GUI's stats dashboard server: omp's own dashboard API (`@oh-my-pi/omp-stats`
- * from the user's omp install), hosted by resources/gui-bridge/stats-host.ts.
- * `omp stats` itself is not used: it always opens a browser tab.
- *
- * Spawned on app start, killed on quit, localhost-only on a private ephemeral
- * port (separate GUI instances must not share an index or listener). If an
- * external process already owns the port, this reports the conflict rather
- * than silently using it.
- */
-import { type ChildProcess, spawn } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { stripVTControlCharacters } from "node:util";
-import { MAX_RESTART_ATTEMPTS, RestartBudget, type Revive } from "./restart-policy";
+import { codedError, isIpcErrorCode } from "../shared/ipc-error-codes";
+import { CoreError, core } from "./core/process";
 
-/** How long `kill()` waits for the process to exit (an omp update replaces the files it reads). */
-const STOP_WAIT_MS = 5000;
-
-/** How to start the dashboard process; it must print `http://127.0.0.1:<port>` once listening. */
+export type StatsRead = { ready: true; data: unknown } | { ready: false; exhausted: boolean };
 export interface StatsLaunch {
 	command: string;
 	args: string[];
 	/** Overlaid on the inherited environment. */
-	env?: Record<string, string>;
+	env?: NodeJS.ProcessEnv;
 }
 
-export class StatsServerManager extends EventEmitter {
-	#child: ChildProcess | null = null;
-	#budget = new RestartBudget();
-	#restartTimer: NodeJS.Timeout | null = null;
-	#disposed = false;
-	#port = 0;
+let nextId = 0;
+
+/** The core owns the child, its port and both restart budgets. A fresh read reopens the host after core loss. */
+export class StatsServerManager {
+	readonly #id = ++nextId;
 	readonly #launch: StatsLaunch;
+	#opened?: { generation: number; promise: Promise<void> };
+	#stopping?: Promise<void>;
 
 	constructor(launch: StatsLaunch) {
-		super();
 		this.#launch = launch;
 	}
 
-	get port(): number {
-		return this.#port;
-	}
-
-	start(): void {
-		if (this.#disposed) return;
-		this.#spawn();
-	}
-
-	/**
-	 * Bring the server up because something now wants to read it. Without this,
-	 * a manager that spent its restart budget stays at port 0 for the rest of the
-	 * session and every dashboard read answers "not ready" forever.
-	 */
-	ensureRunning(): Revive {
-		if (this.#disposed) return "exhausted";
-		if (this.#child || this.#restartTimer) return "already-pending";
-		const verdict = this.#budget.revive(Date.now());
-		if (verdict === "scheduled") this.#spawn();
-		return verdict;
-	}
-
-	#spawn(): void {
+	start(): Promise<void> {
+		if (this.#stopping) return this.#stopping;
+		const client = core();
+		if (this.#opened && this.#opened.generation === client.generation) return this.#opened.promise;
 		const { command, args, env } = this.#launch;
-		console.log(`[stats-server] spawning: ${command} ${args.join(" ")}`);
-		let child: ChildProcess;
+		const open = client.call("stats.start", { id: this.#id, command, args, env: { ...process.env, ...env } });
+		const generation = client.generation;
+		const promise = open.then(
+			() => {},
+			error => {
+				if (this.#opened?.generation === generation) this.#opened = undefined;
+				throw error;
+			},
+		);
+		this.#opened = { generation, promise };
+		return promise;
+	}
+
+	async fetch(path: string, params?: Record<string, string>): Promise<StatsRead> {
+		await this.start();
+		if (this.#stopping) return { ready: false, exhausted: true };
 		try {
-			child = spawn(command, args, {
-				// stdin stays an open pipe: stats-host exits when it closes, so a
-				// crashed or force-killed app never leaves the server orphaned.
-				stdio: ["pipe", "pipe", "pipe"],
-				env: { ...process.env, ...env, PI_NOTIFICATIONS: "off" },
-				windowsHide: true,
-			});
-		} catch (err) {
-			// spawn() throws synchronously (e.g. EBADF/ENOENT) — treat like a
-			// failed child so it retries gracefully instead of crashing the main
-			// process with an uncaught-exception dialog.
-			this.#attemptRestart(err instanceof Error ? err.message : String(err));
-			return;
+			const answer = await core().call<StatsRead>(
+				"stats.fetch",
+				{ id: this.#id, path, params },
+				{ generation: this.#opened?.generation },
+			);
+			return answer.result;
+		} catch (error) {
+			if (error instanceof CoreError && isIpcErrorCode(error.code)) throw codedError(error.code, error.message);
+			throw error;
 		}
-		this.#child = child;
-
-		let stdout = "";
-		child.stdout?.on("data", (chunk: Buffer) => {
-			stdout = (stdout + chunk.toString("utf-8")).slice(-4096);
-			const text = stripVTControlCharacters(stdout);
-			const match = /http:\/\/(?:localhost|127\.0\.0\.1):([0-9]+)(?=[\s/])/.exec(text);
-			if (match && Number(match[1]) > 0) {
-				this.#port = Number(match[1]);
-				this.#budget.noteReady();
-				console.log(`[stats-server] ready on http://localhost:${this.#port}`);
-				this.emit("ready", this.#port);
-				stdout = "";
-			}
-		});
-		child.stderr?.on("data", (chunk: Buffer) => {
-			const text = chunk.toString("utf-8").trim();
-			if (text) console.error(`[stats-server stderr] ${text}`);
-		});
-		child.on("exit", (code, signal) => {
-			if (this.#child !== child) return;
-			this.#child = null;
-			if (this.#disposed) return;
-			if (code === 0) {
-				this.emit("exit", code);
-				return;
-			}
-			this.#attemptRestart(`exit code ${code}${signal ? ` (${signal})` : ""}`);
-		});
-		child.on("error", err => {
-			if (this.#child !== child) return;
-			this.#child = null;
-			if (this.#disposed) return;
-			this.#attemptRestart(err.message);
-		});
 	}
 
-	#attemptRestart(reason: string): void {
-		this.#port = 0;
-		this.emit("exit", null);
-		const delay = this.#budget.nextDelay();
-		if (delay === null) {
-			console.error(`[stats-server] failed after ${MAX_RESTART_ATTEMPTS} attempts: ${reason}`);
-			return;
-		}
-		console.warn(`[stats-server] restart in ${delay}ms: ${reason}`);
-		this.#restartTimer = setTimeout(() => {
-			this.#restartTimer = null;
-			if (!this.#disposed) this.#spawn();
-		}, delay);
-	}
-
-	/** Stops the server for good; resolves once its process is gone (immediately when none runs). */
 	kill(): Promise<void> {
-		this.#disposed = true;
-		if (this.#restartTimer) {
-			clearTimeout(this.#restartTimer);
-			this.#restartTimer = null;
-		}
-		const child = this.#child;
-		this.#child = null;
-		if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-		const exited = new Promise<void>(done => child.once("exit", () => done()));
-		child.kill("SIGTERM");
-		return Promise.race([exited, new Promise<void>(done => setTimeout(done, STOP_WAIT_MS).unref())]);
+		if (this.#stopping) return this.#stopping;
+		const generation = this.#opened?.generation;
+		this.#stopping =
+			generation && core().generation === generation
+				? core()
+						.call("stats.stop", { id: this.#id }, { generation })
+						.then(() => {})
+				: Promise.resolve();
+		return this.#stopping;
 	}
 }

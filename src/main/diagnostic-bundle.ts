@@ -8,25 +8,23 @@
  * and its bytes come back over `host.fs.readBinary`, the route a remote tab's file viewer reads with. That handler
  * redacts every member on the machine that wrote it; an archive not marked `redacted` (an older host) is refused,
  * never saved. The archive is deleted on the machine that wrote it (`discard_session_archive`) whether the save
- * worked or not. The bundle is one zip: jszip (bundled into main, `MAIN_BUNDLED_DEPS`) opens it and adds the member.
+ * worked or not. The core opens the local file (or the paired host's byte frame), adds the report and saves it.
  *
  * Electron-free: the dialog, the Downloads folder, the pool and the host link come in as `DiagnosticBundleDeps`.
  */
-import { promises as fsp } from "node:fs";
 import path from "node:path";
-import JSZip from "jszip";
 import { z } from "zod";
 import {
 	bundleFileName,
 	DIAGNOSTICS_MEMBER,
 	type DiagnosticBundleRequest,
 	type DiagnosticBundleResult,
-	type SessionArchive,
 } from "../shared/diagnostic-bundle";
 import { codedError, type IpcErrorCode, ipcErrorCode, isIpcErrorCode } from "../shared/ipc-error-codes";
 import { IPC_COMMANDS, type IpcFsReadBinaryResult } from "../shared/ipc-types";
 import { timeoutForCommand } from "../shared/rpc-client";
 import type { RpcCommand } from "../shared/rpc-types";
+import { core } from "./core/process";
 import type { SidecarPool } from "./sidecar-pool";
 import type { SidecarLike } from "./sidecar-types";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
@@ -84,28 +82,15 @@ function failure(code: IpcErrorCode | undefined, error: string): DiagnosticBundl
 	return { ok: false, error, ...(code ? { code } : {}) };
 }
 
-/** `name` in `dir`, or `name (2)`, `name (3)`… when that file exists: an agent never replaces a person's file. */
-async function freeFile(dir: string, name: string): Promise<string> {
-	const { name: stem, ext } = path.parse(name);
-	for (let n = 1; ; n++) {
-		const candidate = path.join(dir, n === 1 ? name : `${stem} (${n})${ext}`);
-		try {
-			await fsp.access(candidate);
-		} catch {
-			return candidate;
-		}
-	}
-}
-
 /** Where the zip goes, or the result that ends the call (cancelled, no window, a path that is not absolute). */
 async function destinationFile(
 	deps: DiagnosticBundleDeps,
 	caller: IpcCaller,
 	request: z.infer<typeof Request>,
 	name: string,
-): Promise<{ file: string } | { result: DiagnosticBundleResult }> {
+): Promise<{ file: string; unique?: true } | { result: DiagnosticBundleResult }> {
 	const destination = request.destination ?? { kind: "dialog" };
-	if (destination.kind === "downloads") return { file: await freeFile(deps.downloadsDir(), name) };
+	if (destination.kind === "downloads") return { file: path.join(deps.downloadsDir(), name), unique: true };
 	if (destination.kind === "path") {
 		if (!path.isAbsolute(destination.path)) {
 			return { result: failure("not_absolute_path", "The bundle's path must be absolute") };
@@ -118,12 +103,12 @@ async function destinationFile(
 	return chosen === null ? { result: { ok: false, cancelled: true } } : { file: chosen };
 }
 
-/** The tab's omp writes stock's archive; this reads it (locally or off the host), adds the diagnostics, deletes it. */
-async function bundledBytes(
+async function saveArchive(
 	deps: DiagnosticBundleDeps,
 	tab: BundleTab,
 	anonymized: boolean,
-): Promise<{ archive: SessionArchive; zip: Buffer } | DiagnosticBundleResult> {
+	target: { file: string; unique?: true },
+): Promise<DiagnosticBundleResult> {
 	const client = tab.sidecar.rpcClient;
 	if (!client) return failure("sidecar_not_connected", "The session's omp is not connected");
 	const dump: RpcCommand = { type: "dump_session_archive", anonymized };
@@ -135,11 +120,33 @@ async function bundledBytes(
 		// An older host answers its raw, unredacted archive: refused unread (and still deleted below).
 		if (!archive.success)
 			return failure("remote_protocol", "The omp answered the dump in a form this app does not know");
-		const bytes = await archiveBytes(deps, tab, archive.data.path);
-		if ("ok" in bytes) return bytes;
-		const zip = await JSZip.loadAsync(bytes);
-		zip.file(DIAGNOSTICS_MEMBER, await deps.diagnosticsText());
-		return { archive: archive.data, zip: await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }) };
+		const { device } = tab.sidecar;
+		let bin: Uint8Array | undefined;
+		if (device !== undefined) {
+			const read = await deps.readHostFile({ ...tab, device }, archive.data.path);
+			if (!read.ok) return failure(read.code, read.error ?? "The host's archive could not be read");
+			if (read.truncated) return failure("file_too_large", "The host's archive was truncated");
+			bin = read.data;
+		}
+		const { result: file } = await core().call<string>(
+			"diagnosticBundle.save",
+			{
+				...target,
+				source: device === undefined ? archive.data.path : undefined,
+				diagnostics: await deps.diagnosticsText(),
+			},
+			{ bin, timeoutMs: timeoutForCommand(dump) },
+		);
+		const { files, subagentCount, anonymized: anon, subagentError, dropped } = archive.data;
+		return {
+			ok: true,
+			path: file,
+			files: [...files, DIAGNOSTICS_MEMBER],
+			subagentCount,
+			anonymized: anon,
+			...(subagentError ? { subagentError } : {}),
+			...(dropped?.length ? { dropped } : {}),
+		};
 	} finally {
 		// Best effort: a link that dropped meanwhile leaves the host's temp file to its own cleanup.
 		if (written.success) {
@@ -147,18 +154,6 @@ async function bundledBytes(
 			await client.command(discard).catch(() => undefined);
 		}
 	}
-}
-
-async function archiveBytes(
-	deps: DiagnosticBundleDeps,
-	tab: BundleTab,
-	file: string,
-): Promise<Uint8Array | DiagnosticBundleResult> {
-	const { device } = tab.sidecar;
-	if (device === undefined) return fsp.readFile(file);
-	const read = await deps.readHostFile({ ...tab, device }, file);
-	if (read.ok) return read.data;
-	return failure(read.code, read.error ?? "The host's archive could not be read");
 }
 
 /** Save one open session's diagnostic bundle (see the module comment). Failures come back as results; a malformed request throws. */
@@ -183,19 +178,7 @@ export async function saveDiagnosticBundle(
 		const name = bundleFileName(request.title, (deps.now ?? (() => new Date()))(), request.anonymized);
 		const target = await destinationFile(deps, caller, request, name);
 		if ("result" in target) return target.result;
-		const built = await bundledBytes(deps, tab, request.anonymized);
-		if ("ok" in built) return built;
-		await fsp.writeFile(target.file, built.zip);
-		const { archive } = built;
-		return {
-			ok: true,
-			path: target.file,
-			files: [...archive.files, DIAGNOSTICS_MEMBER],
-			subagentCount: archive.subagentCount,
-			anonymized: archive.anonymized,
-			...(archive.subagentError ? { subagentError: archive.subagentError } : {}),
-			...(archive.dropped?.length ? { dropped: archive.dropped } : {}),
-		};
+		return await saveArchive(deps, tab, request.anonymized, target);
 	} catch (error) {
 		return failure(ipcErrorCode(error), error instanceof Error ? error.message : String(error));
 	}

@@ -17,7 +17,7 @@
  * 4. The app's HTTP cache past `HTTP_CACHE_MAX_BYTES` (update downloads filled it) is cleared through Electron.
  * 5. Closed sessions' scratch folders (`scratch.ts`): whole once their sessions are gone, else what no reply shows
  *    once idle `DISK_CARE_ARTIFACT_IDLE_DAYS` with no tab on their tag and no process carrying it.
- * 6. The tools' caches (`caches.ts`, one table: Bun's install cache, Bun's runtime transpiler cache, npm's cache), each
+ * 6. The tools' caches (`disk/cache_policy.rs`: Bun's install cache, Bun's runtime transpiler cache, npm's cache), each
  *    cleared past its own bound while no process that needs it runs.
  * 7. Generated input lists and hash caches of idle checks. Their verdicts and diagnostics stay.
  *
@@ -27,7 +27,6 @@
  * everything. Every action is one `disk-care` line in gui-runtime.jsonl.
  */
 
-import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import {
 	DISK_CARE_ARTIFACT_IDLE_DAYS,
@@ -52,7 +51,7 @@ import {
 	sweepLeftBehind,
 } from "../worktree-orphans";
 import { withRemovalClaim } from "../worktree-removals";
-import { type CacheTools, type LocatedCache, locateCaches, REGENERABLE_CACHES, type RegenerableCache } from "./caches";
+import { type CacheHolds, type CacheTools, cacheHolds, clearCache, type LocatedCache, locateCaches } from "./caches";
 import {
 	archiveBeforeRemove,
 	dropArtifacts,
@@ -90,8 +89,8 @@ export interface DiskCareDeps extends OrphanDeps {
 	checkInputs?: boolean;
 	/** How the cache step finds, asks and runs the tools whose caches it bounds. */
 	cacheTools: CacheTools;
-	/** The caches bounded (default `REGENERABLE_CACHES`; a test lowers the bounds). */
-	caches?: readonly RegenerableCache[];
+	/** Tests can fill the real caches' bounds with small files. */
+	cacheMaxBytes?: number;
 	log(message: string, details: Record<string, unknown>): void;
 	broadcast(state: DiskCareState): void;
 	/** Runs by itself (a packaged app outside tests); the button and agent work either way. */
@@ -142,10 +141,6 @@ export class DiskCare {
 		this.#now = deps.now ?? Date.now;
 	}
 
-	get #stateFile(): string {
-		return path.join(this.#deps.userData, "disk-care", "state.json");
-	}
-
 	state(): DiskCareState {
 		return {
 			running: this.#running !== null,
@@ -158,12 +153,13 @@ export class DiskCare {
 	/** Reads the last run and measurement an earlier launch kept; then the first run, unless one ran lately. */
 	async start(): Promise<void> {
 		this.#stopped = false;
-		const kept = await fs
-			.readFile(this.#stateFile, "utf8")
-			.then(text => JSON.parse(text) as { usage?: DiskUsage; lastRun?: DiskCareRunSummary })
-			.catch(() => ({}) as { usage?: DiskUsage; lastRun?: DiskCareRunSummary });
-		this.#usage = kept.usage ?? null;
-		this.#lastRun = kept.lastRun ?? null;
+		const kept = await coreHeld<Pick<DiskCareState, "usage" | "lastRun">>(
+			"disk.readRunState",
+			{ profile: this.#deps.userData },
+			60_000,
+		).catch(() => ({ usage: null, lastRun: null }));
+		this.#usage = kept.usage;
+		this.#lastRun = kept.lastRun;
 		if (!this.#deps.automatic) return;
 		const since = this.#lastRun ? this.#now() - this.#lastRun.endedAt : Number.POSITIVE_INFINITY;
 		const recent = since < LAUNCH_THROTTLE_MS;
@@ -257,7 +253,7 @@ export class DiskCare {
 		await step("http-cache", () => this.#httpCache(sizes, tally));
 		let caches: LocatedCache[] = [];
 		await step("caches", async () => {
-			caches = await locateCaches(this.#deps.caches ?? REGENERABLE_CACHES, this.#deps.cacheTools);
+			caches = await locateCaches(this.#deps.cacheTools);
 			await this.#caches(caches, sizes, tally);
 		});
 		await step("usage", async () => {
@@ -291,8 +287,11 @@ export class DiskCare {
 			...this.#lastRun,
 			actions: actions.map(a => `${a.kind}:${a.count}:${a.bytes}`).join(" "),
 		});
-		await fs.mkdir(path.dirname(this.#stateFile), { recursive: true, mode: 0o700 });
-		await fs.writeFile(this.#stateFile, `${JSON.stringify({ usage: this.#usage, lastRun: this.#lastRun })}\n`);
+		await coreHeld<void>(
+			"disk.saveRunState",
+			{ profile: this.#deps.userData, state: { usage: this.#usage, lastRun: this.#lastRun } },
+			60_000,
+		);
 		return { ...this.state(), running: false };
 	}
 
@@ -471,15 +470,16 @@ export class DiskCare {
 	/** Each cache past its bound is cleared, unless a process that needs it runs; one that fails stops no other. */
 	async #caches(caches: readonly LocatedCache[], sizes: TreeSizes, tally: RunTally): Promise<void> {
 		// Listed once, and only when a cache past its bound asks.
-		let listed: Promise<string | null> | undefined;
-		for (const { cache, dir } of caches) {
+		let listed: Promise<CacheHolds> | undefined;
+		for (const located of caches) {
+			const { cache, dir } = located;
 			try {
 				const bytes = await sizes.bytes(dir);
-				if (bytes <= cache.maxBytes) continue;
-				if (cache.inUse) listed ??= this.#deps.cacheTools.processes();
+				if (bytes <= (this.#deps.cacheMaxBytes ?? cache.maxBytes)) continue;
+				if (cache.checkProcesses) listed ??= cacheHolds(this.#deps.cacheTools);
 				const reason =
-					(cache.inUse && listed ? cache.inUse(await listed) : null) ??
-					(await cache.clear(dir, this.#deps.cacheTools));
+					(cache.checkProcesses && listed ? (await listed)[cache.part] : null) ??
+					(await clearCache(located, this.#deps.cacheTools));
 				if (reason !== null) {
 					this.#kept(tally, dir, reason);
 					continue;

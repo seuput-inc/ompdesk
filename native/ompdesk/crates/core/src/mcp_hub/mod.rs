@@ -1,6 +1,9 @@
 //! The app's authenticated loopback MCP server for memory.
 
+mod host;
 mod memory;
+
+pub(crate) use host::{close_all, register};
 
 use std::convert::Infallible;
 use std::env;
@@ -22,6 +25,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
 const BODY_LIMIT: usize = 128 * 1024 * 1024;
+const LISTENING: &str = "mcp-hub listening http://127.0.0.1:";
 
 struct Hub {
     expected: Vec<u8>,
@@ -108,10 +112,8 @@ pub async fn run() -> io::Result<()> {
         .ok()
         .and_then(|s| s.trim().parse::<u16>().ok())
         .unwrap_or(0);
-    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await {
-        Err(_) if port != 0 => TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?,
-        result => result?,
-    };
+    // Running omps cannot change their environment. Never substitute a different port for a published one.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
     let hub = Arc::new(Hub {
         expected: format!("Bearer {secret}").into_bytes(),
         memory_state: env::var_os("OMP_GUI_MEMORY")
@@ -130,7 +132,7 @@ pub async fn run() -> io::Result<()> {
         })?;
     {
         let mut out = io::stdout().lock();
-        writeln!(out, "mcp-hub listening http://{}", listener.local_addr()?)?;
+        writeln!(out, "{LISTENING}{}", listener.local_addr()?.port())?;
         out.flush()?;
     }
     let mut connections = JoinSet::new();

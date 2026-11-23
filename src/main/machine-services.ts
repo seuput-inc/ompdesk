@@ -61,10 +61,9 @@ import {
 	SchedulesStateSchema,
 	SidebarProjectsStateSchema,
 } from "./remote/app-protocol";
-import type { Revive } from "./restart-policy";
 import type { ScheduleService } from "./schedules";
 import type { SidebarProjects } from "./sidebar-projects";
-import type { StatsClient } from "./stats-client";
+import type { StatsRead } from "./stats-server";
 
 export interface MachineServices {
 	listProviders(): Promise<CustomProvidersConfig>;
@@ -161,9 +160,7 @@ function failure(error: unknown): { error: string; unavailable: false; code?: Ip
 }
 
 export interface LocalMachineDeps {
-	stats: Pick<StatsClient, "port" | "fetch">;
-	/** Demand-driven revive for the bundled stats server (no server → "exhausted"). */
-	statsRestart: () => Revive;
+	stats: (path: string, params?: Record<string, string>) => Promise<StatsRead>;
 	statsText: StatsText;
 	/** The system omp `omp bench` and the model setup research run. */
 	benchmarkOmp: () => Promise<OmpResolution>;
@@ -258,14 +255,9 @@ export class LocalMachine implements MachineServices {
 
 	async fetchStats(path: string, params?: Record<string, string>): Promise<unknown> {
 		if (typeof path !== "string") throw codedError("invalid_stats_path", "Invalid stats path");
-		if (!this.#deps.stats.port) {
-			// Nothing is listening: ask for it and let the caller keep waiting — but
-			// only while a revive is actually possible, so a permanently dead stats
-			// server ends in an error instead of an endless "loading".
-			return statsUnavailable(this.#deps.statsRestart() === "exhausted", this.#deps.statsText);
-		}
 		try {
-			return await this.#deps.stats.fetch(path, params);
+			const result = await this.#deps.stats(path, params);
+			return result.ready ? result.data : statsUnavailable(result.exhausted, this.#deps.statsText);
 		} catch (err) {
 			// A request that reached the server and failed is a failure, not a
 			// booting server: the dashboard must show it, not retry for a budget.

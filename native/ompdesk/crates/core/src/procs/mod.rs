@@ -1,8 +1,6 @@
-//! The processes of OMPdesk's sessions (`procs.list`, `procs.end`). Main gives every omp it spawns an environment
-//! variable holding the session's tag. Every descendant inherits it, however deep and after its parent died, so a
-//! process's environment names its session where its parentage no longer can. `procs.list` names every process of
-//! this computer with its tag, so main can say whose the largest processes are when memory runs short; `procs.end`
-//! ends what a closed session left running, asking politely first and forcing what is left.
+//! The processes of OMPdesk's sessions. Every omp inherits its session's tag, as do the processes it starts, even
+//! after their parent dies. `procs.pressureRecord` names the largest memory users. `procs.end` ends what a closed
+//! session left running, asking politely first and forcing what is left.
 //!
 //! For the tags it is asked about, `procs.list` also says whose output path is closed: a process whose standard output
 //! or error is a pipe or socket a write to which fails, with what is known of the other end (`Peer`). The relaunch of
@@ -22,6 +20,8 @@
 //!
 //! `procs.consoles` (Windows) lists the console windows a person sees and whose each new one is: OMPdesk starts every
 //! program without a window, so one that shows is a start that missed that, a tool's own doing, or not OMPdesk's.
+
+mod pressure_record;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -97,6 +97,7 @@ pub(crate) enum Peer {
 
 /// One process as a scan saw it, and a row of `procs.list`.
 #[derive(Debug, Default, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 #[serde(rename_all = "camelCase")]
 struct Row {
     pid: u32,
@@ -119,17 +120,17 @@ struct Row {
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
     /// A shared worker (`keepArg`) or under one, for the tags asked.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
     stock: bool,
     /// Its standard output or error path is closed, so a write to it fails: what is known of the other end. Read only
     /// for the tags asked, and never on Linux.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     output_closed: Option<Peer>,
     /// Of one whose output path is closed: the share of one core it used over `sampleMs`, in percent.
     #[serde(skip_serializing_if = "Option::is_none")]
     cpu_percent: Option<u32>,
     /// Of one whose output path is closed: the TCP ports it listens on.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_deserializing, skip_serializing_if = "Vec::is_empty")]
     ports: Vec<u16>,
     /// The handle its environment was read through, which `procs.end` ends it through.
     #[cfg(windows)]
@@ -165,6 +166,7 @@ struct Report {
 }
 
 pub fn register(registry: &mut Registry) {
+    pressure_record::register(registry);
     registry.add("procs.list", |call| {
         Box::pin(async move {
             let params: ListParams = call.params()?;

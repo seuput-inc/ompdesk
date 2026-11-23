@@ -37,6 +37,7 @@ function field(value: unknown, key: string): unknown {
  */
 export function answerAsks(service: string, handlers: Readonly<Record<string, AskHandler>>): () => void {
 	return core().on("upkeep.ask", (data, _bin, generation) => {
+		if (generation !== core().generation) return;
 		const ask = field(data, "ask");
 		const kind = field(data, "kind");
 		if (field(data, "service") !== service || typeof ask !== "number" || typeof kind !== "string") return;
@@ -171,8 +172,12 @@ export function collatorLocale(): string {
 export interface CoreSide {
 	handlers: Record<string, AskHandler>;
 	/** The members every request of this client carries: the kinds main answers, and for the real client the server
-	 * and the stock helper the core reads memory through itself. */
-	wire(): { asks: string[]; server?: { url: string | null; dataDir: string | null }; stockHost?: string };
+	 * and the stock helper the core reads memory through itself. A scheduled request already has its native server. */
+	wire(nativeServer?: "nativeServer"): {
+		asks: string[];
+		server?: { url: string | null; dataDir: string | null };
+		stockHost?: string;
+	};
 }
 
 /** The side of a request that works for no memory client (a judge): it answers `handlers` and nothing else. */
@@ -189,7 +194,11 @@ export function coreSide(client: object, more: Readonly<Record<string, AskHandle
 	if (client instanceof AiMemoryClient) {
 		return {
 			handlers: { ...more },
-			wire: () => ({ asks: Object.keys(more), server: client.server(), stockHost: stockHelperHost() }),
+			wire: nativeServer => ({
+				asks: Object.keys(more),
+				...(nativeServer ? {} : { server: client.server() }),
+				stockHost: stockHelperHost(),
+			}),
 		};
 	}
 	const handlers = { client: clientAsk(client), facts: factsAsk(), ...more };

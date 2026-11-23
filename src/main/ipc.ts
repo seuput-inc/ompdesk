@@ -165,7 +165,7 @@ import { isOpenableExternalUrl } from "./external-url";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "./launch-profile-store";
-import { readOriginFacts, readProjectOrigin } from "./local/git/origin";
+import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
 import type { LogWatcher } from "./log-watcher";
@@ -313,7 +313,7 @@ export interface IpcDeps {
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
-	schedules?: () => Pick<ScheduleService, "command" | "create" | "state" | "prune"> | null;
+	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune"> | null;
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
@@ -751,10 +751,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		);
 	};
 
-	// Log lines (batched by LogWatcher)
-	logWatcher.onLines = lines => {
-		broadcast(windowManager, IPC_EVENTS.LOG_LINE, { lines, nextSequence: logWatcher.getSnapshot().nextSequence });
-	};
+	logWatcher.onLines = batch => broadcast(windowManager, IPC_EVENTS.LOG_LINE, batch);
 
 	// ========================================================================
 	// IPC Command Handlers
@@ -1380,7 +1377,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				}
 			return [...members, ...deps.hostedTabs.checkoutMembers()];
 		},
-		place: cwd => readCheckoutPlace(cwd, readOriginFacts),
+		place: readCheckoutPlace,
 		hiddenPaths: () => agentHiddenPaths(prefsStore.get(AGENT_HIDDEN_PREFS_KEY)),
 		gitStatus: readCheckoutClaims,
 	});

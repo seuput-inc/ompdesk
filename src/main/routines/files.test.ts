@@ -1,236 +1,185 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFilesSource, FILES_DEBOUNCE_MS, FILES_MAX_WAIT_MS, FILES_RETRY_MS } from "./files";
-import { scanPath } from "./ports";
-import { fakeContext, fakeWatch } from "./test-context";
+import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { describe, expect, it } from "vitest";
+import { core } from "../core/process";
+import { fixture, until } from "./test-context";
 
-beforeEach(() => {
-	vi.useFakeTimers();
-});
-afterEach(() => {
-	vi.useRealTimers();
-});
+const scanPath = async (path: string, mark?: unknown) =>
+	(await core().call("routines.filesScan", { path, ignored: [".git", "node_modules"], mark })).result;
+const listing = (entries: Record<string, string>, complete = true) => ({ entries, complete });
 
-describe("files source across a relaunch", () => {
-	const listing = (entries: Record<string, string>, complete = true) => ({ entries, complete });
+function seededWatchTree(parent: string, names: readonly string[]) {
+	const staging = join(parent, "staging");
+	for (const name of names) {
+		const file = join(staging, "tree", name);
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(file, "0");
+	}
+	// On NTFS the first listing can report directory timestamp changes from setup.
+	readdirSync(staging, { recursive: true, withFileTypes: true });
+	// Move the parent, not the watched directory: delayed FSEvents for setup have no paths inside the watch.
+	const ready = join(parent, "ready");
+	renameSync(staging, ready);
+	return join(ready, "tree");
+}
 
-	it("merges live events with offline changes and saves the new baseline before firing", async () => {
-		const root = mkdtempSync(join(tmpdir(), "routine-relaunch-"));
-		try {
-			writeFileSync(join(root, "a.txt"), "new");
-			writeFileSync(join(root, "c.txt"), "added");
-			const files = fakeWatch();
-			const scan = vi.fn(scanPath);
-			const first = fakeContext({ listing: listing({ "a.txt": "1:1", "b.txt": "1:1" }) });
-			const source = createFilesSource({ path: root, watch: files.watch, scan, context: first.context });
-			files.emit("a.txt");
-			const { listing: baseline } = await scan.mock.results[0]!.value;
-			expect(first.saved).toEqual([{ listing: baseline }]);
-			expect(first.fired).toEqual([]);
-			await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-			expect(first.fired).toEqual(["a.txt, b.txt, c.txt changed"]);
-			await scan.mock.results[1]!.value;
-			source.stop();
-
-			const next = fakeContext(first.saved.at(-1));
-			const resumed = createFilesSource({ path: root, watch: files.watch, scan, context: next.context });
-			await scan.mock.results[2]!.value;
-			await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-			expect(next.saved).toEqual([{ listing: baseline }]);
-			expect(next.fired).toEqual([]);
-			resumed.stop();
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	it("without a mark takes the listing as its baseline and fires nothing", async () => {
-		const files = fakeWatch();
-		files.control.listing = listing({ "a.txt": "1:1" });
-		const { context, fired, saved } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS * 2);
-		expect(fired).toEqual([]);
-		expect(saved).toEqual([{ listing: listing({ "a.txt": "1:1" }) }]);
-	});
-
-	it("lists again after each burst, the routine's own writes too, so they never fire on the next launch", async () => {
-		const files = fakeWatch();
-		const { context, fired, saved, state } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		await vi.advanceTimersByTimeAsync(0);
-		state.running = true;
-		files.control.listing = listing({ "out.txt": "5:3" });
-		files.emit("out.txt");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-		expect(fired).toEqual([]);
-		expect(saved.at(-1)).toEqual({ listing: listing({ "out.txt": "5:3" }) });
-	});
-
-	it("reports an unspecified change when a partial mark has different names", async () => {
-		const root = mkdtempSync(join(tmpdir(), "routine-partial-"));
-		try {
-			writeFileSync(join(root, "z.txt"), "new");
-			const scan = vi.fn(scanPath);
-			const { context, fired } = fakeContext({ listing: listing({ "b.txt": "1:1" }, false) });
-			const source = createFilesSource({ path: root, watch: fakeWatch().watch, scan, context });
-			await scan.mock.results[0]!.value;
-			await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-			expect(fired).toEqual([`Something under ${root} changed`]);
-			source.stop();
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
-});
-
-describe("files source", () => {
-	it("fires once for a burst, two seconds after the last change, listing each path once", async () => {
-		const files = fakeWatch();
-		const { context, fired } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		files.emit("src/a.ts");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS - 1);
-		files.emit("src/b.ts");
-		files.emit("src/a.ts");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS - 1);
-		expect(fired).toEqual([]);
-		await vi.advanceTimersByTimeAsync(1);
-		expect(fired).toEqual(["src/a.ts, src/b.ts changed"]);
-
-		files.emit("src/c.ts");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-		expect(fired).toEqual(["src/a.ts, src/b.ts changed", "src/c.ts changed"]);
-	});
-
-	it("fires on a steady stream within ten seconds of its first change", async () => {
-		const files = fakeWatch();
-		const { context, fired } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		for (let elapsed = 0; elapsed < FILES_MAX_WAIT_MS; elapsed += 1_000) {
-			files.emit(`f${elapsed}.txt`);
-			await vi.advanceTimersByTimeAsync(1_000);
-		}
-		expect(fired).toHaveLength(1);
-	});
-
-	it("lists at most ten paths and counts the rest, with Windows separators read as slashes", async () => {
-		const files = fakeWatch();
-		const { context, fired } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		for (let index = 0; index < 13; index++) files.emit(`dir\\f${index}.txt`);
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-		expect(fired).toHaveLength(1);
-		expect(fired[0]).toBe(
-			`${Array.from({ length: 10 }, (_, index) => `dir/f${index}.txt`).join(", ")} changed, and 3 more`,
+describe("a native file source", () => {
+	it("merges an offline comparison with a live burst and never replays the new baseline", async () => {
+		const ready = Promise.withResolvers<void>();
+		const f = await fixture({ ready: ready.promise, timing: { fileDebounceMs: 250, fileMaxWaitMs: 1_000 } });
+		writeFileSync(join(f.work, "a.txt"), "new");
+		writeFileSync(join(f.work, "c.txt"), "added");
+		const id = await f.add({ source: "files", path: f.work });
+		f.seed(id, { listing: listing({ "a.txt": "1:1", "b.txt": "1:1" }) });
+		ready.resolve();
+		await until(() =>
+			expect(f.marks()[id]?.mark).toMatchObject({ listing: { entries: { "c.txt": expect.any(String) } } }),
 		);
+		writeFileSync(join(f.work, "a.txt"), "newer");
+		await until(() => expect(f.fired).toEqual(["a.txt, b.txt, c.txt changed"]));
+		await until(() =>
+			expect(f.marks()[id]?.mark).toMatchObject({ listing: { entries: { "a.txt": expect.stringMatching(/:5$/) } } }),
+		);
+		await f.reopen();
+		// A new file is positive evidence that the relaunch's watcher, not the retired one, processed this burst.
+		writeFileSync(join(f.work, "d.txt"), "d");
+		await until(() => expect(f.fired).toHaveLength(2));
+		expect(f.fired[1]).toBe("d.txt changed");
 	});
 
-	it("never fires for .git or node_modules", async () => {
-		const files = fakeWatch();
-		const { context, fired } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		files.emit(".git/index.lock");
-		files.emit("web/node_modules/x/index.js");
-		files.emit("sub/.git/HEAD");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS * 2);
-		expect(fired).toEqual([]);
-		files.emit("src/.gitignore");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-		expect(fired).toEqual(["src/.gitignore changed"]);
+	it("reports only an unspecified change for different names outside a partial listing", async () => {
+		const ready = Promise.withResolvers<void>();
+		const f = await fixture({ ready: ready.promise });
+		const path = seededWatchTree(f.work, ["z.txt"]);
+		const id = await f.add({ source: "files", path });
+		f.seed(id, { listing: listing({ "b.txt": "1:1" }, false) });
+		ready.resolve();
+		await until(() => expect(f.fired).toHaveLength(1));
+		expect(f.fired).toEqual([`Something under ${path} changed`]);
 	});
 
-	it("takes the routine's own writes for nothing: not while its run goes, not just after, and again later", async () => {
-		const files = fakeWatch();
-		const { context, fired, state } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		state.running = true;
-		files.emit("out.txt");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS * 2);
-		state.running = false;
-		state.quiet = true;
-		files.emit("out2.txt");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS * 2);
-		expect(fired).toEqual([]);
-		state.quiet = false;
-		files.emit("real.txt");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-		expect(fired).toEqual(["real.txt changed"]);
+	it("baselines silently, deduplicates names and shows ten with a count of the rest", async () => {
+		const f = await fixture();
+		const names = Array.from({ length: 13 }, (_, i) => `sub/f${i}`);
+		const path = seededWatchTree(f.work, names);
+		const entries = Object.fromEntries(names.map(name => [name, expect.stringMatching(/:1$/)]));
+		const id = await f.add({ source: "files", path });
+		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing(entries) }));
+		expect(f.fired).toEqual([]);
+		for (const name of names) {
+			writeFileSync(join(path, name), "a", { flag: "r+" });
+			writeFileSync(join(path, name), "b", { flag: "r+" });
+		}
+		await until(() => expect(f.fired).toHaveLength(1));
+		// Platforms may batch the native notifications in different orders.
+		const line = f.fired[0]!;
+		expect(line).toMatch(/ changed, and 3 more$/);
+		const shown = line.split(" changed")[0]!.split(", ");
+		expect(new Set(shown).size).toBe(10);
+		expect(shown.every(name => /^sub\/f\d+$/.test(name))).toBe(true);
 	});
 
-	it("drops a burst whose run started before it was told", async () => {
-		const files = fakeWatch();
-		const { context, fired, state } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		files.emit("a.txt");
-		state.running = true;
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-		expect(fired).toEqual([]);
+	it("ignores .git and node_modules at any depth but not .gitignore", async () => {
+		const f = await fixture();
+		const names = [".git/index.lock", "src/.git/HEAD", "web/node_modules/x/index.js", "src/.gitignore"];
+		const path = seededWatchTree(f.work, names);
+		const id = await f.add({ source: "files", path });
+		const entries = { "src/.gitignore": expect.stringMatching(/:1$/) };
+		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing(entries) }));
+		for (const name of names) writeFileSync(join(path, name), "x", { flag: "r+" });
+		await until(() => expect(f.fired).toEqual(["src/.gitignore changed"]));
 	});
 
-	it("retries a path that does not exist every minute, fires nothing, and tells the failure once", async () => {
-		const files = fakeWatch();
-		files.control.missing = true;
-		const { context, fired, warned } = fakeContext();
-		createFilesSource({ path: "/gone", watch: files.watch, scan: files.scan, context });
-		expect(files.control.attempts).toBe(1);
-		await vi.advanceTimersByTimeAsync(FILES_RETRY_MS * 3);
-		expect(files.control.attempts).toBe(4);
-		expect(warned).toHaveLength(1);
-		expect(warned[0]).toContain("ENOENT");
-		expect(fired).toEqual([]);
-
-		files.control.missing = false;
-		await vi.advanceTimersByTimeAsync(FILES_RETRY_MS);
-		expect(files.live()).toHaveLength(1);
-		files.emit("x.txt");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS);
-		expect(fired).toEqual(["x.txt changed"]);
-		await vi.advanceTimersByTimeAsync(FILES_RETRY_MS * 3);
-		expect(files.control.attempts).toBe(5);
+	it("reports the creation and removal of an empty directory", async () => {
+		const f = await fixture();
+		const id = await f.add({ source: "files", path: f.work });
+		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing({}) }));
+		const dir = join(f.work, "folder");
+		mkdirSync(dir);
+		await until(() => expect(f.fired).toEqual(["folder changed"]));
+		await until(() => expect(f.service.latest.runs[0]?.status).toBe("succeeded"));
+		rmSync(dir, { recursive: true });
+		await until(() => expect(f.fired).toEqual(["folder changed", "folder changed"]));
 	});
 
-	it("watches again a minute after its watcher failed, closing the failed one", async () => {
-		const files = fakeWatch();
-		const { context } = fakeContext();
-		createFilesSource({ path: "/p", watch: files.watch, scan: files.scan, context });
-		files.fail();
-		expect(files.watchers[0]?.closed).toBe(true);
-		expect(files.live()).toHaveLength(0);
-		await vi.advanceTimersByTimeAsync(FILES_RETRY_MS);
-		expect(files.live()).toHaveLength(1);
+	it("records its own writes without firing during the run or its three-second quiet window", async () => {
+		let now = Date.UTC(2026, 10, 1);
+		const f = await fixture({ hold: true, now: () => now, timing: { quietMs: 3_000 } });
+		const id = await f.add({ source: "files", path: f.work });
+		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing({}) }));
+		const write = async (name: string) => {
+			writeFileSync(join(f.work, name), name);
+			await until(() =>
+				expect(f.marks()[id]?.mark).toMatchObject({ listing: { entries: { [name]: expect.any(String) } } }),
+			);
+		};
+		await f.service.command({ action: "runNow", id });
+		await write("own.txt");
+		f.launched[0]!.finish();
+		await until(() => expect(f.service.latest.runs[0]?.status).toBe("succeeded"));
+		now += 2_999;
+		await f.service.command({ action: "get" });
+		await write("late.txt");
+		expect(f.fired).toEqual([]);
+		now++;
+		await f.service.command({ action: "get" });
+		await write("external.txt");
+		await until(() => expect(f.fired).toEqual(["external.txt changed"]));
 	});
 
-	it("leaves no watcher or timer after stop, and ignores events that come after it", async () => {
-		const files = fakeWatch();
-		const { context, fired, saved } = fakeContext();
-		const source = createFilesSource({
-			path: "/p",
-			watch: files.watch,
-			scan: files.scan,
-			context,
-		});
-		files.emit("a.txt");
-		source.stop();
-		expect(files.live()).toHaveLength(0);
-		expect(vi.getTimerCount()).toBe(0);
-		files.watchers[0]?.onChange("late.txt");
-		await vi.advanceTimersByTimeAsync(FILES_DEBOUNCE_MS * 2);
-		expect(fired).toEqual([]);
-		expect(saved).toEqual([]);
-
-		files.control.missing = true;
-		const retrying = createFilesSource({
-			path: "/gone",
-			watch: files.watch,
-			scan: files.scan,
-			context,
-		});
-		retrying.stop();
-		expect(vi.getTimerCount()).toBe(0);
+	it("drops a collected burst if a run starts before its debounce and flushes no late watcher after close", async () => {
+		const f = await fixture({ hold: true, timing: { fileDebounceMs: 250, fileMaxWaitMs: 1_000 } });
+		const file = join(f.work, "only.txt");
+		writeFileSync(file, "a");
+		const id = await f.add({ source: "files", path: file });
+		await until(() =>
+			expect(f.marks()[id]?.mark).toMatchObject({ listing: { entries: { "": expect.any(String) } } }),
+		);
+		writeFileSync(file, "bb");
+		await f.service.command({ action: "runNow", id });
+		await until(() =>
+			expect(f.marks()[id]?.mark).toMatchObject({ listing: { entries: { "": expect.stringMatching(/:2$/) } } }),
+		);
+		await f.close();
+		writeFileSync(file, "after close");
+		expect(f.fired).toEqual([]);
 	});
+
+	it("reports a missing watch once, retries it, and fires only for changes the attached watcher sees", async () => {
+		const f = await fixture({ timing: { fileRetryMs: 30 } });
+		const dir = join(f.work, "absent");
+		await f.add({ source: "files", path: dir });
+		await until(() => expect(f.log).toHaveLength(1));
+		expect(f.log[0]).toContain("ENOENT");
+		await delay(100);
+		expect(f.log).toHaveLength(1);
+		mkdirSync(dir);
+		// There is no public watcher-ready event on a retry. Write through successive retry windows until one is seen.
+		for (let attempt = 0; attempt < 30 && !f.fired.length; attempt++) {
+			writeFileSync(join(dir, "x.txt"), String(attempt));
+			await delay(150);
+		}
+		expect(f.fired[0]).toBe("x.txt changed");
+		expect(f.log).toHaveLength(1);
+	});
+
+	it("reattaches after its live directory disappears and is recreated at the same path", async () => {
+		const f = await fixture({ timing: { fileRetryMs: 30 } });
+		const dir = join(f.work, "watched");
+		mkdirSync(dir);
+		const id = await f.add({ source: "files", path: dir });
+		await until(() => expect(f.marks()[id]?.mark).toEqual({ listing: listing({}) }));
+		rmSync(dir, { recursive: true });
+		await until(() => expect(f.log.some(line => line.includes(": watch:"))).toBe(true));
+		mkdirSync(dir);
+		for (let attempt = 0; attempt < 30 && !f.fired.includes("back.txt changed"); attempt++) {
+			writeFileSync(join(dir, "back.txt"), String(attempt));
+			await delay(150);
+		}
+		expect(f.fired).toContain("back.txt changed");
+	}, 20_000);
 });
 
 describe("a files trigger's listing in the core", () => {

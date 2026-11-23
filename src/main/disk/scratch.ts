@@ -9,17 +9,15 @@
  *
  * Kept whole instead: a folder whose session file cannot be read as stock's, one this app has no record of (its
  * sessions are not known) unless it is empty, and every folder where the running processes cannot be listed.
- * Reading and removing are the core's (`crates/core/src/disk/scratch.rs`); what is in use is main's.
+ * Main supplies live tag, process and session facts. The core decides what can go and removes it.
  */
 
-import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { DISK_CARE_ARTIFACT_IDLE_DAYS } from "../../shared/disk-care";
 import { CoreError } from "../core/process";
 import { coreHeld } from "../local/git/exec";
-import { SCRATCH_TAG, type SessionScratch, sessionKey } from "../session-scratch";
+import { type SessionScratch, sessionKey } from "../session-scratch";
 
-const DAY_MS = 24 * 60 * 60_000;
 const READ_MS = 10 * 60_000;
 const SWEEP_MS = 30 * 60_000;
 
@@ -56,11 +54,6 @@ interface Swept {
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const sessionName = (file: string): string => sessionKey(path.basename(file));
 
-function processHold(tag: string, processes: TaggedProcesses): string | null {
-	if (processes === null) return "process check unavailable";
-	return processes.some(process => process.tag === tag) ? "a process of its session runs" : null;
-}
-
 export class ScratchCare {
 	readonly #deps: ScratchCareDeps;
 
@@ -89,13 +82,7 @@ export class ScratchCare {
 			const dir = this.#deps.store.dir(tag);
 			try {
 				listed ??= this.#deps.processes();
-				const hold = processHold(tag, await listed);
-				if (hold) {
-					this.#deps.log("kept", { path: dir, reason: hold });
-					continue;
-				}
-				if (this.#deps.heldTags().has(tag)) continue;
-				await this.#remove(dir, tag, [], "its session was deleted");
+				await this.#remove(dir, tag, [], "its session was deleted", await listed);
 			} catch (error) {
 				if (error instanceof CoreError && error.code === "scratch_kept") {
 					this.#deps.log("kept", { path: dir, reason: error.message });
@@ -110,14 +97,19 @@ export class ScratchCare {
 	async sweep(): Promise<ScratchSweep> {
 		const result: ScratchSweep = { removed: [], kept: 0, failed: 0 };
 		const now = (this.#deps.now ?? Date.now)();
-		const names = await fs.readdir(this.root).catch((error: NodeJS.ErrnoException) => {
-			if (error.code === "ENOENT") return [] as string[];
-			throw error;
-		});
+		let names: Set<string>;
+		try {
+			names = new Set(await coreHeld<string[]>("disk.scratchTags", { root: this.root }, READ_MS));
+		} catch (error) {
+			if (!(error instanceof CoreError && error.code === "scratch_kept")) throw error;
+			this.#deps.log("kept", { path: this.root, reason: error.message });
+			result.kept++;
+			return result;
+		}
 		const records = new Map(this.#deps.store.records().map(record => [record.tag, record]));
 		// A record whose folder is gone (removed by hand) names nothing any more.
 		for (const tag of records.keys()) {
-			if (!names.includes(tag) && !this.#deps.heldTags().has(tag)) this.#deps.store.forget(tag);
+			if (!names.has(tag) && !this.#deps.heldTags().has(tag)) this.#deps.store.forget(tag);
 		}
 		// Listed once, and only when a folder is otherwise ready to go.
 		let listed: Promise<TaggedProcesses> | undefined;
@@ -127,42 +119,44 @@ export class ScratchCare {
 			this.#deps.log("kept", { path: dir, reason });
 		};
 		for (const tag of names) {
-			// Only what this app's tabs were given: any other entry of the folder is not ours to judge.
-			if (!SCRATCH_TAG.test(tag) || this.#deps.heldTags().has(tag)) continue;
+			if (this.#deps.heldTags().has(tag)) continue;
 			const dir = this.#deps.store.dir(tag);
 			try {
-				const facts = await coreHeld<{ newestMs: number; entries: number }>("disk.scratchFacts", { dir }, READ_MS);
 				const record = records.get(tag);
-				if (!record && facts.entries > 0) {
-					keep(dir, "its sessions are not known");
-					continue;
-				}
-				let sessions: string[] = [];
+				const idle = await coreHeld<boolean>(
+					"disk.scratchIdle",
+					{
+						dir,
+						known: record !== undefined,
+						now,
+						days: DISK_CARE_ARTIFACT_IDLE_DAYS,
+					},
+					READ_MS,
+				);
+				let sessions: string[] | null = [];
 				if (record?.sessions.length) {
 					stored ??= this.#deps
 						.sessionFiles()
 						.then(files => (files === null ? null : Map.groupBy(files, sessionName)));
 					const files = await stored;
-					if (files === null) {
-						keep(dir, "session list unavailable");
-						continue;
-					}
-					sessions = await existing(record.sessions, files);
+					sessions = await coreHeld<string[] | null>(
+						"disk.scratchSessions",
+						{
+							idle,
+							candidates:
+								files && record.sessions.map(file => ({ file, indexed: files.get(sessionName(file)) ?? [] })),
+						},
+						READ_MS,
+					);
 				}
-				if (sessions.length > 0 && (now - facts.newestMs) / DAY_MS < DISK_CARE_ARTIFACT_IDLE_DAYS) continue;
+				if (sessions === null) continue;
 				listed ??= this.#deps.processes();
-				const hold = processHold(tag, await listed);
-				if (hold) {
-					keep(dir, hold);
-					continue;
-				}
-				// A tab may have taken the tag over while the folder was read.
-				if (this.#deps.heldTags().has(tag)) continue;
 				const bytes = await this.#remove(
 					dir,
 					tag,
 					sessions,
 					sessions.length > 0 ? "idle" : "its sessions are gone",
+					await listed,
 				);
 				if (bytes !== null) result.removed.push(bytes);
 			} catch (error) {
@@ -178,8 +172,17 @@ export class ScratchCare {
 	}
 
 	/** The core's sweep of one folder; the bytes that went, or null when nothing did. */
-	async #remove(dir: string, tag: string, sessions: readonly string[], reason: string): Promise<number | null> {
-		const swept = await coreHeld<Swept>("disk.scratchSweep", { dir, sessions }, SWEEP_MS);
+	async #remove(
+		dir: string,
+		tag: string,
+		sessions: readonly string[],
+		reason: string,
+		processes: TaggedProcesses,
+	): Promise<number | null> {
+		const running = processes?.some(process => process.tag === tag) ?? null;
+		// A tab can claim the tag while the process list is pending.
+		if (running === false && this.#deps.heldTags().has(tag)) return null;
+		const swept = await coreHeld<Swept>("disk.scratchSweep", { dir, sessions, running }, SWEEP_MS);
 		if (swept.kept === 0 && swept.left === 0) this.#deps.store.forget(tag);
 		if (swept.removed === 0) return null;
 		this.#deps.log("scratch", {
@@ -191,20 +194,4 @@ export class ScratchCare {
 		});
 		return swept.bytes;
 	}
-}
-
-/** Stock can list a moved copy while the original still exists. Replies in either file keep their attachments. */
-async function existing(recorded: readonly string[], stored: ReadonlyMap<string, string[]>): Promise<string[]> {
-	const found = new Set<string>();
-	for (const session of recorded) {
-		for (const file of stored.get(sessionName(session)) ?? []) found.add(file);
-		if (found.has(session)) continue;
-		try {
-			await fs.lstat(session);
-			found.add(session);
-		} catch (error) {
-			if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
-		}
-	}
-	return [...found];
 }

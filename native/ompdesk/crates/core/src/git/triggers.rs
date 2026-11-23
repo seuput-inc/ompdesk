@@ -62,13 +62,13 @@ pub async fn branch_status(
 }
 
 #[derive(Serialize)]
-pub(super) struct HeadMark {
+pub(crate) struct HeadMark {
     head: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub(super) enum HeadRead<'a> {
+pub(crate) enum HeadRead<'a> {
     Missing {
         mark: Option<HeadMark>,
     },
@@ -79,7 +79,7 @@ pub(super) enum HeadRead<'a> {
     },
 }
 
-pub(super) async fn routine_head<'a>(
+pub(crate) async fn routine_head<'a>(
     git: &Git,
     repo: &str,
     branch: &str,

@@ -12,10 +12,13 @@ import { MEMORY_HUB_ENTRY } from "../../../resources/gui-bridge/mcp-hub-contract
 import { isRenameBlocked } from "../../../resources/gui-bridge/rename-retry";
 import macSigning from "../../../scripts/mac-signing.json" with { type: "json" };
 import { AI_MEMORY_BINARIES, AI_MEMORY_VERSION, type AiMemoryState } from "../../shared/ai-memory";
+import { core } from "../core/process";
 import type { SpawnSpec } from "../setup/plans";
 import { SetupRunner, type SupervisedChild } from "../setup/runner";
 import { SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
 import { RM_TEMP } from "../test-fake-omp";
+import { MemoryCare } from "./care";
+import { AiMemoryClient } from "./client";
 import {
 	AI_MEMORY_STEP_MAX_MS,
 	AiMemoryService,
@@ -24,6 +27,7 @@ import {
 	type ServiceControl,
 } from "./service";
 import { AI_MEMORY_REQUIREMENT, MAC_STAGE_KEY } from "./staging";
+import { MemoryUpkeep } from "./upkeep";
 
 /** ai-memory's own layout of omp's agent dir and of the extension root (the core's `terminal.rs` and `root.rs`). */
 const EXTENSION_FILE = join("extensions", "ai-memory-omp.ts");
@@ -124,6 +128,22 @@ async function memoryServer(health: World["health"]): Promise<Server> {
 				storage: { database_bytes: 2048 },
 			};
 			response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(status));
+			return;
+		}
+		if (request.url === "/api/v1/projects") {
+			response.writeHead(200).end(JSON.stringify([{ workspace_name: "w", project_name: "p" }]));
+			return;
+		}
+		if (request.url === "/api/v1/workspaces/w/projects/p/pages") {
+			response.writeHead(200).end("[]");
+			return;
+		}
+		if (request.url === "/api/v1/workspaces/w/projects/p/handoffs") {
+			response.writeHead(200).end('{"handoffs":[]}');
+			return;
+		}
+		if (request.url?.startsWith("/api/v1/workspaces/w/projects/p/sessions?")) {
+			response.writeHead(200).end('{"sessions":[]}');
 			return;
 		}
 		response.writeHead(404).end();
@@ -1237,6 +1257,114 @@ describe("AiMemoryService", () => {
 			}
 		}, 30_000);
 	});
+
+	it("owns the quality timers while ready, finishes an admitted unit's undo record and repairs only once per launch", async () => {
+		let care: MemoryCare;
+		let upkeep: MemoryUpkeep;
+		const { service, clock, health, http, root } = await make({
+			quality: () => ({ care: care.service, upkeep: upkeep.service }),
+			pollMs: 3_600_000,
+		});
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const restores: string[] = [];
+		let units = 0;
+		care = new MemoryCare({
+			version: "1",
+			stateFile: join(root, "care.json"),
+			now: () => clock.now,
+			log: () => {},
+			client: {
+				headCheckpoint: async () => "checkpoint",
+				page: async () => {
+					throw new Error("title unavailable");
+				},
+				feedback: async () => {},
+				retirePage: async () => "retired",
+				restorePage: async (_ref, rev) => {
+					restores.push(rev);
+				},
+			},
+			units: [
+				{
+					name: "fresh",
+					everyMs: null,
+					run: async store => {
+						await store.feedback({ workspace: "w", project: "p", path: `gotchas/${++units}.md` }, "stale");
+						started.resolve();
+						await release.promise;
+						return { done: false };
+					},
+				},
+			],
+		});
+		upkeep = new MemoryUpkeep({
+			// Scheduled work gets the *native service's* current address, not an address captured on open.
+			client: new AiMemoryClient({ url: () => null, dataDir: () => null }),
+			stateFile: join(root, "upkeep.json"),
+			log: () => {},
+			now: () => clock.now,
+		});
+		let repairs = 0;
+		let learns = 0;
+		http.on("request", request => {
+			if (request.url?.endsWith("/handoffs")) repairs++;
+			if (request.url?.includes("/sessions?")) learns++;
+		});
+		type Timer = { service: string; timer: number; ms: number; repeat: boolean };
+		const timers: Timer[] = [];
+		const off = core().on("aimemory.service.timer", data => {
+			const timer = data as Timer;
+			if ([120_000, 300_000, 900_000].includes(timer.ms)) timers.push(timer);
+		});
+		const fire = (ms: number, stretch: number) => {
+			const timer = timers.filter(t => t.ms === ms)[stretch];
+			if (!timer) throw new Error(`No ${ms} ms timer for ready stretch ${stretch}`);
+			expect(timer.repeat).toBe(ms === 900_000);
+			return core().call("aimemory.service.fire", { ...timer, now: clock.now });
+		};
+		const waitFor = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
+		try {
+			await service.start();
+			await waitFor(() => expect([timers.length, repairs]).toEqual([3, 1]));
+			await fire(120_000, 0);
+			await waitFor(() => expect(learns).toBe(1));
+			await fire(300_000, 0);
+			await started.promise;
+
+			health.up = false;
+			clock.now += 6_000;
+			await service.refresh();
+			expect(service.state().phase).toBe("unreachable");
+			release.resolve();
+			expect(await care.undo()).toBe(1);
+			expect(restores).toEqual(["checkpoint"]);
+			await fire(900_000, 0);
+
+			health.up = true;
+			clock.now += 6_000;
+			await service.refresh();
+			await waitFor(() => expect(timers).toHaveLength(6));
+			await fire(900_000, 0);
+			await fire(900_000, 1);
+			await waitFor(() => expect([units, learns, repairs]).toEqual([2, 2, 1]));
+			expect(await care.undo()).toBe(1);
+
+			core().abandon("replace the test's memory core");
+			await waitFor(() => expect(timers).toHaveLength(9));
+			await fire(120_000, 2);
+			await waitFor(() => expect([learns, repairs]).toEqual([3, 1]));
+			service.dispose();
+			await core().call("aimemory.service.closed", { service: timers[0]?.service });
+			await expect(fire(900_000, 2)).rejects.toMatchObject({ code: "memory_service_closed" });
+		} finally {
+			off();
+			release.resolve();
+			service.dispose();
+			care.dispose();
+			upkeep.dispose();
+		}
+	}, 60_000);
 
 	describe("state pushes", () => {
 		it("every push is a whole, independent snapshot", async () => {

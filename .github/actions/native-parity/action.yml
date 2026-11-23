@@ -17,12 +17,17 @@ runs:
         src/main/initial-cwd.test.ts
         src/main/open-path.test.ts
         src/main/hang-watchdog.test.ts
+        src/main/diagnostic-bundle.test.ts
+        src/main/diagnostics.test.ts
+        src/main/log-watcher.test.ts
         src/main/agent-browsers.test.ts
         src/main/preview/visuals.test.ts
         src/main/repo-lock-fence.test.ts
         src/main/session-index.test.ts
         src/main/session-store-enrichment.test.ts
         src/main/memory-sampler.test.ts
+        src/main/memory-record.test.ts
+        src/main/memory-watch.test.ts
         src/main/model-setup-runner.test.ts
         src/main/schedules.test.ts
         src/main/web/webhook.test.ts
@@ -45,6 +50,9 @@ runs:
         src/main/terminal/shells.test.ts
         src/main/terminal/lease.test.ts
         src/main/terminal/agent-tool.test.ts
+        src/main/stats-server.test.ts
+        src/main/stats-host.test.ts
+        src/main/stats-host-stock.test.ts
         src/main/models-config.test.ts
         src/main/bridge-input-history.test.ts
         src/main/omp-availability.test.ts
@@ -84,6 +92,7 @@ runs:
         src/main/ai-memory/distill-model.test.ts
         src/main/stock-helper-memory.test.ts
         src/main/mcp-hub-memory.test.ts
+        src/main/mcp-hub-lifetime.test.ts
         src/main/ai-memory/sync.test.ts
         src/main/ai-memory/recall-terms.test.ts
         src/main/bridge-memory-recall-core.test.ts

@@ -511,6 +511,39 @@ fn a_charge_asked_while_the_schedule_goes_is_given_back() {
     assert_eq!(engine.state()["runs"], serde_json::json!([]));
 }
 
+#[test]
+fn an_old_routine_quota_answer_cannot_start_or_release_the_new_generations_run() {
+    let mut engine = engine(std::sync::Arc::default());
+    engine.load(None, 0);
+    let draft = serde_json::json!({"name":"Watch", "prompt":"Look", "cwd":"/work", "model":null, "autoApprove":false, "enabled":true,
+        "frequency":{"kind":"event","event":{"source":"session","events":["done"]}}});
+    let id = engine.create(&draft, Some("peer"), 0).unwrap();
+    let ask = |engine: &Engine| {
+        engine
+            .outs
+            .iter()
+            .rev()
+            .find_map(|out| match out {
+                Out::Reserve { ask, .. } => Some(*ask),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(engine.fire(&id, "old", 1));
+    let old = ask(&engine);
+    assert!(engine.fire(&id, "old pending", 2));
+    engine.retire_trigger(&id);
+    assert!(matches!(engine.outs.last(), Some(Out::Refund { charge }) if *charge == old));
+    assert!(engine.fire(&id, "new", 3));
+    let new = ask(&engine);
+    assert_ne!(old, new);
+    engine.outs.clear();
+    assert!(engine.reserved(old, None, 4).is_none());
+    assert!(engine.outs.is_empty());
+    assert!(engine.reserved(new, None, 5).is_none());
+    assert_eq!(engine.state()["runs"][0]["detail"], "new");
+}
+
 /// The journal's writer thread can be holding an older state when the quit's close writes the last one; nothing of
 /// it may land after the close, not even its temp file, or the folder cannot be removed (`ENOTEMPTY` on Windows).
 #[test]
@@ -518,7 +551,7 @@ fn nothing_of_the_journal_lands_after_its_close() {
     for round in 0..200 {
         let dir = crate::fs::disk::make_temp_dir("ompdesk-core-journal-").unwrap();
         let file = dir.join("schedules.json");
-        let journal = super::Journal::open(file.clone());
+        let journal = super::Journal::open(file.clone(), None, "schedules");
         journal.keep("older".into());
         journal.close("last");
         assert_eq!(

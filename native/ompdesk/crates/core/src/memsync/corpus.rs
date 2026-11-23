@@ -12,18 +12,10 @@ use super::store::{Store, cursor_fits, position};
 use super::wire::Source;
 use crate::aimemory::client::Server;
 use crate::disk::tree::write_atomic;
-use crate::server::{Call, Fault, Reply};
+use crate::server::{Events, Fault, Scope};
 use crate::stock::request_in_process;
 
 const PAGE: u64 = 200;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Params {
-    file: PathBuf,
-    server: Server,
-    stock_host: String,
-}
 
 #[derive(Default, Deserialize, Serialize)]
 struct Corpus {
@@ -67,12 +59,13 @@ impl Corpus {
     }
 }
 
-pub(super) async fn refresh(call: Call) -> Result<Reply, Fault> {
-    let Params {
-        file,
-        server,
-        stock_host,
-    } = call.params()?;
+pub(crate) async fn refresh(
+    file: PathBuf,
+    server: Server,
+    events: &Events,
+    stock_host: &str,
+    scope: Scope,
+) -> Result<(), Fault> {
     let store = Store::new(server);
     let mut saved = tokio::fs::read(&file)
         .await
@@ -112,8 +105,8 @@ pub(super) async fn refresh(call: Call) -> Result<Reply, Fault> {
                             .collect(),
                     );
                     let terms = request_in_process(
-                        &call.events,
-                        &stock_host,
+                        events,
+                        stock_host,
                         "memory.recallTerms",
                         &bodies,
                         Duration::from_secs(30),
@@ -134,12 +127,12 @@ pub(super) async fn refresh(call: Call) -> Result<Reply, Fault> {
             tokio::task::spawn_blocking(move || {
                 let bytes = serde_json::to_vec(&state)
                     .map_err(|error| Fault::new("internal", error.to_string()))?;
-                write_atomic(&file, &bytes, 0o600, 0o777, &call.scope)
+                write_atomic(&file, &bytes, 0o600, 0o777, &scope)
             })
             .await
             .map_err(|error| Fault::new("internal", error.to_string()))??;
         }
-        return Reply::json(&Value::Null);
+        return Ok(());
     }
     Err(Fault::new(
         "invalid_corpus",

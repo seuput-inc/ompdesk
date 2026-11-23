@@ -234,7 +234,10 @@ describe("disk care", () => {
 				false,
 			]);
 			expect(w.logs.some(([message]) => message === "run")).toBe(true);
-			expect(await exists(path.join(w.userData, "disk-care", "state.json"))).toBe(true);
+			const reopened = w.care();
+			await reopened.start();
+			expect(reopened.state().lastRun).toEqual(state.lastRun);
+			expect(reopened.state().usage).toEqual(state.usage);
 		},
 		SLOW,
 	);

@@ -337,6 +337,19 @@ describe("naming the tab", () => {
 	});
 });
 
+it("overwrites the chosen file through its existing hard link", async () => {
+	const root = await tmp();
+	const original = path.join(root, "original.zip");
+	const chosen = path.join(root, "chosen.zip");
+	await fs.writeFile(original, "previous bundle");
+	await fs.link(original, chosen);
+	const { deps } = setup({ dumpDir: root, chosen });
+
+	ok(await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false }));
+
+	expect((await membersOf(original))[DIAGNOSTICS_MEMBER]).toBe(DIAGNOSTICS);
+});
+
 describe("a tab on a paired host", () => {
 	it("dumps on the host, reads the bytes back over the host file route, writes here and has the host delete its archive", async () => {
 		const root = await tmp();
@@ -356,6 +369,49 @@ describe("a tab on a paired host", () => {
 		expect(result.path).toBe(target);
 		expect(dialogs).toHaveLength(1);
 		expect(await fs.readdir(root)).toEqual(["from-host.zip"]);
+	});
+
+	it("refuses a truncated host response even when its prefix parses as a ZIP", async () => {
+		const root = await tmp();
+		const { deps } = setup({ dumpDir: root, device: "host-1", chosen: path.join(root, "chosen.zip") });
+		const data = await new JSZip().file("session.md", "incomplete").generateAsync({ type: "nodebuffer" });
+		deps.readHostFile = async () => ({
+			ok: true,
+			data,
+			mime: "application/zip",
+			size: data.length + 1,
+			truncated: true,
+		});
+
+		await expect(
+			saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false }),
+		).resolves.toMatchObject({
+			ok: false,
+			code: "file_too_large",
+		});
+		expect(await fs.readdir(root)).toEqual([]);
+	});
+
+	it("leaves the chosen file alone and discards the host's archive when the bytes are not a ZIP", async () => {
+		const root = await tmp();
+		const chosen = path.join(root, "chosen.zip");
+		await fs.writeFile(chosen, "previous bundle");
+		const { deps, commands } = setup({ dumpDir: root, device: "host-1", chosen });
+		const data = Buffer.from("not a zip");
+		deps.readHostFile = async () => ({
+			ok: true,
+			data,
+			mime: "application/zip",
+			size: data.length,
+			truncated: false,
+		});
+
+		const result = await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false });
+
+		expect(result).toMatchObject({ ok: false, error: expect.any(String) });
+		expect(commands.map(command => command.type)).toEqual(["dump_session_archive", "discard_session_archive"]);
+		expect(await fs.readFile(chosen, "utf8")).toBe("previous bundle");
+		expect(await fs.readdir(root)).toEqual(["chosen.zip"]);
 	});
 
 	it("reports the host's refusal to send an archive past its cap, and still has the host delete it", async () => {

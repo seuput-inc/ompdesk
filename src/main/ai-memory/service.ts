@@ -126,6 +126,8 @@ export interface AiMemoryServiceDeps {
 	unit?: ServiceControl;
 	spawnEnv: () => Promise<NodeJS.ProcessEnv>;
 	onState: (state: AiMemoryState) => void;
+	/** The clients that supply the native care and upkeep engines' current settings. */
+	quality?: () => { care: string; upkeep: string; recallTermsFile?: string };
 	/** Wait for something before the first wiring (the first tab boots before ai-memory competes with it). */
 	beforeStart?: () => Promise<void>;
 	/**
@@ -153,7 +155,7 @@ export interface AiMemoryServiceDeps {
 	now?: () => number;
 }
 
-export type AiMemoryLogMessage = "launch" | "binary" | "phase" | "failed" | "retry";
+export type AiMemoryLogMessage = "launch" | "binary" | "phase" | "failed" | "retry" | "recall-terms-failed";
 export type AiMemoryLogDetails = Record<string, string | number | boolean | null>;
 
 /** `aimemory.service.ask`: what the core needs of main. */
@@ -440,10 +442,10 @@ export class AiMemoryService {
 				),
 				host.on(
 					"aimemory.service.timer",
-					mine<{ timer: number; ms: number; repeat: boolean }>(({ timer, ms, repeat }) => {
+					mine<{ timer: number; ms: number; repeat: boolean }>(({ timer, ms, repeat }, generation) => {
 						const fire = () => {
 							if (!repeat) this.#timers.delete(timer);
-							void this.#call("aimemory.service.fire", { timer }).catch(() => undefined);
+							void this.#call("aimemory.service.fire", { timer }, undefined, generation).catch(() => undefined);
 						};
 						const handle = repeat ? setInterval(fire, ms) : setTimeout(fire, ms);
 						handle.unref();
@@ -458,6 +460,7 @@ export class AiMemoryService {
 		}
 		const deps = this.#deps;
 		await this.#call("aimemory.service.open", {
+			quality: deps.quality?.(),
 			deps: {
 				platform: deps.platform,
 				arch: deps.arch,

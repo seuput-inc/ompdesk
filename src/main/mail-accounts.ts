@@ -5,7 +5,7 @@
  * memory after its first use (on macOS each keystore read can ask for the login password after an update, see
  * update-auth.ts), and never returned, logged or put in an error.
  *
- * `read` is the email trigger's `MailPort.read`: one IMAP-over-TLS poll of the account's mailbox (routines/imap.ts).
+ * The private core pipe receives login parameters only when a poll is about to start.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
@@ -168,14 +168,26 @@ export class MailAccounts {
 		return account ? { id: account.id, label: account.label, address: account.address } : null;
 	}
 
-	/** One poll of the account's mailbox past `cursor` (none: the baseline). */
-	async read(id: string, cursor: MailCursor | null): Promise<MailboxRead> {
+	/** Main → core only. Never part of account state, events, logs or a renderer response. */
+	pollAccount(name: string) {
+		const account = this.resolve(name);
+		return account ? { ...account, connection: this.#connection(account.id) } : null;
+	}
+
+	#connection(id: string) {
 		const account = this.#find(id);
-		return readMailbox(
-			{ host: account.host, port: account.port, plainLoopback: this.#options.plainLoopback ?? false },
-			{ username: account.username, password: this.#password(id), mailbox: account.mailbox },
-			cursor,
-		);
+		return {
+			host: account.host,
+			port: account.port,
+			plainLoopback: this.#options.plainLoopback ?? false,
+			login: { username: account.username, password: this.#password(id), mailbox: account.mailbox },
+			timeoutMs: 30_000,
+		};
+	}
+
+	async read(id: string, cursor: MailCursor | null): Promise<MailboxRead> {
+		const { login, timeoutMs, ...endpoint } = this.#connection(id);
+		return readMailbox(endpoint, login, cursor, timeoutMs);
 	}
 
 	/** Log in and open the mailbox once, as a poll does; the reason in words when it cannot. */

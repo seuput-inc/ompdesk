@@ -46,7 +46,7 @@ Init ==
     /\ nextHolder = "waiting" /\ spawnedAfterStop = FALSE /\ timedOut = FALSE
     /\ scratch = "none" /\ disk = 0 /\ diskCalls = 0
 
-\* @code src/main/local/git/exec.ts:168-248 heldRequest and heldAnswer (coreGit, coreGitAnswer, coreHeld, coreGh): a live step sends its request; its end is the step's tracked effect
+\* @code src/main/local/git/exec.ts:168-252 heldRequest and heldAnswer (coreGit, coreGitAnswer, coreHeld, coreGh): a live step sends its request; its end is the step's tracked effect
 Send ==
     /\ step = "running" /\ req = "none" /\ coreUp
     /\ req' = "pending" /\ toCore' = Append(toCore, "request")
@@ -74,13 +74,13 @@ StepEnds ==
     /\ step' = "done"
     /\ UNCHANGED <<req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:236-255 a request registers its cancel flag before the next frame is read
+\* @code native/ompdesk/crates/core/src/server.rs:352-365 a request registers its cancel flag before the next frame is read
 CoreReadsRequest ==
     /\ coreUp /\ toCore # <<>> /\ Head(toCore) = "request"
     /\ toCore' = Tail(toCore) /\ registered' = TRUE /\ handler' = "running"
     /\ UNCHANGED <<step, req, toMain, cancelled, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:231-235 a cancel sets the flag of a request still in flight; else nothing
+\* @code native/ompdesk/crates/core/src/server.rs:336-341 a cancel sets the flag of a request still in flight; else nothing
 CoreReadsCancel ==
     /\ coreUp /\ toCore # <<>> /\ Head(toCore) = "cancel"
     /\ toCore' = Tail(toCore)
@@ -113,25 +113,26 @@ DropScratch ==
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, disk, diskCalls>>
 
 \* @code native/ompdesk/crates/core/src/disk/tree.rs:16-23 live: every file system call of disk care's requests first asks whether its request was cancelled
+\* @code native/ompdesk/crates/core/src/disk/saved_records.rs:108-129 change: take the record writer, check cancellation, then replace saved.json through the fenced atomic write
 DiskStarts ==
     /\ coreUp /\ handler = "running" /\ ~cancelled /\ disk = 0 /\ diskCalls < MaxDisk
     /\ disk' = 1 /\ diskCalls' = diskCalls + 1
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch>>
 
-\* @code native/ompdesk/crates/core/src/git/read.rs:63-70 blocking: the call returns on its worker, which held a clone of the request's scope
+\* @code native/ompdesk/crates/core/src/git/read.rs:64-70 blocking: the call returns on its worker, which held a clone of the request's scope
 DiskEnds ==
     /\ disk = 1
     /\ disk' = 0
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:302-311 the handler returns (done, failed or cancelled); a git's task or a disk call's worker may still run, the scratch store is gone
+\* @code native/ompdesk/crates/core/src/server.rs:448-463 the handler returns (done, failed or cancelled); a git's task or a disk call's worker may still run, the scratch store is gone
 HandlerEnds ==
     /\ coreUp /\ handler = "running"
     /\ scratch # "made"
     /\ handler' = "finished"
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:312-314 the answer waits until every scope clone (a git's supervisor, a disk call's worker) is gone
+\* @code native/ompdesk/crates/core/src/server.rs:464-467 the answer waits until every scope clone (a git's supervisor, a disk call's worker) is gone
 CoreAnswers ==
     /\ coreUp /\ handler = "finished" /\ ~answered
     /\ WaitGroup => alive = 0

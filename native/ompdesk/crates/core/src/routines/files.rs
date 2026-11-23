@@ -1,6 +1,6 @@
 //! A files trigger's reads (was `scanPath` of `src/main/routines/ports.ts` and `changedNames`/`parseMark` of
 //! `files.ts`): the listing of what is under the watched path, which is the trigger's mark, and the names that changed
-//! between the last launch's listing and the first one of this launch. The watch and the burst's timers stay main's.
+//! between the last launch's listing and the first one of this launch.
 //!
 //! A listing is each file's name (`/`-separated, relative; `""` for the path itself when it is a file) and
 //! `<modified ms>:<size>`, capped in name order; `.git` and `node_modules` directories are passed over, folders that
@@ -43,13 +43,18 @@ pub struct Listing {
 
 #[derive(Serialize)]
 pub(super) struct Scan {
-    listing: Option<Listing>,
-    changed: Option<Vec<String>>,
+    pub(super) listing: Option<Listing>,
+    pub(super) changed: Option<Vec<String>>,
 }
 
-pub(super) fn scan(path: &str, ignored: &[String], mark: Option<Value>) -> Result<Scan, Fault> {
+pub(super) fn scan(
+    path: &str,
+    ignored: &[String],
+    mark: &mut Option<Value>,
+) -> Result<Scan, Fault> {
     let listing = list(path, ignored)?;
-    let changed = parse_mark(mark).map(|before| changed_names(before.as_ref(), listing.as_ref()));
+    let changed =
+        parse_mark(mark.take()).map(|before| changed_names(before.as_ref(), listing.as_ref()));
     Ok(Scan { listing, changed })
 }
 
@@ -112,9 +117,11 @@ fn walk(dir: &Path, prefix: &str, ignored: &[String], listing: &mut Listing, cou
             continue;
         };
         if name != "__proto__" {
-            listing
-                .entries
-                .insert(name, Value::String(stamp(&meta, size)));
+            crate::remote::events::js::set(
+                &mut listing.entries,
+                name,
+                Value::String(stamp(&meta, size)),
+            );
         }
         *count += 1;
     }

@@ -245,12 +245,15 @@ pub fn registry() -> Registry {
     crate::aimemory::register(&mut registry);
     crate::browsers::register(&mut registry);
     crate::clock::register(&mut registry);
+    crate::diagnostic_bundle::register(&mut registry);
     crate::disk::register(&mut registry);
     crate::ext::register(&mut registry);
     crate::fs::register(&mut registry);
     crate::git::register(&mut registry);
     crate::gh::register(&mut registry);
     crate::keepawake::register(&mut registry);
+    crate::logs::register(&mut registry);
+    crate::mcp_hub::register(&mut registry);
     crate::memory::register(&mut registry);
     crate::memsync::register(&mut registry);
     crate::models::register(&mut registry);
@@ -266,6 +269,7 @@ pub fn registry() -> Registry {
     crate::control::register(&mut registry);
     crate::tailscale::register(&mut registry);
     crate::ssh::register(&mut registry);
+    crate::stats::register(&mut registry);
     crate::stock::register(&mut registry);
     crate::update_feed::register(&mut registry);
     crate::upkeep::register(&mut registry);
@@ -378,22 +382,26 @@ where
     let ending = Events {
         frames: frames.downgrade(),
     };
+    crate::logs::close_all(&ending);
+    let mcp_hub_closed = crate::mcp_hub::close_all(&ending);
     crate::control::close_all(&ending).await;
     crate::ssh::close_all(&ending);
-    crate::schedules::close_all(&ending);
+    crate::schedules::close_all(&ending).await;
     crate::aimemory::service::close_all(&ending);
+    crate::stats::close_all(&ending).await;
     crate::stock::close_all(&ending).await;
     crate::sidecar::close_all(&ending).await;
     crate::ports::close_all(&ending);
     while tasks.join_next().await.is_some() {
         crate::control::close_all(&ending).await;
         crate::ssh::close_all(&ending);
-        crate::schedules::close_all(&ending);
+        crate::schedules::close_all(&ending).await;
         crate::aimemory::service::close_all(&ending);
         crate::stock::close_all(&ending).await;
         crate::sidecar::close_all(&ending).await;
         crate::ports::close_all(&ending);
     }
+    mcp_hub_closed.await;
     crate::web::store::flush_all().await;
     drop(frames);
     let written = writer.await.map_err(io::Error::other)?;

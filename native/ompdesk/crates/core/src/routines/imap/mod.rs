@@ -45,7 +45,7 @@ impl Login {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Mailbox {
+pub(super) struct Mailbox {
     host: String,
     port: u16,
     login: Login,
@@ -91,7 +91,7 @@ pub(super) fn register(registry: &mut Registry) {
     });
 }
 
-async fn read_mailbox(
+pub(super) async fn read_mailbox(
     account: &Mailbox,
     cursor: Option<MailCursor>,
     scope: &Scope,

@@ -1,6 +1,6 @@
 /**
  * Mailboxes the owner adds for email routines (Settings › Schedules › Email accounts): an IMAP server reached over TLS,
- * polled by this computer's email triggers (`src/main/routines/email.ts`). Main keeps them
+ * polled by this computer's Rust routine service. Main keeps them
  * (`src/main/mail-accounts.ts`): the account in `<userData>/mail-accounts.json`, its password encrypted with the OS
  * keystore (Electron `safeStorage`) beside it. A password goes one way: typed in Settings, sent to main once, never
  * read back by a window, an agent or a log. Each computer keeps its own (a paired host's are set on the host).

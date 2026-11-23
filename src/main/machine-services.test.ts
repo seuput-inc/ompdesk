@@ -16,7 +16,6 @@ import {
 } from "./machine-services";
 import type { OmpUpdater } from "./omp-updater";
 import { HOST_STATS_TIMEOUT_MS, LINK_SLACK_MS } from "./remote/app-protocol";
-import type { Revive } from "./restart-policy";
 
 const statsText = (key: "stats.notRunning" | "stats.notReady") => `local:${key}`;
 const OPTIONS: IpcBenchmarkRunOptions = { models: ["anthropic/x"], profile: "chat", runs: 1, parallel: 1 };
@@ -69,7 +68,7 @@ function fakeUpdater() {
 
 function localMachine(
 	port: number,
-	revive: Revive = "scheduled",
+	revive: "scheduled" | "exhausted" = "scheduled",
 	fetch: StatsFetch = async () => ({ ok: 1 }),
 	accountRotation: AccountRotationDeps = rotationPrefs().deps,
 	updater: Pick<OmpUpdater, "state" | "updateNow"> = fakeUpdater(),
@@ -88,8 +87,8 @@ function localMachine(
 	},
 ) {
 	return new LocalMachine({
-		stats: { port, fetch },
-		statsRestart: () => revive,
+		stats: async (path, params) =>
+			port ? { ready: true, data: await fetch(path, params) } : { ready: false, exhausted: revive === "exhausted" },
 		statsText,
 		benchmarkOmp: async () => ({ ok: false, error: "omp missing" }),
 		benchmarkEnv: async () => ({}),

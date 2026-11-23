@@ -98,12 +98,10 @@ import { accountRotationDeps } from "./account-rotation";
 import { agentDesktopToRun } from "./agent-desktop";
 import { agentDir } from "./agent-paths";
 import { migrateAgentPowers } from "./agent-power-migration";
-import { lowerAgentPriority } from "./agent-priority";
 import { MemoryCare } from "./ai-memory/care";
 import { AiMemoryClient } from "./ai-memory/client";
 import { configureModelRuns, ompLaunch } from "./ai-memory/core-asks";
 import { registerAiMemoryIpc } from "./ai-memory/ipc";
-import { RecallTermsIndex } from "./ai-memory/recall-terms";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
@@ -193,9 +191,7 @@ import { type Identity, loadIdentity } from "./remote/identity";
 import { KeepAwakePolicy } from "./remote/keep-awake";
 import { readoptHostTabs } from "./remote/readopt";
 import { migrateRetiredPrefs } from "./retired-prefs";
-import { FileMarks } from "./routines/marks";
-import { githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
-import { RoutineTriggers } from "./routines/triggers";
+import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
 import { tailLogLines } from "./runtime-log-core";
 import { SafeStore } from "./safe-store";
@@ -230,7 +226,6 @@ import { SidecarPool } from "./sidecar-pool";
 import { installSlowSteps, loopMaxMs } from "./slow-steps";
 import { nextSnowflake } from "./snowflake";
 import { markStartup } from "./startup-timing";
-import { StatsClient } from "./stats-client";
 import { StatsServerManager } from "./stats-server";
 import { stockHelperRequest, stopStockHelper } from "./stock-helper";
 import { seedSpellchecker } from "./system-languages";
@@ -566,7 +561,6 @@ let ompProcesses: OmpProcesses | null = null;
 /** The startup omp resolution that creates `statsServer` has finished (with or without one). */
 let statsLaunchSettled = false;
 let sessionIndex: SessionIndex;
-let statsClient: StatsClient;
 let logWatcher: LogWatcher;
 let remoteDevices: RemoteDevices | null = null;
 let worktreePrompts: WorktreePrompts | null = null;
@@ -593,20 +587,16 @@ let aiMemoryService: AiMemoryService | null = null;
 let aiMemoryUpkeep: MemoryUpkeep | null = null;
 let aiMemoryCare: MemoryCare | null = null;
 let aiMemorySync: MemorySync | null = null;
-let recallTerms: RecallTermsIndex | null = null;
-const RECALL_TERMS_REFRESH_MS = 10 * 60_000;
 let extensionUpdater: ExtensionUpdater | null = null;
 let githubAuthService: GithubAuthService | null = null;
 let scheduleService: ScheduleService | null = null;
 /** Settles once the core wrote the schedules' journal at a quit, or its bound passed: the core's stop and the exit wait for it. */
 let schedulesClosed: Promise<void> = Promise.resolve();
+let logsClosed: Promise<void> = Promise.resolve();
 /** The quit's stop of every omp (`sidecar.stopAll`), started with the tabs' disposal: the core ends only after it answered. */
 let ompsStopped: Promise<void> = Promise.resolve();
 /** The core and the processes it started, after the omps and schedule writes have settled. */
 let coreStopped: Promise<void> = Promise.resolve();
-/** Watches what event routines (Settings › Schedules) wait for (src/main/routines). */
-let routineTriggers: RoutineTriggers | null = null;
-let routineMarks: FileMarks | null = null;
 
 /** Resolves once a window of the app has loaded its page (at once when one has). */
 function firstWindowLoaded(): Promise<void> {
@@ -1030,10 +1020,9 @@ app.whenReady().then(async () => {
 	const recallTermsFile = join(app.getPath("userData"), "ai-memory", RECALL_TERMS_FILE);
 	mcpHub = new McpHub({
 		memoryStateFile: memoryRecallFile,
-		lowerPriority: lowerAgentPriority,
-		log: (message, details) => console.log(`[mcp-hub] ${message}`, details ?? ""),
+		log: ({ message, details }) => console.log(`[mcp-hub] ${message}`, details),
 	});
-	mcpHub.start();
+	void mcpHub.ompEnv();
 	const hub = mcpHub;
 	// The omps an earlier instance left running (a crash, a forced quit) stop before any tab's omp starts: the core holds
 	// every lane's start (`sidecar.holdStarts`) until the reap has settled, and then starts them a few at a time.
@@ -1227,7 +1216,6 @@ app.whenReady().then(async () => {
 	sidecarPool.onTabReleased = (tabId, exited) => lifecycle.released(tabId, exited);
 	// This computer's models.yml, stats server and `omp bench`, for its own
 	// windows and for the devices that use it as their host.
-	statsClient = new StatsClient();
 	// FreeToken and colibri on loopback are listed as providers by themselves (src/main/local-engines.ts). A test
 	// launch never probes the developer's real ports unless its spec names a table (OMP_GUI_TEST_LOCAL_ENGINES).
 	const hostModelsChanged = { current: () => {} };
@@ -1263,10 +1251,8 @@ app.whenReady().then(async () => {
 	localEngines = detector;
 	if (app.isPackaged || process.env.OMP_GUI_TEST_LOCAL_ENGINES !== undefined) detector.start();
 	const machine = new LocalMachine({
-		stats: statsClient,
-		// Until omp is resolved below there is no manager yet, but one is coming: a read in
-		// that window waits like a booting server instead of hearing "stopped for good".
-		statsRestart: () => statsServer?.ensureRunning() ?? (statsLaunchSettled ? "exhausted" : "already-pending"),
+		stats: (path, params) =>
+			statsServer?.fetch(path, params) ?? Promise.resolve({ ready: false, exhausted: statsLaunchSettled }),
 		statsText: mainT,
 		benchmarkOmp: systemOmp,
 		benchmarkEnv: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
@@ -1619,21 +1605,15 @@ app.whenReady().then(async () => {
 				}
 				statsServer = new StatsServerManager({
 					command: "bun",
-					args: [join(bridgeDir, "stats-host.ts"), "127.0.0.1", "0"],
+					args: [join(bridgeDir, "stats-host.ts")],
 					env: { PATH: ompPathEnv(resolution.runtime.bin, basePath), OMP_PACKAGE_ROOT: packageRoot },
 				});
-				statsServer.on("ready", (port: number) => {
-					statsClient.port = port;
-				});
-				statsServer.on("exit", () => {
-					statsClient.port = 0;
-				});
-				statsServer.start();
+				return statsServer.start();
 			})
 			.finally(() => {
 				statsLaunchSettled = true;
 			});
-	void launchStats();
+	void launchStats().catch(error => console.warn("[stats-server] could not start", error));
 	// Accessibility and Screen Recording cannot be granted by an app: macOS checks OMPdesk's grant for both engines.
 	// After the first tab is up, a missing one OMPdesk never asked for gets macOS's own prompt; Settings › Agent
 	// behavior › Computer use and a failed computer-use step keep the state and the button.
@@ -1851,7 +1831,6 @@ app.whenReady().then(async () => {
 		releaseHelpers: async () => {
 			const stats = statsServer;
 			statsServer = null;
-			statsClient.port = 0;
 			await Promise.all([stats?.kill(), stopStockHelper()]);
 		},
 		resume: async updated => {
@@ -2020,22 +1999,17 @@ app.whenReady().then(async () => {
 		...(platform === "win32"
 			? { bunPresent: async () => findBun({ ...process.env, ...(await shellSpawnEnv()) }) !== null }
 			: {}),
+		quality: () => {
+			if (!aiMemoryCare || !aiMemoryUpkeep) throw new Error("Memory quality clients are not initialized");
+			return { care: aiMemoryCare.service, upkeep: aiMemoryUpkeep.service, recallTermsFile };
+		},
 		onState: state => {
 			for (const win of BrowserWindow.getAllWindows()) {
 				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.AI_MEMORY_STATE, state);
 			}
-			// The repair and the learning run only while the server answers.
-			if (state.phase === "ready") {
-				aiMemoryUpkeep?.ready();
-				aiMemoryCare?.ready();
-			} else {
-				aiMemoryUpkeep?.pause();
-				aiMemoryCare?.pause();
-			}
 			// Memory just came up: catch up with the computers this one is connected to.
 			if (state.phase === "ready" && aiMemoryPhase !== "ready") {
 				aiMemorySync?.syncAll();
-				void recallTerms?.refresh();
 			}
 			aiMemoryPhase = state.phase;
 		},
@@ -2173,15 +2147,6 @@ app.whenReady().then(async () => {
 			);
 	});
 	aiMemorySync.start();
-	// The term corpus of memory recall's coverage gate: read at memory-ready (onState above) and every ten minutes.
-	recallTerms = new RecallTermsIndex({
-		server: () => memoryClient.server(),
-		file: recallTermsFile,
-		log: (message, details) => writeRuntimeLog({ source: "ai-memory", message, details }),
-	});
-	setInterval(() => {
-		if (memoryReady()) void recallTerms?.refresh();
-	}, RECALL_TERMS_REFRESH_MS).unref();
 	registerAiMemoryIpc(ipc, aiMemory, {
 		openExternal: url => shell.openExternal(url),
 		openPath: path => shell.openPath(path),
@@ -2240,8 +2205,6 @@ app.whenReady().then(async () => {
 			}
 			// Devices showing this computer's schedules (Settings › Schedules on a tab here) follow.
 			devices.hostSchedulesChanged(state);
-			// An event routine's trigger starts, changes or stops with its schedule.
-			routineTriggers?.sync();
 		},
 		// A session's own wake-up (`ompdesk_schedule` with `target: "self"`) is delivered into that session by the control
 		// tools; the test launches shorten the check and the minute so a wake comes within seconds.
@@ -2279,28 +2242,20 @@ app.whenReady().then(async () => {
 			decrypt: data => safeStorage.decryptString(data),
 		},
 	});
-	const mailbox = mailAccounts;
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();
-	const marks = new FileMarks(join(app.getPath("userData"), "routine-marks.json"));
-	routineMarks = marks;
-	routineTriggers = new RoutineTriggers({
-		service: scheduleService,
-		marks,
-		// What a relaunch fires may open a session: sources start once the first window has loaded.
-		ready: firstWindowReady,
-		log: message => writeRuntimeLog({ source: "routines", message }),
-		github: githubPort(),
-		watch: watchPath,
-		scan: scanPath,
-		git: gitPort,
-		sessions: sessionPorts(sidecarPool),
-		mail: { account: name => mailbox.resolve(name), read: (id, cursor) => mailbox.read(id, cursor) },
-		...(process.env.OMP_GUI_TEST_EMAIL_POLL_MS
-			? { emailPollMs: Number(process.env.OMP_GUI_TEST_EMAIL_POLL_MS) }
-			: {}),
-	});
-	void scheduleService.start().catch(error => console.error("[schedules] couldn't start:", error));
+	void scheduleService
+		.start({
+			...routinePorts(sidecarPool, mailAccounts),
+			file: join(app.getPath("userData"), "routine-marks.json"),
+			// A routine catching up after relaunch may open a session.
+			ready: firstWindowReady,
+			log: message => writeRuntimeLog({ source: "routines", message }),
+			...(process.env.OMP_GUI_TEST_EMAIL_POLL_MS
+				? { timing: { emailPollMs: Number(process.env.OMP_GUI_TEST_EMAIL_POLL_MS) } }
+				: {}),
+		})
+		.catch(error => console.error("[schedules] couldn't start:", error));
 	// Lists every folder sessions ran in (the first pass also the ones from before the list existed).
 	void sidebarProjects.sync();
 	logWatcher = new LogWatcher();
@@ -2780,7 +2735,7 @@ app.whenReady().then(async () => {
 		spawnWindow();
 	});
 	sessionIndex.start();
-	logWatcher.start();
+	void logWatcher.start().catch(error => console.warn("[log-watcher] couldn't start:", error));
 	// Read before the first window restores: every tab change rewrites the store,
 	// so a later read would only see the just-restored primary window.
 	const savedLayouts = readSavedTabLayouts({ log: true });
@@ -2894,6 +2849,8 @@ installQuitGuard(
 	() => (sidecarPool ? sidecarPool.tabInventory() : []),
 	() => {
 		// Each step is named to the hang watchdog first: a stalled quit then names the step that never returned.
+		let statsStopped = Promise.resolve();
+		let mcpHubStopped = Promise.resolve();
 		const steps: Array<[string, () => void]> = [
 			[
 				"connectivity",
@@ -2904,8 +2861,18 @@ installQuitGuard(
 					connectivityMonitor?.stop();
 				},
 			],
-			["stats-server", () => void statsServer?.kill()],
-			["mcp-hub", () => void mcpHub?.kill()],
+			[
+				"stats-server",
+				() => {
+					statsStopped = statsServer?.kill() ?? Promise.resolve();
+				},
+			],
+			[
+				"mcp-hub",
+				() => {
+					mcpHubStopped = mcpHub?.kill() ?? Promise.resolve();
+				},
+			],
 			["omp-updater", () => ompUpdater?.dispose()],
 			["local-engines", () => localEngines?.dispose()],
 			["cli-updater", () => cliUpdater?.dispose()],
@@ -2916,13 +2883,6 @@ installQuitGuard(
 			["ai-memory-care", () => aiMemoryCare?.dispose()],
 			["ai-memory", () => aiMemoryService?.dispose()],
 			["github-auth", () => githubAuthService?.dispose()],
-			[
-				"routine-triggers",
-				() => {
-					routineTriggers?.dispose();
-					routineMarks?.dispose();
-				},
-			],
 			[
 				"schedules",
 				() => {
@@ -2945,11 +2905,22 @@ installQuitGuard(
 			["mobile-web", () => mobileWebService?.dispose()],
 			["web-host", () => void webHost?.stop()],
 			["session-index", () => sessionIndex?.stop()],
-			["log-watcher", () => logWatcher?.stop()],
+			[
+				"log-watcher",
+				() => {
+					logsClosed = logWatcher?.stop() ?? Promise.resolve();
+				},
+			],
 			[
 				"core",
 				() => {
-					coreStopped = Promise.allSettled([schedulesClosed, ompsStopped]).then(() => shutdownCore());
+					coreStopped = Promise.allSettled([
+						schedulesClosed,
+						ompsStopped,
+						logsClosed,
+						statsStopped,
+						mcpHubStopped,
+					]).then(() => shutdownCore());
 					void coreStopped.catch((error: unknown) => console.warn(`[quit] core stop failed: ${String(error)}`));
 				},
 			],
@@ -2978,7 +2949,7 @@ installQuitGuard(
 	},
 	// Main must not exit until the core and the processes it started have ended too.
 	async () => {
-		const results = await Promise.allSettled([ompsStopped, schedulesClosed, coreStopped]);
+		const results = await Promise.allSettled([ompsStopped, schedulesClosed, logsClosed, coreStopped]);
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
 	},
