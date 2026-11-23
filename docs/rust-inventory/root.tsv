@@ -294,7 +294,7 @@ src/main/machine-state.ts	port	2	MachineState retains recent resource samples an
 src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
 src/main/mail-accounts.ts	mixed	2	MailAccounts.read delegates the connection and IMAP poll to routines.readMailbox. Account state, encrypted password files and synchronous keystore reads remain in main.
 src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
-src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
+src/main/main-failures.ts	port	4	Node's uncaughtExceptionMonitor and uncaughtException inspect the same exception, log its stack and return or call process.exit(1) synchronously. Move with Node process lifetime, not an RPC to the core after its shutdown.
 src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.
 src/main/mcp-hub.ts	port	2	McpHub launches and supervises the native MCP hub, provides endpoint/auth environment to omp, and handles restart/kill.
 src/main/mcp-live.ts	port	3	§1.3: extension mutations synchronously notify the listener installed by index.ts; no separate I/O. Receiver: shell, with that notification.
@@ -364,14 +364,14 @@ src/main/process-alive.ts	port	1	processAlive uses signal zero and treats EPERM 
 src/main/quit-guard.test.ts	tooling	-	Vitest suite: quit guard risk assessment.
 src/main/quit-guard.ts	port	3	assessQuitRisk aggregates tab work; lastWindowCloseAction, updateRestartConfirmation and QuitLatch decide close, approval and restart behavior.
 src/main/quit-log.test.ts	tooling	-	Vitest suite: app-quit lines.
-src/main/quit-log.ts	port	1	quitAskedReport and exitReport produce structured end-of-run records; uncleanEndReport identifies a prior run without an end line.
+src/main/quit-log.ts	mixed	1	The shell reads and classifies the previous log tail (app.previousRunEnd). app-quit writes quitAskedReport before app.quit(); endMain uses exitReport even after the shell disconnects. Move those with the exit events and their writer.
 src/main/quit-watchdog.test.ts	tooling	-	Vitest suite: quit watchdog.
-src/main/quit-watchdog.ts	port	2	QuitWatchdog arms or cancels the bounded forced-exit timer after a committed quit or update, reporting its reason before exit.
+src/main/quit-watchdog.ts	port	2	installQuitGuard arms after teardown starts; updater error handlers disarm in the same tick. Expiry runs the staged swap hook before app.exit(0). Move with quit approval, update cancellation and force-exit hooks.
 src/main/quota-reset-stock.test.ts	tooling	-	Vitest suite: never waits for a failure stock calls a billing cap, and waits for the limits stock lets pass with time.
 src/main/raw-imports.d.ts	tooling	-	Ambient declarations type Vite *.md?raw and *.png?inline imports in the main bundle; no runtime implementation.
 src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credentials.
 src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recovery.
-src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesChanged and shouldRestartForChangedResources decide recovery from process failure or changed app resources; hangRestartNotifies rate-limits notices.
+src/main/renderer-recovery.ts	port	1	WindowManager consumes and clears endedForHang and advances the window's recovery timestamp before reloading. It owns timer cancellation, the resource identity check and the one restart dialog; move with that window state.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
 src/main/restart-policy.test.ts	tooling	-	Vitest suite: restartDelay.
 src/main/restart-policy.ts	port	1	RestartBudget and restartDelay implement the bounded restart/backoff ladder used by bundled services; the tab sidecar has its own native ladder, not this implementation.

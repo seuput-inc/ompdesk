@@ -5,6 +5,8 @@ mod shell_args;
 mod app_icon;
 #[path = "../../src/js_date.rs"]
 mod js_date;
+#[path = "../../src/diagnostic_logs/log_tail.rs"]
+mod log_tail;
 #[path = "../../src/watchdog/marker.rs"]
 mod marker;
 
@@ -27,6 +29,10 @@ fn main() -> io::Result<()> {
                 params["headless"].as_str().map(std::ffi::OsStr::new),
             ),
             "hang.consume" => marker::consume_reports(Path::new(params["path"].as_str().unwrap())),
+            "app.previousRunEnd" => log_tail::previous_run_end(
+                std::fs::File::open(params["path"].as_str().unwrap()),
+                u32::try_from(params["ownPid"].as_u64().unwrap()).unwrap(),
+            ),
             method => panic!("unknown fixture method {method}"),
         };
         serde_json::to_writer(&mut out, &answer)?;

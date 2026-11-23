@@ -1,8 +1,6 @@
 /**
- * The `app-quit` lines of gui-runtime.jsonl, so a person can tell afterwards how a run ended: who asked to quit or
- * relaunch (written before the quit work starts), the exit itself (`details.end: true`, the run's end line), and at the
- * next start a run that left no end line. Only a kill (force quit, SIGKILL), a crash or a power loss leaves none, and
- * none of them runs a handler that could say so. Pure: the shell host's `electron` module writes through it too.
+ * The `app-quit` lines main writes synchronously before the quit work starts and immediately before exit.
+ * The shell-host shim also needs the end line when its connection to the native shell has already closed.
  */
 import type { RuntimeLogReport } from "./runtime-log-core";
 
@@ -54,46 +52,5 @@ export function exitReport(code: number, reason?: string): RuntimeLogReport {
 		source: "app-quit",
 		message: reason ? `Exiting with code ${code}: ${reason}` : `Exiting with code ${code}`,
 		details: { end: true, code, ...(reason ? { reason } : {}) },
-	};
-}
-
-interface LogEntry {
-	pid?: unknown;
-	timestamp?: unknown;
-	appVersion?: unknown;
-	source?: unknown;
-	details?: { end?: unknown };
-}
-
-function entry(line: string): LogEntry | null {
-	try {
-		const value: unknown = JSON.parse(line);
-		return typeof value === "object" && value !== null ? (value as LogEntry) : null;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * The line for a previous run that ended without its end line, from the log's last lines (`tailLogLines`, read before
- * or after this run's first lines: `ownPid`'s are skipped); null when it has one or there is no previous run. A log
- * with no `app-quit` line at all was written by a version that wrote none, and is not judged.
- */
-export function uncleanEndReport(lines: readonly string[], ownPid: number): RuntimeLogReport | null {
-	const entries = lines.map(entry).filter((e): e is LogEntry => e !== null && e.pid !== ownPid);
-	if (!entries.some(e => e.source === "app-quit")) return null;
-	const last = entries.at(-1);
-	if (!last || typeof last.pid !== "number") return null;
-	const run = entries.slice(entries.findLastIndex(e => e.pid !== last.pid) + 1);
-	if (run.some(e => e.source === "app-quit" && e.details?.end === true)) return null;
-	const at = typeof last.timestamp === "string" ? last.timestamp : null;
-	return {
-		source: "app-quit",
-		message: `The previous run (pid ${last.pid}) ended without a reason: no end line, so it was killed (force quit, SIGKILL), crashed or lost power; its last line was at ${at ?? "an unknown time"}`,
-		details: {
-			previousPid: last.pid,
-			lastLineAt: at,
-			previousVersion: typeof last.appVersion === "string" ? last.appVersion : null,
-		},
 	};
 }
