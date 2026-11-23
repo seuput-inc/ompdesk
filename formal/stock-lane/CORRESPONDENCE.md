@@ -35,3 +35,11 @@ All code is `native/ompdesk/crates/core/src/stock/mod.rs`. A lane is one task (`
 - **The worker's queue is not modelled.** That a withdrawn request never runs is the worker's own rule (`resources/gui-bridge/stock-helper/dispatch.ts`, pinned by `stock-helper.test.ts` "createDispatcher"); here a worker answers any request it was sent, in any order, or never.
 - **A worker's last lines and its exit are two messages.** A line read after the exit was handled is dropped, in the model and in the code; the request then failed with the exit, as it did in the TypeScript (`exit` before the last `data`).
 - **Writes to a worker never block the lane.** They go through an unbounded channel to the worker's writer task; a worker that stopped reading its stdin cannot stop the lane from handling timeouts.
+
+## The worker's FIFO turn is not `ReadLine`
+
+`sent[r]` means `Lane::flush` handed the frame to the worker's stdin writer. A timeout after that handoff arms the stock grace even when the running predecessor has not timed out. `dispatch.ts` acknowledges a queued withdrawal in its original turn. While the worker stays current, reading the predecessor's reply does not clear the grace for the withdrawn ID. A request that times out before launch has no such grace.
+
+`dispatch.ts` can finish `sessions.list` and start the next `sessions.delete` before the lane reads the list reply. Stock can remove the journal and its artifacts in that interval (`stock-helper/sessions.ts`). If `Lane::stop` wins the race with `ReadLine`, both callers fail. `src/main/session-mutations.ts` records no tombstone for a failed delete. If the list is still running when `host.ts` receives EOF, the worker exits without starting the queued delete. Waiting for `ReadLine` to admit the delete loses the first outcome. Running it unconditionally on stop loses the second.
+
+`src/main/stock-helper.test.ts` pins the queued request as the only reason for a recycle. Its stop case holds reply delivery and checks the file effects before and after a blocked handler. These worker turns are outside the model.
