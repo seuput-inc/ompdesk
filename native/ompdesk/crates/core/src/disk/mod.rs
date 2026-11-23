@@ -12,6 +12,7 @@ mod cache;
 mod cache_policy;
 mod facts;
 mod regenerable;
+mod run_state;
 mod saved;
 pub(crate) mod saves;
 mod scratch;
@@ -187,6 +188,7 @@ struct Restored {
 }
 
 pub fn register(registry: &mut Registry) {
+    run_state::register(registry);
     registry.add("disk.usage", |call| Box::pin(usage::handle(call)));
     registry.add("disk.sizesOpen", |call| {
         Box::pin(async move {

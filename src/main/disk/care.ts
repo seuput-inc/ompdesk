@@ -27,7 +27,6 @@
  * everything. Every action is one `disk-care` line in gui-runtime.jsonl.
  */
 
-import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import {
 	DISK_CARE_ARTIFACT_IDLE_DAYS,
@@ -142,10 +141,6 @@ export class DiskCare {
 		this.#now = deps.now ?? Date.now;
 	}
 
-	get #stateFile(): string {
-		return path.join(this.#deps.userData, "disk-care", "state.json");
-	}
-
 	state(): DiskCareState {
 		return {
 			running: this.#running !== null,
@@ -158,12 +153,13 @@ export class DiskCare {
 	/** Reads the last run and measurement an earlier launch kept; then the first run, unless one ran lately. */
 	async start(): Promise<void> {
 		this.#stopped = false;
-		const kept = await fs
-			.readFile(this.#stateFile, "utf8")
-			.then(text => JSON.parse(text) as { usage?: DiskUsage; lastRun?: DiskCareRunSummary })
-			.catch(() => ({}) as { usage?: DiskUsage; lastRun?: DiskCareRunSummary });
-		this.#usage = kept.usage ?? null;
-		this.#lastRun = kept.lastRun ?? null;
+		const kept = await coreHeld<Pick<DiskCareState, "usage" | "lastRun">>(
+			"disk.readRunState",
+			{ profile: this.#deps.userData },
+			60_000,
+		).catch(() => ({ usage: null, lastRun: null }));
+		this.#usage = kept.usage;
+		this.#lastRun = kept.lastRun;
 		if (!this.#deps.automatic) return;
 		const since = this.#lastRun ? this.#now() - this.#lastRun.endedAt : Number.POSITIVE_INFINITY;
 		const recent = since < LAUNCH_THROTTLE_MS;
@@ -291,8 +287,11 @@ export class DiskCare {
 			...this.#lastRun,
 			actions: actions.map(a => `${a.kind}:${a.count}:${a.bytes}`).join(" "),
 		});
-		await fs.mkdir(path.dirname(this.#stateFile), { recursive: true, mode: 0o700 });
-		await fs.writeFile(this.#stateFile, `${JSON.stringify({ usage: this.#usage, lastRun: this.#lastRun })}\n`);
+		await coreHeld<void>(
+			"disk.saveRunState",
+			{ profile: this.#deps.userData, state: { usage: this.#usage, lastRun: this.#lastRun } },
+			60_000,
+		);
 		return { ...this.state(), running: false };
 	}
 
