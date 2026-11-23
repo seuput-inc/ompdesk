@@ -298,9 +298,9 @@ src/main/tailscale/test-fake-tailscale.ts	exception	Test substitute CLI models s
 src/main/tailscale/whois.ts	exception	Declares the TailnetPeer whois response type only.
 src/main/terminal/agent-tool.test.ts	exception	Test coverage for terminal listing and snapshot selection.
 src/main/terminal/agent-tool.ts	port	Selects a terminal snapshot, strips overwritten text and formats a bounded tail for gui_terminal_read.
-src/main/terminal/ipc.ts	port	Routes local versus remote terminal operations, tracks tab ownership and enforces viewer leases before dispatch.
+src/main/terminal/ipc.ts	port	Remote-web batch with terminal:request and host-services (§1.3c). The host checks the tab owner and applies the viewer lease before it enqueues the PTY request. Pool release clears that owner's leases and disposes its terminals.
 src/main/terminal/lease.test.ts	exception	Test coverage for terminal viewer lease arbitration.
-src/main/terminal/lease.ts	port	Tracks viewer presence and idle expiry to arbitrate terminal control and resizing.
+src/main/terminal/lease.ts	port	Remote-web batch with terminal/ipc.ts (§1.3c). A resize reads the lease or a claim changes it in the same tick as the PTY request. Pool release forgets the owner's leases. No separate lease RPC.
 src/main/terminal/requests.ts	port	Remote-web batch, §1.3(c): paired remote/host-services checks the owner and immediately enqueues terminal.request, then can enqueue terminal.dispose for a closed tab. Awaiting a shell lookup before enqueue can create a shell after disposal. Move admission with the owner.
 src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ordering and deduplication.
 src/main/terminal/shells.ts	port	Remote-web batch, §1.3(c): terminal/requests uses the same live shell list as the picker to allow only exact installed paths at create admission, before the owner can be disposed. Move both uses together with paired terminal admission.

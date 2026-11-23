@@ -331,7 +331,7 @@ src/main/native-labels.test.ts	tooling	-	Vitest suite: native menu roles.
 src/main/notification-batch.test.ts	tooling	-	Vitest suite: NotificationBatcher.
 src/main/notification-batch.ts	port	2	NotificationBatcher groups one window's tab notifications over a timer; formatBatchSummary builds the resulting localized summary.
 src/main/notify-triage.test.ts	tooling	-	Vitest suite: a completion the judge says waits for the person.
-src/main/notify-triage.ts	port	3	createNotifyHandler deduplicates per-window notifications and waits for a judge-model completion classification before deciding whether input is needed.
+src/main/notify-triage.ts	port	3	Shell batch with SYSTEM_NOTIFY (§1.3c). The handler deduplicates a shared tab's notice before asking the judge and reads window focus again after the answer. No separate triage RPC.
 src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
 src/main/nsis-updater.ts	port	4	OmpNsisUpdater customizes electron-updater's download session and delays quitAndInstall teardown until the detached installer spawn resolves.
 src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
