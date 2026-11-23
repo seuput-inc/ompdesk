@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { loadOmpModule } from "../omp-package";
 import { PROMPT_ORIGIN_ENTRY } from "../prompt-origin-contracts";
 import { NO_TEXT_PROMPT } from "../session-list-contracts";
+import { mapImagePayloads } from "./image-payloads";
 
 /** The fields of stock's `SessionInfo` this helper reads; the rest pass through untouched. */
 interface StockSessionInfo {
@@ -255,6 +257,15 @@ function withoutPlaceholder(rows: StockSessionInfo[]): StockSessionInfo[] {
  * for the scan, not the lease. The probe takes the lease for an instant and touches no journal. */
 export const UNQUEUED_METHODS: Readonly<Record<string, true>> = { "sessions.owned": true };
 
+/** Stock's SHA-256 address without blob-store writes: stored transcript reads must stay read-only. */
+export function withImageRefs<T>(messages: T): T {
+	return mapImagePayloads(messages, (record, data) => {
+		if (data.length < 1024) return null; // Stock's BLOB_EXTERNALIZE_THRESHOLD; existing references are shorter.
+		const hash = createHash("sha256").update(Buffer.from(data, "base64")).digest("hex");
+		return { ...record, data: `blob:sha256:${hash}` };
+	});
+}
+
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"sessions.parseDates": async groups => {
 		if (!Array.isArray(groups)) throw new Error("Invalid session date groups");
@@ -349,6 +360,9 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		const read = loader.loadSessionMessagesReadOnly;
 		if (typeof read !== "function")
 			throw new Error("This omp cannot read stored sessions (loadSessionMessagesReadOnly).");
-		return (await (read as (path: string) => Promise<unknown[]>)(sessionPath)) ?? [];
+		const messages = (await (read as (path: string) => Promise<unknown[]>)(sessionPath)) ?? [];
+		return typeof params === "object" && params !== null && "imageRefs" in params && params.imageRefs === true
+			? withImageRefs(messages)
+			: messages;
 	},
 };

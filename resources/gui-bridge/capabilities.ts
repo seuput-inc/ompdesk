@@ -1110,6 +1110,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** session-dump.ts: the two session methods `/dump all` and `/dump anon` run, called directly for their zip. */
 	sessionDump: {
 		session: ["dumpSessionArchiveToTmpDir()", "dumpAnonymizedArchiveToTmpDir()"],
+		modules: { [`${UTILS}/ar`]: ["openArchive()", "encodeArchive()"] },
 	},
 	/** advisor-stats.ts: stock's advisor stats and branch. It imports nothing from omp, so health.ts has no LOADERS entry for it. */
 	advisorStats: {

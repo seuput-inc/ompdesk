@@ -16,9 +16,8 @@
  * (`imageRefs`: a paired device, which reads each blob once, `read_image_blob`).
  */
 
-import { createHash } from "node:crypto";
-import { open } from "node:fs/promises";
 import { transcriptPageMessages } from "../../../resources/gui-bridge/transcript-page";
+import { core } from "../core/process";
 import { noteMcpChange } from "../mcp-live";
 import { resolveImageBlobs } from "./image-blobs";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
@@ -134,27 +133,9 @@ interface TranscriptAnswer {
 	reset?: unknown;
 }
 
-/** How many bytes before an offset a journal's `tail` covers: a line's end, enough to tell two journals apart. */
-const TAIL_BYTES = 64;
-
-/**
- * A journal's tail at `byte`: the offset and a hash of the bytes just before it. Stock only appends to a subagent's
- * journal, so a reader that kept what it read up to `byte` reads on from there while the tail is the same. Null when
- * the file cannot be read that far.
- */
-export async function journalTail(file: string, byte: number): Promise<string | null> {
-	if (byte <= 0) return "0";
-	const start = Math.max(0, byte - TAIL_BYTES);
-	const handle = await open(file, "r").catch(() => null);
-	if (!handle) return null;
-	try {
-		const bytes = Buffer.alloc(byte - start);
-		const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
-		if (bytesRead !== bytes.length) return null;
-		return `${byte}:${createHash("sha256").update(bytes).digest("base64url").slice(0, 22)}`;
-	} finally {
-		await handle.close();
-	}
+async function journalTail(path: string, byte: number): Promise<string | null> {
+	if (!Number.isSafeInteger(byte)) return null;
+	return (await core().call<{ tail: string | null }>("sessions.journalTail", { path, byte })).result.tail;
 }
 
 /** A second reauth while one is in flight fails with the fork's `oauth_busy` code. */

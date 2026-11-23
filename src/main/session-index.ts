@@ -327,13 +327,13 @@ export class SessionIndex {
 		return this.#store.owned(target);
 	}
 
-	async readMessages(sessionPath: string): Promise<AgentMessage[]> {
+	async readMessages(sessionPath: string, imageRefs?: boolean): Promise<AgentMessage[]> {
 		const target = resolve(sessionPath);
 		const root = `${resolve(this.#sessionsDir)}${sep}`;
 		if (!target.startsWith(root) || !target.endsWith(".jsonl")) {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
-		return this.#store.messages(target);
+		return this.#store.messages(target, imageRefs);
 	}
 
 	/** The pace of a stored session's journal (session-pace.ts); undefined when it cannot be read. */

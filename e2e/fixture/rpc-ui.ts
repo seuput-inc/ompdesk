@@ -38,6 +38,7 @@ import {
 	PROMPT_ORIGIN_ENTRY,
 	parsePromptOriginEnv,
 } from "../../resources/gui-bridge/prompt-origin-contracts";
+import { redactDiagnosticsFile } from "../../resources/gui-bridge/redactor";
 import {
 	interruptedJobs,
 	journalEnd,
@@ -2758,34 +2759,30 @@ export function runRpcUi(): void {
 			const problem = judgeAssistEnabled ? (judgeAssistScript.preview ?? null) : null;
 			return { problem, judged: problem !== null };
 		},
-		// gui-bridge session-dump.ts: a real zip with stock's members in os.tmpdir(); null while the session has no messages.
-		session_dump: (params, reply) => {
+		session_dump_redacted: (params, reply) => {
+			const output = params.output;
+			if (typeof output !== "string") throw new Error("missing dump output");
 			const messages = activeBranch().flatMap(entry =>
 				entry.type === "message" ? [entry.message as AgentMessage] : [],
 			);
 			if (messages.length === 0) return null;
 			const anonymized = params.anonymized === true;
 			const zip = new JSZip();
+			const member = (name: string, text: string) => zip.file(name, redactDiagnosticsFile(name, text));
 			if (anonymized) {
-				zip.file(
-					"session.jsonl",
-					`${messages.map(message => JSON.stringify({ role: message.role })).join("\n")}\n`,
-				);
+				member("session.jsonl", `${messages.map(message => JSON.stringify({ role: message.role })).join("\n")}\n`);
 			} else {
-				zip.file(
+				member(
 					"session.md",
 					`${messages.map(message => `## ${message.role}\n\n${messageText(message, "\n")}`).join("\n\n")}\n`,
 				);
-				zip.file("llm-request.json", `${JSON.stringify({ messages: messages.length })}\n`);
+				member("llm-request.json", `${JSON.stringify({ messages: messages.length })}\n`);
 			}
-			const file = nodePath.join(
-				os.tmpdir(),
-				`omp-dump-${anonymized ? "anon-" : ""}${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`,
-			);
 			void zip.generateAsync({ type: "nodebuffer" }).then(bytes => {
-				fs.writeFileSync(file, bytes);
+				fs.writeFileSync(output, bytes, { flag: "r+" });
 				reply({
-					path: file,
+					path: output,
+					redacted: true,
 					files: anonymized ? ["session.jsonl"] : ["session.md", "llm-request.json"],
 					subagentCount: 0,
 					anonymized,

@@ -162,7 +162,7 @@ src/main/local/composer.ts	mixed	Rust sidecar.guiBridge forwards maintenance abo
 src/main/local/copy-targets.test.ts	exception	Tests message and command ranking, fenced quote exclusion and handoff fallback for copy targets.
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
 src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
-src/main/local/extensions.ts	port	Verifies transcript journal tails, expands referenced images and notifies sessions of MCP changes.
+src/main/local/extensions.ts	mixed	sessions.journalTail fingerprints the bytes before stock's journal offset. Stock still selects the child and reads its messages. Main checks the kept token before replay, expands image references and notifies sessions of MCP changes.
 src/main/local/git.ts	mixed	sidecar.guiBridge reads worktree lifecycle settings from the requesting spawn. Main dispatches SCM and PR commands and verifies repository ownership before restoring a worktree.
 src/main/local/git/changes.test.ts	exception	Tests net tracked changes, rename counts and treatment of untracked or binary files in real checkouts.
 src/main/local/git/changes.ts	native-client	Forwards repository reads to git.*. git.diff validates the path before reporting missing git or reading the checkout.
@@ -195,7 +195,7 @@ src/main/local/git/worktree-seed.ts	port	Setup batch owns runWorktreeHook with i
 src/main/local/git/worktree.test.ts	exception	Tests real Git creation and removal, occupied folders and branches, exact branch names, exhaustion, rollback guards and checkout spelling.
 src/main/local/git/worktree.ts	port	Validates input and stock's location, locks the repository and invokes preparation. git.worktreePlan preserves checkout spelling; git.worktreeAdd chooses and creates the first free path and branch. Git absent: gitRunner throws before heldAnswer sends git.worktreeRemoval (exec.ts); runLocalCommand reports “git is not installed or not on PATH” without a code even for an outside path. No removal plan, lock or deletion executes. With Git available an outside target still fails worktree_outside_root.
 src/main/local/image-blobs.test.ts	exception	Tests restoration of stock blob references on subagent and bridge transcript reads.
-src/main/local/image-blobs.ts	port	Identifies image payload sites, hashes large inline payloads into references and resolves referenced bytes for transcripts.
+src/main/local/image-blobs.ts	mixed	Stock projects saved transcripts before the worker reply. Subagent reads still resolve missing bytes through the live tab's bridge; remote-web's ImageBlobCache.resolve needs the original object sites in the current turn (§1.3c). No whole-transcript RPC.
 src/main/local/index.test.ts	exception	Tests duplicate local handler refusal and which GUI or stock commands the registry claims.
 src/main/local/index.ts	port	Rejects duplicate local commands, looks up local handlers and converts success or failure to an RPC response.
 src/main/local/judge-assist.ts	port	Accepts only error or blank preview findings and treats judge bridge failures as unjudged or unavailable.
@@ -209,12 +209,12 @@ src/main/local/prompt-origin.test.ts	exception	Tests prompt provenance validatio
 src/main/local/prompt-origin.ts	port	Selects person-authored prompt and steer commands and caps the wait for recording their text at 500 ms.
 src/main/local/queue.test.ts	exception	Drives edits through the real Rust sidecar, checks chip identity across queue updates, and verifies that direct stock commands still bypass GUI edits.
 src/main/local/session-dump.test.ts	exception	Tests stock archive requests, redaction, removal of non-text entries and cleanup of the original file.
-src/main/local/session-dump.ts	port	Rebuilds a private redacted ZIP, omits binary entries, removes the original and permits deletion only for recorded output paths.
-src/main/local/session-extras.ts	mixed	Rust sidecar.guiBridge forwards copy targets and last link. TS restricts foreign import sources and combines stock session stats with a separate usage-history request.
+src/main/local/session-dump.ts	native-client	archive.prepare reserves a private output. The stock bridge redacts before replying; archive.discard verifies the exact reserved path and receipt across core restarts. Main validates replies and keeps the receipt off the page.
+src/main/local/session-extras.ts	mixed	sidecar.guiBridge forwards copy targets and last link. Import validation, source_unavailable mapping and merging stock's stats and bridge history have no independent I/O (§1.3b). The live session owns the importers, local:// root and completion registry.
 src/main/local/session-files.test.ts	exception	Renames synthetic sessions through the core with a stand-in stock CLI; checks argv, stdin, matched replies, missing files and the single restore retry.
 src/main/local/session-files.ts	native-client	omp.renameStoredSession checks the file and runs stock's fixed offline rename RPC in the temp directory; main supplies only the resolved launcher and environment.
 src/main/local/sessions.test.ts	exception	Tests paged transcript reads, stale snapshot cursors and retries when a live tail changes.
-src/main/local/sessions.ts	port	Encodes snapshot-bound transcript cursors, caches tails, shrinks oversized backward pages and retries stale uncursored tail reads.
+src/main/local/sessions.ts	port	Hub batch with sidecar: BridgeRelay fences each stock replay by tab, seq, generation and spawnId. Cursors, shrinking and retry belong with that transaction; the per-bridge tail cache returns the same page object for the same version, limit and image form (§1.3a,c). Stock owns replay and session mutations (§1.3d).
 src/main/local/settings.test.ts	exception	Tests model catalog availability without optional metadata and merging stock and bridge account data.
 src/main/local/settings.ts	mixed	Rust sidecar.guiBridge forwards schema, role metadata, setup facts, spend and recent models. TS merges logout accounts and usage data, routes parameterized settings and cancels browser login via a timed loopback callback.
 src/main/local/slash.ts	port	Caches builtin slash names and aliases per bridge and rejects a command not offered by the running stock version.
