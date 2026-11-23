@@ -427,8 +427,9 @@ describe("reaches", () => {
 		const target = { host: "local.invalid", port: address.port };
 		try {
 			expect(await reaches(target, async () => ["127.0.0.1"])).toBe(true);
-			expect(await reaches(target, async () => ["127.0.0.2", "127.0.0.1"])).toBe(true);
-			expect(await reaches(target, async () => ["127.0.0.2", "127.0.0.2", "127.0.0.1"])).toBe(false);
+			// The IPv4 listener refuses IPv6 loopback; 127.0.0.2 need not be assigned on macOS.
+			expect(await reaches(target, async () => ["::1", "127.0.0.1"])).toBe(true);
+			expect(await reaches(target, async () => ["::1", "::1", "127.0.0.1"])).toBe(false);
 		} finally {
 			const closed = Promise.withResolvers<void>();
 			server.close(() => closed.resolve());
