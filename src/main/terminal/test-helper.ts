@@ -32,7 +32,8 @@ export class PtySession {
 			env: {
 				...process.env,
 				OMP_PACKAGE_ROOT: dir,
-				[process.platform === "win32" ? "ComSpec" : "SHELL"]: path.join(dir, "worker-default"),
+				// Node keeps the first sorted spelling when a Windows environment also contains ComSpec.
+				[process.platform === "win32" ? "COMSPEC" : "SHELL"]: path.join(dir, "worker-default"),
 			},
 		}),
 	});
