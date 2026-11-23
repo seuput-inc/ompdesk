@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, link, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -26,7 +26,9 @@ describe("PATH refresh", () => {
 			await mkdir(bin);
 			await mkdir(managed, { recursive: true });
 			const reg = join(bin, "reg.exe");
-			await link(process.execPath, reg).catch(() => copyFile(process.execPath, reg));
+			// Homebrew Node resolves libnode relative to its executable; a hardlink relocates it.
+			if (process.platform !== "win32") await symlink(process.execPath, reg);
+			else await link(process.execPath, reg).catch(() => copyFile(process.execPath, reg));
 			await writeFile(
 				join(dir, "query"),
 				`const [key, flag, value] = process.argv.slice(2);
