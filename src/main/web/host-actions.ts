@@ -20,7 +20,6 @@ import {
 	type WebModelsWriteResult,
 } from "../../shared/web-host";
 import { CoreError, core } from "../core/process";
-import { isOpenableExternalUrl } from "../external-url";
 import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin } from "../workspace-fs";
 import type { BlobStore } from "./blobs";
 import type { WebDevices } from "./devices-store";
@@ -40,7 +39,7 @@ export interface HostActionsDeps {
 	/** The host's own "open" for a file (launcher types are revealed instead: main/open-path.ts). */
 	openPath(abs: string): Promise<unknown>;
 	reveal(abs: string): void;
-	openExternal(url: string): Promise<void>;
+	openPageExternal(url: string): Promise<void>;
 	/** The agent's models.yml as text, and the checked save (models-config.ts `readModelsText` / `writeModelsText`). */
 	models: { read(): WebModelsText; write(text: string, stamp: string): Promise<string> };
 	homedir?: () => string;
@@ -192,7 +191,7 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 
 	const openExternal = async (_context: WebCallContext, args: readonly unknown[]): Promise<void> => {
 		const { url } = parse(UrlRequest, args[0]);
-		if (isOpenableExternalUrl(url)) await deps.openExternal(url);
+		await deps.openPageExternal(url);
 	};
 
 	const blobOpen = async (context: WebCallContext, args: readonly unknown[]): Promise<WebBlobOpenResult> => {

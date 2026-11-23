@@ -42,6 +42,10 @@ export function postWatchdog(signal: WatchdogSignal): void {
 
 export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client.call("app.diagnosticLog", selection);
 
+export async function openPageExternal(url: string): Promise<void> {
+	await client.call("shell.openPageExternal", { url });
+}
+
 /** Paired pages arrive through the permission-checked registry. Desktop pages read the same log in the shell. */
 export function registerRuntimeLogIpc(ipc: Pick<IpcRegistry, "handle">): void {
 	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_PATH, () => client.call(IPC_COMMANDS.RUNTIME_LOG_PATH, []));
