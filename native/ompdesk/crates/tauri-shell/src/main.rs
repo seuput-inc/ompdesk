@@ -5,6 +5,7 @@ mod assets;
 mod automation;
 mod evaluate;
 mod gpu;
+mod js_date;
 mod migrate_watch;
 mod native_chrome;
 mod native_services;
@@ -1069,9 +1070,9 @@ fn dispatch(call: host::Call) {
         native_services::watchdog::handle(call, &runtime().user_data);
         return;
     }
-    if call.method == "app.consumeHangMarker" {
+    if call.method == "app.consumeHangReports" {
         tauri::async_runtime::spawn_blocking(move || {
-            call.ok(native_services::watchdog::consume_marker(
+            call.ok(native_services::watchdog::consume_reports(
                 &runtime().user_data,
             ))
         });
