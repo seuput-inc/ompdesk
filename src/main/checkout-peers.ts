@@ -10,7 +10,6 @@
  * host's tab is that host's to coordinate. A pass runs after tab activity, when a bridge reports a file it had not
  * changed before, and on a timer; a session hears only a change.
  */
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { judgeClaim } from "../../resources/gui-bridge/modes/checkout-claims";
 import {
@@ -20,6 +19,7 @@ import {
 	type CheckoutPeer,
 	type CheckoutPeers,
 } from "../../resources/gui-bridge/modes/checkout-peers-contracts";
+import { core } from "./core/process";
 import { coreGit } from "./local/git/exec";
 
 /** One live omp on this computer. */
@@ -434,12 +434,31 @@ async function claimsOf(status: MemberStatus, toplevel: string): Promise<Claim[]
 	}));
 	const held = new Set(status.files);
 	for (const file of pending) if (!held.has(file)) entries.push({ file, stamp: undefined, pending: true });
-	return Promise.all(
-		entries.map(async entry => {
-			const rel = await relativeTo(toplevel, entry.file);
-			return { ...entry, rel, norm: rel === null ? null : rel.normalize("NFC") };
-		}),
-	);
+	const dirs = new Map<string, number>();
+	const relativeOrDir = entries.map(({ file }) => {
+		const rel = relativeTo(toplevel, file);
+		if (rel !== null) return rel;
+		const dir = path.dirname(file);
+		const slot = dirs.get(dir) ?? dirs.size;
+		dirs.set(dir, slot);
+		return slot;
+	});
+	// A write need not have landed yet: resolve its directory, never the file itself.
+	// An unanswered batch must not classify an unchecked path as outside and retire it.
+	const physical = dirs.size
+		? (await core().call<(string | null)[]>("git.checkoutAliasDirs", { dirs: [...dirs.keys()] })).result
+		: [];
+	return entries.map((entry, index) => {
+		const source = relativeOrDir[index];
+		const dir = typeof source === "number" ? physical[source] : null;
+		const rel =
+			typeof source === "string"
+				? source
+				: dir
+					? relativeTo(toplevel, path.join(dir, path.basename(entry.file)))
+					: null;
+		return { ...entry, rel, norm: rel?.normalize("NFC") ?? null };
+	});
 }
 
 /**
@@ -451,27 +470,18 @@ export function readCheckoutClaims(toplevel: string, paths: string[]): Promise<s
 	return coreGit("git.checkoutStatus", { toplevel, paths }, 1);
 }
 
-/** `file` relative to `toplevel`; null when it lies outside (a path spelled through a symlink is resolved before giving up). */
-async function relativeTo(toplevel: string, file: string): Promise<string | null> {
-	const within = (target: string): string | null => {
-		const rel = path.relative(toplevel, target);
-		return rel && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel) ? rel : null;
-	};
-	const direct = within(file);
-	if (direct) return direct;
-	const dir = await fs.realpath(path.dirname(file)).catch(() => null);
-	return dir ? within(path.join(dir, path.basename(file))) : null;
+function relativeTo(toplevel: string, file: string): string | null {
+	const rel = path.relative(toplevel, file);
+	return rel && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel) ? rel : null;
 }
 
 /** The checkout `cwd` is in, both paths in one spelling (macOS /var vs /private/var). */
-export async function readCheckoutPlace(
-	cwd: string,
-	facts: (cwd: string) => Promise<{ toplevel: string | null; commonDir: string } | null>,
-): Promise<CheckoutPlace | null> {
-	const found = await facts(cwd);
-	if (!found?.toplevel) return null;
-	const [toplevel, commonDir] = await Promise.all(
-		[found.toplevel, found.commonDir].map(dir => fs.realpath(dir).catch(() => dir)),
-	);
-	return { toplevel, commonDir };
+export function readCheckoutPlace(cwd: string): Promise<CheckoutPlace | null> {
+	const timeoutMs = 10_000;
+	return coreGit<CheckoutPlace | null>(
+		"git.checkoutPlace",
+		{ cwd: path.resolve(cwd), timeoutMs },
+		0,
+		2 * timeoutMs,
+	).catch(() => null);
 }

@@ -165,7 +165,7 @@ import { isOpenableExternalUrl } from "./external-url";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "./launch-profile-store";
-import { readOriginFacts, readProjectOrigin } from "./local/git/origin";
+import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
 import type { LogWatcher } from "./log-watcher";
@@ -1377,7 +1377,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				}
 			return [...members, ...deps.hostedTabs.checkoutMembers()];
 		},
-		place: cwd => readCheckoutPlace(cwd, readOriginFacts),
+		place: readCheckoutPlace,
 		hiddenPaths: () => agentHiddenPaths(prefsStore.get(AGENT_HIDDEN_PREFS_KEY)),
 		gitStatus: readCheckoutClaims,
 	});

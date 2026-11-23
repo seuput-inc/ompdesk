@@ -212,7 +212,7 @@ src/main/checkout-claims-journal.test.ts	tooling	-	Vitest suite: the claims jour
 src/main/checkout-claims.test.ts	tooling	-	Vitest suite: shared-checkout claims under generated sequences.
 src/main/checkout-expand.test.ts	tooling	-	Vitest suite: the files a formatter on a folder claims.
 src/main/checkout-peers.test.ts	tooling	-	Vitest suite: checkout peers.
-src/main/checkout-peers.ts	mixed	3	readCheckoutClaims calls git.checkoutStatus in crates/core/src/git/mod.rs; CheckoutPeerCoordinator still polls bridges, judges claims, groups checkouts and publishes peer changes.
+src/main/checkout-peers.ts	mixed	3	git.checkoutPlace, checkoutAliasDirs and checkoutStatus resolve paths and Git facts. The bridge publisher assigns seq before awaiting sends; agent-control reads peersOf synchronously to authorize reports. Move the pass with these callers, not the pure claim judgment alone (§1.3a,c).
 src/main/ci-queue.test.ts	tooling	-	Vitest suite: every macOS job of a dispatchable workflow.
 src/main/connectivity.test.ts	tooling	-	Vitest suite: ConnectivityMonitor.
 src/main/connectivity.ts	mixed	2	ConnectivityMonitor invokes hub kind connectivity (crates/core/src/resume/{mod,connectivity}.rs); TS still owns proxy target selection, DNS/TCP probe, deadlines, timers and host signals.

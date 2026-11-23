@@ -14,6 +14,7 @@
 
 pub mod branches;
 mod checkout;
+mod checkout_peers;
 mod fingerprints;
 pub(crate) mod freshness;
 pub(crate) mod left_behind;
@@ -380,6 +381,7 @@ struct HookParams {
 }
 
 pub fn register(registry: &mut Registry) {
+    checkout_peers::register(registry);
     registry.add("git.freshnessCheckout", |call| {
         Box::pin(async move {
             let FreshnessCheckoutParams {
