@@ -56,9 +56,9 @@ src/main/cli-tools/catalog.ts	port	Shell updater batch, §1.3a,b: a synchronous 
 src/main/cli-tools/detect.test.ts	exception	Tests attribution of CLI installs to Homebrew, Bun and npm using their actual directory layouts.
 src/main/cli-tools/detect.ts	port	Resolves executable shims, classifies package-manager ownership, checks write access and probes installed versions.
 src/main/cli-tools/plans.test.ts	exception	Checks package-manager executable selection, argv and environment for version checks and upgrades.
-src/main/cli-tools/plans.ts	port	Selects owner-specific check and update commands, parses latest versions and decides when running tools must wait.
+src/main/cli-tools/plans.ts	mixed	ext.cliWaitsForIdle and ext.updateRunning decide whether an update must wait. Shell updater batch, §1.3a: CLI and MCP still share synchronous owner-specific command builders and the tool catalog.
 src/main/cli-tools/updater.test.ts	exception	Exercises provider filtering, supervised updates and post-update detection using controlled dependencies.
-src/main/cli-tools/updater.ts	port	Schedules detection and version checks, defers busy tools, runs updates and manages temporary package directories for probes.
+src/main/cli-tools/updater.ts	mixed	Core scans the Mac for a running CLI before an update. Shell updater batch, §1.3a,c: the Settings IPC snapshot must return before the rescan settles; one state owner schedules checks, records results and queues setup's installer.
 src/main/control-socket/backend.ts	native-client	The backend supplies already-visible host facts at the pool event and forwards outside calls. The core projects socket state both for a resolved target and for numbered updates.
 src/main/control-socket/cli-install.test.ts	exception	Checks launcher contents, PATH updates and when a packaged install may replace a launcher.
 src/main/control-socket/cli-install.ts	native-client	control.installCli writes the launchers; the startup adapter supplies the local platform and bin directories, appends the latter to the host PATH, and logs a failed install without stopping app startup.
@@ -111,9 +111,9 @@ src/main/ext-update/mcp-plans.ts	port	Chooses pip, pipx, uv or shared package-ma
 src/main/ext-update/mcp.test.ts	exception	Tests classification of bundled, remote and package-runner MCP launches and pinned versions.
 src/main/ext-update/mcp.ts	native-client	Forwards configured servers to ext.mcpClasses for classification.
 src/main/ext-update/running.test.ts	exception	Tests which package-owner and executable combinations must wait for the running server before updating.
-src/main/ext-update/running.ts	port	Enables process scanning only on macOS; ext.defersWhileRunning and ext.serverRunning answer the other running checks.
+src/main/ext-update/running.ts	native-client	ext.defersWhileRunning and ext.updateRunning check the install method and scan the Mac. No live process command lines leave the core.
 src/main/ext-update/updater.test.ts	exception	Tests initial inventory, project-scoped rows and keeping existing rows when inventory refresh fails.
-src/main/ext-update/updater.ts	port	Schedules inventory refresh, selects checks and upgrades by target, defers running scripts and merges reload plans.
+src/main/ext-update/updater.ts	mixed	Core classifies inventory and checks running MCP servers. Shell updater batch, §1.3a,c: IPC validates requested keys against live rows, setup owns the install queue, and the hub consumes reload decisions for live tabs.
 src/main/formal/audit-drift.test.ts	exception	Test coverage for declaration span and drift detection.
 src/main/formal/audit-lean.test.ts	exception	Test coverage for Lean module and proof trust auditing.
 src/main/formal/audit-statechart.test.ts	exception	Test coverage for statechart rule parsing and validation.

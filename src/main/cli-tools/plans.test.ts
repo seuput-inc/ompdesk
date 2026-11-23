@@ -278,19 +278,23 @@ describe("updateCommand", () => {
 });
 
 describe("waitsForIdle (the macOS rule for replacing files a running process loads)", () => {
-	it("waits for npm and Bun globals, and for a Homebrew Node CLI, but not for single binaries or a vendor's updater", () => {
-		expect(waitsForIdle(detection("codex", null), npmOwner("/p"))).toBe(true);
-		expect(waitsForIdle(detection("gemini", null), { method: "bun", name: "x", bunRoot: "/b", root: "/b/x" })).toBe(
+	it("waits for npm and Bun globals, and for a Homebrew Node CLI, but not for single binaries or a vendor's updater", async () => {
+		expect(await waitsForIdle(detection("codex", null), npmOwner("/p"))).toBe(true);
+		expect(
+			await waitsForIdle(detection("gemini", null), { method: "bun", name: "x", bunRoot: "/b", root: "/b/x" }),
+		).toBe(true);
+		expect(await waitsForIdle(detection("gemini", null), { method: "brew", name: "gemini-cli", brew: "brew" })).toBe(
 			true,
 		);
-		expect(waitsForIdle(detection("gemini", null), { method: "brew", name: "gemini-cli", brew: "brew" })).toBe(true);
-		expect(waitsForIdle(detection("codex", null), { method: "brew-cask", name: "codex", brew: "brew" })).toBe(true);
+		expect(await waitsForIdle(detection("codex", null), { method: "brew-cask", name: "codex", brew: "brew" })).toBe(
+			true,
+		);
 		// gh is one native binary: a running gh keeps its old inode.
-		expect(waitsForIdle(detection("gh", null), { method: "brew", name: "gh", brew: "brew" })).toBe(false);
-		expect(waitsForIdle(detection("claude", null), { method: "self" })).toBe(false);
-		expect(waitsForIdle(detection("cursor-agent", null), { method: "self" })).toBe(false);
-		expect(waitsForIdle(detection("gh", null), { method: "managed", item: "gh" })).toBe(false);
-		expect(waitsForIdle(detection("gh", null), { method: "winget", id: "GitHub.cli" })).toBe(false);
+		expect(await waitsForIdle(detection("gh", null), { method: "brew", name: "gh", brew: "brew" })).toBe(false);
+		expect(await waitsForIdle(detection("claude", null), { method: "self" })).toBe(false);
+		expect(await waitsForIdle(detection("cursor-agent", null), { method: "self" })).toBe(false);
+		expect(await waitsForIdle(detection("gh", null), { method: "managed", item: "gh" })).toBe(false);
+		expect(await waitsForIdle(detection("gh", null), { method: "winget", id: "GitHub.cli" })).toBe(false);
 	});
 });
 
@@ -303,34 +307,32 @@ describe("runningIn", () => {
 		"",
 	].join("\n");
 
-	it("sees a process of the tool through its package dir", () => {
+	it("sees a process of the tool through its package dir", async () => {
 		const owner = npmOwner("/Users/u/.nvm/versions/node/v22");
 		const found = detection("codex", owner, { path: "/Users/u/.nvm/versions/node/v22/bin/codex" });
-		expect(runningIn(ps, found, owner)).toBe(true);
+		expect(await runningIn(found, owner, ps)).toBe(true);
+		expect(await runningIn(found, owner, `node ${found.path}-neighbour`)).toBe(true);
 	});
 
-	it("sees a Homebrew keg's process and a process named after the tool", () => {
+	it("sees a Homebrew keg's process and a process named after the tool", async () => {
 		const brew: CliOwner = { method: "brew", name: "gemini-cli", brew: "brew" };
-		expect(runningIn(ps, detection("gemini", brew), brew)).toBe(true);
+		expect(await runningIn(detection("gemini", brew), brew, ps)).toBe(true);
 		const self: CliOwner = { method: "self" };
-		expect(runningIn("/Users/u/.local/bin/claude --resume\n", detection("claude", self), self)).toBe(true);
-		expect(runningIn("claude\n", detection("claude", self), self)).toBe(true);
+		expect(await runningIn(detection("claude", self), self, "/Users/u/.local/bin/claude --resume\n")).toBe(true);
+		expect(await runningIn(detection("claude", self), self, "claude\n")).toBe(true);
 	});
 
-	it("answers false when no process of the tool runs", () => {
+	it("answers false when no process of the tool runs", async () => {
 		const owner = npmOwner("/Users/u/other-prefix");
 		expect(
-			runningIn(
-				ps,
+			await runningIn(
 				detection("codex", owner, { path: "/Users/u/other-prefix/bin/codex", real: "/Users/u/other-prefix/x" }),
 				owner,
+				ps,
 			),
 		).toBe(false);
-		expect(
-			runningIn("/usr/bin/vim notes.txt\n/sbin/launchd\n", detection("claude", { method: "self" }), {
-				method: "self",
-			}),
-		).toBe(false);
-		expect(runningIn("", detection("claude", { method: "self" }), { method: "self" })).toBe(false);
+		const self: CliOwner = { method: "self" };
+		expect(await runningIn(detection("claude", self), self, "/usr/bin/vim notes.txt\n/sbin/launchd\n")).toBe(false);
+		expect(await runningIn(detection("claude", self), self, "")).toBe(false);
 	});
 });

@@ -76,6 +76,8 @@ runs:
         src/main/setup/detect-agent-desktop.test.ts
         src/main/local-engines.test.ts
         src/main/cli-tools/detect.test.ts
+        src/main/cli-tools/plans.test.ts
+        src/main/cli-tools/updater.test.ts
         src/main/ext-update/running.test.ts
         src/main/ext-update/mcp-owner.test.ts
         src/main/ext-update/mcp-plans.test.ts
