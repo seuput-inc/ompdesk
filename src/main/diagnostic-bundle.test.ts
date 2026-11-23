@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { BrowserWindow } from "electron";
 import JSZip from "jszip";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { bundleFileName, DIAGNOSTICS_MEMBER, type DiagnosticBundleResult } from "../shared/diagnostic-bundle";
 import type { IpcFsReadBinaryResult } from "../shared/ipc-types";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
@@ -188,27 +188,22 @@ describe("saving through the dialog", () => {
 	it("offers the paired page's name on the caller's local day, without splitting a letter at the UTF-16 cap", async () => {
 		const root = await tmp();
 		const { deps, dialogs } = setup({ dumpDir: root });
-		vi.stubEnv("TZ", "Pacific/Honolulu");
-		try {
-			const now = new Date("2026-10-01T00:15:00Z");
-			deps.now = () => now;
-			const letter = "\u{10400}";
-			const prefix = "x".repeat(38);
-			for (const [title, slug] of [
-				[".._Cafe\u0301/\\\u1100\u1161_Ⅷ.²\u{1F600}\u093Eend.__", "Café-가_Ⅷ.²-end"],
-				["x\uD800y\uDC00z", "x-y-z"],
-				[`${prefix}${letter}z`, `${prefix}${letter}`],
-				[`${prefix}x${letter}z`, `${prefix}x`],
-				[`${prefix}_${letter}`, prefix],
-			] as const) {
-				const expected = `omp-dump-${slug}-2026-09-30-anon.zip`;
-				expect(bundleFileName(title, now, true)).toBe(expected);
-				const result = await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", title, anonymized: true });
-				expect(result).toEqual({ ok: false, cancelled: true });
-				expect(dialogs.pop()).toBe(path.join(root, "Downloads", expected));
-			}
-		} finally {
-			vi.unstubAllEnvs();
+		const now = new Date(2026, 8, 30, 0, 15);
+		deps.now = () => now;
+		const letter = "\u{10400}";
+		const prefix = "x".repeat(38);
+		for (const [title, slug] of [
+			[".._Cafe\u0301/\\\u1100\u1161_Ⅷ.²\u{1F600}\u093Eend.__", "Café-가_Ⅷ.²-end"],
+			["x\uD800y\uDC00z", "x-y-z"],
+			[`${prefix}${letter}z`, `${prefix}${letter}`],
+			[`${prefix}x${letter}z`, `${prefix}x`],
+			[`${prefix}_${letter}`, prefix],
+		] as const) {
+			const expected = `omp-dump-${slug}-2026-09-30-anon.zip`;
+			expect(bundleFileName(title, now, true)).toBe(expected);
+			const result = await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", title, anonymized: true });
+			expect(result).toEqual({ ok: false, cancelled: true });
+			expect(dialogs.pop()).toBe(path.join(root, "Downloads", expected));
 		}
 	});
 
