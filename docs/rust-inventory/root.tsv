@@ -56,7 +56,7 @@ src/main/autopilot.ts	native-client	3	Autopilot opens the run via autopilot.open
 src/main/background-work.test.ts	tooling	-	Vitest suite: summarizeJobRows.
 src/main/background-work.ts	port	3	askBackgroundWork queries member bridges under deadline and aggregates named subagents, jobs and unknown sessions for restart confirmation.
 src/main/benchmark-runner.test.ts	tooling	-	Vitest suite: benchmark runner contract.
-src/main/benchmark-runner.ts	port	2	BenchmarkRunner spawns/cancels the benchmark child, enforces a timeout and parses its summary for the live IPC feature.
+src/main/benchmark-runner.ts	port	2	Shell launch batch, §1.3a,c: MachineServices reads running and aborts per caller synchronously. resolveOmp also accepts versioned OMP_GUI_OMP wrappers without a package manifest (test-fake-omp.ts). Running a guessed package entry bypasses wrapper behavior; do not route model arguments through a new general-purpose shell RPC.
 src/main/boot-model.test.ts	tooling	-	Vitest suite: recognizes every stock no-model boot failure.
 src/main/boot-model.ts	mixed	2	models.bootSelector caches the installed Bun catalog probe in core. §1.3(a), hub batch: sidecar.ts reads isNoModelBootFailure before choosing its exit plan. Stock's catalog stays in Bun; main supplies its launch environment.
 src/main/bridge-account-credits.test.ts	tooling	-	Vitest suite: account credits from stock's usage limits.
