@@ -28,6 +28,7 @@ interface Launched {
 let launches = 0;
 
 async function launch(prefs: Record<string, unknown> = {}, extraEnv: Record<string, string> = {}): Promise<Launched> {
+	console.log("[auto-launch]", process.pid, "fixture-start", performance.now());
 	const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-auto-mode-")));
 	const project = path.join(profile, "project");
 	const desktop = path.join(profile, "desktop");
@@ -38,6 +39,7 @@ async function launch(prefs: Record<string, unknown> = {}, extraEnv: Record<stri
 		path.join(desktop, "prefs.json"),
 		JSON.stringify({ language: "en", themeName: "light", firstRunComplete: true, ...prefs }),
 	);
+	console.log("[auto-launch]", process.pid, "launch-app", performance.now());
 	const app = await launchApp({
 		project,
 		desktop,
@@ -51,6 +53,7 @@ async function launch(prefs: Record<string, unknown> = {}, extraEnv: Record<stri
 	await expect
 		.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 		.toBe("ready");
+	console.log("[auto-launch]", process.pid, "sidecar-ready", performance.now());
 	return { app, page, profile, record };
 }
 
