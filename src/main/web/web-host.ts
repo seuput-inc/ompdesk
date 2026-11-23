@@ -72,7 +72,7 @@ export interface WebHostDeps {
 	shell: {
 		openPath(abs: string): Promise<unknown>;
 		reveal(abs: string): void;
-		openExternal(url: string): Promise<void>;
+		openPageExternal(url: string): Promise<void>;
 	};
 	/** Tailscale logins that may reach the page (Mobile web's service decides). */
 	allowedUsers: () => readonly string[];
@@ -149,7 +149,7 @@ export class WebHost {
 				cwdFor: (context, tabId) => deps.tabs.cwd(context.win, tabId),
 				openPath: deps.shell.openPath,
 				reveal: deps.shell.reveal,
-				openExternal: deps.shell.openExternal,
+				openPageExternal: deps.shell.openPageExternal,
 				models: { read: readModelsText, write: writeModelsText },
 			}),
 			// The phone's streamed Preview (preview-stream.ts) is built in; a host build without it passes `preview: false`.

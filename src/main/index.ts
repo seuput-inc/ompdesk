@@ -216,6 +216,7 @@ import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
 import {
 	consumeHangReports,
+	openPageExternal,
 	postWatchdog,
 	readDiagnosticLog,
 	registerRuntimeLogIpc,
@@ -2605,6 +2606,7 @@ app.whenReady().then(async () => {
 	// Register all handlers and sidecar listeners before loading the renderer.
 	const fileEditReports = new FileEditReports();
 	registerIpcHandlers({
+		openPageExternal,
 		fileEditReports,
 		ipc,
 		macPermissions,
@@ -2680,7 +2682,7 @@ app.whenReady().then(async () => {
 		shell: {
 			openPath: abs => openLocalPath(abs, shell),
 			reveal: abs => shell.showItemInFolder(abs),
-			openExternal: url => shell.openExternal(url),
+			openPageExternal,
 		},
 		allowedUsers: () => mobileWebService?.allowedUsers() ?? [],
 		// Off unless the user turned it on (Settings › Mobile web): a device Tailscale vouches for connects on its own.

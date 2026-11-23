@@ -271,6 +271,7 @@ role. AppKit sends the action to the first responder. A native edit does not pro
 | `clipboard.readText` | Node | `{}` | `{text}` |
 | `clipboard.writeText` | Node | `{text}` | `{}` |
 | `shell.openExternal` | Node | `{url}` | `{}`; failure → `error.code "failed"` |
+| `shell.openPageExternal` | Node | `{url}` | Like `shell.openExternal` for page links. Refused schemes and malformed mail drafts succeed without opening anything. |
 | `shell.openPath` | Node | `{path}` | `{error: string}` ("" on success), as Electron |
 | `shell.showItemInFolder` | Node | `{path}` | `{}` |
 | `shell.trashItem` | Node | `{path}` | `{}`; failure → `error.code "failed"` |

@@ -161,7 +161,6 @@ import { deliverOnce } from "./delivery-ledger";
 import { DesktopSlotHost } from "./desktop-slot-host";
 import { savedWorktreesForSpawn } from "./disk/saved-worktrees";
 import { openInExternalEditor } from "./editor";
-import { isOpenableExternalUrl } from "./external-url";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "./launch-profile-store";
@@ -250,6 +249,7 @@ function agentCaller(win: ClientWindow): IpcCaller {
 }
 
 export interface IpcDeps {
+	openPageExternal(url: string): Promise<void>;
 	/** What paired web pages report about unsaved Files edits (WebHost forgets a page's report when it drops). */
 	fileEditReports: FileEditReports;
 	/** Where every handler here registers (index.ts's one table). */
@@ -1972,7 +1972,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		node: process.versions.node ?? "?",
 	}));
 	ipc.handle(IPC_COMMANDS.SYSTEM_OPEN_EXTERNAL, async (_caller, url: unknown) => {
-		if (isOpenableExternalUrl(url)) await shell.openExternal(url);
+		if (typeof url === "string") await deps.openPageExternal(url);
 	});
 
 	// Tool-card and reply path links: open in the system editor, or reveal the

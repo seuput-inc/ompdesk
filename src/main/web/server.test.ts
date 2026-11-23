@@ -124,7 +124,7 @@ beforeEach(async () => {
 		desktopWindows: () => [desktop()],
 		tabs: { activeTab: () => null, cwd: () => null, facts: () => null, resnapshot: () => {} },
 		openMedia: async () => new Response(null, { status: 404 }),
-		shell: { openPath: async () => {}, reveal: () => {}, openExternal: async () => {} },
+		shell: { openPath: async () => {}, reveal: () => {}, openPageExternal: async () => {} },
 		allowedUsers: () => allowed,
 		confirmNewDevices: () => confirmNew,
 		whois: async address => {
