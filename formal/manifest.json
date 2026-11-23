@@ -81,7 +81,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "482bd43fcdf55c9ed781f9d6835affca0a078961",
+			"syncCommit": "6dda2b61d55280b6a1bb8bbfd12c3bf70bbf98c3",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
