@@ -53,6 +53,9 @@ pub fn register(registry: &mut Registry) {
     registry.add("fs.stat", |call| {
         Box::pin(blocking(move || read::stat(&call.params()?)))
     });
+    registry.add("fs.directory", |call| {
+        Box::pin(blocking(move || read::directory(&call.params()?)))
+    });
     registry.add("fs.mutate", |call| {
         Box::pin(blocking(move || mutate::mutate(call)))
     });

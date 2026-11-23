@@ -1,5 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -545,6 +555,65 @@ describe("LocalHostServices", () => {
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}
+	});
+
+	it("opens and restarts in a directory alias with the host's cwd spelling", async () => {
+		const { services, sidecars } = setup();
+		const conn = new FakeConnection(peer("device-x"));
+		const folder = join(workDir, "project");
+		const alias = join(workDir, "alias");
+		mkdirSync(folder);
+		symlinkSync(folder, alias, process.platform === "win32" ? "junction" : "dir");
+		const expected = process.platform === "win32" ? alias : realpathSync(folder);
+		expect(await services.call(conn.peer, "tab.open", { rtab: "t", cwd: alias }, conn)).toMatchObject({
+			cwd: expected,
+		});
+		const restart = vi.spyOn(sidecars[0]!, "restart");
+		await services.call(conn.peer, "tab.restart", { rtab: "t", cwd: alias }, conn);
+		expect(restart).toHaveBeenCalledWith(expected, undefined);
+
+		const file = join(folder, "file");
+		const missing = join(folder, "missing");
+		writeFileSync(file, "");
+		for (const [cwd, message] of [
+			[file, `[not_a_directory] Not a directory: ${file}`],
+			[missing, `[file_not_found] Directory not found: ${missing}`],
+		] as const) {
+			await expect(services.call(conn.peer, "tab.restart", { rtab: "t", cwd }, conn)).rejects.toThrow(message);
+		}
+		expect(restart).toHaveBeenCalledTimes(1);
+	});
+
+	it.skipIf(process.platform === "win32")("keeps Node's cwd for links with a parent step", async () => {
+		const { services } = setup();
+		const conn = new FakeConnection(peer("device-x"));
+		const deep = join(workDir, "nested", "project");
+		mkdirSync(deep, { recursive: true });
+		symlinkSync(deep, join(workDir, "alias"));
+		const indirect = join(workDir, "indirect");
+		symlinkSync("alias/..", indirect);
+		for (const [rtab, cwd] of [
+			["direct", `${workDir}/alias/..`],
+			["indirect", indirect],
+		] as const) {
+			expect(await services.call(conn.peer, "tab.open", { rtab, cwd }, conn)).toMatchObject({ cwd: workDir });
+		}
+		const fallback = `${workDir}/alias/../only-in-nested`;
+		mkdirSync(join(workDir, "nested", "only-in-nested"));
+		expect(await services.call(conn.peer, "tab.open", { rtab: "raw", cwd: fallback }, conn)).toMatchObject({
+			cwd: fallback,
+		});
+		mkdirSync(join(workDir, "nested", "pipe-link", "child"), { recursive: true });
+		execFileSync("mkfifo", [join(workDir, "fifo")]);
+		symlinkSync("fifo", join(workDir, "pipe-link"));
+		const throughPipe = `${workDir}/alias/../pipe-link/child`;
+		expect(await services.call(conn.peer, "tab.open", { rtab: "pipe", cwd: throughPipe }, conn)).toMatchObject({
+			cwd: realpathSync(throughPipe),
+		});
+		const missing = `${workDir}/missing/..`;
+		await expect(services.call(conn.peer, "tab.open", { rtab: "absent", cwd: missing }, conn)).rejects.toThrow(
+			`[file_not_found] Directory not found: ${missing}`,
+		);
 	});
 
 	it("refuses a device's saved session whose recorded folder is gone instead of opening it in another folder", async () => {

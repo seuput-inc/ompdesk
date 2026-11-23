@@ -37,13 +37,12 @@
  * one research run per device, aborted when it drops.
  */
 import { randomUUID } from "node:crypto";
-import { promises as fsp } from "node:fs";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
 import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
-import { codedError, isIpcErrorCode } from "../../shared/ipc-error-codes";
+import { codedError, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	HOST_UPDATE_ACTIONS,
 	type IpcScheduledRetry,
@@ -75,7 +74,6 @@ import { type AnswerStep, TargetAnswer } from "../agent-control/target-answer";
 import { AtomicSaver } from "../atomic-file";
 import type { BackgroundWorkMember } from "../background-work";
 import type { BridgeConnectResult } from "../bridge-health";
-import { canonicalCwd } from "../canonical-cwd";
 import type { CheckoutMember } from "../checkout-peers";
 import { controlEnvFor } from "../control-socket/env";
 import { CoreError, core } from "../core/process";
@@ -627,11 +625,12 @@ function parse<T extends z.ZodTypeAny>(schema: T, method: string, params: unknow
 
 async function directory(cwd: string): Promise<string> {
 	try {
-		if ((await fsp.stat(cwd)).isDirectory()) return canonicalCwd(cwd);
-	} catch {
-		throw codedError("file_not_found", `Directory not found: ${cwd}`);
+		return (await core().call<string>("fs.directory", { path: cwd })).result;
+	} catch (error) {
+		if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "not_a_directory"))
+			throw codedError(error.code, error.message);
+		throw error;
 	}
-	throw codedError("not_a_directory", `Not a directory: ${cwd}`);
 }
 
 /** Tokens one assistant reply used (its `message_end` usage), for the device's daily count. */
@@ -2132,7 +2131,9 @@ export class LocalHostServices implements HostServices {
 					: null;
 			this.#checkOpenSession(params.sessionPath);
 			cwd = recorded
-				? await directory(recorded).catch(async () => {
+				? await directory(recorded).catch(async (error: unknown) => {
+						const code = ipcErrorCode(error);
+						if (code !== "file_not_found" && code !== "not_a_directory") throw error;
 						const saved = await savedWorktreesForSpawn.find(recorded).catch(() => null);
 						this.#checkOpenSession(params.sessionPath);
 						throw codedError(

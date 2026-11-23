@@ -312,7 +312,7 @@ src/main/memory-watch.ts	mixed	3	startMemoryWatch schedules samples via memory.r
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions.
 src/main/menu.ts	mixed	4	createMenu builds localized templates, shortcuts and window callbacks, installs the application menu and uses shell.openExternal (shell/src/shellops.rs) for the project URL; action composition remains in TS.
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
-src/main/message-update-slim.ts	port	1	slimMessageUpdate and createMessageUpdateSlimmer strip repeated accumulated message content from streamed events before forwarding.
+src/main/message-update-slim.ts	port	1	§1.3a,b,c: SidecarPool, the link encoder and subagent frame shaping synchronously strip repeated content using state for this turn. No I/O unit; move with the producer and its ordered sinks, not another round trip per event.
 src/main/model-release-dates.test.ts	tooling	-	Vitest suite: model release dates.
 src/main/model-release-dates.ts	port	2	Node fetches models.dev/catalog.json directly by default; NODE_USE_ENV_PROXY=1 honors HTTPS_PROXY and NO_PROXY. Node trusts its bundled roots by default and accepts NODE_EXTRA_CA_CERTS. core/http.rs dials directly and trusts platform roots plus extra CAs; the shell's net.* uses OS TLS and session proxy rules. First provide equivalent proxy routing and CA selection for the catalog GET. Then move fetch, canonical UTC dates, single-flight and the 24h success / 5min failure cache together; keep the last good dates on refresh failure, without sending the catalog over IPC.
 src/main/model-role-contracts.test.ts	tooling	-	Vitest suite: role groups.
