@@ -600,9 +600,9 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn nothing_listening_is_a_failed_connect() {
-        let closed = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let url = format!("http://127.0.0.1:{}", closed.local_addr().unwrap().port());
-        drop(closed);
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind(([127, 0, 0, 1], 0).into()).unwrap();
+        let url = format!("http://{}", reserved.local_addr().unwrap());
         assert_eq!(send(get(&url)).await.err(), Some(Failure::Connect));
         assert_eq!(status(get(&url)).await.err(), Some(Failure::Connect));
     }
