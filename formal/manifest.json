@@ -279,7 +279,7 @@
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
 				"src/main/ipc.ts:653-672"
 			],
-			"syncCommit": "e7a46fec9876fa0c17b83be1b726b55c72f48934"
+			"syncCommit": "4d300db5674cea2ad6bc68bf5e99c52418ad04f5"
 		},
 		{
 			"id": "open-first-message",
