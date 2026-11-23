@@ -77,7 +77,7 @@ try {
 		}));
 		for (const file of [original, reg, "reg.exe"]) {
 			const r = spawnSync(file,args,{encoding:"utf8",timeout:5000});
-			console.error("paths-probe direct",name,file,r.status,r.signal,r.error?.code,r.stdout,r.stderr);
+			console.error("paths-probe direct",name,JSON.stringify({file,status:r.status,signal:r.signal,error:r.error?.code,stdout:r.stdout?.trim(),stderr:r.stderr?.trim().slice(0,1200)}));
 		}
 		try { const r = await core().call("setup.registryPath",{cwd:process.cwd(),env:process.env}); console.error("paths-probe core",name,JSON.stringify(r.result)); }
 		catch (err) { console.error("paths-probe coreError",name,err.message); }
@@ -107,11 +107,10 @@ try {
 				timeout: 30_000,
 				windowsHide: true,
 			});
-			console.error(result.stderr);
 			expect(result.status, result.stderr).toBe(0);
 			const userOnly = `Base;BASE;C:\\Users\\First Last\\.bun\\bin;c:\\program files\\git\\cmd\\;%NOPE%\\x;${managed}`;
 			const both = `Base;BASE;C:\\Program Files\\Git\\cmd;C:\\Users\\First Last\\.bun\\bin;%NOPE%\\x;${managed}`;
-			expect(JSON.parse(result.stdout.trim())).toEqual([
+			expect(JSON.parse(result.stdout.trim()), result.stderr).toEqual([
 				both,
 				userOnly,
 				userOnly,
