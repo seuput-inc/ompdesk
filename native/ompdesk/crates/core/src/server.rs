@@ -252,6 +252,7 @@ pub fn registry() -> Registry {
     crate::git::register(&mut registry);
     crate::gh::register(&mut registry);
     crate::keepawake::register(&mut registry);
+    crate::logs::register(&mut registry);
     crate::memory::register(&mut registry);
     crate::memsync::register(&mut registry);
     crate::models::register(&mut registry);
@@ -379,6 +380,7 @@ where
     let ending = Events {
         frames: frames.downgrade(),
     };
+    crate::logs::close_all(&ending);
     crate::control::close_all(&ending).await;
     crate::ssh::close_all(&ending);
     crate::schedules::close_all(&ending);

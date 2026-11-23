@@ -600,6 +600,7 @@ let githubAuthService: GithubAuthService | null = null;
 let scheduleService: ScheduleService | null = null;
 /** Settles once the core wrote the schedules' journal at a quit, or its bound passed: the core's stop and the exit wait for it. */
 let schedulesClosed: Promise<void> = Promise.resolve();
+let logsClosed: Promise<void> = Promise.resolve();
 /** The quit's stop of every omp (`sidecar.stopAll`), started with the tabs' disposal: the core ends only after it answered. */
 let ompsStopped: Promise<void> = Promise.resolve();
 /** The core and the processes it started, after the omps and schedule writes have settled. */
@@ -2776,7 +2777,7 @@ app.whenReady().then(async () => {
 		spawnWindow();
 	});
 	sessionIndex.start();
-	logWatcher.start();
+	void logWatcher.start().catch(error => console.warn("[log-watcher] couldn't start:", error));
 	// Read before the first window restores: every tab change rewrites the store,
 	// so a later read would only see the just-restored primary window.
 	const savedLayouts = readSavedTabLayouts({ log: true });
@@ -2941,11 +2942,15 @@ installQuitGuard(
 			["mobile-web", () => mobileWebService?.dispose()],
 			["web-host", () => void webHost?.stop()],
 			["session-index", () => sessionIndex?.stop()],
-			["log-watcher", () => logWatcher?.stop()],
+			[
+				"log-watcher",
+				() => {
+					logsClosed = logWatcher?.stop() ?? Promise.resolve();
+				},
+			],
 			[
 				"core",
 				() => {
-					coreStopped = Promise.allSettled([schedulesClosed, ompsStopped]).then(() => shutdownCore());
 					void coreStopped.catch((error: unknown) => console.warn(`[quit] core stop failed: ${String(error)}`));
 				},
 			],
@@ -2974,7 +2979,7 @@ installQuitGuard(
 	},
 	// Main must not exit until the core and the processes it started have ended too.
 	async () => {
-		const results = await Promise.allSettled([ompsStopped, schedulesClosed, coreStopped]);
+		const results = await Promise.allSettled([ompsStopped, schedulesClosed, logsClosed, coreStopped]);
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
 	},

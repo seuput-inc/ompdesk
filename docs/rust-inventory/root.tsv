@@ -286,7 +286,7 @@ src/main/local-engines-core.ts	port	1	engineAction maps one local engine's avail
 src/main/local-engines.test.ts	tooling	-	Vitest suite: localEngineSettings.
 src/main/local-engines.ts	port	2	LocalEngineDetector probes loopback inference endpoints on an interval and maintains detected provider entries via the models.yml writer.
 src/main/log-watcher.test.ts	tooling	-	Vitest suite: opening logs later replays complete lines once, including split appends.
-src/main/log-watcher.ts	port	2	LogWatcher watches the log directory, tails changed files, maintains a bounded buffer and publishes batches to subscribers.
+src/main/log-watcher.ts	mixed	2	logs.start/snapshot/close own watching, UTF-8 tails and sequence assignment. Main forwards pushes and holds an opaque cursor per file plus the accepted 1000-line tail in RAM so a replacement core can resume without losing the panel history. Receiver: shell window transport.
 src/main/mac-permissions.test.ts	tooling	-	Vitest suite: MacPermissions.status.
 src/main/mac-permissions.ts	port	2	MacPermissions queries accessibility and screen grants through injected platform calls, requests missing permissions and tracks prior requests in preferences.
 src/main/machine-services.test.ts	tooling	-	Vitest suite: machineFor.

@@ -751,10 +751,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		);
 	};
 
-	// Log lines (batched by LogWatcher)
-	logWatcher.onLines = lines => {
-		broadcast(windowManager, IPC_EVENTS.LOG_LINE, { lines, nextSequence: logWatcher.getSnapshot().nextSequence });
-	};
+	logWatcher.onLines = batch => broadcast(windowManager, IPC_EVENTS.LOG_LINE, batch);
 
 	// ========================================================================
 	// IPC Command Handlers

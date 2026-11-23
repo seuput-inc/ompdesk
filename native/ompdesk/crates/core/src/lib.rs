@@ -20,6 +20,7 @@ pub mod hub;
 pub mod ipc;
 mod json;
 pub mod keepawake;
+mod logs;
 pub mod mcp_hub;
 pub mod memory;
 mod memsync;
