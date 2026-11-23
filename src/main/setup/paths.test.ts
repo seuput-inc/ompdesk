@@ -114,6 +114,26 @@ try {
 	});
 });
 
+it("resolves development and packaged native binaries from Node ESM", () => {
+	const moduleUrl = new URL("../native-bin.ts", import.meta.url).href;
+	const packaged = join(tmpdir(), "Packaged Resources");
+	const script = `import { configureNativeBin, nativeBinPath } from ${JSON.stringify(moduleUrl)};
+console.log(nativeBinPath("ompdesk-core"));
+configureNativeBin({ packaged: true, resourcesPath: ${JSON.stringify(packaged)} });
+console.log(nativeBinPath("ompdesk-core"));`;
+	const result = spawnSync("node", ["--experimental-strip-types", "--input-type=module", "-e", script], {
+		cwd: tmpdir(),
+		encoding: "utf8",
+		windowsHide: true,
+	});
+	expect(result.status, result.stderr).toBe(0);
+	const binary = process.platform === "win32" ? "ompdesk-core.exe" : "ompdesk-core";
+	expect(result.stdout.trim().split(/\r?\n/)).toEqual([
+		join(__dirname, "../../..", "resources", "ompdesk-bin", `${process.platform}-${process.arch}`, binary),
+		join(packaged, "ompdesk-bin", binary),
+	]);
+});
+
 describe("managed tools", () => {
 	it("lives under %LOCALAPPDATA%\\ompdesk\\tools on Windows and userData elsewhere", () => {
 		expect(managedToolsDir("win32", { LOCALAPPDATA: "L" }, "H", "U")).toBe(join("L", "ompdesk", "tools"));

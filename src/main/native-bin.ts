@@ -8,7 +8,8 @@ import { join } from "node:path";
 
 export type NativeBinary = "ompdesk" | "ompdesk-core";
 
-let location = { packaged: false, resourcesPath: join(__dirname, "..", "..", "resources") };
+const here = typeof __dirname === "string" ? __dirname : import.meta.dirname;
+let location = { packaged: false, resourcesPath: join(here, "..", "..", "resources") };
 
 export function configureNativeBin(options: { packaged: boolean; resourcesPath: string }): void {
 	location = { ...options };
