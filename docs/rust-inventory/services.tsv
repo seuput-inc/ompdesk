@@ -211,11 +211,11 @@ src/main/local/prompt-origin.ts	port	Selects person-authored prompt and steer co
 src/main/local/queue.test.ts	exception	Drives edits through the real Rust sidecar, checks chip identity across queue updates, and verifies that direct stock commands still bypass GUI edits.
 src/main/local/session-dump.test.ts	exception	Tests stock archive requests, redaction, removal of non-text entries and cleanup of the original file.
 src/main/local/session-dump.ts	port	Rebuilds a private redacted ZIP, omits binary entries, removes the original and permits deletion only for recorded output paths.
-src/main/local/session-extras.ts	mixed	Rust sidecar.guiBridge forwards copy targets and last link. TS restricts foreign import sources and combines stock session stats with a separate usage-history request.
+src/main/local/session-extras.ts	mixed	sidecar.guiBridge forwards copy targets and last link. Import validation, source_unavailable mapping and merging stock's stats and bridge history have no independent I/O (§1.3b). The live session owns the importers, local:// root and completion registry.
 src/main/local/session-files.test.ts	exception	Renames synthetic sessions through the core with a stand-in stock CLI; checks argv, stdin, matched replies, missing files and the single restore retry.
 src/main/local/session-files.ts	native-client	omp.renameStoredSession checks the file and runs stock's fixed offline rename RPC in the temp directory; main supplies only the resolved launcher and environment.
 src/main/local/sessions.test.ts	exception	Tests paged transcript reads, stale snapshot cursors and retries when a live tail changes.
-src/main/local/sessions.ts	port	Encodes snapshot-bound transcript cursors, caches tails, shrinks oversized backward pages and retries stale uncursored tail reads.
+src/main/local/sessions.ts	port	Hub batch with sidecar: BridgeRelay fences each stock replay by tab, seq, generation and spawnId. Cursors, shrinking and retry belong with that transaction; the per-bridge tail cache returns the same page object for the same version, limit and image form (§1.3a,c). Stock owns replay and session mutations (§1.3d).
 src/main/local/settings.test.ts	exception	Tests model catalog availability without optional metadata and merging stock and bridge account data.
 src/main/local/settings.ts	mixed	Rust sidecar.guiBridge forwards schema, role metadata, setup facts, spend and recent models. TS merges logout accounts and usage data, routes parameterized settings and cancels browser login via a timed loopback callback.
 src/main/local/slash.ts	port	Caches builtin slash names and aliases per bridge and rejects a command not offered by the running stock version.
