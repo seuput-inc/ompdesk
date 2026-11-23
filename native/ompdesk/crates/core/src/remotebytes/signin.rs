@@ -4,6 +4,8 @@
 //! computer's browser to this computer's loopback. While the host's `login` runs, this computer listens on that port
 //! on its own loopback, hands the browser's callback to main (`signIn` ask; main sends it over the link as
 //! `host.signIn.callback`) and gives the browser the page the host's omp answered.
+//! On the host, `signInReplay` sends that query only to stock's advertised loopback callback. Main keeps the tab's
+//! one-use path and state checks.
 //!
 //! Guards: loopback only (both families for `localhost`, as stock binds them), the callback's exact path, the flow's
 //! `state`, a loopback Host header (no DNS rebinding), one use, and an end with the sign-in, at Cancel or after
@@ -14,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{CONNECTION, CONTENT_TYPE, HeaderValue};
 use hyper::server::conn::http1;
@@ -28,6 +30,117 @@ use tokio::sync::watch;
 
 use super::ask;
 use crate::server::{Call, Events, Fault, PushCall, Reply};
+
+const PAGE_UNITS: usize = 64 * 1024;
+
+#[derive(Deserialize)]
+struct ReplayParams {
+    url: String,
+    query: String,
+}
+
+fn unavailable() -> Fault {
+    Fault::new(
+        "sign_in_unavailable",
+        "The sign-in's callback server did not answer",
+    )
+}
+
+fn replay_url(params: &ReplayParams) -> Result<url::Url, Fault> {
+    // WHATWG Fetch's bad ports are refused even on loopback. Stock's callback uses a high port.
+    const BAD_PORTS: &[u16] = &[
+        1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101,
+        102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389,
+        427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636,
+        989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665,
+        6666, 6667, 6668, 6669, 6679, 6697, 10080,
+    ];
+    let mut url = url::Url::parse(&params.url).map_err(|_| unavailable())?;
+    if BAD_PORTS
+        .binary_search(&url.port().ok_or_else(unavailable)?)
+        .is_ok()
+    {
+        return Err(unavailable());
+    }
+    let query = params.query.as_str();
+    url.set_query((!query.is_empty()).then(|| query.strip_prefix('?').unwrap_or(query)));
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn page_type(headers: &hyper::HeaderMap) -> String {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    let first = values.next().map_or(&[][..], HeaderValue::as_bytes);
+    let allowed = [b"text/html".as_slice(), b"text/plain"]
+        .iter()
+        .any(|prefix| {
+            first
+                .get(..prefix.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
+                && !first
+                    .get(prefix.len())
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        });
+    if !allowed {
+        return "text/plain; charset=utf-8".into();
+    }
+    first
+        .iter()
+        .chain(values.flat_map(|v| b", ".iter().chain(v.as_bytes())))
+        .take(200)
+        .copied()
+        .map(char::from)
+        .collect()
+}
+
+async fn replay_page(params: &ReplayParams) -> Result<Reply, Fault> {
+    let response = crate::http::loopback_get_once(&replay_url(params)?)
+        .await
+        .map_err(|_| unavailable())?;
+    let status = response.status().as_u16();
+    let head =
+        Reply::json(&json!({"status": status, "contentType": page_type(response.headers())}))?;
+    if matches!(status, 204 | 205 | 304) {
+        return Ok(head.with_bin(Vec::new()));
+    }
+    // Stock sends its template as identity. Never display compressed bytes if another responder ignores our request.
+    if response
+        .headers()
+        .get_all("content-encoding")
+        .iter()
+        .any(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"))
+    {
+        return Err(Fault::new(
+            "sign_in_unavailable",
+            "Unsupported sign-in callback content encoding",
+        ));
+    }
+    let mut body = response.into_body();
+    let mut prefix = Vec::new();
+    while let Some(frame) = body.frame().await {
+        if let Ok(data) = frame.map_err(|_| unavailable())?.into_data() {
+            // Three UTF-8 bytes per UTF-16 unit, plus a BOM. Drain the rest: a late read error still fails the replay.
+            let keep = data.len().min(3 * PAGE_UNITS + 3 - prefix.len());
+            prefix.extend_from_slice(&data[..keep]);
+        }
+    }
+    let text = String::from_utf8_lossy(prefix.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&prefix));
+    let mut units = Vec::with_capacity(2 * text.len().min(PAGE_UNITS));
+    for unit in text.encode_utf16().take(PAGE_UNITS) {
+        units.extend_from_slice(&unit.to_le_bytes());
+    }
+    Ok(head.with_bin(units))
+}
+
+pub(super) async fn replay(call: Call) -> Result<Reply, Fault> {
+    let params: ReplayParams = call.params().map_err(|_| unavailable())?;
+    tokio::select! {
+        biased;
+        () = call.scope.on_cancel() => Err(Fault::cancelled()),
+        () = crate::clock::sleep(Duration::from_secs(10)) => Err(unavailable()),
+        page = replay_page(&params) => page,
+    }
+}
 
 struct Relay {
     id: u64,
@@ -321,6 +434,50 @@ async fn handle(relay: &Relay, request: Request<Incoming>) -> Response<Full<Byte
                 Some("text/html; charset=utf-8"),
                 failure_page(&words.title, &words.message),
             )
+        }
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_stock_loopback_origins_can_be_dialed() {
+        for input in [
+            "https://localhost:43210/cb",
+            "http://localhost/cb",
+            "http://localhost.:43210/cb",
+            "http://127.0.0.2:43210/cb",
+            "http://[::ffff:127.0.0.1]:43210/cb",
+            "http://fixture@127.0.0.1:43210/cb",
+        ] {
+            let url = url::Url::parse(input).unwrap();
+            assert_eq!(
+                crate::http::loopback_get_once(&url).await.err(),
+                Some(crate::http::Failure::Request),
+                "{input}"
+            );
+        }
+        let params = ReplayParams {
+            url: "http://localhost:6000/cb".into(),
+            query: String::new(),
+        };
+        assert_eq!(replay_url(&params).unwrap_err(), unavailable());
+    }
+
+    #[test]
+    fn only_html_and_plain_types_on_a_word_boundary_pass() {
+        for (raw, expected) in [
+            ("TEXT/PLAIN;charset=UTF-8", "TEXT/PLAIN;charset=UTF-8"),
+            ("text/html-fixture", "text/html-fixture"),
+            ("text/html_x", "text/plain; charset=utf-8"),
+            ("text/html2", "text/plain; charset=utf-8"),
+            ("application/xhtml+xml", "text/plain; charset=utf-8"),
+        ] {
+            let mut headers = hyper::HeaderMap::new();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(raw));
+            assert_eq!(page_type(&headers), expected);
         }
     }
 }

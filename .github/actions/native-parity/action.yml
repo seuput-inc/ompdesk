@@ -122,6 +122,7 @@ runs:
         src/main/remote/transcript-cache.test.ts
         src/main/remote/image-blob-cache.test.ts
         src/main/remote/sign-in-relay.test.ts
+        src/main/sign-in-callback.test.ts
         src/main/remote/link-traffic-images.test.ts
         src/main/remote/link-events-core.test.ts
         src/main/remote/link-traffic-report.test.ts

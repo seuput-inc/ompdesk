@@ -317,6 +317,31 @@ pub async fn status_once(request: Request<'_>) -> Result<u16, Failure> {
     Ok(response.status().as_u16())
 }
 
+/// A single GET to stock's callback server. Preserve the advertised Host, but never consult DNS or follow Location.
+pub(crate) async fn loopback_get_once(url: &Url) -> Result<hyper::Response<Incoming>, Failure> {
+    let port = url.port().ok_or(Failure::Request)?;
+    if url.scheme() != "http" {
+        return Err(Failure::Request);
+    }
+    let v4 = SocketAddr::from(([127, 0, 0, 1], port));
+    let v6 = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+    let both = [v4, v6];
+    let addresses = match url.host_str() {
+        Some("127.0.0.1") => std::slice::from_ref(&v4),
+        Some("[::1]") => std::slice::from_ref(&v6),
+        Some("localhost") => &both,
+        _ => return Err(Failure::Request),
+    };
+    exchange_at(
+        url,
+        &[("accept", "*/*"), ("accept-encoding", "identity")],
+        None,
+        machine_tls,
+        Some(addresses),
+    )
+    .await
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::sync::Mutex;

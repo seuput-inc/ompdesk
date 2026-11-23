@@ -439,7 +439,8 @@ src/main/sidecar-run-state.ts	port	3	applyRunEvent/trackRunEvent reduce stock ev
 src/main/sidecar-types.ts	port	3	SidecarLike and VIEW_ENDED_EVENT define the local/remote tab handle and event vocabulary; migrate consumers, not a separate process implementation.
 src/main/sidecar.test.ts	tooling	-	Vitest suite: SidecarManager.
 src/main/sidecar.ts	mixed	3	SidecarManager uses sidecar.open/start/restart/dispose/barrier in core/src/sidecar/mod.rs for child and wire lifecycle; TS still resolves spawn inputs, routes frames, dispatches GUI commands and pushes settings.
-src/main/sign-in-callback.ts	port	1	loopbackCallback validates redirect host and port; replaySignInCallback forwards a callback query and bounds the returned page.
+src/main/sign-in-callback.test.ts	tooling	-	Replays a synthetic loopback callback through the core; no provider or credentials.
+src/main/sign-in-callback.ts	mixed	1	remotebytes.signInReplay fetches the host callback and bounds the page. Host open_url, the device relay and local cancellation still use loopbackCallback synchronously; move the parser with those callers (§1.3a,d).
 src/main/slow-steps.test.ts	tooling	-	Vitest suite: slow steps.
 src/main/slow-steps.ts	port	2	SlowSteps measures slow IPC and hub calls and rate-limits repeated diagnostics.
 src/main/snowflake-stock.test.ts	tooling	-	Vitest suite: mints stock's ids, including clocks before the epoch and past the 42-bit field.
