@@ -90,24 +90,24 @@ describe("omp version parsing", () => {
 });
 
 describe("parseUpdateCheck", () => {
-	it("reads the installed version when already up to date", () => {
-		expect(parseUpdateCheck("Current version: 18.6.1\n✔ Already up to date\n")).toEqual({
+	it("reads the installed version when already up to date", async () => {
+		await expect(parseUpdateCheck("Current version: 18.6.1\n✔ Already up to date\n")).resolves.toEqual({
 			currentVersion: "18.6.1",
 			latestVersion: "18.6.1",
 		});
 	});
 
-	it("reads the newer release on a pending update", () => {
-		expect(
+	it("reads the newer release on a pending update", async () => {
+		await expect(
 			parseUpdateCheck(
 				"Current version: 18.6.1\r\nCurrent channel: canary\r\nNew version available: 18.7.0-canary.3\r\n",
 			),
-		).toEqual({ currentVersion: "18.6.1", latestVersion: "18.7.0-canary.3" });
+		).resolves.toEqual({ currentVersion: "18.6.1", latestVersion: "18.7.0-canary.3" });
 	});
 
-	it("rejects output it cannot account for", () => {
-		expect(parseUpdateCheck("Failed to check for updates: offline")).toBeNull();
-		expect(parseUpdateCheck("Current version: 18.6.1\n")).toBeNull();
+	it("rejects output it cannot account for", async () => {
+		await expect(parseUpdateCheck("Failed to check for updates: offline")).resolves.toBeNull();
+		await expect(parseUpdateCheck("Current version: 18.6.1\n")).resolves.toBeNull();
 	});
 });
 

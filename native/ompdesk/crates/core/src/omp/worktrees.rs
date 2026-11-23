@@ -1,17 +1,12 @@
 //! Stock decides which agent worktrees are orphaned. The only mutating invocation is `worktree clear --json`.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use tokio::io::AsyncReadExt;
 
-use crate::fs::error::uv_code;
-use crate::fs::order::js_trim;
-use crate::run::{KILL_GRACE, terminate};
+use super::cli::{self, Launch, Output};
 use crate::server::{Call, Fault, Reply, Scope};
-use crate::sidecar::omp_command;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,9 +34,8 @@ impl Action {
 #[derive(Deserialize)]
 struct Params {
     action: Action,
-    bin: String,
-    env: BTreeMap<String, String>,
-    cwd: String,
+    #[serde(flatten)]
+    launch: Launch,
 }
 
 pub(super) async fn run(call: Call) -> Result<Reply, Fault> {
@@ -51,89 +45,28 @@ pub(super) async fn run(call: Call) -> Result<Reply, Fault> {
 }
 
 async fn execute(params: Params, scope: Scope, timeout: Duration) -> Result<Reply, Fault> {
-    let Params {
-        action,
-        bin,
-        env,
-        cwd,
-    } = params;
-    if scope.cancelled() {
-        return Err(Fault::cancelled());
-    }
-    let args = ["worktree", action.name(), "--json"];
-    #[cfg(windows)]
-    let shell = std::path::Path::new(&bin)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
-    #[cfg(not(windows))]
-    let shell = false;
-    let mut cmd = if shell {
-        let quoted = args.map(|arg| format!("\"{arg}\""));
-        omp_command(&format!("\"{bin}\""), &quoted, true, &cwd, &env)
-    } else {
-        omp_command(&bin, &args, false, &cwd, &env)
-    };
-    cmd.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
-    cmd.kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| Fault::new("spawn_failed", format!("spawn {bin} {}", uv_code(&e))))?;
-    drop(child.stdin.take());
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    let mut stderr = child.stderr.take().expect("piped stderr");
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    // Node waited for close, not just exit: a child of stock can still hold an output pipe.
-    let finished = async {
-        tokio::try_join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err))?;
-        child.wait().await
-    };
-    let fault = tokio::select! {
-        status = finished => match status {
-            Ok(status) => return report(action, status.code().unwrap_or(1), &out, &err),
-            Err(e) => Fault::new("io_error", e.to_string()),
-        },
-        () = scope.on_cancel() => Fault::cancelled(),
-        () = tokio::time::sleep(timeout) => Fault::new("omp_timeout", format!("omp worktree timed out after {}ms", timeout.as_millis())),
-    };
-    terminate(&mut child);
-    let cleanup = async move {
-        if tokio::time::timeout(KILL_GRACE, child.wait())
-            .await
-            .is_err()
-        {
-            let _ = child.kill().await;
-        }
-    };
-    if fault.code == "omp_timeout" {
-        // A shim may ignore TERM or leave a descendant holding a pipe. Neither delays the timeout reply.
-        tokio::spawn(cleanup);
-    } else {
-        cleanup.await;
-    }
-    Err(fault)
+    let action = params.action;
+    let output = cli::run(
+        &params.launch,
+        ["worktree", action.name(), "--json"],
+        scope,
+        timeout,
+    )
+    .await?;
+    report(action, &output)
 }
 
-fn report(action: Action, code: i32, stdout: &[u8], stderr: &[u8]) -> Result<Reply, Fault> {
-    if code == 0
-        && let Ok(data) = serde_json::from_str(&String::from_utf8_lossy(stdout))
+fn report(action: Action, output: &Output) -> Result<Reply, Fault> {
+    if output.code == 0
+        && let Ok(data) = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
         && let Some(result) = project(action, data)
     {
         return Reply::json(&result);
     }
-    let bytes = if stderr.is_empty() { stdout } else { stderr };
-    let text = String::from_utf8_lossy(bytes);
-    let detail = js_trim(&text);
-    let message = if detail.is_empty() {
-        format!("omp worktree {} exited with code {code}", action.name())
-    } else {
-        let start = detail.rmatch_indices('\n').nth(5).map_or(0, |(i, _)| i + 1);
-        detail[start..].replace("\r\n", "\n")
-    };
-    Err(Fault::new("worktree_cli_failed", message))
+    Err(output.failure(
+        "worktree_cli_failed",
+        format_args!("worktree {}", action.name()),
+    ))
 }
 
 fn project(action: Action, mut data: Value) -> Option<Value> {
@@ -244,9 +177,11 @@ mod tests {
         .unwrap();
         let params = Params {
             action: Action::List,
-            bin: "/bin/sh".into(),
-            env: BTreeMap::new(),
-            cwd: dir.to_string_lossy().into_owned(),
+            launch: Launch {
+                bin: "/bin/sh".into(),
+                env: Default::default(),
+                cwd: dir.to_string_lossy().into_owned(),
+            },
         };
         let result = tokio::time::timeout(
             Duration::from_secs(2),
@@ -290,9 +225,12 @@ mod tests {
                 "1\n2\n\n4\n5\n6",
             ),
         ] {
-            let fault = report(action, code, out.as_bytes(), err.as_bytes())
-                .err()
-                .unwrap();
+            let output = Output {
+                code,
+                stdout: out.as_bytes().to_vec(),
+                stderr: err.as_bytes().to_vec(),
+            };
+            let fault = report(action, &output).err().unwrap();
             assert_eq!(fault, Fault::new("worktree_cli_failed", message));
         }
     }

@@ -52,6 +52,8 @@ globs:
 
 ### Ledger
 
+- **Installed omp reports.** `omp.pluginDoctor` and `omp.checkUpdate` run fixed, read-only commands through the same CLI supervisor as `omp.worktrees`. Setup still runs its own supervised check and calls the same native `omp.parseUpdateCheck` parser. The doctor drops unknown statuses (including inherited object keys) and replaces unpaired surrogates with U+FFFD. Process start and timeout failures are core faults; invalid reports retain their prior command-specific refusals. Local misc, setup, runtime and worktree suites exercise these calls.
+
 - **Files panel content search.** `stock/search.rs` prepares the installed `pi-natives` grep options in the existing `stock.request` frame, preserving the pattern and glob's raw JSON strings. Main still rejects invalid panel requests before launching stock, including the exact V8 regular-expression error; the worker calls the installed search engine. `workspace-search.test.ts` covers the worker options and reply through the core, and `stock::search` covers unpaired UTF-16 surrogates on the wire.
 
 - **Parameterless GUI commands.** `sidecar.guiBridge` on the requesting spawn now translates eleven composer, session and settings actions to their live bridge method with absent params. Main selects the GUI route before raw stock RPC; the extension still reads its own live state. `sidecar/tests.rs` records the prior method and parameter shape for each, and `sidecar.test.ts` exercises normal versus direct-stock dispatch through the actual core.

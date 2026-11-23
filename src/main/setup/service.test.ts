@@ -1316,6 +1316,11 @@ ${script}`,
 			await expect(h.service.latestOmp()).resolves.toBe("18.8.7");
 		});
 
+		it("keeps setup's cleaned error detail when stock exits zero without an update verdict", async () => {
+			const { h } = await checkingOmp(`console.log("Current version: 18.8.7\\r\\n\\x1b[33m  no verdict  \\x1b[0m");`);
+			await expect(h.service.latestOmp()).rejects.toThrow("Current version: 18.8.7\nno verdict");
+		});
+
 		it("rejects with stock's own reason when the check fails, and while omp is missing", async () => {
 			const { h } = await checkingOmp(
 				`console.log("Current version: 18.8.7");

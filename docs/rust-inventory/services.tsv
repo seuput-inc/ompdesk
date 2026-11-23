@@ -203,7 +203,7 @@ src/main/local/index.ts	port	Rejects duplicate local commands, looks up local ha
 src/main/local/judge-assist.ts	port	Accepts only error or blank preview findings and treats judge bridge failures as unjudged or unavailable.
 src/main/local/mcp-live-changes.test.ts	exception	Tests which successful MCP operations propagate a server-specific or full reload to other sessions.
 src/main/local/misc.test.ts	exception	Tests filtering stock plugin doctor output and confirms that only the host, not a local handler, installs omp updates.
-src/main/local/misc.ts	port	Runs plugin doctor and update checks through the omp CLI, parses their output and turns invalid responses into local errors.
+src/main/local/misc.ts	mixed	omp.pluginDoctor and omp.checkUpdate execute and project stock reports. Main passes the resolved CLI launch and routes session-bound bridge calls; the security-validation follow-up still goes to the live session.
 src/main/local/modes.ts	port	Distinguishes goal creation, replacement, resumption and dropping, applies time limits and starts objective turns when idle.
 src/main/local/next-prompt.test.ts	exception	Tests bridge routing, invalid draft flags and handling of suggestion and inline completion commands.
 src/main/local/next-prompt.ts	port	Enforces child-count, title, draft and request-ID limits and admissible refresh and cancel values before calling stock suggestion methods.
@@ -276,7 +276,7 @@ src/main/setup/plans.ts	port	Selects installers by tool, platform and presence, 
 src/main/setup/runner.test.ts	exception	Tests streamed output and the outcomes for success, nonzero exit and spawn failure.
 src/main/setup/runner.ts	port	Enforces one installer at a time, drains output after exit, distinguishes spawn and exit failures and closes stdin to cancel.
 src/main/setup/service.test.ts	exception	Checks launch-time install order and preservation or restoration of the prior compiled omp launcher.
-src/main/setup/service.ts	port	Queues required and optional installations, enforces retry backoff, executes plans, refreshes detection and handles cancellation and update outcomes.
+src/main/setup/service.ts	port	Queues installations, retry backoff, plan execution, detection and cancellation. latestOmp retains setup's runner and cleanup on failure; omp.parseUpdateCheck supplies the same native parser as the local update command.
 src/main/setup/supervisor.ts	port	Builds isolated launches and log redirection, including the Windows Bun launcher and command-line quoting, before starting ompdesk-core --supervise.
 src/main/setup/test-mirror.ts	exception	Starts and stops controlled HTTP mirrors for installer release and download tests.
 src/main/ssh/client.ts	port	Starts native ssh.* operations but buffers early events, keeps prompts and reports dropped runs when the core restarts.
