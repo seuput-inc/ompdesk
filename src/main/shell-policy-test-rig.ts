@@ -9,6 +9,8 @@ const cwd = resolve("native/ompdesk/crates/tauri-shell/tests/policy");
 let binary: Promise<string> | undefined;
 
 async function build(): Promise<string> {
+	const staged = process.env.OMPDESK_TEST_SHELL_POLICY;
+	if (staged) return staged;
 	const cargo = cargoPath(cwd);
 	if (!cargo) throw new Error("Cargo is required for shell policy parity");
 	const { stdout } = await promisify(execFile)(cargo, ["build", "--locked", "--message-format=json"], {
