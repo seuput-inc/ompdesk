@@ -126,7 +126,7 @@ Greet(p) ==
     /\ UNCHANGED <<edit, conn, live, handoff, store, deciding, released, edits, bad, late, refused>>
 
 \* The socket ends (closed, timed out, retired, revoked): detach, onConnectionEnded, forget, in one synchronous run.
-\* @code native/ompdesk/crates/core/src/web/router.rs:825-862 finish -> web.conns end; src/main/web/ws-router.ts:383-394 connections -> onConnectionEnded; src/main/index.ts:2297 forget
+\* @code native/ompdesk/crates/core/src/web/router.rs:847-884 finish -> web.conns end; src/main/web/ws-router.ts:435-445 connections -> onConnectionEnded; src/main/index.ts:2660 forget
 Drop(c) ==
     /\ c \in live
     /\ live' = live \ {c}
@@ -134,7 +134,7 @@ Drop(c) ==
     /\ UNCHANGED <<edit, conn, greeted, q, handoff, deciding, released, edits, bad, late, refused>>
 
 \* A report frame reaches main: an ended connection refuses it; a live one hands it to the handler in the same run.
-\* @code native/ompdesk/crates/core/src/web/router.rs:1009-1018 receive (closed -> ignored); native/ompdesk/crates/core/src/web/router.rs:1140-1222 dispatch -> web.call; src/main/web/ws-router.ts:414-434 call -> #dispatch; ws-router.ts:476 registry.invoke; src/main/ipc.ts:1693-1697 FILE_EDIT_REPORT
+\* @code native/ompdesk/crates/core/src/web/router.rs:1031-1040 receive (closed -> ignored); native/ompdesk/crates/core/src/web/router.rs:1162-1243 dispatch -> web.call; src/main/web/ws-router.ts:469-488 call -> #dispatch; ws-router.ts:547 registry.invoke; src/main/ipc.ts:1780-1784 FILE_EDIT_REPORT
 Deliver(c) ==
     /\ q[c] # <<>>
     /\ q' = [q EXCEPT ![c] = Tail(@)]
@@ -168,7 +168,7 @@ CloseDecide(t) ==
 \* The release lands after awaits (host.release, closeWindowTab's refreshExitPolicy); reports may arrive meanwhile.
 \* Right after the await, with no await before the release, the one rule decides again on what the store says now.
 \* @code src/main/tab-release.ts:38-41 refreshExitPolicy, stillClosable, closeTabTerminals, releaseTab
-\* @code src/main/agent-control/host.ts:1119-1126 release: the re-check reads the store's word then (`edits(...) !== "dirty"`)
+\* @code src/main/agent-control/host.ts:1212-1219 release: the re-check reads the store's word then (`edits(...) !== "dirty"`)
 CloseRelease(t) ==
     /\ t \in deciding
     /\ deciding' = deciding \ {t}

@@ -66,7 +66,7 @@ Init ==
 \* The hub's bridge holds a report once per id (`hasMailEntry`); a replay with a new id is a new message.
 Deliver(r) == hub' = [hub EXCEPT ![r] = IF StableIds /\ @ >= 1 THEN @ ELSE @ + 1]
 
-\* @code src/main/remote/host-services.ts:2513-2519 omp's host_tool_call enters hostCalls, marked delivered if a connection is held
+\* @code src/main/remote/host-services.ts:2520-2525 omp's host_tool_call enters hostCalls, marked delivered if a connection is held
 Call(c) ==
     /\ pending[c] = "new"
     /\ pending' = [pending EXCEPT ![c] = "waiting"]
@@ -86,13 +86,13 @@ Wake ==
     /\ link' = "up"
     /\ UNCHANGED <<pending, delivered, inflight, replies, aJournal, runs, kept, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts:1860-1864 B notices: the tab's connection is gone
+\* @code src/main/remote/host-services.ts:1864-1867 B notices: the tab's connection is gone
 Detect ==
     /\ link = "dead"
     /\ link' = "down"
     /\ UNCHANGED <<pending, delivered, inflight, replies, aJournal, runs, kept, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts:2079-2089 A's tab.open re-attaches: waiting calls go again (resent when handed before), then the kept reports
+\* @code src/main/remote/host-services.ts:2083-2092 A's tab.open re-attaches: waiting calls go again (resent when handed before), then the kept reports
 Reattach ==
     /\ link = "down" /\ AReturns
     /\ LET again == {c \in Calls : pending[c] = "waiting" /\ (~delivered[c] \/ ResendDelivered)}
@@ -124,7 +124,7 @@ ARun(m) ==
             /\ UNCHANGED hub
     /\ UNCHANGED <<link, pending, delivered, kept, toldKept, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts:1204-1213 A's host_tool_result: the omp gets its answer; a replay's answer commits a scoped settlement
+\* @code src/main/remote/host-services.ts:1198-1219 A's host_tool_result: the omp gets its answer; a replay's answer commits a scoped settlement
 BReply(m) ==
     /\ link = "up" /\ m \in replies
     /\ replies' = replies \ {m}
@@ -135,7 +135,7 @@ BReply(m) ==
             /\ UNCHANGED pending
     /\ UNCHANGED <<link, delivered, inflight, aJournal, runs, toldKept, hub, sleeps, crashes>>
 
-\* @code src/main/remote/host-services.ts:1921-1930 A away past the notice: B takes only a call no connection was handed
+\* @code src/main/remote/host-services.ts:1925-1934 A away past the notice: B takes only a call no connection was handed
 \* @code native/ompdesk/crates/core/src/remote/kept_calls.rs:91-119 a successful keep commits the outbox before B tells the session
 TakeOver(c) ==
     /\ UseTakeover /\ link = "down" /\ pending[c] = "waiting"
