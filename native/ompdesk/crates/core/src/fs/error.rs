@@ -131,6 +131,7 @@ fn uv_name(errno: i32) -> Option<&'static str> {
         (libc::EBADF, "EBADF"),
         (libc::EBUSY, "EBUSY"),
         (libc::ECANCELED, "ECANCELED"),
+        (libc::EDQUOT, "EDQUOT"),
         (libc::EEXIST, "EEXIST"),
         (libc::EFAULT, "EFAULT"),
         (libc::EFBIG, "EFBIG"),
@@ -194,6 +195,7 @@ fn uv_name(code: i32) -> Option<&'static str> {
         87 | 122 | 1464 => "EINVAL", // bad parameter, buffer, symlink not supported
         112 => "ENOSPC",     // ERROR_DISK_FULL
         121 => "ETIMEDOUT",  // ERROR_SEM_TIMEOUT
+        1295 => "EDQUOT",    // ERROR_DISK_QUOTA_EXCEEDED, not the process's memory quota
         145 => "ENOTEMPTY",  // ERROR_DIR_NOT_EMPTY
         206 => "ENAMETOOLONG", // ERROR_FILENAME_EXCED_RANGE
         208 => "E2BIG",      // ERROR_META_EXPANSION_TOO_LONG
@@ -213,6 +215,7 @@ fn describe(name: &str) -> &'static str {
         "EBUSY" => "resource busy or locked",
         "ECANCELED" => "operation canceled",
         "ECHARSET" => "invalid Unicode character",
+        "EDQUOT" => "disk quota exceeded",
         "EEXIST" => "file already exists",
         "EFAULT" => "bad address in system call argument",
         "EFBIG" => "file too large",
@@ -288,7 +291,7 @@ mod tests {
             .code,
             IO
         );
-        let unmapped = io::Error::from_raw_os_error(libc::EDQUOT);
+        let unmapped = io::Error::from_raw_os_error(i32::MAX);
         assert_eq!(
             NodeError::new(&unmapped, "open", Some("/q")).message,
             "UNKNOWN: unknown error, open '/q'"
