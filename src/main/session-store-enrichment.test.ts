@@ -87,6 +87,22 @@ it.skipIf(!ompPackageRoot(INSTALLED_OMP))("lists the newest date Bun accepts in 
 	expect(await store.list()).toMatchObject([{ id: "undated", modified: mtime.toISOString() }]);
 });
 
+it.skipIf(!ompPackageRoot(INSTALLED_OMP))("returns references only on a compact stored transcript read", async () => {
+	const store = new StockSessionStore(root, path.resolve("resources/gui-bridge"), index);
+	const timestamp = "2026-11-01T00:00:00Z";
+	const data = "a".repeat(1024);
+	const ref = "blob:sha256:2886dc386b60485cd75eaf1c5459452c76ea567fe6097097f753868f75e93dce";
+	const message = { role: "user", content: [{ type: "image", mimeType: "image/png", data }], timestamp: 1 };
+	const lines = [
+		{ type: "session", version: 3, id: "stored", cwd: dir, timestamp },
+		{ type: "message", id: "first", parentId: null, timestamp, message },
+	];
+	await fs.writeFile(file, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+	expect(await store.messages(file, true)).toMatchObject([{ content: [{ data: ref }] }]);
+	expect(await store.messages(file)).toMatchObject([message]);
+	await expect(store.messages(path.join(dir, "outside.jsonl"), true)).rejects.toThrow("Invalid session path");
+});
+
 it("forgets absent rows only on a full list and never reads outside its root", async () => {
 	const message = (at: number) => JSON.stringify({ type: "message", message: { timestamp: at } });
 	const row = { path: file, id: "a", modified: "fixed", size: Buffer.byteLength(message(1)) };

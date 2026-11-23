@@ -7,8 +7,8 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { withImageRefs } from "../../../resources/gui-bridge/stock-helper/sessions";
 import type { AgentMessage } from "../../shared/rpc-types";
-import { withImageRefs } from "./image-blobs";
 import { localHandlerFor } from "./index";
 import type { BridgeClient, LocalCommandContext } from "./types";
 

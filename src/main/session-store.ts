@@ -80,8 +80,12 @@ export class StockSessionStore {
 	}
 
 	/** A stored session's transcript (stock `loadSessionMessagesReadOnly` in the helper). */
-	async messages(sessionPath: string): Promise<AgentMessage[]> {
-		const result = await stockHelperRequest("sessions.messages", { sessionsRoot: this.#sessionsRoot, sessionPath });
+	async messages(sessionPath: string, imageRefs?: boolean): Promise<AgentMessage[]> {
+		const result = await stockHelperRequest("sessions.messages", {
+			sessionsRoot: this.#sessionsRoot,
+			sessionPath,
+			imageRefs,
+		});
 		return Array.isArray(result) ? (result as AgentMessage[]) : [];
 	}
 

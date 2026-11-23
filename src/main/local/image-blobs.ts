@@ -11,24 +11,14 @@
  * shows that image as unavailable. A paired device asks for the references
  * instead (`imageRefs`) and reads each blob once (remote/image-blob-cache.ts).
  */
-import { createHash } from "node:crypto";
+import { isImagePosition } from "../../../resources/gui-bridge/stock-helper/image-payloads";
 import type { BridgeClient } from "./types";
 
-export const BLOB_REF_PREFIX = "blob:sha256:";
 const BLOB_REF = /^blob:sha256:[a-f0-9]{64}$/;
 
 /** One place in a transcript whose `data` holds stock's blob reference for an image's bytes. */
 export interface ImagePayload {
 	data: string;
-}
-
-/** Stock's externalized positions: a `content` image block or an `images[]` entry. */
-function isImagePosition(record: Record<string, unknown>, key: string | undefined): boolean {
-	if (key === "content") return record.type === "image";
-	return (
-		key === "images" &&
-		(record.type === "image" || (typeof record.mimeType === "string" && record.mimeType.startsWith("image/")))
-	);
 }
 
 function collectBlobRefs(value: unknown, sites: ImagePayload[], key?: string): void {
@@ -72,60 +62,4 @@ export async function resolveImageBlobs(messages: unknown, bridge: BridgeClient)
 		}
 		if (data !== null) site.data = data;
 	}
-}
-
-/** Stock's `BLOB_EXTERNALIZE_THRESHOLD` (session-persistence.ts): shorter base64 never left the journal. */
-const INLINE_BELOW = 1024;
-
-/**
- * `messages` with every picture's bytes replaced by the reference stock minted for them (the SHA-256 of the bytes:
- * blob-store.ts `put`), on copies, the originals untouched. A stored session a paired device's agent reads
- * (`sessions.messages`, `ompdesk_session_read`) comes from stock's loader with its pictures inline; the agent renders
- * text only (agent-control `contentText`), and one session's sixteen pictures made the answer 18.4 MB, past the
- * link's 16 MiB frame (4 Nov 2026). The address is the store's, so a reader that needs the bytes can still ask
- * `read_image_blob` for them.
- */
-export function withImageRefs<T>(value: T): T {
-	return mapImagePayloads(value, (record, data) => {
-		if (BLOB_REF.test(data) || data.length < INLINE_BELOW) return null;
-		const hash = createHash("sha256").update(Buffer.from(data, "base64")).digest("hex");
-		return { ...record, data: `${BLOB_REF_PREFIX}${hash}` };
-	});
-}
-
-/**
- * `value` with every picture payload (stock's positions, `isImagePosition`) that `swap` answers a record for replaced
- * by that record, on copies and the originals untouched; `value` itself when nothing was swapped (`swap` answers null
- * to keep a payload). A record `skip` names is left whole with everything under it.
- */
-export function mapImagePayloads<T>(
-	value: T,
-	swap: (record: Record<string, unknown>, data: string) => Record<string, unknown> | null,
-	skip?: (record: Record<string, unknown>) => boolean,
-	key?: string,
-): T {
-	if (Array.isArray(value)) {
-		let copy: unknown[] | null = null;
-		value.forEach((item, index) => {
-			const replaced = mapImagePayloads(item, swap, skip, key);
-			if (replaced === item) return;
-			copy ??= [...value];
-			copy[index] = replaced;
-		});
-		return (copy ?? value) as T;
-	}
-	if (typeof value !== "object" || value === null) return value;
-	const record = value as Record<string, unknown>;
-	if (skip?.(record)) return value;
-	if (typeof record.data === "string" && isImagePosition(record, key)) {
-		return (swap(record, record.data) ?? value) as T;
-	}
-	let copy: Record<string, unknown> | null = null;
-	for (const [childKey, child] of Object.entries(record)) {
-		const replaced = mapImagePayloads(child, swap, skip, childKey);
-		if (replaced === child) continue;
-		copy ??= { ...record };
-		copy[childKey] = replaced;
-	}
-	return (copy ?? value) as T;
 }

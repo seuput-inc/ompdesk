@@ -3,7 +3,7 @@
  * A native lift needs that reply to carry bounded transcript pieces on the same ordered send, not one JSON string.
  * The core registers the tab on the ordered byte push and drops its pictures when the device no longer lists it.
  */
-import { mapImagePayloads } from "../local/image-blobs";
+import { mapImagePayloads } from "../../../resources/gui-bridge/stock-helper/image-payloads";
 import type { BlobStore } from "./blobs";
 
 /** Base64 characters of a picture from which it goes behind a blob (about 190 KB of image). */
