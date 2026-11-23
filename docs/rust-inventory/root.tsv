@@ -281,9 +281,9 @@ src/main/launch-profile-store.ts	port	2	§1.3(a,c), shell batch: local IPC and r
 src/main/legacy-user-data.test.ts	tooling	-	Runs the Tauri host on an isolated profile; shell-batch-checks tauri-native supplies the executable on macOS and Windows.
 src/main/line-budget.ts	port	1	LineBudget.take enforces an hourly allowance and counts suppressed lines for the next admitted report.
 src/main/local-engines-core.test.ts	tooling	-	Vitest suite: engineAction.
-src/main/local-engines-core.ts	port	1	engineAction maps one local engine's availability and provider facts to the action its detector should take.
+src/main/local-engines-core.ts	port	1	§1.3a,b,c: the detector checks the current enabled bit, ownership and deletion ledger immediately before applying an action. Move this pure rule with that ledger and the models.yml writer, not via a second RPC after the probe (shell models editor).
 src/main/local-engines.test.ts	tooling	-	Vitest suite: localEngineSettings.
-src/main/local-engines.ts	port	2	LocalEngineDetector probes loopback inference endpoints on an interval and maintains detected provider entries via the models.yml writer.
+src/main/local-engines.ts	mixed	2	models.probeLocalEngine checks an HTTP loopback model list. The shell models editor retains its same-tick ownership ledger and shared models.yml write queue. An inconclusive probe does not unregister an existing provider.
 src/main/log-watcher.test.ts	tooling	-	Vitest suite: opening logs later replays complete lines once, including split appends.
 src/main/log-watcher.ts	port	2	LogWatcher watches the log directory, tails changed files, maintains a bounded buffer and publishes batches to subscribers.
 src/main/mac-permissions.test.ts	tooling	-	Vitest suite: MacPermissions.status.

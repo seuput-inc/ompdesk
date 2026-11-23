@@ -23,6 +23,7 @@
 //! a failed probe tells that port `warn` with the detail and caches `fallback`.
 
 mod boot;
+mod engines;
 mod stream;
 
 use std::collections::{BTreeMap, HashMap};
@@ -50,6 +51,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 pub fn register(registry: &mut Registry) {
     registry.add("models.bootSelector", boot::handle);
+    registry.add("models.probeLocalEngine", engines::handle);
     registry.add("models.setupRun", |call| {
         Box::pin(async move { setup_run(&call) })
     });

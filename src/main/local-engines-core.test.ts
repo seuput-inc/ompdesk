@@ -31,6 +31,12 @@ describe("engineAction", () => {
 		expect(engineAction(facts({ present: true, registered: true, up: true }))).toBe("none");
 	});
 
+	it("keeps an owned provider on an inconclusive probe but still records a person's deletion", () => {
+		expect(engineAction(facts({ up: null, registered: true, present: true }))).toBe("none");
+		expect(engineAction(facts({ up: null, registered: true }))).toBe("tombstone");
+		expect(engineAction(facts({ up: null }))).toBe("none");
+	});
+
 	it("never touches an entry of the same id the person made", () => {
 		for (const up of [true, false]) {
 			for (const removed of [true, false]) {
