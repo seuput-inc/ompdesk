@@ -25,6 +25,9 @@ mod text;
 mod version;
 mod whois;
 
+pub(crate) use text::version_in;
+pub(crate) use version::compare as compare_versions;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
