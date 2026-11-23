@@ -4,7 +4,7 @@
  * browsers in their standard install places, each with whether the omp Browser Relay extension is loaded in one of
  * its profiles (stock's `omp browser-relay install` writes it; Chrome forbids installing it for the user).
  *
- * The core owns executable discovery and its positive cache. Main supplies the login-shell PATH on a cache miss.
+ * The core owns the status snapshot and automatic choice. Main supplies the login-shell PATH and stock relay mode.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,6 @@ import {
 	CHROMIUM_BROWSER_NAMES,
 	CHROMIUM_RELAY_PORTS,
 	type ChromiumBrowserId,
-	type InstalledBrowser,
 } from "../shared/default-browser";
 import { compareVersions } from "../shared/version";
 import { core } from "./core/process";
@@ -24,13 +23,15 @@ import { spawnPath } from "./shell-env";
 
 let egoRequest: Promise<string | null> | null = null;
 
+async function egoSearch(home: string) {
+	return { pathEnv: await spawnPath(), home, cwd: process.cwd() };
+}
+
 async function lookupEgo(): Promise<string | null> {
 	const host = core();
 	const cached = (await host.call<string | null>("browsers.cachedEgo", {})).result;
 	if (cached !== null) return cached;
-	const pathEnv = await spawnPath();
-	const params = { pathEnv, home: homedir(), cwd: process.cwd() };
-	return (await host.call<string | null>("browsers.resolveEgo", params)).result;
+	return (await host.call<string | null>("browsers.resolveEgo", await egoSearch(homedir()))).result;
 }
 
 /** Concurrent callers share the same lookup. A miss or error leaves the next caller free to retry. */
@@ -39,10 +40,6 @@ export function resolveEgoBrowser(): Promise<string | null> {
 		egoRequest = null;
 	});
 	return egoRequest;
-}
-
-export async function egoBrowserInstalled(): Promise<boolean> {
-	return (await resolveEgoBrowser().catch(() => null)) !== null;
 }
 
 /** Where the machine keeps things; a test points these at a temp folder. */
@@ -82,29 +79,17 @@ export interface FoundBrowser {
 	extensionsUrl: string;
 }
 
-/** The browsers in `auto` order, as the page names them, each with its own relay port. */
-function named(ports: Record<ChromiumBrowserId, number> | null) {
-	return CHROMIUM_BROWSER_IDS.map(id => ({ id, name: CHROMIUM_BROWSER_NAMES[id], port: ports?.[id] }));
-}
+const browsers = CHROMIUM_BROWSER_IDS.map(id => ({
+	id,
+	name: CHROMIUM_BROWSER_NAMES[id],
+	port: CHROMIUM_RELAY_PORTS[id],
+}));
 
 /** The Chromium browsers installed in their standard places, in `auto` order. */
 export async function findChromiumBrowsers(places: BrowserPlaces = systemBrowserPlaces()): Promise<FoundBrowser[]> {
-	const params = { places, browsers: named(null) };
+	const params = { places, browsers };
 	return (await core().call<FoundBrowser[]>("browsers.find", params)).result;
 }
-
-/**
- * The installed Chromium browsers with the state of their own relay extension copy. A copy is connected when its
- * relay at `ports[id]` answers `/json/version` 200 within half a second (503 while it waits for the extension).
- */
-export async function detectChromiumBrowsers(
-	places: BrowserPlaces = systemBrowserPlaces(),
-	ports: Record<ChromiumBrowserId, number> | null = CHROMIUM_RELAY_PORTS,
-): Promise<InstalledBrowser[]> {
-	return (await core().call<InstalledBrowser[]>("browsers.status", { places, browsers: named(ports) })).result;
-}
-
-let cachedStatus: { nativeHostRelay: boolean; result: Promise<AgentBrowserStatus> } | null = null;
 
 function nativeHostRelay(version: string | undefined): boolean {
 	return !version || compareVersions(version, "19.1.0") !== -1;
@@ -114,12 +99,28 @@ function nativeHostRelay(version: string | undefined): boolean {
 const NATIVE_HOST_BROWSERS: readonly ChromiumBrowserId[] =
 	process.platform === "win32" ? ["chrome"] : ["chrome", "brave", "chromium"];
 
-async function probeStatus(nativeHostRelay: boolean): Promise<AgentBrowserStatus> {
-	const [egoInstalled, browsers] = await Promise.all([
-		egoBrowserInstalled(),
-		detectChromiumBrowsers(undefined, nativeHostRelay ? null : CHROMIUM_RELAY_PORTS),
-	]);
-	return { egoInstalled, browsers, ...(nativeHostRelay ? { nativeHostBrowsers: NATIVE_HOST_BROWSERS } : {}) };
+interface BrowserStatusRead {
+	status: AgentBrowserStatus;
+	changed: boolean;
+}
+
+async function readStatus(refresh: boolean): Promise<BrowserStatusRead> {
+	const omp = await systemOmp();
+	const native = nativeHostRelay(omp.ok ? omp.runtime.version : undefined);
+	const nativeHostBrowsers = native ? NATIVE_HOST_BROWSERS : undefined;
+	const host = core();
+	if (!refresh) {
+		const cached = (await host.call<BrowserStatusRead | null>("browsers.status", { nativeHostBrowsers })).result;
+		if (cached) return cached;
+	}
+	const places = systemBrowserPlaces();
+	const ego = await egoSearch(places.home).catch(() => null);
+	return (
+		await host.call<BrowserStatusRead>("browsers.status", {
+			nativeHostBrowsers,
+			probe: { places, browsers, ego, refresh },
+		})
+	).result;
 }
 
 /**
@@ -127,33 +128,12 @@ async function probeStatus(nativeHostRelay: boolean): Promise<AgentBrowserStatus
  * may install ego-browser or load the extension while the app runs.
  */
 export async function agentBrowserStatus(): Promise<AgentBrowserStatus> {
-	const omp = await systemOmp();
-	const native = nativeHostRelay(omp.ok ? omp.runtime.version : undefined);
-	if (cachedStatus?.nativeHostRelay !== native) {
-		const result = probeStatus(native);
-		cachedStatus = { nativeHostRelay: native, result };
-		void result.catch(() => {
-			if (cachedStatus?.result === result) cachedStatus = null;
-		});
-	}
-	return cachedStatus.result;
-}
-
-/** The answer without what changes by itself (a connection), which no session needs telling about. */
-function resolvedKey(status: AgentBrowserStatus): string {
-	return JSON.stringify([
-		status.nativeHostBrowsers,
-		status.egoInstalled,
-		status.browsers.map(browser => [browser.id, browser.relayInstalled]),
-	]);
+	return (await readStatus(false)).status;
 }
 
 /** Probe again; `changed` is whether what sessions are pointed at could differ from the answer held before. */
-export async function reprobeAgentBrowserStatus(): Promise<{ status: AgentBrowserStatus; changed: boolean }> {
-	const before = await cachedStatus?.result.catch(() => null);
-	cachedStatus = null;
-	const status = await agentBrowserStatus();
-	return { status, changed: !!before && resolvedKey(before) !== resolvedKey(status) };
+export function reprobeAgentBrowserStatus(): Promise<BrowserStatusRead> {
+	return readStatus(true);
 }
 
 /**
