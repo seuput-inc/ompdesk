@@ -223,7 +223,7 @@ Open(t, s) ==
 \* @code src/main/remote/host-services.ts:3119-3150 #closeTab removes the tab and calls listingChanged().
 \* @code native/ompdesk/crates/core/src/pool/windows.rs:331-347 Ctx::release_entry removes the tab and awaits release_detached.
 \* @code native/ompdesk/crates/core/src/pool/windows.rs:349-436 Ctx::release_detached calls unregister_session_file_of.
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1285-1292 Ctx::release_tab notifies the window after release_entry returns.
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1330-1337 Ctx::release_tab notifies the window after release_entry returns.
 Close(t) ==
     /\ ~Busy
     /\ (file[t] # NoS \/ t \in pendReg) /\ nChanges < MaxChanges
@@ -296,7 +296,7 @@ IdxCreate(s) ==
 \* @code src/main/session-index.ts:174-184 #onChanged handles a changed journal.
 \* @code src/main/session-index.ts:250-252 relist marks the shared list changed after a rename.
 \* @code src/main/remote/host-services.ts:3089-3101 renameSession awaits the rename, then calls sessionIndex.relist().
-\* @code src/main/ipc.ts:1631-1638 SESSIONS_RENAME marks the copy stale after the host answers.
+\* @code src/main/ipc.ts:1628-1635 SESSIONS_RENAME marks the copy stale after the host answers.
 IdxBump(s, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[s] < MaxJ /\ nIdx < MaxIdx /\ Free(by)
@@ -318,7 +318,7 @@ IdxDelete(s, by) ==
 \* A session moves to another folder: its old path is gone, a new path is listed.
 \* @code src/main/session-index.ts:350-363 moveSession awaits the move and calls #notifyChange.
 \* @code src/main/remote/host-services.ts:1397-1405 sessions.move moves the host's session.
-\* @code src/main/ipc.ts:1649-1658 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
+\* @code src/main/ipc.ts:1646-1655 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
 IdxMove(s, t, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[t] = Absent /\ nIdx < MaxIdx /\ Free(by)
@@ -449,7 +449,7 @@ HostReplyArrive(d, i) ==
 \* and the read's continuation): the read gives the copy it found.
 ReplyBehind(h, v) == h > 0 /\ v < h
 
-\* @code src/main/remote/host-session-list.ts:87-114 #read: the answer continues the read: an answer older than the held host version gives the copy; else it sets hostVersion; the finally branch asks for another read when a change named a later version
+\* @code src/main/remote/host-session-list.ts:87-115 #read: the answer continues the read: an answer older than the held host version gives the copy; else it sets hostVersion; the finally branch asks for another read when a change named a later version
 \* @code src/main/session-list-share.ts:77-90 #readOnce, #publish: the rows become the copy; a changed list goes to the windows as a delta
 \* @code src/main/session-list-share.ts:35-44 current() returns the copy to the window's ask
 HostReplyResume(d) ==
@@ -477,7 +477,7 @@ HostReplyResume(d) ==
 \* @code src/main/remote/client.ts:414-420 A close or offline state drops the link.
 \* @code src/main/remote/client.ts:428-435 #dropLink rejects each pending request.
 \* @code src/main/remote/devices.ts:979-994 The state handler returns when the link is not online.
-\* @code src/main/remote/host-session-list.ts:87-114 #read throws; its finally still runs
+\* @code src/main/remote/host-session-list.ts:87-115 #read throws; its finally still runs
 LinkDrop(d) ==
     /\ ~Busy
     /\ up[d] /\ nDrops < MaxDrops /\ Len(ip[d]) + 2 <= MaxCh
@@ -615,8 +615,8 @@ FeedRetry(d) ==
 
 \* A device's delete, rename or move: main answered after the host did, and marked the device computer's copy stale (a bare event goes to the windows) ...
 \* @code src/main/ipc.ts:550-558 deleteStoredSession calls hostSessionsStale after sessions.delete answers.
-\* @code src/main/ipc.ts:1631-1638 SESSIONS_RENAME calls hostSessionsStale after the rename.
-\* @code src/main/ipc.ts:1649-1658 SESSIONS_MOVE calls hostSessionsStale after the move.
+\* @code src/main/ipc.ts:1628-1635 SESSIONS_RENAME calls hostSessionsStale after the rename.
+\* @code src/main/ipc.ts:1646-1655 SESSIONS_MOVE calls hostSessionsStale after the move.
 \* @code src/main/remote/devices.ts:693-695 hostSessionsStale calls HostSessionList.stale().
 PostMain(d) ==
     /\ ~Busy
