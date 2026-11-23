@@ -17,6 +17,11 @@ runs:
         src/main/initial-cwd.test.ts
         src/main/open-path.test.ts
         src/main/hang-watchdog.test.ts
+        src/main/quit-log.test.ts
+        src/main/gpu-fallback*.test.ts
+        src/main/launch-guard.test.ts
+        src/main/app-icon.test.ts
+        src/main/external-url.test.ts
         src/main/agent-browsers.test.ts
         src/main/preview/visuals.test.ts
         src/main/repo-lock-fence.test.ts

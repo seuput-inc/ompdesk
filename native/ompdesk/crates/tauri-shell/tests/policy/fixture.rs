@@ -1,6 +1,3 @@
-#[allow(dead_code)]
-#[path = "../../../shell/src/shell_args.rs"]
-mod shell_args;
 #[path = "../../../shell/src/facts/app_icon.rs"]
 mod app_icon;
 #[path = "../../src/js_date.rs"]
@@ -11,6 +8,9 @@ mod launch_protection;
 mod log_tail;
 #[path = "../../src/watchdog/marker.rs"]
 mod marker;
+#[allow(dead_code)]
+#[path = "../../../shell/src/shell_args.rs"]
+mod shell_args;
 
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
@@ -23,7 +23,11 @@ fn main() -> io::Result<()> {
         let call: Value = serde_json::from_str(&line?)?;
         let params = &call["params"];
         let answer = match call["method"].as_str().unwrap() {
-            "page.allowsExternal" => Value::Bool(params["url"].as_str().is_some_and(shell_args::page_external_url)),
+            "page.allowsExternal" => Value::Bool(
+                params["url"]
+                    .as_str()
+                    .is_some_and(shell_args::page_external_url),
+            ),
             "appIcon" => app_icon::fact(
                 Path::new(params["resources"].as_str().unwrap()),
                 Path::new(params["rendererRoot"].as_str().unwrap()),
@@ -47,7 +51,10 @@ fn main() -> io::Result<()> {
                 launch = Some(state);
                 result
             }
-            "launch.event" => launch.as_mut().unwrap().apply(params["op"].as_str().unwrap(), &params["args"]),
+            "launch.event" => launch
+                .as_mut()
+                .unwrap()
+                .apply(params["op"].as_str().unwrap(), &params["args"]),
             method => panic!("unknown fixture method {method}"),
         };
         serde_json::to_writer(&mut out, &answer)?;

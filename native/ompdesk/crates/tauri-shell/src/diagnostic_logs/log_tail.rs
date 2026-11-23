@@ -149,7 +149,10 @@ mod tests {
         let own = "\n{\"pid\":300,\"source\":\"app-quit\"}\n";
         let last = "{\"pid\":200}\n";
         let log = format!("{old}{}{last}", own.repeat(398));
-        assert_eq!(read(&log).unwrap()["details"]["previousPid"].as_f64(), Some(200.0));
+        assert_eq!(
+            read(&log).unwrap()["details"]["previousPid"].as_f64(),
+            Some(200.0)
+        );
         assert!(read(&format!("{log}not-json\n")).is_none());
         assert!(read(&format!("{own}{last}")).is_none());
     }
@@ -163,16 +166,27 @@ mod tests {
         assert_eq!(report["details"]["previousPid"].as_f64(), Some(200.0));
         assert!(report["details"]["lastLineAt"].is_null());
         assert!(report["details"]["previousVersion"].is_null());
-        assert!(report["message"].as_str().unwrap().ends_with("an unknown time"));
+        assert!(
+            report["message"]
+                .as_str()
+                .unwrap()
+                .ends_with("an unknown time")
+        );
         assert!(read(&format!("{log}\n[]")).is_none());
     }
 
     #[test]
     fn only_a_boolean_end_field_marks_the_last_run_clean() {
         for details in [r#"{"end":"true"}"#, r#"[true]"#, "null"] {
-            assert!(read(&format!(r#"{{"pid":200,"source":"app-quit","details":{details}}}"#)).is_some());
+            assert!(
+                read(&format!(
+                    r#"{{"pid":200,"source":"app-quit","details":{details}}}"#
+                ))
+                .is_some()
+            );
         }
-        let cut_reason = r#"{"pid":200,"source":"app-quit","details":{"reason":"\ud83d","end":true}}"#;
+        let cut_reason =
+            r#"{"pid":200,"source":"app-quit","details":{"reason":"\ud83d","end":true}}"#;
         assert!(read(cut_reason).is_none());
     }
 }

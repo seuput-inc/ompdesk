@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyLaunchDecision, type LaunchDecision, type LaunchStart } from "./gpu-fallback";
-import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 import { writeRuntimeLog } from "./runtime-log";
+import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 
 const electron = vi.hoisted(() => ({
 	userData: "",
@@ -39,7 +39,8 @@ async function event(op: string, args: object = {}): Promise<void> {
 }
 
 const gpuEvents = {
-	handleGpuProcessGone: (details: typeof crash) => event("crash", { ...details, now: Date.now(), testLaunch: process.env.OMP_GUI_HEADLESS === "1" }),
+	handleGpuProcessGone: (details: typeof crash) =>
+		event("crash", { ...details, now: Date.now(), testLaunch: process.env.OMP_GUI_HEADLESS === "1" }),
 	confirmHardwareTrial: () => event("healthy"),
 };
 
@@ -50,8 +51,11 @@ async function keepsDying(gpu: typeof gpuEvents): Promise<void> {
 
 async function launch(): Promise<typeof gpuEvents> {
 	const result = await fixture.call<LaunchStart>("launch.start", {
-		profile: electron.userData, now: Date.now(), guard: true,
-		enableGpu: electron.switches.has("enable-gpu"), disableGpu: electron.switches.has("disable-gpu"),
+		profile: electron.userData,
+		now: Date.now(),
+		guard: true,
+		enableGpu: electron.switches.has("enable-gpu"),
+		disableGpu: electron.switches.has("disable-gpu"),
 	});
 	for (const log of result.logs) writeRuntimeLog(log);
 	if (result.software) electron.softwareCalls++;

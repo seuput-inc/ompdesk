@@ -259,8 +259,8 @@ src/main/gpu-fallback.ts	mixed	4	The shell owns markers, trial, cooldown and cra
 src/main/hang-watchdog.test.ts	tooling	-	Vitest consumes an actual marker through the Rust watchdog and checks both JSONL records.
 src/main/hang-watchdog.ts	mixed	4	The Tauri watchdog owns marker I/O and report formatting. The observed Node event loop must send its own heartbeat, synchronous markMainStep and lifecycle signals until index.ts and app-quit.ts move (§1.3c).
 src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
-src/main/i18n-text.ts	port	1	MAIN_TEXT holds the bilingual menu, dialog and failure-message table consumed by main.
-src/main/i18n.ts	port	1	getMainLanguage chooses the stored language or app locale; mainT interpolates MAIN_TEXT and ompFailureText maps runtime failures to messages.
+src/main/i18n-text.ts	port	1	mainT, notification-batch and web-push-notifier format messages directly from MAIN_TEXT. Move the catalog with its last formatter, not one RPC per label.
+src/main/i18n.ts	port	1	menu.createMenu and WindowManager.createWindow consume getMainLanguage, mainT and editLabels synchronously; move with menu, dialog and prefs ownership. Keep shared uiLanguageFromLocale and fillText.
 src/main/idle-release.test.ts	tooling	-	Vitest suite: memoryShort.
 src/main/idle-release.ts	port	3	IdleRelease tracks quiet time and uses the native snapshot’s idle facts to select a quiet tab to release under memory pressure; does not perform the release.
 src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup and session services; routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
@@ -463,7 +463,7 @@ src/main/subagent-frames.test.ts	tooling	-	Vitest suite: createSubagentFrameBatc
 src/main/subagent-frames.ts	port	1	slimSubagentFrame and createSubagentFrameBatcher shrink streaming frames and coalesce visible-tab IPC deliveries.
 src/main/supply-chain.test.ts	tooling	-	Vitest suite: supply chain.
 src/main/system-languages.test.ts	tooling	-	Vitest suite: system languages.
-src/main/system-languages.ts	port	4	acceptLanguages, seedSpellchecker and applyAcceptLanguages apply system language ordering and spellchecker policy through the Electron-compatible session API on the Tauri host.
+src/main/system-languages.ts	port	4	preview/host.sessionsOf sets the partition's UA, Accept-Language and dictionary before returning it. Startup seeds the default session too; move with session creation and its UA/dictionary snapshot.
 src/main/system-version.test.ts	tooling	-	Vitest suite: systemVersion.
 src/main/system-version.ts	port	1	systemVersion maps OS kernel release to display version; shellEngine derives the shell label from runtime versions.
 src/main/tab-layout.test.ts	tooling	-	Vitest suite: persisted tab layout.
@@ -491,7 +491,7 @@ src/main/test-turn-edits-omp.ts	tooling	-	Stand-in omp serves a synthetic transc
 src/main/tls-test-rig.ts	tooling	-	testCertificates signs a loopback server certificate with a temporary test authority.
 src/main/tool-approval-stock.test.ts	tooling	-	Vitest suite: reads every approval select stock sends over RPC, and each option means what the card says.
 src/main/tray-labels.test.ts	tooling	-	Vitest suite: tray menu.
-src/main/tray-labels.ts	port	1	trayMenuTemplate, aggregateTrayStatus and menuSignature derive tray labels, progress and menu rebuild decisions.
+src/main/tray-labels.ts	port	1	tray.refreshMenu reads the live updater status, visibility, menuIsOpen and installedSignature before binding click actions. Move with tray/menu state and action ownership.
 src/main/tray.ts	port	4	createTray/setTrayState/destroyTray own the Electron tray handle, menu installation and window/app actions.
 src/main/turn-resume-ends.test.ts	tooling	-	Vitest suite: the end table and formal/turn-resume name the same rows and checks.
 src/main/turn-resume-ends.ts	tooling	-	HOLD_CHECKS/HOLD_ENDS expose core/src/resume/hold-ends.json for parity tests; core/src/resume/ends.rs makes the runtime decision.
@@ -522,11 +522,11 @@ src/main/updater-state.test.ts	tooling	-	Vitest suite: update repository access.
 src/main/updater-state.ts	port	2	stageBundleFromDmg, SWAP_SCRIPT and settleFailedUpdateCheck implement installer staging, replacement and status transitions.
 src/main/updater.ts	port	4	checkForUpdate/downloadUpdate/restartIntoUpdate orchestrate electron-updater, Electron networking, platform installers, app quit and relaunch.
 src/main/window-chrome.test.ts	tooling	-	Vitest suite: windowChromeOptions.
-src/main/window-chrome.ts	port	1	windowChromeOptions selects platform caption layout; sanitizeChromeColors and nativeThemeSource normalize renderer theme inputs.
+src/main/window-chrome.ts	port	1	WindowManager.createWindow consumes chrome options and sends the same Mica decision to the renderer. WINDOW_CHROME_SET validates unknown input before setTitleBarOverlay. Move with window creation and trusted IPC dispatch.
 src/main/window-show.test.ts	tooling	-	Vitest suite: showOnFirstPaint.
 src/main/window-show.ts	port	4	showOnFirstPaint races window ready-to-show with content load to reveal a hidden Electron window.
 src/main/window-spawn-target.test.ts	tooling	-	Vitest suite: resolveWindowSpawnTarget.
-src/main/window-spawn-target.ts	port	1	resolveWindowSpawnTarget chooses idle placeholder versus a fresh or restored session launch target.
+src/main/window-spawn-target.ts	port	1	After both cwd and workspace lookups, spawnWindow hands the result directly to WindowManager.createWindow and sidecarPool.acquire. The selector owns no I/O; move it with launch orchestration.
 src/main/window.ts	mixed	4	WindowManager creates windows and persists geometry, dialogs, themes and lifetimes. Tauri win.create restores saved bounds using the shell's current display snapshot (tauri-shell/src/window_bounds.rs).
 src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name order.
 src/main/workspace-fs.test.ts	tooling	-	Vitest suite: workspace file reads, MIME detection, confinement and mutations.

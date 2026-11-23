@@ -91,10 +91,12 @@ electron.app.once("quit", () => {
 });
 
 export function readPreviousRunEnd(): Promise<RuntimeLogReport | null> {
-	return client.call<RuntimeLogReport | null>("app.previousRunEnd", { ownPid: process.pid }).catch((error: unknown) => {
-		console.warn("[app-quit]", error);
-		return null;
-	});
+	return client
+		.call<RuntimeLogReport | null>("app.previousRunEnd", { ownPid: process.pid })
+		.catch((error: unknown) => {
+			console.warn("[app-quit]", error);
+			return null;
+		});
 }
 
 // The e2e harness (OMP_GUI_TEST_NODE_INSPECT=1: main runs under `--inspect`) evaluates specs' functions against this

@@ -32,7 +32,10 @@ describe("GPU fallback", () => {
 		["Utility", "crashed", false],
 	] as const)("handles %s %s as a crash: %s", async (type, reason, handled) => {
 		await start();
-		const decision = await fixture.call<LaunchDecision>("launch.event", { op: "crash", args: { type, reason, now: 2 } });
+		const decision = await fixture.call<LaunchDecision>("launch.event", {
+			op: "crash",
+			args: { type, reason, now: 2 },
+		});
 		expect(decision !== null).toBe(handled);
 	});
 

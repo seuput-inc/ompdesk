@@ -1,6 +1,6 @@
 import { app } from "electron";
-import type { RuntimeLogReport } from "./runtime-log-core";
 import { writeRuntimeLog } from "./runtime-log";
+import type { RuntimeLogReport } from "./runtime-log-core";
 
 export interface LaunchStart {
 	guard: boolean;
@@ -47,4 +47,3 @@ export function softwareCompositing(): Promise<boolean> {
 }
 
 let softwareCompositingResult: Promise<boolean> | undefined;
-

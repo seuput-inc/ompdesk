@@ -25,7 +25,9 @@ pub(super) fn lines(profile: &Path, selection: Selection) -> Vec<String> {
     };
     let mut newest = Vec::new();
     for &archive in files {
-        let Ok(tail) = super::files::open(profile, archive).and_then(|file| LogTail::read(file, bytes)) else {
+        let Ok(tail) =
+            super::files::open(profile, archive).and_then(|file| LogTail::read(file, bytes))
+        else {
             continue;
         };
         for line in tail.newest() {
