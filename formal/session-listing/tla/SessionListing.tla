@@ -211,7 +211,7 @@ Announce(f2, r2) ==
 \* ===== the host's tabs change: each handler ends by calling listingChanged() in the same synchronous block =====
 
 \* @code src/main/remote/host-services.ts:2329-2358 #createTab records the session file and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:131-195 Ctx::acquire_inner registers the window tab's session file and calls notify_window_tabs_changed.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:280-314 Ctx::finish_acquire registers the window tab's session file and notifies its window.
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of records the file and owner, then calls on_session_files_changed if the file changed.
 Open(t, s) ==
     /\ ~Busy
@@ -221,8 +221,8 @@ Open(t, s) ==
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
 \* @code src/main/remote/host-services.ts:3119-3150 #closeTab removes the tab and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:331-347 Ctx::release_entry removes the tab and awaits release_detached.
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:349-436 Ctx::release_detached calls unregister_session_file_of.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:399-415 Ctx::release_entry removes the tab and awaits release_detached.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:417-504 Ctx::release_detached calls unregister_session_file_of.
 \* @code native/ompdesk/crates/core/src/pool/api.rs:1330-1337 Ctx::release_tab notifies the window after release_entry returns.
 Close(t) ==
     /\ ~Busy
@@ -243,7 +243,7 @@ Switch(t, s) ==
 
 \* @code native/ompdesk/crates/core/src/pool/listen.rs:212-247 Ctx::feed_session_info unregisters the tab's file if a known session ID changes.
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:99-118 Ctx::unregister_session_file_of drops the owner and calls on_session_files_changed.
-\* @code src/main/index.ts:1568-1571 onSessionFilesChanged calls hostServices.listingChanged().
+\* @code src/main/index.ts:1546-1549 onSessionFilesChanged calls hostServices.listingChanged().
 IdChange(t) ==
     /\ ~Busy
     /\ t \in WinTabs /\ file[t] # NoS /\ nChanges < MaxChanges
@@ -261,7 +261,7 @@ Reregister(t, s) ==
     /\ pendReg' = pendReg \ {t}
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, cn, seen>>
 
-\* @code src/main/index.ts:1400-1409 sessionOpeners merges closed-child records with the current tab openers.
+\* @code src/main/index.ts:1378-1387 sessionOpeners merges closed-child records with the current tab openers.
 \* @code src/main/ipc.ts:1433 A change to AGENT_CLOSED_CHILDREN_PREF calls hostedTabs.listingChanged().
 Record ==
     /\ ~Busy
@@ -282,7 +282,7 @@ Tick ==
 \* ===== the index's rows change: the index reads again and tells main, which calls sessionsChanged() =====
 
 \* @code src/main/session-index.ts:174-184 #onChanged marks the shared list changed for named paths or calls #notifyChange for a rescan.
-\* @code src/main/session-index.ts:393-396 #notifyChange also marks the shared list changed.
+\* @code src/main/session-index.ts:392-395 #notifyChange also marks the shared list changed.
 \* @code src/main/session-index.ts:87 The share publishes to onListChange.
 \* @code src/main/ipc.ts:695-699 onListChange calls remoteDevices.hostSessionsChanged().
 \* @code src/main/remote/devices.ts:846-848 hostSessionsChanged calls the host's sessionsChanged().
@@ -316,7 +316,8 @@ IdxDelete(s, by) ==
     /\ UNCHANGED <<file, pendReg, rec, snap, hs, lkv, hsl, ip, fd, nChanges, nTicks, nDrops, nForeign, seen>>
 
 \* A session moves to another folder: its old path is gone, a new path is listed.
-\* @code src/main/session-index.ts:350-363 moveSession awaits the move and calls #notifyChange.
+\* @code native/ompdesk/crates/core/src/fs/read.rs:359-368 stat follows links to check the move destination before stock moves the session.
+\* @code src/main/session-index.ts:350-362 moveSession awaits the move and calls #notifyChange.
 \* @code src/main/remote/host-services.ts:1397-1405 sessions.move moves the host's session.
 \* @code src/main/ipc.ts:1646-1655 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
 IdxMove(s, t, by) ==

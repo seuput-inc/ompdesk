@@ -1,17 +1,15 @@
 //! Host file saves from paired devices. Check uploads against the authenticated device's store before copying.
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 use std::fs;
 use std::fs::File;
-#[cfg(unix)]
-use std::fs::{self, FileTimes, OpenOptions};
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::uploads;
-use crate::fs::{disk, error::NodeError};
+use crate::fs::{disk, error::NodeError, save_copy::copy_file};
 use crate::server::{Call, Fault, Registry, Reply};
 
 #[derive(Deserialize)]
@@ -73,54 +71,6 @@ fn write_inline(target: &str, overwrite: bool, bytes: &[u8]) -> Result<(), NodeE
         .map_err(|e| NodeError::new(&e, "write", None))
 }
 
-#[cfg(windows)]
-fn copy_upload(source: &str, target: &str, overwrite: bool) -> io::Result<()> {
-    crate::sys::copy_file(source, target, !overwrite)
-}
-
-#[cfg(unix)]
-fn copy_upload(source: &str, target: &str, overwrite: bool) -> io::Result<()> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, fchown};
-    let mut input = File::open(source)?;
-    let meta = input.metadata()?;
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create(overwrite)
-        .create_new(!overwrite)
-        .mode(meta.mode())
-        .open(target)?;
-
-    // Never truncate before comparing the open files. A second lookup could see a different entry.
-    if overwrite && disk::same_entry(&meta, &output.metadata()?, source, target) {
-        return Ok(());
-    }
-
-    let copied = (|| {
-        if overwrite {
-            output.set_len(0)?;
-        }
-        let _ = fchown(&output, Some(meta.uid()), Some(meta.gid()));
-        output.set_permissions(meta.permissions())?;
-        io::copy(
-            &mut std::io::Read::take(&mut input, meta.len()),
-            &mut output,
-        )?;
-        if let (Ok(accessed), Ok(modified)) = (meta.accessed(), meta.modified()) {
-            let _ = output.set_times(
-                FileTimes::new()
-                    .set_accessed(accessed)
-                    .set_modified(modified),
-            );
-        }
-        Ok(())
-    })();
-    if copied.is_err() {
-        // copyFile removes an incomplete destination only after it successfully opened it.
-        let _ = fs::remove_file(target);
-    }
-    copied
-}
-
 fn save(call: Call) -> Result<Reply, Fault> {
     let p: Params = call.params()?;
     if !disk::stat(&p.dir).is_ok_and(|info| info.is_dir()) {
@@ -145,7 +95,7 @@ fn save(call: Call) -> Result<Reply, Fault> {
             if source.contains('\0') {
                 Err(NodeError::nul_in_path("src", source))
             } else {
-                copy_upload(source, &p.target, p.overwrite).map_err(|e| {
+                copy_file(source, &p.target, p.overwrite).map_err(|e| {
                     NodeError::with_dest(&e, "copyfile", Some(source), Some(&p.target))
                 })
             }

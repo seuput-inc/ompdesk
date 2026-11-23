@@ -68,6 +68,7 @@
 				"native/ompdesk/crates/core/src/resume/ends.rs",
 				"native/ompdesk/crates/core/src/resume/facts.rs",
 				"native/ompdesk/crates/core/src/resume/connectivity.rs",
+				"native/ompdesk/crates/core/src/resume/probe.rs",
 				"native/ompdesk/crates/core/src/resume/hold-ends.json",
 				"native/ompdesk/crates/core/src/pool/run.rs",
 				"native/ompdesk/crates/core/src/pool/api.rs#note_stopped",
@@ -94,7 +95,7 @@
 			"mutations": "mutations.json",
 			"covers": [
 				"src/main/remote/host-services.ts",
-				"native/ompdesk/crates/core/src/pool/windows.rs#acquire_inner",
+				"native/ompdesk/crates/core/src/pool/windows.rs#finish_acquire",
 				"native/ompdesk/crates/core/src/pool/windows.rs#release_entry",
 				"native/ompdesk/crates/core/src/pool/windows.rs#release_detached",
 				"native/ompdesk/crates/core/src/pool/api.rs#release_tab",
@@ -167,7 +168,7 @@
 				"native/ompdesk/crates/core/src/sidecar/launch.rs",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "be94a6bc4fe0b18c1336d58c086a773e51da079f",
+			"syncCommit": "d0e83f711ce8443cce494bd736fa26b980403f5c",
 			"verifySkill": ".omp/skills/tab-session-verify/SKILL.md"
 		},
 		{
@@ -215,7 +216,7 @@
 				"native/ompdesk/crates/core/src/disk/saved_records.rs#change",
 				"native/ompdesk/crates/core/src/git/read.rs#blocking"
 			],
-			"syncCommit": "482bd43fcdf55c9ed781f9d6835affca0a078961",
+			"syncCommit": "728789b7353190b868c9a7a9b224ff7bad0413f7",
 			"verifySkill": ".omp/skills/repo-lock-core-verify/SKILL.md"
 		},
 		{
@@ -230,7 +231,7 @@
 				"src/main/session-processes.ts",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "a3ad197159e98ca7f4611993a39997f8bcd426d2",
+			"syncCommit": "d056e98329bc35c3787eb653e8e0474249e80773",
 			"verifySkill": ".omp/skills/session-processes-verify/SKILL.md"
 		},
 		{
@@ -262,7 +263,7 @@
 				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
-			"syncCommit": "ceef5975aa6fb26fccda274feaf7c580241fdd25"
+			"syncCommit": "d0e83f711ce8443cce494bd736fa26b980403f5c"
 		},
 		{
 			"id": "away-calls",

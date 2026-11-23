@@ -12,7 +12,7 @@
 //!   and `unwireFull`, `listenClosed`, `command` (a command to a sidecar whose answer nobody reads), `emitView`,
 //!   `settleWatch`, `modelWaitForget`, `turnStop`, `reloadExtensions`, `immediate` and `stopTimer` (a tick and a timer
 //!   run by main's clock), and `settle` (the end of a method that was `async`).
-//! - Questions the core asks (the collaborator answers at once, `ask`): `blocked`, `spawn`, `wire`, `acquired`,
+//! - Questions the core asks (the collaborator answers at once, `ask`): `blocked`, `spawn`, `acquired`,
 //!   `facts`, `window`, `start`, `restart`, `sleep`, `adoptCwd`, `sideChannel`, `endViews`, `dispose`, `disposeSidecars`,
 //!   `announce`, `decide`, `mergePlans`, `deletedAdd`, `selfDevice`, `snowflake`, the hooks `onRunningChange`,
 //!   `onSessionFilesChanged` and `onWindowTabsChanged`; and, for what main answers with a promise (`ask_later`):

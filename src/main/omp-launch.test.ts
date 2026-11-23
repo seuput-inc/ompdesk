@@ -6,9 +6,7 @@ import {
 	type OmpLaunch,
 	ompArgs,
 	SESSION_OWNED_ENV,
-	type SessionOpen,
 	sessionEnv,
-	sessionOpen,
 	withCreditSpendRuns,
 	withoutSessionEnv,
 } from "./omp-launch";
@@ -141,20 +139,5 @@ describe("omp launch", () => {
 		// Neither refused press started omp.
 		expect(calls).toHaveLength(1);
 		expect(commitCheck).toHaveBeenCalledTimes(3);
-	});
-
-	it("opens a tab's session by the one rule, for every combination of what the tab knows", () => {
-		const written = new Set(["/s/written.jsonl"]);
-		for (const path of [null, "/s/written.jsonl", "/s/unwritten.jsonl"]) {
-			for (const isNew of [false, true]) {
-				const open: SessionOpen = sessionOpen({ path, isNew }, file => written.has(file));
-				// A written session is always reopened.
-				if (path && written.has(path)) expect(open).toEqual({ session: path });
-				// `--session` never names a file stock never wrote ("Session not found").
-				else expect(open).not.toHaveProperty("session");
-				// A new tab, or one whose session stock has not written yet, never lets autoResume pick another session.
-				if (isNew || path) expect(open).not.toBe("default");
-			}
-		}
 	});
 });
