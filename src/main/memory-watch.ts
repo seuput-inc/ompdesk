@@ -6,7 +6,7 @@
 import { IdleRelease, memoryShort } from "./idle-release";
 import { memoryRecord, RecordClock } from "./memory-record";
 import { type MemoryReading, type ProcessRow, readMemory, watchProcesses } from "./memory-sampler";
-import { listTaggedProcesses, type TagOwner } from "./session-processes";
+import type { TagOwner } from "./session-processes";
 
 /** How often memory is read. */
 export const SAMPLE_MS = 5_000;
@@ -48,9 +48,8 @@ function gb(bytes: number): number {
  * details. Nothing is written when the processes cannot be listed.
  */
 async function recordShort(deps: MemoryWatchDeps, owners: () => TagOwner[], reading: MemoryReading): Promise<void> {
-	const rows = await listTaggedProcesses();
-	if (!rows) return;
-	const record = memoryRecord(rows, owners(), deps.tabs(), process.pid, Date.now());
+	const record = await memoryRecord(() => ({ owners: owners(), tabs: deps.tabs() }));
+	if (!record) return;
 	deps.log("memory short", {
 		level: "warn",
 		availableGb: gb(reading.availableBytes),

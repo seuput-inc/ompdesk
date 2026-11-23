@@ -1,10 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { type MemoryReading, readMemory, watchProcesses } from "./memory-sampler";
 import { SAMPLE_MS, startMemoryWatch } from "./memory-watch";
-import { listTaggedProcesses } from "./session-processes";
 
 vi.mock("./memory-sampler", () => ({ readMemory: vi.fn(), watchProcesses: vi.fn() }));
-vi.mock("./session-processes", () => ({ listTaggedProcesses: vi.fn() }));
 
 afterEach(() => {
 	vi.clearAllTimers();
@@ -12,7 +10,7 @@ afterEach(() => {
 });
 
 it("uses the tabs after recordShort and keeps quiet time across a failed listing", async () => {
-	vi.useFakeTimers();
+	vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
 	vi.setSystemTime(0);
 	const GiB = 1024 ** 3;
 	const real: MemoryReading = { totalBytes: 16 * GiB, availableBytes: 8 * GiB, pressure: "normal" };
@@ -20,7 +18,6 @@ it("uses the tabs after recordShort and keeps quiet time across a failed listing
 	const snapshot = { rows, busyParents: [1], quietTrees: [] };
 	vi.mocked(readMemory).mockResolvedValue(real);
 	vi.mocked(watchProcesses).mockResolvedValueOnce(snapshot).mockResolvedValueOnce(null).mockResolvedValue(snapshot);
-	vi.mocked(listTaggedProcesses).mockResolvedValue([]);
 	const oldTab = { tabId: "old", label: "closed", pid: 16, quiet: true };
 	const newTab = { tabId: "new", label: "new tab", pid: 17, quiet: true };
 	let current = oldTab;
@@ -28,7 +25,8 @@ it("uses the tabs after recordShort and keeps quiet time across a failed listing
 	const log = vi.fn((message: string, _details: Record<string, unknown>) => {
 		if (message === "memory short") current = newTab;
 	});
-	const sampled = vi.fn();
+	const firstSample = Promise.withResolvers<void>();
+	const sampled = vi.fn(() => firstSample.resolve());
 	const release = vi.fn();
 	startMemoryWatch({
 		tabs,
@@ -39,7 +37,7 @@ it("uses the tabs after recordShort and keeps quiet time across a failed listing
 		testReading: () => ({ ...real, availableBytes: GiB }),
 		releaseQuietMs: 2 * SAMPLE_MS,
 	});
-	await vi.advanceTimersByTimeAsync(0);
+	await firstSample.promise;
 	expect(sampled).toHaveBeenLastCalledWith(real, rows, [newTab], 0);
 	expect(release).not.toHaveBeenCalled();
 	const reads = tabs.mock.calls.length;

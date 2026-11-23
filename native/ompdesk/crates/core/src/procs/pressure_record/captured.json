@@ -1,0 +1,124 @@
+[
+  {
+    "rows": [
+      {"pid":90,"ppid":99,"bytes":524288,"name":"outside","startedMs":60001},
+      {"pid":10,"ppid":4,"bytes":524288,"name":"child","startedMs":60000},
+      {"pid":4,"ppid":2,"bytes":524287,"name":"omp","startedMs":0},
+      {"pid":20,"ppid":1,"bytes":524288,"name":"gone","tag":"old"},
+      {"pid":21,"ppid":1,"bytes":524288,"name":"daemon","tag":"live"},
+      {"pid":22,"ppid":2,"bytes":524288,"name":"worker","startedMs":90001,"tag":"old"},
+      {"pid":23,"ppid":1,"bytes":524287,"name":"parked","tag":"parked"},
+      {"pid":2,"ppid":1,"bytes":100,"name":"main","startedMs":0},
+      {"pid":7,"ppid":0,"bytes":524287,"name":"z"},
+      {"pid":8,"ppid":0,"bytes":524287,"name":"a"},
+      {"pid":9,"ppid":0,"bytes":0,"name":"a2"},
+      {"pid":30,"ppid":31,"bytes":524287,"name":"cycle"},
+      {"pid":31,"ppid":30,"bytes":524287,"name":"cycle"},
+      {"pid":32,"ppid":4,"bytes":524288,"name":"pid reuse"},
+      {"pid":33,"ppid":22,"bytes":524288,"name":"older","startedMs":10}
+    ],
+    "owners": [
+      {"tag":"live","cwd":"/a","pid":4,"device":"remote"},
+      {"tag":"parked","cwd":""}
+    ],
+    "tabs": [
+      {"pid":4,"label":"ä"},
+      {"pid":7,"label":"z"},
+      {"pid":8,"label":"a"},
+      {"pid":9,"label":"a"}
+    ],
+    "mainPid": 2,
+    "now": 90000,
+    "locale": "ko-KR",
+    "expected": {"top":[{"name":"child","pid":10,"mb":1,"ageMin":1,"owner":"session","session":"ä"},{"name":"gone","pid":20,"mb":1,"owner":"closed session"},{"name":"daemon","pid":21,"mb":1,"owner":"session","session":"ä","folder":"/a","device":"remote"},{"name":"worker","pid":22,"mb":1,"ageMin":0,"owner":"OMPdesk"},{"name":"pid reuse","pid":32,"mb":1,"owner":"session","session":"ä"},{"name":"older","pid":33,"mb":1,"ageMin":1,"owner":"not OMPdesk's"},{"name":"outside","pid":90,"mb":1,"ageMin":0,"owner":"not OMPdesk's"},{"name":"omp","pid":4,"mb":0,"ageMin":2,"owner":"session","session":"ä"}],"sessions":[{"session":"ä","mb":1,"processes":3},{"session":"(closed session)","mb":1,"processes":1},{"session":"ä","folder":"/a","device":"remote","mb":1,"processes":1},{"session":"(not running)","folder":"","mb":0,"processes":1},{"session":"a","mb":0,"processes":2},{"session":"z","mb":0,"processes":1}],"sessionsMb":4,"ompdeskMb":1,"otherMb":2}
+  },
+  {
+    "rows": [
+      {"pid":100,"ppid":0,"bytes":524288,"name":"worker","tag":"test-0"},
+      {"pid":99,"ppid":0,"bytes":524288,"name":"worker","tag":"test-1"},
+      {"pid":98,"ppid":0,"bytes":524288,"name":"worker","tag":"test-2"},
+      {"pid":97,"ppid":0,"bytes":524288,"name":"worker","tag":"test-3"},
+      {"pid":96,"ppid":0,"bytes":524288,"name":"worker","tag":"test-4"},
+      {"pid":95,"ppid":0,"bytes":524288,"name":"worker","tag":"test-5"},
+      {"pid":94,"ppid":0,"bytes":524288,"name":"worker","tag":"test-6"},
+      {"pid":93,"ppid":0,"bytes":524288,"name":"worker","tag":"test-7"},
+      {"pid":92,"ppid":0,"bytes":524288,"name":"worker","tag":"test-8"},
+      {"pid":91,"ppid":0,"bytes":524288,"name":"worker","tag":"test-9"}
+    ],
+    "owners": [
+      {"tag":"test-0","pid":100,"cwd":"/0"},
+      {"tag":"test-1","pid":99,"cwd":"/1"},
+      {"tag":"test-2","pid":98,"cwd":"/2"},
+      {"tag":"test-3","pid":97,"cwd":"/3"},
+      {"tag":"test-4","pid":96,"cwd":"/4"},
+      {"tag":"test-5","pid":95,"cwd":"/5"},
+      {"tag":"test-6","pid":94,"cwd":"/6"},
+      {"tag":"test-7","pid":93,"cwd":"/7"},
+      {"tag":"test-8","pid":92,"cwd":"/eight"},
+      {"tag":"test-9","pid":91,"cwd":"/9"}
+    ],
+    "tabs": [
+      {"pid":100,"label":"z"},
+      {"pid":99,"label":"a"},
+      {"pid":98,"label":"é"},
+      {"pid":97,"label":"é"},
+      {"pid":96,"label":"Item2"},
+      {"pid":95,"label":"Item10"},
+      {"pid":94,"label":"ß"},
+      {"pid":93,"label":"(closed session)"},
+      {"pid":92,"label":"a"},
+      {"pid":91,"label":"a"}
+    ],
+    "mainPid": 5,
+    "now": 500,
+    "locale": "ko-KR",
+    "expected": {"top":[{"name":"worker","pid":91,"mb":1,"owner":"session","session":"a","folder":"/9"},{"name":"worker","pid":92,"mb":1,"owner":"session","session":"a","folder":"/eight"},{"name":"worker","pid":93,"mb":1,"owner":"session","session":"(closed session)","folder":"/7"},{"name":"worker","pid":94,"mb":1,"owner":"session","session":"ß","folder":"/6"},{"name":"worker","pid":95,"mb":1,"owner":"session","session":"Item10","folder":"/5"},{"name":"worker","pid":96,"mb":1,"owner":"session","session":"Item2","folder":"/4"},{"name":"worker","pid":97,"mb":1,"owner":"session","session":"é","folder":"/3"},{"name":"worker","pid":98,"mb":1,"owner":"session","session":"é","folder":"/2"}],"sessions":[{"session":"(closed session)","folder":"/7","mb":1,"processes":1},{"session":"a","folder":"/1","mb":1,"processes":1},{"session":"a","folder":"/eight","mb":1,"processes":1},{"session":"a","folder":"/9","mb":1,"processes":1},{"session":"é","folder":"/2","mb":1,"processes":1},{"session":"é","folder":"/3","mb":1,"processes":1}],"sessionsMb":5,"ompdeskMb":0,"otherMb":0}
+  },
+  {
+    "rows": [
+      {"pid":1,"ppid":0,"bytes":10485760,"name":"launchd","startedMs":60000},
+      {"pid":100,"ppid":1,"bytes":419430400,"name":"OMPdesk","startedMs":6000000},
+      {"pid":110,"ppid":100,"bytes":157286400,"name":"OMPdesk Helper","startedMs":6600000},
+      {"pid":200,"ppid":100,"bytes":293601280,"name":"bun","startedMs":12000000,"tag":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"pid":210,"ppid":200,"bytes":62914560,"name":"node","startedMs":12600000,"tag":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"pid":900,"ppid":1,"bytes":943718400,"name":"node","startedMs":54000000,"tag":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"pid":300,"ppid":100,"bytes":272629760,"name":"bun","startedMs":18000000,"tag":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      {"pid":310,"ppid":300,"bytes":1258291200,"name":"qemu-system-aarch64-headless","startedMs":18600000,"tag":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      {"pid":950,"ppid":1,"bytes":734003200,"name":"adb","startedMs":57000000,"tag":"cccccccccccccccccccccccccccccccc"},
+      {"pid":500,"ppid":1,"bytes":2097152000,"name":"Xcode","startedMs":30000000}
+    ],
+    "owners": [{"tag":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","cwd":"/work/shop","sessionPath":"/s/a.jsonl","pid":200},{"tag":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","cwd":"/work/app","sessionPath":"/s/b.jsonl","device":"MacBook","pid":300}],
+    "tabs": [{"pid":200,"label":"Checkout page"},{"pid":300,"label":"Emulator run (for MacBook)"}],
+    "mainPid": 100,
+    "now": 60000000,
+    "locale": "ko-KR",
+    "expected": {"top":[{"name":"Xcode","pid":500,"mb":2000,"ageMin":500,"owner":"not OMPdesk's"},{"name":"qemu-system-aarch64-headless","pid":310,"mb":1200,"ageMin":690,"owner":"session","session":"Emulator run (for MacBook)","folder":"/work/app","device":"MacBook"},{"name":"node","pid":900,"mb":900,"ageMin":100,"owner":"session","session":"Checkout page","folder":"/work/shop"},{"name":"adb","pid":950,"mb":700,"ageMin":50,"owner":"closed session"},{"name":"OMPdesk","pid":100,"mb":400,"ageMin":900,"owner":"OMPdesk"},{"name":"bun","pid":200,"mb":280,"ageMin":800,"owner":"session","session":"Checkout page","folder":"/work/shop"},{"name":"bun","pid":300,"mb":260,"ageMin":700,"owner":"session","session":"Emulator run (for MacBook)","folder":"/work/app","device":"MacBook"},{"name":"OMPdesk Helper","pid":110,"mb":150,"ageMin":890,"owner":"OMPdesk"}],"sessions":[{"session":"Emulator run (for MacBook)","folder":"/work/app","device":"MacBook","mb":1460,"processes":2},{"session":"Checkout page","folder":"/work/shop","mb":1240,"processes":3},{"session":"(closed session)","mb":700,"processes":1}],"sessionsMb":3400,"ompdeskMb":550,"otherMb":2010}
+  },
+  {
+    "rows": [
+      {"pid":100,"ppid":1,"bytes":1048576,"name":"OMPdesk","startedMs":6000000},
+      {"pid":200,"ppid":100,"bytes":1048576,"name":"bun","startedMs":12000000},
+      {"pid":210,"ppid":200,"bytes":1048576,"name":"bash","startedMs":12600000},
+      {"pid":220,"ppid":210,"bytes":1048576,"name":"node","startedMs":13200000}
+    ],
+    "owners": [],
+    "tabs": [{"pid":200,"label":"Old tab"}],
+    "mainPid": 100,
+    "now": 60000000,
+    "locale": "ko-KR",
+    "expected": {"top":[{"name":"OMPdesk","pid":100,"mb":1,"ageMin":900,"owner":"OMPdesk"},{"name":"bun","pid":200,"mb":1,"ageMin":800,"owner":"session","session":"Old tab"},{"name":"bash","pid":210,"mb":1,"ageMin":790,"owner":"session","session":"Old tab"},{"name":"node","pid":220,"mb":1,"ageMin":780,"owner":"session","session":"Old tab"}],"sessions":[{"session":"Old tab","mb":3,"processes":3}],"sessionsMb":3,"ompdeskMb":1,"otherMb":0}
+  },
+  {
+    "rows": [
+      {"pid":100,"ppid":1,"bytes":1048576,"name":"OMPdesk.exe","startedMs":1000},
+      {"pid":700,"ppid":100,"bytes":1048576,"name":"conhost.exe","startedMs":9000},
+      {"pid":710,"ppid":700,"bytes":1048576,"name":"chrome.exe","startedMs":2000}
+    ],
+    "owners": [],
+    "tabs": [],
+    "mainPid": 100,
+    "now": 60000000,
+    "locale": "ko-KR",
+    "expected": {"top":[{"name":"OMPdesk.exe","pid":100,"mb":1,"ageMin":1000,"owner":"OMPdesk"},{"name":"conhost.exe","pid":700,"mb":1,"ageMin":1000,"owner":"OMPdesk"},{"name":"chrome.exe","pid":710,"mb":1,"ageMin":1000,"owner":"not OMPdesk's"}],"sessions":[],"sessionsMb":0,"ompdeskMb":2,"otherMb":1}
+  }
+]

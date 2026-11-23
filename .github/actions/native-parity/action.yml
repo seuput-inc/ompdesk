@@ -23,6 +23,8 @@ runs:
         src/main/session-index.test.ts
         src/main/session-store-enrichment.test.ts
         src/main/memory-sampler.test.ts
+        src/main/memory-record.test.ts
+        src/main/memory-watch.test.ts
         src/main/model-setup-runner.test.ts
         src/main/schedules.test.ts
         src/main/web/webhook.test.ts
