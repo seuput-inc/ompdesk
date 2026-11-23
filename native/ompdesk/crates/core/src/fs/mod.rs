@@ -5,6 +5,7 @@
 //! Files panel's validation and writes. A failure is a fault whose code is the app's `IpcErrorCode` (`io` when the
 //! TypeScript set none) and whose message is node's text.
 
+mod agent_files;
 pub(crate) mod disk;
 pub(crate) mod error;
 mod ignore;
@@ -21,6 +22,9 @@ use serde_json::Value;
 use crate::server::{Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
+    registry.add("fs.agentFile", |call| {
+        Box::pin(blocking(move || agent_files::run(call)))
+    });
     registry.add("fs.initialCwd", |call| {
         Box::pin(blocking(move || launch::initial_cwd(call.params()?)))
     });

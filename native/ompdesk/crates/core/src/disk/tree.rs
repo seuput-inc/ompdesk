@@ -129,7 +129,7 @@ fn remove_tree(target: &Path, scope: &Scope) -> Result<(), Removal> {
 }
 
 #[cfg(not(windows))]
-fn unlink(target: &Path, _meta: &fs::Metadata) -> io::Result<()> {
+pub(crate) fn unlink(target: &Path, _meta: &fs::Metadata) -> io::Result<()> {
     fs::remove_file(target)
 }
 
@@ -140,7 +140,7 @@ fn unlink(target: &Path, _meta: &fs::Metadata) -> io::Result<()> {
     clippy::permissions_set_readonly_false,
     reason = "Windows only: it clears the read-only attribute, it makes nothing world-writable"
 )]
-fn unlink(target: &Path, meta: &fs::Metadata) -> io::Result<()> {
+pub(crate) fn unlink(target: &Path, meta: &fs::Metadata) -> io::Result<()> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
     if meta.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {

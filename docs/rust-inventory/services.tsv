@@ -153,7 +153,7 @@ src/main/github-auth/service.ts	port	Owns the gh login state machine, including 
 src/main/github-auth/test-fake-gh.ts	exception	Writes a fake gh executable and seeds account records for sign-in tests.
 src/main/local/agent-control.ts	port	Enforces attachment path versus image-index exclusivity and size limits on messages and images before calling the stock bridge.
 src/main/local/agent-files.test.ts	exception	Tests creating, overwriting, renaming and protecting agent definition files in test directories.
-src/main/local/agent-files.ts	port	Confines edits to user or project agent directories, validates frontmatter names and writes files atomically without replacing another agent.
+src/main/local/agent-files.ts	mixed	fs.agentFile authorizes direct paths and owns file mutations. Stock supplies the directories and validates Markdown. Main reads existing regular files without a size cap or a second whole-file wire buffer; the page shares template and name rules (§1.3d).
 src/main/local/auto-mode.test.ts	exception	Tests applying plan and goal decisions and routing the associated stock commands.
 src/main/local/auto-mode.ts	port	Applies a mode decision by enabling stock plan mode or creating a goal and undoes each differently.
 src/main/local/autopilot.test.ts	exception	Tests read-only ahead/behind counts and refusals for invalid roots and option-like refs.

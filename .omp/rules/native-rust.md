@@ -52,6 +52,8 @@ globs:
 
 ### Ledger
 
+- **Agent Studio definitions.** `fs.agentFile` checks the discovered directories, publishes new definitions without clobbering, replaces existing definitions atomically and creates a renamed file before removing its source. Stock still validates the Markdown; the page and host use one template serializer. Main reads an authorized regular file on one handle, so opening an existing definition has no new size limit or second whole-file copy on the core wire. Reads follow a final file symlink; deletes remove its entry. Special files are not read. `local/agent-files.test.ts` exercises the core for creation, collision, rename and deletion.
+
 - **Installed omp reports.** `omp.pluginDoctor` and `omp.checkUpdate` run fixed, read-only commands through the same CLI supervisor as `omp.worktrees`. Setup still runs its own supervised check and calls the same native `omp.parseUpdateCheck` parser. The doctor drops unknown statuses (including inherited object keys) and replaces unpaired surrogates with U+FFFD. Process start and timeout failures are core faults; invalid reports retain their prior command-specific refusals. Local misc, setup, runtime and worktree suites exercise these calls.
 
 - **Files panel content search.** `stock/search.rs` prepares the installed `pi-natives` grep options in the existing `stock.request` frame, preserving the pattern and glob's raw JSON strings. Main still rejects invalid panel requests before launching stock, including the exact V8 regular-expression error; the worker calls the installed search engine. `workspace-search.test.ts` covers the worker options and reply through the core, and `stock::search` covers unpaired UTF-16 surrogates on the wire.
