@@ -9,6 +9,7 @@ pub mod browsers;
 pub mod care;
 pub mod clock;
 pub mod control;
+mod diagnostic_bundle;
 pub mod disk;
 pub mod ext;
 pub mod fs;
