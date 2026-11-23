@@ -158,7 +158,7 @@ src/main/local/auto-mode.ts	port	Applies a mode decision by enabling stock plan 
 src/main/local/autopilot.test.ts	exception	Tests read-only ahead/behind counts and refusals for invalid roots and option-like refs.
 src/main/local/autopilot.ts	port	Checks refs before git.autopilotBranchStatus, restricts bridge methods and refuses set_autopilot outside the local window.
 src/main/local/composer.test.ts	exception	Tests merging stock state with bridge extras, fast-mode handling and defaults when the bridge is down.
-src/main/local/composer.ts	mixed	Rust sidecar.guiBridge forwards maintenance abort, forced tool, context report and share preview. TS still merges stock/bridge state, filters reasoning levels, guards busy context clears and validates parameterized actions.
+src/main/local/composer.ts	mixed	omp.pluginCount runs stock's plugin list in the tab's workspace and returns only the count. sidecar.guiBridge forwards maintenance abort, forced tool, context report and share preview. Stock owns live composer state; main combines its optional replies and maps busy clears to errors (§1.3b,d).
 src/main/local/copy-targets.test.ts	exception	Tests message and command ranking, fenced quote exclusion and handoff fallback for copy targets.
 src/main/local/desktop-slot.ts	port	Rejects all requested bridge methods except desktop_slot.grant and desktop_slot.revoke before forwarding.
 src/main/local/mcp-action.test.ts	exception	Tests updates and owner notifications for a configured MCP server.
