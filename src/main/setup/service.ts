@@ -334,10 +334,13 @@ export class SetupService {
 		if (!isSetupItemId(item)) return Promise.reject(new Error(`Unknown setup item: ${String(item)}`));
 		if (this.#deps.platform === "other") return Promise.reject(new Error("Setup is not available on this platform"));
 		const required = this.#items[item].required;
+		performance.mark("probe-retry:queued");
 		if (required) this.#markQueued(this.#requiredItems(), true);
 		else this.#markQueued([item], true);
 		return this.#enqueue(async () => {
+			performance.mark("probe-retry:detect-start");
 			await this.#detect();
+			performance.mark("probe-retry:detect-end");
 			if (required) {
 				await this.#runRequired(true);
 				await this.#runOptionalAfterRequired();
@@ -977,6 +980,7 @@ export class SetupService {
 		item.output = "";
 		item.failure = null;
 		item.phase = "running";
+		if (id === "omp") performance.mark("probe-retry:omp-running");
 		const download = this.#deps.testInstaller ? this.#testDownload() : plan.download;
 		item.progress = {
 			...place,
