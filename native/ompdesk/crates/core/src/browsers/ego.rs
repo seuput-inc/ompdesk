@@ -4,13 +4,13 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-use crate::server::{Registry, Reply};
+use crate::server::{Fault, Registry, Reply};
 
 static FOUND: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Search {
+pub(super) struct Search {
     path_env: String,
     home: PathBuf,
     cwd: PathBuf,
@@ -82,19 +82,21 @@ fn find(search: Search) -> Option<PathBuf> {
     None
 }
 
+pub(super) async fn resolve(search: Option<Search>) -> Result<Option<&'static PathBuf>, Fault> {
+    if FOUND.get().is_none()
+        && let Some(search) = search
+        && let Some(path) = super::blocking(move || find(search)).await?
+    {
+        let _ = FOUND.set(path);
+    }
+    Ok(FOUND.get())
+}
+
 pub(super) fn register(registry: &mut Registry) {
     registry.add("browsers.cachedEgo", |_| {
         Box::pin(async { Reply::json(&FOUND.get()) })
     });
     registry.add("browsers.resolveEgo", |call| {
-        Box::pin(async move {
-            let search: Search = call.params()?;
-            if FOUND.get().is_none()
-                && let Some(path) = super::blocking(move || find(search)).await?
-            {
-                let _ = FOUND.set(path);
-            }
-            Reply::json(&FOUND.get())
-        })
+        Box::pin(async move { Reply::json(&resolve(Some(call.params()?)).await?) })
     });
 }

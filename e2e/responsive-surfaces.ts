@@ -492,13 +492,17 @@ async function openSettingsModels(page: Page, look: Look): Promise<void> {
 	await row.scrollIntoViewIfNeeded();
 }
 
-/** Settings › Agent behavior, scrolled to Computer use engine and the two macOS permission rows under it. */
-async function openSettingsComputerUse(page: Page, look: Look): Promise<void> {
+async function openSettingsAgent(page: Page, look: Look): Promise<void> {
 	await openDrawer(page, look);
 	await page.locator('[data-destination="settings"]').first().click();
 	const nav = page.locator('[data-settings-section="agent"]');
 	await nav.waitFor({ state: "visible", timeout: 15_000 });
 	await nav.click();
+}
+
+/** Settings › Agent behavior, scrolled to Computer use engine and the two macOS permission rows under it. */
+async function openSettingsComputerUse(page: Page, look: Look): Promise<void> {
+	await openSettingsAgent(page, look);
 	const row = page.locator("[data-settings-page] #setting-gui-macPermission-screen");
 	await row.waitFor({ state: "visible", timeout: 30_000 });
 	await page.locator("[data-settings-page] #setting-gui-computerUse").scrollIntoViewIfNeeded();
@@ -1700,6 +1704,18 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-settings-page] #setting-host-omp [data-testid='omp-tested'], [data-settings-page] [data-setup-item='omp'] [data-testid='omp-tested']",
 		settle: 600,
 		// Parity only, like settings-disk-care: the row reads the computer's machine setup from main.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-default-browser",
+		area: "B",
+		title: "Settings › Agent behavior, the automatic browser selection",
+		open: async (page, look) => {
+			await openSettingsAgent(page, look);
+			await page.locator("#setting-gui-defaultBrowser").scrollIntoViewIfNeeded();
+		},
+		ready: "#setting-gui-defaultBrowser select:has(option[value='auto']:text('Automatic ·')):enabled",
 		when: () => false,
 		parity: { session: "work" },
 	},
