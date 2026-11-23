@@ -18,10 +18,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+
+use crate::sys::child_command;
 
 /// A repository may declare generated outputs for one exact invocation. Everything else stays an input.
 #[derive(serde::Deserialize)]
@@ -194,7 +196,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new("git")
+    let out = child_command("git")
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
@@ -708,7 +710,7 @@ pub fn volatile_env(name: &str) -> bool {
 }
 
 fn version_of(program: &str, args: &[&str]) -> Option<String> {
-    let mut child = Command::new(program)
+    let mut child = child_command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

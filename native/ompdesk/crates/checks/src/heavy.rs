@@ -983,8 +983,8 @@ mod tests {
     impl Worker {
         fn waiting(dir: &Path, class: &str, weight: usize) -> Self {
             use std::io::{BufRead, BufReader};
-            use std::process::{Command, Stdio};
-            let mut child = Command::new(std::env::current_exe().unwrap())
+            use std::process::Stdio;
+            let mut child = crate::sys::child_command(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
                     "heavy::tests::release_queue_with_two_slots",

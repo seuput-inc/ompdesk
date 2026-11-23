@@ -11,10 +11,12 @@
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+
+use crate::sys::child_command;
 
 /// How often the runner looks for the command's end and a cancel.
 const POLL: Duration = Duration::from_millis(100);
@@ -66,7 +68,7 @@ fn start(dir: &Path) -> i32 {
     ];
     #[cfg(unix)]
     let started = {
-        let mut command = Command::new(&exe);
+        let mut command = child_command(&exe);
         command
             .args(&args)
             .stdin(Stdio::null())
@@ -122,7 +124,7 @@ fn run_command(dir: &Path) -> io::Result<i32> {
         .create(true)
         .append(true)
         .open(dir.join("output.log"))?;
-    let mut command = Command::new(program);
+    let mut command = child_command(program);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -133,12 +135,6 @@ fn run_command(dir: &Path) -> io::Result<i32> {
     }
     #[cfg(unix)]
     crate::sys::child_defaults(&mut command, true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
     let mut child = command.spawn()?;
     write_whole(dir, "pid", &child.id().to_string())?;
     let mut cancelled = false;
@@ -171,7 +167,7 @@ fn end_tree(pid: u32) {
 
 #[cfg(windows)]
 fn end_tree(pid: u32) {
-    let _ = Command::new("taskkill")
+    let _ = child_command("taskkill")
         .args(["/T", "/F", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

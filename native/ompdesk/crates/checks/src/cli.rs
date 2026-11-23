@@ -11,9 +11,9 @@
 //! - `ompdesk checks wait [ID]`, `checks status`: see `board.rs`.
 
 use std::io::{self, BufRead, Write};
-use std::process::Command;
 
 use crate::heavy::{self, HELD_ENV, Owner, Pool, Waiting};
+use crate::sys::child_command;
 
 pub const EXIT_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
@@ -312,7 +312,7 @@ fn run(rest: &[String]) -> i32 {
 /// (a daemon) is not seen.
 #[cfg(unix)]
 pub fn tree(pid: u32) -> Vec<u32> {
-    let out = Command::new("ps")
+    let out = child_command("ps")
         .args(["-A", "-o", "pid=,ppid="])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -365,7 +365,7 @@ pub fn stop_process(pid: u32, grace: std::time::Duration) {
     #[cfg(windows)]
     {
         let _ = grace;
-        let _ = Command::new("taskkill")
+        let _ = child_command("taskkill")
             .args(["/T", "/F", "/PID", &pid.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -379,7 +379,7 @@ pub fn stop_process(pid: u32, grace: std::time::Duration) {
 fn run_holding(command: &[String], lease: Option<&heavy::Lease>) -> i32 {
     use std::io::IsTerminal;
     use std::process::Stdio;
-    let mut child = Command::new(&command[0]);
+    let mut child = child_command(&command[0]);
     child.args(&command[1..]);
     if let Some(lease) = lease {
         if lease.has_slots() {
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn a_stop_ends_a_shell_wrapper_and_the_writer_it_started() {
         // A wrapper that ignores SIGTERM and a background writer under it: both must be gone.
-        let mut wrapper = Command::new("sh")
+        let mut wrapper = child_command("sh")
             .args(["-c", "trap '' TERM; sleep 60 & echo $! ; wait"])
             .stdout(std::process::Stdio::piped())
             .spawn()
@@ -658,7 +658,7 @@ mod tests {
 
     /// The wrapper's pid: the parent of the writer it started.
     fn reaper_pid<T>(_: &std::thread::JoinHandle<T>, writer: u32) -> u32 {
-        let out = Command::new("ps")
+        let out = child_command("ps")
             .args(["-o", "ppid=", "-p", &writer.to_string()])
             .output()
             .unwrap();

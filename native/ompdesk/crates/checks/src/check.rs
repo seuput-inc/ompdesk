@@ -35,6 +35,7 @@ use crate::heavy::{self, now_ms};
 use crate::inputs::{self, InputSet, StatCache};
 use crate::runner::{self, Detected, Earlier, Kind, Record};
 use crate::store::{self, Plan, Run, State, Store};
+use crate::sys::child_command;
 use crate::watch::gb;
 
 /// Set for a check's command: a check started inside it runs as its child (no second runner, no second slot).
@@ -285,7 +286,7 @@ pub fn start(opts: Start) -> i32 {
     let nested = env(RUN_ENV).is_some_and(|outer| store.runner_alive(&outer));
     let started = if nested {
         // Inside another check's command: a plain child, so cancelling the outer check ends this one too.
-        Command::new(&exe)
+        child_command(&exe)
             .args(["check", "--runner", &id])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -295,7 +296,7 @@ pub fn start(opts: Start) -> i32 {
     } else {
         // Through a middle process that exits at once, so the runner's parent is gone before anyone walks the
         // starter's process tree to end it.
-        Command::new(&exe)
+        child_command(&exe)
             .args(["check", "--spawn", &id])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -337,7 +338,7 @@ pub fn spawn_runner(id: &str) -> i32 {
     let args = vec!["check".to_string(), "--runner".to_string(), id.to_string()];
     #[cfg(unix)]
     let started = {
-        let mut command = Command::new(&exe);
+        let mut command = child_command(&exe);
         command
             .args(&args)
             .stdin(Stdio::null())
@@ -623,7 +624,7 @@ fn stop_command(store: &Store, run: &Run) {
 #[cfg(windows)]
 fn stop_command(store: &Store, run: &Run) {
     if let Ok(pid) = fs::read_to_string(store.file(&run.id, "child")) {
-        let _ = Command::new("taskkill")
+        let _ = child_command("taskkill")
             .args(["/T", "/F", "/PID", pid.trim()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1102,7 +1103,7 @@ fn jest_list(argv: &[String], cwd: &Path, detected: &Detected) -> Option<Vec<Str
         args.push("--".into());
     }
     args.extend(["--listTests".into(), "--json".into()]);
-    let out = Command::new(&argv[0])
+    let out = child_command(&argv[0])
         .args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -1179,7 +1180,7 @@ pub fn run_runner(id: &str) -> i32 {
 /// macOS keychains in this user's search list (`security list-keychains`), to put back a list a check changed.
 #[cfg(target_os = "macos")]
 fn keychains() -> Option<Vec<String>> {
-    let out = Command::new("/usr/bin/security")
+    let out = child_command("/usr/bin/security")
         .args(["list-keychains", "-d", "user"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -1403,7 +1404,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
         && before != after
     {
         {
-            let _ = Command::new("/usr/bin/security")
+            let _ = child_command("/usr/bin/security")
                 .args(["list-keychains", "-d", "user", "-s"])
                 .args(&before)
                 .status();
@@ -1507,7 +1508,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
 
 #[cfg(unix)]
 fn command_for(argv: &[String], _env: &BTreeMap<String, String>) -> Command {
-    let mut command = Command::new(&argv[0]);
+    let mut command = child_command(&argv[0]);
     command.args(&argv[1..]);
     // A group of its own, so a cancel or a full disk ends what it started too.
     crate::sys::child_defaults(&mut command, true);
@@ -1523,17 +1524,17 @@ fn command_for(argv: &[String], env: &BTreeMap<String, String>) -> Command {
                 e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")
             }) =>
         {
-            let mut c = Command::new("cmd");
+            let mut c = child_command("cmd");
             c.arg("/d").arg("/s").arg("/c").arg(p).args(&argv[1..]);
             c
         }
         Some(p) => {
-            let mut c = Command::new(p);
+            let mut c = child_command(p);
             c.args(&argv[1..]);
             c
         }
         None => {
-            let mut c = Command::new(&argv[0]);
+            let mut c = child_command(&argv[0]);
             c.args(&argv[1..]);
             c
         }
@@ -2090,7 +2091,7 @@ mod tests {
             std::os::unix::fs::symlink(target, at).unwrap();
             #[cfg(windows)]
             assert!(
-                Command::new("cmd")
+                child_command("cmd")
                     .args(["/D", "/C", "mklink", "/J"])
                     .arg(at)
                     .arg(target)

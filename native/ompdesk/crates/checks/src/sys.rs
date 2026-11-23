@@ -2,6 +2,26 @@
 //! runner's own session, and on Windows the desktop a check runs on.
 #![allow(unsafe_code)]
 
+use std::ffi::OsStr;
+use std::process::Command;
+
+/// Inherit an attached console (even with redirected stdio) so Ctrl-C still reaches the child.
+pub(crate) fn child_command(program: impl AsRef<OsStr>) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = command;
+        // SAFETY: GetConsoleCP takes no arguments and only queries this process's console.
+        if unsafe { GetConsoleCP() } == 0 {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        command
+    };
+    command
+}
+
 /// This computer's physical memory in bytes, `None` when the system does not say.
 #[cfg(unix)]
 pub fn physical_memory() -> Option<u64> {
@@ -286,6 +306,7 @@ pub struct Detached {
 #[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
+    fn GetConsoleCP() -> u32;
     fn GetExitCodeProcess(process: *mut std::ffi::c_void, code: *mut u32) -> i32;
     fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
 }
