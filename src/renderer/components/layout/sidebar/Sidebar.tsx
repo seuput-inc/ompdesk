@@ -59,7 +59,7 @@ import {
 } from "../../../../shared/sidebar-rows";
 import { splitTabIds } from "../../../../shared/split-layout";
 import { useSessionList } from "../../../hooks/use-session-list";
-import { requestSessionSwitch, sessionSwitchInFlight } from "../../../hooks/use-session-switch";
+import { requestSessionSwitch, useSwitchingTabs } from "../../../hooks/use-session-switch";
 import { useShellInput } from "../../../hooks/use-shell-mode";
 import { useTabListRows } from "../../../hooks/use-tab-list-rows";
 import { ATTENTION_LABEL_KEY, type AttentionKind, isAsk } from "../../../lib/attention";
@@ -204,7 +204,7 @@ function activeTabUntouched(): boolean {
 	// A remote tab runs on its host: it can never be re-rooted to this device's sessions or folders.
 	if (!tab || tab.device !== undefined || tab.worktree || tab.status === "running" || tab.compacting) return false;
 	// A pick still loading has not reached the stores below: the tab is not empty, whatever they read yet.
-	if (sessionSwitchInFlight()) return false;
+	if (useSwitchingTabs.getState().includes(tab.id)) return false;
 	// Main names a saved session there (a switch it answered, a restored tab): its transcript may still be loading, and
 	// a pick that ends the switch before the replacement's stores fill would otherwise re-root it.
 	if (tab.sessionPath && tab.unstarted !== true) return false;
@@ -1028,9 +1028,6 @@ export function Sidebar() {
 			recordedCwd && projectName(session.cwd).gone && session.liveTabId === undefined
 				? { ...session, cwd: recordedCwd }
 				: session;
-		// Already open in a tab: go there. An untouched empty tab is replaced
-		// instead of left behind; anything else keeps its tab and the session
-		// opens next to it.
 		const owner = tabForSession(session);
 		const how = owner ? "focus" : activeTabUntouched() ? "reroot" : "open";
 		logSelection(

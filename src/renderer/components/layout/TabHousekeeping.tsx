@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { splitTabIds } from "../../../shared/split-layout";
 import { useSessionList } from "../../hooks/use-session-list";
+import { useSwitchingTabs } from "../../hooks/use-session-switch";
 import { sessionHasContent } from "../../lib/session-title";
 import { type ComposerStore, useComposerStore } from "../../stores/composer";
 import { type MessagesStore, useMessagesStore } from "../../stores/messages";
@@ -43,6 +44,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 	const liveRenderedMessages = useMessagesStore(s => s.messages.length);
 	const liveQueuedMessages = useQueueStore(s => s.steering.length + s.followUp.length);
 	const armedCloseTab = useUiStore(s => s.armedCloseTab);
+	const switchingTabs = useSwitchingTabs();
 	const cancelCloseTab = useUiStore(s => s.cancelCloseTab);
 	const pruningPlaceholderRef = useRef<string | null>(null);
 	const split = useTabsStore(s => s.split);
@@ -87,6 +89,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 		const left = tabs.find(
 			tab =>
 				tab.unstarted === true &&
+				!switchingTabs.includes(tab.id) &&
 				tab.id !== activeTabId &&
 				shownRef.current.has(tab.id) &&
 				!inSplit.has(tab.id) &&
@@ -110,6 +113,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 					indexedSession !== undefined &&
 					!sessionHasContent(indexedSession);
 				if (tab.placeholder !== true && !legacyEmptyStartupChat) return false;
+				if (switchingTabs.includes(tab.id)) return false;
 				if (indexedSession && sessionHasContent(indexedSession)) return false;
 				if (tab.worktree || tab.pendingSessionPath || tab.status === "running" || tab.compacting) return false;
 				// A tab already closing (its session is being deleted) is no reason for the start tab to go.
@@ -148,6 +152,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 		sessionsById,
 		sessionsByPath,
 		tabs,
+		switchingTabs,
 		split,
 	]);
 

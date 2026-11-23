@@ -56,6 +56,7 @@ import { useUiStore } from "../../../stores/ui";
 import { setWebPwa, type WebPwa } from "../../../web/pwa";
 import * as web from "../../../web/runtime";
 import type { WsConnectionState } from "../../../web/ws-transport";
+import { TabHousekeeping } from "../TabHousekeeping";
 import { Sidebar } from "./Sidebar";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -729,31 +730,62 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(omp.rpc.switchSession).toHaveBeenCalledWith("/work/alpha/one.jsonl");
 	});
 
-	it("opens a second pick beside the first while the first still loads, not over it", async () => {
+	it("keeps a pick made while the landing tab is learning its session identity", async () => {
 		const omp = installMockOmp(LIST);
-		useSessionStore.setState({ sessionId: "empty", cwd: "/work/alpha", isStreaming: false, messageCount: 0 });
 		useTabsStore.setState({
-			tabs: [{ id: "t0", cwd: "/work/alpha", status: "ready", kind: "agent", unreadDone: false }],
+			tabs: [{ id: "t0", cwd: "/work/alpha", status: "ready", kind: "agent", unreadDone: false, unstarted: true }],
 			activeTabId: "t0",
 			bundles: new Map(),
 		});
-		// The first switch is committed by main but not yet answered: the stores still read like the empty tab.
-		let answer: (response: unknown) => void = () => {};
-		omp.rpc.switchSession.mockImplementationOnce(
-			() => new Promise(resolve => (answer = resolve)) as ReturnType<typeof omp.rpc.switchSession>,
-		);
+		ensureTabRuntime("t0");
+		setFocusedSessionRuntime("t0");
+		useSessionStore.setState({ cwd: "/work/alpha", sessionId: "" });
+		omp.tabs.getSessionOwner.mockImplementationOnce(async () => {
+			useSessionStore.setState({ sessionId: "landing" });
+			return null;
+		});
 		await mount(<Sidebar />);
-
 		await fire(rowButton("Session /work/alpha/one"), "onClick");
 		await flush();
-		expect(omp.rpc.switchSession).toHaveBeenCalledTimes(1);
+		expect(omp.rpc.commandForTab).toHaveBeenCalledWith(
+			"t0",
+			expect.objectContaining({ type: "switch_session", sessionPath: "/work/alpha/one.jsonl" }),
+			undefined,
+		);
+	});
 
-		await fire(rowButton("Session /work/alpha/two"), "onClick");
-		await flush();
-		expect(omp.rpc.switchSession).toHaveBeenCalledTimes(1);
-		expect(omp.tabs.spawn).toHaveBeenCalled();
-
-		await act(async () => answer({ type: "response", command: "switch_session", success: true, data: {} }));
+	it("keeps the first pick's tab when the second pick opens before the ownership check answers", async () => {
+		const omp = installMockOmp(LIST);
+		useTabsStore.setState({
+			tabs: [{ id: "t0", cwd: "/work/alpha", status: "ready", kind: "agent", unreadDone: false, unstarted: true }],
+			activeTabId: "t0",
+			bundles: new Map(),
+		});
+		ensureTabRuntime("t0");
+		setFocusedSessionRuntime("t0");
+		useSessionStore.setState({ cwd: "/work/alpha", sessionId: "empty" });
+		const owner = Promise.withResolvers<null>();
+		omp.tabs.getSessionOwner.mockReturnValueOnce(owner.promise);
+		await mount(
+			<>
+				<Sidebar />
+				<TabHousekeeping />
+			</>,
+		);
+		try {
+			await fire(rowButton("Session /work/alpha/one"), "onClick");
+			await fire(rowButton("Session /work/alpha/two"), "onClick");
+			await flush();
+			expect(useTabsStore.getState().activeTabId).toBe("t-new");
+			expect(useTabsStore.getState().tabs.map(tab => tab.id)).toEqual(["t0", "t-new"]);
+		} finally {
+			await act(async () => owner.resolve(null));
+		}
+		expect(omp.rpc.commandForTab).toHaveBeenCalledWith(
+			"t0",
+			expect.objectContaining({ type: "switch_session", sessionPath: "/work/alpha/one.jsonl" }),
+			undefined,
+		);
 	});
 
 	it("opens a pick beside a saved session the tab switched to whose transcript has not landed yet", async () => {

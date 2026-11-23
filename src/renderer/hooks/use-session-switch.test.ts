@@ -34,8 +34,8 @@ import {
 	newSessionNow,
 	opensInOwnTab,
 	requestSessionSwitch,
-	sessionSwitchInFlight,
 	switchSessionNow,
+	useSwitchingTabs,
 } from "./use-session-switch";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -548,11 +548,11 @@ describe("switchSessionNow F-OWN owner guard", () => {
 
 		const switching = switchSessionNow(session("/sessions/x.jsonl"));
 		await transcriptStarted.promise;
-		expect(sessionSwitchInFlight()).toBe(true);
+		expect(useSwitchingTabs.getState()).toContain("t0");
 
 		transcript.resolve(ok({ messages: [] }));
 		await expect(switching).resolves.toBe(true);
-		expect(sessionSwitchInFlight()).toBe(false);
+		expect(useSwitchingTabs.getState()).not.toContain("t0");
 		setFocusedSessionRuntime(null);
 		deleteSessionRuntime("t0");
 	});

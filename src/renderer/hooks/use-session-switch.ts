@@ -1,3 +1,4 @@
+import { create } from "zustand";
 import { createTabRpc } from "../lib/tab-rpc";
 import type { SessionStore } from "../stores/session";
 import {
@@ -143,16 +144,8 @@ export function opensInOwnTab(session: SessionInfo): boolean {
 	return trim(tabCwd) !== trim(session.cwd);
 }
 
-let switchesInFlight = 0;
-
-/**
- * A switch is running: its session file is committed (or about to be) but the replacement runtime is not hydrated, so
- * the tab's stores still read like the empty tab it was. Nothing may re-root that tab again until it settles: the
- * second switch would start from the retired runtime, which refuses it ("the originating session was replaced").
- */
-export function sessionSwitchInFlight(): boolean {
-	return switchesInFlight > 0;
-}
+/** One entry per switch, from the owner lookup through hydration, even if the tab's runtime changes. */
+export const useSwitchingTabs = create<readonly string[]>(() => []);
 
 /**
  * Run the switch immediately. The server aborts any in-flight turn
@@ -170,11 +163,13 @@ export function sessionSwitchInFlight(): boolean {
  * pre-check is safe to ignore.
  */
 export async function switchSessionNow(session: SessionInfo, model?: SessionModelOverride): Promise<boolean> {
-	switchesInFlight++;
+	const tabId = focusedSessionRuntime()?.tabId ?? useTabsStore.getState().activeTabId;
+	if (!tabId) return switchSession(session, model);
+	useSwitchingTabs.setState(tabs => [...tabs, tabId], true);
 	try {
 		return await switchSession(session, model);
 	} finally {
-		switchesInFlight--;
+		useSwitchingTabs.setState(tabs => tabs.toSpliced(tabs.indexOf(tabId), 1), true);
 	}
 }
 
@@ -183,8 +178,19 @@ async function switchSession(session: SessionInfo, model?: SessionModelOverride)
 	const originStore = runtime ? sessionRuntimeStore<SessionStore>(runtime.tabId, "session")! : useSessionStore;
 	const originSessionId = originStore.getState().sessionId;
 	const originTabId = runtime?.tabId ?? useTabsStore.getState().activeTabId;
-	const stillCurrent = () =>
-		!runtime || (sessionRuntime(runtime.tabId) === runtime && originStore.getState().sessionId === originSessionId);
+	const stillCurrent = () => {
+		if (!runtime) return true;
+		if (sessionRuntime(runtime.tabId) !== runtime) return false;
+		const current = originStore.getState();
+		if (current.sessionId === originSessionId) return true;
+		// The landing tab's initial hydration supplies its first id; it has not switched sessions.
+		return (
+			!originSessionId &&
+			!current.isStreaming &&
+			!current.isCompacting &&
+			useTabsStore.getState().tabs.some(tab => tab.id === originTabId && tab.unstarted)
+		);
+	};
 	try {
 		const owner = await window.omp.tabs.getSessionOwner(session.path);
 		if (owner) return await routeToSessionOwner(owner, session.path, session.kind === "chat" ? "chat" : "agent");
