@@ -102,6 +102,9 @@ describe("deflated frames by the device's build", () => {
 			const capabilities = slim.split(",");
 			expect(capabilities.includes("deflate")).toBe(deflate);
 			expect(capabilities.includes("context")).toBe(context);
+			expect(capabilities.includes("lists")).toBe(["current", "noDeflateContext", "noDeflate"].includes(device));
+			expect(capabilities.includes("settings")).toBe(capabilities.includes("lists"));
+			expect(capabilities.includes("events")).toBe(device !== "older");
 		},
 		60_000,
 	);

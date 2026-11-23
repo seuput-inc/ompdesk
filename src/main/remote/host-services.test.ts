@@ -95,9 +95,10 @@ import { HOST_WAIT_NOTICE_MS, type HostServicesDeps, LocalHostServices } from ".
 import type { HostedTabView } from "./hosted-view";
 import { KeptCalls } from "./kept-calls";
 import { createLinkEventDecoder, createReadDecoder, type WireSubagentFrame } from "./link-events";
+import { linkSlimFixture } from "./link-slim-fixture";
 import { localDay, PeerQuota } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
-import { slimOf, tabHolderOf } from "./protocol";
+import { tabHolderOf } from "./protocol";
 import { FrameTooLargeError } from "./wire";
 
 /** A SidecarManager stand-in for the host side. */
@@ -2679,7 +2680,7 @@ describe("LocalHostServices", () => {
 			sessionIndex: { list: async () => rows } as unknown as HostServicesDeps["sessionIndex"],
 		});
 		const numbered = Object.assign(new FakeConnection(peer("device-new")), {
-			slim: { ...slimOf({ t: "hello", protocol: 1, appVersion: "1", name: "n" }), sessionLists: true },
+			slim: { ...linkSlimFixture(false), sessionLists: true },
 		});
 		const older = new FakeConnection(peer("device-old"));
 		const first = (await services.call(

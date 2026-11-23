@@ -32,8 +32,8 @@ import type { WsRouter } from "../web/ws-router";
 import { TestRouterHost } from "../web/ws-router-test-rig";
 import type { HostConnection } from "./host-server";
 import { LocalHostServices } from "./host-services";
+import { linkSlimFixture } from "./link-slim-fixture";
 import type { PeerInfo } from "./peers-store";
-import { slimOf } from "./protocol";
 import { Link } from "./wire";
 
 const OUT = process.env.OMP_GUI_FANOUT_CPU;
@@ -228,29 +228,7 @@ class SinkLink extends Link {
 }
 
 class Connection implements HostConnection {
-	readonly slim = slimOf({
-		t: "hello",
-		protocol: 1,
-		appVersion: "1.0.0",
-		name: "device",
-		slimEvents: true,
-		slimProgress: true,
-		slimAutopilot: true,
-		slimEnds: true,
-		slimReadGroups: true,
-		slimToolResults: true,
-		slimEndFields: true,
-		slimAutopilotReads: true,
-		slimListReads: true,
-		slimShiftedReads: true,
-		slimSettingsReads: true,
-		slimRosterReads: true,
-		slimJobsReads: true,
-		slimToolOutputs: true,
-		slimToolArgs: true,
-		deflate: true,
-		deflateContext: true,
-	} as never);
+	readonly slim = { ...linkSlimFixture(true), sessionLists: false };
 	constructor(
 		readonly link: Link,
 		readonly peer: PeerInfo,

@@ -48,7 +48,7 @@ export class RemoteError extends Error {
 }
 
 /**
- * What this device can read beyond whole frames, sent in its hello (`ClientHello`, protocol.ts): every capability
+ * What this device can read beyond whole frames, sent in its hello: every capability
  * this build has. An older host ignores the ones it does not know.
  */
 export const HELLO_CAPABILITIES = {
