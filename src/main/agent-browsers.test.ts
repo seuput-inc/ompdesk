@@ -8,6 +8,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -20,7 +21,7 @@ import {
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHROMIUM_BROWSER_IDS, type ChromiumBrowserId } from "../shared/default-browser";
 import {
@@ -28,12 +29,15 @@ import {
 	detectChromiumBrowsers,
 	findChromiumBrowsers,
 	installRelayExtension,
+	resolveEgoBrowser,
 } from "./agent-browsers";
-import { CoreProcess } from "./core/process";
+import * as coreProcess from "./core/process";
 import type { OmpRuntime } from "./local/types";
 import { nativeBinPath } from "./native-bin";
+import * as shellEnv from "./shell-env";
 import { OMP_COMMAND, stockSource } from "./test-bridge-probe";
 
+const { CoreProcess } = coreProcess;
 let root: string;
 let home: string;
 const servers: Server[] = [];
@@ -94,6 +98,73 @@ beforeEach(() => {
 afterEach(() => {
 	for (const server of servers.splice(0)) server.close();
 	rmSync(root, { recursive: true, force: true });
+});
+
+describe("ego-browser executable discovery", () => {
+	const win = process.platform === "win32";
+	const firstName = win ? "ego-browser.exe" : "ego-browser";
+	const file = (path: string) => {
+		place(path, "");
+		chmodSync(path, 0o755);
+	};
+
+	it("retries misses, searches each PATH directory before the next and keeps the first hit", async () => {
+		const host = new CoreProcess({ binary: () => nativeBinPath("ompdesk-core"), log: () => {} });
+		const pathEnv = ["", "first/missing/..", "second"].join(delimiter);
+		const lookup = async () => (await host.call("browsers.resolveEgo", { home, cwd: root, pathEnv })).result;
+		try {
+			file(join(root, firstName)); // An empty PATH entry does not mean cwd.
+			if (win) place(join(root, "first", firstName));
+			else {
+				file(join(root, "first", firstName));
+				chmodSync(join(root, "first", firstName), 0o644);
+			}
+			expect(await lookup()).toBeNull();
+			const expected = join("first", win ? "ego-browser.cmd" : firstName);
+			file(join(root, expected));
+			if (win) file(join(root, "first", "ego-browser"));
+			file(join(root, "second", firstName));
+			file(join(home, ".local", "bin", firstName));
+			expect(await lookup()).toBe(expected);
+			rmSync(join(root, expected));
+			expect((await host.call("browsers.cachedEgo", {})).result).toBe(expected);
+			expect(await lookup()).toBe(expected);
+		} finally {
+			await host.stop();
+		}
+	});
+
+	it("shares the pending lookup and asks for the shell PATH only on a cache miss", async () => {
+		const host = new CoreProcess({ binary: () => nativeBinPath("ompdesk-core"), log: () => {} });
+		const client = vi.spyOn(coreProcess, "core").mockReturnValue(host);
+		const path = vi.spyOn(shellEnv, "spawnPath").mockResolvedValue(root);
+		try {
+			const expected = join(root, firstName);
+			file(expected);
+			const pending = resolveEgoBrowser();
+			expect(resolveEgoBrowser()).toBe(pending);
+			expect(await pending).toBe(expected);
+			rmSync(expected);
+			expect(await resolveEgoBrowser()).toBe(expected);
+			expect(path).toHaveBeenCalledTimes(1);
+		} finally {
+			path.mockRestore();
+			client.mockRestore();
+			await host.stop();
+		}
+	});
+
+	it("accepts the bare installer fallback outside PATH", async () => {
+		const host = new CoreProcess({ binary: () => nativeBinPath("ompdesk-core"), log: () => {} });
+		try {
+			const expected = join(home, ".local", "bin", "ego-browser");
+			file(expected);
+			const answer = await host.call("browsers.resolveEgo", { home, cwd: root, pathEnv: "" });
+			expect(answer.result).toBe(expected);
+		} finally {
+			await host.stop();
+		}
+	});
 });
 
 describe("findChromiumBrowsers", () => {

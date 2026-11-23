@@ -6,9 +6,9 @@
 //!
 //! Main hands over what it also spells for the page: the browsers in `auto` order with their names and relay ports
 //! (`src/shared/default-browser.ts`), where this machine keeps things (`systemBrowserPlaces`), and how it runs omp.
-//! It keeps finding `ego-browser` along the spawn PATH (`findOnPath`, which omp's lookup shares) and the
-//! once-per-launch answer every session reads.
+//! The core finds ego-browser on the login-shell PATH supplied by main and caches a successful lookup.
 
+mod ego;
 mod relay;
 
 use std::path::PathBuf;
@@ -326,6 +326,7 @@ async fn open(params: OpenParams, scope: Scope) -> Result<(), Fault> {
 }
 
 pub fn register(registry: &mut Registry) {
+    ego::register(registry);
     registry.add("browsers.find", |call| {
         Box::pin(async move {
             let params: FindParams = call.params()?;
