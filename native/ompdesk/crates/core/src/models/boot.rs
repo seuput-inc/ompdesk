@@ -42,7 +42,7 @@ struct Launch {
 pub(super) fn handle(call: Call) -> Answer {
     // Reserve the first caller's launch inputs in wire order, before either request's task runs.
     let pending = lookup(&call);
-    Box::pin(async move { Reply::json(&*pending?.await) })
+    Box::pin(async move { Reply::json(&pending?.await.as_ref()) })
 }
 
 fn lookup(call: &Call) -> Result<Lookup, Fault> {
