@@ -462,7 +462,8 @@ describe("a failed turn", () => {
 		await vi.waitFor(() => expect(status.state).toBe("waiting_quota"), { timeout: 5_000 });
 		const at = status.quotaResetAt as number;
 		expect(at).toBeGreaterThan(Date.now() + QUOTA_FALLBACK_MS - 10_000);
-		expect(at).toBeLessThanOrEqual(Date.now() + QUOTA_FALLBACK_MS);
+		// The core stamps the reset with its own clock, which may read a millisecond or so ahead of this process.
+		expect(at).toBeLessThanOrEqual(Date.now() + QUOTA_FALLBACK_MS + 1_000);
 	});
 
 	it("a pause meanwhile cancels the quota wake", async () => {
