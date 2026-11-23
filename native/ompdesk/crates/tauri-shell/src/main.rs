@@ -6,6 +6,7 @@ mod automation;
 mod evaluate;
 mod gpu;
 mod js_date;
+mod launch_protection;
 mod migrate_watch;
 mod native_chrome;
 mod native_services;
@@ -83,6 +84,7 @@ struct Runtime {
     host_navigations: Mutex<HashMap<u64, String>>,
     preload: String,
     user_data: PathBuf,
+    packaged: bool,
     feedback_profile: PathBuf,
     renderer: PathBuf,
     user_agent: Mutex<Option<String>>,
@@ -95,6 +97,22 @@ fn runtime() -> &'static Runtime {
     RUNTIME
         .get()
         .expect("Tauri runtime initialized before Node")
+}
+static LAUNCH: OnceLock<Mutex<launch_protection::LaunchProtection>> = OnceLock::new();
+
+fn wall_clock_ms() -> i64 {
+    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
+}
+
+#[cfg(windows)]
+fn gpu_process_gone(mut details: Value) {
+    if let Some(launch) = LAUNCH.get() {
+        let mut crash = details.clone();
+        crash["now"] = json!(wall_clock_ms());
+        crash["testLaunch"] = json!(std::env::var("OMP_GUI_HEADLESS").as_deref() == Ok("1"));
+        details["launchDecision"] = launch.lock().expect("launch protection").apply("crash", &crash);
+    }
+    host::event("app.childProcessGone", details);
 }
 fn failed(error: impl std::fmt::Display) -> WireError {
     WireError::new("failed", error.to_string())
@@ -1066,6 +1084,39 @@ fn wc_op(call: host::Call) {
     }
 }
 fn dispatch(call: host::Call) {
+    // The socket reader dispatches in order. The receipt follows the file write, not its scheduling.
+    if call.method == "app.startLaunchProtection" {
+        if LAUNCH.get().is_some() {
+            call.err("invalid", "launch protection already started");
+            return;
+        }
+        let (launch, result) = launch_protection::LaunchProtection::start(
+            &runtime().user_data,
+            wall_clock_ms(),
+            call.params["primary"] == true
+                && ((runtime().packaged && std::env::var("OMP_GUI_HEADLESS").as_deref() != Ok("1"))
+                    || std::env::var("OMP_GUI_LAUNCH_GUARD").as_deref() == Ok("1")),
+            call.params["enableGpu"] == true,
+            call.params["disableGpu"] == true,
+        );
+        let _ = LAUNCH.set(Mutex::new(launch));
+        call.ok(result);
+        return;
+    }
+    if call.method == "app.launchEvent" {
+        let Some(launch) = LAUNCH.get() else {
+            call.err("invalid", "launch protection not started");
+            return;
+        };
+        let mut launch = launch.lock().expect("launch protection");
+        let result = match call.params["op"].as_str() {
+            Some("identity") => launch.apply("identity", &json!({"devices":gpu::info()["info"]["gpuDevice"]})),
+            Some(op @ ("stable" | "healthy")) => launch.apply(op, &Value::Null),
+            _ => { call.err("invalid", "unknown launch signal"); return; }
+        };
+        call.ok(result);
+        return;
+    }
     if call.method == "app.watchdog" {
         native_services::watchdog::handle(call, &runtime().user_data);
         return;
@@ -1797,6 +1848,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     host_navigations: Mutex::new(HashMap::new()),
                     preload,
                     user_data,
+                    packaged,
                     feedback_profile,
                     renderer,
                     user_agent: Mutex::new(None),

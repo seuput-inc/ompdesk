@@ -96,6 +96,8 @@ function fakeShell(shell: ShellClient) {
 	>();
 	const methods = [
 		"app.init",
+		"app.startLaunchProtection",
+		"app.launchEvent",
 		"app.exit",
 		"app.setAsDefaultProtocolClient",
 		"app.getGPUInfo",
@@ -203,6 +205,21 @@ describe("app", () => {
 		commandLine.appendSwitch("blink-settings", "foo=1,dnsPrefetchingEnabled=false");
 		commandLine.appendSwitch("disable-renderer-backgrounding");
 		expect(commandLine.getSwitchValue("blink-settings")).toBe("foo=1,dnsPrefetchingEnabled=false");
+	});
+
+	it("waits for launch history and the GPU decision before sending the pre-ready flags", async () => {
+		const { app } = electron;
+		const saved = Promise.withResolvers<{ software: boolean }>();
+		fake.answers.set("app.startLaunchProtection", () => saved.promise);
+		app.commandLine.appendSwitch("enable-gpu");
+		const start = app.startLaunchProtection(true);
+		await settle();
+		expect(fake.callsOf("app.startLaunchProtection")[0]?.params).toEqual({ primary: true, enableGpu: true, disableGpu: false });
+		expect(fake.callsOf("app.init")).toHaveLength(0);
+		saved.resolve({ software: true });
+		await start;
+		await settle();
+		expect(fake.callsOf("app.init")[0]?.params.disableHardwareAcceleration).toBe(true);
 	});
 
 	it("sends one app.init after main's top level, with its switches, schemes and flags; ready follows the shell's event", async () => {
@@ -313,6 +330,27 @@ describe("the quit sequence", () => {
 	beforeEach(async () => {
 		await boot();
 		await ready();
+	});
+
+	it("finishes the stable write between the will-quit listeners on either side of it", async () => {
+		const { app } = electron;
+		const saved = Promise.withResolvers<void>();
+		const order: string[] = [];
+		fake.answers.set("app.launchEvent", ({ op }) => {
+			order.push(String(op));
+			return saved.promise;
+		});
+		app.once("will-quit", () => order.push("earlier"));
+		app.stabilizeOnCleanQuit();
+		app.once("will-quit", () => order.push("later"));
+		app.quit();
+		await settle();
+		expect(order).toEqual(["earlier", "stable"]);
+		expect(exited).toEqual([]);
+		saved.resolve();
+		await settle();
+		expect(order).toEqual(["earlier", "stable", "later"]);
+		expect(exited).toEqual([0]);
 	});
 
 	it("runs before-quit, closes the windows, will-quit and quit, then exits", async () => {

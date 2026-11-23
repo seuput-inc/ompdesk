@@ -7,6 +7,7 @@
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { LaunchDecision, LaunchStart } from "../../gpu-fallback";
 import type { HostFacts, PathName, SchemeFact } from "../facts";
 import { emitPreventable, type Host, makeEvent } from "./host";
 
@@ -80,6 +81,7 @@ export class App extends EventEmitter {
 	#ready = false;
 	#readyWaiters: Array<() => void> = [];
 	#disableHardwareAcceleration = false;
+	#launchStart?: Promise<LaunchStart>;
 	#appUserModelId: string | undefined;
 	#activationPolicy: string | undefined;
 	#aboutPanel: Record<string, unknown> | undefined;
@@ -131,16 +133,36 @@ export class App extends EventEmitter {
 		client.on("app.activate", ({ hasVisibleWindows }: { hasVisibleWindows?: boolean }) => {
 			this.emit("activate", makeEvent(), hasVisibleWindows === true);
 		});
-		client.on("app.childProcessGone", (details: Record<string, unknown>) => {
-			this.emit("child-process-gone", makeEvent(), details);
+		client.on("app.childProcessGone", ({ launchDecision, ...details }: { launchDecision?: LaunchDecision }) => {
+			this.emit("child-process-gone", makeEvent({ launchDecision }), details);
 		});
 	}
 
-	#sendInit(): void {
+	startLaunchProtection(primary: boolean): Promise<LaunchStart> {
+		this.#launchStart = this.#host.client.call<LaunchStart>("app.startLaunchProtection", {
+			primary,
+			enableGpu: this.commandLine.hasSwitch("enable-gpu"),
+			disableGpu: this.commandLine.hasSwitch("disable-gpu"),
+		});
+		return this.#launchStart;
+	}
+
+	launchEvent(op: "identity" | "healthy" | "stable"): Promise<LaunchDecision> {
+		return this.#host.client.call("app.launchEvent", { op });
+	}
+
+	readonly #markLaunchStable = () => this.launchEvent("stable");
+
+	stabilizeOnCleanQuit(): void {
+		this.on("will-quit", this.#markLaunchStable);
+	}
+
+	async #sendInit(): Promise<void> {
 		if (this.#initSent) return;
 		this.#initSent = true;
-		this.#host.client
-			.call("app.init", {
+		try {
+			if ((await this.#launchStart)?.software) this.disableHardwareAcceleration();
+			await this.#host.client.call("app.init", {
 				name: this.#name,
 				switches: this.commandLine.entries(),
 				schemes: this.#initState.schemes,
@@ -148,10 +170,10 @@ export class App extends EventEmitter {
 				...(this.#appUserModelId === undefined ? {} : { appUserModelId: this.#appUserModelId }),
 				...(this.#activationPolicy === undefined ? {} : { activationPolicy: this.#activationPolicy }),
 				...(this.#aboutPanel === undefined ? {} : { aboutPanel: this.#aboutPanel }),
-			})
-			.catch((error: unknown) =>
-				this.#host.warn(`app.init failed: ${error instanceof Error ? error.message : String(error)}`),
-			);
+			});
+		} catch (error) {
+			this.#host.warn(`app.init failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	// --- identity and paths ---
@@ -324,7 +346,13 @@ export class App extends EventEmitter {
 			if (!emitPreventable(this, "before-quit")) return;
 			this.#quitting = true;
 			if (!(await this.#deps.closeWindows())) return;
-			if (!emitPreventable(this, "will-quit")) return;
+			const event = makeEvent();
+			// Keep EventEmitter's listener snapshot and once wrappers. Only the guard's own write waits for a receipt.
+			for (const listener of this.rawListeners("will-quit")) {
+				if (listener === this.#markLaunchStable) await this.#markLaunchStable();
+				else listener.call(this, event);
+			}
+			if (event.defaultPrevented) return;
 			this.exit(0);
 		} finally {
 			this.#quitting = false;
