@@ -295,6 +295,7 @@ export interface SidecarOptions {
 	 * variable, the section stays off.
 	 */
 	defaultBrowser?: () => Promise<AgentBrowser> | AgentBrowser;
+	defaultBrowserFallback?: () => AgentBrowser | undefined;
 	/**
 	 * ego-browser's folder when it is installed (null when not): added to the session's PATH, since the browser
 	 * section has agents run a bare `ego-browser` and it is also found where the login shell's PATH may not look
@@ -1364,6 +1365,7 @@ export class SidecarManager extends EventEmitter {
 		this.#opening = { at: Date.now(), steps: [] };
 		const { omp, proxyEnv, shellEnv } = this.#options;
 		const fallback = () => ({}) as Record<string, string>;
+		const browserFallback = this.#options.defaultBrowserFallback?.();
 		const bound = this.#options.startInputMs ?? START_INPUT_MS;
 		// What the start still waits on, named for a recovery's `resolve-slow` report.
 		const pending = new Set<string>();
@@ -1421,8 +1423,8 @@ export class SidecarManager extends EventEmitter {
 			),
 			waited(
 				"defaultBrowser",
-				Promise.resolve(this.#options.defaultBrowser?.()).catch(() => undefined),
-				() => undefined,
+				Promise.resolve(this.#options.defaultBrowser?.()).catch(() => browserFallback),
+				() => browserFallback,
 			),
 			waited("egoBrowserDir", this.#options.egoBrowserDir?.().catch(() => null) ?? null, () => null),
 		]).then(([resolution, proxyVars, shellVars, builtinMcp, session, defaultBrowser, egoBrowserDir]) => {
