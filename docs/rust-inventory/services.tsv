@@ -173,7 +173,7 @@ src/main/local/git/exec.test.ts	exception	Tests rediscovery after a missing bina
 src/main/local/git/exec.ts	port	Resolves binaries and their environments, runs bounded child processes and serializes or cancels mutating steps under per-repository locks.
 src/main/local/git/git-env.test.ts	exception	Injects Git repository selectors and verifies reads and writes stay in the intended checkout unless explicitly overridden.
 src/main/local/git/github.test.ts	exception	Tests GitHub request validation, quiet gh invocation and classification of missing remotes versus a signed-out user.
-src/main/local/git/github.ts	port	Validates each GitHub operation and host/repo syntax, rejects flag-like inputs and resolves clone destinations before gh.github.
+src/main/local/git/github.ts	port	gh.github executes the validated request. The host checks shared repo and host syntax before looking up gh (§1.3d). For a Windows verbatim UNC share root, Node dirname returns the server path while Rust Path::parent returns None. Keep path.resolve and dirname together for clone admission and its errors.
 src/main/local/git/origin.test.ts	exception	Tests project identity and worktree classification for ordinary, Autopilot and agent checkouts.
 src/main/local/git/origin.ts	native-client	git.cachedProjectOrigin checks folder presence and the native cache before the host resolves git. git.projectOrigin coalesces misses and canonicalizes the checkout; only shared page naming and the uncached git.originFacts client remain.
 src/main/local/git/parse.test.ts	exception	Tests path containment, ref validity and worktree slug generation.
