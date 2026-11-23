@@ -116,6 +116,7 @@ runs:
         src/main/sidebar-projects.test.ts
         src/main/worktree-orphans*.test.ts
         src/main/turn-wait-watch.test.ts
+        src/main/session-pace*.test.ts
         src/main/disk/*.test.ts
         src/main/sidecar.test.ts
         src/main/local/queue.test.ts

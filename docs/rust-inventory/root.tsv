@@ -406,7 +406,7 @@ src/main/session-mutations.test.ts	tooling	-	Vitest suite: deleteSession.
 src/main/session-mutations.ts	port	3	deleteSession, renameSession and moveSession coordinate live ownership, shutdown, stored sessions, tombstones and deletion listeners.
 src/main/session-pace-memory.test.ts	tooling	-	Vitest suite: reads a journal far larger than the memory it takes.
 src/main/session-pace.test.ts	tooling	-	Vitest suite: session-pace.
-src/main/session-pace.ts	port	1	pace reconstructs tool intervals, idle time and model time from journal entries; waste flags inefficient calls.
+src/main/session-pace.ts	mixed	1	sessions.pacePage reads bounded journal pages and projects only fold inputs. scripts/session-pace and session-checks consume pace() synchronously; the bridge and page share the check and poll classifiers. The single fold and its cache remain with those rules.
 src/main/session-processes.test.ts	tooling	-	Vitest suite: a session's processes, on this computer.
 src/main/session-processes.ts	mixed	3	SessionProcesses uses procs.list/end in core/src/procs/mod.rs for OS surveys and termination; TS owns the session tag ledger, sweep selection, spin sampling policy and retries.
 src/main/session-scratch.ts	port	2	SessionScratch assigns tab-tag scratch folders and persists the sessions each folder served for retention.

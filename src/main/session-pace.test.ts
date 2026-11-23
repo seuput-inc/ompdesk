@@ -370,6 +370,62 @@ describe("session-pace", () => {
 			expect(await readPace(file)).toEqual(pace(replaced));
 		});
 
+		it("rejects an append cursor on a replacement even when its seam bytes match", async () => {
+			const original = assistant(1, []);
+			const tail = JSON.stringify({ ignored: "x".repeat(400) });
+			const { dir, file } = await fresh(`${original}\n${tail}\n`);
+			expect((await readPace(file))?.modelCalls).toBe(1);
+			const other = join(dir, "rotated.jsonl");
+			await writeFile(other, `${user(1).padEnd(original.length)}\n${tail}\n${user(2)}\n`);
+			await rename(other, file);
+			expect((await readPace(file))?.modelCalls).toBe(0);
+		});
+
+		it("discards the old fold when a longer rewrite changes the seam on the same inode", async () => {
+			const { file } = await fresh(`${steady(2).join("\n")}\n`);
+			expect((await readPace(file))?.modelCalls).toBe(2);
+			const replacement = steady(5, "read", "replaced.ts");
+			await writeFile(file, `${replacement.join("\n")}\n`);
+			expect(await readPace(file)).toEqual(pace(replacement));
+		});
+
+		it("folds the stock guard inputs in order across reads and counts only the check's part of a wait", async () => {
+			const msg = (s: number, body: Record<string, unknown>) =>
+				JSON.stringify({ type: "message", message: { timestamp: T0 + s * 1000, ...body } });
+			const call = (id: string, name: string, args: Record<string, unknown>) => ({
+				type: "toolCall",
+				id,
+				name,
+				arguments: args,
+			});
+			const look = call("p", "read", { path: "proc://bg_1/streams/0" });
+			const begun = [
+				user(0),
+				msg(1, { role: "assistant", content: [look, call("b", "bash", { command: "bunx vitest run", async: true })] }),
+				start(1, "b"),
+				msg(2, { role: "toolResult", toolName: "bash", toolCallId: "b", details: { async: { jobId: "bg_1" } } }),
+			];
+			const { file } = await fresh(`${begun.join("\n")}\n`);
+			expect((await readPace(file))?.checks).toEqual({ runs: 1, seconds: 1 });
+			const rest = [
+				msg(3, { role: "assistant", content: [look, call("w", "wait", {})] }),
+				start(3, "w"),
+				msg(8, {
+					role: "toolResult",
+					toolName: "wait",
+					toolCallId: "w",
+					useless: true,
+					details: { op: "wait", jobs: [{ id: "bg_1", type: "bash", status: "running", durationMs: 2_000 }] },
+					content: [{ text: "log\nompdesk check: 20261113-021600-cd34: passed in 3s — reuse saved about 1m (60 s)" }],
+				}),
+			];
+			await appendFile(file, rest.join("\n"));
+			const read = await readPace(file);
+			expect(read).toEqual(pace([...begun, ...rest]));
+			expect(read?.checks).toEqual({ runs: 1, seconds: 3, savedS: 60 });
+			expect(read?.pollKinds).toEqual({ proc: 1, wait: 1 });
+		});
+
 		it("counts appended lines once when two reads ask at once", async () => {
 			const { file } = await fresh(`${lines.slice(0, 3).join("\n")}\n`);
 			await readPace(file);
