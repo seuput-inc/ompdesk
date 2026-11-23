@@ -1,6 +1,6 @@
 path	status	cutover_wave	implementer_and_remaining_work
 src/main/account-rotation.test.ts	tooling	-	Vitest suite: accountRotationDeps.
-src/main/account-rotation.ts	port	3	accountRotationDeps stores this machine's preference and pushes it to locally hosted live omps, including paired clients' tabs.
+src/main/account-rotation.ts	port	3	Hub batch, §1.3(a,c): index.ts wires one synchronous preference write to the current local pool and the tabs served for peers. Move that transaction with its readers, not a separately scheduled rotation broadcast.
 src/main/agent-browsers.test.ts	tooling	-	Vitest suite: findChromiumBrowsers.
 src/main/agent-browsers.ts	mixed	2	browsers.find/status/installRelay/openExtensions dispatch in crates/core/src/browsers/mod.rs; resolveEgoBrowser, systemBrowserPlaces and the launch cache/reprobe remain in TS.
 src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a session runs.
@@ -246,7 +246,7 @@ src/main/extension-reload.test.ts	tooling	-	Vitest suite: mergeApplyPlans.
 src/main/extension-reload.ts	port	1	mergeApplyPlans merges restart/reload/reconnect requirements; extensionApplyDecision chooses immediate, deferred or skipped application from tab facts.
 src/main/extension-specs.test.ts	tooling	-	Vitest suite: isPinnedNpmSpec.
 src/main/external-url.test.ts	tooling	-	Vitest suite: isOpenableExternalUrl.
-src/main/external-url.ts	port	1	isOpenableExternalUrl restricts external OS dispatch to accepted web and mailto URLs.
+src/main/external-url.ts	port	1	Shell batch, §1.3(a,b): ipc.ts and web/host-actions.ts check the page URL immediately before OS dispatch. Move the allowlist into the page-only open command, not a standalone validation RPC; keep general shell.openExternal available to trusted native callers.
 src/main/fenced-fs.ts	port	1	fs proxies Node promise filesystem methods through fencedEffect so a stopped serial-chain step cannot issue later operations.
 src/main/frame-bookkeeping.test.ts	tooling	-	Vitest suite: withoutFrameBookkeeping.
 src/main/frame-bookkeeping.ts	port	1	withoutFrameBookkeeping removes redundant turn_end payload and assistant request bookkeeping before live frames reach clients.
