@@ -45,6 +45,26 @@ const LABELS = {
 	},
 } as const;
 
+/** Phase of the first bounds call received after Page.crash started, at observation or at Restore's native receipt. */
+async function boundsPhase(logPath: string, at: "now" | "reload receipt"): Promise<string> {
+	const log = await fs.readFile(logPath, "utf8");
+	let crashedPage: number | null = null;
+	let boundsCall: number | undefined;
+	let phase = "no bounds receipt";
+	// The host may still be writing the last line.
+	for (const line of log.slice(0, log.lastIndexOf("\n") + 1).split("\n")) {
+		if (!line.includes('"event":"preview.recovery.call"')) continue;
+		const call: { op: string; phase: string; callId: number; wcId: number | null } = JSON.parse(line);
+		if (call.op === "crash" && call.phase === "execute") crashedPage = call.wcId;
+		if (crashedPage === null) continue;
+		if (at === "reload receipt" && call.op === "reload" && call.phase === "queued" && call.wcId === crashedPage)
+			return phase;
+		if (boundsCall === undefined && call.op === "bounds" && call.phase === "queued") boundsCall = call.callId;
+		if (call.callId === boundsCall) phase = call.phase;
+	}
+	return at === "reload receipt" ? "no reload receipt" : phase;
+}
+
 for (const [language, theme] of variants([
 	["en", "light"],
 	["ko", "dark"],
@@ -82,6 +102,7 @@ for (const [language, theme] of variants([
 		const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-preview-tools-"));
 		const desktop = path.join(profile, "desktop");
 		const project = path.join(profile, "project");
+		const recoveryLog = path.join(desktop, "tauri-shell.jsonl");
 		const agent = path.join(profile, "agent");
 		const pdf = path.join(profile, "page.pdf");
 		await Promise.all([fs.mkdir(desktop), fs.mkdir(project), fs.mkdir(agent)]);
@@ -235,13 +256,25 @@ for (const [language, theme] of variants([
 
 			// C126: a crashed page offers a restore that reloads it.
 			const priorDocument = await child("document");
-			await child("crash");
-			await expect(aside.getByRole("alert")).toContainText(label.crashed);
-			await capture("preview-crashed");
-			await aside.getByRole("button", { name: label.restore, exact: true }).click();
-			await expect(aside.getByRole("alert")).toHaveCount(0);
-			await expect(status).toContainText("w=");
-			expect(await child("document")).toBeGreaterThan(priorDocument);
+			const crash = child("crash");
+			const restore = (async () => {
+				const alert = aside.getByRole("alert");
+				await expect(alert).toContainText(label.crashed);
+				await capture("preview-crashed");
+				await expect.poll(() => boundsPhase(recoveryLog, "now")).toBe("queued");
+				await aside.getByRole("button", { name: label.restore, exact: true }).click();
+				await Promise.all([
+					expect(alert).toHaveCount(0),
+					expect.poll(() => boundsPhase(recoveryLog, "reload receipt")).toMatch(/^(queued|execute)$/),
+				]);
+				await expect(status).toContainText("w=");
+				expect(await child("document")).toBeGreaterThan(priorDocument);
+			})();
+			try {
+				await Promise.all([crash, restore]);
+			} finally {
+				await Promise.allSettled([crash, restore]);
+			}
 
 			// C119: a target=_blank link opens a preview tab; the strip switches and closes tabs.
 			await addressBar.fill(`${host}/popup`);
@@ -279,7 +312,7 @@ for (const [language, theme] of variants([
 		} finally {
 			await exitApp(app);
 			server.close();
-			const log = await fs.readFile(path.join(desktop, "tauri-shell.jsonl"), "utf8").catch(() => "");
+			const log = await fs.readFile(recoveryLog, "utf8").catch(() => "");
 			for (const line of log.split("\n")) {
 				if (/"event":"preview\.recovery\.(call|commit)"/.test(line)) console.log(line);
 			}
