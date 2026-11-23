@@ -27,7 +27,7 @@ describe("gui_terminal_read", () => {
 		const read = (pick: string) =>
 			helper.request<string | null>("terminal.request", {
 				...tabArgs,
-				operation: { action: "list", offsets: {} },
+				operation: { action: "list" },
 				read: { pick, lines: 2 },
 			});
 

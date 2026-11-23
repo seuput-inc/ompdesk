@@ -14,6 +14,11 @@ export interface TerminalSnapshot {
 }
 /** A viewer's standing on a PTY's size. */
 export type TerminalLeaseState = "you" | "other" | "free";
+/** The selected terminal number as the tool prints it, and the number of trailing lines to read. */
+export interface TerminalRead {
+	pick: string;
+	lines: number;
+}
 /** A shell the Terminal panel can start (main/terminal/shells.ts); `path` names it. */
 export interface TerminalShell {
 	path: string;

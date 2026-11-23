@@ -74,6 +74,7 @@ const READ_BUFFER: usize = 64 * 1024;
 
 pub fn register(registry: &mut Registry) {
     shells::register(registry);
+    scrollback::register(registry);
     registry.add("stock.request", enqueue);
     registry.add("terminal.viewerSeen", viewer_seen);
     registry.add("stock.launched", |call| {

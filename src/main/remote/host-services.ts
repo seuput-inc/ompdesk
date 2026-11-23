@@ -119,7 +119,8 @@ import { type LoopbackCallback, loopbackCallback, replaySignInCallback } from ".
 import { stockHelperRequest } from "../stock-helper";
 import { MAX_FORMER_TAB_IDS } from "../tab-layout";
 import { sessionFolderState } from "../tab-spawn";
-import { disposeTerminals, terminalRequest } from "../terminal/requests";
+import { MAX_TERMINAL_READ_LINES } from "../terminal/agent-tool";
+import { disposeTerminals, readTerminalOutput, terminalRequest } from "../terminal/requests";
 import { detectShells } from "../terminal/shells";
 import {
 	MovesInFlight,
@@ -590,6 +591,16 @@ const AccountRotationSetParams = z.object({ mode: z.enum(ACCOUNT_ROTATION_MODES)
 const LocalEnginesSetParams = z.object({ enabled: z.boolean() });
 const CreditSpendSetParams = z.object({ enabled: z.boolean() });
 const TerminalParams = z.object({ rtab: Rtab, operation: z.object({ action: z.string() }).passthrough() });
+const TerminalReadParams = z.object({
+	rtab: Rtab,
+	read: z.object({
+		pick: z
+			.string()
+			.max(32)
+			.refine(value => Number.isInteger(Number(value)) && String(Number(value)) === value),
+		lines: z.number().int().min(1).max(MAX_TERMINAL_READ_LINES),
+	}),
+});
 const DesktopUpdateParams = z.object({ action: z.enum(HOST_UPDATE_ACTIONS) });
 /** A session's worktree binding (`IpcTabWorktree`), as the device's agent names it for `host.git.*`. */
 const GitWorktree = z.object({
@@ -1409,6 +1420,11 @@ export class LocalHostServices implements HostServices {
 					operation as TerminalOperation,
 					controlEnvFor(true),
 				);
+			}
+			case "terminal.read": {
+				const { rtab, read } = parse(TerminalReadParams, method, params);
+				const tab = this.#tab(peer, rtab);
+				return readTerminalOutput({ deviceId: peer.deviceId, rtab }, tab.sidecar.cwd, read);
 			}
 			// The device's Preview page is driven by this tab's agent through the relay on this computer's loopback: the
 			// device never names an address, only the tab (see PreviewRelayTunnels).

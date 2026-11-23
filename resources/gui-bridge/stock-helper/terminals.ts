@@ -1,4 +1,4 @@
-import type { TerminalOperation } from "../../../src/shared/terminal-types";
+import type { TerminalOperation, TerminalRead } from "../../../src/shared/terminal-types";
 import { ompModuleFile } from "../omp-package";
 import type { HelperMethods } from "./dispatch";
 import { type Pty, type PtyOptions, TerminalService } from "./terminal-service";
@@ -32,8 +32,10 @@ export const methods: HelperMethods = {
 			operation,
 			shell,
 			env: extra,
+			read,
 		} = params as {
 			owner: string;
+			read?: TerminalRead;
 			cwd: string;
 			operation: TerminalOperation;
 			/** Main's per-terminal variables over this worker's own (the control socket's, or that it is off). */
@@ -59,7 +61,7 @@ export const methods: HelperMethods = {
 		const service = await terminals();
 		// A web viewer's long poll holds here, in the worker, until the PTY writes (never a timer loop in main).
 		if (operation.action === "list" && operation.waitMs) await service.wait(owner, operation);
-		return frame(terminalFrame(service, owner, operation, options));
+		return frame(terminalFrame(service, owner, operation, options, read));
 	},
 	/** One command (not the login shell) in a PTY, e.g. `gh auth login`, which needs a TTY. Main supplies the whole env. */
 	"pty.request": async (params, frame) => {
@@ -88,8 +90,15 @@ export const methods: HelperMethods = {
 	},
 };
 
-function terminalFrame(service: TerminalService, owner: string, operation: TerminalOperation, options: PtyOptions) {
+function terminalFrame(
+	service: TerminalService,
+	owner: string,
+	operation: TerminalOperation,
+	options: PtyOptions,
+	read?: TerminalRead,
+) {
 	return {
+		read,
 		rows: service.request(owner, operation, options),
 		forget: operation.action === "clear" || operation.action === "close" ? [operation.id] : undefined,
 		budget: operation.action === "list" ? operation.budget : undefined,

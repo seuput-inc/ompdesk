@@ -296,8 +296,8 @@ src/main/tailscale/tailnet.test.ts	exception	Test coverage for tailnet identity 
 src/main/tailscale/tailnet.ts	native-client	remote.tailnet owns status/whois, lookup caching and shareable reads. The client supplies the CLI launch arguments and invalidates process-local handles on core exit; a core that cannot answer gives a conservative result.
 src/main/tailscale/test-fake-tailscale.ts	exception	Test substitute CLI models status, serve configuration and relay responses.
 src/main/tailscale/whois.ts	exception	Declares the TailnetPeer whois response type only.
-src/main/terminal/agent-tool.test.ts	exception	Test coverage for terminal listing and snapshot selection.
-src/main/terminal/agent-tool.ts	port	Selects a terminal snapshot, strips overwritten text and formats a bounded tail for gui_terminal_read.
+src/main/terminal/agent-tool.test.ts	tooling	Reads synthetic PTYs through the real stock lane and exercises both versions of the paired read contract.
+src/main/terminal/agent-tool.ts	native-client	Defines the read-only stock host tool and normalizes its arguments. The native owner projects the selected terminal's output before answering.
 src/main/terminal/ipc.ts	mixed	The native stock lane arbitrates PTY size. Main gets the live pool target, attaches the owning sender's destroyed listener and enqueues work before yielding. Tab release removes that binding before releasing the sidecar, and an outstanding reply rechecks it. Move these shell bindings with the window and pool callback (§1.3a,c).
 src/main/terminal/lease.test.ts	tooling	Two viewers of the real stock lane compete over one synthetic PTY. Exercises returned geometry, arrival order, timed takeover, close and owner disposal.
 src/main/terminal/requests.ts	mixed	The stock lane chooses an allowed shell, derives the paired PTY owner and applies viewer operations before forwarding. Main validates incoming shapes before binding the sender or dispatching to an older paired host (§1.3a,c).

@@ -29,6 +29,8 @@ struct Request<'a> {
     operation: Option<&'a RawValue>,
     #[serde(borrow)]
     env: Option<&'a RawValue>,
+    #[serde(borrow)]
+    read: Option<&'a RawValue>,
     viewer: Option<i64>,
     now: Option<i64>,
 }
@@ -44,6 +46,8 @@ struct Params<'a> {
     env: Option<&'a RawValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     shell: Option<Shell>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read: Option<&'a RawValue>,
 }
 
 #[derive(Serialize)]
@@ -64,7 +68,7 @@ impl Request<'_> {
             Owner::Peer { device, rtab } => Cow::Owned(format!("peer:{device}:{rtab}")),
         };
         // Leave room for the frame around a large raw write so the closing fields don't recopy it.
-        let payload = [self.cwd, self.operation, self.env]
+        let payload = [self.cwd, self.operation, self.env, self.read]
             .into_iter()
             .flatten()
             .map(|field| field.get().len())
@@ -81,6 +85,7 @@ impl Request<'_> {
                     operation: self.operation,
                     env: self.env,
                     shell,
+                    read: self.read,
                 },
             },
         )

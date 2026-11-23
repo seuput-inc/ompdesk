@@ -3258,6 +3258,12 @@ describe("LocalHostServices", () => {
 			.call(y.peer, "terminal.request", { rtab: "t1", operation: { action: "list" } }, y)
 			.catch((error: unknown) => error);
 		expect(ipcErrorCode(foreign)).toBe("unknown_tab");
+		const read = { pick: "1", lines: 2 };
+		const denied = await services.call(y.peer, "terminal.read", { rtab: "t1", read }, y).catch(error => error);
+		expect(ipcErrorCode(denied)).toBe("unknown_tab");
+		await expect(
+			services.call(x.peer, "terminal.read", { rtab: "t1", read: { ...read, lines: 0 } }, x),
+		).rejects.toThrow(/Invalid terminal.read/);
 		await expect(
 			services.call(x.peer, "terminal.request", { rtab: "t1", operation: { action: "write", id: 1 } }, x),
 		).rejects.toThrow(/Invalid terminal operation/);

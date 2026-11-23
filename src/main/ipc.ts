@@ -215,7 +215,7 @@ import { stockHelperRequest } from "./stock-helper";
 import { shellEngine } from "./system-version";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
-import { formatTerminalRead, TERMINAL_READ_TOOL } from "./terminal/agent-tool";
+import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
 import { closeTabTerminals, readTabTerminals, registerTerminalIpc } from "./terminal/ipc";
 import { setTrayState } from "./tray";
 import { aggregateProgress, aggregateTrayStatus } from "./tray-labels";
@@ -616,8 +616,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				cwd: sidecar.cwd,
 				device: sidecar.device,
 			};
-			void readTabTerminals(remoteDevices, target).then(
-				snapshots => reply(formatTerminalRead(snapshots, request.arguments), false),
+			void readTabTerminals(remoteDevices, target, request.arguments).then(
+				text => reply(text ?? "The user has no terminal open in this tab's Terminal panel.", false),
 				error =>
 					reply(`Couldn't read the terminals: ${error instanceof Error ? error.message : String(error)}`, true),
 			);

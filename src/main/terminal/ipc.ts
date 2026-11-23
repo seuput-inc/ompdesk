@@ -1,3 +1,4 @@
+import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	TERMINAL_OUTPUT_BUDGET,
 	TERMINAL_POLL_MAX_WAIT_MS,
@@ -13,7 +14,8 @@ import type { SidecarPool } from "../sidecar-pool";
 import { stockHelperHost } from "../stock-helper";
 import { isWebWindow } from "../web/client-window";
 import type { IpcRegistry } from "../web/ipc-registry";
-import { disposeTerminals, terminalRequest, validTerminalOperation } from "./requests";
+import { terminalReadOptions } from "./agent-tool";
+import { disposeTerminals, readTerminalOutput, terminalRequest, validTerminalOperation } from "./requests";
 import { detectShells } from "./shells";
 
 const owners = new Set<string>();
@@ -21,21 +23,44 @@ export function closeTabTerminals(windowId: number, tabId: string): void {
 	const owner = `${windowId}:${tabId}`;
 	if (owners.delete(owner)) disposeTerminals(owner);
 }
-/**
- * The full output of a tab's Terminal panel sessions, for the read-only agent tool (C115):
- * a local tab's in this window, a paired host's tab's on that host.
- */
+/** Reads on the machine that owns this tab's PTYs. Unopened local tabs do not start a worker. */
 export async function readTabTerminals(
 	remoteDevices: Pick<RemoteDevices, "request">,
 	tab: { tabId: string; webContentsId: number; cwd: string; device: string | undefined },
-): Promise<TerminalSnapshot[]> {
-	const operation: TerminalOperation = { action: "list" };
-	if (tab.device)
-		return remoteDevices.request<TerminalSnapshot[]>(tab.device, "terminal.request", { rtab: tab.tabId, operation });
+	args: Record<string, unknown>,
+): Promise<string | null> {
+	const read = terminalReadOptions(args);
+	if (tab.device) {
+		try {
+			const text = await remoteDevices.request<unknown>(tab.device, "terminal.read", { rtab: tab.tabId, read });
+			if (text !== null && typeof text !== "string") throw new Error("Invalid terminal.read response");
+			return text;
+		} catch (error) {
+			if (ipcErrorCode(error) !== "unsupported") throw error;
+		}
+		// shortcut: protocol 1 hosts may only list PTYs; remove when protocol 2 requires terminal.read.
+		const snapshots = await remoteDevices.request<TerminalSnapshot[]>(tab.device, "terminal.request", {
+			rtab: tab.tabId,
+			operation: { action: "list" },
+		});
+		if (!snapshots.length) return null;
+		const pick = Number(read.pick) - 1;
+		const rows = snapshots.map(({ exited, exitCode, error, output }, index) => ({
+			exited,
+			exitCode,
+			error,
+			output: index === pick ? output : undefined,
+		}));
+		const { bin } = await core().call(
+			"terminal.projectLegacy",
+			{},
+			{ bin: Buffer.from(JSON.stringify({ rows, read })) },
+		);
+		if (!bin) throw new Error("Missing terminal.read response");
+		return JSON.parse(Buffer.from(bin.buffer, bin.byteOffset, bin.byteLength).toString()) as string | null;
+	}
 	const owner = `${tab.webContentsId}:${tab.tabId}`;
-	return owners.has(owner)
-		? terminalRequest(owner, tab.cwd, operation, controlEnvFor(isWebWindow(tab.webContentsId)))
-		: [];
+	return owners.has(owner) ? readTerminalOutput(owner, tab.cwd, read) : null;
 }
 export function registerTerminalIpc(
 	ipc: IpcRegistry,

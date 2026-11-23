@@ -6,6 +6,7 @@ import {
 	TERMINAL_OUTPUT_BUDGET,
 	TERMINAL_POLL_MAX_WAIT_MS,
 	type TerminalOperation,
+	type TerminalRead,
 	type TerminalSnapshot,
 } from "../../shared/terminal-types";
 import { stockHelperRequest } from "../stock-helper";
@@ -72,6 +73,15 @@ export function terminalRequest(
 				? "terminal.request"
 				: "terminal.peerRequest";
 	return stockHelperRequest<TerminalSnapshot[]>(method, { owner, cwd, operation, env });
+}
+
+export function readTerminalOutput(owner: TerminalOwner, cwd: string, read: TerminalRead): Promise<string | null> {
+	return stockHelperRequest(typeof owner === "string" ? "terminal.request" : "terminal.peerRequest", {
+		owner,
+		cwd,
+		operation: { action: "list" },
+		read,
+	});
 }
 
 export function disposeTerminals(owner: TerminalOwner): void {
