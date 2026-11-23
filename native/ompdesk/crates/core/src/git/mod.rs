@@ -14,6 +14,7 @@
 
 pub mod branches;
 mod checkout;
+mod fingerprints;
 pub(crate) mod freshness;
 pub(crate) mod left_behind;
 pub(crate) mod origin;
@@ -49,6 +50,7 @@ struct FingerprintParams {
     git: Runner,
     cwd: String,
     root: Option<String>,
+    key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -421,10 +423,11 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&checkout::status(&Git::new(git, call.scope), &toplevel, &paths).await?)
         })
     });
-    registry.add("git.checkoutDirs", |call| {
+    registry.add("git.watchedFingerprint", |call| {
         Box::pin(async move {
-            let At { git, cwd } = call.params()?;
-            Reply::json(&checkout::dirs(&Git::new(git, call.scope), &cwd).await?)
+            let FingerprintParams { git, cwd, root, key } = call.params()?;
+            let git = Git::new(git, call.scope);
+            fingerprints::read(&git, &cwd, key.as_deref().unwrap_or(&cwd), root.as_deref()).await
         })
     });
     registry.add("git.routineHead", |call| {
@@ -481,7 +484,7 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.fingerprint", |call| {
         Box::pin(async move {
-            let FingerprintParams { git, cwd, root } = call.params()?;
+            let FingerprintParams { git, cwd, root, .. } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&read::fingerprint(&git, &cwd, root.as_deref()).await?)
         })

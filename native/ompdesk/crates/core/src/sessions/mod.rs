@@ -15,7 +15,7 @@ mod enrich;
 mod rules;
 mod search;
 mod snippet;
-mod source;
+pub(crate) mod source;
 mod title;
 mod watch;
 

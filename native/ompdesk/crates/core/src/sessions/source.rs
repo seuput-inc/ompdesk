@@ -24,13 +24,13 @@ pub enum Raw {
 }
 
 #[cfg(windows)]
-pub use tree::start;
+pub use tree::{Source, start};
 
 #[cfg(target_os = "macos")]
-pub use fsevents::start;
+pub use fsevents::{Source, start};
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub use scan::start;
+pub use scan::{Source, start};
 
 #[cfg(windows)]
 mod tree {

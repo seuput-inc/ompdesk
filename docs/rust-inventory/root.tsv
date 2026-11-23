@@ -254,7 +254,7 @@ src/main/gh-guard-launchers.test.ts	tooling	-	Vitest suite: the gh guard's launc
 src/main/gh-guard-stock.test.ts	tooling	-	Vitest suite: serves a finished attempt's log from the cache, by attempt, and slows a watch to a minute.
 src/main/gh-guard.test.ts	tooling	-	Vitest suite: what a gh command costs.
 src/main/git-fingerprints.test.ts	tooling	-	Vitest suite: GitFingerprints.
-src/main/git-fingerprints.ts	mixed	2	GitFingerprints owns checkout watches, invalidation and concurrent read caching; core git.checkoutDirs and git.fingerprint resolve directories and read Git state.
+src/main/git-fingerprints.ts	mixed	2	git.watchedFingerprint owns recursive watches and concurrent sample reuse on macOS and Windows. Main still supplies the runner and serves get_git_fingerprint; no non-Node panel caller yet.
 src/main/gpu-fallback-core.ts	port	1	gpuMarkerDecision, gpuChange and markerForTrial determine software fallback and hardware retrial from persisted GPU identity and age.
 src/main/gpu-fallback-loop.test.ts	tooling	-	Vitest suite: GPU crash relaunch.
 src/main/gpu-fallback.test.ts	tooling	-	Vitest suite: isGpuProcessCrash.

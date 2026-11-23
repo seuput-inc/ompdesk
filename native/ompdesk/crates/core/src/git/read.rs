@@ -212,7 +212,7 @@ pub async fn head(git: &Git, root: &str) -> Result<Head, Fault> {
 
 #[derive(Serialize)]
 pub struct Fingerprint {
-    fingerprint: String,
+    pub(super) fingerprint: String,
 }
 
 const STATUS_ARGS: [&str; 5] = [
