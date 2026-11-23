@@ -12,6 +12,13 @@ pub fn post(work: impl FnOnce() + Send + 'static) {
     tauri::async_runtime::spawn(async move { run(work) });
 }
 
+pub fn post_delayed(ms: i64, work: impl FnOnce() + Send + 'static) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
+        run(work);
+    });
+}
+
 pub fn window_handle(id: u64) -> Option<isize> {
     use tauri::Manager;
 

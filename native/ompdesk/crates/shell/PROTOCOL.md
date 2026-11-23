@@ -275,6 +275,7 @@ role. AppKit sends the action to the first responder. A native edit does not pro
 | `dialog.saveDialog` | Node | `{winId?, options: {title, defaultPath, buttonLabel, filters, message, nameFieldLabel, showsTagField, properties}}` | `{canceled, filePath?: string}` |
 | `clipboard.readText` | Node | `{}` | `{text}` |
 | `clipboard.writeText` | Node | `{text}` | `{}` |
+| `clipboard.writePassword` | Node | `{text}` | `{}` after writing. The shell expires this copy after 60 s only if it still owns that revision. No text is read back. |
 | `shell.openExternal` | Node | `{url}` | `{}`; failure → `error.code "failed"` |
 | `shell.openPageExternal` | Node | `{url}` | Like `shell.openExternal` for page links. Refused schemes and malformed mail drafts succeed without opening anything. |
 | `shell.openPath` | Node | `{path}` | `{error: string}` ("" on success), as Electron |

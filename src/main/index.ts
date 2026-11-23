@@ -12,7 +12,6 @@ import { promisify } from "node:util";
 import {
 	app,
 	BrowserWindow,
-	clipboard,
 	dialog,
 	globalShortcut,
 	ipcMain,
@@ -204,6 +203,7 @@ import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
 import {
 	appIconPath,
+	clipboard,
 	consumeHangReports,
 	openPageExternal,
 	postWatchdog,
@@ -215,7 +215,6 @@ import {
 import {
 	accessibilityTrusted,
 	defaultSessionCachePath,
-	readClipboardText,
 	safeStorageUnavailableReason,
 	screenRecordingGranted,
 } from "./shell-host/shell-calls";
@@ -2135,8 +2134,7 @@ app.whenReady().then(async () => {
 	registerAiMemoryIpc(ipc, aiMemory, {
 		openExternal: url => shell.openExternal(url),
 		openPath: path => shell.openPath(path),
-		readClipboard: () => readClipboardText(),
-		writeClipboard: text => clipboard.writeText(text),
+		copyPassword: clipboard.writePassword,
 		care: () => aiMemoryCare,
 	});
 	// start() turns every failure into the `failed` phase and a log line; anything escaping it is logged too.

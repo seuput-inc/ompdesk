@@ -1,5 +1,6 @@
 #[path = "../../../shell/src/facts/app_icon.rs"]
 mod app_icon;
+mod clipboard;
 #[path = "../../src/js_date.rs"]
 mod js_date;
 #[path = "../../src/launch_protection.rs"]
@@ -19,10 +20,12 @@ use std::path::Path;
 fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
     let mut launch = None;
+    let mut clipboard = clipboard::Clipboard::default();
     for line in io::stdin().lock().lines() {
         let call: Value = serde_json::from_str(&line?)?;
         let params = &call["params"];
         let answer = match call["method"].as_str().unwrap() {
+            method if method.starts_with("clipboard.") => clipboard.call(method, params),
             "page.allowsExternal" => Value::Bool(
                 params["url"]
                     .as_str()

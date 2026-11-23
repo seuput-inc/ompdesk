@@ -114,6 +114,7 @@ function fakeShell(shell: ShellClient) {
 		"dialog.messageBox",
 		"clipboard.readText",
 		"clipboard.writeText",
+		"clipboard.writePassword",
 		"net.fetch",
 		"shell.openPath",
 		"theme.setSource",
@@ -1606,6 +1607,14 @@ describe("menus, dialogs and the small modules", () => {
 		expect(await clipboard.readTextAsync()).toBe("pasted");
 		fake.answers.set("shell.openPath", () => ({ error: "" }));
 		expect(await shellModule.openPath("C:/x")).toBe("");
+	});
+
+	it("waits for the password clipboard write and reports a refused write", async () => {
+		fake.answers.set("clipboard.writePassword", () => {
+			throw new Error("clipboard unavailable");
+		});
+		await expect(electron.clipboard.writePassword("fixture-password")).rejects.toThrow("clipboard unavailable");
+		expect(fake.callsOf("clipboard.writePassword").map(call => call.params)).toEqual([{ text: "fixture-password" }]);
 	});
 
 	it("a message box whose signal aborts is closed by the shell and resolves to the shell's cancelled answer", async () => {

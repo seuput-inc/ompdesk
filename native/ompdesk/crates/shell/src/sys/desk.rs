@@ -151,7 +151,7 @@ pub fn init(handler: fn(Msg)) -> Result<(), String> {
     Ok(())
 }
 
-fn hwnd() -> HWND {
+pub(super) fn hwnd() -> HWND {
     WINDOW.load(Ordering::Acquire) as HWND
 }
 
