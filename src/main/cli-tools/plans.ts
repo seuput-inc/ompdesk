@@ -7,6 +7,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { extRule } from "../ext-update/core";
 import { parseOmpVersion } from "../omp-runtime";
 import type { SpawnSpec } from "../setup/plans";
 import { executableName, findOnPath, needsShell, spawnArgs, spawnCommand } from "../spawn";
@@ -217,30 +218,16 @@ export function ownerUpdateCommand(owner: PackageOwner, latest: string | null, t
  * version or find it missing. A single native binary keeps running from its old inode, and the vendors'
  * own updaters install into a new versioned dir and switch a link.
  */
-export function waitsForIdle(detection: CliDetection, owner: CliOwner): boolean {
-	if (owner.method === "npm" || owner.method === "bun") return true;
-	if (owner.method === "brew" || owner.method === "brew-cask") return CLI_TOOL_SPECS[detection.id].lazyLoads;
-	return false;
+export function waitsForIdle(detection: CliDetection, owner: CliOwner): Promise<boolean> {
+	return extRule("ext.cliWaitsForIdle", { method: owner.method, lazyLoads: CLI_TOOL_SPECS[detection.id].lazyLoads });
 }
 
-/** `ps` command lines: is a process of this tool running (its executable, its package dir, or its name)? */
-export function runningIn(commands: string, detection: CliDetection, owner: CliOwner): boolean {
-	const bin = CLI_TOOL_SPECS[detection.id].bin;
-	const dirs = [detection.real, detection.path];
-	if (owner.method === "npm" || owner.method === "bun") dirs.push(owner.root);
-	const keg =
-		owner.method === "brew" || owner.method === "brew-cask"
-			? `/${owner.method === "brew" ? "Cellar" : "Caskroom"}/${owner.name}/`
-			: null;
-	return commands.split("\n").some(line => {
-		const text = line.trim();
-		if (!text) return false;
-		const first = text.split(/\s+/)[0] ?? "";
-		return (
-			first === bin ||
-			first.endsWith(`/${bin}`) ||
-			dirs.some(dir => text.includes(dir)) ||
-			(keg !== null && text.includes(keg))
-		);
+/** Core scans locally; deterministic callers can supply a captured process list instead. */
+export function runningIn(detection: CliDetection, owner: CliOwner, commands?: string): Promise<boolean> {
+	return extRule("ext.updateRunning", {
+		kind: "cli",
+		command: CLI_TOOL_SPECS[detection.id].bin,
+		binary: { real: detection.real, path: detection.path, owner },
+		commands,
 	});
 }

@@ -8,13 +8,15 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { GitShellProblem, SetupItemId, SetupPlatform, SetupPresence } from "../../shared/setup";
 import { isNewer } from "../../shared/version";
-import { bundledAgentDesktop, pickAgentDesktop } from "../agent-desktop";
-import { ompBunMinimum, ompPackageRoot, parseOmpVersion, refreshSystemOmp, systemOmp } from "../omp-runtime";
+import { pickAgentDesktop } from "../agent-desktop";
+import { core } from "../core/process";
+import { ompBunMinimum, ompPackageRoot, refreshSystemOmp, systemOmp } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
 import { brewBinDirs, spawnPath } from "../shell-env";
-import { executableName, findOnPath, needsShell, spawnArgs, spawnCommand } from "../spawn";
+import { executableName, findOnPath } from "../spawn";
 import { TailscaleCli } from "../tailscale/cli";
 import { locateTailscale } from "../tailscale/locate";
+import { appleDeveloperDir } from "./apple-git";
 import { AGENT_DESKTOP_MIN_VERSION } from "./archives";
 import { readGitAslrOverride } from "./git-aslr";
 import { findGitBash, managedAgentDesktop } from "./paths";
@@ -27,28 +29,11 @@ export interface Detection {
 	winget: string | null;
 }
 
-/** `<bin> <args>` stdout (first line), or throws. */
-function probe(bin: string, args: string[], env: NodeJS.ProcessEnv, platform: SetupPlatform): Promise<string> {
-	const { promise, resolve, reject } = Promise.withResolvers<string>();
-	const target = platform === "win32" ? "win32" : "darwin";
-	execFile(
-		spawnCommand(bin, target),
-		spawnArgs(bin, args, target),
-		{ env, shell: needsShell(bin, target), timeout: 15_000, windowsHide: true },
-		(error, stdout, stderr) => {
-			if (error) reject(new Error((stderr || error.message).trim().split("\n")[0] ?? error.message));
-			else resolve(stdout.trim());
-		},
-	);
-	return promise;
-}
+type ToolVersion = { kind: "present"; version: string | null } | { kind: "broken"; detail: string };
 
-async function versionOf(bin: string, env: NodeJS.ProcessEnv, platform: SetupPlatform): Promise<SetupPresence> {
-	try {
-		return { kind: "present", version: parseOmpVersion(await probe(bin, ["--version"], env, platform)), path: bin };
-	} catch (error) {
-		return { kind: "broken", detail: error instanceof Error ? error.message : String(error), path: bin };
-	}
+async function versionOf(bin: string, env: NodeJS.ProcessEnv): Promise<ToolVersion & { path: string }> {
+	const { result } = await core().call<ToolVersion>("setup.toolVersion", { bin, cwd: process.cwd(), env });
+	return { ...result, path: bin };
 }
 
 /**
@@ -163,7 +148,7 @@ async function detectGit(platform: SetupPlatform, pathEnv: string, env: NodeJS.P
 		const hasSh = existsSync(join(root, "usr", "bin", "sh.exe"));
 		const [found, gitShell, gitAslrOverride] = await Promise.all([
 			existsSync(git)
-				? versionOf(git, env, platform)
+				? versionOf(git, env)
 				: Promise.resolve<SetupPresence>({ kind: "present", version: null, path: root }),
 			hasSh ? probeGitShell(root, env) : Promise.resolve(null),
 			hasSh ? readGitAslrOverride(root) : Promise.resolve(false),
@@ -186,14 +171,10 @@ async function detectGit(platform: SetupPlatform, pathEnv: string, env: NodeJS.P
 	// /usr/bin/git is a stub until the Command Line Tools exist; running it then
 	// opens Apple's install dialog, so ask xcode-select before touching it.
 	const git = findOnPath(["git"], pathEnv, platform, [], ["/usr/bin/git"]);
-	if (git) return versionOf(git, env, platform);
+	if (git) return versionOf(git, env);
 	if (platform !== "darwin") return { kind: "missing" };
-	try {
-		await probe("/usr/bin/xcode-select", ["-p"], env, platform);
-	} catch {
-		return { kind: "missing" };
-	}
-	return versionOf("/usr/bin/git", env, platform);
+	if ((await appleDeveloperDir(env, 15000)) === null) return { kind: "missing" };
+	return versionOf("/usr/bin/git", env);
 }
 
 /**
@@ -215,19 +196,17 @@ export async function detectAgentDesktop(
 	const exe = managedAgentDesktop(toolsDir, platform);
 	let managed: SetupPresence = { kind: "missing" };
 	if (existsSync(exe)) {
-		try {
-			const version = parseOmpVersion(await probe(exe, ["--version"], env, platform));
-			if (!version) managed = { kind: "broken", detail: "agent-desktop printed no version", path: exe };
-			else if (isNewer(AGENT_DESKTOP_MIN_VERSION, version))
-				managed = { kind: "outdated", version, minimum: AGENT_DESKTOP_MIN_VERSION, path: exe };
-			else managed = { kind: "present", version, path: exe };
-		} catch (error) {
-			managed = { kind: "broken", detail: error instanceof Error ? error.message : String(error), path: exe };
-		}
+		const found = await versionOf(exe, env);
+		if (found.kind === "broken") managed = found;
+		else if (!found.version) managed = { kind: "broken", detail: "agent-desktop printed no version", path: exe };
+		else if (isNewer(AGENT_DESKTOP_MIN_VERSION, found.version))
+			managed = { kind: "outdated", version: found.version, minimum: AGENT_DESKTOP_MIN_VERSION, path: exe };
+		else managed = found;
 	}
-	const copy = pickAgentDesktop(
-		managed.kind === "present" && managed.version ? { path: exe, version: managed.version } : null,
-		bundleDir ? bundledAgentDesktop(bundleDir, platform) : null,
+	const copy = await pickAgentDesktop(
+		platform,
+		bundleDir,
+		managed.kind === "present" && managed.version ? { path: exe, version: managed.version } : undefined,
 	);
 	return copy ? { kind: "present", version: copy.version, path: copy.path } : managed;
 }
@@ -282,11 +261,11 @@ export async function detectMachine(
 	);
 	const node = findOnPath([executableName("node", platform)], pathEnv, platform);
 	const [foundBun, omp, git, ghPresence, nodePresence, agentDesktop, tailscale] = await Promise.all([
-		bun ? versionOf(bun, env, platform) : Promise.resolve<SetupPresence>({ kind: "missing" }),
+		bun ? versionOf(bun, env) : Promise.resolve<SetupPresence>({ kind: "missing" }),
 		detectOmp(),
 		detectGit(platform, pathEnv, env),
-		gh ? versionOf(gh, env, platform) : Promise.resolve<SetupPresence>({ kind: "missing" }),
-		node ? versionOf(node, env, platform) : Promise.resolve<SetupPresence>({ kind: "missing" }),
+		gh ? versionOf(gh, env) : Promise.resolve<SetupPresence>({ kind: "missing" }),
+		node ? versionOf(node, env) : Promise.resolve<SetupPresence>({ kind: "missing" }),
 		detectAgentDesktop(platform, toolsDir, env, agentDesktopBundle),
 		detectTailscale(platform, pathEnv),
 	]);

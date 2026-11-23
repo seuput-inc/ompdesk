@@ -41,6 +41,7 @@ export interface InstalledBrowser {
 
 /** What this computer has: the answer of `DEFAULT_BROWSER_STATUS`, in `auto` order. */
 export interface AgentBrowserStatus {
+	auto: Exclude<AgentBrowser, { kind: "unavailable" }>;
 	egoInstalled: boolean;
 	browsers: InstalledBrowser[];
 	/** Native-host discovery does not attest a browser or profile. Absent on older hosts with per-browser ports. */
@@ -101,9 +102,6 @@ export function resolveAgentBrowser(pref: DefaultBrowserPref, status: AgentBrows
 			? { kind: "relay", name: CHROMIUM_BROWSER_NAMES[id], url: relayUrl(id) }
 			: { kind: "unavailable", name: CHROMIUM_BROWSER_NAMES[id] };
 	}
-	if (!status || pref === "builtin") return { kind: "builtin" };
-	if (status.egoInstalled) return { kind: "ego" };
-	const legacy =
-		pref === "auto" && !status.nativeHostBrowsers && status.browsers.find(browser => browser.relayInstalled);
-	return legacy ? { kind: "relay", name: legacy.name, url: relayUrl(legacy.id) } : { kind: "builtin" };
+	if (pref === "auto" && status) return status.auto;
+	return pref === "ego" && status?.egoInstalled ? { kind: "ego" } : { kind: "builtin" };
 }

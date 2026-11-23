@@ -5,6 +5,7 @@ mod assets;
 mod automation;
 mod evaluate;
 mod gpu;
+mod legacy_user_data;
 mod migrate_watch;
 mod native_chrome;
 mod native_services;
@@ -1620,16 +1621,24 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     } else {
         home.join("Library/Application Support")
     };
-    let user_data = startup::resolve_user_data(
+    let (user_data, migrate_legacy) = match startup::user_data_override(
         &args,
-        std::env::var(startup::USER_DATA_ENV).ok().as_deref(),
-        startup::default_user_data(&app_data),
-    );
+        std::env::var_os(startup::USER_DATA_ENV).as_deref(),
+    ) {
+        Some(path) => (path, false),
+        None => (
+            startup::default_user_data(&app_data),
+            app_data.is_absolute(),
+        ),
+    };
     let feedback_profile = feedback_profile(&user_data, &args)?;
-    std::fs::create_dir_all(&user_data)?;
     log::start_clock();
-    log::open_file(&user_data.join("tauri-shell.jsonl"));
-    log_start(&argv, relaunched_by.as_deref());
+    let open_start_log = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&user_data)?;
+        log::open_file(&user_data.join("tauri-shell.jsonl"));
+        log_start(&argv, relaunched_by.as_deref());
+        Ok(())
+    };
     #[cfg(windows)]
     let instance_name = startup::pipe_name(&user_data);
     #[cfg(not(windows))]
@@ -1642,10 +1651,21 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 &argv,
                 &std::env::current_dir()?.to_string_lossy(),
             )?;
+            // The primary acknowledges only after its profile is ready.
+            open_start_log()?;
             log::log("shell.handedOver", json!({"to":"the running shell"}));
             return Ok(0);
         }
     };
+    let migration = if migrate_legacy {
+        legacy_user_data::migrate(&user_data)
+    } else {
+        None
+    };
+    open_start_log()?;
+    if let Some(message) = &migration {
+        log::log("user-data-migration", json!({ "message": message }));
+    }
     let exe_dir = exe.parent().ok_or("executable has no parent")?;
     let packaged_resources = if cfg!(target_os = "macos") {
         exe_dir.join("../Resources")
@@ -1704,6 +1724,9 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             .find_map(|s| s.strip_prefix("--lang=").map(str::to_owned)),
     };
     let mut facts = facts::collect(&launch, &mut log::log);
+    if let Some(message) = migration {
+        facts["legacyUserDataMigration"] = Value::String(message);
+    }
     // Do not advertise CEF/Chromium versions for WKWebView. The shim can diagnose the actual engine.
     facts["versions"] = json!({"shell":env!("CARGO_PKG_VERSION"),"tauri":tauri::VERSION,"webview":tauri::webview_version()?});
     let mut token_bytes = [0u8; 32];

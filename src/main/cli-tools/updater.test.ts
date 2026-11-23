@@ -14,6 +14,7 @@ import type { ToolUpdateOutcome, ToolUpdateRequest } from "../setup/service";
 import { CHECK_INTERVAL_MS, UPDATE_STEP_MAX_MS } from "../update-scheduler";
 import { type IpcCaller, IpcRegistry } from "../web/ipc-registry";
 import type { CliDetection, CliOwner, DetectDeps } from "./detect";
+import { runningIn } from "./plans";
 import { CliUpdater, type CliUpdaterDeps, registerCliUpdateIpc, runCheckProcess } from "./updater";
 
 const NPM: CliOwner = { method: "npm", name: "@openai/codex", prefix: "/p", root: "/p/lib/node_modules/@openai/codex" };
@@ -76,7 +77,7 @@ function harness(over: Partial<CliUpdaterDeps> = {}, scheduled = true): Harness 
 			h.outcome.onRun?.();
 			return h.outcome.value;
 		},
-		processes: async () => h.processes.value,
+		running: (detection, owner) => runningIn(detection, owner, h.processes.value),
 		onState: state => h.states.push(state),
 		now: () => h.clock.now,
 		detect: async (id: CliToolId, _deps: DetectDeps) => h.detections[id] ?? null,
@@ -178,6 +179,13 @@ describe("CliUpdater", () => {
 		await newer.updater.updateNow("codex");
 		expect(newer.updates).toEqual([]);
 		expect(tool(newer, "codex")?.last).toEqual({ kind: "current" });
+	});
+
+	it("does not update when core fails to answer the running check", async () => {
+		const h = harness({ running: async () => Promise.reject(new Error("ompdesk-core ended")) });
+		await h.updater.updateNow("codex");
+		expect(h.updates).toEqual([]);
+		expect(tool(h, "codex")?.last).toMatchObject({ kind: "failed", failure: { reason: "check" } });
 	});
 
 	it("on macOS waits while the Node CLI runs, and updates at the next check after it quits", async () => {
@@ -430,9 +438,10 @@ describe("CliUpdater", () => {
 		const h = harness({ now: () => Date.now() });
 		h.outcome.value = { kind: "cancelled" };
 		h.updater.start();
-		await vi.advanceTimersByTimeAsync(0);
+		await h.updater.rescan(); // Wait behind the pass, including its real core idle check.
 		expect(h.updates).toHaveLength(1);
 		await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+		await h.updater.rescan();
 		expect(h.updates).toHaveLength(2);
 		h.updater.dispose();
 	});

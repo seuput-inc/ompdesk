@@ -2,12 +2,12 @@ path	status	cutover_wave	implementer_and_remaining_work
 src/main/account-rotation.test.ts	tooling	-	Vitest suite: accountRotationDeps.
 src/main/account-rotation.ts	port	3	Hub batch, §1.3(a,c): index.ts wires one synchronous preference write to the current local pool and the tabs served for peers. Move that transaction with its readers, not a separately scheduled rotation broadcast.
 src/main/agent-browsers.test.ts	tooling	-	Vitest suite: findChromiumBrowsers.
-src/main/agent-browsers.ts	mixed	2	browsers.find/status/installRelay/openExtensions dispatch in crates/core/src/browsers/mod.rs; resolveEgoBrowser, systemBrowserPlaces and the launch cache/reprobe remain in TS.
+src/main/agent-browsers.ts	mixed	2	The core owns executable discovery, browsers.status, its automatic selection, cache and reprobe change detection. Shell (§1.3c,d) supplies login PATH, install places, relay mode from systemOmp and sends the reprobe notification to live sessions.
 src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a session runs.
-src/main/agent-desktop.ts	port	2	agentDesktopToRun compares bundled and managed executable versions; computerUseSpawn selects the engine and spawn environment.
+src/main/agent-desktop.ts	native-client	2	setup.pickAgentDesktop checks the bundle, probes the managed executable once per file identity and selects the copy. The client maps this result and the existing shared pref/bridge contract to session spawn args and env.
 src/main/agent-paths.ts	port	1	agentDir resolves PI_CODING_AGENT_DIR or the user's .omp/agent path.
 src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
-src/main/agent-power-migration.ts	port	2	migrateAgentPowers applies a versioned one-time preferences and stock config.yml migration.
+src/main/agent-power-migration.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore synchronously migrates the new SafeStore before its first read; the same migration patches stock config.yml without losing comments. Move with the prefs bootstrap, not as a second writer.
 src/main/agent-worktrees.test.ts	tooling	-	Exercises list and orphan-only clear through the core against an isolated stock CLI.
 src/main/agent-worktrees.ts	native-client	1	Forwards the resolved executable, environment and cwd once to omp.worktrees. Rust starts stock and interprets its reply; stock decides which worktrees are orphaned.
 src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.
@@ -54,9 +54,9 @@ src/main/autopilot.ts	native-client	3	Autopilot opens the run via autopilot.open
 src/main/background-work.test.ts	tooling	-	Vitest suite: summarizeJobRows.
 src/main/background-work.ts	port	3	askBackgroundWork queries member bridges under deadline and aggregates named subagents, jobs and unknown sessions for restart confirmation.
 src/main/benchmark-runner.test.ts	tooling	-	Vitest suite: benchmark runner contract.
-src/main/benchmark-runner.ts	port	2	BenchmarkRunner spawns/cancels the benchmark child, enforces a timeout and parses its summary for the live IPC feature.
+src/main/benchmark-runner.ts	port	2	Shell launch batch, §1.3a,c: MachineServices reads running and aborts per caller synchronously. resolveOmp also accepts versioned OMP_GUI_OMP wrappers without a package manifest (test-fake-omp.ts). Running a guessed package entry bypasses wrapper behavior; do not route model arguments through a new general-purpose shell RPC.
 src/main/boot-model.test.ts	tooling	-	Vitest suite: recognizes every stock no-model boot failure.
-src/main/boot-model.ts	port	2	isNoModelBootFailure detects stock startup errors; bootModelSelector spawns the catalog probe and caches its answer per install/version.
+src/main/boot-model.ts	mixed	2	models.bootSelector caches the installed Bun catalog probe in core. §1.3(a), hub batch: sidecar.ts reads isNoModelBootFailure before choosing its exit plan. Stock's catalog stays in Bun; main supplies its launch environment.
 src/main/bridge-account-credits.test.ts	tooling	-	Vitest suite: account credits from stock's usage limits.
 src/main/bridge-account-rotation-stock.test.ts	tooling	-	Vitest suite: moves an automatic warm pin only when stock ranks another account first by more than the margin, never an explicit one, and never flip-flops.
 src/main/bridge-account-rotation.test.ts	tooling	-	Vitest suite: gui-bridge account rotation.
@@ -241,7 +241,7 @@ src/main/editor.ts	mixed	1	editor.prepare/finish own the temporary draft, conten
 src/main/emoji-stock.test.ts	tooling	-	Vitest suite: ships stock's shortcode table byte for byte.
 src/main/event-batcher.ts	port	2	SidecarManager.#dispatchFrame flushes the current batch before a settling event or response is emitted; a separate timer RPC would permit replay after the snapshot. Move with the ordered sidecar event producer and beforeResponse listeners (§1.3a,c).
 src/main/extension-reload.test.ts	tooling	-	Vitest suite: mergeApplyPlans.
-src/main/extension-reload.ts	port	1	mergeApplyPlans merges restart/reload/reconnect requirements; extensionApplyDecision chooses immediate, deferred or skipped application from tab facts.
+src/main/extension-reload.ts	port	1	§1.3(a,b,c), hub batch: host-services.ts consumes the decision and changes tab.extensionPending before returning its apply count. sidecar-pool.ts and ext-update/updater.ts use the same merge. No independent I/O; move with hosted tab state.
 src/main/extension-specs.test.ts	tooling	-	Vitest suite: isPinnedNpmSpec.
 src/main/external-url.test.ts	tooling	-	Vitest suite: isOpenableExternalUrl.
 src/main/external-url.ts	port	1	Shell batch, §1.3(a,b): ipc.ts and web/host-actions.ts check the page URL immediately before OS dispatch. Move the allowlist into the page-only open command, not a standalone validation RPC; keep general shell.openExternal available to trusted native callers.
@@ -268,25 +268,24 @@ src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup
 src/main/initial-cwd.test.ts	tooling	-	Real-core parity for startup cwd selection and default workspace creation.
 src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path or an existing directory before falling back to home.
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
-src/main/installer-spawn.ts	port	1	spawnDetachedOffThread delegates detached installer process creation to a Node Worker and returns its PID.
+src/main/installer-spawn.ts	port	1	Shell updater batch, §1.3c: NsisUpdater holds the verified download and elevation decision in its own process and OmpNsisUpdater orders quit after the installer starts. Move that verified handoff with the updater; do not expose detached execution of an arbitrary path through core RPC.
 src/main/ipc.ts	mixed	4	registerIpcHandlers still routes session commands and renderer events. Desktop runtime:log-path and runtime:log-tail bypass Node; paired requests use the same Tauri reader after the workspace permission check. Clipboard and image conversion already use the shell and stock worker.
 src/main/launch-guard-core.ts	port	1	parseLaunchHistory, crashLoopDetected and gpuRelaunchDecision implement launch-history and relaunch cooldown policy.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-guard.ts	port	2	startLaunchGuard and markLaunchStable maintain launch-history.json and safe-mode state; noteGpuRelaunch records cross-process cooldown.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
 src/main/launch-profile-store.test.ts	tooling	-	Vitest suite: launch profile store.
-src/main/launch-profile-store.ts	port	2	readLaunchProfile and updateLaunchProfile read and merge per-workspace launch flags in GUI preferences.
-src/main/legacy-user-data.test.ts	tooling	-	Vitest suite: migrateLegacyUserData.
-src/main/legacy-user-data.ts	port	1	migrateLegacyUserData checks the destination profile is fresh before renaming or copying the old seucode profile.
+src/main/launch-profile-store.ts	port	2	§1.3(a,c), shell batch: local IPC and remote host-services synchronously patch one SafeStore launchProfiles map; index.ts supplies that same map to the sidecar's spawn-time flags. Move with the prefs owner to preserve atomic per-workspace patches.
+src/main/legacy-user-data.test.ts	tooling	-	Runs the Tauri host on an isolated profile; shell-batch-checks tauri-native supplies the executable on macOS and Windows.
 src/main/line-budget.ts	port	1	LineBudget.take enforces an hourly allowance and counts suppressed lines for the next admitted report.
 src/main/local-engines-core.test.ts	tooling	-	Vitest suite: engineAction.
-src/main/local-engines-core.ts	port	1	engineAction maps one local engine's availability and provider facts to the action its detector should take.
+src/main/local-engines-core.ts	port	1	§1.3a,b,c: the detector checks the current enabled bit, ownership and deletion ledger immediately before applying an action. Move this pure rule with that ledger and the models.yml writer, not via a second RPC after the probe (shell models editor).
 src/main/local-engines.test.ts	tooling	-	Vitest suite: localEngineSettings.
-src/main/local-engines.ts	port	2	LocalEngineDetector probes loopback inference endpoints on an interval and maintains detected provider entries via the models.yml writer.
+src/main/local-engines.ts	mixed	2	models.probeLocalEngine checks an HTTP loopback model list. The shell models editor retains its same-tick ownership ledger and shared models.yml write queue. An inconclusive probe does not unregister an existing provider.
 src/main/log-watcher.test.ts	tooling	-	Vitest suite: opening logs later replays complete lines once, including split appends.
 src/main/log-watcher.ts	mixed	2	logs.start/snapshot/close own watching, UTF-8 tails and sequence assignment. Main forwards pushes and holds an opaque cursor per file plus the accepted 1000-line tail in RAM so a replacement core can resume without losing the panel history. Receiver: shell window transport.
 src/main/mac-permissions.test.ts	tooling	-	Vitest suite: MacPermissions.status.
-src/main/mac-permissions.ts	port	2	MacPermissions queries accessibility and screen grants through injected platform calls, requests missing permissions and tracks prior requests in preferences.
+src/main/mac-permissions.ts	port	2	Shell batch, §1.3c: index.ts window-focus and Settings requests share askMissing and the synchronously updated macPermissionsRequested pref. TCC reads and requests belong to the signed app, not an independent core identity.
 src/main/machine-services.test.ts	tooling	-	Vitest suite: machineFor.
 src/main/machine-services.ts	mixed	3	LocalMachine owns caller-scoped benchmark/model setup runners and local settings operations; RemoteMachine validates and forwards host requests. ModelSetupRunner delegates execution to core models.setupRun; TS retains routing and runner maps.
 src/main/machine-state.test.ts	tooling	-	Vitest suite: machine state around a stall.
@@ -313,18 +312,18 @@ src/main/menu.ts	mixed	4	createMenu builds localized templates, shortcuts and wi
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
 src/main/message-update-slim.ts	port	1	§1.3a,b,c: SidecarPool, the link encoder and subagent frame shaping synchronously strip repeated content using state for this turn. No I/O unit; move with the producer and its ordered sinks, not another round trip per event.
 src/main/model-release-dates.test.ts	tooling	-	Vitest suite: model release dates.
-src/main/model-release-dates.ts	port	2	Node fetches models.dev/catalog.json directly by default; NODE_USE_ENV_PROXY=1 honors HTTPS_PROXY and NO_PROXY. Node trusts its bundled roots by default and accepts NODE_EXTRA_CA_CERTS. core/http.rs dials directly and trusts platform roots plus extra CAs; the shell's net.* uses OS TLS and session proxy rules. First provide equivalent proxy routing and CA selection for the catalog GET. Then move fetch, canonical UTC dates, single-flight and the 24h success / 5min failure cache together; keep the last good dates on refresh failure, without sending the catalog over IPC.
+src/main/model-release-dates.ts	port	2	Shell networking batch: preserve Node fetch's bundled roots, NODE_EXTRA_CA_CERTS and opt-in NODE_USE_ENV_PROXY with HTTPS_PROXY/NO_PROXY. core/http.rs dials directly using platform roots; net.* uses OS proxy settings. Move the GET with the date parser and 24h success / 5min failure cache once transport matches. Never replace last-good dates on a failed refresh.
 src/main/model-role-contracts.test.ts	tooling	-	Vitest suite: role groups.
 src/main/model-roles-stock-coverage.test.ts	tooling	-	Vitest suite: lists each installed role with stock's metadata, or hides it with a reason.
 src/main/model-setup-metering.test.ts	tooling	-	Vitest suite: sees OpenRouter chat models, so the metering checks are not vacuous.
 src/main/model-setup-review-stock.test.ts	tooling	-	Vitest suite; not shipped in main.
 src/main/model-setup-runner.test.ts	tooling	-	Vitest suite: ModelSetupRunner.
-src/main/model-setup-runner.ts	mixed	2	ModelSetupRunner uses core models.setupRun/models.setupStop for the research process; TS enforces a single live request, validates input, tracks events and parses the returned plan.
+src/main/model-setup-runner.ts	mixed	2	models.setupRun and models.setupStop own the research process. §1.3a,c,d: shell and paired-host handlers read status and abort one live run immediately; the page shares request and plan validation. Move admission and the event mirror with these handlers, not a second copy of the schema.
 src/main/model-wait-count.test.ts	tooling	-	Vitest suite: countTogether.
 src/main/model-wait-count.ts	port	3	Hub batch, §1.3(c): remote/host-services.ts reads modelWait.snapshot.local to serve host counts; sidecar-pool.ts forwards onChange's together counts while processing the same event. Move the tracker with those event and snapshot consumers.
-src/main/models-config-stock.ts	mixed	2	modelsConfigMetadata and normalizeModelsConfig request catalog.roster and models.validate from installed omp via core stock.request; TS checks returned option arrays, Rust owns worker lanes, not stock validation.
+src/main/models-config-stock.ts	native-client	2	catalog.roster and models.validate run in installed omp through the core's stock.request lane. The client validates the option arrays at that boundary; copying the stock roster or normalizer would fail §1.3d.
 src/main/models-config.test.ts	tooling	-	Vitest suite: derives the full stock roster and option vocabularies.
-src/main/models-config.ts	mixed	2	listModelsProviders, upsertModelsProvider and writeModelsText own YAML editing, merging and file writes; models-config-stock obtains vocabulary and normalization from installed omp over core stock.request.
+src/main/models-config.ts	mixed	2	Shell models editor, §1.3d: YAML Document mutations preserve comments and layout on the shared write queue, and stock alone normalizes models.yml through models.validate. Replacing the editor with a serde round trip would discard user text.
 src/main/native-bin.ts	port	1	configureNativeBin and nativeBinPath resolve packaged or development paths to ompdesk and ompdesk-core; this is runtime path selection, not binary staging.
 src/main/native-labels.test.ts	tooling	-	Vitest suite: native menu roles.
 src/main/notification-batch.test.ts	tooling	-	Vitest suite: NotificationBatcher.
@@ -334,11 +333,11 @@ src/main/notify-triage.ts	port	3	Shell batch with SYSTEM_NOTIFY (§1.3c). The ha
 src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
 src/main/nsis-updater.ts	port	4	OmpNsisUpdater customizes electron-updater's download session and delays quitAndInstall teardown until the detached installer spawn resolves.
 src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
-src/main/omp-auto-takeover.ts	port	2	OmpAutoTakeover reads/writes stock update.auto via the omp CLI and uses takeoverStep and the stored record to manage ownership of automatic updates.
+src/main/omp-auto-takeover.ts	port	2	Shell updater batch, §1.3a,c: OmpUpdater.state reads taken() synchronously at startup and on every change. Move that snapshot with the stock update.auto record and its serialized read/write/restore; a stale copy can report ownership the person revoked.
 src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
-src/main/omp-availability.ts	port	2	followSetupState maintains the shared machine-level omp availability gate; refuseWithoutOmp distinguishes setup unavailability from a failed worker request.
+src/main/omp-availability.ts	port	2	§1.3(a,b,c), shell batch: stock-helper.ts records a refused call before admission; index.ts consumes that bit synchronously in followSetupState before restarting tabs and relisting. Move with setup events and worker admission, not across a second state mirror.
 src/main/omp-compat-source.test.ts	tooling	-	Vitest suite: OmpCompatSource.
-src/main/omp-compat-source.ts	port	2	OmpCompatSource fetches the verified-version feed, throttles reads and retains a last-good disk cache for offline launches.
+src/main/omp-compat-source.ts	mixed	2	setup.readCompatCache and setup.saveCompatCache own the verified list on disk. Shell updater batch retains net.fetch (system proxy), the release tool's shared validator and the newest unconfirmed bytes across core replacement (§1.3d).
 src/main/omp-config-stock.test.ts	tooling	-	Vitest suite: reads stock's default, writes both values, and reads back what it wrote.
 src/main/omp-daemon-folder-stock.test.ts	tooling	-	Vitest suite: is removed once that omp ended, while another session's omp keeps running.
 src/main/omp-exits.ts	port	3	noteOmpExit records exit promises by cwd; ompsExitedIn bounds the wait before an opened worktree can be removed.
@@ -353,9 +352,9 @@ src/main/omp-processes.ts	native-client	3	OmpProcesses.stopAll and reapLeftovers
 src/main/omp-restart.test.ts	tooling	-	Vitest suite: ompRestartDecision.
 src/main/omp-restart.ts	port	1	ompRestartDecision classifies an updated omp tab as restart, wait or skip based on its lifecycle facts.
 src/main/omp-runtime.test.ts	tooling	-	Vitest suite: omp version parsing.
-src/main/omp-runtime.ts	mixed	2	Core checks launcher headers and parses stock update reports (omp.parseUpdateCheck). Main still resolves paths, verifies Bun and omp versions and runs other stock subprocesses.
+src/main/omp-runtime.ts	mixed	2	setup.firstPackageCandidate and setup.probeOmp classify launchers, read installed versions, run fixed --version probes and enforce version floors. omp.parseUpdateCheck parses stock update reports. Main keeps PATH lookup, general stock commands and ompPackageRoot for synchronous stats startup and the stock helper.
 src/main/omp-updater.test.ts	tooling	-	Vitest suite: OmpUpdater.
-src/main/omp-updater.ts	port	2	OmpUpdater schedules checks, applies verified-version policy and coordinates setup update/repair; registerOmpUpdateIpc exposes state and update actions.
+src/main/omp-updater.ts	port	2	Shell updater batch, §1.3a,c,d: registerOmpUpdateIpc reads state synchronously, and onState publishes that same pass and takeover snapshot. Move them with setup update/repair; release tooling shares verified-version selection.
 src/main/ompdesk-check.test.ts	tooling	-	Vitest suite: group.
 src/main/open-path.test.ts	tooling	-	Vitest suite: isLauncherPath.
 src/main/open-path.ts	native-client	1	fs.isLauncherPath checks extensions, resolved targets and POSIX executable bits. The shell adapter reveals a launcher or a path the default app cannot open.
@@ -375,7 +374,7 @@ src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recove
 src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesChanged and shouldRestartForChangedResources decide recovery from process failure or changed app resources; hangRestartNotifies rate-limits notices.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
 src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
-src/main/retired-prefs.ts	port	2	migrateRetiredPrefs applies retired-key and panel-view migrations and updates associated settings/schedule storage.
+src/main/retired-prefs.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore migrates the in-memory SafeStore before returning it or reading themes. Port with prefs initialization so readers cannot see retired keys or stale schedule preferences during a migration.
 src/main/rpc-client.ts	mixed	3	RpcClient.command assigns GUI IDs, tries local handlers and times them out; stock() uses the tab lane's core sidecar.command and refuses sends after retire().
 src/main/runtime-log-core.test.ts	tooling	-	Vitest suite: runtime crash log.
 src/main/runtime-log-core.ts	port	1	normalizeRuntimeErrorReport validates renderer reports, appendRuntimeLogAtPath appends structured records, and tailLogLines bounds reads by count and bytes.

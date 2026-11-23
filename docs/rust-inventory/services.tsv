@@ -52,13 +52,13 @@ src/main/ai-memory/sync.test.ts	exception	Exercises paired memory stores, includ
 src/main/ai-memory/sync.ts	mixed	The core owns sync rounds and cursors. §1.3(d): the stock bridge shares the same conclusion redactor; do not fork its privacy rules in Rust. Receiver: remote-web for the RemoteDevices host-link request.
 src/main/ai-memory/upkeep.test.ts	exception	Checks learning from paused conversations and which pages upkeep writes or skips.
 src/main/ai-memory/upkeep.ts	mixed	Native readiness schedules repair and upkeep and cancels pending ticks on pause. The repair claim belongs to this app launch, not to a replaceable core; the client reads current host settings.
-src/main/cli-tools/catalog.ts	port	Filters the catalog by connected provider IDs and includes machine-setup tools without a matching provider. Before reusing native-root-mini-intake's machine/ candidate, compare its output and order with this caller contract.
+src/main/cli-tools/catalog.ts	port	Shell updater batch, §1.3a,b: a synchronous table, not an I/O unit. Detection, command planning and CliUpdater share CLI_TOOL_SPECS; relevantTools preserves the caller's display order. Move the table with these readers.
 src/main/cli-tools/detect.test.ts	exception	Tests attribution of CLI installs to Homebrew, Bun and npm using their actual directory layouts.
-src/main/cli-tools/detect.ts	port	Resolves executable shims, classifies package-manager ownership, checks write access and probes installed versions.
+src/main/cli-tools/detect.ts	mixed	ext.binaryFacts resolves package shims and returns their manager, writable target and installed manifest version. The shell updater (§1.3c) supplies the login PATH and probes live vendor CLI versions with its command runner.
 src/main/cli-tools/plans.test.ts	exception	Checks package-manager executable selection, argv and environment for version checks and upgrades.
-src/main/cli-tools/plans.ts	port	Selects owner-specific check and update commands, parses latest versions and decides when running tools must wait.
+src/main/cli-tools/plans.ts	mixed	ext.cliWaitsForIdle and ext.updateRunning decide whether an update must wait. Shell updater batch, §1.3a: CLI and MCP still share synchronous owner-specific command builders and the tool catalog.
 src/main/cli-tools/updater.test.ts	exception	Exercises provider filtering, supervised updates and post-update detection using controlled dependencies.
-src/main/cli-tools/updater.ts	port	Schedules detection and version checks, defers busy tools, runs updates and manages temporary package directories for probes.
+src/main/cli-tools/updater.ts	mixed	Core scans the Mac for a running CLI before an update. Shell updater batch, §1.3a,c: the Settings IPC snapshot must return before the rescan settles; one state owner schedules checks, records results and queues setup's installer.
 src/main/control-socket/backend.ts	native-client	The backend supplies already-visible host facts at the pool event and forwards outside calls. The core projects socket state both for a resolved target and for numbered updates.
 src/main/control-socket/cli-install.test.ts	exception	Checks launcher contents, PATH updates and when a packaged install may replace a launcher.
 src/main/control-socket/cli-install.ts	native-client	control.installCli writes the launchers; the startup adapter supplies the local platform and bin directories, appends the latter to the host PATH, and logs a failed install without stopping app startup.
@@ -101,19 +101,19 @@ src/main/ecc/ecc-stock.test.ts	exception	Test coverage for stock SDK skill disco
 src/main/ecc/pack-drift.test.ts	exception	Test coverage for ECC pack pin and file integrity.
 src/main/ecc/stock-probe.ts	exception	Test probe launches a stock SDK session to measure skill visibility, slash commands and context cost.
 src/main/ext-update/classify.test.ts	exception	Tests inventory row order, project scoping, install methods and skipped linked plugins.
-src/main/ext-update/classify.ts	port	Hashes project working directories to eight hex characters before ext.seeds and drops binary targets without an owner on return.
+src/main/ext-update/classify.ts	native-client	Calls ext.seeds with the inventory and resolved binaries. The core builds project keys and selects targets. The adapter attaches the binary the updater already holds without sending it back over the pipe.
 src/main/ext-update/core.ts	native-client	Wraps ext.* requests to the Rust core in the updater step's call fence and returns the result.
-src/main/ext-update/ipc.ts	port	Rescans on state reads and permits a requested update key only if it appears in the updater's current rows.
+src/main/ext-update/ipc.ts	port	Shell IPC batch, §1.3a,c: GET returns the current rows before its rescan settles; NOW accepts only a key already in the same updater's rows. Move both handlers with the updater's state.
 src/main/ext-update/mcp-owner.test.ts	exception	Checks ownership of npm, Bun, Homebrew and Python installs and the reasons other binaries are skipped.
-src/main/ext-update/mcp-owner.ts	port	Resolves the executable on disk, determines its package owner and writable target, and probes its installed version after ext.binaryFacts.
+src/main/ext-update/mcp-owner.ts	mixed	ext.binaryFacts owns package layouts, script detection, venv versions and write access. The shell updater (§1.3c) resolves its launch PATH and queries the Python environment only for a pip console-script entry point.
 src/main/ext-update/mcp-plans.test.ts	exception	Checks generated check and upgrade commands for package managers, runners and Python environments.
-src/main/ext-update/mcp-plans.ts	port	Chooses pip, pipx, uv or shared package-manager commands from the owner and dispatches version parsing by runner type.
+src/main/ext-update/mcp-plans.ts	mixed	ext.pipLatest and ext.registryLatest parse check output. The shell updater owns the shared synchronous CLI/MCP package-manager plan and command runner (§1.3a,c); move both callers together.
 src/main/ext-update/mcp.test.ts	exception	Tests classification of bundled, remote and package-runner MCP launches and pinned versions.
 src/main/ext-update/mcp.ts	native-client	Forwards configured servers to ext.mcpClasses for classification.
 src/main/ext-update/running.test.ts	exception	Tests which package-owner and executable combinations must wait for the running server before updating.
-src/main/ext-update/running.ts	port	Enables process scanning only on macOS; ext.defersWhileRunning and ext.serverRunning answer the other running checks.
+src/main/ext-update/running.ts	native-client	ext.defersWhileRunning and ext.updateRunning check the install method and scan the Mac. No live process command lines leave the core.
 src/main/ext-update/updater.test.ts	exception	Tests initial inventory, project-scoped rows and keeping existing rows when inventory refresh fails.
-src/main/ext-update/updater.ts	port	Schedules inventory refresh, selects checks and upgrades by target, defers running scripts and merges reload plans.
+src/main/ext-update/updater.ts	mixed	Core classifies inventory and checks running MCP servers. Shell updater batch, §1.3a,c: IPC validates requested keys against live rows, setup owns the install queue, and the hub consumes reload decisions for live tabs.
 src/main/formal/audit-drift.test.ts	exception	Test coverage for declaration span and drift detection.
 src/main/formal/audit-lean.test.ts	exception	Test coverage for Lean module and proof trust auditing.
 src/main/formal/audit-statechart.test.ts	exception	Test coverage for statechart rule parsing and validation.
@@ -145,10 +145,10 @@ src/main/formal/tlc-parse.test.ts	exception	Test coverage for TLC output statist
 src/main/formal/toolchain.test.ts	exception	Test coverage for toolchain asset pins and installation.
 src/main/formal/verify-all.test.ts	exception	Test coverage for verification manifest and example handling.
 src/main/github-auth/cli.ts	native-client	Forwards account checks, Git identity, logout, switching and repository star operations to gh.authCheck, gh.authIdentity, gh.authLogout, gh.authSwitch and gh.star.
-src/main/github-auth/ipc.ts	port	Probes xcode-select before using Apple's Git and builds a login environment that prevents gh from launching its own browser.
-src/main/github-auth/pty.ts	port	Allocates a PTY owner, tracks offsets, polls stock every 150 ms and disposes the PTY on cancellation.
+src/main/github-auth/ipc.ts	mixed	setup.appleDeveloperDir checks Apple's git stub without opening its install dialog. The shell batch owns the IPC handlers and wires loginEnv to the stock PTY; GH_BROWSER must remain noninteractive.
+src/main/github-auth/pty.ts	port	Shell GitHub login batch, §1.3a,c,d: stock PtySession owns the terminal. The service advances one live handle's output offset; cancel marks that handle killed before asynchronous disposal. Move the handle with login state; do not start a second PTY.
 src/main/github-auth/service.test.ts	exception	Exercises signed-out, unavailable and authenticated gh states and login flows against a fake executable.
-src/main/github-auth/service.ts	port	Owns the gh login state machine, including optional gh installation, PTY prompts, cancellation and refreshing account state.
+src/main/github-auth/service.ts	port	Shell GitHub login batch, §1.3a,c: cancelLogin synchronously retires the active flow and cancels setup's gh install if that flow started it. Login start, account switching and shutdown share this state. Move with setup cancellation and the IPC handlers.
 src/main/github-auth/test-fake-gh.ts	exception	Writes a fake gh executable and seeds account records for sign-in tests.
 src/main/local/agent-control.ts	port	Enforces attachment path versus image-index exclusivity and size limits on messages and images before calling the stock bridge.
 src/main/local/agent-files.test.ts	exception	Tests creating, overwriting, renaming and protecting agent definition files in test directories.
@@ -191,7 +191,7 @@ src/main/local/git/test-repos.ts	exception	Builds and copies reusable temporary 
 src/main/local/git/unlanded.test.ts	exception	Tests comparison against the merge base and remote default branch, including main and detached HEAD exclusions.
 src/main/local/git/unlanded.ts	native-client	Delegates the whole comparison to the Rust core method git.unlanded through coreGit.
 src/main/local/git/worktree-seed.test.ts	exception	Tests include patterns, ignored and tracked file handling and the worktree seeding size budget.
-src/main/local/git/worktree-seed.ts	port	Setup batch owns runWorktreeHook with its standalone supervisor: main holds the child's stdin lease across a core restart (§1.3c). Local keeps seedWorktree (git.worktreeSeed client), prepareWorktree (joins seed failure and the later host hook result) and synchronous describePreparation (including a paired host's result); none can move independently of its consumer.
+src/main/local/git/worktree-seed.ts	mixed	git.worktreeSeed and git.worktreeHook find the seed and hook. The independent --supervise process runs and logs the hook. Local batch retains preparation/merge wrappers and attaches the active repo-lock lease to the standalone child (§1.3c). prepareWorktree combines seed failures with the later hook result; describePreparation synchronously formats local and paired host results.
 src/main/local/git/worktree.test.ts	exception	Tests real Git creation and removal, occupied folders and branches, exact branch names, exhaustion, rollback guards and checkout spelling.
 src/main/local/git/worktree.ts	port	Validates input and stock's location, locks the repository and invokes preparation. git.worktreePlan preserves checkout spelling; git.worktreeAdd chooses and creates the first free path and branch. Git absent: gitRunner throws before heldAnswer sends git.worktreeRemoval (exec.ts); runLocalCommand reports “git is not installed or not on PATH” without a code even for an outside path. No removal plan, lock or deletion executes. With Git available an outside target still fails worktree_outside_root.
 src/main/local/image-blobs.test.ts	exception	Tests restoration of stock blob references on subagent and bridge transcript reads.
@@ -244,6 +244,7 @@ src/main/routines/source.test.ts	exception	Test coverage for text clipping at ca
 src/main/routines/test-context.ts	exception	Test harness observes real schedule runs and marks with temporary repositories, synthetic mail, a fixture gh executable and a controlled session pool.
 src/main/routines/test-state.ts	exception	Test observer records the state sent to a window; no production schedule state mirror.
 src/main/routines/triggers.test.ts	exception	Test coverage for live trigger reconciliation on schedule edits.
+src/main/setup/apple-git.ts	native-client	Asks setup.appleDeveloperDir for the fixed xcode-select -p probe; the git trampoline, GitHub sign-in and setup use their original deadlines.
 src/main/setup/archives.test.ts	exception	Tests release selection and checksum lookup for the supported archives against a test mirror.
 src/main/setup/archives.ts	native-client	Forwards release lookups to setup.resolveArchive, setup.resolveAgentDesktop and setup.resolveTailscale and translates lookup errors.
 src/main/setup/compiled-launcher.test.ts	exception	Real core file operations and a delayed or lost reply exercise restore, competing installs, stale backups and the setup queue.
@@ -252,24 +253,24 @@ src/main/setup/detect-agent-desktop.test.ts	exception	Tests managed-only agent-d
 src/main/setup/detect-brew.test.ts	exception	Tests discovery of Homebrew's gh when the login shell does not supply its directory.
 src/main/setup/detect-bun.test.ts	exception	Checks Bun presence against the installed omp package's minimum Bun version.
 src/main/setup/detect-git-shell.test.ts	exception	Checks classification of Git shell failures, including the Mandatory ASLR signature.
-src/main/setup/detect.ts	port	Probes installed tools and Git shell health, detects outdated managed binaries and compares Bun with omp's minimum version.
+src/main/setup/detect.ts	mixed	setup.toolVersion probes the five located tools; setup.probeOmp, pickAgentDesktop and appleDeveloperDir select their runtime. Shell setup batch (§1.3c) retains the first-resolution gate, spawn PATH and Git shell diagnosis beside its repair and prefs.
 src/main/setup/download.test.ts	exception	Tests streamed progress, SHA-256 verification and cleanup of rejected downloads.
 src/main/setup/download.ts	native-client	Forwards setup.download with cancellation and adapts setup.downloadProgress events and checksum errors to the caller.
 src/main/setup/git-aslr.test.ts	exception	Tests the scope of Git mitigation changes, quoting and recorded prior state for undo.
-src/main/setup/git-aslr.ts	port	Builds Git-specific Windows mitigation fix and undo operations and persists prior per-image settings for restoration.
+src/main/setup/git-aslr.ts	port	Shell setup batch: setup IPC accepts only an explicit fix or undo action; the existing Windows path saves prior settings through setup's prefs. Move with that authorization and restoration state, not as a separately callable privilege-changing operation.
 src/main/setup/git-aslr.windows.test.ts	exception	Opt-in Windows test of changing and restoring the Git mitigation without altering unrelated mitigations.
 src/main/setup/ipc.test.ts	exception	Checks the setup IPC channels and rejects unknown retry items or Git mitigation actions.
-src/main/setup/ipc.ts	port	Rejects unknown setup IDs and Git mitigation actions and starts valid retries in the background through the TypeScript setup service.
+src/main/setup/ipc.ts	port	Shell IPC batch, §1.3a,c: GET and CANCEL read SetupService immediately. RETRY validates a known item and returns while the service reports progress. Move these handlers with that service.
 src/main/setup/omp-update-install.test.ts	exception	Exercises updates of the selected omp installation rather than unrelated executables on PATH.
-src/main/setup/paths.test.ts	exception	Tests registry PATH parsing, Windows environment expansion and duplicate-entry handling.
-src/main/setup/paths.ts	port	Selects managed tool directories, merges them into process PATH, queries Windows registry paths and locates Git Bash.
+src/main/setup/paths.test.ts	exception	Checks PATH refresh against the real core, plus synchronous managed paths and Git Bash selection.
+src/main/setup/paths.ts	mixed	setup.registryPath queries and parses the machine and user registry values. After it returns, refreshPath binds variables from the current process.env and publishes PATH synchronously; managedToolEnv and cli-install share the same synchronous merge (§1.3a,c).
 src/main/setup/plans.test.ts	exception	Checks the selected installer methods, generated commands and unsupported or already-present tools.
-src/main/setup/plans.ts	port	Selects installers by tool, platform and presence, and builds the download, verification and install commands or manual instructions.
+src/main/setup/plans.ts	mixed	ext.binaryFacts identifies the npm install behind omp. Shell setup batch keeps synchronous plan and manual-step selection with SetupService, the installer and its cancellation slot (§1.3a,c).
 src/main/setup/runner.test.ts	exception	Tests streamed output and the outcomes for success, nonzero exit and spawn failure.
-src/main/setup/runner.ts	port	Enforces one installer at a time, drains output after exit, distinguishes spawn and exit failures and closes stdin to cancel.
+src/main/setup/runner.ts	port	Shell setup batch, §1.3a,c: SetupService.cancel reads runner.running and closes the current supervisor's stdin synchronously. Move with the same installer slot, output drain and cancellation outcome.
 src/main/setup/service.test.ts	exception	Checks launch-time install order and preservation or restoration of the prior compiled omp launcher.
-src/main/setup/service.ts	port	Queues installations, retry backoff, plan execution, detection and cancellation. latestOmp retains setup's runner and cleanup on failure; omp.parseUpdateCheck supplies the same native parser as the local update command.
-src/main/setup/supervisor.ts	port	Builds isolated launches and log redirection, including the Windows Bun launcher and command-line quoting, before starting ompdesk-core --supervise.
+src/main/setup/service.ts	port	Shell setup batch, §1.3a,c: index.ts consults the current item snapshot for startup and GitHub installation; setup IPC cancels the active runner and starts validated retries without awaiting their completion. Move those readers with the install queue. latestOmp keeps the runner and cleanup on failure; omp.parseUpdateCheck shares the local command's native parser.
+src/main/setup/supervisor.ts	mixed	--supervise owns the installer tree, and a standalone worktree hook's deadline, log and output tail. Shell setup batch retains the immediate ChildProcess stdin lease, isolated Windows launch handles and spawn-failure diagnostic (§1.3a,c).
 src/main/setup/test-mirror.ts	exception	Starts and stops controlled HTTP mirrors for installer release and download tests.
 src/main/ssh/client.ts	mixed	Rust owns ssh processes, prompts and tool I/O. SshTools reads prompts synchronously and attaches listeners after start; this client queues early events and tells those listeners when their core died. Move the event consumer with SshTools (§1.3a,c).
 src/main/ssh/ipc.ts	port	registerSshToolsIpc enumerates the live windows for each state/prompt broadcast and disposes SshTools inside will-quit. Move with the shell window and quit owners (§1.3a,c).

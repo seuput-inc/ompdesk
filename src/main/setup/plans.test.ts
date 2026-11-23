@@ -262,7 +262,7 @@ describe("buildPlan", () => {
 
 	it.skipIf(process.platform === "win32")(
 		"installs a too-old omp npm owns at the one version it is handed, into that npm's prefix",
-		() => {
+		async () => {
 			const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-omp-npm-")));
 			try {
 				const pkg = join(root, "lib", "node_modules", "@oh-my-pi", "pi-coding-agent");
@@ -272,7 +272,7 @@ describe("buildPlan", () => {
 				writeFileSync(join(root, "bin", "npm"), "");
 				symlinkSync(join(pkg, "src", "cli.ts"), join(root, "bin", "omp"));
 				const omp = join(root, "bin", "omp");
-				const ompNpm = ompNpmOwner(omp, { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" });
+				const ompNpm = await ompNpmOwner(omp, { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" });
 				expect(ompNpm).toEqual({ npm: join(root, "bin", "npm"), prefix: root });
 				const ctx = { ...mac, omp, ompNpm, ompVersion: "18.22.2" };
 				expect(selectMethod("omp", outdated, ctx)).toBe("npm-global");
@@ -290,9 +290,9 @@ describe("buildPlan", () => {
 				const other = join(root, "lib", "node_modules", "other", "cli.js");
 				mkdirSync(dirname(other), { recursive: true });
 				writeFileSync(other, "");
-				expect(ompNpmOwner(other, { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" })).toBeNull();
+				expect(await ompNpmOwner(other, { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" })).toBeNull();
 				expect(
-					ompNpmOwner("/opt/checkout/bin/omp", { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" }),
+					await ompNpmOwner("/opt/checkout/bin/omp", { platform: "darwin", toolsDir: mac.toolsDir, pathEnv: "" }),
 				).toBeNull();
 			} finally {
 				rmSync(root, { recursive: true, force: true });
@@ -300,7 +300,7 @@ describe("buildPlan", () => {
 		},
 	);
 
-	it("follows a Windows npm .cmd shim to the prefix that holds omp, and runs npm.cmd from PATH through cmd.exe", () => {
+	it("follows a Windows npm .cmd shim to the prefix that holds omp, and runs npm.cmd from PATH through cmd.exe", async () => {
 		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-omp-npm-win-")));
 		try {
 			const prefix = join(root, "npm");
@@ -311,16 +311,16 @@ describe("buildPlan", () => {
 			const shim = join(prefix, "omp.cmd");
 			writeFileSync(shim, '@ECHO off\r\n"%dp0%\\node_modules\\@oh-my-pi\\pi-coding-agent\\src\\cli.ts" %*\r\n');
 			const where = { platform: "win32" as const, toolsDir: win.toolsDir, pathEnv: node };
-			const ompNpm = ompNpmOwner(shim, where);
+			const ompNpm = await ompNpmOwner(shim, where);
 			// The prefix reads as a Windows path whatever host builds the plan.
 			expect(ompNpm).toEqual({ npm: join(node, "npm.cmd"), prefix: win32.normalize(prefix) });
 			// No npm anywhere: nothing can install into that prefix.
-			expect(ompNpmOwner(shim, { ...where, pathEnv: "" })).toBeNull();
+			expect(await ompNpmOwner(shim, { ...where, pathEnv: "" })).toBeNull();
 			// A project's own shim names a package above its folder: never a global prefix to install into.
 			const local = join(root, "proj", "node_modules", ".bin");
 			mkdirSync(local, { recursive: true });
 			writeFileSync(join(local, "omp.cmd"), '"%dp0%\\..\\@oh-my-pi\\pi-coding-agent\\src\\cli.ts" %*\r\n');
-			expect(ompNpmOwner(join(local, "omp.cmd"), where)).toBeNull();
+			expect(await ompNpmOwner(join(local, "omp.cmd"), where)).toBeNull();
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

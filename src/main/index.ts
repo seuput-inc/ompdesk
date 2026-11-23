@@ -4,8 +4,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { existsSync, mkdirSync, openAsBlob } from "node:fs";
 import { homedir, release } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -110,7 +109,8 @@ import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, 
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
-import { CliUpdater, psCommands, registerCliUpdateIpc } from "./cli-tools/updater";
+import { runningIn } from "./cli-tools/plans";
+import { CliUpdater, registerCliUpdateIpc } from "./cli-tools/updater";
 import {
 	answersWithin,
 	ConnectivityMonitor,
@@ -137,6 +137,7 @@ import { ScratchCare } from "./disk/scratch";
 import { diskFull } from "./disk-full";
 import { bindDiskFullNotice, bindDiskFullPush, describeFiles } from "./disk-full-notice";
 import { registerExtensionUpdateIpc } from "./ext-update/ipc";
+import { runningServer } from "./ext-update/running";
 import { ExtensionUpdater } from "./ext-update/updater";
 import { EMPTY_APPLY_PLAN } from "./extension-reload";
 import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ipc";
@@ -154,7 +155,6 @@ import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { markLaunchStable, startLaunchGuard } from "./launch-guard";
 import { CRASH_LOOP_LAUNCHES, STABLE_AFTER_MS } from "./launch-guard-core";
-import { migrateLegacyUserData } from "./legacy-user-data";
 import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngineDetector, localEngineSettings, probeLocalEngine } from "./local-engines";
@@ -290,20 +290,6 @@ if (userDataDirectory) {
 	const directory = resolve(userDataDirectory);
 	mkdirSync(directory, { recursive: true });
 	app.setPath("userData", directory);
-} else {
-	// The pre-rename profile (a sibling of userData) moves in before the GPU
-	// marker, the instance lock, prefs or window state read userData.
-	try {
-		const migration = migrateLegacyUserData(app.getPath("userData"));
-		if (migration !== "skipped") {
-			writeRuntimeLog({ source: "user-data-migration", message: `Legacy profile ${migration} into userData` });
-		}
-	} catch (error) {
-		writeRuntimeLog({
-			source: "user-data-migration",
-			message: `Legacy profile migration failed: ${error instanceof Error ? error.message : String(error)}`,
-		});
-	}
 }
 
 // Players stream audio/video through `omp-media://` (range requests); the agent's visuals load in the Preview
@@ -1778,15 +1764,16 @@ app.whenReady().then(async () => {
 	const followVerified = () => prefs.get(OMP_FOLLOW_VERIFIED_PREF) === true;
 	const testCompat = app.isPackaged ? undefined : process.env.OMP_GUI_TEST_OMP_COMPAT;
 	const compatSource = new OmpCompatSource({
-		file: join(app.getPath("userData"), "omp-compat.json"),
+		cache: { userData: app.getPath("userData"), host: core() },
 		fetch:
 			testCompat !== undefined || testInstaller
 				? async () =>
 						testCompat && existsSync(testCompat)
-							? new Response(await readFile(testCompat, "utf8"))
+							? new Response(await openAsBlob(testCompat))
 							: new Response(null, { status: 404 })
 				: (url, init) => net.fetch(url, init),
 	});
+	app.once("will-quit", () => compatSource.dispose());
 	// OMPdesk is the one owner of omp updates while it follows the verified list: stock's own `update.auto` is taken
 	// while that pref and "Keep tools up to date" are on and given back when either goes off (omp-auto-takeover.ts),
 	// through stock's settings command on the omp OMPdesk runs. Only a launch that updates omp on its own touches it
@@ -1910,7 +1897,7 @@ app.whenReady().then(async () => {
 		testInstaller,
 		managedLatest: item => setup.latestManaged(item),
 		runUpdate: request => setup.runToolUpdate(request),
-		processes: psCommands,
+		running: testInstaller ? (detection, owner) => runningIn(detection, owner, "") : runningIn,
 		onState: state => {
 			for (const win of BrowserWindow.getAllWindows()) {
 				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.CLI_UPDATE_STATE, state);
@@ -1939,7 +1926,7 @@ app.whenReady().then(async () => {
 		// While omp is installed the stock helper is stopped; a request would start it again.
 		blocked: () => updater.state().phase !== "idle",
 		runUpdate: request => setup.runToolUpdate(request),
-		processes: psCommands,
+		running: testInstaller ? (command, binary) => runningServer(command, binary, "") : runningServer,
 		apply: plan => {
 			sidecarPool.applyExtensionUpdate(plan);
 			hostServices.applyExtensionUpdate(plan);

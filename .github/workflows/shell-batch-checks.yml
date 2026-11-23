@@ -487,6 +487,8 @@ jobs:
           bun native/ompdesk/crates/tauri-shell/tests/preload.ts
           bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
           bun native/ompdesk/crates/tauri-shell/tests/ipc-post-message.ts
+          OMPDESK_TAURI_TEST_BINARY="$(bun -p 'require("node:path").resolve("native/ompdesk/crates/tauri-shell/target/debug/ompdesk-tauri-shell" + (process.platform === "win32" ? ".exe" : ""))')" \
+            bunx vitest run --project=node src/main/legacy-user-data.test.ts
       - name: Test and lint the test-only WebDriver build
         shell: bash
         if: inputs.only == 'tauri-native'

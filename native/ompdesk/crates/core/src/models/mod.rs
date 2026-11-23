@@ -17,7 +17,13 @@
 //! Once the run is over its omp's stdin closes, which ends omp; one that stays is asked to end `EXIT_GRACE` later
 //! and killed `KILL_GRACE` after that. The omp never outlives the core: `kill_on_drop`, the core's job object
 //! (Windows) and its process group (POSIX, which main kills) see to that.
+//!
+//! `models.bootSelector {bin, version, port, fallback}` answers with the selector for an unauthenticated
+//! boot. For each `bin@version`, only the first request asks its port for `launch {script, cwd, env}`;
+//! a failed probe tells that port `warn` with the detail and caches `fallback`.
 
+mod boot;
+mod engines;
 mod stream;
 
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +50,8 @@ const STDERR_KEPT: usize = 64 * 1024;
 const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 pub fn register(registry: &mut Registry) {
+    registry.add("models.bootSelector", boot::handle);
+    registry.add("models.probeLocalEngine", engines::handle);
     registry.add("models.setupRun", |call| {
         Box::pin(async move { setup_run(&call) })
     });

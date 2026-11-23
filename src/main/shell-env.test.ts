@@ -444,13 +444,16 @@ describe("SidecarManager spawn env", () => {
 			`import * as fs from "node:fs/promises";\nawait fs.writeFile(${JSON.stringify(envPath)}, process.env.OMP_GUI_BROWSER ?? "");\nprocess.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n`,
 		);
 		let browser: AgentBrowser = { kind: "ego" };
+		let probe: () => AgentBrowser | Promise<AgentBrowser> = () => browser;
 		const sidecar = new SidecarManager({
 			omp: async () => ({
 				ok: true,
 				runtime: { bin: binaryPath, version: "18.8.0", run: async () => ({ code: 0, stdout: "", stderr: "" }) },
 			}),
 			cwd: tempDir,
-			defaultBrowser: async () => browser,
+			defaultBrowser: () => probe(),
+			defaultBrowserFallback: () => ({ kind: "unavailable", name: "Brave" }),
+			startInputMs: 100,
 		});
 		let ready = Promise.withResolvers<void>();
 		sidecar.on("status", ({ status }) => {
@@ -470,6 +473,16 @@ describe("SidecarManager spawn env", () => {
 			sidecar.restart();
 			await ready.promise;
 			expect(await fs.readFile(envPath, "utf8")).toBe("builtin");
+			const failed: Record<string, string> = {};
+			for (const failure of ["rejection", "deadline"]) {
+				probe = () =>
+					failure === "rejection" ? Promise.reject(new Error("status unavailable")) : new Promise(() => {});
+				ready = Promise.withResolvers<void>();
+				sidecar.restart();
+				await ready.promise;
+				failed[failure] = await fs.readFile(envPath, "utf8");
+			}
+			expect(failed).toEqual({ rejection: "unavailable:Brave", deadline: "unavailable:Brave" });
 		} finally {
 			sidecar.dispose();
 			await fs.rm(tempDir, RM_TEMP);

@@ -11,11 +11,15 @@
  * argv. `inputFile` becomes the child's stdin (else it gets none). `log` is the output file of an isolated command
  * (`SpawnSpec.isolated`, see `isolatedLaunch`): with `redirect` the supervisor hands it to the child as stdout/stderr;
  * either way its bytes become the supervisor's own output once the child exited.
+ * The separate `{worktreeHook: ...}` form takes a hook kind, not an executable. Its stdout is a single bounded result.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, win32 } from "node:path";
+import { dirname, join, relative, win32 } from "node:path";
+import type { WorktreeSetupReport } from "../../shared/rpc-types";
+import type { WorktreeHook } from "../local/git/worktree-seed";
 import { nativeBinPath } from "../native-bin";
 import { findOnPath } from "../spawn";
 import { bunInstallDir } from "./paths";
@@ -189,10 +193,103 @@ export function isolatedLaunch(spec: SpawnSpec, env: NodeJS.ProcessEnv, options:
 /** Start `spec` under the supervisor with `env` (in `cwd`, else main's); stdin stays open until a cancel. */
 export function spawnSupervised(spec: SpawnSpec, env: NodeJS.ProcessEnv, cwd?: string): ChildProcess {
 	const launch = spec.isolated ? isolatedLaunch(spec, env) : { spec, env };
+	return startSupervisor(launch.spec, launch.env, cwd);
+}
+
+interface HookSpec {
+	kind: WorktreeHook;
+	primary: string;
+	worktree: string;
+	fromPrimary: boolean;
+	logDir: string;
+	deadlineMs: number;
+}
+
+function startSupervisor(spec: Launch["spec"] | { worktreeHook: HookSpec }, env: NodeJS.ProcessEnv, cwd?: string) {
 	return spawn(nativeBinPath("ompdesk-core"), ["--supervise"], {
-		env: { ...launch.env, [SUPERVISOR_SPEC_ENV]: JSON.stringify(launch.spec) },
+		env: { ...env, [SUPERVISOR_SPEC_ENV]: JSON.stringify(spec) },
 		stdio: ["pipe", "pipe", "pipe"],
 		windowsHide: true,
 		...(cwd ? { cwd } : {}),
 	});
+}
+
+/** Only the hook supervisor writes this packet: one timeout byte, then at most 4096 UTF-16LE units. */
+export async function superviseWorktreeHook(
+	kind: HookSpec["kind"],
+	where: { primary: string; worktree: string; cwd: string; timeoutMs: number },
+	found: { script: string; logPath: string },
+	signal?: AbortSignal,
+): Promise<WorktreeSetupReport> {
+	signal?.throwIfAborted();
+	const { primary, worktree, cwd, timeoutMs } = where;
+	const root = dirname(dirname(found.script));
+	const script = relative(root, found.script);
+	const { logPath } = found;
+	const started = Date.now();
+	const spec = {
+		kind,
+		primary,
+		worktree,
+		fromPrimary: relative(root, primary) === "",
+		logDir: dirname(logPath),
+		deadlineMs: started + (timeoutMs >= 1 && timeoutMs <= 2_147_483_647 ? Math.trunc(timeoutMs) : 1),
+	};
+	const child = startSupervisor({ worktreeHook: spec }, process.env, cwd);
+	const stop = () => child.stdin.end();
+	signal?.addEventListener("abort", stop, { once: true });
+	const chunks: Buffer[] = [];
+	let bytes = 0;
+	child.stdout.on("data", (chunk: Buffer) => {
+		bytes += chunk.length;
+		if (bytes <= 8193) chunks.push(chunk);
+	});
+	let diagnostic = "";
+	child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+		diagnostic = (diagnostic + chunk).slice(-4096);
+	});
+	let spawnFailed = false;
+	child.once("error", error => {
+		spawnFailed = true;
+		diagnostic = `${error.message}\n`;
+	});
+	// 'close', including after a spawn error, means both the process and its pipes have ended.
+	const closed = Promise.withResolvers<number | null>();
+	child.once("close", closed.resolve);
+	const code = await closed.promise;
+	signal?.removeEventListener("abort", stop);
+	const packet = Buffer.concat(chunks);
+	const valid = bytes <= 8193 && bytes % 2 === 1 && (packet[0] === 0 || packet[0] === 1);
+	const timedOut = valid && packet[0] === 1;
+	const exitCode = valid && !timedOut && code !== SUPERVISOR_STOPPED_CODE ? code : null;
+	const outputTail = valid
+		? packet.toString("utf16le", 1)
+		: diagnostic || "Worktree hook supervisor returned no result.\n";
+	// A repo controls this directory: stage with exclusive creation, even if the supervisor failed to start.
+	if (spawnFailed && !signal?.aborted) {
+		const stage = `${logPath}.${randomUUID()}.tmp`;
+		const file = await fs.open(stage, "wx", 0o600).catch(() => null);
+		if (file) {
+			try {
+				try {
+					await file.writeFile(outputTail);
+				} finally {
+					await file.close();
+				}
+				if (signal?.aborted) await fs.unlink(stage);
+				else await fs.rename(stage, logPath);
+			} catch {
+				await fs.unlink(stage).catch(() => undefined);
+			}
+		}
+	}
+	return {
+		script,
+		ok: exitCode === 0,
+		exitCode,
+		timedOut,
+		durationMs: Date.now() - started,
+		logPath,
+		outputTail: valid ? outputTail : outputTail.slice(-4096),
+	};
 }

@@ -52,7 +52,7 @@ import {
 	type RunnerPackage,
 	runnerCheck,
 } from "./mcp-plans";
-import { deferForRunning, runningServer, scansProcesses } from "./running";
+import { deferForRunning, type runningServer, scansProcesses } from "./running";
 
 /** Inventory, check and refresh: local files or one registry round trip. */
 const CHECK_TIMEOUT_MS = 120_000;
@@ -77,8 +77,7 @@ export interface ExtensionUpdaterDeps {
 	/** omp is being installed or checked for an update (or the stock helper is stopped for it): a pass waits. */
 	blocked: () => boolean;
 	runUpdate: (request: ToolUpdateRequest) => Promise<ToolUpdateOutcome>;
-	/** Command lines of the running processes (`ps`); macOS only. */
-	processes: () => Promise<string>;
+	running: typeof runningServer;
 	/** What changed, once per pass: the live tabs reload, restart or reconnect (between turns). */
 	apply: (plan: ExtensionApplyPlan) => void;
 	onState: (state: ExtensionUpdateState) => void;
@@ -131,7 +130,7 @@ export class ExtensionUpdater {
 			helper: fencedCall(deps.helper) as ExtensionUpdaterDeps["helper"],
 			env: fencedCall(deps.env),
 			runUpdate: fencedCall(deps.runUpdate),
-			processes: fencedCall(deps.processes),
+			running: fencedCall(deps.running),
 			detectBinary: fencedCall(deps.detectBinary ?? detectMcpBinary),
 			runCheck: fencedCall(deps.runCheck ?? runCheckProcess),
 		};
@@ -542,9 +541,9 @@ export class ExtensionUpdater {
 		}
 		try {
 			if (scansProcesses(this.#deps.platform) && (await deferForRunning(owner.method, binary.script))) {
-				const commands = await this.#deps.processes().catch(() => "");
+				const busy = await this.#deps.running(command, binary);
 				throwIfStepStalled();
-				if (await runningServer(commands, { command }, binary)) {
+				if (busy) {
 					this.#finish(record, { kind: "deferred", latest, why: "running" });
 					return noPlan();
 				}

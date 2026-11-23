@@ -41,7 +41,7 @@ import {
 	findBrew,
 	type InstallContext,
 } from "./detect";
-import { type CliCommand, checkCommand, parseLatest, runningIn, updateCommand, waitsForIdle } from "./plans";
+import { type CliCommand, checkCommand, parseLatest, type runningIn, updateCommand, waitsForIdle } from "./plans";
 
 const CHECK_TIMEOUT_MS = 120_000;
 
@@ -63,8 +63,7 @@ export interface CliUpdaterDeps {
 	/** The newest release of machine setup's archive for gh, Node or agent-desktop. */
 	managedLatest: (item: "gh" | "node" | "agent-desktop") => Promise<string>;
 	runUpdate: (request: ToolUpdateRequest) => Promise<ToolUpdateOutcome>;
-	/** Command lines of the running processes (`ps`); macOS only. */
-	processes: () => Promise<string>;
+	running: typeof runningIn;
 	onState: (state: CliUpdateState) => void;
 	now?: () => number;
 	/** Test seams. */
@@ -123,7 +122,7 @@ export class CliUpdater {
 			env: fencedCall(deps.env),
 			managedLatest: fencedCall(deps.managedLatest),
 			runUpdate: fencedCall(deps.runUpdate),
-			processes: fencedCall(deps.processes),
+			running: fencedCall(deps.running),
 			detect: fencedCall(deps.detect ?? detectCliTool),
 			runCheck: fencedCall(deps.runCheck ?? runCheckProcess),
 		};
@@ -304,13 +303,19 @@ export class CliUpdater {
 			this.#finish(record, { kind: "current" });
 			return;
 		}
-		if (this.#deps.platform === "darwin" && waitsForIdle(detection, owner)) {
-			const commands = await this.#deps.processes().catch(() => "");
-			throwIfStepStalled();
-			if (runningIn(commands, detection, owner)) {
-				this.#finish(record, { kind: "deferred", latest: latest ?? "" });
-				return;
+		try {
+			if (this.#deps.platform === "darwin" && (await waitsForIdle(detection, owner))) {
+				const busy = await this.#deps.running(detection, owner);
+				throwIfStepStalled();
+				if (busy) {
+					this.#finish(record, { kind: "deferred", latest: latest ?? "" });
+					return;
+				}
 			}
+		} catch (error) {
+			throwIfStepStalled();
+			this.#fail(record, { reason: "check", detail: message(error) });
+			return;
 		}
 		let request: ToolUpdateRequest;
 		if (owner.method === "managed") {
@@ -368,15 +373,6 @@ export class CliUpdater {
 		};
 		return { spawn, env: {} };
 	}
-}
-
-/** `ps` command lines of every process (macOS), for the in-use check. */
-export function psCommands(): Promise<string> {
-	const { promise, resolve } = Promise.withResolvers<string>();
-	execFile("/bin/ps", ["-axww", "-o", "command="], { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) =>
-		resolve(error ? "" : stdout),
-	);
-	return promise;
 }
 
 /** IPC: a snapshot and "Update now" by tool id (or all). No handler takes a version, a command or a path. */

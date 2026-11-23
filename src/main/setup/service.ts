@@ -721,7 +721,9 @@ export class SetupService {
 		) {
 			return { kind: "skipped" };
 		}
-		const ctx = this.#planContext(detection);
+		const ctx = this.#planContext(detection, await this.#ompNpm(detection));
+		throwIfStepStalled();
+		if (this.#disposed) return { kind: "skipped" };
 		const root = detection.bun ? ompBunRoot(detection.omp) : null;
 		const npm = root ? null : ctx.ompNpm;
 		if (!root && !npm && exactOnly) return { kind: "skipped" };
@@ -914,7 +916,9 @@ export class SetupService {
 			this.#emit();
 			return;
 		}
-		const ctx = this.#planContext(detection);
+		const ctx = this.#planContext(detection, id === "omp" ? await this.#ompNpm(detection) : null);
+		throwIfStepStalled();
+		if (this.#stopPipeline || this.#disposed) return;
 		const method = fallback ?? selectMethod(id, item.presence, ctx);
 		if (!method) {
 			item.phase = "unavailable";
@@ -1163,7 +1167,17 @@ export class SetupService {
 		return { ...env, ...ompUpdateEnv(omp, base) };
 	}
 
-	#planContext(detection: Detection): PlanContext {
+	#ompNpm(detection: Detection): Promise<PlanContext["ompNpm"]> | null {
+		return detection.omp && ompBunRoot(detection.omp) === null
+			? ompNpmOwner(detection.omp, {
+					platform: this.#deps.platform,
+					toolsDir: this.#deps.toolsDir,
+					pathEnv: process.env.PATH ?? "",
+				})
+			: null;
+	}
+
+	#planContext(detection: Detection, ompNpm: PlanContext["ompNpm"] = null): PlanContext {
 		return {
 			platform: this.#deps.platform,
 			arch: this.#deps.arch,
@@ -1174,16 +1188,7 @@ export class SetupService {
 			// Setup's own install is the omp this OMPdesk was tested with, never the registry's newest, which may be a
 			// major nothing here was tested on (19 Nov 2026: omp 19.0.0 came out while OMPdesk was tested with 18).
 			ompSpecs: ompInstallSpecs(this.#deps.bunInstall, TESTED_OMP_VERSION),
-			// The PATH main itself keeps current (`refreshPath`): where an npm outside its own prefix is found (Windows'
-			// `%APPDATA%\npm` holds the packages, `npm.cmd` sits beside node.exe).
-			ompNpm:
-				detection.omp && ompBunRoot(detection.omp) === null
-					? ompNpmOwner(detection.omp, {
-							platform: this.#deps.platform,
-							toolsDir: this.#deps.toolsDir,
-							pathEnv: process.env.PATH ?? "",
-						})
-					: null,
+			ompNpm,
 			ompVersion: TESTED_OMP_VERSION,
 			brew: detection.brew,
 			winget: detection.winget,

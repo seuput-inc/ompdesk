@@ -1,7 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from "node:zlib";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CustomProviderInput } from "../shared/ipc-types";
 import { LOCAL_ENGINES, type LocalEngineSpec, type LocalEnginesLedger } from "../shared/local-engines";
+import { stopCore } from "./core/process";
 import { LocalEngineDetector, localEngineSettings, probeLocalEngine } from "./local-engines";
+import { deadMirror, startMirror } from "./setup/test-mirror";
 
 const FREETOKEN: LocalEngineSpec = { id: "freetoken", name: "FreeToken", baseUrl: "http://127.0.0.1:1919/v1" };
 const COLIBRI: LocalEngineSpec = { id: "colibri", name: "colibri", baseUrl: "http://127.0.0.1:8000/v1" };
@@ -18,10 +21,12 @@ function gate(): Gate {
 function rig() {
 	const world = {
 		up: new Set<string>(),
+		uninspected: new Set<string>(),
 		file: new Set<string>(),
 		ledger: { registered: [], removed: [] } as LocalEnginesLedger,
 		enabled: true,
 		probes: 0,
+		probeError: null as Error | null,
 		changed: 0,
 		upserts: [] as CustomProviderInput[],
 		deletes: [] as string[],
@@ -41,8 +46,9 @@ function rig() {
 		enabled: () => world.enabled,
 		probe: async baseUrl => {
 			world.probes++;
+			if (world.probeError) throw world.probeError;
 			const id = engines.find(engine => engine.baseUrl === baseUrl)?.id ?? "";
-			const answer = world.up.has(id);
+			const answer = world.uninspected.has(id) ? null : world.up.has(id);
 			await world.hold?.promise;
 			return answer;
 		},
@@ -92,14 +98,14 @@ describe("localEngineSettings", () => {
 	});
 });
 
-beforeEach(() => {
-	vi.useFakeTimers();
-});
-afterEach(() => {
-	vi.useRealTimers();
-});
-
 describe("LocalEngineDetector", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
 	it("registers an engine that answers as a discovery-only provider and tells the windows once", async () => {
 		const { world, detector } = rig();
 		world.up.add("freetoken");
@@ -334,6 +340,31 @@ describe("LocalEngineDetector", () => {
 		expect(world.ledger).toEqual({ registered: [], removed: [] });
 	});
 
+	it("leaves owned entries alone when the core cannot report whether an engine is up", async () => {
+		const { world, detector } = rig();
+		world.up.add("freetoken");
+		await detector.tick();
+		world.probeError = new Error("core exited");
+		await detector.tick();
+		expect(world.file.has("freetoken")).toBe(true);
+		expect(world.ledger).toEqual({ registered: ["freetoken"], removed: [] });
+		expect(world.failures).toHaveLength(1);
+	});
+
+	it("an uninspectable reply preserves the provider, not another engine that really went offline", async () => {
+		const { world, detector } = rig();
+		world.up.add("freetoken").add("colibri");
+		await detector.tick();
+		world.up.clear();
+		world.uninspected.add("freetoken");
+		await detector.tick();
+		expect(world.file).toEqual(new Set(["freetoken"]));
+		expect(world.ledger).toEqual({ registered: ["freetoken"], removed: [] });
+		world.file.delete("freetoken");
+		await detector.tick();
+		expect(world.ledger).toEqual({ registered: [], removed: ["freetoken"] });
+	});
+
 	it("reads an unreadable models.yml as no decision, not as every entry gone", async () => {
 		const { world, detector } = rig();
 		world.up.add("freetoken");
@@ -366,40 +397,136 @@ describe("LocalEngineDetector", () => {
 });
 
 describe("probeLocalEngine", () => {
-	const answer = (body: unknown, ok = true) =>
-		vi.fn(async () => ({ ok, json: async () => body }) as unknown as Response) as unknown as typeof fetch;
+	afterAll(stopCore);
 
-	it("is up for an OpenAI-style model list on loopback", async () => {
-		const fetchImpl = answer({ data: [{ id: "m" }] });
-		await expect(probeLocalEngine("http://127.0.0.1:1919/v1", fetchImpl)).resolves.toBe(true);
-		expect(String((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toBe(
-			"http://127.0.0.1:1919/v1/models",
-		);
+	it("requests the OpenAI model list from the real core without registering individual models", async () => {
+		const methods: (string | undefined)[] = [];
+		const mirror = await startMirror((_url, request) => {
+			methods.push(request.method);
+			return { status: 299, body: '{"data":[{"id":"m"}]}' };
+		});
+		try {
+			await expect(probeLocalEngine(`${mirror.url}/v1///`)).resolves.toBe(true);
+			expect(mirror.asked).toEqual(["https://v1/models"]);
+			expect(methods).toEqual(["GET"]);
+		} finally {
+			await mirror.close();
+		}
 	});
 
-	it("is down for an error status, a body without a data array, a thrown fetch, or invalid JSON", async () => {
-		await expect(probeLocalEngine("http://127.0.0.1:1/v1", answer({ data: [] }, false))).resolves.toBe(false);
-		await expect(probeLocalEngine("http://127.0.0.1:1/v1", answer({ data: "x" }))).resolves.toBe(false);
-		await expect(probeLocalEngine("http://127.0.0.1:1/v1", answer(null))).resolves.toBe(false);
-		const throws = vi.fn(async () => {
-			throw new Error("ECONNREFUSED");
-		}) as unknown as typeof fetch;
-		await expect(probeLocalEngine("http://127.0.0.1:1/v1", throws)).resolves.toBe(false);
-		const badJson = vi.fn(async () => ({
-			ok: true,
-			json: async () => {
-				throw new SyntaxError("bad");
-			},
-		})) as unknown as typeof fetch;
-		await expect(probeLocalEngine("http://127.0.0.1:1/v1", badJson)).resolves.toBe(false);
+	it("is down on a bad status, wrong shape, invalid JSON, refused socket or timed-out body", async () => {
+		const mirror = await startMirror((_url, request) => {
+			switch (request.url) {
+				case "/status/models":
+					return { status: 503, body: '{"data":[]}' };
+				case "/shape/models":
+					return '{"data":"x"}';
+				case "/null/models":
+					return "null";
+				case "/stall/models":
+					return (_req, res) => {
+						res.write('{"data":[');
+					};
+				default:
+					return "bad JSON";
+			}
+		});
+		try {
+			const bases = ["status", "shape", "null", "bad", "stall"].map(path => `${mirror.url}/${path}`);
+			bases.push(await deadMirror());
+			await expect(Promise.all(bases.map(probeLocalEngine))).resolves.toEqual(bases.map(() => false));
+		} finally {
+			await mirror.close();
+		}
 	});
 
-	it("never asks an address off loopback", async () => {
-		const fetchImpl = answer({ data: [] });
-		await expect(probeLocalEngine("http://192.168.1.5:8000/v1", fetchImpl)).resolves.toBe(false);
-		await expect(probeLocalEngine("https://127.0.0.1:8000/v1", fetchImpl)).resolves.toBe(false);
-		await expect(probeLocalEngine("http://example.com/v1", fetchImpl)).resolves.toBe(false);
-		await expect(probeLocalEngine("not a url", fetchImpl)).resolves.toBe(false);
-		expect(fetchImpl).not.toHaveBeenCalled();
+	it("follows loopback redirects, preserves the localhost Host header and never dials a rejected hop", async () => {
+		const mirror = await startMirror((_url, request) => {
+			const redirect = (location: string) => ({ status: 302, headers: { location } });
+			switch (request.url) {
+				case "/v1/models":
+					return redirect("/relative");
+				case "/relative":
+					return redirect(`${mirror.url.replace("127.0.0.1", "localhost")}/catalog`);
+				// Even a regressed client can reach only this fixture. The mapped IPv4 host is outside the allowlist.
+				case "/refused/models":
+					return redirect(`${mirror.url.replace("127.0.0.1", "[::ffff:127.0.0.1]")}/no`);
+				default:
+					return '{"data":[]}';
+			}
+		});
+		try {
+			await expect(probeLocalEngine(`${mirror.url}/v1`)).resolves.toBe(true);
+			expect(mirror.headers[2]?.host).toBe(new URL(mirror.url).host.replace("127.0.0.1", "localhost"));
+			await expect(probeLocalEngine(`${mirror.url}/refused`)).resolves.toBe(false);
+			await expect(probeLocalEngine(mirror.url.replace("127.0.0.1", "[::ffff:127.0.0.1]"))).resolves.toBe(false);
+			await expect(probeLocalEngine(mirror.url.replace("http:", "https:"))).resolves.toBe(false);
+			await expect(probeLocalEngine("not a url")).resolves.toBe(false);
+			expect(mirror.asked).toEqual([
+				"https://v1/models",
+				"https://relative",
+				"https://catalog",
+				"https://refused/models",
+			]);
+		} finally {
+			await mirror.close();
+		}
+	});
+
+	it("follows twenty allowed redirects but does not send a twenty-first redirected GET", async () => {
+		const mirror = await startMirror((_url, request) => {
+			const left = Number(request.url?.split("/")[1]);
+			return left > 0 ? { status: 308, headers: { location: `/${left - 1}` } } : '{"data":[]}';
+		});
+		try {
+			await expect(probeLocalEngine(`${mirror.url}/20`)).resolves.toBe(true);
+			await expect(probeLocalEngine(`${mirror.url}/21`)).resolves.toBe(false);
+			expect(mirror.asked).toHaveLength(42);
+			expect(mirror.asked.at(-1)).toBe("https://1");
+		} finally {
+			await mirror.close();
+		}
+	});
+
+	it("reads the same gzip, zlib, raw deflate, Brotli and stacked model lists as fetch", async () => {
+		const list = Buffer.from('{"data":[]}');
+		const gzip = gzipSync(list);
+		const replies = [
+			{ coding: "gzip", body: gzip },
+			{ coding: "gzip", body: gzip.subarray(0, -4) },
+			{ coding: "x-gzip", body: gzip },
+			{ coding: "deflate", body: deflateSync(list) },
+			{ coding: "deflate", body: deflateRawSync(list) },
+			{ coding: "br", body: brotliCompressSync(list) },
+			{ coding: "GZip, Br", body: brotliCompressSync(gzip) },
+			{ coding: "unknown", body: list },
+		];
+		const mirror = await startMirror((_url, req) => {
+			const reply = replies[Number(req.url?.split("/")[1])];
+			return reply && { headers: { "content-encoding": reply.coding }, body: reply.body };
+		});
+		try {
+			const results = await Promise.all(replies.map((_, i) => probeLocalEngine(`${mirror.url}/${i}`)));
+			expect(results).toEqual(replies.map(() => true));
+			expect(mirror.headers.every(headers => headers["accept-encoding"] === "gzip, deflate")).toBe(true);
+		} finally {
+			await mirror.close();
+		}
+	});
+
+	it("does not classify a body declared over 64 MiB or an unsupported zstd reply as offline", async () => {
+		const mirror = await startMirror((_url, req) => {
+			if (req.url === "/zstd/models") return { headers: { "content-encoding": "zstd" }, body: "encoded" };
+			return (_request, response) => {
+				response.writeHead(200, { "content-length": 64 * 1024 * 1024 + 1 });
+				response.flushHeaders();
+			};
+		});
+		try {
+			await expect(probeLocalEngine(mirror.url)).resolves.toBeNull();
+			await expect(probeLocalEngine(`${mirror.url}/zstd`)).resolves.toBeNull();
+		} finally {
+			await mirror.close();
+		}
 	});
 });

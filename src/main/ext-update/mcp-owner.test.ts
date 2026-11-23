@@ -2,11 +2,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { InstallContext } from "../cli-tools/detect";
-import { classifyMcpBinary, detectMcpBinary, type OwnerDeps } from "./mcp-owner";
+import { type InstallContext, readInstall } from "../cli-tools/detect";
+import { detectMcpBinary, type OwnerDeps } from "./mcp-owner";
 
 const MAC: InstallContext = { platform: "darwin", toolsDir: "/tools", brew: "/opt/homebrew/bin/brew" };
 const WIN: InstallContext = { platform: "win32", toolsDir: "C:\\tools", brew: null };
+
+async function classifyMcpBinary(real: string, command: string, ctx: InstallContext) {
+	const { owner, skip } = await readInstall(real, ctx, { kind: "mcp", command });
+	return { owner, skip };
+}
 
 describe("classifyMcpBinary", () => {
 	it("npm, Bun and Homebrew installs name their package manager", async () => {
@@ -165,6 +170,50 @@ describe("on disk", () => {
 			installed: null,
 		});
 	});
+
+	it.runIf(process.platform === "win32")(
+		"reads an npm cmd shim but does not claim an MCP executable by a Bun sidecar",
+		async () => {
+			const root = temp();
+			const bin = path.join(root, "mcp.cmd");
+			const pkg = path.join(root, "node_modules", "@S", "Pkg");
+			const real = path.join(pkg, "bin", "tool.js");
+			write(bin, '"%dp0%\\node.exe" "%~dp0\\node_modules\\@S\\Pkg\\bin\\tool.js" %*');
+			write(real, "#!/usr/bin/env node\n");
+			write(path.join(pkg, "package.json"), '{"version":"old","version":"v2.3.4-beta"}');
+			const where = { ...deps(""), ctx: { ...WIN, toolsDir: path.join(root, "managed") } };
+			const command = path.relative(process.cwd(), bin);
+			expect(await detectMcpBinary(command, where)).toMatchObject({
+				command,
+				path: command,
+				real,
+				installed: "2.3.4",
+				skip: null,
+				script: true,
+				owner: { method: "npm", name: "@S/Pkg", prefix: root, root: pkg },
+			});
+			const alternate = real.replace(`${path.sep}node_modules${path.sep}`, `${path.sep}NODE_MODULES${path.sep}`);
+			const found = await detectMcpBinary(alternate, where);
+			if (fs.existsSync(alternate)) {
+				expect(found).toMatchObject({ real: alternate, owner: null, skip: "unknown-install" });
+			} else {
+				expect(found).toBeNull();
+			}
+			const exe = path.join(root, "bin", "tool.exe");
+			write(exe, "MZ");
+			write(
+				path.join(root, "bin", "tool.bunx"),
+				Buffer.from('install\\global\\node_modules\\pkg\\tool.js"\0', "utf16le"),
+			);
+			expect(await detectMcpBinary(exe, where)).toMatchObject({
+				real: exe,
+				owner: null,
+				skip: "unknown-install",
+				installed: null,
+				script: false,
+			});
+		},
+	);
 
 	it.skipIf(process.platform === "win32")(
 		"finds an npm global through its symlink and reads the package version",

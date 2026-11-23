@@ -49,6 +49,7 @@ export type PathName = (typeof PATH_NAMES)[number];
 
 export interface HostFacts {
 	paths: Record<PathName, string>;
+	legacyUserDataMigration?: string;
 	exe: string;
 	resourcesPath: string;
 	appPath: string;

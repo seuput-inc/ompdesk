@@ -28,6 +28,7 @@ import { CHECK_INTERVAL_MS, nextCheckDelay, UPDATE_STEP_MAX_MS } from "../update
 import { type IpcCaller, IpcRegistry } from "../web/ipc-registry";
 import { registerExtensionUpdateIpc } from "./ipc";
 import type { McpBinary, McpOwner } from "./mcp-owner";
+import { runningServer } from "./running";
 import { ExtensionUpdater, type ExtensionUpdaterDeps } from "./updater";
 
 const NPM: McpOwner = { method: "npm", name: "@s/pkg", prefix: "/p", root: "/p/lib/node_modules/@s/pkg" };
@@ -212,9 +213,9 @@ function harness(over: Partial<ExtensionUpdaterDeps> = {}, scheduled = true): Ha
 			h.outcome.onRun?.();
 			return h.outcome.value;
 		},
-		processes: async () => {
+		running: (command, binary) => {
 			h.processes.calls++;
-			return h.processes.value;
+			return runningServer(command, binary, h.processes.value);
 		},
 		apply: plan => h.applied.push(plan),
 		onState: state => h.states.push(state),

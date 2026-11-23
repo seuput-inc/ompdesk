@@ -55,6 +55,8 @@ pub mod upkeep;
 mod user_app;
 mod visuals;
 pub mod web;
+#[cfg(windows)]
+mod windows_executable;
 pub mod wire;
 
 pub use server::{registry, serve};

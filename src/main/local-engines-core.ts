@@ -14,8 +14,8 @@
 export type EngineAction = "register" | "unregister" | "tombstone" | "none";
 
 export interface EngineFacts {
-	/** `GET <base>/models` answered like an OpenAI model list. */
-	up: boolean;
+	/** Null when the core could not inspect the reply within its safety limits. */
+	up: boolean | null;
 	/** models.yml has a provider with the engine's id. */
 	present: boolean;
 	/** The ledger says the detector wrote that entry. */
@@ -27,6 +27,6 @@ export interface EngineFacts {
 export function engineAction(facts: EngineFacts): EngineAction {
 	if (!facts.present && facts.registered) return "tombstone";
 	if (facts.up && !facts.present && !facts.registered && !facts.removed) return "register";
-	if (!facts.up && facts.present && facts.registered) return "unregister";
+	if (facts.up === false && facts.present && facts.registered) return "unregister";
 	return "none";
 }

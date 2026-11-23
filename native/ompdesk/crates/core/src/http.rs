@@ -241,6 +241,21 @@ async fn exchange_at(
         .map_err(|_| Failure::Broken)
 }
 
+/// One GET to these exact sockets, without a DNS lookup or an automatic redirect.
+pub(crate) async fn get_at(
+    url: &Url,
+    addresses: &[SocketAddr],
+) -> Result<hyper::Response<Incoming>, Failure> {
+    exchange_at(
+        url,
+        &[("accept-encoding", "gzip, deflate")],
+        None,
+        machine_tls,
+        Some(addresses),
+    )
+    .await
+}
+
 /// Sends `request`, following its redirects, and answers at the last head; the body is still to be read.
 async fn exchange(request: &Request<'_>, tls: Tls) -> Result<hyper::Response<Incoming>, Failure> {
     let mut url = Url::parse(request.url).map_err(|_| Failure::Request)?;
@@ -585,9 +600,9 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn nothing_listening_is_a_failed_connect() {
-        let closed = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let url = format!("http://127.0.0.1:{}", closed.local_addr().unwrap().port());
-        drop(closed);
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind(([127, 0, 0, 1], 0).into()).unwrap();
+        let url = format!("http://{}", reserved.local_addr().unwrap());
         assert_eq!(send(get(&url)).await.err(), Some(Failure::Connect));
         assert_eq!(status(get(&url)).await.err(), Some(Failure::Connect));
     }

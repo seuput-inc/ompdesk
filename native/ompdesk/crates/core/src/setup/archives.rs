@@ -55,7 +55,7 @@ impl Platform {
 }
 
 /// `/^v?\d+\.\d+\.\d+$/`.
-fn is_version(text: &str) -> bool {
+pub(super) fn is_version(text: &str) -> bool {
     let digits = text.strip_prefix('v').unwrap_or(text);
     let mut parts = digits.split('.');
     let mut count = 0;

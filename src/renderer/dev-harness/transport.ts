@@ -601,6 +601,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case IPC_COMMANDS.DEFAULT_BROWSER_STATUS:
 				return {
 					egoInstalled: true,
+					auto: { kind: "ego" },
 					browsers: [{ id: "chrome", name: "Google Chrome", relayInstalled: false, relayConnected: false }],
 				};
 			case IPC_COMMANDS.DEFAULT_BROWSER_INSTALL_RELAY:
