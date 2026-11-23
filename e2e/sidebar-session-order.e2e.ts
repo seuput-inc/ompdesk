@@ -108,8 +108,25 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await expect.poll(() => titles(page)).toEqual(["Delta plan", "Charlie plan", "Alpha plan", "Bravo plan"]);
 
 	// An open session that is not on screen still drags onto a pane's edge: the split, not a reorder.
-	await rows().filter({ hasText: "Charlie plan" }).locator("button").first().click();
-	await rows().filter({ hasText: "Alpha plan" }).locator("button").first().click();
+	const releaseCharlie = await page.evaluateHandle(() => {
+		const gate = Promise.withResolvers<void>();
+		const lookup = window.omp.tabs.getSessionOwner;
+		window.omp.tabs.getSessionOwner = async (...args) => {
+			if (args[0].endsWith("s-3.jsonl")) await gate.promise;
+			return lookup(...args);
+		};
+		return () => {
+			window.omp.tabs.getSessionOwner = lookup;
+			gate.resolve();
+		};
+	});
+	try {
+		await rows().filter({ hasText: "Charlie plan" }).locator("button").first().click();
+		await rows().filter({ hasText: "Alpha plan" }).locator("button").first().click();
+		await expect(page.locator('.omp-sidebar-session-row[data-active="true"]')).toContainText("Alpha plan");
+	} finally {
+		await releaseCharlie.evaluate(release => release());
+	}
 	const tabs = () => page.evaluate(() => window.omp.tabs.list());
 	await expect
 		.poll(async () => (await tabs()).map(tab => tab.sessionPath?.split(/[\\/]/).at(-1)).sort())
