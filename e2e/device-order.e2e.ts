@@ -15,6 +15,8 @@ import * as path from "node:path";
 import { chromium, expect, type Page, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { createServer } from "vite";
+import type { SidebarFolds } from "../src/renderer/lib/sidebar-memory";
+import type { RemoteState } from "../src/shared/ipc-types";
 import { exitApp } from "./harness";
 import {
 	connectHost,
@@ -165,6 +167,15 @@ interface DeviceFrame {
 declare global {
 	interface Window {
 		__deviceFrames?: DeviceFrame[];
+		__heldSidebar: {
+			offlineRead: number;
+			onlineRead: number;
+			prefsDelivered: number;
+			liveDelivered: number;
+			unexpectedLive: number;
+			releasePref: () => void;
+			releaseLive: () => void;
+		};
 	}
 }
 
@@ -269,6 +280,229 @@ test("the local rows do not move across the first remote read of a relaunch", as
 	} finally {
 		for (const instance of [client, host]) if (instance) await exitApp(instance.app);
 		for (const instance of [client, host]) expect(instance?.errors ?? []).toEqual([]);
+		await fs.rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+	}
+});
+
+test("a cached host row survives a stale offline preference delivered before live host state", async () => {
+	test.setTimeout(180_000);
+	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-offline-pref-")));
+	let host: RemoteInstance | undefined;
+	let client: RemoteInstance | undefined;
+	try {
+		const hostProfile = await makeRemoteProfile(parent, "host", { language: "en", theme: "light" });
+		const clientProfile = await makeRemoteProfile(parent, "client", {
+			language: "en",
+			theme: "light",
+			port: hostProfile.port,
+		});
+		host = await launchRemote(hostProfile);
+		client = await launchRemote(clientProfile);
+		const page = client.page;
+		const id = await connectHost(host.page, page, "Studio B");
+		for (const device of [host.page, page]) {
+			const input = device.locator("[data-composer-input]").first();
+			await input.fill("Remember this fixture session");
+			await input.press("Enter");
+		}
+		await page.evaluate(id => window.omp.remote.setDeviceSectionOrder([id, "local"]), id);
+		const cacheKey = `omp.snap.1.sessions.${encodeURIComponent(`device:${id}`)}.global`;
+		// Keep row identities inside the fixture window. Only observations about them leave it.
+		await page.waitForFunction(
+			({ id, cacheKey }) => {
+				const [first, second] = document.querySelectorAll("[data-device-slot]");
+				const section = first?.querySelector("[data-sidebar-device]");
+				const rows = section?.querySelectorAll("[data-device-session]:not([data-live])");
+				const row = rows?.length === 1 && rows[0]?.getAttribute("data-device-session");
+				const local = second?.querySelector("[data-session-path]")?.getAttribute("data-session-path");
+				const cached = JSON.parse(localStorage.getItem(cacheKey) ?? "null") as { d: { path: string }[] } | null;
+				const localCache = JSON.parse(
+					localStorage.getItem("omp.snap.1.sessions.local.global") ?? "null",
+				) as typeof cached;
+				if (
+					first?.getAttribute("data-device-slot") !== id ||
+					second?.getAttribute("data-device-slot") !== "local" ||
+					section?.getAttribute("data-device-state") !== "online" ||
+					!row ||
+					!local ||
+					!cached?.d.some(entry => entry.path === row) ||
+					!localCache?.d.some(entry => entry.path === local)
+				)
+					return false;
+				sessionStorage.setItem("offline-pref-probe", JSON.stringify({ row, local }));
+				return true;
+			},
+			{ id, cacheKey },
+			{ timeout: 30_000 },
+		);
+		await page.evaluate(async id => {
+			const folds = JSON.parse(localStorage.getItem("omp.sidebarFolds") ?? "null") as SidebarFolds | null;
+			if (folds?.knownHosts.length !== 1 || folds.knownHosts[0]?.id !== id || folds.knownHosts[0].offline)
+				throw new Error("Expected one remembered online fixture host");
+			await window.omp.prefs.set("sidebarFolds", {
+				...folds,
+				knownHosts: [{ ...folds.knownHosts[0], offline: true }],
+			});
+		}, id);
+		// Delay the fixture bridge's actual replies and pushes, not the Sidebar's store or its DOM.
+		await page.addInitScript(id => {
+			if (window !== window.top) return;
+			function install() {
+				const { remote, prefs } = window.omp;
+				const pref = Promise.withResolvers<void>();
+				const live = Promise.withResolvers<void>();
+				const held = {
+					offlineRead: -1,
+					onlineRead: -1,
+					prefsDelivered: 0,
+					liveDelivered: 0,
+					unexpectedLive: 0,
+					releasePref: pref.resolve,
+					releaseLive: live.resolve,
+				};
+				window.__heldSidebar = held;
+				const get = prefs.get;
+				prefs.get = async key => {
+					const value = await get(key);
+					if (key === "sidebarFolds") {
+						const hosts = (value as SidebarFolds | null)?.knownHosts;
+						held.offlineRead = Number(hosts?.length === 1 && hosts[0]?.id === id && hosts[0].offline === true);
+						await pref.promise;
+						held.prefsDelivered++;
+					}
+					return value;
+				};
+				const getState = remote.getState;
+				const isFixtureOnline = (state: RemoteState) =>
+					state.hosts.length === 1 && state.hosts[0]?.deviceId === id && state.hosts[0].state === "online";
+				const delivered = (state: RemoteState) => {
+					held.liveDelivered++;
+					if (!isFixtureOnline(state)) held.unexpectedLive++;
+				};
+				remote.getState = async () => {
+					const state = await getState();
+					held.onlineRead = Number(isFixtureOnline(state));
+					await live.promise;
+					delivered(state);
+					return state;
+				};
+				const onState = remote.onState;
+				remote.onState = callback => {
+					let subscribed = true;
+					const off = onState(state => {
+						void live.promise.then(() => {
+							if (subscribed) {
+								delivered(state);
+								callback(state);
+							}
+						});
+					});
+					return () => {
+						subscribed = false;
+						off();
+					};
+				};
+			}
+			if (window.omp) install();
+			else document.addEventListener("readystatechange", install, { once: true });
+		}, id);
+		await page.reload();
+		await page.waitForFunction(() => {
+			const held = window.__heldSidebar;
+			return (
+				held &&
+				held.onlineRead >= 0 &&
+				held.offlineRead >= 0 &&
+				document.querySelector("[data-sidebar-local-device] [data-session-path]") !== null
+			);
+		});
+		const sample = () =>
+			page.evaluate(
+				async ({ id, cacheKey }) => {
+					const paint = Promise.withResolvers<void>();
+					requestAnimationFrame(() => requestAnimationFrame(() => paint.resolve()));
+					await paint.promise;
+					const { row, local } = JSON.parse(sessionStorage.getItem("offline-pref-probe") ?? "{}");
+					const cached = JSON.parse(localStorage.getItem(cacheKey) ?? "null") as { d: { path: string }[] } | null;
+					const folds = JSON.parse(localStorage.getItem("omp.sidebarFolds") ?? "null") as SidebarFolds | null;
+					const remembered = folds?.knownHosts.find(h => h.id === id);
+					const section = document.querySelector(`[data-sidebar-device="${id}"]`);
+					const rows = [...(section?.querySelectorAll("[data-device-session]") ?? [])];
+					const localRow = document.querySelector("[data-sidebar-local-device] [data-session-path]");
+					const { offlineRead, onlineRead, prefsDelivered, liveDelivered, unexpectedLive } = window.__heldSidebar;
+					return {
+						offlineRead,
+						onlineRead,
+						prefsDelivered,
+						liveDelivered,
+						unexpectedLive,
+						cached: Number(!!cached?.d.some(entry => entry.path === row)),
+						mirrorOnline: Number(!!remembered && !remembered.offline),
+						pending: Number(section?.hasAttribute("data-device-pending") === true),
+						connecting: Number(section?.getAttribute("data-device-state") === "connecting"),
+						offline: Number(section?.getAttribute("data-device-state") === "offline"),
+						online: Number(section?.getAttribute("data-device-state") === "online"),
+						rows: rows.length,
+						row: Number(
+							rows.some(
+								el => el.getAttribute("data-device-session") === row && el.getBoundingClientRect().height > 0,
+							),
+						),
+						local: Number(!!localRow && localRow.getAttribute("data-session-path") === local),
+						top: localRow?.getBoundingClientRect().top ?? -1,
+						hostFirst: Number(
+							document.querySelector("[data-device-slot]")?.getAttribute("data-device-slot") === id,
+						),
+					};
+				},
+				{ id, cacheKey },
+			);
+		const before = await sample();
+		await page.evaluate(() => window.__heldSidebar.releasePref());
+		await page.waitForFunction(() => window.__heldSidebar.prefsDelivered > 0);
+		const stale = await sample();
+		await page.evaluate(() => window.__heldSidebar.releaseLive());
+		await page.waitForFunction(() => window.__heldSidebar.liveDelivered > 0);
+		let restored = await sample();
+		await expect
+			.configure({ soft: true })
+			.poll(
+				async () => {
+					restored = await sample();
+					return [restored.online, restored.row, restored.local];
+				},
+				{ timeout: 30_000 },
+			)
+			.toEqual([1, 1, 1]);
+		const trace = JSON.stringify([before, stale, restored]);
+		console.log(`device-order offline-pref stages: ${trace}`);
+		expect(before, trace).toMatchObject({
+			offlineRead: 1,
+			onlineRead: 1,
+			prefsDelivered: 0,
+			liveDelivered: 0,
+			cached: 1,
+			mirrorOnline: 1,
+			hostFirst: 1,
+			pending: 1,
+			connecting: 1,
+			row: 1,
+			local: 1,
+		});
+		expect(stale.prefsDelivered, trace).toBeGreaterThan(0);
+		expect(stale, trace).toMatchObject({ liveDelivered: 0, cached: 1, hostFirst: 1, pending: 1, local: 1 });
+		expect(restored, trace).toMatchObject({
+			unexpectedLive: 0,
+			online: 1,
+			pending: 0,
+			hostFirst: 1,
+			row: 1,
+			local: 1,
+		});
+		expect(Math.abs(stale.top - before.top), trace).toBeLessThanOrEqual(1);
+		expect(stale.row, trace).toBe(1);
+	} finally {
+		for (const instance of [client, host]) if (instance) await exitApp(instance.app);
 		await fs.rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });
