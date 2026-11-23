@@ -1,48 +1,6 @@
 import { app, powerMonitor } from "electron";
-import { writeRuntimeLog } from "./runtime-log";
 
 type MainPhase = "startup" | "running" | "quit" | "update";
-
-export interface HangMarker {
-	detectedAt: number;
-	pid: number;
-	unresponsiveMs: number;
-	selfRecovered: boolean;
-	phase?: MainPhase;
-	steps?: string[];
-	machine?: Record<string, string | number | boolean>;
-}
-
-export function reportPreviousHang(marker: HangMarker | null): void {
-	if (!marker) return;
-	writeRuntimeLog({
-		source: "main-thread-hang",
-		message: marker.selfRecovered
-			? `Main thread stalled for ${Math.round(marker.unresponsiveMs / 1000)}s and recovered`
-			: `Main thread stalled for ${Math.round(marker.unresponsiveMs / 1000)}s and never recovered`,
-		details: {
-			unresponsiveMs: Math.round(marker.unresponsiveMs),
-			selfRecovered: marker.selfRecovered,
-			detectedAt: new Date(marker.detectedAt).toISOString(),
-			previousPid: marker.pid,
-			phase: marker.phase ?? null,
-			// The runtime log keeps primitives only: an array would be dropped from the line.
-			steps: marker.steps?.join(" > ") ?? null,
-		},
-	});
-	// The next launch reports the sample from the stall, not the state of the computer now.
-	if (marker.machine)
-		writeRuntimeLog({
-			source: "machine-state",
-			message: "hang during",
-			details: {
-				trigger: "hang",
-				when: "during",
-				at: new Date(marker.detectedAt).toISOString(),
-				...marker.machine,
-			},
-		});
-}
 
 export type WatchdogSignal =
 	| { type: "start"; pid: number }

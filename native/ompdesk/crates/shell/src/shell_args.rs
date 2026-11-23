@@ -1,6 +1,21 @@
 //! Argument checks of `shell.*` (PROTOCOL.md §8) that need no OS: what `openExternal` accepts and how a path is
 //! handed to the Windows shell. Pure, so it is tested on every OS.
 
+/// Links supplied by pages get a narrower policy than trusted settings links.
+pub fn page_external_url(url: &str) -> bool {
+    if url.starts_with("https://") || url.starts_with("http://") {
+        return true;
+    }
+    let Some((scheme, draft)) = url.split_once(':') else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("mailto")
+        && !draft.is_empty()
+        && !draft
+            .chars()
+            .any(|c| c == '\u{feff}' || c.is_whitespace() || c.is_control())
+}
+
 /// `shell.openExternal`: Electron refuses what it cannot parse as a URL and a URL with a double quote (the shell
 /// would read it as the end of an argument). Returns the URL to hand over, or why it is refused.
 pub fn validate_external_url(url: &str) -> Result<&str, String> {

@@ -1,4 +1,4 @@
-use std::io::{self, Read, Seek, SeekFrom};
+use super::log_tail::LogTail;
 use std::path::Path;
 
 pub(super) enum Selection {
@@ -16,18 +16,6 @@ const PROBE_SOURCES: [&str; 4] = [
     r#""source":"machine-state""#,
 ];
 
-fn read_window(profile: &Path, archive: bool, limit: u64) -> io::Result<(Vec<u8>, bool)> {
-    let mut file = super::files::open(profile, archive)?;
-    let size = file.metadata()?.len();
-    let length = size.min(limit);
-    if size > length {
-        file.seek(SeekFrom::Start(size - length))?;
-    }
-    let mut bytes = Vec::with_capacity(length as usize);
-    file.take(length).read_to_end(&mut bytes)?;
-    Ok((bytes, size > length))
-}
-
 pub(super) fn lines(profile: &Path, selection: Selection) -> Vec<String> {
     let (files, bytes, count): (&[bool], _, _) = match selection {
         Selection::Current => (&[false], MIB, 3000),
@@ -37,14 +25,12 @@ pub(super) fn lines(profile: &Path, selection: Selection) -> Vec<String> {
     };
     let mut newest = Vec::new();
     for &archive in files {
-        let Ok((window, truncated)) = read_window(profile, archive, bytes) else {
+        let Ok(tail) =
+            super::files::open(profile, archive).and_then(|file| LogTail::read(file, bytes))
+        else {
             continue;
         };
-        let mut rows = window.split(|&b| b == b'\n');
-        if truncated {
-            rows.next();
-        }
-        for line in rows.rev().filter(|line| !line.is_empty()) {
+        for line in tail.newest() {
             if matches!(selection, Selection::Probes)
                 && !line.utf8_chunks().any(|chunk| {
                     PROBE_SOURCES

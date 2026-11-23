@@ -35,8 +35,8 @@ fn marker_path(profile: &Path) -> PathBuf {
     profile.join("logs").join(MARKER)
 }
 
-pub(crate) fn consume_marker(profile: &Path) -> Value {
-    marker::consume(&marker_path(profile)).unwrap_or(Value::Null)
+pub(crate) fn consume_reports(profile: &Path) -> Value {
+    marker::consume_reports(&marker_path(profile))
 }
 
 pub(crate) fn handle(mut call: Call, profile: &Path) {

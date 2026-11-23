@@ -36,7 +36,7 @@ src/main/ai-memory/fake-server-test-rig.ts	exception	Starts a loopback HTTP serv
 src/main/ai-memory/freshness.test.ts	exception	Tests retirement for deleted paths, partial disappearance and unchanged references against Git checkouts.
 src/main/ai-memory/freshness.ts	native-client	Passes the repository runner, project and flagged versions to care.freshness and applies the returned version map.
 src/main/ai-memory/ipc.test.ts	exception	Exercises memory IPC handlers, including background refresh and retry without blocking the caller.
-src/main/ai-memory/ipc.ts	port	The IPC handler reads service.state() before opening a loopback URL. The platform clipboard must clear a copied password after a minute only if unchanged. Receiver: shell, which owns clipboard reads and writes; core must not hold an extra copy.
+src/main/ai-memory/ipc.ts	mixed	Memory IPC validates incoming requests and the loopback console address. clipboard.writePassword hands the host clipboard write and conditional expiry to the shell; no clipboard contents are read back into Node.
 src/main/ai-memory/memory-capture-stock.test.ts	exception	Tests stock omp capture with terminal wiring and with the root supplied by OMPdesk.
 src/main/ai-memory/memory-judge.test.ts	exception	Checks pair batching, model cost reporting and abstention on an unparseable or failed answer.
 src/main/ai-memory/memory-judge.ts	native-client	Production care/units.rs chooses the native judge chain. Only tests call these typed clients; the core skips empty batches and disabled Jev before requesting a launch.

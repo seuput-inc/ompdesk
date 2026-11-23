@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiMemoryState } from "../../shared/ai-memory";
 import { IPC_COMMANDS } from "../../shared/ipc-types";
+import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "../shell-policy-test-rig";
 import { type IpcCaller, IpcRegistry } from "../web/ipc-registry";
 import { type AiMemoryIpcDeps, registerAiMemoryIpc } from "./ipc";
 import type { AiMemoryService } from "./service";
@@ -35,25 +36,17 @@ function setup(webUrl: string | null = "http://127.0.0.1:49374/web") {
 		cancelHandoff: vi.fn(async (_project: unknown, _id: string) => {}),
 		token: vi.fn(async () => "tok" as string | null),
 	} satisfies Service;
-	let clipboard = "";
 	const deps = {
 		openExternal: vi.fn(async (_url: string) => {}),
 		openPath: vi.fn(async (_path: string) => ""),
-		readClipboard: () => clipboard,
-		writeClipboard: (text: string) => {
-			clipboard = text;
-		},
+		copyPassword: vi.fn<(text: string) => Promise<void>>(),
 		care: () => null,
 	} satisfies AiMemoryIpcDeps;
 	const ipc = new IpcRegistry({ handle: () => {}, on: () => {} });
 	registerAiMemoryIpc(ipc, service as unknown as AiMemoryService, deps);
 	const call = (channel: string, ...args: unknown[]) => ipc.invoke(channel, CALLER, args);
-	return { service, deps, call, clipboard: () => clipboard, setClipboard: (text: string) => (clipboard = text) };
+	return { service, deps, call };
 }
-
-afterEach(() => {
-	vi.useRealTimers();
-});
 
 describe("ai-memory IPC", () => {
 	it("get-state refreshes in the background and returns the snapshot", async () => {
@@ -121,31 +114,59 @@ describe("ai-memory IPC", () => {
 	});
 
 	describe("copy-web-password", () => {
-		it("puts the token on the clipboard and clears it after the timeout when unchanged", async () => {
-			vi.useFakeTimers();
-			const { call, clipboard } = setup();
-			await call(IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD);
-			expect(clipboard()).toBe("tok");
-			await vi.advanceTimersByTimeAsync(59_000);
-			expect(clipboard()).toBe("tok");
-			await vi.advanceTimersByTimeAsync(1_000);
-			expect(clipboard()).toBe("");
+		let fixture: ShellPolicyFixture;
+		beforeAll(prepareShellPolicyFixture, 180_000);
+		beforeEach(async () => {
+			fixture = await shellPolicyFixture();
+		});
+		afterEach(async () => {
+			await fixture?.close();
 		});
 
-		it("leaves the clipboard alone when something else replaced the password", async () => {
-			vi.useFakeTimers();
-			const { call, clipboard, setClipboard } = setup();
+		function copySetup() {
+			const rig = setup();
+			rig.deps.copyPassword.mockImplementation(text => fixture.call<void>("clipboard.writePassword", { text }));
+			return {
+				...rig,
+				clipboard: () => fixture.call<string>("clipboard.read"),
+				advance: (ms: number) => fixture.call("clipboard.advance", { ms }),
+			};
+		}
+
+		it("puts the token on the clipboard and clears it after the timeout when unchanged", async () => {
+			const { call, clipboard, advance } = copySetup();
 			await call(IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD);
-			setClipboard("something the user copied");
-			await vi.advanceTimersByTimeAsync(120_000);
-			expect(clipboard()).toBe("something the user copied");
+			expect(await clipboard()).toBe("tok");
+			await advance(59_000);
+			expect(await clipboard()).toBe("tok");
+			await advance(1_000);
+			expect(await clipboard()).toBe("");
+		});
+
+		it.each(["something the user copied", "tok"])("leaves another app's copy of %j alone", async text => {
+			const { call, clipboard, advance } = copySetup();
+			await call(IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD);
+			await fixture.call("clipboard.replace", { text });
+			await advance(120_000);
+			expect(await clipboard()).toBe(text);
+		});
+
+		it("gives a second copy of the same password its full lifetime", async () => {
+			const { call, clipboard, advance } = copySetup();
+			await call(IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD);
+			await advance(59_000);
+			await call(IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD);
+			await advance(1_000);
+			expect(await clipboard()).toBe("tok");
+			await advance(59_000);
+			expect(await clipboard()).toBe("");
 		});
 
 		it("refuses while there is no token yet and writes nothing", async () => {
-			const { service, call, clipboard } = setup();
+			const { service, call, clipboard } = copySetup();
 			service.token.mockResolvedValueOnce(null);
 			await expect(call(IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD)).rejects.toThrow("Memory has no token yet");
-			expect(clipboard()).toBe("");
+			expect(await clipboard()).toBe("");
 		});
 	});
 

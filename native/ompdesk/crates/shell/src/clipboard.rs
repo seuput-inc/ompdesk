@@ -26,6 +26,19 @@ pub fn handle(call: Call) {
                 Err(why) => call.err("failed", why),
             });
         }
+        "clipboard.writePassword" => ui::run(move || {
+            let Some(text) = call.params["text"].as_str().filter(|text| !text.is_empty()) else {
+                call.err("invalid", "clipboard.writePassword needs non-empty text");
+                return;
+            };
+            match native::write_password(text) {
+                Ok(copy) => {
+                    copy.schedule(|ms, copy| ui::post_delayed(ms, move || native::expire(copy)));
+                    call.ok(json!({}));
+                }
+                Err(why) => call.err("failed", why),
+            }
+        }),
         _ => call.unsupported(),
     }
 }

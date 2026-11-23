@@ -55,6 +55,7 @@ pushed event.
            pictures, videos, logs, crashDumps },        // every name app.getPath serves; absolute
   exe: string,                  // the shell's executable (`app.getPath("exe")`, what a relaunch starts)
   resourcesPath: string,        // `process.resourcesPath`: packaged <install>/resources, unpackaged: <appDir>/resources
+  appIcon: { path: string, notifications: "off" | "appIcon" | "systemIcon" }, // headless posts nothing; Windows toasts default to this PNG
   appPath: string,              // `app.getAppPath()`: the folder holding out/main/index.js (package.json beside it)
   isPackaged: boolean,
   rendererRoot?: string,        // the renderer folder served as app://ompdesk/ (dirname(entry)/../renderer); absent: <appPath>/out/renderer
@@ -93,12 +94,17 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `app.setAsDefaultProtocolClient` | Node | `{protocol}` | `{ok: boolean}` — registers the shell's own exe: Windows `HKCU\Software\Classes\<protocol>` (`shell\open\command` = `"exe" "%1"`), macOS LaunchServices (`LSSetDefaultHandlerForURLScheme`). The shell's exe only: dev runs register the dev shell. |
 | `app.showAboutPanel` | Node | `{}` | macOS standard about panel using the init `aboutPanel` options; Windows: no-op. |
 | `app.getGPUInfo` | Node | `{kind: "basic"\|"complete"}` | `{info: {gpuDevice: [{vendorId, deviceId, active, driverVendor?, driverVersion?, deviceString?}]}, features: Record<string,string>}`. `features` is Electron's `getGPUFeatureStatus()` (`gpu_compositing` is `"enabled"`, `"disabled_software"`, …); the shim serves the sync `getGPUFeatureStatus()` from the last answer. Resolves once the GPU process reported (CEF `GetGPUInfo`/the `chrome://gpu` feature status), never earlier. |
+| `app.startLaunchProtection` | Node | `{primary, enableGpu, disableGpu}` (booleans) | Tauri: `{guard, safeMode, software, stableAfterMs, logs}` after the selected profile's history/marker writes are attempted. Called once, before `app.init`. |
+| `app.launchEvent` | Node | `{op: "identity"\|"healthy"\|"stable"}` | Tauri: `null` or `{log}` after recording the GPU or launch stability. |
+| `app.previousRunEnd` | Node | `{ownPid: number}` | Tauri: the previous run's unclean-end report or `null`. Reads only this profile's runtime log. |
+| `app.consumeHangReports` | Node | `{}` | Tauri: zero to two log records from the previous main-thread hang. The primary instance consumes the marker before starting its new heartbeat. |
+| `app.diagnosticBundleFileName` | Node | `{title, localDate: [year, month, day], anonymized}` | Tauri returns the suggested `.zip` filename for the save dialog or Downloads. The month is 1-based. The title slug fits 40 UTF-16 code units without splitting a character. |
 | `app.secondInstance` (event) | shell→Node | `{kind:"url", url}` / `{kind:"path", path}` / `{kind:"focus"}` | after skipping the executable, the first `omp://` URL wins; otherwise the first non-switch directory in the running shell’s cwd, else focus. A relative path is passed unchanged and ignored by main, not resolved in the second launch’s cwd. |
 | `app.openUrl` (event) | shell→Node | `{url}` | macOS `kAEGetURL` (and Windows protocol launches arrive as `secondInstance`). |
 | `app.openFile` (event) | shell→Node | `{path}` | macOS `kAEOpenDocuments`. |
 | `app.quitRequested` (event) | shell→Node | `{}` | macOS ⌘Q / Dock › Quit: the shim runs `app.quit()` (before-quit, window closes, will-quit, quit), which ends in `app.exit`. |
 | `app.activate` (event) | shell→Node | `{hasVisibleWindows: boolean}` | macOS Dock click. |
-| `app.childProcessGone` (event) | shell→Node | `{type: "GPU"\|"Utility"\|"Renderer"\|…, reason, exitCode, name?, serviceName?}` | CEF helper process ended abnormally (the GPU one drives the software fallback). Renderer crashes are `wc.event render-process-gone` instead. |
+| `app.childProcessGone` (event) | shell→Node | `{type, reason, exitCode, name?, serviceName?, launchDecision?}` | A WebView2 GPU failure can carry `{log, relaunch?}` after the guard writes the marker/history. Renderer crashes use `wc.event render-process-gone`. |
 
 `Scheme = {scheme, privileges: {standard?, secure?, bypassCSP?, allowServiceWorkers?, supportFetchAPI?, corsEnabled?, stream?, codeCache?}}`
 (Electron's `CustomScheme`). `app://ompdesk` is the shell's own and is not registered here.
@@ -270,7 +276,9 @@ role. AppKit sends the action to the first responder. A native edit does not pro
 | `dialog.saveDialog` | Node | `{winId?, options: {title, defaultPath, buttonLabel, filters, message, nameFieldLabel, showsTagField, properties}}` | `{canceled, filePath?: string}` |
 | `clipboard.readText` | Node | `{}` | `{text}` |
 | `clipboard.writeText` | Node | `{text}` | `{}` |
+| `clipboard.writePassword` | Node | `{text}` | `{}` after writing. The shell expires this copy after 60 s only if it still owns that revision. No text is read back. |
 | `shell.openExternal` | Node | `{url}` | `{}`; failure → `error.code "failed"` |
+| `shell.openPageExternal` | Node | `{url}` | Like `shell.openExternal` for page links. Refused schemes and malformed mail drafts succeed without opening anything. |
 | `shell.openPath` | Node | `{path}` | `{error: string}` ("" on success), as Electron |
 | `shell.showItemInFolder` | Node | `{path}` | `{}` |
 | `shell.trashItem` | Node | `{path}` | `{}`; failure → `error.code "failed"` |

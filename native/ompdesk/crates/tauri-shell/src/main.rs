@@ -3,13 +3,17 @@
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+mod diagnostic_bundle_name;
 mod evaluate;
 mod gpu;
+mod js_date;
+mod launch_protection;
 mod legacy_user_data;
 mod migrate_watch;
 mod native_chrome;
 mod native_services;
 mod network;
+mod notify_triage;
 mod page_watch;
 mod preview_protocol;
 pub use native_chrome::menu;
@@ -81,8 +85,10 @@ struct Runtime {
     app_initializations: Mutex<HashMap<u64, AppInitialization>>,
     navigation_watch: Mutex<HashSet<u64>>,
     host_navigations: Mutex<HashMap<u64, String>>,
+    notify_triage: Mutex<notify_triage::NotifyTriage>,
     preload: String,
     user_data: PathBuf,
+    packaged: bool,
     feedback_profile: PathBuf,
     renderer: PathBuf,
     user_agent: Mutex<Option<String>>,
@@ -95,6 +101,25 @@ fn runtime() -> &'static Runtime {
     RUNTIME
         .get()
         .expect("Tauri runtime initialized before Node")
+}
+static LAUNCH: OnceLock<Mutex<launch_protection::LaunchProtection>> = OnceLock::new();
+
+fn wall_clock_ms() -> i64 {
+    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
+}
+
+#[cfg(windows)]
+fn gpu_process_gone(mut details: Value) {
+    if let Some(launch) = LAUNCH.get() {
+        let mut crash = details.clone();
+        crash["now"] = json!(wall_clock_ms());
+        crash["testLaunch"] = json!(std::env::var("OMP_GUI_HEADLESS").as_deref() == Ok("1"));
+        details["launchDecision"] = launch
+            .lock()
+            .expect("launch protection")
+            .apply("crash", &crash);
+    }
+    host::event("app.childProcessGone", details);
 }
 fn failed(error: impl std::fmt::Display) -> WireError {
     WireError::new("failed", error.to_string())
@@ -629,6 +654,12 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         }
         // Node's own handler (`will-navigate`) sees every navigation the page starts, as Electron's did, and may refuse it.
         let prevented = url.as_str() != "about:blank" && node_prevents_navigation(wc, url);
+        if profile_bootstrap(url.as_str()) {
+            log::log(
+                "profile.migrate.navigation",
+                json!({"wcId":wc,"allowed":allowed && !prevented}),
+            );
+        }
         allowed && !prevented
     })
     .on_new_window(|_, _| NewWindowResponse::Deny)
@@ -1066,16 +1097,90 @@ fn wc_op(call: host::Call) {
     }
 }
 fn dispatch(call: host::Call) {
+    // The socket reader dispatches in order. The receipt follows the file write, not its scheduling.
+    if call.method == "app.startLaunchProtection" {
+        if LAUNCH.get().is_some() {
+            call.err("invalid", "launch protection already started");
+            return;
+        }
+        let (launch, result) = launch_protection::LaunchProtection::start(
+            &runtime().user_data,
+            wall_clock_ms(),
+            call.params["primary"] == true
+                && ((runtime().packaged
+                    && std::env::var("OMP_GUI_HEADLESS").as_deref() != Ok("1"))
+                    || std::env::var("OMP_GUI_LAUNCH_GUARD").as_deref() == Ok("1")),
+            call.params["enableGpu"] == true,
+            call.params["disableGpu"] == true,
+        );
+        let _ = LAUNCH.set(Mutex::new(launch));
+        call.ok(result);
+        return;
+    }
+    if call.method == "app.launchEvent" {
+        let Some(launch) = LAUNCH.get() else {
+            call.err("invalid", "launch protection not started");
+            return;
+        };
+        let mut launch = launch.lock().expect("launch protection");
+        let result = match call.params["op"].as_str() {
+            Some("identity") => launch.apply(
+                "identity",
+                &json!({"devices":gpu::info()["info"]["gpuDevice"]}),
+            ),
+            Some(op @ ("stable" | "healthy")) => launch.apply(op, &Value::Null),
+            _ => {
+                call.err("invalid", "unknown launch signal");
+                return;
+            }
+        };
+        call.ok(result);
+        return;
+    }
+    if call.method == "app.admitNotification" {
+        let plan = runtime()
+            .notify_triage
+            .lock()
+            .expect("notification triage")
+            .admit(&call.params);
+        match plan {
+            Some(plan) => call.ok(plan),
+            None => call.err("invalid", "invalid notification admission"),
+        }
+        return;
+    }
     if call.method == "app.watchdog" {
         native_services::watchdog::handle(call, &runtime().user_data);
         return;
     }
-    if call.method == "app.consumeHangMarker" {
+    if call.method == "app.consumeHangReports" {
         tauri::async_runtime::spawn_blocking(move || {
-            call.ok(native_services::watchdog::consume_marker(
+            call.ok(native_services::watchdog::consume_reports(
                 &runtime().user_data,
             ))
         });
+        return;
+    }
+    if call.method == "app.previousRunEnd" {
+        let Some(pid) = call.params["ownPid"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+        else {
+            return call.err("invalid", "expected Node's process id");
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            call.ok(native_services::diagnostic_logs::previous_run_end(
+                &runtime().feedback_profile,
+                pid,
+            ))
+        });
+        return;
+    }
+    if call.method == "app.diagnosticBundleFileName" {
+        match diagnostic_bundle_name::file_name(&call.params) {
+            Ok(name) => call.ok(Value::String(name)),
+            Err(error) => call.err("invalid", error.to_string()),
+        }
         return;
     }
     if call.method == "app.diagnosticLog" {
@@ -1767,9 +1872,13 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let app = builder
         .invoke_handler(tauri::generate_handler![omp_ipc])
         .register_asynchronous_uri_scheme_protocol("app", |context, request, responder| {
+            let bootstrap = assets::is_bootstrap(request.uri());
+            if bootstrap {
+                log::log("profile.migrate.request", json!({"webview":context.webview_label()}));
+            }
             let label = context.webview_label().to_owned();
             std::thread::spawn(move || {
-                if !assets::is_bootstrap(request.uri()) {
+                if !bootstrap {
                     return responder.respond(assets::serve(&runtime().renderer, request, &runtime().content_policy));
                 }
                 #[cfg(feature = "test-automation")]
@@ -1805,8 +1914,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     app_initializations: Mutex::new(HashMap::new()),
                     navigation_watch: Mutex::new(HashSet::new()),
                     host_navigations: Mutex::new(HashMap::new()),
+                    notify_triage: Mutex::default(),
                     preload,
                     user_data,
+                    packaged,
                     feedback_profile,
                     renderer,
                     user_agent: Mutex::new(None),
