@@ -1,19 +1,19 @@
-/**
- * External-editor round trip for the composer editor dialog (ported from the
- * agent's utils/external-editor.ts): write the draft to a temp file, spawn
- * $VISUAL / $EDITOR (notepad on Windows), read the file back on a clean exit.
- */
+/** The host launches the user's GUI editor outside the core's kill-on-exit process tree. */
 
+import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { codedError } from "../shared/ipc-error-codes";
+import { core } from "./core/process";
 import { resolveEditorCommand, spawnPath } from "./shell-env";
 
 export interface EditorRoundTripResult {
 	/** Edited text (exit 0), null when the editor exits non-zero (draft unchanged). */
 	text: string | null;
+}
+
+interface PreparedDraft {
+	id: { folder: string; token: string };
+	file: string;
 }
 
 export async function openInExternalEditor(content: string): Promise<EditorRoundTripResult> {
@@ -24,31 +24,36 @@ export async function openInExternalEditor(content: string): Promise<EditorRound
 	if (!editorCmd) {
 		throw codedError("editor_unset", "Set $VISUAL or $EDITOR to use an external editor");
 	}
-	const tmpFile = path.join(os.tmpdir(), `omp-editor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`);
+	const client = core();
+	const env = { ...process.env, PATH: await spawnPath() };
+	const { result: draft } = await client.call<PreparedDraft>("editor.prepare", {}, { bin: Buffer.from(content) });
+	let read = false;
 	try {
-		await fs.writeFile(tmpFile, content, "utf8");
-		const [editor, ...editorArgs] = editorCmd.split(" ");
-		const child = spawn(editor, [...editorArgs, tmpFile], {
-			stdio: ["ignore", "ignore", "ignore"],
-			shell: process.platform === "win32",
-			// The shell that starts the editor on Windows shows no console window of its own; the editor's window is its own.
-			windowsHide: true,
-			// Bare editor names (code, zed, subl) resolve via the login-shell PATH.
-			env: { ...process.env, PATH: await spawnPath() },
-		});
+		const [editor, ...args] = editorCmd.split(" ");
+		// cmd expands the quoted variable once. The generated filename is never part of the configured command.
+		const windows = process.platform === "win32";
+		if (windows && /["\r\n]/.test(draft.file)) throw new Error("Invalid Windows editor draft path");
+		const child = windows
+			? spawn(
+					process.env.ComSpec || "cmd.exe",
+					["/d", "/v:off", "/s", "/c", `"${editorCmd} "%OMPDESK_EDITOR_DRAFT%""`],
+					{
+						stdio: "ignore",
+						windowsHide: true,
+						windowsVerbatimArguments: true,
+						env: { ...env, OMPDESK_EDITOR_DRAFT: draft.file },
+					},
+				)
+			: spawn(editor, [...args, draft.file], { stdio: "ignore", env });
 		const { promise, reject, resolve } = Promise.withResolvers<number>();
 		child.once("exit", (code, signal) => resolve(code ?? (signal ? -1 : 0)));
 		child.once("error", error => reject(error));
-		const exitCode = await promise;
-		if (exitCode !== 0) return { text: null };
-		// Read-back contract: strip exactly one trailing newline.
-		const text = await fs.readFile(tmpFile, "utf8");
-		return { text: text.replace(/\n$/, "") };
+		read = (await promise) === 0;
 	} finally {
-		try {
-			await fs.rm(tmpFile, { force: true });
-		} catch {
-			// ignore cleanup errors
-		}
+		if (!read) await client.call("editor.finish", { id: draft.id, read: false }).catch(() => {});
 	}
+	if (!read) return { text: null };
+	const { bin } = await client.call("editor.finish", { id: draft.id, read: true });
+	if (!bin) throw new Error("Missing external-editor draft");
+	return { text: new TextDecoder("utf-8", { ignoreBOM: true }).decode(bin) };
 }

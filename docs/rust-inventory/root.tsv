@@ -239,7 +239,7 @@ src/main/disk-full-notice.ts	port	3	bindDiskFullNotice opens/closes one OS notic
 src/main/disk-full.ts	port	2	DiskFullWatch tracks failed file names and coalesces listener notifications; isDiskFull recognizes space/quota errors.
 src/main/editable-context-menu.test.ts	tooling	-	Vitest suite: editableContextMenuTemplate.
 src/main/editable-context-menu.ts	port	4	editableContextMenuTemplate and editRoleItems build Electron menu roles, spellchecker suggestions and copy-image actions from context-menu parameters.
-src/main/editor.ts	port	1	openInExternalEditor writes draft to a temp file, launches the configured editor and reads edited text after a successful exit.
+src/main/editor.ts	mixed	1	editor.prepare/finish own the temporary draft, contents, readback and cleanup. Main resolves the user's editor and awaits its exit outside the core's kill-on-exit process tree; a core restart must not end a GUI editor or expire a long edit.
 src/main/emoji-stock.test.ts	tooling	-	Vitest suite: ships stock's shortcode table byte for byte.
 src/main/event-batcher.ts	port	2	EventBatcher buffers agent session events per frame interval and drops intermediate tool execution updates under backpressure.
 src/main/extension-reload.test.ts	tooling	-	Vitest suite: mergeApplyPlans.

@@ -52,6 +52,8 @@ globs:
 
 ### Ledger
 
+- **External editor drafts.** `editor.prepare` writes the temporary Markdown; `editor.finish` checks the receipt, reads only on a clean editor exit, removes one final LF and deletes only its own files. The GUI editor remains a host launch so the core can restart without killing the user's editor. No request stays open while the person edits. Unix drafts use a private directory; Windows inherits the per-user TEMP ACL. A hard stop before finish can leave the draft behind. `shell-env.test.ts` exercises the real core and a process standing in for the editor.
+
 - **CLI launchers.** Startup awaits `control.installCli` before using the app's bin folder. The core writes POSIX, Windows sh and `.cmd` launchers atomically with the prior bounded rename retries. In Bun's bin it leaves a foreign file, including a dangling symlink, alone; previously the broken link looked absent. An install error still leaves the app usable. `control::cli_install` checks the prior launchers' exact bytes; `control-socket/cli-install.test.ts` runs the sh/WSL and argument-quoting cases through the real core.
 
 - **Agent Studio definitions.** `fs.agentFile` checks the discovered directories, publishes new definitions without clobbering, replaces existing definitions atomically and creates a renamed file before removing its source. Stock still validates the Markdown; the page and host use one template serializer. Main reads an authorized regular file on one handle, so opening an existing definition has no new size limit or second whole-file copy on the core wire. Reads follow a final file symlink; deletes remove its entry. Special files are not read. `local/agent-files.test.ts` exercises the core for creation, collision, rename and deletion.

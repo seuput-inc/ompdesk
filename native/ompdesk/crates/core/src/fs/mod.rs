@@ -7,6 +7,7 @@
 
 mod agent_files;
 pub(crate) mod disk;
+mod editor;
 pub(crate) mod error;
 mod ignore;
 mod launch;
@@ -63,6 +64,12 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("fs.mutate", |call| {
         Box::pin(blocking(move || mutate::mutate(call)))
+    });
+    registry.add("editor.prepare", |call| {
+        Box::pin(blocking(move || editor::prepare(call)))
+    });
+    registry.add("editor.finish", |call| {
+        Box::pin(blocking(move || editor::finish(call)))
     });
 }
 
