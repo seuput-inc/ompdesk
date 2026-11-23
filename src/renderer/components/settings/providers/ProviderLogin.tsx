@@ -100,6 +100,8 @@ function loginLink(
 
 export interface ProviderLogin {
 	state: ProviderLoginState;
+	/** The tab still owns a login, even after Cancel closed its panel. */
+	busy: boolean;
 	start: (providerId: string) => Promise<boolean>;
 	submit: (value: string) => void;
 	cancel: () => void;
@@ -114,6 +116,7 @@ export function useProviderLogin(onConnected: (providerId: string) => Promise<vo
 	const arrivedAt = useExtensionUiStore(state => state.arrivedAt);
 	const owned = useExtensionUiStore(state => state.loginRequestIds);
 	const removeRequest = useExtensionUiStore(state => state.removeRequest);
+	const busy = useExtensionUiStore(state => state.inlineLogins > 0);
 	const beginInlineLogin = useExtensionUiStore(state => state.beginInlineLogin);
 	const endInlineLogin = useExtensionUiStore(state => state.endInlineLogin);
 	const adopted = useExtensionUiStore(state => state.adoptedLogin);
@@ -196,24 +199,22 @@ export function useProviderLogin(onConnected: (providerId: string) => Promise<vo
 
 	const start = useCallback(
 		async (providerId: string): Promise<boolean> => {
+			if (busy) return false;
 			const current = ++attempt.current;
 			submittedPrompts.current.clear();
 			loginSent.current = false;
 			browserOpened.current = false;
 			cancelRequested.current = false;
-			beginInlineLogin();
 			setState({ ...IDLE, providerId, running: true, since: Date.now() });
 			// A starting omp would get `login` the moment it is ready (tab-runtime holds it), after a Cancel that had
 			// nothing to cancel yet: wait here instead, and send nothing for an attempt that was cancelled meanwhile.
 			const starting = tabId === null ? null : tabReady(tabId);
 			if (starting) {
 				await starting;
-				if (current !== attempt.current) {
-					endInlineLogin();
-					return false;
-				}
+				if (current !== attempt.current) return false;
 			}
 			let outcome: { ok: true } | { ok: false; error: string | null };
+			beginInlineLogin();
 			try {
 				loginSent.current = true;
 				const response = await tabRpc.login(providerId);
@@ -238,7 +239,7 @@ export function useProviderLogin(onConnected: (providerId: string) => Promise<vo
 			await onConnected(providerId);
 			return live;
 		},
-		[beginInlineLogin, endInlineLogin, onConnected, sendResponse, tabId, tabRpc],
+		[beginInlineLogin, busy, endInlineLogin, onConnected, sendResponse, tabId, tabRpc],
 	);
 
 	const submit = useCallback(
@@ -287,7 +288,7 @@ export function useProviderLogin(onConnected: (providerId: string) => Promise<vo
 		if (cancelRequested.current && state.running && (state.link?.oauth || state.prompt)) cancel();
 	}, [cancel, state.link, state.prompt, state.running]);
 
-	return { state, start, submit, cancel };
+	return { state, busy, start, submit, cancel };
 }
 
 /** A masked one-line answer to omp's prompt (`input`), with Show/Hide. */
