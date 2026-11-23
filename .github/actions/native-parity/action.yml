@@ -114,6 +114,7 @@ runs:
         src/main/workspace-search.test.ts
         src/main/save-copy.test.ts
         src/main/sidebar-projects.test.ts
+        src/main/worktree-orphans*.test.ts
         src/main/turn-wait-watch.test.ts
         src/main/disk/*.test.ts
         src/main/sidecar.test.ts

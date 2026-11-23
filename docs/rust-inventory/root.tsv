@@ -540,7 +540,7 @@ src/main/worktree-orphans-removal.test.ts	tooling	-	Vitest suite: removeOrphanWo
 src/main/worktree-orphans-sweep.test.ts	tooling	-	Vitest suite: sweepLandedWorktrees.
 src/main/worktree-orphans-test-rig.ts	tooling	-	installOrphansRig/scene build Git repositories, linked worktrees and simulated open-folder state for orphan tests.
 src/main/worktree-orphans.test.ts	tooling	-	Vitest suite: listOrphanWorktrees.
-src/main/worktree-orphans.ts	mixed	3	listOrphanWorktrees/removeOrphanWorktree use git.orphanInspect/removeOrphanWorktree and git.leftBehindRemove in core/src/git/mod.rs; TS still obtains open folders, reserves removals and invokes archive preparation.
+src/main/worktree-orphans.ts	mixed	3	git.orphanRepositories/orphanProject/orphanProjectWithEntries discover repositories in stock's global and project roots. The bridge supplies stock worktree.base; withRemovalClaim rechecks live open folders before deletion and the caller supplies archive preparation under its repo lock.
 src/main/worktree-removals.test.ts	tooling	-	Vitest suite: withRemovalClaim.
 src/main/worktree-removals.ts	port	3	withRemovalClaim reserves canonical folder paths while removal runs; removalHolds prevents concurrent tab acquisition.
 src/main/xdev-stock.test.ts	tooling	-	Vitest suite: names the device stock names, and no device where stock finds none.
