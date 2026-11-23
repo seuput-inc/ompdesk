@@ -301,6 +301,17 @@ pub fn write_atomic_if(
     dir_mode: u32,
     commit: &dyn Fn() -> bool,
 ) -> Result<bool, Fault> {
+    write_atomic_with_retries(file, bytes, mode, dir_mode, commit, &RENAME_RETRY_MS)
+}
+
+pub(crate) fn write_atomic_with_retries(
+    file: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+    dir_mode: u32,
+    commit: &dyn Fn() -> bool,
+    waits: &[u64],
+) -> Result<bool, Fault> {
     if let Some(dir) = file.parent() {
         make_dirs(dir, dir_mode)?;
     }
@@ -314,7 +325,7 @@ pub fn write_atomic_if(
         if let Some(mode) = mode {
             chmod(&temp, mode)?;
         }
-        for wait in RENAME_RETRY_MS.iter().map(Some).chain([None]) {
+        for wait in waits.iter().map(Some).chain([None]) {
             if !commit() {
                 return Ok(false);
             }

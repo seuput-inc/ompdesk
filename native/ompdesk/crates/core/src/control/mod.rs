@@ -14,6 +14,7 @@
 //! news). A listener that is still up when the core's input ends is closed then (`close_all`), so the socket file and
 //! `endpoint.json` go even when main never asked.
 
+mod cli_install;
 pub(crate) mod conn;
 mod endpoint;
 mod events;
@@ -135,6 +136,9 @@ fn servers() -> MutexGuard<'static, HashMap<u64, Server>> {
 }
 
 pub fn register(registry: &mut Registry) {
+    registry.add("control.installCli", |call| {
+        Box::pin(cli_install::install(call))
+    });
     registry.add("control.prepareDir", |call| Box::pin(prepare_dir(call)));
     registry.add("control.token", |call| Box::pin(token(call)));
     registry.add("control.listen", |call| Box::pin(listen(call)));

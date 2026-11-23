@@ -40,6 +40,7 @@ runs:
         src/main/local/agent-files.test.ts
         src/main/agent-worktrees.test.ts
         src/main/stock-helper.test.ts
+        src/main/control-socket/cli-install.test.ts
         src/main/models-config.test.ts
         src/main/bridge-input-history.test.ts
         src/main/omp-availability.test.ts

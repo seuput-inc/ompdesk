@@ -276,6 +276,7 @@
 				"src/main/remote/kept-calls.ts",
 				"native/ompdesk/crates/core/src/remote/kept_calls.rs",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
+				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
 				"src/main/ipc.ts:654-671"
 			],
 			"syncCommit": "68d7bf91dedeac0f35b6da04c728c8a1f802384d"

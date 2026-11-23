@@ -52,6 +52,8 @@ globs:
 
 ### Ledger
 
+- **CLI launchers.** Startup awaits `control.installCli` before using the app's bin folder. The core writes POSIX, Windows sh and `.cmd` launchers atomically with the prior bounded rename retries. In Bun's bin it leaves a foreign file, including a dangling symlink, alone; previously the broken link looked absent. An install error still leaves the app usable. `control::cli_install` checks the prior launchers' exact bytes; `control-socket/cli-install.test.ts` runs the sh/WSL and argument-quoting cases through the real core.
+
 - **Agent Studio definitions.** `fs.agentFile` checks the discovered directories, publishes new definitions without clobbering, replaces existing definitions atomically and creates a renamed file before removing its source. Stock still validates the Markdown; the page and host use one template serializer. Main reads an authorized regular file on one handle, so opening an existing definition has no new size limit or second whole-file copy on the core wire. Reads follow a final file symlink; deletes remove its entry. Special files are not read. `local/agent-files.test.ts` exercises the core for creation, collision, rename and deletion.
 
 - **Installed omp reports.** `omp.pluginDoctor` and `omp.checkUpdate` run fixed, read-only commands through the same CLI supervisor as `omp.worktrees`. Setup still runs its own supervised check and calls the same native `omp.parseUpdateCheck` parser. The doctor drops unknown statuses (including inherited object keys) and replaces unpaired surrogates with U+FFFD. Process start and timeout failures are core faults; invalid reports retain their prior command-specific refusals. Local misc, setup, runtime and worktree suites exercise these calls.

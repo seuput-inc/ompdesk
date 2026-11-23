@@ -927,7 +927,7 @@ app.whenReady().then(async () => {
 		return { deviceId: "", publicKey: "" };
 	});
 	// The CLI the app ships (bun run build:native stages it for an unpacked run).
-	installCliLaunchers({
+	await installCliLaunchers({
 		binary: nativeBinPath("ompdesk"),
 		userData: app.getPath("userData"),
 		platform,

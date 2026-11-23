@@ -62,7 +62,7 @@ src/main/cli-tools/updater.test.ts	exception	Exercises provider filtering, super
 src/main/cli-tools/updater.ts	port	Schedules detection and version checks, defers busy tools, runs updates and manages temporary package directories for probes.
 src/main/control-socket/backend.ts	port	Hides private tabs and maps waiting, starting, stopped, busy and idle states for socket callers.
 src/main/control-socket/cli-install.test.ts	exception	Checks launcher contents, PATH updates and when a packaged install may replace a launcher.
-src/main/control-socket/cli-install.ts	port	Generates shell and Windows launchers, protects foreign launchers in the Bun bin folder and adds the app bin directory to the supplied PATH.
+src/main/control-socket/cli-install.ts	native-client	control.installCli writes the launchers; the startup adapter supplies the local platform and bin directories, appends the latter to the host PATH, and logs a failed install without stopping app startup.
 src/main/control-socket/cli.test.ts	exception	Drives the CLI with arguments and stdin and checks caller identity, text output and JSON output.
 src/main/control-socket/control-test-rig.ts	exception	Supplies a fake control backend, temporary endpoints and a line-oriented client for socket tests.
 src/main/control-socket/endpoint.ts	port	Hub batch, §1.3(a,c): control-socket/index.ts computes the random pipe or short Unix socket before its first await. sidecar-factory.ts can already read the published endpoint for a spawn while prepareDir runs. Move naming with controlEnvFor's synchronous consumers.
