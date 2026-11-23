@@ -95,7 +95,7 @@
 			"mutations": "mutations.json",
 			"covers": [
 				"src/main/remote/host-services.ts",
-				"native/ompdesk/crates/core/src/pool/windows.rs#acquire_inner",
+				"native/ompdesk/crates/core/src/pool/windows.rs#finish_acquire",
 				"native/ompdesk/crates/core/src/pool/windows.rs#release_entry",
 				"native/ompdesk/crates/core/src/pool/windows.rs#release_detached",
 				"native/ompdesk/crates/core/src/pool/api.rs#release_tab",

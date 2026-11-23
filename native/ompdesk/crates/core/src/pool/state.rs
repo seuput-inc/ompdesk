@@ -45,6 +45,8 @@ pub(super) struct Entry {
     /// Latest `setStatus` per key, `setWidget` per key and `setTitle` (keys `status:`, `widget:`, `title`).
     pub ui_state: Option<OMap<String, Value>>,
     pub hosted_view: bool,
+    /// The seed restored this handle while main was still waiting for its acquire to finish.
+    pub recovering_acquire: bool,
     /// Paired devices that view this tab through their own tab on this host (handle ids, in order).
     pub device_views: Vec<u64>,
     pub kind: String,
@@ -106,6 +108,7 @@ impl Entry {
             viewers: Vec::new(),
             ui_state: None,
             hosted_view: false,
+            recovering_acquire: false,
             device_views: Vec::new(),
             kind,
             placeholder: false,

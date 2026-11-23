@@ -4233,6 +4233,22 @@ describe("SidecarPool device views (a paired device viewing a tab of a window he
 		return { pool, sidecar, desktop, view };
 	}
 
+	it("keeps one hosted view when the receiving window loses its acquireHostedView reply", () => {
+		const { sidecar, view } = viewed();
+		Object.assign(sidecar, { kind: "agent" });
+		const { pool } = fakePool();
+		const { win } = fakeWindow(2);
+		const loseReply = vi.fn().mockImplementationOnce(() => core().abandon("drop the acquireHostedView reply"));
+		pool.onWindowTabsChanged = loseReply;
+
+		expect(pool.acquireHostedView(win, "tab-h", view, "/s/a.jsonl")).toBe(true);
+		expect(loseReply).toHaveBeenCalled();
+		expect(pool.tabsForWindow(win).map(tab => tab.tabId)).toEqual(["tab-h"]);
+		expect(pool.isHostedView("tab-h")).toBe(true);
+		expect(pool.sessionOwner("/s/a.jsonl")).toEqual({ tabId: "tab-h", winId: 2 });
+		expect(pool.releaseTab("tab-h")).toBe(true);
+	});
+
 	it("tells a device that joins mid-turn how the window's turn stands, and since when", () => {
 		const { sidecar, view } = viewed();
 		expect(view.runReading()).toEqual({ running: false, turn: false });
@@ -4390,6 +4406,29 @@ describe("SidecarPool and a lost core", () => {
 		expect(pool.releaseTab("tab-a")).toBe(true);
 		expect(sidecars[0]?.disposed).toBe(true);
 		expect(pool.size).toBe(0);
+	});
+
+	it("resumes the saved session once when the core is lost in onAcquire", () => {
+		const { pool, sidecars } = fakePool();
+		const owner = fakeWindow(1);
+		const sessionPath = "/s/a.jsonl";
+		const onAcquire = vi.fn().mockImplementationOnce(() => core().abandon("drop acquire before session registration"));
+		pool.onAcquire = onAcquire;
+
+		const acquired = pool.acquire("/a", owner.win, "tab-a", sessionPath);
+		expect(onAcquire).toHaveBeenCalledExactlyOnceWith("tab-a", acquired);
+		expect(pool.sessionOwner(sessionPath)).toEqual({ tabId: "tab-a", winId: 1 });
+		expect(sidecars).toHaveLength(1);
+		const [sidecar] = sidecars;
+		expect(sidecar?.started).toBe(false);
+		expect(sidecar?.restartArgs).toEqual([{ cwd: undefined, sessionPath }]);
+		sidecar?.emitAgentEvents(["agent_start"]);
+		expect(owner.sentTo(IPC_EVENTS.EVENTS_BATCH).map(entry => entry.data)).toEqual([
+			{ tabId: "tab-a", payload: [{ type: "agent_start" }] },
+		]);
+		expect(pool.releaseTab("tab-a")).toBe(true);
+		expect(sidecar?.disposed).toBe(true);
+		expect(pool.sessionOwner(sessionPath)).toBeNull();
 	});
 
 	it("seeds the next core with the tabs main holds, and its windows keep their tabs", () => {

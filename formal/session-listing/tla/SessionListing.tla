@@ -211,7 +211,7 @@ Announce(f2, r2) ==
 \* ===== the host's tabs change: each handler ends by calling listingChanged() in the same synchronous block =====
 
 \* @code src/main/remote/host-services.ts:2329-2358 #createTab records the session file and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:131-195 Ctx::acquire_inner registers the window tab's session file and calls notify_window_tabs_changed.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:280-314 Ctx::finish_acquire registers the window tab's session file and notifies its window.
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of records the file and owner, then calls on_session_files_changed if the file changed.
 Open(t, s) ==
     /\ ~Busy
@@ -221,8 +221,8 @@ Open(t, s) ==
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
 \* @code src/main/remote/host-services.ts:3119-3150 #closeTab removes the tab and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:331-347 Ctx::release_entry removes the tab and awaits release_detached.
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:349-436 Ctx::release_detached calls unregister_session_file_of.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:399-415 Ctx::release_entry removes the tab and awaits release_detached.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:417-504 Ctx::release_detached calls unregister_session_file_of.
 \* @code native/ompdesk/crates/core/src/pool/api.rs:1285-1292 Ctx::release_tab notifies the window after release_entry returns.
 Close(t) ==
     /\ ~Busy
