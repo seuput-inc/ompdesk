@@ -322,6 +322,8 @@ impl Service {
     }
     pub fn submit(&self, call: host::Call) {
         let id = call.id();
+        #[cfg(feature = "test-automation")]
+        trace_recovery_call(&call, "queued");
         if call.method == "wc.op"
             && let (Some(wc), Some(op @ ("loadURL" | "stop"))) =
                 (call.params["wcId"].as_u64(), call.params["op"].as_str())
@@ -550,6 +552,8 @@ async fn serve(
             continue;
         }
         let browser = browser.as_ref().expect("launched Preview");
+        #[cfg(feature = "test-automation")]
+        trace_recovery_call(&call, "execute");
         match execute(
             browser,
             &pages,
@@ -734,6 +738,8 @@ impl Evaluation {
 }
 
 async fn answer_call(pages: &Pages, call: host::Call, result: Result<Answer, WireError>) {
+    #[cfg(feature = "test-automation")]
+    trace_recovery_call(&call, if result.is_ok() { "ok" } else { "error" });
     host::forget_cancel(call.id());
     match result {
         Ok(Answer::Json(value)) => call.ok(value),
@@ -1412,6 +1418,25 @@ async fn create(
     }
     .await
 }
+#[cfg(feature = "test-automation")]
+fn trace_recovery_call(call: &host::Call, phase: &str) {
+    if std::env::var_os("OMP_GUI_TEST_PREVIEW_RECOVERY_PROBE").is_none() {
+        return;
+    }
+    let op = match (call.method.as_str(), call.params["op"].as_str()) {
+        ("wc.op", Some("reload")) => "reload",
+        ("wc.cdp.send", _) if call.params["method"] == "Page.crash" => "crash",
+        ("wc.cdp.detach", _) => "detach",
+        ("view.op", Some("setVisible")) => "visible",
+        ("view.op", Some("setBounds")) => "bounds",
+        _ => return,
+    };
+    crate::log::log(
+        "preview.recovery.call",
+        json!({"phase":phase,"op":op,"callId":call.id(),"wcId":call.params["wcId"].as_u64(),"viewId":call.params["viewId"].as_u64()}),
+    );
+}
+
 fn log_navigation(event: &str, wc: u64, cause: &str, code: Option<i32>) {
     let state = runtime()
         .registry
@@ -2341,6 +2366,10 @@ fn update_page(entry: &Entry, wc: u64, update: events::Update) {
             if same_document {
                 wc_event(wc, "did-navigate-in-page", json!([url, true]));
             } else {
+                #[cfg(feature = "test-automation")]
+                if std::env::var_os("OMP_GUI_TEST_PREVIEW_RECOVERY_PROBE").is_some() {
+                    crate::log::log("preview.recovery.commit", json!({"wcId":wc}));
+                }
                 host::event("wc.state", json!({"wcId":wc,"crashed":false}));
                 wc_event(wc, "did-navigate", json!([url]));
                 if restored {
