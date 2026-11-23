@@ -143,33 +143,10 @@ pub fn start(
     on_exit: impl FnOnce(Exit) + Send + 'static,
 ) -> Result<Started, String> {
     let mut cmd = omp_command(&start.bin, &start.args, start.shell, &start.cwd, &start.env);
-    #[cfg(windows)]
-    let (mut child, priority_error) = {
-        // A .cmd can start Bun immediately. Set the class before either process runs.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
-        match cmd
-            .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
-            .spawn()
-        {
-            Ok(child) => (child, None),
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => (
-                cmd.creation_flags(CREATE_NO_WINDOW)
-                    .spawn()
-                    .map_err(|e| refused(start, &e))?,
-                Some(error),
-            ),
-            Err(error) => return Err(refused(start, &error)),
-        }
-    };
     #[cfg(unix)]
-    let (mut child, priority_error) = {
-        // A tab has its own group so stopping it also stops the tools it started.
-        crate::sys::own_group(cmd.as_std_mut());
-        let child = cmd.spawn().map_err(|e| refused(start, &e))?;
-        let error = crate::sys::lower_agent_priority(&child).err();
-        (child, error)
-    };
+    crate::sys::own_group(cmd.as_std_mut());
+    let (mut child, priority_error) =
+        crate::sys::spawn_low_priority(&mut cmd).map_err(|e| refused(start, &e))?;
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {

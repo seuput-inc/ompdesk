@@ -8,8 +8,6 @@ src/main/agent-desktop.ts	port	2	agentDesktopToRun compares bundled and managed 
 src/main/agent-paths.ts	port	1	agentDir resolves PI_CODING_AGENT_DIR or the user's .omp/agent path.
 src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
 src/main/agent-power-migration.ts	port	2	migrateAgentPowers applies a versioned one-time preferences and stock config.yml migration.
-src/main/agent-priority.test.ts	tooling	-	Checks best-effort scheduling of the Node-spawned hub.
-src/main/agent-priority.ts	port	1	The Bun MCP hub still starts in Node. For every tab, Rust sets priority on the child before publishing its PID; main only reports a failure.
 src/main/agent-worktrees.test.ts	tooling	-	Exercises list and orphan-only clear through the core against an isolated stock CLI.
 src/main/agent-worktrees.ts	native-client	1	Forwards the resolved executable, environment and cwd once to omp.worktrees. Rust starts stock and interprets its reply; stock decides which worktrees are orphaned.
 src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.
@@ -297,8 +295,9 @@ src/main/mail-accounts.test.ts	tooling	-	Vitest suite: MailAccounts.
 src/main/mail-accounts.ts	mixed	2	MailAccounts.read delegates the connection and IMAP poll to routines.readMailbox. Account state, encrypted password files and synchronous keystore reads remain in main.
 src/main/main-failures.test.ts	tooling	-	Vitest suite: handles calls into the core after the quit shut it down, each naming its caller, without ending main.
 src/main/main-failures.ts	port	4	installMainFailureLogging registers process exception and rejection handlers and filters expected post-core-shutdown failures.
+src/main/mcp-hub-lifetime.test.ts	tooling	-	Checks actual child priority, crash recovery with the old tab binding, endpoint contention and shutdown.
 src/main/mcp-hub-memory.test.ts	tooling	-	Vitest suite: MCP hub: memory.
-src/main/mcp-hub.ts	port	2	McpHub launches and supervises the native MCP hub, provides endpoint/auth environment to omp, and handles restart/kill.
+src/main/mcp-hub.ts	mixed	2	mcpHub.env/stop start and supervise the child in Rust. The app retains only the authenticated binding already injected into running omps, so a replacement core can serve those tabs. Receiver: shell launch owner; never persist or log that binding.
 src/main/mcp-live.ts	port	3	§1.3: extension mutations synchronously notify the listener installed by index.ts; no separate I/O. Receiver: shell, with that notification.
 src/main/media-stream.test.ts	tooling	-	Vitest suite: parseRange.
 src/main/media-stream.ts	port	2	FS_MEDIA_RELEASE and the sender's destroyed callback revoke tokens synchronously. Both the desktop scheme and the web host's openMedia callback use MediaStreams.handle before stat or streaming. Move registration, revocation and the backpressured body with the shell protocol owner (§1.3a,c).
@@ -375,8 +374,6 @@ src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credent
 src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recovery.
 src/main/renderer-recovery.ts	port	1	shouldReloadRenderer, applicationResourcesChanged and shouldRestartForChangedResources decide recovery from process failure or changed app resources; hangRestartNotifies rate-limits notices.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
-src/main/restart-policy.test.ts	tooling	-	Vitest suite: restartDelay.
-src/main/restart-policy.ts	port	1	RestartBudget and restartDelay implement the bounded restart/backoff ladder used by bundled services; the tab sidecar has its own native ladder, not this implementation.
 src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
 src/main/retired-prefs.ts	port	2	migrateRetiredPrefs applies retired-key and panel-view migrations and updates associated settings/schedule storage.
 src/main/rpc-client.ts	mixed	3	RpcClient.command assigns GUI IDs, tries local handlers and times them out; stock() uses the tab lane's core sidecar.command and refuses sends after retire().

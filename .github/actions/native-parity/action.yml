@@ -91,6 +91,7 @@ runs:
         src/main/ai-memory/distill-model.test.ts
         src/main/stock-helper-memory.test.ts
         src/main/mcp-hub-memory.test.ts
+        src/main/mcp-hub-lifetime.test.ts
         src/main/ai-memory/sync.test.ts
         src/main/ai-memory/recall-terms.test.ts
         src/main/bridge-memory-recall-core.test.ts

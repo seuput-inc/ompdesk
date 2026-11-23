@@ -6,15 +6,36 @@
 //! dial that fails at once when refused.
 #![allow(unsafe_code)]
 
-/// Lower only the child we just spawned, before handing it to its wait task.
-#[cfg(unix)]
-pub(crate) fn lower_agent_priority(child: &tokio::process::Child) -> std::io::Result<()> {
-    let Some(pid) = child.id() else { return Ok(()) };
-    // SAFETY: the child has not been reaped, so its PID cannot name another process.
-    if unsafe { libc::setpriority(libc::PRIO_PROCESS, pid, 10) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+/// Set the child's priority before publishing its PID. A denied adjustment does not prevent a launch.
+pub(crate) fn spawn_low_priority(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<(tokio::process::Child, Option<std::io::Error>)> {
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
+        // A .cmd shim may start Bun immediately; set the class on creation.
+        match command
+            .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
+            .spawn()
+        {
+            Ok(child) => Ok((child, None)),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok((
+                command.creation_flags(CREATE_NO_WINDOW).spawn()?,
+                Some(error),
+            )),
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(unix)]
+    {
+        let child = command.spawn()?;
+        let error = child.id().and_then(|pid| {
+            // SAFETY: the child has not been reaped, so its PID cannot name another process.
+            (unsafe { libc::setpriority(libc::PRIO_PROCESS, pid, 10) } != 0)
+                .then(std::io::Error::last_os_error)
+        });
+        Ok((child, error))
     }
 }
 
@@ -2711,3 +2732,55 @@ mod zone {
 
 #[cfg(windows)]
 pub use zone::{local_day, local_instant};
+#[cfg(test)]
+mod priority_tests {
+    use std::process::Stdio;
+    use tokio::process::{Child, Command};
+
+    #[cfg(unix)]
+    fn priority(child: Option<&Child>) -> i32 {
+        let pid = child.map_or(0, |c| c.id().unwrap());
+        // SAFETY: zero selects this process; the other PID is our unreaped child.
+        unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) }
+    }
+
+    #[cfg(windows)]
+    fn priority(child: Option<&Child>) -> i32 {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetPriorityClass(process: super::job::Handle) -> u32;
+        }
+        // SAFETY: both the current-process pseudohandle and the borrowed child handle remain valid.
+        let class = unsafe {
+            let handle = child.map_or_else(
+                || super::job::GetCurrentProcess(),
+                |c| c.raw_handle().unwrap(),
+            );
+            GetPriorityClass(handle)
+        };
+        assert_ne!(class, 0);
+        class as i32
+    }
+
+    #[tokio::test]
+    async fn lowers_only_the_child_before_returning_it() {
+        #[cfg(unix)]
+        let (mut command, expected) = (Command::new("cat"), 10);
+        #[cfg(windows)]
+        let (mut command, expected) = (Command::new("cmd.exe"), 0x4000);
+        #[cfg(windows)]
+        command.args(["/d", "/q"]);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let parent = priority(None);
+        let (mut child, warning) = super::spawn_low_priority(&mut command).unwrap();
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(priority(Some(&child)), expected);
+        assert_eq!(priority(None), parent);
+        drop(child.stdin.take());
+        child.wait().await.unwrap();
+    }
+}

@@ -253,6 +253,7 @@ pub fn registry() -> Registry {
     crate::gh::register(&mut registry);
     crate::keepawake::register(&mut registry);
     crate::logs::register(&mut registry);
+    crate::mcp_hub::register(&mut registry);
     crate::memory::register(&mut registry);
     crate::memsync::register(&mut registry);
     crate::models::register(&mut registry);
@@ -382,6 +383,7 @@ where
         frames: frames.downgrade(),
     };
     crate::logs::close_all(&ending);
+    let mcp_hub_closed = crate::mcp_hub::close_all(&ending);
     crate::control::close_all(&ending).await;
     crate::ssh::close_all(&ending);
     crate::schedules::close_all(&ending);
@@ -399,6 +401,7 @@ where
         crate::sidecar::close_all(&ending).await;
         crate::ports::close_all(&ending);
     }
+    mcp_hub_closed.await;
     crate::web::store::flush_all().await;
     drop(frames);
     let written = writer.await.map_err(io::Error::other)?;

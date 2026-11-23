@@ -666,7 +666,7 @@ export type RuntimeErrorSource =
 	| "omp-slow-start"
 	/** An input a tab's omp start went on without after `START_INPUT_MS` (src/main/sidecar.ts `#onResolve`): `message` names it (omp, proxyEnv, shellEnv, defaultBrowser, egoBrowserDir), `details` the lane and session. */
 	| "omp-start-input"
-	/** An omp whose CPU priority could not be lowered below the app's (src/main/agent-priority.ts), logged once: `message` is why. */
+	/** The core could not lower the omp child's CPU priority. Logged once; `message` says why. */
 	| "process-priority"
 	/**
 	 * Omps an earlier launch left running, stopped before this launch's tabs start (src/main/omp-processes.ts):

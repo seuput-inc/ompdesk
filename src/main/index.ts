@@ -98,7 +98,6 @@ import { accountRotationDeps } from "./account-rotation";
 import { agentDesktopToRun } from "./agent-desktop";
 import { agentDir } from "./agent-paths";
 import { migrateAgentPowers } from "./agent-power-migration";
-import { lowerAgentPriority } from "./agent-priority";
 import { MemoryCare } from "./ai-memory/care";
 import { AiMemoryClient } from "./ai-memory/client";
 import { configureModelRuns, ompLaunch } from "./ai-memory/core-asks";
@@ -1026,10 +1025,9 @@ app.whenReady().then(async () => {
 	const recallTermsFile = join(app.getPath("userData"), "ai-memory", RECALL_TERMS_FILE);
 	mcpHub = new McpHub({
 		memoryStateFile: memoryRecallFile,
-		lowerPriority: lowerAgentPriority,
-		log: (message, details) => console.log(`[mcp-hub] ${message}`, details ?? ""),
+		log: ({ message, details }) => console.log(`[mcp-hub] ${message}`, details),
 	});
-	mcpHub.start();
+	void mcpHub.ompEnv();
 	const hub = mcpHub;
 	// The omps an earlier instance left running (a crash, a forced quit) stop before any tab's omp starts: the core holds
 	// every lane's start (`sidecar.holdStarts`) until the reap has settled, and then starts them a few at a time.
@@ -2867,6 +2865,7 @@ installQuitGuard(
 	() => {
 		// Each step is named to the hang watchdog first: a stalled quit then names the step that never returned.
 		let statsStopped = Promise.resolve();
+		let mcpHubStopped = Promise.resolve();
 		const steps: Array<[string, () => void]> = [
 			[
 				"connectivity",
@@ -2878,7 +2877,12 @@ installQuitGuard(
 				},
 			],
 			["stats-server", () => { statsStopped = statsServer?.kill() ?? Promise.resolve(); }],
-			["mcp-hub", () => void mcpHub?.kill()],
+			[
+				"mcp-hub",
+				() => {
+					mcpHubStopped = mcpHub?.kill() ?? Promise.resolve();
+				},
+			],
 			["omp-updater", () => ompUpdater?.dispose()],
 			["local-engines", () => localEngines?.dispose()],
 			["cli-updater", () => cliUpdater?.dispose()],
@@ -2927,6 +2931,9 @@ installQuitGuard(
 			[
 				"core",
 				() => {
+					coreStopped = Promise.allSettled([schedulesClosed, ompsStopped, logsClosed, statsStopped, mcpHubStopped]).then(
+						() => shutdownCore(),
+					);
 					void coreStopped.catch((error: unknown) => console.warn(`[quit] core stop failed: ${String(error)}`));
 				},
 			],
