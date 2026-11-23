@@ -205,7 +205,7 @@ src/main/bridge-visuals.test.ts	tooling	-	Vitest suite: gui-bridge diagram instr
 src/main/bridge-waste-guards-stock.test.ts	tooling	-	Vitest suite: refuses a ready.log that cannot match at once, without running the command.
 src/main/bridge-waste-guards.test.ts	tooling	-	Vitest suite: ready.log that can never match.
 src/main/bridge-xdev-notice.test.ts	tooling	-	Vitest suite: xdev mount notice dedupe.
-src/main/canonical-cwd.ts	port	1	canonicalCwd resolves real paths for tab/sidecar identity while preserving Windows spelling.
+src/main/canonical-cwd.ts	mixed	1	directoryExists calls fs.stat for session opens and moves. The pool still needs canonicalCwd synchronously when constructing a local sidecar; Windows keeps the original spelling.
 src/main/checkout-claims-journal.test.ts	tooling	-	Vitest suite: the claims journal.
 src/main/checkout-claims.test.ts	tooling	-	Vitest suite: shared-checkout claims under generated sequences.
 src/main/checkout-expand.test.ts	tooling	-	Vitest suite: the files a formatter on a folder claims.
@@ -396,7 +396,7 @@ src/main/session-free.ts	port	2	whenSessionFree owns the bounded polling loop an
 src/main/session-index-activity.test.ts	tooling	-	Vitest suite: lists when the conversation last moved, not when a relaunch last wrote the file.
 src/main/session-index-first-prompt.test.ts	tooling	-	Vitest suite: lists the first prompt that stock persists after a long xd:// mount notice.
 src/main/session-index.test.ts	tooling	-	Vitest suite: keeps GUI kind overlays and handles headers with no title slot.
-src/main/session-index.ts	mixed	3	Rust owns the tree watch, listed rows and bounded content search with excerpts. Main still calls stock, filters tombstones and folders, and shares numbered updates with the page.
+src/main/session-index.ts	mixed	3	Rust watches the tree, filters listed rows, searches journals and stats move destinations. Main asks stock for the move, then invalidates the shared list before consumers can read it again.
 src/main/session-kinds.ts	port	2	Hub batch, §1.3(a,c): sidecar-factory.ts marks chat IDs on its session event; session-index.ts reads isChat synchronously while classifying each row and resolving kind. Move the store with the index readers; a pending core write must not make a new chat briefly appear as an ordinary session.
 src/main/session-launch-parity.test.ts	tooling	-	Vitest suite: a session's omp launches the same way on every start path.
 src/main/session-list-share.test.ts	tooling	-	Vitest suite: SessionListShare.
@@ -472,7 +472,7 @@ src/main/tab-layout.ts	native-client	3	sanitizePersistedTabLayout(s) calls layou
 src/main/tab-release.test.ts	tooling	-	Vitest suite: closeWindowTab.
 src/main/tab-release.ts	port	3	closeWindowTab coordinates viewer detach or real tab release with worktree exit policy.
 src/main/tab-spawn.test.ts	tooling	-	Vitest suite: spawnTabForWindow refusal contracts.
-src/main/tab-spawn.ts	port	3	spawnTabForWindow validates stored-session ownership and kind, determines folder state and attaches a tab for the requesting window.
+src/main/tab-spawn.ts	mixed	3	fs.stat checks the recorded folder before and after a disk-care restore. The same-tick sessionOwner/attachViewer pair and hosted view handles stay with the local and paired pool callers.
 src/main/test-bridge-probe.ts	tooling	-	runBridgeProbe and runStock prepare isolated bridge fixtures against installed stock omp.
 src/main/test-codex-picker.ts	tooling	-	Builds synthetic account fixtures for picker tests.
 src/main/test-fake-judge.ts	tooling	-	fakeJudge records judge requests and returns test-controlled answers.

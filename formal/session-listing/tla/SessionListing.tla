@@ -282,7 +282,7 @@ Tick ==
 \* ===== the index's rows change: the index reads again and tells main, which calls sessionsChanged() =====
 
 \* @code src/main/session-index.ts:174-184 #onChanged marks the shared list changed for named paths or calls #notifyChange for a rescan.
-\* @code src/main/session-index.ts:393-396 #notifyChange also marks the shared list changed.
+\* @code src/main/session-index.ts:392-395 #notifyChange also marks the shared list changed.
 \* @code src/main/session-index.ts:87 The share publishes to onListChange.
 \* @code src/main/ipc.ts:695-699 onListChange calls remoteDevices.hostSessionsChanged().
 \* @code src/main/remote/devices.ts:846-848 hostSessionsChanged calls the host's sessionsChanged().
@@ -316,7 +316,8 @@ IdxDelete(s, by) ==
     /\ UNCHANGED <<file, pendReg, rec, snap, hs, lkv, hsl, ip, fd, nChanges, nTicks, nDrops, nForeign, seen>>
 
 \* A session moves to another folder: its old path is gone, a new path is listed.
-\* @code src/main/session-index.ts:350-363 moveSession awaits the move and calls #notifyChange.
+\* @code native/ompdesk/crates/core/src/fs/read.rs:359-368 stat follows links to check the move destination before stock moves the session.
+\* @code src/main/session-index.ts:350-362 moveSession awaits the move and calls #notifyChange.
 \* @code src/main/remote/host-services.ts:1397-1405 sessions.move moves the host's session.
 \* @code src/main/ipc.ts:1650-1658 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
 IdxMove(s, t, by) ==
