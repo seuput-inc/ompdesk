@@ -39,7 +39,7 @@ src/main/ai-memory/ipc.test.ts	exception	Exercises memory IPC handlers, includin
 src/main/ai-memory/ipc.ts	port	Restricts browser opening to loopback HTTP and clears the copied password after a minute only if the clipboard still holds it.
 src/main/ai-memory/memory-capture-stock.test.ts	exception	Tests stock omp capture with terminal wiring and with the root supplied by OMPdesk.
 src/main/ai-memory/memory-judge.test.ts	exception	Checks pair batching, model cost reporting and abstention on an unparseable or failed answer.
-src/main/ai-memory/memory-judge.ts	port	Skips disabled Jev and empty pair batches locally before issuing care.judgeJev or care.judgeSmol.
+src/main/ai-memory/memory-judge.ts	native-client	Production care/units.rs chooses the native judge chain. Only tests call these typed clients; the core skips empty batches and disabled Jev before requesting a launch.
 src/main/ai-memory/memory-store-test-rig.ts	exception	Implements fake page and conclusion HTTP routes over an injected memory store for sync tests.
 src/main/ai-memory/no-self-update.test.ts	exception	Checks that the bundled memory CLI has no upgrade command or upstream release fetch.
 src/main/ai-memory/recall-terms.test.ts	exception	Tests incremental term counts, cursor resets and preservation of the prior index after a failed read.

@@ -79,12 +79,11 @@ export interface JevJudgeDeps {
 /** Jev through stock's judge chain; null when there is no native judge or the run failed. */
 export function jevJudge(deps: JevJudgeDeps): PairJudge {
 	return async pairs => {
-		if (!deps.enabled() || pairs.length === 0) return null;
 		const side = askOnly({ omp: () => ompLaunchOf(deps.omp.bin) });
 		return await oneShot<PairJudgment | null>(
 			"care.judgeJev",
 			side,
-			{ pairs, enabled: true, hostFile: deps.hostFile, cwd: deps.cwd },
+			{ pairs, enabled: deps.enabled(), hostFile: deps.hostFile, cwd: deps.cwd },
 			{ timeoutMs: JEV_TIMEOUT_MS },
 		);
 	};
@@ -98,7 +97,6 @@ export interface SmolJudgeDeps {
 /** One batched call on the cheap model; null when the call failed or answered nothing readable. */
 export function smolJudge(deps: SmolJudgeDeps): PairJudge {
 	return async (pairs, rules) => {
-		if (pairs.length === 0) return null;
 		const side = askOnly({ model: modelAsk(deps.model) });
 		return await oneShot<PairJudgment | null>(
 			"care.judgeSmol",
