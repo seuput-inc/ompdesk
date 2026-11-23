@@ -7,6 +7,7 @@ Windows 10에서 WinHTTP가 옵션 195를 지원하지 않아도 업데이트를
 이미 0.141.1에서 오류 12009가 나서 업데이트를 받을 수 없다면, 이번 한 번은 [Windows 설치 파일](https://github.com/seuput-inc/ompdesk/releases/download/v0.141.2/ompdesk-windows-setup.exe)로 업데이트하세요.
 
 omp 19.1.1에서 추가된 데스크톱 입력 전환과 할 일 목록 연동 설정도 한국어로 표시합니다.
+omp 19.1.1에서 하위 에이전트의 답을 기다리던 작업이 앱 종료로 끊겨도, 다시 열면 원래 작업을 이어갑니다.
 
 <!-- en -->
 
@@ -15,6 +16,7 @@ OMPdesk can check for updates on Windows 10 even when WinHTTP does not support o
 If error 12009 prevents version 0.141.1 from updating itself, use the [Windows installer](https://github.com/seuput-inc/ompdesk/releases/download/v0.141.2/ompdesk-windows-setup.exe) for this update.
 
 The new desktop input and todo list settings in omp 19.1.1 now have Korean labels and descriptions.
+On omp 19.1.1, a turn interrupted while waiting for a subagent resumes when OMPdesk reopens.
 
 ## [0.141.1] - 2026-11-23
 

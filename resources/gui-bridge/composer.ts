@@ -526,7 +526,15 @@ export const methods: BridgeMethods = {
 							{ assumeExit: true },
 						)
 					: undefined;
-			if (abort) session.sessionManager.appendMessage(abort);
+			if (abort) {
+				// Stock distinguishes a live abort from a stale eval snapshot by its recorded completion time.
+				const live = cut?.abort?.message;
+				if (typeof live?.completedAt === "number" && typeof live.timestamp === "number") {
+					abort.timestamp = live.timestamp;
+					abort.completedAt = live.completedAt;
+				}
+				session.sessionManager.appendMessage(abort);
+			}
 			// Before stock reads the subagents' transcripts: the stop left some of them cut mid-turn.
 			const prepared = await closeShutdownSubagents(session, branch, startedAt, (id, error) =>
 				env.emit({

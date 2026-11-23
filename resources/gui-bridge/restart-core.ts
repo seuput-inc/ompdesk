@@ -26,6 +26,8 @@ export interface JournalEntry {
 		toolCallId?: string;
 		details?: unknown;
 		stopReason?: string;
+		timestamp?: number;
+		completedAt?: number;
 		isError?: boolean;
 		errorMessage?: string;
 	};
