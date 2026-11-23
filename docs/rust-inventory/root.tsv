@@ -423,7 +423,7 @@ src/main/sidebar-layout.ts	port	1	SidebarLayoutScope restricts project and sessi
 src/main/sidebar-prefs.test.ts	tooling	-	Vitest suite: updateSidebarPrefs.
 src/main/sidebar-prefs.ts	port	2	updateSidebarPrefs applies individual validated sidebar changes to current storage; moveSidebarPin updates pinned identities.
 src/main/sidebar-projects.test.ts	tooling	-	Vitest suite: SidebarProjects.
-src/main/sidebar-projects.ts	mixed	2	SidebarProjects owns project membership, suppression, persistence and session reconciliation; readProjectOrigin supplies Git facts via git.originFacts in core/src/git/mod.rs.
+src/main/sidebar-projects.ts	mixed	2	fs.sidebarFolder resolves linked checkout files and missing folders; git.originFacts supplies Git facts. index.ts reads SidebarProjects.state() synchronously for local and paired snapshots; ipc.ts applies layoutChanged() in the preference update, using page-shared project rules.
 src/main/sidecar-core-loss.test.ts	tooling	-	Vitest suite: tabs whose core ended under them.
 src/main/sidecar-exit-hold.test.ts	tooling	-	Vitest suite: is not killed at the stop's bound while it says it waits to save, and ends by itself once it saved.
 src/main/sidecar-factory.test.ts	tooling	-	Vitest suite: localSidecarFactory.

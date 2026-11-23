@@ -19,6 +19,7 @@ pub(crate) mod order;
 pub(crate) mod path;
 mod read;
 pub(crate) mod save_copy;
+mod sidebar;
 
 use serde_json::Value;
 
@@ -78,6 +79,9 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("fs.saveCopy", |call| {
         Box::pin(blocking(move || save_copy::save(call.params()?)))
+    });
+    registry.add("fs.sidebarFolder", |call| {
+        Box::pin(blocking(move || sidebar::folder(call.params()?)))
     });
 }
 
