@@ -661,6 +661,8 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	Reflect.deleteProperty(env, "WEBVIEW2_USER_DATA_FOLDER");
 	env.OMP_GUI_TEST_WEBVIEW2_DEBUG_PORT = String(debugPort);
 
+	const mark = (phase: string) => console.log("[auto-launch]", process.pid, phase, performance.now());
+	mark("spawn");
 	const child = spawn(executable, args, { env, cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"] });
 	let info: TestInfo | undefined;
 	try {
@@ -710,14 +712,19 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	let browser: Browser | undefined;
 	try {
 		const url = await until("Node's inspector did not report its URL", () => inspectorUrl(stderr));
+		mark("inspector-url");
 		inspector = await Inspector.connect(url, Math.max(1_000, deadline - Date.now()));
+		mark("inspector-connected");
 		await until(`WebView2 opened no DevTools port ${debugPort}`, () => devToolsAnswers(debugPort));
+		mark("devtools-ready");
 		for (let attempt = 0; ; attempt++) {
 			try {
+				mark("cdp-start");
 				browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {
 					timeout: Math.max(1_000, deadline - Date.now()),
 					noDefaults: options.colorScheme === null,
 				});
+				mark("cdp-connected");
 				break;
 			} catch (error) {
 				if (attempt >= 20 || Date.now() > deadline) throw error;
