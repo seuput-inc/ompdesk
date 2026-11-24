@@ -8,16 +8,18 @@ import { createRequire } from "node:module";
 import { DownloadedUpdateHelper } from "electron-updater/out/DownloadedUpdateHelper";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OmpNsisUpdater } from "./nsis-updater";
+import type { InstallerStartReceipt } from "./shell-host/shell-calls";
 
 const mocks = vi.hoisted(() => ({
-	order: [] as string[],
+	order: [] as Array<string | InstallerStartReceipt>,
 	start: vi.fn<(command: string, args: readonly string[]) => Promise<number>>(),
 	appSession: { partition: "app" },
 	requests: [] as Array<{ session?: unknown }>,
 }));
 
 vi.mock("electron", () => ({
-	autoUpdater: { emit: (event: string) => mocks.order.push(event) },
+	installerQuitPending: () => mocks.order.push("pending"),
+	installerQuitReceipt: (receipt: InstallerStartReceipt) => mocks.order.push(receipt),
 	session: { defaultSession: mocks.appSession },
 }));
 vi.mock("./installer-spawn", () => ({ spawnDetachedOffThread: mocks.start }));
@@ -85,7 +87,7 @@ afterEach(() => {
 });
 
 describe("OmpNsisUpdater.quitAndInstall", () => {
-	it("starts the installer without waiting for it, and quits only once it is running", async () => {
+	it("holds quit until the verified install's first worker reports its PID", async () => {
 		const started = Promise.withResolvers<number>();
 		mocks.start.mockReturnValue(started.promise);
 		const updater = await downloaded("C:\\updates\\ompdesk-windows-setup.exe");
@@ -96,9 +98,9 @@ describe("OmpNsisUpdater.quitAndInstall", () => {
 			"C:\\updates\\ompdesk-windows-setup.exe",
 			expect.arrayContaining(["--updated"]),
 		);
-		expect(mocks.order).toEqual([]);
+		expect(mocks.order).toEqual(["pending"]);
 		started.resolve(4242);
-		await vi.waitFor(() => expect(mocks.order).toEqual(["before-quit-for-update", "app.quit"]));
+		await vi.waitFor(() => expect(mocks.order).toEqual(["pending", { kind: "started", pid: 4242 }]));
 	});
 
 	it("still quits when the installer could not start, and the updater reports why", async () => {
@@ -109,7 +111,12 @@ describe("OmpNsisUpdater.quitAndInstall", () => {
 
 		updater.quitAndInstall();
 
-		await vi.waitFor(() => expect(mocks.order).toEqual(["before-quit-for-update", "app.quit"]));
+		await vi.waitFor(() =>
+			expect(mocks.order).toEqual([
+				"pending",
+				{ kind: "failed", message: "the installer would not start", code: "EPERM" },
+			]),
+		);
 		expect(failures).toMatchObject([{ code: "EPERM" }]);
 	});
 
@@ -131,6 +138,7 @@ describe("OmpNsisUpdater.quitAndInstall", () => {
 		updater.install(true, false);
 
 		expect(mocks.start).not.toHaveBeenCalled();
+		expect(mocks.order).toEqual([]);
 	});
 });
 

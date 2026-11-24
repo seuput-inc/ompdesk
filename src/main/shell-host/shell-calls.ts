@@ -8,6 +8,9 @@ import type { StageBundleReply, StageBundleRequest } from "../updater-state";
 
 export type UpdateFileArea = "downloads" | "updates";
 export type UpdateSweep = { area: "downloads"; asset?: string } | { area: "updates"; asset: string };
+export type InstallerStartReceipt =
+	| { kind: "started"; pid: number }
+	| { kind: "failed"; message: string; code?: string };
 
 export interface UpdateHost {
 	stageUpdateBundle(request: StageBundleRequest): Promise<StageBundleReply>;
@@ -23,6 +26,8 @@ export interface UpdateHost {
 
 interface AsyncForms {
 	updateHost: UpdateHost;
+	installerQuitPending(): void;
+	installerQuitReceipt(receipt: InstallerStartReceipt): void;
 	clipboard: { readTextAsync(): Promise<string> };
 	powerMonitor: { getSystemIdleTimeAsync(): Promise<number> };
 	systemPreferences: {
@@ -37,6 +42,14 @@ const shim = (): AsyncForms => electron as unknown as AsyncForms;
 
 export function updateHost(): UpdateHost {
 	return shim().updateHost;
+}
+
+export function installerQuitPending(): void {
+	shim().installerQuitPending();
+}
+
+export function installerQuitReceipt(receipt: InstallerStartReceipt): void {
+	shim().installerQuitReceipt(receipt);
 }
 
 /**

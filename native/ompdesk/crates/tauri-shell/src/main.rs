@@ -14,6 +14,7 @@ mod native_chrome;
 mod native_services;
 mod network;
 mod notify_triage;
+mod page_push;
 mod page_watch;
 mod preview_protocol;
 pub use native_chrome::menu;
@@ -24,6 +25,7 @@ mod preview_surface;
 mod process_failed;
 mod profile;
 mod profile_file;
+mod quit_chain;
 mod registry;
 mod runtime_inputs;
 mod sessions;
@@ -107,6 +109,7 @@ struct Runtime {
     renderer: PathBuf,
     user_agent: Mutex<Option<String>>,
     relaunch: Mutex<Option<Vec<String>>>,
+    quit: Mutex<quit_chain::Chain>,
     stop_instance: AtomicBool,
     instance_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -1121,6 +1124,16 @@ fn wc_op(call: host::Call) {
     }
 }
 fn dispatch(call: host::Call) {
+    if call.method == "app.quit" {
+        match quit_chain::parse(&call.params) {
+            Ok(admission) => {
+                call.ok(Value::Null);
+                quit_chain::admit(&runtime().quit, admission);
+            }
+            Err(error) => call.err("invalid", error),
+        }
+        return;
+    }
     // The socket reader dispatches in order. The receipt follows the file write, not its scheduling.
     if call.method == "app.startLaunchProtection" {
         if LAUNCH.get().is_some() {
@@ -1301,6 +1314,7 @@ fn dispatch_ui(call: host::Call) {
                 call.err("exiting", "application exit already requested");
                 return;
             }
+            runtime().quit.lock().expect("quit chain").terminate();
             call.ok(json!({}));
             // The writer remains alive during node::stop, so Node receives this receipt before teardown.
             exit_after_preview(code);
@@ -1337,53 +1351,8 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
             log::log("relaunch.stored", json!({"args":args}));
             *runtime().relaunch.lock().expect("relaunch") = Some(args);
         }
-        "wc.send" => {
-            let Some(wc) = data["wcId"].as_u64() else {
-                return;
-            };
-            let identity = runtime()
-                .registry
-                .lock()
-                .expect("registry")
-                .page(wc)
-                .filter(|page| page.kind == registry::Kind::App)
-                .map(|page| page.identity);
-            let Some(identity) = identity else {
-                return;
-            };
-            let message = json!({"channel":data["channel"],"args":data["args"]}).to_string();
-            let app = runtime().app.clone();
-            let _ = app.run_on_main_thread(move || {
-                let deliver = {
-                    let mut registry = runtime().registry.lock().expect("registry");
-                    let Some(page) = registry
-                        .page_mut(wc)
-                        .filter(|page| page.identity == identity)
-                    else {
-                        return;
-                    };
-                    if page.ready {
-                        true
-                    } else {
-                        if page.pushes.len() >= 4096 {
-                            page.pushes.clear();
-                            page.pushes.push_back(json!({"stream":"reset"}).to_string());
-                        }
-                        page.pushes.push_back(message.clone());
-                        false
-                    }
-                };
-                if deliver
-                    && let Ok(window) = window_for_wc(wc)
-                    && let Err(error) = window.eval(format!(
-                        "window.__ompTauriPush({}, {message});",
-                        identity.generation
-                    ))
-                {
-                    log::log("push.failed", json!({"wcId":wc,"error":error.to_string()}));
-                }
-            });
-        }
+        "wc.send" => page_push::wc_send(&data),
+        "diskFull.state" => page_push::disk_full_state(data),
         _ => log::log("event.unsupported", json!({"name":name})),
     }
 }
@@ -1406,6 +1375,7 @@ fn exit_after_preview(code: i32) {
 /// Node is gone: `via` says how the shell learned it (`exited`: its process ended, `closed`: its connection did).
 fn node_gone(via: &str, code: Option<i32>) {
     sessions::protocol::disconnected();
+    runtime().quit.lock().expect("quit chain").terminate();
     let quitting = lifecycle::EXITING.swap(true, Ordering::SeqCst);
     log::log(
         "node.gone",
@@ -1541,30 +1511,13 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 .app
                 .run_on_main_thread(move || {
                     let result = (|| -> Result<Value, Value> {
-                        let queued = {
-                            let mut registry = runtime().registry.lock().expect("registry");
-                            let Some(page) = registry
-                                .page_mut(identity.wc)
-                                .filter(|p| p.identity == identity)
-                            else {
-                                return Err(json!({"code":"gone","message":"document ended"}));
-                            };
-                            if page.ready {
-                                return Ok(json!({"generation":identity.generation}));
-                            }
-                            page.ready = true;
-                            std::mem::take(&mut page.pushes)
-                        };
+                        if !page_push::document_ready(identity, &webview)
+                            .map_err(|e| json!({"code":e.code,"message":e.message}))?
+                        {
+                            return Ok(json!({"generation":identity.generation}));
+                        }
                         if let Some(ua) = value["userAgent"].as_str() {
                             *runtime().user_agent.lock().expect("user agent") = Some(ua.into());
-                        }
-                        for message in queued {
-                            webview
-                                .eval(format!(
-                                    "window.__ompTauriPush({}, {message});",
-                                    identity.generation
-                                ))
-                                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
                         }
                         wc_state(identity.wc);
                         wc_event(identity.wc, "dom-ready", json!([]));
@@ -2003,6 +1956,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     renderer,
                     user_agent: Mutex::new(None),
                     relaunch: Mutex::new(None),
+                    quit: Mutex::default(),
                     stop_instance: AtomicBool::new(false),
                     instance_thread: Mutex::new(None),
                 })
@@ -2067,14 +2021,11 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         // `code`: None when the system or the last window asked (the Dock's Quit, ⌘Q handled by macOS, a logout),
         // Some when this shell's own `exit` did.
         RunEvent::ExitRequested { code, api, .. } => {
-            let forward = !lifecycle::EXITING.load(Ordering::SeqCst);
-            log::log(
-                "exit.requested",
-                json!({"code":code,"forwardedToNode":forward}),
-            );
-            if forward {
+            let ask = !lifecycle::EXITING.load(Ordering::SeqCst);
+            log::log("exit.requested", json!({"code":code,"quitAsked":ask}));
+            if ask {
                 api.prevent_exit();
-                host::event("app.quitRequested", json!({}));
+                quit_chain::admit(&runtime().quit, quit_chain::Admission::Ask);
             }
         }
         RunEvent::Exit => node::stop(Duration::from_secs(5)),

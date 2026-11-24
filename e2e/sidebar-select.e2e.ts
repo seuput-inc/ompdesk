@@ -96,6 +96,7 @@ declare global {
 	interface Window {
 		__orders?: string[];
 		__painted?: string[];
+		__paintDetails?: string[];
 	}
 }
 
@@ -165,17 +166,41 @@ async function recordOrders(page: Page, lists: Lists): Promise<void> {
 		const note = (found, order) => {
 			if (order && order !== found.at(-1)) found.push(order);
 		};
+		const details = [];
+		const detail = () => {
+			const scope = document.querySelector(lists.scope);
+			if (!scope) return "";
+			return [...scope.querySelectorAll(lists.rows)].map(row => {
+				const flips = [];
+				for (let at = row; at && at !== scope; at = at.parentElement) {
+					const key = at.getAttribute && at.getAttribute("data-flip-key");
+					if (!key) continue;
+					const style = getComputedStyle(at);
+					const moving = at.getAnimations().map(a => a.playState + ":" + (a.effect && a.effect.getComputedTiming ? Math.round(a.effect.getComputedTiming().progress * 100) : "?")).join(",");
+					flips.push(key.replace(/^.*[\\\\/]/, "") + "{" + style.transform + (moving ? " " + moving : "") + "}");
+				}
+				return (row.getAttribute("data-device-session") ?? row.getAttribute("data-session-path") ?? "").split(/[\\\\/]/).at(-1) + "@" + Math.round(row.getBoundingClientRect().top) + " " + flips.join(" < ");
+			}).join(" | ");
+		};
+		const notePaint = why => {
+			const before = painted.length;
+			note(painted, paint(lists));
+			if (painted.length > before && painted.length > 1 && details.length < 20)
+				details.push(why + " " + Math.round(performance.now()) + "ms " + detail());
+		};
 		new MutationObserver(() => {
 			note(seen, read(lists));
-			note(painted, paint(lists));
+			notePaint("mutation");
 		}).observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
 		const frame = () => {
-			note(painted, paint(lists));
+			notePaint("frame");
 			requestAnimationFrame(frame);
 		};
 		requestAnimationFrame(frame);
 		window.__orders = seen;
 		window.__painted = painted;
+		window.__paintDetails = details;
+		details.push("start " + Math.round(performance.now()) + "ms " + detail());
 	})()`);
 }
 
@@ -333,7 +358,8 @@ test("a session another omp starts never moves into the row the pointer rests on
 async function expectNoMove(page: Page, order: string, after: string): Promise<void> {
 	expect(await page.evaluate(() => window.__orders), `orders drawn after ${after}`).toEqual([order]);
 	const moved = (await page.evaluate(() => window.__painted ?? [])).filter(painted => painted !== order);
-	expect(moved, `orders painted after ${after}, other than the list's`).toEqual([]);
+	const details = await page.evaluate(() => window.__paintDetails ?? []);
+	expect(moved, `orders painted after ${after}, other than the list's\n${details.join("\n")}`).toEqual([]);
 }
 
 /** Runs every case even when one fails, and names each one's outcome in the report. */

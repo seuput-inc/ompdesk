@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:108-109",
+				"src/main/shell-host/electron/index.ts:118-119",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
@@ -53,7 +53,7 @@
 				"native/ompdesk/crates/shell/src/main.rs:344-363",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "4779a3f5ee3d91b957541d9bcf52dee6483a7c32"
+			"syncCommit": "3b2ea6891ff017247d8a15efd6f47ec44e892150"
 		},
 		{
 			"id": "turn-resume",
@@ -82,7 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "0a29ca1f972d98b7681f718ea9b6379caa2b47de",
+			"syncCommit": "dd6e98db61cf37cdf0c7dd84945d6e9807586859",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "ac7cbd6653837c2827480d23daa28ababf244d66",
+			"syncCommit": "3b2ea6891ff017247d8a15efd6f47ec44e892150",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -153,7 +153,7 @@
 				"src/main/tab-release.ts#closeWindowTab",
 				"src/main/agent-control/host.ts:1244-1251"
 			],
-			"syncCommit": "0a29ca1f972d98b7681f718ea9b6379caa2b47de",
+			"syncCommit": "6f08aed051eab59de9d39ccda9a93551a15ecc04",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -231,7 +231,7 @@
 				"src/main/session-processes.ts",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "d056e98329bc35c3787eb653e8e0474249e80773",
+			"syncCommit": "3b2ea6891ff017247d8a15efd6f47ec44e892150",
 			"verifySkill": ".omp/skills/session-processes-verify/SKILL.md"
 		},
 		{

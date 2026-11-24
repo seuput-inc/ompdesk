@@ -100,6 +100,7 @@ function fakeShell(shell: ShellClient) {
 		"app.startLaunchProtection",
 		"app.launchEvent",
 		"app.exit",
+		"app.quit",
 		"app.setAsDefaultProtocolClient",
 		"app.getGPUInfo",
 		"win.create",
@@ -332,13 +333,93 @@ describe("app", () => {
 	});
 });
 
-describe("the quit sequence", () => {
+describe("the quit hooks the shell calls", () => {
 	beforeEach(async () => {
 		await boot();
 		await ready();
 	});
 
-	it("finishes the stable write between the will-quit listeners on either side of it", async () => {
+	const hook = (step: string, extra: Record<string, unknown> = {}) =>
+		shell.call("app.quitHook", { step, update: false, ...extra });
+
+	it("sends each quit intent, the installer's pending before its receipt", async () => {
+		const { app } = electron;
+		app.quit();
+		app.quit("approved");
+		app.installerQuitPending();
+		app.installerQuitReceipt({ kind: "started", pid: 42 });
+		app.installerQuitReceipt({ kind: "failed", message: "denied", code: "EACCES" });
+		await settle();
+		expect(fake.callsOf("app.quit").map(call => call.params)).toEqual([
+			{ intent: "ask" },
+			{ intent: "approved" },
+			{ intent: "installerPending" },
+			{ intent: "installerReceipt", receipt: { kind: "started", pid: 42 } },
+			{ intent: "installerReceipt", receipt: { kind: "failed", message: "denied", code: "EACCES" } },
+		]);
+		expect(exited).toEqual([]);
+	});
+
+	it("before answers whether before-quit was let through, and may be asked again", async () => {
+		let prevent = true;
+		electron.app.on("before-quit", event => {
+			if (prevent) event.preventDefault();
+		});
+		expect(await hook("before")).toBe(false);
+		prevent = false;
+		expect(await hook("before")).toBe(true);
+	});
+
+	it("runs main's effects: confirm, finalize, teardown (named for an update) and settle's code", async () => {
+		expect(await hook("confirm")).toBe(true);
+		expect(await hook("settle")).toBe(0);
+		const order: string[] = [];
+		const finalized = Promise.withResolvers<void>();
+		electron.app.setQuitEffects({
+			confirm: async () => false,
+			finalize: () => {
+				order.push("finalize");
+				return finalized.promise;
+			},
+			teardown: update => order.push(`teardown:${String(update)}`),
+			settle: async () => 1,
+		});
+		expect(await hook("confirm")).toBe(false);
+		let finalizeAnswered = false;
+		const finalizing = hook("finalize").then(() => {
+			finalizeAnswered = true;
+		});
+		await settle();
+		expect(finalizeAnswered).toBe(false);
+		finalized.resolve();
+		await finalizing;
+		expect(await hook("teardown", { update: true })).toBeNull();
+		expect(await hook("settle")).toBe(1);
+		expect(order).toEqual(["finalize", "teardown:true"]);
+		expect(exited).toEqual([]);
+	});
+
+	it("close closes every window through its close listeners, without window-all-closed", async () => {
+		const { app, BrowserWindow } = electron;
+		const win = new BrowserWindow({});
+		const order: string[] = [];
+		win.on("close", () => order.push("close"));
+		app.on("window-all-closed", () => order.push("window-all-closed"));
+		const answer = hook("close");
+		await settle();
+		await shell.event("win.event", { winId: win.id, name: "closed" });
+		expect(await answer).toBe(true);
+		expect(order).toEqual(["close"]);
+	});
+
+	it("close answers false when a window keeps itself open", async () => {
+		const win = new electron.BrowserWindow({});
+		win.on("close", event => event.preventDefault());
+		expect(await hook("close")).toBe(false);
+		expect(fake.callsOf("win.op").filter(call => call.params.op === "close")).toHaveLength(0);
+	});
+
+	it("will finishes the stable write between the will-quit listeners on either side of it", async () => {
 		const { app } = electron;
 		const saved = Promise.withResolvers<void>();
 		const order: string[] = [];
@@ -349,31 +430,26 @@ describe("the quit sequence", () => {
 		app.once("will-quit", () => order.push("earlier"));
 		app.stabilizeOnCleanQuit();
 		app.once("will-quit", () => order.push("later"));
-		app.quit();
+		const answer = hook("will");
 		await settle();
 		expect(order).toEqual(["earlier", "stable"]);
-		expect(exited).toEqual([]);
 		saved.resolve();
-		await settle();
+		expect(await answer).toBe(true);
 		expect(order).toEqual(["earlier", "stable", "later"]);
-		expect(exited).toEqual([0]);
 	});
 
-	it("runs before-quit, closes the windows, will-quit and quit, then exits", async () => {
-		const { app, BrowserWindow } = electron;
-		const win = new BrowserWindow({});
-		const order: string[] = [];
-		app.on("before-quit", () => order.push("before-quit"));
-		win.on("close", () => order.push("close"));
-		app.on("window-all-closed", () => order.push("window-all-closed"));
-		app.on("will-quit", () => order.push("will-quit"));
-		app.on("quit", () => order.push("quit"));
-		app.quit();
+	it("will answers false when a listener prevents it", async () => {
+		electron.app.on("will-quit", event => event.preventDefault());
+		expect(await hook("will")).toBe(false);
+	});
+
+	it("exit ends through app.exit with the shell's code", async () => {
+		const codes: number[] = [];
+		electron.app.on("quit", (_event, code) => codes.push(code));
+		expect(await hook("exit", { code: 1 })).toBeNull();
 		await settle();
-		await shell.event("win.event", { winId: win.id, name: "closed" });
-		await settle();
-		expect(order).toEqual(["before-quit", "close", "will-quit", "quit"]);
-		expect(exited).toEqual([0]);
+		expect(codes).toEqual([1]);
+		expect(exited).toEqual([1]);
 	});
 
 	it("exit() emits quit once with its code, without before-quit or will-quit, then ends the process", async () => {
@@ -411,9 +487,9 @@ describe("the quit sequence", () => {
 
 	// electron-updater installs a downloaded update on the app's `quit`, code 0 only (BaseUpdater.addQuitHandler).
 	it.each([
-		["an approved quit", (app: ElectronShim["app"]) => app.quit(), 1],
-		["a forced exit(0)", (app: ElectronShim["app"]) => app.exit(0), 1],
-		["an exit with a failure code", (app: ElectronShim["app"]) => app.exit(1), 0],
+		["a settled quit's exit", () => hook("exit", { code: 0 }), 1],
+		["a forced exit(0)", async () => electron.app.exit(0), 1],
+		["an exit with a failure code", () => hook("exit", { code: 1 }), 0],
 	])("a downloaded update installs on %s (installs: %j)", async (_name, end, installs) => {
 		const updater = new NsisUpdater(
 			{ provider: "generic", url: "https://updates.invalid/" },
@@ -429,51 +505,10 @@ describe("the quit sequence", () => {
 			},
 		});
 		(updater as unknown as { addQuitHandler(): void }).addQuitHandler();
-		end(electron.app);
+		await end();
 		await settle();
 		expect(doInstall).toHaveBeenCalledTimes(installs);
 		if (installs) expect(doInstall).toHaveBeenCalledWith(expect.objectContaining({ isSilent: true }));
-	});
-
-	it("runs the quit sequence when the shell reports a macOS Cmd-Q", async () => {
-		const order: string[] = [];
-		electron.app.on("before-quit", () => order.push("before-quit"));
-		await shell.event("app.quitRequested");
-		await settle();
-		expect(order).toEqual(["before-quit"]);
-		expect(exited).toEqual([0]);
-	});
-
-	it("stops when before-quit is prevented, and may be asked again", async () => {
-		const { app } = electron;
-		let prevent = true;
-		app.on("before-quit", event => {
-			if (prevent) event.preventDefault();
-		});
-		app.quit();
-		await settle();
-		expect(exited).toEqual([]);
-		prevent = false;
-		app.quit();
-		await settle();
-		expect(exited).toEqual([0]);
-	});
-
-	it("stops when a window keeps itself open, and when will-quit is prevented", async () => {
-		const { app, BrowserWindow } = electron;
-		const win = new BrowserWindow({});
-		win.on("close", event => event.preventDefault());
-		app.quit();
-		await settle();
-		expect(exited).toEqual([]);
-		expect(fake.callsOf("win.op").filter(call => call.params.op === "close")).toHaveLength(0);
-		win.removeAllListeners("close");
-		app.on("will-quit", event => event.preventDefault());
-		app.quit();
-		await settle();
-		await shell.event("win.event", { winId: win.id, name: "closed" });
-		await settle();
-		expect(exited).toEqual([]);
 	});
 });
 

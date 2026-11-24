@@ -6,13 +6,12 @@
  * launch continues (Continue interrupted work on; ⌘Q and the update restart alike).
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { closeToTrayEnabled } from "../shared/desktop-prefs";
 import {
 	activateAction,
 	assessQuitRisk,
 	lastWindowCloseAction,
-	QuitLatch,
 	quitNeedsConfirmation,
 	updateRestartConfirmation,
 	type WindowTabFact,
@@ -64,40 +63,6 @@ describe("an update restart a person starts", () => {
 		expect(updateRestartConfirmation(working, false, subagents)).toBe("running work");
 		expect(updateRestartConfirmation(working, false, none)).toBe("running work");
 		expect(updateRestartConfirmation(idle, false, none)).toBeNull();
-	});
-});
-
-describe("quit latch", () => {
-	it("refuses an unapproved quit without tearing anything down", () => {
-		const teardown = vi.fn();
-		const latch = new QuitLatch();
-
-		expect(latch.proceed(teardown)).toBe(false);
-		expect(latch.approved).toBe(false);
-		expect(teardown).not.toHaveBeenCalled();
-	});
-
-	it("tears down once per approved quit", () => {
-		const teardown = vi.fn();
-		const latch = new QuitLatch();
-		latch.approve();
-
-		expect(latch.proceed(teardown)).toBe(true);
-		expect(latch.proceed(teardown)).toBe(true);
-		expect(teardown).toHaveBeenCalledTimes(1);
-	});
-
-	it("runs the ⌘Q teardown when an update quits, before its windows close", () => {
-		const teardown = vi.fn();
-		const latch = new QuitLatch();
-
-		// quitAndInstall() emits before-quit-for-update, then closes every window,
-		// then emits before-quit: the teardown must already have run, and the
-		// later before-quit must neither ask again nor tear down twice.
-		latch.proceedForUpdate(teardown);
-		expect(teardown).toHaveBeenCalledTimes(1);
-		expect(latch.proceed(teardown)).toBe(true);
-		expect(teardown).toHaveBeenCalledTimes(1);
 	});
 });
 
