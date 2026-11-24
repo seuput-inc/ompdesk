@@ -143,7 +143,7 @@ async fn fetch(input: &str, max_bytes: usize, past: Past) -> Result<PublicRespon
     let mut url = checked_url(input)?;
     for hop in 0..=REDIRECTS {
         let pinned = addresses(&url).await?;
-        let response = exchange_at(&url, &[], None, machine_tls, Some(&pinned)).await?;
+        let response = exchange_at(&url, &[], None, machine_tls, Some(&pinned), None).await?;
         let status = response.status().as_u16();
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
             if hop == REDIRECTS {
@@ -304,6 +304,7 @@ mod tests {
             None,
             machine_tls,
             Some(&[address]),
+            None,
         )
         .await
         .unwrap();

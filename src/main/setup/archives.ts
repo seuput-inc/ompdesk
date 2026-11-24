@@ -18,6 +18,8 @@ export interface LookupOptions {
 	mirror?: string;
 	/** Sent as `authorization: Bearer` to api.github.com only (60 requests an hour without one). */
 	githubToken?: string;
+	/** The proxy the core's `proxy.resolve` picked for checks and installs; a loopback address never goes through it. */
+	proxy?: string;
 }
 
 /**
@@ -28,11 +30,16 @@ export const AGENT_DESKTOP_MIN_VERSION = "1.2.0";
 
 /** One lookup: the core answers the release or says why it cannot (`setup_lookup`), which is an `Error` here. */
 async function lookup<T>(method: string, params: Record<string, unknown>, options: LookupOptions): Promise<T> {
-	const { mirror, githubToken } = options;
+	const { mirror, githubToken, proxy } = options;
 	try {
 		const answer = await core().call<T>(
 			method,
-			{ ...params, ...(mirror ? { mirror } : {}), ...(githubToken ? { githubToken } : {}) },
+			{
+				...params,
+				...(mirror ? { mirror } : {}),
+				...(githubToken ? { githubToken } : {}),
+				...(proxy ? { proxy } : {}),
+			},
 			// The core bounds each page it reads (30 s); the lookup is two pages at most.
 			{ timeoutMs: NO_TIMEOUT_MS },
 		);
