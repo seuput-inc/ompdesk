@@ -15,6 +15,7 @@ pub(crate) mod deleted;
 mod enrich;
 mod journal;
 mod journal_wait;
+pub(crate) mod kinds;
 mod pace;
 mod raw;
 mod rules;
@@ -229,6 +230,9 @@ struct ListedParams {
     root: PathBuf,
     /// Every row of the list stock answered, in the list's order (newest first).
     rows: Vec<Row>,
+    /// The record of the GUI's chat sessions (`kinds`); `None`: only the legacy header flag labels a chat.
+    #[serde(default)]
+    kinds: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +303,16 @@ fn listed(params: ListedParams) -> Result<Reply, Fault> {
         listed[at].chat = chat;
     }
     drop(known);
+    let ids: Vec<&str> = listed
+        .iter()
+        .map(|entry| rows[entry.row].id.as_str())
+        .collect();
+    for (entry, marked) in listed
+        .iter_mut()
+        .zip(kinds::which(params.kinds.as_deref(), &ids))
+    {
+        entry.chat |= marked;
+    }
     let paths = listed
         .iter()
         .map(|entry| std::mem::take(&mut rows[entry.row].path))
@@ -383,6 +397,10 @@ fn legacy_chat(path: &str) -> Option<bool> {
 #[derive(Deserialize)]
 struct KindParams {
     path: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    kinds: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -390,10 +408,15 @@ struct Kind {
     chat: Option<bool>,
 }
 
-/// One session file's legacy chat flag, read now.
+/// One session's chat label: the GUI's record, else the file's legacy flag, read now.
 fn kind(params: &KindParams) -> Result<Reply, Fault> {
+    let marked = !params.id.is_empty() && kinds::which(params.kinds.as_deref(), &[&params.id])[0];
     Reply::json(&Kind {
-        chat: legacy_chat(&params.path),
+        chat: if marked {
+            Some(true)
+        } else {
+            legacy_chat(&params.path)
+        },
     })
 }
 
@@ -426,6 +449,7 @@ mod tests {
                     id: (*id).to_owned(),
                 })
                 .collect(),
+            kinds: None,
         };
         let reply = listed(params).unwrap();
         let value: serde_json::Value = serde_json::from_str(reply.result.get()).unwrap();

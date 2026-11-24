@@ -55,8 +55,8 @@ export class SessionIndex {
 	#listedGeneration: number | null = null;
 	#sessionsDir: string;
 	#cwd: string;
-	/** GUI-side chat labels for sessions whose header carries no kind (stock omp writes none). */
-	#isChat: (sessionId: string) => boolean;
+	/** The record of the GUI's chat sessions (`session-kinds.ts`), which the core reads while it labels rows; null: none. */
+	#kindsFile: string | null;
 	#store: StockSessionStore;
 	/** The global list, read once per change while the tree is watched and shared by every asker. */
 	readonly #share = new SessionListShare(() => this.#readAll());
@@ -77,12 +77,12 @@ export class SessionIndex {
 	constructor(
 		sessionsDir: string | undefined,
 		cwd: string,
-		isChat: (sessionId: string) => boolean = () => false,
+		kindsFile: string | null = null,
 		bridgeDir = resolve("resources/gui-bridge"),
 	) {
 		this.#sessionsDir = sessionsDir ?? join(agentDir(), "sessions");
 		this.#cwd = resolve(cwd);
-		this.#isChat = isChat;
+		this.#kindsFile = kindsFile;
 		this.#store = new StockSessionStore(this.#sessionsDir, bridgeDir, this.#id);
 		this.#share.onChange = delta => this.onListChange?.(delta);
 	}
@@ -270,28 +270,32 @@ export class SessionIndex {
 			index: this.#id,
 			root: resolve(this.#sessionsDir),
 			rows: infos.map(info => ({ path: info.path, id: info.id })),
+			kinds: this.#kindsFile,
 		});
 		this.#listedGeneration = generation;
 		return listedAnswer.parse(result).listed.flatMap(({ row, chat }) => {
 			const info = infos[row];
 			if (!info) return [];
-			if (chat || this.#isChat(info.id)) info.kind = "chat";
+			if (chat) info.kind = "chat";
 			return [info];
 		});
 	}
 
 	/**
-	 * GUI chat labels are an overlay: stock sessions have no chat-kind concept. The legacy one is a flag in the file's
-	 * header that stock's listing deliberately does not expose; the core reads it. Only this presentation overlay is
-	 * read there, never stock metadata or lifecycle.
+	 * GUI chat labels are an overlay: stock sessions have no chat-kind concept. The core reads the GUI's record of chat
+	 * sessions and, for older files, the legacy flag in the header that stock's listing deliberately does not expose.
+	 * Only this presentation overlay is read there, never stock metadata or lifecycle.
 	 */
 	async kindFor(sessionPath: string): Promise<SessionKind> {
 		try {
 			const infos = await this.#store.listDirectory(sessionPath);
 			const info = infos.find(row => resolve(row.path) === resolve(sessionPath));
 			if (!info) return "agent";
-			if (this.#isChat(info.id)) return "chat";
-			const { result } = await core().call("sessions.kind", { path: resolve(sessionPath) });
+			const { result } = await core().call("sessions.kind", {
+				path: resolve(sessionPath),
+				id: info.id,
+				kinds: this.#kindsFile,
+			});
 			return kindAnswer.parse(result).chat === true ? "chat" : "agent";
 		} catch {
 			return "agent";
