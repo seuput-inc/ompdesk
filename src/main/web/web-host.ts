@@ -128,7 +128,7 @@ export class WebHost {
 		this.#deps = deps;
 		const now = deps.now ?? Date.now;
 		this.devices = new WebDevices(deps.userData);
-		this.quota = new PeerQuota(this.devices, () => this.devices.notifyChanged());
+		this.quota = new PeerQuota("web", deps.userData, () => this.devices.notifyChanged());
 		this.blobs = new BlobStore({ userData: deps.userData, now });
 		this.uploads = new UploadStore({ userData: deps.userData, now });
 		this.blocks = new WebBlocks(deps.userData, now);
@@ -301,6 +301,7 @@ export class WebHost {
 	}
 
 	#info(device: WebDevice): WebDeviceInfo {
+		const quota = this.quota.view(device.deviceId);
 		return {
 			id: device.deviceId,
 			name: device.name,
@@ -311,8 +312,8 @@ export class WebHost {
 			connected: this.router.isConnected(device.deviceId),
 			grants: device.grants,
 			tier: webDeviceTier(device.grants),
-			limits: device.limits ?? {},
-			usage: this.quota.usage(device),
+			limits: quota?.limits ?? {},
+			usage: quota?.usage ?? { requests: 0, tokens: 0 },
 			blockScope: device.nodeId ? "node" : "login",
 		};
 	}

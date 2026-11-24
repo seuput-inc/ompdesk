@@ -60,6 +60,7 @@ import { deletedSessions, initDeletedSessions } from "../deleted-sessions";
 import { SavedWorktreeStore, setSavedWorktreeStore } from "../disk/saved-worktrees";
 import { gitSync, initRepo } from "../local/git/test-repos";
 import type { MachineServices } from "../machine-services";
+import { localDay } from "../omp-log-tail";
 import { RpcTimeoutError } from "../rpc-client";
 import { SessionSummaries, SUMMARY_DEBOUNCE_MS } from "../session-summaries";
 import { updateSidebarPrefs } from "../sidebar-prefs";
@@ -96,7 +97,7 @@ import type { HostedTabView } from "./hosted-view";
 import { KeptCalls } from "./kept-calls";
 import { createLinkEventDecoder, createReadDecoder, type WireSubagentFrame } from "./link-events";
 import { linkSlimFixture } from "./link-slim-fixture";
-import { localDay, PeerQuota } from "./peer-quota";
+import { PeerQuota } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
 import { tabHolderOf } from "./protocol";
 import { FrameTooLargeError } from "./wire";
@@ -208,6 +209,16 @@ class FakeConnection implements HostConnection {
 
 function peer(deviceId: string): PeerInfo {
 	return { deviceId, name: deviceId, staticPub: "pub", nodeId: `n-${deviceId}`, login: null, pairedAt: 0 };
+}
+
+/** The core's per-device limit over `peers` (a `remote-peers.json` of its own), and each device's usage today. */
+function quotaOver(...peers: PeerInfo[]) {
+	// Not under `workDir`: the core's writer may still be replacing the file when a case's folder goes.
+	const userData = mkdtempSync(join(tmpdir(), "host-quota-"));
+	const entries = peers.map(entry => ({ ...entry, staticPub: "A".repeat(43) }));
+	writeFileSync(join(userData, "remote-peers.json"), JSON.stringify({ v: 1, peers: entries }));
+	const quota = new PeerQuota("peers", userData, () => {});
+	return { quota, stored: { get: (deviceId: string) => ({ usage: quota.view(deviceId)?.usage }) } };
 }
 
 let workDir: string;
@@ -977,20 +988,7 @@ describe("LocalHostServices", () => {
 
 	it("counts a device's model requests and reply tokens and refuses its next request past a daily limit", async () => {
 		const { services, sidecars } = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", { ...peer("device-x"), limits: { requestsPerDay: 2 } }]]);
-		const quota = new PeerQuota(
-			{
-				get: id => stored.get(id),
-				update: (id, patch) => {
-					const current = stored.get(id);
-					if (!current) return undefined;
-					const next = { ...current, ...patch };
-					stored.set(id, next);
-					return next;
-				},
-			},
-			() => {},
-		);
+		const { quota, stored } = quotaOver({ ...peer("device-x"), limits: { requestsPerDay: 2 } });
 		services.attachQuota(quota);
 		const x = new FakeConnection(peer("device-x"));
 		await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
@@ -1034,34 +1032,15 @@ describe("LocalHostServices", () => {
 		};
 		function limited(limits: { requestsPerDay?: number }, requests = 0) {
 			const fixture = setup();
-			const stored = new Map<string, PeerInfo>([
-				[
-					"device-x",
-					{
-						...peer("device-x"),
-						limits,
-						usage: { day: localDay(new Date()), requests, tokens: 0 },
-					},
-				],
-			]);
-			fixture.services.attachQuota(
-				new PeerQuota(
-					{
-						get: id => stored.get(id),
-						update: (id, patch) => {
-							const current = stored.get(id);
-							if (!current) return undefined;
-							const next = { ...current, ...patch };
-							stored.set(id, next);
-							return next;
-						},
-					},
-					() => {},
-				),
-			);
+			const { quota, stored } = quotaOver({
+				...peer("device-x"),
+				limits,
+				usage: { day: localDay(new Date()), requests, tokens: 0 },
+			});
+			fixture.services.attachQuota(quota);
 			return { ...fixture, stored, x: new FakeConnection(peer("device-x")) };
 		}
-		const used = (stored: Map<string, PeerInfo>) => stored.get("device-x")?.usage?.requests;
+		const used = (stored: ReturnType<typeof quotaOver>["stored"]) => stored.get("device-x")?.usage?.requests;
 
 		it("refuses omfg, tan and a summarizing leaf switch once the limit is used up, and still serves reads", async () => {
 			const { services, sidecars, stored, x } = limited({ requestsPerDay: 1 }, 1);
@@ -4153,22 +4132,8 @@ describe("LocalHostServices: a device opening a session another device's tab run
 describe("LocalHostServices: Autopilot of a device's tab", () => {
 	it("answers get/set_autopilot through this computer's coordinator, counting a start against the device", async () => {
 		const { services, sidecars } = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", { ...peer("device-x"), limits: { requestsPerDay: 1 } }]]);
-		services.attachQuota(
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			),
-		);
+		const { quota, stored } = quotaOver({ ...peer("device-x"), limits: { requestsPerDay: 1 } });
+		services.attachQuota(quota);
 		const x = new FakeConnection(peer("device-x"));
 		await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
 		const send = (command: Record<string, unknown>) =>
@@ -4275,27 +4240,13 @@ describe("LocalHostServices: Autopilot of a device's tab", () => {
 
 	it("charges an Autopilot run a device started here for its reply tokens until it ends, across a relaunch", async () => {
 		const file = join(workDir, "autopilot-device-runs.json");
-		const stored = new Map<string, PeerInfo>([["device-x", peer("device-x")]]);
-		const quota = () =>
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			);
+		const { quota, stored } = quotaOver(peer("device-x"));
 		const reply = (tokens: number) => [
 			{ type: "message_end", message: { role: "assistant", usage: { totalTokens: tokens } } },
 			{ type: "message_end", message: { role: "user" } },
 		];
 		const first = setup(60_000, { runChargesFile: file }).services;
-		first.attachQuota(quota());
+		first.attachQuota(quota);
 		first.chargeRun("/wt/run", "device-x");
 		first.runEvents("/wt/run", reply(500) as never);
 		first.runEvents("/wt/other", reply(9_000) as never);
@@ -4303,36 +4254,22 @@ describe("LocalHostServices: Autopilot of a device's tab", () => {
 
 		// This computer restarted: the run resumes from its layout and is still the device's.
 		const second = setup(60_000, { runChargesFile: file }).services;
-		second.attachQuota(quota());
+		second.attachQuota(quota);
 		second.runEvents("/wt/run", reply(300) as never);
 		expect(stored.get("device-x")?.usage).toMatchObject({ tokens: 800 });
 		second.endRun("/wt/run");
 		second.runEvents("/wt/run", reply(300) as never);
 		expect(stored.get("device-x")?.usage).toMatchObject({ tokens: 800 });
 		const third = setup(60_000, { runChargesFile: file }).services;
-		third.attachQuota(quota());
+		third.attachQuota(quota);
 		third.runEvents("/wt/run", reply(300) as never);
 		expect(stored.get("device-x")?.usage).toMatchObject({ tokens: 800 });
 	});
 
 	it("counts a run's reply once while the device views it: through the run, not the device's view", async () => {
 		const context = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", peer("device-x")]]);
-		context.services.attachQuota(
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			),
-		);
+		const { quota, stored } = quotaOver(peer("device-x"));
+		context.services.attachQuota(quota);
 		const view = new FakeHostSidecar(workDir, "agent");
 		view.setStatus("ready");
 		context.local.views.set("/s/run.jsonl", view);
@@ -4370,22 +4307,8 @@ describe("LocalHostServices: Autopilot of a device's tab", () => {
 
 	it("counts a run's child's reply once while the device views the child: through the run, not the view", async () => {
 		const context = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", peer("device-x")]]);
-		context.services.attachQuota(
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			),
-		);
+		const { quota, stored } = quotaOver(peer("device-x"));
+		context.services.attachQuota(quota);
 		const child = new FakeHostSidecar(workDir, "agent");
 		child.setStatus("ready");
 		context.local.views.set("/s/child.jsonl", child);

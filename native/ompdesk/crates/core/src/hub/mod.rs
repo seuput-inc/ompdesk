@@ -104,6 +104,7 @@ fn kinds() -> &'static [Kind] {
         crate::resume::RESUME_KIND,
         crate::resume::CONNECTIVITY_KIND,
         crate::sessions::deleted::KIND,
+        crate::remote::quota::KIND,
     ]
 }
 

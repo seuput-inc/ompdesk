@@ -7,8 +7,8 @@
 //! code-paired hosts to nodes once, forgets code-paired devices after the grace period and holds the host's
 //! keep-awake policy. Main keeps what only it can say or do and is asked (`remote.ask`): Mobile web's allowed accounts
 //! and blocks (`policy`), the person's approval (`admit`), each device link's hello (`open`), and every request and
-//! event on a link. Main mirrors the records from `remote.devices.state` for its synchronous readers; the quota's
-//! counts are main's writes (`remote.devices.peerPatch`), applied here in the order sent.
+//! event on a link. Main mirrors the records from `remote.devices.state` for its synchronous readers; a device's
+//! limits and counts are the quota's (`remote/quota.rs`), written through the same store.
 
 pub mod client;
 pub(crate) mod gate;
@@ -104,8 +104,6 @@ struct Inner {
     watchers: HashSet<u64>,
     poll_timer: Option<AbortHandle>,
     scan_timer: Option<AbortHandle>,
-    /// The last quota patch applied (main's numbering).
-    patched: u64,
 }
 
 pub struct Devices {
@@ -294,7 +292,6 @@ impl Devices {
                 "peers": peers,
                 "hosts": hosts,
                 "deviceSectionOrder": order,
-                "patched": inner.patched,
         })
     }
 
@@ -1112,7 +1109,6 @@ async fn open(call: Call) -> Result<Reply, Fault> {
             watchers: HashSet::new(),
             poll_timer: None,
             scan_timer: None,
-            patched: 0,
         }),
         binding: Pass::default(),
         migrating: Pass::default(),
@@ -1425,33 +1421,6 @@ fn configure(push: PushCall) {
     devices.keep_awake();
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PatchParams {
-    devices: u64,
-    seq: u64,
-    device_id: String,
-    /// The fields main's quota wrote (`limits`, `usage`); a null value removes the field.
-    patch: Map<String, Value>,
-}
-
-/// Main's quota changed a device's limits or counts: applied in the order sent, told with the next state.
-fn peer_patch(push: PushCall) {
-    let Ok(params) = serde_json::from_str::<PatchParams>(push.params.get()) else {
-        return;
-    };
-    let Some(devices) = instance(params.devices) else {
-        return;
-    };
-    let patch = params
-        .patch
-        .into_iter()
-        .map(|(key, value)| (key, (!value.is_null()).then_some(value)))
-        .collect();
-    let _ = locked(&devices.peers).update(&params.device_id, patch);
-    devices.inner().patched = params.seq;
-}
-
 fn wake_push(push: PushCall) {
     #[derive(Deserialize)]
     struct WakeParams {
@@ -1616,7 +1585,6 @@ pub fn register(registry: &mut Registry) {
     registry.add("remote.devices.peerName", |call| Box::pin(peer_name(call)));
     registry.add("remote.devices.dispose", |call| Box::pin(dispose(call)));
     registry.add_push("remote.devices.configure", configure);
-    registry.add_push("remote.devices.peerPatch", peer_patch);
     registry.add_push("remote.devices.wake", wake_push);
     registry.add("remote.client.open", |call| Box::pin(client_open(call)));
     registry.add("remote.connectFirst", |call| Box::pin(connect_first(call)));

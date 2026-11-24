@@ -382,27 +382,12 @@ impl Effect {
     }
 }
 
-/// A change to a device's `limits` and `usage`: a member that is present replaces it, `null` removes it
-/// (`PeerQuota`'s `update(id, {limits: undefined})`).
+/// A change to a device's `limits` and `usage` (the per-device limit's, `remote/quota.rs`): a member that is present
+/// replaces it, `Some(None)` removes it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Patch {
     pub limits: Option<Option<Value>>,
     pub usage: Option<Option<Value>>,
-}
-
-impl Patch {
-    /// From the members of an `update` push; `None` where a present member does not read.
-    pub fn from_json(object: &Map<String, Value>) -> Option<Patch> {
-        let member = |key: &str, clean: fn(&Value) -> Option<Value>| match object.get(key) {
-            None => Some(None),
-            Some(Value::Null) => Some(Some(None)),
-            Some(value) => clean(value).map(|clean| Some(Some(clean))),
-        };
-        Some(Patch {
-            limits: member("limits", clean_limits)?,
-            usage: member("usage", clean_usage)?,
-        })
-    }
 }
 
 /// The devices of `web-devices.json`, in the order they were paired (a re-pair keeps its place).

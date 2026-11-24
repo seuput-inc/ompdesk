@@ -135,11 +135,9 @@ mod devices_file {
         assert!(book.set_push(&a, push).0);
         let prefs = book.get(&b).unwrap().ui_prefs.clone();
         assert!(book.set_ui_prefs(&b, prefs).0);
-        let patch = |limits, usage| {
-            let mut object = Map::new();
-            object.insert("limits".into(), limits);
-            object.insert("usage".into(), usage);
-            Patch::from_json(&object).unwrap()
+        let patch = |limits: Value, usage: Value| Patch {
+            limits: Some((!limits.is_null()).then_some(limits)),
+            usage: Some((!usage.is_null()).then_some(usage)),
         };
         assert!(
             book.update(
@@ -151,12 +149,12 @@ mod devices_file {
             )
             .0
         );
-        // Written as the quota writes it: members in the order the caller built them.
+        // Written as the quota writes it (`remote/quota.rs` `Limits::json`): requests first.
         assert!(
             book.update(
                 &c,
                 patch(
-                    json!({"tokensPerDay": 100000, "requestsPerDay": 0}),
+                    json!({"requestsPerDay": 0, "tokensPerDay": 100000}),
                     json!(null)
                 )
             )
@@ -762,18 +760,20 @@ mod devices_store {
         );
         assert_eq!(devices.get(&never.device_id).unwrap().push, None);
         // Quota: limits and usage ride the record; a limit of `null` removes it.
-        let update = |devices: &FileDevices, seq: u64, patch: Value| {
-            let patch = Patch::from_json(patch.as_object().unwrap()).unwrap();
-            devices.apply(Some(seq), |book| book.update(&b.device_id, patch))
+        let update = |devices: &FileDevices, patch: Value| {
+            let member = |key: &str| patch.get(key).map(|v| (!v.is_null()).then(|| v.clone()));
+            let patch = Patch {
+                limits: member("limits"),
+                usage: member("usage"),
+            };
+            devices.update_quota(&b.device_id, patch)
         };
         assert!(update(
             &devices,
-            7,
             json!({"limits": {"requestsPerDay": 2}, "usage": {"day": "2026-11-12", "requests": 1, "tokens": 5}})
         ));
         assert!(update(
             &devices,
-            8,
             json!({"usage": {"day": "2026-11-12", "requests": 2, "tokens": 500}})
         ));
         devices.flush().await.unwrap();
@@ -787,11 +787,8 @@ mod devices_store {
             record["usage"],
             json!({"day": "2026-11-12", "requests": 2, "tokens": 500})
         );
-        assert!(update(&devices, 9, json!({"limits": null})));
+        assert!(update(&devices, json!({"limits": null})));
         assert!(devices.get(&b.device_id).unwrap().limits.is_none());
-        let unreadable = json!({"limits": {"requestsPerDay": -5}});
-        assert!(Patch::from_json(unreadable.as_object().unwrap()).is_none());
-        assert!(Patch::from_json(json!({"usage": {"day": 1}}).as_object().unwrap()).is_none());
         // Never `pairing-admin`, in what a device was made with and what a person grants later.
         assert!(devices.apply(Some(11), |book| book.set_grants(
             &a.device_id,
