@@ -82,7 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "75bb3735a5ac8ffeaf20c120ebe6ccd231275092",
+			"syncCommit": "366d38653e1e9e279d2125371a824cb9a4dcce4a",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "44ca44b2a05bb2c2b8d3f20d49331b7f599b5532",
+			"syncCommit": "366d38653e1e9e279d2125371a824cb9a4dcce4a",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
