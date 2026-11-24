@@ -3054,6 +3054,26 @@ describe("autoClose: opened sessions whose work landed", () => {
 
 	const closes = (host: FakeHost) => host.views.filter(view => view.how === "close");
 
+	it("keeps a child answerable when it asks a question during the final cost read", async () => {
+		const { host, service, child } = await finishedChild();
+		const omp = host.command;
+		host.command = (tabId, command, timeoutMs) => {
+			if (tabId === child.tabId && command.type === "get_session_stats") {
+				child.asks = [select("Which database?", ["sqlite", "postgres"])];
+			}
+			return omp(tabId, command, timeoutMs);
+		};
+
+		await service.autoClose("main0001");
+		const answer = await service.run("main0001", T.answer, { session: child.tabId, choice: "sqlite" });
+		expect(answer.isError, answer.text).toBe(false);
+		expect(host.answers).toContainEqual({
+			tabId: child.tabId,
+			id: "req1",
+			response: { type: "extension_ui_response", id: "req1", value: "sqlite" },
+		});
+	});
+
 	it("closes a finished session without a branch, records it under its opener and keeps the file", async () => {
 		const { host, service, child } = await finishedChild();
 		await service.autoClose("main0001");
