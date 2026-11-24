@@ -106,7 +106,7 @@ export class ModelSetupRunner {
 			prompt: buildModelSetupPrompt(request),
 			timeoutMs: MODEL_SETUP_TIMEOUT_MS,
 		});
-		const home = host.pid;
+		const home = host.generation;
 		const live: Live = {
 			startedAt: Date.now(),
 			// Sent once the core answered the start, so the stop never reaches it before the run it names.
@@ -114,7 +114,7 @@ export class ModelSetupRunner {
 				void started.then(
 					async () => {
 						const stopped =
-							host.pid === home &&
+							host.generation === home &&
 							(await host.call<{ stopped: boolean }>("models.setupStop", { run }).then(
 								answer => answer.result.stopped,
 								() => false,
@@ -144,7 +144,7 @@ export class ModelSetupRunner {
 			),
 			// A core that started after the one the run was started on holds nothing of it.
 			host.on("ready", () => {
-				if (host.pid !== home) ended.resolve({ error: "ompdesk-core exited before the research finished" });
+				if (host.generation !== home) ended.resolve({ error: "ompdesk-core exited before the research finished" });
 			}),
 		];
 		// The budget is the core's; this only ends the wait for a core that never says how the run ended.

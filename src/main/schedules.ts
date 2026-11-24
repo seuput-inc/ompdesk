@@ -282,8 +282,8 @@ export class ScheduleService {
 	/** Keeps a request open on the service; when the core dies under it, opens the schedules on the next one. */
 	async #hold(): Promise<void> {
 		const host = core();
-		const home = host.pid;
-		while (!this.#disposed && host.pid === home) {
+		const home = host.generation;
+		while (!this.#disposed && host.generation === home) {
 			try {
 				await host.call("schedules.closed", { service: this.#name }, { timeoutMs: HOLD_MS });
 				return;
@@ -498,7 +498,7 @@ export function ompRunLauncher(options: {
 			}),
 			// A core that started after the one the omp was started on holds nothing of it: it ended with its core.
 			host.on("ready", () => {
-				if (host.pid !== home) ended.resolve({ code: null, error: "ompdesk-core exited during the run" });
+				if (host.generation !== home) ended.resolve({ code: null, error: "ompdesk-core exited during the run" });
 			}),
 		];
 		const done = ended.promise.then(({ code, error }) => {
@@ -517,7 +517,7 @@ export function ompRunLauncher(options: {
 			prompt: files.prompt,
 			header: `$ omp ${args.join(" ")}\n# ${schedule.cwd}\n\n`,
 		});
-		const home = host.pid;
+		const home = host.generation;
 		try {
 			await started;
 		} catch (error) {
