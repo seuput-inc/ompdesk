@@ -83,8 +83,15 @@ for name in OMPdesk ompdesk-shell; do
 	evidence "designated $name: $(codesign -d -r- "$APP/Contents/MacOS/$name" 2>&1 | grep designated)"
 done
 
+# What main logged, for a launch that did not start: the start mark is written only once the first window's page loaded.
+startup_log() {
+	tail -n 12 "$UD/logs/gui-runtime.jsonl" 2>/dev/null | cut -c1-700 | tr '\n' '|'
+}
 open "$APP"
-wait_for "test -s '$UD/app-started.json'" 180; check $? "the app started through open (app-started.json)"
+wait_for "test -s '$UD/app-started.json'" 180
+STARTED=$?
+check $STARTED "the app started through open (app-started.json)"
+[ "$STARTED" = 0 ] || evidence "first launch: runtime log: $(startup_log)"
 SHELL_PID=$(shells)
 [ "$(echo "$SHELL_PID" | grep -c .)" = 1 ]; check $? "one ompdesk-shell runs ($(echo $SHELL_PID))"
 [ -z "$(pgrep -fx "$APP/Contents/MacOS/OMPdesk")" ]; check $? "the launcher has exited"
@@ -139,7 +146,10 @@ menu_quit() {
 	local where=$1 port
 	rm -f "$UD/app-started.json"
 	open "$APP"
-	wait_for "test -s '$UD/app-started.json'" 180; check $? "$where: the app started again"
+	wait_for "test -s '$UD/app-started.json'" 180
+	local started=$?
+	check $started "$where: the app started again"
+	[ "$started" = 0 ] || evidence "$where: runtime log: $(startup_log)"
 	wait_for 'port=$(inspector_port)' 60; check $? "$where: main's inspector answers (port ${port:-none})"
 	wait_for "bun '$REPO/scripts/mac-menu-quit.ts' '$port' '$where' > '$W/quit-$where.out' 2>&1" 30
 	check $? "$where: Quit clicked in the menu"

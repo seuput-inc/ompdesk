@@ -355,6 +355,8 @@ src/main/open-path.test.ts	tooling	-	Vitest suite: isLauncherPath.
 src/main/open-path.ts	native-client	1	fs.isLauncherPath checks extensions, resolved targets and POSIX executable bits. The shell adapter reveals a launcher or a path the default app cannot open.
 src/main/packaging-config.test.ts	tooling	-	Vitest suite: mac bundle configs.
 src/main/platform-test-scope.test.ts	tooling	-	Vitest suite: Windows test scope.
+src/main/prefs-store.test.ts	tooling	-	Vitest suite: the preference files against the real core (native parity).
+src/main/prefs-store.ts	native-client	2	Typed client of crates/core/src/prefs: changes are synchronous hub calls the core commits; reads keep the core's answer per key until a change could reach it or the hub is lost. Goes with the IPC router and the last Node reader.
 src/main/process-alive.ts	port	1	test-launcher-exit decides immediately whether the launcher has ended; lock-slots also reads signal-zero synchronously (EPERM means alive). Neither caller requires a running core; this is not session process supervision.
 src/main/quit-guard.test.ts	tooling	-	Vitest suite: quit guard risk assessment.
 src/main/quit-guard.ts	port	3	QuitLatch moved to tauri-shell quit_chain.rs. The risk, confirmation, last-window and Dock-activation rules stay pure functions that app-quit's confirm effect and index.ts's window handlers call synchronously on live tab facts; they move with those handlers (§1.3a).
@@ -372,8 +374,6 @@ src/main/rpc-client.ts	mixed	3	SidecarManager owns one RpcClient per spawn. It a
 src/main/runtime-log-core.test.ts	tooling	-	Vitest suite: runtime crash log.
 src/main/runtime-log-core.ts	port	1	normalizeRuntimeErrorReport validates renderer reports, appendRuntimeLogAtPath appends structured records, and tailLogLines bounds reads by count and bytes.
 src/main/runtime-log.ts	port	2	runtimeLogPath resolves the app userData log location and writeRuntimeLog attaches caller context before passing the report to the TS log writer.
-src/main/safe-store.test.ts	tooling	-	Vitest suite: prefs written on a full disk.
-src/main/safe-store.ts	port	2	§1.3: window geometry and prefs getters synchronously read pending values, including after ENOSPC. Receiver: shell, with the window and prefs getters.
 src/main/save-copy.test.ts	tooling	-	Vitest suite: fileNameOf.
 src/main/save-copy.ts	mixed	3	fs.saveCopy copies local files after the destination dialog. Remote downloads still hold one exclusive temporary file across the peer's readRange callbacks; move the writer with that peer transport.
 src/main/saved-layouts.test.ts	tooling	-	Vitest suite: layoutsToSave.

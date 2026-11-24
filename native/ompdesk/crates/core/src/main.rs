@@ -79,6 +79,8 @@ fn main() -> ExitCode {
         ompdesk_core::clients::wind_down().await;
         served
     });
+    // A preference main changed before it closed stdin is on disk before the process ends (main kills it after 5 s).
+    ompdesk_core::prefs::flush(std::time::Duration::from_secs(4));
     match served {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

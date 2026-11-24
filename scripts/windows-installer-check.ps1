@@ -38,7 +38,14 @@ $uninstallKeys = @{
 	HKLM = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 }
 
-function Fail([string] $Message) { throw "FAIL ($Mode): $Message" }
+function Fail([string] $Message) {
+	# What main logged last: a launch that never opened its window says why here.
+	$runtime = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+	if (Test-Path -LiteralPath $runtime) {
+		Get-Content -LiteralPath $runtime -Tail 15 | ForEach-Object { Write-Host "     runtime: $($_.Substring(0, [Math]::Min(700, $_.Length)))" }
+	}
+	throw "FAIL ($Mode): $Message"
+}
 function Ok([string] $Message) { Write-Host "ok   $Message" }
 
 function Get-UninstallEntries([string] $Hive) {
