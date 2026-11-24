@@ -29,6 +29,8 @@ export interface ToolsOpts {
 	testDownload?: { url: string; sha256: string } | null;
 	/** The core's timers are main's (a test's fake timers drive them). */
 	manual?: boolean;
+	/** `new Intl.Collator().resolvedOptions().locale`: extension rows sort by name as `localeCompare` sorts here. */
+	locale?: string;
 }
 
 export interface ToolsState {
@@ -72,6 +74,8 @@ export interface ToolsAsks {
 	notify(kind: string, params: Record<string, unknown>): void | Promise<void>;
 	/** A stock worker request. */
 	stock(method: string, params: unknown, timeoutMs: number): Promise<unknown>;
+	/** The working folders of this computer's open local and hosted tabs (project-scoped plugins and skills). */
+	workspaceDirs(): string[] | Promise<string[]>;
 }
 
 export interface ToolsClientDeps {
@@ -105,6 +109,8 @@ function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
 			return asks.notify(String(item.kind), (item.params ?? {}) as Record<string, unknown>);
 		case "stock":
 			return asks.stock(String(item.method), item.params, Number(item.timeoutMs));
+		case "workspaceDirs":
+			return asks.workspaceDirs();
 		default:
 			throw new Error(`the tools hub asked what main does not answer: ${q}`);
 	}
@@ -216,5 +222,15 @@ export class ToolsClient {
 
 	extNow(key?: unknown): Promise<unknown> {
 		return hub().callLater(this.#instance(), "ext.now", { key: key ?? null });
+	}
+
+	/** List the extensions again without checking (Settings opened); answers when listed. */
+	extRescan(): Promise<unknown> {
+		return hub().callLater(this.#instance(), "ext.rescan");
+	}
+
+	/** `toolsAutoUpdate` changed: turning it on checks the extensions at once. */
+	extPrefChanged(): void {
+		hub().call(this.#instance(), "ext.prefChanged");
 	}
 }

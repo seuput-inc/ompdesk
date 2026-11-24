@@ -14,6 +14,8 @@
 //! `automatic` (setup installs on its own), `scheduled {omp, cli, ext}` (each updater checks on a timer),
 //! `testInstaller`, `testDownload {url, sha256}`, `manual` (main's timers, below) and `now` (main's `Date.now()`).
 //! A part adds the opts it needs (setup: `systemRoot`, `agentDesktopBundle`, `bunInstall`).
+//! The extension updater adds `locale` (`new Intl.Collator().resolvedOptions().locale`: its rows sort by name as
+//! main's `localeCompare` sorted them).
 //!
 //! **Calls** answered at once from memory (main waits for them):
 //! - `state` → `{setup, omp, cli, ext}`: `SetupState`, `OmpUpdateState`, `CliUpdateState`, `ExtensionUpdateState`
@@ -32,6 +34,8 @@
 //! one answer; main reads `state` right after posting it, and the hub runs the call first, so the state already shows
 //! the pass), `cli.now {id?}`, `ext.now {key?}`. A step that ended by its bound or the close answers its fault
 //! (`step_stalled`, `tools_closed`); the part turns that into its own outcome (`skipped`, `failed`).
+//! The extension updater's `ext.rescan` (lists again, answered when listed) and `ext.prefChanged` (answered at once;
+//! `toolsAutoUpdate` changed: a started, scheduled instance checks at once when it is on) take no key.
 //!
 //! **Items** to main (`k`): `state {part, state}` once per change of a part (`setup`, `omp`, `cli`, `ext`; main sends
 //! it to the windows and paired devices); `log {source, message, details}` (main writes `gui-runtime.jsonl`: `setup`,
@@ -49,6 +53,8 @@
 //! local tabs waiting for omp); `notify {kind, params}` (an OS notification, text from main's table); `stock {method,
 //! params, timeoutMs}` (a stock worker request: `stock::request_in_process` needs main's stdio `Events` to start a
 //! worker, which a hub instance does not hold).
+//! The extension updater asks `workspaceDirs` (the working folders of main's open local and hosted tabs: where
+//! project-scoped plugins and skills live).
 //!
 //! **Preferences** are read in process from `<userData>/prefs.json` ([`Tools::pref`]): `toolsAutoUpdate`,
 //! `ompFollowVerified`, `ompHeldSeen`, `ompHoldTold`, `proxyUrl`.
@@ -150,6 +156,8 @@ pub struct Opts {
     pub manual: bool,
     #[serde(default)]
     pub now: Option<u64>,
+    #[serde(default)]
+    pub locale: String,
 }
 
 /// What the instance tells main and asks of it: the hub's `Out`, or a test's stand-in.
@@ -356,6 +364,10 @@ impl Tools {
             if on {
                 self.spawn_task(schedule(Rc::downgrade(self), updater));
             }
+        }
+        // A launch that does not schedule lists the extensions once, checking nothing.
+        if !scheduled.ext {
+            let _ = ext::rescan(self);
         }
         true
     }

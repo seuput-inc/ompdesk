@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { stopCore } from "../core/process";
-import { CHECK_INTERVAL_MS } from "../update-scheduler";
+import { CHECK_INTERVAL_MS, UPDATE_STEP_MAX_MS } from "../update-scheduler";
 import { ToolsClient } from "./client";
 
 const userData = mkdtempSync(join(tmpdir(), "ompdesk-tools-client-"));
@@ -25,6 +25,7 @@ const asks = {
 	restartWaiting: () => {},
 	notify: () => {},
 	stock: async () => null,
+	workspaceDirs: () => [],
 };
 
 /** Lets the core's items reach main (the hub's worker pings on a turn of the event loop) until `done` holds. */
@@ -64,14 +65,15 @@ describe("ToolsClient against the real core", () => {
 			expect(state.omp).toMatchObject({ enabled: true, scheduled: true, phase: "idle", held: null });
 			expect(state.cli).toEqual({ enabled: true, scheduled: false, tools: [] });
 			expect(client.start()).toBe(true);
-			// The launch tick's pass ran on the queue (ending at once, it armed no bound); then the 4 h timer was armed.
-			await until(() => armed().length === 1);
-			expect(armed()).toEqual([CHECK_INTERVAL_MS]);
+			// A launch that does not schedule the extensions lists them first: its step bound is armed while main answers,
+			// then cleared. The launch tick's pass ran next (ending at once, it armed no bound); then the 4 h timer was armed.
+			await until(() => armed().length === 2);
+			expect(armed()).toEqual([UPDATE_STEP_MAX_MS, CHECK_INTERVAL_MS]);
 			expect(vi.getTimerCount()).toBe(1);
 			// The timer fires in the core: the next tick runs its pass and arms the next 4 h.
 			await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
-			await until(() => armed().length === 2);
-			expect(armed()).toEqual([CHECK_INTERVAL_MS, CHECK_INTERVAL_MS]);
+			await until(() => armed().length === 3);
+			expect(armed()).toEqual([UPDATE_STEP_MAX_MS, CHECK_INTERVAL_MS, CHECK_INTERVAL_MS]);
 			expect(vi.getTimerCount()).toBe(1);
 			client.close();
 			expect(vi.getTimerCount()).toBe(0);

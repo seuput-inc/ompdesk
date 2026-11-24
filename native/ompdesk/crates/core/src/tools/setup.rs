@@ -103,3 +103,36 @@ pub fn call(tools: &Rc<Tools>, method: &str, args: &RawValue) -> Option<Outcome>
         _ => return None,
     })
 }
+
+/// `ToolUpdateRequest` of `setup/service.ts`: one tool's update (an updater's MCP binary or vendor CLI).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ToolUpdateRequest {
+    /// The tool and its update method; the test installer is called `<installer> cli-<tool> <method> update`.
+    pub tool: String,
+    pub method: String,
+    /// The owner's update command; none with `managed`.
+    pub spawn: Option<super::runner::SpawnSpec>,
+    /// Machine setup's own archive of this item again (`gh`, `node`, `agent-desktop`).
+    pub managed: Option<String>,
+    /// Added to the installer environment.
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
+/// `ToolUpdateOutcome` of `setup/service.ts`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolUpdateOutcome {
+    Succeeded,
+    Failed(Option<String>),
+    Cancelled,
+    Skipped,
+}
+
+/// `runToolUpdate`: the update under the supervisor, inline in the caller's step (its `ctx` stops the installer).
+/// Stand-in until T2.2 writes it: it runs nothing.
+pub async fn run_tool_update(
+    _tools: &Rc<Tools>,
+    _ctx: &super::queue::Ctx,
+    _request: ToolUpdateRequest,
+) -> ToolUpdateOutcome {
+    ToolUpdateOutcome::Skipped
+}
