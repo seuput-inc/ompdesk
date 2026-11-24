@@ -41,7 +41,6 @@ runs:
         src/main/web/webhook.test.ts
         src/main/omp-processes.test.ts
         src/main/omp-log-tail.test.ts
-        src/main/session-processes.test.ts
         src/main/console-window-watch.test.ts
         src/main/setup/runner.test.ts
         src/main/setup/download.test.ts
@@ -203,3 +202,9 @@ runs:
         src/main/turn-resume-ends.test.ts
         src/main/connectivity.test.ts
         src/main/autopilot*.test.ts
+    # Alone, after the rest: its spin cases judge a real process by its share of a core (`SPIN_PERCENT`, 50 %), which
+    # the runner's cores did not give it beside the parallel files above (run 45264017767: the closed-pipe spinner read
+    # under 50 % in both cases); alone it passed 10 of 10 (flake-probe 45364024177).
+    - name: vitest over the session processes, alone
+      shell: bash
+      run: bunx vitest run --project=node src/main/session-processes.test.ts
