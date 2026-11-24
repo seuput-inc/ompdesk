@@ -57,7 +57,6 @@ import {
 	APP_AUTO_UPDATE_PREF,
 	CLOSE_TO_TRAY_NOTICE_PREF,
 	CLOSE_TO_TRAY_PREF,
-	closeToTrayEnabled,
 	END_SPINNING_ON_CLOSED_OUTPUT_PREF,
 	KEEP_AWAKE_WORKING_PREF,
 	OMP_FOLLOW_VERIFIED_PREF,
@@ -163,7 +162,6 @@ import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
 import { type PrefsStore, prefsFile } from "./prefs-store";
-import { lastWindowCloseAction } from "./quit-guard";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
 import { HOST_TAB_GRACE_MS, LocalHostServices } from "./remote/host-services";
@@ -200,6 +198,7 @@ import {
 	publishLanguage,
 	readDiagnosticLog,
 	readPreviousRunEnd,
+	serveCloseToTray,
 	serveSessions,
 	serveTray,
 	app as shellApp,
@@ -2242,22 +2241,13 @@ app.whenReady().then(async () => {
 	void sidebarProjects.sync();
 	logWatcher = new LogWatcher();
 
-	// Settings › General › Window: closing the last window hides it to the tray
-	// (Windows; macOS keeps running with no window anyway) or quits through the
-	// quit guard, and this computer stays awake while any of its own tabs runs a turn.
-	windowManager.lastWindowClose = () =>
-		lastWindowCloseAction({
-			platform: process.platform,
-			quitApproved: quitApproved(),
-			// The shell's tray (tauri-shell/src/tray.rs) is there in every run but a test's (OMP_GUI_HEADLESS).
-			closeToTray: process.env.OMP_GUI_HEADLESS !== "1" && closeToTrayEnabled(prefs.get(CLOSE_TO_TRAY_PREF)),
-		});
-	windowManager.lastWindowHidden = () => {
-		// macOS: the Dock icon is the way back and needs no explanation.
-		if (process.platform === "darwin" || prefs.get(CLOSE_TO_TRAY_NOTICE_PREF) === true) return;
-		prefs.set(CLOSE_TO_TRAY_NOTICE_PREF, true);
-		new Notification({ title: mainT("tray.keepsRunningTitle"), body: mainT("tray.keepsRunningBody") }).show();
-	};
+	// Settings › General › Window: the shell decides what closing the last window does (tauri-shell/src/last_close.rs)
+	// from these prefs as stored, pushed now and on every change; its one-time tray notice is recorded here.
+	const publishCloseToTray = serveCloseToTray({
+		read: () => ({ closeToTray: prefs.get(CLOSE_TO_TRAY_PREF), noticeShown: prefs.get(CLOSE_TO_TRAY_NOTICE_PREF) }),
+		noticeShown: () => prefs.set(CLOSE_TO_TRAY_NOTICE_PREF, true),
+	});
+	// This computer stays awake while any of its own tabs runs a turn.
 	const workAwake = new KeepAwakePolicy({
 		blocker: keepAwakeBlocker("work"),
 	});
@@ -2576,6 +2566,7 @@ app.whenReady().then(async () => {
 			hostName: () => devices.deviceName(),
 		},
 		onPrefChanged: key => {
+			if (key === CLOSE_TO_TRAY_PREF || key === CLOSE_TO_TRAY_NOTICE_PREF) publishCloseToTray();
 			if (key === KEEP_AWAKE_WORKING_PREF) {
 				syncWorkAwake();
 				devices.keepAwakeChanged();

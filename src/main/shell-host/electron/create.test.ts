@@ -375,24 +375,18 @@ describe("the quit hooks the shell calls", () => {
 		expect(exited).toEqual([]);
 	});
 
-	it("close closes every window through its close listeners, without window-all-closed", async () => {
+	it("close asks the shell to close every window, without window-all-closed", async () => {
 		const { app, BrowserWindow } = electron;
 		const win = new BrowserWindow({});
 		const order: string[] = [];
-		win.on("close", () => order.push("close"));
+		win.on("closed", () => order.push("closed"));
 		app.on("window-all-closed", () => order.push("window-all-closed"));
 		const answer = hook("close");
 		await settle();
+		expect(fake.callsOf("win.op").filter(call => call.params.op === "close")).toHaveLength(1);
 		await shell.event("win.event", { winId: win.id, name: "closed" });
 		expect(await answer).toBe(true);
-		expect(order).toEqual(["close"]);
-	});
-
-	it("close answers false when a window keeps itself open", async () => {
-		const win = new electron.BrowserWindow({});
-		win.on("close", event => event.preventDefault());
-		expect(await hook("close")).toBe(false);
-		expect(fake.callsOf("win.op").filter(call => call.params.op === "close")).toHaveLength(0);
+		expect(order).toEqual(["closed"]);
 	});
 
 	it("will finishes the stable write between the will-quit listeners on either side of it", async () => {
@@ -580,16 +574,9 @@ describe("BrowserWindow", () => {
 		expect(seen).toEqual(["focus", "blur"]);
 	});
 
-	it("asks close listeners when the person closes the window, and finishes on closed", async () => {
+	it("finishes the window on closed", async () => {
 		const { BrowserWindow, app } = electron;
 		const win = new BrowserWindow({});
-		let prevent = true;
-		win.on("close", event => {
-			if (prevent) event.preventDefault();
-		});
-		expect(await shell.call("win.closeRequested", { winId: win.id })).toEqual({ prevent: true });
-		prevent = false;
-		expect(await shell.call("win.closeRequested", { winId: win.id })).toEqual({ prevent: false });
 		const order: string[] = [];
 		win.on("closed", () => order.push("closed"));
 		app.on("window-all-closed", () => order.push("window-all-closed"));
@@ -600,11 +587,11 @@ describe("BrowserWindow", () => {
 		expect(BrowserWindow.getAllWindows()).toEqual([]);
 	});
 
-	it("close() runs the listeners, then closes without asking again", async () => {
+	it("close() asks the shell, which decides what closing the window does", async () => {
 		const win = new electron.BrowserWindow({});
 		win.close();
 		await settle();
-		expect(fake.callsOf("win.op").at(-1)?.params).toMatchObject({ op: "close", args: { force: true } });
+		expect(fake.callsOf("win.op").at(-1)?.params).toMatchObject({ op: "close", winId: win.id });
 	});
 
 	it("adds and removes view children as view ops", async () => {

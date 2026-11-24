@@ -1,6 +1,6 @@
 /**
- * The "sessions are still working" inventory behind the ⌘Q confirmation, and what a window close does while a quit is
- * underway. A Dock click's rule is the shell's (`tauri-shell/src/entry.rs`).
+ * The "sessions are still working" inventory behind the ⌘Q confirmation. A Dock click's rule and the last window's
+ * close are the shell's (`tauri-shell/src/entry.rs`, `last_close.rs`).
  *
  * Deliberately electron-free: the main process can only be unit-tested through
  * pure modules like this one, so the risk assessment (what counts as in-flight
@@ -59,27 +59,4 @@ export function updateRestartConfirmation(
 ): "running work" | "background work" | null {
 	if (!resumes) return quitNeedsConfirmation(risk, resumes) ? "running work" : null;
 	return hasBackgroundWork(work) ? "background work" : null;
-}
-
-/** What closing the last shown window does. */
-export type LastWindowClose = "close" | "hide" | "quit";
-
-/**
- * Closing a window while no other window is shown. An approved quit lets every window close.
- * macOS hides it, so the window, its tabs and their omp processes keep running and the Dock icon
- * shows the same window again. Elsewhere close-to-tray hides it; otherwise the app quits with it,
- * and that quit is asked for before the window goes, like any quit: the confirmation for
- * running work, then the tabs end with the quit approved, so their resume markers stay
- * (turn-resume.ts). A window closed first ends its tabs as if their turns had finished, and
- * `window-all-closed` quits afterwards with neither.
- */
-export function lastWindowCloseAction(facts: {
-	platform: NodeJS.Platform;
-	quitApproved: boolean;
-	/** A tray exists and Settings › General › Window has close-to-tray on (not asked on macOS). */
-	closeToTray: boolean;
-}): LastWindowClose {
-	if (facts.quitApproved) return "close";
-	if (facts.platform === "darwin") return "hide";
-	return facts.closeToTray ? "hide" : "quit";
 }

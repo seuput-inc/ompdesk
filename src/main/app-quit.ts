@@ -1,9 +1,10 @@
 /**
  * Main's side of the quit. The shell owns the quit's order (ask, confirm, finalize, teardown, window closes,
  * `will-quit`, settle, exit) and calls the effects registered here through `app.quitHook`. Every quit main starts goes
- * through `requestQuit()` (already approved) or `askQuit()` (the shell asks `confirm` first). Without the ask, ⌘Q
- * SIGTERMs every in-flight agent run with no word to the user; with Continue interrupted work on, those runs continue
- * after the next launch and the quit asks nothing.
+ * through `requestQuit()` (already approved); the quits a person asks for in the shell (⌘Q, the app menu, the tray, the
+ * last window) reach the shell's `confirm` first and are logged here (`logQuitAsked`). Without the ask, ⌘Q SIGTERMs
+ * every in-flight agent run with no word to the user; with Continue interrupted work on, those runs continue after the
+ * next launch and the quit asks nothing.
  */
 import { app, BrowserWindow, dialog, type MessageBoxOptions } from "electron";
 import { type BackgroundWork, backgroundWorkSentence } from "./background-work";
@@ -82,12 +83,6 @@ export function requestQuit(asker: QuitAsker, ask?: QuitAsk): void {
 export function approveQuit(asker: QuitAsker, ask?: QuitAsk): void {
 	logQuitAsked(asker, ask);
 	frozen = true;
-}
-
-/** Quit through the shell, which asks first when running work would stop (Continue interrupted work off). */
-export function askQuit(asker: QuitAsker): void {
-	logQuitAsked(asker);
-	shellApp.quit("ask");
 }
 
 /**
