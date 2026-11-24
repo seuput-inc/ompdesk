@@ -14,7 +14,7 @@ import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from ".
 import type { IpcShell } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
-import type { UpdateHost } from "../shell-calls";
+import type { InstallerStartReceipt, UpdateHost } from "../shell-calls";
 import { decodeBin, encodeBin } from "./binary-json";
 import { createElectron } from "./create";
 
@@ -131,6 +131,14 @@ if (hello.facts.legacyUserDataMigration) {
 electron.app.once("quit", () => {
 	ended = true;
 });
+
+export function installerQuitPending(): void {
+	electron.app.installerQuitPending();
+}
+
+export function installerQuitReceipt(receipt: InstallerStartReceipt): void {
+	electron.app.installerQuitReceipt(receipt);
+}
 
 export function readPreviousRunEnd(): Promise<RuntimeLogReport | null> {
 	return client

@@ -17,7 +17,7 @@ src/main/app-auto-update.ts	port	3	setupUpdater reads restartAt in broadcast, cl
 src/main/app-icon.test.ts	tooling	-	Vitest checks packaged/development icon paths and notification defaults against the shell's Rust launch fact.
 src/main/app-quit-failure.test.ts	tooling	-	Vitest suite: exits with failure when the last core stop cannot establish that its processes ended.
 src/main/app-quit.test.ts	tooling	-	Vitest suite: who asked to quit, in gui-runtime.jsonl.
-src/main/app-quit.ts	port	4	installQuitGuard and requestQuit arbitrate Electron before-quit, dialogs, approved restarts, watchdog and exit reporting.
+src/main/app-quit.ts	port	4	The quit's order, once-only teardown, stale-answer drop and installer fence are Tauri's (quit_chain.rs). Node keeps the steps' effects: the confirmation dialog, the approval freeze that tray/last-window/layout saves read in the same tick (quitApproved), the teardown of sidecars, schedules and the core, and settle. Those move with index.ts's teardown owners (§1.3a).
 src/main/atomic-file-disk-full.test.ts	tooling	-	Vitest suite: a write on a full disk.
 src/main/atomic-file.test.ts	tooling	-	Vitest suite: atomic file writes.
 src/main/atomic-file.ts	port	1	writeFileAtomicSync/writeFileAtomic replace sibling temp files; AtomicSaver schedules/replaces deferred writes and disk-full retries.
@@ -265,7 +265,7 @@ src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup
 src/main/initial-cwd.test.ts	tooling	-	Real-core parity for startup cwd selection and default workspace creation.
 src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path or an existing directory before falling back to home.
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
-src/main/installer-spawn.ts	port	1	Shell updater batch, §1.3c: NsisUpdater holds the verified download and elevation decision in its own process and OmpNsisUpdater orders quit after the installer starts. Move that verified handoff with the updater; do not expose detached execution of an arbitrary path through core RPC.
+src/main/installer-spawn.ts	port	1	G: replace the Node worker with native launch of the verified Windows asset, including elevation and the real setup PID. H2 observes the first worker attempt only; never expose a detached spawn by path.
 src/main/ipc.ts	mixed	4	registerIpcHandlers still routes session commands and renderer events. Desktop runtime:log-path and runtime:log-tail bypass Node; paired requests use the same Tauri reader after the workspace permission check. Clipboard and image conversion already use the shell and stock worker.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
@@ -326,7 +326,7 @@ src/main/notification-batch.ts	port	2	The first notice immediately returns a clo
 src/main/notify-triage.test.ts	tooling	-	Vitest suite: a completion the judge says waits for the person.
 src/main/notify-triage.ts	mixed	3	The shell owns repeat admission and the judge deadline. §1.3(a,c): the window's local bridge is a live capability; its focus must be read after the judge result with no yield before enqueueing the notice.
 src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
-src/main/nsis-updater.ts	port	4	electron-updater owns the verified installer path, elevation fallback and synchronous quitAndInstall contract. The override delays quit until the detached spawn answers; move both with the quit owner (§1.3a,c). WinHTTP option 195 is handled by the Rust shell.
+src/main/nsis-updater.ts	port	4	H2 hands the first worker result (PID or failure) to Tauri before teardown. An elevate.exe PID identifies the helper, not setup; stock EACCES/UNKNOWN elevation and ENOENT openPath fallbacks are not additional receipts. G replaces this adapter with verified-asset launch and its own elevation path (§1.3a,c).
 src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
 src/main/omp-auto-takeover.ts	port	2	Shell updater batch, §1.3a,c: OmpUpdater.state reads taken() synchronously at startup and on every change. Move that snapshot with the stock update.auto record and its serialized read/write/restore; a stale copy can report ownership the person revoked.
 src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
@@ -357,11 +357,11 @@ src/main/packaging-config.test.ts	tooling	-	Vitest suite: mac bundle configs.
 src/main/platform-test-scope.test.ts	tooling	-	Vitest suite: Windows test scope.
 src/main/process-alive.ts	port	1	test-launcher-exit decides immediately whether the launcher has ended; lock-slots also reads signal-zero synchronously (EPERM means alive). Neither caller requires a running core; this is not session process supervision.
 src/main/quit-guard.test.ts	tooling	-	Vitest suite: quit guard risk assessment.
-src/main/quit-guard.ts	port	3	app-quit reads QuitLatch in before-quit to veto synchronously or admit teardown once. Last-window close and Dock activation also read approval immediately; the guard performs no separate I/O.
+src/main/quit-guard.ts	port	3	QuitLatch moved to tauri-shell quit_chain.rs. The risk, confirmation, last-window and Dock-activation rules stay pure functions that app-quit's confirm effect and index.ts's window handlers call synchronously on live tab facts; they move with those handlers (§1.3a).
 src/main/quit-log.test.ts	tooling	-	Vitest suite: app-quit lines.
 src/main/quit-log.ts	mixed	1	The shell reads and classifies the previous log tail (app.previousRunEnd). app-quit writes quitAskedReport before app.quit(); endMain uses exitReport even after the shell disconnects. Move those with the exit events and their writer.
 src/main/quit-watchdog.test.ts	tooling	-	Vitest suite: quit watchdog.
-src/main/quit-watchdog.ts	port	2	installQuitGuard arms after teardown starts; updater error handlers disarm in the same tick. Expiry runs the staged swap hook before app.exit(0). Move with quit approval, update cancellation and force-exit hooks.
+src/main/quit-watchdog.ts	port	2	app-quit's teardown effect arms it (reason quit or update, chosen by the shell's teardown step); updater error handlers disarm in the same tick. Expiry runs the staged swap hook before app.exit(0). Move with the teardown effects and update cancellation.
 src/main/quota-reset-stock.test.ts	tooling	-	Vitest suite: never waits for a failure stock calls a billing cap, and waits for the limits stock lets pass with time.
 src/main/raw-imports.d.ts	tooling	-	Ambient declarations type Vite *.md?raw and *.png?inline imports in the main bundle; no runtime implementation.
 src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credentials.

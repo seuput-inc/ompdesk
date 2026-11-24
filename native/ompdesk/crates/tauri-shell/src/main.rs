@@ -25,6 +25,7 @@ mod preview_surface;
 mod process_failed;
 mod profile;
 mod profile_file;
+mod quit_chain;
 mod registry;
 mod runtime_inputs;
 mod sessions;
@@ -108,6 +109,7 @@ struct Runtime {
     renderer: PathBuf,
     user_agent: Mutex<Option<String>>,
     relaunch: Mutex<Option<Vec<String>>>,
+    quit: Mutex<quit_chain::Chain>,
     stop_instance: AtomicBool,
     instance_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -1122,6 +1124,16 @@ fn wc_op(call: host::Call) {
     }
 }
 fn dispatch(call: host::Call) {
+    if call.method == "app.quit" {
+        match quit_chain::parse(&call.params) {
+            Ok(admission) => {
+                call.ok(Value::Null);
+                quit_chain::admit(&runtime().quit, admission);
+            }
+            Err(error) => call.err("invalid", error),
+        }
+        return;
+    }
     // The socket reader dispatches in order. The receipt follows the file write, not its scheduling.
     if call.method == "app.startLaunchProtection" {
         if LAUNCH.get().is_some() {
@@ -1302,6 +1314,7 @@ fn dispatch_ui(call: host::Call) {
                 call.err("exiting", "application exit already requested");
                 return;
             }
+            runtime().quit.lock().expect("quit chain").terminate();
             call.ok(json!({}));
             // The writer remains alive during node::stop, so Node receives this receipt before teardown.
             exit_after_preview(code);
@@ -1362,6 +1375,7 @@ fn exit_after_preview(code: i32) {
 /// Node is gone: `via` says how the shell learned it (`exited`: its process ended, `closed`: its connection did).
 fn node_gone(via: &str, code: Option<i32>) {
     sessions::protocol::disconnected();
+    runtime().quit.lock().expect("quit chain").terminate();
     let quitting = lifecycle::EXITING.swap(true, Ordering::SeqCst);
     log::log(
         "node.gone",
@@ -1942,6 +1956,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     renderer,
                     user_agent: Mutex::new(None),
                     relaunch: Mutex::new(None),
+                    quit: Mutex::default(),
                     stop_instance: AtomicBool::new(false),
                     instance_thread: Mutex::new(None),
                 })
@@ -2006,14 +2021,11 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         // `code`: None when the system or the last window asked (the Dock's Quit, ⌘Q handled by macOS, a logout),
         // Some when this shell's own `exit` did.
         RunEvent::ExitRequested { code, api, .. } => {
-            let forward = !lifecycle::EXITING.load(Ordering::SeqCst);
-            log::log(
-                "exit.requested",
-                json!({"code":code,"forwardedToNode":forward}),
-            );
-            if forward {
+            let ask = !lifecycle::EXITING.load(Ordering::SeqCst);
+            log::log("exit.requested", json!({"code":code,"quitAsked":ask}));
+            if ask {
                 api.prevent_exit();
-                host::event("app.quitRequested", json!({}));
+                quit_chain::admit(&runtime().quit, quit_chain::Admission::Ask);
             }
         }
         RunEvent::Exit => node::stop(Duration::from_secs(5)),

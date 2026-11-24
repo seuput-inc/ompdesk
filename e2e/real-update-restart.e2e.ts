@@ -7,7 +7,7 @@ import { exitApp } from "./harness";
 import { realOmpProfile, spentIn } from "./real-omp";
 
 // Opt-in audits on the user's small model: "Restart to update" while work runs. The update path
-// is an approved quit (relaunch mode: `requestQuit()`; Squirrel: `before-quit-for-update`, then
+// is an approved quit (relaunch mode: `requestQuit()`; NSIS: the installer's receipt, then
 // the same teardown), so the test approves the quit the way the update does and relaunches on
 // the same userData. What continues after the relaunch is read from the journals and the files
 // the work writes.
