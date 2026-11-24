@@ -6,7 +6,6 @@
 //! `ProcessFailed` reports a renderer that ended, and one the engine itself found unresponsive.
 #![allow(unsafe_code)]
 
-use crate::host::Call;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -233,12 +232,11 @@ fn end_process(pid: i32) -> Result<(), String> {
     Ok(())
 }
 
-pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
-    // A view that is gone drops the closure, and the call with it: that answers `failed`.
+pub fn kill(window: &WebviewWindow, wc: u64) {
     let asked = window.with_webview(move |view| {
         let known = RENDERERS.with_borrow_mut(|known| known.remove(&wc));
         match known.map(|pid| (pid, live_renderer(&view, pid))) {
-            Some((pid, Ok(true))) => end(wc, call, Ok(pid), "learned"),
+            Some((pid, Ok(true))) => end(wc, Ok(pid), "learned"),
             known => {
                 // Not learned (the page never answered), or that renderer is gone: ask now, which a stuck renderer
                 // may never answer.
@@ -248,7 +246,7 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
                         serde_json::json!({"pid": pid, "live": live.map_err(|e| e.to_string())})
                     })}),
                 );
-                lookup(&view, move |found| end(wc, call, found, "looked up"));
+                lookup(&view, move |found| end(wc, found, "looked up"));
             }
         }
     });
@@ -260,7 +258,7 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
     }
 }
 
-fn end(wc: u64, call: Call, renderer: Result<i32, String>, how: &str) {
+fn end(wc: u64, renderer: Result<i32, String>, how: &str) {
     let ended = renderer.and_then(|pid| {
         crate::log::log(
             "page.kill_pid",
@@ -269,7 +267,7 @@ fn end(wc: u64, call: Call, renderer: Result<i32, String>, how: &str) {
         super::killing(wc, true);
         end_process(pid).inspect_err(|_| super::killing(wc, false))
     });
-    super::crash_answer(wc, call, ended.map_err(crate::failed));
+    super::killed(wc, ended.map_err(crate::failed));
 }
 
 /// WebView2 may wait for its cookie store between admitting a navigation and invoking our scheme handler.
