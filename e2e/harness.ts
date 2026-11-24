@@ -187,7 +187,7 @@ export function readClipboardText(app: ElectronApplication): Promise<string> {
 }
 
 /**
- * Machine setup's back-off ledger (`<userData>/setup-state.json`, `SetupService`) with three automatic misses
+ * Machine setup's back-off ledger (`<userData>/setup-state.json`, the core's `tools/setup/ledger.rs`) with three automatic misses
  * today for each of `items`, so the launch leaves them alone ("Paused after failed attempts"). Each miss names
  * the version that made it: the ledger ignores another version's misses (a fixed release repairs at its first
  * launch), and the built app launched unpackaged takes its `app.getVersion()` from the checkout's package.json. A

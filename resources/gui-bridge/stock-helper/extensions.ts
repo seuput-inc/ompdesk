@@ -1,5 +1,5 @@
 /**
- * The `extensions` worker (`host.ts extensions`): everything the extension updater (src/main/ext-update/)
+ * The `extensions` worker (`host.ts extensions`): everything the extension updater (the core's `tools/ext.rs`)
  * asks of this computer's omp without a session: what is installed (marketplaces, plugins, registry skills,
  * MCP servers), the catalog refresh, the plugin and skill version checks and their upgrades. The contracts
  * are in extensions-contracts.ts; the pure decisions (pins, origins) in extension-specs.ts.

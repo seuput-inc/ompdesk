@@ -40,7 +40,7 @@ async function loginEnv(): Promise<Record<string, string>> {
 	return env;
 }
 
-/** Machine setup's gh item, for a sign-in that finds gh missing (src/main/setup/service.ts). */
+/** Machine setup's gh item, for a sign-in that finds gh missing (the core's `tools` instance, `tools/client.ts`). */
 export type GithubInstallHooks = Pick<GithubAuthDeps, "installGh" | "cancelGhInstall">;
 
 export function createGithubAuthService(

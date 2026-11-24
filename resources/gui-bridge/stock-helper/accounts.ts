@@ -1,4 +1,4 @@
-/** Main-side worker: which stock providers have a stored credential (src/main/cli-tools/updater.ts). */
+/** Main-side worker: which stock providers have a stored credential (asked by the core's tools/cli through main). */
 import { ompModuleFile } from "../omp-package";
 
 interface StockAuthStorage {

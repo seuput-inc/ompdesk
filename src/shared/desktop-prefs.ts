@@ -35,7 +35,7 @@ export const APP_AUTO_UPDATE_PREF = "appAutoUpdate";
 
 /**
  * Keep tools up to date (Settings › Updates & about; default on, only a stored `false` turns it off): omp itself
- * (`omp-updater.ts`), the tool CLIs of connected accounts (`cli-tools/`) and omp's extensions (`ext-update/`).
+ * (the core's `tools/omp`), the tool CLIs of connected accounts (`tools/cli`) and omp's extensions (`tools/ext.rs`).
  * Replaced the three switches `ompAutoUpdate`, `cliAutoUpdate`, `extensionAutoUpdate` (`crates/core/src/prefs/retired.rs`).
  */
 export const TOOLS_AUTO_UPDATE_PREF = "toolsAutoUpdate";

@@ -1,6 +1,6 @@
 /**
- * Settings › Updates & about › This computer: one "Keep tools up to date" switch (default on) for omp (main
- * `omp-updater.ts`), the tool CLIs and extensions (their rows follow below). omp's own "Update now" and what main
+ * Settings › Updates & about › This computer: one "Keep tools up to date" switch (default on) for omp (the core's
+ * `tools/omp`), the tool CLIs and extensions (their rows follow below). omp's own "Update now" and what main
  * last learned from npm sit on omp's machine-setup row (`OmpUpdateNowButton`, `OmpUpdateStatus`): one row for omp,
  * not two. OMPdesk's own update stays manual (the section above).
  */
