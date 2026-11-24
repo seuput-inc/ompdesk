@@ -35,7 +35,7 @@ use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 
 use crate::disk::saves::{disk_full, waiting_content, write_kept};
-use crate::hub::{Kind, Outcome, params};
+use crate::hub::{Kind, Out, Outcome, params, post};
 use crate::server::Fault;
 
 pub use path::{Part, parts_of};
@@ -275,6 +275,28 @@ pub fn delete(file: &str, key: &str) -> Result<(), Fault> {
     Ok(())
 }
 
+/// Reads the value at `key`, lets `change` decide the next one (`None`: leave it), writes it and answers the value now
+/// held, all under the file's one lock: no other change of this file lands between the read and the write. For a
+/// native caller that patches a stored blob (the sidebar's `moveSidebarPin`/`updateSidebarPrefs` once they move).
+/// Main's own patches already read and write in one tick of its thread, which nothing else writes in.
+pub fn update(
+    file: &str,
+    key: &str,
+    change: impl FnOnce(Option<&Value>) -> Option<Value>,
+) -> Result<Option<Value>, Fault> {
+    let prefs = prefs(file)?;
+    let mut state = prefs.current()?;
+    let current = read_key(&state.store, key)?;
+    let Some(next) = change(current.as_ref()) else {
+        return Ok(current);
+    };
+    write_key(&mut state.store, key, next.clone())?;
+    prefs.changed(state);
+    let (file, key) = (file.to_string(), key.to_string());
+    post(move || tell_changed(&file, &key));
+    Ok(Some(next))
+}
+
 /// The whole store, without conf's bookkeeping.
 pub fn store(file: &str) -> Result<Map<String, Value>, Fault> {
     let prefs = prefs(file)?;
@@ -298,11 +320,28 @@ pub fn replace(file: &str, mut value: Map<String, Value>) -> Result<(), Fault> {
 
 // ---- the hub kind -------------------------------------------------------------------------------------------------
 
+thread_local! {
+    /// Main's open prefs instances (on the hub thread): told of a change main did not make, so its copies of the core's
+    /// answers (`prefs-store.ts`) drop what the change reached.
+    static LISTENERS: std::cell::RefCell<Vec<Out>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn tell_changed(file: &str, key: &str) {
+    LISTENERS.with(|listeners| {
+        for out in listeners.borrow().iter() {
+            out.push(&json!({ "k": "changed", "file": file, "key": key }));
+        }
+    });
+}
+
 pub const KIND: Kind = Kind {
     name: "prefs",
-    open: |_, _, _| Ok(()),
+    open: |_, _, out| {
+        LISTENERS.with(|listeners| listeners.borrow_mut().push(out));
+        Ok(())
+    },
     call,
-    close: |_| {},
+    close: |id| LISTENERS.with(|listeners| listeners.borrow_mut().retain(|out| out.id() != id)),
 };
 
 #[derive(Deserialize)]

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::path::{Part, parse};
-use super::{delete, flush, get, read_key, remove_key, set, store, write_key};
+use super::{delete, flush, get, read_key, remove_key, set, store, update, write_key};
 
 #[derive(Deserialize)]
 struct Vectors {
@@ -153,4 +153,36 @@ fn every_retired_pref_leaves_and_a_live_one_stays() {
             "{key} twice"
         );
     }
+}
+
+#[test]
+fn an_update_patches_the_value_it_read_and_answers_what_is_held() {
+    let dir = temp();
+    let file = dir.path().join("prefs.json");
+    let name = file.to_str().unwrap();
+    set(
+        name,
+        "sidebar",
+        json!({ "pinnedSessions": ["/a"], "other": 1 }),
+    )
+    .unwrap();
+
+    let moved = update(name, "sidebar", |current| {
+        let mut next = current.cloned()?;
+        next["pinnedSessions"] = json!(["/b"]);
+        Some(next)
+    })
+    .unwrap();
+    assert_eq!(moved, Some(json!({ "pinnedSessions": ["/b"], "other": 1 })));
+    assert_eq!(
+        get(name, "sidebar.pinnedSessions").unwrap(),
+        Some(json!(["/b"]))
+    );
+
+    let left = update(name, "sidebar", |_| None).unwrap();
+    assert_eq!(left, moved);
+    assert_eq!(
+        update(name, "missing", |current| current.cloned()).unwrap(),
+        None
+    );
 }
