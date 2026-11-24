@@ -181,10 +181,10 @@ async fn upsert_creates_lists_and_deletes() {
             0o600
         );
     }
-    let views = views(&stock, &dir).await.unwrap();
-    assert_eq!(views[0]["hasApiKey"], json!(true));
-    assert_eq!(views[0]["apiKeyPreview"], json!("•••1234"));
-    assert!(views[0].get("apiKey").is_none());
+    let listed = views(&stock, &dir).await.unwrap();
+    assert_eq!(listed[0]["hasApiKey"], json!(true));
+    assert_eq!(listed[0]["apiKeyPreview"], json!("•••1234"));
+    assert!(listed[0].get("apiKey").is_none());
     // The key stays through an edit that does not give one, and goes when cleared.
     upsert(
         &stock,
