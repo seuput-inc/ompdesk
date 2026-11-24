@@ -77,12 +77,12 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2435-2439",
+				"src/main/index.ts:2433-2437",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "bdd9d20210867b31ab0ed49a88f839d6adb772d5",
+			"syncCommit": "23c8866d494ed5f8b6b769ad14828eb1e6888130",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "b2123f29417e1c59442cddbeb124c594afa559ed",
+			"syncCommit": "23c8866d494ed5f8b6b769ad14828eb1e6888130",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
