@@ -10,6 +10,7 @@
  * (same first path segment, or any key with an escape), so the next read asks the core again and a read in the same
  * tick as a change sees it. A lost hub drops every answer: the next core reads the files again.
  */
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app } from "electron";
 import { hub } from "./core/hub";
@@ -106,6 +107,7 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 	}
 
 	#read(key: string): unknown {
+		if (probeDir) probe.reads++;
 		const cached = this.#answers();
 		if (cached.keys.has(key)) return cached.keys.get(key);
 		const { value } = this.#call<{ value?: unknown }>("get", { key });
@@ -130,8 +132,47 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 	}
 
 	#call<R>(method: string, params: Record<string, unknown>): R {
-		return hub().callOnce<R>(instance, method, { file: this.path, ...params });
+		if (!probeDir) return hub().callOnce<R>(instance, method, { file: this.path, ...params });
+		const started = performance.now();
+		try {
+			return hub().callOnce<R>(instance, method, { file: this.path, ...params });
+		} finally {
+			probe.durations.push(Math.round((performance.now() - started) * 1000));
+			const name = `${method} ${String(params.key ?? "")}`;
+			probe.keys.set(name, (probe.keys.get(name) ?? 0) + 1);
+		}
 	}
+}
+
+// probe only: counts reads and times every prefs hub call, written to OMP_GUI_PREFS_PROBE_DIR.
+const probeDir = process.env.OMP_GUI_PREFS_PROBE_DIR;
+const probe = { reads: 0, durations: [] as number[], keys: new Map<string, number>() };
+function writeProbe(): void {
+	if (!probeDir || probe.reads === 0) return;
+	const sorted = [...probe.durations].sort((a, b) => a - b);
+	const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
+	const stats = hub().stats;
+	mkdirSync(probeDir, { recursive: true });
+	writeFileSync(
+		join(probeDir, `${process.pid}.json`),
+		JSON.stringify({
+			uptimeS: Math.round(process.uptime()),
+			reads: probe.reads,
+			calls: sorted.length,
+			p50Us: at(0.5),
+			p99Us: at(0.99),
+			maxUs: sorted.at(-1) ?? 0,
+			totalMs: Math.round(sorted.reduce((s, v) => s + v, 0) / 1000),
+			hubCalls: stats.calls,
+			hubTotalMs: Math.round(stats.totalUs / 1000),
+			keys: [...probe.keys].sort((a, b) => b[1] - a[1]).slice(0, 25),
+		}),
+	);
+}
+if (probeDir) {
+	hub().measuring = true;
+	setInterval(writeProbe, 20_000).unref();
+	process.on("exit", writeProbe);
 }
 
 /** `<userData>/<name>.json`, where electron-store kept a store of that name. */
