@@ -8,6 +8,7 @@ mod archive;
 pub mod autopilot;
 pub mod browsers;
 pub mod care;
+pub mod clients;
 pub mod clock;
 pub mod control;
 mod diagnostic_bundle;

@@ -18,6 +18,7 @@ mod page_watch;
 mod preview_protocol;
 pub use native_chrome::menu;
 mod ipc_router;
+mod page_dialogs;
 mod preview;
 mod preview_surface;
 mod process_failed;

@@ -42,7 +42,7 @@ use tokio::sync::{Notify, mpsc, oneshot};
 use crate::server::Fault;
 
 mod desktop_slot;
-mod listen;
+pub(crate) mod listen;
 mod probe;
 #[cfg(test)]
 mod tests;
