@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:144-145",
+				"src/main/shell-host/electron/index.ts:162-163",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
@@ -53,7 +53,7 @@
 				"native/ompdesk/crates/shell/src/main.rs:344-363",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "72400d5cf5fada8564d0bd0b21e5fe6406dee35d"
+			"syncCommit": "8de6619c2db768e9f3819dc29d2da396eea1c933"
 		},
 		{
 			"id": "turn-resume",
@@ -77,12 +77,12 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2425-2429",
+				"src/main/index.ts:2433-2437",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "004e8b261b11f1bdfce8a60618fdc6803ebd376f",
+			"syncCommit": "2fed3941e16470c38e31d0b321dfcfeb10c55f88",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "c530cc79a86616c3138ea221f5ab4e50c7834d20",
+			"syncCommit": "d231abf62bf6b862bc80c4e23a7c0f8dd2d7eed9",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -154,7 +154,7 @@
 				"src/main/tab-release.ts#closeWindowTab",
 				"src/main/agent-control/host.ts:1240-1247"
 			],
-			"syncCommit": "13852b1a7af5c7a61aad60dff2142432eeeb6586",
+			"syncCommit": "c08ca9e738baf8368a91a765938e9cda118dfca0",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -234,7 +234,7 @@
 				"src/main/session-processes.ts",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "3b2ea6891ff017247d8a15efd6f47ec44e892150",
+			"syncCommit": "a48197a0bbaccca8461e3effc1aa3b3eccdc6998",
 			"verifySkill": ".omp/skills/session-processes-verify/SKILL.md"
 		},
 		{
@@ -284,7 +284,7 @@
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
 				"src/main/ipc.ts:653-672"
 			],
-			"syncCommit": "0a29ca1f972d98b7681f718ea9b6379caa2b47de"
+			"syncCommit": "16bd1cc0dd42cbd160c552b45f2f058c58f996e5"
 		},
 		{
 			"id": "open-first-message",

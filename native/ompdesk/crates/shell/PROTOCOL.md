@@ -97,7 +97,7 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `store.saveFailed` / `store.saved` (events) | shell→Node | `{file}` | Tauri: `window-state.json` waits for disk space / was saved; Node's one disk-full notice lists it meanwhile. |
 | `app.setDockIcon` | Node | `{}` + `bin` PNG | macOS `app.dock.setIcon`. |
 | `app.setAppUserModelId` | Node | `{id}` | Windows AppUserModelID (also in `app.init`). |
-| `app.setAsDefaultProtocolClient` | Node | `{protocol}` | `{ok: boolean}` — registers the shell's own exe: Windows `HKCU\Software\Classes\<protocol>` (`shell\open\command` = `"exe" "%1"`), macOS LaunchServices (`LSSetDefaultHandlerForURLScheme`). The shell's exe only: dev runs register the dev shell. |
+| `app.setAsDefaultProtocolClient` | Node | `{protocol}` | `{ok: boolean}` — CEF only; Node no longer asks (W2): `omp://` is registered once, by the Windows installer (`electron-builder.win.yml` `protocols`) and the macOS bundle's `CFBundleURLTypes`. The CEF shell registers its own exe: Windows `HKCU\Software\Classes\<protocol>` (`shell\open\command` = `"exe" "%1"`), macOS LaunchServices (`LSSetDefaultHandlerForURLScheme`). |
 | `app.showAboutPanel` | Node | `{}` | macOS standard about panel using the init `aboutPanel` options; Windows: no-op. |
 | `app.getGPUInfo` | Node | `{kind: "basic"\|"complete"}` | `{info: {gpuDevice: [{vendorId, deviceId, active, driverVendor?, driverVersion?, deviceString?}]}, features: Record<string,string>}`. `features` is Electron's `getGPUFeatureStatus()` (`gpu_compositing` is `"enabled"`, `"disabled_software"`, …); the shim serves the sync `getGPUFeatureStatus()` from the last answer. Resolves once the GPU process reported (CEF `GetGPUInfo`/the `chrome://gpu` feature status), never earlier. |
 | `app.startLaunchProtection` | Node | `{primary, enableGpu, disableGpu}` (booleans) | Tauri: `{guard, safeMode, software, stableAfterMs, logs}` after the selected profile's history/marker writes are attempted. Called once, before `app.init`. |
@@ -105,12 +105,15 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `app.previousRunEnd` | Node | `{ownPid: number}` | Tauri: the previous run's unclean-end report or `null`. Reads only this profile's runtime log. |
 | `app.consumeHangReports` | Node | `{}` | Tauri: zero to two log records from the previous main-thread hang. The primary instance consumes the marker before starting its new heartbeat. |
 | `app.diagnosticBundleFileName` | Node | `{title, localDate: [year, month, day], anonymized}` | Tauri returns the suggested `.zip` filename for the save dialog or Downloads. The month is 1-based. The title slug fits 40 UTF-16 code units without splitting a character. |
-| `app.secondInstance` (event) | shell→Node | `{kind:"url", url}` / `{kind:"path", path}` / `{kind:"focus"}` | after skipping the executable, the first `omp://` URL wins; otherwise the first non-switch directory in the running shell’s cwd, else focus. A relative path is passed unchanged and ignored by main, not resolved in the second launch’s cwd. |
-| `app.openUrl` (event) | shell→Node | `{url}` | macOS `kAEGetURL` (and Windows protocol launches arrive as `secondInstance`). |
-| `app.openFile` (event) | shell→Node | `{path}` | macOS `kAEOpenDocuments`. |
+| `app.secondInstance` (event) | shell→Node | `{kind:"url", url}` / `{kind:"path", path}` / `{kind:"focus"}` | CEF only. After skipping the executable, the first `omp://` URL wins; otherwise the first non-switch directory in the running shell’s cwd, else focus. A relative path is passed unchanged and ignored by main, not resolved in the second launch’s cwd. Tauri: the shell opens the same request itself (`tauri-shell/src/entry.rs`) and sends no event. |
+| `app.openUrl` (event) | shell→Node | `{url}` | CEF only: macOS `kAEGetURL` (and Windows protocol launches arrive as `secondInstance`). Tauri: the shell opens it itself; a `file:` URL is a folder or file (`session.openPath`). |
+| `app.openFile` (event) | shell→Node | `{path}` | CEF only: macOS `kAEOpenDocuments`. |
+| `session.spawnWindow` | shell→Node | `{cwd?}` | Tauri: `{win}` once Node made a window and its tab (no `cwd`: the saved layout, as a launch restores it), or `null` (a quit is approved, no tab could start). A Dock click with no window, the window shortcut with none, an `omp://` link with none. |
+| `session.openPath` | shell→Node | `{path}` | Tauri: `{focus: win}` when a window's cwd is the resolved path (the shell restores, shows and focuses it), `{spawned: win}` when Node opened one there, `null` for a relative path or a refused spawn. |
+| `session.ready` (event) | Node→shell | `{}` | Tauri: Node's startup windows exist and it answers `session.*`. Links, folders and second launches that reached the shell before wait for it and then run one at a time, in order; a spawn asked before it is dropped. |
 | `app.quit` | Node | `{intent: "ask"\|"approved"\|"installerPending"}` / `{intent: "installerReceipt", receipt: {kind:"started", pid} \| {kind:"failed", message, code?}}` | `null` once admitted; `invalid` for any other shape. Tauri orders the quit (`tauri-shell/src/quit_chain.rs`). Ask: `before → confirm → finalize → teardown → close → will → settle → exit`; approved skips `confirm`. `installerPending` (before the ordinary teardown only) drops the uncommitted step's answer and holds every quit until the first-worker receipt, which runs `teardown(update) → before → close → will → settle → exit`. A receipt without a pending install, a second receipt and anything after `app.exit` or Node's end are ignored. The system's quit (⌘Q, Dock › Quit, logout, last window) is admitted as `ask`. |
 | `app.quitHook` | shell→Node | `{step, update, code?}` | One step at a time, each committing step (`finalize`, `teardown`) at most once; a stale answer is dropped. `before`/`confirm`/`close`/`will` answer a boolean (false vetoes; a later request resumes at `before`, never re-sending a committed step), `finalize`/`teardown`/`exit` `null`, `settle` 0 or 1 (the `exit` code). Any other answer stops the quit and is logged (`quit.fault`). |
-| `app.activate` (event) | shell→Node | `{hasVisibleWindows: boolean}` | macOS Dock click. |
+| `app.activate` (event) | shell→Node | `{hasVisibleWindows: boolean}` | CEF only: macOS Dock click. Tauri: the shell decides (`RunEvent::Reopen`): no window → `session.spawnWindow`, none visible → the focused or first window comes back, else nothing; nothing at all once a quit is approved. |
 | `app.childProcessGone` (event) | shell→Node | `{type, reason, exitCode, name?, serviceName?, launchDecision?}` | A WebView2 GPU failure can carry `{log, relaunch?}` after the guard writes the marker/history. Renderer crashes use `wc.event render-process-gone`. |
 
 `Scheme = {scheme, privileges: {standard?, secure?, bypassCSP?, allowServiceWorkers?, supportFetchAPI?, corsEnabled?, stream?, codeCache?}}`
@@ -315,9 +318,9 @@ role. AppKit sends the action to the first responder. A native edit does not pro
 | `power.idleTime` | Node | `{}` | `{seconds}` — idle input time (`GetLastInputInfo` / `CGEventSourceSecondsSinceLastEventType`) |
 | `power.blockerStart` | Node | `{id, type: "prevent-app-suspension"\|"prevent-display-sleep"}` | `{}` — `id` is Node's (Electron's `start()` returns it at once) |
 | `power.blockerStop` | Node | `{id}` | `{}` |
-| `shortcut.register` | Node | `{accelerator}` | `{registered: boolean}` |
-| `shortcut.unregister` | Node | `{accelerator}` | `{}` |
-| `shortcut.fired` (event) | shell→Node | `{accelerator}` | |
+| `shortcut.register` | Node | `{accelerator}` | `{registered: boolean}` — CEF only; Node no longer asks. Tauri registers the window shortcut (`CommandOrControl+Shift+O`, `window.toggle`) itself at start and toggles the windows (`entry.rs`). |
+| `shortcut.unregister` | Node | `{accelerator}` | `{}` — CEF only |
+| `shortcut.fired` (event) | shell→Node | `{accelerator}` | CEF only |
 | `net.online` (event) | shell→Node | `{online}` | mirrors `net.isOnline()` |
 
 The system-permission calls main makes on macOS (`systemPreferences.isTrustedAccessibilityClient(prompt)`,
@@ -446,8 +449,8 @@ What the Rust shell does differently from this table or from Electron. README.md
 - **Ids**: Node's `winId`/`wcId`/`viewId` are used as sent; the shell's own counters only serve a create that omits them.
 - **`app.exit`**: the shell records the exit before answering. Windows close without `win.closeRequested`; browsers that have not closed after 4 s do not hold the quit. Node's stdin stays open while its accepted exit finishes, so stdin EOF cannot overtake the receipt.
   Node dying unexpectedly still makes the shell exit 1 after logging it on stderr.
-- **`app.secondInstance`** is sent for a second launch of the same user-data folder (named pipe, unix socket on macOS: `$TMPDIR/ompdesk-<16 hex of SHA-256(userData)>-shell.sock`, `/tmp/…` when TMPDIR is long, 0600; the host socket Node gets is `…-host-<pid>.sock` beside it);
-  `app.openUrl`, `app.openFile`, `app.activate` are macOS only and unverified.
+- **`app.secondInstance`** is sent for a second launch of the same user-data folder (named pipe, unix socket on macOS: `$TMPDIR/ompdesk-<16 hex of SHA-256(userData)>-shell.sock`, `/tmp/…` when TMPDIR is long, 0600; the host socket Node gets is `…-host-<pid>.sock` beside it); the Tauri shell opens it itself instead.
+  `app.openUrl`, `app.openFile`, `app.activate` are macOS only and unverified (CEF).
 - **`wc.navigate`**: for main-frame navigations Node did not start itself. A click on a `file:` link is reported by the
   injected preload (`POST /__shell/will-navigate`) and the request is sent without waiting for the answer: Blink refuses
   that navigation before the browser process sees it, so it is always blocked.

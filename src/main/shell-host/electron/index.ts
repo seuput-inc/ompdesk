@@ -77,6 +77,24 @@ export function serveWindows(windows: {
 	client.on("store.saved", ({ file }: { file: string }) => windows.saves(file, false));
 }
 
+/**
+ * The windows the shell's entry points ask for (`tauri-shell/src/entry.rs`): a new window, or the one showing a folder.
+ * `session.ready` tells the shell the startup windows exist, so the links and folders it held run now.
+ */
+export function serveSessions(sessions: {
+	spawnWindow(cwd?: string): Promise<number | null>;
+	openPath(path: string): Promise<{ focus: number } | { spawned: number } | null>;
+}): void {
+	client.handle("session.spawnWindow", async ({ cwd }: { cwd?: unknown }) => {
+		const win = await sessions.spawnWindow(typeof cwd === "string" ? cwd : undefined);
+		return win === null ? null : { win };
+	});
+	client.handle("session.openPath", ({ path }: { path?: unknown }) =>
+		typeof path === "string" ? sessions.openPath(path) : null,
+	);
+	void client.event("session.ready");
+}
+
 export function setShellRunProgress(state: RunProgressState): void {
 	void client.call("app.setRunProgress", { state }).catch((error: unknown) => console.warn("[run-progress]", error));
 }
@@ -203,7 +221,6 @@ export const {
 	systemPreferences,
 	powerMonitor,
 	powerSaveBlocker,
-	globalShortcut,
 	autoUpdater,
 	net,
 	nativeImage,

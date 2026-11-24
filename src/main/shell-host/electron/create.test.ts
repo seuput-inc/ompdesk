@@ -102,7 +102,6 @@ function fakeShell(shell: ShellClient) {
 		"app.launchEvent",
 		"app.exit",
 		"app.quit",
-		"app.setAsDefaultProtocolClient",
 		"app.getGPUInfo",
 		"win.create",
 		"win.op",
@@ -128,10 +127,7 @@ function fakeShell(shell: ShellClient) {
 		"notification.close",
 		"power.blockerStart",
 		"power.blockerStop",
-		"shortcut.register",
-		"shortcut.unregister",
 	];
-	answers.set("shortcut.register", () => ({ registered: true }));
 	for (const method of methods) {
 		shell.handle(method, (params: Record<string, unknown>, { bin, signal }) => {
 			calls.push({ method, params, bin });
@@ -261,9 +257,9 @@ describe("app", () => {
 
 	it("holds requests that need CEF until app.ready, in order, and sends app.* at once", async () => {
 		const win = new electron.BrowserWindow({ width: 100, height: 100 });
-		void electron.app.setAsDefaultProtocolClient("omp");
+		void electron.app.getGPUInfo("basic");
 		await settle();
-		expect(fake.callsOf("app.setAsDefaultProtocolClient")).toHaveLength(1);
+		expect(fake.callsOf("app.getGPUInfo")).toHaveLength(1);
 		expect(fake.callsOf("win.create")).toHaveLength(0);
 		win.show();
 		await shell.event("app.ready");
@@ -274,29 +270,12 @@ describe("app", () => {
 		]);
 	});
 
-	it("delivers shell launch requests separately from macOS open-url, open-file and activate", async () => {
-		const { app } = electron;
-		const seen: unknown[][] = [];
-		app.onSecondInstance(request => seen.push(["launch", request]));
-		for (const name of ["open-url", "open-file", "activate", "child-process-gone"])
-			app.on(name, (_event, ...args) => seen.push([name, ...args]));
-		await shell.event("app.secondInstance", { kind: "path", path: "C:/work" });
-		await shell.event("app.secondInstance", { kind: "url", url: "omp://session/abc" });
-		await shell.event("app.secondInstance", { kind: "focus" });
-		await shell.event("app.openUrl", { url: "omp://new" });
-		await shell.event("app.openFile", { path: "C:/x" });
-		await shell.event("app.activate", { hasVisibleWindows: true });
+	it("delivers a child process's end as Electron's child-process-gone", async () => {
+		const seen: unknown[] = [];
+		electron.app.on("child-process-gone", (_event, details) => seen.push(details));
 		await shell.event("app.childProcessGone", { type: "GPU", reason: "crashed" });
 		await settle();
-		expect(seen).toEqual([
-			["launch", { kind: "path", path: "C:/work" }],
-			["launch", { kind: "url", url: "omp://session/abc" }],
-			["launch", { kind: "focus" }],
-			["open-url", "omp://new"],
-			["open-file", "C:/x"],
-			["activate", true],
-			["child-process-gone", { type: "GPU", reason: "crashed" }],
-		]);
+		expect(seen).toEqual([{ type: "GPU", reason: "crashed" }]);
 	});
 
 	it("keeps Node alive until the shell accepts the requested relaunch and exit", async () => {
@@ -1693,7 +1672,7 @@ describe("menus, dialogs and the small modules", () => {
 	});
 
 	it("mirrors screen, theme and power state from the facts and the shell's pushes", async () => {
-		const { screen, nativeTheme, powerMonitor, systemPreferences, powerSaveBlocker, globalShortcut } = electron;
+		const { screen, nativeTheme, powerMonitor, systemPreferences, powerSaveBlocker } = electron;
 		expect(screen.getPrimaryDisplay()).toMatchObject({
 			id: 1,
 			scaleFactor: 1.5,
@@ -1737,11 +1716,6 @@ describe("menus, dialogs and the small modules", () => {
 		const id = powerSaveBlocker.start("prevent-app-suspension");
 		expect(powerSaveBlocker.isStarted(id)).toBe(true);
 		powerSaveBlocker.stop(id);
-		let fired = 0;
-		expect(globalShortcut.register("CommandOrControl+Shift+O", () => (fired += 1))).toBe(true);
-		await shell.event("shortcut.fired", { accelerator: "CommandOrControl+Shift+O" });
-		await settle();
-		expect(fired).toBe(1);
 	});
 
 	it("answers shouldUseDarkColors from the OS's own scheme the moment the source goes back to system", async () => {
