@@ -13,7 +13,7 @@ src/main/agent-worktrees.ts	native-client	1	Forwards the resolved executable, en
 src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.
 src/main/agents-md.test.ts	tooling	-	Vitest suite: AGENTS.md and the area rules.
 src/main/app-auto-update.test.ts	tooling	-	Vitest suite: quietMoment.
-src/main/app-auto-update.ts	port	3	AutoInstallScheduler owns idle/card/compaction gating, countdown and automatic restart timing from injected app/session facts.
+src/main/app-auto-update.ts	port	3	setupUpdater reads restartAt in broadcast, clears the countdown at install start and postpones synchronously on Later. Move the scheduler with the live quit, window and session owners (§1.3a,c).
 src/main/app-icon.test.ts	tooling	-	Vitest checks packaged/development icon paths and notification defaults against the shell's Rust launch fact.
 src/main/app-quit-failure.test.ts	tooling	-	Vitest suite: exits with failure when the last core stop cannot establish that its processes ended.
 src/main/app-quit.test.ts	tooling	-	Vitest suite: who asked to quit, in gui-runtime.jsonl.
@@ -326,7 +326,7 @@ src/main/notification-batch.ts	port	2	The first notice immediately returns a clo
 src/main/notify-triage.test.ts	tooling	-	Vitest suite: a completion the judge says waits for the person.
 src/main/notify-triage.ts	mixed	3	The shell owns repeat admission and the judge deadline. §1.3(a,c): the window's local bridge is a live capability; its focus must be read after the judge result with no yield before enqueueing the notice.
 src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
-src/main/nsis-updater.ts	port	4	OmpNsisUpdater customizes electron-updater's download session and delays quitAndInstall teardown until the detached installer spawn resolves.
+src/main/nsis-updater.ts	port	4	electron-updater owns the verified installer path, elevation fallback and synchronous quitAndInstall contract. The override delays quit until the detached spawn answers; move both with the quit owner (§1.3a,c). WinHTTP option 195 is handled by the Rust shell.
 src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
 src/main/omp-auto-takeover.ts	port	2	Shell updater batch, §1.3a,c: OmpUpdater.state reads taken() synchronously at startup and on every change. Move that snapshot with the stock update.auto record and its serialized read/write/restore; a stale copy can report ownership the person revoked.
 src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
@@ -501,22 +501,22 @@ src/main/turn-stop-log.ts	port	1	dispatchedCommand/recordTurnStop log the origin
 src/main/turn-wait-watch.test.ts	tooling	-	Vitest suite: turn wait watch.
 src/main/turn-wait-watch.ts	mixed	3	sessions.journalWait reads the bounded journal tail and extracts pending calls. The watch timestamps synchronous pool activity, retries and resume transitions before its next sweep; main logs those facts with the native evidence.
 src/main/update-auth.test.ts	tooling	-	Vitest suite: a stored update token when the keychain would ask.
-src/main/update-auth.ts	port	2	resolveUpdateToken chooses environment, gh CLI or encrypted credentials; checkRepoAccess uses Electron net and storeUpdateToken uses safeStorage.
+src/main/update-auth.ts	mixed	2	The shell stores only sealed token bytes and the keychain-would-ask marker. Main selects the login environment, gh and safeStorage sources in order and uses the default HTTP session for the repository probe.
 src/main/update-compatibility.test.ts	tooling	-	Vitest suite: released and current updater compatibility.
 src/main/update-log-core.test.ts	tooling	-	Vitest suite: scrubUpdateText.
-src/main/update-log-core.ts	port	1	scrubUpdateText, parsePendingInstall and previousInstallDetails redact and reconstruct install/swap outcomes from persisted markers.
+src/main/update-log-core.ts	port	1	No file I/O: the first-window and will-quit handlers synchronously project the previous install and redact reasons with the shared diagnostics redactor. Move with those marker writes, not as another log writer (§1.3a,b,d).
 src/main/update-provider.test.ts	tooling	-	Vitest suite: release-notes update provider.
-src/main/update-provider.ts	mixed	4	ReleaseUpdateProvider fetches the feed and adapts the Rust updateFeed.resolve result to electron-updater; synchronous resolveFiles remains here.
+src/main/update-provider.ts	mixed	4	The shell fetches through the default session (system proxy and certificates); updateFeed.resolve in core selects the release. electron-updater calls resolveFiles synchronously on this provider's last admitted release (§1.3a,c).
 src/main/update-release.test.ts	tooling	-	Vitest suite: update metadata comment.
-src/main/update-release.ts	mixed	4	Rust selects the release, metadata and asset. TypeScript still checks the local OS version for the synchronous updater file-resolution contract.
+src/main/update-release.ts	mixed	4	updateFeed.resolve validates the release, metadata, asset and declared OS floor in Rust. Both provider admission and synchronous resolveFiles recheck the running OS with shared compareVersions (§1.3a,d).
 src/main/update-scheduler.test.ts	tooling	-	Vitest suite: nextCheckDelay.
-src/main/update-scheduler.ts	port	2	UpdateScheduler serializes updater passes and owns timer rearming, failure backoff and disposal.
+src/main/update-scheduler.ts	port	2	OmpUpdater, CliUpdater and ExtensionUpdater read started and disposed in the same tick to decide whether to enqueue or publish. Move the timer and serial callback queue with these services, not the app's installer (§1.3a,c).
 src/main/updater-check.test.ts	tooling	-	Vitest suite: Check for Updates while the background check runs.
 src/main/updater-held-quit.test.ts	tooling	-	Vitest suite: a quit with a staged version that failed to start before.
 src/main/updater-install.test.ts	tooling	-	Vitest suite: Restart & install with background work running.
 src/main/updater-state.test.ts	tooling	-	Vitest suite: update repository access.
-src/main/updater-state.ts	port	2	stageBundleFromDmg, SWAP_SCRIPT and settleFailedUpdateCheck implement installer staging, replacement and status transitions.
-src/main/updater.ts	port	4	checkForUpdate/downloadUpdate/restartIntoUpdate orchestrate electron-updater, Electron networking, platform installers, app quit and relaunch.
+src/main/updater-state.ts	mixed	2	The shell hashes the partial, cleans installer debris and stages and verifies the DMG. SingleTransfer, progress and the quit-time swap handoff remain with the owner of UpdateStatus (§1.3a,c).
+src/main/updater.ts	mixed	4	The shell resolves the Downloads destination, sweeps stale files and returns the verified staged bundle. Main owns the live HTTP stream, electron-updater events, quit approval and synchronous install handoff (§1.3a,c).
 src/main/window-chrome.test.ts	tooling	-	Vitest suite: windowChromeOptions.
 src/main/window-chrome.ts	port	1	WindowManager.createWindow consumes chrome options and sends the same Mica decision to the renderer. WINDOW_CHROME_SET validates unknown input before setTitleBarOverlay. Move with window creation and trusted IPC dispatch.
 src/main/window-show.test.ts	tooling	-	Vitest suite: showOnFirstPaint.
