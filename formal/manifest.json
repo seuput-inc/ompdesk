@@ -53,7 +53,7 @@
 				"native/ompdesk/crates/shell/src/main.rs:344-363",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "8de6619c2db768e9f3819dc29d2da396eea1c933"
+			"syncCommit": "bac0c39ba26a19c89bc345c7b53e535277c897a6"
 		},
 		{
 			"id": "turn-resume",
@@ -82,7 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "23c8866d494ed5f8b6b769ad14828eb1e6888130",
+			"syncCommit": "75bb3735a5ac8ffeaf20c120ebe6ccd231275092",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "23c8866d494ed5f8b6b769ad14828eb1e6888130",
+			"syncCommit": "44ca44b2a05bb2c2b8d3f20d49331b7f599b5532",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -207,6 +207,8 @@
 				"src/main/local/git/exec.ts#coreHeld",
 				"src/main/local/git/scm.ts#mutate",
 				"src/main/core/process.ts",
+				"native/ompdesk/crates/core/src/owner.rs",
+				"native/ompdesk/crates/core/src/clients.rs",
 				"src/main/serial-chain.ts",
 				"native/ompdesk/crates/core/src/server.rs",
 				"native/ompdesk/crates/core/src/run.rs",
@@ -217,7 +219,7 @@
 				"native/ompdesk/crates/core/src/disk/saved_records.rs#change",
 				"native/ompdesk/crates/core/src/git/read.rs#blocking"
 			],
-			"syncCommit": "004e8b261b11f1bdfce8a60618fdc6803ebd376f",
+			"syncCommit": "1aaaa36b3d99bd7ea7f50b718d6c29a1f511cb94",
 			"verifySkill": ".omp/skills/repo-lock-core-verify/SKILL.md"
 		},
 		{
@@ -232,7 +234,7 @@
 				"src/main/session-processes.ts",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "a48197a0bbaccca8461e3effc1aa3b3eccdc6998",
+			"syncCommit": "a4a4704afe4b8ef555a739bf2343b7738556c738",
 			"verifySkill": ".omp/skills/session-processes-verify/SKILL.md"
 		},
 		{
@@ -280,9 +282,9 @@
 				"native/ompdesk/crates/core/src/remote/kept_calls.rs",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
-				"src/main/ipc.ts:653-672"
+				"src/main/ipc.ts:640-659"
 			],
-			"syncCommit": "16bd1cc0dd42cbd160c552b45f2f058c58f996e5"
+			"syncCommit": "5dbb77afeb03c13fdf69d1cd60ab5a379557c96c"
 		},
 		{
 			"id": "open-first-message",

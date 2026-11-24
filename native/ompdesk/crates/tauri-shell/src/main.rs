@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod app_menu;
 mod app_window;
 mod assets;
 #[cfg(feature = "test-automation")]
@@ -9,6 +10,7 @@ mod entry;
 mod evaluate;
 mod gpu;
 mod js_date;
+mod labels;
 mod launch_protection;
 mod legacy_user_data;
 mod migrate_watch;
@@ -32,6 +34,7 @@ mod registry;
 mod runtime_inputs;
 mod sessions;
 mod theme;
+mod tray;
 mod ui;
 mod update_auth_files;
 mod update_commands;
@@ -49,6 +52,61 @@ use native_services::{power, screen, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
 pub mod host;
+// The owner of the ompdesk-core processes main asks for (the same file `ompdesk-core --own` runs; its stdio server
+// is that binary's only).
+#[allow(dead_code)]
+#[path = "../../core/src/owner.rs"]
+mod owner;
+
+/// Main's connection to the core owner, while one is open: where the owner's events go.
+static CORE_OWNER_FRAMES: std::sync::Mutex<Option<owner::Frames>> = std::sync::Mutex::new(None);
+
+/// Spawns the cores main asks for, holds their stdio and reports their end to main (`core.*` events).
+fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
+    static OWNER: std::sync::LazyLock<std::sync::Arc<owner::Owner>> =
+        std::sync::LazyLock::new(|| {
+            owner::Owner::new(std::sync::Arc::new(|event: &str, data: Value| {
+                let frames = CORE_OWNER_FRAMES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(frames) = frames.as_ref() {
+                    let _ = frames.send(Some(owner::event(event, data)));
+                }
+            }))
+        });
+    &OWNER
+}
+
+/// Serves main's core-owner connection (PROTOCOL.md › 12a): its first line is the host token, then owner requests, one
+/// JSON object per line. Main sends them from a worker thread, which a main thread blocked in a hub wait cannot hold
+/// back. The connection's end (main exited) ends every core.
+fn serve_core_owner(mut listener: conn::Listener, token: String) {
+    std::thread::spawn(move || {
+        loop {
+            let Ok(conn) = listener.accept() else { return };
+            let Ok(out) = conn.try_clone() else { continue };
+            let mut input = std::io::BufReader::new(conn);
+            let mut first = String::new();
+            if std::io::BufRead::read_line(&mut input, &mut first).is_err()
+                || first.trim_end() != token
+            {
+                continue;
+            }
+            let (frames, writer) = owner::writer(out);
+            let set = |value| {
+                *CORE_OWNER_FRAMES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = value;
+            };
+            set(Some(frames.clone()));
+            owner::serve_lines(core_owner(), input, &frames);
+            set(None);
+            core_owner().end_all();
+            let _ = frames.send(None);
+            let _ = writer.join();
+        }
+    });
+}
 #[path = "../../shell/src/log.rs"]
 pub mod log;
 #[path = "../../shell/src/node.rs"]
@@ -609,6 +667,7 @@ fn node_prevents_navigation(wc: u64, url: &tauri::Url) -> bool {
 }
 fn close_record(wc: u64) {
     entry::forget(wc);
+    tray::forget(wc);
     runtime()
         .app_initializations
         .lock()
@@ -1069,69 +1128,70 @@ fn wc_op(call: host::Call) {
     let Some(call) = defer_app_load(call) else {
         return;
     };
-    let result = (|| {
-        let wc = number(&call.params, "wcId")?;
-        let window = window_for_wc(wc)?;
-        let op = string(&call.params, "op")?;
-        let a = &call.params["args"];
-        match op {
-            "loadURL" => load_app(wc, &window, string(a, "url")?)?,
-            "reload" | "reloadIgnoringCache" => {
-                if op == "reloadIgnoringCache" {
-                    return Err(unsupported(op));
-                }
-                if let Ok(current) = window.url() {
-                    expect_navigation(wc, current.as_str())
-                        .map_err(|message| WireError::new("invalid", message))?;
-                }
-                window.eval("location.reload()").map_err(failed)?;
-            }
-            "stop" => window.eval("window.stop()").map_err(failed)?,
-            "setZoomFactor" => {
-                let factor = dimension(a, "factor")?;
-                window.set_zoom(factor).map_err(failed)?;
-                if let Some(p) = runtime().registry.lock().expect("registry").page_mut(wc) {
-                    p.zoom = factor;
-                }
-                wc_state(wc);
-            }
-            "focus" => window.set_focus().map_err(failed)?,
-            "openDevTools" => window.open_devtools(),
-            "closeDevTools" => window.close_devtools(),
-            "watchEvents" => {
-                let names = a["names"].as_array().map(Vec::as_slice).unwrap_or_default();
-                if names.iter().any(|name| name == "will-navigate") {
-                    runtime()
-                        .navigation_watch
-                        .lock()
-                        .expect("navigation watch")
-                        .insert(wc);
-                }
-                let unwatched: Vec<&str> = names
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter(|name| *name != "will-navigate")
-                    .collect();
-                if !unwatched.is_empty() {
-                    return Err(unsupported(&format!(
-                        "webContents events {}",
-                        unwatched.join(", ")
-                    )));
-                }
-            }
-            "executeJavaScript" => {
-                return Ok(Some(Later::Evaluate(window, string(a, "code")?.to_owned())));
-            }
-            _ => return Err(unsupported(&format!("wc.op {op}"))),
-        }
-        Ok(None)
-    })();
-    match result {
+    match wc_apply(&call.params) {
         Err(error) => call.err(&error.code, error.message),
         Ok(None) => call.ok(json!({})),
         // The engine's own evaluation, outside the page's CSP (evaluate.rs).
         Ok(Some(Later::Evaluate(window, code))) => evaluate::run(&window, call, code),
     }
+}
+/// A `wc.op` on an app page: Node's, or an app menu role's (app_menu.rs).
+fn wc_apply(params: &Value) -> Result<Option<Later>, WireError> {
+    let wc = number(params, "wcId")?;
+    let window = window_for_wc(wc)?;
+    let op = string(params, "op")?;
+    let a = &params["args"];
+    match op {
+        "loadURL" => load_app(wc, &window, string(a, "url")?)?,
+        "reload" | "reloadIgnoringCache" => {
+            if op == "reloadIgnoringCache" {
+                return Err(unsupported(op));
+            }
+            if let Ok(current) = window.url() {
+                expect_navigation(wc, current.as_str())
+                    .map_err(|message| WireError::new("invalid", message))?;
+            }
+            window.eval("location.reload()").map_err(failed)?;
+        }
+        "stop" => window.eval("window.stop()").map_err(failed)?,
+        "setZoomFactor" => {
+            let factor = dimension(a, "factor")?;
+            window.set_zoom(factor).map_err(failed)?;
+            if let Some(p) = runtime().registry.lock().expect("registry").page_mut(wc) {
+                p.zoom = factor;
+            }
+            wc_state(wc);
+        }
+        "focus" => window.set_focus().map_err(failed)?,
+        "openDevTools" => window.open_devtools(),
+        "closeDevTools" => window.close_devtools(),
+        "watchEvents" => {
+            let names = a["names"].as_array().map(Vec::as_slice).unwrap_or_default();
+            if names.iter().any(|name| name == "will-navigate") {
+                runtime()
+                    .navigation_watch
+                    .lock()
+                    .expect("navigation watch")
+                    .insert(wc);
+            }
+            let unwatched: Vec<&str> = names
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|name| *name != "will-navigate")
+                .collect();
+            if !unwatched.is_empty() {
+                return Err(unsupported(&format!(
+                    "webContents events {}",
+                    unwatched.join(", ")
+                )));
+            }
+        }
+        "executeJavaScript" => {
+            return Ok(Some(Later::Evaluate(window, string(a, "code")?.to_owned())));
+        }
+        _ => return Err(unsupported(&format!("wc.op {op}"))),
+    }
+    Ok(None)
 }
 fn dispatch(call: host::Call) {
     if call.method == "app.quit" {
@@ -1305,7 +1365,7 @@ fn dispatch_ui(call: host::Call) {
     }
     match call.method.as_str() {
         "wc.op" => return wc_op(call),
-        "app.setRunProgress" => return app_window::set_run_progress(call),
+        "menu.testClick" => return app_menu::test_click(call),
         _ => {}
     }
     let result = match call.method.as_str() {
@@ -1372,7 +1432,17 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
         }
         "wc.send" => page_push::wc_send(&data),
         "diskFull.state" => page_push::disk_full_state(data),
-        "session.ready" => entry::ready(),
+        "app.language" => match data["language"].as_str().and_then(labels::Lang::parse) {
+            Some(lang) => {
+                tray::set_language(lang);
+                ui::run(move || app_menu::install(lang));
+            }
+            None => log::log("app.language_invalid", json!({"data":data})),
+        },
+        "session.ready" => {
+            entry::ready();
+            tray::create();
+        }
         _ => log::log("event.unsupported", json!({"name":name})),
     }
 }
@@ -1388,6 +1458,8 @@ fn exit_after_preview(code: i32) {
                 if code == 0 { 1 } else { code }
             }
         };
+        // The cores' stdin closes with this process; ending them here waits until they and what they run are gone.
+        let _ = tauri::async_runtime::spawn_blocking(|| core_owner().end_all()).await;
         log::log("exit", json!({"code":code}));
         runtime().app.exit(code);
     });
@@ -1894,6 +1966,18 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .display()
         .to_string();
     let listener = conn::Listener::bind(&socket)?;
+    #[cfg(windows)]
+    let core_socket = format!("{instance_name}-core-{}", std::process::id());
+    #[cfg(not(windows))]
+    let core_socket = startup::unix_socket_path(
+        &user_data,
+        &std::env::temp_dir(),
+        &format!("core-{}", std::process::id()),
+    )
+    .display()
+    .to_string();
+    serve_core_owner(conn::Listener::bind(&core_socket)?, token.clone());
+    facts["coreOwner"] = Value::String(core_socket);
     let program = node::node_program(packaged, &resources);
     let profile = profile::Profile::open(&user_data).map_err(std::io::Error::other)?;
     let gateway = Arc::new(preview_protocol::Gateway::new());

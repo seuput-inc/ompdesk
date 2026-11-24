@@ -15,7 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { chromium, devices, expect, type Page, test } from "@playwright/test";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { captureTo, controlToolCaller, cssString, exitApp } from "./harness";
+import { captureTo, controlToolCaller, cssString, exitApp, fixtureSessionPid } from "./harness";
 import {
 	connectHost,
 	type LinkProxy,
@@ -503,7 +503,7 @@ test("a session's row says the same on this computer, a paired computer and the 
 				id => window.omp.rpc.commandForTab(id, { type: "get_state", brief: true }),
 				hidden.tabId,
 			);
-			const pid = Number((state.data as { sessionId?: string } | undefined)?.sessionId?.replace("fixture-", ""));
+			const pid = fixtureSessionPid((state.data as { sessionId?: string } | undefined)?.sessionId);
 			expect(pid).toBeGreaterThan(0);
 			const fakes = () =>
 				execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" })

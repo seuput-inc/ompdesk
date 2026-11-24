@@ -79,6 +79,7 @@ const FACTS: HostFacts = {
 	versions: { chrome: "156.0.1", cef: "156.0.26", shell: "0.1.0" },
 	safeStorage: { unavailable: "test" },
 	nativeIpc: [],
+	coreOwner: "",
 };
 
 interface Call {
@@ -110,7 +111,6 @@ function fakeShell(shell: ShellClient) {
 		"wc.cdp.send",
 		"session.create",
 		"session.op",
-		"menu.setApplication",
 		"menu.popup",
 		"dialog.messageBox",
 		"clipboard.readText",
@@ -120,8 +120,6 @@ function fakeShell(shell: ShellClient) {
 		"shell.openPath",
 		"theme.setSource",
 		"power.idleTime",
-		"tray.create",
-		"tray.op",
 		"notification.show",
 		"notification.close",
 		"power.blockerStart",
@@ -1505,41 +1503,34 @@ describe("menus, dialogs and the small modules", () => {
 		await ready();
 	});
 
-	it("builds a template, sends a description, and runs the clicked item's handler or role", async () => {
+	it("sends a popup's description and runs the chosen item's handler or edit role", async () => {
 		const { Menu, BrowserWindow } = electron;
 		const win = new BrowserWindow({});
 		await shell.event("win.event", { winId: win.id, name: "focus" });
 		let clicked = 0;
 		const menu = Menu.buildFromTemplate([
-			{
-				label: "File",
-				submenu: [
-					{ label: "New", accelerator: "CommandOrControl+N", click: () => (clicked += 1) },
-					{ type: "separator" },
-					{ role: "reload", label: "Reload!" },
-				],
-			},
+			{ label: "New", accelerator: "CommandOrControl+N", click: () => (clicked += 1) },
+			{ type: "separator" },
+			{ role: "undo", label: "Undo!" },
 		]);
-		Menu.setApplicationMenu(menu);
-		await settle();
-		const [{ params }] = fake.callsOf("menu.setApplication");
-		const template = params.template as Array<{
+		let pick = 0;
+		fake.answers.set("menu.popup", params => ({ itemId: (params.template as Array<{ id: string }>)[pick].id }));
+		menu.popup({ window: win });
+		await vi.waitUntil(() => clicked === 1);
+		const template = fake.callsOf("menu.popup")[0].params.template as Array<{
 			label: string;
-			submenu: Array<{ id: string; label: string; accelerator?: string; type: string }>;
+			accelerator?: string;
+			type: string;
 		}>;
-		expect(template[0].label).toBe("File");
-		expect(template[0].submenu.map(item => [item.label, item.accelerator, item.type])).toEqual([
+		expect(template.map(item => [item.label, item.accelerator, item.type])).toEqual([
 			["New", "CommandOrControl+N", "normal"],
 			["", undefined, "separator"],
-			["Reload!", "CommandOrControl+R", "normal"],
+			["Undo!", "CommandOrControl+Z", "normal"],
 		]);
-		await shell.event("menu.click", { menuId: params.menuId, itemId: template[0].submenu[0].id });
-		expect(clicked).toBe(1);
-		fake.calls.length = 0;
-		await shell.event("menu.click", { menuId: params.menuId, itemId: template[0].submenu[2].id });
-		await settle();
-		expect(fake.callsOf("wc.op").map(call => call.params.op)).toEqual(["reload"]);
-		expect(Menu.getApplicationMenu()).toBe(menu);
+		if (process.platform === "darwin") return;
+		pick = 2;
+		menu.popup({ window: win });
+		await vi.waitUntil(() => fake.callsOf("wc.op").some(call => call.params.op === "undo"));
 	});
 
 	it.runIf(process.platform === "darwin")(
@@ -1547,19 +1538,15 @@ describe("menus, dialogs and the small modules", () => {
 		async () => {
 			const custom = vi.fn();
 			const { Menu } = electron;
-			Menu.setApplicationMenu(
-				Menu.buildFromTemplate([{ role: "copy" }, { role: "paste" }, { role: "copy", click: custom }]),
-			);
-			await settle();
-			const [{ params }] = fake.callsOf("menu.setApplication");
-			const items = params.template as Array<{ role?: string; id: string; accelerator: string }>;
+			fake.answers.set("menu.popup", params => ({ itemId: (params.template as Array<{ id: string }>)[2].id }));
+			Menu.buildFromTemplate([{ role: "copy" }, { role: "paste" }, { role: "copy", click: custom }]).popup();
+			await vi.waitUntil(() => custom.mock.calls.length === 1);
+			const items = fake.callsOf("menu.popup")[0].params.template as Array<{ role?: string; accelerator: string }>;
 			expect(items.map(item => [item.role, item.accelerator])).toEqual([
 				["copy", "CommandOrControl+C"],
 				["paste", "CommandOrControl+V"],
 				[undefined, "CommandOrControl+C"],
 			]);
-			await shell.event("menu.click", { menuId: params.menuId, itemId: items[2].id });
-			expect(custom).toHaveBeenCalledTimes(1);
 		},
 	);
 
@@ -1572,36 +1559,6 @@ describe("menus, dialogs and the small modules", () => {
 		menu.popup({ window: win });
 		await vi.waitUntil(() => labels.length === 1);
 		expect(fake.callsOf("menu.popup")[0].params).toMatchObject({ winId: win.id });
-	});
-
-	it("makes a tray with its icon representations and a context menu", async () => {
-		const { Tray, Menu, nativeImage } = electron;
-		const image = nativeImage.createFromDataURL(`data:image/png;base64,${PNG_1X1.toString("base64")}`);
-		image.addRepresentation({ scaleFactor: 2, dataURL: `data:image/png;base64,${PNG_1X1.toString("base64")}` });
-		image.setTemplateImage(true);
-		const tray = new Tray(image);
-		tray.setToolTip("OMPdesk");
-		const menu = Menu.buildFromTemplate([{ label: "Quit", click: () => undefined }]);
-		const states: string[] = [];
-		menu.on("menu-will-show", () => states.push("show"));
-		tray.setContextMenu(menu);
-		await settle();
-		const [create] = fake.callsOf("tray.create");
-		expect(create.params).toMatchObject({
-			trayId: 1,
-			template: true,
-			images: [{ scaleFactor: 1 }, { scaleFactor: 2 }],
-		});
-		expect(fake.callsOf("tray.op").map(call => call.params.op)).toEqual(["setToolTip", "setContextMenu"]);
-		const op = fake.callsOf("tray.op")[1].params;
-		await shell.event("menu.event", { menuId: (op.args as { menuId: number }).menuId, name: "will-show" });
-		await settle();
-		expect(states).toEqual(["show"]);
-		const clicks: string[] = [];
-		tray.on("click", () => clicks.push("click"));
-		await shell.event("tray.event", { trayId: 1, name: "click" });
-		await settle();
-		expect(clicks).toEqual(["click"]);
 	});
 
 	it("dialogs pass the owner's id and the options; clipboard.readText is asynchronous only", async () => {

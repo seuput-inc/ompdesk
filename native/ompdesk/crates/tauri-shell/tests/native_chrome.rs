@@ -6,7 +6,6 @@ mod host;
 mod log;
 #[path = "../src/native_chrome.rs"]
 mod native_chrome;
-use native_chrome::menu;
 
 use std::io::{BufReader, Write};
 use std::sync::{LazyLock, Mutex, OnceLock, mpsc};
@@ -105,12 +104,20 @@ fn native_requests_preserve_validation_gone_and_precancelled_answers() {
             "gone",
             true,
         ),
+        // The application menu and the tray are the shell's own (app_menu.rs, tray.rs): Node no longer installs them.
         (
             4,
             "tray.op",
             json!({"trayId":99,"op":"destroy"}),
-            "gone",
-            true,
+            "unsupported",
+            false,
+        ),
+        (
+            10,
+            "menu.setApplication",
+            json!({"menuId":1,"template":[]}),
+            "unsupported",
+            false,
         ),
         (5, "notification.close", json!({}), "invalid", false),
         (6, "dialog.unknown", json!({}), "unsupported", false),

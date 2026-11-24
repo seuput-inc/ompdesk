@@ -311,6 +311,8 @@ export class Hub {
 
 	/** A call main does not wait for: what the instance's async rule answers when it is done. */
 	callLater<T>(to: number, method: string, params: unknown = {}): Promise<T> {
+		const stale = this.#dropStale();
+		if (stale) return Promise.reject(stale);
 		const connection = this.#connect();
 		const id = ++this.#sequence;
 		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
@@ -342,11 +344,25 @@ export class Hub {
 	}
 
 	#write(request: object): void {
+		if (this.#dropStale()) return;
 		const connection = this.#connect();
 		this.#post(connection, request);
 	}
 
+	/**
+	 * Loses the connection when the core it reached was abandoned or ended: main knows before the core's socket
+	 * closes (the owner kills it on another thread), and nothing main sends may reach it or be answered by it.
+	 */
+	#dropStale(): CoreError | null {
+		const current = this.#connection;
+		if (!current || current.dead || current.generation === core().hubEndpointGeneration()) return null;
+		this.#lose(current, new CoreError("hub_lost", "the core this hub connection reached was ended"));
+		return current.dead ?? null;
+	}
+
 	#call(method: string, params: unknown): unknown {
+		const stale = this.#dropStale();
+		if (stale) throw stale;
 		const connection = this.#connect();
 		const id = ++this.#sequence;
 		this.#post(connection, { id, method, params });

@@ -113,8 +113,6 @@ import {
 	type IpcInstallBrowserRelayPayload,
 	type IpcInstallBrowserRelayResult,
 	type IpcSessionsChanged,
-	type RunProgressState,
-	type TrayState,
 } from "../shared/ipc-types";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
@@ -171,7 +169,6 @@ import type { MacPermissions } from "./mac-permissions";
 import { type LocalMachine, type MachineServices, machineFor as pickMachine } from "./machine-services";
 import type { MailAccounts } from "./mail-accounts";
 import type { MediaStreams } from "./media-stream";
-import { createMenu } from "./menu";
 import { modelsPath } from "./models-config";
 import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notification-batch";
 import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
@@ -201,6 +198,7 @@ import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, rena
 import type { SessionSummaries } from "./session-summaries";
 import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "./session-targets";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
+import { publishLanguage } from "./shell-host/electron/index";
 import { readClipboardText } from "./shell-host/shell-calls";
 import { updateSidebarPrefs } from "./sidebar-prefs";
 import type { SidebarProjects } from "./sidebar-projects";
@@ -215,8 +213,6 @@ import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
 import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
 import { closeTabTerminals, readTabTerminals, registerTerminalIpc } from "./terminal/ipc";
-import { setTrayState } from "./tray";
-import { aggregateProgress, aggregateTrayStatus } from "./tray-labels";
 import { personsPrompt, type RelaunchContinuation, trackMove } from "./turn-resume";
 import { dispatchedCommand, STOP_COMMANDS } from "./turn-stop-log";
 import { appVersion } from "./updater";
@@ -495,12 +491,6 @@ const notificationBatcher = new NotificationBatcher({
 });
 app.once("will-quit", () => notificationBatcher.dispose());
 
-// Per-window tray/progress snapshots, aggregated for the app-global tray/dock.
-const trayStates = new Map<number, TrayState>();
-const progressStates = new Map<number, RunProgressState>();
-
-/** Collapse per-window run-progress to one: any working > waiting > idle. */
-
 export function registerIpcHandlers(deps: IpcDeps): void {
 	const { ipc } = deps;
 	registerTerminalIpc(ipc, deps.sidecarPool, deps.remoteDevices);
@@ -574,11 +564,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		});
 	};
 
-	// Drop a closed window's tray/progress snapshot so the aggregate reflects
-	// only live windows (and re-render the tray with the new aggregate).
+	// A closed window's benchmark and model setup stop with it.
 	windowManager.subscribeWindowClosed(record => {
-		trayStates.delete(record.id);
-		progressStates.delete(record.id);
 		const caller = benchCaller(record.id);
 		void deps.machine.abortBenchmark(caller);
 		const device = remoteBenchmarks.get(record.id);
@@ -766,30 +753,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.on(IPC_COMMANDS.RUNTIME_STARTUP_MARK, (_caller, mark: unknown) => markStartupFromRenderer(mark));
 
 	ipc.handle(IPC_COMMANDS.LOG_SNAPSHOT, () => logWatcher.getSnapshot());
-
-	// Tray/dock are app-global OS surfaces; with N parallel windows each pushing
-	// its own state, aggregate per-window instead of last-write-wins (which made
-	// the indicator flap with push order) or focus-gating (which let it go
-	// stale). Status aggregates across windows, loudest first
-	// (`aggregateTrayStatus`): an error, a question, an approval, a waiting
-	// child, work going on, a failed check, idle; the displayed blob is the most
-	// recently pushed one, with its status replaced by the aggregate.
-	ipc.on(IPC_EVENTS.TRAY_STATE_PUSH, (caller, state: TrayState) => {
-		const winId = caller.win?.webContents.id;
-		if (winId === undefined) return;
-		trayStates.set(winId, state);
-		const aggregate = aggregateTrayStatus([...trayStates.values()]);
-		setTrayState({ ...state, status: aggregate });
-	});
-
-	// Run-progress (terminal.showProgress): aggregate per-window the same way —
-	// any window waiting on the person → waiting, else any working → working, else idle.
-	ipc.on(IPC_EVENTS.PROGRESS_SET, (caller, state: RunProgressState) => {
-		const winId = caller.win?.webContents.id;
-		if (winId === undefined) return;
-		progressStates.set(winId, state);
-		windowManager.setRunProgress(aggregateProgress([...progressStates.values()]));
-	});
 
 	// Windows title-bar overlay: the caption buttons repaint in the theme's top-bar colors.
 	ipc.on(IPC_EVENTS.WINDOW_CHROME_SET, (caller, value: unknown) => {
@@ -2127,7 +2090,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			remoteDevices.hostJudgeAssistChanged();
 		}
 		if (payload.key === "language" && isUiLanguage(payload.value)) {
-			createMenu(windowManager, deps.spawnWindow);
+			publishLanguage(payload.value);
 		}
 		if (payload.key === AGENT_CONTROL_PREF)
 			for (const sidecar of sidecarPool.allSidecars()) if (!sidecar.device) sidecar.syncHostTools();
