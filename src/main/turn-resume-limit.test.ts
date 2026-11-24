@@ -212,7 +212,10 @@ describe("a turn stock gave up on at a provider limit", () => {
 		expect(w.sent("retry")).toBe(0);
 
 		await advance(WEEKLY_LIMIT_MS);
-		expect(w.sent("retry")).toBe(1);
+		expect(
+			w.sent("retry"),
+			JSON.stringify({ commands: w.commands.map(c => c.type), shown: w.shown, logs: w.logs, markers: w.markers() }),
+		).toBe(1);
 		expect(w.shown.at(-1)).toBeUndefined();
 	});
 
