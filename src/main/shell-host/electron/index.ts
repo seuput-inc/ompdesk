@@ -45,6 +45,16 @@ export function postWatchdog(signal: WatchdogSignal): void {
 	void client.call("app.watchdog", signal).catch((error: unknown) => console.warn("[hang-watchdog]", error));
 }
 
+export function publishDiskFull(files: readonly string[]): void {
+	void client.event("diskFull.state", { files });
+}
+
+export function onPairedPagePush(
+	listener: (push: { connId: string; channel: string; payload: unknown }) => void,
+): void {
+	client.on("page.push", listener);
+}
+
 export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params =>
 	client.call("app.diagnosticBundleFileName", params);
 
