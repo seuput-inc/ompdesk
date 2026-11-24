@@ -16,7 +16,7 @@
  */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -449,13 +449,16 @@ export class CoreProcess {
 		const stderr: string[] = [];
 		const diag = (line: string) => {
 			try {
-				appendFileSync(
-					join(process.env.APPDATA ?? tmpdir(), "ompdesk", "logs", "core-diag.log"),
-					`${new Date().toISOString()} [g${generation}] ${line}\n`,
-				);
+				const dir = join(process.env.APPDATA ?? tmpdir(), "ompdesk", "logs");
+				mkdirSync(dir, { recursive: true });
+				appendFileSync(join(dir, "core-diag.log"), `${new Date().toISOString()} [g${generation}] ${line}\n`);
 			} catch {}
 		};
-		diag(`spawned pid ${child.pid} hub ${this.#hub?.address}`);
+		diag(
+			`spawned pid ${child.pid} binary ${this.#binary()} hub ${this.#hub?.address} stack ${new Error().stack?.split("\n").slice(2, 7).join(" <- ")}`,
+		);
+		child.on("error", error => diag(`spawn error: ${error.message}`));
+		child.on("close", (code, signal) => diag(`closed code ${code} signal ${signal}`));
 		createInterface({ input: child.stderr }).on("line", line => {
 			diag(line);
 			stderr.push(line);
