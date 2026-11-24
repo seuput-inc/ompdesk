@@ -1,11 +1,11 @@
 /**
- * Clicks Quit in the running app's menu bar menu (`app`) or the tray's menu (`tray`), through main's test inspector: the
- * shim's own `menu.click` delivery (`__ompdeskMenus`, src/main/shell-host/electron/menu.ts), as the shell delivers a
- * person's click. No synthetic OS input. scripts/mac-launch-check.sh runs it.
+ * Clicks Quit in the running app's menu bar menu (`app`) or the tray's menu (`tray`), through main's test inspector:
+ * `__ompdeskMenus.click` (src/main/shell-host/electron/index.ts) asks the shell to choose the item as a person's click
+ * does (`menu.testClick`, tauri-shell/src/app_menu.rs). No synthetic OS input. scripts/mac-launch-check.sh runs it.
  *
  *   bun scripts/mac-menu-quit.ts <inspector port> app|tray
  *
- * Prints the menu id, item id and label it clicked; exits 1 when the inspector or the item is missing.
+ * Prints the menu and label it clicked; exits 1 when the inspector or the item is missing.
  */
 const [port, where] = process.argv.slice(2);
 if (!port || (where !== "app" && where !== "tray")) {
@@ -18,23 +18,25 @@ const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(
 const url = targets[0]?.webSocketDebuggerUrl;
 if (!url) throw new Error(`no inspector target on port ${port}`);
 
-// Runs in main: the item to click, then the click on the next turn, so this evaluation answers before the quit starts.
-const expression = `(() => {
+const label = where === "app" ? "Quit OMPdesk" : "Quit";
+// Runs in main and waits for the shell's answer: the item was found and chosen; the quit then runs on its own.
+const expression = `(async () => {
 	const hooks = globalThis.__ompdeskMenus;
 	if (!hooks) throw new Error("no __ompdeskMenus: not a test-inspector run");
-	const appMenu = hooks.applicationMenuId();
-	const menus = hooks.menus();
-	const menu = ${where === "app" ? "menus.find(m => m.menuId === appMenu)" : "menus.find(m => m.menuId !== appMenu && m.items.some(i => i.label === 'Quit'))"};
-	const item = menu && menu.items.find(i => ${where === "app" ? "i.role === 'quit'" : "i.label === 'Quit'"});
-	if (!item) throw new Error("no Quit item: " + JSON.stringify(menus));
-	setTimeout(() => hooks.click({ menuId: menu.menuId, itemId: item.itemId }), 0);
-	return JSON.stringify({ menuId: menu.menuId, itemId: item.itemId, label: item.label });
+	await hooks.click(${JSON.stringify(where)}, ${JSON.stringify(label)});
+	return JSON.stringify({ menu: ${JSON.stringify(where)}, label: ${JSON.stringify(label)} });
 })()`;
 
 const socket = new WebSocket(url);
 const answer = Promise.withResolvers<string>();
 socket.addEventListener("open", () =>
-	socket.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression, returnByValue: true } })),
+	socket.send(
+		JSON.stringify({
+			id: 1,
+			method: "Runtime.evaluate",
+			params: { expression, returnByValue: true, awaitPromise: true },
+		}),
+	),
 );
 socket.addEventListener("message", event => {
 	const message = JSON.parse(String(event.data)) as {

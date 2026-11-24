@@ -286,11 +286,25 @@ pub fn admit(chain: &'static Mutex<Chain>, admission: Admission) {
     send(chain, hook);
 }
 
+/// A quit a person asked for from the app menu or the tray (`asker`): Node logs who asked, as `askQuit` did, before the
+/// chain's first step reaches it on the same stream; then the chain asks as for ⌘Q.
+pub fn ask(asker: &str) {
+    host::event(
+        "app.quitAsked",
+        json!({"asker":asker,"ask":{},"approved":false}),
+    );
+    admit(&crate::runtime().quit, Admission::Ask);
+}
+
 fn send(chain: &'static Mutex<Chain>, hook: Option<Hook>) {
     let Some(hook) = hook else {
         return;
     };
     let ticket = hook.ticket;
+    // Node's teardown destroyed its tray; the shell's goes at the same step.
+    if hook.step == Step::Teardown {
+        crate::tray::remove();
+    }
     host::request("app.quitHook", hook.params(), None, move |result, _| {
         let next = chain.lock().expect("quit chain").answer(ticket, result);
         send(chain, next);

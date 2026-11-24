@@ -1,0 +1,350 @@
+{
+	"menu.about": {
+		"en": "About OMPdesk",
+		"ko": "OMPdesk 정보"
+	},
+	"menu.checkUpdates": {
+		"en": "Check for Updates…",
+		"ko": "업데이트 확인…"
+	},
+	"menu.settings": {
+		"en": "Settings…",
+		"ko": "설정…"
+	},
+	"menu.services": {
+		"en": "Services",
+		"ko": "서비스"
+	},
+	"menu.hide": {
+		"en": "Hide OMPdesk",
+		"ko": "OMPdesk 가리기"
+	},
+	"menu.hideOthers": {
+		"en": "Hide Others",
+		"ko": "기타 가리기"
+	},
+	"menu.showAll": {
+		"en": "Show All",
+		"ko": "모두 보기"
+	},
+	"menu.quit": {
+		"en": "Quit OMPdesk",
+		"ko": "OMPdesk 종료"
+	},
+	"menu.file": {
+		"en": "File",
+		"ko": "파일"
+	},
+	"menu.openProject": {
+		"en": "Open Project…",
+		"ko": "프로젝트 열기…"
+	},
+	"menu.newSession": {
+		"en": "New Session",
+		"ko": "새 세션"
+	},
+	"menu.newTab": {
+		"en": "New Tab",
+		"ko": "새 탭"
+	},
+	"menu.newChatTab": {
+		"en": "New Chat Tab",
+		"ko": "새 채팅 탭"
+	},
+	"menu.newWindow": {
+		"en": "New Window",
+		"ko": "새 창"
+	},
+	"menu.edit": {
+		"en": "Edit",
+		"ko": "편집"
+	},
+	"menu.view": {
+		"en": "View",
+		"ko": "보기"
+	},
+	"menu.commandCenter": {
+		"en": "Command Palette",
+		"ko": "명령 팔레트"
+	},
+	"menu.contextReport": {
+		"en": "Context Report",
+		"ko": "컨텍스트 보고서"
+	},
+	"menu.stats": {
+		"en": "All-Sessions Stats",
+		"ko": "전체 통계"
+	},
+	"menu.jobs": {
+		"en": "Background Tasks",
+		"ko": "백그라운드 작업"
+	},
+	"menu.hotkeys": {
+		"en": "Keyboard Shortcuts",
+		"ko": "키보드 단축키"
+	},
+	"menu.toggleSidebar": {
+		"en": "Toggle Sidebar",
+		"ko": "사이드바 표시/숨기기"
+	},
+	"menu.togglePanel": {
+		"en": "Toggle Side Panel",
+		"ko": "사이드 패널 표시/숨기기"
+	},
+	"menu.reload": {
+		"en": "Reload",
+		"ko": "새로고침"
+	},
+	"menu.forceReload": {
+		"en": "Force Reload",
+		"ko": "강제 새로고침"
+	},
+	"menu.toggleDevTools": {
+		"en": "Toggle Developer Tools",
+		"ko": "개발자 도구 표시/숨기기"
+	},
+	"menu.actualSize": {
+		"en": "Actual Size",
+		"ko": "실제 크기"
+	},
+	"menu.zoomIn": {
+		"en": "Zoom In",
+		"ko": "확대"
+	},
+	"menu.zoomOut": {
+		"en": "Zoom Out",
+		"ko": "축소"
+	},
+	"menu.toggleFullScreen": {
+		"en": "Toggle Full Screen",
+		"ko": "전체 화면 표시/숨기기"
+	},
+	"menu.window": {
+		"en": "Window",
+		"ko": "창"
+	},
+	"menu.closeTab": {
+		"en": "Close Tab",
+		"ko": "탭 닫기"
+	},
+	"menu.closeWindow": {
+		"en": "Close Window",
+		"ko": "창 닫기"
+	},
+	"menu.minimize": {
+		"en": "Minimize",
+		"ko": "최소화"
+	},
+	"menu.zoom": {
+		"en": "Zoom",
+		"ko": "확대/축소"
+	},
+	"menu.bringAllToFront": {
+		"en": "Bring All to Front",
+		"ko": "모두 앞으로 가져오기"
+	},
+	"menu.session": {
+		"en": "Session",
+		"ko": "세션"
+	},
+	"menu.importSession": {
+		"en": "Import External Session",
+		"ko": "외부 세션 가져오기"
+	},
+	"menu.branchPicker": {
+		"en": "Branch from Message",
+		"ko": "메시지에서 분기"
+	},
+	"menu.sessionTree": {
+		"en": "Session Tree",
+		"ko": "세션 트리"
+	},
+	"menu.sessionInfo": {
+		"en": "Session Info",
+		"ko": "세션 정보"
+	},
+	"menu.shareSession": {
+		"en": "Share Session",
+		"ko": "세션 공유"
+	},
+	"menu.exportHtml": {
+		"en": "Export HTML",
+		"ko": "HTML 내보내기"
+	},
+	"menu.handoff": {
+		"en": "Handoff",
+		"ko": "핸드오프"
+	},
+	"menu.tools": {
+		"en": "Tools",
+		"ko": "도구"
+	},
+	"menu.agentHub": {
+		"en": "Agent Definitions",
+		"ko": "에이전트 정의"
+	},
+	"menu.modes": {
+		"en": "Modes",
+		"ko": "모드"
+	},
+	"menu.providers": {
+		"en": "Models & Accounts",
+		"ko": "모델 및 계정"
+	},
+	"menu.modelRoles": {
+		"en": "Model Roles",
+		"ko": "모델 역할"
+	},
+	"menu.modelPicker": {
+		"en": "Select Model",
+		"ko": "모델 선택"
+	},
+	"menu.capabilities": {
+		"en": "Agent Behavior",
+		"ko": "에이전트 동작"
+	},
+	"menu.usage": {
+		"en": "Usage & Quotas",
+		"ko": "사용량 및 할당량"
+	},
+	"menu.extensions": {
+		"en": "Extensions",
+		"ko": "확장"
+	},
+	"menu.inventory": {
+		"en": "Plugins",
+		"ko": "플러그인"
+	},
+	"menu.prCenter": {
+		"en": "Pull Requests",
+		"ko": "풀 리퀘스트"
+	},
+	"menu.workspaceDirs": {
+		"en": "Projects & Launch",
+		"ko": "프로젝트 및 실행"
+	},
+	"menu.workspaceChanges": {
+		"en": "Git Changes",
+		"ko": "Git 변경 사항"
+	},
+	"menu.restartCore": {
+		"en": "Restart omp",
+		"ko": "omp 다시 시작"
+	},
+	"menu.debugConsole": {
+		"en": "Debugger Console",
+		"ko": "디버거 콘솔"
+	},
+	"menu.help": {
+		"en": "Help",
+		"ko": "도움말"
+	},
+	"menu.reportIssue": {
+		"en": "Send Feedback…",
+		"ko": "피드백 보내기…"
+	},
+	"menu.documentation": {
+		"en": "Documentation",
+		"ko": "문서"
+	},
+	"menu.undo": {
+		"en": "Undo",
+		"ko": "실행 취소"
+	},
+	"menu.redo": {
+		"en": "Redo",
+		"ko": "실행 복귀"
+	},
+	"menu.cut": {
+		"en": "Cut",
+		"ko": "오려두기"
+	},
+	"menu.copy": {
+		"en": "Copy",
+		"ko": "복사하기"
+	},
+	"menu.paste": {
+		"en": "Paste",
+		"ko": "붙여넣기"
+	},
+	"menu.selectAll": {
+		"en": "Select All",
+		"ko": "전체 선택"
+	},
+	"tray.open": {
+		"en": "Open OMPdesk",
+		"ko": "OMPdesk 열기"
+	},
+	"tray.hide": {
+		"en": "Hide OMPdesk",
+		"ko": "OMPdesk 숨기기"
+	},
+	"tray.quit": {
+		"en": "Quit",
+		"ko": "종료"
+	},
+	"tray.updateCheck": {
+		"en": "Check for updates",
+		"ko": "업데이트 확인"
+	},
+	"tray.updateChecking": {
+		"en": "Checking for updates…",
+		"ko": "업데이트 확인 중…"
+	},
+	"tray.updateDownload": {
+		"en": "Download v{version}",
+		"ko": "v{version} 다운로드"
+	},
+	"tray.updateDownloading": {
+		"en": "Downloading v{version}…",
+		"ko": "v{version} 다운로드 중…"
+	},
+	"tray.updateDownloadingPercent": {
+		"en": "Downloading v{version}… {percent}%",
+		"ko": "v{version} 다운로드 중… {percent}%"
+	},
+	"tray.updateRestart": {
+		"en": "Restart to update to v{version}",
+		"ko": "다시 시작해서 v{version} 업데이트"
+	},
+	"tray.updateInstalling": {
+		"en": "Installing v{version}…",
+		"ko": "v{version} 설치 중…"
+	},
+	"tray.updateOpenInstaller": {
+		"en": "Open installer for v{version}",
+		"ko": "v{version} 설치 프로그램 열기"
+	},
+	"tray.updateUpToDate": {
+		"en": "OMPdesk is up to date",
+		"ko": "OMPdesk가 최신 버전이에요"
+	},
+	"tray.updateFailed": {
+		"en": "Update failed — try again",
+		"ko": "업데이트 실패 — 다시 시도"
+	},
+	"tray.statusIdle": {
+		"en": "Ready",
+		"ko": "준비됨"
+	},
+	"tray.statusStreaming": {
+		"en": "Working",
+		"ko": "작업 중"
+	},
+	"tray.statusQuestion": {
+		"en": "Needs input",
+		"ko": "답변 필요"
+	},
+	"tray.statusApproval": {
+		"en": "Needs approval",
+		"ko": "승인 필요"
+	},
+	"tray.statusChildWaiting": {
+		"en": "Child waiting",
+		"ko": "하위 세션 대기"
+	},
+	"tray.statusError": {
+		"en": "Error",
+		"ko": "오류"
+	}
+}

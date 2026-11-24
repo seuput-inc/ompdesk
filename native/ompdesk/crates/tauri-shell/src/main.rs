@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod app_menu;
 mod app_window;
 mod assets;
 #[cfg(feature = "test-automation")]
@@ -9,6 +10,7 @@ mod entry;
 mod evaluate;
 mod gpu;
 mod js_date;
+mod labels;
 mod launch_protection;
 mod legacy_user_data;
 mod migrate_watch;
@@ -32,6 +34,7 @@ mod registry;
 mod runtime_inputs;
 mod sessions;
 mod theme;
+mod tray;
 mod ui;
 mod update_auth_files;
 mod update_commands;
@@ -609,6 +612,7 @@ fn node_prevents_navigation(wc: u64, url: &tauri::Url) -> bool {
 }
 fn close_record(wc: u64) {
     entry::forget(wc);
+    tray::forget(wc);
     runtime()
         .app_initializations
         .lock()
@@ -1069,69 +1073,70 @@ fn wc_op(call: host::Call) {
     let Some(call) = defer_app_load(call) else {
         return;
     };
-    let result = (|| {
-        let wc = number(&call.params, "wcId")?;
-        let window = window_for_wc(wc)?;
-        let op = string(&call.params, "op")?;
-        let a = &call.params["args"];
-        match op {
-            "loadURL" => load_app(wc, &window, string(a, "url")?)?,
-            "reload" | "reloadIgnoringCache" => {
-                if op == "reloadIgnoringCache" {
-                    return Err(unsupported(op));
-                }
-                if let Ok(current) = window.url() {
-                    expect_navigation(wc, current.as_str())
-                        .map_err(|message| WireError::new("invalid", message))?;
-                }
-                window.eval("location.reload()").map_err(failed)?;
-            }
-            "stop" => window.eval("window.stop()").map_err(failed)?,
-            "setZoomFactor" => {
-                let factor = dimension(a, "factor")?;
-                window.set_zoom(factor).map_err(failed)?;
-                if let Some(p) = runtime().registry.lock().expect("registry").page_mut(wc) {
-                    p.zoom = factor;
-                }
-                wc_state(wc);
-            }
-            "focus" => window.set_focus().map_err(failed)?,
-            "openDevTools" => window.open_devtools(),
-            "closeDevTools" => window.close_devtools(),
-            "watchEvents" => {
-                let names = a["names"].as_array().map(Vec::as_slice).unwrap_or_default();
-                if names.iter().any(|name| name == "will-navigate") {
-                    runtime()
-                        .navigation_watch
-                        .lock()
-                        .expect("navigation watch")
-                        .insert(wc);
-                }
-                let unwatched: Vec<&str> = names
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter(|name| *name != "will-navigate")
-                    .collect();
-                if !unwatched.is_empty() {
-                    return Err(unsupported(&format!(
-                        "webContents events {}",
-                        unwatched.join(", ")
-                    )));
-                }
-            }
-            "executeJavaScript" => {
-                return Ok(Some(Later::Evaluate(window, string(a, "code")?.to_owned())));
-            }
-            _ => return Err(unsupported(&format!("wc.op {op}"))),
-        }
-        Ok(None)
-    })();
-    match result {
+    match wc_apply(&call.params) {
         Err(error) => call.err(&error.code, error.message),
         Ok(None) => call.ok(json!({})),
         // The engine's own evaluation, outside the page's CSP (evaluate.rs).
         Ok(Some(Later::Evaluate(window, code))) => evaluate::run(&window, call, code),
     }
+}
+/// A `wc.op` on an app page: Node's, or an app menu role's (app_menu.rs).
+fn wc_apply(params: &Value) -> Result<Option<Later>, WireError> {
+    let wc = number(params, "wcId")?;
+    let window = window_for_wc(wc)?;
+    let op = string(params, "op")?;
+    let a = &params["args"];
+    match op {
+        "loadURL" => load_app(wc, &window, string(a, "url")?)?,
+        "reload" | "reloadIgnoringCache" => {
+            if op == "reloadIgnoringCache" {
+                return Err(unsupported(op));
+            }
+            if let Ok(current) = window.url() {
+                expect_navigation(wc, current.as_str())
+                    .map_err(|message| WireError::new("invalid", message))?;
+            }
+            window.eval("location.reload()").map_err(failed)?;
+        }
+        "stop" => window.eval("window.stop()").map_err(failed)?,
+        "setZoomFactor" => {
+            let factor = dimension(a, "factor")?;
+            window.set_zoom(factor).map_err(failed)?;
+            if let Some(p) = runtime().registry.lock().expect("registry").page_mut(wc) {
+                p.zoom = factor;
+            }
+            wc_state(wc);
+        }
+        "focus" => window.set_focus().map_err(failed)?,
+        "openDevTools" => window.open_devtools(),
+        "closeDevTools" => window.close_devtools(),
+        "watchEvents" => {
+            let names = a["names"].as_array().map(Vec::as_slice).unwrap_or_default();
+            if names.iter().any(|name| name == "will-navigate") {
+                runtime()
+                    .navigation_watch
+                    .lock()
+                    .expect("navigation watch")
+                    .insert(wc);
+            }
+            let unwatched: Vec<&str> = names
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|name| *name != "will-navigate")
+                .collect();
+            if !unwatched.is_empty() {
+                return Err(unsupported(&format!(
+                    "webContents events {}",
+                    unwatched.join(", ")
+                )));
+            }
+        }
+        "executeJavaScript" => {
+            return Ok(Some(Later::Evaluate(window, string(a, "code")?.to_owned())));
+        }
+        _ => return Err(unsupported(&format!("wc.op {op}"))),
+    }
+    Ok(None)
 }
 fn dispatch(call: host::Call) {
     if call.method == "app.quit" {
@@ -1305,7 +1310,7 @@ fn dispatch_ui(call: host::Call) {
     }
     match call.method.as_str() {
         "wc.op" => return wc_op(call),
-        "app.setRunProgress" => return app_window::set_run_progress(call),
+        "menu.testClick" => return app_menu::test_click(call),
         _ => {}
     }
     let result = match call.method.as_str() {
@@ -1372,7 +1377,17 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
         }
         "wc.send" => page_push::wc_send(&data),
         "diskFull.state" => page_push::disk_full_state(data),
-        "session.ready" => entry::ready(),
+        "app.language" => match data["language"].as_str().and_then(labels::Lang::parse) {
+            Some(lang) => {
+                tray::set_language(lang);
+                ui::run(move || app_menu::install(lang));
+            }
+            None => log::log("app.language_invalid", json!({"data":data})),
+        },
+        "session.ready" => {
+            entry::ready();
+            tray::create();
+        }
         _ => log::log("event.unsupported", json!({"name":name})),
     }
 }
