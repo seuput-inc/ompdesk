@@ -449,7 +449,15 @@ describe("RemoteSidecar", () => {
 		const endMessage = { type: "message_end", message };
 		const wire = [endMessage, { ...first, messages: [{ "~sent": "assistant\u000042" }] }, start, second];
 		sidecar.handleEvent({ rtab: "tab-1", name: "events", arg: wire });
-		expect(received).toHaveBeenCalledWith([endMessage, first, start, second]);
+		expect(received).toHaveBeenCalledWith(
+			[
+				endMessage,
+				{ type: first.type, messages: first.messages },
+				start,
+				{ type: second.type, success: false, finalError: "failed" },
+			],
+			[endMessage, first, start, second],
+		);
 	});
 
 	it("hands over a stamped re-attach reading with its outcome only for the omp that reports status", () => {
@@ -499,7 +507,7 @@ describe("RemoteSidecar", () => {
 		const reading = { running: false, turn: false, hostTurn: { omp: "new", turn: 0 } };
 		if (omp) sidecar.handleEvent({ rtab: "tab-1", name: "run", arg: reading });
 		sidecar.handleEvent(hostStatus("ready", omp ? { omp, hostTurn: reading.hostTurn } : {}));
-		expect(seen).toEqual([["starting", false], ...(omp ? [reading] : []), ["ready", false]]);
+		expect(seen).toEqual([["starting", true], ...(omp ? [reading] : []), ["ready", false]]);
 	});
 
 	describe("a re-attach after a lost link", () => {

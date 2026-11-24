@@ -426,7 +426,7 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 					(this.#reattaching && (changed || parsed.data.omp === undefined)) ||
 					(replaced && (parsed.data.status === "ready" || parsed.data.status === "asleep"))
 				)
-					this.#setStatus("starting", {}, !replaced);
+					this.#setStatus("starting", {}, true, replaced ? null : undefined);
 				if (changed) this.#invalidateHostClose();
 				this.#omp = parsed.data.omp;
 				const run = this.#reattachRun;
@@ -500,9 +500,19 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 				if (typeof message.arg === "string") this.emit("sessionDeleted", message.arg);
 				return;
 			// A host that sent them slim (the hello asked): back to what a local sidecar delivers; whole ones pass through.
-			case "events":
-				this.emit(message.name, Array.isArray(message.arg) ? this.#linkEvents.events(message.arg) : message.arg);
+			case "events": {
+				if (!Array.isArray(message.arg)) return;
+				const events = this.#linkEvents.events(message.arg);
+				let publicEvents = events;
+				for (const [i, event] of events.entries()) {
+					if (!("hostTurn" in event)) continue;
+					const { hostTurn: _hostTurn, ...stock } = event;
+					if (publicEvents === events) publicEvents = events.slice();
+					publicEvents[i] = stock;
+				}
+				this.emit("events", publicEvents, events);
 				return;
+			}
 			// One frame, or an array of them: what a host that batches (`slimProgress`) sends for each flush.
 			case "subagentFrame":
 				for (const frame of Array.isArray(message.arg) ? message.arg : [message.arg]) {
@@ -927,7 +937,7 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 	}
 
 	/** `fromLink`: this side derived the status (start, link down, reconnecting) instead of the host's omp. */
-	#setStatus(status: SidecarStatus, detail: StatusDetail, fromLink = true, initialTurn?: HostCloseTurn): void {
+	#setStatus(status: SidecarStatus, detail: StatusDetail, fromLink = true, initialTurn?: HostCloseTurn | null): void {
 		if (status === "starting" || status === "restarting") this.#invalidateHostClose();
 		// Only `starting` keeps a bring-up waiting; every other status ends it (and its watchdog).
 		if (status !== "starting") this.#settle(status);

@@ -958,7 +958,7 @@ export class SidecarPool {
 				if (!isCoreShutdown(error)) throw error;
 			}
 		};
-		sidecar.on("status", (payload: SidecarStatusPayload, hostTurn?: HostCloseTurn) => {
+		sidecar.on("status", (payload: SidecarStatusPayload, hostTurn?: HostCloseTurn | null) => {
 			feed("status", {
 				status: payload.status,
 				hostTurn,
@@ -1042,11 +1042,11 @@ export class SidecarPool {
 		sidecar.on("scheduledRetry", (retry: IpcScheduledRetry | undefined) => feed("scheduledRetry", retry ?? null));
 		// Agent-end means one run yielded; upstream prompt/session-settled frames keep background async work
 		// represented as running until it is quiet.
-		sidecar.on("events", (events: AgentSessionEvent[]) => {
+		sidecar.on("events", (events: AgentSessionEvent[], hostEvents = events) => {
 			const handle = this.#handles.get(tab);
 			handle?.full?.forwardEvents(events);
 			this.modelWait.observe(tab, handle?.device ?? "", events);
-			const projected = projectEvents(events);
+			const projected = projectEvents(hostEvents);
 			if (projected.length > 0) feed("events", projected);
 		});
 	}

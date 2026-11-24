@@ -1607,7 +1607,16 @@ describe("LocalHostServices", () => {
 		// The turn and the status are re-sent on attach, the asks its omp holds (none), and whether this computer holds
 		// the turn for its connection.
 		expect(second.tabEvents()).toEqual([
-			{ rtab: "t1", name: "run", arg: { running: false, turn: false } },
+			{
+				rtab: "t1",
+				name: "run",
+				arg: {
+					running: false,
+					turn: false,
+					hostTurn: { omp: expect.any(String), turn: 1 },
+					lastRun: { stopReason: "stop" },
+				},
+			},
 			expect.objectContaining({ name: "status", arg: expect.objectContaining({ status: "ready" }) }),
 			{ rtab: "t1", name: "signIn", arg: { active: [] } },
 			{ rtab: "t1", name: "openAsks", arg: [] },

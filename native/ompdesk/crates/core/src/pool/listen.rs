@@ -80,9 +80,12 @@ impl Ctx {
             } else {
                 None
             };
-            if entry.device.is_some() && !from_link && !session_ended {
-                let new_omp =
-                    status == "restarting" || (status == "starting" && entry.start_wait.is_none());
+            // A synthetic reattach start can invalidate the prior omp's turn without withdrawing its replayed asks.
+            let replaced = payload.get("hostTurn").is_some_and(Value::is_null);
+            if entry.device.is_some() && (!from_link || replaced) && !session_ended {
+                let new_omp = replaced
+                    || status == "restarting"
+                    || (status == "starting" && entry.start_wait.is_none());
                 entry.tracking.host_status(payload, new_omp);
             }
             let seq = entry.seq;
