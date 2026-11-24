@@ -101,9 +101,20 @@ function launch(args: string[], env: Record<string, string>): Promise<ElectronAp
 async function readyPage(app: ElectronApplication): Promise<Page> {
 	const page = await app.firstWindow();
 	await page.waitForFunction(() => window.omp?.rpc != null);
-	await expect
-		.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 90_000 })
-		.toBe("ready");
+	try {
+		await expect
+			.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 90_000 })
+			.toBe("ready");
+	} catch (error) {
+		// Which tab main answers for and what it holds for this window: a relaunch once read "starting" for 90 s while
+		// a tab's omp was ready (W4 45474514857 shard 17).
+		const seen = await page
+			.evaluate(async () => ({ status: await window.omp.sidecar.getStatus(), tabs: await window.omp.tabs.list() }))
+			.catch((reason: unknown) => String(reason));
+		throw new Error(
+			`${error instanceof Error ? error.message : String(error)}\nmain's view: ${JSON.stringify(seen)}`,
+		);
+	}
 	return page;
 }
 

@@ -163,6 +163,7 @@ pub(super) async fn post(bytes: Bytes, state_file: Option<&Path>) -> Reply {
         url: url.as_str(),
         headers: &headers,
         body: Some(text.as_bytes()),
+        proxy: None,
     })
     .await;
     if id.is_none() {

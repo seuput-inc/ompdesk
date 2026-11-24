@@ -97,6 +97,8 @@ async fn apple_developer_dir(call: Call) -> Result<Reply, Fault> {
 struct Source {
     mirror: Option<String>,
     github_token: Option<String>,
+    /// The proxy `proxy.resolve` picked, which every non-loopback request goes through.
+    proxy: Option<String>,
 }
 
 impl Source {
@@ -104,6 +106,7 @@ impl Source {
         Http {
             mirror: self.mirror.as_deref(),
             token: self.github_token.as_deref(),
+            proxy: self.proxy.as_deref(),
         }
     }
 }

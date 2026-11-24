@@ -408,6 +408,7 @@ pub async fn deliver(prepared: &Prepared, timeout: Duration) -> Result<u16, Faul
         url: prepared.url.as_str(),
         headers: &headers,
         body: Some(&prepared.body),
+        proxy: None,
     };
     match tokio::time::timeout(timeout, http::status_once(request)).await {
         Err(_) => Err(fault(

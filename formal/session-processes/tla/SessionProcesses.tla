@@ -213,7 +213,7 @@ Boot ==
     /\ UNCHANGED <<quitting, held, sess, used, saved, inflight, alive, tookOver, retry>>
 
 \* The launch's sweep.
-\* @code src/main/index.ts:2660-2677 keep: the restored layouts and the markers; sweep after the tabs exist
+\* @code src/main/index.ts:2661-2678 keep: the restored layouts and the markers; sweep after the tabs exist
 Sweep ==
     /\ app = "up" /\ ~swept /\ ~quitting
     /\ swept' = TRUE

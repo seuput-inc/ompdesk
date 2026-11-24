@@ -119,6 +119,8 @@ export interface SetupServiceDeps {
 	/** `OMP_GUI_TEST_DOWNLOAD(_SHA256)`: under the test installer, every plan first downloads this (e2e progress). */
 	testDownload?: { url: string; sha256: string } | null;
 	refreshPath?: (platform: SetupPlatform, toolsDir: string) => Promise<void>;
+	/** The proxy every lookup and download goes through (the core's `proxy.resolve`, as the spawns get it); none in tests. */
+	proxy?: () => Promise<string | undefined>;
 	/**
 	 * The registry's manifest of omp `version` (default `bun pm view @oh-my-pi/pi-coding-agent@<version> --json` run
 	 * by `bun` in `env`, the update's own environment); rejects when the lookup fails. Under the test installer
@@ -436,9 +438,10 @@ export class SetupService {
 		return parsed.latestVersion;
 	}
 
-	/** What the core's lookups and downloads are told beyond their request: a test's mirror. */
-	#lookupOptions(): { mirror?: string } {
-		return this.#deps.mirror ? { mirror: this.#deps.mirror } : {};
+	/** What the core's lookups and downloads are told beyond their request: a test's mirror, the proxy. */
+	async #lookupOptions(): Promise<{ mirror?: string; proxy?: string }> {
+		const proxy = await this.#deps.proxy?.();
+		return { ...(this.#deps.mirror ? { mirror: this.#deps.mirror } : {}), ...(proxy ? { proxy } : {}) };
 	}
 
 	/** The newest release of machine setup's verified archive for gh, Node or agent-desktop (`runToolUpdate`'s `managed` update installs it). */
@@ -448,11 +451,10 @@ export class SetupService {
 	}
 
 	/** The release machine setup's verified archive install of `item` downloads (agent-desktop has its own source and targets). */
-	#resolveManaged(item: "gh" | "node" | "agent-desktop"): Promise<ArchiveRelease> {
-		const lookup = this.#lookupOptions();
+	async #resolveManaged(item: "gh" | "node" | "agent-desktop"): Promise<ArchiveRelease> {
+		const lookup = await this.#lookupOptions();
 		if (item !== "agent-desktop") return resolveArchiveRelease(item, this.#deps.arch, lookup);
-		if (this.#deps.platform === "other")
-			return Promise.reject(new Error("agent-desktop has no release for this platform"));
+		if (this.#deps.platform === "other") throw new Error("agent-desktop has no release for this platform");
 		return resolveAgentDesktopRelease(this.#deps.platform, this.#deps.arch, lookup);
 	}
 
@@ -509,6 +511,8 @@ export class SetupService {
 		let output = "";
 		try {
 			if (download) {
+				const lookup = await this.#lookupOptions();
+				throwIfStepStalled();
 				const controller = new AbortController();
 				this.#download = controller;
 				try {
@@ -516,7 +520,7 @@ export class SetupService {
 						...download,
 						signal: controller.signal,
 						onProgress: () => {},
-						...this.#lookupOptions(),
+						...lookup,
 					});
 				} catch (error) {
 					throwIfStepStalled();
@@ -954,7 +958,7 @@ export class SetupService {
 					tailscale = await resolveTailscaleRelease(
 						platform,
 						tailscaleMsiArch(this.#deps.arch),
-						this.#lookupOptions(),
+						await this.#lookupOptions(),
 					);
 					throwIfStepStalled();
 				} catch (error) {
@@ -1056,6 +1060,8 @@ export class SetupService {
 	/** Download the plan's file in main with byte progress; false when it failed or was cancelled (already reported). */
 	async #fetch(id: SetupItemId, download: PlanDownload): Promise<boolean> {
 		const item = this.#items[id];
+		const lookup = await this.#lookupOptions();
+		throwIfStepStalled();
 		const controller = new AbortController();
 		this.#download = controller;
 		try {
@@ -1066,7 +1072,7 @@ export class SetupService {
 					if (item.progress) item.progress = { ...item.progress, download: { ...value } };
 					this.#emitSoon();
 				},
-				...this.#lookupOptions(),
+				...lookup,
 			});
 		} catch (error) {
 			throwIfStepStalled();

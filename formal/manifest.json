@@ -77,7 +77,7 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2360-2364",
+				"src/main/index.ts:2361-2365",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "648d2431d7c14088a8166927f4fdbf8fef15501c",
+			"syncCommit": "44ca44b2a05bb2c2b8d3f20d49331b7f599b5532",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
