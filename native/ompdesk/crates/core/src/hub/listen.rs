@@ -4,7 +4,11 @@
 
 use super::serve_conn;
 
-/// Listens where `OMPDESK_HUB` names, if it does: from the core's start, so main's first call finds it.
+/// Listens where `OMPDESK_HUB` names, if it does: from the core's start, so main's first call finds it. The listener
+/// and every connection run on a thread and runtime of their own: main's thread waits on each hub call, so a hub
+/// answer must never wait for the core's shared runtime, whose workers a burst of requests (or a stderr write main
+/// does not drain while it waits) can hold for seconds. Packaged apps on macOS and Windows found the hub silent for
+/// over 2 s at their first call under that load (runs 45351355265 and 45365781117).
 pub fn listen_from_env() {
     let (Ok(address), Ok(token)) = (
         std::env::var("OMPDESK_HUB"),
@@ -12,11 +16,26 @@ pub fn listen_from_env() {
     ) else {
         return;
     };
-    tokio::spawn(async move {
-        if let Err(error) = accept(&address, token).await {
-            eprintln!("ompdesk-core: the hub does not listen at {address}: {error}");
-        }
-    });
+    let started = std::thread::Builder::new()
+        .name("ompdesk-hub-io".into())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    eprintln!("ompdesk-core: the hub cannot start its connections' runtime: {error}");
+                    return;
+                }
+            };
+            if let Err(error) = runtime.block_on(accept(&address, token)) {
+                eprintln!("ompdesk-core: the hub does not listen at {address}: {error}");
+            }
+        });
+    if let Err(error) = started {
+        eprintln!("ompdesk-core: the hub's connection thread did not start: {error}");
+    }
 }
 
 #[cfg(unix)]
