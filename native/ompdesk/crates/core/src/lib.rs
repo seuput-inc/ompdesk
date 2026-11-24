@@ -29,6 +29,7 @@ pub mod models;
 pub mod omp;
 pub mod pool;
 pub mod ports;
+pub mod prefs;
 pub mod procs;
 pub mod remote;
 pub mod remotebytes;

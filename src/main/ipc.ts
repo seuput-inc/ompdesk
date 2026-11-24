@@ -177,6 +177,7 @@ import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notifi
 import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
+import { prefsFile } from "./prefs-store";
 import { registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
 import { runVisualizeTool, VISUALIZE_TOOL, VisualStore } from "./preview/visuals";
@@ -193,7 +194,6 @@ import { hostedAutopilot } from "./remote/hosted-autopilot";
 import { RemoteImageReads } from "./remote/image-reads";
 import { writeRuntimeLog } from "./runtime-log";
 import { normalizeRuntimeErrorReport } from "./runtime-log-core";
-import { SafeStore } from "./safe-store";
 import { fileNameOf, readRemoteFile, type SaveCopyRemote, saveCopy } from "./save-copy";
 import type { RunProcess, ScheduleService } from "./schedules";
 import type { SessionIndex } from "./session-index";
@@ -534,7 +534,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	/** The same for a window's model setup research. */
 	const remoteModelSetups = new Map<number, string>();
 	const { sidecarPool, sessionIndex, logWatcher, windowManager, remoteDevices } = deps;
-	const prefsStore = new SafeStore<PrefsSchema>({ name: "prefs" });
+	const prefsStore = prefsFile<PrefsSchema>("prefs");
 	const remoteMachine = { request: remoteDevices.request.bind(remoteDevices), statsText: mainT };
 	/**
 	 * Delete a stored session (the sidebar, `/delete`, the control tools): the tab holding it closes. On this computer

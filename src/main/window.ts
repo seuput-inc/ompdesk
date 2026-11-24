@@ -1,18 +1,18 @@
 /**
  * Multi-window management for ompdesk.
- * Creates sandboxed BrowserWindows with persisted state via electron-store.
+ * Creates sandboxed BrowserWindows with persisted state via the core (`prefs-store.ts`).
  */
 
 import * as fs from "node:fs";
 import { release } from "node:os";
 import { join } from "node:path";
 import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, Notification, nativeTheme, shell } from "electron";
-import type Store from "electron-store";
 import type { RunProgressState, SessionKind } from "../shared/ipc-types";
 import { askQuit, quitRisk, requestQuit } from "./app-quit";
 import { editableContextMenuTemplate } from "./editable-context-menu";
 import { softwareCompositing } from "./gpu-fallback";
 import { editLabels, getMainLanguage, mainT } from "./i18n";
+import { type PrefsStore, prefsFile } from "./prefs-store";
 import type { LastWindowClose } from "./quit-guard";
 import {
 	type ApplicationResourceIdentity,
@@ -24,7 +24,6 @@ import {
 	shouldRestartForChangedResources,
 } from "./renderer-recovery";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
-import { SafeStore } from "./safe-store";
 import { appIconPath } from "./shell-host/electron/index";
 import type { WindowPresence } from "./update-log-core";
 import type { ClientWindow } from "./web/client-window";
@@ -83,7 +82,7 @@ export type SpawnWindow = (
 
 export class WindowManager {
 	#records = new Map<number, WindowRecord>();
-	#store: Store<StoreSchema>;
+	#store: PrefsStore<StoreSchema>;
 	/** The renderer entry the packaged app serves its windows from: an update replaces it. */
 	#resourceEntryPath = app.isPackaged ? join(app.getAppPath(), "out", "renderer", "index.html") : null;
 	#launchResourceIdentity = this.#readResourceIdentity();
@@ -107,7 +106,7 @@ export class WindowManager {
 	lastWindowHidden: (() => void) | null = null;
 
 	constructor() {
-		this.#store = new SafeStore<StoreSchema>({ name: "window-state" });
+		this.#store = prefsFile<StoreSchema>("window-state");
 	}
 
 	createWindow(opts: { cwd: string }): BrowserWindow {

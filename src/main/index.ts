@@ -26,7 +26,6 @@ import {
 	shell,
 	systemPreferences,
 } from "electron";
-import type Store from "electron-store";
 import {
 	AUTO_TITLE_EVOLVE_PREF,
 	AUTO_TITLE_PREF,
@@ -167,6 +166,7 @@ import { OmpUpdater, registerOmpUpdateIpc } from "./omp-updater";
 import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
+import { type PrefsStore, prefsFile } from "./prefs-store";
 import { activateAction, lastWindowCloseAction } from "./quit-guard";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
@@ -177,7 +177,6 @@ import { readoptHostTabs } from "./remote/readopt";
 import { migrateRetiredPrefs } from "./retired-prefs";
 import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
-import { SafeStore } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
 import { whenSessionFree } from "./session-free";
@@ -380,16 +379,13 @@ interface MainPrefs {
 	[key: string]: unknown;
 }
 
-let mainPrefsStore: Store<MainPrefs> | null = null;
+let mainPrefsStore: PrefsStore<MainPrefs> | null = null;
 
-function prefsStore(): Store<MainPrefs> {
+function prefsStore(): PrefsStore<MainPrefs> {
 	if (!mainPrefsStore) {
-		mainPrefsStore = new SafeStore<MainPrefs>({ name: "prefs" });
-		migrateRetiredPrefs(
-			mainPrefsStore as unknown as Store<Record<string, unknown>>,
-			join(app.getPath("userData"), "schedules.json"),
-		);
-		const powers = migrateAgentPowers(mainPrefsStore as unknown as Store<Record<string, unknown>>, agentDir());
+		mainPrefsStore = prefsFile<MainPrefs>("prefs");
+		migrateRetiredPrefs(mainPrefsStore, join(app.getPath("userData"), "schedules.json"));
+		const powers = migrateAgentPowers(mainPrefsStore, agentDir());
 		if (powers) {
 			writeRuntimeLog({
 				// A clean migration is no failure: only one that could not edit config.yml is a background-task error.
@@ -400,7 +396,7 @@ function prefsStore(): Store<MainPrefs> {
 		}
 		// A theme the app no longer ships (the pre-curated set) is replaced by its nearest successor, so the
 		// stored pref never names a missing theme and the saved window opens in the right scheme.
-		const prefs = mainPrefsStore as unknown as Store<Record<string, unknown>>;
+		const prefs = mainPrefsStore;
 		for (const key of ["themeName", "systemLightTheme", "systemDarkTheme"]) {
 			const stored = prefs.get(key);
 			const migrated = migrateThemeName(stored);
@@ -1447,7 +1443,7 @@ app.whenReady().then(async () => {
 		};
 		return lidAwake ? lidAwake.wrap(blocker, label) : blocker;
 	};
-	const deviceOrderStore = new SafeStore({ name: "sidebar-device-order" });
+	const deviceOrderStore = prefsFile("sidebar-device-order");
 	const devices = new RemoteDevices({
 		userData: app.getPath("userData"),
 		identity: await remoteIdentity,
