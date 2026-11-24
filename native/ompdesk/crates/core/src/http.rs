@@ -9,10 +9,16 @@
 //! certificate is checked by the platform's verifier against what the machine trusts, plus the certificates
 //! `NODE_EXTRA_CA_CERTS` names, as Node's `fetch` added them.
 //!
+//! A request may name a proxy (`Request::proxy`, the URL `proxy.rs` picks for a check, an update or an install): an
+//! `http` or `https` proxy tunnels an `https` address with `CONNECT` and takes an `http` one in absolute form, a
+//! `socks5` proxy (no authentication; the name resolved by the proxy) tunnels both. A loopback address never goes
+//! through it, as Chromium bypassed one. Any other proxy scheme is refused before dialing (`ProxyUnsupported`, with a
+//! line on stderr), never sent direct; nothing before spoke one.
+//!
 //! What it does not do, on purpose: connection reuse (`connection: close` on every request; a loopback connect costs
-//! less than keeping a pool right), compression (no `accept-encoding` is sent, so none comes back), proxies. The
-//! address is read as the WHATWG URL standard reads it (`url`, as node's `fetch` did), so the path and query go out
-//! normalized the same way.
+//! less than keeping a pool right), compression (no `accept-encoding` is sent, so none comes back), proxy
+//! authentication. The address is read as the WHATWG URL standard reads it (`url`, as node's `fetch` did), so the path
+//! and query go out normalized the same way.
 //!
 //! Nothing here keeps or reports what a request carried: a `Failure` names a kind, and the one text it can hold
 //! (`Tls`) is rustls's account of a handshake, which ends before any header or body of the request is written.
@@ -29,7 +35,7 @@ use hyper_util::rt::TokioIo;
 use rustls::ClientConfig;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use url::{Host, Position, Url};
@@ -51,6 +57,8 @@ pub struct Request<'a> {
     pub url: &'a str,
     pub headers: &'a [(&'static str, &'a str)],
     pub body: Option<&'a [u8]>,
+    /// The proxy every hop to a non-loopback address goes through: `http://`, `https://` or `socks5://host:port`.
+    pub proxy: Option<&'a str>,
 }
 
 pub struct Response {
@@ -74,6 +82,10 @@ pub enum Failure {
     Tls(String),
     /// A redirect could not be followed: one past the 20th, or a `location` that is no `http` or `https` URL.
     Redirect,
+    /// The proxy refused the tunnel, did not answer as its kind does, or ended the connection while it was made.
+    Proxy,
+    /// The proxy's scheme is none this client speaks.
+    ProxyUnsupported,
 }
 
 /// The TLS settings a request uses; tests hand in their own authority.
@@ -153,26 +165,70 @@ fn target(url: &Url) -> Result<Target, Failure> {
 trait Io: AsyncRead + AsyncWrite + Send + Unpin + 'static {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Io for T {}
 
-async fn connect(
-    target: &Target,
-    tls: Tls,
-    addresses: Option<&[SocketAddr]>,
-) -> Result<Box<dyn Io>, Failure> {
-    let config = if target.tls { Some(tls()?) } else { None };
-    let stream = match addresses {
-        Some(addresses) => TcpStream::connect(addresses).await,
-        None => match &target.host {
-            Host::Domain(name) => TcpStream::connect((name.as_str(), target.port)).await,
-            Host::Ipv4(address) => TcpStream::connect((*address, target.port)).await,
-            Host::Ipv6(address) => TcpStream::connect((*address, target.port)).await,
-        },
+#[derive(Clone, Copy, PartialEq)]
+enum Via {
+    Http,
+    Https,
+    Socks5,
+}
+
+/// A request's proxy, read from its URL.
+struct Proxy {
+    via: Via,
+    host: Host<String>,
+    port: u16,
+}
+
+impl Proxy {
+    fn parse(proxy: &str) -> Result<Proxy, Failure> {
+        let url = Url::parse(proxy).map_err(|_| Failure::Request)?;
+        let (via, default_port) = match url.scheme() {
+            "http" => (Via::Http, 80),
+            "https" => (Via::Https, 443),
+            "socks5" | "socks5h" => (Via::Socks5, 1080),
+            other => {
+                eprintln!("proxy scheme `{other}` is not supported: the request is not sent");
+                return Err(Failure::ProxyUnsupported);
+            }
+        };
+        Ok(Proxy {
+            via,
+            host: url.host().ok_or(Failure::Request)?.to_owned(),
+            port: url.port().unwrap_or(default_port),
+        })
+    }
+
+    /// An HTTP proxy takes a plain `http` request whole, its target in absolute form.
+    fn forwards(&self, target: &Target) -> bool {
+        self.via != Via::Socks5 && !target.tls
+    }
+}
+
+fn loopback(host: &Host<String>) -> bool {
+    match host {
+        Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => address.is_loopback(),
+        Host::Ipv6(address) => address.is_loopback(),
+    }
+}
+
+async fn dial(host: &Host<String>, port: u16) -> Result<TcpStream, Failure> {
+    let stream = match host {
+        Host::Domain(name) => TcpStream::connect((name.as_str(), port)).await,
+        Host::Ipv4(address) => TcpStream::connect((*address, port)).await,
+        Host::Ipv6(address) => TcpStream::connect((*address, port)).await,
     }
     .map_err(|_| Failure::Connect)?;
     let _ = stream.set_nodelay(true);
-    let Some(config) = config else {
-        return Ok(Box::new(stream));
-    };
-    let name = match &target.host {
+    Ok(stream)
+}
+
+async fn secure(
+    config: Arc<ClientConfig>,
+    host: &Host<String>,
+    stream: Box<dyn Io>,
+) -> Result<Box<dyn Io>, Failure> {
+    let name = match host {
         Host::Domain(name) => ServerName::try_from(name.clone()).map_err(|_| Failure::Request)?,
         Host::Ipv4(address) => ServerName::from(IpAddr::V4(*address)),
         Host::Ipv6(address) => ServerName::from(IpAddr::V6(*address)),
@@ -192,14 +248,128 @@ async fn connect(
     Ok(Box::new(stream))
 }
 
+/// `CONNECT host:port` through an HTTP proxy; any answer but a 2xx is the proxy's refusal.
+async fn tunnel(stream: &mut Box<dyn Io>, target: &Target) -> Result<(), Failure> {
+    let authority = format!("{}:{}", target.host, target.port);
+    let ask = format!("CONNECT {authority} HTTP/1.1\r\nhost: {authority}\r\n\r\n");
+    stream
+        .write_all(ask.as_bytes())
+        .await
+        .map_err(|_| Failure::Proxy)?;
+    // Read up to the head's end, never past it: what follows is the tunnel's.
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() >= 16 * 1024 || stream.read(&mut byte).await.map_err(|_| Failure::Proxy)? == 0
+        {
+            return Err(Failure::Proxy);
+        }
+        head.push(byte[0]);
+    }
+    let line = String::from_utf8_lossy(&head);
+    let mut words = line.split_ascii_whitespace();
+    match (words.next(), words.next()) {
+        (Some(version), Some(code)) if version.starts_with("HTTP/1.") && code.starts_with('2') => {
+            Ok(())
+        }
+        _ => Err(Failure::Proxy),
+    }
+}
+
+/// RFC 1928 without authentication; the proxy resolves a name itself.
+async fn socks5(stream: &mut Box<dyn Io>, target: &Target) -> Result<(), Failure> {
+    let broke = |_: std::io::Error| Failure::Proxy;
+    stream.write_all(&[5, 1, 0]).await.map_err(broke)?;
+    let mut chosen = [0_u8; 2];
+    stream.read_exact(&mut chosen).await.map_err(broke)?;
+    if chosen != [5, 0] {
+        return Err(Failure::Proxy);
+    }
+    let mut ask = vec![5, 1, 0];
+    match &target.host {
+        Host::Domain(name) => {
+            ask.push(3);
+            ask.push(u8::try_from(name.len()).map_err(|_| Failure::Request)?);
+            ask.extend_from_slice(name.as_bytes());
+        }
+        Host::Ipv4(address) => {
+            ask.push(1);
+            ask.extend_from_slice(&address.octets());
+        }
+        Host::Ipv6(address) => {
+            ask.push(4);
+            ask.extend_from_slice(&address.octets());
+        }
+    }
+    ask.extend_from_slice(&target.port.to_be_bytes());
+    stream.write_all(&ask).await.map_err(broke)?;
+    let mut answer = [0_u8; 4];
+    stream.read_exact(&mut answer).await.map_err(broke)?;
+    if answer[..2] != [5, 0] {
+        return Err(Failure::Proxy);
+    }
+    let bound = match answer[3] {
+        1 => 4,
+        4 => 16,
+        3 => {
+            let mut length = [0_u8; 1];
+            stream.read_exact(&mut length).await.map_err(broke)?;
+            usize::from(length[0])
+        }
+        _ => return Err(Failure::Proxy),
+    };
+    // The address and port the proxy bound: not used.
+    let mut rest = vec![0_u8; bound + 2];
+    stream.read_exact(&mut rest).await.map_err(broke)?;
+    Ok(())
+}
+
+async fn connect(
+    target: &Target,
+    tls: Tls,
+    addresses: Option<&[SocketAddr]>,
+    proxy: Option<&Proxy>,
+) -> Result<Box<dyn Io>, Failure> {
+    let config = if target.tls { Some(tls()?) } else { None };
+    let mut stream: Box<dyn Io> = match (addresses, proxy) {
+        (Some(addresses), _) => {
+            let stream = TcpStream::connect(addresses)
+                .await
+                .map_err(|_| Failure::Connect)?;
+            let _ = stream.set_nodelay(true);
+            Box::new(stream)
+        }
+        (None, Some(proxy)) => {
+            let stream: Box<dyn Io> = Box::new(dial(&proxy.host, proxy.port).await?);
+            if proxy.via == Via::Https {
+                secure(tls()?, &proxy.host, stream).await?
+            } else {
+                stream
+            }
+        }
+        (None, None) => Box::new(dial(&target.host, target.port).await?),
+    };
+    match proxy {
+        Some(proxy) if proxy.forwards(target) => return Ok(stream),
+        Some(proxy) if proxy.via == Via::Socks5 => socks5(&mut stream, target).await?,
+        Some(_) => tunnel(&mut stream, target).await?,
+        None => {}
+    }
+    match config {
+        Some(config) => secure(config, &target.host, stream).await,
+        None => Ok(stream),
+    }
+}
+
 /// Sends one request to `url` and answers at its head; the body is still to be read.
 async fn exchange_once(
     url: &Url,
     headers: &[(&str, &str)],
     body: Option<&[u8]>,
     tls: Tls,
+    proxy: Option<&Proxy>,
 ) -> Result<hyper::Response<Incoming>, Failure> {
-    exchange_at(url, headers, body, tls, None).await
+    exchange_at(url, headers, body, tls, None, proxy).await
 }
 
 async fn exchange_at(
@@ -208,12 +378,18 @@ async fn exchange_at(
     body: Option<&[u8]>,
     tls: Tls,
     addresses: Option<&[SocketAddr]>,
+    proxy: Option<&Proxy>,
 ) -> Result<hyper::Response<Incoming>, Failure> {
     let target = target(url)?;
+    let proxy = proxy.filter(|_| addresses.is_none() && !loopback(&target.host));
+    let uri = match proxy {
+        Some(proxy) if proxy.forwards(&target) => &url[..Position::AfterQuery],
+        _ => target.path.as_str(),
+    };
     let method = if body.is_some() { "POST" } else { "GET" };
     let mut message = hyper::Request::builder()
         .method(method)
-        .uri(target.path.as_str())
+        .uri(uri)
         .header("host", target.authority.as_str())
         .header("connection", "close");
     for (name, value) in headers {
@@ -227,7 +403,7 @@ async fn exchange_at(
     }
     let body = Full::new(Bytes::copy_from_slice(body.unwrap_or_default()));
     let message = message.body(body).map_err(|_| Failure::Request)?;
-    let stream = connect(&target, tls, addresses).await?;
+    let stream = connect(&target, tls, addresses, proxy).await?;
     let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
         .map_err(|_| Failure::Broken)?;
@@ -252,17 +428,19 @@ pub(crate) async fn get_at(
         None,
         machine_tls,
         Some(addresses),
+        None,
     )
     .await
 }
 
 /// Sends `request`, following its redirects, and answers at the last head; the body is still to be read.
 async fn exchange(request: &Request<'_>, tls: Tls) -> Result<hyper::Response<Incoming>, Failure> {
+    let proxy = request.proxy.map(Proxy::parse).transpose()?;
     let mut url = Url::parse(request.url).map_err(|_| Failure::Request)?;
     let mut headers: Vec<(&str, &str)> = request.headers.to_vec();
     let mut body = request.body;
     for _ in 0..=REDIRECT_MAX {
-        let response = exchange_once(&url, &headers, body, tls).await?;
+        let response = exchange_once(&url, &headers, body, tls, proxy.as_ref()).await?;
         let status = response.status().as_u16();
         let location = match response.headers().get(LOCATION) {
             Some(location) if matches!(status, 301 | 302 | 303 | 307 | 308) => {
@@ -328,7 +506,15 @@ pub async fn open(request: Request<'_>) -> Result<hyper::Response<Incoming>, Fai
 /// did (the redirect rules above are `fetch`'s).
 pub async fn status_once(request: Request<'_>) -> Result<u16, Failure> {
     let url = Url::parse(request.url).map_err(|_| Failure::Request)?;
-    let response = exchange_once(&url, request.headers, request.body, machine_tls).await?;
+    let proxy = request.proxy.map(Proxy::parse).transpose()?;
+    let response = exchange_once(
+        &url,
+        request.headers,
+        request.body,
+        machine_tls,
+        proxy.as_ref(),
+    )
+    .await?;
     Ok(response.status().as_u16())
 }
 
@@ -353,6 +539,7 @@ pub(crate) async fn loopback_get_once(url: &Url) -> Result<hyper::Response<Incom
         None,
         machine_tls,
         Some(addresses),
+        None,
     )
     .await
 }
@@ -419,6 +606,7 @@ pub(crate) mod tests {
             url,
             headers: &[],
             body: None,
+            proxy: None,
         }
     }
 
@@ -448,6 +636,7 @@ pub(crate) mod tests {
             url: &format!("{url}/a%20b/../c?q=1 2#frag"),
             headers: &[("authorization", "Bearer abc"), ("accept", "text/plain")],
             body: None,
+            proxy: None,
         })
         .await
         .unwrap();
@@ -476,6 +665,7 @@ pub(crate) mod tests {
             url: &format!("{url}/write"),
             headers: &[("content-type", "application/json")],
             body: Some("{\"a\":\"한\"}".as_bytes()),
+            proxy: None,
         })
         .await
         .unwrap();
@@ -587,6 +777,7 @@ pub(crate) mod tests {
                 url: &url,
                 headers: &[("authorization", value)],
                 body: None,
+                proxy: None,
             })
             .await;
             assert_eq!(refused.err(), Some(Failure::Request), "{value:?}");
@@ -766,6 +957,7 @@ pub(crate) mod tests {
                 url: &url,
                 headers: &[("authorization", "Bearer abc")],
                 body: Some(b"{}"),
+                proxy: None,
             };
             let response = send_within(request, BODY_MAX, trusting).await.unwrap();
             assert_eq!((response.status, response.body), (200, b"secure".to_vec()));
@@ -798,6 +990,7 @@ pub(crate) mod tests {
                 url: &url,
                 headers: &[("authorization", "Bearer abc")],
                 body: None,
+                proxy: None,
             };
             match send_within(request, BODY_MAX, client).await {
                 Err(Failure::Tls(said)) => {
@@ -884,6 +1077,7 @@ pub(crate) mod tests {
                 ("content-type", "application/json"),
             ],
             body: Some(b"{\"a\":1}"),
+            proxy: None,
         }
     }
 
@@ -970,5 +1164,210 @@ pub(crate) mod tests {
         assert_eq!((response.status, response.body), (302, b"bare".to_vec()));
         let elsewhere = format!("http://127.0.0.1:{port}/elsewhere");
         assert_eq!(send(get(&elsewhere)).await.err(), Some(Failure::Redirect));
+    }
+
+    /// A stand-in proxy on 127.0.0.1. An HTTP proxy answers `CONNECT` with `connect_answer` and, on a 2xx, pipes the
+    /// tunnel to `upstream`; a request in absolute form it answers itself. A SOCKS5 proxy pipes every tunnel to
+    /// `upstream`. Each connection's first line (`CONNECT …`, `GET http://…`, `SOCKS5 host:port`) is kept.
+    async fn stand_in(socks: bool, connect_answer: &'static str, upstream: u16) -> (String, Seen) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Seen::default();
+        let kept = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let kept = kept.clone();
+                tokio::spawn(async move {
+                    if socks {
+                        let mut greeting = [0_u8; 3];
+                        socket.read_exact(&mut greeting).await.unwrap();
+                        socket.write_all(&[5, 0]).await.unwrap();
+                        let mut head = [0_u8; 5];
+                        socket.read_exact(&mut head).await.unwrap();
+                        assert_eq!(
+                            (head[3], &head[..3]),
+                            (3, &[5_u8, 1, 0][..]),
+                            "a name, resolved here"
+                        );
+                        let mut name = vec![0_u8; usize::from(head[4]) + 2];
+                        socket.read_exact(&mut name).await.unwrap();
+                        let port = u16::from_be_bytes([name[name.len() - 2], name[name.len() - 1]]);
+                        let host = String::from_utf8_lossy(&name[..name.len() - 2]).into_owned();
+                        kept.lock()
+                            .unwrap()
+                            .push(format!("SOCKS5 {host}:{port}").into_bytes());
+                        socket
+                            .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+                            .await
+                            .unwrap();
+                    } else {
+                        let request = read_request(&mut socket).await;
+                        let line = String::from_utf8_lossy(&request)
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned();
+                        kept.lock().unwrap().push(line.clone().into_bytes());
+                        if !line.starts_with("CONNECT ") {
+                            let _ = socket.write_all(ok("forwarded").as_bytes()).await;
+                            return;
+                        }
+                        socket.write_all(connect_answer.as_bytes()).await.unwrap();
+                        if !connect_answer.starts_with("HTTP/1.1 2") {
+                            return;
+                        }
+                    }
+                    let mut far = TcpStream::connect(("127.0.0.1", upstream)).await.unwrap();
+                    let _ = tokio::io::copy_bidirectional(&mut socket, &mut far).await;
+                });
+            }
+        });
+        let scheme = if socks { "socks5" } else { "http" };
+        (format!("{scheme}://127.0.0.1:{port}"), seen)
+    }
+
+    fn lines(seen: &Seen) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .map(|bytes| {
+                String::from_utf8_lossy(bytes)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn via<'a>(url: &'a str, proxy: &'a str) -> Request<'a> {
+        Request {
+            url,
+            headers: &[],
+            body: None,
+            proxy: Some(proxy),
+        }
+    }
+
+    const ESTABLISHED: &str = "HTTP/1.1 200 Connection established\r\n\r\n";
+
+    #[tokio::test]
+    async fn an_https_address_goes_through_an_http_proxy_s_tunnel_and_is_checked_end_to_end() {
+        let tls = server_tls(&TRUSTED.issuer, &["upstream.test"]);
+        let (upstream, served) = serve(Some(tls), |_| ok("through")).await;
+        let (proxy, asked) = stand_in(false, ESTABLISHED, upstream).await;
+        let response = send_within(
+            via("https://upstream.test/x?y=1", &proxy),
+            BODY_MAX,
+            trusting,
+        )
+        .await
+        .unwrap();
+        assert_eq!((response.status, response.body), (200, b"through".to_vec()));
+        assert_eq!(lines(&asked), ["CONNECT upstream.test:443 HTTP/1.1"]);
+        assert_eq!(lines(&served), ["GET /x?y=1 HTTP/1.1"]);
+        // A certificate the machine does not trust still fails inside the tunnel.
+        assert!(matches!(
+            send_within(
+                via("https://upstream.test/x", &proxy),
+                BODY_MAX,
+                machine_tls
+            )
+            .await,
+            Err(Failure::Tls(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_http_address_goes_to_an_http_proxy_in_absolute_form() {
+        let (proxy, asked) = stand_in(false, ESTABLISHED, 1).await;
+        let response = send(via("http://upstream.test:8080/a?b=1#frag", &proxy))
+            .await
+            .unwrap();
+        assert_eq!(
+            (response.status, response.body),
+            (200, b"forwarded".to_vec())
+        );
+        assert_eq!(
+            lines(&asked),
+            ["GET http://upstream.test:8080/a?b=1 HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_socks5_proxy_tunnels_both_schemes_and_resolves_the_name_itself() {
+        let (plain, plain_served) = serve(None, |_| ok("plain")).await;
+        let (proxy, asked) = stand_in(true, "", plain).await;
+        let response = send(via("http://upstream.test/p", &proxy)).await.unwrap();
+        assert_eq!(response.body, b"plain");
+        assert_eq!(lines(&plain_served), ["GET /p HTTP/1.1"]);
+
+        let tls = server_tls(&TRUSTED.issuer, &["upstream.test"]);
+        let (secure, secure_served) = serve(Some(tls), |_| ok("secure")).await;
+        let (proxy, asked_secure) = stand_in(true, "", secure).await;
+        let response = send_within(via("https://upstream.test/s", &proxy), BODY_MAX, trusting)
+            .await
+            .unwrap();
+        assert_eq!(response.body, b"secure");
+        assert_eq!(lines(&secure_served), ["GET /s HTTP/1.1"]);
+        assert_eq!(lines(&asked), ["SOCKS5 upstream.test:80"]);
+        assert_eq!(lines(&asked_secure), ["SOCKS5 upstream.test:443"]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_tunnel_is_the_proxy_s_failure_and_never_goes_direct() {
+        let refusal = "HTTP/1.1 407 Proxy Authentication Required\r\ncontent-length: 0\r\n\r\n";
+        let (proxy, asked) = stand_in(false, refusal, 1).await;
+        assert_eq!(
+            send_within(via("https://upstream.test/x", &proxy), BODY_MAX, trusting)
+                .await
+                .err(),
+            Some(Failure::Proxy)
+        );
+        assert_eq!(lines(&asked), ["CONNECT upstream.test:443 HTTP/1.1"]);
+        // A proxy that is not there is no connection, not a direct one.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind(([127, 0, 0, 1], 0).into()).unwrap();
+        let gone = format!("http://{}", reserved.local_addr().unwrap());
+        assert_eq!(
+            send(via("http://upstream.test/x", &gone)).await.err(),
+            Some(Failure::Connect)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_proxy_scheme_nothing_spoke_is_refused_before_dialing() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        for scheme in ["socks4", "socks4a", "ftp", "quic"] {
+            let proxy = format!("{scheme}://127.0.0.1:{port}");
+            assert_eq!(
+                send(via("https://upstream.test/x", &proxy)).await.err(),
+                Some(Failure::ProxyUnsupported),
+                "{scheme}"
+            );
+        }
+        tokio::select! {
+            biased;
+            _ = listener.accept() => panic!("a refused proxy was dialed"),
+            () = std::future::ready(()) => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn a_loopback_address_never_goes_through_the_proxy() {
+        let (port, served) = serve(None, |_| ok("home")).await;
+        let unused = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let proxy = format!("http://127.0.0.1:{}", unused.local_addr().unwrap().port());
+        for host in ["127.0.0.1", "localhost"] {
+            let url = format!("http://{host}:{port}/here");
+            assert_eq!(send(via(&url, &proxy)).await.unwrap().body, b"home");
+        }
+        assert_eq!(lines(&served).len(), 2);
+        tokio::select! {
+            biased;
+            _ = unused.accept() => panic!("a loopback request went through the proxy"),
+            () = std::future::ready(()) => {}
+        }
     }
 }
