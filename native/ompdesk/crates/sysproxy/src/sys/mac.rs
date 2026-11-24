@@ -1,17 +1,16 @@
 // UNVERIFIED on macOS: written on Windows without a compiler for this target.
-//! macOS `session.resolveProxy`: the system proxy settings (`CFNetworkCopySystemProxySettings`) read into
-//! `proxy_mac::Settings`, which decides and formats (`PROXY host:port; DIRECT`). When the settings name a PAC script
+//! macOS: the system proxy settings (`CFNetworkCopySystemProxySettings`) read into
+//! `mac_settings::Settings`, which decides and formats (`PROXY host:port; DIRECT`). When the settings name a PAC script
 //! (a URL or auto-discovery), `CFNetworkCopyProxiesForURL` says which script applies and
 //! `CFNetworkExecuteProxyAutoConfigurationURL` runs it for the URL, on a private run-loop mode of the calling thread
 //! for at most [`PAC_DEADLINE`]; a script that cannot be fetched or run in time falls back to the fixed settings.
 //! The script's own answer is read for the types none / HTTP / HTTPS / SOCKS (an `HTTPS` entry is an HTTP proxy
 //! reached with CONNECT, written `PROXY`). Any thread.
-#![allow(unsafe_code)]
 
 use std::ffi::{CString, c_char, c_void};
 use std::time::{Duration, Instant};
 
-use crate::proxy_mac::{Endpoint, Entry, Kind, Settings};
+use crate::mac_settings::{Endpoint, Entry, Kind, Settings};
 
 type CFTypeRef = *const c_void;
 

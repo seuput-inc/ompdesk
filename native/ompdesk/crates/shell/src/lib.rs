@@ -21,8 +21,6 @@ pub mod netmap;
 pub mod netproxy;
 pub mod notify_spec;
 pub mod preload_report;
-pub mod proxy_mac;
-pub mod proxy_rules;
 pub mod range;
 pub mod shell_args;
 pub mod spell;
