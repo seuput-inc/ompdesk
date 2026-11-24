@@ -414,102 +414,39 @@ async function resolveInitialCwd(): Promise<string> {
 // The agent reads proxy config from env vars only (PI_PROXY_* → PI_PROXY →
 // HTTPS_PROXY → ALL_PROXY). A Finder-launched app has no shell env, so a
 // proxy-only network (codex's chatgpt.com backend behind a firewall) would
-// silently hang every provider request. Resolution order per spawn:
-// explicit GUI pref → inherited env (terminal launch) → macOS system proxy.
+// silently hang every provider request. Resolution order per spawn, the core's
+// (`proxy.resolve`, crates/core/src/proxy.rs): explicit GUI pref → inherited env
+// (terminal launch) → the system proxy (PAC included), bounded.
 
-/** Expand one proxy URL into the full env-var set the agent and Bun honor. */
-function proxyEnvVars(proxyUrl: string): Record<string, string> {
-	return {
-		PI_PROXY: proxyUrl,
-		HTTPS_PROXY: proxyUrl,
-		HTTP_PROXY: proxyUrl,
-		ALL_PROXY: proxyUrl,
-		https_proxy: proxyUrl,
-		http_proxy: proxyUrl,
-		all_proxy: proxyUrl,
-	};
-}
-
-/** Accept "127.0.0.1:7890" shorthand; keep explicit schemes as-is. */
-function normalizeProxyUrl(raw: string): string {
-	const trimmed = raw.trim();
-	if (trimmed.includes("://")) return trimmed;
-	return `http://${trimmed}`;
-}
-
-/** First entry of a Chromium PAC result → URL ("PROXY h:p" / "SOCKS5 h:p" / "DIRECT"). */
-function parsePacResult(pac: string): string | undefined {
-	const first = pac.split(";")[0]?.trim() ?? "";
-	const [kind, endpoint] = first.split(/\s+/, 2);
-	if (!endpoint) return undefined;
-	if (kind === "PROXY") return `http://${endpoint}`;
-	if (kind === "HTTPS") return `https://${endpoint}`;
-	if (kind === "SOCKS" || kind === "SOCKS5") return `socks5://${endpoint}`;
-	return undefined;
-}
-
-/** Representative URL for system-proxy resolution (codex's OAuth backend). */
-const SYSTEM_PROXY_PROBE_URL = "https://chatgpt.com";
-/** How long the system proxy lookup may take (`systemProxyUrl`): the host's PAC run has 3 s. */
-const SYSTEM_PROXY_LOOKUP_MS = 5_000;
 /** How long the tabs of one core loss that have no omp are gathered before the one notification counts them. */
 const STUCK_NOTICE_GATHER_MS = 10_000;
 /** How long the stats server and setup's optional installs wait for a first ready tab before starting anyway. */
 const FIRST_TAB_GRACE_MS = 30_000;
 
-/** The GUI's proxy pref, normalized; undefined when unset. */
-function prefProxyUrl(): string | undefined {
-	const pref = prefsStore().get("proxyUrl");
-	return typeof pref === "string" && pref.trim() ? normalizeProxyUrl(pref) : undefined;
-}
-
-/** A proxy the app inherited from a terminal launch; every spawn inherits it too. */
-function inheritedProxyUrl(): string | undefined {
-	return (
-		process.env.PI_PROXY ||
-		process.env.HTTPS_PROXY ||
-		process.env.https_proxy ||
-		process.env.ALL_PROXY ||
-		process.env.all_proxy ||
-		undefined
-	);
-}
-
 /**
- * The system proxy for the agent's requests, from the Tauri host. Bounded: the host answers on its main thread, and a
- * host whose main thread hung (the Mac mini, 18 Nov 2026: 6 h) held every tab's start that waited for it. A lookup past
- * the bound reads as no system proxy, logged (source `omp-start-input`); the host's own PAC run has 3 s.
+ * The proxy the agent's requests go through and the variables a spawn adds. A system lookup past the core's bound
+ * reads as none and is logged (source `omp-start-input`); a core that cannot answer reads as none.
  */
-async function systemProxyUrl(): Promise<string | undefined> {
-	const late = Promise.withResolvers<"late">();
-	const timer = setTimeout(() => late.resolve("late"), SYSTEM_PROXY_LOOKUP_MS);
+async function spawnProxy(): Promise<{ url: string | undefined; env: Record<string, string> }> {
 	try {
-		const answer = await Promise.race([session.defaultSession.resolveProxy(SYSTEM_PROXY_PROBE_URL), late.promise]);
-		if (answer !== "late") return parsePacResult(answer);
-		writeRuntimeLog({
-			source: "omp-start-input",
-			message: "proxyEnv",
-			details: { ms: SYSTEM_PROXY_LOOKUP_MS, reason: "the shell did not answer resolveProxy" },
-		});
-		return undefined;
+		const { result } = await core().call<{ url: string | null; env: Record<string, string>; lateMs: number | null }>(
+			"proxy.resolve",
+			{ pref: prefsStore().get("proxyUrl") },
+		);
+		if (result.lateMs !== null)
+			writeRuntimeLog({
+				source: "omp-start-input",
+				message: "proxyEnv",
+				details: { ms: result.lateMs, reason: "the system proxy lookup did not answer" },
+			});
+		return { url: result.url ?? undefined, env: result.env };
 	} catch {
-		return undefined;
-	} finally {
-		clearTimeout(timer);
+		return { url: undefined, env: {} };
 	}
 }
 
-/** The proxy the agent's requests go through, in the spawn's order. */
-async function agentProxyUrl(): Promise<string | undefined> {
-	return prefProxyUrl() ?? inheritedProxyUrl() ?? (await systemProxyUrl());
-}
-
 async function resolveProxyEnvForSpawn(): Promise<Record<string, string>> {
-	const pref = prefProxyUrl();
-	if (pref) return proxyEnvVars(pref);
-	if (inheritedProxyUrl()) return {};
-	const system = await systemProxyUrl();
-	return system ? proxyEnvVars(system) : {};
+	return (await spawnProxy()).env;
 }
 
 // Module-level instances (alive for app lifetime)
@@ -2289,7 +2226,7 @@ app.whenReady().then(async () => {
 			!app.isPackaged && process.env.OMP_GUI_TEST_UNREACHABLE === "1"
 				? Promise.resolve(false)
 				: answersWithin(
-						agentProxyUrl().then(proxy =>
+						spawnProxy().then(({ url: proxy }) =>
 							reaches(probeTarget(host ?? "example.com", proxy), async name =>
 								(await net.resolveHost(name, { cacheUsage: "disallowed" })).endpoints.map(
 									endpoint => endpoint.address,

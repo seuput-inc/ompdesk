@@ -431,14 +431,6 @@ fn run_op(call: Call, partition: &str, name: &str, args: &Value) {
             };
             host.add_word_to_dictionary(Some(&cs(word)));
         }
-        "resolveProxy" => {
-            let url = args
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            return call.ok(json!({ "result": crate::proxy::resolve(&url) }));
-        }
         other => {
             return call.err(
                 "unsupported",

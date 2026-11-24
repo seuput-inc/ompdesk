@@ -19,6 +19,8 @@ workspace = true
 
 [dependencies]
 ompdesk-checks = { path = "../checks" }
+# The system proxy a check, an update or a tab spawn goes through when no other is set (`proxy.rs`).
+ompdesk-sysproxy = { path = "../sysproxy" }
 # Diagnostic bundles use stock's stored/deflated ZIP entries and publish a completed file without clobbering Downloads.
 zip = { version = "=9.5.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tempfile = "3"

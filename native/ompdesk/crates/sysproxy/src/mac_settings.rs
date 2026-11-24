@@ -1,11 +1,10 @@
-//! macOS system proxy settings (`CFNetworkCopySystemProxySettings`) as Chromium's PAC result, the answer of
-//! `session.resolveProxy`: `PROXY host:port; DIRECT`, `SOCKS5 host:port; DIRECT` or `DIRECT`. The fetching is
-//! `sys_mac::proxy`'s; what is decided here (which URLs skip the proxy, which proxy a scheme takes, how an entry list
-//! is written) is pure, so `cargo test` covers it on any platform.
+//! macOS system proxy settings (`CFNetworkCopySystemProxySettings`) as Chromium's PAC result: `PROXY host:port; DIRECT`,
+//! `SOCKS5 host:port; DIRECT` or `DIRECT`. The fetching is `sys::mac`'s; what is decided here (which URLs skip the
+//! proxy, which proxy a scheme takes, how an entry list is written) is pure, so `cargo test` covers it on any platform.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::proxy_rules;
+use crate::rules;
 
 /// What a proxy speaks. CFNetwork's `kCFProxyTypeHTTPS` is an HTTP proxy used for https URLs (CONNECT), not a proxy
 /// reached over TLS, so it is [`Kind::Http`] too: Chromium's `HTTPS host:port` would mean TLS to the proxy.
@@ -85,7 +84,7 @@ impl Settings {
             .filter(|e| !e.is_empty())
             .any(|entry| match cidr(entry) {
                 Some((base, bits)) => ip.is_some_and(|ip| in_range(ip, base, bits)),
-                None => proxy_rules::bypassed(entry, &host),
+                None => rules::bypassed(entry, &host),
             })
     }
 

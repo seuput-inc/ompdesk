@@ -1478,6 +1478,7 @@ dependencies = [
  "libc",
  "notify",
  "ompdesk-checks",
+ "ompdesk-sysproxy",
  "p256",
  "rcgen",
  "rustix",
@@ -1498,6 +1499,13 @@ dependencies = [
  "yaml-edit",
  "yawc",
  "zip",
+]
+
+[[package]]
+name = "ompdesk-sysproxy"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
