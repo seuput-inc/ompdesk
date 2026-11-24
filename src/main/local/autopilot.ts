@@ -2,8 +2,7 @@
  * Autopilot's GUI-side commands. The coordinator (src/main/autopilot.ts) answers `get_autopilot` and
  * `set_autopilot` for a tab in `ipc.ts`, where the window and the pool are; what stays here is what needs
  * neither: the read-only branch comparison, main's own door into the bridge (`autopilot_bridge`, the way
- * `agent_control_confirm` reaches it), and the two commands for a caller that has no coordinator (a paired
- * host answering a device: the status as the bridge keeps it, and a refusal to control).
+ * `agent_control_confirm` reaches it), and the refusal to control a run outside the local window.
  */
 import { AUTOPILOT_BRIDGE_METHODS } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import { CoreError } from "../core/process";
@@ -47,7 +46,6 @@ export const handlers: Record<string, LocalHandler> = {
 		}
 		return ctx.bridge.request(method, command.params);
 	},
-	get_autopilot: (_command, ctx) => ctx.bridge.request(AUTOPILOT_BRIDGE_METHODS.status, {}),
 	set_autopilot: async () => {
 		throw new LocalCommandError(
 			"Autopilot is controlled from the OMPdesk window on this computer.",

@@ -20,6 +20,7 @@ const LIMITS: &str = "{\"type\":\"ready\",\"supportedProtocolVersions\":[1,2],\"
 #[test]
 fn parameterless_gui_commands_keep_the_bridge_method_and_absent_params() {
     for (command, method) in [
+        ("get_directories", "workspace.directories"),
         ("abort_maintenance", "composer.abort_maintenance"),
         ("get_force_tool", "composer.get_force_tool"),
         ("get_context_report", "composer.context_report"),

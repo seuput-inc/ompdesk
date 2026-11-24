@@ -63,6 +63,9 @@ import { TERMINAL_READ_DEFINITION } from "./terminal/agent-tool";
 const LOCAL_SEND_TIMEOUT_MS = 120_000;
 const GUI_BRIDGE_COMMANDS: Record<string, true> = {
 	get_advisor_stats: true,
+	get_checkout_peers: true,
+	get_autopilot: true,
+	get_directories: true,
 	regenerate_session_title: true,
 	abort_maintenance: true,
 	get_force_tool: true,

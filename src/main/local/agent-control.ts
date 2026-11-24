@@ -98,6 +98,4 @@ export const handlers: Record<string, LocalHandler> = {
 		const { marks } = sentCommand.parse(command);
 		return ctx.bridge.request("agent_control.sent", { marks });
 	},
-	/** The other live sessions in this session's worktree or repository (the work board's "same checkout" row). */
-	get_checkout_peers: async (_command, ctx) => ctx.bridge.request("checkout_peers.get", {}),
 };
