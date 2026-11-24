@@ -2180,10 +2180,14 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "files",
 		contract: "public",
 		summary:
-			"Custom models: models.yml (models.yaml as fallback) with provider, model, API and credential fields; main parses, merges and writes, the stock schema validates.",
-		files: ["src/main/models-config.ts", "src/main/models-config-stock.ts"],
+			"Custom models: models.yml (models.yaml as fallback) with provider, model, API and credential fields; the core edits the YAML in place and writes it, stock's Bun.YAML parse and ModelsConfigSchema read and normalize every text it reads or writes.",
+		files: [
+			"native/ompdesk/crates/core/src/models/file/mod.rs",
+			"src/main/models-config.ts",
+			"resources/gui-bridge/stock-helper/models.ts",
+		],
 		stock: ["models.yml", "models.yaml"],
-		tests: ["src/main/models-config.test.ts"],
+		tests: ["src/main/models-config.test.ts", "native/ompdesk/crates/core/src/models/file/tests.rs"],
 	},
 	{
 		id: "F04",

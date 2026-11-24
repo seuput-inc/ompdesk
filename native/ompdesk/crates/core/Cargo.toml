@@ -97,6 +97,9 @@ sha1 = "0.11"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Live logs watch only the directory, including inotify on Linux. macOS also uses FSEvents for the sessions tree.
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+# The agent's models.yml is edited in place (`models/file`): a lossless tree keeps every comment and the layout of
+# what an edit does not touch, as the `yaml` package's Document did. No base64 (`binary` tags are never written).
+yaml-edit = { version = "=0.3.6", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 # errno values for node's error codes (`ENOENT: no such file or directory, stat '…'`), and the SIGTERM that asks a
