@@ -13,13 +13,14 @@
 //! **Open** `opts` ([`Opts`]): `platform` (`SetupPlatform`), `arch`, `toolsDir`, `userData`, `appVersion`,
 //! `automatic` (setup installs on its own), `scheduled {omp, cli, ext}` (each updater checks on a timer),
 //! `testInstaller`, `testDownload {url, sha256}`, `manual` (main's timers, below) and `now` (main's `Date.now()`).
-//! A part adds the opts it needs (setup: `systemRoot`, `agentDesktopBundle`, `bunInstall`).
+//! A part adds the opts it needs (setup: `systemRoot`, `agentDesktopBundle`, `bunInstall`, a test's `mirror`).
 //!
 //! **Calls** answered at once from memory (main waits for them):
 //! - `state` → `{setup, omp, cli, ext}`: `SetupState`, `OmpUpdateState`, `CliUpdateState`, `ExtensionUpdateState`
 //!   (`src/shared/`), each as main's `state()` gave it;
-//! - `start` → bool: setup's first pass ended; each scheduled updater ticks now, then on its timer. False when it had
-//!   started already or the instance closed;
+//! - `start` → bool: the launch: setup's first pass runs (detection, the required installs, after `firstTab` the
+//!   optional ones), then each scheduled updater ticks and goes on on its timer. False when it had started already or
+//!   the instance closed;
 //! - `close`: the quit; the running step is dropped and what it started ends, queued steps never run, nothing new is
 //!   queued (replaces the quit steps omp updater → CLI → extensions → setup);
 //! - `fire {timer, now}` → bool: main's timer `timer` fired (a `manual` instance);
@@ -28,10 +29,11 @@
 //!
 //! **Calls answered later** (`Outcome::Later`; main does not wait): each validates its key against what the part
 //! holds now and fails at once, as the IPC handler threw, else queues one step and answers when that step ended:
-//! `setup.retry {item}`, `setup.installForConnection {item}`, `omp.now` (joins a pass that runs or waits: one pass,
-//! one answer; main reads `state` right after posting it, and the hub runs the call first, so the state already shows
-//! the pass), `cli.now {id?}`, `ext.now {key?}`. A step that ended by its bound or the close answers its fault
-//! (`step_stalled`, `tools_closed`); the part turns that into its own outcome (`skipped`, `failed`).
+//! `setup.retry {item}`, `setup.installForConnection {item}` (answers the item's `SetupItemState`), `setup.gitAslr
+//! {action}` (answers `GitAslrResult`, a stopped step's fault as `{ok: false}`), `omp.now` (joins a pass that runs or
+//! waits: one pass, one answer; main reads `state` right after posting it, and the hub runs the call first, so the
+//! state already shows the pass), `cli.now {id?}`, `ext.now {key?}`. A step that ended by its bound or the close
+//! answers its fault (`step_stalled`, `tools_closed`); the part turns that into its own outcome (`skipped`, `failed`).
 //!
 //! **Items** to main (`k`): `state {part, state}` once per change of a part (`setup`, `omp`, `cli`, `ext`; main sends
 //! it to the windows and paired devices); `log {source, message, details}` (main writes `gui-runtime.jsonl`: `setup`,
@@ -150,6 +152,20 @@ pub struct Opts {
     pub manual: bool,
     #[serde(default)]
     pub now: Option<u64>,
+    /// Setup's: `%SystemRoot%` (Windows PowerShell's folder), the agent-desktop the app ships, Bun's root
+    /// (`BUN_INSTALL` or `~/.bun`), and a test's server on 127.0.0.1 for every lookup and download.
+    #[serde(default = "system_root")]
+    pub system_root: String,
+    #[serde(default)]
+    pub agent_desktop_bundle: Option<String>,
+    #[serde(default)]
+    pub bun_install: String,
+    #[serde(default)]
+    pub mirror: Option<String>,
+}
+
+fn system_root() -> String {
+    "C:\\Windows".to_owned()
 }
 
 /// What the instance tells main and asks of it: the hub's `Out`, or a test's stand-in.
@@ -218,7 +234,7 @@ impl Tools {
             }
         });
         let tools = Rc::new(Tools {
-            setup: RefCell::new(setup::Part::default()),
+            setup: RefCell::new(setup::Part::new(&opts)),
             omp: RefCell::new(omp::Part::default()),
             cli: RefCell::new(cli::Part::default()),
             ext: RefCell::new(ext::Part::default()),
@@ -341,22 +357,28 @@ impl Tools {
         })
     }
 
-    /// Setup's first pass ended: each scheduled updater ticks now and then on its timer.
+    /// The launch: setup's first pass (detection, the required installs, after the first tab the optional ones), then
+    /// each scheduled updater ticks and goes on on its timer. False when it had started already or the instance closed.
     pub fn start(self: &Rc<Self>) -> bool {
         if self.started.get() || self.is_closed() {
             return false;
         }
         self.started.set(true);
-        let scheduled = self.opts.scheduled;
-        for (updater, on) in [
-            (Updater::Omp, scheduled.omp),
-            (Updater::Cli, scheduled.cli),
-            (Updater::Ext, scheduled.ext),
-        ] {
-            if on {
-                self.spawn_task(schedule(Rc::downgrade(self), updater));
+        let tools = Rc::downgrade(self);
+        self.spawn_task(async move {
+            let Some(first) = tools.upgrade() else { return };
+            setup::start(&first).await;
+            let scheduled = first.opts.scheduled;
+            for (updater, on) in [
+                (Updater::Omp, scheduled.omp),
+                (Updater::Cli, scheduled.cli),
+                (Updater::Ext, scheduled.ext),
+            ] {
+                if on {
+                    first.spawn_task(schedule(Rc::downgrade(&first), updater));
+                }
             }
-        }
+        });
         true
     }
 
@@ -381,6 +403,7 @@ impl Tools {
         if self.closed.send_replace(true) {
             return;
         }
+        setup::closing(self);
         self.queue.close();
     }
 }

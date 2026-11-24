@@ -204,16 +204,24 @@ impl Queue {
         let (waiting, running) = {
             let mut st = self.st.borrow_mut();
             st.closed = true;
-            let running = st.running.as_mut().map(|r| (r.ctx.clone(), r.stop.take()));
+            // The running step's callers hear the close now: its worker may be dropped with the instance before it
+            // answers them.
+            let running = st
+                .running
+                .as_mut()
+                .map(|r| (r.ctx.clone(), r.stop.take(), std::mem::take(&mut r.waiters)));
             (std::mem::take(&mut st.waiting), running)
         };
         for waiter in waiting.into_iter().flat_map(|w| w.waiters) {
             let _ = waiter.send(Err(closed()));
         }
-        if let Some((ctx, stop)) = running {
+        if let Some((ctx, stop, waiters)) = running {
             ctx.stop(true);
             if let Some(stop) = stop {
                 let _ = stop.send(closed());
+            }
+            for waiter in waiters {
+                let _ = waiter.send(Err(closed()));
             }
         }
         self.wake.notify_one();

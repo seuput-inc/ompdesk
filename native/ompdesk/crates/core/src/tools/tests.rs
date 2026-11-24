@@ -300,6 +300,10 @@ fn tools(manual: bool) -> (Rc<Tools>, Rc<Recorder>) {
         Supervisor::this_binary(),
         STEP_MAX_MS,
     );
+    // A machine with nothing on it: setup's first pass detects without running anything.
+    tools.setup.borrow_mut().seams.detect = Some(Rc::new(|| {
+        Box::pin(async { super::setup::Detection::default() })
+    }));
     (tools, main)
 }
 
@@ -377,21 +381,73 @@ async fn reads_its_state_at_once_and_checks_each_key_before_it_queues() {
         .run_until(async {
             let (tools, _) = tools(false);
             let state = now(call(&tools, "state", json!({}))).unwrap();
-            assert_eq!(state["setup"], json!({"platform": "win32", "automatic": false, "ompReady": false, "requiredRunning": false, "items": []}));
+            assert_eq!(state["setup"]["platform"], "win32");
+            assert_eq!(state["setup"]["requiredRunning"], false);
+            let items = state["setup"]["items"].as_array().unwrap();
+            let ids: Vec<&str> = items
+                .iter()
+                .map(|item| item["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                ids,
+                super::setup::ITEMS,
+                "every item, checking until the first detection"
+            );
+            assert!(items.iter().all(|item| item["phase"] == "checking"));
             assert_eq!(state["omp"]["phase"], "idle");
             assert_eq!(state["omp"]["held"], Value::Null);
-            assert_eq!(state["cli"], json!({"enabled": true, "scheduled": false, "tools": []}));
-            assert_eq!(state["ext"], json!({"enabled": true, "scheduled": false, "rows": []}));
-            let refused = |method: &str, params: Value| now(call(&tools, method, params)).unwrap_err().message;
-            assert_eq!(refused("setup.retry", json!({"item": "rm -rf"})), "Unknown setup item: rm -rf");
-            assert_eq!(refused("setup.installForConnection", json!({"item": "git"})), "Not an optional setup item: git");
-            assert_eq!(refused("cli.now", json!({"id": "/bin/sh"})), "Unknown tool: /bin/sh");
-            assert_eq!(refused("ext.now", json!({"key": "mcp:nope"})), "Unknown extension: mcp:nope");
-            assert_eq!(now(call(&tools, "setup.cancel", json!({}))), Ok(json!(false)));
-            for (method, params) in [("cli.now", json!({"id": "gh"})), ("ext.now", json!({})), ("omp.now", json!({})), ("setup.installForConnection", json!({"item": "gh"}))] {
-                let Outcome::Later(answer) = call(&tools, method, params) else { panic!("{method} answers later") };
+            assert_eq!(
+                state["cli"],
+                json!({"enabled": true, "scheduled": false, "tools": []})
+            );
+            assert_eq!(
+                state["ext"],
+                json!({"enabled": true, "scheduled": false, "rows": []})
+            );
+            let refused = |method: &str, params: Value| {
+                now(call(&tools, method, params)).unwrap_err().message
+            };
+            assert_eq!(
+                refused("setup.retry", json!({"item": "rm -rf"})),
+                "Unknown setup item: rm -rf"
+            );
+            assert_eq!(
+                refused("setup.installForConnection", json!({"item": "git"})),
+                "Not an optional setup item: git"
+            );
+            assert_eq!(
+                refused("cli.now", json!({"id": "/bin/sh"})),
+                "Unknown tool: /bin/sh"
+            );
+            assert_eq!(
+                refused("ext.now", json!({"key": "mcp:nope"})),
+                "Unknown extension: mcp:nope"
+            );
+            assert_eq!(
+                now(call(&tools, "setup.cancel", json!({}))),
+                Ok(json!(false))
+            );
+            for (method, params) in [
+                ("cli.now", json!({"id": "gh"})),
+                ("ext.now", json!({})),
+                ("omp.now", json!({})),
+            ] {
+                let Outcome::Later(answer) = call(&tools, method, params) else {
+                    panic!("{method} answers later")
+                };
                 assert_eq!(answer.await, Ok(Value::Null), "{method}");
             }
+            let Outcome::Later(answer) =
+                call(&tools, "setup.installForConnection", json!({"item": "gh"}))
+            else {
+                panic!("answers later")
+            };
+            let gh = answer.await.unwrap();
+            assert_eq!(
+                (gh["id"].clone(), gh["phase"].clone()),
+                (json!("gh"), json!("idle")),
+                "detected, nothing installed"
+            );
         })
         .await;
 }

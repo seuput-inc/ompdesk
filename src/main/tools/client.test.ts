@@ -17,6 +17,11 @@ const asks = {
 	env: () => ({}),
 	refreshPath: async () => {},
 	refreshOmp: async () => null,
+	ompResolution: async () => ({
+		ok: false as const,
+		error: "omp was not found",
+		reason: { kind: "not-found" as const },
+	}),
 	ompReady: () => {},
 	firstTab: async () => {},
 	releaseHelpers: async () => {},
@@ -38,6 +43,8 @@ describe("ToolsClient against the real core", () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		const timers = vi.spyOn(globalThis, "setTimeout");
 		const armed = () => timers.mock.calls.map(([, ms]) => ms);
+		// The 4 h check timers (setup's first detection also arms its step's bound while it runs).
+		const checks = () => armed().filter(ms => ms === CHECK_INTERVAL_MS);
 		const client = new ToolsClient({
 			opts: {
 				platform: "darwin",
@@ -48,30 +55,33 @@ describe("ToolsClient against the real core", () => {
 				automatic: false,
 				scheduled: { omp: true, cli: false, ext: false },
 				manual: true,
+				bunInstall: join(userData, "bun"),
 			},
 			asks,
 			onState: () => {},
 		});
 		try {
 			const state = client.state();
-			expect(state.setup).toEqual({
+			expect(state.setup).toMatchObject({
 				platform: "darwin",
 				automatic: false,
 				ompReady: false,
 				requiredRunning: false,
-				items: [],
 			});
+			expect(state.setup.items.map(item => [item.id, item.phase])).toEqual(
+				["bun", "git", "omp", "gh", "node", "agent-desktop", "tailscale"].map(id => [id, "checking"]),
+			);
 			expect(state.omp).toMatchObject({ enabled: true, scheduled: true, phase: "idle", held: null });
 			expect(state.cli).toEqual({ enabled: true, scheduled: false, tools: [] });
 			expect(client.start()).toBe(true);
-			// The launch tick's pass ran on the queue (ending at once, it armed no bound); then the 4 h timer was armed.
-			await until(() => armed().length === 1);
-			expect(armed()).toEqual([CHECK_INTERVAL_MS]);
-			expect(vi.getTimerCount()).toBe(1);
+			// Setup's first pass (a detection on this machine), then the launch tick's pass; then the 4 h timer was armed.
+			await until(() => checks().length === 1);
+			await until(() => vi.getTimerCount() === 1);
+			expect(client.state().setup.items.every(item => item.phase !== "checking")).toBe(true);
 			// The timer fires in the core: the next tick runs its pass and arms the next 4 h.
 			await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
-			await until(() => armed().length === 2);
-			expect(armed()).toEqual([CHECK_INTERVAL_MS, CHECK_INTERVAL_MS]);
+			await until(() => checks().length === 2);
+			expect(checks()).toEqual([CHECK_INTERVAL_MS, CHECK_INTERVAL_MS]);
 			expect(vi.getTimerCount()).toBe(1);
 			client.close();
 			expect(vi.getTimerCount()).toBe(0);

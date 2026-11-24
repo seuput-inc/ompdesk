@@ -9,9 +9,10 @@ import type { CliUpdateState } from "../../shared/cli-update";
 import type { ExtensionUpdateState } from "../../shared/extension-update";
 import type { RuntimeErrorSource } from "../../shared/ipc-types";
 import type { OmpUpdateState } from "../../shared/omp-update";
-import type { SetupPlatform, SetupState } from "../../shared/setup";
+import type { GitAslrResult, SetupPlatform, SetupState } from "../../shared/setup";
 import { type HubItem, hub } from "../core/hub";
 import type { ExtensionApplyPlan } from "../extension-reload";
+import type { OmpResolution } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
 import { StepStalledError, writeStall } from "../serial-chain";
 
@@ -29,6 +30,12 @@ export interface ToolsOpts {
 	testDownload?: { url: string; sha256: string } | null;
 	/** The core's timers are main's (a test's fake timers drive them). */
 	manual?: boolean;
+	/** Setup's: `%SystemRoot%`, the agent-desktop the app ships, Bun's root (`BUN_INSTALL` or `~/.bun`). */
+	systemRoot?: string;
+	agentDesktopBundle?: string | null;
+	bunInstall: string;
+	/** A test's server on 127.0.0.1 standing in for every host setup's lookups and downloads reach. */
+	mirror?: string | null;
 }
 
 export interface ToolsState {
@@ -56,6 +63,11 @@ export interface ToolsAsks {
 	refreshPath(): Promise<void>;
 	/** main's omp resolution again; the version it found, or null. */
 	refreshOmp(): Promise<string | null>;
+	/**
+	 * Setup's detection of omp: main's resolution (`systemOmp()`), resolved again (`refreshSystemOmp()`) when `fresh`
+	 * (every detection after the launch's first, which follows an install or an update).
+	 */
+	ompResolution(fresh: boolean): Promise<OmpResolution>;
 	/** omp became usable: restart the tabs that waited, the stats server. */
 	ompReady(): void | Promise<void>;
 	/** Settles once the first tab is ready or its grace passed (setup's optional installs wait for it). */
@@ -89,6 +101,8 @@ function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
 			return asks.refreshPath();
 		case "refreshOmp":
 			return asks.refreshOmp();
+		case "ompResolution":
+			return asks.ompResolution(item.fresh === true);
 		case "ompReady":
 			return asks.ompReady();
 		case "firstTab":
@@ -203,6 +217,11 @@ export class ToolsClient {
 
 	installForConnection(item: unknown): Promise<unknown> {
 		return hub().callLater(this.#instance(), "setup.installForConnection", { item });
+	}
+
+	/** The Git item's Mandatory ASLR override (`setup:git-aslr`); answers `GitAslrResult`. */
+	setupGitAslr(action: unknown): Promise<GitAslrResult> {
+		return hub().callLater<GitAslrResult>(this.#instance(), "setup.gitAslr", { action });
 	}
 
 	/** Update now for omp: joins a pass that runs or waits. */

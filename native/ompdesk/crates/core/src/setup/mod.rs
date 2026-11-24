@@ -10,14 +10,14 @@
 //! - `setup.probeOmp` checks the Bun that would run a package launcher, then its installed manifest or `--version`.
 //! - `mirror` is a test's server on 127.0.0.1 standing in for every host (`net::routed`).
 
-mod archives;
+pub(crate) mod archives;
 mod compat;
-mod desktop;
-mod download;
-mod launcher;
-mod net;
+pub(crate) mod desktop;
+pub(crate) mod download;
+pub(crate) mod launcher;
+pub(crate) mod net;
 mod registry_path;
-mod runtime;
+pub(crate) mod runtime;
 #[cfg(test)]
 mod tests;
 
@@ -64,8 +64,6 @@ struct AppleDeveloperDir {
 }
 
 async fn apple_developer_dir(call: Call) -> Result<Reply, Fault> {
-    use crate::run::{Exec, Opts, Runner};
-
     let p: AppleDeveloperDir = call.params()?;
     if !matches!(p.timeout_ms, 5_000 | 15_000) {
         return Err(Fault::new(
@@ -73,23 +71,35 @@ async fn apple_developer_dir(call: Call) -> Result<Reply, Fault> {
             "Unknown developer directory probe timeout",
         ));
     }
+    Reply::json(&developer_dir(&p.cwd, p.env, p.timeout_ms, call.scope).await?)
+}
+
+/// `xcode-select -p` within `timeout_ms` on macOS: the selected developer directory; none elsewhere or when it fails.
+pub(crate) async fn developer_dir(
+    cwd: &str,
+    env: BTreeMap<String, String>,
+    timeout_ms: u64,
+    scope: crate::server::Scope,
+) -> Result<Option<String>, Fault> {
+    use crate::run::{Exec, Opts, Runner};
+
     let mut dir = None;
     if cfg!(target_os = "macos") {
         let runner = Runner {
             bin: "/usr/bin/xcode-select".into(),
             args: Vec::new(),
-            env: p.env,
-            timeout_ms: p.timeout_ms,
+            env,
+            timeout_ms,
             max_bytes: runtime::EXEC_FILE_MAX_BUFFER as usize,
         };
-        let exec = Exec::new(runner, call.scope, "xcode_select");
-        match exec.run(&p.cwd, &["-p"], Opts::default()).await {
+        let exec = Exec::new(runner, scope, "xcode_select");
+        match exec.run(cwd, &["-p"], Opts::default()).await {
             Ok(out) if out.code == 0 && !out.truncated => dir = Some(out.text()),
             Err(fault) if fault.code == "cancelled" => return Err(fault),
             _ => {}
         }
     }
-    Reply::json(&dir)
+    Ok(dir)
 }
 
 #[derive(Deserialize)]

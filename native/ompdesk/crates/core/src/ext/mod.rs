@@ -58,6 +58,14 @@ struct OutputParams {
     output: String,
 }
 
+/// `ext.binaryFacts` in process (the tools hub's install reads), as the JSON the method answers.
+pub(crate) fn binary_facts(params: serde_json::Value) -> Result<serde_json::Value, Fault> {
+    let params: install::Params = serde_json::from_value(params)
+        .map_err(|error| Fault::new("invalid_params", error.to_string()))?;
+    serde_json::to_value(install::facts(&params))
+        .map_err(|error| Fault::new("internal", error.to_string()))
+}
+
 pub fn register(registry: &mut Registry) {
     registry.add("ext.mcpClasses", |call| {
         Box::pin(async move {
