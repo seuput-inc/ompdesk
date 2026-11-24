@@ -13,7 +13,6 @@ import { WEB_PERMISSIONS, WEB_PROTOCOL_VERSION, type WebPermission } from "../..
 import { core } from "../core/process";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
-import { FileEditReports, parseFileEditReport } from "./file-edit-reports";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 import type { IpcCaller } from "./ipc-registry";
 import { PAGE_IMAGE_MIN_CHARS } from "./page-images";
@@ -85,7 +84,8 @@ async function rig(options: RigOptions = {}) {
 		mimeType: "image/jpeg",
 	}));
 	const resyncs: string[] = [];
-	const ended: { deviceId: string; connId: string }[] = [];
+	/** The devices whose Files-edit report the core recorded, in the order main heard (`web.fileEdits`). */
+	const fileEditReports: string[] = [];
 	let routerRef: WsRouter | null = null;
 	const windows = new WebWindows((id, channel, payload) => routerRef?.deliver(id, channel, payload));
 	const host = await TestRouterHost.open(
@@ -101,7 +101,7 @@ async function rig(options: RigOptions = {}) {
 			uploads,
 			toModelImage,
 			onResync: deviceId => resyncs.push(deviceId),
-			onConnectionEnded: (deviceId, connId) => ended.push({ deviceId, connId }),
+			onFileEditReport: deviceId => fileEditReports.push(deviceId),
 		},
 		{ blobUserData: userData },
 	);
@@ -137,7 +137,7 @@ async function rig(options: RigOptions = {}) {
 		frame,
 		settle,
 		resyncs,
-		ended,
+		fileEditReports,
 		revoke: async () => {
 			current = undefined;
 			await host.device("dev1", null);
@@ -944,102 +944,97 @@ describe("limits", () => {
 		expect(await r.host.attach("dev2")).not.toBeNull();
 	});
 
-	it("closes every socket of a device, and tells when connections come and go", async () => {
+	it("closes every socket of a device, and forgets each one's Files-edit report", async () => {
 		const r = await rig();
 		const other = await r.host.attach("dev1");
+		const report = { t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: "t1" }] };
+		await r.frame(report);
+		await other?.receive(JSON.stringify(report));
+		expect(await r.host.edits("dev1", "t1")).toBe("dirty");
 		r.router.closeDevice("dev1", CLOSE_REVOKED, "revoked");
 		await r.host.sync();
 		expect(r.socket.closed).toEqual({ code: CLOSE_REVOKED, reason: "revoked" });
 		expect(other?.socket.closed?.code).toBe(CLOSE_REVOKED);
 		expect(r.router.isConnected("dev1")).toBe(false);
-		expect(r.ended.map(end => end.connId)).toEqual([r.connection.connId, other?.connId]);
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
 	});
 });
 
-describe("a connection ending", () => {
-	it("is told for each connection, with its id, whether or not others remain", async () => {
-		const r = await rig();
-		const second = await r.host.attach("dev1");
-		const first = r.connection.connId;
-		await r.connection.dispose();
-		expect(r.ended).toEqual([{ deviceId: "dev1", connId: first }]);
-		await second?.dispose();
-		expect(r.ended.map(end => end.connId)).toEqual([first, second?.connId]);
-	});
-
+describe("a connection's calls", () => {
 	it("carries the connection id on the caller of each call", async () => {
 		const r = await rig();
 		const second = await r.host.attach("dev1");
 		if (!second) throw new Error("attach failed");
-		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: "t1" }] });
+		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_LIST, a: [{ scope: "global" }] });
 		await second.receive(
-			JSON.stringify({ t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: null }] }),
+			JSON.stringify({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_LIST, a: [{ scope: "global" }] }),
 		);
 		await r.settle();
 		expect(r.callers.map(call => call.caller.connId)).toEqual([r.connection.connId, second.connId]);
 		expect(r.connection.connId).not.toBe(second.connId);
 	});
+});
 
-	// The Files-edit report store (`file-edit-reports.ts`) forgets a connection when it ends and never hears from it
-	// again only because its report reaches main in the very event that carries the frame, before the event that
-	// ends the connection, and an ended connection's frames are refused in the core. An `await` in front of the
-	// handler would let a frame read before the drop land after it, and its report would count until the window
-	// closes (formal/web-close-reports: the `SplitDispatch` mutation).
-	it("hands a Files-edit report to main within the frame, and nothing an ended connection sent after", async () => {
-		const r = await rig();
-		const report = (dirtyTabId: string | null) =>
-			r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId }] });
-		await report("t1");
-		expect(r.callers.map(call => call.args)).toEqual([[{ dirtyTabId: "t1" }]]);
-		await r.connection.dispose();
-		await report(null);
-		expect(r.callers).toHaveLength(1);
+// The Files-edit report store is the core's router's (`file_edits.rs`, C2): a frame's report is recorded in the
+// frame's own run under the lock that ends connections, so a frame read before a drop lands before it and an ended
+// connection's frames are refused (formal/web-close-reports: `Deliver`, `Drop`, the `SplitDispatch` mutation).
+describe("a page's Files-edit report", () => {
+	const report = (dirtyTabId: string | null, id = 1) => ({
+		t: "inv",
+		id,
+		ch: IPC_COMMANDS.FILE_EDIT_REPORT,
+		a: [{ dirtyTabId }],
 	});
 
-	it("never lets a report outlive its connection, even one whose arguments carry a picture that has to land first", async () => {
-		// A picture block anywhere in a call's arguments makes `#dispatch` await its upload before the handler runs; a
-		// connection that ends meanwhile was already forgotten, so such a report must never reach the store.
-		const reports = new FileEditReports();
-		const r = await rig();
-		const id = r.windows.windowFor("dev1").webContents.id;
-		r.invoke.mockImplementation(async (channel, caller, args) => {
-			const report = parseFileEditReport(args);
-			if (channel === IPC_COMMANDS.FILE_EDIT_REPORT && report && caller.connId)
-				reports.report(id, caller.connId, report.dirtyTabId);
-			return undefined;
-		});
-		r.uploaded.set("/up/dev1/a/image.png", Buffer.from("PNG"));
-		r.uploaded.set("/up/dev1/b/image.png", Buffer.from("PNG"));
-		const extra = (dir: string) => ({ type: "image", mimeType: "image/png", upload: `/up/dev1/${dir}/image.png` });
-		await r.frame({
-			t: "inv",
-			id: 1,
-			ch: IPC_COMMANDS.FILE_EDIT_REPORT,
-			a: [{ dirtyTabId: "t1", extra: extra("a") }],
-		});
-		await r.frame({ t: "inv", id: 2, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: "t1" }, extra("b")] });
-		await r.connection.dispose();
-		for (const end of r.ended) reports.forget(end.connId);
-		// Both frames reach the handler once their pictures landed (the nested one takes more turns), after the drop.
-		await vi.waitFor(() => expect(r.invoke).toHaveBeenCalledTimes(2));
-		expect(reports.edits(id, "t1")).toBe("unreported");
-	});
-
-	it("lets main drop only that connection's Files-edit report: the other page's stands, none left is unreported", async () => {
-		const reports = new FileEditReports();
+	it("is kept by the core per connection and answered there: main hears that one came, never the call", async () => {
 		const r = await rig();
 		const second = await r.host.attach("dev1");
 		if (!second) throw new Error("attach failed");
-		const id = r.windows.windowFor("dev1").webContents.id;
-		reports.report(id, r.connection.connId, "t1");
-		reports.report(id, second.connId, null);
-		expect(reports.edits(id, "t1")).toBe("dirty");
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
+		await r.frame(report("t1"));
+		await second.receive(JSON.stringify(report(null)));
+		await r.settle();
+		expect(await r.host.edits("dev1", "t1")).toBe("dirty");
+		expect(await r.host.edits("dev1", "t2")).toBe("clean");
+		expect(await r.host.edits("dev2", "t1")).toBe("unreported");
+		expect(r.socket.frames("res")).toEqual([{ t: "res", id: 1, ok: true }]);
+		expect(r.callers).toEqual([]);
+		expect(r.fileEditReports).toEqual(["dev1", "dev1"]);
+	});
+
+	it("forgets an ended connection's report and takes nothing it sent after; the other page's word stands", async () => {
+		const r = await rig();
+		const second = await r.host.attach("dev1");
+		if (!second) throw new Error("attach failed");
+		await r.frame(report("t1"));
+		await second.receive(JSON.stringify(report(null)));
 		await r.connection.dispose();
-		for (const end of r.ended) reports.forget(end.connId);
-		expect(reports.edits(id, "t1")).toBe("clean");
+		expect(await r.host.edits("dev1", "t1")).toBe("clean");
+		await r.frame(report("t1", 2));
+		expect(await r.host.edits("dev1", "t1")).toBe("clean");
 		await second.dispose();
-		for (const end of r.ended) reports.forget(end.connId);
-		expect(reports.edits(id, "t1")).toBe("unreported");
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
+	});
+
+	it("takes no report whose arguments carry anything beyond {dirtyTabId}, a picture least of all", async () => {
+		const r = await rig();
+		r.uploaded.set("/up/dev1/a/image.png", Buffer.from("PNG"));
+		const picture = { type: "image", mimeType: "image/png", upload: "/up/dev1/a/image.png" };
+		const shapes = [
+			[{ dirtyTabId: "t1", extra: picture }],
+			[{ dirtyTabId: "t1" }, picture],
+			[{ dirtyTabId: "t1", x: 1 }],
+			[{ dirtyTabId: 7 }],
+			[],
+		];
+		for (const [index, a] of shapes.entries())
+			await r.frame({ t: "inv", id: index + 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a });
+		await r.settle();
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
+		expect(r.socket.frames("res")).toHaveLength(shapes.length);
+		expect(r.uploads.take).not.toHaveBeenCalled();
+		expect(r.callers).toEqual([]);
+		expect(r.fileEditReports).toEqual([]);
 	});
 });
 

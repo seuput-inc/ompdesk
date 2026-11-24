@@ -463,7 +463,7 @@ src/main/system-version.ts	port	1	systemVersion maps OS kernel release to displa
 src/main/tab-layout.test.ts	tooling	-	Vitest suite: persisted tab layout.
 src/main/tab-layout.ts	native-client	3	sanitizePersistedTabLayout(s) calls layout hub sanitize in core/src/pool/layout.rs; TS supplies deleted-session and optional probe callbacks and reports dropped entries.
 src/main/tab-release.test.ts	tooling	-	Vitest suite: closeWindowTab.
-src/main/tab-release.ts	port	3	closeWindowTab detaches a viewer immediately. After awaiting worktree exit policy it rechecks stillClosable, closes the tab's terminals and releases without another await. Both IPC close paths use that ordering.
+src/main/tab-release.ts	port	3	closeWindowTab detaches a viewer immediately. After awaiting worktree exit policy it reads the page's Files-edit word again and releases with unlessDirty, which the core checks in the step that removes the tab (C2); the window's own close passes no guard. Moves with the exit-policy read (B) as one core close step.
 src/main/tab-spawn.test.ts	tooling	-	Vitest suite: spawnTabForWindow refusal contracts.
 src/main/tab-spawn.ts	mixed	3	fs.stat checks the recorded folder before and after a disk-care restore. The same-tick sessionOwner/attachViewer pair and hosted view handles stay with the local and paired pool callers.
 src/main/test-bridge-probe.ts	tooling	-	runBridgeProbe and runStock prepare isolated bridge fixtures against installed stock omp.

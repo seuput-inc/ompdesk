@@ -34,6 +34,7 @@ import { BlobStore } from "./blobs";
 import { WebBlocks } from "./blocks-store";
 import type { ClientWindow } from "./client-window";
 import { type WebDevice, WebDevices } from "./devices-store";
+import type { FileEditTarget } from "./file-edit-reports";
 import { createHostActions } from "./host-actions";
 import type { IpcRegistry } from "./ipc-registry";
 import { PairingConfirmations } from "./pairing";
@@ -49,8 +50,8 @@ import { CLOSE_REVOKED, type InlineImage, WsRouter } from "./ws-router";
 const UPLOAD_SWEEP_MS = 60 * 60_000;
 
 export interface WebHostDeps {
-	/** One socket of a paired page ended (the page's other sockets may remain; its window stays parked with its tabs). */
-	onPageConnectionEnded?: (connId: string) => void;
+	/** The core's router recorded a paired page's Files-edit report. */
+	onFileEditReport?: () => void;
 	ipc: Pick<IpcRegistry, "handle" | "invoke" | "send">;
 	userData: string;
 	/** The built renderer's folder (`web.html` and assets), null when the app has none (a dev run). */
@@ -156,7 +157,7 @@ export class WebHost {
 			uploads: this.uploads,
 			toModelImage: image => stockHelperRequest<InlineImage>("image.toModel", image),
 			onConnectionsChanged: () => this.devices.notifyChanged(),
-			onConnectionEnded: (_deviceId, connId) => deps.onPageConnectionEnded?.(connId),
+			onFileEditReport: () => deps.onFileEditReport?.(),
 			onResync: deviceId => deps.tabs.resnapshot(this.windows.windowFor(deviceId)),
 		});
 		this.confirmations = new PairingConfirmations(this.router.host, {
@@ -286,6 +287,12 @@ export class WebHost {
 		if (!(win instanceof WebClientWindow)) return null;
 		const device = this.devices.get(win.deviceId);
 		return device ? { deviceId: device.deviceId, name: device.name } : null;
+	}
+
+	/** Where the core keeps the Files-edit reports of web window `windowId`'s device; null for any other window. */
+	fileEditTarget(windowId: number): FileEditTarget | null {
+		const win = this.windows.all().find(candidate => candidate.webContents.id === windowId);
+		return win ? { host: this.router.host, device: win.deviceId } : null;
 	}
 
 	/** The paired devices as Settings lists them. */

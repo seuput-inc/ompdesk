@@ -9,6 +9,23 @@ use super::split::{
     split_tab_ids,
 };
 use super::state::{Closer, Ctx, Entry, Pool, R};
+use crate::web::router;
+
+/// The paired page an agent's release must not take a dirty tab from (`releaseTab`'s `unlessDirty`): the router
+/// (main's `WsRouter.host`) and the device whose live connections are asked.
+pub(super) struct FileEditGuard {
+    pub host: u64,
+    pub device: String,
+}
+
+impl FileEditGuard {
+    pub(super) fn parse(value: &Value) -> Option<FileEditGuard> {
+        Some(FileEditGuard {
+            host: value.get("host")?.as_u64()?,
+            device: value.get("device")?.as_str()?.to_owned(),
+        })
+    }
+}
 
 /// What a tab acquired for a window needs from main's side (`acquire`'s arguments).
 pub(super) struct Acquire {
@@ -395,26 +412,35 @@ impl Ctx {
     // ---- releasing ----------------------------------------------------------------------------------------------
 
     pub(super) async fn release(&self, tab: &str) -> R<()> {
-        self.release_entry(tab, None).await.map(|_| ())
+        self.release_entry(tab, None, None).await.map(|_| ())
     }
 
     /// Remove the entry before notifying or disposing anything. Return its window only if it was removed.
+    /// `unless_dirty`: an agent's release of a paired page's tab is refused while a live connection of that page
+    /// names it dirty, checked under the router's lock in the same step that removes it (`NoLateDirtyRelease`).
     pub(super) async fn release_entry(
         &self,
         tab: &str,
         expected: Option<AutoCloseTurn>,
+        unless_dirty: Option<&FileEditGuard>,
     ) -> R<Option<i64>> {
         let removed = self.with(|pool| {
-            let at = pool.index(tab)?;
-            if let Some(expected) = &expected
-                && !pool.can_release(&pool.entries[at], expected)
-            {
-                return None;
+            let mut remove = || {
+                let at = pool.index(tab)?;
+                if let Some(expected) = &expected
+                    && !pool.can_release(&pool.entries[at], expected)
+                {
+                    return None;
+                }
+                let entry = pool.entries.remove(at);
+                let removed = (entry.seq, entry.win_id);
+                pool.detached.push(entry);
+                Some(removed)
+            };
+            match unless_dirty {
+                Some(guard) => router::unless_dirty(guard.host, &guard.device, tab, remove),
+                None => remove(),
             }
-            let entry = pool.entries.remove(at);
-            let removed = (entry.seq, entry.win_id);
-            pool.detached.push(entry);
-            Some(removed)
         });
         let Some((seq, win)) = removed else {
             return Ok(None);

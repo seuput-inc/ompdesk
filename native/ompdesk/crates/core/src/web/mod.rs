@@ -8,6 +8,7 @@ pub mod body;
 pub mod bytes;
 pub mod deps;
 pub mod devices;
+pub mod file_edits;
 pub mod host;
 pub mod limits;
 mod pairing;

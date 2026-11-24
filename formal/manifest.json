@@ -82,7 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "dd6e98db61cf37cdf0c7dd84945d6e9807586859",
+			"syncCommit": "6618fd8bb19a89e00e8b3dc4756a212041fd060d",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "3b2ea6891ff017247d8a15efd6f47ec44e892150",
+			"syncCommit": "f5b622ca060afedd22a5585e024780276ab63857",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -141,19 +141,20 @@
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
 			"covers": [
-				"src/main/web/file-edit-reports.ts",
+				"native/ompdesk/crates/core/src/web/file_edits.rs",
 				"native/ompdesk/crates/core/src/agentctl/rules/tab_close.rs",
 				"src/renderer/web/FileEditReporter.tsx",
 				"native/ompdesk/crates/core/src/web/router.rs#finish",
 				"native/ompdesk/crates/core/src/web/router.rs#receive",
 				"native/ompdesk/crates/core/src/web/router.rs#dispatch",
-				"src/main/web/ws-router.ts#WsRouter.connections",
-				"src/main/web/ws-router.ts#WsRouter.call",
+				"native/ompdesk/crates/core/src/web/router.rs#file_edit_report",
+				"native/ompdesk/crates/core/src/web/router.rs#unless_dirty",
+				"native/ompdesk/crates/core/src/pool/windows.rs#release_entry",
 				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs#close_tab",
 				"src/main/tab-release.ts#closeWindowTab",
-				"src/main/agent-control/host.ts:1244-1251"
+				"src/main/agent-control/host.ts:1240-1247"
 			],
-			"syncCommit": "6f08aed051eab59de9d39ccda9a93551a15ecc04",
+			"syncCommit": "ed16fd72439bffb8bc4d0cbde31dcb1593c3a877",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -265,7 +266,7 @@
 				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
-			"syncCommit": "edee54f6a28e019b835a6688263113649113a49e"
+			"syncCommit": "f5b622ca060afedd22a5585e024780276ab63857"
 		},
 		{
 			"id": "away-calls",

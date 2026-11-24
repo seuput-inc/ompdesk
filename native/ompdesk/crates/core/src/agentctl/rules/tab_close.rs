@@ -2,7 +2,8 @@
 //! releasing it in main and keeping it. A desktop window closes its own tab when asked and refuses one in use, with
 //! unsaved Files edits or its last. A paired web page's window may have no socket, so main releases that tab itself,
 //! unless a live connection of the page reported unsaved Files edits in it or the person is at it and the close was
-//! not cleared by `needs_person_turn`. Pure; no seams (`FileEdits` is `web/file-edit-reports.ts`' answer, passed in).
+//! not cleared by `needs_person_turn`. Pure; no seams (`FileEdits` is the web router's answer, `web/file_edits.rs`,
+//! read through main's snapshot and passed in).
 
 /// What a paired page's live connections report of one tab's Files edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

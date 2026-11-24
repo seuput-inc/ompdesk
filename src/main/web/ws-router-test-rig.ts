@@ -6,6 +6,7 @@
  */
 import type { WebPermission, WebServerFrame } from "../../shared/web-protocol";
 import { type CoreProcess, core } from "../core/process";
+import type { FileEdits } from "./file-edit-reports";
 import { WsRouter, type WsRouterDeps } from "./ws-router";
 
 interface Sent {
@@ -163,5 +164,10 @@ export class TestRouterHost {
 	/** The batch windows open now, by the delay each was armed with. */
 	async pending(): Promise<number[]> {
 		return this.op<number[]>("timers");
+	}
+
+	/** What `deviceId`'s live connections reported of `tabId`'s Files edits, as the core's router keeps it. */
+	async edits(deviceId: string, tabId: string): Promise<FileEdits> {
+		return this.op<FileEdits>("edits", { device: deviceId, text: tabId });
 	}
 }

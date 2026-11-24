@@ -163,7 +163,7 @@ export class IpcRegistry {
 	 * never comes here), then hands the shell the channels of `policy` (`IPC_POLICY`) main serves. Rejects when a
 	 * channel would have both owners or the shell refuses the hand-over; call it before the first window opens.
 	 */
-	async routeShell(shell: IpcShell, policy: Readonly<Record<string, { dir: string }>>): Promise<void> {
+	async routeShell(shell: IpcShell, policy: Readonly<Record<string, { dir: string; mode?: string }>>): Promise<void> {
 		for (const { channel, dir } of shell.channels) {
 			if (this.#invokeHandlers.has(channel) || this.#sendHandlers.has(channel))
 				throw new Error(`'${channel}' is served by both main and the shell`);
@@ -186,8 +186,9 @@ export class IpcRegistry {
 				);
 		}
 		const main: { invoke: string[]; send: string[] } = { invoke: [], send: [] };
-		for (const [channel, { dir }] of Object.entries(policy))
-			if ((dir === "invoke" || dir === "send") && !this.#native.has(channel)) main[dir].push(channel);
+		for (const [channel, { dir, mode }] of Object.entries(policy))
+			if ((dir === "invoke" || dir === "send") && mode !== "core" && !this.#native.has(channel))
+				main[dir].push(channel);
 		await shell.routes(main);
 	}
 
