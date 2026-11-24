@@ -1405,8 +1405,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// OMPdesk control tools (src/main/agent-control): the same pool, dispatcher, spawn path and notifications the GUI uses.
 	const agentControl: AgentControlRuntime = new AgentControlRuntime({
 		fileEdits: fileEditReports,
-		releaseTab: async (win, tabId, stillReleasable) => {
-			const released = await closeWindowTab(tabRelease, win, tabId, win.webContents.id, stillReleasable);
+		releaseTab: async (win, tabId, stillReleasable, expectedTurn) => {
+			const released = await closeWindowTab(
+				tabRelease,
+				win,
+				tabId,
+				win.webContents.id,
+				stillReleasable,
+				expectedTurn,
+			);
 			if (released) sidecarPool.announceClosed(win, tabId);
 			return released;
 		},
@@ -1769,7 +1776,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(IPC_COMMANDS.CLOSE_TAB, async (caller, payload: IpcCloseTabPayload) => {
 		const win = caller.win;
 		if (!win || typeof payload?.tabId !== "string") return false;
-		return closeWindowTab(tabRelease, win, payload.tabId, caller.sender.id);
+		return closeWindowTab(tabRelease, win, payload.tabId, caller.sender.id, undefined, payload.expectedTurn);
 	});
 
 	// A paired web page's Files editor state, which decides whether main may close one of its tabs for an agent. Only a

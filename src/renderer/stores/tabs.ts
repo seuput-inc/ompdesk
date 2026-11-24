@@ -35,6 +35,7 @@ import { useEffect } from "react";
 import { create, type StoreApi } from "zustand";
 import type { AgentCloseOutcome, AgentControlViewEvent } from "../../shared/agent-control";
 import type {
+	AutoCloseTurn,
 	IpcOpenExtensionRequest,
 	IpcRetrySaga,
 	IpcScheduledRetry,
@@ -684,7 +685,7 @@ export interface TabsStore {
 	removePane: (tabId: string) => Promise<void>;
 	setSplitRatio: (ratio: number, path?: readonly ("first" | "second")[]) => void;
 	/** Close a tab (keeps ≥1). Closing the active tab activates its neighbor first. */
-	closeTab: (id: string) => Promise<void>;
+	closeTab: (id: string, expectedTurn?: AutoCloseTurn) => Promise<void>;
 	/**
 	 * `sessionPath` is being deleted: `tabId`, the tab showing it, closes as `closeTab` closes it (the
 	 * window's last tab gives way to the empty start tab first), and the closed-tab history forgets the
@@ -1251,7 +1252,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		}, 250);
 	},
 
-	closeTab: async id => {
+	closeTab: async (id, expectedTurn) => {
 		const state = get();
 		const refusal = closeRefusal(state, id);
 		// Unsaved Files edits belong to this tab: closing it would drop them, so the editor's discard confirm asks first
@@ -1269,31 +1270,37 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			if (neighbor) await get().switchTab(neighbor.id);
 		}
 		const closed = state.tabs[index];
-		set(current => {
-			const closedTabs = closed?.sessionPath
-				? [
-						...current.closedTabs.filter(entry => entry.sessionPath !== closed.sessionPath),
-						{
-							sessionPath: closed.sessionPath,
-							cwd: closed.cwd,
-							kind: closed.kind,
-							...(closed.device === undefined ? {} : { device: closed.device }),
-							...(closed.title ? { title: closed.title } : {}),
-						},
-					].slice(-CLOSED_TAB_LIMIT)
-				: current.closedTabs;
-			return {
-				tabs: current.tabs.filter(tab => tab.id !== id),
-				rememberedSplits: forgetSplitTab(current.rememberedSplits, id),
-				closedTabs,
-			};
-		});
-		closedTabIds.add(id);
+		const forget = () => {
+			set(current => {
+				const closedTabs = closed?.sessionPath
+					? [
+							...current.closedTabs.filter(entry => entry.sessionPath !== closed.sessionPath),
+							{
+								sessionPath: closed.sessionPath,
+								cwd: closed.cwd,
+								kind: closed.kind,
+								...(closed.device === undefined ? {} : { device: closed.device }),
+								...(closed.title ? { title: closed.title } : {}),
+							},
+						].slice(-CLOSED_TAB_LIMIT)
+					: current.closedTabs;
+				return {
+					tabs: current.tabs.filter(tab => tab.id !== id),
+					rememberedSplits: forgetSplitTab(current.rememberedSplits, id),
+					closedTabs,
+				};
+			});
+			closedTabIds.add(id);
+		};
+		if (expectedTurn === undefined) forget();
 		let failure: unknown = null;
-		let refused = false;
 		try {
-			refused = !(await window.omp.tabs.close(id));
-			if (refused) failure = new Error(`Tab ${id} was not released`);
+			if (expectedTurn !== undefined) {
+				if (!(await window.omp.tabs.close(id, expectedTurn))) return;
+				forget();
+			} else if (!(await window.omp.tabs.close(id))) {
+				failure = new Error(`Tab ${id} was not released`);
+			}
 		} catch (error) {
 			failure = error;
 		}
@@ -1478,7 +1485,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		toast({ variant: "info", message: translate("tabs.openElsewhere", { device }) });
 	},
 
-	applyAgentView: async ({ tabId, how, auto, closeId }) => {
+	applyAgentView: async ({ tabId, how, auto, closeId, expectedTurn }) => {
 		// Main announces a tab it just spawned (TAB_LIST_CHANGED) and then asks to show it; the list may not
 		// have been applied yet, so an unknown tab is reconciled first. Still unknown afterwards: nothing to show.
 		if (!get().tabs.some(tab => tab.id === tabId)) await get().reconcileTabs();
@@ -1491,11 +1498,19 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					: auto && autoCloseHeld(tabId, visibleTabIds(get()))
 						? "in-use"
 						: (closeRefusal(get(), tabId) ?? "closing");
-			// The answer goes first: the close it starts may wait on a neighbor's switch, and the agent is told what this
-			// window did, not left to read a tab that stayed as a window that never heard it.
-			if (closeId !== undefined)
-				void window.omp.tabs.answerAgentClose({ tabId, closeId, outcome }).catch(() => undefined);
-			if (outcome === "closing" || outcome === "unsaved-edits") await get().closeTab(tabId);
+			const answer = (final: AgentCloseOutcome) => {
+				if (closeId !== undefined)
+					void window.omp.tabs.answerAgentClose({ tabId, closeId, outcome: final }).catch(() => undefined);
+			};
+			if (expectedTurn !== undefined && outcome === "closing") {
+				await get().closeTab(tabId, expectedTurn);
+				answer(get().tabs.some(tab => tab.id === tabId) ? "in-use" : "closing");
+			} else {
+				answer(outcome);
+				if (outcome === "closing" || (outcome === "unsaved-edits" && expectedTurn === undefined)) {
+					await get().closeTab(tabId);
+				}
+			}
 			return;
 		}
 		useUiStore.getState().closeDestination();

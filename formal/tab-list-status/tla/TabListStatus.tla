@@ -35,14 +35,14 @@ Init ==
     /\ late = 0
 
 \* @code native/ompdesk/crates/core/src/pool/listen.rs:58-65 feed_status: the tab's state changes
-\* @code native/ompdesk/crates/core/src/pool/state.rs:563-573 forward_status: TAB_STATUS with the state at send time
+\* @code native/ompdesk/crates/core/src/pool/state.rs:579-588 forward_status: TAB_STATUS with the state at send time
 MainChange ==
     /\ mainV < MaxV
     /\ mainV' = mainV + 1
     /\ pushes' = Append(pushes, mainV + 1)
     /\ UNCHANGED <<view, pushCount, req, late>>
 
-\* @code src/renderer/stores/tabs.ts:1353-1356 applyTabStatus: counts the push, then projects it over the tab
+\* @code src/renderer/stores/tabs.ts:1394-1397 applyTabStatus records the push before projecting it over the tab
 Push ==
     /\ pushes # <<>>
     /\ view' = Head(pushes)
@@ -50,19 +50,19 @@ Push ==
     /\ pushCount' = pushCount + 1
     /\ UNCHANGED <<mainV, req, late>>
 
-\* @code src/renderer/stores/tabs.ts:722-725 reconcileTabs: takes the push count, then asks `window.omp.tabs.list()`
+\* @code src/renderer/stores/tabs.ts:758-759 reconcileTabs takes the push count before asking `window.omp.tabs.list()`
 Send(r) ==
     /\ req[r].phase = "idle"
     /\ req' = [req EXCEPT ![r].phase = "sent", ![r].sent = pushCount]
     /\ UNCHANGED <<mainV, pushes, view, pushCount, late>>
 
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:716 tabs_for_window: main reads its tabs (the answer)
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:743-749 tabs_for_window reads the window's tabs
 Answer(r) ==
     /\ req[r].phase = "sent"
     /\ req' = [req EXCEPT ![r].phase = "answered", ![r].snap = mainV]
     /\ UNCHANGED <<mainV, pushes, view, pushCount, late>>
 
-\* @code src/renderer/stores/tabs.ts:769-810 reconcileTabs: a tab pushed since the ask keeps what the push said
+\* @code src/renderer/stores/tabs.ts:804-843 reconcileTabs keeps the status of a tab pushed since the ask
 Apply(r) ==
     /\ req[r].phase = "answered"
     /\ req' = [req EXCEPT ![r].phase = "done"]

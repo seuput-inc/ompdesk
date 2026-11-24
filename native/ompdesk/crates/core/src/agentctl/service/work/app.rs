@@ -509,6 +509,7 @@ impl AgentControl {
                     tab_id,
                     CloseHow {
                         auto: false,
+                        expected_turn: None,
                         wait_ms: self.tuning.close_wait_ms,
                         cleared: false,
                     },

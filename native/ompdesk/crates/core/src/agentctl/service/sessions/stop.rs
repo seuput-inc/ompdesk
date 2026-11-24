@@ -55,6 +55,7 @@ fn next_close_id() -> u64 {
 #[derive(Clone, Copy, Debug)]
 pub struct CloseHow {
     pub auto: bool,
+    pub(crate) expected_turn: Option<crate::pool::AutoCloseTurn>,
     pub wait_ms: u64,
     pub cleared: bool,
 }
@@ -211,8 +212,17 @@ impl AgentControl {
             return Ok(TabClose::Kept);
         };
         let Some(tab) = tabs.iter().find(|entry| entry.tab_id == tab_id) else {
-            return Ok(TabClose::Closed);
+            return Ok(if how.expected_turn.is_some() {
+                TabClose::Kept
+            } else {
+                TabClose::Closed
+            });
         };
+        if how.expected_turn.is_some_and(|turn| {
+            tab.close_turn != Some(turn) || tab.busy || tab.resuming || waits(tab)
+        }) {
+            return Ok(TabClose::Kept);
+        }
         match tab_close_step(&facts(tab), how.cleared) {
             TabCloseStep::Keep(reason) => {
                 return Ok(if reason.as_str() == "dirty" {
@@ -225,7 +235,11 @@ impl AgentControl {
                 return Ok(self.ask_window_close(caller_tab_id, tab_id, how).await);
             }
             TabCloseStep::Release => {
-                if !self.host.release(caller_tab_id, tab_id).await? {
+                if !self
+                    .host
+                    .release(caller_tab_id, tab_id, how.expected_turn)
+                    .await?
+                {
                     return Ok(TabClose::Kept);
                 }
             }
@@ -252,7 +266,7 @@ impl AgentControl {
     async fn ask_window_close(&self, caller_tab_id: &str, tab_id: &str, how: CloseHow) -> TabClose {
         let close_id = next_close_id();
         self.host
-            .close_view(caller_tab_id, tab_id, how.auto, close_id);
+            .close_view(caller_tab_id, tab_id, how.auto, close_id, how.expected_turn);
         let answer_of =
             |state: &crate::agentctl::service::host::HostState| -> Option<Option<CloseOutcome>> {
                 let Some(tab) = state.tabs.iter().find(|entry| entry.tab_id == tab_id) else {
@@ -524,6 +538,7 @@ impl AgentControl {
                     &joined.tab_id,
                     CloseHow {
                         auto: true,
+                        expected_turn: None,
                         wait_ms: self.tuning.close_wait_ms,
                         cleared: true,
                     },
@@ -636,6 +651,7 @@ impl AgentControl {
                         &target.tab_id,
                         CloseHow {
                             auto: false,
+                            expected_turn: None,
                             wait_ms: self.tuning.close_wait_ms,
                             cleared: true,
                         },

@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
 
+use super::AutoCloseTurn;
 use super::split::{
     SplitNode, as_split_layout, read_remembered_splits, read_split_node, split_tab_ids,
 };
@@ -547,13 +548,7 @@ impl Ctx {
                     {
                         fact.insert("sessionFile".into(), Value::from(file.clone()));
                     }
-                    if let Some(last) = &entry.tracking.last_run {
-                        // The outcome's identity: main hands the resume rules one object while this id stands.
-                        let mut last = last.clone();
-                        if let Some(outcome) = last.as_object_mut() {
-                            outcome
-                                .insert("id".into(), Value::from(entry.tracking.last_run_serial));
-                        }
+                    if let Some(last) = entry.tracking.numbered_outcome() {
                         fact.insert("lastRun".into(), last);
                     }
                     if let Some(retry) = &entry.tracking.retry {
@@ -682,7 +677,7 @@ impl Ctx {
             let Some(entry) = pool.entry(tab) else {
                 return Value::Null;
             };
-            let payload = Pool::tab_status(entry, &cwd);
+            let payload = pool.tab_status(entry, &cwd);
             let ask = ask.or(entry.plan_proposal.as_ref().map(|_| "approval"));
             let mut facts = Map::new();
             facts.insert("sessionPath".into(), opt(entry.session_file.clone()));
@@ -788,7 +783,7 @@ impl Ctx {
                     }
                     .filter(|file| !file.is_empty())?;
                     let cwd = facts[tab.as_str()]["cwd"].as_str().unwrap_or("");
-                    let payload = Pool::tab_status(entry, cwd);
+                    let payload = pool.tab_status(entry, cwd);
                     let mut item = Map::new();
                     item.insert("tabId".into(), Value::from(entry.tab_id.clone()));
                     item.insert("device".into(), opt(entry.device.clone()));
@@ -1326,12 +1321,11 @@ impl Ctx {
         Ok(true)
     }
 
-    /// `releaseTab`: false when the tab is unknown.
-    pub(super) async fn release_tab(&self, tab: &str) -> R<bool> {
-        let Some(win) = self.with(|pool| pool.entry(tab).map(|entry| entry.win_id)) else {
+    /// Only a successful removal changes the owner's layout.
+    pub(super) async fn release_tab(&self, tab: &str, expected: Option<AutoCloseTurn>) -> R<bool> {
+        let Some(win) = self.release_entry(tab, expected).await? else {
             return Ok(false);
         };
-        self.release_entry(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         Ok(true)
     }

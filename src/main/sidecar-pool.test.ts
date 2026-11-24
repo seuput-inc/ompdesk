@@ -212,6 +212,12 @@ function fakePool(): { pool: SidecarPool; sidecars: FakeSidecar[] } {
 	return { pool, sidecars };
 }
 
+function closeTurn(pool: SidecarPool, win: ClientWindow, tabId: string) {
+	const turn = pool.tabsForWindow(win).find(tab => tab.tabId === tabId)?.closeTurn;
+	if (!turn) throw new Error(`No close turn for ${tabId}`);
+	return turn;
+}
+
 describe("SidecarPool session kind", () => {
 	it("threads the spawn kind through the factory into TAB_STATUS payloads", () => {
 		const kinds: Array<"agent" | "chat" | undefined> = [];
@@ -239,6 +245,7 @@ describe("SidecarPool session kind", () => {
 				cwd: "/b",
 				status: "ready",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -332,6 +339,7 @@ describe("SidecarPool tabs", () => {
 				active: true,
 				visible: true,
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -341,6 +349,7 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "starting",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -505,6 +514,7 @@ describe("SidecarPool tabs", () => {
 				active: true,
 				visible: true,
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -529,8 +539,9 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "ready",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: expect.any(Number) },
 				sessionPath: null,
-				lastRun: { stopReason: "stop" },
+				lastRun: { id: expect.any(Number), stopReason: "stop" },
 			},
 		]);
 
@@ -793,6 +804,7 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "starting",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 				sessionId: "sess-1",
@@ -807,6 +819,7 @@ describe("SidecarPool tabs", () => {
 			cwd: "/b",
 			status: "starting",
 			placeholder: false,
+			closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 			unstarted: true,
 			sessionPath: null,
 			sessionId: "sess-1",
@@ -823,6 +836,7 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "ready",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 				sessionId: "sess-1",
@@ -1036,6 +1050,115 @@ describe("SidecarPool tabs", () => {
 		expect(pool.sidecarForWindow(fw.win)).toBeNull();
 		expect(pool.activeTabForWindow(fw.win)).toBeNull();
 		expect(pool.tabsForWindow(fw.win)).toEqual([]);
+	});
+
+	it("does not close a later turn that finished with the same reply", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child");
+		const child = sidecars[0]!;
+		child.emitStatus("ready");
+		const end = { type: "agent_end", messages: [{ role: "assistant", content: "Done.", stopReason: "stop" }] };
+		child.emitEvents([{ type: "agent_start" }, end]);
+		const collected = closeTurn(pool, win, "child");
+		expect(collected.turn).toBeGreaterThan(0);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ id: collected.turn, stopReason: "stop", reply: "Done." });
+		expect(pool.resumeFacts()[0]?.lastRun?.id).toBe(collected.turn);
+
+		child.emitEvents([{ type: "agent_start" }]);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitEvents([end]);
+		const current = closeTurn(pool, win, "child");
+		expect(current.turn).toBeGreaterThan(collected.turn);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ id: current.turn, stopReason: "stop", reply: "Done." });
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		expect(child.disposed).toBe(false);
+		expect(pool.releaseTab("child", current)).toBe(true);
+		expect(child.disposed).toBe(true);
+	});
+
+	it("keeps a child for a late question, plan, compaction or continuation, but not a status notice", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child");
+		const child = sidecars[0]!;
+		child.emitStatus("ready");
+		child.emitAgentEvents(["agent_start", "agent_end"]);
+		const collected = closeTurn(pool, win, "child");
+		const released = vi.fn();
+		pool.onTabReleased = released;
+		child.emitExtensionUi("question");
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitUiRequest({ id: "cancel", method: "cancel", targetId: "question" });
+		child.emitEvents([{ type: "plan_proposal", title: "Plan", planFilePath: "plan.md", options: [] }]);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitEvents([{ type: "plan_proposal_resolved", planFilePath: "plan.md" }]);
+		child.emitAgentEvents(["auto_compaction_start"]);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitAgentEvents(["auto_compaction_end"]);
+		pool.setResuming("child", true);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		pool.setResuming("child", false);
+		pool.setAwaitingConnection("child", true);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		pool.setAwaitingConnection("child", false);
+		pool.setScheduledRetry("child", { at: 1_000, attempt: 1 });
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		pool.setScheduledRetry("child", undefined);
+		child.emitStatus("restarting");
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitStatus("ready");
+		const notice = { id: "index", method: "setStatus", statusKey: "index", statusText: "Indexed" };
+		child.emitUiRequest(notice);
+		child.emit("openAsks", [notice]);
+		expect(released).not.toHaveBeenCalled();
+		expect(pool.releaseTab("child", collected)).toBe(true);
+		expect(released).toHaveBeenCalledTimes(1);
+	});
+
+	it("rejects a malformed fence and a replaced entry, but an ordinary close still releases a busy child", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child");
+		sidecars[0]!.emitStatus("ready");
+		const collected = closeTurn(pool, win, "child");
+		for (const invalid of [null, {}, { ...collected, turn: "0" }, [collected.pool, collected.entry, 0]]) {
+			// @ts-expect-error The native boundary also receives malformed wire input.
+			expect(pool.releaseTab("child", invalid)).toBe(false);
+		}
+		expect(pool.releaseTab("child", collected)).toBe(true);
+		pool.acquire("/b", win, "child");
+		const replacement = sidecars[1]!;
+		replacement.emitStatus("ready");
+		const current = closeTurn(pool, win, "child");
+		expect(current).toEqual({ ...collected, entry: expect.any(Number) });
+		expect(current.entry).not.toBe(collected.entry);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		replacement.emitAgentEvents(["agent_start"]);
+		expect(pool.releaseTab("child")).toBe(true);
+		expect(replacement.disposed).toBe(true);
+	});
+
+	it("can close a restored sleeping tab but never reuses its zero-turn fence after a run starts", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.restoreLayout(win, {
+			version: 1,
+			activeIndex: 1,
+			tabs: [
+				{ cwd: "/a", kind: "agent", sessionPath: "/s/a.jsonl" },
+				{ cwd: "/b", kind: "agent", sessionPath: "/s/b.jsonl" },
+			],
+		});
+		const [sleeping, waking] = pool.tabsForWindow(win);
+		expect(sleeping!.status).toBe("asleep");
+		const restored = closeTurn(pool, win, sleeping!.tabId);
+		expect(restored.turn).toBe(0);
+		expect(pool.releaseTab(sleeping!.tabId, restored)).toBe(true);
+		sidecars[1]!.emitStatus("ready");
+		const before = closeTurn(pool, win, waking!.tabId);
+		sidecars[1]!.emitEvents([{ type: "agent_start" }, { type: "agent_end", isTerminal: false }]);
+		expect(pool.releaseTab(waking!.tabId, before)).toBe(false);
 	});
 
 	it("has no limit on tabs: an 11th, 12th… tab still acquires, and a restore keeps them all", () => {
@@ -2915,7 +3038,11 @@ describe("SidecarPool background tabs", () => {
 			a?.emitEvents([{ type: "agent_start" }]);
 			a?.emitEvents([{ type: "agent_end", messages: failed }]);
 			const first = outcome();
-			expect(first).toEqual({ stopReason: "error", errorMessage: "fetch failed: other side closed" });
+			expect(first).toEqual({
+				id: expect.any(Number),
+				stopReason: "error",
+				errorMessage: "fetch failed: other side closed",
+			});
 			// The rules judge an outcome once and end a hold when another one shows: a fresh parse must not read as another run.
 			expect(outcome()).toBe(first);
 
@@ -4432,11 +4559,13 @@ describe("SidecarPool and a lost core", () => {
 	});
 
 	it("seeds the next core with the tabs main holds, and its windows keep their tabs", () => {
-		const { pool } = fakePool();
+		const { pool, sidecars } = fakePool();
 		const fw = fakeWindow(1);
 		pool.acquire("/a", fw.win, "tab-a", "/s/a.jsonl");
 		pool.acquire("/b", fw.win, "tab-b");
 		expect(pool.sessionOwner("/s/a.jsonl")?.tabId).toBe("tab-a");
+		sidecars[1]!.emitStatus("ready");
+		const before = closeTurn(pool, fw.win, "tab-b");
 		// The core is killed as a hub call past its deadline kills it: every instance it ran is gone.
 		core().abandon("a test ends the core");
 		expect(pool.size).toBe(2);
@@ -4447,7 +4576,12 @@ describe("SidecarPool and a lost core", () => {
 		expect(pool.sidecarForTab(fw.win, "tab-b")).not.toBeNull();
 		// The session file the tab was acquired on still names it.
 		expect(pool.sessionOwner("/s/a.jsonl")?.tabId).toBe("tab-a");
-		expect(pool.releaseTab("tab-b")).toBe(true);
+		const after = closeTurn(pool, fw.win, "tab-b");
+		expect(after).toEqual({ ...before, pool: expect.any(Number) });
+		expect(after.pool).toBeGreaterThan(before.pool);
+		expect(pool.releaseTab("tab-b", before)).toBe(false);
+		expect(sidecars[1]!.disposed).toBe(false);
+		expect(pool.releaseTab("tab-b", after)).toBe(true);
 		expect(pool.size).toBe(1);
 	});
 });

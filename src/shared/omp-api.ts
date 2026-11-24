@@ -38,6 +38,7 @@ import type { DiskCareState } from "./disk-care";
 import type { ExtensionUpdateState } from "./extension-update";
 import type { GithubAuthState, GithubStarState } from "./github-auth";
 import type {
+	AutoCloseTurn,
 	CustomProviderInput,
 	CustomProvidersConfig,
 	DeepLinkPayload,
@@ -593,7 +594,11 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			list: () => transport.invoke(IPC_COMMANDS.GET_TABS) as Promise<IpcTabInfo[]>,
 			spawn: (payload: IpcSpawnTabPayload) =>
 				transport.invoke(IPC_COMMANDS.SPAWN_TAB, payload) as Promise<IpcSpawnTabResult | null>,
-			close: (tabId: string) => transport.invoke(IPC_COMMANDS.CLOSE_TAB, { tabId }) as Promise<boolean>,
+			close: (tabId: string, expectedTurn?: AutoCloseTurn) =>
+				transport.invoke<boolean>(
+					IPC_COMMANDS.CLOSE_TAB,
+					expectedTurn === undefined ? { tabId } : { tabId, expectedTurn },
+				),
 			setActive: async (tabId: string) => {
 				const switched = await transport.invoke<boolean>(IPC_COMMANDS.SET_ACTIVE_TAB, { tabId });
 				if (switched) activeTabId = tabId;

@@ -8,6 +8,7 @@
  */
 
 import { assignmentHeadline } from "../../resources/gui-bridge/modes/subagent-title-contracts";
+import type { AutoCloseTurn } from "./ipc-types";
 
 /** Prefs key; on unless stored `false`. Off: the tools are unregistered from every live local session. */
 export const AGENT_CONTROL_PREF = "agentControl";
@@ -193,6 +194,7 @@ export interface AgentControlViewEvent {
 	how: AgentControlPlacement | "close";
 	/** A close main decided on itself (an opened session's work landed): the window refuses it for a tab the person is using. */
 	auto?: true;
+	expectedTurn?: AutoCloseTurn;
 	/** A close the core waits on: the window answers it with `IPC_COMMANDS.AGENT_CLOSE_ANSWER` carrying this id. */
 	closeId?: number;
 }

@@ -1778,10 +1778,18 @@ export interface IpcRetrySaga {
 	startedAt: number;
 }
 
+/** The pool opening, tab entry and finished turn observed by an automatic close. Zero means no turn has finished. */
+export interface AutoCloseTurn {
+	pool: number;
+	entry: number;
+	turn: number;
+}
+
 /** One tab of a window: its sidecar's cwd, last status, and cached session meta. */
 export interface IpcTabInfo {
 	/** Opaque snowflake id minted by main at acquire. */
 	tabId: string;
+	closeTurn?: AutoCloseTurn;
 	cwd: string;
 	status: TabStatus;
 	/** Present on GET_TABS for the tab main currently routes as active. */
@@ -1876,6 +1884,8 @@ export interface IpcTabInfo {
  * failed, or aborted.
  */
 export interface IpcTabRunOutcome {
+	/** Monotonic outcome serial assigned by the pool. */
+	id?: number;
 	/** The last assistant message's stop reason ("stop", "error", "aborted", …). */
 	stopReason: string;
 	errorMessage?: string;
@@ -1978,6 +1988,7 @@ export interface IpcGetSessionOwnerPayload {
 
 export interface IpcCloseTabPayload {
 	tabId: string;
+	expectedTurn?: AutoCloseTurn;
 }
 
 export interface IpcFileEditReportPayload {
@@ -2560,7 +2571,7 @@ export interface OmpApi {
 		 */
 		spawn(payload: IpcSpawnTabPayload): Promise<IpcSpawnTabResult | null>;
 		/** Release a tab's sidecar. False when the tab is unknown or foreign. */
-		close(tabId: string): Promise<boolean>;
+		close(tabId: string, expectedTurn?: AutoCloseTurn): Promise<boolean>;
 		/** Move full event forwarding to this tab. False when unknown or foreign. */
 		setActive(tabId: string): Promise<boolean>;
 		/** Set the focused tab plus up to four tabs rendered by the window. */

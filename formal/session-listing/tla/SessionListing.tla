@@ -211,7 +211,7 @@ Announce(f2, r2) ==
 \* ===== the host's tabs change: each handler ends by calling listingChanged() in the same synchronous block =====
 
 \* @code src/main/remote/host-services.ts:2329-2358 #createTab records the session file and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:280-314 Ctx::finish_acquire registers the window tab's session file and notifies its window.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:281-315 Ctx::finish_acquire registers the window tab's session file and notifies its window.
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of records the file and owner, then calls on_session_files_changed if the file changed.
 Open(t, s) ==
     /\ ~Busy
@@ -221,9 +221,9 @@ Open(t, s) ==
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
 \* @code src/main/remote/host-services.ts:3119-3150 #closeTab removes the tab and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:399-415 Ctx::release_entry removes the tab and awaits release_detached.
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:417-504 Ctx::release_detached calls unregister_session_file_of.
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1330-1337 Ctx::release_tab notifies the window after release_entry returns.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:407-441 Ctx::release_entry removes only the matching entry and awaits release_detached.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:444-531 Ctx::release_detached calls unregister_session_file_of.
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1325-1331 Ctx::release_tab notifies the window after a successful removal.
 Close(t) ==
     /\ ~Busy
     /\ (file[t] # NoS \/ t \in pendReg) /\ nChanges < MaxChanges
@@ -262,7 +262,7 @@ Reregister(t, s) ==
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, cn, seen>>
 
 \* @code src/main/index.ts:1378-1387 sessionOpeners merges closed-child records with the current tab openers.
-\* @code src/main/ipc.ts:1433 A change to AGENT_CLOSED_CHILDREN_PREF calls hostedTabs.listingChanged().
+\* @code src/main/ipc.ts:1440 A change to AGENT_CLOSED_CHILDREN_PREF calls hostedTabs.listingChanged().
 Record ==
     /\ ~Busy
     /\ nChanges < MaxChanges
@@ -296,7 +296,7 @@ IdxCreate(s) ==
 \* @code src/main/session-index.ts:174-184 #onChanged handles a changed journal.
 \* @code src/main/session-index.ts:250-252 relist marks the shared list changed after a rename.
 \* @code src/main/remote/host-services.ts:3089-3101 renameSession awaits the rename, then calls sessionIndex.relist().
-\* @code src/main/ipc.ts:1628-1635 SESSIONS_RENAME marks the copy stale after the host answers.
+\* @code src/main/ipc.ts:1635-1642 SESSIONS_RENAME marks the copy stale after the host answers.
 IdxBump(s, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[s] < MaxJ /\ nIdx < MaxIdx /\ Free(by)
@@ -319,7 +319,7 @@ IdxDelete(s, by) ==
 \* @code native/ompdesk/crates/core/src/fs/read.rs:359-368 stat follows links to check the move destination before stock moves the session.
 \* @code src/main/session-index.ts:350-362 moveSession awaits the move and calls #notifyChange.
 \* @code src/main/remote/host-services.ts:1397-1405 sessions.move moves the host's session.
-\* @code src/main/ipc.ts:1646-1655 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
+\* @code src/main/ipc.ts:1653-1661 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
 IdxMove(s, t, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[t] = Absent /\ nIdx < MaxIdx /\ Free(by)
@@ -616,8 +616,8 @@ FeedRetry(d) ==
 
 \* A device's delete, rename or move: main answered after the host did, and marked the device computer's copy stale (a bare event goes to the windows) ...
 \* @code src/main/ipc.ts:550-558 deleteStoredSession calls hostSessionsStale after sessions.delete answers.
-\* @code src/main/ipc.ts:1628-1635 SESSIONS_RENAME calls hostSessionsStale after the rename.
-\* @code src/main/ipc.ts:1646-1655 SESSIONS_MOVE calls hostSessionsStale after the move.
+\* @code src/main/ipc.ts:1635-1642 SESSIONS_RENAME calls hostSessionsStale after the rename.
+\* @code src/main/ipc.ts:1653-1661 SESSIONS_MOVE calls hostSessionsStale after the move.
 \* @code src/main/remote/devices.ts:693-695 hostSessionsStale calls HostSessionList.stale().
 PostMain(d) ==
     /\ ~Busy
