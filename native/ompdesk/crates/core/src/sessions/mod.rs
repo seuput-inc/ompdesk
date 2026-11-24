@@ -11,6 +11,7 @@
 //! `{index, names}` with the settled entries relative to the root, `names: null` when anything may have changed.
 
 mod activity;
+pub(crate) mod deleted;
 mod enrich;
 mod journal;
 mod journal_wait;

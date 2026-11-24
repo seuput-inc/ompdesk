@@ -221,12 +221,12 @@ export class SessionIndex {
 
 	#shown(sessions: readonly SessionInfo[], scope: "local" | "global", cwd?: string): SessionInfo[] {
 		const localCwd = cwd !== undefined ? resolve(cwd) : this.#cwd;
-		const deleted = deletedSessions();
-		// A file a stray writer put back after its session was deleted is not that session coming back.
-		return sessions.filter(
-			info =>
-				!deleted.has(info.path) && (scope === "global" || (info.cwd != null && resolve(info.cwd) === localCwd)),
+		const inScope = sessions.filter(
+			info => scope === "global" || (info.cwd != null && resolve(info.cwd) === localCwd),
 		);
+		// A file a stray writer put back after its session was deleted is not that session coming back.
+		const deleted = deletedSessions().which(inScope.map(info => info.path));
+		return inScope.filter((_, at) => !deleted[at]);
 	}
 
 	/**
@@ -258,8 +258,9 @@ export class SessionIndex {
 	 * file's legacy chat flag.
 	 */
 	async #readAll(): Promise<SessionInfo[]> {
-		const deleted = deletedSessions();
-		const infos = (await this.#store.list()).filter(info => !deleted.has(info.path));
+		const stored = await this.#store.list();
+		const deleted = deletedSessions().which(stored.map(info => info.path));
+		const infos = stored.filter((_, at) => !deleted[at]);
 		if (infos.length === 0 && (this.#listedGeneration === null || core().pid === null)) {
 			this.#listedGeneration = null;
 			return infos;

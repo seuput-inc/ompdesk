@@ -3,7 +3,6 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DeletedSessions } from "./deleted-sessions";
 import { diskFull } from "./disk-full";
 import { SessionKindStore } from "./session-kinds";
 import { disk } from "./test-full-disk";
@@ -24,28 +23,6 @@ describe("stores that save on every change, on a full disk", () => {
 		diskFull.clear(file);
 		vi.useRealTimers();
 		rmSync(dir, { recursive: true, force: true });
-	});
-
-	it("keeps a deleted session deleted in memory and saves the tombstone once the space is back", async () => {
-		const sessions = new DeletedSessions(file);
-		sessions.add("/work/a.jsonl");
-		const before = readFileSync(file, "utf8");
-
-		disk.full = true;
-		expect(() => sessions.add("/work/b.jsonl")).not.toThrow();
-		expect(sessions.has("/work/b.jsonl")).toBe(true);
-		expect(readFileSync(file, "utf8")).toBe(before);
-		expect(readdirSync(dir)).toEqual(["state.json"]);
-		await vi.advanceTimersByTimeAsync(0);
-		expect(diskFull.names()).toEqual(["state.json"]);
-
-		disk.full = false;
-		await vi.advanceTimersByTimeAsync(60_000);
-		const reread = new DeletedSessions(file);
-		expect(reread.has("/work/a.jsonl")).toBe(true);
-		expect(reread.has("/work/b.jsonl")).toBe(true);
-		expect(readdirSync(dir)).toEqual(["state.json"]);
-		expect(diskFull.names()).toEqual([]);
 	});
 
 	it("keeps a chat session's label in memory and saves it once the space is back", async () => {
