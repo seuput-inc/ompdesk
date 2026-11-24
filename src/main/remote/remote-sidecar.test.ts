@@ -438,6 +438,78 @@ describe("RemoteSidecar", () => {
 		]);
 	});
 
+	it("keeps each terminal event's stamp with its own outcome through the link decoder", () => {
+		const { sidecar } = setup();
+		const received = vi.fn();
+		sidecar.on("events", received);
+		const message = { role: "assistant", timestamp: 42, content: "first reply", stopReason: "stop" };
+		const first = { type: "agent_end", messages: [message], hostTurn: { omp: "a", turn: 1 } };
+		const second = { type: "auto_retry_end", success: false, finalError: "failed", hostTurn: { omp: "a", turn: 2 } };
+		const start = { type: "agent_start" };
+		const endMessage = { type: "message_end", message };
+		const wire = [endMessage, { ...first, messages: [{ "~sent": "assistant\u000042" }] }, start, second];
+		sidecar.handleEvent({ rtab: "tab-1", name: "events", arg: wire });
+		expect(received).toHaveBeenCalledWith(
+			[
+				endMessage,
+				{ type: first.type, messages: first.messages },
+				start,
+				{ type: second.type, success: false, finalError: "failed" },
+			],
+			[endMessage, first, start, second],
+		);
+	});
+
+	it("hands over a stamped re-attach reading with its outcome only for the omp that reports status", () => {
+		const { sidecar } = setup();
+		const run = vi.fn();
+		sidecar.on("hostRun", run);
+		const reading = {
+			running: false,
+			turn: false,
+			hostTurn: { omp: "a", turn: 7 },
+			lastRun: { stopReason: "stop", reply: "finished while offline" },
+		};
+		sidecar.handleEvent({ rtab: "tab-1", name: "run", arg: reading });
+		sidecar.handleEvent(hostStatus("ready", { omp: "b" }));
+		expect(run).not.toHaveBeenCalled();
+		sidecar.handleEvent({ rtab: "tab-1", name: "run", arg: reading });
+		sidecar.handleEvent(hostStatus("ready", { omp: "a" }));
+		expect(run.mock.calls).toEqual([[reading]]);
+	});
+
+	it("forwards only the reporting omp's zero-turn status as an initial close stamp", () => {
+		const { sidecar } = setup();
+		const stamps: unknown[] = [];
+		sidecar.on("status", (_status, stamp) => stamps.push(stamp));
+		const zero = { omp: "a", turn: 0 };
+		sidecar.handleEvent(hostStatus("ready", { omp: "a", hostTurn: { omp: "b", turn: 0 } }));
+		sidecar.handleEvent(hostStatus("ready", { omp: "a", hostTurn: { omp: "a", turn: 3 } }));
+		sidecar.handleEvent(hostStatus("starting", { omp: "a", hostTurn: zero }));
+		sidecar.handleEvent(hostStatus("ready", { omp: "a", hostTurn: zero }));
+		expect(stamps).toEqual([undefined, undefined, undefined, zero]);
+	});
+
+	it.each(["new", undefined])("resets the old omp before reporting its replacement %s", async omp => {
+		const { sidecar, link } = setup();
+		sidecar.start();
+		await settle();
+		sidecar.handleEvent(hostStatus("ready", { omp: "old" }));
+		link.state = "offline";
+		sidecar.linkStateChanged("offline");
+		link.state = "online";
+		link.attached = true;
+		sidecar.linkStateChanged("online");
+		await settle();
+		const seen: unknown[] = [];
+		sidecar.on("status", (status: SidecarStatusPayload) => seen.push([status.status, sidecar.statusFromLink]));
+		sidecar.on("hostRun", reading => seen.push(reading));
+		const reading = { running: false, turn: false, hostTurn: { omp: "new", turn: 0 } };
+		if (omp) sidecar.handleEvent({ rtab: "tab-1", name: "run", arg: reading });
+		sidecar.handleEvent(hostStatus("ready", omp ? { omp, hostTurn: reading.hostTurn } : {}));
+		expect(seen).toEqual([["starting", true], ...(omp ? [reading] : []), ["ready", false]]);
+	});
+
 	describe("a re-attach after a lost link", () => {
 		/** Start on omp `first`, lose the link, re-attach (`attached`), and return what the page heard from then on. */
 		async function reattach(first: string | undefined, attached: boolean, again?: string): Promise<unknown[]> {
@@ -939,6 +1011,110 @@ describe("RemoteSidecar", () => {
 		unopened.link.state = "offline";
 		unopened.sidecar.dispose();
 		expect(unopened.deferredCloses).toEqual([]);
+	});
+
+	describe("closing only the finished turn on the host", () => {
+		const expectedTurn = { omp: "omp-1", turn: 3 };
+
+		it.each([false, "yes", {}])("keeps the tab callable when the host answers %j", async answer => {
+			const { link, sidecar, disposed, deferredCloses } = setup();
+			sidecar.start();
+			await settle();
+			sidecar.handleEvent(hostStatus("ready", { omp: expectedTurn.omp }));
+			link.handlers["tab.close"] = () => answer;
+			expect(await sidecar.closeHostTurn(expectedTurn)).toBe(false);
+			expect(link.sent.at(-1)?.params).toEqual({ rtab: "tab-1", expectedTurn });
+			expect(await sidecar.rpcClient?.command({ type: "get_state" })).toMatchObject({ success: true });
+			expect(disposed).toEqual([]);
+			expect(deferredCloses).toEqual([]);
+			sidecar.dispose();
+			expect(link.sent.at(-1)?.params).toEqual({ rtab: "tab-1" });
+		});
+
+		it.each([true, null])("accepts %j once without a second close on disposal", async answer => {
+			const { link, sidecar, disposed, deferredCloses } = setup();
+			sidecar.start();
+			await settle();
+			const stamp = answer === true ? expectedTurn : null;
+			sidecar.handleEvent(hostStatus("ready", stamp ? { omp: stamp.omp } : {}));
+			link.handlers["tab.close"] = () => answer;
+			const client = sidecar.rpcClient;
+			expect(await sidecar.closeHostTurn(stamp)).toBe(true);
+			expect(sidecar.rpcClient).toBeNull();
+			await expect(client?.command({ type: "get_state" })).rejects.toSatisfy(
+				error => ipcErrorCode(error) === "sidecar_not_connected",
+			);
+			expect(await sidecar.closeHostTurn(stamp ? { ...stamp } : null)).toBe(true);
+			expect(await sidecar.closeHostTurn({ ...expectedTurn, turn: 4 })).toBe(false);
+			expect(await sidecar.closeHostTurn({ omp: "replacement", turn: 3 })).toBe(false);
+			sidecar.dispose();
+			expect(disposed).toEqual([1]);
+			expect(link.sent.filter(r => r.method === "tab.close").map(r => r.params)).toEqual([
+				{ rtab: "tab-1", expectedTurn: stamp },
+			]);
+			expect(deferredCloses).toEqual([]);
+		});
+
+		it.each(["restart", "relink"])("does not reuse a close acceptance after %s", async change => {
+			const { link, sidecar } = setup();
+			sidecar.start();
+			await settle();
+			sidecar.handleEvent(hostStatus("ready", { omp: expectedTurn.omp }));
+			link.handlers["tab.close"] = () => true;
+			expect(await sidecar.closeHostTurn(expectedTurn)).toBe(true);
+
+			const current = change === "restart" ? link : new FakeLink();
+			current.handlers["tab.close"] = () => false;
+			if (change === "restart") sidecar.restart();
+			else sidecar.relink(current);
+			await settle();
+			expect(await sidecar.closeHostTurn(expectedTurn)).toBe(false);
+			expect(current.sent.at(-1)?.params).toEqual({ rtab: "tab-1", expectedTurn });
+			sidecar.dispose();
+			expect(current.sent.at(-1)?.params).toEqual(
+				change === "restart" ? { rtab: "tab-1" } : { rtab: "tab-1", expectedTurn },
+			);
+		});
+
+		it("does not retry a dropped or offline close when the link returns", async () => {
+			const { link, sidecar, deferredCloses } = setup();
+			sidecar.start();
+			await settle();
+			sidecar.handleEvent(hostStatus("ready", { omp: expectedTurn.omp }));
+			link.handlers["tab.close"] = () => {
+				link.state = "offline";
+				sidecar.linkStateChanged("offline");
+				throw codedError("remote_offline", "lost");
+			};
+			expect(await sidecar.closeHostTurn(expectedTurn)).toBe(false);
+			expect(await sidecar.closeHostTurn(expectedTurn)).toBe(false);
+			link.state = "online";
+			link.attached = true;
+			sidecar.linkStateChanged("online");
+			await settle();
+			expect(await sidecar.rpcClient?.command({ type: "get_state" })).toMatchObject({ success: true });
+			expect(link.methods().filter(m => m === "tab.close")).toHaveLength(1);
+			expect(deferredCloses).toEqual([]);
+		});
+
+		it("does not bind an old link's late acceptance to a reopened tab", async () => {
+			const { link, sidecar } = setup();
+			sidecar.start();
+			await settle();
+			const ack = Promise.withResolvers<boolean>();
+			link.handlers["tab.close"] = () => ack.promise;
+			const closing = sidecar.closeHostTurn(expectedTurn);
+			expect(await sidecar.closeHostTurn(null)).toBe(false);
+			expect(link.methods().filter(m => m === "tab.close")).toHaveLength(1);
+			const replacement = new FakeLink();
+			sidecar.relink(replacement);
+			await settle();
+			ack.resolve(true);
+			expect(await closing).toBe(false);
+			expect(await sidecar.rpcClient?.command({ type: "get_state" })).toMatchObject({ success: true });
+			sidecar.dispose();
+			expect(replacement.sent.at(-1)?.params).toEqual({ rtab: "tab-1" });
+		});
 	});
 
 	it("leaves its host tab running when the app quits with its work to continue, and closes it otherwise", async () => {

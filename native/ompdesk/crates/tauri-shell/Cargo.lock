@@ -2684,6 +2684,8 @@ dependencies = [
  "ompdesk-shell",
  "ompdesk-shell-preview",
  "psl",
+ "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.1",

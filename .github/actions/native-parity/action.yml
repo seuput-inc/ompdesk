@@ -27,6 +27,8 @@ runs:
         src/main/app-icon.test.ts
         src/main/external-url.test.ts
         src/main/notify-triage.test.ts
+        src/main/update-auth.test.ts
+        src/main/updater-state.test.ts
         src/main/agent-browsers.test.ts
         src/main/preview/visuals.test.ts
         src/main/repo-lock-fence.test.ts

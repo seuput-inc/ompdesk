@@ -43,6 +43,7 @@ vi.mock("electron", () => ({
 		},
 	},
 	BrowserWindow: { getAllWindows: () => [] },
+	updateHost: { sweepUpdateFiles: async () => {} },
 	net: {},
 	powerMonitor: { getSystemIdleTime: () => 0 },
 	shell: {},

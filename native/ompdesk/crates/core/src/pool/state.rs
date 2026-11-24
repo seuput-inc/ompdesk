@@ -350,13 +350,24 @@ impl Pool {
         wins
     }
 
-    pub(super) fn close_turn(&self, entry: &Entry) -> Option<AutoCloseTurn> {
-        let tracking = &entry.tracking;
-        (!tracking.saw_start || tracking.last_run.is_some()).then_some(AutoCloseTurn {
-            pool: self.epoch,
-            entry: entry.seq,
-            turn: tracking.last_run_serial,
-        })
+    pub(super) fn can_release(&self, entry: &Entry, expected: &AutoCloseTurn) -> bool {
+        self.epoch == expected.pool
+            && entry.seq == expected.entry
+            && entry.tracking.close_observation() == Some((expected.turn, expected.host.as_ref()))
+            && matches!(entry.status.as_str(), "ready" | "asleep")
+            && !entry.busy()
+            && !entry.resuming
+            && !entry.awaiting_connection
+            && entry.scheduled_retry.is_none()
+            && entry.tracking.retry.is_none()
+            && entry.plan_proposal.is_none()
+            && !self.request_owners.iter().any(|(id, owner)| {
+                *owner == entry.seq
+                    && self
+                        .request_bodies
+                        .get(id)
+                        .is_some_and(|ask| ask.kinds.blocking)
+            })
     }
 
     /// `TAB_STATUS` push / `GET_TABS` item: the full tab snapshot including cached session meta (`tabStatusPayload`).
@@ -425,8 +436,12 @@ impl Pool {
         if let Some(worktree) = &entry.worktree {
             payload.insert("worktree".into(), worktree.clone());
         }
-        if let Some(turn) = self.close_turn(entry) {
-            payload.insert("closeTurn".into(), json!(turn));
+        if let Some((turn, host)) = entry.tracking.close_observation() {
+            let mut fence = json!({"pool": self.epoch, "entry": entry.seq, "turn": turn});
+            if let Some(host) = host {
+                fence["host"] = json!(host);
+            }
+            payload.insert("closeTurn".into(), fence);
         }
         if let Some(last) = entry.tracking.numbered_outcome() {
             payload.insert("lastRun".into(), last);

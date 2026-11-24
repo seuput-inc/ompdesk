@@ -46,12 +46,45 @@ use crate::hub::{Kind, Out, Outcome};
 use crate::server::Fault;
 use state::{Ctx, LevelKey, P, Pool, R};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HostCloseTurn {
+    pub omp: String,
+    pub turn: u64,
+}
+
+impl HostCloseTurn {
+    fn valid(&self) -> bool {
+        !self.omp.is_empty() && self.turn < (1 << 53)
+    }
+
+    fn from_payload(payload: &Value) -> Option<Self> {
+        let value = payload.get("hostTurn")?;
+        value.as_object()?;
+        Self::deserialize(value).ok().filter(Self::valid)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AutoCloseTurn {
     pub pool: u64,
     pub entry: u64,
     pub turn: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostCloseTurn>,
+}
+
+impl AutoCloseTurn {
+    fn parse(value: &Value) -> Option<Self> {
+        value.as_object()?;
+        if let Some(host) = value.get("host") {
+            host.as_object()?;
+        }
+        Self::deserialize(value)
+            .ok()
+            .filter(|fence| fence.host.as_ref().is_none_or(HostCloseTurn::valid))
+    }
 }
 
 pub const KIND: Kind = Kind {
@@ -360,12 +393,19 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                 .await?,
             ))
         }),
+        "canReleaseTab" => now(Value::Bool(ctx.with(|pool| {
+            let Some(entry) = p.0["tab"].as_str().and_then(|tab| pool.entry(tab)) else {
+                return false;
+            };
+            AutoCloseTurn::parse(&p.0["expectedTurn"])
+                .is_some_and(|expected| pool.can_release(entry, &expected))
+        }))),
         "releaseTab" => later(async move {
             let expected = match p.0.get("expectedTurn") {
                 None => None,
-                Some(value) => match AutoCloseTurn::deserialize(value) {
-                    Ok(turn) if value.is_object() => Some(turn),
-                    _ => return Ok(Value::Bool(false)),
+                Some(value) => match AutoCloseTurn::parse(value) {
+                    Some(turn) => Some(turn),
+                    None => return Ok(Value::Bool(false)),
                 },
             };
             Ok(Value::from(ctx.release_tab(&p.s("tab")?, expected).await?))

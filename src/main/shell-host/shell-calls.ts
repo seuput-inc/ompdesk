@@ -4,8 +4,25 @@
  * What each one changed is in INVENTORY.md.
  */
 import * as electron from "electron";
+import type { StageBundleReply, StageBundleRequest } from "../updater-state";
+
+export type UpdateFileArea = "downloads" | "updates";
+export type UpdateSweep = { area: "downloads"; asset?: string } | { area: "updates"; asset: string };
+
+export interface UpdateHost {
+	stageUpdateBundle(request: StageBundleRequest): Promise<StageBundleReply>;
+	updateDestination(asset: string): Promise<string>;
+	updateDigest(area: UpdateFileArea, asset: string): Promise<string>;
+	sweepUpdateFiles(request: UpdateSweep): Promise<void>;
+	readUpdateTokenCiphertext(): Promise<Buffer | null>;
+	updateTokenFileStatus(): Promise<{ hasStoredToken: boolean; droppedReason: string | null }>;
+	saveUpdateTokenCiphertext(bytes: Buffer): Promise<void>;
+	dropUpdateTokenFile(): Promise<void>;
+	clearUpdateTokenFiles(): Promise<void>;
+}
 
 interface AsyncForms {
+	updateHost: UpdateHost;
 	clipboard: { readTextAsync(): Promise<string> };
 	powerMonitor: { getSystemIdleTimeAsync(): Promise<number> };
 	systemPreferences: {
@@ -17,6 +34,10 @@ interface AsyncForms {
 // The shim's asynchronous forms are not in Electron's own typings: one named view of them, read when a call is made
 // (a test that replaces `electron` without them must still load this module).
 const shim = (): AsyncForms => electron as unknown as AsyncForms;
+
+export function updateHost(): UpdateHost {
+	return shim().updateHost;
+}
 
 /**
  * Why `safeStorage` cannot encrypt, in the shell's words (`KEYCHAIN_WOULD_ASK` when the macOS keychain would have shown

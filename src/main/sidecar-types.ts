@@ -3,6 +3,7 @@
  * `turn-resume.ts`, `ipc.ts`, `remote/`) share it without importing one another.
  */
 import type { EventEmitter } from "node:events";
+import type { HostCloseTurn } from "../shared/ipc-types";
 import type { SidecarStatus, SidecarStatusPayload } from "../shared/rpc-types";
 import type { ExtensionApplyPlan } from "./extension-reload";
 import type { RpcClient } from "./rpc-client";
@@ -86,6 +87,8 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	syncAccountRotation(): void;
 	/** Local sidecars only: push this machine's credit-use switch to the live omp. */
 	syncCreditSpend?(): void;
+	/** Remote owner only. A refusal or lost reply keeps the proxy; a manual dispose is unconditional. */
+	closeHostTurn?(expected: HostCloseTurn | null): Promise<boolean>;
 	dispose(): void;
 	/** Local sidecars: hold the first spawn at `starting` until `gate` settles (worktree.onStart). */
 	setStartGate?(gate: SidecarStartGate): void;
