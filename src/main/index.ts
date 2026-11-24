@@ -2522,7 +2522,11 @@ app.whenReady().then(async () => {
 	void care.start();
 
 	// Register all handlers and sidecar listeners before loading the renderer.
-	const fileEditReports = new FileEditReports();
+	// Paired pages' Files-edit reports live in the core's web router; main reads them for the control tools.
+	const fileEditReports = new FileEditReports({
+		target: windowId => webHost?.fileEditTarget(windowId) ?? null,
+		read: (target, tabId) => sidecarPool.fileEdits(target, tabId),
+	});
 	registerIpcHandlers({
 		openPageExternal,
 		admitNotification,
@@ -2583,7 +2587,7 @@ app.whenReady().then(async () => {
 	protocol.handle(MEDIA_SCHEME, request => mediaStreams.handle(request));
 	const createdWebHost = new WebHost({
 		ipc,
-		onPageConnectionEnded: connId => fileEditReports.forget(connId),
+		onFileEditReport: () => fileEditReports.reported(),
 		userData: app.getPath("userData"),
 		// The built renderer: `web.html` and its assets sit beside `index.html` (a dev run has none).
 		staticRoot: () => join(__dirname, "../renderer"),

@@ -89,15 +89,22 @@ function subscribedChannels(): string[] {
 }
 
 describe("IPC channel policy", () => {
-	it("gives every invoke and send channel exactly one owner, main or the shell", () => {
+	it("gives every invoke and send channel exactly one owner: main, the shell or the core's router", () => {
 		const { invoke, send } = registeredChannels();
 		const native = [...NATIVE.invoke, ...NATIVE.send];
+		// Channels the core's router answers for a page itself (`mode: "core"`): main registers no handler for them.
+		const coreServed = Object.entries(IPC_POLICY)
+			.filter(([, policy]) => policy.mode === "core")
+			.map(([channel, policy]) => ({ channel, dir: policy.dir }));
+		const core = coreServed.map(({ channel }) => channel);
 		expect(new Set(invoke).size).toBe(invoke.length);
 		expect(new Set(send).size).toBe(send.length);
 		expect(new Set(native).size).toBe(native.length);
 		expect([...invoke, ...send].filter(channel => native.includes(channel))).toEqual([]);
-		expect([...invoke, ...NATIVE.invoke].sort()).toEqual(policyChannels("invoke"));
-		expect([...send, ...NATIVE.send].sort()).toEqual(policyChannels("send"));
+		expect([...invoke, ...send, ...native].filter(channel => core.includes(channel))).toEqual([]);
+		const coreOf = (dir: string) => coreServed.filter(entry => entry.dir === dir).map(({ channel }) => channel);
+		expect([...invoke, ...NATIVE.invoke, ...coreOf("invoke")].sort()).toEqual(policyChannels("invoke"));
+		expect([...send, ...NATIVE.send, ...coreOf("send")].sort()).toEqual(policyChannels("send"));
 		// The remaining-work meter of docs/rust-node-removal.md: the page channels main still serves.
 		const remaining = [...invoke, ...send].sort();
 		console.info(
@@ -121,7 +128,7 @@ describe("IPC channel policy", () => {
 
 	it("says what the web side does for every channel it does not pass through", () => {
 		for (const [channel, policy] of Object.entries(IPC_POLICY) as [IpcChannel, (typeof IPC_POLICY)[IpcChannel]][]) {
-			if (policy.mode === "pass" || policy.mode === "boundary") continue;
+			if (policy.mode === "pass" || policy.mode === "boundary" || policy.mode === "core") continue;
 			expect(policy.web.trim(), channel).not.toBe("");
 		}
 	});

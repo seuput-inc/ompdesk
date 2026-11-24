@@ -141,17 +141,18 @@
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
 			"covers": [
-				"src/main/web/file-edit-reports.ts",
+				"native/ompdesk/crates/core/src/web/file_edits.rs",
 				"native/ompdesk/crates/core/src/agentctl/rules/tab_close.rs",
 				"src/renderer/web/FileEditReporter.tsx",
 				"native/ompdesk/crates/core/src/web/router.rs#finish",
 				"native/ompdesk/crates/core/src/web/router.rs#receive",
 				"native/ompdesk/crates/core/src/web/router.rs#dispatch",
-				"src/main/web/ws-router.ts#WsRouter.connections",
-				"src/main/web/ws-router.ts#WsRouter.call",
+				"native/ompdesk/crates/core/src/web/router.rs#file_edit_report",
+				"native/ompdesk/crates/core/src/web/router.rs#unless_dirty",
+				"native/ompdesk/crates/core/src/pool/windows.rs#release_entry",
 				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs#close_tab",
 				"src/main/tab-release.ts#closeWindowTab",
-				"src/main/agent-control/host.ts:1244-1251"
+				"src/main/agent-control/host.ts:1240-1247"
 			],
 			"syncCommit": "6f08aed051eab59de9d39ccda9a93551a15ecc04",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"

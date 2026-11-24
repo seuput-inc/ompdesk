@@ -129,15 +129,22 @@ export interface WsRouterDeps {
 	toModelImage: (image: InlineImage) => Promise<InlineImage>;
 	/** A device's connection count changed (the settings list shows who is connected). */
 	onConnectionsChanged?: (deviceId: string) => void;
-	/** One connection of the device ended (its socket closed, was retired or timed out); others of the device may remain. */
-	onConnectionEnded?: (deviceId: string, connId: string) => void;
+	/** The core's router recorded a page's Files-edit report (`web.fileEdits`; the store is the core's, C2). */
+	onFileEditReport?: (deviceId: string) => void;
 	/** The device's page got a hello it must resync from (`resumed: false`): it missed pushes. */
 	onResync?: (deviceId: string) => void;
 }
 
 /** What the core's router is started with (`web.start`'s `router`). */
 export interface RouterConfig {
-	channels: { batch: string; diskFull: string; streams: string[]; heavy: readonly string[]; prefsSet: string };
+	channels: {
+		batch: string;
+		diskFull: string;
+		streams: string[];
+		heavy: readonly string[];
+		prefsSet: string;
+		fileEditReport: string;
+	};
 	protocol: number;
 	features: WebFeatures;
 	policy: Record<string, { dir: string; permission?: string; mode: string }>;
@@ -166,7 +173,6 @@ interface ConnsEvent {
 	device: string;
 	conns: PageConnection[];
 	change: "attach" | "end" | "presence";
-	connId: string;
 }
 
 interface TabBatch {
@@ -287,6 +293,10 @@ function route(process: CoreProcess): void {
 		const event = data as ConnsEvent;
 		routers.get(event.host)?.connections(event);
 	});
+	process.on("web.fileEdits", data => {
+		const { host, device } = data as { host: number; device: string };
+		routers.get(host)?.fileEditReported(device);
+	});
 	process.on("web.resync", (data, _bin, generation) => {
 		const { host, conn, device } = data as { host: number; conn: number; device: string };
 		routers.get(host)?.resync(conn, device, generation);
@@ -338,6 +348,7 @@ export class WsRouter {
 				streams: [...STREAM_CHANNELS],
 				heavy: HEAVY_CHANNELS,
 				prefsSet: IPC_COMMANDS.PREFS_SET,
+				fileEditReport: IPC_COMMANDS.FILE_EDIT_REPORT,
 			},
 			protocol: WEB_PROTOCOL_VERSION,
 			features: this.#deps.features(),
@@ -460,7 +471,11 @@ export class WsRouter {
 		}
 		if (event.change === "presence") return;
 		this.#deps.onConnectionsChanged?.(event.device);
-		if (event.change === "end") this.#deps.onConnectionEnded?.(event.device, event.connId);
+	}
+
+	/** The core's router recorded a Files-edit report of one of the device's connections. */
+	fileEditReported(deviceId: string): void {
+		this.#deps.onFileEditReport?.(deviceId);
 	}
 
 	/** A page is about to be told to resync: the pool sends whole stream snapshots from now, then the hello goes. */
@@ -472,12 +487,9 @@ export class WsRouter {
 	/** The core ended, and every page socket with it. */
 	coreExited(): void {
 		this.#unsent.clear();
-		const ended = [...this.#connections];
+		const ended = [...this.#connections.keys()];
 		this.#connections.clear();
-		for (const [deviceId, connections] of ended) {
-			this.#deps.onConnectionsChanged?.(deviceId);
-			for (const { connId } of connections) this.#deps.onConnectionEnded?.(deviceId, connId);
-		}
+		for (const deviceId of ended) this.#deps.onConnectionsChanged?.(deviceId);
 	}
 
 	/**

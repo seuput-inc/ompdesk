@@ -19,7 +19,7 @@
 	"mutations": [
 		{
 			"name": "split-dispatch",
-			"why": "An `await` in front of the FILE_EDIT_REPORT handler (ws-router #dispatch): a frame read before its connection ended is handled after the drop, and that dead connection's report counts until the next launch.",
+			"why": "An `await` in front of the router's FILE_EDIT_REPORT handling (`Host::dispatch`): a frame read before its connection ended is recorded after the drop, and that dead connection's report counts until the next launch.",
 			"file": "WebCloseReports.tla",
 			"search": "SplitDispatch == FALSE",
 			"replace": "SplitDispatch == TRUE",
@@ -82,10 +82,19 @@
 		},
 		{
 			"name": "no-recheck-before-release",
-			"why": "closeWindowTab drops its stillClosable re-check after refreshExitPolicy (the decide-to-release window as it was before): a dirty report that lands during the await does not stop the release.",
+			"why": "The release drops its last check of the store (the decide-to-release window as it was before stillClosable): a dirty report that lands during the release's awaits does not stop it.",
 			"file": "WebCloseReports.tla",
-			"search": "    /\\ IF CloseStep(t) = \"release\"\n          THEN /\\ released' = released \\cup {t}",
-			"replace": "    /\\ IF TRUE\n          THEN /\\ released' = released \\cup {t}",
+			"search": "    /\\ IF CloseStep(t) = \"release\"\n          THEN IF SplitRelease",
+			"replace": "    /\\ IF TRUE\n          THEN IF SplitRelease",
+			"breaks": "NoLateDirtyRelease",
+			"config": "MC_p4.cfg"
+		},
+		{
+			"name": "split-release",
+			"why": "The release's last check and the pool's removal in separate steps (main reads the store, then asks the pool to release, as two hub calls): a report the router records between them is lost to the close.",
+			"file": "WebCloseReports.tla",
+			"search": "SplitRelease == FALSE",
+			"replace": "SplitRelease == TRUE",
 			"breaks": "NoLateDirtyRelease",
 			"config": "MC_p4.cfg"
 		}

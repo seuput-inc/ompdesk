@@ -28,6 +28,7 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 use super::blobs::BlobStore;
+use super::file_edits::{self, FileEditReports, FileEdits};
 use super::deps::{BoxFuture, Connection, Outbox, Outgoing, Router};
 use crate::server::{Call, Events, Fault, PushCall, Registry, Reply};
 
@@ -485,6 +486,8 @@ struct Channels {
     /// `PREFS_SET`, which may not write `mobileWeb.*`.
     prefs_set: String,
     disk_full: String,
+    /// `FILE_EDIT_REPORT`, which the router answers itself (`file_edits.rs`).
+    file_edit_report: String,
 }
 
 /// What main hands the router at the start: the page protocol it speaks, the host's features,
@@ -599,6 +602,8 @@ struct State {
     pushes: HashMap<String, u64>,
     heavy: HashMap<String, usize>,
     calls: HashMap<u64, Pending>,
+    /// Each live connection's latest Files-edit report (C2): under the lock that ends connections.
+    file_edits: FileEditReports,
 }
 
 impl State {
@@ -635,6 +640,34 @@ fn hosts() -> MutexGuard<'static, HashMap<u64, Arc<Host>>> {
 
 pub(super) fn host_of(host: u64) -> Option<Arc<Host>> {
     hosts().get(&host).cloned()
+}
+
+/// What `device`'s live connections on router `host` report of `tab`; `unreported` while that router is not open.
+pub(crate) fn file_edits(host: u64, device: &str, tab: &str) -> FileEdits {
+    host_of(host).map_or(FileEdits::Unreported, |host| {
+        host.state().file_edits.edits(device, tab)
+    })
+}
+
+/// Runs `release` unless a live connection of `device` names `tab` dirty, holding the router's lock throughout, so
+/// no report lands between the check and what `release` does (`NoLateDirtyRelease`). `None` when it was dirty.
+/// Lock order: called from the pool on the hub thread; the router's threads never reach the pool.
+pub(crate) fn unless_dirty<T>(
+    host: u64,
+    device: &str,
+    tab: &str,
+    release: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    let Some(host) = host_of(host) else {
+        return release();
+    };
+    let state = host.state();
+    if state.file_edits.edits(device, tab) == FileEdits::Dirty {
+        return None;
+    }
+    let released = release();
+    drop(state);
+    released
 }
 
 fn now_ms() -> i64 {
@@ -891,6 +924,8 @@ impl Host {
             clean,
             at: now,
         });
+        // Under the same lock as `receive`: a report read before this end lands before it, none after.
+        state.file_edits.forget(&conn_id);
         self.tell_conns(state, &device, "end", &conn_id);
         true
     }
@@ -1252,6 +1287,9 @@ impl Host {
                 let message = "Mobile web settings can only be changed on the computer";
                 return self.refuse(state, conn, id, message);
             }
+            if ch == self.config.channels.file_edit_report {
+                return self.file_edit_report(state, conn, id, &device, &conn_id, &args);
+            }
             self.config.channels.heavy.iter().any(|heavy| heavy == ch)
         };
         if heavy {
@@ -1292,6 +1330,31 @@ impl Host {
             }),
             args.get().as_bytes().to_vec(),
         );
+    }
+
+    /// `FILE_EDIT_REPORT`, answered here: recorded in the frame's own run under the state lock, so it never lands
+    /// after its connection's `finish` (a picture-carrying shape is not a report: `parse_report` takes only
+    /// `{dirtyTabId}`). Main hears `web.fileEdits` to sweep the openers a page held back. An invoke's answer leaves
+    /// after what was pushed before it.
+    fn file_edit_report(
+        &self,
+        state: &mut State,
+        conn: u64,
+        id: Option<u64>,
+        device: &str,
+        conn_id: &str,
+        args: &RawValue,
+    ) {
+        if let Some(dirty) = file_edits::parse_report(args) {
+            state.file_edits.report(device, conn_id, dirty);
+            self.tell(
+                "web.fileEdits",
+                json!({ "host": self.host, "device": device }),
+            );
+        }
+        if let Some(id) = id {
+            self.reply(state, conn, id, Answer::Value(None));
+        }
     }
 
     /// Main ran a call: its heavy slot is free, and an invoke's answer leaves after everything pushed before it.
@@ -1862,6 +1925,12 @@ mod test_hooks {
                 Value::Null
             }
             "count" => json!(host.state().devices.get(&params.device).map_or(0, Vec::len)),
+            "edits" => json!(
+                host.state()
+                    .file_edits
+                    .edits(&params.device, &params.text)
+                    .as_str()
+            ),
             _ => return Err(Fault::new("invalid_params", "unknown router test op")),
         };
         host.drain_test();
