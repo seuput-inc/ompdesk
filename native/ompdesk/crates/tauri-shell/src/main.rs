@@ -1854,7 +1854,11 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     };
     let mut facts = facts::collect(&launch, &mut log::log);
     #[cfg(target_os = "macos")]
-    let downloads = PathBuf::from(facts["paths"]["downloads"].as_str().ok_or("no Downloads path")?);
+    let downloads = PathBuf::from(
+        facts["paths"]["downloads"]
+            .as_str()
+            .ok_or("no Downloads path")?,
+    );
     if let Some(message) = migration {
         facts["legacyUserDataMigration"] = Value::String(message);
     }
