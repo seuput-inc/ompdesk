@@ -600,6 +600,7 @@ where
             return;
         }
     }
+    eprintln!("diag: hub token proved");
     let (lines, mut outgoing) = mpsc::unbounded_channel::<String>();
     let (registered, conn) = oneshot::channel();
     post(move || {
@@ -618,9 +619,14 @@ where
         let _ = registered.send(conn);
     });
     let Ok(conn) = conn.await else { return };
+    eprintln!("diag: hub conn {conn} registered");
     let writing = tokio::spawn(async move {
         while let Some(mut line) = outgoing.recv().await {
             line.push('\n');
+            eprintln!(
+                "diag: hub writes {}",
+                line.chars().take(80).collect::<String>().trim_end()
+            );
             if writer.write_all(line.as_bytes()).await.is_err() {
                 return;
             }
@@ -633,6 +639,10 @@ where
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
+        eprintln!(
+            "diag: hub reads {}",
+            line.chars().take(120).collect::<String>().trim_end()
+        );
         match serde_json::from_str::<Request>(line.trim_end()) {
             Ok(request) => post(move || handle(conn, request)),
             Err(error) => eprintln!("ompdesk-core: the hub skipped a line: {error}"),

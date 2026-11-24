@@ -58,6 +58,7 @@ pub fn from_env(address_var: &str, token_var: &str, what: &'static str, serve: S
     let (Ok(address), Ok(token)) = (std::env::var(address_var), std::env::var(token_var)) else {
         return;
     };
+    eprintln!("diag: {what} listens at {address}");
     tokio::spawn(async move {
         if let Err(error) = accept(&address, token, serve).await {
             eprintln!("ompdesk-core: {what} does not listen at {address}: {error}");
@@ -87,6 +88,7 @@ async fn accept(address: &str, token: String, serve: Serve) -> std::io::Result<(
         .create(address)?;
     loop {
         server.connect().await?;
+        eprintln!("diag: a connection at {address}");
         let connected = server;
         server = ServerOptions::new()
             .reject_remote_clients(true)

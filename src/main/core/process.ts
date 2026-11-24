@@ -16,7 +16,7 @@
  */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -447,7 +447,17 @@ export class CoreProcess {
 		child.stdout.on("data", (chunk: Buffer) => reader.push(chunk));
 		// The last lines it wrote, for the report of its end.
 		const stderr: string[] = [];
+		const diag = (line: string) => {
+			try {
+				appendFileSync(
+					join(process.env.APPDATA ?? tmpdir(), "ompdesk", "logs", "core-diag.log"),
+					`${new Date().toISOString()} [g${generation}] ${line}\n`,
+				);
+			} catch {}
+		};
+		diag(`spawned pid ${child.pid} hub ${this.#hub?.address}`);
 		createInterface({ input: child.stderr }).on("line", line => {
+			diag(line);
 			stderr.push(line);
 			if (stderr.length > STDERR_TAIL_LINES) stderr.shift();
 			this.#log(line);

@@ -44,6 +44,10 @@ function Fail([string] $Message) {
 	if (Test-Path -LiteralPath $runtime) {
 		Get-Content -LiteralPath $runtime -Tail 15 | ForEach-Object { Write-Host "     runtime: $($_.Substring(0, [Math]::Min(700, $_.Length)))" }
 	}
+	$diag = Join-Path $env:APPDATA 'ompdesk\logs\core-diag.log'
+	if (Test-Path -LiteralPath $diag) {
+		Get-Content -LiteralPath $diag -Tail 60 | ForEach-Object { Write-Host "     diag: $($_.Substring(0, [Math]::Min(300, $_.Length)))" }
+	}
 	throw "FAIL ($Mode): $Message"
 }
 function Ok([string] $Message) { Write-Host "ok   $Message" }
