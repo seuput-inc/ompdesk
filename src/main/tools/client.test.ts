@@ -33,9 +33,13 @@ const asks = {
 	workspaceDirs: () => [],
 };
 
-/** Lets the core's items reach main (the hub's worker pings on a turn of the event loop) until `done` holds. */
+/**
+ * Lets the core's items reach main (the hub's worker pings on a turn of the event loop) until `done` holds. Bound by
+ * wall time, not turns: setup's first pass is a real detection of this machine, which takes seconds on a CI runner.
+ */
 async function until(done: () => boolean): Promise<void> {
-	for (let turn = 0; turn < 2_000 && !done(); turn += 1) await new Promise<void>(next => setImmediate(next));
+	const deadline = Date.now() + 60_000;
+	while (!done() && Date.now() < deadline) await new Promise<void>(next => setImmediate(next));
 	expect(done()).toBe(true);
 }
 
@@ -92,5 +96,5 @@ describe("ToolsClient against the real core", () => {
 			timers.mockRestore();
 			vi.useRealTimers();
 		}
-	});
+	}, 120_000);
 });
