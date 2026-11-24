@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { gzipSync } from "node:zlib";
-import { OMP_PACKAGE } from "./setup/plans";
+import { OMP_PACKAGE } from "./omp-runtime";
 
 export interface OmpRelease {
 	version: string;

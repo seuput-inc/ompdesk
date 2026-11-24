@@ -61,10 +61,13 @@ export const MIN_OMP_VERSION = "18.18.9";
 /**
  * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`, moved by the omp bump). OMPdesk
  * installs this one where it installs omp itself (machine setup), and nothing it installs unasked goes above its
- * major (omp-updater.ts): 19 Nov 2026, omp 19.0.0 came out and reached two computers within hours, on an OMPdesk
- * that had only ever run against 18.
+ * major (crates/core/src/tools/omp): 19 Nov 2026, omp 19.0.0 came out and reached two computers within hours, on an
+ * OMPdesk that had only ever run against 18.
  */
 export const TESTED_OMP_VERSION: string = ompTested.version;
+
+/** omp's npm package. */
+export const OMP_PACKAGE = "@oh-my-pi/pi-coding-agent";
 
 const DEFAULT_RUN_TIMEOUT_MS = 60_000;
 const INSTALL_HINT = "OMPdesk's machine setup installs the omp package on its own.";
@@ -228,7 +231,7 @@ export function ompPackageRoot(bin: string): string | null {
 		try {
 			const manifest: unknown = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
 			if (typeof manifest === "object" && manifest !== null && "name" in manifest) {
-				if (manifest.name === "@oh-my-pi/pi-coding-agent") return dir;
+				if (manifest.name === OMP_PACKAGE) return dir;
 			}
 		} catch {
 			// Not this layout.

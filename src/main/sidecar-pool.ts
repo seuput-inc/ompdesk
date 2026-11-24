@@ -86,7 +86,7 @@ import { canonicalCwd } from "./canonical-cwd";
 import { type Hub, type HubItem, hub } from "./core/hub";
 import { CoreError, isCoreShutdown } from "./core/process";
 import { deletedSessions } from "./deleted-sessions";
-import { type ExtensionApplyPlan, extensionApplyDecision, mergeApplyPlans } from "./extension-reload";
+import { type ExtensionApplyPlan, extensionApplyDecision } from "./extension-reload";
 import { createMessageUpdateSlimmer } from "./message-update-slim";
 import { ModelWaitTracker } from "./model-wait-count";
 import { noteOmpExit } from "./omp-exits";
@@ -900,8 +900,6 @@ export class SidecarPool {
 				if (item.kind !== "omp") return extensionApplyDecision(facts);
 				return ompRestartDecision({ ...facts, resuming: this.continuationOwed?.(tab) === true });
 			}
-			case "mergePlans":
-				return mergeApplyPlans(item.a as ExtensionApplyPlan, item.b as ExtensionApplyPlan);
 			case "deletedAdd":
 				deletedSessions().add(item.sessionPath as string, item.device as string);
 				return null;

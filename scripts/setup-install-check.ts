@@ -1,8 +1,8 @@
 /**
- * Real install check for this machine's automatic setup (src/main/setup/):
+ * Real install check for this machine's automatic setup (the core's `tools` instance):
  * runs the actual Bun installer, (on Windows) Git for Windows' PortableGit
  * when no Git for Windows is found, and `bun install -g @oh-my-pi/pi-coding-agent`
- * through the app's own runner and supervisor, inside a throwaway
+ * through the core's setup and supervisor, inside a throwaway
  * HOME/USERPROFILE and BUN_INSTALL. It then checks that omp is detected at or
  * above MIN_OMP_VERSION, and on Windows that the registry PATH refresh picked
  * up Bun and that stock omp's shell resolves to Git Bash, not cmd.exe. Only
@@ -19,7 +19,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MIN_OMP_VERSION, resolveOmp } from "../src/main/omp-runtime";
+import { stopCore } from "../src/main/core/process";
+import { MIN_OMP_VERSION, refreshSystemOmp, resolveOmp, systemOmp, TESTED_OMP_VERSION } from "../src/main/omp-runtime";
 import {
 	applyManagedToolEnv,
 	bunInstallDir,
@@ -103,41 +104,62 @@ async function check(root: string): Promise<void> {
 	const states: SetupState[] = [];
 	const printed = new Map<string, number>();
 	electronOutside(join(root, "userData"), "0.0.0-install-check");
-	// Dynamic: service.ts links runtime-log's `electron` import, which only resolves once electronOutside ran.
-	const { SetupService } = await import("../src/main/setup/service");
-	const service = new SetupService({
-		platform,
-		arch: process.arch,
-		systemRoot: process.env.SystemRoot || "C:\\Windows",
-		toolsDir,
-		bunInstall: bunInstallDir(process.env, home),
-		statePath: join(root, "setup-state.json"),
-		// Installers themselves may need the real Program Files (PowerShell modules).
-		spawnEnv: async () => ({ ...process.env, ...realProgramFiles }),
-		// The registry's machine PATH (merged after each install) lists the runner's Git for Windows again.
-		refreshPath: async (target, tools) => {
-			await refreshPath(target, tools);
-			const systemGit = Object.values(realProgramFiles)
-				.filter(Boolean)
-				.map(dir => join(dir, "Git").toLowerCase());
-			process.env.PATH = (process.env.PATH ?? "")
-				.split(";")
-				.filter(entry => !systemGit.some(dir => entry.toLowerCase().startsWith(dir)))
-				.join(";");
+	// Dynamic: the client links runtime-log's `electron` import, which only resolves once electronOutside ran.
+	const { ToolsClient } = await import("../src/main/tools/client");
+	const client = new ToolsClient({
+		opts: {
+			platform,
+			arch: process.arch,
+			toolsDir,
+			userData: join(root, "userData"),
+			appVersion: "0.0.0-install-check",
+			testedOmp: TESTED_OMP_VERSION,
+			automatic: false,
+			scheduled: { omp: false, cli: false, ext: false },
+			systemRoot: process.env.SystemRoot || "C:\\Windows",
+			bunInstall: bunInstallDir(process.env, home),
+			cwd: process.cwd(),
 		},
-		onState: state => {
-			states.push(state);
-			for (const item of state.items) {
+		asks: {
+			// Installers themselves may need the real Program Files (PowerShell modules).
+			env: () => ({ ...process.env, ...realProgramFiles }),
+			// The registry's machine PATH (merged after each install) lists the runner's Git for Windows again.
+			refreshPath: async () => {
+				await refreshPath(platform, toolsDir);
+				const systemGit = Object.values(realProgramFiles)
+					.filter(Boolean)
+					.map(dir => join(dir, "Git").toLowerCase());
+				process.env.PATH = (process.env.PATH ?? "")
+					.split(";")
+					.filter(entry => !systemGit.some(dir => entry.toLowerCase().startsWith(dir)))
+					.join(";");
+			},
+			ompResolution: fresh => (fresh ? refreshSystemOmp() : systemOmp()),
+			ompReady: () => console.log("\n→ omp ready"),
+			firstTab: async () => {},
+			releaseHelpers: async () => {},
+			resume: async () => {},
+			applyExtensionUpdate: () => {},
+			notify: () => {},
+			stock: async () => null,
+			workspaceDirs: () => [],
+		},
+		onState: (part, state) => {
+			if (part !== "setup") return;
+			const setup = state as SetupState;
+			states.push(setup);
+			for (const item of setup.items) {
 				const seen = printed.get(item.id) ?? 0;
 				if (item.output.length > seen) process.stdout.write(item.output.slice(seen));
 				printed.set(item.id, item.output.length);
 			}
 		},
-		onOmpReady: () => console.log("\n→ omp ready"),
 	});
 	const started = performance.now();
-	await service.retry("omp");
-	const state = service.state();
+	await client.setupRetry("omp");
+	const state = client.state().setup;
+	client.close();
+	await stopCore();
 	console.log(`\nSetup finished in ${((performance.now() - started) / 1000).toFixed(1)} s`);
 	for (const item of state.items.filter(entry => entry.required)) {
 		const failure = item.failure ? ` ${JSON.stringify(item.failure)}` : "";

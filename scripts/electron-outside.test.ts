@@ -22,7 +22,7 @@ describe("main's setup code in a Bun script", () => {
 		const run = bun(`
 			const { electronOutside } = await import("./scripts/electron-outside.ts");
 			electronOutside(${JSON.stringify(userData)}, "9.9.9");
-			await import("./src/main/setup/service.ts");
+			await import("./src/main/tools/client.ts");
 			const { writeRuntimeLog } = await import("./src/main/runtime-log.ts");
 			writeRuntimeLog({ source: "app-update", message: "from a script" });
 		`);
