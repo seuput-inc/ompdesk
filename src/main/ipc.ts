@@ -207,6 +207,7 @@ import type { SidebarProjects } from "./sidebar-projects";
 import { deviceLanguage } from "./sidecar-factory";
 import type { SidecarPool } from "./sidecar-pool";
 import type { SidecarLike } from "./sidecar-types";
+import { tookStep } from "./slow-steps";
 import { registerSshToolsIpc } from "./ssh/ipc";
 import { markStartupFromRenderer } from "./startup-timing";
 import { stockHelperRequest } from "./stock-helper";
@@ -2091,9 +2092,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 
 	/** `PREFS_CHANGED` to every window and paired page but the one that wrote the key, so the others' settings follow it. */
-	const prefChanged = (writer: ClientWindow | null, key: string): void => {
+	const prefChanged = (writer: ClientWindow | null, key: string, controlUpdated?: () => void): void => {
 		// The control tools' service reads the switches, the sidebar's pins and the closed-children list from main.
 		agentControl.control.changed();
+		controlUpdated?.();
 		const writerId = writer?.webContents.id;
 		for (const win of [...windowManager.getAllWindows(), ...(deps.webPages?.() ?? [])]) {
 			if (win.webContents.id !== writerId && !win.isDestroyed()) {
@@ -2211,10 +2213,22 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	ipc.handle(IPC_COMMANDS.PREFS_UPDATE_SIDEBAR, (caller, payload: unknown) => {
 		const from = caller.win && isWebWindow(caller.win.webContents.id) ? "web" : "window";
-		const change = updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog);
+		const start = performance.now();
+		let previous = start;
+		const durations: Record<string, number> = {};
+		const mark = (stage: string) => {
+			const now = performance.now();
+			durations[stage] = Math.round(now - previous);
+			previous = now;
+		};
+		const change = updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog, mark);
+		mark("log");
 		if (change && change.op !== "touch-workspace" && change.op !== "set-rail-pin" && change.op !== "set-group-alias")
 			deps.sidebarProjects?.layoutChanged();
-		prefChanged(caller.win, SIDEBAR_PREFS_KEY);
+		mark("layout");
+		prefChanged(caller.win, SIDEBAR_PREFS_KEY, () => mark("control"));
+		mark("notify");
+		tookStep("ipc", "prefs:update-sidebar/stages", previous - start, durations);
 	});
 
 	// Launch profiles live with the machine that spawns omp: a tab's paired

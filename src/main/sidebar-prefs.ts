@@ -77,13 +77,18 @@ export function updateSidebarPrefs(
 	payload: unknown,
 	from: "window" | "web" | "host",
 	log: (report: RuntimeLogReport) => void,
+	mark?: (stage: "validate" | "read" | "patch" | "write") => void,
 ): SidebarChange | undefined {
 	const parsed = SidebarChangeSchema.safeParse(payload);
 	if (!parsed.success) throw codedError("invalid_preference_key", "Invalid sidebar change");
+	mark?.("validate");
 	const current = readSidebarPrefs(storage.get(SIDEBAR_PREFS_KEY));
+	mark?.("read");
 	const patch = sidebarPatch(current, parsed.data);
+	mark?.("patch");
 	if (Object.keys(patch).length === 0) return;
 	storage.set(SIDEBAR_PREFS_KEY, { ...current, ...patch });
+	mark?.("write");
 	const line = logLine(parsed.data, from);
 	if (line) log(line);
 	return parsed.data;
