@@ -229,24 +229,34 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 					restartAttempt.resolve(message.afterShutdown);
 				if ("lateCode" in message && typeof message.lateCode === "string") lateAnswer.resolve(message.lateCode);
 			});
-			const beforeExit = <T>(promise: Promise<T>): Promise<T> =>
-				Promise.race([
+			// Which wait a stalled run is in, named before the test's own timeout ends it without saying.
+			let step = "the shell's hello";
+			const stalled = Promise.withResolvers<never>();
+			const stallTimer = setTimeout(
+				() => stalled.reject(new Error(`stalled waiting for ${step}; main's stderr:\n${stderr}`)),
+				27_000,
+			);
+			const beforeExit = <T>(promise: Promise<T>, waitingFor?: string): Promise<T> => {
+				if (waitingFor) step = waitingFor;
+				return Promise.race([
 					promise,
 					failed.promise,
+					stalled.promise,
 					exited.then(code => {
 						throw new Error(`main exited ${String(code)} before the test finished: ${stderr}`);
 					}),
 				]);
+			};
 			shell = await beforeExit(shellReady.promise);
-			firstCore = await beforeExit(coreReady.promise);
-			const firstGit = await beforeExit(firstGitReady.promise);
+			firstCore = await beforeExit(coreReady.promise, "the first core");
+			const firstGit = await beforeExit(firstGitReady.promise, "the first git");
 			if (!Number.isSafeInteger(firstCore) || firstCore <= 0) throw new Error("invalid first core pid");
 			let secondGit = firstGit;
 			if (process.platform !== "win32") {
 				process.kill(firstCore, "SIGSTOP");
 				node.send?.("replace", () => {});
-				secondCore = await beforeExit(nextCoreReady.promise);
-				secondGit = await beforeExit(secondGitReady.promise);
+				secondCore = await beforeExit(nextCoreReady.promise, "the next core");
+				secondGit = await beforeExit(secondGitReady.promise, "the next core's git");
 				expect(secondCore).not.toBe(firstCore);
 			}
 			expect(() => process.kill(firstGit.pid, 0)).not.toThrow();
@@ -257,22 +267,23 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 			if (shutdown !== "socket") {
 				if (!node.stdin) throw new Error("main has no stdin pipe");
 				node.stdin.end();
-				expect(await beforeExit(stdinEnded.promise)).toBeNull();
+				expect(await beforeExit(stdinEnded.promise, "main's stdin end")).toBeNull();
 			}
-			expect(await beforeExit(exitRequested.promise)).toBe(1);
+			expect(await beforeExit(exitRequested.promise, "main's exit")).toBe(1);
 			// The shell's own end, which ends every core it owns: the running one at once, the stopped one 5 s later.
 			owner?.stdin?.end();
 			// A git's connection closes as it dies.
-			await Promise.all([firstGit.closed, secondGit.closed]);
+			await beforeExit(Promise.all([firstGit.closed, secondGit.closed]), "the gits to end");
 			const exitedAt = Date.now();
 			expect(await ompRuns(firstGit.pid, exitedAt)).toBe(false);
 			expect(await ompRuns(secondGit.pid, exitedAt)).toBe(false);
 
 			node.send?.("request", () => {});
-			const restarted = await beforeExit(restartAttempt.promise);
+			const restarted = await beforeExit(restartAttempt.promise, "a request after the shutdown");
 			if (restarted !== null) extraCore = restarted;
 			expect(restarted).toBeNull();
-			expect(await beforeExit(lateAnswer.promise)).toBe("core_unavailable");
+			expect(await beforeExit(lateAnswer.promise, "its answer")).toBe("core_unavailable");
+			clearTimeout(stallTimer);
 			node.send?.("finish", () => {});
 			expect(await exited).toBe(1);
 			await streamsClosed.promise;
