@@ -11,8 +11,8 @@
 
 use std::collections::HashMap;
 
-use serde_json::value::RawValue;
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 /// What a device's live reports say about one of its tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +113,8 @@ mod tests {
 
     #[test]
     fn refuses_any_other_shape() {
-        let picture = json!({"type": "image", "mimeType": "image/png", "upload": "/up/dev1/a/image.png"});
+        let picture =
+            json!({"type": "image", "mimeType": "image/png", "upload": "/up/dev1/a/image.png"});
         for args in [
             json!([{"dirtyTabId": "t1", "x": 1}]),
             json!([{"dirtyTabId": "t1", "extra": picture}]),
@@ -182,7 +183,12 @@ mod tests {
         let conn_of = |event: &Event| match *event {
             Event::Report(conn, _) | Event::Drop(conn) => conn,
         };
-        fn expected(history: &[Event], conns: &[(&str, &str)], device: &str, tab: &str) -> FileEdits {
+        fn expected(
+            history: &[Event],
+            conns: &[(&str, &str)],
+            device: &str,
+            tab: &str,
+        ) -> FileEdits {
             let mut latest = Vec::new();
             for (index, (_, of)) in conns.iter().enumerate() {
                 if *of != device

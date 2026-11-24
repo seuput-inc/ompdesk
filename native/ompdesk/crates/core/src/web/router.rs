@@ -28,8 +28,8 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 use super::blobs::BlobStore;
-use super::file_edits::{self, FileEditReports, FileEdits};
 use super::deps::{BoxFuture, Connection, Outbox, Outgoing, Router};
+use super::file_edits::{self, FileEditReports, FileEdits};
 use crate::server::{Call, Events, Fault, PushCall, Registry, Reply};
 
 pub const EVENT_BATCH_MS: u64 = 75;
