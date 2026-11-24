@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::Service;
 use crate::aimemory::client::Server;
@@ -26,7 +25,13 @@ pub(super) struct Schedule {
     service: Weak<Service>,
     active: Option<Scope>,
     repaired: bool,
-    recall_slot: Arc<Mutex<()>>,
+    recall_state: RecallState,
+}
+
+enum RecallState {
+    Idle,
+    Running,
+    RunAgain,
 }
 
 impl Schedule {
@@ -39,7 +44,7 @@ impl Schedule {
                     biased;
                     _ = closed.wait_for(|closed| *closed) => (),
                     () = service.every(10 * 60_000, |service| {
-                        if let Some(schedule) = &service.inner().quality {
+                        if let Some(schedule) = &mut service.inner().quality {
                             schedule.recall(service);
                         }
                     }) => (),
@@ -51,22 +56,20 @@ impl Schedule {
             service: Arc::downgrade(service),
             active: None,
             repaired: false,
-            recall_slot: Arc::default(),
+            recall_state: RecallState::Idle,
         }
     }
 
-    fn recall(&self, service: &Arc<Service>) {
+    fn recall(&mut self, service: &Arc<Service>) {
         let (Some(file), Some(epoch)) = (&self.clients.recall_terms_file, &self.active) else {
             return;
         };
-        let Ok(turn) = Arc::clone(&self.recall_slot).try_lock_owned() else {
+        if !matches!(self.recall_state, RecallState::Idle) {
+            self.recall_state = RecallState::RunAgain;
             return;
-        };
-        Work::Recall {
-            file: file.clone(),
-            _turn: turn,
         }
-        .start(
+        self.recall_state = RecallState::Running;
+        Work::Recall { file: file.clone() }.start(
             service,
             epoch,
             &Asker::new(&self.clients.upkeep, service.events.clone()),
@@ -124,50 +127,58 @@ enum Work {
     Repair,
     Learn,
     Care,
-    Recall {
-        file: PathBuf,
-        _turn: OwnedMutexGuard<()>,
-    },
+    Recall { file: PathBuf },
 }
 
 impl Work {
-    fn start(mut self, service: &Arc<Service>, epoch: &Scope, host: &Asker) {
+    fn start(self, service: &Arc<Service>, epoch: &Scope, host: &Asker) {
         let (service, epoch, host) = (Arc::clone(service), epoch.clone(), host.clone());
         tokio::spawn(async move {
-            let mut closed = service.closed.subscribe();
-            let timeout = match self {
-                Self::Repair => Duration::from_secs(10 * 60),
-                Self::Learn => Duration::from_secs(5 * 60),
-                Self::Care => Duration::from_secs(30 * 60),
-                Self::Recall { .. } => Duration::from_millis(i32::MAX as u64),
-            };
-            let scope = Scope::detached();
-            let bounded = tokio::time::timeout(timeout, self.run(&service, &epoch, &host, &scope));
-            let result = tokio::select! {
-                biased;
-                _ = closed.wait_for(|closed| *closed) => {
-                    scope.cancel();
-                    return;
+            let recall = matches!(self, Self::Recall { .. });
+            self.execute(&service, &epoch, &host).await;
+            if recall && let Some(schedule) = &mut service.inner().quality {
+                let previous = std::mem::replace(&mut schedule.recall_state, RecallState::Idle);
+                if matches!(previous, RecallState::RunAgain) {
+                    schedule.recall(&service);
                 }
-                result = bounded => result,
-            };
-            let detail = match result {
-                Ok(Ok(())) => return,
-                Ok(Err(error)) => error.message,
-                Err(_) => {
-                    scope.cancel();
-                    "Memory work timed out".to_owned()
-                }
-            };
-            match self {
-                Self::Recall { .. } => service.log("recall-terms-failed", json!({ "error": detail })),
-                Self::Care => host.log("care-failed", json!({ "unit": "tick", "detail": detail })),
-                Self::Repair | Self::Learn => host.log(
-                    "failed",
-                    json!({ "step": if matches!(self, Self::Repair) { "retitle" } else { "learn" }, "detail": detail }),
-                ),
             }
         });
+    }
+
+    async fn execute(mut self, service: &Service, epoch: &Scope, host: &Asker) {
+        let mut closed = service.closed.subscribe();
+        let timeout = match self {
+            Self::Repair => Duration::from_secs(10 * 60),
+            Self::Learn => Duration::from_secs(5 * 60),
+            Self::Care => Duration::from_secs(30 * 60),
+            Self::Recall { .. } => Duration::from_millis(i32::MAX as u64),
+        };
+        let scope = Scope::detached();
+        let bounded = tokio::time::timeout(timeout, self.run(service, epoch, host, &scope));
+        let result = tokio::select! {
+            biased;
+            _ = closed.wait_for(|closed| *closed) => {
+                scope.cancel();
+                return;
+            }
+            result = bounded => result,
+        };
+        let detail = match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error.message,
+            Err(_) => {
+                scope.cancel();
+                "Memory work timed out".to_owned()
+            }
+        };
+        match self {
+            Self::Recall { .. } => service.log("recall-terms-failed", json!({ "error": detail })),
+            Self::Care => host.log("care-failed", json!({ "unit": "tick", "detail": detail })),
+            Self::Repair | Self::Learn => host.log(
+                "failed",
+                json!({ "step": if matches!(self, Self::Repair) { "retitle" } else { "learn" }, "detail": detail }),
+            ),
+        }
     }
 
     async fn run(
@@ -177,7 +188,7 @@ impl Work {
         host: &Asker,
         scope: &Scope,
     ) -> Result<(), Fault> {
-        // Recall was admitted when the ready trigger took its slot. A bounce joins that pass.
+        // A pass admitted while ready may finish across a readiness change.
         let recall = matches!(self, Self::Recall { .. });
         let settings = tokio::select! {
             biased;
