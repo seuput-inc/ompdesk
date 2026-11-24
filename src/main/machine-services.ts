@@ -43,8 +43,7 @@ import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState }
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../shared/sidebar-projects";
 import { BENCHMARK_TIMEOUT_MS, BenchmarkRunner } from "./benchmark-runner";
 import { ModelSetupRunner } from "./model-setup-runner";
-import { deleteModelsProvider, listModelsProviders, setModelOverride, upsertModelsProvider } from "./models-config";
-import { modelsConfigMetadata } from "./models-config-stock";
+import { deleteModelsProvider, modelsCatalog, setModelOverride, upsertModelsProvider } from "./models-config";
 import type { OmpResolution } from "./omp-runtime";
 import {
 	AccountRotationStateSchema,
@@ -241,9 +240,8 @@ export class LocalMachine implements MachineServices {
 		this.#deps = deps;
 	}
 
-	async listProviders(): Promise<CustomProvidersConfig> {
-		const [providers, options] = await Promise.all([listModelsProviders(), modelsConfigMetadata()]);
-		return { providers, options };
+	listProviders(): Promise<CustomProvidersConfig> {
+		return modelsCatalog();
 	}
 
 	async upsertProvider(input: CustomProviderInput): Promise<void> {

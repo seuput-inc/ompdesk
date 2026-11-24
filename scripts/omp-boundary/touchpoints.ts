@@ -2173,19 +2173,23 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "public",
 		summary:
 			"Direct edits of the global config.yml / config.yaml, keeping dotted keys as nested YAML; the power-settings migration resets those keys.",
-		files: ["src/main/agent-power-migration.ts", "resources/gui-bridge/settings.ts"],
+		files: ["native/ompdesk/crates/core/src/prefs/powers.rs", "resources/gui-bridge/settings.ts"],
 		stock: ["config.yml", "config.yaml", "omp://settings.md"],
-		tests: ["src/main/agent-power-migration.test.ts"],
+		tests: ["src/main/agent-power-migration.test.ts", "native/ompdesk/crates/core/src/prefs/powers.rs"],
 	},
 	{
 		id: "F03",
 		area: "files",
 		contract: "public",
 		summary:
-			"Custom models: models.yml (models.yaml as fallback) with provider, model, API and credential fields; main parses, merges and writes, the stock schema validates.",
-		files: ["src/main/models-config.ts", "src/main/models-config-stock.ts"],
+			"Custom models: models.yml (models.yaml as fallback) with provider, model, API and credential fields; the core edits the YAML in place and writes it, stock's Bun.YAML parse and ModelsConfigSchema read and normalize every text it reads or writes.",
+		files: [
+			"native/ompdesk/crates/core/src/models/file/mod.rs",
+			"src/main/models-config.ts",
+			"resources/gui-bridge/stock-helper/models.ts",
+		],
 		stock: ["models.yml", "models.yaml"],
-		tests: ["src/main/models-config.test.ts"],
+		tests: ["src/main/models-config.test.ts", "native/ompdesk/crates/core/src/models/file/tests.rs"],
 	},
 	{
 		id: "F04",

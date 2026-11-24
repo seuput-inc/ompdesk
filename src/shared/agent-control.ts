@@ -13,6 +13,11 @@ import type { AutoCloseTurn } from "./ipc-types";
 /** Prefs key; on unless stored `false`. Off: the tools are unregistered from every live local session. */
 export const AGENT_CONTROL_PREF = "agentControl";
 
+/** The pref and version the core's one-time "every agent power on" migration stores once it ran
+ * (`crates/core/src/prefs/powers.rs`); e2e seeds them to start a profile past it. */
+export const AGENT_POWERS_MIGRATION_PREF = "agentPowersMigrated";
+export const AGENT_POWERS_MIGRATION_VERSION = 1;
+
 /**
  * Session files (`.jsonl` paths) the user kept other agents away from (Sidebar session menu › Hide from other
  * agents), stored in the `sidebar` prefs blob as `agentHidden`. Such a session is listed as hidden and refuses

@@ -52,11 +52,21 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 			efforts: options("models", 0, "thinking", "efforts", 0),
 		};
 	},
+	// Stock reads models.yml with Bun.YAML (config-file.ts), so the core's editor checks every text it reads or
+	// writes against this parse: `raw` as parsed, `config` as ModelsConfigSchema normalizes it.
 	"models.validate": async params => {
 		const schema = await stockSchema();
-		if (!params || typeof params !== "object" || !("config" in params)) throw new Error("config is required");
+		if (!params || typeof params !== "object" || !("text" in params) || typeof params.text !== "string") {
+			throw new Error("text is required");
+		}
+		let raw: unknown;
 		try {
-			return { config: schema.assert(params.config) };
+			raw = Bun.YAML.parse(params.text) ?? {};
+		} catch (error) {
+			return { error: `models.yml: ${error instanceof Error ? error.message : String(error)}` };
+		}
+		try {
+			return { raw, config: schema.assert(structuredClone(raw)) };
 		} catch {
 			// Schema errors may include credential values: never send or log those values.
 			return { error: "models.yml does not satisfy stock omp ModelsConfigSchema" };

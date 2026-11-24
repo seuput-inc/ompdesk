@@ -65,6 +65,7 @@ pub mod web;
 #[cfg(windows)]
 mod windows_executable;
 pub mod wire;
+mod yaml;
 
 pub use server::{registry, serve, serve_as};
 

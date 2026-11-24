@@ -19,6 +19,7 @@
 //! `set {file, key, value}`, `delete {file, key}`, `store {file}` → the whole store, `replace {file, value}`.
 
 mod path;
+mod powers;
 mod retired;
 #[cfg(test)]
 mod tests;
@@ -318,6 +319,17 @@ pub fn replace(file: &str, mut value: Map<String, Value>) -> Result<(), Fault> {
     Ok(())
 }
 
+/// The agent-power migration (`powers.rs`) on `file`, once per profile; its report, or `None` when it had run.
+pub fn migrate_powers(file: &str, agent_dir: &Path) -> Result<Option<powers::Report>, Fault> {
+    let prefs = prefs(file)?;
+    let mut state = prefs.current()?;
+    let report = powers::migrate(&mut state.store, agent_dir)?;
+    if report.is_some() {
+        prefs.changed(state);
+    }
+    Ok(report)
+}
+
 // ---- the hub kind -------------------------------------------------------------------------------------------------
 
 thread_local! {
@@ -364,6 +376,13 @@ struct Replace {
     value: Map<String, Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Powers {
+    file: String,
+    agent_dir: PathBuf,
+}
+
 fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
     let done = match method {
         "get" => params::<Of>(raw).and_then(|of| {
@@ -385,6 +404,8 @@ fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
         "replace" => {
             params::<Replace>(raw).and_then(|r| replace(&r.file, r.value).map(|()| Value::Null))
         }
+        "migratePowers" => params::<Powers>(raw)
+            .and_then(|p| migrate_powers(&p.file, &p.agent_dir).map(|report| json!(report))),
         _ => Err(Fault::new("no_method", format!("prefs has no {method}"))),
     };
     Outcome::Now(done)
