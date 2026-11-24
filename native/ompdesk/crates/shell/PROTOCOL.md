@@ -251,7 +251,7 @@ with the page), a name without `persist:` is in memory only, `persist:<name>` is
 | Method | Asks | Params | Result |
 |---|---|---|---|
 | `session.create` | Node | `{partition, cache?: boolean}` | `{userAgent, acceptLanguages, spellCheckerLanguages: string[], availableSpellCheckerLanguages: string[], cachePath: string \| null}` — idempotent; the shim mirrors these for `getUserAgent()`, `getSpellCheckerLanguages()`, `availableSpellCheckerLanguages` and `getCachePath()`. `cachePath` is the folder of the partition's HTTP cache on disk (`app`: the shell's own `<userData>/shell-webview/Default/Cache`; `persist:<n>`: that partition's cache folder; an in-memory partition: `null`); disk care measures it and `session.op clearCache` must empty it, for `app` too |
-| `session.op` | Node | `{partition, op, args}` | `setProxy {mode: "direct"\|"system"\|"fixed_servers"\|"pac_script", proxyRules?, pacScript?, proxyBypassRules?}`, `resolveProxy {url}` → `{result: "PROXY h:p; DIRECT"}`, `clearCache`, `clearStorageData`, `setUserAgent {userAgent, acceptLanguages?}`, `setSpellCheckerLanguages {languages}`, `addWordToSpellCheckerDictionary {word}`, `setPermissions {mode: "deny-all"\|"default"}` (the Preview denies every permission request **and** check; no round trip), `setDownloads {mode: "deny"\|"default"}` (denied: the shell cancels, and tells Node with `session.download`), `registerPreload {id, source}` (below), `handleScheme {scheme}`, `unhandleScheme {scheme}` |
+| `session.op` | Node | `{partition, op, args}` | `setProxy {mode: "direct"\|"system"\|"fixed_servers"\|"pac_script", proxyRules?, pacScript?, proxyBypassRules?}`, `clearCache`, `clearStorageData`, `setUserAgent {userAgent, acceptLanguages?}`, `setSpellCheckerLanguages {languages}`, `addWordToSpellCheckerDictionary {word}`, `setPermissions {mode: "deny-all"\|"default"}` (the Preview denies every permission request **and** check; no round trip), `setDownloads {mode: "deny"\|"default"}` (denied: the shell cancels, and tells Node with `session.download`), `registerPreload {id, source}` (below), `handleScheme {scheme}`, `unhandleScheme {scheme}` |
 | `session.download` (event) | shell→Node | `{partition, wcId, url, filename, mimeType, totalBytes}` | a cancelled download (`setDownloads deny`): the shim emits the partition's `will-download` with the page's `webContents` |
 
 `registerPreload {id, source}`: the shell runs `source` (a classic script) in every frame's main world of that
@@ -503,12 +503,8 @@ What the Rust shell does differently from this table or from Electron. README.md
 - **`win.closeRequested`**: no answer within 5 s closes the window.
 - **`view.*`**: a view is hidden until its first `setVisible`/`setBounds` with a non-empty size; an empty `setBounds` only
   hides the view (a zero-sized browser view is a fatal check in Chromium).
-- **`session.*`**: `setProxy` writes Chromium's `proxy` preference; `resolveProxy` is answered from the user's WinINET /
-  WinHTTP settings on Windows, not Chromium's resolver; on macOS from CFNetwork's system proxy settings (static
-  HTTP/HTTPS/SOCKS, the exceptions list, exclude-simple-hostnames; a PAC script or auto-discovery is run through
-  `CFNetworkExecuteProxyAutoConfigurationURL` on a run loop for at most 3 s on the calling thread and falls back to the
-  fixed settings; a script answer is read for none/HTTP/HTTPS/SOCKS only and an HTTPS entry is written `PROXY`;
-  UNVERIFIED on macOS). `setSpellCheckerLanguages {languages}` normalises the codes (`en_US` to `en-US`; a language without
+- **`session.*`**: `setProxy` writes Chromium's `proxy` preference. The system proxy a spawn takes is not the shell's: the
+  core reads it (`proxy.resolve`, `crates/sysproxy`). `setSpellCheckerLanguages {languages}` normalises the codes (`en_US` to `en-US`; a language without
   a dictionary falls back to its bare or first regional one, else is dropped) and writes Chromium's `spellcheck.dictionaries`
   (and `browser.enable_spellchecking`) on the partition's context; `addWordToSpellCheckerDictionary {word}` adds to the
   profile's custom dictionary through a page of that partition and answers `failed` when it has none yet. Chromium

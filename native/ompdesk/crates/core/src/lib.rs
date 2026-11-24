@@ -33,6 +33,7 @@ pub mod pool;
 pub mod ports;
 pub mod prefs;
 pub mod procs;
+mod proxy;
 pub mod remote;
 pub mod remotebytes;
 pub mod repo_images;

@@ -47,6 +47,8 @@ serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a number is read as its digits say, as the core's wire does (crates/core).
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.11"
+# The bypass globs of the Preview's proxy rules (`netproxy.rs`), one copy with the core's system proxy reader.
+ompdesk-sysproxy = { path = "../sysproxy" }
 base64 = "0.23"
 # Electron's safeStorage key on Windows (OSCrypt v10 = AES-256-GCM).
 aes-gcm = "0.11"
