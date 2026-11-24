@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AutoCloseTurn, HostCloseTurn } from "../shared/ipc-types";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import type { ClientWindow } from "./web/client-window";
+import type { FileEditTarget } from "./web/file-edit-reports";
+
+const PAGE: FileEditTarget = { host: 1, device: "phone" };
 
 const win = (id: number): ClientWindow => ({
 	webContents: { id, send: () => undefined },
@@ -21,6 +24,8 @@ function rig(
 	} = {},
 ) {
 	const steps: string[] = [];
+	/** What the page's live connections report of the tab, as the core's router keeps it. */
+	const page = { dirty: false };
 	const sidecar = { closeHostTurn: options.closeHostTurn };
 	const deps: TabReleaseDeps = {
 		sidecarPool: {
@@ -32,7 +37,10 @@ function rig(
 			},
 			isHostedView: () => options.hosted === true,
 			canReleaseTab: (_tabId, turn) => options.canRelease?.(turn) ?? true,
-			releaseTab: (tabId, turn) => {
+			fileEdits: () => (page.dirty ? "dirty" : "clean"),
+			// The core checks the guard in the step that removes the tab.
+			releaseTab: (tabId, turn, unlessDirty) => {
+				if (unlessDirty && page.dirty) return false;
 				steps.push(`release:${tabId}`);
 				return options.canRelease?.(turn) ?? true;
 			},
@@ -46,7 +54,7 @@ function rig(
 		},
 		closeTabTerminals: (windowId, tabId) => void steps.push(`terminals:${windowId}:${tabId}`),
 	};
-	return { deps, steps };
+	return { deps, steps, page };
 }
 
 describe("closeWindowTab", () => {
@@ -99,23 +107,34 @@ describe("closeWindowTab", () => {
 		expect(steps).toEqual(["exit-policy:t1"]);
 	});
 
+	it("does not ask the host to close a turn while the page names the tab dirty", async () => {
+		const { deps, steps, page } = rig({
+			closeHostTurn: () => {
+				throw new Error("unexpected host close");
+			},
+		});
+		page.dirty = true;
+		const expected = { pool: 1, entry: 2, turn: 3, host: { omp: "host-spawn", turn: 7 } };
+		expect(await closeWindowTab(deps, win(-1), "t1", -1, PAGE, expected)).toBe(false);
+		expect(steps).toEqual(["exit-policy:t1"]);
+	});
+
 	it.each(["refused", "dirty", "replaced", "accepted"] as const)(
 		"keeps the proxy and terminals until host acceptance and a final local check: %s",
 		async outcome => {
 			const sent = Promise.withResolvers<HostCloseTurn | null>();
 			const reply = Promise.withResolvers<boolean>();
 			const expected = { pool: 1, entry: 2, turn: 3, host: { omp: "host-spawn", turn: 7 } };
-			const { deps, steps } = rig({
+			const { deps, steps, page } = rig({
 				closeHostTurn: turn => {
 					sent.resolve(turn);
 					return reply.promise;
 				},
 			});
-			let clean = true;
-			const closed = closeWindowTab(deps, win(-1), "t1", -1, () => clean, expected);
+			const closed = closeWindowTab(deps, win(-1), "t1", -1, PAGE, expected);
 			expect(await sent.promise).toEqual(expected.host);
 			expect(steps).toEqual(["exit-policy:t1"]);
-			if (outcome === "dirty") clean = false;
+			if (outcome === "dirty") page.dirty = true;
 			if (outcome === "replaced") deps.sidecarPool.sidecarForTab = () => ({}) as never;
 			reply.resolve(outcome !== "refused");
 			expect(await closed).toBe(outcome === "accepted");
@@ -125,13 +144,20 @@ describe("closeWindowTab", () => {
 		},
 	);
 
-	it("asks stillClosable again after the exit-policy read and keeps the tab when the answer changed meanwhile", async () => {
-		let closable = true;
-		const kept = rig({ duringExitPolicy: () => (closable = false) });
-		expect(await closeWindowTab(kept.deps, win(-1), "t1", -1, () => closable)).toBe(false);
+	it("keeps the tab when the page turned dirty during the exit-policy read (the core's release check)", async () => {
+		const kept = rig({ duringExitPolicy: () => (kept.page.dirty = true) });
+		expect(await closeWindowTab(kept.deps, win(-1), "t1", -1, PAGE)).toBe(false);
 		expect(kept.steps).toEqual(["exit-policy:t1"]);
 		const gone = rig();
-		expect(await closeWindowTab(gone.deps, win(-1), "t1", -1, () => true)).toBe(true);
-		expect(gone.steps).toEqual(["exit-policy:t1", "terminals:-1:t1", "release:t1"]);
+		expect(await closeWindowTab(gone.deps, win(-1), "t1", -1, PAGE)).toBe(true);
+		expect(gone.steps).toEqual(["exit-policy:t1", "release:t1", "terminals:-1:t1"]);
+	});
+
+	it("closes no terminal of a tab the core kept because its page names it dirty at the release", async () => {
+		const { deps, steps, page } = rig();
+		deps.sidecarPool.fileEdits = () => "clean";
+		page.dirty = true;
+		expect(await closeWindowTab(deps, win(-1), "t1", -1, PAGE)).toBe(false);
+		expect(steps).toEqual(["exit-policy:t1"]);
 	});
 });

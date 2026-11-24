@@ -212,7 +212,7 @@ Settle(t) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<last, kindOf, stopped, sg, awaiting, userRun, ready, nStarts, nO, retryIn, store, resV, monV, rp, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1038-1048 Ctx::note_stopped: noteStopped: Stop pressed (a run or the probe row)
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1058-1068 Ctx::note_stopped: noteStopped: Stop pressed (a run or the probe row)
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
 UserStop(t) ==
     /\ Idle /\ ~stopped[t] /\ (run[t] = "running" \/ probing[t] # 0)
@@ -228,7 +228,7 @@ MoveSend(t, k) ==
     /\ mv' = [mv EXCEPT ![t] = k]          \* k = "moves": the answer will count (or it times out); "stays": cancelled or failed
     /\ UNCHANGED <<poolV, resV, rg, restoring, restGen, rsg, apWait, runSg, pk, rk, monV, ctlV, histV>>
 
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1071-1085 Ctx::note_counter: noteTouched (called by trackMove at the answer, a timed-out command included: movesTabUnknown), then onRunningChange -> sync()
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1091-1105 Ctx::note_counter: noteTouched (called by trackMove at the answer, a timed-out command included: movesTabUnknown), then onRunningChange -> sync()
 \* @code src/main/turn-resume.ts:255-272 trackMove: `end()` runs after `touched` counted, so every continuation waiting in movesSettled resumes then (RunGo)
 MoveReply(t) ==
     /\ Idle /\ mv[t] # "none"

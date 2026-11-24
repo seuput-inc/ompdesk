@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AGENT_CONTROL_REVIEW } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
-import { IPC_EVENTS, type IpcExtensionUiPayload, type IpcTabStatusPayload } from "../shared/ipc-types";
+import { IPC_COMMANDS, IPC_EVENTS, type IpcExtensionUiPayload, type IpcTabStatusPayload } from "../shared/ipc-types";
 import type {
 	ExtensionUIRequest,
 	RpcCommand,
@@ -22,7 +22,10 @@ import { SidecarPool, type TabActivity } from "./sidecar-pool";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
 import type { PersistedTabLayout } from "./tab-layout";
 import { InterruptedTurnStore, TurnResume } from "./turn-resume";
+import { BlobStore } from "./web/blobs";
 import type { ClientWindow } from "./web/client-window";
+import { WebWindows } from "./web/web-client-window";
+import { TestRouterHost } from "./web/ws-router-test-rig";
 import { withRemovalClaim } from "./worktree-removals";
 
 /** Minimal SidecarManager stand-in: an EventEmitter with lifecycle recording. */
@@ -1050,6 +1053,45 @@ describe("SidecarPool tabs", () => {
 		expect(pool.sidecarForWindow(fw.win)).toBeNull();
 		expect(pool.activeTabForWindow(fw.win)).toBeNull();
 		expect(pool.tabsForWindow(fw.win)).toEqual([]);
+	});
+
+	it("keeps a paired page's tab while a live connection names it dirty, checked in the step that removes it", async () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "t1");
+		const host = await TestRouterHost.open({
+			registry: { invoke: vi.fn(), send: vi.fn() },
+			devices: { get: () => undefined },
+			windows: new WebWindows(() => {}),
+			quota: { reserve: vi.fn(), record: vi.fn() },
+			webChannels: {},
+			features: () => ({ push: false, preview: false, upload: false, passkey: false }),
+			blobs: new BlobStore(),
+			uploads: { take: vi.fn() },
+			toModelImage: async image => image,
+		});
+		await host.device("phone", ["workspace"]);
+		const page = await host.attach("phone");
+		if (!page) throw new Error("attach failed");
+		let id = 0;
+		const report = async (dirtyTabId: string | null): Promise<void> => {
+			await page.receive(
+				JSON.stringify({ t: "inv", id: ++id, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId }] }),
+			);
+			await host.sync();
+		};
+		const guard = { host: host.router.host, device: "phone" };
+
+		await report("t1");
+		expect(pool.fileEdits(guard, "t1")).toBe("dirty");
+		expect(pool.releaseTab("t1", undefined, guard)).toBe(false);
+		expect(pool.size).toBe(1);
+		expect(sidecars[0]?.disposed).toBe(false);
+
+		await report(null);
+		expect(pool.releaseTab("t1", undefined, guard)).toBe(true);
+		expect(sidecars[0]?.disposed).toBe(true);
+		await page.dispose();
 	});
 
 	it("does not close a later turn that finished with the same reply", () => {

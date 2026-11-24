@@ -106,6 +106,8 @@ export type ChannelPolicy =
 	| { dir: RequestDirection; permission: WebPermission; mode: "pass" }
 	| { dir: RequestDirection; permission: WebPermission; mode: "web"; web: string }
 	| { dir: RequestDirection; permission: "pairing-admin"; mode: "boundary" }
+	/** The core's router answers it for a page itself (main registers no handler). */
+	| { dir: RequestDirection; permission: WebPermission; mode: "core" }
 	| { dir: "push"; mode: "pass" }
 	| { dir: "push"; mode: "transform" | "client"; web: string };
 
@@ -165,7 +167,9 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[C.SPAWN_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.CLOSE_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
-	[C.FILE_EDIT_REPORT]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	// The core's web router keeps each connection's report (`crates/core/src/web/file_edits.rs`); only a paired page
+	// reports (a desktop window closes its own tabs and guards its own edits).
+	[C.FILE_EDIT_REPORT]: { dir: "invoke", permission: "workspace", mode: "core" },
 	[C.AGENT_CLOSE_ANSWER]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SET_ACTIVE_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SET_TAB_VIEW]: { dir: "invoke", permission: "workspace", mode: "pass" },

@@ -227,7 +227,6 @@
 		"src/main/local/autopilot.test.ts": 2.8,
 		"src/main/preview/host.test.ts": 2.6,
 		"src/main/schedules.test.ts": 2.5,
-		"src/main/web/file-edit-reports.test.ts": 2.2,
 		"src/main/stock-helper-extensions.test.ts": 2.1
 	}
 }

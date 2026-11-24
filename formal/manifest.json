@@ -82,7 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "15bc23dbb5259e83a203eba96ab2515bd529a069",
+			"syncCommit": "6618fd8bb19a89e00e8b3dc4756a212041fd060d",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "15bc23dbb5259e83a203eba96ab2515bd529a069",
+			"syncCommit": "f5b622ca060afedd22a5585e024780276ab63857",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -141,19 +141,20 @@
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
 			"covers": [
-				"src/main/web/file-edit-reports.ts",
+				"native/ompdesk/crates/core/src/web/file_edits.rs",
 				"native/ompdesk/crates/core/src/agentctl/rules/tab_close.rs",
 				"src/renderer/web/FileEditReporter.tsx",
 				"native/ompdesk/crates/core/src/web/router.rs#finish",
 				"native/ompdesk/crates/core/src/web/router.rs#receive",
 				"native/ompdesk/crates/core/src/web/router.rs#dispatch",
-				"src/main/web/ws-router.ts#WsRouter.connections",
-				"src/main/web/ws-router.ts#WsRouter.call",
+				"native/ompdesk/crates/core/src/web/router.rs#file_edit_report",
+				"native/ompdesk/crates/core/src/web/router.rs#unless_dirty",
+				"native/ompdesk/crates/core/src/pool/windows.rs#release_entry",
 				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs#close_tab",
 				"src/main/tab-release.ts#closeWindowTab",
-				"src/main/agent-control/host.ts:1244-1251"
+				"src/main/agent-control/host.ts:1240-1247"
 			],
-			"syncCommit": "6f08aed051eab59de9d39ccda9a93551a15ecc04",
+			"syncCommit": "13852b1a7af5c7a61aad60dff2142432eeeb6586",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -216,7 +217,7 @@
 				"native/ompdesk/crates/core/src/disk/saved_records.rs#change",
 				"native/ompdesk/crates/core/src/git/read.rs#blocking"
 			],
-			"syncCommit": "15bc23dbb5259e83a203eba96ab2515bd529a069",
+			"syncCommit": "bf3b7a5ea33a478252ae6d5af20cc00b1d31dbeb",
 			"verifySkill": ".omp/skills/repo-lock-core-verify/SKILL.md"
 		},
 		{
@@ -263,7 +264,7 @@
 				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
-			"syncCommit": "edee54f6a28e019b835a6688263113649113a49e"
+			"syncCommit": "f5b622ca060afedd22a5585e024780276ab63857"
 		},
 		{
 			"id": "away-calls",

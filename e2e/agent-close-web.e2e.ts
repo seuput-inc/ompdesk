@@ -1,14 +1,15 @@
 /**
  * An agent closes a child tab a paired phone page owns (`ompdesk_session_stop {close:true}`, src/main/agent-control
  * `#closeTab`): main releases it itself, because the page's `AGENT_CONTROL_VIEW` is dropped while it has no socket.
- * It does so for any tab whose page did not report unsaved edits in it (`FileEditReporter` → `FILE_EDIT_REPORT`, `web/
- * file-edit-reports.ts`): a page that is offline, or has said nothing since this launch, is released at once with one
- * close note; only a tab the page's latest report names as holding unsaved Files edits stays. The built app runs
- * on the fake omp and the fake Tailscale CLI; the phone is the app's real `web.html` in Chromium behind the fake
- * serve (e2e/fixture/phone-serve.ts), the agent is the fake omp's `fixture:host-tool:` line.
+ * It does so for any tab whose page did not report unsaved edits in it (`FileEditReporter` → `FILE_EDIT_REPORT`, kept
+ * by the core's web router, `crates/core/src/web/file_edits.rs`): a page that is offline, or has said nothing since
+ * this launch, is released at once with one close note; only a tab the page's latest report names as holding unsaved
+ * Files edits stays. The built app runs on the fake omp and the fake Tailscale CLI; the phone is the app's real
+ * `web.html` in Chromium behind the fake serve (e2e/fixture/phone-serve.ts), the agent is the fake omp's
+ * `fixture:host-tool:` line.
  *
  * Unit counterparts: `service.test.ts` ("a close is told only once the tab is gone", "closing a tab a paired web page
- * owns"), `host.test.ts`, `tab-release.test.ts`, `web/file-edit-reports.test.ts`, `FileEditReporter.test.tsx`.
+ * owns"), `host.test.ts`, `tab-release.test.ts`, `ws-router.test.ts`, `file_edits.rs`, `FileEditReporter.test.tsx`.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";

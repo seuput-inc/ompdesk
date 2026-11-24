@@ -221,7 +221,7 @@ import { personsPrompt, type RelaunchContinuation, trackMove } from "./turn-resu
 import { dispatchedCommand, STOP_COMMANDS } from "./turn-stop-log";
 import { appVersion } from "./updater";
 import { type ClientWindow, isWebWindow } from "./web/client-window";
-import { type FileEditReports, parseFileEditReport } from "./web/file-edit-reports";
+import type { FileEditReports } from "./web/file-edit-reports";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
 import type { UploadStore } from "./web/uploads";
 import type { SpawnWindow, WindowManager } from "./window";
@@ -1405,15 +1405,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// OMPdesk control tools (src/main/agent-control): the same pool, dispatcher, spawn path and notifications the GUI uses.
 	const agentControl: AgentControlRuntime = new AgentControlRuntime({
 		fileEdits: fileEditReports,
-		releaseTab: async (win, tabId, stillReleasable, expectedTurn) => {
-			const released = await closeWindowTab(
-				tabRelease,
-				win,
-				tabId,
-				win.webContents.id,
-				stillReleasable,
-				expectedTurn,
-			);
+		releaseTab: async (win, tabId, unlessDirty, expectedTurn) => {
+			const released = await closeWindowTab(tabRelease, win, tabId, win.webContents.id, unlessDirty, expectedTurn);
 			if (released) sidecarPool.announceClosed(win, tabId);
 			return released;
 		},
@@ -1773,14 +1766,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const win = caller.win;
 		if (!win || typeof payload?.tabId !== "string") return false;
 		return closeWindowTab(tabRelease, win, payload.tabId, caller.sender.id, undefined, payload.expectedTurn);
-	});
-
-	// A paired web page's Files editor state, which decides whether main may close one of its tabs for an agent. Only a
-	// web page's connection reports (an Electron window closes its own tabs and guards its own edits).
-	ipc.handle(IPC_COMMANDS.FILE_EDIT_REPORT, (caller, ...args: unknown[]) => {
-		const report = parseFileEditReport(args);
-		if (!caller.win || !caller.connId || !report) return;
-		fileEditReports.report(caller.win.webContents.id, caller.connId, report.dirtyTabId);
 	});
 
 	// A window's answer to an agent's close it was asked to make (`AgentControlViewEvent.closeId`).
