@@ -1,8 +1,6 @@
 //! Install plans (was `src/main/setup/plans.ts`): for each setup item, the one way this machine installs it and the
 //! exact process that runs. Everything here is fixed by the core; the renderer can name an item, never a command.
 
-use std::sync::LazyLock;
-
 use base64::Engine;
 use serde::Serialize;
 use serde_json::Value;
@@ -14,18 +12,6 @@ use crate::tools::runner::SpawnSpec;
 use crate::tools::spawn::{InstallContext, PlanTools, npm_for, read_install, spawn_spec};
 
 pub const OMP_PACKAGE: &str = "@oh-my-pi/pi-coding-agent";
-
-/// The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`, `TESTED_OMP_VERSION`).
-pub static TESTED_OMP_VERSION: LazyLock<String> = LazyLock::new(|| {
-    let tested: Value = serde_json::from_str(include_str!(
-        "../../../../../../../src/shared/omp-tested.json"
-    ))
-    .expect("omp-tested.json is JSON");
-    tested["version"]
-        .as_str()
-        .expect("omp-tested.json names a version")
-        .to_owned()
-});
 
 /// The natives packages stock's own update installs beside the agent (`OMP_NATIVES`).
 fn is_natives(name: &str) -> bool {

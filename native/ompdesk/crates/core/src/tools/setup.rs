@@ -57,7 +57,7 @@ use crate::server::{Fault, Scope};
 pub use detect::Detection;
 use ledger::Ledger;
 pub(crate) use paths::managed_bin_dirs;
-use plans::{OmpNpm, PlanContext, PlanDownload, Release, TESTED_OMP_VERSION};
+use plans::{OmpNpm, PlanContext, PlanDownload, Release};
 
 pub type Env = BTreeMap<String, String>;
 
@@ -898,9 +898,9 @@ fn plan_context(tools: &Tools, detection: &Detection, omp_npm: Option<OmpNpm>) -
         tools_dir: opts.tools_dir.clone(),
         bun: detection.bun.clone(),
         omp: detection.omp.clone(),
-        omp_specs: plans::omp_install_specs(&opts.bun_install, &TESTED_OMP_VERSION),
+        omp_specs: plans::omp_install_specs(&opts.bun_install, &opts.tested_omp),
         omp_npm,
-        omp_version: TESTED_OMP_VERSION.clone(),
+        omp_version: opts.tested_omp.clone(),
         brew: detection.brew.clone(),
         winget: detection.winget.clone(),
         system_root: opts.system_root.clone(),

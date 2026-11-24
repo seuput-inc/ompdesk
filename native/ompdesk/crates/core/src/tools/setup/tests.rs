@@ -19,12 +19,15 @@ use tokio::task::LocalSet;
 
 use super::detect::{Detection, bun_for_omp, git_shell_problem};
 use super::ledger::BACKOFF_MS;
-use super::plans::{OMP_PACKAGE, TESTED_OMP_VERSION};
+use super::plans::OMP_PACKAGE;
 use super::*;
 use crate::hub::LocalFuture;
 use crate::tools::queue::{Ctx, STEP_MAX_MS, StepKind};
 use crate::tools::runner::{FailedBy, Ran, RunOutcome, SpawnSpec, Supervisor};
 use crate::tools::{Main, Tools, call_tools};
+
+/// The omp this release was tested with, as main passes it (`testedOmp`).
+const TESTED_OMP_VERSION: &str = "19.0.0";
 
 fn present(version: &str) -> Presence {
     Presence::Present {
@@ -367,6 +370,7 @@ fn harness_in(dir: &Path, found: Machine, options: Options, mirror: Option<&Mirr
         "toolsDir": dir.join("tools").to_string_lossy(),
         "userData": user_data,
         "appVersion": options.app_version,
+        "testedOmp": TESTED_OMP_VERSION,
         "automatic": options.automatic,
         "scheduled": {"omp": false, "cli": false, "ext": false},
         "testInstaller": options.test_installer,
@@ -1018,7 +1022,7 @@ fn runs_the_real_plans_process_without_a_test_installer() {
                 args: vec![
                     "install".into(),
                     "-g".into(),
-                    format!("{OMP_PACKAGE}@{}", *TESTED_OMP_VERSION)
+                    format!("{OMP_PACKAGE}@{TESTED_OMP_VERSION}")
                 ],
                 ..SpawnSpec::default()
             }]
@@ -1905,7 +1909,7 @@ fn installs_the_tested_omp_for_a_missing_omp() {
             [vec![
                 "install".to_owned(),
                 "-g".into(),
-                format!("{OMP_PACKAGE}@{}", *TESTED_OMP_VERSION)
+                format!("{OMP_PACKAGE}@{TESTED_OMP_VERSION}")
             ]]
         );
         assert_eq!(h.specs()[0].file, "/home/u/.bun/bin/bun");
@@ -1931,7 +1935,7 @@ fn brings_a_too_old_bun_omp_to_the_tested_omp_with_its_natives() {
             },
         );
         h.start().await;
-        let v = &*TESTED_OMP_VERSION;
+        let v = TESTED_OMP_VERSION;
         assert_eq!(
             h.args(),
             [vec![
@@ -2128,7 +2132,7 @@ fn brings_a_too_old_npm_omp_to_the_tested_omp_through_that_npm() {
                     "-g",
                     "--prefix",
                     &prefix,
-                    &format!("{OMP_PACKAGE}@{}", *TESTED_OMP_VERSION)
+                    &format!("{OMP_PACKAGE}@{TESTED_OMP_VERSION}")
                 ]
                 .map(str::to_owned)
                 .to_vec(),
@@ -2222,10 +2226,8 @@ fn names_no_release_for_an_unmanaged_omp() {
 #[test]
 fn writes_a_line_when_its_own_omp_install_starts_and_ends() {
     local(|dir| async move {
-        let command = format!(
-            "\"/home/u/.bun/bin/bun\" install -g {OMP_PACKAGE}@{}",
-            *TESTED_OMP_VERSION
-        );
+        let command =
+            format!("\"/home/u/.bun/bin/bun\" install -g {OMP_PACKAGE}@{TESTED_OMP_VERSION}");
         let ok = harness(
             &sub(&dir, "a"),
             machine(&[("omp", Presence::Missing)]),
@@ -2290,7 +2292,7 @@ fn a_too_old_unowned_omp_gets_the_tested_omp_with_bun_never_stocks_update() {
             args: vec![
                 "install".into(),
                 "-g".into(),
-                format!("{OMP_PACKAGE}@{}", *TESTED_OMP_VERSION),
+                format!("{OMP_PACKAGE}@{TESTED_OMP_VERSION}"),
             ],
             ..SpawnSpec::default()
         };
@@ -2311,7 +2313,7 @@ fn a_too_old_unowned_omp_gets_the_tested_omp_with_bun_never_stocks_update() {
             machine(&[("omp", npm_omp)]),
             Options {
                 omp_bin: "/usr/local/bin/omp".into(),
-                installed: [("omp", TESTED_OMP_VERSION.clone())].into(),
+                installed: [("omp", TESTED_OMP_VERSION.to_owned())].into(),
                 ..Options::default()
             },
         );
@@ -2327,7 +2329,7 @@ fn a_too_old_unowned_omp_gets_the_tested_omp_with_bun_never_stocks_update() {
             (
                 json!("present"),
                 json!("bun-global"),
-                json!(*TESTED_OMP_VERSION)
+                json!(TESTED_OMP_VERSION)
             )
         );
         let steps: Vec<(String, Value)> = h
