@@ -264,31 +264,36 @@ describe("the service's recall term corpus", { timeout: 60_000 }, () => {
 		]);
 	});
 
-	it("does not overlap a ready-entry refresh with timer ticks", async () => {
+	it("refreshes once more after ticks during a ready-entry refresh", async () => {
 		const file = join(dir, "recall-terms.json");
 		const fake = fakeStore({ native: ["only once"], synced: [] });
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const { conclusions } = fake.store;
 		fake.store.conclusions = async (source, after, limit) => {
-			if (source === "native") {
+			const page = await conclusions(source, after, limit);
+			if (source === "native" && after === 0) {
 				started.resolve();
 				await release.promise;
 			}
-			return conclusions(source, after, limit);
+			return page;
 		};
 		try {
 			const index = await start(fake);
 			await started.promise;
+			fake.streams.native.push("platypus");
 			await index.fire();
 			await index.fire();
 			await index.check();
+			expect(fake.calls).toEqual([["native", 0]]);
 		} finally {
 			release.resolve();
 		}
-		await eventually(async () => expect((await read(file)).n).toBe(1));
+		await eventually(async () => expect(await read(file)).toMatchObject({ native: 2, n: 2, df: { platypus: 1 } }));
 		expect(fake.calls).toEqual([
 			["native", 0],
+			["synced", 0],
+			["native", 1],
 			["synced", 0],
 		]);
 	});
