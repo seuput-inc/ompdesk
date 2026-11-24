@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import Store from "electron-store";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
 	CommandOutputFrame,
@@ -13,6 +12,7 @@ import type {
 } from "../shared/rpc-types";
 import { AGENT_CONTROL_DEFINITIONS } from "./agent-control/tools";
 import type { OmpResolution } from "./omp-runtime";
+import { PrefsStore } from "./prefs-store";
 import { type SidecarFailureReport, SidecarManager, type SlowStartReport } from "./sidecar";
 import { ANSWERS_COMMANDS, ompRuns, RM_TEMP, writeFakeOmp } from "./test-fake-omp";
 import type { TurnFixture, TurnPageRequest } from "./test-turn-edits-omp";
@@ -940,7 +940,7 @@ describe("SidecarManager", () => {
 			`import * as fs from "node:fs/promises";\nawait fs.writeFile(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n`,
 		);
 		// The app's prefs store, kept in tempDir: never the developer's own prefs.json.
-		const prefs = new Store<Record<string, unknown>>({ name: "prefs", cwd: path.join(tempDir, "prefs") });
+		const prefs = new PrefsStore<Record<string, unknown>>(path.join(tempDir, "prefs", "prefs.json"));
 		const sidecar = new SidecarManager({
 			omp: ompAt(binaryPath),
 			cwd: workspaceCwd,
