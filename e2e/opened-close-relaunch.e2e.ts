@@ -120,7 +120,16 @@ test("a finished child restored by a relaunch leaves the open list by itself and
 		// and the continuing opener holding it are pinned by service.test.ts ("waits while …").
 		await expect
 			.poll(async () => (await tabs(second.page)).some(tab => tab.sessionPath === childPath), { timeout: 15_000 })
-			.toBe(false);
+			.toBe(false)
+			.catch(async (error: unknown) => {
+				// Which side held the child: the opener's continued turn (status, lastRun) or the child's own facts.
+				const records = (await readRecords(profile.record)).slice(-60).map(frame => frame.type);
+				await test.info().attach("child-still-open.json", {
+					body: JSON.stringify({ opener, tabs: await tabs(second.page), records }, null, 2),
+					contentType: "application/json",
+				});
+				throw error;
+			});
 		// The work board folds it into its "1 done" row: no open row is left for it; unfolded, it is a done row.
 		const fold = second.page.locator("[data-board-opened-done]");
 		await expect(fold).toHaveText("1 done", { timeout: 15_000 });
