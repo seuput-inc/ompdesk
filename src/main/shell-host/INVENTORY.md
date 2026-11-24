@@ -8,7 +8,7 @@ frames; `electron/*.ts` has the shim. `electron-log` is a dependency nothing imp
 
 | Module | Members main uses |
 |---|---|
-| `app` | `isPackaged`, `name`/`getName`/`setName`, `getVersion`, `getAppPath`, `getPath` (userData, appData, temp, downloads, exe…), `setPath`, `getLocale`, `getPreferredSystemLanguages`, `commandLine.{appendSwitch,hasSwitch,getSwitchValue}`, `disableHardwareAcceleration`, `setAppUserModelId`, `setAboutPanelOptions`, `showAboutPanel`, `setActivationPolicy`, `requestSingleInstanceLock`, `whenReady`, `quit`, `exit`, `relaunch`, `hide`, `setAsDefaultProtocolClient`, `getGPUInfo`, `getGPUFeatureStatus`, `dock.setIcon`; events `ready`, `before-quit`, `will-quit`, `quit`, `window-all-closed`, `activate`, `open-url`, `open-file`, `browser-window-created`, `browser-window-focus`, `child-process-gone`; `onSecondInstance` subscribes to the shell’s decoded launch request |
+| `app` | `isPackaged`, `name`/`getName`/`setName`, `getVersion`, `getAppPath`, `getPath` (userData, appData, temp, downloads, exe…), `setPath`, `getLocale`, `getPreferredSystemLanguages`, `commandLine.{appendSwitch,hasSwitch,getSwitchValue}`, `disableHardwareAcceleration`, `setAppUserModelId`, `setAboutPanelOptions`, `showAboutPanel`, `setActivationPolicy`, `requestSingleInstanceLock`, `whenReady`, `quit`, `exit`, `relaunch`, `hide`, `getGPUInfo`, `getGPUFeatureStatus`, `dock.setIcon`; events `ready`, `before-quit`, `will-quit`, `quit`, `window-all-closed`, `browser-window-created`, `browser-window-focus`, `child-process-gone` |
 | `BrowserWindow` | `new` (+ `webPreferences`, `presence`: the shell places, draws and first shows an app window itself), `getAllWindows`, `getFocusedWindow`, `fromWebContents`, `id`, `webContents`, `contentView.{addChildView,removeChildView}`, `show`, `showInactive`, `hide`, `close`, `focus`, `restore`, `minimize`, `maximize`, `isDestroyed`, `isVisible`, `isFocused`, `isMinimized`, `isMaximized`, `getBounds`, `getContentSize`, `setOpacity`, `setIgnoreMouseEvents`, `setSkipTaskbar`, `setFocusable`, `setTitleBarOverlay`, `loadURL`, `loadFile`; events `close`, `closed`, `show`, `hide`, `minimize`, `restore`, `ready-to-show` |
 | `webContents` | `id`, `send`, `getURL`, `getTitle`, `isLoading`, `isDestroyed`, `loadURL`, `stop`, `reload`, `executeJavaScript`, `executeJavaScriptInIsolatedWorld`, `setWindowOpenHandler`, `session`, `replaceMisspelling`, `copyImageAt`, `getZoomFactor`/`setZoomFactor`, `navigationHistory.*`, `setWebRTCIPHandlingPolicy`, `setFrameRate`, `invalidate`, `startPainting`, `stopPainting`, `capturePage`, `printToPDF`, `sendInputEvent`, `insertText`, `getUserAgent`, `close`, `debugger.{attach,detach,isAttached,sendCommand,on}`; events `did-start-loading`, `did-stop-loading`, `did-finish-load`, `did-fail-load`, `did-navigate`, `did-navigate-in-page`, `did-start-navigation`, `page-title-updated`, `dom-ready`, `render-process-gone`, `console-message`, `context-menu`, `input-event`, `unresponsive`, `responsive`, `will-navigate`, `will-frame-navigate`, `will-redirect`, `will-attach-webview` (never raised: no `<webview>` exists), `will-prevent-unload`, `paint`, `destroyed` |
 | `WebContentsView` | `new({webPreferences})`, `webContents`, `setVisible` |
@@ -19,7 +19,7 @@ frames; `electron/*.ts` has the shim. `electron-log` is a dependency nothing imp
 | `dialog` | `showMessageBox`, `showOpenDialog`, `showSaveDialog` (with and without an owner window) |
 | `clipboard`, `shell` | `writeText`; `openExternal`, `openPath`, `showItemInFolder`, `trashItem` |
 | `Notification` | `new`, `show`, `close`, `on("click"/"close")` |
-| `screen`, `nativeTheme`, `powerMonitor`, `powerSaveBlocker`, `globalShortcut` | `getPrimaryDisplay`, `getAllDisplays`; `shouldUseDarkColors`, `themeSource`; `on("suspend"/"resume"/"unlock-screen"/"on-ac"/"on-battery")`, `isOnBatteryPower`; `start`, `stop`; `register` |
+| `screen`, `nativeTheme`, `powerMonitor`, `powerSaveBlocker` | `getPrimaryDisplay`, `getAllDisplays`; `shouldUseDarkColors`, `themeSource`; `on("suspend"/"resume"/"unlock-screen"/"on-ac"/"on-battery")`, `isOnBatteryPower`; `start`, `stop` |
 | `net` | `fetch`, `request` (`redirect: "manual"`, `setHeader`, `on("redirect"/"response"/"error")`, `abort`), `isOnline`, `resolveHost` |
 | `nativeImage` | `createFromPath`, `createFromDataURL`; `addRepresentation`, `setTemplateImage` |
 | `safeStorage` | `isEncryptionAvailable`, `encryptString`, `decryptString` |
@@ -41,13 +41,11 @@ frames; `electron/*.ts` has the shim. `electron-log` is a dependency nothing imp
 | `registerPreloadScript` of the Preview's dialog shim | it used `contextBridge` and `ipcRenderer.sendSync`; the Tauri host's Chromium has neither | deleted: the page's own dialog is blocked by Chromium and the host's Preview owner (`dialogs.rs`) asks `ipcMain.on("preview-web:dialog")` over `ipc.sendSync` from `Page.javascriptDialogOpening`; `ipcMain.on` answers when a handler sets `returnValue`, however late, and sees the shell's withdrawal as `event.signal` |
 | `process.getSystemVersion()` | Node has none | `system-version.ts` `systemVersion()` (Windows `os.release()`, macOS from the Darwin kernel) |
 | `process.versions.electron` (system info, feedback, diagnostics) | no Electron | `shellEngine()` (`ompdesk-shell 0.1.0, CEF 156.0.26`); the shared type's key stays `electron`, the labels read "Shell" |
-| `process.defaultApp`, `process.execPath` | main is `node <bundle> <the shell's args>` | `index.ts` reads arguments from `process.argv.slice(2)`, `deep-link.ts` from `argv.slice(1)` of a second launch; `setAsDefaultProtocolClient(PROTOCOL)` always registers the shell's own exe; `updater.ts` reads the bundle from `app.getPath("exe")` and reopens with `process.argv.slice(2)` |
+| `process.defaultApp`, `process.execPath` | main is `node <bundle> <the shell's args>` | `index.ts` reads arguments from `process.argv.slice(2)`; `updater.ts` reads the bundle from `app.getPath("exe")` and reopens with `process.argv.slice(2)` |
 | `original-fs` / `node:original-fs` | no asar: nothing patches `fs` | every import is `node:fs`; `user-folder-fs.test.ts` (the guard against the patched `fs`) and the vitest alias are gone |
 | `app.asar` identity (window.ts' "resources changed" restart) | no archive | the renderer entry `out/renderer/index.html`'s identity |
 | `win.webContents` `preload` option | the shell injects `window.omp` itself | dropped from `window.ts`; `src/preload/index.ts` (contextBridge + `webUtils`) is deleted once `src/preload/shell.ts` exists (`fs.pathForFile` is the shell's) |
 | `autoUpdater` (Squirrel) | not in the shell | emitter only; its methods throw. macOS "relaunch"/"manual" modes never call them |
-| `globalShortcut.register()` | returns synchronously | returns `true`; a refusal by the OS is logged and the shortcut forgotten |
-| `app.setAsDefaultProtocolClient()` | returns synchronously | returns `true`; a refusal is logged |
 | HTTP cache folder (`<userData>/Cache`, disk care) | CEF keeps it under `<userData>/shell-webview` | `shell-calls.ts` `defaultSessionCachePath()` (the shim `Session.getCachePath()`, from `session.create`'s `cachePath`) feeds `DiskCare`'s `httpCachePath`; null → the Electron path |
 
 ## Deleted
@@ -57,3 +55,7 @@ externals in `electron.vite.config.ts` (and the `electron`/`original-fs`/`node:o
 `scripts/check-main-bundle.ts`); `process.defaultApp` branches in `deep-link.ts` and `index.ts`; the `preload:`
 option of `window.ts`; `process.getSystemVersion()`/`process.versions.electron` reads; `Electron.*` sync NativeImage
 handling in `preview-stream.ts`.
+
+W2 (the entry points moved to `tauri-shell/src/entry.rs`): `deep-link.ts`; `app.on("activate" | "open-url" | "open-file")`,
+`app.onSecondInstance` and `app.setAsDefaultProtocolClient` (the installer and the bundle register `omp://`);
+`globalShortcut` (the shell registers the window shortcut itself).
