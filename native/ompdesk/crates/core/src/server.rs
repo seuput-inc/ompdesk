@@ -260,6 +260,7 @@ pub fn registry() -> Registry {
     crate::models::register(&mut registry);
     crate::omp::register(&mut registry);
     crate::procs::register(&mut registry);
+    crate::proxy::register(&mut registry);
     crate::remote::register(&mut registry);
     crate::remotebytes::register(&mut registry);
     crate::repo_images::register(&mut registry);

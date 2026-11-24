@@ -7,10 +7,16 @@
  * clicking: the installer holds the update so This computer shows "Updating…" and a disabled Update now, then
  * releases it and the row reads 2.1.0 from `claude --version`. The bundled Codex is listed with the reason it
  * is left alone and is never checked or touched. With the pref off nothing runs at launch; Update now runs
- * the same cycle. Captures in en/ko.
+ * the same cycle. Captures in en/ko. On a Windows runner the user's system proxy is a PAC script naming a local
+ * proxy, and a launch with no proxy preference or inherited one checks through it (the order is the core's
+ * `proxy.resolve`, whose cases are Rust tests).
  */
+import { execFileSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
@@ -19,8 +25,9 @@ import { writeFakeOmp } from "../src/main/test-fake-omp";
 import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible, seedSetupBackoff, variants } from "./harness";
 
 /**
- * `cli-<tool> <method> check` prints the newest version; `update` waits while the `hold` file exists, then
- * "installs" 2.1.0 by writing the version file the fake claude prints. Every call is logged.
+ * `cli-<tool> <method> check` prints the newest version (asked of `OMPDESK_FAKE_FEED` through the spawn's
+ * `HTTPS_PROXY` when set: the feed's host resolves nowhere, so only the proxy answers); `update` waits while the
+ * `hold` file exists, then "installs" 2.1.0 by writing the version file the fake claude prints. Every call is logged.
  */
 const INSTALLER = `
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
@@ -28,7 +35,14 @@ import { join } from "node:path";
 const args = process.argv.slice(2);
 const dir = process.env.OMPDESK_FAKE_INSTALLER_DIR;
 appendFileSync(join(dir, "installs.log"), args.join(" ") + "\\n");
-if (args[0] === "cli-claude" && args[2] === "check") console.log("2.1.0");
+if (args[0] === "cli-claude" && args[2] === "check") {
+	const feed = process.env.OMPDESK_FAKE_FEED;
+	if (!feed) console.log("2.1.0");
+	else {
+		appendFileSync(join(dir, "proxy.log"), (process.env.HTTPS_PROXY ?? "none") + "\\n");
+		console.log(await (await fetch(feed, { proxy: process.env.HTTPS_PROXY })).text());
+	}
+}
 if (args[0] === "cli-claude" && args[2] === "update") {
 	while (existsSync(join(dir, "hold"))) await Bun.sleep(25);
 	writeFileSync(process.env.OMPDESK_FAKE_CLAUDE_VERSION, "2.1.0");
@@ -69,7 +83,11 @@ function cleanPath(...extra: string[]): string {
 	return [...extra, ...rest].join(path.delimiter);
 }
 
-async function launch(name: string, prefs: Record<string, unknown>): Promise<Launched> {
+async function launch(
+	name: string,
+	prefs: Record<string, unknown>,
+	env: Record<string, string> = {},
+): Promise<Launched> {
 	const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `omp-cli-update-${name}-`)));
 	const home = path.join(root, "home");
 	const desktop = path.join(root, "desktop");
@@ -147,6 +165,7 @@ async function launch(name: string, prefs: Record<string, unknown>): Promise<Lau
 			OMPDESK_FAKE_INSTALLER_DIR: installerDir,
 			OMPDESK_FAKE_CLAUDE_VERSION: versionFile,
 			OMPDESK_FAKE_PROVIDERS: "anthropic,openai-codex",
+			...env,
 		},
 	});
 	const page = await app.firstWindow();
@@ -247,3 +266,102 @@ for (const language of variants(["en", "ko"] as const)) {
 		}
 	});
 }
+
+const INTERNET_SETTINGS = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+
+/** The registry's current `DefaultConnectionSettings` blob as hex, or none. */
+function connectionSettingsNow(): string | undefined {
+	try {
+		const out = execFileSync(
+			"reg",
+			["query", `${INTERNET_SETTINGS}\\Connections`, "/v", "DefaultConnectionSettings"],
+			{
+				encoding: "utf8",
+			},
+		);
+		return /DefaultConnectionSettings\s+REG_BINARY\s+([0-9A-F]+)/i.exec(out)?.[1];
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * WinINET's connection blob naming only `pacUrl` (`DefaultConnectionSettings`: version, change counter, flags
+ * DIRECT | AUTO_PROXY_URL, then length-prefixed proxy, bypass list and script URL), its counter one past the current.
+ */
+function pacConnectionSettings(pacUrl: string): string {
+	const current = connectionSettingsNow();
+	const counter = current ? Buffer.from(current, "hex").readUInt32LE(4) + 1 : 1;
+	const dword = (n: number) => {
+		const bytes = Buffer.alloc(4);
+		bytes.writeUInt32LE(n);
+		return bytes;
+	};
+	const text = (s: string) => Buffer.concat([dword(Buffer.byteLength(s)), Buffer.from(s, "ascii")]);
+	return Buffer.concat([dword(0x46), dword(counter), dword(0x05), text(""), text(""), text(pacUrl), Buffer.alloc(32)])
+		.toString("hex")
+		.toUpperCase();
+}
+
+// The system proxy is this Windows user's own setting: only a runner, whose account is thrown away, gets it changed.
+test("a tool check goes through the system proxy a PAC script names (Windows)", async () => {
+	test.skip(
+		!WIN || !process.env.GITHUB_ACTIONS,
+		"changes this computer's system proxy: GitHub's Windows runners only",
+	);
+	test.setTimeout(120_000);
+	const FEED = "http://ompdesk-update.invalid/claude";
+	const proxied: string[] = [];
+	const server = createServer((request, response) => {
+		if (request.url === "/proxy.pac") {
+			response.writeHead(200, { "content-type": "application/x-ns-proxy-autoconfig" });
+			response.end(`function FindProxyForURL(url, host) { return "PROXY 127.0.0.1:${port}"; }`);
+			return;
+		}
+		// An absolute-form request is a proxy's: the only way the feed's host, which resolves nowhere, is reached.
+		proxied.push(`${request.method} ${request.url}`);
+		response.end(request.url === FEED ? "2.1.0" : "");
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const port = (server.address() as AddressInfo).port;
+	const backup = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "omp-internet-settings-")), "backup.reg");
+	execFileSync("reg", ["export", INTERNET_SETTINGS, backup, "/y"]);
+	let launched: Launched | undefined;
+	try {
+		const pac = `http://127.0.0.1:${port}/proxy.pac`;
+		execFileSync("reg", ["add", INTERNET_SETTINGS, "/v", "AutoConfigURL", "/t", "REG_SZ", "/d", pac, "/f"]);
+		const blob = pacConnectionSettings(pac);
+		execFileSync("reg", [
+			"add",
+			`${INTERNET_SETTINGS}\\Connections`,
+			"/v",
+			"DefaultConnectionSettings",
+			"/t",
+			"REG_BINARY",
+			"/d",
+			blob,
+			"/f",
+		]);
+		// No proxy inherited from the runner's environment: the system's is the one the order reaches.
+		const noInherited = { PI_PROXY: "", HTTPS_PROXY: "", HTTP_PROXY: "", ALL_PROXY: "" };
+		const current = await launch("system-proxy", {}, { ...noInherited, OMPDESK_FAKE_FEED: FEED });
+		launched = current;
+		await expect
+			.poll(() => installs(current), { timeout: 60_000 })
+			.toEqual(["cli-claude self check", "cli-claude self update"]);
+		const seen = await fs.readFile(path.join(current.root, "installer", "proxy.log"), "utf8");
+		expect(seen.trim().split(/\r?\n/)).toEqual([`http://127.0.0.1:${port}`]);
+		expect(proxied).toContain(`GET ${FEED}`);
+	} finally {
+		if (launched) {
+			await release(launched);
+			await close(launched);
+		}
+		server.close();
+		try {
+			execFileSync("reg", ["delete", INTERNET_SETTINGS, "/v", "AutoConfigURL", "/f"]);
+		} catch {}
+		execFileSync("reg", ["import", backup]);
+	}
+});

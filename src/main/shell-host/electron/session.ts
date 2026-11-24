@@ -169,10 +169,6 @@ export class Session extends EventEmitter {
 		await this.#op("setProxy", config);
 	}
 
-	async resolveProxy(url: string): Promise<string> {
-		return (await this.#op<{ result: string }>("resolveProxy", { url })).result;
-	}
-
 	async clearCache(): Promise<void> {
 		await this.#op("clearCache");
 	}
