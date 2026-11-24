@@ -176,7 +176,7 @@ CloseDecide(t) ==
 
 \* The release lands after awaits (exit policy and, on a paired owner, the host's close reply); reports may arrive
 \* meanwhile. The pool's removal asks the store again under the router's lock, in the step that removes the tab.
-\* @code src/main/tab-release.ts:29-64 refreshExitPolicy, closeHostTurn, early re-checks, releaseTab with the guard
+\* @code src/main/tab-release.ts:30-64 refreshExitPolicy, the page's word before closeHostTurn, releaseTab with the guard
 \* @code src/main/agent-control/host.ts:1240-1247 release: the guard names the page's router and device
 \* @code native/ompdesk/crates/core/src/pool/windows.rs:421-453 release_entry: removal inside unless_dirty
 \* @code native/ompdesk/crates/core/src/web/router.rs:652-671 unless_dirty: check and removal under the router's lock
