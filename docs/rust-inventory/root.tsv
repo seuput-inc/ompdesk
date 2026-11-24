@@ -356,7 +356,7 @@ src/main/open-path.ts	native-client	1	fs.isLauncherPath checks extensions, resol
 src/main/packaging-config.test.ts	tooling	-	Vitest suite: mac bundle configs.
 src/main/platform-test-scope.test.ts	tooling	-	Vitest suite: Windows test scope.
 src/main/prefs-store.test.ts	tooling	-	Vitest suite: the preference files against the real core (native parity).
-src/main/prefs-store.ts	native-client	2	Typed client of crates/core/src/prefs: each get/has/set/delete/store is a synchronous hub call answered from the core's memory; the core writes through write_kept. Goes with the IPC router and the last Node reader.
+src/main/prefs-store.ts	native-client	2	Typed client of crates/core/src/prefs: changes are synchronous hub calls the core commits; reads keep the core's answer per key until a change could reach it or the hub is lost. Goes with the IPC router and the last Node reader.
 src/main/process-alive.ts	port	1	test-launcher-exit decides immediately whether the launcher has ended; lock-slots also reads signal-zero synchronously (EPERM means alive). Neither caller requires a running core; this is not session process supervision.
 src/main/quit-guard.test.ts	tooling	-	Vitest suite: quit guard risk assessment.
 src/main/quit-guard.ts	port	3	app-quit reads QuitLatch in before-quit to veto synchronously or admit teardown once. Last-window close and Dock activation also read approval immediately; the guard performs no separate I/O.

@@ -64,14 +64,22 @@ describe("the preference files the core owns", () => {
 		expect(prefs.get("proxyUrl")).toBe("http://proxy");
 	});
 
-	it("reads a file edited on disk while it runs", async () => {
-		const prefs = new PrefsStore<Record<string, unknown>>(file);
-		prefs.set("ompFollowVerified", false);
-		await stopCore();
-		writeFileSync(file, JSON.stringify({ ompFollowVerified: true }));
-		expect(prefs.get("ompFollowVerified")).toBe(true);
-		writeFileSync(file, `\uFEFF${JSON.stringify({ ompFollowVerified: false, extra: [1] })}`);
-		expect(prefs.store).toEqual({ ompFollowVerified: false, extra: [1] });
+	it("answers a change made through another store of the same file, nested or escaped, in the same tick", () => {
+		writeFileSync(file, `\uFEFF${JSON.stringify({ gui: { panelWidth: 300 }, language: "en", "a.b": 1 })}`);
+		const reader = new PrefsStore<Record<string, unknown>>(file);
+		const writer = new PrefsStore<Record<string, unknown>>(file);
+		expect(reader.get("gui.panelWidth")).toBe(300);
+		expect(reader.get("gui")).toEqual({ panelWidth: 300 });
+		expect(reader.get("a\\.b")).toBe(1);
+		expect(reader.store).toEqual({ gui: { panelWidth: 300 }, language: "en", "a.b": 1 });
+
+		writer.set("gui", { panelWidth: 420 });
+		expect(reader.get("gui.panelWidth")).toBe(420);
+		writer.set("a\\.b", 2);
+		expect(reader.get("a\\.b")).toBe(2);
+		writer.delete("language");
+		expect(reader.has("language")).toBe(false);
+		expect(reader.store).toEqual({ gui: { panelWidth: 420 }, "a.b": 2 });
 	});
 
 	it("refuses a key no value can be written to, and conf's own bookkeeping", () => {
