@@ -428,9 +428,13 @@ export function systemOmp(): Promise<OmpResolution> {
 	if (cached) return cached;
 	const pending = resolveOmp();
 	cached = pending;
+	// A rejection (the core ended under the probe) is a failure too, and handled here: the caller sees it on `pending`.
+	const forget = () => {
+		if (cached === pending) cached = null;
+	};
 	void pending.then(result => {
-		if (!result.ok && cached === pending) cached = null;
-	});
+		if (!result.ok) forget();
+	}, forget);
 	return pending;
 }
 

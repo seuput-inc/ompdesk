@@ -79,6 +79,7 @@ const FACTS: HostFacts = {
 	versions: { chrome: "156.0.1", cef: "156.0.26", shell: "0.1.0" },
 	safeStorage: { unavailable: "test" },
 	nativeIpc: [],
+	coreOwner: "",
 };
 
 interface Call {

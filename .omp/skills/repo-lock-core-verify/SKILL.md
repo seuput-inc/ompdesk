@@ -13,7 +13,7 @@ A holder of `withRepoLock` that runs past its bound fails its caller at once; th
 
 | Check id | Tool | Covers | Model |
 |---|---|---|---|
-| `repo-lock-core` | TLC 1.8.0 | `heldRequest`, `heldAnswer`, `coreGit`, `coreGitAnswer` and `coreHeld` (`exec.ts`), `mutate` (`scm.ts`), `process.ts`, `serial-chain.ts`, `server.rs`, `run.rs`, `sys.rs`, `main.rs`, the scratch object store of `git/branches.rs` (`Scratch`), disk care's file system calls (`disk/tree.rs` `live`, `git/read.rs` `blocking`) | `formal/repo-lock-core/tla/RepoLockCore.tla`, `@code` tags on each action |
+| `repo-lock-core` | TLC 1.8.0 | `heldRequest`, `heldAnswer`, `coreGit`, `coreGitAnswer` and `coreHeld` (`exec.ts`), `mutate` (`scm.ts`), `process.ts`, the core's owner (`owner.rs`: `core.ended`, `group_gone`, `core.gone`) and main's connection to it (`clients.rs`), `serial-chain.ts`, `server.rs`, `run.rs`, `sys.rs`, `main.rs`, the scratch object store of `git/branches.rs` (`Scratch`), disk care's file system calls (`disk/tree.rs` `live`, `git/read.rs` `blocking`) | `formal/repo-lock-core/tla/RepoLockCore.tla`, `@code` tags on each action |
 
 Sync commit: see `syncCommit` of `repo-lock-core` in `formal/manifest.json` (the manifest wins).
 

@@ -16,13 +16,13 @@ StartCEF ==
   /\ s.mode = "boot" /\ ~s.accepted /\ s.result = "none"
   /\ s' = [s EXCEPT !.mode = "cef"]
 
-\* @code src/main/shell-host/electron/app.ts:296-298 Relaunch is an earlier frame, if requested.
+\* @code src/main/shell-host/electron/app.ts:292-294 Relaunch is an earlier frame, if requested.
 QueueRelaunch ==
   /\ s.phase = "open" /\ s.node = "alive" /\ s.result = "none"
   /\ ~s.relaunchWanted
   /\ s' = [s EXCEPT !.relaunchWanted = TRUE, !.queue = Append(@, "relaunch")]
 
-\* @code src/main/shell-host/electron/app.ts:305-312 The quit guard is set before listeners and a reentrant exit does nothing.
+\* @code src/main/shell-host/electron/app.ts:301-308 The quit guard is set before listeners and a reentrant exit does nothing.
 \* @code src/main/shell-host/client.ts:141-151 The call writes the request before awaiting its result.
 \* @code src/main/shell-host/client.ts:154-158 Events use the same write path.
 \* @code src/main/shell-host/client.ts:179-189 Both frame types go to stream.write before waiting for drain.
@@ -50,7 +50,7 @@ DeliverAnswer ==
   /\ s.answer = "queued" /\ s.node = "alive" /\ s.result = "none"
   /\ s' = [s EXCEPT !.answer = "received"]
 
-\* @code src/main/shell-host/electron/app.ts:313-320 NodeExit is the receipt path; the rejection path also exits.
+\* @code src/main/shell-host/electron/app.ts:309-316 NodeExit is the receipt path; the rejection path also exits.
 NodeExit ==
   /\ s.node = "alive" /\ s.answer = "received"
   /\ s' = [s EXCEPT !.node = "ended"]
@@ -63,7 +63,7 @@ BeginStop ==
   /\ s' = [s EXCEPT !.phase = "stopping",
                     !.stdin = IF KeepStdin THEN "open" ELSE "closed"]
 
-\* @code src/main/shell-host/electron/index.ts:158-178 EOF calls endMain, which exits with failure even if an answer is pending.
+\* @code src/main/shell-host/electron/index.ts:180-199 EOF calls endMain, which exits with failure even if an answer is pending.
 ObserveEOF ==
   /\ s.stdin = "closed" /\ s.node = "alive"
   /\ s' = [s EXCEPT !.node = "ended", !.prematureEOF = s.accepted /\ s.answer # "received"]

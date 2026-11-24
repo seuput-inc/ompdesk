@@ -691,7 +691,7 @@ class BridgeRelay implements BridgeClient {
 			| { command: RpcCommand; bridgeConnected: boolean },
 		{ timeoutMs, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
 	): Promise<T> {
-		if (this.#closed || !core().pid || core().generation !== this.generation) {
+		if (this.#closed || core().generation !== this.generation) {
 			if (route === "sidecar.queue") throw new Error("Sidecar disconnected");
 			throw new LocalCommandError("GUI bridge closed", "bridge_unavailable");
 		}
