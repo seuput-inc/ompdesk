@@ -161,11 +161,19 @@ for arg do
     */actions/workflows/e2e-nightly.yml/runs?*)
       if [ "$PENDING_ONLY" = yes ]; then echo '{"workflow_runs":[{"id":707,"status":"pending","head_branch":"parity-owner"}]}'; else echo '{"workflow_runs":[]}'; fi
       exit 0 ;;
-    */actions/workflows/ci.yml/runs?*|*/actions/workflows/flake-probe.yml/runs?*|*/actions/workflows/shell-batch-checks.yml/runs?*)
+    */actions/workflows/ci.yml/runs?*|*/actions/workflows/flake-probe.yml/runs?*)
+      echo '{"workflow_runs":[]}'; exit 0 ;;
+    */actions/workflows/shell-batch-checks.yml/runs?*)
+      # The run list lags a dispatch: the run shows only from the second read after it.
+      if [ -f "$DISPATCH_TRACE.dispatched" ]; then
+        n=$(cat "$DISPATCH_TRACE.dispatched"); echo $((n + 1)) > "$DISPATCH_TRACE.dispatched"
+        if [ "$n" -ge 1 ]; then printf '{"workflow_runs":[{"id":%s,"status":"queued","head_branch":"concurrent-dispatch"}]}\\n' "$OWN_RUN"; exit 0; fi
+      fi
       echo '{"workflow_runs":[]}'; exit 0 ;;
     */actions/runs/707/jobs?*)
       echo '[{"status":"pending","labels":[]}]'; exit 0 ;;
     */dispatches)
+      echo 0 > "$DISPATCH_TRACE.dispatched"
       case "$DISPATCH_BODY" in
         __receipt__) printf '{"workflow_run_id":%s,"html_url":"https://github.com/test/repo/actions/runs/%s"}\\n' "$OWN_RUN" "$OWN_RUN" ;;
         __network__) echo 'connection reset after request was sent' >&2; exit 1 ;;
@@ -211,12 +219,15 @@ fi
 		expect(first.stdout + second.stdout).not.toContain("watch it once: bun scripts/watch-run.ts 999999");
 	});
 
-	it("dispatches an admitted shell run and reports its receipt", async () => {
+	it("dispatches an admitted shell run and returns only once the run list shows it", async () => {
 		const { start, dir } = fixture();
 		const result = await start(505, undefined, ["shell-batch-checks", "--ref", "concurrent-dispatch"]);
 		expect(result.stdout).toContain("watch it once: bun scripts/watch-run.ts 505");
-		const trace = fs.readFileSync(path.join(dir, "trace-505"), "utf8");
-		expect(trace).toContain("actions/workflows/shell-batch-checks.yml/dispatches");
+		const trace = fs.readFileSync(path.join(dir, "trace-505"), "utf8").trim().split("\n");
+		const dispatch = trace.findIndex(line => line.includes("actions/workflows/shell-batch-checks.yml/dispatches"));
+		expect(dispatch).toBeGreaterThanOrEqual(0);
+		// One read that lags, one that shows the run: the next dispatch, of this session or another, will see it.
+		expect(trace.slice(dispatch).filter(line => line.includes("shell-batch-checks.yml/runs?"))).toHaveLength(2);
 	});
 
 	it.each([

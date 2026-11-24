@@ -14,7 +14,7 @@ src/main/shell-host/electron/index.ts	port	Entry for imports aliased from electr
 src/main/shell-host/electron/input-events.ts	port	Translates Preview stream input. Move with web/preview-input.ts and preview/host.ts; preserve wheel native scale, zoom and keyboard char events.
 src/main/shell-host/electron/ipc-main.ts	port	serveIpc routes native window events to Node handlers. Move handlers and registrations before removing the Node dispatcher.
 src/main/shell-host/electron/lifetime-force.test.ts	exception	Window and web contents lifecycle parity scenarios.
-src/main/shell-host/electron/menu.ts	mixed	Node owns menu item and tray callbacks; Rust displays the menu. Move callbacks with their window and tray owners.
+src/main/shell-host/electron/menu.ts	mixed	Node builds the text-field context menu's popup and keeps its click handlers; Rust shows it (menu.popup). The app menu and the tray are tauri-shell/src/app_menu.rs and tray.rs (W3). Move the popup with the context menu's owner.
 src/main/shell-host/electron/native-image.ts	mixed	Rust captures or encodes live frames; Node still reads image files, sniffs formats, and holds icon representations. The two screenshot tests decode outside the app.
 src/main/shell-host/electron/net.ts	native-client	Adapts request, response streams and cancellation for Node consumers. Retire with these consumers rather than translating the same streams twice.
 src/main/shell-host/electron/safe-storage.test.ts	exception	Protects compatibility with saved ciphertext; keep synthetic fixtures when moving the consumer.
