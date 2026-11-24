@@ -98,6 +98,7 @@ impl Client {
             url: &url,
             headers: &[],
             body: None,
+            proxy: None,
         };
         matches!(
             tokio::time::timeout(HEALTH_TIMEOUT, http::status(request)).await,
@@ -147,6 +148,7 @@ impl Client {
             url: &url,
             headers: &headers,
             body: body.as_deref(),
+            proxy: None,
         };
         let response = match tokio::time::timeout(timeout, http::send(request)).await {
             Ok(Ok(response)) => response,

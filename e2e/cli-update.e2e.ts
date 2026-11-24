@@ -12,6 +12,7 @@
  * `proxy.resolve`, whose cases are Rust tests).
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -311,6 +312,9 @@ test("a tool check goes through the system proxy a PAC script names (Windows)", 
 	);
 	test.setTimeout(120_000);
 	const FEED = "http://ompdesk-update.invalid/claude";
+	// The file machine setup downloads before the update runs (OMP_GUI_TEST_DOWNLOAD): the core's own client fetches it.
+	const PAYLOAD_URL = "http://ompdesk-setup.invalid/payload";
+	const PAYLOAD = "verified through the proxy";
 	const proxied: string[] = [];
 	const server = createServer((request, response) => {
 		if (request.url === "/proxy.pac") {
@@ -320,7 +324,7 @@ test("a tool check goes through the system proxy a PAC script names (Windows)", 
 		}
 		// An absolute-form request is a proxy's: the only way the feed's host, which resolves nowhere, is reached.
 		proxied.push(`${request.method} ${request.url}`);
-		response.end(request.url === FEED ? "2.1.0" : "");
+		response.end(request.url === FEED ? "2.1.0" : request.url === PAYLOAD_URL ? PAYLOAD : "");
 	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
@@ -345,14 +349,24 @@ test("a tool check goes through the system proxy a PAC script names (Windows)", 
 		]);
 		// No proxy inherited from the runner's environment: the system's is the one the order reaches.
 		const noInherited = { PI_PROXY: "", HTTPS_PROXY: "", HTTP_PROXY: "", ALL_PROXY: "" };
-		const current = await launch("system-proxy", {}, { ...noInherited, OMPDESK_FAKE_FEED: FEED });
+		const current = await launch(
+			"system-proxy",
+			{},
+			{
+				...noInherited,
+				OMPDESK_FAKE_FEED: FEED,
+				OMP_GUI_TEST_DOWNLOAD: PAYLOAD_URL,
+				OMP_GUI_TEST_DOWNLOAD_SHA256: createHash("sha256").update(PAYLOAD).digest("hex"),
+			},
+		);
 		launched = current;
 		await expect
 			.poll(() => installs(current), { timeout: 60_000 })
 			.toEqual(["cli-claude self check", "cli-claude self update"]);
 		const seen = await fs.readFile(path.join(current.root, "installer", "proxy.log"), "utf8");
 		expect(seen.trim().split(/\r?\n/)).toEqual([`http://127.0.0.1:${port}`]);
-		expect(proxied).toContain(`GET ${FEED}`);
+		// The check's fetch (the installer's own) and setup's download (the core's client) both went through it.
+		expect(proxied).toEqual(expect.arrayContaining([`GET ${FEED}`, `GET ${PAYLOAD_URL}`]));
 	} finally {
 		if (launched) {
 			await release(launched);

@@ -61,7 +61,9 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 	}, [armedCloseTab, cancelCloseTab, confirmCloseMs]);
 
 	useEffect(() => {
-		if (tabs.length <= 1 || pruningPlaceholderRef.current) return;
+		// Last launch's ghosts are a picture until main's list replaces them: a real start tab whose status push came
+		// first is not in company, and closing it on a ghost's account left the window with no tab at all.
+		if (tabs.length <= 1 || pruningPlaceholderRef.current || tabs.some(tab => tab.ghost)) return;
 		const inSplit = new Set(split ? splitTabIds(split) : []);
 		const emptyBehind = (tab: (typeof tabs)[number]) => {
 			const session = sessionRuntimeStore<SessionStore>(tab.id, "session")?.getState();

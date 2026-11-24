@@ -33,6 +33,8 @@ export interface DownloadOptions {
 	 * `<mirror>/host/path`. Only a test passes it.
 	 */
 	mirror?: string;
+	/** The proxy the core's `proxy.resolve` picked for checks and installs; a loopback address never goes through it. */
+	proxy?: string;
 }
 
 /** The longest `setTimeout` takes: a download has no bound of its own, only its signal. */
@@ -53,7 +55,7 @@ function subscribe(): void {
 
 /** Download `url` to `file` and check its SHA-256. Throws DownloadError, or the abort reason once `signal` fired. */
 export async function downloadVerified(options: DownloadOptions): Promise<void> {
-	const { url, sha256, file, signal, onProgress, accept, mirror } = options;
+	const { url, sha256, file, signal, onProgress, accept, mirror, proxy } = options;
 	signal.throwIfAborted();
 	subscribe();
 	const id = ++sequence;
@@ -61,7 +63,15 @@ export async function downloadVerified(options: DownloadOptions): Promise<void> 
 	try {
 		await core().call(
 			"setup.download",
-			{ id, url, sha256, file, ...(accept ? { accept } : {}), ...(mirror ? { mirror } : {}) },
+			{
+				id,
+				url,
+				sha256,
+				file,
+				...(accept ? { accept } : {}),
+				...(mirror ? { mirror } : {}),
+				...(proxy ? { proxy } : {}),
+			},
 			{ signal, timeoutMs: NO_TIMEOUT_MS },
 		);
 	} catch (error) {

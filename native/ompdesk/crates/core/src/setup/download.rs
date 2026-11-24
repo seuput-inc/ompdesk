@@ -46,6 +46,8 @@ struct Params {
     /// An `accept` header (the GitHub API's asset URL wants `application/octet-stream`).
     accept: Option<String>,
     mirror: Option<String>,
+    /// The proxy `proxy.resolve` picked, which every non-loopback hop goes through.
+    proxy: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -157,6 +159,7 @@ async fn transfer(
         url: &target,
         headers: &headers,
         body: None,
+        proxy: params.proxy.as_deref(),
     };
     let response = tokio::select! {
         biased;
