@@ -94,6 +94,47 @@ Today Node main owns `ompdesk-core`: `CoreProcess` (`src/main/core/process.ts`) 
 
 **Out of scope here:** `ompdesk-core --supervise` (Node's setup supervisor spawns it per hook) and `--mcp-hub` (the core spawns it). Neither is the core process this section moves.
 
+### Design: the shell owns the windows and the entry points (H final's prerequisite, not built yet)
+
+Today `WindowManager` (`src/main/window.ts`) is Node's: it numbers windows, builds them through the shim's `win.create`, persists geometry, decides the last window's close, recovers a crashed or stuck page, and is read synchronously by every entry point that opens or shows a window (`deep-link.ts`, `index.ts` `activateWindow` and the global shortcut, `menu.ts`, `tray.ts`, 13 `ipc.ts` sites). The shell already owns the OS windows, their pages' identities (`registry.rs`), bounds restore (`window_bounds.rs`), activation (`window_activation.rs`), ordered page pushes (`page_push.rs`), the quit chain (`quit_chain.rs`) and the second-instance and macOS open events (`startup.rs`), and hands each to Node as an event. Target: the shell decides, and asks the session owner only for what it cannot know.
+
+**1. The split.** What a window *is* belongs to the shell; what runs *in* it belongs to the pool (slice C).
+
+| Concern | Owner after | Today |
+|---|---|---|
+| Window id, record (`slot`, `mica`), create, close, destroyed | shell | `WindowManager.#records`, ids from `host.nextWindowId()` |
+| Geometry: saved bounds, cascade, maximized, persist on close (`window-state.json`, same keys) | shell | `SafeStore("window-state")`, `#persistState` |
+| Chrome and Mica (`window-chrome.ts`), first show and relaunch presence (`window-show.ts`, `launchPresence`), software-compositing mark | shell | `createWindow`, `#markSoftwareCompositing` |
+| Focused/target window, show/restore/focus, Dock `activate` (`activateAction`), global shortcut toggle, run progress (Dock badge, taskbar progress) | shell | `getTargetWindow`, `focusWindowById`, `activateWindow`, `setRunProgress` |
+| Renderer recovery: load failure, crash reload cooldown, stuck-page restart and its notice, changed-resources prompt, crash dialog (`renderer-recovery.ts`) | shell | `#observeRuntimeFailures`; the prompts' relaunch becomes a quit-chain `approved` intent the shell starts itself |
+| Entry points: second instance, `open-url`, `open-file`, `omp://` parse, their serial queue and pre-setup replay | shell | `deep-link.ts` `enqueue`, `beforeSetup`, `filesBeforeSetup` |
+| Last-window close: `lastWindowCloseAction` facts | shell (`quitApproved` is the quit chain's, the tray is the shell's after menu/tray) | `win.closeRequested` answered by Node; the close-to-tray pref is slice B's |
+| Window ↔ tabs, the window's **cwd** (`WindowRecord.cwd`, `setRecordCwd`), spawn target (`resolveWindowSpawnTarget`), tab layouts (`persistTabLayouts`, `spawnWindowWithLayout`) | **pool** | `index.ts` `spawnWindow`, `ipc.ts` 1195/2245/2281; the cwd is the window's last local tab cwd, a pool fact, so it leaves the window record |
+
+**2. Two commands to the pool owner.** An entry point that needs a window the shell does not have asks the owner of the pool, never the window manager:
+- `session.spawnWindow {cwd?, session?, kind?, device?, presence?} → {win} | null`: today `index.ts` `spawnWindow` (refused once a quit is approved; the target from `resolveWindowSpawnTarget`; the window's tab acquired before it answers, closed again when no tab could be made). With no arguments it restores the saved layout, as now.
+- `session.openPath {path} → {focus: win} | {spawned: win} | null`: today `deep-link.ts` `handleOpenPath` (the first window whose cwd is the path, else a spawn there).
+- The owner is Node until slice C, reached over the shell's host connection. After C the shell sends the same two commands to the core over the client connection it gets in the core-owner step (c) above (in (b) the shell only spawns and holds the core; the shell's own request channel to it comes with the `Core` route). Only the transport changes; neither command exists twice.
+- The owner creates the window through the shell (`win.create`, answered with the shell's ids) before it acquires the tab, so a window never exists in Node that the shell did not make. Node's `createWindow` becomes async; its three callers already are.
+
+**3. Ordering kept.**
+- Entry points stay serial: an open waits for the one before it (`deep-link.ts` `pending`), and a link or file that arrives before the first window is replayed after it, in order.
+- A payload for a page (`DEEP_LINK`) goes through `page_push`'s outbox, which holds it until that document is ready, as `did-finish-load` holds it today; a document that is replaced first never gets it.
+- `win.closed` reaches Node after the window's last page send on the same stream. Node handles it in one tick, in today's order: the window leaves the live list, `persistTabLayouts` runs, then the pool's `windowClosed` releases its tabs. A closed window must be gone from the list before the first save after its close, or its layout comes back on the next launch. Releasing before or after that save must give the same file (today both run and the last save wins). During an approved quit, `layoutsToSave` keeps the stored layouts, and a paired page's window is never saved (slice C's answer).
+- Until C, Node keeps one thin `ClientWindow` per shell window with what the pool uses: `webContents.id`, `webContents.send`, `isDestroyed()`, `once("closed")` and `isWebWindow(id)` (and `instanceof WebClientWindow`/`deviceId`, which `onWindowTabsChanged` uses to save paired layouts), as the shim's mirror does now. Its ~25 "send to every window" loops become one shell broadcast to the live app pages. The broadcast and Node's other sends share one stream, so they stay in order.
+- **The pool owner in the core needs three things first** (slice C's answer): a core→shell path to create a window, the quit state (now `quit_chain.rs`'s), and the session list and prefs `resolveWindowSpawnTarget` reads (prefs are slice B's). Until all three exist, Node serves both commands.
+
+**4. Units, each green alone.**
+1. **W1 OS window state.** Shell: ids, geometry and its file, chrome/Mica, first show and presence, focus/target/show, run progress, renderer recovery and its two dialogs. Node's `WindowManager` keeps the pool-facing record and `cwd` only. Vitest `window-chrome`, `window-show`, `renderer-recovery` cases move to Rust tests. e2e: `first-launch-window`, `window-theme`, `windows-caption`, `sidebar-prefs-two-windows`, `renderer-hang` (`e2e/renderer-hang.e2e.ts`).
+2. **W2 entry points.** Shell: Dock `activate`, the global shortcut, second instance, `open-url`/`open-file`, the `omp://` parse (`deep-link.ts`'s cases become Rust tests), using the two commands. Node's `setupDeepLinks`, `activateWindow` and the shortcut handler are deleted. e2e: `first-launch-window` (second launch), `multi-viewer`, `opened-close-relaunch`, `relaunch-child-ids`.
+3. **W3 menu and tray** (`menu.ts`, `tray.ts`, `tray-labels.ts`, root rows 306/490/491): the last readers of the target window. The tray's labels read the updater status (slice G) and the quit risk (pool): the shell asks for them when the menu opens, never from a mirror.
+4. **W4 last-window close.** `lastWindowCloseAction` in the shell. The close-to-tray pref reaches it as a fact its owner pushes on every change (Node now, slice B's owner later), as the theme does, never as a read on the close path: the close must decide at once, also while a core restarts. The once-only tray notice is a shell notification whose pref write goes to B's owner. Lands after B. `WindowManager` is then deleted; the pool's window entry carries `cwd`.
+- Depends on: W1–W3 need neither (b) nor C. W4 needs B. Moving the two commands' owner to the core needs C and (c).
+- Formal: `session-processes` and `tab-session` tag `index.ts` spawn and restore lines; W1/W2 move their `@code` tags with the code and restamp both on the branch.
+
+**5. Behaviour differences.** None intended. Two to watch: the window id is the shell's (positive, unique for the app's life, never a paired page's negative virtual id, `isWebWindow`; the pool's tab layouts and core lanes key on it), and a spawn the shell asks for while Node is busy waits on Node's answer instead of running inside Node's own tick, which is the order the shell's events already arrive in.
+
+
 
 ## 3. Landing order and exit gate
 
