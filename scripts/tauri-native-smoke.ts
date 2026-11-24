@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { type ChildProcessByStdio, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
-import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -176,6 +176,8 @@ export interface NativeLaunch {
 	env?: Record<string, string | undefined>;
 	/** Where the evidence folder is made; default OMPDESK_TAURI_TEST_OUTPUT. */
 	output?: string;
+	/** The executable to start; default OMPDESK_TAURI_TEST_BINARY. */
+	binary?: string;
 }
 
 /**
@@ -184,7 +186,7 @@ export interface NativeLaunch {
  */
 export async function launchNative(prefix = "native-smoke-", launch: NativeLaunch = {}): Promise<NativeApp> {
 	assert(["darwin", "win32"].includes(process.platform), "Native smoke requires the actual shipping OS");
-	const binary = process.env.OMPDESK_TAURI_TEST_BINARY;
+	const binary = launch.binary ?? process.env.OMPDESK_TAURI_TEST_BINARY;
 	const output = launch.output ?? process.env.OMPDESK_TAURI_TEST_OUTPUT;
 	assert(binary && path.isAbsolute(binary), "OMPDESK_TAURI_TEST_BINARY must name the built Tauri executable");
 	assert(output && path.isAbsolute(output), "OMPDESK_TAURI_TEST_OUTPUT must name the caller's private evidence root");
@@ -332,14 +334,55 @@ export async function saveFailure(driver: Driver, profile: string, error: unknow
 		await writeFile(path.join(profile, "failure.png"), Buffer.from(png, "base64")).catch(() => undefined);
 }
 
+const LSREGISTER =
+	"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+/**
+ * The app bundle macOS delivers `open -a <bundle> <link or folder>` to, and the executable in it to start: the packaged
+ * app's own, or, for the bare staged host, a bundle made around a copy of it in the evidence root (an id no installed
+ * OMPdesk has, `omp://` declared), so the open reaches this process and never a person's app.
+ */
+async function openTarget(binary: string, output: string): Promise<{ bundle: string; binary: string }> {
+	const own = path.dirname(path.dirname(path.dirname(binary)));
+	if (own.endsWith(".app") && path.basename(path.dirname(binary)) === "MacOS") return { bundle: own, binary };
+	await mkdir(output, { recursive: true });
+	const bundle = path.join(await mkdtemp(path.join(output, "bundle-")), "OMPdesk Smoke.app");
+	await mkdir(path.join(bundle, "Contents", "MacOS"), { recursive: true });
+	const executable = path.join(bundle, "Contents", "MacOS", "ompdesk-shell");
+	await copyFile(binary, executable);
+	await chmod(executable, 0o755);
+	await writeFile(
+		path.join(bundle, "Contents", "Info.plist"),
+		`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.seuput.ompdesk.native-smoke</string>
+<key>CFBundleName</key><string>OMPdesk Smoke</string>
+<key>CFBundleExecutable</key><string>ompdesk-shell</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.seuput.ompdesk.native-smoke</string><key>CFBundleURLSchemes</key><array><string>omp</string></array></dict></array>
+</dict></plist>
+`,
+	);
+	return { bundle, binary: executable };
+}
+
 async function main(): Promise<void> {
 	console.log("test build: release bytes + feature test-automation (tauri-plugin-wdio-webdriver)");
 	const edit = process.env.OMPDESK_TEST_EDIT_MENU === "1";
 	if (edit) assert(process.platform === "darwin" && process.env.RUNNER_ENVIRONMENT === "github-hosted");
-	const app = await launchNative(
-		"native-smoke-",
-		edit ? { env: { OMP_GUI_HEADLESS: "0", OMPDESK_TEST_EDIT_MENU: "1" } } : {},
-	);
+	// Only on a macOS runner: the opens below go through LaunchServices, which a person's Mac shares with their own app.
+	const staged = process.env.OMPDESK_TAURI_TEST_BINARY;
+	const output = process.env.OMPDESK_TAURI_TEST_OUTPUT;
+	const opens =
+		process.platform === "darwin" && process.env.RUNNER_ENVIRONMENT === "github-hosted" && staged && output
+			? await openTarget(staged, output)
+			: null;
+	const app = await launchNative("native-smoke-", {
+		...(edit ? { env: { OMP_GUI_HEADLESS: "0", OMPDESK_TEST_EDIT_MENU: "1" } } : {}),
+		...(opens ? { binary: opens.binary } : {}),
+	});
 	const { binary, profile, port, exited, code } = app;
 	const driver = new Driver(port);
 	let quitRequested = false;
@@ -417,6 +460,63 @@ async function main(): Promise<void> {
 			);
 			console.log("Verified Edit > Copy and Edit > Paste in the OMPdesk WKWebView composer.");
 		}
+		if (opens) {
+			// macOS hands a link and a folder to the running app as it does for a person (`open -a`, an Apple Event to this
+			// bundle): the shell's queue opens them (tauri-shell/src/entry.rs), Node only answers for the windows.
+			execFileSync(LSREGISTER, ["-f", opens.bundle]);
+			const active = "window.omp.tabs.list().then(t=>t.find(x=>x.active))";
+			await until(
+				"Tab idle before omp://new",
+				async () => (await driver.evaluate(`${active}.then(a=>a?.status==='ready')`)) === true,
+				exited,
+			);
+			execFileSync("/usr/bin/open", ["-a", opens.bundle, "omp://new"]);
+			await until(
+				"open -a <app> omp://new starts a new session in the window",
+				async () =>
+					(await driver.evaluate(
+						`${active}.then(a=>a?.unstarted===true&&![...document.querySelectorAll('[data-transcript-kind]')].some(n=>n.textContent.includes('Local fixture reply')))`,
+					)) === true,
+				exited,
+			);
+			const first = String(await driver.command("GET", "/window"));
+			const folder = await mkdtemp(path.join(profile, "opened-"));
+			const folders = JSON.stringify([folder, await realpath(folder)]);
+			execFileSync("/usr/bin/open", ["-a", opens.bundle, folder]);
+			let second = "";
+			await until(
+				"open -a <app> <folder> opens a second window",
+				async () => {
+					const handles = (await driver.command("GET", "/window/handles")) as string[];
+					second = handles.find(handle => handle !== first) ?? "";
+					return handles.length === 2 && second !== "";
+				},
+				exited,
+			);
+			await driver.command("POST", "/window", { handle: second });
+			await until(
+				"The second window's tab works in the opened folder",
+				async () =>
+					driver
+						.evaluate(
+							`window.omp ? window.omp.tabs.list().then(t=>t.some(x=>${folders}.includes(x.cwd))) : false`,
+						)
+						.then(
+							value => value === true,
+							() => false,
+						),
+				exited,
+			);
+			await driver.command("POST", "/window", { handle: first });
+			execFileSync("/usr/bin/open", ["-a", opens.bundle, folder]);
+			await delay(3_000);
+			assert.equal(
+				((await driver.command("GET", "/window/handles")) as string[]).length,
+				2,
+				"Opening the same folder again must bring its window forward, not open another",
+			);
+			console.log("Verified omp://new and a folder opened through LaunchServices (open -a).");
+		}
 		await driver.chord(",");
 		await driver.element('[data-settings-page] [data-settings-section="appearance"]');
 		const png = await driver.command("GET", "/screenshot");
@@ -445,7 +545,7 @@ async function main(): Promise<void> {
 		assert(!String(userAgent).includes("Electron/"), "The smoke attached to the old Electron renderer");
 		await writeFile(
 			path.join(profile, "result.json"),
-			`${JSON.stringify({ engine: process.platform === "darwin" ? "WKWebView" : "WebView2", userAgent, binary, profile, checks: ["preload", "bridge", "native-new-tab", "native-prompt-input", "actual-answer", "native-settings", "screenshot"] }, null, 2)}\n`,
+			`${JSON.stringify({ engine: process.platform === "darwin" ? "WKWebView" : "WebView2", userAgent, binary, profile, checks: ["preload", "bridge", "native-new-tab", "native-prompt-input", "actual-answer", ...(opens ? ["open-url", "open-file"] : []), "native-settings", "screenshot"] }, null, 2)}\n`,
 		);
 		await driver.evaluate("(setTimeout(()=>window.omp.app.quit(),0),true)");
 		quitRequested = true;

@@ -71,8 +71,8 @@ export function createMenu(windowManager: WindowManager, spawnWindow: SpawnWindo
 			submenu: [
 				{
 					label: mainT("menu.openProject", language),
-					// No accelerator: ⌘⇧O is owned by the globalShortcut window
-					// toggle (index.ts). Registering it here too makes macOS fire
+					// No accelerator: ⌘⇧O is owned by the shell's global window
+					// toggle (tauri-shell/src/entry.rs). Registering it here too makes macOS fire
 					// both (dialog + hide) and Windows swallow the menu shortcut
 					// entirely. The menu item stays clickable.
 					click: () => sendMenuAction(windowManager, spawnWindow, "open-project"),

@@ -1,6 +1,6 @@
 /**
  * The small desktop modules of `electron`: `dialog`, `clipboard`, `shell`, `Notification`, `screen`, `nativeTheme`,
- * `powerMonitor`, `powerSaveBlocker`, `globalShortcut`, `systemPreferences` and the native `autoUpdater` (PROTOCOL.md
+ * `powerMonitor`, `powerSaveBlocker`, `systemPreferences` and the native `autoUpdater` (PROTOCOL.md
  * §8, §9). Their synchronous getters answer from what the shell hands over and pushes (`facts`, `screen.changed`,
  * `theme.changed`, `power.event`); the few that cannot (`clipboard.readText`, `powerMonitor.getSystemIdleTime`,
  * the macOS permission queries) throw and have an `…Async` form that asks.
@@ -315,32 +315,6 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		isStarted: (id: number): boolean => blockers.has(id),
 	};
 
-	// --- globalShortcut ---
-	const shortcuts = new Map<string, () => void>();
-	client.on("shortcut.fired", ({ accelerator }: { accelerator: string }) => shortcuts.get(accelerator)?.());
-	const globalShortcut = {
-		register(accelerator: string, callback: () => void): boolean {
-			shortcuts.set(accelerator, callback);
-			client.call<{ registered: boolean }>("shortcut.register", { accelerator }).then(
-				({ registered }) => {
-					if (!registered) {
-						shortcuts.delete(accelerator);
-						host.warn(`the global shortcut ${accelerator} is taken by another application`);
-					}
-				},
-				(error: unknown) => host.warn(`shortcut.register: ${String(error)}`),
-			);
-			return true;
-		},
-		unregister(accelerator: string): void {
-			if (shortcuts.delete(accelerator)) host.post("shortcut.unregister", { accelerator });
-		},
-		unregisterAll(): void {
-			for (const accelerator of [...shortcuts.keys()]) globalShortcut.unregister(accelerator);
-		},
-		isRegistered: (accelerator: string): boolean => shortcuts.has(accelerator),
-	};
-
 	// --- native autoUpdater (Squirrel): not in the shell; electron-updater only listens to it ---
 	class NativeAutoUpdater extends EventEmitter {
 		setFeedURL(): void {
@@ -367,7 +341,6 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		systemPreferences,
 		powerMonitor,
 		powerSaveBlocker,
-		globalShortcut,
 		autoUpdater: new NativeAutoUpdater(),
 		/** The window a dialog sheet or a menu belongs to when none is given. */
 		focusedWindowId: deps.focusedWindowId,

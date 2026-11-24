@@ -243,7 +243,7 @@ Switch(t, s) ==
 
 \* @code native/ompdesk/crates/core/src/pool/listen.rs:231-266 Ctx::feed_session_info unregisters the tab's file if a known session ID changes.
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:99-118 Ctx::unregister_session_file_of drops the owner and calls on_session_files_changed.
-\* @code src/main/index.ts:1546-1549 onSessionFilesChanged calls hostServices.listingChanged().
+\* @code src/main/index.ts:1565-1568 onSessionFilesChanged calls hostServices.listingChanged().
 IdChange(t) ==
     /\ ~Busy
     /\ t \in WinTabs /\ file[t] # NoS /\ nChanges < MaxChanges
@@ -261,8 +261,8 @@ Reregister(t, s) ==
     /\ pendReg' = pendReg \ {t}
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, cn, seen>>
 
-\* @code src/main/index.ts:1378-1387 sessionOpeners merges closed-child records with the current tab openers.
-\* @code src/main/ipc.ts:1440 A change to AGENT_CLOSED_CHILDREN_PREF calls hostedTabs.listingChanged().
+\* @code src/main/index.ts:1397-1407 sessionOpeners merges closed-child records with the current tab openers.
+\* @code src/main/ipc.ts:1433 A change to AGENT_CLOSED_CHILDREN_PREF calls hostedTabs.listingChanged().
 Record ==
     /\ ~Busy
     /\ nChanges < MaxChanges
@@ -296,7 +296,7 @@ IdxCreate(s) ==
 \* @code src/main/session-index.ts:174-184 #onChanged handles a changed journal.
 \* @code src/main/session-index.ts:250-252 relist marks the shared list changed after a rename.
 \* @code src/main/remote/host-services.ts:3169-3180 renameSession awaits the rename, then calls sessionIndex.relist().
-\* @code src/main/ipc.ts:1635-1642 SESSIONS_RENAME marks the copy stale after the host answers.
+\* @code src/main/ipc.ts:1628-1634 SESSIONS_RENAME marks the copy stale after the host answers.
 IdxBump(s, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[s] < MaxJ /\ nIdx < MaxIdx /\ Free(by)
@@ -319,7 +319,7 @@ IdxDelete(s, by) ==
 \* @code native/ompdesk/crates/core/src/fs/read.rs:359-368 stat follows links to check the move destination before stock moves the session.
 \* @code src/main/session-index.ts:350-362 moveSession awaits the move and calls #notifyChange.
 \* @code src/main/remote/host-services.ts:1435-1442 sessions.move moves the host's session.
-\* @code src/main/ipc.ts:1653-1661 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
+\* @code src/main/ipc.ts:1646-1654 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
 IdxMove(s, t, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[t] = Absent /\ nIdx < MaxIdx /\ Free(by)
@@ -616,8 +616,8 @@ FeedRetry(d) ==
 
 \* A device's delete, rename or move: main answered after the host did, and marked the device computer's copy stale (a bare event goes to the windows) ...
 \* @code src/main/ipc.ts:550-558 deleteStoredSession calls hostSessionsStale after sessions.delete answers.
-\* @code src/main/ipc.ts:1635-1642 SESSIONS_RENAME calls hostSessionsStale after the rename.
-\* @code src/main/ipc.ts:1653-1661 SESSIONS_MOVE calls hostSessionsStale after the move.
+\* @code src/main/ipc.ts:1628-1634 SESSIONS_RENAME calls hostSessionsStale after the rename.
+\* @code src/main/ipc.ts:1646-1654 SESSIONS_MOVE calls hostSessionsStale after the move.
 \* @code src/main/remote/devices.ts:693-695 hostSessionsStale calls HostSessionList.stale().
 PostMain(d) ==
     /\ ~Busy
