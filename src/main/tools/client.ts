@@ -22,12 +22,16 @@ export interface ToolsOpts {
 	toolsDir: string;
 	userData: string;
 	appVersion: string;
+	/** `TESTED_OMP_VERSION`: the omp this release was tested with. */
+	testedOmp: string;
 	/** Setup installs on its own (a packaged app outside headless, or a test installer). */
 	automatic: boolean;
 	/** Which updaters check on a timer in this launch. */
 	scheduled: { omp: boolean; cli: boolean; ext: boolean };
 	testInstaller?: string | null;
 	testDownload?: { url: string; sha256: string } | null;
+	/** The verified list's file a test launch reads instead of the network (`OMP_GUI_TEST_OMP_COMPAT`, unpacked only). */
+	testOmpCompat?: string | null;
 	/** The core's timers are main's (a test's fake timers drive them). */
 	manual?: boolean;
 	/** Setup's: `%SystemRoot%`, the agent-desktop the app ships, Bun's root (`BUN_INSTALL` or `~/.bun`). */
@@ -36,6 +40,8 @@ export interface ToolsOpts {
 	bunInstall: string;
 	/** A test's server on 127.0.0.1 standing in for every host setup's lookups and downloads reach. */
 	mirror?: string | null;
+	/** `new Intl.Collator().resolvedOptions().locale`: extension rows sort by name as `localeCompare` sorts here. */
+	locale?: string;
 }
 
 export interface ToolsState {
@@ -53,7 +59,9 @@ export type ToolsItem =
 	| { k: "log"; source: RuntimeErrorSource; message: string; details: Record<string, unknown> }
 	| { k: "stalled"; chain: string; label: string; ms: number }
 	| { k: "timer"; timer: number; ms: number }
-	| { k: "clearTimer"; timer: number };
+	| { k: "clearTimer"; timer: number }
+	/** The omp updater installed `version`: main's one "omp updated" toast. */
+	| { k: "ompUpdated"; version: string };
 
 /** What the core asks main, until the owners of these move into the core; each may answer with a promise. */
 export interface ToolsAsks {
@@ -84,6 +92,8 @@ export interface ToolsAsks {
 	notify(kind: string, params: Record<string, unknown>): void | Promise<void>;
 	/** A stock worker request. */
 	stock(method: string, params: unknown, timeoutMs: number): Promise<unknown>;
+	/** The working folders of this computer's open local and hosted tabs (project-scoped plugins and skills). */
+	workspaceDirs(): string[] | Promise<string[]>;
 }
 
 export interface ToolsClientDeps {
@@ -91,6 +101,8 @@ export interface ToolsClientDeps {
 	asks: ToolsAsks;
 	/** A part changed: send it to the windows and paired devices. */
 	onState(part: ToolsPart, state: ToolsState[ToolsPart]): void;
+	/** The omp updater installed a new omp (the focused window's toast). */
+	onOmpUpdated?(version: string): void;
 }
 
 function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
@@ -119,6 +131,8 @@ function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
 			return asks.notify(String(item.kind), (item.params ?? {}) as Record<string, unknown>);
 		case "stock":
 			return asks.stock(String(item.method), item.params, Number(item.timeoutMs));
+		case "workspaceDirs":
+			return asks.workspaceDirs();
 		default:
 			throw new Error(`the tools hub asked what main does not answer: ${q}`);
 	}
@@ -180,6 +194,9 @@ export class ToolsClient {
 				clearTimeout(this.#timers.get(item.timer));
 				this.#timers.delete(item.timer);
 				return;
+			case "ompUpdated":
+				this.#deps.onOmpUpdated?.(item.version);
+				return;
 		}
 	}
 
@@ -229,11 +246,31 @@ export class ToolsClient {
 		return hub().callLater(this.#instance(), "omp.now");
 	}
 
+	/** BridgeHealth: setup's retry of an omp it holds missing or broken, else the omp updater's repair pass. */
+	ompRepair(): Promise<unknown> {
+		return hub().callLater(this.#instance(), "omp.repair");
+	}
+
+	/** `toolsAutoUpdate` or `ompFollowVerified` changed. */
+	ompPrefChanged(): void {
+		hub().call(this.#instance(), "omp.prefChanged");
+	}
+
 	cliNow(id?: unknown): Promise<unknown> {
 		return hub().callLater(this.#instance(), "cli.now", { id: id ?? null });
 	}
 
 	extNow(key?: unknown): Promise<unknown> {
 		return hub().callLater(this.#instance(), "ext.now", { key: key ?? null });
+	}
+
+	/** List the extensions again without checking (Settings opened); answers when listed. */
+	extRescan(): Promise<unknown> {
+		return hub().callLater(this.#instance(), "ext.rescan");
+	}
+
+	/** `toolsAutoUpdate` changed: turning it on checks the extensions at once. */
+	extPrefChanged(): void {
+		hub().call(this.#instance(), "ext.prefChanged");
 	}
 }

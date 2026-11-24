@@ -14,7 +14,7 @@
 //!   and `settle` (the end of a method that was `async`).
 //! - Questions the core asks (the collaborator answers at once, `ask`): `blocked`, `spawn`, `acquired`,
 //!   `facts`, `window`, `start`, `restart`, `sleep`, `adoptCwd`, `sideChannel`, `endViews`, `dispose`, `disposeSidecars`,
-//!   `announce`, `decide`, `mergePlans`, `deletedAdd`, `selfDevice`, `snowflake`, the hooks `onRunningChange`,
+//!   `announce`, `decide`, `deletedAdd`, `selfDevice`, `snowflake`, the hooks `onRunningChange`,
 //!   `onSessionFilesChanged` and `onWindowTabsChanged`; and, for what main answers with a promise (`ask_later`):
 //!   `rpc`, `sideChannelLater` and `exiting`.
 

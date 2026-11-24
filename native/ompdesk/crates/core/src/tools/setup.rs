@@ -213,6 +213,30 @@ pub struct Seams {
     pub omp_release: Option<Rc<dyn Fn(String, String, Env) -> LocalFuture<Result<Value, String>>>>,
 }
 
+#[cfg(test)]
+impl Seams {
+    /// A machine with nothing on it whose installers never start: the other parts' tests run setup without touching
+    /// this computer.
+    pub fn offline() -> Seams {
+        Seams {
+            detect: Some(Rc::new(|| Box::pin(async { Detection::default() }))),
+            run: Some(Rc::new(|_, _, _, _| {
+                Box::pin(async {
+                    Ran {
+                        outcome: RunOutcome::Failed {
+                            reason: FailedBy::Spawn,
+                            exit_code: None,
+                            detail: Some("no installer in this test".to_owned()),
+                        },
+                        output: String::new(),
+                    }
+                })
+            })),
+            omp_release: None,
+        }
+    }
+}
+
 pub struct Part {
     pub items: Vec<Item>,
     pub required_running: bool,

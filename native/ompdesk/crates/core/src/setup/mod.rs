@@ -11,7 +11,7 @@
 //! - `mirror` is a test's server on 127.0.0.1 standing in for every host (`net::routed`).
 
 pub(crate) mod archives;
-mod compat;
+pub(crate) mod compat;
 pub(crate) mod desktop;
 pub(crate) mod download;
 pub(crate) mod launcher;

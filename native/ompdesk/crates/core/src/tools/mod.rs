@@ -10,10 +10,12 @@
 //! `cli-tools/`), `ext.rs` (T2.5, `ext-update/`). This file holds what they share; T2.1 built it with each part's
 //! default state and its calls queuing a step whose work is the unit's to write ([`unported`]).
 //!
-//! **Open** `opts` ([`Opts`]): `platform` (`SetupPlatform`), `arch`, `toolsDir`, `userData`, `appVersion`,
+//! **Open** `opts` ([`Opts`]): `platform` (`SetupPlatform`), `arch`, `toolsDir`, `userData`, `appVersion`, `testedOmp`,
 //! `automatic` (setup installs on its own), `scheduled {omp, cli, ext}` (each updater checks on a timer),
 //! `testInstaller`, `testDownload {url, sha256}`, `manual` (main's timers, below) and `now` (main's `Date.now()`).
 //! A part adds the opts it needs (setup: `systemRoot`, `agentDesktopBundle`, `bunInstall`, a test's `mirror`).
+//! The extension updater adds `locale` (`new Intl.Collator().resolvedOptions().locale`: its rows sort by name as
+//! main's `localeCompare` sorted them).
 //!
 //! **Calls** answered at once from memory (main waits for them):
 //! - `state` → `{setup, omp, cli, ext}`: `SetupState`, `OmpUpdateState`, `CliUpdateState`, `ExtensionUpdateState`
@@ -34,6 +36,8 @@
 //! waits: one pass, one answer; main reads `state` right after posting it, and the hub runs the call first, so the
 //! state already shows the pass), `cli.now {id?}`, `ext.now {key?}`. A step that ended by its bound or the close
 //! answers its fault (`step_stalled`, `tools_closed`); the part turns that into its own outcome (`skipped`, `failed`).
+//! The extension updater's `ext.rescan` (lists again, answered when listed) and `ext.prefChanged` (answered at once;
+//! `toolsAutoUpdate` changed: a started, scheduled instance checks at once when it is on) take no key.
 //!
 //! **Items** to main (`k`): `state {part, state}` once per change of a part (`setup`, `omp`, `cli`, `ext`; main sends
 //! it to the windows and paired devices); `log {source, message, details}` (main writes `gui-runtime.jsonl`: `setup`,
@@ -51,6 +55,8 @@
 //! local tabs waiting for omp); `notify {kind, params}` (an OS notification, text from main's table); `stock {method,
 //! params, timeoutMs}` (a stock worker request: `stock::request_in_process` needs main's stdio `Events` to start a
 //! worker, which a hub instance does not hold).
+//! The extension updater asks `workspaceDirs` (the working folders of main's open local and hosted tabs: where
+//! project-scoped plugins and skills live).
 //!
 //! **Preferences** are read in process from `<userData>/prefs.json` ([`Tools::pref`]): `toolsAutoUpdate`,
 //! `ompFollowVerified`, `ompHeldSeen`, `ompHoldTold`, `proxyUrl`.
@@ -58,6 +64,12 @@
 //! **Timing.** One step at a time in the order asked, each bound by 30 min ([`queue::STEP_MAX_MS`]); a CLI pass and
 //! an extension pass no longer overlap, and an omp pass is bound like the others (the named timing difference of the
 //! ledger). An install an updater pass needs runs inline in that pass's step ([`queue::Ctx`]).
+//!
+//! **The omp part** (T2.3, `omp/`) adds: opt `testOmpCompat` (the file `OMP_GUI_TEST_OMP_COMPAT` names, an unpacked
+//! app only); calls `omp.repair` (BridgeHealth: setup's retry of omp while setup holds omp missing or broken, else the
+//! repair pass) and `omp.prefChanged` (`toolsAutoUpdate` or `ompFollowVerified` changed); item `ompUpdated {version}`
+//! (main's one "omp updated" toast); it writes the prefs `ompHeldSeen` and `ompHoldTold` and asks `notify {kind:
+//! "ompHold", params}`.
 
 mod cli;
 mod clock;
@@ -77,7 +89,7 @@ use std::rc::{Rc, Weak};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use crate::hub::{self, Kind, LocalFuture, Out, Outcome, params};
 use crate::server::Fault;
@@ -142,12 +154,19 @@ pub struct Opts {
     pub tools_dir: String,
     pub user_data: String,
     pub app_version: String,
+    /// `TESTED_OMP_VERSION` (`src/shared/omp-tested.json`): the omp this release was tested with. An opt, not an
+    /// `include_str!`: the native build's fingerprint holds only `native/ompdesk`. Missing, the default passes hold
+    /// every newer omp.
+    #[serde(default)]
+    pub tested_omp: String,
     pub automatic: bool,
     pub scheduled: Scheduled,
     #[serde(default)]
     pub test_installer: Option<String>,
     #[serde(default)]
     pub test_download: Option<TestDownload>,
+    #[serde(default)]
+    pub test_omp_compat: Option<String>,
     #[serde(default)]
     pub manual: bool,
     #[serde(default)]
@@ -162,6 +181,8 @@ pub struct Opts {
     pub bun_install: String,
     #[serde(default)]
     pub mirror: Option<String>,
+    #[serde(default)]
+    pub locale: String,
 }
 
 fn system_root() -> String {
@@ -204,6 +225,8 @@ pub struct Tools {
     pub ext: RefCell<ext::Part>,
     started: Cell<bool>,
     closed: watch::Sender<bool>,
+    /// Wakes an updater's timer to tick now and count its next wait from that tick (a pref turned on).
+    rearm: [Rc<Notify>; 3],
 }
 
 /// The step work a unit has not written yet: it does nothing and answers null.
@@ -246,6 +269,7 @@ impl Tools {
             runner: Runner::new(supervisor),
             started: Cell::new(false),
             closed: watch::Sender::new(false),
+            rearm: Default::default(),
         });
         tools.spawn_task(queue.run());
         tools
@@ -317,6 +341,17 @@ impl Tools {
         let base = self.ask("env", json!({})).await?;
         let mut env: BTreeMap<String, String> = serde_json::from_value(base)
             .map_err(|error| Fault::new("tools_env", error.to_string()))?;
+        for (name, value) in self.proxy().await.env {
+            if let Value::String(value) = value {
+                env.insert(name, value);
+            }
+        }
+        Ok(env)
+    }
+
+    /// The proxy the core picks (`proxy.resolve`): for a spawn's environment, and as `http::Request.proxy` for the
+    /// core's own requests. A late system lookup is logged as main logged it.
+    pub async fn proxy(&self) -> crate::proxy::Pick {
         let system = async {
             tokio::task::spawn_blocking(|| ompdesk_sysproxy::resolve(crate::proxy::PROBE_URL))
                 .await
@@ -335,12 +370,7 @@ impl Tools {
                 json!({"ms": crate::proxy::LOOKUP_BOUND.as_millis(), "reason": "the system proxy lookup did not answer"}),
             );
         }
-        for (name, value) in pick.env {
-            if let Value::String(value) = value {
-                env.insert(name, value);
-            }
-        }
-        Ok(env)
+        pick
     }
 
     /// Queues `work` as one step of `kind`.
@@ -378,8 +408,19 @@ impl Tools {
                     first.spawn_task(schedule(Rc::downgrade(&first), updater));
                 }
             }
+            // A launch that does not schedule lists the extensions once, checking nothing.
+            if !scheduled.ext {
+                let _ = ext::rescan(&first);
+            }
+            omp::started(&first);
         });
         true
+    }
+
+    /// `updater`'s timer ticks now and waits its delay from that tick; nothing when no timer waits (before the start,
+    /// while its pass runs, in a launch that does not schedule).
+    fn rearm(&self, updater: Updater) {
+        self.rearm[updater as usize].notify_waiters();
     }
 
     /// One scheduled check of `updater`: its pass, queued.
@@ -417,13 +458,19 @@ async fn schedule(tools: Weak<Tools>, updater: Updater) {
         };
         let Ok(pass) = pass else { return };
         let _ = pass.await;
-        let Some((clock, ms)) = tools
-            .upgrade()
-            .map(|tools| (Rc::clone(&tools.clock), tools.delay(updater)))
-        else {
+        let Some((clock, ms, rearm)) = tools.upgrade().map(|tools| {
+            (
+                Rc::clone(&tools.clock),
+                tools.delay(updater),
+                Rc::clone(&tools.rearm[updater as usize]),
+            )
+        }) else {
             return;
         };
-        clock.sleep(ms).await;
+        tokio::select! {
+            () = clock.sleep(ms) => {}
+            () = rearm.notified() => {}
+        }
     }
 }
 

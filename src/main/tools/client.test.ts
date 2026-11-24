@@ -30,6 +30,7 @@ const asks = {
 	restartWaiting: () => {},
 	notify: () => {},
 	stock: async () => null,
+	workspaceDirs: () => [],
 };
 
 /** Lets the core's items reach main (the hub's worker pings on a turn of the event loop) until `done` holds. */
@@ -52,6 +53,7 @@ describe("ToolsClient against the real core", () => {
 				toolsDir: join(userData, "tools"),
 				userData,
 				appVersion: "0.0.0",
+				testedOmp: "18.22.2",
 				automatic: false,
 				scheduled: { omp: true, cli: false, ext: false },
 				manual: true,

@@ -9,11 +9,12 @@
 //! CLI updates, MCP updates and setup all read installed package ownership through `ext.binaryFacts`.
 
 mod binary;
-mod install;
-mod latest;
-mod mcp;
-mod running;
-mod seeds;
+pub(crate) mod install;
+pub(crate) mod latest;
+pub(crate) mod mcp;
+pub(crate) mod plan;
+pub(crate) mod running;
+pub(crate) mod seeds;
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;

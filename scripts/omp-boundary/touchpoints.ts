@@ -218,14 +218,23 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "public",
 		summary:
 			"OMPdesk is the one owner of omp updates: it reads stock's `update.auto` with `omp config get update.auto --json`, turns it off with `omp config set update.auto false --json` while it keeps omp current, and sets it back to true when the person turns that off (an `overriddenBy` in set's reply counts as not written).",
-		files: ["src/main/index.ts", "src/main/omp-auto-takeover.ts"],
+		files: [
+			"src/main/index.ts",
+			"src/main/omp-auto-takeover.ts",
+			"native/ompdesk/crates/core/src/tools/omp/takeover.rs",
+		],
 		stock: [
 			"omp config get <key> --json",
 			"omp config set <key> <value> --json",
 			"update.auto (default false)",
 			"omp://settings.md",
 		],
-		tests: ["src/main/omp-auto-takeover.test.ts", "src/main/omp-config-stock.test.ts", "e2e/omp-auto-update.e2e.ts"],
+		tests: [
+			"src/main/omp-auto-takeover.test.ts",
+			"src/main/omp-config-stock.test.ts",
+			"e2e/omp-auto-update.e2e.ts",
+			"native/ompdesk/crates/core/src/tools/omp/tests.rs",
+		],
 	},
 	{
 		id: "Q01",

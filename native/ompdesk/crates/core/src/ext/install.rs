@@ -439,7 +439,7 @@ fn shim_target(real: &str, bun: bool) -> Option<String> {
     None
 }
 
-fn may_write(path: &Path) -> bool {
+pub(crate) fn may_write(path: &Path) -> bool {
     #[cfg(unix)]
     {
         crate::sys::may_write(path)
