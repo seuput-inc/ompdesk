@@ -3,13 +3,13 @@
  * CLI and extension updaters and their schedule as one owner on one queue (slice G, T2). Main keeps what only it has:
  * the typed IPC forwards call these methods, the state items go to the windows (`onState`), the log lines into
  * `gui-runtime.jsonl`, and the core's questions are answered by `asks`. The contract is the module header of
- * `tools/mod.rs`; not wired into `index.ts` yet (T2.2-T2.5 move the parts and cut main over).
+ * `tools/mod.rs`; `index.ts` opens one instance and `ipc.ts` forwards the IPC channels to it.
  */
 import type { CliUpdateState } from "../../shared/cli-update";
 import type { ExtensionUpdateState } from "../../shared/extension-update";
 import type { RuntimeErrorSource } from "../../shared/ipc-types";
 import type { OmpUpdateState } from "../../shared/omp-update";
-import type { GitAslrResult, SetupPlatform, SetupState } from "../../shared/setup";
+import type { GitAslrResult, SetupItemState, SetupPlatform, SetupState } from "../../shared/setup";
 import { type HubItem, hub } from "../core/hub";
 import type { ExtensionApplyPlan } from "../extension-reload";
 import type { OmpResolution } from "../omp-runtime";
@@ -75,8 +75,6 @@ export interface ToolsAsks {
 	env(): NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>;
 	/** After an install: main's PATH and its login-shell cache again. */
 	refreshPath(): Promise<void>;
-	/** main's omp resolution again; the version it found, or null. */
-	refreshOmp(): Promise<string | null>;
 	/**
 	 * Setup's detection of omp: main's resolution (`systemOmp()`), resolved again (`refreshSystemOmp()`) when `fresh`
 	 * (every detection after the launch's first, which follows an install or an update).
@@ -92,8 +90,6 @@ export interface ToolsAsks {
 	resume(updated: boolean): Promise<void>;
 	/** An extension pass's plan for main's own and its hosted tabs. */
 	applyExtensionUpdate(plan: ExtensionApplyPlan): void | Promise<void>;
-	/** Restart the local tabs waiting for omp. */
-	restartWaiting(): void | Promise<void>;
 	/** An OS notification; its text from main's table. */
 	notify(kind: string, params: Record<string, unknown>): void | Promise<void>;
 	/** A stock worker request. */
@@ -117,8 +113,6 @@ function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
 			return asks.env();
 		case "refreshPath":
 			return asks.refreshPath();
-		case "refreshOmp":
-			return asks.refreshOmp();
 		case "ompResolution":
 			return asks.ompResolution(item.fresh === true);
 		case "ompReady":
@@ -131,8 +125,6 @@ function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
 			return asks.resume(item.updated === true);
 		case "applyExtensionUpdate":
 			return asks.applyExtensionUpdate(item.plan as ExtensionApplyPlan);
-		case "restartWaiting":
-			return asks.restartWaiting();
 		case "notify":
 			return asks.notify(String(item.kind), (item.params ?? {}) as Record<string, unknown>);
 		case "stock":
@@ -147,6 +139,8 @@ function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
 export class ToolsClient {
 	readonly #deps: ToolsClientDeps;
 	#id: number | null = null;
+	/** `start` was called: an instance opened again on a new core starts again (setup detects, the timers run). */
+	#started = false;
 	/** The core's timers main runs, by the core's id (a `manual` instance). */
 	readonly #timers = new Map<number, NodeJS.Timeout>();
 
@@ -173,6 +167,7 @@ export class ToolsClient {
 			},
 		);
 		this.#id = id;
+		if (this.#started) hub().call(id, "start");
 		return id;
 	}
 
@@ -215,14 +210,17 @@ export class ToolsClient {
 		return hub().call<ToolsState>(this.#instance(), "state");
 	}
 
-	/** Setup's first pass ended: the scheduled updaters check now and then on their timers. */
+	/** The launch: setup's first pass, then each scheduled updater ticks and goes on on its timer. */
 	start(): boolean {
-		return hub().call<boolean>(this.#instance(), "start");
+		const id = this.#instance();
+		this.#started = true;
+		return hub().call<boolean>(id, "start");
 	}
 
 	/** The quit: the running step and what it started end, nothing queued runs. */
 	close(): void {
 		if (this.#id === null) return;
+		this.#started = false;
 		hub().call(this.#id, "close");
 		hub().close(this.#id);
 		this.#id = null;
@@ -238,8 +236,9 @@ export class ToolsClient {
 		return hub().callLater(this.#instance(), "setup.retry", { item });
 	}
 
-	installForConnection(item: unknown): Promise<unknown> {
-		return hub().callLater(this.#instance(), "setup.installForConnection", { item });
+	/** A connection the person starts installs its missing tool now; answers the item once that attempt ended. */
+	installForConnection(item: unknown): Promise<SetupItemState> {
+		return hub().callLater<SetupItemState>(this.#instance(), "setup.installForConnection", { item });
 	}
 
 	/** The Git item's Mandatory ASLR override (`setup:git-aslr`); answers `GitAslrResult`. */

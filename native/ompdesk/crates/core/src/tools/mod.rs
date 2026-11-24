@@ -47,14 +47,14 @@
 //!
 //! **Questions** to main ([`Main::ask`], answered later): `env` → main's spawn environment (`process.env` with the
 //! login shell's, [`Tools::spawn_env`] adds the proxy); `refreshPath` (main's PATH and login-shell cache after an
-//! install); `refreshOmp` (main's omp resolution again; answers its version or null); `ompReady` (omp became usable:
-//! main restarts the tabs that waited, the stats server); `firstTab` (answers once the first tab is ready or 30 s
-//! passed; setup's optional installs wait for it); `releaseHelpers` (main stops the stats server and the stock helper
-//! before omp is replaced); `resume {updated}` (and starts them again; the tabs restart on a new omp);
-//! `applyExtensionUpdate {plan}` (main applies it to its own and its hosted tabs); `restartWaiting` (main restarts
-//! local tabs waiting for omp); `notify {kind, params}` (an OS notification, text from main's table); `stock {method,
-//! params, timeoutMs}` (a stock worker request: `stock::request_in_process` needs main's stdio `Events` to start a
-//! worker, which a hub instance does not hold).
+//! install); `ompResolution {fresh}` (main's omp resolution, resolved again when `fresh`); `ompReady` (omp became
+//! usable: main restarts the tabs that failed for lack of it, the stats server); `firstTab` (answers once the first
+//! tab is ready or 30 s passed; setup's optional installs wait for it); `releaseHelpers` (main stops the stats server
+//! and the stock helper before omp is replaced); `resume {updated}` (and starts them again; the tabs restart on a new
+//! omp); `applyExtensionUpdate {plan}` (main applies it to its own and its hosted tabs); `notify {kind, params}` (an
+//! OS notification, text from main's table); `stock {method, params, timeoutMs}` (a stock worker request:
+//! `stock::request_in_process` needs main's stdio `Events` to start a worker, which a hub instance does not hold).
+//! Main restarts the local tabs waiting for omp itself, on the `state {part: "setup"}` that says omp is usable.
 //! The extension updater asks `workspaceDirs` (the working folders of main's open local and hosted tabs: where
 //! project-scoped plugins and skills live).
 //!

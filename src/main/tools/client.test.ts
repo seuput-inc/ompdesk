@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { stopCore } from "../core/process";
-import { CHECK_INTERVAL_MS } from "../update-scheduler";
 import { ToolsClient } from "./client";
+
+/** Between scheduled checks while all is well (`CHECK_INTERVAL_MS` of `tools/mod.rs`). */
+const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 const userData = mkdtempSync(join(tmpdir(), "ompdesk-tools-client-"));
 
@@ -16,7 +18,6 @@ afterAll(() => {
 const asks = {
 	env: () => ({}),
 	refreshPath: async () => {},
-	refreshOmp: async () => null,
 	ompResolution: async () => ({
 		ok: false as const,
 		error: "omp was not found",
@@ -27,7 +28,6 @@ const asks = {
 	releaseHelpers: async () => {},
 	resume: async () => {},
 	applyExtensionUpdate: () => {},
-	restartWaiting: () => {},
 	notify: () => {},
 	stock: async () => null,
 	workspaceDirs: () => [],

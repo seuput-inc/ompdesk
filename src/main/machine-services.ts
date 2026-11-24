@@ -46,7 +46,6 @@ import { ModelSetupRunner } from "./model-setup-runner";
 import { deleteModelsProvider, listModelsProviders, setModelOverride, upsertModelsProvider } from "./models-config";
 import { modelsConfigMetadata } from "./models-config-stock";
 import type { OmpResolution } from "./omp-runtime";
-import type { OmpUpdater } from "./omp-updater";
 import {
 	AccountRotationStateSchema,
 	BridgeHealthReportSchema,
@@ -159,6 +158,12 @@ function failure(error: unknown): { error: string; unavailable: false; code?: Ip
 	};
 }
 
+/** This computer's omp updater as a paired device drives it: its state, and Update now (a pass joins a running one). */
+export interface OmpUpdateDriver {
+	state(): OmpUpdateState;
+	updateNow(): Promise<unknown>;
+}
+
 export interface LocalMachineDeps {
 	stats: (path: string, params?: Record<string, string>) => Promise<StatsRead>;
 	statsText: StatsText;
@@ -185,8 +190,8 @@ export interface LocalMachineDeps {
 		write(pick: string | null): void;
 	};
 	desktop: DesktopDeps;
-	/** This computer's omp updater (`omp-updater.ts`); it exists once startup has built it. */
-	ompUpdater: () => Pick<OmpUpdater, "state" | "updateNow">;
+	/** This computer's omp updater (the core's `tools` instance); it exists once startup has built it. */
+	ompUpdater: () => OmpUpdateDriver;
 	/** This computer's ScheduleService; it exists once startup has built it. */
 	schedules: () => Pick<ScheduleService, "command" | "create" | "readLog"> | null;
 	/** This computer's sidebar project list; it exists once startup has built it. */
@@ -405,10 +410,11 @@ export class LocalMachine implements MachineServices {
 	}
 
 	/**
-	 * A paired device asks this computer to update its omp: the computer's own OmpUpdater does it
+	 * A paired device asks this computer to update its omp: the computer's own omp updater does it
 	 * (helpers released and resumed, the setup supervisor, the tabs moved to the new omp, one run at a
-	 * time with its scheduled one), in the background. The reply carries the state at that moment;
-	 * every change after it reaches the device as a pushed event (`LocalHostServices.ompUpdateChanged`).
+	 * time with its scheduled one), in the background. The reply carries the state at that moment, which already
+	 * shows the pass (the core runs the call before the state read); every change after it reaches the device as a
+	 * pushed event (`LocalHostServices.ompUpdateChanged`).
 	 */
 	async startOmpUpdate(): Promise<OmpUpdateState> {
 		const updater = this.#deps.ompUpdater();
