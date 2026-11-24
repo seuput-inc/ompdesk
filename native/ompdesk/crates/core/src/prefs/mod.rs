@@ -12,11 +12,14 @@
 //!   hub's. Another failure is logged; the next change writes the whole content again.
 //! - **Exit.** `flush` waits for the writer before the core exits, so a change main made before it closed the core's
 //!   stdin is on disk.
+//! - **Migrations.** `prefs.json` is migrated each time it is read from disk (`retired.rs`), before any caller sees
+//!   it; a migration that changed something is written like any change.
 //!
 //! Hub kind `prefs` (no state per instance): `get {file, key}` → `{value}` or `{}` when nothing is there, `has`,
 //! `set {file, key, value}`, `delete {file, key}`, `store {file}` → the whole store, `replace {file, value}`.
 
 mod path;
+mod retired;
 #[cfg(test)]
 mod tests;
 
@@ -85,13 +88,22 @@ fn read(file: &Path) -> Result<Map<String, Value>, Fault> {
 
 impl Prefs {
     /// The held store, read again when the file changed under the core.
-    fn current(&self) -> Result<MutexGuard<'_, State>, Fault> {
+    fn current(self: &Arc<Self>) -> Result<MutexGuard<'_, State>, Fault> {
         let mut state = lock(&self.state);
         let now = stamp(&self.file);
         let settled = !state.dirty && !state.writing && waiting_content(&self.file).is_none();
         if state.seen.is_none() || (settled && state.seen != Some(now)) {
             state.store = read(&self.file)?;
             state.seen = Some(now);
+            let migrated = self.file.file_name() == Some(std::ffi::OsStr::new("prefs.json"))
+                && self
+                    .file
+                    .parent()
+                    .is_some_and(|dir| retired::migrate(&mut state.store, dir));
+            if migrated && !state.dirty {
+                state.dirty = true;
+                hand_to_writer(Arc::clone(self));
+            }
         }
         Ok(state)
     }

@@ -137,3 +137,20 @@ fn a_missing_file_is_an_empty_store_until_something_is_set() {
         json!({ "windowState": { "width": 800 } })
     );
 }
+
+#[test]
+fn every_retired_pref_leaves_and_a_live_one_stays() {
+    let dir = temp();
+    for (key, _) in super::retired::RETIRED {
+        let mut store =
+            serde_json::from_value::<Map<String, Value>>(json!({ "language": "en" })).unwrap();
+        write_key(&mut store, key, json!(false)).unwrap();
+        assert!(super::retired::migrate(&mut store, dir.path()), "{key}");
+        assert_eq!(read_key(&store, key).unwrap(), None, "{key}");
+        assert_eq!(read_key(&store, "language").unwrap(), Some(json!("en")));
+        assert!(
+            !super::retired::migrate(&mut store, dir.path()),
+            "{key} twice"
+        );
+    }
+}

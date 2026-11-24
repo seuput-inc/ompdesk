@@ -174,7 +174,6 @@ import { HOST_TAB_GRACE_MS, LocalHostServices } from "./remote/host-services";
 import { type Identity, loadIdentity } from "./remote/identity";
 import { KeepAwakePolicy } from "./remote/keep-awake";
 import { readoptHostTabs } from "./remote/readopt";
-import { migrateRetiredPrefs } from "./retired-prefs";
 import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
 import { layoutsToSave } from "./saved-layouts";
@@ -386,7 +385,6 @@ let mainPrefsStore: PrefsStore<MainPrefs> | null = null;
 function prefsStore(): PrefsStore<MainPrefs> {
 	if (!mainPrefsStore) {
 		mainPrefsStore = prefsFile<MainPrefs>("prefs");
-		migrateRetiredPrefs(mainPrefsStore, join(app.getPath("userData"), "schedules.json"));
 		const powers = migrateAgentPowers(mainPrefsStore, agentDir());
 		if (powers) {
 			writeRuntimeLog({

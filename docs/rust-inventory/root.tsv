@@ -368,8 +368,7 @@ src/main/quota-reset-stock.test.ts	tooling	-	Vitest suite: never waits for a fai
 src/main/raw-imports.d.ts	tooling	-	Ambient declarations type Vite *.md?raw and *.png?inline imports in the main bundle; no runtime implementation.
 src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credentials.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
-src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
-src/main/retired-prefs.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore migrates the in-memory SafeStore before returning it or reading themes. Port with prefs initialization so readers cannot see retired keys or stale schedule preferences during a migration.
+src/main/retired-prefs.test.ts	tooling	-	Vitest suite: the prefs migration of crates/core/src/prefs/retired.rs, run through the real core (native parity).
 src/main/rpc-client.ts	mixed	3	SidecarManager owns one RpcClient per spawn. It assigns the ID and selects a local handler before yielding, refuses stock sends on retire, and cancels the actual handler on timeout. The core lane already transports and correlates stock requests.
 src/main/runtime-log-core.test.ts	tooling	-	Vitest suite: runtime crash log.
 src/main/runtime-log-core.ts	port	1	normalizeRuntimeErrorReport validates renderer reports, appendRuntimeLogAtPath appends structured records, and tailLogLines bounds reads by count and bytes.
