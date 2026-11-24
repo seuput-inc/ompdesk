@@ -224,6 +224,8 @@ pub(crate) struct Tracking {
     /// One per outcome set in `last_run` (the TypeScript's one object each): the resume rules judge an outcome once and
     /// hold work for the failure they saw, so main hands them the same identity for as long as this serial stands.
     pub last_run_serial: u64,
+    /// A run that started but never produced an outcome must not reuse a restored tab's zero-turn fence.
+    pub saw_start: bool,
     /// The user pressed Stop since the run began. Cleared by the next agent_start.
     pub stopped: bool,
     /// Stock's auto-retry waiting for its next attempt: `errorMessage`, and the serial of its `auto_retry_start`.
@@ -241,12 +243,19 @@ pub(crate) struct Retry {
 }
 
 impl Tracking {
+    pub(super) fn numbered_outcome(&self) -> Option<Value> {
+        let mut outcome = self.last_run.clone()?;
+        outcome["id"] = Value::from(self.last_run_serial);
+        Some(outcome)
+    }
+
     /// `trackRunEvent`: `RunState::apply` plus the run's outcome, Stop and pending auto-retry; true when it ended the
     /// run's last attempt. `serial` numbers the next retry.
     pub(crate) fn track(&mut self, event: &Value, now: i64, serial: &mut u64) -> bool {
         let ended = self.run.apply(event, now);
         match event["type"].as_str() {
             Some("agent_start") => {
+                self.saw_start = true;
                 self.last_run = None;
                 self.stopped = false;
                 self.retry = None;

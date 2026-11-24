@@ -11,11 +11,12 @@
 | `Edits(t)` | `FileEditReports.edits` | pure read |
 | `CloseStep(t)` | `tab_close_step` (`native/ompdesk/crates/core/src/agentctl/rules/tab_close.rs`, the core's one close rule) minus `looked`/`userTouched` | pure |
 | `CloseDecide(t)` | the core's `close_tab` (`native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs`) reads the snapshot's tabs (each tab's `webEdits` from `edits`, `host.ts` `#controlTab`, pushed to the core) and applies `tab_close_step` | synchronous until `await host.release` |
-| `CloseRelease(t)` | `host.release` → `closeWindowTab` → `await refreshExitPolicy` → `stillClosable()` (`edits(...) !== "dirty"` on the store now, `host.ts` `release`) → `closeTabTerminals` → `SidecarPool.releaseTab` | split from the decision (awaits in between); the re-check and the release are one synchronous run |
+| `CloseRelease(t)` | `host.release` → `closeWindowTab` → `await refreshExitPolicy` → `stillClosable()` (`edits(...) !== "dirty"` now) → `SidecarPool.releaseTab` | the dirty-state re-check and release run synchronously; a work-based close also compares the expected turn in the pool before it removes the entry or closes any terminals |
 
 ## Abstractions that could hide a bug
 
 - One window: the store's window filter is not exercised here (unit-tested instead).
+- The model tracks unsaved edits, not turns or terminals. A refusal by the turn check leaves the tab open; it is not evidence that a paired host still has the same turn.
 - Frames are FIFO per connection and never duplicated (a WebSocket).
 - `Greet` sends from the page's current editor state; the real page sends `fileEditTabId ?? activeTabId` when dirty, which the model folds into `edit[p]`.
 - The `SplitDispatch` switch is how the model says "no `await` before the handler"; the code keeps it because `#dispatch` awaits only a frame with picture blocks (or `FS_UPLOAD_TO_HOST`), and `parseFileEditReport` refuses any report but exactly one `{dirtyTabId: string | null}`, which holds none.

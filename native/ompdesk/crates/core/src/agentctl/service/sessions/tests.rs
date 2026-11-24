@@ -627,9 +627,11 @@ async fn a_stop_of_a_session_the_user_looks_at_waits_for_a_turn_the_user_started
 
 #[tokio::test]
 async fn closing_a_resting_session_needs_no_card_and_a_tab_the_window_keeps_is_reported() {
+    let mut child = tab("b", "/s/y_2.jsonl");
+    child["closeTurn"] = json!({ "pool": 2, "entry": 3, "turn": 0 });
     let (control, asked) = rig(
         7_309,
-        vec![tab("a", "/s/x_1.jsonl"), tab("b", "/s/y_2.jsonl")],
+        vec![tab("a", "/s/x_1.jsonl"), child],
         json!({}),
         main_of,
     );
@@ -651,8 +653,57 @@ async fn closing_a_resting_session_needs_no_card_and_a_tab_the_window_keeps_is_r
     assert_eq!(view["event"]["tabId"], "b");
     assert_eq!(view["event"]["how"], "close");
     assert!(view["event"]["closeId"].is_u64());
+    assert!(view["event"].get("expectedTurn").is_none());
     // The tab is marked closing only while the call runs.
     assert!(!control.mem().closing.contains("b"));
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn only_a_stamped_web_orphan_is_released_and_a_requested_close_carries_no_stamp() {
+    let mut child = tab("kid", "/s/kid.jsonl");
+    child["autoClosable"] = json!(true);
+    child["webEdits"] = json!("clean");
+    let mut unstamped = child.clone();
+    unstamped["tabId"] = json!("unstamped");
+    let turn = json!({ "pool": 5, "entry": 8, "turn": 0 });
+    child["closeTurn"] = turn.clone();
+    let mut unnumbered = child.clone();
+    unnumbered["tabId"] = json!("unnumbered");
+    unnumbered["lastRun"] = json!({ "stopReason": "stop" });
+    let (control, asked) = rig(
+        7_317,
+        vec![tab("boss", "/s/boss.jsonl"), child, unstamped, unnumbered],
+        json!({ "parents": { "kid": { "callerTabId": "boss" } } }),
+        |method, args| match method {
+            "release" => Ok(json!(false)),
+            other => main_of(other, args),
+        },
+    );
+    control
+        .close_orphans(
+            vec!["unstamped".into(), "unnumbered".into(), "kid".into()],
+            None,
+        )
+        .await;
+    let manual = control
+        .run(
+            "boss",
+            "ompdesk_session_stop",
+            json!({ "session": "kid", "close": true }),
+            None,
+        )
+        .await;
+    assert!(manual.is_error, "main kept the tab");
+    assert_eq!(
+        names(&asked, "release"),
+        [
+            json!({ "callerTabId": "kid", "tabId": "kid", "expectedTurn": turn }),
+            json!({ "callerTabId": "boss", "tabId": "kid" }),
+        ]
+    );
+    assert!(names(&asked, "view").is_empty());
+    assert!(control.fates().find("kid").is_none());
     control.host.port().close();
 }
 

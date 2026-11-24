@@ -602,6 +602,7 @@ impl AgentControl {
                         &opened,
                         CloseHow {
                             auto: false,
+                            expected_turn: None,
                             wait_ms,
                             cleared: false,
                         },

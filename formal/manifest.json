@@ -82,7 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "0f1a4de14c9dbd9450bb895b71eae048b67e1765",
+			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "0f1a4de14c9dbd9450bb895b71eae048b67e1765",
+			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -149,11 +149,11 @@
 				"native/ompdesk/crates/core/src/web/router.rs#dispatch",
 				"src/main/web/ws-router.ts#WsRouter.connections",
 				"src/main/web/ws-router.ts#WsRouter.call",
-				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:204-247",
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs#close_tab",
 				"src/main/tab-release.ts#closeWindowTab",
-				"src/main/agent-control/host.ts:1234-1241"
+				"src/main/agent-control/host.ts:1244-1251"
 			],
-			"syncCommit": "04331efed7b9b9800f89fc753fb9a26d0bfc04e1",
+			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -257,13 +257,13 @@
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
 			"covers": [
-				"src/renderer/stores/tabs.ts:722-810",
-				"src/renderer/stores/tabs.ts:1353-1356",
+				"src/renderer/stores/tabs.ts:758-843",
+				"src/renderer/stores/tabs.ts:1394-1397",
 				"native/ompdesk/crates/core/src/pool/listen.rs#feed_status",
 				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
-			"syncCommit": "d0e83f711ce8443cce494bd736fa26b980403f5c"
+			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d"
 		},
 		{
 			"id": "away-calls",
@@ -296,7 +296,7 @@
 				"native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs",
 				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:155-213"
 			],
-			"syncCommit": null
+			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d"
 		},
 		{
 			"id": "urgent-asides",

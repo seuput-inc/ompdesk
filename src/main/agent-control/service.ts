@@ -43,7 +43,13 @@ import type {
 } from "../../shared/agent-control";
 import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
-import type { IpcSavedFolder, IpcTabRunOutcome, IpcTabWorktree, TabStatus } from "../../shared/ipc-types";
+import type {
+	AutoCloseTurn,
+	IpcSavedFolder,
+	IpcTabRunOutcome,
+	IpcTabWorktree,
+	TabStatus,
+} from "../../shared/ipc-types";
 import type {
 	AgentMessage,
 	ExtensionUIRequest,
@@ -107,6 +113,7 @@ export interface ControlTab {
 	task?: string;
 	/** How its last finished turn ended; absent while one runs or before the first. */
 	lastRun?: IpcTabRunOutcome;
+	closeTurn?: AutoCloseTurn;
 	/** Opened by an agent's control tools, and not an Autopilot run or child (those close with their run). */
 	autoClosable?: boolean;
 	/** The person is looking at it: the focused tab, a visible pane, a viewer in another window or on a phone. */
@@ -399,7 +406,7 @@ export interface AgentControlHost {
 	 * Release a tab a paired web page owns in main, as its own close would (worktree exit policy, terminals, the pool),
 	 * and tell that page to drop it. False when nothing was released.
 	 */
-	release(callerTabId: string, tabId: string): Promise<boolean>;
+	release(callerTabId: string, tabId: string, expectedTurn?: AutoCloseTurn): Promise<boolean>;
 	/** Resolves once the omp of a tab the window closed has exited (at once when none is exiting, and for a paired device's tab). */
 	exited(tabId: string): Promise<void>;
 	notify(callerTabId: string, title: string, body: string): void;
@@ -1096,8 +1103,15 @@ export class AgentControl {
 						throw error;
 					}
 				}),
-			release: ({ callerTabId, tabId }: { callerTabId: string; tabId: string }) =>
-				coded(() => host.release(callerTabId, tabId)),
+			release: ({
+				callerTabId,
+				tabId,
+				expectedTurn,
+			}: {
+				callerTabId: string;
+				tabId: string;
+				expectedTurn?: AutoCloseTurn;
+			}) => coded(() => host.release(callerTabId, tabId, expectedTurn)),
 			exited: ({ tabId }: { tabId: string }) => coded(async () => (await host.exited(tabId)) ?? null),
 			markAnswered: ({ tabId, byTitle }: { tabId: string; byTitle: string }) =>
 				coded(async () => (await host.markAnswered(tabId, byTitle)) ?? null),

@@ -3,6 +3,7 @@
 
 use serde_json::{Map, Value, json};
 
+use super::AutoCloseTurn;
 use super::split::{
     SplitNode, as_split_layout, forget_split_tab, map_split_leaves, remembered_split_of,
     split_tab_ids,
@@ -72,7 +73,7 @@ impl Ctx {
                 Closer::Entry(seq) => {
                     let tab = self.with(|pool| pool.by_seq(seq).map(|entry| entry.tab_id.clone()));
                     if let Some(tab) = tab {
-                        self.release_entry(&tab).await?;
+                        self.release(&tab).await?;
                     }
                 }
                 Closer::Viewer(seq, viewer) => {
@@ -148,7 +149,7 @@ impl Ctx {
         });
         if blocked {
             if matches!(slot, Some(AcquireSlot::Seeded(_))) {
-                self.release_entry(tab).await?;
+                self.release(tab).await?;
             }
             return Ok(None);
         }
@@ -393,25 +394,51 @@ impl Ctx {
 
     // ---- releasing ----------------------------------------------------------------------------------------------
 
-    /// `#releaseEntry`: listeners first, then dispose. When the active tab goes away, the oldest surviving tab of the
-    /// window takes over; viewer windows lose the tab the same way and hear their list changed. False when the tab is
-    /// not in the pool.
-    pub(super) async fn release_entry(&self, tab: &str) -> R<bool> {
+    pub(super) async fn release(&self, tab: &str) -> R<()> {
+        self.release_entry(tab, None).await.map(|_| ())
+    }
+
+    /// Remove the entry before notifying or disposing anything. Return its window only if it was removed.
+    pub(super) async fn release_entry(
+        &self,
+        tab: &str,
+        expected: Option<AutoCloseTurn>,
+    ) -> R<Option<i64>> {
         let removed = self.with(|pool| {
             let at = pool.index(tab)?;
+            let entry = &pool.entries[at];
+            if let Some(expected) = expected
+                && (pool.close_turn(entry) != Some(expected)
+                    || !matches!(entry.status.as_str(), "ready" | "asleep")
+                    || entry.busy()
+                    || entry.resuming
+                    || entry.awaiting_connection
+                    || entry.scheduled_retry.is_some()
+                    || entry.tracking.retry.is_some()
+                    || entry.plan_proposal.is_some()
+                    || pool.request_owners.iter().any(|(id, owner)| {
+                        *owner == entry.seq
+                            && pool
+                                .request_bodies
+                                .get(id)
+                                .is_some_and(|ask| ask.kinds.blocking)
+                    }))
+            {
+                return None;
+            }
             let entry = pool.entries.remove(at);
-            let seq = entry.seq;
+            let removed = (entry.seq, entry.win_id);
             pool.detached.push(entry);
-            Some(seq)
+            Some(removed)
         });
-        let Some(seq) = removed else {
-            return Ok(false);
+        let Some((seq, win)) = removed else {
+            return Ok(None);
         };
         // The tab is gone for everyone now (`byTabId.delete`): main stops handing out its sidecar.
         self.push(&json!({"k": "gone", "tab": tab}));
         let result = self.release_detached(tab, seq).await;
         self.with(|pool| pool.detached.retain(|entry| entry.seq != seq));
-        result.map(|()| true)
+        result.map(|()| Some(win))
     }
 
     async fn release_detached(&self, tab: &str, seq: u64) -> R<()> {
@@ -734,7 +761,7 @@ impl Ctx {
                 .into_iter()
                 .map(|entry| {
                     let cwd = facts[entry.tab_id.as_str()]["cwd"].as_str().unwrap_or("");
-                    let mut tab = Pool::tab_status(entry, cwd);
+                    let mut tab = pool.tab_status(entry, cwd);
                     if active.as_deref() == Some(entry.tab_id.as_str()) {
                         tab.insert("active".into(), Value::from(true));
                     }

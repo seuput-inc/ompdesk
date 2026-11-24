@@ -158,13 +158,8 @@ impl AgentControl {
             {
                 continue;
             }
-            let how = CloseHow {
-                auto: true,
-                wait_ms: self.tuning.auto_close_wait_ms,
-                cleared: false,
-            };
             // The opener is gone: the child names its own window.
-            let closed = self.close_tab(&child, &child, how).await;
+            let closed = self.close_resting_child(&child, &tab).await;
             self.mem().closing.remove(&child);
             if matches!(closed, Ok(TabClose::Closed)) {
                 let fated = self.fated(&tab, opener_session.as_deref());
@@ -254,6 +249,8 @@ impl AgentControl {
             now.tab_id == tab.tab_id
                 && now.status == tab.status
                 && now.busy == tab.busy
+                && !now.resuming
+                && now.close_turn == tab.close_turn
                 && now.last_run == tab.last_run
                 && !waits(now)
         })
@@ -316,7 +313,7 @@ impl AgentControl {
         }
         let session = self.session_state(tab).await;
         let answer = trim(session.last.as_deref().unwrap_or("")).to_owned();
-        if parse_worker_result(Some(&answer)).is_none() {
+        if parse_worker_result(Some(&answer)).is_none() || self.moved(tab) {
             return Ok(false);
         }
         self.mem()
@@ -512,6 +509,30 @@ impl AgentControl {
         }
     }
 
+    async fn close_resting_child(&self, caller_tab_id: &str, tab: &ControlTab) -> R<TabClose> {
+        let Some(turn) = tab.close_turn else {
+            return Ok(TabClose::Kept);
+        };
+        let numbered = match &tab.last_run {
+            Some(run) => run.id == Some(turn.turn) && turn.turn != 0,
+            None => turn.turn == 0,
+        };
+        if !numbered {
+            return Ok(TabClose::Kept);
+        }
+        self.close_tab(
+            caller_tab_id,
+            &tab.tab_id,
+            CloseHow {
+                auto: true,
+                expected_turn: Some(turn),
+                wait_ms: self.tuning.auto_close_wait_ms,
+                cleared: false,
+            },
+        )
+        .await
+    }
+
     /// `#deleteThrowaway`: a throwaway child's saved session goes with its tab, on the computer it is saved on (the
     /// sidebar's delete), and its opener gets one quiet line saying so. Not when a tab holds the session again (the
     /// person reopened it meanwhile) or the delete failed: then it stays like any closed child. Resolves true when
@@ -620,17 +641,7 @@ impl AgentControl {
         }
         // Not closed (the window kept it, the person came to it meanwhile, or its paired page holds unsaved Files
         // edits in it): nothing else changes, and a later pass tries again.
-        let outcome = self
-            .close_tab(
-                &caller.tab_id,
-                &tab.tab_id,
-                CloseHow {
-                    auto: true,
-                    wait_ms: self.tuning.auto_close_wait_ms,
-                    cleared: false,
-                },
-            )
-            .await?;
+        let outcome = self.close_resting_child(&caller.tab_id, tab).await?;
         if outcome != TabClose::Closed {
             return Ok(());
         }

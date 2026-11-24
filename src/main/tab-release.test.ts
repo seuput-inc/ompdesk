@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AutoCloseTurn } from "../shared/ipc-types";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import type { ClientWindow } from "./web/client-window";
 
@@ -9,19 +10,28 @@ const win = (id: number): ClientWindow => ({
 	removeListener: () => undefined,
 });
 
-function rig(options: { owns?: boolean; viewer?: boolean; hosted?: boolean; duringExitPolicy?: () => void } = {}) {
+function rig(
+	options: {
+		owns?: boolean;
+		viewer?: boolean;
+		hosted?: boolean;
+		duringExitPolicy?: () => void;
+		canRelease?: (turn?: AutoCloseTurn) => boolean;
+	} = {},
+) {
 	const steps: string[] = [];
 	const deps: TabReleaseDeps = {
 		sidecarPool: {
 			sidecarForTab: (_win, tabId) => (options.owns === false ? null : ({ tabId } as never)),
+			windowOfTab: () => win(options.viewer ? -2 : -1),
 			detachViewer: (_win, tabId) => {
 				if (options.viewer) steps.push(`detach:${tabId}`);
 				return options.viewer === true;
 			},
 			isHostedView: () => options.hosted === true,
-			releaseTab: tabId => {
+			releaseTab: (tabId, turn) => {
 				steps.push(`release:${tabId}`);
-				return true;
+				return options.canRelease?.(turn) ?? true;
 			},
 		},
 		worktreeLifecycle: {
@@ -51,6 +61,9 @@ describe("closeWindowTab", () => {
 
 	it("only leaves a tab another window owns", async () => {
 		const { deps, steps } = rig({ viewer: true });
+		const expected = { pool: 1, entry: 1, turn: 1 };
+		expect(await closeWindowTab(deps, win(-1), "t1", -1, undefined, expected)).toBe(false);
+		expect(steps).toEqual([]);
 		expect(await closeWindowTab(deps, win(-1), "t1", -1)).toBe(true);
 		expect(steps).toEqual(["detach:t1"]);
 	});
@@ -59,6 +72,17 @@ describe("closeWindowTab", () => {
 		const { deps, steps } = rig({ hosted: true });
 		expect(await closeWindowTab(deps, win(-1), "t1", -1)).toBe(true);
 		expect(steps).toEqual(["terminals:-1:t1", "release:t1"]);
+	});
+
+	it("keeps the terminal when a newer turn prevents release after the exit-policy read", async () => {
+		let currentTurn = 1;
+		const { deps, steps } = rig({
+			duringExitPolicy: () => ++currentTurn,
+			canRelease: expected => expected === undefined || expected.turn === currentTurn,
+		});
+		const expected = { pool: 1, entry: 1, turn: currentTurn };
+		expect(await closeWindowTab(deps, win(-1), "t1", -1, undefined, expected)).toBe(false);
+		expect(steps).toEqual(["exit-policy:t1", "release:t1"]);
 	});
 
 	it("asks stillClosable again after the exit-policy read and keeps the tab when the answer changed meanwhile", async () => {

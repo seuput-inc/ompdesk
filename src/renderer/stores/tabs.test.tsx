@@ -3114,6 +3114,22 @@ describe("agent control view requests", () => {
 		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 7, outcome: "closing" });
 	});
 
+	it("keeps the child visible and answers in-use when the pool refuses an outdated close", async () => {
+		await bootWith("t0", "t1");
+		const release = Promise.withResolvers<boolean>();
+		omp.tabs.close.mockReturnValueOnce(release.promise);
+		const expectedTurn = { pool: 1, entry: 2, turn: 3 };
+		const closing = useTabsStore
+			.getState()
+			.applyAgentView({ tabId: "t1", how: "close", auto: true, closeId: 7, expectedTurn });
+		expect(omp.tabs.close).toHaveBeenCalledWith("t1", expectedTurn);
+		expect(tabOf("t1")).toBeDefined();
+		release.resolve(false);
+		await closing;
+		expect(tabOf("t1")).toBeDefined();
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 7, outcome: "in-use" });
+	});
+
 	// 19 Nov 2026: an agent's close a window kept came back as "its last tab, or unsaved Files edits", whichever it was,
 	// and the same words when the window never heard it. The window says which of its rules kept the tab.
 	it("answers a close it refuses with its own reason and keeps the tab", async () => {
@@ -3125,6 +3141,15 @@ describe("agent control view requests", () => {
 		await bootWith("t0", "t1");
 		useUiStore.setState({ fileEditDirty: true, fileEditTabId: "t1", pendingFileSwitch: null });
 		try {
+			await useTabsStore.getState().applyAgentView({
+				tabId: "t1",
+				how: "close",
+				auto: true,
+				closeId: 11,
+				expectedTurn: { pool: 1, entry: 2, turn: 3 },
+			});
+			expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 11, outcome: "unsaved-edits" });
+			expect(useUiStore.getState().pendingFileSwitch).toBeNull();
 			await useTabsStore.getState().applyAgentView({ tabId: "t1", how: "close", closeId: 9 });
 			expect(tabOf("t1")).toBeDefined();
 			expect(omp.tabs.close).not.toHaveBeenCalledWith("t1");

@@ -37,6 +37,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
@@ -44,6 +45,14 @@ pub(crate) use crate::hub::spawn;
 use crate::hub::{Kind, Out, Outcome};
 use crate::server::Fault;
 use state::{Ctx, LevelKey, P, Pool, R};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AutoCloseTurn {
+    pub pool: u64,
+    pub entry: u64,
+    pub turn: u64,
+}
 
 pub const KIND: Kind = Kind {
     name: "pool",
@@ -59,6 +68,7 @@ thread_local! {
 fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
     let opts: Value = serde_json::from_str(opts.get()).unwrap_or(Value::Null);
     let pool = Pool {
+        epoch: id,
         layout_version: opts["layoutVersion"].as_i64().unwrap_or(1),
         max_former_tab_ids: opts["maxFormerTabIds"]
             .as_u64()
@@ -350,7 +360,16 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                 .await?,
             ))
         }),
-        "releaseTab" => later(async move { Ok(Value::from(ctx.release_tab(&p.s("tab")?).await?)) }),
+        "releaseTab" => later(async move {
+            let expected = match p.0.get("expectedTurn") {
+                None => None,
+                Some(value) => match AutoCloseTurn::deserialize(value) {
+                    Ok(turn) if value.is_object() => Some(turn),
+                    _ => return Ok(Value::Bool(false)),
+                },
+            };
+            Ok(Value::from(ctx.release_tab(&p.s("tab")?, expected).await?))
+        }),
         "announceClosed" => later(async move {
             let closed = [p.s("tab")?];
             done(ctx.send_tab_list(p.i("win")?, Some(&closed), None).await)

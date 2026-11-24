@@ -121,6 +121,8 @@ pub use crate::git::branches::WorktreeRef;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
     pub stop_reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
@@ -210,6 +212,8 @@ pub struct ControlTab {
     pub task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<RunOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) close_turn: Option<crate::pool::AutoCloseTurn>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_closable: bool,
     #[serde(default, skip_serializing_if = "is_false")]

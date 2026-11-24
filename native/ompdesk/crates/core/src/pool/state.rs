@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use serde_json::{Map, Value, json};
 
+use super::AutoCloseTurn;
 use super::omap::OMap;
 use super::run::Tracking;
 use super::split::SplitLayout;
@@ -231,6 +232,7 @@ pub(super) struct StopWait {
 
 #[derive(Default)]
 pub(super) struct Pool {
+    pub epoch: u64,
     /// The clock of the call being served: main's `Date.now()`.
     pub now: i64,
     pub next_seq: u64,
@@ -348,8 +350,17 @@ impl Pool {
         wins
     }
 
+    pub(super) fn close_turn(&self, entry: &Entry) -> Option<AutoCloseTurn> {
+        let tracking = &entry.tracking;
+        (!tracking.saw_start || tracking.last_run.is_some()).then_some(AutoCloseTurn {
+            pool: self.epoch,
+            entry: entry.seq,
+            turn: tracking.last_run_serial,
+        })
+    }
+
     /// `TAB_STATUS` push / `GET_TABS` item: the full tab snapshot including cached session meta (`tabStatusPayload`).
-    pub(super) fn tab_status(entry: &Entry, cwd: &str) -> Map<String, Value> {
+    pub(super) fn tab_status(&self, entry: &Entry, cwd: &str) -> Map<String, Value> {
         let run = &entry.tracking.run;
         let mut payload = Map::new();
         payload.insert("tabId".into(), Value::from(entry.tab_id.clone()));
@@ -414,8 +425,11 @@ impl Pool {
         if let Some(worktree) = &entry.worktree {
             payload.insert("worktree".into(), worktree.clone());
         }
-        if let Some(last) = &entry.tracking.last_run {
-            payload.insert("lastRun".into(), last.clone());
+        if let Some(turn) = self.close_turn(entry) {
+            payload.insert("closeTurn".into(), json!(turn));
+        }
+        if let Some(last) = entry.tracking.numbered_outcome() {
+            payload.insert("lastRun".into(), last);
         }
         if entry.awaiting_connection {
             payload.insert("awaitingConnection".into(), Value::from(true));
@@ -567,7 +581,7 @@ impl Ctx {
         let cwd = self.cwd_of(tab_id).await?;
         self.with(|pool| {
             if let Some(entry) = pool.entry(tab_id) {
-                let payload = Value::Object(Pool::tab_status(entry, &cwd));
+                let payload = Value::Object(pool.tab_status(entry, &cwd));
                 let wins = Pool::windows_of(entry);
                 self.send(wins, "TAB_STATUS", payload);
             }

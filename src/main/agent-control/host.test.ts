@@ -1218,7 +1218,8 @@ describe("AgentControlRuntime", () => {
 						sessionPath: "/s/kid.jsonl",
 						openedBySession: "/s/boss.jsonl",
 						worktree,
-						lastRun: { stopReason: "stop" },
+						lastRun: { id: 17, stopReason: "stop" },
+						closeTurn: { pool: 2, entry: 3, turn: 17 },
 					},
 				],
 				sweepMs: 50,
@@ -1237,19 +1238,15 @@ describe("AgentControlRuntime", () => {
 						? ok({ text: "Pushed to main.\nResult: ok" })
 						: ok();
 			await expect
-				.poll(
-					() =>
-						win.sent.some(
-							([channel, event]) =>
-								channel === AGENT_CONTROL_VIEW &&
-								typeof event === "object" &&
-								event !== null &&
-								"how" in event &&
-								event.how === "close",
-						),
-					{ timeout: 10_000 },
-				)
-				.toBe(true);
+				.poll(() => win.sent, { timeout: 10_000 })
+				.toContainEqual([
+					AGENT_CONTROL_VIEW,
+					expect.objectContaining({
+						tabId: "kid00002",
+						how: "close",
+						expectedTurn: { pool: 2, entry: 3, turn: 17 },
+					}),
+				]);
 			tabs.splice(
 				tabs.findIndex(tab => tab.tabId === "kid00002"),
 				1,
@@ -1677,6 +1674,35 @@ describe("closing a child a paired web page owns", () => {
 			sweepMs: 0,
 			...(duringRelease ? { duringRelease } : {}),
 		});
+
+	it("passes the collected turn to main and leaves the web child open when main refuses it", async () => {
+		const { runtime, deps, webWin, webTabs, released } = phone();
+		const child = webTabs[0] as IpcTabInfo;
+		const reply = "Done.\nResult: ok";
+		Object.assign(child, {
+			openedBy: "main0001",
+			closeTurn: { pool: 7, entry: 4, turn: 19 },
+			lastRun: { id: 19, stopReason: "stop", reply },
+		});
+		deps.dispatch = async (_target, _sidecar, _tabId, command) =>
+			command.type === "get_state"
+				? ok({ isStreaming: false })
+				: command.type === "get_last_assistant_text"
+					? ok({ text: reply })
+					: ok();
+		const release = vi.spyOn(deps, "releaseTab").mockResolvedValueOnce(false);
+		await runtime.control.autoClose("main0001");
+		expect(release).toHaveBeenCalledTimes(1);
+		expect(release).toHaveBeenCalledWith(webWin, child.tabId, expect.any(Function), { pool: 7, entry: 4, turn: 19 });
+		expect(released).toEqual([]);
+		expect(webTabs).toContain(child);
+
+		child.closeTurn = { pool: 7, entry: 4, turn: 20 };
+		child.lastRun = { id: 20, stopReason: "stop", reply };
+		await runtime.control.autoClose("main0001");
+		expect(release).toHaveBeenLastCalledWith(webWin, child.tabId, expect.any(Function), child.closeTurn);
+		expect(released).toEqual([{ win: webWin, tabId: child.tabId }]);
+	});
 
 	it("releases the tab in main once the page reported its Files editor clean, and mails the note after", async () => {
 		const { runtime, win, webWin, webTabs, fileEdits, released, log } = phone();

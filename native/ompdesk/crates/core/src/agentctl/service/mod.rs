@@ -590,6 +590,7 @@ impl AgentControl {
         for tab_id in joined {
             let how = sessions::CloseHow {
                 auto: true,
+                expected_turn: None,
                 wait_ms: self.tuning.close_wait_ms,
                 cleared: true,
             };

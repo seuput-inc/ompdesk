@@ -81,7 +81,7 @@ impl Ctx {
                 self.settle_ok(token, Value::from(false));
                 return Ok(());
             }
-            self.release_entry(&tab).await?;
+            self.release(&tab).await?;
             self.notify_window_tabs_changed(win).await?;
             self.send_tab_list(win, Some(std::slice::from_ref(&tab)), None)
                 .await?;

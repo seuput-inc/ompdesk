@@ -41,6 +41,7 @@ import {
 } from "../../shared/agent-control";
 import type { SessionStatus } from "../../shared/control-protocol";
 import type {
+	AutoCloseTurn,
 	HostView,
 	IpcSpawnTabPayload,
 	IpcSpawnTabResult,
@@ -268,7 +269,12 @@ export interface AgentControlHostDeps {
 	 * gone. Only for a paired web page's window: a desktop window closes its own tab when asked (`AGENT_CONTROL_VIEW`).
 	 * `stillReleasable` is asked again after the release's awaits, right before it lets the tab go.
 	 */
-	releaseTab: (win: ClientWindow, tabId: string, stillReleasable: () => boolean) => Promise<boolean>;
+	releaseTab: (
+		win: ClientWindow,
+		tabId: string,
+		stillReleasable: () => boolean,
+		expectedTurn?: AutoCloseTurn,
+	) => Promise<boolean>;
 	/** Settings › Schedules (`ScheduleService`); absent or null where there is none. */
 	schedules?: () => Pick<ScheduleService, "command" | "create"> | null;
 	/** The app's own handlers `ompdesk_app` goes through (src/main/ipc.ts): the `IpcRegistry` for the window, `PREFS_SET`, the language. */
@@ -799,6 +805,7 @@ export class AgentControlRuntime {
 			...(info.sessionPath ? { sessionPath: info.sessionPath } : {}),
 			...(info.task ? { task: info.task } : {}),
 			...(info.lastRun ? { lastRun: info.lastRun } : {}),
+			...(info.closeTurn ? { closeTurn: info.closeTurn } : {}),
 			autoClosable,
 			...(autoClosable && !this.#parents.has(info.tabId) ? { restored: true } : {}),
 			looked: info.active === true || info.visible === true || (info.viewerCount ?? 0) > 0,
@@ -1234,13 +1241,13 @@ export class AgentControlRuntime {
 			autopilot: this.#autopilotSource(),
 			start: tabId => void deps.pool.startTab(tabId),
 			setTask: (tabId, task) => deps.pool.setTabTask(tabId, task),
-			release: async (_callerTabId, tabId) => {
+			release: async (_callerTabId, tabId, expectedTurn) => {
 				const win = deps.pool.windowOfTab(tabId);
 				if (!win || !isWebWindow(win.webContents.id)) return false;
 				// The page's word may change while the release awaits: the core's rule (`rules/tab_close.rs`) released a
 				// page's tab only while its page held no unsaved Files edits, and that is asked again on the store now.
 				const id = win.webContents.id;
-				return deps.releaseTab(win, tabId, () => deps.fileEdits.edits(id, tabId) !== "dirty");
+				return deps.releaseTab(win, tabId, () => deps.fileEdits.edits(id, tabId) !== "dirty", expectedTurn);
 			},
 			view: (callerTabId, event: AgentControlViewEvent) => {
 				// The window that holds the session (another window's tab closes or shows there), else the caller's.
