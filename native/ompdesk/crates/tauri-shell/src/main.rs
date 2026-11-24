@@ -5,6 +5,7 @@ mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
 mod diagnostic_bundle_name;
+mod entry;
 mod evaluate;
 mod gpu;
 mod js_date;
@@ -42,8 +43,9 @@ mod update_stage;
 mod window_activation;
 mod window_bounds;
 mod window_state;
+use entry::shortcut;
 use native_services::diagnostic_logs::feedback_profile;
-use native_services::{power, screen, shortcut, system};
+use native_services::{power, screen, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
 pub mod host;
@@ -509,9 +511,9 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
             .lock()
             .expect("registry")
             .navigate(wc, url.into());
-        if changed.is_none() {
+        let Some(identity) = changed else {
             return;
-        }
+        };
         wc_state(wc);
         wc_event(wc, "did-start-loading", json!([]));
         wc_event(
@@ -519,6 +521,7 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
             "did-start-navigation",
             json!([{"url":url,"isMainFrame":true,"isSameDocument":false,"isInPlace":false}]),
         );
+        entry::document_started(identity);
     } else {
         let win = {
             let mut registry = runtime().registry.lock().expect("registry");
@@ -605,6 +608,7 @@ fn node_prevents_navigation(wc: u64, url: &tauri::Url) -> bool {
     answer.map_or(true, |answer| answer["prevent"] != false)
 }
 fn close_record(wc: u64) {
+    entry::forget(wc);
     runtime()
         .app_initializations
         .lock()
@@ -1368,6 +1372,7 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
         }
         "wc.send" => page_push::wc_send(&data),
         "diskFull.state" => page_push::disk_full_state(data),
+        "session.ready" => entry::ready(),
         _ => log::log("event.unsupported", json!({"name":name})),
     }
 }
@@ -1982,6 +1987,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                 })
                 .map_err(|_| "runtime already initialized")?;
             system::init();
+            shortcut::register();
             sessions::init(runtime().user_data.clone()).map_err(std::io::Error::other)?;
             // `net.*` reads the same canonical partitions: their cookies (on a worker, never this UI thread) and policy.
             network::session::install_cookie_authority(std::sync::Arc::new(
@@ -2015,8 +2021,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     if runtime().stop_instance.load(Ordering::SeqCst) {
                         break;
                     }
-                    if let Ok((argv, _cwd)) = conn::take_hand_over(&mut connection) {
-                        host::event("app.secondInstance", startup::second_instance(&argv));
+                    if let Ok((argv, _cwd)) = conn::take_hand_over(&mut connection)
+                        && let Some(open) = entry::launched(&startup::second_instance(&argv))
+                    {
+                        entry::push(open);
                     }
                 }
             });
@@ -2050,11 +2058,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
         RunEvent::Exit => node::stop(Duration::from_secs(5)),
         #[cfg(target_os = "macos")]
-        RunEvent::Opened { urls } => {
-            for url in urls {
-                host::event("app.openUrl", json!({"url":url.as_str()}));
-            }
-        }
+        RunEvent::Opened { urls } => urls.iter().for_each(entry::opened_url),
+        // The Dock was clicked, or the running app opened again.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => entry::activate(),
         _ => {}
     });
     runtime().stop_instance.store(true, Ordering::SeqCst);

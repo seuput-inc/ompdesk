@@ -10,8 +10,6 @@ pub mod power;
 pub mod screen;
 #[path = "../../shell/src/shellops.rs"]
 pub mod shellops;
-#[path = "../../shell/src/shortcut.rs"]
-pub mod shortcut;
 #[path = "../../shell/src/system.rs"]
 pub mod system;
 #[path = "watchdog/mod.rs"]
@@ -23,7 +21,6 @@ pub fn dispatch(call: Call) -> Option<Call> {
         Some("power") => power::handle,
         Some("screen") => screen::handle,
         Some("shell") => shellops::handle,
-        Some("shortcut") => shortcut::handle,
         Some("system") => system::handle,
         Some("theme") => crate::theme::handle,
         _ => return Some(call),

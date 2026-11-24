@@ -1,18 +1,17 @@
 /**
  * Main process entry point for ompdesk.
- * App lifecycle: ready → window, sidecar, session index, IPC, tray, menu, deep links, updater.
+ * App lifecycle: ready → window, sidecar, session index, IPC, tray, menu, the shell's window commands, updater.
  */
 
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, openAsBlob } from "node:fs";
 import { homedir, release } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import {
 	app,
 	BrowserWindow,
 	dialog,
-	globalShortcut,
 	ipcMain,
 	Notification,
 	nativeImage,
@@ -66,7 +65,6 @@ import {
 	TOOLS_AUTO_UPDATE_PREF,
 } from "../shared/desktop-prefs";
 import { ECC_PREF } from "../shared/ecc";
-import { nativeAccelerator } from "../shared/hotkeys";
 import { IPC_COMMANDS, IPC_EVENTS, type SessionKind } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import {
@@ -115,7 +113,6 @@ import { installCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
-import { setupDeepLinks } from "./deep-link";
 import { defaultWorkspace } from "./default-workspace";
 import { initDeletedSessions } from "./deleted-sessions";
 import type { DesktopSlotHost } from "./desktop-slot-host";
@@ -167,7 +164,7 @@ import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
 import { type PrefsStore, prefsFile } from "./prefs-store";
-import { activateAction, lastWindowCloseAction } from "./quit-guard";
+import { lastWindowCloseAction } from "./quit-guard";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
 import { HOST_TAB_GRACE_MS, LocalHostServices } from "./remote/host-services";
@@ -204,6 +201,7 @@ import {
 	publishDiskFull,
 	readDiagnosticLog,
 	readPreviousRunEnd,
+	serveSessions,
 	app as shellApp,
 	shellIpc,
 } from "./shell-host/electron/index";
@@ -720,6 +718,20 @@ async function spawnWindow(
 		return null;
 	}
 	return win;
+}
+
+/**
+ * The shell's `session.openPath` (a folder opened on the app, a second launch in a folder): the window already showing
+ * this workspace, or a new one there. A relative path resolves against the launcher's cwd, which is never the
+ * workspace the person pointed at, so it is refused rather than guessed.
+ */
+async function openPath(path: string): Promise<{ focus: number } | { spawned: number } | null> {
+	if (!isAbsolute(path)) return null;
+	const target = resolve(path);
+	const shown = windowManager.getAllWindows().find(win => windowManager.recordFor(win)?.cwd === target);
+	if (shown) return { focus: shown.id };
+	const win = await spawnWindow(target);
+	return win ? { spawned: win.id } : null;
 }
 
 app.whenReady().then(async () => {
@@ -2624,27 +2636,6 @@ app.whenReady().then(async () => {
 	void mobileWeb.start();
 	// Before the first window: a restored remote tab needs its host's link to exist.
 	devices.start();
-
-	// Global shortcut: Cmd+Shift+O — toggle focused window, else show the most
-	// recent, else spawn one (multi-window decision tree).
-	globalShortcut.register(nativeAccelerator("window.toggle"), () => {
-		const focused = BrowserWindow.getFocusedWindow();
-		if (focused && !focused.isDestroyed() && windowManager.recordFor(focused)) {
-			if (focused.isVisible()) focused.hide();
-			else {
-				focused.show();
-				focused.focus();
-			}
-			return;
-		}
-		const win = windowManager.getMainWindow();
-		if (win) {
-			win.show();
-			win.focus();
-			return;
-		}
-		spawnWindow();
-	});
 	sessionIndex.start();
 	void logWatcher.start().catch(error => console.warn("[log-watcher] couldn't start:", error));
 	// Read before the first window restores: every tab change rewrites the store,
@@ -2694,14 +2685,18 @@ app.whenReady().then(async () => {
 		hostedGraceMs: HOST_TAB_GRACE_MS,
 	});
 
-	// Tray, menu, deep links, updater. Test runs (OMP_GUI_HEADLESS) skip the tray:
+	// Tray, menu, the shell's window commands, updater. Test runs (OMP_GUI_HEADLESS) skip the tray:
 	// the menu bar is shared with the user's own OMPdesk, and a test's status item
 	// once stalled this main thread (MenuBarAgent never completed its scene), so
 	// the first window never reached Playwright (release run 38048085831).
 	if (process.env.OMP_GUI_HEADLESS !== "1") createTray(windowManager, spawnWindow);
 	createMenu(windowManager, spawnWindow);
-	setupDeepLinks(windowManager, spawnWindow);
-	app.on("activate", activateWindow);
+	// The shell's entry points (a second launch, a link, a folder, the Dock, the window shortcut) ask for the windows
+	// it does not have; what reached it before now runs after, in order (tauri-shell/src/entry.rs).
+	serveSessions({
+		spawnWindow: async cwd => (await spawnWindow(cwd))?.id ?? null,
+		openPath,
+	});
 	setupUpdater(ipc, {
 		// Default on: only a stored `false` turns it off (an unattended Mac running Autopilot updates itself).
 		enabled: () => prefs.get(APP_AUTO_UPDATE_PREF) !== false,
@@ -2728,22 +2723,6 @@ app.whenReady().then(async () => {
 			if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.UPDATER_STATUS, status);
 	});
 });
-
-// macOS: re-create window on dock click
-function activateWindow(): void {
-	const windows = windowManager.getAllWindows();
-	const action = activateAction({
-		quitApproved: quitApproved(),
-		windowCount: windows.length,
-		anyVisible: windows.some(win => win.isVisible()),
-	});
-	if (action === "spawn") spawnWindow();
-	if (action !== "show") return;
-	const win = windowManager.getTargetWindow() ?? windows[0];
-	if (win.isMinimized()) win.restore();
-	win.show();
-	win.focus();
-}
 
 // Quit on all windows closed (except macOS)
 app.on("window-all-closed", () => {
