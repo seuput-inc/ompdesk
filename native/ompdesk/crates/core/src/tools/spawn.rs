@@ -83,22 +83,27 @@ pub(crate) fn launcher_names(name: &str, platform: &str) -> Vec<String> {
     }
 }
 
+/// node's `accessSync`: `X_OK` for a POSIX lookup, `F_OK` for a Windows one (a plan for Windows built on any host).
 #[cfg(unix)]
-fn may_execute(path: &Path) -> bool {
-    crate::sys::may_execute(path)
+fn may_execute(path: &Path, windows: bool) -> bool {
+    if windows {
+        path.symlink_metadata().is_ok()
+    } else {
+        crate::sys::may_execute(path)
+    }
 }
 
 /// node's `accessSync(F_OK)` on Windows.
 #[cfg(not(unix))]
-fn may_execute(path: &Path) -> bool {
+fn may_execute(path: &Path, _windows: bool) -> bool {
     path.symlink_metadata().is_ok()
 }
 
-/// A file this platform can start: any existing file on Windows, one with an execute bit on POSIX; never a directory.
-/// An app execution alias (`WindowsApps\winget.exe`) is a reparse point that may refuse a stat: only a directory that
-/// stats as one is ruled out.
-pub(crate) fn is_executable_file(file: &Path) -> bool {
-    may_execute(file) && std::fs::metadata(file).map_or(true, |meta| !meta.is_dir())
+/// A file the lookup's platform can start: any existing file for Windows, one with an execute bit for POSIX; never a
+/// directory. An app execution alias (`WindowsApps\winget.exe`) is a reparse point that may refuse a stat: only a
+/// directory that stats as one is ruled out.
+pub(crate) fn is_executable_file(file: &Path, windows: bool) -> bool {
+    may_execute(file, windows) && std::fs::metadata(file).map_or(true, |meta| !meta.is_dir())
 }
 
 fn joined(dir: &str, name: &str) -> String {
@@ -202,7 +207,7 @@ fn find_on_path_from(
         .map(|dir| resolve_against(dir, base, windows))
         .flat_map(|dir| names.iter().map(move |name| joined(&dir, name)))
         .chain(extra.iter().cloned())
-        .find(|file| is_executable_file(Path::new(file)))
+        .find(|file| is_executable_file(Path::new(file), windows))
 }
 
 /// `brewBinDirs` over `OMP_GUI_TEST_BREW_DIRS` (a PATH-style list, empty for none), which a test launch sets so the

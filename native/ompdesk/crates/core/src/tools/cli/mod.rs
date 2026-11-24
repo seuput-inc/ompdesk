@@ -162,6 +162,49 @@ impl Io for System {
     }
 }
 
+/// A machine with no vendor CLI on it: the other parts' tests list the tools without reading this computer (a
+/// Homebrew prefix or `/usr/local/bin` holding `gh` or `node` would add rows and a file read off the test's thread).
+#[cfg(test)]
+pub fn offline(tools: &Tools) {
+    struct Offline;
+    impl Io for Offline {
+        fn detect(&self, _: &'static str, _: &DetectDeps) -> LocalFuture<Option<Detection>> {
+            Box::pin(async { None })
+        }
+        fn run_check(
+            &self,
+            command: &CliCommand,
+            env: &Env,
+        ) -> LocalFuture<Result<String, String>> {
+            System.run_check(command, env)
+        }
+        fn running(
+            &self,
+            detection: &Detection,
+            owner: &Value,
+            commands: Option<String>,
+        ) -> LocalFuture<Result<bool, String>> {
+            System.running(detection, owner, commands)
+        }
+        fn latest_managed(
+            &self,
+            tools: &Rc<Tools>,
+            item: &str,
+        ) -> LocalFuture<Result<String, String>> {
+            System.latest_managed(tools, item)
+        }
+        fn run_update(
+            &self,
+            tools: &Rc<Tools>,
+            ctx: &Ctx,
+            request: ToolUpdateRequest,
+        ) -> LocalFuture<ToolUpdateOutcome> {
+            System.run_update(tools, ctx, request)
+        }
+    }
+    tools.cli.borrow_mut().io = Rc::new(Offline);
+}
+
 /// `ext.updateRunning`'s params for a tool (`runningIn`).
 fn running_params(detection: &Detection, owner: &Value, commands: Option<String>) -> Value {
     json!({

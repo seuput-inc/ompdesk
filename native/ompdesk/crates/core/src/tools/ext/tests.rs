@@ -342,6 +342,7 @@ fn harness_with(scheduled: bool, platform: &str, installer: Option<&str>) -> Har
     );
     tools.ext.borrow_mut().deps = fake_deps(&fake);
     tools.setup.borrow_mut().seams = crate::tools::setup::Seams::offline();
+    super::super::cli::offline(&tools);
     Harness { tools, fake }
 }
 
