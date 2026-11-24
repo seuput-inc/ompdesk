@@ -107,8 +107,8 @@ function endMain(reason: string): void {
 			pid: process.pid,
 		});
 	}
-	// The cores are the shell's: its end closes their stdin, which ends them and what they run. Main only refuses new
-	// work and asks for their stop where the shell still listens; it does not wait for it.
+	// The cores are the shell's: main's exit closes its owner connection, which ends them and what they run. Main only
+	// refuses new work and asks for their stop; it does not wait for it.
 	core()
 		.shutdown()
 		.catch(() => undefined);
