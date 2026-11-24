@@ -509,6 +509,9 @@ struct GuiBridgeParams {
 #[serde(rename_all = "snake_case")]
 enum GuiBridgeCommand {
     GetAdvisorStats,
+    GetCheckoutPeers,
+    GetAutopilot,
+    GetDirectories,
     RegenerateSessionTitle,
     AbortMaintenance,
     GetForceTool,
@@ -527,11 +530,12 @@ enum GuiBridgeCommand {
 
 impl From<GuiBridgeParams> for BridgeParams {
     fn from(gui: GuiBridgeParams) -> Self {
+        let empty_params = || Some(RawValue::from_string("{}".into()).expect("empty JSON object"));
         let (method, params) = match gui.command {
-            GuiBridgeCommand::GetAdvisorStats => (
-                "advisor_stats",
-                Some(RawValue::from_string("{}".into()).expect("empty JSON object")),
-            ),
+            GuiBridgeCommand::GetAdvisorStats => ("advisor_stats", empty_params()),
+            GuiBridgeCommand::GetCheckoutPeers => ("checkout_peers.get", empty_params()),
+            GuiBridgeCommand::GetAutopilot => ("modes.autopilot_status", empty_params()),
+            GuiBridgeCommand::GetDirectories => ("workspace.directories", None),
             GuiBridgeCommand::RegenerateSessionTitle => ("regenerate_title", None),
             GuiBridgeCommand::AbortMaintenance => ("composer.abort_maintenance", None),
             GuiBridgeCommand::GetForceTool => ("composer.get_force_tool", None),

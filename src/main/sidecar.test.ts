@@ -544,6 +544,9 @@ describe("SidecarManager", () => {
 			"let titles = 0;",
 			"const localReply = r => {",
 			'  if (r.method === "advisor_stats") return { ok: true, result: Object.keys(r.params).length === 0 ? { calls: 3 } : null };',
+			'  if (r.method === "checkout_peers.get") return { ok: true, result: Object.keys(r.params).length === 0 ? { peers: [] } : null };',
+			'  if (r.method === "modes.autopilot_status") return { ok: true, result: Object.keys(r.params).length === 0 ? { active: false } : null };',
+			'  if (r.method === "workspace.directories") return { ok: true, result: "params" in r ? null : { directories: [] } };',
 			'  if (r.method === "composer.last_link") return { ok: true, result: "params" in r ? null : { url: "https://example.org/doc" } };',
 			'  if (r.method === "next_prompt_state") return { ok: true, result: "params" in r ? null : { suggestions: true, inline: false } };',
 			'  if (r.method === "worktree_lifecycle_settings") return { ok: true, result: "params" in r ? null : { onExit: "keep" } };',
@@ -609,6 +612,9 @@ describe("SidecarManager", () => {
 			expect(commands).toEqual(["get_state", "prompt"]);
 			for (const [type, data] of [
 				["get_advisor_stats", { calls: 3 }],
+				["get_checkout_peers", { peers: [] }],
+				["get_autopilot", { active: false }],
+				["get_directories", { directories: [] }],
 				["regenerate_session_title", { title: null, reason: "none" }],
 				["get_last_link", { url: "https://example.org/doc" }],
 				["get_next_prompt", { suggestions: true, inline: false }],
@@ -629,6 +635,9 @@ describe("SidecarManager", () => {
 			expect(JSON.parse(await fs.readFile(commandLog, "utf8"))).toEqual([
 				...commands,
 				"get_advisor_stats",
+				"get_checkout_peers",
+				"get_autopilot",
+				"get_directories",
 				"regenerate_session_title",
 				"get_last_link",
 				"get_next_prompt",

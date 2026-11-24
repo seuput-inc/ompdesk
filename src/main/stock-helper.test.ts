@@ -35,8 +35,10 @@ appendFileSync(process.env.WORKER_PIDS, process.pid + "\\n");
 // slow takes real time; gated runs until the test writes "release", so a helper timeout cuts it short
 // whatever the machine's load does to either side's timers.
 const releaseOnCancel = Promise.withResolvers();
+let holdReplies = false;
 const methods = {
 	fast: () => "ok",
+	holdReplies: () => { holdReplies = true; },
 	untilCancel: () => releaseOnCancel.promise,
 	slow: async () => {
 		await new Promise(done => setTimeout(done, 300));
@@ -56,7 +58,9 @@ const methods = {
 };
 const input = createInterface({ input: process.stdin });
 input.on("close", () => process.exit(0));
-const dispatch = createDispatcher(methods, line => process.stdout.write(line + "\\n"), false);
+const dispatch = createDispatcher(methods, line => {
+	if (!holdReplies) process.stdout.write(line + "\\n");
+}, false);
 // Release the head inside the worker, only after the dispatcher registered the queued request's cancellation.
 input.on("line", line => {
 	const canceled = line.includes('"cancel"');
@@ -147,6 +151,18 @@ describe("StockHelper request timeout", () => {
 		expect(gone(workers()[0])).toBe(false);
 	});
 
+	it("recycles for a queued timeout before the running request's own deadline", async () => {
+		const { helper, workers } = await helperOnWorker(30_000, { recycleGraceMs: 150 });
+		const running = helper.request("gated", {});
+		const queued = helper.request("mutate", "late", { timeoutMs: 150 });
+		await Promise.all([
+			expect(queued).rejects.toThrow("timed out"),
+			expect(running).rejects.toThrow('restarted: "mutate" hung'),
+		]);
+		await vi.waitFor(() => expect(gone(workers()[0])).toBe(true), { timeout: 10_000 });
+		await expect(fs.readFile(path.join(dir, "mutations"))).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
 	it("recycles the stock worker when a request hangs past its timeout plus the grace, and starts afresh lazily", async () => {
 		const { helper, workers } = await helperOnWorker(150, { recycleGraceMs: 150 });
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -208,6 +224,28 @@ describe("StockHelper request timeout", () => {
 		const rejected = expect(slow).rejects.toThrow("stopped");
 		await helper.stop();
 		await rejected;
+	});
+
+	it("stops with unread replies without undoing a completed mutation or starting one behind a blocked handler", async () => {
+		const { helper, workers } = await helperOnWorker(30_000);
+		const answers = Promise.allSettled([
+			helper.request("holdReplies", {}),
+			helper.request("mutate", "applied"),
+			helper.request("gated", {}),
+			helper.request("mutate", "still queued"),
+		]);
+		await vi.waitFor(
+			() => {
+				expect(readFileSync(path.join(dir, "gated-started"), "utf8")).toBe("gated\n");
+				expect(readFileSync(path.join(dir, "handed"), "utf8")).toMatch(/gated\nmutate\n$/);
+			},
+			{ timeout: 10_000 },
+		);
+		await helper.stop();
+		for (const answer of await answers)
+			expect(answer).toMatchObject({ status: "rejected", reason: { message: "Stock helper stopped" } });
+		await vi.waitFor(() => expect(gone(workers()[0])).toBe(true), { timeout: 10_000 });
+		expect(await fs.readFile(path.join(dir, "mutations"), "utf8")).toBe("applied\n");
 	});
 
 	it("ends an idle worker once every request it was sent is answered, and starts a fresh one on the next", async () => {

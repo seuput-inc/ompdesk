@@ -23,7 +23,7 @@ src/main/atomic-file.test.ts	tooling	-	Vitest suite: atomic file writes.
 src/main/atomic-file.ts	port	1	writeFileAtomicSync/writeFileAtomic replace sibling temp files; AtomicSaver schedules/replaces deferred writes and disk-full retries.
 src/main/autopilot-actions.test.ts	tooling	-	Vitest suite: ship actions from the screen.
 src/main/autopilot-approver.test.ts	tooling	-	Vitest suite: decideApproval.
-src/main/autopilot-approver.ts	port	2	AutopilotApprover consumes extension cards; decideApproval checks the shared guard and decideQuestion chooses or declines unattended answers.
+src/main/autopilot-approver.ts	port	2	handle starts the reply and returns whether it consumed the card in the same extensionUi event. Stock shares findBanViolation; the page shares approvalChoices. Neither rule has independent I/O (§1.3a,c,d).
 src/main/autopilot-audit-local.test.ts	tooling	-	Vitest suite: auditCycle.
 src/main/autopilot-audit-test-rig.ts	tooling	-	installAuditRig creates Git fixtures; takeSnapshot/auditCycle call autopilot.snapshot/audit for crates/core/src/autopilot/audit.rs parity tests.
 src/main/autopilot-audit.test.ts	tooling	-	Vitest suite: auditCycle.
@@ -526,7 +526,7 @@ src/main/window-spawn-target.ts	port	1	After both cwd and workspace lookups, spa
 src/main/window.ts	mixed	4	WindowManager creates windows and persists geometry, dialogs, themes and lifetimes. Tauri win.create restores saved bounds using the shell's current display snapshot (tauri-shell/src/window_bounds.rs).
 src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name order.
 src/main/workspace-fs.test.ts	tooling	-	Vitest suite: workspace file reads, MIME detection, confinement and mutations.
-src/main/workspace-fs.ts	mixed	2	fs.* in core/src/fs owns disk operations, caps and viewer/image MIME detection. TS retains path confinement, argument checks, trash delegation and IPC response shapes.
+src/main/workspace-fs.ts	mixed	2	fs.* owns file I/O, caps and MIME detection. IPC and paired web actions also call resolveWithin synchronously. Trash passes the checked path to the shell's recycle operation, not a permanent unlink (§1.3a,c).
 src/main/workspace-search.test.ts	tooling	-	Vitest suite: Files content search.
 src/main/workspace-search.ts	mixed	2	Validates the panel request before launching stock and returns V8's RegExp syntax error. core/src/stock/search.rs supplies the case flag, file and match limits, ignored/hidden-file policy and grep timeout on that request; installed pi-natives searches.
 src/main/worktree-lifecycle.test.ts	tooling	-	Vitest suite: decideWorktreeStart (interactive-mode.ts 7716-7720).

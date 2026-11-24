@@ -26,8 +26,6 @@ function directories(ctx: LocalCommandContext): Promise<RpcWorkspaceDirectoriesR
 }
 
 export const handlers: Record<string, LocalHandler> = {
-	get_directories: async (_command, ctx) => directories(ctx),
-
 	add_directory: async (command, ctx) =>
 		ctx.bridge.request<RpcWorkspaceDirectoriesResult>("workspace.add_directory", { path: requirePath(command.path) }),
 
