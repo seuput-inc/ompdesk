@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:144-145",
+				"src/main/shell-host/electron/index.ts:162-163",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
@@ -77,7 +77,7 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2425-2429",
+				"src/main/index.ts:2434-2438",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"

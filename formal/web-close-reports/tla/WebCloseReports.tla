@@ -128,7 +128,7 @@ Greet(p) ==
 \* The socket ends (closed, timed out, retired, revoked): detach, onConnectionEnded, forget, in one synchronous run.
 \* @code native/ompdesk/crates/core/src/web/router.rs:847-884 finish -> web.conns end
 \* @code src/main/web/ws-router.ts:435-445 connections -> onConnectionEnded
-\* @code src/main/index.ts:2660 forget
+\* @code src/main/index.ts:2598 forget
 Drop(c) ==
     /\ c \in live
     /\ live' = live \ {c}
