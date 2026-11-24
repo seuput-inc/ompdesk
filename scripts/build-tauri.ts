@@ -42,9 +42,11 @@ function sha256(file: string): string {
 /** Every source file the host is built from, by repository path, with its hash. */
 function sourceFiles(): Map<string, string> {
 	const files = new Map<string, string>();
-	// Outside the crates: the toolchain, and the tray's pictures that tauri-shell/src/tray.rs embeds.
+	// Outside the crates: the toolchain, the core's owner (one file the host links from the core crate, `#[path]` in
+	// tauri-shell main.rs), and the tray's pictures that tauri-shell/src/tray.rs embeds.
 	for (const file of [
 		"native/ompdesk/rust-toolchain.toml",
+		"native/ompdesk/crates/core/src/owner.rs",
 		"resources/brand/tray.png",
 		"resources/brand/tray@2x.png",
 		"resources/brand/trayTemplate.png",

@@ -16,21 +16,21 @@
 | `DiskEnds` | the system call returns on that worker (`git/read.rs` `blocking`, `std::thread::scope` workers of `sizes.rs` `measure`, joined before it returns) | one synchronous call |
 | `HandlerEnds` | `server.rs` `answer`: the handler task returns (`?` on a cancelled git, `try_join!` dropping siblings); a scratch store is gone by then, because its owner is a local of a function the handler awaited | the join of the handler task |
 | `CoreAnswers` | `server.rs` `finish`: `ended.recv()` returns once every `Scope` clone (including the process supervisor and any disk worker) dropped, then `serve` writes the frame | the supervisor drops its clone after reaping the process |
-| `MainReceives` | `process.ts` `#receive`: pending → `onEnded`, resolve/reject; late → `onEnded`, drop | one stdout chunk handler |
-| `CoreDies` | the core process ends (environment); main's `close` handler (`#start`) calls `#ended` | the `close` event |
-| `MainSeesDeath` | `process.ts` `#ended`: takes the dead core's pending and late requests out (timers cleared), `groupGone(pid)` SIGKILLs the process group and polls `kill(-pid, 0)` until ESRCH, then `onEnded` and the rejection | the settle runs after the poll answered, in one callback |
-| `BoundPasses` | `groupGone` answers false after `GROUP_GONE_MS`; `#ended` settles with "git processes it started may still run" and logs it | the same callback |
+| `MainReceives` | `process.ts` `#receive`: pending → `onEnded`, resolve/reject; late → `onEnded`, drop | one data handler of main's connection to the core (`Link`) |
+| `CoreDies` | the core process ends (environment); its owner (`owner.rs` `watch`, the shell or `--own`) sends `core.ended`, on which `#ended` takes the dead core's pending and late requests out | the `core.ended` event |
+| `MainSeesDeath` | the owner's `group_gone(pid)` SIGKILLs the process group and polls `kill(-pid, 0)` until ESRCH, then sends `core.gone {empty: true}`; `#ended`'s `core.gone` continuation calls `onEnded` and the rejection | main settles in one callback, after the owner's poll answered |
+| `BoundPasses` | `group_gone` answers false after `GROUP_GONE` (3 s); `core.gone {empty: false}`; `#ended` settles with "git processes it started may still run" and logs it | the same callback |
 | `NextStarts` | `serial-chain.ts` `#clearHolds`: waits for the stopped step's `settled` (its effects) | the chain's tail |
 
 ## Abstractions that could hide a bug
 
-- Frames are FIFO and never lost or duplicated each way (two pipes, one writer task per side).
+- Frames are FIFO and never lost or duplicated each way: main's connection to the core is one socket (writes queued in order until it connects, `Link`), the core has one writer task per connection. The owner's events reach main in the order the owner sent them (`core.ended` before `core.gone`).
 - A cancel for an id the core already answered is ignored: `in_flight` drops the id before the answer frame is queued.
 - `GitExits` folds "finished by itself" and "ended after a cancel or a death": the model does not tell them apart (see SCOPE).
 - A disk call is one system call (an `lstat`, a `copy`, an `unlink`): the model counts them one at a time per request (the walk's workers run up to `WALK_THREADS` at once, which only adds calls the same `live` check guards and the same scope clones hold). A core that dies ends its own threads with it; a call the kernel already had completes or fails inside the dying process before main's group poll sees it gone.
 - The handler's gits are counted, not named; `Par` bounds how many run at once (`try_join!` of `head`, `log`, `commitDetail`).
 - POSIX: every git (and what it starts: hooks, ssh, credential helpers) stays in the core's process group; a process that makes a group or session of its own leaves it, and main neither kills nor waits for it.
-- Windows: `MainSeesDeath` waits for `alive = 0`, but main has nothing to poll there. The model assumes the job object ended the gits by the time main sees the core's `close` (the job's last handle closes while the core's process is torn down, before it is signalled); not verified on Windows.
+- Windows: `MainSeesDeath` waits for `alive = 0`, but the owner has nothing to poll there. The model assumes the job object ended the gits by the time the owner sees the core's exit (the job's last handle closes while the core's process is torn down, before it is signalled); not verified on Windows.
 - pid reuse: main signals `-pid` only while the dead core's group can still have members; POSIX does not reuse a pid as a group id while that group exists.
 
 ## Additional first-shell lifetime path

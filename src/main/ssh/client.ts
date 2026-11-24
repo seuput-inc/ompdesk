@@ -63,7 +63,7 @@ export interface SshRun {
 }
 
 interface Live {
-	/** The core that runs it. */
+	/** The core (its generation) that runs it. */
 	core: number | null;
 	events: SshRunEvents | null;
 	/** What it reported before its owner listened. */
@@ -175,7 +175,7 @@ export class SshCore {
 	close(): void {
 		this.#closed = true;
 		// Only a running core holds anything: none is started to close nothing.
-		if (core().pid === null) for (const run of [...this.#runs.keys()]) this.#exit(run, CORE_GONE);
+		if (core().generation === 0) for (const run of [...this.#runs.keys()]) this.#exit(run, CORE_GONE);
 		else
 			core()
 				.call("ssh.close", { service: this.#service })
@@ -207,7 +207,7 @@ export class SshCore {
 		this.#runs.set(id, live);
 		const stop = () => {
 			if (!this.#runs.has(id)) return;
-			if (core().pid !== live.core) return this.#exit(id, CORE_GONE);
+			if (core().generation !== live.core) return this.#exit(id, CORE_GONE);
 			core()
 				.call("ssh.stop", { service: this.#service, run: id })
 				.catch(() => this.#exit(id, CORE_GONE));
@@ -219,7 +219,7 @@ export class SshCore {
 			promptTimeoutMs: SSH_PROMPT_TIMEOUT_MS,
 			...params,
 		});
-		live.core = core().pid;
+		live.core = core().generation;
 		try {
 			await started;
 		} catch (error) {
@@ -261,7 +261,7 @@ export class SshCore {
 	}
 
 	#coreStarted(): void {
-		const running = core().pid;
+		const running = core().generation;
 		for (const [id, live] of [...this.#runs]) if (live.core !== running) this.#exit(id, CORE_GONE);
 		if (this.#prompts.length > 0) this.#asked([]);
 	}
