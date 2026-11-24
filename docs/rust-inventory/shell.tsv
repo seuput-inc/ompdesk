@@ -3,7 +3,7 @@ src/main/shell-host/INVENTORY.md	exception	Documents the shell API surface; not 
 src/main/shell-host/client.test.ts	exception	Socket request and event parity test; keep until the last Node host client is gone.
 src/main/shell-host/client.ts	native-client	ShellClient exchanges frames with the Rust shell; remove with its last Node caller.
 src/main/shell-host/duplex-pair.ts	exception	Test stream pair used by client.test.ts and electron/create.test.ts.
-src/main/shell-host/electron/app.ts	mixed	App keeps launch state, path overrides and lifecycle listeners in Node. Move them with index.ts and application quit; Rust already runs the OS event loop.
+src/main/shell-host/electron/app.ts	mixed	The quit's order is quit_chain.rs's (H2); App runs each step's listeners on app.quitHook. Launch state, path overrides and the ready, activate, second-instance, open-url/open-file and window-created listeners stay: their handlers in index.ts, window.ts and deep-link.ts read WindowManager synchronously (§1.3a,c). Move them with those owners; Rust already runs the OS event loop.
 src/main/shell-host/electron/binary-json.ts	native-client	Converts buffers at the page IPC boundary. Remove the Node adapter when native IPC serves its callers.
 src/main/shell-host/electron/browser-window.ts	mixed	Node owns window and view objects and reads their mirrored state synchronously. Move creation, close and view callers together; Tauri owns the OS windows.
 src/main/shell-host/electron/create.test.ts	exception	Integration cases for the shim. Retain behaviors as native host tests when the shim goes.
