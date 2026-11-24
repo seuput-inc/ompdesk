@@ -22,7 +22,7 @@ export function mainT(
 	return fillText(MAIN_TEXT[key][language], params);
 }
 
-/** The edit items' names, for the Edit menu and the text-field context menu. */
+/** The edit items' names, for the text-field context menu (the shell's Edit menu has the same words). */
 export function editLabels(language = getMainLanguage()): EditLabels {
 	return {
 		undo: mainT("menu.undo", language),

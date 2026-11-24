@@ -149,7 +149,6 @@ import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
 import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
-import { createMenu } from "./menu";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
@@ -199,9 +198,11 @@ import {
 	openPageExternal,
 	postWatchdog,
 	publishDiskFull,
+	publishLanguage,
 	readDiagnosticLog,
 	readPreviousRunEnd,
 	serveSessions,
+	serveTray,
 	app as shellApp,
 	shellIpc,
 } from "./shell-host/electron/index";
@@ -229,12 +230,12 @@ import { locateTailscale } from "./tailscale/locate";
 import { MobileWebService } from "./tailscale/service";
 import { Tailnet } from "./tailscale/tailnet";
 import { exitWithLauncher } from "./test-launcher-exit";
-import { createTray, destroyTray, hasTray } from "./tray";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
 import { journalWait, TurnWaitWatch, WAIT_SWEEP_MS } from "./turn-wait-watch";
 import {
 	appAutoUpdatePrefChanged,
+	applyUpdate,
 	appVersion,
 	checkForUpdate,
 	downloadUpdate,
@@ -2250,7 +2251,8 @@ app.whenReady().then(async () => {
 		lastWindowCloseAction({
 			platform: process.platform,
 			quitApproved: quitApproved(),
-			closeToTray: hasTray() && closeToTrayEnabled(prefs.get(CLOSE_TO_TRAY_PREF)),
+			// The shell's tray (tauri-shell/src/tray.rs) is there in every run but a test's (OMP_GUI_HEADLESS).
+			closeToTray: process.env.OMP_GUI_HEADLESS !== "1" && closeToTrayEnabled(prefs.get(CLOSE_TO_TRAY_PREF)),
 		});
 	windowManager.lastWindowHidden = () => {
 		// macOS: the Dock icon is the way back and needs no explanation.
@@ -2748,16 +2750,30 @@ app.whenReady().then(async () => {
 		hostedGraceMs: HOST_TAB_GRACE_MS,
 	});
 
-	// Tray, menu, the shell's window commands, updater. Test runs (OMP_GUI_HEADLESS) skip the tray:
-	// the menu bar is shared with the user's own OMPdesk, and a test's status item
-	// once stalled this main thread (MenuBarAgent never completed its scene), so
-	// the first window never reached Playwright (release run 38048085831).
-	if (process.env.OMP_GUI_HEADLESS !== "1") createTray(windowManager, spawnWindow);
-	createMenu(windowManager, spawnWindow);
+	// The shell's app menu and tray (tauri-shell/src/app_menu.rs, tray.rs) speak the UI language; the tray's update
+	// item asks for the updater's status, and since when a check found nothing, each time its menu opens.
+	publishLanguage(getMainLanguage());
+	let notAvailableAt: number | null = null;
+	onUpdateStatus(status => {
+		notAvailableAt = status.state === "not-available" ? Date.now() : null;
+	});
+	serveTray({
+		update: () => ({ status: updateStatus(), notAvailableAt }),
+		runUpdate: action => {
+			if (action === "check") void checkForUpdate();
+			else if (action === "download") void downloadUpdate();
+			else void applyUpdate();
+		},
+	});
 	// The shell's entry points (a second launch, a link, a folder, the Dock, the window shortcut) ask for the windows
 	// it does not have; what reached it before now runs after, in order (tauri-shell/src/entry.rs).
 	serveSessions({
-		spawnWindow: async cwd => (await spawnWindow(cwd))?.id ?? null,
+		spawnWindow: async (cwd, from) => {
+			// New Window (the app menu): in the project of the window it was chosen over.
+			const beside = windowManager.getAllWindows().find(win => win.id === from);
+			const project = cwd ?? (beside ? windowManager.recordFor(beside)?.cwd : undefined);
+			return (await spawnWindow(project))?.id ?? null;
+		},
 		openPath,
 	});
 	setupUpdater(ipc, {
@@ -2877,7 +2893,6 @@ installQuitGuard(
 					void coreStopped.catch((error: unknown) => console.warn(`[quit] core stop failed: ${String(error)}`));
 				},
 			],
-			["tray", () => destroyTray()],
 		];
 		for (const [name, run] of steps) {
 			markMainStep("quit", `teardown:${name}`);
