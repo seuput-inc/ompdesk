@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
@@ -53,13 +53,19 @@ it.each(["socket", "stdin", "both"] as const)(
 		const ownerPath =
 			process.platform === "win32" ? `\\\\.\\pipe\\ompdesk-shell-core-${randomUUID()}` : join(dir, "core.sock");
 		let owner: ChildProcess | undefined;
+		let ownerLog = "";
+		let owners = 0;
 		const ownerServer = createServer(socket => {
 			sockets.add(socket);
 			const own = spawn(nativeBinPath("ompdesk-core"), ["--own"], {
-				stdio: ["pipe", "pipe", "inherit"],
+				stdio: ["pipe", "pipe", "pipe"],
 				windowsHide: true,
 			});
+			own.stderr?.on("data", (part: Buffer) => {
+				ownerLog += part.toString();
+			});
 			owner = own;
+			owners++;
 			let token = true;
 			socket.on("data", (chunk: Buffer) => {
 				let rest = chunk;
@@ -232,10 +238,25 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 			// Which wait a stalled run is in, named before the test's own timeout ends it without saying.
 			let step = "the shell's hello";
 			const stalled = Promise.withResolvers<never>();
-			const stallTimer = setTimeout(
-				() => stalled.reject(new Error(`stalled waiting for ${step}; main's stderr:\n${stderr}`)),
-				27_000,
-			);
+			const stallTimer = setTimeout(() => {
+				const tree =
+					process.platform === "win32"
+						? ""
+						: execFileSync("ps", ["-eo", "pid,ppid,pgid,stat,args"], { encoding: "utf8" })
+								.split("\n")
+								.filter(line =>
+									[firstCore, secondCore, ...gits.map(git => git.pid), owner?.pid].some(
+										pid =>
+											pid !== undefined && new RegExp(`^\\s*\\d+\\s+${pid}\\b|^\\s*${pid}\\b`).test(line),
+									),
+								)
+								.join("\n");
+				stalled.reject(
+					new Error(
+						`stalled waiting for ${step}; gits ${gits.map(git => git.pid).join(",")} cores ${firstCore},${secondCore} owners ${owners} (pid ${owner?.pid}, exit ${owner?.exitCode})\n${tree}\nowner's stderr:\n${ownerLog}\nmain's stderr:\n${stderr}`,
+					),
+				);
+			}, 27_000);
 			const beforeExit = <T>(promise: Promise<T>, waitingFor?: string): Promise<T> => {
 				if (waitingFor) step = waitingFor;
 				return Promise.race([
