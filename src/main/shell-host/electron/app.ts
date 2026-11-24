@@ -1,14 +1,15 @@
 /**
  * `app`: Electron's lifecycle over the host protocol (PROTOCOL.md §2). Everything main does before `whenReady`
  * (switches, privileged schemes, "no hardware acceleration") is collected and sent as `app.init` on the first
- * macrotask after main's top-level code ran; the shell answers, starts CEF and sends `app.ready`. The quit sequence
- * is Electron's, run here: `before-quit`, every window's `close`, `will-quit`, `quit`, then `app.exit`.
+ * macrotask after main's top-level code ran; the shell answers, starts CEF and sends `app.ready`. The shell orders
+ * quit hooks; this shim runs the corresponding Electron listeners and main-process effects.
  */
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LaunchDecision, LaunchStart } from "../../gpu-fallback";
 import type { HostFacts, PathName, SchemeFact } from "../facts";
+import type { InstallerStartReceipt } from "../shell-calls";
 import { emitPreventable, type Host, makeEvent } from "./host";
 
 type LaunchRequest = { kind: "url"; url: string } | { kind: "path"; path: string } | { kind: "focus" };
@@ -23,6 +24,17 @@ export interface AppDeps {
 	/** Ends the process; tests replace it. */
 	exitProcess?(code: number): void;
 }
+
+export interface QuitEffects {
+	confirm(): Promise<boolean>;
+	finalize(): Promise<void>;
+	teardown(update: boolean): void;
+	settle(): Promise<0 | 1>;
+}
+
+type QuitHook =
+	| { step: "before" | "confirm" | "finalize" | "teardown" | "close" | "will" | "settle"; update: boolean }
+	| { step: "exit"; update: boolean; code: number };
 
 class CommandLine {
 	readonly #switches = new Map<string, string | null>();
@@ -85,8 +97,8 @@ export class App extends EventEmitter {
 	#appUserModelId: string | undefined;
 	#activationPolicy: string | undefined;
 	#aboutPanel: Record<string, unknown> | undefined;
-	#quitting = false;
-	#quitRunning = false;
+	#closingForQuit = false;
+	#quitEffects?: QuitEffects;
 	#quitEmitted = false;
 	#gpuFeatures: Record<string, string> = {};
 	#initSent = false;
@@ -129,7 +141,7 @@ export class App extends EventEmitter {
 		client.on("app.openFile", ({ path }: { path: string }) => {
 			this.emit("open-file", makeEvent(), path);
 		});
-		client.on("app.quitRequested", () => this.quit());
+		client.handle("app.quitHook", (hook: QuitHook) => this.#quitHook(hook));
 		client.on("app.activate", ({ hasVisibleWindows }: { hasVisibleWindows?: boolean }) => {
 			this.emit("activate", makeEvent(), hasVisibleWindows === true);
 		});
@@ -335,34 +347,61 @@ export class App extends EventEmitter {
 		);
 	}
 
-	quit(): void {
-		void this.#runQuit();
+	quit(intent: "ask" | "approved" = "ask"): void {
+		this.#host.post("app.quit", { intent });
 	}
 
-	async #runQuit(): Promise<void> {
-		if (this.#quitRunning) return;
-		this.#quitRunning = true;
-		try {
-			if (!emitPreventable(this, "before-quit")) return;
-			this.#quitting = true;
-			if (!(await this.#deps.closeWindows())) return;
-			const event = makeEvent();
-			// Keep EventEmitter's listener snapshot and once wrappers. Only the guard's own write waits for a receipt.
-			for (const listener of this.rawListeners("will-quit")) {
-				if (listener === this.#markLaunchStable) await this.#markLaunchStable();
-				else listener.call(this, event);
+	installerQuitPending(): void {
+		this.#host.post("app.quit", { intent: "installerPending" });
+	}
+
+	installerQuitReceipt(receipt: InstallerStartReceipt): void {
+		this.#host.post("app.quit", { intent: "installerReceipt", receipt });
+	}
+
+	setQuitEffects(effects: QuitEffects): void {
+		this.#quitEffects = effects;
+	}
+
+	async #quitHook(hook: QuitHook): Promise<boolean | number | null> {
+		switch (hook.step) {
+			case "before":
+				return emitPreventable(this, "before-quit");
+			case "confirm":
+				return this.#quitEffects?.confirm() ?? true;
+			case "finalize":
+				await this.#quitEffects?.finalize();
+				return null;
+			case "teardown":
+				this.#quitEffects?.teardown(hook.update);
+				return null;
+			case "close":
+				this.#closingForQuit = true;
+				try {
+					return await this.#deps.closeWindows();
+				} finally {
+					this.#closingForQuit = false;
+				}
+			case "will": {
+				const event = makeEvent();
+				// Keep EventEmitter's listener snapshot and once wrappers. Only the guard's own write waits for a receipt.
+				for (const listener of this.rawListeners("will-quit")) {
+					if (listener === this.#markLaunchStable) await this.#markLaunchStable();
+					else listener.call(this, event);
+				}
+				return !event.defaultPrevented;
 			}
-			if (event.defaultPrevented) return;
-			this.exit(0);
-		} finally {
-			this.#quitting = false;
-			this.#quitRunning = false;
+			case "settle":
+				return this.#quitEffects?.settle() ?? 0;
+			case "exit":
+				this.exit(hook.code);
+				return null;
 		}
 	}
 
 	/** `window-all-closed` is not emitted while a quit closes the windows, as in Electron. */
 	override emit(name: string | symbol, ...args: unknown[]): boolean {
-		if (name === "window-all-closed" && this.#quitting) return false;
+		if (name === "window-all-closed" && this.#closingForQuit) return false;
 		return super.emit(name, ...args);
 	}
 }

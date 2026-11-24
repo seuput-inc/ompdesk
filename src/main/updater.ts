@@ -914,8 +914,8 @@ export function restartIntoUpdate(trigger: InstallTrigger): void {
 		requestQuit("update", { relaunch: true, detail: trigger });
 		return;
 	}
-	// quitAndInstall() starts the installer (off the main thread on Windows), then emits before-quit-for-update
-	// once it runs, and the quit guard runs ⌘Q's teardown.
+	// quitAndInstall() holds the quit (installer pending) and starts the installer off the main thread; its first
+	// launch's receipt lets the shell run the update teardown and the quit (nsis-updater.ts, quit_chain.rs).
 	if (current.mode === "automatic") {
 		markMainStep("update", "quit-and-install");
 		beginInstall(trigger);
