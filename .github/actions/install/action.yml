@@ -134,7 +134,7 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/shell-policy-bin
-        key: shell-policy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/ompdesk/rust-toolchain.toml', 'native/ompdesk/crates/tauri-shell/tests/policy/*.*', 'native/ompdesk/crates/tauri-shell/src/**/*.rs', 'native/ompdesk/crates/shell/src/**/*.rs') }}
+        key: shell-policy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/ompdesk/rust-toolchain.toml', 'native/ompdesk/crates/tauri-shell/tests/policy/*.*', 'native/ompdesk/crates/tauri-shell/src/**/*.rs', 'native/ompdesk/crates/shell/src/**/*.rs', 'src/shared/app-compatibility.json') }}
 
     - if: (inputs.native || inputs.electron) == 'true' && (steps.native-cache.outputs.cache-hit != 'true' || steps.policy-cache.outputs.cache-hit != 'true')
       uses: ./.github/actions/native-toolchain

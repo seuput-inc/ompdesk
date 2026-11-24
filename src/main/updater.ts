@@ -29,9 +29,8 @@
  * "not found" does the state become `auth-required`.
  */
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { app, BrowserWindow, net, shell } from "electron";
 import type { AppUpdater, UpdateInfo } from "electron-updater";
@@ -47,7 +46,7 @@ import { mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { OmpNsisUpdater } from "./nsis-updater";
 import { writeRuntimeLog } from "./runtime-log";
-import { systemIdleSeconds } from "./shell-host/shell-calls";
+import { systemIdleSeconds, updateHost } from "./shell-host/shell-calls";
 import {
 	checkRepoAccess,
 	clearUpdateToken,
@@ -89,10 +88,7 @@ import {
 	SWAP_SCRIPT,
 	settleFailedUpdateCheck,
 	settleIncompleteUpdateCheck,
-	sha512FileBase64,
 	stageBundleFromDmg,
-	sweepInstallerPartials,
-	type ToolResult,
 	withinIdle,
 } from "./updater-state";
 import type { IpcRegistry } from "./web/ipc-registry";
@@ -434,27 +430,13 @@ function updatesDirectory(): string {
 	return path.join(app.getPath("userData"), "updates");
 }
 
-function runTool(command: string, args: readonly string[]): Promise<ToolResult> {
-	const { promise, resolve } = Promise.withResolvers<ToolResult>();
-	execFile(command, [...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout) =>
-		resolve({ ok: !error, stdout }),
-	);
-	return promise;
-}
-
 /** Copy the app out of the verified DMG and prove it is this app at `version`, intact. */
 async function stageBundle(dmgPath: string, version: string): Promise<string> {
 	if (!ownBundle) throw new Error(mainT("updates.installerMissing"));
 	try {
-		return await stageBundleFromDmg({
-			dmgPath,
-			stagingDir: path.join(updatesDirectory(), version),
-			mountRoot: os.tmpdir(),
-			version,
-			ownBundle,
-			run: runTool,
-			fs: fs.promises,
-		});
+		return await stageBundleFromDmg({ dmgPath, version, ownBundle }, request =>
+			updateHost().stageUpdateBundle(request),
+		);
 	} catch (error) {
 		if (!(error instanceof StageBundleError)) throw error;
 		if (error.reason === "missing") throw new Error(mainT("updates.installerMissing"));
@@ -491,17 +473,6 @@ function launchSwap(
 	);
 	child.unref();
 	noteInstallHelper("relaunch", trigger, { relaunch });
-}
-
-function availableDownloadPath(fileName: string): string {
-	const downloadsDirectory = app.getPath("downloads");
-	const extension = path.extname(fileName);
-	const stem = path.basename(fileName, extension);
-	let candidate = path.join(downloadsDirectory, fileName);
-	for (let suffix = 2; fs.existsSync(candidate); suffix += 1) {
-		candidate = path.join(downloadsDirectory, `${stem} (${suffix})${extension}`);
-	}
-	return candidate;
 }
 
 async function fileSize(filePath: string): Promise<number> {
@@ -553,8 +524,12 @@ async function downloadMacAsset(
 ): Promise<void> {
 	// Manual installers land in Downloads for Finder; relaunch DMGs are private staging.
 	if (mode === "relaunch") await fs.promises.mkdir(updatesDirectory(), { recursive: true });
+	const area = mode === "manual" ? "downloads" : "updates";
 	const destinationPath =
-		mode === "manual" ? availableDownloadPath(macDownloadName) : path.join(updatesDirectory(), macDownloadName);
+		mode === "manual"
+			? await updateHost().updateDestination(macDownloadName)
+			: path.join(updatesDirectory(), macDownloadName);
+	const fileName = path.basename(destinationPath);
 	const partialPath = installerPartialPath(destinationPath);
 	// Every network step gets the idle timeout: a stalled transfer fails as
 	// retryable instead of sitting in `downloading` forever.
@@ -562,8 +537,7 @@ async function downloadMacAsset(
 	const abort = () => controller.abort();
 	const assetUrl = await withinIdle(signedAssetUrl(apiUrl, token, controller.signal), DOWNLOAD_IDLE_TIMEOUT_MS, abort);
 	// Partials of releases this one superseded can never be continued.
-	if (mode === "manual") await sweepInstallerPartials(path.dirname(partialPath), partialPath);
-	else await sweepUpdatesDirectory(macDownloadName);
+	await updateHost().sweepUpdateFiles({ area, asset: fileName });
 
 	let existing = await fileSize(partialPath);
 	if (existing > asset.size) {
@@ -624,7 +598,7 @@ async function downloadMacAsset(
 		await file.close();
 	}
 
-	if ((await sha512FileBase64(partialPath)) !== asset.sha512) {
+	if ((await updateHost().updateDigest(area, fileName)) !== asset.sha512) {
 		await fs.promises.rm(partialPath, { force: true });
 		throw new Error(mainT("updates.hashMismatch"));
 	}
@@ -640,23 +614,6 @@ async function downloadMacAsset(
 	// e2e/headless runs verify the download but never put Finder on screen.
 	if (process.env.OMP_GUI_HEADLESS !== "1") await openManualInstaller(destinationPath);
 	broadcast({ state: "downloaded", version, mode });
-}
-
-/** Drop staging left by older releases; keep this release's partial so it can resume. */
-async function sweepUpdatesDirectory(keepAsset: string): Promise<void> {
-	const keep = new Set([keepAsset, installerPartialPath(keepAsset), "swap.log"]);
-	let entries: string[] = [];
-	try {
-		entries = await fs.promises.readdir(updatesDirectory());
-	} catch {
-		return;
-	}
-	// One stubborn leftover must never block the download that replaces it.
-	await Promise.allSettled(
-		entries
-			.filter(entry => !keep.has(entry))
-			.map(entry => fs.promises.rm(path.join(updatesDirectory(), entry), { recursive: true, force: true })),
-	);
 }
 
 /** Background download for relaunch mode; failures stay out of the banner like any passive check. */
@@ -1027,7 +984,13 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 	// Installs interrupted by older builds keyed the partial by process id, which
 	// nothing could ever continue — those orphans are the only debris a startup
 	// sweep can identify for sure.
-	if (process.platform === "darwin") void sweepInstallerPartials(app.getPath("downloads"));
+	if (process.platform === "darwin") {
+		void updateHost()
+			.sweepUpdateFiles({ area: "downloads" })
+			.catch(error => {
+				logUpdate("download", { event: "cleanup-failed", reason: failureReason(error) });
+			});
+	}
 	// Updates download in the background as soon as a check finds one (Claude/Codex
 	// style); the only prompt is "Restart & install". Manual DMGs still wait for a click.
 	syncQuitInstall();
