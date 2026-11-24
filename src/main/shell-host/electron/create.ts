@@ -131,7 +131,6 @@ export function createElectron(client: HostClient, facts: HostFacts, options: Cr
 		systemPreferences: desktop.systemPreferences,
 		powerMonitor: desktop.powerMonitor,
 		powerSaveBlocker: desktop.powerSaveBlocker,
-		globalShortcut: desktop.globalShortcut,
 		autoUpdater: desktop.autoUpdater,
 		net: createNet(host),
 		nativeImage: {

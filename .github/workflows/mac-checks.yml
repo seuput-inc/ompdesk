@@ -34,7 +34,7 @@ jobs:
           runtime: tauri
           playwright: "false"
       # The same driver release.yml's `mac` runs on the packaged app, here on the staged host: bridge, new tab, a prompt
-      # round trip on the fake omp, settings, a clean quit.
+      # round trip on the fake omp, `open -a` with omp://new and a folder (the shell's entry points), settings, a clean quit.
       - name: Smoke the staged Tauri host
         run: |
           set -euo pipefail

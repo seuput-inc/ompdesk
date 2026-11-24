@@ -250,6 +250,12 @@ impl Chain {
         self.installer_pending = false;
     }
 
+    /// The quit is committed (Node's `quitApproved`): a Dock click no longer opens or restores a window.
+    #[cfg(target_os = "macos")]
+    pub fn approved(&self) -> bool {
+        self.stage != Stage::Open
+    }
+
     /// A request while a step runs joins it; one while an install is pending is that install's quit.
     fn start(&mut self) -> Option<Hook> {
         if self.running.is_some() || self.installer_pending {

@@ -5,9 +5,10 @@
  * the keymap registry therefore treats them as reserved and refuses the binding,
  * and the shortcuts dialog lists them alongside the remappable rows.
  *
- * This is the only place these chords are spelled out: `main/menu.ts` and
- * `main/index.ts` ask for the Electron accelerator by id, and the renderer
- * derives its display + conflict table from the same list.
+ * This is the only place these chords are spelled out: `main/menu.ts` asks
+ * for the Electron accelerator by id, the shell registers `window.toggle`'s
+ * spelling itself (`tauri-shell/src/entry.rs`, keep the two equal), and the
+ * renderer derives its display + conflict table from the same list.
  */
 export interface NativeChord {
 	readonly id: string;

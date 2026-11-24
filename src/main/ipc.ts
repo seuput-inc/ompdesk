@@ -1673,7 +1673,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// sidecar cannot be created.
 	// F-OWN: when the session is already attached to a tab, focus the owner
 	// window (win.show()+win.focus() — the codebase's focus pattern, see
-	// deep-link.ts/tray.ts) instead of spawning a second sidecar for the same
+	// tray.ts) instead of spawning a second sidecar for the same
 	// file; resolves true because the session ends up foregrounded either way.
 	// The new window's tab starts on the session file itself (spawnWindow passes it to the pool, `--session`).
 	ipc.handle(IPC_COMMANDS.SESSION_OPEN_NEW_WINDOW, async (caller, payload: IpcSessionOpenNewWindowPayload) => {
