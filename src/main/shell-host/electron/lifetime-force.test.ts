@@ -292,9 +292,13 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 			}
 			expect(await beforeExit(exitRequested.promise, "main's exit")).toBe(1);
 			// The shell's own end, which ends every core it owns: the running one at once, the stopped one 5 s later.
+			const shellEnded = Promise.withResolvers<void>();
+			if (!owner || owner.exitCode !== null || owner.signalCode !== null) shellEnded.resolve();
+			else owner.once("exit", () => shellEnded.resolve());
 			owner?.stdin?.end();
-			// A git's connection closes as it dies.
-			await beforeExit(Promise.all([firstGit.closed, secondGit.closed]), "the gits to end");
+			// A git's connection closes as it dies; the owner exits once every core's process group is gone, so a git
+			// that died but was not reaped yet (a zombie answers kill(pid, 0) on POSIX) is gone by then too.
+			await beforeExit(Promise.all([firstGit.closed, secondGit.closed, shellEnded.promise]), "the gits to end");
 			const exitedAt = Date.now();
 			expect(await ompRuns(firstGit.pid, exitedAt)).toBe(false);
 			expect(await ompRuns(secondGit.pid, exitedAt)).toBe(false);
