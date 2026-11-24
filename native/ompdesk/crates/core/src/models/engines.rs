@@ -1,21 +1,19 @@
 //! Probe an engine's model list. Stock itself discovers the models after main registers a provider.
 use std::fmt;
-use std::io::{self, Read};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
-use flate2::read::{DeflateDecoder, MultiGzDecoder, ZlibDecoder};
 use http_body_util::{BodyExt, LengthLimitError, Limited};
 use hyper::HeaderMap;
 use hyper::body::{Body, Bytes};
-use hyper::header::{CONTENT_ENCODING, LOCATION};
+use hyper::header::LOCATION;
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use tokio::time::{Instant, timeout_at};
 use url::Url;
 
-use crate::http::{self, Failure};
+use crate::http::{self, Failure, Undecoded};
 use crate::server::{Answer, Call, Reply};
 
 // Ports refused by Node fetch (undici's badPortsSet), including on redirects.
@@ -109,87 +107,13 @@ async fn fetch(base: &str, max_bytes: usize) -> Result<(HeaderMap, Bytes), Failu
     Err(Failure::Redirect)
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Coding {
-    Gzip,
-    Deflate,
-    Brotli,
-    Zstd,
-    Other,
-}
-
-fn decode(
-    headers: &HeaderMap,
-    mut body: Bytes,
-    max_bytes: usize,
-    deadline: Instant,
-) -> Option<bool> {
-    // Fetch decodes at most five layers, in reverse order. One unknown coding leaves the entire body raw.
-    let mut layers = [Coding::Other; 5];
-    let mut count = 0;
-    for header in headers.get_all(CONTENT_ENCODING) {
-        for coding in header.to_str().unwrap_or("").split(',').map(str::trim) {
-            *layers.get_mut(count)? =
-                if coding.eq_ignore_ascii_case("gzip") || coding.eq_ignore_ascii_case("x-gzip") {
-                    Coding::Gzip
-                } else if coding.eq_ignore_ascii_case("deflate") {
-                    Coding::Deflate
-                } else if coding.eq_ignore_ascii_case("br") {
-                    Coding::Brotli
-                } else if coding.eq_ignore_ascii_case("zstd") {
-                    Coding::Zstd
-                } else {
-                    Coding::Other
-                };
-            count += 1;
-        }
+/// The decoded body read as a model list; `None` (inconclusive) when it cannot be decoded within the bounds.
+fn decode(headers: &HeaderMap, body: Bytes, max_bytes: usize, deadline: Instant) -> Option<bool> {
+    match http::decode(headers, body, max_bytes, deadline.into_std()) {
+        Ok(body) => Some(model_list(&body)),
+        Err(Undecoded::Corrupt) => Some(false),
+        Err(Undecoded::Unsupported | Undecoded::Bounds) => None,
     }
-    let layers = &layers[..count];
-    if !layers.contains(&Coding::Other) {
-        for coding in layers.iter().rev() {
-            let result = match coding {
-                Coding::Gzip => expand(MultiGzDecoder::new(&body[..]), max_bytes, deadline),
-                Coding::Deflate if body.first().is_some_and(|first| first & 15 == 8) => {
-                    expand(ZlibDecoder::new(&body[..]), max_bytes, deadline)
-                }
-                Coding::Deflate => expand(DeflateDecoder::new(&body[..]), max_bytes, deadline),
-                Coding::Brotli => {
-                    // 0x11 is the large-window extension, not RFC 7932. Refuse before it can allocate its window.
-                    if body.first() == Some(&0x11) {
-                        return None;
-                    }
-                    expand(
-                        brotli::Decompressor::new(&body[..], 4096),
-                        max_bytes,
-                        deadline,
-                    )
-                }
-                Coding::Zstd => return None,
-                Coding::Other => unreachable!(),
-            };
-            match result {
-                Ok(next) => body = next?,
-                Err(_) => return Some(false),
-            }
-        }
-    }
-    (Instant::now() < deadline).then(|| model_list(&body))
-}
-
-fn expand(mut reader: impl Read, max_bytes: usize, deadline: Instant) -> io::Result<Option<Bytes>> {
-    let mut out = Vec::new();
-    let mut chunk = [0_u8; 16 * 1024];
-    while Instant::now() < deadline {
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) if n > max_bytes - out.len() => return Ok(None),
-            Ok(n) => out.extend_from_slice(&chunk[..n]),
-            // Node uses Z_SYNC_FLUSH at EOF; a missing gzip trailer need not invalidate complete JSON.
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error),
-        }
-    }
-    Ok((Instant::now() < deadline).then(|| out.into()))
 }
 
 // Keep only the last `data` field as JSON.parse does, without allocating a model catalog.
@@ -231,6 +155,7 @@ fn model_list(body: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyper::header::CONTENT_ENCODING;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 

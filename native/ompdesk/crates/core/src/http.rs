@@ -40,7 +40,11 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use url::{Host, Position, Url};
 
+mod decode;
+mod node_fetch;
 mod public;
+pub(crate) use decode::{Undecoded, decode};
+pub(crate) use node_fetch::node_get;
 #[cfg(test)]
 pub(crate) use public::fixture_request;
 pub(crate) use public::{public_get, public_head};
@@ -843,13 +847,13 @@ pub(crate) mod tests {
         params.not_after = now + Duration::days(1);
     }
 
-    struct Authority {
-        issuer: Issuer<'static, KeyPair>,
-        der: CertificateDer<'static>,
+    pub(crate) struct Authority {
+        pub(crate) issuer: Issuer<'static, KeyPair>,
+        pub(crate) der: CertificateDer<'static>,
         pem: String,
     }
 
-    fn authority(name: &str) -> Authority {
+    pub(crate) fn authority(name: &str) -> Authority {
         let key = KeyPair::generate().unwrap();
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -865,7 +869,7 @@ pub(crate) mod tests {
     }
 
     /// The test process's authority: the machine does not trust it, `trusting` does.
-    static TRUSTED: LazyLock<Authority> = LazyLock::new(|| authority("OMPdesk test CA"));
+    pub(crate) static TRUSTED: LazyLock<Authority> = LazyLock::new(|| authority("OMPdesk test CA"));
 
     fn trusting() -> Result<Arc<ClientConfig>, Failure> {
         static CONFIG: LazyLock<Arc<ClientConfig>> =
@@ -874,7 +878,7 @@ pub(crate) mod tests {
     }
 
     /// A server's TLS settings with a certificate for `names`, signed by `issuer`.
-    fn server_tls(issuer: &Issuer<'_, KeyPair>, names: &[&str]) -> Arc<ServerConfig> {
+    pub(crate) fn server_tls(issuer: &Issuer<'_, KeyPair>, names: &[&str]) -> Arc<ServerConfig> {
         let key = KeyPair::generate().unwrap();
         let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
         let mut params = CertificateParams::new(names).unwrap();
@@ -894,7 +898,7 @@ pub(crate) mod tests {
         Arc::new(config)
     }
 
-    type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
+    pub(crate) type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
 
     async fn reply(
         stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
@@ -910,7 +914,7 @@ pub(crate) mod tests {
 
     /// A server on 127.0.0.1, TLS with `tls`, that answers each request (its text) with `answer`; answers its port and
     /// the requests it read, in order.
-    async fn serve(
+    pub(crate) async fn serve(
         tls: Option<Arc<ServerConfig>>,
         answer: impl Fn(&str) -> String + Send + Sync + 'static,
     ) -> (u16, Seen) {
@@ -936,7 +940,7 @@ pub(crate) mod tests {
         (port, seen)
     }
 
-    fn ok(body: &str) -> String {
+    pub(crate) fn ok(body: &str) -> String {
         format!(
             "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{body}",
             body.len()

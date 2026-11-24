@@ -303,8 +303,6 @@ src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses and procs.pressur
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions (tauri-shell/src/app_menu.rs against MenuAction and NATIVE_CHORDS).
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
 src/main/message-update-slim.ts	port	1	§1.3a,b,c: SidecarPool, the link encoder and subagent frame shaping synchronously strip repeated content using state for this turn. No I/O unit; move with the producer and its ordered sinks, not another round trip per event.
-src/main/model-release-dates.test.ts	tooling	-	Vitest suite: model release dates.
-src/main/model-release-dates.ts	port	2	Shell networking batch: preserve Node fetch's bundled roots, NODE_EXTRA_CA_CERTS and opt-in NODE_USE_ENV_PROXY with HTTPS_PROXY/NO_PROXY. core/http.rs dials directly using platform roots; net.* uses OS proxy settings. Move the GET with the date parser and 24h success / 5min failure cache once transport matches. Never replace last-good dates on a failed refresh.
 src/main/model-role-contracts.test.ts	tooling	-	Vitest suite: role groups.
 src/main/model-roles-stock-coverage.test.ts	tooling	-	Vitest suite: lists each installed role with stock's metadata, or hides it with a reason.
 src/main/model-setup-metering.test.ts	tooling	-	Vitest suite: sees OpenRouter chat models, so the metering checks are not vacuous.
