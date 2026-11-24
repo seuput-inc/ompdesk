@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
-import { AGENT_POWERS_MIGRATION_PREF, AGENT_POWERS_MIGRATION_VERSION } from "../src/main/agent-power-migration";
+import { AGENT_POWERS_MIGRATION_PREF, AGENT_POWERS_MIGRATION_VERSION } from "../src/shared/agent-control";
 import { exitApp, launchApp, readRecords } from "./harness";
 
 // `ompdesk_app_list` / `ompdesk_app` (src/main/agent-control/app-*.ts): the main agent changes OMPdesk itself.

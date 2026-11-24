@@ -29,7 +29,12 @@ function rig(cwd: string | null = null) {
 		reveal: vi.fn(),
 		openPageExternal: vi.fn(async () => {}),
 		setUiPrefs: vi.fn(() => true),
-		modelsRead: vi.fn(() => ({ path: "/agent/models.yml", text: "providers: {}\n", exists: true, stamp: "s1" })),
+		modelsRead: vi.fn(async () => ({
+			path: "/agent/models.yml",
+			text: "providers: {}\n",
+			exists: true,
+			stamp: "s1",
+		})),
 		modelsWrite: vi.fn(async (_text: string, _stamp: string) => "s2"),
 	};
 	const table = createHostActions({
