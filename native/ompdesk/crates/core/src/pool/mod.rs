@@ -10,8 +10,8 @@
 //!   sidecar emitted it. Every call carries main's clock (`now`) and whether main's layout hook is installed (`wt`).
 //! - Items the core pushes (their effects need nothing back): `send` (a window send, by `IPC_EVENTS` key), `wireFull`
 //!   and `unwireFull`, `listenClosed`, `command` (a command to a sidecar whose answer nobody reads), `emitView`,
-//!   `settleWatch`, `modelWaitForget`, `turnStop`, `reloadExtensions`, `immediate` and `stopTimer` (a tick and a timer
-//!   run by main's clock), and `settle` (the end of a method that was `async`).
+//!   `settleWatch`, `modelWaitForget`, `turnStop`, `reloadExtensions`, `immediate` (a tick run by main's event loop)
+//!   and `settle` (the end of a method that was `async`).
 //! - Questions the core asks (the collaborator answers at once, `ask`): `blocked`, `spawn`, `acquired`,
 //!   `facts`, `window`, `start`, `restart`, `sleep`, `adoptCwd`, `sideChannel`, `endViews`, `dispose`, `disposeSidecars`,
 //!   `announce`, `decide`, `mergePlans`, `deletedAdd`, `selfDevice`, `snowflake`, the hooks `onRunningChange`,
@@ -202,14 +202,6 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         }),
         "windowClosed" => later(async move { done(ctx.window_closed(p.i("win")?).await) }),
         "immediate" => later(async move { done(ctx.immediate(&p.s("tab")?, &p.s("kind")?).await) }),
-        "stopTimeout" => {
-            ctx.stop_timeout(
-                p.oi("token")
-                    .and_then(|t| u64::try_from(t).ok())
-                    .unwrap_or(0),
-            );
-            Outcome::done()
-        }
         "size" => now(Value::from(ctx.with(|pool| pool.entries.len()))),
         "tabFacts" => now(ctx.tab_facts(&p.s("tab").unwrap_or_default())),
         "pendingPlan" => now(ctx.pending_plan(&p.s("tab").unwrap_or_default())),
