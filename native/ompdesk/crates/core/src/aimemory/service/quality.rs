@@ -234,3 +234,63 @@ impl Work {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aimemory::service::{SERVICES, locked, open};
+    use crate::server::{Call, Events};
+
+    #[tokio::test(start_paused = true)]
+    async fn a_tick_after_publication_survives_the_running_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("recall-terms.json");
+        let name = "recall-publication-test";
+        let (events, _sender, mut frames) = Events::capture();
+        let params = json!({
+            "service": name,
+            "quality": {"upkeep": name, "care": name, "recallTermsFile": file},
+            "deps": {
+                "platform":"win32", "arch":"x64", "automatic":false, "toolsDir":"", "noService":true,
+                "home":"", "rootDir":"", "uid":0, "unitAsks":true, "codeRequirementAsks":false,
+                "bunCheck":false, "beforeStart":false, "pollMs":0, "healthWaitMs":0,
+                "retryDelaysMs":[], "stepMaxMs":0, "manual":true, "hubEntry":null,
+                "builds":{"binaries":{}, "manifest":"", "version":"", "macStageKey":"", "requirement":""}
+            }
+        });
+        open(&Call {
+            params: serde_json::value::to_raw_value(&params).unwrap(),
+            scope: Scope::detached(),
+            bin: None,
+            events,
+        })
+        .unwrap();
+        let service = locked(&SERVICES).remove(name).unwrap();
+        let trigger = || {
+            let mut inner = service.inner();
+            let schedule = inner.quality.as_mut().unwrap();
+            schedule.active.get_or_insert_with(Scope::detached);
+            schedule.recall(&service);
+        };
+        let mut settings = async || {
+            while let Some(frame) = frames.recv().await {
+                let event: Value = serde_json::from_slice(frame.parts().0).unwrap();
+                if event["event"] == "upkeep.ask" && event["data"]["kind"] == "settings" {
+                    return;
+                }
+            }
+            panic!("service closed");
+        };
+        trigger();
+        settings().await;
+        // Hold the first pass at its host ask across publication and two ticks.
+        std::fs::write(file, r#"{"store":"db1"}"#).unwrap();
+        trigger();
+        trigger();
+        tokio::time::advance(Duration::from_secs(30)).await;
+        tokio::time::timeout(Duration::from_secs(1), settings())
+            .await
+            .expect("a busy tick must start a fresh recall without another timer");
+        service.close();
+    }
+}
