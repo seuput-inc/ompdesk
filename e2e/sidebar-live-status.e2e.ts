@@ -16,7 +16,7 @@ import { chromium, devices, expect, type Locator, type Page, test } from "@playw
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { captureTo, controlToolCaller, cssString, exitApp, fixtureOmp } from "./harness";
+import { captureTo, controlToolCaller, cssString, exitApp, fixtureOmp, fixtureSessionPid } from "./harness";
 
 const CAPTURES = process.env.OMP_GUI_SIDEBAR_LIVE;
 
@@ -347,7 +347,7 @@ test("a hidden session's row counts the subagents its agent starts after its omp
 			id => window.omp.rpc.commandForTab(id, { type: "get_state", brief: true }),
 			back,
 		);
-		const pid = Number((state.data as { sessionId?: string } | undefined)?.sessionId?.replace("fixture-", ""));
+		const pid = fixtureSessionPid((state.data as { sessionId?: string } | undefined)?.sessionId);
 		expect(pid).toBeGreaterThan(0);
 		process.kill(pid, "SIGKILL");
 		// The app starts another omp for the tab: two fake omps run again, the killed one not among them.

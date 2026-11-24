@@ -23,6 +23,11 @@ export function windowsDrawsMica(): boolean {
 	return process.platform === "win32" && Number(os.release().split(".")[2] ?? 0) >= 22621;
 }
 
+/** The process id in a fake omp's session id (`fixture-<pid>-<random>`, e2e/fixture/rpc-ui.ts); NaN for any other id. */
+export function fixtureSessionPid(sessionId: string | undefined): number {
+	return Number(/^fixture-(\d+)-/.exec(sessionId ?? "")?.[1]);
+}
+
 /**
  * Install the fake omp in `sidecar-fixture.ts` under `dir` for `OMP_GUI_OMP`,
  * shaped like a real install: an executable script on POSIX, an `omp.cmd` shim
