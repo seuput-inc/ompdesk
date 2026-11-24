@@ -337,6 +337,19 @@ async function main(argv: string[]): Promise<number> {
 			1,
 		);
 	}
+	// A macOS request only holds the lane for the next dispatch once the run list shows it: on 24 Nov 2026 a dispatch
+	// 14 s after run 45454593193 did not see it (its title was right) and replaced it. Return only once it is listed.
+	if (asksForMac(args.workflow, args.inputs)) {
+		const listed = () => {
+			const runs = gh([
+				"api",
+				`repos/{owner}/{repo}/actions/workflows/${args.workflow}.yml/runs?event=workflow_dispatch&per_page=30`,
+			]);
+			if (!runs.ok) return false;
+			return (JSON.parse(runs.out) as { workflow_runs: { id: number }[] }).workflow_runs.some(run => run.id === id);
+		};
+		for (let tries = 0; tries < 30 && !listed(); tries++) await Bun.sleep(2_000);
+	}
 	console.log(`dispatched ${args.workflow}.yml on ${ref}: run ${id}\nwatch it once: bun scripts/watch-run.ts ${id}`);
 	return 0;
 }
