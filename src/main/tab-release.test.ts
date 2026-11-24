@@ -107,6 +107,18 @@ describe("closeWindowTab", () => {
 		expect(steps).toEqual(["exit-policy:t1"]);
 	});
 
+	it("does not ask the host to close a turn while the page names the tab dirty", async () => {
+		const { deps, steps, page } = rig({
+			closeHostTurn: () => {
+				throw new Error("unexpected host close");
+			},
+		});
+		page.dirty = true;
+		const expected = { pool: 1, entry: 2, turn: 3, host: { omp: "host-spawn", turn: 7 } };
+		expect(await closeWindowTab(deps, win(-1), "t1", -1, PAGE, expected)).toBe(false);
+		expect(steps).toEqual(["exit-policy:t1"]);
+	});
+
 	it.each(["refused", "dirty", "replaced", "accepted"] as const)(
 		"keeps the proxy and terminals until host acceptance and a final local check: %s",
 		async outcome => {
@@ -132,7 +144,7 @@ describe("closeWindowTab", () => {
 		},
 	);
 
-	it("asks the page's word again after the exit-policy read and keeps the tab when it turned dirty meanwhile", async () => {
+	it("keeps the tab when the page turned dirty during the exit-policy read (the core's release check)", async () => {
 		const kept = rig({ duringExitPolicy: () => (kept.page.dirty = true) });
 		expect(await closeWindowTab(kept.deps, win(-1), "t1", -1, PAGE)).toBe(false);
 		expect(kept.steps).toEqual(["exit-policy:t1"]);
