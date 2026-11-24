@@ -389,7 +389,7 @@ ends it. Main speaks to the core over its own connection (`OMPDESK_CLIENTS`), ne
 
 | Method | Asks | Params | Result |
 |---|---|---|---|
-| `core.start` | Node | `{generation, binary, env}` | `{pid}` once the core printed its first line (or ended before it); `env` is the core's whole environment |
+| `core.start` | Node | `{generation, binary, cwd, env}` | `{pid}` once the core printed its first line (or ended before it); `env` is the core's whole environment, `cwd` main's working folder |
 | `core.abandon` | Node | `{generation}` | `{}`: its process tree is killed now |
 | `core.stop` | Node | `{generation}` | `{}`: its stdin closes; killed after 5 s |
 | `core.stderr` (event) | shell→Node | `{generation, line}` | |

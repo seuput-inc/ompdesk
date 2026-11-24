@@ -16,79 +16,27 @@ pub type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 /// Serves one accepted connection, given the token it must prove.
 pub type Serve = fn(Reader, Writer, String) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// Listens where `OMPDESK_HUB` names, if it does: from the core's start, so main's first call finds it. The listener
-/// and every connection run on a thread and runtime of their own (`dedicated`): main's thread waits on each hub call,
-/// so a hub answer must never wait for the core's shared runtime, whose workers a burst of requests can hold for
-/// seconds (packaged apps found the hub silent for over 2 s at their first call: runs 45351355265 and 45365781117).
+/// Listens where `OMPDESK_HUB` names, if it does: from the core's start, so main's first call finds it.
 pub fn listen_from_env() {
     from_env(
         "OMPDESK_HUB",
         "OMPDESK_HUB_TOKEN",
         "the hub",
         |reader, writer, token| Box::pin(serve_conn(reader, writer, Some(token))),
-        true,
     );
 }
 
 /// Listens where `address_var` names, with the token `token_var` holds, if both are set; `serve` takes each connection.
-/// The listener is bound when this returns. `dedicated`: on a thread and current-thread runtime of its own, else on the
-/// runtime this is called in.
-pub fn from_env(
-    address_var: &str,
-    token_var: &str,
-    what: &'static str,
-    serve: Serve,
-    dedicated: bool,
-) {
+/// The listener is bound when this returns.
+pub fn from_env(address_var: &str, token_var: &str, what: &'static str, serve: Serve) {
     let (Ok(address), Ok(token)) = (std::env::var(address_var), std::env::var(token_var)) else {
         return;
     };
-    if !dedicated {
-        match bind(&address) {
-            Ok(listener) => {
-                tokio::spawn(listen(listener, token, serve, what));
-            }
-            Err(error) => eprintln!("ompdesk-core: {what} does not listen at {address}: {error}"),
+    match bind(&address) {
+        Ok(listener) => {
+            tokio::spawn(listen(listener, token, serve, what));
         }
-        return;
-    }
-    let (bound, is_bound) = std::sync::mpsc::channel();
-    let started = std::thread::Builder::new()
-        .name(format!(
-            "ompdesk-{}-io",
-            address_var.trim_start_matches("OMPDESK_").to_lowercase()
-        ))
-        .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    eprintln!(
-                        "ompdesk-core: {what} cannot start its connections' runtime: {error}"
-                    );
-                    let _ = bound.send(());
-                    return;
-                }
-            };
-            runtime.block_on(async move {
-                let listener = bind(&address);
-                let _ = bound.send(());
-                match listener {
-                    Ok(listener) => listen(listener, token, serve, what).await,
-                    Err(error) => {
-                        eprintln!("ompdesk-core: {what} does not listen at {address}: {error}")
-                    }
-                }
-            });
-        });
-    match started {
-        // Bound (or failed) before this returns, so the listener exists before the core says `ready`.
-        Ok(_) => {
-            let _ = is_bound.recv();
-        }
-        Err(error) => eprintln!("ompdesk-core: {what}'s connection thread did not start: {error}"),
+        Err(error) => eprintln!("ompdesk-core: {what} does not listen at {address}: {error}"),
     }
 }
 

@@ -77,7 +77,7 @@ export interface CoreAnswer<T> {
 }
 
 /**
- * Who spawns the cores (`crates/core/src/owner.rs`): requests `core.start {generation, binary, env}` (answers
+ * Who spawns the cores (`crates/core/src/owner.rs`): requests `core.start {generation, binary, cwd, env}` (answers
  * `{pid}`), `core.abandon {generation}`, `core.stop {generation}`; events `core.stderr {generation, line}`,
  * `core.ended {generation, code, signal}` and `core.gone {generation, empty}`.
  */
@@ -281,6 +281,8 @@ if (workerData.connect) {
 	write = line => socket.write(line);
 } else {
 	const child = require("node:child_process").spawn(workerData.spawn, ["--own"], {
+		// Its own folder, never main's: it lives as long as main, and a folder it stands in cannot be removed on Windows.
+		cwd: require("node:path").dirname(workerData.spawn),
 		stdio: ["pipe", "pipe", "pipe"],
 		windowsHide: true,
 	});
@@ -297,7 +299,6 @@ parentPort.on("message", line => write(line));
 /** Main's link to the core's owner, over a worker thread (`OWNER_WORKER`). */
 function ownerLink(target: OwnerTarget, log: (line: string) => void): CoreOwner {
 	const worker = new Worker(OWNER_WORKER, { eval: true, name: "ompdesk-core-owner", workerData: target });
-	worker.unref();
 	const listeners = new Map<string, Set<(data: unknown) => void>>();
 	const pending = new Map<number, PromiseWithResolvers<unknown>>();
 	let next = 0;
@@ -328,6 +329,8 @@ function ownerLink(target: OwnerTarget, log: (line: string) => void): CoreOwner 
 		log(`the core's owner link failed: ${error.message}`);
 		close();
 	});
+	// After the listeners: Bun refs a worker again when one is added.
+	worker.unref();
 	return {
 		call<T>(method: string, params: unknown): Promise<T> {
 			if (closed) return Promise.reject(new CoreError("core_unavailable", "the core's owner ended"));
@@ -615,7 +618,7 @@ export class CoreProcess {
 		};
 		this.#child = core;
 		this.#cores.set(generation, core);
-		owner.call<{ pid: number }>("core.start", { generation, binary: this.#binary(), env }).then(
+		owner.call<{ pid: number }>("core.start", { generation, binary: this.#binary(), cwd: process.cwd(), env }).then(
 			({ pid }) => {
 				core.pid = pid;
 				core.link.open();

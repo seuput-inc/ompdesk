@@ -6,7 +6,7 @@
 //! to it from a worker thread: a thread blocked in a hub wait can send one pipe write on Windows, not the abandon and
 //! the next start a lost hub call needs.
 //!
-//! Requests: `core.start {generation, binary, env}` (answers `{pid}` once spawned), `core.abandon {generation}`
+//! Requests: `core.start {generation, binary, cwd, env}` (answers `{pid}` once spawned), `core.abandon {generation}`
 //! (kills its tree at once), `core.stop {generation}` (closes its stdin; killed 5 s later if it still runs). Events:
 //! `core.stderr {generation, line}`, `core.ended {generation, code, signal}` when the process exited, then
 //! `core.gone {generation, empty}` once what is left of its process group is killed and gone (`empty`), or 3 s passed.
@@ -81,7 +81,7 @@ impl Owner {
                             .collect()
                     })
                     .unwrap_or_default();
-                self.start(generation, binary, &env, reply);
+                self.start(generation, binary, params["cwd"].as_str(), &env, reply);
             }
             "core.abandon" | "core.stop" => {
                 let Some(generation) = generation else {
@@ -119,6 +119,7 @@ impl Owner {
         self: &Arc<Self>,
         generation: u64,
         binary: &str,
+        cwd: Option<&str>,
         env: &[(String, String)],
         reply: Reply,
     ) {
@@ -137,6 +138,10 @@ impl Owner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Main's working folder, as a core main spawned had it.
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
         // POSIX: the core leads a process group of its own, which every git it starts joins. Windows: a console of its
         // own with no window (`CREATE_NO_WINDOW`: a console its children share, none the person sees, and none the
         // owner's Ctrl+C reaches) in a process group of its own (`CREATE_NEW_PROCESS_GROUP`).

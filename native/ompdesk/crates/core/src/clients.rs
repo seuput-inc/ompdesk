@@ -49,7 +49,6 @@ pub fn listen_from_env() {
         "OMPDESK_CLIENTS_TOKEN",
         "the clients' listener",
         |reader, writer, token| Box::pin(serve_client(Arc::clone(&CLIENTS), reader, writer, token)),
-        false,
     );
 }
 
