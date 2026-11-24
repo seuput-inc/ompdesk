@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:90-91",
+				"src/main/shell-host/electron/index.ts:108-109",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
