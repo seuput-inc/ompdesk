@@ -9,7 +9,6 @@
  * until they open it again (`add`); a removed project's sessions are not touched.
  */
 
-import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { SessionInfo } from "../shared/ipc-types";
 import {
@@ -29,6 +28,8 @@ import {
 	type SidebarProjectsRequest,
 	type SidebarProjectsState,
 } from "../shared/sidebar-projects";
+import { directoryExists } from "./canonical-cwd";
+import { core } from "./core/process";
 import { readProjectOrigin } from "./local/git/origin";
 import { sessionKey } from "./session-scratch";
 import { SidebarLayoutScope } from "./sidebar-layout";
@@ -78,11 +79,8 @@ export interface SidebarProjectsDeps {
 	now?: () => number;
 }
 
-async function folderExists(path: string): Promise<boolean> {
-	return fs.stat(path).then(
-		stat => stat.isDirectory(),
-		() => false,
-	);
+async function sidebarFolder(cwd: string) {
+	return (await core().call<{ linkedRoot: string | null } | null>("fs.sidebarFolder", { cwd })).result;
 }
 
 /**
@@ -91,23 +89,15 @@ async function folderExists(path: string): Promise<boolean> {
  * project of its own (the user's report, 23 Oct 2026: a paired Windows host's section was a column of `gui-agent-…`).
  */
 export async function linkedWorktreeRoot(cwd: string): Promise<string | null> {
-	const text = await fs.readFile(path.join(cwd, ".git"), "utf8").catch(() => null);
-	const match = text ? /^gitdir:\s*(.+?)\s*$/m.exec(text) : null;
-	if (!match?.[1]) return null;
-	const gitdir = path.resolve(cwd, match[1]);
-	if (path.basename(path.dirname(gitdir)) !== "worktrees") return null;
-	const common = path.dirname(path.dirname(gitdir));
-	if (path.basename(common) !== ".git") return null;
-	const root = path.dirname(common);
-	return fs.realpath(root).catch(() => root);
+	return (await sidebarFolder(path.resolve(cwd)))?.linkedRoot ?? null;
 }
 
 /** A linked worktree names its main checkout; any other folder is its own project; a folder that is gone, none. */
 export async function projectOfFolder(cwd: string): Promise<string | null> {
-	if (!(await folderExists(cwd))) return null;
 	const origin = await readProjectOrigin(cwd);
-	if (origin?.worktree) return origin.root;
-	return (await linkedWorktreeRoot(cwd)) ?? cwd;
+	if (origin?.worktree) return (await directoryExists(cwd)) ? origin.root : null;
+	const folder = await sidebarFolder(cwd);
+	return folder ? (folder.linkedRoot ?? cwd) : null;
 }
 
 /** A linked worktree's kind by its branch (git's answer, cached by `readProjectOrigin`); null for any other folder. */
@@ -276,7 +266,7 @@ export class SidebarProjects {
 		const autopilotRuns: Record<string, AutopilotRun> = {};
 		// Session folders that are gone: a paired device places their sessions by `sidebarRows`, as this computer's does.
 		const gone: string[] = [];
-		const exists = this.#deps.exists ?? folderExists;
+		const exists = this.#deps.exists ?? directoryExists;
 		for (const [cwd, created] of newest) {
 			const known = this.#resolved.get(cwd);
 			// A folder seen before is asked again only once it is gone: a worktree removed while this app runs (disk care,
@@ -402,7 +392,7 @@ export class SidebarProjects {
 		moved: ReadonlyMap<string, string>,
 		gone: readonly string[],
 	): Promise<void> {
-		const exists = this.#deps.exists ?? folderExists;
+		const exists = this.#deps.exists ?? directoryExists;
 		const before = this.#state;
 		const kept = before.projects.filter(entry => !moved.has(entry.path) && !ended.has(entry.path));
 		const checked = (

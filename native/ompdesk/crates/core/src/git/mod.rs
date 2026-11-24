@@ -276,6 +276,12 @@ struct DiscardRemoveParams {
     tip: String,
 }
 
+#[derive(Deserialize)]
+struct OrphanLocation {
+    root: String,
+    primary: String,
+}
+
 /// `root`: the worktree root's real path (none: every linked worktree, wherever it is), `open`: the real folders open
 /// sessions use, `only`: the one real path to keep (a removal re-reads just that one).
 #[derive(Deserialize)]
@@ -884,6 +890,26 @@ pub fn register(registry: &mut Registry) {
             let DiscardRemoveParams { git, worktree, tip } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&branches::discard_remove(&git, &worktree, &tip).await?)
+        })
+    });
+    registry.add("git.orphanRepositories", |call| {
+        Box::pin(async move {
+            let Root { git, root } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&orphans::repositories(&git, root).await?)
+        })
+    });
+    registry.add("git.orphanProject", |call| {
+        Box::pin(async move {
+            let At { git, cwd } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&orphans::project(&git, &cwd).await?)
+        })
+    });
+    registry.add("git.orphanProjectWithEntries", |call| {
+        Box::pin(async move {
+            let OrphanLocation { root, primary } = call.params()?;
+            Reply::json(&orphans::project_with_entries(root, primary).await?)
         })
     });
     registry.add("git.orphanCandidates", |call| {

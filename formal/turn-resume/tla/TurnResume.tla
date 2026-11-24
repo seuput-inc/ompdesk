@@ -608,6 +608,7 @@ FlushStep ==
 ----------------------------------------------------------------------------
 \* ===== ConnectivityMonitor =====
 
+\* @code native/ompdesk/crates/core/src/resume/probe.rs:19-34 probe: the transport result underlying defOK and hostOK; the model abstracts DNS, sockets and their deadline
 \* @code native/ompdesk/crates/core/src/resume/connectivity.rs:281-307 Monitor::check: #check: the probe answered; unreachable takes the state offline and starts the recovery loop
 \* @code native/ompdesk/crates/core/src/resume/connectivity.rs:310-312 Monitor::reachable: #reachable: the default way out or the host answers
 \* @code native/ompdesk/crates/core/src/resume/connectivity.rs:315-326 Monitor::answers

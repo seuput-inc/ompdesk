@@ -241,6 +241,7 @@ interface TabHandle {
 	win: ClientWindow;
 	/** Paired host deviceId the tab runs on (immutable, set at acquire). */
 	device: string | undefined;
+	hosted: boolean;
 	/** The core released the tab: it is not in the pool any more, its sidecar is still being let go of. */
 	gone: boolean;
 	/**
@@ -251,6 +252,11 @@ interface TabHandle {
 	full: FullWiring | null;
 	/** Paired devices that view this tab through their own tab on this host, by the id the core knows them by. */
 	views: Map<number, HostedTabView>;
+}
+
+interface PendingAcquire {
+	handle?: TabHandle;
+	phase: "pending" | "bound" | "saved" | { bindError: unknown };
 }
 
 /** The facts the core asks of a sidecar (`facts`): what only the live object can say. */
@@ -396,9 +402,12 @@ export class SidecarPool {
 	readonly #factory: SidecarFactory;
 	/** Tab id → what main holds of it. */
 	readonly #handles = new Map<string, TabHandle>();
+	/** The original handle and last completed hook of a direct acquire still awaiting its reply. */
+	readonly #acquiring = new Map<string, PendingAcquire>();
 	/** Window id (`webContents.id`) → the window: the core names windows by id; a send finds the object here. */
 	readonly #windows = new Map<number, ClientWindow>();
 	readonly #windowIds = new WeakMap<ClientWindow, number>();
+	readonly #listeningForClose = new WeakSet<ClientWindow>();
 	/** Moves whose command is on its way, per tab (`beginMove`). */
 	readonly #moves = new MovesInFlight();
 	/** Session file (F-OWN key) → the exit of the omp a released tab ran it in: a delete waits for it. */
@@ -554,14 +563,16 @@ export class SidecarPool {
 				tab,
 				win: this.#windowId(handle.win),
 				device: handle.device ?? null,
-				hosted: handle.sidecar instanceof HostedTabView,
+				hosted: handle.hosted,
+				acquiring: this.#acquiring.get(tab)?.handle === handle,
 				kind: handle.sidecar.kind,
 				status: handle.sidecar.status,
 				sessionFile: handle.sessionFile,
 				full: [...(handle.full?.windows.keys() ?? [])],
 				views: [...handle.views.keys()],
 			}));
-		this.#call("seed", { tabs });
+		// Opening the replacement already seeds it. Retrying seed itself would add every tab twice.
+		this.#hub.call(this.#id, "seed", { tabs, now: Date.now(), wt: this.onWindowTabsChanged !== null });
 	}
 
 	/** One window's id, remembered: a destroyed window's `webContents` can no longer be read. */
@@ -625,7 +636,11 @@ export class SidecarPool {
 			}
 			case "listenClosed": {
 				const id = item.win as number;
-				this.#windows.get(id)?.once("closed", () => this.#windowClosed(id));
+				const win = this.#windows.get(id);
+				if (win && !this.#listeningForClose.has(win)) {
+					this.#listeningForClose.add(win);
+					win.once("closed", () => this.#windowClosed(id));
+				}
 				return;
 			}
 			case "command":
@@ -714,6 +729,8 @@ export class SidecarPool {
 		const tab = item.tab as string;
 		switch (q) {
 			case "blocked": {
+				const prior = this.#acquiring.get(tab)?.handle;
+				if (prior && prior !== this.#live(tab)) return true;
 				const sessionPath = (item.sessionPath as string | null) ?? undefined;
 				// A session the user deleted never comes back as a tab, whoever asks (a layout, a marker, a reopen);
 				// a worktree being removed is not opened until git is done with it.
@@ -726,6 +743,19 @@ export class SidecarPool {
 				const win = this.#windows.get(item.win as number);
 				if (!win) throw new Error("The window of the new tab is unknown");
 				const device = (item.device as string | null) ?? undefined;
+				const prior = this.#handles.get(tab);
+				if (prior) {
+					// A nested call can open the replacement core before the factory returns its handle.
+					if (
+						prior !== this.#acquiring.get(tab)?.handle ||
+						prior.gone ||
+						prior.win !== win ||
+						prior.device !== device ||
+						prior.hosted
+					)
+						throw new Error("The tab ID is already held");
+					return { status: prior.sidecar.status };
+				}
 				const cwd = item.cwd as string;
 				// One spelling per directory: the sidecar reports its realpath'd cwd.
 				const sidecar = this.#factory(
@@ -748,28 +778,28 @@ export class SidecarPool {
 					deferStart: item.deferStart === true,
 				});
 				if (gate) sidecar.setStartGate?.(gate);
-				this.#handles.set(tab, {
-					sidecar,
-					win,
-					device,
-					gone: false,
-					sessionFile: null,
-					full: null,
-					views: new Map(),
-				});
+				this.#hold(tab, sidecar, win, device, false);
 				this.#wireLight(tab, sidecar);
 				if (!device) this.summaries?.track(sidecar);
 				return { status };
 			}
-			case "wire": {
-				const handle = this.#handles.get(tab);
-				if (handle) this.#wireLight(tab, handle.sidecar);
-				return null;
-			}
 			case "acquired": {
 				const handle = this.#handles.get(tab);
-				if (handle) this.onAcquire?.(tab, handle.sidecar);
-				return null;
+				const acquire = this.#acquiring.get(tab);
+				const phase = acquire?.phase;
+				if (typeof phase === "object") throw phase.bindError;
+				if (handle && (!phase || phase === "pending")) {
+					try {
+						if (handle.hosted) this.#wireLight(tab, handle.sidecar);
+						else this.onAcquire?.(tab, handle.sidecar);
+					} catch (error) {
+						// A failed hook may already have attached listeners. Return its failure on replay.
+						if (acquire) acquire.phase = { bindError: error };
+						throw error;
+					}
+					if (acquire) acquire.phase = "bound";
+				}
+				return phase === "saved";
 			}
 			case "facts": {
 				const facts: Record<string, SidecarFacts> = {};
@@ -884,6 +914,8 @@ export class SidecarPool {
 			case "onWindowTabsChanged": {
 				const win = this.#windows.get(item.win as number);
 				if (win) this.onWindowTabsChanged?.(win, item.layout as PersistedTabLayout | null);
+				const acquire = this.#acquiring.get(item.acquire as string);
+				if (acquire) acquire.phase = "saved";
 				return null;
 			}
 			case "exiting":
@@ -1023,7 +1055,7 @@ export class SidecarPool {
 	#wireFull(tab: string, winId: number): void {
 		const handle = this.#handles.get(tab);
 		const win = this.#windows.get(winId);
-		if (!handle || !win) return;
+		if (!handle || !win || handle.full?.windows.has(winId)) return;
 		// A fresh slimmer per window: the first update of each message after the tab becomes visible there keeps
 		// its full snapshot (it missed message_start).
 		const shown = { win, slim: createMessageUpdateSlimmer() };
@@ -1163,6 +1195,32 @@ export class SidecarPool {
 		});
 	}
 
+	#hold(tab: string, sidecar: SidecarLike, win: ClientWindow, device: string | undefined, hosted: boolean): void {
+		const handle: TabHandle = {
+			sidecar,
+			win,
+			device,
+			hosted,
+			gone: false,
+			sessionFile: null,
+			full: null,
+			views: new Map(),
+		};
+		this.#handles.set(tab, handle);
+		const acquire = this.#acquiring.get(tab);
+		if (acquire) acquire.handle = handle;
+	}
+
+	#withAcquire<T>(tab: string, refused: T, acquire: () => T): T {
+		if (this.#handles.has(tab) || this.#acquiring.has(tab)) return refused;
+		this.#acquiring.set(tab, { phase: "pending" });
+		try {
+			return acquire();
+		} finally {
+			this.#acquiring.delete(tab);
+		}
+	}
+
 	/**
 	 * Spawn + bind a sidecar for `cwd` to `win` as a tab. Returns null when creating or starting the sidecar throws.
 	 * `tabId` defaults to a fresh snowflake; `sessionPath` resumes that session on first start. `kind` defaults to
@@ -1193,24 +1251,25 @@ export class SidecarPool {
 		task?: string,
 		formerIds?: string[],
 	): SidecarLike | null {
-		const winId = this.#windowId(win);
-		const result = this.#call<{ ok: boolean; added: boolean }>("acquire", {
-			cwd,
-			win: winId,
-			tab: tabId,
-			sessionPath,
-			kind,
-			worktree,
-			fresh,
-			placeholder,
-			deferStart,
-			title,
-			device,
-			task,
-			formerIds,
+		return this.#withAcquire(tabId, null, () => {
+			const result = this.#call<{ ok: boolean; added: boolean }>("acquire", {
+				cwd,
+				win: this.#windowId(win),
+				tab: tabId,
+				sessionPath,
+				kind,
+				worktree,
+				fresh,
+				placeholder,
+				deferStart,
+				title,
+				device,
+				task,
+				formerIds,
+			});
+			if (!result.added) this.#handles.delete(tabId);
+			return result.ok ? (this.#live(tabId)?.sidecar ?? null) : null;
 		});
-		if (!result.added) this.#handles.delete(tabId);
-		return result.ok ? (this.#handles.get(tabId)?.sidecar ?? null) : null;
 	}
 
 	/**
@@ -1220,29 +1279,23 @@ export class SidecarPool {
 	 * with no tab yet makes it active. False when the session was deleted.
 	 */
 	acquireHostedView(win: ClientWindow, tabId: string, sidecar: SidecarLike, sessionPath: string): boolean {
-		const winId = this.#windowId(win);
-		// Open first: a new core is seeded with the handles held so far, and this tab is not one of them.
-		this.#ensureOpen();
-		this.#handles.set(tabId, {
-			sidecar,
-			win,
-			device: undefined,
-			gone: false,
-			sessionFile: null,
-			full: null,
-			views: new Map(),
+		return this.#withAcquire(tabId, false, () => {
+			const winId = this.#windowId(win);
+			// Open first: the handle belongs to this acquire, not the seed preceding its first attempt.
+			this.#ensureOpen();
+			this.#hold(tabId, sidecar, win, undefined, true);
+			const shown = this.#call<boolean>("acquireHostedView", {
+				win: winId,
+				tab: tabId,
+				kind: sidecar.kind,
+				status: sidecar.status,
+				// The device's tab may be mid-turn as this window joins it: its events so far reached nobody here.
+				reading: sidecar instanceof HostedTabView ? sidecar.runReading() : null,
+				sessionPath,
+			});
+			if (!shown) this.#handles.delete(tabId);
+			return shown;
 		});
-		const shown = this.#call<boolean>("acquireHostedView", {
-			win: winId,
-			tab: tabId,
-			kind: sidecar.kind,
-			status: sidecar.status,
-			// The device's tab may be mid-turn as this window joins it: its events so far reached nobody here.
-			reading: sidecar instanceof HostedTabView ? sidecar.runReading() : null,
-			sessionPath,
-		});
-		if (!shown) this.#handles.delete(tabId);
-		return shown;
 	}
 
 	/** Whether the tab is a window's view of a tab this computer runs for a paired device (`acquireHostedView`). */

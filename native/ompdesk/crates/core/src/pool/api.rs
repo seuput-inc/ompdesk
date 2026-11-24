@@ -1857,7 +1857,6 @@ impl Ctx {
     /// entry as a deferred acquire makes it, from the facts the handle can say (`SidecarPool.#reseed` lists what is
     /// lost with the old pool: run state, titles, asks, viewers, splits; the session file survives).
     pub(super) fn seed(&self, tabs: &[Value]) {
-        let mut windows: Vec<i64> = Vec::new();
         for tab in tabs {
             let (Some(id), Some(win)) = (tab["tab"].as_str(), tab["win"].as_i64()) else {
                 continue;
@@ -1885,6 +1884,7 @@ impl Ctx {
                     );
                 }
                 entry.hosted_view = tab["hosted"].as_bool() == Some(true);
+                entry.recovering_acquire = tab["acquiring"].as_bool() == Some(true);
                 let wired: Vec<i64> = tab["full"]
                     .as_array()
                     .map(|wins| wins.iter().filter_map(Value::as_i64).collect())
@@ -1896,29 +1896,17 @@ impl Ctx {
                     .as_array()
                     .map(|views| views.iter().filter_map(Value::as_u64).collect())
                     .unwrap_or_default();
+                // A pending acquire that never wired the window has not claimed it, especially a deferred tab.
+                if !pool.active_by_window.contains(&win)
+                    && (!entry.recovering_acquire || entry.wired_in(win))
+                {
+                    pool.active_by_window.insert(win, id.to_string());
+                    pool.visible_by_window.insert(win, vec![id.to_string()]);
+                }
                 pool.entries.push(entry);
                 seq
             });
             self.when_closed(win, super::state::Closer::Entry(seq));
-            if !windows.contains(&win) {
-                windows.push(win);
-            }
         }
-        self.with(|pool| {
-            for win in windows {
-                if pool.active_by_window.contains(&win) {
-                    continue;
-                }
-                let first = pool
-                    .entries
-                    .iter()
-                    .find(|entry| entry.shown_in(win))
-                    .map(|entry| entry.tab_id.clone());
-                if let Some(first) = first {
-                    pool.active_by_window.insert(win, first.clone());
-                    pool.visible_by_window.insert(win, vec![first]);
-                }
-            }
-        });
     }
 }

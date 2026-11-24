@@ -9,11 +9,10 @@
  * `git worktree remove` deletes ignored files without asking, so every removal first runs the caller's `prepare`
  * (disk care's private archive of what no tool makes again, `src/main/disk/`), which may keep the worktree.
  *
- * The git side runs in the core process (`native/ompdesk/crates/core/src/git/orphans.rs`): which listed worktrees are
- * candidates, each one's state, and the removal's git steps. What stays here is main's: where the worktree root is
- * (omp's `git.worktree_location`) and its real path (fenced files, under the repository lock for a removal), the
- * folders open sessions use, the repository lock, the removal claim, the `prepare`, which states are removable and
- * the refusals.
+ * The core (`native/ompdesk/crates/core/src/git/orphans.rs`) discovers repositories under stock's roots, selects
+ * candidates, reads their state and runs the removal's git steps. Main asks stock for its root, resolves that root
+ * on fenced files during candidate selection, and owns the live open folders, repository lock, removal claim,
+ * `prepare`, removable states and refusals.
  *
  * `sweepLandedWorktrees` runs the same rule over every repository with a worktree under stock's worktree root, as
  * part of disk care (`src/main/disk/care.ts`): what the Work tree view's cleanup would offer goes by itself, branch kept.
@@ -29,10 +28,11 @@ import type {
 	RpcSafeRemoval,
 } from "../shared/rpc-types";
 import { REMOTE_COPY_MS, REMOTE_COPY_ROUNDS } from "./agent-control/branches";
+import { CoreError } from "./core/process";
 import { KeepWorktree } from "./disk/saved-worktrees";
 import { fs } from "./fenced-fs";
 import { primaryRoot, repoRoot } from "./local/git/changes";
-import { coreGit, withRepoLock } from "./local/git/exec";
+import { coreGit, coreHeld, withRepoLock } from "./local/git/exec";
 import { stockWorktreeLocation } from "./local/git/worktree";
 import { type BridgeClient, LocalCommandError } from "./local/types";
 import { realFolder, withRemovalClaim } from "./worktree-removals";
@@ -246,26 +246,33 @@ export async function orphanRepositories(
 	deps: OrphanDeps,
 ): Promise<{ root: string; repos: string[]; known: string[] }> {
 	const { root } = await stockWorktreeLocation(deps.bridge, os.homedir());
-	const repos = new Set<string>();
-	for (const name of await guiFolders(root)) {
-		const primary = await primaryRoot(path.join(root, name)).catch(() => null);
-		if (primary) repos.add(realFolder(primary));
-	}
+	// The root has no known entry count. Allow the disk-care walk an hour; each git still has its own timeout.
+	const found = await coreGit<string[]>("git.orphanRepositories", { root }, 60).catch((error: unknown) => {
+		if (error instanceof CoreError) throw error; // A lost scan has no trustworthy partial result.
+		return []; // No git runner.
+	});
+	const repos = new Set(found);
 	const known = new Set(repos);
 	for (const folder of deps.projects?.() ?? []) {
-		const primary = await primaryRoot(folder).catch(() => null);
-		if (!primary) continue;
-		known.add(realFolder(primary));
-		if (repos.has(realFolder(primary))) continue;
+		const project = await coreGit<{ primary: string; real: string } | null>(
+			"git.orphanProject",
+			{ cwd: folder },
+			1,
+		).catch(() => null);
+		if (!project) continue;
+		const { primary, real } = project;
+		known.add(real);
+		if (repos.has(real)) continue;
 		const own = await stockWorktreeLocation(deps.bridge, primary).catch(() => null);
 		if (!own || path.resolve(own.root) === path.resolve(root)) continue;
-		if ((await guiFolders(own.root)).length > 0) repos.add(realFolder(primary));
+		const withEntries = await coreHeld<string | null>(
+			"git.orphanProjectWithEntries",
+			{ root: own.root, primary },
+			60_000,
+		).catch(() => null);
+		if (withEntries) repos.add(withEntries);
 	}
 	return { root, repos: [...repos], known: [...known] };
-}
-
-async function guiFolders(root: string): Promise<string[]> {
-	return (await fs.readdir(root).catch(() => [] as string[])).filter(name => name.startsWith("gui-"));
 }
 
 /** Every repository's orphaned worktrees under stock's worktree root, read once; a listing that failed says why. */

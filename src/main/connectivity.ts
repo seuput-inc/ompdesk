@@ -1,6 +1,5 @@
-import { connect } from "node:net";
 import { type HubItem, hub } from "./core/hub";
-import { isCoreShutdown } from "./core/process";
+import { core, isCoreShutdown } from "./core/process";
 
 /**
  * Whether this computer can reach the internet right now, as far as a waiting
@@ -27,8 +26,7 @@ import { isCoreShutdown } from "./core/process";
  * The state machine lives in the core (`native/ompdesk/crates/core/src/resume/connectivity.rs`, hub kind
  * `connectivity`); this class is its client. What stays here is what main owns: `net.isOnline()` and the clock (read
  * and sent with each call that needs them), the probe (a promise of main's, asked), the timers (main's, they call back)
- * and the `changed` hook. The transport helpers below (`reaches`, `tcpConnects`, `probeTarget`, `answersWithin`) are the
- * probe's own: node's sockets and the proxy setting, wired in `index.ts`.
+ * and the `changed` hook. The shell resolves the proxy or destination without its DNS cache; the core opens the sockets.
  *
  * When the core is lost the state is gone with it: a new instance starts from `net.isOnline()` (not recovering, no wake
  * window), the timers it had are cancelled and the probes asked of it answer `false`.
@@ -68,37 +66,20 @@ export function probeTarget(host: string, proxyUrl: string | undefined): ProbeTa
 	return { host, port: 443 };
 }
 
-export interface TransportDeps {
-	/** The addresses `host` resolves to, asking the resolver itself (never its cache). */
-	resolve(host: string): Promise<readonly string[]>;
-	/** Whether a TCP connection to `address:port` opens. */
-	connect(address: string, port: number): Promise<boolean>;
-}
-
-/** The name resolves and one of its addresses takes a connection; a failing step is "no". */
-export async function reaches(target: ProbeTarget, deps: TransportDeps): Promise<boolean> {
-	let addresses: readonly string[];
+/** Resolve through the shell's network policy; connect only to the first two addresses it approved. */
+export async function reaches(
+	target: ProbeTarget,
+	resolveHost: (host: string) => Promise<readonly string[]>,
+): Promise<boolean> {
 	try {
-		addresses = await deps.resolve(target.host);
+		const [first, second] = await resolveHost(target.host);
+		if (!first) return false;
+		return (
+			await core().call<boolean>("resume.probe", { first, second, port: target.port, timeoutMs: PROBE_TIMEOUT_MS })
+		).result;
 	} catch {
 		return false;
 	}
-	const answers = await Promise.all(addresses.slice(0, 2).map(address => deps.connect(address, target.port)));
-	return answers.includes(true);
-}
-
-/** Whether a TCP connection to `address:port` opens within `ms`; the socket is closed either way. */
-export function tcpConnects(address: string, port: number, ms: number): Promise<boolean> {
-	const { promise, resolve } = Promise.withResolvers<boolean>();
-	const socket = connect({ host: address, port });
-	const finish = (answer: boolean) => {
-		socket.destroy();
-		resolve(answer);
-	};
-	socket.setTimeout(ms, () => finish(false));
-	socket.once("connect", () => finish(true));
-	socket.once("error", () => finish(false));
-	return promise;
 }
 
 export interface ConnectivityDeps {
