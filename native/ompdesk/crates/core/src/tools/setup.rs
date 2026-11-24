@@ -3,15 +3,16 @@
 //! the items and the install pipeline are T2.2's.
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
-use super::queue::StepKind;
+use super::queue::{Ctx, StepKind};
 use super::{Tools, queued, unported};
 use crate::control::js::string_of_value;
-use crate::hub::{Outcome, params};
+use crate::hub::{LocalFuture, Outcome, params};
 use crate::server::Fault;
 
 /// `SETUP_ITEMS` of `src/shared/setup.ts`, in order.
@@ -135,4 +136,63 @@ pub async fn run_tool_update(
     _request: ToolUpdateRequest,
 ) -> ToolUpdateOutcome {
     ToolUpdateOutcome::Skipped
+}
+
+// ---- What the omp updater asks of setup (T2.3 declared these; T2.2 fills them) ------------------------------------
+
+/// `OmpUpdateOutcome` of `setup/service.ts`: what `updateOmp` ended with.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OmpUpdateOutcome {
+    /// The omp that runs now.
+    Updated(String),
+    /// `OmpUpdateFailure`: `{reason, detail?}`.
+    Failed(Value),
+    /// Nothing ran (a disposed setup, an omp neither Bun nor npm owns on a pass nobody asked for).
+    Skipped,
+}
+
+/// Runs just before the installer starts (the omp updater stops what reads omp's files); setup awaits it inside the
+/// step, as `beforeInstall` ran inside setup's.
+pub type BeforeInstall = Box<dyn FnOnce() -> LocalFuture<Result<(), Fault>>>;
+
+/// A short `omp …` run to its end (`OmpRuntime.run`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OmpRun {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+const NOT_MOVED: &str = "machine setup has not moved into the core yet";
+
+/// `SetupService.latestOmp`: stock `omp update --check` on the omp setup detected, in `ompUpdateEnv` with the spawn
+/// environment ([`Tools::spawn_env`]) and `NO_COLOR`, 60 s, read by `omp.parseUpdateCheck`; the newest omp, or why it
+/// could not tell.
+pub async fn latest_omp(_: &Rc<Tools>) -> Result<String, String> {
+    Err(NOT_MOVED.to_owned())
+}
+
+/// `SetupService.newestOmpIn(major)`: the newest release of `major` that installs here as a named version (`bun pm
+/// view`); none when nothing can (an omp Bun does not manage); why it could not tell.
+pub async fn newest_omp_in(_: &Rc<Tools>, _major: u64) -> Result<Option<String>, String> {
+    Err(NOT_MOVED.to_owned())
+}
+
+/// `SetupService.updateOmp(target, beforeInstall, exactOnly)`, run inline in the caller's step (`ctx`): installs
+/// `target`, then detects omp again. `exact_only`: only an install that names the version may run, never stock `omp
+/// update`.
+pub async fn update_omp(
+    _: &Rc<Tools>,
+    _ctx: &Ctx,
+    _target: &str,
+    _before: BeforeInstall,
+    _exact_only: bool,
+) -> OmpUpdateOutcome {
+    OmpUpdateOutcome::Skipped
+}
+
+/// `omp <args>` on the omp setup detected (main's `systemOmp`), in the spawn environment with `NO_COLOR=1` and
+/// `FORCE_COLOR=0`, ended after `timeout`; why it could not run.
+pub async fn run_omp(_: &Rc<Tools>, _args: &[&str], _timeout: Duration) -> Result<OmpRun, String> {
+    Err(NOT_MOVED.to_owned())
 }

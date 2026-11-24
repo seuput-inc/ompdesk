@@ -283,6 +283,7 @@ fn opts(manual: bool) -> super::Opts {
         "toolsDir": "C:\\tools",
         "userData": std::env::temp_dir().join("ompdesk-tools-test-none").to_string_lossy(),
         "appVersion": "0.0.0",
+        "testedOmp": "18.22.2",
         "automatic": false,
         "scheduled": {"omp": true, "cli": false, "ext": false},
         "manual": manual,
@@ -390,7 +391,13 @@ async fn reads_its_state_at_once_and_checks_each_key_before_it_queues() {
             assert_eq!(now(call(&tools, "setup.cancel", json!({}))), Ok(json!(false)));
             for (method, params) in [("cli.now", json!({"id": "gh"})), ("ext.now", json!({})), ("omp.now", json!({})), ("setup.installForConnection", json!({"item": "gh"}))] {
                 let Outcome::Later(answer) = call(&tools, method, params) else { panic!("{method} answers later") };
-                assert_eq!(answer.await, Ok(Value::Null), "{method}");
+                let answer = answer.await.unwrap();
+                if method == "omp.now" {
+                    // A pass answers the omp state it ended with (no omp detected: nothing checked).
+                    assert_eq!(answer["phase"], "idle");
+                } else {
+                    assert_eq!(answer, Value::Null, "{method}");
+                }
             }
         })
         .await;

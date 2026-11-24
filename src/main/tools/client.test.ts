@@ -46,6 +46,7 @@ describe("ToolsClient against the real core", () => {
 				toolsDir: join(userData, "tools"),
 				userData,
 				appVersion: "0.0.0",
+				testedOmp: "18.22.2",
 				automatic: false,
 				scheduled: { omp: true, cli: false, ext: false },
 				manual: true,

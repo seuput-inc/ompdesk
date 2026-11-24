@@ -21,12 +21,16 @@ export interface ToolsOpts {
 	toolsDir: string;
 	userData: string;
 	appVersion: string;
+	/** `TESTED_OMP_VERSION`: the omp this release was tested with. */
+	testedOmp: string;
 	/** Setup installs on its own (a packaged app outside headless, or a test installer). */
 	automatic: boolean;
 	/** Which updaters check on a timer in this launch. */
 	scheduled: { omp: boolean; cli: boolean; ext: boolean };
 	testInstaller?: string | null;
 	testDownload?: { url: string; sha256: string } | null;
+	/** The verified list's file a test launch reads instead of the network (`OMP_GUI_TEST_OMP_COMPAT`, unpacked only). */
+	testOmpCompat?: string | null;
 	/** The core's timers are main's (a test's fake timers drive them). */
 	manual?: boolean;
 	/** `new Intl.Collator().resolvedOptions().locale`: extension rows sort by name as `localeCompare` sorts here. */
@@ -48,7 +52,9 @@ export type ToolsItem =
 	| { k: "log"; source: RuntimeErrorSource; message: string; details: Record<string, unknown> }
 	| { k: "stalled"; chain: string; label: string; ms: number }
 	| { k: "timer"; timer: number; ms: number }
-	| { k: "clearTimer"; timer: number };
+	| { k: "clearTimer"; timer: number }
+	/** The omp updater installed `version`: main's one "omp updated" toast. */
+	| { k: "ompUpdated"; version: string };
 
 /** What the core asks main, until the owners of these move into the core; each may answer with a promise. */
 export interface ToolsAsks {
@@ -83,6 +89,8 @@ export interface ToolsClientDeps {
 	asks: ToolsAsks;
 	/** A part changed: send it to the windows and paired devices. */
 	onState(part: ToolsPart, state: ToolsState[ToolsPart]): void;
+	/** The omp updater installed a new omp (the focused window's toast). */
+	onOmpUpdated?(version: string): void;
 }
 
 function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
@@ -172,6 +180,9 @@ export class ToolsClient {
 				clearTimeout(this.#timers.get(item.timer));
 				this.#timers.delete(item.timer);
 				return;
+			case "ompUpdated":
+				this.#deps.onOmpUpdated?.(item.version);
+				return;
 		}
 	}
 
@@ -214,6 +225,16 @@ export class ToolsClient {
 	/** Update now for omp: joins a pass that runs or waits. */
 	ompNow(): Promise<unknown> {
 		return hub().callLater(this.#instance(), "omp.now");
+	}
+
+	/** BridgeHealth: setup's retry of an omp it holds missing or broken, else the omp updater's repair pass. */
+	ompRepair(): Promise<unknown> {
+		return hub().callLater(this.#instance(), "omp.repair");
+	}
+
+	/** `toolsAutoUpdate` or `ompFollowVerified` changed. */
+	ompPrefChanged(): void {
+		hub().call(this.#instance(), "omp.prefChanged");
 	}
 
 	cliNow(id?: unknown): Promise<unknown> {
