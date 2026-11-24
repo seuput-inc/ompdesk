@@ -285,23 +285,23 @@ fn time_migration(wc: u64, round: u64) {
                 round,
                 Instant::now(),
             );
-            let (after, retry) = match due {
+            let (after, attempt, retry) = match due {
                 migrate_watch::Due::Ended => return,
                 migrate_watch::Due::Wait(wait) => {
                     tokio::time::sleep(wait).await;
                     continue;
                 }
-                migrate_watch::Due::Retry { attempt, after } => (after, Some(attempt)),
-                migrate_watch::Due::GiveUp { after } => (after, None),
+                migrate_watch::Due::Retry { attempt, after } => (after, attempt, Some(attempt)),
+                migrate_watch::Due::GiveUp { after, attempt } => (after, attempt, None),
             };
             log::log(
                 "profile.migrate.stalled",
-                json!({"wcId":wc,"step":after.name(),"waitedMs":migrate_watch::STEP_TIMEOUT.as_millis(),"retry":retry}),
+                json!({"wcId":wc,"step":after.name(),"retry":retry}),
             );
             let app = runtime().app.clone();
             let dispatched = match retry {
                 Some(attempt) => app.run_on_main_thread(move || retry_migration(wc, attempt)),
-                None => app.run_on_main_thread(move || give_up_migration(wc, after)),
+                None => app.run_on_main_thread(move || give_up_migration(wc, after, attempt)),
             };
             if let Err(error) = dispatched {
                 log::log(
@@ -352,12 +352,22 @@ fn retry_migration(wc: u64, attempt: u32) {
 /// Shows the window with the reason and a Retry that loads the migration page again. The reason goes on a fresh blank
 /// page: the document a request that never came back leaves in place answers no script (Playwright's evaluate timed
 /// out on it), so it is navigated away from first and the text is written once the blank page has loaded.
-fn give_up_migration(wc: u64, after: migrate_watch::Step) {
+fn give_up_migration(wc: u64, after: migrate_watch::Step, attempt: u32) {
+    let why = if attempt == migrate_watch::ATTEMPTS {
+        format!(
+            "got no answer in {} s, {} times",
+            migrate_watch::STEP_TIMEOUT.as_secs(),
+            attempt
+        )
+    } else {
+        format!(
+            "did not finish within the {} s startup deadline",
+            migrate_watch::ROUND_TIMEOUT.as_secs()
+        )
+    };
     let reason = format!(
-        "OMPdesk could not open its window: the profile migration step \"{}\" got no answer in {} s, {} times. Your existing data has not been overwritten.",
-        after.name(),
-        migrate_watch::STEP_TIMEOUT.as_secs(),
-        migrate_watch::ATTEMPTS
+        "OMPdesk could not open its window: the profile migration step \"{}\" {why}. Your existing data has not been overwritten.",
+        after.name()
     );
     log::log(
         "profile.migrate.gave_up",
@@ -1873,10 +1883,17 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .invoke_handler(tauri::generate_handler![omp_ipc])
         .register_asynchronous_uri_scheme_protocol("app", |context, request, responder| {
             let bootstrap = assets::is_bootstrap(request.uri());
-            if bootstrap {
+            let wc = if bootstrap {
                 log::log("profile.migrate.request", json!({"webview":context.webview_label()}));
-            }
-            let label = context.webview_label().to_owned();
+                let wc = runtime().registry.lock().expect("registry")
+                    .by_label(context.webview_label()).map(|page| page.identity.wc);
+                if let Some(wc) = wc {
+                    runtime().migration.lock().expect("migration").watches.request_received(wc, Instant::now());
+                }
+                wc
+            } else {
+                None
+            };
             std::thread::spawn(move || {
                 if !bootstrap {
                     return responder.respond(assets::serve(&runtime().renderer, request, &runtime().content_policy));
@@ -1888,7 +1905,6 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     return;
                 }
                 responder.respond(assets::serve(&runtime().renderer, request, &runtime().content_policy));
-                let wc = runtime().registry.lock().expect("registry").by_label(&label).map(|page| page.identity.wc);
                 if let Some(wc) = wc {
                     migration_step(&mut runtime().migration.lock().expect("migration"), wc, migrate_watch::Step::Served, false);
                 }
