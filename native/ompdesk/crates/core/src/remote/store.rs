@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -78,6 +78,13 @@ pub struct Store {
     file: PathBuf,
     kind: Kind,
     rows: Option<Vec<Row>>,
+    /// The changes made to `rows`, counted: a content is written with the count it was rendered at.
+    changes: u64,
+    /// The count of the content written last, under the lock every write of the file takes, so a content rendered
+    /// before another never lands after it (`persist`).
+    written: Arc<Mutex<u64>>,
+    /// The thread that writes what [`Store::update_kept`] changed (`save_later`), started on first use.
+    later: Option<mpsc::Sender<()>>,
 }
 
 static STORES: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<Store>>>>> = LazyLock::new(Mutex::default);
@@ -331,6 +338,9 @@ impl Store {
             file,
             kind,
             rows: None,
+            changes: 0,
+            written: Arc::default(),
+            later: None,
         }
     }
 
@@ -338,8 +348,8 @@ impl Store {
         self.rows.get_or_insert_with(|| read(&self.file, self.kind))
     }
 
-    /// The file's bytes: `{ v: 1, [key]: entries }`. A change is kept in memory even when this fails, as before.
-    fn save(&mut self) -> io::Result<()> {
+    /// The file's bytes: `{ v: 1, [key]: entries }`, with the count of changes they hold.
+    fn render(&mut self) -> (u64, String) {
         let kind = self.kind;
         let entries: Vec<Value> = self
             .rows()
@@ -352,9 +362,14 @@ impl Store {
         let mut text = String::new();
         stringify(&Value::Object(document), 0, &mut text);
         text.push('\n');
-        write_kept(&self.file, text.as_bytes(), Some(0o600), 0o777)
-            .map(|_| ())
-            .map_err(|fault| io::Error::other(fault.message))
+        (self.changes, text)
+    }
+
+    /// Writes the content now, in the caller's thread. A change is kept in memory even when this fails, as before.
+    fn save(&mut self) -> io::Result<()> {
+        self.changes += 1;
+        let (count, text) = self.render();
+        persist(&self.file, &self.written, count, &text)
     }
 
     /// Forgets what was read: the next call reads the file again.
@@ -399,6 +414,32 @@ impl Store {
     pub fn update(
         &mut self,
         device_id: &str,
+        patch: Vec<(String, Option<Value>)>,
+    ) -> io::Result<Option<Map<String, Value>>> {
+        let next = self.patch(device_id, patch)?;
+        if next.is_some() {
+            self.save()?;
+        }
+        Ok(next)
+    }
+
+    /// [`Store::update`] in memory only: the caller hands the write to the file's writer thread with [`save_later`],
+    /// so it never waits for the disk (the per-device limit's counts, `quota.rs`).
+    pub fn update_kept(
+        &mut self,
+        device_id: &str,
+        patch: Vec<(String, Option<Value>)>,
+    ) -> io::Result<Option<Map<String, Value>>> {
+        let next = self.patch(device_id, patch)?;
+        if next.is_some() {
+            self.changes += 1;
+        }
+        Ok(next)
+    }
+
+    fn patch(
+        &mut self,
+        device_id: &str,
         mut patch: Vec<(String, Option<Value>)>,
     ) -> io::Result<Option<Map<String, Value>>> {
         let kind = self.kind;
@@ -427,9 +468,7 @@ impl Store {
         for (key, value) in patch {
             set(&mut rows[at].fields, key, value);
         }
-        let next = view(&rows[at].fields);
-        self.save()?;
-        Ok(Some(next))
+        Ok(Some(view(&rows[at].fields)))
     }
 
     pub fn remove(&mut self, device_id: &str) -> io::Result<bool> {
@@ -477,6 +516,77 @@ impl Store {
             vec![("addresses".into(), Some(Value::Array(next)))],
         )
     }
+}
+
+/// Writes `text`, rendered at change count `count`, unless a content rendered later is already written. Every write
+/// of `file` goes through here under `written`'s lock, so the file only moves forward.
+fn persist(file: &Path, written: &Mutex<u64>, count: u64, text: &str) -> io::Result<()> {
+    let mut last = lock(written);
+    if count <= *last {
+        return Ok(());
+    }
+    *last = count;
+    write_kept(file, text.as_bytes(), Some(0o600), 0o777)
+        .map(|_| ())
+        .map_err(|fault| io::Error::other(fault.message))
+}
+
+/// Hands what [`Store::update_kept`] changed to the store's writer thread: one write at a time, and the changes made
+/// meanwhile go out together in the next, so at most one write runs and one waits. The caller's thread never waits
+/// for the disk; a crash loses at most the changes since the last write that finished.
+pub fn save_later(store: &Arc<Mutex<Store>>) {
+    let mut guard = lock(store);
+    if guard.later.is_none() {
+        let (kick, kicked) = mpsc::channel::<()>();
+        let weak = Arc::downgrade(store);
+        std::thread::spawn(move || {
+            while kicked.recv().is_ok() {
+                while kicked.try_recv().is_ok() {}
+                let Some(store) = weak.upgrade() else {
+                    return;
+                };
+                let (count, text, file, written) = {
+                    let mut store = lock(&store);
+                    let (count, text) = store.render();
+                    (count, text, store.file.clone(), Arc::clone(&store.written))
+                };
+                if let Err(error) = persist(&file, &written, count, &text) {
+                    eprintln!("ompdesk-core: couldn't save {}: {error}", file.display());
+                }
+            }
+        });
+        guard.later = Some(kick);
+    }
+    if let Some(kick) = &guard.later {
+        let _ = kick.send(());
+    }
+}
+
+/// Writes every store's changes not on disk yet, in the caller's thread: the core's exit, after main closed stdin.
+pub fn flush() {
+    let stores: Vec<_> = lock(&STORES).values().cloned().collect();
+    for store in stores {
+        let mut store = lock(&store);
+        if store.changes > *lock(&store.written) {
+            let (count, text) = store.render();
+            if let Err(error) = persist(&store.file, &store.written, count, &text) {
+                eprintln!(
+                    "ompdesk-core: couldn't save {}: {error}",
+                    store.file.display()
+                );
+            }
+        }
+    }
+}
+
+/// Whether every change of `store` is on disk: waits for a write in progress (it holds `written`).
+#[cfg(test)]
+pub(crate) fn settled(store: &Arc<Mutex<Store>>) -> bool {
+    let (changes, written) = {
+        let store = lock(store);
+        (store.changes, Arc::clone(&store.written))
+    };
+    *lock(&written) >= changes
 }
 
 #[derive(Deserialize)]
