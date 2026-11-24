@@ -441,7 +441,30 @@ for (const engine of ENGINES)
 			await phone.getByRole("button", { name: /^(Send|보내기)$/ }).click();
 			await expect
 				.poll(async () => (await receivedPrompt(profile.record, both))?.images?.length, { timeout: 60_000 })
-				.toBe(2);
+				.toBe(2)
+				.catch(async (error: Error) => {
+					const notices = await phone.locator('[role="status"], [role="alert"]').allInnerTexts();
+					const frames = (await fs.readFile(profile.record, "utf8").catch(() => ""))
+						.split("\n")
+						.filter(line => line.includes("look at") || line.includes('"abort"'))
+						.map(line => {
+							const frame = JSON.parse(line) as Received & { recordedBy?: string };
+							return `${frame.type} ${frame.message} images=${frame.images?.length} by=${frame.recordedBy}`;
+						});
+					const state = await phone
+						.evaluate(() => ({
+							thumbnails: document.querySelectorAll('ul[aria-label="Attached images"] li').length,
+							draft: (document.querySelector("[data-composer-input]") as HTMLTextAreaElement | null)?.value,
+							buttons: [...document.querySelectorAll("button")]
+								.map(button => button.getAttribute("aria-label") ?? button.textContent)
+								.filter(Boolean)
+								.slice(0, 40),
+						}))
+						.catch((failure: Error) => failure.message);
+					throw new Error(
+						`${error.message}\nuploads: ${JSON.stringify(uploads)}\nframes:\n${frames.join("\n")}\nstate: ${JSON.stringify(state)}\nnotices: ${JSON.stringify(notices)}\nthe phone's wire:\n${wire.join("\n")}`,
+					);
+				});
 			// The bubbles above showed one picture per message sent, now 2 more.
 			await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(pictures.length + 2);
 			await captureTo(CAPTURES, phone, `${engine.name}-two-photos-sent`);
