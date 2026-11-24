@@ -30,7 +30,7 @@ import { WORKTREE_COMMAND_BUDGETS_MS } from "../local/git/worktree";
 import { SchedulesCommandParams, SchedulesCreateParams } from "../remote/app-protocol";
 import type { ScheduleService } from "../schedules";
 import type { ClientWindow } from "../web/client-window";
-import { FileEditReports } from "../web/file-edit-reports";
+import { FileEditReports, type FileEdits, type FileEditTarget } from "../web/file-edit-reports";
 import { type AgentControlHostDeps, AgentControlRuntime, splitBranch } from "./host";
 
 const ok = (data: unknown = {}): RpcResponse => ({ type: "response", success: true, data }) as RpcResponse;
@@ -58,6 +58,39 @@ function window(id = 1): ClientWindow & { sent: [string, unknown][] } {
 		isDestroyed: () => false,
 		once: () => undefined,
 		removeListener: () => undefined,
+	};
+}
+
+/** A stand-in for the core's web router as the host reads it. */
+interface FakeFileEdits {
+	reports: FileEditReports;
+	read(target: FileEditTarget, tabId: string): FileEdits;
+	/** A page connection of web window `windowId` reports its dirty tab, as the core then tells main. */
+	report(windowId: number, connId: string, dirty: string | null): void;
+}
+
+/**
+ * Each connection's latest Files-edit report as the core's web router keeps it (`file_edits.rs`, whose rules its own
+ * tests pin), read by window through `FileEditReports` as main reads the core. A web window's device is `w<id>`.
+ */
+function fakeFileEdits(): FakeFileEdits {
+	const byConnection = new Map<string, { device: string; dirty: string | null }>();
+	const read = (target: FileEditTarget, tabId: string): FileEdits => {
+		const reports = [...byConnection.values()].filter(report => report.device === target.device);
+		if (reports.some(report => report.dirty === tabId)) return "dirty";
+		return reports.length > 0 ? "clean" : "unreported";
+	};
+	const reports = new FileEditReports({
+		target: windowId => (windowId < 0 ? { host: 1, device: `w${windowId}` } : null),
+		read,
+	});
+	return {
+		reports,
+		read,
+		report(windowId: number, connId: string, dirty: string | null) {
+			byConnection.set(connId, { device: `w${windowId}`, dirty });
+			reports.reported();
+		},
 	};
 }
 
@@ -97,7 +130,7 @@ function setup(
 		/** Tabs a paired web page owns (its window id is negative). */
 		webTabs?: Partial<IpcTabInfo>[];
 		/** What happens while a release awaits (`closeWindowTab`'s exit-policy read), before it asks again. */
-		duringRelease?: (fileEdits: FileEditReports) => void;
+		duringRelease?: (fileEdits: FakeFileEdits) => void;
 		/** The tab holding each session file (`sessionOwner`). */
 		owners?: Record<string, string>;
 		/** The front window sessions are opened in without a tab of their own (`outsideWindow`). */
@@ -111,7 +144,7 @@ function setup(
 	const win = window();
 	const win2 = window(2);
 	const webWin = window(-1);
-	const fileEdits = new FileEditReports();
+	const fileEdits = fakeFileEdits();
 	const released: { win: ClientWindow; tabId: string }[] = [];
 	/** Releases and close mails in the order they happened. */
 	const log: string[] = [];
@@ -218,13 +251,14 @@ function setup(
 		sendOutboxFile: options.sendOutboxFile,
 		uploads: options.uploads,
 		sessionFatesFile: options.sessionFatesFile,
-		fileEdits,
-		releaseTab: async (target, tabId, stillReleasable) => {
+		fileEdits: fileEdits.reports,
+		releaseTab: async (target, tabId, unlessDirty) => {
 			const at = webTabs.findIndex(tab => tab.tabId === tabId);
 			if (at < 0) return false;
 			await Promise.resolve();
 			options.duringRelease?.(fileEdits);
-			if (!stillReleasable()) return false;
+			// The core's check in the step that removes the tab (`releaseTab`'s `unlessDirty`).
+			if (unlessDirty && fileEdits.read(unlessDirty, tabId) === "dirty") return false;
 			webTabs.splice(at, 1);
 			released.push({ win: target, tabId });
 			log.push(`release:${tabId}`);
@@ -1675,7 +1709,7 @@ describe("AgentControlRuntime", () => {
 describe("closing a child a paired web page owns", () => {
 	const WEB = -1;
 	const stop = { session: "web00002", close: true };
-	const phone = (duringRelease?: (fileEdits: FileEditReports) => void) =>
+	const phone = (duringRelease?: (fileEdits: FakeFileEdits) => void) =>
 		setup({
 			tabs: [{ tabId: "main0001", sessionPath: "/s/boss.jsonl" }],
 			webTabs: [{ tabId: "web00002", title: "Phone child", sessionPath: "/s/kid.jsonl" }],
@@ -1701,14 +1735,19 @@ describe("closing a child a paired web page owns", () => {
 		const release = vi.spyOn(deps, "releaseTab").mockResolvedValueOnce(false);
 		await runtime.control.autoClose("main0001");
 		expect(release).toHaveBeenCalledTimes(1);
-		expect(release).toHaveBeenCalledWith(webWin, child.tabId, expect.any(Function), { pool: 7, entry: 4, turn: 19 });
+		expect(release).toHaveBeenCalledWith(
+			webWin,
+			child.tabId,
+			{ host: 1, device: "w-1" },
+			{ pool: 7, entry: 4, turn: 19 },
+		);
 		expect(released).toEqual([]);
 		expect(webTabs).toContain(child);
 
 		child.closeTurn = { pool: 7, entry: 4, turn: 20 };
 		child.lastRun = { id: 20, stopReason: "stop", reply };
 		await runtime.control.autoClose("main0001");
-		expect(release).toHaveBeenLastCalledWith(webWin, child.tabId, expect.any(Function), child.closeTurn);
+		expect(release).toHaveBeenLastCalledWith(webWin, child.tabId, { host: 1, device: "w-1" }, child.closeTurn);
 		expect(released).toEqual([{ win: webWin, tabId: child.tabId }]);
 	});
 

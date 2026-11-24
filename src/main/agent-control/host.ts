@@ -87,7 +87,7 @@ import type { ControlTabInfo, SidecarPool, TabActivity } from "../sidecar-pool";
 import type { SidecarLike } from "../sidecar-types";
 import { recordTurnStop } from "../turn-stop-log";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
-import type { FileEditReports } from "../web/file-edit-reports";
+import type { FileEditReports, FileEditTarget } from "../web/file-edit-reports";
 import type { UploadStore } from "../web/uploads";
 import { sessionOpenFolders } from "../worktree-orphans";
 import {
@@ -257,17 +257,18 @@ export interface AgentControlHostDeps {
 			command: { type: "get_autopilot" } | ({ type: "set_autopilot" } & AutopilotAction),
 		) => Promise<RpcResponse>;
 	};
-	/** What paired web pages last reported about unsaved Files edits in their tabs (ipc.ts `FILE_EDIT_REPORT`). */
-	fileEdits: Pick<FileEditReports, "edits" | "onReport">;
+	/** What paired web pages last reported about unsaved Files edits in their tabs (kept by the core's web router). */
+	fileEdits: Pick<FileEditReports, "edits" | "onReport" | "target">;
 	/**
 	 * Close a tab of `win` the way the window's own close does (ipc.ts `closeWindowTab`) and tell that window it is
 	 * gone. Only for a paired web page's window: a desktop window closes its own tab when asked (`AGENT_CONTROL_VIEW`).
-	 * `stillReleasable` is asked again after the release's awaits, right before it lets the tab go.
+	 * `unlessDirty` names the page whose live reports are checked again after the release's awaits, and once more by
+	 * the core in the step that lets the tab go.
 	 */
 	releaseTab: (
 		win: ClientWindow,
 		tabId: string,
-		stillReleasable: () => boolean,
+		unlessDirty: FileEditTarget | undefined,
 		expectedTurn?: AutoCloseTurn,
 	) => Promise<boolean>;
 	/** Settings › Schedules (`ScheduleService`); absent or null where there is none. */
@@ -1240,9 +1241,9 @@ export class AgentControlRuntime {
 				const win = deps.pool.windowOfTab(tabId);
 				if (!win || !isWebWindow(win.webContents.id)) return false;
 				// The page's word may change while the release awaits: the core's rule (`rules/tab_close.rs`) released a
-				// page's tab only while its page held no unsaved Files edits, and that is asked again on the store now.
-				const id = win.webContents.id;
-				return deps.releaseTab(win, tabId, () => deps.fileEdits.edits(id, tabId) !== "dirty", expectedTurn);
+				// page's tab only while its page held no unsaved Files edits, and the core asks its store again in the
+				// step that removes the tab. No target: no web server runs, so no page has reported.
+				return deps.releaseTab(win, tabId, deps.fileEdits.target(win.webContents.id) ?? undefined, expectedTurn);
 			},
 			view: (callerTabId, event: AgentControlViewEvent) => {
 				// The window that holds the session (another window's tab closes or shows there), else the caller's.

@@ -45,6 +45,7 @@ pub(crate) use crate::hub::spawn;
 use crate::hub::{Kind, Out, Outcome};
 use crate::server::Fault;
 use state::{Ctx, LevelKey, P, Pool, R};
+use windows::FileEditGuard;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -400,8 +401,31 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                     None => return Ok(Value::Bool(false)),
                 },
             };
-            Ok(Value::from(ctx.release_tab(&p.s("tab")?, expected).await?))
+            // A guard main sent but the core cannot read keeps the tab: never a release it did not check.
+            let guard = match p.0.get("unlessDirty") {
+                None => None,
+                Some(value) => match FileEditGuard::parse(value) {
+                    Some(guard) => Some(guard),
+                    None => return Ok(Value::Bool(false)),
+                },
+            };
+            Ok(Value::from(
+                ctx.release_tab(&p.s("tab")?, expected, guard.as_ref())
+                    .await?,
+            ))
         }),
+        // What a paired page's live connections report of one of its tabs' Files edits (`FileEditReports.edits`).
+        "fileEdits" => now(Value::from(
+            FileEditGuard::parse(&p.0)
+                .map_or(crate::web::file_edits::FileEdits::Unreported, |guard| {
+                    crate::web::router::file_edits(
+                        guard.host,
+                        &guard.device,
+                        p.0["tab"].as_str().unwrap_or(""),
+                    )
+                })
+                .as_str(),
+        )),
         "announceClosed" => later(async move {
             let closed = [p.s("tab")?];
             done(ctx.send_tab_list(p.i("win")?, Some(&closed), None).await)

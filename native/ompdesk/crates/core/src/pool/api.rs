@@ -11,6 +11,7 @@ use super::split::{
 use super::state::{
     Ctx, Entry, LevelKey, Owner, Pool, R, fault, highest_subagent_level, owner_key,
 };
+use super::windows::FileEditGuard;
 
 fn opt(value: Option<String>) -> Value {
     value.map_or(Value::Null, Value::from)
@@ -1346,8 +1347,13 @@ impl Ctx {
     }
 
     /// Only a successful removal changes the owner's layout.
-    pub(super) async fn release_tab(&self, tab: &str, expected: Option<AutoCloseTurn>) -> R<bool> {
-        let Some(win) = self.release_entry(tab, expected).await? else {
+    pub(super) async fn release_tab(
+        &self,
+        tab: &str,
+        expected: Option<AutoCloseTurn>,
+        unless_dirty: Option<&FileEditGuard>,
+    ) -> R<bool> {
+        let Some(win) = self.release_entry(tab, expected, unless_dirty).await? else {
             return Ok(false);
         };
         self.notify_window_tabs_changed(win).await?;

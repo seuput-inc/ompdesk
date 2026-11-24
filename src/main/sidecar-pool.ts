@@ -106,6 +106,7 @@ import { MAX_FORMER_TAB_IDS, type PersistedTabLayout, TAB_LAYOUT_VERSION } from 
 import { MovesInFlight, type ResumeFact } from "./turn-resume";
 import { recordTurnStop, type TurnStopBy } from "./turn-stop-log";
 import { type ClientWindow, isWebWindow } from "./web/client-window";
+import type { FileEdits, FileEditTarget } from "./web/file-edit-reports";
 import type { TabSpawnFacts } from "./worktree-lifecycle";
 import { removalHolds } from "./worktree-removals";
 
@@ -1612,9 +1613,17 @@ export class SidecarPool {
 		return this.#call<boolean>("canReleaseTab", { tab: tabId, expectedTurn });
 	}
 
-	/** An automatic close releases only the same idle entry and turn. */
-	releaseTab(tabId: string, expectedTurn?: AutoCloseTurn): boolean {
-		return this.#call<boolean>("releaseTab", { tab: tabId, expectedTurn });
+	/**
+	 * An automatic close releases only the same idle entry and turn. `unlessDirty`: an agent's release of a paired
+	 * page's tab, refused while a live connection of that page names it dirty, checked in the core step that removes it.
+	 */
+	releaseTab(tabId: string, expectedTurn?: AutoCloseTurn, unlessDirty?: FileEditTarget): boolean {
+		return this.#call<boolean>("releaseTab", { tab: tabId, expectedTurn, unlessDirty });
+	}
+
+	/** What `target`'s live connections report of `tabId`'s Files edits (the core's web router keeps them). */
+	fileEdits(target: FileEditTarget, tabId: string): FileEdits {
+		return this.#call<FileEdits>("fileEdits", { ...target, tab: tabId });
 	}
 
 	/** Release one tab like `releaseTab`; resolves once its omp process has exited. */
