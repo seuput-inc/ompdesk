@@ -112,7 +112,7 @@ import { CliUpdater, registerCliUpdateIpc } from "./cli-tools/updater";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
 import { installCliLaunchers } from "./control-socket/cli-install";
-import { hub as coreHub, takeHubMinute } from "./core/hub";
+import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
 import { setupDeepLinks } from "./deep-link";
@@ -785,21 +785,15 @@ async function spawnWindow(
 
 app.whenReady().then(async () => {
 	installMainRuntimeLogging();
-	// The hub answers before main's first synchronous hub call (the prefs below): on a macOS runner the core's hub sent
-	// nothing for over 2 s right after the core started, the deadline of a call that holds main's thread, and the
-	// startup failed (mac-smoke, runs 45339164652 and 45344032167). A round trip main does not wait on waits it out: a
-	// call of no instance, whose refusal is the answer. At most 15 s; a hub that never answers fails at the first call.
-	const startWait = Promise.withResolvers<void>();
-	setTimeout(startWait.resolve, 15_000).unref();
-	coreHub()
-		.callLater(0, "ready")
-		.then(
-			() => startWait.resolve(),
-			() => startWait.resolve(),
-		);
-	const hubUp = startWait.promise;
+	// Before the first core starts: the prefs below are main's first hub call, and the core it starts must be the
+	// packaged binary (a core started before this looked in the checkout's layout and failed ENOENT in every packaged
+	// app) and carry the left-behind file in its environment.
+	configureNativeBin({
+		packaged: app.isPackaged,
+		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
+	});
+	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	const { guard, safeMode, stableAfterMs } = await launch;
-	await hubUp;
 	// A full disk is told once, by one notification that goes when the files are saved; the writers retry on their own.
 	bindDiskFullNotice(diskFull, {
 		show: notice => {
@@ -870,16 +864,11 @@ app.whenReady().then(async () => {
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
 	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
 	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
-	configureNativeBin({
-		packaged: app.isPackaged,
-		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
-	});
 	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
 	core().report = (step, details) => {
 		writeRuntimeLog({ source: "core-loss", message: step, details });
 		if (step === "abandoned") machineState.stalled("core-loss");
 	};
-	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
 	const remoteIdentity = loadIdentity(app.getPath("userData")).catch((error: unknown): Identity => {

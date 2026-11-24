@@ -14,43 +14,14 @@ pub type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 /// Serves one accepted connection, given the token it must prove.
 pub type Serve = fn(Reader, Writer, String) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// Listens where `OMPDESK_HUB` names, if it does: from the core's start, so main's first call finds it. The hub's
-/// listener and connections run on a thread and runtime of their own: main's thread waits on each hub call, so a hub
-/// answer must never wait for the core's shared runtime, whose workers a burst of requests (or a stderr write main
-/// does not drain while it waits) can hold for seconds. Packaged apps on macOS and Windows found the hub silent for
-/// over 2 s at their first call under that load (runs 45351355265 and 45365781117).
+/// Listens where `OMPDESK_HUB` names, if it does: from the core's start, so main's first call finds it.
 pub fn listen_from_env() {
-    if std::env::var_os("OMPDESK_HUB").is_none() {
-        return;
-    }
-    let started = std::thread::Builder::new()
-        .name("ompdesk-hub-io".into())
-        .spawn(|| {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    eprintln!(
-                        "ompdesk-core: the hub cannot start its connections' runtime: {error}"
-                    );
-                    return;
-                }
-            };
-            runtime.block_on(async {
-                from_env(
-                    "OMPDESK_HUB",
-                    "OMPDESK_HUB_TOKEN",
-                    "the hub",
-                    |reader, writer, token| Box::pin(serve_conn(reader, writer, Some(token))),
-                );
-                std::future::pending::<()>().await;
-            });
-        });
-    if let Err(error) = started {
-        eprintln!("ompdesk-core: the hub's connection thread did not start: {error}");
-    }
+    from_env(
+        "OMPDESK_HUB",
+        "OMPDESK_HUB_TOKEN",
+        "the hub",
+        |reader, writer, token| Box::pin(serve_conn(reader, writer, Some(token))),
+    );
 }
 
 /// Listens where `address_var` names, with the token `token_var` holds, if both are set; `serve` takes each connection.

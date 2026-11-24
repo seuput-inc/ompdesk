@@ -87,34 +87,11 @@ done
 startup_log() {
 	tail -n 12 "$UD/logs/gui-runtime.jsonl" 2>/dev/null | cut -c1-700 | tr '\n' '|'
 }
-# Where the first core's threads are during its first seconds (`sample`, macOS's own profiler), kept for a launch that
-# does not start: a hub that answers nothing shows here.
-sample_core() {
-	local n=0 pid
-	while [ $n -lt 20 ]; do
-		pid=$(pgrep -f "$APP/Contents/.*ompdesk-core" | head -1)
-		[ -n "$pid" ] && sample "$pid" 1 -mayDie -file "$W/core-sample-$n.txt" >/dev/null 2>&1
-		n=$((n+1))
-	done
-}
-core_threads() {
-	local n
-	for n in 2 5; do
-		[ -f "$W/core-sample-$n.txt" ] || continue
-		echo "sample $n"
-		grep -E '^ {4}[0-9]+ Thread_|^ {6,14}\+ [0-9]+ ' "$W/core-sample-$n.txt" | cut -c1-160 | head -90
-	done
-}
-
-sample_core &
 open "$APP"
 wait_for "test -s '$UD/app-started.json'" 180
 STARTED=$?
 check $STARTED "the app started through open (app-started.json)"
-if [ "$STARTED" != 0 ]; then
-	evidence "first launch: runtime log: $(startup_log)"
-	core_threads | sed 's/^/CORE /'
-fi
+[ "$STARTED" = 0 ] || evidence "first launch: runtime log: $(startup_log)"
 SHELL_PID=$(shells)
 [ "$(echo "$SHELL_PID" | grep -c .)" = 1 ]; check $? "one ompdesk-shell runs ($(echo $SHELL_PID))"
 [ -z "$(pgrep -fx "$APP/Contents/MacOS/OMPdesk")" ]; check $? "the launcher has exited"
