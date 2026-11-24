@@ -20,7 +20,10 @@ Object.assign(globalThis as Record<string, unknown>, {
 
 let container: HTMLElement;
 let root: Root;
-const command = vi.fn(async (_command: unknown) => ({ success: true, data: { armed: false } }));
+type Answer = { success: boolean; data: { armed: boolean } };
+const answerAtOnce = async (_command: unknown): Promise<Answer> => ({ success: true, data: { armed: false } });
+let answer = answerAtOnce;
+const command = vi.fn((sent: unknown) => answer(sent));
 let composer = createComposerStore();
 
 function Effects() {
@@ -45,6 +48,7 @@ async function mount(): Promise<void> {
 
 beforeEach(() => {
 	command.mockClear();
+	answer = answerAtOnce;
 	composer = createComposerStore();
 	const runtime = registerSessionRuntime({ tabId: "tab-1", command: command as never, stores: new Map() });
 	addRuntimeStore(runtime, "composer", composer);
@@ -95,5 +99,27 @@ describe("useIdleCompactionDraft", () => {
 		await act(async () => useTabsStore.setState({ tabs: [] }));
 		await act(async () => composer.getState().setDraft(""));
 		expect(sent()).toHaveLength(6);
+	});
+
+	it("sends a change only after omp took the previous one, so a late answer never leaves a stale draft state", async () => {
+		const pending: Array<() => void> = [];
+		const applied: unknown[] = [];
+		useTabsStore.setState({ tabs: tab("ready"), activeTabId: "tab-1" });
+		await mount();
+		answer = sent =>
+			new Promise(resolve =>
+				pending.push(() => {
+					applied.push(sent);
+					resolve({ success: true, data: { armed: false } });
+				}),
+			);
+		await act(async () => composer.getState().setDraft("run the tests"));
+		await act(async () => composer.getState().setDraft(""));
+		// omp takes the newest command first, as two calls in flight may arrive.
+		while (pending.length > 0) await act(async () => pending.pop()?.());
+		const suggestionStates = applied.filter(
+			c => typeof c === "object" && c !== null && "type" in c && c.type === "set_next_prompt_draft",
+		);
+		expect(suggestionStates.at(-1)).toEqual({ type: "set_next_prompt_draft", empty: true });
 	});
 });

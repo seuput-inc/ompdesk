@@ -1728,10 +1728,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return (await deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device)) !== null;
 	});
 
-	// A desktop window starts its tab on its session (spawnWindow), so it has nothing pending; a paired web page
-	// answers this from its own launch link (web/shim.ts `takePendingSessionPath`).
-	ipc.handle(IPC_COMMANDS.SESSION_CONSUME_PENDING, () => null);
-
 	// ========================================================================
 	// Session tabs — in-window parallel sessions. Each tab owns a pooled
 	// sidecar bound to the CALLING window (no new BrowserWindow); the pool
@@ -1999,62 +1995,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if (!("path" in local)) return local;
 			shell.showItemInFolder(local.path);
 			return { ok: true };
-		},
-	);
-
-	ipc.handle(
-		IPC_COMMANDS.SYSTEM_SAVE_DIALOG,
-		async (caller, defaultPath?: string, filters?: { name: string; extensions: string[] }[]) => {
-			const win = caller.browserWindow;
-			if (!win) return null;
-			const result = await dialog.showSaveDialog(win, {
-				defaultPath: defaultPath ?? "session.html",
-				filters: filters ?? [{ name: "HTML", extensions: ["html"] }],
-			});
-			return result.canceled ? null : (result.filePath ?? null);
-		},
-	);
-
-	ipc.handle(IPC_COMMANDS.SYSTEM_SAVE_IMAGE, async (caller, defaultName: string, mimeType: string, data: string) => {
-		const win = caller.browserWindow;
-		if (!win) return { saved: false };
-		const extension =
-			mimeType
-				.split("/")[1]
-				?.split(/[+;]/)[0]
-				?.replace("jpeg", "jpg")
-				.replace(/[^a-z0-9]/gi, "") || "png";
-		const result = await dialog.showSaveDialog(win, {
-			defaultPath: path.basename(defaultName) || `image.${extension}`,
-			filters: [{ name: "Image", extensions: [extension] }],
-		});
-		if (result.canceled || !result.filePath) return { saved: false };
-		try {
-			await fsp.writeFile(result.filePath, Buffer.from(data, "base64"));
-			return { saved: true };
-		} catch (error) {
-			return { saved: false, error: error instanceof Error ? error.message : String(error) };
-		}
-	});
-
-	ipc.handle(
-		IPC_COMMANDS.SYSTEM_OPEN_DIALOG,
-		async (
-			caller,
-			filters?: { name: string; extensions: string[] }[],
-			options?: { directory?: boolean; title?: string; buttonLabel?: string },
-		) => {
-			const win = caller.browserWindow;
-			if (!win) return null;
-			const result = await dialog.showOpenDialog(win, {
-				properties: options?.directory ? ["openDirectory", "createDirectory"] : ["openFile", "multiSelections"],
-				filters: filters ?? [],
-				title: options?.title,
-				buttonLabel: options?.buttonLabel,
-				// macOS sheet header; the panel's own "New Folder" button creates the project folder.
-				message: options?.title,
-			});
-			return result.canceled ? null : result.filePaths;
 		},
 	);
 

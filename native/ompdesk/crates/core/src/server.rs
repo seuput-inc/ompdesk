@@ -307,8 +307,19 @@ fn in_flight(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Serves requests from `input`, answering on `output`, until `input` ends. Announces `ready` first.
+/// Serves requests from `input`, answering on `output`, until `input` ends. Announces `ready` first. Main's connection
+/// (stdio today) is where `store.saveFailed` and `store.saved` go.
 pub async fn serve<R, W>(input: R, output: W, registry: Registry) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    serve_as(input, output, registry, true).await
+}
+
+/// `serve`, with `main` saying whether this connection is main's: the process-wide sinks (`disk::saves`) report on the
+/// latest connection of main's, never on another client's.
+pub async fn serve_as<R, W>(input: R, output: W, registry: Registry, main: bool) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -320,10 +331,11 @@ where
         protocol: PROTOCOL,
     };
     let _ = frames.send(Frame::event("ready", &ready));
-    // Where `store.saveFailed` and `store.saved` go: a store whose disk is full tells main on this connection.
-    crate::disk::saves::attach(Events {
-        frames: frames.downgrade(),
-    });
+    if main {
+        crate::disk::saves::attach(Events {
+            frames: frames.downgrade(),
+        });
+    }
     let mut reader = BufReader::new(input);
     let mut line = Vec::new();
     let mut tasks = JoinSet::new();

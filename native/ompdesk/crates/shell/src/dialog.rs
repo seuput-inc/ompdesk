@@ -67,14 +67,29 @@ fn run(call: Call, show: impl FnOnce(isize, &Value) -> Result<Value, String> + S
     let win_id = call.params.get("winId").and_then(Value::as_u64);
     let options = call.params.get("options").cloned().unwrap_or(Value::Null);
     let method = call.method.clone();
+    present(win_id, method, options, show, move |shown| match shown {
+        Ok(result) => call.ok(result),
+        Err(why) => call.err("failed", why),
+    });
+}
+
+/// Runs `show` over window `win_id` (its handle looked up on the UI thread) and hands `done` the outcome; a failure is
+/// logged under `method`. A dialog that could not start drops `done` uncalled.
+pub fn present(
+    win_id: Option<u64>,
+    method: String,
+    options: Value,
+    show: impl FnOnce(isize, &Value) -> Result<Value, String> + Send + 'static,
+    done: impl FnOnce(Result<Value, String>) + Send + 'static,
+) {
     ui::run(move || {
         let owner = owner_handle(win_id);
-        let work = move || match show(owner, &options) {
-            Ok(result) => call.ok(result),
-            Err(why) => {
+        let work = move || {
+            let shown = show(owner, &options);
+            if let Err(why) = &shown {
                 log("dialog.failed", json!({ "method": method, "error": why }));
-                call.err("failed", why);
             }
+            done(shown);
         };
         #[cfg(windows)]
         {
