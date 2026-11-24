@@ -127,7 +127,7 @@ import { DiskCare, registerDiskCareIpc } from "./disk/care";
 import { SavedWorktreeStore, setSavedWorktreeStore } from "./disk/saved-worktrees";
 import { ScratchCare } from "./disk/scratch";
 import { diskFull } from "./disk-full";
-import { bindDiskFullNotice, bindDiskFullPush, describeFiles } from "./disk-full-notice";
+import { bindDiskFullNotice, describeFiles } from "./disk-full-notice";
 import { registerExtensionUpdateIpc } from "./ext-update/ipc";
 import { runningServer } from "./ext-update/running";
 import { ExtensionUpdater } from "./ext-update/updater";
@@ -199,8 +199,10 @@ import {
 	clipboard,
 	consumeHangReports,
 	diagnosticBundleFileName,
+	onPairedPagePush,
 	openPageExternal,
 	postWatchdog,
+	publishDiskFull,
 	readDiagnosticLog,
 	readPreviousRunEnd,
 	registerRuntimeLogIpc,
@@ -803,7 +805,11 @@ app.whenReady().then(async () => {
 		}),
 	});
 	// The same notice as a toast in every window and on the paired phone's page, closed when the files are saved.
-	bindDiskFullPush(diskFull, () => [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])]);
+	diskFull.onChange(files => {
+		publishDiskFull(files);
+		webHost?.router.publishDiskFull(files);
+	});
+	onPairedPagePush(({ connId, channel, payload }) => webHost?.router.deliverToConnection(connId, channel, payload));
 	// The core's stores (web devices, paired computers, schedules, journals) join it.
 	routeCoreSaves(core(), diskFull);
 	markStartup("app-ready");

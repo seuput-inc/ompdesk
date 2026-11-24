@@ -596,6 +596,63 @@ describe("events", () => {
 		expect(r.socket.frames("evt")).toHaveLength(1);
 	});
 
+	it("orders a native caller's private push before its reply without notifying its other page", async () => {
+		const r = await rig();
+		const other = await r.host.attach("dev1");
+		if (!other) throw new Error("second page did not attach");
+		r.invoke.mockImplementationOnce(async (_channel, caller) => {
+			if (!caller.connId) throw new Error("no caller connection");
+			r.router.deliverToConnection(caller.connId, WEB_PAIRING_REQUEST, {});
+			r.router.deliverToConnection(caller.connId, IPC_EVENTS.TAB_STATUS, { tabId: "a", status: "ready" });
+			return "answered";
+		});
+		await r.frame({ t: "inv", id: 9, ch: IPC_COMMANDS.SESSIONS_LIST, a: [{ scope: "global" }] });
+		await r.settle();
+		await r.host.flush();
+		expect(r.socket.sent.filter(frame => frame.t === "evt" || frame.t === "res")).toEqual([
+			{ t: "evt", seq: 1, ch: IPC_EVENTS.TAB_STATUS, d: { tabId: "a", status: "ready" } },
+			{ t: "res", id: 9, ok: true, v: "answered" },
+		]);
+		expect(other.socket.frames("evt")).toEqual([]);
+	});
+
+	it("broadcasts the files waiting for disk space and their recovery to both pages", async () => {
+		const r = await rig();
+		const other = await r.host.attach("dev1");
+		if (!other) throw new Error("second page did not attach");
+		r.router.publishDiskFull(["web-devices.json"]);
+		r.router.publishDiskFull([]);
+		await r.host.flush();
+		for (const socket of [r.socket, other.socket]) {
+			expect(socket.frames("evt")).toEqual([
+				{ t: "evt", seq: 1, ch: IPC_EVENTS.DISK_FULL, d: { files: ["web-devices.json"] } },
+				{ t: "evt", seq: 2, ch: IPC_EVENTS.DISK_FULL, d: { files: [] } },
+			]);
+		}
+	});
+
+	it("never widens a stale or malformed connection target to its device", async () => {
+		const r = await rig();
+		const stale = r.connection.connId;
+		await r.connection.dispose();
+		const replacement = await r.host.attach("dev1", stale);
+		if (!replacement) throw new Error("page did not reconnect");
+		for (const connId of [stale, null, 1, ""]) {
+			core().push("web.deliver", { host: r.router.host, device: "dev1", connId, ch: IPC_EVENTS.TAB_STATUS });
+		}
+		await r.host.flush();
+		expect(replacement.socket.frames("evt")).toEqual([]);
+		expect(replacement.socket.frames("hello")[0]).toMatchObject({ resumed: true });
+	});
+
+	it("requires resync when even the last disconnected page missed a disk-full change", async () => {
+		const r = await rig();
+		await r.connection.dispose();
+		r.router.publishDiskFull([]);
+		const back = await r.host.attach("dev1", r.connection.connId);
+		expect(back?.socket.frames("hello")[0]).toMatchObject({ resumed: false });
+	});
+
 	it("joins a tab's neighbouring batches and merges their streaming deltas", async () => {
 		const r = await rig();
 		const win = r.windows.windowFor("dev1");
