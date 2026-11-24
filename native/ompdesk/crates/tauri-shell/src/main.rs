@@ -14,6 +14,7 @@ mod native_chrome;
 mod native_services;
 mod network;
 mod notify_triage;
+mod page_push;
 mod page_watch;
 mod preview_protocol;
 pub use native_chrome::menu;
@@ -1337,53 +1338,8 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
             log::log("relaunch.stored", json!({"args":args}));
             *runtime().relaunch.lock().expect("relaunch") = Some(args);
         }
-        "wc.send" => {
-            let Some(wc) = data["wcId"].as_u64() else {
-                return;
-            };
-            let identity = runtime()
-                .registry
-                .lock()
-                .expect("registry")
-                .page(wc)
-                .filter(|page| page.kind == registry::Kind::App)
-                .map(|page| page.identity);
-            let Some(identity) = identity else {
-                return;
-            };
-            let message = json!({"channel":data["channel"],"args":data["args"]}).to_string();
-            let app = runtime().app.clone();
-            let _ = app.run_on_main_thread(move || {
-                let deliver = {
-                    let mut registry = runtime().registry.lock().expect("registry");
-                    let Some(page) = registry
-                        .page_mut(wc)
-                        .filter(|page| page.identity == identity)
-                    else {
-                        return;
-                    };
-                    if page.ready {
-                        true
-                    } else {
-                        if page.pushes.len() >= 4096 {
-                            page.pushes.clear();
-                            page.pushes.push_back(json!({"stream":"reset"}).to_string());
-                        }
-                        page.pushes.push_back(message.clone());
-                        false
-                    }
-                };
-                if deliver
-                    && let Ok(window) = window_for_wc(wc)
-                    && let Err(error) = window.eval(format!(
-                        "window.__ompTauriPush({}, {message});",
-                        identity.generation
-                    ))
-                {
-                    log::log("push.failed", json!({"wcId":wc,"error":error.to_string()}));
-                }
-            });
-        }
+        "wc.send" => page_push::wc_send(&data),
+        "diskFull.state" => page_push::disk_full_state(data),
         _ => log::log("event.unsupported", json!({"name":name})),
     }
 }
@@ -1541,30 +1497,13 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 .app
                 .run_on_main_thread(move || {
                     let result = (|| -> Result<Value, Value> {
-                        let queued = {
-                            let mut registry = runtime().registry.lock().expect("registry");
-                            let Some(page) = registry
-                                .page_mut(identity.wc)
-                                .filter(|p| p.identity == identity)
-                            else {
-                                return Err(json!({"code":"gone","message":"document ended"}));
-                            };
-                            if page.ready {
-                                return Ok(json!({"generation":identity.generation}));
-                            }
-                            page.ready = true;
-                            std::mem::take(&mut page.pushes)
-                        };
+                        if !page_push::document_ready(identity, &webview)
+                            .map_err(|e| json!({"code":e.code,"message":e.message}))?
+                        {
+                            return Ok(json!({"generation":identity.generation}));
+                        }
                         if let Some(ua) = value["userAgent"].as_str() {
                             *runtime().user_agent.lock().expect("user agent") = Some(ua.into());
-                        }
-                        for message in queued {
-                            webview
-                                .eval(format!(
-                                    "window.__ompTauriPush({}, {message});",
-                                    identity.generation
-                                ))
-                                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
                         }
                         wc_state(identity.wc);
                         wc_event(identity.wc, "dom-ready", json!([]));
