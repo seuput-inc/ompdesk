@@ -23,7 +23,6 @@ mod notification;
 mod platform;
 mod power;
 mod protocol;
-mod proxy;
 mod scheme;
 mod screen;
 mod session;

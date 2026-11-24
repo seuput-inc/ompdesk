@@ -45,7 +45,7 @@ pub fn bypassed(list: &str, host: &str) -> bool {
 }
 
 /// `*` matches any run of characters, `?` one.
-pub(crate) fn glob(pattern: &str, text: &str) -> bool {
+pub fn glob(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
     let (mut pi, mut ti, mut star, mut mark) = (0, 0, None, 0);

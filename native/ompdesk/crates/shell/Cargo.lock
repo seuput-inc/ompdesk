@@ -1516,6 +1516,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "ompdesk-sysproxy",
  "pbkdf2",
  "png",
  "rusty-leveldb",
@@ -1526,6 +1527,13 @@ dependencies = [
  "sha2",
  "tray-icon",
  "windows",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ompdesk-sysproxy"
+version = "0.1.0"
+dependencies = [
  "windows-sys 0.61.2",
 ]
 

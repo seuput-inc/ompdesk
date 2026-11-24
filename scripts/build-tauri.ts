@@ -43,17 +43,22 @@ function sha256(file: string): string {
 function sourceFiles(): Map<string, string> {
 	const files = new Map<string, string>();
 	// Outside the crates: the toolchain, the core's owner (one file the host links from the core crate, `#[path]` in
-	// tauri-shell main.rs), and the tray's pictures that tauri-shell/src/tray.rs embeds.
+	// tauri-shell main.rs), the core workspace's manifest (it gives `crates/sysproxy`, one of its members, its edition
+	// and lints), and the tray's pictures that tauri-shell/src/tray.rs embeds.
 	for (const file of [
 		"native/ompdesk/rust-toolchain.toml",
 		"native/ompdesk/crates/core/src/owner.rs",
+		"native/ompdesk/Cargo.toml",
 		"resources/brand/tray.png",
 		"resources/brand/tray@2x.png",
 		"resources/brand/trayTemplate.png",
 		"resources/brand/trayTemplate@2x.png",
 	])
 		files.set(file, sha256(path.join(REPO_ROOT, file)));
-	for (const root of [TAURI_DIR, path.join(TAURI_DIR, "../shell"), path.join(TAURI_DIR, "../shell-preview")]) {
+	for (const root of [
+		TAURI_DIR,
+		...["../shell", "../shell-preview", "../sysproxy"].map(dir => path.join(TAURI_DIR, dir)),
+	]) {
 		for (const name of filesUnder(root).sort()) {
 			const file = path.join(root, name);
 			files.set(path.relative(REPO_ROOT, file).replaceAll(path.sep, "/"), sha256(file));

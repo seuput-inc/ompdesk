@@ -1,6 +1,6 @@
 OMPdesk's CEF shell: statically linked Rust crates
 
-Cargo.lock SHA-256: 9fd8e2743da85cca303e476af95a8ad50fd3cac862031e4968049d988458b684
+Cargo.lock SHA-256: a9d05dc53ed1ce3df9b62634de0f9b85aff323f4d9f8ef572a1991b91dec3371
 
 The shell OMPdesk builds from its own Rust source in native/ompdesk/crates/shell (OMPdesk.exe / the app's
 executable and its helper processes) links the crates below, among them the `cef` binding to the Chromium

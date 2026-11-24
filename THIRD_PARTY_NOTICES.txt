@@ -22774,7 +22774,7 @@ authors as stated in the repository listed above.
 
 OMPdesk native binaries: statically linked Rust crates
 
-Cargo.lock SHA-256: 1401b29784d4fb4d99797eec133e56d6416ff99b98e1ea85c333ad332157a37c
+Cargo.lock SHA-256: 5f04448566d91e2515cccbe8df68a97d66dfaae1f908e423ba893cf72e31ae8a
 
 The binaries OMPdesk builds from its own Rust source in native/ompdesk (shipped under ompdesk-bin/) link the
 crates below. Set: normal dependencies of every workspace crate for aarch64-apple-darwin and
@@ -32055,7 +32055,7 @@ authors as stated in the repository listed above.
 
 OMPdesk's CEF shell: statically linked Rust crates
 
-Cargo.lock SHA-256: 9fd8e2743da85cca303e476af95a8ad50fd3cac862031e4968049d988458b684
+Cargo.lock SHA-256: a9d05dc53ed1ce3df9b62634de0f9b85aff323f4d9f8ef572a1991b91dec3371
 
 The shell OMPdesk builds from its own Rust source in native/ompdesk/crates/shell (OMPdesk.exe / the app's
 executable and its helper processes) links the crates below, among them the `cef` binding to the Chromium
@@ -38654,7 +38654,7 @@ authors as stated in the repository listed above.
 
 OMPdesk's Tauri shell: statically linked Rust crates
 
-Cargo.lock SHA-256: e72df98e372fe3bddb6dc1cf479e086c401e1ae184697804e5efb28563814fc1
+Cargo.lock SHA-256: a90c07563d8ca5e0cc65f89445e3f073c34e589df5b5ded9eb5626b65bdaab05
 
 The Tauri 2 shell and rollback launcher OMPdesk builds from native/ompdesk/crates/tauri-shell link the
 crates below. The OS supplies WKWebView or WebView2; no CEF runtime is part of this shell.
