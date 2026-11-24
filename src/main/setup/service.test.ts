@@ -11,6 +11,7 @@ import ompTested from "../../shared/omp-tested.json";
 import type { SetupItemId, SetupPlatform, SetupPresence, SetupState } from "../../shared/setup";
 import { RM_TEMP, writeFakeOmp } from "../test-fake-omp";
 import { itWithFileSymlinks } from "../test-symlinks";
+import { UPDATE_STEP_MAX_MS, UpdateScheduler } from "../update-scheduler";
 import type { Detection } from "./detect";
 import type { SpawnSpec } from "./plans";
 import { SetupRunner, type SupervisedChild } from "./runner";
@@ -1442,6 +1443,38 @@ process.exit(1);`,
 				expect(mirror.asked.filter(url => url.endsWith(".zip"))).toEqual([]);
 				expect(h.spawned).toEqual([]);
 				expect(h.states).toHaveLength(before);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		// Finding 4 of slice G (docs/rust-node-removal.md): an updater step stopped by its own 30 min bound aborts the
+		// setup step it started (the nested-step fence) but never runs setup's `onStall`, so the installer it started
+		// keeps running and the next install meets it. The core's one queue fixes it (`tools::tests`); this pins today's
+		// defect until T2 deletes this path.
+		it.fails("an updater step stopped by its own bound cancels the update it started, so the next install starts", async () => {
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			try {
+				const h = harness(machine({ gh: missing }), { holdTool: true });
+				const scheduler = new UpdateScheduler({ scheduled: false, tick: async () => {} });
+				const checkMs = 10 * 60_000;
+				// The pass checks for 10 min before it updates, so its bound comes before the setup step's own.
+				const pass = scheduler
+					.enqueue(async () => {
+						const checked = Promise.withResolvers<void>();
+						setTimeout(checked.resolve, checkMs);
+						await checked.promise;
+						await h.service.runToolUpdate(request);
+					})
+					.catch((error: unknown) => error);
+				await vi.advanceTimersByTimeAsync(checkMs);
+				await vi.waitFor(() => expect(h.spawned).toHaveLength(1));
+				const install = h.service.installForConnection("gh").catch((error: unknown) => error);
+				await vi.advanceTimersByTimeAsync(UPDATE_STEP_MAX_MS - checkMs);
+				expect(String(await pass)).toMatch(/was stopped/);
+				// Today: `Error: An install is already running`, and no gh installer ever starts.
+				expect(await install).toMatchObject({ id: "gh", phase: "present" });
+				expect(h.items()).toEqual(["tool", "gh"]);
 			} finally {
 				vi.useRealTimers();
 			}
