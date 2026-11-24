@@ -638,7 +638,7 @@ impl Host {
         &self,
         caller_tab_id: &str,
         tab_id: &str,
-        expected_turn: Option<AutoCloseTurn>,
+        expected_turn: Option<&AutoCloseTurn>,
     ) -> R<bool> {
         let mut args = json!({ "callerTabId": caller_tab_id, "tabId": tab_id });
         if let Some(turn) = expected_turn {
@@ -959,7 +959,7 @@ impl Host {
         tab_id: &str,
         auto: bool,
         close_id: u64,
-        expected_turn: Option<AutoCloseTurn>,
+        expected_turn: Option<&AutoCloseTurn>,
     ) {
         let mut event = json!({ "tabId": tab_id, "how": "close", "closeId": close_id });
         if auto {

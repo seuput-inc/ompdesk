@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AutoCloseTurn } from "../shared/ipc-types";
+import type { AutoCloseTurn, HostCloseTurn } from "../shared/ipc-types";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import type { ClientWindow } from "./web/client-window";
 
@@ -17,18 +17,21 @@ function rig(
 		hosted?: boolean;
 		duringExitPolicy?: () => void;
 		canRelease?: (turn?: AutoCloseTurn) => boolean;
+		closeHostTurn?: (turn: HostCloseTurn | null) => Promise<boolean>;
 	} = {},
 ) {
 	const steps: string[] = [];
+	const sidecar = { closeHostTurn: options.closeHostTurn };
 	const deps: TabReleaseDeps = {
 		sidecarPool: {
-			sidecarForTab: (_win, tabId) => (options.owns === false ? null : ({ tabId } as never)),
+			sidecarForTab: () => (options.owns === false ? null : (sidecar as never)),
 			windowOfTab: () => win(options.viewer ? -2 : -1),
 			detachViewer: (_win, tabId) => {
 				if (options.viewer) steps.push(`detach:${tabId}`);
 				return options.viewer === true;
 			},
 			isHostedView: () => options.hosted === true,
+			canReleaseTab: (_tabId, turn) => options.canRelease?.(turn) ?? true,
 			releaseTab: (tabId, turn) => {
 				steps.push(`release:${tabId}`);
 				return options.canRelease?.(turn) ?? true;
@@ -84,6 +87,43 @@ describe("closeWindowTab", () => {
 		expect(await closeWindowTab(deps, win(-1), "t1", -1, undefined, expected)).toBe(false);
 		expect(steps).toEqual(["exit-policy:t1", "release:t1"]);
 	});
+
+	it("does not ask the host to close a locally stale turn, even if the host would accept", async () => {
+		const { deps, steps } = rig({
+			canRelease: () => false,
+			closeHostTurn: () => {
+				throw new Error("unexpected host close");
+			},
+		});
+		expect(await closeWindowTab(deps, win(-1), "t1", -1, undefined, { pool: 1, entry: 1, turn: 2 })).toBe(false);
+		expect(steps).toEqual(["exit-policy:t1"]);
+	});
+
+	it.each(["refused", "dirty", "replaced", "accepted"] as const)(
+		"keeps the proxy and terminals until host acceptance and a final local check: %s",
+		async outcome => {
+			const sent = Promise.withResolvers<HostCloseTurn | null>();
+			const reply = Promise.withResolvers<boolean>();
+			const expected = { pool: 1, entry: 2, turn: 3, host: { omp: "host-spawn", turn: 7 } };
+			const { deps, steps } = rig({
+				closeHostTurn: turn => {
+					sent.resolve(turn);
+					return reply.promise;
+				},
+			});
+			let clean = true;
+			const closed = closeWindowTab(deps, win(-1), "t1", -1, () => clean, expected);
+			expect(await sent.promise).toEqual(expected.host);
+			expect(steps).toEqual(["exit-policy:t1"]);
+			if (outcome === "dirty") clean = false;
+			if (outcome === "replaced") deps.sidecarPool.sidecarForTab = () => ({}) as never;
+			reply.resolve(outcome !== "refused");
+			expect(await closed).toBe(outcome === "accepted");
+			expect(steps).toEqual(
+				outcome === "accepted" ? ["exit-policy:t1", "release:t1", "terminals:-1:t1"] : ["exit-policy:t1"],
+			);
+		},
+	);
 
 	it("asks stillClosable again after the exit-policy read and keeps the tab when the answer changed meanwhile", async () => {
 		let closable = true;

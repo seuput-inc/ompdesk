@@ -738,6 +738,7 @@ describe("LocalHostServices", () => {
 					cwd: workDir,
 					kind: "agent",
 					omp: expect.any(String),
+					hostTurn: { omp: expect.any(String), turn: 0 },
 				},
 			},
 			{ rtab: "t1", name: "events", arg: [{ type: "agent_start" }] },
@@ -806,7 +807,152 @@ describe("LocalHostServices", () => {
 		// The turn ended while the device was away: the next re-attach says so.
 		sidecar.emit("events", [{ type: "agent_end", messages: [] }]);
 		const after = TabRunArg.parse((await reattach())[0]?.arg);
-		expect(after).toEqual({ running: false, turn: false });
+		expect(after).toEqual({
+			running: false,
+			turn: false,
+			hostTurn: { omp: expect.any(String), turn: 1 },
+			lastRun: { stopReason: "stop" },
+		});
+	});
+
+	it("closes only the observed host outcome even across identical replies in a single batch", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		const open = () => services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		const close = (expectedTurn: unknown) => services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x);
+		await open();
+		const sidecar = sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		const fresh = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		if (!fresh) throw new Error("expected the new omp's initial turn");
+		const turn = [{ type: "agent_start" }, { type: "agent_end", messages: [] }];
+		sidecar.emit("events", [...turn, ...turn]);
+		const first = { ...fresh, turn: 1 };
+		const second = { ...fresh, turn: 2 };
+		expect(x.tabEvents().at(-1)?.arg).toEqual([
+			turn[0],
+			{ ...turn[1], hostTurn: first },
+			turn[0],
+			{ ...turn[1], hostTurn: second },
+		]);
+		await open();
+		expect(TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg)).toMatchObject({
+			hostTurn: second,
+			lastRun: { stopReason: "stop" },
+		});
+		expect(await close(null)).toBe(false);
+		expect(await close(first)).toBe(false);
+		await expect(close({ ...second, typo: true })).rejects.toThrow();
+		sidecar.setStatus("restarting");
+		sidecar.setStatus("ready");
+		sidecar.emit("events", [...turn, ...turn]);
+		expect(await close(second)).toBe(false);
+		await open();
+		const latest = TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg).hostTurn;
+		expect(sidecar.disposed).toBe(false);
+		expect(await close(latest)).toBe(true);
+		expect(sidecar.disposed).toBe(true);
+		expect(await close(null)).toBe(true);
+	});
+
+	it("withholds the previous stamp while waiting for a start, on nonterminal ends, and through auto-retry", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		const open = () => services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		await open();
+		const tab = sidecars[0];
+		if (!tab) throw new Error("expected a sidecar");
+		tab.setStatus("ready");
+		const initial = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		if (!initial) throw new Error("expected the new omp's initial turn");
+		await services.call(x.peer, "tab.command", { rtab: "t", command: { type: "prompt", message: "next" } }, x);
+		const close = (expectedTurn: unknown) => services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x);
+		const withheld = async () => {
+			await open();
+			expect(TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg).hostTurn).toBeUndefined();
+			expect(await close(initial)).toBe(false);
+		};
+		tab.emit("events", [{ type: "agent_end", messages: [] }]);
+		expect(x.tabEvents().at(-1)?.arg).toEqual([{ type: "agent_end", messages: [] }]);
+		await withheld();
+		tab.emit("events", [{ type: "agent_start" }, { type: "agent_end", messages: [], isTerminal: false }]);
+		await withheld();
+		const retry = { type: "auto_retry_start", attempt: 1, maxAttempts: 2, delayMs: 50, errorMessage: "retry" };
+		tab.emit("events", [retry, { type: "agent_end", messages: [] }]);
+		await withheld();
+		const failure = { type: "auto_retry_end", success: false, finalError: "failed" };
+		const hostTurn = { ...initial, turn: 1 };
+		tab.emit("events", [failure]);
+		expect(x.tabEvents().at(-1)?.arg).toEqual([{ ...failure, hostTurn }]);
+		await open();
+		expect(TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg)).toMatchObject({
+			hostTurn,
+			lastRun: { stopReason: "error", errorMessage: "failed" },
+		});
+		const id = services.resumeFacts()[0]?.tabId;
+		if (!id) throw new Error("expected hosted tab's resume id");
+		services.setResuming(id, true);
+		expect(await close(hostTurn)).toBe(false);
+		services.setResuming(id, false);
+		expect(await close(hostTurn)).toBe(true);
+	});
+
+	it("closes the finished turn after coalesced prompts and steers with no separate start", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		await services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		const tab = sidecars[0];
+		if (!tab) throw new Error("expected a sidecar");
+		tab.setStatus("ready");
+		const fresh = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		if (!fresh) throw new Error("expected the new omp's initial turn");
+		const send = (command: RpcCommand) => services.call(x.peer, "tab.command", { rtab: "t", command }, x);
+		await Promise.all(["first", "second"].map(message => send({ type: "prompt", message })));
+		tab.emit("events", [{ type: "agent_start" }]);
+		await send({ type: "steer", message: "correction" });
+		await send({ type: "prompt", message: "another correction", streamingBehavior: "steer" });
+		const end = { type: "agent_end", messages: [] };
+		tab.emit("events", [end]);
+		const expectedTurn = { ...fresh, turn: 1 };
+		expect(x.tabEvents().at(-1)?.arg).toEqual([{ ...end, hostTurn: expectedTurn }]);
+		expect(await services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x)).toBe(true);
+	});
+
+	it("a rejected window prompt releases its own pending start, never a newer one", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		await services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		const tab = sidecars[0];
+		if (!tab) throw new Error("expected a sidecar");
+		tab.setStatus("ready");
+		const expectedTurn = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		const close = () => services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x);
+		const sessionFile = join(workDir, "held.jsonl");
+		tab.emit("session", { sessionId: "s", sessionFile });
+		const view = services.viewSession(sessionFile);
+		const client = view?.rpcClient;
+		if (!view || !client) throw new Error("expected a window view");
+		expect(await close()).toBe(false);
+		const first = Promise.withResolvers<RpcResponse>();
+		const second = Promise.withResolvers<RpcResponse>();
+		vi.spyOn(tab.rpcClient, "command").mockImplementation(async command =>
+			command.type === "prompt"
+				? command.message === "first"
+					? first.promise
+					: second.promise
+				: { type: "response", command: command.type, success: true },
+		);
+		const a = client.command({ type: "prompt", message: "first" });
+		const b = client.command({ type: "prompt", message: "second" });
+		view.dispose();
+		expect(await close()).toBe(false);
+		first.resolve({ type: "response", command: "prompt", success: false, error: "refused" });
+		await a;
+		expect(await close()).toBe(false);
+		second.resolve({ type: "response", command: "prompt", success: false, error: "refused" });
+		await b;
+		expect(await close()).toBe(true);
 	});
 
 	it("runs commands on the tab and re-syncs every tab on this machine after a login", async () => {
@@ -1210,6 +1356,17 @@ describe("LocalHostServices", () => {
 		sidecars[0]?.exited.resolve();
 		await deleting;
 		expect(deleteSession).toHaveBeenCalledWith("/s/x.jsonl");
+	});
+
+	it("does not cancel an open that a conditional close reaches before it finishes", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		const opening = services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		expect(await services.call(x.peer, "tab.close", { rtab: "t", expectedTurn: null }, x)).toBe(false);
+		await opening;
+		expect(sidecars[0]?.disposed).toBe(false);
+		expect(await services.call(x.peer, "tab.close", { rtab: "t" }, x)).toBeNull();
+		expect(sidecars[0]?.disposed).toBe(true);
 	});
 
 	it("a device's close that arrives while its tab is still opening leaves no tab holding the session", async () => {

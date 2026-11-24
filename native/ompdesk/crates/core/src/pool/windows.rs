@@ -406,23 +406,8 @@ impl Ctx {
     ) -> R<Option<i64>> {
         let removed = self.with(|pool| {
             let at = pool.index(tab)?;
-            let entry = &pool.entries[at];
-            if let Some(expected) = expected
-                && (pool.close_turn(entry) != Some(expected)
-                    || !matches!(entry.status.as_str(), "ready" | "asleep")
-                    || entry.busy()
-                    || entry.resuming
-                    || entry.awaiting_connection
-                    || entry.scheduled_retry.is_some()
-                    || entry.tracking.retry.is_some()
-                    || entry.plan_proposal.is_some()
-                    || pool.request_owners.iter().any(|(id, owner)| {
-                        *owner == entry.seq
-                            && pool
-                                .request_bodies
-                                .get(id)
-                                .is_some_and(|ask| ask.kinds.blocking)
-                    }))
+            if let Some(expected) = &expected
+                && !pool.can_release(&pool.entries[at], expected)
             {
                 return None;
             }

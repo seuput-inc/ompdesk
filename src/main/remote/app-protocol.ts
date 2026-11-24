@@ -5,7 +5,8 @@
  *
  * Requests (A → B), served by host-services.ts:
  * - `tab.open {rtab, cwd?, kind?, fresh, sessionPath?}` → TabOpenResult
- * - `tab.start {rtab}`, `tab.restart {rtab, cwd?, sessionPath?}`, `tab.adoptCwd {rtab, cwd}`, `tab.close {rtab}`
+ * - `tab.start {rtab}`, `tab.restart {rtab, cwd?, sessionPath?}`, `tab.adoptCwd {rtab}`
+ * - `tab.close {rtab, expectedTurn?}` → null for an unconditional close (also an old host), boolean for a fenced close
  * - `tab.command {rtab, command, timeoutMs?}` → RpcResponse
  * - `tabs.kept {}` → `{tabs: KeptTab[]}`: the tabs the host keeps for the asking device that no live connection holds
  *   and that are running a turn, settling, waiting on an ask or held for the host's connection (a relaunched device
@@ -509,6 +510,10 @@ export const TabEventMessage = z
 	.refine(event => event.name === "viewEnded" || event.arg !== undefined);
 export type TabEventMessage = z.infer<typeof TabEventMessage>;
 
+export const HostCloseTurnSchema = z
+	.object({ omp: z.string().min(1), turn: z.number().int().nonnegative().safe() })
+	.strict();
+
 /** `status` event argument: the payload plus what A cannot observe itself. */
 export const TabStatusArg = z.object({
 	status: z.enum(["asleep", "starting", "ready", "exited", "error", "restarting"]),
@@ -531,11 +536,16 @@ export const TabStatusArg = z.object({
 	 * lost link keeps what it shows when this is the one it last saw; absent (an older host): treated as new.
 	 */
 	omp: z.string().optional(),
+	hostTurn: HostCloseTurnSchema.optional(),
 });
 export type TabStatusArg = z.infer<typeof TabStatusArg>;
 
 /** `run` event argument: the host's reading of the tab's turn (sidecar-run-state.ts), re-sent on every re-attach. */
 export const TabRunArg = z.object({
+	hostTurn: HostCloseTurnSchema.optional(),
+	lastRun: z
+		.object({ stopReason: z.string(), errorMessage: z.string().optional(), reply: z.string().optional() })
+		.optional(),
 	/** A run is on: a turn in front, or background work (subagents, async jobs) that keeps the session unsettled. */
 	running: z.boolean(),
 	/** A turn runs in front (`running` without it is background work). */

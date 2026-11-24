@@ -177,8 +177,8 @@ Launch(t) ==
 ----------------------------------------------------------------------------
 \* ===== pool events: each is followed by the `sync()` the pool triggers =====
 
-\* @code src/main/ipc.ts:918-921 the person's prompt: personsPrompt -> SidecarPool.notePrompted (host-services.ts:2792-2798 a device's, a view's through its window tab), before the command is sent
-\* @code native/ompdesk/crates/core/src/pool/run.rs:257-262 Tracking::track[agent_start]: agent_start: a new run clears lastRun, stopped, retry
+\* @code src/main/ipc.ts:918-921 the person's prompt: personsPrompt -> SidecarPool.notePrompted (host-services.ts:2866-2872 a device's, a view's through its window tab), before the command is sent
+\* @code native/ompdesk/crates/core/src/pool/run.rs:359-363 Tracking::track[agent_start]: agent_start: a new run clears lastRun, stopped, retry
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts: judge every fact
 UserPrompt(t) ==
     /\ Idle /\ run[t] = "idle" /\ ready /\ nStarts < MaxStarts       \* a prompt reaches an omp that is up (also while a continuation is on its way: A11 closed)
@@ -193,7 +193,7 @@ UserPrompt(t) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<kindOf, sg, awaiting, ready, nO, retryIn, store, resV, monV, rp, bad1, bad2, bad2h, bad6, sentFor, calledOffH, launched, mvV, runSg, bad7, bad8>>
 
-\* @code native/ompdesk/crates/core/src/pool/run.rs:270-276 Tracking::track[agent_end]: agent_end sets lastRun to the run's outcome (the run may still be settling)
+\* @code native/ompdesk/crates/core/src/pool/run.rs:371-375 Tracking::track[agent_end]: agent_end sets lastRun to the run's outcome (the run may still be settling)
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
 EndRun(t, k) ==
     /\ Idle /\ run[t] = "running" /\ last[t] = 0
@@ -204,7 +204,7 @@ EndRun(t, k) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<run, stopped, sg, awaiting, userRun, ready, nStarts, retryIn, store, resV, monV, rp, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/pool/run.rs:114-123 RunState::settle: the run settles (background work done)
+\* @code native/ompdesk/crates/core/src/pool/run.rs:116-125 RunState::settle: the run settles (background work done)
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
 Settle(t) ==
     /\ Idle /\ run[t] = "running" /\ last[t] # 0
@@ -222,7 +222,7 @@ UserStop(t) ==
     /\ UNCHANGED <<run, last, kindOf, sg, awaiting, userRun, ready, nStarts, nO, retryIn, store, resV, monV, rp, bad1, bad2, bad2h, bad6, sentFor, calledOffH, launched, mvV, runSg, pk, rk, bad7, bad8>>
 
 \* @code src/main/turn-resume.ts:255-272 trackMove: a TOUCH_COMMANDS command goes out and is marked in flight (MovesInFlight.begin); `touched` counts it only at its answer
-\* @code src/main/ipc.ts:1151-1160 the window tab's move command; src/main/remote/host-services.ts:2808-2832 a device's
+\* @code src/main/ipc.ts:1151-1160 the window tab's move command; src/main/remote/host-services.ts:2882-2911 a device's
 MoveSend(t, k) ==
     /\ Idle /\ mv[t] = "none" /\ sg[t] < MaxSess
     /\ mv' = [mv EXCEPT ![t] = k]          \* k = "moves": the answer will count (or it times out); "stays": cancelled or failed
@@ -247,7 +247,7 @@ MoveReply(t) ==
 \* Environment: the tab's session moves and no sync() follows (a path that does not tell the resume rules: the model
 \* drops the sync() a held wait's file move now triggers, so the continuations' own re-check must hold without it).
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of: #registerSessionFile: a window tab's file moves (a paired device's switch through a view)
-\* @code src/main/remote/host-services.ts:2427-2437 a device's own hosted tab reports another session file
+\* @code src/main/remote/host-services.ts:2472-2480 a device's own hosted tab reports another session file
 FileMoved(t) ==
     /\ Idle /\ sg[t] + (IF mv[t] = "moves" THEN 1 ELSE 0) < MaxSess
     /\ sg' = [sg EXCEPT ![t] = sg[t] + 1]
