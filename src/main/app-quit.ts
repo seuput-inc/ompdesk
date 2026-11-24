@@ -74,9 +74,14 @@ export function logQuitAsked(asker: QuitAsker, ask?: QuitAsk): void {
 
 /** Quit without asking about running work: the asker already did, or nobody can answer. A relaunch calls `app.relaunch()` first. */
 export function requestQuit(asker: QuitAsker, ask?: QuitAsk): void {
+	approveQuit(asker, ask);
+	shellApp.quit("approved");
+}
+
+/** An approved quit is logged and freezes the run's state; the shell approves a window's restart prompt itself. */
+export function approveQuit(asker: QuitAsker, ask?: QuitAsk): void {
 	logQuitAsked(asker, ask);
 	frozen = true;
-	shellApp.quit("approved");
 }
 
 /** Quit through the shell, which asks first when running work would stop (Continue interrupted work off). */

@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod app_window;
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
@@ -40,6 +41,7 @@ mod update_stage;
 #[cfg(windows)]
 mod window_activation;
 mod window_bounds;
+mod window_state;
 use native_services::diagnostic_logs::feedback_profile;
 use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
@@ -452,13 +454,9 @@ fn give_up_migration(wc: u64, after: migrate_watch::Step, attempt: u32) {
         .page(wc)
         .and_then(|page| page.identity.win);
     if let Some(win) = win {
-        win_event(win, "ready-to-show");
+        ready_to_show(wc, win);
     }
-    wc_event(
-        wc,
-        "preload-error",
-        json!(["profile migration", {"message": reason}]),
-    );
+    preload_error(wc, "profile migration", json!({"message": reason}));
     runtime()
         .migration
         .lock()
@@ -590,9 +588,19 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
         wc_event(wc, "did-stop-loading", json!([]));
         wc_event(wc, "did-finish-load", json!([]));
         if let Some(win) = win {
-            win_event(win, "ready-to-show");
+            ready_to_show(wc, win);
         }
     }
+}
+/// The page painted: Node's `ready-to-show`, and the window's first show (app_window.rs).
+fn ready_to_show(wc: u64, win: u64) {
+    win_event(win, "ready-to-show");
+    app_window::first_paint(wc);
+}
+/// The page's preload, or the shell's setup of the page, failed: Node's `preload-error`, and its runtime log line.
+fn preload_error(wc: u64, path: &str, error: Value) {
+    app_window::preload_failed(wc, path, &error);
+    wc_event(wc, "preload-error", json!([path, error]));
 }
 /// Records a navigation the host itself starts (`loadURL`, the profile gate's hand-over, `reload`): Electron raises no
 /// `will-navigate` for those, so `node_prevents_navigation` tells them from the page's own by their URL.
@@ -675,6 +683,7 @@ fn close_record(wc: u64) {
         migration.failures.remove(&wc);
     }
     let page = runtime().registry.lock().expect("registry").remove(wc);
+    app_window::closed(wc);
     if let Some(page) = page {
         if let Some(win) = page.identity.win {
             host::event(
@@ -708,7 +717,9 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         .expect("registry")
         .create(win, wc)
         .map_err(|e| WireError::new("invalid", e))?;
-    let bounds = screen::with_displays(|snapshot| window_bounds::for_create(options, snapshot));
+    let plan = app_window::plan(options);
+    let bounds =
+        screen::with_displays(|snapshot| window_bounds::for_create(&plan.geometry, snapshot));
     let mut builder = WebviewWindowBuilder::new(
         &runtime().app,
         &label,
@@ -716,8 +727,8 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     )
     .title(options["title"].as_str().unwrap_or("OMPdesk"))
     .inner_size(bounds.width, bounds.height)
-    .visible(options["show"].as_bool().unwrap_or(true))
-    .focused(options["show"].as_bool().unwrap_or(true))
+    .visible(false)
+    .focused(false)
     .disable_drag_drop_handler()
     .theme(theme::for_new_window())
     .initialization_script(&runtime().preload)
@@ -762,28 +773,23 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     if let Some((x, y)) = bounds.position {
         builder = builder.position(x, y);
     }
-    if let (Some(w), Some(h)) = (options["minWidth"].as_f64(), options["minHeight"].as_f64()) {
-        builder = builder.min_inner_size(w, h);
-    }
+    builder = builder.min_inner_size(window_state::MIN_WIDTH, window_state::MIN_HEIGHT);
     #[cfg(target_os = "macos")]
-    if matches!(
-        options["titleBarStyle"].as_str(),
-        Some("hidden" | "hiddenInset")
-    ) {
+    {
         builder = builder
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
-    // Electron's `titleBarStyle: "hidden"` + `titleBarOverlay`: no OS caption; the page draws the caption buttons and its
-    // own top bar is the drag area (`-webkit-app-region`, which WebView2 serves as a non-client region).
+    // No OS caption: the page draws the caption buttons and its own top bar is the drag area (`-webkit-app-region`,
+    // which WebView2 serves as a non-client region).
     #[cfg(windows)]
-    if options["titleBarStyle"].as_str() == Some("hidden") {
+    {
         builder = builder.decorations(false);
     }
-    // `backgroundMaterial: "mica"` (a window that first shows restored on Windows 11): the backdrop shows through the
-    // page where it is transparent (`?mica=1`).
+    // The Mica backdrop (a window that first shows restored on Windows 11) shows through the page where it is
+    // transparent (`?mica=1`).
     #[cfg(windows)]
-    if options["backgroundMaterial"].as_str() == Some("mica") {
+    if plan.mica {
         builder = builder.transparent(true).effects(
             tauri::window::EffectsBuilder::new()
                 .effect(tauri::window::Effect::Mica)
@@ -820,9 +826,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     }
     #[cfg(windows)]
     page_watch::attach(&window, wc);
-    if !options["useContentSize"].as_bool().unwrap_or(false) {
-        apply_size(&window, bounds.width, bounds.height, false)?;
-    }
+    apply_size(&window, bounds.width, bounds.height, false)?;
     let webview = runtime()
         .app
         .get_webview(&label)
@@ -843,11 +847,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         if let Err(error) = result {
             let app = runtime().app.clone();
             let _ = app.run_on_main_thread(move || {
-                wc_event(
-                    wc,
-                    "preload-error",
-                    json!(["native session",{"message":error}]),
-                );
+                preload_error(wc, "native session", json!({"message": error}));
                 destroy_app(wc, None);
             });
         }
@@ -856,6 +856,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
+            app_window::closing(&observer);
             tauri::async_runtime::spawn_blocking(move || {
                 let answer = host::request_blocking(
                     "win.closeRequested",
@@ -906,6 +907,11 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         }
         _ => {}
     });
+    let maximize = plan.maximize;
+    app_window::opened(win, wc, plan);
+    if maximize {
+        win_op(&json!({"winId": win, "op": "maximize", "args": {}}))?;
+    }
     wc_state(wc);
     Ok(json!({"state":win_state(&window,win)?}))
 }
@@ -1079,7 +1085,36 @@ fn dimension(v: &Value, key: &str) -> Result<f64, WireError> {
 /// A `wc.op` the engine answers later.
 enum Later {
     Evaluate(WebviewWindow, String),
-    Crash(WebviewWindow, u64),
+}
+/// Loads `url` in an app window's page with the window's query (app_window.rs), through the profile gate while a
+/// migration is pending.
+fn load_app(wc: u64, window: &WebviewWindow, url: &str) -> Result<(), WireError> {
+    if !trusted_url(url) {
+        return Err(WireError::new(
+            "denied",
+            "app windows cannot load remote pages",
+        ));
+    }
+    let url = app_window::page_url(wc, url);
+    #[cfg(windows)]
+    let url = url.replacen("app://ompdesk", "http://app.localhost", 1);
+    let destination = {
+        let mut migration = runtime().migration.lock().expect("migration");
+        if migration.profile.pending() {
+            migration.targets.insert(wc, url.clone());
+            migration.offers.remove(&wc);
+            migration_step(&mut migration, wc, migrate_watch::Step::Navigate, true);
+            bootstrap_url().to_owned()
+        } else {
+            url
+        }
+    };
+    window
+        .navigate(
+            expect_navigation(wc, &destination)
+                .map_err(|message| WireError::new("invalid", message))?,
+        )
+        .map_err(failed)
 }
 fn wc_op(call: host::Call) {
     let Some(call) = defer_app_load(call) else {
@@ -1091,34 +1126,7 @@ fn wc_op(call: host::Call) {
         let op = string(&call.params, "op")?;
         let a = &call.params["args"];
         match op {
-            "loadURL" => {
-                let url = string(a, "url")?;
-                if !trusted_url(url) {
-                    return Err(WireError::new(
-                        "denied",
-                        "app windows cannot load remote pages",
-                    ));
-                }
-                #[cfg(windows)]
-                let url = url.replacen("app://ompdesk", "http://app.localhost", 1);
-                let destination = {
-                    let mut migration = runtime().migration.lock().expect("migration");
-                    if migration.profile.pending() {
-                        migration.targets.insert(wc, url.to_string());
-                        migration.offers.remove(&wc);
-                        migration_step(&mut migration, wc, migrate_watch::Step::Navigate, true);
-                        bootstrap_url().to_owned()
-                    } else {
-                        url.to_string()
-                    }
-                };
-                window
-                    .navigate(
-                        expect_navigation(wc, &destination)
-                            .map_err(|message| WireError::new("invalid", message))?,
-                    )
-                    .map_err(failed)?;
-            }
+            "loadURL" => load_app(wc, &window, string(a, "url")?)?,
             "reload" | "reloadIgnoringCache" => {
                 if op == "reloadIgnoringCache" {
                     return Err(unsupported(op));
@@ -1165,7 +1173,6 @@ fn wc_op(call: host::Call) {
             "executeJavaScript" => {
                 return Ok(Some(Later::Evaluate(window, string(a, "code")?.to_owned())));
             }
-            "forcefullyCrashRenderer" => return Ok(Some(Later::Crash(window, wc))),
             _ => return Err(unsupported(&format!("wc.op {op}"))),
         }
         Ok(None)
@@ -1175,7 +1182,6 @@ fn wc_op(call: host::Call) {
         Ok(None) => call.ok(json!({})),
         // The engine's own evaluation, outside the page's CSP (evaluate.rs).
         Ok(Some(Later::Evaluate(window, code))) => evaluate::run(&window, call, code),
-        Ok(Some(Later::Crash(window, wc))) => page_watch::crash(&window, wc, call),
     }
 }
 fn dispatch(call: host::Call) {
@@ -1338,11 +1344,20 @@ fn dispatch_ui(call: host::Call) {
         _ => None,
     };
     if let Some(wc) = closing {
+        // Node's own close (`tryClose`: a quit's, a menu's) saves the geometry as the person's close does.
+        if call.method == "win.op"
+            && call.params["op"] == "close"
+            && let Ok(window) = window_for_wc(wc)
+        {
+            app_window::closing(&window);
+        }
         destroy_app(wc, Some(call));
         return;
     }
-    if call.method == "wc.op" {
-        return wc_op(call);
+    match call.method.as_str() {
+        "wc.op" => return wc_op(call),
+        "app.setRunProgress" => return app_window::set_run_progress(call),
+        _ => {}
     }
     let result = match call.method.as_str() {
         "app.init" => {
@@ -1578,6 +1593,11 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                         }
                         wc_state(identity.wc);
                         wc_event(identity.wc, "dom-ready", json!([]));
+                        // Software compositing: the page draws its looping cues still (`html[data-gpu=software]`).
+                        if gpu::disabled() {
+                            let _ = webview
+                                .eval(r#"document.documentElement.dataset.gpu = "software""#);
+                        }
                         Ok(json!({"generation":identity.generation}))
                     })();
                     let _ = send.send(result);
@@ -1626,10 +1646,10 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 }
                 // Reveal the recovery page without settling Node's original app load promise.
                 if let Some(win) = identity.win {
-                    win_event(win, "ready-to-show");
+                    ready_to_show(identity.wc, win);
                 }
             }
-            wc_event(identity.wc, "preload-error", json!(["tauri.js", value]));
+            preload_error(identity.wc, "tauri.js", value);
             Ok(json!({}))
         }
         "invoke" | "send" => {
@@ -2282,11 +2302,9 @@ fn destroy_app(wc: u64, call: Option<host::Call>) {
         match (result, call) {
             (Ok(()), Some(call)) => call.ok(json!({})),
             (Err(error), Some(call)) => call.err(&error.code, error.message),
-            (Err(error), None) => wc_event(
-                wc,
-                "preload-error",
-                json!(["native close",{"message":error.message}]),
-            ),
+            (Err(error), None) => {
+                preload_error(wc, "native close", json!({"message": error.message}))
+            }
             (Ok(()), None) => {}
         }
     });

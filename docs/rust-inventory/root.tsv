@@ -365,8 +365,6 @@ src/main/quit-watchdog.ts	port	2	app-quit's teardown effect arms it (reason quit
 src/main/quota-reset-stock.test.ts	tooling	-	Vitest suite: never waits for a failure stock calls a billing cap, and waits for the limits stock lets pass with time.
 src/main/raw-imports.d.ts	tooling	-	Ambient declarations type Vite *.md?raw and *.png?inline imports in the main bundle; no runtime implementation.
 src/main/redactor.test.ts	tooling	-	Vitest suite: redactDiagnosticsText: credentials.
-src/main/renderer-recovery.test.ts	tooling	-	Vitest suite: renderer crash recovery.
-src/main/renderer-recovery.ts	port	1	WindowManager consumes and clears endedForHang and advances the window's recovery timestamp before reloading. It owns timer cancellation, the resource identity check and the one restart dialog; move with that window state.
 src/main/repo-lock-fence.test.ts	tooling	-	Vitest suite: an effect a stopped holder has not started.
 src/main/retired-prefs.test.ts	tooling	-	Vitest suite: migrateRetiredPrefs.
 src/main/retired-prefs.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore migrates the in-memory SafeStore before returning it or reading themes. Port with prefs initialization so readers cannot see retired keys or stale schedule preferences during a migration.
@@ -425,7 +423,7 @@ src/main/sidecar-factory.test.ts	tooling	-	Vitest suite: localSidecarFactory.
 src/main/sidecar-factory.ts	port	3	The pool spawn callback and paired host need a SidecarManager immediately to attach gates, overlay and frame listeners before start. Installed-omp, settings and builtin pack inputs come from the services injected into the factory; the actual lane is native.
 src/main/sidecar-os-shutdown.test.ts	tooling	-	Vitest suite: omp ended by the Windows session.
 src/main/sidecar-pool.test.ts	tooling	-	Vitest suite: SidecarPool session kind.
-src/main/sidecar-pool.ts	mixed	3	The core owns pool membership and Stop waiter tokens. Main holds live handles, forwards events, and cancels the Stop deadline synchronously when sessionSettled arrives. Moving the timer alone could expire a Stop between two frames that FrameReader.push delivers in one JS turn (§1.3a,c).
+src/main/sidecar-pool.ts	mixed	3	The core owns pool membership, Stop waiter tokens and their deadline (C1). Main holds the live sidecar handles and windows the core asks for, forwards each sidecar event as it is emitted, and runs the one-tick setImmediate before a restart so its own listeners have read the turn's last events (§1.3a,c).
 src/main/sidecar-run-state.test.ts	tooling	-	Vitest suite: a retry saga across a reading.
 src/main/sidecar-run-state.ts	port	3	LocalHostServices updates the hosted run in its events/settle listener and compares runBusy before leaving that delivery. Hosted resume facts and restartOnNewOmp read it immediately; the local pool's own tracker is native pool/run.rs.
 src/main/sidecar-types.ts	port	3	RemoteSidecar and HostedTabView emit VIEW_ENDED_EVENT; the pool and LocalHostServices detach the matching view during delivery. Other exports are types for those handles; there is no process implementation to port separately.
@@ -517,13 +515,11 @@ src/main/updater-install.test.ts	tooling	-	Vitest suite: Restart & install with 
 src/main/updater-state.test.ts	tooling	-	Vitest suite: update repository access.
 src/main/updater-state.ts	mixed	2	The shell hashes the partial, cleans installer debris and stages and verifies the DMG. SingleTransfer, progress and the quit-time swap handoff remain with the owner of UpdateStatus (§1.3a,c).
 src/main/updater.ts	mixed	4	The shell resolves the Downloads destination, sweeps stale files and returns the verified staged bundle. Main owns the live HTTP stream, electron-updater events, quit approval and synchronous install handoff (§1.3a,c).
-src/main/window-chrome.test.ts	tooling	-	Vitest suite: windowChromeOptions.
-src/main/window-chrome.ts	port	1	WindowManager.createWindow consumes chrome options and sends the same Mica decision to the renderer. WINDOW_CHROME_SET validates unknown input before setTitleBarOverlay. Move with window creation and trusted IPC dispatch.
-src/main/window-show.test.ts	tooling	-	Vitest suite: showOnFirstPaint.
-src/main/window-show.ts	port	4	showOnFirstPaint races window ready-to-show with content load to reveal a hidden Electron window.
+src/main/window-chrome.test.ts	tooling	-	Vitest suite: nativeThemeSource, sanitizeChromeColors.
+src/main/window-chrome.ts	port	1	The chrome options and the Mica decision are the shell's (tauri-shell/src/app_window.rs, W1). nativeThemeSource is read with the prefs store at startup and on each theme change; WINDOW_CHROME_SET validates unknown input before setTitleBarOverlay. Move with the prefs owner (B) and trusted IPC dispatch.
 src/main/window-spawn-target.test.ts	tooling	-	Vitest suite: resolveWindowSpawnTarget.
 src/main/window-spawn-target.ts	port	1	After both cwd and workspace lookups, spawnWindow hands the result directly to WindowManager.createWindow and sidecarPool.acquire. The selector owns no I/O; move it with launch orchestration.
-src/main/window.ts	mixed	4	WindowManager creates windows and persists geometry, dialogs, themes and lifetimes. Tauri win.create restores saved bounds using the shell's current display snapshot (tauri-shell/src/window_bounds.rs).
+src/main/window.ts	mixed	4	W1: the shell owns each app window's geometry and window-state.json, chrome and Mica, slot, first show, run progress and renderer recovery with its two dialogs (tauri-shell/src/app_window.rs, window_state.rs, window_bounds.rs); main writes its window.log lines with the window's cwd and answers window.notice in the app's language. WindowManager keeps numbering windows (host.nextWindowId), the pool-facing record and cwd, the close-to-tray decision and the focus/target reads deep links, the menu, the tray and ipc.ts make in the same tick (W2-W4, §1.3a,c).
 src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name order.
 src/main/workspace-fs.test.ts	tooling	-	Vitest suite: workspace file reads, MIME detection, confinement and mutations.
 src/main/workspace-fs.ts	mixed	2	fs.* owns file I/O, caps and MIME detection. IPC and paired web actions also call resolveWithin synchronously. Trash passes the checked path to the shell's recycle operation, not a permanent unlink (§1.3a,c).
