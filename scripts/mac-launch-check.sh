@@ -139,7 +139,11 @@ menu_quit() {
 	local where=$1 port
 	rm -f "$UD/app-started.json"
 	open "$APP"
-	wait_for "test -s '$UD/app-started.json'" 180; check $? "$where: the app started again"
+	wait_for "test -s '$UD/app-started.json'" 180
+	local started=$?
+	check $started "$where: the app started again"
+	# What main logged, when it did not start: the start mark is written only once the first window's page loaded.
+	[ "$started" = 0 ] || evidence "$where: runtime log: $(tail -n 25 "$UD/logs/gui-runtime.jsonl" 2>/dev/null | cut -c1-400 | tr '\n' '|')"
 	wait_for 'port=$(inspector_port)' 60; check $? "$where: main's inspector answers (port ${port:-none})"
 	wait_for "bun '$REPO/scripts/mac-menu-quit.ts' '$port' '$where' > '$W/quit-$where.out' 2>&1" 30
 	check $? "$where: Quit clicked in the menu"
