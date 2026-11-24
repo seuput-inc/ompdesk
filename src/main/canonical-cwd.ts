@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { CoreError, core } from "./core/process";
 
 /**
  * The sidecar reports `process.cwd()`, which is the resolved path (`/private/var/…`
@@ -13,5 +14,15 @@ export function canonicalCwd(cwd: string): string {
 		return realpathSync(cwd);
 	} catch {
 		return cwd;
+	}
+}
+
+/** A failed stat is not a directory. A lost core is not evidence that a saved folder is gone. */
+export async function directoryExists(path: string): Promise<boolean> {
+	try {
+		return (await core().call<{ directory: boolean }>("fs.stat", { path })).result.directory;
+	} catch (error) {
+		if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "io")) return false;
+		throw error;
 	}
 }

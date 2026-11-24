@@ -72,7 +72,7 @@ const LABELS: Record<string, Find> = {
 	"Ctx::release_tab": { file: `${CORE}pool/api.rs`, fn: "release_tab" },
 	"Ctx::register_session_file_of": { file: `${CORE}pool/routes.rs`, fn: "register_session_file_of" },
 	"Ctx::unregister_session_file_of": { file: `${CORE}pool/routes.rs`, fn: "unregister_session_file_of" },
-	"Ctx::acquire_inner": { file: `${CORE}pool/windows.rs`, fn: "acquire_inner" },
+	"Ctx::finish_acquire": { file: `${CORE}pool/windows.rs`, fn: "finish_acquire" },
 	"Ctx::release_entry": { file: `${CORE}pool/windows.rs`, fn: "release_entry" },
 	"Ctx::release_detached": { file: `${CORE}pool/windows.rs`, fn: "release_detached" },
 	"Ctx::feed_session": { file: `${CORE}pool/listen.rs`, fn: "feed_session" },

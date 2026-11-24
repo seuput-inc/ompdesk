@@ -218,17 +218,42 @@ test("a message a busy child had not read survives a relaunch, its done report r
 		expect(queued.text).toContain("Dispatch d2");
 		await quit(first.app);
 		current = undefined;
+		const layoutAtQuit: unknown = await fs
+			.readFile(path.join(profile.desktop, "prefs.json"), "utf8")
+			.then(text => JSON.parse(text).tabLayouts ?? null)
+			.catch(error => ({ readError: String(error) }));
 
 		// The relaunch ends that omp and what it held: the message reaches the child's new omp, once.
 		const second = await launch(profile);
 		current = second.app;
-		const boss = (await tabs(second.page)).find(tab => tab.active)?.tabId ?? "";
+		let lastTabs = await tabs(second.page);
+		const boss = lastTabs.find(tab => tab.active)?.tabId ?? "";
 		// The window lists its restored tabs as they come up; the child's is not necessarily there at the first read.
-		await expect
-			.poll(async () => (await tabs(second.page)).find(tab => tab.sessionPath === childPath)?.tabId ?? "", {
-				timeout: 30_000,
-			})
-			.not.toBe("");
+		try {
+			await expect
+				.poll(
+					async () => {
+						lastTabs = await tabs(second.page);
+						return lastTabs.find(tab => tab.sessionPath === childPath)?.tabId ?? "";
+					},
+					{ timeout: 30_000 },
+				)
+				.not.toBe("");
+		} catch (error) {
+			await test.info().attach("restored-child.json", {
+				contentType: "application/json",
+				body: JSON.stringify({
+					expectedPath: childPath,
+					tabs: lastTabs.map(({ tabId, status, sessionPath }) => ({
+						tabId,
+						status,
+						sessionPath: sessionPath ?? null,
+					})),
+					layoutAtQuit,
+				}),
+			});
+			throw error;
+		}
 		const kid = (await tabs(second.page)).find(tab => tab.sessionPath === childPath)?.tabId ?? "";
 		expect(kid).not.toBe(oldId);
 		await expect

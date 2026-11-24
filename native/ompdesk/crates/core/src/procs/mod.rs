@@ -550,17 +550,61 @@ struct Link {
     command_line: Option<String>,
 }
 
+#[cfg(any(windows, test))]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Attribution {
+    ours: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via_root: Option<usize>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    chain: String,
+}
+
+#[cfg(any(windows, test))]
+fn attribution(rows: &[Row], lineage: &[usize], roots: &[u32], tagged: bool) -> Attribution {
+    use std::fmt::Write as _;
+
+    let mut chain = String::new();
+    let mut via_root = None;
+    for &index in lineage {
+        let row = &rows[index];
+        if via_root.is_none() {
+            via_root = roots.iter().position(|&pid| pid == row.pid);
+        }
+        if !chain.is_empty() {
+            chain.push_str(" < ");
+        }
+        write!(chain, "{}({})", row.name, row.pid).expect("writing to a String");
+    }
+    Attribution {
+        ours: tagged || via_root.is_some(),
+        via_root,
+        chain,
+    }
+}
+
+#[cfg(windows)]
+#[derive(Serialize)]
+struct ConsoleRow {
+    window: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    facts: Option<ConsoleFacts>,
+}
+
 #[cfg(windows)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ConsoleRow {
-    window: u64,
+struct ConsoleFacts {
     pid: u32,
     class: &'static str,
     title: String,
-    /// The window's process and its ancestors, nearest first.
+    #[serde(flatten)]
+    attribution: Attribution,
     #[serde(skip_serializing_if = "Option::is_none")]
-    chain: Option<Vec<Link>>,
+    process: Option<Link>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_cmd: Option<String>,
     /// The session tag in that process's environment.
     #[serde(skip_serializing_if = "Option::is_none")]
     tag: Option<String>,
@@ -586,52 +630,58 @@ async fn consoles(params: ConsolesParams) -> Result<Vec<ConsoleRow>, Fault> {
             Snapshot::take()?.rows
         };
         let env: Vec<u16> = params.env.encode_utf16().collect();
-        let link = |index: usize, with_line: bool| {
+        let command = |index: usize| {
+            let line = rows[index].process.as_ref()?.command_line()?;
+            Some(String::from_utf16_lossy(
+                &line[..line.len().min(COMMAND_LINE_UNITS)],
+            ))
+        };
+        let link = |index: usize| {
             let row = &rows[index];
-            let line = with_line
-                .then(|| row.process.as_ref()?.command_line())
-                .flatten();
             Link {
                 pid: row.pid,
                 name: row.name.clone(),
                 started_ms: row.started_ms,
-                command_line: line.map(|line| {
-                    String::from_utf16_lossy(&line[..line.len().min(COMMAND_LINE_UNITS)])
-                }),
+                command_line: command(index),
             }
         };
+        let mut recent = None;
         Ok(windows
             .into_iter()
             .map(|window| {
-                let fresh = !known(&window);
-                let chain = if fresh {
-                    lineage(&rows, window.pid)
-                } else {
-                    Vec::new()
-                };
+                let handle = window.window as u64;
+                if known(&window) {
+                    return ConsoleRow {
+                        window: handle,
+                        facts: None,
+                    };
+                }
+                let chain = lineage(&rows, window.pid);
+                let tag = chain
+                    .first()
+                    .and_then(|&index| rows[index].process.as_ref()?.environment())
+                    .and_then(|block| block_tag(&block, &env));
+                let attribution = attribution(&rows, &chain, &params.roots, tag.is_some());
+                let recent = (!attribution.ours).then(|| {
+                    recent
+                        .get_or_insert_with(|| recent_starts(&rows, &params.roots, params.since_ms))
+                        .iter()
+                        .copied()
+                        .filter(|&index| rows[index].pid != window.pid)
+                        .map(link)
+                        .collect()
+                });
                 ConsoleRow {
-                    window: window.window as u64,
-                    pid: window.pid,
-                    class: window.class,
-                    title: window.title,
-                    tag: chain
-                        .first()
-                        .and_then(|&index| rows[index].process.as_ref()?.environment())
-                        .and_then(|block| block_tag(&block, &env)),
-                    recent: fresh.then(|| {
-                        recent_starts(&rows, &params.roots, params.since_ms)
-                            .into_iter()
-                            .filter(|&index| rows[index].pid != window.pid)
-                            .map(|index| link(index, true))
-                            .collect()
-                    }),
-                    // Who started it reads off the window's process and its parent; further up the names do.
-                    chain: fresh.then(|| {
-                        chain
-                            .iter()
-                            .enumerate()
-                            .map(|(depth, &index)| link(index, depth < 2))
-                            .collect()
+                    window: handle,
+                    facts: Some(ConsoleFacts {
+                        pid: window.pid,
+                        class: window.class,
+                        title: window.title,
+                        attribution,
+                        process: chain.first().copied().map(link),
+                        parent_cmd: chain.get(1).copied().and_then(command),
+                        tag,
+                        recent,
                     }),
                 }
             })
@@ -2016,6 +2066,46 @@ mod tests {
         assert!(recent_starts(&rows, &[20], 0).is_empty());
     }
 
+    #[test]
+    fn attributes_windows_like_the_captured_watch_lines() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("console-attribution.json")).unwrap();
+        let roots = [200, 100, 300];
+        let project = |links: &[(u32, &str)], tagged| {
+            let rows: Vec<_> = links
+                .iter()
+                .map(|&(pid, name)| Row {
+                    pid,
+                    name: name.into(),
+                    ..Row::default()
+                })
+                .collect();
+            let chain: Vec<_> = (0..rows.len()).collect();
+            serde_json::to_value(attribution(&rows, &chain, &roots, tagged)).unwrap()
+        };
+        assert_eq!(
+            project(
+                &[
+                    (900, "git.exe"),
+                    (300, "ompdesk-core.exe"),
+                    (200, "node.exe"),
+                    (100, "OMPdesk.exe"),
+                ],
+                false,
+            ),
+            cases[0]
+        );
+        assert_eq!(
+            project(
+                &[(5000, "WindowsTerminal.exe"), (800, "svchost.exe")],
+                false
+            ),
+            cases[1]
+        );
+        assert_eq!(project(&[(700, "cmd.exe")], true), cases[2]);
+        assert_eq!(project(&[], true), cases[3]);
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn says_whose_a_console_window_is_only_while_it_is_new() {
@@ -2026,19 +2116,12 @@ mod tests {
             since_ms: 0,
         };
         let first = consoles(ask(Vec::new())).await.unwrap();
-        assert!(
-            first
-                .iter()
-                .all(|row| row.chain.is_some() && row.recent.is_some())
-        );
+        assert!(first.iter().all(|row| row.facts.is_some()));
         let known: Vec<u64> = first.iter().map(|row| row.window).collect();
         let again = consoles(ask(known.clone())).await.unwrap();
-        assert!(
-            again
-                .iter()
-                .filter(|row| known.contains(&row.window))
-                .all(|row| row.chain.is_none() && row.tag.is_none() && row.recent.is_none())
-        );
+        for row in again {
+            assert_eq!(row.facts.is_none(), known.contains(&row.window));
+        }
     }
 
     #[test]
