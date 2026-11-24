@@ -593,9 +593,10 @@ async fn a_running_child_is_read_again_only_when_it_moved_and_a_list_went_out() 
 
 #[tokio::test]
 async fn an_opener_s_closed_tab_closes_its_resting_children_only() {
-    let child = |id: &str, extra: Value| {
+    let child = |id: &str, entry: u64, extra: Value| {
         let mut tab = tab(id, &format!("/s/{id}.jsonl"));
         tab["autoClosable"] = json!(true);
+        tab["closeTurn"] = json!({ "pool": 1, "entry": entry, "turn": 0 });
         for (key, value) in extra.as_object().unwrap() {
             tab[key] = value.clone();
         }
@@ -603,9 +604,9 @@ async fn an_opener_s_closed_tab_closes_its_resting_children_only() {
     };
     let mut family = state(vec![
         tab("boss", "/s/boss.jsonl"),
-        child("rest", json!({})),
-        child("busy", json!({ "busy": true })),
-        child("seen", json!({ "looked": true })),
+        child("rest", 2, json!({})),
+        child("busy", 3, json!({ "busy": true })),
+        child("seen", 4, json!({ "looked": true })),
     ]);
     family["parents"] = json!({
         "rest": { "callerTabId": "boss" },
