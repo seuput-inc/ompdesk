@@ -246,8 +246,8 @@ export interface AutopilotSource {
 	stop(tabId: string, now: boolean): Promise<AutopilotStatus>;
 }
 
-/** An open tab and the window it is in (any stable key for the window: its id). */
-export type HostTab = ControlTab & { window: string };
+/** An open tab and the window it is in (any stable key for the window: its id), and the session that opened it, if any. */
+export type HostTab = ControlTab & { window: string; opener?: string };
 
 /** What the receiver's bridge says of message markers (`agent_control_sent`): its instance and the marks its journal holds. */
 export interface SentAnswer {
@@ -346,8 +346,6 @@ export interface AgentControlHost {
 	summaries(device?: string): readonly SessionSummary[];
 	/** `agentControlManage` (default on) or full control: an agent may stop or close sessions it did not open, merge, schedule and start Autopilot without a card; deleting a saved session it did not open asks unless full control is on. */
 	manageEnabled(): boolean;
-	/** The session that opened `tabId` (`ompdesk_session_open`), if any. */
-	parentOf(tabId: string): string | undefined;
 	/** The tag the open carried (Autopilot passes `autopilot-child`), if any. */
 	parentTag?(tabId: string): string | undefined;
 	/** The sessions working in `tabId`'s checkout or another worktree of its repository on this computer (`checkout-peers.ts`); `ompdesk_report` may go to them. */
@@ -970,20 +968,19 @@ export class AgentControl {
 		const hosted = host.tabs();
 		const tabs: ControlTab[] = [];
 		const windowOf: Record<string, string> = {};
-		for (const { window, ...tab } of hosted) {
+		const parents: HostSnapshot["parents"] = {};
+		for (const { window, opener, ...tab } of hosted) {
 			tabs.push(tab);
 			windowOf[tab.tabId] = window;
+			if (opener !== undefined) {
+				const tag = host.parentTag?.(tab.tabId);
+				parents[tab.tabId] = { callerTabId: opener, ...(tag === undefined ? {} : { tag }) };
+			}
 		}
 		const devices = host.devices();
-		const parents: HostSnapshot["parents"] = {};
 		const checkoutPeers: HostSnapshot["checkoutPeers"] = {};
 		const stopping: string[] = [];
 		for (const tab of tabs) {
-			const parent = host.parentOf(tab.tabId);
-			if (parent !== undefined) {
-				const tag = host.parentTag?.(tab.tabId);
-				parents[tab.tabId] = { callerTabId: parent, ...(tag === undefined ? {} : { tag }) };
-			}
 			const peers = host.checkoutPeers?.(tab.tabId) ?? [];
 			if (peers.length > 0) checkoutPeers[tab.tabId] = [...peers];
 			if (host.isStopping?.(tab.tabId) === true) stopping.push(tab.tabId);

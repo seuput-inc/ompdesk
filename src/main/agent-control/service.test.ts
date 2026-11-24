@@ -174,6 +174,7 @@ class FakeHost implements AgentControlHost {
 					? { closeTurn: { pool: 1, entry, turn, host: hostTurn } }
 					: {}),
 				window: here ? "main" : "other",
+				...(this.parents.has(own.tabId) ? { opener: this.parents.get(own.tabId) } : {}),
 			};
 		});
 	isStopping = (callerTabId: string) => this.stopping.has(callerTabId);
@@ -442,7 +443,6 @@ class FakeHost implements AgentControlHost {
 	judgeError: string | null = null;
 
 	parents = new Map<string, string>();
-	parentOf = (tabId: string) => this.parents.get(tabId);
 	/** Sessions sharing each tab's checkout (main's checkout-peers coordinator). */
 	peers = new Map<string, string[]>();
 	checkoutPeers = (tabId: string) => this.peers.get(tabId) ?? [];

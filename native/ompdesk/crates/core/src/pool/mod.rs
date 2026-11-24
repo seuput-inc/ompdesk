@@ -437,6 +437,7 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "windowOfTab" => now(ctx.window_of_tab(&p.s("tab").unwrap_or_default())),
         "windowsShowingTab" => now(ctx.windows_showing_tab(&p.s("tab").unwrap_or_default())),
         "tabWindows" => now(ctx.tab_windows()),
+        "controlTabs" => later(async move { ctx.control_tabs().await }),
         "extensionUiState" => now(ctx.extension_ui_state(p.i("win").unwrap_or(0))),
         "openRequests" => now(ctx.open_requests(p.i("win").unwrap_or(0))),
         "broadcastTargets" => now(ctx.broadcast_targets()),
