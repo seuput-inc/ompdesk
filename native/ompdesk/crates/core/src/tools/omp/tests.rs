@@ -337,6 +337,7 @@ fn harness_in(opt: Opt, dir: Rc<tempfile::TempDir>, stock: Rc<RefCell<Stock>>) -
         Box::pin(async move { detection })
     }));
     tools.setup.borrow_mut().seams = seams;
+    super::super::cli::offline(&tools);
     H { tools, w, dir }
 }
 

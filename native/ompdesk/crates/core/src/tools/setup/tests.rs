@@ -419,6 +419,7 @@ fn harness_in(dir: &Path, found: Machine, options: Options, mirror: Option<&Mirr
         run: Some(run),
         omp_release: options.omp_release.clone(),
     };
+    crate::tools::cli::offline(&tools);
     H {
         tools,
         main,

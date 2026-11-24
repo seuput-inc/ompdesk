@@ -306,6 +306,7 @@ fn tools(manual: bool) -> (Rc<Tools>, Rc<Recorder>) {
     tools.setup.borrow_mut().seams.detect = Some(Rc::new(|| {
         Box::pin(async { super::setup::Detection::default() })
     }));
+    super::cli::offline(&tools);
     (tools, main)
 }
 
