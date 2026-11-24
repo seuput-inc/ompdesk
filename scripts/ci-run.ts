@@ -84,25 +84,43 @@ export function refAllowed(ref: string, macRefs: string): boolean {
 export interface LaneJob {
 	status: string;
 	labels: string[];
+	name?: string;
 }
 
 export interface LaneRun {
 	id: number;
 	workflow: string;
 	branch: string;
+	/** The run's display title: each LANE_WORKFLOWS `run-name` names the inputs that ask for macOS. */
+	title?: string;
 	jobs: LaneJob[];
 }
 
 export interface Lane {
 	/** Runs whose macOS jobs are queued or running: they hold the lane. */
 	holders: LaneRun[];
-	/** Runs with jobs held back by a concurrency group (GitHub's `pending`; such a job shows no runner label yet, observed on run 43443610875). */
+	/**
+	 * Runs with jobs held back by a concurrency group (GitHub's `pending`; such a job shows no runner label yet, observed
+	 * on run 43443610875), and runs that asked for macOS whose macOS jobs do not exist yet: GitHub makes a job only once
+	 * its `needs` are done, so a run still in its gate shows none (run 45436987620's request was replaced 13 s after its
+	 * dispatch by one that saw no request).
+	 */
 	waiting: LaneRun[];
 	/** Open macOS jobs of the dispatched runs. */
 	openJobs: number;
 }
 
 const isMac = (job: LaneJob) => job.labels.some(label => label.startsWith("macos"));
+
+/** Whether a dispatched run asked for macOS, read from its title (the `run-name` of ci.yml and flake-probe.yml). */
+export function runAsksForMac(workflow: string, title: string): boolean {
+	if (workflow === "ci") return asksForMac("ci", { mac: /^ci \[[^\]]*\bmac\b/.test(title) ? "true" : "" });
+	if (workflow === "flake-probe") {
+		const probe = /^flake (\S*) ×\S* \((\w*)\)$/.exec(title);
+		return probe ? asksForMac("flake-probe", { spec: probe[1] ?? "", os: probe[2] ?? "" }) : true;
+	}
+	return asksForMac(workflow, {});
+}
 
 /** The lane as the dispatched runs show it. A run of the same workflow and branch is the one a new dispatch replaces anyway. */
 export function laneOf(runs: LaneRun[], replacing: { workflow: string; branch: string }): Lane {
@@ -111,9 +129,13 @@ export function laneOf(runs: LaneRun[], replacing: { workflow: string; branch: s
 		if (run.workflow === replacing.workflow && run.branch === replacing.branch) continue;
 		const active = run.jobs.filter(job => isMac(job) && (job.status === "queued" || job.status === "in_progress"));
 		const pending = run.jobs.filter(job => job.status === "pending");
+		const arriving =
+			run.title !== undefined &&
+			runAsksForMac(run.workflow, run.title) &&
+			!run.jobs.some(job => isMac(job) || /mac/i.test(job.name ?? ""));
 		lane.openJobs += active.length;
 		if (active.length > 0) lane.holders.push(run);
-		else if (pending.length > 0) lane.waiting.push(run);
+		else if (pending.length > 0 || arriving) lane.waiting.push(run);
 	}
 	return lane;
 }
@@ -174,17 +196,26 @@ function readLane(replacing: { workflow: string; branch: string }): Lane {
 			`repos/{owner}/{repo}/actions/workflows/${workflow}.yml/runs?event=workflow_dispatch&per_page=30`,
 		]);
 		if (!listed.ok) fail(`could not list ${workflow} runs: ${listed.err}`, 1);
-		const rows = (JSON.parse(listed.out) as { workflow_runs: { id: number; status: string; head_branch: string }[] })
-			.workflow_runs;
+		const rows = (
+			JSON.parse(listed.out) as {
+				workflow_runs: { id: number; status: string; head_branch: string; display_title?: string }[];
+			}
+		).workflow_runs;
 		for (const row of rows.filter(candidate => candidate.status !== "completed")) {
 			const jobs = gh([
 				"api",
 				`repos/{owner}/{repo}/actions/runs/${row.id}/jobs?per_page=100`,
 				"--jq",
-				"[.jobs[] | {status, labels}]",
+				"[.jobs[] | {status, labels, name}]",
 			]);
 			if (!jobs.ok) fail(`could not list the jobs of run ${row.id}: ${jobs.err}`, 1);
-			runs.push({ id: row.id, workflow, branch: row.head_branch, jobs: JSON.parse(jobs.out) as LaneJob[] });
+			runs.push({
+				id: row.id,
+				workflow,
+				branch: row.head_branch,
+				title: row.display_title,
+				jobs: JSON.parse(jobs.out) as LaneJob[],
+			});
 		}
 	}
 	return laneOf(runs, replacing);

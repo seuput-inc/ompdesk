@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { asksForMac, decide, type LaneRun, laneOf, parseArgs, refAllowed } from "./ci-run";
+import { asksForMac, decide, type LaneRun, laneOf, parseArgs, refAllowed, runAsksForMac } from "./ci-run";
 
 const run = (id: number, workflow: string, branch: string, ...statuses: string[]): LaneRun => ({
 	id,
@@ -108,6 +108,36 @@ describe("ci-run lane", () => {
 		expect(decide({ workflow: "ci", inputs: { mac: "true" }, replace: true }, "mine", "mine", lane)).toEqual({
 			go: true,
 		});
+	});
+
+	it("counts a run that asked for macOS but has no macOS job yet (still in its gate) as waiting", () => {
+		const gate = [{ status: "in_progress", labels: ["ubuntu-latest"], name: "gate / gate" }];
+		const arriving: LaneRun = { id: 45436987620, workflow: "ci", branch: "b", title: "ci [batch mac ]", jobs: gate };
+		const lane = laneOf([arriving], mine);
+		expect(lane.waiting.map(r => r.id)).toEqual([45436987620]);
+		expect(decide({ workflow: "shell-batch-checks", inputs: {}, replace: false }, "w", "w", lane)).toMatchObject({
+			go: false,
+			code: 3,
+		});
+		// Not a request: a run without macOS, a shell run whose macOS jobs GitHub has made (and skipped), a Windows probe.
+		const skipped = [...gate, { status: "completed", labels: [], name: "tauri-native (macos-15)" }];
+		expect(
+			laneOf(
+				[
+					{ ...arriving, id: 1, title: "ci [batch ]" },
+					{
+						id: 2,
+						workflow: "shell-batch-checks",
+						branch: "c",
+						title: "shell-batch-checks [mac only=]",
+						jobs: skipped,
+					},
+					{ id: 3, workflow: "flake-probe", branch: "d", title: "flake e2e/a.e2e.ts ×5 (all)", jobs: gate },
+				],
+				mine,
+			).waiting,
+		).toEqual([]);
+		expect(runAsksForMac("flake-probe", "flake src/a.test.ts ×5 (macos)")).toBe(true);
 	});
 });
 
