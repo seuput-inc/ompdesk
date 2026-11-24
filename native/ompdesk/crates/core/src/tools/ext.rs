@@ -19,7 +19,6 @@
 //! say), `ext.rescan` (list again without checking), `ext.prefChanged` (`toolsAutoUpdate` changed: turning it on
 //! checks at once).
 
-mod cli_seam;
 mod owner;
 #[cfg(test)]
 mod tests;
@@ -32,14 +31,15 @@ use serde_json::{Value, json};
 
 use super::queue::{Answer, Ctx, StepKind};
 use super::setup::{ToolUpdateOutcome, ToolUpdateRequest, run_tool_update};
+use super::spawn::{
+    self, CliCommand, Env, InstallContext, PlanTools, find_brew, is_newer, parse_omp_version,
+    spawn_spec,
+};
 use super::{Backoff, Tools, queued};
 use crate::control::js::string_of_value;
 use crate::ext::plan;
 use crate::hub::{LocalFuture, Outcome, params};
 use crate::server::Fault;
-use cli_seam::{
-    CliCommand, Env, InstallContext, PlanTools, find_brew, is_newer, parse_omp_version, spawn_spec,
-};
 use owner::{McpBinary, OwnerDeps, RunnerPackage};
 
 /// Inventory, check and refresh: local files or one registry round trip.
@@ -196,7 +196,7 @@ impl Default for Deps {
                 Box::pin(async move { owner::detect(command, &deps).await })
             }),
             run_check: Rc::new(|command, env| {
-                Box::pin(async move { cli_seam::run_check(&command, &env).await })
+                Box::pin(async move { spawn::run_check(&command, &env).await })
             }),
             run_update: Rc::new(|tools, ctx, request| {
                 Box::pin(async move { run_tool_update(&tools, &ctx, request).await })

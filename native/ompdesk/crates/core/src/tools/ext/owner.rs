@@ -10,7 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::cli_seam::{
+use super::super::spawn::{
     CliCommand, Env, InstallContext, PlanTools, brew_bin_dirs, bun_view, command, executable_name,
     find_on_path, launcher_names, npm_bin, owner_check_command, owner_update_command, parse_latest,
     probe_output, read_install,

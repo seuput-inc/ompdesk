@@ -14,7 +14,8 @@ use super::{Backoff, CHECK_INTERVAL_MS, Main, Tools, call_tools, next_check_dela
 use crate::hub::{LocalFuture, Outcome};
 use crate::server::Fault;
 
-/// Main as a test sees it: every item, in order; `env` answers this process's environment.
+/// Main as a test sees it: every item, in order; `env` answers an empty environment (no PATH: a tool CLI listing finds
+/// nothing of this machine's).
 #[derive(Default)]
 struct Recorder {
     items: RefCell<Vec<Value>>,
@@ -27,7 +28,7 @@ impl Main for Recorder {
 
     fn ask(&self, q: &str, _: Value) -> LocalFuture<Result<Value, Fault>> {
         let answer = match q {
-            "env" => Ok(json!(std::env::vars().collect::<BTreeMap<_, _>>())),
+            "env" => Ok(json!({})),
             _ => Err(Fault::new("no_answer", q.to_owned())),
         };
         Box::pin(async move { answer })

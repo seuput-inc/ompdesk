@@ -11,10 +11,10 @@ use serde_json::{Value, json};
 use super::paths::{
     dirname, find_git_bash, host_join, managed_agent_desktop, omp_bun_minimum, omp_package_root,
 };
-use super::spawn_seam::{brew_bin_dirs, executable_name, find_on_path, is_newer};
 use super::{ITEMS, Presence, exec, git_aslr};
 use crate::server::Scope;
 use crate::tools::Tools;
+use crate::tools::spawn::{brew_bin_dirs, executable_name, find_on_path, is_newer};
 
 /// `AGENT_DESKTOP_MIN_VERSION`: no `agent-desktop mcp` before it.
 pub const AGENT_DESKTOP_MIN_VERSION: &str = "1.2.0";
@@ -289,13 +289,13 @@ async fn detect_git(
     }
     // /usr/bin/git is a stub until the Command Line Tools exist; running it then opens Apple's install dialog.
     let names = ["git".to_owned()];
-    if let Some(git) = find_on_path(
-        &names,
-        path_env,
-        platform,
-        &[],
-        &["/usr/bin/git".to_owned()],
-    ) {
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    let path_env = path_env
+        .split(separator)
+        .filter(|dir| Path::new(dir) != Path::new("/usr/bin"))
+        .collect::<Vec<_>>()
+        .join(separator);
+    if let Some(git) = find_on_path(&names, &path_env, platform, &[]) {
         return version_of(&git, env).await;
     }
     if platform != "darwin" {
@@ -424,7 +424,6 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
             "bin",
             &executable_name("bun", platform),
         ])],
-        &[],
     );
     let brew = if win {
         None
@@ -437,7 +436,6 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
                 "/opt/homebrew/bin/brew".to_owned(),
                 "/usr/local/bin/brew".to_owned(),
             ],
-            &[],
         )
     };
     let winget = if win {
@@ -447,7 +445,7 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
             .map(|(_, local)| host_join(&[local, "Microsoft", "WindowsApps", "winget.exe"]))
             .into_iter()
             .collect();
-        find_on_path(&["winget.exe".to_owned()], &path_env, platform, &apps, &[])
+        find_on_path(&["winget.exe".to_owned()], &path_env, platform, &apps)
     } else {
         None
     };
@@ -455,13 +453,13 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
     let brew_gh: Vec<String> = if win {
         Vec::new()
     } else {
-        brew_bin_dirs(&env)
+        brew_bin_dirs()
             .iter()
             .map(|dir| host_join(&[dir, "gh"]))
             .collect()
     };
-    let gh = find_on_path(&exe("gh"), &path_env, platform, &brew_gh, &[]);
-    let node = find_on_path(&exe("node"), &path_env, platform, &[], &[]);
+    let gh = find_on_path(&exe("gh"), &path_env, platform, &brew_gh);
+    let node = find_on_path(&exe("node"), &path_env, platform, &[]);
     let found = |bin: Option<String>| {
         let env = &env;
         async move {

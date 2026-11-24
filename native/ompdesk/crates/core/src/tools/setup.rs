@@ -35,7 +35,6 @@ mod git_aslr;
 mod ledger;
 mod paths;
 mod plans;
-mod spawn_seam;
 #[cfg(test)]
 mod tests;
 
@@ -50,16 +49,15 @@ use serde_json::{Value, json};
 
 use super::queue::{Ctx, StepKind};
 use super::runner::{FailedBy, Ran, RunOutcome, SpawnSpec, push_tail};
+use super::spawn::{is_newer, spawn_spec};
 use super::{Opts, Tools, queued};
 use crate::control::js::string_of_value;
 use crate::hub::{LocalFuture, Outcome, params};
 use crate::server::{Fault, Scope};
 pub use detect::Detection;
 use ledger::Ledger;
-#[allow(unused_imports)] // the CLI part's PATH reads these (T2.4)
 pub(crate) use paths::managed_bin_dirs;
 use plans::{OmpNpm, PlanContext, PlanDownload, Release, TESTED_OMP_VERSION};
-use spawn_seam::{is_newer, spawn_spec};
 
 pub type Env = BTreeMap<String, String>;
 
@@ -876,7 +874,7 @@ async fn install_each(tools: &Rc<Tools>, ctx: &Ctx, items: &[&'static str], manu
 }
 
 /// The ompNpm of a detected omp Bun does not manage (`#ompNpm`).
-fn omp_npm(tools: &Tools, detection: &Detection) -> Option<OmpNpm> {
+async fn omp_npm(tools: &Tools, detection: &Detection) -> Option<OmpNpm> {
     let omp = detection.omp.as_deref()?;
     if paths::omp_bun_root(omp).is_some() {
         return None;
@@ -887,6 +885,7 @@ fn omp_npm(tools: &Tools, detection: &Detection) -> Option<OmpNpm> {
         &tools.opts.tools_dir,
         &detection.path_env,
     )
+    .await
 }
 
 /// `#planContext`: setup's own install is the omp this OMPdesk was tested with.
@@ -952,7 +951,7 @@ async fn ensure_once(
         return None;
     }
     let npm = if id == "omp" {
-        omp_npm(tools, &detection)
+        omp_npm(tools, &detection).await
     } else {
         None
     };
@@ -1836,7 +1835,7 @@ pub async fn update_omp(
     let Some(omp) = detection.omp.clone() else {
         return OmpUpdateOutcome::Skipped;
     };
-    let npm = omp_npm(tools, &detection);
+    let npm = omp_npm(tools, &detection).await;
     let mut plan_ctx = plan_context(tools, &detection, npm);
     if tools.is_closed() {
         return OmpUpdateOutcome::Skipped;

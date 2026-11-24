@@ -78,6 +78,7 @@ mod omp;
 mod queue;
 mod runner;
 mod setup;
+mod spawn;
 #[cfg(test)]
 mod tests;
 
@@ -290,6 +291,11 @@ impl Tools {
         *self.closed.borrow()
     }
 
+    /// The launch began (`start` ran; setup's first pass may still run).
+    pub fn is_started(&self) -> bool {
+        self.started.get()
+    }
+
     pub fn state(&self) -> Value {
         json!({
             "setup": setup::state(self),
@@ -335,12 +341,16 @@ impl Tools {
         self.pref("toolsAutoUpdate") != Some(Value::Bool(false))
     }
 
+    /// Main's spawn environment (`env`), without the proxy.
+    pub async fn base_env(&self) -> Result<BTreeMap<String, String>, Fault> {
+        let base = self.ask("env", json!({})).await?;
+        serde_json::from_value(base).map_err(|error| Fault::new("tools_env", error.to_string()))
+    }
+
     /// The environment an install or a check runs with: main's (`env`) plus the proxy the core picks
     /// (`resolveProxyEnvForSpawn`); a late system lookup is logged as main logged it.
     pub async fn spawn_env(&self) -> Result<BTreeMap<String, String>, Fault> {
-        let base = self.ask("env", json!({})).await?;
-        let mut env: BTreeMap<String, String> = serde_json::from_value(base)
-            .map_err(|error| Fault::new("tools_env", error.to_string()))?;
+        let mut env = self.base_env().await?;
         for (name, value) in self.proxy().await.env {
             if let Value::String(value) = value {
                 env.insert(name, value);
@@ -407,6 +417,10 @@ impl Tools {
                 if on {
                     first.spawn_task(schedule(Rc::downgrade(&first), updater));
                 }
+            }
+            if !scheduled.cli {
+                // A launch that does not check on a timer still lists the tool CLIs (`CliUpdater.start`).
+                cli::start(&first);
             }
             // A launch that does not schedule lists the extensions once, checking nothing.
             if !scheduled.ext {

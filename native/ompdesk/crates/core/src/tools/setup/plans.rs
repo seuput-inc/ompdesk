@@ -9,9 +9,9 @@ use serde_json::Value;
 
 use super::Presence;
 use super::paths::{dirname, host_join, join, managed_agent_desktop_dir, managed_git_root};
-use super::spawn_seam::{InstallContext, npm_for, read_install, spawn_spec};
 use crate::fs::path::normalize_win32;
 use crate::tools::runner::SpawnSpec;
+use crate::tools::spawn::{InstallContext, PlanTools, npm_for, read_install, spawn_spec};
 
 pub const OMP_PACKAGE: &str = "@oh-my-pi/pi-coding-agent";
 
@@ -73,7 +73,12 @@ pub struct OmpNpm {
 }
 
 /// The npm install that owns the omp launcher `bin` (`ompNpmOwner`), or none for any other omp.
-pub fn omp_npm_owner(bin: &str, platform: &str, tools_dir: &str, path_env: &str) -> Option<OmpNpm> {
+pub async fn omp_npm_owner(
+    bin: &str,
+    platform: &str,
+    tools_dir: &str,
+    path_env: &str,
+) -> Option<OmpNpm> {
     if platform == "other" {
         return None;
     }
@@ -85,7 +90,9 @@ pub fn omp_npm_owner(bin: &str, platform: &str, tools_dir: &str, path_env: &str)
             brew: None,
         },
         serde_json::json!({"kind": "omp"}),
-    );
+    )
+    .await
+    .ok()?;
     let owner = &facts["owner"];
     if owner["method"] != "npm" || owner["name"] != OMP_PACKAGE {
         return None;
@@ -98,7 +105,11 @@ pub fn omp_npm_owner(bin: &str, platform: &str, tools_dir: &str, path_env: &str)
             return None;
         }
     }
-    let npm = npm_for(prefix, platform, path_env)?;
+    let tools = PlanTools {
+        platform: platform.to_owned(),
+        path_env: path_env.to_owned(),
+    };
+    let npm = npm_for(prefix, &tools)?;
     Some(OmpNpm {
         npm,
         prefix: prefix.to_owned(),

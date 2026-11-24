@@ -4525,11 +4525,11 @@ fn names_omp_and_the_natives_its_root_pins() {
 
 /// "installs a too-old omp npm owns at the one version it is handed, into that npm's prefix" (POSIX)
 #[cfg(unix)]
-#[test]
-fn finds_the_npm_that_owns_a_posix_omp() {
+#[tokio::test]
+async fn finds_the_npm_that_owns_a_posix_omp() {
     let dir = tempfile::tempdir().unwrap();
     let (prefix, omp, npm) = npm_prefix(dir.path());
-    let owner = plans::omp_npm_owner(&omp, "darwin", "/data/tools", "");
+    let owner = plans::omp_npm_owner(&omp, "darwin", "/data/tools", "").await;
     assert_eq!(
         owner,
         Some(OmpNpm {
@@ -4575,18 +4575,18 @@ fn finds_the_npm_that_owns_a_posix_omp() {
     std::fs::create_dir_all(other.parent().unwrap()).unwrap();
     std::fs::write(&other, "").unwrap();
     assert_eq!(
-        plans::omp_npm_owner(&other.to_string_lossy(), "darwin", "/data/tools", ""),
+        plans::omp_npm_owner(&other.to_string_lossy(), "darwin", "/data/tools", "").await,
         None
     );
     assert_eq!(
-        plans::omp_npm_owner("/opt/checkout/bin/omp", "darwin", "/data/tools", ""),
+        plans::omp_npm_owner("/opt/checkout/bin/omp", "darwin", "/data/tools", "").await,
         None
     );
 }
 
 /// "follows a Windows npm .cmd shim to the prefix that holds omp, and runs npm.cmd from PATH through cmd.exe"
-#[test]
-fn follows_a_windows_npm_shim_to_its_prefix() {
+#[tokio::test]
+async fn follows_a_windows_npm_shim_to_its_prefix() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
     let root = PathBuf::from(root.to_string_lossy().trim_start_matches(r"\\?\"));
@@ -4601,7 +4601,7 @@ fn follows_a_windows_npm_shim_to_its_prefix() {
     )
     .unwrap();
     let text = |path: &Path| path.to_string_lossy().into_owned();
-    let owner = plans::omp_npm_owner(&text(&shim), "win32", "C:\\tools", &text(&node));
+    let owner = plans::omp_npm_owner(&text(&shim), "win32", "C:\\tools", &text(&node)).await;
     assert_eq!(
         owner,
         Some(OmpNpm {
@@ -4610,7 +4610,7 @@ fn follows_a_windows_npm_shim_to_its_prefix() {
         })
     );
     assert_eq!(
-        plans::omp_npm_owner(&text(&shim), "win32", "C:\\tools", ""),
+        plans::omp_npm_owner(&text(&shim), "win32", "C:\\tools", "").await,
         None
     );
     let local = root.join("proj").join("node_modules").join(".bin");
@@ -4626,7 +4626,8 @@ fn follows_a_windows_npm_shim_to_its_prefix() {
             "win32",
             "C:\\tools",
             &text(&node)
-        ),
+        )
+        .await,
         None
     );
 }

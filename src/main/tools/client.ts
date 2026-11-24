@@ -260,6 +260,16 @@ export class ToolsClient {
 		return hub().callLater(this.#instance(), "cli.now", { id: id ?? null });
 	}
 
+	/** Settings opened: list the tools again (the rows arrive as a state item). */
+	cliRescan(): Promise<unknown> {
+		return hub().callLater(this.#instance(), "cli.rescan");
+	}
+
+	/** `toolsAutoUpdate` changed: the state again, and a check now when it turned on in a scheduled launch. */
+	cliPrefChanged(): void {
+		hub().call(this.#instance(), "cli.prefChanged");
+	}
+
 	extNow(key?: unknown): Promise<unknown> {
 		return hub().callLater(this.#instance(), "ext.now", { key: key ?? null });
 	}

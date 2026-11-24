@@ -15,9 +15,10 @@ use tokio::task::LocalSet;
 use super::super::queue::STEP_MAX_MS;
 use super::super::runner::{SpawnSpec, Supervisor};
 use super::super::setup::{ToolUpdateOutcome, ToolUpdateRequest};
+use super::super::spawn;
 use super::super::{CHECK_INTERVAL_MS, Main, Tools, call_tools, next_check_delay};
+use super::Deps;
 use super::owner::McpBinary;
-use super::{Deps, cli_seam};
 use crate::hub::{LocalFuture, Outcome};
 use crate::server::Fault;
 
@@ -196,6 +197,10 @@ impl Main for Fake {
         match q {
             "env" => self.env(),
             "workspaceDirs" => Box::pin(async { Ok(json!(["/w/proj"])) }),
+            // The tool CLI listing of a launch that does not schedule it: not this part's ask.
+            "stock" if payload["method"] == "accounts.providers" => {
+                Box::pin(async { Ok(json!({"providers": []})) })
+            }
             "stock" => self.stock(payload["method"].as_str().unwrap_or(""), &payload["params"]),
             "applyExtensionUpdate" => {
                 self.applied.borrow_mut().push(payload["plan"].clone());
@@ -1049,11 +1054,11 @@ fn checks_a_pinned_runner_package_through_the_real_registry_command_when_no_inst
         *f.check_output.borrow_mut() =
             Ok("mcp-thing (1.0.2)\nAvailable versions: 1.0.2, 1.0.0\n".to_owned());
         h.now(Some("mcp:p")).await.unwrap();
-        let npm = cli_seam::command(
+        let npm = spawn::command(
             &dir.join(npm).to_string_lossy(),
             &["view".into(), "pkg".into(), "version".into()],
         );
-        let pip = cli_seam::command(
+        let pip = spawn::command(
             &dir.join(python).to_string_lossy(),
             &["-m", "pip", "index", "versions", "mcp-thing"].map(str::to_owned),
         );
@@ -1307,12 +1312,12 @@ fn without_an_installer_it_asks_the_owner_and_runs_the_owners_own_update() {
         *h.fake.after_update.borrow_mut() = Some(npm_binary("1.1.0"));
         h.now(Some("mcp:pkg")).await.unwrap();
         let npm = dir.join(npm).to_string_lossy().into_owned();
-        let view = cli_seam::command(&npm, &["view", "@s/pkg", "version"].map(str::to_owned));
+        let view = spawn::command(&npm, &["view", "@s/pkg", "version"].map(str::to_owned));
         assert_eq!(
             *h.fake.checks.borrow(),
             [[vec![view.spawn.file.clone()], view.spawn.args].concat()]
         );
-        let install = cli_seam::command(
+        let install = spawn::command(
             &npm,
             &["install", "-g", "--prefix", "/p", "@s/pkg@1.1.0"].map(str::to_owned),
         );
@@ -1867,12 +1872,14 @@ fn one_pass_at_a_time_and_a_failed_one_does_not_stop_the_queue_or_the_schedule()
         *h.fake.env_error.borrow_mut() = Some("no shell env".to_owned());
         h.start();
         until(|| h.timers(CHECK_INTERVAL_MS).len() == 1).await;
+        // The launch's tool CLI listing asks `env` too; the timer's pass asks it once more.
+        let asked = h.fake.env_calls.get();
         h.fire(&h.timers(CHECK_INTERVAL_MS)[0], CHECK_INTERVAL_MS);
         until(|| h.timers(CHECK_INTERVAL_MS).len() == 2).await;
-        assert_eq!(h.fake.env_calls.get(), 2);
+        assert_eq!(h.fake.env_calls.get(), asked + 1);
         assert!(matches!(h.call("close", json!({})), Outcome::Now(Ok(_))));
         assert_eq!(h.now(None).await.unwrap_err().code, "tools_closed");
-        assert_eq!(h.fake.env_calls.get(), 2);
+        assert_eq!(h.fake.env_calls.get(), asked + 1);
     });
 }
 
@@ -1967,18 +1974,18 @@ fn pipx_uv_and_pip_have_their_own_check_and_update_commands() {
     let venv = std::path::PathBuf::from(user_data()).join("venv");
     let scripts = venv.join(if cfg!(windows) { "Scripts" } else { "bin" });
     std::fs::create_dir_all(&scripts).unwrap();
-    let python = scripts.join(cli_seam::executable_name("python", platform));
+    let python = scripts.join(spawn::executable_name("python", platform));
     std::fs::write(&python, "").unwrap();
     let names = [
-        cli_seam::executable_name("pipx", platform),
-        cli_seam::executable_name("uv", platform),
+        spawn::executable_name("pipx", platform),
+        spawn::executable_name("uv", platform),
     ];
     let bin = bin_dir(&names.iter().map(String::as_str).collect::<Vec<_>>());
-    let tools = cli_seam::PlanTools {
+    let tools = spawn::PlanTools {
         platform: platform.to_owned(),
         path_env: bin.to_string_lossy().into_owned(),
     };
-    let args = |command: &cli_seam::CliCommand| command.spawn.args.clone();
+    let args = |command: &spawn::CliCommand| command.spawn.args.clone();
     let pipx = json!({"method": "pipx", "name": "t", "venv": venv.to_string_lossy()});
     let check = super::owner::owner_check(&pipx, &tools).unwrap();
     assert_eq!(check.spawn.file, python.to_string_lossy());
@@ -2037,8 +2044,8 @@ fn runner_packages_ask_their_registry_through_the_first_tool_found() {
     // "pip index versions", "npm view keeps a prerelease tag"
     let platform = host();
     let (npm, bun, python) = (
-        cli_seam::npm_bin(platform).to_owned(),
-        cli_seam::executable_name("bun", platform),
+        spawn::npm_bin(platform).to_owned(),
+        spawn::executable_name("bun", platform),
         if cfg!(windows) {
             "python.exe".to_owned()
         } else {
@@ -2046,7 +2053,7 @@ fn runner_packages_ask_their_registry_through_the_first_tool_found() {
         },
     );
     let bin = bin_dir(&[npm.as_str(), bun.as_str(), python.as_str()]);
-    let tools = cli_seam::PlanTools {
+    let tools = spawn::PlanTools {
         platform: platform.to_owned(),
         path_env: bin.to_string_lossy().into_owned(),
     };
@@ -2066,7 +2073,7 @@ fn runner_packages_ask_their_registry_through_the_first_tool_found() {
     assert!(super::owner::runner_check(&runner("npx", "npm", false), &tools).is_none());
     // Only Bun on PATH: npx falls back to it.
     let only_bun = bin_dir(&[bun.as_str()]);
-    let tools = cli_seam::PlanTools {
+    let tools = spawn::PlanTools {
         platform: platform.to_owned(),
         path_env: only_bun.to_string_lossy().into_owned(),
     };

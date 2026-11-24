@@ -198,14 +198,13 @@ impl Queue {
         ended
     }
 
-    /// The quit: the running step is dropped and what it started ends now; queued steps never run (their callers
-    /// hear `tools_closed`); nothing is queued after.
+    /// The quit: the running step is dropped and what it started ends now; queued steps never run; their callers and
+    /// the running step's hear `tools_closed` now (the instance's close ends the worker before it could answer them);
+    /// nothing is queued after.
     pub fn close(&self) {
         let (waiting, running) = {
             let mut st = self.st.borrow_mut();
             st.closed = true;
-            // The running step's callers hear the close now: its worker may be dropped with the instance before it
-            // answers them.
             let running = st
                 .running
                 .as_mut()
@@ -216,12 +215,12 @@ impl Queue {
             let _ = waiter.send(Err(closed()));
         }
         if let Some((ctx, stop, waiters)) = running {
+            for waiter in waiters {
+                let _ = waiter.send(Err(closed()));
+            }
             ctx.stop(true);
             if let Some(stop) = stop {
                 let _ = stop.send(closed());
-            }
-            for waiter in waiters {
-                let _ = waiter.send(Err(closed()));
             }
         }
         self.wake.notify_one();
