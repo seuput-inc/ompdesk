@@ -296,7 +296,7 @@
 				"native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs",
 				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:155-213"
 			],
-			"syncCommit": null
+			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d"
 		},
 		{
 			"id": "urgent-asides",
