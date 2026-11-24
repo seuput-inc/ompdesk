@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.142.0] - 2026-11-24
+
+사이드바의 세션 목록이 오래된 순으로 바뀌어, 새 세션은 목록 맨 아래에 추가됩니다.
+
+- 고정한 세션은 맨 위에 그대로 있고, 직접 옮겨 둔 순서도 유지됩니다. 보관함 목록도 오래된 순입니다. 프로젝트 순서는 바뀌지 않습니다.
+- Windows에서 첫 창이 드물게 30초 넘게 빈 화면으로 남던 문제를 고쳤습니다. 화면을 불러오는 중인 요청을 중간에 끊고 다시 보내지 않습니다.
+- 질문 카드에서 괄호로 감싼 글이 수식처럼 깨져 보이던 문제를 고쳤습니다.
+- 연결된 컴퓨터의 연결이 끊겼을 때 입력 기록 오류가 기록되지 않습니다.
+- 입력창을 비운 직후 다음 프롬프트 제안과 유휴 정리가 막히던 문제를 고쳤습니다.
+- 에이전트가 연 하위 탭이, 닫히기 직전에 새 질문이나 새 턴을 시작하면 닫히지 않고 남습니다. 연결된 컴퓨터의 하위 탭도 같습니다.
+- 탭이 많을 때 에이전트 제어가 앱을 느리게 하던 부분을 줄였습니다.
+- 변경 취소(discard)가 git 상태를 끝까지 읽지 못하면 파일을 건드리지 않고 거부합니다.
+- 앱 업데이트 내려받기·검증, 종료 순서, 파일 대화상자를 Rust로 옮겼습니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+Session lists in the sidebar now read oldest first, so a new session appears at the bottom.
+
+- Pinned sessions stay on top and an order you set is kept. The archive reads oldest first too. Project order is unchanged.
+- Fixed a rare Windows first window that stayed blank for over 30 seconds: a page request still loading is no longer cut off and sent again.
+- Text in parentheses on a question card no longer renders as broken math.
+- An offline paired computer no longer logs input history errors.
+- Prompt suggestions and idle compaction are no longer held back right after you clear the composer.
+- A child tab an agent opened stays open when it starts a new question or turn just before it would close, on a paired computer too.
+- Agent control no longer slows the app down when many tabs are open.
+- Discard refuses and touches no file when it cannot read the complete git status.
+- App update download and verification, the quit sequence and file dialogs now run in Rust.
+
+Known issue: on macOS, pressing the Right arrow key in the composer can insert an icon-like character; this is being investigated.
+
 ## [0.141.3] - 2026-11-24
 
 Windows에서 `ompdesk check`가 더 이상 Windows 터미널 창을 띄우지 않고, 사이드바와 공급자 로그인의 빠른 연속 동작에서 생기던 문제를 고쳤습니다.
