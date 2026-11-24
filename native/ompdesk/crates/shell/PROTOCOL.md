@@ -91,8 +91,10 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `app.hide` / `app.show` | Node | `{}` | macOS `NSApp hide/unhide`; no-op elsewhere. |
 | `app.setBadge` | Node | `{text}` | macOS Dock badge (`app.dock.setBadge`); no-op elsewhere. |
 | `app.setRunProgress` | Node | `{state: "working"\|"waiting"\|"idle"}` | CEF only. Tauri: the pages' `progress:set` reaches the shell itself (`tauri-shell/src/tray.rs`, one waiting window outranks one working), which sets the macOS Dock badge (● working, ! waiting) and Dock progress, Windows taskbar progress on every app window (0.5 working, 0.75 waiting, none idle; `app_window.rs`). |
-| `app.quitAsked` (event) | shell→Node | `{asker, ask: {relaunch?}, approved}` | Tauri: who asked for a quit the shell starts, before the chain's first step. `approved: true`: a window's restart dialog was answered "Restart now" (`asker` `restart-prompt` or `crash-recovery`); Node logs the asker and freezes, then the shell's approved quit with relaunch reaches `app.quitHook`. `approved: false`: Quit in the app menu (`app-menu`) or the tray (`tray`); Node logs the asker as `askQuit` did and the chain asks (`confirm`). |
-| `app.language` (event) | Node→shell | `{language: "en"\|"ko"}` | Tauri: main's UI language, at start (before `session.ready`) and on every change. The shell installs its app menu in it (`app_menu.rs`); the tray's menu uses it until a page reported its own. |
+| `app.quitAsked` (event) | shell→Node | `{asker, ask: {relaunch?}, approved}` | Tauri: who asked for a quit the shell starts, before the chain's first step. `approved: true`: a window's restart dialog was answered "Restart now" (`asker` `restart-prompt` or `crash-recovery`); Node logs the asker and freezes, then the shell's approved quit with relaunch reaches `app.quitHook`. `approved: false`: Quit in the app menu (`app-menu`), the tray (`tray`) or the last shown window's close (`last-window`); Node logs the asker (`logQuitAsked`) and the chain asks (`confirm`). |
+| `app.language` (event) | Node→shell | `{language: "en"\|"ko"}` | Tauri: main's UI language, at start (before `session.ready`) and on every change. The shell installs its app menu in it (`app_menu.rs`); the tray's menu uses it until a page reported its own, and the tray notice speaks it. |
+| `app.closeToTray` (event) | Node→shell | `{closeToTray?, noticeShown?}` | Tauri: the prefs `closeToTray` and `closeToTrayNoticeShown` as stored (absent when unset), at start and on every change. The last window's close reads them (`last_close.rs`): close-to-tray is on unless `closeToTray` is `false`; the notice shows only while `noticeShown` is not `true`. Before the first push: on, and no notice. |
+| `app.closeToTrayNoticeShown` (event) | shell→Node | `{}` | Tauri: the shell showed the one-time "keeps running in the tray" notice; Node stores `closeToTrayNoticeShown: true`. |
 | `window.notice` | shell→Node | `{kind: "hang"\|"resources"\|"crash"}` | Tauri: `hang` shows Node's stuck-page notification (`null`); `resources` and `crash` answer the restart dialog's `{message, detail, buttons: [restart, other]}` in the app's language, the first with the running and total tabs. |
 | `window.log` (event) | shell→Node | `{wcId, entry: {source, message, url?, details?, stack?}}` | Tauri: a `gui-runtime.jsonl` line about an app window's page (`preload`, `renderer-process`, `renderer-unresponsive`, `application-resources`); Node writes it with the window's id and cwd. |
 | `store.saveFailed` / `store.saved` (events) | shell→Node | `{file}` | Tauri: `window-state.json` waits for disk space / was saved; Node's one disk-full notice lists it meanwhile. |
@@ -132,7 +134,7 @@ shell's own resolution of the same switch/env is authoritative and equal in ever
 |---|---|---|---|
 | `win.create` | Node | `{winId, wcId, options}` | `{state: WinState}` — see options below. For `webPreferences.offscreen: true` there is no OS window: a windowless CEF browser (`wc.paint` events, `wc.frame`) and `state.visible` stays false. |
 | `win.op` | Node | `{winId, op, args}` | `{}` unless noted; the ops below. |
-| `win.closeRequested` | shell→Node | `{winId}` | `{prevent: boolean}` — the person closed the window (caption button, Alt+F4, taskbar, ⌘W, `win.op close` is **not** this). The shim runs `close` listeners with `preventDefault`; the shell closes only when `prevent` is false, then emits `win.event closed`. No answer within 5 s counts as not prevented. |
+| `win.closeRequested` | shell→Node | `{winId}` | CEF only (Tauri decides the close itself, `last_close.rs`; Node no longer answers this since W4, so the CEF shell closes the window). `{prevent: boolean}` — the person closed the window (caption button, Alt+F4, taskbar, ⌘W, `win.op close` is **not** this). The shim ran `close` listeners with `preventDefault`; the shell closes only when `prevent` is false, then emits `win.event closed`. No answer within 5 s counts as not prevented. |
 | `win.state` (event) | shell→Node | `WinState` + `{winId}` | pushed after every change; the shim answers `getBounds()`, `isMaximized()`, … synchronously from it. |
 | `win.event` (event) | shell→Node | `{winId, name, args?}` | `show`, `hide`, `focus`, `blur`, `minimize`, `maximize`, `unmaximize`, `restore`, `enter-full-screen`, `leave-full-screen`, `resize`, `move`, `ready-to-show`, `unresponsive`, `responsive`, `closed`. `focus`/`blur`/`closed` come *after* the `win.state` that shows their effect. |
 
@@ -158,11 +160,16 @@ maximized when saved so (and then without Mica), frameless with the Mica backdro
 800 × 600, hidden; it adds `slot` (the lowest free among open app windows) and `mica=1` to the page's `loadURL`, shows
 the window on its first `ready-to-show` as `options.presence` says (`hidden`: not at all, `minimized`, `behind`:
 `showInactive`; none: `show`, or `showInactive` under `OMP_GUI_HEADLESS=1`), and saves its bounds when it closes
-(`win.closeRequested`, `win.op close`).
+(the person's close, `win.op close`). **The last shown app window's close** (W4, `tauri-shell/src/last_close.rs`): a
+person's close and `win.op close` alike, while no other app window is shown and no quit is approved, hide the window
+on macOS, hide it on Windows when the tray exists and `app.closeToTray` says close-to-tray is on (then the one-time
+notice), and otherwise ask the quit chain with asker `last-window`; the window then stays open (`win.op close` answers
+`{}`). Node is not asked.
 
 `win.op` ops (`args` object):
-`show`, `showInactive`, `hide`, `close` (`{force: true}` — Node already ran the `close` listeners and the
-window closes without `win.closeRequested`; the shell then emits `win.event closed`), `destroy`, `focus`, `blur`,
+`show`, `showInactive`, `hide`, `close` (Electron's `close()`: Tauri closes it as the person's close does, above; CEF:
+`{force: true}`, Node already ran the `close` listeners and the window closes without `win.closeRequested`; the shell
+then emits `win.event closed`), `destroy`, `focus`, `blur`,
 `minimize`, `maximize`, `unmaximize`, `restore`, `setFullScreen {on}`, `setBounds {bounds}`, `setSize {width,height}`,
 `setContentSize {width,height}`, `setPosition {x,y}`, `center`, `setMinimumSize {width,height}`, `setMaximumSize`,
 `setOpacity {value}`, `setIgnoreMouseEvents {ignore, forward?}`, `setSkipTaskbar {skip}`, `setFocusable {focusable}`,
@@ -484,7 +491,7 @@ What the Rust shell does differently from this table or from Electron. README.md
 - **macOS focus**: `setFocusable(false)` has no window flag there; the shell keeps it per window (the window never reports
   `focused`, `show` does not activate it) and `showInactive` shows the window and hands key status back at once (never
   `NSApp activate`). A created window's size is set again when Views made it 1 px off the requested one (UNVERIFIED on a Mac).
-- **`win.closeRequested`**: no answer within 5 s closes the window.
+- **`win.closeRequested`** (CEF only): no answer within 5 s closes the window.
 - **`view.*`**: a view is hidden until its first `setVisible`/`setBounds` with a non-empty size; an empty `setBounds` only
   hides the view (a zero-sized browser view is a fatal check in Chromium).
 - **`session.*`**: `setProxy` writes Chromium's `proxy` preference; `resolveProxy` is answered from the user's WinINET /
