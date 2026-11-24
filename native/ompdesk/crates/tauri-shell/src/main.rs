@@ -17,6 +17,7 @@ mod notify_triage;
 mod page_watch;
 mod preview_protocol;
 pub use native_chrome::menu;
+mod ipc_router;
 mod preview;
 mod preview_surface;
 mod process_failed;
@@ -29,7 +30,7 @@ mod ui;
 #[cfg(windows)]
 mod window_activation;
 mod window_bounds;
-use native_services::diagnostic_logs::{FeedbackRead, feedback_profile};
+use native_services::diagnostic_logs::feedback_profile;
 use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
@@ -90,6 +91,7 @@ struct Runtime {
     user_data: PathBuf,
     packaged: bool,
     feedback_profile: PathBuf,
+    app_package: PathBuf,
     renderer: PathBuf,
     user_agent: Mutex<Option<String>>,
     relaunch: Mutex<Option<Vec<String>>>,
@@ -1197,9 +1199,23 @@ fn dispatch(call: host::Call) {
         native_services::diagnostic_logs::handle(call, &runtime().user_data);
         return;
     }
-    if let Some(read) = FeedbackRead::parse(&call.method, &call.params) {
+    if call.method == "ipc.routes" {
+        match ipc_router::hand_over(&call.params) {
+            Ok(()) => call.ok(json!({})),
+            Err(message) => call.err("invalid", message),
+        }
+        return;
+    }
+    if call.method == "ipc.call" {
         tauri::async_runtime::spawn_blocking(move || {
-            call.ok(read.read(&runtime().feedback_profile))
+            match ipc_router::call_from_main(&ipc_context(), &call.params) {
+                Ok(answer) => call.ok(answer),
+                Err(error) => {
+                    let code = error["code"].as_str().unwrap_or("failed").to_owned();
+                    let message = error["message"].as_str().unwrap_or_default().to_owned();
+                    call.err(&code, message)
+                }
+            }
         });
         return;
     }
@@ -1442,6 +1458,13 @@ async fn profile_ipc(
         .map_err(|error| json!({"code":"failed","message":error.to_string()}))?
 }
 
+fn ipc_context() -> ipc_router::Context<'static> {
+    ipc_router::Context {
+        feedback_profile: &runtime().feedback_profile,
+        app_package: &runtime().app_package,
+    }
+}
+
 fn ensure_current(identity: Identity) -> Result<(), Value> {
     if runtime()
         .registry
@@ -1591,16 +1614,32 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
             if !value["args"].is_array() {
                 return Err(json!({"code":"invalid","message":"args must be an array"}));
             }
-            if kind == "invoke"
-                && let Some(read) = FeedbackRead::parse(channel, &value["args"])
-            {
-                let result = tauri::async_runtime::spawn_blocking(move || {
-                    read.read(&runtime().feedback_profile)
-                })
-                .await
-                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
-                ensure_current(identity)?;
-                return Ok(Value::from_iter([("value", result)]));
+            let dir = if kind == "invoke" {
+                ipc_router::Dir::Invoke
+            } else {
+                ipc_router::Dir::Send
+            };
+            match ipc_router::route(dir, channel) {
+                ipc_router::Route::Refused(error) => return Err(error),
+                // Answered here whatever the handler says: a native channel's call never reaches main.
+                ipc_router::Route::Native(handler) => {
+                    let channel = channel.to_owned();
+                    let args = value["args"].clone();
+                    let answer = tauri::async_runtime::spawn_blocking(move || {
+                        let caller = ipc_router::Caller::Page(identity);
+                        ipc_router::run(handler, &ipc_context(), &caller, &channel, &args)
+                    })
+                    .await
+                    .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+                    ensure_current(identity)?;
+                    let answer = answer?;
+                    return Ok(if kind == "invoke" {
+                        Value::from_iter([("value", answer)])
+                    } else {
+                        json!({})
+                    });
+                }
+                ipc_router::Route::Main => {}
             }
             #[cfg(windows)]
             let args = {
@@ -1826,6 +1865,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     // Tauri refuses IPC from any http page but its dev URL (`is_local_url`), and this crate builds without
     // `custom-protocol`, so its `dev` cfg reads the dev URL.
     context.config_mut().build.dev_url = dev_renderer;
+    let app_package = app_dir.join("package.json");
     let launch = facts::Launch {
         user_data: user_data.clone(),
         exe: exe.clone(),
@@ -1844,6 +1884,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     }
     // Do not advertise CEF/Chromium versions for WKWebView. The shim can diagnose the actual engine.
     facts["versions"] = json!({"shell":env!("CARGO_PKG_VERSION"),"tauri":tauri::VERSION,"webview":tauri::webview_version()?});
+    facts["nativeIpc"] = ipc_router::native_facts();
     let mut token_bytes = [0u8; 32];
     getrandom::fill(&mut token_bytes).map_err(|e| format!("OS entropy: {e}"))?;
     let token: String = token_bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -1935,6 +1976,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     user_data,
                     packaged,
                     feedback_profile,
+                    app_package,
                     renderer,
                     user_agent: Mutex::new(None),
                     relaunch: Mutex::new(None),

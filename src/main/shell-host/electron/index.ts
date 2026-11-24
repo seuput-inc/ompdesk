@@ -4,7 +4,6 @@
  * for the facts before any main code runs, so Electron's synchronous `app.getPath()` and friends work at module top
  * level, as they do there.
  */
-import { IPC_COMMANDS } from "../../../shared/ipc-types";
 import { shutdownCore } from "../../core/process";
 import type { DiagnosticBundleDeps } from "../../diagnostic-bundle";
 import type { DiagnosticsDeps } from "../../diagnostics";
@@ -12,9 +11,10 @@ import type { WatchdogSignal } from "../../hang-watchdog";
 import type { AdmitNotification } from "../../notify-triage";
 import { exitReport } from "../../quit-log";
 import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from "../../runtime-log-core";
-import type { IpcRegistry } from "../../web/ipc-registry";
+import type { IpcShell } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
+import { decodeBin, encodeBin } from "./binary-json";
 import { createElectron } from "./create";
 
 const socketPath = process.env.OMPDESK_SHELL_SOCKET;
@@ -55,13 +55,13 @@ export function openPageExternal(url: string): Promise<void> {
 	return electron.shell.openExternal(url, "page");
 }
 
-/** Paired pages arrive through the permission-checked registry. Desktop pages read the same log in the shell. */
-export function registerRuntimeLogIpc(ipc: Pick<IpcRegistry, "handle">): void {
-	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_PATH, () => client.call(IPC_COMMANDS.RUNTIME_LOG_PATH, []));
-	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_TAIL, (_caller, maxLines: unknown) =>
-		client.call(IPC_COMMANDS.RUNTIME_LOG_TAIL, [maxLines]),
-	);
-}
+/** The page channels the shell serves itself; main's own callers (paired pages, agents) reach them through `ipc.call`. */
+export const shellIpc: IpcShell = {
+	channels: hello.facts.nativeIpc,
+	routes: main => client.call("ipc.routes", main),
+	call: async params =>
+		decodeBin((await client.call<{ value: unknown }>("ipc.call", { ...params, args: encodeBin(params.args) })).value),
+};
 
 let stopping = false;
 /** Main's app once made: its log line names the profile and the version. */

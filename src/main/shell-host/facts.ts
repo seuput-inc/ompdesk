@@ -65,6 +65,8 @@ export interface HostFacts {
 	system: { reducedMotion: boolean; onBattery: boolean; online: boolean };
 	versions: { chrome: string; cef: string; shell: string };
 	safeStorage: SafeStorageFact;
+	/** The page channels the shell serves itself (`crates/tauri-shell/src/ipc_router.json`). */
+	nativeIpc: Array<{ channel: string; dir: "invoke" | "send" }>;
 }
 
 export interface WinState {

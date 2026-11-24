@@ -68,6 +68,7 @@ pushed event.
   safeStorage: { kind: "win-v10", key: base64(32 bytes) }
              | { kind: "mac-v10-lazy" }                      // macOS: no key at launch, see §11
              | { unavailable: string }                      // why (logged by the shim, never silent)
+  nativeIpc: { channel, dir: "invoke" | "send" }[],        // Tauri: the page channels the shell serves itself (§12)
 }
 Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90|180|270, internal: boolean,
             colorDepth, monitorFrequency? }
@@ -366,10 +367,17 @@ in the other:
 |---|---|---|---|
 | `ipc.invoke` | shell→Node | `{wcId, frameUrl, channel, args}` | `{value}`; a handler's rejection is an error answer (`code "failed"`, `message` = the thrown message) and the page's promise rejects with `Error(message)` |
 | `ipc.send` (event) | shell→Node | `{wcId, frameUrl, channel, args}` | fire and forget |
+| `ipc.routes` | Node | `{invoke: string[], send: string[]}` | `{}` — Tauri: the channels main serves, once, before its first window; refused (`invalid`) when one is also native or on a second hand-over |
+| `ipc.call` | Node | `{channel, dir, args, caller: {key, window, connId}}` | `{value}` — Tauri: a native channel's call by one of main's callers (a paired page's connection, an agent); `args` and `value` carry `$bin`; refused (`invalid`) for a channel the shell does not serve |
 | `ipc.sendSync` | shell→Node | `{wcId, frameUrl, channel, args}` | `{value}` — only `__ompdeskSendSync` and Electron-style `sendSync` channels (`ipcMain.on` handlers that set `event.returnValue`); the shell blocks the page for the answer. Node answers when a handler sets `returnValue` — possibly much later (the Preview's dialog waits for a person, up to 60 s) — and with `null` when no handler listens. The shell sends `{cancel: id}` when the page stops waiting (navigated, closed). |
 | `wc.send` | Node | (section 4) | |
 
 Bytes: JSON cannot carry a `Uint8Array`, so the page and the shell write one as `{"$bin": "<base64>"}` anywhere inside `args` of `ipc.invoke` / `ipc.send` / `ipc.sendSync`, inside the `{value}` of an answer and inside `wc.send` `args`; the shell forwards the JSON untouched and the page-side reviver turns it back; the shim decodes incoming `args` to `Buffer` and encodes `Buffer`/`Uint8Array`/`ArrayBuffer` in answers and `wc.send`.
+
+Tauri routes each app page call by `(dir, channel)` before it would become `ipc.invoke`/`ipc.send`
+(`crates/tauri-shell/src/ipc_router.rs`): a channel in `ipc_router.json` runs in the shell and never reaches Node, even
+when its handler fails; a channel `ipc.routes` named goes to Node as above; any other call is refused (`invalid`,
+`No handler registered for '<channel>' (<dir>)`; `denied` before `ipc.routes`).
 
 `frameUrl` is the sending frame's URL (`event.senderFrame.url`); Node serves only `app://ompdesk/` for app channels,
 and `ipc.sendSync` from Preview partitions only for their registered preload (`__ompdeskSendSync`).

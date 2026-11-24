@@ -1164,7 +1164,6 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 		broadcast({ state: "downloaded", version: devVersion, mode: "automatic" });
 	}
 	ipc.handle(IPC_COMMANDS.UPDATER_GET_STATUS, () => current);
-	ipc.handle(IPC_COMMANDS.UPDATER_VERSION, () => appVersion());
 	ipc.handle(IPC_COMMANDS.UPDATER_AUTH_INFO, () => updateAuthInfo());
 	ipc.handle(IPC_COMMANDS.UPDATER_AUTH_TEST, (_caller, token?: string) => testAuth(token));
 	ipc.handle(IPC_COMMANDS.UPDATER_AUTH_SAVE, async (_caller, token: string): Promise<UpdateAuthTestResult> => {
