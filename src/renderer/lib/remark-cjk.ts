@@ -11,7 +11,7 @@ type ChildSpan = { child: RootContent; start: number; end: number };
 /** `**…%**이며`: a strong run whose last character is punctuation, glued to a letter or digit. */
 const ADJACENT_STRONG =
 	/(\*\*(?!\s)([^*\n]*?[^\s\p{L}\p{N}*])\*\*|__(?!\s)([^_\n]*?[^\s\p{L}\p{N}_])__)(?=[\p{L}\p{N}])/gu;
-const CJK_CHARACTER =
+export const CJK_CHARACTER =
 	/[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef]/u;
 const TRAILING_URL_PUNCTUATION = /[?!.,:*_~]$/;
 
