@@ -435,10 +435,6 @@ export function createWindowClasses(host: Host, app: AppEvents, sessionFor: (par
 			this.#op("setFocusable", { focusable });
 		}
 
-		setProgressBar(value: number, options?: { mode?: string }): void {
-			this.#op("setProgressBar", { value, ...(options?.mode === undefined ? {} : { mode: options.mode }) });
-		}
-
 		setTitleBarOverlay(options: { color?: string; symbolColor?: string; height?: number }): void {
 			this.#op("setTitleBarOverlay", { ...options });
 		}

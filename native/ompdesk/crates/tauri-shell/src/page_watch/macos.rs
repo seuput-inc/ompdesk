@@ -5,7 +5,6 @@
 //! running, told nobody, and the view never loaded again (measured 19 Nov 2026).
 #![allow(unsafe_code)]
 
-use crate::host::Call;
 use block2::RcBlock;
 use objc2::runtime::AnyObject;
 use objc2::{msg_send, sel};
@@ -34,8 +33,8 @@ pub fn probe(window: &WebviewWindow, wc: u64, probe: u64) {
     }
 }
 
-pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
-    // A view that is gone drops the closure, and the call with it: that answers `failed`.
+pub fn kill(window: &WebviewWindow, wc: u64) {
+    // A view that is gone drops the closure: its page has nothing left to end.
     let _ = window.with_webview(move |view| {
         let result = (|| {
             // SAFETY: Tauri hands this closure the live WKWebView, or null, on the main thread.
@@ -61,6 +60,6 @@ pub fn kill(window: &WebviewWindow, wc: u64, call: Call) {
                 WireError::new("failed", "WebKit refused to end the content process")
             })
         })();
-        super::crash_answer(wc, call, result);
+        super::killed(wc, result);
     });
 }

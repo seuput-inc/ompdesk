@@ -121,6 +121,20 @@ describe("the quit's freeze", () => {
 		expect(seenFrozen).toEqual([true]);
 	});
 
+	it("a restart prompt the shell approved itself is logged and frozen, and main asks the shell for no second quit", () => {
+		quit.approveQuit("crash-recovery", { relaunch: true });
+		expect(quit.quitApproved()).toBe(true);
+		expect(electron.quit).not.toHaveBeenCalled();
+		expect(electron.log).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Relaunch asked by the window crash prompt",
+				details: { asker: "crash-recovery", relaunch: true },
+			}),
+		);
+		fireBeforeQuit();
+		expect(electron.log).toHaveBeenCalledTimes(1);
+	});
+
 	it("the shell's confirm freezes only when the person quits anyway", async () => {
 		electron.showMessageBox.mockResolvedValueOnce({ response: 1 });
 		expect(await effects.confirm()).toBe(false);

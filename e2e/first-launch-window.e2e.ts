@@ -5,8 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type TestInfo, test } from "@playwright/test";
 import { type ElectronApplication, _electron as electron, type Page } from "playwright";
-import { micaSupported } from "../src/main/window-chrome";
-import { exitApp, fixtureOmp } from "./harness";
+import { exitApp, fixtureOmp, windowsDrawsMica } from "./harness";
 import {
 	descendantsIn,
 	describeProcess,
@@ -426,7 +425,7 @@ test("@smoke Windows: the packaged app's first launch shows the app on screen, m
 		"quit",
 		async (launched, info) => {
 			const mica = await launched.page.evaluate(() => document.documentElement.dataset.mica);
-			expect(mica).toBe(micaSupported("win32", os.release()) ? "true" : undefined);
+			expect(mica).toBe(windowsDrawsMica() ? "true" : undefined);
 			await expectDrawn(launched, info, "first-launch");
 			// A Mica window maximized after its first show draws fine; only one shown maximized went blank.
 			await launched.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.maximize());

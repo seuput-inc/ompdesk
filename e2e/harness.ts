@@ -18,6 +18,11 @@ import { withoutGitSelectors } from "../src/shared/git-env";
 import type { SetupItemId } from "../src/shared/setup";
 import { exitShellApp, launchShell } from "./fixture/shell-launch";
 
+/** Whether this computer draws the Mica backdrop (Windows 11 22H2, build 22621): only there does a window get it. */
+export function windowsDrawsMica(): boolean {
+	return process.platform === "win32" && Number(os.release().split(".")[2] ?? 0) >= 22621;
+}
+
 /**
  * Install the fake omp in `sidecar-fixture.ts` under `dir` for `OMP_GUI_OMP`,
  * shaped like a real install: an executable script on POSIX, an `omp.cmd` shim
