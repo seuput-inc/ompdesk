@@ -140,13 +140,29 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 			probe.durations.push(Math.round((performance.now() - started) * 1000));
 			const name = `${method} ${String(params.key ?? "")}`;
 			probe.keys.set(name, (probe.keys.get(name) ?? 0) + 1);
+			if (method !== "get" && method !== "store") {
+				const list = probe.writes.get(name) ?? [];
+				list.push(Math.round((performance.now() - started) * 1000));
+				probe.writes.set(name, list);
+			}
 		}
 	}
 }
 
 // probe only: counts reads and times every prefs hub call, written to OMP_GUI_PREFS_PROBE_DIR.
 const probeDir = process.env.OMP_GUI_PREFS_PROBE_DIR;
-const probe = { reads: 0, durations: [] as number[], keys: new Map<string, number>() };
+const probe = {
+	reads: 0,
+	durations: [] as number[],
+	keys: new Map<string, number>(),
+	writes: new Map<string, number[]>(),
+};
+export function probeTime(name: string, us: number): void {
+	if (!probeDir) return;
+	const list = probe.writes.get(name) ?? [];
+	list.push(us);
+	probe.writes.set(name, list);
+}
 function writeProbe(): void {
 	if (!probeDir || probe.reads === 0) return;
 	const sorted = [...probe.durations].sort((a, b) => a - b);
@@ -166,6 +182,7 @@ function writeProbe(): void {
 			hubCalls: stats.calls,
 			hubTotalMs: Math.round(stats.totalUs / 1000),
 			keys: [...probe.keys].sort((a, b) => b[1] - a[1]).slice(0, 25),
+			writes: Object.fromEntries(probe.writes),
 		}),
 	);
 }

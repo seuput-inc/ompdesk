@@ -177,7 +177,7 @@ import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notifi
 import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
-import { prefsFile } from "./prefs-store";
+import { prefsFile, probeTime } from "./prefs-store";
 import { registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
 import { runVisualizeTool, VISUALIZE_TOOL, VisualStore } from "./preview/visuals";
@@ -2150,11 +2150,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		prefChanged(caller.win, payload.key);
 	});
 	ipc.handle(IPC_COMMANDS.PREFS_UPDATE_SIDEBAR, (caller, payload: unknown) => {
+		const started = performance.now();
 		const from = caller.win && isWebWindow(caller.win.webContents.id) ? "web" : "window";
 		const change = updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog);
 		if (change && change.op !== "touch-workspace" && change.op !== "set-rail-pin" && change.op !== "set-group-alias")
 			deps.sidebarProjects?.layoutChanged();
 		prefChanged(caller.win, SIDEBAR_PREFS_KEY);
+		probeTime("ipc prefs:update-sidebar", Math.round((performance.now() - started) * 1000));
 	});
 
 	// Launch profiles live with the machine that spawns omp: a tab's paired
