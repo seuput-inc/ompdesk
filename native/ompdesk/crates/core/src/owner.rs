@@ -200,7 +200,10 @@ impl Owner {
     /// Waits for the core's exit, reports it, then settles its process group and reports that.
     fn watch(&self, generation: u64, core: Arc<Core>) {
         let status = loop {
-            match lock(&core.child).try_wait() {
+            // The guard is dropped before the sleep: held across it, this loop starved `stop`'s and `kill_tree`'s
+            // lock of the child on Linux, so a stopped core was never killed.
+            let polled = lock(&core.child).try_wait();
+            match polled {
                 Ok(Some(status)) => break Some(status),
                 Ok(None) => thread::sleep(EXIT_POLL),
                 Err(_) => break None,
