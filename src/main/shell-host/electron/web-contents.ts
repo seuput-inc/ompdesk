@@ -279,10 +279,6 @@ export class WebContents extends EventEmitter implements PageRecord {
 		this.op("stop");
 	}
 
-	forcefullyCrashRenderer(): void {
-		this.op("forcefullyCrashRenderer");
-	}
-
 	getURL(): string {
 		return this.#state.url;
 	}
