@@ -209,11 +209,17 @@ async function quitAndCheck(app: ElectronApplication, how: QuitPath, profile: st
 		...before.filter(isAiMemoryService).map(process => `ai-memory service ${describeProcess(process)}`),
 	];
 	await fs.writeFile(info.outputPath(`processes-before-${how}.txt`), roles.join("\n"));
-	await app.evaluate(({ app, autoUpdater }, how) => {
-		// What electron-updater's quitAndInstall() does once its installer has started.
+	await app.evaluate(({ app }, how) => {
+		// What OmpNsisUpdater.quitAndInstall() does once its installer's first launch has started.
 		setImmediate(() => {
-			if (how === "update") autoUpdater.emit("before-quit-for-update");
-			app.quit();
+			if (how !== "update") return app.quit();
+			// The shim's App; Playwright types `app` as Electron's.
+			const shell = app as unknown as {
+				installerQuitPending(): void;
+				installerQuitReceipt(receipt: { kind: "started"; pid: number }): void;
+			};
+			shell.installerQuitPending();
+			shell.installerQuitReceipt({ kind: "started", pid: process.pid });
 		});
 	}, how);
 	// A real bound on a real process: its pipes close within moments of the quit, or never.

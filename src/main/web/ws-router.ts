@@ -137,7 +137,7 @@ export interface WsRouterDeps {
 
 /** What the core's router is started with (`web.start`'s `router`). */
 export interface RouterConfig {
-	channels: { batch: string; streams: string[]; heavy: readonly string[]; prefsSet: string };
+	channels: { batch: string; diskFull: string; streams: string[]; heavy: readonly string[]; prefsSet: string };
 	protocol: number;
 	features: WebFeatures;
 	policy: Record<string, { dir: string; permission?: string; mode: string }>;
@@ -334,6 +334,7 @@ export class WsRouter {
 		return {
 			channels: {
 				batch: IPC_EVENTS.EVENTS_BATCH,
+				diskFull: IPC_EVENTS.DISK_FULL,
 				streams: [...STREAM_CHANNELS],
 				heavy: HEAVY_CHANNELS,
 				prefsSet: IPC_COMMANDS.PREFS_SET,
@@ -368,9 +369,27 @@ export class WsRouter {
 		return this.#connections.get(deviceId)?.some(connection => connection.visible) ?? false;
 	}
 
+	publishDiskFull(files: readonly string[]): void {
+		if (this.#open()) core().push("web.diskFullState", { host: this.host, files }, undefined, this.#startedIn);
+	}
+
+	/** A native event for one authenticated caller, never the other pages of its device. */
+	deliverToConnection(connId: string, channel: string, payload: unknown): void {
+		for (const [deviceId, connections] of this.#connections) {
+			const page = connections.find(connection => connection.connId === connId);
+			if (!page) continue;
+			if (this.#deps.devices.get(deviceId)) this.#deliver(deviceId, channel, payload, page);
+			return;
+		}
+	}
+
 	/** A push the pool or a handler made to the device's window. */
 	deliver(deviceId: string, channel: string, payload: unknown): void {
 		this.#recordTokens(deviceId, channel, payload);
+		this.#deliver(deviceId, channel, payload);
+	}
+
+	#deliver(deviceId: string, channel: string, payload: unknown, page?: PageConnection): void {
 		const policy = Object.hasOwn(IPC_POLICY, channel) ? IPC_POLICY[channel as keyof typeof IPC_POLICY] : undefined;
 		if (policy?.dir !== "push" || policy.mode === "client" || Object.hasOwn(DESKTOP_ONLY_PUSH, channel)) return;
 		if (
@@ -379,7 +398,7 @@ export class WsRouter {
 		)
 			return;
 		if (!this.#open()) return;
-		const tabs = channel === IPC_EVENTS.TAB_LIST_CHANGED ? listedTabs(payload) : undefined;
+		const tabs = !page && channel === IPC_EVENTS.TAB_LIST_CHANGED ? listedTabs(payload) : undefined;
 		if (!this.#connections.has(deviceId)) {
 			// Counted, so a page that comes back is not told it missed nothing; its data would reach no socket.
 			const alreadyMissed = this.#unsent.has(deviceId);
@@ -391,7 +410,7 @@ export class WsRouter {
 		let data: Uint8Array | undefined;
 		try {
 			const pictured =
-				Object.hasOwn(PICTURE_CHANNELS, channel) && this.isDeviceVisible(deviceId)
+				Object.hasOwn(PICTURE_CHANNELS, channel) && (page ? page.visible : this.isDeviceVisible(deviceId))
 					? this.#pictures.lift(deviceId, isTabBatch(payload) ? payload.tabId : undefined, payload)
 					: payload;
 			data = this.#dataBytes(channel, pictured);
@@ -399,7 +418,7 @@ export class WsRouter {
 			if (tabs) core().push("web.deliver", { host: this.host, device: deviceId, tabs, onlyTabs: true });
 			return;
 		}
-		core().push("web.deliver", { host: this.host, device: deviceId, ch: channel, tabs }, data);
+		core().push("web.deliver", { host: this.host, device: deviceId, connId: page?.connId, ch: channel, tabs }, data);
 	}
 
 	/** `JSON.stringify(payload)`'s bytes; a stream's made once per push object. Throws as `JSON.stringify` does. */

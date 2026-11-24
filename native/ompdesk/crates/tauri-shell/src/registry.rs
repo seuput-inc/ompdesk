@@ -1,5 +1,6 @@
+use crate::page_push::Outbox;
 use crate::page_watch::{Activity, Step, Watch};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,10 +32,15 @@ pub struct Page {
     pub title: String,
     pub loading: bool,
     pub zoom: f64,
-    pub ready: bool,
-    pub pushes: VecDeque<String>,
+    outbox: Outbox,
     /// The responsiveness watch of an app window's page (page_watch); a Preview page has none.
     pub watch: Option<Watch>,
+}
+
+impl Page {
+    fn live_app(&self) -> bool {
+        self.state == PageState::Live && self.kind == Kind::App
+    }
 }
 
 #[derive(Default)]
@@ -74,8 +80,7 @@ impl Registry {
                 title: String::new(),
                 loading: false,
                 zoom: 1.0,
-                ready: false,
-                pushes: VecDeque::new(),
+                outbox: Outbox::default(),
                 watch: (kind == Kind::App).then(Watch::default),
             },
         );
@@ -104,8 +109,7 @@ impl Registry {
                 title: String::new(),
                 loading: false,
                 zoom: 1.0,
-                ready: false,
-                pushes: VecDeque::new(),
+                outbox: Outbox::default(),
                 watch: None,
             },
         );
@@ -131,7 +135,21 @@ impl Registry {
     pub fn by_label(&self, label: &str) -> Option<&Page> {
         self.pages
             .values()
-            .find(|p| p.state == PageState::Live && p.kind == Kind::App && p.label == label)
+            .find(|p| p.live_app() && p.label == label)
+    }
+    pub fn app_document(&self, wc: u64) -> Option<Identity> {
+        self.page(wc).filter(|p| p.live_app()).map(|p| p.identity)
+    }
+    pub fn app_documents(&self) -> impl Iterator<Item = Identity> + '_ {
+        self.pages
+            .values()
+            .filter(|p| p.live_app())
+            .map(|p| p.identity)
+    }
+    pub(super) fn outbox(&mut self, id: Identity) -> Option<&mut Outbox> {
+        self.page_mut(id.wc)
+            .filter(|p| p.live_app() && p.identity == id)
+            .map(|p| &mut p.outbox)
     }
     pub fn current(&self, id: Identity) -> bool {
         self.page(id.wc)
@@ -153,8 +171,7 @@ impl Registry {
             .get_mut(&wc)
             .filter(|page| page.state == PageState::Live)?;
         page.identity.generation = page.identity.generation.checked_add(1)?;
-        page.ready = false;
-        page.pushes.clear();
+        page.outbox = Outbox::default();
         Some(page.identity)
     }
     /// The content process of an app page ended: its document is gone (its callbacks are stale, pushes queue for the
@@ -238,6 +255,7 @@ impl Registry {
     pub fn begin_close(&mut self, wc: u64) -> Option<Identity> {
         let page = self.pages.get_mut(&wc)?;
         page.state = PageState::Closing;
+        page.outbox = Outbox::default();
         Some(page.identity)
     }
     pub fn remove(&mut self, wc: u64) -> Option<Page> {
@@ -356,15 +374,11 @@ mod tests {
         let old = registry
             .navigate(1, "app://ompdesk/index.html".into())
             .unwrap();
-        let page = registry.page_mut(1).unwrap();
-        page.ready = true;
-        page.pushes.push_back("push".into());
         let (gone, killed) = registry.process_gone(1).unwrap();
         assert!(!killed);
         assert!(!registry.current(old));
         assert!(registry.current(gone));
-        let page = registry.page(1).unwrap();
-        assert!(!page.ready && !page.loading && page.pushes.is_empty());
+        assert!(!registry.page(1).unwrap().loading);
         assert_eq!(watch_turns(&mut registry, 60, &[]), []);
         assert!(registry.process_gone(2).is_none());
 

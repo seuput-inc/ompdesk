@@ -1,11 +1,11 @@
 /**
- * The "sessions are still working" inventory behind the ⌘Q confirmation, and
- * the approval latch every quit passes.
+ * The "sessions are still working" inventory behind the ⌘Q confirmation, and what a window close or a Dock click does
+ * while a quit is underway.
  *
  * Deliberately electron-free: the main process can only be unit-tested through
  * pure modules like this one, so the risk assessment (what counts as in-flight
- * work, which windows to name in the message) and the latch live here while
- * `app-quit.ts` keeps just the dialog and the event wiring.
+ * work, which windows to name in the message) lives here while
+ * `app-quit.ts` keeps just the dialog and the quit's effects.
  */
 
 import { type BackgroundWork, hasBackgroundWork } from "./background-work";
@@ -101,41 +101,4 @@ export function activateAction(facts: {
 	if (facts.quitApproved) return "ignore";
 	if (facts.windowCount === 0) return "spawn";
 	return facts.anyVisible ? "ignore" : "show";
-}
-
-/**
- * The approval behind `before-quit`: refused until a confirmation (or a
- * restart prompt) approves it, then the app's teardown runs exactly once.
- */
-export class QuitLatch {
-	#approved = false;
-	#tornDown = false;
-
-	get approved(): boolean {
-		return this.#approved;
-	}
-
-	approve(): void {
-		this.#approved = true;
-	}
-
-	/** `before-quit`: false while unapproved (veto it and ask); otherwise tears down once and lets it through. */
-	proceed(teardown: () => void): boolean {
-		if (!this.#approved) return false;
-		if (!this.#tornDown) {
-			this.#tornDown = true;
-			teardown();
-		}
-		return true;
-	}
-
-	/**
-	 * `before-quit-for-update`: the updater confirmed before `quitAndInstall()`,
-	 * which closes every window before `before-quit` fires. Tearing down here
-	 * runs ⌘Q's teardown while the windows and their tabs are still alive.
-	 */
-	proceedForUpdate(teardown: () => void): void {
-		this.approve();
-		this.proceed(teardown);
-	}
 }

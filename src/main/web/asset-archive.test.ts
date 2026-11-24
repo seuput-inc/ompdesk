@@ -30,7 +30,7 @@ async function start(staticRoot: string): Promise<number> {
 		archiveNow: clock,
 		buildMeta: "omp-build",
 		router: {
-			channels: { batch: "batch", streams: [], heavy: [], prefsSet: "prefs" },
+			channels: { batch: "batch", diskFull: "disk-full", streams: [], heavy: [], prefsSet: "prefs" },
 			protocol: 1,
 			features: {},
 			policy: {},
