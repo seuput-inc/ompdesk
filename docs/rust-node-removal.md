@@ -219,7 +219,7 @@ So C's order gains a remote branch after the event drain: core page sends → ev
 
 **7. Shared paths.** With the shell-owns-core step ((b) above, `omp/agent/node-removal-router`; its owner's answer, 25 Nov 2026): `core.exited` keeps its name and moment and there is no `core.started` event, so `RemoteClient.lost`, `SharingCore.lost` and `core/reopen.ts` `openAgain` stay as they are; which core runs is `core().generation`, never `core().pid` (null for a moment after a start). (b) adds `#dropStale()` to `core/hub.ts` before `#call`/`#write`/`callLater`, the only overlap with R-Q's hub instance, and rewrites `core/process.ts`. Order: (b) → R-Q. With F's page router: `ws-router.ts` `#meter`, R-Q's second caller, which neither (b) nor (c) touches. With F-prefs: none.
 
-### Design: slice G, machine setup and the tool updaters move into the core as one owner (not built)
+### Design: slice G, machine setup and the tool updaters move into the core as one owner (built: T1, T1b, T2.1-T2.6; native-rust's ledger)
 
 Asked by Main on 25 Nov 2026 (dispatch d9) once B1 gave the core the preference files. Read with `.omp/rules/machine-setup-updates.md` (UpdateScheduler, omp self-update, tool CLI and extension updates, the nested-step fence) and the ledger. The map behind it is the scout report of the same day; the line numbers below are from `e526d8af2`.
 

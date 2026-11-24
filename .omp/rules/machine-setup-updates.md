@@ -2,16 +2,16 @@
 description: "OMPdesk rules: Machine setup and installs, omp self-update, UpdateScheduler, tool CLI and extension updates, disk care, scheduled runs. Read before changing these files."
 globs:
   - "src/main/setup/**"
-  - "src/main/omp-updater.ts"
-  - "src/main/update-scheduler.ts"
-  - "src/main/cli-tools/**"
-  - "src/main/ext-update/**"
+  - "src/main/tools/**"
+  - "native/ompdesk/crates/core/src/tools/**"
   - "src/main/disk/**"
   - "src/main/schedules.ts"
   - "native/ompdesk/crates/core/src/schedules/**"
   - "src/main/extension-reload.ts"
 ---
 ## Machine setup and updates
+
+**Where it runs now (slice G, T2.6).** Setup, the omp, tool CLI and extension updaters and their schedule are one instance of the core's hub kind `tools` (`native/ompdesk/crates/core/src/tools/`: `setup.rs` with `setup/`, `omp/`, `cli/`, `ext.rs`, `queue.rs`, `clock.rs`; contract in `mod.rs`'s header). Main keeps `src/main/tools/client.ts` (opens it, relays its items, answers its asks) and `ipc.ts` (the channels below). The TypeScript names below (`SetupService`, `OmpUpdater`, `OmpAutoTakeover`, `OmpCompatSource`, `CliUpdater`, `ExtensionUpdater`, `UpdateScheduler`, `plans.ts`, `detect.ts`, `cli-tools/*`, `ext-update/*`) are the Rust parts of the same names in those files; their rules are unchanged except: one queue (a CLI pass and an extension pass no longer overlap; an omp pass is bound at 30 min); the tool CLI listing runs without the proxy; a relative PATH entry or launcher resolves against main's directories (`cwd`/`driveCwds` opts, fixed in T2.4 as main resolved it); a check that timed out keeps no partial output; the verified list is read through the core's HTTPS client with the core's proxy, not `net.fetch`.
 
 ### Machine setup (`src/main/setup/`, contract `src/shared/setup.ts`)
 - At launch main detects Bun, omp (through `resolveOmp`, gated by `MIN_OMP_VERSION`), Git, GitHub CLI, Node.js, agent-desktop (managed or bundled copy) and Tailscale, and installs what is missing **on its own**: no install button, no consent click. `SETUP_ITEMS` = bun, git, omp, gh, node, agent-desktop, tailscale.
