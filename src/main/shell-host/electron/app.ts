@@ -12,8 +12,6 @@ import type { HostFacts, PathName, SchemeFact } from "../facts";
 import type { InstallerStartReceipt } from "../shell-calls";
 import { emitPreventable, type Host, makeEvent } from "./host";
 
-type LaunchRequest = { kind: "url"; url: string } | { kind: "path"; path: string } | { kind: "focus" };
-
 export interface InitState {
 	schemes: SchemeFact[];
 }
@@ -134,16 +132,7 @@ export class App extends EventEmitter {
 			this.emit("ready");
 			for (const waiter of this.#readyWaiters.splice(0)) waiter();
 		});
-		client.on("app.openUrl", ({ url }: { url: string }) => {
-			this.emit("open-url", makeEvent(), url);
-		});
-		client.on("app.openFile", ({ path }: { path: string }) => {
-			this.emit("open-file", makeEvent(), path);
-		});
 		client.handle("app.quitHook", (hook: QuitHook) => this.#quitHook(hook));
-		client.on("app.activate", ({ hasVisibleWindows }: { hasVisibleWindows?: boolean }) => {
-			this.emit("activate", makeEvent(), hasVisibleWindows === true);
-		});
 		client.on("app.childProcessGone", ({ launchDecision, ...details }: { launchDecision?: LaunchDecision }) => {
 			this.emit("child-process-gone", makeEvent({ launchDecision }), details);
 		});
@@ -237,10 +226,6 @@ export class App extends EventEmitter {
 
 	// --- lifecycle ---
 
-	onSecondInstance(listener: (request: LaunchRequest) => void): void {
-		this.#host.client.on("app.secondInstance", listener);
-	}
-
 	isReady(): boolean {
 		return this.#ready;
 	}
@@ -281,17 +266,6 @@ export class App extends EventEmitter {
 
 	showAboutPanel(): void {
 		this.#host.post("app.showAboutPanel");
-	}
-
-	/** Registers the shell's own executable for `protocol://` links; the answer is logged when it fails. */
-	setAsDefaultProtocolClient(protocol: string): boolean {
-		this.#host.client.call<{ ok: boolean }>("app.setAsDefaultProtocolClient", { protocol }).then(
-			({ ok }) => {
-				if (!ok) this.#host.warn(`app.setAsDefaultProtocolClient(${protocol}) was refused`);
-			},
-			(error: unknown) => this.#host.warn(`app.setAsDefaultProtocolClient: ${String(error)}`),
-		);
-		return true;
 	}
 
 	focus(options?: { steal?: boolean }): void {
