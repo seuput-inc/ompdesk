@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { NATIVE_CHORDS } from "../shared/hotkeys";
+import { PRODUCT_REPO_URL } from "../shared/product-repo";
 
 const SRC = path.resolve(__dirname, "..");
 const APP_MENU = fs.readFileSync(path.join(SRC, "../native/ompdesk/crates/tauri-shell/src/app_menu.rs"), "utf8");
@@ -52,5 +53,9 @@ describe("menu actions", () => {
 			if (chord.id === "window.toggle") expect(MENU).not.toContain(`"${chord.accelerator}"`);
 			else expect(MENU, chord.id).toContain(`Some("${chord.accelerator}")`);
 		}
+	});
+
+	it("opens the product's repository for Documentation", () => {
+		expect(MENU).toContain(`const DOCUMENTATION: &str = "${PRODUCT_REPO_URL}";`);
 	});
 });

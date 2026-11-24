@@ -234,7 +234,7 @@ src/main/diagnostics.ts	mixed	2	app.diagnosticLog selects probes and folds recen
 src/main/disk-full-notice.ts	port	3	§1.3: still owns the synchronous OS notification handle and localized text. The shell and paired web router now distribute the basename snapshot to their own live pages.
 src/main/disk-full.ts	port	2	§1.3: atomic-file.ts reports or clears a failed write before returning; onChange delivers the current pending names at registration. The shell must receive the watch with its remaining Node writers and DISK_FULL_GET.
 src/main/editable-context-menu.test.ts	tooling	-	Vitest suite: editableContextMenuTemplate.
-src/main/editable-context-menu.ts	port	4	editableContextMenuTemplate and editRoleItems build Electron menu roles, spellchecker suggestions and copy-image actions from context-menu parameters.
+src/main/editable-context-menu.ts	port	4	editableContextMenuTemplate builds Electron menu roles, spellchecker suggestions and copy-image actions from context-menu parameters for the text-field context menu (a popup; the app menu is tauri-shell/src/app_menu.rs).
 src/main/editor.ts	mixed	1	editor.prepare/finish own the temporary draft, contents, readback and cleanup. Main resolves the user's editor and awaits its exit outside the core's kill-on-exit process tree; a core restart must not end a GUI editor or expire a long edit.
 src/main/emoji-stock.test.ts	tooling	-	Vitest suite: ships stock's shortcode table byte for byte.
 src/main/event-batcher.ts	port	2	SidecarManager.#dispatchFrame flushes the current batch before a settling event or response is emitted; a separate timer RPC would permit replay after the snapshot. Move with the ordered sidecar event producer and beforeResponse listeners (§1.3a,c).
@@ -257,10 +257,10 @@ src/main/hang-watchdog.test.ts	tooling	-	Vitest consumes an actual marker throug
 src/main/hang-watchdog.ts	mixed	4	The Tauri watchdog owns marker I/O and report formatting. The observed Node event loop must send its own heartbeat, synchronous markMainStep and lifecycle signals until index.ts and app-quit.ts move (§1.3c).
 src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
 src/main/i18n-text.ts	port	1	mainT, notification-batch and web-push-notifier format messages directly from MAIN_TEXT. Move the catalog with its last formatter, not one RPC per label.
-src/main/i18n.ts	port	1	menu.createMenu and WindowManager.createWindow consume getMainLanguage, mainT and editLabels synchronously; move with menu, dialog and prefs ownership. Keep shared uiLanguageFromLocale and fillText.
+src/main/i18n.ts	port	1	WindowManager.createWindow, the context menu and dialogs consume getMainLanguage, mainT and editLabels synchronously; index.ts and ipc.ts push getMainLanguage to the shell's app menu and tray (app.language). Move with dialog and prefs ownership. Keep shared uiLanguageFromLocale and fillText.
 src/main/idle-release.test.ts	tooling	-	Vitest suite: memoryShort.
 src/main/idle-release.ts	port	3	memory-watch re-reads the current tab facts after the native sample; pick() combines them with prior quiet-since times before releasing the selected tab without yielding. The sampler, not IdleRelease, owns the OS query.
-src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, tray, setup and session services; routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
+src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, setup and session services, the language the shell's app menu and tray speak and the tray's update item (serveTray); routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
 src/main/initial-cwd.test.ts	tooling	-	Real-core parity for startup cwd selection and default workspace creation.
 src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path or an existing directory before falling back to home.
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
@@ -301,8 +301,7 @@ src/main/memory-sampler.test.ts	tooling	-	Vitest suite: the core's reading of th
 src/main/memory-sampler.ts	mixed	1	Production memory, process rows and idle-tree facts come from core. testMemoryReading reads only the fixture override; the memory watch consumes its answer in the same tick (§1.3c).
 src/main/memory-watch.test.ts	tooling	-	Checks that the watch makes release decisions from the live tabs after sampling and ignores failed process snapshots.
 src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses and procs.pressureRecord run in core. After sampling, main reads current tab quiet state, calls MachineState.sample, then invokes SidecarPool.releaseIdle in that turn. Move with idle release and the pool (§1.3a,c).
-src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions.
-src/main/menu.ts	mixed	4	createMenu builds localized templates, shortcuts and window callbacks, installs the application menu and uses shell.openExternal (shell/src/shellops.rs) for the project URL; action composition remains in TS.
+src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions (tauri-shell/src/app_menu.rs against MenuAction and NATIVE_CHORDS).
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
 src/main/message-update-slim.ts	port	1	§1.3a,b,c: SidecarPool, the link encoder and subagent frame shaping synchronously strip repeated content using state for this turn. No I/O unit; move with the producer and its ordered sinks, not another round trip per event.
 src/main/model-release-dates.test.ts	tooling	-	Vitest suite: model release dates.
@@ -483,9 +482,6 @@ src/main/test-symlinks.ts	tooling	-	itWithFileSymlinks gates filesystem tests on
 src/main/test-turn-edits-omp.ts	tooling	-	Stand-in omp serves a synthetic transcript over the live sidecar bridge for turn-edit parity and restart tests.
 src/main/tls-test-rig.ts	tooling	-	testCertificates signs a loopback server certificate with a temporary test authority.
 src/main/tool-approval-stock.test.ts	tooling	-	Vitest suite: reads every approval select stock sends over RPC, and each option means what the card says.
-src/main/tray-labels.test.ts	tooling	-	Vitest suite: tray menu.
-src/main/tray-labels.ts	port	1	tray.refreshMenu reads the live updater status, visibility, menuIsOpen and installedSignature before binding click actions. Move with tray/menu state and action ownership.
-src/main/tray.ts	port	4	createTray/setTrayState/destroyTray own the Electron tray handle, menu installation and window/app actions.
 src/main/turn-resume-ends.test.ts	tooling	-	Vitest suite: the end table and formal/turn-resume name the same rows and checks.
 src/main/turn-resume-ends.ts	tooling	-	HOLD_CHECKS/HOLD_ENDS expose core/src/resume/hold-ends.json for parity tests; core/src/resume/ends.rs makes the runtime decision.
 src/main/turn-resume-limit.test.ts	tooling	-	Vitest suite: a turn stock gave up on at a provider limit.
@@ -518,7 +514,7 @@ src/main/window-chrome.test.ts	tooling	-	Vitest suite: nativeThemeSource, saniti
 src/main/window-chrome.ts	port	1	The chrome options and the Mica decision are the shell's (tauri-shell/src/app_window.rs, W1). nativeThemeSource is read with the prefs store at startup and on each theme change; WINDOW_CHROME_SET validates unknown input before setTitleBarOverlay. Move with the prefs owner (B) and trusted IPC dispatch.
 src/main/window-spawn-target.test.ts	tooling	-	Vitest suite: resolveWindowSpawnTarget.
 src/main/window-spawn-target.ts	port	1	After both cwd and workspace lookups, spawnWindow hands the result directly to WindowManager.createWindow and sidecarPool.acquire. The selector owns no I/O; move it with launch orchestration.
-src/main/window.ts	mixed	4	W1: the shell owns each app window's geometry and window-state.json, chrome and Mica, slot, first show, run progress and renderer recovery with its two dialogs (tauri-shell/src/app_window.rs, window_state.rs, window_bounds.rs); main writes its window.log lines with the window's cwd and answers window.notice in the app's language. W2: the shell's entry points (second launch, macOS open-url/open-file, Dock activate, the window shortcut; tauri-shell/src/entry.rs) read focus, target and visibility themselves and ask main session.spawnWindow and session.openPath (index.ts: the cwd match over these records). WindowManager keeps numbering windows (host.nextWindowId), the pool-facing record and cwd, the close-to-tray decision and the focus/target reads the menu, the tray and ipc.ts make in the same tick (W3-W4, §1.3a,c).
+src/main/window.ts	mixed	4	W1: the shell owns each app window's geometry and window-state.json, chrome and Mica, slot, first show, run progress and renderer recovery with its two dialogs (tauri-shell/src/app_window.rs, window_state.rs, window_bounds.rs); main writes its window.log lines with the window's cwd and answers window.notice in the app's language. W2: the shell's entry points (second launch, macOS open-url/open-file, Dock activate, the window shortcut; tauri-shell/src/entry.rs) read focus, target and visibility themselves and ask main session.spawnWindow and session.openPath (index.ts: the cwd match over these records). W3: the app menu and the tray are the shell's (app_menu.rs, tray.rs); main logs their Quit's asker (app.quitAsked). WindowManager keeps numbering windows (host.nextWindowId), the pool-facing record and cwd, the close-to-tray decision and the focus/target reads ipc.ts makes in the same tick (W4, §1.3a,c).
 src/main/workspace-fs-order.test.ts	tooling	-	Vitest suite: the core's name order.
 src/main/workspace-fs.test.ts	tooling	-	Vitest suite: workspace file reads, MIME detection, confinement and mutations.
 src/main/workspace-fs.ts	mixed	2	fs.* owns file I/O, caps and MIME detection. IPC and paired web actions also call resolveWithin synchronously. Trash passes the checked path to the shell's recycle operation, not a permanent unlink (§1.3a,c).
