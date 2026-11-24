@@ -22,9 +22,14 @@ impl Ctx {
             return Ok(());
         };
         self.with(|pool| Ctx::add_stop_wait(pool, token, &tab, seq));
-        // The timer is main's, so its (fake) clock is the clock here too; main says how long (`STOP_SESSION_WAIT_MS`).
+        // The core's clock: the wait ends `STOP_SESSION_WAIT_MS` (main's one definition, in `opts`) from now, whatever
+        // main's thread is doing; a wait the run's end settled first makes `stop_timeout` a no-op.
         let wait = self.with(|pool| pool.stop_wait_ms);
-        self.push(&json!({"k": "stopTimer", "token": token, "ms": wait}));
+        let ctx = self.clone();
+        super::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            ctx.stop_timeout(token);
+        });
         self.note_stopped(&tab).await?;
         self.push(&json!({"k": "turnStop", "tab": tab, "command": "abort_and_restore_queue", "by": "session-delete"}));
         // Its queued messages go too: they would start the next turn on a session about to be deleted.
@@ -44,8 +49,8 @@ impl Ctx {
         Ok(())
     }
 
-    /// The timer main ran for `stop_session` ended before the run did.
-    pub(super) fn stop_timeout(&self, token: u64) {
+    /// The wait `stop_session` armed ended before the run did.
+    fn stop_timeout(&self, token: u64) {
         let waiting = self.with(|pool| {
             let before = pool.stop_waits.len();
             pool.stop_waits.retain(|wait| wait.token != token);

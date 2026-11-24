@@ -1,6 +1,6 @@
 /**
- * Main's client of the preference files the core owns (`native/ompdesk/crates/core/src/prefs`): `prefs.json`,
- * `window-state.json` and `sidebar-device-order.json` in userData, with the API `electron-store` gave them (a dotted
+ * Main's client of the preference files the core owns (`native/ompdesk/crates/core/src/prefs`): `prefs.json`
+ * and `sidebar-device-order.json` in userData, with the API `electron-store` gave them (a dotted
  * key is a nested path, `get` answers a fresh copy, `set(key, undefined)` is refused).
  *
  * The core is the one owner and writer; a change is a synchronous hub call, so it is committed before `set` returns.

@@ -90,6 +90,11 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `app.focus` | Node | `{steal?: boolean}` | `{}` |
 | `app.hide` / `app.show` | Node | `{}` | macOS `NSApp hide/unhide`; no-op elsewhere. |
 | `app.setBadge` | Node | `{text}` | macOS Dock badge (`app.dock.setBadge`); no-op elsewhere. |
+| `app.setRunProgress` | Node | `{state: "working"\|"waiting"\|"idle"}` | Tauri: `{}` — macOS Dock badge (● working, ! waiting) and Dock progress, Windows taskbar progress on every app window (0.5 working, 0.75 waiting, none idle; `tauri-shell/src/app_window.rs`). |
+| `app.quitAsked` (event) | shell→Node | `{asker, ask: {relaunch}}` | Tauri: a window's restart dialog was answered "Restart now" (`asker` `restart-prompt` or `crash-recovery`); Node logs the asker and freezes, then the shell's approved quit with relaunch reaches `app.quitHook`. |
+| `window.notice` | shell→Node | `{kind: "hang"\|"resources"\|"crash"}` | Tauri: `hang` shows Node's stuck-page notification (`null`); `resources` and `crash` answer the restart dialog's `{message, detail, buttons: [restart, other]}` in the app's language, the first with the running and total tabs. |
+| `window.log` (event) | shell→Node | `{wcId, entry: {source, message, url?, details?, stack?}}` | Tauri: a `gui-runtime.jsonl` line about an app window's page (`preload`, `renderer-process`, `renderer-unresponsive`, `application-resources`); Node writes it with the window's id and cwd. |
+| `store.saveFailed` / `store.saved` (events) | shell→Node | `{file}` | Tauri: `window-state.json` waits for disk space / was saved; Node's one disk-full notice lists it meanwhile. |
 | `app.setDockIcon` | Node | `{}` + `bin` PNG | macOS `app.dock.setIcon`. |
 | `app.setAppUserModelId` | Node | `{id}` | Windows AppUserModelID (also in `app.init`). |
 | `app.setAsDefaultProtocolClient` | Node | `{protocol}` | `{ok: boolean}` — registers the shell's own exe: Windows `HKCU\Software\Classes\<protocol>` (`shell\open\command` = `"exe" "%1"`), macOS LaunchServices (`LSSetDefaultHandlerForURLScheme`). The shell's exe only: dev runs register the dev shell. |
@@ -141,6 +146,13 @@ Chrome as in the contract: frameless; Windows draws the caption buttons (138 × 
 colours), macOS hidden-inset traffic lights at `trafficLightPosition`.
 For a restored app window, `restoreBounds: true` tells the Tauri host to keep the requested rectangle if its
 title bar is reachable, or fit it on the primary work area otherwise. `win.create` uses its cached display facts.
+**Tauri app windows** (W1, `tauri-shell/src/app_window.rs`): the shell ignores the geometry and chrome options. It
+opens the window at `<userData>/window-state.json`'s bounds (28 px further per open app window, `restoreBounds`),
+maximized when saved so (and then without Mica), frameless with the Mica backdrop on Windows 11 22H2+, at least
+800 × 600, hidden; it adds `slot` (the lowest free among open app windows) and `mica=1` to the page's `loadURL`, shows
+the window on its first `ready-to-show` as `options.presence` says (`hidden`: not at all, `minimized`, `behind`:
+`showInactive`; none: `show`, or `showInactive` under `OMP_GUI_HEADLESS=1`), and saves its bounds when it closes
+(`win.closeRequested`, `win.op close`).
 
 `win.op` ops (`args` object):
 `show`, `showInactive`, `hide`, `close` (`{force: true}` — Node already ran the `close` listeners and the
@@ -187,8 +199,8 @@ instead of resizing a bitmap), `Page.printToPDF` (`transferMode: "ReturnAsBase64
 `delete`, `replaceMisspelling {text}`, `copyImageAt {x, y}`, `setWebRTCIPHandlingPolicy {policy}`,
 `setFrameRate {fps}`, `invalidate`, `startPainting`, `stopPainting`, `focus`, `setAudioMuted {muted}`,
 `setBackgroundThrottling {allowed}`, `ignoreBeforeUnload`, `close` (destroys the page), `watchEvents {names}`,
-`forcefullyCrashRenderer` (ends the page's content process: macOS `_killWebContentProcessAndResetState`, Windows
-`TerminateProcess` of the renderer `GetProcessExtendedInfos` names for its main frame; `render-process-gone` `{reason: "killed"}` follows, and Node loads the page again).
+`forcefullyCrashRenderer` (CEF shell: ends the page's content process; `render-process-gone` `{reason: "killed"}`
+follows). The Tauri host has no such op: it ends a stuck app page itself (`app_window.rs`, `page_watch`).
 
 `wc.event` names and `args` (all the page-level events the app listens to):
 

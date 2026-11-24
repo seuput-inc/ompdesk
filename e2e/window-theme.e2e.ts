@@ -3,8 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
-import { micaSupported } from "../src/main/window-chrome";
-import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
+import { exitApp, fixtureOmp, pressShortcutUntilVisible, windowsDrawsMica } from "./harness";
 
 // A new window opens in the saved theme exactly like the first one, whatever the OS is set to:
 // main creates every window under `nativeTheme.themeSource` = the saved scheme (the Windows Mica
@@ -106,7 +105,7 @@ for (const scheme of ["light", "dark"] as const) {
 			expect(await second.evaluate(() => Reflect.get(window, "__prePaintTheme"))).toBe(scheme);
 			await expect.poll(() => surfaces(second), { timeout: 30_000 }).toEqual(expected);
 			if (process.platform === "win32") {
-				expect(expected.mica).toBe(micaSupported("win32", os.release()) ? "true" : undefined);
+				expect(expected.mica).toBe(windowsDrawsMica() ? "true" : undefined);
 			}
 			// Picking another theme in Settings moves the native theme with it, so later windows open in that one;
 			// back on System, the window settles on the OS scheme once the native theme stops forcing one.

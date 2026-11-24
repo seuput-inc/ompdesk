@@ -4,12 +4,13 @@
  * for the facts before any main code runs, so Electron's synchronous `app.getPath()` and friends work at module top
  * level, as they do there.
  */
+import type { RunProgressState } from "../../../shared/ipc-types";
 import { shutdownCore } from "../../core/process";
 import type { DiagnosticBundleDeps } from "../../diagnostic-bundle";
 import type { DiagnosticsDeps } from "../../diagnostics";
 import type { WatchdogSignal } from "../../hang-watchdog";
 import type { AdmitNotification } from "../../notify-triage";
-import { exitReport } from "../../quit-log";
+import { exitReport, type QuitAsk, type QuitAsker } from "../../quit-log";
 import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from "../../runtime-log-core";
 import type { IpcShell } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
@@ -53,6 +54,31 @@ export function onPairedPagePush(
 	listener: (push: { connId: string; channel: string; payload: unknown }) => void,
 ): void {
 	client.on("page.push", listener);
+}
+
+/** What the shell asks main about an app window (`tauri-shell/src/app_window.rs`). */
+export type WindowNotice = "hang" | "resources" | "crash";
+
+/**
+ * The shell's app windows: a `gui-runtime.jsonl` line about a window's page, the stuck-page notice or a restart
+ * dialog's text, the quit a restart dialog approved (it then runs the quit chain itself), and the window geometry file
+ * waiting for disk space.
+ */
+export function serveWindows(windows: {
+	log(wcId: number, entry: RuntimeLogReport): void;
+	notice(kind: WindowNotice): unknown;
+	quitAsked(asker: QuitAsker, ask: QuitAsk): void;
+	saves(file: string, waiting: boolean): void;
+}): void {
+	client.on("window.log", ({ wcId, entry }: { wcId: number; entry: RuntimeLogReport }) => windows.log(wcId, entry));
+	client.handle("window.notice", ({ kind }: { kind: WindowNotice }) => windows.notice(kind));
+	client.on("app.quitAsked", ({ asker, ask }: { asker: QuitAsker; ask: QuitAsk }) => windows.quitAsked(asker, ask));
+	client.on("store.saveFailed", ({ file }: { file: string }) => windows.saves(file, true));
+	client.on("store.saved", ({ file }: { file: string }) => windows.saves(file, false));
+}
+
+export function setShellRunProgress(state: RunProgressState): void {
+	void client.call("app.setRunProgress", { state }).catch((error: unknown) => console.warn("[run-progress]", error));
 }
 
 export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params =>

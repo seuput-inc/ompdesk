@@ -1,4 +1,4 @@
-//! The preference files (`<userData>/prefs.json`, `window-state.json`, `sidebar-device-order.json`; was
+//! The preference files (`<userData>/prefs.json` and `sidebar-device-order.json`; was
 //! `src/main/safe-store.ts` over `electron-store`): the core is their one owner. Main reads and changes them through
 //! the hub (`src/main/prefs-store.ts`), so a read in the same tick as a change sees it, as conf's did.
 //!

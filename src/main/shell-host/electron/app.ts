@@ -82,7 +82,7 @@ function readPackage(appPath: string): { name: string; version: string } {
 export class App extends EventEmitter {
 	readonly commandLine: CommandLine;
 	readonly isPackaged: boolean;
-	readonly dock: { setBadge(text: string): void; setIcon(image: { bytes(): Buffer | null }): void } | undefined;
+	readonly dock: { setIcon(image: { bytes(): Buffer | null }): void } | undefined;
 	readonly #host: Host;
 	readonly #facts: HostFacts;
 	readonly #initState: InitState;
@@ -117,7 +117,6 @@ export class App extends EventEmitter {
 		this.dock =
 			process.platform === "darwin"
 				? {
-						setBadge: text => host.post("app.setBadge", { text }),
 						setIcon: image => {
 							const bytes = image.bytes();
 							if (bytes) host.post("app.setDockIcon", {}, bytes);
