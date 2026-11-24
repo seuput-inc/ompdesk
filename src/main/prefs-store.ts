@@ -33,7 +33,11 @@ function instance(): number {
 		"prefs",
 		{},
 		{
-			item: () => {},
+			// A change main did not make (a native caller's `prefs::update`).
+			item: item => {
+				if (item.k === "changed" && typeof item.file === "string" && typeof item.key === "string")
+					forget(item.file, item.key);
+			},
 			ask: q => {
 				throw new Error(`the prefs ask nothing (${q})`);
 			},
@@ -50,6 +54,18 @@ function instance(): number {
 /** The first segment of a dotted key, or null when an escape makes it unclear. */
 function head(key: string): string | null {
 	return key.includes("\\") ? null : (key.split(/[.[]/, 1)[0] ?? "");
+}
+
+/** Drops the answers of `file` a change of `key` could reach; `key` null reaches all. */
+function forget(file: string, key: string | null): void {
+	const cached = answers.get(file);
+	if (!cached) return;
+	cached.whole = null;
+	const changed = key === null ? null : head(key);
+	for (const known of [...cached.keys.keys()]) {
+		const reached = head(known);
+		if (changed === null || reached === null || reached === changed) cached.keys.delete(known);
+	}
 }
 
 function copy<V>(value: V): V {
@@ -119,13 +135,7 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 		try {
 			this.#call(method, params);
 		} finally {
-			const cached = this.#answers();
-			cached.whole = null;
-			const changed = key === null ? null : head(key);
-			for (const known of [...cached.keys.keys()]) {
-				const reached = head(known);
-				if (changed === null || reached === null || reached === changed) cached.keys.delete(known);
-			}
+			forget(this.path, key);
 		}
 	}
 

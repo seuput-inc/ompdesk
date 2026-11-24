@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::path::{Part, parse};
-use super::{delete, flush, get, read_key, remove_key, set, store, write_key};
+use super::{delete, flush, get, read_key, remove_key, set, store, update, write_key};
 
 #[derive(Deserialize)]
 struct Vectors {
@@ -135,5 +135,54 @@ fn a_missing_file_is_an_empty_store_until_something_is_set() {
     assert_eq!(
         serde_json::from_str::<Value>(&std::fs::read_to_string(&file).unwrap()).unwrap(),
         json!({ "windowState": { "width": 800 } })
+    );
+}
+
+#[test]
+fn every_retired_pref_leaves_and_a_live_one_stays() {
+    let dir = temp();
+    for (key, _) in super::retired::RETIRED {
+        let mut store =
+            serde_json::from_value::<Map<String, Value>>(json!({ "language": "en" })).unwrap();
+        write_key(&mut store, key, json!(false)).unwrap();
+        assert!(super::retired::migrate(&mut store, dir.path()), "{key}");
+        assert_eq!(read_key(&store, key).unwrap(), None, "{key}");
+        assert_eq!(read_key(&store, "language").unwrap(), Some(json!("en")));
+        assert!(
+            !super::retired::migrate(&mut store, dir.path()),
+            "{key} twice"
+        );
+    }
+}
+
+#[test]
+fn an_update_patches_the_value_it_read_and_answers_what_is_held() {
+    let dir = temp();
+    let file = dir.path().join("prefs.json");
+    let name = file.to_str().unwrap();
+    set(
+        name,
+        "sidebar",
+        json!({ "pinnedSessions": ["/a"], "other": 1 }),
+    )
+    .unwrap();
+
+    let moved = update(name, "sidebar", |current| {
+        let mut next = current.cloned()?;
+        next["pinnedSessions"] = json!(["/b"]);
+        Some(next)
+    })
+    .unwrap();
+    assert_eq!(moved, Some(json!({ "pinnedSessions": ["/b"], "other": 1 })));
+    assert_eq!(
+        get(name, "sidebar.pinnedSessions").unwrap(),
+        Some(json!(["/b"]))
+    );
+
+    let left = update(name, "sidebar", |_| None).unwrap();
+    assert_eq!(left, moved);
+    assert_eq!(
+        update(name, "missing", |current| current.cloned()).unwrap(),
+        None
     );
 }
