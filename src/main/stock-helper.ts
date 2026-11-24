@@ -143,7 +143,7 @@ export class StockHelper {
 		this.#stopped = true;
 		launchers.delete(this.#host);
 		// No core, no workers (they end with it); a core is never started to stop nothing.
-		if (core().pid === null) return;
+		if (core().generation === 0) return;
 		await core()
 			.call("stock.stop", { host: this.#host })
 			.catch(() => {});

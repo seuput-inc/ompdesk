@@ -30,13 +30,18 @@ export function windowsProcesses(): WinProcess[] {
 export const describeProcess = (process: WinProcess) =>
 	`${process.pid} (parent ${process.ppid}) ${process.name}: ${process.commandLine ?? process.exe ?? "?"}`;
 
-/** Main starts the RPC core without arguments. The MCP hub and supervisor use the same executable. */
+/**
+ * The RPC cores of the app whose main is `mainPid`: the shell (main's parent) starts them without arguments. The MCP
+ * hub and supervisor use the same executable.
+ */
 export function corePids(mainPid: number): number[] {
-	if (process.platform === "win32")
-		return windowsProcesses()
+	if (process.platform === "win32") {
+		const all = windowsProcesses();
+		const shell = all.find(entry => entry.pid === mainPid)?.ppid;
+		return all
 			.filter(
 				entry =>
-					entry.ppid === mainPid &&
+					entry.ppid === shell &&
 					entry.name.toLowerCase() === "ompdesk-core.exe" &&
 					entry.exe !== null &&
 					entry.commandLine
@@ -45,12 +50,15 @@ export function corePids(mainPid: number): number[] {
 						.toLowerCase() === entry.exe.toLowerCase(),
 			)
 			.map(entry => entry.pid);
-	return execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+	}
+	const rows = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
 		.split("\n")
 		.flatMap(line => {
 			const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
-			return match && Number(match[2]) === mainPid && match[3]?.endsWith("/ompdesk-core") ? [Number(match[1])] : [];
+			return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }] : [];
 		});
+	const shell = rows.find(row => row.pid === mainPid)?.ppid;
+	return rows.filter(row => row.ppid === shell && row.command.endsWith("/ompdesk-core")).map(row => row.pid);
 }
 
 /**
