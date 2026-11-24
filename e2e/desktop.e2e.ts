@@ -101,12 +101,15 @@ test("stock session identity, cycling in both directions, and /copy stay usable"
 });
 
 test("Check for Updates… from the app menu reports in the sidebar without opening Settings", async () => {
-	await app.evaluate(({ Menu }) => {
-		const item = Menu.getApplicationMenu()
-			?.items.flatMap(top => top.submenu?.items ?? [])
-			.find(entry => entry.label === "Check for Updates…");
-		if (!item) throw new Error("Check for Updates… is missing from the app menu");
-		item.click();
+	// The shell's app menu (tauri-shell/src/app_menu.rs), chosen through main's test inspector as a person's click is.
+	await app.evaluate(async () => {
+		// What main defines under the test inspector (src/main/shell-host/electron/index.ts).
+		const menus: { click(menu: "app", label: string): Promise<unknown> } | undefined = Reflect.get(
+			globalThis,
+			"__ompdeskMenus",
+		);
+		if (!menus) throw new Error("main exposes no __ompdeskMenus");
+		await menus.click("app", "Check for Updates…");
 	});
 	const card = page.locator("[data-sidebar-update]");
 	await expect(card).toBeVisible();

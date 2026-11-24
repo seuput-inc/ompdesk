@@ -87,11 +87,7 @@ export function createElectron(client: HostClient, facts: HostFacts, options: Cr
 	serveIpc(host, ipcMain);
 
 	const desktop = createDesktopModules(host, { focusedWindowId: () => BrowserWindow.getFocusedWindow()?.id });
-	const menus = createMenuModule(host, {
-		focusedWindow: () => BrowserWindow.getFocusedWindow(),
-		quit: () => app.quit(),
-		showAboutPanel: () => app.showAboutPanel(),
-	});
+	const menus = createMenuModule(host, { focusedWindow: () => BrowserWindow.getFocusedWindow() });
 
 	const session = {
 		get defaultSession(): Session {

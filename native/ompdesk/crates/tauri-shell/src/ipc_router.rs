@@ -13,8 +13,8 @@
 
 use crate::log::log;
 use crate::native_services::diagnostic_logs::FeedbackRead;
-use crate::page_dialogs;
 use crate::registry::Identity;
+use crate::{page_dialogs, tray};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -149,6 +149,9 @@ fn handler(channel: &str) -> Option<Handler> {
         "system:save-dialog" => |_, caller, args| page_dialogs::save_dialog(caller, args),
         "system:open-dialog" => |_, caller, args| page_dialogs::open_dialog(caller, args),
         "system:save-image" => |_, caller, args| page_dialogs::save_image(caller, args),
+        // The tray's hover text and the app icon's progress gather every window's pushes (tray.rs).
+        "tray:state-push" => |_, caller, args| Ok(tray::state_push(caller, &args[0])),
+        "progress:set" => |_, caller, args| Ok(tray::progress_push(caller, &args[0])),
         _ => return None,
     })
 }
