@@ -80,6 +80,14 @@ impl Ctx {
             } else {
                 None
             };
+            // A synthetic reattach start can invalidate the prior omp's turn without withdrawing its replayed asks.
+            let replaced = payload.get("hostTurn").is_some_and(Value::is_null);
+            if entry.device.is_some() && (!from_link || replaced) && !session_ended {
+                let new_omp = replaced
+                    || status == "restarting"
+                    || (status == "starting" && entry.start_wait.is_none());
+                entry.tracking.host_status(payload, new_omp);
+            }
             let seq = entry.seq;
             let mut host_sign_in = None;
             // A restart/exit kills any in-flight run along with the process, and the asks and approvals it had
@@ -160,18 +168,29 @@ impl Ctx {
     async fn feed_host_run(&self, tab: &str, reading: &Value) -> R<()> {
         let changed = self.with(|pool| {
             let now = pool.now;
+            let mut serial = pool.retry_serial;
             let entry = pool.entry_mut(tab)?;
             let was_busy = entry.busy();
             entry.run_across_link = false;
             entry.tracking.run = RunState::from_reading(reading, Some(&entry.tracking.run), now);
-            Some(entry.busy() != was_busy)
+            let outcome_changed =
+                entry.device.is_some() && entry.tracking.read_host_outcome(reading, &mut serial);
+            let busy_changed = entry.busy() != was_busy;
+            pool.retry_serial = serial;
+            Some((busy_changed, outcome_changed))
         });
-        if changed != Some(true) {
+        let Some((busy_changed, outcome_changed)) = changed else {
+            return Ok(());
+        };
+        if !busy_changed && !outcome_changed {
             return Ok(());
         }
         self.forward_status(tab).await?;
         self.on_running_change().await?;
-        self.announce_run(tab).await
+        if busy_changed {
+            self.announce_run(tab).await?;
+        }
+        Ok(())
     }
 
     /// A paired host deleted this session while the tab was away: it closes here as a delete from this device would,
@@ -493,7 +512,7 @@ impl Ctx {
             unsaved_before: Option<String>,
             goal_before: bool,
         }
-        let list = events.as_array().cloned().unwrap_or_default();
+        let list = events.as_array().map(Vec::as_slice).unwrap_or_default();
         let (seen, run_ended, retry_started, stepped, hidden, win) = self.with(|pool| {
             let now = pool.now;
             let mut serial = pool.retry_serial;
@@ -514,8 +533,9 @@ impl Ctx {
             let mut retry_started = false;
             let mut stepped = false;
             let mut hidden: Vec<Value> = Vec::new();
-            for event in &list {
-                if entry.tracking.track(event, now, &mut serial) {
+            let remote = entry.device.is_some();
+            for event in list {
+                if entry.tracking.track(event, now, &mut serial, remote) {
                     run_ended = true;
                 }
                 match event["type"].as_str() {

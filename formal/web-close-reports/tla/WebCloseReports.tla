@@ -171,9 +171,9 @@ CloseDecide(t) ==
                /\ UNCHANGED <<deciding, bad>>
     /\ UNCHANGED <<edit, conn, live, greeted, q, handoff, store, released, edits, late>>
 
-\* The release lands after awaits (host.release, closeWindowTab's refreshExitPolicy); reports may arrive meanwhile.
+\* The local release lands after awaits (exit policy and, on a paired owner, the host's close reply); reports may arrive meanwhile.
 \* Right after the await, with no await before the release, the one rule decides again on what the store says now.
-\* @code src/main/tab-release.ts:38-48 refreshExitPolicy, stillClosable, releaseTab
+\* @code src/main/tab-release.ts:41-52 refreshExitPolicy, closeHostTurn, final stillClosable, releaseTab
 \* @code src/main/agent-control/host.ts:1244-1251 release: the re-check reads the store's word then (`edits(...) !== "dirty"`)
 CloseRelease(t) ==
     /\ t \in deciding

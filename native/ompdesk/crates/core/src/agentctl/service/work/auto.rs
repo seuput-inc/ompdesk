@@ -510,7 +510,7 @@ impl AgentControl {
     }
 
     async fn close_resting_child(&self, caller_tab_id: &str, tab: &ControlTab) -> R<TabClose> {
-        let Some(turn) = tab.close_turn else {
+        let Some(turn) = tab.close_turn.as_ref() else {
             return Ok(TabClose::Kept);
         };
         let numbered = match &tab.last_run {

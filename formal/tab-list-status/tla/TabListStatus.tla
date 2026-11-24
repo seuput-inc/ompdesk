@@ -35,7 +35,7 @@ Init ==
     /\ late = 0
 
 \* @code native/ompdesk/crates/core/src/pool/listen.rs:58-65 feed_status: the tab's state changes
-\* @code native/ompdesk/crates/core/src/pool/state.rs:579-588 forward_status: TAB_STATUS with the state at send time
+\* @code native/ompdesk/crates/core/src/pool/state.rs:594-603 forward_status: TAB_STATUS with the state at send time
 MainChange ==
     /\ mainV < MaxV
     /\ mainV' = mainV + 1
@@ -56,7 +56,7 @@ Send(r) ==
     /\ req' = [req EXCEPT ![r].phase = "sent", ![r].sent = pushCount]
     /\ UNCHANGED <<mainV, pushes, view, pushCount, late>>
 
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:743-749 tabs_for_window reads the window's tabs
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:728-734 tabs_for_window reads the window's tabs
 Answer(r) ==
     /\ req[r].phase = "sent"
     /\ req' = [req EXCEPT ![r].phase = "answered", ![r].snap = mainV]

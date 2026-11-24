@@ -89,6 +89,7 @@ import type { MachineServices } from "../machine-services";
 import type { ModelWaitTracker } from "../model-wait-count";
 import { noteOmpExit } from "../omp-exits";
 import { ompRestartDecision } from "../omp-restart";
+import { RpcTimeoutError } from "../rpc-client";
 import type { SessionIndex } from "../session-index";
 import { SessionListShare } from "../session-list-share";
 import {
@@ -155,6 +156,7 @@ import {
 	CustomProviderInputSchema,
 	encodeBinaryRead,
 	GIT_METHODS,
+	HostCloseTurnSchema,
 	HostFsReadRangeParams,
 	HostUploadParams,
 	HostUploadPartParams,
@@ -384,6 +386,9 @@ interface HostTab extends RunTracking {
 	/** The tab's id for this computer's resume coordinator; kept when a relaunched device re-keys the tab. */
 	resumeId: string;
 	sidecar: SidecarLike;
+	turnSerial: number;
+	finishedTurn: boolean;
+	awaitingStarts?: Set<symbol>;
 	/**
 	 * Names the omp process the tab's statuses come from, new with each one the sidecar starts: a device that
 	 * re-attaches after a lost link compares it with the last it saw to tell the same omp from a new one.
@@ -438,6 +443,7 @@ interface HostTab extends RunTracking {
 	 * limit, or for a view the retry of the window's tab it shows.
 	 */
 	scheduledRetry?: IpcScheduledRetry;
+	resuming?: boolean;
 	/** Provider ids of the `login` commands running on this tab (a device's sign-in, even if its link dropped). */
 	signIns?: string[];
 	/**
@@ -522,6 +528,7 @@ const SessionPath = z.string().endsWith(".jsonl");
 const Scope = z.enum(["local", "global"]);
 
 const RtabParams = z.object({ rtab: Rtab });
+const CloseParams = RtabParams.extend({ expectedTurn: HostCloseTurnSchema.nullable().optional() });
 const OpenParams = z.object({
 	rtab: Rtab,
 	cwd: AbsolutePath.optional(),
@@ -982,6 +989,11 @@ export class LocalHostServices implements HostServices {
 		this.workChanged();
 	}
 
+	setResuming(id: string, resuming: boolean): void {
+		const tab = this.#byResumeId(id);
+		if (tab) tab.resuming = resuming;
+	}
+
 	/** Show (or with `undefined` clear) the hosted tab's wait for a provider's limit; its device counts it down and may cancel it. */
 	setScheduledRetry(id: string, retry: IpcScheduledRetry | undefined): void {
 		const tab = this.#byResumeId(id);
@@ -1165,6 +1177,7 @@ export class LocalHostServices implements HostServices {
 			start: () => this.#start(tab),
 			answer: frame => this.#answer(tab, frame, "host", view),
 			stopped: () => this.noteStopped(tab.resumeId),
+			prompting: () => expectHostStart(tab),
 			cancelWait: () => this.#resume?.cancelWait(tab.resumeId),
 			snapshot: () => ({
 				asks: [...tab.asks.values()],
@@ -1299,7 +1312,36 @@ export class LocalHostServices implements HostServices {
 				return this.#tab(peer, rtab).sidecar.adoptCwd(cwd);
 			}
 			case "tab.close": {
-				const key = this.#key(peer.deviceId, parse(RtabParams, method, params).rtab);
+				const close = parse(CloseParams, method, params);
+				const key = this.#key(peer.deviceId, close.rtab);
+				if ("expectedTurn" in close) {
+					const tab = this.#tabs.get(key);
+					if (this.#opening.has(key)) return false;
+					if (!tab) return true;
+					const expected = close.expectedTurn;
+					if (
+						!expected ||
+						expected.omp !== tab.omp ||
+						expected.turn !== tab.turnSerial ||
+						!tab.finishedTurn ||
+						tab.awaitingStarts?.size ||
+						tab.viewing ||
+						tab.views.size > 0 ||
+						(tab.sidecar.status !== "ready" && tab.sidecar.status !== "asleep") ||
+						runBusy(tab.run) ||
+						tab.run.saga ||
+						tab.retry ||
+						tab.asks.size ||
+						tab.planProposal ||
+						tab.awaitingConnection ||
+						tab.scheduledRetry ||
+						tab.resuming ||
+						this.#resume?.relaunchContinuation(tab.resumeId) === "after_restore"
+					)
+						return false;
+					this.#closeTab(key);
+					return true;
+				}
 				if (!this.#tabs.has(key) && this.#opening.has(key)) this.#closedWhileOpening.add(key);
 				this.#closeTab(key);
 				return null;
@@ -2075,7 +2117,7 @@ export class LocalHostServices implements HostServices {
 			// the device still has to `tab.start` it.
 			const attached = existing.sidecar.status !== "asleep";
 			// The turn first: the device kept its reading through the lost link and checks it against this.
-			if (attached) this.#emit(existing, "run", runReading(existing.run));
+			if (attached) this.#emit(existing, "run", this.#runArg(existing));
 			if (attached) this.#emit(existing, "status", this.#statusArg(existing, existing.sidecar.statusPayload));
 			// Which sign-ins still run decides whether a re-sent code paste is the login panel's or a leftover,
 			// so it goes first.
@@ -2116,7 +2158,7 @@ export class LocalHostServices implements HostServices {
 				throw error;
 			}
 			const tab = this.#createTab(peer, params.rtab, view.cwd, view.kind, false, params.sessionPath, conn, holder);
-			this.#emit(tab, "run", runReading(tab.run));
+			this.#emit(tab, "run", this.#runArg(tab));
 			// A tab this computer revived after a restart is still asleep: the device opening it wants it live.
 			if (view.status === "asleep") view.start();
 			this.#emit(tab, "status", this.#statusArg(tab, view.statusPayload));
@@ -2329,6 +2371,8 @@ export class LocalHostServices implements HostServices {
 			resumeId: resumeId(peer.deviceId, rtab),
 			sidecar,
 			omp: randomUUID(),
+			turnSerial: 0,
+			finishedTurn: true,
 			conn,
 			resumeSessionPath: sessionPath,
 			sessionFile: sessionPath,
@@ -2415,8 +2459,12 @@ export class LocalHostServices implements HostServices {
 					sidecar.on(name, (payload: SidecarStatusPayload) => {
 						// A slow or queued start's `starting` re-send is no new omp: the tab keeps its id.
 						const resend = payload.status === "starting" && (payload.slow || payload.queued);
-						if ((payload.status === "starting" && !resend) || payload.status === "restarting")
+						if ((payload.status === "starting" && !resend) || payload.status === "restarting") {
 							tab.omp = randomUUID();
+							tab.turnSerial = 0;
+							tab.finishedTurn = true;
+							tab.awaitingStarts = undefined;
+						}
 						this.#emit(tab, name, this.#statusArg(tab, payload));
 						if (payload.status === "ready") void this.#handKept(tab);
 					});
@@ -2445,9 +2493,7 @@ export class LocalHostServices implements HostServices {
 					// (`setScheduledRetry`; a view forwards its window tab's, #createTab), and `tab.open` sends the asks.
 					break;
 				case "events":
-					// The plan proposals leave stamped with this host's generation (`#stampPlans`): the target's is the
-					// one the device's pool keeps and its agent's answer carries back.
-					sidecar.on(name, (events: AgentSessionEvent[]) => this.#emit(tab, name, this.#stampPlans(tab, events)));
+					// Forwarded by #trackRun with each outcome's own turn.
 					break;
 				default:
 					sidecar.on(name, (arg: unknown) => this.#emit(tab, name, arg));
@@ -2505,12 +2551,29 @@ export class LocalHostServices implements HostServices {
 			}),
 		);
 		sidecar.on("events", (events: AgentSessionEvent[]) => {
+			let stamped = events;
 			change(() => {
 				// A fast turn can start and end inside one batch: busy never changes, yet its outcome is news.
 				let news = false;
-				for (const event of events) if (trackRunEvent(tab, event) || event.type === "auto_retry_start") news = true;
+				for (const [index, event] of events.entries()) {
+					if (event.type === "agent_start") {
+						tab.finishedTurn = false;
+						// Several prompts sent while idle may coalesce into this one start.
+						tab.awaitingStarts = undefined;
+					}
+					const ended = trackRunEvent(tab, event);
+					if (ended || event.type === "auto_retry_start") news = true;
+					if (!ended) continue;
+					tab.finishedTurn =
+						!tab.awaitingStarts?.size && !(event.type === "agent_end" && event.isTerminal === false);
+					if (!tab.finishedTurn || tab.viewing) continue;
+					const stampedEvent = { ...event, hostTurn: { omp: tab.omp, turn: ++tab.turnSerial } };
+					if (stamped === events) stamped = events.slice();
+					stamped[index] = stampedEvent;
+				}
 				return news;
 			});
+			this.#emit(tab, "events", this.#stampPlans(tab, stamped));
 			// A tab a window shows is counted by the pool; a device's own tab waits on this computer's account too.
 			if (!tab.viewing) this.#deps.localTabs.modelWait?.observe(`hosted:${tab.resumeId}`, "", events);
 			// Another device's tab here is charged to that device as it runs (its own tab sees the same replies), and a
@@ -2631,6 +2694,18 @@ export class LocalHostServices implements HostServices {
 		});
 	}
 
+	#runArg(tab: HostTab) {
+		return {
+			...runReading(tab.run),
+			...(tab.finishedTurn && !tab.awaitingStarts?.size && !tab.viewing
+				? {
+						hostTurn: { omp: tab.omp, turn: tab.turnSerial },
+						...(tab.turnSerial > 0 && tab.lastRun ? { lastRun: tab.lastRun } : {}),
+					}
+				: {}),
+		};
+	}
+
 	#statusArg(tab: HostTab, payload: SidecarStatusPayload): TabStatusArg {
 		const { sidecar } = tab;
 		const { status, cwd: _cwd, ...detail } = payload;
@@ -2642,6 +2717,9 @@ export class LocalHostServices implements HostServices {
 			cwd: sidecar.cwd,
 			kind: sidecar.kind,
 			omp: tab.omp,
+			...(tab.turnSerial === 0 && tab.finishedTurn && !tab.awaitingStarts?.size && !tab.viewing
+				? { hostTurn: { omp: tab.omp, turn: 0 } }
+				: {}),
 		};
 	}
 
@@ -2816,6 +2894,10 @@ export class LocalHostServices implements HostServices {
 						},
 					}
 				: undefined;
+		const rejected =
+			runs && (command.type === "prompt" || command.type === "follow_up" || command.type === "steer")
+				? expectHostStart(runs)
+				: undefined;
 		try {
 			const response = await trackMove(command.type, tracker, () =>
 				commandUsesModel(command)
@@ -2827,6 +2909,7 @@ export class LocalHostServices implements HostServices {
 						)
 					: this.#run(tab, client, command, params.timeoutMs),
 			);
+			if (!response.success) rejected?.();
 			if (!response.success) signInError = response.error ?? "";
 			if (command.type === "browser_relay_stop") this.#relays.forget(this.#key(tab.peerId, tab.rtab));
 			if (response.success && command.type === "browser_relay_start")
@@ -2843,6 +2926,7 @@ export class LocalHostServices implements HostServices {
 			}
 			return response;
 		} catch (error) {
+			rejected?.(error);
 			signInError = error instanceof Error ? error.message : String(error);
 			throw error;
 		} finally {
@@ -3150,6 +3234,19 @@ export class LocalHostServices implements HostServices {
 /** A hosted tab's id for this computer's resume coordinator, beside the local tabs' ids (its first rtab). */
 function resumeId(deviceId: string, rtab: string): string {
 	return `peer:${deviceId}:${rtab}`;
+}
+
+/** A rejected send can release only its own pending start. A timeout does not prove the prompt was refused. */
+function expectHostStart(tab: HostTab): ((error?: unknown) => void) | undefined {
+	// Steers join the foreground turn; queued messages need not produce a separate agent_start either.
+	if (tab.run.turn) return undefined;
+	tab.awaitingStarts ??= new Set();
+	const starts = tab.awaitingStarts;
+	const ticket = Symbol();
+	starts.add(ticket);
+	return error => {
+		if (!(error instanceof RpcTimeoutError)) starts.delete(ticket);
+	};
 }
 
 /**

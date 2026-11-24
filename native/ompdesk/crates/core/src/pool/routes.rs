@@ -157,7 +157,7 @@ impl Ctx {
                 json!({"type": "busy", "tabId": tab})
             } else {
                 let mut activity = json!({"type": "idle", "tabId": tab});
-                if let Some(last) = &entry.tracking.last_run {
+                if let Some(last) = entry.tracking.last_outcome() {
                     activity["outcome"] = last.clone();
                 }
                 activity

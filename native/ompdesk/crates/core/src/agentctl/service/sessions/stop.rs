@@ -53,9 +53,9 @@ fn next_close_id() -> u64 {
 /// What a close of one tab is told (`closeTab`'s `how`): `auto` marks the window's close as the app's own; `cleared`:
 /// the caller checked the in-use rule for this close (`needs_person_turn`) and it lets it go.
 #[derive(Clone, Copy, Debug)]
-pub struct CloseHow {
+pub struct CloseHow<'a> {
     pub auto: bool,
-    pub(crate) expected_turn: Option<crate::pool::AutoCloseTurn>,
+    pub(crate) expected_turn: Option<&'a crate::pool::AutoCloseTurn>,
     pub wait_ms: u64,
     pub cleared: bool,
 }
@@ -206,7 +206,7 @@ impl AgentControl {
         &self,
         caller_tab_id: &str,
         tab_id: &str,
-        how: CloseHow,
+        how: CloseHow<'_>,
     ) -> R<TabClose> {
         let Some(tabs) = self.host.state().tabs(caller_tab_id) else {
             return Ok(TabClose::Kept);
@@ -219,7 +219,7 @@ impl AgentControl {
             });
         };
         if how.expected_turn.is_some_and(|turn| {
-            tab.close_turn != Some(turn) || tab.busy || tab.resuming || waits(tab)
+            tab.close_turn.as_ref() != Some(turn) || tab.busy || tab.resuming || waits(tab)
         }) {
             return Ok(TabClose::Kept);
         }
@@ -263,7 +263,12 @@ impl AgentControl {
     /// A desktop window closes its own tab (its renderer applies the person's guards) and answers the close with
     /// what it did. Waits until the tab is gone (then for its omp's exit) or the window answered that it keeps it;
     /// no answer within the wait is a window whose page is not running.
-    async fn ask_window_close(&self, caller_tab_id: &str, tab_id: &str, how: CloseHow) -> TabClose {
+    async fn ask_window_close(
+        &self,
+        caller_tab_id: &str,
+        tab_id: &str,
+        how: CloseHow<'_>,
+    ) -> TabClose {
         let close_id = next_close_id();
         self.host
             .close_view(caller_tab_id, tab_id, how.auto, close_id, how.expected_turn);

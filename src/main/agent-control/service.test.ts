@@ -71,6 +71,7 @@ interface ScheduleRow {
 
 interface FakeTab extends Omit<ControlTab, "closeTurn"> {
 	entry?: number;
+	hostTurn?: AutoCloseTurn["host"];
 	/** In the calling session's window (the default list); a tab with this false sits in another window. */
 	here: boolean;
 	last?: string;
@@ -154,6 +155,7 @@ class FakeHost implements AgentControlHost {
 			const {
 				here,
 				entry,
+				hostTurn,
 				last: _last,
 				messages: _messages,
 				turn: _turn,
@@ -168,7 +170,9 @@ class FakeHost implements AgentControlHost {
 			const turn = own.lastRun ? own.lastRun.id : 0;
 			return {
 				...own,
-				...(entry !== undefined && turn !== undefined ? { closeTurn: { pool: 1, entry, turn } } : {}),
+				...(entry !== undefined && turn !== undefined
+					? { closeTurn: { pool: 1, entry, turn, host: hostTurn } }
+					: {}),
 				window: here ? "main" : "other",
 			};
 		});
@@ -3108,6 +3112,22 @@ describe("autoClose: opened sessions whose work landed", () => {
 			]);
 		},
 	);
+
+	it("keeps a paired child when its host advanced beyond the turn the opener collected", async () => {
+		const hostTurn = { omp: "incarnation", turn: 7 };
+		const { host, service, child } = await finishedChild({ patch: { webEdits: "clean", hostTurn } });
+		const release = host.release;
+		const observed: (AutoCloseTurn | undefined)[] = [];
+		host.release = async (caller, tab, expected) => {
+			observed.push(expected);
+			if (expected?.host?.omp === hostTurn.omp && expected.host.turn !== 8) return false;
+			return release(caller, tab, expected);
+		};
+		await service.autoClose("main0001");
+		expect(observed).toEqual([{ pool: 1, entry: 2, turn: 1, host: hostTurn }]);
+		expect(host.tabsById.has(child.tabId)).toBe(true);
+		expect(host.closedRecords).toEqual([]);
+	});
 
 	it.each([
 		["a running turn", { busy: true }],

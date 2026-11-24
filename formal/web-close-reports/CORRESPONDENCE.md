@@ -11,7 +11,7 @@
 | `Edits(t)` | `FileEditReports.edits` | pure read |
 | `CloseStep(t)` | `tab_close_step` (`native/ompdesk/crates/core/src/agentctl/rules/tab_close.rs`, the core's one close rule) minus `looked`/`userTouched` | pure |
 | `CloseDecide(t)` | the core's `close_tab` (`native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs`) reads the snapshot's tabs (each tab's `webEdits` from `edits`, `host.ts` `#controlTab`, pushed to the core) and applies `tab_close_step` | synchronous until `await host.release` |
-| `CloseRelease(t)` | `host.release` → `closeWindowTab` → `await refreshExitPolicy` → `stillClosable()` (`edits(...) !== "dirty"` now) → `SidecarPool.releaseTab` | the dirty-state re-check and release run synchronously; a work-based close also compares the expected turn in the pool before it removes the entry or closes any terminals |
+| `CloseRelease(t)` | `host.release` → `closeWindowTab` → exit-policy read and, for a paired owner, host acknowledgement → final `stillClosable()` → `SidecarPool.releaseTab` | the final dirty check and local release run synchronously. The host's own removal is a separate decision, outside this model; if a dirty report lands during the host request, the local tab and its editors remain. |
 
 ## Abstractions that could hide a bug
 
