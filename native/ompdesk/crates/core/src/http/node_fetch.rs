@@ -1,36 +1,27 @@
 //! A GET to the internet as main's Node `fetch` made it (was the global `fetch` of `src/main/model-release-dates.ts`),
-//! for a request a person's network may have been set up for Node:
+//! for a request a person's network may have been set up for Node. This module only decides what Node decided; the
+//! request goes through `http.rs` (its proxy tunnel, redirects and bounds):
 //! - **Trust**: Node's bundled roots (Mozilla's list, which `webpki-roots` carries from the same source) plus the
-//!   certificates `NODE_EXTRA_CA_CERTS` names; the machine's store as well only when `NODE_USE_SYSTEM_CA=1` or
-//!   `--use-system-ca` in `NODE_OPTIONS` asked Node for it.
+//!   certificates `NODE_EXTRA_CA_CERTS` names; the machine's store only when `NODE_USE_SYSTEM_CA=1` or
+//!   `--use-system-ca` in `NODE_OPTIONS` asked Node for it. An `https` proxy is reached with the same trust.
 //! - **Proxy**: none unless `NODE_USE_ENV_PROXY=1` or `--use-env-proxy` in `NODE_OPTIONS`; then undici's
-//!   `EnvHttpProxyAgent` rules: `https_proxy` ?? `HTTPS_PROXY` for an `https` address, else `http_proxy` ??
-//!   `HTTP_PROXY`; `no_proxy` ?? `NO_PROXY` (`*` = never; an entry is a host or a domain whose subdomains it also
-//!   covers, with an optional `:port`); a `CONNECT` tunnel, with Basic credentials from the proxy URL's user and
-//!   password. An `https` proxy is reached over TLS with the same trust.
-//! - **Request**: `fetch`'s default headers, redirects as `http.rs` follows them, `br, gzip, deflate` answers decoded.
+//!   `EnvHttpProxyAgent` picks it: `https_proxy` ?? `HTTPS_PROXY` for an `https` address, falling back to the `http`
+//!   one, `http_proxy` ?? `HTTP_PROXY` for an `http` address; `no_proxy` ?? `NO_PROXY` exempts a host (`*`: every host;
+//!   an entry is a host or a domain whose subdomains it also covers, with an optional `:port`). The proxy URL's user
+//!   and password go as `Basic` credentials (`http.rs`). Picked for the address asked; a redirect keeps that pick.
+//! - **Request**: `fetch`'s default headers and its `accept-encoding`, the answer decoded (`decode.rs`).
 //!
 //! Node read its environment once, at start; so does this, at the first request.
 
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
-use base64::Engine;
-use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
-use hyper::body::{Bytes, Incoming};
-use hyper::header::LOCATION;
-use hyper_util::rt::TokioIo;
-use rustls::pki_types::{CertificateDer, ServerName};
+use http_body_util::{BodyExt, LengthLimitError, Limited};
+use rustls::pki_types::CertificateDer;
 use rustls::{ClientConfig, RootCertStore};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio_rustls::TlsConnector;
 use url::{Host, Url};
 
-use super::{BODY_MAX, Failure, Io, REDIRECT_MAX, Response, Target, decode, extra_roots, target};
-
-/// The longest `CONNECT` answer head read from a proxy.
-const CONNECT_HEAD_MAX: usize = 16 * 1024;
+use super::{BODY_MAX, Failure, Request, Response, Tls, decode, extra_roots, open_with};
 
 /// What Node read of its environment.
 struct Settings {
@@ -41,7 +32,7 @@ struct Settings {
 struct Proxies {
     http: Option<Url>,
     https: Option<Url>,
-    /// `NO_PROXY` as written (`*` is never) and its entries.
+    /// `NO_PROXY` as written (`*` is every host) and its entries.
     no_proxy: String,
     entries: Vec<(String, u16)>,
 }
@@ -111,11 +102,11 @@ impl Proxies {
             if self.no_proxy == "*" {
                 return None;
             }
-            let excluded = self.entries.iter().any(|(entry, entry_port)| {
+            let exempt = self.entries.iter().any(|(entry, entry_port)| {
                 (*entry_port == 0 || *entry_port == port)
                     && (host == *entry || host.ends_with(&format!(".{entry}")))
             });
-            if excluded {
+            if exempt {
                 return None;
             }
         }
@@ -127,7 +118,7 @@ impl Proxies {
     }
 }
 
-/// Node's trust: the bundled roots and `NODE_EXTRA_CA_CERTS`, the machine's store too when asked.
+/// Node's trust: the bundled roots and `NODE_EXTRA_CA_CERTS`, the machine's store when asked.
 fn client_config(
     system_ca: bool,
     extra: Vec<CertificateDer<'static>>,
@@ -156,219 +147,86 @@ fn client_config(
     Ok(Arc::new(config))
 }
 
-static TLS: LazyLock<Result<Arc<ClientConfig>, String>> = LazyLock::new(|| {
+static NODE_TLS: LazyLock<Result<Arc<ClientConfig>, String>> = LazyLock::new(|| {
     client_config(
         SETTINGS.system_ca,
         extra_roots(std::env::var_os("NODE_EXTRA_CA_CERTS")),
     )
 });
 
-fn server_name(host: &Host<String>) -> Result<ServerName<'static>, Failure> {
-    Ok(match host {
-        Host::Domain(name) => ServerName::try_from(name.clone()).map_err(|_| Failure::Request)?,
-        Host::Ipv4(address) => ServerName::from(std::net::IpAddr::V4(*address)),
-        Host::Ipv6(address) => ServerName::from(std::net::IpAddr::V6(*address)),
-    })
-}
-
-async fn tls_over(
-    stream: Box<dyn Io>,
-    host: &Host<String>,
-    config: &Arc<ClientConfig>,
-) -> Result<Box<dyn Io>, Failure> {
-    let stream = TlsConnector::from(config.clone())
-        .connect(server_name(host)?, stream)
-        .await
-        .map_err(|error| {
-            match error
-                .get_ref()
-                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
-            {
-                Some(refused) => Failure::Tls(refused.to_string()),
-                None => Failure::Broken,
-            }
-        })?;
-    Ok(Box::new(stream))
-}
-
-async fn dial(host: &Host<String>, port: u16) -> Result<Box<dyn Io>, Failure> {
-    let stream = match host {
-        Host::Domain(name) => TcpStream::connect((name.as_str(), port)).await,
-        Host::Ipv4(address) => TcpStream::connect((*address, port)).await,
-        Host::Ipv6(address) => TcpStream::connect((*address, port)).await,
-    }
-    .map_err(|_| Failure::Connect)?;
-    let _ = stream.set_nodelay(true);
-    Ok(Box::new(stream))
-}
-
-/// A tunnel to `target` through `proxy`: the proxy's own connection (TLS for an `https` proxy), then `CONNECT`.
-async fn tunnel(
-    target: &Target,
-    proxy: &Url,
-    config: &Arc<ClientConfig>,
-) -> Result<Box<dyn Io>, Failure> {
-    let host = proxy.host().ok_or(Failure::Request)?.to_owned();
-    let port = proxy.port_or_known_default().ok_or(Failure::Request)?;
-    let mut stream = dial(&host, port).await?;
-    match proxy.scheme() {
-        "http" => {}
-        "https" => stream = tls_over(stream, &host, config).await?,
-        _ => return Err(Failure::Request),
-    }
-    let authority = format!("{}:{}", host_text(&target.host), target.port);
-    let mut head = format!("CONNECT {authority} HTTP/1.1\r\nhost: {authority}\r\n");
-    if !proxy.username().is_empty() || proxy.password().is_some() {
-        let decode = |text: &str| {
-            percent_encoding::percent_decode_str(text)
-                .decode_utf8_lossy()
-                .into_owned()
-        };
-        let credentials = format!(
-            "{}:{}",
-            decode(proxy.username()),
-            decode(proxy.password().unwrap_or(""))
-        );
-        let encoded = base64::engine::general_purpose::STANDARD.encode(credentials);
-        head.push_str(&format!("proxy-authorization: Basic {encoded}\r\n"));
-    }
-    head.push_str("proxy-connection: keep-alive\r\n\r\n");
-    stream
-        .write_all(head.as_bytes())
-        .await
-        .map_err(|_| Failure::Connect)?;
-    let mut answer = Vec::new();
-    let mut byte = [0_u8; 1];
-    while !answer.ends_with(b"\r\n\r\n") {
-        if answer.len() >= CONNECT_HEAD_MAX
-            || stream.read(&mut byte).await.map_err(|_| Failure::Connect)? == 0
-        {
-            return Err(Failure::Connect);
-        }
-        answer.push(byte[0]);
-    }
-    let status = answer
-        .split(|byte| *byte == b' ')
-        .nth(1)
-        .unwrap_or_default();
-    if status != b"200" {
-        return Err(Failure::Connect);
-    }
-    Ok(stream)
-}
-
-fn host_text(host: &Host<String>) -> String {
-    match host {
-        Host::Ipv6(address) => format!("[{address}]"),
-        host => host.to_string(),
-    }
-}
-
-/// One GET of `url`, answered at its head.
-async fn get_once(
-    url: &Url,
-    settings: &Settings,
-    config: &Arc<ClientConfig>,
-) -> Result<hyper::Response<Incoming>, Failure> {
-    let target = target(url)?;
-    let proxy = settings
-        .proxy
-        .as_ref()
-        .and_then(|proxies| proxies.for_url(url));
-    let stream = match proxy {
-        Some(proxy) => tunnel(&target, proxy, config).await?,
-        None => dial(&target.host, target.port).await?,
-    };
-    let stream = if target.tls {
-        tls_over(stream, &target.host, config).await?
-    } else {
-        stream
-    };
-    let encodings = if target.tls {
-        "br, gzip, deflate"
-    } else {
-        "gzip, deflate"
-    };
-    let message = hyper::Request::builder()
-        .method("GET")
-        .uri(target.path.as_str())
-        .header("host", target.authority.as_str())
-        .header("connection", "close")
-        .header("accept", "*/*")
-        .header("accept-language", "*")
-        .header("sec-fetch-mode", "cors")
-        .header("user-agent", "node")
-        .header("accept-encoding", encodings)
-        .body(Full::new(Bytes::new()))
-        .map_err(|_| Failure::Request)?;
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .map_err(|_| Failure::Broken)?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    sender
-        .send_request(message)
-        .await
-        .map_err(|_| Failure::Broken)
+fn node_tls() -> Result<Arc<ClientConfig>, Failure> {
+    NODE_TLS.clone().map_err(Failure::Tls)
 }
 
 async fn get_with(
     input: &str,
     settings: &Settings,
-    config: &Arc<ClientConfig>,
+    tls: Tls,
     deadline: Instant,
 ) -> Result<Response, Failure> {
-    let mut url = Url::parse(input).map_err(|_| Failure::Request)?;
-    for _ in 0..=REDIRECT_MAX {
-        let response = get_once(&url, settings, config).await?;
-        let status = response.status().as_u16();
-        if let Some(location) = response.headers().get(LOCATION)
-            && matches!(status, 301 | 302 | 303 | 307 | 308)
-        {
-            url = url
-                .join(&String::from_utf8_lossy(location.as_bytes()))
-                .ok()
-                .filter(|next| matches!(next.scheme(), "http" | "https"))
-                .ok_or(Failure::Redirect)?;
-            continue;
-        }
-        let (parts, body) = response.into_parts();
-        let body = Limited::new(body, BODY_MAX)
-            .collect()
-            .await
-            .map_err(|error| {
-                if error.is::<LengthLimitError>() {
-                    Failure::TooLarge
-                } else {
-                    Failure::Broken
-                }
-            })?;
-        let body = tokio::task::spawn_blocking(move || {
-            decode(&parts.headers, body.to_bytes(), BODY_MAX, deadline)
-        })
+    let url = Url::parse(input).map_err(|_| Failure::Request)?;
+    let proxy = settings
+        .proxy
+        .as_ref()
+        .and_then(|proxies| proxies.for_url(&url))
+        .map(Url::to_string);
+    let encodings = if url.scheme() == "https" {
+        "br, gzip, deflate"
+    } else {
+        "gzip, deflate"
+    };
+    let headers = [
+        ("accept", "*/*"),
+        ("accept-language", "*"),
+        ("sec-fetch-mode", "cors"),
+        ("user-agent", "node"),
+        ("accept-encoding", encodings),
+    ];
+    let request = Request {
+        url: input,
+        headers: &headers,
+        body: None,
+        proxy: proxy.as_deref(),
+    };
+    let response = open_with(request, tls).await?;
+    let status = response.status().as_u16();
+    let (parts, body) = response.into_parts();
+    let body = Limited::new(body, BODY_MAX)
+        .collect()
         .await
-        .map_err(|_| Failure::Broken)?
-        .map_err(|_| Failure::Broken)?;
-        return Ok(Response {
-            status,
-            body: body.to_vec(),
-        });
-    }
-    Err(Failure::Redirect)
+        .map_err(|error| {
+            if error.is::<LengthLimitError>() {
+                Failure::TooLarge
+            } else {
+                Failure::Broken
+            }
+        })?;
+    let body = tokio::task::spawn_blocking(move || {
+        decode(&parts.headers, body.to_bytes(), BODY_MAX, deadline)
+    })
+    .await
+    .map_err(|_| Failure::Broken)?
+    .map_err(|_| Failure::Broken)?;
+    Ok(Response {
+        status,
+        body: body.to_vec(),
+    })
 }
 
 /// A GET of `url` as Node's `fetch` made it, its answer decoded. The caller bounds the time (`tokio::time::timeout`)
 /// and passes the same `deadline` for decoding.
 pub(crate) async fn node_get(url: &str, deadline: Instant) -> Result<Response, Failure> {
-    let config = TLS.clone().map_err(Failure::Tls)?;
-    get_with(url, &SETTINGS, &config, deadline).await
+    get_with(url, &SETTINGS, node_tls, deadline).await
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
+
+    use hyper::body::Bytes;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
 
     use super::*;
     use crate::http::tests::{TRUSTED, authority, ok, serve, server_tls};
@@ -391,36 +249,27 @@ mod tests {
 
     #[test]
     fn a_proxy_only_when_node_was_asked_for_one() {
-        let set = [("HTTPS_PROXY", "http://proxy.test:3128")];
-        assert!(env(&set).proxy.is_none());
+        let set = ("HTTPS_PROXY", "http://proxy.test:3128");
+        assert!(env(&[set]).proxy.is_none());
         assert_eq!(
             proxied(
-                &env(&[set[0], ("NODE_USE_ENV_PROXY", "1")]),
+                &env(&[set, ("NODE_USE_ENV_PROXY", "1")]),
                 "https://models.dev/catalog.json"
             ),
             Some("http://proxy.test:3128/".into())
         );
+        let options = ("NODE_OPTIONS", "--max-old-space-size=4096 --use-env-proxy");
         assert_eq!(
-            proxied(
-                &env(&[
-                    set[0],
-                    ("NODE_OPTIONS", "--max-old-space-size=4096 --use-env-proxy")
-                ]),
-                "https://a.b/"
-            ),
+            proxied(&env(&[set, options]), "https://a.b/"),
             Some("http://proxy.test:3128/".into())
         );
-        assert!(
-            env(&[set[0], ("NODE_USE_ENV_PROXY", "true")])
-                .proxy
-                .is_none()
-        );
+        assert!(env(&[set, ("NODE_USE_ENV_PROXY", "true")]).proxy.is_none());
     }
 
     #[test]
     fn picks_the_proxy_as_undici_does() {
         let on = ("NODE_USE_ENV_PROXY", "1");
-        // Lowercase first, even empty; https falls back to the http proxy.
+        // Lowercase first, even empty; an https address falls back to the http proxy.
         let both = env(&[
             on,
             ("https_proxy", ""),
@@ -467,29 +316,50 @@ mod tests {
         assert!(proxied(&with(""), "https://any.where/").is_some());
     }
 
-    fn trusting(system_ca: bool) -> Arc<ClientConfig> {
-        client_config(system_ca, vec![TRUSTED.der.clone()]).unwrap()
-    }
-
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(5)
     }
 
+    fn bundled_and_test_ca() -> Result<Arc<ClientConfig>, Failure> {
+        static CONFIG: LazyLock<Arc<ClientConfig>> =
+            LazyLock::new(|| client_config(false, vec![TRUSTED.der.clone()]).unwrap());
+        Ok(CONFIG.clone())
+    }
+
+    fn bundled_only() -> Result<Arc<ClientConfig>, Failure> {
+        static CONFIG: LazyLock<Arc<ClientConfig>> =
+            LazyLock::new(|| client_config(false, Vec::new()).unwrap());
+        Ok(CONFIG.clone())
+    }
+
+    fn machine_and_test_ca() -> Result<Arc<ClientConfig>, Failure> {
+        static CONFIG: LazyLock<Arc<ClientConfig>> =
+            LazyLock::new(|| client_config(true, vec![TRUSTED.der.clone()]).unwrap());
+        Ok(CONFIG.clone())
+    }
+
     #[tokio::test]
     async fn the_bundled_roots_refuse_what_only_an_extra_certificate_vouches_for() {
-        let (port, _) = serve(Some(server_tls(&TRUSTED.issuer, &["localhost"])), |_| {
+        let (port, seen) = serve(Some(server_tls(&TRUSTED.issuer, &["localhost"])), |_| {
             ok("{}")
         })
         .await;
         let url = format!("https://localhost:{port}/");
         let direct = settings(&|_| None);
-        let answer = get_with(&url, &direct, &trusting(false), deadline())
+        let answer = get_with(&url, &direct, bundled_and_test_ca, deadline())
             .await
             .unwrap();
         assert_eq!((answer.status, answer.body), (200, b"{}".to_vec()));
-        let bundled = client_config(false, Vec::new()).unwrap();
+        let request = String::from_utf8_lossy(&seen.lock().unwrap()[0]).to_lowercase();
+        for header in [
+            "accept-encoding: br, gzip, deflate\r\n",
+            "user-agent: node\r\n",
+            "accept: */*\r\n",
+        ] {
+            assert!(request.contains(header), "{request}");
+        }
         assert!(matches!(
-            get_with(&url, &direct, &bundled, deadline()).await,
+            get_with(&url, &direct, bundled_only, deadline()).await,
             Err(Failure::Tls(_))
         ));
         let other = authority("Another CA");
@@ -499,45 +369,41 @@ mod tests {
         .await;
         let url = format!("https://localhost:{port}/");
         assert!(matches!(
-            get_with(&url, &direct, &trusting(true), deadline()).await,
+            get_with(&url, &direct, machine_and_test_ca, deadline()).await,
             Err(Failure::Tls(_))
         ));
     }
 
     #[tokio::test]
-    async fn tunnels_through_the_proxy_with_its_credentials() {
-        let (origin, seen) = serve(Some(server_tls(&TRUSTED.issuer, &["localhost"])), |_| {
-            ok("{\"ok\":true}")
-        })
+    async fn the_picked_proxy_carries_the_request_with_its_credentials() {
+        let (origin, _) = serve(
+            Some(server_tls(&TRUSTED.issuer, &["upstream.test"])),
+            |_| ok("{\"ok\":true}"),
+        )
         .await;
-        let proxy = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
+        let proxy = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let proxy_port = proxy.local_addr().unwrap().port();
-        let connects = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let kept = connects.clone();
+        let heads = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let kept = heads.clone();
         tokio::spawn(async move {
             while let Ok((mut client, _)) = proxy.accept().await {
-                let kept = kept.clone();
-                tokio::spawn(async move {
-                    let mut head = Vec::new();
-                    let mut byte = [0_u8; 1];
-                    while !head.ends_with(b"\r\n\r\n") {
-                        if client.read(&mut byte).await.unwrap() == 0 {
-                            return;
-                        }
-                        head.push(byte[0]);
+                let mut head = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if client.read(&mut byte).await.unwrap() == 0 {
+                        break;
                     }
-                    kept.lock()
-                        .unwrap()
-                        .push(String::from_utf8_lossy(&head).into_owned());
-                    let mut upstream = TcpStream::connect(("127.0.0.1", origin)).await.unwrap();
-                    client
-                        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
-                        .await
-                        .unwrap();
-                    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
-                });
+                    head.push(byte[0]);
+                }
+                kept.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&head).into_owned());
+                let mut upstream = TcpStream::connect(("127.0.0.1", origin)).await.unwrap();
+                client
+                    .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    .await
+                    .unwrap();
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
             }
         });
         let through = env(&[
@@ -546,53 +412,29 @@ mod tests {
                 "HTTPS_PROXY",
                 &format!("http://us%40er:p%3Ass@127.0.0.1:{proxy_port}"),
             ),
+            ("NO_PROXY", "elsewhere.test"),
         ]);
-        let url = format!("https://localhost:{origin}/catalog.json");
-        let answer = get_with(&url, &through, &trusting(false), deadline())
-            .await
-            .unwrap();
+        let answer = get_with(
+            "https://upstream.test/catalog.json",
+            &through,
+            bundled_and_test_ca,
+            deadline(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             (answer.status, answer.body),
             (200, b"{\"ok\":true}".to_vec())
         );
-        let connect = connects.lock().unwrap()[0].clone();
+        let head = heads.lock().unwrap()[0].clone();
         assert!(
-            connect.starts_with(&format!("CONNECT localhost:{origin} HTTP/1.1\r\n")),
-            "{connect}"
+            head.starts_with("CONNECT upstream.test:443 HTTP/1.1\r\n"),
+            "{head}"
         );
-        let expected = base64::engine::general_purpose::STANDARD.encode("us@er:p:ss");
         assert!(
-            connect.contains(&format!("proxy-authorization: Basic {expected}\r\n")),
-            "{connect}"
+            head.contains("proxy-authorization: Basic dXNAZXI6cDpzcw==\r\n"),
+            "{head}"
         );
-        let request = String::from_utf8_lossy(&seen.lock().unwrap()[0]).to_lowercase();
-        assert!(
-            request.contains("accept-encoding: br, gzip, deflate\r\n"),
-            "{request}"
-        );
-        assert!(request.contains("user-agent: node\r\n"), "{request}");
-        // A proxy that refuses the tunnel is a failed connect.
-        let refusing = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let refusing_port = refusing.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            if let Ok((mut client, _)) = refusing.accept().await {
-                let mut buffer = [0_u8; 1024];
-                let _ = client.read(&mut buffer).await;
-                let _ = client
-                    .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
-                    .await;
-            }
-        });
-        let refused = env(&[
-            ("NODE_USE_ENV_PROXY", "1"),
-            ("HTTPS_PROXY", &format!("http://127.0.0.1:{refusing_port}")),
-        ]);
-        assert!(matches!(
-            get_with(&url, &refused, &trusting(false), deadline()).await,
-            Err(Failure::Connect)
-        ));
     }
 
     #[test]

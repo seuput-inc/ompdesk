@@ -10,15 +10,16 @@
 //! `NODE_EXTRA_CA_CERTS` names, as Node's `fetch` added them.
 //!
 //! A request may name a proxy (`Request::proxy`, the URL `proxy.rs` picks for a check, an update or an install): an
-//! `http` or `https` proxy tunnels an `https` address with `CONNECT` and takes an `http` one in absolute form, a
-//! `socks5` proxy (no authentication; the name resolved by the proxy) tunnels both. A loopback address never goes
-//! through it, as Chromium bypassed one. Any other proxy scheme is refused before dialing (`ProxyUnsupported`, with a
-//! line on stderr), never sent direct; nothing before spoke one.
+//! `http` or `https` proxy tunnels an `https` address with `CONNECT` and takes an `http` one in absolute form, both with
+//! `Basic` credentials when the proxy URL carries a user and password; a `socks5` proxy (no authentication; the name
+//! resolved by the proxy) tunnels both. A loopback address never goes through it, as Chromium bypassed one. Any other
+//! proxy scheme is refused before dialing (`ProxyUnsupported`, with a line on stderr), never sent direct; nothing
+//! before spoke one.
 //!
 //! What it does not do, on purpose: connection reuse (`connection: close` on every request; a loopback connect costs
-//! less than keeping a pool right), compression (no `accept-encoding` is sent, so none comes back), proxy
-//! authentication. The address is read as the WHATWG URL standard reads it (`url`, as node's `fetch` did), so the path
-//! and query go out normalized the same way.
+//! less than keeping a pool right), compression unless a caller asks for it (`node_fetch.rs` does, and decodes). The
+//! address is read as the WHATWG URL standard reads it (`url`, as node's `fetch` did), so the path and query go out
+//! normalized the same way.
 //!
 //! Nothing here keeps or reports what a request carried: a `Failure` names a kind, and the one text it can hold
 //! (`Tls`) is rustls's account of a handshake, which ends before any header or body of the request is written.
@@ -93,7 +94,7 @@ pub enum Failure {
 }
 
 /// The TLS settings a request uses; tests hand in their own authority.
-type Tls = fn() -> Result<Arc<ClientConfig>, Failure>;
+pub(crate) type Tls = fn() -> Result<Arc<ClientConfig>, Failure>;
 
 /// ring's cryptography, the platform's verifier with `roots` trusted beside the machine's.
 fn client_config(roots: Vec<CertificateDer<'static>>) -> Result<Arc<ClientConfig>, String> {
@@ -181,6 +182,9 @@ struct Proxy {
     via: Via,
     host: Host<String>,
     port: u16,
+    /// `Basic` credentials from the proxy URL's user and password (percent-decoded, as undici's `ProxyAgent` sent
+    /// them), for an HTTP proxy's `CONNECT` or forwarded request; a SOCKS5 proxy is spoken to without them.
+    authorization: Option<String>,
 }
 
 impl Proxy {
@@ -195,10 +199,28 @@ impl Proxy {
                 return Err(Failure::ProxyUnsupported);
             }
         };
+        let authorization = (!url.username().is_empty() || url.password().is_some()).then(|| {
+            use base64::Engine;
+            let decoded = |text: &str| {
+                percent_encoding::percent_decode_str(text)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            };
+            let pair = format!(
+                "{}:{}",
+                decoded(url.username()),
+                decoded(url.password().unwrap_or(""))
+            );
+            format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(pair)
+            )
+        });
         Ok(Proxy {
             via,
             host: url.host().ok_or(Failure::Request)?.to_owned(),
             port: url.port().unwrap_or(default_port),
+            authorization,
         })
     }
 
@@ -252,10 +274,17 @@ async fn secure(
     Ok(Box::new(stream))
 }
 
-/// `CONNECT host:port` through an HTTP proxy; any answer but a 2xx is the proxy's refusal.
-async fn tunnel(stream: &mut Box<dyn Io>, target: &Target) -> Result<(), Failure> {
+/// `CONNECT host:port` through an HTTP proxy, with its credentials; any answer but a 2xx is the proxy's refusal.
+async fn tunnel(
+    stream: &mut Box<dyn Io>,
+    target: &Target,
+    authorization: Option<&str>,
+) -> Result<(), Failure> {
     let authority = format!("{}:{}", target.host, target.port);
-    let ask = format!("CONNECT {authority} HTTP/1.1\r\nhost: {authority}\r\n\r\n");
+    let credentials = authorization
+        .map(|value| format!("proxy-authorization: {value}\r\n"))
+        .unwrap_or_default();
+    let ask = format!("CONNECT {authority} HTTP/1.1\r\nhost: {authority}\r\n{credentials}\r\n");
     stream
         .write_all(ask.as_bytes())
         .await
@@ -356,7 +385,7 @@ async fn connect(
     match proxy {
         Some(proxy) if proxy.forwards(target) => return Ok(stream),
         Some(proxy) if proxy.via == Via::Socks5 => socks5(&mut stream, target).await?,
-        Some(_) => tunnel(&mut stream, target).await?,
+        Some(proxy) => tunnel(&mut stream, target, proxy.authorization.as_deref()).await?,
         None => {}
     }
     match config {
@@ -396,6 +425,11 @@ async fn exchange_at(
         .uri(uri)
         .header("host", target.authority.as_str())
         .header("connection", "close");
+    if let Some(proxy) = proxy.filter(|proxy| proxy.forwards(&target))
+        && let Some(authorization) = &proxy.authorization
+    {
+        message = message.header("proxy-authorization", authorization.as_str());
+    }
     for (name, value) in headers {
         if !value
             .bytes()
@@ -467,6 +501,14 @@ async fn exchange(request: &Request<'_>, tls: Tls) -> Result<hyper::Response<Inc
         url = next;
     }
     Err(Failure::Redirect)
+}
+
+/// `open` with the caller's TLS settings (`node_fetch.rs`: Node's roots, not the machine's).
+pub(crate) async fn open_with(
+    request: Request<'_>,
+    tls: Tls,
+) -> Result<hyper::Response<Incoming>, Failure> {
+    exchange(&request, tls).await
 }
 
 async fn send_within(request: Request<'_>, body_max: usize, tls: Tls) -> Result<Response, Failure> {
@@ -1172,7 +1214,7 @@ pub(crate) mod tests {
 
     /// A stand-in proxy on 127.0.0.1. An HTTP proxy answers `CONNECT` with `connect_answer` and, on a 2xx, pipes the
     /// tunnel to `upstream`; a request in absolute form it answers itself. A SOCKS5 proxy pipes every tunnel to
-    /// `upstream`. Each connection's first line (`CONNECT …`, `GET http://…`, `SOCKS5 host:port`) is kept.
+    /// `upstream`. Each connection's head (`CONNECT …`, `GET http://…`) or `SOCKS5 host:port` is kept.
     async fn stand_in(socks: bool, connect_answer: &'static str, upstream: u16) -> (String, Seen) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1211,7 +1253,7 @@ pub(crate) mod tests {
                             .next()
                             .unwrap_or_default()
                             .to_owned();
-                        kept.lock().unwrap().push(line.clone().into_bytes());
+                        kept.lock().unwrap().push(request.clone());
                         if !line.starts_with("CONNECT ") {
                             let _ = socket.write_all(ok("forwarded").as_bytes()).await;
                             return;
@@ -1295,6 +1337,44 @@ pub(crate) mod tests {
         assert_eq!(
             lines(&asked),
             ["GET http://upstream.test:8080/a?b=1 HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_proxy_url_s_credentials_go_as_basic_on_a_connect_and_on_a_forward() {
+        use base64::Engine;
+        let tls = server_tls(&TRUSTED.issuer, &["upstream.test"]);
+        let (upstream, _) = serve(Some(tls), |_| ok("through")).await;
+        let (proxy, asked) = stand_in(false, ESTABLISHED, upstream).await;
+        let with = proxy.replace("http://", "http://us%40er:p%3Ass@");
+        send_within(via("https://upstream.test/x", &with), BODY_MAX, trusting)
+            .await
+            .unwrap();
+        send(via("http://upstream.test/y", &with)).await.unwrap();
+        send(via("http://upstream.test/z", &proxy)).await.unwrap();
+        let basic = base64::engine::general_purpose::STANDARD.encode("us@er:p:ss");
+        let heads: Vec<String> = asked
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|head| String::from_utf8_lossy(head).into_owned())
+            .collect();
+        assert_eq!(heads.len(), 3);
+        for head in &heads[..2] {
+            assert!(
+                head.to_ascii_lowercase().contains(&format!(
+                    "proxy-authorization: basic {}\r\n",
+                    basic.to_ascii_lowercase()
+                )),
+                "{head}"
+            );
+        }
+        assert!(
+            !heads[2]
+                .to_ascii_lowercase()
+                .contains("proxy-authorization"),
+            "{}",
+            heads[2]
         );
     }
 
