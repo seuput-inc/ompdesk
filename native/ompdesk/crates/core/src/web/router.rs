@@ -4,8 +4,9 @@
 //! web-only channels and the device's grants before main runs them.
 //!
 //! Main hands the router what its windows push to a device (`web.deliver {host, device, ch}` with the data's JSON as
-//! `bin`; with no `ch`, the device missed a push). A `tabs` list releases the pictures of its closed tabs, even
-//! while disconnected; `onlyTabs` skips counting another missed push. Main answers a page's call
+//! `bin`; with no `ch`, the device missed a push). With `connId`, only that live page can receive the push.
+//! Only device-wide `tabs` lists release pictures; `onlyTabs` skips counting another missed push.
+//! `web.diskFullState {host, files}` sends the aggregate file names to all pages of that host. Main answers a page's call
 //! (`web.reply {host, call, ok, e}` with the value's JSON as `bin`), says a resync was prepared (`web.resynced {host,
 //! conn}`) and closes a device's sockets (`web.closeDevice`). The router tells main which connections a device has and
 //! which of them show their page (`web.conns`), asks it to prepare a page's resync (`web.resync`) and hands it each call
@@ -483,6 +484,7 @@ struct Channels {
     heavy: Vec<String>,
     /// `PREFS_SET`, which may not write `mobileWeb.*`.
     prefs_set: String,
+    disk_full: String,
 }
 
 /// What main hands the router at the start: the page protocol it speaks, the host's features,
@@ -579,10 +581,17 @@ struct Pending {
 }
 
 #[derive(Default)]
+struct BatchTimers {
+    next: u64,
+    /// Manual timers (a test's): the batch windows open, by connection.
+    due: Vec<(u64, u64)>,
+}
+
+#[derive(Default)]
 struct State {
     next_conn: u64,
     next_call: u64,
-    next_flush: u64,
+    batches: BatchTimers,
     conns: HashMap<u64, Conn>,
     /// Each device's connections in the order they came.
     devices: HashMap<String, Vec<u64>>,
@@ -590,8 +599,16 @@ struct State {
     pushes: HashMap<String, u64>,
     heavy: HashMap<String, usize>,
     calls: HashMap<u64, Pending>,
-    /// Manual timers (a test's): the batch windows open, by connection.
-    due: Vec<(u64, u64)>,
+}
+
+impl State {
+    fn connection(&self, device: &str, conn_id: &str) -> Option<u64> {
+        self.devices
+            .get(device)?
+            .iter()
+            .copied()
+            .find(|conn| self.conns.get(conn).is_some_and(|c| c.conn_id == conn_id))
+    }
 }
 
 /// One host's router.
@@ -627,25 +644,20 @@ fn now_ms() -> i64 {
 }
 
 /// `randomUUID()`.
-fn uuid() -> String {
+fn uuid() -> Option<String> {
     let mut bytes = [0u8; 16];
-    if crate::sys::random(&mut bytes).is_err() {
-        bytes = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_nanos())
-            .to_le_bytes();
-    }
+    crate::sys::random(&mut bytes).ok()?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let hex = super::hex(&bytes);
-    format!(
+    Some(format!(
         "{}-{}-{}-{}-{}",
         &hex[..8],
         &hex[8..12],
         &hex[12..16],
         &hex[16..20],
         &hex[20..]
-    )
+    ))
 }
 
 /// The router of `host`, made at its first start; a later start keeps it (resume entries outlive a stop) and takes
@@ -745,9 +757,9 @@ impl Host {
         if state.devices.get(device).map_or(0, Vec::len) >= MAX_CONNECTIONS_PER_DEVICE {
             return None;
         }
+        let conn_id = uuid()?;
         state.next_conn += 1;
         let conn = state.next_conn;
-        let conn_id = uuid();
         state.conns.insert(
             conn,
             Conn {
@@ -911,12 +923,7 @@ impl Host {
 
     fn retire(&self, device: &str, conn_id: &str) {
         let mut state = self.state();
-        let found = state.devices.get(device).and_then(|list| {
-            list.iter()
-                .copied()
-                .find(|conn| state.conns.get(conn).is_some_and(|c| c.conn_id == conn_id))
-        });
-        if let Some(conn) = found {
+        if let Some(conn) = state.connection(device, conn_id) {
             self.close_conn(&mut state, conn, CLOSE_GOING_AWAY, "resumed");
         }
     }
@@ -931,24 +938,71 @@ impl Host {
 
     // --- pushes -------------------------------------------------------------------------------------------------
 
-    /// A push main made to the device's window; `None` when main sent no data because the device had no connection.
-    fn deliver(&self, device: &str, pushed: Option<Arc<Pushed>>) {
+    /// A push already admitted and shaped for this page. An ended page has no recipient.
+    fn deliver_connection(&self, device: &str, conn_id: &str, pushed: &Arc<Pushed>) {
         let mut state = self.state();
-        *state.pushes.entry(device.to_owned()).or_insert(0) += 1;
-        let conns = state.devices.get(device).cloned().unwrap_or_default();
-        for conn in conns {
-            match &pushed {
-                Some(pushed) => self.push(&mut state, conn, pushed),
-                // Main thought the page gone; one that came meanwhile missed this push and loads its state again.
-                None => self.resync_missed(&mut state, conn),
+        if let Some(conn) = state.connection(device, conn_id) {
+            let State { conns, batches, .. } = &mut *state;
+            if let Some(c) = conns.get_mut(&conn) {
+                self.push(conn, c, batches, pushed);
             }
         }
     }
 
-    fn push(&self, state: &mut State, conn: u64, pushed: &Arc<Pushed>) {
-        let Some(c) = state.conns.get_mut(&conn) else {
+    fn disk_full(&self, params: &DiskFullParams) {
+        let channel = &self.config.channels.disk_full;
+        if !self.config.policy.get(channel).is_some_and(|policy| {
+            policy.dir == Dir::Push
+                && policy.mode.as_deref() == Some("pass")
+                && policy.permission.is_none()
+        }) {
+            return;
+        }
+        let mut state = self.state();
+        for ended in &mut state.ended {
+            ended.clean = false;
+        }
+        if state.conns.is_empty() {
+            return;
+        }
+        let Ok(data) = serde_json::value::to_raw_value(params) else {
             return;
         };
+        let pushed = Pushed::new(channel.clone(), Some(data));
+        let State { conns, batches, .. } = &mut *state;
+        for (&conn, c) in conns {
+            self.push(conn, c, batches, &pushed);
+        }
+    }
+
+    /// A push main made to the device's window; `None` when main sent no data because the device had no connection.
+    fn deliver(&self, device: &str, pushed: Option<Arc<Pushed>>) {
+        let mut state = self.state();
+        *state.pushes.entry(device.to_owned()).or_insert(0) += 1;
+        let State {
+            devices,
+            conns,
+            batches,
+            ..
+        } = &mut *state;
+        let Some(list) = devices.get(device) else {
+            return;
+        };
+        if let Some(pushed) = pushed {
+            for conn in list {
+                if let Some(c) = conns.get_mut(conn) {
+                    self.push(*conn, c, batches, &pushed);
+                }
+            }
+        } else {
+            // Main thought the page gone; one that came meanwhile missed this push and loads its state again.
+            for conn in list.clone() {
+                self.resync_missed(&mut state, conn);
+            }
+        }
+    }
+
+    fn push(&self, conn: u64, c: &mut Conn, batches: &mut BatchTimers, pushed: &Arc<Pushed>) {
         if c.closed || c.awaiting_hello {
             return;
         }
@@ -960,13 +1014,11 @@ impl Host {
         if c.flush.is_some() {
             return;
         }
-        state.next_flush += 1;
-        let window = state.next_flush;
-        if let Some(c) = state.conns.get_mut(&conn) {
-            c.flush = Some(window);
-        }
+        batches.next += 1;
+        let window = batches.next;
+        c.flush = Some(window);
         if self.manual {
-            state.due.push((conn, window));
+            batches.due.push((conn, window));
             return;
         }
         let me = self.me.clone();
@@ -1451,11 +1503,26 @@ impl Router for Host {
 struct DeliverParams {
     host: u64,
     device: String,
+    #[serde(default, deserialize_with = "connection_target")]
+    conn_id: Option<String>,
     #[serde(default)]
     ch: Option<String>,
     tabs: Option<std::collections::HashSet<String>>,
     #[serde(default)]
     only_tabs: bool,
+}
+
+// Only an absent connId means fanout. A present null or non-string must not widen the target.
+fn connection_target<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct DiskFullParams {
+    #[serde(skip_serializing)]
+    host: u64,
+    files: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1488,7 +1555,9 @@ fn deliver(push: PushCall) {
     let Some(host) = host_of(params.host) else {
         return;
     };
-    if let Some(tabs) = &params.tabs {
+    if params.conn_id.is_none()
+        && let Some(tabs) = &params.tabs
+    {
         host.blobs.tabs_changed(&params.device, tabs);
     }
     if params.only_tabs {
@@ -1501,8 +1570,30 @@ fn deliver(push: PushCall) {
             .and_then(|text| RawValue::from_string(text).ok());
         Pushed::new(ch, data)
     });
-    host.deliver(&params.device, pushed);
+    if let Some(conn_id) = &params.conn_id {
+        if let Some(pushed) = &pushed {
+            host.deliver_connection(&params.device, conn_id, pushed);
+        }
+    } else {
+        host.deliver(&params.device, pushed);
+    }
     host.drain_test();
+}
+
+fn disk_full(push: PushCall) {
+    let Ok(params) = serde_json::from_str::<DiskFullParams>(push.params.get()) else {
+        return;
+    };
+    if params.files.iter().any(|name| {
+        name.contains(['/', '\\'])
+            || matches!(name.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
+    }) {
+        return;
+    }
+    if let Some(host) = host_of(params.host) {
+        host.disk_full(&params);
+        host.drain_test();
+    }
 }
 
 fn reply(push: PushCall) {
@@ -1547,6 +1638,7 @@ fn close_device(push: PushCall) {
 
 pub fn register(registry: &mut Registry) {
     registry.add_push("web.deliver", deliver);
+    registry.add_push("web.diskFullState", disk_full);
     registry.add_push("web.reply", reply);
     registry.add_push("web.resynced", resynced);
     registry.add_push("web.closeDevice", close_device);
@@ -1737,6 +1829,7 @@ mod test_hooks {
             "timers" => {
                 let state = host.state();
                 let due: Vec<u64> = state
+                    .batches
                     .due
                     .iter()
                     .filter(|(conn, window)| {
@@ -1748,7 +1841,7 @@ mod test_hooks {
             }
             "flush" => {
                 let mut state = host.state();
-                let due = std::mem::take(&mut state.due);
+                let due = std::mem::take(&mut state.batches.due);
                 for (conn, window) in due {
                     if state.conns.get(&conn).and_then(|c| c.flush) == Some(window) {
                         host.flush(&mut state, conn);
