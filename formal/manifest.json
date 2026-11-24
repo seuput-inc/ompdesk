@@ -232,7 +232,7 @@
 				"src/main/session-processes.ts",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "100e6ee60a84681081e8e54c4423e4f52a20a6dd",
+			"syncCommit": "a48197a0bbaccca8461e3effc1aa3b3eccdc6998",
 			"verifySkill": ".omp/skills/session-processes-verify/SKILL.md"
 		},
 		{
