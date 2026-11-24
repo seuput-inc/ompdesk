@@ -64,6 +64,7 @@ mod omp;
 mod queue;
 mod runner;
 mod setup;
+mod spawn;
 #[cfg(test)]
 mod tests;
 
@@ -150,6 +151,10 @@ pub struct Opts {
     pub manual: bool,
     #[serde(default)]
     pub now: Option<u64>,
+    /// The agent-desktop the app ships (`<resources>/agent-desktop-bin`): the CLI updater lists it until a managed copy
+    /// is as new.
+    #[serde(default)]
+    pub agent_desktop_bundle: Option<String>,
 }
 
 /// What the instance tells main and asks of it: the hub's `Out`, or a test's stand-in.
@@ -250,6 +255,11 @@ impl Tools {
         *self.closed.borrow()
     }
 
+    /// Setup's first pass ended (`start` ran).
+    pub fn is_started(&self) -> bool {
+        self.started.get()
+    }
+
     pub fn state(&self) -> Value {
         json!({
             "setup": setup::state(self),
@@ -295,12 +305,16 @@ impl Tools {
         self.pref("toolsAutoUpdate") != Some(Value::Bool(false))
     }
 
+    /// Main's spawn environment (`env`), without the proxy.
+    pub async fn base_env(&self) -> Result<BTreeMap<String, String>, Fault> {
+        let base = self.ask("env", json!({})).await?;
+        serde_json::from_value(base).map_err(|error| Fault::new("tools_env", error.to_string()))
+    }
+
     /// The environment an install or a check runs with: main's (`env`) plus the proxy the core picks
     /// (`resolveProxyEnvForSpawn`); a late system lookup is logged as main logged it.
     pub async fn spawn_env(&self) -> Result<BTreeMap<String, String>, Fault> {
-        let base = self.ask("env", json!({})).await?;
-        let mut env: BTreeMap<String, String> = serde_json::from_value(base)
-            .map_err(|error| Fault::new("tools_env", error.to_string()))?;
+        let mut env = self.base_env().await?;
         let system = async {
             tokio::task::spawn_blocking(|| ompdesk_sysproxy::resolve(crate::proxy::PROBE_URL))
                 .await
@@ -356,6 +370,10 @@ impl Tools {
             if on {
                 self.spawn_task(schedule(Rc::downgrade(self), updater));
             }
+        }
+        if !scheduled.cli {
+            // A launch that does not check on a timer still lists the tool CLIs (`CliUpdater.start`).
+            cli::start(self);
         }
         true
     }

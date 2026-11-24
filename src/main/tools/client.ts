@@ -29,6 +29,8 @@ export interface ToolsOpts {
 	testDownload?: { url: string; sha256: string } | null;
 	/** The core's timers are main's (a test's fake timers drive them). */
 	manual?: boolean;
+	/** The agent-desktop the app ships (`<resources>/agent-desktop-bin`): the CLI updater lists it until a managed copy is as new. */
+	agentDesktopBundle?: string | null;
 }
 
 export interface ToolsState {
@@ -212,6 +214,16 @@ export class ToolsClient {
 
 	cliNow(id?: unknown): Promise<unknown> {
 		return hub().callLater(this.#instance(), "cli.now", { id: id ?? null });
+	}
+
+	/** Settings opened: list the tools again (the rows arrive as a state item). */
+	cliRescan(): Promise<unknown> {
+		return hub().callLater(this.#instance(), "cli.rescan");
+	}
+
+	/** `toolsAutoUpdate` changed: the state again, and a check now when it turned on in a scheduled launch. */
+	cliPrefChanged(): void {
+		hub().call(this.#instance(), "cli.prefChanged");
 	}
 
 	extNow(key?: unknown): Promise<unknown> {

@@ -198,19 +198,26 @@ impl Queue {
         ended
     }
 
-    /// The quit: the running step is dropped and what it started ends now; queued steps never run (their callers
-    /// hear `tools_closed`); nothing is queued after.
+    /// The quit: the running step is dropped and what it started ends now; queued steps never run; their callers and
+    /// the running step's hear `tools_closed` now (the instance's close ends the worker before it could answer them);
+    /// nothing is queued after.
     pub fn close(&self) {
         let (waiting, running) = {
             let mut st = self.st.borrow_mut();
             st.closed = true;
-            let running = st.running.as_mut().map(|r| (r.ctx.clone(), r.stop.take()));
+            let running = st
+                .running
+                .as_mut()
+                .map(|r| (r.ctx.clone(), r.stop.take(), std::mem::take(&mut r.waiters)));
             (std::mem::take(&mut st.waiting), running)
         };
         for waiter in waiting.into_iter().flat_map(|w| w.waiters) {
             let _ = waiter.send(Err(closed()));
         }
-        if let Some((ctx, stop)) = running {
+        if let Some((ctx, stop, waiters)) = running {
+            for waiter in waiters {
+                let _ = waiter.send(Err(closed()));
+            }
             ctx.stop(true);
             if let Some(stop) = stop {
                 let _ = stop.send(closed());
