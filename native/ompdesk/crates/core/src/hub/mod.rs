@@ -103,6 +103,7 @@ fn kinds() -> &'static [Kind] {
         crate::prefs::KIND,
         crate::resume::RESUME_KIND,
         crate::resume::CONNECTIVITY_KIND,
+        crate::tools::KIND,
     ]
 }
 
