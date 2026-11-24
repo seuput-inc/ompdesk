@@ -881,6 +881,30 @@ impl Ctx {
         })
     }
 
+    /// `controlTabs`: what the control tools' snapshot reads of every window that owns a tab, in one call instead of
+    /// several per tab (main's thread waits on each): per window (`tabWindows`'s order) its `tabsForWindow` rows and
+    /// `openRequests`, each row with its tab's `tabFacts`, `pendingPlan`, `formerTabIds`, `hasDraft` and owner window
+    /// (`windowOfTab`) under `control`.
+    pub(super) async fn control_tabs(&self) -> R<Value> {
+        let wins: Vec<i64> = serde_json::from_value(self.tab_windows()).unwrap_or_default();
+        let mut windows = Vec::with_capacity(wins.len());
+        for win in wins {
+            let mut tabs = self.tabs_for_window(win).await?;
+            for row in &mut tabs {
+                let tab = row["tabId"].as_str().unwrap_or_default().to_string();
+                row["control"] = json!({
+                    "facts": self.tab_facts(&tab),
+                    "plan": self.pending_plan(&tab),
+                    "formerIds": self.former_tab_ids(&tab),
+                    "hasDraft": self.has_draft(&tab),
+                    "owner": self.window_of_tab(&tab),
+                });
+            }
+            windows.push(json!({"win": win, "tabs": tabs, "asks": self.open_requests(win)}));
+        }
+        Ok(Value::Array(windows))
+    }
+
     pub(super) async fn memory_tabs(&self) -> R<Value> {
         let tabs: Vec<String> = self.with(|pool| {
             pool.entries

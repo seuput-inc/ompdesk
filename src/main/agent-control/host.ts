@@ -83,7 +83,7 @@ import { uploadToHost } from "../remote/host-upload";
 import type { RunProcess, ScheduleService } from "../schedules";
 import type { Pace } from "../session-pace";
 import { SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
-import type { SidecarPool, TabActivity } from "../sidecar-pool";
+import type { ControlTabInfo, SidecarPool, TabActivity } from "../sidecar-pool";
 import type { SidecarLike } from "../sidecar-types";
 import { recordTurnStop } from "../turn-stop-log";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
@@ -171,20 +171,15 @@ export interface AgentControlHostDeps {
 	pool: Pick<
 		SidecarPool,
 		| "tabsForWindow"
-		| "tabFacts"
-		| "pendingPlan"
+		| "controlTabs"
 		| "observeTabs"
-		| "openRequests"
 		| "routeSideChannel"
 		| "sidecarOf"
 		| "startTab"
 		| "setTabTask"
-		| "formerTabIds"
 		| "setTabOpener"
-		| "hasDraft"
 		| "windowOfTab"
 		| "windowsShowingTab"
-		| "tabWindows"
 		| "sessionOwner"
 		| "whenTabExited"
 	>;
@@ -751,33 +746,36 @@ export class AgentControlRuntime {
 		return agentHiddenPaths(this.#deps.prefs.get(AGENT_HIDDEN_PREFS_KEY));
 	}
 
-	/** Every open tab of the app once, in the pool's order, with the window it is in (any window). */
+	/**
+	 * Every open tab of the app once, in the pool's order, with the window it is in (any window). One read of the pool
+	 * (`controlTabs`): the core asks for this on every answer and push, and each read waits on main's thread.
+	 */
 	#hostTabs(): HostTab[] {
-		const { pool } = this.#deps;
 		const hidden = this.#hiddenPaths();
 		const seen = new Set<string>();
 		const tabs: HostTab[] = [];
-		for (const win of pool.tabWindows()) {
+		for (const { win, tabs: rows, asks: open } of this.#deps.pool.controlTabs()) {
 			if (win.isDestroyed()) continue;
-			const open = pool.openRequests(win);
-			for (const info of pool.tabsForWindow(win)) {
-				if (seen.has(info.tabId)) continue;
-				seen.add(info.tabId);
+			for (const row of rows) {
+				if (seen.has(row.tabId)) continue;
+				seen.add(row.tabId);
 				const asks = open
-					.filter(entry => entry.tabId === info.tabId && !entry.signIn && askOf(entry.request))
+					.filter(entry => entry.tabId === row.tabId && !entry.signIn && askOf(entry.request))
 					.map(entry => ({ id: entry.request.id, request: entry.request }));
-				tabs.push({ ...this.#controlTab(info, asks, hidden), window: String(win.webContents.id) });
+				const opener = this.#parents.get(row.tabId)?.callerTabId ?? this.#restoredOpener(row);
+				tabs.push({
+					...this.#controlTab(row, asks, hidden),
+					window: String(win.webContents.id),
+					...(opener ? { opener } : {}),
+				});
 			}
 		}
 		return tabs;
 	}
 
-	#controlTab(info: IpcTabInfo, asks: ControlAsk[], hidden: Set<string>): ControlTab {
-		const plan = this.#deps.pool.pendingPlan(info.tabId);
+	#controlTab(row: ControlTabInfo, asks: ControlAsk[], hidden: Set<string>): ControlTab {
+		const { facts, plan, formerIds, hasDraft, owner, ...info } = row;
 		const autoClosable = this.#autoClosable(info);
-		const formerIds = this.#deps.pool.formerTabIds(info.tabId);
-		const facts = this.#deps.pool.tabFacts(info.tabId);
-		const owner = this.#deps.pool.windowOfTab(info.tabId);
 		// A paired web page's tab: what its page last said about unsaved Files edits in it (never assumed clean).
 		const webEdits =
 			owner && isWebWindow(owner.webContents.id)
@@ -809,10 +807,10 @@ export class AgentControlRuntime {
 			autoClosable,
 			...(autoClosable && !this.#parents.has(info.tabId) ? { restored: true } : {}),
 			looked: info.active === true || info.visible === true || (info.viewerCount ?? 0) > 0,
-			userTouched: this.#userPrompted.has(info.tabId) || this.#deps.pool.hasDraft(info.tabId),
-			...(this.#deps.pool.hasDraft(info.tabId) ? { drafting: true } : {}),
+			userTouched: this.#userPrompted.has(info.tabId) || hasDraft,
+			...(hasDraft ? { drafting: true } : {}),
 			...(facts?.runningSince !== undefined ? { busySince: facts.runningSince } : {}),
-			...(formerIds.length > 0 ? { formerIds } : {}),
+			...(formerIds.length > 0 ? { formerIds: [...formerIds] } : {}),
 			...(webEdits ? { webEdits } : {}),
 			...(this.#closeAnswers.has(info.tabId) ? { closeAnswer: this.#closeAnswers.get(info.tabId) } : {}),
 			...this.#hostOpen(info),
@@ -1068,9 +1066,6 @@ export class AgentControlRuntime {
 				agentControlFullEnabled(deps.prefs.get(AGENT_CONTROL_FULL_PREF)) ||
 				agentControlManageEnabled(deps.prefs.get(AGENT_CONTROL_MANAGE_PREF)),
 			checkoutPeers: tabId => deps.checkoutPeers?.(tabId) ?? [],
-			// The opener this launch saw, else the one the pool kept across a relaunch: its tab id, or (tab ids are new
-			// after a relaunch) the tab now holding the opener's session file.
-			parentOf: tabId => this.#openerOf(tabId),
 			parentTag: tabId => this.#parents.get(tabId)?.tag,
 			// What the receiver's bridge answers: the core keeps the report until the receiver's journal holds it
 			// (`mail-outbox`) and sends it again to whatever omp holds the receiver's session next.

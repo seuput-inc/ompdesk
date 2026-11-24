@@ -17,6 +17,10 @@ import * as sshTools from "../../shared/ssh-tools";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 
 const MAIN = path.join(__dirname, "..");
+/** The channels the Tauri shell serves itself (`ipc_router.rs`): main registers no handler for them. */
+const NATIVE = JSON.parse(
+	fs.readFileSync(path.join(MAIN, "../../native/ompdesk/crates/tauri-shell/src/ipc_router.json"), "utf8"),
+) as { invoke: string[]; send: string[] };
 const NAMED: Record<string, unknown> = {
 	...bridgeHealth,
 	...mailAccounts,
@@ -85,12 +89,20 @@ function subscribedChannels(): string[] {
 }
 
 describe("IPC channel policy", () => {
-	it("classifies exactly the invoke and send channels main registers, each once", () => {
+	it("gives every invoke and send channel exactly one owner, main or the shell", () => {
 		const { invoke, send } = registeredChannels();
+		const native = [...NATIVE.invoke, ...NATIVE.send];
 		expect(new Set(invoke).size).toBe(invoke.length);
 		expect(new Set(send).size).toBe(send.length);
-		expect(invoke).toEqual(policyChannels("invoke"));
-		expect(send).toEqual(policyChannels("send"));
+		expect(new Set(native).size).toBe(native.length);
+		expect([...invoke, ...send].filter(channel => native.includes(channel))).toEqual([]);
+		expect([...invoke, ...NATIVE.invoke].sort()).toEqual(policyChannels("invoke"));
+		expect([...send, ...NATIVE.send].sort()).toEqual(policyChannels("send"));
+		// The remaining-work meter of docs/rust-node-removal.md: the page channels main still serves.
+		const remaining = [...invoke, ...send].sort();
+		console.info(
+			`[ipc] main serves ${remaining.length} page channels, the shell ${native.length}: ${remaining.join(" ")}`,
+		);
 	});
 
 	it("classifies exactly the push channels the renderer API listens to", () => {
