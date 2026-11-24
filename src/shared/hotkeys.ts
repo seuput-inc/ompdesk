@@ -5,10 +5,11 @@
  * the keymap registry therefore treats them as reserved and refuses the binding,
  * and the shortcuts dialog lists them alongside the remappable rows.
  *
- * This is the only place these chords are spelled out: `main/menu.ts` asks
- * for the Electron accelerator by id, the shell registers `window.toggle`'s
- * spelling itself (`tauri-shell/src/entry.rs`, keep the two equal), and the
- * renderer derives its display + conflict table from the same list.
+ * This is the only place these chords are spelled out in TypeScript: the shell's
+ * app menu spells the menu's accelerators (`tauri-shell/src/app_menu.rs`, pinned
+ * to this list by `menu-actions.test.ts`) and registers `window.toggle`'s itself
+ * (`tauri-shell/src/entry.rs`, keep the two equal), and the renderer derives its
+ * display + conflict table from the same list.
  */
 export interface NativeChord {
 	readonly id: string;
@@ -34,13 +35,3 @@ export const NATIVE_CHORDS = [
 	// close has to sit one modifier away or the two chords would fight.
 	{ id: "window.close", labelKey: "hotkeys.row.windowClose", chord: "⇧⌘W", accelerator: "CmdOrCtrl+Shift+W" },
 ] as const satisfies readonly NativeChord[];
-
-export type NativeChordId = (typeof NATIVE_CHORDS)[number]["id"];
-
-const nativeChordById = {} as Record<NativeChordId, (typeof NATIVE_CHORDS)[number]>;
-for (const entry of NATIVE_CHORDS) nativeChordById[entry.id] = entry;
-
-/** Electron accelerator for a native chord id. */
-export function nativeAccelerator(id: NativeChordId): string {
-	return nativeChordById[id].accelerator;
-}

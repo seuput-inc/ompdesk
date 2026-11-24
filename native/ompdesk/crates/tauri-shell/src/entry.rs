@@ -1,6 +1,7 @@
 //! The app's entry points (docs/rust-node-removal.md, W2): a second launch, macOS `open-url`/`open-file` and the Dock's
-//! `activate`, the window shortcut, and the `omp://` links they carry. The shell decides which window shows; a window it
-//! does not have it asks Node for (`session.spawnWindow`, `session.openPath`), which owns the windows' tabs and cwds.
+//! `activate`, the window shortcut, and the `omp://` links they carry; and the windows the app menu and the tray act on
+//! (W3). The shell decides which window shows; a window it does not have it asks Node for (`session.spawnWindow`,
+//! `session.openPath`), which owns the windows' tabs and cwds.
 
 use crate::{host, log, page_push, registry::Identity, runtime};
 use serde_json::{Value, json};
@@ -11,6 +12,8 @@ use std::time::Duration;
 
 /// `IPC_EVENTS.DEEP_LINK` (src/shared/ipc-types.ts).
 const DEEP_LINK: &str = "deep-link";
+/// `IPC_EVENTS.MENU_ACTION` (src/shared/ipc-types.ts).
+const MENU_ACTION: &str = "menu:action";
 /// How long an open waits for Node's window before the next open goes on.
 const NODE_WAIT: Duration = Duration::from_secs(60);
 
@@ -23,6 +26,17 @@ pub enum Open {
     Show,
     /// A Dock click or the shortcut with no window left.
     Spawn,
+    /// New Window: a window in this window's project.
+    Window(u64),
+    /// A menu item for a page with no window left: a new window's page gets `{action}` once it is up.
+    Menu(Value),
+}
+
+impl Open {
+    /// Only opens a window: dropped before `session.ready`, as the startup is opening its windows anyway.
+    fn spawns(&self) -> bool {
+        matches!(self, Open::Spawn | Open::Window(_) | Open::Menu(_))
+    }
 }
 
 /// What `omp://` asks of the page.
@@ -137,7 +151,7 @@ impl Queue {
     }
 
     fn push(&self, open: Open) {
-        if open == Open::Spawn && !self.ready.load(Ordering::SeqCst) {
+        if open.spawns() && !self.ready.load(Ordering::SeqCst) {
             return;
         }
         let _ = self.send.send(open);
@@ -209,7 +223,7 @@ fn toggle() {
 }
 
 /// The live app windows, oldest first (Node's `getAllWindows`; the first is its `getMainWindow`).
-fn app_windows() -> Vec<(u64, tauri::WebviewWindow)> {
+pub fn app_windows() -> Vec<(u64, tauri::WebviewWindow)> {
     let mut pages: Vec<(u64, u64)> = runtime()
         .registry
         .lock()
@@ -225,7 +239,7 @@ fn app_windows() -> Vec<(u64, tauri::WebviewWindow)> {
 }
 
 /// What a menu or a launch acts on (Node's `getTargetWindow`): the focused app window, else the first.
-fn target(windows: &[(u64, tauri::WebviewWindow)]) -> Option<u64> {
+pub fn target(windows: &[(u64, tauri::WebviewWindow)]) -> Option<u64> {
     windows
         .iter()
         .find(|(_, window)| crate::window_focused(window).unwrap_or(false))
@@ -234,7 +248,7 @@ fn target(windows: &[(u64, tauri::WebviewWindow)]) -> Option<u64> {
 }
 
 /// Through `win.op`, so Node's mirror of the window hears it as it heard its own calls.
-fn op(win: u64, name: &str) {
+pub fn op(win: u64, name: &str) {
     if let Err(error) = crate::win_op(&json!({"winId":win,"op":name,"args":{}})) {
         log::log(
             "entry.window_failed",
@@ -254,6 +268,35 @@ fn reveal(win: u64) {
     }
     op(win, "show");
     op(win, "focus");
+}
+
+/// A menu item for the page: the target window's page gets `{action}`; with no window left, one opens and its page gets
+/// it once it is up (Node's `sendMenuAction`). UI thread.
+pub fn menu_action(action: &str) {
+    let payload = json!({"action":action});
+    match target(&app_windows()) {
+        Some(win) => deliver(win, MENU_ACTION, payload),
+        None => push(Open::Menu(payload)),
+    }
+}
+
+/// New Window: in the target window's project, else as a Dock click opens one. UI thread.
+pub fn new_window() {
+    push(target(&app_windows()).map_or(Open::Spawn, Open::Window));
+}
+
+/// Close Window: the target window closes as its own close button closes it, so Node still decides whether it hides
+/// to the tray. UI thread.
+pub fn close_target() {
+    let Some(win) = target(&app_windows()) else {
+        return;
+    };
+    if let Err(error) = crate::window_for_win(win).and_then(|w| w.close().map_err(crate::failed)) {
+        log::log(
+            "entry.window_failed",
+            json!({"winId":win,"op":"close","error":error.message}),
+        );
+    }
 }
 
 /// Runs `f` on the UI thread and waits for it; None once the event loop is gone.
@@ -278,8 +321,10 @@ fn ask_node(method: &str, params: Value) -> Value {
     })
 }
 
-fn spawn_window() -> Option<u64> {
-    ask_node("session.spawnWindow", json!({}))["win"].as_u64()
+/// A new window from Node: in window `from`'s project, else with no cwd (the saved layout, or the app's workspace).
+fn spawn_window(from: Option<u64>) -> Option<u64> {
+    let params = from.map_or_else(|| json!({}), |from| json!({"from":from}));
+    ask_node("session.spawnWindow", params)["win"].as_u64()
 }
 
 /// One open, on the queue's thread.
@@ -290,14 +335,14 @@ fn run(open: Open) {
                 return;
             };
             let main = on_ui(|| app_windows().first().map(|(win, _)| *win)).flatten();
-            let Some(win) = main.or_else(spawn_window) else {
+            let Some(win) = main.or_else(|| spawn_window(None)) else {
                 return;
             };
             on_ui(move || {
                 op(win, "show");
                 op(win, "focus");
                 if let Some(payload) = link.payload() {
-                    deliver(win, payload);
+                    deliver(win, DEEP_LINK, payload);
                 }
             });
         }
@@ -315,17 +360,28 @@ fn run(open: Open) {
             });
         }
         Open::Spawn => {
-            spawn_window();
+            spawn_window(None);
+        }
+        Open::Window(from) => {
+            spawn_window(Some(from));
+        }
+        Open::Menu(payload) => {
+            if let Some(win) = spawn_window(None) {
+                on_ui(move || deliver(win, MENU_ACTION, payload));
+            }
         }
     }
 }
 
-/// Links for a window whose page has not started its app document yet (a window just spawned), by webContents id.
-static AWAITING: LazyLock<Mutex<HashMap<u64, Vec<Value>>>> = LazyLock::new(Mutex::default);
+/// A push for a page: its channel and payload.
+type Push = (&'static str, Value);
 
-/// Sends the link to the window's app document through its outbox, which holds it until the page is ready; a window
+/// Pushes for a window whose page has not started its app document yet (a window just spawned), by webContents id.
+static AWAITING: LazyLock<Mutex<HashMap<u64, Vec<Push>>>> = LazyLock::new(Mutex::default);
+
+/// Sends the push to the window's app document through its outbox, which holds it until the page is ready; a window
 /// still before its first app document gets it on that document.
-fn deliver(win: u64, payload: Value) {
+fn deliver(win: u64, channel: &'static str, payload: Value) {
     let page = {
         let registry = runtime().registry.lock().expect("registry");
         registry.by_window(win).and_then(|page| {
@@ -334,35 +390,35 @@ fn deliver(win: u64, payload: Value) {
         })
     };
     match page {
-        Some((id, true)) => send(id, payload),
+        Some((id, true)) => send(id, channel, payload),
         Some((id, false)) => AWAITING
             .lock()
-            .expect("awaiting links")
+            .expect("awaiting pushes")
             .entry(id.wc)
             .or_default()
-            .push(payload),
+            .push((channel, payload)),
         None => {}
     }
 }
 
-/// An app document started in a window: the links that waited for it.
+/// An app document started in a window: the pushes that waited for it.
 pub fn document_started(id: Identity) {
-    let links = AWAITING.lock().expect("awaiting links").remove(&id.wc);
-    for payload in links.into_iter().flatten() {
-        send(id, payload);
+    let pushes = AWAITING.lock().expect("awaiting pushes").remove(&id.wc);
+    for (channel, payload) in pushes.into_iter().flatten() {
+        send(id, channel, payload);
     }
 }
 
 /// The window closed before its page started.
 pub fn forget(wc: u64) {
-    AWAITING.lock().expect("awaiting links").remove(&wc);
+    AWAITING.lock().expect("awaiting pushes").remove(&wc);
 }
 
-fn send(id: Identity, payload: Value) {
-    if let Err(error) = page_push::enqueue(id, DEEP_LINK, &[payload], None) {
+fn send(id: Identity, channel: &'static str, payload: Value) {
+    if let Err(error) = page_push::enqueue(id, channel, &[payload], None) {
         log::log(
-            "entry.link_failed",
-            json!({"wcId":id.wc,"error":error.message}),
+            "entry.push_failed",
+            json!({"wcId":id.wc,"channel":channel,"error":error.message}),
         );
     }
 }
@@ -477,6 +533,8 @@ mod tests {
         });
         queue.push(Open::Link("omp://new".into()));
         queue.push(Open::Spawn);
+        queue.push(Open::Window(1));
+        queue.push(Open::Menu(json!({"action":"open-settings"})));
         queue.push(Open::Path("/work".into()));
         queue.push(Open::Show);
         assert!(
@@ -484,11 +542,12 @@ mod tests {
             "nothing runs before ready"
         );
         queue.ready();
-        queue.push(Open::Spawn);
+        queue.push(Open::Window(1));
+        queue.push(Open::Menu(json!({"action":"open-settings"})));
         queue.ready();
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut order = Vec::new();
-        while order.len() < 8 {
+        while order.len() < 10 {
             order.push(
                 runs.recv_timeout(deadline.saturating_duration_since(Instant::now()))
                     .unwrap(),
@@ -498,7 +557,8 @@ mod tests {
             Open::Link("omp://new".into()),
             Open::Path("/work".into()),
             Open::Show,
-            Open::Spawn,
+            Open::Window(1),
+            Open::Menu(json!({"action":"open-settings"})),
         ];
         let paired: Vec<_> = expected
             .iter()

@@ -264,10 +264,6 @@ export class App extends EventEmitter {
 		this.#aboutPanel = options;
 	}
 
-	showAboutPanel(): void {
-		this.#host.post("app.showAboutPanel");
-	}
-
 	focus(options?: { steal?: boolean }): void {
 		this.#host.post("app.focus", { ...options });
 	}

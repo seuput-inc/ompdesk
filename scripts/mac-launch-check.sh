@@ -10,8 +10,8 @@
 #  handover  `open -b com.seuput.ompdesk` and `open <app>` again: still one shell, the same pid, one running application,
 #            and it is the frontmost app afterwards (Finder was activated first).
 #  quit      three launches, each quit one way: a quit request (`NSRunningApplication.terminate`, what the Dock's Quit sends),
-#            then Quit in the menu bar menu and Quit in the tray's menu, each clicked through main's test inspector
-#            (scripts/mac-menu-quit.ts: the shim's own `menu.click` delivery, as the shell delivers a person's click).
+#            then Quit in the menu bar menu and Quit in the tray's menu, each chosen through main's test inspector
+#            (scripts/mac-menu-quit.ts: the shell's own `menu.testClick`, which chooses the item as a person's click does).
 #            After each, nothing of the bundle and no ompdesk-core is left running.
 # No `osascript` or synthetic input: LaunchServices activates Finder (`open -a`) and AppKit sends the quit, so no Automation
 # consent is asked. The default profile, so a launch with no arguments finds the same single-instance name (runner homes

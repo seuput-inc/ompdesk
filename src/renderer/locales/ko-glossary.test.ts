@@ -5,8 +5,8 @@
  */
 
 import { describe, expect, it } from "vitest";
+import NATIVE_LABELS from "../../../native/ompdesk/crates/tauri-shell/src/native_labels.json";
 import { MAIN_TEXT } from "../../main/i18n-text";
-import { TRAY_LABELS } from "../../main/tray-labels";
 import { KO_SETTINGS } from "../components/settings/schema-ko";
 import { KO_SCHEMA_OPTION_TEXT } from "../components/settings/schema-option-ko";
 import { en } from "./en";
@@ -22,9 +22,7 @@ function koTexts(): [string, string][] {
 	}
 	for (const [key, value] of Object.entries(KO_SCHEMA_OPTION_TEXT)) texts.push([`schema-option.${key}`, value]);
 	for (const [key, value] of Object.entries(MAIN_TEXT)) texts.push([`main.${key}`, value.ko]);
-	for (const [key, value] of Object.entries(TRAY_LABELS)) {
-		if (typeof value.ko === "string") texts.push([`tray.${key}`, value.ko]);
-	}
+	for (const [key, value] of Object.entries(NATIVE_LABELS)) texts.push([`native.${key}`, value.ko]);
 	return texts;
 }
 

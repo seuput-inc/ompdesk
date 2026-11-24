@@ -62,7 +62,6 @@ export class Host {
 	#winId = 0;
 	#wcId = 0;
 	#viewId = 0;
-	#trayId = 0;
 	#menuId = 0;
 	/** Pages by `wcId`; filled by the page constructors, emptied when a page is destroyed. */
 	readonly pages = new Map<number, PageRecord>();
@@ -84,10 +83,6 @@ export class Host {
 
 	nextViewId(): number {
 		return ++this.#viewId;
-	}
-
-	nextTrayId(): number {
-		return ++this.#trayId;
 	}
 
 	nextMenuId(): number {
