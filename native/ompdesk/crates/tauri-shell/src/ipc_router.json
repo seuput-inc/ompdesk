@@ -1,4 +1,12 @@
 {
-  "invoke": ["runtime:log-path", "runtime:log-tail", "updater:version"],
+  "invoke": [
+    "runtime:log-path",
+    "runtime:log-tail",
+    "session:consume-pending",
+    "system:open-dialog",
+    "system:save-dialog",
+    "system:save-image",
+    "updater:version"
+  ],
   "send": []
 }

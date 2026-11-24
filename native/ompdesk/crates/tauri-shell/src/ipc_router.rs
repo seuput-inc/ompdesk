@@ -13,6 +13,7 @@
 
 use crate::log::log;
 use crate::native_services::diagnostic_logs::FeedbackRead;
+use crate::page_dialogs;
 use crate::registry::Identity;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -143,6 +144,11 @@ fn handler(channel: &str) -> Option<Handler> {
             |ctx, _, args| Ok(FeedbackRead::tail(args).read(ctx.feedback_profile))
         }
         "updater:version" => |ctx, _, _| Ok(Value::String(app_version(ctx.app_package))),
+        // A desktop window starts its tab on its session, so nothing is pending; a paired page reads its own link.
+        "session:consume-pending" => |_, _, _| Ok(Value::Null),
+        "system:save-dialog" => |_, caller, args| page_dialogs::save_dialog(caller, args),
+        "system:open-dialog" => |_, caller, args| page_dialogs::open_dialog(caller, args),
+        "system:save-image" => |_, caller, args| page_dialogs::save_image(caller, args),
         _ => return None,
     })
 }
