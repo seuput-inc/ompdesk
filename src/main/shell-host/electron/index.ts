@@ -14,7 +14,7 @@ import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from ".
 import type { IpcShell } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
-import type { UpdateHost } from "../shell-calls";
+import type { InstallerStartReceipt, UpdateHost } from "../shell-calls";
 import { decodeBin, encodeBin } from "./binary-json";
 import { createElectron } from "./create";
 
@@ -43,6 +43,16 @@ export function consumeHangReports(): Promise<RuntimeLogReport[]> {
 
 export function postWatchdog(signal: WatchdogSignal): void {
 	void client.call("app.watchdog", signal).catch((error: unknown) => console.warn("[hang-watchdog]", error));
+}
+
+export function publishDiskFull(files: readonly string[]): void {
+	void client.event("diskFull.state", { files });
+}
+
+export function onPairedPagePush(
+	listener: (push: { connId: string; channel: string; payload: unknown }) => void,
+): void {
+	client.on("page.push", listener);
 }
 
 export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params =>
@@ -123,6 +133,14 @@ if (hello.facts.legacyUserDataMigration) {
 electron.app.once("quit", () => {
 	ended = true;
 });
+
+export function installerQuitPending(): void {
+	electron.app.installerQuitPending();
+}
+
+export function installerQuitReceipt(receipt: InstallerStartReceipt): void {
+	electron.app.installerQuitReceipt(receipt);
+}
 
 export function readPreviousRunEnd(): Promise<RuntimeLogReport | null> {
 	return client

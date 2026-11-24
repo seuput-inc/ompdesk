@@ -4,8 +4,8 @@
  * Deliberately electron-free (the clock, the log and the exit are injected) so it is unit-tested
  * with fake timers; `app-quit.ts` wires it to `app.exit` and the runtime log.
  *
- * The quit is committed once `before-quit` has let the teardown run (⌘Q, tray, an update restart)
- * or `before-quit-for-update` fired. From there nothing may keep the process alive: a wedged
+ * The quit is committed once the shell sends the teardown step (⌘Q, tray, an update restart, or
+ * an NSIS installer's first-launch receipt). From there nothing may keep the process alive: a wedged
  * teardown (a sidecar that never exits, a stuck socket close) leaves the windows gone but the
  * process running, and the updater's swap helper (relaunch mode) or installer (NSIS, Squirrel)
  * waits for this process to exit before it replaces the bundle, so the update never applies.
