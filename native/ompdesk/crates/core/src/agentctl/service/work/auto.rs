@@ -615,6 +615,9 @@ impl AgentControl {
             self.cost(tab),
             self.split(tab),
         );
+        if self.moved(tab) {
+            return Ok(());
+        }
         // Not closed (the window kept it, the person came to it meanwhile, or its paired page holds unsaved Files
         // edits in it): nothing else changes, and a later pass tries again.
         let outcome = self
