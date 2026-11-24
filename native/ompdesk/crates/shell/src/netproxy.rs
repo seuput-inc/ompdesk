@@ -246,7 +246,7 @@ fn rule_matches(rule: &str, scheme: &str, host: &str, port: u16) -> bool {
     if let Some(suffix) = pattern.strip_prefix('.') {
         return host.ends_with(&format!(".{suffix}"));
     }
-    crate::proxy_rules::glob(pattern, host)
+    ompdesk_sysproxy::rules::glob(pattern, host)
 }
 
 #[cfg(test)]

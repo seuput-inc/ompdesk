@@ -1,0 +1,20 @@
+[package]
+name = "ompdesk-sysproxy"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The system proxy for a URL as a PAC result, read from the OS. One copy linked by the core (every update, check and
+# tab spawn picks its proxy there) and by the shells (the Preview's bypass globs).
+[lib]
+name = "ompdesk_sysproxy"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# WinHTTP's view of the user's WinINET settings and its PAC / WPAD run.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinHttp"] }

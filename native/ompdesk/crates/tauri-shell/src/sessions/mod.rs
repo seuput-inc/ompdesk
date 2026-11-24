@@ -461,22 +461,6 @@ async fn execute(call: &Call) -> Result<Value, Failure> {
             updated.proxy = Some(args.clone());
             None
         }
-        "resolveProxy" => {
-            let url = args["url"].as_str().unwrap_or("").to_string();
-            let result = tauri::async_runtime::spawn_blocking(move || {
-                #[cfg(target_os = "macos")]
-                {
-                    shell_core::sys_mac::proxy::resolve_proxy(&url)
-                }
-                #[cfg(windows)]
-                {
-                    shell_core::sys::system::resolve_proxy(&url)
-                }
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-            return Ok(json!({"result":result}));
-        }
         "handleScheme" | "unhandleScheme" => {
             let scheme = args["scheme"].as_str().unwrap_or("").to_ascii_lowercase();
             if op == "handleScheme" && !with(|r| protocol::can_handle(r.get(&partition)?, &scheme))?

@@ -77,7 +77,7 @@ ompdesk-shell(.exe)          the shell; also every CEF helper (same exe, `--type
 | Path | What |
 |---|---|
 | `PROTOCOL.md` | the host protocol (method table by NodeShim, deviations in §14) |
-| `src/lib.rs` + `src/{wire,range,startup,facts,frame,color,conn,chunks,proxy_rules,…}.rs`, `src/migrate/`, `src/sys/` | `shell_core`: everything CEF-free, with the Rust tests; `src/sys/` is the one place raw Win32 lives (`unsafe` allowed there, each block with `// SAFETY:`), `src/sys_mac/` the macOS twin |
+| `src/lib.rs` + `src/{wire,range,startup,facts,frame,color,conn,chunks,…}.rs`, `src/migrate/`, `src/sys/` | `shell_core`: everything CEF-free, with the Rust tests; `src/sys/` is the one place raw Win32 lives (`unsafe` allowed there, each block with `// SAFETY:`), `src/sys_mac/` the macOS twin |
 | `src/main.rs`, `lifecycle.rs`, `node.rs`, `host.rs`, `dispatch.rs` | startup, exit, Node process, the socket and its handshake, routing |
 | `src/app.rs` | CEF `App`: command line, custom schemes, browser- and renderer-process handlers |
 | `src/window.rs`, `view.rs`, `wc.rs`, `cdp.rs`, `wcframe.rs`, `session.rs` | windows, Preview views, pages and their events, DevTools protocol, offscreen frames, request contexts |
@@ -110,9 +110,7 @@ file name).
   dialogs are CEF's own; `beforeunload` never asks.
 - **`webContents.setBackgroundThrottling`** is accepted and ignored.
 - **`copyImageAt`** copies the image under the point through the page's own clipboard API (CEF has no such call).
-- **`session.setProxy`/`resolveProxy`**: proxy modes go to Chromium's `proxy` preference of the request context;
-  `resolveProxy` is answered from the user's WinINET/WinHTTP settings (fixed proxy, bypass list, WPAD/PAC), not
-  from Chromium's resolver.
+- **`session.setProxy`**: proxy modes go to Chromium's `proxy` preference of the request context.
 - **Display bounds** are physical pixels divided by each display's own scale (Electron's DIP space differs on mixed-DPI
   setups).
 - **`theme.setSource`** changes what Node reports and is pushed into every page as CDP `Emulation.setEmulatedMedia`

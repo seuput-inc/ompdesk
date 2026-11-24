@@ -243,7 +243,7 @@ Switch(t, s) ==
 
 \* @code native/ompdesk/crates/core/src/pool/listen.rs:231-266 Ctx::feed_session_info unregisters the tab's file if a known session ID changes.
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:99-118 Ctx::unregister_session_file_of drops the owner and calls on_session_files_changed.
-\* @code src/main/index.ts:1563-1566 onSessionFilesChanged calls hostServices.listingChanged().
+\* @code src/main/index.ts:1500-1503 onSessionFilesChanged calls hostServices.listingChanged().
 IdChange(t) ==
     /\ ~Busy
     /\ t \in WinTabs /\ file[t] # NoS /\ nChanges < MaxChanges
@@ -261,7 +261,7 @@ Reregister(t, s) ==
     /\ pendReg' = pendReg \ {t}
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, cn, seen>>
 
-\* @code src/main/index.ts:1395-1405 sessionOpeners merges closed-child records with the current tab openers.
+\* @code src/main/index.ts:1332-1341 sessionOpeners merges closed-child records with the current tab openers.
 \* @code src/main/ipc.ts:1396 A change to AGENT_CLOSED_CHILDREN_PREF calls hostedTabs.listingChanged().
 Record ==
     /\ ~Busy
