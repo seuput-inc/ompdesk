@@ -16,6 +16,7 @@ runs:
         src/main/core/process.test.ts
         src/main/prefs-store.test.ts
         src/main/retired-prefs.test.ts
+        src/main/agent-power-migration.test.ts
         src/main/initial-cwd.test.ts
         src/main/open-path.test.ts
         src/main/hang-watchdog.test.ts

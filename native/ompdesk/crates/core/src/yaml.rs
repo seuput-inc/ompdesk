@@ -1,20 +1,21 @@
-//! models.yml edited in place on yaml-edit's lossless tree, as `models-config.ts` did on the `yaml` package's
-//! Document: a changed value is set where it stands, a mapping is diffed key by key and a list of the same length item
-//! by item, so every comment and the layout of what the edit does not reach stay as the person wrote them. A new value
-//! is written as block YAML (flow inside a flow collection), a string quoted only when plain text would read as
-//! something else.
+//! A YAML file the app edits for the person (`models.yml`, the agent's `config.yml`), changed in place on yaml-edit's
+//! lossless tree, as `models-config.ts` did on the `yaml` package's Document: a changed value is set where it stands,
+//! a mapping is diffed key by key and a list of the same length item by item, so every comment and the layout of what
+//! the edit does not reach stay as the person wrote them. A new value is written as block YAML (flow inside a flow
+//! collection), a string quoted only when plain text would read as something else.
 //!
-//! This module only edits. Stock reads models.yml with Bun.YAML, and yaml-edit both accepts some text Bun refuses and
-//! is a second reader, so `mod.rs` checks every text it writes against stock's own parse.
+//! This module only edits. Stock reads its files with Bun.YAML, and yaml-edit both accepts some text Bun refuses and
+//! is a second reader, so a caller whose edit must mean exactly something checks the text against stock's own parse
+//! (`models/file`).
 
 use std::str::FromStr;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use yaml_edit::{Document, YamlNode};
 
 /// The text as a document, refused when it does not parse or a mapping repeats a key (the `yaml` package refused
 /// that; Bun.YAML keeps the last, so the person would lose the first without a word).
-pub(super) fn parse(text: &str) -> Result<Document, String> {
+pub(crate) fn parse(text: &str) -> Result<Document, String> {
     let doc = Document::from_str(text).map_err(|error| error.to_string())?;
     if let Some(root) = doc.as_mapping() {
         unique_keys(&YamlNode::Mapping(root))?;
@@ -45,7 +46,7 @@ fn unique_keys(node: &YamlNode) -> Result<(), String> {
 
 /// `text` (read as `before`) changed to say `after`. A text with no top-level mapping (missing, empty or only
 /// comments) keeps what it has and gets `after` appended.
-pub(super) fn edit(text: &str, before: &Value, after: &Value) -> Result<String, String> {
+pub(crate) fn edit(text: &str, before: &Value, after: &Value) -> Result<String, String> {
     // yaml-edit is a young crate: a panic inside it refuses the edit instead of ending the core.
     std::panic::catch_unwind(|| edit_unguarded(text, before, after))
         .unwrap_or_else(|_| Err("the YAML editor failed on this file".into()))
@@ -140,7 +141,7 @@ fn node(value: &Value, flow: bool) -> YamlNode {
 }
 
 /// `value` as what follows `key:` in block YAML, its nested lines at `indent`.
-pub(super) fn emit(value: &Value, indent: usize) -> String {
+fn emit(value: &Value, indent: usize) -> String {
     let pad = " ".repeat(indent);
     match value {
         Value::Object(map) if map.is_empty() => " {}".into(),
@@ -209,24 +210,4 @@ fn plain(text: &str, flow: bool) -> bool {
             text.to_ascii_lowercase().as_str(),
             "true" | "false" | "null" | "yes" | "no" | "on" | "off" | "y" | "n"
         )
-}
-
-/// What `old` with `providers.<id>` set to `entry`, or removed for `None`, reads as.
-pub(super) fn with_provider(old: &Value, id: &str, entry: Option<Value>) -> Value {
-    let mut root = old.as_object().cloned().unwrap_or_default();
-    let mut providers = root
-        .get("providers")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_else(Map::new);
-    match entry {
-        Some(entry) => {
-            providers.insert(id.to_owned(), entry);
-        }
-        None => {
-            providers.shift_remove(id);
-        }
-    }
-    root.insert("providers".into(), Value::Object(providers));
-    Value::Object(root)
 }

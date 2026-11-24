@@ -6,8 +6,7 @@ src/main/agent-browsers.ts	mixed	2	The core owns executable discovery, browsers.
 src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a session runs.
 src/main/agent-desktop.ts	native-client	2	setup.pickAgentDesktop checks the bundle, probes the managed executable once per file identity and selects the copy. The client maps this result and the existing shared pref/bridge contract to session spawn args and env.
 src/main/agent-paths.ts	port	1	SessionIndex, LogWatcher and defaultWorkspace need the current agent profile path when they construct their services. agentDir joins the environment or home path synchronously; it performs no directory I/O.
-src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: migrateAgentPowers.
-src/main/agent-power-migration.ts	port	2	§1.3(a,c), shell batch: index.ts prefsStore synchronously migrates the new SafeStore before its first read; the same migration patches stock config.yml without losing comments. Move with the prefs bootstrap, not as a second writer.
+src/main/agent-power-migration.test.ts	tooling	-	Vitest suite: the agent-power migration of crates/core/src/prefs/powers.rs, run through the real core (native parity).
 src/main/agent-worktrees.test.ts	tooling	-	Exercises list and orphan-only clear through the core against an isolated stock CLI.
 src/main/agent-worktrees.ts	native-client	1	Forwards the resolved executable, environment and cwd once to omp.worktrees. Rust starts stock and interprets its reply; stock decides which worktrees are orphaned.
 src/main/agents-md-probe.ts	tooling	-	Bun test subprocess loads installed stock omp and prints session context, prompt size and rule-read evidence for agents-md.test.ts.

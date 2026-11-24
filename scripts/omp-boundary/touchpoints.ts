@@ -2171,9 +2171,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "public",
 		summary:
 			"Direct edits of the global config.yml / config.yaml, keeping dotted keys as nested YAML; the power-settings migration resets those keys.",
-		files: ["src/main/agent-power-migration.ts", "resources/gui-bridge/settings.ts"],
+		files: ["native/ompdesk/crates/core/src/prefs/powers.rs", "resources/gui-bridge/settings.ts"],
 		stock: ["config.yml", "config.yaml", "omp://settings.md"],
-		tests: ["src/main/agent-power-migration.test.ts"],
+		tests: ["src/main/agent-power-migration.test.ts", "native/ompdesk/crates/core/src/prefs/powers.rs"],
 	},
 	{
 		id: "F03",

@@ -19,7 +19,6 @@
 #[cfg(test)]
 mod tests;
 mod view;
-mod yaml;
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -31,6 +30,7 @@ use sha2::{Digest, Sha256};
 
 use crate::disk::tree::write_atomic_if;
 use crate::server::{Call, Events, Fault, Registry, Reply};
+use crate::yaml;
 use view::Roster;
 
 /// A file the editor opens while none exists.
@@ -319,6 +319,26 @@ async fn load(stock: &impl Stock, dir: &Path) -> Result<Loaded, Fault> {
     })
 }
 
+/// What `old` with `providers.<id>` set to `entry`, or removed for `None`, reads as.
+fn with_provider(old: &Value, id: &str, entry: Option<Value>) -> Value {
+    let mut root = old.as_object().cloned().unwrap_or_default();
+    let mut providers = root
+        .get("providers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    match entry {
+        Some(entry) => {
+            providers.insert(id.to_owned(), entry);
+        }
+        None => {
+            providers.shift_remove(id);
+        }
+    }
+    root.insert("providers".into(), Value::Object(providers));
+    Value::Object(root)
+}
+
 fn providers(config: &Value) -> serde_json::Map<String, Value> {
     config
         .get("providers")
@@ -359,7 +379,7 @@ async fn upsert(
         return Ok(false);
     }
     let entry = view::provider_entry(existing.as_ref(), input);
-    let intended = yaml::with_provider(&loaded.raw, id, Some(entry));
+    let intended = with_provider(&loaded.raw, id, Some(entry));
     save(stock, &loaded, Some(&intended)).await?;
     Ok(true)
 }
@@ -377,7 +397,7 @@ async fn delete(stock: &impl Stock, dir: &Path, id: &str) -> Result<(), Fault> {
     if !providers(&loaded.config).contains_key(id) {
         return Ok(());
     }
-    let intended = yaml::with_provider(&loaded.raw, id, None);
+    let intended = with_provider(&loaded.raw, id, None);
     save(stock, &loaded, Some(&intended)).await.map(drop)
 }
 
@@ -397,8 +417,8 @@ async fn set_override(
         .get("providers")
         .and_then(|providers| providers.get(provider));
     let intended = match view::override_entry(before, model, input) {
-        Some(entry) => yaml::with_provider(&loaded.raw, provider, Some(entry)),
-        None if before.is_some() => yaml::with_provider(&loaded.raw, provider, None),
+        Some(entry) => with_provider(&loaded.raw, provider, Some(entry)),
+        None if before.is_some() => with_provider(&loaded.raw, provider, None),
         None => loaded.raw.clone(),
     };
     save(stock, &loaded, Some(&intended)).await.map(drop)
