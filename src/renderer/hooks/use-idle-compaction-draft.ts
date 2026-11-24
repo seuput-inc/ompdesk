@@ -43,17 +43,36 @@ export function useIdleCompactionDraft(): void {
 			current?.unsubscribe();
 			const rpc = createTabRpc(runtime.command);
 			let reported: boolean | undefined;
+			let inFlight = false;
+			let live = true;
+			// One report at a time: two calls in flight may reach omp in either order, and a
+			// stale "non-empty" applied last held suggestions and idle compaction back.
 			const report = () => {
+				if (!live || inFlight) return;
 				const empty = store.getState().draft.trim() === "";
 				if (empty === reported) return;
 				reported = empty;
-				// An omp without the feature answers unsupported_omp; the health toast already says so.
-				void rpc.command({ type: "set_idle_compaction_draft", empty }).catch(() => {});
-				// The prompt suggestions' bridge aborts a pending suggestion once the draft turns non-empty.
-				void rpc.command({ type: "set_next_prompt_draft", empty }).catch(() => {});
+				inFlight = true;
+				void Promise.all([
+					// An omp without the feature answers unsupported_omp; the health toast already says so.
+					rpc.command({ type: "set_idle_compaction_draft", empty }).catch(() => {}),
+					// The prompt suggestions' bridge aborts a pending suggestion once the draft turns non-empty.
+					rpc.command({ type: "set_next_prompt_draft", empty }).catch(() => {}),
+				]).then(() => {
+					inFlight = false;
+					report();
+				});
 			};
 			report();
-			watches.current.set(tab.id, { sessionId, store, unsubscribe: store.subscribe(report) });
+			const unsubscribe = store.subscribe(report);
+			watches.current.set(tab.id, {
+				sessionId,
+				store,
+				unsubscribe: () => {
+					live = false;
+					unsubscribe();
+				},
+			});
 		}
 		for (const [id, watch] of watches.current) {
 			if (open.has(id)) continue;
