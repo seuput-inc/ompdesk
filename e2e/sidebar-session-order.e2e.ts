@@ -23,7 +23,7 @@ test.afterEach(async () => {
 	root = "";
 });
 
-/** A stored session in the fake omp's journal format; `minutesAgo` sets where the default (newest first) order puts it. */
+/** A stored session in the fake omp's journal format; `minutesAgo` sets where the default (oldest first) order puts it. */
 async function seed(agent: string, id: string, cwd: string, title: string, minutesAgo: number): Promise<string> {
 	const file = path.join(agent, "sessions", "seeded", `${id}.jsonl`);
 	await fs.mkdir(path.dirname(file), { recursive: true });
@@ -79,7 +79,7 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
 
 	const rows = () => page.locator("[data-session-group] .omp-sidebar-session-row");
-	await expect.poll(() => titles(page)).toEqual(["Alpha plan", "Bravo plan", "Charlie plan"]);
+	await expect.poll(() => titles(page)).toEqual(["Charlie plan", "Bravo plan", "Alpha plan"]);
 	await captureTo(SHOTS, page, "before");
 
 	// The last row dropped on the first lands above it.
@@ -87,11 +87,12 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await expect(rows().nth(0)).toHaveAttribute("data-session-drop", "before");
 	await captureTo(SHOTS, page, "during");
 	await page.mouse.up();
-	await expect.poll(() => titles(page)).toEqual(["Charlie plan", "Alpha plan", "Bravo plan"]);
+	await expect.poll(() => titles(page)).toEqual(["Alpha plan", "Charlie plan", "Bravo plan"]);
 	await expect(page.locator("[data-session-drop]")).toHaveCount(0);
 	await captureTo(SHOTS, page, "after");
 
-	// The order is in the prefs file, and a relaunch draws it again: a session new since then is on top, the rest stay.
+	// The order is in the prefs file, and a relaunch draws it again: a session new since then is at the bottom, the rest
+	// stay.
 	await expect
 		.poll(async () => {
 			const prefs = JSON.parse(await fs.readFile(path.join(desktop, "prefs.json"), "utf8"));
@@ -105,7 +106,7 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1440, 900));
 	await page.waitForFunction(() => window.omp?.rpc != null);
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
-	await expect.poll(() => titles(page)).toEqual(["Delta plan", "Charlie plan", "Alpha plan", "Bravo plan"]);
+	await expect.poll(() => titles(page)).toEqual(["Alpha plan", "Charlie plan", "Bravo plan", "Delta plan"]);
 
 	// An open session that is not on screen still drags onto a pane's edge: the split, not a reorder.
 	const releaseCharlie = await page.evaluateHandle(() => {

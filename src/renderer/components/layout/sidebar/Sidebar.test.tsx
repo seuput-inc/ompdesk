@@ -841,7 +841,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			);
 
 		expect(workspaceOrder()).toEqual(["/work/beta", "/work/alpha"]);
-		expect(alphaSessionOrder()[0]).toContain("Session /work/alpha/one");
+		expect(alphaSessionOrder()[0]).toContain("Session /work/alpha/two");
 
 		await act(async () => {
 			useTabsStore.setState({
@@ -863,11 +863,11 @@ describe("Sidebar menus and pinned ordering", () => {
 		// Opening alpha's older session must not reorder anything: order follows
 		// real activity, not the last click.
 		expect(workspaceOrder()).toEqual(["/work/beta", "/work/alpha"]);
-		expect(alphaSessionOrder()[0]).toContain("Session /work/alpha/one");
-		expect(alphaSessionOrder()[1]).toContain("Session /work/alpha/two");
+		expect(alphaSessionOrder()[0]).toContain("Session /work/alpha/two");
+		expect(alphaSessionOrder()[1]).toContain("Session /work/alpha/one");
 	});
 
-	it("orders sessions by creation, not by the activity that rewrites their file", async () => {
+	it("orders sessions by creation, oldest first, not by the activity that rewrites their file", async () => {
 		// two.jsonl was created earlier but streamed last: its modified time is the newest.
 		installMockOmp([
 			session("/work/alpha/one.jsonl", "/work/alpha", {
@@ -884,8 +884,8 @@ describe("Sidebar menus and pinned ordering", () => {
 		const rows = [...container.querySelectorAll('[data-session-group="/work/alpha"] .omp-sidebar-session-row')]
 			.map(element => element.textContent ?? "")
 			.filter(text => text.includes("Session /work/alpha/"));
-		expect(rows[0]).toContain("Session /work/alpha/one");
-		expect(rows[1]).toContain("Session /work/alpha/two");
+		expect(rows[0]).toContain("Session /work/alpha/two");
+		expect(rows[1]).toContain("Session /work/alpha/one");
 	});
 
 	it("keeps one header line, its search and the project folder button, with chats after the projects in one list", async () => {
@@ -1007,7 +1007,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		}
 	});
 
-	it("lists open tabs the index does not have yet newest first, as it will once it does", async () => {
+	it("lists open tabs the index does not have yet oldest first, as it will once it does", async () => {
 		installMockOmp(LIST);
 		useSessionStore.setState({ sessionId: "", sessionName: null, cwd: "/work/gamma", isStreaming: false });
 		const tab = (id: string, title: string) => ({
@@ -1030,14 +1030,14 @@ describe("Sidebar menus and pinned ordering", () => {
 			[...container.querySelectorAll('[data-session-group="/work/gamma"] .omp-sidebar-session-row[data-live]')].map(
 				row => row.getAttribute("data-session-path"),
 			);
-		expect(livePaths()).toEqual(["/work/gamma/b.jsonl", "/work/gamma/a.jsonl"]);
+		expect(livePaths()).toEqual(["/work/gamma/a.jsonl", "/work/gamma/b.jsonl"]);
 
-		// A tab opened later goes on top, and the earlier rows keep their places.
+		// A tab opened later goes at the bottom, and the earlier rows keep their places.
 		await act(async () =>
 			useTabsStore.setState({ tabs: [tab("a", "First"), tab("b", "Second"), tab("c", "Third")], activeTabId: "c" }),
 		);
 		await flush();
-		expect(livePaths()).toEqual(["/work/gamma/c.jsonl", "/work/gamma/b.jsonl", "/work/gamma/a.jsonl"]);
+		expect(livePaths()).toEqual(["/work/gamma/a.jsonl", "/work/gamma/b.jsonl", "/work/gamma/c.jsonl"]);
 	});
 
 	it("offers a way out of an empty filter and keeps help in the footer's last row", async () => {
@@ -1356,24 +1356,24 @@ describe("Sidebar menus and pinned ordering", () => {
 			[...container.querySelectorAll("[data-session-path]")]
 				.map(element => (element as unknown as Element).getAttribute("data-session-path"))
 				.filter(path => path?.startsWith("/work/alpha/"));
-		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
-		await fire(rowFor("Session /work/alpha/two"), "onContextMenu");
+		expect(alpha()).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
+		await fire(rowFor("Session /work/alpha/one"), "onContextMenu");
 		expect(menuItem("Move down").getAttribute("aria-disabled") === "true").toBe(true);
 		await fire(menuItem("Move up"), "onClick");
-		expect(alpha()).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
+		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
 		expect(useSidebarPrefs.getState().sessionOrder["/work/alpha"]).toEqual([
-			"/work/alpha/two.jsonl",
 			"/work/alpha/one.jsonl",
+			"/work/alpha/two.jsonl",
 		]);
 		expect(omp.prefs.updateSidebar).toHaveBeenCalledWith({
 			op: "set-session-order",
 			list: "/work/alpha",
-			order: ["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"],
+			order: ["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"],
 		});
 		// A pinned session stays on top: the one below it cannot trade places with it.
-		await act(async () => useSidebarPrefs.setState({ pinnedSessions: ["/work/alpha/one.jsonl"] }));
-		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
-		await fire(rowFor("Session /work/alpha/two"), "onContextMenu");
+		await act(async () => useSidebarPrefs.setState({ pinnedSessions: ["/work/alpha/two.jsonl"] }));
+		expect(alpha()).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
+		await fire(rowFor("Session /work/alpha/one"), "onContextMenu");
 		expect(menuItem("Move up").getAttribute("aria-disabled") === "true").toBe(true);
 	});
 
@@ -1388,36 +1388,36 @@ describe("Sidebar menus and pinned ordering", () => {
 				.filter(path => path?.startsWith("/work/alpha/"));
 		const one = rowFor("Session /work/alpha/one");
 		const two = rowFor("Session /work/alpha/two");
-		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
-		expect(two.getAttribute("draggable")).toBe("true");
-
-		await drag(two, "onDragStart");
-		// Over the row it would take the place of: a line marks the edge it lands on, and the row accepts the drop.
-		expect(await drag(one, "onDragOver")).toBe(true);
-		expect(one.getAttribute("data-session-drop")).toBe("before");
-		await drag(one, "onDrop");
-		await drag(two, "onDragEnd");
 		expect(alpha()).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
-		expect(one.getAttribute("data-session-drop")).toBeNull();
+		expect(one.getAttribute("draggable")).toBe("true");
+
+		await drag(one, "onDragStart");
+		// Over the row it would take the place of: a line marks the edge it lands on, and the row accepts the drop.
+		expect(await drag(two, "onDragOver")).toBe(true);
+		expect(two.getAttribute("data-session-drop")).toBe("before");
+		await drag(two, "onDrop");
+		await drag(one, "onDragEnd");
+		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+		expect(two.getAttribute("data-session-drop")).toBeNull();
 		expect(useSidebarPrefs.getState().sessionOrder["/work/alpha"]).toEqual([
-			"/work/alpha/two.jsonl",
 			"/work/alpha/one.jsonl",
+			"/work/alpha/two.jsonl",
 		]);
 		expect(omp.prefs.updateSidebar).toHaveBeenCalledWith({
 			op: "set-session-order",
 			list: "/work/alpha",
-			order: ["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"],
+			order: ["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"],
 		});
 		expect(document.querySelector("[data-session-order-status]")?.textContent).toBe(
-			"Moved Session /work/alpha/two.jsonl to position 1 of 2.",
+			"Moved Session /work/alpha/one.jsonl to position 1 of 2.",
 		);
 
 		// Dragging back down lands after the row it is dropped on.
-		await drag(rowFor("Session /work/alpha/two"), "onDragStart");
-		await drag(rowFor("Session /work/alpha/one"), "onDragOver");
-		expect(rowFor("Session /work/alpha/one").getAttribute("data-session-drop")).toBe("after");
-		await drag(rowFor("Session /work/alpha/one"), "onDrop");
-		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+		await drag(rowFor("Session /work/alpha/one"), "onDragStart");
+		await drag(rowFor("Session /work/alpha/two"), "onDragOver");
+		expect(rowFor("Session /work/alpha/two").getAttribute("data-session-drop")).toBe("after");
+		await drag(rowFor("Session /work/alpha/two"), "onDrop");
+		expect(alpha()).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
 	});
 
 	it("a session row takes no drop from another list's row, or across the pinned edge", async () => {
@@ -1435,7 +1435,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(useSidebarPrefs.getState().sessionOrder).toEqual({});
 	});
 
-	it("a saved session order comes back after a relaunch, and a session new since then lands on top", async () => {
+	it("a saved session order comes back after a relaunch, and a session new since then lands at the bottom", async () => {
 		const omp = installMockOmp([
 			...LIST,
 			session("/work/alpha/three.jsonl", "/work/alpha", {
@@ -1456,7 +1456,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		const alpha = [...container.querySelectorAll("[data-session-path]")]
 			.map(element => (element as unknown as Element).getAttribute("data-session-path"))
 			.filter(path => path?.startsWith("/work/alpha/"));
-		expect(alpha).toEqual(["/work/alpha/three.jsonl", "/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
+		expect(alpha).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl", "/work/alpha/three.jsonl"]);
 	});
 
 	it("Chats reorder by dragging too, under their own list key", async () => {
@@ -1471,14 +1471,14 @@ describe("Sidebar menus and pinned ordering", () => {
 			[...container.querySelectorAll("[data-sidebar-chats] [data-session-path]")].map(element =>
 				(element as unknown as Element).getAttribute("data-session-path"),
 			);
-		expect(chats()).toEqual(["/work/chat-1.jsonl", "/work/chat-2.jsonl"]);
-		await drag(rowFor("Session /work/chat-2"), "onDragStart");
-		await drag(rowFor("Session /work/chat-1"), "onDragOver");
-		await drag(rowFor("Session /work/chat-1"), "onDrop");
 		expect(chats()).toEqual(["/work/chat-2.jsonl", "/work/chat-1.jsonl"]);
+		await drag(rowFor("Session /work/chat-1"), "onDragStart");
+		await drag(rowFor("Session /work/chat-2"), "onDragOver");
+		await drag(rowFor("Session /work/chat-2"), "onDrop");
+		expect(chats()).toEqual(["/work/chat-1.jsonl", "/work/chat-2.jsonl"]);
 		expect(useSidebarPrefs.getState().sessionOrder[CHATS_ORDER_KEY]).toEqual([
-			"/work/chat-2.jsonl",
 			"/work/chat-1.jsonl",
+			"/work/chat-2.jsonl",
 		]);
 	});
 
@@ -1542,8 +1542,8 @@ describe("Sidebar menus and pinned ordering", () => {
 			["omp:tab-drag", { tabId: null }],
 		]);
 		expect(useSidebarPrefs.getState().sessionOrder["/work/alpha"]).toEqual([
-			"/work/alpha/two.jsonl",
 			"/work/alpha/one.jsonl",
+			"/work/alpha/two.jsonl",
 		]);
 	});
 
@@ -1552,7 +1552,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		seedStores();
 		useSidebarPrefs.setState({ hydrated: true });
 		await mount(<Sidebar />);
-		const button = rowFor("Session /work/alpha/one").querySelector("button[data-roving-item]");
+		const button = rowFor("Session /work/alpha/two").querySelector("button[data-roving-item]");
 		const record = button as unknown as Record<string, unknown>;
 		const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$")) ?? "";
 		const props = record[propsKey] as Record<string, (event: unknown) => void>;
@@ -1571,8 +1571,8 @@ describe("Sidebar menus and pinned ordering", () => {
 		await flush();
 		expect(prevented).toBe(true);
 		expect(useSidebarPrefs.getState().sessionOrder["/work/alpha"]).toEqual([
-			"/work/alpha/two.jsonl",
 			"/work/alpha/one.jsonl",
+			"/work/alpha/two.jsonl",
 		]);
 	});
 
@@ -4152,12 +4152,12 @@ describe("Sidebar device sections", () => {
 			session("/s/app/one.jsonl", "/code/app", {
 				title: "App one",
 				device: "dev-studio",
-				created: "2026-01-03T00:00:00Z",
+				created: "2026-01-02T00:00:00Z",
 			}),
 			session("/s/app/two.jsonl", "/code/app", {
 				title: "App two",
 				device: "dev-studio",
-				created: "2026-01-02T00:00:00Z",
+				created: "2026-01-03T00:00:00Z",
 			}),
 			session("/s/web/one.jsonl", "/code/web", {
 				title: "Web one",
@@ -4229,12 +4229,12 @@ describe("Sidebar device sections", () => {
 				session("/s/app/one.jsonl", "/code/app", {
 					title: "App one",
 					device: "dev-studio",
-					created: "2026-01-03T00:00:00Z",
+					created: "2026-01-02T00:00:00Z",
 				}),
 				session("/s/app/two.jsonl", "/code/app", {
 					title: "App two",
 					device: "dev-studio",
-					created: "2026-01-02T00:00:00Z",
+					created: "2026-01-03T00:00:00Z",
 				}),
 				session("/s/web/one.jsonl", "/code/web", {
 					title: "Web one",
@@ -4415,12 +4415,12 @@ describe("Sidebar device sections", () => {
 			session("/s/app/one.jsonl", "/code/app", {
 				title: "App one",
 				device: "dev-studio",
-				created: "2026-01-03T00:00:00Z",
+				created: "2026-01-02T00:00:00Z",
 			}),
 			session("/s/app/two.jsonl", "/code/app", {
 				title: "App two",
 				device: "dev-studio",
-				created: "2026-01-02T00:00:00Z",
+				created: "2026-01-03T00:00:00Z",
 			}),
 			session("/s/web/one.jsonl", "/code/web", {
 				title: "Web one",
@@ -5635,7 +5635,7 @@ describe("Sidebar device sections", () => {
 				) as unknown as Element | null,
 			);
 
-			expect(host).toEqual(["/h/plain.jsonl", "/h/run.jsonl", "/h/docs.jsonl"]);
+			expect(host).toEqual(["/h/run.jsonl", "/h/docs.jsonl", "/h/plain.jsonl"]);
 			expect(device).toEqual(host);
 		});
 
@@ -6157,7 +6157,7 @@ describe("Sidebar archive and move", () => {
 		await fire(menuItem("Restore"), "onClick");
 		expect(useSidebarPrefs.getState().archivedSessions).toEqual([]);
 		expect(archivedSection()).toBeNull();
-		expect(groupRows("/work/alpha")).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+		expect(groupRows("/work/alpha")).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
 	});
 
 	it("scrolls the Archived section to the top of the list when it opens, so its rows are not left below the fold", async () => {
@@ -6499,15 +6499,15 @@ describe("Sidebar worktree sessions", () => {
 		expect(groups).not.toContain(CHILD);
 		expect(groups).not.toContain("/work/alpha#agent");
 
-		// In the project's order (newest first), the Autopilot row among the others; the parallel child below them.
+		// In the project's order (oldest first), the Autopilot row among the others; the parallel child below them.
 		const rows = rowsOf("/work/alpha").filter(row => !row.text.includes("New session"));
 		expect(rows.map(row => row.text)).toEqual([
-			expect.stringContaining("Cycle 3"),
-			expect.stringContaining("Session /work/alpha/one"),
 			expect.stringContaining("Session /work/alpha/two"),
+			expect.stringContaining("Session /work/alpha/one"),
+			expect.stringContaining("Cycle 3"),
 		]);
-		expect(rows.map(row => row.mark)).toEqual(["autopilot", null, null]);
-		expect(rows[0]?.tooltip).toContain("Autopilot");
+		expect(rows.map(row => row.mark)).toEqual([null, null, "autopilot"]);
+		expect(rows[2]?.tooltip).toContain("Autopilot");
 		expect(looseOf("/work/alpha")).toEqual([expect.stringContaining("Approach A")]);
 		// The folder names stay out of the sidebar.
 		expect(container.textContent).not.toContain("gui-2026");
@@ -6678,7 +6678,7 @@ describe("Sidebar worktree sessions", () => {
 			rowsOf("/var/w/alpha")
 				.filter(row => !row.text.includes("New session"))
 				.map(row => row.text),
-		).toEqual([expect.stringContaining("Cycle 3"), expect.stringContaining("Own row")]);
+		).toEqual([expect.stringContaining("Own row"), expect.stringContaining("Cycle 3")]);
 	});
 
 	it("shows the folder without its gui-…-hash dressing while git has not answered", async () => {
@@ -6758,17 +6758,18 @@ describe("Sidebar worktree sessions", () => {
 		for (const header of container.querySelectorAll("[data-workspace-group]"))
 			expect(header.textContent).not.toMatch(/c2-docs|c3-bugs|c2-tests/);
 
-		// In the project's group: the run's row where its recency puts it, its children right under it, newest first,
-		// one step in and with no mark of their own; then the project's older rows.
+		// In the project's group: the project's older rows, then the run's row where its creation puts it and its
+		// children right under it, oldest first like the list, one step in and with no mark of their own.
 		const rows = rowsOf("/work/alpha").filter(row => !row.text.includes("New session"));
-		expect(rows.map(row => row.child)).toEqual([false, true, true, true, false, false]);
-		expect(rows[0]?.text).toContain("Cycle 3");
-		expect(rows[0]?.mark).toBe("autopilot");
-		expect(rows[1]?.text).toContain("Fix the flaky upload test");
-		expect(rows[2]?.text).toContain("Cover the upload retry");
+		expect(rows.map(row => row.child)).toEqual([false, false, false, true, true, true]);
+		expect(rows[0]?.text).toContain("Session /work/alpha/two");
+		expect(rows[1]?.text).toContain("Session /work/alpha/one");
+		expect(rows[2]?.text).toContain("Cycle 3");
+		expect(rows[2]?.mark).toBe("autopilot");
 		expect(rows[3]?.text).toContain("Docs pass");
-		expect(rows.slice(1, 4).map(row => row.mark)).toEqual([null, null, null]);
-		expect(rows[4]?.text).toContain("Session /work/alpha/one");
+		expect(rows[4]?.text).toContain("Cover the upload retry");
+		expect(rows[5]?.text).toContain("Fix the flaky upload test");
+		expect(rows.slice(3, 6).map(row => row.mark)).toEqual([null, null, null]);
 	});
 
 	it("opens no group for a run's new child while git has not answered for its worktree yet", async () => {

@@ -259,7 +259,7 @@ describe("sidebarRows over every combination of folder, holder and opener", () =
 	// hand or not, archived rows included.
 	it.each(
 		WORLDS.slice(0, 60).flatMap((cells, index) => [
-			[index, "newest first", cells] as const,
+			[index, "by creation", cells] as const,
 			[index, "by hand", cells] as const,
 		]),
 	)("world %i (%s) moves no row when a session is selected", (index, order, cells) => {
@@ -276,7 +276,8 @@ describe("sidebarRows over every combination of folder, holder and opener", () =
 		const plain = world(cells);
 		const archived = new Set(cells.filter((_cell, at) => (at + index) % 5 === 0).map(cell => cell.path));
 		const drawn = sidebarRows({ ...plain, archived });
-		// A hand order: each list's rows reversed, with its newest row left out (new since the person last moved one).
+		// A hand order: each list's rows reversed, with its newest row (the last) left out: new since the person last
+		// moved one.
 		const byHand = new Map([
 			...drawn.groups.map(
 				group =>
@@ -284,7 +285,7 @@ describe("sidebarRows over every combination of folder, holder and opener", () =
 						group.cwd,
 						group.sessions
 							.map(row => row.path)
-							.slice(1)
+							.slice(0, -1)
 							.toReversed(),
 					] as const,
 			),
@@ -292,7 +293,7 @@ describe("sidebarRows over every combination of folder, holder and opener", () =
 				CHATS_ORDER_KEY,
 				drawn.chats
 					.map(row => row.path)
-					.slice(1)
+					.slice(0, -1)
 					.toReversed(),
 			] as const,
 		]);
@@ -521,7 +522,7 @@ describe("holdRows: what the person aims at keeps its place", () => {
 		},
 	);
 
-	it("keeps a newer session out of the top of its project, and a deleted one's place empty, until the aim ends", () => {
+	it("keeps a newer session out of the bottom of its project, and a deleted one's place empty, until the aim ends", () => {
 		const cells: Cell[] = [
 			{ folder: "app", holder: "none", origin: "person", path: "/s/alpha" },
 			{ folder: "app", holder: "none", origin: "person", path: "/s/bravo" },
@@ -534,9 +535,82 @@ describe("holdRows: what the person aims at keeps its place", () => {
 			rows.groups
 				.find(group => group.cwd === APP)
 				?.sessions.map(row => `${row.path}${row.departed ? " (empty)" : ""}`);
-		expect(app(now)).toEqual(["/s/zulu", "/s/bravo", BOSS]);
+		expect(app(now)).toEqual([BOSS, "/s/bravo", "/s/zulu"]);
 		const held = holdRows(shown, now);
 		expect(app(held)).toEqual(app(shown)?.map(row => (row === "/s/alpha" ? "/s/alpha (empty)" : row)));
 		expect(rowsWaiting(held, now)).toBe(1);
+	});
+});
+
+// The owner's decision, 24 Nov 2026: every session list reads oldest first, so a new session lands at the bottom.
+describe("every session list reads oldest first", () => {
+	const row = (path: string, cwd: string, minute: number): SessionInfo => {
+		const at = new Date(Date.UTC(2026, 10, 24) + minute * 60_000).toISOString();
+		return {
+			path,
+			id: path,
+			title: path,
+			cwd,
+			created: at,
+			modified: at,
+			messageCount: 3,
+			size: 1,
+			status: "complete",
+			firstMessage: "hello",
+			openedBySession: null,
+		};
+	};
+	const app = (rows: SidebarRows) =>
+		rows.groups.find(group => group.cwd === APP)?.sessions.map(session => session.path);
+	const chats = (rows: SidebarRows) => rows.chats.map(session => session.path);
+
+	it("puts a new session last in a list nobody ordered and in one the person ordered, under the pins", () => {
+		const base = world([]);
+		const sessions = [
+			row("/s/new", APP, 9),
+			row("/s/a", APP, 1),
+			row("/s/b", APP, 2),
+			row("/c/new", FOLDERS.chat, 9),
+			row("/c/a", FOLDERS.chat, 1),
+			row("/c/b", FOLDERS.chat, 2),
+		];
+		const unordered = sidebarRows({ ...base, sessions });
+		expect(app(unordered)).toEqual(["/s/a", "/s/b", "/s/new"]);
+		expect(chats(unordered)).toEqual(["/c/a", "/c/b", "/c/new"]);
+
+		const byHand = new Map([
+			[APP, ["/s/b", "/s/a"]],
+			[CHATS_ORDER_KEY, ["/c/b", "/c/a"]],
+		]);
+		const order = { ...base.order, sessionOrder: (list: string) => byHand.get(list) };
+		const ordered = sidebarRows({ ...base, sessions, order });
+		expect(app(ordered)).toEqual(["/s/b", "/s/a", "/s/new"]);
+		expect(chats(ordered)).toEqual(["/c/b", "/c/a", "/c/new"]);
+
+		const pinned = sidebarRows({ ...base, sessions, order: { ...order, pinnedSessions: ["/s/a"] } });
+		expect(app(pinned)).toEqual(["/s/a", "/s/b", "/s/new"]);
+	});
+
+	it("lists an Autopilot run's children right under its row, oldest first like the list", () => {
+		const base = world([]);
+		const sessions = [
+			row("/s/later", APP, 9),
+			row("/s/child-2", "/w/child-2", 3),
+			row("/s/run", "/w/run", 1),
+			row("/s/child-1", "/w/child-1", 2),
+			row("/s/earlier", APP, 0),
+		];
+		const rows = sidebarRows({
+			...base,
+			sessions,
+			folder: cwd => (cwd.startsWith("/w/") ? { project: APP, gone: false } : base.folder(cwd)),
+			runOf: session =>
+				session.cwd === "/w/run"
+					? { key: "run", child: false }
+					: session.cwd.startsWith("/w/child-")
+						? { key: "run", child: true }
+						: null,
+		});
+		expect(app(rows)).toEqual(["/s/earlier", "/s/run", "/s/child-1", "/s/child-2", "/s/later"]);
 	});
 });

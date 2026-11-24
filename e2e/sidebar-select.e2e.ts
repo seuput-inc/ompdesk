@@ -184,11 +184,11 @@ test("selecting a session row selects it and moves no row, an archived one's inc
 	root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-sidebar-select-")));
 	const [project, desktop, agent] = ["project", "desktop", "agent"].map(name => path.join(root, name));
 	await Promise.all([project, desktop, agent].map(dir => fs.mkdir(dir)));
-	await seed(agent, "s-1", project, "Alpha plan", 1);
-	await seed(agent, "s-2", project, "Bravo plan", 2);
+	await seed(agent, "s-1", project, "Alpha plan", 5);
+	await seed(agent, "s-2", project, "Bravo plan", 4);
 	await seed(agent, "s-3", project, "Charlie plan", 3);
-	await seed(agent, "s-4", project, "Delta plan", 4);
-	await seed(agent, "s-5", project, "Echo plan", 5);
+	await seed(agent, "s-4", project, "Delta plan", 2);
+	await seed(agent, "s-5", project, "Echo plan", 1);
 	await fs.writeFile(
 		path.join(desktop, "prefs.json"),
 		JSON.stringify({ language: "en", firstRunComplete: true, sidebar: { archivedSessions: ["s-5"] } }),
@@ -236,9 +236,9 @@ test("selecting a session row selects it and moves no row, an archived one's inc
 
 /**
  * The owner's next report (9 Nov 2026, MacBook, v0.119.8): a click on one row selected another session, one at work.
- * Rows sit newest first, so a session another omp starts lands at the top of its project and pushes every row below it
- * down by one: the pointer that rested on Alpha then rests on the newcomer, and the click a person aimed at Alpha
- * selects it. While the pointer is on the list nothing moves into its place; the newcomer joins once it leaves.
+ * Rows then sat newest first, so a session another omp started landed at the top of its project and pushed every row
+ * below it down by one. Rows now sit oldest first (24 Nov 2026), and a newcomer lands at the bottom, where it still
+ * pushes every list below it down. While the pointer is on the list nothing moves; the newcomer joins once it leaves.
  */
 test("a session another omp starts never moves into the row the pointer rests on: the click selects the row aimed at", async () => {
 	test.setTimeout(120_000);
@@ -321,11 +321,11 @@ test("a session another omp starts never moves into the row the pointer rests on
 		)
 		.toHaveLength(1);
 
-	// The pointer leaves the list: the newcomer takes its place at the top.
+	// The pointer leaves the list: the newcomer takes its place at the bottom.
 	await page.mouse.move(1000, 450);
 	await expect
 		.poll(() => orderOf(page, LOCAL))
-		.toBe("project:s-9.jsonl | project:s-1.jsonl | project:s-2.jsonl | project:s-3.jsonl | project:s-4.jsonl");
+		.toBe("project:s-1.jsonl | project:s-2.jsonl | project:s-3.jsonl | project:s-4.jsonl | project:s-9.jsonl");
 	await shoot("3-pointer-left");
 });
 
@@ -351,13 +351,13 @@ async function runCases(cases: ReadonlyArray<readonly [name: string, run: () => 
 	expect(failed, "failed cases").toEqual([]);
 }
 
-/** The world both lists show: four plain rows, an archived one and a loose child that needs a look. */
+/** The world both lists show: four plain rows (oldest first), an archived one and a loose child that needs a look. */
 const WORLD = [
-	["s-1", "Alpha plan", 1],
-	["s-2", "Bravo plan", 2],
+	["s-1", "Alpha plan", 5],
+	["s-2", "Bravo plan", 4],
 	["s-3", "Charlie plan", 3],
-	["s-4", "Delta plan", 4],
-	["s-5", "Echo plan", 5],
+	["s-4", "Delta plan", 2],
+	["s-5", "Echo plan", 1],
 ] as const;
 const LOOSE = ["s-6", "Fix the upload", 6] as const;
 const WORLD_ORDER =

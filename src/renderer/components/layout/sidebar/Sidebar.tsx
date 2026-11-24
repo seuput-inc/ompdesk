@@ -420,7 +420,7 @@ function focusRovingItem(item: HTMLElement) {
 /**
  * Sessions-first sidebar and the app's only session
  * navigator: one search, sessions grouped by project and then the Chats section
- * (newest first, status as icon + text; every open tab keeps a row),
+ * (oldest first, a new session at the bottom; status as icon + text; every open tab keeps a row),
  * and a footer with the three destinations plus help.
  */
 export function Sidebar() {
