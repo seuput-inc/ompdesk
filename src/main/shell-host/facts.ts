@@ -67,6 +67,8 @@ export interface HostFacts {
 	safeStorage: SafeStorageFact;
 	/** The page channels the shell serves itself (`crates/tauri-shell/src/ipc_router.json`). */
 	nativeIpc: Array<{ channel: string; dir: "invoke" | "send" }>;
+	/** Where main reaches the shell's core owner (PROTOCOL.md › 12a): a named pipe on Windows, a unix socket elsewhere. */
+	coreOwner: string;
 }
 
 export interface WinState {

@@ -244,8 +244,8 @@ export class Autopilot {
 	readonly #readyCancels = new Map<string, () => void>();
 	#callSeq = 0;
 	#control: AutopilotControl | null = null;
-	/** The core this was opened on: another process id is a core that started again, which lost the runs it held. */
-	#pid: number | null = null;
+	/** The core this was opened on: another generation is a core that started again, which lost the runs it held. */
+	#generation = 0;
 
 	constructor(deps: AutopilotDeps) {
 		this.#deps = deps;
@@ -273,8 +273,8 @@ export class Autopilot {
 	 * the same tick, so the core applies them in the order this side made them.
 	 */
 	#open(): void {
-		const pid = core().pid;
-		if (this.#pid !== null && pid === this.#pid) return;
+		const generation = core().generation;
+		if (generation !== 0 && generation === this.#generation) return;
 		this.#mirror.clear();
 		this.#childRuns.clear();
 		const tuning = this.#deps.tuning ?? {};
@@ -298,7 +298,7 @@ export class Autopilot {
 				probeOverride: this.#deps.probeRepo !== undefined,
 			})
 			.catch(error => this.#log(`autopilot.open: ${String(error)}`));
-		this.#pid = core().pid;
+		this.#generation = core().generation;
 	}
 
 	/** An event for the core: applied in the order it was sent. */

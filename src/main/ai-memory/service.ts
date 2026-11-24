@@ -498,8 +498,8 @@ export class AiMemoryService {
 	/** Keeps a request open on the service; when the core dies under it, opens the service on the next one. */
 	async #hold(): Promise<void> {
 		const host = core();
-		const home = host.pid;
-		while (!this.#disposed && host.pid === home) {
+		const home = host.generation;
+		while (!this.#disposed && host.generation === home) {
 			try {
 				await host.call("aimemory.service.closed", { service: this.#name }, { timeoutMs: HOLD_MS });
 				return;

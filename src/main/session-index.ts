@@ -45,7 +45,7 @@ export class SessionIndex {
 	#subscriptions: Array<() => void> = [];
 	/** Whether the core says the tree is watched now. */
 	#watching = false;
-	/** The core process the watch was asked of (a core that ends takes its watches with it); null: none, or the ask failed. */
+	/** The core (its generation) the watch was asked of (a core that ends takes its watches with it); null: none, or the ask failed. */
 	#watchCore: number | null = null;
 	/** Whether a watch was asked for since `start()`: a second ask means an earlier watch was lost. */
 	#asked = false;
@@ -120,14 +120,14 @@ export class SessionIndex {
 		this.#asked = true;
 		this.#watching = false;
 		const asked = core().call("sessions.watch", { index: this.#id, root: resolve(this.#sessionsDir) });
-		const pid = core().pid;
-		this.#watchCore = pid;
+		const generation = core().generation;
+		this.#watchCore = generation;
 		asked.catch((error: unknown) => {
 			console.warn(
 				`[session-index] not watching ${this.#sessionsDir}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			// Unwatched, so every ask reads; the next ask (or the next core) asks for the watch again.
-			if (this.#watchCore === pid) this.#watchCore = null;
+			if (this.#watchCore === generation) this.#watchCore = null;
 		});
 	}
 
@@ -137,7 +137,7 @@ export class SessionIndex {
 	 */
 	#watched(): boolean {
 		if (!this.#started) return false;
-		if (this.#watchCore === null || core().pid !== this.#watchCore) {
+		if (this.#watchCore === null || core().generation !== this.#watchCore) {
 			this.#watch();
 			return false;
 		}
@@ -192,7 +192,7 @@ export class SessionIndex {
 		this.#asked = false;
 		this.#missed = false;
 		// Only a running core holds anything of this index: none is started to forget nothing.
-		if (core().pid !== null) {
+		if (core().generation !== 0) {
 			core()
 				.call("sessions.close", { index: this.#id })
 				.catch(() => {
@@ -261,7 +261,7 @@ export class SessionIndex {
 		const stored = await this.#store.list();
 		const deleted = deletedSessions().which(stored.map(info => info.path));
 		const infos = stored.filter((_, at) => !deleted[at]);
-		if (infos.length === 0 && (this.#listedGeneration === null || core().pid === null)) {
+		if (infos.length === 0 && (this.#listedGeneration === null || core().generation === 0)) {
 			this.#listedGeneration = null;
 			return infos;
 		}
