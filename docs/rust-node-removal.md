@@ -205,6 +205,56 @@ So C's order gains a remote branch after the event drain: core page sends → ev
 
 **7. Shared paths.** With the shell-owns-core step ((b) above, `omp/agent/node-removal-router`; its owner's answer, 25 Nov 2026): `core.exited` keeps its name and moment and there is no `core.started` event, so `RemoteClient.lost`, `SharingCore.lost` and `core/reopen.ts` `openAgain` stay as they are; which core runs is `core().generation`, never `core().pid` (null for a moment after a start). (b) adds `#dropStale()` to `core/hub.ts` before `#call`/`#write`/`callLater`, the only overlap with R-Q's hub instance, and rewrites `core/process.ts`. Order: (b) → R-Q. With F's page router: `ws-router.ts` `#meter`, R-Q's second caller, which neither (b) nor (c) touches. With F-prefs: none.
 
+### Design: slice G, machine setup and the tool updaters move into the core as one owner (not built)
+
+Asked by Main on 25 Nov 2026 (dispatch d9) once B1 gave the core the preference files. Read with `.omp/rules/machine-setup-updates.md` (UpdateScheduler, omp self-update, tool CLI and extension updates, the nested-step fence) and the ledger. The map behind it is the scout report of the same day; the line numbers below are from `e526d8af2`.
+
+**1. What it is.** Five things that share one queue and one clock:
+
+| Part | Files (non-test lines) | State it holds |
+|---|---|---|
+| Machine setup | `setup/service.ts` (1 281), its `plans.ts` | `SetupState` (items, phases), the install `#queue` (`SerialChain`, nested steps fenced), detect/fetch/settle pipelines over the supervisor (`ompdesk-core --supervise`) |
+| Scheduler | `update-scheduler.ts` (103) | one timer and one `SerialChain` per updater (`CHECK_INTERVAL_MS` 4 h, backoff to 24 h, 30 min step bound), `started`/`disposed` |
+| omp self-update | `omp-updater.ts` (349), `omp-auto-takeover.ts` (176), `omp-compat-source.ts` (153), `omp-hold-notice.ts` (101) | `OmpUpdateState`, failures, the joined `#running` pass, `asked`/`ticked`; the stock `update.auto` takeover record (`omp-auto-takeover.json`); the compat feed and its cache |
+| CLI tools | `cli-tools/{catalog,detect,plans,updater}.ts` (87+219+233+393) | rows per tool (state, detection, failures, `nextAt`) |
+| Extensions | `ext-update/{ipc,mcp-owner,mcp-plans,updater}.ts` (27+103+119+608) | rows per package (row, target, skips, failures, `nextAt`) |
+
+The rules are already Rust (`ext.*` in `core/src/ext`, `omp.parseUpdateCheck`/`checkUpdate`, `setup.resolveArchive`/`resolveAgentDesktop`/`pickAgentDesktop`/`readCompatCache`/`saveCompatCache`, the supervisor, `stock.request`); the schedule, the backoff, the rows, the takeover and every run are main's.
+
+**2. Why they move together (§1.3 a, c).** Each reads another in the tick it decides:
+
+- The extension updater's `blocked` reads `OmpUpdater.state().phase` (`index.ts:1924`): while omp installs, the stock helper is stopped.
+- `OmpUpdater.state()` reads `OmpAutoTakeover.taken()`, and the takeover's change calls `ompUpdater.changed()`.
+- `OmpUpdater.installed` reads `setup.state()` (`index.ts:1810`), and `BridgeHealth` reads it before it calls `repair()` (`index.ts:921-933`).
+- `updateOmp` and `runToolUpdate` run on setup's `#queue`, inside an updater's step, so the nested-step fence (`machine-setup-updates.md` › A nested step is fenced) ties the two chains: a stopped updater step aborts the setup step it started.
+- `setup/plans.ts` imports `npmFor` (synchronous) and `readInstall` from `cli-tools`; the extension updater reuses the CLI updater's check process, owners and builders.
+- One preference (`toolsAutoUpdate`, with `ompFollowVerified` for omp) drives all three through one `onPrefChanged` branch (`index.ts:2578-2592`).
+
+Moving any one leaves a same-tick reader in main. So G is one owner in the core: setup and the three updaters on one task with one queue, the fence structural instead of an `AsyncLocalStorage` scope.
+
+**3. The two steps.**
+
+- **T1. System proxy resolution leaves Electron (small, lands first).** `resolveProxyEnvForSpawn` (`index.ts:511`) gives every check and update spawn its proxy: the `proxy` preference, else an inherited `*_PROXY`/`PI_PROXY` (then nothing is added), else the system proxy for `https://chatgpt.com` from `session.defaultSession.resolveProxy`, bounded by `SYSTEM_PROXY_LOOKUP_MS` and logged as `omp-start-input`/`proxyEnv` when late. The same lookup feeds every tab's omp (`agentProxyUrl`). The OS lookup is already Rust in the shell crate (`shell/src/sys/system.rs:342` WinHTTP with its 3 s PAC run, `shell/src/sys_mac/proxy.rs:372`). T1 makes it callable from the core (the function moves to a module both processes link, or the core asks the shell once (b) gives it a request channel; whichever lands first), keeps the order, the bound, the log line and `parsePacResult`, and deletes the Electron call. **The rule G keeps: no update path, check or install, may run without the proxy this order picks; PAC and system proxies included.** No test pins the order today (the spawn tests fake `proxyEnv`: `session-launch-parity.test.ts`, `sidecar-factory.test.ts`; `sys_mac/proxy.rs` has no test), so T1 adds a Rust table test of the order and the bound, and one Windows e2e whose system proxy is a PAC file naming a local proxy that the fake installer's check must pass through.
+- **T2. One owner in the core.** A hub kind (`setup`, with the updaters inside it) holds `SetupState`, the install queue, the scheduler, the three updaters' state and rows, the takeover record and the compat feed (the core's HTTPS client, `http.rs`, with T1's proxy and the system certificates `net.fetch` used). Its runs spawn under the supervisor as today and read prefs in process (B1). Main keeps:
+  - **IPC as typed forwards.** `omp-update:*`, `cli-update:*`, `extension-update:*`, `host-omp-update:*` and the setup channels keep their names, payloads and permissions (`ipc-policy.ts`); each handler awaits one hub call. `GET` answers the current rows before a rescan settles and `NOW` validates the key against the same rows, as today, because the core answers both from memory under one lock. `startOmpUpdate` (`machine-services.ts:403-417`) gets the state of the pass it started in the same answer, not by a second read.
+  - **Event relays.** The core's state events go to the windows (`OMP_UPDATE_STATE`, `OMP_UPDATED` to the focused window, `CLI_UPDATE_STATE`, `EXTENSION_UPDATE_STATE`) and to paired devices: `devices.hostOmpUpdateChanged` and `host-services.ts` `host.ompUpdate.get/now` forward to the same hub calls, so a device sees what a window sees (the remote half moves with R-H later; the wire stays).
+  - **Notices through the shell.** The omp hold notice (`ompHold.*`) becomes a shell notification (`notify-triage`'s path), its text from the main text table until that table moves.
+  - **What the core asks main for, until their owners move.** A new omp's restarts (`sidecarPool.restartOnNewOmp`, `hostServices.restartOnNewOmp`, the stats server and stock helper release/resume, `refreshSystemOmp`) and an extension update's reloads (`applyExtensionUpdate`, `workspaceDirs`) are core → main requests answered when done; the pool's own parts are already the core's and answer in process once C lands. The tab inventory's idle facts the CLI updater waits on come from the pool.
+  - Deleted: `update-scheduler.ts`, `omp-updater.ts`, `omp-auto-takeover.ts`, `omp-compat-source.ts`, `cli-tools/*`, `ext-update/{updater,mcp-owner,mcp-plans}.ts`, `setup/service.ts` and `setup/plans.ts`, with `serial-chain.ts`' use by them; `classify.ts`, `mcp.ts`, `running.ts`, `core.ts` lose their last callers. `omp-hold-notice.ts` keeps only its text if the shell's notice needs it.
+
+**4. Kept exactly** (each pinned today; T2 runs these against the core):
+
+- Schedule and backoff: first check at start, then 4 h, doubled per failure to 24 h, a manual "Update now" joins the running pass (`update-scheduler.test.ts`, `omp-updater.test.ts`).
+- omp: no untested omp installs unasked (`omp-tested.json`, `ompFollowVerified`), the held-version notice once per version (`ompHeldSeen`, `ompHoldTold`), the takeover of stock `update.auto` and its restore when the person turns it off (`omp-auto-takeover.test.ts`), the bridge's `repair()` only when setup says omp is present.
+- CLI and extensions: a tool in use waits (`waitsForIdle`, the `ps` scan on macOS), an update never runs while omp installs, `NOW` refuses a key not in the rows (`cli-tools/updater.test.ts`, `ext-update/updater.test.ts`, both already on the real core for their rules).
+- The fence: an updater step past 30 min is stopped and the setup step it started aborts with it; a stopped step writes no state (`serial-chain.test.ts` cases for nested steps become Rust tests of the one queue).
+- Quit order: omp updater → local engines → CLI → extensions → setup (`index.ts:2829-2832`) becomes the hub kind's own stop, before the core exits.
+- e2e: `omp-auto-update`, `cli-update`, `extension-update`, `machine-setup`, `app-auto-update-parity` (fake installers, `OMP_GUI_TEST_*`), on Windows; the macOS proof is `mac-smoke` plus the Rust tests.
+
+**5. Formal.** No model covers these files today. If T2 runs the queue, the timers and the runs on one core task, the fence and "no extension update while omp installs" are one lock and a state check, proved by the Rust tests above. If it splits them across tasks, a `tool-updates` model (queue, nested step, stop, omp phase) is written and stamped before landing.
+
+**6. Order and owners.** T1 needs nothing. T2 needs B1 (landed) and T1; it does not wait for C (the restarts are requests main answers) or for (b). Owner: a new session for G (Main, 25 Nov 2026), starting from this section.
+
 
 ## 3. Landing order and exit gate
 
