@@ -32,7 +32,7 @@
  *   promises of released omps (`#exiting`), the moves in flight, the activity observers, the model-wait tracker;
  * - the collaborators, which the core asks (`ask`): the sidecar factory and its lifecycle calls, the hooks
  *   (`onRunningChange`, `onSessionFilesChanged`, `onWindowTabsChanged`, `worktreeStartGate`, `onAcquire`,
- *   `onTabReleased`), the deleted-session list and the removal holds, the clock of the timers and ticks;
+ *   `onTabReleased`), the deleted-session list and the removal holds, the event loop's tick before a restart;
  * - the sidecar's listeners: each event is fed to the core at the moment the sidecar emits it, in the order it came.
  * `hub.ts` explains how a call, an item and a question travel; `pool/mod.rs` lists this protocol.
  */
@@ -435,10 +435,7 @@ export class SidecarPool {
 	/** Tab id → the exit of its omp once the tab is released: what a folder the tab worked in waits for. */
 	readonly #exitingTabs = new Map<string, Promise<void>>();
 	/** The methods that were `async` wait here for the core's `settle` item (by token). */
-	readonly #settling = new Map<
-		number,
-		{ resolve: (value: unknown) => void; reject: (error: unknown) => void; timer?: NodeJS.Timeout }
-	>();
+	readonly #settling = new Map<number, { resolve: (value: unknown) => void; reject: (error: unknown) => void }>();
 	#token = 0;
 	/** The summary facts read last (`#summaryFacts`), while nothing has changed since. */
 	#summaryRead: object | null = null;
@@ -563,7 +560,6 @@ export class SidecarPool {
 		// Promises waiting for the core's word can never get it: they end as a failed call does.
 		for (const [token, waiting] of this.#settling) {
 			this.#settling.delete(token);
-			clearTimeout(waiting.timer);
 			waiting.reject(new CoreError("hub_lost", "The pool was lost with the core"));
 		}
 	}
@@ -711,25 +707,11 @@ export class SidecarPool {
 					}
 				});
 				return;
-			case "stopTimer": {
-				const token = item.token as number;
-				const waiting = this.#settling.get(token);
-				if (!waiting) return;
-				waiting.timer = setTimeout(() => {
-					try {
-						this.#call("stopTimeout", { token });
-					} catch {
-						// A lost core ends the wait with the rest.
-					}
-				}, item.ms as number);
-				return;
-			}
 			case "settle": {
 				const token = item.token as number;
 				const waiting = this.#settling.get(token);
 				if (!waiting) return;
 				this.#settling.delete(token);
-				clearTimeout(waiting.timer);
 				if (item.ok === true) waiting.resolve(item.value ?? null);
 				else if (typeof item.code === "string" && item.code !== "main_error")
 					waiting.reject(
