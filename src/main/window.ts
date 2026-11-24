@@ -8,14 +8,14 @@
 
 import { join } from "node:path";
 import { BrowserWindow, Menu, Notification, shell } from "electron";
-import type { RunProgressState, SessionKind } from "../shared/ipc-types";
-import { approveQuit, askQuit, quitRisk } from "./app-quit";
+import type { SessionKind } from "../shared/ipc-types";
+import { approveQuit, askQuit, logQuitAsked, quitRisk } from "./app-quit";
 import { diskFull } from "./disk-full";
 import { editableContextMenuTemplate } from "./editable-context-menu";
 import { editLabels, getMainLanguage, mainT } from "./i18n";
 import type { LastWindowClose } from "./quit-guard";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
-import { serveWindows, setShellRunProgress, type WindowNotice } from "./shell-host/electron/index";
+import { serveWindows, type WindowNotice } from "./shell-host/electron/index";
 import type { WindowPresence } from "./update-log-core";
 import type { ClientWindow } from "./web/client-window";
 
@@ -66,7 +66,7 @@ export class WindowManager {
 		serveWindows({
 			log: (wcId, entry) => writeRuntimeLog(entry, { windowId: wcId, cwd: this.#records.get(wcId)?.cwd }),
 			notice: kind => this.#notice(kind),
-			quitAsked: approveQuit,
+			quitAsked: (asker, ask, approved) => (approved ? approveQuit(asker, ask) : logQuitAsked(asker, ask)),
 			saves: (file, waiting) => (waiting ? diskFull.report(file) : diskFull.clear(file)),
 		});
 	}
@@ -207,10 +207,5 @@ export class WindowManager {
 
 	getAllWindows(): BrowserWindow[] {
 		return [...this.#records.values()].map(r => r.win).filter(w => !w.isDestroyed());
-	}
-
-	/** Run-progress indicator (agent `terminal.showProgress` setting): the shell's Dock badge and taskbar progress. */
-	setRunProgress(state: RunProgressState): void {
-		setShellRunProgress(state);
 	}
 }

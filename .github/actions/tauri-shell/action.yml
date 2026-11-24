@@ -20,7 +20,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: resources/ompdesk-tauri
-        key: ompdesk-tauri-${{ runner.os }}-${{ runner.arch }}-${{ inputs.test-automation == 'true' && 'test-automation' || 'release' }}-v${{ steps.app.outputs.version }}-${{ hashFiles('native/ompdesk/rust-toolchain.toml', 'native/ompdesk/crates/core/src/owner.rs', 'native/ompdesk/crates/tauri-shell/**', '!native/ompdesk/crates/tauri-shell/target/**', 'native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'native/ompdesk/crates/shell-preview/**', '!native/ompdesk/crates/shell-preview/target/**', 'scripts/build-tauri.ts', 'scripts/cargo.ts', 'src/shared/app-compatibility.json') }}
+        key: ompdesk-tauri-${{ runner.os }}-${{ runner.arch }}-${{ inputs.test-automation == 'true' && 'test-automation' || 'release' }}-v${{ steps.app.outputs.version }}-${{ hashFiles('native/ompdesk/rust-toolchain.toml', 'native/ompdesk/crates/core/src/owner.rs', 'native/ompdesk/crates/tauri-shell/**', '!native/ompdesk/crates/tauri-shell/target/**', 'native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'native/ompdesk/crates/shell-preview/**', '!native/ompdesk/crates/shell-preview/target/**', 'scripts/build-tauri.ts', 'scripts/cargo.ts', 'src/shared/app-compatibility.json', 'resources/brand/tray*.png') }}
     - if: steps.shell-cache.outputs.cache-hit != 'true'
       uses: ./.github/actions/native-toolchain
       with:

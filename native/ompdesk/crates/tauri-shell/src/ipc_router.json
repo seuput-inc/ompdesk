@@ -8,5 +8,5 @@
     "system:save-image",
     "updater:version"
   ],
-  "send": []
+  "send": ["progress:set", "tray:state-push"]
 }

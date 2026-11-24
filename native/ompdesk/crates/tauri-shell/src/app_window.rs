@@ -19,7 +19,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 use tauri::WebviewWindow;
 
-use crate::host::{self, Call};
+use crate::host;
 use crate::{log, quit_chain, runtime, window_state};
 
 /// A crash reload this soon after the last one is a crash loop: the dialog is offered instead.
@@ -327,12 +327,13 @@ pub fn closing(window: &WebviewWindow) {
     }
 }
 
-/// `app.setRunProgress {state}` (`working`, `waiting`, anything else idle): the Dock badge (● working, ! waiting) and a
-/// progress fraction on every app window, a state marker rather than progress; idle clears both. UI thread.
-pub fn set_run_progress(call: Call) {
-    let (badge, value) = match call.params["state"].as_str() {
-        Some("working") => ("●", 0.5),
-        Some("waiting") => ("!", 0.75),
+/// The run progress over every window (`tray::progress_push`: `working`, `waiting`, anything else idle): the Dock
+/// badge (● working, ! waiting) and a progress fraction on every app window, a state marker rather than progress; idle
+/// clears both. UI thread.
+pub fn set_run_progress(state: &str) {
+    let (badge, value) = match state {
+        "working" => ("●", 0.5),
+        "waiting" => ("!", 0.75),
         _ => ("", -1.0),
     };
     let progress = shell_core::native_ui::progress(value, None);
@@ -357,7 +358,6 @@ pub fn set_run_progress(call: Call) {
             }
         }
     }
-    call.ok(json!({}));
 }
 
 /// A `gui-runtime.jsonl` line about window `wc`'s page, written by Node with the window's cwd.
@@ -585,7 +585,7 @@ fn restart(asker: &str) {
     // Node logs who asked and freezes its state before the chain's first step reaches it on the same stream.
     host::event(
         "app.quitAsked",
-        json!({"asker": asker, "ask": {"relaunch": true}}),
+        json!({"asker": asker, "ask": {"relaunch": true}, "approved": true}),
     );
     quit_chain::admit(&runtime().quit, quit_chain::Admission::Approved);
 }

@@ -90,15 +90,16 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `app.focus` | Node | `{steal?: boolean}` | `{}` |
 | `app.hide` / `app.show` | Node | `{}` | macOS `NSApp hide/unhide`; no-op elsewhere. |
 | `app.setBadge` | Node | `{text}` | macOS Dock badge (`app.dock.setBadge`); no-op elsewhere. |
-| `app.setRunProgress` | Node | `{state: "working"\|"waiting"\|"idle"}` | Tauri: `{}` — macOS Dock badge (● working, ! waiting) and Dock progress, Windows taskbar progress on every app window (0.5 working, 0.75 waiting, none idle; `tauri-shell/src/app_window.rs`). |
-| `app.quitAsked` (event) | shell→Node | `{asker, ask: {relaunch}}` | Tauri: a window's restart dialog was answered "Restart now" (`asker` `restart-prompt` or `crash-recovery`); Node logs the asker and freezes, then the shell's approved quit with relaunch reaches `app.quitHook`. |
+| `app.setRunProgress` | Node | `{state: "working"\|"waiting"\|"idle"}` | CEF only. Tauri: the pages' `progress:set` reaches the shell itself (`tauri-shell/src/tray.rs`, one waiting window outranks one working), which sets the macOS Dock badge (● working, ! waiting) and Dock progress, Windows taskbar progress on every app window (0.5 working, 0.75 waiting, none idle; `app_window.rs`). |
+| `app.quitAsked` (event) | shell→Node | `{asker, ask: {relaunch?}, approved}` | Tauri: who asked for a quit the shell starts, before the chain's first step. `approved: true`: a window's restart dialog was answered "Restart now" (`asker` `restart-prompt` or `crash-recovery`); Node logs the asker and freezes, then the shell's approved quit with relaunch reaches `app.quitHook`. `approved: false`: Quit in the app menu (`app-menu`) or the tray (`tray`); Node logs the asker as `askQuit` did and the chain asks (`confirm`). |
+| `app.language` (event) | Node→shell | `{language: "en"\|"ko"}` | Tauri: main's UI language, at start (before `session.ready`) and on every change. The shell installs its app menu in it (`app_menu.rs`); the tray's menu uses it until a page reported its own. |
 | `window.notice` | shell→Node | `{kind: "hang"\|"resources"\|"crash"}` | Tauri: `hang` shows Node's stuck-page notification (`null`); `resources` and `crash` answer the restart dialog's `{message, detail, buttons: [restart, other]}` in the app's language, the first with the running and total tabs. |
 | `window.log` (event) | shell→Node | `{wcId, entry: {source, message, url?, details?, stack?}}` | Tauri: a `gui-runtime.jsonl` line about an app window's page (`preload`, `renderer-process`, `renderer-unresponsive`, `application-resources`); Node writes it with the window's id and cwd. |
 | `store.saveFailed` / `store.saved` (events) | shell→Node | `{file}` | Tauri: `window-state.json` waits for disk space / was saved; Node's one disk-full notice lists it meanwhile. |
 | `app.setDockIcon` | Node | `{}` + `bin` PNG | macOS `app.dock.setIcon`. |
 | `app.setAppUserModelId` | Node | `{id}` | Windows AppUserModelID (also in `app.init`). |
 | `app.setAsDefaultProtocolClient` | Node | `{protocol}` | `{ok: boolean}` — CEF only; Node no longer asks (W2): `omp://` is registered once, by the Windows installer (`electron-builder.win.yml` `protocols`) and the macOS bundle's `CFBundleURLTypes`. The CEF shell registers its own exe: Windows `HKCU\Software\Classes\<protocol>` (`shell\open\command` = `"exe" "%1"`), macOS LaunchServices (`LSSetDefaultHandlerForURLScheme`). |
-| `app.showAboutPanel` | Node | `{}` | macOS standard about panel using the init `aboutPanel` options; Windows: no-op. |
+| `app.showAboutPanel` | Node | `{}` | CEF only: macOS standard about panel using the init `aboutPanel` options; Windows: no-op. Tauri: the app menu's About items are AppKit's `about` role. |
 | `app.getGPUInfo` | Node | `{kind: "basic"\|"complete"}` | `{info: {gpuDevice: [{vendorId, deviceId, active, driverVendor?, driverVersion?, deviceString?}]}, features: Record<string,string>}`. `features` is Electron's `getGPUFeatureStatus()` (`gpu_compositing` is `"enabled"`, `"disabled_software"`, …); the shim serves the sync `getGPUFeatureStatus()` from the last answer. Resolves once the GPU process reported (CEF `GetGPUInfo`/the `chrome://gpu` feature status), never earlier. |
 | `app.startLaunchProtection` | Node | `{primary, enableGpu, disableGpu}` (booleans) | Tauri: `{guard, safeMode, software, stableAfterMs, logs}` after the selected profile's history/marker writes are attempted. Called once, before `app.init`. |
 | `app.launchEvent` | Node | `{op: "identity"\|"healthy"\|"stable"}` | Tauri: `null` or `{log}` after recording the GPU or launch stability. |
@@ -108,9 +109,11 @@ Display = { id, label, bounds: Rect, workArea: Rect, scaleFactor, rotation: 0|90
 | `app.secondInstance` (event) | shell→Node | `{kind:"url", url}` / `{kind:"path", path}` / `{kind:"focus"}` | CEF only. After skipping the executable, the first `omp://` URL wins; otherwise the first non-switch directory in the running shell’s cwd, else focus. A relative path is passed unchanged and ignored by main, not resolved in the second launch’s cwd. Tauri: the shell opens the same request itself (`tauri-shell/src/entry.rs`) and sends no event. |
 | `app.openUrl` (event) | shell→Node | `{url}` | CEF only: macOS `kAEGetURL` (and Windows protocol launches arrive as `secondInstance`). Tauri: the shell opens it itself; a `file:` URL is a folder or file (`session.openPath`). |
 | `app.openFile` (event) | shell→Node | `{path}` | CEF only: macOS `kAEOpenDocuments`. |
-| `session.spawnWindow` | shell→Node | `{cwd?}` | Tauri: `{win}` once Node made a window and its tab (no `cwd`: the saved layout, as a launch restores it), or `null` (a quit is approved, no tab could start). A Dock click with no window, the window shortcut with none, an `omp://` link with none. |
+| `session.spawnWindow` | shell→Node | `{cwd?, from?: win}` | Tauri: `{win}` once Node made a window and its tab (no `cwd`: window `from`'s cwd, New Window in the app menu; with neither, the saved layout, as a launch restores it), or `null` (a quit is approved, no tab could start). A Dock click with no window, the window shortcut, the tray or a menu item with none, an `omp://` link with none. |
 | `session.openPath` | shell→Node | `{path}` | Tauri: `{focus: win}` when a window's cwd is the resolved path (the shell restores, shows and focuses it), `{spawned: win}` when Node opened one there, `null` for a relative path or a refused spawn. |
-| `session.ready` (event) | Node→shell | `{}` | Tauri: Node's startup windows exist and it answers `session.*`. Links, folders and second launches that reached the shell before wait for it and then run one at a time, in order; a spawn asked before it is dropped. |
+| `session.ready` (event) | Node→shell | `{}` | Tauri: Node's startup windows exist and it answers `session.*`. Links, folders and second launches that reached the shell before wait for it and then run one at a time, in order; a spawn asked before it is dropped. The tray appears now (never under `OMP_GUI_HEADLESS=1`). |
+| `tray.update` | shell→Node | `{}` | Tauri: `{status: UpdateStatus, notAvailableAt: number\|null}` — asked each time the tray's menu opens (2 s; unanswered, the update item offers a check). `notAvailableAt`: epoch ms of the last check that found nothing (the item says "up to date" for 30 s after it). |
+| `tray.runUpdate` (event) | shell→Node | `{action: "check"\|"download"\|"install"}` | Tauri: the tray's update item was clicked; Node runs `checkForUpdate`, `downloadUpdate` or `applyUpdate`. |
 | `app.quit` | Node | `{intent: "ask"\|"approved"\|"installerPending"}` / `{intent: "installerReceipt", receipt: {kind:"started", pid} \| {kind:"failed", message, code?}}` | `null` once admitted; `invalid` for any other shape. Tauri orders the quit (`tauri-shell/src/quit_chain.rs`). Ask: `before → confirm → finalize → teardown → close → will → settle → exit`; approved skips `confirm`. `installerPending` (before the ordinary teardown only) drops the uncommitted step's answer and holds every quit until the first-worker receipt, which runs `teardown(update) → before → close → will → settle → exit`. A receipt without a pending install, a second receipt and anything after `app.exit` or Node's end are ignored. The system's quit (⌘Q, Dock › Quit, logout, last window) is admitted as `ask`. |
 | `app.quitHook` | shell→Node | `{step, update, code?}` | One step at a time, each committing step (`finalize`, `teardown`) at most once; a stale answer is dropped. `before`/`confirm`/`close`/`will` answer a boolean (false vetoes; a later request resumes at `before`, never re-sending a committed step), `finalize`/`teardown`/`exit` `null`, `settle` 0 or 1 (the `exit` code). Any other answer stops the quit and is logged (`quit.fault`). |
 | `app.activate` (event) | shell→Node | `{hasVisibleWindows: boolean}` | CEF only: macOS Dock click. Tauri: the shell decides (`RunEvent::Reopen`): no window → `session.spawnWindow`, none visible → the focused or first window comes back, else nothing; nothing at all once a quit is approved. |
@@ -276,15 +279,23 @@ accelerator); `role` stays set only for those that need native handling: macOS `
 On macOS, `undo`, `redo`, `cut`, `copy`, `paste` and `selectAll` without a custom click handler also keep their
 role. AppKit sends the action to the first responder. A native edit does not produce a second Node click.
 
+Tauri: the application menu and the tray are the shell's own (`tauri-shell/src/app_menu.rs`, `tray.rs`; W3), built in
+main's UI language (`app.language`) and run by the shell. Node uses `menu.popup` only (the text-field context menu); the
+host answers `menu.setApplication` and `tray.*` `unsupported` and sends no `menu.click` or `tray.event`. Under the test
+inspector (`OMP_GUI_TEST_NODE_INSPECT=1`) Node may ask `menu.testClick {menu: "app"\|"tray", label}`: the shell chooses
+the item with that label as a person's click does (the tray's menu after its `tray.update`), `{}` once found, `gone`
+when no item has that label; any other run answers `unsupported`.
+
 | Method | Asks | Params | Result |
 |---|---|---|---|
-| `menu.setApplication` | Node | `{menuId, template: MenuItem[] \| null}` | `{}` — macOS menu bar; Windows: the window's menu bar is not shown (frameless), but accelerators of the items work while an app window has focus |
+| `menu.setApplication` | Node | `{menuId, template: MenuItem[] \| null}` | CEF only. `{}` — macOS menu bar; Windows: the window's menu bar is not shown (frameless), but accelerators of the items work while an app window has focus |
 | `menu.popup` | Node | `{menuId, template, winId, x?, y?}` | `{itemId: string \| null}` — answered when the menu closes; `null` for a dismissal. Also emits `menu.event` `will-show`/`will-close` |
-| `menu.click` (event) | shell→Node | `{menuId, itemId, checked?}` | an item was chosen (application menu, accelerator, tray menu) |
+| `menu.click` (event) | shell→Node | `{menuId, itemId, checked?}` | CEF only: an item was chosen (application menu, accelerator, tray menu) |
 | `menu.event` (event) | shell→Node | `{menuId, name: "will-show"\|"will-close"}` | tray/popup menus |
-| `tray.create` | Node | `{trayId, images: [{scaleFactor, dataURL}], template: boolean, tooltip}` | `{}` — the shell picks the closest representation to the display scale |
-| `tray.op` | Node | `{trayId, op, args}` | `setToolTip {text}`, `setImage {images, template}`, `setContextMenu {menuId, template}` (right/left click shows it per platform convention), `destroy` |
-| `tray.event` (event) | shell→Node | `{trayId, name: "click"\|"right-click"\|"double-click"}` | `click`: Windows left click and macOS click without a menu |
+| `menu.testClick` | Node | `{menu: "app"\|"tray", label}` | Tauri, test inspector only (above) |
+| `tray.create` | Node | `{trayId, images: [{scaleFactor, dataURL}], template: boolean, tooltip}` | CEF only. `{}` — the shell picks the closest representation to the display scale |
+| `tray.op` | Node | `{trayId, op, args}` | CEF only. `setToolTip {text}`, `setImage {images, template}`, `setContextMenu {menuId, template}` (right/left click shows it per platform convention), `destroy` |
+| `tray.event` (event) | shell→Node | `{trayId, name: "click"\|"right-click"\|"double-click"}` | CEF only. `click`: Windows left click and macOS click without a menu |
 
 ## 8. `dialog.*`, `clipboard.*`, `shell.*`, `notification.*`
 

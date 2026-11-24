@@ -176,7 +176,7 @@ Retry(t) ==
     /\ UNCHANGED <<app, quitting, swept, launches, tab, held, sess, used, saved, keep, alive, mayEnd, failed, tookOver>>
 
 \* A quit is approved: the layout is no longer saved, and the teardown that follows closes every tab.
-\* @code src/main/index.ts:1045-1050 frozen: quitApproved
+\* @code src/main/index.ts:1044-1049 frozen: quitApproved
 QuitBegin ==
     /\ app = "up" /\ ~quitting
     /\ quitting' = TRUE
