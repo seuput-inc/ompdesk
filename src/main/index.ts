@@ -112,7 +112,7 @@ import { CliUpdater, registerCliUpdateIpc } from "./cli-tools/updater";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
 import { installCliLaunchers } from "./control-socket/cli-install";
-import { takeHubMinute } from "./core/hub";
+import { hub as coreHub, takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
 import { setupDeepLinks } from "./deep-link";
@@ -785,13 +785,21 @@ async function spawnWindow(
 
 app.whenReady().then(async () => {
 	installMainRuntimeLogging();
-	// The core answers before main's first synchronous hub call (the prefs below): on a macOS runner the first launch's
-	// hub sent nothing for 2 s, the deadline of a call that holds main's thread; here the wait holds nothing.
-	const coreUp = core()
-		.call("core.echo", {})
-		.catch((error: unknown) => console.warn(`[core] did not answer at startup: ${String(error)}`));
+	// The hub answers before main's first synchronous hub call (the prefs below): on a macOS runner the core's hub sent
+	// nothing for over 2 s right after the core started, the deadline of a call that holds main's thread, and the
+	// startup failed (mac-smoke, runs 45339164652 and 45344032167). A round trip main does not wait on waits it out: a
+	// call of no instance, whose refusal is the answer. At most 15 s; a hub that never answers fails at the first call.
+	const startWait = Promise.withResolvers<void>();
+	setTimeout(startWait.resolve, 15_000).unref();
+	coreHub()
+		.callLater(0, "ready")
+		.then(
+			() => startWait.resolve(),
+			() => startWait.resolve(),
+		);
+	const hubUp = startWait.promise;
 	const { guard, safeMode, stableAfterMs } = await launch;
-	await coreUp;
+	await hubUp;
 	// A full disk is told once, by one notification that goes when the files are saved; the writers retry on their own.
 	bindDiskFullNotice(diskFull, {
 		show: notice => {
