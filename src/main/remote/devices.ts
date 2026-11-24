@@ -103,7 +103,7 @@ import type { Identity } from "./identity";
 import { ImageBlobCache } from "./image-blob-cache";
 import { type KeepAwakeBlocker, KeepAwakePolicy } from "./keep-awake";
 import { LinkRelaySocket } from "./link-relay-socket";
-import { PeerQuota, type QuotaRecord, type QuotaReservation, type QuotaStore } from "./peer-quota";
+import { PeerQuota, type QuotaReservation } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
 import { REFUSAL_CODES } from "./protocol";
 import { PendingTabCloses, RemoteSidecar, type RemoteSidecarOptions } from "./remote-sidecar";
@@ -209,70 +209,13 @@ interface HostLink {
 	relays: Map<string, LinkRelaySocket>;
 }
 
-/** A quota patch as the core reads it: a field main removed is null. */
-function wireOf(patch: Partial<Pick<PeerInfo, "limits" | "usage">>): Record<string, unknown> {
-	const wire: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(patch)) wire[key] = value ?? null;
-	return wire;
-}
-
-/**
- * The device records as main reads them in the same tick (the quota's `reserve`, the device lists): the core's last
- * state with main's own quota writes over it until the core says it applied them (`patched`). Main is the only
- * writer of `limits` and `usage`, so its latest write of a field is the record's.
- */
-class PeerMirror implements QuotaStore {
-	#peers = new Map<string, PeerInfo>();
-	readonly #written = new Map<string, { seq: number; patch: Partial<Pick<PeerInfo, "limits" | "usage">> }>();
-	#seq = 0;
-	readonly #send: (seq: number, deviceId: string, patch: Record<string, unknown>) => void;
-
-	constructor(send: (seq: number, deviceId: string, patch: Record<string, unknown>) => void) {
-		this.#send = send;
-	}
-
-	told(snapshot: SharingSnapshot): void {
-		this.#peers = new Map(snapshot.peers.map(peer => [peer.deviceId, peer]));
-		for (const [deviceId, written] of this.#written)
-			if (written.seq <= snapshot.patched) this.#written.delete(deviceId);
-	}
-
-	list(): PeerInfo[] {
-		return [...this.#peers.keys()].flatMap(deviceId => this.get(deviceId) ?? []);
-	}
-
-	get(deviceId: string): PeerInfo | undefined {
-		const peer = this.#peers.get(deviceId);
-		if (!peer) return undefined;
-		const written = this.#written.get(deviceId)?.patch ?? {};
-		const merged: PeerInfo = { ...peer, ...written };
-		if ("limits" in written && written.limits === undefined) delete merged.limits;
-		return merged;
-	}
-
-	update(deviceId: string, patch: Pick<QuotaRecord, "limits" | "usage">): PeerInfo | undefined {
-		if (!this.#peers.has(deviceId)) return undefined;
-		const seq = ++this.#seq;
-		const written = { ...this.#written.get(deviceId)?.patch, ...patch };
-		this.#written.set(deviceId, { seq, patch: written });
-		this.#send(seq, deviceId, wireOf(patch));
-		return this.get(deviceId);
-	}
-
-	/** The core ended before it applied every write: the next one is told what it has not confirmed, in the order made. */
-	resend(): void {
-		const unconfirmed = [...this.#written].sort(([, a], [, b]) => a.seq - b.seq);
-		for (const [deviceId, { seq, patch }] of unconfirmed) this.#send(seq, deviceId, wireOf(patch));
-	}
-}
-
 export class RemoteDevices {
 	readonly #deps: RemoteDevicesDeps;
 	readonly #identity: Identity;
 	readonly #sharing: Promise<SharingCore>;
 	/** The core's devices instance once open; its snapshot is what the synchronous readers here read. */
 	#core: SharingCore | null = null;
-	readonly #peers: PeerMirror;
+	readonly #quota: PeerQuota;
 	/** Every host's subagent pictures this device read, by content address: one folder for all tabs and hosts. */
 	readonly #imageBlobs: ImageBlobCache;
 	/** Every host's transcripts this device read (subagent journals, tail pages): one folder for all tabs and hosts. */
@@ -282,7 +225,6 @@ export class RemoteDevices {
 	#disposed = false;
 	readonly #keepAwake: KeepAwakePolicy;
 	readonly #unwatchRunning: () => void;
-	readonly #quota: PeerQuota;
 	#quotaTimer: NodeJS.Timeout | undefined;
 	/** The device name the core was told last. */
 	#toldName: string;
@@ -324,25 +266,21 @@ export class RemoteDevices {
 			keepAwakeEnabled: this.#keepAwakeEnabled(),
 			migratedAt: typeof deps.prefs.get(MIGRATED_KEY) === "number" ? (deps.prefs.get(MIGRATED_KEY) as number) : null,
 			...(deps.log ? { log: deps.log } : {}),
-			onState: snapshot => this.#told(snapshot),
+			onState: () => this.#told(),
 			onComputers: computers => this.#deps.broadcast(IPC_EVENTS.REMOTE_TAILNET, computers),
 			onAdoptLogin: login => this.#deps.adoptLogin(login),
 			onMigrated: migration => this.#migrated(migration),
-			onReopened: () => this.#peers.resend(),
 		}).then(sharing => {
 			this.#core = sharing;
-			this.#told(sharing.snapshot);
+			this.#told();
 			return sharing;
-		});
-		this.#peers = new PeerMirror((seq, deviceId, patch) => {
-			void this.#sharing.then(sharing => sharing.peerPatch(seq, deviceId, patch)).catch(() => undefined);
 		});
 		this.#unwatchRunning = deps.services.onRunningChange(() => {
 			this.#core?.configure({ running: this.#deps.services.runningPeers().length > 0 });
 			this.#broadcastState();
 		});
 		// Usage is written per assistant message; the Settings view needs only a settled count.
-		this.#quota = new PeerQuota(this.#peers, () => this.#quotaChanged());
+		this.#quota = new PeerQuota("peers", deps.userData, () => this.#quotaChanged());
 		deps.services.attachQuota(this.#quota);
 	}
 
@@ -378,9 +316,8 @@ export class RemoteDevices {
 		return this.#deps.prefs.get(KEEP_AWAKE_WORKING_PREF) !== false;
 	}
 
-	/** The core told what changed: the mirror follows, the windows are told, a new tailnet name is passed on. */
-	#told(snapshot: SharingSnapshot): void {
-		this.#peers.told(snapshot);
+	/** The core told what changed: the windows are told, a new tailnet name is passed on. */
+	#told(): void {
 		const name = this.deviceName();
 		if (this.#core && name !== this.#toldName) {
 			this.#toldName = name;
@@ -403,12 +340,21 @@ export class RemoteDevices {
 		return this.#core?.snapshot ?? null;
 	}
 
+	/** The devices that use this computer, as the core told them last. */
+	#peerList(): PeerInfo[] {
+		return this.#snapshot()?.peers ?? [];
+	}
+
+	#peer(deviceId: string): PeerInfo | undefined {
+		return this.#peerList().find(peer => peer.deviceId === deviceId);
+	}
+
 	state(): RemoteState {
 		const host = this.#host;
 		const versions = new Map((host?.connections() ?? []).map(peer => [peer.deviceId, peer.appVersion]));
 		const online = new Set(versions.keys());
 		const using = new Set([...online, ...this.#deps.services.runningPeers()]);
-		const peers = this.#peers.list();
+		const peers = this.#peerList();
 		const forgotten = this.#deps.prefs.get(FORGOTTEN_KEY);
 		const hosts = this.#snapshot()?.hosts ?? [];
 		return {
@@ -419,16 +365,19 @@ export class RemoteDevices {
 				port: host?.port ?? null,
 				addresses: host?.addresses() ?? [],
 				listenError: host?.listenError ?? null,
-				peers: peers.map(peer => ({
-					deviceId: peer.deviceId,
-					name: peer.name,
-					login: peer.login,
-					online: online.has(peer.deviceId),
-					appVersion: versions.get(peer.deviceId) ?? null,
-					lastSeenAt: peer.lastSeenAt ?? null,
-					limits: peer.limits ?? {},
-					usage: this.#quota.usage(peer),
-				})),
+				peers: peers.map(peer => {
+					const quota = this.#quota.view(peer.deviceId);
+					return {
+						deviceId: peer.deviceId,
+						name: peer.name,
+						login: peer.login,
+						online: online.has(peer.deviceId),
+						appVersion: versions.get(peer.deviceId) ?? null,
+						lastSeenAt: peer.lastSeenAt ?? null,
+						limits: quota?.limits ?? {},
+						usage: quota?.usage ?? { requests: 0, tokens: 0 },
+					};
+				}),
 				keepAwake: this.#deps.prefs.get(KEEP_AWAKE_WORKING_PREF) !== false,
 				keepingAwake: this.#keepAwake.held,
 				usedBy: peers.filter(peer => using.has(peer.deviceId)).map(peer => peer.name),
@@ -453,7 +402,7 @@ export class RemoteDevices {
 
 	/** A device may still use this computer: paired here and its Tailscale node (or login) not blocked. */
 	allowsPeer(deviceId: string): boolean {
-		const peer = this.#peers.get(deviceId);
+		const peer = this.#peer(deviceId);
 		if (!peer) return false;
 		return !this.#deps.blocks()?.check({ nodeId: peer.nodeId, login: peer.login });
 	}
@@ -545,7 +494,7 @@ export class RemoteDevices {
 	/** Rename a device that uses this computer: it is asked to rename itself, so it must be connected. */
 	renamePeer(payload: unknown): RemoteState {
 		const { deviceId, name } = parseRename(payload);
-		if (!this.#peers.get(deviceId)) throw codedError("remote_unknown_device", "Unknown device");
+		if (!this.#peer(deviceId)) throw codedError("remote_unknown_device", "Unknown device");
 		if (!this.#host?.askPeerRename(deviceId, name)) {
 			throw codedError("remote_offline", "The device must be connected to rename it");
 		}
@@ -570,7 +519,7 @@ export class RemoteDevices {
 	/** Keep a device out: block its node (its login when it never bound one), then forget it. */
 	async blockPeer(deviceId: unknown): Promise<RemoteState> {
 		if (typeof deviceId !== "string") throw codedError("remote_unknown_device", "Unknown device");
-		const peer = this.#peers.get(deviceId);
+		const peer = this.#peer(deviceId);
 		if (!peer) throw codedError("remote_unknown_device", "Unknown device");
 		const blocks = this.#deps.blocks();
 		if (!blocks) throw codedError("remote_tailscale_off", "Blocks are not available yet");
@@ -700,7 +649,7 @@ export class RemoteDevices {
 	 */
 	reviveHostTab(deviceId: string, marker: ResumeMarker): string | null {
 		if (this.#deps.prefs.get(HOST_ENABLED_KEY) !== true) return null;
-		const peer = this.#peers.get(deviceId);
+		const peer = this.#peer(deviceId);
 		return peer ? this.#deps.services.reviveTab(peer, marker) : null;
 	}
 
@@ -899,6 +848,7 @@ export class RemoteDevices {
 		this.#disposed = true;
 		this.#unwatchRunning();
 		clearTimeout(this.#quotaTimer);
+		this.#quota.close();
 		this.#keepAwake.dispose();
 		for (const deviceId of [...this.#links.keys()]) this.#unlink(deviceId);
 		this.#deps.services.disposeAll();
