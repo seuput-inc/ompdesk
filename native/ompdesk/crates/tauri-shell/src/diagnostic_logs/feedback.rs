@@ -36,17 +36,10 @@ pub(crate) enum FeedbackRead {
 }
 
 impl FeedbackRead {
-    pub(crate) fn parse(channel: &str, args: &Value) -> Option<Self> {
-        match channel {
-            "runtime:log-path" => Some(Self::Path),
-            "runtime:log-tail" => {
-                let count = args.get(0).and_then(Value::as_f64).filter(|n| *n > 0.0);
-                Some(Self::Tail(
-                    count.map_or(20, |n| n.clamp(1.0, 50.0) as usize),
-                ))
-            }
-            _ => None,
-        }
+    /// `runtime:log-tail (maxLines)`: a positive count clamped to 1..=50, else 20.
+    pub(crate) fn tail(args: &Value) -> Self {
+        let count = args.get(0).and_then(Value::as_f64).filter(|n| *n > 0.0);
+        Self::Tail(count.map_or(20, |n| n.clamp(1.0, 50.0) as usize))
     }
 
     pub(crate) fn read(self, profile: &Path) -> Value {
@@ -80,7 +73,7 @@ mod tests {
     #[test]
     fn feedback_path_uses_the_node_spelling_not_a_canonical_target() {
         let relative = feedback_profile(Path::new("one/../two"), &[]).unwrap();
-        let path = FeedbackRead::parse("runtime:log-path", &json!(["ignored"])).unwrap();
+        let path = FeedbackRead::Path;
         assert_eq!(
             path.read(&relative),
             json!(Path::new("two").join("logs").join("gui-runtime.jsonl"))
@@ -88,7 +81,6 @@ mod tests {
         let explicit =
             feedback_profile(Path::new("unused"), &["--user-data-dir=one/../two".into()]).unwrap();
         assert_eq!(explicit, std::env::current_dir().unwrap().join("two"));
-        assert!(FeedbackRead::parse("log:snapshot", &Value::Null).is_none());
     }
 
     #[test]
@@ -97,11 +89,7 @@ mod tests {
         let logs = profile.path().join("logs");
         fs::create_dir(&logs).unwrap();
         let file = logs.join("gui-runtime.jsonl");
-        let tail = |args: Value| {
-            FeedbackRead::parse("runtime:log-tail", &args)
-                .unwrap()
-                .read(profile.path())
-        };
+        let tail = |args: Value| FeedbackRead::tail(&args).read(profile.path());
         assert_eq!(tail(json!([])), json!([]));
         fs::write(&file, []).unwrap();
         assert_eq!(tail(json!([20])), json!([]));

@@ -1,0 +1,4 @@
+{
+  "invoke": ["runtime:log-path", "runtime:log-tail", "updater:version"],
+  "send": []
+}
