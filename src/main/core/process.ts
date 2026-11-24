@@ -397,7 +397,10 @@ export class CoreProcess {
 		this.#adopt(ownerLink(target, this.#log));
 	}
 
-	/** The running core's process id (null while none runs, or before its owner said it). */
+	/**
+	 * The running core's process id, for what needs the OS process (watchdogs, process lists): null while none runs and
+	 * until its owner answered the start. Which core it is, and whether one runs, is `generation`.
+	 */
 	get pid(): number | null {
 		return this.#child?.pid ?? null;
 	}

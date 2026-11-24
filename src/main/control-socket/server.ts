@@ -233,7 +233,7 @@ export class ControlServer {
 		// A close during a pending bind/restart waits for that listener too.
 		await this.#opening?.catch(() => undefined);
 		this.#hold?.abort();
-		if (this.#serving && core().pid !== null) await core().call("control.close", { server: this.#number });
+		if (this.#serving && core().generation !== 0) await core().call("control.close", { server: this.#number });
 		this.#serving = false;
 		this.#detach?.();
 		this.#detach = undefined;
