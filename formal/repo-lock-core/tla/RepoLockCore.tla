@@ -53,7 +53,7 @@ Send ==
     /\ UNCHANGED <<step, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
 \* Environment: the step ran past its bound (serial-chain.ts #step timer, or its caller's step was stopped).
-\* @code src/main/core/process.ts:469-483 the signal's abort listener writes {"cancel": id} while the call waits
+\* @code src/main/core/process.ts:475-489 the signal's abort listener writes {"cancel": id} while the call waits
 Stop ==
     /\ step = "running"
     /\ step' = "stopped"
@@ -61,7 +61,7 @@ Stop ==
     /\ UNCHANGED <<req, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
 \* Environment: the call's own timeout passes.
-\* @code src/main/core/process.ts:471-477 the caller fails, the request goes on waiting for its end, the core is asked to cancel
+\* @code src/main/core/process.ts:477-483 the caller fails, the request goes on waiting for its end, the core is asked to cancel
 Timeout ==
     /\ req = "pending" /\ coreUp
     /\ req' = IF SettleOnAnswer THEN "late" ELSE "settled"
@@ -140,7 +140,7 @@ CoreAnswers ==
     /\ answered' = TRUE /\ toMain' = Append(toMain, "answer")
     /\ UNCHANGED <<step, req, toCore, registered, cancelled, handler, gits, alive, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code src/main/core/process.ts:634-664 #receive: the answer, also a late one, calls onEnded
+\* @code src/main/core/process.ts:640-670 #receive: the answer, also a late one, calls onEnded
 MainReceives ==
     /\ toMain # <<>>
     /\ toMain' = Tail(toMain)
@@ -154,7 +154,7 @@ CoreDies ==
     /\ coreUp' = FALSE /\ toCore' = <<>> /\ toMain' = <<>> /\ disk' = 0
     /\ UNCHANGED <<step, req, registered, cancelled, handler, gits, alive, answered, nextHolder, spawnedAfterStop, timedOut, scratch, diskCalls>>
 
-\* @code src/main/core/process.ts:666-718 #ended: what waited on the core settles on the owner's core.gone, once its group is gone
+\* @code src/main/core/process.ts:672-724 #ended: what waited on the core settles on the owner's core.gone, once its group is gone
 MainSeesDeath ==
     /\ ~coreUp /\ req \in {"pending", "late"}
     /\ KillGroup => alive = 0
@@ -162,7 +162,7 @@ MainSeesDeath ==
     /\ UNCHANGED <<step, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
 \* Environment: a git of the dead core outlives SIGKILL past GROUP_GONE_MS (a process stuck in the kernel).
-\* @code native/ompdesk/crates/core/src/owner.rs:256-289 group_gone answers false past its bound; core.gone {empty: false}, #ended settles anyway, naming it
+\* @code native/ompdesk/crates/core/src/owner.rs:261-294 group_gone answers false past its bound; core.gone {empty: false}, #ended settles anyway, naming it
 BoundPasses ==
     /\ BoundMayPass /\ ~coreUp /\ req \in {"pending", "late"} /\ alive > 0
     /\ req' = "settled"
