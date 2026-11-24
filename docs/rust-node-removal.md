@@ -94,6 +94,23 @@ Today Node main owns `ompdesk-core`: `CoreProcess` (`src/main/core/process.ts`) 
 
 **Out of scope here:** `ompdesk-core --supervise` (Node's setup supervisor spawns it per hook) and `--mcp-hub` (the core spawns it). Neither is the core process this section moves.
 
+### Design: slice C, one ordered stream per tab (not built)
+
+**Landed so far.** C1: the pool's Stop deadline runs on the core's clock (`pool/later.rs`; ledger C1).
+
+**Why the rest cannot move piece by piece.** Each remaining C item has a same-tick reader that lives in main and belongs to another slice or to (b):
+
+| Item | What holds it in main today | Moves with |
+|---|---|---|
+| Event drain: `SidecarManager.#onFrame`/`#dispatchFrame`, `EventBatcher` (32 ms, flushed before a response and before `RUN_SETTLE_FRAMES`), `message_update` rebuild, subagent frame batch, the pool's `feed` | The pool's `#wireLight` sends a batch to the windows (`forwardEvents`) and then feeds the core, whose `TAB_STATUS` sends come back inside that call. A batch fed by the lane would reach the pool on the hub thread while main still forwards the events, so the two send streams to a window lose their order. Paired pages get both through `ws-router.ts` (F). | The core sending to pages itself: desktop windows through the shell (after (b), with a core → shell page-send capability), paired pages through the Rust edge (F). Then lane → interpretation → pool → page sends is one ordered path in the core, and main receives only what its remaining consumers read (`modelWait`, autopilot's `runEvents`, the session summaries). |
+| Resume and connectivity timers | Their callbacks read OS facts main holds when they fire (`net.isOnline()` mirrored from the shell, `quitApproved()`), and the vitest suites drive them through `schedule`/`now`. | (b): the shell pushes online and quit facts to the core. The timers then move as C1 did, and the suites keep `schedule`/`now` as the test clock the core's instance accepts. |
+| The tick before a restart (`immediate`) | It lets main's listeners read the turn's last events before the omp goes. | The event drain above. |
+| The close's last step (`closeWindowTab`: re-check `stillClosable`, release) | `FileEditReports` is main's. An ask answered by main before the core releases would let a dirty report land in between (`web-close-reports`, `NoLateDirtyRelease`). | F's file-edit reports. |
+| Spawn inputs (`SidecarManager.#onResolve`/`#onLaunch`: preferences, tools, profile, roles) | Read from main's live preference callbacks at the moment the lane asks. | B's preference owner. |
+| Hosted tabs (`remote/host-services.ts`) | Their own sidecars and run state (`sidecar-run-state.ts`). | R6/F. |
+
+**Order.** (b) → timers (resume, connectivity) → core page sends → event drain with `immediate` → close step (after F's reports). Each lands with its vitest suite on the real core and its models (`turn-resume`, `tab-list-status`, `web-close-reports`) restamped.
+
 ### Design: the shell owns the windows and the entry points (H final's prerequisite, not built yet)
 
 Today `WindowManager` (`src/main/window.ts`) is Node's: it numbers windows, builds them through the shim's `win.create`, persists geometry, decides the last window's close, recovers a crashed or stuck page, and is read synchronously by every entry point that opens or shows a window (`deep-link.ts`, `index.ts` `activateWindow` and the global shortcut, `menu.ts`, `tray.ts`, 13 `ipc.ts` sites). The shell already owns the OS windows, their pages' identities (`registry.rs`), bounds restore (`window_bounds.rs`), activation (`window_activation.rs`), ordered page pushes (`page_push.rs`), the quit chain (`quit_chain.rs`) and the second-instance and macOS open events (`startup.rs`), and hands each to Node as an event. Target: the shell decides, and asks the session owner only for what it cannot know.

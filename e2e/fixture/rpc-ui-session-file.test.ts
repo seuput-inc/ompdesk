@@ -100,8 +100,9 @@ async function answer(fake: Fake): Promise<void> {
 	await fake.next(frame => frame.type === "agent_end");
 }
 
+/** The session files, not the fake's `<file>.<pid>.tmp` of a journal write still under way. */
 async function sessionFiles(agent: string): Promise<string[]> {
-	return (await fs.readdir(path.join(agent, "sessions", "fixture"))).sort();
+	return (await fs.readdir(path.join(agent, "sessions", "fixture"))).filter(name => name.endsWith(".jsonl")).sort();
 }
 
 /** One line of a session file, as the fake writes it. */

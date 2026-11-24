@@ -760,3 +760,48 @@ async fn the_control_snapshot_reads_every_window_s_tabs_and_their_facts_in_one_c
     );
     assert_eq!(windows[0]["tabs"][1]["control"]["hasDraft"], true);
 }
+
+#[tokio::test]
+async fn a_stop_whose_run_never_ends_fails_session_running_on_the_core_s_clock_and_one_that_ends_settles_once()
+ {
+    let mut main =
+        Main::start(json!({"layoutVersion": 1, "maxFormerTabIds": 8, "stopSessionWaitMs": 50}))
+            .await;
+    main.acquire("a", 1, Some("/s/a.jsonl"), false).await;
+    main.acquire("b", 1, Some("/s/b.jsonl"), false).await;
+    for tab in ["a", "b"] {
+        main.call(
+            "feed",
+            json!({"tab": tab, "event": "status", "payload": {"status": "ready", "failure": null}}),
+        )
+        .await;
+        main.call(
+            "feed",
+            json!({"tab": tab, "event": "events", "payload": [{"type": "agent_start"}]}),
+        )
+        .await;
+    }
+    main.call("stopSession", json!({"token": 1, "path": "/s/a.jsonl"}))
+        .await;
+    main.call("stopSession", json!({"token": 2, "path": "/s/b.jsonl"}))
+        .await;
+    // b's run ends before the wait does: settled once, ok.
+    main.call(
+        "feed",
+        json!({"tab": "b", "event": "events", "payload": [{"type": "agent_end", "messages": []}]}),
+    )
+    .await;
+    // Nothing from main fires the wait: the core's own timer does.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    main.call("size", json!({})).await;
+    let settles: Vec<&Value> = main
+        .items
+        .iter()
+        .filter(|item| item["k"] == "settle")
+        .collect();
+    assert_eq!(settles.len(), 2, "{settles:?}");
+    let of = |token: u64| settles.iter().find(|item| item["token"] == token).unwrap();
+    assert_eq!(of(1)["code"], "session_running");
+    assert_eq!(of(2)["ok"], true);
+    assert!(!main.items.iter().any(|item| item["k"] == "stopTimer"));
+}
