@@ -2229,6 +2229,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		prefChanged(caller.win, SIDEBAR_PREFS_KEY, () => mark("control"));
 		mark("notify");
 		tookStep("ipc", "prefs:update-sidebar/stages", previous - start, durations);
+		writeRuntimeLog({
+			source: "slow-step",
+			message: `sidebar-probe ${change?.op ?? "unchanged"}`,
+			details: { ms: previous - start, ...durations },
+		});
 	});
 
 	// Launch profiles live with the machine that spawns omp: a tab's paired
