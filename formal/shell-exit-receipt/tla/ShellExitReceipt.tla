@@ -63,7 +63,7 @@ BeginStop ==
   /\ s' = [s EXCEPT !.phase = "stopping",
                     !.stdin = IF KeepStdin THEN "open" ELSE "closed"]
 
-\* @code src/main/shell-host/electron/index.ts:71-91 EOF calls endMain, which exits with failure even if an answer is pending.
+\* @code src/main/shell-host/electron/index.ts:89-109 EOF calls endMain, which exits with failure even if an answer is pending.
 ObserveEOF ==
   /\ s.stdin = "closed" /\ s.node = "alive"
   /\ s' = [s EXCEPT !.node = "ended", !.prematureEOF = s.accepted /\ s.answer # "received"]

@@ -3,7 +3,6 @@ use crate::js_date::iso_ms;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const COOLDOWN: i64 = 600_000;
@@ -161,21 +160,7 @@ impl History {
         }
         let mut temp = builder.prefix(".launch-history-").tempfile_in(parent)?;
         std::io::Write::write_all(&mut temp, &serde_json::to_vec(&self.launches)?)?;
-        let mut waits = [10, 20, 40, 80, 160, 320].into_iter();
-        loop {
-            match temp.persist(&self.path) {
-                Ok(_) => return Ok(()),
-                Err(error) => {
-                    let blocked = cfg!(windows)
-                        && matches!(error.error.raw_os_error(), Some(5 | 32 | 33 | 170));
-                    let Some(ms) = waits.next().filter(|_| blocked) else {
-                        return Err(error.error);
-                    };
-                    temp = error.file;
-                    std::thread::sleep(Duration::from_millis(ms));
-                }
-            }
-        }
+        crate::profile_file::persist(temp, &self.path)
     }
 
     fn update(&mut self, key: &str, value: Value) {
