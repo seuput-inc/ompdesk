@@ -53,15 +53,16 @@ fn read_json(text: &str) -> Value {
 }
 
 type Normalize = fn(Value) -> Value;
+/// Runs before the check of this number (1-based).
+type Hook = (usize, Box<dyn FnOnce() + Send>);
 
 struct Fake {
     roster_fails: bool,
     normalize: Normalize,
     checks: AtomicUsize,
-    /// Runs before the check of this number (1-based).
-    on_check: Mutex<Option<(usize, Box<dyn FnOnce() + Send>)>>,
+    on_check: Mutex<Option<Hook>>,
     /// What stock reads back instead of the text, for a misedit.
-    misread: Option<fn(Value) -> Value>,
+    misread: Option<Normalize>,
 }
 
 impl Fake {
