@@ -153,7 +153,7 @@
 				"src/main/tab-release.ts#closeWindowTab",
 				"src/main/agent-control/host.ts:1244-1251"
 			],
-			"syncCommit": "0a29ca1f972d98b7681f718ea9b6379caa2b47de",
+			"syncCommit": "c817906044b976e4a6b9f9065638cd20d3b705fd",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
