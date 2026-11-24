@@ -77,6 +77,8 @@ export interface HostedTabPort {
 	answer(frame: object): void;
 	/** The user pressed Stop here: nothing continues this turn after a crash. */
 	stopped(): void;
+	/** Fence the holder's automatic close before forwarding a window prompt; release it on rejection. */
+	prompting?(): ((error?: unknown) => void) | undefined;
 	/** The user's Cancel on the tab's "waiting for the connection" row, or on its scheduled retry. */
 	cancelWait(): void;
 	/** The asks open now, the session's identity, the connection wait, a scheduled retry and its run, for a party that just joined. */
@@ -225,8 +227,10 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 	async #command(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
 		const client = this.#port.sidecar.rpcClient;
 		if (!client) throw codedError("sidecar_not_connected", "Sidecar not connected");
+		let rejected: ((error?: unknown) => void) | undefined;
 		if (command.type === "prompt_origin_set") this.#namedOrigin = command.text;
 		else if (command.type === "prompt" || command.type === "steer" || command.type === "follow_up") {
+			rejected = this.#port.prompting?.();
 			const named = this.#namedOrigin === command.message;
 			this.#namedOrigin = undefined;
 			if (!named) {
@@ -240,7 +244,11 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 			command.type === "set_subagent_subscription"
 				? { ...command, level: this.#port.subagentLevel(command.level) }
 				: command;
-		const response = await client.command(sent, timeoutMs);
+		const response = await client.command(sent, timeoutMs).catch((error: unknown) => {
+			rejected?.(error);
+			throw error;
+		});
+		if (!response.success) rejected?.();
 		if (command.type !== "get_transcript_page" || !response.success) return response;
 		return { ...response, data: this.#port.labelTranscript(response.data) };
 	}

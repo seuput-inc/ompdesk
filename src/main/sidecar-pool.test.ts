@@ -1077,6 +1077,92 @@ describe("SidecarPool tabs", () => {
 		expect(child.disposed).toBe(true);
 	});
 
+	it("replaces a missed host turn and its outcome together, even when the reply is identical", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child", undefined, "agent", undefined, false, false, false, undefined, "host");
+		const child = sidecars[0]!;
+		child.emitStatus("ready");
+		const host = { omp: "first", turn: 90 };
+		const outcome = { stopReason: "stop", reply: "Done." };
+		child.emitEvents([
+			{ type: "agent_start" },
+			{ type: "agent_end", hostTurn: host, messages: [{ role: "assistant", content: "Done." }] },
+		]);
+		const collected = closeTurn(pool, win, "child");
+		expect(collected.host).toEqual(host);
+		expect(pool.canReleaseTab("child", collected)).toBe(true);
+
+		child.emitLinkStatus("starting");
+		const reading = { running: false, turn: false, hostTurn: { ...host, turn: 91 }, lastRun: outcome };
+		child.emit("hostRun", reading);
+		child.emitStatus("ready");
+		const current = closeTurn(pool, win, "child");
+		expect(current.host).toEqual(reading.hostTurn);
+		expect(current.turn).toBeGreaterThan(collected.turn);
+		expect(current.turn).not.toBe(reading.hostTurn.turn);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ ...outcome, id: current.turn });
+		expect(pool.resumeFacts()[0]?.lastRun?.id).toBe(current.turn);
+		child.emit("hostRun", reading);
+		expect(closeTurn(pool, win, "child")).toEqual(current);
+		expect(pool.canReleaseTab("child", collected)).toBe(false);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		// Even a matching local number cannot stand in for a different host's observation.
+		expect(pool.canReleaseTab("child", { ...current, host })).toBe(false);
+		expect(pool.canReleaseTab("child", current)).toBe(true);
+		child.emitExtensionUi("late");
+		expect(pool.releaseTab("child", current)).toBe(false);
+		expect(child.disposed).toBe(false);
+
+		child.emit("hostRun", { running: false, turn: false, hostTurn: { ...host, turn: 92 } });
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("lastRun");
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("closeTurn");
+		child.emit("hostRun", { ...reading, hostTurn: { omp: "replacement", turn: 91 } });
+		const replacement = closeTurn(pool, win, "child");
+		expect(replacement.host).toEqual({ omp: "replacement", turn: 91 });
+		expect(replacement.turn).toBeGreaterThan(current.turn);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ ...outcome, id: replacement.turn });
+	});
+
+	it("uses only the settling event's host stamp and never reuses it after a restart", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child", undefined, "agent", undefined, false, false, false, undefined, "host");
+		const child = sidecars[0]!;
+		const zero = { omp: "old", turn: 0 };
+		child.emit("status", { status: "ready" }, zero);
+		expect(closeTurn(pool, win, "child").host).toEqual(zero);
+		const failed = { ...zero, turn: 2 };
+		child.emitEvents([
+			{ type: "agent_start" },
+			{ type: "agent_end", hostTurn: { ...zero, turn: 1 } },
+			{ type: "agent_start" },
+			{ type: "auto_retry_start", errorMessage: "retry" },
+			{ type: "agent_end" },
+			{ type: "auto_retry_end", success: false, finalError: "failed", hostTurn: failed },
+		]);
+		const collected = closeTurn(pool, win, "child");
+		expect(collected.host).toEqual(failed);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({
+			id: collected.turn,
+			stopReason: "error",
+			errorMessage: "failed",
+		});
+		child.emit("status", { status: "ready" }, zero);
+		expect(closeTurn(pool, win, "child")).toEqual(collected);
+
+		const fresh = { omp: "new", turn: 0 };
+		child.emitStatus("restarting");
+		child.emit("status", { status: "ready" }, fresh);
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("lastRun");
+		expect(closeTurn(pool, win, "child")).toEqual({ ...collected, turn: 0, host: fresh });
+		expect(pool.canReleaseTab("child", collected)).toBe(false);
+		child.emitEvents([{ type: "agent_start" }, { type: "agent_end", isTerminal: false, hostTurn: failed }]);
+		child.emit("status", { status: "ready" }, fresh);
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("closeTurn");
+		expect(pool.releaseTab("child", collected)).toBe(false);
+	});
+
 	it("keeps a child for a late question, plan, compaction or continuation, but not a status notice", () => {
 		const { pool, sidecars } = fakePool();
 		const { win } = fakeWindow(1);
@@ -1122,7 +1208,19 @@ describe("SidecarPool tabs", () => {
 		pool.acquire("/a", win, "child");
 		sidecars[0]!.emitStatus("ready");
 		const collected = closeTurn(pool, win, "child");
-		for (const invalid of [null, {}, { ...collected, turn: "0" }, [collected.pool, collected.entry, 0]]) {
+		// @ts-expect-error A preflight without a fence is never a manual close.
+		expect(pool.canReleaseTab("child")).toBe(false);
+		for (const invalid of [
+			null,
+			{},
+			{ ...collected, turn: "0" },
+			[collected.pool, collected.entry, 0],
+			{ ...collected, host: null },
+			{ ...collected, host: ["omp", 0] },
+			{ ...collected, host: { omp: "omp", turn: 0, unknown: true } },
+		]) {
+			// @ts-expect-error The native preflight and removal reject the same malformed input.
+			expect(pool.canReleaseTab("child", invalid)).toBe(false);
 			// @ts-expect-error The native boundary also receives malformed wire input.
 			expect(pool.releaseTab("child", invalid)).toBe(false);
 		}

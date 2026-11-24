@@ -398,8 +398,7 @@ impl Ctx {
                 facts.insert("status".into(), Value::from(entry.status.clone()));
                 if let Some(reason) = entry
                     .tracking
-                    .last_run
-                    .as_ref()
+                    .last_outcome()
                     .and_then(|last| last.get("stopReason"))
                 {
                     facts.insert("lastRun".into(), reason.clone());

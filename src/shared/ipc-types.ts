@@ -1778,11 +1778,18 @@ export interface IpcRetrySaga {
 	startedAt: number;
 }
 
+/** The host's omp incarnation and its own count of finished turns, not the proxy's local count. */
+export interface HostCloseTurn {
+	omp: string;
+	turn: number;
+}
+
 /** The pool opening, tab entry and finished turn observed by an automatic close. Zero means no turn has finished. */
 export interface AutoCloseTurn {
 	pool: number;
 	entry: number;
 	turn: number;
+	host?: HostCloseTurn;
 }
 
 /** One tab of a window: its sidecar's cwd, last status, and cached session meta. */

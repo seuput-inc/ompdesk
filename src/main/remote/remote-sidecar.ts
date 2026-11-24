@@ -21,8 +21,8 @@
  * `remote_offline` (or the host's error) so its card stays open to be answered
  * again; the replies to the host's own tool and URI calls
  * wait and go out once the host tab is re-attached (and are dropped when the
- * host started a new omp, which never made those calls); a `tab.close` is
- * handed to `deferClose` and sent when the link is back (`PendingTabCloses`).
+ * host started a new omp, which never made those calls); a manual `tab.close`
+ * is handed to `deferClose` and sent when the link is back (`PendingTabCloses`).
  *
  * An app quit whose work continues after the relaunch (`keepOnHost`) closes nothing on the host: the host owns
  * the turns it runs for this device, keeps the tab through its grace period, and the relaunched device's
@@ -31,7 +31,7 @@
 import { EventEmitter } from "node:events";
 import { z } from "zod";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
-import type { IpcScheduledRetry, RemoteLinkState } from "../../shared/ipc-types";
+import type { HostCloseTurn, IpcScheduledRetry, RemoteLinkState } from "../../shared/ipc-types";
 import { isOmpdeskWorktreeFolder } from "../../shared/project-origin";
 import { MAX_RPC_COMMAND_TIMEOUT_MS } from "../../shared/rpc-client";
 import type { RpcCommand, RpcResponse, SidecarStatus, SidecarStatusPayload } from "../../shared/rpc-types";
@@ -203,6 +203,9 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 	#disposed = false;
 	/** `tab.open` was sent at some point: the host may hold this tab, whatever the link says now. */
 	#openedOnce = false;
+	#closingHost: symbol | undefined;
+	/** Reusable until the attachment changes. Dispose has nothing to close until another tab.open is actually sent. */
+	#acceptedClose: { omp: string | undefined; turn: number | undefined; current: boolean } | undefined;
 	/** Replies to the host's tool and URI calls that found the link down. */
 	#queuedReplies: object[] = [];
 	readonly #unansweredMessage: () => string;
@@ -271,9 +274,9 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 		return this.#kind;
 	}
 
-	/** Null until started, like a SidecarManager before its first spawn. */
+	/** A closed host tab has no RPC client while a local guard still keeps its row. */
 	get rpcClient(): Pick<RpcClient, "command"> | null {
-		return this.#status === "asleep" ? null : this.#client;
+		return this.#status === "asleep" || (this.#acceptedClose && !this.#wanted) ? null : this.#client;
 	}
 
 	get processAlive(): boolean {
@@ -364,9 +367,38 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 	/** The host's own account-rotation setting applies to the omp it runs; this machine's is not sent. */
 	syncAccountRotation(): void {}
 
+	async closeHostTurn(expectedTurn: HostCloseTurn | null): Promise<boolean> {
+		if (this.#disposed || this.offline || this.#viewing || this.#closingHost !== undefined) return false;
+		const omp = expectedTurn?.omp;
+		const turn = expectedTurn?.turn;
+		if (this.#acceptedClose?.current) return omp === this.#acceptedClose.omp && turn === this.#acceptedClose.turn;
+		const attempt = Symbol();
+		const opened = this.#opened;
+		this.#closingHost = attempt;
+		try {
+			const reply = await this.#link.request("tab.close", { rtab: this.#rtab, expectedTurn });
+			if (reply !== true && reply !== null) return false;
+			if (this.#closingHost !== attempt || this.#disposed || this.offline || this.#opened !== opened) return false;
+			// A legacy host returns null after closing. Neither host should get a second, unfenced close from dispose.
+			this.#acceptedClose = { omp, turn, current: true };
+			this.#opened = null;
+			this.#wanted = false;
+			return true;
+		} catch {
+			return false;
+		} finally {
+			if (this.#closingHost === attempt) this.#closingHost = undefined;
+		}
+	}
+
+	#invalidateHostClose(): void {
+		this.#closingHost = undefined;
+		if (this.#acceptedClose) this.#acceptedClose.current = false;
+	}
+
 	dispose(): void {
 		if (this.#disposed) return;
-		if (this.#openedOnce && !this.#keepOnHost()) this.#closeOnHost();
+		if (this.#openedOnce && !this.#acceptedClose && !this.#keepOnHost()) this.#closeOnHost();
 		this.#endSignInRelay();
 		this.#disposed = true;
 		this.#settle(null);
@@ -387,15 +419,23 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 				this.#offlineShown = false;
 				this.#processAlive = parsed.data.processAlive;
 				if (parsed.data.cwd) this.#cwd = parsed.data.cwd;
-				// The host re-attached another omp than the one the page shows (it restarted while the link was
-				// down; an older host does not say): the page starts over, as for any new omp.
-				if (this.#reattaching && (parsed.data.omp === undefined || parsed.data.omp !== this.#omp))
-					this.#setStatus("starting", {});
+				const changed = parsed.data.omp !== this.#omp;
+				const replaced = changed && this.#omp !== undefined;
+				// A re-attach can jump straight to the replacement's ready. Reset the old run before handing over the new one.
+				if (
+					(this.#reattaching && (changed || parsed.data.omp === undefined)) ||
+					(replaced && (parsed.data.status === "ready" || parsed.data.status === "asleep"))
+				)
+					this.#setStatus("starting", {}, true, replaced ? null : undefined);
+				if (changed) this.#invalidateHostClose();
 				this.#omp = parsed.data.omp;
 				const run = this.#reattachRun;
 				this.#reattachRun = null;
-				if (run) this.emit("hostRun", run);
-				this.#setStatus(parsed.data.status, parsed.data.statusPayload, false);
+				if (run && (!run.hostTurn || run.hostTurn.omp === this.#omp)) this.emit("hostRun", run);
+				const { status, statusPayload, hostTurn } = parsed.data;
+				const initial =
+					(status === "ready" || status === "asleep") && hostTurn?.turn === 0 && hostTurn.omp === this.#omp;
+				this.#setStatus(status, statusPayload, false, initial ? hostTurn : undefined);
 				return;
 			}
 			case "session": {
@@ -439,7 +479,7 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 			case "run": {
 				const parsed = TabRunArg.safeParse(message.arg);
 				if (!parsed.success) return;
-				if (this.#reattaching) this.#reattachRun = parsed.data;
+				if (this.#status === "starting" || parsed.data.hostTurn) this.#reattachRun = parsed.data;
 				else this.emit("hostRun", parsed.data);
 				return;
 			}
@@ -460,9 +500,19 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 				if (typeof message.arg === "string") this.emit("sessionDeleted", message.arg);
 				return;
 			// A host that sent them slim (the hello asked): back to what a local sidecar delivers; whole ones pass through.
-			case "events":
-				this.emit(message.name, Array.isArray(message.arg) ? this.#linkEvents.events(message.arg) : message.arg);
+			case "events": {
+				if (!Array.isArray(message.arg)) return;
+				const events = this.#linkEvents.events(message.arg);
+				let publicEvents = events;
+				for (const [i, event] of events.entries()) {
+					if (!("hostTurn" in event)) continue;
+					const { hostTurn: _hostTurn, ...stock } = event;
+					if (publicEvents === events) publicEvents = events.slice();
+					publicEvents[i] = stock;
+				}
+				this.emit("events", publicEvents, events);
 				return;
+			}
 			// One frame, or an array of them: what a host that batches (`slimProgress`) sends for each flush.
 			case "subagentFrame":
 				for (const frame of Array.isArray(message.arg) ? message.arg : [message.arg]) {
@@ -519,12 +569,14 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 		if (this.#disposed) return;
 		this.#link = link;
 		this.#opened = null;
+		this.#reattachRun = null;
 		this.linkStateChanged(link.state);
 	}
 
 	/** The link to the host changed state. */
 	linkStateChanged(state: RemoteLinkState): void {
 		if (this.#disposed) return;
+		this.#invalidateHostClose();
 		if (state === "online") {
 			if (this.#wanted && !this.#opened) {
 				// The host may still run the omp this tab showed: the page keeps it until the host's status says.
@@ -602,7 +654,10 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 				this.#note("open", { attached: opened.attached, viewing: opened.viewing === true });
 				if (!opened.attached) {
 					// The host no longer held the tab: a new omp, so a re-attaching page starts over.
-					if (this.#reattaching) this.#setStatus("starting", {});
+					if (this.#reattaching) {
+						this.#omp = undefined;
+						this.#setStatus("starting", {}, false);
+					}
 					this.#advance("start");
 					await this.#link.request("tab.start", { rtab: this.#rtab });
 					this.#note("start", {});
@@ -707,6 +762,10 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 
 	#open(): Promise<TabOpenResult> {
 		if (this.#opened) return this.#opened;
+		if (this.#acceptedClose && !this.#wanted)
+			return Promise.reject(codedError("sidecar_not_connected", "The host tab is closed"));
+		this.#closingHost = undefined;
+		this.#acceptedClose = undefined;
 		this.#openedOnce = true;
 		const opening = this.#link
 			.request<unknown>("tab.open", {
@@ -878,14 +937,15 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 	}
 
 	/** `fromLink`: this side derived the status (start, link down, reconnecting) instead of the host's omp. */
-	#setStatus(status: SidecarStatus, detail: StatusDetail, fromLink = true): void {
+	#setStatus(status: SidecarStatus, detail: StatusDetail, fromLink = true, initialTurn?: HostCloseTurn | null): void {
+		if (status === "starting" || status === "restarting") this.#invalidateHostClose();
 		// Only `starting` keeps a bring-up waiting; every other status ends it (and its watchdog).
 		if (status !== "starting") this.#settle(status);
 		this.#status = status;
 		this.#detail = detail;
 		this.#reattaching = status === "starting" && detail.reconnecting === true;
 		this.#statusFromLink = fromLink;
-		this.emit("status", this.statusPayload);
+		this.emit("status", this.statusPayload, initialTurn);
 	}
 }
 

@@ -14,6 +14,7 @@ import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from ".
 import type { IpcShell } from "../../web/ipc-registry";
 import { ShellClient } from "../client";
 import type { HostFacts } from "../facts";
+import type { UpdateHost } from "../shell-calls";
 import { decodeBin, encodeBin } from "./binary-json";
 import { createElectron } from "./create";
 
@@ -50,6 +51,23 @@ export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params
 export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client.call("app.diagnosticLog", selection);
 
 export const admitNotification: AdmitNotification = report => client.call("app.admitNotification", report);
+
+export const updateHost: UpdateHost = {
+	stageUpdateBundle: request => client.call("app.stageUpdateBundle", request),
+	updateDestination: asset => client.call("app.updateDestination", { asset }),
+	updateDigest: (area, asset) => client.call("app.updateDigest", { area, asset }),
+	async sweepUpdateFiles(request) {
+		await client.call("app.sweepUpdateFiles", request);
+	},
+	async readUpdateTokenCiphertext() {
+		const { result: present, bin } = await client.request<boolean>("updateAuth.read");
+		return present ? (bin ?? Buffer.alloc(0)) : null;
+	},
+	updateTokenFileStatus: () => client.call("updateAuth.status"),
+	saveUpdateTokenCiphertext: bytes => client.call("updateAuth.save", {}, { bin: bytes }),
+	dropUpdateTokenFile: () => client.call("updateAuth.drop"),
+	clearUpdateTokenFiles: () => client.call("updateAuth.clear"),
+};
 
 export function openPageExternal(url: string): Promise<void> {
 	return electron.shell.openExternal(url, "page");

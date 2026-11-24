@@ -2328,6 +2328,7 @@ app.whenReady().then(async () => {
 			// Only this computer's own tabs show the row: a paired device's tab mirrors its host's turn.
 			setResuming: (tabId, resuming) => {
 				sidecarPool.setResuming(tabId, resuming);
+				hostServices.setResuming(tabId, resuming);
 				turnWait.noteResuming(tabId, resuming);
 			},
 			resumeRank: tabId => sidecarPool.resumeRank(tabId),

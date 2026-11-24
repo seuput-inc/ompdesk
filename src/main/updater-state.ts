@@ -1,10 +1,6 @@
-import { createHash } from "node:crypto";
-import type * as nodeFs from "node:fs";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import compatibility from "../shared/app-compatibility.json";
+import { getSystemErrorMap } from "node:util";
 import type { UpdateAccess, UpdateStatus, UpdateTokenSource } from "../shared/ipc-types";
-import { compareVersions } from "../shared/version";
 
 /**
  * `/Applications/ompdesk.app` from `/Applications/ompdesk.app/Contents/MacOS/ompdesk`; undefined outside a bundle.
@@ -93,14 +89,6 @@ else
 fi
 `;
 
-/** Outcome of one external tool run (sw_vers, hdiutil, ditto, codesign, plutil). */
-export interface ToolResult {
-	ok: boolean;
-	stdout: string;
-}
-
-export type ToolRunner = (command: string, args: readonly string[]) => Promise<ToolResult>;
-
 /** Why a DMG could not be staged; updater.ts maps it to user-facing copy. */
 export class StageBundleError extends Error {
 	readonly reason: "mount" | "missing" | "copy" | "verify" | "compatibility";
@@ -112,140 +100,37 @@ export class StageBundleError extends Error {
 	}
 }
 
-export interface StageBundleOptions {
-	/** SHA-512-verified release DMG. */
+export interface StageBundleRequest {
 	dmgPath: string;
-	/** Emptied, then receives the `.app`; removed again if verification fails. */
-	stagingDir: string;
-	/** Parent of the temporary mount point. */
-	mountRoot: string;
 	version: string;
-	/** Running bundle; the staged one must carry its bundle id. */
 	ownBundle: string;
-	run: ToolRunner;
-	fs: Pick<typeof nodeFs.promises, "mkdir" | "mkdtemp" | "readdir" | "rm" | "rmdir">;
 }
 
-/**
- * Check the running macOS version and the mounted bundle's minimum before
- * replacing the staging directory, then copy, detach and verify the bundle.
- */
-export async function stageBundleFromDmg(options: StageBundleOptions): Promise<string> {
-	const { dmgPath, stagingDir, mountRoot, version, ownBundle, run, fs: files } = options;
-	const system = await run("/usr/bin/sw_vers", ["-productVersion"]);
-	const currentMacOS = system.stdout.trim();
-	const numericVersion = (value: string) =>
-		/^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}$/.test(value) &&
-		value.split(".").every(part => Number.isSafeInteger(Number(part)));
-	if (
-		!system.ok ||
-		!numericVersion(currentMacOS) ||
-		!numericVersion(compatibility.minimumMacOS) ||
-		(compareVersions(currentMacOS, compatibility.minimumMacOS) ?? -1) < 0
-	) {
-		throw new StageBundleError("compatibility", "The running macOS version is unsupported or unavailable");
-	}
-	const plistValue = async (appPath: string, key: string) => {
-		const result = await run("/usr/bin/plutil", [
-			"-extract",
-			key,
-			"raw",
-			"-o",
-			"-",
-			path.join(appPath, "Contents", "Info.plist"),
-		]);
-		return result.ok ? result.stdout.trim() : undefined;
-	};
-	await files.mkdir(mountRoot, { recursive: true });
-	const mountPoint = await files.mkdtemp(path.join(mountRoot, "ompdesk-update-"));
+interface StageFailure {
+	message: string;
+	reason?: StageBundleError["reason"];
+	errno?: number;
+	errors?: StageFailure[];
+}
 
-	let staged = "";
-	let detached = true;
-	const stagingErrors: unknown[] = [];
-	try {
-		const attach = await run("/usr/bin/hdiutil", [
-			"attach",
-			"-nobrowse",
-			"-readonly",
-			"-noautoopen",
-			"-mountpoint",
-			mountPoint,
-			dmgPath,
-		]);
-		if (!attach.ok) throw new StageBundleError("mount", `hdiutil could not attach ${dmgPath}`);
-		detached = false;
-		let operationError: unknown;
-		let operationFailed = false;
-		try {
-			const entries = await files.readdir(mountPoint, { withFileTypes: true });
-			// The DMG also holds the /Applications symlink; only a real directory is the app.
-			const bundle = entries.find(entry => entry.isDirectory() && entry.name.endsWith(".app"));
-			if (!bundle) throw new StageBundleError("missing", `${dmgPath} contains no .app bundle`);
-			const mountedBundle = path.join(mountPoint, bundle.name);
-			const minimum = await plistValue(mountedBundle, "LSMinimumSystemVersion");
-			if (!minimum || !numericVersion(minimum) || (compareVersions(currentMacOS, minimum) ?? -1) < 0) {
-				throw new StageBundleError("compatibility", "The mounted bundle requires an unsupported macOS version");
-			}
-			await files.rm(stagingDir, { recursive: true, force: true });
-			await files.mkdir(stagingDir, { recursive: true });
-			staged = path.join(stagingDir, bundle.name);
-			const copy = await run("/usr/bin/ditto", [mountedBundle, staged]);
-			if (!copy.ok) throw new StageBundleError("copy", `ditto could not copy ${bundle.name} out of the DMG`);
-		} catch (error) {
-			operationFailed = true;
-			operationError = error;
-		}
-		const detachErrors: unknown[] = [];
-		for (const args of [
-			["detach", mountPoint],
-			["detach", "-force", mountPoint],
-		]) {
-			try {
-				const result = await run("/usr/bin/hdiutil", args);
-				if (result.ok) {
-					detached = true;
-					break;
-				}
-				detachErrors.push(new StageBundleError("mount", `hdiutil ${args.join(" ")} failed`));
-			} catch (error) {
-				detachErrors.push(error);
-			}
-		}
-		if (!detached) {
-			throw new AggregateError(
-				operationFailed ? [operationError, ...detachErrors] : detachErrors,
-				"Could not detach the update disk image",
-			);
-		}
-		if (operationFailed) throw operationError;
-	} catch (error) {
-		stagingErrors.push(error);
-	} finally {
-		if (detached) {
-			try {
-				await files.rmdir(mountPoint);
-			} catch (error) {
-				stagingErrors.push(error);
-			}
-		}
-	}
-	if (stagingErrors.length === 1) throw stagingErrors[0];
-	if (stagingErrors.length > 1) {
-		throw new AggregateError(stagingErrors, "Update staging and mount cleanup failed");
-	}
+export type StageBundleReply = { staged: string } | { error: StageFailure };
 
-	const signature = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged]);
-	const bundleId = await plistValue(staged, "CFBundleIdentifier");
-	const verified =
-		signature.ok &&
-		bundleId !== undefined &&
-		bundleId === (await plistValue(ownBundle, "CFBundleIdentifier")) &&
-		(await plistValue(staged, "CFBundleShortVersionString")) === version;
-	if (!verified) {
-		await files.rm(stagingDir, { recursive: true, force: true });
-		throw new StageBundleError("verify", `The bundle in ${dmgPath} is not an intact OMPdesk ${version}`);
+function stageError(failure: StageFailure): Error {
+	if (failure.errors) return new AggregateError(failure.errors.map(stageError), failure.message);
+	if (failure.errno !== undefined) {
+		const [code, description] = getSystemErrorMap().get(failure.errno) ?? ["UNKNOWN", "unknown error"];
+		return new Error(`${code}: ${description}, ${failure.message}`);
 	}
-	return staged;
+	return failure.reason ? new StageBundleError(failure.reason, failure.message) : new Error(failure.message);
+}
+
+export async function stageBundleFromDmg(
+	request: StageBundleRequest,
+	stage: (request: StageBundleRequest) => Promise<StageBundleReply>,
+): Promise<string> {
+	const reply = await stage(request);
+	if ("error" in reply) throw stageError(reply.error);
+	return reply.staged;
 }
 
 /**
@@ -341,14 +226,6 @@ export function settleFailedUpdateCheck(
 
 const PARTIAL_SUFFIX = ".partial";
 /**
- * Only names the updater itself could have written: `ompdesk-<version>[-arm64][ (n)].dmg`
- * plus a partial suffix. Downloads is the user's directory, so anything else —
- * including a lookalike like `holiday.dmg.partial` — must survive the sweep.
- */
-const INSTALLER_DEBRIS = /^ompdesk-[\d.]+(?:-arm64)?(?: \(\d+\))?\.dmg(?:\.partial|\.download-\d+)$/;
-const HASH_CHUNK_BYTES = 1024 * 1024;
-
-/**
  * Deterministic name for the in-flight installer. The earlier PID-keyed temp
  * name could never be continued after a crash or quit, so every interrupted
  * download left an unresumable copy of a ~120 MB DMG behind in Downloads.
@@ -430,53 +307,4 @@ export class SingleTransfer {
 		});
 		return this.#running;
 	}
-}
-
-/** Stream a finished installer through SHA-512 without holding a DMG in memory. */
-export async function sha512FileBase64(filePath: string): Promise<string> {
-	const hash = createHash("sha512");
-	const file = await fs.open(filePath, "r");
-	const buffer = new Uint8Array(HASH_CHUNK_BYTES);
-	try {
-		let position = 0;
-		for (;;) {
-			const { bytesRead } = await file.read(buffer, 0, buffer.length, position);
-			if (bytesRead === 0) break;
-			hash.update(buffer.subarray(0, bytesRead));
-			position += bytesRead;
-		}
-	} finally {
-		await file.close();
-	}
-	return hash.digest("base64");
-}
-
-/**
- * Delete installer debris: PID-keyed partials written by older builds (never
- * resumable) and, once a fresh download names its own partial, `.partial` files
- * belonging to a superseded release. Without a current download there is no way
- * to tell a resumable partial from an abandoned one, so startup removes only
- * the old debris. Everything else in Downloads belongs to the user.
- */
-export async function sweepInstallerPartials(directory: string, activePartial?: string): Promise<string[]> {
-	const activeName = activePartial ? path.basename(activePartial) : undefined;
-	const removed: string[] = [];
-	let entries: string[];
-	try {
-		entries = await fs.readdir(directory);
-	} catch {
-		return removed;
-	}
-	for (const name of entries) {
-		if (!INSTALLER_DEBRIS.test(name)) continue;
-		if (name === activeName) continue;
-		if (activeName === undefined && name.endsWith(PARTIAL_SUFFIX)) continue;
-		try {
-			await fs.rm(path.join(directory, name), { force: true });
-			removed.push(name);
-		} catch {
-			/* still open by a racing transfer; the next launch retries */
-		}
-	}
-	return removed;
 }

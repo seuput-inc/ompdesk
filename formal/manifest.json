@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:90-91",
+				"src/main/shell-host/electron/index.ts:108-109",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
@@ -53,7 +53,7 @@
 				"native/ompdesk/crates/shell/src/main.rs:344-363",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "c44010e43753d67a047aef4d9f356cfded4c28fc"
+			"syncCommit": "4779a3f5ee3d91b957541d9bcf52dee6483a7c32"
 		},
 		{
 			"id": "turn-resume",
@@ -77,12 +77,12 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2447-2451",
+				"src/main/index.ts:2425-2429",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d",
+			"syncCommit": "0a29ca1f972d98b7681f718ea9b6379caa2b47de",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d",
+			"syncCommit": "ac7cbd6653837c2827480d23daa28ababf244d66",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -153,7 +153,7 @@
 				"src/main/tab-release.ts#closeWindowTab",
 				"src/main/agent-control/host.ts:1244-1251"
 			],
-			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d",
+			"syncCommit": "0a29ca1f972d98b7681f718ea9b6379caa2b47de",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -263,7 +263,7 @@
 				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
 			],
-			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d"
+			"syncCommit": "edee54f6a28e019b835a6688263113649113a49e"
 		},
 		{
 			"id": "away-calls",
@@ -281,7 +281,7 @@
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
 				"src/main/ipc.ts:653-672"
 			],
-			"syncCommit": "538e522c898d83fd94f8d28cd9100beca90de77a"
+			"syncCommit": "0a29ca1f972d98b7681f718ea9b6379caa2b47de"
 		},
 		{
 			"id": "open-first-message",

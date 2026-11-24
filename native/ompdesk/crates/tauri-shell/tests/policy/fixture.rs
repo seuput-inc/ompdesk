@@ -7,15 +7,27 @@ mod diagnostic_bundle_name;
 mod js_date;
 #[path = "../../src/launch_protection.rs"]
 mod launch_protection;
+#[allow(dead_code)]
+#[path = "../../../shell/src/launcher.rs"]
+mod launcher;
 #[path = "../../src/diagnostic_logs/log_tail.rs"]
 mod log_tail;
 #[path = "../../src/watchdog/marker.rs"]
 mod marker;
 #[path = "../../src/notify_triage.rs"]
 mod notify_triage;
+#[path = "../../src/profile_file.rs"]
+mod profile_file;
 #[allow(dead_code)]
 #[path = "../../../shell/src/shell_args.rs"]
 mod shell_args;
+#[path = "../../src/update_auth_files.rs"]
+mod update_auth_files;
+#[path = "../../src/update_files.rs"]
+mod update_files;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+#[path = "../../src/update_stage/mod.rs"]
+mod update_stage;
 
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
@@ -32,6 +44,42 @@ fn main() -> io::Result<()> {
         let answer = match call["method"].as_str().unwrap() {
             method if method.starts_with("clipboard.") => clipboard.call(method, params),
             "app.admitNotification" => notify.admit(params).unwrap(),
+            method @ ("app.updateDestination" | "app.updateDigest" | "app.sweepUpdateFiles") => {
+                let mut args = params.clone();
+                let directory = args.as_object_mut().unwrap().remove("directory").unwrap();
+                let dir = Path::new(directory.as_str().unwrap());
+                match update_files::handle(method, &args, dir, dir) {
+                    Ok(value) => value,
+                    Err(error) => serde_json::json!({ "error": error }),
+                }
+            }
+            method if method.starts_with("updateAuth.") => {
+                let profile = Path::new(params["profile"].as_str().unwrap());
+                let result = match method {
+                    "updateAuth.read" => {
+                        update_auth_files::read(profile).map(|bytes| serde_json::json!(bytes))
+                    }
+                    "updateAuth.status" => Ok(update_auth_files::status(profile)),
+                    "updateAuth.save" => {
+                        let bytes: Vec<u8> = serde_json::from_value(params["bytes"].clone())?;
+                        update_auth_files::save(profile, &bytes).map(|()| Value::Null)
+                    }
+                    "updateAuth.drop" => {
+                        update_auth_files::drop_token(profile).map(|()| Value::Null)
+                    }
+                    "updateAuth.clear" => update_auth_files::clear(profile).map(|()| Value::Null),
+                    _ => panic!("unknown fixture method {method}"),
+                };
+                result.unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }))
+            }
+            #[cfg(target_os = "macos")]
+            "app.stageUpdateBundle" => serde_json::json!(update_stage::stage(
+                Path::new(params["profile"].as_str().unwrap()),
+                Path::new(params["tempRoot"].as_str().unwrap()),
+                Path::new(params["dmgPath"].as_str().unwrap()),
+                params["version"].as_str().unwrap(),
+                Path::new(params["ownBundle"].as_str().unwrap()),
+            )),
             "page.allowsExternal" => Value::Bool(
                 params["url"]
                     .as_str()

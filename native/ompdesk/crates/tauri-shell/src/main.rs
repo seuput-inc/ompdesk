@@ -22,11 +22,18 @@ mod preview;
 mod preview_surface;
 mod process_failed;
 mod profile;
+mod profile_file;
 mod registry;
 mod runtime_inputs;
 mod sessions;
 mod theme;
 mod ui;
+mod update_auth_files;
+mod update_commands;
+#[cfg(target_os = "macos")]
+mod update_files;
+#[cfg(target_os = "macos")]
+mod update_stage;
 #[cfg(windows)]
 mod window_activation;
 mod window_bounds;
@@ -45,6 +52,8 @@ pub mod lifecycle {
 
 use registry::{Identity, Registry, trusted_url};
 use serde_json::{Value, json};
+#[cfg(target_os = "macos")]
+use shell_core::launcher;
 use shell_core::wire::WireError;
 use shell_core::{conn, facts, startup};
 use std::collections::{HashMap, HashSet};
@@ -89,6 +98,8 @@ struct Runtime {
     notify_triage: Mutex<notify_triage::NotifyTriage>,
     preload: String,
     user_data: PathBuf,
+    #[cfg(target_os = "macos")]
+    downloads: PathBuf,
     packaged: bool,
     feedback_profile: PathBuf,
     app_package: PathBuf,
@@ -1188,6 +1199,9 @@ fn dispatch(call: host::Call) {
         });
         return;
     }
+    let Some(call) = update_commands::dispatch(call) else {
+        return;
+    };
     if call.method == "app.diagnosticBundleFileName" {
         match diagnostic_bundle_name::file_name(&call.params) {
             Ok(name) => call.ok(Value::String(name)),
@@ -1879,6 +1893,12 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             .find_map(|s| s.strip_prefix("--lang=").map(str::to_owned)),
     };
     let mut facts = facts::collect(&launch, &mut log::log);
+    #[cfg(target_os = "macos")]
+    let downloads = PathBuf::from(
+        facts["paths"]["downloads"]
+            .as_str()
+            .ok_or("no Downloads path")?,
+    );
     if let Some(message) = migration {
         facts["legacyUserDataMigration"] = Value::String(message);
     }
@@ -1974,6 +1994,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
                     notify_triage: Mutex::default(),
                     preload,
                     user_data,
+                    #[cfg(target_os = "macos")]
+                    downloads,
                     packaged,
                     feedback_profile,
                     app_package,
