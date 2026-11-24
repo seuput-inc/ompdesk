@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { build } from "vite";
 import { expect, it } from "vitest";
+import { nativeBinPath } from "../../native-bin";
 import { DIES_WITH_TEST, ompRuns, RM_TEMP } from "../../test-fake-omp";
 import { ShellClient } from "../client";
 
@@ -27,7 +28,7 @@ function close(server: Server): Promise<void> {
 }
 
 it.each(["socket", "stdin", "both"] as const)(
-	"forces and joins its cores when shell %s closes",
+	"exits once when shell %s closes, and the shell's end ends its cores, a stopped one too, with their gits",
 	async shutdown => {
 		const dir = await mkdtemp(join(tmpdir(), "omp-shell-life-"));
 		const socketPath =
@@ -47,6 +48,34 @@ it.each(["socket", "stdin", "both"] as const)(
 		const gits: Git[] = [];
 		let shell: ShellClient | undefined;
 		let shuttingDown = false;
+		// The cores are the shell's: this stand-in shell owns them through the same owner the app's shell links,
+		// served on its own socket as the app's shell serves it (a token line, then the owner's requests).
+		const ownerPath =
+			process.platform === "win32" ? `\\\\.\\pipe\\ompdesk-shell-core-${randomUUID()}` : join(dir, "core.sock");
+		let owner: ChildProcess | undefined;
+		const ownerServer = createServer(socket => {
+			sockets.add(socket);
+			const own = spawn(nativeBinPath("ompdesk-core"), ["--own"], {
+				stdio: ["pipe", "pipe", "inherit"],
+				windowsHide: true,
+			});
+			owner = own;
+			let token = true;
+			socket.on("data", (chunk: Buffer) => {
+				let rest = chunk;
+				if (token) {
+					const end = chunk.indexOf(0x0a);
+					if (end === -1) return;
+					token = false;
+					rest = chunk.subarray(end + 1);
+				}
+				// The test ends the owner's stdin (the shell's end) while main's link stays open.
+				if (own.stdin?.writable) own.stdin.write(rest);
+			});
+			socket.on("error", () => {});
+			socket.on("close", () => own.stdin?.end());
+			own.stdout?.pipe(socket);
+		});
 		const shellServer = createServer(socket => {
 			shell = new ShellClient(socket);
 			shell.handle("hello", () => ({
@@ -66,6 +95,8 @@ it.each(["socket", "stdin", "both"] as const)(
 					system: { reducedMotion: false, onBattery: false, online: true },
 					versions: { chrome: "1", cef: "1", shell: "1" },
 					safeStorage: { unavailable: "test" },
+					nativeIpc: [],
+					coreOwner: ownerPath,
 				},
 			}));
 			shell.handle("app.init", () => ({}));
@@ -100,7 +131,7 @@ it.each(["socket", "stdin", "both"] as const)(
 		let extraCore: number | undefined;
 		let completed = false;
 		try {
-			await Promise.all([listen(shellServer, socketPath), listen(gitServer, 0)]);
+			await Promise.all([listen(shellServer, socketPath), listen(gitServer, 0), listen(ownerServer, ownerPath)]);
 			const gitAddress = gitServer.address();
 			if (!gitAddress || typeof gitAddress === "string") throw new Error("git fixture has no TCP port");
 			const gitScript = `${DIES_WITH_TEST}
@@ -118,16 +149,20 @@ const params = {
   root: ${JSON.stringify(dir)}, paths: null,
   git: { bin: process.execPath, args: ["-e", ${JSON.stringify(gitScript)}], env: process.env, timeoutMs: 600000, maxBytes: 1024 }
 };
-function startGit() {
+// The pid comes with the owner's answer to core.start; the core answering something says main has it.
+function startGit(key) {
   void instance.call("git.stage", params).catch(error => {
     if (error.code !== "cancelled" && error.code !== "core_exited") process.send?.({ error: String(error) });
   });
-  return instance.pid;
+  void instance.call("core.echo", { value: key }).then(
+    () => process.send?.({ [key]: instance.pid }),
+    error => process.send?.({ error: String(error) })
+  );
 }
 process.on("message", message => {
   if (message === "replace") {
     void instance.stop().catch(error => process.send?.({ error: String(error) }));
-    process.send?.({ nextCore: startGit() });
+    startGit("nextCore");
   }
   if (message === "request") {
     void instance.call("core.echo", { value: "late" }).then(
@@ -140,7 +175,7 @@ process.on("message", message => {
 });
 process.stdin.once("end", () => process.send?.({ stdinCore: instance.pid }));
 process.stdin.resume();
-process.send?.({ core: startGit() });`,
+startGit("core");`,
 			);
 			const built = await build({
 				configFile: false,
@@ -225,11 +260,13 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 				expect(await beforeExit(stdinEnded.promise)).toBeNull();
 			}
 			expect(await beforeExit(exitRequested.promise)).toBe(1);
+			// The shell's own end, which ends every core it owns: the running one at once, the stopped one 5 s later.
+			owner?.stdin?.end();
+			// A git's connection closes as it dies.
+			await Promise.all([firstGit.closed, secondGit.closed]);
 			const exitedAt = Date.now();
 			expect(await ompRuns(firstGit.pid, exitedAt)).toBe(false);
 			expect(await ompRuns(secondGit.pid, exitedAt)).toBe(false);
-			await Promise.all([firstGit.closed, secondGit.closed]);
-			expect(secondGit.term).toBe(false);
 
 			node.send?.("request", () => {});
 			const restarted = await beforeExit(restartAttempt.promise);
@@ -256,7 +293,7 @@ process.exit = code => process.send?.({ exitRequested: code ?? 0 });
 					}
 				}
 			}
-			await Promise.all([close(shellServer), close(gitServer)]);
+			await Promise.all([close(shellServer), close(gitServer), close(ownerServer)]);
 			await rm(dir, RM_TEMP);
 		}
 	},

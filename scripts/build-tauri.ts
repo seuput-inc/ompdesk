@@ -42,8 +42,9 @@ function sha256(file: string): string {
 /** Every source file the host is built from, by repository path, with its hash. */
 function sourceFiles(): Map<string, string> {
 	const files = new Map<string, string>();
-	const toolchain = "native/ompdesk/rust-toolchain.toml";
-	files.set(toolchain, sha256(path.join(REPO_ROOT, toolchain)));
+	// The core's owner is one file the host links from the core crate (`#[path]`, tauri-shell main.rs).
+	for (const single of ["native/ompdesk/rust-toolchain.toml", "native/ompdesk/crates/core/src/owner.rs"])
+		files.set(single, sha256(path.join(REPO_ROOT, single)));
 	for (const root of [TAURI_DIR, path.join(TAURI_DIR, "../shell"), path.join(TAURI_DIR, "../shell-preview")]) {
 		for (const name of filesUnder(root).sort()) {
 			const file = path.join(root, name);

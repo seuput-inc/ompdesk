@@ -382,6 +382,22 @@ when its handler fails; a channel `ipc.routes` named goes to Node as above; any 
 `frameUrl` is the sending frame's URL (`event.senderFrame.url`); Node serves only `app://ompdesk/` for app channels,
 and `ipc.sendSync` from Preview partitions only for their registered preload (`__ompdeskSendSync`).
 
+### 12a. `core.*`: the core's owner (Tauri)
+
+Main decides when an `ompdesk-core` starts; the shell (`crates/core/src/owner.rs`) spawns it, holds its stdio and
+ends it. Main speaks to the core over its own connection (`OMPDESK_CLIENTS`), never over the shell.
+
+| Method | Asks | Params | Result |
+|---|---|---|---|
+| `core.start` | Node | `{generation, binary, env}` | `{pid}` once the core printed its first line (or ended before it); `env` is the core's whole environment |
+| `core.abandon` | Node | `{generation}` | `{}`: its process tree is killed now |
+| `core.stop` | Node | `{generation}` | `{}`: its stdin closes; killed after 5 s |
+| `core.stderr` (event) | shell→Node | `{generation, line}` | |
+| `core.ended` (event) | shell→Node | `{generation, code, signal}` | the process exited |
+| `core.gone` (event) | shell→Node | `{generation, empty}` | what is left of its process group was killed and is gone (`empty`), or 3 s passed |
+
+The shell ends every core it holds before it exits.
+
 ## 13. Values the shim mirrors (sync getters)
 
 | Electron | Source |

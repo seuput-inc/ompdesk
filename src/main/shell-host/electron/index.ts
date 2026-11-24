@@ -4,7 +4,7 @@
  * for the facts before any main code runs, so Electron's synchronous `app.getPath()` and friends work at module top
  * level, as they do there.
  */
-import { shutdownCore } from "../../core/process";
+import { core } from "../../core/process";
 import type { DiagnosticBundleDeps } from "../../diagnostic-bundle";
 import type { DiagnosticsDeps } from "../../diagnostics";
 import type { WatchdogSignal } from "../../hang-watchdog";
@@ -97,19 +97,21 @@ function endMain(reason: string): void {
 			pid: process.pid,
 		});
 	}
-	void shutdownCore(true).then(
-		() => process.exit(1),
-		(error: unknown) => {
-			console.error(`[shell-host] core shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
-			process.exit(1);
-		},
-	);
+	// The cores are the shell's: its end closes their stdin, which ends them and what they run. Main only refuses new
+	// work and asks for their stop where the shell still listens; it does not wait for it.
+	core()
+		.shutdown()
+		.catch(() => undefined);
+	process.exit(1);
 }
 client.onClose(reason => endMain(`the shell connection ended${reason ? `: ${reason.message}` : ""}`));
 process.stdin.once("end", () => endMain("the shell's stdin ended"));
 process.stdin.resume();
 
 const electron = createElectron(client, hello.facts, { patchProcess: true });
+// The shell spawns the cores main asks for and reports their end (`crates/core/src/owner.rs`), over a connection of
+// its own that a worker thread holds (`ownerLink`).
+core().ownBy({ connect: hello.facts.coreOwner, token });
 electronApp = electron.app;
 if (hello.facts.legacyUserDataMigration) {
 	appendRuntimeLogAtPath(

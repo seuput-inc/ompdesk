@@ -43,6 +43,61 @@ use native_services::{power, screen, shortcut, system};
 // These are the existing engine-independent Node wire, child lifetime and log authorities.
 #[path = "../../shell/src/host.rs"]
 pub mod host;
+// The owner of the ompdesk-core processes main asks for (the same file `ompdesk-core --own` runs; its stdio server
+// is that binary's only).
+#[allow(dead_code)]
+#[path = "../../core/src/owner.rs"]
+mod owner;
+
+/// Main's connection to the core owner, while one is open: where the owner's events go.
+static CORE_OWNER_FRAMES: std::sync::Mutex<Option<owner::Frames>> = std::sync::Mutex::new(None);
+
+/// Spawns the cores main asks for, holds their stdio and reports their end to main (`core.*` events).
+fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
+    static OWNER: std::sync::LazyLock<std::sync::Arc<owner::Owner>> =
+        std::sync::LazyLock::new(|| {
+            owner::Owner::new(std::sync::Arc::new(|event: &str, data: Value| {
+                let frames = CORE_OWNER_FRAMES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(frames) = frames.as_ref() {
+                    let _ = frames.send(Some(owner::event(event, data)));
+                }
+            }))
+        });
+    &OWNER
+}
+
+/// Serves main's core-owner connection (PROTOCOL.md › 12a): its first line is the host token, then owner requests, one
+/// JSON object per line. Main sends them from a worker thread, which a main thread blocked in a hub wait cannot hold
+/// back. The connection's end (main exited) ends every core.
+fn serve_core_owner(mut listener: conn::Listener, token: String) {
+    std::thread::spawn(move || {
+        loop {
+            let Ok(conn) = listener.accept() else { return };
+            let Ok(out) = conn.try_clone() else { continue };
+            let mut input = std::io::BufReader::new(conn);
+            let mut first = String::new();
+            if std::io::BufRead::read_line(&mut input, &mut first).is_err()
+                || first.trim_end() != token
+            {
+                continue;
+            }
+            let (frames, writer) = owner::writer(out);
+            let set = |value| {
+                *CORE_OWNER_FRAMES
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = value;
+            };
+            set(Some(frames.clone()));
+            owner::serve_lines(core_owner(), input, &frames);
+            set(None);
+            core_owner().end_all();
+            let _ = frames.send(None);
+            let _ = writer.join();
+        }
+    });
+}
 #[path = "../../shell/src/log.rs"]
 pub mod log;
 #[path = "../../shell/src/node.rs"]
@@ -1399,6 +1454,8 @@ fn exit_after_preview(code: i32) {
                 if code == 0 { 1 } else { code }
             }
         };
+        // The cores' stdin closes with this process; ending them here waits until they and what they run are gone.
+        let _ = tauri::async_runtime::spawn_blocking(|| core_owner().end_all()).await;
         log::log("exit", json!({"code":code}));
         runtime().app.exit(code);
     });
@@ -1916,6 +1973,18 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .display()
         .to_string();
     let listener = conn::Listener::bind(&socket)?;
+    #[cfg(windows)]
+    let core_socket = format!("{instance_name}-core-{}", std::process::id());
+    #[cfg(not(windows))]
+    let core_socket = startup::unix_socket_path(
+        &user_data,
+        &std::env::temp_dir(),
+        &format!("core-{}", std::process::id()),
+    )
+    .display()
+    .to_string();
+    serve_core_owner(conn::Listener::bind(&core_socket)?, token.clone());
+    facts["coreOwner"] = Value::String(core_socket);
     let program = node::node_program(packaged, &resources);
     let profile = profile::Profile::open(&user_data).map_err(std::io::Error::other)?;
     let gateway = Arc::new(preview_protocol::Gateway::new());

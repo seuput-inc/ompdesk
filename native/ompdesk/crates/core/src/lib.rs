@@ -28,6 +28,7 @@ pub mod memory;
 mod memsync;
 pub mod models;
 pub mod omp;
+pub mod owner;
 pub mod pool;
 pub mod ports;
 pub mod procs;
@@ -60,7 +61,7 @@ pub mod web;
 mod windows_executable;
 pub mod wire;
 
-pub use server::{registry, serve};
+pub use server::{registry, serve, serve_as};
 
 /// Lowercase hex of a digest, as node's `digest('hex')` writes it (RustCrypto's 0.11 digests have no `LowerHex`).
 pub(crate) fn hex(bytes: &[u8]) -> String {
