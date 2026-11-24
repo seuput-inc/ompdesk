@@ -785,7 +785,13 @@ async function spawnWindow(
 
 app.whenReady().then(async () => {
 	installMainRuntimeLogging();
+	// The core answers before main's first synchronous hub call (the prefs below): on a macOS runner the first launch's
+	// hub sent nothing for 2 s, the deadline of a call that holds main's thread; here the wait holds nothing.
+	const coreUp = core()
+		.call("core.echo", {})
+		.catch((error: unknown) => console.warn(`[core] did not answer at startup: ${String(error)}`));
 	const { guard, safeMode, stableAfterMs } = await launch;
+	await coreUp;
 	// A full disk is told once, by one notification that goes when the files are saved; the writers retry on their own.
 	bindDiskFullNotice(diskFull, {
 		show: notice => {
