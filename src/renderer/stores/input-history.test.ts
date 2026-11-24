@@ -156,16 +156,18 @@ describe("stock prompt history adapter", () => {
 		(globalThis as Record<string, unknown>).window = {
 			omp: { rpc: { commandForTab: vi.fn() }, prefs, runtime: { report } },
 		};
-		const refuse = (error: string) =>
+		// The real refusal (ipc.ts, a tab whose host's link is down): the code beside the message, no "[code]" prefix.
+		const refuse = (error: string, code?: string) =>
 			createSessionRpcClient(async () => ({
 				type: "response" as const,
 				command: "history_recent",
 				success: false as const,
 				error,
+				code,
 			}));
 		await useInputHistoryStore
 			.getState()
-			.hydrate(refuse("[remote_offline] The device running this tab is offline"), "host");
+			.hydrate(refuse("The device running this tab is offline", "remote_offline"), "host");
 		expect(report).not.toHaveBeenCalled();
 		await useInputHistoryStore.getState().hydrate(refuse("history store unreadable"), "host");
 		expect(report).toHaveBeenCalledTimes(1);
@@ -176,7 +178,13 @@ describe("stock prompt history adapter", () => {
 		(globalThis as Record<string, unknown>).window = {
 			omp: { rpc: { commandForTab: vi.fn() }, prefs, runtime: { report } },
 		};
-		command.mockRejectedValueOnce(new Error("[remote_offline] The device running this tab is offline"));
+		command.mockResolvedValueOnce({
+			type: "response",
+			command: "history_record",
+			success: false,
+			error: "The device running this tab is offline",
+			code: "remote_offline",
+		});
 		useInputHistoryStore.getState().record("while away", "/repo", rpc, "host");
 		await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
 		await new Promise(resolve => setTimeout(resolve, 0));
