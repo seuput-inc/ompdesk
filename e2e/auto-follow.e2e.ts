@@ -73,20 +73,25 @@ function followProbe(page: Page) {
 		await expect.poll(gap).toBeGreaterThan(LIVE_EDGE_PX);
 		// Rows the scroll brought into view are measured over the next frames, which
 		// re-sizes the transcript against the estimates (hundreds of px with 300 rows of
-		// history); a reader's position has settled once the offset stops moving.
+		// history); a reader's position has settled once the offset stops moving for
+		// 300 ms. Timed, not counted in samples: on a loaded runner one read takes a
+		// second, so five samples did not fit the timeout though the offset stood still.
 		let lastTop = Number.NaN;
-		let stillSamples = 0;
+		let stillSince = 0;
 		await expect
 			.poll(
 				async () => {
 					const top = await scroll.evaluate(node => node.scrollTop);
-					stillSamples = top === lastTop ? stillSamples + 1 : 0;
-					lastTop = top;
-					return stillSamples;
+					const now = Date.now();
+					if (top !== lastTop) {
+						lastTop = top;
+						stillSince = now;
+					}
+					return now - stillSince;
 				},
 				{ timeout: 5_000, intervals: [60] },
 			)
-			.toBeGreaterThanOrEqual(5);
+			.toBeGreaterThanOrEqual(300);
 	};
 	// The fixture streams a chunk every 16ms, so a handful of samples proves
 	// sustained following rather than one lucky frame.
