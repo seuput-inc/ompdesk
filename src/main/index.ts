@@ -92,7 +92,6 @@ import { WORKTREE_BRANCH_PREFIX_PREF, worktreeBranchPrefix } from "../shared/wor
 import { accountRotationDeps } from "./account-rotation";
 import { agentDesktopToRun } from "./agent-desktop";
 import { agentDir } from "./agent-paths";
-import { migrateAgentPowers } from "./agent-power-migration";
 import { MemoryCare } from "./ai-memory/care";
 import { AiMemoryClient } from "./ai-memory/client";
 import { configureModelRuns, ompLaunch } from "./ai-memory/core-asks";
@@ -383,7 +382,7 @@ let mainPrefsStore: PrefsStore<MainPrefs> | null = null;
 function prefsStore(): PrefsStore<MainPrefs> {
 	if (!mainPrefsStore) {
 		mainPrefsStore = prefsFile<MainPrefs>("prefs");
-		const powers = migrateAgentPowers(mainPrefsStore, agentDir());
+		const powers = mainPrefsStore.migrateAgentPowers(agentDir());
 		if (powers) {
 			writeRuntimeLog({
 				// A clean migration is no failure: only one that could not edit config.yml is a background-task error.

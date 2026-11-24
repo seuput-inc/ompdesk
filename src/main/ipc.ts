@@ -9,7 +9,7 @@
  * (`remote_path_native`): this machine cannot see that disk.
  */
 
-import { existsSync, promises as fsp } from "node:fs";
+import { promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, dialog, Notification, screen, shell } from "electron";
@@ -2350,17 +2350,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 
 	// "Edit config" — open the agent's models.yml in the system editor. The
-	// file is created with a minimal skeleton when missing so there is always
+	// core creates it with a minimal skeleton when missing so there is always
 	// something to edit; when no editor association exists, reveal it in the
 	// file manager instead. A paired host's file is out of this editor's reach:
 	// its providers are edited in-app.
 	ipc.handle(IPC_COMMANDS.MODELS_CONFIG_OPEN, async (_caller, device?: unknown) => {
 		if (deviceOf(device)) throw codedError("remote_path_native", "The models file is on another device");
-		const file = modelsPath();
-		if (!existsSync(file)) {
-			await fsp.mkdir(path.dirname(file), { recursive: true });
-			await fsp.writeFile(file, "# Custom model providers.\nproviders: {}\n", "utf8");
-		}
+		const file = await modelsPath({ create: true });
 		const openError = await shell.openPath(file);
 		if (openError) shell.showItemInFolder(file);
 		return { path: file, opened: !openError };

@@ -9,7 +9,7 @@
 //! an event, all in that one step, so the file, the events and the answers keep the order of the changes.
 //!
 //! Main keeps a copy it reads synchronously (`web-stores-client.ts`) and changes with ordered pushes
-//! (`web.devices.revoke`, `rename`, `setGrants`, `setUiPrefs`, `setPush`, `forgetPush`, `update`,
+//! (`web.devices.revoke`, `rename`, `setGrants`, `setUiPrefs`, `setPush`, `forgetPush`,
 //! `web.blocks.add`, `remove`). Each carries `seq`, main's number for it; every push is answered by an event with
 //! `ack`, the highest `seq` applied, so main ignores a snapshot that does not hold its own latest change yet.
 //! The events, all with `userData`:
@@ -290,6 +290,12 @@ impl FileDevices {
     pub fn get(&self, device_id: &str) -> Option<Device> {
         locked(&self.state).book.get(device_id).cloned()
     }
+
+    /// The per-device limit's write (`remote/quota.rs`): limits or counts in memory, the file to the writer thread and
+    /// the list to main, in one step; false when there is no such device.
+    pub fn update_quota(&self, device_id: &str, patch: Patch) -> bool {
+        self.apply(None, |book| book.update(device_id, patch))
+    }
 }
 
 impl Devices for FileDevices {
@@ -524,13 +530,6 @@ struct ForgetPush {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Update {
-    device_id: String,
-    patch: Map<String, Value>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct Block {
     scope: String,
     key: String,
@@ -645,20 +644,6 @@ pub fn register(registry: &mut Registry) {
                 });
             },
         );
-    });
-    registry.add_push("web.devices.update", |call| {
-        pushed(&call, "web.devices.update", |s, seq, update: Update| {
-            s.devices
-                .apply(Some(seq), |book| match Patch::from_json(&update.patch) {
-                    Some(patch) => book.update(&update.device_id, patch),
-                    None => {
-                        eprintln!(
-                            "ompdesk-core: skipped web.devices.update: limits or usage do not read"
-                        );
-                        (false, Effect::default())
-                    }
-                });
-        });
     });
     registry.add_push("web.blocks.add", |call| {
         pushed(&call, "web.blocks.add", |s, seq, block: Block| {

@@ -1,9 +1,9 @@
 /**
  * Computer sharing's devices instance in the core (`crates/core/src/remote/devices/`), as main holds it: the device
  * and host records, Tailscale's side, the host's listener and gate, and each known host's reconnecting client run
- * there. Main mirrors what the core tells (`remote.devices.state`) for its synchronous readers, answers what only it
- * can say (`policy`: Mobile web's allowed accounts and blocks; `admit`: the person's approval; `tailnet`: a test
- * rig's Tailscale), and writes the quota's counts in order (`peerPatch`).
+ * there. Main mirrors what the core tells (`remote.devices.state`) for its synchronous readers and answers what only
+ * it can say (`policy`: Mobile web's allowed accounts and blocks; `admit`: the person's approval; `tailnet`: a test
+ * rig's Tailscale). A device's limits and counts are the core's `quota` hub instance's (`peer-quota.ts`).
  */
 import type { RemoteTailnetPhase, TailnetComputer } from "../../shared/ipc-types";
 import { CORE_EXITED, CoreError, core } from "../core/process";
@@ -62,8 +62,6 @@ export interface SharingOptions {
 	onAdoptLogin?: (login: string) => void;
 	/** Code-paired hosts were matched (or forgotten, `removed`) once. */
 	onMigrated?: (migration: { at: number; forgotten: string[]; removed: string[] }) => void;
-	/** The instance opened again in a new core, after it ended: what main wrote to the old one may need writing again. */
-	onReopened?: () => void;
 }
 
 export interface SharingSnapshot {
@@ -73,8 +71,6 @@ export interface SharingSnapshot {
 	peers: PeerInfo[];
 	hosts: PairedHost[];
 	deviceSectionOrder: string[];
-	/** The last quota patch the core applied. */
-	patched: number;
 }
 
 const EMPTY: SharingSnapshot = {
@@ -84,7 +80,6 @@ const EMPTY: SharingSnapshot = {
 	peers: [],
 	hosts: [],
 	deviceSectionOrder: [],
-	patched: 0,
 };
 
 const instances = new Map<number, SharingCore>();
@@ -388,7 +383,6 @@ export class SharingCore {
 				failed("watch"),
 			);
 		}
-		this.options.onReopened?.();
 	}
 
 	#callIn<T = unknown>(opened: Opened, method: string, params: object = {}, timeoutMs?: number): Promise<T> {
@@ -472,11 +466,6 @@ export class SharingCore {
 	configure(patch: Partial<Settings>): void {
 		Object.assign(this.#settings, patch);
 		this.#push("remote.devices.configure", patch);
-	}
-
-	/** The quota wrote a device's `limits` or `usage` (null removes it): applied in the order sent. */
-	peerPatch(seq: number, deviceId: string, patch: Record<string, unknown>): void {
-		this.#push("remote.devices.peerPatch", { seq, deviceId, patch });
 	}
 
 	wake(trigger: string): void {

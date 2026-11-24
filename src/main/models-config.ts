@@ -1,585 +1,76 @@
 /**
- * Read/write the agent's `models.yml` for third-party provider configuration.
- *
- * The file lives in the agent dir (models.yml preferred, models.yaml
- * fallback) and is parsed with the `yaml` package — the agent watches the
- * file and live-reloads providers on save.
- *
- * Field coverage mirrors the agent's ModelsConfigSchema
- * (coding-agent/src/config/models-config-schema-bundle.ts): every field the
- * GUI renders is written through, and every field it does NOT render
- * (compat beyond extraBody, remoteCompaction, modelOverrides, effortMap,
- * contextPromotionTarget, compactionModel…) is PRESERVED verbatim on save —
- * upserts merge over the existing entry instead of replacing it, so a rich
- * hand-written config never loses data to a GUI edit.
+ * The agent's `models.yml`: the Settings page's providers, their edits and the in-app text editor. The core owns the
+ * file (`native/ompdesk/crates/core/src/models/file`): it edits the YAML in place so comments and layout survive, has
+ * stock parse and normalize every text it reads or writes, runs one edit at a time and writes atomically. This module
+ * hands it the agent folder and the stock helper's lanes.
  */
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
-import * as path from "node:path";
-import { type Document, parseDocument } from "yaml";
-import { codedError } from "../shared/ipc-error-codes";
+import { codedError, isIpcErrorCode } from "../shared/ipc-error-codes";
 import type {
-	CustomModelEffort,
-	CustomProviderApi,
-	CustomProviderDiscovery,
 	CustomProviderInput,
-	CustomProviderModelCost,
 	CustomProviderModelInput,
-	CustomProviderModelThinking,
+	CustomProvidersConfig,
 	CustomProviderView,
 	ModelOverrideInput,
 } from "../shared/ipc-types";
 import { agentDir } from "./agent-paths";
-import { writeFileAtomicSync } from "./atomic-file";
-import { type ModelsConfigMetadata, modelsConfigMetadata, normalizeModelsConfig } from "./models-config-stock";
+import { CoreError, core } from "./core/process";
+import { stockHelperHost } from "./stock-helper";
 
 export type { CustomProviderInput, CustomProviderModelInput, CustomProviderView };
 
-const MASK_PREVIEW_LEN = 4;
-
-// Stock owns the roster and option vocabularies; no stale checked-in fallback.
-let options: ModelsConfigMetadata;
-
-/** Absolute path to the agent's models file (`models.yml` preferred, `models.yaml` fallback). */
-export function modelsPath(): string {
-	const dir = agentDir();
-	const yml = path.join(dir, "models.yml");
-	if (existsSync(yml)) return yml;
-	const legacy = path.join(dir, "models.yaml");
-	// A fresh install writes the preferred name; only an existing `models.yaml`
-	// keeps being used.
-	return existsSync(legacy) ? legacy : yml;
-}
-
-/** What a read saw of the file (through a symlink): changed since means someone else wrote it. `null`: missing. */
-interface FileStamp {
-	mtimeMs: number;
-	size: number;
-	ino: number;
-}
-
-interface ModelsFile {
-	/** The live document: an edit mutates this, and a save writes it back. */
-	doc: Document;
-	providers: Record<string, unknown>;
-	/** The file as it was before it was read; `writeModelsFile` refuses to overwrite a different one. */
-	stamp: FileStamp | null;
-}
-
-/** Permissions of a models file this app creates: it can hold API keys. */
-const NEW_MODELS_FILE_MODE = 0o600;
-
-function fileStamp(file: string): FileStamp | null {
+async function call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
 	try {
-		const { mtimeMs, size, ino } = statSync(file);
-		return { mtimeMs, size, ino };
+		const { result } = await core().call(method, { dir: agentDir(), host: stockHelperHost(), ...params });
+		return result as T;
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-		throw error;
+		// A refusal the page shows in its own words keeps its code; the rest are plain errors with their reason.
+		if (!(error instanceof CoreError)) throw error;
+		throw isIpcErrorCode(error.code) ? codedError(error.code, error.message) : new Error(error.message);
 	}
 }
 
-function sameStamp(a: FileStamp | null, b: FileStamp | null): boolean {
-	if (!a || !b) return a === b;
-	return a.mtimeMs === b.mtimeMs && a.size === b.size && a.ino === b.ino;
+/** The models file (`models.yml`, or `models.yaml` while only that exists); `create` writes a skeleton when missing. */
+export async function modelsPath(options: { create?: boolean } = {}): Promise<string> {
+	return (await call<{ path: string }>("models.path", { create: options.create === true })).path;
 }
 
-async function readModelsFile(): Promise<ModelsFile> {
-	const file = modelsPath();
-	const stamp = fileStamp(file);
-	if (!stamp) return { doc: parseDocument(""), providers: {}, stamp };
-	const doc = parseDocument(readFileSync(file, "utf8"));
-	const issue = doc.errors[0] ?? doc.warnings[0];
-	if (doc.errors.length > 0) throw new Error(`${file}: ${issue?.message ?? "invalid YAML"}`);
-	const normalized = await normalizeModelsConfig(doc.toJS() ?? {});
-	if (normalized.error) throw new Error(normalized.error);
-	const providers = normalized.config?.providers;
-	return {
-		doc,
-		stamp,
-		providers: typeof providers === "object" && providers !== null ? (providers as Record<string, unknown>) : {},
-	};
+/** Configured providers (custom ones and overrides of built-ins), keys masked, with the form's option vocabularies
+ * from the installed omp. */
+export function modelsCatalog(): Promise<CustomProvidersConfig> {
+	return call("models.list");
 }
 
-/** Update existing nodes rather than replacing mappings, preserving comments on edited fields too. */
-function applyYamlDiff(doc: Document, before: unknown, after: unknown, keys: Array<string | number>): void {
-	if (before === after) return;
-	if (Array.isArray(before) && Array.isArray(after) && before.length === after.length) {
-		after.forEach((value, index) => {
-			applyYamlDiff(doc, before[index], value, [...keys, index]);
-		});
-	} else if (
-		before &&
-		after &&
-		typeof before === "object" &&
-		typeof after === "object" &&
-		!Array.isArray(before) &&
-		!Array.isArray(after)
-	) {
-		const old = before as Record<string, unknown>;
-		const next = after as Record<string, unknown>;
-		for (const key of Object.keys(old)) if (!(key in next)) doc.deleteIn([...keys, key]);
-		for (const [key, value] of Object.entries(next)) applyYamlDiff(doc, old[key], value, [...keys, key]);
-	} else {
-		doc.setIn(keys, after);
-	}
-}
-
-/**
- * Swap the file in one step. The agent watches this path and live-reloads it,
- * so a truncate-then-write leaves a window where a concurrent read sees an empty
- * or half-written config — and a crash inside it destroys every provider.
- *
- * The file may hold `apiKey`s and be a symlink (a dotfiles repo): the temp file is
- * written next to the link's TARGET, takes the original's mode (a new file is 0600),
- * and replaces the target, so the link stays a link. A link whose target is gone is
- * reported, never replaced by a file. A file that changed on disk since it was read
- * (the external editor, stock) is not overwritten.
- */
-async function writeModelsFile(doc: Document, readStamp: FileStamp | null): Promise<void> {
-	const raw = doc.toJS() ?? {};
-	const normalized = await normalizeModelsConfig(raw);
-	if (normalized.error) throw new Error(normalized.error);
-	applyYamlDiff(doc, raw, normalized.config, []);
-	const file = modelsPath();
-	mkdirSync(path.dirname(file), { recursive: true });
-	if (!sameStamp(fileStamp(file), readStamp)) {
-		throw new Error(`${file} changed on disk while it was being saved. Nothing was written; try again.`);
-	}
-	if (!readStamp && lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
-		const dangling = path.resolve(path.dirname(file), readlinkSync(file));
-		throw new Error(
-			`${file} links to ${dangling}, which does not exist. Nothing was written; fix or remove the link.`,
-		);
-	}
-	let target = file;
-	let mode = NEW_MODELS_FILE_MODE;
-	if (readStamp) {
-		target = realpathSync(file);
-		mode = statSync(target).mode & 0o7777;
-	}
-	// The original's mode is kept exactly (the creation mode is masked by the umask).
-	writeFileAtomicSync(target, String(doc), { mode });
-}
-
-function maskApiKey(key: unknown): { hasApiKey: boolean; apiKeyPreview?: string } {
-	if (typeof key !== "string" || key.length === 0) return { hasApiKey: false };
-	return { hasApiKey: true, apiKeyPreview: `•••${key.slice(-MASK_PREVIEW_LEN)}` };
-}
-
-// ============================================================================
-// Wire ← file parsing (toView): surface every GUI-editable field, tolerate
-// free-form file content (unknown shapes degrade to undefined, never throw).
-// ============================================================================
-
-function asString(value: unknown): string | undefined {
-	return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
-}
-
-function asStringRecord(value: unknown): Record<string, string> | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-		if (typeof v === "string") out[k] = v;
-	}
-	return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function asApi(value: unknown): CustomProviderApi | undefined {
-	return typeof value === "string" && options.apis.includes(value) ? (value as CustomProviderApi) : undefined;
-}
-
-function asCost(value: unknown): CustomProviderModelCost | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const rec = value as Record<string, unknown>;
-	const cost: CustomProviderModelCost = {};
-	if (asNumber(rec.input) !== undefined) cost.input = asNumber(rec.input);
-	if (asNumber(rec.output) !== undefined) cost.output = asNumber(rec.output);
-	if (asNumber(rec.cacheRead) !== undefined) cost.cacheRead = asNumber(rec.cacheRead);
-	if (asNumber(rec.cacheWrite) !== undefined) cost.cacheWrite = asNumber(rec.cacheWrite);
-	return Object.keys(cost).length > 0 ? cost : undefined;
-}
-
-function asThinking(value: unknown): CustomProviderModelThinking | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const rec = value as Record<string, unknown>;
-	if (typeof rec.mode !== "string" || !options.thinkingModes.includes(rec.mode)) return undefined;
-	const efforts = Array.isArray(rec.efforts) ? (rec.efforts as CustomModelEffort[]) : [];
-	if (efforts.length === 0) return undefined;
-	const thinking: CustomProviderModelThinking = {
-		mode: rec.mode as CustomProviderModelThinking["mode"],
-		efforts,
-	};
-	const defaultLevel = asString(rec.defaultLevel);
-	if (defaultLevel && options.efforts.includes(defaultLevel)) {
-		thinking.defaultLevel = defaultLevel as CustomProviderModelThinking["defaultLevel"];
-	}
-	if (typeof rec.supportsDisplay === "boolean") thinking.supportsDisplay = rec.supportsDisplay;
-	return thinking;
-}
-
-function asInput(value: unknown): Array<"text" | "image"> | undefined {
-	if (!Array.isArray(value)) return undefined;
-	const out = value.filter((v): v is "text" | "image" => v === "text" || v === "image");
-	return out.length > 0 ? out : undefined;
-}
-
-function asDiscovery(value: unknown): CustomProviderDiscovery | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const rec = value as Record<string, unknown>;
-	if (typeof rec.type !== "string" || !options.discovery.includes(rec.type)) return undefined;
-	const discovery: CustomProviderDiscovery = { type: rec.type as CustomProviderDiscovery["type"] };
-	const timeoutMs = asNumber(rec.timeoutMs);
-	if (timeoutMs !== undefined) discovery.timeoutMs = timeoutMs;
-	return discovery;
-}
-
-function modelToView(raw: unknown): CustomProviderModelInput | null {
-	if (!raw || typeof raw !== "object") return null;
-	const m = raw as Record<string, unknown>;
-	const id = asString(m.id);
-	if (!id) return null;
-	const view: CustomProviderModelInput = { id };
-	const fields: Array<[keyof CustomProviderModelInput, unknown]> = [
-		["name", asString(m.name)],
-		["api", asApi(m.api)],
-		["baseUrl", asString(m.baseUrl)],
-		["reasoning", m.reasoning === true ? true : undefined],
-		["thinking", asThinking(m.thinking)],
-		["input", asInput(m.input)],
-		["supportsTools", asBoolean(m.supportsTools)],
-		["cost", asCost(m.cost)],
-		["premiumMultiplier", asNumber(m.premiumMultiplier)],
-		["contextWindow", asNumber(m.contextWindow)],
-		["maxTokens", asNumber(m.maxTokens)],
-		["omitMaxOutputTokens", asBoolean(m.omitMaxOutputTokens)],
-		["headers", asStringRecord(m.headers)],
-	];
-	for (const [key, value] of fields) {
-		if (value !== undefined) {
-			view[key] = value as never;
-		}
-	}
-	return view;
-}
-
-/** A `modelOverrides` entry's GUI-rendered fields; anything else in it stays in the file only. */
-function overrideToView(raw: unknown): ModelOverrideInput | null {
-	if (!raw || typeof raw !== "object") return null;
-	const rec = raw as Record<string, unknown>;
-	const view: ModelOverrideInput = {};
-	const name = asString(rec.name);
-	if (name) view.name = name;
-	const api = asApi(rec.api);
-	if (api) view.api = api;
-	const reasoning = asBoolean(rec.reasoning);
-	if (reasoning !== undefined) view.reasoning = reasoning;
-	const thinking = asThinking(rec.thinking);
-	if (thinking) {
-		const rawMap = (rec.thinking as Record<string, unknown>).effortMap;
-		const effortMap: Partial<Record<CustomModelEffort, string>> = {};
-		if (rawMap && typeof rawMap === "object") {
-			for (const [effort, wire] of Object.entries(rawMap)) {
-				if (options.efforts.includes(effort) && typeof wire === "string" && wire) {
-					effortMap[effort as CustomModelEffort] = wire;
-				}
-			}
-		}
-		view.thinking = { mode: thinking.mode, efforts: thinking.efforts };
-		if (Object.keys(effortMap).length > 0) view.thinking.effortMap = effortMap;
-	}
-	const contextWindow = asNumber(rec.contextWindow);
-	if (contextWindow !== undefined) view.contextWindow = contextWindow;
-	const maxTokens = asNumber(rec.maxTokens);
-	if (maxTokens !== undefined) view.maxTokens = maxTokens;
-	const compat = rec.compat && typeof rec.compat === "object" ? (rec.compat as Record<string, unknown>) : undefined;
-	const replay = asBoolean(compat?.requiresReasoningContentForToolCalls);
-	if (replay !== undefined) view.replayReasoning = replay;
-	return view;
-}
-
-function toView(id: string, raw: unknown): CustomProviderView & { apiKey?: string } {
-	const rec = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-	const models: CustomProviderModelInput[] = [];
-	if (Array.isArray(rec.models)) {
-		for (const m of rec.models) {
-			const view = modelToView(m);
-			if (view) models.push(view);
-		}
-	}
-	const { hasApiKey, apiKeyPreview } = maskApiKey(rec.apiKey);
-	const compat = rec.compat && typeof rec.compat === "object" ? (rec.compat as Record<string, unknown>) : undefined;
-	const extraBody =
-		compat?.extraBody && typeof compat.extraBody === "object"
-			? (compat.extraBody as Record<string, unknown>)
-			: undefined;
-	const auth = asString(rec.auth);
-	return {
-		id,
-		api: asApi(rec.api) ?? "openai-completions",
-		baseUrl: asString(rec.baseUrl) ?? "",
-		hasApiKey,
-		apiKeyPreview,
-		auth: auth && options.auth.includes(auth) ? (auth as CustomProviderView["auth"]) : undefined,
-		authHeader: asBoolean(rec.authHeader),
-		headers: asStringRecord(rec.headers),
-		discovery: asDiscovery(rec.discovery),
-		disableStrictTools: asBoolean(rec.disableStrictTools),
-		transport: rec.transport === "pi-native" ? "pi-native" : undefined,
-		extraBody: extraBody && Object.keys(extraBody).length > 0 ? extraBody : undefined,
-		models,
-		builtin: options.builtinProviders.includes(id),
-		modelOverrides: overridesToView(rec.modelOverrides),
-		apiKey: typeof rec.apiKey === "string" ? rec.apiKey : undefined,
-	};
-}
-
-function overridesToView(raw: unknown): Record<string, ModelOverrideInput> | undefined {
-	if (!raw || typeof raw !== "object") return undefined;
-	const views: Record<string, ModelOverrideInput> = {};
-	for (const [modelId, entry] of Object.entries(raw)) {
-		const view = overrideToView(entry);
-		if (view) views[modelId] = view;
-	}
-	return Object.keys(views).length > 0 ? views : undefined;
-}
-
-/** List configured providers (custom + user overrides), apiKey masked. */
 export async function listModelsProviders(): Promise<CustomProviderView[]> {
-	options = await modelsConfigMetadata();
-	const { providers } = await readModelsFile();
-	return Object.entries(providers).map(([id, raw]) => {
-		const { apiKey: _secret, ...view } = toView(id, raw);
-		return view;
-	});
+	return (await modelsCatalog()).providers;
 }
 
-// ============================================================================
-// File ← wire writing (upsert): merge over the existing entry. Rendered
-// fields are set-or-deleted from the input; unrendered fields (compat minus
-// extraBody, remoteCompaction, modelOverrides, effortMap,
-// contextPromotionTarget, compactionModel) survive verbatim.
-// ============================================================================
-
-function setOrDelete(entry: Record<string, unknown>, key: string, value: unknown): void {
-	if (value === undefined || value === "") delete entry[key];
-	else entry[key] = value;
-}
-
-function mergeModel(existingModels: unknown, input: CustomProviderModelInput): Record<string, unknown> {
-	const existing = Array.isArray(existingModels)
-		? (existingModels.find(m => m && typeof m === "object" && (m as Record<string, unknown>).id === input.id) as
-				| Record<string, unknown>
-				| undefined)
-		: undefined;
-	const merged: Record<string, unknown> = { ...existing };
-	setOrDelete(merged, "name", input.name);
-	setOrDelete(merged, "api", input.api);
-	setOrDelete(merged, "baseUrl", input.baseUrl);
-	setOrDelete(merged, "reasoning", input.reasoning);
-	// thinking: merge over the existing object so unrendered keys (effortMap,
-	// requiresEffort) survive a GUI edit of the efforts list.
-	if (input.thinking) {
-		const base =
-			existing?.thinking && typeof existing.thinking === "object"
-				? (existing.thinking as Record<string, unknown>)
-				: {};
-		// The legacy range keys are the ladder this view already renders as
-		// `efforts`, so they are a second source of truth rather than an
-		// unrendered field: a later edit that shortens the ladder would leave a
-		// stale `levels`/`minLevel`+`maxLevel` claiming the old range.
-		const unrendered = { ...base };
-		delete unrendered.levels;
-		delete unrendered.minLevel;
-		delete unrendered.maxLevel;
-		merged.thinking = { ...unrendered, ...input.thinking };
-	} else {
-		delete merged.thinking;
-	}
-	setOrDelete(merged, "input", input.input && input.input.length > 0 ? input.input : undefined);
-	setOrDelete(merged, "supportsTools", input.supportsTools);
-	setOrDelete(merged, "cost", input.cost && Object.keys(input.cost).length > 0 ? input.cost : undefined);
-	setOrDelete(merged, "premiumMultiplier", input.premiumMultiplier);
-	setOrDelete(merged, "contextWindow", input.contextWindow);
-	setOrDelete(merged, "maxTokens", input.maxTokens);
-	setOrDelete(merged, "omitMaxOutputTokens", input.omitMaxOutputTokens);
-	setOrDelete(merged, "headers", input.headers && Object.keys(input.headers).length > 0 ? input.headers : undefined);
-	return { id: input.id, ...merged };
-}
-
-/** Insert or update a custom provider. Keeps the stored apiKey unless the input
- * re-supplies one or sets `clearApiKey`. */
-export function upsertModelsProvider(input: CustomProviderInput): Promise<void> {
-	return writeProvider(input, false).then(() => undefined);
+/** Insert or update a custom provider. Keeps the stored apiKey unless the input re-supplies one or sets `clearApiKey`. */
+export async function upsertModelsProvider(input: CustomProviderInput): Promise<void> {
+	await call("models.upsert", { input });
 }
 
 /**
- * Insert a custom provider only while no entry has its id; false when one does (nothing written). The check and
- * the write share one turn of the mutation chain, so an entry the person adds meanwhile is never overwritten
- * (local-engines.ts registers an engine it detected through this).
+ * Insert a custom provider only while no entry has its id; false when one does (nothing written). The check and the
+ * write are one edit in the core, so an entry the person adds meanwhile is never overwritten (local-engines.ts
+ * registers an engine it detected through this).
  */
 export function insertModelsProvider(input: CustomProviderInput): Promise<boolean> {
-	return writeProvider(input, true);
-}
-
-// The old synchronous writers were serialized by main's event loop. Keep that guarantee across helper awaits.
-let mutation: Promise<void> = Promise.resolve();
-
-function writeProvider(input: CustomProviderInput, onlyIfAbsent: boolean): Promise<boolean> {
-	const operation = mutation.then(async () => {
-		options = await modelsConfigMetadata();
-		if (options.builtinProviders.includes(input.id)) {
-			throw codedError(
-				"provider_id_builtin",
-				`"${input.id}" is a built-in provider id; choose a distinct custom id.`,
-			);
-		}
-		const data = await readModelsFile();
-		const existingRaw = data.providers[input.id];
-		if (onlyIfAbsent && existingRaw !== undefined) return false;
-		const existing = toView(input.id, existingRaw);
-		const apiKey = input.clearApiKey
-			? undefined
-			: input.apiKey && input.apiKey.trim().length > 0
-				? input.apiKey.trim()
-				: existing.apiKey;
-		const entry: Record<string, unknown> =
-			existingRaw && typeof existingRaw === "object" ? { ...(existingRaw as Record<string, unknown>) } : {};
-		entry.baseUrl = input.baseUrl;
-		entry.api = input.api;
-		setOrDelete(entry, "apiKey", apiKey);
-		setOrDelete(entry, "auth", input.auth);
-		setOrDelete(entry, "authHeader", input.authHeader);
-		setOrDelete(entry, "headers", input.headers && Object.keys(input.headers).length > 0 ? input.headers : undefined);
-		setOrDelete(entry, "discovery", input.discovery);
-		setOrDelete(entry, "disableStrictTools", input.disableStrictTools);
-		setOrDelete(entry, "transport", input.transport);
-		// compat: merge extraBody into the existing compat object (other flags survive).
-		const compat =
-			entry.compat && typeof entry.compat === "object" ? { ...(entry.compat as Record<string, unknown>) } : {};
-		setOrDelete(
-			compat,
-			"extraBody",
-			input.extraBody && Object.keys(input.extraBody).length > 0 ? input.extraBody : undefined,
-		);
-		if (Object.keys(compat).length > 0) entry.compat = compat;
-		else delete entry.compat;
-		entry.models = input.models.map(m => mergeModel(entry.models, m));
-		applyYamlDiff(data.doc, data.doc.toJS()?.providers?.[input.id], entry, ["providers", input.id]);
-		await writeModelsFile(data.doc, data.stamp);
-		return true;
-	});
-	mutation = operation.then(
-		() => undefined,
-		() => undefined,
-	);
-	return operation;
+	return call("models.upsert", { input, onlyIfAbsent: true });
 }
 
 /** Delete a custom provider entry (built-ins cannot be removed here). */
-export function deleteModelsProvider(id: string): Promise<void> {
-	const operation = mutation.then(async () => {
-		options = await modelsConfigMetadata();
-		if (options.builtinProviders.includes(id)) {
-			throw codedError(
-				"provider_builtin_delete",
-				`"${id}" is a built-in provider and cannot be removed from the GUI.`,
-			);
-		}
-		const data = await readModelsFile();
-		if (!(id in data.providers)) return;
-		data.doc.deleteIn(["providers", id]);
-		await writeModelsFile(data.doc, data.stamp);
-	});
-	mutation = operation.catch(() => undefined);
-	return operation;
+export async function deleteModelsProvider(id: string): Promise<void> {
+	await call("models.delete", { id });
 }
 
-/**
- * Write (or with `null`, remove) one model's `modelOverrides` entry under any
- * provider, built-in ones included (B43). Rendered fields are set-or-deleted;
- * the entry's other keys (cost, headers, compat flags, effortMap levels the
- * ladder no longer has…) survive. A built-in provider entry left with nothing
- * is removed, so resetting the last override leaves models.yml as it was.
- */
-export function setModelOverride(provider: string, modelId: string, input: ModelOverrideInput | null): Promise<void> {
-	const operation = mutation.then(async () => {
-		options = await modelsConfigMetadata();
-		const data = await readModelsFile();
-		const before = data.doc.toJS()?.providers?.[provider];
-		const entry: Record<string, unknown> =
-			before && typeof before === "object" ? { ...(before as Record<string, unknown>) } : {};
-		const overrides: Record<string, unknown> =
-			entry.modelOverrides && typeof entry.modelOverrides === "object"
-				? { ...(entry.modelOverrides as Record<string, unknown>) }
-				: {};
-		if (input === null) {
-			delete overrides[modelId];
-		} else {
-			const existing = overrides[modelId];
-			const merged: Record<string, unknown> =
-				existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
-			setOrDelete(merged, "name", input.name);
-			setOrDelete(merged, "api", input.api);
-			setOrDelete(merged, "reasoning", input.reasoning);
-			setOrDelete(merged, "contextWindow", input.contextWindow);
-			setOrDelete(merged, "maxTokens", input.maxTokens);
-			if (input.thinking) {
-				const base =
-					merged.thinking && typeof merged.thinking === "object"
-						? { ...(merged.thinking as Record<string, unknown>) }
-						: {};
-				// The legacy range keys restate the ladder `efforts` now holds (see mergeModel).
-				delete base.levels;
-				delete base.minLevel;
-				delete base.maxLevel;
-				const thinking: Record<string, unknown> = {
-					...base,
-					mode: input.thinking.mode,
-					efforts: input.thinking.efforts,
-				};
-				setOrDelete(
-					thinking,
-					"effortMap",
-					input.thinking.effortMap && Object.keys(input.thinking.effortMap).length > 0
-						? input.thinking.effortMap
-						: undefined,
-				);
-				merged.thinking = thinking;
-			} else {
-				delete merged.thinking;
-			}
-			const compat =
-				merged.compat && typeof merged.compat === "object" ? { ...(merged.compat as Record<string, unknown>) } : {};
-			setOrDelete(compat, "requiresReasoningContentForToolCalls", input.replayReasoning);
-			if (Object.keys(compat).length > 0) merged.compat = compat;
-			else delete merged.compat;
-			if (Object.keys(merged).length > 0) overrides[modelId] = merged;
-			else delete overrides[modelId];
-		}
-		if (Object.keys(overrides).length > 0) entry.modelOverrides = overrides;
-		else delete entry.modelOverrides;
-		if (Object.keys(entry).length === 0) {
-			if (before !== undefined) data.doc.deleteIn(["providers", provider]);
-		} else {
-			applyYamlDiff(data.doc, before, entry, ["providers", provider]);
-		}
-		await writeModelsFile(data.doc, data.stamp);
-	});
-	mutation = operation.catch(() => undefined);
-	return operation;
+/** Write (or with `null`, remove) one model's `modelOverrides` entry under any provider, built-in ones included. */
+export async function setModelOverride(
+	provider: string,
+	modelId: string,
+	input: ModelOverrideInput | null,
+): Promise<void> {
+	await call("models.override", { provider, model: modelId, input });
 }
-
-// ============================================================================
-// The file as text, for an in-app editor (a paired web device edits models.yml where there is no $EDITOR).
-// ============================================================================
 
 /** What an in-app editor needs of the models file. */
 export interface ModelsText {
@@ -591,52 +82,15 @@ export interface ModelsText {
 	stamp: string;
 }
 
-const MODELS_SKELETON = "# Custom model providers.\nproviders: {}\n";
-
-function stampToken(stamp: FileStamp | null): string {
-	return stamp ? `${stamp.mtimeMs}:${stamp.size}:${stamp.ino}` : "missing";
-}
-
-export function readModelsText(): ModelsText {
-	const file = modelsPath();
-	const stamp = fileStamp(file);
-	return {
-		path: file,
-		text: stamp ? readFileSync(file, "utf8") : MODELS_SKELETON,
-		exists: stamp !== null,
-		stamp: stampToken(stamp),
-	};
+export function readModelsText(): Promise<ModelsText> {
+	return call("models.text");
 }
 
 /**
- * Save text an editor produced, through the same writer as every GUI edit: the models.yml parser and the
- * agent's schema check it first (an invalid file is never written, the reason comes back), the swap is
- * atomic, and a file that changed on disk since `stamp` was read is not overwritten. Resolves the new stamp.
+ * Save text an editor produced, through the same checks as every GUI edit: stock's parser and schema check it first
+ * (an invalid file is never written, the reason comes back as `invalid_content`), the swap is atomic, and a file that
+ * changed on disk since `stamp` was read is not overwritten. Resolves the new stamp.
  */
 export function writeModelsText(text: string, stamp: string): Promise<string> {
-	const operation = mutation.then(async () => {
-		options = await modelsConfigMetadata();
-		const file = modelsPath();
-		const current = fileStamp(file);
-		if (stampToken(current) !== stamp) {
-			throw codedError(
-				"invalid_content",
-				`${file} changed on disk since it was opened. Nothing was written; reopen it.`,
-			);
-		}
-		const doc = parseDocument(text);
-		const issue = doc.errors[0];
-		if (issue) throw codedError("invalid_content", `models.yml: ${issue.message}`);
-		try {
-			await writeModelsFile(doc, current);
-		} catch (error) {
-			throw codedError("invalid_content", error instanceof Error ? error.message : String(error));
-		}
-		return stampToken(fileStamp(modelsPath()));
-	});
-	mutation = operation.then(
-		() => undefined,
-		() => undefined,
-	);
-	return operation;
+	return call("models.saveText", { text, stamp });
 }

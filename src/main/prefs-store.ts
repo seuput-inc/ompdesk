@@ -14,6 +14,15 @@ import { join } from "node:path";
 import { app } from "electron";
 import { hub } from "./core/hub";
 
+export interface AgentPowersReport {
+	/** Prefs that were stored off and are on again. */
+	prefs: string[];
+	/** Dotted config.yml keys that were off (or stricter) and were removed. */
+	stock: string[];
+	/** Why config.yml was left alone (unreadable, malformed, not writable); the prefs part still ran. */
+	error?: string;
+}
+
 interface Answers {
 	/** Key → its value, or `undefined` for a key the core holds nothing under. */
 	keys: Map<string, unknown>;
@@ -112,6 +121,14 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 		this.#write(null, "replace", { value });
 	}
 
+	/**
+	 * The one-time "every agent power on" migration (`crates/core/src/prefs/powers.rs`): stored offs of the default-on
+	 * powers dropped and config.yml's off ones removed, once per profile. Its report, or null when it had already run.
+	 */
+	migrateAgentPowers(agentDir: string): AgentPowersReport | null {
+		return this.#write(null, "migratePowers", { agentDir }) as AgentPowersReport | null;
+	}
+
 	#answers(): Answers {
 		let cached = answers.get(this.path);
 		if (!cached) {
@@ -131,9 +148,9 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 	}
 
 	/** A change: committed by the core, then every answer it could reach is dropped. `key` null reaches all. */
-	#write(key: string | null, method: string, params: Record<string, unknown>): void {
+	#write(key: string | null, method: string, params: Record<string, unknown>): unknown {
 		try {
-			this.#call(method, params);
+			return this.#call(method, params);
 		} finally {
 			forget(this.path, key);
 		}

@@ -225,16 +225,11 @@ describe("push settings on a web device", () => {
 });
 
 describe("model quota on a web device", () => {
-	it("counts reservations against the device's daily limit and keeps usage on its record", async () => {
+	it("counts reservations in the core, and the copy and the file follow", async () => {
 		const { record } = seededDevice();
 		writeWebDevices(dir, [record]);
 		const devices = await store();
-		const now = Date.parse("2026-11-12T12:00:00");
-		const quota = new PeerQuota(
-			devices,
-			() => {},
-			() => new Date(now),
-		);
+		const quota = new PeerQuota("web", dir, () => {});
 		quota.setLimits(record.deviceId, { requestsPerDay: 2 });
 		const first = quota.reserve(record.deviceId);
 		expect(first.ok).toBe(true);
@@ -243,13 +238,15 @@ describe("model quota on a web device", () => {
 		if (first.ok) first.refund();
 		expect(quota.reserve(record.deviceId).ok).toBe(true);
 		quota.record(record.deviceId, { tokens: 500 });
+		expect(quota.view(record.deviceId)?.usage).toEqual({ requests: 2, tokens: 500 });
 		await devices.flush();
 		const stored = fileOf().devices[0];
 		expect(stored?.usage).toMatchObject({ requests: 2, tokens: 500 });
 		expect(stored?.limits).toEqual({ requestsPerDay: 2 });
-		expect(devices.get(record.deviceId)?.usage).toMatchObject({ requests: 2, tokens: 500 });
+		await vi.waitFor(() => expect(devices.get(record.deviceId)?.usage).toMatchObject({ requests: 2, tokens: 500 }));
 		quota.setLimits(record.deviceId, {});
 		await devices.flush();
 		expect(fileOf().devices[0]?.limits, "an empty object removes the limits").toBeUndefined();
+		quota.close();
 	});
 });

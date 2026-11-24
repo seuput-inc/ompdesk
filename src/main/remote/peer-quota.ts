@@ -1,128 +1,114 @@
 /**
- * Per-device model-use limits on the host (D65): how many model requests
- * (prompts, steers, follow-ups, compactions…) and how many tokens a paired
- * device may spend on this computer's models per day. Both are optional; no
- * limit is the default. Usage counts per local calendar day and is stored on
- * the peer (`remote-peers.json`), so a restart does not reset it.
+ * Per-device model-use limits on the host (D65): main's client of the core's `quota` hub instance
+ * (`native/ompdesk/crates/core/src/remote/quota.rs`), which keeps how many model requests (prompts, steers,
+ * follow-ups, compactions…) and tokens a paired device may spend on this computer's models per day, counts them per
+ * local calendar day on the device's record (`remote-peers.json` for a paired computer, `web-devices.json` for a
+ * Mobile web device) and writes them after it answers.
  *
- * LocalHostServices `reserve`s a request before it forwards a model command
- * (which commands: quota-commands.ts) or starts a benchmark or a model setup
- * run, and `refund`s it when that fails, so the check and the count never
- * have an await between them: N parallel requests at limit - 1 let exactly one
- * through. Tokens come from each assistant `message_end`'s usage. A turn
- * already running when the limit is crossed finishes; the next request is
- * refused.
+ * LocalHostServices and the web router `reserve` a request before they forward a model command (which commands:
+ * quota-commands.ts) or start a benchmark, a model setup run or a saved schedule, and `refund` it when that work did
+ * not run. `reserve` is a synchronous hub call answered from the core's memory under one lock, so N parallel requests
+ * at limit - 1 let exactly one through. Tokens come from each assistant `message_end`'s usage (`record`, a call main
+ * does not wait for). A turn already running when the limit is crossed finishes; the next request is refused.
  */
 import type { PeerLimits, PeerUsageView } from "../../shared/ipc-types";
-
-/** What the quota reads and writes of a device: a paired desktop peer's record or a web device's. */
-export interface QuotaRecord {
-	deviceId: string;
-	limits?: PeerLimits | undefined;
-	usage?: { day: string; requests: number; tokens: number } | undefined;
-}
-
-export interface QuotaStore {
-	get(deviceId: string): QuotaRecord | undefined;
-	update(deviceId: string, patch: Pick<QuotaRecord, "limits" | "usage">): unknown;
-}
-
-/** `YYYY-MM-DD` of `date` in this computer's time zone. */
-export function localDay(date: Date): string {
-	const month = String(date.getMonth() + 1).padStart(2, "0");
-	const day = String(date.getDate()).padStart(2, "0");
-	return `${date.getFullYear()}-${month}-${day}`;
-}
+import { hub } from "../core/hub";
 
 export type QuotaRefusal = "requests" | "tokens";
 
 /** A request counted ahead of its work: give it back with `refund` when the work did not run. */
 export type QuotaReservation = { ok: true; refund(): void } | { ok: false; refusal: QuotaRefusal };
 
+/** A device's limits and today's usage, as Settings shows them. */
+export interface QuotaView {
+	limits: PeerLimits;
+	usage: PeerUsageView;
+}
+
+type Reserved = { ok: true; day: string } | { ok: false; refusal: QuotaRefusal };
+
 export class PeerQuota {
-	readonly #peers: QuotaStore;
-	readonly #now: () => Date;
+	readonly #store: "peers" | "web";
+	readonly #userData: string;
 	readonly #changed: (deviceId: string) => void;
+	#id: number | null = null;
 
-	constructor(peers: QuotaStore, changed: (deviceId: string) => void, now = () => new Date()) {
-		this.#peers = peers;
+	/** `store`: whose records under `userData` (a paired computer's or a Mobile web device's). */
+	constructor(store: "peers" | "web", userData: string, changed: (deviceId: string) => void) {
+		this.#store = store;
+		this.#userData = userData;
 		this.#changed = changed;
-		this.#now = now;
 	}
 
-	/** Today's usage of a peer (zero once the stored day is over). */
-	usage(peer: Pick<QuotaRecord, "usage">): PeerUsageView {
-		const today = localDay(this.#now());
-		return peer.usage?.day === today
-			? { requests: peer.usage.requests, tokens: peer.usage.tokens }
-			: { requests: 0, tokens: 0 };
-	}
-
-	/** Which limit stops this device's next `requests` model requests, or null. */
-	refusal(deviceId: string, requests = 1): QuotaRefusal | null {
-		const peer = this.#peers.get(deviceId);
-		if (!peer?.limits) return null;
-		const used = this.usage(peer);
-		if (peer.limits.requestsPerDay !== undefined && used.requests + requests > peer.limits.requestsPerDay)
-			return "requests";
-		if (peer.limits.tokensPerDay !== undefined && used.tokens >= peer.limits.tokensPerDay) return "tokens";
-		return null;
-	}
+	/** The core's instance, opened on first use and again after a lost core (which reads the files again). */
+	#instance = (): number => {
+		if (this.#id !== null) return this.#id;
+		const opened = hub().nextId();
+		hub().open(
+			opened,
+			"quota",
+			{ store: this.#store, userData: this.#userData },
+			{
+				item: () => {},
+				ask: question => {
+					throw new Error(`the quota asks nothing (${question})`);
+				},
+				lost: () => {
+					if (this.#id === opened) this.#id = null;
+				},
+			},
+		);
+		this.#id = opened;
+		return opened;
+	};
 
 	/**
-	 * Refuse, or count `requests` now (synchronously, so concurrent callers see each other's
-	 * reservation). A weighted reservation (a benchmark's models × runs) is refused whole when it
+	 * Refuse, or count `requests` now. A weighted reservation (a benchmark's models × runs) is refused whole when it
 	 * would take the day's count past the limit, never let through to cross it.
 	 */
 	reserve(deviceId: string, requests = 1): QuotaReservation {
-		const refusal = this.refusal(deviceId, requests);
-		if (refusal) return { ok: false, refusal };
-		const day = localDay(this.#now());
-		this.record(deviceId, { requests });
+		const reserved = hub().callOnce<Reserved>(this.#instance, "reserve", { deviceId, requests });
+		if (!reserved.ok) return reserved;
+		this.#changed(deviceId);
 		let refunded = false;
 		return {
 			ok: true,
 			refund: () => {
 				if (refunded) return;
 				refunded = true;
-				this.#unrecord(deviceId, day, requests);
+				hub().callOnce(this.#instance, "refund", { deviceId, day: reserved.day, requests });
+				this.#changed(deviceId);
 			},
 		};
 	}
 
-	/** Undo `requests` of `day`'s count; a refund after the day turned over leaves the new day alone. */
-	#unrecord(deviceId: string, day: string, requests: number): void {
-		const peer = this.#peers.get(deviceId);
-		if (peer?.usage?.day !== day) return;
-		this.#peers.update(deviceId, {
-			usage: { day, requests: Math.max(0, peer.usage.requests - requests), tokens: peer.usage.tokens },
-		});
-		this.#changed(deviceId);
-	}
-
+	/** Counts spent tokens (or requests): called from the reply's events, so a core that cannot be reached drops it. */
 	record(deviceId: string, spent: { requests?: number; tokens?: number }): void {
-		const peer = this.#peers.get(deviceId);
-		if (!peer) return;
-		const used = this.usage(peer);
-		this.#peers.update(deviceId, {
-			usage: {
-				day: localDay(this.#now()),
-				requests: used.requests + (spent.requests ?? 0),
-				tokens: used.tokens + (spent.tokens ?? 0),
-			},
-		});
+		let instance: number;
+		try {
+			instance = this.#instance();
+		} catch {
+			return;
+		}
+		void hub()
+			.callLater(instance, "record", { deviceId, ...spent })
+			.catch(() => undefined);
 		this.#changed(deviceId);
 	}
 
-	/** Replace a device's limits; an empty object removes them. */
+	/** Replace a device's limits; an empty object removes them. False for an unknown device. */
 	setLimits(deviceId: string, limits: PeerLimits): boolean {
-		const next: PeerLimits = {
-			...(limits.requestsPerDay !== undefined ? { requestsPerDay: limits.requestsPerDay } : {}),
-			...(limits.tokensPerDay !== undefined ? { tokensPerDay: limits.tokensPerDay } : {}),
-		};
-		const updated = this.#peers.update(deviceId, {
-			limits: next.requestsPerDay === undefined && next.tokensPerDay === undefined ? undefined : next,
-		});
-		return updated !== undefined;
+		return hub().callOnce<boolean>(this.#instance, "setLimits", { deviceId, limits });
+	}
+
+	/** A device's limits and today's usage (zero once the stored day is over); null for an unknown device. */
+	view(deviceId: string): QuotaView | null {
+		return hub().callOnce<QuotaView | null>(this.#instance, "view", { deviceId });
+	}
+
+	/** Lets go of the core's instance. */
+	close(): void {
+		if (this.#id !== null) hub().close(this.#id);
+		this.#id = null;
 	}
 }

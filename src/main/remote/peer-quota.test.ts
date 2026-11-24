@@ -1,154 +1,142 @@
-import { describe, expect, it } from "vitest";
-import { localDay, PeerQuota } from "./peer-quota";
-import type { PeerInfo } from "./peers-store";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { core, stopCore } from "../core/process";
+import { realCoreTimers } from "../core/test-clock";
+import { localDay } from "../omp-log-tail";
+import { seededDevice, writeWebDevices } from "../web/test-web-devices";
+import { PeerQuota } from "./peer-quota";
 
-/** PeerStore's get/update over a map (the real store also copies on every read). */
-function memoryPeers(...peers: PeerInfo[]) {
-	const entries = new Map(peers.map(peer => [peer.deviceId, { ...peer }]));
-	return {
-		entries,
-		get: (deviceId: string) => {
-			const entry = entries.get(deviceId);
-			return entry && { ...entry };
-		},
-		update: (deviceId: string, patch: Partial<Omit<PeerInfo, "deviceId">>) => {
-			const current = entries.get(deviceId);
-			if (!current) return undefined;
-			const next = { ...current, ...patch };
-			entries.set(deviceId, next);
-			return { ...next };
-		},
-	};
+const dirs: string[] = [];
+
+afterEach(async () => {
+	await realCoreTimers();
+});
+
+afterAll(async () => {
+	await stopCore();
+	for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+});
+
+/** The clock both sides read, set to `date` and held there. */
+async function at(date: Date): Promise<void> {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	vi.setSystemTime(date);
+	await core().call("clock.manual", { nowMs: date.getTime() });
 }
 
-const LAPTOP: PeerInfo = {
-	deviceId: "laptop",
-	name: "laptop",
-	staticPub: "pub",
-	nodeId: "nLAPTOP",
-	login: null,
-	pairedAt: 0,
-};
+type Store = "peers" | "web";
 
-describe("PeerQuota", () => {
-	it("has no limit until one is set, and counts per local day", () => {
-		let now = new Date(2026, 9, 15, 23, 59);
-		const changed: string[] = [];
-		const peers = memoryPeers(LAPTOP);
-		const quota = new PeerQuota(
-			peers,
-			id => changed.push(id),
-			() => now,
-		);
+/** A userData whose one device ("laptop") carries `extra` (limits, usage), and the quota over it. */
+function rig(store: Store, extra: Record<string, unknown> = {}) {
+	const userData = mkdtempSync(join(tmpdir(), "peer-quota-"));
+	dirs.push(userData);
+	const changed: string[] = [];
+	if (store === "peers") {
+		const peer = {
+			deviceId: "laptop",
+			name: "laptop",
+			staticPub: "A".repeat(43),
+			nodeId: "nLAPTOP",
+			login: null,
+			pairedAt: 0,
+			...extra,
+		};
+		writeFileSync(join(userData, "remote-peers.json"), JSON.stringify({ v: 1, peers: [peer] }));
+	} else {
+		writeWebDevices(userData, [{ ...seededDevice({ deviceId: "laptop" }).record, ...extra }]);
+	}
+	const quota = new PeerQuota(store, userData, id => changed.push(id));
+	const file = join(userData, store === "peers" ? "remote-peers.json" : "web-devices.json");
+	const onDisk = () => {
+		const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, Array<Record<string, unknown>>>;
+		return (parsed[store === "peers" ? "peers" : "devices"] ?? [])[0];
+	};
+	return { quota, changed, onDisk };
+}
+
+describe.each(["peers", "web"] as const)("the per-device limit over the %s records", store => {
+	it("has no limit until one is set, and counts per local day", async () => {
+		await at(new Date(2026, 9, 15, 23, 59));
+		const { quota, changed } = rig(store);
 
 		quota.record("laptop", { requests: 1, tokens: 900 });
-		expect(quota.refusal("laptop")).toBeNull();
-		expect(peers.entries.get("laptop")?.usage).toEqual({ day: "2026-10-15", requests: 1, tokens: 900 });
+		expect(quota.view("laptop")).toEqual({ limits: {}, usage: { requests: 1, tokens: 900 } });
 		expect(changed).toEqual(["laptop"]);
 
 		expect(quota.setLimits("laptop", { requestsPerDay: 2, tokensPerDay: 1_000 })).toBe(true);
 		quota.record("laptop", { tokens: 100 });
-		expect(quota.refusal("laptop")).toBe("tokens");
+		expect(quota.reserve("laptop")).toEqual({ ok: false, refusal: "tokens" });
 		quota.setLimits("laptop", { requestsPerDay: 2 });
-		expect(quota.refusal("laptop")).toBeNull();
-		quota.record("laptop", { requests: 1 });
-		expect(quota.refusal("laptop")).toBe("requests");
+		expect(quota.view("laptop")?.limits).toEqual({ requestsPerDay: 2 });
+		expect(quota.reserve("laptop").ok).toBe(true);
+		expect(quota.reserve("laptop")).toEqual({ ok: false, refusal: "requests" });
 
 		// The next day starts from zero.
-		now = new Date(2026, 9, 16, 0, 1);
-		const stored = peers.get("laptop");
-		if (!stored) throw new Error("peer gone");
-		expect(quota.usage(stored)).toEqual({ requests: 0, tokens: 0 });
-		expect(quota.refusal("laptop")).toBeNull();
-		quota.record("laptop", { requests: 1 });
-		expect(peers.entries.get("laptop")?.usage).toEqual({ day: "2026-10-16", requests: 1, tokens: 0 });
+		await at(new Date(2026, 9, 16, 0, 1));
+		expect(quota.view("laptop")?.usage).toEqual({ requests: 0, tokens: 0 });
+		expect(quota.reserve("laptop").ok).toBe(true);
+		expect(quota.view("laptop")?.usage).toEqual({ requests: 1, tokens: 0 });
 	});
 
-	it("removes the limits with an empty object and refuses an unknown device", () => {
-		const peers = memoryPeers(LAPTOP);
-		const quota = new PeerQuota(peers, () => {});
+	it("removes the limits with an empty object and knows no unknown device", () => {
+		const { quota } = rig(store);
 		quota.setLimits("laptop", { tokensPerDay: 0 });
-		expect(quota.refusal("laptop")).toBe("tokens");
+		expect(quota.reserve("laptop")).toEqual({ ok: false, refusal: "tokens" });
 		quota.setLimits("laptop", {});
-		expect(peers.entries.get("laptop")?.limits).toBeUndefined();
-		expect(quota.refusal("laptop")).toBeNull();
+		expect(quota.view("laptop")?.limits).toEqual({});
+		expect(quota.reserve("laptop").ok).toBe(true);
 		expect(quota.setLimits("nobody", { requestsPerDay: 1 })).toBe(false);
+		expect(quota.view("nobody")).toBeNull();
+		expect(quota.reserve("nobody").ok).toBe(true);
 	});
 
-	it("reserves a request when it checks, so parallel requests at limit minus one let exactly one through", () => {
-		const peers = memoryPeers({
-			...LAPTOP,
+	it("reserves a request when it checks, so requests at limit minus one let exactly one through", async () => {
+		await at(new Date(2026, 9, 15, 12, 0));
+		const { quota, onDisk } = rig(store, {
 			limits: { requestsPerDay: 3 },
 			usage: { day: "2026-10-15", requests: 2, tokens: 0 },
 		});
-		const quota = new PeerQuota(
-			peers,
-			() => {},
-			() => new Date(2026, 9, 15, 12, 0),
-		);
 
 		const results = Array.from({ length: 5 }, () => quota.reserve("laptop"));
 		expect(results.filter(result => result.ok)).toHaveLength(1);
-		expect(results.filter(result => !result.ok).map(result => !result.ok && result.refusal)).toEqual([
-			"requests",
-			"requests",
-			"requests",
-			"requests",
-		]);
-		expect(peers.entries.get("laptop")?.usage?.requests).toBe(3);
+		expect(results.filter(result => !result.ok)).toEqual(Array(4).fill({ ok: false, refusal: "requests" }));
+		expect(quota.view("laptop")?.usage.requests).toBe(3);
+		await vi.waitFor(() => expect(onDisk()?.usage).toEqual({ day: "2026-10-15", requests: 3, tokens: 0 }));
 	});
 
 	it("gives a reserved request back on refund, once", () => {
-		const now = new Date(2026, 9, 15, 23, 59);
-		const peers = memoryPeers({ ...LAPTOP, limits: { requestsPerDay: 1 } });
-		const quota = new PeerQuota(
-			peers,
-			() => {},
-			() => now,
-		);
+		const { quota } = rig(store, { limits: { requestsPerDay: 1 } });
 
 		const first = quota.reserve("laptop");
 		if (!first.ok) throw new Error("expected a reservation");
 		expect(quota.reserve("laptop")).toEqual({ ok: false, refusal: "requests" });
 		first.refund();
 		first.refund();
-		expect(peers.entries.get("laptop")?.usage?.requests).toBe(0);
+		expect(quota.view("laptop")?.usage.requests).toBe(0);
 		expect(quota.reserve("laptop").ok).toBe(true);
 	});
 
-	it("does not take a request off the new day when a refund lands after midnight", () => {
-		let now = new Date(2026, 9, 15, 23, 59);
-		const peers = memoryPeers({ ...LAPTOP, limits: { requestsPerDay: 5 } });
-		const quota = new PeerQuota(
-			peers,
-			() => {},
-			() => now,
-		);
+	it("does not take a request off the new day when a refund lands after midnight", async () => {
+		await at(new Date(2026, 9, 15, 23, 59));
+		const { quota, onDisk } = rig(store, { limits: { requestsPerDay: 5 } });
 		const reservation = quota.reserve("laptop");
 		if (!reservation.ok) throw new Error("expected a reservation");
-		now = new Date(2026, 9, 16, 0, 1);
+		await at(new Date(2026, 9, 16, 0, 1));
 		quota.record("laptop", { requests: 2 });
 		reservation.refund();
-		expect(peers.entries.get("laptop")?.usage).toEqual({ day: "2026-10-16", requests: 2, tokens: 0 });
-	});
-
-	it("reserves nothing for an unknown device", () => {
-		const quota = new PeerQuota(memoryPeers(), () => {});
-		expect(quota.reserve("nobody").ok).toBe(true);
+		expect(quota.view("laptop")?.usage).toEqual({ requests: 2, tokens: 0 });
+		await vi.waitFor(() => expect(onDisk()?.usage).toEqual({ day: localDay(new Date()), requests: 2, tokens: 0 }));
 	});
 
 	it("counts a weighted reservation, such as a benchmark's model requests, and never lets one cross the limit", () => {
-		const peers = memoryPeers({ ...LAPTOP, limits: { requestsPerDay: 10 } });
-		const quota = new PeerQuota(peers, () => {});
+		const { quota } = rig(store, { limits: { requestsPerDay: 10 } });
 		expect(quota.reserve("laptop", 40)).toEqual({ ok: false, refusal: "requests" });
 		expect(quota.reserve("laptop", 6).ok).toBe(true);
 		expect(quota.reserve("laptop", 6)).toEqual({ ok: false, refusal: "requests" });
 		expect(quota.reserve("laptop", 4).ok).toBe(true);
 		expect(quota.reserve("laptop").ok).toBe(false);
-		expect(peers.entries.get("laptop")?.usage?.requests).toBe(10);
-	});
-
-	it("names days in this computer's time zone", () => {
-		expect(localDay(new Date(2026, 0, 5, 0, 0))).toBe("2026-01-05");
+		expect(quota.view("laptop")?.usage.requests).toBe(10);
 	});
 });

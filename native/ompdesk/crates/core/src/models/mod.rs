@@ -24,6 +24,7 @@
 
 mod boot;
 mod engines;
+mod file;
 mod stream;
 
 use std::collections::{BTreeMap, HashMap};
@@ -50,6 +51,7 @@ const STDERR_KEPT: usize = 64 * 1024;
 const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 pub fn register(registry: &mut Registry) {
+    file::register(registry);
     registry.add("models.bootSelector", boot::handle);
     registry.add("models.probeLocalEngine", engines::handle);
     registry.add("models.setupRun", |call| {

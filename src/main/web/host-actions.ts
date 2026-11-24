@@ -41,7 +41,7 @@ export interface HostActionsDeps {
 	reveal(abs: string): void;
 	openPageExternal(url: string): Promise<void>;
 	/** The agent's models.yml as text, and the checked save (models-config.ts `readModelsText` / `writeModelsText`). */
-	models: { read(): WebModelsText; write(text: string, stamp: string): Promise<string> };
+	models: { read(): Promise<WebModelsText>; write(text: string, stamp: string): Promise<string> };
 	homedir?: () => string;
 }
 
@@ -229,7 +229,7 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		await deps.blobs.release(context.deviceId, typeof given === "string" ? given : given.url).catch(() => false);
 	};
 
-	const modelsRead = (): WebModelsText => deps.models.read();
+	const modelsRead = (): Promise<WebModelsText> => deps.models.read();
 
 	const modelsWrite = async (_context: WebCallContext, args: readonly unknown[]): Promise<WebModelsWriteResult> => {
 		const request = parse(ModelsWriteRequest, args[0]);
