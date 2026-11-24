@@ -140,7 +140,7 @@ Drop(c) ==
 \* @code native/ompdesk/crates/core/src/web/router.rs:1162-1243 dispatch -> web.call
 \* @code src/main/web/ws-router.ts:469-488 call -> #dispatch
 \* @code src/main/web/ws-router.ts:547 registry.invoke
-\* @code src/main/ipc.ts:1780-1784 FILE_EDIT_REPORT
+\* @code src/main/ipc.ts:1784-1788 FILE_EDIT_REPORT
 Deliver(c) ==
     /\ q[c] # <<>>
     /\ q' = [q EXCEPT ![c] = Tail(@)]
@@ -160,7 +160,7 @@ Handle(c) ==
     /\ UNCHANGED <<edit, conn, live, greeted, q, deciding, released, edits, bad, late, refused>>
 
 \* An agent's close reads the tab (its `webEdits` from the store) and decides.
-\* @code native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:204-232 close_tab: snapshot, tab_close_step, keep or start the release
+\* @code native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:211-245 close_tab: snapshot, tab_close_step, keep or start the release
 CloseDecide(t) ==
     /\ t \notin released \cup deciding
     /\ IF CloseStep(t) = "release"
@@ -173,8 +173,8 @@ CloseDecide(t) ==
 
 \* The release lands after awaits (host.release, closeWindowTab's refreshExitPolicy); reports may arrive meanwhile.
 \* Right after the await, with no await before the release, the one rule decides again on what the store says now.
-\* @code src/main/tab-release.ts:38-41 refreshExitPolicy, stillClosable, closeTabTerminals, releaseTab
-\* @code src/main/agent-control/host.ts:1237-1244 release: the re-check reads the store's word then (`edits(...) !== "dirty"`)
+\* @code src/main/tab-release.ts:38-48 refreshExitPolicy, stillClosable, releaseTab
+\* @code src/main/agent-control/host.ts:1244-1251 release: the re-check reads the store's word then (`edits(...) !== "dirty"`)
 CloseRelease(t) ==
     /\ t \in deciding
     /\ deciding' = deciding \ {t}

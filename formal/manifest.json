@@ -149,9 +149,9 @@
 				"native/ompdesk/crates/core/src/web/router.rs#dispatch",
 				"src/main/web/ws-router.ts#WsRouter.connections",
 				"src/main/web/ws-router.ts#WsRouter.call",
-				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:204-247",
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs#close_tab",
 				"src/main/tab-release.ts#closeWindowTab",
-				"src/main/agent-control/host.ts:1234-1241"
+				"src/main/agent-control/host.ts:1244-1251"
 			],
 			"syncCommit": "04331efed7b9b9800f89fc753fb9a26d0bfc04e1",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
@@ -257,8 +257,8 @@
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
 			"covers": [
-				"src/renderer/stores/tabs.ts:722-810",
-				"src/renderer/stores/tabs.ts:1353-1356",
+				"src/renderer/stores/tabs.ts:758-843",
+				"src/renderer/stores/tabs.ts:1394-1397",
 				"native/ompdesk/crates/core/src/pool/listen.rs#feed_status",
 				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
 				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"

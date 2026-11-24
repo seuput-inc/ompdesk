@@ -50,6 +50,7 @@ import {
 } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
 import {
+	type AutoCloseTurn,
 	IPC_EVENTS,
 	type IpcOpenExtensionRequest,
 	type IpcScheduledRetry,
@@ -397,8 +398,7 @@ function poolError(error: unknown): unknown {
 
 export class SidecarPool {
 	readonly #hub: Hub = hub();
-	readonly #id: number;
-	#open = false;
+	#id = 0;
 	readonly #factory: SidecarFactory;
 	/** Tab id → what main holds of it. */
 	readonly #handles = new Map<string, TabHandle>();
@@ -428,7 +428,7 @@ export class SidecarPool {
 	/** The one retry object per `auto_retry_start` the resume rules compare by identity: tab → the object handed out. */
 	readonly #retries = new Map<string, { id: number; retry: { errorMessage: string } }>();
 	/** The one outcome object per finished run the resume rules judge by identity: tab → the object handed out. */
-	readonly #outcomes = new Map<string, { id: number; outcome: IpcTabRunOutcome }>();
+	readonly #outcomes = new Map<string, IpcTabRunOutcome & { id: number }>();
 	readonly #activityObservers = new Set<(activity: TabActivity) => void>();
 	/**
 	 * GUI host tools run against Electron in ipc.ts, which the pool cannot import without a cycle. Set once at startup;
@@ -474,7 +474,6 @@ export class SidecarPool {
 
 	constructor(factory: SidecarFactory) {
 		this.#factory = factory;
-		this.#id = this.#hub.nextId();
 		this.modelWait.onChange(snapshot => {
 			this.#call("modelWaitTogether", { together: [...snapshot.together] });
 		});
@@ -506,11 +505,11 @@ export class SidecarPool {
 	}
 
 	#ensureOpen(): void {
-		if (!this.#open) this.#openInstance();
+		if (!this.#id) this.#openInstance();
 	}
 
 	#openInstance(): void {
-		this.#open = true;
+		this.#id = this.#hub.nextId();
 		try {
 			this.#hub.open(
 				this.#id,
@@ -527,7 +526,7 @@ export class SidecarPool {
 				},
 			);
 		} catch (error) {
-			this.#open = false;
+			this.#id = 0;
 			throw error;
 		}
 		if (this.#handles.size > 0) this.#reseed();
@@ -538,7 +537,9 @@ export class SidecarPool {
 	 * (`#reseed`); what the calls in between find is an empty pool, as a new core is.
 	 */
 	#lost(): void {
-		this.#open = false;
+		this.#id = 0;
+		this.#outcomes.clear();
+		this.#retries.clear();
 		// Promises waiting for the core's word can never get it: they end as a failed call does.
 		for (const [token, waiting] of this.#settling) {
 			this.#settling.delete(token);
@@ -1576,9 +1577,9 @@ export class SidecarPool {
 		return this.#exitingTabs.get(tabId) ?? Promise.resolve();
 	}
 
-	/** Release one tab's sidecar. False when the tab is unknown. */
-	releaseTab(tabId: string): boolean {
-		return this.#call<boolean>("releaseTab", { tab: tabId });
+	/** An automatic close releases only the same idle entry and turn. */
+	releaseTab(tabId: string, expectedTurn?: AutoCloseTurn): boolean {
+		return this.#call<boolean>("releaseTab", { tab: tabId, expectedTurn });
 	}
 
 	/** Release one tab like `releaseTab`; resolves once its omp process has exited. */
@@ -1818,11 +1819,10 @@ export class SidecarPool {
 				// by identity, so a fresh parse of the same outcome must read as the same one.
 				let kept = this.#outcomes.get(fact.tabId);
 				if (kept?.id !== lastRun.id) {
-					const { id, ...outcome } = lastRun;
-					kept = { id, outcome };
+					kept = lastRun;
 					this.#outcomes.set(fact.tabId, kept);
 				}
-				wired.lastRun = kept.outcome;
+				wired.lastRun = kept;
 			}
 			return wired;
 		});

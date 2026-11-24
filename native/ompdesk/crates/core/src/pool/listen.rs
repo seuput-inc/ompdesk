@@ -194,7 +194,7 @@ impl Ctx {
         if !self.with(|pool| pool.has(tab)) {
             return Ok(());
         }
-        self.release_entry(tab).await?;
+        self.release(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         self.send_tab_list(win, Some(&[tab.to_string()]), None)
             .await
@@ -204,7 +204,7 @@ impl Ctx {
         let Some(win) = self.with(|pool| pool.entry(tab).map(|entry| entry.win_id)) else {
             return Ok(());
         };
-        self.release_entry(tab).await?;
+        self.release(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         self.send_tab_list(win, None, None).await
     }
@@ -781,7 +781,7 @@ impl Ctx {
             let Some(win) = self.with(|pool| pool.entry(tab).map(|entry| entry.win_id)) else {
                 continue;
             };
-            self.release_entry(tab).await?;
+            self.release(tab).await?;
             match closed.iter_mut().find(|(candidate, _)| *candidate == win) {
                 Some((_, list)) => list.push(tab.clone()),
                 None => closed.push((win, vec![tab.clone()])),
@@ -850,7 +850,7 @@ impl Ctx {
         } else {
             None
         };
-        self.release_entry(tab).await?;
+        self.release(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         let closed = [tab.to_string()];
         if let Some((owner_tab, owner_win)) = &owner

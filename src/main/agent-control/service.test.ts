@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutopilotStartOptions, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
 	type AgentCloseOutcome,
+	type AgentControlViewEvent,
 	type ClosedChild,
 	AGENT_CONTROL_TOOLS as T,
 	wrapAgentMessage,
 } from "../../shared/agent-control";
+import type { AutoCloseTurn } from "../../shared/ipc-types";
 import type {
 	AgentMessage,
 	ExtensionUIRequest,
@@ -67,7 +69,8 @@ interface ScheduleRow {
 	wakes?: boolean;
 }
 
-interface FakeTab extends ControlTab {
+interface FakeTab extends Omit<ControlTab, "closeTurn"> {
+	entry?: number;
 	/** In the calling session's window (the default list); a tab with this false sits in another window. */
 	here: boolean;
 	last?: string;
@@ -89,7 +92,7 @@ interface FakeTab extends ControlTab {
 class FakeHost implements AgentControlHost {
 	tabsById = new Map<string, FakeTab>();
 	sent: { tabId: string; command: RpcCommand }[] = [];
-	views: { tabId: string; how: string }[] = [];
+	views: Omit<AgentControlViewEvent, "closeId">[] = [];
 	cards: { title: string; message: string }[] = [];
 	cardAnswer = true;
 	approve = false;
@@ -104,6 +107,7 @@ class FakeHost implements AgentControlHost {
 	listeners = new Set<() => void>();
 	beforeFirstPromptError: Error | null = null;
 	seq = 0;
+	#entry = 0;
 	/** The journal files the service keeps (calls, fates, cleanups, the send outbox): absent = none, as a bare host. */
 	files: AgentControlFiles = {};
 	/** The waits the service shortens, in ms: what the TypeScript tests moved fake timers for. */
@@ -119,6 +123,7 @@ class FakeHost implements AgentControlHost {
 	add(tab: Partial<FakeTab>): FakeTab {
 		const full: FakeTab = {
 			tabId: tab.tabId ?? `tab${++this.seq}00`,
+			entry: ++this.#entry,
 			title: "",
 			cwd: "/repo",
 			status: "ready",
@@ -148,6 +153,7 @@ class FakeHost implements AgentControlHost {
 		[...this.tabsById.values()].map(tab => {
 			const {
 				here,
+				entry,
 				last: _last,
 				messages: _messages,
 				turn: _turn,
@@ -159,7 +165,12 @@ class FakeHost implements AgentControlHost {
 				personTurn: _personTurn,
 				...own
 			} = tab;
-			return { ...own, window: here ? "main" : "other" };
+			const turn = own.lastRun ? own.lastRun.id : 0;
+			return {
+				...own,
+				...(entry !== undefined && turn !== undefined ? { closeTurn: { pool: 1, entry, turn } } : {}),
+				window: here ? "main" : "other",
+			};
 		});
 	isStopping = (callerTabId: string) => this.stopping.has(callerTabId);
 	beforeFirstPrompt = async (child: OpenedChild) => {
@@ -181,7 +192,7 @@ class FakeHost implements AgentControlHost {
 			tab.title = task;
 		}
 	};
-	view = (_caller: string, event: { tabId: string; how: string; auto?: true; closeId?: number }) => {
+	view = (_caller: string, event: AgentControlViewEvent) => {
 		const { closeId, ...shown } = event;
 		this.views.push(shown);
 		this.order.push(`view:${event.how}:${event.tabId}`);
@@ -200,7 +211,7 @@ class FakeHost implements AgentControlHost {
 	order: string[] = [];
 	/** Tabs main released itself (`release`): a paired web page's, never asked of its window. */
 	releases: string[] = [];
-	release = async (_caller: string, tabId: string): Promise<boolean> => {
+	release = async (_caller: string, tabId: string, _expectedTurn?: AutoCloseTurn): Promise<boolean> => {
 		this.order.push(`release:${tabId}`);
 		this.releases.push(tabId);
 		return this.tabsById.delete(tabId);
@@ -3043,7 +3054,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 			title: "Fix the parser",
 			sessionPath: "/s/kid.jsonl",
 			autoClosable: true,
-			lastRun: { stopReason: "stop" },
+			lastRun: { id: 1, stopReason: "stop" },
 			last: "Done: parser fixed.\nResult: ok",
 			model: { provider: "openai", id: "gpt-z" },
 			cost: 0.42,
@@ -3074,10 +3085,62 @@ describe("autoClose: opened sessions whose work landed", () => {
 		});
 	});
 
+	it.each(["get_last_assistant_text", "get_session_stats"] as const)(
+		"keeps a child whose next turn gives the identical answer during %s",
+		async read => {
+			const reply = "Done: parser fixed.\nResult: ok";
+			const run = { id: 1, stopReason: "stop", reply };
+			const { host, service, child } = await finishedChild({ patch: { last: reply, lastRun: run } });
+			const omp = host.command;
+			host.command = (tabId, command, timeoutMs) => {
+				if (tabId === child.tabId && command.type === read) child.lastRun = { ...run, id: 2 };
+				return omp(tabId, command, timeoutMs);
+			};
+			await service.autoClose("main0001");
+			expect(child.lastRun?.id).toBe(2);
+			expect(closes(host)).toEqual([]);
+			expect(host.closedRecords).toEqual([]);
+			if (read === "get_last_assistant_text") expect(host.mails.filter(mail => mail.to === "main0001")).toEqual([]);
+
+			await service.autoClose("main0001");
+			expect(closes(host)).toEqual([
+				{ tabId: child.tabId, how: "close", auto: true, expectedTurn: { pool: 1, entry: 2, turn: 2 } },
+			]);
+		},
+	);
+
+	it.each([
+		["a running turn", { busy: true }],
+		["a replacement entry with the same tab id and turn number", { entry: 3 }],
+	] as const)("keeps %s seen during the final cost read", async (_name, patch) => {
+		const { host, service, child } = await finishedChild({ patch: { webEdits: "clean" } });
+		const omp = host.command;
+		host.command = (tabId, command, timeoutMs) => {
+			if (tabId === child.tabId && command.type === "get_session_stats") Object.assign(child, patch);
+			return omp(tabId, command, timeoutMs);
+		};
+		await service.autoClose("main0001");
+		expect(child).toMatchObject(patch);
+		expect(host.releases).toEqual([]);
+		expect(host.closedRecords).toEqual([]);
+	});
+
+	it.each([undefined, "clean"] as const)("never closes without a stamp (webEdits %s)", async webEdits => {
+		const { host, service, child } = await finishedChild({ patch: { entry: undefined, webEdits } });
+		await service.autoClose("main0001");
+		expect(host.tabsById.has(child.tabId)).toBe(true);
+		expect(host.closedRecords).toEqual([]);
+	});
+
 	it("closes a finished session without a branch, records it under its opener and keeps the file", async () => {
 		const { host, service, child } = await finishedChild();
 		await service.autoClose("main0001");
-		expect(host.views).toContainEqual({ tabId: child.tabId, how: "close", auto: true });
+		expect(host.views).toContainEqual({
+			tabId: child.tabId,
+			how: "close",
+			auto: true,
+			expectedTurn: { pool: 1, entry: 2, turn: 1 },
+		});
 		expect(host.closedRecords).toEqual([
 			{
 				path: "/s/kid.jsonl",
@@ -3103,7 +3166,9 @@ describe("autoClose: opened sessions whose work landed", () => {
 			expect(closes(host)).toHaveLength(0);
 			expect(host.deletedStored).toEqual([]);
 			await service.autoClose("main0001");
-			expect(closes(host)).toEqual([{ tabId: child.tabId, how: "close", auto: true }]);
+			expect(closes(host)).toEqual([
+				{ tabId: child.tabId, how: "close", auto: true, expectedTurn: { pool: 1, entry: 2, turn: 1 } },
+			]);
 			expect(host.deletedStored).toEqual([{ path: "/s/kid.jsonl", device: undefined }]);
 			expect(host.closedRecords).toEqual([]);
 			const note = host.mails.filter(mail => mail.to === "main0001").at(-1);
@@ -3187,7 +3252,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 		const plan = { title: "Share over Tailscale", planFilePath: "local://PLAN.md" };
 		const { host, service, child } = await finishedChild({
 			worktree: true,
-			patch: { plan, lastRun: { stopReason: "aborted" }, last: "Plan written." },
+			patch: { plan, lastRun: { id: 1, stopReason: "aborted" }, last: "Plan written." },
 		});
 		const listed = await service.run("main0001", T.list, { status: "waiting" });
 		expect(listed.text).toContain(child.tabId);
@@ -3217,6 +3282,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 		child.busy = true;
 		await service.autoClose("main0001");
 		child.busy = false;
+		child.lastRun = { id: 2, stopReason: "stop" };
 		await service.autoClose("main0001");
 		await service.autoClose("main0001");
 		const toOpener = host.mails.filter(mail => mail.to === "main0001");
@@ -3228,7 +3294,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 
 	it("never asks a child that reported done, failed, or that the person typed into", async () => {
 		for (const patch of [
-			{ last: "Done.", lastRun: { stopReason: "aborted" } },
+			{ last: "Done.", lastRun: { id: 1, stopReason: "aborted" } },
 			{ last: "Done.", userTouched: true },
 		] as Partial<FakeTab>[]) {
 			const { host, service, child } = await finishedChild({ patch });
@@ -3369,6 +3435,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 				child.busy = true;
 				await service.autoClose("main0001");
 				child.busy = false;
+				child.lastRun = { id: 2, stopReason: "stop" };
 				child.last = "Moved to schema v2.\nResult: ok";
 				await service.autoClose("main0001");
 				const done = host.mails.filter(
@@ -3380,8 +3447,8 @@ describe("autoClose: opened sessions whose work landed", () => {
 
 		it("sends none for a failed or stopped turn, or one the person typed into", async () => {
 			for (const patch of [
-				{ lastRun: { stopReason: "error" } },
-				{ lastRun: { stopReason: "aborted" } },
+				{ lastRun: { id: 1, stopReason: "error" } },
+				{ lastRun: { id: 1, stopReason: "aborted" } },
 				{ userTouched: true },
 			] as Partial<FakeTab>[]) {
 				const { host, service } = await finishedChild({ patch });
@@ -3398,6 +3465,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 			child.busy = true;
 			await service.autoClose("main0001");
 			child.busy = false;
+			child.lastRun = { id: 2, stopReason: "stop" };
 			child.last = "Second round.\nResult: ok";
 			await service.autoClose("main0001");
 			const toOpener = host.mails.filter(mail => mail.to === "main0001");
@@ -3408,7 +3476,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 		it("sends one for a child a relaunch restored once a turn of this launch ended, unless it reported that work itself", async () => {
 			// Its cut-off turn went on after the relaunch (or it took a message): the opener's new tab hears it.
 			const resumed = await finishedChild({
-				patch: { restored: true, lastRun: { stopReason: "stop" }, last: "Titles combined.\nResult: ok" },
+				patch: { restored: true, lastRun: { id: 1, stopReason: "stop" }, last: "Titles combined.\nResult: ok" },
 			});
 			await resumed.service.autoClose("main0001");
 			const done = resumed.host.mails.filter(
@@ -3428,7 +3496,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 			const reported = await finishedChild({
 				patch: {
 					restored: true,
-					lastRun: { stopReason: "stop" },
+					lastRun: { id: 1, stopReason: "stop" },
 					messages: [
 						{ role: "user", content: [{ type: "text", text: wrapAgentMessage("fix it", "Boss") }] },
 						{
@@ -3471,7 +3539,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 			host.command = async (tabId, command, timeoutMs) => {
 				if (tabId === child.tabId && command.type === "get_state" && child.lastRun === undefined)
 					Object.assign(child, {
-						lastRun: { stopReason: "stop" },
+						lastRun: { id: 1, stopReason: "stop" },
 						last: "Did C.\nResult: ok",
 						messages: [
 							{ role: "assistant", content: "Did C.\nResult: ok", stopReason: "stop" },
@@ -3670,7 +3738,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 			for (const patch of [
 				{ looked: true },
 				{ userTouched: true },
-				{ lastRun: { stopReason: "error" } },
+				{ lastRun: { id: 1, stopReason: "error" } },
 				{ busy: true },
 				{ asks: [select("Allow tool: bash", ["Approve", "Deny"])] },
 			] satisfies Partial<FakeTab>[]) {
@@ -3689,7 +3757,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 		expect(closes(unmerged.host)).toHaveLength(0);
 
 		for (const stopReason of ["error", "aborted"]) {
-			const failed = await finishedChild({ patch: { lastRun: { stopReason } } });
+			const failed = await finishedChild({ patch: { lastRun: { id: 1, stopReason } } });
 			await failed.service.autoClose("main0001");
 			expect(closes(failed.host)).toHaveLength(0);
 		}
@@ -3716,7 +3784,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 				tabId: "user0002",
 				sessionPath: "/s/u.jsonl",
 				autoClosable: true,
-				lastRun: { stopReason: "stop" },
+				lastRun: { id: 1, stopReason: "stop" },
 				last: "x",
 			},
 		);
@@ -5076,7 +5144,7 @@ describe("closing a tab a paired web page owns", () => {
 			title: "Fix the parser",
 			sessionPath: "/s/kid.jsonl",
 			autoClosable: true,
-			lastRun: { stopReason: "stop" },
+			lastRun: { id: 1, stopReason: "stop" },
 			last,
 			webEdits,
 		});
@@ -5123,7 +5191,7 @@ describe("every close path follows tabCloseStep", () => {
 				title: "Fix the parser",
 				sessionPath: "/s/kid.jsonl",
 				autoClosable: true,
-				lastRun: { stopReason: "stop" },
+				lastRun: { id: 1, stopReason: "stop" },
 				last: "Done: parser fixed.\nResult: ok",
 				...patch,
 			});
@@ -6086,7 +6154,7 @@ describe("an id keeps naming its session after its tab is gone, and says when th
 			title: "Lookup",
 			sessionPath: "/s/lookup.jsonl",
 			autoClosable: true,
-			lastRun: { stopReason: "stop" },
+			lastRun: { id: 1, stopReason: "stop" },
 			last: "Found it.\nResult: ok",
 		});
 		await service.autoClose("boss0001");
@@ -6163,7 +6231,7 @@ describe("a message to a closed child whose folder is gone", () => {
 			sessionPath: "/s/kid.jsonl",
 			...(worktree ? { cwd: "/wt/w" } : {}),
 			autoClosable: true,
-			lastRun: { stopReason: "stop" },
+			lastRun: { id: 1, stopReason: "stop" },
 			last: "Done.\nResult: ok",
 		});
 		if (worktree) host.landings.set("omp/agent/w", { hasWork: true, landed: true, clean: true });

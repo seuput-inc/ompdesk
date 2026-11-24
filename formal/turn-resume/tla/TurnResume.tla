@@ -178,7 +178,7 @@ Launch(t) ==
 \* ===== pool events: each is followed by the `sync()` the pool triggers =====
 
 \* @code src/main/ipc.ts:918-921 the person's prompt: personsPrompt -> SidecarPool.notePrompted (host-services.ts:2792-2798 a device's, a view's through its window tab), before the command is sent
-\* @code native/ompdesk/crates/core/src/pool/run.rs:249-253 Tracking::track[agent_start]: agent_start: a new run clears lastRun, stopped, retry
+\* @code native/ompdesk/crates/core/src/pool/run.rs:257-262 Tracking::track[agent_start]: agent_start: a new run clears lastRun, stopped, retry
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts: judge every fact
 UserPrompt(t) ==
     /\ Idle /\ run[t] = "idle" /\ ready /\ nStarts < MaxStarts       \* a prompt reaches an omp that is up (also while a continuation is on its way: A11 closed)
@@ -193,7 +193,7 @@ UserPrompt(t) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<kindOf, sg, awaiting, ready, nO, retryIn, store, resV, monV, rp, bad1, bad2, bad2h, bad6, sentFor, calledOffH, launched, mvV, runSg, bad7, bad8>>
 
-\* @code native/ompdesk/crates/core/src/pool/run.rs:261-267 Tracking::track[agent_end]: agent_end sets lastRun to the run's outcome (the run may still be settling)
+\* @code native/ompdesk/crates/core/src/pool/run.rs:270-276 Tracking::track[agent_end]: agent_end sets lastRun to the run's outcome (the run may still be settling)
 \* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
 EndRun(t, k) ==
     /\ Idle /\ run[t] = "running" /\ last[t] = 0

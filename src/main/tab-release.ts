@@ -2,12 +2,13 @@
  * The steps of closing a tab, shared by the window's own `tabs.close` and by main closing a paired web page's tab
  * on an agent's behalf (`AgentControlHostDeps.releaseTab`), so the two never drift.
  */
+import type { AutoCloseTurn } from "../shared/ipc-types";
 import type { SidecarPool } from "./sidecar-pool";
 import type { ClientWindow } from "./web/client-window";
 import { readLiveLifecycleSettings, type WorktreeLifecycle } from "./worktree-lifecycle";
 
 export interface TabReleaseDeps {
-	sidecarPool: Pick<SidecarPool, "sidecarForTab" | "detachViewer" | "isHostedView" | "releaseTab">;
+	sidecarPool: Pick<SidecarPool, "sidecarForTab" | "windowOfTab" | "detachViewer" | "isHostedView" | "releaseTab">;
 	/** A tab owning a `worktree.onStart` worktree re-reads `worktree.onExit` from its live session before it goes. */
 	worktreeLifecycle: Pick<WorktreeLifecycle, "refreshExitPolicy">;
 	closeTabTerminals(windowId: number, tabId: string): void;
@@ -27,16 +28,22 @@ export async function closeWindowTab(
 	tabId: string,
 	senderId: number,
 	stillClosable: () => boolean = () => true,
+	expectedTurn?: AutoCloseTurn,
 ): Promise<boolean> {
 	const sidecar = deps.sidecarPool.sidecarForTab(win, tabId);
 	if (!sidecar) return false;
-	if (deps.sidecarPool.detachViewer(win, tabId)) return true;
-	if (deps.sidecarPool.isHostedView(tabId)) {
-		deps.closeTabTerminals(senderId, tabId);
-		return deps.sidecarPool.releaseTab(tabId);
+	if (expectedTurn !== undefined) {
+		if (deps.sidecarPool.windowOfTab(tabId)?.webContents.id !== win.webContents.id) return false;
+	} else if (deps.sidecarPool.detachViewer(win, tabId)) return true;
+	if (!deps.sidecarPool.isHostedView(tabId)) {
+		await deps.worktreeLifecycle.refreshExitPolicy(tabId, () => readLiveLifecycleSettings(sidecar));
 	}
-	await deps.worktreeLifecycle.refreshExitPolicy(tabId, () => readLiveLifecycleSettings(sidecar));
 	if (!stillClosable()) return false;
+	if (expectedTurn !== undefined) {
+		if (!deps.sidecarPool.releaseTab(tabId, expectedTurn)) return false;
+		deps.closeTabTerminals(senderId, tabId);
+		return true;
+	}
 	deps.closeTabTerminals(senderId, tabId);
 	return deps.sidecarPool.releaseTab(tabId);
 }

@@ -27,6 +27,7 @@ use crate::agentctl::journal::Clock;
 use crate::agentctl::journal::attachments::{AttachedSet, AttachmentStore, LandedCache};
 use crate::agentctl::journal::mail_outbox::{MailAnswer, MailOutbox, OutboxMail};
 use crate::agentctl::rules::mail::MailDelivery;
+use crate::pool::AutoCloseTurn;
 use crate::ports::Port;
 
 /// Who opened a tab (`host.parentOf`): the opener's tab, and the tag the open carried (`autopilot-child`).
@@ -632,13 +633,18 @@ impl Host {
             .map_err(|error| Fail::other(format!("spawn: main answered {error}")))
     }
 
-    /// `release(callerTabId, tabId)`: release a tab a paired web page owns in main.
-    pub async fn release(&self, caller_tab_id: &str, tab_id: &str) -> R<bool> {
-        self.ask(
-            "release",
-            json!({ "callerTabId": caller_tab_id, "tabId": tab_id }),
-        )
-        .await
+    /// Release a tab a paired web page owns in main.
+    pub(crate) async fn release(
+        &self,
+        caller_tab_id: &str,
+        tab_id: &str,
+        expected_turn: Option<AutoCloseTurn>,
+    ) -> R<bool> {
+        let mut args = json!({ "callerTabId": caller_tab_id, "tabId": tab_id });
+        if let Some(turn) = expected_turn {
+            args["expectedTurn"] = json!(turn);
+        }
+        self.ask("release", args).await
     }
 
     /// `exited(tabId)`: resolves once the omp of a tab the window closed has exited.
@@ -947,10 +953,20 @@ impl Host {
     /// `view(callerTabId, event)` with `how: "close"`: the window holding the tab closes it as the person's close
     /// would and answers `close_id` with what it did (main's `answerClose`, read back as `ControlTab.close_answer`).
     /// `auto`: a close the app decided on itself, which the window refuses for a tab the person is at.
-    pub fn close_view(&self, caller_tab_id: &str, tab_id: &str, auto: bool, close_id: u64) {
+    pub(crate) fn close_view(
+        &self,
+        caller_tab_id: &str,
+        tab_id: &str,
+        auto: bool,
+        close_id: u64,
+        expected_turn: Option<AutoCloseTurn>,
+    ) {
         let mut event = json!({ "tabId": tab_id, "how": "close", "closeId": close_id });
         if auto {
             event["auto"] = json!(true);
+        }
+        if let Some(turn) = expected_turn {
+            event["expectedTurn"] = json!(turn);
         }
         self.tell_view(caller_tab_id, event);
     }
