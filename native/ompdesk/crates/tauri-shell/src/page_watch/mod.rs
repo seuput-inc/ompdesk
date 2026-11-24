@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tauri::{Manager, WebviewWindow};
+use tauri::Manager;
 
 /// How often the watch looks.
 const TURN: Duration = Duration::from_secs(1);
@@ -177,7 +177,7 @@ pub fn content_process_ended(webview: &tauri::Webview) {
 
 /// WebView2 reports a renderer that ended, or that it found unresponsive, per webview.
 #[cfg(windows)]
-pub fn attach(window: &WebviewWindow, wc: u64) {
+pub fn attach(window: &tauri::WebviewWindow, wc: u64) {
     if let Err(error) = native::watch_failures(window, wc) {
         crate::log::log(
             "page.watch_failed",
