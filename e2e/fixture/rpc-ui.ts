@@ -132,7 +132,9 @@ export function runRpcUi(): void {
 		timestamp: string;
 		[key: string]: unknown;
 	}
-	const sessionId = `fixture-${process.pid}`;
+	// Unique per process, not only its pid: Windows reuses pids, and a record file spans every launch of a spec, so two
+	// omps of one spec could otherwise share an id (`fixtureSessionPid` reads the pid back).
+	const sessionId = `fixture-${process.pid}-${randomUUID().slice(0, 8)}`;
 	/** `OMP_GUI_PROMPT_ORIGIN`: the paired device a host runs this omp for (A85). */
 	const promptOrigin = parsePromptOriginEnv(process.env.OMP_GUI_PROMPT_ORIGIN);
 	const entries: Entry[] = [];
