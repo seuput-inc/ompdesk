@@ -42,6 +42,12 @@ export interface ToolsOpts {
 	mirror?: string | null;
 	/** `new Intl.Collator().resolvedOptions().locale`: extension rows sort by name as `localeCompare` sorts here. */
 	locale?: string;
+	/**
+	 * `process.cwd()` and, on Windows, the `=X:` per-drive directories of `process.env`: a relative PATH entry or
+	 * launcher resolves against main's directories, as `findOnPath`/`execFile`/`readInstall` did here, not the core's.
+	 */
+	cwd?: string;
+	driveCwds?: Record<string, string>;
 }
 
 export interface ToolsState {

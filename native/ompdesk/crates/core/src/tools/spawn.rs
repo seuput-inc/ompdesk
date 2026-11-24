@@ -10,7 +10,7 @@
 //! an owner is the `CliOwner` JSON `ext.binaryFacts` answers (`{method, …}`).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -105,23 +105,102 @@ fn joined(dir: &str, name: &str) -> String {
     Path::new(dir).join(name).to_string_lossy().into_owned()
 }
 
+/// Main's working directory and, on Windows, its per-drive ones (`=X:` of its environment): what main's `findOnPath`,
+/// `execFile` and `readInstall` resolved a relative launcher against. The core's own working directory is the shell's,
+/// so a relative PATH entry is resolved here, never by the OS against the core's.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Base {
+    pub cwd: String,
+    /// `=D:` → `D:\work`, as main's environment holds them.
+    pub drives: BTreeMap<String, String>,
+}
+
+static BASE: std::sync::RwLock<Option<Base>> = std::sync::RwLock::new(None);
+
+/// Main's base, from the instance's opts; a launch before any (a test) resolves against the core's own directory.
+pub(crate) fn set_base(base: Base) {
+    *BASE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(base);
+}
+
+fn base() -> Base {
+    BASE.read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+        .unwrap_or_else(|| Base {
+            cwd: std::env::current_dir()
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            drives: BTreeMap::new(),
+        })
+}
+
+/// The drive letter of a Windows path (`d:` → `D:`), if it starts with one.
+fn drive_of(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        .then(|| path[..2].to_ascii_uppercase())
+}
+
+/// Where `path.resolve("D:")` lands in main: its working directory when that is on D:, else its `=D:`, else `D:\`.
+pub(crate) fn drive_base(drive: &str, base: &Base) -> String {
+    let drive = drive.to_ascii_uppercase();
+    if drive_of(&base.cwd).as_deref() == Some(drive.as_str()) {
+        return base.cwd.clone();
+    }
+    base.drives
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(&format!("={drive}")))
+        .map_or_else(|| format!("{drive}\\"), |(_, dir)| dir.clone())
+}
+
+/// `path.resolve(dir)` in main: `dir` as it is when it names its whole place, else against main's directories.
+pub(crate) fn resolve_against(dir: &str, base: &Base, windows: bool) -> String {
+    if !windows {
+        return if dir.starts_with('/') {
+            dir.to_owned()
+        } else {
+            joined(&base.cwd, dir)
+        };
+    }
+    let bytes = dir.as_bytes();
+    let separator = |at: usize| matches!(bytes.get(at), Some(b'\\' | b'/'));
+    match drive_of(dir) {
+        Some(_) if separator(2) => dir.to_owned(),
+        Some(drive) => joined(&drive_base(&drive, base), &dir[2..]),
+        // `\\server\share` and `\x`: the first is whole, the second is on the working directory's drive.
+        None if separator(0) && separator(1) => dir.to_owned(),
+        None if separator(0) => format!("{}{dir}", drive_of(&base.cwd).unwrap_or_default()),
+        None => joined(&base.cwd, dir),
+    }
+}
+
 /// The first `names` entry found along `path_env` (each directory tries every name in order), then the first `extra`
-/// candidate that exists.
+/// candidate that exists. A relative directory is main's (`Base`), so what is found is the file main would find.
 pub(crate) fn find_on_path(
     names: &[String],
     path_env: &str,
     platform: &str,
     extra: &[String],
 ) -> Option<String> {
-    let separator = if win32(platform) || cfg!(windows) {
-        ';'
-    } else {
-        ':'
-    };
+    find_on_path_from(names, path_env, platform, extra, &base())
+}
+
+fn find_on_path_from(
+    names: &[String],
+    path_env: &str,
+    platform: &str,
+    extra: &[String],
+    base: &Base,
+) -> Option<String> {
+    let windows = win32(platform) || cfg!(windows);
+    let separator = if windows { ';' } else { ':' };
     path_env
         .split(separator)
         .filter(|dir| !dir.is_empty())
-        .flat_map(|dir| names.iter().map(move |name| joined(dir, name)))
+        .map(|dir| resolve_against(dir, base, windows))
+        .flat_map(|dir| names.iter().map(move |name| joined(&dir, name)))
         .chain(extra.iter().cloned())
         .find(|file| is_executable_file(Path::new(file)))
 }
@@ -250,10 +329,9 @@ pub(crate) async fn read_install(
     ctx: &InstallContext,
     source: Value,
 ) -> Result<Value, Fault> {
-    let cwd = std::env::current_dir()
-        .map(|dir| dir.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let file = std::path::absolute(path)
+    // `process.cwd()`, `resolve(path)` and `resolve("D:")` were main's: its directories, never the core's (`Base`).
+    let base = base();
+    let file = std::path::absolute(resolve_against(path, &base, cfg!(windows)))
         .map(|file| file.to_string_lossy().into_owned())
         .unwrap_or_else(|_| path.to_owned());
     let mut drives = serde_json::Map::new();
@@ -272,12 +350,11 @@ pub(crate) async fn read_install(
                 && bytes[1] == b':'
                 && !matches!(bytes.get(2), Some(b'\\' | b'/'));
             if drive_relative && !drives.contains_key(&input[..2]) {
-                let base =
-                    std::path::absolute(&input[..2]).unwrap_or_else(|_| PathBuf::from(&input[..2]));
-                drives.insert(input[..2].to_owned(), json!(base.to_string_lossy()));
+                drives.insert(input[..2].to_owned(), json!(drive_base(&input[..2], &base)));
             }
         }
     }
+    let cwd = base.cwd;
     let params = json!({
         "path": path,
         "file": file,

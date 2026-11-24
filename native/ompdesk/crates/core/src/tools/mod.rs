@@ -184,6 +184,12 @@ pub struct Opts {
     pub mirror: Option<String>,
     #[serde(default)]
     pub locale: String,
+    /// Main's `process.cwd()` and its per-drive directories (`=X:` of its environment, Windows): what a relative
+    /// launcher or PATH entry is resolved against, as main resolved it ([`spawn::Base`]).
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub drive_cwds: BTreeMap<String, String>,
 }
 
 fn system_root() -> String {
@@ -494,6 +500,12 @@ thread_local! {
 
 fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
     let opts: Opts = params(opts)?;
+    if let Some(cwd) = &opts.cwd {
+        spawn::set_base(spawn::Base {
+            cwd: cwd.clone(),
+            drives: opts.drive_cwds.clone(),
+        });
+    }
     let tools = Tools::new(
         opts,
         Rc::new(out),

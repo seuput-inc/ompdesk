@@ -492,3 +492,68 @@ async fn a_check_that_cannot_start_or_fails_answers_its_own_reason() {
         "{reason}"
     );
 }
+
+#[test]
+fn a_relative_path_entry_resolves_against_main_s_directories_not_the_core_s() {
+    // The core's working directory is the shell's: main's (`Base`) is what `findOnPath` + `execFile` resolved against.
+    let main = fake_bin(&["tools/codex.cmd"]);
+    let tools = main.path().join("tools");
+    let base = Base {
+        cwd: s(main.path()),
+        drives: BTreeMap::new(),
+    };
+    assert_eq!(
+        find_on_path_from(
+            &launcher_names("codex", "win32"),
+            "tools",
+            "win32",
+            &[],
+            &base
+        ),
+        Some(s(tools.join("codex.cmd")))
+    );
+    // The same relative entry from the core's own directory finds nothing there.
+    assert_ne!(std::env::current_dir().unwrap(), main.path());
+    assert_eq!(
+        find_on_path_from(
+            &launcher_names("codex", "win32"),
+            "tools",
+            "win32",
+            &[],
+            &Base::default()
+        ),
+        None
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn path_resolve_in_main_on_windows() {
+    let base = Base {
+        cwd: "C:\\work".into(),
+        drives: BTreeMap::from([("=D:".into(), "D:\\proj".into())]),
+    };
+    for (dir, want) in [
+        ("C:\\bin", "C:\\bin"),
+        ("bin", "C:\\work\\bin"),
+        ("c:bin", "C:\\work\\bin"),
+        ("D:bin", "D:\\proj\\bin"),
+        ("E:bin", "E:\\bin"),
+        ("\\bin", "C:\\bin"),
+        ("\\\\srv\\share\\bin", "\\\\srv\\share\\bin"),
+    ] {
+        assert_eq!(resolve_against(dir, &base, true), want, "{dir}");
+    }
+    assert_eq!(drive_base("d:", &base), "D:\\proj");
+}
+
+#[cfg(unix)]
+#[test]
+fn path_resolve_in_main_on_posix() {
+    let base = Base {
+        cwd: "/home/a".into(),
+        drives: BTreeMap::new(),
+    };
+    assert_eq!(resolve_against("/usr/bin", &base, false), "/usr/bin");
+    assert_eq!(resolve_against("bin", &base, false), "/home/a/bin");
+}
