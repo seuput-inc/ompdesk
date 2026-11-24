@@ -202,6 +202,23 @@ export interface PendingPlan {
 	generation: number;
 }
 
+/** One tab of {@link SidecarPool.controlTabs}: its `tabsForWindow` row and the per-tab reads the control tools' snapshot makes. */
+export interface ControlTabInfo extends IpcTabInfo {
+	facts: TabFacts | null;
+	plan: PendingPlan | null;
+	formerIds: readonly string[];
+	hasDraft: boolean;
+	/** The window that owns the tab (`windowOfTab`): the row's own window for a tab a viewer's window lists. */
+	owner: ClientWindow | null;
+}
+
+/** One window of {@link SidecarPool.controlTabs}: its tabs and the asks they wait on (`openRequests`). */
+export interface ControlWindowTabs {
+	win: ClientWindow;
+	tabs: ControlTabInfo[];
+	asks: IpcOpenExtensionRequest[];
+}
+
 /** How long "Stop and delete" waits for a stopped turn to end before it gives up (`stopSession`). */
 export const STOP_SESSION_WAIT_MS = 60_000;
 
@@ -1483,6 +1500,34 @@ export class SidecarPool {
 			const win = this.#windows.get(id);
 			return win ? [win] : [];
 		});
+	}
+
+	/**
+	 * `tabWindows`, then each window's `tabsForWindow` and `openRequests`, with each tab's `tabFacts`, `pendingPlan`,
+	 * `formerTabIds`, `hasDraft` and `windowOfTab`: the control tools' snapshot in one wait of main's thread, which
+	 * rebuilds it on every answer and push to the core, instead of several per tab.
+	 */
+	controlTabs(): ControlWindowTabs[] {
+		type Row = IpcTabInfo & {
+			control: Omit<ControlTabInfo, keyof IpcTabInfo | "owner"> & { owner: number | null };
+		};
+		return this.#call<{ win: number; tabs: Row[]; asks: IpcOpenExtensionRequest[] }[]>("controlTabs").flatMap(
+			({ win: id, tabs, asks }) => {
+				const win = this.#windows.get(id);
+				if (!win) return [];
+				return [
+					{
+						win,
+						asks,
+						tabs: tabs.map(({ control: { owner, ...control }, ...info }) => ({
+							...info,
+							...control,
+							owner: owner === null ? null : (this.#windows.get(owner) ?? null),
+						})),
+					},
+				];
+			},
+		);
 	}
 
 	/**

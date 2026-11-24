@@ -4,6 +4,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { ExtensionUIRequest, ExtensionUIResponse, RpcResponseSuccess } from "../../../shared/rpc-types";
 import { I18nProvider, translate } from "../../lib/i18n";
+import { preloadMarkdownPipeline } from "../../lib/markdown";
 import { useAutopilotStore } from "../../stores/autopilot";
 import { awaitedInput, useExtensionUiStore } from "../../stores/extension-ui";
 import { type SessionRuntime, SessionRuntimeProvider } from "../../stores/session-runtime-context";
@@ -362,6 +363,33 @@ describe("ExtensionDialog ask", () => {
 		expect(pictures).toEqual(["A: round", "B: square"]);
 		expect(readImage).toHaveBeenCalledWith("/shots/a.png", undefined);
 		expect(respondExtensionUi).not.toHaveBeenCalled();
+	});
+
+	it("shows parenthesized prose in an ask card's paragraph as written, not as math", async () => {
+		await preloadMarkdownPipeline();
+		await mount();
+		await push({
+			type: "extension_ui_request",
+			id: "ask-parens",
+			method: "ask",
+			questions: [
+				{
+					id: "next",
+					question: "What next?",
+					options: [{ label: "Continue" }, { label: "Stop" }],
+					context: String.raw`Queue \(HWP 편집 보류, SeuOffice 0.125.4 검증 포함\) after \(rust\-gate\-retry 11\-22 종료\); area \(\pi r^2\).`,
+				},
+			],
+		});
+		await flush();
+
+		const card = document.querySelector("[data-ask-context]");
+		expect(card?.textContent).toContain(
+			"Queue (HWP 편집 보류, SeuOffice 0.125.4 검증 포함) after (rust-gate-retry 11-22 종료);",
+		);
+		expect(Array.from(document.querySelectorAll("[data-ask-context] annotation"), node => node.textContent)).toEqual([
+			String.raw`\pi r^2`,
+		]);
 	});
 
 	it("reports the chat redirect as a cancel (stock ask has no chat answer)", async () => {

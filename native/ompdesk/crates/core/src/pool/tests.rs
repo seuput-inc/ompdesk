@@ -696,3 +696,67 @@ async fn a_shell_line_typed_in_the_start_tab_makes_it_a_tab_of_its_own() {
     assert!(tabs[0].get("unstarted").is_none());
     assert_eq!(tabs[0]["placeholder"], false);
 }
+
+#[tokio::test]
+async fn the_control_snapshot_reads_every_window_s_tabs_and_their_facts_in_one_call() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("a", 1, None, false).await;
+    main.acquire("b", 1, None, false).await;
+    main.acquire("c", 2, None, false).await;
+    main.call("attachViewer", json!({"win": 1, "tab": "c"}))
+        .await;
+    main.call(
+        "noteDraft",
+        json!({"tab": "b", "win": 1, "command": "set_next_prompt_draft", "empty": false}),
+    )
+    .await;
+    let windows = main.call("controlTabs", json!({})).await;
+    let windows = windows.as_array().unwrap();
+    assert_eq!(windows.len(), 2);
+    for window in windows {
+        let win = window["win"].as_i64().unwrap();
+        let mut rows = window["tabs"].as_array().unwrap().clone();
+        for row in &mut rows {
+            let control = row.as_object_mut().unwrap().remove("control").unwrap();
+            let tab = row["tabId"].clone();
+            assert_eq!(
+                control["facts"],
+                main.call("tabFacts", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["plan"],
+                main.call("pendingPlan", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["formerIds"],
+                main.call("formerTabIds", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["hasDraft"],
+                main.call("hasDraft", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["owner"],
+                main.call("windowOfTab", json!({"tab": tab})).await
+            );
+        }
+        assert_eq!(
+            Value::Array(rows),
+            main.call("tabsForWindow", json!({"win": win})).await
+        );
+        assert_eq!(
+            window["asks"],
+            main.call("openRequests", json!({"win": win})).await
+        );
+    }
+    // The viewer's window lists the tab it views; its owner is the other window.
+    let viewed = &windows[0]["tabs"][2];
+    assert_eq!(
+        (
+            viewed["tabId"].as_str(),
+            viewed["control"]["owner"].as_i64()
+        ),
+        (Some("c"), Some(2))
+    );
+    assert_eq!(windows[0]["tabs"][1]["control"]["hasDraft"], true);
+}

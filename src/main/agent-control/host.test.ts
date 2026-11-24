@@ -131,42 +131,50 @@ function setup(
 	const spawned: IpcSpawnTabPayload[] = [];
 	const activity: ((event: { type: string; tabId: string }) => void)[] = [];
 	const sidecars = new Map<string, { cwd: string; device?: string }>([["main0001", { cwd: "/repo" }]]);
+	const windowOfTab = (tabId: string) =>
+		otherTabs.some(tab => tab.tabId === tabId)
+			? win2
+			: webTabs.some(tab => tab.tabId === tabId)
+				? webWin
+				: tabs.some(tab => tab.tabId === tabId)
+					? win
+					: null;
+	const tabsForWindow = (target: ClientWindow) => (target === win2 ? otherTabs : target === webWin ? webTabs : tabs);
 	const deps: AgentControlHostDeps = {
 		pool: {
-			tabsForWindow: target => (target === win2 ? otherTabs : target === webWin ? webTabs : tabs),
-			tabFacts: tabId => ({ title: "", busy: tabId === "busy0002", awaitingConnection: false, retrying: false }),
-			pendingPlan: () => null,
+			tabsForWindow,
+			controlTabs: () =>
+				[win, ...(otherTabs.length ? [win2] : []), ...(webTabs.length ? [webWin] : [])].map(target => ({
+					win: target,
+					asks: options.requests ?? [],
+					tabs: tabsForWindow(target).map(tab => ({
+						...tab,
+						facts: {
+							title: "",
+							busy: tab.tabId === "busy0002",
+							awaitingConnection: false,
+							retrying: false,
+						},
+						plan: null,
+						formerIds: [],
+						hasDraft: false,
+						owner: windowOfTab(tab.tabId),
+					})),
+				})),
 			observeTabs: observer => {
 				activity.push(observer as never);
 				return () => undefined;
 			},
-			openRequests: () => options.requests ?? [],
 			routeSideChannel: vi.fn(async () => true),
 			sidecarOf: tabId => (sidecars.get(tabId) ?? { cwd: "/repo" }) as never,
 			startTab: vi.fn(() => null),
 			setTabTask: vi.fn(),
-			formerTabIds: () => [],
 			setTabOpener: openers,
-			hasDraft: () => false,
-			windowOfTab: tabId =>
-				otherTabs.some(tab => tab.tabId === tabId)
-					? win2
-					: webTabs.some(tab => tab.tabId === tabId)
-						? webWin
-						: tabs.some(tab => tab.tabId === tabId)
-							? win
-							: null,
+			windowOfTab,
 			windowsShowingTab: tabId => {
-				const owner = otherTabs.some(tab => tab.tabId === tabId)
-					? win2
-					: webTabs.some(tab => tab.tabId === tabId)
-						? webWin
-						: tabs.some(tab => tab.tabId === tabId)
-							? win
-							: null;
+				const owner = windowOfTab(tabId);
 				return owner ? [owner, ...(options.viewers?.[tabId] ?? [])] : [];
 			},
-			tabWindows: () => [win, ...(otherTabs.length ? [win2] : []), ...(webTabs.length ? [webWin] : [])],
 			sessionOwner: sessionPath => {
 				const tabId = options.owners?.[sessionPath];
 				return tabId ? { tabId, winId: win.webContents.id } : null;
@@ -2138,5 +2146,42 @@ describe("a session's own wake-up", () => {
 		await expect(rig.runtime.wakeSession(wakeable(file), "run-7")).rejects.toThrow("The window is closing");
 		const kept = await fs.readFile(outbox, "utf8").catch(() => "");
 		expect(kept).not.toContain("wake-run-7");
+	});
+});
+
+describe("the snapshot of main the core reads", () => {
+	// Main rebuilds it on every answer and push to the core, and each pool read waits on main's thread for the core:
+	// with a read per tab, a busy Autopilot run's host held the window's answers for 14 s (e2e 45288545767).
+	it("reads the pool once, however many tabs are open", () => {
+		const reads = (count: number) => {
+			const { runtime, deps, win } = setup({
+				tabs: Array.from({ length: count }, (_, at) => ({ tabId: `tab${String(at).padStart(5, "0")}` })),
+			});
+			const calls: string[] = [];
+			// Every read the pool offers, earlier per-tab ones included, counted as the hub waits it costs.
+			const pool: Record<string, unknown> = {
+				...deps.pool,
+				tabWindows: () => [win],
+				openRequests: () => [],
+				tabFacts: () => null,
+				pendingPlan: () => null,
+				formerTabIds: () => [],
+				hasDraft: () => false,
+			};
+			deps.pool = new Proxy(pool, {
+				get: (target, key) => {
+					const value = target[key as string];
+					if (typeof value !== "function" || key === "sidecarOf") return value;
+					return (...args: unknown[]) => {
+						calls.push(String(key));
+						return value(...args);
+					};
+				},
+			}) as typeof deps.pool;
+			runtime.control.changed();
+			return calls;
+		};
+		expect(reads(1)).toEqual(["controlTabs"]);
+		expect(reads(6)).toEqual(["controlTabs"]);
 	});
 });
