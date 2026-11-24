@@ -100,6 +100,7 @@ fn kinds() -> &'static [Kind] {
         desktop_slot::KIND,
         crate::pool::KIND,
         crate::pool::layout::KIND,
+        crate::prefs::KIND,
         crate::resume::RESUME_KIND,
         crate::resume::CONNECTIVITY_KIND,
     ]

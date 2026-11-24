@@ -77,12 +77,12 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2434-2438",
+				"src/main/index.ts:2433-2437",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "07343953bbb7ae6164f4d56b1b1e691151f3b390",
+			"syncCommit": "004e8b261b11f1bdfce8a60618fdc6803ebd376f",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "4f832ba15488cd10c5d30ba67340558eee1353f7",
+			"syncCommit": "008cd94c4cb92153b19b545f740df331a60d8d57",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -217,7 +217,7 @@
 				"native/ompdesk/crates/core/src/disk/saved_records.rs#change",
 				"native/ompdesk/crates/core/src/git/read.rs#blocking"
 			],
-			"syncCommit": "bf3b7a5ea33a478252ae6d5af20cc00b1d31dbeb",
+			"syncCommit": "004e8b261b11f1bdfce8a60618fdc6803ebd376f",
 			"verifySkill": ".omp/skills/repo-lock-core-verify/SKILL.md"
 		},
 		{

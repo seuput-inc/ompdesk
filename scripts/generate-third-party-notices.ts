@@ -309,6 +309,15 @@ function vendoredSections(): string {
 			read("LICENSES/MIT-ponytail.txt"),
 		].join("\n"),
 		[
+			"dot-prop 10.2.0 (https://github.com/sindresorhus/dot-prop) and conf 16.0.0",
+			"(https://github.com/sindresorhus/conf). dot-prop's parsePath and conf's own-property get, set and",
+			"delete of a dotted key, which electron-store gave the preference files, are ported to Rust in",
+			"native/ompdesk/crates/core/src/prefs/path.rs. Licensed under the MIT License (full text below and",
+			"in LICENSES/MIT-sindresorhus.txt).",
+			"",
+			read("LICENSES/MIT-sindresorhus.txt"),
+		].join("\n"),
+		[
 			"AI provider brand symbols of @lobehub/icons (@lobehub/icons-static-svg 1.95.1;",
 			"Chutes: 1.102.0; https://github.com/lobehub/lobe-icons), Copyright (c) 2023 LobeHub,",
 			"licensed under the MIT License (LICENSES/MIT-lobe-icons.txt). The monochrome SVG files",

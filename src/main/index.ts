@@ -25,7 +25,6 @@ import {
 	shell,
 	systemPreferences,
 } from "electron";
-import type Store from "electron-store";
 import {
 	AUTO_TITLE_EVOLVE_PREF,
 	AUTO_TITLE_PREF,
@@ -164,6 +163,7 @@ import { OmpUpdater, registerOmpUpdateIpc } from "./omp-updater";
 import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
+import { type PrefsStore, prefsFile } from "./prefs-store";
 import { lastWindowCloseAction } from "./quit-guard";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
@@ -174,7 +174,6 @@ import { readoptHostTabs } from "./remote/readopt";
 import { migrateRetiredPrefs } from "./retired-prefs";
 import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
-import { SafeStore } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
 import { whenSessionFree } from "./session-free";
@@ -380,16 +379,13 @@ interface MainPrefs {
 	[key: string]: unknown;
 }
 
-let mainPrefsStore: Store<MainPrefs> | null = null;
+let mainPrefsStore: PrefsStore<MainPrefs> | null = null;
 
-function prefsStore(): Store<MainPrefs> {
+function prefsStore(): PrefsStore<MainPrefs> {
 	if (!mainPrefsStore) {
-		mainPrefsStore = new SafeStore<MainPrefs>({ name: "prefs" });
-		migrateRetiredPrefs(
-			mainPrefsStore as unknown as Store<Record<string, unknown>>,
-			join(app.getPath("userData"), "schedules.json"),
-		);
-		const powers = migrateAgentPowers(mainPrefsStore as unknown as Store<Record<string, unknown>>, agentDir());
+		mainPrefsStore = prefsFile<MainPrefs>("prefs");
+		migrateRetiredPrefs(mainPrefsStore, join(app.getPath("userData"), "schedules.json"));
+		const powers = migrateAgentPowers(mainPrefsStore, agentDir());
 		if (powers) {
 			writeRuntimeLog({
 				// A clean migration is no failure: only one that could not edit config.yml is a background-task error.
@@ -400,7 +396,7 @@ function prefsStore(): Store<MainPrefs> {
 		}
 		// A theme the app no longer ships (the pre-curated set) is replaced by its nearest successor, so the
 		// stored pref never names a missing theme and the saved window opens in the right scheme.
-		const prefs = mainPrefsStore as unknown as Store<Record<string, unknown>>;
+		const prefs = mainPrefsStore;
 		for (const key of ["themeName", "systemLightTheme", "systemDarkTheme"]) {
 			const stored = prefs.get(key);
 			const migrated = migrateThemeName(stored);
@@ -803,6 +799,14 @@ async function openPath(path: string): Promise<{ focus: number } | { spawned: nu
 
 app.whenReady().then(async () => {
 	installMainRuntimeLogging();
+	// Before the first core starts: the prefs below are main's first hub call, and the core it starts must be the
+	// packaged binary (a core started before this looked in the checkout's layout and failed ENOENT in every packaged
+	// app) and carry the left-behind file in its environment.
+	configureNativeBin({
+		packaged: app.isPackaged,
+		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
+	});
+	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	const { guard, safeMode, stableAfterMs } = await launch;
 	// A full disk is told once, by one notification that goes when the files are saved; the writers retry on their own.
 	bindDiskFullNotice(diskFull, {
@@ -878,16 +882,11 @@ app.whenReady().then(async () => {
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
 	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
 	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
-	configureNativeBin({
-		packaged: app.isPackaged,
-		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
-	});
 	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
 	core().report = (step, details) => {
 		writeRuntimeLog({ source: "core-loss", message: step, details });
 		if (step === "abandoned") machineState.stalled("core-loss");
 	};
-	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
 	const remoteIdentity = loadIdentity(app.getPath("userData")).catch((error: unknown): Identity => {
@@ -1467,7 +1466,7 @@ app.whenReady().then(async () => {
 		};
 		return lidAwake ? lidAwake.wrap(blocker, label) : blocker;
 	};
-	const deviceOrderStore = new SafeStore({ name: "sidebar-device-order" });
+	const deviceOrderStore = prefsFile("sidebar-device-order");
 	const devices = new RemoteDevices({
 		userData: app.getPath("userData"),
 		identity: await remoteIdentity,

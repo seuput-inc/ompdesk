@@ -4,14 +4,12 @@ import { isUiLanguage, type UiLanguage, uiLanguageFromLocale } from "../shared/u
 import type { EditLabels } from "./editable-context-menu";
 import { MAIN_TEXT, type MainTextKey } from "./i18n-text";
 import type { OmpFailure } from "./omp-runtime";
-import { SafeStore } from "./safe-store";
+import { prefsFile } from "./prefs-store";
 
 export type MainLanguage = UiLanguage;
 
-const prefs = new SafeStore<{ language?: MainLanguage }>({ name: "prefs" });
-
 export function getMainLanguage(): MainLanguage {
-	const stored = prefs.get("language");
+	const stored = prefsFile("prefs").get("language");
 	if (isUiLanguage(stored)) return stored;
 	return uiLanguageFromLocale(app.getLocale());
 }
