@@ -413,7 +413,11 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // run 45687946641), 3,139 bytes over. The budget is that measure plus 80 bytes.
 // With main's queued-edit requeue (8c6217faf, b99ecc9af: the composer store's `editsRequeueing`) merged: measured
 // 2,215,938 (branch run 45699393025). The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_216_018;
+// The quick terminal's shortcut, store fields and lazy mount, the palette's quick-terminal and saved-command rows (Orca
+// terminal port, 26 Nov 2026; the saved-command store and parser load with the palette, the sheet and xterm on first
+// open), on top of the review notes: measured 2,218,875 (local build of omp/agent/orca-terminal rebased on 73923cfad),
+// 2,857 bytes over. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_218_955;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
