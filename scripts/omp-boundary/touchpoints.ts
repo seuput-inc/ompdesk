@@ -1821,7 +1821,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/tools/gh-common",
 			"@oh-my-pi/pi-coding-agent/utils/github",
 		],
-		tests: ["src/main/bridge-ci-watch.test.ts", "src/main/bridge-capabilities.test.ts"],
+		tests: [
+			"src/main/bridge-ci-watch.test.ts",
+			"src/main/bridge-ci-watch-stock.test.ts",
+			"src/main/bridge-capabilities.test.ts",
+		],
 	},
 	{
 		id: "H01",
