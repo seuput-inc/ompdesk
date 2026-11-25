@@ -24,6 +24,7 @@ import { createTabRpc, type TabRpc } from "./tab-rpc";
 
 import { OUTPUT_STYLE_IDS } from "../../../resources/gui-bridge/modes/output-style-contracts";
 import type { AvailableCommand, CopyTarget, RpcResponse } from "../../shared/rpc-types";
+import { commandsFor } from "../../shared/terminal-commands";
 import { hydrateSession, hydrateTabSession } from "../hooks/use-rpc-events";
 import { newSessionNow } from "../hooks/use-session-switch";
 import { openHandoffDialog } from "../stores/fork-handoff";
@@ -32,6 +33,7 @@ import { useOutputStyleStore } from "../stores/output-style";
 import { type SessionStore, useSessionStore } from "../stores/session";
 import { useSettingsStore } from "../stores/settings";
 import { useTabsStore } from "../stores/tabs";
+import { ensureTerminalCommands, useTerminalCommandsStore } from "../stores/terminal-commands";
 import { toast, toastError } from "../stores/toast";
 import { useTodoStore } from "../stores/todo";
 import { type AgentsTab, type DockCardId, type InsightsStatsScope, type InsightsTab, useUiStore } from "../stores/ui";
@@ -1487,6 +1489,34 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 		shortcut: kbd("terminal.new"),
 		affordance: { kind: "action", run: () => useUiStore.getState().newTerminal() },
 	});
+	add({
+		name: "quick-terminal",
+		label: t("hotkeys.row.terminalQuick"),
+		description: t("quickTerminal.desc"),
+		category: "panel",
+		shortcut: kbd("terminal.quick"),
+		affordance: { kind: "action", run: () => useUiStore.getState().setQuickTerminalOpen(true) },
+	});
+	// Saved terminal commands (Orca's quick commands, FT37): the active tab's folder's and every project's, each run in
+	// that tab's terminal as `runInTerminal` does.
+	// The list loads on the first palette (or Terminal panel) open and follows the pref after.
+	ensureTerminalCommands();
+	const activeTab = useTabsStore.getState().tabs.find(tab => tab.id === useTabsStore.getState().activeTabId);
+	if (activeTab)
+		for (const saved of commandsFor(useTerminalCommandsStore.getState().commands, activeTab.cwd))
+			add({
+				name: `terminal-command-${saved.id}`,
+				label: t("panel.terminal.commands.run", { name: saved.label }),
+				description: saved.command,
+				category: "panel",
+				affordance: {
+					kind: "action",
+					run: () =>
+						void runInTerminal(activeTab.id, saved.command).catch(error =>
+							toastError({ title: t("panel.terminal.failed"), error }),
+						),
+				},
+			});
 	// The session views that open as sheets (`jobs` and `tree` are their own commands above and below).
 	for (const [name, view] of [
 		["logs", "logs"],

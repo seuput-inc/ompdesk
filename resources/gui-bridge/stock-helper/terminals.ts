@@ -114,7 +114,12 @@ export const methods: HelperMethods = {
 			/** The tab's session file ("" for none), which keeps its terminals across a restart. */
 			session?: string;
 		};
-		const options = ptyOptions(cwd, env, shell);
+		// A program main chose (a saved SSH host's `ssh`) runs in the PTY in place of a shell.
+		const options = ptyOptions(
+			cwd,
+			env,
+			operation.action === "create" && operation.program ? operation.program : shell,
+		);
 		const service = await terminals();
 		// A web viewer's long poll holds here, in the worker, until the PTY writes (never a timer loop in main).
 		if (operation.action === "list" && operation.waitMs) await service.wait(owner, operation);

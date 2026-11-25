@@ -203,6 +203,11 @@ export class SshTools {
 		return this.#core.agent();
 	}
 
+	/** What a Terminal panel PTY runs to reach a saved host (Orca's plain SSH terminal). */
+	terminal(raw: unknown): Promise<{ bin: string; args: string[] }> {
+		return this.#core.terminal(targetSchema.parse(raw));
+	}
+
 	/**
 	 * The computer woke, was unlocked or came back online: a forward waiting to reconnect, or a ports watch waiting to
 	 * start again, goes now with a fresh budget, since the drop was the sleep's and not the server's.

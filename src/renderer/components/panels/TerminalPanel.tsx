@@ -1,5 +1,6 @@
 import type { ITheme, Terminal } from "@xterm/xterm";
 import {
+	Bookmark,
 	ChevronDown,
 	ClipboardPaste,
 	Columns2,
@@ -15,6 +16,7 @@ import {
 	Rows2,
 	Search,
 	Square,
+	SquareTerminal,
 	Terminal as TerminalIcon,
 	TextSelect,
 	Trash2,
@@ -31,6 +33,8 @@ import {
 	useState,
 } from "react";
 import { shellKindOf, shellQuote } from "../../../shared/shell-quote";
+import type { SshTarget } from "../../../shared/ssh-tools";
+import { commandInput, commandsFor } from "../../../shared/terminal-commands";
 import {
 	TERMINAL_OUTPUT_BUDGET,
 	TERMINAL_SHELL_PREF,
@@ -82,6 +86,7 @@ import {
 import { pollTerminal } from "../../lib/terminal-poll";
 import { chromePlatform } from "../../lib/window-chrome";
 import { useTabsStore } from "../../stores/tabs";
+import { ensureTerminalCommands, useTerminalCommandsStore } from "../../stores/terminal-commands";
 import { toast } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
 import {
@@ -101,6 +106,7 @@ import {
 	Spinner,
 	Tabs,
 } from "../common";
+import { TerminalCommandsDialog } from "./TerminalCommandsDialog";
 import { TerminalFind, type TerminalSearch } from "./TerminalFind";
 import { AddToChatButton } from "./notes/AddToChat";
 import { TerminalKeyBar } from "./TerminalKeyBar";
@@ -224,14 +230,14 @@ function clearScreen(view: TerminalMount): void {
 
 /** The keymap's terminal actions a focused terminal takes before its shell sees the key. */
 let compiledKeymap: { overrides: KeymapOverrides; map: Map<string, string> } | null = null;
-function terminalAction(event: KeyboardEvent): "terminal.find" | "terminal.new" | null {
+function terminalAction(event: KeyboardEvent): "terminal.find" | "terminal.new" | "terminal.quick" | null {
 	const chord = chordFromEvent(event);
 	if (!chord) return null;
 	const overrides = useUiStore.getState().keymapOverrides;
 	if (compiledKeymap?.overrides !== overrides)
 		compiledKeymap = { overrides, map: compileKeymap(KEYMAP_ACTIONS, overrides) };
 	const action = compiledKeymap.map.get(chord);
-	return action === "terminal.find" || action === "terminal.new" ? action : null;
+	return action === "terminal.find" || action === "terminal.new" || action === "terminal.quick" ? action : null;
 }
 
 /** One notice per page when a program's OSC 52 copy could not reach the clipboard. */
@@ -405,7 +411,7 @@ export function TerminalViewport({
 					return false;
 				}
 				// The keymap (App) starts the terminal; the shell never sees the chord.
-				if (action === "terminal.new") return false;
+				if (action === "terminal.new" || action === "terminal.quick") return false;
 				const zoom = zoomKey(event, MAC);
 				if (zoom && latest.current.onZoom) {
 					event.preventDefault();
@@ -757,10 +763,14 @@ export function terminalLabels(
 	});
 }
 
-/** `terminal.new` presses the panel has answered, across its mounts (the keymap opens the panel, then it starts one). */
-let terminalNewSeen = 0;
+/** Terminal requests (`ui.terminalNew`) each set has answered, across its mounts: the Terminal panel's and the quick terminal's. */
+const terminalNewSeen = { panel: 0, scratch: 0 };
 
-function TabTerminalPanel({ tabId }: { tabId: string }) {
+/**
+ * One set of terminals: a tab's (the Terminal panel) or, with `scratch`, this window's quick terminal in the home folder
+ * (`SCRATCH_TERMINAL_TAB`), which no session keeps.
+ */
+export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch?: boolean }) {
 	const t = useT();
 	const [sessions, setSessions] = useState<TerminalSnapshot[]>([]);
 	const [layout, setLayout] = useState<TerminalPanes>(NO_PANES);
@@ -870,7 +880,11 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 		void (async () => {
 			let result = await request({ action: "list", offsets: {} });
 			if (cancelled) return;
-			if (result?.length === 0) {
+			// A terminal asked for elsewhere (`ui.terminalNew`) starts once loading ends: no default shell beside it.
+			const asked = useUiStore.getState().terminalNew;
+			const pending =
+				Boolean(asked.scratch) === scratch && asked.seq > terminalNewSeen[scratch ? "scratch" : "panel"];
+			if (result?.length === 0 && !pending) {
 				// Settings › General › Terminal shell; main ignores a path it no longer finds.
 				const preferred = await window.omp.prefs.get(TERMINAL_SHELL_PREF).catch(() => undefined);
 				if (cancelled) return;
@@ -910,28 +924,42 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 		useUiStore.setState({ terminalFocusId: null });
 	}, [focusId, sessions, select]);
 	const active = sessions.find(session => session.id === selected);
-	/** A new terminal: shown in the pane in focus, or beside it with `split`. */
-	const add = async (shell?: string, split?: SplitDirection) => {
-		const preferred = shell ?? (await window.omp.prefs.get(TERMINAL_SHELL_PREF).catch(() => undefined));
+	/**
+	 * A new terminal: shown in the pane in focus, or beside it with `split`. `ssh` runs a saved host in place of a shell;
+	 * `input` is typed once it starts (the worker holds it until the shell is ready, D90).
+	 */
+	const add = async (
+		shell?: string,
+		split?: SplitDirection,
+		extra: { ssh?: SshTarget; title?: string; input?: string | ((row: TerminalSnapshot) => string) } = {},
+	) => {
+		const preferred =
+			extra.ssh || shell ? shell : await window.omp.prefs.get(TERMINAL_SHELL_PREF).catch(() => undefined);
 		const result = await request({
 			action: "create",
 			cols: 80,
 			rows: 24,
 			...(typeof preferred === "string" && preferred ? { shell: preferred } : {}),
+			...(extra.ssh ? { ssh: extra.ssh, title: extra.ssh.name } : {}),
+			...(extra.title ? { title: extra.title } : {}),
 		});
-		const created = result?.at(-1)?.id;
-		if (!created) return;
+		const row = result?.at(-1);
+		const created = row?.id;
+		if (!row || !created) return;
+		const input = typeof extra.input === "function" ? extra.input(row) : extra.input;
+		if (input) void request({ action: "write", id: created, data: input });
 		keyboardSwitch.current = false;
 		setLayout(current => (split ? splitTerminal(current, created, split) : pickTerminal(current, created)));
 	};
-	// The keymap's `terminal.new` (it opened this panel first when it was closed).
-	const newSeq = useUiStore(s => s.terminalNewSeq);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: a press is answered once, when the panel can start a shell.
+	// A terminal asked for elsewhere (the keymap's `terminal.new`, the palette, Settings › SSH), once this set can start one.
+	const asked = useUiStore(s => s.terminalNew);
+	const set = scratch ? "scratch" : "panel";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a request is answered once, when the set can start a shell.
 	useEffect(() => {
-		if (loading || newSeq === terminalNewSeen) return;
-		terminalNewSeen = newSeq;
-		void add();
-	}, [newSeq, loading]);
+		if (loading || Boolean(asked.scratch) !== scratch || asked.seq <= terminalNewSeen[set]) return;
+		terminalNewSeen[set] = asked.seq;
+		void add(undefined, undefined, asked.ssh ? { ssh: asked.ssh } : {});
+	}, [asked, loading]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a session just chosen starts with nobody known to hold its size.
 	useEffect(() => {
 		setLease(undefined);
@@ -1013,6 +1041,64 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 		const index = sessions.findIndex(session => session.id === id);
 		setRenaming({ id, value: sessions[index]?.title ?? labels[index] ?? "" });
 	};
+	const tab = useTabsStore(state => state.tabs.find(item => item.id === tabId));
+	// Saved commands of this tab's folder and every project's; the quick terminal (home folder) has every project's.
+	const commands = useTerminalCommandsStore(state => state.commands);
+	const folder = scratch ? undefined : tab?.cwd;
+	const [commandsOpen, setCommandsOpen] = useState(false);
+	useEffect(() => ensureTerminalCommands(), []);
+	const runCommand = (command: string) => {
+		if (selected && !active?.exited) void request({ action: "write", id: selected, data: commandInput(command) });
+		else void add(undefined, undefined, { input: commandInput(command) });
+	};
+	const commandItems: ContextMenuItem[] = [
+		...commandsFor(commands, folder).map(item => ({
+			id: `run-${item.id}`,
+			label: item.label,
+			description: item.command,
+			onSelect: () => runCommand(item.command),
+		})),
+		{
+			id: "commands-edit",
+			label: t(commands.length ? "panel.terminal.commands.manage" : "panel.terminal.commands.addFirst"),
+			icon: Pencil,
+			separatorBefore: commands.length > 0,
+			onSelect: () => setCommandsOpen(true),
+		},
+	];
+	// Orca's "Continue in terminal" (FC69): this computer's session, picked up by `omp --resume` in a new terminal.
+	// While this tab holds the session, stock moves the terminal's run to a new file of its own (`open-elsewhere`).
+	const sessionPath = !scratch && !remote ? tab?.sessionPath : undefined;
+	const moreItems: ContextMenuItem[] = [
+		...(shells.length > 1
+			? shells.map(shell => ({
+					id: shell.path,
+					label: t("panel.terminal.newWith", { name: shell.name }),
+					description: shell.path,
+					onSelect: () => void add(shell.path),
+				}))
+			: []),
+		...(sessionPath
+			? [
+					{
+						id: "resume",
+						label: t("panel.terminal.resume"),
+						tooltip: t("panel.terminal.resumeHint"),
+						icon: SquareTerminal,
+						separatorBefore: shells.length > 1,
+						onSelect: () =>
+							void add(undefined, undefined, {
+								// The program's own name, in every language.
+								title: "omp",
+								input: row =>
+									commandInput(
+										`omp --resume ${shellQuote(sessionPath, shellKindOf(row.shell, PLATFORM === "windows"))}`,
+									),
+							}),
+					},
+				]
+			: []),
+	];
 	const split = layout.panes.length > 1;
 	const menuFor = (id: string): TerminalMenuExtra => {
 		const index = sessions.findIndex(session => session.id === id);
@@ -1139,20 +1225,24 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 					onClick={() => void add()}
 					size="sm"
 				/>
-				{shells.length > 1 && (
+				{moreItems.length > 0 && (
 					<MenuButton
+						data-terminal-more
 						disabled={loading}
 						icon={<ChevronDown />}
-						items={shells.map(shell => ({
-							id: shell.path,
-							label: t("panel.terminal.newWith", { name: shell.name }),
-							description: shell.path,
-							onSelect: () => void add(shell.path),
-						}))}
+						items={moreItems}
 						label={t("panel.terminal.newWithMenu")}
 						size="sm"
 					/>
 				)}
+				<MenuButton
+					data-terminal-commands-menu
+					disabled={loading}
+					icon={<Bookmark />}
+					items={commandItems}
+					label={t("panel.terminal.commands.menu")}
+					size="sm"
+				/>
 				<div className="ml-auto flex shrink-0 items-center gap-0.5">
 					{touch && (
 						<IconButton
@@ -1198,7 +1288,7 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 						}}
 						size="sm"
 					/>
-					{!compact && (
+					{!compact && !scratch && (
 						<IconButton
 							icon={expanded ? <Minimize2 /> : <Maximize2 />}
 							label={t(expanded ? "fileViewer.collapse" : "fileViewer.expand")}
@@ -1346,6 +1436,7 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 					/>
 				</form>
 			</Modal>
+			<TerminalCommandsDialog folder={folder} onClose={() => setCommandsOpen(false)} open={commandsOpen} />
 		</div>
 	);
 }
@@ -1354,5 +1445,5 @@ export function TerminalPanel() {
 	const tabId = useTabsStore(state => state.activeTabId);
 	// A paired host's tab gets the host's terminals, in the tab's folder there (C114).
 	if (!tabId) return <EmptyState icon={<TerminalIcon />} size="sm" title={t("panel.terminal.noTab")} />;
-	return <TabTerminalPanel key={tabId} tabId={tabId} />;
+	return <TerminalSet key={tabId} tabId={tabId} />;
 }

@@ -112,6 +112,9 @@ const ImportForeignDialog = lazyChunk(() =>
 const ThemePickerDialog = lazyChunk(() =>
 	import("./components/dialogs/ThemePickerDialog").then(m => ({ default: m.ThemePickerDialog })),
 );
+const QuickTerminal = lazyChunk(() =>
+	import("./components/layout/QuickTerminal").then(m => ({ default: m.QuickTerminal })),
+);
 
 function FocusedSessionEffects() {
 	useTraySync();
@@ -241,6 +244,10 @@ export function App() {
 	const themePickerOpen = useUiStore(s => s.themePickerOpen);
 	const [themePickerMounted, setThemePickerMounted] = useState(false);
 	if (themePickerOpen && !themePickerMounted) setThemePickerMounted(true);
+	// The quick terminal loads xterm: only on its first open, then stays mounted so its terminals keep their screens.
+	const quickTerminalOpen = useUiStore(s => s.quickTerminalOpen);
+	const [quickTerminalMounted, setQuickTerminalMounted] = useState(false);
+	if (quickTerminalOpen && !quickTerminalMounted) setQuickTerminalMounted(true);
 	const debugOpen = useUiStore(s => s.debugOpen);
 	const [debugMounted, setDebugMounted] = useState(false);
 	if (debugOpen && !debugMounted) setDebugMounted(true);
@@ -652,6 +659,9 @@ export function App() {
 				case "terminal.new":
 					ui.newTerminal();
 					return;
+				case "terminal.quick":
+					ui.setQuickTerminalOpen(!ui.quickTerminalOpen);
+					return;
 				case "terminal.find":
 					// The focused terminal opened its find bar before its shell saw the key; elsewhere the chord does nothing.
 					return;
@@ -971,6 +981,11 @@ export function App() {
 					</Suspense>
 				) : null}
 				<Suspense fallback={null}>{modelSetupOpen && <ModelSetupDialog />}</Suspense>
+				{quickTerminalMounted ? (
+					<Suspense fallback={null}>
+						<QuickTerminal />
+					</Suspense>
+				) : null}
 				{themePickerMounted ? (
 					<Suspense fallback={null}>
 						<ThemePickerDialog />

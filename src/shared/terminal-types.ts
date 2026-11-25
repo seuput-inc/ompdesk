@@ -1,3 +1,5 @@
+import type { SshTarget } from "./ssh-tools";
+
 export interface TerminalSnapshot {
 	id: string;
 	output: string;
@@ -57,6 +59,8 @@ export interface TerminalShell {
 }
 /** Pref holding the shell path new terminals start with; unset or unknown = the first detected shell. */
 export const TERMINAL_SHELL_PREF = "terminalShell";
+/** The quick terminal's stand-in tab id: a window's own terminals in the home folder, kept by no session. */
+export const SCRATCH_TERMINAL_TAB = "~scratch";
 /** A web viewer's `list` is held at most this long when nothing new has been written. */
 export const TERMINAL_POLL_MAX_WAIT_MS = 1000;
 /** The most output (UTF-16 units) one reply carries to a web viewer: the viewer acknowledges it by asking again. */
@@ -67,8 +71,19 @@ export type TerminalOperation =
 	 * restart, close, clear, claim), or this long (a viewport's long poll; at most `TERMINAL_POLL_MAX_WAIT_MS`). `budget`: cut each session's `output` to this many units.
 	 */
 	| { action: "list"; offsets?: Record<string, number>; waitMs?: number; budget?: number }
-	/** `shell`: a detected shell's path; omitted = this computer's default. */
-	| { action: "create"; cols: number; rows: number; shell?: string }
+	/**
+	 * `shell`: a detected shell's path; omitted = this computer's default. `ssh`: a saved host of Settings › SSH, which
+	 * main turns into its `ssh` run (`program`, never accepted from a page). `title`: the terminal's name from the start.
+	 */
+	| {
+			action: "create";
+			cols: number;
+			rows: number;
+			shell?: string;
+			ssh?: SshTarget;
+			title?: string;
+			program?: { path: string; args: string[] };
+	  }
 	| { action: "write"; id: string; data: string }
 	| { action: "resize"; id: string; cols: number; rows: number }
 	/** Take the PTY's size from whoever has it (the viewer's next `resize` is then applied). */

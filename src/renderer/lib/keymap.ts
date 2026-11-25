@@ -622,6 +622,14 @@ export const KEYMAP_ACTIONS = [
 	})),
 	// A new terminal in the Terminal panel (Orca's ⌘T is New tab here, so it ships unbound).
 	{ id: "terminal.new", labelKey: "hotkeys.row.terminalNew", defaults: [], overlaySafe: false, hotkeyGroup: "view" },
+	// The quick terminal (Orca's floating terminal toggle): VS Code's ⌃` opens a terminal the same way.
+	{
+		id: "terminal.quick",
+		labelKey: "hotkeys.row.terminalQuick",
+		defaults: ["⌃`"],
+		overlaySafe: true,
+		hotkeyGroup: "view",
+	},
 	// Find in a focused terminal's scrollback (Orca `terminal.search`, Mod+F); the terminal reads it before its shell does.
 	{
 		id: "terminal.find",

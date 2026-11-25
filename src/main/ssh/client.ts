@@ -171,6 +171,16 @@ export class SshCore {
 		await core().call("ssh.forgetHostKey", { how: this.#how(), target }, { timeoutMs: FORGET_TIMEOUT_MS });
 	}
 
+	/** What a terminal runs to reach `target`: `ssh -F <config>` and its checked arguments (nothing starts here). */
+	async terminal(target: SshTarget): Promise<{ bin: string; args: string[] }> {
+		const { result } = await core().call<{ bin: string; args: string[] }>(
+			"ssh.terminal",
+			{ how: this.#how(), target },
+			{ timeoutMs: TOOL_TIMEOUT_MS },
+		);
+		return result;
+	}
+
 	/** Ends everything this service has in the core, for good. Runs still report their end. */
 	close(): void {
 		this.#closed = true;

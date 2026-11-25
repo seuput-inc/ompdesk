@@ -322,7 +322,10 @@ mod tests {
         assert!(reply.contains(r#""busy":true"#), "{reply}");
         let plain = br#"{"id":2,"terminal":{"rows":[{"id":"t","offset":0,"exited":false,"cols":80,"rows":24}]}}"#;
         let reply = String::from_utf8(history.project(plain).unwrap()).unwrap();
-        assert!(!reply.contains("title") && !reply.contains("busy"), "{reply}");
+        assert!(
+            !reply.contains("title") && !reply.contains("busy"),
+            "{reply}"
+        );
     }
 
     #[test]

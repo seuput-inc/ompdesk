@@ -235,6 +235,7 @@ export class TerminalService {
 				version: 1,
 				saved: 0,
 				queued: null,
+				...(operation.title?.trim() ? { title: operation.title.trim() } : {}),
 			};
 			this.#entries.set(randomUUID(), entry);
 			this.#start(entry);
