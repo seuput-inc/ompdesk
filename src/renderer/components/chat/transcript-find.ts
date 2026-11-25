@@ -124,7 +124,10 @@ export function rowRanges(rowElement: Element, query: string): Range[] {
 	return ranges;
 }
 
-/** How far to scroll so `match` sits mid-view, below the bar when the bar covers it (Orca's `nativeChatFindScrollDelta`). */
+/**
+ * How far to scroll so `match` sits mid-view, below the bar when the bar covers it. Adapted from Orca's
+ * `nativeChatFindScrollDelta` (Copyright (c) 2026 Lovecast Inc., MIT; attributed in THIRD_PARTY_NOTICES.txt).
+ */
 export function findScrollDelta(
 	match: Pick<DOMRect, "top" | "bottom" | "left" | "right">,
 	view: Pick<DOMRect, "top" | "bottom">,

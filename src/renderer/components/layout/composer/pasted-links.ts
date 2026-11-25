@@ -1,7 +1,8 @@
 /**
- * Links in a paste (Orca's `native-chat-pasted-links.ts` and `clipboard-link-html.ts`, MIT, re-implemented): a rich
- * copy (a web page, a doc) keeps its links as Markdown instead of losing them to its plain text, and one URL pasted
- * over selected words links them, as most message editors do.
+ * Links in a paste, adapted from Orca's `native-chat-pasted-links.ts` and `clipboard-link-html.ts` (Copyright (c) 2026
+ * Lovecast Inc., MIT; attributed in THIRD_PARTY_NOTICES.txt): a rich copy (a web page, a doc) keeps its links as
+ * Markdown instead of losing them to its plain text, and one URL pasted over selected words links them, as most
+ * message editors do.
  */
 
 const LINK_PROTOCOLS: Record<string, true> = { "http:": true, "https:": true, "mailto:": true };
