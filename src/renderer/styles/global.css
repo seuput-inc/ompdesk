@@ -751,6 +751,19 @@ html[data-platform="darwin"] .omp-sidebar-search {
 	font-weight: var(--sc-weight-semibold);
 }
 
+/* A session made current from outside the list outlines its row once as the list brings it into view (Orca's reveal
+   highlight): an accent outline that fades back to the row's own. */
+.omp-sidebar-session-row[data-reveal] {
+	animation: omp-row-reveal calc(var(--sc-duration-slow) * 3) var(--sc-ease-exit);
+}
+
+@keyframes omp-row-reveal {
+	from {
+		outline: 2px solid var(--sc-accent);
+		outline-offset: -2px;
+	}
+}
+
 /* The search over every session is Orca's pill: a quiet wash, no border until it has focus. */
 .omp-session-sidebar input[data-sidebar-filter] {
 	border-radius: var(--sc-radius-full);

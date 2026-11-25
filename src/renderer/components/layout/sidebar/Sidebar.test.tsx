@@ -1024,6 +1024,28 @@ describe("Sidebar menus and pinned ordering", () => {
 		}
 	});
 
+	it("outlines the row of a session made current from outside the list, once", async () => {
+		installMockOmp(LIST);
+		useTabsStore.setState({
+			tabs: [
+				{ id: "t0", cwd: "/work/gamma", status: "ready", kind: "agent", title: "Audit session", unreadDone: false },
+				{ id: "t2", cwd: "/work/delta", status: "ready", kind: "agent", title: "Next run", unreadDone: false },
+			],
+			activeTabId: "t0",
+			bundles: new Map(),
+		});
+		setSummaries([
+			summary(unsavedSessionKey("t0"), { cwd: "/work/gamma", tabId: "t0" }),
+			summary(unsavedSessionKey("t2"), { cwd: "/work/delta", tabId: "t2" }),
+		]);
+		await mount(<Sidebar />);
+		expect(container.querySelector("[data-reveal]")).toBeNull();
+		// The title bar's tab strip picks the other session: its row is outlined, the one left is not.
+		await act(async () => useTabsStore.setState({ activeTabId: "t2" }));
+		expect(rowFor("Next run").hasAttribute("data-reveal")).toBe(true);
+		expect(rowFor("Audit session").hasAttribute("data-reveal")).toBe(false);
+	});
+
 	it("lists open tabs the index does not have yet oldest first, as it will once it does", async () => {
 		installMockOmp(LIST);
 		useSessionStore.setState({ sessionId: "", sessionName: null, cwd: "/work/gamma", isStreaming: false });

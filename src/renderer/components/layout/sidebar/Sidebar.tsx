@@ -1264,6 +1264,22 @@ export function Sidebar() {
 		const item = items[next];
 		if (item) focusRovingItem(item);
 	};
+	// A session made current from outside the list (a title bar tab, the palette, a shortcut) brings its row into view
+	// and outlines it once (Orca's reveal highlight); a pick in the list itself has focus there and moves nothing.
+	const revealed = useRef(activeSessionKey);
+	useEffect(() => {
+		if (revealed.current === activeSessionKey) return;
+		revealed.current = activeSessionKey;
+		const list = listRef.current;
+		if (!list || !activeSessionKey || list.contains(document.activeElement)) return;
+		const row = [...list.querySelectorAll<HTMLElement>("[data-roving-item]")]
+			.find(item => item.dataset.rovingItem === `session:${activeSessionKey}`)
+			?.closest<HTMLElement>(".omp-sidebar-session-row");
+		if (!row) return;
+		row.scrollIntoView?.({ block: "nearest" });
+		row.setAttribute("data-reveal", "");
+		row.addEventListener("animationend", () => row.removeAttribute("data-reveal"), { once: true });
+	}, [activeSessionKey]);
 	// After render, exactly one roving item is tabbable: the remembered one,
 	// else the current session, else the first row. Its row's ⋯ (or a section header's own action, such as the Chats
 	// section's New chat) is the next tab stop (focus-within reveals it), so Tab then Enter opens or runs it.
