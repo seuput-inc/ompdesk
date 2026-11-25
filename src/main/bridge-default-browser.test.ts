@@ -1,9 +1,8 @@
 /**
- * gui-bridge default browser (modes/default-browser-core.ts): ego-browser and the user's own browser each get one
- * static `<browser>` section, the built-in browser leaves the prompt stock, and `default_browser_set` switches it
- * without reinstalling. A relay choice holds `browser.relay` and `browser.relayUrl` (the endpoint only that browser's
- * extension dials) as session overrides; Preview's agent browsing wins while it runs and the choice comes back when
- * it stops.
+ * gui-bridge default browser (modes/default-browser-core.ts): ego-browser and an unverified pick each get one static
+ * `<browser>` section, the built-in browser leaves the prompt stock, and `default_browser_set` switches it without
+ * reinstalling. An unverified pick holds `browser.enabled` off as a session override; Preview's agent browsing wins
+ * while it runs and the choice comes back when it stops.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -13,12 +12,12 @@ import {
 } from "../../resources/gui-bridge/modes/default-browser-contracts";
 import {
 	applyDefaultBrowser,
+	type BrowserSetting,
 	browserSection,
 	type DefaultBrowserHost,
 	install,
 	previewRelayStarted,
 	previewRelayStopped,
-	type RelaySetting,
 	setDefaultBrowser,
 } from "../../resources/gui-bridge/modes/default-browser-core";
 
@@ -26,8 +25,6 @@ type Handler = Parameters<DefaultBrowserHost["on"]>[1];
 type Turn = ReturnType<Handler>;
 
 const EGO: AgentBrowser = { kind: "ego" };
-const CHROME: AgentBrowser = { kind: "relay", name: "Google Chrome", url: "http://127.0.0.1:9231" };
-const EDGE: AgentBrowser = { kind: "relay", name: "Microsoft Edge", url: "http://127.0.0.1:9232" };
 const UNAVAILABLE: AgentBrowser = { kind: "unavailable", name: "Brave" };
 const BUILTIN: AgentBrowser = { kind: "builtin" };
 
@@ -38,29 +35,21 @@ function installedHook(kind: string): (event: { systemPrompt: string[] }) => Tur
 	return event => handlers[0]?.(event, { sessionManager: { getBranch: () => [] }, agent: { kind } });
 }
 
-interface Overrides {
-	relay: boolean;
-	relayUrl: string;
-}
-
-/** The session settings as the bridge's two overrides leave them: scope → what `browser.relay`/`browser.relayUrl` hold. */
+/** The session settings as the bridge's override leaves them: the scopes whose `browser.enabled` is held off. */
 function fakeSettings() {
-	const overrides = new Map<object, Overrides>();
 	const disabled = new Set<object>();
 	const writes: string[] = [];
-	const setting: RelaySetting = {
-		block: scope => void disabled.add(scope),
-		unblock: scope => void disabled.delete(scope),
-		hold: (scope, url) => {
-			overrides.set(scope, { relay: true, relayUrl: url });
-			writes.push(`hold ${url}`);
+	const setting: BrowserSetting = {
+		block: scope => {
+			disabled.add(scope);
+			writes.push("block");
 		},
-		release: scope => {
-			overrides.delete(scope);
-			writes.push("release");
+		unblock: scope => {
+			disabled.delete(scope);
+			writes.push("unblock");
 		},
 	};
-	return { overrides, setting, writes, disabled };
+	return { disabled, setting, writes };
 }
 
 afterEach(() => {
@@ -81,13 +70,11 @@ describe("gui-bridge default browser section", () => {
 		}
 	});
 
-	it("names the user's own browser for a relay choice, and says what to do without the extension", () => {
-		setDefaultBrowser({ browser: CHROME });
+	it("says an unverified pick cannot be used and points the user at Settings", () => {
+		setDefaultBrowser({ browser: UNAVAILABLE });
 		const section = installedHook("main")({ systemPrompt: ["base"] })?.systemPrompt[1] ?? "";
-		expect(section).toContain("<browser>");
-		expect(section).toContain("signed-in Google Chrome");
-		expect(section).toContain("never navigate or close a tab the user opened unless asked");
-		expect(section).toContain("tell the user to open Google Chrome");
+		expect(section).toContain("cannot verify a relay for the selected Brave");
+		expect(section).toContain("Settings");
 		expect(section).not.toContain("ego-browser");
 	});
 
@@ -101,14 +88,14 @@ describe("gui-bridge default browser section", () => {
 		expect(hook({ systemPrompt: ["base"] })).toBeUndefined();
 		expect(setDefaultBrowser({ browser: EGO })).toEqual({ browser: EGO });
 		expect(hook({ systemPrompt: ["base"] })?.systemPrompt[1]).toContain("ego-browser");
-		setDefaultBrowser({ browser: CHROME });
-		expect(hook({ systemPrompt: ["base"] })?.systemPrompt[1]).toContain("Google Chrome");
+		setDefaultBrowser({ browser: UNAVAILABLE });
+		expect(hook({ systemPrompt: ["base"] })?.systemPrompt[1]).toContain("Brave");
 		setDefaultBrowser({ browser: BUILTIN });
 		expect(hook({ systemPrompt: ["base"] })).toBeUndefined();
 	});
 
 	it("keeps one copy and the same bytes across turns", () => {
-		setDefaultBrowser({ browser: CHROME });
+		setDefaultBrowser({ browser: EGO });
 		const hook = installedHook("main");
 		const first = hook({ systemPrompt: ["base"] })?.systemPrompt;
 		expect(hook({ systemPrompt: first ?? [] })).toBeUndefined();
@@ -116,14 +103,12 @@ describe("gui-bridge default browser section", () => {
 		expect(first?.filter(part => part.includes("<browser>"))).toHaveLength(1);
 	});
 
-	it("refuses a value that is not a browser, or a relay at an endpoint that is not loopback", () => {
+	it("refuses a value that is not a browser, including the old per-port relay", () => {
 		for (const bad of [
 			{ browser: "ego" },
 			{ browser: { kind: "chrome" } },
-			{ browser: { kind: "relay", name: "Chrome" } },
-			{ browser: { kind: "relay", name: "a\nb", url: "http://127.0.0.1:9231" } },
-			{ browser: { kind: "relay", name: "Chrome", url: "http://evil.example:9231" } },
-			{ browser: { kind: "relay", name: "Chrome", url: "http://127.0.0.1:9231/x" } },
+			{ browser: { kind: "unavailable", name: "a\nb" } },
+			{ browser: { kind: "relay", name: "Chrome", url: "http://127.0.0.1:9231" } },
 			null,
 		]) {
 			expect(() => setDefaultBrowser(bad)).toThrow("default_browser_set");
@@ -133,72 +118,36 @@ describe("gui-bridge default browser section", () => {
 
 describe("gui-bridge default browser env", () => {
 	it("round-trips every choice through the env value and reads anything else as built-in", () => {
-		for (const browser of [EGO, CHROME, EDGE, BUILTIN, UNAVAILABLE]) {
+		for (const browser of [EGO, BUILTIN, UNAVAILABLE]) {
 			expect(parseAgentBrowserEnv(agentBrowserEnv(browser))).toEqual(browser);
 		}
-		expect(agentBrowserEnv(CHROME)).toBe("relay:Google Chrome@http://127.0.0.1:9231");
+		expect(agentBrowserEnv(UNAVAILABLE)).toBe("unavailable:Brave");
 		for (const bad of [
 			undefined,
 			"",
 			"chrome",
-			"relay:",
-			"relay:   ",
-			"relay:Google Chrome",
-			"relay:Google Chrome@",
-			"relay:Google Chrome@http://evil.example:9231",
-			"relay:@http://127.0.0.1:9231",
-			`relay:${"x".repeat(65)}@http://127.0.0.1:9231`,
+			"unavailable:",
+			`unavailable:${"x".repeat(65)}`,
+			"relay:Google Chrome@http://127.0.0.1:9231",
 		]) {
 			expect(parseAgentBrowserEnv(bad)).toEqual(BUILTIN);
 		}
 	});
 });
 
-describe("gui-bridge default browser relay override", () => {
-	it("holds browser.relay and browser.relayUrl while the choice is relay and releases both on switching away", () => {
-		const { overrides, setting } = fakeSettings();
-		const scope = {};
-		setDefaultBrowser({ browser: CHROME });
-		applyDefaultBrowser(scope, setting);
-		expect(overrides.get(scope)).toEqual({ relay: true, relayUrl: "http://127.0.0.1:9231" });
-		setDefaultBrowser({ browser: EGO });
-		applyDefaultBrowser(scope, setting);
-		expect(overrides.has(scope)).toBe(false);
-		setDefaultBrowser({ browser: CHROME });
-		applyDefaultBrowser(scope, setting);
-		setDefaultBrowser({ browser: BUILTIN });
-		applyDefaultBrowser(scope, setting);
-		expect(overrides.size).toBe(0);
-	});
-
-	it("does not discover another native host before or after Preview owns the browser", () => {
-		const { disabled, overrides, setting } = fakeSettings();
+describe("gui-bridge default browser override", () => {
+	it("holds browser.enabled off while the pick is unavailable and gives it back on switching away", () => {
+		const { disabled, setting } = fakeSettings();
 		const scope = {};
 		setDefaultBrowser({ browser: UNAVAILABLE });
 		applyDefaultBrowser(scope, setting);
 		expect(disabled.has(scope)).toBe(true);
-		expect(overrides.has(scope)).toBe(false);
-		expect(browserSection(UNAVAILABLE)).toContain("cannot verify a relay for the selected Brave");
-		previewRelayStarted(scope, setting);
-		expect(disabled.has(scope)).toBe(false);
-		previewRelayStopped(scope, setting);
-		expect(disabled.has(scope)).toBe(true);
-		setDefaultBrowser({ browser: BUILTIN });
+		setDefaultBrowser({ browser: EGO });
 		applyDefaultBrowser(scope, setting);
 		expect(disabled.has(scope)).toBe(false);
 	});
 
-	it("moves to the other browser's endpoint when the pick changes between browsers", () => {
-		const { overrides, setting } = fakeSettings();
-		const scope = {};
-		setDefaultBrowser({ browser: CHROME });
-		applyDefaultBrowser(scope, setting);
-		setDefaultBrowser({ browser: EDGE });
-		applyDefaultBrowser(scope, setting);
-		expect(overrides.get(scope)?.relayUrl).toBe("http://127.0.0.1:9232");
-	});
-
-	it("never touches the settings for ego or built-in, so a user's own browser.relay stays", () => {
+	it("never touches the settings for ego or built-in", () => {
 		const { writes, setting } = fakeSettings();
 		for (const browser of [EGO, BUILTIN]) {
 			setDefaultBrowser({ browser });
@@ -207,37 +156,29 @@ describe("gui-bridge default browser relay override", () => {
 		expect(writes).toEqual([]);
 	});
 
-	it("writes the overrides once however often the same choice is applied", () => {
+	it("writes the override once however often the same choice is applied", () => {
 		const { writes, setting } = fakeSettings();
 		const scope = {};
-		setDefaultBrowser({ browser: CHROME });
+		setDefaultBrowser({ browser: UNAVAILABLE });
 		applyDefaultBrowser(scope, setting);
 		applyDefaultBrowser(scope, setting);
-		expect(writes).toEqual(["hold http://127.0.0.1:9231"]);
+		expect(writes).toEqual(["block"]);
 	});
 
-	it("leaves both overrides to Preview while it runs and holds the choice's again when Preview stops", () => {
-		const { overrides, setting } = fakeSettings();
+	it("lets Preview own the browser while it runs and holds the choice again when Preview stops", () => {
+		const { disabled, setting } = fakeSettings();
 		const scope = {};
-		setDefaultBrowser({ browser: CHROME });
+		setDefaultBrowser({ browser: UNAVAILABLE });
 		applyDefaultBrowser(scope, setting);
 		previewRelayStarted(scope, setting);
-		// Preview's own pair replaces the choice's; a switch meanwhile must not clear it.
-		overrides.set(scope, { relay: true, relayUrl: "http://127.0.0.1:50321" });
+		expect(disabled.has(scope)).toBe(false);
+		// A switch while Preview runs leaves Preview's browser alone.
+		applyDefaultBrowser(scope, setting);
+		expect(disabled.has(scope)).toBe(false);
+		previewRelayStopped(scope, setting);
+		expect(disabled.has(scope)).toBe(true);
 		setDefaultBrowser({ browser: BUILTIN });
 		applyDefaultBrowser(scope, setting);
-		expect(overrides.get(scope)?.relayUrl).toBe("http://127.0.0.1:50321");
-		// Preview's stop cleared both (browser-relay.ts); the choice is now built-in, so they stay cleared.
-		overrides.delete(scope);
-		previewRelayStopped(scope, setting);
-		expect(overrides.has(scope)).toBe(false);
-
-		setDefaultBrowser({ browser: CHROME });
-		applyDefaultBrowser(scope, setting);
-		previewRelayStarted(scope, setting);
-		overrides.set(scope, { relay: true, relayUrl: "http://127.0.0.1:50322" });
-		overrides.delete(scope);
-		previewRelayStopped(scope, setting);
-		expect(overrides.get(scope)).toEqual({ relay: true, relayUrl: "http://127.0.0.1:9231" });
+		expect(disabled.has(scope)).toBe(false);
 	});
 });

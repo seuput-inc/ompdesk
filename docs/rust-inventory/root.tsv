@@ -2,7 +2,7 @@ path	status	cutover_wave	implementer_and_remaining_work
 src/main/account-rotation.test.ts	tooling	-	Vitest suite: accountRotationDeps.
 src/main/account-rotation.ts	port	3	Hub batch, §1.3(a,c): index.ts wires one synchronous preference write to the current local pool and the tabs served for peers. Move that transaction with its readers, not a separately scheduled rotation broadcast.
 src/main/agent-browsers.test.ts	tooling	-	Vitest suite: findChromiumBrowsers.
-src/main/agent-browsers.ts	mixed	2	The core owns executable discovery, browsers.status, its automatic selection, cache and reprobe change detection. Shell (§1.3c,d) supplies login PATH, install places, relay mode from systemOmp and sends the reprobe notification to live sessions.
+src/main/agent-browsers.ts	mixed	2	The core owns executable discovery, browsers.status, its automatic selection, cache and reprobe change detection. Shell (§1.3c,d) supplies login PATH, install places, the platform's native-host browsers and sends the reprobe notification to live sessions.
 src/main/agent-desktop.test.ts	tooling	-	Vitest suite: the agent-desktop a session runs.
 src/main/agent-desktop.ts	native-client	2	setup.pickAgentDesktop checks the bundle, probes the managed executable once per file identity and selects the copy. The client maps this result and the existing shared pref/bridge contract to session spawn args and env.
 src/main/agent-paths.ts	port	1	SessionIndex, LogWatcher and defaultWorkspace need the current agent profile path when they construct their services. agentDir joins the environment or home path synchronously; it performs no directory I/O.

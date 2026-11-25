@@ -1,8 +1,8 @@
 /**
  * The browsers the Default browser setting can point agents at, as this computer has them: ego-browser (ego lite;
  * looked up on the spawn PATH like `resolveBin`, plus `~/.local/bin`, where ego's installer puts it) and the Chromium
- * browsers in their standard install places, each with whether the omp Browser Relay extension is loaded in one of
- * its profiles (stock's `omp browser-relay install` writes it; Chrome forbids installing it for the user).
+ * browsers in their standard install places, for which the row can install the omp Browser Relay extension (stock's
+ * `omp browser-relay install` writes it; Chrome forbids installing it for the user).
  *
  * The core owns the status snapshot and automatic choice. Main supplies the login-shell PATH.
  */
@@ -12,7 +12,6 @@ import {
 	type AgentBrowserStatus,
 	CHROMIUM_BROWSER_IDS,
 	CHROMIUM_BROWSER_NAMES,
-	CHROMIUM_RELAY_PORTS,
 	type ChromiumBrowserId,
 } from "../shared/default-browser";
 import { core } from "./core/process";
@@ -68,7 +67,7 @@ export function systemBrowserPlaces(): BrowserPlaces {
 	};
 }
 
-/** A Chromium browser found on disk: what the launch and the relay check need. */
+/** A Chromium browser found on disk: what the launch needs. */
 export interface FoundBrowser {
 	id: ChromiumBrowserId;
 	name: string;
@@ -78,11 +77,7 @@ export interface FoundBrowser {
 	extensionsUrl: string;
 }
 
-const browsers = CHROMIUM_BROWSER_IDS.map(id => ({
-	id,
-	name: CHROMIUM_BROWSER_NAMES[id],
-	port: CHROMIUM_RELAY_PORTS[id],
-}));
+const browsers = CHROMIUM_BROWSER_IDS.map(id => ({ id, name: CHROMIUM_BROWSER_NAMES[id] }));
 
 /** The Chromium browsers installed in their standard places, in `auto` order. */
 export async function findChromiumBrowsers(places: BrowserPlaces = systemBrowserPlaces()): Promise<FoundBrowser[]> {
@@ -118,7 +113,7 @@ async function readStatus(refresh: boolean): Promise<BrowserStatusRead> {
 
 /**
  * What this computer has, read once per launch; Settings asks `reprobeAgentBrowserStatus` instead, since the person
- * may install ego-browser or load the extension while the app runs.
+ * may install ego-browser or a browser while the app runs.
  */
 export async function agentBrowserStatus(): Promise<AgentBrowserStatus> {
 	return (await readStatus(false)).status;
@@ -140,14 +135,8 @@ export async function installRelayExtension(
 			`omp does not register a native messaging host for ${CHROMIUM_BROWSER_NAMES[id]} on this platform`,
 		);
 	}
-	const params = {
-		omp: { bin: omp.bin, env: ompRunEnv(omp.bin, await spawnPath()) },
-		id,
-		home,
-		port: CHROMIUM_RELAY_PORTS[id],
-		nativeHost: true,
-	};
-	// Stock's install has 30 s; the copy and the clean-up after it are a few small files.
+	const params = { omp: { bin: omp.bin, env: ompRunEnv(omp.bin, await spawnPath()) }, id, home };
+	// Stock's install has 30 s.
 	return (await core().call<string>("browsers.installRelay", params, { timeoutMs: 37_000 })).result;
 }
 
