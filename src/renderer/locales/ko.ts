@@ -4747,6 +4747,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.turnStages": "느리거나 출력 없는 턴 기록",
 	"bridgeHealth.feature.askForm": "에이전트 질문 양식의 그림과 설명",
 	"bridgeHealth.feature.imageSubscription": "이미지 생성은 ChatGPT 구독으로만",
+	"bridgeHealth.feature.a2ui": "에이전트가 대화에 보여 주는 양식과 차트",
 	"bridgeHealth.feature.visuals": "다이어그램 지침(Mermaid, SVG)",
 	"bridgeHealth.feature.phoneImages": "휴대폰 사진(HEIC) 모델용 변환",
 	"bridgeHealth.feature.sessionOwner": "다른 omp가 세션을 놓을 때까지 대기",

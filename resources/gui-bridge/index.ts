@@ -210,6 +210,7 @@ const AREAS: readonly Area[] = [
 	{ name: "modes/bots", features: ["bots"], load: () => import("./modes/bots") },
 	{ name: "modes/scratch", features: ["scratch"], load: () => import("./modes/scratch") },
 	{ name: "modes/check-runs", features: ["checkRuns"], load: () => import("./modes/check-runs") },
+	{ name: "modes/a2ui", features: ["a2ui"], load: () => import("./modes/a2ui") },
 	{ name: "modes/ci-watch", features: ["ciWatch"], load: () => import("./modes/ci-watch") },
 	{ name: "xdev-notice", features: ["xdevNotice", "contextHookIdle"], load: () => import("./xdev-notice") },
 	{ name: "account-rotation", features: ["accountRotation"], load: () => import("./account-rotation") },
@@ -389,6 +390,10 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 	await import("./ompdesk-roles")
 		.then(module => module.settleOmpdeskRoles(pi.pi.Settings.instance as unknown as RoleSettings))
 		.catch(err => pi.logger.error("gui-bridge: OMPdesk roles failed", { error: String(err) }));
+	// The main agent's `a2ui` tool, before stock builds the session (modes/a2ui.ts says why it is not an area hook).
+	await import("./modes/a2ui")
+		.then(module => module.registerA2ui(pi))
+		.catch(err => pi.logger.error("gui-bridge: a2ui tool failed", { error: String(err) }));
 
 	const loading = firstUse.promise.then(() => loadMethods(pi));
 	// Requests rethrow a failed table; this logs it once, and a rebind then installs nothing.

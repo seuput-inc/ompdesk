@@ -1839,6 +1839,27 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/interfaces/interfaces-stock.test.ts", "src/main/bridge-formal-hint.test.ts"],
 	},
 	{
+		id: "B68",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"A2UI: the `a2ui` tool through the extension API (`registerTool` in the factory's main bind, before stock builds the session; `getActiveTools` to refuse a button in a run with `ask` off), the person's answer through `ctx.ui.formDialog` (stock's RPC `form` request carrying OMPdesk's marker form), and A2UI messages checked by pi-ai's root `validateJsonSchemaValue`, which resolves local refs only and treats `unevaluatedProperties` as permissive.",
+		files: [
+			"resources/gui-bridge/modes/a2ui.ts",
+			"resources/gui-bridge/index.ts",
+			"resources/gui-bridge/modes/a2ui-core.ts",
+			"resources/gui-bridge/omp/pi-ai.ts",
+			"resources/gui-bridge/capabilities.ts",
+		],
+		stock: [
+			"omp://extensions.md#registerTool",
+			"omp://rpc.md#extension_ui_request",
+			"@oh-my-pi/pi-ai",
+			"tools/html-form/parse.ts parseHtmlForm",
+		],
+		tests: ["src/main/bridge-a2ui-stock.test.ts", "src/main/bridge-a2ui.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",
