@@ -1099,6 +1099,31 @@ export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch
 				]
 			: []),
 	];
+	const clearSelected = () => {
+		if (!selected) return;
+		const view = handles.current.get(selected)?.current;
+		void request({ action: "clear", id: selected }).then(result => {
+			if (!result || !view || handles.current.get(selected)?.current !== view) return;
+			clearScreen(view);
+		});
+	};
+	// A phone's head holds one row of buttons: its saved commands and Clear join the More menu there.
+	const headMenu: ContextMenuItem[] = compact
+		? [
+				...moreItems,
+				...commandItems.map((item, index) =>
+					index === 0 && moreItems.length > 0 ? { ...item, separatorBefore: true } : item,
+				),
+				{
+					id: "clear",
+					label: t("panel.terminal.clear"),
+					icon: Trash2,
+					separatorBefore: true,
+					disabled: !selected,
+					onSelect: clearSelected,
+				},
+			]
+		: moreItems;
 	const split = layout.panes.length > 1;
 	const menuFor = (id: string): TerminalMenuExtra => {
 		const index = sessions.findIndex(session => session.id === id);
@@ -1227,25 +1252,33 @@ export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch
 					onClick={() => void add()}
 					size="sm"
 				/>
-				{moreItems.length > 0 && (
+				{headMenu.length > 0 && (
 					<MenuButton
 						data-terminal-more
 						disabled={loading}
 						icon={<ChevronDown />}
-						items={moreItems}
-						label={t("panel.terminal.newWithMenu")}
+						items={headMenu}
+						label={t(compact ? "panel.more" : "panel.terminal.newWithMenu")}
 						size="sm"
 					/>
 				)}
-				<MenuButton
-					data-terminal-commands-menu
-					disabled={loading}
-					icon={<Bookmark />}
-					items={commandItems}
-					label={t("panel.terminal.commands.menu")}
-					size="sm"
-				/>
-				<div className={cx("ml-auto flex shrink-0 items-center", touch ? "gap-2.5" : "gap-0.5")}>
+				{!compact && (
+					<MenuButton
+						data-terminal-commands-menu
+						disabled={loading}
+						icon={<Bookmark />}
+						items={commandItems}
+						label={t("panel.terminal.commands.menu")}
+						size="sm"
+					/>
+				)}
+				{/* On a phone the buttons flow on the head's second row instead of a third. */}
+				<div
+					className={cx(
+						compact ? "contents" : "ml-auto flex shrink-0 items-center",
+						!compact && (touch ? "gap-2.5" : "gap-0.5"),
+					)}
+				>
 					{touch && (
 						<IconButton
 							data-terminal-keys-toggle
@@ -1279,21 +1312,15 @@ export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch
 						onClick={() => void paste()}
 						size="sm"
 					/>
-					<IconButton
-						icon={<Trash2 />}
-						label={t("panel.terminal.clear")}
-						disabled={!selected}
-						onClick={() => {
-							if (selected) {
-								const view = handles.current.get(selected)?.current;
-								void request({ action: "clear", id: selected }).then(result => {
-									if (!result || !view || handles.current.get(selected)?.current !== view) return;
-									clearScreen(view);
-								});
-							}
-						}}
-						size="sm"
-					/>
+					{!compact && (
+						<IconButton
+							icon={<Trash2 />}
+							label={t("panel.terminal.clear")}
+							disabled={!selected}
+							onClick={clearSelected}
+							size="sm"
+						/>
+					)}
 					{!compact && !scratch && (
 						<IconButton
 							icon={expanded ? <Minimize2 /> : <Maximize2 />}
