@@ -4695,8 +4695,12 @@ describe("LocalHostServices host.* calls", () => {
 		const privateRow = { ...first, path: "/hidden.jsonl", id: "hidden-id" };
 		const a = first.path;
 		const b = second.path;
-		// The host's prefs file in the real core, which applies each layout change as the app's does.
-		const prefs = new PrefsStore<Record<string, unknown>>(join(workDir, "prefs.json"));
+		// The host's prefs file in the real core, which applies each layout change as the app's does. Not under
+		// `workDir`: the core's prefs writer saves on its own thread after the change returned, and a save still under
+		// way when `afterEach` removes the case's folder adds a temp file to it (ENOTEMPTY, release run 45631785852).
+		const prefs = new PrefsStore<Record<string, unknown>>(
+			join(mkdtempSync(join(tmpdir(), "host-prefs-")), "prefs.json"),
+		);
 		prefs.set("sidebar", {
 			pinnedGroups: ["other-device\nelsewhere"],
 			pinnedSessions: [privateRow.path],
