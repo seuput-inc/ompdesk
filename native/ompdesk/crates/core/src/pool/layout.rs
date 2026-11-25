@@ -3,8 +3,8 @@
 //! kind `layout`, which holds nothing: each call checks one value.
 //!
 //! The folder, session file and content checks are the core's own reads (`Disk`), or, when main's caller handed its
-//! own checks (tests), questions to main (`Asked`). Whether a session was deleted is main's (`deleted-sessions.ts`),
-//! always asked.
+//! own checks (tests), questions to main (`Asked`). Whether a session was deleted is the core's tombstone record
+//! (`sessions::deleted`).
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -154,8 +154,7 @@ impl Checks {
     }
 
     async fn deleted(&self, path: &str, device: Option<&str>) -> Result<bool, Fault> {
-        self.ask_bool("deleted", json!({"path": path, "device": device}))
-            .await
+        Ok(crate::sessions::deleted::has(path, device))
     }
 }
 

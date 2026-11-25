@@ -102,6 +102,10 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 # The agent's models.yml is edited in place (`models/file`): a lossless tree keeps every comment and the layout of
 # what an edit does not touch, as the `yaml` package's Document did. No base64 (`binary` tags are never written).
 yaml-edit = { version = "=0.3.6", default-features = false }
+# A GET made as main's Node `fetch` made it (`http/node_fetch.rs`): Node's bundled roots are Mozilla's list, which
+# webpki-roots carries from the same source; a proxy URL's credentials are percent-decoded as `decodeURIComponent`.
+webpki-roots = "1"
+percent-encoding = "2"
 
 [target.'cfg(unix)'.dependencies]
 # errno values for node's error codes (`ENOENT: no such file or directory, stat '…'`), and the SIGTERM that asks a

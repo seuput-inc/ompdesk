@@ -225,7 +225,7 @@ describe.skipIf(!OUT || !stockRoot)("session lists across windows and paired com
 			const root = path.join(agent, "sessions");
 			const { files, subagentDir } = await writeTree(root);
 			initDeletedSessions(null);
-			const index = new SessionIndex(root, root, () => false, path.resolve("resources/gui-bridge"));
+			const index = new SessionIndex(root, root, null, path.resolve("resources/gui-bridge"));
 			const timers: NodeJS.Timeout[] = [];
 			try {
 				// ---- host: index, the projects list, the paired computers' services

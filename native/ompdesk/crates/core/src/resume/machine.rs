@@ -2275,16 +2275,13 @@ impl Inst {
         let read = self.ask("launchRead", json!({})).await?;
         let all: Vec<MarkerData> =
             serde_json::from_value(read["markers"].clone()).unwrap_or_default();
-        let deleted: Vec<bool> =
-            serde_json::from_value(read["deleted"].clone()).unwrap_or_default();
         let enabled = read["enabled"] == true;
         // A session the user deleted is not continued, not even into a fresh tab in its folder; its marker goes. A
         // never-written session (a first turn cut off before its file) has no tombstone and still continues below.
         let markers: Vec<MarkerData> = all
             .iter()
-            .enumerate()
-            .filter(|(at, _)| !deleted.get(*at).copied().unwrap_or(false))
-            .map(|(_, marker)| marker.clone())
+            .filter(|marker| !crate::sessions::deleted::has(&marker.session_path, None))
+            .cloned()
             .collect();
         if markers.len() != all.len() {
             self.push(json!({"k": "storeWrite", "markers": markers}));

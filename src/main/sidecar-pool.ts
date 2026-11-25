@@ -85,7 +85,7 @@ import type { BackgroundWorkMember } from "./background-work";
 import { canonicalCwd } from "./canonical-cwd";
 import { type Hub, type HubItem, hub } from "./core/hub";
 import { CoreError, isCoreShutdown } from "./core/process";
-import { deletedSessions } from "./deleted-sessions";
+import { deletedSessionsOpen } from "./deleted-sessions";
 import { type ExtensionApplyPlan, extensionApplyDecision } from "./extension-reload";
 import { createMessageUpdateSlimmer } from "./message-update-slim";
 import { ModelWaitTracker } from "./model-wait-count";
@@ -527,6 +527,7 @@ export class SidecarPool {
 	}
 
 	#openInstance(): void {
+		deletedSessionsOpen();
 		this.#id = this.#hub.nextId();
 		try {
 			this.#hub.open(
@@ -736,12 +737,10 @@ export class SidecarPool {
 			case "blocked": {
 				const prior = this.#acquiring.get(tab)?.handle;
 				if (prior && prior !== this.#live(tab)) return true;
-				const sessionPath = (item.sessionPath as string | null) ?? undefined;
-				// A session the user deleted never comes back as a tab, whoever asks (a layout, a marker, a reopen);
-				// a worktree being removed is not opened until git is done with it.
-				if (item.hosted === true) return deletedSessions().has(sessionPath);
+				// A deleted session the core refused before asking; a worktree being removed is not opened until git is
+				// done with it.
+				if (item.hosted === true) return false;
 				const device = (item.device as string | null) ?? undefined;
-				if (deletedSessions().has(sessionPath, device)) return true;
 				return !device && removalHolds(item.cwd as string);
 			}
 			case "spawn": {
@@ -901,9 +900,6 @@ export class SidecarPool {
 				if (item.kind !== "omp") return extensionApplyDecision(facts);
 				return ompRestartDecision({ ...facts, resuming: this.continuationOwed?.(tab) === true });
 			}
-			case "deletedAdd":
-				deletedSessions().add(item.sessionPath as string, item.device as string);
-				return null;
 			case "selfDevice":
 				return this.selfDeviceId?.() ?? null;
 			case "snowflake":

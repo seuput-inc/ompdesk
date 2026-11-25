@@ -207,8 +207,7 @@ impl Ctx {
             (payload.as_str().filter(|path| !path.is_empty()), &device)
             && !device.is_empty()
         {
-            self.ask("deletedAdd", json!({"sessionPath": path, "device": device}))
-                .await?;
+            crate::sessions::deleted::add(path, Some(device));
         }
         if !self.with(|pool| pool.has(tab)) {
             return Ok(());
