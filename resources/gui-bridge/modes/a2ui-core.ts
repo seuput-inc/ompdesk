@@ -556,6 +556,24 @@ export function a2uiErrorText(errors: readonly A2uiError[]): string {
 	].join("\n");
 }
 
+/**
+ * Why nobody can press an event button in this session, or undefined when someone can. An unattended run (Autopilot
+ * turns `ask` off) or a session without a window would leave the call waiting forever.
+ */
+export function a2uiUnanswerable(activeTools: readonly string[], canAsk: boolean): A2uiError | undefined {
+	const why = !activeTools.includes("ask")
+		? "Nobody is there to press a button: this is an unattended run."
+		: !canAsk
+			? "Nobody can press a button here: this session has no OMPdesk window."
+			: undefined;
+	if (!why) return undefined;
+	return {
+		code: "VALIDATION_FAILED",
+		path: "/messages",
+		message: `${why} Show the surface without an event button, or decide yourself.`,
+	};
+}
+
 /** One line per component: its props, `*` when required, enum values after `:`. */
 function componentLine(name: string): string {
 	const def = resolve(DEFS[`catalog_component_${name}`]);

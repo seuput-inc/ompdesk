@@ -13,7 +13,14 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "../health";
 import { validateJsonSchemaValue } from "../omp/pi-ai";
 import { A2UI_ANSWER_FIELD, A2UI_TOOL, type A2uiError, type A2uiToolDetails, a2uiMarkerForm } from "./a2ui-contracts";
-import { a2uiAnswer, a2uiErrorText, a2uiPriorCalls, a2uiToolDescription, checkA2uiCall } from "./a2ui-core";
+import {
+	a2uiAnswer,
+	a2uiErrorText,
+	a2uiPriorCalls,
+	a2uiToolDescription,
+	a2uiUnanswerable,
+	checkA2uiCall,
+} from "./a2ui-core";
 
 function result(text: string, details: A2uiToolDetails, isError = false) {
 	return { content: [{ type: "text" as const, text }], details, ...(isError ? { isError: true } : {}) };
@@ -53,21 +60,11 @@ export function registerA2ui(pi: ExtensionAPI): void {
 					shown: check.touched,
 				});
 			}
-			// An unattended run (Autopilot turns `ask` off) or a session without a window: a button would wait forever.
-			const unanswered = !pi.getActiveTools().includes("ask")
-				? "Nobody is there to press a button: this is an unattended run."
-				: !ctx.hasUI || typeof ctx.ui.formDialog !== "function"
-					? "Nobody can press a button here: this session has no OMPdesk window."
-					: undefined;
-			if (unanswered) {
-				return refused([
-					{
-						code: "VALIDATION_FAILED",
-						path: "/messages",
-						message: `${unanswered} Show the surface without an event button, or decide yourself.`,
-					},
-				]);
-			}
+			const unanswerable = a2uiUnanswerable(
+				pi.getActiveTools(),
+				ctx.hasUI && typeof ctx.ui.formDialog === "function",
+			);
+			if (unanswerable) return refused([unanswerable]);
 			const answer = await ctx.ui.formDialog(a2uiMarkerForm(toolCallId), { signal });
 			if (signal?.aborted) throw new Error("Stopped before the person answered.");
 			if (!answer) return result("The person dismissed the surface without acting.", { dismissed: true });
