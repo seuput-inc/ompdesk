@@ -18,8 +18,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::bridge::{Bridge, CONNECT_TIMEOUT, Out, Sink, new_address, remove_address};
 use super::chips::{Chips, Lane as ChipLane};
-use super::held_queue;
 use super::frames::{Decoder, Frame, head_of, js_trim, strip_vt_control_characters, supports_v2};
+use super::held_queue;
 use super::launch::{
     MAX_RESTART_ATTEMPTS, Open, WINDOWS_SESSION_END_EXIT_CODE, file_exists, restart_delay,
     session_open,
@@ -904,7 +904,11 @@ impl Lane {
                 bridge_connected,
                 reply,
             } => {
-                if !self.running.as_ref().is_some_and(|r| r.spawn_id == spawn_id) {
+                if !self
+                    .running
+                    .as_ref()
+                    .is_some_and(|r| r.spawn_id == spawn_id)
+                {
                     let _ = reply.send(Err(disconnected()));
                     return;
                 }
@@ -930,7 +934,12 @@ impl Lane {
                             let _ = reply.send(Err(disconnected()));
                             return;
                         };
-                        queue_commands::start(command, &mut running.chips, bridge_connected, now_ms())
+                        queue_commands::start(
+                            command,
+                            &mut running.chips,
+                            bridge_connected,
+                            now_ms(),
+                        )
                     }
                 };
                 self.queue_step(step, reply);
@@ -1661,7 +1670,14 @@ impl Lane {
         let (Some(running), Some(session)) = (&self.running, self.held_session()) else {
             return;
         };
-        let texts = |lane| running.chips.lane(lane).iter().map(|chip| chip.text.clone()).collect();
+        let texts = |lane| {
+            running
+                .chips
+                .lane(lane)
+                .iter()
+                .map(|chip| chip.text.clone())
+                .collect()
+        };
         held_queue::note(
             self.held_queue_file.as_deref(),
             &session,

@@ -1782,7 +1782,10 @@ async fn the_persons_queue_outlives_its_omp_and_is_offered_once() {
     .unwrap();
     // The omp lives: its queue is stock's, nothing is offered.
     let spawn = rig.spawn_id();
-    assert_eq!(rig.queue(spawn, false, take.clone()).await.unwrap(), nothing);
+    assert_eq!(
+        rig.queue(spawn, false, take.clone()).await.unwrap(),
+        nothing
+    );
     // The omp goes with messages queued (what it says while it stops changes nothing); the next one is offered them.
     rig.tab_call("sidecar.kill", json!({})).await.unwrap();
     rig.tab_call("sidecar.start", json!({})).await.unwrap();

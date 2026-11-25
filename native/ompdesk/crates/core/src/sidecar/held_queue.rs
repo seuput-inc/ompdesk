@@ -120,7 +120,8 @@ impl Store {
     fn put(&mut self, entry: Entry) -> bool {
         if let Some(at) = self.position(&entry.owner) {
             let old = &self.entries[at];
-            if old.session == entry.session && old.lanes == entry.lanes && old.until == entry.until {
+            if old.session == entry.session && old.lanes == entry.lanes && old.until == entry.until
+            {
                 return false;
             }
             self.entries.remove(at);
@@ -162,10 +163,13 @@ impl Store {
         let mut taken = Lanes::default();
         let live = &self.live;
         self.entries.retain(|entry| {
-            let offered = entry.session == session && !live.contains(&entry.owner) && entry.until <= now;
+            let offered =
+                entry.session == session && !live.contains(&entry.owner) && entry.until <= now;
             if offered {
                 taken.steering.extend(entry.lanes.steering.iter().cloned());
-                taken.follow_up.extend(entry.lanes.follow_up.iter().cloned());
+                taken
+                    .follow_up
+                    .extend(entry.lanes.follow_up.iter().cloned());
             }
             !offered
         });
@@ -242,7 +246,9 @@ pub(super) fn spawn_owner(tab: &str, spawn_id: u64) -> String {
 
 /// The running omp's queue changed (`queue_update`).
 pub(super) fn note(file: Option<&Path>, session: &str, owner: &str, lanes: Lanes, now: u64) {
-    with(file, now, |store| ((), store.note(session, owner, lanes, now)));
+    with(file, now, |store| {
+        ((), store.note(session, owner, lanes, now))
+    });
 }
 
 /// The lane tore `owner`'s omp down: its entry is offered from now on.
@@ -271,7 +277,12 @@ pub(super) fn command(
                 })
             });
             let wire = |texts: Vec<String>| {
-                Value::Array(texts.into_iter().map(|text| json!({ "text": text })).collect())
+                Value::Array(
+                    texts
+                        .into_iter()
+                        .map(|text| json!({ "text": text }))
+                        .collect(),
+                )
             };
             Some(Step::Done(
                 json!({ "steering": wire(taken.steering), "followUp": wire(taken.follow_up) }),
@@ -337,7 +348,12 @@ mod tests {
     }
 
     fn take(file: Option<&Path>, session: &str, now: u64) -> Value {
-        match command(&json!({"type": "queue_take_held"}), file, Some(session), now) {
+        match command(
+            &json!({"type": "queue_take_held"}),
+            file,
+            Some(session),
+            now,
+        ) {
             Some(Step::Done(value)) => value,
             _ => panic!("take must answer"),
         }
@@ -348,7 +364,13 @@ mod tests {
         let path = folder("exit").join("held-queue.json");
         let file = Some(path.as_path());
         let owner = spawn_owner("t1", 1);
-        note(file, "/s/a.jsonl", &owner, lanes(&["one", "[Image]"], &["two"]), 10);
+        note(
+            file,
+            "/s/a.jsonl",
+            &owner,
+            lanes(&["one", "[Image]"], &["two"]),
+            10,
+        );
         // While the omp lives its queue is stock's: nothing is offered.
         assert_eq!(take(file, "/s/a.jsonl", 11)["steering"], json!([]));
         release(file, &owner, 12);
@@ -388,7 +410,10 @@ mod tests {
         store.note("/s/a.jsonl", "o1", Lanes::default(), 3);
         assert!(store.entries.is_empty());
         store.note("/s/a.jsonl", "o1", lanes(&["[Image]"], &[]), 4);
-        assert!(store.entries.is_empty(), "a picture-only message carries nothing to keep");
+        assert!(
+            store.entries.is_empty(),
+            "a picture-only message carries nothing to keep"
+        );
         store.release("o1");
         assert!(store.take("/s/a.jsonl", 5).is_empty());
     }
@@ -406,10 +431,16 @@ mod tests {
             ));
         };
         hold(Some("draft"), 1_000);
-        assert_eq!(take(None, "/s/e.jsonl", 1_000 + EDIT_LEASE_MS - 1)["followUp"], json!([]));
+        assert_eq!(
+            take(None, "/s/e.jsonl", 1_000 + EDIT_LEASE_MS - 1)["followUp"],
+            json!([])
+        );
         // Renewed: the lease runs from the renewal.
         hold(Some("draft"), 60_000);
-        assert_eq!(take(None, "/s/e.jsonl", 1_000 + EDIT_LEASE_MS)["followUp"], json!([]));
+        assert_eq!(
+            take(None, "/s/e.jsonl", 1_000 + EDIT_LEASE_MS)["followUp"],
+            json!([])
+        );
         assert_eq!(
             take(None, "/s/e.jsonl", 60_000 + EDIT_LEASE_MS)["followUp"],
             json!([{"text": "draft"}])
@@ -418,7 +449,12 @@ mod tests {
         hold(None, 200_001);
         assert_eq!(take(None, "/s/e.jsonl", 900_000)["followUp"], json!([]));
         assert!(matches!(
-            command(&json!({"type": "queue_hold", "token": "k1", "lane": "x", "text": "t"}), None, Some("/s"), 1),
+            command(
+                &json!({"type": "queue_hold", "token": "k1", "lane": "x", "text": "t"}),
+                None,
+                Some("/s"),
+                1
+            ),
             Some(Step::Fail(_))
         ));
         assert!(command(&json!({"type": "queue_remove"}), None, Some("/s"), 1).is_none());
@@ -428,12 +464,22 @@ mod tests {
     fn the_journal_is_bounded_by_count_and_age() {
         let mut store = Store::default();
         for index in 0..=MAX_ENTRIES {
-            store.note("/s/a.jsonl", &format!("o{index}"), lanes(&["m"], &[]), 1_000);
+            store.note(
+                "/s/a.jsonl",
+                &format!("o{index}"),
+                lanes(&["m"], &[]),
+                1_000,
+            );
         }
         store.prune(1_000);
         assert_eq!(store.entries.len(), MAX_ENTRIES);
         assert_eq!(store.entries[0].owner, "o1");
-        store.note("/s/a.jsonl", "fresh", lanes(&["m"], &[]), MAX_AGE_MS + 1_000);
+        store.note(
+            "/s/a.jsonl",
+            "fresh",
+            lanes(&["m"], &[]),
+            MAX_AGE_MS + 1_000,
+        );
         store.prune(MAX_AGE_MS + 1_000);
         assert_eq!(store.entries.len(), 1);
         assert_eq!(store.entries[0].owner, "fresh");
