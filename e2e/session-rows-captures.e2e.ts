@@ -235,7 +235,7 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	expect(lines.length).toBeGreaterThan(4);
 	for (const line of lines) {
 		if (line.cut || (line.hasHead && !line.head)) expect(line.age, `${line.name}: age before branch`).toBe(false);
-		if (line.working) expect(line.arc, `${line.name}: arc stays`).toBe(true);
+		if (line.working && surface.name !== "narrow") expect(line.arc, `${line.name}: arc stays`).toBe(true);
 		expect(line.endClear, `${line.name}: chip and ⋯ beside the line`).toBe(true);
 	}
 	// Below the sidebar's 280 px default the rows lead without the status lane, so the branch keeps its words.
@@ -264,7 +264,9 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	expect(await visibleAge()).toBe(true);
 	const atRest = await branchStart();
 	await setRun("running");
-	await expect(restRow.locator("[data-status-lane] [data-session-working]")).toBeVisible();
+	const working = restRow.locator("[data-status-lane] [data-session-working]");
+	if (surface.name === "narrow") await expect(working).toBeHidden();
+	else await expect(working).toBeVisible();
 	expect(await visibleAge()).toBe(true);
 	expect(await branchStart()).toBe(atRest);
 	await setRun("ready");
