@@ -162,6 +162,7 @@ import type {
 	ExtensionErrorFrame,
 	ExtensionUIRequest,
 	ExtensionUIResponse,
+	ImageContent,
 	ModelCatalogUpdateFrame,
 	PromptResultFrame,
 	RpcBtwFrame,
@@ -853,6 +854,15 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 					path,
 					tabId,
 				} satisfies IpcFsSaveCopyPayload) as Promise<IpcFsSaveCopyResult>,
+		},
+		draftPictures: {
+			put: async (id: string, content: ImageContent) => {
+				await transport.invoke(IPC_COMMANDS.DRAFT_PICTURES_PUT, id, content);
+			},
+			read: (id: string) => transport.invoke<string | null>(IPC_COMMANDS.DRAFT_PICTURES_READ, id),
+			remove: async (id: string) => {
+				await transport.invoke(IPC_COMMANDS.DRAFT_PICTURES_REMOVE, id);
+			},
 		},
 
 		editor: {

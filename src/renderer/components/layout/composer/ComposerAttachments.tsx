@@ -1,11 +1,12 @@
 /**
- * What goes along with the draft, above the field: the attached pictures, the files still uploading, the folded
- * pastes (each opens "Edit pasted text") and the chips of the draft's `@path` mentions. Each strip has one tab stop
- * and its own arrow keys (strip-roving.ts); Delete removes the focused item and focus returns to the field.
- * The picture strip, the upload chips and the paste chips are memoised: a keystroke re-renders none of them unless
- * what they show changed.
+ * What goes along with the draft, above the field: the attached pictures (a saved draft's picture still being read
+ * back is a still placeholder, one that is gone a warning chip that attaches it again), the files still uploading,
+ * the folded pastes (each opens "Edit pasted text") and the chips of the draft's `@path` mentions. Each strip has
+ * one tab stop and its own arrow keys (strip-roving.ts); Delete removes the focused item and focus returns to the
+ * field. The picture strip, the upload chips and the paste chips are memoised: a keystroke re-renders none of them
+ * unless what they show changed.
  */
-import { AlertTriangle, ClipboardPaste, TextCursorInput, X } from "lucide-react";
+import { AlertTriangle, ClipboardPaste, ImageIcon, TextCursorInput, X } from "lucide-react";
 import { memo, type RefObject, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { removeFileMention } from "../../../../shared/file-mentions";
 import { cx } from "../../../lib/format";
@@ -18,7 +19,7 @@ import {
 	referencedPasteIds,
 	releasePaste,
 } from "../../../lib/paste-blobs";
-import type { ComposerImage } from "../../../stores/composer";
+import { type ComposerImage, type DraftPictureSlot, isReadyPicture, useComposerStore } from "../../../stores/composer";
 import { Button, Chip, IconButton, Spinner, Tooltip } from "../../common";
 import { ComposerThumbnail, imageSummary } from "./ComposerThumbnail";
 import { MAX_COMPOSER_IMAGES } from "./composer-files";
@@ -27,15 +28,13 @@ import { PastedTextDialog } from "./PastedTextDialog";
 import { useRovingStrip } from "./strip-roving";
 import type { SendingFile } from "./use-composer-attach";
 
-type SetImages = (next: (current: ComposerImage[]) => ComposerImage[]) => void;
-
 /** Drafts past this many characters let the chip scan trail a render behind the keystroke. */
 const LONG_DRAFT_CHARS = 4000;
 
 export function ComposerAttachments({
 	text,
-	images,
-	setImages,
+	pictureSlots,
+	onAttachAgain,
 	setText,
 	sendingFiles,
 	textareaRef,
@@ -43,8 +42,10 @@ export function ComposerAttachments({
 	touch,
 }: {
 	text: string;
-	images: readonly ComposerImage[];
-	setImages: SetImages;
+	/** The draft's picture strip, in order (stores/composer.ts `pictureSlots`). */
+	pictureSlots: readonly DraftPictureSlot[];
+	/** Open the file chooser: a saved picture that is gone is attached again by its name. */
+	onAttachAgain: () => void;
 	setText: (next: (current: string) => string) => void;
 	sendingFiles: readonly SendingFile[];
 	textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -107,8 +108,8 @@ export function ComposerAttachments({
 	});
 	return (
 		<>
-			{images.length > 0 && (
-				<ImageStrip focusField={focusField} images={images} setImages={setImages} touch={touch} />
+			{pictureSlots.length > 0 && (
+				<ImageStrip focusField={focusField} onAttachAgain={onAttachAgain} slots={pictureSlots} touch={touch} />
 			)}
 			{sendingFiles.length > 0 && <UploadChips files={sendingFiles} />}
 			<PasteChips
@@ -141,53 +142,57 @@ export function ComposerAttachments({
 	);
 }
 
-/** A picture's identity across renders (the strip's list key): previews are far too long to be keys themselves. */
-const imageIds = new WeakMap<ComposerImage, number>();
-let nextImageId = 0;
-function imageKey(image: ComposerImage): number {
-	let id = imageIds.get(image);
+/** A strip place's identity across renders (its list key): previews are far too long to be keys themselves. */
+const slotIds = new WeakMap<DraftPictureSlot, number>();
+let nextSlotId = 0;
+function slotKey(slot: DraftPictureSlot): number {
+	let id = slotIds.get(slot);
 	if (id === undefined) {
-		id = ++nextImageId;
-		imageIds.set(image, id);
+		id = ++nextSlotId;
+		slotIds.set(slot, id);
 	}
 	return id;
 }
 
 const ImageStrip = memo(function ImageStrip({
-	images,
-	setImages,
+	slots,
 	focusField,
+	onAttachAgain,
 	touch,
 }: {
-	images: readonly ComposerImage[];
-	setImages: SetImages;
+	slots: readonly DraftPictureSlot[];
 	focusField: () => void;
+	onAttachAgain: () => void;
 	touch: boolean;
 }) {
 	const t = useT();
+	const setSlots = useComposerStore(s => s.setPictureSlots);
 	const roving = useRovingStrip<HTMLUListElement>(focusField);
 	// One gallery for every thumbnail, built once per change of the pictures.
 	const gallery = useMemo(
-		() => images.map((item, index) => ({ src: item.preview, alt: t("input.attachmentAlt", { index: index + 1 }) })),
-		[images, t],
+		() =>
+			slots.flatMap((item, index) =>
+				isReadyPicture(item) ? [{ src: item.preview, alt: t("input.attachmentAlt", { index: index + 1 }) }] : [],
+			),
+		[slots, t],
 	);
 	const remove = useCallback(
-		(index: number) => setImages(previous => previous.filter((_, itemIndex) => itemIndex !== index)),
-		[setImages],
+		(slot: DraftPictureSlot) => setSlots(previous => previous.filter(item => item !== slot)),
+		[setSlots],
 	);
 	const removeFromButton = useCallback(
-		(index: number) => {
-			remove(index);
+		(slot: DraftPictureSlot) => {
+			remove(slot);
 			// The button leaves with its picture: typing goes on in the field, never on <body>.
 			focusField();
 		},
 		[remove, focusField],
 	);
 	const removeAll = useCallback(() => {
-		setImages(() => []);
+		setSlots([]);
 		focusField();
-	}, [setImages, focusField]);
-	const over = images.length > MAX_COMPOSER_IMAGES;
+	}, [setSlots, focusField]);
+	const over = slots.length > MAX_COMPOSER_IMAGES;
 	return (
 		<ul
 			aria-label={t("input.attachments")}
@@ -197,18 +202,61 @@ const ImageStrip = memo(function ImageStrip({
 			onKeyDown={roving.onKeyDown}
 			ref={roving.ref}
 		>
-			{images.map((image, index) => (
-				<AttachedImage
-					key={imageKey(image)}
-					gallery={gallery}
-					image={image}
-					index={index}
-					onRemove={remove}
-					onRemoveButton={removeFromButton}
-				/>
-			))}
+			{slots.map((slot, index) =>
+				isReadyPicture(slot) ? (
+					<AttachedImage
+						key={slotKey(slot)}
+						gallery={gallery}
+						image={slot}
+						index={index}
+						onRemove={remove}
+						onRemoveButton={removeFromButton}
+					/>
+				) : slot.status === "missing" ? (
+					<Chip
+						as="li"
+						data-draft-picture="missing"
+						data-strip-item=""
+						icon={<AlertTriangle aria-hidden />}
+						key={slotKey(slot)}
+						labelAttrs={{ "data-strip-stop": "" }}
+						onClick={onAttachAgain}
+						onRemove={() => removeFromButton(slot)}
+						removeAttrs={{ "data-strip-remove": "", tabIndex: -1 }}
+						removeLabel={t("input.removeAttachment", { index: index + 1 })}
+						tone="warning"
+						tooltip={t("input.draft.attachAgain", { name: slot.ref.name })}
+					>
+						{t("input.draft.attachAgain", { name: slot.ref.name })}
+					</Chip>
+				) : (
+					// Being read back: a still placeholder of the thumbnail's size, never a warning before the read ends.
+					<li className="relative shrink-0" data-draft-picture="pending" data-strip-item="" key={slotKey(slot)}>
+						<span
+							aria-label={t("input.attachmentAlt", { index: index + 1 })}
+							className="omp-skeleton flex size-14 items-center justify-center rounded-(--sc-radius-lg) border border-(--sc-border-subtle) text-(--sc-text-muted)"
+							data-strip-stop=""
+							role="img"
+							tabIndex={0}
+							title={slot.ref.name}
+						>
+							<ImageIcon aria-hidden className="size-4" />
+						</span>
+						<IconButton
+							className="omp-composer-attachment-remove absolute -top-2 -right-2"
+							data-strip-remove=""
+							icon={<X />}
+							label={t("input.removeAttachment", { index: index + 1 })}
+							onClick={() => removeFromButton(slot)}
+							size="sm"
+							tabIndex={-1}
+							variant="secondary"
+						/>
+					</li>
+				),
+			)}
 			<Tooltip
-				content={over ? t("input.attachments.over", { count: images.length, max: MAX_COMPOSER_IMAGES }) : ""}
+				content={over ? t("input.attachments.over", { count: slots.length, max: MAX_COMPOSER_IMAGES }) : ""}
 				describe={false}
 				hidden={!over}
 			>
@@ -222,11 +270,11 @@ const ImageStrip = memo(function ImageStrip({
 					role={over ? "status" : undefined}
 				>
 					{over && <AlertTriangle aria-hidden className="size-(--sc-icon-sm)" />}
-					<span>{t("input.attachments.count", { count: images.length, max: MAX_COMPOSER_IMAGES })}</span>
+					<span>{t("input.attachments.count", { count: slots.length, max: MAX_COMPOSER_IMAGES })}</span>
 					{over && <span>{t("input.attachments.overShort")}</span>}
 				</li>
 			</Tooltip>
-			{images.length > 1 && (
+			{slots.length > 1 && (
 				<li className="shrink-0">
 					<Button data-strip-stop="" onClick={removeAll} size="sm" variant="ghost">
 						{t("input.attachments.removeAll")}
@@ -247,8 +295,8 @@ const AttachedImage = memo(function AttachedImage({
 	image: ComposerImage;
 	index: number;
 	gallery: readonly { src: string; alt: string }[];
-	onRemove: (index: number) => void;
-	onRemoveButton: (index: number) => void;
+	onRemove: (image: ComposerImage) => void;
+	onRemoveButton: (image: ComposerImage) => void;
 }) {
 	const t = useT();
 	/** The picture's size once it has decoded: the tooltip names it beside the format and bytes. */
@@ -267,7 +315,7 @@ const AttachedImage = memo(function AttachedImage({
 					const { naturalWidth, naturalHeight } = event.currentTarget;
 					setDimensions(naturalWidth > 0 ? `${naturalWidth}×${naturalHeight}` : null);
 				}}
-				onRemove={() => onRemove(index)}
+				onRemove={() => onRemove(image)}
 				title={dimensions ? `${summary} · ${dimensions}` : summary}
 			/>
 			<IconButton
@@ -275,7 +323,7 @@ const AttachedImage = memo(function AttachedImage({
 				data-strip-remove=""
 				icon={<X />}
 				label={t("input.removeAttachment", { index: index + 1 })}
-				onClick={() => onRemoveButton(index)}
+				onClick={() => onRemoveButton(image)}
 				size="sm"
 				tabIndex={-1}
 				variant="secondary"

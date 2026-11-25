@@ -118,6 +118,7 @@ import { SavedWorktreeStore, setSavedWorktreeStore } from "./disk/saved-worktree
 import { ScratchCare } from "./disk/scratch";
 import { diskFull } from "./disk-full";
 import { bindDiskFullNotice, describeFiles } from "./disk-full-notice";
+import { DraftPictures, registerDraftPicturesIpc } from "./draft-pictures";
 import { EMPTY_APPLY_PLAN } from "./extension-reload";
 import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ipc";
 import type { GithubAuthService } from "./github-auth/service";
@@ -2503,6 +2504,10 @@ app.whenReady().then(async () => {
 	registerDiskCareIpc(ipc, care);
 	void care.start();
 
+	// A composer draft's pictures, per device, until the draft drops them (draft-pictures.ts).
+	const draftPictures = new DraftPictures(join(app.getPath("userData"), "draft-pictures"));
+	registerDraftPicturesIpc(ipc, draftPictures);
+
 	// Register all handlers and sidecar listeners before loading the renderer.
 	// Paired pages' Files-edit reports live in the core's web router; main reads them for the control tools.
 	const fileEditReports = new FileEditReports({
@@ -2627,7 +2632,10 @@ app.whenReady().then(async () => {
 		if (!quiet) webHost?.tabActivity(activity);
 	});
 	webTabNotice.current = (tabId, notice) => webHost?.tabNotice(tabId, notice);
-	webHost.devices.onRevoked(deviceId => webTabLayouts.drop(deviceId));
+	webHost.devices.onRevoked(deviceId => {
+		webTabLayouts.drop(deviceId);
+		void draftPictures.removeDevice(deviceId).catch(() => {});
+	});
 	const host = webHost;
 	// Mobile web's Tailscale side (src/main/tailscale/): the switch, Tailscale's own setup and the published
 	// address. The server it starts is the WebHost above. `OMP_GUI_TEST_TAILSCALE_OPEN` is a test's stand-in

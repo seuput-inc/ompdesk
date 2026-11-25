@@ -39,7 +39,7 @@ import {
 import { translate } from "../lib/i18n";
 import type { WebChrome } from "./chrome";
 import { type LocalChannels, parseOmpUrl } from "./deep-link";
-import { base64ToBytes, type SaveOutcome } from "./download";
+import { base64ToBytes, bytesToBase64, type SaveOutcome } from "./download";
 import {
 	type EditorResult,
 	type FileFilter,
@@ -150,6 +150,36 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 			return { ...rest, data: new Uint8Array(await response.arrayBuffer()) };
 		}
 		return { ...rest, data: new Uint8Array() };
+	}
+
+	/** Each draft picture's calls, one after another in the order the composer made them (by id). */
+	const draftPictureCalls = new Map<string, Promise<unknown>>();
+
+	/**
+	 * `call` once the picture's earlier calls settled: a put still uploading its bytes (`POST /upload`) reaches the
+	 * computer before a remove or read made after it, so the last call made is the one that holds.
+	 */
+	function inDraftPictureOrder<T>(id: unknown, call: () => Promise<T>): Promise<T> {
+		const key = String(id);
+		const running = (draftPictureCalls.get(key) ?? Promise.resolve()).then(call);
+		const tail = running.then(
+			() => undefined,
+			() => undefined,
+		);
+		draftPictureCalls.set(key, tail);
+		void tail.then(() => {
+			if (draftPictureCalls.get(key) === tail) draftPictureCalls.delete(key);
+		});
+		return running;
+	}
+
+	/** A kept draft picture as base64: inline, or (past 512 KiB) fetched from the `/blob` URL the computer answered. */
+	async function readDraftPicture(id: unknown): Promise<string | null> {
+		const wire = await transport.invoke<string | null | { blobUrl: string }>(C.DRAFT_PICTURES_READ, id);
+		if (wire === null || typeof wire === "string") return wire;
+		const response = await env.fetch(`${base}${wire.blobUrl}`, { credentials: "same-origin" });
+		if (!response.ok) throw new Error(`blob ${response.status}`);
+		return bytesToBase64(new Uint8Array(await response.arrayBuffer()));
 	}
 
 	async function viewOnPhone(path: string, tabId: string | undefined) {
@@ -401,6 +431,14 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 			return confirmed ? transport.invoke(C.UPDATER_APPLY) : undefined;
 		},
 		[C.FS_READ_BINARY]: (...args: unknown[]) => readBinary(args),
+		// A draft's picture goes up by upload like a prompt's (a frame holds 1 MB), each picture's calls in order.
+		[C.DRAFT_PICTURES_PUT]: (id: unknown, content: unknown) =>
+			inDraftPictureOrder(id, async () =>
+				transport.invoke(C.DRAFT_PICTURES_PUT, ...(await withImagesUploaded([id, content]))),
+			),
+		[C.DRAFT_PICTURES_READ]: (id: unknown) => inDraftPictureOrder(id, () => readDraftPicture(id)),
+		[C.DRAFT_PICTURES_REMOVE]: (id: unknown) =>
+			inDraftPictureOrder(id, () => transport.invoke(C.DRAFT_PICTURES_REMOVE, id)),
 		// The phone's page prints on the computer; the PDF comes back as bytes and is kept on this device.
 		[PREVIEW_SAVE_PDF]: async () => {
 			const { name, base64 } = await transport.invoke<{ name: string; base64: string }>(PREVIEW_STREAM_PDF);

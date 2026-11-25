@@ -27,6 +27,14 @@ export function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
 	return bytes;
 }
 
+/** Encode bytes as base64 (no data-URL prefix), in chunks a call's argument list can hold. */
+export function bytesToBase64(bytes: Uint8Array): string {
+	let binary = "";
+	for (let index = 0; index < bytes.length; index += 0x8000)
+		binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+	return btoa(binary);
+}
+
 /** `name` without path separators and control characters, never empty. */
 export function safeFileName(name: string): string {
 	const base = name.split(/[\\/]/).pop() ?? "";

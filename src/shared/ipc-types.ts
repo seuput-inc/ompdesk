@@ -52,6 +52,7 @@ import type {
 	ExtensionErrorFrame,
 	ExtensionUIRequest,
 	ExtensionUIResponse,
+	ImageContent,
 	ModelCatalogUpdateFrame,
 	PromptResultFrame,
 	RpcBtwFrame,
@@ -388,6 +389,11 @@ export const IPC_COMMANDS = {
 	/** A picture in a format models refuse (HEIC, TIFF, BMP, ...) made model-safe with stock's image path. */
 	IMAGE_TO_MODEL: "image:to-model",
 	FS_SAVE_COPY: "fs:save-copy",
+	/** A composer draft's picture kept on this device's computer until the draft drops it (main/draft-pictures.ts). */
+	DRAFT_PICTURES_PUT: "draft-pictures:put",
+	/** A kept draft picture's bytes as base64; null when it is not kept. A web page may get `{blobUrl}` (shim.ts). */
+	DRAFT_PICTURES_READ: "draft-pictures:read",
+	DRAFT_PICTURES_REMOVE: "draft-pictures:remove",
 	FS_REVEAL_COPY: "fs:reveal-copy",
 	/** Open a session (or a fresh window) in a new parallel window with its own sidecar */
 	SESSION_OPEN_NEW_WINDOW: "session:open-new-window",
@@ -2861,6 +2867,17 @@ export interface OmpApi {
 		 * Electron answers at once (`webUtils.getPathForFile`); a web page uploads the file to the host first.
 		 */
 		pathForFile(file: File): string | Promise<string>;
+	};
+	/**
+	 * A composer draft's pictures, kept per device on the computer this window belongs to (main/draft-pictures.ts), so a
+	 * draft in `localStorage` keeps its pictures across a relaunch. `id` is a `crypto.randomUUID()` the renderer made;
+	 * one picture's calls take effect in the order they were made.
+	 */
+	draftPictures: {
+		put(id: string, content: ImageContent): Promise<void>;
+		/** The picture's bytes as base64; null only when it is not kept. */
+		read(id: string): Promise<string | null>;
+		remove(id: string): Promise<void>;
 	};
 	editor: {
 		openExternal(content: string): Promise<{

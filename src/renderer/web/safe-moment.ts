@@ -16,7 +16,7 @@ export function pageSafeMoment(isVisible: () => boolean = () => document.visibil
 		visible: isVisible,
 		draftEmpty: () => {
 			const composer = useComposerStore.getState();
-			return composer.draft.trim() === "" && composer.images.length === 0;
+			return composer.draft.trim() === "" && composer.pictureSlots.length === 0;
 		},
 		attached: () => useComposerStore.getState().images.length > 0,
 		picking: filePickInProgress,
