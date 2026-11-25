@@ -50,10 +50,10 @@
 				"native/ompdesk/crates/shell/src/host.rs#read_loop",
 				"native/ompdesk/crates/shell/src/lifecycle.rs:64-107",
 				"native/ompdesk/crates/shell/src/node.rs#stop",
-				"native/ompdesk/crates/shell/src/main.rs:344-363",
+				"native/ompdesk/crates/shell/src/main.rs:343-362",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "5dcad8f44b09755ffec38c029e8ac41a633bd151"
+			"syncCommit": "aa5384b6e6511a59962de6257e137c76c65e7d26"
 		},
 		{
 			"id": "turn-resume",
@@ -314,9 +314,9 @@
 				"resources/gui-bridge/agent-control.ts#watchAsides",
 				"resources/gui-bridge/agent-control.ts#interruptFor",
 				"resources/gui-bridge/agent-control.ts#install",
-				"resources/gui-bridge/agent-control.ts:343-396"
+				"resources/gui-bridge/agent-control.ts:343-397"
 			],
-			"syncCommit": "1661762d43e5eab5ecee11a5a5eb6244b7ec369e"
+			"syncCommit": "aa5384b6e6511a59962de6257e137c76c65e7d26"
 		},
 		{
 			"id": "relaunch-once",
