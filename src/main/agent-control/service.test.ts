@@ -3459,6 +3459,9 @@ describe("autoClose: opened sessions whose work landed", () => {
 			const all = await service.run("main0001", T.send, { sessions: ["@children"], message: "rebase on main" });
 			expect(all.isError).toBe(false);
 			expect(all.text).toContain("Sent to 2 of 2 sessions");
+			// The fake omp starts a turn on each: one finished it, the other still works.
+			a.busy = false;
+			b.busy = true;
 			const idle = await service.run("main0001", T.send, { sessions: ["@idle"], message: "and push" });
 			expect(idle.text).toContain("Sent to 1 of 1 sessions");
 			const pushed = host.sent.filter(

@@ -571,7 +571,12 @@ impl AgentControl {
         }
         if let Some(worktree) = worktree {
             notes.push(format!("worktree {}", worktree.branch));
-            if !reopened && joined.is_none() {
+            // Made from the parent's HEAD (the default) it starts at where it lands: nothing to read.
+            let based = matches!(
+                &args.worktree,
+                Some(WorktreeArg::Spec(SpawnWorktree { base: Some(base), .. })) if base != "HEAD"
+            );
+            if based && !reopened && joined.is_none() {
                 notes.extend(self.starts_behind(&caller.tab_id, tab_id, worktree).await);
             }
         }

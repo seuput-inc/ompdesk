@@ -1027,7 +1027,7 @@ async fn an_asleep_tab_whose_host_finished_answers_from_the_saved_file() {
 #[tokio::test]
 async fn a_child_reads_stopping_on_its_opener_s_board_while_its_stop_waits_and_not_after() {
     let (control, asked) = rig_tuned(
-        7_316,
+        7_322,
         state_of(
             vec![tab("a", "/s/x_1.jsonl"), tab("c1", "/s/c_1.jsonl")],
             json!({ "parents": { "c1": { "callerTabId": "a" } } }),
