@@ -52,6 +52,10 @@ function showPanel(view: PanelTab): void {
 	if (!ui.panelVisible) ui.togglePanel();
 }
 
+/** The kit marks each tab `data-tab-id`, which a session pane also carries: a prefixed id keeps the two apart. */
+const STRIP_PREFIX = "strip:";
+const stripId = (tabId: string): string => `${STRIP_PREFIX}${tabId}`;
+
 export function SessionTabStrip({
 	activeTitle,
 	activeContent,
@@ -90,7 +94,7 @@ export function SessionTabStrip({
 			setMenu({ tab, anchor: anchorFromEvent(event) });
 		};
 		return {
-			id: tab.id,
+			id: stripId(tab.id),
 			label,
 			content: active ? activeContent : undefined,
 			tooltip: label,
@@ -108,7 +112,7 @@ export function SessionTabStrip({
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
 		if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
 		const id = (event.target as HTMLElement).closest?.("[role=tab]")?.getAttribute("data-tab-id");
-		const tab = strip.find(entry => entry.id === id);
+		const tab = strip.find(entry => stripId(entry.id) === id);
 		if (!tab) return;
 		event.preventDefault();
 		const rect = (event.target as HTMLElement).getBoundingClientRect();
@@ -118,15 +122,16 @@ export function SessionTabStrip({
 	return (
 		<div className="omp-tab-strip flex h-full min-w-0 flex-1 items-stretch" data-tab-strip onKeyDown={onKeyDown}>
 			<Tabs
-				activeId={activeTabId ?? ""}
+				activeId={activeTabId ? stripId(activeTabId) : ""}
 				ariaLabel={t("tabStrip.label")}
 				className="min-w-0"
 				onChange={(id, via) => {
-					if (id === activeTabId) {
+					const tabId = id.slice(STRIP_PREFIX.length);
+					if (tabId === activeTabId) {
 						if (via === "click") onRenameActive();
 						return;
 					}
-					void useTabsStore.getState().switchTab(id);
+					void useTabsStore.getState().switchTab(tabId);
 				}}
 				tabs={items}
 				variant="strip"

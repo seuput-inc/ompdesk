@@ -69,7 +69,9 @@ describe("the title bar's session tabs", () => {
 		});
 		const rename = vi.fn();
 		await mount(rename);
-		expect(tabs().map(element => element.getAttribute("data-tab-id"))).toEqual(["a", "b", "d"]);
+		expect(tabs().map(element => element.getAttribute("data-session-tab"))).toEqual(["tab:a", "tab:b", "tab:d"]);
+		// A strip tab never carries a session pane's `data-tab-id`, which e2e locators and focus-place.ts read as the pane.
+		for (const element of tabs()) expect(["a", "b", "d"]).not.toContain(element.getAttribute("data-tab-id"));
 		const chosen = tabs()[1];
 		expect(chosen?.hasAttribute("data-titlebar-session-name")).toBe(true);
 		// The chosen tab draws the title bar's name parts; another tab its plain name.

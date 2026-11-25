@@ -353,7 +353,9 @@ function readHeadIn(node: Element): {
 	const tail = node.querySelector("[data-head-tail]");
 	const line = node.closest(".omp-session-row-give")?.getBoundingClientRect();
 	const title = node.getAttribute("title") ?? "";
-	const onLine = Boolean(line && node.getBoundingClientRect().top < line.bottom - 1);
+	// A head the box wrapped out of sight starts one line (15 px at 12 px type) down; on Windows' fonts a line is a
+	// fraction shorter than the box's 1lh, so "on the line" is a top above the line's middle, not above its bottom.
+	const onLine = Boolean(line && node.getBoundingClientRect().top < line.top + line.height / 2);
 	const whole = `${text?.textContent ?? ""}${tail?.textContent ?? ""}`;
 	if (!text?.firstChild || !onLine) return { title, onLine, cut: false, shown: whole, visible: "", past: 0 };
 	const box = text.getBoundingClientRect();
