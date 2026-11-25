@@ -14,7 +14,7 @@
  * Whether this build has bots: the registry and a way to make the first one (`ompdesk_bot create`, the `ompdesk bot`
  * CLI). The Bots navigation row and page (orca-look-shell) show only while it is true.
  */
-export const BOTS_AVAILABLE = false;
+export const BOTS_AVAILABLE = true;
 export const BOTS_COMMAND = "bots:command";
 export const BOTS_STATE = "bots:state";
 
