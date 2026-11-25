@@ -24,6 +24,7 @@ import {
 	SearchField,
 	SkeletonRows,
 } from "../common";
+import { NotesShelf, useNotesOwner } from "./notes/ReviewNotes";
 import { ChangeCounts, ChangeStatus, type ChangeStatusName, PanelToolbar } from "./PanelChrome";
 import { CommitBox } from "./scm/CommitBox";
 import { DiffLines, DiffSkeleton, VirtualRows } from "./scm/DiffLines";
@@ -95,6 +96,7 @@ export function RepositoryChanges({ sourceSelector }: { sourceSelector?: ReactNo
 	const [nameRequest, setNameRequest] = useState<NameRequest | null>(null);
 	const [discarding, setDiscarding] = useState<string[] | null>(null);
 	const [menu, setMenu] = useState<{ anchor: ContextMenuAnchor; file: ChangedFile } | null>(null);
+	const { owner: notesOwner } = useNotesOwner();
 	const loadedFor = useRef<TabRpc | null>(null);
 	// The fingerprint read just before the last full load; a poll that reads another one reloads.
 	const loadedFingerprint = useRef("");
@@ -299,6 +301,11 @@ export function RepositoryChanges({ sourceSelector }: { sourceSelector?: ReactNo
 						tone="danger"
 					/>
 				)}
+				<NotesShelf
+					onOpen={note => {
+						if (note.anchor.kind === "diff") setSelected(note.anchor.path);
+					}}
+				/>
 				{changes?.isRepo && head && !selected && (
 					<CommitBox branch={head.branch} conflicts={conflicts} rpc={rpc} runner={runner} staged={staged} />
 				)}
@@ -466,7 +473,12 @@ export function RepositoryChanges({ sourceSelector }: { sourceSelector?: ReactNo
 								{!preview && !error ? (
 									<DiffSkeleton label={t("common.loading")} />
 								) : preview?.kind === "text" ? (
-									<DiffLines lines={lines} path={selected} scroller={previewScroller} />
+									<DiffLines
+										lines={lines}
+										notes={notesOwner ? { owner: notesOwner } : undefined}
+										path={selected}
+										scroller={previewScroller}
+									/>
 								) : (
 									preview && (
 										<p className="p-3 text-sc-sm text-(--sc-text-muted)">

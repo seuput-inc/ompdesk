@@ -58,7 +58,8 @@ interface PrCenterStore {
 	/** Close the selected PR's detail (a phone's back from the detail). */
 	deselect: () => void;
 	toggleFile: (path: string) => Promise<void>;
-	checkout: (number: number) => Promise<void>;
+	/** Check the PR out into a worktree and open a session there; the new tab's id, or null when it failed (toasted). */
+	checkout: (number: number) => Promise<string | null>;
 	reset: () => void;
 	/**
 	 * While the panel is shown: a return to the window reads the list and the PR again when a minute old and not held,
@@ -376,7 +377,7 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 			const response = await window.omp.rpc.prCheckout(number);
 			if (!response.success) {
 				toastError({ title: translate("prCenter.checkoutFailed"), error: response });
-				return;
+				return null;
 			}
 			const result = response.data as { path: string; branch: string };
 			const repo = get().repo;
@@ -391,8 +392,10 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 			});
 			if (tabId)
 				toast({ variant: "success", message: translate("prCenter.checkoutOpened", { number: String(number) }) });
+			return tabId;
 		} catch (error) {
 			toastError({ title: translate("prCenter.checkoutFailed"), error });
+			return null;
 		}
 	},
 

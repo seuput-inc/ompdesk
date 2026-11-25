@@ -31,6 +31,12 @@ export function prependToDraft(restored: string, draft: string): string {
 	return draft.trim() ? `${restored}\n\n${draft}` : restored;
 }
 
+/** A quote added to the composer goes after what it holds, a blank line between, as typing it would (Orca's `appendNativeChatQuote`). */
+export function appendToDraft(added: string, draft: string): string {
+	const kept = draft.trimEnd();
+	return kept ? `${kept}\n\n${added}` : added;
+}
+
 /**
  * One queued message a Stop withdrew (stock's `abort_and_restore_queue`), or one the core kept when the tab's omp went
  * with it still queued (`kept`, core `sidecar/held_queue.rs`), held apart from the draft until the user decides: Resume

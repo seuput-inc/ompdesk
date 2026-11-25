@@ -2,7 +2,8 @@
  * Pull request detail (Agents › Pull requests): header (title, state,
  * branches, diff stat, review decision, actions), collapsible markdown body,
  * checks, and the files index with per-file lazy DiffView expansion. Diff
- * text loads on first expand via pr_diff — closed files cost nothing.
+ * text loads on first expand via pr_diff — closed files cost nothing. Failed
+ * checks can go to an agent session on the PR's checkout.
  */
 
 import {
@@ -13,18 +14,20 @@ import {
 	GitPullRequest,
 	GitPullRequestDraft,
 	RefreshCw,
+	Sparkles,
 	XCircle,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { githubConclusionPassed } from "../../../../shared/github-checks";
 import { DiffView } from "../../../lib/diff";
+import { checkFailed, fixChecksPrompt } from "../../../lib/fix-prompts";
 import { githubStateLabel } from "../../../lib/github-state";
 import { useT } from "../../../lib/i18n";
 import { MarkdownRenderer } from "../../../lib/markdown";
 import { openExternal } from "../../../lib/open-external";
 import { usePrCenterStore } from "../../../stores/pr-center";
 import { Badge, Button, Card, DisclosureButton, EmptyState, ErrorDetail, InlineNotice, Skeleton } from "../../common";
-import { PrConversation, PrEditButton, PrMergeButton } from "./PrActions";
+import { handToPrCheckout, PrConversation, PrEditButton, PrMergeButton } from "./PrActions";
 
 const BODY_COLLAPSE_LINES = 12;
 
@@ -98,6 +101,7 @@ export function PrDetail() {
 	const selected = usePrCenterStore(state => state.selected);
 	const error = usePrCenterStore(state => state.error);
 	const [bodyExpanded, setBodyExpanded] = useState(false);
+	const [handing, setHanding] = useState(false);
 
 	if (selected === null) {
 		return (
@@ -269,6 +273,29 @@ export function PrDetail() {
 							))}
 						</ul>
 					</Card>
+					{detail.checks.some(checkFailed) && (
+						<div>
+							<Button
+								icon={<Sparkles />}
+								loading={handing}
+								onClick={() => {
+									setHanding(true);
+									void handToPrCheckout(detail.number, () =>
+										fixChecksPrompt({
+											number: detail.number,
+											title: detail.title,
+											url: detail.url,
+											checks: detail.checks,
+										}),
+									).finally(() => setHanding(false));
+								}}
+								size="sm"
+								variant="secondary"
+							>
+								{t("fixWithAgent.fixChecks")}
+							</Button>
+						</div>
+					)}
 				</Section>
 			)}
 

@@ -411,11 +411,17 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // The first-run gate deciding from omp's catalog before the stock helper answers (G22, `servingVerdict` and the split
 // wait in `FirstRunGate`, 20 Nov 2026), which runs on every first screen: measured 2,212,279 (branch run 44673408959),
 // 266 bytes over. The budget is that measure plus 80 bytes.
+// Review notes (26 Nov 2026, orca-review-notes): ⌘W's close guard reads a tab's unsent notes (`lib/tab-close.ts` →
+// `stores/review-notes.ts`, the store and its localStorage list) and the composer takes handed text into a hidden tab's
+// store (`lib/composer-handoff.ts`); the transcript's Add to chat is lazy (`TranscriptQuote`): measured 2,215,498 (branch
+// run 45687946641), 3,139 bytes over. The budget is that measure plus 80 bytes.
+// With main's queued-edit requeue (8c6217faf, b99ecc9af: the composer store's `editsRequeueing`) merged: measured
+// 2,215,938 (branch run 45699393025). The budget is that measure plus 80 bytes.
 // An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2): `buildHistoryRows` cutting the call out of its
 // card, `MessageBubble` choosing the card for it, and the lazy wrappers that load the A2UI chunk (the engine and views
-// stay in that chunk): measured 2,212,625 (branch run 45698452559), 346 bytes over. The budget is that measure plus
-// 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_212_705;
+// stay in that chunk): 346 bytes over the budget before it (2,212,625 in branch run 45698452559). The budget is main's
+// plus those 346 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_216_364;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

@@ -3,18 +3,22 @@
  * (merge commit, squash, rebase) behind a confirmation, edit title, body
  * and base, the conversation (comments, reviews, inline review comments)
  * and a review form (comment, approve, request changes). Everything runs
- * through `gh` in main on the active tab's repository.
+ * through `gh` in main on the active tab's repository. A fix the PR needs
+ * (its comments, its failed checks) can go to an agent session on its checkout.
  */
-import { CheckCircle2, GitMerge, MessageSquare, Pencil, RefreshCw, XCircle } from "lucide-react";
+import { CheckCircle2, GitMerge, MessageSquare, Pencil, RefreshCw, Sparkles, XCircle } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import type { RpcCommand, RpcPrComments, RpcPrDetail, RpcPrMergeMethod } from "../../../../shared/rpc-types";
+import { handToTab } from "../../../lib/composer-handoff";
 import { errorDetail } from "../../../lib/error-detail";
+import { addressCommentsPrompt } from "../../../lib/fix-prompts";
 import { useFocusedScope } from "../../../lib/focused-scope";
 import { formatTimeAgo } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { lastRead, rememberRead } from "../../../lib/last-read";
 import { MarkdownRenderer } from "../../../lib/markdown";
 import { usePrCenterStore } from "../../../stores/pr-center";
+import { useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
 import {
 	Badge,
@@ -43,6 +47,14 @@ async function runPr(command: RpcCommand, failure: string): Promise<boolean> {
 		toastError({ title: failure, error });
 	}
 	return false;
+}
+
+/** Open the PR's checkout session and put the prompt in its composer, unsent; nothing when the checkout failed (toasted). */
+export async function handToPrCheckout(number: number, prompt: (cwd: string) => string): Promise<void> {
+	const tabId = await usePrCenterStore.getState().checkout(number);
+	if (!tabId) return;
+	const cwd = useTabsStore.getState().tabs.find(tab => tab.id === tabId)?.cwd ?? "";
+	handToTab(tabId, { text: prompt(cwd), mode: "prepend" });
 }
 
 /** Why GitHub would refuse a merge right now, from `mergeStateStatus`; null when nothing blocks it. */
@@ -272,6 +284,15 @@ export function PrConversation({ detail }: { detail: RpcPrDetail }) {
 	};
 
 	const open = !detail.state || detail.state === "OPEN";
+	// An approval or a review with no words asks the agent for nothing.
+	const feedback = comments?.entries.filter(entry => entry.body.trim()) ?? [];
+	const askAgent = async () => {
+		setBusy("agent");
+		await handToPrCheckout(number, cwd =>
+			addressCommentsPrompt({ number, title: detail.title, url: detail.url, comments: feedback, cwd }),
+		);
+		setBusy(null);
+	};
 	return (
 		<section aria-label={t("prCenter.section.conversation")} className="flex flex-col gap-2">
 			<div className="flex items-center gap-2">
@@ -279,8 +300,18 @@ export function PrConversation({ detail }: { detail: RpcPrDetail }) {
 					{t("prCenter.section.conversation")}
 					{comments && ` (${comments.entries.length})`}
 				</h3>
-				<IconButton
+				<Button
 					className="ml-auto"
+					disabled={busy !== null || feedback.length === 0}
+					icon={<Sparkles />}
+					loading={busy === "agent"}
+					onClick={() => void askAgent()}
+					size="sm"
+					variant="ghost"
+				>
+					{t("fixWithAgent.addressComments")}
+				</Button>
+				<IconButton
 					icon={<RefreshCw />}
 					label={t("common.refresh")}
 					loading={loading}

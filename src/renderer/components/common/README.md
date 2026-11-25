@@ -57,6 +57,7 @@ allow-list beside the marker.
 | "Yes, really" before something irreversible | `ConfirmDialog` (the safe `ghost` Cancel focused, the danger button the one fill) | `window.confirm` |
 | Detail too big for a popover, smaller than a page | `Sheet` (`right`, `left` drawer, `bottom` action sheet, `full`; `closeButton={false}` when the footer has Cancel; first focus as `Modal`'s) | a Sheet over a Modal |
 | Quick contextual controls by their trigger | `Popover` | a Modal |
+| Actions on text the person selected (Add to chat, Add note) | `SelectionActions` (a bar above a settled selection inside `rootRef`; waits 500 ms after a double click, keeps the selection, follows the scroller, `accept` limits what may be taken) | a popover that steals focus, a context menu as the only way |
 | A label for an unspelled control | `Tooltip` (prefer `IconButton`, which wires it) | essential information only in a tooltip |
 | A longer explanation of a row | `SettingInfo` (the (i) glyph), `splitDescription` | a paragraph under a label |
 | A short status or count | `Badge` (`dot` + `pulse` while live; text says the state; `size="xs"` 16 px in a dense line, `truncate` for a long one; DOM attributes reach it) | a clickable badge, a `rounded-full` span of your own |
