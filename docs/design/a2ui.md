@@ -160,10 +160,10 @@ Units 1 and 2 can run in parallel (the catalog JSON is unit 1's first commit); 3
 
 ## 8. Risks and what is not checked
 
-- `formDialog` from inside a tool's `execute` was not run yet; `agent-control.ts` does `ctx.ui.confirm` the same way, so the path is used in production for a sibling method. Unit 1's stock test is the proof.
+- Checked in unit 1: `formDialog` from inside a tool's `execute` works on stock 19.2.1 (`src/main/bridge-a2ui-stock.test.ts`). It raises one `form` request with the marker, and an answer, a dismissal or Stop each end the call. Stock prints the call's `tool_execution_start` after the request it raised, and a thrown error's result carries `details: {}`.
 - The notification text for a marker form comes from its `<p>`; how `notify-triage.ts` titles a form was not read. Unit 4 checks the line the person sees.
 - Whether partial tool arguments reach `ToolRendererProps` as parsed objects for a bridge-registered tool (not only stock's) was not traced; if they arrive only at the end, the card renders when the call completes and progressive rendering waits for that fix.
 - `lit` staying out of the renderer chunk rests on tree-shaking under `"sideEffects": false` (§2), not on an import path free of it; not built yet. Unit 2's bundle refusal proves it or triggers the fallback.
-- The stock validator on the merged A2UI schema (§1) was not run: whether its cycle tracking terminates on A2UI's recursive `DynamicValue`/`FunctionCall` refs, and how its issue paths read, is unit 1's first test (the upstream test cases include deep nesting).
+- Checked in unit 1: the stock validator terminates on A2UI's recursive refs. Alone it disagrees with 20 of A2UI's 106 agent-to-renderer test cases: it treats `unevaluatedProperties` as permissive, compiles `\p{…}` without the `u` flag and skips `format: uri`. With `a2ui-core.ts`'s own checks of property keys, identifiers and URLs, all 106 agree (`src/main/fixtures/a2ui-spec-cases.json`).
 - Models trained on A2UI v0.8 write `surfaceUpdate`/`beginRendering`; the validator rejects them with a pointed message and the description's example is v1.0. Watch the first sessions' error rate.
 - web_core is 0.x and moves weekly (0.16.1 published 23 Nov 2026); the exact pin and the schema drift test keep an update deliberate.

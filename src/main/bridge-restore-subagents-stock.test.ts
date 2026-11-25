@@ -541,6 +541,8 @@ describe.skipIf(!existsSync(omp))("revived subagents on stock omp", () => {
 		const revived = provider.subagentCalls[requestsAtCut];
 		expect(live?.system).toContain("<background-checks>");
 		expect(revived?.system).toBe(live?.system);
+		// Only the main agent shows surfaces to the person (modes/a2ui.ts): a subagent, live or revived, has no `a2ui`.
+		expect([...(live?.tools ?? []), ...(revived?.tools ?? [])]).not.toContain("a2ui");
 	}, 240_000);
 
 	// 2 Nov 2026 (v0.94.0 → v0.94.1 automatic update): background subagents were each in the middle of a `bash` or
