@@ -8,6 +8,11 @@
  *
  * A host that predates the long poll answers at once with nothing new; `MIN_GAP_MS` keeps that from becoming a
  * busy loop.
+ *
+ * xterm parses its writes in order. An answer it has not taken after `WRITE_CHECK_MS` gets an empty write queued
+ * behind it (`probe`): when that one comes back, xterm took the output and only its callback was lost, so the read
+ * goes on from the answer's offset; when neither comes back within another `WRITE_CHECK_MS`, the parser is stuck and
+ * the read stops (`wedged`). Nothing is judged while the page is hidden, where timers are throttled (U172).
  */
 import {
 	TERMINAL_OUTPUT_BUDGET,
@@ -20,6 +25,8 @@ import {
 export const MIN_GAP_MS = 80;
 /** Pause after a failed request before asking again. */
 export const RETRY_MS = 1000;
+/** How long xterm may take with one answer before the read checks whether it still parses. */
+export const WRITE_CHECK_MS = 10_000;
 
 export interface TerminalPollOptions {
 	id: string;
@@ -41,6 +48,15 @@ export interface TerminalPollOptions {
 	 * its screen is still blank (H137).
 	 */
 	settled?(): void;
+	/** Resolves when xterm has parsed an empty write queued now, so everything written before it (U172). */
+	probe?(): Promise<void>;
+	/** The page is hidden (its timers are throttled, so a slow write proves nothing). */
+	hidden?(): boolean;
+	/**
+	 * xterm took neither an answer nor the probe behind it in time: its parser is stuck. The read has stopped; the
+	 * viewport replaces the screen with a new one, which reads the kept scrollback from its start (U172).
+	 */
+	wedged?(): void;
 	/** Where the stream starts (0 reads the whole scrollback). */
 	offset?: number;
 	now?: () => number;
@@ -52,6 +68,30 @@ const realSleep = (ms: number) => {
 	setTimeout(resolve, ms);
 	return promise;
 };
+
+/** Whether `work` settles within `ms`. */
+function within(ms: number, work: Promise<unknown>): Promise<boolean> {
+	const { promise: late, resolve } = Promise.withResolvers<boolean>();
+	const timer = setTimeout(resolve, ms, false);
+	return Promise.race([work.then(() => true), late]).finally(() => clearTimeout(timer));
+}
+
+/** Writes `output` to xterm; false when its parser stopped taking writes (see the file's comment). */
+async function parsed(options: TerminalPollOptions, output: string): Promise<boolean> {
+	const written = options.write(output);
+	const { probe } = options;
+	if (!probe) {
+		await written;
+		return true;
+	}
+	while (!options.stopped()) {
+		if (await within(WRITE_CHECK_MS, written)) return true;
+		if (options.hidden?.()) continue;
+		if (await within(WRITE_CHECK_MS, Promise.race([written, probe()]))) return true;
+		if (!options.hidden?.()) return false;
+	}
+	return true;
+}
 
 /** Read `id` until `stopped()`. Never has more than one request in flight. */
 export async function pollTerminal(options: TerminalPollOptions): Promise<void> {
@@ -85,7 +125,10 @@ export async function pollTerminal(options: TerminalPollOptions): Promise<void> 
 		}
 		if (snapshot.output) {
 			// The acknowledgement: asking again only once xterm has the output.
-			await options.write(snapshot.output);
+			if (!(await parsed(options, snapshot.output))) {
+				options.wedged?.();
+				return;
+			}
 			offset = snapshot.offset;
 			continue;
 		}

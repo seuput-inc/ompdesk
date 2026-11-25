@@ -160,6 +160,9 @@ export function TerminalViewport({
 	const fontChanged = useRef<(() => void) | null>(null);
 	const latest = useRef({ transform, fontSize, onLease, takeFocus });
 	latest.current = { transform, fontSize, onLease, takeFocus };
+	/** Bumped when xterm's parser stuck: the effect builds a new screen, which reads the kept scrollback again (U172). */
+	const [screen, setScreen] = useState(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: screen explicitly replaces a stuck xterm.
 	useEffect(() => {
 		if (!element.current) return;
 		const target = element.current;
@@ -308,6 +311,17 @@ export function TerminalViewport({
 							return;
 					void window.omp.terminal.request(tabId, { action: "redraw", id }).catch(() => {});
 				},
+				// xterm parses in order: an empty write behind a late one tells a lost callback from a stuck parser.
+				probe: () => {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					view.terminal.write("", resolve);
+					return promise;
+				},
+				hidden: () => document.visibilityState === "hidden",
+				// The PTY keeps running: only this screen is replaced, and the new one replays what the host kept.
+				wedged: () => {
+					if (!stopped) setScreen(count => count + 1);
+				},
 				stopped: () => stopped || failed,
 			});
 			cleanup = () => {
@@ -328,7 +342,7 @@ export function TerminalViewport({
 			stopped = true;
 			cleanup();
 		};
-	}, [tabId, id, mount, onStatus, onError, handle, predict]);
+	}, [tabId, id, mount, onStatus, onError, handle, predict, screen]);
 	useEffect(() => {
 		if (fontSize !== undefined) fontChanged.current?.();
 	}, [fontSize]);

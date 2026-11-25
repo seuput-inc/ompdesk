@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TERMINAL_OUTPUT_BUDGET, TERMINAL_POLL_MAX_WAIT_MS } from "../../../shared/terminal-types";
 import { resetShellModeForTests } from "../../hooks/use-shell-mode";
 import { I18nProvider, translate } from "../../lib/i18n";
+import { WRITE_CHECK_MS } from "../../lib/terminal-poll";
 import { useTabsStore } from "../../stores/tabs";
 import { type TerminalMount, TerminalPanel, TerminalViewport } from "./TerminalPanel";
 
@@ -178,6 +179,66 @@ describe("TerminalPanel", () => {
 			root = undefined;
 		}
 		expect(redraws).toEqual([""]);
+	});
+	it("replaces a screen whose parser stuck with a new one that replays from the start, leaving the PTY running", async () => {
+		vi.useFakeTimers();
+		for (const Observer of ["ResizeObserver", "MutationObserver"])
+			vi.stubGlobal(
+				Observer,
+				class {
+					observe() {}
+					disconnect() {}
+				},
+			);
+		const request = vi.fn(async (_tabId: string, operation: { action: string; offsets?: Record<string, number> }) => [
+			{ id: "term", output: operation.offsets?.term === 0 ? "frame" : "", offset: 5, exited: false },
+		]);
+		Reflect.set(window, "omp", { terminal: { request } });
+		const screens: Array<{ disposed: number; writes: string[] }> = [];
+		const mountScreen = (): TerminalMount => {
+			const screen = { disposed: 0, writes: [] as string[] };
+			screens.push(screen);
+			// The first screen's parser is stuck: it calls back for nothing, the probe included.
+			const stuck = screens.length === 1;
+			return {
+				terminal: {
+					cols: 80,
+					rows: 24,
+					options: {},
+					write: (data: string | Uint8Array, done?: () => void) => {
+						screen.writes.push(String(data));
+						if (!stuck) done?.();
+					},
+					onData: () => ({ dispose: vi.fn() }),
+					focus: vi.fn(),
+					clear: vi.fn(),
+					getSelection: () => "",
+					dispose: () => {
+						screen.disposed += 1;
+					},
+					attachCustomKeyEventHandler: vi.fn(),
+				},
+				fit: vi.fn(),
+			};
+		};
+		await mount(
+			<TerminalViewport
+				tabId="tab"
+				id="term"
+				onStatus={vi.fn()}
+				onError={vi.fn()}
+				mount={mountScreen}
+				handle={{ current: null }}
+			/>,
+		);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2 * WRITE_CHECK_MS);
+		});
+		expect(screens).toHaveLength(2);
+		expect(screens[0].writes).toEqual(["frame", ""]);
+		expect(screens[0].disposed).toBe(1);
+		expect(screens[1].writes).toEqual(["frame"]);
+		expect(request.mock.calls.some(([, operation]) => ["close", "restart"].includes(operation.action))).toBe(false);
 	});
 	it("shows an actionable startup error instead of an endless loading state", async () => {
 		Reflect.set(window, "omp", {

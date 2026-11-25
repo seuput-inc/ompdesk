@@ -6,7 +6,7 @@ import {
 	type TerminalOperation,
 	type TerminalSnapshot,
 } from "../../shared/terminal-types";
-import { MIN_GAP_MS, pollTerminal, RETRY_MS } from "./terminal-poll";
+import { MIN_GAP_MS, pollTerminal, RETRY_MS, WRITE_CHECK_MS } from "./terminal-poll";
 
 const ID = "pty-1";
 const snapshot = (output: string, offset: number, extra: Partial<TerminalSnapshot> = {}): TerminalSnapshot => ({
@@ -184,5 +184,69 @@ describe("pollTerminal", () => {
 		await h.run;
 		expect(h.written).toEqual(["<reset>", "kept", "more", "<settled>"]);
 		expect(h.requests[2]).toMatchObject({ offsets: { [ID]: 104 } });
+	});
+});
+
+describe("pollTerminal when xterm does not answer a write (U172)", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** A read whose writes never call back; `probe` answers as the test says, `hidden` as the page is. */
+	function stuck(probeAnswers: boolean, page = { hidden: false }) {
+		const offsets: number[] = [];
+		const wedged = vi.fn();
+		let stop = false;
+		const answers = [[snapshot("frame", 5)], [snapshot("next", 9)]];
+		const run = pollTerminal({
+			id: ID,
+			request: async operation => {
+				if (operation.action === "list") offsets.push(operation.offsets?.[ID] ?? -1);
+				const next = answers.shift();
+				if (!next) stop = true;
+				return next ?? [];
+			},
+			write: () => Promise.withResolvers<void>().promise,
+			probe: () => (probeAnswers ? Promise.resolve() : Promise.withResolvers<void>().promise),
+			hidden: () => page.hidden,
+			onSnapshot: () => {},
+			wedged,
+			stopped: () => stop,
+		});
+		return { run, offsets, wedged, page };
+	}
+
+	it("reads on from the answer's offset when only the write's callback was lost", async () => {
+		const h = stuck(true);
+		await vi.advanceTimersByTimeAsync(WRITE_CHECK_MS);
+		expect(h.offsets).toEqual([0, 5]);
+		await vi.advanceTimersByTimeAsync(WRITE_CHECK_MS);
+		await vi.advanceTimersByTimeAsync(RETRY_MS);
+		await h.run;
+		expect(h.offsets).toEqual([0, 5, 9]);
+		expect(h.wedged).not.toHaveBeenCalled();
+	});
+
+	it("stops and says the parser is stuck when the probe behind the write never comes back either", async () => {
+		const h = stuck(false);
+		await vi.advanceTimersByTimeAsync(2 * WRITE_CHECK_MS - 1);
+		expect(h.wedged).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		await h.run;
+		expect(h.wedged).toHaveBeenCalledOnce();
+		expect(h.offsets).toEqual([0]);
+	});
+
+	it("judges nothing while the page is hidden", async () => {
+		const h = stuck(false, { hidden: true });
+		await vi.advanceTimersByTimeAsync(10 * WRITE_CHECK_MS);
+		expect(h.wedged).not.toHaveBeenCalled();
+		h.page.hidden = false;
+		await vi.advanceTimersByTimeAsync(2 * WRITE_CHECK_MS);
+		await h.run;
+		expect(h.wedged).toHaveBeenCalledOnce();
 	});
 });
