@@ -6991,6 +6991,8 @@ export const en: Record<string, string> = {
 	"extensionUpdate.failure.not-updated": "The update finished, but it still reports the old version.",
 	"extensionUpdate.failure.needs-approval":
 		"The new version ships scripts that need your approval. OMPdesk never approves them for you.",
+	"extensionUpdate.failure.plugin-needs-approval":
+		"The new version adds extensions, tools or hooks that run in every session. Choose Update now to approve it.",
 	"extensionUpdate.failure.cancelled": "The update was cancelled.",
 	"settings.connections.mobileWeb": "Mobile web",
 	"mobileWeb.toggle": "Use OMPdesk from a phone or tablet",

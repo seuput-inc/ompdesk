@@ -6973,6 +6973,8 @@ export const ko: Record<string, string> = {
 	"extensionUpdate.failure.not-updated": "업데이트가 끝났지만 아직 이전 버전이에요.",
 	"extensionUpdate.failure.needs-approval":
 		"새 버전에 승인이 필요한 스크립트가 들어 있어요. OMPdesk는 대신 승인하지 않아요.",
+	"extensionUpdate.failure.plugin-needs-approval":
+		"새 버전이 모든 세션에서 실행되는 확장, 도구 또는 훅을 추가해요. 승인하려면 지금 업데이트를 누르세요.",
 	"extensionUpdate.failure.cancelled": "업데이트를 취소했어요.",
 	"settings.connections.mobileWeb": "모바일 웹",
 	"mobileWeb.toggle": "폰과 태블릿에서 OMPdesk 사용",

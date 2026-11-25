@@ -1496,7 +1496,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	extensionUpdates: {
 		modules: {
 			[`${AGENT}/extensibility/plugins/manager`]: ["PluginManager.prototype.upgrade()"],
-			[`${AGENT}/extensibility/plugins/marketplace`]: ["MarketplaceManager.prototype.checkForUpdates()"],
+			[`${AGENT}/extensibility/plugins/marketplace`]: [
+				"MarketplaceManager.prototype.checkForUpdates()",
+				// The hold for a plugin upgrade that adds extensions, tools or hooks reads the candidate through these.
+				"MarketplaceManager.prototype.listAvailablePlugins()",
+				"parsePluginId()",
+				"resolvePluginSource()",
+			],
 			[`${AGENT}/extensibility/plugins/git-url`]: ["parseGitUrl()"],
 			[`${AGENT}/cli/npm-registry`]: ["loadNpmRegistryResolver()", "npmRegistryPackageUrl()"],
 			// Registry-skill installs, and skill discovery for the plugin and local counts.
@@ -1511,7 +1517,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 			[`${AGENT}/skillshare/installer`]: ["listInstalledSkills()", "resolveSkillVersion()", "updateSkillPackages()"],
 			[`${AGENT}/skillshare/manifest`]: ["getProjectSkillsInstallPaths()"],
-			[UTILS]: ["getPluginsPackageJson()"],
+			[UTILS]: ["getPluginsPackageJson()", "getPluginsNodeModules()", "expandTilde()"],
 		},
 	},
 	skills: SKILL_LIST,

@@ -13,7 +13,12 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyActivation, type PluginActivation, pluginRequiresRestart } from "../extensions/activation-core";
+import {
+	addedRestartEntries,
+	classifyActivation,
+	type PluginActivation,
+	pluginRequiresRestart,
+} from "../extensions/activation-core";
 import { loadOmpModule } from "../omp-package";
 import {
 	classifySkillOrigin,
@@ -31,6 +36,7 @@ import type {
 	HelperRegistrySkill,
 	MarketplaceRefreshResult,
 	PluginCheckResult,
+	PluginPreviewResult,
 	PluginSelector,
 	PluginUpgradeResult,
 	SkillCheckResult,
@@ -45,12 +51,21 @@ const REGISTRY_TIMEOUT_MS = 30_000;
 
 interface MarketplaceRegistryEntry {
 	name: string;
+	sourceType: string;
 	sourceUri: string;
+	catalogPath: string;
 	updatedAt: string;
 }
 interface InstalledPluginEntry {
 	version: string;
+	installPath: string;
 	enabled?: boolean;
+}
+/** A catalog's plugin entry, passed back to stock's `resolvePluginSource` as stock read it. */
+interface CatalogPluginEntry {
+	name: string;
+	version?: string;
+	source: unknown;
 }
 interface InstalledPluginSummary {
 	id: string;
@@ -67,6 +82,7 @@ interface MarketplaceManagerOptions {
 }
 interface StockMarketplaceManager {
 	listMarketplaces(): Promise<MarketplaceRegistryEntry[]>;
+	listAvailablePlugins(marketplace?: string): Promise<CatalogPluginEntry[]>;
 	updateMarketplace(name: string): Promise<MarketplaceRegistryEntry>;
 	listInstalledPlugins(): Promise<InstalledPluginSummary[]>;
 	checkForUpdates(): Promise<Array<{ pluginId: string; scope: "user" | "project"; from: string; to: string }>>;
@@ -78,6 +94,11 @@ interface MarketplaceModule {
 	getMarketplacesCacheDir(): string;
 	getMarketplacesRegistryPath(): string;
 	getPluginsCacheDir(): string;
+	parsePluginId(id: string): { name: string; marketplace: string } | null;
+	resolvePluginSource(
+		entry: CatalogPluginEntry,
+		context: { marketplaceClonePath?: string; catalogMetadata?: unknown; tmpDir: string },
+	): Promise<{ dir: string; tempCloneRoot?: string }>;
 }
 interface HelpersModule {
 	clearPluginRootsAndCaches(extraPaths?: readonly string[]): void;
@@ -106,10 +127,12 @@ interface ManagerModule {
 	PluginManager: new (cwd?: string) => StockPluginManager;
 }
 interface GitUrlModule {
-	parseGitUrl(source: string): { ref?: string } | null;
+	parseGitUrl(source: string): { repo?: string; ref?: string } | null;
 }
 interface UtilsModule {
 	getPluginsPackageJson(): string;
+	getPluginsNodeModules(): string;
+	expandTilde(filePath: string): string;
 	getMCPConfigPath(scope: "user" | "project", cwd?: string): string;
 }
 interface NpmRegistry {
@@ -369,8 +392,8 @@ async function pinnedPlugin(channel: "npm" | "git", spec: string, installed: str
 	return isPinnedGitRef(gitUrl.parseGitUrl(spec)?.ref);
 }
 
-/** `dist-tags.latest` of `name` on the registry stock resolves for it (the user's .npmrc / bunfig). */
-async function npmLatest(name: string): Promise<string | null> {
+/** The packument of `name` on the registry stock resolves for it (the user's .npmrc / bunfig). */
+async function npmPackument(name: string, accept: string): Promise<unknown> {
 	const registryModule = await loadOmpModule<NpmRegistryModule>(
 		"pi-coding-agent/cli/npm-registry",
 		"loadNpmRegistryResolver",
@@ -378,17 +401,123 @@ async function npmLatest(name: string): Promise<string | null> {
 	);
 	const registry = (await registryModule.loadNpmRegistryResolver())(name);
 	const response = await fetch(registryModule.npmRegistryPackageUrl(registry, name), {
-		headers: {
-			accept: "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8",
-			...(registry.authorization ? { authorization: registry.authorization } : {}),
-		},
+		headers: { accept, ...(registry.authorization ? { authorization: registry.authorization } : {}) },
 		signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
 	});
 	if (!response.ok) throw new Error(`npm registry answered ${response.status} for ${name}`);
-	const body: unknown = await response.json();
-	const tags = typeof body === "object" && body !== null && "dist-tags" in body ? body["dist-tags"] : null;
+	return response.json();
+}
+
+function latestOf(packument: unknown): string | null {
+	const tags =
+		typeof packument === "object" && packument !== null && "dist-tags" in packument ? packument["dist-tags"] : null;
 	const latest = typeof tags === "object" && tags !== null && "latest" in tags ? tags.latest : null;
 	return typeof latest === "string" ? latest : null;
+}
+
+/** `dist-tags.latest` of `name` (the abbreviated packument). */
+async function npmLatest(name: string): Promise<string | null> {
+	return latestOf(await npmPackument(name, "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8"));
+}
+
+// ─── What an upgrade would install ──────────────────────────────────────────────────────────────────────────
+
+interface PackageManifest {
+	/** The omp plugin manifest: `omp`, else `pi` (stock's loader rule); untrusted JSON. */
+	manifest: unknown;
+	version: string | null;
+}
+
+function manifestOf(pkg: unknown): PackageManifest {
+	if (typeof pkg !== "object" || pkg === null) return { manifest: undefined, version: null };
+	const fields = pkg as { omp?: unknown; pi?: unknown; version?: unknown };
+	return { manifest: fields.omp || fields.pi, version: typeof fields.version === "string" ? fields.version : null };
+}
+
+/** A folder's `package.json` as a plugin manifest; a folder without one (a Claude-format plugin) declares nothing. */
+async function folderManifest(dir: string): Promise<PackageManifest> {
+	try {
+		return manifestOf(JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8")));
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return manifestOf(null);
+		throw error;
+	}
+}
+
+/** Read a catalog source the way stock's install fetches it (`resolvePluginSource`: a clone for a remote one), then drop the clone. */
+async function sourceManifest(
+	entry: CatalogPluginEntry,
+	context: { marketplaceClonePath?: string; catalogMetadata?: unknown },
+): Promise<PackageManifest> {
+	const market = await loadOmpModule<MarketplaceModule>(
+		"pi-coding-agent/extensibility/plugins/marketplace",
+		"resolvePluginSource",
+	);
+	const { dir, tempCloneRoot } = await market.resolvePluginSource(entry, { ...context, tmpDir: os.tmpdir() });
+	try {
+		return await folderManifest(dir);
+	} finally {
+		if (tempCloneRoot) await fs.rm(tempCloneRoot, { recursive: true, force: true });
+	}
+}
+
+/** The installed manifest and the candidate's, for a marketplace plugin: the catalog entry an upgrade reinstalls. */
+async function marketplaceCandidate(selector: PluginSelector): Promise<[PackageManifest, PackageManifest]> {
+	const [manager, market, utils] = await Promise.all([
+		managerFor(selector),
+		loadOmpModule<MarketplaceModule>("pi-coding-agent/extensibility/plugins/marketplace", "parsePluginId"),
+		loadOmpModule<UtilsModule>("pi-utils", "expandTilde"),
+	]);
+	const parsed = market.parsePluginId(selector.id);
+	if (!parsed) throw new Error(`Invalid plugin ID: "${selector.id}"`);
+	const registry = (await manager.listMarketplaces()).find(entry => entry.name === parsed.marketplace);
+	if (!registry) throw new Error(`Marketplace "${parsed.marketplace}" not found`);
+	const entry = (await manager.listAvailablePlugins(parsed.marketplace)).find(item => item.name === parsed.name);
+	if (!entry) throw new Error(`Plugin "${parsed.name}" not found in marketplace "${parsed.marketplace}"`);
+	const catalogPath = path.resolve(utils.expandTilde(registry.catalogPath));
+	const catalog: unknown = JSON.parse(await fs.readFile(catalogPath, "utf8"));
+	const catalogMetadata =
+		typeof catalog === "object" && catalog !== null && "metadata" in catalog ? catalog.metadata : undefined;
+	// Stock's `#resolveMarketplaceRoot`: a local marketplace is its own folder, a fetched one the catalog's folder.
+	const marketplaceClonePath =
+		registry.sourceType === "local" ? path.resolve(utils.expandTilde(registry.sourceUri)) : path.dirname(catalogPath);
+	const installed = await installedMarketplacePlugin(manager, selector.id, selector.scope);
+	const candidate = await sourceManifest(entry, { marketplaceClonePath, catalogMetadata });
+	// The version is stock's own (`checkForUpdates`, its catalog-version precedence), the one the check row shows.
+	const outdated = (await manager.checkForUpdates()).find(
+		update => update.pluginId === selector.id && update.scope === selector.scope,
+	);
+	return [
+		await folderManifest(installed.installPath),
+		{ ...candidate, version: outdated?.to ?? (installed.version || null) },
+	];
+}
+
+/** The installed manifest and the candidate's, for an npm or git plugin: what `PluginManager.upgrade` would install. */
+async function packageCandidate(selector: PluginSelector): Promise<[PackageManifest, PackageManifest]> {
+	const { spec } = await recordedPlugin(selector.id, selector.cwd);
+	if (spec === null || isLinkedSpec(spec))
+		throw new Error(`${selector.id} is linked from a local path; nothing to check`);
+	const utils = await loadOmpModule<UtilsModule>("pi-utils", "getPluginsNodeModules");
+	const installed = await folderManifest(path.join(utils.getPluginsNodeModules(), selector.id));
+	if (selector.channel === "npm") {
+		// npm: upgrade installs `dist-tags.latest`; the full packument carries that version's package.json.
+		const packument = await npmPackument(selector.id, "application/json");
+		const latest = latestOf(packument);
+		const versions =
+			typeof packument === "object" && packument !== null && "versions" in packument ? packument.versions : null;
+		const pkg =
+			latest && typeof versions === "object" && versions !== null
+				? (versions as Record<string, unknown>)[latest]
+				: null;
+		return [installed, { ...manifestOf(pkg), version: latest }];
+	}
+	// git: upgrade re-resolves the recorded repository and ref.
+	const gitUrl = await loadOmpModule<GitUrlModule>("pi-coding-agent/extensibility/plugins/git-url", "parseGitUrl");
+	const git = gitUrl.parseGitUrl(spec);
+	if (!git?.repo) throw new Error(`${selector.id} has no git source to read (${spec})`);
+	const source = { source: "url", url: git.repo, ...(git.ref ? { ref: git.ref } : {}) };
+	return [installed, await sourceManifest({ name: selector.id, source }, {})];
 }
 
 // ─── Skills ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -669,6 +798,13 @@ async function pluginCheck(params: unknown): Promise<PluginCheckResult> {
 	return { installed, latest, pinned, unversioned: false };
 }
 
+async function pluginPreview(params: unknown): Promise<PluginPreviewResult> {
+	const selector = pluginSelector(params);
+	const [installed, candidate] =
+		selector.channel === "marketplace" ? await marketplaceCandidate(selector) : await packageCandidate(selector);
+	return { version: candidate.version, added: addedRestartEntries(installed.manifest, candidate.manifest) };
+}
+
 async function pluginUpgrade(params: unknown): Promise<PluginUpgradeResult> {
 	const selector = pluginSelector(params);
 	const [helpers, loader] = await Promise.all([
@@ -781,6 +917,7 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"extensions.inventory": inventory,
 	"extensions.marketplace.refresh": marketplaceRefresh,
 	"extensions.plugin.check": pluginCheck,
+	"extensions.plugin.preview": pluginPreview,
 	"extensions.plugin.upgrade": pluginUpgrade,
 	"extensions.skill.check": skillCheck,
 	"extensions.skill.update": skillUpdate,

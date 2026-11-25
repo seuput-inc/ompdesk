@@ -112,6 +112,18 @@ export interface PluginCheckResult {
 }
 
 /**
+ * `extensions.plugin.preview`: what an upgrade would install, read before anything is installed. The candidate
+ * is the package an upgrade would fetch: npm `dist-tags.latest` from the full packument, a git plugin's recorded
+ * repository and ref (cloned into a temporary folder), a marketplace plugin's catalog source (a clone for a remote
+ * one). `version` is the candidate's (null when it names none); `added` lists the extension, tool and hook entries
+ * its manifest declares that the installed one does not (`activation-core.ts` `addedRestartEntries`).
+ */
+export interface PluginPreviewResult {
+	version: string | null;
+	added: string[];
+}
+
+/**
  * `extensions.plugin.upgrade`: stock's own path (`MarketplaceManager.upgradePlugin(id, scope)` or
  * `PluginManager.upgrade(name)`), never for a pinned or linked plugin (the worker refuses). `activation` is
  * what a manual upgrade reports: `live` (commands/skills hot-reload with `/reload-plugins`) or
@@ -155,6 +167,7 @@ export const EXTENSION_HELPER_METHODS = {
 	inventory: "extensions.inventory",
 	marketplaceRefresh: "extensions.marketplace.refresh",
 	pluginCheck: "extensions.plugin.check",
+	pluginPreview: "extensions.plugin.preview",
 	pluginUpgrade: "extensions.plugin.upgrade",
 	skillCheck: "extensions.skill.check",
 	skillUpdate: "extensions.skill.update",
