@@ -535,7 +535,7 @@ impl UploadStore {
         let _reading = self
             .inner
             .bodies
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |reading| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |reading| {
                 (reading < limits.bodies_max).then_some(reading + 1)
             })
             .map(|_| Reading(Arc::clone(&self.inner)))
