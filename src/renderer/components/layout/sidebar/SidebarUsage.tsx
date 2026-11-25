@@ -21,7 +21,7 @@ import { bareEmail } from "../AccountLimit";
 import { type UsageAccountGroup, usageAccountGroups } from "./usage-groups";
 
 /** What a row says of a usage report: the account's quota, and its state while omp skips it after a limit. */
-function sourceOf(report: UsageReport, inUse: boolean): AccountQuotaSource {
+export function sourceOf(report: UsageReport, inUse: boolean): AccountQuotaSource {
 	const limited = report.resetAt !== undefined;
 	return {
 		limits: report.limits,
@@ -58,7 +58,7 @@ function shortAccountNames(labels: readonly string[]): string[] {
 	});
 }
 
-function accountStanding(account: AccountQuotaSource): "limited" | "low" | "ok" {
+export function accountStanding(account: AccountQuotaSource): "limited" | "low" | "ok" {
 	const gauges = accountGauges(quotaLimits(account));
 	if (account.state === "depleted" || gauges.some(gauge => gauge.fraction >= 1)) return "limited";
 	if (account.state === "reserve" || gauges.some(gauge => gauge.fraction >= NEAR_FRACTION)) return "low";

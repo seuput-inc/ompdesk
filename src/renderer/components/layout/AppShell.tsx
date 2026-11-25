@@ -33,6 +33,7 @@ import { webRuntime } from "../../web/runtime";
 import { Button, IconButton, Skeleton, Tooltip } from "../common";
 import { PanelContainer, preloadPanelViews } from "./PanelContainer";
 import { EdgeSwipeZone, SidebarDrawer } from "./SidebarDrawer";
+import { StatusBar } from "./status-bar/StatusBar";
 // The session list's look stays on the first screen, where the list's own chunk (sidebar-chunk.ts) is not: 7.6 KB,
 // one request less for a page that waits for the list, and the stylesheet keeps its place in the cascade.
 import "../../styles/sidebar.css";
@@ -393,54 +394,58 @@ export function AppShell() {
 	}, [onPage]);
 
 	return (
-		<div
-			className="omp-shell flex min-w-0 flex-1"
-			// The docked panel's side for global.css, which never asks `:has(> .omp-inspector)`: a `:has()` on this root
-			// made every node streaming output inserted restyle the shell's matching descendants.
-			data-panel={panelDocked ? panelSide : undefined}
-			data-sidebar={sidebarVisible && !drawer ? "docked" : "hidden"}
-			onFocusCapture={event => preloadForIntent(event.target)}
-			onPointerOverCapture={event => preloadForIntent(event.target)}
-			onTouchStartCapture={event => preloadForIntent(event.target)}
-		>
-			{drawer
-				? drawerReady && (
-						<>
-							<SidebarDrawer />
-							<EdgeSwipeZone />
-						</>
-					)
-				: sidebarVisible && Sidebar && <Sidebar />}
-			{panel.mounted && panelSide === "left" && <PanelContainer closing={panel.closing} />}
+		// The shell over the desktop status bar (Orca's 24 px bar under the whole window; none on a phone or tablet page).
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+			<div
+				className="omp-shell flex min-h-0 min-w-0 flex-1"
+				// The docked panel's side for global.css, which never asks `:has(> .omp-inspector)`: a `:has()` on this root
+				// made every node streaming output inserted restyle the shell's matching descendants.
+				data-panel={panelDocked ? panelSide : undefined}
+				data-sidebar={sidebarVisible && !drawer ? "docked" : "hidden"}
+				onFocusCapture={event => preloadForIntent(event.target)}
+				onPointerOverCapture={event => preloadForIntent(event.target)}
+				onTouchStartCapture={event => preloadForIntent(event.target)}
+			>
+				{drawer
+					? drawerReady && (
+							<>
+								<SidebarDrawer />
+								<EdgeSwipeZone />
+							</>
+						)
+					: sidebarVisible && Sidebar && <Sidebar />}
+				{panel.mounted && panelSide === "left" && <PanelContainer closing={panel.closing} />}
 
-			<main aria-label={t("shell.main")} className="omp-workspace-main relative flex min-w-0 flex-1 flex-col">
-				<div className={onPage ? "hidden" : "flex min-h-0 flex-1 flex-col"} data-session-view>
-					<TitleBar />
-					<TabHousekeeping />
-					<UpdateBanner />
-					<MailReentryNoticeGate />
-					<WhatsNewCard />
-					<SplitWorkspace />
-				</div>
-				{onPage && (
-					<section
-						aria-label={t(PAGE_LABEL_KEY[destination])}
-						className="flex min-h-0 flex-1 flex-col outline-none"
-						data-destination={destination}
-						ref={pageRef}
-						tabIndex={-1}
-					>
-						<PageTopBar showSidebarToggle={!sidebarVisible} />
-						<Suspense fallback={<PageFrameSkeleton />}>
-							<DestinationPage destination={destination} key={destination} />
-						</Suspense>
-					</section>
-				)}
-			</main>
+				<main aria-label={t("shell.main")} className="omp-workspace-main relative flex min-w-0 flex-1 flex-col">
+					<div className={onPage ? "hidden" : "flex min-h-0 flex-1 flex-col"} data-session-view>
+						<TitleBar />
+						<TabHousekeeping />
+						<UpdateBanner />
+						<MailReentryNoticeGate />
+						<WhatsNewCard />
+						<SplitWorkspace />
+					</div>
+					{onPage && (
+						<section
+							aria-label={t(PAGE_LABEL_KEY[destination])}
+							className="flex min-h-0 flex-1 flex-col outline-none"
+							data-destination={destination}
+							ref={pageRef}
+							tabIndex={-1}
+						>
+							<PageTopBar showSidebarToggle={!sidebarVisible} />
+							<Suspense fallback={<PageFrameSkeleton />}>
+								<DestinationPage destination={destination} key={destination} />
+							</Suspense>
+						</section>
+					)}
+				</main>
 
-			{panel.mounted && panelSide === "right" && <PanelContainer closing={panel.closing} />}
-			<ViewSheetHost />
-			<MissingFolderSheetHost />
+				{panel.mounted && panelSide === "right" && <PanelContainer closing={panel.closing} />}
+				<ViewSheetHost />
+				<MissingFolderSheetHost />
+			</div>
+			<StatusBar />
 		</div>
 	);
 }

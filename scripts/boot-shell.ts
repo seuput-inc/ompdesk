@@ -53,5 +53,10 @@ function style(variant: BootShellVariant): string {
 }
 
 export function bootShell(variant: BootShellVariant): { style: string; html: string } {
-	return { style: style(variant), html: `<div class="boot-shell">${sidebar()}${main()}</div>` };
+	if (variant === "web") return { style: style(variant), html: `<div class="boot-shell">${sidebar()}${main()}</div>` };
+	// A desktop window ends in the 24 px status bar (layout/status-bar/StatusBar.tsx); a web page has none.
+	return {
+		style: style(variant),
+		html: `<div class="boot-shell flex-col"><div class="flex min-h-0 min-w-0 flex-1">${sidebar()}${main()}</div><footer class="omp-status-bar flex h-(--sc-statusbar-h) shrink-0 items-center border-t border-(--sc-border-subtle) bg-(--sc-surface-1) px-2"></footer></div>`,
+	};
 }

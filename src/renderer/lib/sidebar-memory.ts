@@ -59,6 +59,8 @@ export interface SidebarFolds {
 	usageGroups: Record<string, boolean>;
 	/** A nav row's id → hidden from the sidebar's nav (`SidebarNav`, "Hide from sidebar"). Absent = shown. */
 	navHidden: Record<string, boolean>;
+	/** A status bar item's id → hidden from the desktop status bar (its own context menu). Absent = shown. */
+	statusHidden: Record<string, boolean>;
 	/** The paired hosts the last host-list read named, so the first frame draws their sections before the next read. */
 	knownHosts: KnownHost[];
 }
@@ -89,6 +91,7 @@ export const EMPTY_FOLDS: SidebarFolds = {
 	usageCollapsed: false,
 	usageGroups: {},
 	navHidden: {},
+	statusHidden: {},
 	knownHosts: [],
 };
 
@@ -127,6 +130,7 @@ export function parseSidebarFolds(value: unknown): SidebarFolds {
 		usageCollapsed: record.usageCollapsed === true,
 		usageGroups: parseFlags(record.usageGroups),
 		navHidden: parseFlags(record.navHidden),
+		statusHidden: parseFlags(record.statusHidden),
 		knownHosts: parseKnownHosts(record.knownHosts),
 	};
 }
