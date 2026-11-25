@@ -56,6 +56,7 @@ import {
 	transcriptRunStart,
 } from "../../resources/gui-bridge/transcript-page";
 import { GuiBridgeClient } from "../../src/main/bridge-client";
+import { STRESS_PROMPT, stressReplyText } from "../../src/renderer/dev-harness/fixture";
 import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
 import type {
@@ -5958,27 +5959,29 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 									? replyMedia()
 									: message === "fixture reply components"
 										? REPLY_SHOWCASE
-										: message === "fixture math"
-											? MATH_REPLY
-											: message === "fixture image"
-												? "Here is the chart:\n\n![chart](pixel.png)"
-												: message === "fixture svg"
-													? SVG_REPLY
-													: message === "fixture figures"
-														? FIGURES_REPLY
-														: message === "fixture svg viewbox"
-															? SVG_VIEWBOX_REPLY
-															: message === "fixture markdown"
-																? MARKDOWN_REPLY
-																: message === "fixture paths"
-																	? PATHS_REPLY
-																	: message === "fixture reply actions"
-																		? ACTIONS_REPLY
-																		: message === "fixture documents"
-																			? DOCUMENTS_REPLY
-																			: message.startsWith("Parity turn ")
-																				? `Answer to ${message}`
-																				: `Local fixture reply${message.includes("fixture:result-ok") ? "\nResult: ok" : message.includes("fixture:result-problem") ? "\nResult: problem — tests failed" : ""}`,
+										: message === STRESS_PROMPT
+											? stressReplyText()
+											: message === "fixture math"
+												? MATH_REPLY
+												: message === "fixture image"
+													? "Here is the chart:\n\n![chart](pixel.png)"
+													: message === "fixture svg"
+														? SVG_REPLY
+														: message === "fixture figures"
+															? FIGURES_REPLY
+															: message === "fixture svg viewbox"
+																? SVG_VIEWBOX_REPLY
+																: message === "fixture markdown"
+																	? MARKDOWN_REPLY
+																	: message === "fixture paths"
+																		? PATHS_REPLY
+																		: message === "fixture reply actions"
+																			? ACTIONS_REPLY
+																			: message === "fixture documents"
+																				? DOCUMENTS_REPLY
+																				: message.startsWith("Parity turn ")
+																					? `Answer to ${message}`
+																					: `Local fixture reply${message.includes("fixture:result-ok") ? "\nResult: ok" : message.includes("fixture:result-problem") ? "\nResult: problem — tests failed" : ""}`,
 					},
 				],
 				timestamp: Date.now(),

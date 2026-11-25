@@ -17,6 +17,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Locator, type Page, test } from "@playwright/test";
+import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { writeShellGh } from "./fixture/shell-gh";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
@@ -603,7 +604,12 @@ if (dir) {
 											? longSession()
 											: session === "cut"
 												? cutSession()
-												: limitSession();
+												: session === "stress"
+													? // The harness's stress turn as one turn of a session of its own (fake omp: `STRESS_PROMPT`).
+														answeredSession("Parity stress", [
+															[STRESS_PROMPT, "Here is the unbroken link"],
+														])
+													: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
