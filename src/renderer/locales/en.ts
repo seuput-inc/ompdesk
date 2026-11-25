@@ -565,6 +565,7 @@ export const en: Record<string, string> = {
 	"a2ui.notWaiting": "The agent is not waiting for an answer here",
 	"a2ui.open": "Open",
 	"a2ui.dialog": "Details",
+	"a2ui.tabs": "Sections",
 	"autopilot.name": "Autopilot",
 	"autopilot.actionFailed": "Autopilot action failed",
 	"autopilot.stopping": "Ending…",

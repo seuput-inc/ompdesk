@@ -505,6 +505,9 @@ if (stubs.size > 0) {
 	process.exit(1);
 }
 
+/** A message only web_core's processor carries: the lit check below inspected the A2UI chunk, not an empty set. */
+const A2UI_ENGINE_MARKER = "Surface not found for message";
+let a2uiEngineSeen = false;
 for (const name of await fs.readdir(RENDERER_ASSETS)) {
 	if (!/\.m?js$/.test(name)) continue;
 	const code = await fs.readFile(RENDERER_ASSETS + name, "utf8");
@@ -512,6 +515,7 @@ for (const name of await fs.readdir(RENDERER_ASSETS)) {
 		console.error(`out/renderer/assets/${name} bundles axe-core, which is for the e2e audit only.`);
 		process.exit(1);
 	}
+	a2uiEngineSeen ||= code.includes(A2UI_ENGINE_MARKER);
 	const lit = LIT_MARKERS.find(marker => code.includes(marker));
 	if (lit) {
 		console.error(
@@ -520,6 +524,13 @@ for (const name of await fs.readdir(RENDERER_ASSETS)) {
 		);
 		process.exit(1);
 	}
+}
+if (!a2uiEngineSeen) {
+	console.error(
+		`no out/renderer asset carries @a2ui/web_core ("${A2UI_ENGINE_MARKER}"): the A2UI chunk is missing, so the lit ` +
+			"check above proved nothing. Update A2UI_ENGINE_MARKER if web_core changed the message.",
+	);
+	process.exit(1);
 }
 
 const legacyFonts = (await fs.readdir(RENDERER, { recursive: true })).filter(name => /\.(woff|ttf)$/i.test(name));

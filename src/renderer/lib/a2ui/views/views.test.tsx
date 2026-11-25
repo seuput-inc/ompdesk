@@ -199,7 +199,8 @@ describe("A2UI views", () => {
 		await mounted(session, false, async document => {
 			const tabs = [...document.querySelectorAll('[role="tab"]')].map(tab => tab.textContent);
 			expect(tabs).toEqual(["Week", "Month"]);
-			expect(document.body.textContent).toContain("Seven days");
+			const panel = document.querySelector('[role="tabpanel"]');
+			expect([panel?.getAttribute("aria-label"), panel?.textContent]).toEqual(["Week", "Seven days"]);
 			expect(document.querySelectorAll('[role="list"] > [role="listitem"]')).toHaveLength(2);
 			const chart = document.querySelector('[data-a2ui-chart="bar"] [role="img"]');
 			expect(chart?.getAttribute("aria-label")).toBe("Runs on Monday and Tuesday");

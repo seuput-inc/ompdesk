@@ -559,6 +559,7 @@ export const ko: Record<string, string> = {
 	"a2ui.notWaiting": "에이전트가 여기서 답을 기다리고 있지 않아요",
 	"a2ui.open": "열기",
 	"a2ui.dialog": "자세히",
+	"a2ui.tabs": "구역",
 	"autopilot.name": "오토파일럿",
 	"autopilot.actionFailed": "오토파일럿 동작에 실패했어요",
 	"autopilot.stopping": "종료 중…",

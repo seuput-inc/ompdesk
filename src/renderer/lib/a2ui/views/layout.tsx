@@ -87,18 +87,22 @@ export function DividerView({ props }: ViewProps) {
 }
 
 export function TabsView({ props }: ViewProps) {
+	const t = useT();
 	const [active, setActive] = useState("0");
 	const tabs: Record<string, unknown>[] = Array.isArray(props.tabs) ? props.tabs : [];
-	const child = tabs[Number(active)]?.child;
+	const shown = tabs[Number(active)];
 	return (
 		<div className="flex min-w-0 flex-col gap-3">
 			<Tabs
 				activeId={active}
+				ariaLabel={t("a2ui.tabs")}
 				onChange={setActive}
 				tabs={tabs.map((tab, index) => ({ id: String(index), label: readText(tab.title) }))}
 				variant="underline"
 			/>
-			{isNode(child) ? <NodeView key={child.instanceId} node={child} /> : null}
+			<div aria-label={readText(shown?.title)} className="min-w-0" role="tabpanel">
+				{isNode(shown?.child) ? <NodeView key={shown.child.instanceId} node={shown.child} /> : null}
+			</div>
 		</div>
 	);
 }
