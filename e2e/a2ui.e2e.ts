@@ -96,7 +96,9 @@ test("an A2UI form is answered from the chat card, skipped from the dock, answer
 			const form = await pendingForm(b);
 			tabId = form.tabId;
 			await expect(b.locator(`[data-a2ui-waiting=${cssString(form.callId)}]`)).toBeVisible({ timeout: 30_000 });
-			await expect(b.locator("[data-prompt-card]")).toHaveCount(0);
+			// The dock holds only the waiting row (itself a prompt card): no ask card, nothing to type into there.
+			await expect(b.locator("[data-prompt-card]")).toHaveCount(1);
+			await expect(b.locator("[data-prompt-card] textarea, [data-prompt-card] input")).toHaveCount(0);
 			await expect
 				.poll(
 					async () =>
