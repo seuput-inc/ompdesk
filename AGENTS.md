@@ -28,6 +28,7 @@ This file holds what every change needs. Each area's detailed rules (its user's 
 - `app-updater` (`.omp/rules/app-updater.md`): OMPdesk's updater: auth, release lookup, install modes, automatic install timing, update log.
 - `waste-guards` (`.omp/rules/waste-guards.md`): Measured session waste: a bash `ready.log` that cannot match is refused, polling gets one hint per kind, the gh guard keeps one session from emptying the GitHub account's quota.
 - `native-rust` (`.omp/rules/native-rust.md`): The conversion from Electron/TypeScript to Rust: what stays TypeScript, target architecture, unit order, the `native/ompdesk` workspace, its build, staging, packaging and CI, the ledger of what has moved.
+- `a2ui` (`.omp/rules/a2ui.md`): A2UI generative UI: the bridge's `a2ui` tool, its catalog and generated schema, the renderer's engine over `@a2ui/web_core`, the card's own chat row, the answer path through stock's form channel, the `lit` refusal.
 
 - New detail about an area goes into its rule file, never here. This file stays under 64 KB (`src/main/agents-md.test.ts`): every byte of it rides in front of every request of every session here.
 - A new area gets its own rule file with `description` and `globs` frontmatter and a line in the list above.

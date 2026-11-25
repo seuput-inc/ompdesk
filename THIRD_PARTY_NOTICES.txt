@@ -6158,6 +6158,24 @@ Ported files (OMPdesk file <- Mixdog file, both relative to their repo root):
 
 ------------------------------------------------------------------------------
 
+A2UI (https://github.com/a2ui-project/a2ui)
+Copyright 2025 Google LLC. Licensed under the Apache License, Version 2.0 (full text:
+LICENSES/Apache-2.0.txt, shipped beside this file). The npm package @a2ui/web_core is listed in
+section 3; the files below are derived from the A2UI specification and are modified by SeuPut.
+
+- resources/gui-bridge/modes/a2ui-catalog.json
+  <- catalogs/basic/v1/catalog.json (no Video or AudioPlayer, Image.url a literal string,
+     TextField without the obscured variant, a Chart component added)
+- resources/gui-bridge/modes/a2ui-schema.json
+  <- specification/v1_0/json/agent_to_renderer.json and common_types.json, merged with the
+     catalog into one schema by scripts/gen-a2ui-schema.ts
+- src/main/fixtures/a2ui-spec-cases.json
+  <- specification/v1_0/test/cases/*.json (used as test fixtures only; not shipped)
+
+"A2UI" names the protocol only; its use implies no endorsement by Google LLC.
+
+------------------------------------------------------------------------------
+
 ai-memory 3.4.7 (https://github.com/akitaonrails/ai-memory, tag v3.4.7)
 The source (vendored in native/memory/, with OMPdesk's changes) is built by OMPdesk into the binary
 (ai-memory / ai-memory.exe) that ships inside the app under resources/ai-memory-bin/ as its memory.
