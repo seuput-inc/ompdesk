@@ -2,6 +2,7 @@ import { Archive, FileText, GitBranch, MoreHorizontal, Terminal } from "lucide-r
 import type { ReactNode } from "react";
 import { memo, useState } from "react";
 import { MAIL_CUSTOM_TYPE } from "../../../../resources/gui-bridge/agent-control-contracts";
+import { CI_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/ci-watch-contracts";
 import { COMPUTER_USE_NOTICE_TYPE } from "../../../../resources/gui-bridge/modes/computer-use-contracts";
 import { MEMORY_RECALL_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/memory-recall-contracts";
 import { parseAgentMessage } from "../../../shared/agent-control";
@@ -37,6 +38,7 @@ import {
 import { isAbsoluteChatPath, referencedFiles } from "../tools/media/chat-media";
 import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
+import { CiNote } from "./CiNote";
 import { ComputerUseNote } from "./ComputerUseNote";
 import { CustomMessageCard, isCustomMessageCardType, MailNote, MemoryRecallNote, RecapCard } from "./CustomMessageCard";
 import { type PromptFile, PromptFiles, ReplyFiles } from "./ReplyFiles";
@@ -420,6 +422,7 @@ export function drawsMessageActions(message: AgentMessage): boolean {
 				message.customType === MAIL_CUSTOM_TYPE ||
 				message.customType === MEMORY_RECALL_MESSAGE_TYPE ||
 				message.customType === COMPUTER_USE_NOTICE_TYPE ||
+				message.customType === CI_MESSAGE_TYPE ||
 				isCustomMessageCardType(message.customType) ||
 				parseTodoReminder(message) !== null
 			);
@@ -477,6 +480,7 @@ export const MessageBubble = memo(function MessageBubble({
 		if (message.customType === MAIL_CUSTOM_TYPE) return <MailNote message={message} />;
 		if (message.customType === MEMORY_RECALL_MESSAGE_TYPE) return <MemoryRecallNote message={message} />;
 		if (message.customType === COMPUTER_USE_NOTICE_TYPE) return <ComputerUseNote message={message} />;
+		if (message.customType === CI_MESSAGE_TYPE) return <CiNote message={message} />;
 		// Dedicated cards for the TUI customType set; unknown types fall through
 		// to the generic label + content bubble below.
 		if (isCustomMessageCardType(message.customType)) {

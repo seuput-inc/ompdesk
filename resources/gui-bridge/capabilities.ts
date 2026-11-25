@@ -181,6 +181,7 @@ export const FEATURES = {
 	backgroundChecks: "Long checks run as background jobs (prompt section)",
 	scratch: "A scratch folder per session for throwaway files (prompt section)",
 	checkRuns: "Heavy commands and test suites through ompdesk run --heavy and ompdesk check (prompt section)",
+	ciWatch: "CI results of a session's pushes reach that session (transcript line, no new turn)",
 	checkoutPeers: "Sessions sharing a checkout (prompt section and git guard)",
 	xdevNotice: "No mounted tool listed twice in a request (mount notice)",
 	contextHookIdle: "Model requests not copied while the message filters have nothing to drop (recap, mount notice)",
@@ -1008,6 +1009,40 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	scratch: {},
 	/** modes/check-runs.ts: only the public `before_agent_start` hook; no internals to probe. */
 	checkRuns: {},
+	/**
+	 * modes/ci-watch.ts: the public tool execution, `agent_end` and session hooks, the journal, the idle wait before a
+	 * held result goes, and stock's `gh_run_watch` internals (loaded at the first push): the commit's runs and their
+	 * outcome, a branch's head, the PR/commit reads through stock's `gh` runner, the PR-URL and repo-ref parsers and the
+	 * rate-limit pattern.
+	 */
+	ciWatch: {
+		api: ["sendMessage()"],
+		session: [
+			"isStreaming",
+			"waitForIdle()",
+			"sessionManager.getBranch()",
+			"sessionManager.getCwd()",
+			"sessionManager.appendCustomEntry()",
+		],
+		modules: {
+			[`${AGENT}/tools/gh-run-watch`]: [
+				"fetchRunsForCommit()",
+				"getRunCollectionOutcome()",
+				"getRunSnapshotOutcome()",
+				"isFailedJob()",
+				"resolveGitHubBranchHead()",
+				"GH_RATE_LIMIT_ERROR_PATTERN",
+			],
+			[`${AGENT}/tools/gh-common`]: [
+				"parsePullRequestUrl()",
+				"parseRepoRef()",
+				"ghApiHostArgs()",
+				"defaultGhHost()",
+				"GITHUB_HOST",
+			],
+			[`${AGENT}/utils/github`]: ["github.json()"],
+		},
+	},
 	/** modes/background-checks.ts: reads stock `async.enabled` by id. */
 	backgroundChecks: {
 		pkg: ["Settings.instance"],

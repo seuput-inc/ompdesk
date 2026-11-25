@@ -208,6 +208,7 @@ const AREAS: readonly Area[] = [
 	{ name: "modes/checkout-peers", features: ["checkoutPeers"], load: () => import("./modes/checkout-peers") },
 	{ name: "modes/scratch", features: ["scratch"], load: () => import("./modes/scratch") },
 	{ name: "modes/check-runs", features: ["checkRuns"], load: () => import("./modes/check-runs") },
+	{ name: "modes/ci-watch", features: ["ciWatch"], load: () => import("./modes/ci-watch") },
 	{ name: "xdev-notice", features: ["xdevNotice", "contextHookIdle"], load: () => import("./xdev-notice") },
 	{ name: "account-rotation", features: ["accountRotation"], load: () => import("./account-rotation") },
 	{ name: "credit-spend", features: ["creditSpend"], load: () => import("./credit-spend") },
