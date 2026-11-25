@@ -27,6 +27,7 @@ import {
 	MoreHorizontal,
 	Pencil,
 	Plus,
+	Quote,
 	RotateCw,
 	Search,
 	Settings,
@@ -91,6 +92,7 @@ import {
 	SectionLabel,
 	SegmentedChoice,
 	Select,
+	SelectionActions,
 	SessionTitle,
 	SettingInfo,
 	Sheet,
@@ -386,6 +388,29 @@ const SWAP_TITLES = ["New session", "Fix the login redirect", "Fix the login red
 function CrashOnRender({ crash, children }: { crash: boolean; children: ReactNode }) {
 	if (crash) throw new Error("Unexpected payload: rows is not iterable");
 	return children;
+}
+
+/** Selection actions: select words of the paragraph and the bar offers its action above them. */
+function SelectionActionsSample() {
+	const ref = useRef<HTMLParagraphElement>(null);
+	return (
+		<>
+			<p className="max-w-md text-sc-md text-(--sc-text-secondary)" ref={ref}>
+				Select a few words of this sentence: the bar offers Add to chat beside them, once the selection settles.
+			</p>
+			<SelectionActions
+				actions={[
+					{
+						id: "quote",
+						label: "Add to chat",
+						icon: <Quote />,
+						run: text => toast({ variant: "info", message: `Quoted: ${text}` }),
+					},
+				]}
+				rootRef={ref}
+			/>
+		</>
+	);
 }
 
 /** Chips: toggles that turn on and off, removable chips whose text is its own action, a plain one. */
@@ -1768,6 +1793,7 @@ export default function StyleGuide() {
 								<SwitchField checked label="Fast mode" onCheckedChange={() => {}} />
 								<SwitchField checked={false} label="Auto-retry" onCheckedChange={() => {}} />
 							</PopoverSurface>
+							<SelectionActionsSample />
 						</div>
 					</div>
 					<div className="h-80 overflow-hidden rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-overlay)">

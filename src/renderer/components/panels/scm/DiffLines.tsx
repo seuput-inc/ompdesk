@@ -3,10 +3,15 @@
  * and the commit history: old/new gutters, add/remove tint and syntax colour
  * by the file's language (both sides highlighted as whole texts, so a block
  * comment or template string spanning lines keeps its colour).
+ *
+ * With `notes` (the Changes view's working-tree diff) a line of the new side takes a review note (Orca's diff comments,
+ * `components/diff-comments/*`, MIT): its + opens the note's editor under it, Shift+click on another line's + or a drag
+ * across the +s makes it a range, and the session's notes on this file show under their last line.
  */
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { HLJSApi } from "highlight.js";
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Plus } from "lucide-react";
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { DiffLine } from "../../../lib/diff";
 import { cx, languageFromPath } from "../../../lib/format";
 import {
@@ -16,7 +21,11 @@ import {
 	loadHljs,
 	splitHighlightedLines,
 } from "../../../lib/highlight";
-import { Skeleton } from "../../common";
+import { useT } from "../../../lib/i18n";
+import { noteLabel } from "../../../lib/review-notes";
+import { type NoteLines, type ReviewNote, useReviewNotesStore } from "../../../stores/review-notes";
+import { IconButton, Skeleton } from "../../common";
+import { NoteCard, NoteEditor } from "../notes/ReviewNotes";
 
 /**
  * Rows of a long list inside `scroller`, mounted only near its viewport. A
@@ -123,17 +132,29 @@ export function DiffSkeleton({ label }: { label: string }) {
 	);
 }
 
+type DiffRow =
+	| { kind: "line"; index: number }
+	| { kind: "note"; note: ReviewNote }
+	| { kind: "draft"; lines: NoteLines };
+
+const inRange = (line: number | undefined, range: NoteLines | null) =>
+	line !== undefined && range !== null && line >= range.start && line <= range.end;
+
 /** The diff body: virtualized rows under `scroller` (the preview's scrolling ancestor). */
 export function DiffLines({
 	lines,
 	path,
 	scroller,
+	notes,
 }: {
 	lines: readonly DiffLine[];
 	/** File path the language comes from. */
 	path: string;
 	scroller: HTMLElement | null;
+	/** The session (`notesOwner`) whose review notes the new side takes. */
+	notes?: { owner: string };
 }) {
+	const t = useT();
 	const language = languageFromPath(path);
 	const [hljs, setHljs] = useState(getLoadedHljs);
 	useEffect(() => {
@@ -151,6 +172,62 @@ export function DiffLines({
 	const gutterDigits = String(
 		lines.reduce((max, line) => Math.max(max, line.oldLine ?? 0, line.newLine ?? 0), 0),
 	).length;
+	const owner = notes?.owner ?? null;
+	const allNotes = useReviewNotesStore(state => state.notes);
+	const fileNotes = useMemo(
+		() =>
+			owner
+				? allNotes.filter(note => note.owner === owner && note.anchor.kind === "diff" && note.anchor.path === path)
+				: [],
+		[allNotes, owner, path],
+	);
+	const [draft, setDraft] = useState<NoteLines | null>(null);
+	// A drag across the +s: where it started and the line under the pointer now.
+	const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
+	const dragged = useRef(false);
+	useEffect(() => {
+		if (!drag) return;
+		const end = () => {
+			if (drag.from !== drag.to) {
+				dragged.current = true;
+				setDraft({ start: Math.min(drag.from, drag.to), end: Math.max(drag.from, drag.to) });
+			}
+			setDrag(null);
+		};
+		window.addEventListener("pointerup", end);
+		window.addEventListener("pointercancel", end);
+		return () => {
+			window.removeEventListener("pointerup", end);
+			window.removeEventListener("pointercancel", end);
+		};
+	}, [drag]);
+	// Another file's diff drops the note being written on this one.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: path names the file the draft was on.
+	useEffect(() => setDraft(null), [path]);
+	const rows = useMemo<DiffRow[]>(() => {
+		// Whole-file notes lead; a line's notes follow its last line.
+		const out: DiffRow[] = fileNotes
+			.filter(note => note.anchor.kind === "diff" && !note.anchor.lines)
+			.map(note => ({ kind: "note" as const, note }));
+		const placed = new Set(
+			fileNotes.filter(note => note.anchor.kind === "diff" && !note.anchor.lines).map(note => note.id),
+		);
+		lines.forEach((line, index) => {
+			out.push({ kind: "line", index });
+			if (line.newLine === undefined) return;
+			for (const note of fileNotes) {
+				if (note.anchor.kind === "diff" && note.anchor.lines?.end === line.newLine) {
+					out.push({ kind: "note", note });
+					placed.add(note.id);
+				}
+			}
+			if (draft?.end === line.newLine) out.push({ kind: "draft", lines: draft });
+		});
+		// A note whose line this diff no longer shows (the file changed since) stays reachable at the end.
+		for (const note of fileNotes) if (!placed.has(note.id)) out.push({ kind: "note", note });
+		return out;
+	}, [lines, fileNotes, draft]);
+	const marked = drag ? { start: Math.min(drag.from, drag.to), end: Math.max(drag.from, drag.to) } : draft;
 	return (
 		<div
 			className="omp-pane-diff font-mono text-sc-xs leading-(--sc-leading-relaxed)"
@@ -158,17 +235,86 @@ export function DiffLines({
 			data-language={language}
 			style={{ "--omp-gutter-digits": gutterDigits } as CSSProperties}
 		>
-			<VirtualRows estimate={20} itemKey={(_, index) => index} items={lines} scroller={scroller}>
-				{(line, index) => {
+			<VirtualRows
+				estimate={20}
+				itemKey={row => (row.kind === "line" ? row.index : row.kind === "note" ? row.note.id : "draft")}
+				items={rows}
+				scroller={scroller}
+			>
+				{row => {
+					if (row.kind === "note") {
+						return (
+							<div className="border-y border-(--sc-divider) bg-(--sc-surface-2) px-2 font-sans">
+								<NoteCard note={row.note} />
+							</div>
+						);
+					}
+					if (row.kind === "draft") {
+						const anchor = { kind: "diff", path, lines: row.lines } as const;
+						const place = noteLabel(t, anchor);
+						return (
+							<div className="border-y border-(--sc-divider) bg-(--sc-surface-2) font-sans">
+								<NoteEditor
+									label={t("reviewNotes.newLabel", { place })}
+									onCancel={() => setDraft(null)}
+									onSave={body => {
+										if (owner) useReviewNotesStore.getState().add({ owner, anchor, body });
+										setDraft(null);
+									}}
+								/>
+							</div>
+						);
+					}
+					const index = row.index;
+					const line = lines[index] as DiffLine;
 					const lineTokens = tokens?.[index];
+					const lineNumber = line.newLine;
 					return (
 						<div
 							className={cx(
-								"flex items-start px-2",
+								"group flex items-start px-2",
 								line.type === "add" && "bg-(--sc-success-soft)",
 								line.type === "remove" && "bg-(--sc-danger-soft)",
+								inRange(lineNumber, marked) && "bg-(--sc-accent-soft)",
 							)}
+							data-note-marked={inRange(lineNumber, marked) || undefined}
+							onPointerEnter={() => {
+								if (drag && lineNumber !== undefined) setDrag({ ...drag, to: lineNumber });
+							}}
 						>
+							{owner && (
+								<span className="flex w-5 shrink-0 justify-center">
+									{lineNumber !== undefined && (
+										<IconButton
+											className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+											data-note-add={lineNumber}
+											icon={<Plus />}
+											label={t("reviewNotes.addOnLine", { line: lineNumber })}
+											onClick={event => {
+												if (dragged.current) {
+													dragged.current = false;
+													return;
+												}
+												setDraft(current =>
+													event.shiftKey && current
+														? {
+																start: Math.min(current.start, lineNumber),
+																end: Math.max(current.end, lineNumber),
+															}
+														: { start: lineNumber, end: lineNumber },
+												);
+											}}
+											onPointerDown={event => {
+												if (event.button !== 0 || event.shiftKey || event.pointerType === "touch") return;
+												// The pointer moves over other rows: release it so their enter events fire.
+												event.currentTarget.releasePointerCapture?.(event.pointerId);
+												setDrag({ from: lineNumber, to: lineNumber });
+											}}
+											size="inline"
+										/>
+									)}
+								</span>
+							)}
 							<span
 								aria-hidden
 								className="omp-pane-gutter shrink-0 select-none pr-2 text-right text-(--sc-text-subtle)"

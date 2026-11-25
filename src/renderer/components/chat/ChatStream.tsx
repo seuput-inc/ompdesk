@@ -46,11 +46,13 @@ import {
 	DisclosureButton,
 	JumpToLatest,
 	Kbd,
+	SelectionActions,
 	SettingInfo,
 	Skeleton,
 	Spinner,
 } from "../common";
 import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot";
+import { useAddToChat } from "../panels/notes/AddToChat";
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
 import { ConversationNavigator } from "./ConversationNavigator";
@@ -157,6 +159,8 @@ export function ChatStream() {
 function SessionTranscript() {
 	const t = useT();
 	const tabId = useRuntimeTabId();
+	// A passage of the transcript, quoted into a session's composer (Orca's selection quotes).
+	const addToChat = useAddToChat(tabId);
 	const messages = useMessagesStore(s => s.messages);
 	const liveMessages = useMessagesStore(s => s.liveMessages);
 	const prevCursor = useMessagesStore(s => s.prevCursor);
@@ -1240,6 +1244,8 @@ function SessionTranscript() {
 				</div>
 			</div>
 			<JumpToLatest className="bottom-5" onClick={jumpToLatest} pinned={pinned} />
+			<SelectionActions actions={[addToChat.action]} rootRef={parentRef} />
+			{addToChat.menu}
 			<ConversationNavigator
 				activeIndex={activeConversationIndex}
 				anchors={conversationAnchors}

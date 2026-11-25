@@ -1,4 +1,13 @@
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, FolderGit2, RefreshCw, Undo2 } from "lucide-react";
+import {
+	ArrowLeft,
+	CheckCircle2,
+	ChevronLeft,
+	ChevronRight,
+	FolderGit2,
+	MessageSquarePlus,
+	RefreshCw,
+	Undo2,
+} from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isConflictStatus, stagedState } from "../../../shared/git-status";
 import type { RpcGitChanges, RpcGitDiff, RpcGitFingerprint } from "../../../shared/rpc-types";
@@ -9,6 +18,7 @@ import { useT } from "../../lib/i18n";
 import { lastRead, rememberRead } from "../../lib/last-read";
 import type { TabRpc } from "../../lib/tab-rpc";
 import { useTabRpc } from "../../lib/tab-rpc";
+import { useReviewNotesStore } from "../../stores/review-notes";
 import {
 	anchorFromEvent,
 	Button,
@@ -24,6 +34,7 @@ import {
 	SearchField,
 	SkeletonRows,
 } from "../common";
+import { NoteEditor, NotesShelf, useNotesOwner } from "./notes/ReviewNotes";
 import { ChangeCounts, ChangeStatus, type ChangeStatusName, PanelToolbar } from "./PanelChrome";
 import { CommitBox } from "./scm/CommitBox";
 import { DiffLines, DiffSkeleton, VirtualRows } from "./scm/DiffLines";
@@ -95,6 +106,10 @@ export function RepositoryChanges({ sourceSelector }: { sourceSelector?: ReactNo
 	const [nameRequest, setNameRequest] = useState<NameRequest | null>(null);
 	const [discarding, setDiscarding] = useState<string[] | null>(null);
 	const [menu, setMenu] = useState<{ anchor: ContextMenuAnchor; file: ChangedFile } | null>(null);
+	// The whole-file note being written on the shown file (Orca's file note, `lineNumber` 0).
+	const [fileNoteFor, setFileNoteFor] = useState<string | null>(null);
+	const fileNoteOpen = fileNoteFor !== null && fileNoteFor === selected;
+	const { owner: notesOwner } = useNotesOwner();
 	const loadedFor = useRef<TabRpc | null>(null);
 	// The fingerprint read just before the last full load; a poll that reads another one reloads.
 	const loadedFingerprint = useRef("");
@@ -299,6 +314,11 @@ export function RepositoryChanges({ sourceSelector }: { sourceSelector?: ReactNo
 						tone="danger"
 					/>
 				)}
+				<NotesShelf
+					onOpen={note => {
+						if (note.anchor.kind === "diff") setSelected(note.anchor.path);
+					}}
+				/>
 				{changes?.isRepo && head && !selected && (
 					<CommitBox branch={head.branch} conflicts={conflicts} rpc={rpc} runner={runner} staged={staged} />
 				)}
@@ -461,12 +481,43 @@ export function RepositoryChanges({ sourceSelector }: { sourceSelector?: ReactNo
 										onClick={() => setDiscarding([selected])}
 										size="sm"
 									/>
+									{notesOwner && (
+										<IconButton
+											icon={<MessageSquarePlus />}
+											label={t("reviewNotes.addOnFile")}
+											onClick={() => setFileNoteFor(selected)}
+											pressed={fileNoteOpen}
+											size="sm"
+										/>
+									)}
 									<CopyButton disabled={!preview?.diff} label={t("diff.copy")} text={preview?.diff ?? ""} />
 								</div>
+								{fileNoteOpen && notesOwner && (
+									<div className="border-b border-(--sc-divider) bg-(--sc-surface-2)">
+										<NoteEditor
+											key={selected}
+											label={t("reviewNotes.newLabel", { place: t("reviewNotes.place.file") })}
+											onCancel={() => setFileNoteFor(null)}
+											onSave={body => {
+												useReviewNotesStore.getState().add({
+													owner: notesOwner,
+													anchor: { kind: "diff", path: selected, lines: null },
+													body,
+												});
+												setFileNoteFor(null);
+											}}
+										/>
+									</div>
+								)}
 								{!preview && !error ? (
 									<DiffSkeleton label={t("common.loading")} />
 								) : preview?.kind === "text" ? (
-									<DiffLines lines={lines} path={selected} scroller={previewScroller} />
+									<DiffLines
+										lines={lines}
+										notes={notesOwner ? { owner: notesOwner } : undefined}
+										path={selected}
+										scroller={previewScroller}
+									/>
 								) : (
 									preview && (
 										<p className="p-3 text-sc-sm text-(--sc-text-muted)">

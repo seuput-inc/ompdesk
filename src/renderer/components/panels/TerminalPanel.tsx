@@ -38,6 +38,7 @@ import { chromePlatform } from "../../lib/window-chrome";
 import { useTabsStore } from "../../stores/tabs";
 import { useUiStore } from "../../stores/ui";
 import { Banner, Button, EmptyState, ErrorDetail, IconButton, MenuButton, Spinner, Tabs } from "../common";
+import { AddToChatButton } from "./notes/AddToChat";
 import { TerminalKeyBar } from "./TerminalKeyBar";
 import "@xterm/xterm/css/xterm.css";
 
@@ -609,6 +610,11 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 							size="sm"
 						/>
 					)}
+					<AddToChatButton
+						disabled={!selected}
+						read={() => handle.current?.terminal.getSelection() ?? ""}
+						tabId={tabId}
+					/>
 					<IconButton
 						icon={<Copy />}
 						label={t("panel.terminal.copy")}
