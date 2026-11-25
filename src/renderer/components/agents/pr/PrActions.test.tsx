@@ -15,7 +15,7 @@ import { I18nProvider } from "../../../lib/i18n";
 import { usePrCenterStore } from "../../../stores/pr-center";
 import { useToastStore } from "../../../stores/toast";
 import { PrMergeButton } from "./PrActions";
-import { hunkTail, PrConversation } from "./PrConversation";
+import { hunkTail, PrConversation, reviewFeedback } from "./PrConversation";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
 const globals = globalThis as Record<string, unknown>;
@@ -241,5 +241,17 @@ describe("hunkTail", () => {
 		const hunk = ["@@ -10,5 +20,5 @@", " one", "-two", "+deux", " three", " four"].join("\n");
 		// Left out: " one" (both sides) and "-two" (old only): old starts at 12, new at 21.
 		expect(hunkTail(hunk, 3)).toBe(["@@ -12,2 +21,3 @@", "+deux", " three", " four"].join("\n"));
+	});
+});
+
+describe("reviewFeedback", () => {
+	it("hands an agent what reviewers asked for: worded comments and reviews, unresolved threads with their line", () => {
+		const resolved = { ...CONVERSATION.threads[0]!, id: "T_2", isResolved: true };
+		const entries = reviewFeedback({ ...CONVERSATION, threads: [...CONVERSATION.threads, resolved] });
+		expect(entries.map(entry => [entry.kind, entry.author, entry.body])).toEqual([
+			["comment", "alice", "Looks fine"],
+			["inline", "carol", "nit"],
+		]);
+		expect(entries[1]).toMatchObject({ path: "a.ts", line: 3 });
 	});
 });
