@@ -12,6 +12,7 @@ const KINDS: TurnErrorKind[] = [
 	"contextOverflow",
 	"auth",
 	"creditsOff",
+	"modelUnavailable",
 	"rateLimit",
 	"overloaded",
 	"compaction",
@@ -51,6 +52,11 @@ describe("describeTurnError", () => {
 		],
 		['529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', "overloaded"],
 		["503 Service Unavailable", "overloaded"],
+		['404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-old-1"}}', "modelUnavailable"],
+		["The model `gpt-9` does not exist or you do not have access to it.", "modelUnavailable"],
+		["models/gemini-0 is not found for API version v1beta", "modelUnavailable"],
+		["Error code: model_not_found", "modelUnavailable"],
+		["The model is temporarily unavailable", "overloaded"],
 		["Compaction freed too little context (7.1k of 8.2k)", "compaction"],
 		["Something unexpected happened", "unknown"],
 	])("maps %j to %s", (raw, kind) => {
@@ -77,6 +83,7 @@ describe("describeTurnError", () => {
 		expect(describeTurnError("Unable to connect").actions).toEqual(["retry", "openProviders"]);
 		expect(describeTurnError("Prompt is too long").actions).toEqual(["compact", "changeModel"]);
 		expect(describeTurnError("invalid x-api-key").actions).toEqual(["openProviders", "changeModel"]);
+		expect(describeTurnError("model_not_found").actions).toEqual(["changeModel", "openProviders"]);
 		expect(describeTurnError("429 Too Many Requests").actions).toEqual(["retry", "changeModel"]);
 		expect(describeTurnError("usage limit; OMPdesk's Credit use setting is off").actions).toEqual([
 			"openProviders",

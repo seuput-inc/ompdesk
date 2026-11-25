@@ -5903,6 +5903,9 @@ export const en: Record<string, string> = {
 	"turnError.creditsOff.title": "Plan limit reached",
 	"turnError.creditsOff.guidance":
 		"This account's plan limit is used up and Credit use is off, so OMPdesk stopped instead of spending credits or extra usage. Wait for the reset, switch models, or turn Credit use on in Models & accounts.",
+	"turnError.modelUnavailable.title": "Model unavailable",
+	"turnError.modelUnavailable.guidance":
+		"The provider doesn't offer this model to your account. Switch to another model or check the provider in Providers.",
 	"turnError.rateLimit.title": "Usage limit reached",
 	"turnError.rateLimit.guidance":
 		"You've hit the provider's rate limit or quota. Try again in a moment or switch to another model.",

@@ -130,6 +130,10 @@ Code: `lib/messages.ts` (`abortActiveTurn`, `stopFromEscape`, `restoreAbortedQue
 - A plan under review lets its text box give way first, down to 7.5rem or its own height (`min-height: calc-size(max-content, min(size, 7.5rem))`, `components.css`), so its first choice stays in view; a one-line plan keeps its own height. WebKit has no `calc-size`: there the box keeps its height and the card's body scrolls.
 - A landscape phone (844x390) holds neither the card nor the floor: a known limit. Pinned by `ask-dock.test.ts` (the room), `ask-dock.slot.test.tsx` (the wiring) and `e2e/work-board.e2e.ts` "after a session switch in the same tab…" (the room follows the strip as the side panel opens and closes, the transcript ≥ 240 px with an 8-option card; the fake omp's `fixture:select <n>` raises the card).
 
+### Failed turn kinds
+
+- A failed turn's card and toast name its kind from the error text (`describeTurnError`, `lib/messages.ts`; first pattern wins): aborted, compaction, rate limit, context overflow, auth, overloaded, **model unavailable** (a 404, `not_found_error`, `model_not_found`, "model … not found / does not exist / unavailable"; Orca's model-not-found row, 25 Nov 2026), certificate, timeout, connection, else unknown. Each kind has an en/ko title and one sentence (`turnError.<kind>.*`) and its actions, fixing one first: model unavailable offers Change model, then Open providers, never Retry, since the same request fails the same way. Pinned by `messages-errors.test.ts`.
+
 ### Run sheet (one line per row)
 
 User's rule. The desktop/tablet popover is the same content at `w-96`.

@@ -5896,6 +5896,9 @@ export const ko: Record<string, string> = {
 	"turnError.creditsOff.title": "요금제 한도 도달",
 	"turnError.creditsOff.guidance":
 		"이 계정의 요금제 한도를 다 썼고 크레딧 사용이 꺼져 있어서, 크레딧이나 추가 사용량을 쓰지 않고 멈췄어요. 한도 초기화를 기다리거나, 모델을 바꾸거나, 모델 및 계정에서 크레딧 사용을 켜세요.",
+	"turnError.modelUnavailable.title": "모델을 쓸 수 없음",
+	"turnError.modelUnavailable.guidance":
+		"프로바이더가 이 계정에 이 모델을 제공하지 않아요. 다른 모델로 바꾸거나 프로바이더에서 확인하세요.",
 	"turnError.rateLimit.title": "사용 한도 도달",
 	"turnError.rateLimit.guidance":
 		"프로바이더의 요청 한도나 할당량에 도달했어요. 잠시 후 다시 시도하거나 다른 모델을 쓰세요.",

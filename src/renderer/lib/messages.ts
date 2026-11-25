@@ -112,6 +112,7 @@ export type TurnErrorKind =
 	| "contextOverflow"
 	| "auth"
 	| "creditsOff"
+	| "modelUnavailable"
 	| "rateLimit"
 	| "overloaded"
 	| "compaction"
@@ -140,6 +141,7 @@ const TURN_ERROR_ACTIONS: Record<TurnErrorKind, readonly TurnErrorAction[]> = {
 	auth: ["openProviders", "changeModel"],
 	// Trying again only meets the same refusal: the ways on are the switch (Models & accounts) or another model.
 	creditsOff: ["openProviders", "changeModel"],
+	modelUnavailable: ["changeModel", "openProviders"],
 	rateLimit: ["retry", "changeModel"],
 	overloaded: ["retry", "changeModel"],
 	compaction: ["changeModel", "retry"],
@@ -180,6 +182,15 @@ const TURN_ERROR_PATTERNS: ReadonlyArray<readonly [Exclude<TurnErrorKind, "unkno
 	[
 		"overloaded",
 		[statusPattern("502|503|529"), /overloaded|service unavailable|temporarily unavailable|over capacity/i],
+	],
+	// The provider does not serve the model asked for (renamed, retired, not on this plan or region).
+	[
+		"modelUnavailable",
+		[
+			statusPattern("404"),
+			/model_not_found|not_found_error|unknown model|invalid model/i,
+			/\bmodels?\b[^.\n]{0,80}\b(?:not found|does not exist|doesn't exist|is not available|unavailable|not supported)\b/i,
+		],
 	],
 	[
 		"certificate",
