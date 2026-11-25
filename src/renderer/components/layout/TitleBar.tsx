@@ -258,8 +258,9 @@ export function TitleBar() {
 	// The window's open sessions as tabs (Orca's tab bar, a desktop window's), once the window lists its tab; a phone
 	// or tablet page keeps its one title.
 	const listed = useTabsStore(s => s.tabs.some(tab => tab.id === s.activeTabId));
-	const SessionTabStrip = useTabStripChunk(useShellMode() === null && listed);
-	const tabStrip = SessionTabStrip !== null && listed;
+	const wantStrip = useShellMode() === null && listed;
+	const SessionTabStrip = useTabStripChunk(wantStrip);
+	const tabStrip = wantStrip && SessionTabStrip !== null;
 	const panelVisible = useUiStore(s => s.panelVisible);
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
