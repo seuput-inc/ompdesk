@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use super::{FindParams, Id, Installed, ego, installed};
+use super::{FindParams, Id, Installed, blocking, ego, find};
 use crate::server::{Fault, Reply};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Params {
-    native_host_browsers: Option<Vec<Id>>,
+    native_host_browsers: Vec<Id>,
     // A spawn sends probe inputs only on a miss, without computing the login-shell PATH on hits.
     probe: Option<Probe>,
 }
@@ -24,25 +24,7 @@ struct Probe {
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum Automatic {
     Ego,
-    Relay { name: String, url: String },
     Builtin,
-}
-
-fn automatic(ego_installed: bool, browsers: &[Installed]) -> Automatic {
-    if ego_installed {
-        return Automatic::Ego;
-    }
-    for browser in browsers {
-        if browser.relay_installed
-            && let Some(port) = browser.port
-        {
-            return Automatic::Relay {
-                name: browser.name.clone(),
-                url: format!("http://127.0.0.1:{port}"),
-            };
-        }
-    }
-    Automatic::Builtin
 }
 
 #[derive(Serialize)]
@@ -51,14 +33,7 @@ struct Status {
     auto: Automatic,
     ego_installed: bool,
     browsers: Vec<Installed>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    native_host_browsers: Option<Vec<Id>>,
-}
-
-impl Status {
-    fn bindings(&self) -> impl Iterator<Item = (Id, bool)> + '_ {
-        self.browsers.iter().map(|b| (b.id, b.relay_installed))
-    }
+    native_host_browsers: Vec<Id>,
 }
 
 #[derive(Serialize)]
@@ -84,14 +59,21 @@ pub(super) async fn read(params: Params) -> Result<Reply, Fault> {
         return Reply::json(&());
     };
     let before = cache.take();
-    let (ego, browsers) = tokio::join!(
-        ego::resolve(probe.ego),
-        installed(probe.find, params.native_host_browsers.is_some()),
-    );
+    let (ego, found) = tokio::join!(ego::resolve(probe.ego), blocking(move || find(probe.find)));
     let ego_installed = ego.ok().flatten().is_some();
-    let browsers = browsers?;
+    let browsers: Vec<Installed> = found?
+        .into_iter()
+        .map(|found| Installed {
+            id: found.id,
+            name: found.name,
+        })
+        .collect();
     let status = Status {
-        auto: automatic(ego_installed, &browsers),
+        auto: if ego_installed {
+            Automatic::Ego
+        } else {
+            Automatic::Builtin
+        },
         ego_installed,
         browsers,
         native_host_browsers: params.native_host_browsers,
@@ -99,29 +81,14 @@ pub(super) async fn read(params: Params) -> Result<Reply, Fault> {
     let changed = before.is_some_and(|old| {
         old.ego_installed != status.ego_installed
             || old.native_host_browsers != status.native_host_browsers
-            || old.bindings().ne(status.bindings())
+            || old
+                .browsers
+                .iter()
+                .map(|b| b.id)
+                .ne(status.browsers.iter().map(|b| b.id))
     });
     Reply::json(&Read {
         status: cache.insert(status),
         changed,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::Value;
-
-    #[test]
-    fn automatic_matches_the_typescript_resolver() {
-        #[derive(Deserialize)]
-        struct Captured {
-            auto: Vec<(bool, Vec<Installed>, Value)>,
-        }
-        let captured: Captured = serde_json::from_str(include_str!("captured.json")).unwrap();
-        for (ego, browsers, expected) in captured.auto {
-            let selected = serde_json::to_value(automatic(ego, &browsers)).unwrap();
-            assert_eq!(selected, expected);
-        }
-    }
 }

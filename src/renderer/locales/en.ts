@@ -6349,14 +6349,9 @@ export const en: Record<string, string> = {
 	"settings.gui.defaultBrowserMissing": "ego-browser is not installed, so agents use the built-in browser (omp).",
 	"settings.gui.defaultBrowserLoadFailed": "Couldn't read the default browser setting",
 	"settings.gui.defaultBrowser.notInstalled": "{name} (not installed)",
-	"settings.gui.defaultBrowserBrowserMissing": "{name} is not installed. Agents won't use another browser instead.",
-	"settings.gui.defaultBrowserRelayMissing":
-		"Install the omp extension in {name} to let agents use your signed-in browser. Agents won't use another browser instead.",
 	"settings.gui.defaultBrowserInstall": "Install extension",
 	"settings.gui.defaultBrowserRelayUnverified":
 		"omp cannot verify which relay belongs to {name}. No other browser will be used for this choice. Choose another default or start a chat in the omp side panel of a supported browser.",
-	"settings.gui.defaultBrowserRelayConnected": "Connected: agents use your signed-in {name}.",
-	"settings.gui.defaultBrowserRelayWaiting": "Open {name} to connect it; agents use it once it is open.",
 	"settings.gui.defaultBrowserInstallFailed": "Couldn't install the extension",
 	"settings.gui.defaultBrowserStepsTitle": "Add the extension to {name}",
 	"settings.gui.defaultBrowserSteps":

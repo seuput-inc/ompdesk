@@ -984,23 +984,15 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** modes/formal-hint.ts: the public `before_agent_start` hook and its `prompt` only. */
 	formalHint: {},
 	/**
-	 * modes/default-browser.ts: the public `before_agent_start` hook for the section, and `browser.relay` and
-	 * `browser.relayUrl` held as runtime overrides of the session's settings (handles via `lookup`) while the choice is
-	 * the user's own browser.
+	 * modes/default-browser.ts: the public `before_agent_start` hook for the section, and `browser.enabled` held off as a
+	 * runtime override of the session's settings (handles via `lookup`) while the picked browser cannot be verified.
 	 */
 	defaultBrowser: {
 		pkg: ["Settings.instance"],
 		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/tools/browser/settings`]: [
-				"cfgBrowserEnabled.override()",
-				"cfgBrowserEnabled.clearOverride()",
-				"cfgBrowserRelay.override()",
-				"cfgBrowserRelay.clearOverride()",
-				"cfgBrowserRelayUrl.override()",
-				"cfgBrowserRelayUrl.clearOverride()",
-			],
+			[`${AGENT}/tools/browser/settings`]: ["cfgBrowserEnabled.override()", "cfgBrowserEnabled.clearOverride()"],
 		},
 	},
 	/**
