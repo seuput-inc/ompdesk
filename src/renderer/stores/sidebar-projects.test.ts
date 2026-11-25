@@ -26,6 +26,12 @@ const command = vi.fn(async (request: SidebarProjectsRequest, device?: string) =
 	return listed(pc.paths);
 });
 (globalThis as Record<string, unknown>).window = { omp: { sidebarProjects: { command, onState: () => () => {} } } };
+/** The page's `localStorage`, where an owed removal outlives a restart. */
+const storage = new Map<string, string>();
+(globalThis as Record<string, unknown>).localStorage = {
+	getItem: (key: string) => storage.get(key) ?? null,
+	setItem: (key: string, value: string) => storage.set(key, value),
+};
 
 function setOnline(online: boolean): void {
 	pc.online = online;
@@ -78,5 +84,12 @@ describe("a paired host's project removed while its link is down", () => {
 		await linkUp();
 		expect(shown()).toEqual(["/a", "/b"]);
 		expect(useToastStore.getState().toasts).toHaveLength(1);
+	});
+
+	it("sends a removal owed from before a restart, kept in the page's storage", async () => {
+		storage.set("omp.sidebar.owedRemovals.v1", JSON.stringify({ [HOST]: ["/a"] }));
+		await linkUp();
+		expect(pc.paths).toEqual(["/b"]);
+		expect(JSON.parse(storage.get("omp.sidebar.owedRemovals.v1") ?? "{}")).toEqual({});
 	});
 });
