@@ -309,10 +309,11 @@ describe("ExtensionDialog native RPC form", () => {
 
 describe("ExtensionDialog a2ui form", () => {
 	it("shows where to answer instead of an ask card, and Skip cancels the stock form", async () => {
+		// The row is the A2UI chunk's, loaded lazily: loaded here first, as the call's card in the chat has by then.
+		await import("../tools/renderers/A2uiRenderer");
 		const command = vi.fn<SessionRuntime["command"]>();
 		await mount({ runtime: { tabId: "pane", command, stores: new Map() } });
 		await push({ type: "extension_ui_request", method: "form", id: "a2ui-1", html: a2uiMarkerForm("call_7") });
-		// The row is the A2UI chunk's, loaded lazily.
 		for (let tries = 0; tries < 50 && !document.querySelector("[data-a2ui-waiting]"); tries++) await flush();
 		expect(document.querySelector('[data-a2ui-waiting="call_7"]')).not.toBeNull();
 		expect(document.body.textContent).toContain(translate("a2ui.waiting"));

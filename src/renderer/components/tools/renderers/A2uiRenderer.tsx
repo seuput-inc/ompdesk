@@ -169,7 +169,7 @@ export function A2uiWaiting({
 	return (
 		<PromptCard
 			footer={
-				<>
+				<div className="flex w-full items-center justify-between gap-3" data-a2ui-waiting={callId}>
 					<Button
 						data-a2ui-jump
 						onClick={() => tabId && requestRevealStep({ tabId, key: entryKey })}
@@ -181,15 +181,13 @@ export function A2uiWaiting({
 					<Button data-a2ui-dock-skip onClick={onSkip} size="sm" variant="ghost">
 						{t("a2ui.skip")}
 					</Button>
-				</>
+				</div>
 			}
 			icon={AppWindow}
 			label={t("a2ui.waiting")}
 			onCancel={onSkip}
 		>
-			<div data-a2ui-waiting={callId}>
-				<TimeoutFooter remaining={remaining} />
-			</div>
+			<TimeoutFooter remaining={remaining} />
 		</PromptCard>
 	);
 }
