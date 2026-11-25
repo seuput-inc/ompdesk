@@ -9,7 +9,7 @@
 #
 # The queue is managed by the workflow, not by whoever dispatches (.omp/rules/e2e-ci-windows.md › CI › The check
 # queue): a push to main has one run going and the newest waiting (`ci-main`), a dispatch replaces its own older run, `gate`
-# (queue-gate.yml) admits macOS only to main and MAC_REFS branches and cancels a commit's second identical run.
+# (queue-gate.yml) cancels a commit's second identical run.
 # A push's macOS checks run separately in mac-main.yml so a runner wait does not delay the Linux and Windows verdict.
 #
 # Pull requests (including from forks) run only the Linux jobs with a read-only
@@ -108,9 +108,8 @@ permissions:
   contents: read
 
 jobs:
-  # The queue's admission point (queue-gate.yml). A dispatch asking for macOS (`mac`) must come from main or a
-  # MAC_REFS branch, and a dispatch whose commit already has a green run with the same inputs cancels itself. Skipped on
-  # a push (nothing to admit), where the jobs below start at once. The jobs depend on it so a duplicate starts none.
+  # The queue gate cancels a dispatch whose commit already has a green run with the same inputs. Skipped on
+  # a push, where the jobs below start at once. The jobs depend on it so a duplicate starts none.
   gate:
     if: github.event_name == 'workflow_dispatch'
     permissions:
@@ -119,8 +118,6 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: ci.yml
-      mac: ${{ inputs.mac }}
-      mac-refs: ${{ vars.MAC_REFS }}
       force: ${{ inputs.force }}
 
   # Pre-flight: the same blocking checks release.yml runs (types, biome, surface
@@ -327,7 +324,7 @@ jobs:
   # mac-main.yml calls the same checks on a push to main.
   mac:
     needs: gate
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.mac && needs.gate.outputs.mac_ok == 'true'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.mac"
     permissions:
       contents: read
       actions: read # the failure reports read this run's jobs

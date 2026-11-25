@@ -7,8 +7,6 @@
  *   bun scripts/ci-run.ts flake-probe --ref omp/agent/foo -f spec=e2e/a.e2e.ts -f os=windows
  *   options: --ref <branch> (default: the current branch), -f key=value (any number), --dry-run
  *
- *  - Asking for macOS from a branch that is not in the repository variable MAC_REFS: refused (exit 2). Main sets the list
- *    (`gh variable set MAC_REFS --body "<branch> <branch>"`).
  *  - A branch without queue-gate.yml (cut before the gate landed) runs its own old workflow files, which hold nothing:
  *    refused (exit 2); merge main first.
  * Exit 0: dispatched, the exact response run ID printed (watch it once: `bun scripts/watch-run.ts <id>`).
@@ -62,11 +60,6 @@ export function asksForMac(workflow: string, inputs: Record<string, string>): bo
 	return WORKFLOWS[workflow]?.(inputs) ?? false;
 }
 
-/** MAC_REFS is a list of exact branch names, separated by spaces or commas. */
-export function refAllowed(ref: string, macRefs: string): boolean {
-	return ref === "main" || macRefs.split(/[\s,]+/).includes(ref);
-}
-
 function fail(message: string, code: number): never {
 	console.error(`ci-run: ${message}`);
 	process.exit(code);
@@ -117,8 +110,6 @@ function main(argv: string[]): number {
 		);
 	}
 	if (asksForMac(args.workflow, args.inputs)) {
-		const macRefs = gh(["variable", "get", "MAC_REFS"]).out.trim();
-		if (!refAllowed(ref, macRefs)) fail(`${ref} is not in MAC_REFS (${macRefs || "empty"})`, 2);
 		console.log(accountLoad());
 	}
 	if (args.dryRun) {

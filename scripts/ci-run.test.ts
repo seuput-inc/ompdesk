@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { asksForMac, parseArgs, refAllowed } from "./ci-run";
+import { asksForMac, parseArgs } from "./ci-run";
 
 describe("ci-run arguments", () => {
 	it("reads the workflow, the ref and every -f field", () => {
@@ -33,16 +33,6 @@ describe("ci-run arguments", () => {
 		expect(asksForMac("flake-probe", { spec: "e2e/a.e2e.ts", os: "all" })).toBe(false);
 		expect(asksForMac("flake-probe", { spec: "e2e/a.e2e.ts", os: "macos" })).toBe(true);
 		expect(asksForMac("formal", {})).toBe(false);
-	});
-});
-
-describe("ci-run admission", () => {
-	it("lets main and the listed branches ask for macOS, by exact name", () => {
-		expect(refAllowed("main", "")).toBe(true);
-		expect(refAllowed("a/b", "a/b c")).toBe(true);
-		expect(refAllowed("c", "a/b,c")).toBe(true);
-		expect(refAllowed("a", "a/b")).toBe(false);
-		expect(refAllowed("a/b", "")).toBe(false);
 	});
 });
 

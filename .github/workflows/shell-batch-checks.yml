@@ -64,8 +64,7 @@
 #                scripts/shell-move/scripted-provider.ts) is continued once; `update` the installed candidate updates itself
 #                into next_run's higher build. macOS (job mac-update-gate, scripts/shell-move/mac-update-gate.sh): `update` once.
 # macOS jobs follow main's check queue (queue-gate.yml): a push runs only the Windows jobs (move-win, title-bar on
-# windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`) the gate admits: main, or a branch named in
-# the repository variable MAC_REFS; any other ref fails at the gate.
+# windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`).
 # Deleted with the branch's landing; the checks that stay move into ci.yml's batch run.
 name: shell-batch-checks
 # The subset is in the name: queue-gate cancels a second run of the same name on one commit, so different subsets must differ.
@@ -123,8 +122,7 @@ permissions:
   contents: read
 
 jobs:
-  # The queue's admission (queue-gate.yml): skipped on a push (nothing to admit; only the Windows jobs run), on a dispatch it
-  # lets the macOS jobs start for main and MAC_REFS branches only, and cancels a commit's second identical run.
+  # The queue gate: skipped on a push (only the Windows jobs run); on a dispatch it cancels a commit's second identical run.
   gate:
     if: github.event_name == 'workflow_dispatch'
     permissions:
@@ -133,13 +131,11 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: shell-batch-checks.yml
-      mac: ${{ inputs.only != 'tauri-inputs' && inputs.only != 'preview-transport' && inputs.only != 'win-update-real' }}
-      mac-refs: ${{ vars.MAC_REFS }}
 
   shell-mac:
     name: shell-mac (${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'all'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -189,7 +185,7 @@ jobs:
   title-bar-mac:
     name: title-bar (${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'all'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -235,7 +231,7 @@ jobs:
   move-mac:
     name: move-mac (${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'all'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -346,7 +342,7 @@ jobs:
   move-mac-release1:
     name: move-mac-release1 (${{ matrix.released-tag }}, ${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && (inputs.only == 'all' || inputs.only == 'move-current-mac' || inputs.only == 'tauri-move')"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && (inputs.only == 'all' || inputs.only == 'move-current-mac' || inputs.only == 'tauri-move')"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -388,7 +384,7 @@ jobs:
   keychain:
     name: keychain (${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'all'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -423,7 +419,7 @@ jobs:
   tauri-native:
     name: tauri-native (${{ matrix.os }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && (inputs.only == 'tauri-native' || inputs.only == 'preview-browser')"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && (inputs.only == 'tauri-native' || inputs.only == 'preview-browser')"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -527,7 +523,7 @@ jobs:
   phone-webkit-mac:
     name: phone-webkit-mac (macos-15)
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'phone-webkit-mac'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'phone-webkit-mac'"
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -641,7 +637,7 @@ jobs:
   release-assets-mac:
     name: release-assets-mac (macos-15, ${{ inputs.tag }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'release-verify'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'release-verify'"
     runs-on: macos-15
     timeout-minutes: 40
     permissions:
@@ -721,7 +717,7 @@ jobs:
   release-update-mac:
     name: release-update-mac (macos-15, ${{ inputs.only == 'release-update-mac' && format('{0} to run {1}', inputs.old_tag, inputs.candidate_run) || format('v0.131.0 to {0}', inputs.tag) }})
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && (inputs.only == 'release-verify' || inputs.only == 'release-update-mac')"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && (inputs.only == 'release-verify' || inputs.only == 'release-update-mac')"
     runs-on: macos-15
     timeout-minutes: 90
     permissions:
@@ -939,7 +935,7 @@ jobs:
   mac-update-gate:
     name: mac-update-gate (macos-15)
     needs: [gate]
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.mac_ok == 'true' && inputs.only == 'win-update-gate'"
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'win-update-gate'"
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
