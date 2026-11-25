@@ -16,7 +16,6 @@ const RECOMMENDED_PROVIDERS: readonly (readonly [id: string, name: string])[] = 
 	["openai-codex", "OpenAI Codex"],
 	["github-copilot", "GitHub Copilot"],
 	["openrouter", "OpenRouter"],
-	["google-gemini-cli", "Google Gemini CLI"],
 	["deepseek", "DeepSeek"],
 ];
 
@@ -43,9 +42,9 @@ export const STARTER_PROVIDERS: readonly ProviderInfo[] = [
 /**
  * The providers the sign-in pickers put on top as their own group, in this order. Ids and login
  * kinds are stock's (pi-catalog `auth/*.kdl`, `/login` roster): `openai-codex` and `anthropic` are
- * subscription OAuth, `google-gemini-cli` is Google's own browser sign-in (stock's plain `google`
- * has no login), `openrouter` yields a durable API key (browser sign-in or paste), and Grok has
- * both: `xai-oauth` (device-code sign-in, primary) and `xai` (API key). A card's name is
+ * subscription OAuth, `openrouter` yields a durable API key (browser sign-in or paste), and Grok has
+ * both: `xai-oauth` (device-code sign-in, primary) and `xai` (API key). Google has no card: omp 19.2
+ * dropped the `google-gemini-cli` login, and its plain `google` has none. A card's name is
  * `providerLabel` of stock's live provider row: OMPdesk writes no plan or tier wording of its own,
  * so a plan renamed in stock's catalog shows here after an omp update. `kind` picks the one-line description.
  */
@@ -58,7 +57,6 @@ export const FEATURED_PROVIDERS: readonly {
 	{ id: "openai-codex", kind: "subscription" },
 	{ id: "anthropic", kind: "subscription" },
 	{ id: "openrouter", kind: "apiKey" },
-	{ id: "google-gemini-cli", kind: "subscription" },
 	{ id: "xai-oauth", kind: "subscription", apiKeyId: "xai" },
 ];
 

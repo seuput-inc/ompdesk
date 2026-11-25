@@ -505,12 +505,12 @@ for (const { engine, device } of variants(
 			const step = page.locator('[data-first-run-step="connect"]');
 			await expect(step).toBeVisible({ timeout: 30_000 });
 			const cards = step.locator("[data-featured-provider] > button:first-child");
-			await expect(cards).toHaveCount(5);
+			await expect(cards).toHaveCount(4);
 			expect(
 				await step
 					.locator("[data-featured-provider]")
 					.evaluateAll(items => items.map(item => item.getAttribute("data-featured-provider"))),
-			).toEqual(["openai-codex", "anthropic", "openrouter", "google-gemini-cli", "xai-oauth"]);
+			).toEqual(["openai-codex", "anthropic", "openrouter", "xai-oauth"]);
 			const boxes = await cards.evaluateAll(items =>
 				items.map(item => {
 					const box = item.getBoundingClientRect();

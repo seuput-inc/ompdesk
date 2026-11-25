@@ -277,7 +277,7 @@ for (const language of variants(["en", "ko"] as const)) {
 					.poll(() =>
 						featured.evaluateAll(items => items.map(item => item.getAttribute("data-featured-provider"))),
 					)
-					.toEqual(["openai-codex", "anthropic", "openrouter", "google-gemini-cli", "xai-oauth"]);
+					.toEqual(["openai-codex", "anthropic", "openrouter", "xai-oauth"]);
 				await expect(step.locator("[data-featured-provider] > button:first-child").first()).toBeEnabled();
 				// Late toasts (bridge health, usage) would land in this window.
 				await page.waitForTimeout(2_000);
