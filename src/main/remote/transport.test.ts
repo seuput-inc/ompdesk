@@ -68,12 +68,21 @@ async function side(): Promise<Side> {
 	return { dir, identity: await loadIdentity(dir) };
 }
 
+/** `held` answers only once its signal aborts, and hands the test each signal it was given. */
+const heldReads: AbortSignal[] = [];
+
 const services: HostServices = {
-	async call(_peer, method, params, conn) {
+	async call(_peer, method, params, conn, signal) {
 		if (method === "echo") return params;
 		if (method === "push") {
 			conn.emit("pushed", params);
 			return "sent";
+		}
+		if (method === "held" && signal) {
+			heldReads.push(signal);
+			const { promise, resolve } = Promise.withResolvers<string>();
+			signal.addEventListener("abort", () => resolve("stopped"), { once: true });
+			return promise;
 		}
 		if (method === "coded") throw codedError("remote_offline", "coded failure");
 		throw Object.assign(new Error(`unknown method ${method}`), { code: "no_method" });
@@ -705,6 +714,25 @@ describe("authenticated link", () => {
 		expect(coded.code).toBe("remote_offline");
 		expect(coded.message).toBe("[remote_offline] coded failure");
 		expect((await rejection(remote.request("missing", null))).code).toBe("no_method");
+	});
+
+	it("a request the device gives up on stops at the host, and a closed link stops the rest", async () => {
+		const rig = await startHost();
+		const { a, paired } = await connectedClient(rig);
+		const remote = client(a, paired);
+		remote.connect();
+		await untilState(remote, "online");
+		heldReads.length = 0;
+
+		expect((await rejection(remote.request("held", null, 50))).code).toBe("timeout");
+		await vi.waitFor(() => expect(heldReads[0]?.aborted).toBe(true));
+
+		const second = remote.request("held", null, 60_000).catch(() => undefined);
+		await vi.waitFor(() => expect(heldReads).toHaveLength(2));
+		expect(heldReads[1]?.aborted).toBe(false);
+		await rig.host.stop();
+		await second;
+		expect(heldReads[1]?.aborted).toBe(true);
 	});
 
 	it("rejects requests with remote_offline when not online", async () => {

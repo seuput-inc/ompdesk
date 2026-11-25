@@ -1297,7 +1297,13 @@ export class LocalHostServices implements HostServices {
 		return tab.sessionFile ? (this.#deps.localTabs.sessionOwner(tab.sessionFile)?.tabId ?? null) : null;
 	}
 
-	async call(peer: PeerInfo, method: string, params: unknown, conn: HostConnection): Promise<unknown> {
+	async call(
+		peer: PeerInfo,
+		method: string,
+		params: unknown,
+		conn: HostConnection,
+		signal?: AbortSignal,
+	): Promise<unknown> {
 		if (!this.#conns.has(conn)) {
 			const counts = this.#deps.localTabs.modelWait?.snapshot.local;
 			if (counts && Object.keys(counts).length > 0) emitSafely(conn, MODEL_WAIT_EVENT, { counts });
@@ -1411,9 +1417,11 @@ export class LocalHostServices implements HostServices {
 			case "sessions.search": {
 				const { query, scope, cwd } = parse(SessionsSearchParams, method, params);
 				const candidates = await this.#deps.sessionIndex.list(scope, cwd);
+				// A read the device may give up on: its search in the core stops with it (`signal`).
 				return this.#deps.sessionIndex.searchContent(
 					query,
 					candidates.map(info => info.path),
+					signal,
 				);
 			}
 			case "sessions.messages": {
