@@ -1135,6 +1135,25 @@
 	padding: var(--omp-turn-gap) var(--omp-editorial-edge) var(--omp-prompt-gap) var(--omp-editorial-inset) !important;
 }
 
+/* The "New" line (ChatStream `newRowKey`): where what arrived while the person was in another session starts, in
+   the unread color, a hairline and its word at the reading column's edges. It never moves a row: it sits inside the
+   first new row, which the virtualizer measures with it. */
+.omp-transcript-new {
+	display: flex;
+	align-items: center;
+	gap: var(--sc-space-2);
+	padding: var(--sc-space-2) var(--omp-editorial-edge) 0 var(--omp-editorial-inset);
+	font-size: var(--sc-font-xs);
+	font-weight: var(--sc-weight-semibold);
+	color: var(--sc-unread);
+}
+
+.omp-transcript-new::before {
+	content: "";
+	flex: 1;
+	border-top: 1px solid color-mix(in srgb, var(--sc-unread) 45%, transparent);
+}
+
 .omp-transcript-editorial .omp-user-bubble {
 	max-width: min(80%, 40rem);
 }

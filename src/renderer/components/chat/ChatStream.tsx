@@ -64,10 +64,12 @@ import {
 	createRowEntranceState,
 	endsOnSteer,
 	findConversationAnchorIndex,
+	firstUnseenRowKey,
 	type GestureTowardTail,
 	type HistoryRow,
 	isTranscriptAtLiveEdge,
 	isVisibleTranscriptMessage,
+	lastFinalizedRowKey,
 	liveWorkTail,
 	type MountedTranscriptRow,
 	mergeTodoSnapshots,
@@ -322,6 +324,11 @@ function SessionTranscript() {
 	);
 	const viewRef = useRef({ pinned, preCompactionOpen, expandedProcessKeys });
 	viewRef.current = { pinned, preCompactionOpen, expandedProcessKeys };
+	// The "New" line: rows that arrived while the person was in another session. It holds until they send.
+	const [seenKey, setSeenKey] = useState(restoreView?.seenKey);
+	const newRowKey = useMemo(() => firstUnseenRowKey(rows, rowKeys, seenKey), [rows, rowKeys, seenKey]);
+	const lastSeenRef = useRef<string | undefined>(undefined);
+	lastSeenRef.current = lastFinalizedRowKey(rows, rowKeys);
 	const emptyRef = useRef(true);
 	emptyRef.current = rows.length === 0;
 
@@ -712,6 +719,7 @@ function SessionTranscript() {
 				anchorKey: typeof anchor?.key === "string" ? anchor.key : undefined,
 				anchorOffset: anchor ? scrollOffset - anchor.start : 0,
 				measurements: virtualizer.takeSnapshot(),
+				seenKey: lastSeenRef.current,
 			});
 		},
 		[sessionId, saveView, virtualizer],
@@ -988,6 +996,7 @@ function SessionTranscript() {
 	useEffect(() => {
 		if (lastPinNonce.current === pinNonce) return;
 		lastPinNonce.current = pinNonce;
+		setSeenKey(undefined);
 		jumpToLatest();
 	}, [pinNonce, jumpToLatest]);
 
@@ -1154,6 +1163,16 @@ function SessionTranscript() {
 									}}
 								>
 									<div className="omp-transcript-row w-full">
+										{rowKey === newRowKey && (
+											<div
+												aria-label={t("chat.newSince")}
+												className="omp-transcript-new"
+												data-transcript-new
+												role="separator"
+											>
+												<span aria-hidden>{t("chat.newSince")}</span>
+											</div>
+										)}
 										{row.kind === "message" ? (
 											<>
 												<MessageBubble

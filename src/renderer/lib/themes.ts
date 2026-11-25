@@ -347,6 +347,7 @@ export function applyThemeByName(selection: ThemeSelection, opts: { persist?: bo
 	const mode = selection === "system" ? "system" : theme.scheme;
 	applyTheme(mode);
 	const root = document.documentElement;
+	if (root.getAttribute("data-theme-name") !== name) holdTransitions(root);
 	const style = root.style;
 	for (const key of THEME_TOKEN_KEYS) style.setProperty(key, theme.tokens[key]);
 	for (const [key, value] of Object.entries(scTokensFor(theme))) style.setProperty(key, value);
@@ -360,6 +361,17 @@ export function applyThemeByName(selection: ThemeSelection, opts: { persist?: bo
 		void saveGuiPreference("theme", mode, () => {});
 		storePaint(selection, mode);
 	}
+}
+
+/**
+ * Every color transition off while a palette swaps (Orca's `.theme-transition-disabled`): otherwise each hover-fading
+ * control eases from the old theme's color to the new one on its own clock and the window repaints for a beat in
+ * mixed colors. The mark stays two frames, so the swap's style recalc lands inside it.
+ */
+function holdTransitions(root: HTMLElement): void {
+	if (typeof requestAnimationFrame !== "function") return;
+	root.setAttribute("data-theme-switching", "");
+	requestAnimationFrame(() => requestAnimationFrame(() => root.removeAttribute("data-theme-switching")));
 }
 
 /** Mirror what pre-paint.js reads on the next cold start: the scheme (or "system") and each scheme's page background. */

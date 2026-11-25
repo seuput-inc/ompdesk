@@ -133,3 +133,25 @@ describe("window and page chrome follow the theme", () => {
 		}
 	});
 });
+
+describe("a theme swap", () => {
+	it("holds every transition off for the frames the new palette paints in, and only when the theme changes", () => {
+		const frames: FrameRequestCallback[] = [];
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+		const nextFrame = () => {
+			for (const frame of frames.splice(0)) frame(0);
+		};
+		const root = document.documentElement;
+		applyThemeByName("light", { persist: false });
+		nextFrame();
+		nextFrame();
+		applyThemeByName("dark", { persist: false });
+		expect(root.hasAttribute("data-theme-switching")).toBe(true);
+		nextFrame();
+		expect(root.hasAttribute("data-theme-switching")).toBe(true);
+		nextFrame();
+		expect(root.hasAttribute("data-theme-switching")).toBe(false);
+		applyThemeByName("dark", { persist: false });
+		expect(root.hasAttribute("data-theme-switching")).toBe(false);
+	});
+});

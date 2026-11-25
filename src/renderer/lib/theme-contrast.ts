@@ -23,6 +23,8 @@ export const USAGE_PLAIN_FILL = 0.14;
 export const USAGE_ALERT_FILL = 0.26;
 /** An answer's reading text (`--sc-chat-text`, tokens.css): the text color's share over the page. */
 export const CHAT_TEXT_MIX = 0.88;
+/** An active list option's wash (common/OptionRow): the text color's share. */
+export const OPTION_ACTIVE_WASH = 0.11;
 
 /** The surfaces body text sits on. */
 const TEXT_SURFACES: ThemeTokenKey[] = [
@@ -133,6 +135,13 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 		const glass = flatten(withAlpha(surface(theme, "--omp-bg-elevated"), theme.floating), behind);
 		add(`muted over a floating surface over ${behind}`, paint(theme, "--omp-muted", glass), glass, text);
 	}
+	// A list option under the keyboard or pointer (common/OptionRow `active`, the palette's row): Orca's cmdk row, a text
+	// wash on the menu with a hairline ring; its quiet text reads at secondary there.
+	const optionActive = flatten(
+		withAlpha(surface(theme, "--omp-text"), OPTION_ACTIVE_WASH),
+		surface(theme, "--omp-bg-elevated"),
+	);
+	add("secondary over an active option", paint(theme, "--omp-text-secondary", optionActive), optionActive, text);
 
 	// The sidebar's current session sits on a 9 % text wash (global.css `--sc-sidebar-row-selected`); there its quiet
 	// text reads at secondary (`--sc-text-subtle` and `--sc-text-muted` are lifted to it; muted alone fell under 4.5:1 on solarized-light) and a waiting title's attention color is mixed a fifth toward
@@ -201,7 +210,8 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 		add(`border-strong (${surfaceKey})`, surface(theme, "--omp-border-strong"), bg, UI_BOUNDARY);
 		add(`focus ring (${surfaceKey})`, theme.focusRing, bg, UI_BOUNDARY);
 		add(`accent as graphic (${surfaceKey})`, surface(theme, "--omp-accent"), bg, UI_BOUNDARY);
-		add(`unread mark (${surfaceKey})`, surface(theme, "--omp-unread"), bg, UI_BOUNDARY);
+		// The sidebar's ✓ and the transcript's "New" word: text, so the text floor.
+		add(`unread (${surfaceKey})`, surface(theme, "--omp-unread"), bg, text);
 		for (const [index, color] of theme.chart.entries())
 			add(`chart ${index + 1} (${surfaceKey})`, color, bg, UI_BOUNDARY);
 	}

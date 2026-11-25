@@ -3146,6 +3146,7 @@ export const en: Record<string, string> = {
 	"chat.branchFromHere": "Branch to a new tab from here",
 	"chat.branchSaved": "Branch created. Open it from the session list.",
 	"chat.jumpToLatest": "Jump to latest",
+	"chat.newSince": "New",
 	"chat.process.title": "Steps",
 	"chat.process.statusRunning": "{running} running · {total} step{plural}",
 	"chat.process.statusWorking": "Working · {total} step{plural}",

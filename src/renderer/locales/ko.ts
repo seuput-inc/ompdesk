@@ -3139,6 +3139,7 @@ export const ko: Record<string, string> = {
 	"chat.branchFromHere": "여기서 새 탭으로 분기",
 	"chat.branchSaved": "분기를 만들었어요. 세션 목록에서 열 수 있어요.",
 	"chat.jumpToLatest": "최신으로 이동",
+	"chat.newSince": "새 메시지",
 	"chat.process.title": "진행 단계",
 	"chat.process.statusRunning": "{running}개 실행 중 · {total}단계",
 	"chat.process.statusWorking": "작업 중 · {total}단계",

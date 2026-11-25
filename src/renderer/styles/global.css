@@ -1156,6 +1156,15 @@ html[data-platform="darwin"] .omp-sidebar-search {
 	}
 }
 
+/* While a theme swaps (lib/themes.ts `holdTransitions`, two frames) no transition runs, so nothing eases from the old
+   palette's colors into the new one. */
+html[data-theme-switching],
+html[data-theme-switching] *,
+html[data-theme-switching] *::before,
+html[data-theme-switching] *::after {
+	transition: none !important;
+}
+
 /* GUI density changes conversation spacing without scaling text or scroll
    coordinates: it retunes the transcript spacing scale (components.css). */
 [data-density="tight"] .omp-transcript-editorial {

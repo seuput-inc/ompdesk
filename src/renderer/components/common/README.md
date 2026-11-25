@@ -97,7 +97,9 @@ for `Modal`, `Sheet` or `Popover` first; these give a surface the same behaviour
   layer stack, so an Escape or a key handler of the layer beneath defers to it.
 - `popoverTabStops`, `tabOutOfPopover` and `isTabbable`: a non-modal popover's Tab order (Tab past its last control
   closes it and moves on from its anchor).
-- `PopoverSurface`: the popover's panel look, for a popover laid out by its owner.
+- `PopoverSurface`: the popover's panel look, for a popover laid out by its owner. It and `MenuSurface` (ContextMenu) wear
+  `.omp-floating` (global.css): the theme's floating glass (`ThemeDefinition.floating`, opaque in a theme that sets
+  none), the page blurred behind, the floating shadow; plain under software compositing. A new floating layer wears it.
 - `SheetHandle`: a bottom or left sheet's drag grabber (pulling it toward the edge dismisses).
 
 ## Container policy
