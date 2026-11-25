@@ -605,6 +605,14 @@ fn offset(value: &str) -> Option<i64> {
     Some(sign * (hours * 60 + minutes))
 }
 
+/// A `STANDARD` or `DAYLIGHT` part of a `VTIMEZONE` while it is read.
+#[derive(Default)]
+struct PartRead {
+    offset: Option<i64>,
+    start: Option<Stamp>,
+    yearly: Option<(u32, (i64, u32))>,
+}
+
 /// The events of an ICS feed this reader can follow.
 pub(super) fn parse(feed: &str) -> Vec<Event> {
     // Unfold: a line that starts with a space or a tab goes on the line before it.
@@ -623,7 +631,7 @@ pub(super) fn parse(feed: &str) -> Vec<Event> {
     let mut raw_events: Vec<Vec<usize>> = Vec::new();
     let mut stack: Vec<String> = Vec::new();
     let mut zone_id = String::new();
-    let mut part: Option<(Option<i64>, Option<Stamp>, Option<(u32, (i64, u32))>)> = None;
+    let mut part: Option<PartRead> = None;
     for (at, line) in lines.iter().enumerate() {
         let Some(line) = content_line(line) else {
             continue;
@@ -635,18 +643,18 @@ pub(super) fn parse(feed: &str) -> Vec<Event> {
                     raw_events.push(Vec::new());
                 }
                 if what == "STANDARD" || what == "DAYLIGHT" {
-                    part = Some((None, None, None));
+                    part = Some(PartRead::default());
                 }
                 stack.push(what);
             }
             "END" => {
                 let what = stack.pop().unwrap_or_default();
                 if (what == "STANDARD" || what == "DAYLIGHT")
-                    && let Some((
-                        Some(offset_minutes),
-                        Some(Stamp::Local { day, minutes, .. }),
+                    && let Some(PartRead {
+                        offset: Some(offset_minutes),
+                        start: Some(Stamp::Local { day, minutes, .. }),
                         yearly,
-                    )) = part.take()
+                    }) = part.take()
                 {
                     zones.entry(zone_id.clone()).or_default().push(ZonePart {
                         offset_minutes,
@@ -662,17 +670,17 @@ pub(super) fn parse(feed: &str) -> Vec<Event> {
             }
             "TZOFFSETTO" if part.is_some() => {
                 if let Some(part) = part.as_mut() {
-                    part.0 = offset(line.value);
+                    part.offset = offset(line.value);
                 }
             }
             "DTSTART" if part.is_some() => {
                 if let Some(part) = part.as_mut() {
-                    part.1 = stamp(line.value, false, None);
+                    part.start = stamp(line.value, false, None);
                 }
             }
             "RRULE" if part.is_some() => {
                 if let Some(part) = part.as_mut() {
-                    part.2 = zone_rule(line.value);
+                    part.yearly = zone_rule(line.value);
                 }
             }
             _ if stack.last().is_some_and(|top| top == "VEVENT") => {

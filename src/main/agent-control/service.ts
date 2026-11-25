@@ -499,6 +499,7 @@ export const TEXT_KEYS = [
 	"mergeMessage",
 	"scheduleTitle",
 	"scheduleMessage",
+	"schedulePrecheckMessage",
 	"botTitle",
 	"botMessage",
 	"autopilotTitle",

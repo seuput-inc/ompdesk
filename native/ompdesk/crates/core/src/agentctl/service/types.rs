@@ -830,16 +830,34 @@ pub enum ScheduleEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<String>,
     },
+    /// An ICS feed's events, `leadMinutes` before each starts.
+    Calendar {
+        url: String,
+        #[serde(rename = "leadMinutes")]
+        lead_minutes: i64,
+    },
 }
 
 /// When a schedule starts (`ScheduleFrequency`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ScheduleFrequency {
-    Interval { minutes: f64 },
-    Daily { time: String, days: Vec<u8> },
-    Once { at: String },
-    Event { event: ScheduleEvent },
+    Interval {
+        minutes: f64,
+    },
+    Daily {
+        time: String,
+        days: Vec<u8>,
+    },
+    Once {
+        at: String,
+    },
+    Event {
+        event: ScheduleEvent,
+        /// A wait's deadline (ISO): it runs once, on its event or then.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+    },
 }
 
 /// A scheduled run as the control tools see it.
@@ -899,6 +917,20 @@ pub struct ScheduleDraft {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake_session: Option<String>,
+    /// A shell command that must succeed before each start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precheck: Option<String>,
+    /// Where a fresh run's answer goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results_to: Option<ScheduleResultsTo>,
+}
+
+/// `ScheduleDraft.resultsTo`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ScheduleResultsTo {
+    Session { session: String },
+    Notify,
 }
 
 /// A saved schedule (`Schedule`): its draft plus the id, creation time and the device that saved it.
@@ -1395,9 +1427,20 @@ pub struct ScheduleArgs {
     pub id: Option<String>,
     #[serde(default)]
     pub device: Option<String>,
-    /// `self`.
+    /// `self` or `bot:<name>`.
     #[serde(default)]
     pub target: Option<String>,
+    /// With `on`: a wait's deadline (ISO), or the same as minutes from now.
+    #[serde(default)]
+    pub by: Option<String>,
+    #[serde(default)]
+    pub within_minutes: Option<f64>,
+    /// A shell command each start waits on; empty removes it.
+    #[serde(default)]
+    pub precheck: Option<String>,
+    /// `self` or `notify`.
+    #[serde(default)]
+    pub results_to: Option<String>,
 }
 
 /// `ompdesk_schedule`'s `on`: the trigger as the tool takes it (a webhook's key is made by the service).
@@ -1430,6 +1473,11 @@ pub enum ScheduleOn {
         subject: Option<String>,
         #[serde(default)]
         to: Option<String>,
+    },
+    Calendar {
+        url: String,
+        #[serde(default)]
+        lead_minutes: Option<i64>,
     },
 }
 

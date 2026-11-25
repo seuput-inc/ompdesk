@@ -553,6 +553,79 @@ async fn schedule_says_so_without_a_service_and_needs_one_start() {
     assert_eq!(text, "No scheduled runs on this computer.");
 }
 
+#[tokio::test]
+async fn schedule_asks_for_every_precheck_and_sends_the_answer_where_asked() {
+    let mut state = family();
+    state["scheduleDevices"] = json!([""]);
+    state["manageEnabled"] = json!(true);
+    state["texts"]["schedulePrecheckMessage"] = json!("{caller} prechecks {name} with {command}");
+    let (control, asked) = rig(
+        290,
+        state,
+        Caps::default(),
+        main_of(|method, args| match method {
+            "schedules.create" => {
+                let draft = args["draft"].clone();
+                let made = scheduled(
+                    "sch00002",
+                    draft["name"].as_str().unwrap(),
+                    draft["frequency"].clone(),
+                );
+                Some(json!({ "id": "sch00002", "state": { "schedules": [made], "nextRuns": {} } }))
+            }
+            "schedules.command" => Some(json!({ "schedules": [], "runs": [], "nextRuns": {} })),
+            _ => None,
+        }),
+    );
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_schedule",
+        json!({ "action": "create", "name": "standup", "prompt": "brief me", "folder": "/repo",
+            "on": { "source": "calendar", "url": "https://example.com/a.ics" }, "within_minutes": 60,
+            "precheck": "test -f ready", "results_to": "self" }),
+    )
+    .await;
+    assert!(!is_error, "{text}");
+    let asked = asked.lock().unwrap().clone();
+    let card = asked
+        .iter()
+        .find(|(method, _)| method == "confirm")
+        .expect("a precheck asks even while agents may manage sessions");
+    assert_eq!(
+        card.1["message"],
+        "Boss prechecks standup with test -f ready"
+    );
+    let draft = &asked
+        .iter()
+        .find(|(method, _)| method == "schedules.create")
+        .unwrap()
+        .1["draft"];
+    assert_eq!(draft["precheck"], "test -f ready");
+    assert_eq!(
+        draft["resultsTo"],
+        json!({ "kind": "session", "session": "/s/boss.jsonl" })
+    );
+    assert_eq!(
+        draft["frequency"]["event"],
+        json!({ "source": "calendar", "url": "https://example.com/a.ics", "leadMinutes": 10 })
+    );
+    assert!(draft["frequency"]["by"].is_string(), "{draft}");
+
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_schedule",
+        json!({ "action": "create", "name": "x", "prompt": "p", "every_minutes": 30, "within_minutes": 5,
+            "results_to": "notify", "target": "self" }),
+    )
+    .await;
+    assert!(is_error);
+    assert!(text.contains("by and within_minutes go with on"), "{text}");
+    assert!(
+        text.contains("results_to is for a fresh run: it takes no target"),
+        "{text}"
+    );
+}
+
 fn autopilot_status(state: &str) -> Value {
     json!({ "state": state, "active": true, "role": "parent", "cycle": 2, "branch": "autopilot/x", "tabId": "run00001" })
 }

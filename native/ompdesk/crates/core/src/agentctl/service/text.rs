@@ -472,6 +472,7 @@ pub fn webhook_line(row: &ScheduleRow) -> String {
     use super::types::{ScheduleEvent, ScheduleFrequency as Frequency};
     let Frequency::Event {
         event: ScheduleEvent::Webhook { key },
+        ..
     } = &row.frequency
     else {
         return String::new();

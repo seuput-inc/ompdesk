@@ -726,6 +726,8 @@ impl AgentControl {
                 auto_approve: bot.auto_approve,
                 enabled: true,
                 wake_session: Some(home),
+                precheck: None,
+                results_to: None,
             })
             .await?;
         self.change_bot(&bot.id, |record| record.look_around = Some(row.id.clone()))?;

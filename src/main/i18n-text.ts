@@ -121,6 +121,11 @@ export const MAIN_TEXT = {
 		en: "The agent in “{caller}” wants to run “{name}” {when} in {folder} while OMPdesk is open. It runs without auto-approve. Schedule it?",
 		ko: "“{caller}”의 에이전트가 OMPdesk가 켜져 있는 동안 {folder} 폴더에서 “{name}” 작업을 {when} 실행하도록 예약하려고 해요. 자동 승인 없이 실행돼요. 예약할까요?",
 	},
+	// Every precheck raises this card, whatever else agents may do: it is a command this computer runs.
+	"agentControl.schedulePrecheckMessage": {
+		en: "The agent in “{caller}” wants “{name}” ({when}, in {folder}) to run this command before each start, and to start only when it succeeds: {command}. Allow it?",
+		ko: "“{caller}”의 에이전트가 “{name}”({when}, {folder})을 시작할 때마다 먼저 이 명령을 실행하고, 성공할 때만 시작하도록 하려고 해요: {command}. 허용할까요?",
+	},
 	"agentControl.botTitle": {
 		en: "An agent wants to make a bot",
 		ko: "에이전트가 봇을 만들려고 해요",

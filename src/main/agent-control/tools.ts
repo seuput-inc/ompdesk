@@ -447,7 +447,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Schedule an OMPdesk run",
 		description:
 			"Create, list, change or cancel scheduled runs and routines: on a timer, once, or on an event.\n" +
-			`Create, list, change or cancel a scheduled run: a prompt that OMPdesk runs as a fresh print-mode session in a folder, only while the app is open on that device (its Settings › Schedules shows it, marked ${AGENT_SCHEDULE_PREFIX.trim()}). device picks the computer it runs on (default: the one your session runs on). create needs name, prompt and exactly one start: every_minutes, daily_at (HH:MM, optional days 0-6), at or in_minutes (once), or on (an event: webhook, github, files, git, session). With target "self" the prompt is instead delivered into your own session each time (a routine of yours, or a follow-up to check later). update changes an agent-made one by id; pause, resume and run (a test run now) act on one; runs shows its run history with failure reasons. No card by default; the user confirms a new one only if they turned off "Let agents manage other sessions". It never runs with auto-approve, and you can change or cancel only agent-made schedules. See skill://ompdesk.`,
+			`Create, list, change or cancel a scheduled run: a prompt that OMPdesk runs as a fresh print-mode session in a folder, only while the app is open on that device (its Settings › Schedules shows it, marked ${AGENT_SCHEDULE_PREFIX.trim()}). device picks the computer it runs on (default: the one your session runs on). create needs name, prompt and exactly one start: every_minutes, daily_at (HH:MM, optional days 0-6), at or in_minutes (once), or on (an event: webhook, github, files, git, session, email, calendar; with by or within_minutes it is a wait that runs once, on the event or at the deadline). With target "self" the prompt is instead delivered into your own session each time (a routine of yours, or a follow-up to check later). results_to sends a fresh run's answer into this session or a notification, unless the run ends its answer with NO_REPLY. precheck runs a shell command before each start and starts the run only when it succeeds; the user confirms every precheck. update changes an agent-made one by id; pause, resume and run (a test run now) act on one; runs shows its run history with failure reasons. No card by default; the user confirms a new one only if they turned off "Let agents manage other sessions". It never runs with auto-approve, and you can change or cancel only agent-made schedules. See skill://ompdesk.`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -485,9 +485,12 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				on: {
 					type: "object",
 					description:
-						'create, update: start on an event instead of a clock. {"source":"webhook"} (POST to this computer\'s OMPdesk web server, the answer gives the URL path and key; Mobile web must be on); {"source":"github","repo":"owner/name","events":["pull_request"|"issue"|"ci_failure"|"release"|"push"]} (asked with the user\'s gh every 5 min); {"source":"files","path":"/abs/path"} (a file or folder changed); {"source":"git","repo":"/abs/repo","branch":"main"} (new local commits); {"source":"session","events":["done"|"failed"|"waiting"],"folder":"text"} (another session on this computer finished, failed or waits for the user; never the session a "self" one wakes or ones it opened); {"source":"email","account":"label","from":"text","subject":"text","to":"owner+ci@"} (new mail in a mailbox the user added in Settings › Schedules › Email accounts, by its label, checked every 2 min; from, subject and to are optional text the mail must contain; a reply sent from that mailbox or an automatic mail never starts it; this computer only). Events during a run start one more run after it.',
+						'create, update: start on an event instead of a clock. {"source":"webhook"} (POST to this computer\'s OMPdesk web server, the answer gives the URL path and key; Mobile web must be on); {"source":"github","repo":"owner/name","events":["pull_request"|"issue"|"ci_failure"|"release"|"push"]} (asked with the user\'s gh every 5 min); {"source":"files","path":"/abs/path"} (a file or folder changed); {"source":"git","repo":"/abs/repo","branch":"main"} (new local commits); {"source":"session","events":["done"|"failed"|"waiting"],"folder":"text"} (another session on this computer finished, failed or waits for the user; never the session a "self" one wakes or ones it opened); {"source":"email","account":"label","from":"text","subject":"text","to":"owner+ci@"} (new mail in a mailbox the user added in Settings › Schedules › Email accounts, by its label, checked every 2 min; from, subject and to are optional text the mail must contain; a reply sent from that mailbox or an automatic mail never starts it; this computer only); {"source":"calendar","url":"https://…/basic.ics","lead_minutes":10} (each event of an ICS calendar feed, lead_minutes (1-1440, default 10) before it starts; the feed is read every 5 min). Events during a run start one more run after it.',
 					properties: {
-						source: { type: "string", enum: ["webhook", "github", "files", "git", "session", "email"] },
+						source: {
+							type: "string",
+							enum: ["webhook", "github", "files", "git", "session", "email", "calendar"],
+						},
 						repo: { type: "string" },
 						events: { type: "array", items: { type: "string" } },
 						path: { type: "string" },
@@ -497,9 +500,31 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 						from: { type: "string" },
 						subject: { type: "string" },
 						to: { type: "string" },
+						url: { type: "string" },
+						lead_minutes: { type: "integer" },
 					},
 					required: ["source"],
 					additionalProperties: false,
+				},
+				by: {
+					type: "string",
+					description:
+						"create, update, with on: a deadline (ISO 8601 with an offset). It runs once, on the first event or at the deadline with no event, then turns itself off: a wait.",
+				},
+				within_minutes: {
+					type: "integer",
+					description: "create, update, with on: the same deadline as minutes from now.",
+				},
+				precheck: {
+					type: "string",
+					description:
+						"create, update: a shell command run in the folder before each start (60 s at most). The run starts only when it exits 0; otherwise it is recorded as skipped with the command's output. The user confirms every precheck. This computer only; empty removes it.",
+				},
+				results_to: {
+					type: "string",
+					enum: ["self", "notify"],
+					description:
+						'create, update: a fresh run\'s answer goes into THIS session as a note ("self") or into a notification ("notify"); a run that ends its answer with the line NO_REPLY sends nothing. Not with target.',
 				},
 				model: { type: "string", description: "create, update: provider/id; default omp's default model." },
 				device: {
@@ -1046,8 +1071,32 @@ export const ARGS = {
 							to: z.string().trim().min(1).max(200).optional(),
 						})
 						.strict(),
+					z
+						.object({
+							source: z.literal("calendar"),
+							url: z
+								.string()
+								.trim()
+								.regex(/^https:\/\/\S+$/, "url is an https:// address of an ICS feed")
+								.max(2000),
+							lead_minutes: z.number().int().min(1).max(1440).optional(),
+						})
+						.strict(),
 				])
 				.optional(),
+			by: z
+				.string()
+				.trim()
+				.refine(value => Number.isFinite(Date.parse(value)), "by is an ISO 8601 moment")
+				.optional(),
+			within_minutes: z
+				.number()
+				.int()
+				.min(1)
+				.max(365 * 24 * 60)
+				.optional(),
+			precheck: z.string().trim().max(2000).optional(),
+			results_to: z.enum(["self", "notify"]).optional(),
 			model: z.string().trim().min(1).max(200).optional(),
 			id: z.string().trim().min(1).max(200).optional(),
 			device: deviceArg.optional(),
