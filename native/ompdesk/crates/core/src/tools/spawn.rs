@@ -116,8 +116,8 @@ pub(crate) async fn off_hub<T: Send + 'static>(work: impl FnOnce() -> T + Send +
     }
 }
 
-/// Held while this thread waits on work that runs outside it (a blocking-pool job, a child process). Tests await its
-/// end ([`until`]) instead of a clock; outside tests it is nothing.
+/// Held while this thread waits on work that runs outside it (a blocking-pool job, a child process, a download). Tests
+/// await its end or its next [`Outside::heard`] ([`until`]) instead of a clock; outside tests it is nothing.
 pub(crate) struct Outside {
     #[cfg(test)]
     jobs: std::sync::Arc<OutsideJobs>,
@@ -127,7 +127,7 @@ pub(crate) struct Outside {
 #[derive(Default)]
 struct OutsideJobs {
     running: std::sync::atomic::AtomicUsize,
-    ended: tokio::sync::Notify,
+    moved: tokio::sync::Notify,
 }
 
 #[cfg(test)]
@@ -147,6 +147,12 @@ impl Outside {
         #[cfg(not(test))]
         Self {}
     }
+
+    /// The work brought something in (a download's bytes) before its end.
+    pub(crate) fn heard(&self) {
+        #[cfg(test)]
+        self.jobs.moved.notify_waiters();
+    }
 }
 
 #[cfg(test)]
@@ -155,12 +161,12 @@ impl Drop for Outside {
         self.jobs
             .running
             .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        self.jobs.ended.notify_waiters();
+        self.jobs.moved.notify_waiters();
     }
 }
 
-/// Lets this thread's tasks run until `done` holds, waiting for the end of the outside work they started ([`Outside`])
-/// whenever they have nothing else to do; `what` names it when nothing is left that could make it hold.
+/// Lets this thread's tasks run until `done` holds, waiting for the next end or news of the outside work they started
+/// ([`Outside`]) whenever they have nothing else to do; `what` names it when nothing is left that could make it hold.
 #[cfg(test)]
 pub(crate) async fn until(what: &str, done: impl Fn() -> bool) {
     assert!(settle(done).await, "never came: {what}");
@@ -177,7 +183,7 @@ pub(crate) async fn quiet() {
 async fn settle(done: impl Fn() -> bool) -> bool {
     let jobs = OUTSIDE.with(std::sync::Arc::clone);
     loop {
-        let ended = jobs.ended.notified();
+        let moved = jobs.moved.notified();
         for _ in 0..1_000 {
             if done() {
                 return true;
@@ -187,7 +193,7 @@ async fn settle(done: impl Fn() -> bool) -> bool {
         if jobs.running.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             return false;
         }
-        ended.await;
+        moved.await;
     }
 }
 

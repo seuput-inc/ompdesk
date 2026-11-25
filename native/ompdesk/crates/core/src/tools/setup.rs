@@ -704,6 +704,7 @@ async fn download(
             live
         }
     });
+    let outside = crate::tools::spawn::Outside::enter();
     let done = crate::setup::download::fetch(
         &file.url,
         &file.sha256,
@@ -711,7 +712,10 @@ async fn download(
         mirror.as_deref(),
         proxy.as_deref(),
         &scope,
-        progress,
+        &|received, total| {
+            outside.heard();
+            progress(received, total);
+        },
     )
     .await;
     // A cancel that came after the bytes were all in still ends nothing.
