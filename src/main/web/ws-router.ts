@@ -546,12 +546,11 @@ export class WsRouter {
 		const refund = dir === "invoke" ? this.#meter(deviceId, channel, args, win) : null;
 		try {
 			// Synchronous unless a picture came by upload, so plain calls keep their order and timing.
-			// A draft keeps its picture as the person attached it: the model's copy is made only when it is sent.
 			const landed =
 				channel === IPC_COMMANDS.FS_UPLOAD_TO_HOST
 					? await this.#landHostUpload(deviceId, args)
 					: holdsBlock(args, isWebUploadedImage)
-						? await this.#landUploads(deviceId, args, channel !== IPC_COMMANDS.DRAFT_PICTURES_PUT)
+						? await this.#landUploads(deviceId, args)
 						: args;
 			if (dir === "send") {
 				registry.send(
@@ -619,7 +618,6 @@ export class WsRouter {
 		if (channel === IPC_COMMANDS.FS_READ_BINARY || channel === IPC_COMMANDS.FS_SAVE_COPY)
 			return this.#binaryResult(deviceId, result);
 		if (channel === IPC_COMMANDS.FS_MEDIA_STREAM) return this.#mediaResult(deviceId, result);
-		if (channel === IPC_COMMANDS.DRAFT_PICTURES_READ) return this.#draftPicture(deviceId, result);
 		if (channel === IPC_COMMANDS.SESSIONS_MESSAGES) return this.#pictures.lift(deviceId, undefined, result);
 		if (channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB) {
 			const { command, tabId } = rpcPayload(args[0]);
@@ -648,14 +646,6 @@ export class WsRouter {
 		return { ...rest, blobUrl: this.#deps.blobs.addBytes(deviceId, data, mime) };
 	}
 
-	/** A draft picture's base64 inline up to 512 KiB of bytes, else behind a `/blob` URL (a frame holds 1 MB). */
-	#draftPicture(deviceId: string, result: unknown): unknown {
-		if (typeof result !== "string" || result.length <= (INLINE_BINARY_MAX_BYTES / 3) * 4) return result;
-		return {
-			blobUrl: this.#deps.blobs.addBytes(deviceId, Buffer.from(result, "base64"), "application/octet-stream"),
-		};
-	}
-
 	/** A player's stream: `MediaStreams` keeps serving it, behind this device's `/blob` URL. */
 	#mediaResult(deviceId: string, result: unknown): unknown {
 		const { blobs, mediaOpen } = this.#deps;
@@ -677,10 +667,10 @@ export class WsRouter {
 
 	/**
 	 * The call with each picture the page sent by upload (`WebUploadedImage`) back as an inline image block, its
-	 * upload consumed; with `convert`, a format models refuse (`convertsForModel`) comes back converted. A path outside
-	 * this device's uploads, or one already gone, fails the call, and so does a picture that cannot be converted.
+	 * upload consumed; a format models refuse (`convertsForModel`) comes back converted. A path outside this
+	 * device's uploads, or one already gone, fails the call, and so does a picture that cannot be converted.
 	 */
-	async #landUploads(deviceId: string, args: readonly unknown[], convert: boolean): Promise<unknown[]> {
+	async #landUploads(deviceId: string, args: readonly unknown[]): Promise<unknown[]> {
 		const { uploads, toModelImage } = this.#deps;
 		const landed = await replaceBlocks(args, isWebUploadedImage, async ({ upload, ...block }) => {
 			const bytes = await uploads.take(deviceId, upload).catch(() => {
@@ -690,7 +680,7 @@ export class WsRouter {
 				);
 			});
 			const image = { ...block, data: bytes.toString("base64") };
-			if (!convert || !convertsForModel(block.mimeType)) return image;
+			if (!convertsForModel(block.mimeType)) return image;
 			return toModelImage(image).catch(() => {
 				throw codedError("unsupported_image", "This picture could not be converted for the model");
 			});

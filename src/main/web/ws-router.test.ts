@@ -347,28 +347,6 @@ describe("hello and calls", () => {
 		expect(socket.frames("res")[1]).toMatchObject({ id: 7, ok: false, e: { code: "unsupported_image" } });
 	});
 
-	it("keeps a draft's picture as it was uploaded: a HEIC is read back into the call unconverted", async () => {
-		const { frame, settle, socket, callers, uploaded, toModelImage } = await rig();
-		uploaded.set("/up/dev1/a/image.heic", Buffer.from("HEIC"));
-		const id = "0b5c1e2a-7d4f-4c8e-9a1b-3f6e2d9c8a71";
-		await frame({
-			t: "inv",
-			id: 8,
-			ch: IPC_COMMANDS.DRAFT_PICTURES_PUT,
-			a: [id, { type: "image", mimeType: "image/heic", upload: "/up/dev1/a/image.heic" }],
-		});
-		await vi.waitFor(async () => {
-			await settle();
-			expect(socket.frames("res")).toMatchObject([{ id: 8, ok: true }]);
-		});
-		expect(callers[0]?.args).toEqual([
-			id,
-			{ type: "image", mimeType: "image/heic", data: Buffer.from("HEIC").toString("base64") },
-		]);
-		expect(toModelImage).not.toHaveBeenCalled();
-		expect(uploaded.size).toBe(0);
-	});
-
 	it("tells the formats models refuse from the ones they take", () => {
 		for (const mime of [
 			"image/heic",
@@ -1142,21 +1120,6 @@ describe("binary and media results", () => {
 		expect(small?.v).toEqual({ ok: true, mime: "text/plain", size: 2, truncated: false, dataBase64: "aGk=" });
 		expect(large?.v).not.toHaveProperty("data");
 		expect(large?.v.blobUrl).toMatch(/^\/blob\/[\w-]+$/);
-		expect(await r.blobs.count()).toBe(1);
-	});
-
-	it("answers a small draft picture inline and a large one behind a blob URL, and a missing one as null", async () => {
-		const r = await rig();
-		const large = Buffer.alloc(600 * 1024, 7).toString("base64");
-		r.invoke.mockResolvedValueOnce("aGk=");
-		r.invoke.mockResolvedValueOnce(large);
-		r.invoke.mockResolvedValueOnce(null);
-		for (const id of [1, 2, 3]) await r.frame({ t: "inv", id, ch: IPC_COMMANDS.DRAFT_PICTURES_READ, a: ["x"] });
-		await r.settle();
-		const [small, big, missing] = r.socket.frames("res") as { v: unknown }[];
-		expect(small?.v).toBe("aGk=");
-		expect(big?.v).toEqual({ blobUrl: expect.stringMatching(/^\/blob\/[\w-]+$/) });
-		expect(missing?.v).toBeNull();
 		expect(await r.blobs.count()).toBe(1);
 	});
 

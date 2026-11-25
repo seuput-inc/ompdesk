@@ -511,34 +511,6 @@ describe("the web shim", () => {
 			expect(fetches).toEqual([]);
 			expect(invoked.at(-1)?.args).toEqual([{ tabId: "t1", command: { type: "prompt", message: "plain" } }]);
 		});
-
-		it("keeps a draft picture's calls in the order made: a remove waits for the put still uploading its bytes", async () => {
-			const posted = Promise.withResolvers<Response>();
-			const { web, invoked } = setup({}, { fetch: () => posted.promise });
-			const id = "0b5c1e2a-7d4f-4c8e-9a1b-3f6e2d9c8a71";
-			const put = web.api.draftPictures.put(id, { type: "image", mimeType: "image/jpeg", data: bytes("JPEG") });
-			const removed = web.api.draftPictures.remove(id);
-			await vi.waitFor(() => expect(uploadsInFlight()).toBe(1));
-			expect(invoked).toEqual([]);
-			posted.resolve(new Response(JSON.stringify({ path: "/up/1/image.jpeg" })));
-			await Promise.all([put, removed]);
-			expect(invoked).toEqual([
-				{
-					channel: C.DRAFT_PICTURES_PUT,
-					args: [id, { type: "image", mimeType: "image/jpeg", upload: "/up/1/image.jpeg" }],
-				},
-				{ channel: C.DRAFT_PICTURES_REMOVE, args: [id] },
-			]);
-		});
-
-		it("reads a large draft picture from the blob URL the computer answers, and a missing one as null", async () => {
-			const { web, fetches, fetchReply } = setup({ [C.DRAFT_PICTURES_READ]: { blobUrl: "/blob/tok" } });
-			fetchReply.current = () => new Response(new Uint8Array([104, 105]));
-			await expect(web.api.draftPictures.read("a")).resolves.toBe("aGk=");
-			expect(fetches.map(f => f.url)).toEqual(["/blob/tok"]);
-			const missing = setup({ [C.DRAFT_PICTURES_READ]: null });
-			await expect(missing.web.api.draftPictures.read("a")).resolves.toBeNull();
-		});
 	});
 
 	describe("notifications and chrome", () => {

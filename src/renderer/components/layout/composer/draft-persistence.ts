@@ -43,7 +43,13 @@ interface SavedDraft {
 
 type PictureFiles = OmpApi["draftPictures"];
 type PictureError = (name: string, error: unknown) => void;
-const pictureFiles = () => (typeof window === "undefined" ? undefined : window.omp?.draftPictures);
+// A paired page files no picture on the computer: each would go up twice, once for the draft and once when sent, on a
+// phone's data and its daily upload quota. Its pictures live in the page, which no automatic reload drops
+// (`pageSafeMoment`); one reloaded by hand restores each as the "Attach again" chip.
+const pictureFiles = () =>
+	typeof window === "undefined" || window.document?.documentElement.dataset.platform === "web"
+		? undefined
+		: window.omp?.draftPictures;
 const reportError: PictureError = (name, error) => console.warn("Draft picture:", name, error);
 const pictureRefs = new WeakMap<ComposerImage, DraftPictureRef>();
 const failedPuts = new WeakSet<ComposerImage>();

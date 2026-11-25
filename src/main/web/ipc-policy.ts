@@ -358,18 +358,9 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "The page uploads the file to this computer first (POST /upload); the router reads it back and sends it on",
 	},
-	[C.DRAFT_PICTURES_PUT]: {
-		dir: "invoke",
-		permission: "workspace",
-		mode: "web",
-		web: "The page uploads the picture first (POST /upload); the router reads it back, unconverted, into the call",
-	},
-	[C.DRAFT_PICTURES_READ]: {
-		dir: "invoke",
-		permission: "workspace",
-		mode: "web",
-		web: "A picture past 512 KiB comes back as a /blob URL the page fetches",
-	},
+	// A paired page keeps a draft's pictures in the page (pageSafeMoment holds a reload while it has any); it files none here.
+	[C.DRAFT_PICTURES_PUT]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.DRAFT_PICTURES_READ]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DRAFT_PICTURES_REMOVE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.IMAGE_TO_MODEL]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_REVEAL_COPY]: {
