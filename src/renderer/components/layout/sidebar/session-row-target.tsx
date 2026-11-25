@@ -186,6 +186,7 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 		observer?.observe(line);
 		return () => {
 			observer?.disconnect();
+			element.style.display = "";
 			line.removeAttribute("data-head-out");
 		};
 	}, [floor]);
