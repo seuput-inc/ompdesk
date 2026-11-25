@@ -170,20 +170,24 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 		element.style.flexBasis = size;
 		element.style.minWidth = size;
 		// The box's wrap drops a head whose floor does not fit, but Windows' Chromium kept one on the line, past the
-		// line's end and cut under the ⋯ (a 220 px sidebar): the line's own width decides too. The line's width never
-		// depends on the head (sidebar.css `.omp-session-row-give`), so hiding it cannot change the answer.
+		// line's end and cut under the ⋯ (a 220 px sidebar): the line's own width decides too, and the age, which gives
+		// way before the branch, goes with it (`data-head-out`). The line's width never depends on the head or the age
+		// (sidebar.css `.omp-session-row-give`), so hiding them cannot change the answer.
 		const line = element.closest<HTMLElement>(".omp-session-row-give");
 		if (width === null || !line) return;
 		const place = () => {
 			element.style.display = "";
-			const need = Number.parseFloat(getComputedStyle(element).minWidth) + 1;
-			if (line.clientWidth < need) element.style.display = "none";
+			const out = line.clientWidth < Number.parseFloat(getComputedStyle(element).minWidth) + 1;
+			if (out) element.style.display = "none";
+			line.toggleAttribute("data-head-out", out);
 		};
 		place();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(place);
-		observer.observe(line);
-		return () => observer.disconnect();
+		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+		observer?.observe(line);
+		return () => {
+			observer?.disconnect();
+			line.removeAttribute("data-head-out");
+		};
 	}, [floor]);
 	const Mark =
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;

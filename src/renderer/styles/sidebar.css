@@ -300,6 +300,11 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	display: none;
 }
 
+/* The branch went (`SessionHeadLabel`: its floor does not fit the line): the age, which gives way first, goes too. */
+.omp-session-row-give[data-head-out] > .omp-session-row-age {
+	display: none;
+}
+
 /* The head's own box drops the whole head, mark too, onto an invisible second line once it cannot hold the head's
    floor (`SessionHeadLabel` measures it and sets it as the head's flex basis and min-width: the mark and about eight
    characters with the kept tail, or all of a shorter name): the head is
