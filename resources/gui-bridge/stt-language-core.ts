@@ -126,14 +126,36 @@ interface Download {
 	done: Promise<void>;
 }
 
+/**
+ * The waits before a failed download is tried again (Orca's model download retries, 25 Nov 2026): a dropped
+ * connection or a 429 from the Hub. Stock's downloader skips the files already in its cache, so a retry resumes.
+ */
+export const DOWNLOAD_RETRY_MS: readonly number[] = [1_000, 2_000, 4_000];
+
 /** One download per model at a time, whoever asks: a call preparing it or a dictation waiting for it. */
 export class SttModels {
 	readonly #store: SttModelStore;
+	readonly #retryMs: readonly number[];
 	readonly #downloads = new Map<string, Download>();
 	readonly #failures = new Map<string, string>();
 
-	constructor(store: SttModelStore) {
+	constructor(store: SttModelStore, retryMs: readonly number[] = DOWNLOAD_RETRY_MS) {
 		this.#store = store;
+		this.#retryMs = retryMs;
+	}
+
+	/** The download, tried again after each wait of `retryMs`; the last failure is the one reported. */
+	async #fetch(key: string, onProgress: (loaded: number, total: number) => void): Promise<void> {
+		for (const wait of [...this.#retryMs, undefined]) {
+			try {
+				return await this.#store.download(key, onProgress);
+			} catch (cause) {
+				if (wait === undefined) throw cause;
+				const { promise, resolve } = Promise.withResolvers<void>();
+				setTimeout(resolve, wait);
+				await promise;
+			}
+		}
 	}
 
 	/** Start getting `key` if it is not here yet, and say where it stands; never waits for the download. */
@@ -166,25 +188,53 @@ export class SttModels {
 	/** `remember`: a failure is kept for the next {@link prepare} (nobody awaits a download `prepare` started). */
 	#start(key: string, remember: boolean): Download {
 		const download: Download = { percent: 0, done: Promise.resolve() };
-		download.done = this.#store
-			.download(key, (loaded, total) => {
-				download.percent =
-					total < MIN_PROGRESS_BYTES ? 0 : Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
-			})
-			.then(
-				() => {
-					this.#downloads.delete(key);
-				},
-				(cause: unknown) => {
-					this.#downloads.delete(key);
-					const message = cause instanceof Error ? cause.message : String(cause);
-					if (remember) this.#failures.set(key, message);
-					throw cause instanceof Error ? cause : new Error(message);
-				},
-			);
+		download.done = this.#fetch(key, (loaded, total) => {
+			download.percent =
+				total < MIN_PROGRESS_BYTES ? 0 : Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
+		}).then(
+			() => {
+				this.#downloads.delete(key);
+			},
+			(cause: unknown) => {
+				this.#downloads.delete(key);
+				const message = cause instanceof Error ? cause.message : String(cause);
+				if (remember) this.#failures.set(key, message);
+				throw cause instanceof Error ? cause : new Error(message);
+			},
+		);
 		if (remember) download.done.catch(() => {});
 		this.#downloads.set(key, download);
 		return download;
+	}
+}
+
+/** How long a clip may take once its model is here: a minute plus the clip's own length. */
+export function transcribeDeadlineMs(clipSeconds: number): number {
+	return 60_000 + Math.ceil(clipSeconds * 1000);
+}
+
+/**
+ * `work` under a deadline (Orca's hung speech worker, 25 Nov 2026): stock's `transcribe` has none, so a worker that
+ * never answers held the take forever. Past `ms` the signal aborts it, `onExpire` lets go of the worker (stock
+ * `sttClient.terminate`) and the take fails with a plain reason.
+ */
+export async function transcribeWithin(
+	work: (signal: AbortSignal) => Promise<string>,
+	ms: number,
+	onExpire: () => unknown,
+): Promise<string> {
+	const deadline = new AbortController();
+	const timer = setTimeout(() => deadline.abort(), ms);
+	try {
+		return await work(deadline.signal);
+	} catch (cause) {
+		if (!deadline.signal.aborted) throw cause;
+		Promise.resolve()
+			.then(onExpire)
+			.catch(() => {});
+		throw new Error(`Transcription did not finish within ${Math.round(ms / 1000)} s`);
+	} finally {
+		clearTimeout(timer);
 	}
 }
 
@@ -205,9 +255,9 @@ export class SttDictation<Ctx> {
 	readonly #setup: (ctx: Ctx) => SttSetup;
 	readonly #models: SttModels;
 
-	constructor(setup: (ctx: Ctx) => SttSetup, store: SttModelStore) {
+	constructor(setup: (ctx: Ctx) => SttSetup, store: SttModelStore, retryMs?: readonly number[]) {
 		this.#setup = setup;
-		this.#models = new SttModels(store);
+		this.#models = new SttModels(store, retryMs);
 	}
 
 	/** The speech's language (a `language` the request names wins) and the model the rule picks for it. */

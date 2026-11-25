@@ -1832,7 +1832,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
 			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()"],
+			// `terminate()` lets go of a worker whose take passed its deadline (voice.ts `transcribeWithin`).
+			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()", "sttClient.terminate()"],
 			[`${AGENT}/stt/downloader`]: ["downloadSttModel()", "isSttModelCached()"],
 			[`${AGENT}/stt/models`]: ["resolveSttModelSpec()"],
 		},
