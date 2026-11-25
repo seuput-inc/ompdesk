@@ -28,7 +28,7 @@ import { useCurrentSessionTitle } from "../../hooks/use-current-session-title";
 import { useOverlayPresence } from "../../hooks/use-overlay-presence";
 import { useSessionAttention } from "../../hooks/use-session-attention";
 import { useSessionList } from "../../hooks/use-session-list";
-import { useDrawerMode } from "../../hooks/use-shell-mode";
+import { useDrawerMode, useShellMode } from "../../hooks/use-shell-mode";
 import { useFocusedRun } from "../../hooks/use-tab-run";
 import { ATTENTION_LABEL_KEY } from "../../lib/attention";
 import { cx, formatCost, formatDuration, formatPercent, formatTokens } from "../../lib/format";
@@ -66,6 +66,7 @@ import {
 import { DeviceChip } from "../remote/DeviceChip";
 import { ForkParent } from "./ForkParent";
 import { sessionCacheHitPercent, sessionExecutionDurationMs } from "./session-metrics";
+import { SessionTabStrip } from "./tab-strip/SessionTabStrip";
 
 /**
  * `pending`: the connection is coming up or back (starting, waiting, reconnecting): a still hollow dot, never a spinner.
@@ -229,6 +230,9 @@ export function TitleBar() {
 	const statsMessageCount = useMessagesStore(s => s.messages.length);
 	const sidebarVisible = useUiStore(s => s.sidebarVisible);
 	const drawer = useDrawerMode();
+	// The window's open sessions as tabs (Orca's tab bar), once the window lists its tab; a phone keeps its one title.
+	const listed = useTabsStore(s => s.tabs.some(tab => tab.id === s.activeTabId));
+	const tabStrip = useShellMode() !== "phone" && listed;
 	const panelVisible = useUiStore(s => s.panelVisible);
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
@@ -436,7 +440,13 @@ export function TitleBar() {
 				/>
 			)}
 
-			<nav aria-label={t("titlebar.breadcrumb")} className="omp-titlebar-identity no-drag flex min-w-0 items-center">
+			<nav
+				aria-label={t("titlebar.breadcrumb")}
+				className={cx(
+					"omp-titlebar-identity no-drag flex min-w-0 items-center",
+					tabStrip && "h-full flex-1 self-stretch",
+				)}
+			>
 				{device !== undefined && (
 					<span className="mr-1 flex shrink-0 items-center">
 						<DeviceChip deviceId={device} />
@@ -537,6 +547,8 @@ export function TitleBar() {
 							</p>
 						)}
 					</div>
+				) : tabStrip ? (
+					<SessionTabStrip activeTitle={displayName} onRenameActive={startRename} />
 				) : (
 					<Tooltip content={`${displayName} · ${t("titlebar.rename")}`} describe={false} side="bottom">
 						<Button

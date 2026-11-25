@@ -4854,6 +4854,37 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	}
 }
 
+/* The title bar's session tabs (common/Tabs `variant="strip"`, Orca's tab bar; the owner's decision, 25 Nov 2026):
+   each a full-height box between hairlines, 96–200 px, its ✕ shown on the chosen tab and under the pointer or focus.
+   The chosen one is lifted (the text colour at 6 %) over a 2 px line along its bottom; a tab whose run finished
+   unseen wears Orca's unread wash (the working hue at 10 %). */
+.omp-tab-strip-tab {
+	min-width: 6rem;
+	max-width: 12.5rem;
+	border-right: var(--sc-hairline) solid var(--sc-border-subtle);
+	color: var(--sc-text-muted);
+	transition: background-color var(--sc-duration-fast) var(--sc-ease-standard);
+}
+
+.omp-tab-strip-tab:hover {
+	background: var(--sc-hover);
+	color: var(--sc-text);
+}
+
+.omp-tab-strip-tab-active {
+	background: color-mix(in srgb, var(--sc-text) 6%, transparent);
+	box-shadow: inset 0 -2px 0 var(--sc-text);
+	color: var(--sc-text);
+}
+
+.omp-tab-strip-tab.omp-tab-strip-tab-unread {
+	background: color-mix(in srgb, var(--sc-working) 10%, transparent);
+}
+
+.omp-tab-strip-tab:not(.omp-tab-strip-tab-active):not(:hover):not(:focus-within) > [aria-hidden] {
+	opacity: 0;
+}
+
 /* A device section's header color (lib/device-color.ts): a paired host's header wears its own hue so its rows are told
    from this computer's at a glance. Only the device glyph takes the hue (the header itself stays near-monochrome); the
    hues are not status colors, and each is drawn per scheme so the glyph keeps 3:1 against the sidebar. A repository's

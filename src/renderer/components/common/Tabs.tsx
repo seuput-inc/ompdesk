@@ -29,7 +29,14 @@
  */
 
 import { X } from "lucide-react";
-import { Fragment, type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
+import {
+	Fragment,
+	type KeyboardEvent,
+	type MouseEvent as ReactMouseEvent,
+	type ReactNode,
+	useEffect,
+	useRef,
+} from "react";
 import { cx } from "../../lib/format";
 import { IconButton } from "./IconButton";
 import { Tooltip } from "./Tooltip";
@@ -53,6 +60,8 @@ export type TabItem = {
 	/** Keys this tab answers to besides the strip's own (`aria-keyshortcuts`); a closable tab adds Delete itself. */
 	keyshortcuts?: string;
 	onDoubleClick?: () => void;
+	/** The tab's own menu (right click, a long press, Shift+F10 via the caller's key handler). */
+	onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
 	/** Classes on the tab's box: a width limit, a preview tab's italic. */
 	className?: string;
 } & (
@@ -65,7 +74,8 @@ export type TabItem = {
 	  }
 );
 
-export type TabsVariant = "underline" | "segmented" | "pills";
+/** `strip`: a window's open sessions along the title bar (Orca's tab bar), each closable, the chosen one lifted. */
+export type TabsVariant = "underline" | "segmented" | "pills" | "strip";
 export type TabsOrientation = "horizontal" | "vertical";
 
 /** What moved the selection: a click (or Enter/Space on a tab), or an arrow, Home or End. */
@@ -111,11 +121,17 @@ function tabBox(variant: TabsVariant, active: boolean, compact: boolean | undefi
 				: "text-(--sc-text-muted) hover:bg-(--sc-hover) hover:text-(--sc-text) active:bg-(--sc-pressed)",
 		);
 	}
+	if (variant === "strip") {
+		// Orca's session tab (`SortableTab`): a full-height box divided by a hairline, the chosen one lifted with a 2 px
+		// line along its bottom in the text colour (components.css `.omp-tab-strip-tab`).
+		return cx("omp-tab-strip-tab h-full", active && "omp-tab-strip-tab-active");
+	}
 	return cx(
 		"-mb-px border-b-2 transition-colors duration-(--sc-duration-fast)",
 		compact ? "h-8" : "h-9",
+		// Orca's indicator is the foreground, whatever the theme's accent: one line that only says "this one".
 		active
-			? "border-(--sc-accent) text-(--sc-text)"
+			? "border-(--sc-text) text-(--sc-text)"
 			: "border-transparent text-(--sc-text-muted) hover:text-(--sc-text)",
 	);
 }
@@ -124,10 +140,10 @@ function tabBox(variant: TabsVariant, active: boolean, compact: boolean | undefi
 function tabText(variant: TabsVariant, compact: boolean | undefined): string {
 	return cx(
 		"inline-flex min-w-0 max-w-full items-center gap-1 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50",
-		variant !== "pills" && "font-medium",
+		variant !== "pills" && variant !== "strip" && "font-medium",
 		// The track and a scrolling strip clip what sticks out of them, so the focus ring is drawn inside the tab.
 		variant !== "underline" && "focus-visible:outline-offset-[calc(-1*var(--sc-focus-width))]",
-		compact && variant === "pills" ? "text-sc-xs" : compact ? "text-sc-sm" : "text-sc-md",
+		variant === "strip" || (compact && variant === "pills") ? "text-sc-xs" : compact ? "text-sc-sm" : "text-sc-md",
 		variant === "segmented" ? "px-2.5" : variant === "pills" && !compact ? "px-3" : "px-2",
 	);
 }
@@ -225,7 +241,9 @@ export function Tabs({
 							? "inline-flex gap-0.5 rounded-(--sc-radius-md) bg-(--sc-surface-3) p-0.5"
 							: variant === "pills"
 								? "flex gap-1"
-								: "flex gap-1 border-b border-(--sc-divider)"),
+								: variant === "strip"
+									? "flex h-full items-stretch"
+									: "flex gap-1 border-b border-(--sc-divider)"),
 					className,
 				)}
 				onBlur={event => {
@@ -261,6 +279,9 @@ export function Tabs({
 							disabled={tab.disabled}
 							onClick={() => onChange(tab.id, "click")}
 							onDoubleClick={tab.onDoubleClick}
+							onContextMenu={tab.onContextMenu}
+							// A middle click closes a closable tab, as a browser's does.
+							onAuxClick={tab.onClose ? event => event.button === 1 && tab.onClose?.() : undefined}
 							role="tab"
 							tabIndex={active || (tab === rovingStop && !anySelected) ? 0 : -1}
 							type="button"
