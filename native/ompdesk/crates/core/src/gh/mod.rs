@@ -120,12 +120,16 @@ impl Gh {
         self.exec().map(|_| ())
     }
 
-    /// The GitHub host a run reaches: `GH_HOST` of the run, else of main's environment, else github.com.
-    fn host<'a>(exec: &'a Exec, opts: &Opts<'a>) -> &'a str {
-        opts.env
-            .iter()
-            .find(|(name, _)| *name == "GH_HOST")
-            .map(|(_, value)| *value)
+    /// The GitHub host a run reaches: the one its arguments name (`gate::named_host`), else `GH_HOST` of the run, else
+    /// of main's environment, else github.com.
+    fn host<'a>(exec: &'a Exec, args: &[&'a str], opts: &Opts<'a>) -> &'a str {
+        gate::named_host(args)
+            .or_else(|| {
+                opts.env
+                    .iter()
+                    .find(|(name, _)| *name == "GH_HOST")
+                    .map(|(_, value)| *value)
+            })
             .or_else(|| exec.env("GH_HOST"))
             .filter(|host| !host.is_empty())
             .unwrap_or("github.com")
@@ -156,11 +160,12 @@ impl Gh {
         Some(dir.join("rate-limit.json"))
     }
 
-    /// `gh api rate_limit` (it costs no quota), read as the gate reads it, and stored where the gh guard reads it;
-    /// `None` when it fails.
+    /// `gh api rate_limit` on `host` (it costs no quota), read as the gate reads it, and stored where the gh guard
+    /// reads it; `None` when it fails.
     async fn quota(
         exec: &Exec,
         cwd: &str,
+        host: &str,
         opts: Opts<'_>,
         shared: Option<&Path>,
     ) -> Option<gate::Quota> {
@@ -169,7 +174,10 @@ impl Gh {
             env: opts.env,
             ..Opts::default()
         };
-        let output = exec.run(cwd, &["api", "rate_limit"], opts).await.ok()?;
+        let output = exec
+            .run(cwd, &["api", "--hostname", host, "rate_limit"], opts)
+            .await
+            .ok()?;
         if output.code != 0 {
             return None;
         }
@@ -187,14 +195,15 @@ impl Gh {
         gate::read_quota(&text, gate::QUOTA_FLOOR)
     }
 
-    /// One gh run through the host's gate: refused while the host waits (`gh_paused`), a read run again on a GitHub
-    /// server error, and gh's "rate limit" trips the gate for every request of the host.
+    /// One gh run through the gate of its host and quota: refused while they wait (`gh_paused`), a read run again on a
+    /// GitHub server error or a dropped connection, and gh's "rate limit" trips the gate for every request of the host.
     async fn run(&self, cwd: &str, args: &[&str], opts: Opts<'_>) -> Result<Output, Fault> {
         let exec = self.exec()?;
         if !gate::gated(args) {
             return exec.run(cwd, args, opts).await;
         }
-        let host = Gh::host(exec, &opts);
+        let host = Gh::host(exec, args, &opts);
+        let bucket = gate::bucket(args);
         let key = format!("{}\n{host}", self.command);
         let shared = Gh::budget_file(exec, host);
         let first = !self.admitted.swap(true, Ordering::SeqCst);
@@ -208,11 +217,13 @@ impl Gh {
             } else if gate::quota_due(&key, gate::now_ms()) {
                 gate::learn(
                     &key,
-                    Gh::quota(exec, cwd, opts, shared.as_deref()).await.as_ref(),
+                    Gh::quota(exec, cwd, host, opts, shared.as_deref())
+                        .await
+                        .as_ref(),
                 );
             }
         }
-        if let Err(wait) = gate::admit(&key, self.background, first, gate::now_ms()) {
+        if let Err(wait) = gate::admit(&key, bucket, self.background, first, gate::now_ms()) {
             self.paused_until.store(wait.until(), Ordering::SeqCst);
             return Err(wait.fault(host));
         }
@@ -223,13 +234,13 @@ impl Gh {
                 return Ok(output);
             }
             if gate::rate_limited(&output.stderr) {
-                let quota = Gh::quota(exec, cwd, opts, shared.as_deref()).await;
-                let until = gate::trip(&key, quota.as_ref(), gate::now_ms());
+                let quota = Gh::quota(exec, cwd, host, opts, shared.as_deref()).await;
+                let until = gate::trip(&key, bucket, quota.as_ref(), gate::now_ms());
                 self.paused_until.store(until, Ordering::SeqCst);
                 return Ok(output);
             }
             match retries.next() {
-                Some(&delay) if gate::is_read(args) && gate::server_error(&output.stderr) => {
+                Some(&delay) if gate::is_read(args) && gate::transient(&output.stderr) => {
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                 }
                 _ => return Ok(output),
@@ -831,10 +842,11 @@ mod tests {
         }
     }
 
-    /// gh says "rate limit" once: that request answers `gh_paused` with the reset GitHub names, and every later read
-    /// of the host is refused without starting gh, while a sign-in check still runs and another host is not held.
+    /// gh says "rate limit" once: that request answers `gh_paused` with the reset GitHub names, and every later run of
+    /// the host that spends the spent quota (GraphQL here) is refused without starting gh, while a REST read and a
+    /// sign-in check still run and another host is not held. An Enterprise host named in argv is held, not github.com.
     #[tokio::test]
-    async fn a_rate_limit_holds_every_read_of_its_host_until_the_reset() {
+    async fn a_rate_limit_holds_every_run_of_its_host_and_quota_until_the_reset() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("ompdesk-core-gh-gate-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -844,7 +856,7 @@ mod tests {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nif [ \"$1 $2\" = \"api rate_limit\" ]; then echo '{{\"resources\":{{\"core\":{{\"remaining\":0,\"reset\":{reset}}}}}}}'; exit 0; fi\necho \"$1\" >> \"{runs}\"\necho 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' >&2\nexit 1\n",
+                "#!/bin/sh\ncase \" $* \" in *\" rate_limit \"*) echo '{{\"resources\":{{\"core\":{{\"remaining\":4000,\"reset\":{reset}}},\"graphql\":{{\"remaining\":0,\"reset\":{reset}}}}}}}'; exit 0;; esac\necho \"$1\" >> \"{runs}\"\necho 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' >&2\nexit 1\n",
                 runs = runs.display()
             ),
         )
@@ -883,9 +895,36 @@ mod tests {
             refused.message
         );
         let _ = later.text("/", &["auth", "status"]).await.unwrap();
+        let _ = later.call("/", &["run", "list"], Opts::default()).await;
         let other = Gh::new(Some(runner("other-gate.test")), Scope::detached());
         let _ = other.call("/", &["issue", "list"], Opts::default()).await;
-        assert_eq!(std::fs::read_to_string(&runs).unwrap(), "pr\nauth\nissue\n");
+        let github = Gh::new(Some(runner("")), Scope::detached());
+        let _ = github
+            .call(
+                "/",
+                &["issue", "list", "--repo", "ghe-gate.test/o/r"],
+                Opts::default(),
+            )
+            .await;
+        let held = github
+            .call(
+                "/",
+                &["api", "--hostname", "ghe-gate.test", "graphql"],
+                Opts::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(held.code, "gh_paused");
+        assert!(
+            held.message.contains("for ghe-gate.test"),
+            "{}",
+            held.message
+        );
+        let _ = github.call("/", &["label", "list"], Opts::default()).await;
+        assert_eq!(
+            std::fs::read_to_string(&runs).unwrap(),
+            "pr\nauth\nrun\nissue\nissue\nlabel\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

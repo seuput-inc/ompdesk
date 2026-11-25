@@ -121,12 +121,17 @@ export async function gitRunner(): Promise<CoreRunner> {
 	return runner;
 }
 
-/** Never prompt, never check for a newer gh, no colour. */
+/**
+ * Never prompt, never check for a newer gh, no colour. No telemetry unless the person set it: gh 2.91 turned it on and
+ * detaches `gh send-telemetry`, whose console flashes on Windows (Orca `gh-exec-file.ts:52-60`).
+ */
 const GH_ENV = { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", NO_COLOR: "1" };
 
 /** This process's rules for the gh (or, for the sign-in's git calls, the git) at `bin` that the core runs, read now. */
 export async function ghRunner(bin: string): Promise<CoreRunner> {
-	return { bin, args: [], env: await runnerEnv(GH_ENV), timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
+	const env = await runnerEnv(GH_ENV);
+	env.GH_TELEMETRY ??= "false";
+	return { bin, args: [], env, timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
 }
 
 /**
