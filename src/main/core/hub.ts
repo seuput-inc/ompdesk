@@ -381,7 +381,11 @@ export class Hub {
 				if (!answer) {
 					const lines = this.#wait(connection, id);
 					for (const line of lines) {
-						if (answer) after.push(line);
+						// An outer call's answer is its own now, even behind this one's: the outer call reads it before it
+						// waits again, which is before this call's microtasks run.
+						if (line.id !== undefined && line.id !== id && this.#calling.has(line.id))
+							this.#calling.set(line.id, line);
+						else if (answer) after.push(line);
 						else if (line.id === id) answer = line;
 						else this.#handle(line);
 					}
