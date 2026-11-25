@@ -278,7 +278,8 @@ for (const width of WIDTHS) {
 					expect(height, "a segmented row is one line").toBeLessThanOrEqual(56);
 				// Taps: every switch and segment answers for itself (nothing steals its centre).
 				for (const control of await sheet.locator("[role=switch], [data-choice-row] [role=radio]").all()) {
-					expect(await ownShare(control), "a control keeps its own taps").toBeGreaterThan(0.85);
+					const name = `${await control.getAttribute("role")} ${(await control.getAttribute("aria-label")) ?? (await control.textContent())}`;
+					expect(await ownShare(control), `${name}: a control keeps its own taps`).toBeGreaterThan(0.85);
 				}
 				await captureSheet(page, "sheet-full", { lang, width });
 			} finally {

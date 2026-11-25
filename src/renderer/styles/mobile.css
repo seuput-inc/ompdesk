@@ -1041,7 +1041,7 @@ html[data-shell="phone"] {
 }
 
 /* The top bar stays one 36 px line: 44 px buttons would make it 44, and the header, composer and work strip would then
-   pass the 19.4 % chrome budget, so its buttons are as tall as the bar and reach 44 with their ::after. */
+   pass the 19.4 % chrome budget, so a phone's top bar buttons are as tall as the bar, their reach kept inside it. */
 html[data-shell="phone"] .omp-topbar {
 	--sc-button-sm: 36px;
 	--sc-button-md: 36px;
@@ -1287,6 +1287,14 @@ html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 @container omp-toolbar (max-width: 300px) {
 	html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 		display: none;
+	}
+}
+
+/* With every control 44 px (the owner's decision, 25 Nov 2026) a 360 px phone's row is 1 em short: the name may give
+   back down to 2.5 em there before anything scrolls. */
+@container omp-toolbar (max-width: 340px) {
+	html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
+		min-width: 2.5em;
 	}
 }
 
@@ -1545,8 +1553,13 @@ html[data-shell] .omp-topbar:not(.omp-titlebar) {
 	--hit-gap-y: 10px;
 }
 
-/* A phone's top bar buttons are as tall as the bar (36 px, 34 inside the border): 1 px of reach up and down. */
-html[data-shell="phone"] :is(.omp-titlebar, .omp-topbar:not(.omp-titlebar)) {
+/* A phone's top bar buttons are as tall as the bar (36 px, 34 inside the border): 1 px of reach up and down. A
+   tablet's right group is 32 px (30 inside): 3 px. Either way the work strip under the bar keeps its taps. */
+html[data-shell] .omp-titlebar > div {
+	--hit-gap-y: 6px;
+}
+
+html[data-shell="phone"] :is(.omp-titlebar, .omp-titlebar > div, .omp-topbar:not(.omp-titlebar)) {
 	--hit-gap-y: 2px;
 }
 
@@ -2038,6 +2051,12 @@ html[data-shell] [data-terminal-keybar] > div {
 	--hit-gap-y: 10px;
 }
 
+/* A phone draws the keys 44 px (the owner's decision, 25 Nov 2026), the bar's whole height: the scroller drops its
+   4 px of padding, so a key's box runs from the bar's top to the panel tab bar under it. */
+html[data-shell="phone"] [data-terminal-keybar] > div {
+	padding-block: 0;
+}
+
 /* Inline code and a reply's keys (<kbd>) keep to the 12 px floor (0.85em of a 13.5 px reply is 11.5). */
 html[data-shell="phone"] :is(.markdown-body, .omp-streaming-tail) :is(:not(pre) > code, kbd) {
 	font-size: max(12px, 0.88em);
@@ -2421,6 +2440,24 @@ html[data-shell]
 	) {
 	height: auto;
 	min-height: 36px;
+}
+
+/* A phone draws those controls 44 px (the owner's decision, 25 Nov 2026): their rows, and a project's header, are
+   44 px too, so no button hangs into the next row. */
+html[data-shell="phone"]
+	.omp-session-sidebar
+	:is(
+		[data-device-state] > div:first-child,
+		[data-device-group] > div:first-child,
+		[data-sidebar-device-header],
+		[data-sidebar-chats] > div:first-child
+	) {
+	min-height: 44px;
+}
+
+/* `[data-input]` outranks sidebar.css's touch rule, which may load after this sheet. */
+html[data-shell="phone"][data-input] :is(.omp-session-sidebar, .omp-sidebar-session-rename) {
+	--omp-sidebar-head-h: 44px;
 }
 
 html[data-shell] .omp-session-sidebar [data-sidebar-row-menu][data-sidebar-row-menu][data-sidebar-row-menu] {
