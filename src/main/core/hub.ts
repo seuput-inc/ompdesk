@@ -246,6 +246,11 @@ export class Hub {
 	#sequence = 0;
 	/** Calls main waits for now (nested ones count): a question answered inside one must not wait itself. */
 	#depth = 0;
+	/**
+	 * The sync calls on main's stack, each with its answer once read: a call nested in another's handling (a question's
+	 * answer, a listener) can read the outer call's answer, which the outer call takes when it waits again.
+	 */
+	readonly #calling = new Map<number, Line | null>();
 	readonly stats: HubStats = { calls: 0, waitsUs: [], totalUs: 0, methods: new Map() };
 	measuring = process.env.OMP_GUI_HUB_STATS === "1";
 
@@ -368,15 +373,18 @@ export class Hub {
 		this.#post(connection, { id, method, params });
 		this.stats.calls++;
 		this.#depth++;
+		this.#calling.set(id, null);
 		try {
 			for (;;) {
-				const lines = this.#wait(connection, id);
-				let answer: Line | undefined;
+				let answer = this.#calling.get(id) ?? undefined;
 				const after: Line[] = [];
-				for (const line of lines) {
-					if (answer) after.push(line);
-					else if (line.id === id) answer = line;
-					else this.#handle(line);
+				if (!answer) {
+					const lines = this.#wait(connection, id);
+					for (const line of lines) {
+						if (answer) after.push(line);
+						else if (line.id === id) answer = line;
+						else this.#handle(line);
+					}
 				}
 				if (connection.dead) throw connection.dead;
 				if (answer) {
@@ -390,6 +398,7 @@ export class Hub {
 				}
 			}
 		} finally {
+			this.#calling.delete(id);
 			this.#depth--;
 		}
 	}
@@ -450,6 +459,10 @@ export class Hub {
 	/** One line, at once, also inside another's handling: a nested call's effects run inside it, as a listener did. */
 	#handle(line: Line): void {
 		if (line.id !== undefined) {
+			if (this.#calling.has(line.id)) {
+				this.#calling.set(line.id, line);
+				return;
+			}
 			const waiting = this.#pending.get(line.id);
 			if (!waiting) return;
 			this.#pending.delete(line.id);
