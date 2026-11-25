@@ -1148,13 +1148,13 @@ export const SURFACES: readonly Surface[] = [
 			await promptShownTab(page, "fixture a2ui form");
 			await page.locator("[data-a2ui-waiting]").first().waitFor({ timeout: 15_000 });
 		},
-		ready: '[data-a2ui-card][data-a2ui-live] [data-a2ui-surface="contact"]',
+		ready: '[data-a2ui-card][data-a2ui-live] [data-a2ui-surface^="contact-"]',
 		settle: 900,
 		// The audits' harness page has no such turn; the parity sheet asks the fake omp for it.
 		when: () => false,
 		parity: {
 			session: "a2uiForm",
-			inView: '[data-a2ui-surface="contact"]',
+			inView: '[data-a2ui-surface^="contact-"]',
 			// The dismissal ends the turn, so the session is idle for the next view's prompt.
 			after: async page => {
 				const skip = page.locator("[data-a2ui-dock-skip]");

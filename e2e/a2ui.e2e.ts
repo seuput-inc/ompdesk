@@ -118,7 +118,7 @@ test("an A2UI form is answered from the chat card, skipped from the dock, answer
 
 			const card = b.locator(`[data-a2ui-call=${cssString(form.callId)}]`);
 			await expect(card).toHaveAttribute("data-a2ui-live", "");
-			await expect(card.locator('[data-a2ui-surface="contact"]')).toBeVisible();
+			await expect(card.locator('[data-a2ui-surface^="contact-"]')).toBeVisible();
 			const send = card.getByRole("button", { name: "Send", exact: true });
 			await expect(send).toBeDisabled();
 			await card.getByLabel("Name").fill("Ada Lovelace");
@@ -140,14 +140,14 @@ test("an A2UI form is answered from the chat card, skipped from the dock, answer
 			const data = sent[0]?.data as Record<string, unknown> | undefined;
 			expect(JSON.parse(String(data?.[A2UI_ANSWER_FIELD]))).toMatchObject({
 				name: "submit",
-				surfaceId: "contact",
+				surfaceId: expect.stringMatching(/^contact-/),
 				sourceComponentId: "send",
 				context: { name: "Ada Lovelace" },
 				dataModel: { name: "Ada Lovelace", plan: ["free"] },
 			});
 			const results = await a2uiResults(b, tabId);
 			expect(results).toHaveLength(1);
-			expect(results[0]).toContain('The person pressed send (action "submit") on surface contact.');
+			expect(results[0]).toMatch(/The person pressed send \(action "submit"\) on surface contact-\w+\./);
 			expect(results[0]).toContain("Ada Lovelace");
 		});
 

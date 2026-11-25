@@ -5523,6 +5523,8 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			// blocking form with the marker html; the answer ends the call as the bridge ends it (`a2uiAnswer`). Ids of their
 			// own each run, as stock's are: the parity sheet asks it once from each view (`card-a2ui-form`).
 			const id = `a2ui-${randomUUID()}`;
+			// Surface ids are the session's own, as the bridge requires (a second `createSurface` of one id is refused).
+			const surfaceId = `contact-${id.slice(5, 13)}`;
 			const nameRequired = [
 				{ condition: { "@call": "required", args: { value: { "@path": "/name" } } }, message: "Enter your name" },
 			];
@@ -5530,12 +5532,12 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				messages: [
 					{
 						version: "1.0",
-						createSurface: { surfaceId: "contact", catalogId: A2UI_CATALOG_ID, sendDataModel: true },
+						createSurface: { surfaceId, catalogId: A2UI_CATALOG_ID, sendDataModel: true },
 					},
 					{
 						version: "1.0",
 						updateComponents: {
-							surfaceId: "contact",
+							surfaceId,
 							components: [
 								{ id: "root", component: "Card", child: "col" },
 								{ id: "col", component: "Column", children: ["title", "name", "plan", "send"] },
@@ -5570,7 +5572,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 							],
 						},
 					},
-					{ version: "1.0", updateDataModel: { surfaceId: "contact", value: { name: "", plan: ["free"] } } },
+					{ version: "1.0", updateDataModel: { surfaceId, value: { name: "", plan: ["free"] } } },
 				],
 			};
 			const call: AgentMessage = {
