@@ -28,8 +28,8 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 
 /**
  * B's `gh`: signed in, the project's repository `o/r` with one open PR whose detail has a file, a passing check and an
- * open review thread (`agents-prs`, `agents-pr-detail`). The project's own branch has no PR (`--head`), so the Changes
- * panel and the sidebar rows show none.
+ * open review thread, and one open issue (`agents-prs`, `agents-pr-detail`, `agents-github`). The project's own branch
+ * has no PR (`--head`), so the sidebar rows show none and the Changes panel offers to link one.
  */
 async function writeParityGh(bin: string): Promise<void> {
 	const pr = {
@@ -117,7 +117,8 @@ async function writeParityGh(bin: string): Promise<void> {
 			`"pr view"*comments,reviews*) cat "${bin}/comments.json" ;;`,
 			`"pr view"*) cat "${bin}/view.json" ;;`,
 			`"pr diff"*) cat "${bin}/pr.diff" ;;`,
-			`"label list"*) echo '[]' ;;`,
+			`"issue list"*) echo '[{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12"}]' ;;`,
+			`"label list"*|"release list"*|"run list"*|"workflow list"*|"repo list"*) echo '[]' ;;`,
 			"*) exit 1 ;;",
 			"esac",
 			"",
