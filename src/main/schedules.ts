@@ -28,6 +28,7 @@ import {
 	type Schedule,
 	type ScheduleCreated,
 	type ScheduleDraft,
+	type ScheduleResultsTo,
 	type SchedulesRequest,
 	type SchedulesState,
 } from "../shared/schedules";
@@ -94,6 +95,8 @@ export interface ScheduleServiceOptions {
 	 * failing again and again. Absent: the note is dropped (the run history says it anyway).
 	 */
 	note?: (session: string, text: string) => void;
+	/** A fresh run's answer for where its schedule (`name`) sends it (`resultsTo`); quiet answers never come here. */
+	result?: (name: string, to: ScheduleResultsTo, text: string) => void;
 	/** How a schedule's precheck command runs (a shell and its `-c`, the login environment); absent: prechecks say no. */
 	shell?: () => Promise<CoreRunner>;
 }
@@ -227,6 +230,12 @@ export class ScheduleService {
 				"schedules.note",
 				mine<{ session: string; text: string }>(({ session, text }) => {
 					if (!this.#disposed) this.#options.note?.(session, text);
+				}),
+			),
+			host.on(
+				"schedules.result",
+				mine<{ name: string; to: ScheduleResultsTo; text: string }>(({ name, to, text }) => {
+					if (!this.#disposed) this.#options.result?.(name, to, text);
 				}),
 			),
 		];

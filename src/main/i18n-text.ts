@@ -13,6 +13,12 @@ export const MAIN_TEXT = {
 		en: "Mobile web refused it (no paired device). Nothing to do unless it was you.",
 		ko: "모바일 웹이 거부했어요(페어링된 기기가 아니에요). 직접 시도한 게 아니라면 할 일은 없어요.",
 	},
+	// A scheduled run's answer sent where its schedule says (`ScheduleDraft.resultsTo`).
+	"schedules.result.title": { en: "Scheduled run: {name}", ko: "예약 실행: {name}" },
+	"schedules.result.note": {
+		en: 'The scheduled run "{name}" finished. Its answer:',
+		ko: '예약 실행 "{name}"이 끝났어요. 답:',
+	},
 	// Files main could not save for lack of space (disk-full-notice.ts): one notice, closed once they are saved.
 	"diskFull.title": { en: "Disk is full", ko: "디스크가 가득 찼어요" },
 	"diskFull.body": {

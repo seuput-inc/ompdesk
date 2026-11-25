@@ -106,6 +106,8 @@ struct Play {
     /// Prechecks the fake shell was asked to run (it says yes to `true` only), and quiet notes main was asked to send.
     prechecks: Vec<String>,
     notes: Vec<(String, String)>,
+    /// Runs whose result the host was asked to send, and where.
+    results: Vec<(String, Value)>,
 }
 
 impl Play {
@@ -127,6 +129,7 @@ impl Play {
             key: String::new(),
             prechecks: Vec::new(),
             notes: Vec::new(),
+            results: Vec::new(),
         };
         play.engine.load(None, start);
         play.settle();
@@ -179,6 +182,7 @@ impl Play {
                         self.engine.prechecked(ask, ok, "not today\nno", self.now);
                     }
                     Out::Note { session, text } => self.notes.push((session, text)),
+                    Out::Result { run, to, .. } => self.results.push((run, to)),
                     Out::Changed { .. }
                     | Out::WakeLog { .. }
                     | Out::RemovePrompt { .. }
@@ -900,4 +904,119 @@ fn a_wake_up_that_fails_three_times_in_a_row_turns_itself_off_and_tells_its_sess
     assert_eq!(play.notes.len(), 1);
     assert_eq!(play.notes[0].0, "/sessions/a.jsonl");
     assert!(play.notes[0].1.contains("The turn ended with an error"));
+}
+
+fn wait(by: i64) -> Value {
+    let mut wait = draft(serde_json::json!({
+        "kind": "event", "event": {"source": "files", "path": "/work"}, "by": rules_iso(by),
+    }));
+    wait["wakeSession"] = "/sessions/a.jsonl".into();
+    wait
+}
+
+#[test]
+fn a_wait_runs_once_on_its_event_or_at_its_deadline() {
+    // The event first: one run with it, then the wait is spent and a later event starts nothing.
+    let mut play = Play::new(0);
+    let id = play.engine.create(&wait(HOUR), None, 0).unwrap();
+    play.settle();
+    assert_eq!(
+        play.engine.state()["nextRuns"][&id],
+        Value::String(rules_iso(HOUR))
+    );
+    assert!(play.engine.fire(&id, "ready.txt created", 0));
+    play.settle();
+    assert_eq!(play.launches.len(), 1);
+    play.end_last(Some(0), None);
+    assert!(!play.engine.fire(&id, "again", 0));
+    play.step(&serde_json::json!({"op": "advance", "ms": 2 * HOUR}), &[]);
+    assert_eq!(play.launches.len(), 1);
+    // The deadline first: one run that says so, then spent.
+    let mut play = Play::new(0);
+    let id = play.engine.create(&wait(HOUR), None, 0).unwrap();
+    play.settle();
+    play.step(&serde_json::json!({"op": "advance", "ms": HOUR}), &[]);
+    assert_eq!(play.launches.len(), 1);
+    assert!(
+        play.launches[0]
+            .1
+            .ends_with("Its deadline passed and the event did not come.")
+    );
+    assert_eq!(play.engine.state()["schedules"][0]["enabled"], false);
+    assert!(!play.engine.fire(&id, "late", HOUR));
+    // A deadline already past is refused.
+    assert!(play.engine.create(&wait(HOUR / 2), None, HOUR).is_err());
+}
+
+#[test]
+fn a_wait_whose_deadline_passed_while_closed_is_spent_unrun_and_its_session_told() {
+    let mut play = Play::new(0);
+    play.engine.create(&wait(HOUR), None, 0).unwrap();
+    play.settle();
+    play.relaunch(2 * HOUR);
+    let state = play.engine.state();
+    assert_eq!(state["schedules"][0]["enabled"], false);
+    assert_eq!(
+        state["runs"][0]["error"],
+        "Its deadline passed while OMPdesk was closed"
+    );
+    assert_eq!(play.notes.len(), 1);
+    assert_eq!(play.notes[0].0, "/sessions/a.jsonl");
+    play.step(&serde_json::json!({"op": "advance", "ms": HOUR}), &[]);
+    assert!(play.launches.is_empty());
+}
+
+#[test]
+fn a_fresh_runs_result_goes_where_its_schedule_says_unless_it_is_quiet() {
+    let mut play = Play::new(0);
+    let mut report = draft(serde_json::json!({"kind": "interval", "minutes": 60}));
+    report["resultsTo"] = serde_json::json!({"kind": "notify", "forged": true});
+    let id = play.engine.create(&report, None, 0).unwrap();
+    assert_eq!(
+        play.engine.state()["schedules"][0]["resultsTo"],
+        serde_json::json!({"kind": "notify"})
+    );
+    play.settle();
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": id}))
+            .is_ok()
+    );
+    assert!(
+        play.launches[0]
+            .1
+            .ends_with("end your answer with the line NO_REPLY.")
+    );
+    play.end_last(Some(1), None);
+    assert!(play.results.is_empty(), "a failed run sends nothing");
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": id}))
+            .is_ok()
+    );
+    play.end_last(Some(0), None);
+    assert_eq!(play.results.len(), 1);
+    assert_eq!(play.results[0].1, serde_json::json!({"kind": "notify"}));
+}
+
+#[test]
+fn reads_a_runs_answer_and_tells_a_quiet_one() {
+    use super::engine::{quiet_result, run_answer};
+    let log = "$ omp -p --model x\n# /work\n\nChecked the feed.\nTwo new releases.";
+    assert_eq!(run_answer(log), "Checked the feed.\nTwo new releases.");
+    assert_eq!(run_answer(&"x".repeat(2500)).len(), 2000);
+    for quiet in [
+        "NO_REPLY",
+        "Nothing new.\n\n**NO_REPLY**\n",
+        "- `NO_REPLY`.",
+        "## NO_REPLY",
+    ] {
+        assert!(quiet_result(quiet), "{quiet}");
+    }
+    for loud in [
+        "",
+        "NO_REPLY\nBut the build broke.",
+        "I would say NO_REPLY",
+        "NO_REPLY_X",
+    ] {
+        assert!(!quiet_result(loud), "{loud}");
+    }
 }

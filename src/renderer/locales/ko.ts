@@ -6035,6 +6035,8 @@ export const ko: Record<string, string> = {
 	"schedules.event.emailFrom": ", 보낸 사람 {from}",
 	"schedules.event.emailTo": ", 받는 주소 {to}",
 	"schedules.event.emailSubject": ", 제목 “{subject}”",
+	"schedules.event.calendar": "캘린더 일정 시작 {minutes}분 전",
+	"schedules.event.by": ", {time}까지 한 번",
 	"schedules.github.pull_request": "풀 리퀘스트",
 	"schedules.github.issue": "이슈",
 	"schedules.github.ci_failure": "CI 실패",

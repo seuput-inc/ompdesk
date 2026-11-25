@@ -34,13 +34,14 @@ export const ScheduleEventSchema: z.ZodType<ScheduleEvent> = z.discriminatedUnio
 		subject: z.string().max(200).optional(),
 		to: z.string().max(200).optional(),
 	}),
+	z.object({ source: z.literal("calendar"), url: z.string().max(2000), leadMinutes: z.number().int() }),
 ]);
 
 export const ScheduleFrequencySchema: z.ZodType<ScheduleFrequency> = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("interval"), minutes: z.number().int() }),
 	z.object({ kind: z.literal("daily"), time: z.string().max(5), days: z.array(z.number().int()).max(7) }),
 	z.object({ kind: z.literal("once"), at: z.string().max(40) }),
-	z.object({ kind: z.literal("event"), event: ScheduleEventSchema }),
+	z.object({ kind: z.literal("event"), event: ScheduleEventSchema, by: z.string().max(40).optional() }),
 ]);
 
 export const ScheduleRunSchema: z.ZodType<ScheduleRun> = z.object({

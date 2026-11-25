@@ -33,6 +33,50 @@ const MISSED_AFTER_MS: i64 = 60_000;
 const WAKE_FAILURES_OFF: usize = 3;
 /// The most of a precheck's output a skipped run keeps.
 const PRECHECK_OUTPUT_KEPT: usize = 300;
+/// The line a run's answer ends with when it has nothing worth reporting (`NO_REPLY` in `src/shared/bots.ts`).
+pub(super) const NO_REPLY: &str = "NO_REPLY";
+
+/// Whether an answer is a quiet result: its last non-empty line, Markdown dressing aside (a heading's or a list's
+/// mark, `*`, `_`, backticks, `~` around it, a period after it), is `NO_REPLY`. The same rule as `isQuietResult` in
+/// `src/shared/bots.ts`, which the renderer and main read; this copy runs where a run's log is (after Orca's
+/// `bot-quiet-result.ts`, re-implemented).
+pub(super) fn quiet_result(answer: &str) -> bool {
+    let Some(last) = answer.lines().map(str::trim).rfind(|line| !line.is_empty()) else {
+        return false;
+    };
+    let last = last
+        .strip_prefix('#')
+        .map(|rest| rest.trim_start_matches('#').trim_start())
+        .or_else(|| {
+            ["- ", "* ", "> "]
+                .iter()
+                .find_map(|mark| last.strip_prefix(mark).map(str::trim_start))
+        })
+        .unwrap_or(last);
+    let dressing = |c: char| matches!(c, '*' | '_' | '`' | '~') || c.is_whitespace();
+    last.trim_start_matches(dressing)
+        .trim_end_matches(|c: char| dressing(c) || c == '.')
+        == NO_REPLY
+}
+
+/// The most of a run's answer its result carries.
+const RESULT_KEPT_CHARS: usize = 2000;
+
+/// What an `omp -p` run answered, as its log holds it: the log without the header the launch wrote first (`$ omp …`,
+/// `# <folder>`, a blank line), its last `RESULT_KEPT_CHARS` characters, trimmed.
+pub(super) fn run_answer(log: &str) -> String {
+    let body = match log.strip_prefix("$ omp") {
+        Some(_) => log.split_once("\n\n").map_or("", |(_, body)| body),
+        None => log,
+    };
+    let body = body.trim();
+    let skip = body.chars().count().saturating_sub(RESULT_KEPT_CHARS);
+    body.chars()
+        .skip(skip)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
 
 type Object = Map<String, Value>;
 
@@ -109,6 +153,13 @@ pub enum Out {
     },
     /// A quiet note (no turn) into the session file `session`: a wake-up that turned itself off, a wait that ended.
     Note { session: String, text: String },
+    /// A fresh run succeeded and its result goes somewhere (`to`, the schedule's `resultsTo`): the host reads its answer
+    /// from the log and, unless it is quiet, tells main.
+    Result {
+        run: String,
+        name: String,
+        to: Value,
+    },
 }
 
 struct Active {
@@ -324,6 +375,26 @@ impl Engine {
                 continue;
             };
             if !self.enabled(at) || self.active.contains_key(&id) {
+                continue;
+            }
+            // A wait whose deadline passed while closed is spent unrun, and the session it would wake is told.
+            if let Some(by) = self.deadline(at).filter(|by| *by <= now - MISSED_AFTER_MS) {
+                changed = true;
+                let why = "Its deadline passed while OMPdesk was closed";
+                self.skipped(at, Trigger::Schedule, why, None);
+                self.schedules[at].insert("enabled".into(), false.into());
+                self.reschedule(at);
+                if let Some(session) = text(&self.schedules[at], "wakeSession").map(str::to_owned) {
+                    let name = text(&self.schedules[at], "name").unwrap_or_default();
+                    let note = format!(
+                        "Your wait \"{name}\" ended without its event: its deadline ({}) passed while OMPdesk was closed, so it did not run.",
+                        rules::iso(by)
+                    );
+                    self.outs.push(Out::Note {
+                        session,
+                        text: note,
+                    });
+                }
                 continue;
             }
             let Some(due) = self.missed_due(at) else {
@@ -775,6 +846,12 @@ impl Engine {
                 return Err(fault("Invalid schedule: once (the moment has passed)"));
             }
         }
+        // So is a wait's deadline.
+        let by = frequency.and_then(|frequency| frequency.get("by"));
+        let unchanged = before.is_some_and(|before| before.get("by") == by);
+        if self.parse(by).is_some_and(|by| by <= self.now) && !unchanged {
+            return Err(fault("Invalid schedule: event (the deadline has passed)"));
+        }
         if let Some(session) = text(&clean, "wakeSession") {
             let drive = matches!(session.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
             if !(session.starts_with('/') || drive) {
@@ -791,6 +868,15 @@ impl Engine {
         {
             return Err(fault(
                 "Invalid schedule: only this computer's own schedules run a precheck",
+            ));
+        }
+        if origin.is_some()
+            && clean
+                .get("resultsTo")
+                .is_some_and(|to| to.get("kind") == Some(&Value::from("session")))
+        {
+            return Err(fault(
+                "Invalid schedule: only this computer's own sessions take a run's result",
             ));
         }
         if let Some(at) = existing {
@@ -851,10 +937,27 @@ impl Engine {
     fn reschedule(&mut self, at: usize) {
         let next = if self.paused || !self.enabled(at) {
             None
+        } else if let Some(by) = self.deadline(at) {
+            // A wait comes due at its deadline, even one just passed: the check runs it as the deadline's run.
+            Some(by)
         } else {
             self.next_after(at, self.last_start(id_of(&self.schedules[at])))
         };
         self.set_next(at, next);
+    }
+
+    /// A wait's deadline: an event routine with `by` runs once, on its first event or at `by`, whichever comes first.
+    fn deadline(&self, at: usize) -> Option<i64> {
+        let schedule = &self.schedules[at];
+        if kind_of(schedule) != Some("event") {
+            return None;
+        }
+        self.parse(schedule.get("frequency")?.get("by"))
+    }
+
+    /// A schedule its first timed or event start spends: a one-time start, or a wait.
+    fn one_time(&self, at: usize) -> bool {
+        kind_of(&self.schedules[at]) == Some("once") || self.deadline(at).is_some()
     }
 
     fn reschedule_all(&mut self) {
@@ -950,7 +1053,11 @@ impl Engine {
                 self.held.insert(ask, Held::Due { schedule: id, due });
                 continue;
             }
-            self.begin(at, Trigger::Schedule, None, None, Some(due));
+            // A wait's deadline came before its event: it runs once, told so.
+            let deadline = self
+                .deadline(at)
+                .map(|_| vec!["Its deadline passed and the event did not come.".to_owned()]);
+            self.begin(at, Trigger::Schedule, None, deadline, Some(due));
         }
         if changed {
             self.changed();
@@ -1193,6 +1300,7 @@ impl Engine {
         let prompt = text(schedule, "prompt").unwrap_or_default();
         let prompt = match &detail {
             None => prompt.to_owned(),
+            Some(detail) if trigger == Trigger::Schedule => format!("{prompt}\n\n{detail}"),
             Some(detail) if trigger == Trigger::Manual => {
                 format!("{prompt}\n\nTest run:\n{detail}")
             }
@@ -1204,6 +1312,16 @@ impl Engine {
                 "{prompt}\n\nWhat fired this run:\n{}",
                 fence_untrusted(detail)
             ),
+        };
+        // A fresh run whose result goes somewhere may say there is nothing to send.
+        let reports = schedule.get("resultsTo").is_some_and(Value::is_object)
+            && !schedule.contains_key("wakeSession");
+        let prompt = if reports {
+            format!(
+                "{prompt}\n\nIf nothing is worth reporting, end your answer with the line {NO_REPLY}."
+            )
+        } else {
+            prompt
         };
         let cwd = match schedule.get("wakeSession") {
             Some(_) => None,
@@ -1220,8 +1338,15 @@ impl Engine {
             },
         );
         self.record(run);
-        // A one-time start is spent: the schedule is off from now on (a test run leaves it as it was).
-        if kind_of(&self.schedules[at]) == Some("once") && trigger == Trigger::Schedule {
+        // A one-time start is spent: the schedule is off from now on (a test run leaves it as it was). A wait is spent
+        // by its event or its deadline, whichever came first.
+        let spends = match kind_of(&self.schedules[at]) {
+            Some("once") => trigger == Trigger::Schedule,
+            _ => {
+                self.deadline(at).is_some() && matches!(trigger, Trigger::Schedule | Trigger::Event)
+            }
+        };
+        if spends {
             self.schedules[at].insert("enabled".into(), false.into());
             self.prune_once();
         }
@@ -1339,7 +1464,27 @@ impl Engine {
         {
             record.insert("notStarted".into(), true.into());
         }
+        // Where a fresh run's result goes, read before `finish` may delete a spent schedule.
+        let results = self
+            .find(&id)
+            .filter(|_| status == "succeeded")
+            .map(|at| &self.schedules[at])
+            .filter(|schedule| !schedule.contains_key("wakeSession"))
+            .and_then(|schedule| {
+                let to = schedule.get("resultsTo").filter(|to| to.is_object())?;
+                Some((
+                    text(schedule, "name").unwrap_or_default().to_owned(),
+                    to.clone(),
+                ))
+            });
         self.finish(run, status, code, error);
+        if let Some((name, to)) = results {
+            self.outs.push(Out::Result {
+                run: run.to_owned(),
+                name,
+                to,
+            });
+        }
         if status == "failed" {
             self.wake_failures(&id);
         }
@@ -1359,7 +1504,9 @@ impl Engine {
             record.insert("exitCode".into(), code.into());
             record.insert("error".into(), error.into());
             record.insert("endedAt".into(), ended.into());
-            if text(record, "trigger") == Some("schedule") && status == "succeeded" {
+            if matches!(text(record, "trigger"), Some("schedule" | "event"))
+                && status == "succeeded"
+            {
                 spent = text(record, "scheduleId").map(str::to_owned);
             }
         }
@@ -1440,10 +1587,10 @@ impl Engine {
         self.changed();
     }
 
-    /// A one-time schedule an agent made (`[agent] …`) whose start is spent (it turned itself off).
+    /// A one-time schedule or a wait an agent made (`[agent] …`) whose start is spent (it turned itself off).
     fn spent_agent_once(&self, at: usize) -> bool {
         let schedule = &self.schedules[at];
-        kind_of(schedule) == Some("once") && !self.enabled(at) && self.agents(schedule)
+        self.one_time(at) && !self.enabled(at) && self.agents(schedule)
     }
 
     fn agents(&self, schedule: &Object) -> bool {
@@ -1575,7 +1722,7 @@ impl Engine {
         let spent: Vec<String> = (0..self.schedules.len())
             .filter(|at| {
                 let schedule = &self.schedules[*at];
-                kind_of(schedule) == Some("once")
+                self.one_time(*at)
                     && !self.enabled(*at)
                     && !self.active.contains_key(id_of(schedule))
             })

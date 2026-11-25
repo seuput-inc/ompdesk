@@ -6044,6 +6044,8 @@ export const en: Record<string, string> = {
 	"schedules.event.emailFrom": " from {from}",
 	"schedules.event.emailTo": " to {to}",
 	"schedules.event.emailSubject": " about “{subject}”",
+	"schedules.event.calendar": "{minutes} min before a calendar event starts",
+	"schedules.event.by": ", once, by {time} at the latest",
 	"schedules.github.pull_request": "pull requests",
 	"schedules.github.issue": "issues",
 	"schedules.github.ci_failure": "CI failures",

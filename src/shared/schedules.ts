@@ -34,8 +34,11 @@ export type ScheduleFrequency =
 	| { kind: "daily"; time: string; days: number[] }
 	/** One start at `at` (ISO); then the schedule turns itself off (a follow-up set for a moment). */
 	| { kind: "once"; at: string }
-	/** No clock: started by its event (src/main/routines). */
-	| { kind: "event"; event: ScheduleEvent };
+	/**
+	 * No clock: started by its event (src/main/routines). With `by` (ISO) it is a one-time wait: its first event runs
+	 * it once and spends it (off, like `once`); at `by` with no event it runs once, told the deadline passed.
+	 */
+	| { kind: "event"; event: ScheduleEvent; by?: string };
 
 export const GITHUB_EVENT_KINDS = ["pull_request", "issue", "ci_failure", "release", "push"] as const;
 export type GithubEventKind = (typeof GITHUB_EVENT_KINDS)[number];
@@ -59,10 +62,20 @@ export type ScheduleEvent =
 	 * over IMAP every `EMAIL_POLL_MINUTES`. Each filter is optional text the mail must contain (case aside): `from` in
 	 * its sender, `subject` in its subject, `to` in a recipient address (a plus-address such as `owner+ci@…`).
 	 */
-	| { source: "email"; account: string; from?: string; subject?: string; to?: string };
+	| { source: "email"; account: string; from?: string; subject?: string; to?: string }
+	/**
+	 * An event of an ICS calendar feed (`url`, https; Google, iCloud and Outlook all publish one) about to start: fires
+	 * once per occurrence `leadMinutes` before it starts. The feed is read every `CALENDAR_POLL_MINUTES`.
+	 */
+	| { source: "calendar"; url: string; leadMinutes: number };
 
 /** How often an email trigger asks its mailbox for new mail, in minutes. */
 export const EMAIL_POLL_MINUTES = 2;
+/** How often a calendar trigger reads its feed, in minutes. */
+export const CALENDAR_POLL_MINUTES = 5;
+export const CALENDAR_LEAD_MINUTES_MIN = 1;
+export const CALENDAR_LEAD_MINUTES_MAX = 1440;
+export const CALENDAR_LEAD_MINUTES_DEFAULT = 10;
 
 export type ScheduleEventSource = ScheduleEvent["source"];
 
@@ -88,7 +101,16 @@ export interface ScheduleDraft {
 	 * computer's own schedules only (refused from a paired device).
 	 */
 	precheck?: string | null;
+	/**
+	 * Where a fresh run's answer goes when it succeeds (not a wake-up's: its session has it): a quiet note into a
+	 * session file on this computer, or a notification. An answer ending in `NO_REPLY` goes nowhere. Absent in a save
+	 * keeps the schedule's; null removes it.
+	 */
+	resultsTo?: ScheduleResultsTo | null;
 }
+
+/** Where a fresh run's answer goes (`ScheduleDraft.resultsTo`). */
+export type ScheduleResultsTo = { kind: "session"; session: string } | { kind: "notify" };
 
 export interface Schedule extends ScheduleDraft {
 	id: string;
@@ -192,6 +214,7 @@ export function scheduleDraftProblem(
 		case "once":
 			return typeof frequency.at === "string" && Number.isFinite(Date.parse(frequency.at)) ? null : "once";
 		case "event":
+			if (frequency.by !== undefined && !Number.isFinite(Date.parse(frequency.by))) return "event";
 			return scheduleEventProblem(frequency.event) ? "event" : null;
 		default:
 			return "interval";
@@ -229,6 +252,14 @@ export function scheduleEventProblem(event: ScheduleEvent): string | null {
 				? null
 				: "from, subject and to are short text";
 		}
+		case "calendar":
+			if (typeof event.url !== "string" || !event.url.startsWith("https://") || event.url.length > 2000)
+				return "url is an https:// address of an ICS calendar feed";
+			return Number.isInteger(event.leadMinutes) &&
+				event.leadMinutes >= CALENDAR_LEAD_MINUTES_MIN &&
+				event.leadMinutes <= CALENDAR_LEAD_MINUTES_MAX
+				? null
+				: `leadMinutes is a whole number from ${CALENDAR_LEAD_MINUTES_MIN} to ${CALENDAR_LEAD_MINUTES_MAX}`;
 		default:
 			return "unknown event source";
 	}
@@ -251,28 +282,32 @@ export function describeFrequency(frequency: ScheduleFrequency): string {
 		}
 		case "once":
 			return `once at ${frequency.at}`;
-		case "event": {
-			const event = frequency.event;
-			switch (event.source) {
-				case "webhook":
-					return "on a webhook call";
-				case "github":
-					return `on GitHub ${event.events.join("/")} in ${event.repo}`;
-				case "files":
-					return `when files change under ${event.path}`;
-				case "git":
-					return `on new commits to ${event.branch} in ${event.repo}`;
-				case "session":
-					return `when a session ${event.events.map(kind => (kind === "waiting" ? "waits for the owner" : kind === "done" ? "finishes a turn" : "fails a turn")).join(" or ")}${event.folder ? ` in a folder containing ${event.folder}` : ""}`;
-				case "email": {
-					const filters = [
-						event.from ? `from ${event.from}` : null,
-						event.to ? `to ${event.to}` : null,
-						event.subject ? `with "${event.subject}" in the subject` : null,
-					].filter(Boolean);
-					return `on new mail in ${event.account}${filters.length > 0 ? ` ${filters.join(", ")}` : ""}`;
-				}
-			}
+		case "event":
+			return `${describeEvent(frequency.event)}${frequency.by ? `, once, by ${frequency.by} at the latest` : ""}`;
+	}
+}
+
+function describeEvent(event: ScheduleEvent): string {
+	switch (event.source) {
+		case "webhook":
+			return "on a webhook call";
+		case "github":
+			return `on GitHub ${event.events.join("/")} in ${event.repo}`;
+		case "files":
+			return `when files change under ${event.path}`;
+		case "git":
+			return `on new commits to ${event.branch} in ${event.repo}`;
+		case "session":
+			return `when a session ${event.events.map(kind => (kind === "waiting" ? "waits for the owner" : kind === "done" ? "finishes a turn" : "fails a turn")).join(" or ")}${event.folder ? ` in a folder containing ${event.folder}` : ""}`;
+		case "email": {
+			const filters = [
+				event.from ? `from ${event.from}` : null,
+				event.to ? `to ${event.to}` : null,
+				event.subject ? `with "${event.subject}" in the subject` : null,
+			].filter(Boolean);
+			return `on new mail in ${event.account}${filters.length > 0 ? ` ${filters.join(", ")}` : ""}`;
 		}
+		case "calendar":
+			return `${event.leadMinutes} min before an event of the calendar ${event.url} starts`;
 	}
 }

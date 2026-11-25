@@ -74,7 +74,7 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn system_now() -> i64 {
+pub(crate) fn system_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_millis() as i64)
@@ -327,6 +327,18 @@ impl Service {
                 serde_json::json!({ "session": session, "text": text }),
             ),
             Out::Precheck { ask, command, cwd } => self.precheck(ask, command, cwd, now),
+            Out::Result { run, name, to } => {
+                let log = fs::read(self.log_file(&run))
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .unwrap_or_default();
+                let answer = engine::run_answer(&log);
+                if !answer.is_empty() && !engine::quiet_result(&answer) {
+                    self.tell(
+                        "schedules.result",
+                        serde_json::json!({ "run": run, "name": name, "to": to, "text": answer }),
+                    );
+                }
+            }
             Out::RemovePrompt { run } => {
                 let _ = fs::remove_file(self.prompt_file(&run));
             }

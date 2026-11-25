@@ -2004,6 +2004,20 @@ app.whenReady().then(async () => {
 				.current?.(session, text)
 				.catch(error => console.error("[schedules] note not delivered:", error));
 		},
+		// A fresh run's answer goes where its schedule says: a quiet note into a session, or a notification.
+		result: (name, to, text) => {
+			if (to.kind === "notify") {
+				new Notification({
+					title: mainT("schedules.result.title", undefined, { name }),
+					body: text.slice(0, 300),
+				}).show();
+				return;
+			}
+			const note = `${mainT("schedules.result.note", "en", { name })}\n\n${text}`;
+			void sessionNote
+				.current?.(to.session, note)
+				.catch(error => console.error("[schedules] result not delivered:", error));
+		},
 		shell: shellRunner,
 		...(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS
 			? { tickMs: Number(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS) }
