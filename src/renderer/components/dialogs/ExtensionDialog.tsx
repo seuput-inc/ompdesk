@@ -27,9 +27,11 @@ import { Fragment, type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, u
 import { createPortal } from "react-dom";
 import { OAUTH_PASTE_PROMPT } from "../../../../resources/gui-bridge/extensions/oauth-contracts";
 import type {
+	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
 	ExtensionAskDialogResultItem,
 	ExtensionUIRequest,
+	FormDataReply,
 } from "../../../shared/rpc-types";
 import { useExtensionUiResponder } from "../../hooks/use-extension-ui";
 import { AnsiText } from "../../lib/ansi";
@@ -43,7 +45,7 @@ import { openExternal } from "../../lib/open-external";
 import { isLiveAutopilot, useAutopilotStore } from "../../stores/autopilot";
 import { isApprovalRequest, openUrlTarget, useExtensionUiStore } from "../../stores/extension-ui";
 import { useFocusedTabDevice } from "../../stores/remote";
-import { useRuntimeTabId } from "../../stores/session-runtime-context";
+import { useRuntimeTabId, useTabCommand } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { toast } from "../../stores/toast";
 import { approvalHeldBack } from "../autopilot/autopilot-view";
@@ -76,7 +78,7 @@ function WidgetPanel({ name, lines }: { name: string; lines: string[] }) {
 }
 
 /**
- * Stock's status line (pi-tui status-line `hookStatuses`): every `setStatus`
+ * Stock's status line (pi-coding-agent modes/view-model/status-line `hookStatuses`): every `setStatus`
  * text, ordered by key, on one row joined by dots, with runs of whitespace
  * collapsed like stock's `sanitizeStatusText`. SGR colors stay (AnsiText).
  */
@@ -173,7 +175,8 @@ function useCountdown(request: ExtensionUIRequest | null, arrivedAt: number | un
 		(request.method === "select" ||
 			request.method === "confirm" ||
 			request.method === "input" ||
-			request.method === "ask")
+			request.method === "ask" ||
+			request.method === "form")
 			? request.timeout
 			: undefined;
 	const [, setTick] = useState(0);
@@ -360,6 +363,8 @@ interface AskAnswerState {
 	note: string;
 }
 
+type FormProblem = { index: number; problem: string };
+
 /**
  * The ask card, one question at a time like the Claude app: a step strip on
  * top (✓ once answered, click to revisit), numbered options (1–9 pick), a
@@ -377,7 +382,7 @@ function AskDialog({
 }: {
 	request: Extract<ExtensionUIRequest, { method: "ask" }>;
 	remaining: number | null;
-	onSubmit: (result: ExtensionAskDialogResult) => void;
+	onSubmit: (result: ExtensionAskDialogResult) => void | Promise<void | FormProblem>;
 	onCancel: () => void;
 }) {
 	const t = useT();
@@ -388,9 +393,15 @@ function AskDialog({
 	const total = questions.length;
 	const [step, setStep] = useState(0);
 	const [answers, setAnswers] = useState<AskAnswerState[]>(() =>
-		questions.map(() => ({ selected: new Set<string>(), custom: "", note: "" })),
+		questions.map(({ formField }) => ({
+			selected: new Set<string>(formField?.checked),
+			custom: formField?.initialText ?? "",
+			note: "",
+		})),
 	);
 	const [noteOpen, setNoteOpen] = useState<ReadonlySet<number>>(() => new Set());
+	const [problem, setProblem] = useState<FormProblem | null>(null);
+	const [submitting, setSubmitting] = useState(false);
 	const question = questions[step];
 	const answer = answers[step];
 	const multi = question?.multi ?? false;
@@ -402,7 +413,7 @@ function AskDialog({
 	const unansweredCount = questions.filter((_question, index) => !isAnswered(index)).length;
 	// Stock's ask tool reads an empty answer to a lone single-choice question as
 	// "cancelled by the user" and aborts the whole turn: Submit waits for an answer.
-	const submitBlocked = last && total === 1 && !multi && !isAnswered(0);
+	const submitBlocked = submitting || (!question?.formField && last && total === 1 && !multi && !isAnswered(0));
 
 	// Each step opens on its first option, so 1–9 and ↑/↓ work right away; a step the arrows picked on the step
 	// strip keeps focus there, so the next arrow moves on.
@@ -440,24 +451,36 @@ function AskDialog({
 			!multi && custom.trim() !== "" ? { ...entry, custom, selected: new Set<string>() } : { ...entry, custom },
 		);
 
-	const submit = () => {
-		onSubmit({
-			kind: "submit",
-			results: questions.map((item, index) => {
-				const entry = answers[index];
-				const custom = entry?.custom.trim() ?? "";
-				const note = entry?.note.trim() ?? "";
-				return {
-					id: item.id,
-					question: item.question,
-					options: item.options.map(option => option.label),
-					multi: item.multi ?? false,
-					selectedOptions: item.options.map(option => option.label).filter(label => entry?.selected.has(label)),
-					...(custom !== "" ? { customInput: entry?.custom ?? "" } : {}),
-					...(note !== "" ? { note: entry?.note ?? "" } : {}),
-				};
-			}),
-		});
+	const submit = async () => {
+		setSubmitting(true);
+		setProblem(null);
+		try {
+			const result = await onSubmit({
+				kind: "submit",
+				results: questions.map((item, index) => {
+					const entry = answers[index];
+					const custom = entry?.custom ?? "";
+					const note = entry?.note.trim() ?? "";
+					return {
+						id: item.id,
+						question: item.question,
+						options: item.options.map(option => option.label),
+						multi: item.multi ?? false,
+						selectedOptions: item.options.map(option => option.label).filter(label => entry?.selected.has(label)),
+						...((item.formField ? custom : custom.trim()) !== "" ? { customInput: custom } : {}),
+						...(note !== "" ? { note: entry?.note ?? "" } : {}),
+					};
+				}),
+			});
+			if (result) {
+				setStep(result.index);
+				setProblem(result);
+			}
+		} catch (cause) {
+			setProblem({ index: step, problem: cause instanceof Error ? cause.message : String(cause) });
+		} finally {
+			setSubmitting(false);
+		}
 	};
 
 	if (!question || !answer) return null;
@@ -512,7 +535,7 @@ function AskDialog({
 				onSubmit={event => {
 					event.preventDefault();
 					if (!last) setStep(step + 1);
-					else if (!submitBlocked) submit();
+					else if (!submitBlocked) void submit();
 				}}
 			>
 				{total > 1 && (
@@ -588,13 +611,26 @@ function AskDialog({
 								<MarkdownRenderer content={option.preview ?? ""} />
 							</div>
 						))}
-					<Input
-						aria-label={t("extDialog.ask.customPlaceholder")}
-						onChange={event => setCustom(event.target.value)}
-						placeholder={t("extDialog.ask.customPlaceholder")}
-						value={answer.custom}
-					/>
-					{showNote ? (
+					{question.formField?.multiline ? (
+						<TextArea
+							aria-label={question.question}
+							onChange={event => setCustom(event.target.value)}
+							value={answer.custom}
+						/>
+					) : question.formField?.custom !== false ? (
+						<Input
+							aria-label={
+								question.formField && !question.options.length
+									? question.question
+									: t("extDialog.ask.customPlaceholder")
+							}
+							onChange={event => setCustom(event.target.value)}
+							placeholder={t("extDialog.ask.customPlaceholder")}
+							value={answer.custom}
+						/>
+					) : null}
+					{problem?.index === step && <p role="alert">{problem.problem}</p>}
+					{question.formField ? null : showNote ? (
 						<Input
 							aria-label={t("extDialog.ask.notePlaceholder")}
 							autoFocus={answer.note === "" && (!tabId || useTabsStore.getState().activeTabId === tabId)}
@@ -626,8 +662,8 @@ function looksLikeJson(text: string): boolean {
 
 /**
  * Multi-line answer: Cmd/Ctrl+Enter submits, Enter adds a newline, Escape
- * cancels. With `promptStyle` (stock's one-line prompt editor, pi-tui
- * hook-editor) Enter submits and Shift+Enter adds the newline; Cmd/Ctrl+Enter
+ * cancels. With `promptStyle` (stock's one-line prompt editor, pi-coding-agent
+ * ui/overlays/panels/hook-dialogs.tsx) Enter submits and Shift+Enter adds the newline; Cmd/Ctrl+Enter
  * still submits.
  */
 function EditorDialog({
@@ -780,6 +816,100 @@ function askWireAnswer(item: ExtensionAskDialogResultItem): {
 	};
 }
 
+interface FormView {
+	questions: ExtensionAskDialogQuestion[];
+	context?: string;
+}
+
+/** Stock parses and validates on the tab that owns the form. Projection never opens a second dialog. */
+function NativeFormDialog({
+	request,
+	remaining,
+	onCancel,
+	onData,
+}: {
+	request: Extract<ExtensionUIRequest, { method: "form" }>;
+	remaining: number | null;
+	onCancel: () => void;
+	onData: (reply: FormDataReply) => Promise<void>;
+}) {
+	const command = useTabCommand();
+	const t = useT();
+	const [view, setView] = useState<FormView>();
+	const [error, setError] = useState("");
+	const [attempt, retry] = useState(0);
+	const revision = useRef(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: retrying the same form must request a fresh projection.
+	useEffect(() => {
+		const current = ++revision.current;
+		void command({ type: "project_ask_form", html: request.html })
+			.then(response => {
+				if (revision.current !== current) return;
+				if (!response.success) throw new Error(response.error);
+				setView(response.data as FormView);
+			})
+			.catch(cause => {
+				if (revision.current === current) setError(cause instanceof Error ? cause.message : String(cause));
+			});
+		return () => {
+			revision.current++;
+		};
+	}, [command, request.html, attempt]);
+	const cancel = () => {
+		revision.current++;
+		onCancel();
+	};
+	const submit = async (result: ExtensionAskDialogResult): Promise<void | FormProblem> => {
+		if (result.kind === "chat") return cancel();
+		const current = ++revision.current;
+		const response = await command({
+			type: "project_ask_form",
+			html: request.html,
+			answers: result.results.map(({ id, selectedOptions, customInput }) => ({ id, selectedOptions, customInput })),
+		});
+		if (current !== revision.current) return;
+		if (!response.success) throw new Error(response.error);
+		const reply = response.data as FormDataReply | FormProblem;
+		if ("problem" in reply) return reply;
+		await onData(reply);
+	};
+	if (view?.questions.length) {
+		return (
+			<AskDialog
+				request={{ type: "extension_ui_request", method: "ask", id: request.id, questions: view.questions }}
+				remaining={remaining}
+				onSubmit={submit}
+				onCancel={cancel}
+			/>
+		);
+	}
+	return (
+		<PromptCard label={t("workBoard.question")} icon={MessageCircleQuestion} onCancel={cancel}>
+			{view?.context && <MarkdownRenderer content={view.context} />}
+			{error && <p role="alert">{error}</p>}
+			<TimeoutFooter remaining={remaining} />
+			{error && (
+				<Button
+					onClick={() => {
+						setError("");
+						retry(n => n + 1);
+					}}
+				>
+					{t("common.retry")}
+				</Button>
+			)}
+			{view && (
+				<Button
+					onClick={() => void submit({ kind: "submit", results: [] }).catch(cause => setError(String(cause)))}
+				>
+					{t("extDialog.submit")}
+				</Button>
+			)}
+			<Button onClick={cancel}>{t("common.cancel")}</Button>
+		</PromptCard>
+	);
+}
+
 function ActiveDialog({
 	request,
 	remaining,
@@ -791,18 +921,22 @@ function ActiveDialog({
 }) {
 	const sendResponse = useExtensionUiResponder();
 	const removeRequest = useExtensionUiStore(state => state.removeRequest);
+	const sending = useRef<string | null>(null);
 
-	const respond = (
+	const respond = async (
 		response:
 			| { value: string }
 			| { confirmed: boolean }
 			| { answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }> }
+			| FormDataReply
 			| { cancelled: true },
 	) => {
 		// The card stays until main handed the answer on: a paired host's tab with its link down refuses it.
-		void sendResponse({ type: "extension_ui_response", id: request.id, ...response }).then(delivered => {
-			if (delivered) removeRequest(request.id);
-		});
+		if (sending.current === request.id) return;
+		sending.current = request.id;
+		const delivered = await sendResponse({ type: "extension_ui_response", id: request.id, ...response });
+		if (delivered) removeRequest(request.id);
+		else if (sending.current === request.id) sending.current = null;
 	};
 	const cancel = () => respond({ cancelled: true });
 
@@ -837,6 +971,16 @@ function ActiveDialog({
 					onValue={value => respond({ value })}
 					remaining={remaining}
 					request={request}
+				/>
+			);
+		case "form":
+			return (
+				<NativeFormDialog
+					key={request.id}
+					request={request}
+					remaining={remaining}
+					onData={respond}
+					onCancel={cancel}
 				/>
 			);
 		case "ask":

@@ -9,6 +9,7 @@ import type { ImageContent } from "../../../../shared/rpc-types";
 import { useT } from "../../../lib/i18n";
 import { queueChipLabel } from "../../../lib/queue-chip";
 import type { QueueLane } from "../../../stores/queue";
+import { useSettingsStore } from "../../../stores/settings";
 import { LinkButton } from "../../common";
 
 /** Characters of a message that name its row's buttons ("Edit: <first 40 chars>", DR-11). */
@@ -20,9 +21,13 @@ export function queueRowName(text: string, imageCount = 0): string {
 	return label.length > ROW_NAME_CHARS ? `${label.slice(0, ROW_NAME_CHARS - 1)}…` : label;
 }
 
-/** The lane's heading: its name, how many wait in it, how they are delivered, and `onClear` empties only this lane. */
+/**
+ * The lane's heading: its name, how many wait in it, how they are delivered (the agent's real steering or follow-up
+ * mode: one-at-a-time hands one over per step or per turn), and `onClear` empties only this lane.
+ */
 export function QueueLaneHeading({ lane, count, onClear }: { lane: QueueLane; count: number; onClear?: () => void }) {
 	const t = useT();
+	const mode = useSettingsStore(state => (lane === "steering" ? state.steeringMode : state.followUpMode));
 	return (
 		<div
 			className="flex h-5 items-center gap-1.5 px-2 text-sc-xs font-medium text-(--sc-text-subtle)"
@@ -31,7 +36,9 @@ export function QueueLaneHeading({ lane, count, onClear }: { lane: QueueLane; co
 		>
 			<span className="shrink-0">{t(`composerQueue.lane.${lane}`)}</span>
 			<span className="shrink-0 tabular-nums">{count}</span>
-			<span className="min-w-0 flex-1 truncate font-normal">· {t(`composerQueue.laneSub.${lane}`)}</span>
+			<span className="min-w-0 flex-1 truncate font-normal">
+				· {t(`composerQueue.laneSub.${lane}${mode === "all" ? "All" : "One"}`)}
+			</span>
 			{onClear ? (
 				<LinkButton
 					aria-label={t("composerQueue.clearLane", { lane: t(`composerQueue.lane.${lane}`) })}

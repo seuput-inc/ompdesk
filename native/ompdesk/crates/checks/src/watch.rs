@@ -121,7 +121,7 @@ impl Watch {
                     } else if disk.low() && !low.contains(&disk.path) {
                         low.push(disk.path.clone());
                         say(&format!(
-                            "disk low while running: {} free on {} (new heavy work waits under {}), {pace}; it is stopped under {}",
+                            "disk low while running: {} free on {} (warning threshold {}), {pace}; it is stopped under {}",
                             gb(disk.free),
                             disk.path,
                             gb(disk.need),

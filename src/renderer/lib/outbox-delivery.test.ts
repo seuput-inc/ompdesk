@@ -89,8 +89,8 @@ describe("outbox delivery", () => {
 		const { holdMessage, sendsHeld, installOutboxDelivery, useOutboxStore, tab } = await page();
 		stop = installOutboxDelivery();
 		expect(sendsHeld(tab)).toBe(true);
-		holdMessage(tab, { text: "one", images: [], behavior: "steer" });
-		holdMessage(tab, { text: "two", images: [], behavior: "followUp" });
+		holdMessage(tab, { text: "one", images: [] });
+		holdMessage(tab, { text: "two", images: [] });
 		await Promise.resolve();
 		expect(commandForTab).not.toHaveBeenCalled();
 		const ids = useOutboxStore.getState().items.map(item => item.id);
@@ -108,16 +108,16 @@ describe("outbox delivery", () => {
 
 	it("keeps what waits across a reload, and a send a reload cut off waits again with the same id", async () => {
 		const first = await page();
-		first.holdMessage(first.tab, { text: "one", images: [], behavior: "steer" });
-		first.holdMessage(first.tab, { text: "two", images: [], behavior: "steer" });
+		first.holdMessage(first.tab, { text: "one", images: [] });
+		first.holdMessage(first.tab, { text: "two", images: [] });
 		const [id] = first.useOutboxStore.getState().items.map(item => item.id);
 		if (!id) throw new Error("nothing held");
 		first.useOutboxStore.getState().patch(id, { state: "sending" });
 
 		const second = await page();
 		expect(second.useOutboxStore.getState().items.map(item => [item.send, item.state])).toEqual([
-			[{ kind: "message", text: "one", images: [], behavior: "steer" }, "held"],
-			[{ kind: "message", text: "two", images: [], behavior: "steer" }, "held"],
+			[{ kind: "message", text: "one", images: [] }, "held"],
+			[{ kind: "message", text: "two", images: [] }, "held"],
 		]);
 		setLink("open");
 		stop = second.installOutboxDelivery();
@@ -128,9 +128,9 @@ describe("outbox delivery", () => {
 	it("tries a send the link cut again with the same id, and stops at one the computer refused until it is retried", async () => {
 		vi.useFakeTimers();
 		const { holdMessage, installOutboxDelivery, useOutboxStore, tab } = await page();
-		holdMessage(tab, { text: "cut", images: [], behavior: "steer" });
-		holdMessage(tab, { text: "refused", images: [], behavior: "steer" });
-		holdMessage(tab, { text: "after", images: [], behavior: "steer" });
+		holdMessage(tab, { text: "cut", images: [] });
+		holdMessage(tab, { text: "refused", images: [] });
+		holdMessage(tab, { text: "after", images: [] });
 		// The first try of "cut" is lost on the link, every try of "refused" until the person retries it is refused.
 		let cutTries = 0;
 		let refusing = true;
@@ -188,6 +188,17 @@ describe("outbox delivery", () => {
 		expect(useToastStore.getState().toasts.map(toast => toast.message)).toEqual([
 			translate("outbox.answerClosed", { summary }),
 		]);
+	});
+
+	it("keeps the submitted form intact without showing field names or values in its outbox preview", async () => {
+		const { holdAnswer, useOutboxStore, translate, tab } = await page();
+		const response = { type: "extension_ui_response" as const, id: "form", data: { hidden: "private", note: "" } };
+		holdAnswer(tab, response);
+		expect(useOutboxStore.getState().items[0]?.send).toMatchObject({
+			kind: "answer",
+			response,
+			summary: translate("outbox.formAnswer"),
+		});
 	});
 
 	it("sends an answer whose question is still open to the process that asked", async () => {

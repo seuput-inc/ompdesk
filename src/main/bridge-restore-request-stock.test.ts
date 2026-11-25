@@ -14,9 +14,12 @@ import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { KEEP_CLI_ENV } from "../../resources/gui-bridge/kept-jobs-core";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { nativeBinPath } from "./native-bin";
+import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, stopOmpDaemon } from "./test-bridge-probe";
+import { RM_TEMP } from "./test-fake-omp";
 
 /**
  * A relaunch continues a turn that OMPdesk's quit cut while omp was preparing its next model request (bridge
@@ -70,18 +73,20 @@ interface Provider {
 	url: string;
 	/** Second-turn requests past `secondTurn`'s steps, answered `CONTINUED`: the continued turn. */
 	continued: number;
-	close(): Promise<void>;
+	/** Every request body, in order. */
+	requests: string[];
 }
 
 /** The first prompt is answered in text; the second runs `secondTurn` (one step per tool result since it), then `CONTINUED`. */
 async function startProvider(secondTurn: readonly Step[]): Promise<Provider> {
-	const provider: Provider = { url: "", continued: 0, close: async () => undefined };
+	const provider: Provider = { url: "", continued: 0, requests: [] };
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", chunk => {
 			body += chunk;
 		});
 		req.on("end", () => {
+			provider.requests.push(body);
 			if (!req.url?.endsWith("/chat/completions")) {
 				res.writeHead(404).end();
 				return;
@@ -117,10 +122,11 @@ async function startProvider(secondTurn: readonly Step[]): Promise<Provider> {
 	await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
 	const { port } = server.address() as { port: number };
 	provider.url = `http://127.0.0.1:${port}/v1`;
-	provider.close = () => {
+	onTestFinished(() => {
+		const closed = server[Symbol.asyncDispose]();
 		server.closeAllConnections();
-		return new Promise<void>(done => server.close(() => done()));
-	};
+		return closed;
+	});
 	return provider;
 }
 
@@ -159,14 +165,30 @@ interface Omp {
 	send(command: Record<string, unknown>): Promise<Record<string, unknown>>;
 	/** OMPdesk's quit of a tab's omp (sidecar.ts): stdin closes and stock disposes the session. */
 	quit(): Promise<void>;
+	/** A crash, or a computer that went off: the process ends with nothing journaled. */
+	kill(): Promise<void>;
 }
 
-const cleanups: Array<() => Promise<void> | void> = [];
-afterAll(async () => {
-	for (const cleanup of cleanups.reverse()) await cleanup();
-});
+function testFolders(prefix: string) {
+	const isolated = mkdtempSync(join(tmpdir(), `ompdesk-${prefix}-`));
+	chmodSync(isolated, 0o700);
+	const root = realpathSync(mkdtempSync(join(tmpdir(), `ompdesk-${prefix}-repo-`)));
+	onTestFinished(() => {
+		// omp 19's daemon for this config folder keeps it and the repository busy on Windows.
+		stopOmpDaemon(isolated);
+		rmSync(isolated, RM_TEMP);
+		rmSync(root, RM_TEMP);
+	});
+	return { isolated, root };
+}
 
-async function startOmp(provider: Provider, isolated: string, root: string, resume: boolean): Promise<Omp> {
+async function startOmp(
+	provider: Provider,
+	isolated: string,
+	root: string,
+	resume: boolean,
+	extraEnv: Record<string, string> = {},
+): Promise<Omp> {
 	const agentDir = join(isolated, "agent");
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(
@@ -180,6 +202,7 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			"        reasoning: false",
 			"        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }",
 			"",
 		].join("\n"),
@@ -192,6 +215,7 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 		OMP_PROFILE: "",
 		PI_PROFILE: "",
 		OMP_GUI_BRIDGE: address,
+		...extraEnv,
 	};
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) Reflect.deleteProperty(env, key);
@@ -224,16 +248,26 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 	});
 	const bridge = new GuiBridgeClient(address);
 	let counter = 0;
+	// A killed omp can close its stdin while a write is pending.
+	child.stdin.on("error", () => undefined);
 	const quit = async () => {
 		bridge.close();
-		child.stdin.end();
-		// A guard, not a wait: an omp that ignores its closed stdin is killed so the test ends.
-		const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
-		await exited;
-		clearTimeout(timer);
+		if (child.exitCode === null && child.signalCode === null) {
+			child.stdin.end();
+			// A guard, not a wait: an omp that ignores its closed stdin is killed so the test ends.
+			const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+			await exited;
+			clearTimeout(timer);
+		}
 		removeBridgeAddress(address);
 	};
-	cleanups.push(() => quit());
+	const kill = async () => {
+		bridge.close();
+		child.kill("SIGKILL");
+		await exited;
+		removeBridgeAddress(address);
+	};
+	onTestFinished(quit);
 	await expect.poll(() => frames.some(frame => frame.type === "ready"), { timeout: 60_000 }).toBe(true);
 	await expect
 		.poll(
@@ -249,6 +283,7 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 		bridge,
 		frames,
 		quit,
+		kill,
 		send: command => {
 			const id = `c${++counter}`;
 			const { promise, resolve: done, reject: fail } = Promise.withResolvers<Record<string, unknown>>();
@@ -298,15 +333,8 @@ async function quitBeforeRequest(
 	holdAfter: "user" | "toolResult",
 	options: { lostAfterExit?: boolean } = {},
 ) {
+	const { isolated, root } = testFolders("request");
 	const provider = await startProvider(secondTurn);
-	cleanups.push(() => provider.close());
-	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-request-"));
-	chmodSync(isolated, 0o700);
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-request-repo-")));
-	cleanups.push(() => {
-		rmSync(isolated, { recursive: true, force: true });
-		rmSync(root, { recursive: true, force: true });
-	});
 	const { hold, held } = writeHoldExtension(isolated, holdAfter);
 	const first = await startOmp(provider, isolated, root, false);
 	await first.send({ type: "prompt", message: FIRST });
@@ -384,15 +412,8 @@ describe.skipIf(!existsSync(omp))(
 	"a quit that aborted a tool, with a note journaled after the abort, on stock omp",
 	() => {
 		it("goes on with the turn after the relaunch", async () => {
+			const { isolated, root } = testFolders("noted");
 			const provider = await startProvider([{ tool: "bash", args: { command: "sleep 120", i: "long check" } }]);
-			cleanups.push(() => provider.close());
-			const isolated = mkdtempSync(join(tmpdir(), "ompdesk-noted-"));
-			chmodSync(isolated, 0o700);
-			const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-noted-repo-")));
-			cleanups.push(() => {
-				rmSync(isolated, { recursive: true, force: true });
-				rmSync(root, { recursive: true, force: true });
-			});
 			const { hold } = writeHoldExtension(isolated, "user");
 			rmSync(hold);
 			const first = await startOmp(provider, isolated, root, false);
@@ -438,3 +459,95 @@ describe.skipIf(!existsSync(omp))(
 		}, 240_000);
 	},
 );
+
+/**
+ * A relaunch never cuts a short command nor runs one a second time (quit-journal.ts). Stock aborts a running command
+ * when its stdin closes, and its restore then replays a batch whose every result is an error with the same call id and
+ * arguments: a cut `git commit` was made twice after an update restart (19 Nov 2026). Each command appends a line to
+ * a counter file, so the counter says how often it ran.
+ */
+describe.skipIf(!existsSync(omp))("a command a stop or a crash cuts, on stock omp", () => {
+	async function cutCommand(script: (counter: string) => string, end: "quit" | "kill") {
+		const { isolated, root } = testFolders("once");
+		const counter = join(root, "counter").replaceAll("\\", "/");
+		const provider = await startProvider([{ tool: "bash", args: { command: script(counter), i: "counted" } }]);
+		const { hold } = writeHoldExtension(isolated, "user");
+		rmSync(hold);
+		const first = await startOmp(provider, isolated, root, false);
+		await first.send({ type: "prompt", message: FIRST });
+		await expect.poll(() => first.frames.some(frame => frame.type === "agent_end"), { timeout: 60_000 }).toBe(true);
+		await first.send({ type: "prompt", message: SECOND });
+		await expect.poll(() => existsSync(counter), { timeout: 60_000 }).toBe(true);
+		await (end === "quit" ? first.quit() : first.kill());
+		const runs = () => readFileSync(counter, "utf8").split("\n").filter(Boolean).length;
+		const results = () => messagesOf(journal(isolated)).filter(entry => entry.message?.role === "toolResult");
+		const cut = results();
+		const second = await startOmp(provider, isolated, root, true);
+		const outcome = await second.bridge.request<{ turn: boolean }>("composer.restore_interrupted", {});
+		expect(outcome).toMatchObject({ turn: true });
+		await expect.poll(() => provider.continued, { timeout: 60_000 }).toBe(1);
+		return { cut, results, runs };
+	}
+
+	it("lets the stop finish a running command, and the relaunch goes on from its whole output", async () => {
+		const { cut, results, runs } = await cutCommand(
+			counter => `echo ran >> "${counter}"; sleep 3; echo WHOLE-OUTPUT`,
+			"quit",
+		);
+		expect(cut).toHaveLength(1);
+		expect(textOf(cut[0]?.message?.content)).toContain("WHOLE-OUTPUT");
+		expect(results()).toHaveLength(1);
+		expect(runs()).toBe(1);
+	}, 240_000);
+
+	it("never runs a command again that failed while the stop waited for it", async () => {
+		const { results, runs } = await cutCommand(counter => `echo ran >> "${counter}"; sleep 2; exit 3`, "quit");
+		expect(textOf(results().at(-1)?.message?.content)).toContain("Not run again");
+		expect(runs()).toBe(1);
+	}, 240_000);
+
+	it("never runs a command again that a crash cut", async () => {
+		// The killed omp leaves its command running on Windows: a short one, so it lets the test's folders go.
+		const { results, runs } = await cutCommand(counter => `echo ran >> "${counter}"; sleep 8`, "kill");
+		expect(textOf(results().at(-1)?.message?.content)).toContain("Not run again");
+		expect(runs()).toBe(1);
+	}, 240_000);
+});
+
+/**
+ * A background job runs on through a relaunch (kept-jobs.ts, `ompdesk keep`): stock ran it in omp's own shell, so the
+ * relaunch ended it and the agent was told to start it again. The command logs its start and its end to a counter
+ * file; the relaunch comes while it sleeps.
+ */
+describe.skipIf(!existsSync(omp) || !existsSync(nativeBinPath("ompdesk")))("a background job on stock omp", () => {
+	it("keeps running through a relaunch, once, and its result reaches the agent after it", async () => {
+		const { isolated, root } = testFolders("kept");
+		const counter = join(root, "counter").replaceAll("\\", "/");
+		// The output is computed, so it reaches a request only from the job's result, never from the call's command.
+		const command = `echo started >> "${counter}"; sleep 8; echo KEPT-$((40 + 2)); echo finished >> "${counter}"`;
+		const provider = await startProvider([{ tool: "bash", args: { command, async: true, i: "kept" } }]);
+		const { hold } = writeHoldExtension(isolated, "user");
+		rmSync(hold);
+		const keep = { [KEEP_CLI_ENV]: nativeBinPath("ompdesk") };
+		const first = await startOmp(provider, isolated, root, false, keep);
+		await first.send({ type: "prompt", message: FIRST });
+		await expect
+			.poll(() => first.frames.filter(frame => frame.type === "agent_end").length, { timeout: 60_000 })
+			.toBe(1);
+		await first.send({ type: "prompt", message: SECOND });
+		await expect.poll(() => existsSync(counter), { timeout: 60_000 }).toBe(true);
+		await expect.poll(() => provider.continued, { timeout: 60_000 }).toBe(1);
+		await first.quit();
+		const lines = () => readFileSync(counter, "utf8").split("\n").filter(Boolean);
+		expect(lines()).toEqual(["started"]);
+		const second = await startOmp(provider, isolated, root, true, keep);
+		const outcome = await second.bridge.request<{ jobs: string[]; followUp: boolean }>(
+			"composer.restore_interrupted",
+			{},
+		);
+		expect(outcome).toMatchObject({ jobs: [], followUp: false });
+		await expect.poll(() => provider.requests.some(body => body.includes("KEPT-42")), { timeout: 60_000 }).toBe(true);
+		expect(lines()).toEqual(["started", "finished"]);
+		expect(journal(isolated).some(entry => entry.customType === "ompdesk-restart-jobs")).toBe(false);
+	}, 240_000);
+});

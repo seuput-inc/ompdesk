@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type TodoCompactPhase, todoCompaction } from "../../resources/gui-bridge/todo-compact-core";
+import { compactTodoText, type TodoCompactPhase, todoCompaction } from "../../resources/gui-bridge/todo-compact-core";
 
 function list(closed: number, open: number, blocked = 0): TodoCompactPhase[] {
 	return [
@@ -18,7 +18,7 @@ function list(closed: number, open: number, blocked = 0): TodoCompactPhase[] {
 }
 
 describe("todoCompaction", () => {
-	it("asks for a fold when an append grows a list past 20 items with 10 finished", () => {
+	it("names long lists when an append passes 20 items with 10 finished", () => {
 		expect(todoCompaction("append", list(12, 7, 2))).toEqual({ total: 21, closed: 12, open: 9 });
 	});
 
@@ -36,16 +36,13 @@ describe("todoCompaction", () => {
 			expect(todoCompaction(op, list(33, 3, 2))).toBeUndefined();
 	});
 
-	it("stays quiet once the owner's 38-item list is folded to a summary and its open items", () => {
-		const grown = list(33, 3, 2);
-		expect(todoCompaction("append", grown)).toEqual({ total: 38, closed: 33, open: 5 });
-		const folded: TodoCompactPhase[] = [
-			{ name: "Done", tasks: [{ content: "Done: 33 items", status: "completed" }] },
-			{
-				name: "Work",
-				tasks: grown[0].tasks.filter(task => task.status !== "completed" && task.status !== "abandoned"),
-			},
-		];
-		expect(todoCompaction("append", folded)).toBeUndefined();
+	it("keeps history and blockers in place instead of rebuilding the owner's 38-item list", () => {
+		const long = todoCompaction("append", list(33, 3, 2));
+		expect(long).toEqual({ total: 38, closed: 33, open: 5 });
+		if (!long) throw new Error("expected the long-list reminder");
+		const text = compactTodoText(long);
+		expect(text).toContain("Keep the 5 unfinished items in their phases with their current statuses and blockers");
+		expect(text).toContain("Append each new request in its own phase");
+		expect(text).not.toMatch(/`init`|`block`/);
 	});
 });

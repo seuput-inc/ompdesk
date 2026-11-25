@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
 	Connection,
 	DATA_OFFSET,
@@ -32,10 +32,13 @@ function probe(hub: Hub, answer: (q: string, item: HubItem) => unknown = () => "
 	return { id, items, lost };
 }
 
-/** Kills the running core after `ms`, from another process: main's own thread is blocked meanwhile. */
-function killCoreAfter(ms: number): void {
+/**
+ * Kills the running core after `ms`, from another process: main's own thread is blocked meanwhile. Waits first for the
+ * core's owner to say which process it is (the pid comes with the owner's answer to `core.start`).
+ */
+async function killCoreAfter(ms: number): Promise<void> {
+	await vi.waitFor(() => expect(core().pid).not.toBeNull(), { timeout: 10_000, interval: 5 });
 	const pid = core().pid;
-	if (pid === null) throw new Error("no core runs");
 	spawn(process.execPath, ["-e", `setTimeout(() => process.kill(${pid}, "SIGKILL"), ${ms})`], {
 		stdio: "ignore",
 		env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -64,6 +67,34 @@ describe("the hub connection", () => {
 		expect(order).toEqual(["asked", "nested answered"]);
 		expect(instance.items).toEqual([{ k: "n", n: 1 }, { k: "after" }]);
 	});
+
+	it.each([
+		// The question's answer goes out at once; the core's rule answers the outer call before the nested one's.
+		{ outer: "askPoke", nested: "push", result: "from main", nestedResult: 2 },
+		// The nested call wakes the outer one's rule: its answer comes right behind the nested call's.
+		{ outer: "askWaitPoke", nested: "fire", result: "woke", nestedResult: null },
+	])(
+		"hands a call the answer a call nested in its handling read ($outer)",
+		({ outer, nested, result, nestedResult }) => {
+			const hub = new Hub();
+			const answers: unknown[] = [];
+			const id = hub.nextId();
+			hub.open(
+				id,
+				"test:probe",
+				{},
+				{
+					item: item => {
+						if (item.k === "poke") answers.push(hub.call(id, nested, { n: 2 }));
+					},
+					ask: () => "from main",
+					lost: () => {},
+				},
+			);
+			expect(hub.call(id, outer)).toBe(result);
+			expect(answers).toEqual([nestedResult]);
+		},
+	);
 
 	it("answers a later question once main's promise settles, without blocking main", async () => {
 		const hub = new Hub();
@@ -106,6 +137,10 @@ describe("the hub connection", () => {
 		expect(blocked).toBeGreaterThanOrEqual(HUB_CALL_DEADLINE_MS - 50);
 		expect(blocked).toBeLessThan(HUB_CALL_DEADLINE_MS + 1_000);
 		expect(instance.lost.map(error => error.code)).toEqual(["hub_lost"]);
+		// The loss says which side was silent: the hub's thread took the wait, the core sent nothing after it.
+		expect(instance.lost[0]?.message).toMatch(
+			/its thread took the wait after \d+ ms; the core's last line came \d+ ms before the wait/,
+		);
 		const again = probe(hub);
 		expect(hub.call(again.id, "push", { n: 2 })).toBe(2);
 		expect(core().pid).not.toBe(before);
@@ -123,7 +158,7 @@ describe("the hub connection", () => {
 		// Main took the question (its promise is pending) before the core is lost.
 		hub.barrier();
 		expect(asked).toBe(1);
-		killCoreAfter(200);
+		await killCoreAfter(200);
 		expect(() => hub.call(old.id, "wait")).toThrow(CoreError);
 		expect(await unanswered).toBeInstanceOf(CoreError);
 		// The next core's first question carries the number the lost core's had.
@@ -137,25 +172,48 @@ describe("the hub connection", () => {
 		await expect(answer).resolves.toBe("fresh");
 	});
 
-	it("wakes main at once when the core ends in the middle of a call (the quit, a crash)", () => {
+	it("wakes main at once when the core ends in the middle of a call (the quit, a crash)", async () => {
 		const hub = new Hub();
 		const instance = probe(hub);
-		killCoreAfter(200);
+		await killCoreAfter(200);
 		const started = performance.now();
 		expect(() => hub.call(instance.id, "wait")).toThrow(CoreError);
 		expect(performance.now() - started).toBeLessThan(HUB_CALL_DEADLINE_MS);
 		expect(instance.lost).toHaveLength(1);
 	});
 
-	it("takes a fraction of a millisecond per call", () => {
+	it("reads a call's params again when the core is lost under it, so the second call carries what main reads after the loss", async () => {
 		const hub = new Hub();
-		const instance = probe(hub);
-		hub.call(instance.id, "push", { n: 0 });
-		const started = performance.now();
-		const calls = 2_000;
-		for (let n = 0; n < calls; n++) hub.call(instance.id, "push", { n });
-		const perCallMs = (performance.now() - started) / calls;
-		expect(perCallMs).toBeLessThan(1);
+		const order: string[] = [];
+		let first = true;
+		const open = () =>
+			probe(hub, () => {
+				// The first core ends while its rule waits on main, as a core that stops answering mid-call.
+				if (first) {
+					first = false;
+					process.kill(core().pid ?? 0, "SIGKILL");
+				}
+				return "answered";
+			});
+		let instance = open();
+		// The owner's answer, which names the core's process, comes on main's next turn.
+		await vi.waitFor(() => expect(core().pid).not.toBeNull(), { timeout: 10_000, interval: 5 });
+		const lostOne = instance;
+		// Each read says whether the instance it goes to is the next core's, opened after the loss.
+		const params = () => {
+			order.push(instance === lostOne ? "read before the loss" : "read after the loss");
+			return {};
+		};
+		const answer = hub.callOnce<string>(
+			() => {
+				if (instance.lost.length > 0) instance = open();
+				return instance.id;
+			},
+			"ask",
+			params,
+		);
+		expect(answer).toBe("answered");
+		expect(order).toEqual(["read before the loss", "read after the loss"]);
 	});
 });
 

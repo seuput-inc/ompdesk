@@ -1,7 +1,4 @@
-//! What machine setup fetches from the network (was `src/main/setup/download.ts` and the lookups of
-//! `src/main/setup/archives.ts`): a verified download to disk with byte progress (`download`) and the release
-//! lookups for the archives setup installs itself (`archives`: Node.js, GitHub CLI, agent-desktop, Tailscale).
-//! `net` holds what both read the network with. Main keeps how a failure is shown and when a download starts.
+//! Machine setup's downloads, release lookups and compiled omp launcher repair.
 //!
 //! Methods:
 //! - `setup.download` `{id, url, sha256, file, accept?, mirror?}` answers `{}` once `file` holds bytes that match
@@ -10,15 +7,22 @@
 //! - `setup.resolveArchive` `{item, arch, mirror?, githubToken?}`, `setup.resolveAgentDesktop`
 //!   `{platform, arch, …}` and `setup.resolveTailscale` `{platform, msiArch, …}` answer the release; a lookup that
 //!   cannot say fails `setup_lookup` with a readable reason.
+//! - `setup.probeOmp` checks the Bun that would run a package launcher, then its installed manifest or `--version`.
 //! - `mirror` is a test's server on 127.0.0.1 standing in for every host (`net::routed`).
 
-mod archives;
-mod download;
-mod net;
+pub(crate) mod archives;
+pub(crate) mod compat;
+pub(crate) mod desktop;
+pub(crate) mod download;
+pub(crate) mod launcher;
+pub(crate) mod net;
+mod registry_path;
+pub(crate) mod runtime;
 #[cfg(test)]
 mod tests;
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 use archives::{Platform, resolve_agent_desktop, resolve_archive, resolve_tailscale};
 use net::Http;
@@ -26,6 +30,18 @@ use net::Http;
 use crate::server::{Call, Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
+    compat::register(registry);
+    launcher::register(registry);
+    registry.add("setup.pickAgentDesktop", |call| {
+        Box::pin(desktop::select(call))
+    });
+    registry.add("setup.probeOmp", |call| Box::pin(runtime::probe(call)));
+    registry.add("setup.toolVersion", |call| {
+        Box::pin(runtime::tool_version(call))
+    });
+    registry.add("setup.appleDeveloperDir", |call| {
+        Box::pin(apple_developer_dir(call))
+    });
     registry.add("setup.download", |call| Box::pin(download::handle(call)));
     registry.add("setup.resolveArchive", |call| {
         Box::pin(async move { resolve_archive_method(call).await })
@@ -36,6 +52,54 @@ pub fn register(registry: &mut Registry) {
     registry.add("setup.resolveTailscale", |call| {
         Box::pin(async move { resolve_tailscale_method(call).await })
     });
+    registry_path::register(registry);
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppleDeveloperDir {
+    cwd: String,
+    env: BTreeMap<String, String>,
+    timeout_ms: u64,
+}
+
+async fn apple_developer_dir(call: Call) -> Result<Reply, Fault> {
+    let p: AppleDeveloperDir = call.params()?;
+    if !matches!(p.timeout_ms, 5_000 | 15_000) {
+        return Err(Fault::new(
+            "invalid_params",
+            "Unknown developer directory probe timeout",
+        ));
+    }
+    Reply::json(&developer_dir(&p.cwd, p.env, p.timeout_ms, call.scope).await?)
+}
+
+/// `xcode-select -p` within `timeout_ms` on macOS: the selected developer directory; none elsewhere or when it fails.
+pub(crate) async fn developer_dir(
+    cwd: &str,
+    env: BTreeMap<String, String>,
+    timeout_ms: u64,
+    scope: crate::server::Scope,
+) -> Result<Option<String>, Fault> {
+    use crate::run::{Exec, Opts, Runner};
+
+    let mut dir = None;
+    if cfg!(target_os = "macos") {
+        let runner = Runner {
+            bin: "/usr/bin/xcode-select".into(),
+            args: Vec::new(),
+            env,
+            timeout_ms,
+            max_bytes: runtime::EXEC_FILE_MAX_BUFFER as usize,
+        };
+        let exec = Exec::new(runner, scope, "xcode_select");
+        match exec.run(cwd, &["-p"], Opts::default()).await {
+            Ok(out) if out.code == 0 && !out.truncated => dir = Some(out.text()),
+            Err(fault) if fault.code == "cancelled" => return Err(fault),
+            _ => {}
+        }
+    }
+    Ok(dir)
 }
 
 #[derive(Deserialize)]
@@ -43,6 +107,8 @@ pub fn register(registry: &mut Registry) {
 struct Source {
     mirror: Option<String>,
     github_token: Option<String>,
+    /// The proxy `proxy.resolve` picked, which every non-loopback request goes through.
+    proxy: Option<String>,
 }
 
 impl Source {
@@ -50,6 +116,7 @@ impl Source {
         Http {
             mirror: self.mirror.as_deref(),
             token: self.github_token.as_deref(),
+            proxy: self.proxy.as_deref(),
         }
     }
 }

@@ -5,9 +5,8 @@
  * may ask for a retry or a cancel by item id (never a command).
  *
  * Required: Bun and omp everywhere, plus Git for Windows on Windows (stock
- * omp's shell tools resolve Git Bash there). Optional: Git (macOS), GitHub CLI
- * and Node.js (the built-in REA MCP server) and agent-desktop (the default computer-use engine) install on their
- * own in the background; Tailscale (Mobile web) never does: only `installForConnection`
+ * omp's shell tools resolve Git Bash there). Optional: Git (macOS), GitHub CLI,
+ * Node.js and agent-desktop install in the background. Tailscale (Mobile web) never does: only `installForConnection`
  * and an explicit Retry install it, because the user's click is its consent.
  */
 
@@ -39,7 +38,7 @@ export type SetupPlatform = "darwin" | "win32" | "other";
  */
 export type GitShellProblem = { kind: "mandatory-aslr" } | { kind: "spawn-failed"; detail: string };
 
-/** Setup's Git Mandatory ASLR override (src/main/setup/git-aslr.ts): set it, or remove it again. */
+/** Setup's Git Mandatory ASLR override (the core's `tools/setup/git_aslr.rs`): set it, or remove it again. */
 export type GitAslrAction = "fix" | "undo";
 export type GitAslrResult = { ok: true; images: number } | { ok: false; detail: string };
 
@@ -71,10 +70,19 @@ export type SetupMethod =
 	| "bun-script"
 	/** `<bun> upgrade`: a Bun older than the omp package's `engines.bun` (bun renames its own running exe on Windows). */
 	| "bun-upgrade"
-	/** `<bun> install -g @oh-my-pi/pi-coding-agent`, with a compiled omp in the launcher's place moved aside first. */
+	/**
+	 * `<bun> install -g @oh-my-pi/pi-coding-agent@<version>`: the tested omp for setup's own install (a compiled omp
+	 * in the launcher's place moved aside first), an update's target for an omp Bun manages.
+	 */
 	| "bun-global"
 	/** agent-desktop's release archive (GitHub), verified against its published checksums, into `<tools>/agent-desktop`. */
 	| "agent-desktop-archive"
+	/**
+	 * `<npm> install -g --prefix <prefix> @oh-my-pi/pi-coding-agent@<version>`: an omp npm owns, at one exact version
+	 * (the tested omp for setup's own install, an update's target for an update).
+	 */
+	| "npm-global"
+	/** Stock `omp update`, which picks its own version: the last resort, for an omp neither Bun nor npm owns. */
 	| "omp-update"
 	| "portable-git"
 	| "xcode-select"

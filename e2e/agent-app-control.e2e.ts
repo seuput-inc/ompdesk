@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
-import { AGENT_POWERS_MIGRATION_PREF, AGENT_POWERS_MIGRATION_VERSION } from "../src/main/agent-power-migration";
+import { AGENT_POWERS_MIGRATION_PREF, AGENT_POWERS_MIGRATION_VERSION } from "../src/shared/agent-control";
 import { exitApp, launchApp, readRecords } from "./harness";
 
 // `ompdesk_app_list` / `ompdesk_app` (src/main/agent-control/app-*.ts): the main agent changes OMPdesk itself.
@@ -102,10 +102,10 @@ test("the agent lists actions, changes the theme with a toast and undo, opens th
 	await expect.poll(themeName).toBe("dark");
 
 	const [changed] = await Promise.all([
-		app_("settings.theme", { value: "nord" }),
+		app_("settings.theme", { value: "github-dark" }),
 		(async () => {
-			await expect.poll(themeName, { timeout: 90_000 }).toBe("nord");
-			expect(await storedPref("themeName")).toBe("nord");
+			await expect.poll(themeName, { timeout: 90_000 }).toBe("github-dark");
+			expect(await storedPref("themeName")).toBe("github-dark");
 			await page.getByRole("button", { name: "Undo" }).click();
 		})(),
 	]);

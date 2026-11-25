@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -9,7 +9,8 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { parseDocument } from "yaml";
 import type { RpcCommand, RpcResponse } from "../../../shared/rpc-types";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "../../bridge-client";
-import { OMP_COMMAND, INSTALLED_OMP as omp } from "../../test-bridge-probe";
+import { OMP_COMMAND, INSTALLED_OMP as omp, stockFixtureEnv } from "../../test-bridge-probe";
+import { writeFakeBin } from "../../test-fake-omp";
 import { StockRpc } from "../../test-stock-rpc";
 import type { LocalCommandContext } from "../types";
 import { handlers as workspace } from "../workspace";
@@ -61,14 +62,8 @@ describe.skipIf(!existsSync(omp))("installed stock worktree bridge", () => {
 			}),
 		);
 		const gh = `import { readFileSync } from 'node:fs';\nif (process.argv[2] === 'pr' && process.argv[3] === 'view') console.log(readFileSync(process.env.OMP_TEST_PR, 'utf8')); else { console.error('Unexpected gh invocation'); process.exit(1); }\n`;
-		if (process.platform === "win32") {
-			// The product starts only `gh.exe` on Windows (`resolveBin`), so the stand-in is compiled, as e2e's fake gh is.
-			const source = path.join(scratch, "fake-gh.ts");
-			await fs.writeFile(source, gh);
-			execFileSync("bun", ["build", "--compile", source, "--outfile", path.join(bin, "gh.exe")], {
-				stdio: "ignore",
-			});
-		} else await fs.writeFile(path.join(bin, "gh"), `#!/usr/bin/env bun\n${gh}`, { mode: 0o700 });
+		// The product starts only `gh.exe` on Windows (`resolveBin`), so the stand-in is compiled there.
+		await writeFakeBin(bin, "gh", gh);
 		const child = spawn(
 			OMP_COMMAND.file,
 			[
@@ -87,9 +82,7 @@ describe.skipIf(!existsSync(omp))("installed stock worktree bridge", () => {
 			{
 				cwd: repo,
 				env: {
-					...process.env,
-					PI_CODING_AGENT_DIR: agent,
-					PI_CONFIG_DIR: path.relative(os.homedir(), scratch),
+					...stockFixtureEnv(scratch),
 					OMP_GUI_BRIDGE: address,
 					OMP_WORKTREE_DIR: "",
 					OMP_TEST_PR: payload,
@@ -182,13 +175,24 @@ describe.skipIf(!existsSync(omp))("installed stock worktree bridge", () => {
 				cwd: string;
 			};
 			expect(await fs.realpath(moved.cwd)).toBe(relative);
+			await fs.writeFile(path.join(relative, "ordinary.txt"), "file");
+			for (const [input, reason] of [
+				["ordinary.txt", "Not a directory"],
+				["missing", "Directory does not exist"],
+				[path.join("ordinary.txt", "child"), "Directory does not exist"],
+			] as const) {
+				const target = await bridge.request<{ path: string }>("workspace.resolve_path", { path: input });
+				await expect(workspace.move_session({ type: "move_session", path: input }, ctx)).rejects.toEqual(
+					new Error(`${reason}: ${target.path}`),
+				);
+			}
 			const movedUrl = (await workspace.move_session(
 				{ type: "move_session", path: pathToFileURL(repo).href },
 				ctx,
 			)) as { cwd: string };
 			expect(await fs.realpath(movedUrl.cwd)).toBe(repo);
 			const movedHome = (await workspace.move_session({ type: "move_session", path: "~" }, ctx)) as { cwd: string };
-			expect(await fs.realpath(movedHome.cwd)).toBe(await fs.realpath(os.homedir()));
+			expect(await fs.realpath(movedHome.cwd)).toBe(scratch);
 		} finally {
 			bridge.close();
 			rpc.rejectAll("test teardown");

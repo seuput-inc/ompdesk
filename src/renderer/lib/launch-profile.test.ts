@@ -1,14 +1,14 @@
 /**
  * Contract tests for launch profiles (plan B3): the flag mapping, the
  * code-controlled-flag denylist (which guarantees a profile can never
- * override sidecar-owned argv like --session/--mode), prefs-JSON parsing,
- * and the effective-command-line preview shown in Settings.
+ * override sidecar-owned argv like --session/--mode), and the
+ * effective-command-line preview shown in Settings. Parsing stored profiles
+ * is the core's (`crates/core/src/prefs/launch_profile.rs`).
  */
 import { describe, expect, it } from "vitest";
 import {
 	DENYLISTED_FLAGS,
 	flagsToCommandLine,
-	parseLaunchProfile,
 	profileToFlags,
 	stripDenylistedFlags,
 } from "../../shared/launch-profile";
@@ -134,62 +134,6 @@ describe("denylist", () => {
 			"read",
 		]);
 		expect(stripDenylistedFlags(["--config", "--mode=text"])).toEqual(["--config", "--mode=text"]);
-	});
-
-	it("profileToFlags can never emit a denylisted flag, even from a crafted profile object", () => {
-		const crafted = {
-			"--session": "hijack",
-			session: "hijack",
-			mode: "text",
-			appendSystemPrompt: "hi",
-		};
-		const flags = profileToFlags(parseLaunchProfile(crafted));
-		expect(flags).toEqual(["--append-system-prompt", "hi"]);
-		for (const token of flags) {
-			expect(DENYLISTED_FLAGS).not.toContain(token);
-		}
-	});
-});
-
-describe("parseLaunchProfile", () => {
-	it("rejects non-objects", () => {
-		expect(parseLaunchProfile(null)).toEqual({});
-		expect(parseLaunchProfile(undefined)).toEqual({});
-		expect(parseLaunchProfile("nope")).toEqual({});
-		expect(parseLaunchProfile([1, 2])).toEqual({});
-	});
-
-	it("keeps valid fields and drops unknown keys", () => {
-		expect(
-			parseLaunchProfile({
-				systemPrompt: "s",
-				appendSystemPrompt: "a",
-				noRules: true,
-				addDirs: ["/a", 42, " "],
-				tools: ["read", null, "bash"],
-				noLsp: true,
-				planYolo: false,
-				profile: " p ",
-				sessionDir: "/s",
-				config: "/c.yml",
-				"--mode": "text",
-				extra: "unknown",
-			}),
-		).toEqual({
-			systemPrompt: "s",
-			appendSystemPrompt: "a",
-			noRules: true,
-			addDirs: ["/a"],
-			tools: ["read", "bash"],
-			noLsp: true,
-			profile: "p",
-			sessionDir: "/s",
-			config: "/c.yml",
-		});
-	});
-
-	it("normalizes an all-empty profile to the empty object (no profile)", () => {
-		expect(parseLaunchProfile({ systemPrompt: " ", addDirs: [], noRules: false })).toEqual({});
 	});
 });
 

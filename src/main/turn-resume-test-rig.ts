@@ -149,6 +149,7 @@ export class TurnResumeWorld {
 					this.#resuming = resuming;
 					this.trace.push(`resuming ${resuming}`);
 				},
+				setCutOff: () => undefined,
 				setScheduledRetry: (_tab, retry) => {
 					this.#scheduled = retry;
 					this.trace.push(retry ? `scheduled ${retry.attempt}` : "scheduled off");

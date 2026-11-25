@@ -1,0 +1,3202 @@
+{
+	"plans": [
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "bun-script",
+			"plan": {
+				"item": "bun",
+				"method": "bun-script",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+					],
+					"shell": false
+				},
+				"command": "curl -fsSL https://bun.sh/install | bash",
+				"location": "/home/u/.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "bun",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" upgrade",
+				"location": "/home/u/.bun/bin/bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "bun-global",
+			"plan": {
+				"item": "bun",
+				"method": "bun-global",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2",
+						"@oh-my-pi/pi-natives@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" install -g @oh-my-pi/pi-coding-agent@18.22.2 @oh-my-pi/pi-natives@18.22.2",
+				"location": "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "agent-desktop-archive",
+			"plan": null
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "npm-global",
+			"plan": {
+				"item": "bun",
+				"method": "npm-global",
+				"spawn": {
+					"file": "/usr/local/bin/npm",
+					"args": [
+						"install",
+						"-g",
+						"--prefix",
+						"/usr/local",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/usr/local/bin/npm\" install -g --prefix \"/usr/local\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "/usr/local/lib/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "omp-update",
+			"plan": {
+				"item": "bun",
+				"method": "omp-update",
+				"spawn": {
+					"file": "/home/u/.bun/bin/omp",
+					"args": [
+						"update"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/omp\" update",
+				"location": "/home/u/.bun/bin/omp",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "xcode-select",
+			"plan": {
+				"item": "bun",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "brew",
+			"plan": {
+				"item": "bun",
+				"method": "brew",
+				"spawn": {
+					"file": "/opt/homebrew/bin/brew",
+					"args": [
+						"install",
+						"node"
+					],
+					"shell": false
+				},
+				"command": "\"/opt/homebrew/bin/brew\" install node",
+				"location": "/opt/homebrew",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "winget",
+			"plan": null
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "archive",
+			"plan": {
+				"item": "bun",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/bun.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/bun.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/bun.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/bun.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/bun'\nmv \"$tmp/x\" '/data/tools/bun'\necho 'bun 1.2.0 is in /data/tools/bun'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/bun.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/bun.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/bun.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/bun.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/bun'\nmv \"$tmp/x\" '/data/tools/bun'\necho 'bun 1.2.0 is in /data/tools/bun'",
+				"location": "/data/tools/bun",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/bun.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "/data/tools/.downloads/bun.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "bun",
+			"method": "tailscale-zip",
+			"plan": {
+				"item": "bun",
+				"method": "tailscale-zip",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'",
+				"location": "/Applications/Tailscale.app",
+				"prompt": null,
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "/data/tools/.downloads/Tailscale-1.104.1-macos.zip"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "bun-script",
+			"plan": {
+				"item": "git",
+				"method": "bun-script",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+					],
+					"shell": false
+				},
+				"command": "curl -fsSL https://bun.sh/install | bash",
+				"location": "/home/u/.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "git",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" upgrade",
+				"location": "/home/u/.bun/bin/bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "bun-global",
+			"plan": {
+				"item": "git",
+				"method": "bun-global",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2",
+						"@oh-my-pi/pi-natives@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" install -g @oh-my-pi/pi-coding-agent@18.22.2 @oh-my-pi/pi-natives@18.22.2",
+				"location": "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "npm-global",
+			"plan": {
+				"item": "git",
+				"method": "npm-global",
+				"spawn": {
+					"file": "/usr/local/bin/npm",
+					"args": [
+						"install",
+						"-g",
+						"--prefix",
+						"/usr/local",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/usr/local/bin/npm\" install -g --prefix \"/usr/local\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "/usr/local/lib/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "omp-update",
+			"plan": {
+				"item": "git",
+				"method": "omp-update",
+				"spawn": {
+					"file": "/home/u/.bun/bin/omp",
+					"args": [
+						"update"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/omp\" update",
+				"location": "/home/u/.bun/bin/omp",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "xcode-select",
+			"plan": {
+				"item": "git",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "brew",
+			"plan": {
+				"item": "git",
+				"method": "brew",
+				"spawn": {
+					"file": "/opt/homebrew/bin/brew",
+					"args": [
+						"install",
+						"node"
+					],
+					"shell": false
+				},
+				"command": "\"/opt/homebrew/bin/brew\" install node",
+				"location": "/opt/homebrew",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "archive",
+			"plan": {
+				"item": "git",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/git.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/git.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/git.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/git.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/git'\nmv \"$tmp/x\" '/data/tools/git'\necho 'git 1.2.0 is in /data/tools/git'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/git.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/git.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/git.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/git.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/git'\nmv \"$tmp/x\" '/data/tools/git'\necho 'git 1.2.0 is in /data/tools/git'",
+				"location": "/data/tools/git",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/git.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "/data/tools/.downloads/git.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "git",
+			"method": "tailscale-zip",
+			"plan": {
+				"item": "git",
+				"method": "tailscale-zip",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'",
+				"location": "/Applications/Tailscale.app",
+				"prompt": null,
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "/data/tools/.downloads/Tailscale-1.104.1-macos.zip"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "bun-script",
+			"plan": {
+				"item": "omp",
+				"method": "bun-script",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+					],
+					"shell": false
+				},
+				"command": "curl -fsSL https://bun.sh/install | bash",
+				"location": "/home/u/.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "omp",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" upgrade",
+				"location": "/home/u/.bun/bin/bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "bun-global",
+			"plan": {
+				"item": "omp",
+				"method": "bun-global",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2",
+						"@oh-my-pi/pi-natives@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" install -g @oh-my-pi/pi-coding-agent@18.22.2 @oh-my-pi/pi-natives@18.22.2",
+				"location": "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "npm-global",
+			"plan": {
+				"item": "omp",
+				"method": "npm-global",
+				"spawn": {
+					"file": "/usr/local/bin/npm",
+					"args": [
+						"install",
+						"-g",
+						"--prefix",
+						"/usr/local",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/usr/local/bin/npm\" install -g --prefix \"/usr/local\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "/usr/local/lib/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "omp-update",
+			"plan": {
+				"item": "omp",
+				"method": "omp-update",
+				"spawn": {
+					"file": "/home/u/.bun/bin/omp",
+					"args": [
+						"update"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/omp\" update",
+				"location": "/home/u/.bun/bin/omp",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "xcode-select",
+			"plan": {
+				"item": "omp",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "brew",
+			"plan": {
+				"item": "omp",
+				"method": "brew",
+				"spawn": {
+					"file": "/opt/homebrew/bin/brew",
+					"args": [
+						"install",
+						"node"
+					],
+					"shell": false
+				},
+				"command": "\"/opt/homebrew/bin/brew\" install node",
+				"location": "/opt/homebrew",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "archive",
+			"plan": {
+				"item": "omp",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/omp.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/omp.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/omp.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/omp.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/omp'\nmv \"$tmp/x\" '/data/tools/omp'\necho 'omp 1.2.0 is in /data/tools/omp'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/omp.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/omp.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/omp.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/omp.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/omp'\nmv \"$tmp/x\" '/data/tools/omp'\necho 'omp 1.2.0 is in /data/tools/omp'",
+				"location": "/data/tools/omp",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/omp.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "/data/tools/.downloads/omp.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "omp",
+			"method": "tailscale-zip",
+			"plan": {
+				"item": "omp",
+				"method": "tailscale-zip",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'",
+				"location": "/Applications/Tailscale.app",
+				"prompt": null,
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "/data/tools/.downloads/Tailscale-1.104.1-macos.zip"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "bun-script",
+			"plan": {
+				"item": "gh",
+				"method": "bun-script",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+					],
+					"shell": false
+				},
+				"command": "curl -fsSL https://bun.sh/install | bash",
+				"location": "/home/u/.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "gh",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" upgrade",
+				"location": "/home/u/.bun/bin/bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "bun-global",
+			"plan": {
+				"item": "gh",
+				"method": "bun-global",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2",
+						"@oh-my-pi/pi-natives@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" install -g @oh-my-pi/pi-coding-agent@18.22.2 @oh-my-pi/pi-natives@18.22.2",
+				"location": "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "npm-global",
+			"plan": {
+				"item": "gh",
+				"method": "npm-global",
+				"spawn": {
+					"file": "/usr/local/bin/npm",
+					"args": [
+						"install",
+						"-g",
+						"--prefix",
+						"/usr/local",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/usr/local/bin/npm\" install -g --prefix \"/usr/local\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "/usr/local/lib/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "omp-update",
+			"plan": {
+				"item": "gh",
+				"method": "omp-update",
+				"spawn": {
+					"file": "/home/u/.bun/bin/omp",
+					"args": [
+						"update"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/omp\" update",
+				"location": "/home/u/.bun/bin/omp",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "xcode-select",
+			"plan": {
+				"item": "gh",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "brew",
+			"plan": {
+				"item": "gh",
+				"method": "brew",
+				"spawn": {
+					"file": "/opt/homebrew/bin/brew",
+					"args": [
+						"install",
+						"gh"
+					],
+					"shell": false
+				},
+				"command": "\"/opt/homebrew/bin/brew\" install gh",
+				"location": "/opt/homebrew",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "archive",
+			"plan": {
+				"item": "gh",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/gh.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/gh.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/gh.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/gh.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/gh'\nmv \"$tmp/x\" '/data/tools/gh'\necho 'gh 1.2.0 is in /data/tools/gh'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/gh.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/gh.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/gh.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/gh.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/gh'\nmv \"$tmp/x\" '/data/tools/gh'\necho 'gh 1.2.0 is in /data/tools/gh'",
+				"location": "/data/tools/gh",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/gh.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "/data/tools/.downloads/gh.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "gh",
+			"method": "tailscale-zip",
+			"plan": {
+				"item": "gh",
+				"method": "tailscale-zip",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'",
+				"location": "/Applications/Tailscale.app",
+				"prompt": null,
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "/data/tools/.downloads/Tailscale-1.104.1-macos.zip"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "bun-script",
+			"plan": {
+				"item": "node",
+				"method": "bun-script",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+					],
+					"shell": false
+				},
+				"command": "curl -fsSL https://bun.sh/install | bash",
+				"location": "/home/u/.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "node",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" upgrade",
+				"location": "/home/u/.bun/bin/bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "bun-global",
+			"plan": {
+				"item": "node",
+				"method": "bun-global",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2",
+						"@oh-my-pi/pi-natives@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" install -g @oh-my-pi/pi-coding-agent@18.22.2 @oh-my-pi/pi-natives@18.22.2",
+				"location": "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "npm-global",
+			"plan": {
+				"item": "node",
+				"method": "npm-global",
+				"spawn": {
+					"file": "/usr/local/bin/npm",
+					"args": [
+						"install",
+						"-g",
+						"--prefix",
+						"/usr/local",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/usr/local/bin/npm\" install -g --prefix \"/usr/local\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "/usr/local/lib/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "omp-update",
+			"plan": {
+				"item": "node",
+				"method": "omp-update",
+				"spawn": {
+					"file": "/home/u/.bun/bin/omp",
+					"args": [
+						"update"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/omp\" update",
+				"location": "/home/u/.bun/bin/omp",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "xcode-select",
+			"plan": {
+				"item": "node",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "brew",
+			"plan": {
+				"item": "node",
+				"method": "brew",
+				"spawn": {
+					"file": "/opt/homebrew/bin/brew",
+					"args": [
+						"install",
+						"node"
+					],
+					"shell": false
+				},
+				"command": "\"/opt/homebrew/bin/brew\" install node",
+				"location": "/opt/homebrew",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "archive",
+			"plan": {
+				"item": "node",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/node.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/node.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/node.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\ntar -xzf '/data/tools/.downloads/node.tgz' -C \"$tmp/x\" --strip-components 1\nmkdir -p '/data/tools'\nrm -rf '/data/tools/node'\nmv \"$tmp/x\" '/data/tools/node'\necho 'node 1.2.0 is in /data/tools/node'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/node.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/node.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/node.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\ntar -xzf '/data/tools/.downloads/node.tgz' -C \"$tmp/x\" --strip-components 1\nmkdir -p '/data/tools'\nrm -rf '/data/tools/node'\nmv \"$tmp/x\" '/data/tools/node'\necho 'node 1.2.0 is in /data/tools/node'",
+				"location": "/data/tools/node",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/node.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "/data/tools/.downloads/node.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "node",
+			"method": "tailscale-zip",
+			"plan": {
+				"item": "node",
+				"method": "tailscale-zip",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'",
+				"location": "/Applications/Tailscale.app",
+				"prompt": null,
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "/data/tools/.downloads/Tailscale-1.104.1-macos.zip"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "bun-script",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "bun-script",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+					],
+					"shell": false
+				},
+				"command": "curl -fsSL https://bun.sh/install | bash",
+				"location": "/home/u/.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" upgrade",
+				"location": "/home/u/.bun/bin/bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "bun-global",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "bun-global",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2",
+						"@oh-my-pi/pi-natives@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" install -g @oh-my-pi/pi-coding-agent@18.22.2 @oh-my-pi/pi-natives@18.22.2",
+				"location": "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "agent-desktop-archive",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "agent-desktop-archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/ad-mac.tar.gz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/ad-mac.tar.gz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/ad-mac.tar.gz' | shasum -a 256 -c -\nlisting=\"$(tar -tzf '/data/tools/.downloads/ad-mac.tar.gz' | LC_ALL=C sort | paste -sd' ' -)\"\n[ \"$listing\" = 'agent-desktop agent-desktop-macos-helper' ] || { echo \"Unexpected archive contents: $listing\"; exit 1; }\nmkdir -p '/data/tools'\ntmp=\"$(mktemp -d '/data/tools/.agent-desktop.'XXXXXX)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir \"$tmp/new\"\ntar -xzf '/data/tools/.downloads/ad-mac.tar.gz' -C \"$tmp/new\"\nfor name in agent-desktop agent-desktop-macos-helper; do\n\tif [ ! -f \"$tmp/new/$name\" ] || [ -L \"$tmp/new/$name\" ]; then echo \"$name is not a regular file\"; exit 1; fi\n\tchmod 755 \"$tmp/new/$name\"\ndone\nchmod 755 \"$tmp/new\"\nwant='agent-desktop 1.2.0'\n[ \"$(\"$tmp/new/agent-desktop\" --version)\" = \"$want\" ] || { echo \"The downloaded agent-desktop does not print $want\"; exit 1; }\ndest='/data/tools/agent-desktop'\nif [ -e \"$dest\" ]; then mv \"$dest\" \"$tmp/old\"; fi\nmv \"$tmp/new\" \"$dest\" || { [ ! -e \"$tmp/old\" ] || mv \"$tmp/old\" \"$dest\"; exit 1; }\nif [ \"$(\"$dest/agent-desktop\" --version)\" != \"$want\" ]; then\n\trm -rf \"$dest\"\n\t[ ! -e \"$tmp/old\" ] || mv \"$tmp/old\" \"$dest\"\n\techo \"agent-desktop in $dest does not print $want\"\n\texit 1\nfi\necho \"$want is in $dest\""
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/ad-mac.tar.gz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/ad-mac.tar.gz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/ad-mac.tar.gz' | shasum -a 256 -c -\nlisting=\"$(tar -tzf '/data/tools/.downloads/ad-mac.tar.gz' | LC_ALL=C sort | paste -sd' ' -)\"\n[ \"$listing\" = 'agent-desktop agent-desktop-macos-helper' ] || { echo \"Unexpected archive contents: $listing\"; exit 1; }\nmkdir -p '/data/tools'\ntmp=\"$(mktemp -d '/data/tools/.agent-desktop.'XXXXXX)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir \"$tmp/new\"\ntar -xzf '/data/tools/.downloads/ad-mac.tar.gz' -C \"$tmp/new\"\nfor name in agent-desktop agent-desktop-macos-helper; do\n\tif [ ! -f \"$tmp/new/$name\" ] || [ -L \"$tmp/new/$name\" ]; then echo \"$name is not a regular file\"; exit 1; fi\n\tchmod 755 \"$tmp/new/$name\"\ndone\nchmod 755 \"$tmp/new\"\nwant='agent-desktop 1.2.0'\n[ \"$(\"$tmp/new/agent-desktop\" --version)\" = \"$want\" ] || { echo \"The downloaded agent-desktop does not print $want\"; exit 1; }\ndest='/data/tools/agent-desktop'\nif [ -e \"$dest\" ]; then mv \"$dest\" \"$tmp/old\"; fi\nmv \"$tmp/new\" \"$dest\" || { [ ! -e \"$tmp/old\" ] || mv \"$tmp/old\" \"$dest\"; exit 1; }\nif [ \"$(\"$dest/agent-desktop\" --version)\" != \"$want\" ]; then\n\trm -rf \"$dest\"\n\t[ ! -e \"$tmp/old\" ] || mv \"$tmp/old\" \"$dest\"\n\techo \"agent-desktop in $dest does not print $want\"\n\texit 1\nfi\necho \"$want is in $dest\"",
+				"location": "/data/tools/agent-desktop",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/ad-mac.tar.gz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "/data/tools/.downloads/ad-mac.tar.gz"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "npm-global",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "npm-global",
+				"spawn": {
+					"file": "/usr/local/bin/npm",
+					"args": [
+						"install",
+						"-g",
+						"--prefix",
+						"/usr/local",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/usr/local/bin/npm\" install -g --prefix \"/usr/local\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "/usr/local/lib/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "omp-update",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "omp-update",
+				"spawn": {
+					"file": "/home/u/.bun/bin/omp",
+					"args": [
+						"update"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/omp\" update",
+				"location": "/home/u/.bun/bin/omp",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "xcode-select",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "brew",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "brew",
+				"spawn": {
+					"file": "/opt/homebrew/bin/brew",
+					"args": [
+						"install",
+						"node"
+					],
+					"shell": false
+				},
+				"command": "\"/opt/homebrew/bin/brew\" install node",
+				"location": "/opt/homebrew",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "agent-desktop",
+			"method": "tailscale-zip",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "tailscale-zip",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'",
+				"location": "/Applications/Tailscale.app",
+				"prompt": null,
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "/data/tools/.downloads/Tailscale-1.104.1-macos.zip"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "bun-script",
+			"plan": {
+				"item": "tailscale",
+				"method": "bun-script",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"set -o pipefail; curl -fsSL https://bun.sh/install | bash"
+					],
+					"shell": false
+				},
+				"command": "curl -fsSL https://bun.sh/install | bash",
+				"location": "/home/u/.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "tailscale",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" upgrade",
+				"location": "/home/u/.bun/bin/bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "bun-global",
+			"plan": {
+				"item": "tailscale",
+				"method": "bun-global",
+				"spawn": {
+					"file": "/home/u/.bun/bin/bun",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2",
+						"@oh-my-pi/pi-natives@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/bun\" install -g @oh-my-pi/pi-coding-agent@18.22.2 @oh-my-pi/pi-natives@18.22.2",
+				"location": "/home/u/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "npm-global",
+			"plan": {
+				"item": "tailscale",
+				"method": "npm-global",
+				"spawn": {
+					"file": "/usr/local/bin/npm",
+					"args": [
+						"install",
+						"-g",
+						"--prefix",
+						"/usr/local",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"/usr/local/bin/npm\" install -g --prefix \"/usr/local\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "/usr/local/lib/node_modules/@oh-my-pi/pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "omp-update",
+			"plan": {
+				"item": "tailscale",
+				"method": "omp-update",
+				"spawn": {
+					"file": "/home/u/.bun/bin/omp",
+					"args": [
+						"update"
+					],
+					"shell": false
+				},
+				"command": "\"/home/u/.bun/bin/omp\" update",
+				"location": "/home/u/.bun/bin/omp",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "xcode-select",
+			"plan": {
+				"item": "tailscale",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "brew",
+			"plan": {
+				"item": "tailscale",
+				"method": "brew",
+				"spawn": {
+					"file": "/opt/homebrew/bin/brew",
+					"args": [
+						"install",
+						"node"
+					],
+					"shell": false
+				},
+				"command": "\"/opt/homebrew/bin/brew\" install node",
+				"location": "/opt/homebrew",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "archive",
+			"plan": {
+				"item": "tailscale",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/tailscale.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/tailscale.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/tailscale.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/tailscale.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/tailscale'\nmv \"$tmp/x\" '/data/tools/tailscale'\necho 'tailscale 1.2.0 is in /data/tools/tailscale'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/tailscale.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to /data/tools/.downloads/tailscale.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /data/tools/.downloads/tailscale.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k '/data/tools/.downloads/tailscale.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p '/data/tools'\nrm -rf '/data/tools/tailscale'\nmv \"$tmp/x\" '/data/tools/tailscale'\necho 'tailscale 1.2.0 is in /data/tools/tailscale'",
+				"location": "/data/tools/tailscale",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/tailscale.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "/data/tools/.downloads/tailscale.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "mac",
+			"item": "tailscale",
+			"method": "tailscale-zip",
+			"plan": {
+				"item": "tailscale",
+				"method": "tailscale-zip",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to /data/tools/.downloads/Tailscale-1.104.1-macos.zip\nset -euo pipefail\necho 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  /data/tools/.downloads/Tailscale-1.104.1-macos.zip' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nditto -x -k '/data/tools/.downloads/Tailscale-1.104.1-macos.zip' \"$tmp\"\napp=\"$tmp/Tailscale.app\"\ntest -d \"$app\" || { echo \"Tailscale.app is missing from the download\"; exit 1; }\ncodesign --verify --deep --strict \"$app\"\nid=\"$(/usr/libexec/PlistBuddy -c \"Print :CFBundleIdentifier\" \"$app/Contents/Info.plist\")\"\ncase \"$id\" in io.tailscale.ipn.macsys|io.tailscale.ipn.macos) ;; *) echo \"Unexpected bundle id $id\"; exit 1;; esac\nteam=\"$(codesign -dv \"$app\" 2>&1 | sed -n 's/^TeamIdentifier=//p')\"\n[ \"$team\" = W5364U7YZB ] || { echo \"Unexpected signing team $team\"; exit 1; }\nrm -rf '/Applications/Tailscale.app'\nditto \"$app\" '/Applications/Tailscale.app'\necho 'Tailscale 1.104.1 is in /Applications/Tailscale.app'",
+				"location": "/Applications/Tailscale.app",
+				"prompt": null,
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/Tailscale-1.104.1-macos.zip",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "/data/tools/.downloads/Tailscale-1.104.1-macos.zip"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "bun-script",
+			"plan": {
+				"item": "bun",
+				"method": "bun-script",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "$ErrorActionPreference = 'Stop'\n$exe = Join-Path 'C:\\Users\\O''Brien Last\\.bun' 'bin\\bun.exe'\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\ttry { Move-Item -LiteralPath $exe -Destination $aside } catch { $aside = $null; Write-Output ('Could not move the old bun.exe aside: ' + $_) }\n}\n$failure = $null\ntry { Invoke-RestMethod -Uri 'https://bun.sh/install.ps1' | Invoke-Expression } catch { $failure = $_ }\n$version = $null\nif (Test-Path -LiteralPath $exe) { $version = & $exe --version; if ($LASTEXITCODE -ne 0) { $version = $null } }\nif (-not $version) {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tif ($failure) { Write-Output $failure }\n\tthrow 'Bun was not installed: bun.exe does not answer --version'\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nWrite-Output ('Bun ' + $version + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "bun",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" upgrade",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "bun-global",
+			"plan": {
+				"item": "bun",
+				"method": "bun-global",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" install -g @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "agent-desktop-archive",
+			"plan": null
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "npm-global",
+			"plan": {
+				"item": "bun",
+				"method": "npm-global",
+				"spawn": {
+					"file": "\"C:\\Program Files\\nodejs\\npm.cmd\"",
+					"args": [
+						"\"install\"",
+						"\"-g\"",
+						"\"--prefix\"",
+						"\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\"",
+						"\"@oh-my-pi/pi-coding-agent@18.22.2\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Program Files\\nodejs\\npm.cmd\" install -g --prefix \"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "omp-update",
+			"plan": {
+				"item": "bun",
+				"method": "omp-update",
+				"spawn": {
+					"file": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\"",
+					"args": [
+						"\"update\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\" update",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "portable-git",
+			"plan": {
+				"item": "bun",
+				"method": "portable-git",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe (SHA-256 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b') { throw ('SHA-256 mismatch: expected 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\n$proc = Start-Process -FilePath $file -ArgumentList @('-y', ('-o\"' + $part + '\"')) -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('PortableGit extraction exited with ' + $proc.ExitCode) }\nif (-not (Test-Path -LiteralPath (Join-Path $part 'bin\\bash.exe'))) { throw 'bash.exe is missing after extraction' }\nif (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }\nMove-Item -LiteralPath $part -Destination $dest\nWrite-Output ('Git for Windows ' + '2.56.0.2' + ' is in ' + $dest)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+					"sha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "xcode-select",
+			"plan": {
+				"item": "bun",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "brew",
+			"plan": null
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "winget",
+			"plan": null
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "archive",
+			"plan": {
+				"item": "bun",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/bun.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\bun.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\bun.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\bun.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\bun'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\bun'\necho 'bun 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\bun'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/bun.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\bun.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\bun.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\bun.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\bun'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\bun'\necho 'bun 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\bun'",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\bun",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/bun.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\bun.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "tailscale-zip",
+			"plan": null
+		},
+		{
+			"ctx": "win",
+			"item": "bun",
+			"method": "tailscale-msi",
+			"plan": {
+				"item": "bun",
+				"method": "tailscale-msi",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi\n$ErrorActionPreference = 'Stop'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') { throw ('SHA-256 mismatch: expected bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$sig = Get-AuthenticodeSignature -LiteralPath $file\nif ($sig.Status -ne 'Valid') { throw ('Signature is ' + $sig.Status) }\nif ($sig.SignerCertificate.Subject -notlike '*CN=Tailscale Inc.*') { throw ('Signed by ' + $sig.SignerCertificate.Subject) }\nWrite-Output 'Signature verified'\n$proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + $file + '\"'), '/qn') -Verb RunAs -Wait -PassThru\nif ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw ('msiexec exited with ' + $proc.ExitCode) }\nWrite-Output 'Tailscale is installed'",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "bun-script",
+			"plan": {
+				"item": "git",
+				"method": "bun-script",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "$ErrorActionPreference = 'Stop'\n$exe = Join-Path 'C:\\Users\\O''Brien Last\\.bun' 'bin\\bun.exe'\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\ttry { Move-Item -LiteralPath $exe -Destination $aside } catch { $aside = $null; Write-Output ('Could not move the old bun.exe aside: ' + $_) }\n}\n$failure = $null\ntry { Invoke-RestMethod -Uri 'https://bun.sh/install.ps1' | Invoke-Expression } catch { $failure = $_ }\n$version = $null\nif (Test-Path -LiteralPath $exe) { $version = & $exe --version; if ($LASTEXITCODE -ne 0) { $version = $null } }\nif (-not $version) {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tif ($failure) { Write-Output $failure }\n\tthrow 'Bun was not installed: bun.exe does not answer --version'\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nWrite-Output ('Bun ' + $version + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "git",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" upgrade",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "bun-global",
+			"plan": {
+				"item": "git",
+				"method": "bun-global",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" install -g @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "npm-global",
+			"plan": {
+				"item": "git",
+				"method": "npm-global",
+				"spawn": {
+					"file": "\"C:\\Program Files\\nodejs\\npm.cmd\"",
+					"args": [
+						"\"install\"",
+						"\"-g\"",
+						"\"--prefix\"",
+						"\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\"",
+						"\"@oh-my-pi/pi-coding-agent@18.22.2\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Program Files\\nodejs\\npm.cmd\" install -g --prefix \"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "omp-update",
+			"plan": {
+				"item": "git",
+				"method": "omp-update",
+				"spawn": {
+					"file": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\"",
+					"args": [
+						"\"update\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\" update",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "portable-git",
+			"plan": {
+				"item": "git",
+				"method": "portable-git",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe (SHA-256 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b') { throw ('SHA-256 mismatch: expected 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\n$proc = Start-Process -FilePath $file -ArgumentList @('-y', ('-o\"' + $part + '\"')) -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('PortableGit extraction exited with ' + $proc.ExitCode) }\nif (-not (Test-Path -LiteralPath (Join-Path $part 'bin\\bash.exe'))) { throw 'bash.exe is missing after extraction' }\nif (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }\nMove-Item -LiteralPath $part -Destination $dest\nWrite-Output ('Git for Windows ' + '2.56.0.2' + ' is in ' + $dest)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+					"sha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "xcode-select",
+			"plan": {
+				"item": "git",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "winget",
+			"plan": {
+				"item": "git",
+				"method": "winget",
+				"spawn": {
+					"file": "C:\\winget.exe",
+					"args": [
+						"install",
+						"--id",
+						"Git.Git",
+						"-e",
+						"--accept-source-agreements",
+						"--accept-package-agreements"
+					],
+					"shell": false
+				},
+				"command": "winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements",
+				"location": "C:\\Program Files",
+				"prompt": "uac",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "archive",
+			"plan": {
+				"item": "git",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/git.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\git.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\git.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\git.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\necho 'git 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/git.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\git.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\git.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\git.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\necho 'git 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/git.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\git.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "git",
+			"method": "tailscale-msi",
+			"plan": {
+				"item": "git",
+				"method": "tailscale-msi",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi\n$ErrorActionPreference = 'Stop'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') { throw ('SHA-256 mismatch: expected bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$sig = Get-AuthenticodeSignature -LiteralPath $file\nif ($sig.Status -ne 'Valid') { throw ('Signature is ' + $sig.Status) }\nif ($sig.SignerCertificate.Subject -notlike '*CN=Tailscale Inc.*') { throw ('Signed by ' + $sig.SignerCertificate.Subject) }\nWrite-Output 'Signature verified'\n$proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + $file + '\"'), '/qn') -Verb RunAs -Wait -PassThru\nif ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw ('msiexec exited with ' + $proc.ExitCode) }\nWrite-Output 'Tailscale is installed'",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "bun-script",
+			"plan": {
+				"item": "omp",
+				"method": "bun-script",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "$ErrorActionPreference = 'Stop'\n$exe = Join-Path 'C:\\Users\\O''Brien Last\\.bun' 'bin\\bun.exe'\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\ttry { Move-Item -LiteralPath $exe -Destination $aside } catch { $aside = $null; Write-Output ('Could not move the old bun.exe aside: ' + $_) }\n}\n$failure = $null\ntry { Invoke-RestMethod -Uri 'https://bun.sh/install.ps1' | Invoke-Expression } catch { $failure = $_ }\n$version = $null\nif (Test-Path -LiteralPath $exe) { $version = & $exe --version; if ($LASTEXITCODE -ne 0) { $version = $null } }\nif (-not $version) {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tif ($failure) { Write-Output $failure }\n\tthrow 'Bun was not installed: bun.exe does not answer --version'\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nWrite-Output ('Bun ' + $version + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "omp",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" upgrade",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "bun-global",
+			"plan": {
+				"item": "omp",
+				"method": "bun-global",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" install -g @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "npm-global",
+			"plan": {
+				"item": "omp",
+				"method": "npm-global",
+				"spawn": {
+					"file": "\"C:\\Program Files\\nodejs\\npm.cmd\"",
+					"args": [
+						"\"install\"",
+						"\"-g\"",
+						"\"--prefix\"",
+						"\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\"",
+						"\"@oh-my-pi/pi-coding-agent@18.22.2\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Program Files\\nodejs\\npm.cmd\" install -g --prefix \"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "omp-update",
+			"plan": {
+				"item": "omp",
+				"method": "omp-update",
+				"spawn": {
+					"file": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\"",
+					"args": [
+						"\"update\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\" update",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "portable-git",
+			"plan": {
+				"item": "omp",
+				"method": "portable-git",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe (SHA-256 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b') { throw ('SHA-256 mismatch: expected 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\n$proc = Start-Process -FilePath $file -ArgumentList @('-y', ('-o\"' + $part + '\"')) -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('PortableGit extraction exited with ' + $proc.ExitCode) }\nif (-not (Test-Path -LiteralPath (Join-Path $part 'bin\\bash.exe'))) { throw 'bash.exe is missing after extraction' }\nif (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }\nMove-Item -LiteralPath $part -Destination $dest\nWrite-Output ('Git for Windows ' + '2.56.0.2' + ' is in ' + $dest)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+					"sha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "xcode-select",
+			"plan": {
+				"item": "omp",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "archive",
+			"plan": {
+				"item": "omp",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/omp.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\omp.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\omp.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\omp.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\omp'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\omp'\necho 'omp 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\omp'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/omp.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\omp.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\omp.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\omp.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\omp'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\omp'\necho 'omp 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\omp'",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\omp",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/omp.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\omp.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "omp",
+			"method": "tailscale-msi",
+			"plan": {
+				"item": "omp",
+				"method": "tailscale-msi",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi\n$ErrorActionPreference = 'Stop'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') { throw ('SHA-256 mismatch: expected bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$sig = Get-AuthenticodeSignature -LiteralPath $file\nif ($sig.Status -ne 'Valid') { throw ('Signature is ' + $sig.Status) }\nif ($sig.SignerCertificate.Subject -notlike '*CN=Tailscale Inc.*') { throw ('Signed by ' + $sig.SignerCertificate.Subject) }\nWrite-Output 'Signature verified'\n$proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + $file + '\"'), '/qn') -Verb RunAs -Wait -PassThru\nif ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw ('msiexec exited with ' + $proc.ExitCode) }\nWrite-Output 'Tailscale is installed'",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "bun-script",
+			"plan": {
+				"item": "gh",
+				"method": "bun-script",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "$ErrorActionPreference = 'Stop'\n$exe = Join-Path 'C:\\Users\\O''Brien Last\\.bun' 'bin\\bun.exe'\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\ttry { Move-Item -LiteralPath $exe -Destination $aside } catch { $aside = $null; Write-Output ('Could not move the old bun.exe aside: ' + $_) }\n}\n$failure = $null\ntry { Invoke-RestMethod -Uri 'https://bun.sh/install.ps1' | Invoke-Expression } catch { $failure = $_ }\n$version = $null\nif (Test-Path -LiteralPath $exe) { $version = & $exe --version; if ($LASTEXITCODE -ne 0) { $version = $null } }\nif (-not $version) {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tif ($failure) { Write-Output $failure }\n\tthrow 'Bun was not installed: bun.exe does not answer --version'\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nWrite-Output ('Bun ' + $version + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "gh",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" upgrade",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "bun-global",
+			"plan": {
+				"item": "gh",
+				"method": "bun-global",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" install -g @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "npm-global",
+			"plan": {
+				"item": "gh",
+				"method": "npm-global",
+				"spawn": {
+					"file": "\"C:\\Program Files\\nodejs\\npm.cmd\"",
+					"args": [
+						"\"install\"",
+						"\"-g\"",
+						"\"--prefix\"",
+						"\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\"",
+						"\"@oh-my-pi/pi-coding-agent@18.22.2\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Program Files\\nodejs\\npm.cmd\" install -g --prefix \"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "omp-update",
+			"plan": {
+				"item": "gh",
+				"method": "omp-update",
+				"spawn": {
+					"file": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\"",
+					"args": [
+						"\"update\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\" update",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "portable-git",
+			"plan": {
+				"item": "gh",
+				"method": "portable-git",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe (SHA-256 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b') { throw ('SHA-256 mismatch: expected 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\n$proc = Start-Process -FilePath $file -ArgumentList @('-y', ('-o\"' + $part + '\"')) -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('PortableGit extraction exited with ' + $proc.ExitCode) }\nif (-not (Test-Path -LiteralPath (Join-Path $part 'bin\\bash.exe'))) { throw 'bash.exe is missing after extraction' }\nif (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }\nMove-Item -LiteralPath $part -Destination $dest\nWrite-Output ('Git for Windows ' + '2.56.0.2' + ' is in ' + $dest)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+					"sha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "xcode-select",
+			"plan": {
+				"item": "gh",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "winget",
+			"plan": {
+				"item": "gh",
+				"method": "winget",
+				"spawn": {
+					"file": "C:\\winget.exe",
+					"args": [
+						"install",
+						"--id",
+						"GitHub.cli",
+						"-e",
+						"--accept-source-agreements",
+						"--accept-package-agreements"
+					],
+					"shell": false
+				},
+				"command": "winget install --id GitHub.cli -e --accept-source-agreements --accept-package-agreements",
+				"location": "C:\\Program Files",
+				"prompt": "uac",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "archive",
+			"plan": {
+				"item": "gh",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/gh.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\gh.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\gh.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\gh.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\gh'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\gh'\necho 'gh 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\gh'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/gh.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\gh.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\gh.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\gh.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\gh'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\gh'\necho 'gh 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\gh'",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\gh",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/gh.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\gh.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "gh",
+			"method": "tailscale-msi",
+			"plan": {
+				"item": "gh",
+				"method": "tailscale-msi",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi\n$ErrorActionPreference = 'Stop'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') { throw ('SHA-256 mismatch: expected bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$sig = Get-AuthenticodeSignature -LiteralPath $file\nif ($sig.Status -ne 'Valid') { throw ('Signature is ' + $sig.Status) }\nif ($sig.SignerCertificate.Subject -notlike '*CN=Tailscale Inc.*') { throw ('Signed by ' + $sig.SignerCertificate.Subject) }\nWrite-Output 'Signature verified'\n$proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + $file + '\"'), '/qn') -Verb RunAs -Wait -PassThru\nif ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw ('msiexec exited with ' + $proc.ExitCode) }\nWrite-Output 'Tailscale is installed'",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "bun-script",
+			"plan": {
+				"item": "node",
+				"method": "bun-script",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "$ErrorActionPreference = 'Stop'\n$exe = Join-Path 'C:\\Users\\O''Brien Last\\.bun' 'bin\\bun.exe'\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\ttry { Move-Item -LiteralPath $exe -Destination $aside } catch { $aside = $null; Write-Output ('Could not move the old bun.exe aside: ' + $_) }\n}\n$failure = $null\ntry { Invoke-RestMethod -Uri 'https://bun.sh/install.ps1' | Invoke-Expression } catch { $failure = $_ }\n$version = $null\nif (Test-Path -LiteralPath $exe) { $version = & $exe --version; if ($LASTEXITCODE -ne 0) { $version = $null } }\nif (-not $version) {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tif ($failure) { Write-Output $failure }\n\tthrow 'Bun was not installed: bun.exe does not answer --version'\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nWrite-Output ('Bun ' + $version + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "node",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" upgrade",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "bun-global",
+			"plan": {
+				"item": "node",
+				"method": "bun-global",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" install -g @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "npm-global",
+			"plan": {
+				"item": "node",
+				"method": "npm-global",
+				"spawn": {
+					"file": "\"C:\\Program Files\\nodejs\\npm.cmd\"",
+					"args": [
+						"\"install\"",
+						"\"-g\"",
+						"\"--prefix\"",
+						"\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\"",
+						"\"@oh-my-pi/pi-coding-agent@18.22.2\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Program Files\\nodejs\\npm.cmd\" install -g --prefix \"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "omp-update",
+			"plan": {
+				"item": "node",
+				"method": "omp-update",
+				"spawn": {
+					"file": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\"",
+					"args": [
+						"\"update\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\" update",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "portable-git",
+			"plan": {
+				"item": "node",
+				"method": "portable-git",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe (SHA-256 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b') { throw ('SHA-256 mismatch: expected 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\n$proc = Start-Process -FilePath $file -ArgumentList @('-y', ('-o\"' + $part + '\"')) -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('PortableGit extraction exited with ' + $proc.ExitCode) }\nif (-not (Test-Path -LiteralPath (Join-Path $part 'bin\\bash.exe'))) { throw 'bash.exe is missing after extraction' }\nif (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }\nMove-Item -LiteralPath $part -Destination $dest\nWrite-Output ('Git for Windows ' + '2.56.0.2' + ' is in ' + $dest)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+					"sha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "xcode-select",
+			"plan": {
+				"item": "node",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "winget",
+			"plan": {
+				"item": "node",
+				"method": "winget",
+				"spawn": {
+					"file": "C:\\winget.exe",
+					"args": [
+						"install",
+						"--id",
+						"OpenJS.NodeJS.LTS",
+						"-e",
+						"--accept-source-agreements",
+						"--accept-package-agreements"
+					],
+					"shell": false
+				},
+				"command": "winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements",
+				"location": "C:\\Program Files\\nodejs",
+				"prompt": "uac",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "archive",
+			"plan": {
+				"item": "node",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/node.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\node.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\node.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\ntar -xzf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\node.tgz' -C \"$tmp/x\" --strip-components 1\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\node'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\node'\necho 'node 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\node'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/node.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\node.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\node.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\ntar -xzf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\node.tgz' -C \"$tmp/x\" --strip-components 1\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\node'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\node'\necho 'node 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\node'",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\node",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/node.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\node.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "node",
+			"method": "tailscale-msi",
+			"plan": {
+				"item": "node",
+				"method": "tailscale-msi",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi\n$ErrorActionPreference = 'Stop'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') { throw ('SHA-256 mismatch: expected bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$sig = Get-AuthenticodeSignature -LiteralPath $file\nif ($sig.Status -ne 'Valid') { throw ('Signature is ' + $sig.Status) }\nif ($sig.SignerCertificate.Subject -notlike '*CN=Tailscale Inc.*') { throw ('Signed by ' + $sig.SignerCertificate.Subject) }\nWrite-Output 'Signature verified'\n$proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + $file + '\"'), '/qn') -Verb RunAs -Wait -PassThru\nif ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw ('msiexec exited with ' + $proc.ExitCode) }\nWrite-Output 'Tailscale is installed'",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "bun-script",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "bun-script",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "$ErrorActionPreference = 'Stop'\n$exe = Join-Path 'C:\\Users\\O''Brien Last\\.bun' 'bin\\bun.exe'\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\ttry { Move-Item -LiteralPath $exe -Destination $aside } catch { $aside = $null; Write-Output ('Could not move the old bun.exe aside: ' + $_) }\n}\n$failure = $null\ntry { Invoke-RestMethod -Uri 'https://bun.sh/install.ps1' | Invoke-Expression } catch { $failure = $_ }\n$version = $null\nif (Test-Path -LiteralPath $exe) { $version = & $exe --version; if ($LASTEXITCODE -ne 0) { $version = $null } }\nif (-not $version) {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tif ($failure) { Write-Output $failure }\n\tthrow 'Bun was not installed: bun.exe does not answer --version'\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nWrite-Output ('Bun ' + $version + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" upgrade",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "bun-global",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "bun-global",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" install -g @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "agent-desktop-archive",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "agent-desktop-archive",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/ad-win.tar.gz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\ad-win.tar.gz\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\agent-desktop'\n$exe = Join-Path $dest 'agent-desktop.exe'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\ad-win.tar.gz'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') { throw ('SHA-256 mismatch: expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$tar = Join-Path $env:SystemRoot 'System32\\tar.exe'\n$listing = (& $tar -tzf $file | Sort-Object) -join ' '\nif ($LASTEXITCODE -ne 0) { throw ('tar.exe could not list the archive (exit ' + $LASTEXITCODE + ')') }\nif ($listing -ne 'agent-desktop.exe') { throw ('Unexpected archive contents: ' + $listing) }\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\nNew-Item -ItemType Directory -Force -Path $part | Out-Null\n& $tar -xzf $file -C $part\nif ($LASTEXITCODE -ne 0) { throw ('tar.exe could not extract the archive (exit ' + $LASTEXITCODE + ')') }\n$new = Join-Path $part 'agent-desktop.exe'\nif (-not (Test-Path -LiteralPath $new -PathType Leaf)) { throw 'agent-desktop.exe is missing after extraction' }\nNew-Item -ItemType Directory -Force -Path $dest | Out-Null\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\tMove-Item -LiteralPath $exe -Destination $aside\n}\ntry { Move-Item -LiteralPath $new -Destination $exe } catch {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tthrow\n}\n$want = 'agent-desktop 1.2.0'\n$version = (& $exe --version | Out-String).Trim()\nif ($LASTEXITCODE -ne 0 -or $version -ne $want) {\n\tRemove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue\n\tif ($aside) { Move-Item -LiteralPath $aside -Destination $exe }\n\tthrow ('The downloaded agent-desktop.exe does not print ' + $want)\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nRemove-Item -Recurse -Force -LiteralPath $part -ErrorAction SilentlyContinue\nWrite-Output ($want + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\agent-desktop",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/ad-win.tar.gz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\ad-win.tar.gz"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "npm-global",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "npm-global",
+				"spawn": {
+					"file": "\"C:\\Program Files\\nodejs\\npm.cmd\"",
+					"args": [
+						"\"install\"",
+						"\"-g\"",
+						"\"--prefix\"",
+						"\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\"",
+						"\"@oh-my-pi/pi-coding-agent@18.22.2\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Program Files\\nodejs\\npm.cmd\" install -g --prefix \"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "omp-update",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "omp-update",
+				"spawn": {
+					"file": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\"",
+					"args": [
+						"\"update\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\" update",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "portable-git",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "portable-git",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe (SHA-256 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b') { throw ('SHA-256 mismatch: expected 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\n$proc = Start-Process -FilePath $file -ArgumentList @('-y', ('-o\"' + $part + '\"')) -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('PortableGit extraction exited with ' + $proc.ExitCode) }\nif (-not (Test-Path -LiteralPath (Join-Path $part 'bin\\bash.exe'))) { throw 'bash.exe is missing after extraction' }\nif (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }\nMove-Item -LiteralPath $part -Destination $dest\nWrite-Output ('Git for Windows ' + '2.56.0.2' + ' is in ' + $dest)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+					"sha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "xcode-select",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "agent-desktop",
+			"method": "tailscale-msi",
+			"plan": {
+				"item": "agent-desktop",
+				"method": "tailscale-msi",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi\n$ErrorActionPreference = 'Stop'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') { throw ('SHA-256 mismatch: expected bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$sig = Get-AuthenticodeSignature -LiteralPath $file\nif ($sig.Status -ne 'Valid') { throw ('Signature is ' + $sig.Status) }\nif ($sig.SignerCertificate.Subject -notlike '*CN=Tailscale Inc.*') { throw ('Signed by ' + $sig.SignerCertificate.Subject) }\nWrite-Output 'Signature verified'\n$proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + $file + '\"'), '/qn') -Verb RunAs -Wait -PassThru\nif ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw ('msiexec exited with ' + $proc.ExitCode) }\nWrite-Output 'Tailscale is installed'",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "bun-script",
+			"plan": {
+				"item": "tailscale",
+				"method": "bun-script",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "$ErrorActionPreference = 'Stop'\n$exe = Join-Path 'C:\\Users\\O''Brien Last\\.bun' 'bin\\bun.exe'\nGet-ChildItem -Path ($exe + '.ompdesk-*') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue\n$aside = $null\nif (Test-Path -LiteralPath $exe) {\n\t$aside = $exe + '.ompdesk-' + [DateTime]::UtcNow.Ticks\n\ttry { Move-Item -LiteralPath $exe -Destination $aside } catch { $aside = $null; Write-Output ('Could not move the old bun.exe aside: ' + $_) }\n}\n$failure = $null\ntry { Invoke-RestMethod -Uri 'https://bun.sh/install.ps1' | Invoke-Expression } catch { $failure = $_ }\n$version = $null\nif (Test-Path -LiteralPath $exe) { $version = & $exe --version; if ($LASTEXITCODE -ne 0) { $version = $null } }\nif (-not $version) {\n\tif ($aside -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $aside -Destination $exe }\n\tif ($failure) { Write-Output $failure }\n\tthrow 'Bun was not installed: bun.exe does not answer --version'\n}\nif ($aside) { Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue }\nWrite-Output ('Bun ' + $version + ' is in ' + $exe)",
+				"location": "C:\\Users\\O'Brien Last\\.bun",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "bun-upgrade",
+			"plan": {
+				"item": "tailscale",
+				"method": "bun-upgrade",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"upgrade"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" upgrade",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "bun-global",
+			"plan": {
+				"item": "tailscale",
+				"method": "bun-global",
+				"spawn": {
+					"file": "C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe",
+					"args": [
+						"install",
+						"-g",
+						"@oh-my-pi/pi-coding-agent@18.22.2"
+					],
+					"shell": false
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\.bun\\bin\\bun.exe\" install -g @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "npm-global",
+			"plan": {
+				"item": "tailscale",
+				"method": "npm-global",
+				"spawn": {
+					"file": "\"C:\\Program Files\\nodejs\\npm.cmd\"",
+					"args": [
+						"\"install\"",
+						"\"-g\"",
+						"\"--prefix\"",
+						"\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\"",
+						"\"@oh-my-pi/pi-coding-agent@18.22.2\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Program Files\\nodejs\\npm.cmd\" install -g --prefix \"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\" @oh-my-pi/pi-coding-agent@18.22.2",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\node_modules\\@oh-my-pi\\pi-coding-agent",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "omp-update",
+			"plan": {
+				"item": "tailscale",
+				"method": "omp-update",
+				"spawn": {
+					"file": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\"",
+					"args": [
+						"\"update\""
+					],
+					"shell": true
+				},
+				"command": "\"C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd\" update",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Roaming\\npm\\omp.cmd",
+				"prompt": null,
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "portable-git",
+			"plan": {
+				"item": "tailscale",
+				"method": "portable-git",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe (SHA-256 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe\n$ErrorActionPreference = 'Stop'\n$dest = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\git'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe'\n$part = $dest + '.partial'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b') { throw ('SHA-256 mismatch: expected 075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\nif (Test-Path -LiteralPath $part) { Remove-Item -Recurse -Force -LiteralPath $part }\n$proc = Start-Process -FilePath $file -ArgumentList @('-y', ('-o\"' + $part + '\"')) -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('PortableGit extraction exited with ' + $proc.ExitCode) }\nif (-not (Test-Path -LiteralPath (Join-Path $part 'bin\\bash.exe'))) { throw 'bash.exe is missing after extraction' }\nif (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }\nMove-Item -LiteralPath $part -Destination $dest\nWrite-Output ('Git for Windows ' + '2.56.0.2' + ' is in ' + $dest)",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\git",
+				"prompt": null,
+				"download": {
+					"url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+					"sha256": "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\PortableGit-2.56.0.2-64-bit.7z.exe"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "xcode-select",
+			"plan": {
+				"item": "tailscale",
+				"method": "xcode-select",
+				"spawn": {
+					"file": "/usr/bin/xcode-select",
+					"args": [
+						"--install"
+					],
+					"shell": false
+				},
+				"command": "xcode-select --install",
+				"location": "/Library/Developer/CommandLineTools",
+				"prompt": "dialog",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "winget",
+			"plan": {
+				"item": "tailscale",
+				"method": "winget",
+				"spawn": {
+					"file": "C:\\winget.exe",
+					"args": [
+						"install",
+						"--id",
+						"Tailscale.Tailscale",
+						"-e",
+						"--silent",
+						"--accept-package-agreements",
+						"--accept-source-agreements"
+					],
+					"shell": false
+				},
+				"command": "winget install --id Tailscale.Tailscale -e --silent --accept-package-agreements --accept-source-agreements",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": null
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "archive",
+			"plan": {
+				"item": "tailscale",
+				"method": "archive",
+				"spawn": {
+					"file": "/bin/bash",
+					"args": [
+						"-c",
+						"# OMPdesk downloaded https://example.test/tailscale.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\tailscale'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\tailscale'\necho 'tailscale 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\tailscale'"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://example.test/tailscale.tgz (SHA-256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale.tgz\nset -euo pipefail\necho 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale.tgz' | shasum -a 256 -c -\ntmp=\"$(mktemp -d)\"\ntrap 'rm -rf \"$tmp\"' EXIT\nmkdir -p \"$tmp/x\" \"$tmp/zip\"\nditto -x -k 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale.tgz' \"$tmp/zip\" && mv \"$tmp\"/zip/*/* \"$tmp/x/\"\nmkdir -p 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools'\nrm -rf 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\tailscale'\nmv \"$tmp/x\" 'C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\tailscale'\necho 'tailscale 1.2.0 is in C:\\Users\\O'\\''Brien Last\\AppData\\Local\\ompdesk\\tools\\tailscale'",
+				"location": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\tailscale",
+				"prompt": null,
+				"download": {
+					"url": "https://example.test/tailscale.tgz",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale.tgz"
+				}
+			}
+		},
+		{
+			"ctx": "win",
+			"item": "tailscale",
+			"method": "tailscale-msi",
+			"plan": {
+				"item": "tailscale",
+				"method": "tailscale-msi",
+				"spawn": {
+					"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+					"args": [
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-EncodedCommand",
+						"<command, UTF-16LE base64>"
+					],
+					"shell": false
+				},
+				"command": "# OMPdesk downloaded https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi (SHA-256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) to C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi\n$ErrorActionPreference = 'Stop'\n$file = 'C:\\Users\\O''Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi'\n$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()\nif ($hash -ne 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') { throw ('SHA-256 mismatch: expected bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, got ' + $hash) }\nWrite-Output 'SHA-256 verified'\n$sig = Get-AuthenticodeSignature -LiteralPath $file\nif ($sig.Status -ne 'Valid') { throw ('Signature is ' + $sig.Status) }\nif ($sig.SignerCertificate.Subject -notlike '*CN=Tailscale Inc.*') { throw ('Signed by ' + $sig.SignerCertificate.Subject) }\nWrite-Output 'Signature verified'\n$proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"' + $file + '\"'), '/qn') -Verb RunAs -Wait -PassThru\nif ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw ('msiexec exited with ' + $proc.ExitCode) }\nWrite-Output 'Tailscale is installed'",
+				"location": "C:\\Program Files\\Tailscale",
+				"prompt": "uac",
+				"download": {
+					"url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+					"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					"file": "C:\\Users\\O'Brien Last\\AppData\\Local\\ompdesk\\tools\\.downloads\\tailscale-setup-1.104.1-amd64.msi"
+				}
+			}
+		}
+	],
+	"manual": [
+		{
+			"platform": "darwin",
+			"item": "bun",
+			"steps": {
+				"commands": [],
+				"url": ""
+			}
+		},
+		{
+			"platform": "darwin",
+			"item": "git",
+			"steps": {
+				"commands": [
+					"xcode-select --install"
+				],
+				"url": "https://git-scm.com/downloads"
+			}
+		},
+		{
+			"platform": "darwin",
+			"item": "omp",
+			"steps": {
+				"commands": [],
+				"url": ""
+			}
+		},
+		{
+			"platform": "darwin",
+			"item": "gh",
+			"steps": {
+				"commands": [
+					"brew install gh"
+				],
+				"url": "https://cli.github.com/"
+			}
+		},
+		{
+			"platform": "darwin",
+			"item": "node",
+			"steps": {
+				"commands": [
+					"brew install node"
+				],
+				"url": "https://nodejs.org/en/download"
+			}
+		},
+		{
+			"platform": "darwin",
+			"item": "agent-desktop",
+			"steps": {
+				"commands": [],
+				"url": "https://github.com/vercel-labs/agent-desktop/releases"
+			}
+		},
+		{
+			"platform": "darwin",
+			"item": "tailscale",
+			"steps": {
+				"commands": [
+					"brew install --cask tailscale-app"
+				],
+				"url": "https://tailscale.com/download"
+			}
+		},
+		{
+			"platform": "win32",
+			"item": "bun",
+			"steps": {
+				"commands": [],
+				"url": ""
+			}
+		},
+		{
+			"platform": "win32",
+			"item": "git",
+			"steps": {
+				"commands": [
+					"winget install --id Git.Git -e"
+				],
+				"url": "https://git-scm.com/downloads"
+			}
+		},
+		{
+			"platform": "win32",
+			"item": "omp",
+			"steps": {
+				"commands": [],
+				"url": ""
+			}
+		},
+		{
+			"platform": "win32",
+			"item": "gh",
+			"steps": {
+				"commands": [
+					"winget install --id GitHub.cli -e"
+				],
+				"url": "https://cli.github.com/"
+			}
+		},
+		{
+			"platform": "win32",
+			"item": "node",
+			"steps": {
+				"commands": [
+					"winget install --id OpenJS.NodeJS.LTS -e"
+				],
+				"url": "https://nodejs.org/en/download"
+			}
+		},
+		{
+			"platform": "win32",
+			"item": "agent-desktop",
+			"steps": {
+				"commands": [],
+				"url": "https://github.com/vercel-labs/agent-desktop/releases"
+			}
+		},
+		{
+			"platform": "win32",
+			"item": "tailscale",
+			"steps": {
+				"commands": [
+					"winget install --id Tailscale.Tailscale -e"
+				],
+				"url": "https://tailscale.com/download"
+			}
+		}
+	],
+	"aslr": [
+		{
+			"action": "fix",
+			"spawn": {
+				"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+				"args": [
+					"-NoProfile",
+					"-NonInteractive",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-EncodedCommand",
+					"<outer, UTF-16LE base64>"
+				],
+				"shell": false
+			},
+			"outer": "$ErrorActionPreference = 'Stop'\n$proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', 'JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQAgAD0AIAAnAFMAdABvAHAAJwAKACQAaQBmAGUAbwAgAD0AIAAnAEgASwBMAE0AOgBcAFMATwBGAFQAVwBBAFIARQBcAE0AaQBjAHIAbwBzAG8AZgB0AFwAVwBpAG4AZABvAHcAcwAgAE4AVABcAEMAdQByAHIAZQBuAHQAVgBlAHIAcwBpAG8AbgBcAEkAbQBhAGcAZQAgAEYAaQBsAGUAIABFAHgAZQBjAHUAdABpAG8AbgAgAE8AcAB0AGkAbwBuAHMAJwAKAGYAdQBuAGMAdABpAG8AbgAgAEYAaQBuAGQALQBFAG4AdAByAHkAKABbAHMAdAByAGkAbgBnAF0AJABpAG0AYQBnAGUAKQAgAHsACgAJACQAawBlAHkAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAGkAZgBlAG8AIAAoAFsAUwB5AHMAdABlAG0ALgBJAE8ALgBQAGEAdABoAF0AOgA6AEcAZQB0AEYAaQBsAGUATgBhAG0AZQAoACQAaQBtAGEAZwBlACkAKQAKAAkAaQBmACAAKAAtAG4AbwB0ACAAKABUAGUAcwB0AC0AUABhAHQAaAAgAC0ATABpAHQAZQByAGEAbABQAGEAdABoACAAJABrAGUAeQApACkAIAB7ACAAcgBlAHQAdQByAG4AIAAkAG4AdQBsAGwAIAB9AAoACQBmAG8AcgBlAGEAYwBoACAAKAAkAHMAdQBiACAAaQBuACAAQAAoAEcAZQB0AC0AQwBoAGkAbABkAEkAdABlAG0AIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAawBlAHkAKQApACAAewAgAGkAZgAgACgAWwBzAHQAcgBpAG4AZwBdACQAcwB1AGIALgBHAGUAdABWAGEAbAB1AGUAKAAnAEYAaQBsAHQAZQByAEYAdQBsAGwAUABhAHQAaAAnACkAIAAtAGkAZQBxACAAJABpAG0AYQBnAGUAKQAgAHsAIAByAGUAdAB1AHIAbgAgACQAcwB1AGIAIAB9ACAAfQAKAAkAcgBlAHQAdQByAG4AIAAkAG4AdQBsAGwACgB9AAoAZgB1AG4AYwB0AGkAbwBuACAARwBlAHQALQBPAHAAdABpAG8AbgBzACgAJABlAG4AdAByAHkAKQAgAHsAIABpAGYAIAAoAC0AbgBvAHQAIAAkAGUAbgB0AHIAeQApACAAewAgAHIAZQB0AHUAcgBuACAAJABuAHUAbABsACAAfQA7ACAAJABvACAAPQAgACQAZQBuAHQAcgB5AC4ARwBlAHQAVgBhAGwAdQBlACgAJwBNAGkAdABpAGcAYQB0AGkAbwBuAE8AcAB0AGkAbwBuAHMAJwApADsAIABpAGYAIAAoACQAbwAgAC0AaQBzACAAWwBiAHkAdABlAFsAXQBdACAALQBhAG4AZAAgACQAbwAuAEwAZQBuAGcAdABoACAALQBnAGUAIAAyACkAIAB7ACAAcgBlAHQAdQByAG4AIAAkAG8AIAB9ADsAIAByAGUAdAB1AHIAbgAgACQAbgB1AGwAbAAgAH0ACgBmAHUAbgBjAHQAaQBvAG4AIABTAGUAdAAtAFIAZQBsAG8AYwBhAHQAZQAoACQAZQBuAHQAcgB5ACwAIABbAGIAeQB0AGUAWwBdAF0AJABvAHAAdABpAG8AbgBzACwAIABbAGkAbgB0AF0AJAB2AGEAbAB1AGUAKQAgAHsACgAJACQAbwBwAHQAaQBvAG4AcwBbADEAXQAgAD0AIABbAGIAeQB0AGUAXQAoACgAJABvAHAAdABpAG8AbgBzAFsAMQBdACAALQBiAGEAbgBkACAAMAB4AEYAMAApACAALQBiAG8AcgAgACgAJAB2AGEAbAB1AGUAIAAtAGIAYQBuAGQAIAAwAHgAMABGACkAKQAKAAkAWwBNAGkAYwByAG8AcwBvAGYAdAAuAFcAaQBuADMAMgAuAFIAZQBnAGkAcwB0AHIAeQBdADoAOgBTAGUAdABWAGEAbAB1AGUAKAAkAGUAbgB0AHIAeQAuAE4AYQBtAGUALAAgACcATQBpAHQAaQBnAGEAdABpAG8AbgBPAHAAdABpAG8AbgBzACcALAAgACQAbwBwAHQAaQBvAG4AcwAsACAAWwBNAGkAYwByAG8AcwBvAGYAdAAuAFcAaQBuADMAMgAuAFIAZQBnAGkAcwB0AHIAeQBWAGEAbAB1AGUASwBpAG4AZABdADoAOgBCAGkAbgBhAHIAeQApAAoAfQAKACQAZABvAG4AZQAgAD0AIABAACgAKQAKAEMAbwBuAHYAZQByAHQAVABvAC0ASgBzAG8AbgAgAC0ASQBuAHAAdQB0AE8AYgBqAGUAYwB0ACAAQAAoACQAZABvAG4AZQApACAALQBDAG8AbQBwAHIAZQBzAHMAIAB8ACAAUwBlAHQALQBDAG8AbgB0AGUAbgB0ACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAnAEMAOgBcAHUAXABvAHUAdAAuAGoAcwBvAG4AJwAgAC0ARQBuAGMAbwBkAGkAbgBnACAAVQBUAEYAOAAKACQAaQBtAGEAZwBlAHMAIAA9ACAAQAAoAEcAZQB0AC0AQwBoAGkAbABkAEkAdABlAG0AIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACcAQwA6AFwATwAnACcAQgByAGkAZQBuAFwARwBpAHQAXAB1AHMAcgAnACAALQBSAGUAYwB1AHIAcwBlACAALQBGAGkAbABlACAALQBGAGkAbAB0AGUAcgAgACoALgBlAHgAZQAgAHwAIABGAG8AcgBFAGEAYwBoAC0ATwBiAGoAZQBjAHQAIAB7ACAAJABfAC4ARgB1AGwAbABOAGEAbQBlACAAfQApAAoAZgBvAHIAZQBhAGMAaAAgACgAJABpAG0AYQBnAGUAIABpAG4AIAAkAGkAbQBhAGcAZQBzACkAIAB7AAoACQAkAGUAbgB0AHIAeQAgAD0AIABGAGkAbgBkAC0ARQBuAHQAcgB5ACAAJABpAG0AYQBnAGUACgAJACQAbwBwAHQAaQBvAG4AcwAgAD0AIABHAGUAdAAtAE8AcAB0AGkAbwBuAHMAIAAkAGUAbgB0AHIAeQAKAAkAJABwAHIAaQBvAHIAIAA9ACAAaQBmACAAKAAkAG8AcAB0AGkAbwBuAHMAKQAgAHsAIAAkAG8AcAB0AGkAbwBuAHMAWwAxAF0AIAAtAGIAYQBuAGQAIAAwAHgAMABGACAAfQAgAGUAbABzAGUAIAB7ACAAMAAgAH0ACgAJAGkAZgAgACgAJABwAHIAaQBvAHIAIAAtAGUAcQAgADIAKQAgAHsAIABjAG8AbgB0AGkAbgB1AGUAIAB9AAoACQBpAGYAIAAoAC0AbgBvAHQAIAAkAGUAbgB0AHIAeQApACAAewAKAAkACQAkAHAAYQByAGUAbgB0ACAAPQAgAEoAbwBpAG4ALQBQAGEAdABoACAAJABpAGYAZQBvACAAKABbAFMAeQBzAHQAZQBtAC4ASQBPAC4AUABhAHQAaABdADoAOgBHAGUAdABGAGkAbABlAE4AYQBtAGUAKAAkAGkAbQBhAGcAZQApACkACgAJAAkAaQBmACAAKAAtAG4AbwB0ACAAKABUAGUAcwB0AC0AUABhAHQAaAAgAC0ATABpAHQAZQByAGEAbABQAGEAdABoACAAJABwAGEAcgBlAG4AdAApACkAIAB7ACAAJABuAHUAbABsACAAPQAgAE4AZQB3AC0ASQB0AGUAbQAgAC0AUABhAHQAaAAgACQAcABhAHIAZQBuAHQAIAAtAEYAbwByAGMAZQAgAH0ACgAJAAkAUwBlAHQALQBJAHQAZQBtAFAAcgBvAHAAZQByAHQAeQAgAC0ATABpAHQAZQByAGEAbABQAGEAdABoACAAJABwAGEAcgBlAG4AdAAgAC0ATgBhAG0AZQAgAFUAcwBlAEYAaQBsAHQAZQByACAALQBWAGEAbAB1AGUAIAAxACAALQBUAHkAcABlACAARABXAG8AcgBkAAoACQAJACQAZQBuAHQAcgB5ACAAPQAgAE4AZQB3AC0ASQB0AGUAbQAgAC0AUABhAHQAaAAgACgASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHAAYQByAGUAbgB0ACAAKAAnAHsAJwAgACsAIABbAGcAdQBpAGQAXQA6ADoATgBlAHcARwB1AGkAZAAoACkAIAArACAAJwB9ACcAKQApAAoACQAJAFMAZQB0AC0ASQB0AGUAbQBQAHIAbwBwAGUAcgB0AHkAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAZQBuAHQAcgB5AC4AUABTAFAAYQB0AGgAIAAtAE4AYQBtAGUAIABGAGkAbAB0AGUAcgBGAHUAbABsAFAAYQB0AGgAIAAtAFYAYQBsAHUAZQAgACQAaQBtAGEAZwBlAAoACQB9AAoACQBpAGYAIAAoAC0AbgBvAHQAIAAkAG8AcAB0AGkAbwBuAHMAKQAgAHsAIAAkAG8AcAB0AGkAbwBuAHMAIAA9ACAATgBlAHcALQBPAGIAagBlAGMAdAAgAGIAeQB0AGUAWwBdACAAMgA0ACAAfQAKAAkAUwBlAHQALQBSAGUAbABvAGMAYQB0AGUAIAAkAGUAbgB0AHIAeQAgACQAbwBwAHQAaQBvAG4AcwAgADIACgAJACQAZABvAG4AZQAgACsAPQAgAFsAcABzAGMAdQBzAHQAbwBtAG8AYgBqAGUAYwB0AF0AQAB7ACAAcABhAHQAaAAgAD0AIAAkAGkAbQBhAGcAZQA7ACAAcAByAGkAbwByACAAPQAgACQAcAByAGkAbwByACAAfQAKAAkAQwBvAG4AdgBlAHIAdABUAG8ALQBKAHMAbwBuACAALQBJAG4AcAB1AHQATwBiAGoAZQBjAHQAIABAACgAJABkAG8AbgBlACkAIAAtAEMAbwBtAHAAcgBlAHMAcwAgAHwAIABTAGUAdAAtAEMAbwBuAHQAZQBuAHQAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACcAQwA6AFwAdQBcAG8AdQB0AC4AagBzAG8AbgAnACAALQBFAG4AYwBvAGQAaQBuAGcAIABVAFQARgA4AAoAfQA=') -Verb RunAs -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('The elevated step exited with ' + $proc.ExitCode) }",
+			"elevated": "$ErrorActionPreference = 'Stop'\n$ifeo = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options'\nfunction Find-Entry([string]$image) {\n\t$key = Join-Path $ifeo ([System.IO.Path]::GetFileName($image))\n\tif (-not (Test-Path -LiteralPath $key)) { return $null }\n\tforeach ($sub in @(Get-ChildItem -LiteralPath $key)) { if ([string]$sub.GetValue('FilterFullPath') -ieq $image) { return $sub } }\n\treturn $null\n}\nfunction Get-Options($entry) { if (-not $entry) { return $null }; $o = $entry.GetValue('MitigationOptions'); if ($o -is [byte[]] -and $o.Length -ge 2) { return $o }; return $null }\nfunction Set-Relocate($entry, [byte[]]$options, [int]$value) {\n\t$options[1] = [byte](($options[1] -band 0xF0) -bor ($value -band 0x0F))\n\t[Microsoft.Win32.Registry]::SetValue($entry.Name, 'MitigationOptions', $options, [Microsoft.Win32.RegistryValueKind]::Binary)\n}\n$done = @()\nConvertTo-Json -InputObject @($done) -Compress | Set-Content -LiteralPath 'C:\\u\\out.json' -Encoding UTF8\n$images = @(Get-ChildItem -LiteralPath 'C:\\O''Brien\\Git\\usr' -Recurse -File -Filter *.exe | ForEach-Object { $_.FullName })\nforeach ($image in $images) {\n\t$entry = Find-Entry $image\n\t$options = Get-Options $entry\n\t$prior = if ($options) { $options[1] -band 0x0F } else { 0 }\n\tif ($prior -eq 2) { continue }\n\tif (-not $entry) {\n\t\t$parent = Join-Path $ifeo ([System.IO.Path]::GetFileName($image))\n\t\tif (-not (Test-Path -LiteralPath $parent)) { $null = New-Item -Path $parent -Force }\n\t\tSet-ItemProperty -LiteralPath $parent -Name UseFilter -Value 1 -Type DWord\n\t\t$entry = New-Item -Path (Join-Path $parent ('{' + [guid]::NewGuid() + '}'))\n\t\tSet-ItemProperty -LiteralPath $entry.PSPath -Name FilterFullPath -Value $image\n\t}\n\tif (-not $options) { $options = New-Object byte[] 24 }\n\tSet-Relocate $entry $options 2\n\t$done += [pscustomobject]@{ path = $image; prior = $prior }\n\tConvertTo-Json -InputObject @($done) -Compress | Set-Content -LiteralPath 'C:\\u\\out.json' -Encoding UTF8\n}"
+		},
+		{
+			"action": "undo",
+			"spawn": {
+				"file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+				"args": [
+					"-NoProfile",
+					"-NonInteractive",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-EncodedCommand",
+					"<outer, UTF-16LE base64>"
+				],
+				"shell": false
+			},
+			"outer": "$ErrorActionPreference = 'Stop'\n$proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', 'JABFAHIAcgBvAHIAQQBjAHQAaQBvAG4AUAByAGUAZgBlAHIAZQBuAGMAZQAgAD0AIAAnAFMAdABvAHAAJwAKACQAaQBmAGUAbwAgAD0AIAAnAEgASwBMAE0AOgBcAFMATwBGAFQAVwBBAFIARQBcAE0AaQBjAHIAbwBzAG8AZgB0AFwAVwBpAG4AZABvAHcAcwAgAE4AVABcAEMAdQByAHIAZQBuAHQAVgBlAHIAcwBpAG8AbgBcAEkAbQBhAGcAZQAgAEYAaQBsAGUAIABFAHgAZQBjAHUAdABpAG8AbgAgAE8AcAB0AGkAbwBuAHMAJwAKAGYAdQBuAGMAdABpAG8AbgAgAEYAaQBuAGQALQBFAG4AdAByAHkAKABbAHMAdAByAGkAbgBnAF0AJABpAG0AYQBnAGUAKQAgAHsACgAJACQAawBlAHkAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAGkAZgBlAG8AIAAoAFsAUwB5AHMAdABlAG0ALgBJAE8ALgBQAGEAdABoAF0AOgA6AEcAZQB0AEYAaQBsAGUATgBhAG0AZQAoACQAaQBtAGEAZwBlACkAKQAKAAkAaQBmACAAKAAtAG4AbwB0ACAAKABUAGUAcwB0AC0AUABhAHQAaAAgAC0ATABpAHQAZQByAGEAbABQAGEAdABoACAAJABrAGUAeQApACkAIAB7ACAAcgBlAHQAdQByAG4AIAAkAG4AdQBsAGwAIAB9AAoACQBmAG8AcgBlAGEAYwBoACAAKAAkAHMAdQBiACAAaQBuACAAQAAoAEcAZQB0AC0AQwBoAGkAbABkAEkAdABlAG0AIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAawBlAHkAKQApACAAewAgAGkAZgAgACgAWwBzAHQAcgBpAG4AZwBdACQAcwB1AGIALgBHAGUAdABWAGEAbAB1AGUAKAAnAEYAaQBsAHQAZQByAEYAdQBsAGwAUABhAHQAaAAnACkAIAAtAGkAZQBxACAAJABpAG0AYQBnAGUAKQAgAHsAIAByAGUAdAB1AHIAbgAgACQAcwB1AGIAIAB9ACAAfQAKAAkAcgBlAHQAdQByAG4AIAAkAG4AdQBsAGwACgB9AAoAZgB1AG4AYwB0AGkAbwBuACAARwBlAHQALQBPAHAAdABpAG8AbgBzACgAJABlAG4AdAByAHkAKQAgAHsAIABpAGYAIAAoAC0AbgBvAHQAIAAkAGUAbgB0AHIAeQApACAAewAgAHIAZQB0AHUAcgBuACAAJABuAHUAbABsACAAfQA7ACAAJABvACAAPQAgACQAZQBuAHQAcgB5AC4ARwBlAHQAVgBhAGwAdQBlACgAJwBNAGkAdABpAGcAYQB0AGkAbwBuAE8AcAB0AGkAbwBuAHMAJwApADsAIABpAGYAIAAoACQAbwAgAC0AaQBzACAAWwBiAHkAdABlAFsAXQBdACAALQBhAG4AZAAgACQAbwAuAEwAZQBuAGcAdABoACAALQBnAGUAIAAyACkAIAB7ACAAcgBlAHQAdQByAG4AIAAkAG8AIAB9ADsAIAByAGUAdAB1AHIAbgAgACQAbgB1AGwAbAAgAH0ACgBmAHUAbgBjAHQAaQBvAG4AIABTAGUAdAAtAFIAZQBsAG8AYwBhAHQAZQAoACQAZQBuAHQAcgB5ACwAIABbAGIAeQB0AGUAWwBdAF0AJABvAHAAdABpAG8AbgBzACwAIABbAGkAbgB0AF0AJAB2AGEAbAB1AGUAKQAgAHsACgAJACQAbwBwAHQAaQBvAG4AcwBbADEAXQAgAD0AIABbAGIAeQB0AGUAXQAoACgAJABvAHAAdABpAG8AbgBzAFsAMQBdACAALQBiAGEAbgBkACAAMAB4AEYAMAApACAALQBiAG8AcgAgACgAJAB2AGEAbAB1AGUAIAAtAGIAYQBuAGQAIAAwAHgAMABGACkAKQAKAAkAWwBNAGkAYwByAG8AcwBvAGYAdAAuAFcAaQBuADMAMgAuAFIAZQBnAGkAcwB0AHIAeQBdADoAOgBTAGUAdABWAGEAbAB1AGUAKAAkAGUAbgB0AHIAeQAuAE4AYQBtAGUALAAgACcATQBpAHQAaQBnAGEAdABpAG8AbgBPAHAAdABpAG8AbgBzACcALAAgACQAbwBwAHQAaQBvAG4AcwAsACAAWwBNAGkAYwByAG8AcwBvAGYAdAAuAFcAaQBuADMAMgAuAFIAZQBnAGkAcwB0AHIAeQBWAGEAbAB1AGUASwBpAG4AZABdADoAOgBCAGkAbgBhAHIAeQApAAoAfQAKACQAZABvAG4AZQAgAD0AIABAACgAKQAKAEMAbwBuAHYAZQByAHQAVABvAC0ASgBzAG8AbgAgAC0ASQBuAHAAdQB0AE8AYgBqAGUAYwB0ACAAQAAoACQAZABvAG4AZQApACAALQBDAG8AbQBwAHIAZQBzAHMAIAB8ACAAUwBlAHQALQBDAG8AbgB0AGUAbgB0ACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAnAEMAOgBcAHUAXABvAHUAdAAuAGoAcwBvAG4AJwAgAC0ARQBuAGMAbwBkAGkAbgBnACAAVQBUAEYAOAAKAGYAbwByAGUAYQBjAGgAIAAoACQAZQAgAGkAbgAgACgARwBlAHQALQBDAG8AbgB0AGUAbgB0ACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAnAEMAOgBcAHUAXABpAG4ALgBqAHMAbwBuACcAIAAtAFIAYQB3ACAALQBFAG4AYwBvAGQAaQBuAGcAIABVAFQARgA4ACAAfAAgAEMAbwBuAHYAZQByAHQARgByAG8AbQAtAEoAcwBvAG4AKQApACAAewAKAAkAJABlAG4AdAByAHkAIAA9ACAARgBpAG4AZAAtAEUAbgB0AHIAeQAgACgAWwBzAHQAcgBpAG4AZwBdACQAZQAuAHAAYQB0AGgAKQAKAAkAJABvAHAAdABpAG8AbgBzACAAPQAgAEcAZQB0AC0ATwBwAHQAaQBvAG4AcwAgACQAZQBuAHQAcgB5AAoACQBpAGYAIAAoACQAbwBwAHQAaQBvAG4AcwAgAC0AYQBuAGQAIAAoACQAbwBwAHQAaQBvAG4AcwBbADEAXQAgAC0AYgBhAG4AZAAgADAAeAAwAEYAKQAgAC0AZQBxACAAMgApACAAewAgAFMAZQB0AC0AUgBlAGwAbwBjAGEAdABlACAAJABlAG4AdAByAHkAIAAkAG8AcAB0AGkAbwBuAHMAIAAoAFsAaQBuAHQAXQAkAGUALgBwAHIAaQBvAHIAKQAgAH0ACgAJACQAZABvAG4AZQAgACsAPQAgAFsAcwB0AHIAaQBuAGcAXQAkAGUALgBwAGEAdABoAAoACQBDAG8AbgB2AGUAcgB0AFQAbwAtAEoAcwBvAG4AIAAtAEkAbgBwAHUAdABPAGIAagBlAGMAdAAgAEAAKAAkAGQAbwBuAGUAKQAgAC0AQwBvAG0AcAByAGUAcwBzACAAfAAgAFMAZQB0AC0AQwBvAG4AdABlAG4AdAAgAC0ATABpAHQAZQByAGEAbABQAGEAdABoACAAJwBDADoAXAB1AFwAbwB1AHQALgBqAHMAbwBuACcAIAAtAEUAbgBjAG8AZABpAG4AZwAgAFUAVABGADgACgB9AA==') -Verb RunAs -Wait -PassThru -WindowStyle Hidden\nif ($proc.ExitCode -ne 0) { throw ('The elevated step exited with ' + $proc.ExitCode) }",
+			"elevated": "$ErrorActionPreference = 'Stop'\n$ifeo = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options'\nfunction Find-Entry([string]$image) {\n\t$key = Join-Path $ifeo ([System.IO.Path]::GetFileName($image))\n\tif (-not (Test-Path -LiteralPath $key)) { return $null }\n\tforeach ($sub in @(Get-ChildItem -LiteralPath $key)) { if ([string]$sub.GetValue('FilterFullPath') -ieq $image) { return $sub } }\n\treturn $null\n}\nfunction Get-Options($entry) { if (-not $entry) { return $null }; $o = $entry.GetValue('MitigationOptions'); if ($o -is [byte[]] -and $o.Length -ge 2) { return $o }; return $null }\nfunction Set-Relocate($entry, [byte[]]$options, [int]$value) {\n\t$options[1] = [byte](($options[1] -band 0xF0) -bor ($value -band 0x0F))\n\t[Microsoft.Win32.Registry]::SetValue($entry.Name, 'MitigationOptions', $options, [Microsoft.Win32.RegistryValueKind]::Binary)\n}\n$done = @()\nConvertTo-Json -InputObject @($done) -Compress | Set-Content -LiteralPath 'C:\\u\\out.json' -Encoding UTF8\nforeach ($e in (Get-Content -LiteralPath 'C:\\u\\in.json' -Raw -Encoding UTF8 | ConvertFrom-Json)) {\n\t$entry = Find-Entry ([string]$e.path)\n\t$options = Get-Options $entry\n\tif ($options -and ($options[1] -band 0x0F) -eq 2) { Set-Relocate $entry $options ([int]$e.prior) }\n\t$done += [string]$e.path\n\tConvertTo-Json -InputObject @($done) -Compress | Set-Content -LiteralPath 'C:\\u\\out.json' -Encoding UTF8\n}"
+		}
+	]
+}

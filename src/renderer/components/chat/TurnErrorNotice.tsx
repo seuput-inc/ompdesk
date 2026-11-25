@@ -72,7 +72,8 @@ export function TurnErrorNotice({
 			}
 		return false;
 	});
-	const quota = description.kind === "rateLimit" && latest;
+	// A plan limit the Credit use switch refused to pass is a provider's limit as well: same reset line, same wait.
+	const quota = (description.kind === "rateLimit" || description.kind === "creditsOff") && latest;
 	const provider = useModelStore(state => state.model?.provider);
 	// main's retry of this failed turn (turn-resume.ts): shown on the card of the latest failure only.
 	const scheduled = useScheduledRetry();

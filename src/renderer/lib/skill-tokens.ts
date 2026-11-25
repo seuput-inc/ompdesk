@@ -1,7 +1,7 @@
 /**
  * Stock's mid-prompt skill invocation, read in the renderer so the composer can
  * warn before a token goes out as plain text. A copy of
- * `@oh-my-pi/pi-tui/src/prompt/skill-tokens.ts` (`SKILL_TOKEN_RE`,
+ * `@oh-my-pi/pi-coding-agent/src/extensibility/skill-tokens.ts` (`SKILL_TOKEN_RE`,
  * `allowsSkillTokens`): the renderer cannot import stock, and
  * `skill-tokens.test.ts` pins it to stock's documented cases.
  */

@@ -50,7 +50,7 @@ export function HandoffDialog() {
 		requestAnimationFrame(() => textRef.current?.focus());
 	}, [open]);
 
-	// Generating the handoff document can be cancelled (stock abortHandoff, as Esc does in the
+	// Generating the handoff document can be cancelled (stock abortCompaction, as Esc does in the
 	// TUI); once the new session is being created, dismissal waits for it.
 	const [cancelling, setCancelling] = useState(false);
 	const requestClose = () => {

@@ -15,6 +15,7 @@
  * re-seeds itself there. Main's thread is never held longer than the deadline per wait.
  */
 import { Worker } from "node:worker_threads";
+import { tookHub } from "../slow-steps";
 import { CoreError, core } from "./process";
 
 /**
@@ -47,7 +48,8 @@ const MAX_BYTES = 1 << 30;
 const WORKER = `
 const { parentPort, workerData } = require("node:worker_threads");
 const net = require("node:net");
-const { sab } = workerData;
+const { sab, times: timesBuffer } = workerData;
+const times = new Float64Array(timesBuffer);
 const control = new Int32Array(sab, 0, 4);
 const encoder = new TextEncoder();
 const { StringDecoder } = require("node:string_decoder");
@@ -124,6 +126,7 @@ function connect(endpoint, deadline) {
 		// One decoder per connection: a multibyte character split across two chunks stays whole.
 		const decoder = new StringDecoder("utf8");
 		candidate.on("data", chunk => {
+			times[0] = performance.timeOrigin + performance.now();
 			partial += decoder.write(chunk);
 			let end;
 			while ((end = partial.indexOf("\\n")) >= 0) {
@@ -150,6 +153,7 @@ parentPort.on("message", message => {
 		else queued.push(message.line);
 	}
 	if (message.wait !== undefined) {
+		times[1] = performance.timeOrigin + performance.now();
 		waiting = message.wait;
 		look();
 	}
@@ -201,15 +205,38 @@ export class Connection {
 	readonly control: Int32Array;
 	readonly generation: number;
 	dead: CoreError | null = null;
+	/** [last line from the core, last wait the worker took]: wall times the worker writes (`lossTrace`). */
+	readonly times: Float64Array;
 
 	constructor(endpoint: { address: string; token: string }, generation: number) {
 		this.generation = generation;
 		this.sab = new SharedArrayBuffer(DATA_OFFSET + INITIAL_BYTES, { maxByteLength: DATA_OFFSET + MAX_BYTES });
 		this.control = new Int32Array(this.sab, 0, 4);
-		this.worker = new Worker(WORKER, { eval: true, name: "ompdesk-hub", workerData: { sab: this.sab } });
+		const times = new SharedArrayBuffer(16);
+		this.times = new Float64Array(times);
+		this.worker = new Worker(WORKER, { eval: true, name: "ompdesk-hub", workerData: { sab: this.sab, times } });
 		this.worker.unref();
 		this.worker.postMessage({ endpoint });
 	}
+}
+
+/**
+ * Which side of a lost wait was silent, for the `abandoned` line: whether the hub's thread took main's wait at all (a
+ * starved worker or a lost message), and when the core last sent it a line (a core that stopped answering).
+ */
+function lossTrace(times: Float64Array, waitedAt: number): string {
+	const [lastLine = 0, lastWait = 0] = times;
+	const took =
+		lastWait >= waitedAt
+			? `its thread took the wait after ${Math.round(lastWait - waitedAt)} ms`
+			: "its thread never took the wait";
+	const line =
+		lastLine === 0
+			? "the core sent no line yet"
+			: lastLine >= waitedAt
+				? `the core's last line came ${Math.round(lastLine - waitedAt)} ms into the wait`
+				: `the core's last line came ${Math.round(waitedAt - lastLine)} ms before the wait`;
+	return `${took}; ${line}`;
 }
 
 export class Hub {
@@ -219,6 +246,11 @@ export class Hub {
 	#sequence = 0;
 	/** Calls main waits for now (nested ones count): a question answered inside one must not wait itself. */
 	#depth = 0;
+	/**
+	 * The sync calls on main's stack, each with its answer once read: a call nested in another's handling (a question's
+	 * answer, a listener) can read the outer call's answer, which the outer call takes when it waits again.
+	 */
+	readonly #calling = new Map<number, Line | null>();
 	readonly stats: HubStats = { calls: 0, waitsUs: [], totalUs: 0, methods: new Map() };
 	measuring = process.env.OMP_GUI_HUB_STATS === "1";
 
@@ -255,25 +287,37 @@ export class Hub {
 	/** A synchronous call of instance `to`'s `method`: its value, after every item it made was handled. */
 	call<T>(to: number, method: string, params: unknown = {}): T {
 		if (this.measuring) this.stats.methods.set(method, (this.stats.methods.get(method) ?? 0) + 1);
-		return this.#call("hub.call", { to, method, params }) as T;
+		const started = performance.now();
+		try {
+			return this.#call("hub.call", { to, method, params }) as T;
+		} finally {
+			// With the items the call made handled: all of it held main's thread.
+			tookHub(method, performance.now() - started);
+		}
 	}
 
 	/**
 	 * A call of the instance `instance()` opens or returns: when the hub is lost under it (the core died or stopped
 	 * answering), the instance's `lost` handler has run, so `instance()` opens it on the next core and the call is made
-	 * once more. Everything the lost core knew is gone, so the second call lands where a call after the loss would.
+	 * once more. Everything the lost core knew is gone, so the second call lands where a call after the loss would:
+	 * `params` given as a function is read for each attempt, so what it reads of main (a pool's facts) is read after
+	 * the loss and after whatever the new instance's opening changed.
 	 */
-	callOnce<T>(instance: () => number, method: string, params: unknown = {}): T {
+	callOnce<T>(instance: () => number, method: string, params: unknown | (() => unknown) = {}): T {
+		const read = () => (typeof params === "function" ? (params as () => unknown)() : params);
 		try {
-			return this.call<T>(instance(), method, params);
+			return this.call<T>(instance(), method, read());
 		} catch (error) {
 			if (!(error instanceof CoreError) || error.code !== "hub_lost") throw error;
-			return this.call<T>(instance(), method, params);
+			const id = instance();
+			return this.call<T>(id, method, read());
 		}
 	}
 
 	/** A call main does not wait for: what the instance's async rule answers when it is done. */
 	callLater<T>(to: number, method: string, params: unknown = {}): Promise<T> {
+		const stale = this.#dropStale();
+		if (stale) return Promise.reject(stale);
 		const connection = this.#connect();
 		const id = ++this.#sequence;
 		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
@@ -305,25 +349,46 @@ export class Hub {
 	}
 
 	#write(request: object): void {
+		if (this.#dropStale()) return;
 		const connection = this.#connect();
 		this.#post(connection, request);
 	}
 
+	/**
+	 * Loses the connection when the core it reached was abandoned or ended: main knows before the core's socket
+	 * closes (the owner kills it on another thread), and nothing main sends may reach it or be answered by it.
+	 */
+	#dropStale(): CoreError | null {
+		const current = this.#connection;
+		if (!current || current.dead || current.generation === core().hubEndpointGeneration()) return null;
+		this.#lose(current, new CoreError("hub_lost", "the core this hub connection reached was ended"));
+		return current.dead ?? null;
+	}
+
 	#call(method: string, params: unknown): unknown {
+		const stale = this.#dropStale();
+		if (stale) throw stale;
 		const connection = this.#connect();
 		const id = ++this.#sequence;
 		this.#post(connection, { id, method, params });
 		this.stats.calls++;
 		this.#depth++;
+		this.#calling.set(id, null);
 		try {
 			for (;;) {
-				const lines = this.#wait(connection, id);
-				let answer: Line | undefined;
+				let answer = this.#calling.get(id) ?? undefined;
 				const after: Line[] = [];
-				for (const line of lines) {
-					if (answer) after.push(line);
-					else if (line.id === id) answer = line;
-					else this.#handle(line);
+				if (!answer) {
+					const lines = this.#wait(connection, id);
+					for (const line of lines) {
+						// An outer call's answer is its own now, even behind this one's: the outer call reads it before it
+						// waits again, which is before this call's microtasks run.
+						if (line.id !== undefined && line.id !== id && this.#calling.has(line.id))
+							this.#calling.set(line.id, line);
+						else if (answer) after.push(line);
+						else if (line.id === id) answer = line;
+						else this.#handle(line);
+					}
 				}
 				if (connection.dead) throw connection.dead;
 				if (answer) {
@@ -337,6 +402,7 @@ export class Hub {
 				}
 			}
 		} finally {
+			this.#calling.delete(id);
 			this.#depth--;
 		}
 	}
@@ -359,6 +425,8 @@ export class Hub {
 	#wait(connection: Connection, id: number | "drain"): Line[] {
 		const { control, worker } = connection;
 		Atomics.store(control, STATE, WAITING);
+		// Wall time, as the worker writes its own (`lossTrace`); a test's fake clock moves neither.
+		const waitedAt = performance.timeOrigin + performance.now();
 		worker.postMessage({ wait: id });
 		const started = this.measuring ? performance.now() : 0;
 		const outcome = this.#block(control);
@@ -368,7 +436,13 @@ export class Hub {
 			this.stats.totalUs += us;
 		}
 		if (outcome === "timed-out") {
-			this.#lose(connection, new CoreError("hub_lost", `the hub did not answer within ${HUB_CALL_DEADLINE_MS} ms`));
+			this.#lose(
+				connection,
+				new CoreError(
+					"hub_lost",
+					`the hub did not answer within ${HUB_CALL_DEADLINE_MS} ms (${lossTrace(connection.times, waitedAt)})`,
+				),
+			);
 			return [];
 		}
 		const length = Atomics.load(control, LENGTH);
@@ -389,6 +463,10 @@ export class Hub {
 	/** One line, at once, also inside another's handling: a nested call's effects run inside it, as a listener did. */
 	#handle(line: Line): void {
 		if (line.id !== undefined) {
+			if (this.#calling.has(line.id)) {
+				this.#calling.set(line.id, line);
+				return;
+			}
 			const waiting = this.#pending.get(line.id);
 			if (!waiting) return;
 			this.#pending.delete(line.id);

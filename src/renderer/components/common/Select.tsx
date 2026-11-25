@@ -46,7 +46,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
 				<select
 					aria-invalid={error ? true : undefined}
 					className={cx(
-						"w-full cursor-pointer appearance-none rounded-(--sc-radius-md) border bg-(--sc-field) text-(--sc-text) transition-[border-color,box-shadow] duration-(--sc-duration-fast) focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
+						"w-full cursor-pointer appearance-none rounded-(--sc-radius-md) border bg-(--sc-field) text-(--sc-text) shadow-(--sc-shadow-sm) transition-[border-color,box-shadow] duration-(--sc-duration-fast) focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
 						SIZE[controlSize],
 						fieldStateClasses(Boolean(error)),
 						className,

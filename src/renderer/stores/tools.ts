@@ -66,6 +66,20 @@ function resultsByCallId(messages: readonly AgentMessage[]): Map<string, AgentMe
 }
 
 /**
+ * The result a run committed for its newest call with this raw id, when the run answered every call of that id (a
+ * provider may reuse ids, and an unanswered one among them would hand the newest call an older call's result).
+ */
+function committedResultOf(committed: readonly AgentMessage[], callId: string): AgentMessage | undefined {
+	let calls = 0;
+	for (const message of committed) {
+		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		for (const block of message.content) if (block.type === "toolCall" && block.id === callId) calls++;
+	}
+	const answers = resultsByCallId(committed).get(callId) ?? [];
+	return calls > 0 && answers.length === calls ? answers.at(-1) : undefined;
+}
+
+/**
  * The tool entries of a transcript slice outside any runtime (another session's turn), one per call, paired with its
  * results by occurrence as `hydrateMessages` pairs them.
  */
@@ -729,6 +743,31 @@ export const createToolsStore = () => {
 							finishedChanged = true;
 						}
 						uncommittedKeysByCallId = new Map();
+						// The run is over for good, so none of its calls executes any more. One whose end event never
+						// reached this store (frames lost while its tab was out of view) settles from the result the run
+						// committed, else as `aborted`, as a history rebuild settles an unanswered call: its card would
+						// otherwise spin on behind the finished run with a live clock. A deferred mid-run settle
+						// (`isTerminal: false`) ends nothing.
+						if (event.isTerminal !== false && liveNow().size > 0) {
+							for (const [key, entry] of [...liveNow()]) {
+								const callId = callIdOfEntryKey(key);
+								const answer = committedResultOf(committed, callId);
+								put(
+									key,
+									answer
+										? {
+												...entry,
+												status: resultStatus(answer, answer.isError),
+												result: { content: answer.content ?? null, details: answer.details ?? null },
+												isError: answer.isError ?? false,
+												endTime: timestampMs(answer.timestamp, Date.now()),
+											}
+										: { ...entry, status: "aborted", endTime: Date.now() },
+								);
+								runningEntryKeyByCallId.delete(callId);
+							}
+							queuedExecutionKeysByCallId = new Map();
+						}
 						const current = partials ?? state.partialResults;
 						if (current.size > 0) {
 							partials = new Map();

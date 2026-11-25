@@ -339,7 +339,7 @@ function FamilyChip({
 				aria-label={label}
 				className={cx(
 					"omp-family-chip flex h-(--sc-hit-min) items-center gap-0.5 rounded-(--sc-radius-sm) px-1 text-sc-xs tabular-nums hover:bg-(--sc-hover) hover:text-(--sc-text) aria-expanded:bg-(--sc-hover) focus-visible:outline-2 focus-visible:outline-(--sc-focus-ring)",
-					counts.waiting > 0 ? "text-(--sc-warning)" : "text-(--sc-text-muted)",
+					counts.waiting > 0 ? "text-(--sc-attention)" : "text-(--sc-text-muted)",
 				)}
 				data-family-waiting={counts.waiting > 0 ? counts.waiting : undefined}
 				data-sidebar-subagents-toggle={sessionKey}

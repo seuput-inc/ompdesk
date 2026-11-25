@@ -404,6 +404,12 @@ describe("regeneration", () => {
 		expect(world.calls).toHaveLength(2);
 		expect(world.calls[1]?.context.messages[0]?.content).toContain("history: compacted");
 		expect(updates(world).at(-1)).toMatchObject({ trigger: "compaction" });
+		const shown = updates(world).at(-1);
+		world.hooks.get("session_switch")?.({}, main);
+		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
+		await flush();
+		expect(world.calls).toHaveLength(2);
+		expect(updates(world).at(-1)).toEqual(shown);
 		await handlers.next_prompt_refresh({ reason: "bash" }, world.env);
 		world.session.messages.push({
 			role: "bashExecution",
@@ -487,16 +493,16 @@ describe("the session's last suggestion (a page that reloads, a tab shown again,
 		const again = build();
 		withJournal(again, journal);
 		await handlers.next_prompt_set({ suggestions: true, inline: true }, again.env);
-		expect((await state(again)).last).toMatchObject({
-			id: frame?.id,
-			candidates: ["commit it", "push it", "run the linter"],
-		});
-		// The moment is the same: an emptied draft asks the model nothing.
+		// A draft event may reach the restored session before the renderer fetches the saved suggestion.
 		await handlers.next_prompt_draft({ empty: false }, again.env);
 		await handlers.next_prompt_draft({ empty: true }, again.env);
 		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
 		await flush();
 		expect(again.calls).toHaveLength(0);
+		expect((await state(again)).last).toMatchObject({
+			id: frame?.id,
+			candidates: ["commit it", "push it", "run the linter"],
+		});
 	});
 
 	it("never answers a journaled one a later message made stale", async () => {
@@ -868,21 +874,29 @@ describe("the judge's reading of the last reply (judge assist)", () => {
 		expect(updates(world)[0]?.candidates).toEqual(["run the tests", "push it"]);
 	});
 
-	it("an ask still open counts as a decision whatever the judge says", async () => {
+	it.each([false, true])("skips the judge for an open ask (answered: %s)", async answered => {
 		world.session.messages.push(
 			{ role: "user", content: "set it up", timestamp: 3 },
 			{
 				role: "assistant",
 				stopReason: "toolUse",
-				content: [{ type: "toolCall", id: "a", name: "ask", arguments: { questions: [] } }],
+				content: [
+					{ type: "text", text: MISSED },
+					{ type: "toolCall", id: "a", name: "ask", arguments: { questions: [] } },
+				],
 				timestamp: 4,
 			},
 		);
+		if (answered)
+			world.session.messages.push({ role: "toolResult", toolCallId: "a", toolName: "ask", content: "First one." });
 		world.reply.current = async () => text("1. yes, go ahead\n2. run the tests\n3. push it");
 		withJudge(0.01);
 		await turnEnds();
-		expect(prompt()).toContain(DECISION_LINE);
-		expect(updates(world)[0]?.candidates).toContain("yes, go ahead");
+		expect(prompt()).toContain(answered ? DONE_LINE : DECISION_LINE);
+		expect(updates(world)[0]?.candidates).toEqual(
+			answered ? ["run the tests", "push it"] : ["yes, go ahead", "run the tests", "push it"],
+		);
+		expect(fake.requests).toHaveLength(answered ? 1 : 0);
 	});
 
 	it("keeps one suggestion per moment: a judged state does not move the state key", async () => {

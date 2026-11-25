@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ScheduleDraft } from "../../shared/schedules";
+import { firedDetail } from "../routines/test-fired";
 import { type RunLauncher, ScheduleService } from "../schedules";
 import type { ClientWindow } from "./client-window";
 import type { IpcCaller } from "./ipc-registry";
@@ -60,7 +61,7 @@ beforeEach(async () => {
 		desktopWindows: () => [desktop() as ClientWindow & IpcCaller],
 		tabs: { activeTab: () => null, cwd: () => null, facts: () => null, resnapshot: () => undefined },
 		openMedia: async () => new Response(null, { status: 404 }),
-		shell: { openPath: async () => undefined, reveal: () => undefined, openExternal: async () => undefined },
+		shell: { openPath: async () => undefined, reveal: () => undefined, openPageExternal: async () => undefined },
 		allowedUsers: () => [LOGIN],
 		confirmNewDevices: () => false,
 		whois: async () => null,
@@ -142,7 +143,7 @@ describe("POST /hooks/<id> on the loopback address", () => {
 		const reply = await direct(id, { ...bearer(), "content-type": "application/json" }, body);
 		expect(reply.status).toBe(202);
 		await expect.poll(() => prompts.length).toBe(1);
-		const told = prompts[0]?.split("What fired this run:\n")[1] ?? "";
+		const told = firedDetail(prompts[0] ?? "") ?? "";
 		expect(told.startsWith('Webhook call: {"a": 1, "b": "xxx')).toBe(true);
 		expect(told).toHaveLength("Webhook call: ".length + 400);
 	});
@@ -165,7 +166,7 @@ describe("POST /hooks/<id> on the loopback address", () => {
 		expect((await direct(id, { authorization: `Basic ${KEY}` })).status).toBe(401);
 		expect((await direct(id, { authorization: KEY })).status).toBe(401);
 		expect(prompts).toEqual([]);
-		expect(service?.state().runs).toEqual([]);
+		expect((await service?.command({ action: "get" }))?.runs).toEqual([]);
 	});
 
 	it("answers 404 for an unknown routine, a routine of another trigger and an id that cannot be one", async () => {

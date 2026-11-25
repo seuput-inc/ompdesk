@@ -1,12 +1,13 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterAll, describe, expect, it } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { OMP_COMMAND, INSTALLED_OMP as omp, stockFixtureEnv, stopOmpDaemon } from "./test-bridge-probe";
+import { removeWhenFree } from "./test-folders";
 
 /**
  * A plan the automatic mode choice entered for one request (bridge `modes.set_plan_mode {auto: true}`) is approved
@@ -26,14 +27,14 @@ function sse(delta: unknown, finish: string): string {
 	return `${frame({ role: "assistant", content: "" })}${frame(delta)}${frame({}, finish)}data: [DONE]\n\n`;
 }
 
-function write(path: string, content: string): string {
+function toolCall(name: string, args: Record<string, string>): string {
 	const call = {
 		tool_calls: [
 			{
 				index: 0,
 				id: `call_${Math.random().toString(36).slice(2, 8)}`,
 				type: "function",
-				function: { name: "write", arguments: JSON.stringify({ path, content }) },
+				function: { name, arguments: JSON.stringify(args) },
 			},
 		],
 	};
@@ -62,9 +63,15 @@ async function startProvider(): Promise<{ url: string; bodies: string[] }> {
 				return;
 			}
 			bodies.push(body);
-			if (bodies.length === 1) res.end(write("local://demo-plan.md", PLAN));
-			else if (bodies.length === 2) res.end(write("xd://propose", "demo"));
-			else res.end(sse({ content: "DONE" }, "stop"));
+			if (bodies.length === 1) res.end(toolCall("write", { path: "local://demo-plan.md", content: PLAN }));
+			else if (bodies.length !== 2) res.end(sse({ content: "DONE" }, "stop"));
+			else if (parsed.tools?.some(tool => tool.function?.name === "propose")) {
+				res.end(toolCall("propose", { title: "demo" }));
+			} else if (body.includes("xd://propose")) {
+				res.end(toolCall("write", { path: "xd://propose", content: "demo" }));
+			} else {
+				res.end(toolCall("bash", { command: "propose demo; false" }));
+			}
 		});
 	});
 	await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
@@ -82,39 +89,33 @@ interface Omp {
 	send(command: Record<string, unknown>): Promise<Frame>;
 }
 
-async function startOmp(url: string): Promise<Omp> {
+async function startOmp(url: string, tools?: string): Promise<Omp> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-auto-plan-"));
 	chmodSync(isolated, 0o700);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-auto-plan-repo-")));
-	cleanups.push(() => {
-		rmSync(isolated, { recursive: true, force: true });
-		rmSync(root, { recursive: true, force: true });
+	const env = stockFixtureEnv(isolated);
+	cleanups.push(async () => {
+		stopOmpDaemon(isolated, env);
+		await removeWhenFree(isolated);
+		await removeWhenFree(root);
 	});
 	const agentDir = join(isolated, "agent");
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(
 		join(agentDir, "models.yml"),
-		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
+		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
 	);
 	const address = newBridgeAddress();
-	const env: Record<string, string | undefined> = {
-		...process.env,
-		PI_CODING_AGENT_DIR: agentDir,
-		PI_CONFIG_DIR: configDirName(isolated),
-		OMP_PROFILE: "",
-		PI_PROFILE: "",
-		OMP_GUI_BRIDGE: address,
-	};
-	for (const key of ["ELECTRON_RUN_AS_NODE", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"])
-		Reflect.deleteProperty(env, key);
+	env.OMP_GUI_BRIDGE = address;
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
 		[
 			...OMP_COMMAND.args,
 			...["--mode", "rpc-ui", "--no-extensions", "--no-skills", "--no-rules"],
 			...["--model", "fake/m1", "-e", resolve("resources/gui-bridge/index.ts")],
+			...(tools ? ["--tools", tools] : []),
 		],
-		{ cwd: root, env: env as NodeJS.ProcessEnv },
+		{ cwd: root, env },
 	);
 	let stderr = "";
 	child.stderr.on("data", chunk => {
@@ -192,6 +193,28 @@ function approvedPrompt(bodies: readonly string[]): string | undefined {
 	return undefined;
 }
 
+/** Rethrows a failed wait with what the model was asked and which tools ran. */
+function explained(bodies: readonly string[], frames: readonly Frame[], events: readonly Frame[]) {
+	return (error: unknown): never => {
+		const requests = bodies.map(body => {
+			const messages: Array<{ role?: string; content?: unknown }> = JSON.parse(body).messages ?? [];
+			const last = messages.at(-1);
+			return `${messages.length} messages, last ${last?.role}: ${JSON.stringify(last?.content).slice(0, 300)}`;
+		});
+		const tools = frames
+			.filter(frame => frame.type === "tool_execution_end")
+			.map(frame => `${frame.toolName} error=${frame.isError} ${JSON.stringify(frame.result).slice(0, 400)}`);
+		throw new Error(
+			[
+				`requests:\n${requests.join("\n")}`,
+				`tools:\n${tools.join("\n")}`,
+				`bridge events: ${events.map(event => event.type).join(", ")}`,
+			].join("\n"),
+			{ cause: error },
+		);
+	};
+}
+
 describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on stock omp", () => {
 	it("is approved by itself when proposed: no card, plan mode ends, the plan runs in the same session", async () => {
 		const provider = await startProvider();
@@ -201,7 +224,11 @@ describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on 
 		await send({ type: "prompt", message: "add a greeting file and run the checks" });
 		// The execution turn reads stock's approved-plan prompt with the plan itself inlined. (Stock's loop may send
 		// one more request after the propose call before the bridge's abort lands; the approved turn comes after it.)
-		await expect.poll(() => approvedPrompt(provider.bodies), { timeout: 60_000 }).toContain("Plan approved.");
+		try {
+			await expect.poll(() => approvedPrompt(provider.bodies), { timeout: 60_000 }).toContain("Plan approved.");
+		} catch (error) {
+			explained(provider.bodies, frames, events)(error);
+		}
 		expect(approvedPrompt(provider.bodies)).toContain("Add the greeting file.");
 		await expect
 			.poll(() => frames.some(frame => frame.type === "agent_end" && frame.isTerminal !== false), {
@@ -215,15 +242,24 @@ describe.skipIf(!existsSync(omp))("a plan the automatic mode choice entered, on 
 
 	it("still waits for the person's answer when the user turned plan mode on", async () => {
 		const provider = await startProvider();
-		const { events, bridge, send } = await startOmp(provider.url);
+		const { frames, events, bridge, send } = await startOmp(provider.url, "read,write,edit");
 		await bridge.request("modes.set_plan_mode", { enabled: true });
 		await send({ type: "prompt", message: "add a greeting file and run the checks" });
-		await expect.poll(() => events.some(event => event.type === "plan_proposal"), { timeout: 60_000 }).toBe(true);
+		try {
+			await expect.poll(() => events.some(event => event.type === "plan_proposal"), { timeout: 60_000 }).toBe(true);
+		} catch (error) {
+			explained(provider.bodies, frames, events)(error);
+		}
 		// The proposal waits for an answer, with plan mode still on, and no approved turn runs.
 		expect(await bridge.request("modes.get_plan_mode", {})).toMatchObject({
 			enabled: true,
 			proposal: { title: expect.any(String) },
 		});
 		expect(approvedPrompt(provider.bodies)).toBeUndefined();
+		expect(await bridge.request("modes.plan_approval", { approved: false })).toMatchObject({
+			approved: false,
+			dispatched: false,
+		});
+		expect(await bridge.request("modes.get_plan_mode", {})).not.toHaveProperty("proposal");
 	}, 120_000);
 });

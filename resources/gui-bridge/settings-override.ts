@@ -2,7 +2,7 @@
  * A stock setting's runtime override handle (not persisted; `clearOverride` gives the configured value back), read
  * through `config/registry` `lookup` so no stock module is imported by path.
  */
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+import { lookup } from "./omp/pi-coding-agent/config/registry";
 
 export interface OverridableSetting {
 	override(scope: object, value: unknown): void;

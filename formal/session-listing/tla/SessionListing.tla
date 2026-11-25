@@ -210,9 +210,9 @@ Announce(f2, r2) ==
 ----------------------------------------------------------------------------
 \* ===== the host's tabs change: each handler ends by calling listingChanged() in the same synchronous block =====
 
-\* @code src/main/remote/host-services.ts:1684-1723 #createTab: the device's tab holds its session now; listingChanged()
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:131-195 Ctx::acquire_inner: a window tab acquired a session: #registerSessionFile, then #notifyWindowTabsChanged -> listingChanged
-\* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of: #registerSessionFile: a file taken calls onSessionFilesChanged -> listingChanged
+\* @code src/main/remote/host-services.ts:2365-2398 #createTab records the session file and calls listingChanged().
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:303-337 Ctx::finish_acquire registers the window tab's session file and notifies its window.
+\* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of records the file and owner, then calls on_session_files_changed if the file changed.
 Open(t, s) ==
     /\ ~Busy
     /\ file[t] = NoS /\ t \notin pendReg /\ nChanges < MaxChanges
@@ -220,10 +220,10 @@ Open(t, s) ==
     /\ nChanges' = nChanges + 1
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
-\* @code src/main/remote/host-services.ts:2383-2412 #closeTab ... listingChanged()
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:331-347 Ctx::release_entry: #releaseEntry lets the file go (#unregisterSessionFile); releaseTab -> #notifyWindowTabsChanged -> listingChanged
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:349-436 Ctx::release_detached
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1272-1279 Ctx::release_tab
+\* @code src/main/remote/host-services.ts:3199-3229 #closeTab removes the tab and calls listingChanged().
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:426-458 Ctx::release_entry removes only the matching entry and awaits release_detached.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:460-547 Ctx::release_detached calls unregister_session_file_of.
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1370-1381 Ctx::release_tab notifies the window after a successful removal.
 Close(t) ==
     /\ ~Busy
     /\ (file[t] # NoS \/ t \in pendReg) /\ nChanges < MaxChanges
@@ -232,8 +232,8 @@ Close(t) ==
     /\ nChanges' = nChanges + 1
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
-\* @code src/main/remote/host-services.ts:1782-1791 'session' handler: tab.sessionFile = identity.sessionFile; listingChanged() when it changed
-\* @code native/ompdesk/crates/core/src/pool/listen.rs:251-304 Ctx::feed_session: 'session' handler of a window tab: register the file, notify when it changed
+\* @code src/main/remote/host-services.ts:2472-2480 The session handler updates tab.sessionFile and announces the change.
+\* @code native/ompdesk/crates/core/src/pool/listen.rs:273-326 Ctx::feed_session: 'session' handler of a window tab: register the file, notify when it changed
 Switch(t, s) ==
     /\ ~Busy
     /\ file[t] # NoS /\ file[t] # s /\ nChanges < MaxChanges
@@ -241,9 +241,9 @@ Switch(t, s) ==
     /\ nChanges' = nChanges + 1
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
-\* @code native/ompdesk/crates/core/src/pool/listen.rs:212-247 Ctx::feed_session_info: sessionInfoUpdate with another sessionId unregisters the file (entry.sessionFile = undefined)
-\* @code native/ompdesk/crates/core/src/pool/routes.rs:99-118 Ctx::unregister_session_file_of: #unregisterSessionFile: the let-go calls onSessionFilesChanged
-\* @code src/main/index.ts:1442-1445 onSessionFilesChanged -> hostServices.listingChanged()
+\* @code native/ompdesk/crates/core/src/pool/listen.rs:234-269 Ctx::feed_session_info unregisters the tab's file if a known session ID changes.
+\* @code native/ompdesk/crates/core/src/pool/routes.rs:99-118 Ctx::unregister_session_file_of drops the owner and calls on_session_files_changed.
+\* @code src/main/index.ts:1499-1502 onSessionFilesChanged calls hostServices.listingChanged().
 IdChange(t) ==
     /\ ~Busy
     /\ t \in WinTabs /\ file[t] # NoS /\ nChanges < MaxChanges
@@ -253,7 +253,7 @@ IdChange(t) ==
     /\ nChanges' = nChanges + 1
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
-\* @code native/ompdesk/crates/core/src/pool/listen.rs:251-304 Ctx::feed_session: the `session` identity arrives (get_state, heartbeat): register the file and notify
+\* @code native/ompdesk/crates/core/src/pool/listen.rs:273-326 Ctx::feed_session: the `session` identity arrives (get_state, heartbeat): register the file and notify
 Reregister(t, s) ==
     /\ ~Busy
     /\ t \in pendReg
@@ -261,8 +261,8 @@ Reregister(t, s) ==
     /\ pendReg' = pendReg \ {t}
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, cn, seen>>
 
-\* @code src/main/index.ts:1290-1299 sessionOpeners(): the closed-child record (AGENT_CLOSED_CHILDREN_PREF) appears or goes
-\* @code src/main/ipc.ts:1285 the pref changed: hostedTabs.listingChanged()
+\* @code src/main/index.ts:1331-1340 sessionOpeners merges closed-child records with the current tab openers.
+\* @code src/main/ipc.ts:1396 A change to AGENT_CLOSED_CHILDREN_PREF calls hostedTabs.listingChanged().
 Record ==
     /\ ~Busy
     /\ nChanges < MaxChanges
@@ -271,7 +271,7 @@ Record ==
     /\ nChanges' = nChanges + 1
     /\ UNCHANGED <<file, pendReg, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
-\* @code src/main/remote/host-services.ts:1318-1325 sessionsChanged(): a child's review changed, or the index moved but no row did
+\* @code src/main/remote/host-services.ts:1714-1720 sessionsChanged schedules a read, even when the rows haven't changed.
 Tick ==
     /\ ~Busy
     /\ nTicks < MaxTicks
@@ -281,8 +281,11 @@ Tick ==
 ----------------------------------------------------------------------------
 \* ===== the index's rows change: the index reads again and tells main, which calls sessionsChanged() =====
 
-\* @code src/main/session-index.ts:441-444 #notifyChange: the watch saw a new session file; the shared list reads again
-\* @code src/main/ipc.ts:598-606 sessionIndex.onListChange -> remoteDevices.hostSessionsChanged() -> sessionsChanged()
+\* @code src/main/session-index.ts:174-184 #onChanged marks the shared list changed for named paths or calls #notifyChange for a rescan.
+\* @code src/main/session-index.ts:392-395 #notifyChange also marks the shared list changed.
+\* @code src/main/session-index.ts:87 The share publishes to onListChange.
+\* @code src/main/ipc.ts:682-686 onListChange calls remoteDevices.hostSessionsChanged().
+\* @code src/main/remote/devices.ts:846-848 hostSessionsChanged calls the host's sessionsChanged().
 IdxCreate(s) ==
     /\ ~Busy
     /\ idx[s] = Absent /\ nIdx < MaxIdx
@@ -290,9 +293,10 @@ IdxCreate(s) ==
     /\ UNCHANGED <<file, pendReg, rec, snap, hs, lkv, hsl, ip, fd, post, nChanges, nTicks, nDrops, nForeign, seen>>
 
 \* A journal write (by `by` = "host": a turn appended) or a rename (by a device: the host renamed it for that device).
-\* @code src/main/session-index.ts:441-444 #notifyChange / relist() (src/main/session-index.ts:273-275) after a rename
-\* @code src/main/remote/host-services.ts:2315-2316 a device's rename: the title is in the journal, sessionIndex.relist()
-\* @code src/main/ipc.ts:1458-1463 SESSIONS_RENAME: remoteDevices.hostSessionsStale(device) once the host answered
+\* @code src/main/session-index.ts:174-184 #onChanged handles a changed journal.
+\* @code src/main/session-index.ts:250-252 relist marks the shared list changed after a rename.
+\* @code src/main/remote/host-services.ts:3169-3180 renameSession awaits the rename, then calls sessionIndex.relist().
+\* @code src/main/ipc.ts:1591-1597 SESSIONS_RENAME marks the copy stale after the host answers.
 IdxBump(s, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[s] < MaxJ /\ nIdx < MaxIdx /\ Free(by)
@@ -301,9 +305,9 @@ IdxBump(s, by) ==
     /\ UNCHANGED <<file, pendReg, rec, snap, hs, lkv, hsl, ip, fd, nChanges, nTicks, nDrops, nForeign, seen>>
 
 \* A session is deleted (by the host's own window, or by a device: the host deletes it, then main of that device marks its copy stale).
-\* @code src/main/session-index.ts:329-338 deleteSession -> #notifyChange
-\* @code src/main/remote/host-services.ts:2282-2291 #deleteSession (a device's delete takes the host's path)
-\* @code src/main/ipc.ts:472-484 SESSIONS_DELETE: remoteDevices.request(sessions.delete), then hostSessionsStale(device)
+\* @code src/main/session-index.ts:310-319 deleteSession awaits the delete, forgets the cached text and calls #notifyChange.
+\* @code src/main/remote/host-services.ts:3142-3152 #deleteSession delegates a paired device's delete to the host.
+\* @code src/main/ipc.ts:534-551 deleteStoredSession requests sessions.delete, then calls hostSessionsStale(device).
 IdxDelete(s, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ nIdx < MaxIdx /\ Free(by)
@@ -312,9 +316,10 @@ IdxDelete(s, by) ==
     /\ UNCHANGED <<file, pendReg, rec, snap, hs, lkv, hsl, ip, fd, nChanges, nTicks, nDrops, nForeign, seen>>
 
 \* A session moves to another folder: its old path is gone, a new path is listed.
-\* @code src/main/session-index.ts:369-383 moveSession -> #notifyChange
-\* @code src/main/remote/host-services.ts:1107-1112 sessions.move
-\* @code src/main/ipc.ts:1473-1482 SESSIONS_MOVE: remoteDevices.request(sessions.move), then hostSessionsStale(device)
+\* @code native/ompdesk/crates/core/src/fs/read.rs:359-368 stat follows links to check the move destination before stock moves the session.
+\* @code src/main/session-index.ts:350-362 moveSession awaits the move and calls #notifyChange.
+\* @code src/main/remote/host-services.ts:1435-1442 sessions.move moves the host's session.
+\* @code src/main/ipc.ts:1609-1617 SESSIONS_MOVE requests sessions.move, then calls hostSessionsStale(device).
 IdxMove(s, t, by) ==
     /\ ~Busy
     /\ Listed(idx, s) /\ idx[t] = Absent /\ nIdx < MaxIdx /\ Free(by)
@@ -327,11 +332,11 @@ IdxMove(s, t, by) ==
 
 EmitAll(l, m) == [d \in Devices |-> IF up[d] THEN Append(l[d], m) ELSE l[d]]
 
-\* @code src/main/remote/host-services.ts:1318-1325 sessionsChanged(): the debounce fires -> #deviceList.changed()
+\* @code src/main/remote/host-services.ts:1714-1720 The sessionsChanged timer calls #deviceList.changed().
 \* @code src/main/session-list-share.ts:52-61 changed(): no copy yet -> onChange(null) (a bare event); else read and hand on the delta
 \* @code src/main/session-list-share.ts:77-90 #readOnce, #publish: a changed list gets the next version and goes to onChange
-\* @code src/main/remote/host-services.ts:587-590 onChange: a delta to a device that has the capability, a bare event to the others
-\* @code src/main/remote/host-services.ts:1371-1373 #decorated records the listing snapshot of this read
+\* @code src/main/remote/host-services.ts:790-793 onChange sends the delta to capable devices and a bare event to the others.
+\* @code src/main/remote/host-services.ts:1770-1773 #decorated records the shared read's listing snapshot.
 HostChanged ==
     /\ ~Busy
     /\ evTimer /\ \A d \in Devices : Len(lk[d]) + 1 <= MaxCh
@@ -345,10 +350,9 @@ HostChanged ==
                           /\ lk' = EmitAll(lk, DeltaMsg(hv, hv + 1, Diff(hrows, Truth)))
     /\ UNCHANGED <<tr, up, rq, hsl, ip, fd, post, cn, seen>>
 
-\* @code src/main/remote/host-services.ts:1059-1067 sessions.list: stale() then current(): the read samples the rows now; a changed list is published
-\*   (the delta goes to every device first), then the reply
+\* @code src/main/remote/host-services.ts:1379-1389 Global sessions.list marks the list stale and awaits current(); a changed list is published before the reply.
 \* @code src/main/session-list-share.ts:35-44 current()
-\* @code src/main/remote/host-services.ts:1371-1373 #decorated records the listing snapshot of this read
+\* @code src/main/remote/host-services.ts:1770-1773 #decorated records the shared read's listing snapshot.
 HostRequest(d) ==
     /\ ~Busy
     /\ rq[d] /\ up[d] /\ \A e \in Devices : Len(lk[e]) + 2 <= MaxCh
@@ -363,7 +367,7 @@ HostRequest(d) ==
 
 \* Another paired device reads the list (sessions.list: stale(), read, publish): the host records the snapshot and a changed list goes to
 \* every device, this one included; the answer goes elsewhere.
-\* @code src/main/remote/host-services.ts:1059-1067 sessions.list of a device that is not modeled
+\* @code src/main/remote/host-services.ts:1379-1389 A global sessions.list request from another device uses the same share.
 ForeignRead ==
     /\ ~Busy
     /\ nForeign < MaxForeign /\ \A e \in Devices : Len(lk[e]) + 1 <= MaxCh
@@ -391,9 +395,10 @@ LinkBack(d) == MarkStale(d)
 StaleAfterSet(st) == st
 
 \* @code src/main/remote/host-session-list.ts:63-79 hostChanged(data): apply, ignore, note, or mark stale
-\* @code src/main/remote/devices.ts:949-953 the host's sessions.changed event -> link.sessions.hostChanged(data)
+\* @code src/main/remote/devices.ts:1009-1012 A sessions.changed event calls link.sessions.hostChanged(data).
 \* @code src/main/session-list-share.ts:63-70 set(rows): the applied list becomes the copy, no fresher than before (F4), handed on like a read
-\* @code src/main/session-list-share.ts:47-49 stale(); src/main/remote/host-session-list.ts:82-85 stale() also tells the windows (a bare event)
+\* @code src/main/session-list-share.ts:47-49 stale() advances the generation without reading.
+\* @code src/main/remote/host-session-list.ts:82-85 stale() marks the share stale and tells the windows.
 HostEvent(d, i) ==
     /\ (~Busy \/ rp[d] # NoMsg)
     /\ EvOk(lk[d], i, LinkMode) /\ Len(ip[d]) + 2 <= MaxCh
@@ -426,14 +431,14 @@ HostEvent(d, i) ==
                      /\ UNCHANGED <<dv, drows, drd, hver, ann, goneD, rp>>
     /\ UNCHANGED <<tr, an, hs, up, rq, fd, post, cn>>
 
-\* The link's `#drain` hands a computer every frame it has read in one synchronous loop, and a read's `await` continues only
-\* after that loop: the reply's frame resolves the read's promise (HostReplyArrive), the frames behind it in the same drain
+\* FrameReader.push delivers the core frames in one stdout chunk synchronously. A read's `await` continues only
+\* after that loop: the reply's frame resolves the read's promise (HostReplyArrive), the frames behind it in that chunk
 \* run (HostEvent: a delta of the held version applies), and only then the read continues (HostReplyResume). The model lets any
 \* number of events run between the two (a superset of the frames of one drain).
 \* @code native/ompdesk/crates/core/src/remote/link.rs:503-561 drain: the core opens a link's frames in order and hands each to main as one event, through the one writer
-\* @code src/main/core/process.ts:163-200 FrameReader.push: delivers every frame of a chunk synchronously, the listener returns before any promise continues
+\* @code src/main/core/process.ts:179-216 FrameReader.push delivers every frame of a chunk before any promise continues.
 \* @code src/main/remote/wire.ts:161-166 Link.deliver: a link's message reaches its listener in the same synchronous call
-\* @code src/main/remote/client.ts:403-420 #onMessage: the reply's frame resolves the pending request of `sessions.list`
+\* @code src/main/remote/client.ts:443-460 #onMessage resolves the pending sessions.list request or dispatches an event.
 HostReplyArrive(d, i) ==
     /\ ~Busy
     /\ RepOk(lk[d], i, LinkMode) /\ lk[d][i].kind = "reply" /\ rp[d] = NoMsg /\ Len(ip[d]) + 3 <= MaxCh
@@ -445,7 +450,7 @@ HostReplyArrive(d, i) ==
 \* and the read's continuation): the read gives the copy it found.
 ReplyBehind(h, v) == h > 0 /\ v < h
 
-\* @code src/main/remote/host-session-list.ts:87-114 #read: the answer continues the read: an answer older than the held host version gives the copy; else it sets hostVersion; the finally branch asks for another read when a change named a later version
+\* @code src/main/remote/host-session-list.ts:87-115 #read: the answer continues the read: an answer older than the held host version gives the copy; else it sets hostVersion; the finally branch asks for another read when a change named a later version
 \* @code src/main/session-list-share.ts:77-90 #readOnce, #publish: the rows become the copy; a changed list goes to the windows as a delta
 \* @code src/main/session-list-share.ts:35-44 current() returns the copy to the window's ask
 HostReplyResume(d) ==
@@ -470,8 +475,10 @@ HostReplyResume(d) ==
 \* ===== the link =====
 
 \* The connection drops: what was in flight is lost, a read of the host fails (and so does the window's ask).
-\* @code src/main/remote/devices.ts:925-948 client.on("state"): a link that is not online
-\* @code src/main/remote/host-session-list.ts:87-114 #read throws; its finally still runs
+\* @code src/main/remote/client.ts:414-420 A close or offline state drops the link.
+\* @code src/main/remote/client.ts:428-435 #dropLink rejects each pending request.
+\* @code src/main/remote/devices.ts:979-994 The state handler returns when the link is not online.
+\* @code src/main/remote/host-session-list.ts:87-115 #read throws; its finally still runs
 LinkDrop(d) ==
     /\ ~Busy
     /\ up[d] /\ nDrops < MaxDrops /\ Len(ip[d]) + 2 <= MaxCh
@@ -486,7 +493,7 @@ LinkDrop(d) ==
     /\ UNCHANGED <<tr, an, hs, dv, drows, hver, rp, goneD, fd, post, nChanges, nIdx, nTicks, nForeign, seen>>
 
 \* The link is back: the copy may have missed changes, so it is stale (the windows are told).
-\* @code src/main/remote/devices.ts:925-948 client.on("state") online: link.sessions.stale()
+\* @code src/main/remote/devices.ts:993-1003 On reconnect the state handler calls link.sessions.stale().
 LinkUp(d) ==
     /\ ~Busy
     /\ ~up[d] /\ Len(ip[d]) + 1 <= MaxCh
@@ -508,8 +515,8 @@ Violates(c, rows) ==
     /\ c[1] # "none"
     /\ IF c[1] = "ren" THEN rows[c[2]] # NoRow /\ rows[c[2]].j < c[3] ELSE rows[c[2]] # NoRow
 
-\* @code src/renderer/stores/session-list.ts:164-206 refresh(): a read in flight queues one more, else the global feed reads the numbered list
-\* @code src/main/remote/devices.ts:636-640 hostSessions -> HostSessionList.current()
+\* @code src/renderer/stores/session-list.ts:170-190 refresh queues another read when busy; otherwise the global feed asks for the numbered list.
+\* @code src/main/remote/devices.ts:679-683 hostSessions calls the link's HostSessionList.current().
 \* `nd`: what a delete, rename or move just done through this device needs the next ask to show (NoNeed: nothing new).
 RefreshFx(d, nd) ==
     LET n == IF nd # NoNeed THEN nd ELSE need[d]
@@ -525,7 +532,7 @@ RefreshFx(d, nd) ==
 \* The feed's view after `accept`: the rows it reconciles to (reconcile keeps a row object only when sameRow, so the content is the answer's).
 SetShow(d, new) == fshow' = [fshow EXCEPT ![d] = new]
 
-\* @code src/renderer/stores/session-list.ts:211-228 onSessionsChanged: a delta while a read is under way is noted; a delta of the held version applies; the same version is ignored; else the 350 ms debounce
+\* @code src/renderer/stores/session-list.ts:249-266 onSessionsChanged notes, applies, ignores or debounces the change.
 FeedEvent(d, i) ==
     /\ ~Busy
     /\ EvOk(ip[d], i, IpcMode)
@@ -551,7 +558,8 @@ FeedEvent(d, i) ==
                      /\ UNCHANGED <<fv, frows, fshow, goneF, fann>>
     /\ UNCHANGED <<tr, an, hs, lkv, hsl, fin, fq, fret, need, chk, bad, post, cn>>
 
-\* @code src/renderer/stores/session-list.ts:164-206 the read's answer: copy = answer, accept, queue a read when a change named a later version; .finally: a queued refresh runs now
+\* @code src/renderer/stores/session-list.ts:189-210 A current-generation answer replaces the feed copy and can queue another read.
+\* @code src/renderer/stores/session-list.ts:226-236 The current generation's finally runs the queued refresh.
 FeedReply(d, i) ==
     /\ ~Busy
     /\ RepOk(ip[d], i, IpcMode) /\ ip[d][i].kind = "reply" /\ Len(ip[d]) + 1 <= MaxCh
@@ -573,7 +581,7 @@ FeedReply(d, i) ==
                 ELSE /\ ip' = [ip EXCEPT ![d] = Drop(@, i)] /\ UNCHANGED <<drd, rq>>
     /\ UNCHANGED <<tr, an, hs, up, lk, dv, drows, dstale, hver, ann, rp, goneD, fdeb, fret, post, nChanges, nIdx, nTicks, nDrops, nForeign>>
 
-\* @code src/renderer/stores/session-list.ts:183-197 the read failed: the error is shown, a retry is set while held; .finally runs the queued refresh
+\* @code src/renderer/stores/session-list.ts:211-236 A current-generation failure sets an error and a retry while held; finally runs any queued refresh.
 FeedErr(d, i) ==
     /\ ~Busy
     /\ RepOk(ip[d], i, IpcMode) /\ ip[d][i].kind = "err" /\ Len(ip[d]) + 1 <= MaxCh
@@ -590,7 +598,7 @@ FeedErr(d, i) ==
                 ELSE /\ ip' = [ip EXCEPT ![d] = Drop(@, i)] /\ UNCHANGED <<drd, rq>>
     /\ UNCHANGED <<tr, an, hs, up, lk, dv, drows, dstale, hver, ann, rp, goneD, fv, frows, fshow, goneF, fdeb, bad, post, cn, seen>>
 
-\* @code src/renderer/stores/session-list.ts:211-228 the debounce fires: refresh()
+\* @code src/renderer/stores/session-list.ts:263-266 The debounce timer calls refresh().
 FeedDebFire(d) ==
     /\ ~Busy
     /\ fdeb[d] /\ Len(ip[d]) + 1 <= MaxCh
@@ -598,7 +606,7 @@ FeedDebFire(d) ==
     /\ RefreshFx(d, NoNeed)
     /\ UNCHANGED <<tr, an, hs, up, lk, dv, drows, dstale, hver, ann, rp, goneD, fv, frows, fshow, goneF, fann, fret, bad, post, cn, seen>>
 
-\* @code src/renderer/stores/session-list.ts:183-197 the retry timer of a failed read fires: refresh()
+\* @code src/renderer/stores/session-list.ts:218-223 The retry timer of a failed read calls refresh().
 FeedRetry(d) ==
     /\ ~Busy
     /\ fret[d] /\ Len(ip[d]) + 1 <= MaxCh
@@ -607,10 +615,10 @@ FeedRetry(d) ==
     /\ UNCHANGED <<tr, an, hs, up, lk, dv, drows, dstale, hver, ann, rp, goneD, fv, frows, fshow, goneF, fann, fdeb, bad, post, cn, seen>>
 
 \* A device's delete, rename or move: main answered after the host did, and marked the device computer's copy stale (a bare event goes to the windows) ...
-\* @code src/main/ipc.ts:472-484 SESSIONS_DELETE: remoteDevices.hostSessionsStale(device)
-\* @code src/main/ipc.ts:1458-1463 SESSIONS_RENAME: remoteDevices.hostSessionsStale(device)
-\* @code src/main/ipc.ts:1473-1482 SESSIONS_MOVE: remoteDevices.hostSessionsStale(device)
-\* @code src/main/remote/devices.ts:650-652 hostSessionsStale -> HostSessionList.stale()
+\* @code src/main/ipc.ts:540-548 deleteStoredSession calls hostSessionsStale after sessions.delete answers.
+\* @code src/main/ipc.ts:1591-1597 SESSIONS_RENAME calls hostSessionsStale after the rename.
+\* @code src/main/ipc.ts:1609-1617 SESSIONS_MOVE calls hostSessionsStale after the move.
+\* @code src/main/remote/devices.ts:693-695 hostSessionsStale calls HostSessionList.stale().
 PostMain(d) ==
     /\ ~Busy
     /\ post[d][1] = "main" /\ Len(ip[d]) + 1 <= MaxCh
@@ -620,8 +628,8 @@ PostMain(d) ==
     /\ UNCHANGED <<tr, an, hs, lkv, dv, drows, hver, ann, rp, goneD, fd, cn, seen>>
 
 \* ... and the window's feed continues: a delete drops the row from the rows it shows, then it reads again.
-\* @code src/renderer/stores/session-list.ts:255-273 deleteSession: every list of this device drops the row, then refresh()
-\* @code src/renderer/stores/session-list.ts:274-284 renameSession: the row's title, then refresh()
+\* @code src/renderer/stores/session-list.ts:294-324 deleteSession calls forgetSession for each feed; its generation reset is not modeled (see CORRESPONDENCE.md, F6).
+\* @code src/renderer/stores/session-list.ts:325-335 renameSession updates the displayed title and calls refresh().
 PostFeed(d) ==
     /\ ~Busy
     /\ post[d][1] = "feed" /\ Len(ip[d]) + 1 <= MaxCh

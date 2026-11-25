@@ -1,10 +1,9 @@
 /**
  * PR Center commands over the `gh` CLI (port of fork rpc-pr.ts). gh's runs and their rules (the checkout's GitHub
  * repository, the list, a PR's detail and one file's diff, create, merge, review, comment, the conversation, edit and
- * the commits and changed files a draft is written from) run in the core process
- * (`native/ompdesk/crates/core/src/gh/pr.rs`, methods `gh.*`); this is their typed client, which keeps what main owns:
+ * PR drafts) run in the core process (`native/ompdesk/crates/core/src/gh`); this is their typed client, which keeps
  * the checks of what the page sent that come before the repository is read (a PR number, the text a review or comment
- * needs, and its trim), the draft's model call (stock `omp -p`) with its prompt, the checkout through the bridge, and
+ * needs, and its trim), the resolved stock omp launch environment, the checkout through the bridge, and
  * the timeouts. Failures map to typed codes: gh_missing / gh_unauthenticated / not_a_repo / no_github_remote /
  * pr_not_found / pr_create_failed / pr_checkout_failed / pr_draft_failed / pr_merge_failed / pr_review_failed /
  * pr_edit_failed.
@@ -21,12 +20,10 @@ import type {
 	RpcPrReviewEvent,
 } from "../../../shared/rpc-types";
 import { CoreError } from "../../core/process";
+import { scrubUpdateText } from "../../update-log-core";
 import type { BridgeClient, OmpRuntime } from "../types";
 import { LocalCommandError } from "../types";
 import { coreGh, DEFAULT_TIMEOUT_MS, GH_TEXT_TIMEOUT_MS } from "./exec";
-import { extractDraftJson, renderPrompt } from "./parse";
-import prDraftSystemPrompt from "./pr-draft-system.md?raw";
-import prDraftUserPrompt from "./pr-draft-user.md?raw";
 
 const DRAFT_TIMEOUT_MS = 170_000;
 const PR_CREATE_TIMEOUT_MS = 110_000;
@@ -61,10 +58,15 @@ export const PR_COMMAND_BUDGETS_MS = {
  */
 export const GITHUB_REPO_MS = 2 * DEFAULT_TIMEOUT_MS + 2 * GH_TEXT_TIMEOUT_MS;
 
-/** The codes the core refuses a PR Center or GitHub center request with, which the page gets as the command's `code`. */
+/**
+ * The codes the core refuses a PR Center or GitHub center request with, which the page gets as the command's `code`.
+ * `gh_paused`: GitHub's rate limit or the background pace holds the request (core `gh/gate.rs`), its message ends with
+ * `paused until <ISO time>`.
+ */
 const REFUSALS = new Set([
 	"gh_missing",
 	"gh_unauthenticated",
+	"gh_paused",
 	"not_a_repo",
 	"no_github_remote",
 	"pr_not_found",
@@ -93,15 +95,16 @@ export function prRepo(cwd: string): Promise<RpcPrRepo> {
 	return ghRequest("gh.prRepo", { cwd }, GITHUB_REPO_MS);
 }
 
+/** `background`: an automatic re-read, held behind GitHub's rate limit and pace. */
 export function prList(
 	cwd: string,
-	input: { state?: "open" | "closed" | "merged" | "all"; limit?: number; view?: RpcPrListView },
+	input: { state?: "open" | "closed" | "merged" | "all"; limit?: number; view?: RpcPrListView; background?: boolean },
 ): Promise<RpcPrListItem[]> {
 	return ghRequest("gh.prList", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }
 
-export function prGet(cwd: string, input: { number: number }): Promise<RpcPrDetail> {
-	return ghRequest("gh.prGet", { cwd, number: input.number }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
+export function prGet(cwd: string, input: { number: number; background?: boolean }): Promise<RpcPrDetail> {
+	return ghRequest("gh.prGet", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }
 
 /** One file's unified-diff slice (lazy per expand — the file index rides pr_get). */
@@ -109,53 +112,67 @@ export function prDiff(cwd: string, input: { number: number; path: string }): Pr
 	return ghRequest("gh.prDiff", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }
 
-/** What the core reads for a draft: the checkout's root and the head branch's commits and changes against the base. */
-interface DraftFacts {
-	root: string;
-	base: string;
-	head: string;
-	commits: string[];
-	files: string[];
-	diffStat: string;
+/** The first title/body object, including an object inside malformed surrounding model prose. */
+function readDraft(output: string): RpcPrDraftResult | null {
+	for (let start = output.indexOf("{"); start !== -1; start = output.indexOf("{", start + 1)) {
+		let depth = 0;
+		let quoted = false;
+		for (let i = start; i < output.length; i++) {
+			const ch = output[i];
+			if (quoted) {
+				if (ch === "\\") i++;
+				else if (ch === '"') quoted = false;
+			} else if (ch === '"') quoted = true;
+			else if (ch === "{") depth++;
+			else if (ch === "}" && --depth === 0) {
+				try {
+					const row: unknown = JSON.parse(output.slice(start, i + 1));
+					if (
+						row &&
+						typeof row === "object" &&
+						"title" in row &&
+						typeof row.title === "string" &&
+						"body" in row &&
+						typeof row.body === "string"
+					) {
+						return { title: row.title.trim(), body: row.body.trim() };
+					}
+				} catch {}
+				break;
+			}
+		}
+	}
+	return null;
 }
 
 /** AI-draft title/body from the head branch's commits + change summary, via stock `omp -p`. */
 export async function prDraft(
 	cwd: string,
-	omp: OmpRuntime,
+	omp: Pick<OmpRuntime, "run">,
 	input: { base?: string; head?: string },
 ): Promise<RpcPrDraftResult> {
-	// The repository, the current branch, two revisions at up to two rev-parses each, then log and diffs at once.
-	const facts = await ghRequest<DraftFacts>(
-		"gh.prDraftFacts",
+	const { root, prompt } = await ghRequest<{ root: string; prompt: string }>(
+		"gh.prDraftPrompt",
 		{ cwd, ...input },
 		GITHUB_REPO_MS + 6 * DEFAULT_TIMEOUT_MS,
 	);
-	const userPrompt = renderPrompt(prDraftUserPrompt, {
-		base: facts.base,
-		head: facts.head,
-		commitCount: String(facts.commits.length),
-		commits: facts.commits.join("\n"),
-		fileCount: String(facts.files.length),
-		files: facts.files.join("\n").slice(0, 6000),
-		diffStat: facts.diffStat.slice(0, 3000),
-	});
-	let output: { code: number; stdout: string; stderr: string };
-	try {
-		output = await omp.run(["-p", "--no-session", "--no-tools", "--no-lsp"], {
-			cwd: facts.root,
-			input: `${prDraftSystemPrompt.trim()}\n\n---\n\n${userPrompt}`,
-			timeoutMs: DRAFT_TIMEOUT_MS,
+	// The tab's guarded run reads Credit use at launch, after the checkout lookup, not before it. `--tools=` (no built-in
+	// tools), not `--no-tools`: omp 19.2 refuses `--no-tools` beside the Credit use run's `-e` (stock cli/args.ts).
+	const output = await omp
+		.run(["-p", "--no-session", "--tools=", "--no-lsp"], { cwd: root, input: prompt, timeoutMs: DRAFT_TIMEOUT_MS })
+		.catch((error: unknown) => {
+			throw new LocalCommandError(`Draft failed: ${errorText(error)}`, "pr_draft_failed");
 		});
-	} catch (error) {
-		throw new LocalCommandError(`Draft failed: ${errorText(error)}`, "pr_draft_failed");
-	}
-	const draft = output.code === 0 ? extractDraftJson(output.stdout) : null;
-	if (!draft) {
-		const detail = (output.stderr || output.stdout).trim().slice(0, 300);
-		throw new LocalCommandError(`The model did not return a draft${detail ? `: ${detail}` : ""}`, "pr_draft_failed");
-	}
-	return { title: draft.title.trim(), body: draft.body.trim() };
+	const draft = output.code === 0 ? readDraft(output.stdout) : null;
+	if (draft) return draft;
+	const { GH_TOKEN, GITHUB_TOKEN, GH_ENTERPRISE_TOKEN, GITHUB_ENTERPRISE_TOKEN } = process.env;
+	const detail = scrubUpdateText((output.stderr || output.stdout).trim(), [
+		GH_TOKEN,
+		GITHUB_TOKEN,
+		GH_ENTERPRISE_TOKEN,
+		GITHUB_ENTERPRISE_TOKEN,
+	]);
+	throw new LocalCommandError(`The model did not return a draft${detail ? `: ${detail}` : ""}`, "pr_draft_failed");
 }
 
 /**

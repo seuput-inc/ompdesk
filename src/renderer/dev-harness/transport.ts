@@ -8,13 +8,16 @@
  * `window.__harness.emit(channel, payload)` plays a main→renderer push (a tab status, a streaming batch, an ask).
  */
 
+import { BOTS_COMMAND } from "../../shared/bots";
 import { EMPTY_GITHUB_AUTH_STATE } from "../../shared/github-auth";
 import {
 	IPC_COMMANDS,
 	IPC_EVENTS,
 	type IpcFsReadImageResult,
 	type IpcFsReadPlanResult,
+	type IpcSessionsArtworkPayload,
 	type IpcSessionsListPayload,
+	type IpcSessionsTargetsPayload,
 	type IpcStatsFetchPayload,
 	type SessionInfo,
 } from "../../shared/ipc-types";
@@ -34,7 +37,7 @@ import {
 	type PreviewStreamPoll,
 	type PreviewStreamPollRequest,
 } from "../../shared/preview";
-import type { RpcCommand, RpcContextReportResult, SettingsSchemaResult } from "../../shared/rpc-types";
+import type { RpcCommand, RpcContextReportResult, SettingsSchemaResult, UsageReport } from "../../shared/rpc-types";
 import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../../shared/schedules";
 import { readSidebarPrefs, SIDEBAR_PREFS_KEY, type SidebarChange, sidebarPatch } from "../../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../../shared/sidebar-projects";
@@ -94,6 +97,8 @@ import {
 } from "./fixture-settings";
 import { PLAN_FILE_PATH, PLAN_MARKDOWN, SESSION_TREE } from "./fixture-sheets";
 import { statsAnswer } from "./fixture-stats";
+import { artworkFixture, targetsFixture } from "./fixture-targets";
+import { blockedAccountUsage, manyWindowUsage, usageFigureReports } from "./fixture-usage";
 import { diskCareState, orphanWorktrees, savedWorktreeRestore, savedWorktrees } from "./fixture-work-tree";
 import { createHarnessSummaries, type HarnessSummaries } from "./summaries";
 
@@ -108,6 +113,14 @@ const FIRST_RUN = new URLSearchParams(location.search).get("firstrun") === "1";
 const ACCOUNTS = new URLSearchParams(location.search).get("accounts") === "1";
 /** `?jobs=tree`: Background tasks lists subagents' jobs nested under them (./fixture-jobs.ts). */
 const JOBS_TREE = new URLSearchParams(location.search).get("jobs") === "tree";
+/** Sample usage records, selected only by this harness page's query. */
+const USAGE_FIXTURES: Record<string, () => UsageReport[]> = {
+	blocked: blockedAccountUsage,
+	similar: () => blockedAccountUsage(Date.now(), true),
+	windows: manyWindowUsage,
+	figures: usageFigureReports,
+};
+const usageFixture = USAGE_FIXTURES[new URLSearchParams(location.search).get("usage") ?? ""];
 const FIRST_RUN_PROVIDERS = [
 	["anthropic", "Anthropic (Claude Pro/Max)"],
 	["cerebras", "Cerebras"],
@@ -444,7 +457,10 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			// `get_usage` also feeds the sidebar usage meter, the composer's account limit and the turn-error notice,
 			// so its reports stay behind `?board=busy`.
 			case "get_usage":
-				return respond(command, BOARD_BUSY ? boardUsage() : { reports: [] });
+				return respond(
+					command,
+					usageFixture ? { reports: usageFixture() } : BOARD_BUSY ? boardUsage() : { reports: [] },
+				);
 			case "get_orphan_worktrees":
 				return respond(command, orphanWorktrees());
 			case "remove_orphan_worktree":
@@ -525,6 +541,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	/** The machine's research pick (`MODEL_SETUP_PICK_*`), as the host's pref would hold it. */
 	let researchPick: string | null = null;
 	let creditSpend = false;
+	let remoteState = REMOTE_STATE;
 	const invoke = async (channel: string, ...args: unknown[]): Promise<unknown> => {
 		calls.push({ channel, args });
 		// Each case reads the one payload shape its channel carries.
@@ -559,6 +576,10 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 					? { version: `harness.${revision}`, sessions }
 					: sessions;
 			}
+			case IPC_COMMANDS.SESSIONS_TARGETS:
+				return targetsFixture((payload as IpcSessionsTargetsPayload).sessions);
+			case IPC_COMMANDS.SESSIONS_ARTWORK:
+				return artworkFixture((payload as IpcSessionsArtworkPayload).roots);
 			case IPC_COMMANDS.PREFS_GET: {
 				const request = payload as PrefsGetPayload | undefined;
 				return request?.key === undefined ? prefs : prefs[request.key];
@@ -581,6 +602,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case IPC_COMMANDS.DEFAULT_BROWSER_STATUS:
 				return {
 					egoInstalled: true,
+					auto: { kind: "ego" },
 					browsers: [{ id: "chrome", name: "Google Chrome", relayInstalled: false, relayConnected: false }],
 				};
 			case IPC_COMMANDS.DEFAULT_BROWSER_INSTALL_RELAY:
@@ -643,7 +665,15 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case IPC_COMMANDS.SETUP_GET_STATE:
 				return SETUP_STATE;
 			case IPC_COMMANDS.REMOTE_GET_STATE:
-				return REMOTE_STATE;
+				return remoteState;
+			case IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER:
+				if (!Array.isArray(payload) || !payload.every((id): id is string => typeof id === "string"))
+					throw new Error("Expected device ids");
+				remoteState = { ...remoteState, deviceSectionOrder: [...payload] };
+				emit(IPC_EVENTS.REMOTE_STATE, remoteState);
+				return undefined;
+			case BOTS_COMMAND:
+				return { bots: [], items: [] };
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;
 			case SIDEBAR_PROJECTS_COMMAND:

@@ -19,7 +19,7 @@ import { type BrowserType, chromium, devices, expect, type Page, test, webkit } 
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, recordPhoneLoads, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const ENGINES: { name: string; type: BrowserType; device: (typeof devices)[string] }[] = [
 	{ name: "webkit", type: webkit, device: devices["iPhone 14"] },
@@ -91,7 +91,7 @@ for (const engine of ENGINES)
 		Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 		let app: ElectronApplication | null = null;
 		let proxy: ServeProxy | null = null;
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		try {
 			app = await electron.launch({
 				args: [path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"), `--user-data-dir=${desktop}`],
@@ -113,12 +113,86 @@ for (const engine of ENGINES)
 			const context = await browser.newContext({ ...engine.device, colorScheme: "light" });
 			const phone = await context.newPage();
 			const loads = recordPhoneLoads(phone);
+			const t0 = Date.now();
+			const workerEvents: string[] = [];
+			phone.on("pageerror", error => workerEvents.push(`+${Date.now() - t0}ms page error: ${error.message}`));
+			context.on("serviceworker", worker =>
+				workerEvents.push(`+${Date.now() - t0}ms serviceworker ${worker.url()}`),
+			);
 			const pending = new Set<string>();
 			phone.on("request", request => pending.add(request.url()));
 			phone.on("requestfinished", request => pending.delete(request.url()));
 			phone.on("requestfailed", request => pending.delete(request.url()));
-			await phone.goto(`${link.url}/`, { timeout: 60_000 });
+			const expectControlled = async () => {
+				try {
+					await expect
+						.poll(() => phone.evaluate(() => navigator.serviceWorker?.controller != null), { timeout: 30_000 })
+						.toBe(true);
+				} catch (error) {
+					// Where the worker and the page parted: the registration's states, what the worker sees as its clients
+					// (windows it could claim), whether a claim made now takes the page, and the page's own loads and
+					// worker log (phone-loads attachment). A claim that takes the page now means the activation's claim ran
+					// before this document existed; one that does not means the page is not claimable.
+					const worker = await phone
+						.evaluate(async () => {
+							const registration = await navigator.serviceWorker?.getRegistration();
+							return {
+								secure: isSecureContext,
+								installing: registration?.installing?.state ?? null,
+								waiting: registration?.waiting?.state ?? null,
+								active: registration?.active?.state ?? null,
+								scope: registration?.scope ?? null,
+								url: location.href,
+							};
+						})
+						.catch(failure => String(failure));
+					const [serviceWorker] = context.serviceWorkers();
+					const clients = await serviceWorker
+						?.evaluate(
+							"self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => list.map(c => [c.url, c.frameType, c.visibilityState, c.focused].join(' ')))",
+						)
+						.catch((failure: unknown) => String(failure));
+					const claimed = await serviceWorker
+						?.evaluate("self.clients.claim().then(() => 'claimed')")
+						.catch((failure: unknown) => String(failure));
+					const controlledAfter = await phone
+						.evaluate(() => navigator.serviceWorker?.controller != null)
+						.catch(failure => String(failure));
+					await loads.attach("phone-loads");
+					await test.info().attach("serve-requests.txt", { body: link.requestLog() });
+					throw new Error(
+						[
+							String(error),
+							`service worker: ${JSON.stringify(worker)}`,
+							`worker events: ${JSON.stringify(workerEvents)} workers now: ${context.serviceWorkers().length}`,
+							`worker's clients: ${JSON.stringify(clients)}`,
+							`claim now: ${JSON.stringify(claimed)}, page controlled after: ${JSON.stringify(controlledAfter)}`,
+							`open requests: ${[...pending].join(" ")}`,
+						].join("\n"),
+					);
+				}
+			};
+			// Let the first, unpaired document finish loading before the host sends it to /pair.
+			const session = link.hold("/api/session");
+			try {
+				await phone.goto(`${link.url}/`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+				await expect(phone.locator(".boot-shell")).toHaveCount(0, { timeout: 60_000 });
+				const hasScope = await phone.evaluate(async () => !!(await navigator.serviceWorker.getRegistration()));
+				expect(hasScope).toBe(false);
+			} finally {
+				session.release();
+			}
 			await phonePaired(phone);
+			// The first paired page's own worker takes control without a reload.
+			// That is checked here, before the reload below: a document that is created while the worker is still installing
+			// and activating can miss the activation's claim (Chromium on a hosted Windows runner: the reload landed between
+			// the worker's install and its activation, the worker listed the page as a client and a claim made 30 s later
+			// took it at once), and no page the person reloads that early is the point of this test.
+			await expectControlled();
+			// Successful shards keep no attachments. Print the worker and its shell responses at the first claim.
+			console.log(
+				`[${engine.name} first claim] ${await phone.evaluate(() => sessionStorage.getItem("omp.test.sw-log"))}\n${link.requestLog()}`,
+			);
 			const tabId = (await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), project))?.tabId;
 			if (!tabId) throw new Error("no tab on the phone");
 			await phone.reload({ timeout: 60_000 });
@@ -136,9 +210,7 @@ for (const engine of ENGINES)
 			await expect
 				.poll(() => received(record, ["hello before the outage"]), { timeout: 30_000 })
 				.toEqual(["hello before the outage"]);
-			await expect
-				.poll(() => phone.evaluate(() => navigator.serviceWorker?.controller != null), { timeout: 30_000 })
-				.toBe(true);
+			await expectControlled();
 			// The tab strip and transcript snapshots are written after a quiet moment.
 			await phone.waitForTimeout(1500);
 
@@ -192,7 +264,7 @@ for (const engine of ENGINES)
 			await phone.waitForTimeout(3000);
 			expect(await received(record, texts)).toEqual([texts[0], texts[1]]);
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await proxy?.close();
 			if (app) await exitApp(app).catch(() => undefined);
 			await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => undefined);

@@ -14,7 +14,10 @@
  * dense row of a side panel's list, 28px (36px with a second line), small text.
  * `titleLines={2}` lets a long title (a pull request's) wrap once before it is
  * cut. `secondary` is a free muted line under the title whose parts each shrink
- * or stay whole on their own (a number, an author, a branch, counts, an age).
+ * or stay whole on their own (a number, an author, a branch, counts, an age);
+ * `secondaryEnd` ends that line with always-visible controls (a count chip, a
+ * ⋯), never clipped by the line; the caller raises them above the row's click
+ * target (`relative z-(--sc-z-raised)`).
  * The button is named by the title and described by the description and the
  * secondary line; `accessibleName="row"` names it by every text of the row in
  * order, for a list whose rows are found by any of their words.
@@ -42,6 +45,8 @@ export interface ListRowProps {
 	descriptionLines?: 1 | 2;
 	/** A muted one-line row of parts under the title and description; each part sets how it shrinks. */
 	secondary?: ReactNode;
+	/** Controls ending the second line, never clipped by it (a family chip, the row's ⋯); raised by the caller. */
+	secondaryEnd?: ReactNode;
 	/** `md` (default) or `sm`, the dense side-panel row. */
 	size?: "sm" | "md";
 	/** What names the row's button: the `title` (default) or every text of the `row` in order. */
@@ -115,6 +120,7 @@ export function ListRow({
 	description,
 	descriptionLines = 1,
 	secondary,
+	secondaryEnd,
 	size = "md",
 	accessibleName = "title",
 	leading,
@@ -264,11 +270,14 @@ export function ListRow({
 					</span>
 				)}
 				{secondary && (
-					<span
-						className="flex min-w-0 items-center gap-2 overflow-hidden text-sc-xs whitespace-nowrap text-(--sc-text-muted)"
-						id={secondaryId}
-					>
-						{secondary}
+					<span className="flex min-w-0 items-center gap-2">
+						<span
+							className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-sc-xs whitespace-nowrap text-(--sc-text-muted)"
+							id={secondaryId}
+						>
+							{secondary}
+						</span>
+						{secondaryEnd}
 					</span>
 				)}
 			</span>
@@ -276,9 +285,8 @@ export function ListRow({
 				<span
 					id={metaId}
 					className={cx(
-						// Down to `--row-meta-min` (its whole content unless the list sets less: the sidebar lets a waiting
-						// badge's word go, down to its ⚠ glyph) before the title loses a character.
-						"flex min-w-(--row-meta-min,min-content) flex-[0_99_auto] items-center justify-end overflow-hidden text-sc-xs whitespace-nowrap tabular-nums text-(--sc-text-muted)",
+						// Whole (min-content) before the title loses a character.
+						"flex min-w-min flex-[0_99_auto] items-center justify-end overflow-hidden text-sc-xs whitespace-nowrap tabular-nums text-(--sc-text-muted)",
 						actions && !actionsAtRest
 							? cx(
 									actionsOnHover

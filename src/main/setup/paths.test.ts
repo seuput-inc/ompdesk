@@ -1,50 +1,106 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RM_TEMP } from "../test-fake-omp";
 import {
-	expandWindowsEnv,
 	findGitBash,
 	managedAgentDesktop,
 	managedGitRoot,
 	managedToolEnv,
 	managedToolsDir,
 	mergePathLists,
-	parseRegQueryValue,
 } from "./paths";
 
-const USER_REG = [
-	"",
-	"HKEY_CURRENT_USER\\Environment",
-	"    Path    REG_EXPAND_SZ    %USERPROFILE%\\.bun\\bin;C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps;",
-	"",
-].join("\r\n");
-const MACHINE_REG = [
-	"",
-	"HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
-	"    Path    REG_SZ    C:\\Windows\\system32;C:\\Program Files\\Git\\cmd",
-	"",
-].join("\r\n");
+const bun = spawnSync("bun", ["-e", "console.log(process.execPath)"], { encoding: "utf8" }).stdout?.trim() ?? "";
 
-describe("PATH refresh parsing", () => {
-	it("reads the Path value of reg query output, REG_SZ or REG_EXPAND_SZ", () => {
-		expect(parseRegQueryValue(USER_REG, "Path")).toBe(
-			"%USERPROFILE%\\.bun\\bin;C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps;",
-		);
-		expect(parseRegQueryValue(MACHINE_REG, "PATH")).toBe("C:\\Windows\\system32;C:\\Program Files\\Git\\cmd");
-		expect(
-			parseRegQueryValue("ERROR: The system was unable to find the specified registry key or value.", "Path"),
-		).toBe(null);
-	});
-
-	it("expands %VAR% case-insensitively and leaves unknown names", () => {
-		expect(expandWindowsEnv("%UserProfile%\\.bun\\bin;%NOPE%\\x", { USERPROFILE: "C:\\Users\\First Last" })).toBe(
-			"C:\\Users\\First Last\\.bun\\bin;%NOPE%\\x",
-		);
-	});
+describe("PATH refresh", () => {
+	it("reads machine then user, binds names in the current environment and reapplies managed tools", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ompdesk-reg-path-"));
+		try {
+			const bin = join(dir, "fake registry");
+			const tools = join(dir, "tools");
+			const managed = join(tools, "git", "cmd");
+			await mkdir(bin);
+			await mkdir(managed, { recursive: true });
+			const reg = join(bin, "reg.exe");
+			// Homebrew Node resolves libnode relative to its executable; a hardlink relocates it.
+			if (process.platform !== "win32") await symlink(process.execPath, reg);
+			else await link(process.execPath, reg).catch(() => copyFile(process.execPath, reg));
+			await writeFile(
+				join(dir, "query"),
+				`const [key, flag, value] = process.argv.slice(2);
+if (flag !== "/v" || value !== "Path" || process.env.OMPDESK_HUB_TOKEN) process.exit(1);
+if (key === ${JSON.stringify("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment")}) {
+	console.log("    Path    REG_SZ    base/;C:\\\\Program Files\\\\Git\\\\cmd;%empty%");
+	switch (process.env.REG_RESULT) {
+		case "exit": process.exitCode = 1; break;
+		case "stdout": process.stdout.write("x".repeat(1024 * 1024 + 1)); break;
+		case "stderr": process.stderr.write("x".repeat(1024 * 1024 + 1)); break;
+		case "timeout": Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); break;
+	}
+} else if (key === ${JSON.stringify("HKCU\\Environment")}) {
+	console.log("  pAtH\\tREG_EXPAND_SZ\\t   %SETUP_User%\\\\.bun\\\\bin;c:\\\\program files\\\\git\\\\cmd\\\\;%NOPE%\\\\x;  ");
+} else process.exit(1);`,
+			);
+			const script = `import { refreshPath } from ${JSON.stringify(join(__dirname, "paths.ts"))};
+import { stopCore } from ${JSON.stringify(join(__dirname, "../core/process.ts"))};
+import { renameSync } from "node:fs";
+const results = [];
+try {
+	for (const mode of ["ok", "exit", "stdout", "stderr", "timeout", "suffix", "missing"]) {
+		if (mode === "suffix" && process.platform === "win32") {
+			renameSync(${JSON.stringify(reg)}, ${JSON.stringify(`${reg}.com`)});
+		}
+		process.env.PATH = mode === "missing" ? "missing" : ${JSON.stringify(bin)};
+		process.env.REG_RESULT = mode;
+		process.env.SETUP_USER = "old";
+		const pending = refreshPath("win32", ${JSON.stringify(tools)});
+		process.env.PATH = "Base;BASE;;";
+		process.env.SETUP_USER = "C:\\\\Users\\\\First Last";
+		await pending;
+		results.push(process.env.PATH);
+	}
+	console.log(JSON.stringify(results));
+} finally { await stopCore(); }`;
+			expect(bun).toBeTruthy();
+			const result = spawnSync(bun, ["-e", script], {
+				cwd: dir,
+				encoding: "utf8",
+				env: {
+					PATH: bin,
+					SystemRoot: process.env.SystemRoot,
+					HOME: dir,
+					USERPROFILE: dir,
+					APPDATA: dir,
+					LOCALAPPDATA: dir,
+					TMP: dir,
+					TEMP: dir,
+					TMPDIR: dir,
+					empty: "",
+					NoDefaultCurrentDirectoryInExePath: "1",
+				},
+				timeout: 30_000,
+				windowsHide: true,
+			});
+			expect(result.status, result.stderr).toBe(0);
+			const userOnly = `Base;BASE;C:\\Users\\First Last\\.bun\\bin;c:\\program files\\git\\cmd\\;%NOPE%\\x;${managed}`;
+			const both = `Base;BASE;C:\\Program Files\\Git\\cmd;C:\\Users\\First Last\\.bun\\bin;%NOPE%\\x;${managed}`;
+			expect(JSON.parse(result.stdout.trim())).toEqual([
+				both,
+				userOnly,
+				userOnly,
+				userOnly,
+				userOnly,
+				both,
+				`Base;BASE;${managed}`,
+			]);
+		} finally {
+			await rm(dir, RM_TEMP);
+		}
+	}, 35_000); // The real core's 10 s deadline ends the stuck reg.exe; Vitest timers cannot advance it.
 
 	it("appends only new entries, comparing case- and slash-insensitively on Windows", () => {
 		const base = "C:\\Windows\\System32;C:\\Users\\a\\.bun\\bin\\";
@@ -58,6 +114,26 @@ describe("PATH refresh parsing", () => {
 		).toBe("C:\\Windows\\System32;C:\\Users\\a\\.bun\\bin\\;C:\\Program Files\\Git\\cmd");
 		expect(mergePathLists("/usr/bin:/Bin", ["/bin", "/usr/bin"], "darwin", ":")).toBe("/usr/bin:/Bin:/bin");
 	});
+});
+
+it("resolves development and packaged native binaries from Node ESM", () => {
+	const moduleUrl = new URL("../native-bin.ts", import.meta.url).href;
+	const packaged = join(tmpdir(), "Packaged Resources");
+	const script = `import { configureNativeBin, nativeBinPath } from ${JSON.stringify(moduleUrl)};
+console.log(nativeBinPath("ompdesk-core"));
+configureNativeBin({ packaged: true, resourcesPath: ${JSON.stringify(packaged)} });
+console.log(nativeBinPath("ompdesk-core"));`;
+	const result = spawnSync("node", ["--experimental-strip-types", "--input-type=module", "-e", script], {
+		cwd: tmpdir(),
+		encoding: "utf8",
+		windowsHide: true,
+	});
+	expect(result.status, result.stderr).toBe(0);
+	const binary = process.platform === "win32" ? "ompdesk-core.exe" : "ompdesk-core";
+	expect(result.stdout.trim().split(/\r?\n/)).toEqual([
+		join(__dirname, "../../..", "resources", "ompdesk-bin", `${process.platform}-${process.arch}`, binary),
+		join(packaged, "ompdesk-bin", binary),
+	]);
 });
 
 describe("managed tools", () => {
@@ -151,7 +227,6 @@ const stockProcmgr = join(
 	"src",
 	"procmgr.ts",
 );
-const bun = spawnSync("bun", ["--version"], { encoding: "utf8" }).status === 0;
 
 describe.skipIf(!existsSync(stockProcmgr) || !bun)("stock omp's Windows shell", () => {
 	it("is the managed PortableGit's bash.exe for an omp spawned with managedToolEnv", async () => {

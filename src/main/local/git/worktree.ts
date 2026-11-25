@@ -1,10 +1,9 @@
 /**
  * `worktree_create` / `worktree_remove` (port of fork rpc-worktree.ts). The gits and their rules (base and branch
  * checks, `worktree add` and its branch rollback, the checks before a removal, the removal) run in the core process
- * (`native/ompdesk/crates/core/src/git/worktree.rs`); this is their typed client, which keeps what main owns: the
- * names (stock's canonical worktree base and repo hash through the bridge), the folder checks and `mkdir` under the
- * repository lock on the fenced files (`fenced-fs.ts`), the removal guard on real paths and the lock itself.
- * Collisions suffix `-2..-100` on path and branch. Removal keeps the branch and
+ * (`native/ompdesk/crates/core/src/git/worktree.rs`). Main gets stock's worktree root and repo hash through the
+ * bridge and holds the repository lock while the core selects a free name and creates the checkout.
+ * Collisions suffix `-2..-100` on the folder and on generated branch names. Removal keeps the branch and
  * requires a linked checkout registered by git under the canonical root.
  * Kept over stock createSessionWorktree: GUI names/baseRef differ and never carry
  * uncommitted changes. Removal deliberately retains branches; session exit safety
@@ -12,20 +11,26 @@
  */
 
 import * as path from "node:path";
-import type { RpcWorktreeCreateResult } from "../../../shared/rpc-types";
-import { worktreeBranchPrefix } from "../../../shared/worktree-branch";
+import type { RpcWorktreeCreateResult, WorktreeBaseFetch } from "../../../shared/rpc-types";
+import { GUI_WORKTREE_BRANCH_PREFIX, worktreeBranchPrefix } from "../../../shared/worktree-branch";
 import { CoreError } from "../../core/process";
-import { fs } from "../../fenced-fs";
+import { SerialChain } from "../../serial-chain";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
-import { coreGit, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
-import { guiWorktreeCandidate, isInside, worktreeSlug } from "./parse";
+import { coreGit, coreHeld, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
+import { worktreeSlug } from "./parse";
 import { prepareWorktree, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 
-const MAX_SUFFIX = 100;
 /** `git worktree add` checks out the whole tree: minutes on a large repository. */
 export const WORKTREE_ADD_TIMEOUT_MS = 300_000;
 const WORKTREE_REMOVE_TIMEOUT_MS = 120_000;
+/** The fetch of the remote default branch before a `default`-based worktree (the core's own timeout). */
+const BASE_FETCH_TIMEOUT_MS = 60_000;
+/** The plan's gits: repo root, primary root, default branch, its sha before and after the fetch, count, subjects. */
+const PLAN_ROUNDS = 7;
+const PLAN_AND_ADD_MS = (PLAN_ROUNDS + 3) * DEFAULT_TIMEOUT_MS + BASE_FETCH_TIMEOUT_MS + WORKTREE_ADD_TIMEOUT_MS;
+/** A create request's answer, by `<caller>:<requestId>`, is kept this long for the caller's retry. */
+const CREATE_REQUEST_KEEP_MS = 10 * 60_000;
 /**
  * Longest each command runs before main answers, counting every git step on
  * its slowest path at that step's timeout. The renderer's RPC timeouts
@@ -33,10 +38,10 @@ const WORKTREE_REMOVE_TIMEOUT_MS = 120_000;
  * the work still lands.
  */
 export const WORKTREE_COMMAND_BUDGETS_MS = {
-	// Repo root, primary root, default branch, branch probe, `git branch`, the
-	// branch rollback when `worktree add` fails, `worktree add` itself, then
-	// seeding and the setup hook (`worktree-seed.ts`).
-	worktree_create: 6 * DEFAULT_TIMEOUT_MS + WORKTREE_ADD_TIMEOUT_MS + WORKTREE_PREPARE_BUDGET_MS,
+	// Planning (its fetch of the remote default branch included), stock's location, waiting for the lock and every
+	// attempt share one cancellable step.
+	worktree_create: PLAN_AND_ADD_MS + WORKTREE_PREPARE_BUDGET_MS,
+	worktree_prefetch: PLAN_ROUNDS * DEFAULT_TIMEOUT_MS + BASE_FETCH_TIMEOUT_MS,
 	// Repo root, primary root, status, prune, and `worktree remove` itself.
 	worktree_remove: 4 * DEFAULT_TIMEOUT_MS + WORKTREE_REMOVE_TIMEOUT_MS,
 } as const;
@@ -48,6 +53,7 @@ const REFUSALS = new Set([
 	"invalid_name",
 	"worktree_create_failed",
 	"not_a_worktree",
+	"worktree_outside_root",
 	"worktree_dirty",
 	"worktree_remove_failed",
 ]);
@@ -61,13 +67,6 @@ export async function worktreeGit<T>(method: string, params: object, rounds: num
 			throw new LocalCommandError(error.message, error.code);
 		throw error;
 	}
-}
-
-async function pathTaken(file: string): Promise<boolean> {
-	return fs.stat(file).then(
-		() => true,
-		() => false,
-	);
 }
 
 /** Main cannot import pi-utils' Bun hash or its live worktree.base override. */
@@ -111,17 +110,69 @@ export function worktreeBranchSource(value: unknown): WorktreeBranchSource | und
 	};
 }
 
-export async function createWorktree(
+interface CreateInput {
+	name: string;
+	baseCwd?: string;
+	baseRef?: string;
+	branchPrefix?: string;
+	branch?: WorktreeBranchSource;
+}
+
+const createRequests = new Map<string, { args: string; made: Promise<RpcWorktreeCreateResult>; at: number }>();
+
+/**
+ * A create that names its request (`caller`: the paired device asking, else "local"; `id`: the caller's id for this
+ * one create) answers every repeat of that request with the same worktree (a retry after a lost answer), refuses the
+ * id with other arguments, and forgets a failed one so its retry runs again.
+ */
+export function createWorktree(
 	sessionCwd: string,
-	input: {
-		name: string;
-		baseCwd?: string;
-		baseRef?: string;
-		branchPrefix?: string;
-		branch?: WorktreeBranchSource;
-	},
+	input: CreateInput & { request?: { caller: string; id: string } },
 	bridge: Pick<BridgeClient, "request">,
 ): Promise<RpcWorktreeCreateResult> {
+	const { request, ...args } = input;
+	if (!request) return createWorktreeOnce(sessionCwd, args, bridge);
+	const now = Date.now();
+	for (const [key, entry] of createRequests) if (now - entry.at > CREATE_REQUEST_KEEP_MS) createRequests.delete(key);
+	const key = `${request.caller}:${request.id}`;
+	const argsKey = JSON.stringify([
+		args.name,
+		args.baseCwd ?? sessionCwd,
+		args.baseRef,
+		args.branchPrefix,
+		args.branch,
+	]);
+	const known = createRequests.get(key);
+	if (known) {
+		if (known.args === argsKey) return known.made;
+		return Promise.reject(
+			new LocalCommandError("This request id was used for a different worktree", "invalid_request"),
+		);
+	}
+	const made = createWorktreeOnce(sessionCwd, args, bridge);
+	createRequests.set(key, { args: argsKey, made, at: now });
+	made.catch(() => {
+		if (createRequests.get(key)?.made === made) createRequests.delete(key);
+	});
+	return made;
+}
+
+/** The remote default branch fetched ahead of a create (the worktree dialog when it opens); null outside a repository or without one. */
+export function prefetchWorktreeBase(cwd: string): Promise<WorktreeBaseFetch | null> {
+	return worktreeGit("git.worktreePrefetch", { cwd }, PLAN_ROUNDS, BASE_FETCH_TIMEOUT_MS);
+}
+
+async function createWorktreeOnce(
+	sessionCwd: string,
+	input: CreateInput,
+	bridge: Pick<BridgeClient, "request">,
+): Promise<RpcWorktreeCreateResult> {
+	const step = new SerialChain({ name: "worktree create", maxStepMs: PLAN_AND_ADD_MS });
+	const { primary, made, base } = await step.run(() => planAndAdd(sessionCwd, input, bridge), input.name);
+	return { ...made, ...(base ? { base } : {}), ...(await prepareWorktree(primary, made.path)) };
+}
+
+async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<BridgeClient, "request">) {
 	const slug = worktreeSlug(input.name);
 	if (!slug) {
 		throw new LocalCommandError(
@@ -129,59 +180,64 @@ export async function createWorktree(
 			"invalid_name",
 		);
 	}
-	const branchPrefix = input.branchPrefix === undefined ? undefined : worktreeBranchPrefix(input.branchPrefix);
+	const branchPrefix =
+		input.branchPrefix === undefined ? GUI_WORKTREE_BRANCH_PREFIX : worktreeBranchPrefix(input.branchPrefix);
 	if (branchPrefix === null) {
 		throw new LocalCommandError(`Invalid worktree branch prefix "${input.branchPrefix}".`, "invalid_name");
 	}
 	const baseCwd = input.baseCwd ?? sessionCwd;
-	// The repository, its main checkout, and the commit a new branch starts at (`HEAD`, `default`, or a ref it has).
-	const { primary, startPoint } = await worktreeGit<{ primary: string; startPoint: string }>(
-		"git.worktreePlan",
-		{ cwd: baseCwd, baseRef: input.baseRef },
-		3,
+	// Check before resolving Git so a missing base still names the folder when Git is unavailable.
+	const stat = await coreHeld<{ directory: boolean }>("fs.stat", { path: baseCwd }, PLAN_AND_ADD_MS).catch(
+		(error: unknown) => {
+			if (error instanceof CoreError && ["file_not_found", "io", "exists"].includes(error.code)) return null;
+			throw error;
+		},
 	);
-	// The main checkout as the caller spells it when it is that directory: git answers with the long form of a Windows
-	// 8.3 path (C:\Users\RUNNER~1\…), and the caller's tabs and sessions compare against the form it gave.
-	const realOf = (dir: string) =>
-		fs.realpath(dir).then(real => (process.platform === "win32" ? real.toLowerCase() : real));
-	const mainCheckout =
-		(await realOf(baseCwd).catch(() => null)) === (await realOf(primary).catch(() => undefined))
-			? path.resolve(baseCwd)
-			: primary;
-	const location = await stockWorktreeLocation(bridge, primary);
+	if (!stat?.directory) {
+		throw new LocalCommandError(`The folder "${baseCwd}" does not exist.`, "file_not_found");
+	}
+	// The repository, its main checkout, and the commit a new branch starts at (`HEAD`, `default` fetched first, or a
+	// ref it has).
+	const { primary, startPoint, mainCheckout, base } = await worktreeGit<{
+		primary: string;
+		startPoint: string;
+		mainCheckout: string;
+		base?: WorktreeBaseFetch;
+	}>(
+		"git.worktreePlan",
+		{ cwd: baseCwd, checkoutSpelling: path.resolve(baseCwd), baseRef: input.baseRef },
+		PLAN_ROUNDS,
+		BASE_FETCH_TIMEOUT_MS,
+	);
+	const { root, hash } = await stockWorktreeLocation(bridge, primary);
 
-	const made = await withRepoLock(primary, async (): Promise<RpcWorktreeCreateResult> => {
-		for (let suffix = 1; suffix <= MAX_SUFFIX; suffix++) {
-			const candidate = guiWorktreeCandidate(slug, location.hash, suffix, location.root, branchPrefix);
-			// A half-created dir (no .git yet) still makes `git worktree add` fail with "exists".
-			if (await pathTaken(candidate.path)) continue;
-			const add = { primary, baseCwd, path: candidate.path, addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS };
-			try {
-				await fs.mkdir(path.dirname(candidate.path), { recursive: true });
-				if (input.branch) {
-					// The branch name is the caller's: only the folder takes a suffix.
-					await worktreeGit("git.worktreeAddNamed", { ...add, source: input.branch }, 4, WORKTREE_ADD_TIMEOUT_MS);
-					return { path: candidate.path, branch: input.branch.name, baseCwd: mainCheckout };
-				}
-				// A taken branch name moves on to the next suffix; a failed add has rolled its branch back.
-				const { taken } = await worktreeGit<{ taken: boolean }>(
-					"git.worktreeAdd",
-					{ ...add, branch: candidate.branch, startPoint },
-					3,
-					WORKTREE_ADD_TIMEOUT_MS,
-				);
-				if (!taken) return { path: candidate.path, branch: candidate.branch, baseCwd: mainCheckout };
-			} catch (error) {
-				if (error instanceof LocalCommandError) throw error;
-				throw new LocalCommandError(
-					`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
-					"worktree_create_failed",
-				);
-			}
+	const made = await withRepoLock(primary, async () => {
+		try {
+			return await worktreeGit<{ path: string; branch: string }>(
+				"git.worktreeAdd",
+				{
+					primary,
+					baseCwd,
+					root,
+					hash,
+					slug,
+					branchPrefix,
+					startPoint,
+					source: input.branch,
+					addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+				},
+				0,
+				PLAN_AND_ADD_MS,
+			);
+		} catch (error) {
+			if (error instanceof LocalCommandError) throw error;
+			throw new LocalCommandError(
+				`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+				"worktree_create_failed",
+			);
 		}
-		throw new LocalCommandError(`No available worktree name after ${MAX_SUFFIX} attempts`, "worktree_create_failed");
 	});
-	return { ...made, ...(await prepareWorktree(primary, made.path)) };
+	return { primary, base, made: { ...made, baseCwd: mainCheckout } };
 }
 
 /**
@@ -195,23 +251,6 @@ export const tablessWorktreeBridge: Pick<BridgeClient, "request"> = {
 };
 
 /**
- * Real path of `worktreePath` when it lies strictly inside `root` (the
- * directory every GUI and PR worktree is created under), else null. Both sides
- * are resolved first, so neither `..` segments nor a symlink inside the root
- * can reach a checkout elsewhere.
- */
-export async function removableWorktreePath(worktreePath: string, root: string): Promise<string | null> {
-	if (!worktreePath || !path.isAbsolute(worktreePath)) return null;
-	try {
-		const [realRoot, realPath] = await Promise.all([fs.realpath(root), fs.realpath(worktreePath)]);
-		return isInside(realRoot, realPath) ? realPath : null;
-	} catch {
-		// A missing root or path holds nothing this command may remove.
-		return null;
-	}
-}
-
-/**
  * Dirty worktrees are refused unless `force`; the message carries the counts for the close dialog.
  * Only checkouts under the worktree root qualify: `--force` must never reach the user's own clone.
  */
@@ -221,16 +260,9 @@ export async function removeWorktree(
 	sessionCwd: string,
 ): Promise<{ removed: true }> {
 	const { root } = await stockWorktreeLocation(bridge, path.resolve(sessionCwd));
-	const worktreePath = await removableWorktreePath(input.path, root);
-	if (!worktreePath) {
-		throw new LocalCommandError(
-			`Refusing to remove ${input.path || "(no path)"}: only registered linked worktrees under ${root} can be removed (check worktree.base).`,
-			"worktree_outside_root",
-		);
-	}
-	const { primary } = await worktreeGit<{ primary: string }>(
+	const { primary, path: worktreePath } = await worktreeGit<{ primary: string; path: string }>(
 		"git.worktreeRemoval",
-		{ path: worktreePath, force: input.force === true },
+		{ path: input.path, root, force: input.force === true },
 		4,
 	);
 	return withRepoLock(primary, () =>

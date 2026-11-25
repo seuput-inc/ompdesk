@@ -30,19 +30,20 @@
  * the scheduled retry, the "continuing" row) and tells Autopilot's goal `none` for a launch continuation it was waiting
  * on, then opens a new instance on the next call and re-seeds it from what can be read again: the marker file (so a
  * run's `startedAt` and the file stay), every outcome and stock retry the pool shows now (as already judged, so an old
- * failure arms nothing), and each tab's `exits`. A failed turn that was waiting is not waited for again; the marker
- * file keeps what the last `sync()` wrote for the next launch.
+ * failure arms nothing), and each tab's `exits`. A failed turn that was waiting is not waited for again. What the
+ * marker file held when the core went is continued at once, as a relaunch continues it (`launch`, `#continueAfterLoss`):
+ * the core ended every omp it ran, so each turn it cut goes on once its tab's next omp is up.
  */
 import { readFileSync } from "node:fs";
 import { parseAgentMessage } from "../shared/agent-control";
-import type { IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
+import type { IpcCutOff, IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
 import { LIMIT_LOOK_MS, QUOTA_FALLBACK_MS } from "../shared/quota-reset";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
 import { canonicalCwd } from "./canonical-cwd";
 import { type HubItem, hub, sharedInstance } from "./core/hub";
-import type { CoreError } from "./core/process";
-import { deletedSessions } from "./deleted-sessions";
+import { type CoreError, isCoreShutdown } from "./core/process";
+import { deletedSessionsOpen } from "./deleted-sessions";
 import { RpcTimeoutError } from "./rpc-client";
 import type { SidecarLike } from "./sidecar-types";
 import { recordTurnStop } from "./turn-stop-log";
@@ -55,7 +56,9 @@ export type ResumeReason =
 	/** The turn ended in a network error and was waiting for the connection. */
 	| "network"
 	/** The turn ended at a provider's limit and was waiting for it to lift. */
-	| "limit";
+	| "limit"
+	/** The turn failed and a scheduled retry was waiting for its time (it lives in the process; the marker carries it). */
+	| "retry";
 
 export interface ResumeMarker {
 	/** The window (webContents id) that held the tab. Informational: windows are rebuilt from the saved layout. */
@@ -99,6 +102,10 @@ export interface ResumeFact {
 	running: boolean;
 	/** The run's turn ended; only background work (subagents, async jobs) keeps it on. */
 	settling?: boolean;
+	/** The session's goal is active (stock's last `goal_updated`): idle between its turns, a relaunch revives it. */
+	goalActive?: boolean;
+	/** The tab is an active Autopilot run's own (main's mirror, `Autopilot.runsOn`): revived like an active goal. */
+	autopilotActive?: boolean;
 	/** The user pressed Stop since the run began. */
 	stopped: boolean;
 	/** An ask or approval is open on this tab. */
@@ -351,7 +358,11 @@ function sanitizeMarker(value: unknown): ResumeMarker | null {
 		typeof cwd !== "string" ||
 		(kind !== "agent" && kind !== "chat") ||
 		typeof startedAt !== "number" ||
-		(reason !== "running" && reason !== "asking" && reason !== "network" && reason !== "limit") ||
+		(reason !== "running" &&
+			reason !== "asking" &&
+			reason !== "network" &&
+			reason !== "limit" &&
+			reason !== "retry") ||
 		// Written by a client before its host owned the resume: the host has its own marker.
 		device !== undefined
 	)
@@ -369,6 +380,8 @@ export interface ResumePool {
 	setAwaitingConnection(tabId: string, awaiting: boolean): void;
 	/** Show or clear the tab's calm "continuing where it left off" row: a relaunch continues it and its turn has not started yet. */
 	setResuming(tabId: string, resuming: boolean): void;
+	/** Show (or with `undefined` clear) the tab's cut-off row: its turn waits for the person's Continue or Dismiss. */
+	setCutOff(tabId: string, cutOff: IpcCutOff | undefined): void;
 	/** Show (or with `undefined` clear) the tab's scheduled retry. */
 	setScheduledRetry(tabId: string, retry: IpcScheduledRetry | undefined): void;
 	/** Spawn a deferred tab's process; the sidecar, or null when the tab is gone. */
@@ -429,6 +442,11 @@ export interface ResumeDeps {
 	 * will run again reports nothing.
 	 */
 	goalSettled?: (tabId: string, outcome: GoalSettlement) => void;
+	/**
+	 * A tab's cut-off turn was offered to the person instead of going on (`what` says why), or the person dismissed it:
+	 * a session an agent opened tells its opener, which otherwise waits for a result that will not come.
+	 */
+	cutNote?: (tabId: string, what: IpcCutOff | "dismissed") => void;
 	/**
 	 * One line of the runtime log (`gui-runtime.jsonl`, source `turn-resume`): each relaunch decision and each limit
 	 * wait's start and try, so a turn that did not continue can be explained afterwards from the user's own files.
@@ -523,7 +541,12 @@ export class TurnResume {
 	/** A token settled before its caller had it (an item that came inside the call): settled when it is waited on. */
 	readonly #settled = new Set<number>();
 	/** What the core has shown the pool, to clear when it is lost: the waiting, "continuing" and scheduled-retry rows. */
-	readonly #shown = { awaiting: new Set<string>(), resuming: new Set<string>(), scheduled: new Set<string>() };
+	readonly #shown = {
+		awaiting: new Set<string>(),
+		resuming: new Set<string>(),
+		scheduled: new Set<string>(),
+		cutOff: new Set<string>(),
+	};
 	/** Tabs whose launch continuation Autopilot's goal waits on (`relaunchContinuation` said so): told `none` if the core is lost. */
 	readonly #owedGoals = new Set<string>();
 
@@ -531,9 +554,22 @@ export class TurnResume {
 		this.#deps = deps;
 	}
 
+	/**
+	 * A call the core's own timers, the sidecars' status events and the pool's run-state changes make: once the quit has
+	 * ended the core there is nothing to decide, so its refusal is dropped (anything else still throws).
+	 */
+	#atQuit(run: () => void): void {
+		try {
+			run();
+		} catch (error) {
+			if (!isCoreShutdown(error)) throw error;
+		}
+	}
+
 	/** The instance, opened (or opened again after a loss) with what can be read again. */
 	#instance(): number {
 		if (this.#id !== null) return this.#id;
+		deletedSessionsOpen();
 		const id = hub().nextId();
 		const deps = this.#deps;
 		hub().open(
@@ -555,10 +591,21 @@ export class TurnResume {
 			},
 		);
 		this.#id = id;
+		if (this.#continueAfterLoss) {
+			this.#continueAfterLoss = false;
+			// Before any other call can sync the new instance: the file still holds what ran when the core went.
+			hub().call(id, "launch", {});
+		}
 		return id;
 	}
 
 	#reseed = false;
+	/**
+	 * The next instance continues the marker file's turns at once (`launch`): a lost core ends every omp it ran, and the
+	 * new one's pool reads each tab idle, so the next `sync` would drop the markers of the turns the loss cut (the Mac
+	 * mini, 18 Nov 2026: 14 tabs came back to nothing). Set only after this launch's own `launch()`.
+	 */
+	#continueAfterLoss = false;
 
 	/** What a new instance of a lost core learns: see the file's header. */
 	#seed(): Record<string, unknown> {
@@ -573,28 +620,36 @@ export class TurnResume {
 		};
 	}
 
-	/** One call; a core lost under it opens again and the call is made once more. */
-	#call<T>(method: string, params: Record<string, unknown> = {}): T {
+	/**
+	 * One call; a core lost under it opens again and the call is made once more. Params that read main (the pool's
+	 * facts, the network) are a function, read again for the second call: after the loss the new instance's `launch`
+	 * has already changed the pool (a held offline wait), and facts read before it would undo that.
+	 */
+	#call<T>(method: string, params: Record<string, unknown> | (() => Record<string, unknown>) = {}): T {
 		return hub().callOnce<T>(() => this.#instance(), method, params);
 	}
 
 	#lost(_error: CoreError): void {
 		this.#id = null;
 		this.#reseed = true;
+		// The lost core took every tab's omp with it: what was running then goes on as after a relaunch (`#instance`).
+		if (this.#launched) this.#continueAfterLoss = true;
 		for (const cancel of this.#timers.values()) cancel();
 		this.#timers.clear();
 		for (const { sidecar, listener } of this.#listeners.values()) sidecar.off("status", listener);
 		this.#listeners.clear();
 		for (const settle of this.#tokens.values()) settle();
 		this.#tokens.clear();
-		const { awaiting, resuming, scheduled } = this.#shown;
-		const rows = { awaiting: [...awaiting], resuming: [...resuming], scheduled: [...scheduled] };
+		const { awaiting, resuming, scheduled, cutOff } = this.#shown;
+		const rows = { awaiting: [...awaiting], resuming: [...resuming], scheduled: [...scheduled], cutOff: [...cutOff] };
 		awaiting.clear();
 		resuming.clear();
 		scheduled.clear();
+		cutOff.clear();
 		for (const tab of rows.awaiting) this.#deps.pool.setAwaitingConnection(tab, false);
 		for (const tab of rows.scheduled) this.#deps.pool.setScheduledRetry(tab, undefined);
 		for (const tab of rows.resuming) this.#deps.pool.setResuming(tab, false);
+		for (const tab of rows.cutOff) this.#deps.pool.setCutOff(tab, undefined);
 		const owed = [...this.#owedGoals];
 		this.#owedGoals.clear();
 		for (const tab of owed) this.#deps.goalSettled?.(tab, "none");
@@ -640,6 +695,14 @@ export class TurnResume {
 				else this.#shown.resuming.delete(tab);
 				deps.pool.setResuming(tab, item.resuming as boolean);
 				break;
+			case "setCutOff":
+				if (item.cutOff) this.#shown.cutOff.add(tab);
+				else this.#shown.cutOff.delete(tab);
+				deps.pool.setCutOff(tab, (item.cutOff ?? undefined) as IpcCutOff | undefined);
+				break;
+			case "cutNote":
+				deps.cutNote?.(tab, item.what as IpcCutOff | "dismissed");
+				break;
 			case "setScheduled":
 				if (item.retry) this.#shown.scheduled.add(tab);
 				else this.#shown.scheduled.delete(tab);
@@ -670,7 +733,7 @@ export class TurnResume {
 			case "schedule": {
 				const timer = item.timer as number;
 				const cancel = deps.scheduledRetry.schedule(() => {
-					if (this.#id !== null) this.#call("timer", { timer });
+					if (this.#id !== null) this.#atQuit(() => this.#call("timer", { timer }));
 				}, item.ms as number);
 				this.#timers.set(timer, cancel);
 				break;
@@ -710,7 +773,9 @@ export class TurnResume {
 		if (!sidecar) return;
 		const listener = (payload: SidecarStatus) => {
 			if (this.#id === null) return;
-			this.#call("status", { listener: id, status: payload.status, sessionHeld: payload.sessionHeld === true });
+			this.#atQuit(() =>
+				this.#call("status", { listener: id, status: payload.status, sessionHeld: payload.sessionHeld === true }),
+			);
 		};
 		this.#listeners.set(id, { sidecar, listener });
 		sidecar.on("status", listener);
@@ -794,14 +859,8 @@ export class TurnResume {
 				return deps.openTab(item.marker as ResumeMarker);
 			case "resumeRank":
 				return (item.tabs as string[]).map(tab => deps.pool.resumeRank?.(tab) ?? 0);
-			case "launchRead": {
-				const markers = deps.store.read();
-				return {
-					markers,
-					deleted: markers.map(marker => deletedSessions().has(marker.sessionPath)),
-					enabled: deps.enabled(),
-				};
-			}
+			case "launchRead":
+				return { markers: deps.store.read(), enabled: deps.enabled() };
 			case "canonical":
 				return (item.paths as string[]).map(path => canonicalCwd(path));
 			default:
@@ -816,14 +875,23 @@ export class TurnResume {
 	 * A tab whose turn waits for a provider's limit keeps a `limit` marker, so a relaunch takes the turn up again.
 	 */
 	sync(): void {
-		this.#call("sync", {
-			env: this.#env(["facts", "network", "enabled", "now"]),
-		});
+		this.#atQuit(() =>
+			this.#call("sync", () => ({
+				env: this.#env(["facts", "network", "enabled", "now"]),
+			})),
+		);
 	}
 
 	/** The network is back (or already was): run every held continuation. */
 	async flush(): Promise<void> {
-		await this.#promise(this.#call<number | null>("flush", { env: this.#env(["facts", "online"]) }));
+		let token: number | null;
+		try {
+			token = this.#call<number | null>("flush", () => ({ env: this.#env(["facts", "online"]) }));
+		} catch (error) {
+			if (isCoreShutdown(error)) return;
+			throw error;
+		}
+		await this.#promise(token);
 	}
 
 	/** The connectivity state changed. */
@@ -837,10 +905,10 @@ export class TurnResume {
 	 * Continue interrupted work after relaunch is off).
 	 */
 	relaunchContinuation(tabId: string): RelaunchContinuation {
-		const answer = this.#call<RelaunchContinuation>("relaunchContinuation", {
+		const answer = this.#call<RelaunchContinuation>("relaunchContinuation", () => ({
 			tab: tabId,
 			enabled: this.#deps.enabled(),
-		});
+		}));
 		if (answer === "after_restore") this.#owedGoals.add(tabId);
 		return answer;
 	}
@@ -853,6 +921,19 @@ export class TurnResume {
 	/** The resuming row's Stop: abort what this launch resumed on the tab, drop what still waits. */
 	async stopResumed(tabId: string): Promise<void> {
 		await this.#promise(this.#call<number>("stopResumed", { tab: tabId }));
+	}
+
+	/** The cut-off row's Continue: the tab's cut-off turn goes on, if it is still the one cut. */
+	continueCut(tabId: string): void {
+		this.#call("continueCut", () => ({
+			tab: tabId,
+			env: this.#env(["facts", "fact", "network", "enabled", "now"], tabId),
+		}));
+	}
+
+	/** The cut-off row's Dismiss: the turn stays where the cut left it. */
+	dismissCut(tabId: string): void {
+		this.#call("dismissCut", () => ({ tab: tabId, env: this.#env(["facts", "fact", "enabled", "now"], tabId) }));
 	}
 
 	/**

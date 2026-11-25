@@ -42,7 +42,7 @@ import {
 import { type ComponentType, Suspense } from "react";
 import { agentDesktopCommand, agentDesktopSummary, isAgentDesktopTool } from "../../lib/agent-desktop-name";
 import { lazyChunk } from "../../lib/chunk-load";
-import { sanitizeToolText } from "../../lib/format";
+import { resultDetails, sanitizeToolText } from "../../lib/format";
 import { translate } from "../../lib/i18n";
 import { decodeXdevPayload, xdevDispatch, xdevInnerResult, xdevWriteTarget } from "../../lib/xdev";
 import { editArgumentPaths, editArgumentSummary } from "./edit-args";
@@ -158,6 +158,70 @@ function WriteRendererOrDevice(props: ToolRendererProps) {
 	);
 }
 
+interface CommandExecution {
+	tool: string;
+	mode: "execute";
+	exitCode: number;
+	args: Record<string, unknown>;
+	inner?: unknown;
+}
+
+function isCommandExecution(value: unknown): value is CommandExecution {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"mode" in value &&
+		value.mode === "execute" &&
+		"tool" in value &&
+		typeof value.tool === "string" &&
+		"exitCode" in value &&
+		typeof value.exitCode === "number" &&
+		"args" in value &&
+		typeof value.args === "object" &&
+		value.args !== null &&
+		!Array.isArray(value.args)
+	);
+}
+
+function BashWithCommands(props: ToolRendererProps) {
+	const commands = resultDetails(props.isPartial ? props.partialResult : props.result)?.toolCommands;
+	if (!Array.isArray(commands)) return <BashRenderer {...props} />;
+	// stdout, images and the outer exit code belong to the whole shell, not to any individual command.
+	return (
+		<>
+			<BashRenderer {...props} />
+			{commands.map((command: unknown, index) => {
+				if (!isCommandExecution(command) || command.tool === "bash") return null;
+				// Without inner details a search renderer, for example, would invent "no matches".
+				const resolution = command.tool === "resolve" || command.tool === "reject";
+				const Renderer =
+					command.inner != null || resolution || Object.hasOwn(NOTE_DEVICES, command.tool)
+						? getToolRenderer(command.tool)
+						: GenericRenderer;
+				const failed = !props.isPartial && command.exitCode !== 0;
+				const inner = command.inner == null ? undefined : { details: command.inner, content: [] };
+				return (
+					<div className="mt-1.5" key={`${index}:${command.tool}`}>
+						<div className="text-sc-xs text-(--sc-text-subtle)">
+							{command.tool}
+							{failed && !resolution && (
+								<span className="ml-1 text-(--sc-danger)">{translate("tools.status.failed")}</span>
+							)}
+						</div>
+						<Renderer
+							args={command.args}
+							result={inner}
+							partialResult={inner}
+							isPartial={props.isPartial}
+							isError={failed}
+						/>
+					</div>
+				);
+			})}
+		</>
+	);
+}
+
 /**
  * Tool name → renderer. Every name the sidecar can emit for a top-level call
  * belongs here or in `GENERIC_TOOL_NAMES` below; `xd://` device names resolve
@@ -171,7 +235,7 @@ const REGISTRY: Record<string, ComponentType<ToolRendererProps>> = {
 	apply_patch: EditRenderer,
 	goal: GoalRenderer,
 	write: WriteRendererOrDevice,
-	bash: BashRenderer,
+	bash: BashWithCommands,
 	grep: GrepRenderer,
 	find: FindRenderer,
 	glob: GlobRenderer,
@@ -225,7 +289,7 @@ function AgentDesktopRenderer(props: ToolRendererProps) {
 }
 
 export function getToolRenderer(name: string): ComponentType<ToolRendererProps> {
-	if (REGISTRY[name]) return REGISTRY[name];
+	if (Object.hasOwn(REGISTRY, name)) return REGISTRY[name];
 	if (isAgentDesktopTool(name)) return AgentDesktopRenderer;
 	return name.startsWith(MCP_TOOL_NAME_PREFIX) ? McpRenderer : GenericRenderer;
 }
@@ -308,6 +372,8 @@ const SUMMARIES: Record<string, (args: Record<string, unknown>) => string> = {
 	generate_image: args => argLine(args, ["subject", "prompt"]),
 	tts: args => argLine(args, ["text"]),
 	resolve: args => argLine(args, ["reason", "label"]),
+	propose: args => argLine(args, ["title"]),
+	report_issue: args => argLine(args, ["report"]),
 	reject: args => argLine(args, ["reason"]),
 };
 

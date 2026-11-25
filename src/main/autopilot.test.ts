@@ -7,7 +7,7 @@ import {
 	type AutopilotStatus,
 	DEFAULT_SHIP_POLICY,
 } from "../../resources/gui-bridge/modes/autopilot-contracts";
-import { localDate, probeRepo, startSettings } from "./autopilot";
+import { localDate } from "./autopilot";
 import {
 	autopilot,
 	build,
@@ -30,47 +30,6 @@ installAutopilotRig();
 describe("pure helpers", () => {
 	it("localDate is the local YYYY-MM-DD", () => {
 		expect(localDate(new Date(2026, 9, 7))).toBe("2026-10-07");
-	});
-
-	it("probeRepo says present for a checkout, gone for a missing folder or one git calls no repository", async () => {
-		expect(await probeRepo(main)).toBe("present");
-		expect(await probeRepo(path.join(tmp, "missing"))).toBe("gone");
-		const plain = path.join(tmp, "plain");
-		await fs.mkdir(plain);
-		expect(await probeRepo(plain)).toBe("gone");
-	});
-
-	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-		"probeRepo says unknown, never gone, when the folder cannot be looked at (EACCES): no soft stop",
-		async () => {
-			const locked = path.join(tmp, "locked");
-			await fs.mkdir(path.join(locked, "wt"), { recursive: true });
-			await fs.chmod(locked, 0o000);
-			try {
-				expect(await probeRepo(path.join(locked, "wt"))).toBe("unknown");
-			} finally {
-				await fs.chmod(locked, 0o755);
-			}
-		},
-	);
-
-	it("startSettings layers defaults, a preset and the explicit values", () => {
-		expect(startSettings({}).ship).toEqual(DEFAULT_SHIP_POLICY);
-		expect(startSettings({ preset: "push" }).ship).toMatchObject({ autoPush: true, autoRelease: { on: false } });
-		expect(startSettings({ preset: "release" }).ship).toMatchObject({
-			autoPush: true,
-			autoRelease: { on: true },
-		});
-		expect(startSettings({ ship: { remote: "up" } }).ship.remote).toBe("up");
-		// No cap on fan-out any more: a start that still names one gets no such setting.
-		expect(startSettings({ maxParallel: 9 } as never)).not.toHaveProperty("maxParallel");
-		expect(startSettings({})).not.toHaveProperty("maxParallel");
-		expect(startSettings({ limits: { cycles: 3 } }).limits).toEqual({
-			tokens: null,
-			minutes: null,
-			cycles: 3,
-			usd: null,
-		});
 	});
 });
 
@@ -146,7 +105,6 @@ describe("start", () => {
 			expect(armedPolicy()).toMatchObject({ land: true, autoRelease: { on: true, cadence: { kind: "agent" } } });
 		});
 		it("releases by the Release section of the guide Start committed, and the agent is told to follow it", async () => {
-			build({ realDetect: true });
 			world.guide = {
 				text: "# Guide\n\n## Release\n\nReleases: yes\n1. Tag it.\n",
 				source: "template",
@@ -160,7 +118,6 @@ describe("start", () => {
 			});
 		});
 		it("only lands when the guide says the project does not release", async () => {
-			build({ realDetect: true });
 			world.guide = {
 				text: "# Guide\n\n## Release\n\nReleases: no\n- Nothing ships.\n",
 				source: "template",
@@ -322,16 +279,16 @@ describe("start", () => {
 	});
 
 	it("answers get_autopilot on a tab that is no run with the sheet's facts", async () => {
-		build({ releaseProcedure: true });
+		build();
 		const sidecar = world.addTab("m", main);
+		expect((await autopilot.status(sidecar as unknown as SidecarLike, "m")).ship?.releaseBlocked).toMatch(
+			/release procedure/i,
+		);
+		build({ releaseProcedure: true });
 		const status = await autopilot.status(sidecar as unknown as SidecarLike, "m");
 		expect(status).toMatchObject({
 			active: false,
 			ship: { policy: DEFAULT_SHIP_POLICY, queue: [], releaseProcedure: { file: "AGENTS.md" } },
 		});
-		build();
-		expect((await autopilot.status(sidecar as unknown as SidecarLike, "m")).ship?.releaseBlocked).toMatch(
-			/release procedure/i,
-		);
 	});
 });

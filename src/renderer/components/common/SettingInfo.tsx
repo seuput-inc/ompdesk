@@ -26,14 +26,17 @@ export function splitDescription(
 	return description.length <= INLINE_DESCRIPTION_MAX && !forceTip ? { inline: description } : { tip: description };
 }
 
-/** The info glyph that shows a long description on hover and keyboard focus; the text stays in the DOM for screen readers. */
-export function SettingInfo({ text }: { text: string }) {
+/**
+ * The info glyph that shows a long description on hover and keyboard focus; the text stays in the DOM for screen
+ * readers. `label` names the glyph where it explains something other than a setting.
+ */
+export function SettingInfo({ text, label }: { text: string; label?: string }) {
 	const t = useT();
 	return (
 		<>
 			<Tooltip content={text} describe={false}>
 				<button
-					aria-label={t("settings.rowInfo")}
+					aria-label={label ?? t("settings.rowInfo")}
 					className="inline-flex size-(--sc-icon-md) shrink-0 items-center justify-center rounded-(--sc-radius-sm) text-(--sc-text-muted) hover:text-(--sc-text) focus-visible:outline-(length:--sc-focus-width) focus-visible:outline-(--sc-focus-ring)"
 					data-setting-info
 					type="button"

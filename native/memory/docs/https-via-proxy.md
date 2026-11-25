@@ -37,8 +37,12 @@ Bearer deployments may still bind authenticated plain HTTP and receive a loud
 warning because those credentials remain sniffable. Human authentication is
 stricter: a non-loopback listener refuses startup unless
 `AI_MEMORY_AUTH__SECURE_COOKIE=true`, which is the operator's explicit signal
-that a trusted HTTPS proxy owns the browser-facing edge. Non-Secure human
-cookies are supported only on an actual loopback listener.
+that a trusted HTTPS proxy owns the browser-facing edge. The only exception is
+the explicit `serve --allow-insecure-human-auth` escape hatch (environment
+`AI_MEMORY_ALLOW_INSECURE_HUMAN_AUTH=true`) for an operator who knowingly
+accepts plaintext passwords, credentials, session cookies, and memory data on
+a private LAN. The option is disabled by default, does not bypass the
+unauthenticated-exposure guard, and prints an unconditional warning.
 
 ## Pick a path
 
@@ -141,6 +145,11 @@ and tell ai-memory about it:
 ```bash
 AI_MEMORY_BASE_PATH=/wiki
 ```
+
+Alternatively, set `base_path = "/wiki"` in `config.toml`; the server and
+thin-client commands both read it. For `serve`, `--base-path` overrides
+`AI_MEMORY_BASE_PATH`, which overrides the file. An explicitly empty value
+or `/` selects the host root even when the file names a prefix.
 
 ```caddyfile
 memory.example.com {
@@ -532,6 +541,10 @@ because your host already trusts that root; the container does not.
 - `ai-memory mcp-bridge` is the exception: on Windows and macOS it ignores
   `SSL_CERT_FILE` / `SSL_CERT_DIR`, so a root the bridge must trust has to be
   in the OS store. See the bridge section below.
+- A local security suite can also corrupt the responses it intercepts,
+  including on plain `http://`, and no root certificate fixes that. See
+  [Windows → Security suites that rewrite AI-tool
+  traffic](windows.md#security-suites-that-rewrite-ai-tool-traffic).
 
 ## What ai-memory does to support being behind a proxy
 
@@ -554,6 +567,16 @@ The only thing to mind: **`AI_MEMORY_ALLOWED_HOSTS` must include the
 public hostname**, not just `localhost`. The host-allowlist middleware
 runs before any header rewriting, so it sees the proxy's forwarded
 `Host: memory.example.com` and would reject it otherwise.
+
+### Clients connect directly, never through a forward proxy
+
+The hooks (native, shell, PowerShell 7 and the TypeScript integrations) and
+`ai-memory mcp-bridge` ignore `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`, so a
+sandbox that exports a filtering proxy cannot swallow their requests. A
+server that a client machine can reach only through an outbound forward proxy
+is therefore out of reach for them. Give the server an address the client can
+reach directly, such as a reverse proxy on the network edge or a tunnel like
+Path 3.
 
 ## Don't paper over the security gap
 

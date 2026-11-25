@@ -5,19 +5,8 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { resolveLocalRoot, resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import {
-	createForeignSessionStore,
-	persistForeignSession,
-} from "@oh-my-pi/pi-coding-agent/session/foreign-session-import";
 import type { ForeignSessionInfo, ForeignSessionSource } from "@oh-my-pi/pi-coding-agent/session/foreign-session-store";
-import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { buildMcpArgumentCompletions } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-completions";
-import { BUILTIN_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
-import { directoryExists, getProjectDir, isEexist, withFileLock } from "@oh-my-pi/pi-utils";
 import { guard } from "./health";
 import type { BridgeEnv, BridgeMethods } from "./types";
 
@@ -73,6 +62,7 @@ async function argCompletions(
 	commandName: string,
 	prefix: string,
 ): Promise<{ items: ArgCompletionItem[]; hint: string | null }> {
+	const { BUILTIN_SLASH_COMMANDS } = await import("./omp/pi-coding-agent/slash-commands/builtin-registry");
 	const command = BUILTIN_SLASH_COMMANDS.find(
 		candidate => candidate.name === commandName || candidate.aliases?.includes(commandName),
 	);
@@ -85,6 +75,11 @@ async function argCompletions(
 	// a live runtime. Stock completion disk reads use the live process project
 	// directory. Main always requests this sidecar's cwd; reject other
 	// directories instead of changing the process-global cwd during concurrent calls.
+	const [{ getProjectDir }, { MCPManager }, { buildMcpArgumentCompletions }] = await Promise.all([
+		import("./omp/pi-utils"),
+		import("./omp/pi-coding-agent/mcp/manager"),
+		import("./omp/pi-coding-agent/slash-commands/builtin-completions"),
+	]);
 	if (path.resolve(cwd) !== path.resolve(getProjectDir())) {
 		throw new Error("MCP completions require the live session project directory");
 	}
@@ -103,6 +98,7 @@ export const methods: BridgeMethods = {
 		/** `{source}` → stock ForeignSessionStore listing, newest first, in the RpcForeignSessionInfo wire shape. */
 		"sessions.foreign_list": async params => {
 			const source = foreignSource(params);
+			const { createForeignSessionStore } = await import("./omp/pi-coding-agent/session/foreign-session-import");
 			const sessions = await createForeignSessionStore(source).list();
 			foreignListings.set(source, { at: Date.now(), sessions });
 			return { sessions: sessions.map(foreignToWire) };
@@ -119,6 +115,17 @@ export const methods: BridgeMethods = {
 			const source = foreignSource(params);
 			const foreignId = param(params, "foreignId");
 			if (typeof foreignId !== "string" || !foreignId) throw new Error("import requires a foreignId");
+			const [
+				{ createForeignSessionStore, persistForeignSession },
+				{ loadSessionFile },
+				{ SessionManager },
+				{ directoryExists, withFileLock },
+			] = await Promise.all([
+				import("./omp/pi-coding-agent/session/foreign-session-import"),
+				import("./omp/pi-coding-agent/session/session-loader"),
+				import("./omp/pi-coding-agent/session/session-manager"),
+				import("./omp/pi-utils"),
+			]);
 			const store = createForeignSessionStore(source);
 			const matches = (candidate: ForeignSessionInfo) => candidate.id === foreignId || candidate.path === foreignId;
 			const cached = foreignListings.get(source);
@@ -160,7 +167,7 @@ export const methods: BridgeMethods = {
 	}),
 
 	/** Usage totals across the whole live journal (pre-compaction history and sibling branches included). */
-	...guard("usage", {
+	...guard("usageHistory", {
 		"sessions.usage_history": async (_params, env) => {
 			const sessionManager = env.session().sessionManager;
 			return {
@@ -172,7 +179,7 @@ export const methods: BridgeMethods = {
 		},
 	}),
 
-	...guard("composer", {
+	...guard("localPaste", {
 		/**
 		 * `{content}` → write a large paste into the live session's local:// store (the read
 		 * tool's own root). `wx` claims paste-N.md exclusively, so concurrent writers never collide.
@@ -180,6 +187,10 @@ export const methods: BridgeMethods = {
 		"sessions.write_local_paste": async (params, env) => {
 			const content = param(params, "content");
 			if (typeof content !== "string") throw new Error("write_local_paste requires string content");
+			const [{ resolveLocalRoot }, { isEexist }] = await Promise.all([
+				import("./omp/pi-coding-agent/internal-urls/local-protocol"),
+				import("./omp/pi-utils"),
+			]);
 			const localRoot = resolveLocalRoot(localProtocolOptions(env));
 			await fs.mkdir(localRoot, { recursive: true });
 			for (let counter = 1; ; counter++) {
@@ -192,7 +203,8 @@ export const methods: BridgeMethods = {
 				}
 			}
 		},
-
+	}),
+	...guard("localLinks", {
 		/**
 		 * `{url}` → the on-disk path of a `local://` link in the live session, through stock's own
 		 * resolution (Windows MAX_PATH shortening, root containment). Refuses anything else.
@@ -201,9 +213,11 @@ export const methods: BridgeMethods = {
 			const url = param(params, "url");
 			if (typeof url !== "string" || !/^local:/i.test(url))
 				throw new Error("resolve_local_url requires a local:// URL");
+			const { resolveLocalUrlToPath } = await import("./omp/pi-coding-agent/internal-urls/local-protocol");
 			return { path: resolveLocalUrlToPath(url, localProtocolOptions(env)) };
 		},
-
+	}),
+	...guard("argCompletions", {
 		/** `{cwd, command, prefix}` → a builtin slash command's argument candidates and inline hint. */
 		"sessions.arg_completions": async params => {
 			const cwd = param(params, "cwd");

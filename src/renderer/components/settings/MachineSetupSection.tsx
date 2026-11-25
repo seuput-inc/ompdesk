@@ -137,7 +137,10 @@ function SetupItemRow({ item, windows }: { item: SetupItemState; windows: boolea
 				<SettingInfo
 					text={`${t(`machineSetup.purpose.${purpose}`)}${item.required ? ` ${t("machineSetup.requiredInfo")}` : ""}`}
 				/>
-				<span className="flex min-w-0 flex-1 text-sc-xs text-(--sc-text-muted)">
+				{/* The path's tail (PathText keeps at least 24 characters of it, about 11rem) never shrinks: with less room
+				    than that on the line the path takes a line of its own, instead of running out of the row sideways. The
+				    empty spacer of a row without a path keeps the buttons at the right edge. */}
+				<span className={`flex min-w-0 flex-1 text-sc-xs text-(--sc-text-muted)${path ? " basis-44" : ""}`}>
 					{path && <PathText className="flex-1" path={path} />}
 				</span>
 				{(item.phase === "running" || SETUP_RETRYABLE.includes(item.phase) || cli || omp) && (

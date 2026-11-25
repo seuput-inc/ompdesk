@@ -16,16 +16,19 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  *
  * Installed omp, no account and no provider: a second extension registers a cleanup shaped as the refresh's (exit-only,
  * a deadline, a wait message) through the same `postmortem` the running omp uses, and leaves a file once it is done.
+ * Stock prints the wait message only while that save is the last cleanup still running, so the save goes on only once
+ * the test has read the message: a fixed delay lost to the exit's other cleanups on a loaded Windows runner
+ * (omp-latest 44590960072, stderr empty).
  */
 
 const SAVE = `
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { postmortem } from "@oh-my-pi/pi-utils";
 export default function () {
 	postmortem.register(
 		"ompdesk-test-save",
 		async () => {
-			await Bun.sleep(700);
+			while (!existsSync(process.env.OMPDESK_TEST_GO)) await Bun.sleep(50);
 			writeFileSync(process.env.OMPDESK_TEST_SAVED, "saved");
 		},
 		{ exitOnly: true, deadlineMs: 20_000, waitMessage: "Waiting for the test save" },
@@ -48,7 +51,7 @@ describe.skipIf(!existsSync(omp))("an omp whose stdin closes, on stock omp", () 
 		// omp does not start without a model; nothing is asked of this one.
 		writeFileSync(
 			join(agentDir, "models.yml"),
-			"providers:\n  fake:\n    baseUrl: http://127.0.0.1:9/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n",
+			"providers:\n  fake:\n    baseUrl: http://127.0.0.1:9/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n",
 		);
 		const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-exit-drain-cwd-")));
 		cleanups.push(() => rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
@@ -68,6 +71,8 @@ describe.skipIf(!existsSync(omp))("an omp whose stdin closes, on stock omp", () 
 		for (const key of Object.keys(env)) if (key.startsWith("OMP_GUI_")) Reflect.deleteProperty(env, key);
 		env.OMP_GUI_BRIDGE = address;
 		env.OMPDESK_TEST_SAVED = saved;
+		const go = join(isolated, "go");
+		env.OMPDESK_TEST_GO = go;
 		const child = spawn(
 			OMP_COMMAND.file,
 			[
@@ -80,6 +85,7 @@ describe.skipIf(!existsSync(omp))("an omp whose stdin closes, on stock omp", () 
 		let stderr = "";
 		child.stderr.on("data", chunk => {
 			stderr += chunk;
+			if (stderr.includes("Waiting for the test save")) writeFileSync(go, "1");
 		});
 		const exited = Promise.withResolvers<void>();
 		child.once("exit", () => exited.resolve());

@@ -14,7 +14,7 @@ import type { RpcContextReportResult } from "../../../../shared/rpc-types";
 import { useOverlayPresence } from "../../../hooks/use-overlay-presence";
 import { buildCurrentCommandMenu } from "../../../lib/command-registry";
 import { useCompactionPoints } from "../../../lib/compaction-limits";
-import { type ContextTone, contextTone, contextUsageView } from "../../../lib/context-usage";
+import { type ContextTone, contextTone, contextUsageView, promptCacheText } from "../../../lib/context-usage";
 import { cx, formatTokens } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useTabRpc } from "../../../lib/tab-rpc";
@@ -207,6 +207,7 @@ export function ContextUsagePopover({ variant = "ring" }: { variant?: "ring" | "
 	}, [attempt, loadedKey, open, sidecarReady, usageKey, rpc]);
 
 	const breakdown = loadedKey === usageKey ? report?.breakdown : undefined;
+	const promptCache = loadedKey === usageKey ? report?.promptCache : undefined;
 	const view = contextUsageView(contextUsage, breakdown);
 	const { capacityKnown, contextWindow, percent, remainingTokens, usedTokens } = view;
 	const categories = useMemo<UsageCategory[]>(() => {
@@ -431,6 +432,14 @@ export function ContextUsagePopover({ variant = "ring" }: { variant?: "ring" | "
 									</div>
 								))}
 							</div>
+						)}
+						{promptCache && (
+							<p
+								className="mt-2 text-sc-xs text-(--sc-text-muted) tabular-nums"
+								data-prompt-cache={promptCache.state}
+							>
+								{promptCacheText(promptCache, Date.now(), t)}
+							</p>
 						)}
 						<div
 							className={

@@ -1,9 +1,3 @@
-/**
- * Settings search: the built-in REA MCP row is findable from the page search
- * (its own result, routed to Tools › MCP servers and anchored on the row),
- * and while results replace the section no nav row claims to be the page.
- */
-
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -24,6 +18,7 @@ Object.assign(globalThis, {
 	Element,
 	Node,
 	IS_REACT_ACT_ENVIRONMENT: true,
+	getComputedStyle: () => ({ scrollMarginTop: "0px" }),
 	requestAnimationFrame: (callback: () => void) => setTimeout(callback, 0),
 	cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
@@ -37,8 +32,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
 		prefs: { get: vi.fn(async () => undefined), set: vi.fn(async () => {}) },
 		system: { info: vi.fn(async () => ({ deviceLanguage: "en-US" })) },
 		sidecar: { restart: vi.fn(async () => {}) },
-		// What a search result opens reads it: the REA row on Tools › MCP servers.
-		builtinRea: { get: vi.fn(() => new Promise(() => {})) },
 		events: { onConfigUpdate: vi.fn(() => () => {}) },
 		rpc: {
 			getSettingsSchema: vi.fn(async () => notConnected),
@@ -46,16 +39,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
 		},
 	},
 });
-
-const search = (query: string) =>
-	searchSettings({
-		query,
-		t: key => translate(key),
-		entries: [],
-		values: {},
-		schemaTabLabel: id => id,
-		schemaLabel: entry => entry.path,
-	});
 
 let root: Root | null = null;
 
@@ -67,19 +50,6 @@ afterEach(async () => {
 });
 
 describe("settings search", () => {
-	it("finds the built-in REA MCP row by name, wire words and Korean, first for its own name", () => {
-		const rea = expect.objectContaining({
-			key: "gui:builtinRea",
-			title: translate("mcp.rea.title"),
-			target: "tools:mcp",
-			rowId: "setting-gui-builtinRea",
-		});
-		expect(search("rea")[0]).toEqual(rea);
-		expect(search("reverse engineering")).toContainEqual(rea);
-		expect(search("리버스")).toContainEqual(rea);
-		expect(search("mcp")).toContainEqual(rea);
-	});
-
 	it("offers no section the page does not list (an empty Other settings)", () => {
 		const keys = (hiddenSections?: readonly "advanced"[]) =>
 			searchSettings({
@@ -112,13 +82,13 @@ describe("settings search", () => {
 		const field = document.querySelector('input[type="search"]');
 		if (!field) throw new Error("no settings search field");
 		const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value");
-		descriptor?.set?.call(field, "rea");
+		descriptor?.set?.call(field, "OMPdesk control tools");
 		const record = field as unknown as Record<string, unknown>;
 		const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$"));
 		const props = propsKey ? (record[propsKey] as { onChange?: (event: object) => void }) : undefined;
 		await act(async () => props?.onChange?.({ target: field, currentTarget: field }));
 
-		expect(document.querySelector('[data-search-key="gui:builtinRea"]')).not.toBeNull();
+		expect(document.querySelector('[data-search-key="gui:agentControl"]')).not.toBeNull();
 		expect(current()).toBeNull();
 	});
 
@@ -151,8 +121,8 @@ describe("settings search", () => {
 			return preventDefault;
 		};
 
-		await type("rea");
-		const first = document.querySelector('[data-search-key="gui:builtinRea"] button') as unknown as {
+		await type("OMPdesk control tools");
+		const first = document.querySelector('[data-search-key="gui:agentControl"] button') as unknown as {
 			focus: () => void;
 		};
 		const focus = vi.fn();

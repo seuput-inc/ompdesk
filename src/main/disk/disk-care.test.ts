@@ -26,6 +26,34 @@ function coreRefuses(...methods: string[]): void {
 }
 
 describe("disk care", () => {
+	it("groups SQLite sidecars under stats and includes missing roots as zero-byte rows", async () => {
+		const omp = path.join(w.root, "home", ".omp");
+		const stats = path.join(omp, "stats.db");
+		const scratch = path.join(w.root, "no-scratch");
+		const worktrees = path.join(w.root, "no-worktrees");
+		for (const suffix of ["", "-wal", "-shm"]) await write(omp, `stats.db${suffix}`, "x".repeat(12_000));
+		const sizes = new TreeSizes(null);
+		const usage = await sizes.usage({
+			userData: w.userData,
+			worktreeRoot: worktrees,
+			scratchRoot: scratch,
+			caches: [],
+		});
+		const dbBytes = (await Promise.all(["", "-wal", "-shm"].map(suffix => sizes.bytes(stats + suffix)))).reduce(
+			(sum, bytes) => sum + bytes,
+		);
+		const appBytes = await sizes.bytes(w.userData);
+		expect(usage.parts).toEqual([
+			{ id: "worktrees", path: worktrees, bytes: 0 },
+			{ id: "sessions", path: path.join(omp, "agent", "sessions"), bytes: 0 },
+			{ id: "ompLogs", path: path.join(omp, "logs"), bytes: 0 },
+			{ id: "stats", path: stats, bytes: dbBytes },
+			{ id: "appData", path: w.userData, bytes: appBytes },
+			{ id: "scratch", path: scratch, bytes: 0 },
+		]);
+		expect(usage.total).toBe(dbBytes + appBytes);
+	});
+
 	it(
 		"measures the disk again from the last run's reading, with the same parts a full walk finds",
 		async () => {
@@ -206,7 +234,10 @@ describe("disk care", () => {
 				false,
 			]);
 			expect(w.logs.some(([message]) => message === "run")).toBe(true);
-			expect(await exists(path.join(w.userData, "disk-care", "state.json"))).toBe(true);
+			const reopened = w.care();
+			await reopened.start();
+			expect(reopened.state().lastRun).toEqual(state.lastRun);
+			expect(reopened.state().usage).toEqual(state.usage);
 		},
 		SLOW,
 	);

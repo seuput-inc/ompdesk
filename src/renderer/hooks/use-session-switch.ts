@@ -1,3 +1,4 @@
+import { create } from "zustand";
 import { createTabRpc } from "../lib/tab-rpc";
 import type { SessionStore } from "../stores/session";
 import {
@@ -39,7 +40,7 @@ import { toast, toastError } from "../stores/toast";
 import { useTodoStore } from "../stores/todo";
 import { useToolsStore } from "../stores/tools";
 import { useUiStore } from "../stores/ui";
-import { hydrateSession, hydrateTabSession } from "./use-rpc-events";
+import { attachTabSession, hydrateSession, hydrateTabSession } from "./use-rpc-events";
 
 /** Clear every renderer slice owned by one session before a replacement hydrates. */
 export function resetSessionSurface(closeOverlays = true): void {
@@ -71,6 +72,7 @@ export function resetSessionSurface(closeOverlays = true): void {
 		awaitingModelSince: null,
 		retryInfo: null,
 		compactionInfo: null,
+		compactionRuns: [],
 		contextUsage: null,
 		messageCount: 0,
 		queuedMessageCount: 0,
@@ -142,6 +144,9 @@ export function opensInOwnTab(session: SessionInfo): boolean {
 	return trim(tabCwd) !== trim(session.cwd);
 }
 
+/** One entry per switch, from the owner lookup through hydration, even if the tab's runtime changes. */
+export const useSwitchingTabs = create<readonly string[]>(() => []);
+
 /**
  * Run the switch immediately. The server aborts any in-flight turn
  * (`switchSession` → `abort({goalReason:"internal"})`) — this is NOT a
@@ -158,12 +163,34 @@ export function opensInOwnTab(session: SessionInfo): boolean {
  * pre-check is safe to ignore.
  */
 export async function switchSessionNow(session: SessionInfo, model?: SessionModelOverride): Promise<boolean> {
+	const tabId = focusedSessionRuntime()?.tabId ?? useTabsStore.getState().activeTabId;
+	if (!tabId) return switchSession(session, model);
+	useSwitchingTabs.setState(tabs => [...tabs, tabId], true);
+	try {
+		return await switchSession(session, model);
+	} finally {
+		useSwitchingTabs.setState(tabs => tabs.toSpliced(tabs.indexOf(tabId), 1), true);
+	}
+}
+
+async function switchSession(session: SessionInfo, model?: SessionModelOverride): Promise<boolean> {
 	const runtime = focusedSessionRuntime();
 	const originStore = runtime ? sessionRuntimeStore<SessionStore>(runtime.tabId, "session")! : useSessionStore;
 	const originSessionId = originStore.getState().sessionId;
 	const originTabId = runtime?.tabId ?? useTabsStore.getState().activeTabId;
-	const stillCurrent = () =>
-		!runtime || (sessionRuntime(runtime.tabId) === runtime && originStore.getState().sessionId === originSessionId);
+	const stillCurrent = () => {
+		if (!runtime) return true;
+		if (sessionRuntime(runtime.tabId) !== runtime) return false;
+		const current = originStore.getState();
+		if (current.sessionId === originSessionId) return true;
+		// The landing tab's initial hydration supplies its first id; it has not switched sessions.
+		return (
+			!originSessionId &&
+			!current.isStreaming &&
+			!current.isCompacting &&
+			useTabsStore.getState().tabs.some(tab => tab.id === originTabId && tab.unstarted)
+		);
+	};
 	try {
 		const owner = await window.omp.tabs.getSessionOwner(session.path);
 		if (owner) return await routeToSessionOwner(owner, session.path, session.kind === "chat" ? "chat" : "agent");
@@ -247,10 +274,12 @@ export async function switchSessionNow(session: SessionInfo, model?: SessionMode
 			toast({ variant: "info", message: translate("sidebar.openCancelled") });
 			return false;
 		}
-		// Main may already have committed and hydrated the replacement runtime.
-		// A later switch also owns its own pending marker and fallback title.
+		// Main may already have committed the replacement runtime (a later switch also owns its own pending marker and
+		// fallback title). The replacement's hydration is the tab's attach, still under way: the switch stays in flight
+		// until it lands, or the tab reads like the empty landing tab and the next pick re-roots it.
 		if (runtime && (sessionRuntime(runtime.tabId) !== runtime || originStore.getState().switchPending !== pending)) {
 			clearPending();
+			if (sessionRuntime(runtime.tabId) !== runtime) await attachTabSession(runtime.tabId);
 			return true;
 		}
 		// Keep the outgoing transcript painted until hydrate commits the next

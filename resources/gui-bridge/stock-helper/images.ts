@@ -5,7 +5,7 @@
  * `InputController#normalizePastedImage` runs them. Stock keeps a small picture as PNG and re-encodes a camera
  * sized one, usually to JPEG.
  */
-import * as path from "node:path";
+import { ompModuleFile } from "../omp-package";
 
 interface ImageBlock {
 	type: "image";
@@ -22,13 +22,10 @@ function imageBlock(params: unknown): ImageBlock {
 }
 
 async function stockImageModules() {
-	const root = process.env.OMP_PACKAGE_ROOT;
-	if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
-	const resolve = (specifier: string) => Bun.resolveSync(specifier, path.join(root, "package.json"));
 	// Runtime-selected: the image path belongs to the user's resolved omp installation.
 	const [loading, resize] = await Promise.all([
-		import(resolve("@oh-my-pi/pi-tui/chat/image-loading")),
-		import(resolve("@oh-my-pi/pi-coding-agent/utils/image-resize")),
+		import(ompModuleFile("pi-coding-agent/utils/image-input")),
+		import(ompModuleFile("pi-coding-agent/utils/image-resize")),
 	]);
 	if (typeof loading.ensureSupportedImageInput !== "function" || typeof resize.resizeImage !== "function") {
 		throw new Error("Installed omp has no image conversion");

@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { INSTALLED_OMP, OMP_COMMAND } from "./test-bridge-probe";
+import { INSTALLED_OMP, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { removeWhenFree } from "./test-folders";
 
 const installed = fs.existsSync(INSTALLED_OMP);
@@ -27,7 +27,7 @@ const TOKEN = "good-token-0123456789";
  * server metadata, dynamic client registration, an authorize endpoint that approves at once, a token endpoint), so
  * the bridge's real sign-in runs end to end; without it nothing ever signs it in.
  */
-function fakeOAuthMcp(oauth = true): Promise<{ url: string; close: () => void }> {
+function fakeOAuthMcp(oauth = true, toolName = () => "echo"): Promise<{ url: string; close: () => void }> {
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", chunk => {
@@ -89,7 +89,11 @@ function fakeOAuthMcp(oauth = true): Promise<{ url: string; close: () => void }>
 							serverInfo: { name: "fake-oauth", version: "1" },
 						}
 					: message.method === "tools/list"
-						? { tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object", properties: {} } }] }
+						? {
+								tools: [
+									{ name: toolName(), description: "Echo", inputSchema: { type: "object", properties: {} } },
+								],
+							}
 						: {};
 			json(200, { jsonrpc: "2.0", id: message.id, result });
 		});
@@ -117,7 +121,14 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
 
 /** The live session's view: the bridge's row for `name` and the session's tools that name it. */
 const PROBE_HELPERS = `
+import { renameSync } from "node:fs";
 import { methods as mcp } from "./extensions/mcp";
+// The test reads the report as soon as it exists: Bun.write creates the file before it writes it, and on Windows the
+// test read it empty (omp-latest 44511132073), so a report appears only whole.
+const writeReport = async (file, out) => {
+	await Bun.write(file + ".tmp", JSON.stringify(out));
+	renameSync(file + ".tmp", file);
+};
 const until = async (check, ms) => {
 	const end = Date.now() + ms;
 	while (Date.now() < end) {
@@ -146,12 +157,15 @@ export default function (pi) {
 			await Bun.write(${JSON.stringify(`${report}.ready`)}, "1");
 			await until(() => Bun.file(${JSON.stringify(go)}).exists(), 60_000);
 			out.sync = await mcp.mcp_sync({ names: ["fake"] }, env);
+			out.synced = await view(env, session, "fake");
 			await until(async () => (await view(env, session, "fake")).row?.status === "connected", 15_000);
 			out.after = await view(env, session, "fake");
+			await Bun.write(${JSON.stringify(`${report}.changed`)}, "1");
+			out.test = await mcp.mcp_test({ name: "fake" }, env);
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -196,7 +210,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -242,7 +256,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -285,7 +299,7 @@ export default function (pi) {
 		} catch (error) {
 			out.error = error.stack ?? String(error);
 		}
-		await Bun.write(${JSON.stringify(report)}, JSON.stringify(out));
+		await writeReport(${JSON.stringify(report)}, out);
 	});
 }
 `;
@@ -299,9 +313,9 @@ interface Profile {
 	bridge: string;
 }
 
-const cleanups: Array<() => void> = [];
-afterEach(() => {
-	for (const cleanup of cleanups.splice(0)) cleanup();
+const cleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => {
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 function makeProfile(): Profile {
@@ -317,7 +331,10 @@ function makeProfile(): Profile {
 	fs.mkdirSync(profile.agentDir, { recursive: true });
 	fs.mkdirSync(profile.project, { recursive: true });
 	fs.cpSync(path.resolve("resources/gui-bridge"), profile.bridge, { recursive: true });
-	cleanups.push(() => removeWhenFree(root));
+	cleanups.push(async () => {
+		stopOmpDaemon(path.join(profile.home, ".omp"), ompEnv(profile));
+		await removeWhenFree(root);
+	});
 	return profile;
 }
 
@@ -327,6 +344,9 @@ function ompEnv(profile: Profile): Record<string, string | undefined> {
 		HOME: profile.home,
 		USERPROFILE: profile.home,
 		PI_CODING_AGENT_DIR: profile.agentDir,
+		PI_CONFIG_DIR: ".omp",
+		OMP_DAEMON_DIR: path.join(profile.root, "daemon"),
+		OMP_DAEMON_TCP: undefined,
 		OMP_PROFILE: "",
 		PI_PROFILE: "",
 		OPENAI_API_KEY: "probe-not-a-real-key",
@@ -354,9 +374,11 @@ async function runLive(profile: Profile, extension: string, report: string, duri
 		stderr += String(chunk);
 	});
 	child.stdout.resume();
-	cleanups.push(() => {
-		child.stdin.end();
-		child.kill("SIGTERM");
+	const exited = Promise.withResolvers<void>();
+	child.once("close", () => exited.resolve());
+	cleanups.push(async () => {
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		await exited.promise;
 	});
 	const deadline = Date.now() + 110_000;
 	const waitFor = async (target: string) => {
@@ -372,21 +394,31 @@ async function runLive(profile: Profile, extension: string, report: string, duri
 		await during();
 	}
 	await waitFor(report);
-	const out = JSON.parse(fs.readFileSync(report, "utf8")) as Record<string, unknown>;
+	// Bun.write fills the file in place: a read right after it appears can see it empty ("Unexpected end of JSON input",
+	// omp-latest 44492095193 on Windows).
+	let out: Record<string, unknown> | undefined;
+	while (!out) {
+		try {
+			out = JSON.parse(fs.readFileSync(report, "utf8")) as Record<string, unknown>;
+		} catch (error) {
+			if (Date.now() > deadline) throw error;
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+	}
 	expect(out.error, stderr.slice(-2000)).toBeUndefined();
 	return out;
 }
 
 describe.skipIf(!installed)("MCP servers on the installed omp", () => {
-	it("connects a server another session signed in to, and its tool joins this live session", async () => {
+	it("connects a server another session signed in to and tests its live catalog after it changes", async () => {
 		const profile = makeProfile();
-		const fake = await fakeOAuthMcp();
+		const report = path.join(profile.root, "signin.json");
+		const fake = await fakeOAuthMcp(true, () => (fs.existsSync(`${report}.changed`) ? "replacement" : "echo"));
 		cleanups.push(fake.close);
 		fs.writeFileSync(
 			path.join(profile.agentDir, "mcp.json"),
 			JSON.stringify({ mcpServers: { fake: { type: "http", url: fake.url } } }),
 		);
-		const report = path.join(profile.root, "signin.json");
 		const go = path.join(profile.root, "go");
 		const out = await runLive(profile, signInProbe(report, go), report, async () => {
 			const signer = path.join(profile.bridge, "signer.ts");
@@ -403,11 +435,15 @@ describe.skipIf(!installed)("MCP servers on the installed omp", () => {
 		expect(before.row).toMatchObject({ enabled: true, status: "disconnected", authState: "required" });
 		expect(String(before.row.lastError)).toContain("401");
 		expect(before.tools).toEqual([]);
-		expect(out.sync).toMatchObject({ connected: ["fake"], failed: [] });
+		expect(out.sync, JSON.stringify({ synced: out.synced, after: out.after })).toMatchObject({
+			connected: ["fake"],
+			failed: [],
+		});
 		const after = out.after as { row: Record<string, unknown>; tools: string[] };
 		expect(after.row).toMatchObject({ status: "connected", authState: "authorized", toolCount: 1 });
 		expect(after.row.lastError).toBeUndefined();
 		expect(after.tools.length).toBeGreaterThan(0);
+		expect(out.test).toEqual({ ok: true, toolNames: ["replacement"], toolCount: 1 });
 	}, 150_000);
 
 	it("adds a server that answers 401 at once and signs in to it while another server still refuses", async () => {

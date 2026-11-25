@@ -31,12 +31,12 @@ export const methods: BridgeMethods = {
 			const leaf = journal.getLeafId();
 			let known = restorable.get(journal);
 			if (known?.leaf !== leaf) {
-				const { getRestorableSessionModels } = await import("@oh-my-pi/pi-coding-agent/session/session-context");
+				const { getRestorableSessionModels } = await import("./omp/pi-coding-agent/session/session-context");
 				known = { leaf, selector: getRestorableSessionModels(journal.buildSessionContext().models, role)[0] };
 				restorable.set(journal, known);
 			}
 			if (!known.selector) return { chosen: null };
-			const { resolveSessionModelSelector } = await import("@oh-my-pi/pi-coding-agent/config/model-resolver");
+			const { resolveSessionModelSelector } = await import("./omp/pi-coding-agent/config/model-resolver");
 			const own = resolveSessionModelSelector(session.modelRegistry, known.selector)?.model;
 			const live = session.model;
 			if (!own || (live && own.provider === live.provider && own.id === live.id)) return { chosen: null };

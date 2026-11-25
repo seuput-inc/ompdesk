@@ -20,7 +20,7 @@ import {
 	Tabs,
 	TextArea,
 } from "../../common";
-import { type GithubSectionProps, GithubToolbar, NeedsRepo, useGithubMutation } from "./shared";
+import { type GithubSectionProps, GithubToolbar, NeedsRepo, pausedNotice, useGithubMutation } from "./shared";
 
 const STATES: GithubIssueState[] = ["open", "closed", "all"];
 
@@ -290,6 +290,7 @@ export function GithubIssues({ target, repoName, targetKey }: GithubSectionProps
 							error={detail.error}
 							hasData={detail.data !== null}
 							loading={detail.loading && !detail.data}
+							notice={pausedNotice(detail.pausedUntil)}
 							onRetry={detail.reload}
 						>
 							{detail.data && <IssueDetail issue={detail.data} onChanged={changed} target={target} />}
@@ -304,6 +305,7 @@ export function GithubIssues({ target, repoName, targetKey }: GithubSectionProps
 						error={list.error}
 						hasData={rows.length > 0}
 						loading={list.loading && !list.data}
+						notice={pausedNotice(list.pausedUntil)}
 						onRetry={list.reload}
 					>
 						<ul className="flex flex-col gap-0.5">

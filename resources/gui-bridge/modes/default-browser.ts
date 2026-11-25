@@ -3,21 +3,33 @@
  * or at the user's own browser, and the `browser.relay` / `browser.relayUrl` overrides that make the built-in `browser` tool drive the
  * latter. Registered like the other OMPdesk sections (../prompt-sections.ts), so the context inspector shows it too.
  */
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "../health";
 import { overridable } from "../settings-override";
 import {
 	applyDefaultBrowser,
+	install as installPrompt,
+	previewRelayStarted as previewRelayStartedCore,
 	previewRelayStopped as previewRelayStoppedCore,
 	type RelaySetting,
 	setDefaultBrowser,
 } from "./default-browser-core";
 
-export { install, previewRelayStarted } from "./default-browser-core";
+export function install(pi: ExtensionAPI): void {
+	applyDefaultBrowser(pi.pi.Settings.instance, relaySetting());
+	installPrompt(pi);
+}
+
+export function previewRelayStarted(scope: object): void {
+	previewRelayStartedCore(scope, relaySetting());
+}
 
 function relaySetting(): RelaySetting {
 	const relay = overridable("browser.relay");
 	const relayUrl = overridable("browser.relayUrl");
 	return {
+		block: scope => overridable("browser.enabled").override(scope, false),
+		unblock: scope => overridable("browser.enabled").clearOverride(scope),
 		hold: (scope, url) => {
 			relay.override(scope, true);
 			relayUrl.override(scope, url);

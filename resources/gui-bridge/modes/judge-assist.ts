@@ -24,8 +24,8 @@ import { attach } from "./shared";
 // Registered at import; `guard` wraps only the methods below. The engines never depend on it: every stock call is
 // inside a try, so a stock internal that vanished means "the judge did not decide" and each feature keeps its rule.
 setJudgeAssistStockLoader(async () => {
-	const judgment = await import("@oh-my-pi/pi-coding-agent/judgment");
-	const { nativeJudgmentImageBounds } = await import("@oh-my-pi/pi-ai");
+	const judgment = await import("../omp/pi-coding-agent/judgment");
+	const { nativeJudgmentImageBounds } = await import("../omp/pi-ai");
 	return {
 		hasNativeJudge: judgment.hasNativeJudge,
 		resolveJudge: judgment.resolveJudge,

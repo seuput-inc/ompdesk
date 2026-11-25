@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import type { Locator, Page } from "@playwright/test";
 import { en } from "../src/renderer/locales/en";
 import { ko } from "../src/renderer/locales/ko";
+import type { RpcCommand } from "../src/shared/rpc-types";
 import { type Look, touchLook } from "./responsive-audit";
 
 /** A control's words in the look's language, so a Korean look finds by name what an English one does. */
@@ -85,7 +86,7 @@ export interface Surface {
 	};
 }
 
-export type ParitySession = "work" | "reply" | "steer" | "advisor" | "limit";
+export type ParitySession = "work" | "reply" | "steer" | "advisor" | "ci" | "limit" | "turns" | "long" | "cut";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -139,6 +140,19 @@ async function scriptStart(script: Record<string, unknown>): Promise<void> {
 async function shownTab(page: Page): Promise<{ tabId: string; status: string } | undefined> {
 	const tab = (await page.evaluate(() => window.omp.tabs.list())).find(entry => entry.active);
 	return tab ? { tabId: tab.tabId, status: String(tab.status) } : undefined;
+}
+
+/** Sends the view's shown tab a prompt through the view's own rpc (a paired computer's and the phone's reach the host). */
+async function promptShownTab(page: Page, message: string): Promise<void> {
+	const tab = await shownTab(page);
+	if (!tab) throw new Error("the view shows no session to prompt");
+	const reply = await page.evaluate(
+		([tabId, text]) => window.omp.rpc.commandForTab(tabId, { type: "prompt", message: text }),
+		[tab.tabId, message] as const,
+	);
+	// A refused prompt (a turn still running, a link not up) says so here, not as a later wait that times out.
+	if (!reply.success)
+		throw new Error(`the prompt was refused on tab ${tab.tabId} (${tab.status}): ${JSON.stringify(reply)}`);
 }
 
 /**
@@ -279,6 +293,13 @@ async function clickCommandPalette(page: Page): Promise<void> {
 	await entry.click();
 }
 
+async function openWorkspaceDialog(page: Page): Promise<void> {
+	await clickCommandPalette(page);
+	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
+	await palette.getByRole("combobox").fill("switch-project");
+	await palette.locator('[data-command-name="switch-project"]').click();
+}
+
 /** Put a prompt of the web host's sheet layer (`?host=1` pages) in front of the person. */
 async function hostPrompt(page: Page, prompt: Record<string, unknown>): Promise<void> {
 	await page.evaluate(prompt => {
@@ -345,6 +366,35 @@ async function openProjectMenu(page: Page, look: Look): Promise<void> {
 /** Closes the menu or dialog a surface left open (Escape), so the next starts from the same window. */
 async function closeOverlay(page: Page): Promise<void> {
 	await page.keyboard.press("Escape");
+}
+
+/** Closes the queue popover, drops both lanes and stops the turn `composer-queue` started, so the session is idle again. */
+async function endQueuedTurn(page: Page): Promise<void> {
+	await page.keyboard.press("Escape");
+	const tab = await shownTab(page);
+	if (!tab) return;
+	await page.evaluate(async tabId => {
+		await window.omp.rpc.commandForTab(tabId, { type: "queue_clear" });
+		await window.omp.rpc.commandForTab(tabId, { type: "abort" });
+	}, tab.tabId);
+	await page.locator(".omp-composer-toolbar[data-turn-running]").first().waitFor({ state: "hidden", timeout: 30_000 });
+}
+
+/** One op of the fake omp's `fixture flow` run in the tab the view shows (e2e/fixture/rpc-ui.ts `startFlow`). */
+async function flowOp(page: Page, tabId: string, spec: Record<string, unknown>) {
+	return page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+		tabId,
+		`fixture:flow:${JSON.stringify(spec)}`,
+	] as const);
+}
+
+/** Ends the compaction `turn-compacting` holds the way stock skips one (no entry, nothing said) and answers its turn. */
+async function endCompactingTurn(page: Page): Promise<void> {
+	const tab = await shownTab(page);
+	if (!tab) return;
+	await flowOp(page, tab.tabId, { op: "compact-end", skipped: true });
+	await flowOp(page, tab.tabId, { op: "reply", text: "Compaction shown." });
+	await page.locator("[data-compaction-status]").first().waitFor({ state: "hidden", timeout: 30_000 });
 }
 
 /** The work session's family open, with every other computer's section folded to its count. */
@@ -442,17 +492,43 @@ async function openSettingsModels(page: Page, look: Look): Promise<void> {
 	await row.scrollIntoViewIfNeeded();
 }
 
-/** Settings › Agent behavior, scrolled to Computer use engine and the two macOS permission rows under it. */
-async function openSettingsComputerUse(page: Page, look: Look): Promise<void> {
+async function openSettingsAgent(page: Page, look: Look): Promise<void> {
 	await openDrawer(page, look);
 	await page.locator('[data-destination="settings"]').first().click();
 	const nav = page.locator('[data-settings-section="agent"]');
 	await nav.waitFor({ state: "visible", timeout: 15_000 });
 	await nav.click();
+}
+
+/** Settings › Agent behavior, scrolled to Computer use engine and the two macOS permission rows under it. */
+async function openSettingsComputerUse(page: Page, look: Look): Promise<void> {
+	await openSettingsAgent(page, look);
 	const row = page.locator("[data-settings-page] #setting-gui-macPermission-screen");
 	await row.waitFor({ state: "visible", timeout: 30_000 });
 	await page.locator("[data-settings-page] #setting-gui-computerUse").scrollIntoViewIfNeeded();
 	await row.scrollIntoViewIfNeeded();
+}
+
+/** Settings › Updates & about through the sidebar's Settings entry and the section's own nav entry, as a person opens it. */
+async function openSettingsUpdates(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator('[data-destination="settings"]').first().click();
+	const nav = page.locator('[data-settings-section="updates"]');
+	await nav.waitFor({ state: "visible", timeout: 15_000 });
+	await nav.click();
+}
+
+/**
+ * Settings › Updates & about at the omp row naming the omp its release was tested with (the fake omp runs the minimum
+ * omp, older than the tested one): This computer's machine-setup row, or, where the shown tab is on a paired host (the
+ * paired computer's view), the host's omp row, which names the host's tested omp.
+ */
+async function openSettingsOmpTested(page: Page, look: Look): Promise<void> {
+	await openSettingsUpdates(page, look);
+	const own = page.locator("[data-settings-page] [data-setup-item='omp']");
+	await own.waitFor({ state: "visible", timeout: 30_000 });
+	const host = page.locator("[data-settings-page] #setting-host-omp");
+	await ((await host.count()) > 0 ? host : own).scrollIntoViewIfNeeded();
 }
 
 /**
@@ -460,11 +536,7 @@ async function openSettingsComputerUse(page: Page, look: Look): Promise<void> {
  * is measured first with its own Clean up button: the breakdown then lists every part.
  */
 async function openSettingsDiskCare(page: Page, look: Look): Promise<void> {
-	await openDrawer(page, look);
-	await page.locator('[data-destination="settings"]').first().click();
-	const nav = page.locator('[data-settings-section="updates"]');
-	await nav.waitFor({ state: "visible", timeout: 15_000 });
-	await nav.click();
+	await openSettingsUpdates(page, look);
 	const row = page.locator("[data-settings-page] #setting-disk-care");
 	await row.waitFor({ state: "visible", timeout: 30_000 });
 	await row.scrollIntoViewIfNeeded();
@@ -472,15 +544,100 @@ async function openSettingsDiskCare(page: Page, look: Look): Promise<void> {
 	if ((await measured.count()) === 0) await row.locator("[data-testid='disk-care-clean']").click();
 	await measured.waitFor({ state: "visible", timeout: 180_000 });
 	await row.locator("[data-testid='disk-care-clean']:not([disabled])").waitFor({ timeout: 180_000 });
-	// A pointer opens the row's (i) by resting on it, a finger by pressing it.
+	// A pointer opens the row's (i) by resting on it, a finger by tapping it. Never a mouse click on touch: its move
+	// in starts the hover timer (at once while a tooltip closed lately is warm) and the click then toggles the bubble
+	// shut (reverse parity, run 44634794678, phone). A pointer rests again when the page moved the row from under it
+	// (a banner landing above it scrolled the page: forward parity, run 44643884130, paired computer).
 	const info = row.locator("[data-setting-info]");
-	await info.hover();
+	if (touchLook(look)) {
+		await info.tap();
+		return;
+	}
 	const shown = page.locator("[role='tooltip']").first();
-	const hovered = await shown.waitFor({ state: "visible", timeout: 2_000 }).then(
-		() => true,
-		() => false,
-	);
-	if (!hovered) await info.click();
+	for (let rest = 1; ; rest++) {
+		await page.mouse.move(0, 0);
+		await info.hover();
+		const open = await shown.waitFor({ state: "visible", timeout: 2_000 }).then(
+			() => true,
+			() => false,
+		);
+		if (open || rest === 3) return;
+	}
+}
+
+/**
+ * The notice's and the row's account: saved through the page on whichever computer the view is of (the host's, the
+ * paired computer's own, the phone's host), and read back as "needs its password again" because the parity launch
+ * has `OMP_GUI_TEST_KEYCHAIN_WOULD_ASK=1` (src/main/index.ts). `unseedMailReentry` removes it, so no other surface
+ * carries the notice.
+ */
+async function seedMailReentry(page: Page): Promise<void> {
+	await page.evaluate(async () => {
+		const { accounts } = await window.omp.mailAccounts.command({ action: "list" });
+		if (accounts.some(account => account.label === "Parity mail")) return;
+		await window.omp.mailAccounts.command({
+			action: "save",
+			draft: {
+				label: "Parity mail",
+				host: "imap.example.com",
+				port: 993,
+				username: "parity@example.com",
+				mailbox: "INBOX",
+				password: "parity-secret",
+			},
+		});
+	});
+}
+
+async function unseedMailReentry(page: Page): Promise<void> {
+	// The page's notice holds the list it read: closing it first (a click even where the session view is hidden behind
+	// Settings) keeps it off every later surface of this page; the phone's page loads afresh and finds no account.
+	await page
+		.locator("[data-mail-reentry-notice] button[aria-label]")
+		.last()
+		.evaluate(button => (button as HTMLElement).click(), undefined, { timeout: 2_000 })
+		.catch(() => undefined);
+	await page.evaluate(async () => {
+		const { accounts } = await window.omp.mailAccounts.command({ action: "list" });
+		for (const account of accounts)
+			if (account.label === "Parity mail")
+				await window.omp.mailAccounts.command({ action: "remove", id: account.id });
+	});
+}
+
+/** The session view with the one re-entry notice above it: the account is seeded, and the page loads again to read it. */
+async function openMailReentryNotice(page: Page): Promise<void> {
+	await seedMailReentry(page);
+	await page.reload();
+	await page.locator("[data-mail-reentry-notice]").waitFor({ state: "visible", timeout: 60_000 });
+}
+
+/** Settings › Schedules › Email accounts with the account's "enter the password again" line. */
+async function openSettingsMailReentry(page: Page, look: Look): Promise<void> {
+	await seedMailReentry(page);
+	await openDrawer(page, look);
+	await page.locator('[data-destination="settings"]').first().click();
+	const nav = page.locator('[data-settings-section="schedules"]');
+	await nav.waitFor({ state: "visible", timeout: 15_000 });
+	await nav.click();
+	await page
+		.locator("[data-settings-page] #settings-mail-accounts")
+		.first()
+		.waitFor({ state: "visible", timeout: 30_000 });
+	// A paired computer's view says the accounts are set on that computer itself: only this computer's own has the line.
+	const line = page.locator("[data-settings-page] [data-mail-needs-reentry]").first();
+	if ((await page.locator("[data-settings-page] [data-mail-elsewhere]").count()) === 0) {
+		await line.waitFor({ state: "visible", timeout: 30_000 });
+		await line.scrollIntoViewIfNeeded();
+	}
+}
+
+/** Settings › Updates & about with the token row saying why the saved token was removed. */
+async function openSettingsUpdatesDropped(page: Page, look: Look): Promise<void> {
+	await openSettingsUpdates(page, look);
+	const row = page.locator("[data-settings-page] #settings-updates-auth");
+	await row.waitFor({ state: "visible", timeout: 30_000 });
+	await row.scrollIntoViewIfNeeded();
 }
 
 async function openSettingsGeneral(page: Page, look: Look): Promise<void> {
@@ -490,6 +647,16 @@ async function openSettingsGeneral(page: Page, look: Look): Promise<void> {
 	await nav.waitFor({ state: "visible", timeout: 15_000 });
 	await nav.click();
 	await page.locator("[data-settings-page] #setting-gui-language").waitFor({ state: "visible", timeout: 30_000 });
+}
+
+/** Settings › Appearance through the sidebar's Settings entry and the section's own nav entry: the five theme sets and the light or dark choice under them. */
+async function openSettingsAppearance(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator('[data-destination="settings"]').first().click();
+	const nav = page.locator('[data-settings-section="appearance"]');
+	await nav.waitFor({ state: "visible", timeout: 15_000 });
+	await nav.click();
+	await page.locator("[data-settings-page] #setting-gui-themeMode").waitFor({ state: "visible", timeout: 30_000 });
 }
 
 /** The model setup dialog through Settings › Models & accounts and its "Set up automatically" button, as a person opens it. */
@@ -518,7 +685,7 @@ async function pressUntilVisible(page: Page, shortcut: string, target: Locator):
 async function openPageTab(
 	page: Page,
 	command: "stats" | "agents",
-	tab: "session" | "usage" | "live" | null,
+	tab: "session" | "usage" | "live" | "prs" | "github" | null,
 ): Promise<void> {
 	// The palette's own field: another dialog a harness page left open has a combobox too.
 	const search = page.locator('[role="dialog"]:has([data-palette-index]) [role="combobox"]');
@@ -567,6 +734,7 @@ const DIALOG_FLAGS: ReadonlyArray<{ id: string; action: string; args?: unknown[]
 	{ id: "dialog-whats-new", action: "openWhatsNew", args: ["0.36.1", "0.35.0"], title: "What's new" },
 	{ id: "dialog-feedback", action: "openFeedback", title: "Feedback" },
 	{ id: "dialog-command-palette", action: "openCommandPalette", title: "Command palette" },
+	{ id: "dialog-workspace", action: "openProjectPicker", title: "Projects" },
 	{ id: "dialog-theme-picker", action: "openThemePicker", title: "Theme picker" },
 	{ id: "dialog-quick-open", action: "openQuickOpen", title: "Quick open" },
 	{ id: "dialog-share-session", action: "openShareSession", title: "Share session" },
@@ -665,6 +833,99 @@ async function showTranscriptStart(page: Page): Promise<void> {
 			await mounted.promise;
 		});
 	await holdAtTop(first);
+}
+
+/**
+ * Brings the transcript back to its end the way a reader does, with "Jump to latest": a surface before may have
+ * scrolled this same session up, and a window keeps its view of a session between surfaces (only the phone's page
+ * loads afresh). A scroll of our own would leave the pill over the transcript and the view unpinned. The pill stays
+ * in the page while the view follows its end, hidden from the pointer and the accessibility tree.
+ */
+async function showTranscriptEnd(page: Page): Promise<void> {
+	const latest = page.locator("[data-jump-to-latest]:not([aria-hidden])").first();
+	if ((await latest.count()) > 0) await latest.click();
+	await latest.waitFor({ state: "detached", timeout: 15_000 });
+}
+
+/**
+ * Reads the `long` session back to its first turn. A transcript opens on its newest page and asks for the page before
+ * each time the reader's view comes to the top of what is loaded (ChatStream `handleScroll`), so the view goes to the
+ * top again and again, seven pages of the fake omp's 250 turns, until the first turn is mounted. A window's reader
+ * turns a wheel first (see `showTurn`); a phone's flicks, and its view scrolls on after the finger lifted. The
+ * newest page is on screen before either: a view sent to the top of an empty transcript scrolls nothing afterwards.
+ * It ends on the first turn's row at the top, the session's start: the bubble's text there instead (what
+ * `holdAtTop` of the text does) cuts the bubble by its own 10 px of padding.
+ */
+async function showSessionStart(page: Page, look: Look): Promise<void> {
+	const scroller = page.locator(".omp-transcript-scroll").first();
+	const first = page.locator(".omp-user-bubble").getByText("Long session turn 000", { exact: true });
+	await scroller.getByText("Long session answer 249", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+	// The reader's gesture, taken in by the page (two frames) before the view moves: a wheel, or a finger's move.
+	const touch = touchLook(look);
+	await scroller.evaluate(async (element, finger) => {
+		element.dispatchEvent(
+			finger
+				? new TouchEvent("touchmove", { bubbles: true })
+				: new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true }),
+		);
+		const taken = Promise.withResolvers<void>();
+		requestAnimationFrame(() => requestAnimationFrame(() => taken.resolve()));
+		await taken.promise;
+	}, touch);
+	// A flick: the finger lifts as the view starts to move, so every scroll event comes after it.
+	if (touch)
+		await scroller.evaluate(element => {
+			element.scrollTop = 0;
+			element.dispatchEvent(new TouchEvent("touchend", { bubbles: true }));
+		});
+	const until = Date.now() + 30_000;
+	while ((await first.count()) === 0 && Date.now() < until)
+		await scroller.evaluate(async element => {
+			element.scrollTop = 0;
+			const mounted = Promise.withResolvers<void>();
+			requestAnimationFrame(() => requestAnimationFrame(() => mounted.resolve()));
+			await mounted.promise;
+		});
+	await holdAtTop(scroller.locator("[data-index]").filter({ has: first }).first());
+}
+
+/** What the turn rail draws: its ticks, the number of the first one, the ticks marked as the turn in view, the earlier item's name. */
+interface TurnRailReading {
+	ticks: number;
+	first: number;
+	current: number;
+	earlier: string | null;
+}
+
+/**
+ * Waits until the turn rail draws 20 ticks (`TURN_RAIL_LIMIT`), the first of them turn number `first` (exactly, or at
+ * most `atMost`: a phone's page reads another turn as the one in view than a window does), the turn in view among
+ * them, and an "N earlier" item that names the turns above the first tick (none when the first tick is turn 1). Fails
+ * with what it read.
+ */
+async function expectTurnRail(page: Page, want: { first: number | { atMost: number } }): Promise<void> {
+	const read = (): Promise<TurnRailReading> =>
+		page.evaluate(() => {
+			const markers = [...document.querySelectorAll(".omp-conversation-nav-marker")];
+			const first = Number(/turn (\d+) of/.exec(markers[0]?.getAttribute("aria-label") ?? "")?.[1]);
+			return {
+				ticks: markers.length,
+				first,
+				current: markers.filter(marker => marker.getAttribute("aria-current") === "location").length,
+				earlier: document.querySelector(".omp-conversation-nav-earlier")?.getAttribute("aria-label") ?? null,
+			};
+		});
+	const fits = (seen: TurnRailReading) =>
+		seen.ticks === 20 &&
+		seen.current === 1 &&
+		(typeof want.first === "number" ? seen.first === want.first : seen.first <= want.first.atMost) &&
+		seen.earlier === (seen.first > 1 ? `${seen.first - 1} earlier` : null);
+	let seen = await read();
+	for (let attempt = 0; attempt < 40 && !fits(seen); attempt++) {
+		await page.waitForTimeout(250);
+		seen = await read();
+	}
+	if (!fits(seen)) throw new Error(`the turn rail draws ${JSON.stringify(seen)}, not ${JSON.stringify(want)}`);
 }
 
 export const SURFACES: readonly Surface[] = [
@@ -823,6 +1084,19 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: { session: "advisor", inView: "[data-card]:has-text('결론을 정정하세요')" },
 	},
+	{
+		id: "reply-ci-note",
+		area: "A",
+		title: "The CI lines a session's push brings between turns: one passed, one failed with its jobs and the run link",
+		open: async page => {
+			await showTurn(page, "fixture ci note");
+			await page.getByText("Pushed main.", { exact: true }).last().waitFor({ timeout: 15_000 });
+		},
+		ready: '[data-ci-note="failure"]',
+		settle: 900,
+		when: () => false,
+		parity: { session: "ci", inView: '[data-ci-note="failure"]' },
+	},
 	...(
 		[
 			[
@@ -901,12 +1175,8 @@ export const SURFACES: readonly Surface[] = [
 		title: "The usage row under a reply: model, tokens, cache, cost, duration, first token, speed and time on one line",
 		// The fake omp's agent-desktop run (`tool-agent-desktop`) ends on a reply carrying every segment.
 		open: async page => {
-			// A surface before may have scrolled the transcript up: back to its end, where this reply is, as a reader
-			// does (a scroll of our own would leave "Jump to latest" over the row).
-			// The pill stays in the page while pinned, hidden from the pointer and the accessibility tree.
-			const latest = page.locator("[data-jump-to-latest]:not([aria-hidden])").first();
-			if ((await latest.count()) > 0) await latest.click();
-			await latest.waitFor({ state: "detached", timeout: 15_000 });
+			// A surface before may have scrolled the transcript up: back to its end, where this reply is.
+			await showTranscriptEnd(page);
 			await page.getByText("agent-desktop run finished.", { exact: true }).last().waitFor({ timeout: 15_000 });
 		},
 		ready: ".omp-usage-row",
@@ -1008,7 +1278,10 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-rail-pin='usage'] [data-usage-account]",
 		// Parity only, and only over a host whose fake omp reports those accounts (`OMP_GUI_TEST_USAGE_ACCOUNTS=many`).
 		when: () => false,
-		parity: { session: "work", available: () => process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "many" },
+		parity: {
+			session: "work",
+			available: () => ["many", "blocked"].includes(process.env.OMP_GUI_TEST_USAGE_ACCOUNTS ?? ""),
+		},
 	},
 	{
 		id: "sidebar-usage-end",
@@ -1022,7 +1295,10 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: "[data-rail-pin='usage'] [data-usage-account]",
 		when: () => false,
-		parity: { session: "work", available: () => process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "many" },
+		parity: {
+			session: "work",
+			available: () => ["many", "blocked"].includes(process.env.OMP_GUI_TEST_USAGE_ACCOUNTS ?? ""),
+		},
 	},
 	{
 		id: "sidebar-family",
@@ -1099,6 +1375,47 @@ export const SURFACES: readonly Surface[] = [
 		open: page => showTurn(page, "Show me everything that tends to overflow on a phone."),
 		ready: '.omp-user-bubble:has-text("Show me everything that tends to overflow on a phone.")',
 		settle: 900,
+	},
+	// The turn rail in the transcript's left gutter (ConversationNavigator). A phone's page does not draw it (its CSS
+	// hides it below a wide workspace), so there the capture is the transcript alone; the ticks are mounted all the same.
+	{
+		id: "transcript-turn-rail",
+		area: "A",
+		title: "Transcript of a 44-turn session at its newest turn, with the turn rail in the left gutter",
+		// `transcript-turn-rail-scrolled` leaves this session at its third turn: captured after it, the rail's window
+		// stayed on turns 1 to 20 in the two views that keep their tab.
+		open: async page => {
+			await showTranscriptEnd(page);
+			await expectTurnRail(page, { first: 25 });
+		},
+		ready: ".omp-transcript-scroll",
+		settle: 600,
+		when: () => false,
+		parity: { session: "turns" },
+	},
+	{
+		id: "transcript-turn-rail-scrolled",
+		area: "A",
+		title: "The same session scrolled up to its third turn: the turn rail follows it",
+		open: async page => {
+			await showTurn(page, "Parity turn 3");
+			await expectTurnRail(page, { first: { atMost: 5 } });
+		},
+		ready: ".omp-transcript-scroll",
+		settle: 900,
+		when: () => false,
+		parity: { session: "turns" },
+	},
+	// A session longer than the page a transcript opens with: the pages before it load as the reader comes to the top.
+	{
+		id: "transcript-older-history",
+		area: "A",
+		title: "A 250-turn session read back to its first turn: every page before its newest loaded on the way up",
+		open: showSessionStart,
+		ready: '.omp-transcript-scroll .omp-user-bubble:has-text("Long session turn 000")',
+		settle: 900,
+		when: () => false,
+		parity: { session: "long", inView: '.omp-user-bubble:has-text("Long session turn 000")' },
 	},
 	{
 		id: "image-viewer",
@@ -1261,11 +1578,16 @@ export const SURFACES: readonly Surface[] = [
 			id: `settings-${section}`,
 			area: "B",
 			title: `Settings › ${section}`,
-			// General opens through real controls (the sidebar's Settings, then its section), so the parity sheet takes it.
-			open: section === "general" ? openSettingsGeneral : page => openSettings(page, section),
+			// General and Appearance open through real controls (the sidebar's Settings, then the section), so the parity sheet takes them.
+			open:
+				section === "general"
+					? openSettingsGeneral
+					: section === "appearance"
+						? openSettingsAppearance
+						: page => openSettings(page, section),
 			ready: "[data-settings-page]",
 			settle: 900,
-			...(section === "general" ? { parity: { session: "work" } } : {}),
+			...(section === "general" || section === "appearance" ? { parity: { session: "work" } } : {}),
 		}),
 	),
 	{
@@ -1319,6 +1641,25 @@ export const SURFACES: readonly Surface[] = [
 		},
 	},
 	{
+		id: "settings-credit-use",
+		area: "B",
+		title: "Settings › Models & accounts at the Credit use row: the switch, and the auto top-up line with its two links",
+		open: async (page, look) => {
+			await openSettingsModels(page, look);
+			const row = page.locator("[data-settings-page] [data-credit-spend]");
+			await row.waitFor({ state: "visible", timeout: 30_000 });
+			await row.scrollIntoViewIfNeeded();
+		},
+		ready: "[data-settings-page] [data-credit-spend] [data-credit-top-up-link]",
+		settle: 600,
+		// Parity only, and only over a host with a signed-in subscription: the row stands under account rotation.
+		when: () => false,
+		parity: {
+			session: "work",
+			available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
+		},
+	},
+	{
 		id: "settings-disk-care",
 		area: "B",
 		title: "Settings › Updates & about, the Disk row after a cleanup with its breakdown open",
@@ -1326,6 +1667,97 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[role='tooltip']",
 		settle: 600,
 		// Parity only: the audits' harness page has no disk care to run.
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "mail-reentry-notice",
+		area: "B",
+		title: "The one notice above a session naming the email accounts that need their password again (the macOS keychain would ask)",
+		open: openMailReentryNotice,
+		ready: "[data-mail-reentry-notice]",
+		settle: 600,
+		// Parity only: the audits' harness page has no mail account in that state, and the notice would sit over every other surface.
+		when: () => false,
+		parity: { session: "work", after: unseedMailReentry },
+	},
+	{
+		id: "settings-mail-reentry",
+		area: "B",
+		title: "Settings › Schedules › Email accounts, an account marked to enter its password again",
+		open: openSettingsMailReentry,
+		ready: "[data-settings-page] #settings-mail-accounts",
+		settle: 600,
+		when: () => false,
+		parity: {
+			session: "work",
+			after: async page => {
+				await unseedMailReentry(page);
+				await closeOverlay(page);
+			},
+		},
+	},
+	{
+		id: "settings-updates-token-dropped",
+		area: "B",
+		title: "Settings › Updates & about, the GitHub token row saying the saved token was removed (the keychain would ask)",
+		open: openSettingsUpdatesDropped,
+		ready: "[data-settings-page] [data-updates-auth-dropped]",
+		settle: 600,
+		// The marker is in the parity launch's profile only (e2e/parity.e2e.ts).
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-omp-tested",
+		area: "B",
+		title: "Settings › Updates & about, the omp row (This computer's, or a paired host's) naming the omp its release was tested with",
+		open: openSettingsOmpTested,
+		// DOM order puts a paired host's row first, so the paired computer's view waits for the host's line.
+		ready: "[data-settings-page] #setting-host-omp [data-testid='omp-tested'], [data-settings-page] [data-setup-item='omp'] [data-testid='omp-tested']",
+		settle: 600,
+		// Parity only, like settings-disk-care: the row reads the computer's machine setup from main.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-default-browser",
+		area: "B",
+		title: "Settings › Agent behavior, the automatic browser selection",
+		open: async (page, look) => {
+			await openSettingsAgent(page, look);
+			await page.locator("#setting-gui-defaultBrowser").scrollIntoViewIfNeeded();
+		},
+		ready: "#setting-gui-defaultBrowser select:has(option[value='auto']:text('Automatic ·')):enabled",
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-appearance",
+		area: "B",
+		title: "Settings › Appearance & input: the theme sets, the OMPdesk pair's near-monochrome previews and the fields",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator('[data-destination="settings"]').first().click();
+			const nav = page.locator('[data-settings-section="appearance"]');
+			await nav.waitFor({ state: "visible", timeout: 15_000 });
+			await nav.click();
+		},
+		ready: "[data-settings-page] #setting-gui-theme",
+		// Parity only: the audits reach Settings through the harness's own surfaces.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "palette-option",
+		area: "A",
+		title: "Command palette from the sidebar's search button, its first command the active option (wash and ring)",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator("[data-command-center-entry]:visible").first().click();
+		},
+		ready: "[data-palette-index][data-active='true']",
+		// Parity only: the audits open the palette through the harness (`dialog-command-palette`).
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
 	},
@@ -1422,10 +1854,11 @@ export const SURFACES: readonly Surface[] = [
 			id: `agents-${tab}`,
 			area: "B",
 			title: `Agents › ${tab}`,
-			// Live opens through the palette and its tab (real controls), so the parity sheet takes it.
-			open: tab === "live" ? page => openPageTab(page, "agents", "live") : page => ui(page, "openAgents", tab),
+			// Live, Pull requests and GitHub open through the palette and their tab (real controls), so the parity sheet
+			// takes them.
+			open: tab === "definitions" ? page => ui(page, "openAgents", tab) : page => openPageTab(page, "agents", tab),
 			settle: 900,
-			...(tab === "live" ? { parity: { session: "work" as const } } : {}),
+			...(tab === "definitions" ? {} : { parity: { session: "work" as const } }),
 		}),
 	),
 	{
@@ -1451,44 +1884,6 @@ export const SURFACES: readonly Surface[] = [
 		open: page => openPageTab(page, "stats", "usage"),
 		settle: 900,
 		parity: { session: "work" },
-	},
-	{
-		id: "usage-rotation",
-		area: "B",
-		title: "Insights › Usage: the line under the in-use account saying why the session is on it",
-		// The host's fake omp answers two Claude accounts, the session's with a rotation decision
-		// (e2e/fixture/rpc-ui.ts "fixture:usage-rotation"); `after` gives the host its empty usage back.
-		open: async page => {
-			const tab = await shownTab(page);
-			if (!tab) throw new Error("the view shows no session to read usage for");
-			await page.evaluate(
-				tabId => window.omp.rpc.commandForTab(tabId, { type: "bash", command: "fixture:usage-rotation" }),
-				tab.tabId,
-			);
-			await openPageTab(page, "stats", "usage");
-			// The tab's usage poll read before the fixture answered accounts (a surface mounting into a running poll
-			// reads nothing), so ask for the read the person's Refresh makes.
-			await page
-				.locator('section[data-destination="insights"]')
-				.getByRole("button", { name: "Refresh", exact: true })
-				.click();
-		},
-		ready: "[data-usage-rotation]",
-		settle: 900,
-		// The audits' harness page has no fake omp behind the usage read.
-		when: () => false,
-		parity: {
-			session: "work",
-			after: async page => {
-				const tab = await shownTab(page);
-				if (tab) {
-					await page.evaluate(
-						tabId => window.omp.rpc.commandForTab(tabId, { type: "bash", command: "fixture:usage-accounts:0" }),
-						tab.tabId,
-					);
-				}
-			},
-		},
 	},
 	{
 		id: "autopilot-start",
@@ -1558,18 +1953,25 @@ export const SURFACES: readonly Surface[] = [
 			open: (page, look) =>
 				dialog.id === "dialog-command-palette"
 					? clickCommandPalette(page)
-					: dialog.id === "dialog-model-setup"
-						? openModelSetup(page, look)
-						: ui(page, dialog.action, ...(dialog.args ?? [])),
+					: dialog.id === "dialog-workspace"
+						? openWorkspaceDialog(page)
+						: dialog.id === "dialog-model-setup"
+							? openModelSetup(page, look)
+							: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
-				: dialog.id === "dialog-model-setup"
+				: dialog.id === "dialog-workspace"
 					? {
-							// Ready at the research model selector beside "Find more evidence".
-							ready: "[role=dialog] [data-model-setup-evidence] [aria-haspopup=listbox]",
+							ready: "[role=dialog] [role=listbox]",
 							parity: { session: "work" as const, after: closeOverlay },
 						}
-					: {}),
+					: dialog.id === "dialog-model-setup"
+						? {
+								// Ready at the research model selector beside "Find more evidence".
+								ready: "[role=dialog] [data-model-setup-evidence] [aria-haspopup=listbox]",
+								parity: { session: "work" as const, after: closeOverlay },
+							}
+						: {}),
 			settle: 700,
 		}),
 	),
@@ -1717,6 +2119,84 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", after: closeOverlay },
 	},
 	{
+		id: "todo-behind",
+		area: "A",
+		title: "Instructions since a todo list last changed: the plan zone, the strip or the dock's todo card counts them first and says when the list last changed",
+		// The host's fake omp lists three items and reports the bridge's reading (e2e/fixture/rpc-ui.ts "fixture todo
+		// behind", as resources/gui-bridge/todo-drift.ts pushes it): changed 12 minutes ago, two instructions since.
+		open: page => promptShownTab(page, "fixture todo behind"),
+		ready: "[data-todo-freshness='received']",
+		when: () => false,
+		parity: {
+			session: "work",
+			after: async page => {
+				await promptShownTab(page, "fixture todo clear");
+				await page.locator("[data-todo-freshness]").first().waitFor({ state: "detached", timeout: 15_000 });
+			},
+		},
+	},
+	{
+		id: "composer-queue",
+		area: "A",
+		title: "Queue popover with a steer and a follow-up waiting behind a running turn: lane headings in the agent's real delivery modes and the policy line",
+		// The host's fake omp runs `fixture running` until stopped. The prompt and the steer are typed and sent with Send,
+		// as a person does; a follow-up has no chord on a phone, so it goes through the view's own rpc, as the
+		// composer's follow-up mode sends it.
+		open: async page => {
+			const tab = await shownTab(page);
+			if (!tab) throw new Error("the view shows no session to queue in");
+			const input = page.locator("[data-composer-input]").first();
+			const send = page.getByRole("button", { name: "Send", exact: true }).first();
+			const type = async (text: string) => {
+				await input.fill(text);
+				await send.click({ timeout: 15_000 });
+				await page.waitForFunction(
+					field => (document.querySelector(field) as HTMLTextAreaElement | null)?.value === "",
+					"[data-composer-input]",
+					{ timeout: 15_000 },
+				);
+			};
+			await type("fixture running");
+			await page
+				.locator(".omp-composer-toolbar[data-turn-running]")
+				.first()
+				.waitFor({ state: "visible", timeout: 30_000 });
+			await type("Check the failing test first");
+			const queued = await page.evaluate(([tabId, body]) => window.omp.rpc.commandForTab(tabId, body), [
+				tab.tabId,
+				{ type: "follow_up", message: "Then write the release note" } satisfies RpcCommand,
+			] as const);
+			if (!queued.success) throw new Error(`the follow-up was refused: ${queued.error}`);
+			const pill = page.locator("[data-queue-pill]").first();
+			await pill.filter({ hasText: "2" }).waitFor({ state: "visible", timeout: 15_000 });
+			await pill.click();
+		},
+		ready: "[data-queue-policy]",
+		when: () => false,
+		parity: { session: "work", after: endQueuedTurn },
+	},
+	{
+		id: "turn-compacting",
+		area: "A",
+		title: "Status row of a running compaction: what happens to the conversation in plain words, the time it has run and its (i)",
+		// The host's fake omp starts a `fixture flow` turn and holds its mid-turn compaction open (`compact-start`), as
+		// stock's automatic one runs; ready once the row counts its first second.
+		open: async page => {
+			const tab = await shownTab(page);
+			if (!tab) throw new Error("the view shows no session to compact");
+			await page.evaluate(
+				tabId => window.omp.rpc.commandForTab(tabId, { type: "prompt", message: "fixture flow" }),
+				tab.tabId,
+			);
+			const started = await flowOp(page, tab.tabId, { op: "compact-start" });
+			if (!started.success) throw new Error(`the compaction did not start: ${started.error}`);
+		},
+		ready: "[data-compaction-status] [data-compaction-elapsed]",
+		// The audits' harness page has no such turn.
+		when: () => false,
+		parity: { session: "work", after: endCompactingTurn, inView: "[data-compaction-status]" },
+	},
+	{
 		id: "turn-limit-wait",
 		area: "A",
 		title: "Error card of a turn a provider's limit ended: when main tries it again by itself, with Retry now and Cancel",
@@ -1729,6 +2209,20 @@ export const SURFACES: readonly Surface[] = [
 		// The wait is main's: the audits' harness page has no resume rules behind it.
 		when: () => false,
 		parity: { session: "limit", inView: "[data-limit-wait]" },
+	},
+	{
+		id: "turn-cut-off",
+		area: "A",
+		title: "Status row of a turn whose omp kept dying: why it did not go on by itself, with Continue and Dismiss",
+		// The host's fake omp died under four turns of the session in a row (e2e/fixture/rpc-ui.ts "fixture crash"); the
+		// host's resume rules continued three and offer the fourth (e2e/parity.e2e.ts `cutSession`). Nothing is pressed.
+		open: async page => {
+			await page.waitForSelector("[data-transcript-kind]", { timeout: 15_000 });
+		},
+		ready: '[data-cut-off="crash-loop"]',
+		// The offer is main's: the audits' harness page has no resume rules behind it.
+		when: () => false,
+		parity: { session: "cut", inView: "[data-cut-off]" },
 	},
 	{
 		id: "card-approval",

@@ -53,7 +53,7 @@ export class WebChrome {
 			bar.setAttribute("role", "presentation");
 			bar.style.cssText =
 				"position:fixed;top:0;left:0;right:0;height:2px;z-index:2147483000;pointer-events:none;" +
-				"background:var(--sc-accent, #6e70ee);transform-origin:left";
+				"background:var(--sc-accent, #737373);transform-origin:left";
 			doc.body.append(bar);
 		}
 		bar.style.opacity = state === "waiting" ? "0.45" : "1";

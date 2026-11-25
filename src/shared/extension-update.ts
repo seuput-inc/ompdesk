@@ -1,10 +1,10 @@
 /**
- * Extensions kept current (src/main/ext-update/): the marketplaces, plugins, skills and MCP servers of this
+ * Extensions kept current (the core's `crates/core/src/tools/ext.rs`): the marketplaces, plugins, skills and MCP servers of this
  * computer's omp. The schedule is the tool CLIs' (launch after machine setup, then every 4 h, a per-item
  * back-off, failures recorded, deferred items retried), the work is stock's own (marketplace refresh,
  * `PluginManager.upgrade`, `MarketplaceManager.upgradePlugin`, `updateSkillPackages`) run in the stock helper's
  * `extensions` worker, or the owner's own command for an MCP server's global binary (run as
- * `SetupService.runToolUpdate`). OMPdesk never writes the user's MCP config and never moves a pinned version.
+ * setup's `run_tool_update`). OMPdesk never writes the user's MCP config and never moves a pinned version.
  * Each computer updates its own; a paired host does its own. The renderer shows this state and may ask for
  * "Update now" by row key; it never names a command, a path or a version to install.
  */
@@ -42,7 +42,6 @@ export type ExtensionMethod =
  *   skill's exact version, an MCP package `pkg@1.2.3`); a newer one is only shown as "update available".
  * - `follows-plugin`: skills a plugin provides move with that plugin.
  * - `follows-latest`: an unpinned `npx`/`bunx`/`uvx` MCP package resolves the newest version at every start.
- * - `builtin`: part of the OMPdesk release (the built-in REA MCP server).
  * - `local`: plain local files with no source recorded (skills in a folder): never updated.
  * - `linked`: a plugin linked from a local path.
  * - `remote`: an MCP server reached by URL: nothing on this computer to update.
@@ -53,7 +52,6 @@ export type ExtensionSkipReason =
 	| "pinned"
 	| "follows-plugin"
 	| "follows-latest"
-	| "builtin"
 	| "local"
 	| "linked"
 	| "remote"
@@ -68,9 +66,17 @@ export type ExtensionSkipReason =
  * - `install`: the update failed or could not start (`detail`).
  * - `not-updated`: it finished, but the item still reports the old version.
  * - `needs-approval`: a new skill version ships scripts; stock asks the user, OMPdesk never approves for them.
+ * - `plugin-needs-approval`: a new plugin version adds extension, tool or hook entries (`detail`: the version and
+ *   the entries); held until the person's own "Update now" on that row approves exactly what it shows.
  * - `cancelled`: stopped by quitting.
  */
-export type ExtensionFailureReason = "check" | "install" | "not-updated" | "needs-approval" | "cancelled";
+export type ExtensionFailureReason =
+	| "check"
+	| "install"
+	| "not-updated"
+	| "needs-approval"
+	| "plugin-needs-approval"
+	| "cancelled";
 
 export interface ExtensionFailure {
 	reason: ExtensionFailureReason;

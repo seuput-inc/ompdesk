@@ -237,12 +237,89 @@ pub async fn head(git: &Git, worktree: &str) -> Result<String, Fault> {
     Ok(js_trim(&git.text(worktree, &["rev-parse", "HEAD"]).await?).to_owned())
 }
 
-/// What `lastActivity` reads besides git: the tracked and untracked files (`stamps`, relative), the ignored entries
-/// no tool makes again (`ignored`), and stock omp's session folder for the worktree (main resolves it).
+/// Main sends the two file lists as git returned them and only the ignored paths that need a walk.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Activity {
-    pub stamps: Vec<String>,
-    pub ignored: Vec<String>,
-    pub sessions: Option<String>,
+    tracked: Vec<String>,
+    untracked_files: Vec<String>,
+    ignored: Vec<String>,
+    sessions_root: std::path::PathBuf,
+    temp: std::path::PathBuf,
+    home: std::path::PathBuf,
+}
+
+/// Stock uses node's `path.relative` on real paths. Only Windows folds case; keep the worktree's own spelling.
+fn session_relative<'a>(root: &Path, worktree: &'a Path) -> Option<&'a Path> {
+    let mut remaining = worktree.components();
+    for base in root.components() {
+        let part = remaining.next()?;
+        if part == base {
+            continue;
+        }
+        #[cfg(windows)]
+        {
+            let part = part.as_os_str().to_str()?;
+            let base = base.as_os_str().to_str()?;
+            let same = if part.is_ascii() && base.is_ascii() {
+                part.eq_ignore_ascii_case(base)
+            } else {
+                part.to_lowercase() == base.to_lowercase()
+            };
+            if same {
+                continue;
+            }
+        }
+        return None;
+    }
+    let relative = remaining.as_path();
+    // Stock also rejects a first component named e.g. `..notes`, not just a parent step.
+    (!relative.to_str()?.starts_with("..")).then_some(relative)
+}
+
+/// `getDefaultSessionDirName` checks temp first because on Windows it is usually inside home.
+fn session_name(worktree: &str, temp: &Path, home: &Path) -> String {
+    let resolved;
+    let path = if Path::new(worktree)
+        .components()
+        .any(|part| part == std::path::Component::ParentDir)
+    {
+        resolved = resolve("", worktree);
+        Path::new(&resolved)
+    } else {
+        Path::new(worktree)
+    };
+    let dashed = |c| match c {
+        '/' | '\\' | ':' => '-',
+        _ => c,
+    };
+    for (root, prefix) in [(temp, "-tmp"), (home, "")] {
+        if let Some(relative) = session_relative(root, path) {
+            let mut name = String::with_capacity(prefix.len() + 1 + relative.as_os_str().len());
+            name.push_str(prefix);
+            for part in relative.components() {
+                name.push('-');
+                let part = part.as_os_str().to_str().expect("UTF-8 worktree");
+                name.extend(part.chars().map(dashed));
+            }
+            if name.is_empty() {
+                name.push('-');
+            }
+            return name;
+        }
+    }
+    let mut name = String::with_capacity(worktree.len() + 4);
+    name.push_str("--");
+    let whole = worktree.strip_prefix(['/', '\\']).unwrap_or(worktree);
+    name.extend(whole.chars().map(dashed));
+    name.push_str("--");
+    name
+}
+
+impl Activity {
+    fn stamps(&self) -> impl Iterator<Item = &String> {
+        self.tracked.iter().chain(&self.untracked_files)
+    }
 }
 
 /// When anything in the worktree last changed (epoch ms): its HEAD commit, its git dir's HEAD, index and reflog, the
@@ -254,13 +331,8 @@ pub async fn last_activity(
     activity: Activity,
     scope: &Scope,
 ) -> Result<Option<f64>, Fault> {
-    super::tree::relative_entries(
-        activity
-            .stamps
-            .iter()
-            .chain(&activity.ignored)
-            .map(String::as_str),
-    )?;
+    let paths = activity.stamps().chain(&activity.ignored);
+    super::tree::relative_entries(paths.map(String::as_str))?;
     let (committed, dir) = tokio::join!(
         git.text(worktree, &["log", "-1", "--format=%ct", "HEAD"]),
         git_dir(git, worktree)
@@ -280,7 +352,7 @@ pub async fn last_activity(
         for name in ["HEAD", "index", "logs/HEAD"] {
             stamp(&under(&dir, name));
         }
-        for (index, relative) in activity.stamps.iter().enumerate() {
+        for (index, relative) in activity.stamps().enumerate() {
             if index % 256 == 0 {
                 super::tree::live(&scope)?;
             }
@@ -299,9 +371,9 @@ pub async fn last_activity(
                 None => return Ok(None),
             }
         }
-        if let Some(sessions) = &activity.sessions
-            && let Ok(entries) = std::fs::read_dir(sessions)
-        {
+        let name = session_name(&worktree, &activity.temp, &activity.home);
+        let sessions = activity.sessions_root.join(name);
+        if let Ok(entries) = std::fs::read_dir(sessions) {
             for entry in entries.flatten() {
                 if let Ok(meta) = std::fs::metadata(entry.path()) {
                     newest = newest.max(mtime_ms(&meta));
@@ -492,6 +564,20 @@ mod tests {
         assert_eq!(gitdir_line("x\r\ngitdir:  ../c  \n"), Some("../c"));
         assert_eq!(gitdir_line("gitdir: \n"), None);
         assert_eq!(gitdir_line("gitdir:x"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_session_on_another_drive_or_share_uses_its_whole_path() {
+        let temp = Path::new(r"C:\Temp");
+        let home = Path::new(r"\\server\users\Lee");
+        for (cwd, expected) in [
+            (r"D:\Temp\Repo", "--D--Temp-Repo--"),
+            (r"\\server\other\Lee\Repo", "---server-other-Lee-Repo--"),
+            (r"\\SERVER\Users\lee\Repo", "-Repo"),
+        ] {
+            assert_eq!(session_name(cwd, temp, home), expected);
+        }
     }
 
     #[test]

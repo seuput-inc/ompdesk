@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef } from "react";
+import type { CustomProviderView } from "../../../shared/ipc-types";
 import type { ProviderInfo } from "../../../shared/rpc-types";
 import { useT } from "../../lib/i18n";
 import { useTabRpc } from "../../lib/tab-rpc";
@@ -17,7 +18,7 @@ import { focusedTabDevice } from "../../stores/remote";
 import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
 import { toast } from "../../stores/toast";
-import { hasUsableModelProvider, toProviderInfo } from "../settings/providers/provider-catalog";
+import { servingVerdict, toProviderInfo } from "../settings/providers/provider-catalog";
 import { modelTextAmong } from "../settings/providers/provider-marks";
 import { ensureServingDefault } from "./default-model";
 
@@ -83,9 +84,15 @@ export function FirstRunGate() {
 		let cancelled = false;
 		window.omp.runtime.startupMark("first-run-check");
 		void (async () => {
-			const [catalogResult, configResult, savedStep] = await Promise.allSettled([
+			// models.yml's endpoints come through the stock helper, which answered 10 to 30 s late on a busy runner
+			// (G22): asked now, awaited only when omp's catalog cannot decide alone, so it never holds the provider
+			// step of a computer where nothing can serve, nor flashes it where a signed-in provider does.
+			const configsRead = window.omp.models.listProviders(focusedTabDevice()).then(
+				result => result.providers,
+				(): CustomProviderView[] => [],
+			);
+			const [catalogResult, savedStep] = await Promise.allSettled([
 				refreshProviders(false),
-				window.omp.models.listProviders(focusedTabDevice()),
 				window.omp.prefs.get(FIRST_RUN_STEP_PREF),
 			]);
 			// A failed catalog read is transient (sidecar/transport): stay
@@ -99,11 +106,15 @@ export function FirstRunGate() {
 			const providers = catalogResult.value.providers
 				.map(toProviderInfo)
 				.filter((row): row is ProviderInfo => row !== null);
-			const configs = configResult.status === "fulfilled" ? configResult.value.providers : [];
+			let verdict = servingVerdict(providers);
+			if (verdict === "unknown") {
+				verdict = servingVerdict(providers, await configsRead);
+				if (cancelled) return;
+			}
 			const early = useFirstRunStore.getState();
 			// Opened early and since left (dismissed, or moved on by the user): their choice stands.
 			const userMoved = openedEarly.current && !early.provisional;
-			if (!hasUsableModelProvider(providers, configs)) {
+			if (verdict === "none") {
 				if (!userMoved) useFirstRunStore.getState().setPhase("connect", null);
 				return;
 			}
@@ -112,6 +123,8 @@ export function FirstRunGate() {
 				useFirstRunStore.getState().setPhase(resume, null);
 				return;
 			}
+			const configs = await configsRead;
+			if (cancelled) return;
 			try {
 				const outcome = await ensureServingDefault(tabRpc, useTabsStore.getState().activeTabId, {
 					providers,

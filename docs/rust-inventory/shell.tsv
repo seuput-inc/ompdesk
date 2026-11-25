@@ -1,0 +1,29 @@
+path	status	reason
+src/main/shell-host/INVENTORY.md	exception	Documents the shell API surface; not executable.
+src/main/shell-host/client.test.ts	exception	Socket request and event parity test; keep until the last Node host client is gone.
+src/main/shell-host/client.ts	native-client	ShellClient exchanges frames with the Rust shell; remove with its last Node caller.
+src/main/shell-host/duplex-pair.ts	exception	Test stream pair used by client.test.ts and electron/create.test.ts.
+src/main/shell-host/electron/app.ts	mixed	The quit's order is quit_chain.rs's; App runs each step's listeners on app.quitHook. The entry points (activate, second-instance, open-url/open-file) and the omp:// registration are the shell's (tauri-shell/src/entry.rs, W2). Launch state, path overrides and the ready and window-created listeners stay: their handlers in index.ts and window.ts read WindowManager synchronously (§1.3a,c). Move them with those owners; Rust already runs the OS event loop.
+src/main/shell-host/electron/binary-json.ts	native-client	Converts buffers at the page IPC boundary. Remove the Node adapter when native IPC serves its callers.
+src/main/shell-host/electron/browser-window.ts	mixed	Node owns window and view objects and reads their mirrored state synchronously. Move creation, close and view callers together; Tauri owns the OS windows.
+src/main/shell-host/electron/create.test.ts	exception	Integration cases for the shim. Retain behaviors as native host tests when the shim goes.
+src/main/shell-host/electron/create.ts	port	Constructs the Node host facade. Retire when index.ts no longer imports the shim.
+src/main/shell-host/electron/desktop.ts	mixed	OS operations use the native host; the window shortcut is the shell's (W2). Move display and notification listeners with their callers.
+src/main/shell-host/electron/host.ts	mixed	Tracks page records and preventable event dispatch in Node. Move with browser-window and web-contents to keep one owner.
+src/main/shell-host/electron/index.ts	port	Entry for imports aliased from electron by electron.vite.config.ts. Remove with its last importer, not when the Tauri executable builds.
+src/main/shell-host/electron/input-events.ts	port	Translates Preview stream input. Move with web/preview-input.ts and preview/host.ts; preserve wheel native scale, zoom and keyboard char events.
+src/main/shell-host/electron/ipc-main.ts	port	serveIpc routes native window events to Node handlers. Move handlers and registrations before removing the Node dispatcher.
+src/main/shell-host/electron/lifetime-force.test.ts	exception	Window and web contents lifecycle parity scenarios.
+src/main/shell-host/electron/menu.ts	mixed	Node builds the text-field context menu's popup and keeps its click handlers; Rust shows it (menu.popup). The app menu and the tray are tauri-shell/src/app_menu.rs and tray.rs (W3). Move the popup with the context menu's owner.
+src/main/shell-host/electron/native-image.ts	mixed	Rust captures or encodes live frames; Node still reads image files, sniffs formats, and holds icon representations. The two screenshot tests decode outside the app.
+src/main/shell-host/electron/net.ts	native-client	Adapts request, response streams and cancellation for Node consumers. Retire with these consumers rather than translating the same streams twice.
+src/main/shell-host/electron/safe-storage.test.ts	exception	Protects compatibility with saved ciphertext; keep synthetic fixtures when moving the consumer.
+src/main/shell-host/electron/safe-storage.ts	port	Move storage with the callers that read it synchronously. Preserve existing credentials and avoid platform prompts during compatibility tests.
+src/main/shell-host/electron/session.ts	mixed	Protocol, partition, download and permission callbacks are Node-owned; Tauri owns the WebView. Move callback registrations with the corresponding handlers.
+src/main/shell-host/electron/web-contents.ts	mixed	Owns page state and event callbacks in Node; navigation, capture and input ultimately run in the shell. Move with page callers.
+src/main/shell-host/facts.ts	exception	Wire types. PATH_NAMES supplies a type union but the shipped Node graph does not import the module at runtime.
+src/main/shell-host/image.ts	native-client	Adapts capture scaling and frame encoding to NativeImage. Remove with Preview's Node capture consumer.
+src/main/shell-host/shell-calls.ts	native-client	Clipboard, accessibility, idle and cache reads already use the host adapter. Move callers before retiring it.
+src/main/shell-host/wire.ts	native-client	Node end of the shell frame protocol. Remove with ShellClient, not before the last request consumer moves.
+src/preload/shell.ts	exception	Legacy CEF page preload, built and tested but explicitly excluded from both Tauri installers. Not part of the shipped Node host.
+src/preload/tauri.ts	exception	The Tauri WebView injects this page script to expose window.omp before application JavaScript. Keep the browser side; move its Node IPC handlers.

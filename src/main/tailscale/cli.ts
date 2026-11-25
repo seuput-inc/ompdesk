@@ -11,7 +11,6 @@
  * chain's next step waits until the core is done with it, and the stopped step goes no further. A core process that
  * cannot answer reads as a CLI that could not run: no exit code, the core's message as what it said.
  */
-import { spawn } from "node:child_process";
 import { CoreError, core } from "../core/process";
 import type { CoreRunner } from "../local/git/exec";
 import { currentStepSignal, throwIfStepStalled, trackEffect } from "../serial-chain";
@@ -236,24 +235,11 @@ export async function startTailscaleApp(
 	platform: "darwin" | "win32",
 	standIn: string | null,
 ): Promise<AppStart> {
-	if (standIn || platform === "darwin") {
-		try {
-			const params = { platform, standIn, app: located.app, rules: runRules() };
-			return await tailscaleRequest<AppStart>("tailscale.startApp", params, CLI_TIMEOUT_MS);
-		} catch (error) {
-			if (error instanceof CoreError) return { code: null, line: error.message };
-			throw error;
-		}
+	try {
+		const params = { platform, standIn, path: located.path, app: located.app, rules: runRules() };
+		return await tailscaleRequest<AppStart>("tailscale.startApp", params, CLI_TIMEOUT_MS);
+	} catch (error) {
+		if (error instanceof CoreError) return { code: null, line: error.message };
+		throw error;
 	}
-	// The tray app keeps running after OMPdesk quits, and every process the core starts ends with it: main starts
-	// this one itself, detached rather than awaited.
-	const ipn = located.path.replace(/tailscale\.exe$/i, "tailscale-ipn.exe");
-	const { promise, resolve } = Promise.withResolvers<AppStart>();
-	const child = spawn(ipn, [], { detached: true, stdio: "ignore" });
-	child.once("error", error => resolve({ code: null, line: error.message }));
-	child.once("spawn", () => {
-		child.unref();
-		resolve({ code: 0, line: null });
-	});
-	return promise;
 }

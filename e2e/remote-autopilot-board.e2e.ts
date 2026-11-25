@@ -63,7 +63,10 @@ test("a paired device's view of a run's work board shows the run's follow-ups an
 					"5": { followups: ["Split the store", "Fix the flaky login test"] },
 					"6": { resolved: ["Speed up the board", "Cache the icons"] },
 					"7": { followups: ["Rename the board"] },
-					"8": { holdUntil: gate, children: 1 },
+					// The child's branch appears 3 s into this cycle, not 0.1 s: the run audits each cycle's refs when its end
+					// is processed, and on a Windows runner (slow git) cycle 7's audit ran after cycle 8 had made the branch,
+					// pausing the run on "refs/heads/autopilot/…-c8-tests created" before the child was registered.
+					"8": { holdUntil: gate, children: 1, ms: 10_000 },
 				},
 			}),
 			OMP_WORKTREE_DIR: worktrees,
@@ -145,8 +148,15 @@ test("a paired device's view of a run's work board shows the run's follow-ups an
 	);
 	await host.page.screenshot({ path: test.info().outputPath("host-run.png") });
 	await client.page.screenshot({ path: test.info().outputPath("client-run.png") });
-	const before = (await client.page.evaluate(() => window.omp.tabs.list())).length;
-	await client.page.locator("[data-work-board-panel] [data-board-opened]").first().click();
-	await expect.poll(async () => (await client?.page.evaluate(() => window.omp.tabs.list()))?.length).toBe(before + 1);
+	// A tap shows the child in a tab of A's that holds B's session file. The row is a button only once B's review push
+	// names that file: a child B still starts has none, and a tap on it then could open nothing (a Windows full run
+	// clicked it in that moment and waited for a tab that could never come).
+	const tabs = async (page: Page | undefined) => (await page?.evaluate(() => window.omp.tabs.list())) ?? [];
+	const childFile = async () =>
+		(await tabs(host?.page)).find(tab => tab.tabId !== runTab && tab.cwd.startsWith(worktrees))?.sessionPath;
+	await expect.poll(childFile, { timeout: 30_000 }).toBeTruthy();
+	await client.page.locator("[data-work-board-panel] button[data-board-opened]").first().click({ timeout: 30_000 });
+	const file = await childFile();
+	await expect.poll(async () => (await tabs(client?.page)).find(tab => tab.active)?.sessionPath).toBe(file);
 	await fs.writeFile(gate, "");
 });

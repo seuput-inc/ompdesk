@@ -16,10 +16,8 @@
  * (`imageRefs`: a paired device, which reads each blob once, `read_image_blob`).
  */
 
-import { createHash } from "node:crypto";
-import { open } from "node:fs/promises";
 import { transcriptPageMessages } from "../../../resources/gui-bridge/transcript-page";
-import type { RpcMcpServersResult } from "../../shared/rpc-types";
+import { core } from "../core/process";
 import { noteMcpChange } from "../mcp-live";
 import { resolveImageBlobs } from "./image-blobs";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
@@ -38,7 +36,6 @@ const BRIDGED = [
 	"set_context_file_enabled",
 	"get_prompt_templates",
 	"get_mcp_servers",
-	"mcp_action",
 	"mcp_test",
 	"mcp_reauth_cancel",
 	"get_plugins",
@@ -136,27 +133,9 @@ interface TranscriptAnswer {
 	reset?: unknown;
 }
 
-/** How many bytes before an offset a journal's `tail` covers: a line's end, enough to tell two journals apart. */
-const TAIL_BYTES = 64;
-
-/**
- * A journal's tail at `byte`: the offset and a hash of the bytes just before it. Stock only appends to a subagent's
- * journal, so a reader that kept what it read up to `byte` reads on from there while the tail is the same. Null when
- * the file cannot be read that far.
- */
-export async function journalTail(file: string, byte: number): Promise<string | null> {
-	if (byte <= 0) return "0";
-	const start = Math.max(0, byte - TAIL_BYTES);
-	const handle = await open(file, "r").catch(() => null);
-	if (!handle) return null;
-	try {
-		const bytes = Buffer.alloc(byte - start);
-		const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
-		if (bytesRead !== bytes.length) return null;
-		return `${byte}:${createHash("sha256").update(bytes).digest("base64url").slice(0, 22)}`;
-	} finally {
-		await handle.close();
-	}
+async function journalTail(path: string, byte: number): Promise<string | null> {
+	if (!Number.isSafeInteger(byte)) return null;
+	return (await core().call<{ tail: string | null }>("sessions.journalTail", { path, byte })).result.tail;
 }
 
 /** A second reauth while one is in flight fails with the fork's `oauth_busy` code. */
@@ -173,13 +152,9 @@ async function mcpReauth(command: Parameters<LocalHandler>[0], ctx: LocalCommand
 	return result;
 }
 
-/** Built-in declarations are read-only; only OMPdesk prefs control their next-session launch. */
 const mcpAction: LocalHandler = async (command, ctx) => {
 	if (typeof command.name !== "string" || !command.name.trim())
 		throw new LocalCommandError("MCP server name must be a non-empty string", "invalid_params");
-	const { servers } = await ctx.bridge.request<RpcMcpServersResult>("get_mcp_servers");
-	if (servers.some(server => server.name === command.name && server.builtin === "rea"))
-		throw new LocalCommandError("Use the built-in REA toggle; changes apply to new sessions", "invalid_params");
 	const result = await viaBridge(command, ctx);
 	noteMcpChange({ names: [command.name] });
 	return result;

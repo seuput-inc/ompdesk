@@ -3,23 +3,28 @@
 //! This file: `#evidence`, `#compare`, `#judge`, `#merge`, `#mergeable`, `#runMerge` (service.ts 3936-4164). The
 //! rest of the family is in `work/`:
 //! - `review`: `#reviewItem`, `reviewItems`, `review`, `familyEdits`, `#closedEdits`, `liveReview`, `#cost`,
-//!   `#split` (4166-4451) and the turn-edit cut of `src/shared/turn-edits.ts`.
+//!   `#split` (4166-4451).
 //! - `auto`: `autoClose`, `#autoDone`, `#nudgeSilent`, `#autoCloseFacts`, `#tabRow`, `#transcript`,
 //!   `#deleteThrowaway`, `#autoCloseTab` (4496-4796).
 //! - `schedule`: `#schedule`, `#frequencyOf`, `#autopilot`, `#runStatus`, `#autopilotStart`, `#autopilotFrom`
 //!   (4802-5108).
 //! - `app`: `ServicePorts` (the `AppPorts` of this service), `#appControl`, `#appAutopilot`, `#rpcOn`,
 //!   `#utilityTab`, `#closeUtilityTabs`, `#discardUtility` and the `T.app` / `T.appList` arms with `#appRuns`.
+//! - `bots`, `items`: `ompdesk_bot`, `ompdesk_item` and the owner's `BotsRequest` (new in the core, no TypeScript
+//!   twin).
 //!
 //! Called of the other families (by these names): `close_tab`, `CloseHow`, `TabClose`, `remember_closed`, `fated`
 //! (sessions); `journal_marks`, `report_fields`, `report` (messages).
 
 mod app;
 mod auto;
+mod bots;
+mod items;
 mod review;
 mod schedule;
 #[cfg(test)]
 mod tests;
+mod watch;
 
 pub use app::{ServicePorts, command_timeout};
 
@@ -30,12 +35,12 @@ use super::fail::{R, fail};
 use super::host::Deadline;
 use super::js::{cut, len16, number, one_line};
 use super::text::{
-    CheckRun, JudgeReply, bound_diff, checks_run, content_text, error_text, hook_failure,
-    judge_label, label, merge_problem, parse_verdict, prediction_line, response_data, stored_title,
-    transcript_page, waits,
+    CheckRun, JudgeReply, checks_run, content_text, error_text, hook_failure, judge_label, label,
+    parse_verdict, prediction_line, response_data, stored_title, transcript_page, waits,
 };
 use super::types::{AgentMessage, ControlTab, MergePrediction, StoredSession, Target, WorktreeRef};
 use super::util::join;
+use crate::git::branches::{bound_diff, merge_problem};
 
 /// Newest transcript messages a compare reads from an open session for the checks it ran.
 pub(crate) const EVIDENCE_MESSAGES: usize = 200;
@@ -226,6 +231,15 @@ impl AgentControl {
                             removed,
                             if facts.merged { ", already merged" } else { "" }
                         ));
+                        if facts.commits_behind > 0 {
+                            let target =
+                                facts.base_branch.as_deref().unwrap_or("the parent's HEAD");
+                            lines.push(format!(
+                                "  {} commit{} behind {target} (rebase or merge {target} before landing)",
+                                number(facts.commits_behind as f64),
+                                if facts.commits_behind == 1 { "" } else { "s" }
+                            ));
+                        }
                         lines.push(format!(
                             "  uncommitted {}, untracked {}{}",
                             number(facts.uncommitted as f64),
@@ -619,8 +633,12 @@ impl AgentControl {
             ),
             None => String::new(),
         };
+        let remote = outcome
+            .remote
+            .as_ref()
+            .map_or_else(String::new, |remote| format!(" {}", remote.message));
         Ok(format!(
-            "Merged {} into {} ({}{}). Nothing was pushed.{post}",
+            "Merged {} into {} ({}{}). Nothing was pushed.{remote}{post}",
             worktree.branch,
             worktree.base_cwd,
             outcome.sha.as_deref().unwrap_or(""),

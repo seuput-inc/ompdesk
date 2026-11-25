@@ -2,7 +2,7 @@
 
 ## The promise
 
-Main keeps, per live connection of a paired web page, that connection's latest report of the tab whose Files editor holds unsaved edits; an ended connection's report never counts again; and an agent's close (`ompdesk_session_stop {close}`, auto-close, a failed open's cleanup, Autopilot's source tab) never decides to release a tab a settled live page holds unsaved edits in, nor lets one go while main's store names it dirty.
+The core's web router keeps, per live connection of a paired web page, that connection's latest report of the tab whose Files editor holds unsaved edits; an ended connection's report never counts again; and an agent's close (`ompdesk_session_stop {close}`, auto-close, a failed open's cleanup, Autopilot's source tab) never decides to release a tab a settled live page holds unsaved edits in, nor lets one go while the store names it dirty.
 
 ## The harm
 
@@ -14,15 +14,15 @@ The bugs live in orders: a reload overlapping its predecessor, a drop between a 
 
 ## Bounds
 
-2 pages sharing one window, 2 tabs, 2 connections per page (one reconnect each), at most 3 editor changes, at most 2 report frames in flight per connection; any interleaving. 1,192,923 distinct states, depth 25, about 30 s (`MC.cfg`).
+2 pages sharing one window, 2 tabs, 2 connections per page (one reconnect each), at most 3 editor changes, at most 2 report frames in flight per connection; any interleaving. About 1.2M distinct states, depth 25, about 30 s (`MC.cfg`; the run's own count is in `evidence/`).
 
 ## In the model
 
-`FileEditReporter` (send on change and on `open`), `WsRouter` attach, receive and detach, `onConnectionEnded` → `FileEditReports.forget`, the `FILE_EDIT_REPORT` handler → `report`, `edits`, `tab_close_step`, the core's `close_tab` decision and the release after its awaits with its re-check (`stillClosable`).
+`FileEditReporter` (send on change and on `open`), the router's attach, receive and finish (`file_edits.rs` `report` and `forget` under its lock), `edits`, `tab_close_step`, the core's `close_tab` decision and the release after its awaits, whose last check and removal run under the router's lock (`release_entry` inside `unless_dirty`).
 
 ## Not in the model
 
-- Several windows (devices): the store keys reports by connection and filters by window; cross-window isolation is pinned by `file-edit-reports.test.ts` (every order of up to 5 events over 3 connections in 2 windows).
+- Several windows (devices): the store keys reports by connection and filters by device; device isolation is pinned by `file_edits.rs` (every order of up to 5 events over 3 connections of 2 devices).
 - `looked` / `userTouched` (the person at the tab), the desktop window path (`ask-window`), the close note, `#whenGone`.
 - An unpair: it ends every connection of the device (`closeDevice`) before the window goes, which is the model's `Drop` per connection.
 - The page side's own transport: a send while the page is not `open` is lost; the model sends only from a greeted connection and resends on `open`.

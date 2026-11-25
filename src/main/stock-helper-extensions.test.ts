@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type {
 	HelperInventory,
 	PluginCheckResult,
+	PluginPreviewResult,
 	PluginSelector,
 	PluginUpgradeResult,
 	SkillCheckResult,
@@ -111,13 +112,15 @@ interface FakeConfig {
 	installedSkills: Array<{ id: string; scope: "user" | "project"; range?: string; version?: string }>;
 	skillProjects: Record<string, string>;
 	skill: { latest: string; within: string; missing?: boolean; scripts?: boolean; unchanged?: boolean };
+	/** The `package.json` stock's `resolvePluginSource` puts in the folder it fetches. */
+	sourcePackage: Record<string, unknown>;
 	userMcpPath: string;
 	mcpItems: Array<Record<string, unknown>>;
 	mcpActive: Record<string, { type?: string }>;
 }
 
 const fakeSources = (dir: string): Record<string, string> => {
-	const prelude = `import { appendFileSync, readFileSync } from "node:fs";
+	const prelude = `import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 const DIR = ${JSON.stringify(dir)};
 const cfg = () => JSON.parse(readFileSync(DIR + "/config.json", "utf8"));
 const log = (...entry) => appendFileSync(DIR + "/calls.log", JSON.stringify(entry) + "\\n");
@@ -128,6 +131,15 @@ export const getInstalledPluginsRegistryPath = () => cfg().userRegistry;
 export const getMarketplacesCacheDir = () => DIR + "/cache";
 export const getMarketplacesRegistryPath = () => DIR + "/marketplaces.json";
 export const getPluginsCacheDir = () => DIR + "/plugins-cache";
+export const parsePluginId = id => { const at = id.lastIndexOf("@"); return at > 0 ? { name: id.slice(0, at), marketplace: id.slice(at + 1) } : null; };
+let fetched = 0;
+export const resolvePluginSource = async (entry, context) => {
+	const dir = DIR + "/fetched-" + ++fetched;
+	mkdirSync(dir);
+	writeFileSync(dir + "/package.json", JSON.stringify(cfg().sourcePackage));
+	log("resolvePluginSource", entry, context.marketplaceClonePath ?? null, dir);
+	return { dir, tempCloneRoot: dir };
+};
 export class MarketplaceManager {
 	#options;
 	constructor(options) { this.#options = options; log("manager", options.projectInstalledRegistryPath ?? null); }
@@ -158,7 +170,7 @@ export class PluginManager {
 	async upgrade(name) { log("upgrade", name); return { from: "1.0.0", plugin: { version: cfg().upgradeTo }, changed: true }; }
 }
 `,
-		"extensibility/plugins/git-url": `export const parseGitUrl = spec => spec.startsWith("github:") ? { ref: spec.split("#")[1] } : null;
+		"extensibility/plugins/git-url": `export const parseGitUrl = spec => spec.startsWith("github:") ? { repo: "https://github.com/" + spec.slice(7).split("#")[0] + ".git", ref: spec.split("#")[1] } : null;
 `,
 		"extensibility/plugins/loader": `${prelude}
 let calls = 0;
@@ -265,6 +277,7 @@ async function fakeInstall(
 		installedSkills: [],
 		skillProjects: {},
 		skill: { latest: "1.1.0", within: "1.1.0" },
+		sourcePackage: {},
 		userMcpPath: path.join(dir, "agent", "mcp.json"),
 		mcpItems: [],
 		mcpActive: {},
@@ -285,6 +298,8 @@ async function fakeInstall(
 		`import { readFileSync } from "node:fs";
 const DIR = ${JSON.stringify(dir)};
 export const getPluginsPackageJson = () => ${JSON.stringify(pluginsJson)};
+export const getPluginsNodeModules = () => DIR + "/plugin-modules";
+export const expandTilde = file => file;
 export const getMCPConfigPath = () => JSON.parse(readFileSync(DIR + "/config.json", "utf8")).userMcpPath;
 `,
 	);
@@ -465,7 +480,6 @@ describe("extensions worker on a fake install", () => {
 				args: ["x"],
 				url: null,
 				enabled: false,
-				sourcePath: "/plugins/p/.mcp.json",
 				origin: "other",
 			},
 			{
@@ -475,7 +489,6 @@ describe("extensions worker on a fake install", () => {
 				args: [],
 				url: "https://example.com/mcp",
 				enabled: true,
-				sourcePath: path.join(dir, "agent", "mcp.json"),
 				origin: "user",
 			},
 			{
@@ -485,7 +498,6 @@ describe("extensions worker on a fake install", () => {
 				args: ["-y", "pkg@1.0.0"],
 				url: null,
 				enabled: true,
-				sourcePath: path.join(dir, "agent", "mcp.json"),
 				origin: "user",
 			},
 		]);
@@ -605,6 +617,68 @@ describe("extensions worker on a fake install", () => {
 		});
 		const answer = await startWorker(fake.root).ask("extensions.plugin.check", userScope("bare"));
 		expect(answer.error).toBe("npm registry answered 503 for bare");
+	});
+
+	it("previews what an npm or git upgrade would install against what is installed, and drops what it fetched", async () => {
+		const accepts: Array<string | undefined> = [];
+		const server = createServer((request, response) => {
+			accepts.push(request.headers.accept);
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(
+				JSON.stringify({
+					"dist-tags": { latest: "3.0.0" },
+					versions: { "3.0.0": { name: "bare", version: "3.0.0", omp: { tools: "t.ts", hooks: "h.ts" } } },
+				}),
+			);
+		});
+		servers.push(server);
+		const listening = Promise.withResolvers<void>();
+		server.listen(0, "127.0.0.1", () => listening.resolve());
+		await listening.promise;
+		const address = server.address();
+		const fake = await fakeInstall({
+			registryUrl: `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}/`,
+			plugins: [
+				{ name: "bare", version: "1.0.0", enabled: true },
+				{ name: "git-plug", version: "1.0.0", enabled: true },
+			],
+			deps: { bare: "^1.0.0", "git-plug": "github:o/r#main" },
+			sourcePackage: {
+				name: "git-plug",
+				version: "1.1.0",
+				omp: { extensions: ["./a.ts", "./b.ts"], features: { extra: { hooks: ["./h.ts"] } } },
+			},
+		});
+		await writeTree(path.join(fake.dir, "plugin-modules"), {
+			"bare/package.json": JSON.stringify({ name: "bare", version: "1.0.0", omp: { hooks: "h.ts" } }),
+			"git-plug/package.json": JSON.stringify({
+				name: "git-plug",
+				version: "1.0.0",
+				pi: { extensions: ["./a.ts"] },
+			}),
+		});
+		const worker = startWorker(fake.root);
+		const preview = (selector: PluginSelector) =>
+			ok(worker.ask<PluginPreviewResult>("extensions.plugin.preview", selector));
+
+		expect(await preview(userScope("bare"))).toEqual({ version: "3.0.0", added: ["tools t.ts"] });
+		// The full packument: the abbreviated one carries no `omp` manifest.
+		expect(accepts).toEqual(["application/json"]);
+		expect(await preview(userScope("git-plug", "git"))).toEqual({
+			version: "1.1.0",
+			added: ["extensions ./b.ts", "hooks ./h.ts"],
+		});
+		const fetched = fake.calls().filter(call => call[0] === "resolvePluginSource");
+		expect(fetched).toEqual([
+			[
+				"resolvePluginSource",
+				{ name: "git-plug", source: { source: "url", url: "https://github.com/o/r.git", ref: "main" } },
+				null,
+				expect.any(String),
+			],
+		]);
+		expect(existsSync(String(fetched[0]?.[3]))).toBe(false);
+		expect(fake.calls().some(call => call[0] === "upgrade")).toBe(false);
 	});
 
 	it("reads a marketplace plugin's latest from the catalog check, and unversioned when the catalog gives none", async () => {
@@ -1072,6 +1146,11 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 		);
 		expect(Date.parse(refreshed.updatedAt)).not.toBeNaN();
 		expect(await check()).toEqual({ installed: "1.0.0", latest: "1.1.0", pinned: false, unversioned: false });
+		// A Claude-format plugin has no omp manifest: its upgrade adds no extension, tool or hook.
+		expect(await ok(real.worker.ask<PluginPreviewResult>("extensions.plugin.preview", demo))).toEqual({
+			version: "1.1.0",
+			added: [],
+		});
 		expect(await ok(real.worker.ask<PluginUpgradeResult>("extensions.plugin.upgrade", demo))).toEqual({
 			from: "1.0.0",
 			to: "1.1.0",
@@ -1137,6 +1216,35 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 		expect(after.plugins[0]).toMatchObject({ scope: "project", installed: "1.2.0" });
 	}, 120_000);
 
+	it("previews a marketplace plugin's new version: the hook its omp manifest adds, before anything is installed", async () => {
+		const real = await realEnv();
+		const market = path.join(real.home, "market");
+		const publish = (version: string, omp: Record<string, unknown>) =>
+			writeTree(market, {
+				".claude-plugin/marketplace.json": JSON.stringify({
+					name: "demo-mkt",
+					owner: { name: "me" },
+					plugins: [{ name: "hooky", source: "./plugins/hooky" }],
+				}),
+				"plugins/hooky/package.json": JSON.stringify({ name: "hooky", version, omp: { version, ...omp } }),
+				"plugins/hooky/h.ts": "export default () => {};\n",
+			});
+		await publish("1.0.0", {});
+		await real.seed("marketplace-add", market);
+		await real.seed("marketplace-install", "hooky", "demo-mkt", "user");
+		await publish("1.1.0", { hooks: "h.ts" });
+		await ok(real.worker.ask("extensions.marketplace.refresh", { name: "demo-mkt" }));
+		const hooky = userScope("hooky@demo-mkt", "marketplace");
+		expect(await ok(real.worker.ask<PluginPreviewResult>("extensions.plugin.preview", hooky))).toEqual({
+			version: "1.1.0",
+			added: ["hooks h.ts"],
+		});
+		expect(await ok(real.worker.ask<PluginCheckResult>("extensions.plugin.check", hooky))).toMatchObject({
+			installed: "1.0.0",
+			latest: "1.1.0",
+		});
+	}, 120_000);
+
 	it("keeps an npm plugin from a registry current, honors a pin, and reports a restart for hooks", async () => {
 		const registry: NpmRegistry = await npmRegistry();
 		registries.push(registry);
@@ -1186,6 +1294,11 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 			"pin-demo is pinned (1.0.0); it is not upgraded",
 		);
 		expect(await check("pin-demo")).toMatchObject({ installed: "1.0.0" });
+		// What the upgrade would install, read before it: the hook 1.1.0 adds, and nothing installed meanwhile.
+		const preview = () =>
+			ok(real.worker.ask<PluginPreviewResult>("extensions.plugin.preview", userScope("npm-demo")));
+		expect(await preview()).toEqual({ version: "1.1.0", added: ["hooks h.ts"] });
+		expect(await check("npm-demo")).toMatchObject({ installed: "1.0.0" });
 
 		expect(
 			await ok(real.worker.ask<PluginUpgradeResult>("extensions.plugin.upgrade", userScope("npm-demo"))),
@@ -1201,6 +1314,7 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 			pinned: false,
 			unversioned: false,
 		});
+		expect(await preview()).toEqual({ version: "1.1.0", added: [] });
 		const after = await ok(real.worker.ask<HelperInventory>("extensions.inventory", { cwds: [] }));
 		// The upgrade rewrote the record to the new bare form, so the next check is still not pinned.
 		expect(after.plugins.find(plugin => plugin.id === "npm-demo")?.spec).toBe("^1.1.0");
@@ -1303,7 +1417,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 			},
 		);
 		const inventory = await ok(real.worker.ask<HelperInventory>("extensions.inventory", { cwds: [real.home] }));
-		const mcp = path.join(real.agent, "mcp.json");
 		expect(inventory.mcpServers).toEqual([
 			{
 				name: "alpha",
@@ -1312,7 +1425,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 				args: ["-y", "alpha-mcp@1.2.3"],
 				url: null,
 				enabled: true,
-				sourcePath: mcp,
 				origin: "user",
 			},
 			{
@@ -1322,7 +1434,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 				args: [],
 				url: "https://example.com/mcp",
 				enabled: true,
-				sourcePath: mcp,
 				origin: "user",
 			},
 			{
@@ -1332,7 +1443,6 @@ describe.skipIf(!REAL)("the extensions worker on the real stock omp", () => {
 				args: ["gamma-mcp"],
 				url: null,
 				enabled: false,
-				sourcePath: mcp,
 				origin: "user",
 			},
 		]);

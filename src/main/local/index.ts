@@ -4,11 +4,9 @@
  * forwarding; a hit is answered here and never reaches omp.
  */
 import type { RpcResponse } from "../../shared/rpc-types";
-import { handlers as advisorStats } from "./advisor-stats";
 import { handlers as agentControl } from "./agent-control";
 import { handlers as agentFiles } from "./agent-files";
 import { handlers as autoMode } from "./auto-mode";
-import { handlers as autoTitle } from "./auto-title";
 import { handlers as autopilot } from "./autopilot";
 import { handlers as composer } from "./composer";
 import { handlers as desktopSlot } from "./desktop-slot";
@@ -19,7 +17,6 @@ import { handlers as misc } from "./misc";
 import { handlers as modes } from "./modes";
 import { handlers as nextPrompt } from "./next-prompt";
 import { handlers as promptOrigin } from "./prompt-origin";
-import { handlers as queue } from "./queue";
 import { handlers as sessionDump } from "./session-dump";
 import { handlers as sessions } from "./sessions";
 import { handlers as settings } from "./settings";
@@ -41,14 +38,11 @@ export function mergeHandlers(areas: Record<string, Record<string, LocalHandler>
 const LOCAL_HANDLERS = mergeHandlers({
 	sessions,
 	sessionDump,
-	advisorStats,
 	agentControl,
-	autoTitle,
 	autoMode,
 	judgeAssist,
 	autopilot,
 	desktopSlot,
-	queue,
 	composer,
 	modes,
 	nextPrompt,

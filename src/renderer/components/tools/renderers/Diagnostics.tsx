@@ -9,8 +9,8 @@ import { LinkButton } from "../../common";
 /**
  * LSP diagnostics stock attaches to edit/write results and late-diagnostic
  * messages: `FileDiagnosticsResult { server?, messages[], summary, errored,
- * formatter? }` (pi-tui `tools/lsp.ts`). Rows follow stock
- * `native-view.ts` `diagnosticsSection`: most severe first, then line/column,
+ * formatter? }` (pi-coding-agent `tools/details/lsp.ts`). Rows follow stock
+ * `ui/tools/file-common.tsx` `DiagnosticsSection`: most severe first, then line/column,
  * five rows before "+N more", the file named when several files report.
  */
 export interface FileDiagnostics {

@@ -41,7 +41,10 @@ interface ReadToolDetails {
 	conflictCount?: unknown;
 }
 
-/** `cfg://advisor/enabled` → `advisor.enabled` (stock pi-tui `tools/cfg-url.ts` `parseCfgUrl` segments). */
+/**
+ * `cfg://advisor/enabled` → `advisor.enabled` (stock pi-coding-agent `internal-urls/cfg-url.ts` `parseCfgUrl`
+ * segments).
+ */
 function cfgUrlPath(url: string): string | null {
 	if (!/^cfg:\/\//i.test(url.trim())) return null;
 	return url

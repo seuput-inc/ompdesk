@@ -85,7 +85,6 @@ import {
 	PopoverSurface,
 	ProgressBar,
 	type ProgressSegment,
-	QrCode,
 	Radio,
 	RootErrorBoundary,
 	SearchField,
@@ -118,6 +117,7 @@ import {
 } from "../common";
 import { MenuItemView, MenuSurface, menuItemClasses } from "../common/ContextMenu";
 import { DialogSurface } from "../common/Modal";
+import { QrCode } from "../common/QrCode";
 import { SheetSurface } from "../common/Sheet";
 import { ToastCard } from "../common/Toast";
 import { TooltipBubble } from "../common/Tooltip";
@@ -715,7 +715,7 @@ export default function StyleGuide() {
 
 				<Section
 					id="type"
-					intro="Inter for Latin, the system Korean face for Hangul, JetBrains Mono for code. Steps scale with the user font-size preference (default 15px)."
+					intro="Geist for Latin, the system Korean face for Hangul, the system monospace (SF Mono) for code. Steps scale with the user font-size preference (default 15px)."
 					title="Typography"
 				>
 					<Block className="divide-y divide-(--sc-divider)" label="Scale (text-sc-*)">
@@ -1205,42 +1205,31 @@ export default function StyleGuide() {
 								value={scope}
 							/>
 						</Block>
-						<Block label="ChoiceCards with previews, in parts">
+						<Block label="ChoiceCards with previews">
 							<ChoiceCards
 								aria-label="Theme"
-								gridClassName="grid-cols-3"
-								groups={[
+								className="grid-cols-3"
+								options={[
 									{
-										key: "system",
-										options: [
-											{
-												value: "system",
-												title: "System",
-												preview: (
-													<>
-														<span className="w-1/2 bg-(--sc-bg)" />
-														<span className="w-1/2 bg-(--sc-text)" />
-													</>
-												),
-											},
-										],
+										value: "system",
+										title: "System",
+										preview: (
+											<>
+												<span className="w-1/2 bg-(--sc-bg)" />
+												<span className="w-1/2 bg-(--sc-text)" />
+											</>
+										),
 									},
 									{
-										key: "themes",
-										label: "Themes",
-										options: [
-											{
-												value: "paper",
-												title: "Paper",
-												preview: <span className="w-full bg-(--sc-surface-1)" />,
-												tooltip: "Warm white, low glare",
-											},
-											{
-												value: "night",
-												title: "Night",
-												preview: <span className="w-full bg-(--sc-text)" />,
-											},
-										],
+										value: "paper",
+										title: "Paper",
+										preview: <span className="w-full bg-(--sc-surface-1)" />,
+										tooltip: "Warm white, low glare",
+									},
+									{
+										value: "night",
+										title: "Night",
+										preview: <span className="w-full bg-(--sc-text)" />,
 									},
 								]}
 								onChange={setThemePick}

@@ -26,8 +26,8 @@ import { ompPackageRoot } from "./omp-runtime";
 import type { HostConnection } from "./remote/host-server";
 import { LocalHostServices } from "./remote/host-services";
 import { HostSessionList } from "./remote/host-session-list";
+import { linkSlimFixture } from "./remote/link-slim-fixture";
 import type { PeerInfo } from "./remote/peers-store";
-import { slimOf } from "./remote/protocol";
 import { SessionIndex } from "./session-index";
 import { SidebarProjects } from "./sidebar-projects";
 import type { SidecarLike } from "./sidecar-types";
@@ -198,24 +198,20 @@ function peer(deviceId: string): PeerInfo {
 	return { deviceId, name: deviceId, staticPub: "pub", nodeId: `n-${deviceId}`, login: null, pairedAt: 0 };
 }
 
-/** A current device's hello (`client.ts`): the link capabilities a device of this build asks for. */
-const HELLO = {
-	t: "hello",
-	protocol: 1,
-	appVersion: "audit",
-	name: "device",
-	slimEvents: true,
-	slimProgress: true,
-	slimAutopilot: true,
-	slimAutopilotReads: true,
-	slimListReads: true,
-	slimShiftedReads: true,
-	slimSettingsReads: true,
-	slimRosterReads: true,
-	slimJobsReads: true,
+const SLIM = {
+	...linkSlimFixture(false),
+	events: true,
+	progress: true,
+	autopilot: true,
+	autopilotReads: true,
+	listReads: true,
+	shiftedReads: true,
+	settingsReads: true,
+	rosterReads: true,
+	jobsReads: true,
 	deflate: true,
-	slimSessionLists: true,
-} as const;
+	sessionLists: true,
+};
 
 describe.skipIf(!OUT || !stockRoot)("session lists across windows and paired computers", () => {
 	it(
@@ -229,7 +225,7 @@ describe.skipIf(!OUT || !stockRoot)("session lists across windows and paired com
 			const root = path.join(agent, "sessions");
 			const { files, subagentDir } = await writeTree(root);
 			initDeletedSessions(null);
-			const index = new SessionIndex(root, root, () => false, path.resolve("resources/gui-bridge"));
+			const index = new SessionIndex(root, root, null, path.resolve("resources/gui-bridge"));
 			const timers: NodeJS.Timeout[] = [];
 			try {
 				// ---- host: index, the projects list, the paired computers' services
@@ -241,7 +237,7 @@ describe.skipIf(!OUT || !stockRoot)("session lists across windows and paired com
 					sessionIndex: index,
 					renameStoredSession: async () => {},
 					defaultWorkspace: () => "/work/default",
-					launchProfiles: { get: () => undefined, set: () => {} },
+					launchProfiles: { launchProfile: () => ({}), updateLaunchProfile: () => ({}) },
 					machine: { abortBenchmark: async () => true, abortModelSetup: async () => true } as never,
 					localTabs: {
 						sessionOwner: () => null,
@@ -339,7 +335,7 @@ describe.skipIf(!OUT || !stockRoot)("session lists across windows and paired com
 				for (const name of ["device-1", "device-2"]) {
 					const conn: HostConnection & { win?: Win; list?: HostSessionList } = {
 						peer: peer(name),
-						slim: slimOf(HELLO),
+						slim: SLIM,
 						emit: (event, data) => {
 							meter.add("link event", { t: "evt", event, data });
 							if (event === "sessions.changed") conn.list?.hostChanged(data);

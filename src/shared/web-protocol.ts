@@ -8,15 +8,22 @@ import type { IpcErrorCode } from "./ipc-error-codes";
 /**
  * Bumped only by a change an older page cannot follow; added frames and fields keep it. 2: v0.119.0 replaced the
  * channels a page read its rows' live state from (`sessions:hosted`, `sessions:live`) with the session summaries, so
- * an older page against a newer host showed a session's run only once a tap opened its tab.
+ * an older page against a newer host showed a session's run only once a tap opened its tab. 3: a large picture of a
+ * transcript reaches the page as `ImageContent.blobUrl`, not as bytes inside a frame (main/web/page-images.ts); an
+ * older page would draw such a picture as unavailable.
  */
-export const WEB_PROTOCOL_VERSION = 2;
+export const WEB_PROTOCOL_VERSION = 3;
+
+/** Where a paired page fetches what the host keeps for it instead of sending it in a frame (`/blob/<token>`). */
+export const WEB_BLOB_URL_PREFIX = "/blob/";
 
 /**
  * The `<meta name>` in `web.html` that names its page build (scripts/pwa-plugin.ts: the id its service worker carries
  * too). The page reads its own from its document; the host reads the file it serves and says it in `hello.build`.
  */
 export const WEB_BUILD_META = "omp-build";
+/** The same build's retryable dialogs entry, written into desktop and web HTML. */
+export const ON_DEMAND_DIALOGS_META = "omp-on-demand-dialogs";
 
 /**
  * What a call may do, declared per channel (main/web/ipc-policy.ts). `workspace` already runs code as the

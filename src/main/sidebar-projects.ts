@@ -8,8 +8,8 @@
  * sessions before the list existed) and again after the session index changes. A folder the person removed stays out
  * until they open it again (`add`); a removed project's sessions are not touched.
  */
+
 import * as path from "node:path";
-import { promises as fs } from "original-fs";
 import type { SessionInfo } from "../shared/ipc-types";
 import {
 	type AutopilotRun,
@@ -19,20 +19,27 @@ import {
 	pathBaseName,
 	type WorktreeKind,
 } from "../shared/project-origin";
+import type { SidebarPrefs } from "../shared/sidebar-prefs";
 import {
 	parseSidebarProjects,
+	type SidebarLayout,
+	type SidebarLayoutChange,
 	type SidebarProject,
 	type SidebarProjectsRequest,
 	type SidebarProjectsState,
 } from "../shared/sidebar-projects";
+import { directoryExists } from "./canonical-cwd";
+import { core } from "./core/process";
 import { readProjectOrigin } from "./local/git/origin";
+import { sessionKey } from "./session-scratch";
+import { SidebarLayoutScope } from "./sidebar-layout";
 
 /** How long the list waits after the session index last changed before it looks for new folders. */
 export const SIDEBAR_PROJECTS_SYNC_DELAY_MS = 1_500;
 
 export type SidebarProjectsSession = Pick<
 	SessionInfo,
-	"cwd" | "kind" | "created" | "messageCount" | "title" | "firstMessage"
+	"id" | "path" | "cwd" | "kind" | "created" | "messageCount" | "title" | "firstMessage"
 >;
 
 export interface SidebarProjectsDeps {
@@ -57,17 +64,23 @@ export interface SidebarProjectsDeps {
 	autopilotRunOf?: (cwd: string) => Promise<AutopilotRun | null>;
 	/** The worktrees this computer's own tabs are bound to (folder, branch, main checkout): a run git cannot read yet. */
 	worktreeBindings?: () => ReadonlyArray<{ path: string; branch: string; baseCwd: string }>;
+	/**
+	 * The session files of the tab whose scratch folder `folder` is or lies in (`SessionScratch.sessionsOf`); null for
+	 * any other folder. A session an agent opened there (a test tab) is a row of that tab's project, never a project.
+	 */
+	scratchSessions?: (folder: string) => readonly string[] | null;
 	/** The projects the person pinned on this computer: one only sessions brought in stays while pinned. */
 	pinned?: () => readonly string[];
+	layout?: {
+		read(): SidebarPrefs;
+		write(change: SidebarLayoutChange): void;
+	};
 	onState: (state: SidebarProjectsState) => void;
 	now?: () => number;
 }
 
-async function folderExists(path: string): Promise<boolean> {
-	return fs.stat(path).then(
-		stat => stat.isDirectory(),
-		() => false,
-	);
+async function sidebarFolder(cwd: string) {
+	return (await core().call<{ linkedRoot: string | null } | null>("fs.sidebarFolder", { cwd })).result;
 }
 
 /**
@@ -76,23 +89,15 @@ async function folderExists(path: string): Promise<boolean> {
  * project of its own (the user's report, 23 Oct 2026: a paired Windows host's section was a column of `gui-agent-…`).
  */
 export async function linkedWorktreeRoot(cwd: string): Promise<string | null> {
-	const text = await fs.readFile(path.join(cwd, ".git"), "utf8").catch(() => null);
-	const match = text ? /^gitdir:\s*(.+?)\s*$/m.exec(text) : null;
-	if (!match?.[1]) return null;
-	const gitdir = path.resolve(cwd, match[1]);
-	if (path.basename(path.dirname(gitdir)) !== "worktrees") return null;
-	const common = path.dirname(path.dirname(gitdir));
-	if (path.basename(common) !== ".git") return null;
-	const root = path.dirname(common);
-	return fs.realpath(root).catch(() => root);
+	return (await sidebarFolder(path.resolve(cwd)))?.linkedRoot ?? null;
 }
 
 /** A linked worktree names its main checkout; any other folder is its own project; a folder that is gone, none. */
 export async function projectOfFolder(cwd: string): Promise<string | null> {
-	if (!(await folderExists(cwd))) return null;
 	const origin = await readProjectOrigin(cwd);
-	if (origin?.worktree) return origin.root;
-	return (await linkedWorktreeRoot(cwd)) ?? cwd;
+	if (origin?.worktree) return (await directoryExists(cwd)) ? origin.root : null;
+	const folder = await sidebarFolder(cwd);
+	return folder ? (folder.linkedRoot ?? cwd) : null;
 }
 
 /** A linked worktree's kind by its branch (git's answer, cached by `readProjectOrigin`); null for any other folder. */
@@ -112,6 +117,8 @@ export class SidebarProjects {
 	readonly #runOf: (cwd: string) => Promise<AutopilotRun | null>;
 	readonly #now: () => number;
 	#state: SidebarProjectsState;
+	#sessions: readonly SidebarProjectsSession[] = [];
+	#layout: SidebarLayout | undefined;
 	/**
 	 * What each session folder resolved to while it was there: whether a folder is a linked worktree does not change,
 	 * and a worktree removed since still names the project it was cut from.
@@ -131,18 +138,49 @@ export class SidebarProjects {
 		this.#runOf = deps.autopilotRunOf ?? autopilotRunOfFolder;
 		this.#now = deps.now ?? Date.now;
 		this.#state = parseSidebarProjects(deps.read());
+		delete this.#state.layout;
 	}
 
 	state(): SidebarProjectsState {
-		return this.#state;
+		return this.#layout ? { ...this.#state, layout: this.#layout } : this.#state;
+	}
+
+	/** Recompute on a local preference change or a session-list change, even when the project list stayed put. */
+	layoutChanged(): void {
+		this.#publish(false);
+	}
+
+	#publish(projectsChanged: boolean): void {
+		const layout = this.#deps.layout;
+		if (layout) {
+			const prefs = layout.read();
+			const next = this.#scope(prefs).read(prefs);
+			if (!projectsChanged && JSON.stringify(this.#layout) === JSON.stringify(next)) return;
+			this.#layout = next;
+		} else if (!projectsChanged) return;
+		this.#deps.onState(this.state());
+	}
+
+	#scope(prefs: SidebarPrefs): SidebarLayoutScope {
+		return new SidebarLayoutScope(this.#state, this.#sessions, this.#deps.defaultWorkspace(), prefs.agentHidden);
 	}
 
 	async command(request: SidebarProjectsRequest): Promise<SidebarProjectsState> {
 		if (request.action === "add") await this.add(request.path);
 		else if (request.action === "remove") this.remove(request.path);
+		else if (request.action === "layout") {
+			const layout = this.#deps.layout;
+			if (!layout) throw new Error("Sidebar layout is unavailable");
+			const sessions = await this.#deps.sessions();
+			if (!sessions) throw new Error("The host session list is unavailable");
+			this.#sessions = sessions;
+			const prefs = layout.read();
+			layout.write(this.#scope(prefs).change(request.change, prefs));
+			this.layoutChanged();
+		}
 		// A read also notices a session folder or a project folder that went (or came back) since the last pass.
 		else await this.sync();
-		return this.#state;
+		return this.state();
 	}
 
 	/** The person opened or added a folder: it is listed (its project, for a worktree) as theirs, removed or not before. */
@@ -207,6 +245,7 @@ export class SidebarProjects {
 	async #syncOnce(): Promise<void> {
 		const workspace = this.#deps.defaultWorkspace();
 		const sessions = await this.#deps.sessions();
+		this.#sessions = sessions ?? [];
 		// Each folder once, with its newest session's start: that is where it sorts until a session there sorts it.
 		const newest = new Map<string, number>();
 		for (const session of sessions ?? []) {
@@ -216,6 +255,7 @@ export class SidebarProjects {
 			const created = Date.parse(session.created);
 			newest.set(session.cwd, Math.max(newest.get(session.cwd) ?? 0, Number.isNaN(created) ? 0 : created));
 		}
+		const cwdOf = new Map((sessions ?? []).map(session => [sessionKey(session.path), session.cwd]));
 		const found = new Map<string, number>();
 		// A linked worktree's folder → its project: a paired device groups the host's sessions by it (git runs here). A
 		// removed worktree keeps naming its project, so a session of it a tab still holds is a row of that project there.
@@ -226,12 +266,12 @@ export class SidebarProjects {
 		const autopilotRuns: Record<string, AutopilotRun> = {};
 		// Session folders that are gone: a paired device places their sessions by `sidebarRows`, as this computer's does.
 		const gone: string[] = [];
-		const exists = this.#deps.exists ?? folderExists;
+		const exists = this.#deps.exists ?? directoryExists;
 		for (const [cwd, created] of newest) {
 			const known = this.#resolved.get(cwd);
 			// A folder seen before is asked again only once it is gone: a worktree removed while this app runs (disk care,
 			// a landed child) left a project here that the next pass must not keep listing as there.
-			const project = known != null && (await exists(cwd)) ? known : await this.#projectOf(cwd);
+			const project = known != null && (await exists(cwd)) ? known : await this.#projectOfFolder(cwd, cwdOf);
 			// A gone folder may come back (a restored worktree): asked again next pass.
 			if (project !== null) this.#resolved.set(cwd, project);
 			if (project === null) {
@@ -263,7 +303,7 @@ export class SidebarProjects {
 			if (missing) continue;
 			let project = this.#resolved.get(listedPath);
 			if (project === undefined) {
-				project = await this.#projectOf(listedPath);
+				project = await this.#projectOfFolder(listedPath, cwdOf);
 				this.#resolved.set(listedPath, project);
 			}
 			if (project && project !== listedPath && project !== workspace) moved.set(listedPath, project);
@@ -294,6 +334,21 @@ export class SidebarProjects {
 			added.push({ path, addedAt: addedAt || this.#now(), by: "sessions" });
 		}
 		await this.#checkFolders(added, ended, worktrees, worktreeKinds, autopilotRuns, moved, gone.sort());
+	}
+
+	/**
+	 * A folder's project. A tab's scratch folder, or a folder inside it, belongs to the project of the session that
+	 * tab ran (the newest one known that worked outside the scratch root); with no such session it is the Work
+	 * workspace, so never a project of its own.
+	 */
+	async #projectOfFolder(cwd: string, cwdOf: ReadonlyMap<string, string>): Promise<string | null> {
+		const owners = this.#deps.scratchSessions?.(cwd);
+		if (!owners) return this.#projectOf(cwd);
+		for (const file of [...owners].reverse()) {
+			const owner = cwdOf.get(sessionKey(file));
+			if (owner && !this.#deps.scratchSessions?.(owner)) return this.#projectOf(owner);
+		}
+		return this.#deps.defaultWorkspace();
 	}
 
 	/**
@@ -337,7 +392,7 @@ export class SidebarProjects {
 		moved: ReadonlyMap<string, string>,
 		gone: readonly string[],
 	): Promise<void> {
-		const exists = this.#deps.exists ?? folderExists;
+		const exists = this.#deps.exists ?? directoryExists;
 		const before = this.#state;
 		const kept = before.projects.filter(entry => !moved.has(entry.path) && !ended.has(entry.path));
 		const checked = (
@@ -370,11 +425,12 @@ export class SidebarProjects {
 				autopilotRuns: Object.keys(autopilotRuns).length > 0 ? autopilotRuns : undefined,
 				...(gone.length > 0 ? { gone: [...gone] } : { gone: undefined }),
 			});
+		else this.layoutChanged();
 	}
 
 	#commit(next: Partial<SidebarProjectsState>): void {
 		this.#state = { ...this.#state, ...next };
 		this.#deps.write(this.#state);
-		this.#deps.onState(this.#state);
+		this.#publish(true);
 	}
 }

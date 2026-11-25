@@ -9,12 +9,15 @@ import { z } from "zod";
 import type {
 	AccountCredits,
 	AccountUsageState,
+	ModelReleaseDatesResult,
 	ProviderAccount,
 	ProviderAccountsResult,
 	ResetPasses,
 	ResetPassRedeemResult,
 	UsageLimit,
 } from "../../shared/rpc-types";
+import { core } from "../core/process";
+import { withDeadline } from "../preview/preview-check";
 import { loopbackCallback } from "../sign-in-callback";
 import { stockHelperRequest } from "../stock-helper";
 import { LocalCommandError, type LocalHandler } from "./types";
@@ -91,6 +94,12 @@ export function mergeProviderAccounts(
 	};
 }
 
+/**
+ * How long the account list waits for its quotas: under the renderer's 60 s for `get_provider_accounts`
+ * (rpc-client.ts), so a quota read stuck on a provider never takes the accounts stock already listed down with it.
+ */
+export const ACCOUNT_QUOTA_WAIT_MS = 45_000;
+
 const providerIdParam = z.string().min(1);
 
 /** What a history read passes on: the command's own `id` and `type` stay here. */
@@ -111,20 +120,16 @@ const historySearch = historyRead.extend({ query: z.string() });
 export async function cancelBrowserLogin(authorizationUrl: string): Promise<void> {
 	const flow = loopbackCallback(authorizationUrl);
 	if (!flow) throw new LocalCommandError("This sign-in has no loopback callback to end", "no_loopback_callback");
-	const callback = new URL(flow.url);
-	callback.searchParams.set("error", "access_denied");
-	callback.searchParams.set("error_description", "Sign-in cancelled in OMPdesk");
-	if (flow.state) callback.searchParams.set("state", flow.state);
-	// Stock answers a denial with its error page (500); a closed server means the login already ended.
-	await fetch(callback, { signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
+	await core().call("remotebytes.signInCancel", { url: flow.url.href, state: flow.state });
 }
 
 export const handlers: Record<string, LocalHandler> = {
-	get_settings_schema: (_command, ctx) => ctx.bridge.request("settings_schema"),
 	get_settings: (command, ctx) => ctx.bridge.request("settings_get", { paths: command.paths }),
 	set_setting: (command, ctx) => ctx.bridge.request("settings_set", { path: command.path, value: command.value }),
 	get_available_models: (command, ctx) =>
 		ctx.bridge.request("models_catalog", { forceRefresh: command.forceRefresh === true }),
+	// The core fetches and keeps them (`crates/core/src/models/release_dates.rs`); never an error, unknown dates are absent.
+	get_model_release_dates: async () => (await core().call<ModelReleaseDatesResult>("models.releaseDates", {})).result,
 	get_providers: (command, ctx) => ctx.bridge.request("providers", { forceRefresh: command.forceRefresh === true }),
 	login_cancel: async command => cancelBrowserLogin(z.string().url().parse(command.url)),
 	// One account goes through stock `logout`; the whole provider only when asked for explicitly.
@@ -138,20 +143,25 @@ export const handlers: Record<string, LocalHandler> = {
 		const providerId = providerIdParam.parse(command.providerId);
 		const [stock, usage] = await Promise.allSettled([
 			ctx.send<{ accounts: StockLogoutAccount[] }>({ type: "get_logout_accounts", providerId }),
-			ctx.bridge.request<BridgeProviderAccounts>("provider_accounts", {
-				providerId,
-				refresh: command.refresh === true,
-			}),
+			withDeadline(
+				ctx.bridge.request<BridgeProviderAccounts>("provider_accounts", {
+					providerId,
+					refresh: command.refresh === true,
+				}),
+				ACCOUNT_QUOTA_WAIT_MS,
+			),
 		]);
 		if (stock.status === "rejected") throw stock.reason;
-		return usage.status === "fulfilled"
-			? mergeProviderAccounts(providerId, stock.value.accounts, usage.value)
-			: mergeProviderAccounts(
-					providerId,
-					stock.value.accounts,
-					undefined,
-					usage.reason instanceof Error ? usage.reason.message : String(usage.reason),
-				);
+		if (usage.status === "fulfilled" && usage.value) {
+			return mergeProviderAccounts(providerId, stock.value.accounts, usage.value);
+		}
+		const usageError =
+			usage.status === "fulfilled"
+				? `The quota read took over ${ACCOUNT_QUOTA_WAIT_MS / 1000} s`
+				: usage.reason instanceof Error
+					? usage.reason.message
+					: String(usage.reason);
+		return mergeProviderAccounts(providerId, stock.value.accounts, undefined, usageError);
 	},
 	// Through the tab's own bridge, so a paired host's tab spends the host's account.
 	redeem_reset_pass: async (command, ctx) =>
@@ -164,23 +174,14 @@ export const handlers: Record<string, LocalHandler> = {
 	get_model_roles: (command, ctx) => ctx.bridge.request("model_roles", { compact: command.compact === true }),
 	set_model_role: (command, ctx) =>
 		ctx.bridge.request("model_role_set", { role: command.role, modelId: command.modelId ?? null }),
-	get_model_role_metadata: (_command, ctx) => ctx.bridge.request("model_role_metadata"),
-	get_model_setup_facts: (_command, ctx) => ctx.bridge.request("model_setup_facts"),
-	get_session_spend: (_command, ctx) => ctx.bridge.request("session_spend"),
 	get_compaction_points: (command, ctx) =>
 		ctx.bridge.request("compaction_points", command.selector === undefined ? {} : { selector: command.selector }),
 	compaction_limits: (command, ctx) => ctx.bridge.request("compaction_limits", command),
-	get_recent_models: (_command, ctx) => ctx.bridge.request("recent_models"),
 	set_output_style: async (command, ctx) =>
 		ctx.bridge.request("output_style_set", { style: z.object({ style: z.string() }).parse(command).style }),
-	// One draft report serves both idle timers; an omp without the recap feature answers unsupported_omp, which is no failure here.
-	set_idle_compaction_draft: async (command, ctx) => {
-		const { empty } = z.object({ empty: z.boolean() }).parse(command);
-		const recap = ctx.bridge.request("recap_draft", { empty }).catch(() => undefined);
-		const armed = await ctx.bridge.request("idle_compaction_draft", { empty });
-		await recap;
-		return armed;
-	},
+	// The draft holds stock's idle compaction and idle recap back (gui-bridge idle-maintenance.ts).
+	set_idle_compaction_draft: async (command, ctx) =>
+		ctx.bridge.request("idle_maintenance_draft", { empty: z.object({ empty: z.boolean() }).parse(command).empty }),
 	// Reads go to the stock helper's one handle on the history.db every omp on this computer writes: never through the
 	// tab's omp, whose thread is busy mid-turn (stock-helper/history.ts). The write stays there, for the session id.
 	history_recent: async command => stockHelperRequest("history.recent", historyRead.parse(command)),

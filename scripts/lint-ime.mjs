@@ -11,7 +11,7 @@
  * Heuristic by design: it proves the guard is mentioned in the handler, not that
  * it runs on every path.
  */
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 const ENTER_VALUES = new Set(["Enter", "NumpadEnter"]);
 const EQUALITY = new Set([

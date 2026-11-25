@@ -1,5 +1,5 @@
-//! A message one session sends another (`ompdesk_session_send`) is a stock `prompt`; a busy receiver queues it in its
-//! omp's memory and journals it only when its loop takes it, so an omp that ends first loses it (`send-outbox.ts`).
+//! A message one session sends another (`ompdesk_session_send`) reaches a busy receiver as an aside, which its omp
+//! holds in memory and journals only when its loop takes it, so an omp that ends first loses it (`send-outbox.ts`).
 //! Main keeps each message, per receiver session file (and paired device), until the receiver's journal holds its
 //! marker. It remembers which omp process it handed the message to: that omp still holds it, so it is never sent there
 //! again; a different omp (a relaunch's) gets it once, in the order sent. An omp that holds it no more while idle with
@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value};
 
+use super::attachments::{Attached, AttachedSet, attached_sig, read_attached};
 use super::{
     Clock, THREE_DAYS_MS, js_number, number, object, read_array, string, stringify, system_clock,
     write_text,
@@ -27,21 +28,6 @@ use super::{
 
 pub const SEND_OUTBOX_MAX: usize = 200;
 pub const SEND_OUTBOX_TTL_MS: f64 = THREE_DAYS_MS;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamingBehavior {
-    Steer,
-    FollowUp,
-}
-
-impl StreamingBehavior {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            StreamingBehavior::Steer => "steer",
-            StreamingBehavior::FollowUp => "followUp",
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboxSend {
@@ -54,11 +40,23 @@ pub struct OutboxSend {
     pub device: Option<String>,
     /// The sender's session file (its tab id when it has none).
     pub from: String,
+    /// The computer the sender's session runs on, when a paired device's: where it is told a delivery failed.
+    pub from_device: Option<String>,
     /// What the sender wrote.
     pub body: String,
     /// The prompt as sent: wrapped, with its markers.
     pub message: String,
-    pub streaming_behavior: StreamingBehavior,
+    /// What the message carries: its pictures (bytes in the attachment store) and the files landed for its receiver.
+    pub attachments: Option<AttachedSet>,
+    /// Its record of attachments was damaged: it is never delivered as text alone.
+    pub attachments_corrupt: bool,
+    /// An open's first message: the commands that set its new child up (`agent_control_worker`, `set_model`,
+    /// `set_plan_mode`), sent again, before the message, to an omp other than the one first handed it (a relaunch
+    /// between the open's tab and its first message). Each is idempotent.
+    pub before: Vec<Value>,
+    /// An open's first message in goal mode: handed over as stock's `set_goal {objective: body}`, settled once stock
+    /// took it (its goal entry carries no marker the journal check could find).
+    pub goal: bool,
     /// The receiver omp it was handed to, or `tab:<tab id>`; absent: not handed to any omp yet.
     pub instance: Option<String>,
     pub at: f64,
@@ -77,7 +75,6 @@ impl OutboxSend {
         from: String,
         body: String,
         message: String,
-        streaming_behavior: StreamingBehavior,
         at: f64,
     ) -> OutboxSend {
         OutboxSend {
@@ -86,9 +83,13 @@ impl OutboxSend {
             session_path,
             device: device.filter(|device| !device.is_empty()),
             from,
+            from_device: None,
             body,
             message,
-            streaming_behavior,
+            attachments: None,
+            attachments_corrupt: false,
+            before: Vec::new(),
+            goal: false,
             instance: None,
             at,
             instance_last: false,
@@ -106,12 +107,25 @@ impl OutboxSend {
             map.insert("device".into(), device.clone().into());
         }
         map.insert("from".into(), self.from.clone().into());
+        if let Some(from_device) = &self.from_device {
+            map.insert("fromDevice".into(), from_device.clone().into());
+        }
         map.insert("body".into(), self.body.clone().into());
         map.insert("message".into(), self.message.clone().into());
-        map.insert(
-            "streamingBehavior".into(),
-            self.streaming_behavior.as_str().into(),
-        );
+        if let Some(attachments) = &self.attachments {
+            map.insert("attachments".into(), attachments.to_json());
+        }
+        if self.attachments_corrupt {
+            map.insert("attachmentsCorrupt".into(), true.into());
+        }
+        // Every message is handed over the one way; the key stays for an earlier build reading this file.
+        map.insert("streamingBehavior".into(), "steer".into());
+        if !self.before.is_empty() {
+            map.insert("before".into(), Value::Array(self.before.clone()));
+        }
+        if self.goal {
+            map.insert("goal".into(), true.into());
+        }
         if let Some(instance) = self.instance.as_ref().filter(|_| !self.instance_last) {
             map.insert("instance".into(), instance.clone().into());
         }
@@ -150,12 +164,17 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
     let from = string(fields, "from")?;
     let body = string(fields, "body")?;
     let message = string(fields, "message").filter(|message| !message.is_empty())?;
-    let streaming_behavior = match string(fields, "streamingBehavior")? {
-        "steer" => StreamingBehavior::Steer,
-        "followUp" => StreamingBehavior::FollowUp,
-        _ => return None,
-    };
+    // `followUp`: what an earlier build kept for a message asked to wait for the turn's end; it goes as every other.
+    if !matches!(string(fields, "streamingBehavior")?, "steer" | "followUp") {
+        return None;
+    }
     let at = number(fields, "at")?;
+    // A record of attachments that cannot be read never reads as "none": the message would go without them.
+    let (attachments, corrupt) = match read_attached(fields.get("attachments")) {
+        Attached::None => (None, false),
+        Attached::Set(set) => (Some(set), false),
+        Attached::Corrupt => (None, true),
+    };
     let dispatch = number(fields, "dispatch")
         .filter(|n| n.fract() == 0.0)
         .map(|n| n as i64);
@@ -167,9 +186,26 @@ pub(crate) fn parse_entry(value: &Value) -> Option<OutboxSend> {
             .filter(|d| !d.is_empty())
             .map(str::to_owned),
         from: from.to_owned(),
+        from_device: string(fields, "fromDevice")
+            .filter(|d| !d.is_empty())
+            .map(str::to_owned),
         body: body.to_owned(),
         message: message.to_owned(),
-        streaming_behavior,
+        attachments,
+        attachments_corrupt: corrupt
+            || fields.get("attachmentsCorrupt") == Some(&Value::Bool(true)),
+        before: fields
+            .get("before")
+            .and_then(Value::as_array)
+            .map(|commands| {
+                commands
+                    .iter()
+                    .filter(|command| command.is_object())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default(),
+        goal: fields.get("goal") == Some(&Value::Bool(true)),
         instance: string(fields, "instance")
             .filter(|i| !i.is_empty())
             .map(str::to_owned),
@@ -326,17 +362,44 @@ impl SendOutbox {
             .fold(0, i64::max)
     }
 
-    /// The same message from the same sender, still owed to the receiver: a resend joins it.
+    /// The same message (and the same attachments, `sig`: `attached_sig`) from the same sender, still owed to the
+    /// receiver: a resend joins it.
     pub fn waiting(
         &self,
         from: &str,
         session_path: &str,
         device: Option<&str>,
         body: &str,
+        sig: &str,
     ) -> Option<OutboxSend> {
         self.owed_to(session_path, device)
             .into_iter()
-            .find(|entry| entry.from == from && entry.body == body)
+            .find(|entry| {
+                entry.from == from
+                    && entry.body == body
+                    && attached_sig(entry.attachments.as_ref()) == sig
+            })
+    }
+
+    /// The files of a message landed again (their uploads were deleted): its text and files as they stand now.
+    pub fn relanded(&self, entry: &OutboxSend, message: &str, attachments: &AttachedSet) {
+        let mut state = self.state();
+        let Some(at) = state.position(&key_of(entry)) else {
+            return;
+        };
+        let kept = &mut state.entries[at].1;
+        kept.message = message.to_owned();
+        kept.attachments = Some(attachments.clone());
+        state.save();
+    }
+
+    /// The SHA-256 of every attachment a message still owed names: what the attachment store must keep.
+    pub fn attachment_shas(&self) -> std::collections::HashSet<String> {
+        self.pending()
+            .iter()
+            .flat_map(|entry| entry.attachments.iter())
+            .flat_map(|set| set.shas().map(str::to_owned))
+            .collect()
     }
 
     /// Run `work` alone for one receiver session (deliveries to it never overlap).

@@ -3,8 +3,10 @@ import { createServer, type Server } from "node:http";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SshPrompt, SshToolsState } from "../../shared/ssh-tools";
+import { CoreError, core } from "../core/process";
 import { SshCore } from "./client";
 import { SshTools } from "./service";
 import { writeFakeSsh } from "./test-fake-ssh";
@@ -386,9 +388,71 @@ describe("SshTools", () => {
 				[60_000, 120_000, 180_000, 240_000, 300_000].map(ms => tools.command({ action: "setGrace", ms })),
 			);
 			expect(await fs.readFile(`${store}.corrupt`, "utf8")).toBe("{ not json");
-			expect(JSON.parse(await fs.readFile(store, "utf8"))).toMatchObject({ forwards: [] });
+			expect(JSON.parse(await fs.readFile(store, "utf8"))).toEqual({ graceMs: 300_000, forwards: [] });
 			expect((await fs.readdir(path.dirname(store))).filter(name => name.includes(".tmp"))).toEqual([]);
 		}, 20_000);
+
+		it("does not replace a good store when the startup read fails, and retries before the next change", async () => {
+			const store = path.join(root, "user", "ssh-forwards.json");
+			const row = {
+				id: "kept",
+				server: "box",
+				target: { ...target, username: "dev", port: 2222, keyPath: "keys/test" },
+				localPort: 7000,
+				remotePort: 8000,
+				active: false,
+			};
+			const original = JSON.stringify({ graceMs: 180_000, forwards: [row] });
+			await fs.mkdir(path.dirname(store), { recursive: true });
+			await fs.writeFile(store, original);
+			const failure = new CoreError("core_exited", "core exited before reading the store");
+			vi.spyOn(core(), "call").mockImplementationOnce((_method, _params, options) => {
+				options?.onEnded?.();
+				return Promise.reject(failure);
+			});
+			const launch = tools.start();
+			const change = tools.command({ action: "setGrace", ms: 60_000 });
+			await Promise.all([expect(launch).rejects.toBe(failure), expect(change).rejects.toBe(failure)]);
+			expect(await fs.readFile(store, "utf8")).toBe(original);
+			expect(await fs.readdir(path.dirname(store))).not.toContain("ssh-forwards.json.corrupt");
+			await tools.command({ action: "setGrace", ms: 120_000 });
+			expect(await fs.readFile(store, "utf8")).toBe(
+				JSON.stringify({ graceMs: 120_000, forwards: [row] }, null, "\t"),
+			);
+		});
+
+		it("leaves a corrupt store intact if it cannot be quarantined", async () => {
+			const store = path.join(root, "user", "ssh-forwards.json");
+			await fs.mkdir(`${store}.corrupt`, { recursive: true });
+			const invalid = '{"graceMs":59999,"forwards":[]}';
+			await fs.writeFile(store, invalid);
+			await expect(tools.command({ action: "setGrace", ms: 60_000 })).rejects.toThrow();
+			expect(await fs.readFile(store, "utf8")).toBe(invalid);
+			await fs.rmdir(`${store}.corrupt`);
+			await tools.command({ action: "setGrace", ms: 60_000 });
+			expect(await fs.readFile(`${store}.corrupt`, "utf8")).toBe(invalid);
+			expect(JSON.parse(await fs.readFile(store, "utf8"))).toEqual({ graceMs: 60_000, forwards: [] });
+		});
+
+		it("waits for a timed-out save to finish before writing the newest change", async () => {
+			await tools.start();
+			const store = path.join(root, "user", "ssh-forwards.json");
+			const release = Promise.withResolvers<void>();
+			const nativeCall = core().call.bind(core());
+			let lateWrite: Promise<unknown> | undefined;
+			const calls = vi.spyOn(core(), "call").mockImplementationOnce((method, params, options) => {
+				lateWrite = release.promise.then(() => nativeCall(method, params, options));
+				return Promise.reject(new CoreError("timeout", "save timed out"));
+			});
+			await expect(tools.command({ action: "setGrace", ms: 60_000 })).rejects.toThrow("save timed out");
+			const newest = tools.command({ action: "setGrace", ms: 120_000 });
+			await setImmediate();
+			const sentWhileFirstPending = calls.mock.calls.length;
+			release.resolve();
+			await Promise.all([lateWrite, newest]);
+			expect(sentWhileFirstPending).toBe(1);
+			expect(JSON.parse(await fs.readFile(store, "utf8"))).toEqual({ graceMs: 120_000, forwards: [] });
+		});
 	});
 });
 

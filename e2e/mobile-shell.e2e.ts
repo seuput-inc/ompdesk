@@ -14,7 +14,7 @@ import {
 } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { expectTouchInput, reassertTouch } from "./fixture/touch-emulation";
-import { hitSizes, variants } from "./harness";
+import { closeBrowser, hitSizes, launchBrowser, variants } from "./harness";
 import { composerGeometry, seedPaused, seedQueue, tapProbe } from "./queue-harness";
 
 // The mobile shell (design §6) in Chromium and WebKit device emulation, on the dev harness: the renderer in a
@@ -84,7 +84,7 @@ async function openHarness(
 	browser: Browser,
 	device: string,
 	look: Look,
-	options: { landscape?: boolean } = {},
+	options: { landscape?: boolean; usage?: "blocked" } = {},
 ): Promise<Page> {
 	const preset = devices[device];
 	if (!preset) throw new Error(`unknown device ${device}`);
@@ -100,7 +100,9 @@ async function openHarness(
 	page.on("pageerror", error => {
 		throw error;
 	});
-	await page.goto(`${origin}/harness.html?theme=${look.theme}&lang=${look.lang}`);
+	await page.goto(
+		`${origin}/harness.html?theme=${look.theme}&lang=${look.lang}${options.usage ? "&usage=blocked" : ""}`,
+	);
 	await reassertTouch(page);
 	await expect(page.locator("[data-titlebar-session-name]")).toBeVisible({ timeout: 30_000 });
 	if (preset.hasTouch) await expectTouchInput(page);
@@ -208,6 +210,50 @@ async function capture(page: Page, name: string, tag: string): Promise<void> {
 	await page.screenshot({ path: path.join(captures, `${tag}-${name}.png`), animations: "disabled" });
 }
 
+test("a tablet usage deep link scrolls settings without displacing the shell", async () => {
+	const browser = await chromium.launch();
+	try {
+		const page = await openHarness(
+			browser,
+			"iPad Pro 11",
+			{ theme: "light", lang: "en" },
+			{ landscape: true, usage: "blocked" },
+		);
+		await page.locator("[data-sidebar-usage-open]").click();
+		await expect(page.locator("#settings-models-accounts")).toBeVisible();
+		await page.evaluate(
+			() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))),
+		);
+		const geometry = await page.evaluate(() => {
+			const root = document.querySelector<HTMLElement>(".omp-app-root");
+			const shell = document.querySelector<HTMLElement>(".omp-shell");
+			const sidebar = document.querySelector<HTMLElement>(".omp-session-sidebar");
+			const content = document.querySelector<HTMLElement>(".settings-content");
+			const target = document.getElementById("settings-models-accounts");
+			if (!root || !shell || !sidebar || !content || !target) throw new Error("settings did not mount");
+			return {
+				rootScroll: root.scrollTop,
+				rootTop: root.getBoundingClientRect().top,
+				rootBottom: root.getBoundingClientRect().bottom,
+				shellTop: shell.getBoundingClientRect().top,
+				shellBottom: shell.getBoundingClientRect().bottom,
+				sidebarBottom: sidebar.getBoundingClientRect().bottom,
+				targetTop: target.getBoundingClientRect().top,
+				contentTop: content.getBoundingClientRect().top,
+				contentBottom: content.getBoundingClientRect().bottom,
+			};
+		});
+		expect(geometry.rootScroll).toBe(0);
+		expect(geometry.shellTop).toBeCloseTo(geometry.rootTop, 0);
+		expect(geometry.shellBottom).toBeCloseTo(geometry.rootBottom, 0);
+		expect(geometry.sidebarBottom).toBeCloseTo(geometry.rootBottom, 0);
+		expect(geometry.targetTop).toBeGreaterThanOrEqual(geometry.contentTop);
+		expect(geometry.targetTop).toBeLessThan(geometry.contentBottom);
+	} finally {
+		await closeBrowser(browser);
+	}
+});
+
 // The default run keeps each shell mode once in Chromium plus WebKit on a phone; the other engine × device
 // pairs repeat a mode and run with OMP_GUI_VARIANTS=1.
 for (const { engine, device } of variants(
@@ -219,10 +265,10 @@ for (const { engine, device } of variants(
 		const drawerMode = device.drawer;
 
 		test.beforeAll(async () => {
-			browser = await engine.type.launch();
+			browser = await launchBrowser(engine.type);
 		});
 		test.afterAll(async () => {
-			await browser.close();
+			await closeBrowser(browser);
 		});
 
 		test("the page is in the shell mode its size gives, with touch input", async () => {
@@ -463,7 +509,7 @@ for (const { engine, device } of variants(
 					(await sidebar.locator("[data-device-session]").count()),
 			);
 			for (const { visual, hit } of await hitSizes(menus)) {
-				// Rows are flush: a row's ⋯ owns a slot of the row's height (36) × 44 px, growing sideways only.
+				// A row's ⋯ sits on its second line: a 44 px wide slot whose hit area reaches past the line's height.
 				expect(hit.width).toBeGreaterThanOrEqual(43.5);
 				expect(hit.height).toBeGreaterThanOrEqual(35.5);
 				expect(Math.max(visual.width, visual.height)).toBeLessThanOrEqual(44);

@@ -3,30 +3,32 @@
  * the UI language and call each place by the name the window uses for it:
  * Electron's role items default to English whatever the language, and a menu
  * item that opens a page under another name reads as a different feature.
+ * The shell's app menu and tray read their words from `native_labels.json`.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import NATIVE_LABELS from "../../native/ompdesk/crates/tauri-shell/src/native_labels.json";
 import { en } from "../renderer/locales/en";
 import { ko } from "../renderer/locales/ko";
 import { UI_LANGUAGES } from "../shared/ui-language";
-import { MAIN_TEXT, type MainTextKey } from "./i18n-text";
-import { statusLabel } from "./tray-labels";
+import { MAIN_TEXT } from "./i18n-text";
 
 const RENDERER = { en, ko };
-const source = (file: string) => fs.readFileSync(path.join(__dirname, file), "utf8");
+const NATIVE: Record<string, Record<string, string>> = NATIVE_LABELS;
 
 /** Menus use title case and an ellipsis for items that ask for more; the words must match. */
 const sameName = (native: string, renderer: string) =>
 	native.replace(/…$/, "").toLowerCase() === renderer.replace(/…$/, "").toLowerCase();
 
 describe("native menu roles", () => {
-	it.each(["menu.ts", "editable-context-menu.ts"])("%s labels every role item", file => {
-		expect(source(file).match(/\{\s*role: "\w+"(?: as const)?\s*\}/g) ?? []).toEqual([]);
+	it("labels every role item of the text-field context menu", () => {
+		const source = fs.readFileSync(path.join(__dirname, "editable-context-menu.ts"), "utf8");
+		expect(source.match(/\{\s*role: "\w+"(?: as const)?\s*\}/g) ?? []).toEqual([]);
 	});
 
 	it("keeps Electron's English role names in English", () => {
-		const electronNames: Partial<Record<MainTextKey, string>> = {
+		const electronNames: Record<string, string> = {
 			"menu.undo": "Undo",
 			"menu.redo": "Redo",
 			"menu.cut": "Cut",
@@ -44,16 +46,15 @@ describe("native menu roles", () => {
 			"menu.zoom": "Zoom",
 			"menu.bringAllToFront": "Bring All to Front",
 		};
-		const text: Record<string, Record<string, string>> = MAIN_TEXT;
 		for (const [key, name] of Object.entries(electronNames)) {
-			expect(text[key]?.en, key).toBe(name);
-			expect(text[key]?.ko, key).toMatch(/[가-힣]/);
+			expect(NATIVE[key]?.en, key).toBe(name);
+			expect(NATIVE[key]?.ko, key).toMatch(/[가-힣]/);
 		}
 	});
 });
 
 describe("one name per place", () => {
-	const menuPairs: [MainTextKey, string][] = [
+	const menuPairs: [string, string][] = [
 		["menu.newSession", "cmd.new"],
 		["menu.newTab", "cmd.newTab"],
 		["menu.newChatTab", "cmd.newChatTab"],
@@ -87,16 +88,18 @@ describe("one name per place", () => {
 	for (const language of UI_LANGUAGES) {
 		it(`names each menu item like the page it opens (${language})`, () => {
 			for (const [key, rendererKey] of menuPairs) {
-				const native = MAIN_TEXT[key][language];
+				const native = NATIVE[key]?.[language] ?? "";
 				expect(sameName(native, RENDERER[language][rendererKey] ?? ""), `${key}: ${native}`).toBe(true);
 			}
 		});
 
 		it(`names the tray's states like the composer (${language})`, () => {
-			expect(statusLabel(language, "idle")).toBe(RENDERER[language]["titlebar.status.ready"]);
-			expect(statusLabel(language, "streaming")).toBe(RENDERER[language]["titlebar.status.working"]);
-			for (const kind of ["question", "approval", "childWaiting"] as const)
-				expect(statusLabel(language, kind)).toBe(RENDERER[language][`attention.${kind}`]);
+			const tray = (status: string) => NATIVE[`tray.status${status}`]?.[language];
+			expect(tray("Idle")).toBe(RENDERER[language]["titlebar.status.ready"]);
+			expect(tray("Streaming")).toBe(RENDERER[language]["titlebar.status.working"]);
+			expect(tray("Question")).toBe(RENDERER[language]["attention.question"]);
+			expect(tray("Approval")).toBe(RENDERER[language]["attention.approval"]);
+			expect(tray("ChildWaiting")).toBe(RENDERER[language]["attention.childWaiting"]);
 			// The judge's "this reply waits for you" banner says the question word too.
 			expect(
 				MAIN_TEXT["notify.needsInput"][language].startsWith(`${RENDERER[language]["attention.question"]} · `),

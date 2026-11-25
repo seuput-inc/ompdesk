@@ -88,20 +88,34 @@ async function deleteByMenu(page: Page, session: Seeded): Promise<void> {
 	await expectGone(page, session);
 }
 
-async function launch(args: string[], env: Record<string, string>): Promise<{ app: ElectronApplication; page: Page }> {
+function launch(args: string[], env: Record<string, string>): Promise<ElectronApplication> {
 	// `OMP_GUI_TEST_APP`: a packaged OMPdesk instead of this checkout's build (as real-core.e2e.ts).
 	const executablePath = process.env.OMP_GUI_TEST_APP;
-	const app = await electron.launch({
+	return electron.launch({
 		...(executablePath ? { executablePath } : {}),
 		args: executablePath ? args.slice(1) : args,
 		env,
 	});
+}
+
+async function readyPage(app: ElectronApplication): Promise<Page> {
 	const page = await app.firstWindow();
 	await page.waitForFunction(() => window.omp?.rpc != null);
-	await expect
-		.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 90_000 })
-		.toBe("ready");
-	return { app, page };
+	try {
+		await expect
+			.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 90_000 })
+			.toBe("ready");
+	} catch (error) {
+		// Which tab main answers for and what it holds for this window: a relaunch once read "starting" for 90 s while
+		// a tab's omp was ready (W4 45474514857 shard 17).
+		const seen = await page
+			.evaluate(async () => ({ status: await window.omp.sidecar.getStatus(), tabs: await window.omp.tabs.list() }))
+			.catch((reason: unknown) => String(reason));
+		throw new Error(
+			`${error instanceof Error ? error.message : String(error)}\nmain's view: ${JSON.stringify(seen)}`,
+		);
+	}
+	return page;
 }
 
 export async function deleteSessionsEndToEnd(profile: DeleteProfile, seedSession: SeedSession): Promise<void> {
@@ -155,9 +169,8 @@ export async function deleteSessionsEndToEnd(profile: DeleteProfile, seedSession
 	const args = [path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"), `--user-data-dir=${desktop}`];
 	let app: ElectronApplication | undefined;
 	try {
-		const first = await launch(args, profile.env);
-		app = first.app;
-		const { page } = first;
+		app = await launch(args, profile.env);
+		const page = await readyPage(app);
 		const shot = (name: string) =>
 			page.screenshot({ path: test.info().outputPath(`${name}.png`), animations: "disabled", scale: "css" });
 		for (const session of [active, background, pane, asleep, stored])
@@ -255,9 +268,8 @@ export async function deleteSessionsEndToEnd(profile: DeleteProfile, seedSession
 			]),
 		);
 
-		const second = await launch(args, profile.env);
-		app = second.app;
-		const again = second.page;
+		app = await launch(args, profile.env);
+		const again = await readyPage(app);
 		await expect
 			.poll(async () => (await tabs(again)).map(entry => ({ placeholder: entry.placeholder === true })))
 			.toEqual([{ placeholder: true }]);

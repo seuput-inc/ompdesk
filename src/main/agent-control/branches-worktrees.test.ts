@@ -12,7 +12,6 @@ import { noteOmpExit } from "../omp-exits";
 import type { BeforeRemove } from "../worktree-orphans";
 import { removalHolds } from "../worktree-removals";
 import {
-	boundDiff,
 	branchEvidence,
 	branchFacts,
 	discardNewWorktree,
@@ -71,7 +70,7 @@ describe("discardNewWorktree", () => {
 		const store = new SavedWorktreeStore(path.join(root, "care"));
 		expect(await discardNewWorktree(wt, archiveBeforeRemove(store, null))).toBe("removed");
 		await expect(fs.stat(wt.path)).rejects.toThrow();
-		const [record] = await store.list();
+		const [record] = await store.list(repo);
 		expect(record).toMatchObject({
 			path: await fs.realpath(path.dirname(wt.path)).then(dir => path.join(dir, "wt-seeded")),
 			archivedFiles: 1,
@@ -152,38 +151,6 @@ describe("discardNewWorktree", () => {
 		expect(await discarding).toBe("removed");
 		await expect(fs.stat(exited.path)).rejects.toThrow();
 		expect(gitSync(repo, "branch", "--list", exited.branch)).toBe("");
-	});
-});
-
-describe("boundDiff", () => {
-	const section = (file: string, lines: number): string =>
-		`diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n${Array.from({ length: lines }, (_, i) => `+line ${i}\n`).join("")}`;
-
-	it("returns the whole diff when it fits and nothing when there is no budget", () => {
-		const diff = section("a.ts", 3);
-		expect(boundDiff(diff, diff.length)).toEqual({ text: diff, omitted: 0 });
-		expect(boundDiff(diff, 0)).toEqual({ text: "", omitted: diff.length });
-		expect(boundDiff("", 100)).toEqual({ text: "", omitted: 0 });
-	});
-
-	it("gives a small source file its whole hunk however big the lockfile beside it is", () => {
-		const source = section("src/app.ts", 4);
-		const lock = section("package-lock.json", 5000);
-		const { text, omitted } = boundDiff(lock + source, 2000);
-		expect(text).toContain(source);
-		expect(text).toMatch(/… \d+ more lines of package-lock\.json left out\n/);
-		expect(text.length).toBeLessThanOrEqual(2000);
-		expect(omitted).toBeGreaterThan(0);
-		expect(omitted).toBe(lock.length + source.length - text.replace(/… .* left out\n/, "").length);
-	});
-
-	it("cuts at a line boundary and says how many lines it left out", () => {
-		const { text } = boundDiff(section("big.ts", 100), 300);
-		expect(text.endsWith(" left out\n")).toBe(true);
-		const kept = text.split("\n").filter(line => line.startsWith("+line "));
-		expect(kept.every(line => /^\+line \d+$/.test(line))).toBe(true);
-		const left = Number(/… (\d+) more line/.exec(text)?.[1]);
-		expect(kept.length + left).toBe(100);
 	});
 });
 
@@ -337,7 +304,7 @@ describe("a branch squash-merged into the parent's main", () => {
 		const wt = await agentWorktree("sq6");
 		await commitIn(wt.path, "a.ts", "a\n");
 		squashMerge(wt);
-		expect(await removeSafeWorktree(wt)).toBe("removed");
+		expect(await removeSafeWorktree(wt)).toEqual({ removal: "removed" });
 		await expect(fs.stat(wt.path)).rejects.toThrow();
 		expect(gitSync(repo, "branch", "--list", wt.branch)).toBe("");
 

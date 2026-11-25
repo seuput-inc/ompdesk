@@ -15,31 +15,45 @@ import { INSTALLED_OMP as omp } from "./test-bridge-probe";
  */
 
 const OPEN = "ompdesk_session_open";
+const SEND = "ompdesk_session_send";
+const LOCAL_ITEM = "Classify local branches";
 
 interface Script {
 	items: string[];
-	/** Call the host tool `ompdesk_session_open` after the list; the host answers that a child works. */
-	open?: boolean;
+	delegate?: typeof OPEN | typeof SEND;
+	answer?: string;
 }
 
-/** The main agent's requests in order: the list, the open (when asked), a plain answer, then plain answers. */
+/** A delegated review never replies. On a reminder the agent finishes the independent local item. */
 async function start(script: Script): Promise<{ bodies: string[]; session: Omp }> {
-	const provider = await startProvider(step => {
+	const { delegate } = script;
+	const provider = await startProvider((step, body) => {
 		if (step === 1)
 			return sse(toolCall("todo", { op: "init", list: [{ phase: "Work", items: script.items }] }), "tool_calls");
-		if (step === 2 && script.open) return sse(toolCall(OPEN, { message: "Look into the build" }), "tool_calls");
-		return sse([{ content: "Nothing more to do for now." }], "stop");
+		if (step === 2 && delegate) {
+			const args = { message: "Review the build", ...(delegate === SEND ? { session: "Reviewer" } : {}) };
+			return sse(toolCall(delegate, args), "tool_calls");
+		}
+		if (step === 4 && delegate && body.includes("You stopped with"))
+			return sse(toolCall("todo", { op: "done", task: LOCAL_ITEM }), "tool_calls");
+		return sse([{ content: script.answer ?? "Nothing more to do for now." }], "stop");
 	});
 	const session = await startOmp({
 		...fakeAgent(provider.url),
 		model: "fake/m1",
 		bridge: resolve("resources/gui-bridge/index.ts"),
-		hostTools: script.open
+		hostTools: delegate
 			? {
-					[OPEN]: {
-						description: "Open a session",
-						parameters: { type: "object", properties: { message: { type: "string" } } },
-						answer: "Opened session 15c8906674c31761 in /w. It is working on your message.",
+					[delegate]: {
+						description: "Request a review",
+						parameters: {
+							type: "object",
+							properties: { session: { type: "string" }, message: { type: "string" } },
+						},
+						answer:
+							delegate === SEND
+								? 'Sent to "Reviewer" (saved id 01a1cd44-3e97-7345-a8cc-e9211a49f216, on Desktop): accepted'
+								: "Opened session 15c8906674c31761 in /w. It is working on your message.",
 					},
 				}
 			: undefined,
@@ -67,10 +81,27 @@ describe.skipIf(!existsSync(omp))("stock's todo reminder on a session that waits
 		expect(reminded(bodies)).toBe(0);
 	}, 180_000);
 
-	it("does not wake a session that opened a child and waits for its report, though an item is actionable", async () => {
-		const { bodies, session } = await start({ items: ["Integrate the child's result"], open: true });
-		await session.turn("Ask a session to look into the build");
-		expect(bodies).toHaveLength(3);
+	it.each([OPEN, SEND] as const)(
+		"keeps independent work actionable after %s",
+		async delegate => {
+			const waiting = "Wait for the review";
+			const { bodies, session } = await start({ items: [waiting, LOCAL_ITEM], delegate });
+			const frames = await session.turn("Request a review and classify the local branches");
+			expect(frames.some(frame => frame.type === "host_tool_call" && frame.toolName === delegate)).toBe(true);
+			expect(bodies[3]).toContain("You stopped with 2 incomplete todo item(s)");
+			const done = frames.find(frame => frame.type === "tool_execution_end" && frame.result?.details?.op === "done");
+			expect(done?.result?.details?.phases?.[0]?.tasks).toEqual([
+				{ content: waiting, status: "in_progress" },
+				{ content: LOCAL_ITEM, status: "completed" },
+			]);
+			expect(frames.filter(frame => frame.type === "todo_reminder")).toHaveLength(1);
+		},
+		180_000,
+	);
+
+	it("leaves a request for approval with the person", async () => {
+		const { bodies, session } = await start({ items: [LOCAL_ITEM], answer: "May I proceed?" });
+		await session.turn("Ask for approval before continuing");
 		expect(reminded(bodies)).toBe(0);
 	}, 180_000);
 });

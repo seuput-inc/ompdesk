@@ -9,19 +9,18 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { loadPinnedSessionIds } from "@oh-my-pi/pi-coding-agent/session/session-pins";
-import { replaceFileAtomically } from "@oh-my-pi/pi-coding-agent/utils/atomic-file";
-import { getAgentDir, withFileLock } from "@oh-my-pi/pi-utils";
 
 /** omp's pins file: a JSON array of session ids. */
 const PINS_FILENAME = "session-pins.json";
 
 /** Pin (`pinned`) or unpin `sessionId`; a no-op when it already is. */
-export async function setSessionPinned(
-	sessionId: string,
-	pinned: boolean,
-	agentDir: string = getAgentDir(),
-): Promise<boolean> {
+export async function setSessionPinned(sessionId: string, pinned: boolean, givenDir?: string): Promise<boolean> {
+	const [{ loadPinnedSessionIds }, { replaceFileAtomically }, { getAgentDir, withFileLock }] = await Promise.all([
+		import("./omp/pi-coding-agent/session/session-pins"),
+		import("./omp/pi-coding-agent/utils/atomic-file"),
+		import("./omp/pi-utils"),
+	]);
+	const agentDir = givenDir ?? getAgentDir();
 	const filePath = path.join(agentDir, PINS_FILENAME);
 	await fs.mkdir(agentDir, { recursive: true });
 	return withFileLock(filePath, async () => {

@@ -1,6 +1,6 @@
 //! A session's scratch folder (`<scratch root>/<tag>`, `src/main/session-scratch.ts`): the throwaway files a tab's omp
-//! was told to keep there. Main decides when one may go (no tab holds its tag, no process carries it, idle); the core
-//! reads when anything in it last changed (`facts`) and removes it (`sweep`), except the files its sessions' replies
+//! was told to keep there. Main supplies the tab's live tag, process and ownership facts. The core checks
+//! whether the folder is idle or orphaned and removes it (`sweep`), except the files its sessions' replies
 //! name: a reply's picture is read from its path each time the reply is shown, so a file a reply shows or links stays
 //! as long as the session does.
 //!
@@ -11,12 +11,12 @@
 //! ways. A session file that is not stock's format (an entry that names the tag and is no JSON, a first line that is
 //! no object) fails the sweep with `scratch_kept` and nothing goes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::sizes;
@@ -27,16 +27,82 @@ use crate::server::{Fault, Scope};
 /// How far past the tag a path is looked for on its line.
 const MENTION_MAX: usize = 400;
 
+fn is_tag(name: &str) -> bool {
+    name.len() == 32
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub fn tags(root: &Path, scope: &Scope) -> Result<Vec<String>, Fault> {
+    live(scope)?;
+    match fs::symlink_metadata(root) {
+        Ok(meta) if linked(&meta) => {
+            return Err(Fault::new(
+                "scratch_kept",
+                "its scratch root is a link to another folder",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(fault(&error, "lstat", root)),
+    }
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(fault(&error, "scandir", root)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        live(scope)?;
+        let entry = entry.map_err(|error| fault(&error, "scandir", root))?;
+        if let Ok(name) = entry.file_name().into_string()
+            && is_tag(&name)
+        {
+            names.push(name);
+        }
+    }
+    names.sort_unstable();
+    Ok(names)
+}
+
+#[derive(Deserialize)]
+pub struct SessionCopies {
+    file: String,
+    indexed: Vec<String>,
+}
+
+/// Stock can list a moved file before the original disappears. Either copy's replies can own a file.
+pub fn existing<'a>(candidates: &'a [SessionCopies], scope: &Scope) -> Result<Vec<&'a str>, Fault> {
+    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    for SessionCopies { file, indexed } in candidates {
+        live(scope)?;
+        for copy in indexed {
+            if seen.insert(copy.as_str()) {
+                found.push(copy.as_str());
+            }
+        }
+        if !seen.contains(file.as_str()) {
+            let path = Path::new(file);
+            match fs::symlink_metadata(path) {
+                Ok(_) => {
+                    seen.insert(file.as_str());
+                    found.push(file.as_str());
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(fault(&error, "lstat", path)),
+            }
+        }
+    }
+    Ok(found)
+}
+
 /// The folder's tag: its name, 32 lowercase hex digits, in a folder named `scratch`. Any other folder is refused
 /// before anything is read or removed.
 fn tag_of(dir: &Path) -> Result<String, Fault> {
     let name = dir.file_name().map(|name| name.to_string_lossy());
-    let tag = name.filter(|name| {
-        name.len() == 32
-            && name
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    });
+    let tag = name.filter(|name| is_tag(name));
     let parent = dir.parent().and_then(Path::file_name);
     match tag {
         Some(tag) if parent.is_some_and(|parent| parent == "scratch") => Ok(tag.into_owned()),
@@ -54,8 +120,8 @@ fn tag_of(dir: &Path) -> Result<String, Fault> {
 /// is behind the link is not this app's, so nothing there is read or removed. A folder that is gone is no link.
 fn unlinked(dir: &Path) -> Result<(), Fault> {
     for (path, what) in [
-        (dir, "it"),
         (dir.parent().unwrap_or(dir), "its scratch root"),
+        (dir, "it"),
     ] {
         match fs::symlink_metadata(path) {
             Ok(meta) if linked(&meta) => {
@@ -72,9 +138,8 @@ fn unlinked(dir: &Path) -> Result<(), Fault> {
     Ok(())
 }
 
-#[derive(Serialize, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Facts {
+#[derive(Debug, PartialEq)]
+struct Facts {
     /// When anything in the folder (a file, a folder, the folder itself) last changed, epoch ms.
     newest_ms: f64,
     entries: u64,
@@ -101,7 +166,7 @@ fn walk(dir: &Path, facts: &mut Facts, scope: &Scope) -> Result<(), Fault> {
     Ok(())
 }
 
-pub fn facts(dir: &str, scope: &Scope) -> Result<Facts, Fault> {
+fn facts(dir: &str, scope: &Scope) -> Result<Facts, Fault> {
     let dir = Path::new(dir);
     tag_of(dir)?;
     unlinked(dir)?;
@@ -112,6 +177,33 @@ pub fn facts(dir: &str, scope: &Scope) -> Result<Facts, Fault> {
     };
     walk(dir, &mut facts, scope)?;
     Ok(facts)
+}
+
+pub fn idle(dir: &str, known: bool, now: f64, days: u32, scope: &Scope) -> Result<bool, Fault> {
+    let facts = facts(dir, scope)?;
+    if !known && facts.entries > 0 {
+        return Err(Fault::new("scratch_kept", "its sessions are not known"));
+    }
+    Ok((now - facts.newest_ms) / 86_400_000.0 >= f64::from(days))
+}
+
+pub fn sessions<'a>(
+    candidates: Option<&'a [SessionCopies]>,
+    idle: bool,
+    scope: &Scope,
+) -> Result<Option<Vec<&'a str>>, Fault> {
+    let candidates =
+        candidates.ok_or_else(|| Fault::new("scratch_kept", "session list unavailable"))?;
+    let files = existing(candidates, scope)?;
+    Ok((files.is_empty() || idle).then_some(files))
+}
+
+pub fn check_processes(running: Option<bool>) -> Result<(), Fault> {
+    match running {
+        Some(false) => Ok(()),
+        Some(true) => Err(Fault::new("scratch_kept", "a process of its session runs")),
+        None => Err(Fault::new("scratch_kept", "process check unavailable")),
+    }
 }
 
 fn unreadable(file: &Path) -> Fault {
@@ -720,5 +812,48 @@ mod tests {
         assert!(!again.dir.exists());
         assert_eq!(contents(&outside), before);
         fs::remove_dir_all(&again.root).unwrap();
+    }
+
+    #[test]
+    fn idle_boundary_and_session_ownership_control_when_a_folder_may_go() {
+        let w = world("scratch-plan");
+        let scope = Scope::detached();
+        let dir = w.dir.to_str().unwrap();
+        let newest = facts(dir, &scope).unwrap().newest_ms;
+        let due = newest + 3.0 * 86_400_000.0;
+        assert!(idle(dir, true, due, 3, &scope).unwrap());
+        assert!(!idle(dir, true, due - 1.0, 3, &scope).unwrap());
+        assert_eq!(
+            idle(dir, false, due, 3, &scope).unwrap_err().message,
+            "its sessions are not known"
+        );
+        let file = w.session.to_str().unwrap();
+        let moved = w.root.join("moved.jsonl");
+        let moved = moved.to_str().unwrap();
+        let candidates = [SessionCopies {
+            file: file.to_owned(),
+            indexed: vec![moved.to_owned(), moved.to_owned()],
+        }];
+        write_session(&w, &[]);
+        assert_eq!(
+            sessions(Some(&candidates), true, &scope).unwrap(),
+            Some(vec![moved, file])
+        );
+        assert_eq!(sessions(Some(&candidates), false, &scope).unwrap(), None);
+        assert_eq!(
+            sessions(None, true, &scope).unwrap_err().message,
+            "session list unavailable"
+        );
+        fs::remove_file(file).unwrap();
+        assert_eq!(
+            sessions(Some(&candidates), true, &scope).unwrap(),
+            Some(vec![moved])
+        );
+        let gone = [SessionCopies {
+            file: file.to_owned(),
+            indexed: vec![],
+        }];
+        assert_eq!(sessions(Some(&gone), false, &scope).unwrap(), Some(vec![]));
+        fs::remove_dir_all(w.root).unwrap();
     }
 }

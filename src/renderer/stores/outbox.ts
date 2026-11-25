@@ -17,8 +17,6 @@ export type OutboxSend =
 			/** As the model gets it (paste markers and emoticons expanded). */
 			text: string;
 			images: ImageContent[];
-			/** How it joins a run still going when it arrives; an idle session takes it as a prompt (the host decides). */
-			behavior: "steer" | "followUp";
 	  }
 	| {
 			kind: "answer";

@@ -86,8 +86,10 @@ const ALLOW_IDENTICAL: Record<string, true> = {
 	"chat.exec.shell": true, // Shell — universal term in dev UIs
 	"tools.label.github": true, // GitHub — brand name
 	"tools.label.vibe": true, // Vibe — feature name
-	"themePicker.theme.nord.label": true, // Nord — theme name
-	"themePicker.theme.tokyo-night.label": true, // Tokyo Night — theme name
+	"themePicker.set.ompdesk.label": true, // OMPdesk — product name
+	"themePicker.set.github.label": true, // GitHub — theme name
+	"themePicker.set.solarized.label": true, // Solarized — theme name
+	"themePicker.set.gruvbox.label": true, // Gruvbox — theme name
 	"sessionTree.head": true, // HEAD — git term
 	"themePicker.theme.solarized.label": true, // Solarized — theme name
 	"themePicker.theme.latte.label": true, // Latte — theme name
@@ -137,6 +139,16 @@ describe.each(Object.entries(TRANSLATIONS))("locale parity: %s", (lang, locale) 
 			if (ALLOW_IDENTICAL[key]) continue;
 			if (!LATIN_LETTER.test(proseOf(en[key]))) continue;
 			expect(locale[key], `${lang}["${key}"] duplicates the English source`).not.toBe(en[key]);
+		}
+	});
+});
+
+describe("update repository wording", () => {
+	it("names the canonical repository in both languages", () => {
+		for (const locale of [en, ko]) {
+			for (const key of ["updates.auth.missing", "updates.auth.denied", "updates.auth.ok"]) {
+				expect(locale[key], key).toContain("seuput-inc/ompdesk");
+			}
 		}
 	});
 });
@@ -236,6 +248,7 @@ describe("en counts of one", () => {
 			["modelSetup.review.dropped", { count: 1, failed: 1, skipped: 1 }],
 			["modelSetup.apply.partial", { count: 1, failed: 1, skipped: 1 }],
 			["todoPanel.reminderCount", { count: 1, failed: 1, skipped: 1 }],
+			["todoPanel.received", { count: 1 }],
 		];
 		for (const [key, params] of cases) {
 			expect(en[key], key).toBeDefined();

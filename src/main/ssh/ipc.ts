@@ -31,5 +31,5 @@ export function registerSshToolsIpc(ipc: IpcRegistry): void {
 	// A window that opens (or reloads) while a question waits still sees it.
 	ipc.handle(SSH_TOOLS_PROMPTS, () => tools.prompts());
 	app.on("will-quit", () => tools.dispose());
-	void tools.start();
+	void tools.start().catch(error => console.warn("Could not restore SSH forwards:", error));
 }

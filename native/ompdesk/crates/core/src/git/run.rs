@@ -110,11 +110,11 @@ pub(crate) mod tests {
     async fn fails_with_git_s_own_words() {
         let dir = std::env::temp_dir();
         let fault = git()
-            .text(dir.to_str().unwrap(), &["no-such-command-here"])
+            .text(dir.to_str().unwrap(), &["--ompdesk-invalid-option"])
             .await
             .err()
             .unwrap();
-        assert!(!fault.message.is_empty());
+        assert!(fault.message.contains("unknown option:"));
         assert_eq!(fault.code, "git_exit");
         let empty = Output {
             code: 3,

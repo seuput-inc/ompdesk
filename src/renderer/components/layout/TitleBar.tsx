@@ -63,7 +63,6 @@ import {
 	Spinner,
 	Tooltip,
 } from "../common";
-import { WorkspaceDialog } from "../dialogs/WorkspaceDialog";
 import { DeviceChip } from "../remote/DeviceChip";
 import { ForkParent } from "./ForkParent";
 import { sessionCacheHitPercent, sessionExecutionDurationMs } from "./session-metrics";
@@ -84,7 +83,7 @@ function StatusIcon({ tone }: { tone: StatusTone }) {
 		);
 	if (tone === "pending")
 		return <Circle aria-hidden className="size-2 fill-transparent text-(--sc-text-muted)" strokeWidth={3} />;
-	if (tone === "attention") return <AlertTriangle aria-hidden className="size-(--sc-icon-sm) text-(--sc-warning)" />;
+	if (tone === "attention") return <AlertTriangle aria-hidden className="size-(--sc-icon-sm) text-(--sc-attention)" />;
 	if (tone === "offline") return <WifiOff aria-hidden className="size-(--sc-icon-sm) text-(--sc-warning)" />;
 	if (tone === "error") return <XCircle aria-hidden className="size-(--sc-icon-sm) text-(--sc-danger)" />;
 	return <Circle aria-hidden className="size-2 fill-current text-(--sc-success)" />;
@@ -248,7 +247,6 @@ export function TitleBar() {
 		!isChat && cwd ? (groupAliases[cwd] ?? shown.worktree?.project ?? shown.name) : t("sidebar.chats");
 
 	const [editingName, setEditingName] = useState(false);
-	const workspaceOpen = useUiStore(s => s.projectPickerOpen);
 	const [statusOpen, setStatusOpen] = useState(false);
 	const [draft, setDraft] = useState("");
 	const [stats, setStats] = useState<SessionStats | null>(null);
@@ -372,11 +370,13 @@ export function TitleBar() {
 						? ["ready", t("titlebar.status.ready")]
 						: run.down || summary.status === "waiting"
 							? [run.failed || summary.status === "exited" ? "error" : "pending", t(run.signal.labelKey)]
-							: attention
-								? ["attention", t(ATTENTION_LABEL_KEY[attention.kind])]
-								: run.running
-									? ["busy", t("titlebar.status.working")]
-									: ["ready", t(run.signal.labelKey)];
+							: summary.waitsForDevice
+								? ["pending", t("titlebar.status.deviceWait", { device: summary.waitsForDevice })]
+								: attention
+									? ["attention", t(ATTENTION_LABEL_KEY[attention.kind])]
+									: run.running
+										? ["busy", t("titlebar.status.working")]
+										: ["ready", t(run.signal.labelKey)];
 
 	const ui = useUiStore.getState;
 	const sessionMenuItems: ContextMenuItem[] = [
@@ -647,7 +647,6 @@ export function TitleBar() {
 					{t("sessionStatus.openInsights")}
 				</Button>
 			</Popover>
-			<WorkspaceDialog onClose={() => useUiStore.getState().closeProjectPicker()} open={workspaceOpen} />
 		</header>
 	);
 }

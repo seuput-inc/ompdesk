@@ -46,6 +46,28 @@ export async function writeFakeOmp(dir: string, source: string): Promise<string>
 }
 
 /**
+ * Write `source` (TypeScript run by bun) as an executable named `name` under `dir`; returns its path. POSIX runs it
+ * through its `env bun` shebang. Windows starts neither a shebang script nor, from Rust's `Command` or a spawn without
+ * a shell, a `.cmd`, so there it is compiled to `<name>.exe` (a ~90 MB bun runtime, a few seconds), as a real gh or
+ * agent-desktop is an exe.
+ */
+export async function writeFakeBin(dir: string, name: string, source: string): Promise<string> {
+	if (process.platform !== "win32") {
+		const bin = join(dir, name);
+		await writeFile(bin, `#!/usr/bin/env bun\n${source}`);
+		await chmod(bin, 0o755);
+		return bin;
+	}
+	const script = join(dir, `${name}.ts`);
+	await writeFile(script, source);
+	const exe = join(dir, `${name}.exe`);
+	// Never `execFileSync`: the compile takes seconds on a loaded Windows runner, and a worker blocked that long misses
+	// vitest's `onTaskUpdate` call (an unhandled "Timeout calling onTaskUpdate" fails the whole run).
+	await run("bun", ["build", "--compile", script, "--outfile", exe]);
+	return exe;
+}
+
+/**
  * Fake omp source that answers every RPC command with success, as stock does: a tab reads `ready` only once its omp
  * answered (sidecar.ts `#answered`), so a fake that never answers stays `starting`. Keeps stdin open.
  */

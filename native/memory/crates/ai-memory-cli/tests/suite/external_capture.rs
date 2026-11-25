@@ -1,8 +1,11 @@
 //! An external producer may replace capture without replacing native context delivery.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -117,6 +120,219 @@ fn capture_inspection_reports_external_ownership_without_side_effects() {
     assert_eq!(report["scope_resolution"], "explicit");
     assert!(!String::from_utf8_lossy(&output.stdout).contains("orchestrator-a"));
     assert!(!tmp.as_path().join("data").exists());
+}
+
+/// Runs one `user-prompt-submit` with `prompt` against `server`, owned
+/// externally throughout.
+fn external_prompt(root: &Path, server: &str, prompt: &str) -> Output {
+    let mut child = hermetic(BIN)
+        .args(["--data-dir"])
+        .arg(root.join("data"))
+        .args([
+            "hook",
+            "--agent",
+            "claude-code",
+            "--event",
+            "user-prompt-submit",
+            "--server-url",
+            server,
+        ])
+        .env("AI_MEMORY_HOME", root)
+        .env("HOME", root)
+        .env("AI_MEMORY_CAPTURE_OWNER", "example.runtime")
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn hook");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            json!({"session_id":"external-recap-test", "cwd":root, "prompt":prompt})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    result
+}
+
+/// A one-shot `GET` stub that answers with `body`. It stops on the returned
+/// flag rather than on a timeout, so a run that issues no request at all can
+/// be asserted on without waiting one out.
+fn serve_one_request(
+    body: &'static str,
+) -> (
+    String,
+    Arc<AtomicBool>,
+    std::thread::JoinHandle<Option<String>>,
+) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    let served = std::thread::spawn(move || {
+        loop {
+            match listener.accept() {
+                Ok((mut socket, _)) => {
+                    socket.set_nonblocking(false).unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(10)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        if socket.read_exact(&mut byte).is_err() {
+                            break;
+                        }
+                        request.push(byte[0]);
+                    }
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes());
+                    let _ = socket.shutdown(std::net::Shutdown::Write);
+                    return Some(String::from_utf8_lossy(&request).into_owned());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if flag.load(Ordering::SeqCst) {
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accepting the stub request: {error}"),
+            }
+        }
+    });
+    (format!("http://{address}"), stop, served)
+}
+
+/// Delivering the compaction recap is context delivery, like `SessionStart`'s
+/// handoff, so an external capture owner must not suppress it: the recap
+/// reaches the model through the `UserPromptSubmit` envelope for every agent
+/// whose `user_prompt_injects_context` is true. The exemption stays scoped to
+/// that delivery — an ordinary prompt under the same owner still early-returns
+/// without touching the server — and it leaks no capture, because every
+/// enqueue and drain on the path is separately gated on `!external_capture`.
+#[test]
+fn external_capture_still_delivers_the_compaction_recap() {
+    const RECAP: &str = "RECAP_SENTINEL";
+    for (prompt, delivers) in [("reload context", true), ("an ordinary prompt", false)] {
+        let guard = tempfile::tempdir().unwrap();
+        let root = guard.path().to_path_buf();
+        let (server, stop, served) = serve_one_request(RECAP);
+
+        let output = external_prompt(&root, &server, prompt);
+
+        stop.store(true, Ordering::SeqCst);
+        let request = served.join().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        if delivers {
+            let request = request.unwrap_or_else(|| {
+                panic!("the recap GET never reached the server; stdout was {stdout:?}")
+            });
+            assert!(request.starts_with("GET /recap?"), "{request}");
+            let envelope: Value = serde_json::from_str(stdout.trim()).unwrap();
+            assert_eq!(
+                envelope["hookSpecificOutput"]["hookEventName"],
+                "UserPromptSubmit"
+            );
+            assert_eq!(envelope["hookSpecificOutput"]["additionalContext"], RECAP);
+        } else {
+            assert_eq!(request, None, "{prompt:?} must not request a recap");
+            assert_eq!(stdout, "{}\n", "{prompt:?} must early-return");
+        }
+        let spooled = std::fs::read_dir(root.join("data/hook-spool"))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(spooled, 0, "{prompt:?} must leave capture to its owner");
+    }
+}
+
+/// The subagent brief is context delivery too: under an external capture
+/// owner, a repository that opted into `[briefing] inject_on_subagent_start`
+/// still hands the subagent its brief, and the event itself is
+/// left to the owner.
+#[test]
+fn external_capture_still_delivers_the_subagent_brief() {
+    const BRIEF: &str = "SUBAGENT_BRIEF_SENTINEL";
+    let guard = tempfile::tempdir().unwrap();
+    let root = guard.path().to_path_buf();
+    std::fs::write(
+        root.join(".ai-memory.toml"),
+        "[briefing]\ninject_on_subagent_start = true\n",
+    )
+    .unwrap();
+    let (server, stop, served) = serve_one_request(BRIEF);
+
+    let mut child = hermetic(BIN)
+        .args(["--data-dir"])
+        .arg(root.join("data"))
+        .args([
+            "hook",
+            "--agent",
+            "claude-code",
+            "--event",
+            "subagent-start",
+            "--server-url",
+            &server,
+        ])
+        .env("AI_MEMORY_HOME", &root)
+        .env("HOME", &root)
+        .env("AI_MEMORY_CAPTURE_OWNER", "example.runtime")
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn hook");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            json!({
+                "session_id": "external-subagent-test",
+                "cwd": root,
+                "hook_event_name": "SubagentStart",
+                "agent_id": "agent-1",
+                "agent_type": "Explore"
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    stop.store(true, Ordering::SeqCst);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let request = served
+        .join()
+        .unwrap()
+        .unwrap_or_else(|| panic!("the brief GET never reached the server; stdout was {stdout:?}"));
+    assert!(request.starts_with("GET /brief?"), "{request}");
+    let envelope: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(
+        envelope["hookSpecificOutput"]["hookEventName"],
+        "SubagentStart"
+    );
+    assert_eq!(envelope["hookSpecificOutput"]["additionalContext"], BRIEF);
+    let spooled = std::fs::read_dir(root.join("data/hook-spool"))
+        .map(|entries| entries.flatten().count())
+        .unwrap_or(0);
+    assert_eq!(spooled, 0, "the event must be left to its capture owner");
 }
 
 mod slow {
@@ -366,8 +582,14 @@ mod slow {
         );
     }
 
+    /// Under external capture the owner's own runs share the project with the
+    /// captured harness, so a pending handoff is *offered*, never consumed: the
+    /// start announces the baton by id with `memory_handoff_accept` and leaves
+    /// it open for an explicit claim, rather than delivering (and consuming) its
+    /// body as a claim would. Native capture stays suppressed and MCP recall
+    /// still finds the seeded content (#2148).
     #[tokio::test]
-    async fn external_capture_preserves_native_handoffs_and_mcp_recall() {
+    async fn external_capture_offers_handoffs_without_consuming_them_and_keeps_mcp_recall() {
         let fixture = Fixture::start().await;
         for (agent, event) in [
             ("claude-code", "session-start"),
@@ -375,19 +597,27 @@ mod slow {
         ] {
             fixture.seed_handoff().await;
             let receiver = SessionId::new();
-            let output = fixture.native(receiver, agent, event);
-            assert!(output.contains(MARKER), "handoff was lost: {output}");
+            let offered = fixture.native(receiver, agent, event);
+            assert!(
+                offered.contains("memory_handoff_accept") && !offered.contains(MARKER),
+                "external capture must offer the baton, not deliver its body: {offered}"
+            );
             assert!(
                 fixture
                     .reader
                     .observations_for_session(receiver)
                     .await
                     .unwrap()
-                    .is_empty()
+                    .is_empty(),
+                "external capture must still suppress native capture"
             );
+            // Offer mode never consumes the baton: a fresh start still sees it.
+            let next = SessionId::new();
             assert!(
-                !fixture.native(receiver, agent, event).contains(MARKER),
-                "handoff was delivered twice"
+                fixture
+                    .native(next, agent, event)
+                    .contains("memory_handoff_accept"),
+                "an offered handoff must stay open for the next start"
             );
             fixture.native(receiver, agent, "session-end");
             assert!(!fixture.root.as_path().join("data/hook-spool").exists());
@@ -516,16 +746,35 @@ mod slow {
     async fn post_batch_until_accepted(client: &reqwest::Client, endpoint: &str, items: &[Value]) {
         let mut pending = items.to_vec();
         let mut ack = Value::Null;
-        for attempt in 0..10u64 {
-            let response = client
+        for attempt in 0..20u64 {
+            // A shared server saturated by every session draining at once can
+            // take longer than the client request timeout to answer a single
+            // batch. The real spool drain treats a transient timeout as a
+            // retryable attempt and resends, so model the same bounded backoff
+            // here instead of failing the whole batch on one slow response.
+            let response = match client
                 .post(endpoint)
                 .bearer_auth(TOKEN)
                 .json(&pending)
                 .send()
                 .await
-                .unwrap();
+            {
+                Ok(response) => response,
+                Err(err) if err.is_timeout() => {
+                    tokio::time::sleep(Duration::from_millis(20 * (attempt + 1))).await;
+                    continue;
+                }
+                Err(err) => panic!("unexpected transport error posting batch: {err}"),
+            };
             let status = response.status();
-            ack = response.json().await.unwrap();
+            ack = match response.json().await {
+                Ok(ack) => ack,
+                Err(err) if err.is_timeout() => {
+                    tokio::time::sleep(Duration::from_millis(20 * (attempt + 1))).await;
+                    continue;
+                }
+                Err(err) => panic!("unexpected error reading batch response: {err}"),
+            };
             assert!(
                 status.is_success() || status == reqwest::StatusCode::TOO_MANY_REQUESTS,
                 "{status} {ack}"
@@ -548,7 +797,7 @@ mod slow {
                 .collect();
             tokio::time::sleep(Duration::from_millis(20 * (attempt + 1))).await;
         }
-        panic!("batch never fully accepted after 10 attempts: {ack}");
+        panic!("batch never fully accepted after 20 attempts: {ack}");
     }
 
     #[tokio::test]

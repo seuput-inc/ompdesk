@@ -1,5 +1,5 @@
 /**
- * Pins the renderer copy to stock `pi-tui/src/prompt/skill-tokens.ts` and
+ * Pins the renderer copy to stock `pi-coding-agent/src/extensibility/skill-tokens.ts` and
  * `parseSkillInvocation` (pi-coding-agent/src/extensibility/skills.ts): the
  * leading and mid-prompt forms, namespaced names, and the drafts whose tokens
  * belong to another slash command or a local-execution sigil.

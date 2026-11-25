@@ -5,6 +5,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import * as bots from "../../shared/bots";
+import * as bridgeHealth from "../../shared/bridge-health";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import * as mailAccounts from "../../shared/mail-accounts";
 import * as mobileWeb from "../../shared/mobile-web";
@@ -16,7 +18,13 @@ import * as sshTools from "../../shared/ssh-tools";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 
 const MAIN = path.join(__dirname, "..");
+/** The channels the Tauri shell serves itself (`ipc_router.rs`): main registers no handler for them. */
+const NATIVE = JSON.parse(
+	fs.readFileSync(path.join(MAIN, "../../native/ompdesk/crates/tauri-shell/src/ipc_router.json"), "utf8"),
+) as { invoke: string[]; send: string[] };
 const NAMED: Record<string, unknown> = {
+	...bots,
+	...bridgeHealth,
 	...mailAccounts,
 	...mobileWeb,
 	...preview,
@@ -83,12 +91,27 @@ function subscribedChannels(): string[] {
 }
 
 describe("IPC channel policy", () => {
-	it("classifies exactly the invoke and send channels main registers, each once", () => {
+	it("gives every invoke and send channel exactly one owner: main, the shell or the core's router", () => {
 		const { invoke, send } = registeredChannels();
+		const native = [...NATIVE.invoke, ...NATIVE.send];
+		// Channels the core's router answers for a page itself (`mode: "core"`): main registers no handler for them.
+		const coreServed = Object.entries(IPC_POLICY)
+			.filter(([, policy]) => policy.mode === "core")
+			.map(([channel, policy]) => ({ channel, dir: policy.dir }));
+		const core = coreServed.map(({ channel }) => channel);
 		expect(new Set(invoke).size).toBe(invoke.length);
 		expect(new Set(send).size).toBe(send.length);
-		expect(invoke).toEqual(policyChannels("invoke"));
-		expect(send).toEqual(policyChannels("send"));
+		expect(new Set(native).size).toBe(native.length);
+		expect([...invoke, ...send].filter(channel => native.includes(channel))).toEqual([]);
+		expect([...invoke, ...send, ...native].filter(channel => core.includes(channel))).toEqual([]);
+		const coreOf = (dir: string) => coreServed.filter(entry => entry.dir === dir).map(({ channel }) => channel);
+		expect([...invoke, ...NATIVE.invoke, ...coreOf("invoke")].sort()).toEqual(policyChannels("invoke"));
+		expect([...send, ...NATIVE.send, ...coreOf("send")].sort()).toEqual(policyChannels("send"));
+		// The remaining-work meter of docs/rust-node-removal.md: the page channels main still serves.
+		const remaining = [...invoke, ...send].sort();
+		console.info(
+			`[ipc] main serves ${remaining.length} page channels, the shell ${native.length}: ${remaining.join(" ")}`,
+		);
 	});
 
 	it("classifies exactly the push channels the renderer API listens to", () => {
@@ -107,7 +130,7 @@ describe("IPC channel policy", () => {
 
 	it("says what the web side does for every channel it does not pass through", () => {
 		for (const [channel, policy] of Object.entries(IPC_POLICY) as [IpcChannel, (typeof IPC_POLICY)[IpcChannel]][]) {
-			if (policy.mode === "pass" || policy.mode === "boundary") continue;
+			if (policy.mode === "pass" || policy.mode === "boundary" || policy.mode === "core") continue;
 			expect(policy.web.trim(), channel).not.toBe("");
 		}
 	});

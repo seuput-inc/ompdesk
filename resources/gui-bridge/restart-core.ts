@@ -26,6 +26,8 @@ export interface JournalEntry {
 		toolCallId?: string;
 		details?: unknown;
 		stopReason?: string;
+		timestamp?: number;
+		completedAt?: number;
 		isError?: boolean;
 		errorMessage?: string;
 	};
@@ -49,6 +51,80 @@ export interface InterruptedJob {
 	command: string;
 	/** What the agent said the call was for (the `i` argument every stock tool call carries). */
 	intent?: string;
+}
+
+/**
+ * What is known of the other end of a closed output path (the core's `procs.list` `outputClosed`): `closed` (a pipe at
+ * end of file, a disconnected Unix socket, a Windows pipe closing), `open` (macOS: a Unix socket the process shut down
+ * for writing itself, still connected), `unknown` (any other socket).
+ */
+export type OutputPeer = "closed" | "open" | "unknown";
+
+/**
+ * A process the session's commands started before the relaunch (main's `SessionProcesses.leftover`). Named by what
+ * cannot leak a secret: never its arguments, which can hold tokens, and its folder only inside the session's own.
+ */
+export interface LeftProcess {
+	pid: number;
+	/** Its executable's file name. */
+	name: string;
+	/** When it started, ISO 8601. */
+	started?: string;
+	/** Its working folder relative to the session's folder (`.` for that folder); `outside` when not under it. */
+	folder?: string;
+	outside?: true;
+	/** The TCP ports it listens on. */
+	ports?: number[];
+	/** Its standard output or error path is closed, so a write fails; what is known of the other end. */
+	outputClosed?: OutputPeer;
+	/** Of one whose output path is closed: the share of one core it used while measured, over `seconds`. */
+	cpu?: { percent: number; seconds: number };
+	/** That share is at or over the mark that reads as spinning (`SPIN_PERCENT` in main). */
+	spinning?: true;
+	/** Of one the launch ended: the share of a core in each sample that kept it spinning, over `seconds`. */
+	sustained?: { percents: number[]; seconds: number };
+}
+
+/**
+ * What the session's commands left running across the relaunch: what still runs, and what the launch ended (one whose
+ * output path was closed with its other end closed and that kept spinning, while that is on; on by default).
+ */
+export interface LeftProcesses {
+	running: LeftProcess[];
+	ended: LeftProcess[];
+}
+
+/** `LeftProcesses` out of a restore's `processes` parameter; an item of another shape is left out. */
+export function leftProcessesOf(value: unknown): LeftProcesses {
+	const list = (items: unknown): LeftProcess[] =>
+		Array.isArray(items)
+			? items.flatMap(item =>
+					isObject(item) && typeof item.pid === "number" && typeof item.name === "string"
+						? [item as unknown as LeftProcess]
+						: [],
+				)
+			: [];
+	const record = isObject(value) ? value : {};
+	return { running: list(record.running), ended: list(record.ended) };
+}
+
+/**
+ * One process as the notice names it, only what was observed: `- 4321 next-server, started …, in ., listening on 3000;
+ * output path closed (peer closed); spinning: 99% of a core for 3 s`.
+ */
+function leftProcessLine(item: LeftProcess): string {
+	const facts = [`- ${item.pid} ${item.name}`];
+	if (item.started) facts.push(`started ${item.started}`);
+	if (item.outside) facts.push("outside the session folder");
+	else if (item.folder) facts.push(`in ${item.folder}`);
+	if (item.ports?.length) facts.push(`listening on ${item.ports.join(", ")}`);
+	let line = facts.join(", ");
+	if (item.outputClosed) line += `; output path closed (peer ${item.outputClosed})`;
+	if (item.cpu)
+		line += `; ${item.spinning ? "spinning: " : ""}${item.cpu.percent}% of a core for ${item.cpu.seconds} s`;
+	if (item.sustained)
+		line += `; still ${item.sustained.percents.slice(1).join("%, ")}% in samples over ${item.sustained.seconds} s`;
+	return line;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -110,9 +186,24 @@ function settles(entry: JournalEntry, id: string): boolean {
  * relaunch already named (`RESTART_JOBS_MESSAGE`) counts as settled.
  */
 export function interruptedJobs(branch: readonly JournalEntry[], startedAt: number): InterruptedJob[] {
-	const life = replacedLife(branch, startedAt);
-	const jobs: InterruptedJob[] = [];
-	life.forEach((entry, index) => {
+	return runningJobs(replacedLife(branch, startedAt), branch).map(({ toolCallId: _call, ...job }) => job);
+}
+
+/**
+ * Every background bash job of `branch` that never settled, whatever process started it, with the call that started
+ * it: the ones a kept runner (`kept-jobs.ts`) may still run, also across several relaunches.
+ */
+export function unsettledJobs(branch: readonly JournalEntry[]): Array<InterruptedJob & { toolCallId: string }> {
+	return runningJobs(branch, branch);
+}
+
+/** The jobs `entries` (part of `branch`) started that no later entry of `branch` settles. */
+function runningJobs(
+	entries: readonly JournalEntry[],
+	branch: readonly JournalEntry[],
+): Array<InterruptedJob & { toolCallId: string }> {
+	const jobs: Array<InterruptedJob & { toolCallId: string }> = [];
+	entries.forEach((entry, index) => {
 		const message = entry.message;
 		if (entry.type !== "message" || message?.role !== "toolResult" || !message.toolCallId) return;
 		const state = asyncState(message.details);
@@ -120,10 +211,12 @@ export function interruptedJobs(branch: readonly JournalEntry[], startedAt: numb
 		if (branch.slice(branch.indexOf(entry) + 1).some(later => settles(later, state.jobId))) return;
 		let call: { command: string; intent?: string } | undefined;
 		for (let back = index - 1; back >= 0 && call === undefined; back--) {
-			const candidate = life[back];
+			const candidate = entries[back];
 			if (candidate) call = toolCallArguments(candidate, message.toolCallId);
 		}
-		if (call !== undefined && !jobs.some(job => job.id === state.jobId)) jobs.push({ id: state.jobId, ...call });
+		if (call !== undefined && !jobs.some(job => job.id === state.jobId)) {
+			jobs.push({ id: state.jobId, ...call, toolCallId: message.toolCallId });
+		}
 	});
 	return jobs;
 }
@@ -509,6 +602,7 @@ function restartNotice(
 	subagents: readonly RevivedSubagent[],
 	turn: RestartTurn,
 	stopped: readonly RevivedSubagent[],
+	processes: LeftProcesses,
 ): string {
 	const lines: string[] = [];
 	if (turn === "cut") {
@@ -529,6 +623,23 @@ function restartNotice(
 			"OMPdesk restarted and these background agents you started stopped with it; they did not come back and their results will not arrive:",
 			...stopped.map(agent => `- ${agent.id}: ${agent.intent ?? "background agent"}`),
 			"Check what each one already did, then start again only the ones the work still needs; skip any whose result no longer matters.",
+		);
+	}
+	if (processes.running.length > 0) {
+		const closed = processes.running.some(item => item.outputClosed);
+		lines.push(
+			"These processes your commands started before OMPdesk restarted are still running; they are yours as before (pid, program, what was observed):",
+			...processes.running.map(leftProcessLine),
+			closed
+				? "Use them as they are. A write by one whose output path is closed fails; one marked spinning may be retrying that. If the work needs such a one, end it yourself and start it again with its output going to a file."
+				: "Use them as they are; do not start them again.",
+		);
+	}
+	if (processes.ended.length > 0) {
+		lines.push(
+			"OMPdesk ended these processes your commands had started: their output path was closed, its other end closed, and they kept spinning in every sample (pid, program, what was observed):",
+			...processes.ended.map(leftProcessLine),
+			"Start again only the ones the work still needs, with their output going to a file.",
 		);
 	}
 	if (subagents.length > 0) {
@@ -571,16 +682,26 @@ const listedSubagents = (items: readonly RevivedSubagent[]) =>
 
 /**
  * The relaunch's one follow-up, or undefined when it has nothing to say: the cut-off jobs, the revived subagents, what
- * happened to the session's own turn (`RestartTurn`) and the background subagents the restart stopped for good
- * (`stopped`, counted with the jobs in the transcript's line). One message, so one turn.
+ * happened to the session's own turn (`RestartTurn`), the background subagents the restart stopped for good
+ * (`stopped`, counted with the jobs in the transcript's line) and what the session's commands left running
+ * (`processes`, named only to a turn that goes on: alone they never start one). One message, so one turn.
  */
 export function restartFollowUp(
 	jobs: readonly InterruptedJob[],
 	subagents: readonly RevivedSubagent[],
 	turn: RestartTurn = "idle",
 	stopped: readonly RevivedSubagent[] = [],
+	processes: LeftProcesses = { running: [], ended: [] },
 ): RestartFollowUp | undefined {
-	if (jobs.length === 0 && stopped.length === 0 && subagents.length === 0 && turn !== "cut") return undefined;
+	const left = processes.running.length > 0 || processes.ended.length > 0;
+	if (
+		jobs.length === 0 &&
+		stopped.length === 0 &&
+		subagents.length === 0 &&
+		turn !== "cut" &&
+		!(left && turn === "restored")
+	)
+		return undefined;
 	return {
 		customType:
 			jobs.length > 0 || stopped.length > 0
@@ -588,7 +709,7 @@ export function restartFollowUp(
 				: subagents.length > 0
 					? RESTART_SUBAGENTS_MESSAGE
 					: RESTART_TURN_MESSAGE,
-		content: restartNotice(jobs, subagents, turn, stopped),
+		content: restartNotice(jobs, subagents, turn, stopped, processes),
 		details: {
 			jobs: listed([...jobs, ...stopped]),
 			...(subagents.length > 0 ? { subagents: listedSubagents(subagents) } : {}),

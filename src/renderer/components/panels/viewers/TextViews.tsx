@@ -17,9 +17,10 @@ import { FigureModeToggle } from "../../chat/Figure";
 import { MermaidBlock } from "../../chat/MermaidBlock";
 import { IconButton, ListRow, ZoomableImage } from "../../common";
 import { CodeView, useWrapToggle } from "./CodeView";
+import { parseDelimited } from "./delimited";
 import { fileExtension } from "./file-kind";
 import { HexView } from "./HexView";
-import { parseDelimited, parseNotebook, prettyJson } from "./parse";
+import { parseNotebook, prettyJson } from "./parse";
 import { TEXT_FULL_BYTES, useTextFile } from "./use-file-read";
 import { TruncatedNote, useReportFileInfo, ViewerFailure, ViewerLoading, ViewerToolbar } from "./viewer-chrome";
 

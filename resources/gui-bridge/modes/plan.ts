@@ -4,7 +4,7 @@
  * Stock RPC has no plan commands; its AgentSession does: `setPlanModeState`,
  * `setPlanProposalHandler`, `preparePlanForReview`. Entering mirrors the TUI's
  * `#enterPlanMode` minus the plan-role model switch: the built-in `write` tool
- * is ensured (plan drafts and `xd://propose` are writes) and the pre-plan tool
+ * is ensured for plan drafts and the pre-plan tool
  * set restored on exit. When the agent proposes, the proposal is pushed as a
  * `plan_proposal` frame and the turn is silently aborted, the same stop the TUI
  * and print mode perform, until `plan_approval` resolves it.
@@ -66,7 +66,8 @@ function settlePending(): void {
 	pending = undefined;
 	if (shown) emit({ type: "plan_proposal_resolved", planFilePath: shown.planFilePath });
 }
-let installedHandler: PlanProposalHandler | undefined;
+/** Our handler as the session holds it: stock wraps what `setPlanProposalHandler` gets, so this is what peek returns. */
+let installed: PlanProposalHandler | undefined;
 /** Active tools before plan mode added `write`; restored when it ends. */
 let previousTools: string[] | undefined;
 
@@ -84,19 +85,27 @@ function localOptions(session: AgentSession) {
 }
 
 async function readPlan(session: AgentSession, planFilePath: string): Promise<string | null> {
-	const { readPlanFile } = await import("@oh-my-pi/pi-coding-agent/plan-mode/plan-files");
+	const { readPlanFile } = await import("../omp/pi-coding-agent/plan-mode/plan-files");
 	return readPlanFile(planFilePath, {
 		localProtocolOptions: localOptions(session),
 		cwd: session.sessionManager.getCwd(),
 	});
 }
 
+/**
+ * A handler the session holds. From omp 19 stock's `peekPlanProposalHandler` also answers in plan mode without one, with
+ * a stand-in (`preparePlanForReview`) made on every call; a held one is the same function each time.
+ */
+function heldHandler(session: AgentSession): PlanProposalHandler | undefined {
+	const handler = session.peekPlanProposalHandler();
+	return handler && handler === session.peekPlanProposalHandler() ? handler : undefined;
+}
+
 /** Install the proposal handler; never clobbers a foreign one (prewalk's plan-yolo installs its own). */
 function arm(session: AgentSession): void {
-	if (installedHandler && session.peekPlanProposalHandler() === installedHandler) return;
-	if (session.peekPlanProposalHandler()) return;
+	if (heldHandler(session)) return;
 	// Print mode's handler: validate and shape the proposal, promote the reviewed path, journal it.
-	installedHandler = async title => {
+	session.setPlanProposalHandler(async title => {
 		const result = await session.preparePlanForReview(title);
 		const details = result.details;
 		if (details) {
@@ -106,15 +115,13 @@ function arm(session: AgentSession): void {
 			pending = { planFilePath: details.planFilePath, title: details.title };
 		}
 		return result;
-	};
-	session.setPlanProposalHandler(installedHandler);
+	});
+	installed = heldHandler(session);
 }
 
 function disarm(session: AgentSession): void {
-	if (installedHandler && session.peekPlanProposalHandler() === installedHandler) {
-		session.setPlanProposalHandler(null);
-	}
-	installedHandler = undefined;
+	if (installed && heldHandler(session) === installed) session.setPlanProposalHandler(null);
+	installed = undefined;
 	settlePending();
 }
 
@@ -135,15 +142,15 @@ async function enterPlanMode(session: AgentSession): Promise<void> {
 	const planFilePath = session.getPlanReferencePath() || "local://PLAN.md";
 	const before = session.getEnabledToolNames();
 	const previousState = session.getPlanModeState();
-	// Plan state lands before the tool change: approval is a top-level `write` to `xd://propose`.
+	// Without command transport stock presents `propose` directly when it rebuilds the tools in plan mode.
 	session.setPlanModeState({ enabled: true, planFilePath, workflow: "parallel" });
-	if (session.hasBuiltInTool("write") && !before.includes("write")) {
-		try {
-			await session.setActiveToolsByName([...before, "write"]);
-		} catch (error) {
-			session.setPlanModeState(previousState);
-			throw error;
-		}
+	const tools = before.filter(name => name !== "write");
+	if (session.hasBuiltInTool("write")) tools.push("write");
+	try {
+		await session.setActiveToolsByName(tools);
+	} catch (error) {
+		session.setPlanModeState(previousState);
+		throw error;
 	}
 	previousTools = before;
 	arm(session);
@@ -151,14 +158,19 @@ async function enterPlanMode(session: AgentSession): Promise<void> {
 	session.sessionManager.appendModeChange("plan", { planFilePath });
 }
 
-async function onProposalWritten(event: AgentSessionEvent, session: AgentSession): Promise<void> {
-	if (event.type !== "tool_execution_end" || event.isError) return;
+async function onProposalCompleted(event: AgentSessionEvent, session: AgentSession): Promise<void> {
+	if (event.type !== "tool_execution_end") return;
 	const proposal = pending;
-	if (!proposal) return;
-	const { writeDeviceDispatch } = await import("@oh-my-pi/pi-coding-agent/tools/resolve");
-	const { PROPOSE_DEVICE_NAME } = await import("@oh-my-pi/pi-tui/tools/resolve");
-	const dispatch = writeDeviceDispatch(event.toolName, event.result);
-	if (dispatch?.tool !== PROPOSE_DEVICE_NAME || dispatch.mode !== "execute") return;
+	if (!proposal || proposal.frame) return;
+	const stock = await import("../omp/pi-coding-agent/tools/resolve");
+	if (typeof stock.proposeDispatchDetails === "function") {
+		// A later shell command may fail after `propose` succeeded. Stock checks the dispatch's own exit code.
+		if (event.toolName === "propose" && event.isError) return;
+		if (stock.proposeDispatchDetails(event.toolName, event.result) === undefined) return;
+	} else {
+		const dispatch = stock.writeDeviceDispatch(event.toolName, event.result);
+		if (event.isError || dispatch?.tool !== "propose" || dispatch.mode !== "execute") return;
+	}
 	// A plan the automatic mode choice entered for one request is approved here, as the card's Approve would with
 	// "keep context": no `plan_proposal` frame (no card in any window, nothing waits on the person), and the plan
 	// runs in this session. The user's own plan mode still asks.
@@ -188,7 +200,7 @@ onSessionEvent((event, session) => {
 	// A turn that starts while the card waits is the person's (or an agent's) reply: feedback, like the dialog's
 	// refine, so the card goes everywhere and the agent revises or carries on from the message.
 	if (event.type === "agent_start" && pending?.frame) settlePending();
-	void onProposalWritten(event, session).catch(error =>
+	void onProposalCompleted(event, session).catch(error =>
 		emit({ type: "notice", level: "error", message: `Plan proposal failed: ${errorMessage(error)}` }),
 	);
 });
@@ -252,12 +264,12 @@ async function approve(session: AgentSession, params: Record<string, unknown>): 
 	}
 
 	await exitPlanMode(session);
-	const { prompt } = await import("@oh-my-pi/pi-utils");
+	const { prompt } = await import("../omp/pi-utils");
 
 	if (option === "execute") {
 		// Fresh session carrying the session-local artifacts forward (TUI #approvePlan);
 		// local:// is session-scoped, so the plan is rewritten into the new local root.
-		const { copyLocalArtifacts, resolveLocalUrlToPath } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+		const { copyLocalArtifacts, resolveLocalUrlToPath } = await import("../omp/pi-coding-agent/internal-urls");
 		const oldLocalRoot = resolveLocalUrlToPath("local://", localOptions(session));
 		await session.newSession();
 		const newLocalRoot = resolveLocalUrlToPath("local://", localOptions(session));
@@ -278,7 +290,7 @@ async function approve(session: AgentSession, params: Record<string, unknown>): 
 
 	session.setPlanReferencePath(planFilePath);
 	session.markPlanReferenceSent();
-	const { humanizePlanTitle } = await import("@oh-my-pi/pi-coding-agent/plan-mode/approved-plan");
+	const { humanizePlanTitle } = await import("../omp/pi-coding-agent/plan-mode/approved-plan");
 	const seededName = humanizePlanTitle(proposal.title);
 	if (seededName && !session.sessionManager.getSessionName()) await session.setSessionName(seededName, "auto");
 	// Stock's own render (interactive-mode #approvePlan) inlines the plan: the prompt says never to re-read the file.
@@ -291,34 +303,39 @@ async function approve(session: AgentSession, params: Record<string, unknown>): 
 	return { approved: true, dispatched: true };
 }
 
-export const methods: BridgeMethods = guard("planMode", {
-	"modes.get_plan_mode": async (_params, env) => {
-		const session = attach(env);
-		// A resumed or switched-to session may already carry plan mode.
-		if (session.getPlanModeState()?.enabled) arm(session);
-		// `proposal`: the emitted proposal still awaiting `plan_approval`, if any.
-		return { ...planState(session), proposal: pending?.frame };
-	},
-	/** `auto: true` (main's automatic choice): plan mode for this one request, ended with its plan (auto-mode-state). */
-	"modes.set_plan_mode": async (params, env) => {
-		const session = attach(env);
-		const enabled = record(params).enabled === true;
-		const sessionId = session.sessionManager.getSessionId();
-		if (enabled === (session.getPlanModeState()?.enabled === true)) {
-			if (enabled) {
-				arm(session);
-				// The user turned on the plan mode an automatic plan holds: it is theirs now.
-				if (record(params).auto !== true) setAutoPlan(sessionId, false);
+export const methods: BridgeMethods = {
+	// One id for both: each arms the proposal handler, and the state one reads is what the other writes.
+	...guard("planMode", {
+		"modes.get_plan_mode": async (_params, env) => {
+			const session = attach(env);
+			// A resumed or switched-to session may already carry plan mode.
+			if (session.getPlanModeState()?.enabled) arm(session);
+			// `proposal`: the emitted proposal still awaiting `plan_approval`, if any.
+			return { ...planState(session), proposal: pending?.frame };
+		},
+		/** `auto: true` (main's automatic choice): plan mode for this one request, ended with its plan (auto-mode-state). */
+		"modes.set_plan_mode": async (params, env) => {
+			const session = attach(env);
+			const enabled = record(params).enabled === true;
+			const sessionId = session.sessionManager.getSessionId();
+			if (enabled === (session.getPlanModeState()?.enabled === true)) {
+				if (enabled) {
+					arm(session);
+					// The user turned on the plan mode an automatic plan holds: it is theirs now.
+					if (record(params).auto !== true) setAutoPlan(sessionId, false);
+				}
+				return planState(session);
 			}
+			if (enabled) {
+				await enterPlanMode(session);
+				setAutoPlan(sessionId, record(params).auto === true);
+			} else await exitPlanMode(session);
 			return planState(session);
-		}
-		if (enabled) {
-			await enterPlanMode(session);
-			setAutoPlan(sessionId, record(params).auto === true);
-		} else await exitPlanMode(session);
-		return planState(session);
-	},
-	"modes.plan_approval": async (params, env) => {
-		return approve(attach(env), record(params));
-	},
-});
+		},
+	}),
+	...guard("planApproval", {
+		"modes.plan_approval": async (params, env) => {
+			return approve(attach(env), record(params));
+		},
+	}),
+};

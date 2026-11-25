@@ -25,10 +25,10 @@ export function SidebarFoldSummary({ summary }: { summary: FoldSummary }): React
 			title={text}
 		>
 			{summary.waiting > 0 && (
-				// The row's waiting badge (Badge `warning`), cut to its glyph and count.
+				// The row's waiting badge (Badge `attention`), cut to its glyph and count.
 				<span
 					aria-hidden
-					className="omp-sidebar-approval inline-flex h-4 items-center gap-0.5 rounded-full bg-(--sc-warning-soft) px-1 text-(--sc-warning-on-soft)"
+					className="omp-sidebar-approval inline-flex h-4 items-center gap-0.5 rounded-full bg-(--sc-attention-soft) px-1 text-(--sc-attention-on-soft)"
 				>
 					<AlertTriangle className="size-3 shrink-0" />
 					{summary.waiting > 1 && summary.waiting}
@@ -42,7 +42,7 @@ export function SidebarFoldSummary({ summary }: { summary: FoldSummary }): React
 			)}
 			{summary.done > 0 && (
 				<span aria-hidden className="inline-flex items-center gap-0.5">
-					<Check className="size-3 text-(--sc-success)" />
+					<Check className="size-3 text-(--sc-unread)" />
 					{summary.done > 1 && summary.done}
 				</span>
 			)}

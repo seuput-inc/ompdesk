@@ -1,26 +1,31 @@
 /**
- * The quit latch: everything that ends the process goes through `requestQuit()`
- * (or, for an update, a confirmed `quitAndInstall()`), and `before-quit`
- * refuses unless the run is already approved. Without this, ⌘Q SIGTERMs every
- * in-flight agent run with no word to the user; with Continue interrupted work
- * on, those runs continue after the next launch and the quit asks nothing.
+ * Main's side of the quit. The shell owns the quit's order (ask, confirm, finalize, teardown, window closes,
+ * `will-quit`, settle, exit) and calls the effects registered here through `app.quitHook`. Every quit main starts goes
+ * through `requestQuit()` (already approved); the quits a person asks for in the shell (⌘Q, the app menu, the tray, the
+ * last window) reach the shell's `confirm` first and are logged here (`logQuitAsked`). Without the ask, ⌘Q SIGTERMs
+ * every in-flight agent run with no word to the user; with Continue interrupted work on, those runs continue after the
+ * next launch and the quit asks nothing.
  */
-import { app, autoUpdater, BrowserWindow, dialog, type MessageBoxOptions } from "electron";
+import { app, BrowserWindow, dialog, type MessageBoxOptions } from "electron";
 import { type BackgroundWork, backgroundWorkSentence } from "./background-work";
 import { markMainStep } from "./hang-watchdog";
 import { getMainLanguage, mainT } from "./i18n";
 import {
 	assessQuitRisk,
-	QuitLatch,
 	type QuitRisk,
 	quitNeedsConfirmation,
 	updateRestartConfirmation,
 	type WindowTabFact,
 } from "./quit-guard";
+import { exitReport, type QuitAsk, type QuitAsker, quitAskedReport } from "./quit-log";
 import { QuitWatchdog, type QuitWatchdogReason } from "./quit-watchdog";
 import { writeRuntimeLog } from "./runtime-log";
+import type { RuntimeLogReport } from "./runtime-log-core";
+import type { App as ShellApp } from "./shell-host/electron/app";
 
-const latch = new QuitLatch();
+const shellApp = app as unknown as ShellApp;
+/** The quit is committed: markers and saved state stop changing, windows close instead of hiding. */
+let frozen = false;
 let asking = false;
 let inventory: () => WindowTabFact[] = () => [];
 const forcedExitHooks: Array<() => void> = [];
@@ -56,14 +61,47 @@ export function disarmQuitWatchdog(reason?: QuitWatchdogReason): void {
 	quitWatchdog.disarm(reason);
 }
 
-export function requestQuit(): void {
-	latch.approve();
-	app.quit();
+/**
+ * A named ask is logged and its `before-quit` is still to come: that one is not the shell's. Every quit main starts
+ * names itself, so a `before-quit` that starts a quit without one came from the shell (⌘Q, the Dock, a logout).
+ */
+let askPending = false;
+
+/** Write who asked to end the app, before the quit work starts; for an end that never reaches `before-quit` too. */
+export function logQuitAsked(asker: QuitAsker, ask?: QuitAsk): void {
+	askPending = true;
+	writeRuntimeLog(quitAskedReport(asker, ask));
+}
+
+/** Quit without asking about running work: the asker already did, or nobody can answer. A relaunch calls `app.relaunch()` first. */
+export function requestQuit(asker: QuitAsker, ask?: QuitAsk): void {
+	approveQuit(asker, ask);
+	shellApp.quit("approved");
+}
+
+/** An approved quit is logged and freezes the run's state; the shell approves a window's restart prompt itself. */
+export function approveQuit(asker: QuitAsker, ask?: QuitAsk): void {
+	logQuitAsked(asker, ask);
+	frozen = true;
+}
+
+/**
+ * At start: the line for a previous run that left no end line, this run's end line on `quit` (every exit goes through
+ * `app.exit`, which emits it), and the signals a script or a terminal sends, which quit as Electron quit on them.
+ */
+export function startQuitLog(previousEnd: Promise<RuntimeLogReport | null>): void {
+	void previousEnd.then(report => {
+		if (report) writeRuntimeLog(report);
+	});
+	app.on("quit", (_event, code) => writeRuntimeLog(exitReport(code)));
+	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+		process.on(signal, () => requestQuit("signal", { detail: signal }));
+	}
 }
 
 /** A quit is underway (approved): windows must close, not hide to the tray. */
 export function quitApproved(): boolean {
-	return latch.approved;
+	return frozen;
 }
 
 /** What a quit right now would cost. The resource-change restart quotes it. */
@@ -144,16 +182,13 @@ async function askOnce(options: MessageBoxOptions): Promise<boolean> {
 }
 
 /**
- * Register the `before-quit` gate. `tabInventory` reports what the sidecars are
- * doing, `teardown` runs exactly once per approved quit — ⌘Q and an update's
- * `quitAndInstall()` alike. `finalize` runs once between approval and the
- * teardown, with the windows still up (worktree-lifecycle.ts asks there); the
- * quit resumes when it settles. An update's quit skips it: Squirrel has already
- * closed the windows, and the saved tabs come back after the update.
- * `settled` (what the teardown started and the exit must not cut off) holds the exit in `will-quit`: until every omp
- * has exited, so a stuck one is killed by its stop instead of outliving the app (8 Nov 2026: seven did, for minutes,
- * after an update's relaunch), and until the core wrote the schedules' journal, which main's exit would cut off on
- * Windows. Each part bounds itself.
+ * Register the quit's effects with the shell, which runs each once in its own order. `tabInventory` reports what the
+ * sidecars are doing; `finalize` runs with the windows still up (worktree-lifecycle.ts asks there), and an update's
+ * quit skips it (the saved tabs come back after the update); `teardown` stops the app's services, ⌘Q and an update
+ * alike. `settled` (what the teardown started and the exit must not cut off) holds the exit until every omp has exited,
+ * so a stuck one is killed by its stop instead of outliving the app (8 Nov 2026: seven did, for minutes, after an
+ * update's relaunch), and until the core wrote the schedules' journal, which main's exit would cut off on Windows.
+ * Each part bounds itself.
  */
 export function installQuitGuard(
 	tabInventory: () => WindowTabFact[],
@@ -162,56 +197,39 @@ export function installQuitGuard(
 	settled: () => Promise<void>,
 ): void {
 	inventory = tabInventory;
-	let finalizing: "pending" | "running" | "done" = "pending";
-	let exiting = false;
-	// Every `will-quit` listener (the relaunch swap, flushes) has run once this one holds the exit; `app.exit` then ends the
-	// process without a second `will-quit`.
-	app.on("will-quit", event => {
-		if (exiting) return;
-		exiting = true;
-		event.preventDefault();
-		markMainStep("quit", "will-quit: waiting for every omp to exit and the schedules' journal");
-		void settled()
-			.catch((err: unknown) => console.warn(`[quit] the last stops failed: ${String(err)}`))
-			.finally(() => {
-				markMainStep("quit", "omps exited, schedules saved");
-				app.exit(0);
-			});
+	app.on("before-quit", () => {
+		if (!askPending && !frozen) writeRuntimeLog(quitAskedReport("shell"));
+		askPending = false;
 	});
-	app.on("before-quit", event => {
-		if (latch.approved && finalizing !== "done") {
-			event.preventDefault();
-			if (finalizing === "pending") {
-				finalizing = "running";
-				void finalize()
-					.catch((err: unknown) => console.warn(`[quit] finalize failed: ${String(err)}`))
-					.finally(() => {
-						finalizing = "done";
-						app.quit();
-					});
+	shellApp.setQuitEffects({
+		async confirm() {
+			const ok = await confirmQuit();
+			if (ok) frozen = true;
+			return ok;
+		},
+		async finalize() {
+			frozen = true;
+			await finalize().catch((err: unknown) => console.warn(`[quit] finalize failed: ${String(err)}`));
+		},
+		teardown(update) {
+			frozen = true;
+			markMainStep(update ? "update" : "quit", update ? "installer started: teardown" : "teardown");
+			teardown();
+			if (update) markMainStep("update", "teardown-done: closing windows for the installer");
+			// The quit is committed: nothing may keep the process alive past the deadline.
+			quitWatchdog.arm(update ? "update" : "quit");
+		},
+		async settle() {
+			markMainStep("quit", "will-quit: waiting for omps, schedules and core");
+			try {
+				await settled();
+				markMainStep("quit", "omps exited, schedules saved, core stopped");
+				return 0;
+			} catch (err) {
+				console.warn(`[quit] the last stops failed: ${String(err)}`);
+				markMainStep("quit", "last stops failed");
+				return 1;
 			}
-			return;
-		}
-		markMainStep("quit", "before-quit");
-		if (latch.proceed(teardown)) {
-			// The quit is committed: finalize (which may ask the user) is over and the teardown ran.
-			quitWatchdog.arm("quit");
-			return;
-		}
-		event.preventDefault();
-		void confirmQuit().then(ok => {
-			if (ok) requestQuit();
-		});
-	});
-	// electron-updater emits this from `quitAndInstall()` (Squirrel natively,
-	// NSIS once its installer started), only after updater.ts confirmed.
-	// Squirrel then closes every window before `before-quit`, and a closing
-	// window takes its tabs and their saved layout with it.
-	autoUpdater.on("before-quit-for-update", () => {
-		markMainStep("update", "before-quit-for-update");
-		finalizing = "done";
-		latch.proceedForUpdate(teardown);
-		markMainStep("update", "teardown-done: closing windows for the installer");
-		quitWatchdog.arm("update");
+		},
 	});
 }

@@ -135,6 +135,29 @@ Still readable`);
 		expect(unfinished.documentElement.textContent).toContain("Still readable");
 	});
 
+	it("keeps prose in Markdown-escaped parentheses literal and still typesets parenthesized TeX", () => {
+		const prose = [
+			String.raw`\(HWP 편집 보류, SeuOffice 0.125.4 검증 포함\)`,
+			String.raw`\(rust\-gate\-retry 11\-22 종료\)`,
+			String.raw`\(invoice_export parity 시험 타임아웃 뒤\)`,
+			String.raw`\(waiting on the parity run\)`,
+		];
+		for (const source of prose) {
+			const document = render(`다음 순서로 진행 ${source} 확인`);
+			expect(document.querySelector(".katex, .katex-error")).toBeNull();
+			expect(document.documentElement.textContent).toContain(
+				source.replaceAll("\\(", "(").replaceAll("\\)", ")").replaceAll("\\-", "-"),
+			);
+		}
+		const math = render(String.raw`\(x^2 + y\)와 \(\alpha\), \(\sin x\), \(\text{유효 대역폭}\)`);
+		expect(Array.from(math.querySelectorAll("annotation"), node => node.textContent)).toEqual([
+			"x^2 + y",
+			String.raw`\alpha`,
+			String.raw`\sin x`,
+			String.raw`\text{유효 대역폭}`,
+		]);
+	});
+
 	it("keeps untrusted TeX links and HTML inert while rendering adjacent valid math", () => {
 		const document = render(String.raw`\(\href{javascript:alert(1)}{click}\)
 

@@ -128,10 +128,7 @@ const KNOWN_OTHER_SKILLS = [
 ];
 
 describe("skills", () => {
-	const ownedByOmpdesk = [
-		...readdirSync(path.join(REPO, "resources/omp-builtin/skills")),
-		...readdirSync(path.join(REPO, "resources/omp-builtin/rea/skills")),
-	];
+	const ownedByOmpdesk = readdirSync(path.join(REPO, "resources/omp-builtin/skills"));
 
 	it.each(skillNames)("%s: folder, name and description agree", skill => {
 		const text = readFileSync(path.join(SKILLS, skill, "SKILL.md"), "utf8");
@@ -219,6 +216,22 @@ describe("translation", () => {
 		}
 		expect(verbatim).toEqual([]);
 	});
+
+	it("adds a playbook to unfinished work instead of initializing another list", () => {
+		const playbooks = files.filter(
+			file => file.startsWith("skills/poteto-mode/playbooks/") && !file.endsWith("/opening-a-pr.md"),
+		);
+		for (const file of [
+			"adapter.md",
+			"skills/pstack-adapter/SKILL.md",
+			"skills/poteto-mode/SKILL.md",
+			...playbooks,
+		]) {
+			const text = readFileSync(path.join(PACK, file), "utf8");
+			expect(text, file).toContain("`init` only for a fresh plan");
+			expect(text, file).toContain("`append` only new items, one call per phase");
+		}
+	});
 });
 
 describe("always-on section", () => {
@@ -230,9 +243,17 @@ describe("always-on section", () => {
 	});
 
 	it("stays under its size cap (cost and prompt-cache stability)", () => {
-		expect(Buffer.byteLength(sections.full)).toBeLessThanOrEqual(24 * 1024);
-		expect(Buffer.byteLength(sections.solo)).toBeLessThanOrEqual(24 * 1024);
-		expect(Buffer.byteLength(sections.autopilot)).toBeLessThanOrEqual(3 * 1024);
+		expect(Buffer.byteLength(sections.full)).toBeLessThanOrEqual(21 * 1024);
+		expect(Buffer.byteLength(sections.solo)).toBeLessThanOrEqual(21 * 1024);
+		expect(Buffer.byteLength(sections.autopilot)).toBeLessThanOrEqual(2304);
+	});
+
+	it("lists a direct route for every bundled playbook in both interactive modes", () => {
+		const files = readdirSync(path.join(SKILLS, "poteto-mode/playbooks")).filter(name => name.endsWith(".md"));
+		for (const text of [sections.full, sections.solo]) {
+			const index = text.split("\n## Playbooks\n")[1];
+			for (const file of files) expect(index).toContain(`skill://poteto-mode/playbooks/${file}`);
+		}
 	});
 
 	it("indexes every principle skill the pack has and no other", () => {

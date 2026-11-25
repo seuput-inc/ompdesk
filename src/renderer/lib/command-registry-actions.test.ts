@@ -85,7 +85,7 @@ beforeEach(() => {
 	ctx = { ...baseCtx, hydrateSession, rpc: { ...baseCtx.rpc, setPrewalk: rpc.setPrewalk } };
 	useToastStore.setState({ toasts: [] });
 	useSessionStore.setState({ isStreaming: false, isCompacting: false, prewalkArmed: false });
-	useUiStore.setState({ forceToolOpen: false, projectPickerOpen: false });
+	useUiStore.setState({ forceToolOpen: false, projectPickerIntent: null });
 });
 
 afterEach(() => {
@@ -216,7 +216,7 @@ describe("one-shot action wiring", () => {
 		const affordance = wired("switch-project");
 		expect(affordance.kind).toBe("picker");
 		if (affordance.kind === "picker") affordance.open();
-		expect(useUiStore.getState().projectPickerOpen).toBe(true);
+		expect(useUiStore.getState().projectPickerIntent).toBe("switch");
 	});
 
 	it("restart forwards the active session origin to the sidecar", async () => {

@@ -118,6 +118,56 @@ impl AgentControl {
         swept
     }
 
+    /// The tabs `opener_tab_id` opened, read as its tab goes (`released`), before that forgets them.
+    pub fn opened_of(&self, opener_tab_id: &str) -> Vec<String> {
+        self.mem()
+            .opened
+            .get(opener_tab_id)
+            .map(|ids| {
+                ids.iter()
+                    .filter(|id| !id.starts_with("pending:"))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// An opener's tab closed: each child it opened that rests (no turn, nothing waiting, not the person's, not in
+    /// view) closes too, its session saved. Nobody is left to read it, and a test tab would otherwise stay open for
+    /// good (no answer, no verdict line). A child still working is left to finish.
+    pub async fn close_orphans(&self, children: Vec<String>, opener_session: Option<String>) {
+        for child in children {
+            let Some(tab) = self
+                .host
+                .state()
+                .tabs
+                .iter()
+                .find(|tab| tab.tab_id == child)
+                .cloned()
+            else {
+                continue;
+            };
+            if tab.busy
+                || tab.resuming
+                || waits(&tab)
+                || tab.looked
+                || tab.user_touched
+                || tab.hidden
+                || !tab.auto_closable
+                || !self.mem().closing.insert(child.clone())
+            {
+                continue;
+            }
+            // The opener is gone: the child names its own window.
+            let closed = self.close_resting_child(&child, &tab).await;
+            self.mem().closing.remove(&child);
+            if matches!(closed, Ok(TabClose::Closed)) {
+                let fated = self.fated(&tab, opener_session.as_deref());
+                self.fates().closed(fated, fate_by::ORPHAN);
+            }
+        }
+    }
+
     async fn auto_close_pass(&self, caller: &ControlTab, tabs: &[ControlTab]) -> R<()> {
         let opener_idle = !caller.busy && !caller.resuming && !waits(caller);
         for tab in tabs {
@@ -130,6 +180,12 @@ impl AgentControl {
                 {
                     continue;
                 }
+            }
+            self.watch_child(caller, tab, opener_idle).await;
+            // Its cut-off turn waits for the person's Continue (TurnResume's cut-off row): the work is not over, and
+            // its opener heard of the cut by a report of the tab's own.
+            if tab.cut_off.is_some() {
+                continue;
             }
             if tab.busy || waits(tab) {
                 let mut mem = self.mem();
@@ -154,6 +210,14 @@ impl AgentControl {
                 continue;
             }
             let facts = self.auto_close_facts(tab, opener_idle).await;
+            // The facts come from its omp just now, the tab from main's state as the pass began. A turn that ran in
+            // between (a message handed to a child a relaunch restored runs at once) leaves facts of a run the tab
+            // does not show yet: judged together, a restored child that owes its opener this turn's report reads as
+            // not run this launch and closes with the report unsent. Main's state as of those reads tells whether
+            // the run moved; a tab that moved is judged by a later pass.
+            if self.moved(tab) {
+                continue;
+            }
             let reported = self.auto_done(caller, tabs, tab, &facts).await?;
             // A problem child's tab holds the only live trace of its failure, and a throwaway child's session goes
             // with its tab: the report just sent is read in the opener's next turn, so the tab closes in a later
@@ -182,6 +246,20 @@ impl AgentControl {
             }
         }
         Ok(())
+    }
+
+    /// Whether `tab`'s run is no longer the one main's state shows now: a turn started or ended, it woke or closed.
+    fn moved(&self, tab: &ControlTab) -> bool {
+        let state = self.host.state();
+        !state.tabs.iter().any(|now| {
+            now.tab_id == tab.tab_id
+                && now.status == tab.status
+                && now.busy == tab.busy
+                && !now.resuming
+                && now.close_turn == tab.close_turn
+                && now.last_run == tab.last_run
+                && !waits(now)
+        })
     }
 
     /// `#autoDone`: a child whose turn ended well with a verdict line (`Result: ok` / `Result: problem — <reason>`)
@@ -241,7 +319,7 @@ impl AgentControl {
         }
         let session = self.session_state(tab).await;
         let answer = trim(session.last.as_deref().unwrap_or("")).to_owned();
-        if parse_worker_result(Some(&answer)).is_none() {
+        if parse_worker_result(Some(&answer)).is_none() || self.moved(tab) {
             return Ok(false);
         }
         self.mem()
@@ -288,6 +366,18 @@ impl AgentControl {
         if let Some(report) = self.mailbox.state(&tab.tab_id, &caller.tab_id)
             && report.last.dispatch == dispatch
         {
+            return Ok(());
+        }
+        // It ended its turn to wait for sessions it opened itself: that rest is deliberate, and their reports wake it.
+        let own_at_work = {
+            let state = self.host.state();
+            let children = self.children_of(&tab.tab_id);
+            state
+                .tabs
+                .iter()
+                .any(|open| children.contains(&open.tab_id) && (open.busy || waits(open)))
+        };
+        if own_at_work {
             return Ok(());
         }
         let answer = self.session_state(tab).await.last.unwrap_or_default();
@@ -437,6 +527,30 @@ impl AgentControl {
         }
     }
 
+    async fn close_resting_child(&self, caller_tab_id: &str, tab: &ControlTab) -> R<TabClose> {
+        let Some(turn) = tab.close_turn.as_ref() else {
+            return Ok(TabClose::Kept);
+        };
+        let numbered = match &tab.last_run {
+            Some(run) => run.id == Some(turn.turn) && turn.turn != 0,
+            None => turn.turn == 0,
+        };
+        if !numbered {
+            return Ok(TabClose::Kept);
+        }
+        self.close_tab(
+            caller_tab_id,
+            &tab.tab_id,
+            CloseHow {
+                auto: true,
+                expected_turn: Some(turn),
+                wait_ms: self.tuning.auto_close_wait_ms,
+                cleared: false,
+            },
+        )
+        .await
+    }
+
     /// `#deleteThrowaway`: a throwaway child's saved session goes with its tab, on the computer it is saved on (the
     /// sidebar's delete), and its opener gets one quiet line saying so. Not when a tab holds the session again (the
     /// person reopened it meanwhile) or the delete failed: then it stays like any closed child. Resolves true when
@@ -540,19 +654,12 @@ impl AgentControl {
             self.cost(tab),
             self.split(tab),
         );
+        if self.moved(tab) {
+            return Ok(());
+        }
         // Not closed (the window kept it, the person came to it meanwhile, or its paired page holds unsaved Files
         // edits in it): nothing else changes, and a later pass tries again.
-        let outcome = self
-            .close_tab(
-                &caller.tab_id,
-                &tab.tab_id,
-                CloseHow {
-                    auto: true,
-                    wait_ms: self.tuning.auto_close_wait_ms,
-                    cleared: false,
-                },
-            )
-            .await?;
+        let outcome = self.close_resting_child(&caller.tab_id, tab).await?;
         if outcome != TabClose::Closed {
             return Ok(());
         }

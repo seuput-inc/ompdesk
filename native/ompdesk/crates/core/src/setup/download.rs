@@ -25,7 +25,7 @@ use tokio::time::{MissedTickBehavior, interval};
 use super::net::{USER_AGENT, describe, routed};
 use crate::fs::error::NodeError;
 use crate::http::{self, Request};
-use crate::server::{Call, Events, Fault, Reply, Scope};
+use crate::server::{Call, Fault, Reply, Scope};
 
 /// How often the bytes received so far are reported while they grow.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
@@ -46,6 +46,8 @@ struct Params {
     /// An `accept` header (the GitHub API's asset URL wants `application/octet-stream`).
     accept: Option<String>,
     mirror: Option<String>,
+    /// The proxy `proxy.resolve` picked, which every non-loopback hop goes through.
+    proxy: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -72,15 +74,59 @@ fn failed(message: String) -> Stop {
 
 pub async fn handle(call: Call) -> Result<Reply, Fault> {
     let params: Params = call.params()?;
+    let (id, events) = (params.id, call.events.clone());
+    let report = move |received, total| {
+        events.send(
+            "setup.downloadProgress",
+            &Progress {
+                id,
+                received,
+                total,
+            },
+        );
+    };
+    run(&params, &call.scope, &report).await?;
+    Reply::json(&Done {})
+}
+
+/// `setup.download` in process (the tools hub's installs): `report(received, total)` hears the progress, and
+/// cancelling `scope` stops it (`cancelled`).
+pub(crate) async fn fetch(
+    url: &str,
+    sha256: &str,
+    file: &str,
+    mirror: Option<&str>,
+    proxy: Option<&str>,
+    scope: &Scope,
+    report: &dyn Fn(u64, Option<u64>),
+) -> Result<(), Fault> {
+    let params = Params {
+        id: 0,
+        url: url.to_owned(),
+        sha256: sha256.to_owned(),
+        file: file.to_owned(),
+        accept: None,
+        mirror: mirror.map(str::to_owned),
+        proxy: proxy.map(str::to_owned),
+    };
+    run(&params, scope, report).await
+}
+
+/// Generic over the progress hook, so the request's future stays `Send` while the tools hub's hook need not be.
+async fn run<R: Fn(u64, Option<u64>) + ?Sized>(
+    params: &Params,
+    scope: &Scope,
+    report: &R,
+) -> Result<(), Fault> {
     let part = format!("{}.part", params.file);
     let mut created = false;
-    let outcome = transfer(&params, &part, &call.scope, &call.events, &mut created).await;
+    let outcome = transfer(params, &part, scope, report, &mut created).await;
     if outcome.is_err() && created {
         let part = part.clone();
         let _ = blocking(move || std::fs::remove_file(part)).await;
     }
     match outcome {
-        Ok(()) => Reply::json(&Done {}),
+        Ok(()) => Ok(()),
         Err(Stop::Cancelled) => Err(Fault::cancelled()),
         Err(Stop::Fault(fault)) => Err(fault),
         Err(Stop::WriterGone) => Err(Fault::new("download", format!("{part}: the file is gone"))),
@@ -141,11 +187,11 @@ fn write_failed(part: &str, error: &io::Error) -> Stop {
     ))
 }
 
-async fn transfer(
+async fn transfer<R: Fn(u64, Option<u64>) + ?Sized>(
     params: &Params,
     part: &str,
     scope: &Scope,
-    events: &Events,
+    report: &R,
     created: &mut bool,
 ) -> Result<(), Stop> {
     let target = routed(&params.url, params.mirror.as_deref());
@@ -157,6 +203,7 @@ async fn transfer(
         url: &target,
         headers: &headers,
         body: None,
+        proxy: params.proxy.as_deref(),
     };
     let response = tokio::select! {
         biased;
@@ -198,7 +245,7 @@ async fn transfer(
     *created = true;
     let mut writer = Writer::start(file);
 
-    let streamed = stream(response.into_body(), &writer, params, total, scope, events).await;
+    let streamed = stream(response.into_body(), &writer, params, total, scope, report).await;
     let closed = writer.finish().await;
     let (received, digest) = match (streamed, closed) {
         (Err(Stop::WriterGone), Err(error)) | (Ok(_), Err(error)) => {
@@ -207,14 +254,7 @@ async fn transfer(
         (Err(stop), _) => return Err(stop),
         (Ok(done), Ok(())) => done,
     };
-    events.send(
-        "setup.downloadProgress",
-        &Progress {
-            id: params.id,
-            received,
-            total,
-        },
-    );
+    report(received, total);
     let actual = crate::hex(&digest.finalize());
     if actual != params.sha256 {
         return Err(Stop::Fault(Fault::new(
@@ -232,25 +272,15 @@ async fn transfer(
 }
 
 /// Reads the body into the writer, hashing as it goes and reporting progress; answers the bytes and their hash.
-async fn stream(
+async fn stream<R: Fn(u64, Option<u64>) + ?Sized>(
     mut body: hyper::body::Incoming,
     writer: &Writer,
     params: &Params,
     total: Option<u64>,
     scope: &Scope,
-    events: &Events,
+    report: &R,
 ) -> Result<(u64, Sha256), Stop> {
-    let id = params.id;
-    let report = |received: u64| {
-        events.send(
-            "setup.downloadProgress",
-            &Progress {
-                id,
-                received,
-                total,
-            },
-        )
-    };
+    let report = |received: u64| report(received, total);
     let mut hash = Sha256::new();
     let mut received = 0_u64;
     let mut reported = 0_u64;

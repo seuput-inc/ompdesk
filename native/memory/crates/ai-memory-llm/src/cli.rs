@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
+use ai_memory_core::Sanitizer;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -167,9 +168,15 @@ pub(crate) fn parse_json_answer(text: &str, who: &str) -> LlmResult<serde_json::
     {
         return Ok(value);
     }
+    // Brackets in the surrounding prose can throw off the first/last slice.
+    if let Some(value) = crate::openai_compat::first_json_object(stripped)
+        .and_then(|slice| serde_json::from_str::<serde_json::Value>(slice).ok())
+    {
+        return Ok(value);
+    }
     Err(LlmError::UnexpectedShape(format!(
         "{who} did not return JSON: {}",
-        truncate_chars(stripped, 200)
+        child_output_excerpt(stripped, 200)
     )))
 }
 
@@ -182,16 +189,9 @@ fn strip_fence(text: &str) -> &str {
     rest.trim_end().trim_end_matches('`').trim_end()
 }
 
-pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
-    let mut out = String::new();
-    for ch in text.chars() {
-        if out.chars().count() >= max {
-            out.push('…');
-            break;
-        }
-        out.push(ch);
-    }
-    out
+/// Scrub before the byte cut so a partial secret cannot escape into a logged error.
+pub(crate) fn child_output_excerpt(text: &str, max_bytes: usize) -> String {
+    crate::text::truncate_with_ellipsis(&Sanitizer::builtin().scrub(text), max_bytes)
 }
 
 async fn read_capped(
@@ -294,16 +294,18 @@ pub(crate) async fn run(
     .map_err(|_| LlmError::Provider {
         status: 504,
         body: format!("{who} timed out"),
+        retry_after: None,
     })?
 }
 
-/// A non-zero exit as a provider error carrying the end of stderr.
+/// A non-zero exit as a provider error carrying a scrubbed excerpt of stderr.
 pub(crate) fn exit_error(output: &CliOutput) -> LlmError {
     let code = output.status.code().unwrap_or(1);
     let body = String::from_utf8_lossy(&output.stderr);
     LlmError::Provider {
         status: u16::try_from(code).unwrap_or(1),
-        body: truncate_chars(body.trim(), 500),
+        body: child_output_excerpt(body.trim(), 500),
+        retry_after: None,
     }
 }
 

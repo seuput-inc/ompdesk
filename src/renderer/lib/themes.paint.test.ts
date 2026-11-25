@@ -8,7 +8,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseHTML } from "linkedom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyThemeByName, loadSystemThemePair, setSystemThemePair, THEMES, type ThemeSelection } from "./themes";
+import { THEME_NAMES, THEME_SETS } from "../../shared/theme-names";
+import { applyThemeByName, applyThemeSet, loadSystemThemePair, THEMES, type ThemeSelection } from "./themes";
 
 const { document } = parseHTML(
 	"<html><head><meta name='theme-color' content='#000'><meta name='theme-color' content='#fff'></head><body></body></html>",
@@ -63,16 +64,7 @@ function save(selection: ThemeSelection): void {
 }
 
 describe("pre-paint", () => {
-	it.each([
-		"nord",
-		"sepia",
-		"tokyo-night",
-		"gruvbox-dark",
-		"github-light",
-		"hc-dark",
-		"hc-light",
-		"solarized-light",
-	] as const)("paints a saved %s in its own background and scheme, whatever the OS says", name => {
+	it.each(THEME_NAMES)("paints a saved %s in its own background and scheme, whatever the OS says", name => {
 		save(name);
 		const theme = THEMES[name];
 		for (const os of ["dark", "light"] as const) {
@@ -85,23 +77,43 @@ describe("pre-paint", () => {
 	});
 
 	it("paints System as the pair's light theme under a light OS and its dark theme under a dark OS", () => {
-		loadSystemThemePair({ systemLightTheme: "sepia", systemDarkTheme: "nord" });
+		loadSystemThemePair({ systemLightTheme: "gruvbox-light", systemDarkTheme: "solarized-dark" });
 		save("system");
-		expect(prePaint("light")).toMatchObject({ scheme: "light", background: THEMES.sepia.tokens["--omp-bg-primary"] });
-		expect(prePaint("dark")).toMatchObject({ scheme: "dark", background: THEMES.nord.tokens["--omp-bg-primary"] });
+		expect(prePaint("light")).toMatchObject({
+			scheme: "light",
+			background: THEMES["gruvbox-light"].tokens["--omp-bg-primary"],
+		});
+		expect(prePaint("dark")).toMatchObject({
+			scheme: "dark",
+			background: THEMES["solarized-dark"].tokens["--omp-bg-primary"],
+		});
 	});
 
-	it("repaints the stored backgrounds when the System pair changes", () => {
-		save("system");
-		setSystemThemePair({ dark: "gruvbox-dark" }, { persist: false });
-		// persist:false leaves the stored paint alone; a saved change refreshes it.
-		expect(prePaint("dark").background).toBe(THEMES.dark.tokens["--omp-bg-primary"]);
-		setSystemThemePair({ dark: "gruvbox-dark" });
-		expect(prePaint("dark").background).toBe(THEMES["gruvbox-dark"].tokens["--omp-bg-primary"]);
+	it.each(THEME_SETS)(
+		"paints the $id set, chosen to follow the OS, as its half for each OS scheme",
+		({ id, light, dark }) => {
+			applyThemeSet({ set: id, mode: "system" });
+			expect(prePaint("light")).toMatchObject({
+				scheme: "light",
+				background: THEMES[light].tokens["--omp-bg-primary"],
+			});
+			expect(prePaint("dark")).toMatchObject({
+				scheme: "dark",
+				background: THEMES[dark].tokens["--omp-bg-primary"],
+			});
+		},
+	);
+
+	it("paints a set kept on its dark half dark under a light OS", () => {
+		applyThemeSet({ set: "github", mode: "dark" });
+		expect(prePaint("light")).toMatchObject({
+			scheme: "dark",
+			background: THEMES["github-dark"].tokens["--omp-bg-primary"],
+		});
 	});
 
 	it("falls back to the OMPdesk backgrounds with nothing stored, or with a damaged record", () => {
-		expect(prePaint("dark")).toMatchObject({ scheme: "dark", background: "#19191c" });
+		expect(prePaint("dark")).toMatchObject({ scheme: "dark", background: "#0a0a0a" });
 		stored.set("omp.themeScheme", "light");
 		stored.set("omp.themePaint", "{not json");
 		expect(prePaint("dark")).toMatchObject({ scheme: "light", background: "#ffffff" });
@@ -119,5 +131,27 @@ describe("window and page chrome follow the theme", () => {
 			expect(style.getPropertyValue("--sc-surface-1"), name).toBe(theme.tokens["--omp-sidebar-bg"]);
 			expect(style.getPropertyValue("--sc-text"), name).toBe(theme.tokens["--omp-text"]);
 		}
+	});
+});
+
+describe("a theme swap", () => {
+	it("holds every transition off for the frames the new palette paints in, and only when the theme changes", () => {
+		const frames: FrameRequestCallback[] = [];
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+		const nextFrame = () => {
+			for (const frame of frames.splice(0)) frame(0);
+		};
+		const root = document.documentElement;
+		applyThemeByName("light", { persist: false });
+		nextFrame();
+		nextFrame();
+		applyThemeByName("dark", { persist: false });
+		expect(root.hasAttribute("data-theme-switching")).toBe(true);
+		nextFrame();
+		expect(root.hasAttribute("data-theme-switching")).toBe(true);
+		nextFrame();
+		expect(root.hasAttribute("data-theme-switching")).toBe(false);
+		applyThemeByName("dark", { persist: false });
+		expect(root.hasAttribute("data-theme-switching")).toBe(false);
 	});
 });

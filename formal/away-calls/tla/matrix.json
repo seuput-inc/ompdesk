@@ -1,0 +1,56 @@
+{
+	"runs": [
+		{
+			"name": "fix-a-returns",
+			"config": "MC.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "fix-a-stays-away",
+			"config": "MC_away.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "v0134-waits-for-a",
+			"config": "MC_bug_waits.cfg",
+			"expect": "temporal",
+			"property": "AwayCallsSettle"
+		},
+		{
+			"name": "take-handed-calls-runs-twice",
+			"config": "MC_bug_takeall.cfg",
+			"expect": "invariant",
+			"property": "AtMostOnce"
+		},
+		{
+			"name": "v0134-reattach-skips-handed",
+			"config": "MC_bug_noresend.cfg",
+			"expect": "temporal",
+			"property": "CallsSettle"
+		},
+		{
+			"name": "volatile-outbox-loses-report",
+			"config": "MC_bug_volatile.cfg",
+			"expect": "invariant",
+			"property": "KeptUntilDelivered"
+		},
+		{
+			"name": "new-replay-ids-duplicate",
+			"config": "MC_bug_newids.cfg",
+			"expect": "invariant",
+			"property": "HubOnce"
+		},
+		{
+			"name": "takeover-is-reachable",
+			"config": "MC_sanity_takeover.cfg",
+			"expect": "invariant",
+			"property": "NoTakeover"
+		},
+		{
+			"name": "replay-is-reachable",
+			"config": "MC_sanity_replay.cfg",
+			"expect": "invariant",
+			"property": "NoReplayDelivered"
+		}
+	]
+}

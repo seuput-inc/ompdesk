@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import type { WebClientFrame, WebServerFrame } from "../../shared/web-protocol";
 import { loadLocale, setLanguageOverride, translate } from "../lib/i18n";
 import { UnpairedError } from "./session";
@@ -487,17 +488,27 @@ describe("WsTransport", () => {
 		expect(heard).toBe(true);
 	});
 
-	it("answered() on a dead route that reads open waits through the drop and resolves with the next hello", async () => {
+	it("shares an unanswered probe across wakes and callers, then receives events and calls on the resumed link", async () => {
 		const { transport, clock, sockets, last } = setup();
 		transport.start();
 		await settle();
 		last().serve(HELLO());
 		const dead = last();
+		const seen: unknown[] = [];
+		transport.on(IPC_EVENTS.TAB_LIST_CHANGED, data => seen.push(data));
+		const answers = [transport.answered()];
+		for (let i = 0; i < 2; i++) {
+			clock.advance(1000);
+			transport.setPresence(true);
+			transport.wake();
+			answers.push(transport.answered());
+		}
+		expect(dead.framesOf("ping")).toHaveLength(1);
 		let heard = false;
-		void transport.answered().then(() => {
+		void Promise.all(answers).then(() => {
 			heard = true;
 		});
-		clock.advance(3000);
+		clock.advance(1000);
 		await settle();
 		expect(dead.closedWith).toBe(4000);
 		expect(heard).toBe(false);
@@ -508,6 +519,13 @@ describe("WsTransport", () => {
 		last().serve(HELLO(true));
 		await settle();
 		expect(heard).toBe(true);
+		last().serve({ t: "evt", seq: 1, ch: IPC_EVENTS.TAB_LIST_CHANGED, d: { tabs: [], closed: ["finished-tab"] } });
+		expect(seen).toEqual([{ tabs: [], closed: ["finished-tab"] }]);
+		const tabs = transport.invoke(IPC_COMMANDS.GET_TABS);
+		const [request] = last().framesOf("inv");
+		expect(request?.ch).toBe(IPC_COMMANDS.GET_TABS);
+		last().serve({ t: "res", id: request?.id ?? 0, ok: true, v: [] });
+		await expect(tabs).resolves.toEqual([]);
 	});
 
 	it("answered() asked while the link is down asks nothing and resolves with the first hello", async () => {
@@ -581,6 +599,44 @@ describe("WsTransport", () => {
 		expect(socket.closedWith).toBeNull();
 	});
 
+	it("gives a pre-sleep probe a fresh answer window, but repeated late ticks cannot keep a silent socket", async () => {
+		const { transport, clock, last } = setup();
+		transport.start();
+		await settle();
+		const socket = last();
+		socket.serve(HELLO());
+		transport.wake();
+		clock.now += 600_000;
+		clock.advance(0);
+		expect(socket.closedWith).toBeNull();
+		expect(socket.framesOf("ping")).toHaveLength(2);
+		clock.now += 4000;
+		clock.advance(0);
+		expect(socket.closedWith).toBe(4000);
+		expect(transport.state).toBe("reconnecting");
+	});
+
+	it("does not charge time spent hidden against a probe when the page returns", async () => {
+		let visible = true;
+		const { transport, clock, last } = setup({ isVisible: () => visible });
+		transport.start();
+		await settle();
+		const socket = last();
+		socket.serve(HELLO());
+		transport.wake();
+		visible = false;
+		transport.setPresence(false);
+		clock.advance(60_000);
+		visible = true;
+		transport.setPresence(true);
+		transport.wake();
+		clock.advance(2000);
+		expect(socket.closedWith).toBeNull();
+		socket.serve({ t: "pong" });
+		clock.advance(4000);
+		expect(socket.closedWith).toBeNull();
+	});
+
 	it("treats a 4401 close as an unpaired device and stops retrying", async () => {
 		const { transport, clock, sockets, last, log } = setup();
 		transport.start();
@@ -640,6 +696,30 @@ describe("WsTransport", () => {
 		clock.advance(600);
 		await settle();
 		expect(sockets).toHaveLength(1);
+	});
+
+	it("gets a fresh ticket without another wake when constructing a socket throws", async () => {
+		const { transport, clock, last, sockets } = setup({
+			createSocket: (url, protocols) => {
+				if (protocols.includes("ticket.t2")) throw new Error("socket unavailable");
+				const socket = new FakeSocket(url, protocols);
+				sockets.push(socket);
+				return socket;
+			},
+		});
+		transport.start();
+		await settle();
+		last().serve(HELLO());
+		last().drop();
+		clock.advance(0);
+		await settle();
+		expect(transport.state).toBe("reconnecting");
+		expect(sockets).toHaveLength(1);
+		clock.advance(250);
+		await settle();
+		expect(last().protocols).toEqual(["ompdesk.v1", "ticket.t3", "resume.c1"]);
+		last().serve(HELLO(true));
+		expect(transport.state).toBe("open");
 	});
 
 	it("reports an outdated page when the host's minimum client is newer", async () => {

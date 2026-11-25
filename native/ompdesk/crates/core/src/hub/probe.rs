@@ -76,6 +76,26 @@ fn probe_call(id: u64, method: &str, params: &RawValue) -> Outcome {
         "askLater" => Outcome::Later(Box::pin(async move {
             out.ask_later("probe", &json!({"x": 2})).await
         })),
+        // Asks main and, in the same job, tells it `poke`: main's handling of `poke` calls in while the answer to the
+        // question is on its way, so this call's own answer can reach main inside that nested call.
+        "askPoke" => {
+            let answer = out.ask("probe", &json!({"x": 3}));
+            out.push(&json!({"k": "poke"}));
+            Outcome::Later(answer)
+        }
+        // Asks main and tells it `poke` in the same job, then answers once `fire` came: main's handling of `poke`
+        // fires it, so this call's answer comes right behind that nested call's.
+        "askWaitPoke" => {
+            let (fire, fired) = oneshot::channel();
+            PROBES.with(|probes| probes.borrow_mut().get_mut(&id).unwrap().waiting = Some(fire));
+            let answer = out.ask("probe", &json!({"x": 4}));
+            out.push(&json!({"k": "poke"}));
+            Outcome::Later(Box::pin(async move {
+                let _ = answer.await?;
+                let _ = fired.await;
+                Ok(json!("woke"))
+            }))
+        }
         _ => Outcome::fault("no_method", method.to_string()),
     }
 }

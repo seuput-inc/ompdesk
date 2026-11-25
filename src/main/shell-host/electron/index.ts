@@ -1,0 +1,272 @@
+/**
+ * The `electron` module main, electron-store and electron-updater import (the main bundle aliases `electron` to this
+ * file). Importing it connects to the shell (`OMPDESK_SHELL_SOCKET`, `OMPDESK_SHELL_TOKEN`), says `hello` and waits
+ * for the facts before any main code runs, so Electron's synchronous `app.getPath()` and friends work at module top
+ * level, as they do there.
+ */
+import type { UpdateStatus } from "../../../shared/ipc-types";
+import type { UiLanguage } from "../../../shared/ui-language";
+import { core } from "../../core/process";
+import type { DiagnosticBundleDeps } from "../../diagnostic-bundle";
+import type { DiagnosticsDeps } from "../../diagnostics";
+import type { WatchdogSignal } from "../../hang-watchdog";
+import type { AdmitNotification } from "../../notify-triage";
+import { exitReport, type QuitAsk, type QuitAsker } from "../../quit-log";
+import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from "../../runtime-log-core";
+import type { IpcShell } from "../../web/ipc-registry";
+import { ShellClient } from "../client";
+import type { HostFacts } from "../facts";
+import type { InstallerStartReceipt, UpdateHost } from "../shell-calls";
+import { decodeBin, encodeBin } from "./binary-json";
+import { createElectron } from "./create";
+
+const socketPath = process.env.OMPDESK_SHELL_SOCKET;
+const token = process.env.OMPDESK_SHELL_TOKEN;
+if (!socketPath || !token) {
+	throw new Error("OMPdesk's main runs under ompdesk-shell: OMPDESK_SHELL_SOCKET and OMPDESK_SHELL_TOKEN are not set");
+}
+
+const client = await ShellClient.connect(socketPath);
+const hello = await client.call<{ protocol: number; facts: HostFacts }>("hello", {
+	token,
+	pid: process.pid,
+	protocol: 1,
+});
+if (hello.protocol !== 1) throw new Error(`The shell speaks host protocol ${hello.protocol}, this main speaks 1`);
+
+export const appIconPath = hello.facts.appIcon.path;
+
+export function consumeHangReports(): Promise<RuntimeLogReport[]> {
+	return client.call<RuntimeLogReport[]>("app.consumeHangReports").catch((error: unknown) => {
+		console.warn("[hang-watchdog]", error);
+		return [];
+	});
+}
+
+export function postWatchdog(signal: WatchdogSignal): void {
+	void client.call("app.watchdog", signal).catch((error: unknown) => console.warn("[hang-watchdog]", error));
+}
+
+export function publishDiskFull(files: readonly string[]): void {
+	void client.event("diskFull.state", { files });
+}
+
+export function onPairedPagePush(
+	listener: (push: { connId: string; channel: string; payload: unknown }) => void,
+): void {
+	client.on("page.push", listener);
+}
+
+/** What the shell asks main about an app window (`tauri-shell/src/app_window.rs`). */
+export type WindowNotice = "hang" | "resources" | "crash";
+
+/**
+ * The shell's app windows: a `gui-runtime.jsonl` line about a window's page, the stuck-page notice or a restart
+ * dialog's text, who asked for a quit the shell starts (a restart dialog's approved one, the app menu's or the tray's
+ * ask), and the window geometry file waiting for disk space.
+ */
+export function serveWindows(windows: {
+	log(wcId: number, entry: RuntimeLogReport): void;
+	notice(kind: WindowNotice, reason?: string): unknown;
+	quitAsked(asker: QuitAsker, ask: QuitAsk, approved: boolean): void;
+	saves(file: string, waiting: boolean): void;
+}): void {
+	client.on("window.log", ({ wcId, entry }: { wcId: number; entry: RuntimeLogReport }) => windows.log(wcId, entry));
+	client.handle("window.notice", ({ kind, reason }: { kind: WindowNotice; reason?: string | null }) =>
+		windows.notice(kind, reason ?? undefined),
+	);
+	client.on("app.quitAsked", ({ asker, ask, approved }: { asker: QuitAsker; ask: QuitAsk; approved: boolean }) =>
+		windows.quitAsked(asker, ask, approved),
+	);
+	client.on("store.saveFailed", ({ file }: { file: string }) => windows.saves(file, true));
+	client.on("store.saved", ({ file }: { file: string }) => windows.saves(file, false));
+}
+
+/**
+ * The windows the shell's entry points ask for (`tauri-shell/src/entry.rs`): a new window, or the one showing a folder.
+ * `from` is the window New Window was chosen over (the app menu). `session.ready` tells the shell the startup windows
+ * exist, so the links and folders it held run now, and its tray appears.
+ */
+export function serveSessions(sessions: {
+	spawnWindow(cwd?: string, from?: number): Promise<number | null>;
+	openPath(path: string): Promise<{ focus: number } | { spawned: number } | null>;
+}): void {
+	client.handle("session.spawnWindow", async ({ cwd, from }: { cwd?: unknown; from?: unknown }) => {
+		const win = await sessions.spawnWindow(
+			typeof cwd === "string" ? cwd : undefined,
+			typeof from === "number" ? from : undefined,
+		);
+		return win === null ? null : { win };
+	});
+	client.handle("session.openPath", ({ path }: { path?: unknown }) =>
+		typeof path === "string" ? sessions.openPath(path) : null,
+	);
+	void client.event("session.ready");
+}
+
+/** Main's UI language, which the shell's app menu and tray speak (`app.language`): at start and on every change. */
+export function publishLanguage(language: UiLanguage): void {
+	void client.event("app.language", { language });
+}
+
+/**
+ * The shell's tray (`tauri-shell/src/tray.rs`): its menu asks for the updater's status as it opens, with when a check
+ * last found nothing (epoch ms), and its update item runs the check, the download or the install here.
+ */
+export function serveTray(tray: {
+	update(): { status: UpdateStatus; notAvailableAt: number | null };
+	runUpdate(action: "check" | "download" | "install"): void;
+}): void {
+	client.handle("tray.update", () => tray.update());
+	client.on("tray.runUpdate", ({ action }: { action?: unknown }) => {
+		if (action === "check" || action === "download" || action === "install") tray.runUpdate(action);
+	});
+}
+
+/**
+ * Settings › General › Window's close-to-tray prefs as stored, which the shell's last-window close reads
+ * (`tauri-shell/src/last_close.rs`): pushed now (`app.closeToTray`) and on every call of the returned function, never
+ * asked for on a close. The shell's one-time tray notice is recorded through `noticeShown`.
+ */
+export function serveCloseToTray(prefs: {
+	read(): { closeToTray: unknown; noticeShown: unknown };
+	noticeShown(): void;
+}): () => void {
+	client.on("app.closeToTrayNoticeShown", () => prefs.noticeShown());
+	const publish = (): void => void client.event("app.closeToTray", prefs.read());
+	publish();
+	return publish;
+}
+
+export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params =>
+	client.call("app.diagnosticBundleFileName", params);
+
+export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client.call("app.diagnosticLog", selection);
+
+export const admitNotification: AdmitNotification = report => client.call("app.admitNotification", report);
+
+export const updateHost: UpdateHost = {
+	stageUpdateBundle: request => client.call("app.stageUpdateBundle", request),
+	updateDestination: asset => client.call("app.updateDestination", { asset }),
+	async sweepUpdateFiles(request) {
+		await client.call("app.sweepUpdateFiles", request);
+	},
+	async readUpdateTokenCiphertext() {
+		const { result: present, bin } = await client.request<boolean>("updateAuth.read");
+		return present ? (bin ?? Buffer.alloc(0)) : null;
+	},
+	updateTokenFileStatus: () => client.call("updateAuth.status"),
+	saveUpdateTokenCiphertext: bytes => client.call("updateAuth.save", {}, { bin: bytes }),
+	dropUpdateTokenFile: () => client.call("updateAuth.drop"),
+	clearUpdateTokenFiles: () => client.call("updateAuth.clear"),
+};
+
+export function openPageExternal(url: string): Promise<void> {
+	return electron.shell.openExternal(url, "page");
+}
+
+/** The page channels the shell serves itself; main's own callers (paired pages, agents) reach them through `ipc.call`. */
+export const shellIpc: IpcShell = {
+	channels: hello.facts.nativeIpc,
+	routes: main => client.call("ipc.routes", main),
+	call: async params =>
+		decodeBin((await client.call<{ value: unknown }>("ipc.call", { ...params, args: encodeBin(params.args) })).value),
+};
+
+let stopping = false;
+/** Main's app once made: its log line names the profile and the version. */
+let electronApp: { getPath(name: "userData"): string; getVersion(): string } | null = null;
+/** `app.exit` wrote the run's end line: the shell's stdin ending after it is the exit's own. */
+let ended = false;
+function endMain(reason: string): void {
+	if (stopping) return;
+	stopping = true;
+	console.error(`[shell-host] ${reason}; exiting`);
+	if (electronApp && !ended) {
+		appendRuntimeLogAtPath(runtimeLogFile(electronApp.getPath("userData")), exitReport(1, reason), {
+			appVersion: electronApp.getVersion(),
+			platform: process.platform,
+			pid: process.pid,
+		});
+	}
+	// The cores are the shell's: main's exit closes its owner connection, which ends them and what they run. Main only
+	// refuses new work and asks for their stop; it does not wait for it.
+	core()
+		.shutdown()
+		.catch(() => undefined);
+	process.exit(1);
+}
+client.onClose(reason => endMain(`the shell connection ended${reason ? `: ${reason.message}` : ""}`));
+process.stdin.once("end", () => endMain("the shell's stdin ended"));
+process.stdin.resume();
+
+const electron = createElectron(client, hello.facts, { patchProcess: true });
+// The shell spawns the cores main asks for and reports their end (`crates/core/src/owner.rs`), over a connection of
+// its own that a worker thread holds (`ownerLink`).
+core().ownBy({ connect: hello.facts.coreOwner, token });
+electronApp = electron.app;
+if (hello.facts.legacyUserDataMigration) {
+	appendRuntimeLogAtPath(
+		runtimeLogFile(electron.app.getPath("userData")),
+		{ source: "user-data-migration", message: hello.facts.legacyUserDataMigration },
+		{ appVersion: electron.app.getVersion(), platform: process.platform, pid: process.pid },
+	);
+}
+electron.app.once("quit", () => {
+	ended = true;
+});
+
+export function installerQuitPending(): void {
+	electron.app.installerQuitPending();
+}
+
+export function installerQuitReceipt(receipt: InstallerStartReceipt): void {
+	electron.app.installerQuitReceipt(receipt);
+}
+
+export function readPreviousRunEnd(): Promise<RuntimeLogReport | null> {
+	return client
+		.call<RuntimeLogReport | null>("app.previousRunEnd", { ownPid: process.pid })
+		.catch((error: unknown) => {
+			console.warn("[app-quit]", error);
+			return null;
+		});
+}
+
+// The e2e harness (OMP_GUI_TEST_NODE_INSPECT=1: main runs under `--inspect`) evaluates specs' functions against this
+// object through the inspector, where Electron's `app.evaluate` handed them the module. `__ompdeskMenus.click` chooses
+// an item of the shell's app menu or tray menu by its label, as a person does (`menu.testClick`, app_menu.rs):
+// scripts/mac-menu-quit.ts quits from both, e2e/desktop.e2e.ts checks for updates.
+if (process.env.OMP_GUI_TEST_NODE_INSPECT === "1") {
+	Object.defineProperty(globalThis, "__ompdeskElectron", { value: electron, configurable: true });
+	Object.defineProperty(globalThis, "__ompdeskMenus", {
+		configurable: true,
+		value: { click: (menu: "app" | "tray", label: string) => client.call("menu.testClick", { menu, label }) },
+	});
+}
+
+export const {
+	app,
+	BrowserWindow,
+	WebContentsView,
+	webContents,
+	session,
+	protocol,
+	ipcMain,
+	Menu,
+	dialog,
+	clipboard,
+	shell,
+	Notification,
+	screen,
+	nativeTheme,
+	systemPreferences,
+	powerMonitor,
+	powerSaveBlocker,
+	autoUpdater,
+	net,
+	nativeImage,
+	safeStorage,
+} = electron;
+
+export default electron;

@@ -1,14 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { bunTranspilerCacheDir, type CacheTools, REGENERABLE_CACHES } from "./caches";
+import { type CacheTools, locateCaches } from "./caches";
 import { diskCareWorld, exists, SLOW, write } from "./disk-care-fixture";
 
 // The tools' caches (caches.ts): each cleared past its bound, kept while a process that needs it runs.
 const w = diskCareWorld();
 
-/** The real table with bounds a test can fill. */
-const caches = REGENERABLE_CACHES.map(cache => ({ ...cache, maxBytes: 20_000 }));
 const BIG = "x".repeat(60_000);
 
 interface Tools {
@@ -21,25 +19,48 @@ interface Tools {
 	processes?: string | null;
 }
 
-/** Stand-ins for the tools: `bun pm cache rm` deletes the install cache as Bun does. */
-function tools(options: Tools): CacheTools {
+/** Each tool runs through the real core. The stand-in Bun removes only the fixture's install cache. */
+async function tools(options: Tools): Promise<CacheTools> {
+	const home = path.join(w.root, "home");
+	await fs.mkdir(home, { recursive: true });
 	const env = { ...process.env, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", ...options.env };
+	const stub = async (file: string, args: string, body: string): Promise<string> => {
+		await fs.mkdir(path.dirname(file), { recursive: true });
+		const source = `if (process.argv.slice(2).join(" ") !== ${JSON.stringify(args)}) process.exit(1);\n${body}\n`;
+		if (process.platform === "win32") {
+			await fs.writeFile(`${file}.cjs`, source);
+			await fs.writeFile(`${file}.cmd`, `@"${process.execPath}" "%~dpn0.cjs" %*\r\n`);
+			return `${file}.cmd`;
+		}
+		await fs.writeFile(file, `#!/usr/bin/env node\n${source}`, { mode: 0o700 });
+		return file;
+	};
+	const bun =
+		options.bun &&
+		(await stub(
+			options.bun,
+			"pm cache rm",
+			`require("node:fs").rmSync(${JSON.stringify(path.join(home, ".bun", "install", "cache"))}, { recursive: true });`,
+		));
+	const npm =
+		options.npm && (await stub(options.npm, "config get cache", `console.log(${JSON.stringify(options.npmCache)});`));
+	const ps =
+		options.processes === null
+			? null
+			: await stub(
+					path.join(w.root, "bin", "ps"),
+					"-axo command=",
+					`process.stdout.write(${JSON.stringify(options.processes ?? "")});`,
+				);
 	return {
 		env: async () => env,
-		find: async name => options[name] ?? null,
-		run: async (bin, args) => {
-			if (bin === options.npm && args.join(" ") === "config get cache") return `${options.npmCache}\n`;
-			if (bin === options.bun && args.join(" ") === "pm cache rm") {
-				await fs.rm(path.join(w.root, "home", ".bun", "install", "cache"), { recursive: true });
-				return "";
-			}
-			return null;
-		},
-		processes: async () => (options.processes === undefined ? "" : options.processes),
+		find: async name => (name === "bun" ? bun : npm) ?? null,
+		ps,
 	};
 }
 
-const run = (options: Tools) => w.care(undefined, { caches, cacheTools: tools(options) }).run("user");
+const run = async (options: Tools) =>
+	w.care(undefined, { cacheMaxBytes: 20_000, cacheTools: await tools(options) }).run("user");
 const actions = (state: Awaited<ReturnType<typeof run>>) => state.lastRun?.actions.map(action => action.kind);
 const keptReasons = () =>
 	w.logs.filter(([message]) => message === "kept").map(([, details]) => `${details.path}: ${details.reason}`);
@@ -112,7 +133,7 @@ describe("disk care: the tools' caches", () => {
 		"clears npm's _cacache where npm says its cache is, keeps the rest of that folder, and waits while npm runs",
 		async () => {
 			const npmCache = path.join(w.root, "npm-cache");
-			const npm = path.join(w.root, "bin", "npm");
+			const npm = path.join(w.root, "tools with spaces", "npm");
 			await write(npmCache, "_cacache/content-v2/sha512/aa/bb/cc", BIG);
 			await write(npmCache, "_cacache/index-v5/aa/bb/cc", "{}\n");
 			await write(npmCache, "_cacache/tmp/half", "x");
@@ -141,22 +162,73 @@ describe("disk care: the tools' caches", () => {
 		SLOW,
 	);
 
-	it("finds Bun's transpiler cache where Bun's source puts it", () => {
+	it("reports the shipped locations, bounds and process checks for all three caches", async () => {
+		const install = path.join(w.root, "install");
+		const transpiler = path.join(w.root, "transpiler");
+		const npmCache = path.join(w.root, "npm-cache");
+		const rows = await locateCaches(
+			await tools({
+				env: { BUN_INSTALL_CACHE_DIR: install, BUN_RUNTIME_TRANSPILER_CACHE_PATH: transpiler },
+				npm: path.join(w.root, "bin", "npm"),
+				npmCache,
+			}),
+		);
+		expect(
+			rows.map(({ dir, cache }) => [dir, cache.part, cache.action, cache.maxBytes, cache.checkProcesses]),
+		).toEqual([
+			[install, "bunCache", "bun-cache", 2 * 1024 ** 3, true],
+			[transpiler, "bunTranspilerCache", "bun-transpiler-cache", 1024 ** 3, false],
+			[path.join(npmCache, "_cacache"), "npmCache", "npm-cache", 2 * 1024 ** 3, true],
+		]);
+	});
+
+	it(
+		"reports the tool that could not clear a cache and does not count it as freed",
+		async () => {
+			const dir = path.join(w.root, "home", ".bun", "install", "cache");
+			await write(dir, "package/index.js", BIG);
+			const cacheTools = await tools({});
+			cacheTools.find = async name => (name === "bun" ? path.join(w.root, "missing-bun") : null);
+			const state = await w.care(undefined, { cacheMaxBytes: 20_000, cacheTools }).run("user");
+			expect(actions(state)).toEqual([]);
+			expect(await exists(path.join(dir, "package/index.js"))).toBe(true);
+			expect(w.logs.filter(([message]) => message === "failed")).toContainEqual([
+				"failed",
+				{ step: "bun-cache", path: dir, error: "bun pm cache rm failed" },
+			]);
+		},
+		SLOW,
+	);
+
+	it("finds Bun's transpiler cache where Bun's source puts it", async () => {
 		const home = path.resolve(path.sep, "Users", "me");
-		const at = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) =>
-			bunTranspilerCacheDir({ HOME: home, USERPROFILE: home, ...env }, platform);
-		expect(at({}, "darwin")).toBe(path.join(home, "Library", "Caches", "bun", "@t@"));
-		expect(at({}, "linux")).toBe(path.join(home, ".bun", "install", "cache", "@t@"));
-		expect(at({}, "win32")).toBe(path.join(home, ".bun", "install", "cache", "@t@"));
+		const at = async (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) => {
+			const cacheTools: CacheTools = {
+				env: async () => ({
+					HOME: home,
+					USERPROFILE: home,
+					BUN_INSTALL_CACHE_DIR: path.join(home, "separate"),
+					...env,
+				}),
+				find: async () => null,
+				ps: null,
+			};
+			return (
+				(await locateCaches(cacheTools, platform)).find(row => row.cache.part === "bunTranspilerCache")?.dir ?? null
+			);
+		};
+		expect(await at({}, "darwin")).toBe(path.join(home, "Library", "Caches", "bun", "@t@"));
+		expect(await at({}, "linux")).toBe(path.join(home, ".bun", "install", "cache", "@t@"));
+		expect(await at({}, "win32")).toBe(path.join(home, ".bun", "install", "cache", "@t@"));
 		// Bun's own install folder elsewhere does not move it; the XDG folder and the variable do, in that order.
-		expect(at({ BUN_INSTALL: path.join(home, "tools", "bun") }, "linux")).toBe(
+		expect(await at({ BUN_INSTALL: path.join(home, "tools", "bun") }, "linux")).toBe(
 			path.join(home, ".bun", "install", "cache", "@t@"),
 		);
 		const xdg = path.join(home, ".cache");
-		expect(at({ XDG_CACHE_HOME: xdg }, "darwin")).toBe(path.join(xdg, "bun", "@t@"));
+		expect(await at({ XDG_CACHE_HOME: xdg }, "darwin")).toBe(path.join(xdg, "bun", "@t@"));
 		const named = path.join(home, "elsewhere");
-		expect(at({ XDG_CACHE_HOME: xdg, BUN_RUNTIME_TRANSPILER_CACHE_PATH: named }, "darwin")).toBe(named);
-		expect(at({ BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, "darwin")).toBeNull();
-		expect(at({ BUN_RUNTIME_TRANSPILER_CACHE_PATH: "" }, "darwin")).toBeNull();
+		expect(await at({ XDG_CACHE_HOME: xdg, BUN_RUNTIME_TRANSPILER_CACHE_PATH: named }, "darwin")).toBe(named);
+		expect(await at({ BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, "darwin")).toBeNull();
+		expect(await at({ BUN_RUNTIME_TRANSPILER_CACHE_PATH: "" }, "darwin")).toBeNull();
 	});
 });

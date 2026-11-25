@@ -5,14 +5,14 @@
 		"tla2tools": {
 			"version": "1.8.0",
 			"file": "tla2tools.jar",
-			"url": "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar",
+			"url": "https://github.com/seuput-inc/ompdesk-formal-tools/releases/download/tla2tools-1.8.0-d8fb231/tla2tools.jar",
 			"sha256": "e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f"
 		},
 		"communityModules": {
-			"version": "202610131629",
+			"version": "202611060952",
 			"file": "CommunityModules-deps.jar",
-			"url": "https://github.com/tlaplus/CommunityModules/releases/download/202610131629/CommunityModules-deps.jar",
-			"sha256": "36f1431d58b24a9e98614d2e56eed9b4cfd3a089c3f2b986f78572632ed2831d"
+			"url": "https://github.com/tlaplus/CommunityModules/releases/download/202611060952/CommunityModules-deps.jar",
+			"sha256": "a3b27c40f1fb5085f30c6ead37e918457f8cfc62c1e50a1dc668ef592ad2b5fb"
 		},
 		"jre": {
 			"platforms": {
@@ -29,33 +29,33 @@
 					"format": "tar.gz"
 				},
 				"win32-x64": {
-					"version": "21.0.12.1+1",
-					"url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jre_x64_windows_hotspot_21.0.12.1_1.zip",
-					"sha256": "d35f31e712f0fcf6ac5a093edc90204fbff22f720ba3950bd09d331d5e621636",
+					"version": "21.0.13+9",
+					"url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_x64_windows_hotspot_21.0.13_9.zip",
+					"sha256": "2332c0b4cff6bed722da3567c91d5e47568bcba863fa4945d0a8d6fc76158628",
 					"format": "zip"
 				}
 			}
 		}
 	},
 	"lean": {
-		"version": "4.35.0",
-		"toolchain": "leanprover/lean4:v4.35.0",
+		"version": "4.36.0",
+		"toolchain": "leanprover/lean4:v4.36.0",
 		"elan": {
-			"version": "4.2.4",
+			"version": "4.3.0",
 			"platforms": {
 				"darwin-arm64": {
-					"url": "https://github.com/leanprover/elan/releases/download/v4.2.4/elan-aarch64-apple-darwin.tar.gz",
-					"sha256": "7ad829861392c718dfebde3a83b5c8508df47be02af68894b094b0b3952616e5",
+					"url": "https://github.com/leanprover/elan/releases/download/v4.3.0/elan-aarch64-apple-darwin.tar.gz",
+					"sha256": "214c1b610222cf21c76b2b9e31020cfab3bae90e21826f4aac4901c6aa0922b0",
 					"format": "tar.gz"
 				},
 				"darwin-x64": {
-					"url": "https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-apple-darwin.tar.gz",
-					"sha256": "8a340b309d8ed2e96f930761fa223b3af57a38f5d253b53ac90293c9516f8cd4",
+					"url": "https://github.com/leanprover/elan/releases/download/v4.3.0/elan-x86_64-apple-darwin.tar.gz",
+					"sha256": "ecef112ec83c42a5f5006315da1e3d049047f8136ad0444d4a114cb4cb1eeedf",
 					"format": "tar.gz"
 				},
 				"win32-x64": {
-					"url": "https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-pc-windows-msvc.zip",
-					"sha256": "fad2e980a191c15884cc1d80d170ffc5fa84f3774541020145b66d1a644c6111",
+					"url": "https://github.com/leanprover/elan/releases/download/v4.3.0/elan-x86_64-pc-windows-msvc.zip",
+					"sha256": "58dfd3e290560027abe28a4351aee22c216c61e2dda4e259935683ab412e83d8",
 					"format": "zip"
 				}
 			}
@@ -63,18 +63,18 @@
 		"archive": {
 			"platforms": {
 				"darwin-arm64": {
-					"url": "https://github.com/leanprover/lean4/releases/download/v4.35.0/lean-4.35.0-darwin_aarch64.zip",
-					"sha256": "55132a570e3dfc6203626944b262793c0f0f6a8230c0d09344a06ac992fac4a9",
+					"url": "https://github.com/leanprover/lean4/releases/download/v4.36.0/lean-4.36.0-darwin_aarch64.zip",
+					"sha256": "35ea8a8eba3d014feb16414610454322f6aad7679f8f0d9f09fb63754bb16e39",
 					"format": "zip"
 				},
 				"darwin-x64": {
-					"url": "https://github.com/leanprover/lean4/releases/download/v4.35.0/lean-4.35.0-darwin.zip",
-					"sha256": "67002270b63c6cb12d6024fd00a38aa1e5fc9dc9b6c91cd3bd6f5aa34ed333ef",
+					"url": "https://github.com/leanprover/lean4/releases/download/v4.36.0/lean-4.36.0-darwin.zip",
+					"sha256": "39d519550cc574ff8814f5a7d3da9bcc8fd8e27c37ac79ef75a23b66b18fa5e2",
 					"format": "zip"
 				},
 				"win32-x64": {
-					"url": "https://github.com/leanprover/lean4/releases/download/v4.35.0/lean-4.35.0-windows.zip",
-					"sha256": "5fc033e93e1a7bc59c5ebf311103d2c9cd18d4b3eddda4ffa3414e8adb0ef79e",
+					"url": "https://github.com/leanprover/lean4/releases/download/v4.36.0/lean-4.36.0-windows.zip",
+					"sha256": "5af5f955df6cfe37082d71c56c7d47fe620faa9f59e14b917b43976c08dc676b",
 					"format": "zip"
 				}
 			}

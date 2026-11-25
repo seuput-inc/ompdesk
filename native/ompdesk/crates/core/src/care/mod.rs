@@ -278,7 +278,7 @@ use serde_json::json;
 
 use crate::aimemory::ops::{PageAt, ProjectRef, RetireInput};
 use crate::run::Runner;
-use crate::server::{Call, Reply};
+use crate::server::{Call, Reply, Scope};
 use crate::upkeep::model::Model;
 use backfill::Deps;
 use curate::Options;
@@ -322,9 +322,36 @@ struct TickParams {
 /// `care.tick`: one unit's step, the first one due. Answers its name, or null when none is.
 async fn tick(call: Call) -> Result<Reply, Fault> {
     let (common, params): (Common, TickParams) = (call.params()?, call.params()?);
+    let ran = until_cancelled(
+        &call,
+        run_tick(common, params, &call.events, call.scope.clone()),
+    )
+    .await?;
+    json_reply(&ran)
+}
+
+pub(crate) async fn scheduled_tick(
+    settings: &Value,
+    server: Server,
+    events: &Events,
+    scope: Scope,
+) -> Result<(), Fault> {
+    let invalid = |error: serde_json::Error| Fault::new("invalid_params", error.to_string());
+    let mut common = Common::deserialize(settings).map_err(invalid)?;
+    common.server = server;
+    let params = TickParams::deserialize(settings).map_err(invalid)?;
+    run_tick(common, params, events, scope).await.map(drop)
+}
+
+async fn run_tick(
+    common: Common,
+    params: TickParams,
+    events: &Events,
+    scope: Scope,
+) -> Result<Option<String>, Fault> {
     let service = engine::service(&common.service);
     let name = common.service.clone();
-    let ctx = Arc::new(Ctx::new(common, &call.events));
+    let ctx = Arc::new(Ctx::new(common, events));
     let (asked, units) = match params.units {
         Some(units) => (true, units),
         None => (false, units::production()),
@@ -334,7 +361,7 @@ async fn tick(call: Call) -> Result<Reply, Fault> {
         origin: params.origin,
         judge: params.judge,
         git: params.git,
-        scope: call.scope.clone(),
+        scope,
     };
     let config = Tick {
         state_file: &params.state_file,
@@ -343,8 +370,7 @@ async fn tick(call: Call) -> Result<Reply, Fault> {
         asked,
         setup: &setup,
     };
-    let ran = until_cancelled(&call, engine::tick(&service, ctx, &name, &config)).await?;
-    json_reply(&ran)
+    engine::tick(&service, ctx, &name, &config).await
 }
 
 #[derive(Deserialize)]

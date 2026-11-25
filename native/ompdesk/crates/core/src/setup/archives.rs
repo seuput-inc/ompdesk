@@ -55,7 +55,7 @@ impl Platform {
 }
 
 /// `/^v?\d+\.\d+\.\d+$/`.
-fn is_version(text: &str) -> bool {
+pub(super) fn is_version(text: &str) -> bool {
     let digits = text.strip_prefix('v').unwrap_or(text);
     let mut parts = digits.split('.');
     let mut count = 0;
@@ -66,16 +66,6 @@ fn is_version(text: &str) -> bool {
         count += 1;
     }
     count == 3
-}
-
-/// REA's engines range (`reaNodeSupported`, `src/shared/builtin-mcp.ts`, which stays the one spelling main's own
-/// checks use; `archives.test.ts` holds the two to the same answers). `version` is already `is_version`.
-fn rea_node_supported(version: &str) -> bool {
-    let number = |part: &str| part.parse::<u64>().unwrap_or(u64::MAX);
-    let mut parts = version.trim_start_matches('v').split('.');
-    let major = number(parts.next().unwrap_or_default());
-    let minor = number(parts.next().unwrap_or_default());
-    major >= 26 || (major == 22 && minor >= 19) || (major == 24 && minor >= 11)
 }
 
 /// JavaScript's truthiness of a parsed JSON value.
@@ -89,7 +79,7 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-/// The newest LTS in nodejs.org's `dist/index.json` that REA's engines accept, e.g. `v24.11.0`.
+/// The first stable LTS in nodejs.org's newest-first `dist/index.json`.
 pub fn pick_node_lts(index: &Value) -> Option<String> {
     let Value::Array(entries) = index else {
         return None;
@@ -100,8 +90,7 @@ pub fn pick_node_lts(index: &Value) -> Option<String> {
         };
         let version = entry.get("version")?.as_str()?;
         let lts = entry.get("lts")?;
-        (is_version(version) && truthy(lts) && rea_node_supported(version))
-            .then(|| version.to_owned())
+        (is_version(version) && truthy(lts)).then(|| version.to_owned())
     })
 }
 

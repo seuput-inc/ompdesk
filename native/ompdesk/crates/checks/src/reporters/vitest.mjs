@@ -4,6 +4,14 @@ import { appendFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 
 const CASE = { passed: "passed", failed: "failed", skipped: "skipped" };
+/** A failure's first line without colour codes, for the result's `error`; undefined when nothing failed. */
+const firstLine = message =>
+	String(message ?? "")
+		.replace(/\u001b\[[0-9;]*m/g, "")
+		.split("\n")
+		.find(line => line.trim())
+		?.trim()
+		.slice(0, 300);
 
 export default class OmpdeskCheckReporter {
 	out = process.env.OMPDESK_CHECK_RESULTS;
@@ -32,7 +40,8 @@ export default class OmpdeskCheckReporter {
 			let status = CASE[c.result().state] ?? "unknown";
 			if (status === "passed" && d?.flaky) status = "flaky";
 			if (status !== "passed" && status !== "skipped") failed = true;
-			this.write({ runner: "vitest", project, file, abs: mod.moduleId, titles: c.fullName.split(" > "), status, ms: d?.duration ?? 0 });
+			const error = firstLine(c.result().errors?.[0]?.message);
+			this.write({ runner: "vitest", project, file, abs: mod.moduleId, titles: c.fullName.split(" > "), status, ms: d?.duration ?? 0, error });
 		}
 		const state = mod.state();
 		const errors = typeof mod.errors === "function" ? mod.errors() : [];
@@ -64,7 +73,8 @@ export default class OmpdeskCheckReporter {
 				if (status !== "passed" && status !== "skipped") failed = true;
 				const titles = [];
 				for (let s = t; s && s !== f && s.filepath === undefined; s = s.suite) titles.unshift(s.name);
-				this.write({ runner: "vitest", project, file, abs: f.filepath, titles, status, ms: t.result?.duration ?? 0 });
+				const error = firstLine(t.result?.errors?.[0]?.message);
+				this.write({ runner: "vitest", project, file, abs: f.filepath, titles, status, ms: t.result?.duration ?? 0, error });
 			}
 			this.write({ runner: "vitest", project, file, abs: f.filepath, kind: "file", status: failed ? "failed" : "passed", ms: f.result?.duration ?? 0 });
 		}

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StepStalledError } from "../../serial-chain";
 import { getGitChanges, getGitFingerprint, getGitStatus } from "./changes";
-import { gitRaw, REPO_LOCK_HOLD_MS, withRepoLock } from "./exec";
+import { REPO_LOCK_HOLD_MS, withRepoLock } from "./exec";
 import { gitSync, initRepo } from "./test-repos";
 
 let root: string;
@@ -57,8 +57,19 @@ async function gitProcesses(run: () => Promise<unknown>): Promise<number> {
 
 describe("git call environment", () => {
 	it("never lets a git call take optional locks (a status refresh may not collide with the agent's own git)", async () => {
-		const echoed = await gitRaw(root, ["-c", "alias.show-lock=!echo $GIT_OPTIONAL_LOCKS", "show-lock"]);
-		expect(echoed.stdout.toString("utf8").trim()).toBe("0");
+		const index = path.join(root, ".git", "index");
+		const before = await fs.readFile(index);
+		await fs.utimes(path.join(root, "README.md"), 946684800, 946684800);
+		vi.stubEnv("GIT_OPTIONAL_LOCKS", "1");
+		try {
+			expect(await getGitStatus(root)).toMatchObject({ isRepo: true, unstaged: 0 });
+			expect(await fs.readFile(index)).toEqual(before);
+			// With optional locks enabled, the same status refresh writes the changed stat data.
+			gitSync(root, "status", "--porcelain=v2");
+			expect(await fs.readFile(index)).not.toEqual(before);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 });
 

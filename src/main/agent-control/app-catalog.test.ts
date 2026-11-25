@@ -18,7 +18,6 @@ import {
 import { PANEL_TABS, VIEW_SHEETS } from "../../renderer/stores/ui";
 import { ACCOUNT_ROTATION_PREF } from "../../shared/account-rotation";
 import { AGENT_PANEL_TABS, AGENT_VIEW_SHEETS, PRIVACY_PANES } from "../../shared/agent-control";
-import { REA_PREF } from "../../shared/builtin-mcp";
 import { DEFAULT_BROWSER_PREF } from "../../shared/default-browser";
 import {
 	APP_AUTO_UPDATE_PREF,
@@ -139,7 +138,6 @@ describe("action registry", () => {
 			judgeAssist: JUDGE_ASSIST_PREF,
 			appAutoUpdate: APP_AUTO_UPDATE_PREF,
 			toolsAutoUpdate: TOOLS_AUTO_UPDATE_PREF,
-			builtinRea: REA_PREF,
 			rotation: ACCOUNT_ROTATION_PREF,
 			localEngines: LOCAL_ENGINE_DETECT_PREF,
 		};

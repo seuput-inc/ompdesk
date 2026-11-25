@@ -117,7 +117,7 @@ Comments follow the same rule as the reply. Write them clean as you go. Keep a c
 
 ## Playbooks
 
-Open a `todo` list whose first items are the matched playbook's steps, copied in one per step in its order, before any task-specific todos. Write each copied step in the todo language your `<reply-language>` section sets (word for word without one), keeping skill, tool and file names as written. A step you choose not to do stays in the list with a one-line `skip: <reason>`. Match the task to a playbook below and open its full steps at the `skill://poteto-mode/playbooks/<file>.md` path printed after the entry. Copy its steps in that way.
+Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. Copy one item per new numbered step in order, before task-specific items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. A step you choose not to do stays in the list with a one-line `skip: <reason>`. Match the task to a playbook below and open its full steps at the `skill://poteto-mode/playbooks/<file>.md` path printed after the entry. Copy its steps in that way.
 
 A large or cross-cutting effort (a migration across many call sites, an ambitious multi-part change), or work the user steps away from to trust later, routes to the **figure-it-out** skill even when a narrower playbook like Feature fits. Use **figure-it-out** whenever no bundled playbook fits. It designs a bespoke, rigorous playbook for the task. A standing project-scale program (multi-day, many stacked PRs) routes to **figure-it-out** too, with each unit as an OMPdesk session (`ompdesk_session_open`).
 
@@ -139,7 +139,7 @@ A large or cross-cutting effort (a migration across many call sites, an ambitiou
 - **Autopilot-full.** A queue of independent PRs run to merged with full autonomy. One owner per PR carries build through merge, and the root swarm-verifies each PR before its owner merges ("autopilot this queue", "full autopilot", one-owner-per-PR programs).
 - **Autopilot-stack.** Autopilot-full without the merge. A queue of PRs built and verified with full autonomy, then handed to the operator to land. A PR stacks only on a PR it builds on ("autopilot-stack", "autopilot, don't merge", "stack them, don't ship", "build the stack, I'll land it").
 - **Session pickup.** Resuming or taking over a prior agent's in-flight work from a transcript, hosted-agent URL, or pushed branch.
-- **Pause safely.** Suspending in-flight work cleanly so it can be resumed, on an explicit pause, going offline, an omp or OMPdesk restart, or imminent context compaction. The complement to Session pickup.
+- **Pause safely.** Suspending in-flight work cleanly so it can be resumed, on an explicit pause, going offline, an omp restart you start yourself, or imminent context compaction. The complement to Session pickup.
 - **Multi-phase or multi-PR plan.** Work that spans phases or stacked PRs. File: `playbooks/multi-phase-plan.md`.
 - **Worktree and simulator cleanup.** Reclaiming local disk by pruning merged or abandoned git worktrees and stale iOS simulators ("what's using my disk", "clean up worktrees", "prune safe-to-prune worktrees", "free up space", "delete old simulators"). File: `playbooks/worktree-cleanup.md`.
 - **Opening a PR.** Invoked at the end of every other playbook.

@@ -19,3 +19,10 @@ export interface CreditSpendState {
 export function creditSpendEnabled(value: unknown): boolean {
 	return value === true;
 }
+
+/**
+ * How the gui-bridge words the request it refused because the plan is spent and the switch is off (`planSpentError`
+ * in resources/gui-bridge/credit-spend-core.ts; `bridge-credit-spend.test.ts` holds the two together). The error card
+ * reads it to say why the turn stopped.
+ */
+export const CREDIT_SPEND_OFF_WORDING = /Credit use setting is off/;

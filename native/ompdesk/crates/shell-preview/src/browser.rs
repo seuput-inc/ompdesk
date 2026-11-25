@@ -1,0 +1,1117 @@
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::process::ExitStatus;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use serde_json::{Value, json};
+use tokio::sync::{Mutex, broadcast};
+use tokio::task::JoinHandle;
+
+use crate::initialization::Initializations;
+use crate::request::Requests;
+use crate::transport::Transport;
+use crate::{Error, Event, PageInitializer, RequestDisposition, RequestHandler, Result};
+
+pub struct LaunchConfig {
+    /// An absolute executable selected by trusted packaging, never a page-supplied path.
+    pub executable: PathBuf,
+    /// The application's private disposable Preview storage root, not a user's browser profile.
+    pub profile_root: PathBuf,
+    pub command_timeout: Duration,
+}
+
+pub struct Navigation {
+    pub session_id: String,
+    pub frame_id: String,
+    pub url: String,
+}
+
+/// Adapts the host's existing navigation authorization. No allow-list is stored in the browser service.
+pub trait NavigationHandler: Send + Sync {
+    fn allow(&self, navigation: Navigation) -> Pin<Box<dyn Future<Output = bool> + Send>>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Viewport {
+    pub width: u32,
+    pub height: u32,
+    pub device_scale_factor: f64,
+}
+
+impl Viewport {
+    fn params(self) -> Result<Value> {
+        if self.width == 0
+            || self.height == 0
+            || self.width > 16384
+            || self.height > 16384
+            || !self.device_scale_factor.is_finite()
+            || !(0.25..=8.0).contains(&self.device_scale_factor)
+        {
+            return Err(Error::new("invalid", "Invalid Preview viewport"));
+        }
+        Ok(json!({"width":self.width,"height":self.height,
+            "deviceScaleFactor":self.device_scale_factor,"mobile":false}))
+    }
+}
+
+#[derive(Debug)]
+pub struct Partition {
+    pub context_id: String,
+}
+
+pub struct Browser {
+    transport: Transport,
+    profile: PathBuf,
+    policy: Mutex<Option<JoinHandle<()>>>,
+    shutdown: Mutex<()>,
+    cleaned: AtomicBool,
+    initializations: Arc<Initializations>,
+}
+
+/// Owns one actual Chromium target. The caller owns native wc/view IDs and access checks.
+pub struct Page {
+    pub target_id: String,
+    pub session_id: String,
+    transport: Transport,
+    closed: AtomicBool,
+    closing: Mutex<()>,
+    /// Device pixels per DIP of the page's own view, measured before any emulation (the view a screencast captures).
+    view_scale: f64,
+    /// Bits of the `f64` factor `resize_framed` emulates on top of the layout.
+    emulation_scale: AtomicU64,
+}
+
+static PROFILE_ID: AtomicU64 = AtomicU64::new(1);
+
+impl Browser {
+    pub async fn launch(config: LaunchConfig) -> Result<Self> {
+        Self::launch_inner(config, None, None, None).await
+    }
+
+    pub async fn launch_with_navigation(
+        config: LaunchConfig,
+        handler: Arc<dyn NavigationHandler>,
+    ) -> Result<Self> {
+        Self::launch_inner(config, Some(handler), None, None).await
+    }
+
+    pub async fn launch_with_hooks(
+        config: LaunchConfig,
+        navigation: Arc<dyn NavigationHandler>,
+        initializer: Arc<dyn PageInitializer>,
+    ) -> Result<Self> {
+        Self::launch_inner(config, Some(navigation), Some(initializer), None).await
+    }
+
+    pub async fn launch_with_request_handler(
+        config: LaunchConfig,
+        navigation: Arc<dyn NavigationHandler>,
+        initializer: Arc<dyn PageInitializer>,
+        requests: Arc<dyn RequestHandler>,
+    ) -> Result<Self> {
+        Self::launch_inner(config, Some(navigation), Some(initializer), Some(requests)).await
+    }
+
+    async fn launch_inner(
+        config: LaunchConfig,
+        handler: Option<Arc<dyn NavigationHandler>>,
+        initializer: Option<Arc<dyn PageInitializer>>,
+        requests: Option<Arc<dyn RequestHandler>>,
+    ) -> Result<Self> {
+        if !config.executable.is_absolute()
+            || !config.profile_root.is_absolute()
+            || config.command_timeout.is_zero()
+            || config.command_timeout > Duration::from_secs(120)
+        {
+            return Err(Error::new(
+                "invalid",
+                "Preview requires trusted absolute paths and a bounded timeout",
+            ));
+        }
+        let executable = tokio::fs::canonicalize(&config.executable).await?;
+        if !tokio::fs::metadata(&executable).await?.is_file() {
+            return Err(Error::new("invalid", "Preview executable is not a file"));
+        }
+        tokio::fs::create_dir_all(&config.profile_root).await?;
+        let profile = loop {
+            let id = PROFILE_ID.fetch_add(1, Ordering::Relaxed);
+            let path = config
+                .profile_root
+                .join(format!("preview-{}-{id}", std::process::id()));
+            let directory = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            let directory = {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut directory = directory;
+                directory.mode(0o700);
+                directory
+            };
+            // Creation cannot yield before ownership is recorded, and the profile is private from its first inode.
+            match directory.create(&path) {
+                Ok(()) => break path,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        };
+        let transport = match Transport::launch(&executable, &profile, config.command_timeout).await
+        {
+            Ok(transport) => transport,
+            Err(error) => {
+                let _ = tokio::fs::remove_dir_all(&profile).await;
+                return Err(error);
+            }
+        };
+        let events = transport.subscribe_policy();
+        let initializations = Arc::new(Initializations::new(initializer, config.command_timeout));
+        let requests =
+            requests.map(|handler| Arc::new(Requests::new(handler, config.command_timeout)));
+        let policy = tokio::spawn(enforce_policy(
+            transport.clone(),
+            events,
+            handler,
+            initializations.clone(),
+            requests,
+        ));
+        let browser = Self {
+            transport,
+            profile,
+            policy: Mutex::new(Some(policy)),
+            shutdown: Mutex::new(()),
+            cleaned: AtomicBool::new(false),
+            initializations,
+        };
+        let initialized = browser.command("Browser.getVersion", json!({}), None).await;
+        if let Err(error) = initialized {
+            let _ = browser.shutdown().await;
+            return Err(error);
+        }
+        if let Err(error) = browser
+            .command("Target.setAutoAttach", auto_attach(), None)
+            .await
+        {
+            let _ = browser.shutdown().await;
+            return Err(error);
+        }
+        Ok(browser)
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.transport.pid()
+    }
+
+    pub fn subscribe(&self) -> crate::EventReceiver {
+        self.transport.subscribe()
+    }
+
+    /// Trusted host-only CDP. Session IDs are the browser's actual IDs; authorization remains with the host.
+    pub async fn command(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value> {
+        self.transport.request(method, params, session).await
+    }
+
+    /// Queues a trusted command before returning; only the reply is awaited afterwards.
+    pub fn submit_command(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<crate::CommandReply> {
+        self.transport.submit(method, params, session)
+    }
+
+    /// `submit_command` for a host mutation: the reply waits for Chromium's answer or connection loss, never the read
+    /// deadline.
+    pub fn submit_command_settled(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<crate::CommandReply> {
+        self.transport.submit_settled(method, params, session)
+    }
+
+    /// Host mutations settle on the actual CDP answer or connection loss, not the read deadline.
+    pub async fn command_settled(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value> {
+        self.transport
+            .request_settled(method, params, session)
+            .await
+    }
+
+    pub async fn create_partition(&self) -> Result<Partition> {
+        let mut transaction = Creation::new(&self.transport);
+        let context = self
+            .command(
+                "Target.createBrowserContext",
+                json!({"disposeOnDetach":true}),
+                None,
+            )
+            .await?;
+        let context_id = string_field(&context, "browserContextId")?;
+        self.command(
+            "Browser.grantPermissions",
+            json!({"browserContextId":context_id,"permissions":[]}),
+            None,
+        )
+        .await?;
+        self.command(
+            "Browser.setDownloadBehavior",
+            json!({"browserContextId":context_id,
+            "behavior":"deny","eventsEnabled":true}),
+            None,
+        )
+        .await?;
+        transaction.commit();
+        Ok(Partition { context_id })
+    }
+
+    pub async fn close_partition(&self, partition: &Partition) -> Result<()> {
+        self.command(
+            "Target.disposeBrowserContext",
+            json!({"browserContextId":partition.context_id}),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn create_page(&self, partition: &Partition, viewport: Viewport) -> Result<Page> {
+        let metrics = viewport.params()?;
+        let mut transaction = Creation::new(&self.transport);
+        let target = self
+            .command(
+                "Target.createTarget",
+                json!({"url":"about:blank","browserContextId":partition.context_id}),
+                None,
+            )
+            .await
+            .map_err(|error| {
+                Error::new(
+                    error.code,
+                    format!("Page target creation: {}", error.message),
+                )
+            })?;
+        let target_id = string_field(&target, "targetId")?;
+        let attached = self
+            .initializations
+            .wait(&target_id)
+            .await
+            .map_err(|error| {
+                Error::new(
+                    error.code,
+                    format!("Page initialization: {}", error.message),
+                )
+            })?;
+        let mut page = Page {
+            target_id,
+            session_id: attached.session_id,
+            transport: attached.transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+            view_scale: 1.0,
+            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
+        };
+        // Before the first override: the page still reports its own view's scale.
+        page.view_scale = page
+            .evaluate("window.devicePixelRatio", false)
+            .await
+            .map_err(|error| Error::new(error.code, format!("Page view scale: {}", error.message)))?
+            .as_f64()
+            .filter(|scale| scale.is_finite() && (0.25..=8.0).contains(scale))
+            .ok_or_else(|| Error::new("cdp", "Chromium reported no usable view scale"))?;
+        page.command("Emulation.setDeviceMetricsOverride", metrics)
+            .await
+            .map_err(|error| {
+                Error::new(
+                    error.code,
+                    format!("Page viewport setup: {}", error.message),
+                )
+            })?;
+        transaction.commit();
+        Ok(page)
+    }
+
+    /// Returns only after the exact browser process exited and the owned profile was removed.
+    pub async fn shutdown(&self) -> Result<ExitStatus> {
+        let _hold = self.shutdown.lock().await;
+        let status = self.transport.shutdown().await?;
+        if let Some(policy) = self.policy.lock().await.take() {
+            policy.abort();
+            let _ = policy.await;
+        }
+        if !self.cleaned.load(Ordering::Acquire) {
+            match tokio::fs::remove_dir_all(&self.profile).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.cleaned.store(true, Ordering::Release);
+        }
+        Ok(status)
+    }
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        if let Some(policy) = self.policy.get_mut().take() {
+            policy.abort();
+        }
+        if self.cleaned.load(Ordering::Acquire) {
+            return;
+        }
+        let transport = self.transport.clone();
+        let profile = self.profile.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                if transport.shutdown().await.is_ok() {
+                    let _ = tokio::fs::remove_dir_all(profile).await;
+                }
+            });
+        }
+    }
+}
+
+impl Page {
+    pub async fn command(&self, method: &str, params: Value) -> Result<Value> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .request(method, params, Some(&self.session_id))
+            .await
+    }
+
+    /// Queues a trusted command now; the returned reply is awaited later without reordering later submissions.
+    pub fn submit_command(&self, method: &str, params: Value) -> Result<crate::CommandReply> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .submit(method, params, Some(&self.session_id))
+    }
+
+    pub async fn command_settled(&self, method: &str, params: Value) -> Result<Value> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .request_settled(method, params, Some(&self.session_id))
+            .await
+    }
+
+    /// Queues `Page.navigate` and returns its reply unawaited. Chromium answers only once the navigation commits or
+    /// fails, so a host that keeps serving `Page.stopLoading` and later loads must not wait for it in line.
+    pub fn submit_navigation(&self, url: &str) -> Result<crate::CommandReply> {
+        if !web_url(url) {
+            return Err(Error::new(
+                "denied",
+                "Preview navigation requires HTTP or HTTPS",
+            ));
+        }
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::new("gone", "Preview page is closed"));
+        }
+        self.transport
+            .submit_settled("Page.navigate", json!({"url":url}), Some(&self.session_id))
+    }
+
+    pub async fn navigate(&self, url: &str) -> Result<Value> {
+        let result = self.submit_navigation(url)?.receive().await?;
+        if let Some(error) = result.get("errorText").and_then(Value::as_str) {
+            return Err(Error::new("navigation", error));
+        }
+        Ok(result)
+    }
+
+    pub async fn evaluate(&self, expression: &str, user_gesture: bool) -> Result<Value> {
+        let result = self
+            .command(
+                "Runtime.evaluate",
+                json!({"expression":expression,
+            "awaitPromise":true,"returnByValue":true,"userGesture":user_gesture}),
+            )
+            .await?;
+        evaluated(result)
+    }
+
+    pub async fn isolated_world(&self, name: &str) -> Result<i64> {
+        let tree = self
+            .transport
+            .request("Page.getFrameTree", json!({}), Some(&self.session_id))
+            .await?;
+        let frame = tree
+            .pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new("cdp", "Chromium returned no root frame"))?;
+        let world = self
+            .transport
+            .request(
+                "Page.createIsolatedWorld",
+                json!({"frameId":frame,
+            "worldName":name,"grantUniveralAccess":false}),
+                Some(&self.session_id),
+            )
+            .await?;
+        world
+            .get("executionContextId")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| Error::new("cdp", "Chromium returned no isolated world"))
+    }
+
+    pub async fn resize(&self, viewport: Viewport) -> Result<()> {
+        self.command_settled("Emulation.setDeviceMetricsOverride", viewport.params()?)
+            .await?;
+        self.emulation_scale
+            .store(1.0_f64.to_bits(), Ordering::Release);
+        Ok(())
+    }
+
+    /// Lays the page out as `layout` and sizes Chromium's view so a screencast frame is `frame` pixels (the view's
+    /// DIP size rounds up for a view scale that is not an integer).
+    ///
+    /// A screencast frame is the view's size times the view's own scale (`Page.startScreencast` sizes it from the
+    /// compositor viewport, never from the emulated `deviceScaleFactor`), and `Emulation.setDeviceMetricsOverride`
+    /// alone sets the view to the layout size: a page laid out at 390 CSS px with `deviceScaleFactor` 2 on a 1× view
+    /// streams 390 px frames. This is `Page.captureScreenshot`'s own recipe for a resolution above the view's: the
+    /// view is sized apart from the layout (`Emulation.setVisibleSize`, then metrics with `dontSetVisibleSize`), and the emulated
+    /// page is scaled by `deviceScaleFactor` over the view's scale so it fills the larger view. Chromium takes input
+    /// in that scaled space, so a CSS point is sent at `emulation_scale` times its coordinates.
+    pub async fn resize_framed(&self, layout: Viewport, frame: (u32, u32)) -> Result<()> {
+        let (width, height) = visible_size(frame, self.view_scale)?;
+        let scale = layout.device_scale_factor / self.view_scale;
+        let mut metrics = layout.params()?;
+        metrics["dontSetVisibleSize"] = json!(true);
+        metrics["scale"] = json!(scale);
+        // Chromium's SetVisibleSize replies in the browser; put it before the renderer's metrics acknowledgement.
+        self.command_settled(
+            "Emulation.setVisibleSize",
+            json!({"width":width,"height":height}),
+        )
+        .await?;
+        self.command_settled("Emulation.setDeviceMetricsOverride", metrics)
+            .await?;
+        self.emulation_scale
+            .store(scale.to_bits(), Ordering::Release);
+        Ok(())
+    }
+
+    /// The factor Chromium applies to the emulated page on top of its layout (1 unless `resize_framed` set one):
+    /// `Input.dispatch*` coordinates in CSS pixels are taken at this multiple.
+    pub fn emulation_scale(&self) -> f64 {
+        f64::from_bits(self.emulation_scale.load(Ordering::Acquire))
+    }
+
+    /// CDP clip coordinates are CSS pixels; clip.scale and deviceScaleFactor are not rewritten.
+    pub async fn capture(&self, mut options: Value) -> Result<Vec<u8>> {
+        let object = options
+            .as_object_mut()
+            .ok_or_else(|| Error::new("invalid", "Capture options must be an object"))?;
+        object.entry("format").or_insert(json!("png"));
+        object.entry("fromSurface").or_insert(json!(true));
+        let result = self.command("Page.captureScreenshot", options).await?;
+        decoded(&result)
+    }
+
+    pub async fn pdf(&self, mut options: Value) -> Result<Vec<u8>> {
+        let object = options
+            .as_object_mut()
+            .ok_or_else(|| Error::new("invalid", "PDF options must be an object"))?;
+        object.insert("transferMode".into(), json!("ReturnAsBase64"));
+        decoded(&self.command("Page.printToPDF", options).await?)
+    }
+
+    pub async fn start_screencast(&self, options: Value) -> Result<()> {
+        self.command_settled("Page.startScreencast", options)
+            .await?;
+        Ok(())
+    }
+
+    /// ACK only after the compositor or phone stream consumed this frame. Never ACK an unrelated page's frame.
+    pub async fn ack_frame(&self, session_id: i64) -> Result<()> {
+        self.command_settled("Page.screencastFrameAck", json!({"sessionId":session_id}))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn stop_screencast(&self) -> Result<()> {
+        self.command_settled("Page.stopScreencast", json!({}))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn close(&self) -> Result<()> {
+        let _closing = self.closing.lock().await;
+        if self.closed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if let Err(error) = self
+            .transport
+            .request_settled(
+                "Target.closeTarget",
+                json!({"targetId":self.target_id}),
+                None,
+            )
+            .await
+        {
+            // Chromium rejects closing a target that is already gone, but the same code covers other refusals.
+            if error.code != "cdp_error" || self.target_exists().await? {
+                return Err(error);
+            }
+        }
+        self.closed.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn target_exists(&self) -> Result<bool> {
+        let targets = self
+            .transport
+            .request("Target.getTargets", json!({}), None)
+            .await?;
+        let infos = targets
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new("cdp", "Chromium returned no target list"))?;
+        Ok(infos.iter().any(|info| {
+            info.get("targetId").and_then(Value::as_str) == Some(self.target_id.as_str())
+        }))
+    }
+}
+
+fn evaluated(mut result: Value) -> Result<Value> {
+    if result.get("exceptionDetails").is_some() {
+        // Page exception text can contain credentials and local paths. The caller can inspect raw CDP when authorized.
+        return Err(Error::new("failed", "Preview script threw an exception"));
+    }
+    Ok(result
+        .pointer_mut("/result/value")
+        .map(Value::take)
+        .unwrap_or(Value::Null))
+}
+
+fn decoded(result: &Value) -> Result<Vec<u8>> {
+    let data = result
+        .get("data")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("cdp", "Chromium returned no encoded bytes"))?;
+    STANDARD
+        .decode(data)
+        .map_err(|_| Error::new("cdp", "Chromium returned invalid encoded bytes"))
+}
+
+fn string_field(value: &Value, key: &str) -> Result<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new("cdp", "Chromium returned no target or context identifier"))
+}
+
+/// The DIP size of a view whose device pixels are `frame` (each side 1..=16384, the largest frame a Preview paints),
+/// given the view's own pixels per DIP. A scale that is not an integer rounds the DIP up to a whole one.
+fn visible_size(frame: (u32, u32), view_scale: f64) -> Result<(u32, u32)> {
+    let side = |pixels: u32| {
+        let dip = (f64::from(pixels) / view_scale).ceil();
+        ((1..=16384).contains(&pixels) && dip.is_finite() && dip >= 1.0).then_some(dip as u32)
+    };
+    match (side(frame.0), side(frame.1)) {
+        (Some(width), Some(height)) => Ok((width, height)),
+        _ => Err(Error::new("invalid", "Invalid Preview frame size")),
+    }
+}
+
+fn web_url(url: &str) -> bool {
+    if url == "about:blank" || url == "about:srcdoc" {
+        return true;
+    }
+    url::Url::parse(url).is_ok_and(|parsed| {
+        matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()
+    })
+}
+
+fn interception(all_resources: bool) -> Value {
+    if all_resources {
+        json!({"patterns":[{"urlPattern":"*","requestStage":"Request"}]})
+    } else {
+        json!({"patterns":[{"urlPattern":"*","resourceType":"Document","requestStage":"Request"}]})
+    }
+}
+
+fn auto_attach() -> Value {
+    json!({"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true,
+        "filter":[{"type":"page"},{"type":"iframe"}]})
+}
+
+async fn enforce_policy(
+    transport: Transport,
+    mut events: broadcast::Receiver<Event>,
+    handler: Option<Arc<dyn NavigationHandler>>,
+    initializations: Arc<Initializations>,
+    requests: Option<Arc<Requests>>,
+) {
+    let mut operations = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            result = operations.join_next(), if !operations.is_empty() => {
+                if !matches!(result, Some(Ok(Ok(())))) {
+                    let _ = transport.shutdown().await;
+                    return;
+                }
+            }
+            event = events.recv() => {
+                let event = match event {
+                    Ok(event) => event,
+                    Err(_) => {
+                        let _ = transport.shutdown().await;
+                        return;
+                    }
+                };
+                if !matches!(event.method.as_str(), "Target.attachedToTarget" | "Target.detachedFromTarget" | "Fetch.requestPaused") {
+                    continue;
+                }
+                if operations.len() >= 256 {
+                    let _ = transport.shutdown().await;
+                    return;
+                }
+                let transport = transport.clone();
+                let handler = handler.clone();
+                let initializations = initializations.clone();
+                let requests = requests.clone();
+                operations.spawn(async move {
+                    policy_event(&transport, &event, handler.as_deref(), &initializations, requests.as_deref()).await
+                });
+            }
+        }
+    }
+}
+
+async fn policy_event(
+    transport: &Transport,
+    event: &Event,
+    handler: Option<&dyn NavigationHandler>,
+    initializations: &Initializations,
+    requests: Option<&Requests>,
+) -> Result<()> {
+    match event.method.as_str() {
+        "Target.attachedToTarget" => {
+            let waiting = event
+                .params
+                .get("waitingForDebugger")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !waiting {
+                return Ok(());
+            }
+            let target = event
+                .params
+                .get("targetInfo")
+                .ok_or_else(|| Error::new("cdp", "Missing attached target"))?;
+            let id = string_field(target, "targetId")?;
+            let session = string_field(&event.params, "sessionId")?;
+            if target.get("openerId").is_some() {
+                transport
+                    .request(
+                        "Fetch.enable",
+                        interception(requests.is_some()),
+                        Some(&session),
+                    )
+                    .await?;
+                // A paused popup can hold window.open and the opener's input reply. Close first, then release that pause.
+                let (closed, resumed) = tokio::join!(
+                    transport.request("Target.closeTarget", json!({"targetId":id}), None),
+                    transport.request("Runtime.runIfWaitingForDebugger", json!({}), Some(&session)),
+                );
+                for result in [closed, resumed] {
+                    if let Err(error) = result
+                        && error.code != "cdp_error"
+                    {
+                        return Err(error);
+                    }
+                }
+            } else {
+                let (completion, owner) = initializations.begin(&id, &session).await;
+                let result: Result<_> = async {
+                    let attached = if owner {
+                        transport
+                            .request("Page.enable", json!({}), Some(&session))
+                            .await?;
+                        transport
+                            .request("Runtime.enable", json!({}), Some(&session))
+                            .await?;
+                        transport
+                            .request("Network.enable", json!({}), Some(&session))
+                            .await?;
+                        transport
+                            .request(
+                                "Fetch.enable",
+                                interception(requests.is_some()),
+                                Some(&session),
+                            )
+                            .await?;
+                        transport
+                            .request("Target.setAutoAttach", auto_attach(), Some(&session))
+                            .await?;
+                        initializations
+                            .initialize(transport, target, &session)
+                            .await?
+                    } else {
+                        initializations.wait(&id).await?
+                    };
+                    transport
+                        .request("Runtime.runIfWaitingForDebugger", json!({}), Some(&session))
+                        .await?;
+                    Ok(attached)
+                }
+                .await;
+                if owner {
+                    completion.send_replace(Some(result.clone()));
+                }
+                result?;
+            }
+        }
+        "Target.detachedFromTarget" => {
+            if let (Some(target), Some(session)) = (
+                event.params.get("targetId").and_then(Value::as_str),
+                event.params.get("sessionId").and_then(Value::as_str),
+            ) {
+                initializations.detached(target, session).await;
+            }
+        }
+        "Fetch.requestPaused" => {
+            let id = string_field(&event.params, "requestId")?;
+            let url = event
+                .params
+                .pointer("/request/url")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let target = match transport
+                .request(
+                    "Target.getTargetInfo",
+                    json!({}),
+                    event.session_id.as_deref(),
+                )
+                .await
+            {
+                Ok(target) => target,
+                Err(error) if error.code == "cdp_error" => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            let popup = target.pointer("/targetInfo/openerId").is_some();
+            let document =
+                event.params.get("resourceType").and_then(Value::as_str) == Some("Document");
+            let mut allowed = !popup && (!document || web_url(url));
+            if allowed
+                && document
+                && let Some(handler) = handler
+            {
+                let navigation = Navigation {
+                    session_id: event
+                        .session_id
+                        .clone()
+                        .ok_or_else(|| Error::new("cdp", "Missing navigation session"))?,
+                    frame_id: string_field(&event.params, "frameId")?,
+                    url: url.to_owned(),
+                };
+                allowed = tokio::time::timeout(Duration::from_secs(2), handler.allow(navigation))
+                    .await
+                    .unwrap_or(false);
+            }
+            if allowed && let Some(requests) = requests {
+                let target = target
+                    .get("targetInfo")
+                    .ok_or_else(|| Error::new("cdp", "Paused request has no target"))?;
+                match requests.handle(transport, target, event).await {
+                    Ok(RequestDisposition::Handled) => return Ok(()),
+                    Ok(RequestDisposition::Unhandled) => {}
+                    Err(_) => {
+                        if let Err(error) = transport
+                            .request(
+                                "Fetch.failRequest",
+                                json!({"requestId":id,"errorReason":"Failed"}),
+                                event.session_id.as_deref(),
+                            )
+                            .await
+                            && error.code != "cdp_error"
+                        {
+                            return Err(error);
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+            let (method, params) = if allowed {
+                ("Fetch.continueRequest", json!({"requestId":id}))
+            } else {
+                (
+                    "Fetch.failRequest",
+                    json!({"requestId":id,"errorReason":if document { "Aborted" } else { "BlockedByClient" }}),
+                )
+            };
+            if let Err(error) = transport
+                .request(method, params, event.session_id.as_deref())
+                .await
+            {
+                // This static response also races ordinary navigation cancellation and target disposal.
+                if error.code != "cdp_error" {
+                    return Err(error);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// A cancelled creation has an uncertain side effect. End its browser instead of leaving an unowned context or target.
+struct Creation {
+    transport: Option<Transport>,
+}
+impl Creation {
+    fn new(transport: &Transport) -> Self {
+        Self {
+            transport: Some(transport.clone()),
+        }
+    }
+    fn commit(&mut self) {
+        self.transport = None;
+    }
+}
+impl Drop for Creation {
+    fn drop(&mut self) {
+        if let Some(transport) = self.transport.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                let _ = transport.shutdown().await;
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::test_support::{command, connected};
+    use tokio::io::{AsyncWriteExt, BufReader};
+
+    async fn closing(targets: Value) -> (Result<()>, bool, Vec<String>) {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let page = Arc::new(Page {
+            target_id: "page-1".into(),
+            session_id: "session-1".into(),
+            transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+            view_scale: 1.0,
+            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
+        });
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let task = {
+            let page = Arc::clone(&page);
+            tokio::spawn(async move { page.close().await })
+        };
+        let mut methods = Vec::new();
+        let close = command(&mut read).await;
+        methods.push(close["method"].as_str().unwrap().to_owned());
+        let id = close["id"].as_u64().unwrap();
+        write
+            .write_all(
+                format!("{{\"id\":{id},\"error\":{{\"code\":-32602,\"message\":\"No target with given id found\"}}}}\0")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let list = command(&mut read).await;
+        methods.push(list["method"].as_str().unwrap().to_owned());
+        let id = list["id"].as_u64().unwrap();
+        write
+            .write_all(format!("{{\"id\":{id},\"result\":{targets}}}\0").as_bytes())
+            .await
+            .unwrap();
+        let result = task.await.unwrap();
+        (result, page.closed.load(Ordering::Acquire), methods)
+    }
+
+    #[tokio::test]
+    async fn rejected_close_succeeds_only_when_the_target_is_actually_gone() {
+        let (gone, closed, methods) = closing(json!({"targetInfos":[{"targetId":"other"}]})).await;
+        assert!(gone.is_ok());
+        assert!(closed);
+        assert_eq!(methods, ["Target.closeTarget", "Target.getTargets"]);
+
+        let (refused, closed, _) = closing(json!({"targetInfos":[{"targetId":"page-1"}]})).await;
+        assert_eq!(refused.unwrap_err().code, "cdp_error");
+        assert!(!closed);
+
+        let (malformed, closed, _) = closing(json!({})).await;
+        assert_eq!(malformed.unwrap_err().code, "cdp");
+        assert!(!closed);
+    }
+
+    #[tokio::test]
+    async fn submitted_page_commands_are_queued_before_their_replies_are_awaited() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let page = Page {
+            target_id: "page-1".into(),
+            session_id: "session-1".into(),
+            transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+            view_scale: 1.0,
+            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
+        };
+        let first = page
+            .submit_command("Runtime.evaluate", json!({"n": 1}))
+            .unwrap();
+        let second = page
+            .submit_command("Input.insertText", json!({"n": 2}))
+            .unwrap();
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let a = command(&mut read).await;
+        let b = command(&mut read).await;
+        assert_eq!(a["method"], "Runtime.evaluate");
+        assert_eq!(b["method"], "Input.insertText");
+        assert_eq!(a["sessionId"], "session-1");
+        for value in [&b, &a] {
+            let id = value["id"].as_u64().unwrap();
+            write
+                .write_all(
+                    format!(
+                        "{{\"id\":{id},\"sessionId\":\"session-1\",\"result\":{{\"id\":{id}}}}}\0"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(second.receive().await.unwrap()["id"], b["id"]);
+        assert_eq!(first.receive().await.unwrap()["id"], a["id"]);
+
+        page.closed.store(true, Ordering::Release);
+        assert_eq!(
+            page.submit_command("Runtime.evaluate", json!({}))
+                .err()
+                .unwrap()
+                .code,
+            "gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_submitted_navigation_is_queued_ahead_of_a_later_stop_and_answers_after_it() {
+        let (transport, peer) = connected(Duration::from_secs(10));
+        let page = Page {
+            target_id: "page-1".into(),
+            session_id: "session-1".into(),
+            transport,
+            closed: AtomicBool::new(false),
+            closing: Mutex::new(()),
+            view_scale: 1.0,
+            emulation_scale: AtomicU64::new(1.0_f64.to_bits()),
+        };
+        assert_eq!(
+            page.submit_navigation("file:///secret").err().unwrap().code,
+            "denied"
+        );
+        let navigation = page.submit_navigation("http://127.0.0.1:1/slow").unwrap();
+        let stop = page.submit_command("Page.stopLoading", json!({})).unwrap();
+        let (read, mut write) = tokio::io::split(peer);
+        let mut read = BufReader::new(read);
+        let first = command(&mut read).await;
+        let second = command(&mut read).await;
+        assert_eq!(first["method"], "Page.navigate");
+        assert_eq!(first["params"]["url"], "http://127.0.0.1:1/slow");
+        assert_eq!(first["sessionId"], "session-1");
+        assert_eq!(second["method"], "Page.stopLoading");
+        for (value, result) in [
+            (&second, "{}"),
+            (&first, "{\"errorText\":\"net::ERR_ABORTED\"}"),
+        ] {
+            let id = value["id"].as_u64().unwrap();
+            write
+                .write_all(
+                    format!("{{\"id\":{id},\"sessionId\":\"session-1\",\"result\":{result}}}\0")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+        stop.receive().await.unwrap();
+        assert_eq!(
+            navigation.receive().await.unwrap()["errorText"],
+            "net::ERR_ABORTED"
+        );
+    }
+
+    #[test]
+    fn navigation_never_accepts_files_or_script_schemes() {
+        for url in [
+            "file:///secret",
+            "javascript:alert(1)",
+            "data:text/html,secret",
+            "chrome://version",
+            "https:",
+            "about:config",
+        ] {
+            assert!(!web_url(url), "{url}");
+        }
+        for url in [
+            "https://example.invalid/",
+            "http://127.0.0.1:1234/",
+            "about:blank",
+            "about:srcdoc",
+        ] {
+            assert!(web_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn the_view_is_the_frame_over_its_own_scale() {
+        assert_eq!(visible_size((780, 1400), 1.0).unwrap(), (780, 1400));
+        assert_eq!(visible_size((780, 1400), 2.0).unwrap(), (390, 700));
+        assert_eq!(visible_size((781, 1401), 2.0).unwrap(), (391, 701));
+        assert!(visible_size((0, 1400), 1.0).is_err());
+        assert!(visible_size((16385, 1400), 1.0).is_err());
+        assert!(visible_size((780, 16385), 1.0).is_err());
+        assert!(visible_size((131_072, 1400), 8.0).is_err());
+        assert_eq!(visible_size((16384, 16384), 8.0).unwrap(), (2048, 2048));
+        assert!(visible_size((780, 1400), 0.0).is_err());
+    }
+
+    #[test]
+    fn rejects_nonfinite_or_unbounded_capture_geometry() {
+        for scale in [f64::NAN, f64::INFINITY, 0.0, 0.249, 9.0] {
+            assert!(
+                Viewport {
+                    width: 100,
+                    height: 100,
+                    device_scale_factor: scale
+                }
+                .params()
+                .is_err()
+            );
+        }
+        assert!(
+            Viewport {
+                width: 0,
+                height: 100,
+                device_scale_factor: 1.0
+            }
+            .params()
+            .is_err()
+        );
+    }
+}

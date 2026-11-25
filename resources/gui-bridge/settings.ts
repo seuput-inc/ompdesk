@@ -3,43 +3,20 @@
  * session. Ported from the fork's rpc-extensions.ts / rpc-model-roles.ts /
  * rpc-mode.ts (settings, catalog, logout cases). Wire shapes match
  * `src/shared/rpc-types.ts` (SettingsSchemaResult, ProvidersResult, …).
+ *
+ * Stock modules load where an action uses them: this module serves many capabilities (capabilities.ts), and a
+ * vanished stock export must cost only the actions that call it.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveUsedFraction, type UsageLimit, type UsageReport } from "@oh-my-pi/pi-ai";
-import { usageResetAtMs } from "@oh-my-pi/pi-ai/auth/usage-report";
-import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { modelKind } from "@oh-my-pi/pi-catalog/types";
-import { orderedSettings } from "@oh-my-pi/pi-coding-agent/config/all-settings";
-import {
-	disabledProviderIds,
-	extractExplicitThinkingSelector,
-	resolveModelOverride,
-	resolveRoleChain,
-	resolveRoleSelection,
-	rolePriorityDefaults,
-} from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import {
-	CHAT_MODEL_ROLE_IDS,
-	getKnownRoleIds,
-	getRoleInfo,
-	MODEL_ROLE_IDS,
-	roleCandidatePool,
-} from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import { isManagedMCPOAuthCredentialId } from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import {
-	formatActiveAccountLabel,
-	reportMatchesActiveAccount,
-} from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/active-oauth-account";
-import { listLogoutAccounts, logoutCredential } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/logout";
-import { SETTING_TABS, TAB_GROUPS, TAB_METADATA } from "@oh-my-pi/pi-tui/overlays/settings-defs";
-import { getAgentDir, MAIN_CONFIG_FILENAMES } from "@oh-my-pi/pi-utils";
-import { accountCredits, creditKind, creditsInRaw } from "./account-credits";
+import type { AccountCredits } from "../../src/shared/rpc-types";
+import { accountCredits, creditKind, creditsInRaw, rawCredits } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
+import { pickerAccounts, refreshForeignCatalog, wireModel } from "./codex-picker";
+import { creditSpendEnabled } from "./credit-spend-core";
 import { guard, probe } from "./health";
-import { idleSettingChanged } from "./idle-compaction";
 import { lastFetchedCredits, lastReports, showReport } from "./last-reports";
 import { compactModelRoles } from "./model-role-contracts";
 import { releaseDelegationForWrite } from "./modes/delegation";
@@ -49,9 +26,10 @@ import { asRecord, requiredString } from "./params";
 import { type ResetPasses, shapeResetPasses } from "./reset-passes-core";
 import { effectiveOmpdeskRole, effectiveRole, type RoleStock } from "./role-effective";
 import { shownRoleValue, storedRoleValue } from "./role-values";
-import { recapSettingChanged } from "./session-recap";
+import { settingText } from "./settings-core";
 import { heldDefaultNotes, releaseThinkingDefaultFor, syncThinkingDefault } from "./thinking-default";
 import type { BridgeEnv, BridgeMethods } from "./types";
+import { usageStanding } from "./usage-standing";
 
 type Rec = Record<string, unknown>;
 type Layer = "global" | "project" | "overlay" | "runtime";
@@ -95,7 +73,11 @@ const autoImageOverrides = new WeakSet<object>();
  * when the last image model goes away, and released the moment the user sets it
  * in Settings. Stock's tool-gate listener adds or removes the tool live.
  */
-export function syncImageGeneration(session: AgentSession): void {
+export async function syncImageGeneration(session: AgentSession): Promise<void> {
+	const [{ lookup }, { roleCandidatePool }] = await Promise.all([
+		import("./omp/pi-coding-agent/config/registry"),
+		import("./omp/pi-coding-agent/config/model-roles"),
+	]);
 	const setting = lookup(IMAGE_SETTING) as unknown as SettingLike | undefined;
 	if (
 		!setting ||
@@ -118,10 +100,10 @@ export function syncImageGeneration(session: AgentSession): void {
 }
 
 /** The user's own write replaces an automatic choice (image tool, thinking default, delegation strength) instead of hiding under it. */
-function releaseAutoOverride(session: AgentSession, setting: SettingLike): void {
+async function releaseAutoOverride(session: AgentSession, setting: SettingLike): Promise<void> {
 	const scope = session.settings as unknown as object;
-	releaseThinkingDefaultFor(setting.id, scope);
-	releaseDelegationForWrite(setting.id, scope);
+	await releaseThinkingDefaultFor(setting.id, scope);
+	await releaseDelegationForWrite(setting.id, scope);
 	if (setting.id !== IMAGE_SETTING || !autoImageOverrides.has(scope)) return;
 	setting.clearOverride?.(scope);
 	autoImageOverrides.delete(scope);
@@ -141,7 +123,7 @@ async function followCredentials(session: AgentSession): Promise<void> {
 	const registry = session.modelRegistry;
 	registry.refreshInBackground("online-if-uncached");
 	await registry.awaitBackgroundRefresh();
-	syncImageGeneration(session);
+	await syncImageGeneration(session);
 }
 
 /**
@@ -161,7 +143,7 @@ export async function refreshImageGeneration(session: AgentSession): Promise<voi
 	const before = credentials.generation;
 	await credentials.reload();
 	// reload() bumps the generation when the store changed, and the watcher follows.
-	if (credentials.generation === before) syncImageGeneration(session);
+	if (credentials.generation === before) await syncImageGeneration(session);
 }
 
 interface SettingsLike {
@@ -179,7 +161,8 @@ function byPath(root: Rec | undefined, segments: readonly string[]): unknown {
 	return cursor;
 }
 
-function globalConfigPath(): string {
+async function globalConfigPath(): Promise<string> {
+	const { getAgentDir, MAIN_CONFIG_FILENAMES } = await import("./omp/pi-utils");
 	const dir = getAgentDir();
 	const files = MAIN_CONFIG_FILENAMES.map(name => path.join(dir, name));
 	return files.find(file => fs.existsSync(file)) ?? files[0];
@@ -206,24 +189,15 @@ function provenanceReader(settings: SettingsLike, globalPath: string) {
 	};
 }
 
-function optionsOf(setting: SettingLike): Array<{ value: string; label: string; description?: string }> | undefined {
-	const uiOptions = setting.ui?.options;
-	if (Array.isArray(uiOptions)) {
-		return uiOptions.map(raw => {
-			const option = asRecord(raw);
-			return {
-				value: String(option.value),
-				label: String(option.label ?? option.value),
-				...(typeof option.description === "string" ? { description: option.description } : {}),
-			};
-		});
-	}
-	return setting.enumValues?.map(value => ({ value, label: value }));
-}
-
-function settingsSchema(session: AgentSession) {
-	syncThinkingDefault(session.settings);
-	const provenance = provenanceReader(session.settings as unknown as SettingsLike, globalConfigPath());
+async function settingsSchema(session: AgentSession) {
+	await syncThinkingDefault(session.settings);
+	const [{ orderedSettings }, { SETTING_TABS, TAB_GROUPS }, { SETTINGS_PAGES }, globalPath] = await Promise.all([
+		import("./omp/pi-coding-agent/config/all-settings"),
+		import("./omp/pi-coding-agent/config/settings-defs"),
+		import("./omp/pi-coding-agent/ui/overlays/settings/pages"),
+		globalConfigPath(),
+	]);
+	const provenance = provenanceReader(session.settings as unknown as SettingsLike, globalPath);
 	const entries = (orderedSettings() as unknown as SettingLike[]).map(setting => {
 		const ui = setting.ui;
 		const definition = setting.definition ?? {};
@@ -233,11 +207,7 @@ function settingsSchema(session: AgentSession) {
 			value: setting.get(session.settings),
 			provenance: provenance(setting),
 			default: setting.default,
-			label: typeof ui?.label === "string" ? ui.label : setting.id,
-			description: typeof ui?.description === "string" ? ui.description : undefined,
-			tab: typeof ui?.tab === "string" ? ui.tab : undefined,
-			group: typeof ui?.group === "string" ? ui.group : undefined,
-			options: optionsOf(setting),
+			...settingText(setting),
 			secret: setting.isCredential === true,
 			advanced: !ui,
 			condition: typeof ui?.condition === "string" ? ui.condition : undefined,
@@ -250,7 +220,7 @@ function settingsSchema(session: AgentSession) {
 	});
 	const tabs = SETTING_TABS.map(tab => ({
 		id: tab,
-		label: TAB_METADATA[tab].label,
+		label: SETTINGS_PAGES[tab].label,
 		groups: [...TAB_GROUPS[tab]],
 	}));
 	return { entries, tabs };
@@ -264,10 +234,13 @@ function advisorState(session: AgentSession): { advisorEnabled?: boolean; adviso
 	};
 }
 
-function getSettings(session: AgentSession, paths: string[] | undefined) {
-	syncThinkingDefault(session.settings);
-	const ids = paths ?? orderedSettings().map(setting => setting.id);
-	const provenance = provenanceReader(session.settings as unknown as SettingsLike, globalConfigPath());
+async function getSettings(session: AgentSession, paths: string[] | undefined) {
+	await syncThinkingDefault(session.settings);
+	const { lookup } = await import("./omp/pi-coding-agent/config/registry");
+	// Stock's whole list only when the caller names no path.
+	const ids =
+		paths ?? (await import("./omp/pi-coding-agent/config/all-settings")).orderedSettings().map(setting => setting.id);
+	const provenance = provenanceReader(session.settings as unknown as SettingsLike, await globalConfigPath());
 	const values: Rec = {};
 	const provenances: Rec = {};
 	for (const id of ids) {
@@ -280,12 +253,13 @@ function getSettings(session: AgentSession, paths: string[] | undefined) {
 }
 
 async function setSetting(env: BridgeEnv, session: AgentSession, id: string, value: unknown) {
+	const { lookup } = await import("./omp/pi-coding-agent/config/registry");
 	const setting = lookup(id) as unknown as SettingLike | undefined;
 	if (!setting) throw new Error(`Unknown setting path: ${id}`);
 	// `undefined` removes the global override (stock `Setting.set` unsets it); stock
 	// `assertWritable` rejects it as a value, so only a real value is validated.
 	if (value !== undefined) setting.assertWritable?.(value);
-	releaseAutoOverride(session, setting);
+	await releaseAutoOverride(session, setting);
 	setting.set(session.settings, value);
 	const settings = session.settings as unknown as SettingsLike;
 	const intended = settings.overlayLayers && byPath(settings.overlayLayers().global, setting.segments);
@@ -299,11 +273,9 @@ async function setSetting(env: BridgeEnv, session: AgentSession, id: string, val
 		await settings.flush?.();
 	}
 	// A reset (`undefined`) leaves the thinking level unset again: OMPdesk's default returns.
-	syncThinkingDefault(session.settings);
-	idleSettingChanged(id);
-	recapSettingChanged(id);
+	await syncThinkingDefault(session.settings);
 	env.emit({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-	const provenance = provenanceReader(settings, globalConfigPath());
+	const provenance = provenanceReader(settings, await globalConfigPath());
 	return {
 		path: id,
 		value: setting.get(session.settings),
@@ -349,26 +321,24 @@ function discoveryStates(session: AgentSession) {
 	return states;
 }
 
-/**
- * A model as the windows get it: stock's model less its `compat` block (request quirks of the provider's API, about
- * 1.9 KB of a 2.5 KB model, read by nothing in OMPdesk). A host with many providers sent a paired device 1.73 MB for
- * one `get_providers`; every catalog read and `model_catalog_update` carries the list.
- */
-function wireModel(model: ReturnType<AgentSession["getAvailableModels"]>[number]) {
-	const { compat: _compat, ...rest } = model as typeof model & { compat?: unknown };
-	return rest;
-}
-
-function catalogSnapshot(session: AgentSession, refreshPending: boolean) {
+async function catalogSnapshot(session: AgentSession, refreshPending: boolean) {
+	const generation = nextGeneration();
+	const rows = session.getAvailableModels();
+	const accounts = await pickerAccounts(session, rows);
 	return {
-		models: session.getAvailableModels().map(wireModel),
+		models: rows.map(model => wireModel(model, accounts)),
 		discoveryStates: discoveryStates(session),
 		refreshPending,
-		generation: nextGeneration(),
+		generation,
 	};
 }
 
-function buildProviders(session: AgentSession) {
+async function buildProviders(session: AgentSession) {
+	const [{ getOAuthProviders }, { isManagedMCPOAuthCredentialId }, { lookup }] = await Promise.all([
+		import("./omp/pi-ai/oauth"),
+		import("./omp/pi-coding-agent/mcp/oauth-flow"),
+		import("./omp/pi-coding-agent/config/registry"),
+	]);
 	const authStorage = session.modelRegistry.authStorage;
 	const loginProviders = getOAuthProviders();
 	const loginIds = new Set(loginProviders.map(provider => provider.id));
@@ -409,10 +379,11 @@ function buildProviders(session: AgentSession) {
 	return providers;
 }
 
-function emitCatalogUpdate(env: BridgeEnv, session: AgentSession): void {
+async function emitCatalogUpdate(env: BridgeEnv, session: AgentSession): Promise<void> {
 	// Logins, logouts and settled refreshes all land here: the image tool follows.
-	syncImageGeneration(session);
-	env.emit({ type: "model_catalog_update", ...catalogSnapshot(session, false), providers: buildProviders(session) });
+	await syncImageGeneration(session);
+	const providers = await buildProviders(session);
+	env.emit({ type: "model_catalog_update", ...(await catalogSnapshot(session, false)), providers });
 }
 
 /** Push the catalog once a refresh that outlived the bounded wait settles (fork `watchCatalogRefresh`). */
@@ -423,11 +394,8 @@ function watchRefresh(env: BridgeEnv, session: AgentSession, refresh: Promise<vo
 		.catch(() => undefined)
 		.finally(() => {
 			if (watchedRefresh === refresh) watchedRefresh = undefined;
-			try {
-				emitCatalogUpdate(env, session);
-			} catch {
-				// Session gone (switch/shutdown): the next catalog read reports the state.
-			}
+			// Session gone (switch/shutdown): the next catalog read reports the state.
+			return emitCatalogUpdate(env, session).catch(() => undefined);
 		});
 }
 
@@ -438,8 +406,12 @@ async function refreshCatalog(env: BridgeEnv, session: AgentSession, forceRefres
 	const before = credentials.generation;
 	await credentials.reload();
 	const authChanged = credentials.generation !== before;
-	registry.refreshInBackground(forceRefresh || authChanged ? "online" : "online-if-uncached");
-	const refresh = registry.awaitBackgroundRefresh();
+	const online = forceRefresh || authChanged;
+	const joined = online && registry.isBackgroundRefreshPending();
+	registry.refreshInBackground(online ? "online" : "online-if-uncached");
+	const refresh = registry
+		.awaitBackgroundRefresh()
+		.then(() => refreshForeignCatalog(session, online && !joined, joined));
 	const timeout = Promise.withResolvers<false>();
 	const timer = setTimeout(() => timeout.resolve(false), DISCOVERY_WAIT_MS);
 	const completed = await Promise.race([
@@ -450,7 +422,7 @@ async function refreshCatalog(env: BridgeEnv, session: AgentSession, forceRefres
 		timeout.promise,
 	]).finally(() => clearTimeout(timer));
 	if (!completed) watchRefresh(env, session, refresh);
-	syncImageGeneration(session);
+	await syncImageGeneration(session);
 	return catalogSnapshot(session, !completed);
 }
 
@@ -458,26 +430,30 @@ async function refreshCatalog(env: BridgeEnv, session: AgentSession, forceRefres
 // Usage
 // ============================================================================
 
-function shapeLimit(limit: UsageLimit) {
-	// A balance is no window: Factory's `used: 0` against itself would read as a 0 % gauge.
-	const balance = creditKind(limit.id) === "balance";
-	return {
-		id: limit.id,
-		label: limit.label,
-		...(balance
-			? {}
-			: {
-					usedFraction: resolveUsedFraction(limit),
-					used: limit.amount.used,
-					limit: limit.amount.limit,
-					remainingFraction: limit.amount.remainingFraction,
-				}),
-		unit: limit.amount.unit,
-		windowId: limit.window?.id ?? limit.scope.windowId,
-		windowLabel: limit.window?.label,
-		resetsAt: limit.window?.resetsAt,
-		status: limit.status,
-		notes: limit.notes,
+/** Stock's reading of a limit, bound once per read: shaping a list of limits stays synchronous. */
+async function limitShaper() {
+	const { resolveUsedFraction } = await import("./omp/pi-ai");
+	return (limit: UsageLimit) => {
+		// A balance is no window: Factory's `used: 0` against itself would read as a 0 % gauge.
+		const balance = creditKind(limit.id) === "balance";
+		return {
+			id: limit.id,
+			label: limit.label,
+			...(balance
+				? {}
+				: {
+						usedFraction: resolveUsedFraction(limit),
+						used: limit.amount.used,
+						limit: limit.amount.limit,
+						remainingFraction: limit.amount.remainingFraction,
+					}),
+			unit: limit.amount.unit,
+			windowId: limit.window?.id ?? limit.scope.windowId,
+			windowLabel: limit.window?.label,
+			resetsAt: limit.window?.resetsAt,
+			status: limit.status,
+			notes: limit.notes,
+		};
 	};
 }
 
@@ -486,7 +462,7 @@ async function resetProjector(
 	env: BridgeEnv,
 ): Promise<((report: UsageReport, account: StoredAccount | undefined) => ResetPasses | undefined) | undefined> {
 	if ((await probe(env, ["resetPasses"])).length > 0) return undefined;
-	const { toResetUsageAccounts } = await import("@oh-my-pi/pi-coding-agent/slash-commands/helpers/reset-usage");
+	const { toResetUsageAccounts } = await import("./omp/pi-coding-agent/slash-commands/helpers/reset-usage");
 	return (report, account) => {
 		if (!report.resetCredits) return undefined;
 		const [selected] = toResetUsageAccounts([
@@ -516,6 +492,9 @@ interface WireUsageReport {
 	fetchedAt: number;
 	limits: Rec[];
 	resetAt?: number;
+	limitedUntil?: number;
+	planSpentUntil?: number;
+	credits?: AccountCredits;
 	notes?: string[];
 	account?: string;
 	credentialId?: number;
@@ -545,28 +524,46 @@ function lastUsedAt(
 	return times.length > 0 ? Math.max(...times) : undefined;
 }
 
-function shapeReport(
-	report: UsageReport,
-	account: StoredAccount | undefined,
-	projectReset: ((report: UsageReport, account: StoredAccount | undefined) => ResetPasses | undefined) | undefined,
-	assigned: ReadonlyMap<number, number>,
-): WireUsageReport {
-	const resetPasses = projectReset?.(report, account);
-	const usedAt = lastUsedAt(report, account, assigned);
-	return {
-		provider: report.provider,
-		fetchedAt: report.fetchedAt,
-		limits: report.limits.map(shapeLimit),
-		// When every exhausted window has reset (stock's own rule); absent while not limited.
-		resetAt: usageResetAtMs(report.limits, Date.now()),
-		notes: report.notes,
-		account:
-			formatActiveAccountLabel(account) ??
-			(account ? `#${account.credentialId}` : formatActiveAccountLabel(report.metadata)),
-		...(account ? { credentialId: account.credentialId } : {}),
-		...(account?.active ? { active: true } : {}),
-		...(usedAt !== undefined ? { lastUsedAt: usedAt } : {}),
-		...(resetPasses ? { resetPasses } : {}),
+/** A report's wire shape, with stock's helpers bound once per read (as {@link limitShaper}). */
+async function reportShaper() {
+	const [shapeLimit, { usageResetAtMs }, { formatActiveAccountLabel }] = await Promise.all([
+		limitShaper(),
+		import("./omp/pi-ai/auth/usage-report"),
+		import("./omp/pi-coding-agent/slash-commands/helpers/active-oauth-account"),
+	]);
+	return (
+		report: UsageReport,
+		account: StoredAccount | undefined,
+		projectReset: ((report: UsageReport, account: StoredAccount | undefined) => ResetPasses | undefined) | undefined,
+		assigned: ReadonlyMap<number, number>,
+	): WireUsageReport => {
+		const resetPasses = projectReset?.(report, account);
+		const usedAt = lastUsedAt(report, account, assigned);
+		const now = Date.now();
+		const standing = usageStanding(report, { now, creditSpend: creditSpendEnabled(), resetAtMs: usageResetAtMs });
+		// ChatGPT's balance is only in a fetch's `raw`: this read's, else the account's last fetch through this bridge.
+		const credits =
+			accountCredits(report.limits) ??
+			rawCredits(report.provider, report.raw) ??
+			(account ? lastFetchedCredits(report.provider, account.credentialId) : undefined) ??
+			undefined;
+		return {
+			provider: report.provider,
+			fetchedAt: report.fetchedAt,
+			limits: report.limits.map(shapeLimit),
+			// When every exhausted window has reset (stock's own rule, every row): what a wait for a limit reads.
+			resetAt: usageResetAtMs(report.limits, now),
+			...standing,
+			...(credits ? { credits } : {}),
+			notes: report.notes,
+			account:
+				formatActiveAccountLabel(account) ??
+				(account ? `#${account.credentialId}` : formatActiveAccountLabel(report.metadata)),
+			...(account ? { credentialId: account.credentialId } : {}),
+			...(account?.active ? { active: true } : {}),
+			...(usedAt !== undefined ? { lastUsedAt: usedAt } : {}),
+			...(resetPasses ? { resetPasses } : {}),
+		};
 	};
 }
 
@@ -580,6 +577,10 @@ function shapeReport(
  */
 async function usage(env: BridgeEnv, session: AgentSession, refresh: boolean) {
 	const reports: WireUsageReport[] = [];
+	const [shapeReport, { reportMatchesActiveAccount }] = await Promise.all([
+		reportShaper(),
+		import("./omp/pi-coding-agent/slash-commands/helpers/active-oauth-account"),
+	]);
 	try {
 		const authStorage = session.modelRegistry.authStorage;
 		const projectReset = await resetProjector(env).catch(() => undefined);
@@ -620,6 +621,7 @@ async function usage(env: BridgeEnv, session: AgentSession, refresh: boolean) {
 				accountsOf(report.provider),
 				reportCount.get(report.provider) ?? 0,
 				reportMatchesActiveAccount,
+				typeof report.metadata?.accountId === "string" ? report.metadata.accountId : undefined,
 			);
 			if (account) {
 				showReport(report.provider, account.credentialId, report);
@@ -651,6 +653,8 @@ async function usage(env: BridgeEnv, session: AgentSession, refresh: boolean) {
 	const stats = session.sessionManager.getUsageStatistics();
 	return {
 		reports,
+		// The Credit use of the omp that read them: whether the plans its reports show used up are run on credits here.
+		creditSpend: creditSpendEnabled(),
 		session: {
 			input: stats.input,
 			output: stats.output,
@@ -683,7 +687,7 @@ type IdentityKeyResolver = (provider: string, credential: { type: string }) => s
 async function identityKeyResolver(env: BridgeEnv): Promise<IdentityKeyResolver | undefined> {
 	if ((await probe(env, ["accountPools"])).length > 0) return undefined;
 	// The package root: omp's bundle does not export `pi-ai/auth-storage`, whose import would be a second copy.
-	const auth: Rec = await import("@oh-my-pi/pi-ai");
+	const auth: Rec = await import("./omp/pi-ai");
 	const resolve = auth.resolveCredentialIdentityKey;
 	return typeof resolve === "function"
 		? (provider, credential) => {
@@ -706,6 +710,7 @@ async function identityKeyResolver(env: BridgeEnv): Promise<IdentityKeyResolver 
  * credits left carries it as `credits` (account-credits.ts).
  */
 async function providerAccounts(env: BridgeEnv, session: AgentSession, loginProviderId: string, refresh: boolean) {
+	const [{ getOAuthCredentialProvider }, shapeLimit] = await Promise.all([import("./omp/pi-ai/oauth"), limitShaper()]);
 	const provider = getOAuthCredentialProvider(loginProviderId);
 	const authStorage = session.modelRegistry.authStorage;
 	await authStorage.credentials.reload();
@@ -804,10 +809,16 @@ async function providerAccounts(env: BridgeEnv, session: AgentSession, loginProv
  * whose `defaults` is their chain. A `modelRoles.<id>` the user set outside OMPdesk stays in config.yml and stock
  * still resolves it as `@id`, but OMPdesk neither lists nor offers it.
  */
-export function roleMetadata(session: AgentSession) {
-	settleOmpdeskRoles(session.settings as unknown as RoleSettings);
+export async function roleMetadata(session: AgentSession) {
+	await settleOmpdeskRoles(session.settings as unknown as RoleSettings);
+	const [{ getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS }, { rolePriorityDefaults }, { modelKind }] =
+		await Promise.all([
+			import("./omp/pi-coding-agent/config/model-roles"),
+			import("./omp/pi-coding-agent/config/model-resolver"),
+			import("./omp/pi-catalog/types"),
+		]);
 	const catalog = session.modelRegistry.getAll("all");
-	const describe = (id: string) => {
+	const roleInfo = (id: string) => {
 		const info = getRoleInfo(id, session.settings);
 		const { name, tag, color, hidden, section } = info;
 		const accepts = [...new Set(catalog.filter(model => info.accepts(model)).map(model => modelKind(model)))];
@@ -815,14 +826,14 @@ export function roleMetadata(session: AgentSession) {
 	};
 	const stock = MODEL_ROLE_IDS.map(id => ({
 		id,
-		...describe(id),
+		...roleInfo(id),
 		defaults: rolePriorityDefaults(id),
 		origin: "stock" as const,
 	}));
 	const known = getKnownRoleIds(session.settings);
 	const ompdesk = OMPDESK_ROLES.filter(role => known.includes(role.id)).map(role => ({
 		id: role.id,
-		...describe(role.id),
+		...roleInfo(role.id),
 		name: role.name,
 		defaults: [...role.chain],
 		origin: "ompdesk" as const,
@@ -831,7 +842,16 @@ export function roleMetadata(session: AgentSession) {
 }
 
 /** Stock's resolution bound to this session; each role resolves over its own candidate pool, as its stock caller does. */
-function roleStock(session: AgentSession): RoleStock {
+async function roleStock(session: AgentSession): Promise<RoleStock> {
+	const [
+		{ CHAT_MODEL_ROLE_IDS, getRoleInfo, roleCandidatePool },
+		{ disabledProviderIds, resolveModelOverride, resolveRoleChain, resolveRoleSelection },
+		{ modelKind },
+	] = await Promise.all([
+		import("./omp/pi-coding-agent/config/model-roles"),
+		import("./omp/pi-coding-agent/config/model-resolver"),
+		import("./omp/pi-catalog/types"),
+	]);
 	const { settings, modelRegistry } = session;
 	const pool = (role: string) => roleCandidatePool(role, settings, modelRegistry);
 	return {
@@ -866,9 +886,14 @@ function ompdeskRolePick(session: AgentSession, id: string): string | undefined 
 	return roleConfigured(settings, id) ? session.settings.getModelRole(id) : readRolePicks()[id];
 }
 
-function modelRoles(session: AgentSession) {
-	const stock = roleStock(session);
-	return roleMetadata(session).map(role => {
+async function modelRoles(session: AgentSession) {
+	const stock = await roleStock(session);
+	const roles = await roleMetadata(session);
+	const [{ roleCandidatePool }, { modelKind }] = await Promise.all([
+		import("./omp/pi-coding-agent/config/model-roles"),
+		import("./omp/pi-catalog/types"),
+	]);
+	return roles.map(role => {
 		const chain = role.origin === "ompdesk" ? OMPDESK_ROLES.find(entry => entry.id === role.id)?.chain : undefined;
 		const pick = chain ? ompdeskRolePick(session, role.id) : undefined;
 		return {
@@ -890,10 +915,13 @@ function modelRoles(session: AgentSession) {
 // Methods
 // ============================================================================
 
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
 export const methods: BridgeMethods = {
 	// Schema, reads and writes re-check OMPdesk's thinking defaults (syncThinkingDefault).
-	...guard(["settings", "thinkingDefault"], {
+	...guard(["settingsSchema", "thinkingDefault"], {
 		settings_schema: async (_params, env) => settingsSchema(env.session()),
+	}),
+	...guard(["settings", "thinkingDefault"], {
 		settings_get: async (params, env) => {
 			const paths = asRecord(params).paths;
 			return getSettings(
@@ -904,7 +932,7 @@ export const methods: BridgeMethods = {
 		settings_set: async (params, env) =>
 			setSetting(env, env.session(), requiredString(params, "path"), asRecord(params).value),
 	}),
-	...guard("settings", {
+	...guard("imageGeneration", {
 		/** Main calls this when the bridge connects and after any tab's login or logout. */
 		image_generation_sync: async (_params, env) => {
 			await refreshImageGeneration(env.session());
@@ -914,12 +942,14 @@ export const methods: BridgeMethods = {
 	...guard("models", {
 		models_catalog: async (params, env) => refreshCatalog(env, env.session(), asRecord(params).forceRefresh === true),
 	}),
-	...guard(["models", "providers"], {
+	...guard("providers", {
 		providers: async (params, env) => {
 			const session = env.session();
 			const catalog = await refreshCatalog(env, session, asRecord(params).forceRefresh === true);
-			return { providers: buildProviders(session), ...catalog };
+			return { providers: await buildProviders(session), ...catalog };
 		},
+	}),
+	...guard("providerLogout", {
 		/**
 		 * Explicit "disconnect the provider": removes every stored account (one account: stock `logout`). Stock's
 		 * `logoutCredential` takes the session (omp 18.18.2; a model registry and session id before): it also refreshes
@@ -928,15 +958,18 @@ export const methods: BridgeMethods = {
 		provider_logout: async (params, env) => {
 			const session = env.session();
 			const providerId = requiredString(params, "providerId");
+			const { listLogoutAccounts, logoutCredential } = await import(
+				"./omp/pi-coding-agent/slash-commands/helpers/logout"
+			);
 			const accounts = await listLogoutAccounts(session.modelRegistry.authStorage, providerId, session.sessionId);
 			for (const account of accounts) {
 				await logoutCredential(session, providerId, account.credentialId);
 			}
-			emitCatalogUpdate(env, session);
+			await emitCatalogUpdate(env, session);
 			return { providerId };
 		},
 	}),
-	...guard(["providers", "usage"], {
+	...guard("providerAccounts", {
 		provider_accounts: async (params, env) =>
 			providerAccounts(env, env.session(), requiredString(params, "providerId"), asRecord(params).refresh === true),
 	}),
@@ -945,14 +978,19 @@ export const methods: BridgeMethods = {
 	}),
 	...guard("modelRoles", {
 		model_roles: async (params, env) => {
-			const roles = modelRoles(env.session());
+			const roles = await modelRoles(env.session());
 			return asRecord(params).compact === true ? compactModelRoles(roles) : { roles };
 		},
-		model_role_metadata: async (_params, env) => ({ roles: roleMetadata(env.session()) }),
+	}),
+	...guard("modelRoleMetadata", {
+		model_role_metadata: async (_params, env) => ({ roles: await roleMetadata(env.session()) }),
+	}),
+	...guard("modelRoleSet", {
 		model_role_set: async (params, env) => {
 			const session = env.session();
 			const role = requiredString(params, "role");
 			const modelId = asRecord(params).modelId;
+			const { extractExplicitThinkingSelector } = await import("./omp/pi-coding-agent/config/model-resolver");
 			const value = storedRoleValue(role, typeof modelId === "string" && modelId ? modelId : undefined, value =>
 				extractExplicitThinkingSelector(value, session.settings, {
 					isLiteralModelId: (provider, id) =>
@@ -965,7 +1003,7 @@ export const methods: BridgeMethods = {
 			// force (settleOmpdeskRoles yields to it), so a pick then waits in the picks file until that value is gone.
 			if (OMPDESK_ROLES.some(entry => entry.id === role)) {
 				writeRolePick(role, value);
-				settleOmpdeskRoles(session.settings as unknown as RoleSettings);
+				await settleOmpdeskRoles(session.settings as unknown as RoleSettings);
 			} else {
 				session.settings.setModelRole(role, value);
 				await session.settings.flush();

@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { deliveryFor, type MailKind } from "./agent-control/mail";
+import type { MailKind } from "./agent-control/mail";
 import {
 	atEnd,
+	CLEANUP_MS,
 	HOLD,
 	journaledMail,
 	mail,
@@ -27,7 +28,7 @@ import { INSTALLED_OMP as omp } from "./test-bridge-probe";
  * (the core's `agentctl/journal/mail_outbox.rs`) until the receiver's journal holds its id and sends it again, with the same id, to
  * the omp that replaces the killed one; the bridge answers whether an id is journaled or only queued.
  */
-afterAll(runCleanups);
+afterAll(runCleanups, CLEANUP_MS);
 
 async function busyOmp(prompt: string): Promise<{ provider: Provider; session: Omp }> {
 	const provider = await startProvider();
@@ -73,9 +74,7 @@ describe.skipIf(!existsSync(omp))("a report accepted by a busy receiver whose om
 		const report = mail("done", "killed-done");
 		// What main does when the receiver accepts a report: keep it until the journal holds it.
 		expect(await session.bridge.request("agent_control.mail", report)).toEqual({});
-		const outbox = [
-			{ id: "killed-done", content: report.content, details: report.details, delivery: deliveryFor("done") },
-		];
+		const outbox = [report];
 		await session.kill();
 		expect(journaledMail(session.isolated)).toEqual([]);
 
@@ -93,7 +92,7 @@ describe.skipIf(!existsSync(omp))("a report accepted by a busy receiver whose om
 			for (const entry of [...outbox]) {
 				const answer = await again.bridge.request<{ duplicate?: boolean; journaled?: boolean }>(
 					"agent_control.mail",
-					{ content: entry.content, details: entry.details, ...entry.delivery },
+					entry,
 				);
 				asked.push(answer);
 				if (answer.duplicate && answer.journaled) outbox.splice(outbox.indexOf(entry), 1);

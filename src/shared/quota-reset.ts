@@ -48,14 +48,16 @@ export function isLimitWording(message: string | undefined): boolean {
  * An account out of money, which adding money clears and waiting never does: stock's billing cap
  * (pi-ai `error/rate-limit.ts` `isBillingCapUsageLimit`: out of credit, an insufficient balance, exhausted credits, a
  * spent prepaid balance, a spend ceiling, Anthropic's credits wall, `insufficient_quota`, HTTP 402) plus the billing
- * wordings the scheduled retry already refused. A copy because main judges a failed turn's text with no omp to ask;
+ * wordings the scheduled retry already refused, except stock's in-flight credit reservation (a transient slot that
+ * frees as requests finish). A copy because main judges a failed turn's text with no omp to ask;
  * `src/main/quota-reset-stock.test.ts` holds it against stock's function on the installed omp.
  */
 const BILLING_CAP =
 	/\b402\b|\bout of credit|\badd (?:more )?credit|\btop ?up\b|insufficient|available balance|out of budget|billing|\b(?:exceed\w*|not enough)\b[^\n]{0,40}\bcredits?\b|\bcredits?\b[^\n]{0,40}\b(?:exhausted|depleted)\b|\busage_pricing_required\b|\bprepaid balance\b[^\n]{0,40}\b(?:used up|exhausted|depleted)\b|spend(?:ing)?[\s_-]?(?:limit|cap)\b|\busage credits are required\b|\bcredits_required\b/i;
+const IN_FLIGHT_RESERVATION = /\bin-flight requests\b/i;
 
 export function isBillingCap(message: string | undefined): boolean {
-	return message !== undefined && BILLING_CAP.test(message);
+	return message !== undefined && !IN_FLIGHT_RESERVATION.test(message) && BILLING_CAP.test(message);
 }
 
 /** Stock's hint on a failed reply (pi-ai `utils/retry-after.ts` appends ` retry-after-ms=<n>` from the provider's headers). */

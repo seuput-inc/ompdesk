@@ -113,7 +113,7 @@ export function normalizeFindingPriority(value: unknown): string | undefined {
 	return undefined;
 }
 
-/** A finding stock's `parseFindingDetails` (pi-tui/src/tools/task.ts) accepts, reduced to what the card shows. */
+/** A finding stock's `parseFindingDetails` (pi-coding-agent/src/task/task-details.ts) accepts, reduced to what the card shows. */
 export function parseFinding(value: unknown): ReviewFinding | undefined {
 	const r = asRecord(value);
 	if (!r) return undefined;
@@ -145,7 +145,7 @@ export interface ReviewResult {
 	findings: ReviewFinding[];
 }
 
-/** Stock's REVIEWER_SECTION_SHAPES (pi-tui/src/tools/task.ts): findings always a list, verdict fields the latest yield. */
+/** Stock's REVIEW_SHAPES (pi-coding-agent/src/ui/tools/task/model.ts): findings always a list, verdict fields the latest yield. */
 const REVIEW_SECTION_SHAPES: Readonly<Record<string, "array" | "scalar">> = {
 	findings: "array",
 	overall_correctness: "scalar",
@@ -154,7 +154,7 @@ const REVIEW_SECTION_SHAPES: Readonly<Record<string, "array" | "scalar">> = {
 };
 
 /**
- * Stock `assembleYieldResult` (pi-tui/src/tools/task-yield-assembly.ts) as
+ * Stock `assembleYieldResult` (pi-coding-agent/src/task/yield-sections.ts) as
  * stock's task renderer calls it for a review: reviewer section shapes and no
  * last-assistant-turn fallback. The renderer cannot load stock modules, so
  * this copy is pinned to stock by task-review-stock.test.ts. An explicit

@@ -17,9 +17,9 @@
  * The section is the engine's usage and safety text, for every agent of the omp (subagents share its MCP manager).
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { guard } from "../health";
+import { lookup } from "../omp/pi-coding-agent/config/registry";
+import { MCPManager } from "../omp/pi-coding-agent/mcp/manager";
 import { registerPromptSection } from "../prompt-sections";
 import { holdBuiltinComputerPrelude } from "../thinking-default";
 import { COMPUTER_USE_ENV, parseComputerUseEnv } from "./computer-use-contracts";
@@ -46,7 +46,7 @@ function startCheck(pi: ExtensionAPI, current: ComputerUseState): Promise<void> 
 	startup ??= checkServer(() => MCPManager.instance())
 		.then(verdict => (verdict.ok ? undefined : verdict.error))
 		.catch((error: unknown) => (error instanceof Error ? error.message : String(error)))
-		.then(failure => {
+		.then(async failure => {
 			if (failure === undefined || !current.fail(failure)) return;
 			pi.logger.warn(
 				"gui-bridge: agent-desktop did not start; this omp falls back to the built-in computer prelude",
@@ -54,7 +54,7 @@ function startCheck(pi: ExtensionAPI, current: ComputerUseState): Promise<void> 
 					error: failure,
 				},
 			);
-			holdBuiltinComputerPrelude(pi.pi.Settings.instance);
+			await holdBuiltinComputerPrelude(pi.pi.Settings.instance);
 		})
 		.catch((error: unknown) => {
 			pi.logger.warn("gui-bridge: computer use fallback failed", { error: String(error) });

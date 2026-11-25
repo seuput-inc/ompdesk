@@ -347,6 +347,7 @@ async function heavyBinary(env: NodeJS.ProcessEnv, build: boolean): Promise<stri
 export interface HeavyStatus {
 	dir: string;
 	size: number;
+	admissionLimited?: boolean;
 	slots: Array<{
 		slot: number;
 		owner: { pid: number; command: string; cwd: string; since: number; weight: number } | null;
@@ -371,7 +372,8 @@ export async function heavyStatus(env: NodeJS.ProcessEnv = process.env): Promise
  * copy of the rule (`pool_size` in heavy.rs). 1 where there is no pool to ask, the safe answer for `runSteps`.
  */
 export async function heavyPoolSize(env: NodeJS.ProcessEnv = process.env): Promise<number> {
-	return (await heavyStatus(env))?.size ?? 1;
+	const status = await heavyStatus(env);
+	return status?.admissionLimited === false ? Infinity : (status?.size ?? 1);
 }
 
 /** The pool's slots as `SlotView`s, for `lock-stats`; none where there is no pool. */
@@ -403,9 +405,9 @@ process.on("exit", () => {
 /**
  * One heavy slot of the product pool, FIFO behind every other waiter on the computer: spawns `ompdesk heavy hold`
  * and waits for its `held` line. The child lives in its own process group, so a Ctrl-C in the terminal reaches only
- * the command, never the slot before `release`. Undefined where the pool is skipped (`heavyBinary`).
+ * the command, never the slot before `release`. Null when this device opted out; undefined when no binary is available.
  */
-export async function acquireHeavy(locks: Locks, who: Who): Promise<HeavyLease | undefined> {
+export async function acquireHeavy(locks: Locks, who: Who): Promise<HeavyLease | null | undefined> {
 	const bin = await heavyBinary(locks.env, true);
 	if (!bin) return undefined;
 	const started = performance.now();
@@ -433,18 +435,22 @@ export async function acquireHeavy(locks: Locks, who: Who): Promise<HeavyLease |
 			if (holder && holder !== "nobody yet") behind = holder;
 		}
 	});
-	const held = Promise.withResolvers<void>();
+	const held = Promise.withResolvers<boolean>();
 	let out = "";
 	child.stdout.setEncoding("utf8");
 	child.stdout.on("data", (chunk: string) => {
 		out += chunk;
-		if (/^held [\d,]+$/m.test(out)) held.resolve();
+		if (/^held [\d,]+ pid \d+\r?$/m.test(out)) held.resolve(true);
+		else if (/^unlimited\r?$/m.test(out)) held.resolve(false);
 	});
 	child.once("error", held.reject);
 	child.once("close", code => held.reject(new Error(`ompdesk heavy hold ended (exit ${code}) before it held a slot`)));
 	waitingHolds.add(child);
 	try {
-		await held.promise;
+		if (!(await held.promise)) {
+			child.stdin.end();
+			return null;
+		}
 	} finally {
 		waitingHolds.delete(child);
 	}
@@ -475,8 +481,9 @@ export async function acquireHold(
 	kind: SlotKind,
 	who: Who,
 	options: { heavyHeld?: boolean } = {},
-): Promise<Lease> {
+): Promise<Lease | undefined> {
 	const heavy = options.heavyHeld ? undefined : await acquireHeavy(locks, who);
+	if (heavy === null && kind !== "build") return undefined;
 	let lease: Lease;
 	try {
 		lease = await acquireSlot(locks, kind, who);

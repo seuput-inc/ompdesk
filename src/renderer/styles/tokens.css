@@ -15,13 +15,14 @@
 
 :root {
 	/* ── Typography ─────────────────────────────────────────────────────
-	   Latin from Inter; Hangul from the system Korean face (named first so it
-	   is not borrowed from a Chinese font); Chinese faces stay as a fallback for
-	   ideographs in model output. */
+	   Latin from Geist (Orca's face, the owner's choice of 25 Nov 2026); Hangul from the system Korean face (named
+	   first so it is not borrowed from a Chinese font); Chinese faces stay as a fallback for ideographs in model
+	   output. Code in the system monospace (SF Mono on a Mac), JetBrains Mono where the system has none. */
 	--sc-font-sans:
-		"Inter Variable", "Apple SD Gothic Neo", "Pretendard Variable", "Pretendard", "Malgun Gothic", "PingFang SC",
+		"Geist Variable", "Apple SD Gothic Neo", "Pretendard Variable", "Pretendard", "Malgun Gothic", "PingFang SC",
 		"Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-	--sc-font-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", "D2Coding", ui-monospace, monospace;
+	--sc-font-mono:
+		"SF Mono", "SFMono-Regular", ui-monospace, "Cascadia Code", "JetBrains Mono", "D2Coding", Menlo, Consolas, monospace;
 
 	/* Size steps scale with the user font-size preference (--gui-font-size,
 	   default 15px). Pixel values below are at the default. */
@@ -44,7 +45,7 @@
 	--sc-weight-semibold: 600;
 
 	--sc-tracking-tight: -0.011em; /* ≥ xl titles */
-	--sc-tracking-normal: -0.004em;
+	--sc-tracking-normal: 0.01em;
 
 	/* ── Spacing — 4px base ─────────────────────────────────────────────
 	   Tailwind's spacing unit is the same 4px, so p-2 = --sc-space-2. */
@@ -65,8 +66,8 @@
 	--sc-radius-xs: 4px; /* kbd, inline code, checkbox */
 	--sc-radius-sm: 6px; /* small controls (28px), menu items */
 	--sc-radius-md: 8px; /* controls (32px), fields, list rows */
-	--sc-radius-lg: 12px; /* cards, popovers, menus, toasts */
-	--sc-radius-xl: 16px; /* dialogs, sheets, composer */
+	--sc-radius-lg: 10px; /* cards, popovers, menus, toasts */
+	--sc-radius-xl: 14px; /* dialogs, sheets, composer */
 	--sc-radius-full: 9999px; /* pills, switches, avatars */
 
 	/* ── Controls & icons ─────────────────────────────────────────────── */
@@ -171,6 +172,7 @@
 	--sc-warning-soft: color-mix(in srgb, var(--sc-warning) 12%, transparent);
 	--sc-danger-soft: color-mix(in srgb, var(--sc-danger) 12%, transparent);
 	--sc-info-soft: color-mix(in srgb, var(--sc-info) 12%, transparent);
+	--sc-attention-soft: color-mix(in srgb, var(--sc-attention) 12%, transparent);
 	/* A status color as text on its own soft wash (badges, chips): a third toward the text color, so small type on the
 	   wash holds 4.5:1 over every surface, the sidebar's selected row included (lib/theme-contrast.ts STATUS_ON_SOFT_MIX). */
 	--sc-accent-on-soft: color-mix(in srgb, var(--sc-accent) 65%, var(--sc-text));
@@ -178,6 +180,14 @@
 	--sc-warning-on-soft: color-mix(in srgb, var(--sc-warning) 65%, var(--sc-text));
 	--sc-danger-on-soft: color-mix(in srgb, var(--sc-danger) 65%, var(--sc-text));
 	--sc-info-on-soft: color-mix(in srgb, var(--sc-info) 65%, var(--sc-text));
+	--sc-attention-on-soft: color-mix(in srgb, var(--sc-attention) 65%, var(--sc-text));
+	/* An answer's reading text: Orca's chat body, 88 % of the text over the page (lib/theme-contrast.ts CHAT_TEXT_MIX). */
+	--sc-chat-text: color-mix(in srgb, var(--sc-text) 88%, var(--sc-bg));
+	/* How opaque a floating surface's glass is (global.css `.omp-floating`): the OMPdesk themes' `floating`, written
+	   inline per theme by themeExtrasFor (opaque in a theme that sets none). */
+	--sc-floating-mix: 86%;
+	/* A toast: Orca's notice shadow, deeper than a menu's, so a notice reads above whatever it covers. */
+	--sc-shadow-notice: 0 16px 40px -8px rgb(0 0 0 / 0.28), 0 3px 8px rgb(0 0 0 / 0.12);
 
 	/* ── --omp-* compatibility aliases ──────────────────────────────────
 	   Unmigrated surfaces keep reading --omp-*; each resolves to its --sc-*
@@ -199,6 +209,9 @@
 	--omp-warning-dim: var(--sc-warning-soft);
 	--omp-info: var(--sc-info);
 	--omp-info-dim: var(--sc-info-soft);
+	--omp-attention: var(--sc-attention);
+	--omp-attention-dim: var(--sc-attention-soft);
+	--omp-unread: var(--sc-unread);
 	--omp-text: var(--sc-text);
 	--omp-text-secondary: var(--sc-text-secondary);
 	--omp-bg-primary: var(--sc-bg);
@@ -294,6 +307,12 @@
 	/* Misc */
 	--omp-scrollbar-track: transparent;
 	--omp-streaming-cursor: var(--omp-accent);
+}
+
+/* A dark page swallows a light shadow: the notice deepens and takes a top highlight, as Orca's does. */
+:root[data-theme="dark"] {
+	--sc-shadow-notice:
+		0 18px 48px -8px rgb(0 0 0 / 0.7), 0 4px 12px rgb(0 0 0 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.08);
 }
 
 @media (min-resolution: 2dppx) {

@@ -9,10 +9,10 @@
 
 **The desktop app for the omp coding agent: parallel sessions, Autopilot, and your phone.**
 
-<a href="https://github.com/SeuPut0705/ompdesk/releases/latest/download/ompdesk-mac-arm64.dmg"><img src="resources/brand/download-macos.svg" alt="Download for macOS (Apple Silicon)" width="280" height="64"></a>
-<a href="https://github.com/SeuPut0705/ompdesk/releases/latest/download/ompdesk-windows-setup.exe"><img src="resources/brand/download-windows.svg" alt="Download for Windows (x64)" width="280" height="64"></a>
+<a href="https://github.com/seuput-inc/ompdesk/releases/latest/download/ompdesk-mac-arm64.dmg"><img src="resources/brand/download-macos.svg" alt="Download for macOS (Apple Silicon)" width="280" height="64"></a>
+<a href="https://github.com/seuput-inc/ompdesk/releases/latest/download/ompdesk-windows-setup.exe"><img src="resources/brand/download-windows.svg" alt="Download for Windows (x64)" width="280" height="64"></a>
 
-[![Latest release](https://img.shields.io/github/v/release/SeuPut0705/ompdesk?style=flat-square&color=5B5BD6)](https://github.com/SeuPut0705/ompdesk/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/seuput-inc/ompdesk?style=flat-square&color=5B5BD6)](https://github.com/seuput-inc/ompdesk/releases/latest)
 ![macOS and Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Windows-5B5BD6?style=flat-square)
 [![Apache-2.0 license](https://img.shields.io/badge/license-Apache--2.0-5B5BD6?style=flat-square)](LICENSE)
 
@@ -59,7 +59,7 @@
 
 - **Memory.** Decisions, rules and each turn's conclusion are kept locally and recalled when a later prompt needs them; your paired computers share them. Settings › Memory shows and edits it.
 - **Files in the chat.** Every file you attach or the agent hands over is a card with a preview: a picture, a PDF's first page, a page, a sheet's first rows. One click shows it in Finder or Explorer, or saves it to the device you are using when the file sits on another computer.
-- **Skills.** Engineering playbooks from [pstack](https://github.com/cursor/plugins/tree/main/pstack), language and framework skills from [ECC](https://github.com/affaan-m/ECC), and reverse-engineering tools from REA. Each can be turned off in Settings.
+- **Skills.** The six official [Ponytail](https://github.com/DietrichGebert/ponytail) coding and review skills ship with the app and update with it. New OMPdesk sessions start in Full mode. The [pstack](https://github.com/cursor/plugins/tree/main/pstack) engineering playbooks and [ECC](https://github.com/affaan-m/ECC) language and framework skills each have a switch in Settings.
 - **Small automations.** Plan or Goal mode picked per request, session titles that follow the work, and suggested next prompts. Each has its own switch in Settings › Agent behavior.
 - **Computer use.** On by default; one session drives the desktop at a time, and `/computer off` turns it off.
 - **Keyboard first.** F6 moves between the sidebar, conversation, composer, work board and side panel; every shortcut can be changed in Settings › Keyboard shortcuts.
@@ -73,7 +73,7 @@
 
 macOS first open: the build is signed but not notarized, so right-click the app and choose **Open** once. Windows SmartScreen: **More info → Run anyway**.
 
-Needs macOS on Apple Silicon or Windows 10/11 x64. omp 18.18.9 or newer, installed for you.
+Needs macOS 14 or newer on Apple Silicon, or Windows 10/11 x64. omp 19.2.0 or newer, installed for you.
 
 ## Updates
 
@@ -85,7 +85,7 @@ OMPdesk, omp, the CLIs of your connected accounts, and omp's plugins, skills and
 - **Does it cost anything?** No. It is open source under the Apache License 2.0 and needs no account. Your model providers bill you as they do in the terminal.
 - **Can the agent control my computer?** Computer use is on by default, and only one session drives the desktop at a time. On macOS it needs Screen & System Audio Recording and Accessibility granted to OMPdesk: OMPdesk asks macOS once on its own, and Settings › Agent behavior shows each permission with an **Allow…** button (so does a computer-use step that failed for one). With omp's default tool approval the agent acts without asking: set **Tool approval** to always ask in Settings › Permissions & security, or turn it off with `/computer off`.
 - **I closed the window and the app is still running.** By design: tasks continue until you quit (⌘Q or the tray menu).
-- **Something else broke.** See [Troubleshooting](docs/troubleshooting.md), or open an [issue](https://github.com/SeuPut0705/ompdesk/issues).
+- **Something else broke.** See [Troubleshooting](docs/troubleshooting.md), or open an [issue](https://github.com/seuput-inc/ompdesk/issues).
 
 ## Privacy
 
@@ -105,16 +105,20 @@ OMPdesk, omp, the CLIs of your connected accounts, and omp's plugins, skills and
 
 ## Build from source
 
-Needs Bun, Git and omp 18.18.9 or newer.
+Needs Bun, Git, the Rust version pinned in `native/ompdesk/rust-toolchain.toml`, and omp 19.2.0 or newer.
 
 ```bash
-git clone https://github.com/SeuPut0705/ompdesk.git
+git clone https://github.com/seuput-inc/ompdesk.git
 cd ompdesk
 bun install
 bun run dev
 ```
 
+`bun run dev` builds the Rust parts on its first run (several minutes), then opens the app from your checkout: the page reloads as you edit it, and the app restarts when main changes. It keeps its own settings folder (`ompdesk-dev`), so it runs beside an installed OMPdesk.
+
 Development, checks and release rules are in [AGENTS.md](AGENTS.md); changes per version in [CHANGELOG.md](CHANGELOG.md). To re-record the media above: `bun run readme:media`.
+
+The desktop window runs on Rust (Tauri 2) and the operating system's web view (WebKit on macOS, WebView2 on Windows); the Preview panel runs a bundled Chromium-based browser (Brave) with a profile of its own. It still runs the Node main process and services; the React page and stock omp extension remain TypeScript.
 
 ## Contributing · Security · License
 

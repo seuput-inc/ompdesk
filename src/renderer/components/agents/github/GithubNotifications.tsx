@@ -6,7 +6,7 @@ import { githubNotificationReasonLabel, githubNotificationTypeLabel } from "../.
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
 import { AsyncSection, Badge, Button, IconButton, Tabs } from "../../common";
-import { type GithubSectionProps, GithubToolbar, useGithubMutation } from "./shared";
+import { type GithubSectionProps, GithubToolbar, pausedNotice, useGithubMutation } from "./shared";
 
 /** The signed-in account's notifications on the chosen host (no repository needed). */
 export function GithubNotifications({ target, targetKey }: Pick<GithubSectionProps, "target" | "targetKey">) {
@@ -62,6 +62,7 @@ export function GithubNotifications({ target, targetKey }: Pick<GithubSectionPro
 					error={list.error}
 					hasData={rows.length > 0}
 					loading={list.loading && !list.data}
+					notice={pausedNotice(list.pausedUntil)}
 					onRetry={list.reload}
 				>
 					<ul aria-label={t("github.notifications.list")} className="flex flex-col">

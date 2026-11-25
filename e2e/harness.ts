@@ -1,15 +1,32 @@
-import type { ChildProcess } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, type Locator, type Page, test } from "@playwright/test";
-import { type ElectronApplication, _electron as electron } from "playwright";
+import {
+	type Browser,
+	type BrowserServer,
+	type BrowserType,
+	expect,
+	type Locator,
+	type Page,
+	test,
+} from "@playwright/test";
+import type { ElectronApplication } from "playwright";
 import { assertAppBuilt } from "../scripts/e2e-app-entry";
 import { writeFakeOmp } from "../src/main/test-fake-omp";
 import { withoutGitSelectors } from "../src/shared/git-env";
 import type { SetupItemId } from "../src/shared/setup";
-import { processesBelow, waitForProcessesToExit } from "./process-tree";
+import { exitShellApp, launchShell } from "./fixture/shell-launch";
+
+/** Whether this computer draws the Mica backdrop (Windows 11 22H2, build 22621): only there does a window get it. */
+export function windowsDrawsMica(): boolean {
+	return process.platform === "win32" && Number(os.release().split(".")[2] ?? 0) >= 22621;
+}
+
+/** The process id in a fake omp's session id (`fixture-<pid>-<random>`, e2e/fixture/rpc-ui.ts); NaN for any other id. */
+export function fixtureSessionPid(sessionId: string | undefined): number {
+	return Number(/^fixture-(\d+)-/.exec(sessionId ?? "")?.[1]);
+}
 
 /**
  * Install the fake omp in `sidecar-fixture.ts` under `dir` for `OMP_GUI_OMP`,
@@ -31,7 +48,9 @@ export async function fixtureOmp(dir: string): Promise<string> {
 				"./session/session-listing": "./session-store.ts",
 				"./session/session-storage": "./session-store.ts",
 				"./session/session-loader": "./session-store.ts",
+				"./session/transcript/transcript-entry": "./session-store.ts",
 				"./config/models-config-schema": "./models-config.ts",
+				"./utils/image-input": "./image-convert.ts",
 				"./utils/image-resize": "./image-convert.ts",
 				"./config/settings": "./worktree-location.ts",
 				"./task/settings": "./worktree-location.ts",
@@ -57,18 +76,6 @@ export async function fixtureOmp(dir: string): Promise<string> {
 		}),
 	);
 	await writeFile(path.join(catalog, "config.ts"), `export * from ${JSON.stringify(config)};\n`);
-	const tui = path.join(path.dirname(root), "pi-tui");
-	await mkdir(tui, { recursive: true });
-	await writeFile(
-		path.join(tui, "package.json"),
-		JSON.stringify({
-			name: "@oh-my-pi/pi-tui",
-			type: "module",
-			exports: { "./chat/transcript-entry": "./transcript-entry.ts", "./chat/image-loading": "./image-convert.ts" },
-		}),
-	);
-	await writeFile(path.join(tui, "transcript-entry.ts"), `export * from ${JSON.stringify(store)};\n`);
-	await writeFile(path.join(tui, "image-convert.ts"), `export * from ${JSON.stringify(images)};\n`);
 	const location = pathToFileURL(path.resolve("e2e/worktree-location-fixture.ts")).href;
 	await writeFile(path.join(root, "worktree-location.ts"), `export * from ${JSON.stringify(location)};\n`);
 	const utils = path.join(path.dirname(root), "pi-utils");
@@ -101,7 +108,19 @@ export interface LaunchOptions {
 }
 
 /**
- * What `launchApp` hands Electron: the built app (`out/main/index.js`) on `project` with its own userData, omp
+ * The commit identity of the app's own git (the merge `ompdesk_merge` makes). A hosted Windows runner has no global
+ * `user.name`/`user.email`, so a merge there fails with "Committer identity unknown"; a developer's machine had one.
+ * An identity the environment already sets wins.
+ */
+export const E2E_GIT_IDENTITY = {
+	GIT_AUTHOR_NAME: "OMPdesk E2E",
+	GIT_AUTHOR_EMAIL: "e2e@example.invalid",
+	GIT_COMMITTER_NAME: "OMPdesk E2E",
+	GIT_COMMITTER_EMAIL: "e2e@example.invalid",
+} as const;
+
+/**
+ * What `launchApp` hands the shell's launcher (`electron.launch`'s options; `fixture/shell-launch.ts`): the built app (`out/main/index.js`) on `project` with its own userData, omp
  * agent and config dirs, no omp profile, and the fake omp (`fixtureOmp`) unless `env` names `OMP_GUI_OMP`.
  * `ELECTRON_RUN_AS_NODE`, which an Electron-hosted runner exports, never reaches the app.
  */
@@ -110,6 +129,7 @@ export async function appLaunchOptions(
 ): Promise<{ args: string[]; env: Record<string, string> }> {
 	const extra = options.env ?? {};
 	const env: Record<string, string | undefined> = {
+		...E2E_GIT_IDENTITY,
 		// The app must never inherit a leaked GIT_DIR or its kin (src/shared/git-env.ts).
 		...withoutGitSelectors(process.env),
 		PI_CODING_AGENT_DIR: options.agent,
@@ -138,21 +158,34 @@ export async function appLaunchOptions(
 	};
 }
 
-/** Launch the built app as {@link appLaunchOptions} describes. */
+/**
+ * Launch the built app as {@link appLaunchOptions} describes: the Tauri host (`ompdesk-shell`, WebView2) running `out/main/index.js` under Node,
+ * connected to as `fixture/shell-launch.ts` says. The result has the surface the specs use of `ElectronApplication`.
+ */
 export async function launchApp(options: LaunchOptions): Promise<ElectronApplication> {
-	return electron.launch(await appLaunchOptions(options));
+	return (await launchShell(await appLaunchOptions(options))) as unknown as ElectronApplication;
 }
 
 /**
- * Machine setup's back-off ledger (`<userData>/setup-state.json`, `SetupService`) with three automatic misses
+ * The system clipboard's text, read in main. Electron's `clipboard.readText()` is synchronous; the shell cannot answer
+ * one (main asks it over a socket), so the shim's module has `readTextAsync()` for it.
+ */
+export function readClipboardText(app: ElectronApplication): Promise<string> {
+	return app.evaluate(({ clipboard }) =>
+		(clipboard as unknown as { readTextAsync(): Promise<string> }).readTextAsync(),
+	);
+}
+
+/**
+ * Machine setup's back-off ledger (`<userData>/setup-state.json`, the core's `tools/setup/ledger.rs`) with three automatic misses
  * today for each of `items`, so the launch leaves them alone ("Paused after failed attempts"). Each miss names
  * the version that made it: the ledger ignores another version's misses (a fixed release repairs at its first
- * launch), and the built app launched as a script runs as Electron's default app, whose `app.getVersion()` is
- * Electron's own. A ledger without it read as an older version's and the launch installed the items at once.
+ * launch), and the built app launched unpackaged takes its `app.getVersion()` from the checkout's package.json. A
+ * ledger without it read as an older version's and the launch installed the items at once.
  */
 export async function seedSetupBackoff(desktop: string, items: readonly SetupItemId[]): Promise<void> {
-	const electronPackage = JSON.parse(await readFile(path.resolve("node_modules/electron/package.json"), "utf8"));
-	const missed = { failures: 3, lastAttempt: Date.now(), app: String(electronPackage.version) };
+	const appPackage = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
+	const missed = { failures: 3, lastAttempt: Date.now(), app: String(appPackage.version) };
 	await writeFile(
 		path.join(desktop, "setup-state.json"),
 		JSON.stringify(Object.fromEntries(items.map(item => [item, missed]))),
@@ -167,6 +200,52 @@ export async function seedSetupBackoff(desktop: string, items: readonly SetupIte
  */
 export function variants<T>(all: readonly T[], keep: (item: T) => boolean = item => item === all[0]): readonly T[] {
 	return process.env.OMP_GUI_VARIANTS === "1" ? all : all.filter(keep);
+}
+
+/** The process behind each WebKit phone browser, so {@link closeBrowser} can let go of it. */
+const webkitServers = new WeakMap<Browser, BrowserServer>();
+
+/**
+ * A phone browser of `type`. WebKit is launched as a server this test holds (and connected to), so a close that cannot
+ * finish can still be let go of: see {@link closeBrowser}.
+ */
+export async function launchBrowser(type: BrowserType): Promise<Browser> {
+	if (type.name() !== "webkit") return type.launch();
+	const server = await type.launchServer();
+	const browser = await type.connect(server.wsEndpoint()).catch(async (error: unknown) => {
+		await server.close();
+		throw error;
+	});
+	webkitServers.set(browser, server);
+	return browser;
+}
+
+/**
+ * Closes a browser from {@link launchBrowser}. Playwright's WebKit for Windows sometimes leaves its WebKitNetworkProcess
+ * behind when the browser process exits: it holds sockets the server already closed (CloseWait), survives the server
+ * and the app, and does not exit even when terminated (`Stop-Process` succeeds, the process is still there 60 s
+ * later). It inherited the browser's stdio pipes, and Playwright waits for them to close, so its close never returns,
+ * nor does the worker's teardown (nightly 44304148487; 5 of 691 closes in flake-probes 44318325958, 44326978889,
+ * 44326998079, 44327008525, every other close at most 415 ms; the kill in 44346305091, the teardown in 44355416904).
+ * After 10 s this closes this side of those pipes, which ends Playwright's wait, and says so.
+ */
+export async function closeBrowser(browser: Browser): Promise<void> {
+	const server = webkitServers.get(browser);
+	if (!server) return browser.close();
+	const outcome = browser
+		.close()
+		.then(() => server.close())
+		.then(
+			() => "closed" as const,
+			(error: unknown) => ({ error }),
+		);
+	const { promise: stalled, resolve } = Promise.withResolvers<"stalled">();
+	const timer = setTimeout(() => resolve("stalled"), 10_000);
+	const result = await Promise.race([outcome, stalled]).finally(() => clearTimeout(timer));
+	if (result === "stalled") {
+		for (const stream of server.process().stdio) stream?.destroy();
+		console.warn("[closeBrowser] WebKit's close did not finish in 10 s; its stdio pipes were let go");
+	} else if (result !== "closed") throw result.error;
 }
 
 /** A screenshot of `page` in the test's output dir (`<name>.png`), CSS pixels, animations stopped. */
@@ -390,6 +469,95 @@ export function cssString(value: string): string {
 }
 
 /**
+ * A real mouse drag of a session row onto the right edge of the split workspace, until the split's ghost
+ * (`[data-split-ghost]`) shows there; the caller then releases the mouse. A row replaced between the press and the first
+ * move starts no drag, so a drag that shows no ghost is released over the workspace and begun again. A drag that never
+ * shows it fails with what the page saw: the drag events as `type@x,y` (a dragover only where the ghost count changed,
+ * with whether the pane's handler took it, `prevented`), the `omp:tab-drag` events that arm the pane's drop, and any
+ * error the page raised.
+ */
+export async function dragRowToRightEdge(page: Page, row: Locator): Promise<void> {
+	const workspace = await page.locator(".omp-split-workspace").boundingBox();
+	if (!workspace) throw new Error("expected the workspace box");
+	const ghost = page.locator("[data-split-ghost]");
+	await page.evaluate(() => {
+		const seen: string[] = [];
+		const note = (entry: string) => {
+			if (seen.length >= 40) return;
+			seen.push(entry);
+			document.documentElement.dataset.dragSeen = seen.join(" ");
+		};
+		let ghosts = -1;
+		const at = (event: DragEvent) => `${Math.round(event.clientX)},${Math.round(event.clientY)}`;
+		for (const type of ["dragstart", "dragenter", "dragover", "dragleave", "drop", "dragend"])
+			window.addEventListener(
+				type,
+				event => {
+					if (!(event instanceof DragEvent)) return;
+					const now = document.querySelectorAll("[data-split-ghost]").length;
+					if (type === "dragover") {
+						if (now === ghosts) return;
+						ghosts = now;
+					}
+					note(`${type}@${at(event)}${type === "dragover" ? `:ghost${now}` : ""}`);
+				},
+				true,
+			);
+		// The bubbling phase: the pane's handler has run by then, and `preventDefault` says it took the drag.
+		let prevented: boolean | undefined;
+		window.addEventListener("dragover", event => {
+			if (event.defaultPrevented !== prevented) {
+				prevented = event.defaultPrevented;
+				note(`dragover-prevented=${prevented}`);
+			}
+		});
+		window.addEventListener("omp:tab-drag", event =>
+			note(`omp:tab-drag=${JSON.stringify(event instanceof CustomEvent ? event.detail : null)}`),
+		);
+		window.addEventListener("error", event => note(`error=${event.message}`));
+	});
+	await expect(async () => {
+		const rowBox = await row.boundingBox();
+		if (!rowBox) throw new Error("expected the row's box");
+		await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(rowBox.x + rowBox.width / 2 + 20, rowBox.y + rowBox.height / 2, { steps: 4 });
+		await page.mouse.move(workspace.x + workspace.width * 0.92 + 2, workspace.y + workspace.height * 0.5, {
+			steps: 10,
+		});
+		await page.mouse.move(workspace.x + workspace.width * 0.92, workspace.y + workspace.height * 0.5, { steps: 2 });
+		try {
+			await expect(ghost).toHaveAttribute("data-split-ghost", "right", { timeout: 1_500 });
+		} catch (error) {
+			await page.mouse.up();
+			const seen = await page.evaluate(() => document.documentElement.dataset.dragSeen ?? "no drag event");
+			// The dragged row as the sidebar drew it (an open tab found for it is what arms a split: `data-current` off and a
+			// tab id on the row) and the tabs main lists, so a drag that armed nothing names the row or the tab at fault.
+			const attributes = await row
+				.evaluate(el =>
+					[...el.attributes].map(attribute => `${attribute.name}=${attribute.value.slice(0, 60)}`).join(" "),
+				)
+				.catch((failure: unknown) => String(failure));
+			const tabs = await page
+				.evaluate(async () =>
+					(await window.omp.tabs.list()).map(tab =>
+						[
+							tab.tabId,
+							tab.status,
+							tab.active ? "active" : "",
+							tab.sessionPath?.split(/[\\/]/).at(-1) ?? "-",
+						].join(" "),
+					),
+				)
+				.catch((failure: unknown) => String(failure));
+			throw new Error(
+				`${String(error)}\ndrag events seen: ${seen}\nthe row: ${attributes}\ntabs: ${JSON.stringify(tabs)}`,
+			);
+		}
+	}).toPass({ timeout: 30_000 });
+}
+
+/**
  * Walk a paired host's folder picker to `folder`: up to its root, then down one
  * level at a time. Each level is found by name through the filter, since the
  * host lists a bounded number of folders per level and a crowded temp folder
@@ -424,67 +592,13 @@ export async function walkRemotePicker(picker: Locator, folder: string): Promise
 	}
 }
 
-/** How long a running main process gets to act on `exitApp` before it is killed. */
-const EXIT_GRACE_MS = 10_000;
-
 /**
- * Exit the app, bypassing the production quit confirmation, and wait until the
- * process is gone so Chromium stops writing the profile before it is removed.
- * The exit is scheduled after `evaluate` returns: exiting inside it races the
- * reply ("Resulting promise was garbage collected") and can mask a test's error.
- * A main process whose thread is stuck never runs the evaluate; it is killed
- * after a grace period, so the test reports its own failure instead of the
- * worker teardown timing out.
- *
- * On Windows a process keeps the folder it works in from being removed, and the launcher exits before the app
- * under it has: main, Chromium's helpers, the omp it started, that omp's MCP servers and the git it ran wind
- * down for another ~0.1 s (measured: the omp and its `npx` chain were alive when `exitApp` returned, and the
- * spec's `fs.rm(profile)` failed `EBUSY` on `project`, 5 of 24 runs of `real-core.e2e.ts`). So the processes
- * below the launcher are listed before the exit and waited for after it; one still running after the grace
- * period is killed.
+ * Exit the app, bypassing the production quit confirmation, and wait until the process tree is gone so Chromium
+ * stops writing the profile before it is removed (`exitShellApp`, `fixture/shell-launch.ts`: main's own
+ * `app.exit(0)`, a stuck main killed after a grace period, on Windows every process the app started waited for).
  */
 export async function exitApp(app: ElectronApplication): Promise<void> {
-	// A killed app (a spec's crash) has closed its Playwright connection: `process()` then throws, and a `finally`
-	// that cleans up after it would replace the test's own error with that one (nightly 39510409009).
-	let child: ChildProcess;
-	try {
-		child = app.process();
-	} catch {
-		return;
-	}
-	if (!child || child.exitCode !== null || child.signalCode !== null) return;
-	const owned = child.pid === undefined ? [] : processesBelow(child.pid);
-	const exited = Promise.withResolvers<void>();
-	child.once("exit", () => exited.resolve());
-	const quit = app.evaluate(({ app }) => {
-		setImmediate(() => app.exit(0));
-	});
-	const stuck = Promise.withResolvers<"stuck">();
-	const timer = setTimeout(() => stuck.resolve("stuck"), EXIT_GRACE_MS);
-	try {
-		if ((await Promise.race([quit, stuck.promise])) === "stuck") {
-			quit.catch(() => undefined);
-			child.kill("SIGKILL");
-		}
-	} catch (error) {
-		// A spec that killed the app (SIGKILL) and then failed ends here with the app gone: wait for the launcher below
-		// rather than let "Target closed" replace the spec's own failure in the report.
-		if (!String(error).includes("has been closed")) throw error;
-	} finally {
-		clearTimeout(timer);
-	}
-	// `app.exit(0)` was asked and answered, yet the app can stay: nightly 41931516185's judge-preview-check finished every
-	// assertion in 2.3 s and then waited here until the 90 s test timeout (its trace ends at exitApp's evaluate). The wait
-	// is bounded like the ask above: a late app is killed and the spec goes on, with a line saying so.
-	const late = Promise.withResolvers<"late">();
-	const lateTimer = setTimeout(() => late.resolve("late"), EXIT_GRACE_MS);
-	if ((await Promise.race([exited.promise.then(() => "exited" as const), late.promise])) === "late") {
-		console.warn(`[exitApp] the app did not exit ${EXIT_GRACE_MS} ms after app.exit(0); killed it`);
-		child.kill("SIGKILL");
-		await exited.promise;
-	}
-	clearTimeout(lateTimer);
-	await waitForProcessesToExit(owned, EXIT_GRACE_MS);
+	await exitShellApp(app as unknown as Parameters<typeof exitShellApp>[0]);
 }
 
 /** What a drawn box and a finger each reach, in CSS px. */

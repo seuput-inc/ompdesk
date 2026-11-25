@@ -83,7 +83,13 @@ impl Setting {
 
     /// The value a mirrored key takes when this row's value is `value`.
     pub fn mirrored(&self, value: &Value) -> Value {
-        const DARK: [&str; 5] = ["dark", "nord", "tokyo-night", "gruvbox-dark", "hc-dark"];
+        const DARK: [&str; 5] = [
+            "dark",
+            "github-dark",
+            "solarized-dark",
+            "gruvbox-dark",
+            "hc-dark",
+        ];
         match value.as_str() {
             Some("system") => json!("system"),
             Some(name) if DARK.contains(&name) => json!("dark"),
@@ -185,7 +191,7 @@ pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
         pref("autoTitle", "autoTitle", "agent", "Automatic session titles", "세션 제목 자동 생성", boolean()),
         pref("autoTitleEvolve", "autoTitleEvolve", "agent", "Keep titles current", "제목 최신으로 유지", boolean()),
         pref("judgeAssist", "judgeAssist", "agent", "Use the judge model for small decisions", "작은 판단에 판정 모델 쓰기", boolean()),
-        pref("theme", "themeName", "appearance", "Theme", "테마", options(&["system", "light", "github-light", "solarized-light", "sepia", "hc-light", "dark", "nord", "tokyo-night", "gruvbox-dark", "hc-dark"])).mirror_theme(),
+        pref("theme", "themeName", "appearance", "Theme", "테마", options(&["system", "light", "github-light", "solarized-light", "gruvbox-light", "hc-light", "dark", "github-dark", "solarized-dark", "gruvbox-dark", "hc-dark"])).mirror_theme(),
         pref("followAgentTheme", "followAgentTheme", "appearance", "Follow the agent's theme", "에이전트 테마 따르기", boolean()),
         pref("fontSize", "fontSize", "appearance", "Font size", "글꼴 크기", json!({"type":"integer","minimum":12,"maximum":20})),
         pref("compactDensity", "compactDensity", "appearance", "Compact density", "촘촘한 간격", boolean()),
@@ -204,7 +210,6 @@ pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
         pref("proxy", "proxyUrl", "general", "Network proxy", "네트워크 프록시", json!({"type":"string","maxLength":300})).redacted().sensitive(Manage::Always { reason: "the proxy sees all of this app's traffic and may carry credentials", when: None }),
         pref("appAutoUpdate", "appAutoUpdate", "updates", "Update OMPdesk automatically", "OMPdesk 자동 업데이트", boolean()).sensitive(Manage::Lifts("only the person's own update schedule; installing one now (updates.apply) still asks")),
         pref("toolsAutoUpdate", "toolsAutoUpdate", "updates", "Keep tools up to date (omp, tool CLIs, extensions)", "도구 최신으로 유지 (omp, 도구 CLI, 확장)", boolean()).sensitive(Manage::Lifts("updates omp, tools and extensions the person already has; running turns keep the code they loaded and installing something new still asks")),
-        pref("builtinRea", "builtinMcp.rea", "tools", "Built-in REA tools", "내장 REA 도구", boolean()).sensitive(Manage::Lifts("switches a bundled tool pack on or off; it adds no code the app does not ship")),
         pref("rotation", "accountRotation", "models", "Account rotation", "계정 순환", options(&["quota", "even"])).sensitive(Manage::Lifts("picks which signed-in account a session uses next; no credential is read or changed")),
         pref("localEngines", "localEngineDetect", "models", "Detect local inference engines", "로컬 추론 엔진 자동 탐지", boolean()),
         stock("steeringMode", "agent", "Steering mode", "스티어링 방식", options(&["all", "one-at-a-time"])),
@@ -252,21 +257,13 @@ pub struct HostPref {
 }
 
 pub fn host_pref(key: &str) -> Option<&'static HostPref> {
-    static HOST_PREFS: [(&str, HostPref); 3] = [
+    static HOST_PREFS: [(&str, HostPref); 2] = [
         (
             "accountRotation",
             HostPref {
                 get: "account-rotation:get",
                 set: "account-rotation:set",
                 field: "mode",
-            },
-        ),
-        (
-            "builtinMcp.rea",
-            HostPref {
-                get: "builtin-rea:get",
-                set: "builtin-rea:set",
-                field: "enabled",
             },
         ),
         (

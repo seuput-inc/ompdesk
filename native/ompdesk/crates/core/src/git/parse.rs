@@ -5,8 +5,43 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::fs::order::js_trim;
+use crate::server::Fault;
+
+fn invalid_path() -> Fault {
+    Fault::new("invalid_path", "Invalid repository-relative path")
+}
+
+pub(super) fn relative_path(value: &Value) -> Result<&str, Fault> {
+    value
+        .as_str()
+        .filter(|s| {
+            !s.is_empty()
+                && !s.contains('\0')
+                && !crate::control::js::is_absolute_win32(s)
+                && !s.split(['/', '\\']).any(|part| part == "..")
+        })
+        .ok_or_else(invalid_path)
+}
+
+pub(super) fn literal(path: &str) -> String {
+    format!(":(literal){path}")
+}
+
+/// Finish the whole selection before any git is run. A null or empty selection is never a list.
+pub(super) fn append_pathspecs(args: &mut Vec<String>, input: &Value) -> Result<(), Fault> {
+    let paths = input
+        .as_array()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(invalid_path)?;
+    args.reserve(paths.len());
+    for path in paths {
+        args.push(literal(relative_path(path)?));
+    }
+    Ok(())
+}
 
 /// Paths a fingerprint stats and files a change list keeps.
 pub const MAX_FILES: usize = 1000;
@@ -613,6 +648,40 @@ pub fn worktree_paths(list: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checks_repository_paths_with_both_separator_conventions_on_every_host() {
+        for path in [
+            "",
+            "/file",
+            r"\file",
+            r"Z:\file",
+            "Z:/file",
+            r"\\host\share",
+            "a/../b",
+            r"a\../b",
+            r"a/..\b",
+            "..",
+            "x\0y",
+        ] {
+            assert_eq!(
+                relative_path(&Value::from(path)),
+                Err(invalid_path()),
+                "{path:?}"
+            );
+        }
+        for path in [
+            ".",
+            "Z:file",
+            "src/a..b.ts",
+            "Ａ:/a",
+            "./a",
+            "a//b",
+            "한글/파일",
+        ] {
+            assert_eq!(relative_path(&Value::from(path)), Ok(path));
+        }
+    }
 
     // The cases of `parse.test.ts` (parseStatusV2, newFileDiff) and `scm.test.ts` (parseBranchHeaders) the functions
     // left with.

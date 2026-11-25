@@ -44,10 +44,20 @@ export interface UsageGaugeEntry {
 	fraction: number;
 }
 
+/**
+ * The share of a window used, 0 and up, or null when the report measures none. A window whose reset time has passed
+ * reads 0 until the next report: its quota was given back, and the old share would show a spent account as spent.
+ */
+export function usedShare(limit: UsageLimit, now = Date.now()): number | null {
+	const fraction = limit.usedFraction ?? (limit.used !== undefined && limit.limit ? limit.used / limit.limit : null);
+	if (fraction === null) return null;
+	return limit.resetsAt !== undefined && limit.resetsAt <= now ? 0 : fraction;
+}
+
 function measured(limits: readonly UsageLimit[]): UsageGaugeEntry[] {
+	const now = Date.now();
 	return limits.flatMap(limit => {
-		const fraction =
-			limit.usedFraction ?? (limit.used !== undefined && limit.limit ? limit.used / limit.limit : null);
+		const fraction = usedShare(limit, now);
 		return fraction === null ? [] : [{ limit, fraction }];
 	});
 }

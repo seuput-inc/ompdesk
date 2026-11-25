@@ -67,7 +67,7 @@
 - `decide` on big structures can hit kernel limits. Use `decide +kernel`, or shrink the instance.
 
 ## Environment
-- **Wrong toolchain.** A `lean-toolchain` other than `leanprover/lean4:v4.35.0` makes elan try to download that
+- **Wrong toolchain.** A `lean-toolchain` other than the one in `assets/lean-template/` makes elan try to download that
   version. Offline, that fails. Fix the file; do not install another toolchain.
 - **`lake env lean File.lean` after editing an imported module** uses the stale compiled module. Run `lake build` first.
 - **Network-only features.** Packages (`[[require]]`) need `git` and a download at first build. Without a network,

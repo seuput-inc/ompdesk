@@ -11,7 +11,10 @@ const KINDS: TurnErrorKind[] = [
 	"connection",
 	"contextOverflow",
 	"auth",
+	"creditsOff",
+	"modelUnavailable",
 	"rateLimit",
+	"billing",
 	"overloaded",
 	"compaction",
 	"unknown",
@@ -42,10 +45,26 @@ describe("describeTurnError", () => {
 		["No model selected", "auth"],
 		["429 Too Many Requests", "rateLimit"],
 		["Rate limit reached for requests per minute", "rateLimit"],
-		["You exceeded your current quota, please check your plan and billing details.", "rateLimit"],
+		["You exceeded your current quota, please check your plan and billing details.", "billing"],
+		// The gui-bridge's refusal with Credit use off (resources/gui-bridge/credit-spend-core.ts `planSpentError`).
+		[
+			"usage_limit_reached: this ChatGPT account reached its plan's usage limit, which resets in about 3 hours, and OMPdesk's Credit use setting is off, so it does not run on credits. retry-after-ms=10800000",
+			"creditsOff",
+		],
 		['529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', "overloaded"],
 		["503 Service Unavailable", "overloaded"],
+		['404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-old-1"}}', "modelUnavailable"],
+		["The model `gpt-9` does not exist or you do not have access to it.", "modelUnavailable"],
+		["models/gemini-0 is not found for API version v1beta", "modelUnavailable"],
+		["Error code: model_not_found", "modelUnavailable"],
+		["The model is temporarily unavailable", "overloaded"],
 		["Compaction freed too little context (7.1k of 8.2k)", "compaction"],
+		[
+			"429 You exceeded your current quota, please check your plan and billing details. insufficient_quota",
+			"billing",
+		],
+		["Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.", "billing"],
+		["402 Payment Required", "billing"],
 		["Something unexpected happened", "unknown"],
 	])("maps %j to %s", (raw, kind) => {
 		expect(describeTurnError(raw).kind).toBe(kind);
@@ -71,7 +90,13 @@ describe("describeTurnError", () => {
 		expect(describeTurnError("Unable to connect").actions).toEqual(["retry", "openProviders"]);
 		expect(describeTurnError("Prompt is too long").actions).toEqual(["compact", "changeModel"]);
 		expect(describeTurnError("invalid x-api-key").actions).toEqual(["openProviders", "changeModel"]);
+		expect(describeTurnError("model_not_found").actions).toEqual(["changeModel", "openProviders"]);
 		expect(describeTurnError("429 Too Many Requests").actions).toEqual(["retry", "changeModel"]);
+		expect(describeTurnError("usage limit; OMPdesk's Credit use setting is off").actions).toEqual([
+			"openProviders",
+			"changeModel",
+		]);
+		expect(describeTurnError("insufficient_quota").actions).toEqual(["openProviders", "changeModel"]);
 		expect(describeTurnError("Overloaded").actions).toEqual(["retry", "changeModel"]);
 		expect(describeTurnError("Compaction freed too little context").actions[0]).toBe("changeModel");
 		expect(describeTurnError("boom").actions).toEqual(["retry", "changeModel"]);

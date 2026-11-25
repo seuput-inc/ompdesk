@@ -17,6 +17,34 @@ use crate::server::{registry, serve};
 const FAKE: &str = "OMPDESK_FAKE_OMP";
 const LIMITS: &str = "{\"type\":\"ready\",\"supportedProtocolVersions\":[1,2],\"maxFrameBytes\":1048576,\"maxReassembledFrameBytes\":67108864}";
 
+#[test]
+fn parameterless_gui_commands_keep_the_bridge_method_and_absent_params() {
+    for (command, method) in [
+        ("get_directories", "workspace.directories"),
+        ("abort_maintenance", "composer.abort_maintenance"),
+        ("get_force_tool", "composer.get_force_tool"),
+        ("get_context_report", "composer.context_report"),
+        ("preview_share_session", "composer.share_preview"),
+        ("get_copy_targets", "composer.copy_targets"),
+        ("get_last_link", "composer.last_link"),
+        ("get_settings_schema", "settings_schema"),
+        ("get_model_role_metadata", "model_role_metadata"),
+        ("get_model_setup_facts", "model_setup_facts"),
+        ("get_session_spend", "session_spend"),
+        ("get_recent_models", "recent_models"),
+        ("get_next_prompt", "next_prompt_state"),
+        ("worktree_lifecycle_settings", "worktree_lifecycle_settings"),
+    ] {
+        let gui: super::GuiBridgeParams = serde_json::from_value(json!({
+            "command": command, "tab": "tab", "seq": 3, "spawnId": 7
+        }))
+        .unwrap();
+        let bridge = super::BridgeParams::from(gui);
+        assert_eq!(bridge.method, method);
+        assert!(bridge.params.is_none(), "{command}");
+    }
+}
+
 /// The stand-in omp. Run as a test it does nothing; run with `OMPDESK_FAKE_OMP` set it speaks omp's side of the wire
 /// until its stdin ends (exit 0), or as its mode says.
 #[test]
@@ -88,6 +116,12 @@ fn fake_omp(mode: &str) {
             say(LIMITS);
         }
     }
+    let mut queue = (mode == "queue").then(|| {
+        [
+            Vec::from(["repeat", "repeat", "edit"].map(String::from)),
+            Vec::from(["[Image]", "last"].map(String::from)),
+        ]
+    });
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         note(&format!("in {line}"));
@@ -108,12 +142,25 @@ fn fake_omp(mode: &str) {
         let reply = |data: Value| {
             say(&json!({ "type": "response", "id": id, "command": ty, "success": true, "data": data }).to_string());
         };
+        if let Some(lanes) = &mut queue
+            && let Some(data) = stock_queue(lanes, &command, ty)
+        {
+            reply(data);
+            continue;
+        }
         match ty {
             "get_state" => {
                 let file = std::env::var("FAKE_SESSION_FILE").ok();
                 reply(json!({ "sessionId": "s1", "sessionFile": file }));
             }
             "new_session" | "switch_session" => reply(json!({ "cancelled": false })),
+            "slot_on_stdout" => {
+                say(
+                    &json!({"type": "desktop_slot_touch", "processId": std::process::id()})
+                        .to_string(),
+                );
+                reply(json!({}));
+            }
             "exit0" => {
                 reply(json!({}));
                 std::process::exit(0);
@@ -155,7 +202,48 @@ fn fake_omp(mode: &str) {
     note("eof");
 }
 
-/// The bridge extension's stand-in: answers `sessions.attach_entry_ids` with an `entryId` per message.
+fn stock_queue(lanes: &mut [Vec<String>; 2], command: &Value, ty: &str) -> Option<Value> {
+    let message = command["message"].as_str().unwrap_or("");
+    let data = match ty {
+        "get_state" => {
+            return Some(json!({
+                "sessionId": "s1", "queuedMessages": {"steering": lanes[0], "followUp": lanes[1]}
+            }));
+        }
+        "steer" | "follow_up" => {
+            lanes[usize::from(ty == "follow_up")].push(message.into());
+            json!({})
+        }
+        "remove_queued_message" | "promote_queued_message" => {
+            let lane = if ty == "promote_queued_message" {
+                1
+            } else {
+                match command["queue"].as_str() {
+                    Some("steering") => 0,
+                    Some("followUp") => 1,
+                    _ => return Some(json!({"removed": false})),
+                }
+            };
+            let index = lanes[lane].iter().position(|text| text == message);
+            if let Some(index) = index {
+                let removed = lanes[lane].remove(index);
+                if ty == "promote_queued_message" {
+                    lanes[0].push(removed);
+                }
+            }
+            if ty == "promote_queued_message" {
+                json!({"promoted": index.is_some()})
+            } else {
+                json!({"removed": index.is_some()})
+            }
+        }
+        _ => return None,
+    };
+    say(&json!({"type":"queue_update","steering":lanes[0],"followUp":lanes[1]}).to_string());
+    Some(data)
+}
+
+/// The bridge extension's stand-in serves entry ids, composer attachments and fixture events.
 fn serve_bridge(address: String) {
     let (up, ready) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -225,6 +313,34 @@ async fn bridge_connection(stream: BoxedIo) {
         line.clear();
         let method = request["method"].as_str().unwrap_or("");
         note(&format!("bridge {method}"));
+        if method == "fixture.queueTail" {
+            let tag = &request["params"]["tag"];
+            let end = json!({"type":"agent_end","messages":[{"role":"assistant","content":tag,"timestamp":1}]});
+            let queue = json!({"type":"queue_update","steering":["repeat","repeat"],"followUp":[],"tag":tag});
+            let malformed =
+                json!({"type":"queue_update","steering":["repeat",2],"followUp":[],"tag":tag});
+            for frame in [end, queue, malformed] {
+                let event = json!({"event":frame});
+                write
+                    .write_all(format!("{event}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        }
+        let hold = (method == "sessions.attach_entry_ids"
+            && request["params"]["messages"][0]["content"] == "hold")
+            || (method == "sessions.transcript" && request["params"]["limit"] != 0);
+        if method == "fixture.desktopTouch" || hold {
+            let event =
+                json!({"event": {"type":"desktop_slot_touch","processId":std::process::id()}});
+            write
+                .write_all(format!("{event}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        if hold {
+            continue;
+        }
         let result = if method == "sessions.attach_entry_ids" {
             let messages: Vec<Value> = request["params"]["messages"]
                 .as_array()
@@ -238,6 +354,10 @@ async fn bridge_connection(stream: BoxedIo) {
                 })
                 .collect();
             json!({ "messages": messages })
+        } else if method == "sessions.transcript" {
+            json!({"leafId":"leaf","total":300,"turnStart":0,"messages":[]})
+        } else if method == "composer.dequeue" {
+            json!({"text":"with attachment","images":[{"type":"image","mimeType":"image/png","data":"YWJj"}]})
         } else {
             Value::Null
         };
@@ -390,6 +510,10 @@ impl Rig {
 
     /// Sends a request now; the receiver gets its answer frame.
     fn post(&self, method: &str, params: Value) -> oneshot::Receiver<Value> {
+        self.post_cancellable(method, params).1
+    }
+
+    fn post_cancellable(&self, method: &str, params: Value) -> (u64, oneshot::Receiver<Value>) {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (reply, answer) = oneshot::channel();
         self.replies.lock().unwrap().insert(id, reply);
@@ -398,7 +522,7 @@ impl Rig {
             json!({ "id": id, "method": method, "params": params })
         );
         let _ = self.writer.send(line.into_bytes());
-        answer
+        (id, answer)
     }
 
     /// A request, answered as the core answered it (`ok: true` → `result`; else `error`).
@@ -446,6 +570,26 @@ impl Rig {
             self.backlog.push_back(event);
         };
         Ok(json!({ "response": serde_json::from_slice::<Value>(&found.bin).unwrap() }))
+    }
+
+    fn spawn_id(&self) -> u64 {
+        self.seen
+            .iter()
+            .rev()
+            .find(|event| event.name == "sidecar.spawned")
+            .unwrap()
+            .data["spawnId"]
+            .as_u64()
+            .unwrap()
+    }
+
+    async fn queue(&mut self, spawn: u64, bridge: bool, command: Value) -> Result<Value, Value> {
+        self.tab_call(
+            "sidecar.queue",
+            json!({"spawnId":spawn,"bridgeConnected":bridge,"command":command}),
+        )
+        .await
+        .map(|mut reply| reply["result"].take())
     }
 
     /// Events until one satisfies `want` (every event read is kept in `seen`).
@@ -615,6 +759,105 @@ fn no_queue() -> Value {
 }
 
 // ---- tests --------------------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cancelling_a_turn_read_does_not_wait_for_the_held_page_or_block_the_lane() {
+    let mut rig = Rig::new("turn-cancel", "ok+bridge").await;
+    let _open = rig.open(no_queue());
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let spawn = rig.spawn_id();
+    let seq = rig.seq();
+    let (id, answer) = rig.post_cancellable(
+        "sidecar.turnEdits",
+        json!({"tab":rig.tab,"seq":seq,"spawnId":spawn}),
+    );
+    rig.until("bridge waiting on the page", |event| {
+        event.data["desktopSpawnId"] == spawn
+    })
+    .await;
+    let state = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    assert_eq!(state["response"]["success"], true);
+    rig.writer
+        .send(format!("{{\"cancel\":{id}}}\n").into_bytes())
+        .unwrap();
+    assert_eq!(settle(answer).await.unwrap_err()["code"], "cancelled");
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn desktop_receipts_and_commands_never_cross_a_restarted_spawn() {
+    let mut rig = Rig::new("desktop-receipt", "bridge").await;
+    let _open = rig.open(no_queue());
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let first = rig.event("sidecar.spawned").unwrap().data["spawnId"]
+        .as_u64()
+        .unwrap();
+    rig.tab_call(
+        "sidecar.command",
+        json!({"command":{"type":"slot_on_stdout"}}),
+    )
+    .await
+    .unwrap();
+    rig.tab_call(
+        "sidecar.bridge",
+        json!({"spawnId":first,"method":"fixture.desktopTouch"}),
+    )
+    .await
+    .unwrap();
+    let touch = rig
+        .until("the private bridge's desktop touch", |event| {
+            event.name == "sidecar.frame"
+                && serde_json::from_slice::<Value>(&event.bin)
+                    .is_ok_and(|frame| frame["type"] == "desktop_slot_touch")
+        })
+        .await;
+    assert_eq!(touch.data["desktopSpawnId"], first);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&touch.bin).unwrap()["processId"],
+        rig.event("sidecar.spawned").unwrap().data["pid"]
+    );
+    let seq = rig.seq();
+    let exit = rig.post(
+        "sidecar.desktopProcess",
+        json!({"tab": rig.tab, "seq": seq, "spawnId": first, "action":"watch"}),
+    );
+    rig.tab_call(
+        "sidecar.desktopProcess",
+        json!({"spawnId": first, "action": "restart"}),
+    )
+    .await
+    .unwrap();
+    rig.status("ready").await;
+    assert_eq!(settle(exit).await.unwrap(), true);
+    assert_eq!(
+        rig.tab_call(
+            "sidecar.desktopProcess",
+            json!({"spawnId": first, "action":"restart"})
+        )
+        .await
+        .unwrap(),
+        false
+    );
+    let error = rig
+        .tab_call(
+            "sidecar.bridge",
+            json!({"spawnId": first, "method": "desktop_slot.revoke"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error["code"], "bridge_disconnected");
+    let state = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    assert_eq!(state["response"]["success"], true);
+    finish(rig).await;
+}
 
 #[tokio::test]
 async fn a_started_tab_negotiates_answers_get_state_and_reads_ready() {
@@ -1285,5 +1528,278 @@ async fn main_and_subscribers_get_a_messages_later_updates_reduced_and_a_restart
         }
     }
     assert_eq!(tapped_updates, again);
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn queue_commands_retain_chip_ids_and_leave_stock_commands_raw() {
+    let mut rig = Rig::new("queue-stock", "queue").await;
+    let _open = rig.open(no_queue());
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let spawn = rig.spawn_id();
+    let get = json!({"type":"get_queue"});
+    let original = rig.queue(spawn, false, get.clone()).await.unwrap();
+    let repeats = &original["steering"].as_array().unwrap()[..2];
+    let edit = &repeats[1];
+    let image = &original["followUp"][0];
+    assert!(edit["id"].is_string());
+    assert_eq!(repeats[0]["text"], "repeat");
+    assert_eq!(repeats[1]["text"], "repeat");
+    assert_ne!(repeats[0]["id"], repeats[1]["id"]);
+    assert_eq!(edit["editable"], true);
+    assert_eq!(image["editable"], false);
+    assert!(edit["timestamp"].is_u64());
+    let raw = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    assert_eq!(
+        raw["response"]["data"]["queuedMessages"],
+        json!({"steering":["repeat","repeat","edit"],"followUp":["[Image]","last"]})
+    );
+    let raw_dequeue = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"dequeue"}}))
+        .await
+        .unwrap();
+    assert_eq!(raw_dequeue["response"]["command"], "dequeue");
+    assert_eq!(raw_dequeue["response"]["data"], json!({}));
+    assert!(
+        rig.queue(spawn, false, json!({"type":"exit0"}))
+            .await
+            .is_err()
+    );
+    assert!(
+        rig.queue(spawn, true, json!({"type":"dequeue"}))
+            .await
+            .is_err()
+    );
+    for (command, code) in [
+        (
+            json!({"type":"queue_edit","queueId":image["id"],"text":"x"}),
+            "not_editable",
+        ),
+        (
+            json!({"type":"queue_move","queueId":edit["id"],"toIndex":0}),
+            "unsupported",
+        ),
+        (json!({"type":"queue_clear","lane":"all"}), "queue_error"),
+        (
+            json!({"type":"queue_remove","queueId":"missing"}),
+            "queue_error",
+        ),
+    ] {
+        assert_eq!(
+            rig.queue(spawn, false, command).await.unwrap_err()["code"],
+            code
+        );
+    }
+    let edit_id = &edit["id"];
+    let image_id = &image["id"];
+    let mut edited = edit.clone();
+    edited["text"] = json!("changed");
+    for (command, expected) in [
+        (
+            json!({"type":"queue_edit","queueId":edit_id,"text":"changed"}),
+            json!({"updated":true}),
+        ),
+        (
+            json!({"type":"queue_move","queueId":edit_id,"toLane":"followUp","toIndex":0}),
+            json!({"lane":"followUp","index":2}),
+        ),
+        (
+            json!({"type":"queue_move","queueId":image_id,"toLane":"steering","toIndex":0}),
+            json!({"lane":"steering","index":2}),
+        ),
+    ] {
+        assert_eq!(rig.queue(spawn, false, command).await.unwrap(), expected);
+    }
+    let moved = rig.queue(spawn, false, get.clone()).await.unwrap();
+    assert_eq!(
+        moved["steering"],
+        json!([repeats[0], original["steering"][2], image])
+    );
+    assert_eq!(moved["followUp"], json!([original["followUp"][1], edited]));
+    rig.drain();
+    assert!(
+        frames(&rig)
+            .iter()
+            .any(|frame| { frame["type"] == "queue_update" && frame["steering"][2] == edited }),
+        "the edit must retain the id in the emitted frame too"
+    );
+    for (command, expected) in [
+        (
+            json!({"type":"queue_remove","queueId":image_id}),
+            json!({"removed":true}),
+        ),
+        (
+            json!({"type":"dequeue"}),
+            json!({"messages":[{"text":"edit"}]}),
+        ),
+        (
+            json!({"type":"queue_clear","lane":"steering"}),
+            json!({"removed":1}),
+        ),
+        (
+            json!({"type":"dequeue"}),
+            json!({"messages":[{"text":"changed"}]}),
+        ),
+        (json!({"type":"queue_clear"}), json!({"removed":1})),
+        (json!({"type":"dequeue"}), json!({"messages":[]})),
+        (get, json!({"steering":[],"followUp":[]})),
+    ] {
+        assert_eq!(rig.queue(spawn, false, command).await.unwrap(), expected);
+    }
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn queue_projection_follows_agent_end_through_cleanup_and_stops_at_restart() {
+    let mut rig = Rig::new("queue-held", "queue+bridge").await;
+    let mut subscriber = super::subscribe(&rig.tab);
+    let seq = rig.seq();
+    let mut params = rig.open_params(seq, no_queue());
+    params["entryIdTimeoutMs"] = json!(120_000);
+    let _open = rig.post("sidecar.open", params);
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let spawn = rig.spawn_id();
+    let get = json!({"type":"get_queue"});
+    let original = rig.queue(spawn, true, get.clone()).await.unwrap();
+    let dequeued = rig
+        .queue(spawn, true, json!({"type":"dequeue"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        dequeued,
+        json!({"messages":[{"text":"with attachment","images":[
+            {"type":"image","mimeType":"image/png","data":"YWJj"}
+        ]}]})
+    );
+    for tag in ["complete", "hold"] {
+        rig.tab_call(
+            "sidecar.bridge",
+            json!({"spawnId":spawn,"method":"fixture.queueTail","params":{"tag":tag}}),
+        )
+        .await
+        .unwrap();
+        if tag == "hold" {
+            // The bridge read the entry-id request after writing the tail. Its private touch bypasses the hold.
+            let before = rig.seen.len();
+            rig.until("held entry ids", |event| {
+                event.data["desktopSpawnId"] == spawn
+            })
+            .await;
+            assert!(!rig.seen[before..].iter().any(|event| {
+                event.name == "sidecar.frame"
+                    && serde_json::from_slice::<Value>(&event.bin).is_ok_and(|frame| {
+                        frame["type"] == "queue_update" || frame["type"] == "agent_end"
+                    })
+            }));
+            rig.tab_call("sidecar.restart", json!({})).await.unwrap();
+        }
+        rig.until("malformed tail", |event| {
+            event.name == "sidecar.frame"
+                && serde_json::from_slice::<Value>(&event.bin)
+                    .is_ok_and(|frame| frame["tag"] == tag && frame["steering"][1] == 2)
+        })
+        .await;
+        let delivered = frames(&rig);
+        let tail = &delivered[delivered.len() - 3..];
+        assert_eq!(tail[0]["type"], "agent_end");
+        assert_eq!(tail[0]["messages"][0]["content"], tag);
+        assert_eq!(
+            tail[0]["messages"][0]["entryId"].as_str(),
+            (tag == "complete").then_some("e0")
+        );
+        assert_eq!(
+            tail[1],
+            json!({"type":"queue_update","steering":[original["steering"][0],original["steering"][1]],"followUp":[],"tag":tag})
+        );
+        assert_eq!(
+            tail[2],
+            json!({"type":"queue_update","steering":["repeat",2],"followUp":[],"tag":tag})
+        );
+    }
+    rig.status("ready").await;
+    let replacement = rig.spawn_id();
+    assert_ne!(replacement, spawn);
+    let refused = rig
+        .queue(spawn, true, json!({"type":"queue_clear"}))
+        .await
+        .unwrap_err();
+    assert_eq!(refused["code"], "sidecar_disconnected");
+    let fresh = rig.queue(replacement, true, get).await.unwrap();
+    assert_eq!(fresh["steering"][0]["text"], "repeat");
+    assert_ne!(fresh["steering"][0]["id"], original["steering"][0]["id"]);
+    let stale_id = json!({"type":"queue_remove","queueId":original["steering"][0]["id"]});
+    assert_eq!(
+        rig.queue(replacement, true, stale_id).await.unwrap_err()["code"],
+        "queue_error"
+    );
+
+    let main: Vec<_> = rig
+        .seen
+        .iter()
+        .filter(|event| event.name == "sidecar.frame")
+        .map(|event| &event.bin)
+        .collect();
+    let mut tapped = Vec::new();
+    while let Ok(event) = subscriber.try_recv() {
+        if event.name == "sidecar.frame" {
+            tapped.push(event.bin.unwrap());
+        }
+    }
+    assert_eq!(main.len(), tapped.len());
+    for (wire, tap) in main.into_iter().zip(tapped) {
+        assert_eq!(wire.as_slice(), tap.as_ref());
+    }
+    let without_bridge = rig
+        .queue(replacement, false, json!({"type":"dequeue"}))
+        .await
+        .unwrap();
+    assert_eq!(without_bridge, json!({"messages":[{"text":"edit"}]}));
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn the_persons_queue_outlives_its_omp_and_is_offered_once() {
+    let mut rig = Rig::new("held-queue", "queue").await;
+    let seq = rig.seq();
+    let mut params = rig.open_params(seq, no_queue());
+    params["heldQueueFile"] = json!(rig.dir.join("held-queue.json").to_string_lossy());
+    params["sessionPath"] = json!(rig.dir.join("s.jsonl").to_string_lossy());
+    let _open = rig.post("sidecar.open", params);
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let take = json!({"type":"queue_take_held"});
+    let nothing = json!({"steering":[],"followUp":[]});
+    rig.tab_call(
+        "sidecar.command",
+        json!({"command":{"type":"steer","message":"keep me"}}),
+    )
+    .await
+    .unwrap();
+    // The omp lives: its queue is stock's, nothing is offered.
+    let spawn = rig.spawn_id();
+    assert_eq!(
+        rig.queue(spawn, false, take.clone()).await.unwrap(),
+        nothing
+    );
+    // The omp goes with messages queued (what it says while it stops changes nothing); the next one is offered them.
+    rig.tab_call("sidecar.kill", json!({})).await.unwrap();
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let next = rig.spawn_id();
+    assert_ne!(next, spawn);
+    assert_eq!(
+        rig.queue(next, false, take.clone()).await.unwrap(),
+        json!({
+            "steering":[{"text":"repeat"},{"text":"repeat"},{"text":"edit"},{"text":"keep me"}],
+            "followUp":[{"text":"last"}],
+        })
+    );
+    // Once: another window's take finds nothing.
+    assert_eq!(rig.queue(next, false, take).await.unwrap(), nothing);
     finish(rig).await;
 }

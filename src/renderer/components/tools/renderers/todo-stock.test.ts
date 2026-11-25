@@ -1,6 +1,6 @@
 /**
  * The todo card's phase numerals (TodoRenderer.tsx) against stock
- * `phaseRomanNumeral` (pi-tui/src/tools/todo.ts), which the renderer cannot
+ * `phaseRomanNumeral` (pi-coding-agent/src/tools/details/todo.ts), which the renderer cannot
  * import: both run in Bun over the same indexes.
  */
 import { execFileSync } from "node:child_process";
@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const stockModules = path.join(os.homedir(), ".bun/install/global/node_modules");
-const stockRoot = path.join(stockModules, "@oh-my-pi/pi-tui");
+const stockRoot = path.join(stockModules, "@oh-my-pi/pi-coding-agent");
 const renderer = path.resolve("src/renderer/components/tools/renderers/TodoRenderer.tsx");
 
 // Stock uses Bun/native modules, which cannot execute in Vitest's Node worker.
@@ -21,7 +21,7 @@ describe.skipIf(!fs.existsSync(stockRoot))("todo phase numerals against stock", 
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			const script = `
 import assert from "node:assert/strict";
-import { phaseRomanNumeral as stock } from "@oh-my-pi/pi-tui/tools/todo";
+import { phaseRomanNumeral as stock } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { phaseRomanNumeral } from ${JSON.stringify(renderer)};
 for (let index = -2; index <= 4000; index++) assert.equal(phaseRomanNumeral(index), stock(index), String(index));
 console.log("stock todo assertions passed");

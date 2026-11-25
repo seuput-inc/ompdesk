@@ -13,7 +13,6 @@
 
 import { Maximize2, Scissors } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
-import { z } from "zod";
 import {
 	type CompactionLimit,
 	compactionLimitCommitSchema,
@@ -22,6 +21,7 @@ import {
 	useCompactionPoints,
 } from "../../../lib/compaction-limits";
 import { useT } from "../../../lib/i18n";
+import { z } from "../../../lib/rpc-schema";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { useModelStore } from "../../../stores/model";
 import { useSessionStore } from "../../../stores/session";
@@ -38,8 +38,8 @@ const asRecord = (value: unknown): Rec =>
 	typeof value === "object" && value !== null && !Array.isArray(value) ? { ...value } : {};
 
 const settingsSchema = z.object({
-	values: z.record(z.unknown()),
-	provenance: z.record(z.object({ globalValue: z.unknown().optional() }).passthrough()).optional(),
+	values: z.record(z.string(), z.unknown()),
+	provenance: z.optional(z.record(z.string(), z.looseObject({ globalValue: z.optional(z.unknown()) }))),
 });
 
 interface Loaded {

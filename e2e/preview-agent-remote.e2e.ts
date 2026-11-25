@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type Browser, chromium, devices, expect, type Locator, type Page, test } from "@playwright/test";
+import { type Browser, chromium, devices, expect, type Locator, type Page } from "@playwright/test";
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { defaultTailscaleScenario } from "./fixture/tailscale-scenario";
@@ -13,8 +13,8 @@ import {
 	lanAddress,
 	type PuppeteerBrowser,
 	type PuppeteerPage,
-	relayEnv,
 	stockRelayInstalled,
+	test,
 } from "./preview-agent-fixture";
 import {
 	connectHost,
@@ -196,13 +196,13 @@ interface PairedComputers {
 /** A host and the computer paired with it (its profile on the host's port), each on the fake omp; the host's omp starts the relay. */
 async function pairedComputers(
 	parent: string,
-	relayFile: string,
+	hostEnv: Record<string, string>,
 	clientEnv: Record<string, string> = {},
 ): Promise<PairedComputers> {
 	const hostProfile = await makeRemoteProfile(parent, "host", {
 		language: "en",
 		theme: "light",
-		env: relayEnv(relayFile),
+		env: hostEnv,
 	});
 	const clientProfile = await makeRemoteProfile(parent, "client", {
 		language: "en",
@@ -237,7 +237,9 @@ async function phoneTailscale(parent: string): Promise<FixtureTailscale> {
 	});
 }
 
-test("a paired phone's Preview page is driven by the agent through stock's relay, taken over and handed back", async () => {
+test("a paired phone's Preview page is driven by the agent through stock's relay, taken over and handed back", async ({
+	relayEnv,
+}) => {
 	test.skip(!stockRelayInstalled(), "needs the installed omp and its puppeteer-core");
 	test.setTimeout(240_000);
 	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-preview-agent-phone-")));
@@ -252,7 +254,7 @@ test("a paired phone's Preview page is driven by the agent through stock's relay
 		const profile = await makeRemoteProfile(parent, "app", {
 			language: "en",
 			theme: "light",
-			env: { ...tailscale.env, ...relayEnv(relayFile) },
+			env: { ...tailscale.env, ...(await relayEnv(relayFile)) },
 		});
 		app = await launchRemote(profile);
 		const paired = await pairedPhone(app, tailscale, phoneBrowser, { cwd: profile.project });
@@ -269,7 +271,9 @@ test("a paired phone's Preview page is driven by the agent through stock's relay
 	}
 });
 
-test("a paired device's own Preview page is driven by the agent of the host's tab through the link, taken over and handed back", async () => {
+test("a paired device's own Preview page is driven by the agent of the host's tab through the link, taken over and handed back", async ({
+	relayEnv,
+}) => {
 	test.skip(!stockRelayInstalled(), "needs the installed omp and its puppeteer-core");
 	// A host's tab never loads a loopback page (the Preview's rule for a paired host's tab): the site is on this
 	// computer's own address.
@@ -282,7 +286,7 @@ test("a paired device's own Preview page is driven by the agent of the host's ta
 	const agent: AgentBrowser = { current: null };
 	let computers: PairedComputers | undefined;
 	try {
-		computers = await pairedComputers(parent, relayFile);
+		computers = await pairedComputers(parent, await relayEnv(relayFile));
 		const { host, client, hostProfile, deviceId } = computers;
 		await openHostFolder(client.page, deviceId, hostProfile.project);
 
@@ -314,7 +318,7 @@ test("a paired device's own Preview page is driven by the agent of the host's ta
 	}
 });
 
-test("a paired phone viewing a tab of a paired host is driven through the same tunnel", async () => {
+test("a paired phone viewing a tab of a paired host is driven through the same tunnel", async ({ relayEnv }) => {
 	test.skip(!stockRelayInstalled(), "needs the installed omp and its puppeteer-core");
 	const lan = lanAddress();
 	test.skip(!lan, "needs a non-loopback network address");
@@ -328,7 +332,7 @@ test("a paired phone viewing a tab of a paired host is driven through the same t
 	let proxy: ServeProxy | undefined;
 	try {
 		const tailscale = await phoneTailscale(parent);
-		computers = await pairedComputers(parent, relayFile, tailscale.env);
+		computers = await pairedComputers(parent, await relayEnv(relayFile), tailscale.env);
 		const { host, client, hostProfile, deviceId } = computers;
 		const paired = await pairedPhone(client, tailscale, phoneBrowser, { cwd: hostProfile.project, device: deviceId });
 		proxy = paired.proxy;

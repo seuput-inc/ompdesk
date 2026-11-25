@@ -126,6 +126,8 @@ export interface AiMemoryServiceDeps {
 	unit?: ServiceControl;
 	spawnEnv: () => Promise<NodeJS.ProcessEnv>;
 	onState: (state: AiMemoryState) => void;
+	/** The clients that supply the native care and upkeep engines' current settings. */
+	quality?: () => { care: string; upkeep: string; recallTermsFile?: string };
 	/** Wait for something before the first wiring (the first tab boots before ai-memory competes with it). */
 	beforeStart?: () => Promise<void>;
 	/**
@@ -153,7 +155,7 @@ export interface AiMemoryServiceDeps {
 	now?: () => number;
 }
 
-export type AiMemoryLogMessage = "launch" | "binary" | "phase" | "failed" | "retry";
+export type AiMemoryLogMessage = "launch" | "binary" | "phase" | "failed" | "retry" | "recall-terms-failed";
 export type AiMemoryLogDetails = Record<string, string | number | boolean | null>;
 
 /** `aimemory.service.ask`: what the core needs of main. */
@@ -402,11 +404,11 @@ export class AiMemoryService {
 	async #opening(): Promise<void> {
 		const host = core();
 		const mine =
-			<T>(handle: (told: T) => void) =>
-			(data: unknown) => {
+			<T>(handle: (told: T, generation: number) => void) =>
+			(data: unknown, _bin: Uint8Array | null, generation: number) => {
 				// A frame of this app's own core, spelled by `aimemory/service/mod.rs`.
 				const told = data as T & { service: string };
-				if (told.service === this.#name && !this.#disposed) handle(told);
+				if (told.service === this.#name && !this.#disposed) handle(told, generation);
 			};
 		if (this.#unsubscribe.length === 0) {
 			this.#unsubscribe = [
@@ -429,7 +431,7 @@ export class AiMemoryService {
 				),
 				host.on(
 					"aimemory.service.ask",
-					mine<Ask>(ask => void this.#answer(ask)),
+					mine<Ask>((ask, generation) => void this.#answer(ask, generation)),
 				),
 				host.on(
 					"aimemory.service.cancel",
@@ -440,10 +442,10 @@ export class AiMemoryService {
 				),
 				host.on(
 					"aimemory.service.timer",
-					mine<{ timer: number; ms: number; repeat: boolean }>(({ timer, ms, repeat }) => {
+					mine<{ timer: number; ms: number; repeat: boolean }>(({ timer, ms, repeat }, generation) => {
 						const fire = () => {
 							if (!repeat) this.#timers.delete(timer);
-							void this.#call("aimemory.service.fire", { timer }).catch(() => undefined);
+							void this.#call("aimemory.service.fire", { timer }, undefined, generation).catch(() => undefined);
 						};
 						const handle = repeat ? setInterval(fire, ms) : setTimeout(fire, ms);
 						handle.unref();
@@ -458,6 +460,7 @@ export class AiMemoryService {
 		}
 		const deps = this.#deps;
 		await this.#call("aimemory.service.open", {
+			quality: deps.quality?.(),
 			deps: {
 				platform: deps.platform,
 				arch: deps.arch,
@@ -495,8 +498,8 @@ export class AiMemoryService {
 	/** Keeps a request open on the service; when the core dies under it, opens the service on the next one. */
 	async #hold(): Promise<void> {
 		const host = core();
-		const home = host.pid;
-		while (!this.#disposed && host.pid === home) {
+		const home = host.generation;
+		while (!this.#disposed && host.generation === home) {
 			try {
 				await host.call("aimemory.service.closed", { service: this.#name }, { timeoutMs: HOLD_MS });
 				return;
@@ -519,11 +522,20 @@ export class AiMemoryService {
 	 * the request's own timeout (a timer on that clock) would end it at the test's first jump: there it waits as long
 	 * as a held request.
 	 */
-	async #call<T>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
+	async #call<T>(
+		method: string,
+		params: Record<string, unknown> = {},
+		timeoutMs?: number,
+		generation?: number,
+	): Promise<T> {
 		const now = this.#deps.now;
 		const sent = { service: this.#name, ...(now ? { now: now() } : {}), ...params };
 		const bound = now ? HOLD_MS : timeoutMs;
-		return (await core().call<T>(method, sent, bound === undefined ? {} : { timeoutMs: bound })).result;
+		const options = {
+			...(bound === undefined ? {} : { timeoutMs: bound }),
+			...(generation === undefined ? {} : { generation }),
+		};
+		return (await core().call<T>(method, sent, options)).result;
 	}
 
 	/** A queued step: queued in its turn, then waited for. */
@@ -546,7 +558,7 @@ export class AiMemoryService {
 		return error.code.startsWith("memory_") ? new Error(error.message) : error;
 	}
 
-	async #answer(ask: Ask): Promise<void> {
+	async #answer(ask: Ask, generation: number): Promise<void> {
 		let answer: { value: unknown } | { error: { message: string; stack: string | null } };
 		try {
 			answer = { value: (await this.#asked(ask)) ?? null };
@@ -558,8 +570,10 @@ export class AiMemoryService {
 				},
 			};
 		}
-		// A core that went meanwhile asks again.
-		await this.#call("aimemory.service.answer", { ask: ask.ask, ...answer }).catch(() => undefined);
+		// A core that went meanwhile asks again; the next core numbers its asks from 1, so it never hears this answer.
+		await this.#call("aimemory.service.answer", { ask: ask.ask, ...answer }, undefined, generation).catch(
+			() => undefined,
+		);
 	}
 
 	async #asked(ask: Ask): Promise<unknown> {

@@ -13,6 +13,13 @@
 			"deadlock": false
 		},
 		{
+			"name": "ready-terminal-frame-waits-behind-a-create-with-a-running-worker",
+			"config": "MC_sanity_NeverWaitsBehindCreate.cfg",
+			"expect": "invariant",
+			"property": "NeverWaitsBehindCreate",
+			"deadlock": false
+		},
+		{
 			"name": "extensions-lane-all-invariants",
 			"config": "MC_extensions.cfg",
 			"expect": "pass",

@@ -1,8 +1,7 @@
 //! Worktrees disk care takes off the disk, losing nothing, and puts back on request (was the disk and git work of
-//! `src/main/disk/saved-worktrees.ts`). Main keeps the saved records (`saved.json`), the secret check (the central
-//! redactor is TypeScript), whether nothing moved while a save ran (`stillSame`: it asks main's process list first),
-//! the repository's seeding and setup hook between a restore's checkout and its files, and the order of the steps;
-//! each step's disk work and gits are one request here.
+//! `src/main/disk/saved-worktrees.ts`). `saved_records` publishes the recovery record before removal. Main supplies
+//! the central redactor, the live `stillSame` proof, and the repository's seeding and setup hook between checkout and
+//! restore.
 //!
 //! - `drop`: the regenerable entries go, each measured first.
 //! - `check`, `work`, `rollback`, `remove`: a save. What is staged becomes one commit (from a copy of the index) and
@@ -13,8 +12,8 @@
 //! - `archive`, `settle`: the archive alone before a landed worktree's removal, and what becomes of it after.
 //! - `checkout`, `restore`, `forget`: a restore.
 
-use std::cmp::Ordering;
-use std::io::Read;
+pub(super) mod entry;
+pub(super) mod recovery;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -33,8 +32,8 @@ use crate::server::{Fault, Scope};
 const SAVE_COMMIT_MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// A worktree whose private archive would be this big is kept, not saved.
 const ARCHIVE_MAX_BYTES: u64 = 512 * 1024 * 1024;
-/// A staged file is read whole up to this size for main's secret check.
-const SECRET_SCAN_MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Each file is read whole up to this size for main's secret check.
+pub(super) const SECRET_SCAN_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// The slow gits of a save and a restore (`add -A` of a big tree, `worktree add`, `worktree remove`).
 const SLOW_MS: u64 = 300_000;
 const SAVED_PREFIX: &str = "ompdesk/saved/";
@@ -580,34 +579,33 @@ async fn free_branch_name(
 }
 
 /// A save to make: the worktree, its repository's main checkout, its branch, what the checks found.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Save {
-    worktree: String,
-    primary: String,
-    branch: Option<String>,
+    pub(super) worktree: String,
+    pub(super) primary: String,
+    pub(super) branch: Option<String>,
     /// Commits nothing else holds (the worktree is unlanded).
-    unlanded: bool,
-    head: String,
-    staged: bool,
-    exclude: Vec<String>,
-    archive: Vec<String>,
-    overwrite: Vec<String>,
-    /// The archive folder main names (`saved/<id>`).
-    archive_dir: String,
+    pub(super) unlanded: bool,
+    pub(super) head: String,
+    pub(super) staged: bool,
+    pub(super) exclude: Vec<String>,
+    pub(super) archive: Vec<String>,
+    pub(super) overwrite: Vec<String>,
+    pub(super) archive_dir: String,
     /// The worktree's folder name and today's date (UTC), for the branch and the messages.
-    name: String,
-    day: String,
+    pub(super) name: String,
+    pub(super) day: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Saved {
-    staged: Option<String>,
-    saved_branch: Option<String>,
-    saved_sha: Option<String>,
-    archived_files: usize,
-    archived_bytes: u64,
+    pub(super) path: String,
+    pub(super) repo: String,
+    pub(super) branch: Option<String>,
+    pub(super) head: String,
+    pub(super) staged: Option<String>,
+    pub(super) saved_branch: Option<String>,
+    pub(super) saved_sha: Option<String>,
+    pub(super) archived_files: usize,
+    pub(super) archived_bytes: u64,
 }
 
 /// HEAD → what was staged → the working tree, each as a commit; the saved branch; the archive. A failure after the
@@ -628,7 +626,6 @@ pub async fn work(git: &Git, save: Save, scope: &Scope) -> Result<Saved, Fault> 
     let base = staged.as_deref().unwrap_or(&save.head);
     let wip = work_commit(git, &save.worktree, base, &save.exclude, &save.name).await?;
     let saved_sha = wip
-        .clone()
         .or_else(|| staged.clone())
         .or_else(|| (save.branch.is_none() && save.unlanded).then(|| save.head.clone()));
     let saved_branch = match &saved_sha {
@@ -666,6 +663,10 @@ pub async fn work(git: &Git, save: Save, scope: &Scope) -> Result<Saved, Fault> 
         }
     };
     Ok(Saved {
+        path: save.worktree,
+        repo: save.primary,
+        branch: save.branch,
+        head: save.head,
         staged,
         saved_branch,
         saved_sha,
@@ -701,9 +702,7 @@ pub async fn force_remove(git: &Git, primary: &str, path: &str) -> Result<Option
         timeout_ms: Some(SLOW_MS),
         ..Opts::default()
     };
-    let removed = git
-        .run(primary, &["worktree", "remove", "--force", path], opts)
-        .await?;
+    let removed = crate::git::worktree::git_remove(git, primary, &["--force"], path, opts).await?;
     Ok((removed.code != 0).then(|| js_trim(&removed.stderr).to_owned()))
 }
 
@@ -711,45 +710,20 @@ pub async fn force_remove(git: &Git, primary: &str, path: &str) -> Result<Option
 /// nothing.
 pub async fn archive(
     git: &Git,
-    worktree: String,
+    worktree: &str,
     entries: Vec<String>,
     archive_dir: String,
     scope: &Scope,
 ) -> Result<Option<(usize, u64, String)>, Fault> {
     let held = scope.clone();
-    let root = worktree.clone();
+    let root = worktree.to_owned();
     let (files, bytes) =
         blocking(move || write_archive(&root, &entries, &archive_dir, &[], &held)).await??;
     if files == 0 {
         return Ok(None);
     }
-    let head = js_trim(&git.text(&worktree, &["rev-parse", "HEAD"]).await?).to_owned();
+    let head = js_trim(&git.text(worktree, &["rev-parse", "HEAD"]).await?).to_owned();
     Ok(Some((files, bytes, head)))
-}
-
-fn read_manifest(archive_dir: &str) -> Result<Manifest, Fault> {
-    let path = Path::new(archive_dir).join("manifest.json");
-    let bytes = std::fs::read(&path).map_err(|error| fault(&error, "open", &path))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| Fault::new("archive_manifest", error.to_string()))
-}
-
-/// After a landed worktree's removal that git stopped half way: whether the folder still holds every archived file as
-/// it was (then the archive goes and nothing is recorded); otherwise the archive is its only copy.
-pub fn settle(worktree: &str, archive_dir: &str, scope: &Scope) -> Result<bool, Fault> {
-    let manifest = read_manifest(archive_dir)?;
-    relative_entries(manifest.files.iter().map(|file| file.path.as_str()))?;
-    let intact = manifest.files.iter().all(|file| {
-        let path = under(worktree, &file.path);
-        std::fs::symlink_metadata(&path)
-            .ok()
-            .and_then(|meta| tree::entry_size(&path, &meta).ok())
-            == Some(file.size)
-    });
-    if intact {
-        remove(Path::new(archive_dir), false, scope)?;
-    }
-    Ok(intact)
 }
 
 /// A restore's checkout: the saved worktree's record as main keeps it.
@@ -764,10 +738,17 @@ pub struct Checkout {
     staged: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckedOut {
+    on_branch: bool,
+    root: entry::RootId,
+}
+
 /// `git worktree add` at the old path, on its branch when the branch still points where it did and no other worktree
 /// has it checked out, else detached at the saved HEAD; then the saved changes as uncommitted work and what was staged
-/// back in the index. Answers whether it is on its branch.
-pub async fn checkout(git: &Git, record: Checkout) -> Result<bool, Fault> {
+/// back in the index. The directory identity holds across main's seeding and setup hook.
+pub async fn checkout(git: &Git, record: Checkout) -> Result<CheckedOut, Fault> {
     let path = record.path.clone();
     if blocking(move || std::fs::symlink_metadata(&path).is_ok()).await? {
         return Err(Fault::new(
@@ -830,96 +811,163 @@ pub async fn checkout(git: &Git, record: Checkout) -> Result<bool, Fault> {
             }
         }
     }
-    Ok(on_branch)
+    let path = PathBuf::from(record.path);
+    let root = blocking(move || {
+        entry::directory(&path)
+            .and_then(|f| entry::identity(&f))
+            .map_err(|e| fault(&e, "open", &path))
+    })
+    .await??;
+    Ok(CheckedOut { on_branch, root })
 }
 
-/// `<target>.ompdesk-before-restore`, numbered when that is taken too.
-fn aside_name(target: &Path) -> PathBuf {
-    let base = target.to_string_lossy();
-    (1u64..)
-        .map(|suffix| {
-            PathBuf::from(if suffix > 1 {
-                format!("{base}.ompdesk-before-restore-{suffix}")
-            } else {
-                format!("{base}.ompdesk-before-restore")
-            })
-        })
-        .find(|candidate| std::fs::symlink_metadata(candidate).is_err())
-        .unwrap_or_else(|| target.to_owned())
-}
-
-/// Both files read whole hold the same bytes (an unreadable one never does).
-fn same_bytes(a: &Path, b: &Path) -> bool {
-    let (Ok(mut left), Ok(mut right)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
-        return false;
+/// Before rolling an aborted save back, prove its tree still has source entries. A missing checkout is not a veto
+/// from a live editor: the saved ref and archive may then be the only copies.
+pub(super) async fn sources_present(
+    git: &Git,
+    path: &str,
+    tree: &str,
+    scope: &Scope,
+) -> Result<bool, Fault> {
+    let listed = git
+        .raw(path, &["ls-tree", "-rz", "--name-only", tree])
+        .await?;
+    if listed.code != 0 || listed.truncated {
+        return Ok(false);
+    }
+    let Ok(names) = String::from_utf8(listed.stdout) else {
+        return Ok(false);
     };
-    let mut one = vec![0u8; 64 * 1024];
-    let mut two = vec![0u8; 64 * 1024];
-    loop {
-        let (Ok(read), Ok(other)) = (
-            crate::fs::disk::read_into(&mut left, &mut one),
-            crate::fs::disk::read_into(&mut right, &mut two),
-        ) else {
-            return false;
-        };
-        if read != other || one[..read].cmp(&two[..other]) != Ordering::Equal {
-            return false;
+    let root = PathBuf::from(path);
+    let held = scope.clone();
+    blocking(move || {
+        for name in names.split_terminator('\0').chain([".git"]) {
+            live(&held)?;
+            if !matches!(
+                entry::Entry::at(&root, Path::new(name), false).and_then(|e| e.kind()),
+                Ok(entry::Kind::File | entry::Kind::Link | entry::Kind::Directory)
+            ) {
+                return Ok(false);
+            }
         }
-        if read < one.len() {
-            return right.read(&mut two[..1]).is_ok_and(|more| more == 0);
-        }
-    }
+        Ok(true)
+    })
+    .await?
 }
 
-/// Puts the archive back. The archived bytes are what the person had, so they win: a file something else made at
-/// that path since (a hook's default `.env`, the repository's seeding) is moved aside to
-/// `<name>.ompdesk-before-restore`, never deleted; an identical one counts as restored; a tracked secret's change goes
-/// over HEAD's copy. A folder where a file was is left alone and the file counts as skipped.
-pub fn restore(worktree: &str, archive_dir: &str, scope: &Scope) -> Result<(usize, usize), Fault> {
-    let manifest = read_manifest(archive_dir)?;
-    relative_entries(manifest.files.iter().map(|file| file.path.as_str()))?;
-    let files = Path::new(archive_dir).join("files");
-    let (mut restored, mut skipped) = (0, 0);
-    for file in manifest.files {
-        live(scope)?;
-        let target = under(worktree, &file.path);
-        let from = under(&files.to_string_lossy(), &file.path);
-        if let Ok(existing) = std::fs::symlink_metadata(&target) {
-            if existing.is_dir() {
-                skipped += 1;
-                continue;
-            }
-            if !file.link && existing.is_file() && same_bytes(&from, &target) {
-                restored += 1;
-                continue;
-            }
-            if file.overwrite {
-                std::fs::remove_file(&target).map_err(|error| fault(&error, "rm", &target))?;
-            } else {
-                let aside = aside_name(&target);
-                std::fs::rename(&target, &aside).map_err(|error| {
-                    crate::fs::error::NodeError::with_dest(
-                        &error,
-                        "rename",
-                        Some(&target.to_string_lossy()),
-                        Some(&aside.to_string_lossy()),
-                    )
-                    .fault(crate::fs::error::Codes::None)
-                })?;
-            }
+/// Includes individual files added inside an ignored directory since its archive was made; collapsed status cannot.
+pub(super) async fn private_files(
+    git: &Git,
+    path: &str,
+    regenerable: &[String],
+) -> Result<Option<Vec<u8>>, Fault> {
+    let specs: Vec<_> = regenerable
+        .iter()
+        .map(|p| format!(":(exclude,literal){}", p.trim_end_matches('/')))
+        .collect();
+    let mut args = vec![
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        ".",
+    ];
+    args.extend(specs.iter().map(String::as_str));
+    let out = git.raw(path, &args).await?;
+    Ok((out.code == 0 && !out.truncated).then_some(out.stdout))
+}
+
+/// Re-read the real index and working bytes without `add` (which could write a newly introduced credential to git).
+/// The scratch index names the saved tree, including files that are still untracked in the person's checkout.
+pub(super) async fn holds_work(
+    git: &Git,
+    path: &str,
+    branch: Option<&str>,
+    head: &str,
+    staged: Option<&str>,
+    tree: &str,
+    exclude: &[String],
+) -> Result<bool, Fault> {
+    let current = git.raw(path, &["symbolic-ref", "--quiet", "HEAD"]).await?;
+    let same_branch = match branch {
+        Some(branch) => {
+            current.code == 0
+                && js_trim(&current.text()).strip_prefix("refs/heads/") == Some(branch)
         }
-        if let Some(parent) = target.parent() {
-            make_dirs(parent, 0o777)?;
-        }
-        if file.link {
-            symlink(&read_link(&from)?, &target)?;
-        } else {
-            copy(&from, &target)?;
-            chmod(&target, file.mode)?;
-        }
-        restored += 1;
+        None => current.code == 1,
+    };
+    if !same_branch {
+        return Ok(false);
     }
-    Ok((restored, skipped))
+    let at = git.raw(path, &["rev-parse", "--verify", "HEAD"]).await?;
+    if at.code != 0 || js_trim(&at.text()) != head {
+        return Ok(false);
+    }
+    let index = git
+        .raw(
+            path,
+            &[
+                "diff",
+                "--cached",
+                "--quiet",
+                "--no-ext-diff",
+                "--no-textconv",
+                staged.unwrap_or(head),
+                "--",
+            ],
+        )
+        .await?;
+    if index.code != 0 {
+        return Ok(false);
+    }
+    let scratch = Scratch::new("ompdesk-save-proof-").await?;
+    let index = scratch.index();
+    let env = [("GIT_INDEX_FILE", index.as_str())];
+    let run = async |args: &[&str]| {
+        git.run(
+            path,
+            args,
+            Opts {
+                env: &env,
+                timeout_ms: Some(SLOW_MS),
+                ..Opts::default()
+            },
+        )
+        .await
+    };
+    if run(&["read-tree", tree]).await?.code != 0 {
+        return Ok(false);
+    }
+    let pathspecs: Vec<_> = exclude
+        .iter()
+        .map(|p| format!(":(exclude,literal){}", p.trim_end_matches('/')))
+        .collect();
+    let mut diff = vec![
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        tree,
+        "--",
+        ".",
+    ];
+    diff.extend(pathspecs.iter().map(String::as_str));
+    if run(&diff).await?.code != 0 {
+        return Ok(false);
+    }
+    let mut others = vec![
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ".",
+    ];
+    others.extend(pathspecs.iter().map(String::as_str));
+    let extra = run(&others).await?;
+    Ok(extra.code == 0 && !extra.truncated && extra.stdout.is_empty())
 }
 
 /// The archive folder of a record that is gone.
@@ -929,6 +977,9 @@ pub fn forget(archive_dir: &str, scope: &Scope) -> Result<(), Fault> {
 
 #[cfg(test)]
 mod tests {
+    use super::recovery::restore;
+    #[cfg(unix)]
+    use super::recovery::settle;
     use super::*;
     use std::fs;
 
@@ -991,7 +1042,7 @@ mod tests {
             .collect();
         assert_eq!(paths, [".env", "data/b/a.db", "data/link", "data/z.db"]);
         assert!(manifest.files[0].overwrite && manifest.files[2].link);
-        assert!(settle(&wt, &archive.to_string_lossy(), &scope).unwrap());
+        assert!(settle(&wt, &archive.to_string_lossy(), (files, bytes), &scope).unwrap());
         assert!(!archive.exists(), "an intact worktree drops its archive");
 
         write_archive(
@@ -1003,11 +1054,18 @@ mod tests {
         )
         .unwrap();
         fs::remove_dir_all(&worktree).unwrap();
-        assert!(!settle(&wt, &archive.to_string_lossy(), &scope).unwrap());
+        assert!(!settle(&wt, &archive.to_string_lossy(), (files, bytes), &scope).unwrap());
         fs::create_dir_all(&worktree).unwrap();
         fs::write(worktree.join(".env"), "DEFAULT=1\n").unwrap();
         assert_eq!(
-            restore(&wt, &archive.to_string_lossy(), &scope).unwrap(),
+            restore(
+                &wt,
+                &entry::directory(&worktree).unwrap(),
+                &archive.to_string_lossy(),
+                (files, bytes),
+                &scope
+            )
+            .unwrap(),
             (4, 0)
         );
         assert_eq!(fs::read_to_string(worktree.join(".env")).unwrap(), "A=1\n");
@@ -1020,7 +1078,14 @@ mod tests {
             Path::new("../.env")
         );
         assert_eq!(
-            restore(&wt, &archive.to_string_lossy(), &scope).unwrap(),
+            restore(
+                &wt,
+                &entry::directory(&worktree).unwrap(),
+                &archive.to_string_lossy(),
+                (files, bytes),
+                &scope
+            )
+            .unwrap(),
             (4, 0),
             "identical files count"
         );
@@ -1047,7 +1112,7 @@ mod tests {
         let archive = dir.join("saved/one");
         let wt = worktree.to_string_lossy();
         let scope = Scope::detached();
-        let (files, _) = write_archive(
+        let (files, bytes) = write_archive(
             &wt,
             &["readonly".into(), "dir-link".into(), "file-link".into()],
             &archive.to_string_lossy(),
@@ -1067,7 +1132,14 @@ mod tests {
         fs::write(worktree.join("readonly"), "checkout").unwrap();
         tree::chmod(&worktree.join("readonly"), 0o444).unwrap();
         assert_eq!(
-            restore(&wt, &archive.to_string_lossy(), &scope).unwrap(),
+            restore(
+                &wt,
+                &entry::directory(&worktree).unwrap(),
+                &archive.to_string_lossy(),
+                (files, bytes),
+                &scope
+            )
+            .unwrap(),
             (3, 0)
         );
         assert_eq!(fs::read(worktree.join("readonly")).unwrap(), b"original");
@@ -1175,6 +1247,41 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    #[tokio::test]
+    async fn the_removal_proof_reads_tracked_and_untracked_saved_bytes_without_touching_the_index()
+    {
+        let root = crate::fs::disk::make_temp_dir("ompdesk-work-proof-").unwrap();
+        sh_git(&root, &["init", "-q", "-b", "main"]);
+        sh_git(&root, &["config", "core.autocrlf", "false"]);
+        fs::write(root.join("tracked"), b"base").unwrap();
+        sh_git(&root, &["add", "tracked"]);
+        sh_git(&root, &["commit", "-q", "-m", "base"]);
+        let head = sh_git(&root, &["rev-parse", "HEAD"]);
+        fs::write(root.join("tracked"), b"edit").unwrap();
+        fs::write(root.join("new"), b"mine").unwrap();
+        fs::write(root.join("secret.key"), b"private").unwrap();
+        let excluded = vec!["secret.key".to_owned()];
+        let git = crate::git::run::tests::git();
+        let path = root.to_str().unwrap();
+        let saved = work_commit(&git, path, &head, &excluded, "work")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            holds_work(&git, path, Some("main"), &head, None, &saved, &excluded)
+                .await
+                .unwrap()
+        );
+        fs::write(root.join("new"), b"next").unwrap();
+        assert!(
+            !holds_work(&git, path, Some("main"), &head, None, &saved, &excluded)
+                .await
+                .unwrap()
+        );
+        assert_eq!(sh_git(&root, &["ls-files"]), "tracked");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

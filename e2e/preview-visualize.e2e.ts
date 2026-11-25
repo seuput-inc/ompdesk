@@ -164,9 +164,16 @@ for (const [language, theme] of variants([
 			await expect(status).toHaveText("Plan options v2");
 
 			// C137/C138: pick the heading with a real click, comment on it.
+			// The page itself sees the click's pointer events (trusted ones only) in the order they were sent.
+			await inPage(
+				"(() => { globalThis.pointerSeen = []; for (const type of ['mousemove', 'mousedown', 'mouseup', 'click']) addEventListener(type, event => { if (event.isTrusted) globalThis.pointerSeen.push(type); }, true); })()",
+			);
 			await aside.getByRole("button", { name: label.element, exact: true }).click();
 			await expect(aside.locator("[data-preview-picking=element]")).toBeVisible();
 			await realClick("#title");
+			await expect
+				.poll(() => inPage("globalThis.pointerSeen.join(' ')"))
+				.toMatch(/^(mousemove )+mousedown (mousemove )*mouseup (mousemove )*click$/);
 			const note = aside.locator('[data-preview-note="1"]');
 			await expect(note).toContainText("<h1> Pick a plan");
 			await aside.getByRole("textbox", { name: label.comment, exact: true }).fill("Make it friendlier");

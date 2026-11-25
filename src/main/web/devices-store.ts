@@ -2,9 +2,10 @@
  * The paired web devices, as main reads and changes them. The list is the core's (`<userData>/web-devices.json`,
  * mode 0600, only each secret's SHA-256; `native/ompdesk/crates/core/src/web/store.rs`): the web edge pairs, checks
  * and expires devices there, and the same objects answer main's requests. `WebDevices` keeps a copy for the callers
- * that read in the same tick (the router's grants, `PeerQuota`, the push notifier), changes it at once and sends each
- * change to the core as an ordered push (`web-stores-client.ts`). The core's answer replaces the copy, so a rule the
- * copy applied differently from the core is corrected as soon as the answer comes.
+ * that read in the same tick (the router's grants, the push notifier), changes it at once and sends each change to the
+ * core as an ordered push (`web-stores-client.ts`). The core's answer replaces the copy, so a rule the copy applied
+ * differently from the core is corrected as soon as the answer comes. A device's limits and counts are the core's
+ * `quota` hub instance's (`remote/peer-quota.ts`), written in the core and told here with the list.
  *
  * Call `ready()` before reading: until the core's list is in, the copy is empty.
  */
@@ -12,7 +13,6 @@ import type { JsonWebKey } from "node:crypto";
 import type { PeerLimits } from "../../shared/ipc-types";
 import { WEB_PERMISSIONS, type WebPermission } from "../../shared/web-protocol";
 import { DEFAULT_WEB_PUSH_SETTINGS, type WebPushSettings } from "../../shared/web-push";
-import type { QuotaStore } from "../remote/peer-quota";
 import { acquireChannel, releaseChannel, type StoresChannel } from "./web-stores-client";
 
 const NAME_MAX = 80;
@@ -75,7 +75,7 @@ function copyDevice(device: WebDevice): WebDevice {
 
 export type DevicesListener = () => void;
 
-export class WebDevices implements QuotaStore {
+export class WebDevices {
 	readonly #channel: StoresChannel;
 
 	constructor(userData: string) {
@@ -164,31 +164,6 @@ export class WebDevices implements QuotaStore {
 		this.#change(deviceId, { push: { ...push, subscription: null } });
 		this.#channel.pushDevices("forgetPush", { deviceId, endpoint });
 		return true;
-	}
-
-	/**
-	 * The VAPID keypair was made anew: every subscription was made against the old key and is dead. The core drops
-	 * its own list's, so this works before `ready()` too (the count is the copy's, 0 while it is empty).
-	 */
-	dropAllPushSubscriptions(): number {
-		let dropped = 0;
-		for (const device of this.#channel.devices.list) {
-			if (!device.push?.subscription) continue;
-			this.#change(device.deviceId, { push: { ...device.push, subscription: null } });
-			dropped++;
-		}
-		this.#channel.pushDevices("dropAllPush", {});
-		return dropped;
-	}
-
-	/** Quota's write path (peer-quota.ts): usage and limits ride the device record. A member set to undefined is removed. */
-	update(deviceId: string, patch: Pick<WebDevice, "limits" | "usage">): WebDevice | undefined {
-		if (!this.#change(deviceId, patch)) return undefined;
-		const sent: Record<string, unknown> = {};
-		if ("limits" in patch) sent.limits = patch.limits ?? null;
-		if ("usage" in patch) sent.usage = patch.usage ?? null;
-		this.#channel.pushDevices("update", { deviceId, patch: sent });
-		return this.get(deviceId);
 	}
 
 	/** The list changed in a way the settings page shows (a connection came or went, usage moved). */

@@ -13,4 +13,14 @@ describe("stock account candidate reconciliation", () => {
 		expect(matchReportAccount({}, [first], 1, () => false)).toBe(first);
 		expect(matchReportAccount({}, [first], 2, () => false)).toBeUndefined();
 	});
+	it("tells two logins of one email apart by the report's account id", () => {
+		// A ChatGPT Pro seat and the same person's Team seat: stock's email-first match takes both for either report.
+		const pro: StoredAccount = { credentialId: 3, email: "me@example.test", accountId: "acct-pro", active: false };
+		const team: StoredAccount = { credentialId: 4, email: "me@example.test", accountId: "acct-team", active: true };
+		const sameEmail = () => true;
+		expect(matchReportAccount({}, [pro, team], 2, sameEmail, "acct-team")).toBe(team);
+		expect(matchReportAccount({}, [pro, team], 2, sameEmail, "acct-pro")).toBe(pro);
+		expect(matchReportAccount({}, [pro, team], 2, sameEmail, "acct-other")).toBeUndefined();
+		expect(matchReportAccount({}, [pro, team], 2, sameEmail)).toBeUndefined();
+	});
 });

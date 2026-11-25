@@ -23,7 +23,7 @@ import {
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Schedule, ScheduleDraft, ScheduleRun, SchedulesRequest, SchedulesState } from "../../../shared/schedules";
 import { AnsiText } from "../../lib/ansi";
-import { basename, durationBetween, formatClock, formatTimeAgo } from "../../lib/format";
+import { basename, durationBetween, formatClock, formatTimeAgo, formatTokens, formatUsd } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { frequencySummary, RUN_STATUS_BADGE } from "../../lib/schedule-text";
 import { useFocusedTabDevice } from "../../stores/remote";
@@ -155,11 +155,9 @@ export function SchedulesSection() {
 
 	return (
 		<>
-			<SettingsSection
-				actions={state.schedules.length > 0 ? newButton : undefined}
-				id="settings-schedules-list"
-				title={t("settings.section.schedules")}
-			>
+			{/* No title of its own: the page's heading already reads "Schedules", and a second region of that name beside the
+			    page's would break the landmarks' unique names (axe landmark-unique). */}
+			<SettingsSection actions={state.schedules.length > 0 ? newButton : undefined} id="settings-schedules-list">
 				{/* The "only while OMPdesk is open" rule sits behind the master row's info glyph, not as a paragraph. */}
 				<SettingsRow
 					compactControl
@@ -296,6 +294,7 @@ export function SchedulesSection() {
 								open={openLog === run.id}
 								run={run}
 								device={device}
+								onResend={device ? undefined : () => void send({ action: "resend", runId: run.id })}
 							/>
 						))}
 					</ul>
@@ -342,12 +341,15 @@ function RunRow({
 	open,
 	onToggleLog,
 	device,
+	onResend,
 }: {
 	run: ScheduleRun;
 	name: string;
 	open: boolean;
 	onToggleLog: () => void;
 	device: string | undefined;
+	/** "Send again" for a run that could not start; this computer's own runs only. */
+	onResend?: () => void;
 }) {
 	const t = useT();
 	const [log, setLog] = useState<{ text: string } | { error: unknown } | null>(null);
@@ -371,6 +373,11 @@ function RunRow({
 		<li className="border-b border-(--sc-divider) last:border-b-0" data-schedule-run-row={run.id}>
 			<div className="omp-run-head flex min-w-0 items-center gap-2 py-2">
 				<Badge variant={RUN_STATUS_BADGE[run.status]}>{t(`schedules.status.${run.status}`)}</Badge>
+				{run.repeats && run.repeats > 1 ? (
+					<span className="shrink-0 text-sc-xs text-(--sc-text-muted)" data-schedule-run-repeats>
+						{t("schedules.repeats", { count: run.repeats })}
+					</span>
+				) : null}
 				<span className="omp-run-name min-w-0 flex-1 truncate text-sc-sm text-(--sc-text)">
 					{name}
 					{run.trigger !== "schedule" && (
@@ -381,8 +388,22 @@ function RunRow({
 					<span className="shrink-0 text-sc-xs text-(--sc-text-muted)" tabIndex={0}>
 						{formatTimeAgo(run.startedAt)}
 						{duration ? ` · ${duration}` : ""}
+						{run.usage
+							? ` · ${t("schedules.usage", {
+									tokens: formatTokens(
+										run.usage.input + run.usage.output + run.usage.cacheRead + run.usage.cacheWrite,
+										{ trimZero: true },
+									),
+									cost: formatUsd(run.usage.cost),
+								})}`
+							: ""}
 					</span>
 				</Tooltip>
+				{run.notStarted && !run.resentAs && onResend && (
+					<Button onClick={onResend} size="sm" variant="ghost">
+						{t("schedules.resend")}
+					</Button>
+				)}
 				{run.status !== "skipped" && (
 					<Button aria-expanded={open} icon={<Chevron />} onClick={onToggleLog} size="sm" variant="ghost">
 						{open ? t("schedules.hideLog") : t("schedules.showLog")}

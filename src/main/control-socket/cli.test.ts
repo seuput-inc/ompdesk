@@ -2,12 +2,12 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { binaryFile, ensureNative } from "../../../scripts/build-native";
-import { TOKEN_FILE } from "../../shared/control-protocol";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { binaryFile, stagedDir } from "../../../scripts/build-native";
+import { type SessionStatus, TOKEN_FILE } from "../../shared/control-protocol";
 import type { ToolOutcome } from "../agent-control/service";
 import type { TabActivity } from "../sidecar-pool";
-import type { ControlBackend, OutsideCaller, SessionView } from "./backend";
+import type { ControlBackend, OutsideCaller } from "./backend";
 import { type ControlSocketHandle, startControlSocket } from "./index";
 
 // The `ompdesk` CLI (Rust, native/ompdesk/crates/cli) against main's own control socket: what a script sees (output,
@@ -21,13 +21,10 @@ class Backend implements ControlBackend {
 		this.calls.push({ caller, tool, args });
 		return { text: `ran ${tool} ${JSON.stringify(args)}`, isError: this.failing };
 	}
-	async resolve(): Promise<SessionView> {
+	async resolve(): Promise<SessionStatus> {
 		throw new Error("no such session");
 	}
-	view(): SessionView | null {
-		return null;
-	}
-	views(): SessionView[] {
+	snapshots(): [] {
 		return [];
 	}
 	observe(_listener: (activity: TabActivity) => void): () => void {
@@ -45,11 +42,7 @@ interface Run {
 	stderr: string;
 }
 
-let binary: string;
-beforeAll(() => {
-	// A stale or missing build compiles here; a fresh one only hashes the sources.
-	binary = join(ensureNative(), binaryFile("ompdesk"));
-}, 600_000);
+const binary = join(stagedDir(), binaryFile("ompdesk"));
 
 describe("ompdesk CLI", () => {
 	let userData: string;

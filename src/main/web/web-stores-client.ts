@@ -1,7 +1,7 @@
 /**
  * Main's side of the core's web stores for one `userData` (`native/ompdesk/crates/core/src/web/store.rs`): the
  * paired devices (`web-devices.json`) and the blocks (`web-blocked.json`) live in the core, which the web edge reads
- * and changes too. Main keeps a copy for the callers that read in the same tick (`WebDevices.get`, `PeerQuota`, the
+ * and changes too. Main keeps a copy for the callers that read in the same tick (`WebDevices.get`, the
  * computer-sharing gate's `WebBlocks.check`), changes it at once when it makes a change, and sends the change to the
  * core as an ordered push. The core answers every push with the whole list and the number of the last push it applied
  * (`ack`), and tells every change of its own (a device the edge paired, one it expired) the same way.

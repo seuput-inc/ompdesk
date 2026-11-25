@@ -1,21 +1,11 @@
-/**
- * `git` / `gh` subprocess runner for the GUI-side git commands. No shell, argv
- * arrays only (Windows-safe); binaries resolve against the login-shell PATH
- * (same merge as the omp runtime) because a Finder-launched app inherits
- * launchd's bare PATH, where Homebrew's `gh` is missing.
- *
- * The Changes panel's git (`changes.ts`, `scm.ts`), every gh run (`pr.ts`, `github.ts` and the clients `gh`, `ghText`
- * below) and disk care's gits and disk work (`src/main/disk/`) run in the core process
- * (`native/ompdesk/crates/core/src/{git,gh,disk}`): `gitRunner` and `ghRunner` hand it this file's rules (binary,
- * environment, timeout, output cap), so both runners follow one set, and `coreGit`, `coreGh` and `coreHeld` hold each
- * request to the repository-lock step it is made in as `execBin` holds a git.
- */
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+/** Main resolves the git/gh launcher and environment. The core runs the processes; the active repository-lock
+ * step tracks their final reply even if its caller has already timed out or stopped. */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { withoutGitSelectors } from "../../../shared/git-env";
 import { type CoreAnswer, core } from "../../core/process";
 import { ChainBusyError, currentStepSignal, SerialChain, trackEffect } from "../../serial-chain";
+import { appleDeveloperDir } from "../../setup/apple-git";
 import { brewBinDirs, spawnPath } from "../../shell-env";
 import { findOnPath } from "../../spawn";
 import { LocalCommandError } from "../types";
@@ -26,23 +16,6 @@ export const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 /** How long a process that was asked to end may ignore it before it is killed outright. */
 const KILL_GRACE_MS = 2_000;
-
-export interface ExecResult {
-	code: number;
-	stdout: Buffer;
-	stderr: string;
-	/** stdout hit `maxBytes` and the process was killed. */
-	truncated: boolean;
-}
-
-export interface ExecOptions {
-	cwd: string;
-	timeoutMs?: number;
-	maxBytes?: number;
-	env?: Record<string, string>;
-	/** Bytes written to the process's stdin; without it stdin is closed. */
-	input?: Buffer;
-}
 
 const binCache = new Map<string, Promise<string | null>>();
 
@@ -92,9 +65,7 @@ async function gitBin(): Promise<string | null> {
 	if (process.platform !== "darwin" || found !== "/usr/bin/git") return found;
 	trampolineTarget ??= (async () => {
 		if (process.env.DEVELOPER_DIR) return developerGit(process.env.DEVELOPER_DIR) ?? found;
-		const { promise, resolve } = Promise.withResolvers<string | null>();
-		execFile("/usr/bin/xcode-select", ["-p"], { timeout: 5_000 }, (error, stdout) => resolve(error ? null : stdout));
-		return developerGit(await promise) ?? found;
+		return developerGit(await appleDeveloperDir(process.env, 5000)) ?? found;
 	})();
 	return trampolineTarget;
 }
@@ -127,10 +98,9 @@ async function runnerEnv(extra: Record<string, string>): Promise<Record<string, 
 	return env;
 }
 
-/** This process's git rules for a git the core runs, read now (the PATH and the environment can change while the app runs). */
-export async function gitRunner(): Promise<CoreRunner> {
+async function availableGitRunner(): Promise<CoreRunner | null> {
 	const bin = await gitBin();
-	if (!bin) throw new Error("git is not installed or not on PATH");
+	if (!bin) return null;
 	return {
 		bin,
 		args: GIT_ARGS,
@@ -138,6 +108,13 @@ export async function gitRunner(): Promise<CoreRunner> {
 		timeoutMs: DEFAULT_TIMEOUT_MS,
 		maxBytes: DEFAULT_MAX_BYTES,
 	};
+}
+
+/** This process's git rules for a git the core runs (the PATH and environment can change between calls). */
+export async function gitRunner(): Promise<CoreRunner> {
+	const runner = await availableGitRunner();
+	if (!runner) throw new Error("git is not installed or not on PATH");
+	return runner;
 }
 
 /** Never prompt, never check for a newer gh, no colour. */
@@ -148,12 +125,27 @@ export async function ghRunner(bin: string): Promise<CoreRunner> {
 	return { bin, args: [], env: await runnerEnv(GH_ENV), timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
 }
 
+/**
+ * How a schedule's precheck command runs in the core: the platform shell with the command as its one argument
+ * (`/bin/sh -c`, `cmd.exe /d /s /c`), the login shell's PATH, ambient repository selectors dropped, read now.
+ */
+export async function shellRunner(): Promise<CoreRunner> {
+	const windows = process.platform === "win32";
+	return {
+		bin: windows ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh",
+		args: windows ? ["/d", "/s", "/c"] : ["-c"],
+		env: await runnerEnv({}),
+		timeoutMs: 60_000,
+		maxBytes: 16 * 1024,
+	};
+}
+
 /** Room past a request's git timeouts for its disk work, the core round trip and the end of a git that ran past one. */
 const CORE_SLACK_MS = KILL_GRACE_MS + 5_000;
 
 /**
  * A request to the core whose processes run with this process's rules (`params` builds it, runners included), held to
- * the repository-lock step it is made in as an `execBin` process is: it never starts in a stopped step; when its step
+ * the repository-lock step it is made in: it never starts in a stopped step; when its step
  * is stopped it fails at once with the stop, the core ends the process it runs (asked, then killed `KILL_GRACE_MS`
  * later) and starts no other, and the lock's next holder waits until the core is done with the request, which is once
  * every process it started exited. `timeoutMs` is how long its processes may take in all; the call waits that plus
@@ -164,7 +156,11 @@ async function heldRequest<T>(method: string, params: () => Promise<object>, tim
 }
 
 /** `heldRequest` with the answer's `bin` tail. */
-async function heldAnswer<T>(method: string, params: () => Promise<object>, timeoutMs: number): Promise<CoreAnswer<T>> {
+export async function heldAnswer<T>(
+	method: string,
+	params: () => Promise<object>,
+	timeoutMs: number,
+): Promise<CoreAnswer<T>> {
 	const hold = currentStepSignal();
 	if (hold?.aborted) throw hold.reason;
 	const request = await params();
@@ -198,7 +194,15 @@ export async function coreGit<T>(method: string, params: object, rounds: number,
 
 /** `coreGit` with the answer's `bin` tail (file contents the request read). */
 export function coreGitAnswer<T>(method: string, params: object, rounds: number, slowMs = 0): Promise<CoreAnswer<T>> {
-	return heldAnswer(method, async () => ({ ...params, git: await gitRunner() }), rounds * DEFAULT_TIMEOUT_MS + slowMs);
+	// A diff checks its path first; an unknown project is cached even when git is unavailable.
+	return heldAnswer(
+		method,
+		async () => ({
+			...params,
+			git: await (method === "git.diff" || method === "git.projectOrigin" ? availableGitRunner() : gitRunner()),
+		}),
+		rounds * DEFAULT_TIMEOUT_MS + slowMs,
+	);
 }
 
 /**
@@ -233,104 +237,6 @@ export function coreGh<T>(
 	);
 }
 
-/** Ask a process to end, and end it for good when it ignores the request. */
-function endProcess(child: ChildProcess): void {
-	child.kill();
-	setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
-}
-
-/** Spawn `bin args`; never rejects on non-zero exit, rejects on spawn failure / timeout. */
-export async function execBin(bin: string, args: string[], opts: ExecOptions): Promise<ExecResult> {
-	// A call made in a chain step that was stopped (the repository lock's bound) never starts, and ends once it is.
-	const hold = currentStepSignal();
-	if (hold?.aborted) throw hold.reason;
-	const env = await spawnEnv(opts.env);
-	if (hold?.aborted) throw hold.reason;
-	const { promise, resolve, reject } = Promise.withResolvers<ExecResult>();
-	const child = spawn(bin, args, {
-		cwd: opts.cwd,
-		env,
-		shell: false,
-		stdio: ["pipe", "pipe", "pipe"],
-		windowsHide: true,
-	});
-	// The repository lock waits for this child to exit when its holder is stopped: a git still writing must not overlap
-	// the next holder.
-	const exited = Promise.withResolvers<void>();
-	child.once("close", () => exited.resolve());
-	child.once("error", () => exited.resolve());
-	trackEffect(`${bin} ${args[0] ?? ""}`.trim(), exited.promise);
-	const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
-	const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-	const chunks: Buffer[] = [];
-	let size = 0;
-	let truncated = false;
-	let stderr = "";
-	const timer = setTimeout(() => {
-		endProcess(child);
-		reject(new Error(`${args[0] ?? bin} timed out after ${timeoutMs}ms`));
-	}, timeoutMs);
-	const stop = () => {
-		clearTimeout(timer);
-		endProcess(child);
-		reject(hold?.reason);
-	};
-	hold?.addEventListener("abort", stop, { once: true });
-	child.stdout.on("data", (chunk: Buffer) => {
-		if (truncated) return;
-		if (size + chunk.length > maxBytes) {
-			chunks.push(chunk.subarray(0, maxBytes - size));
-			size = maxBytes;
-			truncated = true;
-			endProcess(child);
-			return;
-		}
-		chunks.push(chunk);
-		size += chunk.length;
-	});
-	child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-		if (stderr.length < 64 * 1024) stderr += chunk;
-	});
-	// A process that exits before reading its input (a failing git) closes the pipe: that is its exit code's news, not ours.
-	child.stdin.on("error", () => {});
-	child.stdin.end(opts.input);
-	child.on("error", err => {
-		clearTimeout(timer);
-		hold?.removeEventListener("abort", stop);
-		reject(err);
-	});
-	child.on("close", code => {
-		clearTimeout(timer);
-		hold?.removeEventListener("abort", stop);
-		resolve({ code: code ?? 1, stdout: Buffer.concat(chunks), stderr, truncated });
-	});
-	return promise;
-}
-
-export class GitCommandError extends Error {
-	constructor(
-		readonly args: string[],
-		readonly result: ExecResult,
-	) {
-		super(result.stderr.trim() || `git ${args[0] ?? ""} exited with code ${result.code}`);
-		this.name = "GitCommandError";
-	}
-}
-
-/** Run git; resolves stdout text, rejects on non-zero exit. */
-export async function git(cwd: string, args: string[], opts: Omit<ExecOptions, "cwd"> = {}): Promise<string> {
-	const result = await gitRaw(cwd, args, opts);
-	if (result.code !== 0) throw new GitCommandError(args, result);
-	return result.stdout.toString("utf8");
-}
-
-/** Run git without throwing on exit code (still throws when git is missing). */
-export async function gitRaw(cwd: string, args: string[], opts: Omit<ExecOptions, "cwd"> = {}): Promise<ExecResult> {
-	const bin = await gitBin();
-	if (!bin) throw new Error("git is not installed or not on PATH");
-	return execBin(bin, [...GIT_ARGS, ...args], { cwd, ...opts, env: { ...GIT_ENV, ...opts.env } });
-}
-
 /** Run gh at `bin` (core `gh.run`); resolves stdout text, rejects with gh's stderr on a non-zero exit or a cut output. */
 export function gh(
 	cwd: string,
@@ -350,14 +256,20 @@ export const GH_TEXT_TIMEOUT_MS = 30_000;
 
 /**
  * Run gh (or git) at `bin` with gh's non-interactive env to completion as text (core `gh.text`); never rejects on a
- * non-zero exit, rejects when it could not run or ran past `GH_TEXT_TIMEOUT_MS`.
+ * non-zero exit, rejects when it could not run or ran past `GH_TEXT_TIMEOUT_MS`. `background`: a timer's read, held
+ * behind GitHub's rate limit and pace (core `gh/gate.rs`, refused as `gh_paused`).
  */
 export function ghText(
 	cwd: string,
 	bin: string,
 	args: string[],
+	opts: { background?: boolean } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-	return heldRequest("gh.text", async () => ({ gh: await ghRunner(bin), cwd, args }), GH_TEXT_TIMEOUT_MS);
+	return heldRequest(
+		"gh.text",
+		async () => ({ gh: await ghRunner(bin), cwd, args, ...(opts.background ? { background: true } : {}) }),
+		GH_TEXT_TIMEOUT_MS,
+	);
 }
 
 /**

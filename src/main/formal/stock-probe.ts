@@ -11,7 +11,13 @@ const { createAgentSession } = await import(`${packageRoot}/src/sdk.ts`);
 const { SkillProtocolHandler } = await import(`${packageRoot}/src/internal-urls/skill-protocol.ts`);
 const { parseInternalUrl } = await import(`${packageRoot}/src/internal-urls/parse.ts`);
 
-const { session } = await createAgentSession({ cwd, additionalExtensionPaths: roots, disableExtensionDiscovery: true });
+const { session } = await createAgentSession({
+	cwd,
+	additionalExtensionPaths: roots,
+	disableExtensionDiscovery: true,
+	// Measure the prompt as built, without starting background model jobs to rewrite its skill descriptions.
+	deferHintCompression: true,
+});
 const skills: { name: string; filePath: string; hide?: boolean; disableModelInvocation?: boolean }[] = [
 	...session.skills,
 ];
@@ -38,4 +44,5 @@ console.log(
 		read,
 	}),
 );
+await session.dispose();
 process.exit(0);

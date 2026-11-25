@@ -20,7 +20,7 @@ export {
 } from "./Card";
 export { Checkbox, type CheckboxProps, Radio, type RadioProps } from "./Checkbox";
 export { Chip, type ChipProps } from "./Chip";
-export { type ChoiceCard, type ChoiceCardGroup, ChoiceCards, type ChoiceCardsProps } from "./ChoiceCards";
+export { type ChoiceCard, ChoiceCards, type ChoiceCardsProps } from "./ChoiceCards";
 export { ChoiceList, type ChoiceListOption, type ChoiceListProps } from "./ChoiceList";
 export { Collapse } from "./Collapse";
 export { ConfirmDialog, type ConfirmDialogProps } from "./ConfirmDialog";
@@ -83,8 +83,8 @@ export {
 	type ProgressSegment,
 	type SegmentedProgressBarProps,
 } from "./ProgressBar";
+export { ProjectArtwork, type ProjectArtworkProps } from "./ProjectArtwork";
 export { isTabbable, popoverTabStops, tabOutOfPopover } from "./popover-focus";
-export { QrCode } from "./QrCode";
 export { RootErrorBoundary } from "./RootErrorBoundary";
 export { SectionLabel, type SectionLabelProps } from "./SectionLabel";
 export {

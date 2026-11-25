@@ -39,7 +39,7 @@ export function capPreview(text: string): Preview {
 		: { text, totalChars: text.length, truncated: false };
 }
 
-/** The fields of stock's `SystemPromptSource` (`pi-tui/status-line/context-usage.ts`) the inspector reads. */
+/** The fields of stock's `SystemPromptSource` (`session/context-usage.ts`) the inspector reads. */
 export interface PromptSource {
 	readonly kind: "instruction-files" | "skills";
 	/** UTF-16 range of the source in its block. */

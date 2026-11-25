@@ -1,6 +1,4 @@
 //! The one-line texts a routine trigger fires with (was `src/main/routines/source.ts`' `clip` and `describeCommits`).
-//! `clip` stays in main too, for the triggers still there (sessions, files, email); both copies are held to the same
-//! captured rows (`captured.json` `clip`, read by `source.test.ts` as well).
 
 use crate::control::js::number;
 use crate::fs::order::{is_js_space, js_trim};

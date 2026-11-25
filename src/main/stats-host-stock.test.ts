@@ -4,28 +4,21 @@
  * (`/api/events` starts `statsLive()`); `omp stats` always opens that page, the GUI never does, so the database
  * stopped at whatever the last browser dashboard or `omp stats` run left (seen: 5 days stale).
  */
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
+import { StatsServerManager } from "./stats-server";
 
 const realRoot = path.join(os.homedir(), ".bun", "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent");
 
 const tempDirs: string[] = [];
-const children: ChildProcessWithoutNullStreams[] = [];
+const hosts: StatsServerManager[] = [];
 afterEach(async () => {
 	// Wait for each host to exit: on Windows its open stats.db keeps the home folder from being removed.
-	await Promise.all(
-		children.splice(0).map(child => {
-			const { promise, resolve } = Promise.withResolvers<void>();
-			if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-			child.once("exit", () => resolve());
-			child.kill();
-			return promise;
-		}),
-	);
+	await Promise.all(hosts.splice(0).map(host => host.kill()));
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -60,7 +53,7 @@ function reply(id: string, parentId: string, at: number): string {
  * The stats host with its home at `home` (HOME, and USERPROFILE, which Windows reads instead), so stock reads
  * `<home>/.omp/agent/sessions` and writes `<home>/.omp/stats.db`.
  */
-async function startHost(home: string): Promise<string> {
+async function startHost(home: string): Promise<StatsServerManager> {
 	const env: Record<string, string | undefined> = {
 		...process.env,
 		HOME: home,
@@ -68,26 +61,20 @@ async function startHost(home: string): Promise<string> {
 		OMP_PACKAGE_ROOT: realRoot,
 	};
 	for (const key of ["PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE", "XDG_DATA_HOME"])
-		delete env[key];
-	const child = spawn("bun", [path.resolve("resources/gui-bridge/stats-host.ts"), "127.0.0.1", "0"], {
-		stdio: ["pipe", "pipe", "pipe"],
+		env[key] = undefined;
+	const host = new StatsServerManager({
+		command: "bun",
+		args: [path.resolve("resources/gui-bridge/stats-host.ts")],
 		env,
 	});
-	children.push(child);
-	child.stderr.resume();
-	let out = "";
-	return await new Promise<string>((resolve, reject) => {
-		child.stdout.on("data", (chunk: Buffer) => {
-			out += chunk.toString("utf8");
-			const match = /http:\/\/127\.0\.0\.1:(\d+)/.exec(out);
-			if (match) resolve(`http://127.0.0.1:${match[1]}`);
-		});
-		child.on("exit", code => reject(new Error(`stats host exited (${code}): ${out}`)));
-	});
+	hosts.push(host);
+	await host.start();
+	return host;
 }
 
-async function requestCount(origin: string): Promise<number | undefined> {
-	const body: unknown = await (await fetch(`${origin}/api/stats/requests?range=all`)).json();
+async function requestCount(host: StatsServerManager): Promise<number | undefined> {
+	const result = await host.fetch("/api/stats/requests", { range: "all" });
+	const body = result.ready ? result.data : undefined;
 	return body && typeof body === "object" && "total" in body && typeof body.total === "number"
 		? body.total
 		: undefined;
@@ -110,10 +97,27 @@ describe.skipIf(!existsSync(path.join(realRoot, "package.json")))("the stats hos
 		});
 		await fs.writeFile(file, `${header}\n${reply("a0000001", "", start)}\n`);
 
-		const origin = await startHost(home);
-		await expect.poll(() => requestCount(origin), { timeout: 20_000, interval: 250 }).toBe(1);
+		const host = await startHost(home);
+		await expect.poll(() => requestCount(host), { timeout: 20_000, interval: 250 }).toBe(1);
 
 		await fs.appendFile(file, `${reply("a0000002", "a0000001", Date.now())}\n`);
-		await expect.poll(() => requestCount(origin), { timeout: 20_000, interval: 250 }).toBe(2);
+		await expect.poll(() => requestCount(host), { timeout: 20_000, interval: 250 }).toBe(2);
+		const first = await host.fetch("/api/stats/requests", { range: "all", limit: "1" });
+		expect(first).toMatchObject({ ready: true, data: { total: 2, nextCursor: expect.any(String) } });
+		if (!first.ready) throw new Error("host lost its listener");
+		const page = z.object({
+			rows: z.array(z.object({ id: z.number() })).length(1),
+			nextCursor: z.string().nullable(),
+			snapshotAt: z.number(),
+		});
+		const { rows, nextCursor, snapshotAt } = page.parse(first.data);
+		if (!nextCursor) throw new Error("first page has no cursor");
+		// Inserted after the snapshot but inside its time window: maxId must exclude it.
+		await fs.appendFile(file, `${reply("a0000003", "a0000002", start + 1000)}\n`);
+		await expect.poll(() => requestCount(host), { timeout: 20_000, interval: 250 }).toBe(3);
+		const next = await host.fetch("/api/stats/requests", { range: "all", limit: "1", cursor: nextCursor });
+		expect(next).toMatchObject({ ready: true, data: { total: 2, nextCursor: null, snapshotAt } });
+		if (!next.ready) throw new Error("host lost its listener");
+		expect(page.parse(next.data).rows[0].id).not.toBe(rows[0].id);
 	}, 60_000);
 });

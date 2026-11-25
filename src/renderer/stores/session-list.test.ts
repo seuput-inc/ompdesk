@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IpcSessionsChanged, SessionInfo } from "../../shared/ipc-types";
 import type { VersionedSessionList } from "../../shared/session-list-delta";
 import { resetSnapshotsForTest, snapshots } from "../lib/snapshot-cache";
-import { READ_RETRY_MS, resetSessionListFeeds, sessionListFeed } from "./session-list";
+import { READ_RETRY_MS, refreshHeldSessionLists, resetSessionListFeeds, sessionListFeed } from "./session-list";
 
 class Memory {
 	readonly map = new Map<string, string>();
@@ -234,6 +234,189 @@ describe("session list snapshot", () => {
 		).toEqual(["/b"]);
 	});
 
+	it("keeps a deleted savedId absent from a late read, snapshots and a reconnecting host-list consumer", async () => {
+		vi.useFakeTimers();
+		const savedId = "/P";
+		const device = "dev-host";
+		const ns = `device:${device}`;
+		const beforeDelete = [row(savedId), row("/kept")];
+		const afterDelete = [row("/kept")];
+		const staleRead = Promise.withResolvers<SessionInfo[]>();
+		const freshRead = Promise.withResolvers<SessionInfo[]>();
+		const list = vi.fn(() => freshRead.promise).mockImplementationOnce(() => staleRead.promise);
+		const remove = vi.fn(async () => {});
+		install(list, remove);
+		snapshots().write("sessions", ns, "global", beforeDelete);
+		snapshots().write("sessions", ns, "local", beforeDelete);
+		const feed = sessionListFeed("global", device);
+		let release = feed.retain();
+		let unsubscribe = () => {};
+		try {
+			expect(feed.store.getState().sessions.map(s => s.path)).toContain(savedId);
+			await feed.deleteSession(savedId);
+			expect(remove).toHaveBeenCalledWith(savedId, device);
+			expect(feed.store.getState().sessions.map(s => s.path)).not.toContain(savedId);
+			const observed: string[] = [];
+			unsubscribe = feed.store.subscribe(state => observed.push(...state.sessions.map(s => s.path)));
+
+			staleRead.resolve(beforeDelete);
+			await vi.runAllTimersAsync();
+			expect.soft(observed).not.toContain(savedId);
+			expect.soft(feed.store.getState().sessions.map(s => s.path)).toEqual(["/kept"]);
+			for (const scope of ["global", "local"] as const)
+				expect
+					.soft(
+						snapshots()
+							.read<SessionInfo[]>("sessions", ns, scope)
+							?.value.map(s => s.path),
+					)
+					.toEqual(["/kept"]);
+
+			release();
+			release = () => {};
+			resetSessionListFeeds();
+			resetSnapshotsForTest();
+			const reconnected = sessionListFeed("global", device);
+			expect.soft(reconnected.store.getState().sessions.map(s => s.path)).toEqual(["/kept"]);
+			release = reconnected.retain();
+			freshRead.resolve(afterDelete);
+			await vi.runAllTimersAsync();
+			expect(reconnected.store.getState().sessions.map(s => s.path)).toEqual(["/kept"]);
+			expect(
+				snapshots()
+					.read<SessionInfo[]>("sessions", ns, "global")
+					?.value.map(s => s.path),
+			).toEqual(["/kept"]);
+		} finally {
+			unsubscribe();
+			release();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		["global", "answer", "before"],
+		["local", "answer", "before"],
+		["global", "error", "before"],
+		["local", "error", "before"],
+		["global", "answer", "after"],
+		["local", "answer", "after"],
+		["global", "error", "after"],
+		["local", "error", "after"],
+	] as const)("%s deletion fences both scopes' late %s %s fresh reads", async (scope, outcome, order) => {
+		vi.useFakeTimers();
+		const before = [row("/P"), row("/kept")];
+		const after = [row("/kept"), row("/new")];
+		const lateGlobal = Promise.withResolvers<SessionInfo[]>();
+		const lateLocal = Promise.withResolvers<SessionInfo[]>();
+		const freshGlobal = Promise.withResolvers<SessionInfo[]>();
+		const freshLocal = Promise.withResolvers<SessionInfo[]>();
+		const globalRead = vi.fn(() => freshGlobal.promise).mockImplementationOnce(() => lateGlobal.promise);
+		const localRead = vi.fn(() => freshLocal.promise).mockImplementationOnce(() => lateLocal.promise);
+		vi.stubGlobal("window", {
+			setTimeout,
+			clearTimeout,
+			omp: {
+				sessions: {
+					list: localRead,
+					listShared: async (device?: string) => ({
+						version: "e.1",
+						sessions: device === "dev-other" ? before : await globalRead(),
+					}),
+					delete: async () => {},
+				},
+				events: { onSessionsChanged: () => () => {} },
+			},
+		});
+		for (const each of ["global", "local"] as const) snapshots().write("sessions", "device:dev-host", each, before);
+		const global = sessionListFeed("global", "dev-host");
+		const local = sessionListFeed("local", "dev-host");
+		const other = sessionListFeed("global", "dev-other");
+		const releases = [global.retain(), local.retain(), other.retain()];
+		try {
+			await sessionListFeed(scope, "dev-host").deleteSession("/P");
+			if (order === "after") {
+				freshGlobal.resolve(after);
+				freshLocal.resolve(after);
+				await vi.runAllTimersAsync();
+			}
+			if (outcome === "answer") {
+				lateGlobal.resolve(before);
+				lateLocal.resolve(before);
+			} else {
+				lateGlobal.reject(new Error("old read failed"));
+				lateLocal.reject(new Error("old read failed"));
+			}
+			await vi.runAllTimersAsync();
+			const expected = order === "after" ? after : [row("/kept")];
+			for (const feed of [global, local])
+				expect(feed.store.getState()).toMatchObject({ sessions: expected, error: null });
+			for (const each of ["global", "local"] as const)
+				expect(
+					snapshots()
+						.read<SessionInfo[]>("sessions", "device:dev-host", each)
+						?.value.map(s => s.path),
+				).toEqual(expected.map(s => s.path));
+			expect(other.store.getState().sessions.map(s => s.path)).toEqual(["/P", "/kept"]);
+
+			freshGlobal.resolve(after);
+			freshLocal.resolve(after);
+			await vi.runAllTimersAsync();
+			for (const feed of [global, local])
+				expect(feed.store.getState().sessions.map(s => s.path)).toEqual(["/kept", "/new"]);
+		} finally {
+			for (const release of releases) release();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["global", "local"] as const)(
+		"a rejected %s delete leaves real rows and pending reads intact",
+		async scope => {
+			vi.useFakeTimers();
+			const before = [row("/P"), row("/kept")];
+			const read = Promise.withResolvers<SessionInfo[]>();
+			const deletion = Promise.withResolvers<void>();
+			install(
+				() => read.promise,
+				() => deletion.promise,
+			);
+			for (const each of ["global", "local"] as const) snapshots().write("sessions", "local", each, before);
+			const global = sessionListFeed("global");
+			const local = sessionListFeed("local");
+			const releases = [global.retain(), local.retain()];
+			const observed: string[][] = [];
+			const subscriptions = [global, local].map(feed =>
+				feed.store.subscribe(state => observed.push(state.sessions.map(s => s.path))),
+			);
+			try {
+				const deleting = sessionListFeed(scope).deleteSession("/P");
+				const rejected = expect(deleting).rejects.toThrow("delete refused");
+				deletion.reject(new Error("delete refused"));
+				await rejected;
+				for (const feed of [global, local])
+					expect(feed.store.getState().sessions.map(s => s.path)).toEqual(["/P", "/kept"]);
+				for (const each of ["global", "local"] as const)
+					expect(
+						snapshots()
+							.read<SessionInfo[]>("sessions", "local", each)
+							?.value.map(s => s.path),
+					).toEqual(["/P", "/kept"]);
+
+				read.resolve([...before, row("/new")]);
+				await vi.runAllTimersAsync();
+				for (const feed of [global, local])
+					expect(feed.store.getState().sessions.map(s => s.path)).toEqual(["/P", "/kept", "/new"]);
+				expect(observed.length).toBeGreaterThan(0);
+				for (const paths of observed) expect(paths).toContain("/P");
+			} finally {
+				for (const unsubscribe of subscriptions) unsubscribe();
+				for (const release of releases) release();
+				vi.useRealTimers();
+			}
+		},
+	);
+
 	it("a session deleted on another device leaves the local list's copy once the global list is read (a phone reload)", async () => {
 		snapshots().write("sessions", "local", "local", [row("/gone"), row("/b")]);
 		install(async () => [row("/a"), row("/b")]);
@@ -252,6 +435,49 @@ describe("session list snapshot", () => {
 				.store.getState()
 				.sessions.map(s => s.path),
 		).toEqual(["/b"]);
+	});
+});
+
+describe("held list recovery", () => {
+	it("waits for the read after an in-flight snapshot before acknowledging resync", async () => {
+		const old = Promise.withResolvers<SessionInfo[]>();
+		const fresh = Promise.withResolvers<SessionInfo[]>();
+		let reads = 0;
+		install(() => (++reads === 1 ? old.promise : fresh.promise));
+		const feed = sessionListFeed("global");
+		const release = feed.retain();
+		try {
+			let completed = false;
+			const recovery = Promise.resolve(refreshHeldSessionLists()).then(value => {
+				completed = true;
+				return value;
+			});
+			await Promise.resolve();
+			expect(completed).toBe(false);
+			old.resolve([row("/deleted")]);
+			await vi.waitFor(() => expect(reads).toBe(2));
+			expect(completed).toBe(false);
+			fresh.resolve([row("/kept")]);
+			expect(await recovery).toBe(true);
+			expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]);
+		} finally {
+			release();
+		}
+	});
+
+	it("reports a failed authoritative read without clearing the last known rows", async () => {
+		let reads = 0;
+		install(() => (++reads === 1 ? Promise.resolve([row("/kept")]) : Promise.reject(new Error("list unavailable"))));
+		const feed = sessionListFeed("global");
+		const release = feed.retain();
+		try {
+			await vi.waitFor(() => expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]));
+			expect(await Promise.resolve(refreshHeldSessionLists())).toBe(false);
+			expect(feed.store.getState().error).toBe("list unavailable");
+			expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]);
+		} finally {
+			release();
+		}
 	});
 });
 
@@ -277,6 +503,7 @@ describe("the numbered global list", () => {
 						pending.push(() => read.resolve(state.answer));
 						return read.promise;
 					},
+					delete: async () => {},
 				},
 				events: {
 					onSessionsChanged: (listener: (change: IpcSessionsChanged) => void) => {
@@ -303,6 +530,58 @@ describe("the numbered global list", () => {
 		return { state, push, land, together };
 	}
 	afterEach(() => vi.useRealTimers());
+
+	it("waits for another authoritative read if a new incarnation changes the list during recovery", async () => {
+		const { state, push, land } = numbered({ version: "old.1", sessions: [at("/deleted")] });
+		const feed = sessionListFeed("global");
+		const release = feed.retain();
+		try {
+			await vi.runAllTimersAsync();
+			state.hold = true;
+			let completed = false;
+			const recovery = Promise.resolve(refreshHeldSessionLists()).then(ok => {
+				completed = true;
+				return ok;
+			});
+			await push({ list: { base: "new.1", version: "new.2", set: [at("/kept")], remove: ["/deleted"] } });
+			await land();
+			expect(completed).toBe(false);
+			state.answer = { version: "new.2", sessions: [at("/kept")] };
+			await land();
+			expect(await recovery).toBe(true);
+			expect(feed.store.getState().sessions.map(session => session.path)).toEqual(["/kept"]);
+		} finally {
+			release();
+		}
+	});
+
+	it("forgets the numbered copy on delete so a delta cannot restore its deleted row after a failed read", async () => {
+		const { state, push, land } = numbered({ version: "e.1", sessions: [at("/P"), at("/kept")] });
+		const feed = sessionListFeed("global");
+		const release = feed.retain();
+		let unsubscribe = () => {};
+		try {
+			await vi.runAllTimersAsync();
+			state.hold = true;
+			vi.spyOn(window.omp.sessions, "listShared").mockRejectedValueOnce(new Error("read failed"));
+			await feed.deleteSession("/P");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(feed.store.getState().error).toBe("read failed");
+			const observed: string[] = [];
+			unsubscribe = feed.store.subscribe(next => observed.push(...next.sessions.map(s => s.path)));
+
+			await push({ list: { base: "e.1", version: "e.2", set: [at("/new")], remove: [] } });
+			expect(observed).not.toContain("/P");
+			expect(feed.store.getState().sessions.map(s => s.path)).toEqual(["/kept"]);
+			state.answer = { version: "e.2", sessions: [at("/kept"), at("/new")] };
+			await land();
+			expect(feed.store.getState().sessions.map(s => s.path)).toEqual(["/kept", "/new"]);
+			expect(observed).not.toContain("/P");
+		} finally {
+			unsubscribe();
+			release();
+		}
+	});
 
 	it("applies a pushed change of the version it holds and reads nothing", async () => {
 		const { state, push } = numbered({ version: "e.1", sessions: [at("/a"), at("/b")] });

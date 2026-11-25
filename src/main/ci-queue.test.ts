@@ -1,15 +1,14 @@
 /**
  * The check queue is managed by the workflows, not by whoever dispatches (.omp/rules/e2e-ci-windows.md › CI › The check
- * queue). Four rules, each pinned where a later edit would silently lose it:
+ * queue). Three rules, each pinned where a later edit would silently lose it:
  *
  *  1. Overlapping runs cancel themselves: main has one run going and the newest waiting, any other ref its newest run.
- *  2. Every macOS job of a dispatchable workflow sits behind the queue gate and in an account-wide lane.
- *  3. macOS is admitted to main and to MAC_REFS branches only.
- *  4. A commit with a green run of the same name is not run again.
+ *  2. Every macOS job of a dispatchable workflow sits behind the queue gate without locking out another workflow or ref.
+ *  3. A commit with a green run of the same name is not run again.
  *
  * GitHub's own side of 1 and 2 (one holder and one waiting request per concurrency group, the newest waiting request
  * replacing an older one, `cancel-in-progress` read from the arriving run) was observed on the runners, not here; this
- * file keeps the workflows shaped so that side applies, and runs the gate's two shell steps as they run there.
+ * file keeps the workflows shaped so that side applies, and runs the gate's dedupe step as it runs there.
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -95,19 +94,26 @@ describe("every macOS job of a dispatchable workflow", () => {
 	it("is found where it is expected, so this test cannot pass by finding none", () => {
 		const found = macJobs.map(({ name, id }) => `${name}:${id}`).sort();
 		expect(found).toEqual([
-			"ci.yml:e2e",
 			"ci.yml:mac",
-			"e2e-nightly.yml:e2e",
-			"e2e-nightly.yml:parity",
 			"flake-probe.yml:probe",
+			"shell-batch-checks.yml:keychain",
+			"shell-batch-checks.yml:mac-update-gate",
+			"shell-batch-checks.yml:move-mac",
+			"shell-batch-checks.yml:move-mac-release1",
+			"shell-batch-checks.yml:phone-webkit-mac",
+			"shell-batch-checks.yml:release-assets-mac",
+			"shell-batch-checks.yml:release-update-mac",
+			"shell-batch-checks.yml:shell-mac",
+			"shell-batch-checks.yml:tauri-native",
+			"shell-batch-checks.yml:title-bar-mac",
 		]);
 	});
 
-	it("holds the account-wide lane for as long as it runs, and never cancels the holder", () => {
-		for (const { name, id, job } of macJobs) {
-			const group = job.concurrency?.group ?? "";
-			expect(group, `${name}:${id}`).toMatch(/mac-dispatch|mac-nightly/);
-			expect(job.concurrency?.["cancel-in-progress"], `${name}:${id}`).toBe(false);
+	it("leaves concurrency to the workflow so other macOS gates can finish", () => {
+		for (const { name, id, job, wf } of macJobs) {
+			expect(job.concurrency, `${name}:${id}`).toBeUndefined();
+			expect(wf.concurrency?.group, name).toContain(`${name.replace(/\.yml$/, "")}-`);
+			expect(wf.concurrency?.group, name).toContain("github.ref");
 		}
 	});
 
@@ -116,17 +122,6 @@ describe("every macOS job of a dispatchable workflow", () => {
 			const trail = chain(wf, id);
 			expect(trail, `${name}:${id}`).toContain("gate");
 			expect(wf.jobs.gate?.uses, name).toBe("./.github/workflows/queue-gate.yml");
-			// A dispatch is admitted by the gate's output, which is read by the first job on the way to the gate.
-			const reads = trail.some(job => String(wf.jobs[job]?.if ?? "").includes("needs.gate.outputs.mac_ok"));
-			expect(reads, `${name}:${id}`).toBe(true);
-		}
-	});
-
-	it("uses only the lanes the queue knows", () => {
-		// The dispatch lane every dispatched macOS job shares, and the nightly's own.
-		for (const { job } of macJobs) {
-			const lanes = [...(job.concurrency?.group ?? "").matchAll(/'(mac-[a-z-]+)'/g)].map(match => match[1]);
-			for (const lane of lanes) expect(["mac-dispatch", "mac-nightly"]).toContain(lane);
 		}
 	});
 });
@@ -159,6 +154,14 @@ describe("main and any other ref", () => {
 		}
 	});
 
+	it("keeps distinct shell gates on one ref in separate groups and compares their own receipts for reuse", () => {
+		const shell = workflows.get("shell-batch-checks.yml") as Workflow;
+		for (const input of Object.keys(shell.on.workflow_dispatch?.inputs ?? {})) {
+			expect(shell.concurrency?.group, input).toContain(`inputs.${input}`);
+			expect(shell["run-name"], input).toContain(`inputs.${input}`);
+		}
+	});
+
 	it("names the nightly's dispatches by their inputs too", () => {
 		const nightly = workflows.get("e2e-nightly.yml") as Workflow;
 		for (const input of Object.keys(nightly.on.workflow_dispatch?.inputs ?? {})) {
@@ -187,8 +190,9 @@ describe("the macOS checks of a push to main", () => {
 		for (const [id, job] of Object.entries(mac.jobs)) {
 			expect(job["runs-on"], id).toBe("macos-latest");
 			// In a called workflow `inputs` is its own, not the dispatch's: admission is the caller's `if`.
-			expect(String(job.if ?? ""), id).not.toContain("inputs.");
-			expect(JSON.stringify(job.steps), id).not.toContain("inputs.");
+			const callerInput = /(?<![\w.-])inputs\s*(?:\.|\[)/i;
+			expect(String(job.if ?? ""), id).not.toMatch(callerInput);
+			expect(JSON.stringify(job.steps), id).not.toMatch(callerInput);
 		}
 	});
 
@@ -217,6 +221,33 @@ describe("the macOS checks of a push to main", () => {
 	});
 });
 
+describe.skipIf(process.platform === "win32")("shell dispatch", () => {
+	it("lets any pushed ref ask for macOS", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-shell-admission-"));
+		try {
+			fs.writeFileSync(
+				path.join(dir, "gh"),
+				`#!/bin/sh
+echo '{}'
+`,
+				{ mode: 0o755 },
+			);
+			const run = (args: string[]) =>
+				spawnSync("bun", [path.join(REPO, "scripts/ci-run.ts"), ...args, "--dry-run"], {
+					encoding: "utf8",
+					env: {
+						...process.env,
+						PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}`,
+					},
+				});
+			expect(run(["shell-batch-checks", "--ref", "unlisted"]).status).toBe(0);
+			expect(run(["shell-batch-checks.yml", "--ref", "main"]).status).toBe(0);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("the queue gate's steps, run as the runner runs them", () => {
 	const gate = workflows.get("queue-gate.yml") as Workflow;
 	const step = (id: string): Step => {
@@ -224,49 +255,14 @@ describe("the queue gate's steps, run as the runner runs them", () => {
 		if (!found?.run) throw new Error(`queue-gate.yml has no step ${id}`);
 		return found;
 	};
-	const bash = spawnSync("bash", ["--version"]).status === 0;
-	const jq = spawnSync("jq", ["--version"]).status === 0;
+	// The gate's dedupe step runs on ubuntu-latest only. Each case starts bash, jq and a fake gh script per
+	// call, which took 120 s for this file on a loaded Windows runner (run 43452782575, a 20 s timeout), so they run
+	// where the steps run and on a developer's POSIX machine.
+	const posix = process.platform !== "win32";
+	const bash = posix && spawnSync("bash", ["--version"]).status === 0;
+	const jq = posix && spawnSync("jq", ["--version"]).status === 0;
 	const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-queue-gate-"));
 	afterAll(() => fs.rmSync(scratch, { recursive: true, force: true }));
-
-	function admit(env: Record<string, string>): { status: number | null; macOk: string } {
-		const output = path.join(scratch, `output-${Math.random().toString(36).slice(2)}`);
-		const result = spawnSync("bash", ["-c", step("admit").run ?? ""], {
-			env: { PATH: process.env.PATH ?? "", GITHUB_OUTPUT: output, ...env },
-			encoding: "utf8",
-		});
-		return { status: result.status, macOk: fs.readFileSync(output, "utf8").trim() };
-	}
-	const dispatch = (ref: string, macRefs: string, mac = "true") => ({
-		EVENT: "workflow_dispatch",
-		MAC: mac,
-		MAC_REFS: macRefs,
-		REF: `refs/heads/${ref}`,
-		REF_NAME: ref,
-	});
-
-	it.skipIf(!bash)(
-		"admits macOS to main, to a listed branch (space or comma separated), and to anything not asking for it",
-		() => {
-			expect(admit(dispatch("main", ""))).toEqual({ status: 0, macOk: "mac_ok=true" });
-			expect(admit(dispatch("omp/agent/a", "omp/agent/a omp/agent/b"))).toEqual({ status: 0, macOk: "mac_ok=true" });
-			expect(admit(dispatch("omp/agent/b", "omp/agent/a,omp/agent/b"))).toEqual({ status: 0, macOk: "mac_ok=true" });
-			expect(admit(dispatch("feature", "", "false"))).toEqual({ status: 0, macOk: "mac_ok=true" });
-			expect(admit({ ...dispatch("feature", ""), EVENT: "push" })).toEqual({ status: 0, macOk: "mac_ok=true" });
-			expect(admit({ ...dispatch("x", ""), EVENT: "schedule" })).toEqual({ status: 0, macOk: "mac_ok=true" });
-		},
-	);
-
-	it.skipIf(!bash)("refuses macOS to a branch that is not listed, however the list is written", () => {
-		const denied = { status: 1, macOk: "mac_ok=false" };
-		expect(admit(dispatch("feature", ""))).toEqual(denied);
-		expect(admit(dispatch("feature", "other"))).toEqual(denied);
-		// A name is not a prefix or a pattern: neither the list's glob characters nor part of a name match.
-		expect(admit(dispatch("feature", "*"))).toEqual(denied);
-		expect(admit(dispatch("feature", "feat"))).toEqual(denied);
-		expect(admit(dispatch("feat", "feature"))).toEqual(denied);
-		expect(admit(dispatch("feature/x", "feature"))).toEqual(denied);
-	});
 
 	/** A `gh` and a `sleep` on PATH that answer the two lookups the step makes and record a cancel; `jq` is the real one. `gh run cancel` fails as it did on a runner with no checkout (run 43445139041): the cancel must go through the API. */
 	function dedupe(title: string, runs: { id: number; display_title: string }[], env: Record<string, string> = {}) {
@@ -327,8 +323,5 @@ describe("the queue gate's steps, run as the runner runs them", () => {
 		expect(dedupeStep.if).toContain("inputs.dedupe");
 		expect(dedupeStep.if).toContain("github.run_attempt == 1");
 		expect(dedupeStep["continue-on-error"]).toBe(true);
-		expect(gate.jobs.gate?.steps?.find(candidate => candidate.id === "admit")).not.toHaveProperty(
-			"continue-on-error",
-		);
 	});
 });

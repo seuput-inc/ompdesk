@@ -42,9 +42,9 @@ interface Snapshot {
 	input: ShellInput | null;
 	/** A portrait tablet wide enough to dock the session list (`TABLET_DOCK_QUERY`). */
 	listDocked: boolean;
+	/** The side panel is a sheet: an Electron window under 1000 px, or any web mode but tablet-landscape. */
+	compact: boolean;
 }
-
-const DESKTOP: Snapshot = { mode: null, input: null, listDocked: false };
 
 /** The URL and storage do not change under a page: read once (tests call `resetShellModeForTests`). */
 let devParams: { shell: string | null; input: string | null } | undefined;
@@ -73,7 +73,8 @@ function matches(query: string): boolean {
 }
 
 function compute(): Snapshot {
-	if (!shellActive()) return DESKTOP;
+	// In an Electron window only `compact` moves; it is in the snapshot so `refresh` tells its readers.
+	if (!shellActive()) return { mode: null, input: null, listDocked: false, compact: matches(TABLET_PORTRAIT_QUERY) };
 	const { shell, input } = dev();
 	const mode =
 		SHELL_MODES.find(candidate => candidate === shell) ??
@@ -82,6 +83,7 @@ function compute(): Snapshot {
 		mode,
 		input: input === "touch" || input === "mouse" ? input : matches(TOUCH_QUERY) ? "touch" : "mouse",
 		listDocked: mode === "tablet-portrait" && matches(TABLET_DOCK_QUERY),
+		compact: mode !== "tablet-landscape",
 	};
 }
 
@@ -96,7 +98,8 @@ function refresh(): void {
 		attached &&
 		attached.mode === next.mode &&
 		attached.input === next.input &&
-		attached.listDocked === next.listDocked
+		attached.listDocked === next.listDocked &&
+		attached.compact === next.compact
 	)
 		return;
 	attached = next;
@@ -162,10 +165,7 @@ export function useShellInput(): ShellInput | null {
 export function useCompactShell(): boolean {
 	return useSyncExternalStore(
 		subscribe,
-		() => {
-			const mode = currentShellMode();
-			return mode === null ? matches(TABLET_PORTRAIT_QUERY) : mode !== "tablet-landscape";
-		},
+		() => snapshot().compact,
 		() => false,
 	);
 }

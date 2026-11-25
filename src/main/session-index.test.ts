@@ -4,11 +4,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionInfo } from "../shared/ipc-types";
 import { core } from "./core/process";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
 import { ompPackageRoot } from "./omp-runtime";
 import { SessionIndex } from "./session-index";
+import { SessionKindStore } from "./session-kinds";
+import { StockSessionStore } from "./session-store";
 import { INSTALLED_OMP } from "./test-bridge-probe";
 
 const stockRoot = ompPackageRoot(INSTALLED_OMP);
@@ -33,7 +36,7 @@ async function makeIndex(): Promise<{ index: SessionIndex; dir: string }> {
 	}
 	process.env.PI_CODING_AGENT_DIR = agent;
 	const dir = path.join(agent, "sessions");
-	const index = new SessionIndex(dir, dir);
+	const index = new SessionIndex(dir, dir, path.join(agent, "session-kinds.json"));
 	indexes.push(index);
 	return { index, dir };
 }
@@ -64,6 +67,59 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
+it("refuses to move a session into a file or missing folder and leaves its journal intact", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-move-"));
+	tempDirs.push(root);
+	const file = await writeSession(root, "stay");
+	const before = await fs.readFile(file);
+	const index = new SessionIndex(root, root);
+	indexes.push(index);
+	for (const destination of [file, path.join(root, "missing")]) {
+		await expect(index.moveSession(file, destination)).rejects.toThrow(
+			`[not_a_directory] Not a directory: ${destination}`,
+		);
+	}
+	expect(await fs.readFile(file)).toEqual(before);
+});
+
+it("searches only listed candidates, in caller order, and quotes original conversation text", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-search-"));
+	tempDirs.push(root);
+	const files = await Promise.all(["first", "second", "not-listed"].map(id => writeSession(root, id)));
+	await Promise.all(
+		files.map((file, i) => fs.appendFile(file, `${JSON.stringify({ message: { text: `Needle ${i} 𝄞` } })}\n`)),
+	);
+	const rows = files.slice(0, 2).map(
+		(file, i): SessionInfo => ({
+			path: file,
+			id: String(i),
+			cwd: root,
+			created: "",
+			modified: "",
+			title: null,
+			messageCount: 1,
+			size: 0,
+			status: "complete",
+			firstMessage: "",
+		}),
+	);
+	const stock = vi.spyOn(StockSessionStore.prototype, "list").mockResolvedValue(rows);
+	try {
+		const index = new SessionIndex(root, root);
+		indexes.push(index);
+		await index.list("global");
+		const candidates = [...files].reverse();
+		const expected = rows.map((row, i) => ({ path: row.path, snippet: `Needle ${i} 𝄞` })).reverse();
+		expect(await index.searchContent("NEEDLE", candidates)).toEqual(expected);
+		expect(await index.searchContent("\ud834", candidates)).toEqual(expected);
+		stock.mockResolvedValue([]);
+		await index.list("global");
+		expect(await index.searchContent("needle", candidates)).toEqual([]);
+	} finally {
+		stock.mockRestore();
+	}
+});
+
 describe.skipIf(!stockRoot)("SessionIndex using real stock storage", () => {
 	it("keeps GUI kind overlays and handles headers with no title slot", async () => {
 		const { index, dir } = await makeIndex();
@@ -74,6 +130,20 @@ describe.skipIf(!stockRoot)("SessionIndex using real stock storage", () => {
 		expect(infos.find(info => info.id === "agent-one")?.kind).toBeUndefined();
 		expect(await index.kindFor(chat)).toBe("chat");
 		expect(await index.kindFor(path.join(dir, "missing.jsonl"))).toBe("agent");
+	});
+
+	it("labels a session its chat tab marked, in the list and in its kind, and saves the record", async () => {
+		const { index, dir } = await makeIndex();
+		const marked = await writeSession(dir, "marked-chat");
+		await writeSession(dir, "agent-two");
+		new SessionKindStore(path.join(path.dirname(dir), "session-kinds.json")).markChat("marked-chat");
+		const infos = await index.list("global");
+		expect(infos.find(info => info.id === "marked-chat")?.kind).toBe("chat");
+		expect(infos.find(info => info.id === "agent-two")?.kind).toBeUndefined();
+		expect(await index.kindFor(marked)).toBe("chat");
+		expect(JSON.parse(await fs.readFile(path.join(path.dirname(dir), "session-kinds.json"), "utf8"))).toEqual({
+			chat: ["marked-chat"],
+		});
 	});
 
 	it("reads each listed session's header once for the legacy chat flag, again only for another session there", async () => {

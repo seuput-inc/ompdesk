@@ -32,6 +32,7 @@
 import type { AutopilotStartOptions, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import type {
 	AgentAppEvent,
+	AgentCloseOutcome,
 	AgentControlToolName,
 	AgentControlViewEvent,
 	AgentReviewItem,
@@ -40,14 +41,26 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
+import type { BotsRequest, BotsState } from "../../shared/bots";
+import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
-import type { IpcSavedFolder, IpcTabRunOutcome, IpcTabWorktree, TabStatus } from "../../shared/ipc-types";
+import type {
+	AutoCloseTurn,
+	IpcSavedFolder,
+	IpcScheduledRetry,
+	IpcTabRunOutcome,
+	IpcTabWorktree,
+	TabStatus,
+} from "../../shared/ipc-types";
 import type {
 	AgentMessage,
 	ExtensionUIRequest,
 	ExtensionUIResponse,
+	ImageContent,
 	RpcCommand,
 	RpcResponse,
+	RpcSafeRemoval,
+	TextContent,
 } from "../../shared/rpc-types";
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import type { SessionSummary } from "../../shared/session-summary";
@@ -89,10 +102,12 @@ export interface ControlTab {
 	 * opener in this state is not idle.
 	 */
 	resuming?: boolean;
+	/** Its cut-off turn did not go on by itself and waits for the person's Continue (TurnResume's cut-off row). */
+	cutOff?: "off" | "crash-loop" | "failed";
 	/** Open asks and approvals that wait for the person. */
 	asks: ControlAsk[];
 	/** A plan proposal that waits for approval (plan mode); answered like an ask with `ompdesk_session_answer`. */
-	plan?: { title: string; planFilePath: string };
+	plan?: { title: string; planFilePath: string; generation?: number };
 	/** The user hid this session from agents (Sidebar › Hide from other agents). */
 	hidden: boolean;
 	worktree?: IpcTabWorktree;
@@ -102,6 +117,7 @@ export interface ControlTab {
 	task?: string;
 	/** How its last finished turn ended; absent while one runs or before the first. */
 	lastRun?: IpcTabRunOutcome;
+	closeTurn?: AutoCloseTurn;
 	/** Opened by an agent's control tools, and not an Autopilot run or child (those close with their run). */
 	autoClosable?: boolean;
 	/** The person is looking at it: the focused tab, a visible pane, a viewer in another window or on a phone. */
@@ -124,6 +140,26 @@ export interface ControlTab {
 	 * (`tabCloseStep` decides what a close does with it).
 	 */
 	webEdits?: FileEdits;
+	/**
+	 * A view of a tab another party holds (a paired host's window or another device's tab there, or a tab this
+	 * computer runs for a paired device; `SidecarLike.shared`): closing it only leaves, that tab stays open.
+	 */
+	viewing?: true;
+	/** The tab's window's latest answer to an agent close (`AgentControlViewEvent.closeId`). */
+	closeAnswer?: { closeId: number; outcome: AgentCloseOutcome };
+	/**
+	 * A tab here not started since a relaunch (`asleep`) on a paired host's session a tab on that host holds: who holds
+	 * it there and what that tab does, from the host's summary every row reads. Its lines say that, never "not started".
+	 */
+	hostOpen?: OpenElsewhere;
+	/** Its turn ended and stock's background work (subagents, async jobs) still runs (`IpcTabInfo.settling`). */
+	settling?: true;
+	/** Stock's auto-retry saga its running turn is in (`IpcTabInfo.retrySaga`). */
+	retrySaga?: { attempt: number; maxAttempts: number; errorMessage: string };
+	/** Its failed turn retries by itself (`IpcTabInfo.scheduledRetry`): a backoff, or a wait for a provider's limit. */
+	scheduledRetry?: IpcScheduledRetry;
+	/** Its turn waits for the internet connection and goes on once it is back. */
+	awaitingConnection?: true;
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */
@@ -222,8 +258,8 @@ export interface AutopilotSource {
 	stop(tabId: string, now: boolean): Promise<AutopilotStatus>;
 }
 
-/** An open tab and the window it is in (any stable key for the window: its id). */
-export type HostTab = ControlTab & { window: string };
+/** An open tab and the window it is in (any stable key for the window: its id), and the session that opened it, if any. */
+export type HostTab = ControlTab & { window: string; opener?: string };
 
 /** What the receiver's bridge says of message markers (`agent_control_sent`): its instance and the marks its journal holds. */
 export interface SentAnswer {
@@ -305,6 +341,9 @@ export interface AppPorts {
 	autopilot(callerTabId: string, args: unknown): Promise<string>;
 }
 
+/** A file put on a computer: its path there, or why not (`code`: `file_too_large`, `upload_refused`, `unsupported`). */
+export type Landing = { ok: true; path: string } | { ok: false; error: string; code?: string };
+
 export interface AgentControlHost {
 	/** Settings › Tools & extensions switch (this computer's). */
 	enabled(): boolean;
@@ -319,8 +358,6 @@ export interface AgentControlHost {
 	summaries(device?: string): readonly SessionSummary[];
 	/** `agentControlManage` (default on) or full control: an agent may stop or close sessions it did not open, merge, schedule and start Autopilot without a card; deleting a saved session it did not open asks unless full control is on. */
 	manageEnabled(): boolean;
-	/** The session that opened `tabId` (`ompdesk_session_open`), if any. */
-	parentOf(tabId: string): string | undefined;
 	/** The tag the open carried (Autopilot passes `autopilot-child`), if any. */
 	parentTag?(tabId: string): string | undefined;
 	/** The sessions working in `tabId`'s checkout or another worktree of its repository on this computer (`checkout-peers.ts`); `ompdesk_report` may go to them. */
@@ -331,10 +368,16 @@ export interface AgentControlHost {
 	 */
 	mail(
 		tabId: string,
-		content: string,
+		content: string | (TextContent | ImageContent)[],
 		details: Record<string, unknown>,
 		delivery: MailDelivery,
 	): Promise<MailAnswer | undefined | void>;
+	/**
+	 * Put a file on the computer `tabId`'s session runs on, where its omp reads it by path (the upload folder a
+	 * composer's attached file lands in; a paired host's through `host.files.upload`). A caller outside OMPdesk's id
+	 * lands it on this computer.
+	 */
+	land?(tabId: string, name: string, bytes: Buffer): Promise<Landing>;
 	/** A child's report changed what its opener's work board shows. */
 	reviewChanged?(parentTabId: string): void;
 	/** Every open tab of this app once, in the pool's order, with the window it is in (a tab of any window). */
@@ -373,7 +416,7 @@ export interface AgentControlHost {
 	 * Release a tab a paired web page owns in main, as its own close would (worktree exit policy, terminals, the pool),
 	 * and tell that page to drop it. False when nothing was released.
 	 */
-	release(callerTabId: string, tabId: string): Promise<boolean>;
+	release(callerTabId: string, tabId: string, expectedTurn?: AutoCloseTurn): Promise<boolean>;
 	/** Resolves once the omp of a tab the window closed has exited (at once when none is exiting, and for a paired device's tab). */
 	exited(tabId: string): Promise<void>;
 	notify(callerTabId: string, title: string, body: string): void;
@@ -400,15 +443,21 @@ export interface AgentControlHost {
 	landing(worktree: WorktreeRef, device?: string): Promise<LandingFacts>;
 	/**
 	 * Remove a clean worktree on `device` whose branch tip is in the parent's HEAD or upstream, and its branch at that very
-	 * tip (never forced); `branch-kept` when the branch moved meanwhile.
+	 * tip (never forced); `branch-kept` when the branch moved meanwhile. `remote`: what became of its copy on origin.
 	 */
-	removeSafeWorktree(worktree: WorktreeRef, device?: string): Promise<WorktreeRemoval>;
+	removeSafeWorktree(worktree: WorktreeRef, device?: string): Promise<RpcSafeRemoval | null>;
 	/** Take back on `device` a worktree and branch an open made and nobody used (a failed open; never forced). */
 	discardWorktree(worktree: WorktreeRef, device?: string): Promise<WorktreeRemoval>;
 	/** Remember a session closed after its work landed, so its opener's family still lists it. */
 	recordClosed(child: ClosedChild): void;
 	/** The sessions main closed after their work landed (`recordClosed`), newest last. */
 	closedChildren?(): readonly ClosedChild[];
+	/** The bots state changed in the core (`botsChanged`): main keeps it and tells every window. */
+	botsChanged?(state: BotsState): void;
+	/** A session handed to a bot: `openerTabId` (the bot's home chat) becomes `tabId`'s opener, as the pool keeps one. */
+	setOpener?(tabId: string, openerTabId: string): void;
+	/** A paired host's bot by name (`host.bots.home`): its home chat file; the host refuses unless this computer is in its reach. */
+	botHome?(device: string, name: string): Promise<{ path: string }>;
 	/**
 	 * Every tombstone (`deleted-sessions.ts`): when the session was deleted, from any path and any launch (the
 	 * sidebar's Delete, `/delete`, a paired device), by its file and computer, or by its saved id alone.
@@ -450,6 +499,9 @@ export const TEXT_KEYS = [
 	"mergeMessage",
 	"scheduleTitle",
 	"scheduleMessage",
+	"schedulePrecheckMessage",
+	"botTitle",
+	"botMessage",
 	"autopilotTitle",
 	"autopilotMessage",
 	"autopilotShipCommit",
@@ -460,6 +512,8 @@ export const TEXT_KEYS = [
 	"appTitle",
 	"appMessage",
 	"appChanged",
+	"unansweredTitle",
+	"unansweredMessage",
 ] as const;
 export type TextKey = (typeof TEXT_KEYS)[number];
 
@@ -474,6 +528,8 @@ export interface ReleasedSession {
 	hidden?: boolean;
 	/** The session file of the session whose agent opened it, when one did. */
 	openedBySession?: string;
+	/** Its opener hears that it was closed: an agent's own child, not an Autopilot run's (the run reads those itself). */
+	tellOpener?: true;
 }
 
 export interface ToolOutcome {
@@ -494,11 +550,6 @@ export class SessionFolderMissing extends Error {
 			`The folder this saved session belongs in no longer exists (${folder}); it is not opened in any other folder.`,
 		);
 	}
-}
-
-/** The session waits on someone: an open ask or approval, or a plan proposal awaiting approval (the control socket's `blocked`). */
-export function waits(tab: ControlTab): boolean {
-	return tab.asks.length > 0 || tab.plan !== undefined;
 }
 
 /** What the core waits for, in ms; every field defaults to the TypeScript service's own value (`tuning.rs`). */
@@ -522,12 +573,15 @@ export type Tuning = Partial<
 		| "closeWaitMs"
 		| "ompExitWaitMs"
 		| "readyPollMs"
+		| "sendReadyWaitMs"
 		| "resultPollMs"
 		| "clearQueueMs"
 		| "promptMs"
 		| "judgeMs"
 		| "whenGoneMs"
-		| "mailCoalesceMs",
+		| "mailCoalesceMs"
+		| "failureSettleMs"
+		| "backgroundNoteMs",
 		number
 	>
 >;
@@ -551,6 +605,13 @@ export interface AgentControlFiles {
 	sendOutbox?: string | null;
 	/** Accepted reports until the receiver's journal holds them (`mail-outbox`); kept in memory when the runtime runs. */
 	mailOutbox?: string | null;
+	/** The bytes of the attachments an outbox entry still owes, by content (`<userData>/agent-attachments`). */
+	attachments?: string | null;
+	/** The bots (`bots.json`) and their items (`items.json`); absent: in memory only. */
+	bots?: string | null;
+	items?: string | null;
+	/** Where a new bot's folder goes (`~/.omp/bots`). */
+	botsRoot?: string | null;
 }
 
 export interface AgentControlOptions {
@@ -617,6 +678,20 @@ function told(run: () => void): void {
 
 function issueText(issue: { path: PropertyKey[]; message: string }): string {
 	return issue.path.length > 0 ? `${issue.path.join(".")}: ${issue.message}` : issue.message;
+}
+
+// On a rejected schedule only, let Zod decide if its action refinement still runs. Never return rejected field values.
+function partialSchedule(input: unknown) {
+	let partial: { action: string; fields: Record<string, boolean> } | undefined;
+	ARGS.ompdesk_schedule
+		.superRefine(value => {
+			partial = {
+				action: value.action,
+				fields: Object.fromEntries(Object.entries(value).map(([key, field]) => [key, field !== ""])),
+			};
+		})
+		.safeParse(input);
+	return partial;
 }
 
 /** The core's `agentRuntime.*`: what the host did over the service's own state, by one service's port. */
@@ -796,7 +871,7 @@ export class AgentControl {
 	 * The open session `session` names for `callerTabId`, by the tools' own name rules, refused when hidden from
 	 * agents (the control socket's waits). Rejects with the tools' own message.
 	 */
-	openTarget(callerTabId: string, session: string): Promise<ControlTab> {
+	openTarget(callerTabId: string, session: string): Promise<SessionStatus> {
 		return this.#call("openTarget", { callerTabId, session });
 	}
 
@@ -828,6 +903,21 @@ export class AgentControl {
 		only?: ReadonlySet<string> | readonly string[],
 	): Promise<AgentReviewResult | null> {
 		return this.#call("liveReview", { callerTabId, last, ...(only ? { only: [...only] } : {}) });
+	}
+
+	/** The owner's change to the bots or their items (`BotsRequest`): the state after it. */
+	bots(request: BotsRequest): Promise<BotsState> {
+		return this.#call("bots", request as unknown as Record<string, unknown>);
+	}
+
+	/** A quiet note (no turn) into a session file on this computer: now when a tab holds it, else when one opens it. */
+	noteSession(sessionPath: string, text: string): Promise<void> {
+		return this.#call("noteSession", { sessionPath, text });
+	}
+
+	/** A paired device asks for one of this computer's bots by name: its home chat file, unless that device may not reach it. */
+	botHome(name: string, device: string, deviceName: string): Promise<{ path: string; name: string }> {
+		return this.#call("botHome", { name, device, deviceName });
 	}
 
 	/** One pass over the sessions `callerTabId` opened whose work landed. */
@@ -887,6 +977,10 @@ export class AgentControl {
 				...(files.calls !== undefined ? { calls: file(files.calls) } : {}),
 				...(files.sendOutbox !== undefined ? { sendOutbox: file(files.sendOutbox) } : {}),
 				...(files.mailOutbox !== undefined || host.runtime ? { mailOutbox: file(files.mailOutbox ?? null) } : {}),
+				...(files.attachments ? { attachments: files.attachments } : {}),
+				...(files.bots ? { bots: files.bots } : {}),
+				...(files.items ? { items: files.items } : {}),
+				...(files.botsRoot ? { botsRoot: files.botsRoot } : {}),
 			},
 			caps: {
 				reviewChanged: host.reviewChanged !== undefined,
@@ -924,20 +1018,19 @@ export class AgentControl {
 		const hosted = host.tabs();
 		const tabs: ControlTab[] = [];
 		const windowOf: Record<string, string> = {};
-		for (const { window, ...tab } of hosted) {
+		const parents: HostSnapshot["parents"] = {};
+		for (const { window, opener, ...tab } of hosted) {
 			tabs.push(tab);
 			windowOf[tab.tabId] = window;
+			if (opener !== undefined) {
+				const tag = host.parentTag?.(tab.tabId);
+				parents[tab.tabId] = { callerTabId: opener, ...(tag === undefined ? {} : { tag }) };
+			}
 		}
 		const devices = host.devices();
-		const parents: HostSnapshot["parents"] = {};
 		const checkoutPeers: HostSnapshot["checkoutPeers"] = {};
 		const stopping: string[] = [];
 		for (const tab of tabs) {
-			const parent = host.parentOf(tab.tabId);
-			if (parent !== undefined) {
-				const tag = host.parentTag?.(tab.tabId);
-				parents[tab.tabId] = { callerTabId: parent, ...(tag === undefined ? {} : { tag }) };
-			}
 			const peers = host.checkoutPeers?.(tab.tabId) ?? [];
 			if (peers.length > 0) checkoutPeers[tab.tabId] = [...peers];
 			if (host.isStopping?.(tab.tabId) === true) stopping.push(tab.tabId);
@@ -1010,15 +1103,13 @@ export class AgentControl {
 		return {
 			"args.parse": ({ tool, args, loose }: { tool: AgentControlToolName; args: unknown; loose: boolean }) =>
 				coded(() => {
-					// A model's JSON written as text is read as what it spells, for every tool and nesting; the
-					// parser's output (trimmed, defaults applied) is what the tool body reads.
-					const parsed = ARGS[tool].safeParse(loose ? (looseArgs(tool, args) ?? {}) : args);
+					const input = loose ? (looseArgs(tool, args) ?? {}) : args;
+					const parsed = ARGS[tool].safeParse(input);
 					if (parsed.success) return { ok: true, args: parsed.data };
 					return {
 						ok: false,
-						error: loose
-							? `Invalid arguments for ${tool}: ${parsed.error.issues.map(issueText).join("; ")}`
-							: `Invalid arguments: ${parsed.error.issues.map(issue => issue.message).join("; ")}`,
+						error: parsed.error.issues.map(loose ? issueText : issue => issue.message).join("; "),
+						schedule: tool === "ompdesk_schedule" ? partialSchedule(input) : undefined,
 					};
 				}),
 			mail: ({
@@ -1028,10 +1119,16 @@ export class AgentControl {
 				delivery,
 			}: {
 				tabId: string;
-				content: string;
+				content: string | (TextContent | ImageContent)[];
 				details: Record<string, unknown>;
 				delivery: MailDelivery;
 			}) => coded(async () => (await host.mail(tabId, content, details, delivery)) ?? null),
+			land: ({ tabId, name, dataBase64 }: { tabId: string; name: string; dataBase64: string }) =>
+				coded(async () => {
+					if (!host.land)
+						return { ok: false, error: "This OMPdesk cannot put files on a computer", code: "unsupported" };
+					return host.land(tabId, name, Buffer.from(dataBase64, "base64"));
+				}),
 			command: ({
 				tabId,
 				command,
@@ -1053,8 +1150,15 @@ export class AgentControl {
 						throw error;
 					}
 				}),
-			release: ({ callerTabId, tabId }: { callerTabId: string; tabId: string }) =>
-				coded(() => host.release(callerTabId, tabId)),
+			release: ({
+				callerTabId,
+				tabId,
+				expectedTurn,
+			}: {
+				callerTabId: string;
+				tabId: string;
+				expectedTurn?: AutoCloseTurn;
+			}) => coded(() => host.release(callerTabId, tabId, expectedTurn)),
 			exited: ({ tabId }: { tabId: string }) => coded(async () => (await host.exited(tabId)) ?? null),
 			markAnswered: ({ tabId, byTitle }: { tabId: string; byTitle: string }) =>
 				coded(async () => (await host.markAnswered(tabId, byTitle)) ?? null),
@@ -1140,6 +1244,18 @@ export class AgentControl {
 				coded(async () => (await apps().note(tabId, text)) ?? null),
 			"appPorts.openPrivacyPane": ({ pane }: { pane: Parameters<AppPortsLike["openPrivacyPane"]>[0] }) =>
 				coded(async () => (await apps().openPrivacyPane(pane)) ?? null),
+			botHome: ({ device: where, name }: { device: string; name: string }) =>
+				coded(() => {
+					if (!host.botHome) throw new Error("Paired computers' bots are not reachable here.");
+					return host.botHome(where, name);
+				}),
+			setOpener: ({ tabId, openerTabId }: { tabId: string; openerTabId: string }) =>
+				coded(() => {
+					if (!host.setOpener) throw new Error("Handing a session to a bot is not available here.");
+					host.setOpener(tabId, openerTabId);
+					this.#port.push();
+					return null;
+				}),
 			reach: ({ sessionPath }: { sessionPath: string }) => {
 				const runtime = host.runtime;
 				if (!runtime) throw new Error("This app runs no core runtime.");
@@ -1163,6 +1279,7 @@ export class AgentControl {
 			nextPromptChildren: ({ tabId, children }: { tabId: string; children: { title: string; waiting?: true }[] }) =>
 				told(() => host.runtime?.nextPromptChildren(tabId, children)),
 			closedChildren: ({ rows }: { rows: ClosedChild[] }) => tell(() => host.runtime?.closedChildren(rows)),
+			botsChanged: ({ state }: { state: BotsState }) => told(() => host.botsChanged?.(state)),
 			wakeDone: ({ runId, code, error }: { runId: string; code: number | null; error?: string }) =>
 				told(() => host.runtime?.wakeDone(runId, { code, ...(error === undefined ? {} : { error }) })),
 		};

@@ -10,7 +10,8 @@ export interface RelaySocket {
 	send(data: string): void;
 	close(): void;
 	onMessage(listener: (data: string) => void): void;
-	onClose(listener: () => void): void;
+	/** `lost`: the paired link dropped under it (the relay itself may still run); false for any other end. */
+	onClose(listener: (lost: boolean) => void): void;
 }
 
 /** A tab on this computer: stock's relay on its loopback port (`relayExtensionUrl` has vetted `target`). */
@@ -30,6 +31,6 @@ export function localRelaySocket(target: string): RelaySocket {
 		send: data => socket.send(data),
 		close: () => socket.close(),
 		onMessage: listener => socket.addEventListener("message", message => listener(String(message.data))),
-		onClose: listener => socket.addEventListener("close", () => listener()),
+		onClose: listener => socket.addEventListener("close", () => listener(false)),
 	};
 }

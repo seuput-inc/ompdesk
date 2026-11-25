@@ -36,6 +36,13 @@ interface PendingImages {
 	at: number;
 }
 
+/** An edited message sent again: its new chip, whenever a snapshot first lists it, is where the edit landed. */
+interface PendingEdit {
+	text: string;
+	lane: QueueLane;
+	at: number;
+}
+
 /** A picture that never found its chip (the send failed, or the message started a turn instead) is forgotten after this. */
 const PENDING_IMAGES_TTL_MS = 10_000;
 /** How long `moved` stays set for the tray to point at the row. */
@@ -47,7 +54,7 @@ export interface QueueStore {
 	/** The last edit or lane switch's landing place, for a few seconds; null otherwise. */
 	moved: QueueMoved | null;
 	/** Hydrate fallback pull via get_queue; only the latest response may apply. */
-	refresh: () => Promise<void>;
+	refresh: () => Promise<boolean>;
 	/** Apply an authoritative queue_update frame. */
 	setFromFrame: (snapshot: RpcGetQueueResult) => void;
 	/**
@@ -56,8 +63,11 @@ export interface QueueStore {
 	 * (`images` on the item, which the tray counts). `text` is what stock will show: the message, or "[Image]".
 	 */
 	expectImages: (text: string, images: ImageContent[]) => void;
-	/** The message lost its pictures (an edit or a lane move re-queues text only). */
-	forgetImages: (id: string) => void;
+	/**
+	 * An edited message is about to be queued again in `lane`: the first snapshot that lists a new chip with `text`
+	 * notes it as moved (its frame may come before or after the send's answer). Returns the call-off for a refused send.
+	 */
+	expectEdited: (text: string, lane: QueueLane) => () => void;
 	noteMoved: (moved: QueueMoved) => void;
 }
 
@@ -69,6 +79,7 @@ export const createQueueStore = (command: TabCommand = activeTabCommand) => {
 	const imagesById = new Map<string, ImageContent[]>();
 	let textById = new Map<string, string>();
 	let movedTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingEdit: PendingEdit | undefined;
 	return createStore<QueueStore>()((set, get) => {
 		/** Attach remembered pictures to the lanes' items and put the UI language's word on a picture-only chip. */
 		const enrich = (snapshot: RpcGetQueueResult): Pick<QueueStore, "steering" | "followUp"> => {
@@ -95,6 +106,28 @@ export const createQueueStore = (command: TabCommand = activeTabCommand) => {
 			for (const id of imagesById.keys()) if (!nextText.has(id)) imagesById.delete(id);
 			return { steering: lanes[0], followUp: lanes[1] };
 		};
+		/** Takes a snapshot in, and notes the expected edit's chip as moved once it shows. */
+		const apply = (snapshot: RpcGetQueueResult) => {
+			const seen = textById;
+			set(enrich(snapshot));
+			const edit = pendingEdit;
+			if (!edit) return;
+			if (Date.now() - edit.at >= PENDING_IMAGES_TTL_MS) {
+				pendingEdit = undefined;
+				return;
+			}
+			const items = get()[edit.lane];
+			const index = snapshot[edit.lane].findLastIndex(item => !seen.has(item.id) && item.text === edit.text);
+			if (index === -1) return;
+			pendingEdit = undefined;
+			get().noteMoved({
+				id: items[index].id,
+				lane: edit.lane,
+				position: index + 1,
+				count: items.length,
+				kind: "edit",
+			});
+		};
 		return {
 			steering: [],
 			followUp: [],
@@ -103,30 +136,28 @@ export const createQueueStore = (command: TabCommand = activeTabCommand) => {
 				const version = ++refreshVersion;
 				try {
 					const response = await command({ type: "get_queue" });
-					if (version !== refreshVersion || !response.success) return;
-					set(enrich(response.data as RpcGetQueueResult));
+					if (version !== refreshVersion || !response.success) return false;
+					apply(response.data as RpcGetQueueResult);
+					return true;
 				} catch {
 					// Sidecar mid-restart or a stale session: keep the last snapshot;
 					// the next hydrate/queue_update refetches.
+					return false;
 				}
 			},
 			setFromFrame: snapshot => {
 				refreshVersion += 1;
-				set(enrich(snapshot));
+				apply(snapshot);
 			},
 			expectImages: (text, images) => {
 				if (images.length > 0) pending.push({ text, images, at: Date.now() });
 			},
-			forgetImages: id => {
-				imagesById.delete(id);
-				// Untouched lanes keep their identity: an optimistic write in flight rolls back by it.
-				set(state => {
-					const holds = (items: RpcQueuedMessage[]) => items.some(item => item.id === id && item.images);
-					if (!holds(state.steering) && !holds(state.followUp)) return state;
-					const strip = (items: RpcQueuedMessage[]) =>
-						items.map(item => (item.id === id && item.images ? { ...item, images: undefined } : item));
-					return { steering: strip(state.steering), followUp: strip(state.followUp) };
-				});
+			expectEdited: (text, lane) => {
+				const edit = { text, lane, at: Date.now() };
+				pendingEdit = edit;
+				return () => {
+					if (pendingEdit === edit) pendingEdit = undefined;
+				};
 			},
 			noteMoved: moved => {
 				clearTimeout(movedTimer);

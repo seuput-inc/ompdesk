@@ -63,7 +63,7 @@ function rowGeometry(page: Page, rows: string): Promise<Record<string, string>> 
 	return page.evaluate(selector => {
 		const out: Record<string, string> = {};
 		for (const row of document.querySelectorAll<HTMLElement>(selector)) {
-			const file = (row.dataset.deviceSession ?? row.dataset.sessionPath ?? "").split("/").at(-1) ?? "";
+			const file = (row.dataset.deviceSession ?? row.dataset.sessionPath ?? "").split(/[\\/]/).at(-1) ?? "";
 			const title = row.querySelector("button[data-roving-item]")?.parentElement?.getBoundingClientRect();
 			const end = row.querySelector("time")?.getBoundingClientRect();
 			out[file] = `title ${Math.round(title?.width ?? -1)} · age ends ${Math.round(end?.right ?? -1)}`;
@@ -125,10 +125,10 @@ test("picking a session moves no row's title end or age on this computer's list"
 		page,
 		"local",
 		rows,
-		id => page.locator(`[data-session-group] [data-session-path$="/${id}.jsonl"]`).first(),
+		id => page.locator(`[data-session-group] [data-session-path$="${id}.jsonl"]`).first(),
 		async id =>
 			(await page.evaluate(() => window.omp.tabs.list())).some(
-				tab => tab.sessionPath?.endsWith(`/${id}.jsonl`) && tab.status === "ready",
+				tab => tab.sessionPath?.endsWith(`${id}.jsonl`) && tab.status === "ready",
 			),
 	);
 });
@@ -159,10 +159,10 @@ test("picking a host's session moves no row's title end or age on a paired compu
 			a,
 			"device",
 			rows,
-			id => a.locator(`${scope} [data-device-session$="/${id}.jsonl"]`).first(),
+			id => a.locator(`${scope} [data-device-session$="${id}.jsonl"]`).first(),
 			async id =>
 				(await a.evaluate(() => window.omp.tabs.list())).some(
-					tab => tab.device === deviceId && tab.sessionPath?.endsWith(`/${id}.jsonl`) && tab.status === "ready",
+					tab => tab.device === deviceId && tab.sessionPath?.endsWith(`${id}.jsonl`) && tab.status === "ready",
 				),
 		);
 	} finally {
@@ -196,7 +196,7 @@ test("a pick that changes the list's height moves no row of another project", as
 	await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 800));
 	await page.waitForFunction(() => window.omp?.rpc != null);
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
-	const rows = `[data-session-group=${cssString(beta)}] .omp-sidebar-session-row:not([data-session-path$="/beta-2.jsonl"])`;
+	const rows = `[data-session-group=${cssString(beta)}] .omp-sidebar-session-row:not([data-session-path$="beta-2.jsonl"])`;
 	// Beta unfolded by hand: both projects open, the list scrolls.
 	await page
 		.locator(`[data-workspace-group=${cssString(beta)}] button`)
@@ -212,12 +212,12 @@ test("a pick that changes the list's height moves no row of another project", as
 	await expect.poll(scrolls, { timeout: 10_000 }).toBe(true);
 	await page.mouse.move(900, 500);
 	const before = await rowGeometry(page, rows);
-	await page.locator(`[data-session-path$="/beta-2.jsonl"] button`).first().click();
+	await page.locator(`[data-session-path$="beta-2.jsonl"] button`).first().click();
 	await expect
 		.poll(
 			async () =>
 				(await page.evaluate(() => window.omp.tabs.list())).some(
-					tab => tab.sessionPath?.endsWith("/beta-2.jsonl") && tab.status === "ready",
+					tab => tab.sessionPath?.endsWith("beta-2.jsonl") && tab.status === "ready",
 				),
 			{ timeout: 60_000 },
 		)

@@ -8,6 +8,72 @@ use super::fail::{Fail, R};
 use super::host::Host;
 use super::types::{Schedule, ScheduleDraft, ScheduleRow, ScheduleRun, SchedulesState};
 
+/// `field` is absent, present but empty after trimming, or present and nonempty.
+pub(super) fn action_issues(
+    action: &str,
+    field: impl Fn(&str) -> Option<bool>,
+    mut issue: impl FnMut(&str),
+) {
+    let has = |key| field(key).is_some();
+    let filled = |key| field(key) == Some(true);
+    let starts = ["every_minutes", "daily_at", "at", "in_minutes", "on"]
+        .into_iter()
+        .filter(|&key| has(key))
+        .count();
+    if has("days") && !has("daily_at") {
+        issue("days goes with daily_at");
+    }
+    if (has("by") || has("within_minutes")) && !has("on") {
+        issue("by and within_minutes go with on");
+    }
+    if has("by") && has("within_minutes") {
+        issue("take one of by or within_minutes");
+    }
+    if has("results_to") && has("target") {
+        issue("results_to is for a fresh run: it takes no target");
+    }
+    if action == "create" {
+        if !filled("name") {
+            issue("create needs name");
+        }
+        if !filled("prompt") {
+            issue("create needs prompt");
+        }
+        if starts != 1 {
+            issue("create needs exactly one of every_minutes, daily_at, at, in_minutes or on");
+        }
+        if has("target") {
+            if has("folder") {
+                issue("target self wakes this session: it takes no folder");
+            }
+            if has("model") {
+                issue("target self wakes this session: it takes no model");
+            }
+            if has("device") {
+                issue("target self wakes this session on this computer: it takes no device");
+            }
+        }
+    } else {
+        if action != "list" && !filled("id") {
+            issue(&format!("{action} needs id"));
+        }
+        if action == "update" && starts > 1 {
+            issue("update takes at most one of every_minutes, daily_at, at, in_minutes or on");
+        }
+        if action != "update"
+            && (starts > 0
+                || ["name", "prompt", "model", "target"]
+                    .into_iter()
+                    .any(filled)
+                || ["precheck", "results_to", "by", "within_minutes"]
+                    .into_iter()
+                    .any(has))
+        {
+            issue(&format!("{action} takes only id (and device)"));
+        }
+    }
+}
+
 /// The Schedules service of this computer (`device` None) or of a paired host.
 pub struct ScheduleSource<'a> {
     host: &'a Host,
@@ -45,6 +111,11 @@ impl ScheduleSource<'_> {
             .iter()
             .map(|schedule| row_of(&state, schedule))
             .collect())
+    }
+
+    /// Every saved schedule with its draft (`wakeSession` included), as the service holds it.
+    pub async fn schedules(&self) -> R<Vec<Schedule>> {
+        Ok(self.command(json!({ "action": "get" })).await?.schedules)
     }
 
     /// The id comes from the save itself: a diff against an earlier read would hand a concurrent create's schedule to

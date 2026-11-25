@@ -1,10 +1,10 @@
 //! The PR Center over gh (was `src/main/local/git/pr.ts`): the checkout's GitHub repository, the list, a PR's detail,
-//! one file's diff, the facts a draft is written from, create, merge, review, comment, the conversation and edit. A
+//! one file's diff, create, merge, review, comment, the conversation and edit. A
 //! refusal is a fault whose code is the `LocalCommandError` code the TypeScript threw (`gh_missing`,
 //! `gh_unauthenticated`, `not_a_repo`, `no_github_remote`, `pr_not_found`, `pr_create_failed`, `pr_draft_failed`,
 //! `pr_merge_failed`, `pr_review_failed`, `pr_edit_failed`); what the TypeScript let through uncoded keeps the runner's
 //! code (`git_exit`, `gh_json`, …). Main keeps the checks of what the page sent that came before the repository (a PR
-//! number, an empty review or comment) and the draft's model call.
+//! number, an empty review or comment). The draft is in `draft.rs`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -562,100 +562,6 @@ fn quoted(chars: &[char], start: usize) -> Option<(String, usize)> {
         at += 2;
     }
     None
-}
-
-/// `name` when it resolves locally, else `origin/name` (a fresh clone often lacks the local default branch).
-async fn resolve_rev(tools: &Tools, root: &str, name: &str) -> Result<String, Fault> {
-    let git = tools.git()?;
-    for candidate in [name.to_owned(), format!("origin/{name}")] {
-        let spec = format!("{candidate}^{{commit}}");
-        if git
-            .raw(root, &["rev-parse", "--verify", "--quiet", &spec])
-            .await?
-            .code
-            == 0
-        {
-            return Ok(candidate);
-        }
-    }
-    Err(Fault::new(
-        "pr_draft_failed",
-        format!("Unknown revision: {name}"),
-    ))
-}
-
-/// What a PR draft is written from: the head branch's commits and changed files against the base, read in the
-/// checkout's root (where main then runs the model).
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DraftFacts {
-    root: String,
-    base: String,
-    head: String,
-    commits: Vec<String>,
-    files: Vec<String>,
-    diff_stat: String,
-}
-
-pub async fn draft_facts(
-    tools: &Tools,
-    cwd: &str,
-    base: Option<String>,
-    head: Option<String>,
-) -> Result<DraftFacts, Fault> {
-    let found = repo(tools, cwd).await?;
-    let git = tools.git()?;
-    let root = found.root;
-    let base = base
-        .or(found.default_branch)
-        .unwrap_or_else(|| "HEAD~1".into());
-    let current = git
-        .raw(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .await?
-        .text();
-    let current = js_trim(&current);
-    let head = head.unwrap_or_else(|| {
-        if current.is_empty() {
-            "HEAD".into()
-        } else {
-            current.to_owned()
-        }
-    });
-    let range = format!(
-        "{}...{}",
-        resolve_rev(tools, &root, &base).await?,
-        resolve_rev(tools, &root, &head).await?
-    );
-    let log_args = ["log", "--no-merges", "--format=%s", "-n", "50", &range];
-    let name_args = ["diff", "--name-only", &range];
-    let numstat_args = ["diff", "--numstat", &range];
-    let (log, names, numstat) = tokio::try_join!(
-        git.text(&root, &log_args),
-        git.text(&root, &name_args),
-        git.text(&root, &numstat_args),
-    )?;
-    let lines = |text: &str| -> Vec<String> {
-        text.split('\n')
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect()
-    };
-    let commits = lines(&log);
-    let files = lines(&names);
-    if commits.is_empty() && files.is_empty() {
-        return Err(Fault::new(
-            "pr_draft_failed",
-            format!("No changes between {base} and {head}"),
-        ));
-    }
-    Ok(DraftFacts {
-        diff_stat: js_trim(&numstat).to_owned(),
-        root,
-        base,
-        head,
-        commits,
-        files,
-    })
 }
 
 #[derive(Deserialize)]

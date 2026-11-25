@@ -12,19 +12,21 @@ on a homelab box where mistakes are harder to undo.
 | `purge-session --session-id --confirm` | ✅ yes | the one session's data, **plus** any observation stamped into a different project by this session (cascades regardless of the observation's own `project_id`), and it nulls (does not delete) the session reference on any handoff in a different project that this session authored or accepted | no | Deletes one session by UUID: its row, its observations, the handoffs it **authored**, its `sessions/<id>.md` page and every superseded version, their embeddings, and its auto-improve runs. Strictly scoped: a session that does not belong to the named workspace/project is a `404` and nothing is deleted. Handoffs the session only *accepted* are kept: that text belongs to the session that wrote it. Logical delete by default; `--compact` additionally rebuilds the FTS indexes and `VACUUM`s (see below). Without `--confirm` it previews the same counts, including the cross-project ones, before refusing (see below). |
 | `handoffs --expire-all --confirm` | ✅ yes | no (state change only) | no (but nothing is destroyed) | Marks every **open** handoff in the scope `expired` so it stops being offered to an agent. Rows, summaries and provenance are kept and stay visible in the audit log. Unlike the automatic sweep it does **not** spare manual handoffs or ones from another directory. A leftover backlog is made of exactly those, so honouring the exemptions would clear nothing. `--older-than-days N` keeps recent batons. Owner-scoped: never touches another user's baton. |
 | `rename-project --from --to` | ✅ yes | no | yes (rename back) | Column-only update on `projects.name`. The on-disk dir is keyed by `project_id` (UUID), so the rename never moves a file. |
+| `repair-split --project-id --from-project-id` | ✅ yes | no | partly (rename back; the identity stays moved) | Moves an empty project's repository identity onto the project holding the checkout's sessions and archives the empty one (#1993). Refuses when the empty one has sessions, pages or a live run. |
 | `/admin/rename-workspace` | ✅ yes | no | yes (rename back) | Column-only update on `workspaces.name`; refreshes `_meta.md` scope manifests and checkpoints the wiki tree. |
 | `/admin/delete-workspace` | ✅ yes | the workspace and every child project, **plus** any observation stamped into a different workspace by one of this workspace's sessions (cascades regardless of the observation's own `workspace_id`), and it nulls (does not delete) the session reference on any handoff in a different workspace that this workspace's sessions authored or accepted | no | Runs `purge_workspace` admission first, deletes SQLite rows in one cascade, removes the UUID-keyed workspace directory and managed-workstream raw segments, reports filesystem partial failures, and dispatches mirror notification after durable work. Logical delete by default; `"compact": true` additionally rebuilds the FTS indexes and `VACUUM`s (see below). `"dry_run": true` previews the same counts, including the cross-workspace ones, without deleting anything (see below). |
-| `move-project --confirm` | ✅ yes | source only in the merge case (a `Reject`-policy `purge_project` webhook can still abort the source teardown leaving everything intact) | no | Fresh destination → lossless **true move** (re-stamp `workspace_id`, keep `project_id`, rename the dir): sessions/observations/handoffs + history all survive. Destination with a same-named project → **copy+purge merge**: only latest pages migrate. |
-| `move-session <id> --to --confirm` | ✅ yes | no | yes (move it back) | Re-stamps one session (or every session touching `--from-project`) into another project: `sessions`, `observations`, its `handoffs`, consolidation jobs, auto-improve runs/claims, profile prompt candidates, ingest keys and its `sessions/<id>.md` page, one transaction per session; the page file moves with it (`--pages move`, default) or is retired for regeneration. Without `--confirm` it is a real dry run (rolled back). Refuses with `409` an open session or a pending consolidation job unless `--force`. |
+| `move-project --confirm` | ✅ yes | source only in the merge case (a `Reject`-policy `purge_project` webhook can still abort the source teardown leaving everything intact) | no | Fresh destination → lossless **true move** (re-stamp `workspace_id`, keep `project_id`, rename the dir): sessions/observations/handoffs + history all survive. Destination with a same-named project → **copy+purge merge**: only latest pages migrate.  An existing same-named destination project makes this a **copy+purge merge**, which deletes the source's sessions, observations, handoffs and older page versions: it now needs `--allow-lossy-merge` as well, and without it the server answers `409` naming the counts it would discard (#1713). |
+| `merge-project [--confirm]` | ✅ yes | no | no | Same-workspace, lossless identity repair. The default is a writer-transaction dry run. `--confirm` re-stamps every history-bearing row and removes the source only after the target files are installed; open sessions and live managed runs refuse. Same-path bodies are appended into a new stale-flagged target version while both histories remain reachable. |
+| `move-session <id> --to --confirm` | ✅ yes | no | yes (move it back) | Re-stamps one session (or every session touching `--from-project`) into another project: `sessions`, `observations`, its `handoffs`, consolidation jobs, auto-improve runs/claims, profile prompt candidates, ingest keys and its `sessions/<id>.md` page (along with its page feedback, query signals, and entity links under `--pages move`), one transaction per session; the page file moves with it (`--pages move`, default) or is retired for regeneration. Without `--confirm` it is a real dry run (rolled back). Refuses with `409` an open session or a pending consolidation job unless `--force`. |
 | `repair-backfill-timestamps --project --confirm` | ✅ yes | no | yes, if the operator kept the audit row or the CLI's before/after report (nothing else) | Corrects `sessions.started_at`/`ended_at` for sessions an older `backfill` imported before it carried the transcript's own event time. The CLI reads the operator's local transcripts read-only and posts candidate `(session_id, started_at, ended_at)` tuples to `POST /admin/repair-session-times`, which validates each one against `(workspace, project)` (a candidate outside that scope is `not_found` and untouched), only rewrites a row whose `started_at` postdates the candidate's own end (`not_flattened` otherwise, so a correctly hook-captured session or a re-run is a no-op), refuses negative/inverted/future-dated times, and never assigns an end time to a session still open. Without `--confirm` the server validates and reports inside a rolled-back transaction, so it is a real dry run; a confirmed run writes one `audit_log` row per request with the before/after times. Touches only the two timestamp columns of rows already in scope; `observations` and pages (including the session's own page frontmatter) are untouched. |
 | `backup --to` | ✅ yes | no | n/a | Streams a gzipped tarball from the server's online `sqlite3 .backup` plus the wiki tree. Safe alongside the live writer. |
 | `forget-sweep` event-ledger pass (`[decay] ledger_retention_months`) | ✅ yes | old hook event ledger *files* (`log-YYYY-MM.md`) from disk, nothing in the database | no ai-memory command restores a ledger (`restore-page` restores pages only); the content stays in the wiki's git history when a checkpoint captured it, recoverable with plain git until the repository is compacted | **Off by default** (`0`). Runs inside the forget sweep, so `--dry-run` previews it: the report lists `ledgers_prunable` and `ledger_bytes_prunable`. Online through the admin API. Only a file whose name is `log-YYYY-MM.md` **and** whose content opens with a ledger hook entry qualifies; `log.md`, the current month and the previous month are never deleted, whatever the setting. Each removal consults the blocking admission chain (`delete_event_ledger` op); a `reject`-policy webhook keeps the file and the report counts it in `ledgers_undeleted`. |
 | `reclaim-ledger-versions` | ✅ yes | superseded pre-#660 ledger page *versions* only | no (the latest page version stays) | Dry-run by default; needs `--confirm` to delete. Online through the writer actor, safe alongside the live writer. Content-gated: only non-latest, non-decay `log.md`/`log-YYYY-MM.md` versions whose body opens with a ledger hook entry are removed; a real page that merely shares the name is untouched. `--compact` additionally rebuilds FTS and `VACUUM`s to reclaim the freed bytes. |
 | `checkpoints` | ✅ yes | no | n/a | Lists recent wiki git checkpoints. Read-only. |
-| `restore-page --path --from` | ✅ yes | overwrites one markdown page version | yes (restore another checkpoint) | Restores one page from wiki git history, reindexes it into SQLite, and writes a post-restore checkpoint. Does not restore DB-only state. |
+| `restore-page --path (--from REV \| --page-id UUID)` | ✅ yes | overwrites one markdown page version | yes (restore another retained version) | Restores one page from wiki git history or a retained SQLite page version, reindexes it, and writes a post-restore checkpoint. `--page-id` reaches source history preserved by `merge-project`; it does not restore other DB state. |
 | MCP `memory_restore_page` | ✅ yes | no (writes a new current version; the replaced one stays reachable) | yes (restore another checkpoint) | Lists a page's checkpoints, or writes one back through the `memory_write_page` path. Admin only, like `restore-page`. See [below](#mcp-memory_restore_page). |
 | `backup-agents --to` / `restore-agents --from <tarball>` | ✅ yes (client-side; never touches the server or its data dir) | no | yes (`restore-agents --apply` keeps timestamped copies of overwritten files) | Agent-config assets, not wiki/db: MCP configs (redacted unless `--include-secrets`), hook configs, instructions, skills, plugins. `restore-agents` is a dry run by default; `--apply` writes to disk and `--force` overwrites existing or differing targets. Non-MCP assets are restored verbatim and may contain secrets, so only `--apply` an archive whose source you trust. |
-| `restore --from <tarball>` | ❌ **stop the server first** | overwrites the data dir | no (without prior backup) | Refuses if any sibling `ai-memory` process is alive (sysinfo guard). Stages and verifies the archive before swapping it in, so a failed restore leaves `wiki/` and `db/` as they were. |
+| `restore --from <tarball>` | ❌ **stop the server first** | overwrites the data dir | no (without prior backup) | Refuses if any sibling `ai-memory` process is alive (sysinfo guard). Stages and verifies the archive before swapping it in, so a failed restore leaves `wiki/` and `db/` as they were. Keeps an existing `config.toml` and saves the backup's as `config.toml.from-backup` unless `--with-config` is passed. From the wiki's `.git` it restores only git's data (objects, refs, logs, HEAD, the index) and writes a fresh git config; hooks, the archived config and anything else git would run or follow are left out and listed. |
 | `reset --confirm` | ❌ **stop the server first** | yes, all data | no | Refuses if any sibling `ai-memory` process is alive (sysinfo guard). |
 | `reindex` | ❌ **stop the server first** | no wiki wipe; requires a clean DB | only with prior DB backup | Rebuilds pages/links/FTS from `wiki/` using `_meta.md` manifests. Refuses if SQLite already has rows so stale DB-only state cannot survive silently. |
 
@@ -33,15 +35,27 @@ on a homelab box where mistakes are harder to undo.
 whose name is ambiguous: an empty legacy twin row left by an older migration
 can carry another project's old name, and the name lookup refuses it.
 `list-projects` prints each project's id. The id is looked up inside the
-workspace the command names. Sending both the name and the id, or neither, is
-a `400`, so is a malformed UUID, and an id that names no project in that
-workspace is a `404`. `--confirm`, the preview and every other guard behave
-the same as with a name.
+workspace the command names. On the admin endpoints, sending both the name and
+the id, or neither, is a `400`, so is a malformed UUID, and an id that names no
+project in that workspace is a `404`. The CLI refuses both flags together before
+sending anything, and with neither it resolves the project the way other
+commands do: the `.ai-memory.toml` marker's `project`, then the git remote, then
+the directory name. `--confirm`, the preview and every other guard behave the
+same as with a name.
+
+That derived target is a deprecation, not a promise: `purge-project --confirm`
+without `--project`/`--project-id` prints the project it resolved and the
+command that names it, and it will be refused in 4.0, because the one thing a
+purge must not do is guess between "the checkout I am standing in" and "the
+project I meant" (#1642). An explicitly empty flag is already refused: `--project
+""` used to pass the "was it named" check and then resolve as if it had not been
+passed, which is how an unset variable in a script reached a real delete.
 
 State-touching commands route through the HTTP admin API except `reset`,
 `restore`, and `reindex`, which are direct-disk lifecycle operations that
 fundamentally cannot run while another process holds the SQLite WAL writer. See
-[CLAUDE.md §16](../CLAUDE.md) for the invariant.
+[AGENTS.md, invariant 9](../AGENTS.md#cross-cutting-invariants-do-not-violate)
+for the live-process guard.
 
 
 ## What "deleted" means (`purge-session`, `purge-project`, `delete-workspace`)
@@ -144,6 +158,14 @@ other unexpected status) prints the server's own error before the refusal
 instead, since the operator asked what would happen and the server has a
 real answer.
 
+The preview asks the server the confirmed purge will use. In a checkout whose
+`.ai-memory.toml` selects a server profile (`server = "<name>"`, see
+[marker-file.md](marker-file.md)), both go to that profile's URL with its
+stored token, never to the install's server with the config bearer. A profile
+that does not resolve fails the command before anything is sent, the same way
+the confirmed purge fails, and `AI_MEMORY_SERVER_URL` still picks the server
+for one command.
+
 A handoff this session only *accepted* (did not author) keeps its row and
 its text either way, confirmed or previewed, and loses only its
 `accepted_by_session` pointer (`ON DELETE SET NULL`) once the session row is
@@ -191,6 +213,15 @@ covers the wait for whatever that single queue is already draining, and, with
 busy server therefore holds up wiki mutations for longer than the delete itself.
 The git checkpoints taken before and after the purge sit outside the guard: they
 bracket it, they do not snapshot it.
+
+Reindex checks session-purge tombstones in the same SQL transaction as its
+page write. A watcher event or directory walk that started before a purge
+cannot use a stale check to restore a summary left by failed file cleanup.
+A manual replacement already preserved by the purge remains reindexable:
+the disk page must not name the purged session as its owner, and a live
+non-owned version must still exist at that path. A leftover legacy summary
+without `session_id` has no such surviving version and stays excluded.
+The watcher, its reconciliation pass and `reindex` use the same check.
 
 ### Scope containment
 
@@ -399,7 +430,7 @@ Failure modes:
 - **Manifest refresh/checkpoint failed after commit** → 200 with
   `manifest_warning`; the SQL rename remains committed and startup manifest
   backfill can repair the disk metadata. The bootstrap, write-page,
-  move-project merge, move-session create, and managed-run responses surface
+  move-project merge, `merge-project`, move-session create, and managed-run responses surface
   the same warning shape when their scope resolution performed the promotion.
   The warning is retained if the promoted operation later fails: MCP puts it at
   `error.data.manifest_warning`, while HTTP admin/managed-run errors keep the
@@ -492,6 +523,68 @@ regard for the message's own `to_workspace_id`), and `from_session_id`/
 when they reference a session that lived in the deleted workspace (`ON DELETE
 SET NULL`).
 
+### `merge-project`
+
+Use this only when two project rows in one workspace are the same logical
+working copy, often after `audit-contamination` reports a case/accent spelling
+collision:
+
+```bash
+# Exact dry run: no files or rows change.
+ai-memory merge-project --workspace default --from Renato --into renato
+
+# Apply after inspecting the counts.
+ai-memory merge-project --workspace default --from Renato --into renato --confirm
+```
+
+The command is root-only on a multi-user server, like every `/admin/*`
+operation. Names may be replaced independently with `--from-project-id` and
+`--into-project-id`; each id is resolved inside `--workspace`, so an id from
+another workspace returns 404 and reaches no mutation.
+
+After `--confirm` the command also updates this client's own records, as
+`repair-split` does: the checkout link filed under the source's name moves to
+the target (a link the target already has wins), and every saved project
+binding that named the source now names the target. Without that, a checkout
+bound to the source keeps sending the removed project id, and `ai-memory run`
+and `ai-memory workstreams` get 404 from it. The update is local to the
+machine that ran the merge, and a failure there is reported as a warning
+after the merge has been applied.
+
+`--workspace` defaults to the nearest `.ai-memory.toml` marker's workspace, so
+the command goes where that marker routes. In a checkout whose marker selects
+a server profile (`server = "<name>"`, see [marker-file.md](marker-file.md)),
+the dry run and `--confirm` both go to that profile's URL with its stored
+token, never to the install's server with the config bearer. A profile that
+does not resolve fails the command before anything is sent, and
+`AI_MEMORY_SERVER_URL` still picks the server for one command.
+
+The writer verifies both latest-page sets under the transaction. It refuses if
+the source has an open session or an unexpired active managed-run lease. A
+same-path collision produces a new version whose body is the target body, a
+`<!-- ai-memory:merged-from workspace/source -->` marker, and the source body.
+The target frontmatter wins; `expires_at`/`stale_after` survive only when both
+sides were expiring. The new page keeps the earlier creation time and receives
+`stale` feedback naming the source, so `memory_lint` continues to report it
+until a person or agent reconciles the combined prose. Every prior target and
+source version remains under the target path and is available to history and
+restore tooling.
+
+SQLite commits the page histories, sessions, observations, handoffs,
+embeddings, workstreams and auxiliary project indexes in one writer
+transaction. The wiki mutation lock snapshots the target tree before installing
+the merged files and restores it if the transaction refuses; after a commit it
+removes the now-empty source tree, refreshes scope manifests and checkpoints
+the result.
+
+A repository identity on the source (the git remote a checkout routes by, with
+its derived name keys) moves to the target when the target has none, so later
+captures and `ai-memory run` from that checkout resolve to the merged project
+instead of opening a new one. A target that already belongs to another
+repository keeps its own identity and the source's is dropped. A checkout of
+the source's repository then needs `project = "<target>"` in its
+`.ai-memory.toml` to keep landing in the merged project.
+
 ### `move-project`
 
 ```bash
@@ -527,8 +620,15 @@ a low-level re-stamp:
    `workstreams`, pending cross-project messages on both ends, entities, page
    feedback, purge tombstones, and the profile evidence). Native workstream
    sessions, runs, and events remain attached
-   through `workstream_id`; `page_embeddings` and `links` remain attached
-   through `page_id`, so none of those rows need a direct re-stamp.
+   through `workstream_id`, and `page_embeddings` through `page_id`, so none of
+   those rows need a direct re-stamp. The `links` rows stay attached by
+   `page_id` too, but a project-only cross-project edge (`[[project:path]]`,
+   workspace omitted) resolves against its source page's own workspace, so the
+   same transaction re-resolves those edges in the source and destination
+   workspaces against the moved project — rebinding to the destination's
+   project, or going unresolved where it is absent — so the live graph matches a
+   clean reindex of the unchanged Markdown (#2264). Explicit
+   workspace-qualified and bare same-project edges are unaffected.
 
 After a successful CLI true move, or a completed copy-purge move, the client
 rekeys its local `show` checkout link. Existing destination links win during a
@@ -605,11 +705,18 @@ destination promotes its legacy name first, the response includes
 `manifest_warning` when that committed promotion's manifest refresh/checkpoint
 fails; the CLI prints it.
 
-**What does NOT migrate (merge case only):** in the `copy-purge` path the
-source's `sessions`, `observations`, and `handoffs` (the raw episodic
-capture log) are dropped by the purge, and the moved pages start a fresh
-supersession chain (the real page history lives in the wiki's git
-mirror). The `true-move` path has no such loss.
+**What does NOT migrate (merge case only):** the `copy-purge` path copies
+only the source's latest pages and their embeddings. The purge then drops
+everything else the source project owns, the same set `purge-project`
+deletes: its `sessions`, `observations`, and `handoffs` (the raw episodic
+capture log), its managed workstreams with their native sessions, runs,
+events and `raw/workstreams/` segments, the cross-project messages it sent
+or received, auto-improvement and profile-harvest state, session-consolidation
+jobs, ingest deduplication keys, entities, page feedback, per-session purge tombstones and
+project grants. The moved pages start a fresh supersession chain (the real
+page history lives in the wiki's git mirror). The append-only audit trail
+remains, with references to the removed source ids. The `true-move` path has
+no such loss.
 
 > **Operational caveat: moving the project the current session writes
 > to.** Lifecycle hooks stamp a bounded observation on every supported tool-lifecycle event into the
@@ -684,15 +791,26 @@ scope), the `handoffs` it produced (`from_session_id`), its
 - `--pages move` (default): every version of the page is re-stamped into the
   destination and the file is renamed into the destination project
   directory, so the curated page and its supersession history follow the
-  session. Refused with `409` when the destination already has a latest page
-  (or a page file) at that path; retry with `--pages regenerate` or resolve
-  the destination page first.
+  session (along with `page_feedback`, `query_page_signals`, and
+  `entity_page_links` bound to those moved versions). Refused with `409` when
+  the destination already has a latest page (or a page file) at that path;
+  retry with `--pages regenerate` or resolve the destination page first.
 - `--pages regenerate`: the source versions are retired (`is_latest = 0`),
   the session's `summary_page_id` is cleared when it pointed at them, and the
   file is removed, so the next consolidation of the session writes a fresh
-  page in the destination. The file has to go: a page file left on
-  disk with no latest row is re-indexed as a new latest page by the next
-  reconciliation pass.
+  page in the destination (retired versions' audit feedback and query signals
+  stay with those `is_latest = 0` rows in the source project). The file has to
+  go: a page file left on disk with no latest row is re-indexed as a new
+  latest page by the next reconciliation pass.
+
+The file step follows the page rows the store sweeps. For a re-home, every
+other project holding a latest `sessions/<id>.md` row has its file relocated
+(`move`) or removed (`regenerate`), whichever project the request named as
+the source; a file in a project with no latest row is left alone there,
+except in the source project the request names, whose file is always handled
+so the watcher cannot re-index it. More than one source file for one `move`
+destination is refused like an existing destination file, before anything
+moves.
 
 The audit row (`op = move_session`) carries the operator when the request
 was attributed. What does NOT move: `sessions.cwd` (historical truth; the
@@ -700,10 +818,11 @@ response carries `cwd_warning` when its basename is not the destination
 project, since new sessions started there still resolve by basename unless a
 `.ai-memory.toml` marker pins the project), other pages written during the
 session (decisions, gotchas: pages are not tracked per session), handoffs the
-session *accepted*, and `auto_improve_proposals` (they have no `session_id`;
-they target pages in the scope they were staged in). `entities` and
-`page_feedback` are not re-stamped either, unlike `move-project`, which
-moves the whole project and re-stamps both.
+session *accepted*, `auto_improve_proposals` (they have no `session_id`;
+they target pages in the scope they were staged in), and feedback/signals
+on source versions retired by `--pages regenerate`. With `--pages move`,
+`page_feedback`, `query_page_signals`, and `entity_page_links` attached to
+the moved `sessions/<id>.md` versions move with them.
 
 **Order of operations (per session):** validate the destination (404 unless
 `create`), reject a batch whose source is the destination (422; the single
@@ -712,8 +831,8 @@ open-session guard does not apply to a re-home, whose row does not move),
 then, under the
 wiki's exclusive mutation gate, fire `op=move_session` admission webhooks
 (source names in `ctx.workspace`/`ctx.project`, destination names in
-`ctx.destination_*`), move the file, and re-stamp SQLite. Disk goes first
-and SQL last, as in `move-project`: a store failure renames the file back,
+`ctx.destination_*`), move the file(s), and re-stamp SQLite. Disk goes first
+and SQL last, as in `move-project`: a store failure renames the files back,
 so the move is all-or-nothing unless the filesystem also refuses the
 rollback, in which case the error names the manual repair. A `--confirm`
 run takes a wiki checkpoint before and after; a batch takes one pair for
@@ -972,6 +1091,12 @@ Lists recent wiki git commits, newest first. The short OID is enough for
 ai-memory checkpoints --json
 ```
 
+From a checkout whose `.ai-memory.toml` selects a server profile, `checkpoints`
+lists that profile's server, the same one `restore-page` targets, so an OID
+printed here restores against the server that owns it. Set `AI_MEMORY_SERVER_URL`
+(or run from an unrouted directory) to list the install-default server's history
+instead.
+
 What it is for:
 
 - Finding the checkpoint just before a bad page write, delete, purge, move, or
@@ -987,7 +1112,16 @@ Fresh empty installs still have no commit until there is content to save.
 ```bash
 ai-memory restore-page --workspace default --project my-project \
   --path notes/foo.md --from <checkpoint>
+
+# Restore a retained page version after merge-project moved its history
+ai-memory restore-page --workspace default --project canonical \
+  --path notes/foo.md --page-id <page-version-uuid>
 ```
+
+Each omitted scope flag is resolved from the current directory; a non-empty
+explicit value takes precedence over that default. An explicitly empty or
+whitespace-only flag is refused before any request, so an unset shell variable
+cannot restore a page in the checkout's project by accident.
 
 What happens:
 
@@ -995,9 +1129,12 @@ What happens:
 2. Server validates the page path.
 3. Server checkpoints the current wiki tree first (`pre-restore-page ...`) when
    there are uncommitted changes.
-4. Server reads the exact markdown blob for that project/page from git at
-   `--from`, parses it, writes it back to the live wiki tree, and upserts a new
-   latest page row in SQLite so search, links, and `/web` agree with disk.
+4. Server reads either the exact markdown blob for that project/page from git
+   at `--from`, or the retained SQLite version identified by `--page-id` after
+   verifying that it now belongs to the requested project and path. It shares
+   the same-path lock with writes and watcher reindexing, including the read of
+   current frontmatter used to preserve `generated.at`, then writes the content
+   and upserts a new latest page row so search, links, and `/web` agree with disk.
 5. Server writes a post-restore checkpoint (`restore-page ...`) when the live
    tree changed.
 
@@ -1007,8 +1144,22 @@ Failure modes:
 - **Invalid page path** → 422, no mutation.
 - **Checkpoint or file not found** → 500 with the git/libgit2 error; any
   pre-restore checkpoint remains as an audit breadcrumb.
+- **Page-version UUID is malformed** → 400 before a checkpoint or mutation.
+- **Page version is absent or belongs to another project/path** → 404.
+- **Session summary belongs to a purged session** → 409 for either source;
+  no page row is added and any newly installed file is removed. Legacy
+  summaries without `session_id` are also refused unless a live manual
+  replacement survives at that path. A live current manual page remains
+  restorable. An older retained manual version alone does not authorize a
+  restore: without a live replacement, it cannot be distinguished from a
+  legacy summary without `session_id` (#701). MCP `memory_restore_page`
+  applies the same guard to its checkpoint restores.
 - **Historical markdown is malformed or non-UTF-8** → 500, live file is not
   replaced.
+- **SQLite rejects the restored version** (for example, the historical path
+  collides with a current page under case folding) → 500, the previous file is
+  restored or a newly created file is removed. If that rollback also fails,
+  the error explicitly reports an inconsistent state requiring repair.
 
 What it does not recover:
 
@@ -1025,7 +1176,8 @@ version.
 
 It differs from `restore-page` in how the text gets back in. The checkpoint's
 body and frontmatter (`title`, `tier`, `tags`, `pinned`, `expires_at`, `kind`,
-`entities`, `abstract`, `relations`, `applies_to`, `enforced_by`) go through the
+`entities`, `abstract`, `relations`, `applies_to`, `enforced_by`,
+`source_files`) go through the
 same path as `memory_write_page`: the sanitizer, the admission chain, write
 attribution and supersession all apply, and the version it replaces stays
 reachable. Metadata that `memory_write_page` would refuse is refused here too,
@@ -1033,10 +1185,19 @@ before anything is written. Other frontmatter keys are not carried over.
 Scope is resolved once, without creating anything, and the listing, the read
 and the write all use that one project.
 
+Before writing, `memory_restore_page` checks the checkpoint's original
+frontmatter, including `session_id`, against the session-purge tombstone.
+A purged session summary is refused with an invalid-parameters error,
+leaving disk, index and git unchanged. A live current manual page at the
+same path remains restorable; an older retained manual version without a
+live replacement is refused because it is indistinguishable from a legacy
+summary without `session_id`. Listing checkpoints and reading history stay
+available to admins.
+
 Who may call it: an admin, the same authority as `/admin/restore-page`. Git
 history keeps every version the live wiki dropped, including pages a root
 deleted, pages a session purge removed and expired pages the forget sweep
-hard-deleted, so listing names them and restoring brings their text back. A DB
+hard-deleted, so listing can name text that a restore must refuse. A DB
 user or proxied operator is refused for both, even on a project they can write
 and even for their own per-user slot. On a server that tells no operators
 apart (anonymous loopback, or a root bearer with no users) the caller is root
@@ -1111,13 +1272,55 @@ What happens on the server:
 
 1. SQLite online-backup API copies the live WAL DB to a temp file,
    a guaranteed consistent snapshot without stopping the writer.
-2. Server tar-gzips the snapshot + the wiki tree + `config.toml`.
+2. Server tar-gzips the snapshot + the wiki tree + `<data_dir>/config.toml`
+   when that file exists.
 3. Response body IS the gzipped tarball
    (`Content-Type: application/gzip`).
 
-CLI writes the response body to `--to`. For a homelab user
-this is the standard "snapshot before doing something dangerous"
-move: `ai-memory backup` first, then proceed.
+The CLI replaces `--to` after receiving the full response and checking its gzip
+signature. An interrupted download or a body without that signature keeps the
+previous archive intact. Use `ai-memory backup` before making changes that may
+require restoring the snapshot.
+
+This tarball is an online **data snapshot**, not a complete host image. It
+intentionally excludes `auth-tokens/`, the hook-side `auth-token` and
+`auth-header` files, `raw/`, logs, models, and a config passed from outside the
+data dir with `--config`. The included `<data_dir>/config.toml` is archived
+verbatim and may itself contain inline root/proxy/recovery credentials, the
+API-key pepper, or sensitive LLM headers. Always protect the snapshot as a
+secret-bearing artifact. It is also code-bearing: a config can name commands
+the server runs (`[auto_improve.eval]`), send consolidated memory to another
+host (LLM provider URLs and headers, admission webhooks) and weaken redaction
+(`[sanitize]`), so `restore` adopts it only when asked (see below). Excluding
+the separate credential files limits the
+copied auth material; omitting `raw/` avoids racing the actively appended
+managed-workstream ledger. The SQLite snapshot still contains the searchable
+managed-workstream events, but loses their immutable source copy.
+
+For a move to another host, carry these beside the snapshot through a
+separately encrypted or otherwise access-controlled backup:
+
+- the config file the service actually loads, especially
+  `[auth].token_pepper`; packaged systemd units keep it outside the data dir;
+- `auth-tokens/` if existing root bearers must keep working (otherwise run
+  `ai-memory auth enable` and rewire clients with the replacement);
+- `raw/` when the immutable managed-workstream source ledger must be retained.
+
+Do not copy hook credential files as the destination's wiring. Run
+`install-hooks --apply` and `install-mcp --apply` there so paths, server URLs,
+and credentials match the new host. Treat both the ordinary snapshot and the
+separate material as sensitive: wiki content and SQLite can contain private
+session data even though the archive excludes bearer files.
+
+Current databases carry an Argon2id verifier for the API-key pepper. If a
+restored database contains native API credentials but the destination loads a
+different pepper, `serve` refuses instead of starting with keys that can never
+authenticate. A database first opened by a version that predates this verifier
+cannot prove which pepper created its existing hashes; for those older
+snapshots, restoring the original external config remains mandatory. Restore
+refuses such a database until the operator supplies that original pepper and
+adds `--accept-legacy-api-key-pepper`, which seals a verifier into the staged
+database before the live data is changed.
 
 Restoring a backup follows the inverse:
 
@@ -1137,7 +1340,7 @@ HTTP admin API).
 ### `restore`
 
 ```bash
-ai-memory restore --from <tarball> --data-dir <path> --force
+ai-memory restore --from <tarball> --data-dir <path> --force [--with-config]
 ```
 
 Direct-disk operation. Refuses if any other `ai-memory` process is
@@ -1147,14 +1350,34 @@ Order of operations:
 
 1. Check the data dir is empty (or the user passed `--force`).
 2. Extract the tarball into a staging directory beside the live data
-   (`<data_dir>/.restore-staging-<stamp>/`), validating every entry.
-3. Open the staged store so pending migrations run and the SQLite
-   snapshot is verified, still without touching the live data.
-4. Swap: rename the live `wiki/` and `db/` (and `config.toml`, when the
-   archive carries one) aside, rename the staged copies into place, then
-   delete the previous data. Each move is a same-filesystem rename; if
-   one fails, the moves already made are reversed.
-5. Print a one-line summary.
+   (`<data_dir>/.restore-staging-<stamp>/`), validating every entry and
+   reading the gzip stream through its checksum and size trailer. A missing
+   or invalid trailer fails here even when every tar entry was readable.
+3. Require an existing `db/memory.sqlite` snapshot with applied ai-memory
+   migration history, then open the staged store so pending migrations run
+   and the SQLite snapshot is checked, still without touching the live data.
+   A database with no pages is valid; an absent, zero-byte or uninitialized
+   database is refused rather than initialized into an empty replacement.
+   A legacy database with API keys but no pepper verifier stops here unless
+   the original pepper is configured and `--accept-legacy-api-key-pepper` was passed. When
+   the live config is being kept (step 4) and the database holds API keys, the
+   configured pepper must match the one the keys were hashed with, or the
+   restore stops here too. This also applies when the archive has no
+   `config.toml`, even with `--with-config`.
+   If the archived config will be installed, its TOML syntax must also be
+   valid before the swap.
+4. Swap: rename the live `wiki/` and `db/` aside and move the staged copies
+   into place. The archive's `config.toml` replaces the live config only with
+   `--with-config` or when the data dir has none. Otherwise the live config
+   stays and the archived one is saved as `<data_dir>/config.toml.from-backup`
+   (`0600` on Unix), replacing an earlier copy there. If any rename fails,
+   including saving this copy, the earlier moves are reversed. The previous
+   data is deleted only after the swap and config placement succeed.
+5. Print a summary, including where the backup's config went.
+
+A backup's `config.toml` can run commands and redirect data. Restore it, with
+`--with-config` or by adopting `config.toml.from-backup`, only from an archive
+you trust; review it first otherwise.
 
 The live data is therefore untouched until the archive has proven usable.
 A restore that fails in steps 2–3 leaves `wiki/` and `db/` exactly as they
@@ -1171,6 +1394,25 @@ Failure modes:
   a snapshot the current binary cannot open** (for example a backup taken
   by a newer release) → exits with the error; the existing `wiki/` and
   `db/` are left as they were.
+- **Missing, empty or uninitialized database snapshot** → exits before the
+  swap. A restore requires the archive's `db/memory.sqlite` and its applied
+  migration history; it never initializes a new store to fill in missing data.
+- **Invalid TOML in a config that would be installed** → exits before the
+  swap. When a live config exists, restore without `--with-config` to keep it
+  and save the archived config beside it for review.
+- **Migration history has a gap** → an earlier migration is unrecorded
+  although a later one was applied. The staged store is refused, just as at
+  normal startup. Keep the backup and report the history for review;
+  `--force` does not bypass this check or repair the missing migration.
+- **The live config's pepper is missing or does not match the backup's API
+  keys** (live config kept) → set the live `[auth].token_pepper` to the
+  original. If the backup contains `config.toml`, restoring it with
+  `--with-config` is another option. Without that file in the archive, carry
+  the original config separately. The live data is left as it was.
+- **Legacy backup has API keys but no pepper verifier** → restore the original
+  `[auth].token_pepper` through the current config/environment and rerun with
+  `--accept-legacy-api-key-pepper`. This flag confirms provenance; it cannot
+  determine whether an unknown pepper is correct.
 - **A rename in the swap fails and cannot be reversed** → exits with an
   `INCONSISTENT STATE` message naming the
   `<data_dir>/.restore-previous-<stamp>/` directory that still holds the
@@ -1305,6 +1547,42 @@ ai-memory move-session <session-id> --to my-project --confirm
 ai-memory move-session --from-project tmp --to my-project --confirm
 ai-memory purge-project --project tmp --confirm
 ```
+
+### Wiki git history unreadable after a crash
+
+Every repository handle the server opens carries `core.fsyncObjectFiles = true`
+from `wiki/.git/ai-memory.gitconfig`, a file the git CLI never reads, so libgit2
+syncs each object and ref before renaming it into place while `git status` in
+the wiki stays free of git's deprecation warning for that key. Setting
+`core.fsyncObjectFiles = false` in `wiki/.git/config` turns it off.
+Before that, a power loss or kernel crash could keep a ref update while the
+objects it names were never written: zero-length files under `.git/objects`,
+`HEAD` pointing at one of them, and every later checkpoint failing with
+`failed to parse loose object: invalid header`. The pages on disk are not
+affected; only their history stops. At startup the server logs an `ERROR`
+("wiki git history is unreadable") when `HEAD` does not resolve to a readable
+commit.
+
+The working tree is the source of truth, so repair points the branch back at
+the newest intact commit and lets the next checkpoint record everything since.
+Stop the server first, then from `<data_dir>/wiki`:
+
+```bash
+git fsck --full                        # names the empty objects and the bad ref
+mkdir -p ../wiki-empty-objects         # move them out, don't delete them
+find .git/objects -type f -empty -exec mv {} ../wiki-empty-objects/ \;
+# Newest reflog entry whose commit and tree still read back:
+for oid in $(awk '{print $2}' .git/logs/HEAD | tac); do
+  git cat-file -e "$oid^{tree}" 2>/dev/null && echo "$oid" && break
+done
+git update-ref refs/heads/main <oid>   # the branch `git symbolic-ref HEAD` names
+rm .git/index && git reset -q          # rebuild the index; pages are untouched
+git reflog expire --stale-fix --expire=never --all
+git fsck --full                        # clean (a dangling blob is harmless)
+```
+
+Start the server again; the next checkpoint commits the pages written after
+that commit.
 
 ## Why this matters: the flat-wiki incident
 

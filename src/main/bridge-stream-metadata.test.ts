@@ -22,8 +22,8 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, runBridgeProbe } from
  */
 const probeSource = (messages: string) => `
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
-import { splitUrlScheme } from "@oh-my-pi/pi-tui/tools/url-scheme-host";
-import { splitPathAndSel } from "@oh-my-pi/pi-tui/tools/read";
+import { splitUrlScheme } from "@oh-my-pi/pi-coding-agent/internal-urls/url-scheme";
+import { splitPathAndSel } from "@oh-my-pi/pi-coding-agent/tools/details/read";
 import { decorateMessages, methods, readGroupTarget } from "./stream-metadata";
 export default function(pi) {
  pi.on("session_start", async () => {

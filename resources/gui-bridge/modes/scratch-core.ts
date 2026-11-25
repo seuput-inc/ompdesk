@@ -3,7 +3,7 @@
  * folder OMPdesk made for this tab's throwaway files (main `src/main/session-scratch.ts`, which also says why it is
  * not the temp folder). Without it agents write screenshots, test output and probes to `/tmp`, the home folder or
  * the repository by hard-coded path, where nothing can tie them to a session afterwards (measured:
- * machine-setup-updates › Disk care). Two sentences: every byte rides on every request.
+ * machine-setup-updates › Disk care).
  *
  * Dependency-free: main imports the variable's name.
  */
@@ -17,6 +17,6 @@ export const SCRATCH_SECTION_ID = "scratch";
 export function scratchSection(dir: string | undefined): string | undefined {
 	if (!dir) return undefined;
 	return `<scratch>
-Put every file you make only to do the work (screenshots, captures, test output, logs, probes, throwaway checkouts, downloads) under \`${dir}\`, never in \`/tmp\`, the temp folder, the home folder or the repository. OMPdesk removes that folder some days after this session's tab is closed and keeps only the files your replies show or link, until the session is deleted.
+Keep throwaway files under \`${dir}\`, not in the repo, home or system temp. After verification, remove your own unneeded build output and downloads; keep files that replies link or ongoing work needs. OMPdesk later sweeps closed tabs' scratch and keeps linked files until their sessions are deleted.
 </scratch>`;
 }

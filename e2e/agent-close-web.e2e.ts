@@ -1,14 +1,15 @@
 /**
  * An agent closes a child tab a paired phone page owns (`ompdesk_session_stop {close:true}`, src/main/agent-control
  * `#closeTab`): main releases it itself, because the page's `AGENT_CONTROL_VIEW` is dropped while it has no socket.
- * It does so for any tab whose page did not report unsaved edits in it (`FileEditReporter` → `FILE_EDIT_REPORT`, `web/
- * file-edit-reports.ts`): a page that is offline, or has said nothing since this launch, is released at once with one
- * close note; only a tab the page's latest report names as holding unsaved Files edits stays. The built app runs
- * on the fake omp and the fake Tailscale CLI; the phone is the app's real `web.html` in Chromium behind the fake
- * serve (e2e/fixture/phone-serve.ts), the agent is the fake omp's `fixture:host-tool:` line.
+ * It does so for any tab whose page did not report unsaved edits in it (`FileEditReporter` → `FILE_EDIT_REPORT`, kept
+ * by the core's web router, `crates/core/src/web/file_edits.rs`): a page that is offline, or has said nothing since
+ * this launch, is released at once with one close note; only a tab the page's latest report names as holding unsaved
+ * Files edits stays. The built app runs on the fake omp and the fake Tailscale CLI; the phone is the app's real
+ * `web.html` in Chromium behind the fake serve (e2e/fixture/phone-serve.ts), the agent is the fake omp's
+ * `fixture:host-tool:` line.
  *
  * Unit counterparts: `service.test.ts` ("a close is told only once the tab is gone", "closing a tab a paired web page
- * owns"), `host.test.ts`, `tab-release.test.ts`, `web/file-edit-reports.test.ts`, `FileEditReporter.test.tsx`.
+ * owns"), `host.test.ts`, `tab-release.test.ts`, `ws-router.test.ts`, `file_edits.rs`, `FileEditReporter.test.tsx`.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -116,10 +117,22 @@ async function openPhone(desktop: Page, options: { spawn: boolean }): Promise<Pa
 	await phone.goto(`${proxy.url}/`);
 	await phonePaired(phone);
 	if (options.spawn) {
-		// A web window starts with no tab: the phone opens one in the project.
-		await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), profile.project);
+		// A paired web window with no tab opens the empty start tab in the host's default workspace (stores/tabs.ts,
+		// 140c6b709). The page does that on its own first tab list, which may come before or after a spawn made here:
+		// in e2e 44516012533 it came first, the start tab stayed the active one, and the agent the spec drove was that
+		// unstarted tab's, not the project's. So wait for the start tab, open the project tab, and close the start tab.
+		await expect
+			.poll(async () => (await phoneTabs(phone)).map(tab => tab.placeholder === true), { timeout: 30_000 })
+			.toEqual([true]);
+		const [start] = await phoneTabs(phone);
+		const spawned = await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), profile.project);
+		expect(await phone.evaluate(id => window.omp.tabs.close(id), start?.tabId ?? "")).toBe(true);
 		await phone.reload();
 		await expect(phone.locator("[data-composer-input]").first()).toBeVisible({ timeout: 60_000 });
+		const tabs = await phoneTabs(phone);
+		expect(tabs.map(tab => [tab.tabId, tab.cwd, tab.active === true])).toEqual([
+			[spawned?.tabId, profile.project, true],
+		]);
 	}
 	return phone;
 }

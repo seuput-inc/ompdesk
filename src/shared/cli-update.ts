@@ -1,5 +1,5 @@
 /**
- * The command-line tools of connected accounts, kept current (src/main/cli-tools/): for each provider with
+ * The command-line tools of connected accounts, kept current (the core's `crates/core/src/tools/cli`): for each provider with
  * a stored credential, its vendor's CLI (Claude Code, Codex, Gemini CLI, Cursor Agent, GitHub CLI and its
  * Copilot), plus the tools machine setup installs (GitHub CLI, Node.js and agent-desktop in the managed tools
  * dir). OMPdesk only updates a CLI that is already installed, through the method that owns it (its own updater, npm or Bun

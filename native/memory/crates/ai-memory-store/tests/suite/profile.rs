@@ -1,7 +1,7 @@
 //! The cross-project profile's store side
 //! (`docs/design-cross-project-profile.md`): where each share mode lives, the
-//! reserved-name rules, the per-project `[profile]` flags, and the bounded
-//! digest reads. The isolation half is adversarial: a private profile must
+//! reserved-name rules, the per-project `[profile]` flags, and the digest
+//! reads. The isolation half is adversarial: a private profile must
 //! refuse every other operator, and a shared one must refuse writes from a
 //! database user without a grant.
 
@@ -391,6 +391,7 @@ async fn digest_inputs_read_entries_stack_and_newness() {
                 body: String::new(),
                 importance: 5,
                 occurred_at: None,
+                file_path: None,
             },
             &Sanitizer::builtin(),
         ))
@@ -412,4 +413,285 @@ async fn digest_inputs_read_entries_stack_and_newness() {
         inputs.project_tags
     );
     assert!(inputs.project_has_pages);
+}
+
+/// Newness honours the TTL, both directions. A project whose every page has
+/// passed its `expires_at` is as new as one that never had a page: its pages
+/// are already hidden from every other digest read, so counting them would
+/// halve the digest budget and suppress the `profile apply` offer for a
+/// project with nothing left to show. A single live page still counts.
+#[tokio::test]
+async fn expired_pages_do_not_make_a_project_look_established() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+    let ws = default_workspace(&store).await;
+    let global = ai_memory_store::create_global_scope(&store.writer)
+        .await
+        .unwrap();
+    let app = store
+        .writer
+        .get_or_create_project(ws, "app".to_owned(), None)
+        .await
+        .unwrap();
+
+    let mut expired = profile_page(ws, app, "notes/stale.md", "# Stale\n\nlong gone");
+    expired.expires_at = Some(jiff::Timestamp::from_second(1).unwrap());
+    store.writer.upsert_page(expired).await.unwrap();
+
+    let inputs = store
+        .reader
+        .profile_digest_inputs(global.as_tuple(), (ws, app))
+        .await
+        .unwrap();
+    assert!(
+        !inputs.project_has_pages,
+        "a project whose every page has expired is still new"
+    );
+
+    store
+        .writer
+        .upsert_page(profile_page(
+            ws,
+            app,
+            "notes/live.md",
+            "# Live\n\nstill here",
+        ))
+        .await
+        .unwrap();
+    let inputs = store
+        .reader
+        .profile_digest_inputs(global.as_tuple(), (ws, app))
+        .await
+        .unwrap();
+    assert!(
+        inputs.project_has_pages,
+        "one unexpired page means the project has memory"
+    );
+}
+
+/// Harvest, list, status and the digest used to stop at 200 pages in path
+/// order. A later category then vanished from those views, and the harvester
+/// treated its ledger rows as removed by the user. Every read keeps the page
+/// after that old cap.
+#[tokio::test]
+async fn profile_reads_keep_pages_past_the_old_two_hundred_path_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+    let global = ai_memory_store::create_global_scope(&store.writer)
+        .await
+        .unwrap();
+
+    for i in 0..200 {
+        let path = format!("profile/habits/h{i:03}.md");
+        store
+            .writer
+            .upsert_page(profile_page(
+                global.workspace_id,
+                global.project_id,
+                &path,
+                "Always keep pull requests small.",
+            ))
+            .await
+            .unwrap();
+    }
+    store
+        .writer
+        .upsert_page(profile_page(
+            global.workspace_id,
+            global.project_id,
+            "profile/workflow/ship.md",
+            "Ship a patch as soon as it is ready.",
+        ))
+        .await
+        .unwrap();
+
+    let (pages, _) = store
+        .reader
+        .profile_scope_pages(global.workspace_id, global.project_id)
+        .await
+        .unwrap();
+    assert_eq!(pages.len(), 201);
+    assert!(
+        pages
+            .iter()
+            .any(|page| page.path == "profile/workflow/ship.md"),
+        "harvester read dropped the page after the old path cap"
+    );
+
+    let all = store
+        .reader
+        .profile_entries(global.workspace_id, global.project_id)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 201);
+    assert!(
+        all.iter()
+            .any(|entry| entry.path == "profile/workflow/ship.md")
+    );
+
+    let inputs = store
+        .reader
+        .profile_digest_inputs(global.as_tuple(), global.as_tuple())
+        .await
+        .unwrap();
+    assert_eq!(inputs.entries.len(), 201);
+    assert!(
+        inputs
+            .entries
+            .iter()
+            .any(|entry| entry.path == "profile/workflow/ship.md")
+    );
+}
+
+/// The session-start digest runs on the first prompt of every session, so its
+/// read of the profile is bounded even after #1946 lifted the old 200-row cap.
+/// The cap sits far above what a digest budget can show, and it never reaches
+/// the harvester or the list/status/apply views: those still read every page.
+#[tokio::test]
+async fn session_start_digest_read_is_bounded_but_scope_reads_are_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+    let global = ai_memory_store::create_global_scope(&store.writer)
+        .await
+        .unwrap();
+    let cap = ai_memory_store::PROFILE_DIGEST_READ_CAP;
+    assert!(cap > 200, "the cap must sit well above the old 200-row cap");
+
+    let pages: Vec<NewPage> = (0..=cap)
+        .map(|i| {
+            profile_page(
+                global.workspace_id,
+                global.project_id,
+                &format!("profile/habits/h{i:05}.md"),
+                "Always keep pull requests small.",
+            )
+        })
+        .collect();
+    store.writer.upsert_pages_batch(pages).await.unwrap();
+
+    let inputs = store
+        .reader
+        .profile_digest_inputs(global.as_tuple(), global.as_tuple())
+        .await
+        .unwrap();
+    assert_eq!(
+        inputs.entries.len(),
+        cap,
+        "digest read must stop at the cap"
+    );
+
+    let all = store
+        .reader
+        .profile_entries(global.workspace_id, global.project_id)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), cap + 1, "list/status/apply read the whole scope");
+    let (scope_pages, _) = store
+        .reader
+        .profile_scope_pages(global.workspace_id, global.project_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        scope_pages.len(),
+        cap + 1,
+        "the harvester's convergence read stays uncapped"
+    );
+}
+
+/// Imported prompts keep their own `occurred_at`, so several can share one
+/// timestamp, and a page batch can share one `updated_at`. A harvest pass
+/// that ends inside such a group must still return the rest of it, or the
+/// mark moves past the group and the rest is never read.
+#[tokio::test]
+async fn harvest_reads_every_row_of_a_timestamp_group_split_by_the_batch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+    let ws = default_workspace(&store).await;
+    let app = store
+        .writer
+        .get_or_create_project(ws, "app".to_owned(), None)
+        .await
+        .unwrap();
+    let session = SessionId::new();
+    store
+        .writer
+        .begin_session(NewSession {
+            occurred_at: Some(1_000_000),
+            id: session,
+            workspace_id: ws,
+            project_id: app,
+            agent_kind: AgentKind::ClaudeCode,
+            cwd: Some("/repo/app".into()),
+            actor_user: None,
+        })
+        .await
+        .unwrap();
+    for body in ["Always use pnpm.", "Never force-push to main."] {
+        store
+            .writer
+            .insert_observation(Sanitized::new(
+                NewObservation {
+                    session_id: session,
+                    workspace_id: ws,
+                    project_id: app,
+                    kind: ObservationKind::UserPrompt,
+                    extension: None,
+                    source_event: None,
+                    title: "prompt".into(),
+                    body: body.into(),
+                    importance: 5,
+                    occurred_at: Some(2_000_000),
+                    file_path: None,
+                },
+                &Sanitizer::builtin(),
+            ))
+            .await
+            .unwrap();
+    }
+    for path in ["decisions/a.md", "decisions/b.md"] {
+        store
+            .writer
+            .upsert_page(profile_page(ws, app, path, "# Decision\n\nUse tokio."))
+            .await
+            .unwrap();
+    }
+    let conn = rusqlite::Connection::open(store.db_path()).unwrap();
+    conn.execute(
+        "UPDATE pages SET updated_at = 3000000 WHERE path IN ('decisions/a.md', 'decisions/b.md')",
+        [],
+    )
+    .unwrap();
+
+    let mut mark = ai_memory_store::ProfileHarvestMark::default();
+    let (mut prompts, mut pages) = (Vec::new(), Vec::new());
+    for _ in 0..4 {
+        let (new_prompts, new_pages, _) = store
+            .reader
+            .profile_harvest_inputs(ws, app, mark, 1)
+            .await
+            .unwrap();
+        if new_prompts.is_empty() && new_pages.is_empty() {
+            break;
+        }
+        for prompt in new_prompts {
+            mark.observations_until = mark.observations_until.max(prompt.created_at);
+            prompts.push(prompt.body);
+        }
+        for page in new_pages {
+            mark.pages_until = mark.pages_until.max(page.updated_at);
+            pages.push(page.path);
+        }
+    }
+    prompts.sort();
+    pages.sort();
+    assert_eq!(
+        prompts,
+        vec!["Always use pnpm.", "Never force-push to main."],
+        "a prompt sharing the batch's last timestamp was never harvested"
+    );
+    assert_eq!(
+        pages,
+        vec!["decisions/a.md", "decisions/b.md"],
+        "a page sharing the batch's last timestamp was never harvested"
+    );
 }

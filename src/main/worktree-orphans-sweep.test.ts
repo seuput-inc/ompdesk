@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { gitSync, initRepo } from "./local/git/test-repos";
-import { sweepLandedWorktrees } from "./worktree-orphans";
+import { orphanRepositories, sweepLandedWorktrees } from "./worktree-orphans";
 import {
 	addWorktree,
 	deps,
@@ -18,6 +18,51 @@ import {
 import { realFolder } from "./worktree-removals";
 
 installOrphansRig();
+
+it(
+	"counts gui- entries in a project's own root and keeps known projects in discovery order",
+	async () => {
+		const knownOnly = path.join(root, "known");
+		const own = path.join(root, "own");
+		const ownRoot = path.join(root, "own-wt");
+		const otherRoot = path.join(root, "other-wt");
+		await initRepo(knownOnly);
+		await initRepo(own);
+		await fs.mkdir(ownRoot);
+		await fs.writeFile(path.join(ownRoot, "gui-"), "");
+		await fs.mkdir(path.join(otherRoot, "plain", "gui-nested"), { recursive: true });
+		await fs.writeFile(path.join(otherRoot, "GUI-upper"), "");
+		const global = addWorktree("global");
+		addWorktree("also-global");
+		await fs.writeFile(path.join(wtRoot, "gui-file"), "");
+		const found = await orphanRepositories({
+			bridge: {
+				request: async <T>(_method: string, params?: { primaryRoot?: string }): Promise<T> => {
+					const primary = params?.primaryRoot && realFolder(params.primaryRoot);
+					const location = primary === own ? ownRoot : primary === knownOnly ? otherRoot : wtRoot;
+					return { root: location, hash: HASH } as T;
+				},
+			},
+			openFolders: () => [],
+			projects: () => [knownOnly, own, global, own, path.join(root, "missing")],
+		});
+		expect(found).toEqual({ root: wtRoot, repos: [repo, own], known: [repo, knownOnly, own] });
+	},
+	SLOW,
+);
+
+it(
+	"keeps known projects when the global root is missing or is a file",
+	async () => {
+		const known = { ...deps, projects: () => [repo] };
+		const expected = { root: wtRoot, repos: [], known: [repo] };
+		await fs.rmdir(wtRoot);
+		expect(await orphanRepositories(known)).toEqual(expected);
+		await fs.writeFile(wtRoot, "not a folder");
+		expect(await orphanRepositories(known)).toEqual(expected);
+	},
+	SLOW,
+);
 
 describe("sweepLandedWorktrees", () => {
 	const branches = () =>

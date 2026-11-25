@@ -1,13 +1,16 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
+import { appDirOfEntry, assertShellBuilt, copyShellDiagnostics, pinNodeRuntime } from "./fixture/shell-launch";
+import { processesBelow, processKey, waitForProcessesToExit } from "./process-tree";
 
 /**
  * A paired phone's preview, on real offscreen pages (design §7.1): `e2e/fixture/preview-stream-main.ts` runs the
- * real preview host and WebSocket router inside Electron against a fake WebSocket client and a local test page
- * (bundled with bun, run by the Electron binary itself, so no app window or pairing is involved). The frames
+ * real preview host and WebSocket router as the Node main of the Tauri host (the shim in place of `electron`)
+ * against a fake WebSocket client and a local test page, so the host's own Preview browser paints the pages and no
+ * app window or pairing is involved. The frames
  * that arrive are JPEGs of the size the phone's surface asks for; the ack pacing holds (no frame without the
  * ack, at most 12 a second, nothing for a still page); a tap, keys, committed text and a wheel reach the page
  * as trusted events; a pinch zooms; the page's dialogs wait for the phone. The numbers it measures are written
@@ -50,42 +53,71 @@ interface Numbers {
 	};
 }
 
-/** The Electron binary the repository's `electron` package installed. */
-function electronBinary(): string {
-	const root = path.resolve("node_modules", "electron");
-	return path.join(root, "dist", readFileSync(path.join(root, "path.txt"), "utf8").trim());
+/** Everything the host and its children wrote while the fixture ran, and the processes it left below it. */
+async function runFixture(work: string, bundle: string): Promise<{ output: string; code: number | null }> {
+	const host = assertShellBuilt();
+	const userData = path.join(work, "userData");
+	const env: NodeJS.ProcessEnv = { ...process.env, OMP_PREVIEW_E2E_USERDATA: userData };
+	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
+	// The host starts its Node child on the bundle as its main script, from the built `out/` beside it (the host
+	// reads the renderer and preload next to `main/`); nothing opens a window, the fixture drives the preview alone.
+	env.OMPDESK_APP_DIR = appDirOfEntry(bundle);
+	env.OMPDESK_APP_ENTRY = bundle;
+	pinNodeRuntime(env);
+	const child = spawn(host, [`--user-data-dir=${userData}`], {
+		env,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	for (const stream of [child.stdout, child.stderr])
+		stream.on("data", chunk => {
+			output += String(chunk);
+		});
+	const { promise: exited, resolve: exit } = Promise.withResolvers<number | null>();
+	child.once("exit", code => exit(code));
+	const stuck = Promise.withResolvers<"stuck">();
+	const timer = setTimeout(() => stuck.resolve("stuck"), 120_000);
+	const owned = () => (child.pid === undefined ? [] : processesBelow(child.pid));
+	let below = owned();
+	const watch = setInterval(() => {
+		below = [...new Map([...below, ...owned()].map(entry => [processKey(entry), entry])).values()];
+	}, 2_000);
+	try {
+		if ((await Promise.race([exited, stuck.promise])) === "stuck") child.kill("SIGKILL");
+		return { output, code: await exited };
+	} finally {
+		clearTimeout(timer);
+		clearInterval(watch);
+		await waitForProcessesToExit(below, 10_000);
+		// The test's own `finally` removes `work` next, and with it the host's native log.
+		try {
+			copyShellDiagnostics(userData, test.info().outputPath("shell-logs", String(child.pid ?? "fixture")), output);
+		} catch (error) {
+			console.warn(`[shell diagnostics] ${String(error)}`);
+		}
+	}
 }
 
 test("a phone's preview streams paced JPEG frames and its gestures reach the offscreen page as trusted input", async () => {
 	test.setTimeout(150_000);
 	const work = mkdtempSync(path.join(os.tmpdir(), "omp-preview-stream-"));
+	// Inside the built `out/main/`, where the host finds the renderer and preload its main script sits beside.
+	const bundle = path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main", `preview-stream-main-${process.pid}.mjs`);
 	try {
-		const bundle = path.join(work, "main.cjs");
 		execFileSync(
 			"bun",
 			[
 				"build",
 				"e2e/fixture/preview-stream-main.ts",
 				"--target=node",
-				"--format=cjs",
-				"--external=electron",
+				"--format=esm",
+				"--tsconfig-override=e2e/fixture/preview-stream.tsconfig.json",
 				"--outfile",
 				bundle,
 			],
 			{ stdio: "pipe" },
 		);
-		const env: NodeJS.ProcessEnv = { ...process.env, OMP_PREVIEW_E2E_USERDATA: path.join(work, "userData") };
-		delete env.ELECTRON_RUN_AS_NODE;
-		const child = spawn(electronBinary(), [bundle], { env, stdio: ["ignore", "pipe", "pipe"] });
-		let output = "";
-		child.stdout.on("data", chunk => {
-			output += String(chunk);
-		});
-		const { promise: exited, resolve: exit } = Promise.withResolvers<number | null>();
-		child.once("exit", code => exit(code));
-		const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
-		const code = await exited;
-		clearTimeout(timer);
+		const { output, code } = await runFixture(work, bundle);
 		const failed = /^FAILED (.*)$/ms.exec(output);
 		expect(failed?.[1], `the fixture failed (exit ${code})`).toBeUndefined();
 		const line = /^RESULT (.+)$/m.exec(output)?.[1];
@@ -134,6 +166,7 @@ test("a phone's preview streams paced JPEG frames and its gestures reach the off
 		]);
 		expect(numbers.dialogs).toMatchObject({ confirm: true, prompt: "Ada", resumed: true });
 	} finally {
+		rmSync(bundle, { force: true });
 		rmSync(work, { recursive: true, force: true });
 	}
 });

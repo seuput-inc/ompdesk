@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { ompModuleFile } from "../omp-package";
 
 /** The pi-natives grep surface the Files panel's content search uses (gitignore-aware, the agent's own engine). */
 interface StockGrep {
@@ -24,9 +24,7 @@ interface StockGrep {
 let natives: Promise<StockGrep> | null = null;
 function stockGrep(): Promise<StockGrep> {
 	natives ??= (async () => {
-		const root = process.env.OMP_PACKAGE_ROOT;
-		if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
-		const stock = await import(Bun.resolveSync("@oh-my-pi/pi-natives", join(root, "package.json")));
+		const stock = await import(ompModuleFile("pi-natives"));
 		if (typeof stock.grep !== "function") throw new Error("Installed omp has no native grep");
 		return stock as StockGrep;
 	})();
@@ -34,27 +32,9 @@ function stockGrep(): Promise<StockGrep> {
 }
 
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
-	/** Main validated `root`, `pattern` (already a regex) and the caps. */
+	/** The core supplies the complete, capped pi-natives options on this request. */
 	"search.text": async params => {
-		const { root, pattern, ignoreCase, glob, maxCount } = params as {
-			root: string;
-			pattern: string;
-			ignoreCase: boolean;
-			glob?: string;
-			maxCount: number;
-		};
-		const result = await (await stockGrep()).grep({
-			pattern,
-			path: root,
-			glob,
-			ignoreCase,
-			hidden: false,
-			gitignore: true,
-			maxCount,
-			maxColumns: 240,
-			maxCountPerFile: 50,
-			timeoutMs: 15_000,
-		});
+		const result = await (await stockGrep()).grep(params as Parameters<StockGrep["grep"]>[0]);
 		return {
 			matches: result.matches.map(match => ({
 				path: match.path.split("\\").join("/"),

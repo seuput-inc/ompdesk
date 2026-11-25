@@ -45,6 +45,12 @@ pub fn spelled(path: &Path) -> String {
     text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
 }
 
+/// `canonicalize` spelled as `spelled` says: a path main and the page compare with the ones node gives them.
+pub async fn real(path: impl AsRef<Path>) -> Option<PathBuf> {
+    let path = tokio::fs::canonicalize(path).await.ok()?;
+    Some(PathBuf::from(spelled(&path)))
+}
+
 /// Fills `buffer` from the file's current position; fewer bytes only at the end of the file.
 pub fn read_into(file: &mut File, buffer: &mut [u8]) -> Result<usize, NodeError> {
     let mut filled = 0;

@@ -10,7 +10,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ElectronApplication, _electron as electron, expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+import { type ElectronApplication, _electron as electron } from "playwright";
 import { appLaunchOptions, exitApp } from "./harness";
 
 const CANDIDATES = ["Run the tests", "Commit these changes", "Explain what you changed"] as const;

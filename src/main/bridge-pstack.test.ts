@@ -74,6 +74,14 @@ describe("pstackText", () => {
 		}
 	});
 
+	it("keeps independent work going unless the user explicitly cancels or replaces it", () => {
+		for (const text of [PSTACK_SECTION, PSTACK_SECTION_SOLO]) {
+			expect(text).toContain("Keep earlier items and their status");
+			expect(text).toContain("Work independent old and new items together");
+			expect(text).toContain("Replace or cancel unfinished work only when the user explicitly asks");
+		}
+	});
+
 	it("keeps the Autopilot variant away from shipping playbooks", () => {
 		expect(PSTACK_AUTOPILOT_SECTION).toContain("HARD LIMITS outrank");
 		expect(PSTACK_AUTOPILOT_SECTION).toContain("skill://poteto-mode/playbooks/bug-fix.md");

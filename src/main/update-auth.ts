@@ -13,26 +13,30 @@
  * the login password again after every update (and blocks the main process while it waits). So the
  * keychain is touched only when a stored token actually exists, or when the
  * user saves one.
+ *
+ * Under the shell the keychain is read with user interaction disabled: a read that would ask answers
+ * `KEYCHAIN_WOULD_ASK`, and nothing touches the keychain again that run. A stored token that cannot be read for that
+ * reason is dropped (its file removed, a marker left that Settings › Updates shows), so the env and `gh` sources apply;
+ * saving a new one fails with the same reason.
  */
 
-import { execFile } from "node:child_process";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { app, net, safeStorage } from "electron";
+import { safeStorage } from "electron";
 import { codedError } from "../shared/ipc-error-codes";
 import type { UpdateAccess, UpdateAuthInfo, UpdateTokenSource } from "../shared/ipc-types";
-import { resolveLoginShellEnv, spawnPath } from "./shell-env";
+import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
+import { PRODUCT_REPO } from "../shared/product-repo";
+import { coreHeld, ghRunner } from "./local/git/exec";
+import { writeRuntimeLog } from "./runtime-log";
+import { resolveLoginShellEnv } from "./shell-env";
+import { safeStorageUnavailableReason, updateHost } from "./shell-host/shell-calls";
 import { executableName } from "./spawn";
-import { classifyRepoAccess, firstUpdateToken, githubApiHeaders, type ResolvedUpdateToken } from "./updater-state";
+import { scrubUpdateText } from "./update-log-core";
+import { githubGet } from "./update-release";
+import { classifyRepoAccess, firstUpdateToken, type ResolvedUpdateToken } from "./updater-state";
 
-const RELEASE_REPO = { owner: "SeuPut0705", repo: "ompdesk" } as const;
-export const GITHUB_API_REPO = `https://api.github.com/repos/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}`;
+export const GITHUB_API_REPO = `https://api.github.com/repos/${PRODUCT_REPO}`;
 
 const GH_TIMEOUT_MS = 5_000;
-
-function storedTokenPath(): string {
-	return path.join(app.getPath("userData"), "update-token.bin");
-}
 
 async function envToken(): Promise<string | undefined> {
 	const launch = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
@@ -42,39 +46,59 @@ async function envToken(): Promise<string | undefined> {
 }
 
 async function ghToken(): Promise<string | undefined> {
-	const pathEnv = await spawnPath();
-	const { promise, resolve } = Promise.withResolvers<string | undefined>();
-	execFile(
-		executableName("gh", process.platform),
-		["auth", "token", "--hostname", "github.com"],
-		{ env: { ...process.env, PATH: pathEnv }, timeout: GH_TIMEOUT_MS, windowsHide: true },
-		(error, stdout) => resolve(error ? undefined : stdout),
-	);
-	return promise;
+	const gh = await ghRunner(executableName("gh", process.platform));
+	gh.maxBytes = 1024 * 1024; // execFile's former limit; a truncated credential is unusable.
+	return coreHeld<string>(
+		"gh.run",
+		{ gh, cwd: process.cwd(), args: ["auth", "token", "--hostname", "github.com"], timeoutMs: GH_TIMEOUT_MS },
+		GH_TIMEOUT_MS,
+	).catch(() => undefined);
+}
+
+function noteStoredTokenFailure(phase: "file" | "key" | "decrypt", reason: string): void {
+	writeRuntimeLog({
+		source: "app-update",
+		message: "The saved update token could not be read",
+		details: { event: "stored-token-read", phase, reason: scrubUpdateText(reason) },
+	});
 }
 
 async function storedToken(): Promise<string | undefined> {
-	let encrypted: Buffer;
+	let encrypted: Buffer | null;
 	try {
-		encrypted = await fs.readFile(storedTokenPath());
+		encrypted = await updateHost().readUpdateTokenCiphertext();
+		if (encrypted === null) return undefined;
+	} catch (error) {
+		const code: unknown = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
+		noteStoredTokenFailure("file", typeof code === "string" ? code : "unknown");
+		return undefined;
+	}
+	let phase: "key" | "decrypt" = "key";
+	try {
+		if (safeStorage.isEncryptionAvailable()) {
+			phase = "decrypt";
+			return safeStorage.decryptString(encrypted);
+		}
+		const reason = safeStorageUnavailableReason();
+		if (reason !== KEYCHAIN_WOULD_ASK) {
+			noteStoredTokenFailure("key", reason ?? "unavailable");
+			return undefined;
+		}
 	} catch {
+		noteStoredTokenFailure(phase, phase === "decrypt" ? "ciphertext-rejected" : "keychain-operation-failed");
 		return undefined;
 	}
 	try {
-		if (!safeStorage.isEncryptionAvailable()) return undefined;
-		return safeStorage.decryptString(encrypted);
+		await updateHost().dropUpdateTokenFile();
 	} catch {
+		noteStoredTokenFailure("key", "keychain-operation-failed");
 		return undefined;
 	}
-}
-
-async function hasStoredToken(): Promise<boolean> {
-	try {
-		await fs.access(storedTokenPath());
-		return true;
-	} catch {
-		return false;
-	}
+	writeRuntimeLog({
+		source: "app-update",
+		message: `The saved update token was removed: it cannot be read on this computer (${KEYCHAIN_WOULD_ASK}); GH_TOKEN, GITHUB_TOKEN and the gh login still apply`,
+	});
+	return undefined;
 }
 
 export function resolveUpdateToken(): Promise<ResolvedUpdateToken | undefined> {
@@ -86,40 +110,42 @@ export function resolveUpdateToken(): Promise<ResolvedUpdateToken | undefined> {
 	return firstUpdateToken(lookups);
 }
 
-/** Whether the release repo is readable with `token`, or anonymously without one. */
 /** The repository probe's deadline: a connection that never answers reads as a network failure. */
 const REPO_ACCESS_TIMEOUT_MS = 10_000;
 
+/** Whether the release repo is readable with `token`, or anonymously without one. */
 export async function checkRepoAccess(token: string | undefined): Promise<UpdateAccess> {
 	try {
-		const response = await net.fetch(GITHUB_API_REPO, {
-			headers: githubApiHeaders(token),
-			signal: AbortSignal.timeout(REPO_ACCESS_TIMEOUT_MS),
+		const answer = await githubGet(GITHUB_API_REPO, {
+			...(token ? { token } : {}),
+			timeoutMs: REPO_ACCESS_TIMEOUT_MS,
 		});
-		return classifyRepoAccess(response.status, response.headers.get("x-ratelimit-remaining") === "0");
+		return classifyRepoAccess(answer.status, answer.rateLimitRemaining === "0");
 	} catch {
 		return "network";
 	}
 }
 
 export async function updateAuthInfo(): Promise<UpdateAuthInfo> {
-	const [resolved, stored] = await Promise.all([resolveUpdateToken(), hasStoredToken()]);
+	const resolved = await resolveUpdateToken();
+	// After the resolve: a token it just dropped is no longer stored, and says why.
 	return {
+		...(await updateHost().updateTokenFileStatus()),
 		source: resolved?.source ?? null,
-		hasStoredToken: stored,
 		// macOS/Windows always have an OS keystore; probing it would prompt (see top).
 		canStore: process.platform !== "linux" || safeStorage.isEncryptionAvailable(),
 	};
 }
 
 export async function storeUpdateToken(token: string): Promise<void> {
-	if (!safeStorage.isEncryptionAvailable())
+	if (!safeStorage.isEncryptionAvailable()) {
+		if (safeStorageUnavailableReason() === KEYCHAIN_WOULD_ASK)
+			throw codedError("keychain_would_ask", "macOS would ask for the login password to open the keychain");
 		throw codedError("safe_storage_unavailable", "safeStorage encryption is unavailable");
-	const file = storedTokenPath();
-	await fs.mkdir(path.dirname(file), { recursive: true });
-	await fs.writeFile(file, safeStorage.encryptString(token), { mode: 0o600 });
+	}
+	await updateHost().saveUpdateTokenCiphertext(safeStorage.encryptString(token));
 }
 
 export async function clearUpdateToken(): Promise<void> {
-	await fs.rm(storedTokenPath(), { force: true });
+	await updateHost().clearUpdateTokenFiles();
 }

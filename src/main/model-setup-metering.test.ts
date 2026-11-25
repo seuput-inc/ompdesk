@@ -44,7 +44,7 @@ export default function (pi) {
    const started = performance.now();
    const facts = await methods.model_setup_facts({}, env);
    const factsMs = performance.now() - started;
-   const extra = providerBillings(session, JSON.parse(process.env.METERING_EXTRA));
+   const extra = await providerBillings(session, JSON.parse(process.env.METERING_EXTRA));
    fs.writeFileSync(process.env.METERING_OUT, JSON.stringify({
     roles: roles.map(role => ({
      id: role.id,

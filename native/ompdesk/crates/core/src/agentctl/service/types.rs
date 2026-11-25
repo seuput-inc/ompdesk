@@ -5,8 +5,8 @@
 //! written back as TypeScript's `undefined` would be (an absent key), so what main receives equals what it received
 //! from the TypeScript service.
 //!
-//! The tool arguments are validated in TypeScript (zod, `looseArgs`), where the tools' JSON schemas and the skill
-//! drift test already keep both in step: the service asks main to parse (`args.parse`) and receives these structs.
+//! Main keeps Zod's field checks and JavaScript's text coercion. `Host::parse_args` applies the
+//! schedule action's cross-field checks before the service reads these structs.
 
 use std::collections::HashMap;
 
@@ -86,6 +86,9 @@ pub struct TabPlan {
     #[serde(default)]
     pub title: String,
     pub plan_file_path: String,
+    /// Which proposal of the tab it is (main bumps it for every new or revised one): the answer names it.
+    #[serde(default)]
+    pub generation: Option<u64>,
 }
 
 /// A tab's git-worktree binding (`IpcTabWorktree`).
@@ -111,19 +114,15 @@ impl TabWorktree {
     }
 }
 
-/// The checkout, its branch and the repo it forked from (`WorktreeRef`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorktreeRef {
-    pub path: String,
-    pub branch: String,
-    pub base_cwd: String,
-}
+/// The checkout, its branch and the repo it forked from (`WorktreeRef`): git's one definition.
+pub use crate::git::branches::WorktreeRef;
 
 /// How a tab's last finished turn ended (`IpcTabRunOutcome`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
     pub stop_reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
@@ -197,6 +196,9 @@ pub struct ControlTab {
     pub busy: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub resuming: bool,
+    /// Its cut-off turn did not go on by itself and waits for the person (`off`, `crash-loop`, `failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_off: Option<String>,
     #[serde(default)]
     pub asks: Vec<ControlAsk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,6 +215,8 @@ pub struct ControlTab {
     pub task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<RunOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) close_turn: Option<crate::pool::AutoCloseTurn>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_closable: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -230,6 +234,50 @@ pub struct ControlTab {
     pub former_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_edits: Option<FileEdits>,
+    /// A view of a tab another party holds (a paired host's window or another device's tab there, or a tab this
+    /// computer runs for a paired device): one omp, shared, and closing the view only leaves it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub viewing: bool,
+    /// The tab's window's latest answer to an agent close (`closeId` of the view event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_answer: Option<CloseAnswer>,
+    /// A tab here not started since a relaunch (`asleep`) on a paired host's session that a tab on that host holds:
+    /// who holds it there and what that tab does, from the host's summary every row reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_open: Option<OpenElsewhere>,
+    /// Its turn ended and stock's background work (subagents, async jobs) still runs (`IpcTabInfo.settling`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub settling: bool,
+    /// Stock's auto-retry saga its running turn is in (`IpcTabInfo.retrySaga`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_saga: Option<RetrySaga>,
+    /// Its failed turn retries by itself (`IpcTabInfo.scheduledRetry`): a backoff, or a wait for a provider's limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_retry: Option<ScheduledRetry>,
+    /// Its turn waits for the internet connection and goes on once it is back (`IpcTabInfo.awaitingConnection`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub awaiting_connection: bool,
+}
+
+/// Stock's auto-retry saga a running turn is in (`IpcRetrySaga`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrySaga {
+    pub attempt: u32,
+    pub max_attempts: u32,
+    #[serde(default)]
+    pub error_message: String,
+}
+
+/// A failed turn's own retry main armed (`IpcScheduledRetry`): `limit` waits for a provider's usage limit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledRetry {
+    /// Epoch ms.
+    pub at: f64,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub limit: bool,
 }
 
 impl ControlTab {
@@ -241,6 +289,39 @@ impl ControlTab {
             &self.title
         }
     }
+
+    /// For a tab here not started since a relaunch on a paired host's session: what the tab that host holds on it
+    /// does (`host_open`). None for any other tab, or while the host's summary does not say.
+    pub fn host_work(&self) -> Option<StoredWork> {
+        if self.status != TabStatus::Asleep || self.device.is_none() {
+            return None;
+        }
+        self.host_open.as_ref()?.work
+    }
+}
+
+/// What a window did with an agent's close (`shared/agent-control.ts` `AgentCloseOutcome`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloseOutcome {
+    /// It let go of the tab; main's release follows.
+    Closing,
+    /// It keeps its last tab.
+    LastTab,
+    /// The tab's Files editor holds unsaved edits: the window asked the person first.
+    UnsavedEdits,
+    /// An automatic close met a tab the person is at.
+    InUse,
+    /// The window holds no such tab.
+    NotHere,
+}
+
+/// A window's answer to the agent close `close_id`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseAnswer {
+    pub close_id: u64,
+    pub outcome: CloseOutcome,
 }
 
 /// What the tab holding a saved session elsewhere does with it.
@@ -405,6 +486,9 @@ pub struct ReleasedSession {
     pub hidden: bool,
     #[serde(default)]
     pub opened_by_session: Option<String>,
+    /// Its opener hears that it was closed: an agent's own child, not an Autopilot run's (the run reads those itself).
+    #[serde(default)]
+    pub tell_opener: bool,
 }
 
 /// A tool call's result: what the agent reads, and whether it failed.
@@ -444,6 +528,18 @@ impl RpcResponse {
             error: Some(error.into()),
             ..RpcResponse::default()
         }
+    }
+
+    /// No answer came, so the command may still run: a local omp's `RPC timeout (…)`, or main's
+    /// `rpc_delivery_unknown`, which a paired host's tab gets when `tab.command` timed out on the link (the host may
+    /// have delivered it and answered too late).
+    pub fn unanswered(&self) -> bool {
+        !self.success && (super::fail::unanswered_text(self.error.as_deref()) || self.unconfirmed())
+    }
+
+    /// The unanswered case where the command left this computer and its fate is unknown (`rpc_delivery_unknown`).
+    pub fn unconfirmed(&self) -> bool {
+        !self.success && self.code.as_deref() == Some("rpc_delivery_unknown")
     }
 }
 
@@ -509,10 +605,32 @@ pub struct AgentMessage {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub is_error: bool,
+    /// Only this fact from stock's `details.toolCommands` is needed after reading the result.
+    #[serde(
+        default,
+        rename = "details",
+        deserialize_with = "command_reported_done"
+    )]
+    pub command_reported_done: bool,
     #[serde(default)]
     pub synthetic: Option<bool>,
     #[serde(default)]
     pub attribution: Option<String>,
+}
+
+fn command_reported_done<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    let details = Value::deserialize(deserializer)?;
+    Ok(details
+        .get("toolCommands")
+        .and_then(Value::as_array)
+        .is_some_and(|commands| {
+            commands.iter().any(|command| {
+                command.get("tool").and_then(Value::as_str) == Some(Tool::Report.name())
+                    && command.get("mode").and_then(Value::as_str) == Some("execute")
+                    && command.get("exitCode").and_then(Value::as_i64) == Some(0)
+                    && command.get("args").is_some_and(super::text::done_to_opener)
+            })
+        }))
 }
 
 /// One page of `get_transcript_page`.
@@ -712,16 +830,34 @@ pub enum ScheduleEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<String>,
     },
+    /// An ICS feed's events, `leadMinutes` before each starts.
+    Calendar {
+        url: String,
+        #[serde(rename = "leadMinutes")]
+        lead_minutes: i64,
+    },
 }
 
 /// When a schedule starts (`ScheduleFrequency`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ScheduleFrequency {
-    Interval { minutes: f64 },
-    Daily { time: String, days: Vec<u8> },
-    Once { at: String },
-    Event { event: ScheduleEvent },
+    Interval {
+        minutes: f64,
+    },
+    Daily {
+        time: String,
+        days: Vec<u8>,
+    },
+    Once {
+        at: String,
+    },
+    Event {
+        event: ScheduleEvent,
+        /// A wait's deadline (ISO): it runs once, on its event or then.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+    },
 }
 
 /// A scheduled run as the control tools see it.
@@ -781,6 +917,20 @@ pub struct ScheduleDraft {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake_session: Option<String>,
+    /// A shell command that must succeed before each start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precheck: Option<String>,
+    /// Where a fresh run's answer goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results_to: Option<ScheduleResultsTo>,
+}
+
+/// `ScheduleDraft.resultsTo`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ScheduleResultsTo {
+    Session { session: String },
+    Notify,
 }
 
 /// A saved schedule (`Schedule`): its draft plus the id, creation time and the device that saved it.
@@ -850,14 +1000,9 @@ pub struct LandingFacts {
     pub clean: bool,
 }
 
-/// What a safe removal did: worktree and branch gone, the worktree gone but the branch kept, or nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WorktreeRemoval {
-    #[serde(rename = "removed")]
-    Removed,
-    #[serde(rename = "branch-kept")]
-    BranchKept,
-}
+/// What a safe removal did (`WorktreeRemoval`), its whole answer and what became of the branch's copy on `origin`:
+/// git's own types.
+pub use crate::git::branches::{RemoteCopy, Removal as WorktreeRemoval, SafeRemoval};
 
 /// A worktree hook's report (`WorktreeSetupReport`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -891,6 +1036,10 @@ pub struct MergeOutcome {
     pub summary: Option<String>,
     #[serde(default)]
     pub post_merge: Option<WorktreeSetupReport>,
+    /// With `merged: true`: what became of the branch's copy on `origin` (none when it has none, or from a paired host
+    /// older than the cleanup).
+    #[serde(default)]
+    pub remote: Option<RemoteCopy>,
     /// With `merged: false`: `hook` or `conflict`.
     #[serde(default)]
     pub reason: Option<String>,
@@ -1072,6 +1221,9 @@ pub struct OpenOne {
     pub worktree: Option<WorktreeArg>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throwaway: Option<bool>,
+    /// From a bot's chat: the item (its number or id) the session works on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
 }
 
 /// `ompdesk_session_open`'s arguments: the single-session fields, or `sessions`, and where to show the tabs.
@@ -1108,13 +1260,27 @@ pub struct ListArgs {
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct SendArgs {
-    pub session: String,
-    pub message: String,
-    /// `follow_up` or `steer`.
+    /// One session; empty when `sessions` names several.
     #[serde(default)]
-    pub delivery: Option<String>,
+    pub session: String,
+    /// Several sessions, each a name or `@children` / `@idle` (the caller's open children, or those of them idle).
+    #[serde(default)]
+    pub sessions: Option<Vec<String>>,
+    pub message: String,
+    #[serde(default)]
+    pub attachments: Option<Vec<Attachment>>,
     #[serde(default)]
     pub request_id: Option<String>,
+}
+
+/// One attachment of a call (exactly one field): a file where the caller's omp runs, or the n-th newest picture of
+/// its conversation (`tools.ts` `Attachment`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Attachment {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub image: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -1138,6 +1304,8 @@ pub struct ReportArgs {
     pub dispatch: Option<String>,
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
+    pub attachments: Option<Vec<Attachment>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -1177,6 +1345,8 @@ pub struct AnswerItem {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct AnswerArgs {
     pub session: String,
+    #[serde(default)]
+    pub attachments: Option<Vec<Attachment>>,
     #[serde(default)]
     pub request: Option<String>,
     #[serde(default)]
@@ -1257,9 +1427,20 @@ pub struct ScheduleArgs {
     pub id: Option<String>,
     #[serde(default)]
     pub device: Option<String>,
-    /// `self`.
+    /// `self` or `bot:<name>`.
     #[serde(default)]
     pub target: Option<String>,
+    /// With `on`: a wait's deadline (ISO), or the same as minutes from now.
+    #[serde(default)]
+    pub by: Option<String>,
+    #[serde(default)]
+    pub within_minutes: Option<f64>,
+    /// A shell command each start waits on; empty removes it.
+    #[serde(default)]
+    pub precheck: Option<String>,
+    /// `self` or `notify`.
+    #[serde(default)]
+    pub results_to: Option<String>,
 }
 
 /// `ompdesk_schedule`'s `on`: the trigger as the tool takes it (a webhook's key is made by the service).
@@ -1292,6 +1473,11 @@ pub enum ScheduleOn {
         subject: Option<String>,
         #[serde(default)]
         to: Option<String>,
+    },
+    Calendar {
+        url: String,
+        #[serde(default)]
+        lead_minutes: Option<i64>,
     },
 }
 
@@ -1380,6 +1566,80 @@ pub struct AppArgs {
     pub args: Option<Map<String, Value>>,
 }
 
+/// `ompdesk_bot`'s arguments (`BotArgs` of `tools.ts`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct BotArgs {
+    /// `create`, `list`, `pause`, `resume`, `set`, `look_around` or `hand`.
+    pub action: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// A bot's name or id.
+    #[serde(default)]
+    pub bot: Option<String>,
+    /// `""` clears it.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub auto_approve: Option<bool>,
+    /// 0 = never stale.
+    #[serde(default)]
+    pub stale_days: Option<f64>,
+    #[serde(default)]
+    pub reach: Option<Vec<String>>,
+    #[serde(default)]
+    pub on: Option<bool>,
+    #[serde(default)]
+    pub time: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+/// `ompdesk_item`'s arguments (`ItemArgs` of `tools.ts`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct ItemArgs {
+    /// `add`, `set`, `comment`, `done`, `cancel`, `link`, `list` or `show`.
+    pub action: String,
+    /// Its number or id.
+    #[serde(default)]
+    pub item: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub done_means: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub ask: Option<String>,
+    #[serde(default)]
+    pub options: Option<Vec<String>>,
+    #[serde(default)]
+    pub recommended: Option<u32>,
+    #[serde(default)]
+    pub wait: Option<String>,
+    #[serde(default)]
+    pub until: Option<String>,
+    #[serde(default)]
+    pub snooze_until: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
+    pub pr: Option<String>,
+}
+
 /// The control tools' names (`AGENT_CONTROL_TOOLS`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -1399,10 +1659,12 @@ pub enum Tool {
     AppList,
     App,
     Report,
+    Bot,
+    Item,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 18] = [
         Tool::List,
         Tool::Open,
         Tool::Send,
@@ -1419,6 +1681,8 @@ impl Tool {
         Tool::AppList,
         Tool::App,
         Tool::Report,
+        Tool::Bot,
+        Tool::Item,
     ];
 
     pub fn name(self) -> &'static str {
@@ -1439,6 +1703,8 @@ impl Tool {
             Tool::AppList => "ompdesk_app_list",
             Tool::App => "ompdesk_app",
             Tool::Report => "ompdesk_report",
+            Tool::Bot => "ompdesk_bot",
+            Tool::Item => "ompdesk_item",
         }
     }
 

@@ -4,15 +4,18 @@
  * Each command's gits run in the core process as one request (`git.*`,
  * native/ompdesk/crates/core/src/git/scm.rs); this file is its typed client.
  * What stays here: the checkout root and the repository lock around every
- * mutation, the check of what the page sent (paths, names, shas, an empty
+ * mutation, the check of what the page sent (names, shas, an empty
  * message, a reset mode), the removal of the untracked files a discard names
  * (fenced to the lock, `fenced-fs`), and the commit message, which stock
  * `omp commit --dry-run` writes (stock's conventional-commit pipeline; it
- * never commits on a dry run).
+ * never commits on a dry run). With Credit use off the tab's omp checks the
+ * account's plan before that run starts (omp-launch.ts `withCreditSpendRuns`):
+ * a refusal is shown as it is, and nothing runs.
  *
  * Failures map to typed codes: not_a_repo / invalid_name / invalid_path /
  * git_failed / push_rejected / no_remote / detached_head / nothing_staged /
- * commit_message_failed / branch_checked_out / dirty_worktree / commit_pushed.
+ * commit_message_failed / credit_spend_off / branch_checked_out /
+ * dirty_worktree / commit_pushed.
  */
 
 import * as path from "node:path";
@@ -26,11 +29,12 @@ import type {
 } from "../../../shared/rpc-types";
 import { CoreError } from "../../core/process";
 import { fs } from "../../fenced-fs";
+import { CreditSpendRefusal } from "../../omp-launch";
 import type { OmpRuntime } from "../types";
 import { LocalCommandError } from "../types";
 import { repoRoot } from "./changes";
 import { coreGit, withRepoLock } from "./exec";
-import { isSafeRelativePath, isValidRefName } from "./parse";
+import { isValidRefName } from "./parse";
 
 /** Hooks (pre-commit, commit-msg) and network round trips get longer than a status read. */
 const COMMIT_TIMEOUT_MS = 300_000;
@@ -56,6 +60,7 @@ export const SCM_COMMAND_BUDGETS_MS = {
 const REFUSALS = new Set([
 	"git_failed",
 	"invalid_name",
+	"invalid_path",
 	"nothing_staged",
 	"no_remote",
 	"detached_head",
@@ -95,10 +100,9 @@ async function mutate<T>(cwd: string, fn: (root: string) => Promise<T>): Promise
 	}
 }
 
-function checkPaths(paths: unknown): string[] {
-	if (!Array.isArray(paths) || paths.length === 0 || !paths.every(p => typeof p === "string" && isSafeRelativePath(p)))
-		throw new LocalCommandError("Invalid repository-relative path", "invalid_path");
-	return paths as string[];
+/** Only the explicit "all" command is the core's null sentinel. */
+function selectedPaths(paths: string[] | "all"): string[] | null {
+	return paths === "all" ? null : Array.isArray(paths) ? paths : [];
 }
 
 function checkRef(name: string): string {
@@ -113,20 +117,20 @@ function checkSha(sha: string): string {
 
 export async function stage(cwd: string, paths: string[] | "all"): Promise<void> {
 	await mutate(cwd, async root => {
-		await scmGit("git.stage", { root, paths: paths === "all" ? null : checkPaths(paths) }, 1);
+		await scmGit("git.stage", { root, paths: selectedPaths(paths) }, 1);
 	});
 }
 
 export async function unstage(cwd: string, paths: string[] | "all"): Promise<void> {
 	await mutate(cwd, async root => {
-		await scmGit("git.unstage", { root, paths: paths === "all" ? null : checkPaths(paths) }, 2);
+		await scmGit("git.unstage", { root, paths: selectedPaths(paths) }, 2);
 	});
 }
 
 /** Back to HEAD in index and worktree; untracked or newly added paths are removed. */
 export async function discard(cwd: string, paths: string[]): Promise<void> {
 	await mutate(cwd, async root => {
-		const { fresh } = await scmGit<{ fresh: string[] }>("git.discard", { root, paths: checkPaths(paths) }, 4);
+		const { fresh } = await scmGit<{ fresh: string[] }>("git.discard", { root, paths }, 4);
 		if (fresh.length === 0) return;
 		const realRoot = await fs.realpath(root);
 		for (const file of fresh) {
@@ -184,6 +188,7 @@ export async function commitMessage(cwd: string, omp: OmpRuntime): Promise<{ mes
 			timeoutMs: MESSAGE_TIMEOUT_MS,
 		});
 	} catch (error) {
+		if (error instanceof CreditSpendRefusal) throw new LocalCommandError(error.message, "credit_spend_off");
 		throw new LocalCommandError(`omp commit failed: ${errorText(error)}`, "commit_message_failed");
 	}
 	const message = output.code === 0 ? parseGeneratedMessage(output.stdout) : null;
@@ -257,7 +262,6 @@ export async function commitDetail(cwd: string, sha: string): Promise<RpcGitComm
 export async function commitDiff(cwd: string, sha: string, filePath: string): Promise<RpcGitDiff> {
 	const root = await requireRoot(cwd);
 	const id = checkSha(sha);
-	if (!isSafeRelativePath(filePath)) throw new LocalCommandError("Invalid repository-relative path", "invalid_path");
 	return scmGit("git.commitDiff", { root, sha: id, path: filePath }, 1);
 }
 

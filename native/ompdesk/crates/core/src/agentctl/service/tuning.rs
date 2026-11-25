@@ -43,6 +43,8 @@ pub struct Tuning {
     pub omp_exit_wait_ms: u64,
     /// A started tab is looked at again this often while it is waited for (`#whenReady`).
     pub ready_poll_ms: u64,
+    /// How long a send waits for a target that is starting before it keeps the message for when the target is up.
+    pub send_ready_wait_ms: u64,
     /// `ompdesk_session_result` re-reads a wait at least this often (a literal 1000 in the TypeScript).
     pub result_poll_ms: u64,
     /// `clearQueue`'s command.
@@ -55,6 +57,10 @@ pub struct Tuning {
     pub when_gone_ms: u64,
     /// The mailbox coalesces progress reports for this long.
     pub mail_coalesce_ms: u64,
+    /// A child's failed turn stands once nothing armed its retry for this long (main arms one a moment after the end).
+    pub failure_settle_ms: u64,
+    /// A child whose own background work keeps it past its turn's end this long is named to its opener.
+    pub background_note_ms: u64,
 }
 
 impl Default for Tuning {
@@ -78,12 +84,15 @@ impl Default for Tuning {
             close_wait_ms: 5_000,
             omp_exit_wait_ms: 5_000,
             ready_poll_ms: 500,
+            send_ready_wait_ms: 5_000,
             result_poll_ms: 1_000,
             clear_queue_ms: 15_000,
             prompt_ms: 30_000,
             judge_ms: 180_000,
             when_gone_ms: 10_000,
             mail_coalesce_ms: crate::agentctl::rules::mail::MAIL_COALESCE_MS,
+            failure_settle_ms: 5_000,
+            background_note_ms: 20 * 60_000,
         }
     }
 }

@@ -287,9 +287,7 @@ for (const language of variants(["en", "ko"] as const))
 
 				await sheet.getByRole("button", { name: new RegExp(`^${text.mcp}`) }).click();
 				await expect(sheet.locator("li")).toHaveCount(2);
-				await expect(sheet.locator("li").filter({ hasText: "mcp__rea__analyze_function" })).toContainText(
-					text.deferred,
-				);
+				await expect(sheet.locator("li").filter({ hasText: "mcp__docs__lookup" })).toContainText(text.deferred);
 				await capture(page, `${language}-${theme}-inspector-mcp`);
 				await sheet.getByRole("button", { name: text.all, exact: true }).click();
 				await sheet.locator("li button").filter({ hasText: "AGENTS.md" }).click();

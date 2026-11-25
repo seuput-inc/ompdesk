@@ -57,7 +57,7 @@ fn mount(server: AiMemoryServer) -> Router {
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true),
     );
     Router::new().nest_service("/mcp", service)
@@ -111,6 +111,28 @@ async fn harness(root_username: Option<&str>, proxy: bool) -> Harness {
 }
 
 async fn call(router: &Router, name: &str, arguments: Value, headers: &[(&str, &str)]) -> Value {
+    let v = call_raw(router, name, arguments, headers).await;
+    if let Some(err) = v.get("error") {
+        panic!("JSON-RPC error: {err}\nfull: {v}");
+    }
+    let joined = v
+        .pointer("/result/content")
+        .and_then(|c| c.as_array())
+        .unwrap_or_else(|| panic!("missing result.content: {v}"))
+        .iter()
+        .filter_map(|i| i.get("text").and_then(|t| t.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    serde_json::from_str(&joined).unwrap_or_else(|e| panic!("tool text not JSON: {joined}: {e}"))
+}
+
+/// The whole JSON-RPC response to one tool call, an `error` member included.
+async fn call_raw(
+    router: &Router,
+    name: &str,
+    arguments: Value,
+    headers: &[(&str, &str)],
+) -> Value {
     let body = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -135,19 +157,7 @@ async fn call(router: &Router, name: &str, arguments: Value, headers: &[(&str, &
         .await
         .expect("body");
     let text = String::from_utf8(bytes.to_vec()).expect("utf8");
-    let v: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("non-JSON: {text}: {e}"));
-    if let Some(err) = v.get("error") {
-        panic!("JSON-RPC error: {err}\nfull: {text}");
-    }
-    let joined = v
-        .pointer("/result/content")
-        .and_then(|c| c.as_array())
-        .unwrap_or_else(|| panic!("missing result.content: {text}"))
-        .iter()
-        .filter_map(|i| i.get("text").and_then(|t| t.as_str()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    serde_json::from_str(&joined).unwrap_or_else(|e| panic!("tool text not JSON: {joined}: {e}"))
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("non-JSON: {text}: {e}"))
 }
 
 fn root_headers() -> Vec<(&'static str, &'static str)> {
@@ -453,4 +463,277 @@ async fn consumed_by_hook_is_reported_only_to_the_session_that_claimed_it() {
         accept_status(&h.http, &with_session(alice, "alice-claude-session")).await,
         "claimed",
     );
+}
+
+/// Open handoffs by summary, read straight from the store.
+async fn handoffs_by_summary(
+    h: &Harness,
+) -> std::collections::HashMap<String, ai_memory_core::Handoff> {
+    h.store
+        .reader
+        .list_handoffs(h.ws, h.proj, None, ai_memory_core::OwnerFilter::Any, 50)
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|handoff| (handoff.content.summary.clone(), handoff))
+        .collect()
+}
+
+/// Begin a live Claude Code session under `native` for `owner` in `proj`.
+async fn claude_session(
+    h: &Harness,
+    proj: ai_memory_core::ProjectId,
+    native: &str,
+    owner: &str,
+) -> ai_memory_core::SessionId {
+    let id = ai_memory_core::SessionId::from_native(native);
+    h.store
+        .writer
+        .begin_session(ai_memory_core::NewSession {
+            occurred_at: None,
+            id,
+            workspace_id: h.ws,
+            project_id: proj,
+            agent_kind: ai_memory_core::AgentKind::ClaudeCode,
+            cwd: Some("/repo".into()),
+            actor_user: Some(owner.to_owned()),
+        })
+        .await
+        .expect("session");
+    id
+}
+
+/// #2014: a handoff begun through the session-aware bridge records the
+/// caller's session, harness and cwd, as `memory_message_send` does. The
+/// session id is a header the caller controls, so it counts only for a session
+/// recorded in the handoff's own project under the caller's owner filter: a
+/// colleague forwarding Alice's id, and Alice naming her session in another
+/// project, get an unattributed handoff and cannot retire the batons of the
+/// session they named.
+#[tokio::test]
+async fn handoff_begin_records_only_the_callers_own_session() {
+    use ai_memory_core::{AgentKind, NewHandoff};
+
+    let h = harness(Some("dj"), true).await;
+    let alice = proxied("x-memory-actor-user", "alice");
+    let bob = proxied("x-memory-actor-user", "bob");
+    begin(&h.http, "static-client", &alice).await;
+    let owner = handoffs_by_summary(&h).await["static-client"]
+        .origin
+        .owner_user
+        .clone()
+        .expect("a proxied operator owns the baton");
+    let other_proj = h
+        .store
+        .writer
+        .get_or_create_project(h.ws, "other", None)
+        .await
+        .expect("other project");
+    let session = claude_session(&h, h.proj, "alice-claude", &owner).await;
+    claude_session(&h, other_proj, "alice-elsewhere", &owner).await;
+    let checkpoint = h
+        .store
+        .writer
+        .checkpoint_session_handoff(NewHandoff {
+            workspace_id: h.ws,
+            project_id: h.proj,
+            from_session_id: Some(session),
+            from_agent: AgentKind::ClaudeCode,
+            to_agent: None,
+            cwd: Some("/repo".into()),
+            summary: "turn-checkpoint".into(),
+            open_questions: Vec::new(),
+            next_steps: Vec::new(),
+            files_touched: Vec::new(),
+            owner_user: Some(owner.clone()),
+        })
+        .await
+        .expect("checkpoint")
+        .expect("a live session publishes its baton");
+
+    begin(
+        &h.http,
+        "bob-forwarding-alices-session",
+        &with_session(bob, "alice-claude"),
+    )
+    .await;
+    begin(
+        &h.http,
+        "alice-naming-another-project",
+        &with_session(alice.clone(), "alice-elsewhere"),
+    )
+    .await;
+    let rows = handoffs_by_summary(&h).await;
+    for label in [
+        "static-client",
+        "bob-forwarding-alices-session",
+        "alice-naming-another-project",
+    ] {
+        let origin = &rows[label].origin;
+        assert_eq!(origin.from_session_id, None, "{label} borrowed a session");
+        assert_eq!(origin.from_agent, AgentKind::Other, "{label}");
+        assert_eq!(origin.cwd, None, "{label}");
+    }
+    assert_eq!(
+        rows["turn-checkpoint"].lifecycle.state,
+        ai_memory_core::HandoffState::Open,
+        "a foreign caller retired the named session's baton",
+    );
+
+    begin(&h.http, "alices-own", &with_session(alice, "alice-claude")).await;
+    let rows = handoffs_by_summary(&h).await;
+    let own = &rows["alices-own"].origin;
+    assert_eq!(own.from_session_id, Some(session));
+    assert_eq!(own.from_agent, AgentKind::ClaudeCode);
+    assert_eq!(own.cwd.as_deref(), Some("/repo"));
+    let replaced = rows
+        .values()
+        .find(|handoff| handoff.scope.id == checkpoint)
+        .expect("checkpoint row");
+    assert_eq!(
+        replaced.lifecycle.state,
+        ai_memory_core::HandoffState::Expired,
+        "the explicit handoff supersedes its own session's automatic baton",
+    );
+}
+
+/// #2014: `memory_handoff_accept` returns the row as the claim left it, with
+/// the claiming harness taken from the caller's own session. A colleague
+/// forwarding that session id is recorded as `other`, and a second accept
+/// still finds nothing to claim.
+#[tokio::test]
+async fn handoff_accept_returns_the_claimed_row() {
+    let h = harness(Some("dj"), true).await;
+    let alice = proxied("x-memory-actor-user", "alice");
+    begin(&h.http, "alices-baton", &alice).await;
+    let owner = handoffs_by_summary(&h).await["alices-baton"]
+        .origin
+        .owner_user
+        .clone()
+        .expect("owner");
+    claude_session(&h, h.proj, "alice-claude", &owner).await;
+
+    let got = call(
+        &h.http,
+        "memory_handoff_accept",
+        json!({ "workspace": "default", "project": "scratch" }),
+        &with_session(alice.clone(), "alice-claude"),
+    )
+    .await;
+    assert_eq!(got["status"], "claimed", "{got}");
+    assert_eq!(got["handoff"]["summary"], "alices-baton");
+    assert_eq!(got["handoff"]["state"], "accepted", "{got}");
+    assert_eq!(got["handoff"]["accepted_by"], "claude-code", "{got}");
+    assert_eq!(got["handoff"]["accepted_by_user"], owner.as_str(), "{got}");
+    assert!(got["handoff"]["accepted_at"].is_string(), "{got}");
+    assert_eq!(
+        accept_status(&h.http, &with_session(alice.clone(), "alice-claude")).await,
+        "none_pending",
+        "a claimed handoff is claimed exactly once",
+    );
+
+    call(
+        &h.http,
+        "memory_handoff_begin",
+        json!({
+            "workspace": "default",
+            "project": "scratch",
+            "summary": "shared-baton",
+            "shared": true,
+        }),
+        &alice,
+    )
+    .await;
+    let got = call(
+        &h.http,
+        "memory_handoff_accept",
+        json!({ "workspace": "default", "project": "scratch" }),
+        &with_session(proxied("x-memory-actor-user", "bob"), "alice-claude"),
+    )
+    .await;
+    assert_eq!(got["handoff"]["summary"], "shared-baton", "{got}");
+    assert_eq!(got["handoff"]["state"], "accepted", "{got}");
+    assert_eq!(
+        got["handoff"]["accepted_by"], "other",
+        "bob borrowed alice's harness: {got}"
+    );
+}
+
+/// An explicitly blank `handoff_id` names no baton. Read as omitted, it
+/// claimed the latest eligible one, which may be the baton a parallel harness
+/// was told to accept, and a claim cannot be undone. It is refused instead and
+/// both batons stay open. A valid id with surrounding whitespace still claims
+/// exactly its row, and omitting the id still claims the latest.
+#[tokio::test]
+async fn a_blank_handoff_id_claims_no_baton() {
+    let h = harness(None, false).await;
+    let root = root_headers();
+    let mut ids = Vec::new();
+    for summary in ["older-baton", "newer-baton"] {
+        let begun = call(
+            &h.http,
+            "memory_handoff_begin",
+            json!({ "workspace": "default", "project": "scratch", "summary": summary }),
+            &root,
+        )
+        .await;
+        ids.push(begun["handoff_id"].as_str().expect("handoff_id").to_owned());
+    }
+    let state = |rows: &std::collections::HashMap<String, ai_memory_core::Handoff>,
+                 summary: &str| rows[summary].lifecycle.state;
+
+    for blank in ["", " \t\n "] {
+        let refused = call_raw(
+            &h.http,
+            "memory_handoff_accept",
+            json!({ "workspace": "default", "project": "scratch", "handoff_id": blank }),
+            &root,
+        )
+        .await;
+        assert_eq!(refused["error"]["code"], -32602, "{refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("invalid handoff_id")),
+            "{refused}"
+        );
+        let rows = handoffs_by_summary(&h).await;
+        for summary in ["older-baton", "newer-baton"] {
+            assert_eq!(
+                state(&rows, summary),
+                ai_memory_core::HandoffState::Open,
+                "a blank handoff_id {blank:?} claimed {summary}",
+            );
+        }
+    }
+
+    let claimed = call(
+        &h.http,
+        "memory_handoff_accept",
+        json!({
+            "workspace": "default",
+            "project": "scratch",
+            "handoff_id": format!(" {}\n", ids[0]),
+        }),
+        &root,
+    )
+    .await;
+    assert_eq!(claimed["status"], "claimed", "{claimed}");
+    assert_eq!(claimed["handoff"]["summary"], "older-baton", "{claimed}");
+    let rows = handoffs_by_summary(&h).await;
+    assert_eq!(
+        state(&rows, "newer-baton"),
+        ai_memory_core::HandoffState::Open,
+        "naming the older baton must leave the newer one open",
+    );
+
+    let latest = call(
+        &h.http,
+        "memory_handoff_accept",
+        json!({ "workspace": "default", "project": "scratch" }),
+        &root,
+    )
+    .await;
+    assert_eq!(latest["status"], "claimed", "{latest}");
+    assert_eq!(latest["handoff"]["summary"], "newer-baton", "{latest}");
 }

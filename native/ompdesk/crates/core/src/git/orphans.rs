@@ -5,21 +5,92 @@
 //! repository lock; the folders open sessions use (`realFolder` of each); the removal claim, the `prepare` that
 //! archives first, which states are removable and the refusals' words.
 
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use super::branches::{self, Removal, WorktreeRef};
+use super::branches::{self, Removal, SafeRemoval, WorktreeRef};
 use super::parse;
-use super::read::blocking;
+use super::read::{blocking, primary_root, resolve};
 use super::run::Git;
 use crate::fs::order::js_trim;
 use crate::server::Fault;
 
 /// How many worktrees are read at once: each read is a handful of git processes.
 const INSPECT_CONCURRENCY: usize = 4;
+
+fn gui_name(name: &OsStr) -> bool {
+    name.as_encoded_bytes().starts_with(b"gui-")
+}
+
+// The old readdir checked names, not file types. An unreadable root contributed nothing.
+fn visit_gui_entries(root: &str, mut visit: impl FnMut(OsString)) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(root)? {
+        let name = entry?.file_name();
+        if gui_name(&name) {
+            visit(name);
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn project_with_entries(
+    root: String,
+    primary: String,
+) -> Result<Option<String>, Fault> {
+    blocking(move || {
+        let mut found = false;
+        (visit_gui_entries(&root, |_| found = true).is_ok() && found)
+            .then(|| branches::real(&primary).unwrap_or(primary))
+    })
+    .await
+}
+
+#[derive(Serialize)]
+pub(super) struct Project {
+    primary: String,
+    real: String,
+}
+
+pub(super) async fn project(git: &Git, folder: &str) -> Result<Option<Project>, Fault> {
+    let primary = match primary_root(git, folder).await {
+        Ok(primary) if !primary.is_empty() => primary,
+        Err(error) if error.code == "cancelled" => return Err(error),
+        _ => return Ok(None),
+    };
+    blocking(move || {
+        let real = branches::real(&primary).unwrap_or_else(|_| primary.clone());
+        Some(Project { primary, real })
+    })
+    .await
+}
+
+pub(super) async fn repositories(git: &Git, root: String) -> Result<Vec<String>, Fault> {
+    let (root, names) = blocking(move || {
+        let mut names = Vec::new();
+        if visit_gui_entries(&root, |name| names.push(name)).is_err() {
+            names.clear();
+        }
+        // libuv's scandir sorts raw names on POSIX and keeps the system order on Windows.
+        #[cfg(unix)]
+        names.sort_unstable();
+        (root, names)
+    })
+    .await?;
+    let mut repos = Vec::new();
+    for name in names {
+        let folder = resolve(&root, &name.to_string_lossy());
+        if let Some(project) = project(git, &folder).await?
+            && !repos.contains(&project.real)
+        {
+            repos.push(project.real);
+        }
+    }
+    Ok(repos)
+}
 
 #[derive(Debug, PartialEq, Deserialize)]
 struct Listed {
@@ -104,10 +175,7 @@ pub async fn candidates(
                 continue;
             };
             let ours = root.as_ref().is_none_or(|root| {
-                inside(root, &real)
-                    && Path::new(&real)
-                        .file_name()
-                        .is_some_and(|name| name.to_string_lossy().starts_with("gui-"))
+                inside(root, &real) && Path::new(&real).file_name().is_some_and(gui_name)
             });
             if !ours || only.as_ref().is_some_and(|only| *only != real) {
                 continue;
@@ -307,18 +375,21 @@ pub async fn inspect(
 
 /// Removes the orphan at `path` of the repository at `primary`, never forced: a detached one when git lists it as
 /// linked, one on a branch by `remove_safe` (landed and clean once more, the branch at the tip it judged unless
-/// `keep_branch`). None when it stayed.
+/// `keep_branch`, its landed copy on `origin` either way, and what became of that copy). None when it stayed.
 pub async fn remove(
     git: &Git,
     primary: &str,
     path: &str,
     branch: Option<String>,
     keep_branch: bool,
-) -> Result<Option<Removal>, Fault> {
+) -> Result<Option<SafeRemoval>, Fault> {
     match branch {
         None => Ok(branches::remove_linked(git, primary, path)
             .await?
-            .map(|_| Removal::Removed)),
+            .map(|_| SafeRemoval {
+                removal: Removal::Removed,
+                remote: None,
+            })),
         Some(branch) => {
             let worktree = WorktreeRef {
                 path: path.to_owned(),
@@ -424,6 +495,22 @@ mod tests {
                 "{}",
                 row[0]
             );
+        }
+    }
+
+    #[test]
+    fn matches_the_names_from_gui_folders() {
+        for (name, expected) in [
+            ("gui-", true),
+            ("gui-root", true),
+            ("gui-한", true),
+            ("GUI-other", false),
+            (".gui-root", false),
+            ("gui_root", false),
+            ("xgui-", false),
+            ("gui", false),
+        ] {
+            assert_eq!(gui_name(OsStr::new(name)), expected, "{name}");
         }
     }
 

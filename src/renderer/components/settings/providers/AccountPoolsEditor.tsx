@@ -33,6 +33,7 @@ import {
 	serializeAgentAccountPools,
 	togglePoolAccount,
 } from "./account-pools";
+import { listsAccounts } from "./provider-groups";
 
 /** A connected subscription provider and its account read (null until it answered). */
 export interface PoolProvider {
@@ -56,12 +57,16 @@ interface Loaded {
 	agents: string[];
 }
 
-/** One provider block of an agent: the accounts that can join a pool, plus saved keys no account here has. */
+/**
+ * One provider block of an agent: the accounts that can join a pool, plus saved keys no account here has
+ * (`orphanKeys`: signed out; `unreadKeys`: an account list that did not read, so they may still be signed in).
+ */
 interface ProviderBlock {
 	id: string;
 	name: string;
 	accounts: { key: string | null; label: string; credentialId: number }[];
 	orphanKeys: string[];
+	unreadKeys: string[];
 }
 
 function providerBlocks(providers: readonly PoolProvider[], pools: AgentAccountPools, agent: string): ProviderBlock[] {
@@ -80,11 +85,14 @@ function providerBlocks(providers: readonly PoolProvider[], pools: AgentAccountP
 			}));
 		const known = new Set(accounts.map(account => account.key));
 		const orphanKeys = (poolFor(pools, agent, id) ?? []).filter(key => !known.has(key));
-		blocks.push({ id, name: provider.name, accounts, orphanKeys });
+		blocks.push({ id, name: provider.name, accounts, orphanKeys, unreadKeys: [] });
 	}
+	// A subscription whose accounts did not read (yet) names no pool id: which saved keys are its is unknown.
+	const unread = providers.some(({ provider, result }) => listsAccounts(provider) && !result?.credentialProvider);
 	for (const id of restrictedProviders(pools, agent)) {
 		if (seen.has(id)) continue;
-		blocks.push({ id, name: id, accounts: [], orphanKeys: [...(poolFor(pools, agent, id) ?? [])] });
+		const keys = [...(poolFor(pools, agent, id) ?? [])];
+		blocks.push({ id, name: id, accounts: [], orphanKeys: unread ? [] : keys, unreadKeys: unread ? keys : [] });
 	}
 	return blocks;
 }
@@ -173,6 +181,7 @@ function AgentPool({
 								),
 							)}
 							{block.orphanKeys.map(key => checkbox(block.id, key, t("accountPools.signedOut", { key }), key))}
+							{block.unreadKeys.map(key => checkbox(block.id, key, key))}
 						</fieldset>
 					))}
 					{restricted.length > 0 && (

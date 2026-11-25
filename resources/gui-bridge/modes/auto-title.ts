@@ -15,14 +15,14 @@ import { ompPrompt } from "./shared";
 
 setAutoTitleStockLoader(async () => {
 	const [messages, cards, titleSettings, text, roles, resolver, ai, { prompt, logger }] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent/session/messages"),
-		import("@oh-my-pi/pi-coding-agent/utils/title-card"),
-		import("@oh-my-pi/pi-coding-agent/utils/title-settings"),
-		import("@oh-my-pi/pi-coding-agent/tiny/text"),
-		import("@oh-my-pi/pi-coding-agent/config/model-roles"),
-		import("@oh-my-pi/pi-coding-agent/config/model-resolver"),
-		import("@oh-my-pi/pi-ai"),
-		import("@oh-my-pi/pi-utils"),
+		import("../omp/pi-coding-agent/session/messages"),
+		import("../omp/pi-coding-agent/utils/title-card"),
+		import("../omp/pi-coding-agent/utils/title-settings"),
+		import("../omp/pi-coding-agent/tiny/text"),
+		import("../omp/pi-coding-agent/config/model-roles"),
+		import("../omp/pi-coding-agent/config/model-resolver"),
+		import("../omp/pi-ai"),
+		import("../omp/pi-utils"),
 	]);
 	return {
 		operatorTitleText: messages.operatorTitleText,

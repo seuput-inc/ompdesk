@@ -6,6 +6,11 @@ import type { RpcResponse } from "../../shared/rpc-types";
 import { RM_TEMP } from "../test-fake-omp";
 import { TranscriptCache } from "./transcript-cache";
 
+// The core this file starts reads it: each trim and each page read that finds nothing is written to stderr, which the
+// test output carries, so the one Windows failure nobody could explain (main run 44078283149) shows its trail if it
+// comes back.
+process.env.OMPDESK_CORE_DEBUG = "cache";
+
 const dirs: string[] = [];
 
 afterEach(async () => {

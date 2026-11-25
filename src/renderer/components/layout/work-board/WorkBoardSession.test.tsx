@@ -611,6 +611,58 @@ describe("Last check row", () => {
 		expect(row("check")?.getAttribute("data-state")).toBe("passed");
 		expect(row("check")?.textContent).toContain("12 tests passed");
 	});
+
+	it("names the release gate of a release check, and says the session is woken while it runs as a job", async () => {
+		const command = "ompdesk check --release -- bunx vitest run";
+		const title = () => row("check")?.closest("button")?.getAttribute("title") ?? row("check")?.getAttribute("title");
+		const wakes = translate("workBoard.session.check.wakes");
+		finished([
+			"b1",
+			bash(command, {
+				result: result("Started in the background", 0, { async: { state: "running", jobId: "bg_9" } }),
+			}),
+		]);
+		await mount();
+		expect(row("check")?.getAttribute("data-state")).toBe("running");
+		expect(row("check")?.hasAttribute("data-release")).toBe(true);
+		expect(row("check")?.textContent).toContain(translate("workBoard.session.check.release"));
+		expect(title()).toBe(`${command}\n${wakes}`);
+		await act(async () =>
+			useMessagesStore.setState({
+				messages: [
+					{
+						role: "toolResult",
+						toolCallId: "b1",
+						toolName: "bash",
+						details: { async: { state: "running", jobId: "bg_9", type: "bash" } },
+					},
+					{
+						role: "toolResult",
+						toolName: "wait",
+						details: { jobs: [{ id: "bg_9", status: "completed", exitCode: 0, resultText: "12 passed" }] },
+					},
+				],
+			}),
+		);
+		expect(row("check")?.getAttribute("data-state")).toBe("passed");
+		expect(row("check")?.textContent).toContain(translate("workBoard.session.check.release"));
+		expect(title()).toBe(command);
+	});
+
+	it("a check that is no release check names no gate, and one the call still runs says nothing of waking", async () => {
+		useToolsStore.setState({
+			liveTools: new Map([
+				[
+					"b1",
+					bash("ompdesk check -- bunx vitest run --release", { status: "running", result: null, endTime: null }),
+				],
+			]),
+		});
+		await mount();
+		expect(row("check")?.getAttribute("data-state")).toBe("running");
+		expect(row("check")?.hasAttribute("data-release")).toBe(false);
+		expect(row("check")?.getAttribute("title")).toBe("ompdesk check -- bunx vitest run --release");
+	});
 });
 
 describe("Same checkout row", () => {

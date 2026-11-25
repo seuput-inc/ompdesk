@@ -16,5 +16,6 @@ export const CHECK_RUNS_SECTION_ID = "check-runs";
 
 export const CHECK_RUNS_SECTION = `<check-runs>
 Run a test suite or a project's check script as \`ompdesk check -- <command>\`: it reuses results whose inputs are unchanged, reruns only what failed, keeps flaky tests visible, takes a heavy slot itself and keeps running across an OMPdesk restart (\`ompdesk check attach\` follows it again).
+For a check's result, never poll it or read its log: \`ompdesk checks wait [id]\` (bash \`async: true\` when it may take long) ends when the run ends and prints the judgment as JSON (verdict green, red or unknown; each failed test with its first error and whether it is known flaky; what to do next), exit code 0 green, 1 red, 4 unknown. Report a check green only from a green answer. \`ompdesk checks status\` lists this computer's heavy slots and check runs with the session that started each.
 Wrap any other heavy command (a build, a type check, a dev server for e2e) as \`ompdesk run --heavy -- <command>\`, so this computer runs only as many at once as it can hold.
 </check-runs>`;

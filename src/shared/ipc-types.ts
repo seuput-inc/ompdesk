@@ -4,7 +4,7 @@
  */
 
 import type { AccountRotationMode, AccountRotationState } from "./account-rotation";
-import type { AgentAppEvent, AgentControlViewEvent, AgentReviewEvent } from "./agent-control";
+import type { AgentAppEvent, AgentCloseAnswer, AgentControlViewEvent, AgentReviewEvent } from "./agent-control";
 import type {
 	AiMemoryCareSummary,
 	AiMemoryDeleted,
@@ -23,7 +23,7 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
-import type { BuiltinReaState } from "./builtin-mcp";
+import type { BotsApi } from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { AgentBrowserStatus, ChromiumBrowserId } from "./default-browser";
@@ -66,6 +66,7 @@ import type {
 import type { SchedulesApi, SchedulesState } from "./schedules";
 import type { SessionListDelta, VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
+import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
 import type { GitAslrAction, GitAslrResult, SetupItemId, SetupState } from "./setup";
 import type { SidebarChange } from "./sidebar-prefs";
 import type { SidebarProjectsApi } from "./sidebar-projects";
@@ -181,7 +182,7 @@ export const IPC_EVENTS = {
 	WORKTREE_NOTICE: "worktree-lifecycle:notice",
 	/** This machine's automatic setup changed (src/main/setup/); payload is the whole SetupState. */
 	SETUP_STATE: "setup:state",
-	/** omp's automatic update changed (src/main/omp-updater.ts); payload is the whole OmpUpdateState. */
+	/** omp's automatic update changed (the core's `tools/omp`); payload is the whole OmpUpdateState. */
 	OMP_UPDATE_STATE: "omp-update:state",
 	/** omp was just updated on its own; payload is an OmpUpdatedNotice, sent to one window (one quiet toast). */
 	OMP_UPDATED: "omp-update:updated",
@@ -193,11 +194,11 @@ export const IPC_EVENTS = {
 	DISK_CARE_STATE: "disk-care:state",
 	/** A paired host's scheduled runs changed (pushed by the host over the link); payload is an IpcHostSchedules. */
 	HOST_SCHEDULES_STATE: "host-schedules:state",
-	/** The tool CLIs' automatic updates changed (src/main/cli-tools/updater.ts); payload is the whole CliUpdateState. */
+	/** The tool CLIs' automatic updates changed (the core's `tools/cli`); payload is the whole CliUpdateState. */
 	CLI_UPDATE_STATE: "cli-update:state",
 	/** ai-memory's state changed (src/main/ai-memory/); payload is the whole AiMemoryState. */
 	AI_MEMORY_STATE: "ai-memory:state",
-	/** The extensions' automatic updates changed (src/main/ext-update/); payload is the whole ExtensionUpdateState. */
+	/** The extensions' automatic updates changed (the core's `tools/ext.rs`); payload is the whole ExtensionUpdateState. */
 	EXTENSION_UPDATE_STATE: "extension-update:state",
 	/** This machine's GitHub CLI sign-in changed (src/main/github-auth/); payload is the whole GithubAuthState. */
 	GITHUB_AUTH_STATE: "github-auth:state",
@@ -264,6 +265,10 @@ export const IPC_COMMANDS = {
 	SESSIONS_MESSAGES: "sessions:messages",
 	/** Move a stored session (no tab holds it) to another project folder */
 	SESSIONS_MOVE: "sessions:move",
+	/** What each listed session works in: repository, HEAD, cached image (`SessionTargetQuery[]` → `SessionTargets`) */
+	SESSIONS_TARGETS: "sessions:targets",
+	/** Repository images by root, looked up when not cached (`string[]` → `SessionArtworks`) */
+	SESSIONS_ARTWORK: "sessions:artwork",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -334,8 +339,6 @@ export const IPC_COMMANDS = {
 	ACCOUNT_ROTATION_GET: "account-rotation:get",
 	/** Store the account-rotation pref there; its live sessions follow from their next prompt */
 	ACCOUNT_ROTATION_SET: "account-rotation:set",
-	BUILTIN_REA_GET: "builtin-rea:get",
-	BUILTIN_REA_SET: "builtin-rea:set",
 	/** Whether the focused tab's machine looks for local inference engines (`LocalEngineDetectState`); `device` absent = this computer */
 	LOCAL_ENGINES_GET: "local-engines:get",
 	/** Switch that detection on or off there; it lists or drops the engines' models by itself */
@@ -383,6 +386,8 @@ export const IPC_COMMANDS = {
 	CLOSE_TAB: "tab:close",
 	/** A paired web page says which of its tabs holds unsaved Files edits (`IpcFileEditReportPayload`); main closes a tab for an agent only while that page says it is clean. */
 	FILE_EDIT_REPORT: "tab:file-edit-report",
+	/** A window answers an agent's close (`AgentCloseAnswer`): what it did, so the agent hears the window's own reason or that it did not answer. */
+	AGENT_CLOSE_ANSWER: "tab:agent-close-answer",
 	/** Move full event forwarding to the window's active tab */
 	SET_ACTIVE_TAB: "tab:set-active",
 	/** Atomically set the focused tab and the one or two tabs receiving full event streams. */
@@ -427,6 +432,10 @@ export const IPC_COMMANDS = {
 	RESUME_CANCEL_WAIT: "resume:cancel-wait",
 	/** Stop what this launch resumed on one tab (the resuming row's Stop; payload: tab id) */
 	RESUME_STOP: "resume:stop",
+	/** Continue a tab's cut-off turn (the cut-off row's Continue; payload: tab id) */
+	RESUME_CONTINUE: "resume:continue",
+	/** Let a tab's cut-off turn stay as it is (the cut-off row's Dismiss; payload: tab id) */
+	RESUME_DISMISS: "resume:dismiss",
 	/** Renderer → main fire-and-forget: the window's `online`/`offline` event (payload: boolean) */
 	CONNECTIVITY_REPORT: "connectivity:report",
 	/** This machine's automatic setup (src/main/setup/): whole SetupState snapshot */
@@ -437,7 +446,7 @@ export const IPC_COMMANDS = {
 	SETUP_CANCEL: "setup:cancel",
 	/** Git for Windows' Mandatory ASLR override for its MSYS executables ("fix" | "undo"; anything else is refused). Elevated: a UAC prompt. */
 	SETUP_GIT_ASLR: "setup:git-aslr",
-	/** omp's automatic update (src/main/omp-updater.ts): whole OmpUpdateState snapshot */
+	/** omp's automatic update (the core's `tools/omp`): whole OmpUpdateState snapshot */
 	OMP_UPDATE_GET_STATE: "omp-update:get-state",
 	/** Check npm and update omp now, whatever the pref says (runs in the background) */
 	OMP_UPDATE_NOW: "omp-update:now",
@@ -449,7 +458,7 @@ export const IPC_COMMANDS = {
 	DISK_CARE_GET_STATE: "disk-care:get-state",
 	/** Run disk care now (joins a run already going); resolves when it ends */
 	DISK_CARE_RUN: "disk-care:run",
-	/** The tool CLIs' automatic updates (src/main/cli-tools/updater.ts): whole CliUpdateState snapshot */
+	/** The tool CLIs' automatic updates (the core's `tools/cli`): whole CliUpdateState snapshot */
 	CLI_UPDATE_GET_STATE: "cli-update:get-state",
 	/** Check and update one tool (a CliToolId) or all now, whatever the pref says (runs in the background) */
 	CLI_UPDATE_NOW: "cli-update:now",
@@ -481,7 +490,7 @@ export const IPC_COMMANDS = {
 	AI_MEMORY_CARE: "ai-memory:care",
 	AI_MEMORY_CARE_UNDO: "ai-memory:care-undo",
 	AI_MEMORY_CANCEL_HANDOFF: "ai-memory:cancel-handoff",
-	/** The extensions' automatic updates (src/main/ext-update/): whole ExtensionUpdateState snapshot */
+	/** The extensions' automatic updates (the core's `tools/ext.rs`): whole ExtensionUpdateState snapshot */
 	EXTENSION_UPDATE_GET_STATE: "extension-update:get-state",
 	/** Check and update one row (an ExtensionRow key) or all now, whatever the pref says (runs in the background) */
 	EXTENSION_UPDATE_NOW: "extension-update:now",
@@ -501,6 +510,7 @@ export const IPC_COMMANDS = {
 	GITHUB_PRODUCT_STAR: "github-auth:product-star",
 	/** Remote devices: whole RemoteState snapshot */
 	REMOTE_GET_STATE: "remote:get-state",
+	REMOTE_SET_DEVICE_SECTION_ORDER: "remote:set-device-section-order",
 	/** Turn the host role (other devices may use this computer) on or off; persisted in prefs */
 	REMOTE_SET_HOST_ENABLED: "remote:set-host-enabled",
 	REMOTE_SET_DEVICE_NAME: "remote:set-device-name",
@@ -553,12 +563,23 @@ export type RuntimeErrorSource =
 	| "error-toast"
 	/** A background task failed without interrupting the user (e.g. saving prompt history). */
 	| "background-task"
+	/**
+	 * A call that reached the core after the quit or the shell's end shut it down (src/main/main-failures.ts): nothing
+	 * was left for it to do. `stack` names the caller; repeats of one caller fold into a count line.
+	 */
+	| "core-shutdown"
 	/** A launch timing mark (src/main/startup-timing.ts): `message` names it, `details.sinceLaunchMs` is when. */
 	| "startup-timing"
 	/** A relaunch's resume decision (src/main/turn-resume.ts `log`): `message` is launch, marker or continue. */
 	| "turn-resume"
 	/** Main's blocked waits on the core's hub, one line a minute (`OMP_GUI_HUB_STATS=1`, `takeHubMinute`). */
 	| "hub"
+	/**
+	 * The core process's loss and each tab's way back (src/main/core/process.ts `report`, sidecar.ts `reportRecovery`):
+	 * `message` names the step: abandoned, ended, rest; lane-lost, resolve-slow, resolved, launch, spawned, ready, stuck
+	 * (not ready `RECOVERY_NOTICE_MS` after the loss: the person and the tab's opener are told once).
+	 */
+	| "core-loss"
 	/**
 	 * The launch's restore of saved tabs (src/main/index.ts `logLayoutRestore`): counts restored and, by reason, left
 	 * out (folder gone, session deleted, a duplicate) or started fresh (its session file missing).
@@ -574,6 +595,13 @@ export type RuntimeErrorSource =
 	 * `message` is check, download, scheduler or swap and `details.event` the step (never a token or a URL).
 	 */
 	| "app-update"
+	/**
+	 * Every omp install OMPdesk makes (the core's `tools/omp`, and machine setup's own omp install): `message` is
+	 * checked (`details.installed`, `latest`, `tested`), held (`version`, `reason`), started (`from`, `target`),
+	 * finished (`version`), failed (`reason`, `detail`) or skipped (`reason`); `details.path` says who started it:
+	 * launch, scheduled, repair, manual or setup.
+	 */
+	| "omp-update"
 	/** ai-memory's service (src/main/ai-memory/service.ts `log`): `message` is launch, binary, phase or failed. */
 	| "ai-memory"
 	/**
@@ -607,6 +635,8 @@ export type RuntimeErrorSource =
 	 * `channel`). No message text.
 	 */
 	| "turn-stop"
+	/** Settings › Credit use changed on this computer (src/main/index.ts): `message` is `on` or `off`. */
+	| "credit-spend"
 	/**
 	 * A host link's transitions (src/main/remote/client.ts, host-server.ts): `message` is `down` (`reason`,
 	 * `wasOnlineMs`), `attempt` (`n`, `delayMs`, `trigger`), `up` (`outageMs`, `attempts`) on the client, `open` and
@@ -617,10 +647,15 @@ export type RuntimeErrorSource =
 	| "gpu-fallback"
 	/** The crash-loop guard (src/main/launch-guard.ts): this launch starts in safe mode. */
 	| "launch-guard"
-	/** The pre-rename profile moved into userData (src/main/legacy-user-data.ts). */
+	/**
+	 * Why the app ends or relaunches (src/main/quit-log.ts): who asked to quit or relaunch, the exit itself
+	 * (`details.end: true`), and at start a previous run that left no end line (killed, crashed, power lost).
+	 */
+	| "app-quit"
+	/** The pre-rename profile moved or was copied into userData. */
 	| "user-data-migration"
 	/**
-	 * Machine setup (src/main/setup/detect.ts, service.ts): `message` names the finding or the Git Mandatory ASLR
+	 * Machine setup (the core's `tools/setup.rs`, `tools/setup/detect.rs`): `message` names the finding or the Git Mandatory ASLR
 	 * override and its outcome; `details.level` is `warn` or `info`.
 	 */
 	| "setup"
@@ -636,7 +671,9 @@ export type RuntimeErrorSource =
 	| "sidecar-restart"
 	/** A tab's omp that has not answered its first `get_state` after `START_SLOW_MS` and is still waited for (src/main/sidecar.ts `SlowStartReport`): `details.stderr` and `details.ompLog` (its own log) are its tails, `details.ready` whether it printed `ready`, `details.unanswered` the stock commands it holds. */
 	| "omp-slow-start"
-	/** An omp whose CPU priority could not be lowered below the app's (src/main/agent-priority.ts), logged once: `message` is why. */
+	/** An input a tab's omp start went on without after `START_INPUT_MS` (src/main/sidecar.ts `#onResolve`): `message` names it (omp, proxyEnv, shellEnv, defaultBrowser, egoBrowserDir), `details` the lane and session. */
+	| "omp-start-input"
+	/** The core could not lower the omp child's CPU priority. Logged once; `message` says why. */
 	| "process-priority"
 	/**
 	 * Omps an earlier launch left running, stopped before this launch's tabs start (src/main/omp-processes.ts):
@@ -656,6 +693,12 @@ export type RuntimeErrorSource =
 	 * whether it was let go or the wait ran out, `details` the session file's name and the wait.
 	 */
 	| "session-owner"
+	/**
+	 * The bridge's compatibility self-check of an omp this computer runs (src/main/bridge-health.ts), one line per omp
+	 * version and launch, never per tab: `message` is `probed` (details `ompVersion`, `ok`, `unavailable` with each
+	 * capability's missing labels) or `unreachable` (the bridge never connected; details `reason`).
+	 */
+	| "bridge-health"
 	/** A goal's time-limit update that failed (src/main/sidecar-factory.ts): `message` is the error. */
 	| "goal-time-limit"
 	/**
@@ -669,6 +712,32 @@ export type RuntimeErrorSource =
 	 * `details` has the chain, the step and the bound in ms.
 	 */
 	| "chain-stall"
+	/**
+	 * A console window that opened on Windows (src/main/console-window-watch.ts): `details` is the window's class and
+	 * title, its process (`pid`, `exe`, `cmd`, `ageMs`), `ours` (it descends from OMPdesk or carries a session's tag),
+	 * `via` (the OMPdesk process that started it), `chain` (it and its ancestors) and `recent` (the processes OMPdesk
+	 * started just before, for a window another program hosts).
+	 */
+	| "console-window"
+	/**
+	 * A step that was slow (src/main/slow-steps.ts): `details.kind` is `loop` (main's thread was blocked), `ipc` (a
+	 * handler), `hub` (main waited on the core), `stock` (a stock helper request) or `tab-open` (an omp's start),
+	 * `name` which one, `ms` how long; `again` and `worstMs` count what the rate limit kept out since the line before.
+	 */
+	| "slow-step"
+	/**
+	 * A tab that has waited long without a step (src/main/turn-wait-watch.ts), again at doubling intervals: `details.on`
+	 * is what it waits on (ask, connection, limit, retry, stock-retry, resuming, background, turn), `waitedMs` how long,
+	 * `tools` the tool calls still running, and what its omp answered (`omp`, `streaming`, `queued`).
+	 */
+	| "turn-wait"
+	/**
+	 * How the computer and OMPdesk's own processes stood around a stall (src/main/machine-state.ts): `details.trigger`
+	 * is `core-loss`, `loop`, `hub` or `hang`, `when` the sample (`before`, `after`, or `during` a hang), then memory
+	 * (`availMB`, `commitPct`, `swapMB`, `pressure`), the processors (`cpuBusyPct`, `runQueue`, `load1`), the disks
+	 * (`diskQueue`, `diskBusyPct`) and OMPdesk's own share (`appCpuPct` and one per kind of process, `appMB`).
+	 */
+	| "machine-state"
 	/**
 	 * A routine's trigger (src/main/routines): a source that could not read what it watches (GitHub through `gh`, a
 	 * path that does not exist, a branch or repository git cannot read). Told once per distinct failure; `message`
@@ -690,6 +759,13 @@ export type RuntimeErrorSource =
 	 * `details` the list (local or device), focus/reroot/open, whether it was archived and whether a tab held it.
 	 */
 	| "sidebar"
+	/**
+	 * A known session's pane shown with no rows, info level (src/renderer/hooks/session-hydration.ts
+	 * `reportEmptyTranscript`): `key` the transcript snapshot key looked up and whether the cache has it (`found`,
+	 * `foundAgeMs`), the key the tab was seeded under (`seeded`, `seededFound`, `seededAgoMs`) and the one its snapshot
+	 * was last written under (`written`, `writtenAgoMs`); a path key carries the file's name only.
+	 */
+	| "transcript-seed"
 	| "unknown";
 
 /** Bounded, serializable renderer/main failure payload written as JSONL. */
@@ -772,6 +848,11 @@ export interface UpdateAuthInfo {
 	hasStoredToken: boolean;
 	/** False when the OS cannot encrypt secrets (safeStorage unavailable): pasting is disabled. */
 	canStore: boolean;
+	/**
+	 * Why a stored token was removed: the macOS keychain would have asked for the login password to read it
+	 * (`KEYCHAIN_WOULD_ASK`), so main dropped the file instead (native-rust › S › The keychain on macOS). Null when none was.
+	 */
+	droppedReason: string | null;
 }
 
 export interface UpdateAuthTestResult {
@@ -781,11 +862,38 @@ export interface UpdateAuthTestResult {
 
 /**
  * A gui-bridge compatibility problem found at sidecar startup (src/main/bridge-health.ts).
- * `features` are the bridge's feature ids (resources/gui-bridge/capabilities.ts `FEATURES`).
+ * `features` are the bridge's capability ids, one action each (resources/gui-bridge/capabilities.ts `FEATURES`).
+ * `unsupported`: a core one is among them and OMPdesk repairs omp; `unsupportedOptional`: only optional actions,
+ * reported and nothing more. The kind is the renderer's message key (`bridgeHealth.<kind>`).
  */
 export type BridgeHealthWarning =
-	| { kind: "unsupported"; ompVersion: string; features: string[] }
+	| { kind: "unsupported" | "unsupportedOptional"; ompVersion: string; features: string[] }
 	| { kind: "unavailable"; ompVersion: string; reason: string };
+
+/** One omp version's latest bridge self-check on a computer (`BRIDGE_HEALTH_GET`, `host.bridgeHealth.get`). */
+export interface BridgeHealthResult {
+	ompVersion: string;
+	/** When the check answered (ms). */
+	at: number;
+	/** Every capability is present and the bridge connected. */
+	ok: boolean;
+	/** omps of this version that run on that computer now; 0 = none any more. */
+	running: number;
+	/** Capability ids it lacks, each with the missing omp internals as `capabilities` labels them. */
+	unavailable: Array<{ feature: string; missing: string[] }>;
+	/** Why the bridge never connected; absent when it answered. */
+	unreachable?: string;
+}
+
+/** The latest result per omp version checked in this launch: running versions first, then the newest. */
+export interface BridgeHealthReport {
+	results: BridgeHealthResult[];
+	/**
+	 * A newer omp that computer's updater keeps back (OmpUpdateState `held`), with the omp it runs, so `ompdesk_app`
+	 * `omp.bridge_health` says why an old omp still runs there. Absent while nothing is held, and from older hosts.
+	 */
+	held?: { version: string; reason: string; since?: string; installed: string | null };
+}
 
 /** What main could not save because the disk is full (src/main/disk-full.ts): file names, never paths. */
 export interface DiskFullState {
@@ -1202,6 +1310,18 @@ export interface IpcSessionsMovePayload {
 	sessionPath: string;
 	/** Absolute target project folder on the session's device. */
 	cwd: string;
+	device?: string;
+}
+
+export interface IpcSessionsTargetsPayload {
+	/** At most `SESSION_TARGET_BATCH` rows. */
+	sessions: SessionTargetQuery[];
+	device?: string;
+}
+
+export interface IpcSessionsArtworkPayload {
+	/** Repository roots (`SessionTargetRepository.root`), at most `SESSION_TARGET_BATCH`. */
+	roots: string[];
 	device?: string;
 }
 
@@ -1637,6 +1757,13 @@ export type IpcWorktreeNotice =
 	| { kind: "remove-failed"; path: string; message: string };
 
 /**
+ * Why a tab's cut-off turn waits for the person instead of going on by itself (turn-resume.ts): `off` Settings ›
+ * Continue interrupted work is off, `crash-loop` its omp died three times in five minutes, `failed` its continuation
+ * failed three times.
+ */
+export type IpcCutOff = "off" | "crash-loop" | "failed";
+
+/**
  * A retry main scheduled for a tab's failed turn (turn-resume.ts): when it fires (epoch ms) and which attempt it is;
  * never "of how many", the chain has no end.
  */
@@ -1665,10 +1792,25 @@ export interface IpcRetrySaga {
 	startedAt: number;
 }
 
+/** The host's omp incarnation and its own count of finished turns, not the proxy's local count. */
+export interface HostCloseTurn {
+	omp: string;
+	turn: number;
+}
+
+/** The pool opening, tab entry and finished turn observed by an automatic close. Zero means no turn has finished. */
+export interface AutoCloseTurn {
+	pool: number;
+	entry: number;
+	turn: number;
+	host?: HostCloseTurn;
+}
+
 /** One tab of a window: its sidecar's cwd, last status, and cached session meta. */
 export interface IpcTabInfo {
 	/** Opaque snowflake id minted by main at acquire. */
 	tabId: string;
+	closeTurn?: AutoCloseTurn;
 	cwd: string;
 	status: TabStatus;
 	/** Present on GET_TABS for the tab main currently routes as active. */
@@ -1736,6 +1878,11 @@ export interface IpcTabInfo {
 	queued?: true;
 	/** A relaunch continues the tab's interrupted work and its turn has not started yet (resume, src/main/turn-resume.ts). */
 	resuming?: boolean;
+	/**
+	 * The tab's cut-off turn waits for the person's Continue or Dismiss instead of going on by itself (resume,
+	 * src/main/turn-resume.ts): automatic continuation is off, its omp kept dying, or its continuation kept failing.
+	 */
+	cutOff?: IpcCutOff;
 	/** The tab's failed turn retries by itself at `at` (resume, src/main/turn-resume.ts). */
 	scheduledRetry?: IpcScheduledRetry;
 	/**
@@ -1763,6 +1910,8 @@ export interface IpcTabInfo {
  * failed, or aborted.
  */
 export interface IpcTabRunOutcome {
+	/** Monotonic outcome serial assigned by the pool. */
+	id?: number;
 	/** The last assistant message's stop reason ("stop", "error", "aborted", …). */
 	stopReason: string;
 	errorMessage?: string;
@@ -1865,6 +2014,7 @@ export interface IpcGetSessionOwnerPayload {
 
 export interface IpcCloseTabPayload {
 	tabId: string;
+	expectedTurn?: AutoCloseTurn;
 }
 
 export interface IpcFileEditReportPayload {
@@ -1906,8 +2056,8 @@ export interface SessionInfo {
 	cwd: string;
 	created: string;
 	/**
-	 * When the session last did something: its newest conversation message's time (the stock helper's
-	 * `session-activity.ts`), else the file's mtime. Never the mtime alone, which every relaunch moves on.
+	 * When the session last did something: its newest conversation message's time, else the file's mtime.
+	 * Relaunch records alone do not change it.
 	 */
 	modified: string;
 	messageCount: number;
@@ -2068,6 +2218,8 @@ export interface RemoteState {
 	tailnet: RemoteTailnetPhase;
 	host: RemoteHostState;
 	hosts: HostView[];
+	/** Ranked sections on this sidebar only; `local` means its serving computer. */
+	deviceSectionOrder?: string[];
 	/** Computers paired by code with an older release that could not be found on the tailnet and were forgotten. */
 	forgotten: string[];
 	/** This computer's OMPdesk version, beside which each connected computer's reads as older or newer. */
@@ -2148,6 +2300,8 @@ export interface OmpApi {
 	preview: PreviewApi;
 	/** Scheduled `omp -p` runs on this machine (Settings › Schedules). */
 	schedules: SchedulesApi;
+	/** This computer's bots and their items (the Bots page; src/shared/bots.ts). */
+	bots: BotsApi;
 	/** This computer's mail accounts for email routines (Settings › Schedules › Email accounts); passwords go one way. */
 	mailAccounts: MailAccountsApi;
 	/** The sidebar's project list of this computer or a paired host (src/main/sidebar-projects.ts). */
@@ -2275,6 +2429,10 @@ export interface OmpApi {
 		cancelWait(tabId: string): Promise<void>;
 		/** Stop what the last launch resumed on one tab (the resuming row's Stop). */
 		stop(tabId: string): Promise<void>;
+		/** Continue one tab's cut-off turn (the cut-off row's Continue). */
+		continueCut(tabId: string): Promise<void>;
+		/** Leave one tab's cut-off turn as it is (the cut-off row's Dismiss). */
+		dismissCut(tabId: string): Promise<void>;
 		/** The window's `online`/`offline` event, for main's connectivity state. */
 		reportOnline(online: boolean): void;
 	};
@@ -2412,6 +2570,13 @@ export interface OmpApi {
 		/** Move a stored session to `cwd`; resolves with its new path. */
 		move(sessionPath: string, cwd: string, device?: string): Promise<string>;
 		/**
+		 * What each listed session works in (`session-target.ts`), resolved on the computer that runs it (`device`),
+		 * keyed by session file. Answers from cached facts: an image not looked up yet is left absent.
+		 */
+		targets(sessions: SessionTargetQuery[], device?: string): Promise<SessionTargets>;
+		/** Repository images by root, looked up where missing (bounded and cached there); null where none. */
+		artwork(roots: string[], device?: string): Promise<SessionArtworks>;
+		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.
 		 */
@@ -2442,7 +2607,7 @@ export interface OmpApi {
 		 */
 		spawn(payload: IpcSpawnTabPayload): Promise<IpcSpawnTabResult | null>;
 		/** Release a tab's sidecar. False when the tab is unknown or foreign. */
-		close(tabId: string): Promise<boolean>;
+		close(tabId: string, expectedTurn?: AutoCloseTurn): Promise<boolean>;
 		/** Move full event forwarding to this tab. False when unknown or foreign. */
 		setActive(tabId: string): Promise<boolean>;
 		/** Set the focused tab plus up to four tabs rendered by the window. */
@@ -2456,11 +2621,14 @@ export interface OmpApi {
 		reorder(tabIds: string[]): Promise<boolean>;
 		/** Say which tab's Files editor holds unsaved edits (null: none). A web page only; main closes a tab for an agent only while this says it is clean. */
 		reportFileEdits(dirtyTabId: string | null): Promise<void>;
+		/** Answer an agent's close (`AgentControlViewEvent.closeId`) with what this window did. */
+		answerAgentClose(answer: AgentCloseAnswer): Promise<void>;
 		/** The tab/window currently attached to a session file on `device` (absent = this device), if any (F-OWN). */
 		getSessionOwner(sessionPath: string, device?: string): Promise<IpcSessionOwner | null>;
 	};
 	remote: {
 		getState(): Promise<RemoteState>;
+		setDeviceSectionOrder(order: readonly string[]): Promise<void>;
 		setHostEnabled(enabled: boolean): Promise<RemoteState>;
 		setDeviceName(name: string): Promise<RemoteState>;
 		/** Forget a device that uses this computer; it may connect again while its account is allowed. */
@@ -2588,11 +2756,6 @@ export interface OmpApi {
 	accountRotation: {
 		get(device?: string): Promise<AccountRotationState>;
 		set(mode: AccountRotationMode, device?: string): Promise<AccountRotationState>;
-	};
-	/** OMPdesk's built-in MCP preference of the machine that runs the focused session. */
-	builtinRea: {
-		get(device?: string): Promise<BuiltinReaState>;
-		set(enabled: boolean, device?: string): Promise<BuiltinReaState>;
 	};
 	/** Local inference engine detection of the machine that runs the focused session. */
 	localEngines: {

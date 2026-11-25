@@ -44,7 +44,7 @@ import {
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { type LinkProfile, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const OUT = process.env.OMP_GUI_WEB_PERF;
 const RUNS = Number(process.env.OMP_GUI_WEB_PERF_RUNS ?? 3);
@@ -381,7 +381,7 @@ async function startRig(engine: string, subject: { name: string; root: string })
 	if (!site) throw new Error("serve publishes no handler");
 	// Pairing and setup run at loopback speed; the phases switch the phone's link on.
 	const proxy = await ServeProxy.start(site, "seuput@example.com", undefined, { plainCookie: engine === "webkit" });
-	const browser = await (engine === "webkit" ? webkit : chromium).launch();
+	const browser = await launchBrowser(engine === "webkit" ? webkit : chromium);
 	const context = await browser.newContext({ ...PHONES[engine] });
 	await context.addInitScript(PROBE);
 	const page = await context.newPage();
@@ -439,7 +439,7 @@ async function startRig(engine: string, subject: { name: string; root: string })
 
 async function stopRig(rig: Rig | null): Promise<void> {
 	if (!rig) return;
-	await rig.browser.close().catch(() => undefined);
+	await closeBrowser(rig.browser).catch(() => undefined);
 	await rig.proxy.close().catch(() => undefined);
 	await exitApp(rig.app).catch(() => undefined);
 	await fs.rm(rig.root, { recursive: true, force: true }).catch(() => undefined);

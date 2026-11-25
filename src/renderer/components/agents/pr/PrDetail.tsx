@@ -219,7 +219,8 @@ export function PrDetail() {
 					<PrEditButton detail={detail} />
 					<PrMergeButton detail={detail} />
 					{detail.state && detail.state !== "OPEN" && (
-						<Badge variant={detail.state === "MERGED" ? "accent" : "muted"}>
+						// A merge is a change that landed (success); the accent is near the text in the monochrome themes.
+						<Badge variant={detail.state === "MERGED" ? "success" : "muted"}>
 							{t(`prCenter.state.${detail.state.toLowerCase()}`)}
 						</Badge>
 					)}

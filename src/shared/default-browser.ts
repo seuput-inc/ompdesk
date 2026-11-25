@@ -1,7 +1,7 @@
 /**
- * The browser agents use (Settings › Agent behavior › Default browser, prefs `defaultBrowser`). `auto` follows what
- * is installed: ego-browser, else a Chromium browser whose omp Browser Relay extension is loaded (agents then drive
- * the user's own signed-in browser through stock's relay), else omp's built-in browser. Main resolves the pref
+ * The browser agents use (Settings › Agent behavior › Default browser, prefs `defaultBrowser`). Automatic picks
+ * ego-browser, then a browser with a dedicated legacy relay, then omp's built-in browser. Native-host discovery
+ * cannot identify a named profile. Main resolves the pref
  * against the machine and passes the result to omp as `OMP_GUI_BROWSER` at spawn and through the bridge's
  * `default_browser_set` on change; the gui-bridge (resources/gui-bridge/modes/default-browser.ts) turns it into a
  * prompt section and, for the relay, a per-session `browser.relay` override.
@@ -41,8 +41,11 @@ export interface InstalledBrowser {
 
 /** What this computer has: the answer of `DEFAULT_BROWSER_STATUS`, in `auto` order. */
 export interface AgentBrowserStatus {
+	auto: Exclude<AgentBrowser, { kind: "unavailable" }>;
 	egoInstalled: boolean;
 	browsers: InstalledBrowser[];
+	/** Native-host discovery does not attest a browser or profile. Absent on older hosts with per-browser ports. */
+	nativeHostBrowsers?: readonly ChromiumBrowserId[];
 }
 
 const CHROMIUM_PREFS: readonly string[] = CHROMIUM_BROWSER_IDS.map(id => `chromium:${id}`);
@@ -67,7 +70,7 @@ export function chromiumBrowserOf(pref: DefaultBrowserPref): ChromiumBrowserId |
 }
 
 /**
- * One relay endpoint per browser. Every extension dials one default port (9224) and stock's relay serves several
+ * Before omp 19.1: one relay endpoint per browser. Every extension dials one default port (9224) and stock serves several
  * connected browsers at once, opening a new tab in whichever it picks: a shared endpoint lets "Chrome" drive a
  * connected Edge, which can be another account. Each browser's extension copy is bound to its own port instead
  * (src/main/agent-browsers.ts), and a session is pointed at that port only. Beside stock's 9224, below the kernel's
@@ -87,19 +90,18 @@ export function relayUrl(id: ChromiumBrowserId): string {
 }
 
 /**
- * What the pref comes to on this computer. An agent is never pointed at a missing binary, and a Chromium browser
- * without its own relay extension copy cannot be driven, so those fall back to omp's built-in browser (never to the
- * system browser binary itself: stock documents that a headless daemon from `Google Chrome.app` takes the user's link
- * clicks). A relay choice carries the endpoint only that browser's copy dials.
+ * Automatic may fall back. An explicit Chromium choice may not: without a verified binding, disable the browser
+ * rather than inheriting stock's configuration, which could itself discover another signed-in browser.
  */
-export function resolveAgentBrowser(pref: DefaultBrowserPref, status: AgentBrowserStatus): AgentBrowser {
-	if (pref === "builtin") return { kind: "builtin" };
-	const relay = (browser: InstalledBrowser | undefined): AgentBrowser =>
-		browser?.relayInstalled ? { kind: "relay", name: browser.name, url: relayUrl(browser.id) } : { kind: "builtin" };
-	if (pref === "ego") return status.egoInstalled ? { kind: "ego" } : { kind: "builtin" };
-	if (pref === "auto") {
-		if (status.egoInstalled) return { kind: "ego" };
-		return relay(status.browsers.find(browser => browser.relayInstalled));
+export function resolveAgentBrowser(pref: DefaultBrowserPref, status: AgentBrowserStatus | undefined): AgentBrowser {
+	const id = chromiumBrowserOf(pref);
+	if (id) {
+		const bound =
+			status && !status.nativeHostBrowsers && status.browsers.find(browser => browser.id === id)?.relayInstalled;
+		return bound
+			? { kind: "relay", name: CHROMIUM_BROWSER_NAMES[id], url: relayUrl(id) }
+			: { kind: "unavailable", name: CHROMIUM_BROWSER_NAMES[id] };
 	}
-	return relay(status.browsers.find(browser => browser.id === chromiumBrowserOf(pref)));
+	if (pref === "auto" && status) return status.auto;
+	return pref === "ego" && status?.egoInstalled ? { kind: "ego" } : { kind: "builtin" };
 }

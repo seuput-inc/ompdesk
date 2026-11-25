@@ -26,7 +26,7 @@ import { type BrowserType, chromium, devices, expect, type Page, test, webkit } 
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { exitApp, fixtureOmp } from "./harness";
+import { closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const ENGINES: { name: string; type: BrowserType; device: (typeof devices)[string] }[] = [
 	// 390 px wide.
@@ -76,7 +76,7 @@ function watchLink(): void {
 				if (event.data.startsWith('{"t":"hello"')) note("hello", JSON.parse(event.data).resumed === true);
 			});
 		}
-		send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+		send(data: Parameters<WebSocket["send"]>[0]): void {
 			if (typeof data === "string" && data.startsWith('{"t":"inv"')) {
 				const frame = JSON.parse(data) as { ch: string };
 				link.calls.push({ at: performance.now(), ch: frame.ch });
@@ -280,7 +280,7 @@ for (const engine of ENGINES)
 		Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 		let app: ElectronApplication | null = null;
 		let proxy: ServeProxy | null = null;
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		const numbers: Numbers[] = [];
 		try {
 			app = await electron.launch({
@@ -478,8 +478,8 @@ for (const engine of ENGINES)
 					await phone.locator("header button:has(svg.lucide-menu)").click();
 					await phone.locator('[data-destination="settings"]').click();
 					await phone.locator('[data-settings-section="appearance"]').click();
-					await phone.locator(`[data-theme-option="${name}"]`).scrollIntoViewIfNeeded();
-					await phone.locator(`[data-theme-option="${name}"]`).click();
+					await phone.locator(`[data-theme-mode="${name}"]`).scrollIntoViewIfNeeded();
+					await phone.locator(`[data-theme-mode="${name}"]`).click();
 					await phone.getByRole("button", { name: "Back to session" }).click();
 					await expect(field).toBeVisible();
 					await phone.waitForTimeout(800);
@@ -602,7 +602,7 @@ for (const engine of ENGINES)
 			expect.soft(long.noticeShownMs, "the status goes once the link is back").toBeLessThan(1500);
 			expect(loads).toBe(0);
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await proxy?.close();
 			if (app) await exitApp(app).catch(() => undefined);
 			await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => undefined);

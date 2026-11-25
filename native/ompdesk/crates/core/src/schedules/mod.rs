@@ -15,7 +15,15 @@
 //!   `schedules.ended`: main starts the run, because the omp, its environment and its extensions are main's to
 //!   resolve (it hands them to `schedules.launch`) and a session's own wake-up is delivered by the control tools.
 //!   `schedules.stop` `{service, run}` asks main to stop the run it started.
+//! - After `schedules.routinesReady`, `routineAsk` → `routineAnswer` resolves a machine runner or a private
+//!   mailbox login per poll. `routineSession` subscribes/unsubscribes stock facts (`routineActivity`).
+//!   The core owns the source generations, all cursor writes, file watches, timers and acceptance of each event.
 //! - `schedules.state` `{service, state}`: every change, which main keeps as the copy its synchronous readers read.
+//! - `schedules.note` `{service, session, text}`: a quiet note main delivers into a session file (a wake-up that
+//!   turned itself off). `schedules.resumed` is main telling the clock the computer woke.
+//!
+//! A schedule's precheck runs here, under the supervisor (`launch::precheck`), with the shell main handed over at
+//! `schedules.open` (`shell`).
 //!
 //! A service that is still open when the core's input ends is closed then (`close_all`): its running runs read
 //! stopped in the journal, as a quit recorded them. `schedules.closed` is the request main keeps open on a service;
@@ -24,11 +32,14 @@
 //! The clock is the system's, read at every check. A test's service is opened `manual`: then the core keeps no timer,
 //! every request says what time it is and `schedules.tick` is the check.
 
+mod draft;
 mod engine;
 mod launch;
+mod marks;
 pub(crate) mod rules;
 #[cfg(test)]
 mod tests;
+pub(crate) mod triggers;
 
 use std::collections::HashMap;
 use std::fs;
@@ -45,8 +56,14 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::disk::saves::write_kept;
 use crate::disk::tree::fault as node_fault;
+use crate::run::Runner;
 use crate::server::{Call, Events, Fault, Registry, Reply};
 use engine::{Commanded, Engine, Limits, Out};
+
+/// How long a schedule's precheck may run before it counts as a no.
+const PRECHECK_TIMEOUT_MS: u64 = 60_000;
+/// The most of a precheck's output read back.
+const PRECHECK_OUTPUT_BYTES: usize = 16 * 1024;
 
 /// A run's log is read back at most this much from its end.
 const LOG_TAIL_BYTES: u64 = 256 * 1024;
@@ -83,7 +100,7 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn system_now() -> i64 {
+pub(crate) fn system_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_millis() as i64)
@@ -141,6 +158,8 @@ fn webhook_key() -> String {
 /// back never holds a request.
 struct Journal {
     file: PathBuf,
+    mode: Option<u32>,
+    label: &'static str,
     queue: Mutex<Option<mpsc::Sender<String>>>,
     /// The writer thread, joined by `close`: nothing of it lands after the last write, not even a temp file.
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -148,7 +167,7 @@ struct Journal {
 }
 
 impl Journal {
-    fn open(file: PathBuf) -> Journal {
+    fn open(file: PathBuf, mode: Option<u32>, label: &'static str) -> Journal {
         let (queue, texts) = mpsc::channel::<String>();
         let closed = Arc::new(AtomicBool::new(false));
         let writer = std::thread::spawn({
@@ -162,17 +181,16 @@ impl Journal {
                     if closed.load(Ordering::SeqCst) {
                         continue;
                     }
-                    if let Err(fault) = write_kept(&file, text.as_bytes(), None, 0o777) {
-                        eprintln!(
-                            "ompdesk-core: couldn't save the schedules: {}",
-                            fault.message
-                        );
+                    if let Err(fault) = write_kept(&file, text.as_bytes(), mode, 0o777) {
+                        eprintln!("ompdesk-core: couldn't save the {label}: {}", fault.message);
                     }
                 }
             }
         });
         Journal {
             file,
+            mode,
+            label,
             queue: Mutex::new(Some(queue)),
             writer: Mutex::new(Some(writer)),
             closed,
@@ -192,10 +210,10 @@ impl Journal {
         if let Some(writer) = locked(&self.writer).take() {
             let _ = writer.join();
         }
-        if let Err(fault) = write_kept(&self.file, text.as_bytes(), None, 0o777) {
+        if let Err(fault) = write_kept(&self.file, text.as_bytes(), self.mode, 0o777) {
             eprintln!(
-                "ompdesk-core: couldn't save the schedules on quit: {}",
-                fault.message
+                "ompdesk-core: couldn't save the {} on quit: {}",
+                self.label, fault.message
             );
         }
     }
@@ -205,9 +223,12 @@ struct Service {
     name: String,
     events: Events,
     engine: Mutex<Engine>,
+    triggers: Mutex<Option<triggers::Triggers>>,
     log_dir: PathBuf,
     /// The clock is main's: every request says the time, and there is no timer here.
     manual: bool,
+    /// How a precheck command runs (main's shell, `-c`, its environment); none: prechecks say no.
+    shell: Option<Runner>,
     journal: Journal,
     /// Run-now commands waiting for main's word on their charge, by ask.
     waits: Mutex<HashMap<u64, oneshot::Sender<Result<(), Fault>>>>,
@@ -283,6 +304,9 @@ impl Service {
         match out {
             Out::Changed { state, journal } => {
                 self.journal.keep(journal);
+                if let Some(triggers) = locked(&self.triggers).as_mut() {
+                    triggers.sync(self, engine, &state, now);
+                }
                 self.tell("schedules.state", serde_json::json!({ "state": state }));
             }
             Out::Closed { journal } => self.journal.close(&journal),
@@ -324,6 +348,23 @@ impl Service {
                 }
             }
             Out::Stop { run } => self.tell("schedules.stop", serde_json::json!({ "run": run })),
+            Out::Note { session, text } => self.tell(
+                "schedules.note",
+                serde_json::json!({ "session": session, "text": text }),
+            ),
+            Out::Precheck { ask, command, cwd } => self.precheck(ask, command, cwd, now),
+            Out::Result { run, name, to } => {
+                let log = fs::read(self.log_file(&run))
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .unwrap_or_default();
+                let answer = engine::run_answer(&log);
+                if !answer.is_empty() && !engine::quiet_result(&answer) {
+                    self.tell(
+                        "schedules.result",
+                        serde_json::json!({ "run": run, "name": name, "to": to, "text": answer }),
+                    );
+                }
+            }
             Out::RemovePrompt { run } => {
                 let _ = fs::remove_file(self.prompt_file(&run));
             }
@@ -349,13 +390,49 @@ impl Service {
         (!Path::new(cwd).exists()).then(|| format!("Project folder not found: {cwd}"))
     }
 
-    fn close(&self, given: Option<f64>) {
+    /// Runs a start's precheck on a task of its own and gives the engine its answer: yes when it exited 0 within
+    /// `PRECHECK_TIMEOUT_MS`, else no with what it printed (or why it could not run).
+    fn precheck(&self, ask: u64, command: String, cwd: String, now: i64) {
+        let name = self.name.clone();
+        let Some(shell) = self.shell.clone() else {
+            // Under the engine's lock already (`carry_out`): answered on a task, as a run's end is.
+            tokio::spawn(async move {
+                if let Ok(service) = service(&name) {
+                    service.with(|engine| {
+                        engine.prechecked(ask, false, "Prechecks cannot run here", now)
+                    });
+                }
+            });
+            return;
+        };
+        tokio::spawn(async move {
+            let timeout = Duration::from_millis(PRECHECK_TIMEOUT_MS);
+            let (ok, output) =
+                launch::precheck(&shell, &command, &cwd, timeout, PRECHECK_OUTPUT_BYTES).await;
+            let Ok(service) = service(&name) else {
+                return;
+            };
+            let now = service.at(None);
+            service.with(|engine| engine.prechecked(ask, ok, &output, now));
+        });
+    }
+
+    async fn close(&self, given: Option<f64>) {
         let now = self.at(given);
-        self.with(|engine| engine.close(now));
+        let drained = self.with(|engine| {
+            let drained = locked(&self.triggers)
+                .take()
+                .map(|triggers| triggers.close(self));
+            engine.close(now);
+            drained
+        });
         if let Some(clock) = locked(&self.clock).take() {
             clock.abort();
         }
         locked(&self.waits).clear();
+        if let Some(mut drained) = drained {
+            while drained.recv().await.is_some() {}
+        }
         self.closed.send_replace(true);
     }
 }
@@ -369,7 +446,7 @@ fn service(name: &str) -> Result<Arc<Service>, Fault> {
 
 /// Closes every service whose events go to `events`' output, or to none any more. `serve` calls it when its input
 /// ended: a main that died never asks, and the request it keeps open on each service would keep the core alive.
-pub fn close_all(events: &Events) {
+pub async fn close_all(events: &Events) {
     let ending: Vec<Arc<Service>> = {
         let mut services = locked(&SERVICES);
         let names: Vec<String> = services
@@ -383,7 +460,7 @@ pub fn close_all(events: &Events) {
             .collect()
     };
     for service in ending {
-        service.close(None);
+        service.close(None).await;
     }
 }
 
@@ -406,6 +483,9 @@ struct OpenParams {
     wakes: bool,
     limits: Limits,
     now: Option<f64>,
+    /// How a precheck runs; absent from an older main: prechecks say no.
+    #[serde(default)]
+    shell: Option<Runner>,
 }
 
 #[derive(Deserialize)]
@@ -427,22 +507,10 @@ struct CreateParams {
 }
 
 #[derive(Deserialize)]
-struct FireParams {
-    id: String,
-    detail: String,
-}
-
-#[derive(Deserialize)]
 struct WebhookParams {
     id: String,
     bearer: String,
     detail: String,
-}
-
-#[derive(Deserialize)]
-struct FailedParams {
-    id: String,
-    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -467,6 +535,9 @@ struct EndedParams {
     run: String,
     code: Option<i64>,
     error: Option<String>,
+    /// What a fresh run's model replies used, when its omp's extension counted it.
+    #[serde(default)]
+    usage: Option<Value>,
 }
 
 /// A request's service and moment, and its own params.
@@ -493,9 +564,11 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         name: params.service.clone(),
         events: call.events.clone(),
         engine: Mutex::new(engine),
+        triggers: Mutex::default(),
         log_dir: PathBuf::from(&params.log_dir),
         manual: params.manual,
-        journal: Journal::open(file.clone()),
+        shell: params.shell,
+        journal: Journal::open(file.clone(), None, "schedules"),
         waits: Mutex::default(),
         clock: Mutex::default(),
         closed: watch::channel(false).0,
@@ -519,6 +592,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
     };
     let state = service.with(|engine| {
         engine.load(stored.as_deref(), now);
+        engine.catch_up(now);
         engine.state()
     });
     if !params.manual {
@@ -631,12 +705,6 @@ pub fn register(registry: &mut Registry) {
     registry.add("schedules.create", |call| {
         Box::pin(async move { create(&call) })
     });
-    registry.add("schedules.fire", |call| {
-        Box::pin(async move {
-            let (service, now, params): (_, _, FireParams) = asked(&call)?;
-            Reply::json(&service.with(|engine| engine.fire(&params.id, &params.detail, now)))
-        })
-    });
     registry.add("schedules.webhook", |call| {
         Box::pin(async move {
             let (service, now, params): (_, _, WebhookParams) = asked(&call)?;
@@ -646,18 +714,18 @@ pub fn register(registry: &mut Registry) {
             )
         })
     });
-    registry.add("schedules.triggerFailed", |call| {
-        Box::pin(async move {
-            let (service, now, params): (_, _, FailedParams) = asked(&call)?;
-            Reply::json(
-                &service.with(|engine| engine.trigger_failed(&params.id, &params.reason, now)),
-            )
-        })
-    });
     registry.add("schedules.prune", |call| {
         Box::pin(async move {
             let (service, now, params): (_, _, PruneParams) = asked(&call)?;
             service.with(|engine| engine.prune(params.at as i64, now));
+            Reply::json(&())
+        })
+    });
+    // The computer woke from sleep (main's `powerMonitor` `resume`): timed starts wait for the settle.
+    registry.add("schedules.resumed", |call| {
+        Box::pin(async move {
+            let (service, now, _): (_, _, Value) = asked(&call)?;
+            service.with(|engine| engine.resumed(now));
             Reply::json(&())
         })
     });
@@ -681,7 +749,12 @@ pub fn register(registry: &mut Registry) {
     registry.add("schedules.ended", |call| {
         Box::pin(async move {
             let (service, now, params): (_, _, EndedParams) = asked(&call)?;
-            service.with(|engine| engine.ended(&params.run, params.code, params.error, now));
+            service.with(|engine| {
+                if let Some(usage) = params.usage {
+                    engine.usage(&params.run, usage);
+                }
+                engine.ended(&params.run, params.code, params.error, now)
+            });
             Reply::json(&())
         })
     });
@@ -690,13 +763,15 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let at: At = call.params()?;
             // Closing twice, or after the core's input ended, has nothing left to close.
-            if let Some(service) = locked(&SERVICES).remove(&at.service) {
-                service.close(at.now);
+            let service = locked(&SERVICES).remove(&at.service);
+            if let Some(service) = service {
+                service.close(at.now).await;
             }
             Reply::json(&())
         })
     });
     registry.add("schedules.closed", |call| Box::pin(closed(call)));
+    triggers::register(registry);
     launch::register(registry);
 }
 

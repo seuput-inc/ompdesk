@@ -93,16 +93,20 @@ export interface SessionRpcClient {
 	getGitDiff(path: string): Promise<RpcResponse>;
 	worktreeCreate(
 		name: string,
-		options?: { baseCwd?: string; baseRef?: "HEAD" | "default"; branchPrefix?: string },
+		options?: { baseCwd?: string; baseRef?: "HEAD" | "default"; branchPrefix?: string; requestId?: string },
 	): Promise<RpcResponse>;
+	/** Fetches the remote default branch ahead of a `default`-based create; its answer is only informative. */
+	worktreePrefetch(baseCwd?: string): Promise<RpcResponse>;
 	worktreeRemove(path: string, force?: boolean): Promise<RpcResponse>;
 	prRepo(): Promise<RpcResponse>;
+	/** `background`: an automatic re-read, which waits behind GitHub's rate limit and pace (core `gh/gate.rs`). */
 	prList(
 		state?: "open" | "closed" | "merged" | "all",
 		limit?: number,
 		view?: "all" | "review" | "mine",
+		background?: boolean,
 	): Promise<RpcResponse>;
-	prGet(number: number): Promise<RpcResponse>;
+	prGet(number: number, background?: boolean): Promise<RpcResponse>;
 	prDiff(number: number, path: string): Promise<RpcResponse>;
 	prDraft(options?: { base?: string; head?: string }): Promise<RpcResponse>;
 	prCreate(input: {
@@ -116,6 +120,7 @@ export interface SessionRpcClient {
 	liveStop(): Promise<RpcResponse>;
 	debug(params: RpcDebugParams): Promise<RpcResponse>;
 	getAvailableModels(forceRefresh?: boolean): Promise<RpcResponse>;
+	getModelReleaseDates(): Promise<RpcResponse>;
 	setThinkingLevel(level: ThinkingLevel | "auto"): Promise<RpcResponse>;
 	cycleThinkingLevel(): Promise<RpcResponse>;
 	setFastMode(enabled: boolean): Promise<RpcResponse>;
@@ -334,7 +339,8 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	// Git/gh commands main runs itself: at least main's own answer budget
 	// (src/main/local/git/{worktree,pr}.ts), or the renderer reports a failure
 	// while the worktree, checkout, or PR still lands.
-	worktree_create: 960_000,
+	worktree_create: 1_260_000,
+	worktree_prefetch: 480_000,
 	worktree_remove: 360_000,
 	// `worktree add`, the archive copied back, then seeding and the setup hook (as worktree_create).
 	restore_saved_worktree: 960_000,
@@ -494,11 +500,14 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 				baseCwd: options?.baseCwd,
 				baseRef: options?.baseRef,
 				...(options?.branchPrefix ? { branchPrefix: options.branchPrefix } : {}),
+				...(options?.requestId ? { requestId: options.requestId } : {}),
 			}),
+		worktreePrefetch: baseCwd => rpcCommand({ type: "worktree_prefetch", ...(baseCwd ? { baseCwd } : {}) }),
 		worktreeRemove: (path, force) => rpcCommand({ type: "worktree_remove", path, force }),
 		prRepo: () => rpcCommand({ type: "pr_repo" }),
-		prList: (state, limit, view) => rpcCommand({ type: "pr_list", state, limit, view }),
-		prGet: number => rpcCommand({ type: "pr_get", number }),
+		prList: (state, limit, view, background) =>
+			rpcCommand({ type: "pr_list", state, limit, view, ...(background ? { background } : {}) }),
+		prGet: (number, background) => rpcCommand({ type: "pr_get", number, ...(background ? { background } : {}) }),
 		prDiff: (number, path) => rpcCommand({ type: "pr_diff", number, path }),
 		prDraft: options => rpcCommand({ type: "pr_draft", base: options?.base, head: options?.head }),
 		prCreate: input => rpcCommand({ type: "pr_create", ...input }),
@@ -506,6 +515,7 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		liveStop: () => rpcCommand({ type: "live_stop" }, 30_000),
 		debug: params => rpcCommand({ type: "debug", params }, 120_000),
 		getAvailableModels: forceRefresh => rpcCommand({ type: "get_available_models", forceRefresh }),
+		getModelReleaseDates: () => rpcCommand({ type: "get_model_release_dates" }),
 		setThinkingLevel: level => rpcCommand({ type: "set_thinking_level", level }),
 		cycleThinkingLevel: () => rpcCommand({ type: "cycle_thinking_level" }),
 		setFastMode: enabled => rpcCommand({ type: "set_fast_mode", enabled }),

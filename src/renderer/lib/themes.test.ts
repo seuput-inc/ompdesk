@@ -42,16 +42,17 @@ describe("theme registry", () => {
 		}
 	});
 
-	it("gives every theme its own terminal ANSI 16, six chart series and a focus ring", () => {
+	it("gives every theme its own terminal ANSI 16, six chart series, a focus ring and a floating glass", () => {
 		for (const [name, theme] of Object.entries(THEMES)) {
 			expect(theme.ansi, `${name} ansi`).toHaveLength(16);
 			expect(theme.chart, `${name} chart`).toHaveLength(6);
 			expect(new Set(theme.chart).size, `${name} chart series are distinct`).toBe(6);
 			expect(theme.focusRing, `${name} focus ring`).toMatch(/^#[0-9a-f]{6}$/i);
-			const extras = themeExtrasFor(theme);
-			expect(Object.keys(extras).sort(), name).toEqual([...ANSI_KEYS, ...CHART_KEYS, "--sc-focus-ring"].sort());
+			const { "--sc-floating-mix": floating, ...colors } = themeExtrasFor(theme);
+			expect(floating, name).toMatch(/^\d{1,3}%$/);
+			expect(Object.keys(colors).sort(), name).toEqual([...ANSI_KEYS, ...CHART_KEYS, "--sc-focus-ring"].sort());
 			expect(
-				Object.values(extras).every(value => /^#[0-9a-f]{6}$/i.test(value)),
+				Object.values(colors).every(value => /^#[0-9a-f]{6}$/i.test(value)),
 				name,
 			).toBe(true);
 		}

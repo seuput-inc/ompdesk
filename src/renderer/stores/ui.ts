@@ -198,7 +198,7 @@ interface UiStore {
 	shareSessionOpen: boolean;
 	forceToolOpen: boolean;
 	/** The recent-projects picker the title bar's project name opens (also the palette's "Switch project"). */
-	projectPickerOpen: boolean;
+	projectPickerIntent: "switch" | "new-session" | null;
 	btwRequest: string | null;
 	debugOpen: boolean;
 	liveOpen: boolean;
@@ -346,7 +346,7 @@ interface UiStore {
 	closeMissingFolder: () => void;
 	openForceTool: () => void;
 	closeForceTool: () => void;
-	openProjectPicker: () => void;
+	openProjectPicker: (intent?: "switch" | "new-session") => void;
 	closeProjectPicker: () => void;
 	openBtw: (question: string) => void;
 	closeBtw: () => void;
@@ -670,9 +670,9 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	forceToolOpen: false,
 	openForceTool: () => set({ forceToolOpen: true }),
 	closeForceTool: () => set({ forceToolOpen: false }),
-	projectPickerOpen: false,
-	openProjectPicker: () => set({ projectPickerOpen: true }),
-	closeProjectPicker: () => set({ projectPickerOpen: false }),
+	projectPickerIntent: null,
+	openProjectPicker: (intent = "switch") => set({ projectPickerIntent: intent }),
+	closeProjectPicker: () => set({ projectPickerIntent: null }),
 	btwRequest: null,
 	openBtw: question => set({ btwRequest: question }),
 	closeBtw: () => set({ btwRequest: null }),
@@ -732,7 +732,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 			activeToolsOpen: false,
 			shareSessionOpen: false,
 			forceToolOpen: false,
-			projectPickerOpen: false,
+			projectPickerIntent: null,
 			btwRequest: null,
 			debugOpen: false,
 			liveOpen: false,

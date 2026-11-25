@@ -8,8 +8,8 @@
 # SHA-512 from an HTML comment the publish job appends to the notes
 # (`<!-- ompdesk-update {json} -->`, parsed by src/main/update-release.ts).
 # An `Unreleased` heading or an existing tag makes the run a no-op.
-# `workflow_dispatch` re-runs it; `dry_run` does everything except the tag and
-# release (the packages stay as run artifacts) and works on any branch.
+# `dry_run` on main exercises the gate without creating a tag or release. Other branches package ad-hoc on macOS
+# and exercise the Windows update gate; only main can build the pinned macOS candidate needed by publish.
 #
 # Layout: the repo is public, so hosted runners are free and every job runs on
 # one (Linux, macOS arm64, Windows). This is the whole release gate (what
@@ -22,8 +22,9 @@
 # arm64 and `mac-native` runs the vitest files that drive its real binary on
 # macOS; `win` and `mac` install meanwhile,
 # wait for build's out/ in this run's artifacts, package it and launch the
-# result (@smoke; the real-omp suite is `mac-real`); `publish` runs only
-# when all of them passed. The full Playwright suite is not part of a release
+# result (the packaged Tauri app, driven through its native WebDriver by scripts/tauri-native-smoke.ts).
+# Installed copies then update into this run's artifacts: the previous stable Mac release and the last Windows Electron release.
+# `publish` waits for both update gates. The full Playwright suite is not part of a release
 # (e2e-nightly.yml runs it informationally). A failed job writes its first error
 # lines to its job summary at once (scripts/ci-failure.sh). After a flaky
 # failure, rerun only the failed jobs: `gh run rerun <id> --failed`.
@@ -85,7 +86,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       release: ${{ steps.meta.outputs.release }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: meta
         env:
           DRY_RUN: ${{ inputs.dry_run == true }}
@@ -135,7 +136,7 @@ jobs:
           printf '\n---\n\nRequires omp **%s** or newer (`omp update`).\n' "$MIN_OMP" >> notes/notes.md
           echo "release=true" >> "$GITHUB_OUTPUT"
       - if: steps.meta.outputs.release == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
           path: notes/notes.md
@@ -160,8 +161,8 @@ jobs:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Nothing here launches Electron, and `win` and `mac` wait on this job's
@@ -171,7 +172,7 @@ jobs:
         with:
           electron: "false"
       - run: bun run build
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: out
           path: out/
@@ -195,8 +196,8 @@ jobs:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
@@ -237,27 +238,24 @@ jobs:
           - name: renderer 2/2
             args: --project=renderer --shard=2/2
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Tests import electron, whose index.js throws without the binary; the shared install fetches it
       # (cached by electron's version, one retry on a download miss).
       - uses: ./.github/actions/install
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+        with:
+          native: ${{ startsWith(matrix.args, '--project=renderer') && 'false' || 'true' }}
+      - uses: ./.github/actions/install-omp
       - run: bunx vitest run ${{ matrix.args }}
       - if: failure()
         run: bash scripts/ci-failure.sh
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # Package, verify the bundle, then launch the build packaging just made:
-  # @smoke on the fake omp (real-core is `mac-real`).
+  # Package, verify the bundle, then launch the build packaging just made: the packaged Tauri app on the fake omp
+  # (scripts/tauri-native-smoke.ts; Playwright cannot drive WKWebView).
   mac:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
@@ -269,8 +267,8 @@ jobs:
     env:
       V: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # The shared install fetches Electron from a cache, and puts electron-builder's downloads in one for
@@ -279,6 +277,11 @@ jobs:
       - uses: ./.github/actions/install
         with:
           builder: "true"
+      # The Tauri host (system WebView), the rollback launcher and the pinned Node for the package (the tauri-shell action: a cached build).
+      - uses: ./.github/actions/tauri-shell
+      # The pinned, signed Brave runtime Preview browses with (resources/preview-browser.json); packaging verifies it.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       # The memory binary is built from native/memory (OMPdesk's own source) right here, while the build job
       # produces out/: the upstream's release build (`cargo build --locked --release -p ai-memory-cli`, scripts/build-memory.ts)
       # puts the binary and its build record in the gitignored resources/ai-memory-bin/; after-pack fails the package without them.
@@ -293,11 +296,11 @@ jobs:
           path: resources/ai-memory-bin
           key: ai-memory-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/memory/**', 'scripts/build-memory.ts', 'resources/gui-bridge/memory-prompt.ts', 'resources/gui-bridge/redactor.ts') }}
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
         with:
           toolchain: "1.95"
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/memory
       - if: steps.memory-cache.outputs.cache-hit != 'true'
@@ -339,10 +342,12 @@ jobs:
           OMPDESK_MAC_SIGNING_REQUIRED: ${{ github.ref == 'refs/heads/main' && '1' || '' }}
         run: |
           set -euo pipefail
+          # scripts/package-mac.ts assembles OMPdesk.app from the Tauri host and launcher, checks it (scripts/after-pack.cjs),
+          # signs it inside out and calls electron-builder --prepackaged for the DMG only.
           if [ "$LEGACY_UPDATE_FEED" = "true" ]; then
-            bunx electron-builder --mac dmg zip --arm64 --publish never
+            bun scripts/package-mac.ts --legacy-zip
           else
-            bunx electron-builder --mac --arm64 --publish never
+            bun scripts/package-mac.ts
           fi
       - name: Verify bundle
         run: |
@@ -389,24 +394,106 @@ jobs:
           test -x "$CORE"
           codesign --verify --strict --verbose=2 "$CORE"
           "$CORE" < /dev/null | grep -F '"event":"ready"'
-          lipo -archs "$APP/Contents/MacOS/OMPdesk" | grep -qx arm64
-      - name: Install omp
+          # The Tauri host and the rollback launcher: the build record (Resources/ompdesk-tauri.build.json, the input
+          # after-pack checked) names the host; the app's executable is the launcher. Each Mach-O carries the app's
+          # signature (the `--deep --strict` above covers them; each is named here so a failure says which) and is arm64.
+          REC="$APP/Contents/Resources/ompdesk-tauri.build.json"
+          test "$(jq -r .engine "$REC")" = tauri
+          test "$(jq -r .platform "$REC")" = darwin
+          HOST="$APP/Contents/MacOS/$(jq -er .binary "$REC")"
+          LAUNCHER="$APP/Contents/MacOS/OMPdesk"
+          jq -er .launcher "$REC" >/dev/null
+          test "$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist")" = OMPdesk
+          for BIN in "$HOST" "$LAUNCHER"; do
+            test -x "$BIN"
+            codesign --verify --strict --verbose=2 "$BIN"
+            lipo -archs "$BIN" | grep -qx arm64
+          done
+          # No CEF anywhere: the system WebView is the engine.
+          test ! -e "$APP/Contents/Frameworks/Chromium Embedded Framework.framework"
+          if compgen -G "$APP/Contents/Frameworks/OMPdesk Helper*.app" >/dev/null; then
+            echo "::error::A CEF helper app remains in the Tauri package"
+            exit 1
+          fi
+          test ! -e "$APP/Contents/Resources/LICENSE.cef.txt"
+          test ! -e "$APP/Contents/Resources/LICENSES.chromium.html"
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist")" = com.seuput.ompdesk
+          plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw -o - "$APP/Contents/Info.plist" | grep -Fx omp
+          # The oldest macOS it runs on (src/shared/app-compatibility.json, 14).
+          MINOS=$(plutil -extract LSMinimumSystemVersion raw -o - "$APP/Contents/Info.plist")
+          test "$MINOS" = "$(jq -r .minimumMacOS src/shared/app-compatibility.json)"
+          [[ "$MINOS" == 14.* ]]
+          # Node (scripts/node-runtime-pin.json) runs the main from the plain app folder.
+          NODE="$APP/Contents/Resources/node/node"
+          test -x "$NODE"
+          codesign --verify --strict --verbose=2 "$NODE"
+          "$NODE" --version | grep -Fx "v$(jq -r .version scripts/node-runtime-pin.json)"
+          test -f "$APP/Contents/Resources/app/out/main/index.js"
+          test -f "$APP/Contents/Resources/app/out/preload/tauri.js"
+          test ! -e "$APP/Contents/Resources/app/out/preload/shell.js"
+          # Preview's own browser runtime (resources/preview-browser.json, bun scripts/stage-preview-browser.ts): its record
+          # and the executable it names are in the package, signed like the rest.
+          PB="$APP/Contents/Resources/preview-browser"
+          test -f "$PB/runtime.json"
+          PBBIN="$PB/$(jq -er .binary "$PB/runtime.json")"
+          test -f "$PBBIN"
+          codesign --verify --strict --verbose=2 "$PBBIN"
+      - uses: ./.github/actions/install-omp
+      # Playwright cannot drive WKWebView. The app that ships is copied out of its DMG and never changed: first it proves
+      # it has no WebDriver server (scripts/tauri-release-automation-check.ts), then a second copy whose host is swapped
+      # for the same source built with the test-automation feature is driven through the native WebDriver (the Node test
+      # inspector, a test profile and a port): bridge, new tab, a prompt round trip on the fake omp, settings, a clean quit.
+      - name: Extract the shipped app from the DMG
         run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
-      # pwa-install and device-prefs drive a phone page in Playwright's own Chromium.
-      - name: Playwright browsers
-        run: bunx playwright install chromium
-      - run: bunx playwright test --grep "@smoke"
-      - if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          set -euo pipefail
+          MNT=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "dist/ompdesk-$V-arm64.dmg"
+          trap 'hdiutil detach "$MNT" -quiet || true' EXIT
+          mkdir -p "$RUNNER_TEMP/release-app"
+          ditto "$MNT/OMPdesk.app" "$RUNNER_TEMP/release-app/OMPdesk.app"
+          hdiutil detach "$MNT" -quiet
+          trap - EXIT
+          echo "RELEASE_APP=$RUNNER_TEMP/release-app/OMPdesk.app" >> "$GITHUB_ENV"
+      - name: Prove the shipped app has no WebDriver server
+        run: |
+          set -euo pipefail
+          REC="$RELEASE_APP/Contents/Resources/ompdesk-tauri.build.json"
+          test "$(jq -c .features "$REC")" = "[]"
+          mkdir -p "$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_BINARY="$RELEASE_APP/Contents/MacOS/$(jq -er .binary "$REC")"
+          export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_NODE="$RELEASE_APP/Contents/Resources/node/node"
+          export OMP_GUI_E2E_OUT="$RELEASE_APP/Contents/Resources/app/out"
+          bun scripts/tauri-release-automation-check.ts
+      # The host of the test copy: the staged build again, with the test-automation feature (it replaces the release host
+      # staged above, which packaging has already taken).
+      - uses: ./.github/actions/tauri-shell
         with:
-          name: e2e-macos
-          path: |
-            test-results/
-            playwright-report/
+          test-automation: "true"
+      - name: Smoke the packaged Tauri app with a test host
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/test-app/OMPdesk.app"
+          mkdir -p "$RUNNER_TEMP/test-app" "$RUNNER_TEMP/tauri-smoke"
+          ditto "$RELEASE_APP" "$APP"
+          BINARY=$(jq -er .binary "$APP/Contents/Resources/ompdesk-tauri.build.json")
+          cp "resources/ompdesk-tauri/darwin-arm64/$BINARY" "$APP/Contents/MacOS/$BINARY"
+          # Only the swapped host and the app's seal: --deep would re-sign the nested binaries too, and the app checks
+          # those (ai-memory, ompdesk-core) against their build records.
+          codesign --force -s - --identifier com.seuput.ompdesk --options runtime --entitlements resources/entitlements.mac.plist "$APP/Contents/MacOS/$BINARY"
+          codesign --force -s - --options runtime --entitlements resources/entitlements.mac.plist "$APP"
+          codesign --verify --strict "$APP"
+          export OMPDESK_TAURI_TEST_BINARY="$APP/Contents/MacOS/$BINARY"
+          export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_NODE="$APP/Contents/Resources/node/node"
+          export OMP_GUI_E2E_OUT="$APP/Contents/Resources/app/out"
+          bun scripts/tauri-release-automation-check.ts --expect-automation "$OMPDESK_TAURI_TEST_BINARY"
+          bun scripts/tauri-native-smoke.ts
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-smoke-macos
+          path: ${{ runner.temp }}/tauri-smoke/
           if-no-files-found: ignore
           retention-days: 3
       - name: Stage assets
@@ -422,55 +509,13 @@ jobs:
           ls -l release
       # The GitHub Release keeps these files; the run artifact only carries
       # them to `publish` (a dry run keeps them a week to download).
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ompdesk-mac
           path: release/
           if-no-files-found: error
           compression-level: 0
           retention-days: ${{ inputs.dry_run == true && 7 || 1 }}
-      - if: failure()
-        run: bash scripts/ci-failure.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  # e2e/real-core.e2e.ts against the latest published omp, on build's out/ (it
-  # launches out/main/index.js, not the package), beside `mac`'s packaging and
-  # @smoke instead of after them (one job after the other took 1:25 more).
-  mac-real:
-    needs: prepare
-    if: needs.prepare.outputs.release == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: read # lists this run's artifacts and jobs while `build` runs; the failure report reads the jobs
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.4
-      - uses: ./.github/actions/install
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
-      - name: Wait for out/ from the build job
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci-fetch-out.sh
-      - run: bunx playwright test e2e/real-core.e2e.ts
-      - if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: e2e-macos-real-core
-          path: |
-            test-results/
-            playwright-report/
-          if-no-files-found: ignore
-          retention-days: 3
       - if: failure()
         run: bash scripts/ci-failure.sh
         env:
@@ -491,7 +536,8 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: windows-latest
-    timeout-minutes: 15
+    # As ci.yml's win-platform: shard 1 of release 45381621872 was still passing tests at 15 min.
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
@@ -500,8 +546,8 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # See `win`: bun's cache on the workspace volume; the Electron binary is
@@ -525,6 +571,112 @@ jobs:
         with:
           path: node_modules/.vite/vitest
           key: vitest-results-win-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # OMPdesk's Tauri shell and Preview consumer, the Rust that replaced the CEF shell (native/ompdesk/crates/tauri-shell and
+  # shell-preview, workspaces of their own): compile the host, test it, fmt and clippy with warnings denied, refuse a CEF
+  # dependency, on the two OSes that ship it; as shell-batch-checks.yml's `tauri-native`.
+  tauri:
+    name: tauri (${{ matrix.name }})
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - uses: ./.github/actions/native-toolchain
+        with:
+          workspaces: |
+            native/ompdesk/crates/tauri-shell
+            native/ompdesk/crates/shell-preview
+      - name: Compile the actual system-WebView host
+        shell: bash
+        run: cargo build --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --bin ompdesk-tauri-shell
+      - name: Test the host identity and page boundaries
+        shell: bash
+        run: cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml
+        env:
+          OMPDESK_PROFILE_TEST_ROOT: ${{ runner.temp }}/ompdesk-profile
+      - name: Test the WebDriver test build's gate
+        shell: bash
+        run: cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --features test-automation -- automation::tests
+      - name: Exercise the real preload attachment and migration consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun native/ompdesk/crates/tauri-shell/tests/preload.ts
+          bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
+          bun native/ompdesk/crates/tauri-shell/tests/ipc-post-message.ts
+      - name: Test the original Local Storage exporter without CEF
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/native/ompdesk/crates/tauri-shell/target
+        run: cargo test --locked --manifest-path native/ompdesk/crates/shell/Cargo.toml --no-default-features --lib migrate::local_storage::tests
+      - name: Test the Preview pipe and lifecycle unit
+        shell: bash
+        run: cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib
+      - name: Exercise the actual Preview browser consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunx --no-install playwright install chromium
+          browser=$(bun -e 'import { chromium } from "@playwright/test"; console.log(chromium.executablePath())')
+          mkdir -p "$RUNNER_TEMP/preview-browser-fixture"
+          OMPDESK_PREVIEW_TEST_BROWSER="$browser" \
+          OMPDESK_PREVIEW_TEST_SCRATCH="$RUNNER_TEMP/preview-browser-fixture" \
+            cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --test browser -- --ignored --exact real_chromium_preview
+      - name: Check the native host
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets --features test-automation -- -D warnings
+      - name: Check the Preview consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --all-targets -- -D warnings
+      - name: Refuse an active CEF dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo tree --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --edges normal --prefix none --format '{p}' > tauri-dependencies.txt
+          if grep -E '^cef(-| )|^cef_dll_sys ' tauri-dependencies.txt; then
+            echo "::error::The system-WebView host still links CEF"
+            exit 1
+          fi
+      - name: Refuse a WebDriver server in the release dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -E '^tauri-plugin-wdio-webdriver ' tauri-dependencies.txt; then
+            echo "::error::The release host still depends on the WebDriver plugin"
+            exit 1
+          fi
       - if: failure()
         shell: bash
         run: bash scripts/ci-failure.sh
@@ -555,7 +707,7 @@ jobs:
           - os: macos-latest
             name: macos arm64
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/native-check
       - if: failure()
         shell: bash
@@ -570,24 +722,20 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: macos-latest
-    timeout-minutes: 10
+    # 45, not 25: on a staged-binary cache miss the install step builds native/ompdesk first (mac-checks.yml's mac-native).
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Stages resources/ompdesk-bin (built on a cache miss), which the tests' core process runs.
       - uses: ./.github/actions/install
       # session-index.test.ts reads stock omp's session storage.
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+      - uses: ./.github/actions/install-omp
       - uses: ./.github/actions/native-parity
       - if: failure()
         run: bash scripts/ci-failure.sh
@@ -603,15 +751,16 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: windows-latest
-    timeout-minutes: 40
+    # 60, not 40: a cold memory binary build alone took 22 min in v0.141.3's 45278857420, and the job ran out in its post steps.
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read # lists this run's artifacts and jobs while `build` runs; the failure report reads the jobs
     env:
       V: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # bun's cache on the workspace volume (D:) instead of the profile on C:,
@@ -627,6 +776,11 @@ jobs:
       - uses: ./.github/actions/install
         with:
           builder: "true"
+      # The Tauri host (system WebView), the pinned Node for the package (the tauri-shell action: a cached build).
+      - uses: ./.github/actions/tauri-shell
+      # The pinned, signed Brave runtime Preview browses with (resources/preview-browser.json); packaging verifies it.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       # The memory binary, built or restored from its cache and checked, as in the mac job.
       - id: memory-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -634,11 +788,11 @@ jobs:
           path: resources/ai-memory-bin
           key: ai-memory-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/memory/**', 'scripts/build-memory.ts', 'resources/gui-bridge/memory-prompt.ts', 'resources/gui-bridge/redactor.ts') }}
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
         with:
           toolchain: "1.95"
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/memory
       - if: steps.memory-cache.outputs.cache-hit != 'true'
@@ -675,6 +829,27 @@ jobs:
         run: |
           set -euo pipefail
           test -f dist/win-unpacked/resources/gui-bridge/index.ts
+          # The Tauri host is OMPdesk.exe (electron-builder renamed the recorded ompdesk-shell.exe); the system's
+          # WebView2 is the engine, so no CEF runtime or notices travel with it. Node runs the main from a plain app folder.
+          REC=dist/win-unpacked/ompdesk-tauri.build.json
+          test "$(jq -r .engine "$REC")" = tauri
+          test "$(jq -r .platform "$REC")" = win32
+          test "$(jq -r .binary "$REC")" = ompdesk-shell.exe
+          test -f dist/win-unpacked/OMPdesk.exe
+          test ! -e dist/win-unpacked/libcef.dll
+          test ! -e dist/win-unpacked/resources/LICENSES.chromium.html
+          test ! -e dist/win-unpacked/resources/LICENSE.cef.txt
+          dist/win-unpacked/resources/node/node.exe --version | grep -Fx "v$(jq -r .version scripts/node-runtime-pin.json)"
+          test -f dist/win-unpacked/resources/app/out/main/index.js
+          test -f dist/win-unpacked/resources/app/out/preload/tauri.js
+          test -f dist/win-unpacked/resources/app/out/renderer/index.html
+          test ! -e dist/win-unpacked/resources/app/out/preload/shell.js
+          test ! -e dist/win-unpacked/resources/app.asar
+          # Preview's own browser runtime (resources/preview-browser.json, bun scripts/stage-preview-browser.ts): its record
+          # and the executable it names are in the package.
+          PB=dist/win-unpacked/resources/preview-browser
+          test -f "$PB/runtime.json"
+          test -f "$PB/$(jq -er .binary "$PB/runtime.json")"
           AIM=dist/win-unpacked/resources/ai-memory-bin/ai-memory.exe
           test -f "$AIM"
           "$AIM" --version | grep -F "$(jq -r .version native/memory/ompdesk.json)"
@@ -683,16 +858,46 @@ jobs:
           # OMPdesk's own Rust (native/ompdesk): the CLI runs.
           dist/win-unpacked/resources/ompdesk-bin/ompdesk.exe help | grep -F "Exit codes"
           dist/win-unpacked/resources/ompdesk-bin/ompdesk-core.exe < /dev/null | grep -F '"event":"ready"'
-      - name: Playwright browsers
-        run: bunx playwright install chromium
-      - run: bunx playwright test --grep "@smoke"
-      - if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      # Playwright cannot drive WebView2 either. The packaged win-unpacked app is never changed: first it proves it has no
+      # WebDriver server (scripts/tauri-release-automation-check.ts), then a copy whose OMPdesk.exe is the same source built
+      # with the test-automation feature is driven through the native WebDriver on the fake omp (bridge, new tab, a
+      # prompt round trip, settings, a clean quit).
+      - name: Prove the shipped app has no WebDriver server
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=$(cygpath -m "$PWD/dist/win-unpacked")
+          test "$(jq -c .features "$APP/ompdesk-tauri.build.json")" = "[]"
+          mkdir -p "$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_BINARY="$APP/OMPdesk.exe"
+          export OMPDESK_TAURI_TEST_OUTPUT=$(cygpath -m "$RUNNER_TEMP/tauri-smoke")
+          export OMPDESK_TAURI_TEST_NODE="$APP/resources/node/node.exe"
+          export OMP_GUI_E2E_OUT="$APP/resources/app/out"
+          bun scripts/tauri-release-automation-check.ts
+      # The host of the test copy: the staged build again, with the test-automation feature (it replaces the release host
+      # staged above, which packaging has already taken).
+      - uses: ./.github/actions/tauri-shell
         with:
-          name: e2e-windows
-          path: |
-            test-results/
-            playwright-report/
+          test-automation: "true"
+      - name: Smoke the packaged Tauri app with a test host
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R dist/win-unpacked "$RUNNER_TEMP/test-app"
+          cp resources/ompdesk-tauri/win32-x64/ompdesk-shell.exe "$RUNNER_TEMP/test-app/OMPdesk.exe"
+          APP=$(cygpath -m "$RUNNER_TEMP/test-app")
+          mkdir -p "$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_BINARY="$APP/OMPdesk.exe"
+          export OMPDESK_TAURI_TEST_OUTPUT=$(cygpath -m "$RUNNER_TEMP/tauri-smoke")
+          export OMPDESK_TAURI_TEST_NODE="$APP/resources/node/node.exe"
+          export OMP_GUI_E2E_OUT="$APP/resources/app/out"
+          bun scripts/tauri-release-automation-check.ts --expect-automation "$OMPDESK_TAURI_TEST_BINARY"
+          bun scripts/tauri-native-smoke.ts
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-smoke-windows
+          path: ${{ runner.temp }}/tauri-smoke/
           if-no-files-found: ignore
           retention-days: 3
       - name: Stage assets
@@ -707,7 +912,7 @@ jobs:
             test -f "release/ompdesk-$V-setup.exe"
           fi
           ls -l release
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ompdesk-win
           path: release/
@@ -720,14 +925,57 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # Runs when prepare, build, static, check (every vitest job), win-platform (every shard), native (every OS),
-  # mac-native, mac (@smoke), mac-real (real-core) and win (@smoke) succeeded (the job `if` keeps GitHub's
-  # implicit success(), so a failed or skipped need stops it). The full
-  # Playwright suite is not part of a release: e2e-nightly.yml runs it
-  # informationally. The pre-flight in ci.yml and local `bun run gate` are the
-  # other proofs.
+  release-update-mac:
+    needs: mac
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ompdesk-mac
+          path: ${{ runner.temp }}/mac-candidate
+      - uses: ./.github/actions/mac-update-candidate
+        with:
+          candidate-dmg: ${{ runner.temp }}/mac-candidate/ompdesk-mac-arm64.dmg
+
+  win-update-real:
+    needs: [prepare, win]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [installer, feed]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ompdesk-win
+          path: ${{ runner.temp }}/win-update-real/new
+      - uses: ./.github/actions/win-update-real
+        with:
+          mode: ${{ matrix.mode }}
+          expected-version: ${{ needs.prepare.outputs.version }}
+
+  # Keep GitHub's implicit success(): a failed or skipped package or update gate must block publication.
   publish:
-    needs: [prepare, build, static, check, mac, mac-real, win-platform, native, mac-native, win]
+    needs: [prepare, build, static, check, mac, win-platform, native, tauri, mac-native, win, release-update-mac, win-update-real]
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -740,16 +988,19 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: scripts/ci-failure.sh
+          # ci-failure.sh for failure reports; app-compatibility.json for the update metadata's minimum macOS.
+          sparse-checkout: |
+            scripts/ci-failure.sh
+            src/shared/app-compatibility.json
           sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: ompdesk-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-notes
           path: notes
@@ -778,8 +1029,9 @@ jobs:
               --arg sha512 "$(openssl dgst -sha512 -binary "dist/$1" | base64 | tr -d '\n')" \
               '{name: $name, size: $size, sha512: $sha512}'
           }
+          minimumDarwin=$(jq -er .minimumDarwin src/shared/app-compatibility.json)
           META=$(jq -cn --arg version "$VERSION" --arg releaseDate "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
-            --argjson mac "$(entry ompdesk-mac-arm64.dmg)" \
+            --argjson mac "$(entry ompdesk-mac-arm64.dmg | jq --arg minimum "$minimumDarwin" '. + {minimumSystemVersion: $minimum}')" \
             --argjson windows "$(entry ompdesk-windows-setup.exe)" \
             '{version: $version, releaseDate: $releaseDate, files: {mac: $mac, windows: $windows}}')
           printf '\n<!-- ompdesk-update %s -->\n' "$META" >> notes/notes.md
@@ -791,3 +1043,28 @@ jobs:
         run: bash scripts/ci-failure.sh
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # Old releases go once a new one is out (the owner's rule, 17 Nov 2026): the newest three stay, and so does every
+  # release a check or script downloads by its tag (.github/release-keep.json, pinned by scripts/release-keep.test.ts).
+  # Only the release and its assets go; the git tag stays. A dry run prints what would go. Its own job, so a failed
+  # prune never turns a published release's run red at `publish`.
+  prune:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/release-keep.json
+            scripts/release-prune.sh
+          sparse-checkout-cone-mode: false
+      - name: Delete old releases, keeping their tags
+        run: bash scripts/release-prune.sh ${{ inputs.dry_run == true && '--dry-run' || '' }}

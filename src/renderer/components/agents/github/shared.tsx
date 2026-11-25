@@ -1,11 +1,11 @@
-import { CheckCircle2, Circle, CircleDot, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, CircleDot, CirclePause, XCircle } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { GithubTarget } from "../../../../shared/github";
-import { cx } from "../../../lib/format";
+import { cx, formatClock } from "../../../lib/format";
 import { githubStateLabel } from "../../../lib/github-state";
 import { useT } from "../../../lib/i18n";
 import { toast, toastError } from "../../../stores/toast";
-import { EmptyState } from "../../common";
+import { Banner, EmptyState } from "../../common";
 
 /** What every section works on: the chosen host and repository (`repoName` null = none known yet). */
 export interface GithubSectionProps {
@@ -58,6 +58,21 @@ export function NeedsRepo() {
 			title={t("github.needsRepo")}
 		/>
 	);
+}
+
+/** GitHub holds reads until `until` (`gh_paused`): one quiet line where a failure would show, rows stay under it. */
+export function GithubPaused({ until, className }: { until: number; className?: string }) {
+	const t = useT();
+	return (
+		<Banner className={className} compact data-github-paused icon={<CirclePause />} variant="neutral">
+			{t("github.pausedUntil", { time: formatClock(until) })}
+		</Banner>
+	);
+}
+
+/** `AsyncSection`'s `notice` for a held read; nothing while reads run. */
+export function pausedNotice(until: number | null): ReactNode {
+	return until === null ? null : <GithubPaused until={until} />;
 }
 
 /** A run or job state: completed runs by conclusion, others by status. */

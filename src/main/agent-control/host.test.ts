@@ -30,7 +30,7 @@ import { WORKTREE_COMMAND_BUDGETS_MS } from "../local/git/worktree";
 import { SchedulesCommandParams, SchedulesCreateParams } from "../remote/app-protocol";
 import type { ScheduleService } from "../schedules";
 import type { ClientWindow } from "../web/client-window";
-import { FileEditReports } from "../web/file-edit-reports";
+import { FileEditReports, type FileEdits, type FileEditTarget } from "../web/file-edit-reports";
 import { type AgentControlHostDeps, AgentControlRuntime, splitBranch } from "./host";
 
 const ok = (data: unknown = {}): RpcResponse => ({ type: "response", success: true, data }) as RpcResponse;
@@ -58,6 +58,39 @@ function window(id = 1): ClientWindow & { sent: [string, unknown][] } {
 		isDestroyed: () => false,
 		once: () => undefined,
 		removeListener: () => undefined,
+	};
+}
+
+/** A stand-in for the core's web router as the host reads it. */
+interface FakeFileEdits {
+	reports: FileEditReports;
+	read(target: FileEditTarget, tabId: string): FileEdits;
+	/** A page connection of web window `windowId` reports its dirty tab, as the core then tells main. */
+	report(windowId: number, connId: string, dirty: string | null): void;
+}
+
+/**
+ * Each connection's latest Files-edit report as the core's web router keeps it (`file_edits.rs`, whose rules its own
+ * tests pin), read by window through `FileEditReports` as main reads the core. A web window's device is `w<id>`.
+ */
+function fakeFileEdits(): FakeFileEdits {
+	const byConnection = new Map<string, { device: string; dirty: string | null }>();
+	const read = (target: FileEditTarget, tabId: string): FileEdits => {
+		const reports = [...byConnection.values()].filter(report => report.device === target.device);
+		if (reports.some(report => report.dirty === tabId)) return "dirty";
+		return reports.length > 0 ? "clean" : "unreported";
+	};
+	const reports = new FileEditReports({
+		target: windowId => (windowId < 0 ? { host: 1, device: `w${windowId}` } : null),
+		read,
+	});
+	return {
+		reports,
+		read,
+		report(windowId: number, connId: string, dirty: string | null) {
+			byConnection.set(connId, { device: `w${windowId}`, dirty });
+			reports.reported();
+		},
 	};
 }
 
@@ -97,17 +130,21 @@ function setup(
 		/** Tabs a paired web page owns (its window id is negative). */
 		webTabs?: Partial<IpcTabInfo>[];
 		/** What happens while a release awaits (`closeWindowTab`'s exit-policy read), before it asks again. */
-		duringRelease?: (fileEdits: FileEditReports) => void;
+		duringRelease?: (fileEdits: FakeFileEdits) => void;
 		/** The tab holding each session file (`sessionOwner`). */
 		owners?: Record<string, string>;
 		/** The front window sessions are opened in without a tab of their own (`outsideWindow`). */
 		outsideWindow?: boolean;
+		/** What the caller's omp answers `agent_control_attachment` for each path (`agent_control.attachment`). */
+		reads?: Record<string, { name: string; mimeType: string; dataBase64: string }>;
+		/** This computer's upload folder (`AgentControlHostDeps.uploads`). */
+		uploads?: AgentControlHostDeps["uploads"];
 	} = {},
 ) {
 	const win = window();
 	const win2 = window(2);
 	const webWin = window(-1);
-	const fileEdits = new FileEditReports();
+	const fileEdits = fakeFileEdits();
 	const released: { win: ClientWindow; tabId: string }[] = [];
 	/** Releases and close mails in the order they happened. */
 	const log: string[] = [];
@@ -127,42 +164,50 @@ function setup(
 	const spawned: IpcSpawnTabPayload[] = [];
 	const activity: ((event: { type: string; tabId: string }) => void)[] = [];
 	const sidecars = new Map<string, { cwd: string; device?: string }>([["main0001", { cwd: "/repo" }]]);
+	const windowOfTab = (tabId: string) =>
+		otherTabs.some(tab => tab.tabId === tabId)
+			? win2
+			: webTabs.some(tab => tab.tabId === tabId)
+				? webWin
+				: tabs.some(tab => tab.tabId === tabId)
+					? win
+					: null;
+	const tabsForWindow = (target: ClientWindow) => (target === win2 ? otherTabs : target === webWin ? webTabs : tabs);
 	const deps: AgentControlHostDeps = {
 		pool: {
-			tabsForWindow: target => (target === win2 ? otherTabs : target === webWin ? webTabs : tabs),
-			tabFacts: tabId => ({ title: "", busy: tabId === "busy0002", awaitingConnection: false, retrying: false }),
-			pendingPlan: () => null,
+			tabsForWindow,
+			controlTabs: () =>
+				[win, ...(otherTabs.length ? [win2] : []), ...(webTabs.length ? [webWin] : [])].map(target => ({
+					win: target,
+					asks: options.requests ?? [],
+					tabs: tabsForWindow(target).map(tab => ({
+						...tab,
+						facts: {
+							title: "",
+							busy: tab.tabId === "busy0002",
+							awaitingConnection: false,
+							retrying: false,
+						},
+						plan: null,
+						formerIds: [],
+						hasDraft: false,
+						owner: windowOfTab(tab.tabId),
+					})),
+				})),
 			observeTabs: observer => {
 				activity.push(observer as never);
 				return () => undefined;
 			},
-			openRequests: () => options.requests ?? [],
 			routeSideChannel: vi.fn(async () => true),
 			sidecarOf: tabId => (sidecars.get(tabId) ?? { cwd: "/repo" }) as never,
 			startTab: vi.fn(() => null),
 			setTabTask: vi.fn(),
-			formerTabIds: () => [],
 			setTabOpener: openers,
-			hasDraft: () => false,
-			windowOfTab: tabId =>
-				otherTabs.some(tab => tab.tabId === tabId)
-					? win2
-					: webTabs.some(tab => tab.tabId === tabId)
-						? webWin
-						: tabs.some(tab => tab.tabId === tabId)
-							? win
-							: null,
+			windowOfTab,
 			windowsShowingTab: tabId => {
-				const owner = otherTabs.some(tab => tab.tabId === tabId)
-					? win2
-					: webTabs.some(tab => tab.tabId === tabId)
-						? webWin
-						: tabs.some(tab => tab.tabId === tabId)
-							? win
-							: null;
+				const owner = windowOfTab(tabId);
 				return owner ? [owner, ...(options.viewers?.[tabId] ?? [])] : [];
 			},
-			tabWindows: () => [win, ...(otherTabs.length ? [win2] : []), ...(webTabs.length ? [webWin] : [])],
 			sessionOwner: sessionPath => {
 				const tabId = options.owners?.[sessionPath];
 				return tabId ? { tabId, winId: win.webContents.id } : null;
@@ -179,6 +224,12 @@ function setup(
 			if (command.type === "worktree_create")
 				return ok({ path: "/wt/agent-1", branch: "omp/agent/agent-1", baseCwd: "/repo" });
 			if (command.type === "agent_control_confirm") return ok({ approved: true });
+			if (command.type === "agent_control_attachment") {
+				const read = options.reads?.[command.path ?? ""];
+				return read
+					? ok(read)
+					: { type: "response", command: command.type, success: false, error: "ENOENT: no such file" };
+			}
 			return ok();
 		},
 		spawnTab: async (_win, payload) => {
@@ -198,14 +249,16 @@ function setup(
 		tuning: { ...SHORT_WAITS, ...options.tuning },
 		mailOutboxFile: options.mailOutboxFile,
 		sendOutboxFile: options.sendOutboxFile,
+		uploads: options.uploads,
 		sessionFatesFile: options.sessionFatesFile,
-		fileEdits,
-		releaseTab: async (target, tabId, stillReleasable) => {
+		fileEdits: fileEdits.reports,
+		releaseTab: async (target, tabId, unlessDirty) => {
 			const at = webTabs.findIndex(tab => tab.tabId === tabId);
 			if (at < 0) return false;
 			await Promise.resolve();
 			options.duringRelease?.(fileEdits);
-			if (!stillReleasable()) return false;
+			// The core's check in the step that removes the tab (`releaseTab`'s `unlessDirty`).
+			if (unlessDirty && fileEdits.read(unlessDirty, tabId) === "dirty") return false;
 			webTabs.splice(at, 1);
 			released.push({ win: target, tabId });
 			log.push(`release:${tabId}`);
@@ -359,6 +412,21 @@ describe("AgentControlRuntime", () => {
 		expect(openers).toHaveBeenCalledWith("new00003", "main0001");
 		// The tab is made with its task, so no window hears of it as "New session" first.
 		expect(spawned[0]).toMatchObject({ task: "Fix the upload test" });
+	});
+
+	it("holds an update restart while a session it opens has not taken its first message, and a moment after", async () => {
+		const { runtime, win, commands } = setup({
+			tabs: [{ tabId: "main0001" }, { tabId: "new00003", status: "ready" }],
+		});
+		expect(runtime.opening()).toBe(false);
+		const opened = await runtime.run(win, "main0001", T.open, {
+			message: "Title: Fix the upload test\nIt times out.",
+		});
+		expect(opened.isError, opened.text).toBe(false);
+		// The first message went to the new session; the hold stays a moment so its turn reaches the relaunch marker.
+		expect(commands.some(entry => entry.tabId === "new00003" && entry.command.type === "prompt")).toBe(true);
+		expect(runtime.opening()).toBe(true);
+		expect(runtime.opening(Date.now() + 3_000)).toBe(false);
 	});
 
 	/** The review frames a window was sent (`AGENT_CONTROL_REVIEW`), as their JSON. */
@@ -867,6 +935,56 @@ describe("AgentControlRuntime", () => {
 			expect(text).toMatch(/plain "plain"\n {2}folder \/s;[^\n]*changed [^;\n]*\n/);
 		});
 
+		it("reads a tab here not started since a relaunch as what the host's own tab on its session does", async () => {
+			// 20 Nov 2026 (C12): the MacBook's list and result read SeuOffice's main tab, which the Mac mini's window ran,
+			// as "not started" for 26 minutes: the MacBook's own tab on that session was restored asleep.
+			let live = summariesOf([{ sessionPath: "/far/seu.jsonl", status: "running" }]);
+			const request = vi.fn(async (_device: string, method: string) =>
+				method === "sessions.messages"
+					? [
+							{ role: "user", content: "go", timestamp: 1 },
+							{
+								role: "assistant",
+								content: [{ type: "text", text: "shipped" }],
+								stopReason: "stop",
+								timestamp: 2,
+							},
+						]
+					: null,
+			);
+			const { runtime, win } = setup({
+				tabs: [
+					{ tabId: "main0001" },
+					{
+						tabId: "seu00002",
+						title: "SeuOffice",
+						device: "dev-1",
+						status: "asleep",
+						sessionPath: "/far/seu.jsonl",
+					},
+				],
+				remote: {
+					hosts: () => [{ deviceId: "dev-1", name: "Mac mini", state: "online" }],
+					request: request as never,
+				},
+				summaries: device => (device === "dev-1" ? live : null),
+			});
+			const hint = "this app's tab on it starts when shown or messaged";
+			const list = (await runtime.run(win, "main0001", T.list, { status: "running" })).text;
+			expect(list).toContain(
+				`seu00002 "SeuOffice"\n  running (open in a tab on device dev-1; ${hint}); folder /repo`,
+			);
+			// Its turn there ended: the result is settled and answers from the saved file on the host.
+			live = summariesOf([{ sessionPath: "/far/seu.jsonl", status: "ready" }]);
+			const result = (await runtime.run(win, "main0001", T.result, { session: "seu00002", wait: true })).text;
+			expect(result).toContain(`"SeuOffice" [seu00002]: idle (open in a tab on device dev-1; ${hint}).`);
+			expect(result).toMatch(/Last answer:\nshipped$/);
+			// The host holds it in no tab: as before, it is a tab that has not started.
+			live = summariesOf([]);
+			const gone = (await runtime.run(win, "main0001", T.result, { session: "seu00002" })).text;
+			expect(gone).toContain('"SeuOffice" [seu00002]: not started (it starts when shown or messaged).');
+		});
+
 		it("reads a saved session's header as the stored list says it, as of the read", async () => {
 			let rows = [row("/far", "there", { heldOnHost: true })];
 			let live = summariesOf([]);
@@ -944,6 +1062,43 @@ describe("AgentControlRuntime", () => {
 			expect(text).toMatch(/"메인" \(saved id s-main\) \[open in a tab Mac mini runs for Desktop\]\n {2}idle/);
 			const stored = (await runtime.run(win, "main0001", T.list, { scope: "stored", device: "Mac mini" })).text;
 			expect(stored).toContain("; open in a tab device dev-1 runs for Desktop: idle");
+		});
+
+		it("carries a file to the receiver: it lands in this computer's upload folder and the prompt names its path", async () => {
+			const attachHere = vi.fn(async (name: string) => ({ ok: true as const, path: `/uploads/${name}` }));
+			const { runtime, win, commands } = setup({
+				tabs: [{ tabId: "main0001" }, { tabId: "recv0002", sessionPath: "/s/recv.jsonl" }],
+				reads: { "/repo/notes.pdf": { name: "notes.pdf", mimeType: "application/pdf", dataBase64: "JVBERi0=" } },
+				uploads: { attachHere },
+			});
+			const sent = await runtime.run(win, "main0001", T.send, {
+				session: "recv0002",
+				message: "read this",
+				attachments: [{ path: "/repo/notes.pdf" }],
+			});
+			expect(sent.isError, sent.text).toBe(false);
+			expect(sent.text).toContain("attached: 1 (1 file at /uploads/notes.pdf)");
+			expect(attachHere).toHaveBeenCalledTimes(1);
+			const prompt = commands.find(entry => entry.command.type === "prompt");
+			expect(prompt?.tabId).toBe("recv0002");
+			expect(JSON.stringify(prompt?.command)).toContain("Attached: /uploads/notes.pdf");
+		});
+
+		it("refuses the whole send when an attachment cannot be read, and puts nothing on the receiver", async () => {
+			const attachHere = vi.fn(async (name: string) => ({ ok: true as const, path: `/uploads/${name}` }));
+			const { runtime, win, commands } = setup({
+				tabs: [{ tabId: "main0001" }, { tabId: "recv0002", sessionPath: "/s/recv.jsonl" }],
+				uploads: { attachHere },
+			});
+			const sent = await runtime.run(win, "main0001", T.send, {
+				session: "recv0002",
+				message: "read this",
+				attachments: [{ path: "/repo/missing.pdf" }],
+			});
+			expect(sent.isError).toBe(true);
+			expect(sent.text).toContain("Nothing was delivered.");
+			expect(attachHere).not.toHaveBeenCalled();
+			expect(commands.some(entry => entry.command.type === "prompt")).toBe(false);
 		});
 
 		it("sends to that session through a view of the tab that holds it, never nesting it under the caller", async () => {
@@ -1105,7 +1260,8 @@ describe("AgentControlRuntime", () => {
 						sessionPath: "/s/kid.jsonl",
 						openedBySession: "/s/boss.jsonl",
 						worktree,
-						lastRun: { stopReason: "stop" },
+						lastRun: { id: 17, stopReason: "stop" },
+						closeTurn: { pool: 2, entry: 3, turn: 17 },
 					},
 				],
 				sweepMs: 50,
@@ -1124,19 +1280,15 @@ describe("AgentControlRuntime", () => {
 						? ok({ text: "Pushed to main.\nResult: ok" })
 						: ok();
 			await expect
-				.poll(
-					() =>
-						win.sent.some(
-							([channel, event]) =>
-								channel === AGENT_CONTROL_VIEW &&
-								typeof event === "object" &&
-								event !== null &&
-								"how" in event &&
-								event.how === "close",
-						),
-					{ timeout: 10_000 },
-				)
-				.toBe(true);
+				.poll(() => win.sent, { timeout: 10_000 })
+				.toContainEqual([
+					AGENT_CONTROL_VIEW,
+					expect.objectContaining({
+						tabId: "kid00002",
+						how: "close",
+						expectedTurn: { pool: 2, entry: 3, turn: 17 },
+					}),
+				]);
 			tabs.splice(
 				tabs.findIndex(tab => tab.tabId === "kid00002"),
 				1,
@@ -1448,9 +1600,9 @@ describe("AgentControlRuntime", () => {
 		}
 	});
 
-	it("hands a follow-up a busy child's omp queued to the omp that holds its session after a relaunch, once", async () => {
-		// One fake omp per tab: a prompt into a running turn waits in its memory, as stock's follow-up queue does, and
-		// only what a turn took is in its journal.
+	it("hands a message a busy child's omp held to the omp that holds its session after a relaunch, once", async () => {
+		// One fake omp per tab: a message into a running turn waits in its memory, and only what a turn took is in its
+		// journal.
 		const journals = new Map<string, string[]>();
 		const prompted: { tabId: string; message: string }[] = [];
 		const attach = (deps: AgentControlHostDeps) => {
@@ -1463,7 +1615,8 @@ describe("AgentControlRuntime", () => {
 							(journals.get(tabId) ?? []).some(text => text.includes(mark)),
 						),
 					});
-				if (command.type === "prompt") prompted.push({ tabId, message: command.message });
+				if (command.type === "prompt" || command.type === "agent_control_aside")
+					prompted.push({ tabId, message: command.message });
 				return inner(target, sidecar, tabId, command, timeoutMs);
 			};
 		};
@@ -1482,12 +1635,11 @@ describe("AgentControlRuntime", () => {
 			const sent = await before.runtime.run(before.win, "main0001", T.send, {
 				session: "busy0002",
 				message: "Also do C",
-				delivery: "follow_up",
 			});
-			expect(sent.text).toContain("queued as a follow-up");
+			expect(sent.text).toContain("delivered as steer");
 			expect(prompted.map(entry => entry.tabId)).toEqual(["busy0002"]);
 
-			// OMPdesk relaunches (an update): that omp ends with its queue; the child's session is back in a new tab.
+			// OMPdesk relaunches (an update): that omp ends with what it held; the child's session is back in a new tab.
 			before.runtime.control.close();
 			const after = setup({
 				tabs: [
@@ -1557,13 +1709,47 @@ describe("AgentControlRuntime", () => {
 describe("closing a child a paired web page owns", () => {
 	const WEB = -1;
 	const stop = { session: "web00002", close: true };
-	const phone = (duringRelease?: (fileEdits: FileEditReports) => void) =>
+	const phone = (duringRelease?: (fileEdits: FakeFileEdits) => void) =>
 		setup({
 			tabs: [{ tabId: "main0001", sessionPath: "/s/boss.jsonl" }],
 			webTabs: [{ tabId: "web00002", title: "Phone child", sessionPath: "/s/kid.jsonl" }],
 			sweepMs: 0,
 			...(duringRelease ? { duringRelease } : {}),
 		});
+
+	it("passes the collected turn to main and leaves the web child open when main refuses it", async () => {
+		const { runtime, deps, webWin, webTabs, released } = phone();
+		const child = webTabs[0] as IpcTabInfo;
+		const reply = "Done.\nResult: ok";
+		Object.assign(child, {
+			openedBy: "main0001",
+			closeTurn: { pool: 7, entry: 4, turn: 19 },
+			lastRun: { id: 19, stopReason: "stop", reply },
+		});
+		deps.dispatch = async (_target, _sidecar, _tabId, command) =>
+			command.type === "get_state"
+				? ok({ isStreaming: false })
+				: command.type === "get_last_assistant_text"
+					? ok({ text: reply })
+					: ok();
+		const release = vi.spyOn(deps, "releaseTab").mockResolvedValueOnce(false);
+		await runtime.control.autoClose("main0001");
+		expect(release).toHaveBeenCalledTimes(1);
+		expect(release).toHaveBeenCalledWith(
+			webWin,
+			child.tabId,
+			{ host: 1, device: "w-1" },
+			{ pool: 7, entry: 4, turn: 19 },
+		);
+		expect(released).toEqual([]);
+		expect(webTabs).toContain(child);
+
+		child.closeTurn = { pool: 7, entry: 4, turn: 20 };
+		child.lastRun = { id: 20, stopReason: "stop", reply };
+		await runtime.control.autoClose("main0001");
+		expect(release).toHaveBeenLastCalledWith(webWin, child.tabId, { host: 1, device: "w-1" }, child.closeTurn);
+		expect(released).toEqual([{ win: webWin, tabId: child.tabId }]);
+	});
 
 	it("releases the tab in main once the page reported its Files editor clean, and mails the note after", async () => {
 		const { runtime, win, webWin, webTabs, fileEdits, released, log } = phone();
@@ -1625,7 +1811,11 @@ describe("closing a child a paired web page owns", () => {
 		});
 		const closing = runtime.run(win, "main0001", T.stop, { session: "desk0002", close: true });
 		await vi.waitFor(
-			() => expect(win.sent).toContainEqual([AGENT_CONTROL_VIEW, { tabId: "desk0002", how: "close" }]),
+			() =>
+				expect(win.sent).toContainEqual([
+					AGENT_CONTROL_VIEW,
+					expect.objectContaining({ tabId: "desk0002", how: "close" }),
+				]),
 			{ timeout: 5_000 },
 		);
 		expect(log).toEqual([]);
@@ -1800,8 +1990,42 @@ describe("a caller outside OMPdesk (the control socket)", () => {
 			state: "idle",
 		});
 		await expect(backend.resolve(outside, "hide0003")).rejects.toThrow("hid this session");
-		expect(backend.views().map(view => view.session)).toEqual(["main0001", "work0002"]);
-		expect(backend.view("hide0003")).toBeNull();
+		expect(backend.snapshots().map(tab => tab.tabId)).toEqual(["main0001", "work0002"]);
+	});
+
+	it("keeps private card and session data out of the socket's resolved view and watch snapshot", async () => {
+		const { backend } = outsideSetup({
+			tabs: [{ tabId: "busy0002", title: "Worker", task: "private task", sessionPath: "/private/work.jsonl" }],
+			requests: [
+				{
+					tabId: "busy0002",
+					request: {
+						type: "extension_ui_request",
+						method: "confirm",
+						id: "private-id",
+						title: "private question",
+						message: "private message",
+					},
+				},
+			],
+		});
+		expect(await backend.resolve(outside, "Worker")).toEqual({
+			session: "busy0002",
+			title: "Worker",
+			state: "blocked",
+		});
+		expect(backend.snapshots()).toEqual([
+			{
+				tabId: "busy0002",
+				title: "Worker",
+				status: "ready",
+				busy: true,
+				hidden: false,
+				resuming: false,
+				hasAsk: true,
+				hasPlan: false,
+			},
+		]);
 	});
 });
 
@@ -1942,6 +2166,9 @@ describe("a session's own wake-up", () => {
 		await expect(runtime.wakeSession(wakeable(`${file}.gone`), "run-5")).rejects.toThrow(
 			"The session to wake is gone",
 		);
+		await expect(runtime.wakeSession(wakeable(path.dirname(file)), "run-dir")).rejects.toThrow(
+			"The session to wake is gone",
+		);
 		await expect(runtime.wakeSession(wakeable(file, { wakeSession: undefined }), "run-6")).rejects.toThrow(
 			"wakes no session",
 		);
@@ -1958,5 +2185,42 @@ describe("a session's own wake-up", () => {
 		await expect(rig.runtime.wakeSession(wakeable(file), "run-7")).rejects.toThrow("The window is closing");
 		const kept = await fs.readFile(outbox, "utf8").catch(() => "");
 		expect(kept).not.toContain("wake-run-7");
+	});
+});
+
+describe("the snapshot of main the core reads", () => {
+	// Main rebuilds it on every answer and push to the core, and each pool read waits on main's thread for the core:
+	// with a read per tab, a busy Autopilot run's host held the window's answers for 14 s (e2e 45288545767).
+	it("reads the pool once, however many tabs are open", () => {
+		const reads = (count: number) => {
+			const { runtime, deps, win } = setup({
+				tabs: Array.from({ length: count }, (_, at) => ({ tabId: `tab${String(at).padStart(5, "0")}` })),
+			});
+			const calls: string[] = [];
+			// Every read the pool offers, earlier per-tab ones included, counted as the hub waits it costs.
+			const pool: Record<string, unknown> = {
+				...deps.pool,
+				tabWindows: () => [win],
+				openRequests: () => [],
+				tabFacts: () => null,
+				pendingPlan: () => null,
+				formerTabIds: () => [],
+				hasDraft: () => false,
+			};
+			deps.pool = new Proxy(pool, {
+				get: (target, key) => {
+					const value = target[key as string];
+					if (typeof value !== "function" || key === "sidecarOf") return value;
+					return (...args: unknown[]) => {
+						calls.push(String(key));
+						return value(...args);
+					};
+				},
+			}) as typeof deps.pool;
+			runtime.control.changed();
+			return calls;
+		};
+		expect(reads(1)).toEqual(["controlTabs"]);
+		expect(reads(6)).toEqual(["controlTabs"]);
 	});
 });

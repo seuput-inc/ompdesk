@@ -87,7 +87,7 @@ for (const [language, theme] of variants([
 		await Promise.all([fs.mkdir(desktop), fs.mkdir(project), fs.mkdir(agent)]);
 		await fs.writeFile(
 			path.join(desktop, "prefs.json"),
-			JSON.stringify({ language, themeName: theme, firstRunComplete: true }),
+			JSON.stringify({ language, themeName: theme, firstRunComplete: true, gui: { panelWidth: 460 } }),
 		);
 		const env = {
 			...process.env,
@@ -116,20 +116,36 @@ for (const [language, theme] of variants([
 				path: path.join(captures, `${name}-${language}-${theme}.png`),
 			});
 		};
-		/** Act on the preview page's own webContents in main. */
-		const child = (op: "zoom" | "download" | "crash") =>
+		/** Act on the preview page's own webContents in main: the page starts a download, or its renderer is crashed. */
+		const child = (op: "zoom" | "download" | "crash" | "document") =>
 			app.evaluate(
-				({ webContents }, source) => {
+				async ({ webContents }, source) => {
 					const contents = webContents
 						.getAllWebContents()
 						.find(candidate => candidate.getURL().startsWith(`http://${source.host}/`));
 					if (!contents) throw new Error("No preview page");
-					if (source.op === "download") contents.downloadURL(`http://${source.host}/file.zip`);
-					else if (source.op === "crash") contents.forcefullyCrashRenderer();
+					if (source.op === "document") return Number(await contents.executeJavaScript("performance.timeOrigin"));
+					if (source.op === "download")
+						await contents.executeJavaScript(
+							"(() => { const a = document.createElement('a'); a.href = '/file.zip'; document.body.append(a); a.click(); })()",
+						);
+					else if (source.op === "crash") {
+						contents.debugger.attach("1.3");
+						await contents.debugger.sendCommand("Page.crash").catch(() => {});
+						contents.debugger.detach();
+					}
 					return contents.getZoomFactor();
 				},
 				{ host, op },
 			);
+		const pageLayout = () =>
+			app.evaluate(async ({ webContents }, source) => {
+				const contents = webContents
+					.getAllWebContents()
+					.find(candidate => candidate.getURL().startsWith(`http://${source}/`));
+				if (!contents) throw new Error("No preview page");
+				return contents.executeJavaScript("({width:innerWidth,title:document.title})");
+			}, host);
 		const page = await app.firstWindow();
 		try {
 			await page.waitForFunction(() => window.omp?.rpc != null);
@@ -179,10 +195,22 @@ for (const [language, theme] of variants([
 			await addressBar.fill(`${host}/width`);
 			await addressBar.press("Enter");
 			await expect(status).toHaveText("w=390");
+			await expect.poll(pageLayout).toEqual({ width: 390, title: "w=390" });
 			await capture("preview-phone");
 			await options.click();
 			await page.getByRole("menuitemcheckbox", { name: label.fill, exact: true }).click();
-			await expect(status).not.toHaveText("w=390");
+			const surface = aside.locator("[data-preview-surface]");
+			const fillWidth = await surface.evaluate(element => Math.round(element.getBoundingClientRect().width));
+			expect(fillWidth).not.toBe(390);
+			await expect.poll(pageLayout).toEqual({ width: fillWidth, title: `w=${fillWidth}` });
+			await expect(status).toHaveText(`w=${fillWidth}`);
+			const resize = aside.getByRole("separator");
+			await resize.press("Home");
+			await expect(resize).toHaveAttribute("aria-valuenow", "360");
+			const resizedWidth = await surface.evaluate(element => Math.round(element.getBoundingClientRect().width));
+			expect(resizedWidth).not.toBe(fillWidth);
+			await expect.poll(pageLayout).toEqual({ width: resizedWidth, title: `w=${resizedWidth}` });
+			await expect(status).toHaveText(`w=${resizedWidth}`);
 
 			// C126: a download is refused with a notice that offers the system browser.
 			await child("download");
@@ -204,13 +232,20 @@ for (const [language, theme] of variants([
 			await expect(page.getByRole("status").filter({ hasText: label.saved }).first()).toBeVisible();
 			expect((await fs.readFile(pdf)).subarray(0, 4).toString()).toBe("%PDF");
 
-			// C126: a crashed page offers a restore that reloads it.
-			await child("crash");
-			await expect(aside.getByRole("alert")).toContainText(label.crashed);
-			await capture("preview-crashed");
-			await aside.getByRole("button", { name: label.restore, exact: true }).click();
-			await expect(aside.getByRole("alert")).toHaveCount(0);
-			await expect(status).toContainText("w=");
+			// C126: restore the document while the debugger may still be waiting for Page.crash.
+			const priorDocument = await child("document");
+			await Promise.all([
+				child("crash"),
+				(async () => {
+					const alert = aside.getByRole("alert");
+					await expect(alert).toContainText(label.crashed);
+					await capture("preview-crashed");
+					await aside.getByRole("button", { name: label.restore, exact: true }).click();
+					await expect(alert).toHaveCount(0, { timeout: 10_000 });
+					await expect(status).toContainText("w=");
+					expect(await child("document")).toBeGreaterThan(priorDocument);
+				})(),
+			]);
 
 			// C119: a target=_blank link opens a preview tab; the strip switches and closes tabs.
 			await addressBar.fill(`${host}/popup`);

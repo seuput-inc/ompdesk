@@ -1,6 +1,7 @@
 import * as net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
+import { handlers as autoMode } from "./local/auto-mode";
 import { LocalCommandError } from "./local/types";
 
 let server: net.Server | null = null;
@@ -14,7 +15,7 @@ afterEach(async () => {
 });
 
 /** A stand-in for resources/gui-bridge: answers `echo`, fails `boom` (coded for `old`), pushes one event per connection. */
-async function startFakeBridge(): Promise<string> {
+async function startFakeBridge(onDecision?: (answer: () => void) => void): Promise<string> {
 	address = newBridgeAddress();
 	server = net.createServer(socket => {
 		socket.write(`${JSON.stringify({ event: { type: "btw_delta", text: "hi" } })}\n`);
@@ -28,6 +29,9 @@ async function startFakeBridge(): Promise<string> {
 				buffer = buffer.slice(newline + 1);
 				if (request.method === "silent") {
 					// Never answered: a frozen omp.
+				} else if (request.method === "modes.auto_mode_decide" && onDecision) {
+					const result = { mode: "goal", objective: "finish", latencyMs: 10 };
+					onDecision(() => socket.write(`${JSON.stringify({ id: request.id, ok: true, result })}\n`));
 				} else if (request.method === "split") {
 					// One reply cut across three writes, then two replies in one write.
 					const big = `${JSON.stringify({ id: request.id, ok: true, result: "x".repeat(200_000) })}\n`;
@@ -74,6 +78,31 @@ describe("GuiBridgeClient", () => {
 		await expect(silent).rejects.toMatchObject({ code: "bridge_timeout" });
 		await expect(client.request("echo", 7)).resolves.toBe(7);
 		client.close();
+	});
+
+	it("an expired classifier read releases the prompt and its late answer never starts a goal", async () => {
+		const received = Promise.withResolvers<() => void>();
+		const client = new GuiBridgeClient(await startFakeBridge(received.resolve));
+		await client.connect();
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const send = vi.fn();
+			const decide = autoMode.auto_mode_decide;
+			if (!decide) throw new Error("no automatic mode handler");
+			const pending = decide(
+				{ type: "auto_mode_decide", message: "keep going until the tests pass" },
+				{ cwd: ".", bridge: client, send, omp: { bin: "omp", version: "", run: vi.fn() } },
+			);
+			const answerLate = await received.promise;
+			await vi.advanceTimersByTimeAsync(3000);
+			await expect(pending).resolves.toMatchObject({ mode: "none", reason: "timeout" });
+			answerLate();
+			await expect(client.request("echo", "next prompt")).resolves.toBe("next prompt");
+			expect(send).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			client.close();
+		}
 	});
 
 	it("correlates requests, surfaces bridge errors, and delivers pushed events", async () => {

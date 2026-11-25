@@ -1,8 +1,6 @@
 //! What the file an MCP server's command resolves to says about itself: whether it is a script or a native binary
 //! (which decides the running rule), the python its shebang names (a pip script is owned through that python's entry
-//! points), and whether it sits in a pipx or `uv tool` venv, with the version that venv's `dist-info` records. Main
-//! finds the file along its spawn PATH and through its links, and asks the package managers it shares with the tool
-//! CLIs (npm, Bun, Homebrew, winget) about the rest.
+//! points), and whether it sits in a pipx or `uv tool` venv, with the version that venv's `dist-info` records.
 
 use std::fs::File;
 use std::io::Read;
@@ -23,15 +21,6 @@ pub enum Platform {
     Win32,
 }
 
-#[derive(Deserialize)]
-pub struct Params {
-    /// The file, symlinks resolved.
-    real: String,
-    /// The server's `command` as configured.
-    command: String,
-    platform: Platform,
-}
-
 /// A venv that owns a tool.
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "method", rename_all = "lowercase")]
@@ -47,9 +36,11 @@ pub struct Facts {
     /// A script (shebang, `.cmd`, `.js`) an interpreter loads lazily, as opposed to a native binary. A file of
     /// neither kind counts as a script: waiting is the safe side.
     script: bool,
-    owner: Option<VenvOwner>,
+    #[serde(skip)]
+    pub(super) owner: Option<VenvOwner>,
     /// The version the owning venv records.
-    installed: Option<String>,
+    #[serde(skip)]
+    pub(super) installed: Option<String>,
     /// The python the file's shebang names, as written there (a bare name is main's to look up).
     python: Option<String>,
 }
@@ -62,7 +53,7 @@ enum Kind {
 }
 
 /// The bytes a file starts with that tell what it is; none when it cannot be read.
-fn head(path: &str) -> Option<Vec<u8>> {
+fn head(path: &Path) -> Option<Vec<u8>> {
     let mut head = Vec::new();
     File::open(path)
         .ok()?
@@ -172,8 +163,7 @@ fn dist_info(entry: &str) -> Option<(&str, &str)> {
 }
 
 /// The version a venv's `<name>-<version>.dist-info` records; none when the venv cannot be read.
-fn dist_info_version(venv: &str, name: &str, platform: Platform) -> Option<String> {
-    let venv = Path::new(venv);
+fn dist_info_version(venv: &Path, name: &str, platform: Platform) -> Option<String> {
     let libs = match platform {
         Platform::Win32 => vec![venv.join("Lib").join("site-packages")],
         Platform::Darwin => {
@@ -199,18 +189,23 @@ fn dist_info_version(venv: &str, name: &str, platform: Platform) -> Option<Strin
     None
 }
 
-pub fn facts(params: &Params) -> Facts {
-    let head = head(&params.real);
-    let owner = venv_owner(&params.real, params.platform);
+pub(super) fn facts(
+    real: &str,
+    command: &str,
+    platform: Platform,
+    at: impl Fn(&str) -> std::path::PathBuf,
+) -> Facts {
+    let head = head(&at(real));
+    let owner = venv_owner(real, platform);
     let installed = match &owner {
         Some(VenvOwner::Pipx { name, venv: dir } | VenvOwner::Uv { name, dir }) => {
-            dist_info_version(dir, name, params.platform)
+            dist_info_version(&at(dir), name, platform)
         }
         None => None,
     };
     Facts {
-        name: command_name(&params.command),
-        script: file_kind(&params.real, head.as_deref()) != Kind::Native,
+        name: command_name(command),
+        script: file_kind(real, head.as_deref()) != Kind::Native,
         owner,
         installed,
         python: head.as_deref().and_then(shebang_python),
@@ -261,7 +256,7 @@ mod tests {
                 None => {}
             }
             let path = file.to_string_lossy();
-            let kind = match file_kind(&path, head(&path).as_deref()) {
+            let kind = match file_kind(&path, head(&file).as_deref()) {
                 Kind::Script => "script",
                 Kind::Native => "native",
                 Kind::Unknown => "unknown",
@@ -300,15 +295,11 @@ mod tests {
                 fs::create_dir_all(file.parent().unwrap()).unwrap();
                 fs::write(file, "").unwrap();
             }
-            let version = dist_info_version(
-                &venv.to_string_lossy(),
-                row[1].as_str().unwrap(),
-                platform(&row[2]),
-            );
+            let version = dist_info_version(&venv, row[1].as_str().unwrap(), platform(&row[2]));
             assert_eq!(version.as_deref(), row[3].as_str(), "case {at}: {row}");
         }
         // A venv that is not there records none, on either layout.
-        let gone = root.join("nope").to_string_lossy().into_owned();
+        let gone = root.join("nope");
         assert_eq!(dist_info_version(&gone, "a", Platform::Darwin), None);
         assert_eq!(dist_info_version(&gone, "a", Platform::Win32), None);
         fs::remove_dir_all(root).unwrap();
@@ -323,11 +314,12 @@ mod tests {
         fs::create_dir_all(venv.join("bin")).unwrap();
         let tool = venv.join("bin").join("mcp-thing");
         fs::write(&tool, "#!/x/python3.12\n").unwrap();
-        let facts = facts(&Params {
-            real: tool.to_string_lossy().into_owned(),
-            command: "MCP-Thing.exe".into(),
-            platform: Platform::Darwin,
-        });
+        let facts = facts(
+            &tool.to_string_lossy(),
+            "MCP-Thing.exe",
+            Platform::Darwin,
+            |s| root.join(s),
+        );
         assert_eq!(facts.name, "mcp-thing");
         assert!(facts.script);
         assert_eq!(facts.installed.as_deref(), Some("0.4.0"));

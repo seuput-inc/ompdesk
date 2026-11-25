@@ -9,10 +9,10 @@
  * (`remote_path_native`): this machine cannot see that disk.
  */
 
-import { existsSync, promises as fsp } from "node:fs";
+import { promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { app, BrowserWindow, clipboard, dialog, type Notification, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, Notification, screen, shell } from "electron";
 import { AUTO_TITLE_EVOLVE_PREF, AUTO_TITLE_PREF } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { DELEGATION_PREF, isDelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
 import { JUDGE_ASSIST_PREF, judgeAssistEnabled } from "../../resources/gui-bridge/modes/judge-assist-contracts";
@@ -33,10 +33,12 @@ import {
 	agentControlEnabled,
 	agentHiddenPaths,
 	isAgentControlTool,
+	parseAgentCloseAnswer,
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
-import { REA_PREF } from "../shared/builtin-mcp";
+import { BOTS_COMMAND, BOTS_FOLDER, type BotsRequest } from "../shared/bots";
+import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
 import {
@@ -85,12 +87,14 @@ import type {
 	IpcRpcCommandPayload,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
+	IpcSessionsArtworkPayload,
 	IpcSessionsDeletePayload,
 	IpcSessionsListPayload,
 	IpcSessionsMessagesPayload,
 	IpcSessionsMovePayload,
 	IpcSessionsRenamePayload,
 	IpcSessionsSearchPayload,
+	IpcSessionsTargetsPayload,
 	IpcSetActiveTabPayload,
 	IpcSetTabViewPayload,
 	IpcSidecarRestartPayload,
@@ -110,8 +114,6 @@ import {
 	type IpcInstallBrowserRelayPayload,
 	type IpcInstallBrowserRelayResult,
 	type IpcSessionsChanged,
-	type RunProgressState,
-	type TrayState,
 } from "../shared/ipc-types";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
@@ -130,7 +132,7 @@ import type {
 import { SCHEDULES_COMMAND, SCHEDULES_LOG, type Schedule, type SchedulesRequest } from "../shared/schedules";
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
-import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../shared/sidebar-projects";
+import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -139,10 +141,11 @@ import {
 	reprobeAgentBrowserStatus,
 } from "./agent-browsers";
 import { AgentControlRuntime, CARD_TIMEOUT_MS } from "./agent-control/host";
-import { appNotification } from "./app-icon";
+import type { AnswerStep } from "./agent-control/target-answer";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
+import { setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -152,16 +155,14 @@ import {
 } from "./checkout-peers";
 import { createControlBackend } from "./control-socket/backend";
 import { controlSocketFailure, startControlSocket } from "./control-socket/index";
-import { ensureDefaultWorkspace } from "./default-workspace";
+import { defaultWorkspace } from "./default-workspace";
 import { deliverOnce } from "./delivery-ledger";
 import { DesktopSlotHost } from "./desktop-slot-host";
 import { savedWorktreesForSpawn } from "./disk/saved-worktrees";
 import { openInExternalEditor } from "./editor";
-import { isOpenableExternalUrl } from "./external-url";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
-import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "./launch-profile-store";
-import { readOriginFacts, readProjectOrigin } from "./local/git/origin";
+import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
 import type { LogWatcher } from "./log-watcher";
@@ -169,31 +170,37 @@ import type { MacPermissions } from "./mac-permissions";
 import { type LocalMachine, type MachineServices, machineFor as pickMachine } from "./machine-services";
 import type { MailAccounts } from "./mail-accounts";
 import type { MediaStreams } from "./media-stream";
-import { createMenu } from "./menu";
 import { modelsPath } from "./models-config";
 import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notification-batch";
-import { createNotifyHandler } from "./notify-triage";
+import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
+import { prefsFile } from "./prefs-store";
 import { registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
 import { runVisualizeTool, VISUALIZE_TOOL, VisualStore } from "./preview/visuals";
-import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, ModelOverrideInputSchema } from "./remote/app-protocol";
+import {
+	decodeBinaryRead,
+	HOST_FS_READ_BINARY_TIMEOUT_MS,
+	ModelOverrideInputSchema,
+	ProjectsCommandParams,
+} from "./remote/app-protocol";
 import type { RemoteDevices } from "./remote/devices";
 import type { LocalHostServices } from "./remote/host-services";
 import { uploadToHost } from "./remote/host-upload";
 import { hostedAutopilot } from "./remote/hosted-autopilot";
 import { RemoteImageReads } from "./remote/image-reads";
-import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
-import { normalizeRuntimeErrorReport, tailLogLines } from "./runtime-log-core";
-import { SafeStore } from "./safe-store";
+import { writeRuntimeLog } from "./runtime-log";
+import { normalizeRuntimeErrorReport } from "./runtime-log-core";
 import { fileNameOf, readRemoteFile, type SaveCopyRemote, saveCopy } from "./save-copy";
 import type { RunProcess, ScheduleService } from "./schedules";
 import type { SessionIndex } from "./session-index";
 import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, renameSession } from "./session-mutations";
 import type { SessionSummaries } from "./session-summaries";
+import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "./session-targets";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
-import { updateSidebarPrefs } from "./sidebar-prefs";
+import { publishLanguage } from "./shell-host/electron/index";
+import { readClipboardText } from "./shell-host/shell-calls";
 import type { SidebarProjects } from "./sidebar-projects";
 import { deviceLanguage } from "./sidecar-factory";
 import type { SidecarPool } from "./sidecar-pool";
@@ -201,20 +208,18 @@ import type { SidecarLike } from "./sidecar-types";
 import { registerSshToolsIpc } from "./ssh/ipc";
 import { markStartupFromRenderer } from "./startup-timing";
 import { stockHelperRequest } from "./stock-helper";
+import { shellEngine } from "./system-version";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
-import { formatTerminalRead, TERMINAL_READ_TOOL } from "./terminal/agent-tool";
+import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
 import { closeTabTerminals, readTabTerminals, registerTerminalIpc } from "./terminal/ipc";
-import { setTrayState } from "./tray";
-import { aggregateProgress, aggregateTrayStatus } from "./tray-labels";
 import { personsPrompt, type RelaunchContinuation, trackMove } from "./turn-resume";
 import { dispatchedCommand, STOP_COMMANDS } from "./turn-stop-log";
 import { appVersion } from "./updater";
 import { type ClientWindow, isWebWindow } from "./web/client-window";
-import { type FileEditReports, parseFileEditReport } from "./web/file-edit-reports";
+import type { FileEditReports } from "./web/file-edit-reports";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
-import { writeDialogPreload } from "./web/preview-dialog";
-import { attachHere, type UploadStore } from "./web/uploads";
+import type { UploadStore } from "./web/uploads";
 import type { SpawnWindow, WindowManager } from "./window";
 import { sanitizeChromeColors, TOP_BAR_HEIGHT } from "./window-chrome";
 import {
@@ -239,6 +244,8 @@ function agentCaller(win: ClientWindow): IpcCaller {
 }
 
 export interface IpcDeps {
+	openPageExternal(url: string): Promise<void>;
+	admitNotification: AdmitNotification;
 	/** What paired web pages report about unsaved Files edits (WebHost forgets a page's report when it drops). */
 	fileEditReports: FileEditReports;
 	/** Where every handler here registers (index.ts's one table). */
@@ -260,6 +267,7 @@ export interface IpcDeps {
 	hostedTabs: Pick<
 		LocalHostServices,
 		| "viewSession"
+		| "showAway"
 		| "summariesChanged"
 		| "remoteOpened"
 		| "onRemoteOpenedChange"
@@ -286,7 +294,7 @@ export interface IpcDeps {
 	spawnWindow: SpawnWindow;
 	/** Where to start when the caller has no cwd. Never the volume root: a
 	 * Finder-launched app's `process.cwd()` is "/", which no session belongs in. */
-	initialCwd: () => string;
+	initialCwd: () => Promise<string>;
 	/** omp's `worktree.onStart` / `worktree.onExit` for this machine's tabs. */
 	worktreeLifecycle: WorktreeLifecycle;
 	/** The questions it asks in the windows. */
@@ -297,15 +305,15 @@ export interface IpcDeps {
 	 * Where a file attached to a prompt of this computer's own tab lands when it has no path here (pasted, dragged out
 	 * of another app): the phones' upload folder (web/uploads.ts), its limits and its 24-hour lifetime.
 	 */
-	uploads?: Pick<UploadStore, "store">;
+	uploads?: Pick<UploadStore, "attachHere" | "goneIn">;
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
-	schedules?: () => Pick<ScheduleService, "command" | "create" | "state" | "prune"> | null;
+	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune"> | null;
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
-	sidebarProjects?: Pick<SidebarProjects, "schedule">;
+	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged">;
 	/**
 	 * Who typed a prompt, for the tabs several windows show (bridge prompt-origin.ts): `of` is the paired
 	 * device a window belongs to (null for a desktop window, whose prompts are the host's own), `hostName`
@@ -318,6 +326,16 @@ export interface IpcDeps {
 	webTabNotice: { current: ((tabId: string, notice: AutopilotNotice) => void) | null };
 	/** Set once the control tools exist: delivers a session's own scheduled wake-up and follows its turn (`ScheduleService`'s `wake`). */
 	sessionWake: { current: ((schedule: Schedule, runId: string) => Promise<RunProcess>) | null };
+	/** Set once the control tools exist: a quiet note (no turn) into a session file on this computer (`ScheduleService`'s `note`). */
+	sessionNote: { current: ((session: string, text: string) => Promise<void>) | null };
+	/** Set once the control tools exist: one of this computer's bots by name for a paired device's agent (`host.bots.home`). */
+	botHome: {
+		current: ((name: string, deviceId: string, deviceName: string) => Promise<{ path: string; name: string }>) | null;
+	};
+	/** Set once the control tools exist: tells a tab's opener what main saw happen to the tab (`AgentControlRuntime.reportFor`). */
+	tabReport: { current: ((tabId: string, report: { kind: "blocked"; text: string; id: string }) => void) | null };
+	/** Set once the control tools exist: an agent is opening a session that has not taken its first message (`AgentControlRuntime.opening`). */
+	agentOpening: { current: (() => boolean) | null };
 	/** The paired web pages' windows: `broadcast` reaches the desktop's own only. */
 	webPages?: () => readonly ClientWindow[];
 	/** The desktop slot's host, built in `registerIpcHandlers` (it needs the pool) and published here for the sidecar factory. */
@@ -451,7 +469,7 @@ const notifyBatchedWindows = new Set<number>();
 /** One OS notification; one about a tab switches to it on click. */
 function showNotification(windowId: number, notice: ShownNotice): { close: () => void } {
 	const win = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.id === windowId);
-	const notification = appNotification({ title: notice.title, body: notice.body });
+	const notification = new Notification({ title: notice.title, body: notice.body });
 	const { tabId } = notice;
 	if (win && tabId) {
 		// Held until clicked or dismissed: a collected Notification drops its click.
@@ -479,18 +497,11 @@ const notificationBatcher = new NotificationBatcher({
 });
 app.once("will-quit", () => notificationBatcher.dispose());
 
-// Per-window tray/progress snapshots, aggregated for the app-global tray/dock.
-const trayStates = new Map<number, TrayState>();
-const progressStates = new Map<number, RunProgressState>();
-
-/** Collapse per-window run-progress to one: any working > waiting > idle. */
-
 export function registerIpcHandlers(deps: IpcDeps): void {
 	const { ipc } = deps;
 	registerTerminalIpc(ipc, deps.sidecarPool, deps.remoteDevices);
 	registerSshToolsIpc(ipc);
 	const visuals = new VisualStore(path.join(app.getPath("userData"), "visuals"));
-	let dialogPreload: string | null = null;
 	const visualPages = registerPreviewHost(
 		ipc,
 		(senderId, tabId) => {
@@ -507,7 +518,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				return tabId ? !target || Boolean(target.device) : Boolean(target?.device);
 			},
 			hostScale: () => screen.getPrimaryDisplay().scaleFactor,
-			preloadPath: () => (dialogPreload ??= writeDialogPreload(app.getPath("userData"))),
 		},
 		// Agent browsing on a paired host's tab: its relay is on the host's loopback, so the frames cross the link.
 		(win, tabId) => {
@@ -520,7 +530,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	/** The same for a window's model setup research. */
 	const remoteModelSetups = new Map<number, string>();
 	const { sidecarPool, sessionIndex, logWatcher, windowManager, remoteDevices } = deps;
-	const prefsStore = new SafeStore<PrefsSchema>({ name: "prefs" });
+	const prefsStore = prefsFile<PrefsSchema>("prefs");
 	const remoteMachine = { request: remoteDevices.request.bind(remoteDevices), statsText: mainT };
 	/**
 	 * Delete a stored session (the sidebar, `/delete`, the control tools): the tab holding it closes. On this computer
@@ -560,11 +570,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		});
 	};
 
-	// Drop a closed window's tray/progress snapshot so the aggregate reflects
-	// only live windows (and re-render the tray with the new aggregate).
+	// A closed window's benchmark and model setup stop with it.
 	windowManager.subscribeWindowClosed(record => {
-		trayStates.delete(record.id);
-		progressStates.delete(record.id);
 		const caller = benchCaller(record.id);
 		void deps.machine.abortBenchmark(caller);
 		const device = remoteBenchmarks.get(record.id);
@@ -585,6 +592,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Sidecar → owning-window event forwarding is wired by SidecarPool at
 	// acquire time. GUI host tools need Electron, so the pool calls this
 	// executor (set once at startup); unknown tools fail with stock's wording.
+	// The control calls being carried out, by device and call id.
+	const runningControlCalls = new Set<string>();
 	sidecarPool.hostToolExecutor = (sidecar, request, tab) => {
 		const reply = (text: string, isError: boolean) =>
 			sidecar.sendSideChannel({
@@ -600,8 +609,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				cwd: sidecar.cwd,
 				device: sidecar.device,
 			};
-			void readTabTerminals(remoteDevices, target).then(
-				snapshots => reply(formatTerminalRead(snapshots, request.arguments), false),
+			void readTabTerminals(remoteDevices, target, request.arguments).then(
+				text => reply(text ?? "The user has no terminal open in this tab's Terminal panel.", false),
 				error =>
 					reply(`Couldn't read the terminals: ${error instanceof Error ? error.message : String(error)}`, true),
 			);
@@ -635,12 +644,18 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return;
 		}
 		if (isAgentControlTool(request.toolName)) {
+			// A paired host re-sends every call still open when its link comes back (host-services.ts `#open`); one this
+			// computer is still carrying out answers when it ends, so the re-send runs nothing.
+			const running = `${sidecar.device ?? ""}\n${request.id}`;
+			if (request.resent === true && runningControlCalls.has(running)) return;
+			runningControlCalls.add(running);
 			void agentControl
 				.run(tab.win, tab.tabId, request.toolName, request.arguments, {
 					id: request.id,
 					resent: request.resent === true,
 				})
 				.then(outcome => {
+					runningControlCalls.delete(running);
 					reply(outcome.text, outcome.isError);
 					// A local omp never re-sends a call; a paired host's result counts once it reached the host
 					// (`hostReplyDelivered`, wired below).
@@ -649,7 +664,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return;
 		}
 		const result = executeGuiHostTool(request.toolName, request.arguments);
-		reply(result ?? `Host tool "${request.toolName}" is not registered`, result === undefined);
+		const settle = (text: string | undefined) =>
+			reply(text ?? `Host tool "${request.toolName}" is not registered`, text === undefined);
+		// The clipboard is read from the shell's process: that one answers later.
+		if (result instanceof Promise)
+			void result.then(settle, (error: unknown) =>
+				reply(error instanceof Error ? error.message : String(error), true),
+			);
+		else settle(result);
 	};
 	// A paired host took a host tool result: a control call's record may now be forgotten in time (call-journal.ts).
 	sidecarPool.hostReplyDelivered = id => agentControl.acknowledge(id);
@@ -701,11 +723,28 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				restore ? WORKTREE_PREPARE_BUDGET_MS : undefined,
 			),
 	};
-
-	// Log lines (batched by LogWatcher)
-	logWatcher.onLines = lines => {
-		broadcast(windowManager, IPC_EVENTS.LOG_LINE, { lines, nextSequence: logWatcher.getSnapshot().nextSequence });
+	/** An agent's open, and a session shown for its absent device, spawn into a window the same way (tab-spawn.ts). */
+	const agentSpawnDeps: Parameters<typeof spawnTabForWindow>[0] = {
+		sidecarPool: deps.sidecarPool,
+		sessionIndex,
+		fallbackCwd: () => null,
+		initialCwd: deps.initialCwd,
+		defaultWorkspace,
+		remote: spawnRemote,
+		hosted: deps.hostedTabs,
+		savedWorktrees: savedWorktreesForSpawn,
 	};
+	// A device's session this computer runs, whose device has been away past the notice, shows in the front window in
+	// the background, so that window carries out the calls the device was never handed (host-services.ts `#takeOver`).
+	deps.hostedTabs.showAway = sessionPath => {
+		const win = windowManager.getTargetWindow();
+		if (!win) return;
+		void spawnTabForWindow(agentSpawnDeps, win, { sessionPath }).catch((error: unknown) =>
+			console.warn(`[host-services] showing a session for its absent device failed: ${String(error)}`),
+		);
+	};
+
+	logWatcher.onLines = batch => broadcast(windowManager, IPC_EVENTS.LOG_LINE, batch);
 
 	// ========================================================================
 	// IPC Command Handlers
@@ -719,38 +758,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	ipc.on(IPC_COMMANDS.RUNTIME_STARTUP_MARK, (_caller, mark: unknown) => markStartupFromRenderer(mark));
 
-	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_PATH, () => runtimeLogPath());
-	// Feedback dialog: last few runtime-error lines for the opt-in diagnostics
-	// block. Tail-read so a large log doesn't have to be parsed end to end.
-	ipc.handle(IPC_COMMANDS.RUNTIME_LOG_TAIL, async (_caller, maxLines: unknown) => {
-		const limit = typeof maxLines === "number" && maxLines > 0 ? Math.min(Math.floor(maxLines), 50) : 20;
-		return tailLogLines(runtimeLogPath(), limit);
-	});
 	ipc.handle(IPC_COMMANDS.LOG_SNAPSHOT, () => logWatcher.getSnapshot());
-
-	// Tray/dock are app-global OS surfaces; with N parallel windows each pushing
-	// its own state, aggregate per-window instead of last-write-wins (which made
-	// the indicator flap with push order) or focus-gating (which let it go
-	// stale). Status aggregates across windows, loudest first
-	// (`aggregateTrayStatus`): an error, a question, an approval, a waiting
-	// child, work going on, a failed check, idle; the displayed blob is the most
-	// recently pushed one, with its status replaced by the aggregate.
-	ipc.on(IPC_EVENTS.TRAY_STATE_PUSH, (caller, state: TrayState) => {
-		const winId = caller.win?.webContents.id;
-		if (winId === undefined) return;
-		trayStates.set(winId, state);
-		const aggregate = aggregateTrayStatus([...trayStates.values()]);
-		setTrayState({ ...state, status: aggregate });
-	});
-
-	// Run-progress (terminal.showProgress): aggregate per-window the same way —
-	// any window waiting on the person → waiting, else any working → working, else idle.
-	ipc.on(IPC_EVENTS.PROGRESS_SET, (caller, state: RunProgressState) => {
-		const winId = caller.win?.webContents.id;
-		if (winId === undefined) return;
-		progressStates.set(winId, state);
-		windowManager.setRunProgress(aggregateProgress([...progressStates.values()]));
-	});
 
 	// Windows title-bar overlay: the caption buttons repaint in the theme's top-bar colors.
 	ipc.on(IPC_EVENTS.WINDOW_CHROME_SET, (caller, value: unknown) => {
@@ -790,6 +798,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const hostName = deps.promptOrigins?.hostName() ?? os.hostname();
 		return { ...page, messages: localizePromptOrigins(page.messages, ownId, hostName) };
 	};
+
+	/** The plan approvals an agent's attachment step sends for the plan it claimed (`TargetAnswer`). */
+	const ownPlanApprovals = new WeakSet<object>();
 
 	const dispatchRpcCommand = async (
 		win: ClientWindow,
@@ -916,6 +927,43 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				};
 			}
 		}
+		// A plan an agent's approval holds (`SidecarPool.claimPlan`) takes no other approve or reject.
+		if (cmd.type === "plan_approval" && issuerTabId) {
+			try {
+				sidecarPool.guardPlan(issuerTabId, ownPlanApprovals.has(payload));
+			} catch (err) {
+				return {
+					id: _id,
+					type: "response",
+					command: cmd.type,
+					success: false,
+					error: err instanceof Error ? err.message : String(err),
+					code: "being_answered",
+				};
+			}
+		}
+		// An answer with attachments is one step where the answered session runs (`target-answer.ts`): this main for its
+		// own tabs; a paired host's tab goes on to that host's main below.
+		if (cmd.type === "agent_control_answer" && !sidecar.device) {
+			if (!issuerTabId)
+				return { id: _id, type: "response", command: cmd.type, success: false, error: "No tab", code: "no_tab" };
+			try {
+				await sidecarPool.targetAnswer.run(issuerTabId, cmd as AnswerStep, (command, own) => {
+					const inner = { ...payload, command };
+					if (own) ownPlanApprovals.add(inner);
+					return dispatchRpcCommand(win, sidecar, issuerTabId, inner, channel);
+				});
+				return { id: _id, type: "response", command: cmd.type, success: true, data: null };
+			} catch (err) {
+				return {
+					id: _id,
+					type: "response",
+					command: cmd.type,
+					success: false,
+					error: err instanceof Error ? err.message : String(err),
+				};
+			}
+		}
 		// The work board's "Changed" row: what the sessions this one opened changed (src/main/agent-control).
 		if (cmd.type === "agent_control_family_edits") {
 			if (!issuerTabId)
@@ -1039,6 +1087,21 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// A prompt from a paired web device names its device to the omp first: the bridge journals it for the
 			// message with that text, so every window can say who typed it.
 			if ((cmd.type === "prompt" || cmd.type === "steer" || cmd.type === "follow_up") && !sidecar.device) {
+				// A prompt naming an attached file that is gone (swept after 24 h, taken) is not sent at all: the draft comes
+				// back and the toast names the file, instead of the agent getting a path that leads nowhere.
+				// Only a text that names an upload waits for the store, so every other one keeps its place in the send order.
+				const asked = channel !== undefined ? deps.uploads?.goneIn(cmd.message, sidecar.cwd) : null;
+				const gone = asked ? await asked : null;
+				if (gone?.length) {
+					return {
+						id: _id,
+						type: "response",
+						command: cmd.type,
+						success: false,
+						error: gone.join(", "),
+						code: "attachment_gone",
+					};
+				}
 				const origin = promptOriginOf(win);
 				if (origin)
 					await client.command({ type: "prompt_origin_set", origin, text: cmd.message }).catch(() => undefined);
@@ -1048,8 +1111,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// one that joins the running turn is answered first (gui-bridge typed-prompts.ts, answer-first.ts).
 			// The same word tells the control tools the person started this tab's turn: cleanups its agent was refused
 			// while the person was in the session are listed to it now (agent-control/pending-cleanups.ts).
-			if (channel !== undefined && issuerTabId && personsPrompt(cmd)) agentControl.personTyped(issuerTabId);
-			if (!sidecar.device && channel !== undefined) await noteTypedPrompt(client, cmd as RpcCommand);
+			if (channel !== undefined && personsPrompt(cmd)) {
+				if (issuerTabId) agentControl.personTyped(issuerTabId);
+				if (!sidecar.device)
+					await noteTypedPrompt(
+						client,
+						cmd as RpcCommand,
+						() => !!issuerTabId && sidecarPool.tabFacts(issuerTabId)?.busy === true,
+					);
+			}
 			// Every Stop leaves one line naming who asked (turn-stop-log.ts); omp gets it without that origin, while a
 			// paired host's tab gets it with, so the host logs it too.
 			const outgoing = dispatchedCommand({ ...cmd, id: _id } as RpcCommand, {
@@ -1087,7 +1157,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if (issuerTabId && response.success) {
 				if (cmd.type === "switch_session") {
 					const cancelled = (response.data as { cancelled?: boolean } | undefined)?.cancelled ?? false;
-					if (!cancelled) sidecarPool.noteSessionFile(issuerTabId, cmd.sessionPath);
+					if (!cancelled) {
+						sidecarPool.noteSessionFile(issuerTabId, cmd.sessionPath);
+						// The tab now holds a saved session, no longer a new one nobody wrote to: TabHousekeeping closes an
+						// unstarted tab left behind while its stores read empty, which a hidden tab still hydrating does.
+						sidecarPool.noteUnstarted(issuerTabId, false);
+					}
 				} else if (cmd.type === "new_session") {
 					const cancelled = (response.data as { cancelled?: boolean } | undefined)?.cancelled ?? false;
 					if (!cancelled) sidecarPool.noteUnstarted(issuerTabId, true);
@@ -1160,7 +1235,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				webPush: (tabId, event) => deps.webTabNotice.current?.(tabId, event),
 				banner: event => {
 					if (prefsStore.get("notifications") !== false)
-						appNotification({ title: event.title, body: event.body }).show();
+						new Notification({ title: event.title, body: event.body }).show();
 				},
 			},
 			host,
@@ -1182,22 +1257,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command,
 				timeoutMs,
 			} as IpcRpcCommandPayload) as Promise<RpcResponse>,
-		spawnTab: (win, payload) =>
-			spawnTabForWindow(
-				{
-					sidecarPool: deps.sidecarPool,
-					sessionIndex,
-					fallbackCwd: () => null,
-					initialCwd: deps.initialCwd,
-					defaultWorkspace: ensureDefaultWorkspace,
-					remote: spawnRemote,
-					hosted: deps.hostedTabs,
-					savedWorktrees: savedWorktreesForSpawn,
-				},
-				win,
-				payload,
-			),
-		prefs: { get: key => prefsStore.get(key) },
+		spawnTab: (win, payload) => spawnTabForWindow(agentSpawnDeps, win, payload),
 		// The host's own banner (batched like any tab notification, notification-batch.ts; a click opens the tab), the
 		// paired device that started the run or shows it (`host.autopilotNotice`) and paired phones (Web Push).
 		notify: (tabId, notice) => {
@@ -1301,7 +1361,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				}
 			return [...members, ...deps.hostedTabs.checkoutMembers()];
 		},
-		place: cwd => readCheckoutPlace(cwd, readOriginFacts),
+		place: readCheckoutPlace,
 		hiddenPaths: () => agentHiddenPaths(prefsStore.get(AGENT_HIDDEN_PREFS_KEY)),
 		gitStatus: readCheckoutClaims,
 	});
@@ -1313,9 +1373,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	).unref();
 	deps.summaries.onChange(refreshCheckoutPeers);
 
+	/** Each tab's last finished reply (the `idle` outcome), for the notify triage's quiet bot turns. */
+	const lastReplies = new Map<string, string>();
 	sidecarPool.observeTabs(activity => {
 		autopilot.observeActivity(activity);
 		desktopSlot.observeActivity(activity);
+		if (activity.type === "idle" && activity.outcome) lastReplies.set(activity.tabId, activity.outcome.reply ?? "");
+		if (activity.type === "released") lastReplies.delete(activity.tabId);
 		if (activity.type === "busy" || activity.type === "idle" || activity.type === "released") refreshCheckoutPeers();
 	});
 
@@ -1329,8 +1393,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// OMPdesk control tools (src/main/agent-control): the same pool, dispatcher, spawn path and notifications the GUI uses.
 	const agentControl: AgentControlRuntime = new AgentControlRuntime({
 		fileEdits: fileEditReports,
-		releaseTab: async (win, tabId, stillReleasable) => {
-			const released = await closeWindowTab(tabRelease, win, tabId, win.webContents.id, stillReleasable);
+		releaseTab: async (win, tabId, unlessDirty, expectedTurn) => {
+			const released = await closeWindowTab(tabRelease, win, tabId, win.webContents.id, unlessDirty, expectedTurn);
 			if (released) sidecarPool.announceClosed(win, tabId);
 			return released;
 		},
@@ -1347,21 +1411,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command,
 				timeoutMs,
 			} as IpcRpcCommandPayload) as Promise<RpcResponse>,
-		spawnTab: (win, payload) =>
-			spawnTabForWindow(
-				{
-					sidecarPool: deps.sidecarPool,
-					sessionIndex,
-					fallbackCwd: () => null,
-					initialCwd: deps.initialCwd,
-					defaultWorkspace: ensureDefaultWorkspace,
-					remote: spawnRemote,
-					hosted: deps.hostedTabs,
-					savedWorktrees: savedWorktreesForSpawn,
-				},
-				win,
-				payload,
-			),
+		spawnTab: (win, payload) => spawnTabForWindow(agentSpawnDeps, win, payload),
 		prefs: {
 			get: key => prefsStore.get(key),
 			set: (key, value) => prefsStore.set(key, value),
@@ -1378,7 +1428,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if (sessionPath) deps.hostedTabs.agentReviewChanged(sessionPath, review);
 		},
 		mailOutboxFile: path.join(app.getPath("userData"), "mail-outbox.json"),
+		botsFile: path.join(app.getPath("userData"), "bots.json"),
+		itemsFile: path.join(app.getPath("userData"), "items.json"),
+		botsRoot: path.join(os.homedir(), BOTS_FOLDER),
+		botsChanged: setBotsState,
 		sendOutboxFile: path.join(app.getPath("userData"), "send-outbox.json"),
+		attachmentsDir: path.join(app.getPath("userData"), "agent-attachments"),
+		uploads: deps.uploads,
 		callJournalFile: path.join(app.getPath("userData"), "agent-control-calls.json"),
 		sessionFatesFile: path.join(app.getPath("userData"), "agent-session-fates.json"),
 		pendingCleanupsFile: path.join(app.getPath("userData"), "agent-pending-cleanups.json"),
@@ -1451,6 +1507,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.summaries.onChange(() => agentControl.control.changed());
 	deps.remoteDevices.onHostOnline(() => agentControl.control.changed());
 	deps.sessionWake.current = (schedule, runId) => agentControl.wakeSession(schedule, runId);
+	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
+	deps.agentOpening.current = () => agentControl.opening();
+	deps.sessionNote.current = (session, text) => agentControl.noteSession(session, text);
+	deps.botHome.current = (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName);
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),
@@ -1574,10 +1634,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (typeof payload.sessionPath !== "string" || !payload.sessionPath.endsWith(".jsonl")) {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
-		if (typeof payload.cwd !== "string" || !path.isAbsolute(payload.cwd)) {
+		const device = deviceOf(payload.device);
+		// The host validates its own absolute paths; a Windows target need not be absolute on the viewing Mac.
+		if (typeof payload.cwd !== "string" || (!device && !path.isAbsolute(payload.cwd))) {
 			throw codedError("not_absolute_path", "Not an absolute path");
 		}
-		const device = deviceOf(payload.device);
 		return moveSession(sidecarPool, payload.sessionPath, device, async () => {
 			if (!device) return sessionIndex.moveSession(payload.sessionPath, payload.cwd);
 			const moved = await remoteDevices.request<string>(device, "sessions.move", {
@@ -1589,13 +1650,26 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		});
 	});
 
+	// What each row's session works in, read on the computer that runs it (session-targets.ts).
+	ipc.handle(IPC_COMMANDS.SESSIONS_TARGETS, async (_caller, payload: IpcSessionsTargetsPayload) => {
+		const params = SessionTargetsParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.targets", params) : sessionTargets(params);
+	});
+
+	ipc.handle(IPC_COMMANDS.SESSIONS_ARTWORK, async (_caller, payload: IpcSessionsArtworkPayload) => {
+		const params = SessionArtworkParams.parse(payload);
+		const device = deviceOf(payload.device);
+		return device ? remoteDevices.request(device, "sessions.artwork", params) : sessionArtwork(params);
+	});
+
 	// Open a session (or a fresh project window) in a NEW parallel window with
 	// its own sidecar. The calling window's sidecar is left running untouched —
 	// this is the explicit parallel action. Returns false when the window's
 	// sidecar cannot be created.
 	// F-OWN: when the session is already attached to a tab, focus the owner
 	// window (win.show()+win.focus() — the codebase's focus pattern, see
-	// deep-link.ts/tray.ts) instead of spawning a second sidecar for the same
+	// tray.ts) instead of spawning a second sidecar for the same
 	// file; resolves true because the session ends up foregrounded either way.
 	// The new window's tab starts on the session file itself (spawnWindow passes it to the pool, `--session`).
 	ipc.handle(IPC_COMMANDS.SESSION_OPEN_NEW_WINDOW, async (caller, payload: IpcSessionOpenNewWindowPayload) => {
@@ -1619,10 +1693,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			kind === "chat"
 				? device
 					? await remoteDefaultWorkspace(device)
-					: ensureDefaultWorkspace()
+					: await defaultWorkspace()
 				: (requested ??
 					cwdOnDevice(deps, caller, device) ??
-					(device ? await remoteDefaultWorkspace(device) : deps.initialCwd()));
+					(device ? await remoteDefaultWorkspace(device) : await deps.initialCwd()));
 		// Its boot switch_session runs in the window's omp, which stock refuses for a session recorded in another
 		// folder: a stored session's window starts where its file says (tab-spawn.ts' rule), never elsewhere.
 		const folder =
@@ -1640,12 +1714,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				"session_folder_missing",
 				`The folder this session belongs in no longer exists: ${folder.folder}`,
 			);
-		return deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device) !== null;
+		return (await deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device)) !== null;
 	});
-
-	// A desktop window starts its tab on its session (spawnWindow), so it has nothing pending; a paired web page
-	// answers this from its own launch link (web/shim.ts `takePendingSessionPath`).
-	ipc.handle(IPC_COMMANDS.SESSION_CONSUME_PENDING, () => null);
 
 	// ========================================================================
 	// Session tabs — in-window parallel sessions. Each tab owns a pooled
@@ -1672,7 +1742,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				sessionIndex,
 				fallbackCwd: device => cwdOnDevice(deps, caller, device),
 				initialCwd: deps.initialCwd,
-				defaultWorkspace: ensureDefaultWorkspace,
+				defaultWorkspace,
 				remote: spawnRemote,
 				hosted: deps.hostedTabs,
 				savedWorktrees: savedWorktreesForSpawn,
@@ -1691,15 +1761,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(IPC_COMMANDS.CLOSE_TAB, async (caller, payload: IpcCloseTabPayload) => {
 		const win = caller.win;
 		if (!win || typeof payload?.tabId !== "string") return false;
-		return closeWindowTab(tabRelease, win, payload.tabId, caller.sender.id);
+		return closeWindowTab(tabRelease, win, payload.tabId, caller.sender.id, undefined, payload.expectedTurn);
 	});
 
-	// A paired web page's Files editor state, which decides whether main may close one of its tabs for an agent. Only a
-	// web page's connection reports (an Electron window closes its own tabs and guards its own edits).
-	ipc.handle(IPC_COMMANDS.FILE_EDIT_REPORT, (caller, ...args: unknown[]) => {
-		const report = parseFileEditReport(args);
-		if (!caller.win || !caller.connId || !report) return;
-		fileEditReports.report(caller.win.webContents.id, caller.connId, report.dirtyTabId);
+	// A window's answer to an agent's close it was asked to make (`AgentControlViewEvent.closeId`).
+	ipc.handle(IPC_COMMANDS.AGENT_CLOSE_ANSWER, (caller, payload: unknown) => {
+		const answer = parseAgentCloseAnswer(payload);
+		if (!caller.win || !answer) return;
+		agentControl.answerClose(caller.win, answer);
 	});
 
 	// The calling window's open `worktree.onStart` / `worktree.onExit` questions.
@@ -1868,8 +1937,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Renderer-initiated quit (the `quit` command). Straight to the guard, never
 	// `window.close()`: closing the focused window only hides the rest of the
 	// session behind it.
-	ipc.on(IPC_COMMANDS.APP_QUIT, () => {
-		requestQuit();
+	ipc.on(IPC_COMMANDS.APP_QUIT, caller => {
+		requestQuit("command", caller.connId ? { detail: "from a paired device" } : undefined);
 	});
 
 	// System
@@ -1879,12 +1948,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		arch: process.arch,
 		deviceLanguage: deviceLanguage() ?? null,
 		osRelease: os.release(),
-		electron: process.versions.electron ?? "?",
+		electron: shellEngine(),
 		chrome: process.versions.chrome ?? "?",
 		node: process.versions.node ?? "?",
 	}));
 	ipc.handle(IPC_COMMANDS.SYSTEM_OPEN_EXTERNAL, async (_caller, url: unknown) => {
-		if (isOpenableExternalUrl(url)) await shell.openExternal(url);
+		if (typeof url === "string") await deps.openPageExternal(url);
 	});
 
 	// Tool-card and reply path links: open in the system editor, or reveal the
@@ -1910,64 +1979,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 	);
 
-	ipc.handle(
-		IPC_COMMANDS.SYSTEM_SAVE_DIALOG,
-		async (caller, defaultPath?: string, filters?: { name: string; extensions: string[] }[]) => {
-			const win = caller.browserWindow;
-			if (!win) return null;
-			const result = await dialog.showSaveDialog(win, {
-				defaultPath: defaultPath ?? "session.html",
-				filters: filters ?? [{ name: "HTML", extensions: ["html"] }],
-			});
-			return result.canceled ? null : (result.filePath ?? null);
-		},
-	);
-
-	ipc.handle(IPC_COMMANDS.SYSTEM_SAVE_IMAGE, async (caller, defaultName: string, mimeType: string, data: string) => {
-		const win = caller.browserWindow;
-		if (!win) return { saved: false };
-		const extension =
-			mimeType
-				.split("/")[1]
-				?.split(/[+;]/)[0]
-				?.replace("jpeg", "jpg")
-				.replace(/[^a-z0-9]/gi, "") || "png";
-		const result = await dialog.showSaveDialog(win, {
-			defaultPath: path.basename(defaultName) || `image.${extension}`,
-			filters: [{ name: "Image", extensions: [extension] }],
-		});
-		if (result.canceled || !result.filePath) return { saved: false };
-		try {
-			await fsp.writeFile(result.filePath, Buffer.from(data, "base64"));
-			return { saved: true };
-		} catch (error) {
-			return { saved: false, error: error instanceof Error ? error.message : String(error) };
-		}
-	});
-
-	ipc.handle(
-		IPC_COMMANDS.SYSTEM_OPEN_DIALOG,
-		async (
-			caller,
-			filters?: { name: string; extensions: string[] }[],
-			options?: { directory?: boolean; title?: string; buttonLabel?: string },
-		) => {
-			const win = caller.browserWindow;
-			if (!win) return null;
-			const result = await dialog.showOpenDialog(win, {
-				properties: options?.directory ? ["openDirectory", "createDirectory"] : ["openFile", "multiSelections"],
-				filters: filters ?? [],
-				title: options?.title,
-				buttonLabel: options?.buttonLabel,
-				// macOS sheet header; the panel's own "New Folder" button creates the project folder.
-				message: options?.title,
-			});
-			return result.canceled ? null : result.filePaths;
-		},
-	);
-
-	// Repeat filter and the judge triage of a completion (notify-triage.ts); main hands the notice on.
+	// The shell admits one reporter; only main can ask that window's local sidecar and deliver to its batch.
 	const notifyHandler = createNotifyHandler({
+		admit: deps.admitNotification,
 		now: Date.now,
 		isShared: tabId => sidecarPool.isShared(tabId),
 		judgeEnabled: () => judgeAssistEnabled(prefsStore.get(JUDGE_ASSIST_PREF)),
@@ -1977,21 +1991,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 		needsYouTitle: title => mainT("notify.needsInput", undefined, { title }),
 		deliver: (win, winId, notice) => {
-			if (win && !notifyBatchedWindows.has(winId)) {
+			if (win && !win.isDestroyed() && !notifyBatchedWindows.has(winId)) {
 				notifyBatchedWindows.add(winId);
 				win.once("closed", () => {
 					notifyBatchedWindows.delete(winId);
 					notificationBatcher.dropWindow(winId);
 				});
 			}
-			// Bursts fold into one summary (notification-batch.ts).
-			notificationBatcher.notify(winId, {
-				title: notice.title,
-				body: notice.body,
-				tabId: notice.tabId,
-				kind: notice.kind,
-			});
+			notificationBatcher.notify(winId, notice);
 		},
+		lastTurn: tabId => ({ cwd: sidecarPool.sidecarOf(tabId)?.cwd, reply: lastReplies.get(tabId) }),
 	});
 	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, (caller, payload: IpcNotifyPayload) => notifyHandler(caller, payload));
 
@@ -2068,11 +2077,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// Same path as Settings' own control: store, then push to the live sessions.
 			return deps.machine.setAccountRotation(payload.value).then(() => prefChanged(caller.win, payload.key));
 		}
-		if (payload.key === REA_PREF) {
-			if (typeof payload.value !== "boolean")
-				throw codedError("invalid_preference_key", "Invalid built-in REA preference");
-			return deps.machine.setBuiltinRea(payload.value).then(() => prefChanged(caller.win, payload.key));
-		}
 		if (payload.key === LOCAL_ENGINE_DETECT_PREF) {
 			if (typeof payload.value !== "boolean") {
 				throw codedError("invalid_preference_key", "Invalid local engine detection preference");
@@ -2120,7 +2124,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			remoteDevices.hostJudgeAssistChanged();
 		}
 		if (payload.key === "language" && isUiLanguage(payload.value)) {
-			createMenu(windowManager, deps.spawnWindow);
+			publishLanguage(payload.value);
 		}
 		if (payload.key === AGENT_CONTROL_PREF)
 			for (const sidecar of sidecarPool.allSidecars()) if (!sidecar.device) sidecar.syncHostTools();
@@ -2129,21 +2133,20 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	ipc.handle(IPC_COMMANDS.PREFS_UPDATE_SIDEBAR, (caller, payload: unknown) => {
 		const from = caller.win && isWebWindow(caller.win.webContents.id) ? "web" : "window";
-		updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog);
+		const { change, log } = prefsStore.updateSidebar(payload, from);
+		if (log) writeRuntimeLog(log);
+		if (change && change.op !== "touch-workspace" && change.op !== "set-rail-pin" && change.op !== "set-group-alias")
+			deps.sidebarProjects?.layoutChanged();
 		prefChanged(caller.win, SIDEBAR_PREFS_KEY);
 	});
 
 	// Launch profiles live with the machine that spawns omp: a tab's paired
 	// host keeps its own.
-	const launchProfilePrefs: LaunchProfilePrefs = {
-		get: key => prefsStore.get(key),
-		set: (key, value) => prefsStore.set(key, value),
-	};
 	ipc.handle(IPC_COMMANDS.PREFS_GET_LAUNCH_PROFILE, (_caller, payload: IpcGetLaunchProfilePayload) => {
 		const device = deviceOf(payload?.device);
 		return device
 			? remoteDevices.request(device, "launchProfile.get", { cwd: payload.cwd })
-			: readLaunchProfile(launchProfilePrefs, payload?.cwd);
+			: prefsStore.launchProfile(payload?.cwd);
 	});
 	const syncDefaultBrowserEverywhere = (): void => {
 		for (const sidecar of sidecarPool.allSidecars()) if (!sidecar.device) sidecar.syncDefaultBrowser();
@@ -2180,7 +2183,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const device = deviceOf(payload?.device);
 		return device
 			? remoteDevices.request(device, "launchProfile.update", { cwd: payload.cwd, patch: payload.patch })
-			: updateLaunchProfile(launchProfilePrefs, payload?.cwd, payload?.patch);
+			: prefsStore.updateLaunchProfile(payload?.cwd, payload?.patch);
 	});
 
 	// Sidecar control
@@ -2262,7 +2265,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	ipc.handle(IPC_COMMANDS.SIDECAR_DEFAULT_WORKSPACE, (_caller, device?: unknown) => {
 		const host = deviceOf(device);
-		return host ? remoteDefaultWorkspace(host) : ensureDefaultWorkspace();
+		return host ? remoteDefaultWorkspace(host) : defaultWorkspace();
 	});
 
 	// models.yml custom providers of the machine the caller's focused tab runs on.
@@ -2318,11 +2321,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return machineFor(caller, device).setAccountRotation(mode);
 	});
 
-	ipc.handle(IPC_COMMANDS.BUILTIN_REA_GET, (caller, device?: unknown) => machineFor(caller, device).builtinRea());
-	ipc.handle(IPC_COMMANDS.BUILTIN_REA_SET, (caller, enabled: unknown, device?: unknown) => {
-		if (typeof enabled !== "boolean") throw codedError("invalid_preference_key", "Invalid built-in REA preference");
-		return machineFor(caller, device).setBuiltinRea(enabled);
-	});
 	ipc.handle(IPC_COMMANDS.LOCAL_ENGINES_GET, (caller, device?: unknown) =>
 		machineFor(caller, device).localEngineDetect(),
 	);
@@ -2349,10 +2347,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(IPC_COMMANDS.HOST_OMP_UPDATE_NOW, (caller, device?: unknown) =>
 		machineFor(caller, device).startOmpUpdate(),
 	);
+	// The bridge self-check's latest result per omp version: this computer's, or the paired host's own (omp.bridge_health).
+	ipc.handle(BRIDGE_HEALTH_GET, (caller, device?: unknown) => machineFor(caller, device).bridgeHealth());
 	// Settings › Schedules on the machine the caller's focused tab runs on: a paired host runs its own schedules.
 	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");
 		return machineFor(caller, device).schedules(request as SchedulesRequest);
+	});
+	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
+	ipc.handle(BOTS_COMMAND, (_caller, request: unknown) => {
+		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
+		return agentControl.bots(request as BotsRequest);
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
 	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {
@@ -2376,26 +2381,18 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	// The sidebar's project list of the machine a section shows: this computer's, or a paired host's own.
 	ipc.handle(SIDEBAR_PROJECTS_COMMAND, (caller, request: unknown, device?: unknown) => {
-		if (typeof request !== "object" || request === null) throw new Error("Invalid project list request");
-		const { action, path } = request as { action?: unknown; path?: unknown };
-		if (action === "get") return machineFor(caller, device).sidebarProjects({ action });
-		if ((action === "add" || action === "remove") && typeof path === "string" && path.length > 0)
-			return machineFor(caller, device).sidebarProjects({ action, path } satisfies SidebarProjectsRequest);
-		throw new Error("Invalid project list request");
+		const params = ProjectsCommandParams.parse({ request });
+		return machineFor(caller, device).sidebarProjects(params.request);
 	});
 
 	// "Edit config" — open the agent's models.yml in the system editor. The
-	// file is created with a minimal skeleton when missing so there is always
+	// core creates it with a minimal skeleton when missing so there is always
 	// something to edit; when no editor association exists, reveal it in the
 	// file manager instead. A paired host's file is out of this editor's reach:
 	// its providers are edited in-app.
 	ipc.handle(IPC_COMMANDS.MODELS_CONFIG_OPEN, async (_caller, device?: unknown) => {
 		if (deviceOf(device)) throw codedError("remote_path_native", "The models file is on another device");
-		const file = modelsPath();
-		if (!existsSync(file)) {
-			await fsp.mkdir(path.dirname(file), { recursive: true });
-			await fsp.writeFile(file, "# Custom model providers.\nproviders: {}\n", "utf8");
-		}
+		const file = await modelsPath({ create: true });
 		const openError = await shell.openPath(file);
 		if (openError) shell.showItemInFolder(file);
 		return { path: file, opened: !openError };
@@ -2639,20 +2636,29 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 					return { ok: false, error: "This tab runs on this computer", code: "invalid_path" };
 				if (!deps.uploads)
 					return { ok: false, error: "This computer does not take attached files", code: "unsupported" };
-				return attachHere(deps.uploads, payload.name, data);
+				return deps.uploads.attachHere(payload.name, data);
 			}
 			const device = target.device;
-			return uploadToHost(
-				(method, params, timeoutMs) =>
-					remoteDevices.request(
-						device,
-						method,
-						{ ...params, rtab: target.tabId, cwd: target.sidecar.cwd },
-						timeoutMs,
-					),
-				payload.name,
-				data,
-			);
+			// A window that closes stops what it attached (host-upload.ts): waiting files are never sent.
+			const closed = new AbortController();
+			const abort = () => closed.abort();
+			caller.win?.once("closed", abort);
+			try {
+				return await uploadToHost(
+					(method, params, timeoutMs) =>
+						remoteDevices.request(
+							device,
+							method,
+							{ ...params, rtab: target.tabId, cwd: target.sidecar.cwd },
+							timeoutMs,
+						),
+					payload.name,
+					data,
+					closed.signal,
+				);
+			} finally {
+				caller.win?.removeListener("closed", abort);
+			}
 		},
 	);
 
@@ -2727,6 +2733,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Remote devices — this computer as a host, and the hosts it is paired with.
 	// ========================================================================
 	ipc.handle(IPC_COMMANDS.REMOTE_GET_STATE, () => remoteDevices.state());
+	ipc.handle(IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER, (_caller, order: unknown) =>
+		remoteDevices.setDeviceSectionOrder(order),
+	);
 	ipc.handle(IPC_COMMANDS.REMOTE_SET_HOST_ENABLED, (_caller, enabled: unknown) =>
 		remoteDevices.setHostEnabled(enabled === true),
 	);
@@ -2800,7 +2809,7 @@ function textToolResult(text: string): { content: Array<{ type: "text"; text: st
 }
 
 /** Execute GUI-registered host tools. Returns undefined for unknown tools. */
-function executeGuiHostTool(name: string, args: Record<string, unknown>): string | undefined {
+function executeGuiHostTool(name: string, args: Record<string, unknown>): string | undefined | Promise<string> {
 	switch (name) {
 		case "gui_open_url": {
 			const url = typeof args.url === "string" ? args.url : "";
@@ -2813,11 +2822,11 @@ function executeGuiHostTool(name: string, args: Record<string, unknown>): string
 		case "gui_notify": {
 			const title = typeof args.title === "string" ? args.title : "Notification";
 			const body = typeof args.body === "string" ? args.body : "";
-			appNotification({ title, body }).show();
+			new Notification({ title, body }).show();
 			return "Notification shown";
 		}
 		case "gui_clipboard_read": {
-			return clipboard.readText();
+			return readClipboardText();
 		}
 		default:
 			return undefined;

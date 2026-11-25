@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
 	DESKTOP_SLOT_LEASE_MS,
 	type DesktopSlotReason,
 	type DesktopSlotState,
 } from "../../resources/gui-bridge/desktop-slot-contracts";
+import { stopCore } from "./core/process";
 import { DESKTOP_SLOT_REVOKE_RETRY_MS, DESKTOP_SLOT_REVOKE_TIMEOUT_MS, DesktopSlot } from "./desktop-slot";
 
 /** A clock and timers the test advances by hand. */
@@ -55,6 +56,13 @@ interface Revoke {
 	reject: (error: Error) => void;
 }
 
+const slots = new Set<DesktopSlot>();
+afterEach(() => {
+	for (const slot of slots) slot.dispose();
+	slots.clear();
+});
+afterAll(stopCore);
+
 function setup(options: { autoRevoke?: boolean } = {}) {
 	const time = new ManualTime();
 	const log: string[] = [];
@@ -84,6 +92,7 @@ function setup(options: { autoRevoke?: boolean } = {}) {
 			return promise;
 		},
 	});
+	slots.add(slot);
 	return { slot, time, log, grants, revokes, kills, states };
 }
 
@@ -494,6 +503,21 @@ describe("DesktopSlot", () => {
 			"b|",
 			"-|",
 		]);
+	});
+
+	it("restores a pending revoke after core replacement without granting either holder twice", async () => {
+		const { slot, grants, revokes } = setup();
+		slot.acquire("a", "a1");
+		slot.acquire("b", "b1");
+		const stopped = slot.stop("a");
+		await stopCore();
+		slot.touch("b");
+		expect(holderOf(slot)).toBe("a");
+		expect(queueOf(slot)).toEqual(["b"]);
+		revokes[0]?.resolve();
+		await stopped;
+		expect(grants.map(grant => grant.requestId)).toEqual(["a1", "b1"]);
+		expect(holderOf(slot)).toBe("b");
 	});
 
 	it("stops its timers on dispose", () => {

@@ -68,8 +68,6 @@ const baseProps: ComposerToolbarProps = {
 	dictationPhase: "idle",
 	onMic: () => {},
 	onStopAndSend: () => {},
-	followUp: false,
-	onToggleSendMode: () => {},
 	stoppable: false,
 	hasDraft: false,
 	sendDisabled: true,
@@ -137,13 +135,12 @@ describe("phone toolbar", () => {
 		expect(slot("send").querySelector("button")?.hasAttribute("disabled")).toBe(true);
 	});
 
-	it("keeps focus in the field: +, Send, Stop, the lane chip and the mic cancel their mousedown", async () => {
+	it("keeps focus in the field: +, Send, Stop and the mic cancel their mousedown", async () => {
 		useSettingsStore.setState({ sttEnabled: true });
 		useSessionStore.setState({ isStreaming: true });
 		await render({ stoppable: true, hasDraft: true, sendDisabled: false });
 		expect(await cancelsMouseDown(q(".omp-composer-scroll > :first-child, [aria-haspopup='menu']"))).toBe(true);
 		expect(await cancelsMouseDown(slot("send").querySelector("button"))).toBe(true);
-		expect(await cancelsMouseDown(q("[data-send-mode]"))).toBe(true);
 		// Empty draft: the button is Stop and the mic moves into the row.
 		await render({ stoppable: true, hasDraft: false, sendDisabled: true });
 		const stop = slot("send").querySelector("button");

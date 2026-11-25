@@ -16,8 +16,8 @@
  *   (`onResync`, with the cause). A host that dropped stream pushes while the page was hidden sends `hello` again on its return.
  * - Liveness: while the page is seen, 5 s without a frame from the host makes it ask (`ping`); a question left
  *   unanswered 2.5 s means the link is dead, and the page drops it and reconnects. A socket that went silent (a
- *   network change, a route that died) used to hold the page stale for up to a minute. A tick that fires late (the
- *   phone slept) asks at once instead of judging. The host pings every 20 s on its side.
+ *   network change, a route that died) used to hold the page stale for up to a minute. A late tick (the phone
+ *   slept) gives the host one fresh chance to answer, not another on every tick. The host pings every 20 s.
  * - Acks: the last event `seq` applied goes back, coalesced; the host resumes only a connection fully acknowledged.
  * - Calls made while the link is down wait for it (up to `connectWaitMs`); calls in flight when it drops fail.
  */
@@ -173,8 +173,9 @@ export class WsTransport implements OmpTransport {
 	#ackedSeq = 0;
 	#lastInbound = 0;
 	#lastTick = 0;
-	/** When the page asked the host whether the link works (`ping`) and has had no frame since; null otherwise. */
-	#askedAt: number | null = null;
+	#presenceVisible = true;
+	/** An unanswered ping. A ping sent after sleep gets no further extension without a host frame. */
+	#probe: { sentAt: number; afterSleep: boolean } | null = null;
 	#features: WebFeatures | null = null;
 	#grants: readonly WebPermission[] | null = null;
 	#hostBuild: string | null = null;
@@ -249,6 +250,9 @@ export class WsTransport implements OmpTransport {
 
 	/** Tell the host whether the page is visible (it stops full streams for a hidden one). */
 	setPresence(visible: boolean): void {
+		// A probe sent before or during the hidden interval has not had a foreground window to be answered.
+		if (visible && !this.#presenceVisible) this.#probe = null;
+		this.#presenceVisible = visible;
 		this.#send({ t: "presence", visible });
 	}
 
@@ -341,9 +345,13 @@ export class WsTransport implements OmpTransport {
 		const attempt: Attempt = { abort: new AbortController(), startedAt: this.#now() };
 		this.#attempt = attempt;
 		const giveUp = this.#after(this.#ticketMs, () => attempt.abort.abort());
-		let ticket: string;
+		let socket: WsLike;
 		try {
-			ticket = await untilAborted(this.#options.fetchTicket(attempt.abort.signal), attempt.abort.signal);
+			const ticket = await untilAborted(this.#options.fetchTicket(attempt.abort.signal), attempt.abort.signal);
+			if (this.#attempt !== attempt || !this.#started) return;
+			const protocols = ["ompdesk.v1", `ticket.${ticket}`];
+			if (this.#everConnected && this.#connId) protocols.push(`resume.${this.#connId}`);
+			socket = this.#options.createSocket(this.#options.url, protocols);
 		} catch (error) {
 			// An attempt `wake()` or `close()` abandoned is over: whatever replaced it goes on.
 			if (this.#attempt !== attempt) return;
@@ -357,10 +365,6 @@ export class WsTransport implements OmpTransport {
 		} finally {
 			this.#clearTimer(giveUp);
 		}
-		if (this.#attempt !== attempt || !this.#started) return;
-		const protocols = ["ompdesk.v1", `ticket.${ticket}`];
-		if (this.#everConnected && this.#connId) protocols.push(`resume.${this.#connId}`);
-		const socket = this.#options.createSocket(this.#options.url, protocols);
 		this.#socket = socket;
 		socket.onmessage = event => {
 			if (this.#socket === socket) this.#receive(event.data);
@@ -404,7 +408,7 @@ export class WsTransport implements OmpTransport {
 		}
 		if (!isServerFrame(frame)) return;
 		this.#lastInbound = this.#now();
-		this.#askedAt = null;
+		this.#probe = null;
 		for (const resolve of this.#heard) resolve();
 		this.#heard.clear();
 		switch (frame.t) {
@@ -458,10 +462,10 @@ export class WsTransport implements OmpTransport {
 		this.#ackedSeq = 0;
 		this.#lastInbound = this.#now();
 		this.#lastTick = this.#lastInbound;
-		this.#askedAt = null;
+		this.#probe = null;
 		this.#setState("open");
 		this.#startLiveness();
-		this.#send({ t: "presence", visible: this.#options.isVisible?.() ?? true });
+		this.setPresence(this.#options.isVisible?.() ?? true);
 		const waiting = [...this.#waiting];
 		this.#waiting.clear();
 		for (const entry of waiting) {
@@ -491,8 +495,9 @@ export class WsTransport implements OmpTransport {
 		this.#socket.send(JSON.stringify(frame));
 	}
 
-	#ask(): void {
-		this.#askedAt = this.#now();
+	#ask(afterSleep = false): void {
+		if (this.#probe && !afterSleep) return;
+		this.#probe = { sentAt: this.#now(), afterSleep };
 		this.#send({ t: "ping" });
 	}
 
@@ -505,14 +510,17 @@ export class WsTransport implements OmpTransport {
 			this.#lastTick = now;
 			// A hidden page judges nothing (the host sends it little, and its timers are throttled); `wake()` asks on its return.
 			if (this.#options.isVisible?.() ?? true) {
-				if (late) {
-					// The timer was starved (the phone slept): the silence says nothing yet, the answer will.
-					this.#ask();
-				} else if (this.#askedAt !== null && now - this.#askedAt >= this.#answerMs) {
-					this.#drop(4000, "no answer");
-					return;
-				} else if (this.#askedAt === null && now - this.#lastInbound >= this.#quietMs) {
-					this.#ask();
+				const probe = this.#probe;
+				if (probe) {
+					if (now - probe.sentAt >= this.#answerMs) {
+						if (!late || probe.afterSleep) {
+							this.#drop(4000, "no answer");
+							return;
+						}
+						this.#ask(true);
+					}
+				} else if (late || now - this.#lastInbound >= this.#quietMs) {
+					this.#ask(late);
 				}
 			}
 			this.#livenessTimer = this.#after(LIVENESS_TICK_MS, tick);
@@ -541,7 +549,7 @@ export class WsTransport implements OmpTransport {
 	#ended(code: number): void {
 		this.#ready = false;
 		this.#attempt = null;
-		this.#askedAt = null;
+		this.#probe = null;
 		this.#clearTimer(this.#helloTimer);
 		this.#clearTimer(this.#livenessTimer);
 		this.#clearTimer(this.#ackTimer);

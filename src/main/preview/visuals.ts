@@ -13,8 +13,6 @@
  * and never outside it.
  */
 
-import { createHash, randomBytes } from "node:crypto";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
 import {
@@ -25,55 +23,16 @@ import {
 	VISUAL_SCHEME,
 } from "../../shared/preview";
 import type { HostToolDefinition } from "../../shared/rpc-types";
-import { writeFileAtomic } from "../atomic-file";
-import { type PreviewImage, type PreviewVerdict, previewHint } from "./preview-check";
+import { core } from "../core/process";
+import { type PreviewCheckOutcome, type PreviewImage, type PreviewVerdict, previewHint } from "./preview-check";
 import { parseVisualUrl } from "./visual-navigation";
 
 export const VISUALIZE_TOOL = "gui_visualize";
 /** Visuals one tab keeps open at once. */
 const TAB_VISUALS = 8;
-const MAX_VERSIONS = 20;
-const MAX_RECORDS = 100;
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const CHOICE_DEFAULT_SECONDS = 120;
 const CHOICE_MAX_SECONDS = 600;
-
-/** Files the preview can show as a visual's entry, with the type they are served as. */
-const ENTRY_TYPES: Record<string, string> = {
-	".html": "text/html",
-	".htm": "text/html",
-	".svg": "image/svg+xml",
-	".png": "image/png",
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif": "image/gif",
-	".webp": "image/webp",
-	".avif": "image/avif",
-	".txt": "text/plain",
-};
-/**
- * The only files a page's other requests may read (by extension); hidden paths (`.env`, `.git/…`) and
- * every other type are refused, so a page can load its assets but not the project's secrets.
- */
-const ASSET_TYPES: Record<string, string> = {
-	...ENTRY_TYPES,
-	".css": "text/css",
-	".js": "text/javascript",
-	".mjs": "text/javascript",
-	".json": "application/json",
-	".ico": "image/x-icon",
-	".woff": "font/woff",
-	".woff2": "font/woff2",
-	".ttf": "font/ttf",
-	".otf": "font/otf",
-	".mp4": "video/mp4",
-	".webm": "video/webm",
-	".mp3": "audio/mpeg",
-	".wav": "audio/wav",
-	".wasm": "application/wasm",
-	".md": "text/plain",
-};
 
 /**
  * The policy on every `omp-visual:` response. A visual's page loads only from its own origin (the entry and
@@ -145,91 +104,65 @@ const argsSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("close"), visual: z.string() }),
 ]);
 
-interface VisualVersionRecord {
-	version: number;
-	createdAt: number;
-	/** Snapshot file name in the visual's folder; "" for a web address. */
-	file: string;
-	hash: string;
-}
-interface VisualRecord {
-	id: string;
-	label: string;
-	kind: "file" | "inline" | "url";
-	/** Absolute file path or web address ("" inline). */
-	target: string;
-	cwd: string;
-	/** Folder its other files load from (the tab folder, or the visual's own for inline HTML). */
-	root: string;
-	/** The entry's path under `root`, `/`-separated. */
+interface CatalogItem {
+	record: PreviewVisualRecord;
 	entry: string;
-	createdAt: number;
-	updatedAt: number;
-	versions: VisualVersionRecord[];
+	latest: number;
+	versions: PreviewVisualView["versions"];
 }
 
-const recordSchema: z.ZodType<VisualRecord> = z.object({
-	id: z.string().regex(/^[0-9a-f]{16}$/),
-	label: z.string(),
-	kind: z.enum(["file", "inline", "url"]),
-	target: z.string(),
-	cwd: z.string(),
-	root: z.string(),
-	entry: z.string(),
-	createdAt: z.number(),
-	updatedAt: z.number(),
-	versions: z.array(z.object({ version: z.number(), createdAt: z.number(), file: z.string(), hash: z.string() })),
-});
+interface OpenInput {
+	target?: string;
+	html?: string;
+	label?: string;
+	visual?: string;
+}
+
+interface OpenResult {
+	record: PreviewVisualRecord;
+	version: number;
+	added: boolean;
+}
 
 class VisualError extends Error {}
 
-const inside = (root: string, candidate: string) => {
-	const relative = path.relative(root, candidate);
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-};
+interface VisualFile {
+	file: string;
+	type: string;
+}
 
 /** The visuals of this computer: records on disk, which tabs show which, and file serving for the scheme. */
 export class VisualStore {
 	readonly #dir: string;
-	#records: VisualRecord[] = [];
+	#items: CatalogItem[] = [];
 	readonly #byTab = new Map<string, string[]>();
 	#loaded: Promise<void> | null = null;
+	#opening = Promise.resolve();
 
 	constructor(dir: string) {
 		this.#dir = dir;
 	}
 
 	#load(): Promise<void> {
-		this.#loaded ??= fs
-			.readFile(path.join(this.#dir, "history.json"), "utf8")
-			.then(text => {
-				const parsed = z.array(recordSchema).safeParse(JSON.parse(text));
-				if (parsed.success) this.#records = parsed.data;
+		this.#loaded ??= core()
+			.call<CatalogItem[]>("visual.history", { dir: this.#dir })
+			.then(({ result }) => {
+				this.#items = result;
 			})
-			.catch(() => {});
+			.catch(error => {
+				this.#loaded = null;
+				throw error;
+			});
 		return this.#loaded;
 	}
 
-	async #save(): Promise<void> {
-		await writeFileAtomic(path.join(this.#dir, "history.json"), JSON.stringify(this.#records));
-	}
-
-	#record(id: string): VisualRecord | undefined {
-		return this.#records.find(record => record.id === id);
+	#item(id: string): CatalogItem | undefined {
+		return this.#items.find(item => item.record.id === id);
 	}
 
 	async list(): Promise<PreviewVisualRecord[]> {
 		await this.#load();
-		return this.#records.map(record => ({
-			id: record.id,
-			label: record.label,
-			kind: record.kind,
-			target: record.target,
-			cwd: record.cwd,
-			createdAt: record.createdAt,
-			updatedAt: record.updatedAt,
-			versions: record.versions.length,
-		}));
+		return this.#items.map(item => item.record);
 	}
 
 	forTab(tabId: string): string[] {
@@ -239,7 +172,7 @@ export class VisualStore {
 	/** Show a visual from "All visuals" in `tabId` too. */
 	async addToTab(tabId: string, id: string): Promise<boolean> {
 		await this.#load();
-		if (!this.#record(id)) return false;
+		if (!this.#item(id)) return false;
 		const ids = this.#byTab.get(tabId) ?? [];
 		if (!ids.includes(id)) this.#byTab.set(tabId, [...ids, id].slice(-TAB_VISUALS));
 		return true;
@@ -257,25 +190,26 @@ export class VisualStore {
 	}
 
 	view(id: string, version?: number): PreviewVisualView | null {
-		const record = this.#record(id);
-		if (!record) return null;
-		const latest = record.versions.at(-1)?.version ?? 0;
+		const item = this.#item(id);
+		if (!item) return null;
 		return {
 			id,
-			label: record.label,
-			version: version && record.versions.some(entry => entry.version === version) ? version : latest,
-			versions:
-				record.kind === "url" ? [] : record.versions.map(({ version, createdAt }) => ({ version, createdAt })),
+			label: item.record.label,
+			version: this.#shown(item, version),
+			versions: item.versions,
 		};
+	}
+
+	#shown(item: CatalogItem, version?: number): number {
+		return version && item.versions.some(v => v.version === version) ? version : item.latest;
 	}
 
 	/** The address a page loads for `version` (default latest). */
 	url(id: string, version?: number): string | null {
-		const record = this.#record(id);
-		if (!record) return null;
-		if (record.kind === "url") return record.target;
-		const shown = this.view(id, version)?.version ?? 0;
-		return `${VISUAL_SCHEME}://v${shown}-${id}/${record.entry.split("/").map(encodeURIComponent).join("/")}`;
+		const item = this.#item(id);
+		if (!item) return null;
+		if (item.record.kind === "url") return item.record.target;
+		return `${VISUAL_SCHEME}://v${this.#shown(item, version)}-${id}/${item.entry.split("/").map(encodeURIComponent).join("/")}`;
 	}
 
 	/** Which visual and version an `omp-visual:` address names, or null. */
@@ -284,167 +218,105 @@ export class VisualStore {
 	}
 
 	/** The file an `omp-visual:` request reads, or null (unknown visual, outside its folder, missing). */
-	async resolve(url: string): Promise<{ file: string; type: string } | null> {
+	async resolve(url: string): Promise<VisualFile | null> {
+		return (await this.#file(url, false))?.result ?? null;
+	}
+
+	async #file(url: string, bytes: boolean) {
 		await this.#load();
 		const named = this.parse(url);
-		const record = named && this.#record(named.id);
-		if (!named || !record || record.kind === "url") return null;
+		if (!named) return null;
 		let relative: string;
 		try {
 			relative = decodeURIComponent(new URL(url).pathname).replace(/^\/+/, "");
 		} catch {
 			return null;
 		}
-		if (relative === record.entry) {
-			const version = record.versions.find(entry => entry.version === named.version);
-			if (!version?.file) return null;
-			return {
-				file: path.join(this.#dir, record.id, version.file),
-				type: ENTRY_TYPES[path.extname(record.entry).toLowerCase()] ?? "text/html",
-			};
-		}
-		if (record.kind === "inline") return null;
-		if (relative.split("/").some(segment => segment.startsWith("."))) return null;
-		const type = ASSET_TYPES[path.extname(relative).toLowerCase()];
-		if (!type) return null;
-		// Assets come from the entry's own folder (the tab folder when the entry sits at its root), not the
-		// whole tab folder: a page cannot read the project's other `.json`/`.js`/`.txt` files.
-		const folder = path.dirname(path.join(record.root, ...record.entry.split("/")));
-		const candidate = path.resolve(record.root, relative);
-		if (!inside(folder, candidate)) return null;
-		const real = await fs.realpath(candidate).catch(() => null);
-		if (!real || !inside(folder, real) || !(await fs.stat(real)).isFile()) return null;
-		if (ASSET_TYPES[path.extname(real).toLowerCase()] !== type) return null;
-		return { file: real, type };
+		return core().call<VisualFile | null>("visual.file", {
+			dir: this.#dir,
+			id: named.id,
+			version: Number.isSafeInteger(named.version) ? named.version : null,
+			relative,
+			bytes,
+		});
 	}
 
 	/** The response for an `omp-visual:` request: the file `resolve` allows, or 404; both limited to the page's own origin. */
 	async serve(url: string): Promise<Response> {
-		const found = await this.resolve(url).catch(() => null);
-		const body = found ? await fs.readFile(found.file).catch(() => null) : null;
+		const served = await this.#file(url, true).catch(() => null);
 		const headers = {
 			"Content-Security-Policy": VISUAL_CSP,
 			"Cache-Control": "no-store",
 			"X-Content-Type-Options": "nosniff",
 		};
-		if (!found || !body) {
+		if (!served?.result || !(served.bin?.buffer instanceof ArrayBuffer)) {
 			return new Response("Not found", {
 				status: 404,
 				headers: { ...headers, "Content-Type": "text/plain; charset=utf-8" },
 			});
 		}
-		const type = found.type.startsWith("text/") ? `${found.type}; charset=utf-8` : found.type;
-		return new Response(body, { headers: { ...headers, "Content-Type": type } });
+		const mime = served.result.type;
+		const type = mime.startsWith("text/") ? `${mime}; charset=utf-8` : mime;
+		return new Response(served.bin.buffer, { headers: { ...headers, "Content-Type": type } });
 	}
 
 	/** `open`: a new visual or a new version of the tab's matching one. */
-	async open(
-		tabId: string,
-		cwd: string,
-		input: { target?: string; html?: string; label?: string; visual?: string },
-	): Promise<{ record: VisualRecord; version: number; added: boolean }> {
+	open(tabId: string, cwd: string, input: OpenInput): Promise<OpenResult> {
+		const opened = this.#opening.then(() => this.#open(tabId, cwd, input));
+		this.#opening = opened.then(
+			() => {},
+			() => {},
+		);
+		return opened;
+	}
+
+	async #open(tabId: string, cwd: string, input: OpenInput): Promise<OpenResult> {
 		await this.#load();
 		if (Boolean(input.target) === Boolean(input.html)) throw new VisualError("Give either target or html");
-		const tabIds = this.#byTab.get(tabId) ?? [];
-		let kind: VisualRecord["kind"];
-		let target = "";
-		let root = "";
-		let entry = "index.html";
-		let content: Buffer | null = null;
+		let source:
+			| { kind: "inline" }
+			| { kind: "url"; url: string; host: string }
+			| { kind: "file"; raw: string; path: string };
+		let bin: Buffer | undefined;
 		const raw = input.target ?? "";
 		if (input.html !== undefined) {
-			kind = "inline";
-			content = Buffer.from(input.html);
-			if (content.length > MAX_HTML_BYTES) throw new VisualError("html is larger than 2 MB");
+			if (Buffer.byteLength(input.html) > MAX_HTML_BYTES) throw new VisualError("html is larger than 2 MB");
+			source = { kind: "inline" };
+			bin = Buffer.from(input.html);
 		} else if (/^https?:\/\//i.test(raw)) {
-			kind = "url";
 			const url = previewUrl(raw);
 			if (!url) throw new VisualError(`Not a web address the preview opens: ${raw}`);
-			target = url;
+			source = { kind: "url", url, host: new URL(url).host };
 		} else {
-			kind = "file";
-			const realCwd = await fs.realpath(cwd).catch(() => {
-				throw new VisualError(`The working directory is unavailable: ${cwd}`);
+			source = { kind: "file", raw, path: path.resolve(cwd, raw) };
+		}
+		const tabIds = this.#byTab.get(tabId) ?? [];
+		const { result } = await core()
+			.call<{ item: CatalogItem; added: boolean; evicted: string[] }>(
+				"visual.open",
+				{
+					dir: this.#dir,
+					cwd,
+					label: input.label,
+					visual: input.visual,
+					tabIds,
+					tabLimit: TAB_VISUALS,
+					input: source,
+				},
+				{ bin },
+			)
+			.catch(error => {
+				this.#loaded = null;
+				throw error;
 			});
-			const real = await fs.realpath(path.resolve(cwd, raw)).catch(() => null);
-			if (!real) throw new VisualError(`No such file: ${raw}`);
-			if (!inside(realCwd, real)) throw new VisualError(`${raw} is outside the working directory`);
-			const stat = await fs.stat(real);
-			if (!stat.isFile()) throw new VisualError(`${raw} is not a file`);
-			if (!ENTRY_TYPES[path.extname(real).toLowerCase()])
-				throw new VisualError("visualize shows .html, .htm, .svg, .txt and image files");
-			if (stat.size > MAX_FILE_BYTES) throw new VisualError(`${raw} is larger than 5 MB`);
-			content = await fs.readFile(real);
-			target = real;
-			root = realCwd;
-			entry = path.relative(realCwd, real).split(path.sep).join("/");
-		}
-		const own = tabIds.map(id => this.#record(id)).filter(record => record !== undefined);
-		let record =
-			(input.visual ? own.find(candidate => candidate.id === input.visual) : undefined) ??
-			own.find(candidate =>
-				kind === "inline"
-					? candidate.kind === "inline" && input.label !== undefined && candidate.label === input.label
-					: candidate.kind === kind && candidate.target === target,
-			);
-		if (input.visual && !record) throw new VisualError(`No visual ${input.visual} in this tab`);
-		if (record && record.kind !== kind) throw new VisualError(`Visual ${record.id} shows a different kind of target`);
-		const now = Date.now();
-		let retargeted = false;
-		if (!record) {
-			if (own.length >= TAB_VISUALS)
-				throw new VisualError(`This tab already shows ${TAB_VISUALS} visuals; close one first`);
-			const id = randomBytes(8).toString("hex");
-			record = {
-				id,
-				label:
-					input.label ??
-					(kind === "url" ? new URL(target).host : kind === "file" ? path.basename(target) : "Visual"),
-				kind,
-				target,
-				cwd,
-				root: kind === "inline" ? path.join(this.#dir, id) : root,
-				entry,
-				createdAt: now,
-				updatedAt: now,
-				versions: [],
-			};
-			this.#records.unshift(record);
-			this.#byTab.set(tabId, [...tabIds, id]);
-		} else {
-			// A reused visual shows what this call named: its address or file moved with it, so the next open of
-			// the new target finds this record instead of adding a second one.
-			retargeted = record.target !== target;
-			record.target = target;
-			if (input.label) record.label = input.label;
-			if (kind === "file") {
-				record.root = root;
-				record.entry = entry;
-			}
-			this.#records = [record, ...this.#records.filter(candidate => candidate !== record)];
-		}
-		const hash = content ? createHash("sha256").update(content).digest("hex") : target;
-		const last = record.versions.at(-1);
-		let added = false;
-		if (!last || last.hash !== hash || retargeted) {
-			const version = (last?.version ?? 0) + 1;
-			let file = "";
-			if (content) {
-				file = `v${version}${kind === "inline" ? ".html" : path.extname(entry).toLowerCase()}`;
-				await fs.mkdir(path.join(this.#dir, record.id), { recursive: true });
-				await fs.writeFile(path.join(this.#dir, record.id, file), content);
-			}
-			record.versions.push({ version, createdAt: now, file, hash });
-			if (kind === "url") record.versions = record.versions.slice(-1);
-			for (const dropped of record.versions.splice(0, Math.max(0, record.versions.length - MAX_VERSIONS)))
-				if (dropped.file) await fs.rm(path.join(this.#dir, record.id, dropped.file), { force: true });
-			added = true;
-		}
-		record.updatedAt = now;
-		for (const dropped of this.#records.splice(MAX_RECORDS))
-			await fs.rm(path.join(this.#dir, dropped.id), { recursive: true, force: true });
-		await this.#save();
-		return { record, version: record.versions.at(-1)?.version ?? 1, added };
+		const { item, added, evicted } = result;
+		const { record, latest: version } = item;
+		this.#items = [
+			item,
+			...this.#items.filter(old => old.record.id !== record.id && !evicted.includes(old.record.id)),
+		];
+		if (!tabIds.includes(record.id)) this.#byTab.set(tabId, [...(this.#byTab.get(tabId) ?? []), record.id]);
+		return { record, version, added };
 	}
 }
 
@@ -480,10 +352,11 @@ export interface VisualizeContext {
 	/** Ask the tab's window to show the visual (it opens when the tab is in front, or when the user goes there). */
 	reveal(visualId: string): void;
 	/**
-	 * The Preview check of the page just opened (preview-check.ts): what the judge model saw on it, or null. Never
-	 * rejects and answers within a few seconds. Unset (a test) = no check and no hint.
+	 * The Preview check of the page just opened (preview-check.ts): what the judge model saw on it, `"unchecked"` when
+	 * a native judge was there but the page went unjudged, or null (no check, or nothing wrong seen). Never rejects and
+	 * answers within a few seconds. Unset (a test) = no check and no hint.
 	 */
-	check?(visualId: string, version: number): Promise<PreviewVerdict | null>;
+	check?(visualId: string, version: number): Promise<PreviewCheckOutcome | null>;
 }
 
 /** Run one `gui_visualize` call: the text the agent reads, and whether it failed. */

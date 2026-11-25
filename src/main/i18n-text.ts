@@ -1,8 +1,9 @@
 /**
- * Every main-process string (native menu, dialogs, coded failures) in both UI
+ * Every main-process string (the text-field context menu, dialogs, coded failures) in both UI
  * languages. Pure data, apart from `i18n.ts` (which needs electron), so tests
  * can hold it against the renderer's names for the same things.
  */
+import NATIVE_LABELS from "../../native/ompdesk/crates/tauri-shell/src/native_labels.json";
 import type { UiLanguage } from "../shared/ui-language";
 
 export const MAIN_TEXT = {
@@ -12,13 +13,19 @@ export const MAIN_TEXT = {
 		en: "Mobile web refused it (no paired device). Nothing to do unless it was you.",
 		ko: "모바일 웹이 거부했어요(페어링된 기기가 아니에요). 직접 시도한 게 아니라면 할 일은 없어요.",
 	},
+	// A scheduled run's answer sent where its schedule says (`ScheduleDraft.resultsTo`).
+	"schedules.result.title": { en: "Scheduled run: {name}", ko: "예약 실행: {name}" },
+	"schedules.result.note": {
+		en: 'The scheduled run "{name}" finished. Its answer:',
+		ko: '예약 실행 "{name}"이 끝났어요. 답:',
+	},
 	// Files main could not save for lack of space (disk-full-notice.ts): one notice, closed once they are saved.
 	"diskFull.title": { en: "Disk is full", ko: "디스크가 가득 찼어요" },
 	"diskFull.body": {
 		en: "OMPdesk couldn't save {what}; it will retry.",
 		ko: "디스크가 가득 차서 {what} 저장에 실패했어요. 자동으로 다시 시도할게요.",
 	},
-	// A settings file that no longer parsed, moved aside at launch (safe-store.ts).
+	// A preference file that no longer parsed, moved aside by the core (crates/core/src/prefs `recover`).
 	"storeRecovered.title": { en: "Settings file was damaged", ko: "설정 파일이 손상됐어요" },
 	"storeRecovered.restored": {
 		en: "OMPdesk couldn't read {file}, so it put back the last good copy. Changes from the last hour may be missing.",
@@ -34,41 +41,62 @@ export const MAIN_TEXT = {
 		en: "Only {gb} GB is free. Free up space before OMPdesk and your sessions can no longer save.",
 		ko: "남은 공간이 {gb} GB뿐이에요. OMPdesk와 세션이 저장하지 못하게 되기 전에 공간을 확보하세요.",
 	},
-	"menu.about": { en: "About OMPdesk", ko: "OMPdesk 정보" },
-	"menu.checkUpdates": { en: "Check for Updates…", ko: "업데이트 확인…" },
-	"menu.services": { en: "Services", ko: "서비스" },
-	"menu.hide": { en: "Hide OMPdesk", ko: "OMPdesk 가리기" },
-	"menu.hideOthers": { en: "Hide Others", ko: "기타 가리기" },
-	"menu.showAll": { en: "Show All", ko: "모두 보기" },
-	"menu.quit": { en: "Quit OMPdesk", ko: "OMPdesk 종료" },
+	// An omp runners found breaking this release, which OMPdesk holds back (the core's tools/omp/hold.rs): once, then after a day.
+	"ompHold.title": { en: "omp {version} is on hold", ko: "omp {version} 판을 보류하고 있어요" },
+	"ompHold.body": {
+		en: "It failed OMPdesk's checks, so this computer stays on omp {installed}. OMPdesk moves on by itself once a fix is out.",
+		ko: "OMPdesk 검사를 통과하지 못해서 이 컴퓨터는 omp {installed} 판을 그대로 써요. 고친 판이 나오면 저절로 올라가요.",
+	},
+	"ompHold.bodyDays": {
+		en: "On hold for {days} day(s): it failed OMPdesk's checks, so this computer stays on omp {installed}. OMPdesk moves on by itself once a fix is out.",
+		ko: "{days}일째 보류 중이에요. OMPdesk 검사를 통과하지 못해서 이 컴퓨터는 omp {installed} 판을 그대로 써요. 고친 판이 나오면 저절로 올라가요.",
+	},
+	// A newer omp that has waited 6 h or more for runners' verdict (the core's tools/omp/hold.rs): then again every 24 h.
+	"ompHold.verifyingTitle": {
+		en: "omp {version} is still waiting for OMPdesk's checks",
+		ko: "omp {version} 판이 아직 OMPdesk 검사를 기다리고 있어요",
+	},
+	"ompHold.verifyingBody": {
+		en: "It has waited {hours} hours (checks usually take under an hour), so this computer stays on omp {installed}. Update now in Settings › Updates & about installs it anyway.",
+		ko: "{hours}시간째 기다리고 있어서(보통 한 시간 안에 끝나요) 이 컴퓨터는 omp {installed} 판을 그대로 써요. 설정 › 업데이트 및 정보에서 지금 업데이트를 누르면 바로 설치돼요.",
+	},
+	"ompHold.verifyingBodyDays": {
+		en: "It has waited {days} day(s) (checks usually take under an hour), so this computer stays on omp {installed}. Update now in Settings › Updates & about installs it anyway.",
+		ko: "{days}일째 기다리고 있어서(보통 한 시간 안에 끝나요) 이 컴퓨터는 omp {installed} 판을 그대로 써요. 설정 › 업데이트 및 정보에서 지금 업데이트를 누르면 바로 설치돼요.",
+	},
+	// A window whose page stopped answering a second time within the hour and was started again (window.ts).
+	"rendererHang.title": { en: "OMPdesk's window stopped responding again", ko: "OMPdesk 창이 또 멈췄어요" },
+	"rendererHang.body": {
+		en: "Its page was started again by itself, with its tabs and sessions. Nothing was lost.",
+		ko: "창의 화면을 자동으로 다시 띄웠어요. 탭과 세션은 그대로예요.",
+	},
+	// Tabs a lost core took that have no omp again minutes later (sidecar.ts `onRecoveryStuck`): one notice per loss.
+	"recovery.stuckTitle": { en: "Sessions did not come back", ko: "세션이 다시 열리지 않았어요" },
+	"recovery.stuckBody": {
+		en: "{count} session(s) still have no agent {minutes} min after OMPdesk's background process restarted. Press Restart on each one.",
+		ko: "OMPdesk 백그라운드 프로세스가 다시 시작된 뒤 {minutes}분이 지나도 세션 {count}개에 에이전트가 없어요. 각 세션에서 다시 시작을 눌러 주세요.",
+	},
+	"recovery.stuckTab": {
+		en: "This session's agent did not come back after OMPdesk's background process restarted. Press Restart.",
+		ko: "OMPdesk 백그라운드 프로세스가 다시 시작된 뒤 이 세션의 에이전트가 돌아오지 않았어요. 다시 시작을 눌러 주세요.",
+	},
+	// The line a side-panel terminal shows between its saved output and the new shell after OMPdesk restarted.
+	"terminal.restored": {
+		en: "Restored after a restart: earlier output above, a new shell below",
+		ko: "재시작 후 복원됨: 위는 이전 출력, 아래는 새 셸",
+	},
+	// A paired device's session here waits on a call that device runs while it is away (host-services.ts `#syncHostWait`).
+	"remote.hostWait.title": { en: "Waiting for {device}", ko: "{device} 연결 대기 중" },
+	"remote.hostWait.body": {
+		en: "{session} waits for {device} to come back.",
+		ko: "‘{session}’ 세션이 {device}의 재연결을 기다리고 있어요.",
+	},
+	"remote.hostWait.bodyUntitled": {
+		en: "A session waits for {device} to come back.",
+		ko: "세션 하나가 {device}의 재연결을 기다리고 있어요.",
+	},
 	"menu.addToDictionary": { en: "Add to dictionary", ko: "사전에 추가" },
 	"menu.copyImage": { en: "Copy Image", ko: "이미지 복사" },
-	"menu.closeTab": { en: "Close Tab", ko: "탭 닫기" },
-	"menu.closeWindow": { en: "Close Window", ko: "창 닫기" },
-	"menu.commandCenter": { en: "Command Palette", ko: "명령 팔레트" },
-	"menu.capabilities": { en: "Agent Behavior", ko: "에이전트 동작" },
-	"menu.importSession": { en: "Import External Session", ko: "외부 세션 가져오기" },
-	"menu.branchPicker": { en: "Branch from Message", ko: "메시지에서 분기" },
-	"menu.sessionTree": { en: "Session Tree", ko: "세션 트리" },
-	"menu.modelPicker": { en: "Select Model", ko: "모델 선택" },
-	"menu.usage": { en: "Usage & Quotas", ko: "사용량 및 할당량" },
-	"menu.workspaceChanges": { en: "Git Changes", ko: "Git 변경 사항" },
-	"menu.restartCore": { en: "Restart omp", ko: "omp 다시 시작" },
-	"menu.contextReport": { en: "Context Report", ko: "컨텍스트 보고서" },
-	"menu.debugConsole": { en: "Debugger Console", ko: "디버거 콘솔" },
-	"menu.documentation": { en: "Documentation", ko: "문서" },
-	"menu.edit": { en: "Edit", ko: "편집" },
-	"menu.exportHtml": { en: "Export HTML", ko: "HTML 내보내기" },
-	"menu.file": { en: "File", ko: "파일" },
-	"menu.handoff": { en: "Handoff", ko: "핸드오프" },
-	"menu.help": { en: "Help", ko: "도움말" },
-	"menu.hotkeys": { en: "Keyboard Shortcuts", ko: "키보드 단축키" },
-	"menu.jobs": { en: "Background Tasks", ko: "백그라운드 작업" },
-	"menu.agentHub": { en: "Agent Definitions", ko: "에이전트 정의" },
-	"menu.extensions": { en: "Extensions", ko: "확장" },
-	"menu.inventory": { en: "Plugins", ko: "플러그인" },
-	"menu.modes": { en: "Modes", ko: "모드" },
-	"menu.modelRoles": { en: "Model Roles", ko: "모델 역할" },
 	"crash.body": {
 		en: "This window crashed repeatedly and can't recover on its own. The failure is in the runtime log ({logPath}). Restarting may help; send the log via Help → Send Feedback so we can fix it.",
 		ko: "이 창이 반복해서 충돌해 스스로 복구할 수 없어요. 실패 내용은 런타임 로그({logPath})에 있어요. 재시작하면 해결될 수 있어요. 도움말 → 피드백 보내기로 로그를 보내 주시면 수정에 도움이 돼요.",
@@ -79,36 +107,13 @@ export const MAIN_TEXT = {
 	},
 	"crash.close": { en: "Close", ko: "닫기" },
 	"crash.title": { en: "OMPdesk window crashed", ko: "OMPdesk 창이 충돌했어요" },
-	"menu.newChatTab": { en: "New Chat Tab", ko: "새 채팅 탭" },
-	"menu.newSession": { en: "New Session", ko: "새 세션" },
-	"menu.newTab": { en: "New Tab", ko: "새 탭" },
-	"menu.newWindow": { en: "New Window", ko: "새 창" },
-	"menu.openProject": { en: "Open Project…", ko: "프로젝트 열기…" },
-	"menu.prCenter": { en: "Pull Requests", ko: "풀 리퀘스트" },
-	"menu.providers": { en: "Models & Accounts", ko: "모델 및 계정" },
-	"menu.reportIssue": { en: "Send Feedback…", ko: "피드백 보내기…" },
-	"menu.session": { en: "Session", ko: "세션" },
-	"menu.sessionInfo": { en: "Session Info", ko: "세션 정보" },
-	"menu.shareSession": { en: "Share Session", ko: "세션 공유" },
-	"menu.settings": { en: "Settings…", ko: "설정…" },
-	"menu.stats": { en: "All-Sessions Stats", ko: "전체 통계" },
-	"menu.togglePanel": { en: "Toggle Side Panel", ko: "사이드 패널 표시/숨기기" },
-	"menu.toggleSidebar": { en: "Toggle Sidebar", ko: "사이드바 표시/숨기기" },
-	"menu.tools": { en: "Tools", ko: "도구" },
-	"menu.view": { en: "View", ko: "보기" },
-	"menu.window": { en: "Window", ko: "창" },
-	"menu.workspaceDirs": { en: "Projects & Launch", ko: "프로젝트 및 실행" },
-	// Electron names role items in English whatever the language; these replace them.
-	"menu.undo": { en: "Undo", ko: "실행 취소" },
-	"menu.redo": { en: "Redo", ko: "실행 복귀" },
-	"menu.cut": { en: "Cut", ko: "오려두기" },
-	"menu.copy": { en: "Copy", ko: "복사하기" },
-	"menu.paste": { en: "Paste", ko: "붙여넣기" },
-	"tray.keepsRunningTitle": { en: "OMPdesk keeps running in the tray", ko: "OMPdesk는 트레이에서 계속 실행돼요" },
-	"tray.keepsRunningBody": {
-		en: "Click the tray icon to bring the window back. Quit from the tray menu.",
-		ko: "트레이 아이콘을 누르면 창이 돌아와요. 종료는 트레이 메뉴에서 해요.",
-	},
+	// The text-field context menu's edit items have the app menu's words (the shell's, `native_labels.json`).
+	"menu.undo": NATIVE_LABELS["menu.undo"],
+	"menu.redo": NATIVE_LABELS["menu.redo"],
+	"menu.cut": NATIVE_LABELS["menu.cut"],
+	"menu.copy": NATIVE_LABELS["menu.copy"],
+	"menu.paste": NATIVE_LABELS["menu.paste"],
+	"menu.selectAll": NATIVE_LABELS["menu.selectAll"],
 	"agentControl.stopTitle": {
 		en: "An agent wants to stop a session",
 		ko: "에이전트가 세션을 중단하려고 해요",
@@ -141,6 +146,19 @@ export const MAIN_TEXT = {
 		en: "The agent in “{caller}” wants to run “{name}” {when} in {folder} while OMPdesk is open. It runs without auto-approve. Schedule it?",
 		ko: "“{caller}”의 에이전트가 OMPdesk가 켜져 있는 동안 {folder} 폴더에서 “{name}” 작업을 {when} 실행하도록 예약하려고 해요. 자동 승인 없이 실행돼요. 예약할까요?",
 	},
+	// Every precheck raises this card, whatever else agents may do: it is a command this computer runs.
+	"agentControl.schedulePrecheckMessage": {
+		en: "The agent in “{caller}” wants “{name}” ({when}, in {folder}) to run this command before each start, and to start only when it succeeds: {command}. Allow it?",
+		ko: "“{caller}”의 에이전트가 “{name}”({when}, {folder})을 시작할 때마다 먼저 이 명령을 실행하고, 성공할 때만 시작하도록 하려고 해요: {command}. 허용할까요?",
+	},
+	"agentControl.botTitle": {
+		en: "An agent wants to make a bot",
+		ko: "에이전트가 봇을 만들려고 해요",
+	},
+	"agentControl.botMessage": {
+		en: "The agent in “{caller}” wants to make the bot “{name}”: a folder on this computer whose sessions are its chats. Nothing is sent to it until you write to it. Make it?",
+		ko: "“{caller}”의 에이전트가 “{name}” 봇을 만들려고 해요. 이 컴퓨터의 폴더 하나이고, 그 폴더의 세션이 봇의 대화예요. 직접 말을 걸기 전에는 아무것도 보내지 않아요. 만들까요?",
+	},
 	"agentControl.autopilotTitle": {
 		en: "An agent wants to start Autopilot",
 		ko: "에이전트가 오토파일럿을 시작하려고 해요",
@@ -170,6 +188,14 @@ export const MAIN_TEXT = {
 		ko: "“{caller}”의 에이전트가 다음 작업을 하려고 해요: {what}. 허용할까요?",
 	},
 	"agentControl.appChanged": { en: "Agent changed: {what} → {value}", ko: "에이전트가 바꿈: {what} → {value}" },
+	"agentControl.unansweredTitle": {
+		en: "“{child}” is waiting for an answer",
+		ko: "“{child}” 세션이 답을 기다려요",
+	},
+	"agentControl.unansweredMessage": {
+		en: "“{opener}” ended its turn without answering: {question}",
+		ko: "“{opener}” 세션이 답하지 않고 차례를 마쳤어요: {question}",
+	},
 	// Autopilot (src/main/autopilot.ts): notifications and the readable failures of a start.
 	"autopilot.paused.title": { en: "Autopilot paused", ko: "오토파일럿이 멈췄어요" },
 	"autopilot.ended.title": { en: "Autopilot ended", ko: "오토파일럿이 끝났어요" },
@@ -274,17 +300,6 @@ export const MAIN_TEXT = {
 		en: "Autopilot is controlled from the OMPdesk window on this computer.",
 		ko: "오토파일럿은 이 컴퓨터의 OMPdesk 창에서만 제어해요.",
 	},
-	"menu.selectAll": { en: "Select All", ko: "전체 선택" },
-	"menu.reload": { en: "Reload", ko: "새로고침" },
-	"menu.forceReload": { en: "Force Reload", ko: "강제 새로고침" },
-	"menu.toggleDevTools": { en: "Toggle Developer Tools", ko: "개발자 도구 표시/숨기기" },
-	"menu.actualSize": { en: "Actual Size", ko: "실제 크기" },
-	"menu.zoomIn": { en: "Zoom In", ko: "확대" },
-	"menu.zoomOut": { en: "Zoom Out", ko: "축소" },
-	"menu.toggleFullScreen": { en: "Toggle Full Screen", ko: "전체 화면 표시/숨기기" },
-	"menu.minimize": { en: "Minimize", ko: "최소화" },
-	"menu.zoom": { en: "Zoom", ko: "확대/축소" },
-	"menu.bringAllToFront": { en: "Bring All to Front", ko: "모두 앞으로 가져오기" },
 	"omp.bunTooOld": {
 		en: "omp at {bin} needs Bun {minimum} or newer, but {bun} is {bunVersion}. OMPdesk is upgrading Bun on its own; this tab starts once it is done.",
 		ko: "{bin}의 omp는 Bun {minimum} 이상이 필요한데 {bun}은 {bunVersion}이에요. OMPdesk가 알아서 Bun을 업그레이드하고 있어요. 끝나면 이 탭이 시작돼요.",

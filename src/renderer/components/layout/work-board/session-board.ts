@@ -119,7 +119,14 @@ export interface LastCheck {
 	durationMs?: number;
 	/** The call's entry key, for the card in the transcript; none for a subagent's call. */
 	key?: string;
+	/** It runs as a release check (`ompdesk check --release`): the row names the release gate. */
+	release?: true;
+	/** It runs as a background job, so its result wakes the session by itself: the row's tooltip says so. */
+	wakes?: true;
 }
+
+/** `ompdesk check --release` as a command of the line (`native/ompdesk/crates/checks`), its other flags before it. */
+const RELEASE_CHECK = /(?:^|[\s;&|(])ompdesk\s+check(?:\s+--(?:full|light))*\s+--release(?:\s|$)/;
 
 function checkOf(outcome: WorkCommandOutcome): LastCheck | null {
 	const [summary] = workVerdict([outcome]).checks;
@@ -134,6 +141,7 @@ function checkOf(outcome: WorkCommandOutcome): LastCheck | null {
 		startedAt: startTime ?? 0,
 		state: summary.passed ? "passed" : "failed",
 		...(outcome.toolCallId ? { key: outcome.toolCallId } : {}),
+		...(RELEASE_CHECK.test(outcome.command) ? { release: true } : {}),
 		...(count !== undefined ? { count } : {}),
 		...(durationMs !== undefined ? { durationMs } : {}),
 	};
@@ -170,7 +178,13 @@ export function lastCheck(
 		: undefined;
 	let newest: LastCheck | null = null;
 	for (const { key, entry, command, kind } of candidates) {
-		const base = { kind, command, startedAt: entry.startTime, key };
+		const base: Omit<LastCheck, "state"> = {
+			kind,
+			command,
+			startedAt: entry.startTime,
+			key,
+			...(RELEASE_CHECK.test(command) ? { release: true } : {}),
+		};
 		if (entry.status === "pending" || entry.status === "running") return { ...base, state: "running" };
 		const [outcome] = workOutcomes(
 			[{ entry, toolCallId: key, stoppedAt: stops.get(key) }],
@@ -179,7 +193,7 @@ export function lastCheck(
 			verdicts,
 		).commands;
 		if (!outcome || outcome.status === "interrupted" || outcome.status === "refused") continue;
-		if (outcome.status === "unknown") return { ...base, state: "running" };
+		if (outcome.status === "unknown") return { ...base, state: "running", wakes: true };
 		if (outcome.status === "failed" && running?.has(key)) continue;
 		newest = checkOf(outcome);
 		if (newest) break;

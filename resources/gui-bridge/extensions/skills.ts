@@ -3,15 +3,10 @@
  * pages. Ported from the omp-gui fork's rpc-domains / rpc-skills / rpc-actions.
  */
 
-import { MANAGED_SKILLS_PROVIDER_ID, sanitizeSkillName } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
-import { loadCapability, reset as resetCapabilities } from "@oh-my-pi/pi-coding-agent/capability";
-import { type ContextFile, contextFileCapability } from "@oh-my-pi/pi-coding-agent/capability/context-file";
-import { type Hook, hookCapability } from "@oh-my-pi/pi-coding-agent/capability/hook";
+import type { ContextFile } from "@oh-my-pi/pi-coding-agent/capability/context-file";
+import type { Hook } from "@oh-my-pi/pi-coding-agent/capability/hook";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/capability/skill";
-import { templateUsesInlineArgPlaceholders } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { ManageSkillTool } from "@oh-my-pi/pi-coding-agent/tools/manage-skill";
-import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { guard } from "../health";
 import type { BridgeMethods } from "../types";
 import { optString, paramsOf, readSetting, requireString, setExtensionDisabled } from "./shared";
@@ -37,13 +32,18 @@ interface SkillInfo {
  * inventory keeps disabled skills visible without changing provider policy.
  */
 async function listSkills(session: AgentSession): Promise<SkillInfo[]> {
+	const [{ loadCapability }, { MANAGED_SKILLS_PROVIDER_ID }] = await Promise.all([
+		import("../omp/pi-coding-agent/capability"),
+		import("../omp/pi-coding-agent/autolearn/managed-skills"),
+	]);
 	const enabledNames = new Set(session.skills.map(skill => skill.name));
+	const disabledExtensions = (await readSetting<string[]>(session, "disabledExtensions")) ?? [];
 	const discovered = await loadCapability<Skill>("skills", {
 		cwd: session.sessionManager.getCwd(),
 		agentDir: session.settings.getAgentDir(),
 		extensionRoots: session.effectiveExtensionRoots,
 		includeDisabled: true,
-		disabledExtensions: readSetting<string[]>(session, "disabledExtensions") ?? [],
+		disabledExtensions,
 	});
 	return discovered.items.map(skill => {
 		return {
@@ -71,166 +71,193 @@ async function findSkill(session: AgentSession, rawName: string): Promise<SkillI
 
 const hookKey = (hook: Hook) => `${hook.type}:${hook.tool}:${hook.name}`;
 
-export const methods: BridgeMethods = guard("skills", {
-	get_skills: async (_params, env) => ({ skills: await listSkills(env.session()) }),
-
-	/** Read a discovered skill by name, so the GUI can never name an arbitrary path. */
-	get_skill_detail: async (params, env) => {
-		const skill = await findSkill(env.session(), requireString(paramsOf(params), "name"));
-		const file = Bun.file(skill.location);
-		if (file.size > MAX_SKILL_DETAIL_BYTES) {
-			throw new Error(`Skill "${skill.name}" is too large to preview (${file.size} bytes).`);
-		}
-		const { body } = parseFrontmatter(await file.text(), { source: skill.location });
-		return { ...skill, body: body.trim() };
-	},
-
-	/** `skill:<name>` in `disabledExtensions`; `refreshSkills` re-reads it live. */
-	set_skill_enabled: async (params, env) => {
-		const p = paramsOf(params);
-		const name = requireString(p, "name");
-		if (!name.trim()) throw new Error("Skill name cannot be empty");
-		if (typeof p.enabled !== "boolean") throw new Error("`enabled` must be a boolean");
-		const enabled = p.enabled === true;
-		const session = env.session();
-		const state = await setExtensionDisabled(session, `skill:${name}`, enabled);
-		await session.refreshSkills();
-		return { name, ...state, enabled: session.skills.some(skill => skill.name === name) };
-	},
-
-	/** Create/update/delete only omp-managed skills; authored and plugin skills stay read-only. */
-	manage_skill: async (params, env) => {
-		const p = paramsOf(params);
-		const action = p.action;
-		if (action !== "create" && action !== "update" && action !== "delete") {
-			throw new Error(`Unknown manage_skill action: ${String(action)}`);
-		}
-		const session = env.session();
-		const name = sanitizeSkillName(requireString(p, "name"));
-		const description = optString(p, "description") ?? "";
-		const body = optString(p, "body") ?? "";
-		if (action === "create") {
-			if ((await listSkills(session)).some(skill => skill.name === name)) {
-				throw new Error(`Skill "${name}" already exists. Choose a different name.`);
-			}
-		} else {
-			const existing = await findSkill(session, name);
-			if (!existing.managed) {
-				throw new Error(`Skill "${name}" is managed by ${existing.providerName} and is read-only here.`);
-			}
-		}
-		// Stock's own tool, so the write joins the session's per-skill mutation chain (`autolearn/managed-skills`
-		// is not in omp's bundle: a direct import is a copy with a chain of its own, racing the agent's writes).
-		const result = await new ManageSkillTool().execute("ompdesk-skills", { action, name, description, body });
-		if (result.isError) {
-			throw new Error(result.content.map(part => (part.type === "text" ? part.text : "")).join(" "));
-		}
-		await session.refreshSkills();
-		return { action, name };
-	},
-
-	/** Enable state is the diff between a `disabledExtensions`-filtered and an unfiltered discovery. */
-	get_hooks: async (_params, env) => {
-		const session = env.session();
-		const cwd = session.sessionManager.getCwd();
-		const disabledExtensions = readSetting<string[]>(session, "disabledExtensions") ?? [];
-		const [enabledResult, allResult] = await Promise.all([
-			loadCapability<Hook>(hookCapability.id, { cwd, disabledExtensions: [...disabledExtensions] }),
-			loadCapability<Hook>(hookCapability.id, { cwd, includeDisabled: true }),
-		]);
-		const enabledKeys = new Set(enabledResult.items.map(hookKey));
-		const hooks = allResult.items
-			.map(hook => ({
-				id: hookCapability.toExtensionId?.(hook) ?? `hook:${hookKey(hook)}`,
-				name: hook.name,
-				event: `${hook.type}:${hook.tool}`,
-				enabled: enabledKeys.has(hookKey(hook)),
-				source: hook._source.provider,
-				path: hook.path,
-			}))
-			.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-		return { hooks };
-	},
-
-	/** Hooks bind at extension load and nothing rebinds them live: takes effect next session. */
-	set_hook_enabled: async (params, env) => {
-		const p = paramsOf(params);
-		const id = requireString(p, "hookId");
-		if (!id.startsWith("hook:")) {
-			throw new Error(`Invalid hook id: ${id} (expected "hook:<type>:<tool>:<name>")`);
-		}
-		if (typeof p.enabled !== "boolean") throw new Error("`enabled` must be a boolean");
-		const enabled = p.enabled === true;
-		const state = await setExtensionDisabled(env.session(), id, enabled);
-		return { id, ...state };
-	},
-
-	/**
-	 * Instruction files (AGENTS.md, CLAUDE.md, GEMINI.md, …) stock discovers for
-	 * the session's folder, grouped by stock's disable id
-	 * `context-file:<level>:<basename>`: one id covers every file of that name
-	 * at that level, so one row lists them all. Shadowed files stay listed.
-	 */
-	get_context_files: async (_params, env) => {
-		const session = env.session();
-		const disabled = new Set(readSetting<string[]>(session, "disabledExtensions") ?? []);
-		const result = await loadCapability<ContextFile>(contextFileCapability.id, {
-			cwd: session.sessionManager.getCwd(),
-			agentDir: session.settings.getAgentDir(),
-			extensionRoots: session.effectiveExtensionRoots,
-			includeDisabled: true,
-			disabledExtensions: [...disabled],
-		});
-		const rows = new Map<
-			string,
-			{ id: string; name: string; level: string; enabled: boolean; files: { path: string; provider: string }[] }
-		>();
-		for (const file of result.all) {
-			const id = contextFileCapability.toExtensionId?.(file);
-			if (!id) continue;
-			const row = rows.get(id) ?? {
-				id,
-				name: id.slice(id.lastIndexOf(":") + 1),
-				level: file.level,
-				enabled: !disabled.has(id),
-				files: [],
-			};
-			if (!row.files.some(entry => entry.path === file.path)) {
-				row.files.push({ path: file.path, provider: file._source.providerName });
-			}
-			rows.set(id, row);
-		}
-		const files = [...rows.values()].sort(
-			(a, b) => a.level.localeCompare(b.level) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-		);
-		return { files };
-	},
-
-	/**
-	 * `context-file:<level>:<basename>` in `disabledExtensions` (stock's extension
-	 * dashboard channel), then the base prompt is rebuilt from fresh discovery so
-	 * the change applies from the next turn.
-	 */
-	set_context_file_enabled: async (params, env) => {
-		const p = paramsOf(params);
-		const id = requireString(p, "contextFileId");
-		if (!/^context-file:(user|project):[^:/\\]+$/.test(id)) {
-			throw new Error(`Invalid context file id: ${id} (expected "context-file:<user|project>:<name>")`);
-		}
-		if (typeof p.enabled !== "boolean") throw new Error("`enabled` must be a boolean");
-		const session = env.session();
-		const state = await setExtensionDisabled(session, id, p.enabled);
-		resetCapabilities();
-		await session.refreshBaseSystemPrompt();
-		return { id, ...state };
-	},
-
-	get_prompt_templates: async (_params, env) => ({
-		templates: env.session().promptTemplates.map(template => ({
-			name: template.name,
-			description: template.description,
-			source: template.source,
-			argumentHint: templateUsesInlineArgPlaceholders(template.content) ? "[arguments]" : undefined,
-		})),
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
+export const methods: BridgeMethods = {
+	...guard("skills", {
+		get_skills: async (_params, env) => ({ skills: await listSkills(env.session()) }),
 	}),
-});
+	...guard("skillDetail", {
+		/** Read a discovered skill by name, so the GUI can never name an arbitrary path. */
+		get_skill_detail: async (params, env) => {
+			const skill = await findSkill(env.session(), requireString(paramsOf(params), "name"));
+			const file = Bun.file(skill.location);
+			if (file.size > MAX_SKILL_DETAIL_BYTES) {
+				throw new Error(`Skill "${skill.name}" is too large to preview (${file.size} bytes).`);
+			}
+			const { parseFrontmatter } = await import("../omp/pi-utils");
+			const { body } = parseFrontmatter(await file.text(), { source: skill.location });
+			return { ...skill, body: body.trim() };
+		},
+	}),
+	...guard("skillToggle", {
+		/** `skill:<name>` in `disabledExtensions`; `refreshSkills` re-reads it live. */
+		set_skill_enabled: async (params, env) => {
+			const p = paramsOf(params);
+			const name = requireString(p, "name");
+			if (!name.trim()) throw new Error("Skill name cannot be empty");
+			if (typeof p.enabled !== "boolean") throw new Error("`enabled` must be a boolean");
+			const enabled = p.enabled === true;
+			const session = env.session();
+			const state = await setExtensionDisabled(session, `skill:${name}`, enabled);
+			await session.refreshSkills();
+			return { name, ...state, enabled: session.skills.some(skill => skill.name === name) };
+		},
+	}),
+	...guard("manageSkill", {
+		/** Create/update/delete only omp-managed skills; authored and plugin skills stay read-only. */
+		manage_skill: async (params, env) => {
+			const p = paramsOf(params);
+			const action = p.action;
+			if (action !== "create" && action !== "update" && action !== "delete") {
+				throw new Error(`Unknown manage_skill action: ${String(action)}`);
+			}
+			const session = env.session();
+			const { sanitizeSkillName } = await import("../omp/pi-coding-agent/autolearn/managed-skills");
+			const name = sanitizeSkillName(requireString(p, "name"));
+			const description = optString(p, "description") ?? "";
+			const body = optString(p, "body") ?? "";
+			if (action === "create") {
+				if ((await listSkills(session)).some(skill => skill.name === name)) {
+					throw new Error(`Skill "${name}" already exists. Choose a different name.`);
+				}
+			} else {
+				const existing = await findSkill(session, name);
+				if (!existing.managed) {
+					throw new Error(`Skill "${name}" is managed by ${existing.providerName} and is read-only here.`);
+				}
+			}
+			// Stock's own tool, so the write joins the session's per-skill mutation chain (`autolearn/managed-skills`
+			// is not in omp's bundle: a direct import is a copy with a chain of its own, racing the agent's writes).
+			const { ManageSkillTool } = await import("../omp/pi-coding-agent/tools/manage-skill");
+			const result = await new ManageSkillTool().execute("ompdesk-skills", { action, name, description, body });
+			if (result.isError) {
+				throw new Error(result.content.map(part => (part.type === "text" ? part.text : "")).join(" "));
+			}
+			await session.refreshSkills();
+			return { action, name };
+		},
+	}),
+	...guard("hooks", {
+		/** Enable state is the diff between a `disabledExtensions`-filtered and an unfiltered discovery. */
+		get_hooks: async (_params, env) => {
+			const session = env.session();
+			const cwd = session.sessionManager.getCwd();
+			const [{ loadCapability }, { hookCapability }] = await Promise.all([
+				import("../omp/pi-coding-agent/capability"),
+				import("../omp/pi-coding-agent/capability/hook"),
+			]);
+			const disabledExtensions = (await readSetting<string[]>(session, "disabledExtensions")) ?? [];
+			const [enabledResult, allResult] = await Promise.all([
+				loadCapability<Hook>(hookCapability.id, { cwd, disabledExtensions: [...disabledExtensions] }),
+				loadCapability<Hook>(hookCapability.id, { cwd, includeDisabled: true }),
+			]);
+			const enabledKeys = new Set(enabledResult.items.map(hookKey));
+			const hooks = allResult.items
+				.map(hook => ({
+					id: hookCapability.toExtensionId?.(hook) ?? `hook:${hookKey(hook)}`,
+					name: hook.name,
+					event: `${hook.type}:${hook.tool}`,
+					enabled: enabledKeys.has(hookKey(hook)),
+					source: hook._source.provider,
+					path: hook.path,
+				}))
+				.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+			return { hooks };
+		},
+	}),
+	...guard("hookToggle", {
+		/** Hooks bind at extension load and nothing rebinds them live: takes effect next session. */
+		set_hook_enabled: async (params, env) => {
+			const p = paramsOf(params);
+			const id = requireString(p, "hookId");
+			if (!id.startsWith("hook:")) {
+				throw new Error(`Invalid hook id: ${id} (expected "hook:<type>:<tool>:<name>")`);
+			}
+			if (typeof p.enabled !== "boolean") throw new Error("`enabled` must be a boolean");
+			const enabled = p.enabled === true;
+			const state = await setExtensionDisabled(env.session(), id, enabled);
+			return { id, ...state };
+		},
+	}),
+	...guard("contextFiles", {
+		/**
+		 * Instruction files (AGENTS.md, CLAUDE.md, GEMINI.md, …) stock discovers for
+		 * the session's folder, grouped by stock's disable id
+		 * `context-file:<level>:<basename>`: one id covers every file of that name
+		 * at that level, so one row lists them all. Shadowed files stay listed.
+		 */
+		get_context_files: async (_params, env) => {
+			const session = env.session();
+			const [{ loadCapability }, { contextFileCapability }] = await Promise.all([
+				import("../omp/pi-coding-agent/capability"),
+				import("../omp/pi-coding-agent/capability/context-file"),
+			]);
+			const disabled = new Set((await readSetting<string[]>(session, "disabledExtensions")) ?? []);
+			const result = await loadCapability<ContextFile>(contextFileCapability.id, {
+				cwd: session.sessionManager.getCwd(),
+				agentDir: session.settings.getAgentDir(),
+				extensionRoots: session.effectiveExtensionRoots,
+				includeDisabled: true,
+				disabledExtensions: [...disabled],
+			});
+			const rows = new Map<
+				string,
+				{ id: string; name: string; level: string; enabled: boolean; files: { path: string; provider: string }[] }
+			>();
+			for (const file of result.all) {
+				const id = contextFileCapability.toExtensionId?.(file);
+				if (!id) continue;
+				const row = rows.get(id) ?? {
+					id,
+					name: id.slice(id.lastIndexOf(":") + 1),
+					level: file.level,
+					enabled: !disabled.has(id),
+					files: [],
+				};
+				if (!row.files.some(entry => entry.path === file.path)) {
+					row.files.push({ path: file.path, provider: file._source.providerName });
+				}
+				rows.set(id, row);
+			}
+			const files = [...rows.values()].sort(
+				(a, b) =>
+					a.level.localeCompare(b.level) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+			);
+			return { files };
+		},
+	}),
+	...guard("contextFileToggle", {
+		/**
+		 * `context-file:<level>:<basename>` in `disabledExtensions` (stock's extension
+		 * dashboard channel), then the base prompt is rebuilt from fresh discovery so
+		 * the change applies from the next turn.
+		 */
+		set_context_file_enabled: async (params, env) => {
+			const p = paramsOf(params);
+			const id = requireString(p, "contextFileId");
+			if (!/^context-file:(user|project):[^:/\\]+$/.test(id)) {
+				throw new Error(`Invalid context file id: ${id} (expected "context-file:<user|project>:<name>")`);
+			}
+			if (typeof p.enabled !== "boolean") throw new Error("`enabled` must be a boolean");
+			const session = env.session();
+			const state = await setExtensionDisabled(session, id, p.enabled);
+			const { reset: resetCapabilities } = await import("../omp/pi-coding-agent/capability");
+			resetCapabilities();
+			await session.refreshBaseSystemPrompt();
+			return { id, ...state };
+		},
+	}),
+	...guard("promptTemplates", {
+		get_prompt_templates: async (_params, env) => {
+			const { templateUsesInlineArgPlaceholders } = await import("../omp/pi-coding-agent/config/prompt-templates");
+			return {
+				templates: env.session().promptTemplates.map(template => ({
+					name: template.name,
+					description: template.description,
+					source: template.source,
+					argumentHint: templateUsesInlineArgPlaceholders(template.content) ? "[arguments]" : undefined,
+				})),
+			};
+		},
+	}),
+};

@@ -101,6 +101,7 @@ export default function (pi) {
 
 const JUDGE_PROBE = `
 import { methods } from "./settings";
+import { getEnvApiKeyName } from "@oh-my-pi/pi-ai";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { getRoleInfo, roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
@@ -117,12 +118,14 @@ export default function (pi) {
    const preferred = resolveRoleChain("judge", settings, modelRegistry.getAll("all").filter(model => accepts(model)));
    const usable = resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, modelRegistry));
    const judgeKind = modelKind(preferred[0].model);
+   const preferredProviders = [...new Set(preferred.filter(candidate => modelKind(candidate.model) === judgeKind).map(candidate => candidate.model.provider))];
    console.error("JUDGE_PROBE=" + JSON.stringify({
     effective: roles.find(role => role.id === "judge").effective,
     native: hasNativeJudge(settings, modelRegistry),
     preferred: sel(preferred[0].model),
     preferredKind: judgeKind,
-    preferredProviders: [...new Set(preferred.filter(candidate => modelKind(candidate.model) === judgeKind).map(candidate => candidate.model.provider))],
+    preferredProviders,
+    providerEnv: Object.fromEntries(preferredProviders.map(provider => [provider, getEnvApiKeyName(provider)])),
     answering: sel(usable[0].model),
     skippedRoles: roles.filter(role => role.effective?.skipped).map(role => role.id),
    }));
@@ -213,6 +216,7 @@ describe.skipIf(!existsSync(INSTALLED_OMP))("model roles on stock's resolution",
 				preferred: string;
 				preferredKind: string;
 				preferredProviders: string[];
+				providerEnv: Record<string, string | undefined>;
 				answering: string;
 				skippedRoles: string[];
 			};
@@ -232,9 +236,12 @@ describe.skipIf(!existsSync(INSTALLED_OMP))("model roles on stock's resolution",
 		expect(none.preferredProviders.length).toBeGreaterThan(1);
 		expect(none.skippedRoles).toEqual(["judge"]);
 
-		// A key for any one provider that holds it: stock now routes to a native judge, and the row reports nothing.
+		// A key for any one provider that holds it, in the env var stock reads for that provider: stock now routes to a
+		// native judge, and the row reports nothing.
 		for (const provider of none.preferredProviders) {
-			const keyed = probeJudge({ [`${provider.toUpperCase()}_API_KEY`]: "probe-not-a-real-key" });
+			const variable = none.providerEnv[provider];
+			expect(variable, provider).toEqual(expect.any(String));
+			const keyed = probeJudge({ [variable as string]: "probe-not-a-real-key" });
 			expect(keyed.native, provider).toBe(true);
 			expect(keyed.effective.skipped, provider).toBeUndefined();
 			expect(keyed.skippedRoles, provider).toEqual([]);

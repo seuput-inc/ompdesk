@@ -11,8 +11,8 @@ import { turnErrorToast } from "./messages";
 
 type NoticeEvent = Extract<AgentSessionEvent, { type: "notice" }>;
 
-/** Routine informational churn: vision/xdev mount notices fire on every model switch and need no action. */
-const QUIET_SOURCES: Record<string, true> = { vision: true, xdev: true };
+/** Routine tool roster changes need no action. Warnings and errors still surface. */
+const QUIET_SOURCES: Record<string, true> = { vision: true, xdev: true, toolCommands: true };
 
 // Stock session/session-advisors.ts `notifyFailure` and `notifyQuotaExhausted`.
 const ADVISOR_UNAVAILABLE = /^Advisor(?: "[^"]*")? unavailable for (\S+): ([\s\S]+)$/;

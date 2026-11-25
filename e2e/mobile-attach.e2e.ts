@@ -16,15 +16,25 @@
  * 25 MB is refused with a message.
  *
  * OMP_GUI_MOBILE_ATTACH=<dir> also writes the composer and the bubble per picture.
+ *
+ * On macOS Playwright cannot attach to the host's WKWebView, so the desktop page is driven through the host's native
+ * WebDriver (`launchNative`, scripts/tauri-native-smoke.ts) for the three things the phone side needs of it (wait for
+ * the preload, turn Mobile web on, read its phase); the phone's browser is Playwright's WebKit there as everywhere.
+ * Needs OMPDESK_TAURI_TEST_BINARY (a test-automation host, `bun run build:tauri -- --test-automation`) and the pinned Node
+ * (`bun run build:node`); the host's logs and a failed launch's page diagnosis land in the test's output folder.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { type BrowserType, chromium, devices, expect, type Page, test, webkit } from "@playwright/test";
-import { type ElectronApplication, _electron as electron } from "playwright";
+import { _electron as electron } from "playwright";
+import sharp from "sharp";
+import { Driver, launchNative, saveFailure, stopNative, until } from "../scripts/tauri-native-smoke";
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, recordPhoneLoads, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { captureTo, exitApp, fixtureOmp } from "./harness";
+import { copyShellDiagnostics } from "./fixture/shell-launch";
+import { captureTo, closeBrowser, exitApp, fixtureOmp, launchBrowser } from "./harness";
 
 const CAPTURES = process.env.OMP_GUI_MOBILE_ATTACH;
 
@@ -44,6 +54,7 @@ interface Profile {
 	root: string;
 	desktop: string;
 	project: string;
+	agent: string;
 	env: Record<string, string>;
 	tailscale: FixtureTailscale;
 	record: string;
@@ -73,36 +84,34 @@ async function makeProfile(): Promise<Profile> {
 		...tailscale.env,
 	});
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
-	return { root, desktop, project, env, tailscale, record };
+	return { root, desktop, project, agent, env, tailscale, record };
 }
 
 /**
- * A camera-like JPEG made by the app's own encoder: a 4032×3024 gradient with sensor-like noise of `noise` levels,
- * which keeps it about as large as a phone's photo of a real scene (and as large after scaling down).
+ * A camera-like JPEG: a 4032×3024 gradient with sensor-like noise of `noise` levels, which keeps it about as large
+ * as a phone's photo of a real scene (and as large after scaling down). The test encodes it (the host has no bitmap
+ * codec in main), 4:2:0 and with plain Huffman tables as Chromium's encoder wrote it, so the sizes the asserts below
+ * bound stay what they were.
  */
-function cameraJpeg(app: ElectronApplication, noise: number, quality: number): Promise<Buffer> {
-	return app
-		.evaluate(
-			({ nativeImage }, { noise, quality }) => {
-				const width = 4032;
-				const height = 3024;
-				const pixels = Buffer.alloc(width * height * 4);
-				let seed = 1;
-				for (let y = 0; y < height; y++)
-					for (let x = 0; x < width; x++) {
-						const at = (y * width + x) * 4;
-						for (let channel = 0; channel < 3; channel++) {
-							seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-							const base = channel === 0 ? (x * 255) / width : channel === 1 ? (y * 255) / height : 128;
-							pixels[at + channel] = Math.max(0, Math.min(255, base + (seed % (2 * noise + 1)) - noise));
-						}
-						pixels[at + 3] = 255;
-					}
-				return nativeImage.createFromBuffer(pixels, { width, height }).toJPEG(quality).toString("base64");
-			},
-			{ noise, quality },
-		)
-		.then(base64 => Buffer.from(base64, "base64"));
+function cameraJpeg(noise: number, quality: number): Promise<Buffer> {
+	const width = 4032;
+	const height = 3024;
+	const pixels = Buffer.alloc(width * height * 4);
+	let seed = 1;
+	for (let y = 0; y < height; y++)
+		for (let x = 0; x < width; x++) {
+			const at = (y * width + x) * 4;
+			for (let channel = 0; channel < 3; channel++) {
+				seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+				const base = channel === 0 ? (x * 255) / width : channel === 1 ? (y * 255) / height : 128;
+				pixels[at + channel] = Math.max(0, Math.min(255, base + (seed % (2 * noise + 1)) - noise));
+			}
+			pixels[at + 3] = 255;
+		}
+	return sharp(pixels, { raw: { width, height, channels: 4 } })
+		.removeAlpha()
+		.jpeg({ quality, chromaSubsampling: "4:2:0", optimiseCoding: false })
+		.toBuffer();
 }
 
 interface Received {
@@ -128,6 +137,34 @@ function bubblePictures(phone: Page): Promise<number> {
 		.evaluateAll(images => images.filter(image => (image as HTMLImageElement).naturalWidth > 0).length);
 }
 
+/** Each sent bubble as the page holds it: its pictures (source head, size, decode result) and unavailable chips. */
+function describeBubbles(phone: Page): Promise<string> {
+	return phone
+		.locator(".omp-user-bubble")
+		.evaluateAll(async bubbles =>
+			JSON.stringify(
+				await Promise.all(
+					bubbles.map(async bubble => ({
+						text: bubble.textContent?.slice(0, 60),
+						pictures: await Promise.all(
+							[...bubble.querySelectorAll("img")].map(async image => ({
+								src: image.src.slice(0, 40),
+								chars: image.src.length,
+								width: image.naturalWidth,
+								decode: await image.decode().then(
+									() => "ok",
+									(failure: Error) => failure.message,
+								),
+							})),
+						),
+						chips: [...bubble.querySelectorAll("[data-image-unavailable]")].map(chip => chip.textContent),
+					})),
+				),
+			),
+		)
+		.catch((failure: Error) => `unreadable: ${failure.message}`);
+}
+
 /**
  * What the phone's browser does with a picture, asked of the page: the engine under test is not always the phone it
  * stands in for. Safari on an iPhone draws a HEIC and has `OffscreenCanvas` (16.4 and later), which scales a photo
@@ -145,15 +182,22 @@ function pictureSupport(phone: Page, heic: Buffer): Promise<{ drawsHeic: boolean
 	}, heic.toString("base64"));
 }
 
+/** The desktop window's page, as far as this spec reaches it. */
+interface Desktop {
+	/** `expression` run in the page (a promise is awaited): its value. */
+	evaluate(expression: string): Promise<unknown>;
+	stop(): Promise<void>;
+}
+
 interface Host {
-	app: ElectronApplication;
+	desktop: Desktop;
 	proxy: ServeProxy;
 }
 
 type Engine = (typeof ENGINES)[number];
 
-/** The app with Mobile web ready and the fake serve in front of it. */
-async function startHost(engine: Engine, profile: Profile): Promise<Host> {
+/** Windows: Playwright attaches to the host's WebView2 page. */
+async function launchWebView2Desktop(profile: Profile): Promise<Desktop> {
 	const app = await electron.launch({
 		args: [path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"), `--user-data-dir=${profile.desktop}`],
 		env: profile.env,
@@ -161,9 +205,55 @@ async function startHost(engine: Engine, profile: Profile): Promise<Host> {
 	try {
 		const desk = await app.firstWindow();
 		await desk.waitForFunction(() => window.omp?.rpc != null);
-		await desk.evaluate(() => window.omp.mobileWeb.command({ action: "enable" }));
+		return { evaluate: expression => desk.evaluate(expression), stop: () => exitApp(app) };
+	} catch (error) {
+		await exitApp(app).catch(() => undefined);
+		throw error;
+	}
+}
+
+/** macOS: the host's own WebDriver, the way scripts/tauri-native-smoke.ts drives the packaged app. */
+async function launchNativeDesktop(profile: Profile): Promise<Desktop> {
+	const app = await launchNative("mobile-attach-", {
+		profile: { root: profile.root, desktop: profile.desktop, project: profile.project, agent: profile.agent },
+		// Without OMP_GUI_HEADLESS, the setup scripts/tauri-native-smoke.ts runs this host in on the runner: the transparent
+		// windows it asks for have not been tried under a driven WKWebView.
+		env: { ...profile.env, OMP_GUI_HEADLESS: undefined },
+		output: test.info().outputPath("native-host"),
+	});
+	const driver = new Driver(app.port);
+	const stop = async () => {
+		await driver.evaluate("(setTimeout(() => window.omp.app.quit(), 0), true)").catch(() => undefined);
+		await Promise.race([app.code.catch(() => undefined), delay(15_000)]);
+		await stopNative(app);
+		copyShellDiagnostics(app.desktop, app.profile);
+	};
+	try {
+		await driver.attach(app.exited);
+		await until(
+			"The desktop page's preload",
+			async () => (await driver.evaluate("window.omp?.rpc != null")) === true,
+			app.exited,
+		);
+	} catch (error) {
+		await saveFailure(driver, app.profile, error);
+		await stop().catch(() => undefined);
+		throw error;
+	}
+	return { evaluate: expression => driver.evaluate(expression), stop };
+}
+
+/** The app with Mobile web ready and the fake serve in front of it. */
+async function startHost(engine: Engine, profile: Profile): Promise<Host> {
+	const desktop = await (process.platform === "darwin"
+		? launchNativeDesktop(profile)
+		: launchWebView2Desktop(profile));
+	try {
+		await desktop.evaluate(`window.omp.mobileWeb.command({ action: "enable" })`);
 		await expect
-			.poll(() => desk.evaluate(async () => (await window.omp.mobileWeb.getState()).phase), { timeout: 60_000 })
+			.poll(() => desktop.evaluate("window.omp.mobileWeb.getState().then(state => state.phase)"), {
+				timeout: 60_000,
+			})
 			.toBe("ready");
 		await expect.poll(() => serveSites(profile.tailscale).length, { timeout: 30_000 }).toBeGreaterThan(0);
 		const site = serveSites(profile.tailscale).at(-1);
@@ -171,9 +261,9 @@ async function startHost(engine: Engine, profile: Profile): Promise<Host> {
 		const proxy = await ServeProxy.start(site, "seuput@example.com", undefined, {
 			plainCookie: engine.name === "webkit",
 		});
-		return { app, proxy };
+		return { desktop, proxy };
 	} catch (error) {
-		await exitApp(app).catch(() => undefined);
+		await desktop.stop().catch(() => undefined);
 		throw error;
 	}
 }
@@ -210,16 +300,16 @@ for (const engine of ENGINES)
 	test(`A photo attached on the phone (${engine.name}) goes up through the serve prefix, omp gets it as an image and the sent bubble shows it: a camera JPEG, a 12 MB JPEG and a HEIC`, async () => {
 		test.setTimeout(240_000);
 		const profile = await makeProfile();
-		const browser = await engine.type.launch();
-		let app: ElectronApplication | null = null;
-		let proxy: ServeProxy | null = null;
+		const browser = await launchBrowser(engine.type);
+		let host: Host | null = null;
 		try {
-			({ app, proxy } = await startHost(engine, profile));
+			host = await startHost(engine, profile);
+			const { proxy } = host;
 
 			const heic = await fs.readFile("e2e/media/photo.heic");
 			const pictures: Picture[] = [
-				{ name: "camera.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(app, 24, 92) },
-				{ name: "big.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(app, 40, 100) },
+				{ name: "camera.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(24, 92) },
+				{ name: "big.jpg", mimeType: "image/jpeg", buffer: await cameraJpeg(40, 100) },
 				{ name: "photo.heic", mimeType: "image/heic", buffer: heic },
 			];
 			const [camera, big] = pictures;
@@ -227,8 +317,48 @@ for (const engine of ENGINES)
 			expect(big?.buffer.length).toBeGreaterThan(12 * 1024 * 1024);
 
 			const context = await browser.newContext({ ...engine.device });
+			// The page's own view of each socket: its close code and any frame over 100 KB, in either direction.
+			await context.addInitScript(() => {
+				const Native = window.WebSocket;
+				const began = performance.now();
+				const say = (what: string) =>
+					console.warn(`[ws ${((performance.now() - began) / 1000).toFixed(1)}s] ${what}`);
+				window.WebSocket = new Proxy(Native, {
+					construct(target, args: ConstructorParameters<typeof WebSocket>) {
+						const socket = new target(...args);
+						socket.addEventListener("close", event =>
+							say(`close ${event.code} ${event.reason} clean=${event.wasClean}`),
+						);
+						socket.addEventListener("message", event => {
+							const size = typeof event.data === "string" ? event.data.length : 0;
+							if (size > 100_000) say(`received ${size} chars`);
+						});
+						const send = socket.send.bind(socket);
+						socket.send = data => {
+							if (typeof data === "string" && data.length > 100_000) say(`sent ${data.length} chars`);
+							send(data);
+						};
+						return socket;
+					},
+				});
+			});
 			const phone = await context.newPage();
 			const uploads: string[] = [];
+			// What the phone's page saw on its socket and console, to say why a send that omp received still failed.
+			const wire: string[] = [];
+			const began = Date.now();
+			const note = (what: string) => wire.push(`${((Date.now() - began) / 1000).toFixed(1)}s ${what}`);
+			phone.on("websocket", socket => {
+				note(`socket open ${new URL(socket.url()).pathname}`);
+				socket.on("close", () => note("socket close"));
+				socket.on("socketerror", failure => note(`socket error ${failure}`));
+			});
+			phone.on("console", message => {
+				const text = message.text();
+				if ((message.type() === "error" || message.type() === "warning") && !text.startsWith("Viewport argument"))
+					note(`${message.type()}: ${text}`);
+			});
+			phone.on("requestfailed", request => note(`request failed ${request.url()} ${request.failure()?.errorText}`));
 			phone.on("response", response => {
 				const url = new URL(response.url());
 				if (url.pathname === "/upload") uploads.push(`${response.request().method()} ${response.status()}`);
@@ -279,10 +409,25 @@ for (const engine of ENGINES)
 					if (support.scales) expect(sent).toBeLessThan(picture.buffer.length);
 					else expect(sent).toBe(picture.buffer.length);
 				}
-				await expect(thumbnails).toHaveCount(0);
+				// A send that fails after omp has the prompt puts the picture back in the composer: say what the page told.
+				await expect(thumbnails)
+					.toHaveCount(0)
+					.catch(async (error: Error) => {
+						const notices = await phone.locator('[role="status"], [role="alert"]').allInnerTexts();
+						throw new Error(
+							`${error.message}\nthe page's notices: ${JSON.stringify(notices)}\nthe phone's wire:\n${wire.join("\n")}`,
+						);
+					});
 				// The bubble shows the picture omp journaled (the HEIC as the computer's JPEG, in every browser).
 				const shown = index + 1;
-				await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(shown);
+				await expect
+					.poll(() => bubblePictures(phone), { timeout: 30_000 })
+					.toBe(shown)
+					.catch(async (error: Error) => {
+						throw new Error(
+							`${error.message}\nthe bubbles: ${await describeBubbles(phone)}\nthe phone's wire:\n${wire.join("\n")}`,
+						);
+					});
 				await captureTo(CAPTURES, phone, `${engine.name}-${picture.name}-sent`);
 			}
 			// Two photos in one message: together well over what one frame may carry.
@@ -296,16 +441,38 @@ for (const engine of ENGINES)
 			await phone.getByRole("button", { name: /^(Send|보내기)$/ }).click();
 			await expect
 				.poll(async () => (await receivedPrompt(profile.record, both))?.images?.length, { timeout: 60_000 })
-				.toBe(2);
-			// The three bubbles above showed 3 pictures, now 2 more.
-			const decoded = 3 + 2;
-			await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(decoded);
+				.toBe(2)
+				.catch(async (error: Error) => {
+					const notices = await phone.locator('[role="status"], [role="alert"]').allInnerTexts();
+					const frames = (await fs.readFile(profile.record, "utf8").catch(() => ""))
+						.split("\n")
+						.filter(line => line.includes("look at") || line.includes('"abort"'))
+						.map(line => {
+							const frame = JSON.parse(line) as Received & { recordedBy?: string };
+							return `${frame.type} ${frame.message} images=${frame.images?.length} by=${frame.recordedBy}`;
+						});
+					const state = await phone
+						.evaluate(() => ({
+							thumbnails: document.querySelectorAll('ul[aria-label="Attached images"] li').length,
+							draft: (document.querySelector("[data-composer-input]") as HTMLTextAreaElement | null)?.value,
+							buttons: [...document.querySelectorAll("button")]
+								.map(button => button.getAttribute("aria-label") ?? button.textContent)
+								.filter(Boolean)
+								.slice(0, 40),
+						}))
+						.catch((failure: Error) => failure.message);
+					throw new Error(
+						`${error.message}\nuploads: ${JSON.stringify(uploads)}\nframes:\n${frames.join("\n")}\nstate: ${JSON.stringify(state)}\nnotices: ${JSON.stringify(notices)}\nthe phone's wire:\n${wire.join("\n")}`,
+					);
+				});
+			// The bubbles above showed one picture per message sent, now 2 more.
+			await expect.poll(() => bubblePictures(phone), { timeout: 30_000 }).toBe(pictures.length + 2);
 			await captureTo(CAPTURES, phone, `${engine.name}-two-photos-sent`);
-			expect(uploads).toEqual(Array(5).fill("POST 200"));
+			expect(uploads).toEqual(Array(pictures.length + 2).fill("POST 200"));
 		} finally {
-			await browser.close();
-			await proxy?.close();
-			if (app) await exitApp(app).catch(() => undefined);
+			await closeBrowser(browser);
+			await host?.proxy.close();
+			if (host) await host.desktop.stop().catch(() => undefined);
 			await fs.rm(profile.root, { recursive: true, force: true }).catch(() => undefined);
 		}
 	});
@@ -356,7 +523,7 @@ for (const engine of ENGINES)
 	test(`Through the + menu on the phone (${engine.name}), a PDF, a text file and a photo picked while the page hides behind the picker and a reply streams all reach omp; a file over 25 MB is refused with a message`, async () => {
 		test.setTimeout(240_000);
 		const profile = await makeProfile();
-		const browser = await engine.type.launch();
+		const browser = await launchBrowser(engine.type);
 		let host: Host | null = null;
 		try {
 			host = await startHost(engine, profile);
@@ -464,9 +631,9 @@ for (const engine of ENGINES)
 			expect(uploads).toEqual([]);
 			await expect(phone.locator("[data-upload-chip]")).toHaveCount(0);
 		} finally {
-			await browser.close();
+			await closeBrowser(browser);
 			await host?.proxy.close();
-			if (host) await exitApp(host.app).catch(() => undefined);
+			if (host) await host.desktop.stop().catch(() => undefined);
 			await fs.rm(profile.root, { recursive: true, force: true }).catch(() => undefined);
 		}
 	});

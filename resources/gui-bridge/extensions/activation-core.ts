@@ -25,6 +25,37 @@ export function pluginRequiresRestart<P>(
 	return RESTART_ENTRY_KEYS.some(key => resolveEntries(plugin, key).length > 0);
 }
 
+/** One manifest section (the base, or a feature), as untrusted JSON: any field may be of any type. */
+type EntrySection = Partial<Record<RestartEntryKey | "features", unknown>>;
+
+/** Every `<key> <entry>` a manifest declares under extensions/tools/hooks, on its base and on every feature. */
+function restartEntries(manifest: unknown): string[] {
+	if (typeof manifest !== "object" || manifest === null) return [];
+	const features = (manifest as EntrySection).features;
+	const sections: unknown[] = [manifest, ...(typeof features === "object" && features ? Object.values(features) : [])];
+	return sections.flatMap(section =>
+		typeof section === "object" && section
+			? RESTART_ENTRY_KEYS.flatMap(key =>
+					[(section as EntrySection)[key]]
+						.flat()
+						.filter(entry => entry !== undefined && entry !== null)
+						.map(entry => `${key} ${typeof entry === "string" ? entry : JSON.stringify(entry)}`),
+				)
+			: [],
+	);
+}
+
+/**
+ * The extension, tool and hook entries (`<key> <entry>`, sorted) a candidate manifest declares that the
+ * installed one does not. Every feature counts, enabled or not, since one can be turned on later. The extension
+ * updater (the core's `tools/ext.rs`) holds an upgrade that adds any for the person's approval. Manifest JSON is
+ * untrusted: either side may be missing or malformed.
+ */
+export function addedRestartEntries(installed: unknown, candidate: unknown): string[] {
+	const have = new Set(restartEntries(installed));
+	return [...new Set(restartEntries(candidate))].filter(entry => !have.has(entry)).sort();
+}
+
 /** The fields of stock's `ScopedInstalledPlugin` the diff compares. */
 export interface ActivationPlugin {
 	name: string;

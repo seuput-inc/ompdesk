@@ -62,7 +62,6 @@
 		"src/main/bridge-mcp-credentials-stock.test.ts": 6.3,
 		"src/main/autopilot-audit.test.ts": 6.2,
 		"src/main/bridge-session-fork-stock.test.ts": 6.1,
-		"src/main/mcp-hub-rea.test.ts": 6.1,
 		"src/main/stock-helper.test.ts": 6,
 		"src/main/omp-processes.test.ts": 6,
 		"src/main/remote/devices.test.ts": 5.9,
@@ -190,7 +189,6 @@
 		"src/main/remote/link-traffic-report.test.ts": 10.3,
 		"src/main/routines/git.test.ts": 10.1,
 		"src/main/local/git/session-worktree.test.ts": 9.7,
-		"src/main/mcp-hub-rea.test.ts": 9.1,
 		"src/main/formal/review-fixes.test.ts": 8.9,
 		"src/main/autopilot-ship.test.ts": 8.6,
 		"src/main/disk/disk-care-artifacts.test.ts": 8.4,
@@ -229,7 +227,6 @@
 		"src/main/local/autopilot.test.ts": 2.8,
 		"src/main/preview/host.test.ts": 2.6,
 		"src/main/schedules.test.ts": 2.5,
-		"src/main/web/file-edit-reports.test.ts": 2.2,
 		"src/main/stock-helper-extensions.test.ts": 2.1
 	}
 }

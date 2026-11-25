@@ -232,10 +232,41 @@ test("typing is one undo step, Hangul composes after @ and /, Enter right after 
 
 		// DI-1: nineteen typed characters are ONE ⌘Z.
 		await input.click();
+		// What the field's edit stream looked like (a failed undo names it): each input event's type and data, and each
+		// write the page made to `value` by script (which ends the browser's open typing command and its undo step).
+		await input.evaluate(el => {
+			const seen: string[] = [];
+			const note = (entry: string) => {
+				if (seen.length >= 80) return;
+				seen.push(entry);
+				el.dataset.editLog = seen.join(" | ");
+			};
+			el.addEventListener("input", event => {
+				if (event instanceof InputEvent) note(`${event.inputType}:${JSON.stringify(event.data)}`);
+			});
+			// The field's own accessor when React put one there (its value tracker), else the prototype's: both stay in the chain.
+			const descriptor =
+				Object.getOwnPropertyDescriptor(el, "value") ??
+				Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+			if (descriptor?.set)
+				Object.defineProperty(el, "value", {
+					configurable: true,
+					get: () => descriptor.get?.call(el),
+					set: next => {
+						note(`script-value=${JSON.stringify(next)}`);
+						descriptor.set?.call(el, next);
+					},
+				});
+		});
 		await page.keyboard.type("hello world foo bar");
 		await expect(input).toHaveValue("hello world foo bar");
 		await page.keyboard.press("ControlOrMeta+z");
-		await expect(input).toHaveValue("");
+		await expect(input)
+			.toHaveValue("", { timeout: 10_000 })
+			.catch(async (error: Error) => {
+				const log = await input.getAttribute("data-edit-log");
+				throw new Error(`${error.message}\nedit stream: ${log}`);
+			});
 
 		// DI-21: composing ㅎ → 하 → 한 after `@` and after `/`; Enter during composition never picks or sends.
 		for (const trigger of ["@", "/"]) {

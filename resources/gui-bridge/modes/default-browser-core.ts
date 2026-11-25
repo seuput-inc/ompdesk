@@ -7,6 +7,7 @@
  *            built-in `browser` tool drives the user's own signed-in browser through the relay only that browser's
  *            extension dials, plus one static section naming it.
  *   builtin  nothing: stock omp.
+ *   unavailable  no verified relay for the selected browser: disable the browser prelude, without changing config.
  * No omp imports, so the GUI's vitest runs it.
  */
 import { type PromptSectionHost, registerPromptSection } from "../prompt-sections";
@@ -30,6 +31,9 @@ The built-in \`browser\` tool and Eval's \`browser\` object drive the user's own
 /** The prompt section for `browser`; undefined for the built-in browser (stock omp's own prompt). */
 export function browserSection(browser: AgentBrowser): string | undefined {
 	if (browser.kind === "ego") return EGO_SECTION;
+	if (browser.kind === "unavailable") {
+		return `<browser>omp cannot verify a relay for the selected ${browser.name} profile. Do not use another browser or discover a relay. Tell the user to choose another default browser in Settings, or start a chat in the omp side panel of a supported browser.</browser>`;
+	}
 	return browser.kind === "relay" ? relaySection(browser.name) : undefined;
 }
 
@@ -44,8 +48,11 @@ export function currentDefaultBrowser(): AgentBrowser {
 export function setDefaultBrowser(params: unknown): { browser: AgentBrowser } {
 	const value = typeof params === "object" && params !== null && "browser" in params ? params.browser : undefined;
 	const browser = parseAgentBrowser(value);
-	if (!browser)
-		throw new Error('default_browser_set needs {browser: {kind: "ego" | "builtin" | "relay", name?, url?}}');
+	if (!browser) {
+		throw new Error(
+			'default_browser_set needs {browser: {kind: "ego" | "builtin" | "relay" | "unavailable", name?, url?}}',
+		);
+	}
 	current = browser;
 	return { browser };
 }
@@ -54,27 +61,33 @@ export function setDefaultBrowser(params: unknown): { browser: AgentBrowser } {
 export interface RelaySetting {
 	hold(scope: object, url: string): void;
 	release(scope: object): void;
+	block(scope: object): void;
+	unblock(scope: object): void;
 }
 
-/** Scopes where this choice holds the relay overrides now, with the endpoint held. */
-const held = new Map<object, string>();
+/** A URL holds a named relay. False holds the browser prelude off because discovery cannot prove its profile. */
+const held = new WeakMap<object, string | false>();
 /** Scopes where Preview's agent browsing holds the same overrides: its pair wins while it runs. */
 const previewing = new Set<object>();
 
 /** Make `scope`'s relay overrides match the current choice. */
 export function applyDefaultBrowser(scope: object, setting: RelaySetting): void {
 	if (previewing.has(scope)) return;
-	if (current.kind === "relay") {
-		if (held.get(scope) === current.url) return;
-		setting.hold(scope, current.url);
-		held.set(scope, current.url);
-	} else if (held.delete(scope)) {
-		setting.release(scope);
-	}
+	const next = current.kind === "relay" ? current.url : current.kind === "unavailable" ? false : undefined;
+	const previous = held.get(scope);
+	if (previous === next) return;
+	if (next === false) setting.block(scope);
+	if (typeof next === "string") setting.hold(scope, next);
+	if (previous === false) setting.unblock(scope);
+	if (typeof previous === "string" && typeof next !== "string") setting.release(scope);
+	if (next === undefined) held.delete(scope);
+	else held.set(scope, next);
 }
 
 /** Preview's relay took `scope`'s `browser.relay`. */
-export function previewRelayStarted(scope: object): void {
+export function previewRelayStarted(scope: object, setting: RelaySetting): void {
+	if (held.get(scope) === false) setting.unblock(scope);
+	held.delete(scope);
 	previewing.add(scope);
 }
 
@@ -89,5 +102,5 @@ export type DefaultBrowserHost = PromptSectionHost;
 
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */
 export function install(pi: DefaultBrowserHost): void {
-	registerPromptSection(pi, "default-browser", () => browserSection(current));
+	registerPromptSection(pi, "default-browser", () => (previewing.size ? undefined : browserSection(current)));
 }

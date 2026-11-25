@@ -1,5 +1,6 @@
-/* ompdesk Light — default light palette. Keep in sync with THEMES.light (lib/themes.ts, label "OMPdesk Light"):
-   applyThemeByName() writes that map inline when the theme is picked by name.
+/* ompdesk Light — default light palette, built from `ompdeskLight` (lib/theme-palettes.ts: Orca's near-monochrome
+   neutrals). applyThemeByName() writes the built map inline when the theme is picked by name; this file paints the
+   same values before any script runs (styles/tokens.test.ts keeps the two equal).
    Only palette primitives live here; scales, derived washes and the --omp-*
    compatibility aliases are theme-independent (tokens.css). */
 
@@ -9,47 +10,53 @@
 	/* ── ompdesk palette (--sc-*) ─────────────────────────────────────── */
 	/* Surfaces */
 	--sc-bg: #ffffff;
-	--sc-surface-1: #f7f7f8;
-	--sc-surface-2: #f3f3f5;
-	--sc-surface-3: #ececef;
+	--sc-surface-1: #f5f5f5;
+	--sc-surface-2: #f5f5f5;
+	--sc-surface-3: #ebebeb;
 	--sc-elevated: #ffffff;
 	--sc-field: #ffffff;
-	--sc-overlay: rgba(15, 15, 20, 0.32);
+	--sc-overlay: rgba(0, 0, 0, 0.4);
 	/* Text */
-	--sc-text: #1b1b1f;
-	--sc-text-secondary: #46464f;
-	--sc-text-muted: #5f5f68;
-	--sc-text-subtle: #6a6a73;
+	--sc-text: #0a0a0a;
+	--sc-text-secondary: #404040;
+	--sc-text-muted: #5c5c5c;
+	--sc-text-subtle: #666666;
 	/* Lines */
-	--sc-divider: #ebebee;
-	--sc-border-subtle: #dcdce2;
-	--sc-border: #878790;
-	/* Accent */
-	--sc-accent: #5b5bd6;
-	--sc-accent-hover: #4f4fc4;
-	--sc-accent-fg: #ffffff;
+	--sc-divider: #ededed;
+	--sc-border-subtle: #e5e5e5;
+	--sc-border: #858585;
+	/* Accent: near the text color, so a primary button, a switch and a selection read black on white */
+	--sc-accent: #171717;
+	--sc-accent-hover: #333333;
+	--sc-accent-fg: #fafafa;
 	/* Status */
-	--sc-success: #18794e;
+	--sc-success: #147638;
 	--sc-warning: #935f00;
-	--sc-danger: #bf3a3e;
+	--sc-danger: #c8102e;
 	--sc-danger-fg: #ffffff;
-	--sc-info: #2f62c4;
-	/* Elevation */
-	--sc-shadow-sm: 0 1px 2px rgba(16, 16, 24, 0.06);
-	--sc-shadow-md: 0 4px 14px rgba(16, 16, 24, 0.08), 0 1px 3px rgba(16, 16, 24, 0.05);
-	--sc-shadow-lg: 0 18px 48px rgba(16, 16, 24, 0.16), 0 2px 8px rgba(16, 16, 24, 0.06);
+	--sc-info: #0a5cc2;
+	/* A session waiting on the person, and an unseen finish: hues of their own, never the accent */
+	--sc-attention: #b83c0b;
+	--sc-unread: #2563eb;
+	/* Elevation: Orca's three levels (a hairline lift, a floating menu, a dialog with a top highlight) */
+	--sc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+	--sc-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);
+	--sc-shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 
 	/* ── Domain tokens with a light-specific value; the rest live in tokens.css ── */
+	--sc-selection: rgba(10, 10, 10, 0.16);
 	--omp-user-msg-bg: var(--sc-surface-2);
-	--omp-tool-error-bg: rgba(191, 58, 62, 0.06);
-	--omp-md-code: #a3365c;
-	--omp-md-quote-border: #c9c9d1;
-	--omp-diff-added-bg: rgba(24, 121, 78, 0.07);
-	--omp-diff-removed-bg: rgba(191, 58, 62, 0.06);
+	--omp-tool-error-bg: rgba(200, 16, 46, 0.06);
+	--omp-md-code: #0a0a0a;
+	--omp-md-quote-border: #bfbfbf;
+	--omp-md-link: #0a56b4;
+	--omp-link: #0a56b4;
+	--omp-diff-added-bg: rgba(20, 118, 56, 0.1);
+	--omp-diff-removed-bg: rgba(200, 16, 46, 0.1);
 	--omp-syntax-keyword: #4646c0;
 	--omp-syntax-function: #0f6b75;
 	--omp-syntax-string: #865100;
 	--omp-syntax-number: #a3365c;
 	--omp-syntax-type: #2b6b3a;
-	--omp-scrollbar-thumb: #c6c6ce;
+	--omp-scrollbar-thumb: #b6b6b6;
 }

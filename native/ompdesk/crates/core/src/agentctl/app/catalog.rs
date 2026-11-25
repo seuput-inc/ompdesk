@@ -55,6 +55,7 @@ const REMOTE_SET_DEVICE_NAME: &str = "remote:set-device-name";
 const REMOTE_RENAME_HOST: &str = "remote:rename-host";
 const REMOTE_RENAME_PEER: &str = "remote:rename-peer";
 const SIDEBAR_PROJECTS_COMMAND: &str = "sidebar-projects:command";
+const BRIDGE_HEALTH_GET: &str = "bridge-health:get";
 
 /// The side panel's views an agent may open (the renderer's `PANEL_TABS`; a test keeps them equal).
 pub const PANEL_TABS: [&str; 4] = ["terminal", "diff", "preview", "files"];
@@ -177,6 +178,7 @@ pub fn shipped<P: AppPorts>() -> Registry<P> {
         action("models.set_role", "models", r##"Assign a model to a model role (default, slow, smol, plan, task, ...); omit modelId to clear the role. device sets it in another computer's omp."##, json!({"type":"object","properties":{"role":{"type":"string","minLength":1,"maxLength":60},"modelId":{"type":"string","minLength":1,"maxLength":200},"device":{"type":"string","minLength":1,"maxLength":200,"description":"A paired computer by name or id as ompdesk_sessions lists it, or \"local\"; omit for the omp of your own session."}},"required":["role"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_models_set_role(ctx, args))),
         action("omp_settings.get", "omp", r##"Read stock omp settings (the ones omp itself lists, e.g. retry.fallbackChains, retry.fallbackOn, compaction.thresholdTokens): paths = exact paths, query = words from a path, label or description. device reads another computer's omp. Credentials and the approval, security, memory and computer-use settings are never shown."##, json!({"type":"object","properties":{"paths":{"type":"array","items":{"type":"string","maxLength":200},"maxItems":40},"query":{"type":"string","minLength":1,"maxLength":100},"device":{"type":"string","minLength":1,"maxLength":200,"description":"A paired computer by name or id as ompdesk_sessions lists it, or \"local\"; omit for the omp of your own session."}},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_omp_settings_get(ctx, args))),
         action("omp_settings.set", "omp", r##"Write one stock omp setting by its exact path (find it with omp_settings.get query). value must fit the setting's type (true/false, number, one of its options, a list, or an object for a record such as retry.fallbackChains). device writes another computer's omp. One step back with app.undo. Credentials and the approval, security, memory and computer-use settings are refused."##, json!({"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":200},"value":{"type":"json"},"device":{"type":"string","minLength":1,"maxLength":200,"description":"A paired computer by name or id as ompdesk_sessions lists it, or \"local\"; omit for the omp of your own session."}},"required":["path","value"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_omp_settings_set(ctx, args))),
+        action("omp.bridge_health", "omp", r##"What OMPdesk's bridge self-check found for each omp version running on the computer this session runs on (a paired host's own when it runs there): whether every OMPdesk action works with it, and each unavailable action with the omp internals it lacks."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_omp_bridge_health(ctx, args))),
         action("ui.panel", "ui", r##"Open a side panel view (terminal, diff, preview, files), open a session view as a sheet (jobs = background tasks, plan = the plan document, logs, tree = the session tree, work = the work tree), or close the panel."##, json!({"type":"object","properties":{"tab":{"type":"string","enum":["terminal","diff","preview","files","jobs","plan","logs","tree","work","close"]}},"required":["tab"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_panel(ctx, args))),
         action("ui.settings_open", "ui", r##"Open Settings at a section (for the user to look at or to finish a step only they may do)."##, json!({"type":"object","properties":{"section":{"type":"string","enum":["general","appearance","keyboard","models","agent","memory","tools","permissions","workspace","schedules","connections","updates","advanced"]},"sub":{"type":"string","maxLength":60}},"required":["section"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_settings_open(ctx, args))),
         action("sessions.saved", "sessions", r##"Saved sessions on the computer this session runs on (a paired host's own when it runs there): title, folder, last change, path."##, json!({"type":"object","properties":{"scope":{"type":"string","enum":["local","global"],"description":"local: this folder's sessions; global (default): all."}},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sessions_saved(ctx, args))),
@@ -199,13 +201,13 @@ pub fn shipped<P: AppPorts>() -> Registry<P> {
             .manage(Manage::Lifts(r##"only contacts the release server; nothing is downloaded into use or applied (updates.apply asks)"##)),
         action("updates.download", "updates", r##"Download the OMPdesk update that updates.status says is available, on this computer (what the Download button does). It installs nothing: updates.apply does, and always asks."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_updates_download(ctx, args)))
             .manage(Manage::Lifts(r##"only fetches the release the check found; nothing is installed or restarted (updates.apply asks)"##)),
-        action("updates.apply", "updates", r##"Install the downloaded OMPdesk update and restart the app (every running turn ends). host: true asks the paired host this session runs on to install and restart its own; it refuses while work runs there."##, json!({"type":"object","properties":{"host":{"type":"boolean","description":"true: the paired host this session runs on, not this computer. Refused for a session on this computer."}},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_updates_apply(ctx, args)))
-            .manage(Manage::Always { reason: r##"installs new code and restarts, ending every running turn"##, when: None })
+        action("updates.apply", "updates", r##"Install the downloaded OMPdesk update and restart the app (running turns go on when OMPdesk starts again, while Continue interrupted work is on, the default: do not end a turn to wait for it). host: true asks the paired host this session runs on to install and restart its own; it refuses while work runs there."##, json!({"type":"object","properties":{"host":{"type":"boolean","description":"true: the paired host this session runs on, not this computer. Refused for a session on this computer."}},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_updates_apply(ctx, args)))
+            .manage(Manage::Always { reason: r##"installs new code and restarts, cutting every running turn until the relaunch continues it"##, when: None })
             .describe(describe_updates_apply),
         action("disk.status", "updates", r##"How much disk OMPdesk uses on this computer (worktrees, sessions, logs, stats, app data, session scratch files, the Bun and npm caches) and what the last disk cleanup freed."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_disk_status(ctx, args))),
         action("disk.clean", "updates", r##"Run disk care now on this computer and wait for it: drops build output and dependencies from worktrees idle 3+ days (the project makes them again) and saves then removes worktrees idle 14+ days (restorable from the Work tree view). Nothing the user could lose is deleted."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_disk_clean(ctx, args))),
-        action("app.quit", "app", r##"Quit OMPdesk (every running turn ends)."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_app_quit(ctx, args)))
-            .manage(Manage::Always { reason: r##"quitting ends every running turn"##, when: None }),
+        action("app.quit", "app", r##"Quit OMPdesk (running turns go on when OMPdesk starts again, while Continue interrupted work is on, the default: do not end a turn to wait for it)."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_app_quit(ctx, args)))
+            .manage(Manage::Always { reason: r##"quitting stops every running turn until OMPdesk starts again and continues it"##, when: None }),
         action("accounts.github_status", "accounts", r##"Whether GitHub CLI is signed in and as which login."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_accounts_github_status(ctx, args))),
         action("accounts.github_sign_in", "accounts", r##"Start GitHub sign-in. Only starts the existing sign-in flow (a browser page or a code the person completes); it never reads or stores a credential."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_accounts_github_sign_in(ctx, args)))
             .manage(Manage::Always { reason: r##"signing in connects the person's account (a credential)"##, when: None }),
@@ -270,9 +272,9 @@ fn when_enabled(args: &Args) -> bool {
 
 fn describe_updates_apply(args: &Args) -> String {
     if args.get("host") == Some(&Value::Bool(true)) {
-        "Install the downloaded OMPdesk update on the paired host this session runs on and restart that computer's app (its running turns end)".into()
+        "Install the downloaded OMPdesk update on the paired host this session runs on and restart that computer's app (its running turns go on after its relaunch)".into()
     } else {
-        "Install the downloaded OMPdesk update and restart the app (every running turn ends)."
+        "Install the downloaded OMPdesk update and restart the app (running turns go on when OMPdesk starts again, while Continue interrupted work is on, the default: do not end a turn to wait for it)."
             .into()
     }
 }
@@ -579,9 +581,30 @@ fn first_text<'a>(candidates: &[&'a str]) -> &'a str {
         .unwrap_or("")
 }
 
+/// What an account has left beyond its plan (`UsageReport.credits`), as the accounts list shows it: a balance or a
+/// cap the provider reports, never a charge.
+fn credits_text(credits: &Map<String, Value>) -> Option<String> {
+    let remaining = finite(credits.get("remaining"));
+    let unit = text_of(credits.get("unit"));
+    match text_of(credits.get("kind")) {
+        "unlimited" => Some("credit balance: unlimited".into()),
+        "balance" => remaining.map(|left| format!("credit balance: {} {unit}", js_number(left))),
+        "monthlyCap" => remaining.map(|left| {
+            let cap = finite(credits.get("limit"))
+                .map_or(String::new(), |cap| format!(" of {}", js_number(cap)));
+            format!(
+                "extra usage cap: {}{cap} {unit} left this month",
+                js_number(left)
+            )
+        }),
+        _ => None,
+    }
+}
+
 /// One account's report: its windows each under their own label (the limit's, as `omp usage` names them), then its
-/// saved resets.
-fn describe_report(report: &Map<String, Value>, now: f64) -> String {
+/// saved resets. `credit_spend` is the Credit use of the omp that read it; `None` from a bridge older than that field,
+/// whose `resetAt` (any exhausted row, a model's own week included) is all it says of a limit.
+fn describe_report(report: &Map<String, Value>, now: f64, credit_spend: Option<bool>) -> String {
     let limits = records(report.get("limits"));
     let label_of = |limit: &Map<String, Value>| {
         first_text(&[
@@ -600,13 +623,41 @@ fn describe_report(report: &Map<String, Value>, now: f64) -> String {
     if report.get("active") == Some(&Value::Bool(true)) {
         notes.push("this session's account".into());
     }
-    if let Some(until) = finite(report.get("resetAt")) {
+    let limited = match credit_spend {
+        Some(_) => finite(report.get("limitedUntil")),
+        None => finite(report.get("resetAt")),
+    };
+    if let Some(until) = limited {
         notes.push(format!("limited until {}", when_text(until, now)));
     }
-    if let Some(fetched) = finite(report.get("fetchedAt"))
-        && now - fetched >= 120_000.0
+    if let Some(until) = finite(report.get("planSpentUntil")) {
+        let until = when_text(until, now);
+        // Whether ChatGPT or Claude still allowing requests past the plan bills credits or extra usage for them is
+        // not in a usage report (a 100 % row the provider still allows, a balance, a served answer prove no debit),
+        // so the reading says what is known: the plan is used up, and whether requests are still allowed.
+        notes.push(match (credit_spend, limited) {
+            (Some(false), _) => {
+                format!(
+                    "plan used up until {until}; Credit use is off here, so nothing is sent on it"
+                )
+            }
+            (_, None) => format!("plan used up until {until}; requests still allowed"),
+            (_, Some(_)) => format!("plan used up until {until}"),
+        });
+    }
+    if let Some(text) = report
+        .get("credits")
+        .and_then(Value::as_object)
+        .and_then(credits_text)
     {
-        notes.push(format!("read {} ago", span(now - fetched)));
+        notes.push(text);
+    }
+    if let Some(fetched) = finite(report.get("fetchedAt")) {
+        notes.push(format!(
+            "read {} ({} ago)",
+            iso_time(fetched),
+            span((now - fetched).max(0.0))
+        ));
     }
     let account = text_of(report.get("account"));
     let mut lines = vec![format!(
@@ -688,16 +739,37 @@ fn describe_report(report: &Map<String, Value>, now: f64) -> String {
     lines.join("\n")
 }
 
-fn describe_usage(data: &Value, now: f64) -> String {
-    let reports = records(fields(Some(data)).get("reports"));
+/// The whole read: where and when it was taken and under which Credit use, then one block per account. `device` is
+/// the computer the action named (`None`: the computer the caller's own session runs on).
+fn describe_usage(data: &Value, now: f64, device: Option<&str>) -> String {
+    let data = fields(Some(data));
+    let reports = records(data.get("reports"));
+    let credit_spend = data.get("creditSpend").and_then(Value::as_bool);
+    let place = device.map_or("your session's computer".to_string(), |name| {
+        format!("\"{name}\"")
+    });
+    let credit = match credit_spend {
+        Some(true) => {
+            "Credit use on there: its omps keep sending an account requests past its plan while the provider allows them"
+        }
+        Some(false) => {
+            "Credit use off there: an account whose plan is used up is limited until it resets"
+        }
+        None => "Credit use there unknown (an older OMPdesk)",
+    };
+    let mut lines = vec![format!(
+        "Read by an omp on {place} at {}; {credit}.",
+        iso_time(now)
+    )];
     if reports.is_empty() {
-        return "No provider usage reports yet (no signed-in account reports a quota).".into();
+        lines.push("No provider usage reports yet (no signed-in account reports a quota).".into());
     }
-    reports
-        .iter()
-        .map(|report| describe_report(report, now))
-        .collect::<Vec<_>>()
-        .join("\n")
+    lines.extend(
+        reports
+            .iter()
+            .map(|report| describe_report(report, now, credit_spend)),
+    );
+    lines.join("\n")
 }
 
 /// One line per model role: what it really runs on, and how (a fallback, the session's own model, a model that is gone).
@@ -1351,7 +1423,11 @@ async fn h_usage_read<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
             device_of(&args),
         )
         .await?;
-    Ok(ActionResult::text(describe_usage(&data, now_ms())))
+    Ok(ActionResult::text(describe_usage(
+        &data,
+        now_ms(),
+        device_of(&args),
+    )))
 }
 
 async fn h_models_list<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
@@ -1667,6 +1743,71 @@ async fn h_ui_open_system_privacy<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done 
         "Opened System Settings › Privacy & Security › {}. Tell the person to switch OMPdesk on there; you cannot.",
         pane.replace('_', " ")
     )))
+}
+
+/// The bridge's self-check per omp version on the caller's computer (the channel routes by `device`), then the newer
+/// omp that computer's updater holds back, if any.
+async fn h_omp_bridge_health<P: AppPorts>(ctx: Ctx<P>, _args: Args) -> Done {
+    let args = ctx
+        .device()
+        .map_or(Vec::new(), |device| vec![json!(device)]);
+    let report = ctx.invoke(BRIDGE_HEALTH_GET, args).await?;
+    let held = report.get("held").and_then(Value::as_object).map(|held| {
+        let since = held
+            .get("since")
+            .and_then(Value::as_str)
+            .map_or(String::new(), |since| format!(" since {since}"));
+        let installed = match held.get("installed") {
+            Some(Value::String(version)) => version.as_str(),
+            _ => "?",
+        };
+        format!(
+            "omp {} is held back ({}{since}): omp {installed} keeps running; Update now in Settings › Updates & about installs it.",
+            text_of(held.get("version")),
+            text_of(held.get("reason"))
+        )
+    });
+    let results = records(report.get("results"));
+    let mut lines = Vec::new();
+    if results.is_empty() {
+        lines.push(
+            "Nothing checked yet in this launch: the check runs when an omp's bridge first connects.".to_string(),
+        );
+    }
+    for result in results {
+        let running = match finite(result.get("running")) {
+            Some(count) if count > 0.0 => format!("{} running", js_number(count)),
+            _ => "no longer running".to_string(),
+        };
+        let checked = finite(result.get("at"))
+            .map_or(String::new(), |at| format!(", checked {}", iso_time(at)));
+        let head = format!(
+            "omp {} ({running}{checked})",
+            text_of(result.get("ompVersion"))
+        );
+        let unavailable = records(result.get("unavailable"));
+        if let Some(reason) = result.get("unreachable").and_then(Value::as_str) {
+            lines.push(format!("{head}: bridge never connected: {reason}"));
+        } else if unavailable.is_empty() {
+            lines.push(format!("{head}: ok"));
+        } else {
+            let noun = if unavailable.len() == 1 {
+                "action"
+            } else {
+                "actions"
+            };
+            lines.push(format!("{head}: {} {noun} unavailable:", unavailable.len()));
+            for feature in unavailable {
+                lines.push(format!(
+                    "- {}: {}",
+                    text_of(feature.get("feature")),
+                    string_list(feature.get("missing")).join(", ")
+                ));
+            }
+        }
+    }
+    lines.extend(held);
+    Ok(ActionResult::text(lines.join("\n")))
 }
 
 async fn h_sidebar_projects<P: AppPorts>(ctx: Ctx<P>, _args: Args) -> Done {

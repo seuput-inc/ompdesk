@@ -26,19 +26,25 @@ use tokio::sync::{mpsc, oneshot};
 use crate::server::{Answer, Call, Events, Fault, Registry, Reply};
 
 pub mod bridge;
+mod chips;
 mod frames;
+mod held_queue;
 mod lane;
 mod launch;
 mod messages;
 mod process;
 mod queue;
+mod queue_commands;
 mod stop;
 mod stream;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use frames::strip_vt_control_characters;
 use lane::{Command, Msg, OpenParams, Plan, StockReply};
+pub(crate) use launch::{MAX_RESTART_ATTEMPTS, restart_delay};
 use process::Start;
+pub(crate) use process::omp_command;
 
 /// How long a request about a tab whose `sidecar.open` has not come waits for it.
 const OPEN_WAIT: Duration = Duration::from_secs(10);
@@ -70,7 +76,11 @@ pub fn register(registry: &mut Registry) {
         plain(call, |params: SendParams| Command::Send(params.frame))
     });
     registry.add("sidecar.command", command);
-    registry.add("sidecar.bridge", bridge_request);
+    registry.add("sidecar.bridge", bridge_request::<BridgeParams>);
+    registry.add("sidecar.queue", queue_command);
+    registry.add("sidecar.guiBridge", bridge_request::<GuiBridgeParams>);
+    registry.add("sidecar.turnEdits", turn_edits);
+    registry.add("sidecar.desktopProcess", desktop_process);
     registry.add("sidecar.barrier", |call| waited(call, Command::Barrier));
     registry.add("sidecar.whenExited", |call| {
         waited(call, |_, reply| Command::WhenExited(reply))
@@ -373,14 +383,184 @@ fn command(call: Call) -> Answer {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TurnEditsParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+}
+
+fn turn_edits(call: Call) -> Answer {
+    let params: TurnEditsParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let (reply, target) = oneshot::channel();
+    deliver(
+        &params.tab,
+        params.seq,
+        Command::TurnEdits {
+            spawn_id: params.spawn_id,
+            reply,
+        },
+    );
+    #[derive(Serialize)]
+    struct TurnAnswer<T> {
+        result: T,
+    }
+    Box::pin(async move {
+        tokio::select! {
+            biased;
+            () = call.scope.on_cancel() => Err(Fault::cancelled()),
+            read = async {
+                let (bridge, cwd) = target.await.map_err(|_| lane::no_bridge())?;
+                let result = crate::turn_edits::live(&bridge, cwd).await?;
+                Reply::json(&TurnAnswer { result })
+            } => read,
+        }
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueueParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+    bridge_connected: bool,
+    command: Box<RawValue>,
+}
+
+fn queue_command(call: Call) -> Answer {
+    let params: QueueParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let (reply, answer) = oneshot::channel();
+    deliver(
+        &params.tab,
+        params.seq,
+        Command::Queue {
+            spawn_id: params.spawn_id,
+            bridge_connected: params.bridge_connected,
+            command: params.command,
+            reply,
+        },
+    );
+    Box::pin(async move {
+        let result = answer
+            .await
+            .map_err(|_| Fault::new("sidecar_disconnected", "Sidecar disconnected"))??;
+        Reply::json(&BridgeAnswer {
+            result: Some(result),
+        })
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopProcessParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+    action: lane::DesktopProcessAction,
+}
+
+fn desktop_process(call: Call) -> Answer {
+    let params: DesktopProcessParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let (reply, answer) = oneshot::channel();
+    deliver(
+        &params.tab,
+        params.seq,
+        Command::DesktopProcess {
+            spawn_id: params.spawn_id,
+            action: params.action,
+            reply,
+        },
+    );
+    Box::pin(async move { Reply::json(&answer.await.unwrap_or(false)) })
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BridgeParams {
     tab: String,
     seq: u64,
     method: String,
+    spawn_id: Option<u64>,
     #[serde(default, deserialize_with = "keep_null")]
     params: Option<Box<RawValue>>,
     timeout_ms: Option<u64>,
+}
+
+/// Unlike a direct bridge request, a GUI command cannot choose a method, payload or another spawn.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GuiBridgeParams {
+    tab: String,
+    seq: u64,
+    spawn_id: u64,
+    command: GuiBridgeCommand,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GuiBridgeCommand {
+    GetAdvisorStats,
+    GetCheckoutPeers,
+    GetAutopilot,
+    GetDirectories,
+    RegenerateSessionTitle,
+    AbortMaintenance,
+    GetForceTool,
+    GetContextReport,
+    PreviewShareSession,
+    GetCopyTargets,
+    GetLastLink,
+    GetSettingsSchema,
+    GetModelRoleMetadata,
+    GetModelSetupFacts,
+    GetSessionSpend,
+    GetRecentModels,
+    GetNextPrompt,
+    WorktreeLifecycleSettings,
+}
+
+impl From<GuiBridgeParams> for BridgeParams {
+    fn from(gui: GuiBridgeParams) -> Self {
+        let empty_params = || Some(RawValue::from_string("{}".into()).expect("empty JSON object"));
+        let (method, params) = match gui.command {
+            GuiBridgeCommand::GetAdvisorStats => ("advisor_stats", empty_params()),
+            GuiBridgeCommand::GetCheckoutPeers => ("checkout_peers.get", empty_params()),
+            GuiBridgeCommand::GetAutopilot => ("modes.autopilot_status", empty_params()),
+            GuiBridgeCommand::GetDirectories => ("workspace.directories", None),
+            GuiBridgeCommand::RegenerateSessionTitle => ("regenerate_title", None),
+            GuiBridgeCommand::AbortMaintenance => ("composer.abort_maintenance", None),
+            GuiBridgeCommand::GetForceTool => ("composer.get_force_tool", None),
+            GuiBridgeCommand::GetContextReport => ("composer.context_report", None),
+            GuiBridgeCommand::PreviewShareSession => ("composer.share_preview", None),
+            GuiBridgeCommand::GetCopyTargets => ("composer.copy_targets", None),
+            GuiBridgeCommand::GetLastLink => ("composer.last_link", None),
+            GuiBridgeCommand::GetSettingsSchema => ("settings_schema", None),
+            GuiBridgeCommand::GetModelRoleMetadata => ("model_role_metadata", None),
+            GuiBridgeCommand::GetModelSetupFacts => ("model_setup_facts", None),
+            GuiBridgeCommand::GetSessionSpend => ("session_spend", None),
+            GuiBridgeCommand::GetRecentModels => ("recent_models", None),
+            GuiBridgeCommand::GetNextPrompt => ("next_prompt_state", None),
+            GuiBridgeCommand::WorktreeLifecycleSettings => ("worktree_lifecycle_settings", None),
+        };
+        Self {
+            tab: gui.tab,
+            seq: gui.seq,
+            method: method.into(),
+            spawn_id: Some(gui.spawn_id),
+            params,
+            timeout_ms: None,
+        }
+    }
 }
 
 /// A field that is present holds a value even when it is `null`: `{"params": null}` is not an absent `params`.
@@ -397,9 +577,9 @@ struct BridgeAnswer {
 }
 
 /// A request to this spawn's bridge.
-fn bridge_request(call: Call) -> Answer {
-    let params: BridgeParams = match call.params() {
-        Ok(params) => params,
+fn bridge_request<P: serde::de::DeserializeOwned + Into<BridgeParams>>(call: Call) -> Answer {
+    let params = match call.params::<P>() {
+        Ok(params) => params.into(),
         Err(fault) => return failed(fault),
     };
     let (reply, answer) = oneshot::channel();
@@ -407,6 +587,7 @@ fn bridge_request(call: Call) -> Answer {
         &params.tab,
         params.seq,
         Command::Bridge {
+            spawn_id: params.spawn_id,
             method: params.method,
             params: params.params,
             timeout: params.timeout_ms.map(Duration::from_millis),

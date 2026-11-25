@@ -28,7 +28,7 @@ export function bridgeHealthToast(warning: BridgeHealthWarning, t: Translate): T
 	return {
 		...sticky,
 		title: t("bridgeHealth.unsupportedTitle"),
-		message: t("bridgeHealth.unsupported", {
+		message: t(`bridgeHealth.${warning.kind}`, {
 			version: warning.ompVersion,
 			features: features.join(t("bridgeHealth.separator")),
 		}),

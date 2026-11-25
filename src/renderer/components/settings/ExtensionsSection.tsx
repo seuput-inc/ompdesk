@@ -36,7 +36,6 @@ import { useActiveTabRouteReady } from "../../hooks/use-active-tab-route";
 import { shortenPath } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { type TabRpc as SessionRpc, useTabRpc as useSessionRpc } from "../../lib/tab-rpc";
-import { useFocusedTabDevice } from "../../stores/remote";
 import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
@@ -61,7 +60,6 @@ import { type McpTestView, summarizeMcpTestData } from "../panels/mcp/McpFeedbac
 import { type McpCardAction, type McpReauthPhase, McpServerCard } from "../panels/mcp/McpServerCard";
 import { McpServerWizard } from "../panels/mcp/McpServerWizard";
 import { AgentControlRow } from "./AgentControlRow";
-import { BuiltinReaRow } from "./BuiltinReaRow";
 import { PluginsSection } from "./PluginsSection";
 import { SettingsRow, SettingsSwitchRow } from "./SettingsLayout";
 import { SkillsTab } from "./SkillsTab";
@@ -546,7 +544,6 @@ function ContextFilesTab({ rpc, query }: { rpc: LazyRpc<RpcContextFileInfo[]>; q
 function McpTab({ rpc, query }: { rpc: LazyRpc<RpcMcpServerInfo[]>; query: string }) {
 	const tabRpc = useSessionRpc();
 	const t = useT();
-	const device = useFocusedTabDevice();
 	const mutation = useRowMutation(rpc.refresh, rpc.ready);
 	const [confirmRemoveFor, setConfirmRemoveFor] = useState<RpcMcpServerInfo | null>(null);
 	const [wizardOpen, setWizardOpen] = useState(false);
@@ -578,7 +575,7 @@ function McpTab({ rpc, query }: { rpc: LazyRpc<RpcMcpServerInfo[]>; query: strin
 	}, [rpc.data]);
 	const visible = useMemo(
 		() =>
-			filterList(rpc.data?.filter(server => server.builtin !== "rea") ?? null, query, server => [
+			filterList(rpc.data ?? null, query, server => [
 				server.name,
 				server.transport,
 				server.status,
@@ -735,7 +732,6 @@ function McpTab({ rpc, query }: { rpc: LazyRpc<RpcMcpServerInfo[]>; query: strin
 	return (
 		<>
 			<AgentControlRow query={query} />
-			<BuiltinReaRow device={device} query={query} server={rpc.data?.find(server => server.builtin === "rea")} />
 			<ListFrame
 				actions={addButton}
 				emptyAction={addButton}

@@ -18,10 +18,18 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+ompdesk-checks = { path = "../checks" }
+# The system proxy a check, an update or a tab spawn goes through when no other is set (`proxy.rs`).
+ompdesk-sysproxy = { path = "../sysproxy" }
+# Diagnostic bundles use stock's stored/deflated ZIP entries and publish a completed file without clobbering Downloads.
+zip = { version = "=9.5.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tempfile = "3"
+# Repository thumbnails decode bounded raster inputs and normalize them to small PNGs; no SVG or default codecs.
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
 # The process's base: requests run concurrently (a slow listing never holds a small read behind it). Only the
 # features used: `process` and `time` run git with its timeout, `macros` joins and races a git's pipes, its exit
-# and its kill, `net` is the control socket (a Unix socket, a Windows named pipe).
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "sync", "process", "time", "macros", "net"] }
+# and its kill, `net` is the control socket (a Unix socket, a Windows named pipe), and `fs` reads bounded repository artwork off the hub.
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "sync", "process", "time", "macros", "net", "fs", "signal"] }
 # The wire: one JSON object per line. `raw_value` hands a request's params to its handler unparsed.
 # `float_roundtrip` reads a number as its digits say, as `JSON.parse` does: the default parse is best effort (one
 # time in ten with sub-millisecond digits one bit off), and a time main sends or a kept file holds is compared `==`.
@@ -29,6 +37,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "sy
 # JavaScript listed them); the CLI crate asks for it too, so every build of the workspace already had it.
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip", "preserve_order"] }
+# MIME headers and snippets use the same charset labels as TextDecoder.
+encoding_rs = "0.8"
 # Listings sort as the page's `Intl.Collator(locale, { numeric: true })` does: ICU's collation, same algorithm and data.
 icu_collator = "2"
 # The folder picker's filter lowercases as `toLocaleLowerCase()` does (Turkish, Azeri and Lithuanian rules included).
@@ -80,29 +90,29 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 subtle = "2"
 # `ecdh` is Web Push's key agreement (RFC 8291), `ecdsa` signs its VAPID token (`web/push.rs`).
 p256 = { version = "0.14", default-features = false, features = ["ecdh", "ecdsa", "std"] }
-brotli = { version = "8", default-features = false, features = ["std"] }
+brotli = { version = "9", default-features = false, features = ["std"] }
 yawc = { version = "0.5", default-features = false, features = ["zlib"] }
 # The WebSocket handshake is answered here, byte for byte as `ws` answers it (yawc's own answer differs: it puts
 # `client_max_window_bits=9` where `ws` says nothing), so the `Sec-WebSocket-Accept` digest is computed here
-# (sha1, 0.10 as yawc's own) and yawc only frames the upgraded stream; `futures-util` is its `Sink` for sending.
-# Both are already in the lockfile through yawc.
-sha1 = "0.10"
+# and yawc only frames the upgraded stream; `futures-util` is its `Sink` for sending.
+sha1 = "0.11"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Live logs watch only the directory, including inotify on Linux. macOS also uses FSEvents for the sessions tree.
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+# The agent's models.yml is edited in place (`models/file`): a lossless tree keeps every comment and the layout of
+# what an edit does not touch, as the `yaml` package's Document did. No base64 (`binary` tags are never written).
+yaml-edit = { version = "=0.3.6", default-features = false }
+# A GET made as main's Node `fetch` made it (`http/node_fetch.rs`): Node's bundled roots are Mozilla's list, which
+# webpki-roots carries from the same source; a proxy URL's credentials are percent-decoded as `decodeURIComponent`.
+webpki-roots = "1"
+percent-encoding = "2"
 
 [target.'cfg(unix)'.dependencies]
 # errno values for node's error codes (`ENOENT: no such file or directory, stat '…'`), and the SIGTERM that asks a
 # git past its timeout or its output cap to end (`sys.rs`).
 libc = "0.2"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# The sessions tree's one recursive watch (`sessions/source.rs`). FSEvents is CoreFoundation and CoreServices calls,
-# a run loop thread and a C callback: unsafe code no machine but a Mac can run, which `sys.rs` would otherwise carry
-# untested from the Windows computers that also develop this crate. notify (CC0-1.0; on macOS it links
-# objc2-core-foundation, objc2-core-services, notify-types, bitflags, log, walkdir and same-file) makes one
-# FSEventStream for the one path watched (file events, no latency) and reports the system's "events were dropped" as
-# a rescan. Windows reads ReadDirectoryChangesW itself (`sys.rs`): notify's backend there reports nothing of a buffer
-# overflow and silently stops watching a deleted root (read in 8.2.2's `windows.rs`).
-notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+# Restore inside an opened directory without following links made by a worktree hook.
+rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 # A rename's "is the target the source itself" (a case-only rename) needs the file's identity, which std keeps

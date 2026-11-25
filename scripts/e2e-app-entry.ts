@@ -1,8 +1,8 @@
 /**
- * The built app every e2e launches: `<OMP_GUI_E2E_OUT ?? out>/main/index.js`. Electron with a missing entry
- * does not fail quietly: it opens a native "Error launching app: Unable to find Electron app at …" dialog on
- * the user's screen (OMP_GUI_HEADLESS does not stop it), once per test. So a run without a build stops before
- * any Electron starts (`playwright.config.ts` globalSetup), and `launchApp` asserts the same before it spawns.
+ * The built app every e2e launches: `<OMP_GUI_E2E_OUT ?? out>/main/index.js`, which the Tauri host
+ * (`e2e/fixture/shell-launch.ts`) starts Node on. Without it every test would spend its own launch failing, so a run
+ * without a build stops before any host starts (`playwright.config.ts` globalSetup), and `launchApp` asserts the same
+ * before it spawns.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -16,7 +16,7 @@ export function assertAppBuilt(env: NodeJS.ProcessEnv = process.env): string {
 	const entry = appEntry(env);
 	if (!fs.existsSync(entry)) {
 		throw new Error(
-			`No build: ${entry} does not exist, so Electron would open an error dialog on screen. ` +
+			`No build: ${entry} does not exist, so no test can start the app. ` +
 				"Run `bun run build` or `bun run check:changed` first (or point OMP_GUI_E2E_OUT at a built out/).",
 		);
 	}

@@ -1,15 +1,13 @@
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { IPC_COMMANDS } from "../shared/ipc-types";
 import type { SetupItemState, SetupState } from "../shared/setup";
 import {
 	buildDiagnosticsReport,
-	DIAGNOSTICS_LOG_LINES,
+	currentDiagnosticsReport,
+	DIAGNOSTICS_PROBE_LINES,
+	type DiagnosticsDeps,
 	type DiagnosticsInput,
 	type DiagnosticsSystem,
-	readDiagnosticsLog,
 	registerDiagnosticsIpc,
 } from "./diagnostics";
 import type { IpcRegistry } from "./web/ipc-registry";
@@ -72,17 +70,16 @@ const INPUT: DiagnosticsInput = {
 	logLines: [],
 };
 
-const tempDirs: string[] = [];
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
-});
+function logReader(recent: string[], probes: string[] = []): DiagnosticsDeps["readLog"] {
+	return async selection => ({ recent, probes })[selection];
+}
 
 describe("buildDiagnosticsReport", () => {
 	it("lists the versions, the machine setup and an empty log", () => {
 		const report = buildDiagnosticsReport(INPUT);
 		expect(report).toContain("OMPdesk: 0.35.1");
 		expect(report).toContain("omp: 18.11.1");
-		expect(report).toContain("Electron: 36.4.0, Chrome 136.0.7103.113, Node 22.16.0");
+		expect(report).toContain("Shell: 36.4.0, Chrome 136.0.7103.113, Node 22.16.0");
 		expect(report).toContain("OS: darwin 26.0.1 (kernel 25.0.0), arm64");
 		expect(report).toContain("- bun (required): present; present 1.2.19 (~/.bun/bin/bun)");
 		expect(report).toContain("- gh: failed; missing; failed: network exit 6");
@@ -140,96 +137,22 @@ describe("buildDiagnosticsReport", () => {
 	});
 });
 
-describe("readDiagnosticsLog", () => {
-	it("tops the current log up from its archive, oldest first", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-diag-"));
-		tempDirs.push(dir);
-		const file = path.join(dir, "gui-runtime.jsonl");
-		await fs.writeFile(`${file}.1`, "old1\nold2\n");
-		await fs.writeFile(file, "new1\nnew2\n");
-		expect(await readDiagnosticsLog(file)).toEqual(["old1", "old2", "new1", "new2"]);
-	});
-
-	it("keeps only the newest lines of a long log", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-diag-"));
-		tempDirs.push(dir);
-		const file = path.join(dir, "gui-runtime.jsonl");
-		const lines = Array.from({ length: DIAGNOSTICS_LOG_LINES + 20 }, (_, index) => `line-${index}`);
-		await fs.writeFile(file, `${lines.join("\n")}\n`);
-		const read = await readDiagnosticsLog(file);
-		expect(read).toHaveLength(DIAGNOSTICS_LOG_LINES);
-		expect(read.at(-1)).toBe(`line-${DIAGNOSTICS_LOG_LINES + 19}`);
-		expect(read[0]).toBe("line-20");
-	});
-
-	it("folds a run of the same line (time aside) into its newest, so repeats never push real events out", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-diag-"));
-		tempDirs.push(dir);
-		const file = path.join(dir, "gui-runtime.jsonl");
-		const check = (minute: number) =>
-			JSON.stringify({
-				timestamp: `2026-10-21T10:${String(minute).padStart(2, "0")}:00.000Z`,
-				source: "app-update",
-				message: "check",
-				details: { event: "no-update" },
-			});
-		const event = JSON.stringify({ timestamp: "2026-10-21T09:00:00.000Z", source: "turn-resume", message: "launch" });
-		const repeats = Array.from({ length: DIAGNOSTICS_LOG_LINES * 2 }, (_, index) => check(index % 60));
-		await fs.writeFile(file, `${[event, ...repeats, "plain"].join("\n")}\n`);
-		const read = await readDiagnosticsLog(file);
-		expect(read).toEqual([
-			event,
-			check(199 % 60),
-			`… the line above ${DIAGNOSTICS_LOG_LINES * 2} times, the first at 2026-10-21T10:00:00.000Z`,
-			"plain",
-		]);
-	});
-
-	it("folds a line repeated between other lines into its newest, where the others stay in order", async () => {
-		// On one Mac the 5-minute update check sat between the link's traffic lines, so no two were adjacent and the
-		// last 100 entries still held 25 of them.
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-diag-"));
-		tempDirs.push(dir);
-		const file = path.join(dir, "gui-runtime.jsonl");
-		const at = (minute: number) => `2026-10-21T10:${String(minute).padStart(2, "0")}:00.000Z`;
-		const check = (minute: number) =>
-			JSON.stringify({
-				timestamp: at(minute),
-				source: "app-update",
-				message: "check",
-				details: { event: "no-update" },
-			});
-		const traffic = (minute: number) =>
-			JSON.stringify({ timestamp: at(minute), source: "remote-link", message: "traffic", details: { tx: minute } });
-		const lines = [check(0), traffic(1), check(5), traffic(6), check(10), traffic(11)];
-		await fs.writeFile(file, `${lines.join("\n")}\n`);
-		expect(await readDiagnosticsLog(file)).toEqual([
-			traffic(1),
-			traffic(6),
-			check(10),
-			`… the line above 3 times, the first at ${at(0)}`,
-			traffic(11),
-		]);
-	});
-
-	it("keeps every step of a sequence that came back to an earlier state: only a periodic check folds across lines", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-diag-"));
-		tempDirs.push(dir);
-		const file = path.join(dir, "gui-runtime.jsonl");
-		const phase = (minute: number, value: string) =>
-			JSON.stringify({
-				timestamp: `2026-10-21T10:0${minute}:00.000Z`,
-				source: "ai-memory",
-				message: "phase",
-				details: { phase: value },
-			});
-		const lines = [phase(0, "ready"), phase(1, "failed"), phase(2, "ready")];
-		await fs.writeFile(file, `${lines.join("\n")}\n`);
-		expect(await readDiagnosticsLog(file)).toEqual(lines);
-	});
-
-	it("is empty when there is no log", async () => {
-		expect(await readDiagnosticsLog(path.join(os.tmpdir(), "omp-gui-absent", "gui-runtime.jsonl"))).toEqual([]);
+describe("currentDiagnosticsReport", () => {
+	it("redacts old probe lines before showing them separately from recent entries", async () => {
+		const report = await currentDiagnosticsReport({
+			system: () => SYSTEM,
+			setupState: () => null,
+			readLog: logReader(["latest"], ['{"source":"turn-wait","message":"check user@example.invalid"}']),
+		});
+		const [, tail] = report.split(
+			`## Probes (console windows, slow steps, long waits, stalls; last ${DIAGNOSTICS_PROBE_LINES})`,
+		);
+		const [probes, recent] = tail.split("## Runtime log");
+		expect(probes).toContain('{"source":"turn-wait","message":"check <email>"}');
+		expect(recent).toContain("latest");
+		expect(recent).not.toContain("turn-wait");
+		expect(report).not.toContain("user@example.invalid");
+		expect(buildDiagnosticsReport(INPUT)).not.toContain("## Probes");
 	});
 });
 
@@ -242,7 +165,7 @@ describe("registerDiagnosticsIpc", () => {
 		registerDiagnosticsIpc(ipc, {
 			system: () => SYSTEM,
 			setupState: () => SETUP,
-			runtimeLogPath: () => path.join(os.tmpdir(), "omp-gui-absent", "gui-runtime.jsonl"),
+			readLog: logReader([]),
 			now: () => INPUT.generatedAt,
 		});
 		expect([...handlers.keys()]).toEqual([IPC_COMMANDS.DIAGNOSTICS_BUILD]);

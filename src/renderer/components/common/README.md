@@ -2,8 +2,9 @@
 
 The renderer's design system: every primitive a surface is built from. Read this before you write UI; reach for a
 component here before a raw element, and read the component's file header for its full rules. Import from the barrel
-(`components/common` → `index.ts`). Every primitive renders in the internal style guide (`OMP_GUI_STYLEGUIDE=1`, or
-`#/styleguide` on the dev harness).
+(`components/common` → `index.ts`) except for `QrCode`: import `components/common/QrCode` directly so the phone
+does not load the QR encoder before Settings opens. Every primitive renders in the internal style guide
+(`OMP_GUI_STYLEGUIDE=1`, or `#/styleguide` on the dev harness).
 
 `scripts/lint-controls.mjs` (run with the other surface rules by `scripts/lint-surfaces.mjs`, so by `bun run check` and
 `bun run check:changed`) fails a renderer component
@@ -27,7 +28,7 @@ allow-list beside the marker.
 | A setting that applies at once | `Switch` (bare), `SwitchField` (settings-style row), `SwitchTile` (two-column grid; `infoEnd` puts its (i) after the switch where the rows around it end in theirs) | a checkbox |
 | A choice applied on submit, or rows picked from a list | `Checkbox` (`indeterminate` for select-all), `Radio` | a raw `<input type="checkbox">` |
 | One of 2–5 short values, applied at once (thinking level, approval, rotation) | `SegmentedChoice` (a radio group; `fit`, `selectOnArrow`, `id`) | `Tabs` (they switch views), hand-made `role="radio"` buttons |
-| One of a few options that each need a line of explanation or a picture (an MCP server's transport, its scope, a theme) | `ChoiceCards` (a radio group of cards with a hint; one tab stop, arrows pick; a card's `preview` makes it a picture to pick, `tooltip` says more; `groups` splits one group into headed parts) | hand-made `role="radio"` cards |
+| One of a few options that each need a line of explanation or a picture (an MCP server's transport, its scope, a theme set) | `ChoiceCards` (a radio group of cards with a hint; one tab stop, arrows pick; a card's `preview` makes it a picture to pick, `tooltip` says more) | hand-made `role="radio"` cards |
 | A numbered list a person answers by pointing or a number key (the agent's question, an approval) | `ChoiceList` (`mode` `action`, `single` radio group or `multi` checkboxes, `selected`, a row's `aside`, `description`, `tone="danger"`; ↑/↓ move, the surface around it maps 1–9; on a touch screen the numbers are not drawn, a choosing row's box shows ✓ while checked) | numbered buttons of your own |
 | One value from ≤ ~15 fixed options | `Select` (native popup) | a custom dropdown |
 | A long, searchable or rich list (models, sessions, branches) | a picker: `Modal size="picker" placement="top"` | `Select` |
@@ -82,6 +83,7 @@ allow-list beside the marker.
 | A title editor's ask-for-a-title button | `AutoTitleButton` | a sparkle button of your own |
 | A code a phone camera reads (pairing) | `QrCode` (drawn locally, never by an image service) | an image URL |
 | The app's mark | `BrandMark` | an inline copy of the π |
+| The picture of a repository a row works in (a session row's leading mark) | `ProjectArtwork` (`src`: the repository's image or its owner's avatar, a `data:` URI or a URL the app serves; with none, or one that fails, the name's letter on a hue from the name; decorative, the row says the name in words) | an `<img>` of your own, a letter in a coloured span |
 | The UI language switch | `LangSwitcher` | a language select of your own |
 
 ## Layer plumbing
@@ -95,7 +97,9 @@ for `Modal`, `Sheet` or `Popover` first; these give a surface the same behaviour
   layer stack, so an Escape or a key handler of the layer beneath defers to it.
 - `popoverTabStops`, `tabOutOfPopover` and `isTabbable`: a non-modal popover's Tab order (Tab past its last control
   closes it and moves on from its anchor).
-- `PopoverSurface`: the popover's panel look, for a popover laid out by its owner.
+- `PopoverSurface`: the popover's panel look, for a popover laid out by its owner. It and `MenuSurface` (ContextMenu) wear
+  `.omp-floating` (global.css): the theme's floating glass (`ThemeDefinition.floating`, opaque in a theme that sets
+  none), the page blurred behind, the floating shadow; plain under software compositing. A new floating layer wears it.
 - `SheetHandle`: a bottom or left sheet's drag grabber (pulling it toward the edge dismisses).
 
 ## Container policy

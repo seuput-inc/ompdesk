@@ -11,6 +11,7 @@ import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../../lib/i18n";
+import { rememberRead, resetLastReadForTest } from "../../lib/last-read";
 import { MarkdownRenderer } from "../../lib/markdown";
 import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
@@ -70,6 +71,7 @@ afterEach(async () => {
 		});
 	}
 	container?.remove();
+	resetLastReadForTest();
 	useSessionStore.getState().reset();
 	useTabsStore.getState().reset();
 	useUiStore.setState({ panelTab: "files", panelVisible: true, filePreviewPath: null, filePreviewExpanded: false });
@@ -156,6 +158,16 @@ describe("PanelContainer", () => {
 		await mount(<PanelContainer />);
 
 		expect((document.querySelector("aside") as HTMLElement | null)?.style.width).toBe("460px");
+	});
+
+	it("opens at the width it last had, before the pref's read answers", async () => {
+		// A pref read that never answers: the first frame is the width the last read gave, not the default's.
+		ompWindow.omp = { prefs: { get: () => new Promise(() => {}) } };
+		rememberRead(undefined, "panel-width", 412, false);
+		seedActiveTab("agent");
+		await mount(<PanelContainer />);
+
+		expect((document.querySelector("aside") as HTMLElement | null)?.style.width).toBe("412px");
 	});
 
 	it("resizes from the window edge in both directions without snapping closed", async () => {

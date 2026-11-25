@@ -1,29 +1,52 @@
-import { describe, expect, it } from "vitest";
-import { isGpuProcessCrash, markerForcesSoftware } from "./gpu-fallback";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { LaunchDecision } from "./gpu-fallback";
+import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 
-describe("isGpuProcessCrash", () => {
-	it("triggers the fallback only for GPU process failures", () => {
-		expect(isGpuProcessCrash({ type: "GPU", reason: "crashed" })).toBe(true);
-		expect(isGpuProcessCrash({ type: "GPU", reason: "oom" })).toBe(true);
-		expect(isGpuProcessCrash({ type: "GPU", reason: "launch-failed" })).toBe(true);
-
-		// A normal GPU-process shutdown is lifecycle, not failure.
-		expect(isGpuProcessCrash({ type: "GPU", reason: "clean-exit" })).toBe(false);
-
-		// Windows logoff, shutdown or an installer ends the whole tree with DBG_TERMINATE_PROCESS
-		// (0x40010004): the GPU process is "killed" beside the network service, which is no GPU failure.
-		expect(isGpuProcessCrash({ type: "GPU", reason: "killed" })).toBe(false);
-
-		// Renderer/utility process exits take other recovery paths.
-		expect(isGpuProcessCrash({ type: "Tab", reason: "crashed" })).toBe(false);
-		expect(isGpuProcessCrash({ type: "Utility", reason: "crashed" })).toBe(false);
-	});
+let profile: string;
+let fixture: ShellPolicyFixture;
+beforeAll(prepareShellPolicyFixture, 180_000);
+beforeEach(async () => {
+	profile = mkdtempSync(join(tmpdir(), "gpu-marker-"));
+	fixture = await shellPolicyFixture();
+});
+afterEach(async () => {
+	await fixture.close();
+	rmSync(profile, { recursive: true, force: true });
 });
 
-describe("markerForcesSoftware", () => {
-	it("keeps software rendering only for a marker left by a real GPU failure", () => {
-		expect(markerForcesSoftware(JSON.stringify({ reason: "crashed", exitCode: -1 }))).toBe(true);
-		expect(markerForcesSoftware(JSON.stringify({ reason: "killed", exitCode: 1073807364 }))).toBe(false);
-		expect(markerForcesSoftware("not json")).toBe(true);
+function start(): Promise<unknown> {
+	return fixture.call("launch.start", { profile, now: 1, guard: false, enableGpu: false, disableGpu: false });
+}
+
+describe("GPU fallback", () => {
+	it.each([
+		["GPU", "crashed", true],
+		["GPU", "oom", true],
+		["GPU", "launch-failed", true],
+		["GPU", "clean-exit", false],
+		["GPU", "killed", false],
+		["Tab", "crashed", false],
+		["Utility", "crashed", false],
+	] as const)("handles %s %s as a crash: %s", async (type, reason, handled) => {
+		await start();
+		const decision = await fixture.call<LaunchDecision>("launch.event", {
+			op: "crash",
+			args: { type, reason, now: 2 },
+		});
+		expect(decision !== null).toBe(handled);
+	});
+
+	it.each([
+		['{"reason":"crashed","exitCode":-1}', true],
+		['{"reason":"killed","exitCode":1073807364}', false],
+		["not json", true],
+	] as const)("retains marker %s: %s", async (text, retained) => {
+		const marker = join(profile, "gpu-fallback.json");
+		writeFileSync(marker, text);
+		await start();
+		expect(existsSync(marker)).toBe(retained);
 	});
 });

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AGENT_CONTROL_REVIEW } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
-import { IPC_EVENTS, type IpcExtensionUiPayload, type IpcTabStatusPayload } from "../shared/ipc-types";
+import { IPC_COMMANDS, IPC_EVENTS, type IpcExtensionUiPayload, type IpcTabStatusPayload } from "../shared/ipc-types";
 import type {
 	ExtensionUIRequest,
 	RpcCommand,
@@ -22,8 +22,14 @@ import { SidecarPool, type TabActivity } from "./sidecar-pool";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
 import type { PersistedTabLayout } from "./tab-layout";
 import { InterruptedTurnStore, TurnResume } from "./turn-resume";
+import { BlobStore } from "./web/blobs";
 import type { ClientWindow } from "./web/client-window";
+import { WebWindows } from "./web/web-client-window";
+import { TestRouterHost } from "./web/ws-router-test-rig";
 import { withRemovalClaim } from "./worktree-removals";
+
+// The core this file starts also sends the pool's pushes itself (`pages.rs`), for the comparison at the end.
+process.env.OMPDESK_TEST_PAGES_SHADOW = "1";
 
 /** Minimal SidecarManager stand-in: an EventEmitter with lifecycle recording. */
 class FakeSidecar extends EventEmitter {
@@ -212,6 +218,12 @@ function fakePool(): { pool: SidecarPool; sidecars: FakeSidecar[] } {
 	return { pool, sidecars };
 }
 
+function closeTurn(pool: SidecarPool, win: ClientWindow, tabId: string) {
+	const turn = pool.tabsForWindow(win).find(tab => tab.tabId === tabId)?.closeTurn;
+	if (!turn) throw new Error(`No close turn for ${tabId}`);
+	return turn;
+}
+
 describe("SidecarPool session kind", () => {
 	it("threads the spawn kind through the factory into TAB_STATUS payloads", () => {
 		const kinds: Array<"agent" | "chat" | undefined> = [];
@@ -239,6 +251,7 @@ describe("SidecarPool session kind", () => {
 				cwd: "/b",
 				status: "ready",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -332,6 +345,7 @@ describe("SidecarPool tabs", () => {
 				active: true,
 				visible: true,
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -341,6 +355,7 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "starting",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -505,6 +520,7 @@ describe("SidecarPool tabs", () => {
 				active: true,
 				visible: true,
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 			},
@@ -529,8 +545,9 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "ready",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: expect.any(Number) },
 				sessionPath: null,
-				lastRun: { stopReason: "stop" },
+				lastRun: { id: expect.any(Number), stopReason: "stop" },
 			},
 		]);
 
@@ -793,6 +810,7 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "starting",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 				sessionId: "sess-1",
@@ -807,6 +825,7 @@ describe("SidecarPool tabs", () => {
 			cwd: "/b",
 			status: "starting",
 			placeholder: false,
+			closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 			unstarted: true,
 			sessionPath: null,
 			sessionId: "sess-1",
@@ -823,6 +842,7 @@ describe("SidecarPool tabs", () => {
 				cwd: "/b",
 				status: "ready",
 				placeholder: false,
+				closeTurn: { pool: expect.any(Number), entry: expect.any(Number), turn: 0 },
 				unstarted: true,
 				sessionPath: null,
 				sessionId: "sess-1",
@@ -1038,6 +1058,252 @@ describe("SidecarPool tabs", () => {
 		expect(pool.tabsForWindow(fw.win)).toEqual([]);
 	});
 
+	it("keeps a paired page's tab while a live connection names it dirty, checked in the step that removes it", async () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "t1");
+		const host = await TestRouterHost.open({
+			registry: { invoke: vi.fn(), send: vi.fn() },
+			devices: { get: () => undefined },
+			windows: new WebWindows(() => {}),
+			quota: { reserve: vi.fn(), record: vi.fn() },
+			webChannels: {},
+			features: () => ({ push: false, preview: false, upload: false, passkey: false }),
+			blobs: new BlobStore(),
+			uploads: { take: vi.fn() },
+			toModelImage: async image => image,
+		});
+		await host.device("phone", ["workspace"]);
+		const page = await host.attach("phone");
+		if (!page) throw new Error("attach failed");
+		let id = 0;
+		const report = async (dirtyTabId: string | null): Promise<void> => {
+			await page.receive(
+				JSON.stringify({ t: "inv", id: ++id, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId }] }),
+			);
+			await host.sync();
+		};
+		const guard = { host: host.router.host, device: "phone" };
+
+		await report("t1");
+		expect(pool.fileEdits(guard, "t1")).toBe("dirty");
+		expect(pool.releaseTab("t1", undefined, guard)).toBe(false);
+		expect(pool.size).toBe(1);
+		expect(sidecars[0]?.disposed).toBe(false);
+
+		await report(null);
+		expect(pool.releaseTab("t1", undefined, guard)).toBe(true);
+		expect(sidecars[0]?.disposed).toBe(true);
+		await page.dispose();
+	});
+
+	it("does not close a later turn that finished with the same reply", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child");
+		const child = sidecars[0]!;
+		child.emitStatus("ready");
+		const end = { type: "agent_end", messages: [{ role: "assistant", content: "Done.", stopReason: "stop" }] };
+		child.emitEvents([{ type: "agent_start" }, end]);
+		const collected = closeTurn(pool, win, "child");
+		expect(collected.turn).toBeGreaterThan(0);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ id: collected.turn, stopReason: "stop", reply: "Done." });
+		expect(pool.resumeFacts()[0]?.lastRun?.id).toBe(collected.turn);
+
+		child.emitEvents([{ type: "agent_start" }]);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitEvents([end]);
+		const current = closeTurn(pool, win, "child");
+		expect(current.turn).toBeGreaterThan(collected.turn);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ id: current.turn, stopReason: "stop", reply: "Done." });
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		expect(child.disposed).toBe(false);
+		expect(pool.releaseTab("child", current)).toBe(true);
+		expect(child.disposed).toBe(true);
+	});
+
+	it("replaces a missed host turn and its outcome together, even when the reply is identical", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child", undefined, "agent", undefined, false, false, false, undefined, "host");
+		const child = sidecars[0]!;
+		child.emitStatus("ready");
+		const host = { omp: "first", turn: 90 };
+		const outcome = { stopReason: "stop", reply: "Done." };
+		child.emitEvents([
+			{ type: "agent_start" },
+			{ type: "agent_end", hostTurn: host, messages: [{ role: "assistant", content: "Done." }] },
+		]);
+		const collected = closeTurn(pool, win, "child");
+		expect(collected.host).toEqual(host);
+		expect(pool.canReleaseTab("child", collected)).toBe(true);
+
+		child.emitLinkStatus("starting");
+		const reading = { running: false, turn: false, hostTurn: { ...host, turn: 91 }, lastRun: outcome };
+		child.emit("hostRun", reading);
+		child.emitStatus("ready");
+		const current = closeTurn(pool, win, "child");
+		expect(current.host).toEqual(reading.hostTurn);
+		expect(current.turn).toBeGreaterThan(collected.turn);
+		expect(current.turn).not.toBe(reading.hostTurn.turn);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ ...outcome, id: current.turn });
+		expect(pool.resumeFacts()[0]?.lastRun?.id).toBe(current.turn);
+		child.emit("hostRun", reading);
+		expect(closeTurn(pool, win, "child")).toEqual(current);
+		expect(pool.canReleaseTab("child", collected)).toBe(false);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		// Even a matching local number cannot stand in for a different host's observation.
+		expect(pool.canReleaseTab("child", { ...current, host })).toBe(false);
+		expect(pool.canReleaseTab("child", current)).toBe(true);
+		child.emitExtensionUi("late");
+		expect(pool.releaseTab("child", current)).toBe(false);
+		expect(child.disposed).toBe(false);
+
+		child.emit("hostRun", { running: false, turn: false, hostTurn: { ...host, turn: 92 } });
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("lastRun");
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("closeTurn");
+		child.emit("hostRun", { ...reading, hostTurn: { omp: "replacement", turn: 91 } });
+		const replacement = closeTurn(pool, win, "child");
+		expect(replacement.host).toEqual({ omp: "replacement", turn: 91 });
+		expect(replacement.turn).toBeGreaterThan(current.turn);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({ ...outcome, id: replacement.turn });
+	});
+
+	it("uses only the settling event's host stamp and never reuses it after a restart", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child", undefined, "agent", undefined, false, false, false, undefined, "host");
+		const child = sidecars[0]!;
+		const zero = { omp: "old", turn: 0 };
+		child.emit("status", { status: "ready" }, zero);
+		expect(closeTurn(pool, win, "child").host).toEqual(zero);
+		const failed = { ...zero, turn: 2 };
+		child.emitEvents([
+			{ type: "agent_start" },
+			{ type: "agent_end", hostTurn: { ...zero, turn: 1 } },
+			{ type: "agent_start" },
+			{ type: "auto_retry_start", errorMessage: "retry" },
+			{ type: "agent_end" },
+			{ type: "auto_retry_end", success: false, finalError: "failed", hostTurn: failed },
+		]);
+		const collected = closeTurn(pool, win, "child");
+		expect(collected.host).toEqual(failed);
+		expect(pool.tabsForWindow(win)[0]?.lastRun).toEqual({
+			id: collected.turn,
+			stopReason: "error",
+			errorMessage: "failed",
+		});
+		child.emit("status", { status: "ready" }, zero);
+		expect(closeTurn(pool, win, "child")).toEqual(collected);
+
+		const fresh = { omp: "new", turn: 0 };
+		child.emitStatus("restarting");
+		child.emit("status", { status: "ready" }, fresh);
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("lastRun");
+		expect(closeTurn(pool, win, "child")).toEqual({ ...collected, turn: 0, host: fresh });
+		expect(pool.canReleaseTab("child", collected)).toBe(false);
+		child.emitEvents([{ type: "agent_start" }, { type: "agent_end", isTerminal: false, hostTurn: failed }]);
+		child.emit("status", { status: "ready" }, fresh);
+		expect(pool.tabsForWindow(win)[0]).not.toHaveProperty("closeTurn");
+		expect(pool.releaseTab("child", collected)).toBe(false);
+	});
+
+	it("keeps a child for a late question, plan, compaction or continuation, but not a status notice", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child");
+		const child = sidecars[0]!;
+		child.emitStatus("ready");
+		child.emitAgentEvents(["agent_start", "agent_end"]);
+		const collected = closeTurn(pool, win, "child");
+		const released = vi.fn();
+		pool.onTabReleased = released;
+		child.emitExtensionUi("question");
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitUiRequest({ id: "cancel", method: "cancel", targetId: "question" });
+		child.emitEvents([{ type: "plan_proposal", title: "Plan", planFilePath: "plan.md", options: [] }]);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitEvents([{ type: "plan_proposal_resolved", planFilePath: "plan.md" }]);
+		child.emitAgentEvents(["auto_compaction_start"]);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitAgentEvents(["auto_compaction_end"]);
+		pool.setResuming("child", true);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		pool.setResuming("child", false);
+		pool.setAwaitingConnection("child", true);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		pool.setAwaitingConnection("child", false);
+		pool.setScheduledRetry("child", { at: 1_000, attempt: 1 });
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		pool.setScheduledRetry("child", undefined);
+		child.emitStatus("restarting");
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		child.emitStatus("ready");
+		const notice = { id: "index", method: "setStatus", statusKey: "index", statusText: "Indexed" };
+		child.emitUiRequest(notice);
+		child.emit("openAsks", [notice]);
+		expect(released).not.toHaveBeenCalled();
+		expect(pool.releaseTab("child", collected)).toBe(true);
+		expect(released).toHaveBeenCalledTimes(1);
+	});
+
+	it("rejects a malformed fence and a replaced entry, but an ordinary close still releases a busy child", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/a", win, "child");
+		sidecars[0]!.emitStatus("ready");
+		const collected = closeTurn(pool, win, "child");
+		// @ts-expect-error A preflight without a fence is never a manual close.
+		expect(pool.canReleaseTab("child")).toBe(false);
+		for (const invalid of [
+			null,
+			{},
+			{ ...collected, turn: "0" },
+			[collected.pool, collected.entry, 0],
+			{ ...collected, host: null },
+			{ ...collected, host: ["omp", 0] },
+			{ ...collected, host: { omp: "omp", turn: 0, unknown: true } },
+		]) {
+			// @ts-expect-error The native preflight and removal reject the same malformed input.
+			expect(pool.canReleaseTab("child", invalid)).toBe(false);
+			// @ts-expect-error The native boundary also receives malformed wire input.
+			expect(pool.releaseTab("child", invalid)).toBe(false);
+		}
+		expect(pool.releaseTab("child", collected)).toBe(true);
+		pool.acquire("/b", win, "child");
+		const replacement = sidecars[1]!;
+		replacement.emitStatus("ready");
+		const current = closeTurn(pool, win, "child");
+		expect(current).toEqual({ ...collected, entry: expect.any(Number) });
+		expect(current.entry).not.toBe(collected.entry);
+		expect(pool.releaseTab("child", collected)).toBe(false);
+		replacement.emitAgentEvents(["agent_start"]);
+		expect(pool.releaseTab("child")).toBe(true);
+		expect(replacement.disposed).toBe(true);
+	});
+
+	it("can close a restored sleeping tab but never reuses its zero-turn fence after a run starts", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.restoreLayout(win, {
+			version: 1,
+			activeIndex: 1,
+			tabs: [
+				{ cwd: "/a", kind: "agent", sessionPath: "/s/a.jsonl" },
+				{ cwd: "/b", kind: "agent", sessionPath: "/s/b.jsonl" },
+			],
+		});
+		const [sleeping, waking] = pool.tabsForWindow(win);
+		expect(sleeping!.status).toBe("asleep");
+		const restored = closeTurn(pool, win, sleeping!.tabId);
+		expect(restored.turn).toBe(0);
+		expect(pool.releaseTab(sleeping!.tabId, restored)).toBe(true);
+		sidecars[1]!.emitStatus("ready");
+		const before = closeTurn(pool, win, waking!.tabId);
+		sidecars[1]!.emitEvents([{ type: "agent_start" }, { type: "agent_end", isTerminal: false }]);
+		expect(pool.releaseTab(waking!.tabId, before)).toBe(false);
+	});
+
 	it("has no limit on tabs: an 11th, 12th… tab still acquires, and a restore keeps them all", () => {
 		const { pool } = fakePool();
 		const fw1 = fakeWindow(1);
@@ -1163,6 +1429,41 @@ describe("SidecarPool restartOnNewOmp (omp updated on this computer)", () => {
 		b.emitAgentEvents(["agent_end"]);
 		await tick();
 		expect(b.restartArgs).toHaveLength(before);
+	});
+
+	it("waits for a tab whose relaunch continuation is owed, and restarts it once the continuation ended without a turn", async () => {
+		const { pool, a } = tabs();
+		let owed = true;
+		pool.continuationOwed = tab => tab === "tab-a" && owed;
+		const before = a.restartArgs.length;
+		expect(pool.restartOnNewOmp()).toBe(1);
+		// Still owed: nothing restarts the omp its restore may be on its way to.
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs).toHaveLength(before);
+		owed = false;
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs.slice(before)).toEqual([{ cwd: undefined, sessionPath: "/sessions/a.jsonl" }]);
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs).toHaveLength(before + 1);
+	});
+
+	it("restarts a tab whose restored turn started only once that turn ends", async () => {
+		const { pool, a } = tabs();
+		let owed = true;
+		pool.continuationOwed = tab => tab === "tab-a" && owed;
+		const before = a.restartArgs.length;
+		pool.restartOnNewOmp();
+		a.emitAgentEvents(["agent_start"]);
+		owed = false;
+		pool.ompRestartIfWaiting("tab-a");
+		await tick();
+		expect(a.restartArgs).toHaveLength(before);
+		a.emitAgentEvents(["agent_end"]);
+		await tick();
+		expect(a.restartArgs.slice(before)).toEqual([{ cwd: undefined, sessionPath: "/sessions/a.jsonl" }]);
 	});
 });
 
@@ -2260,6 +2561,58 @@ describe("SidecarPool request-origin routing (F-UI-ORIGIN)", () => {
 		expect(await pool.routeSideChannel("req-offline", response)).toBe(false);
 	});
 
+	it.each(["delivered", "failed", "withdrawn", "no longer held on host"] as const)(
+		"joins a tab during answer delivery without replaying a second question: %s",
+		async outcome => {
+			const { pool, sidecars } = fakePool();
+			const host = fakeWindow(1);
+			const phone = fakeWindow(-1);
+			pool.acquire("/a", host.win, "tab-a");
+			const [a] = sidecars;
+			if (!a) throw new Error("Expected the host tab");
+			const request = { type: "extension_ui_request", id: "form", method: "form", html: '<input name="color">' };
+			a.emit("openAsks", [request]);
+			const response = { type: "extension_ui_response", id: "form", data: { color: "blue" } };
+			const delivery = Promise.withResolvers<void>();
+			vi.spyOn(a, "sendSideChannel").mockReturnValueOnce(delivery.promise);
+			const pending = pool.routeSideChannel("form", response, "tab-a", host.win);
+			expect(pool.attachViewer(phone.win, "tab-a")).toBe(true);
+			const ui = () => phone.sentTo(IPC_EVENTS.EXTENSION_UI).map(item => item.data);
+			expect(ui()).toEqual([]);
+			expect(pool.openRequests(phone.win)).toEqual([]);
+
+			if (outcome === "delivered") {
+				delivery.resolve();
+				expect(await pending).toBe(true);
+				expect(ui()).toEqual([]);
+			} else {
+				if (outcome === "withdrawn") a.emitUiRequest({ id: "withdraw", method: "cancel", targetId: "form" });
+				if (outcome === "no longer held on host") a.emit("openAsks", []);
+				delivery.reject(new Error("not delivered"));
+				await expect(pending).rejects.toThrow("not delivered");
+				if (outcome === "failed") {
+					expect(ui()).toEqual([{ tabId: "tab-a", request, resent: true }]);
+					expect(a.sentFrames).toEqual([]);
+					expect(await pool.routeSideChannel("form", response, "tab-a", phone.win)).toBe(true);
+					expect(a.sentFrames).toEqual([response]);
+				} else {
+					expect(ui()).toEqual([
+						{
+							tabId: "tab-a",
+							request: {
+								type: "extension_ui_request",
+								id: outcome === "withdrawn" ? "withdraw" : "withdrawn:form",
+								method: "cancel",
+								targetId: "form",
+							},
+						},
+					]);
+				}
+			}
+			expect(pool.openRequests(phone.win)).toEqual([]);
+		},
+	);
+
 	it("fails host-uri requests on the raising sidecar instead of forwarding them, a hidden tab's too", async () => {
 		const { pool, sidecars } = fakePool();
 		const fw = fakeWindow(1);
@@ -2793,6 +3146,54 @@ describe("SidecarPool background tabs", () => {
 			});
 			pool.setAwaitingConnection("tab-a", false);
 			expect(fw.sentTo(IPC_EVENTS.TAB_STATUS).at(-1)?.data).not.toHaveProperty("awaitingConnection");
+		});
+
+		it("says when a session's goal is active, idle between its turns too, and tells the resume rules when it changes", () => {
+			const { pool, sidecars } = fakePool();
+			const fw = fakeWindow(1);
+			pool.acquire("/a", fw.win, "tab-a", "/sessions/a.jsonl");
+			const a = sidecars[0];
+			a?.emitStatus("ready");
+			const changes = vi.fn();
+			pool.onRunningChange = changes;
+			const factA = () => pool.resumeFacts().find(fact => fact.tabId === "tab-a");
+			expect(factA()?.goalActive).toBeUndefined();
+			a?.emitEvents([{ type: "goal_updated", goal: { status: "active", objective: "ship it" } }]);
+			expect(factA()).toMatchObject({ running: false, goalActive: true });
+			expect(changes).toHaveBeenCalled();
+			changes.mockClear();
+			a?.emitEvents([{ type: "goal_updated", goal: { status: "paused", objective: "ship it" } }]);
+			expect(factA()?.goalActive).toBeUndefined();
+			expect(changes).toHaveBeenCalled();
+		});
+
+		it("hands the resume rules one outcome object per finished run, however often the facts are read", () => {
+			const { pool, sidecars } = fakePool();
+			const fw = fakeWindow(1);
+			pool.acquire("/a", fw.win, "tab-a", "/sessions/a.jsonl");
+			const a = sidecars[0];
+			a?.emitStatus("ready");
+			const outcome = () => pool.resumeFacts().find(fact => fact.tabId === "tab-a")?.lastRun;
+			const failed = [
+				{ role: "assistant", content: [], stopReason: "error", errorMessage: "fetch failed: other side closed" },
+			];
+
+			a?.emitEvents([{ type: "agent_start" }]);
+			a?.emitEvents([{ type: "agent_end", messages: failed }]);
+			const first = outcome();
+			expect(first).toEqual({
+				id: expect.any(Number),
+				stopReason: "error",
+				errorMessage: "fetch failed: other side closed",
+			});
+			// The rules judge an outcome once and end a hold when another one shows: a fresh parse must not read as another run.
+			expect(outcome()).toBe(first);
+
+			// The same words after a new run are another outcome.
+			a?.emitEvents([{ type: "agent_start" }]);
+			expect(outcome()).toBeUndefined();
+			a?.emitEvents([{ type: "agent_end", messages: failed }]);
+			expect(outcome()).not.toBe(first);
 		});
 
 		it("gives the summary builder a facts source per window tab with a session file, and follows each tab's omp", async () => {
@@ -3995,7 +4396,7 @@ describe("SidecarPool tab activity (the observer Web Push listens to)", () => {
 			options: [],
 		};
 		a.emitEvents([frame]);
-		expect(pool.pendingPlan("tab-a")).toEqual({ title: "Plan", planFilePath: "local://PLAN.md" });
+		expect(pool.pendingPlan("tab-a")).toEqual({ title: "Plan", planFilePath: "local://PLAN.md", generation: 1 });
 		a.emitEvents([{ type: "plan_proposal_resolved", planFilePath: "local://other.md" }]);
 		expect(pool.pendingPlan("tab-a")).not.toBeNull();
 		a.emitEvents([{ type: "plan_proposal_resolved", planFilePath: "local://PLAN.md" }]);
@@ -4003,6 +4404,30 @@ describe("SidecarPool tab activity (the observer Web Push listens to)", () => {
 		a.emitEvents([frame]);
 		a.emit("status", { status: "restarting" });
 		expect(pool.pendingPlan("tab-a")).toBeNull();
+	});
+
+	it("claims a plan only at the generation the agent read, so a revision that reuses the plan file is refused", () => {
+		const { pool, a } = observed();
+		const frame = {
+			type: "plan_proposal",
+			planFilePath: "local://PLAN.md",
+			title: "Plan",
+			planContent: "x",
+			options: [],
+		};
+		a.emitEvents([frame]);
+		const read = pool.pendingPlan("tab-a");
+		a.emitEvents([{ ...frame, title: "Plan, revised" }]);
+		expect(pool.claimPlan("tab-a", "local://PLAN.md", read?.generation ?? 0)).toBeNull();
+		const now = pool.pendingPlan("tab-a");
+		const claim = pool.claimPlan("tab-a", "local://PLAN.md", now?.generation ?? 0);
+		expect(claim).not.toBeNull();
+		expect(() => pool.guardPlan("tab-a")).toThrow(/answering this plan/);
+		expect(() => pool.guardPlan("tab-a", true)).not.toThrow();
+		a.emitEvents([{ ...frame, title: "Plan, revised again" }]);
+		expect(claim && pool.planStillClaimed("tab-a", claim)).toBe(false);
+		if (claim) pool.releasePlan("tab-a", claim);
+		expect(() => pool.guardPlan("tab-a")).not.toThrow();
 	});
 });
 
@@ -4077,6 +4502,22 @@ describe("SidecarPool device views (a paired device viewing a tab of a window he
 		desktop.sent.length = 0;
 		return { pool, sidecar, desktop, view };
 	}
+
+	it("keeps one hosted view when the receiving window loses its acquireHostedView reply", () => {
+		const { sidecar, view } = viewed();
+		Object.assign(sidecar, { kind: "agent" });
+		const { pool } = fakePool();
+		const { win } = fakeWindow(2);
+		const loseReply = vi.fn().mockImplementationOnce(() => core().abandon("drop the acquireHostedView reply"));
+		pool.onWindowTabsChanged = loseReply;
+
+		expect(pool.acquireHostedView(win, "tab-h", view, "/s/a.jsonl")).toBe(true);
+		expect(loseReply).toHaveBeenCalled();
+		expect(pool.tabsForWindow(win).map(tab => tab.tabId)).toEqual(["tab-h"]);
+		expect(pool.isHostedView("tab-h")).toBe(true);
+		expect(pool.sessionOwner("/s/a.jsonl")).toEqual({ tabId: "tab-h", winId: 2 });
+		expect(pool.releaseTab("tab-h")).toBe(true);
+	});
 
 	it("tells a device that joins mid-turn how the window's turn stands, and since when", () => {
 		const { sidecar, view } = viewed();
@@ -4212,12 +4653,62 @@ describe("SidecarPool device views (a paired device viewing a tab of a window he
 });
 
 describe("SidecarPool and a lost core", () => {
+	it("keeps one started tab when the acquire reply is lost", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.onAcquire = (_tab, sidecar) => vi.spyOn(sidecar, "start");
+		let startedAtLoss = false;
+		pool.onWindowTabsChanged = () => {
+			// The core has added and started the tab, but cannot reply to acquire until this hook returns.
+			startedAtLoss = sidecars[0]?.started === true;
+			pool.onWindowTabsChanged = null;
+			core().abandon("drop the acquire reply");
+		};
+
+		const acquired = pool.acquire("/a", win, "tab-a");
+		expect(startedAtLoss).toBe(true);
+		expect(pool.size).toBe(1);
+		expect(pool.tabsForWindow(win).map(tab => tab.tabId)).toEqual(["tab-a"]);
+		expect(sidecars).toHaveLength(1);
+		expect(acquired).toBe(sidecars[0]);
+		expect(pool.sidecarForTab(win, "tab-a")).toBe(acquired);
+		expect(sidecars[0]?.start).toHaveBeenCalledTimes(1);
+		expect(pool.releaseTab("tab-a")).toBe(true);
+		expect(sidecars[0]?.disposed).toBe(true);
+		expect(pool.size).toBe(0);
+	});
+
+	it("resumes the saved session once when the core is lost in onAcquire", () => {
+		const { pool, sidecars } = fakePool();
+		const owner = fakeWindow(1);
+		const sessionPath = "/s/a.jsonl";
+		const onAcquire = vi.fn().mockImplementationOnce(() => core().abandon("lost before session registration"));
+		pool.onAcquire = onAcquire;
+
+		const acquired = pool.acquire("/a", owner.win, "tab-a", sessionPath);
+		expect(onAcquire).toHaveBeenCalledExactlyOnceWith("tab-a", acquired);
+		expect(pool.sessionOwner(sessionPath)).toEqual({ tabId: "tab-a", winId: 1 });
+		expect(sidecars).toHaveLength(1);
+		const [sidecar] = sidecars;
+		expect(sidecar?.started).toBe(false);
+		expect(sidecar?.restartArgs).toEqual([{ cwd: undefined, sessionPath }]);
+		sidecar?.emitAgentEvents(["agent_start"]);
+		expect(owner.sentTo(IPC_EVENTS.EVENTS_BATCH).map(entry => entry.data)).toEqual([
+			{ tabId: "tab-a", payload: [{ type: "agent_start" }] },
+		]);
+		expect(pool.releaseTab("tab-a")).toBe(true);
+		expect(sidecar?.disposed).toBe(true);
+		expect(pool.sessionOwner(sessionPath)).toBeNull();
+	});
+
 	it("seeds the next core with the tabs main holds, and its windows keep their tabs", () => {
-		const { pool } = fakePool();
+		const { pool, sidecars } = fakePool();
 		const fw = fakeWindow(1);
 		pool.acquire("/a", fw.win, "tab-a", "/s/a.jsonl");
 		pool.acquire("/b", fw.win, "tab-b");
 		expect(pool.sessionOwner("/s/a.jsonl")?.tabId).toBe("tab-a");
+		sidecars[1]!.emitStatus("ready");
+		const before = closeTurn(pool, fw.win, "tab-b");
 		// The core is killed as a hub call past its deadline kills it: every instance it ran is gone.
 		core().abandon("a test ends the core");
 		expect(pool.size).toBe(2);
@@ -4228,7 +4719,76 @@ describe("SidecarPool and a lost core", () => {
 		expect(pool.sidecarForTab(fw.win, "tab-b")).not.toBeNull();
 		// The session file the tab was acquired on still names it.
 		expect(pool.sessionOwner("/s/a.jsonl")?.tabId).toBe("tab-a");
-		expect(pool.releaseTab("tab-b")).toBe(true);
+		const after = closeTurn(pool, fw.win, "tab-b");
+		expect(after).toEqual({ ...before, pool: expect.any(Number) });
+		expect(after.pool).toBeGreaterThan(before.pool);
+		expect(pool.releaseTab("tab-b", before)).toBe(false);
+		expect(sidecars[1]!.disposed).toBe(false);
+		expect(pool.releaseTab("tab-b", after)).toBe(true);
 		expect(pool.size).toBe(1);
+	});
+});
+
+describe("the core's page sends (C4, docs/rust-node-removal.md)", () => {
+	/** The pool's own pushes: each is an item main forwards today, and the core sends the same beside it. */
+	const POOL_CHANNELS = new Set<string>([IPC_EVENTS.TAB_STATUS, IPC_EVENTS.TAB_LIST_CHANGED, IPC_EVENTS.EXTENSION_UI]);
+
+	it("sends every window the pool's pushes main sends it, in the same order and the same JSON", async () => {
+		const { pool, sidecars } = fakePool();
+		const windows = [fakeWindow(901), fakeWindow(902)];
+		const fromCore = new Map<number, Array<{ channel: string; data: unknown }>>(
+			windows.map(w => [w.win.webContents.id, []]),
+		);
+		const fromMain = () =>
+			new Map(
+				windows.map(w => [
+					w.win.webContents.id,
+					w.sent
+						.filter(entry => POOL_CHANNELS.has(entry.channel))
+						.map(entry => ({ channel: entry.channel, data: JSON.parse(JSON.stringify(entry.data)) })),
+				]),
+			);
+		// The pool's calls are synchronous, so main has sent everything once the steps ran; the core's frames come over
+		// another connection and may trail them. Compared whenever either moves after that.
+		let ran = false;
+		const same = Promise.withResolvers<void>();
+		const check = () => {
+			if (!ran) return;
+			const main = fromMain();
+			if ([...main].every(([id, sent]) => JSON.stringify(fromCore.get(id)) === JSON.stringify(sent))) same.resolve();
+		};
+		for (const w of windows) {
+			const contents = w.win.webContents;
+			const send = contents.send;
+			contents.send = (channel: string, data: unknown) => {
+				send(channel, data);
+				check();
+			};
+		}
+		const off = core().on("page.push", data => {
+			const push = data as { win: number; ch: string; data: unknown };
+			fromCore.get(push.win)?.push({ channel: push.ch, data: push.data });
+			check();
+		});
+		try {
+			const [one, two] = windows as [FakeWindow, FakeWindow];
+			pool.acquire("/a", one.win, "tab-a");
+			pool.acquire("/b", one.win, "tab-b");
+			sidecars[0]!.emitStatus("ready");
+			pool.attachViewer(two.win, "tab-a");
+			sidecars[0]!.emitExtensionUi("ask-1");
+			sidecars[1]!.emitStatus("ready");
+			expect(pool.releaseTab("tab-b")).toBe(true);
+			pool.detachViewer(two.win, "tab-a");
+			ran = true;
+			check();
+			await same.promise;
+			const main = fromMain();
+			expect(new Set(main.get(901)!.map(entry => entry.channel))).toEqual(POOL_CHANNELS);
+			expect(main.get(902)!.length).toBeGreaterThan(0);
+			expect(fromCore).toEqual(main);
+		} finally {
+			off();
+		}
 	});
 });

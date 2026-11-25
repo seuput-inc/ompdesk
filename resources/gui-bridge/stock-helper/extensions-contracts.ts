@@ -1,7 +1,7 @@
 /**
- * The `extensions.*` methods of the stock helper's `extensions` worker (extensions.ts), as main's
- * ExtensionUpdater (src/main/ext-update/) calls them. Types only, no omp imports: main and the worker both
- * import this file. Every method works on this computer's omp state with no tab open: user scope always, a
+ * The `extensions.*` methods of the stock helper's `extensions` worker (extensions.ts), as the extension updater
+ * (the core's `tools/ext.rs`, through main's stock relay) calls them. Types only, no omp imports: the worker and its
+ * tests import this file. Every method works on this computer's omp state with no tab open: user scope always, a
  * project's scope for each folder in `cwds` (the workspaces of the open local tabs). No answer carries a
  * credential, a token or an environment variable value; the MCP inventory carries `command`/`args`/`url`
  * only because the package is parsed out of them (by the core process, for main; they never reach the renderer).
@@ -58,8 +58,6 @@ export interface HelperMcpServer {
 	args: string[];
 	url: string | null;
 	enabled: boolean;
-	/** The config file or plugin dir the server came from; main marks the built-in REA by it. */
-	sourcePath: string | null;
 	/** `user`, `project` or `plugin` (a plugin or another tool's config provided it). */
 	origin: "user" | "project" | "other";
 }
@@ -114,6 +112,18 @@ export interface PluginCheckResult {
 }
 
 /**
+ * `extensions.plugin.preview`: what an upgrade would install, read before anything is installed. The candidate
+ * is the package an upgrade would fetch: npm `dist-tags.latest` from the full packument, a git plugin's recorded
+ * repository and ref (cloned into a temporary folder), a marketplace plugin's catalog source (a clone for a remote
+ * one). `version` is the candidate's (null when it names none); `added` lists the extension, tool and hook entries
+ * its manifest declares that the installed one does not (`activation-core.ts` `addedRestartEntries`).
+ */
+export interface PluginPreviewResult {
+	version: string | null;
+	added: string[];
+}
+
+/**
  * `extensions.plugin.upgrade`: stock's own path (`MarketplaceManager.upgradePlugin(id, scope)` or
  * `PluginManager.upgrade(name)`), never for a pinned or linked plugin (the worker refuses). `activation` is
  * what a manual upgrade reports: `live` (commands/skills hot-reload with `/reload-plugins`) or
@@ -157,6 +167,7 @@ export const EXTENSION_HELPER_METHODS = {
 	inventory: "extensions.inventory",
 	marketplaceRefresh: "extensions.marketplace.refresh",
 	pluginCheck: "extensions.plugin.check",
+	pluginPreview: "extensions.plugin.preview",
 	pluginUpgrade: "extensions.plugin.upgrade",
 	skillCheck: "extensions.skill.check",
 	skillUpdate: "extensions.skill.update",

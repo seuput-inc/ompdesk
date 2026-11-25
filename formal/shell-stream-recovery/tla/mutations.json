@@ -1,0 +1,57 @@
+{
+	"checker": {
+		"kind": "tlc",
+		"config": "MC.cfg"
+	},
+	"mutations": [
+		{
+			"name": "unbounded-retained-queue",
+			"why": "Removing eviction lets the native stream grow beyond its configured capacity.",
+			"search": "kept == IF overflow THEN",
+			"replace": "kept == IF FALSE THEN",
+			"breaks": "TypeOK"
+		},
+		{
+			"name": "evict-partial-frame",
+			"why": "An overflow discards a frame whose prefix already reached the page.",
+			"search": "IF s.partial # 0 /\\ KeepPartial THEN",
+			"replace": "IF FALSE THEN",
+			"breaks": "NoPartialFrameLoss"
+		},
+		{
+			"name": "stale-reader-drains-current",
+			"why": "A late old resource read consumes the replacement stream.",
+			"search": "IF FenceReader THEN s ELSE",
+			"replace": "IF FALSE THEN s ELSE",
+			"breaks": "NoStaleReaderEffect"
+		},
+		{
+			"name": "stale-cancel-clears-current-waker",
+			"why": "A late old resource cancel strands the parked replacement reader.",
+			"search": "IF FenceReader THEN s.waiting ELSE FALSE",
+			"replace": "FALSE",
+			"breaks": "NoStaleReaderEffect"
+		},
+		{
+			"name": "omit-ordered-reset",
+			"why": "The final lost event leaves no ordered reset obligation.",
+			"search": "!.after = IF overflow /\\ AnnounceLoss THEN Len(kept) ELSE @,",
+			"replace": "!.after = @,",
+			"breaks": "NoUnsignalledLoss"
+		},
+		{
+			"name": "ack-obsolete-token",
+			"why": "A completed older read clears a newer loss token.",
+			"search": "/\\ (FenceAck => s.readToken = s.pending)",
+			"replace": "/\\ TRUE",
+			"breaks": "CurrentReadBeforeAck"
+		},
+		{
+			"name": "ack-before-read-completes",
+			"why": "Recovery is declared fresh before the applicable authoritative read succeeds.",
+			"search": "/\\ (WaitRead => s.read = \"ok\")",
+			"replace": "/\\ TRUE",
+			"breaks": "CurrentReadBeforeAck"
+		}
+	]
+}

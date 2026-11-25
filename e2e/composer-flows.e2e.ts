@@ -4,8 +4,7 @@
  *   bash badge), and ↑ sends the paste's text again, never the bare `[Paste #N]` marker;
  * - "+ › Use a skill…" puts the keys in the picker's search (they went to the composer, and Enter
  *   sent the draft);
- * - a Follow-up picked on the send-mode chip lasts for that run only, the chip and Stop leave
- *   typing in the field;
+ * - a message sent while a turn runs is a steer (no lane chip exists), and Stop leaves typing in the field;
  * - Stop and Esc withdraw a prompt the automatic mode choice still holds back: nothing reaches
  *   omp, the plan it picked ends, the draft returns (there was no Stop, and Esc Esc opened the
  *   rewind picker);
@@ -84,8 +83,8 @@ async function ready(page: Page): Promise<void> {
 
 const composer = (page: Page) => page.locator(".omp-composer-input").first();
 const stop = (page: Page) => page.getByRole("button", { name: "Stop", exact: true });
-/** The lane chip shows exactly while a turn runs; with a draft the one action button is Send, so Stop is not the cue. */
-const running = (page: Page) => page.locator("[data-send-mode]");
+/** The toolbar says exactly while a turn runs; with a draft the one action button is Send, so Stop is not the cue. */
+const running = (page: Page) => page.locator(".omp-composer-toolbar[data-turn-running]");
 const composerFocused = (page: Page) =>
 	page.evaluate(() => document.activeElement?.classList.contains("omp-composer-input") === true);
 
@@ -106,7 +105,7 @@ async function pasteText(page: Page, text: string): Promise<void> {
 	}, text);
 }
 
-test("+ › Use a skill… takes the keys; the send-mode chip lasts one run; the chip and Stop keep typing in the field", async () => {
+test("+ › Use a skill… takes the keys; a running turn offers no lane chip and Send steers it; Stop keeps typing in the field", async () => {
 	test.setTimeout(120_000);
 	const dirs = await profile("focus");
 	const { app, page, errors } = await launch(dirs);
@@ -124,18 +123,15 @@ test("+ › Use a skill… takes the keys; the send-mode chip lasts one run; the
 
 		await input.fill("fixture running");
 		await input.press("Enter");
-		const chip = page.locator("[data-send-mode]");
-		await expect(chip).toHaveAttribute("data-send-mode", "steer");
-		await chip.click();
-		await expect(chip).toHaveAttribute("data-send-mode", "followUp");
-		expect(await composerFocused(page)).toBe(true);
+		await expect(running(page)).toBeVisible();
+		await expect(page.locator("[data-send-mode]")).toHaveCount(0);
 		await stop(page).click();
 		await expect(stop(page)).toHaveCount(0);
 		expect(await composerFocused(page)).toBe(true);
 
 		await input.fill("fixture running");
 		await input.press("Enter");
-		await expect(chip).toHaveAttribute("data-send-mode", "steer");
+		await expect(running(page)).toBeVisible();
 		await input.fill("steer again");
 		await input.press("Enter");
 		await expect.poll(() => sentOfType(dirs.record, "steer")).toEqual(["steer again"]);
@@ -423,8 +419,8 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 			await input.fill("fixture running");
 			await input.press("Enter");
 			await expect(stop(page)).toBeVisible();
-			// The turn itself runs (the send-mode chip appears): before that Stop only withdraws the pending prompt.
-			await expect(page.locator("[data-send-mode]")).toBeVisible();
+			// The turn itself runs: before that Stop only withdraws the pending prompt.
+			await expect(running(page)).toBeVisible();
 		};
 
 		await run();
@@ -485,7 +481,7 @@ test("Stop with queued messages pauses the queue: separate chips in one row, the
 	test.setTimeout(120_000);
 	const dirs = await profile("stop-queue");
 	// A slow automatic mode choice, as the real judge's round trip can be on a loaded machine: the composer takes one
-	// submission at a time, so the messages to queue are typed once the turn runs (the lane chip), not when Stop shows
+	// submission at a time, so the messages to queue are typed once the turn runs (`running`), not when Stop shows
 	// (Stop already withdraws the prompt the choice holds back).
 	const { app, page, errors } = await launch(dirs, { OMP_GUI_TEST_AUTO_MODE_DELAY_MS: "1500" });
 	try {
@@ -567,7 +563,7 @@ test("Discard and a chip's × drop restored messages; a chip's text puts it in t
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(stop(page)).toBeVisible();
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
+		await expect(running(page)).toBeVisible();
 		await input.fill("an unsent draft");
 		await input.press("Escape");
 		await expect(page.locator("[data-stop-hint]")).toHaveText("Press Esc again to stop the turn. Your draft stays.");
@@ -679,7 +675,7 @@ test("dictation leaves the draft in view, Esc discards the take without stopping
 		await input.fill("fixture running");
 		await input.press("Enter");
 		await expect(stop(page)).toBeVisible();
-		await expect(page.locator("[data-send-mode]")).toBeVisible();
+		await expect(running(page)).toBeVisible();
 		await input.fill("my draft");
 
 		await mic.click();

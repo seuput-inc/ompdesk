@@ -4,12 +4,14 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
 
+use super::AutoCloseTurn;
 use super::split::{
     SplitNode, as_split_layout, read_remembered_splits, read_split_node, split_tab_ids,
 };
 use super::state::{
     Ctx, Entry, LevelKey, Owner, Pool, R, fault, highest_subagent_level, owner_key,
 };
+use super::windows::FileEditGuard;
 
 fn opt(value: Option<String>) -> Value {
     value.map_or(Value::Null, Value::from)
@@ -59,12 +61,11 @@ impl Ctx {
 
     pub(super) fn pending_plan(&self, tab: &str) -> Value {
         self.with(|pool| {
-            pool.entry(tab)
-                .and_then(|entry| entry.plan_proposal.as_ref())
-                .map_or(
-                    Value::Null,
-                    |(title, path)| json!({"title": title, "planFilePath": path}),
-                )
+            pool.entry(tab).map_or(Value::Null, |entry| {
+                entry.plan_proposal.as_ref().map_or(Value::Null, |(title, path)| {
+                    json!({"title": title, "planFilePath": path, "generation": entry.plan_generation})
+                })
+            })
         })
     }
 
@@ -433,9 +434,6 @@ impl Ctx {
             let ids: Vec<String> = pool.request_bodies.keys().cloned().collect();
             let mut open = Vec::new();
             for id in ids {
-                let Some(held) = pool.request_bodies.get(&id).cloned() else {
-                    continue;
-                };
                 let Some(owner) = pool.request_owners.get(&id).copied() else {
                     pool.request_bodies.remove(&id);
                     pool.sign_in_requests.remove(&id);
@@ -444,21 +442,69 @@ impl Ctx {
                 if !pool.by_seq(owner).is_some_and(|entry| entry.shown_in(win)) {
                     continue;
                 }
-                let sign_in = Ctx::sign_in_mark(pool, owner, &held.request, held.kinds);
-                let tab = pool
-                    .by_seq(owner)
-                    .map(|entry| entry.tab_id.clone())
-                    .unwrap_or_default();
-                let mut item = Map::new();
-                item.insert("tabId".into(), Value::from(tab));
-                item.insert("request".into(), held.request);
-                if let Some(sign_in) = sign_in {
-                    item.insert("signIn".into(), sign_in);
+                if let Some(item) = Self::open_request(pool, owner, &id) {
+                    open.push(item);
                 }
-                open.push(Value::Object(item));
             }
             Value::Array(open)
         })
+    }
+
+    fn open_request(pool: &mut Pool, seq: u64, id: &String) -> Option<Value> {
+        let held = pool.request_bodies.get(id)?.clone();
+        let sign_in = Ctx::sign_in_mark(pool, seq, &held.request, held.kinds);
+        if sign_in.is_none() && pool.answering.contains(id) {
+            return None;
+        }
+        let mut item = Map::new();
+        item.insert(
+            "tabId".into(),
+            Value::from(pool.by_seq(seq)?.tab_id.clone()),
+        );
+        item.insert("request".into(), held.request);
+        if let Some(mark) = sign_in {
+            item.insert("signIn".into(), mark);
+        }
+        Some(Value::Object(item))
+    }
+
+    pub(super) fn replay_viewer_questions(&self, seq: u64, win: i64) {
+        self.with(|pool| {
+            if !pool.by_seq(seq).is_some_and(|entry| entry.shown_in(win)) {
+                return;
+            }
+            let ids: Vec<_> = pool
+                .request_owners
+                .iter()
+                .filter(|(_, owner)| **owner == seq)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in ids {
+                if let Some(frame) = Self::replayed_question(pool, seq, &id) {
+                    self.send(vec![win], "EXTENSION_UI", frame);
+                }
+            }
+        });
+    }
+
+    pub(super) fn replay_failed_question(&self, seq: u64, id: &String) {
+        self.with(|pool| {
+            if pool.request_owners.get(id) == Some(&seq)
+                && let Some(frame) = Self::replayed_question(pool, seq, id)
+                && let Some(entry) = pool.by_seq(seq)
+            {
+                self.send(Pool::windows_of(entry), "EXTENSION_UI", frame);
+            }
+        });
+    }
+
+    fn replayed_question(pool: &mut Pool, seq: u64, id: &String) -> Option<Value> {
+        let mut frame = Self::open_request(pool, seq, id)?;
+        if frame.get("signIn").is_some() {
+            return None;
+        }
+        frame["resent"] = Value::Bool(true);
+        Some(frame)
     }
 
     // ---- what the other computers' views read ---------------------------------------------------------------------
@@ -503,8 +549,8 @@ impl Ctx {
                     {
                         fact.insert("sessionFile".into(), Value::from(file.clone()));
                     }
-                    if let Some(last) = &entry.tracking.last_run {
-                        fact.insert("lastRun".into(), last.clone());
+                    if let Some(last) = entry.tracking.numbered_outcome() {
+                        fact.insert("lastRun".into(), last);
                     }
                     if let Some(retry) = &entry.tracking.retry {
                         // One object per `auto_retry_start`: main hands the same object out while this id stands.
@@ -524,6 +570,9 @@ impl Ctx {
                     }
                     if run.settling() {
                         fact.insert("settling".into(), Value::from(true));
+                    }
+                    if entry.tracking.goal_active {
+                        fact.insert("goalActive".into(), Value::from(true));
                     }
                     if let Some(prompt) = &entry.unsaved_prompt {
                         fact.insert("unsavedPrompt".into(), Value::from(prompt.clone()));
@@ -629,7 +678,7 @@ impl Ctx {
             let Some(entry) = pool.entry(tab) else {
                 return Value::Null;
             };
-            let payload = Pool::tab_status(entry, &cwd);
+            let payload = pool.tab_status(entry, &cwd);
             let ask = ask.or(entry.plan_proposal.as_ref().map(|_| "approval"));
             let mut facts = Map::new();
             facts.insert("sessionPath".into(), opt(entry.session_file.clone()));
@@ -735,7 +784,7 @@ impl Ctx {
                     }
                     .filter(|file| !file.is_empty())?;
                     let cwd = facts[tab.as_str()]["cwd"].as_str().unwrap_or("");
-                    let payload = Pool::tab_status(entry, cwd);
+                    let payload = pool.tab_status(entry, cwd);
                     let mut item = Map::new();
                     item.insert("tabId".into(), Value::from(entry.tab_id.clone()));
                     item.insert("device".into(), opt(entry.device.clone()));
@@ -831,6 +880,30 @@ impl Ctx {
                 .collect();
             Value::Array(list)
         })
+    }
+
+    /// `controlTabs`: what the control tools' snapshot reads of every window that owns a tab, in one call instead of
+    /// several per tab (main's thread waits on each): per window (`tabWindows`'s order) its `tabsForWindow` rows and
+    /// `openRequests`, each row with its tab's `tabFacts`, `pendingPlan`, `formerTabIds`, `hasDraft` and owner window
+    /// (`windowOfTab`) under `control`.
+    pub(super) async fn control_tabs(&self) -> R<Value> {
+        let wins: Vec<i64> = serde_json::from_value(self.tab_windows()).unwrap_or_default();
+        let mut windows = Vec::with_capacity(wins.len());
+        for win in wins {
+            let mut tabs = self.tabs_for_window(win).await?;
+            for row in &mut tabs {
+                let tab = row["tabId"].as_str().unwrap_or_default().to_string();
+                row["control"] = json!({
+                    "facts": self.tab_facts(&tab),
+                    "plan": self.pending_plan(&tab),
+                    "formerIds": self.former_tab_ids(&tab),
+                    "hasDraft": self.has_draft(&tab),
+                    "owner": self.window_of_tab(&tab),
+                });
+            }
+            windows.push(json!({"win": win, "tabs": tabs, "asks": self.open_requests(win)}));
+        }
+        Ok(Value::Array(windows))
     }
 
     pub(super) async fn memory_tabs(&self) -> R<Value> {
@@ -994,13 +1067,18 @@ impl Ctx {
         Ok(())
     }
 
+    /// What the person typed (main's `TYPED_COMMANDS`) makes a new session one. A shell or eval line starts no agent
+    /// turn, so `agent_start` never clears the start tab's mark: it goes here too, or the window's housekeeping closes
+    /// the tab (and a host tool call its omp still waits on) once another tab opens.
     pub(super) async fn note_unstarted(&self, tab: &str, unstarted: bool) -> R<()> {
         let win = self.with(|pool| {
             let entry = pool.entry_mut(tab)?;
-            if entry.unstarted == unstarted {
+            let placeholder = entry.placeholder && unstarted;
+            if entry.unstarted == unstarted && entry.placeholder == placeholder {
                 return None;
             }
             entry.unstarted = unstarted;
+            entry.placeholder = placeholder;
             Some(entry.win_id)
         });
         let Some(win) = win else {
@@ -1090,6 +1168,27 @@ impl Ctx {
         });
         if changed.is_some() {
             self.forward_status(tab).await?;
+        }
+        Ok(())
+    }
+
+    /// The tab's cut-off row (TurnResume's offer), or a paired host's for a tab this one views (`listen`): the devices
+    /// viewing the tab show it too, and their Continue and Dismiss come back.
+    pub(super) async fn set_cut_off(&self, tab: &str, cut_off: Option<String>) -> R<()> {
+        let views = self.with(|pool| {
+            let entry = pool.entry_mut(tab)?;
+            if entry.cut_off == cut_off {
+                return None;
+            }
+            entry.cut_off = cut_off.clone();
+            Some(entry.device_views.clone())
+        });
+        let Some(views) = views else {
+            return Ok(());
+        };
+        self.forward_status(tab).await?;
+        for view in views {
+            self.push(&json!({"k": "emitView", "tab": tab, "view": view, "event": "cutOff", "arg": cut_off}));
         }
         Ok(())
     }
@@ -1195,8 +1294,7 @@ impl Ctx {
         paths: &[String],
     ) -> R<Value> {
         for path in paths {
-            self.ask("deletedAdd", json!({"sessionPath": path, "device": device}))
-                .await?;
+            crate::sessions::deleted::add(path, Some(device));
         }
         let held: Vec<String> = self.with(|pool| {
             pool.entries
@@ -1268,12 +1366,16 @@ impl Ctx {
         Ok(true)
     }
 
-    /// `releaseTab`: false when the tab is unknown.
-    pub(super) async fn release_tab(&self, tab: &str) -> R<bool> {
-        let Some(win) = self.with(|pool| pool.entry(tab).map(|entry| entry.win_id)) else {
+    /// Only a successful removal changes the owner's layout.
+    pub(super) async fn release_tab(
+        &self,
+        tab: &str,
+        expected: Option<AutoCloseTurn>,
+        unless_dirty: Option<&FileEditGuard>,
+    ) -> R<bool> {
+        let Some(win) = self.release_entry(tab, expected, unless_dirty).await? else {
             return Ok(false);
         };
-        self.release_entry(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         Ok(true)
     }
@@ -1426,19 +1528,12 @@ impl Ctx {
             match decision.as_str() {
                 Some("skip") => continue,
                 Some("wait") => {
-                    let pending = self.with(|pool| {
-                        pool.entry(&tab)
-                            .and_then(|entry| entry.extension_pending.clone())
-                    });
-                    let merged = match pending {
-                        Some(pending) => {
-                            self.ask("mergePlans", json!({"a": pending, "b": plan}))
-                                .await?
-                        }
-                        None => plan.clone(),
-                    };
                     self.with(|pool| {
                         if let Some(entry) = pool.entry_mut(&tab) {
+                            let merged = match &entry.extension_pending {
+                                Some(pending) => crate::ext::plan::merge(pending, plan),
+                                None => plan.clone(),
+                            };
                             entry.extension_pending = Some(merged);
                         }
                     });
@@ -1581,6 +1676,9 @@ impl Ctx {
             if let Some(retry) = &entry.scheduled_retry {
                 snapshot.insert("scheduledRetry".into(), retry.clone());
             }
+            if let Some(cut_off) = &entry.cut_off {
+                snapshot.insert("cutOff".into(), Value::from(cut_off.clone()));
+            }
             snapshot.insert("run".into(), entry.tracking.run.reading(now));
             Value::Object(snapshot)
         })
@@ -1592,6 +1690,10 @@ impl Ctx {
         let id = (frame["type"] == "extension_ui_response")
             .then(|| frame["id"].as_str().map(str::to_string))
             .flatten();
+        // A question an agent's answer holds takes no answer from a device viewing the tab either.
+        if let Some(id) = &id {
+            self.guard_ask(id, None)?;
+        }
         let seq = self.with(|pool| {
             let entry = pool.entry_any(tab)?;
             let seq = entry.seq;
@@ -1795,7 +1897,6 @@ impl Ctx {
     /// entry as a deferred acquire makes it, from the facts the handle can say (`SidecarPool.#reseed` lists what is
     /// lost with the old pool: run state, titles, asks, viewers, splits; the session file survives).
     pub(super) fn seed(&self, tabs: &[Value]) {
-        let mut windows: Vec<i64> = Vec::new();
         for tab in tabs {
             let (Some(id), Some(win)) = (tab["tab"].as_str(), tab["win"].as_i64()) else {
                 continue;
@@ -1823,6 +1924,7 @@ impl Ctx {
                     );
                 }
                 entry.hosted_view = tab["hosted"].as_bool() == Some(true);
+                entry.recovering_acquire = tab["acquiring"].as_bool() == Some(true);
                 let wired: Vec<i64> = tab["full"]
                     .as_array()
                     .map(|wins| wins.iter().filter_map(Value::as_i64).collect())
@@ -1834,29 +1936,17 @@ impl Ctx {
                     .as_array()
                     .map(|views| views.iter().filter_map(Value::as_u64).collect())
                     .unwrap_or_default();
+                // A pending acquire that never wired the window has not claimed it, especially a deferred tab.
+                if !pool.active_by_window.contains(&win)
+                    && (!entry.recovering_acquire || entry.wired_in(win))
+                {
+                    pool.active_by_window.insert(win, id.to_string());
+                    pool.visible_by_window.insert(win, vec![id.to_string()]);
+                }
                 pool.entries.push(entry);
                 seq
             });
             self.when_closed(win, super::state::Closer::Entry(seq));
-            if !windows.contains(&win) {
-                windows.push(win);
-            }
         }
-        self.with(|pool| {
-            for win in windows {
-                if pool.active_by_window.contains(&win) {
-                    continue;
-                }
-                let first = pool
-                    .entries
-                    .iter()
-                    .find(|entry| entry.shown_in(win))
-                    .map(|entry| entry.tab_id.clone());
-                if let Some(first) = first {
-                    pool.active_by_window.insert(win, first.clone());
-                    pool.visible_by_window.insert(win, vec![first]);
-                }
-            }
-        });
     }
 }

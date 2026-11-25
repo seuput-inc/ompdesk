@@ -6,9 +6,9 @@
 //!   content: a file whose size, modification and change times and inode are what the stat cache last saw keeps its
 //!   hash, any other is hashed again, so an edit that is not committed counts and a touch that changes nothing does
 //!   not;
-//! - except what can never be an input: `.git`, folders tagged as caches (`CACHEDIR.TAG`, which cargo's `target/`
-//!   carries) and, among the files git ignores, the usual cache and report folders (`CACHE_NAMES`);
-//! - files the command names outside the checkout (a wrapper script such as `~/.cache/heavy-run.sh`);
+//! - except Git metadata and the check's outputs. By default only ignored tagged caches and the usual ignored
+//!   cache/report folders are excluded. A matching `.ompdesk/checks.json` declaration replaces those defaults;
+//! - the executable and files the command names outside the checkout (including a wrapper script);
 //! - the environment, every variable but a terminal's or OMPdesk's own plumbing (`volatile_env`), each by a hash of
 //!   its value, so the evidence names a variable without showing it;
 //! - the tools: `node`, `bun` and, for cargo, `rustc` and `cargo` by their version, the operating system, this
@@ -18,10 +18,161 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+
+use crate::sys::child_command;
+
+/// A repository may declare generated outputs for one exact invocation. Everything else stays an input.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckPolicies {
+    checks: Vec<Boundary>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Boundary {
+    cwd: String,
+    argv: Vec<String>,
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+}
+
+const POLICY: &str = ".ompdesk/checks.json";
+
+fn invalid(message: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, format!("{POLICY}: {message}"))
+}
+
+fn under(path: &str, parent: &str) -> bool {
+    path.eq_ignore_ascii_case(parent)
+        || path
+            .get(..parent.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(parent))
+            && path.as_bytes().get(parent.len()) == Some(&b'/')
+}
+
+fn overlaps(a: &str, b: &str) -> bool {
+    under(a, b) || under(b, a)
+}
+
+/// Literal paths only. A symlink or a platform-specific spelling would change what a declaration covers.
+fn literal(root: &Path, rel: &str) -> io::Result<()> {
+    let mut path = root.to_owned();
+    for part in rel.split('/') {
+        let device = part.split('.').next().unwrap_or(part);
+        let reserved = ["con", "prn", "aux", "nul", "conin$", "conout$"]
+            .iter()
+            .any(|s| device.eq_ignore_ascii_case(s))
+            || (device.len() == 4
+                && device.as_bytes()[3].is_ascii_digit()
+                && device.get(..3).is_some_and(|p| {
+                    p.eq_ignore_ascii_case("com") || p.eq_ignore_ascii_case("lpt")
+                }));
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.ends_with(['.', ' '])
+            || reserved
+            || part.contains('~')
+            || part.eq_ignore_ascii_case(".git")
+            || part
+                .chars()
+                .any(|c| c.is_control() || "\\:*?\"<>|[]".contains(c))
+        {
+            return Err(invalid(format!(
+                "expected a literal project-relative path, got {rel:?}"
+            )));
+        }
+        path.push(part);
+        match fs::symlink_metadata(&path) {
+            Ok(m) if m.is_symlink() => return Err(invalid(format!("symlink in {rel:?}"))),
+            Ok(m) if m.is_dir() && path.join(".git").try_exists()? => {
+                return Err(invalid(format!("nested checkout in {rel:?}")));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+fn lockfile(name: &str) -> bool {
+    name.ends_with(".lock")
+        || matches!(
+            name,
+            "bun.lockb" | "package-lock.json" | "npm-shrinkwrap.json" | "pnpm-lock.yaml"
+        )
+}
+
+impl Boundary {
+    pub(crate) fn load(root: &Path, cwd: &Path, argv: &[String]) -> io::Result<Option<Self>> {
+        let path = root.join(POLICY);
+        match fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
+        literal(root, POLICY)?;
+        let policies: CheckPolicies = serde_json::from_slice(&fs::read(path)?).map_err(invalid)?;
+        let mut selected = None;
+        for check in policies.checks {
+            if check.cwd != "." {
+                literal(root, &check.cwd)?;
+            }
+            if check.argv != argv || root.join(&check.cwd) != cwd {
+                continue;
+            }
+            if selected.is_some() || check.outputs.is_empty() {
+                return Err(invalid(
+                    "expected one matching check with at least one output",
+                ));
+            }
+            for path in check.inputs.iter().chain(&check.outputs) {
+                literal(root, path)?;
+            }
+            for (i, input) in check.inputs.iter().enumerate() {
+                if check.inputs[..i].iter().any(|p| overlaps(input, p)) {
+                    return Err(invalid(format!("overlapping input {input:?}")));
+                }
+            }
+            for (i, out) in check.outputs.iter().enumerate() {
+                if overlaps(out, ".ompdesk")
+                    || out
+                        .split('/')
+                        .any(|p| p.eq_ignore_ascii_case("node_modules"))
+                    || lockfile(out.rsplit('/').next().unwrap_or(out))
+                    || check
+                        .inputs
+                        .iter()
+                        .chain(&check.outputs[..i])
+                        .any(|p| overlaps(p, out))
+                {
+                    return Err(invalid(format!("overlapping or protected output {out:?}")));
+                }
+            }
+            let tracked = git(root, &["ls-files", "--cached", "-z"])
+                .ok_or_else(|| invalid("cannot verify outputs against the Git index"))?;
+            for name in tracked.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+                let name = std::str::from_utf8(name).map_err(invalid)?;
+                if check.outputs.iter().any(|p| overlaps(name, p)) {
+                    return Err(invalid(format!("output overlaps tracked input {name:?}")));
+                }
+            }
+            selected = Some(check);
+        }
+        Ok(selected)
+    }
+
+    fn output(&self, child: &str) -> bool {
+        // An exact spelling is conservative on both case-sensitive and case-insensitive filesystems.
+        self.outputs.iter().any(|p| Path::new(child).starts_with(p))
+    }
+}
 
 /// Cache and report folders that are never inputs, when git ignores them (or the folder is no git checkout).
 const CACHE_NAMES: &[&str] = &[
@@ -45,7 +196,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new("git")
+    let out = child_command("git")
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
@@ -149,28 +300,64 @@ pub struct StatCache {
     map: HashMap<String, (Stat, String)>,
 }
 
+fn stat_row(line: &str) -> Option<(&str, Stat, &str)> {
+    let mut fields = line.split('\t');
+    let path = fields.next()?;
+    let stat = Stat {
+        size: fields.next()?.parse().ok()?,
+        mtime: fields.next()?.parse().ok()?,
+        ctime: fields.next()?.parse().ok()?,
+        ino: fields.next()?.parse().ok()?,
+        exec: match fields.next()? {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        },
+    };
+    let hash = fields.next()?;
+    (!path.is_empty() && hex(hash, 64) && fields.next().is_none()).then_some((path, stat, hash))
+}
+
+pub(super) fn hex(text: &str, len: usize) -> bool {
+    text.len() == len && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+pub(super) fn stat_cache_path(store: &Path, root: &str) -> PathBuf {
+    let hash = sha256_hex(root.as_bytes());
+    store.join("inputs").join(format!("{}.tsv", &hash[..16]))
+}
+
+pub(super) fn stat_cache_row(line: &str) -> bool {
+    stat_row(line).is_some()
+}
+
+pub(super) fn run_input_row(line: &str) -> bool {
+    let mut fields = line.split('\t');
+    let (Some(kind), Some(key), Some(value), None) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return false;
+    };
+    !key.is_empty()
+        && match kind {
+            "F" if value == "directory" => true,
+            "F" if value.starts_with("link:") => hex(&value[5..], 64),
+            "X" if key == "@executable" => !value.is_empty(),
+            "F" | "X" => hex(value.strip_suffix('x').unwrap_or(value), 64),
+            "E" => hex(value, 16),
+            "T" => !value.is_empty(),
+            _ => false,
+        }
+}
+
 impl StatCache {
     pub fn load(store: &Path, root: &Path) -> StatCache {
-        let name = &sha256_hex(root.to_string_lossy().as_bytes())[..16];
-        let path = store.join("inputs").join(format!("{name}.tsv"));
+        let path = stat_cache_path(store, &root.to_string_lossy());
         let mut map = HashMap::new();
         if let Ok(text) = fs::read_to_string(&path) {
             for line in text.lines() {
-                let f: Vec<&str> = line.split('\t').collect();
-                if let [p, size, mtime, ctime, ino, exec, hash] = f[..] {
-                    let (Ok(size), Ok(mtime), Ok(ctime), Ok(ino)) =
-                        (size.parse(), mtime.parse(), ctime.parse(), ino.parse())
-                    else {
-                        continue;
-                    };
-                    let stat = Stat {
-                        size,
-                        mtime,
-                        ctime,
-                        ino,
-                        exec: exec == "1",
-                    };
-                    map.insert(p.to_string(), (stat, hash.to_string()));
+                if let Some((path, stat, hash)) = stat_row(line) {
+                    map.insert(path.to_owned(), (stat, hash.to_owned()));
                 }
             }
         }
@@ -199,37 +386,58 @@ impl StatCache {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Outputs {
+    #[default]
+    Undeclared,
+    Missing,
+    Present(String),
+}
+
+impl Outputs {
+    pub(crate) fn matches_proof(&self, proof: &Path) -> bool {
+        matches!(self, Self::Present(hash) if fs::read_to_string(proof).is_ok_and(|saved| saved == *hash))
+    }
+}
+
+fn digest_entry(hasher: &mut Sha256, path: &str, hash: &str) {
+    hasher.update(path.as_bytes());
+    hasher.update([0]);
+    hasher.update(hash.as_bytes());
+    hasher.update(b"\n");
+}
+
+fn finish_sha256(hasher: Sha256) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for byte in hasher.finalize().iter().copied() {
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 15)] as char);
+    }
+    out
+}
+
 /// The files of the input set, by path relative to the root (`/`-separated), each with its content hash.
 #[derive(Clone, Debug, Default)]
 pub struct Files {
     pub files: Vec<(String, String)>,
+    pub(crate) outputs: Outputs,
 }
 
 impl Files {
     pub fn digest(&self) -> String {
         let mut hasher = Sha256::new();
         for (p, h) in &self.files {
-            hasher.update(p.as_bytes());
-            hasher.update([0]);
-            hasher.update(h.as_bytes());
-            hasher.update(b"\n");
+            digest_entry(&mut hasher, p, h);
         }
-        hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        finish_sha256(hasher)
     }
 }
 
 fn excluded_dir(dir: &Path, rel: &str, name: &str, ignored: Option<&[String]>) -> bool {
-    if name == ".git" {
-        return true;
-    }
-    if dir.join("CACHEDIR.TAG").is_file() {
-        return true;
-    }
-    CACHE_NAMES.contains(&name) && is_ignored(ignored, rel)
+    name == ".git"
+        || ((CACHE_NAMES.contains(&name) || dir.join("CACHEDIR.TAG").is_file())
+            && is_ignored(ignored, rel))
 }
 
 fn hash_file(path: &Path) -> io::Result<String> {
@@ -243,11 +451,7 @@ fn hash_file(path: &Path) -> io::Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    Ok(finish_sha256(hasher))
 }
 
 /// A file modified this close to the moment it was hashed may change again within the same timestamp tick (Windows
@@ -280,7 +484,12 @@ fn record_file(
 }
 
 /// Walks the checkout and hashes what the cache cannot vouch for; the cache learns the new hashes.
-pub fn snapshot(root: &Path, ignored: Option<&[String]>, cache: &mut StatCache) -> Files {
+pub(crate) fn snapshot(
+    root: &Path,
+    ignored: Option<&[String]>,
+    boundary: Option<&Boundary>,
+    cache: &mut StatCache,
+) -> io::Result<Files> {
     let racy_after = std::time::SystemTime::now()
         .checked_sub(RACY)
         .unwrap_or(std::time::UNIX_EPOCH);
@@ -289,12 +498,15 @@ pub fn snapshot(root: &Path, ignored: Option<&[String]>, cache: &mut StatCache) 
     let mut stack = vec![(root.to_path_buf(), String::new())];
     let mut followed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     while let Some((dir, rel)) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name == ".DS_Store" {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let name = entry.file_name().into_string().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "input path is not UTF-8")
+            })?;
+            if name == ".git" && boundary.is_some_and(|b| b.output(&rel)) {
+                return Err(invalid(format!("nested checkout inside output {rel:?}")));
+            }
+            if name == ".git" {
                 continue;
             }
             let path = entry.path();
@@ -303,38 +515,41 @@ pub fn snapshot(root: &Path, ignored: Option<&[String]>, cache: &mut StatCache) 
             } else {
                 format!("{rel}/{name}")
             };
-            let Ok(kind) = entry.file_type() else {
+            if boundary.is_none() && name == ".DS_Store" && is_ignored(ignored, &child) {
                 continue;
-            };
+            }
+            let kind = entry.file_type()?;
+            let output = boundary.is_some_and(|b| b.output(&child));
             if kind.is_dir() {
-                if !excluded_dir(&path, &child, &name, ignored) {
+                if boundary.is_some() || !excluded_dir(&path, &child, &name, ignored) {
+                    if boundary.is_some() {
+                        found.push((child.clone(), path.clone(), None, Some("directory".into())));
+                    }
                     stack.push((path, child));
                 }
             } else if kind.is_symlink() {
+                if output {
+                    return Err(invalid(format!("symlink in generated output {child:?}")));
+                }
                 // The link itself (a retargeted link is a change) and what it points to, by content: a linked
                 // `node_modules` or config is as much an input as a real one.
-                let target = fs::read_link(&path)
-                    .map(|t| t.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                let target = fs::read_link(&path)?;
                 found.push((
                     format!("{child}@link"),
                     path.clone(),
                     None,
-                    Some(format!("link:{}", sha256_hex(target.as_bytes()))),
+                    Some(format!(
+                        "link:{}",
+                        sha256_hex(target.as_os_str().as_encoded_bytes())
+                    )),
                 ));
                 match fs::metadata(&path) {
                     Ok(meta) if meta.is_dir() => {
-                        let real = fs::canonicalize(&path).ok();
-                        let parent = fs::canonicalize(&dir).ok();
-                        // A link to a folder that holds it would walk forever; one seen through another link once.
-                        // An excluded alias never claims the target, or a later included alias of it would be skipped.
-                        let loops = match (&real, &parent) {
-                            (Some(real), Some(parent)) => parent.starts_with(real),
-                            _ => true,
-                        };
+                        let real = fs::canonicalize(&path)?;
+                        let loops = fs::canonicalize(&dir)?.starts_with(&real);
                         if !loops
-                            && !excluded_dir(&path, &child, &name, ignored)
-                            && real.as_ref().is_some_and(|r| followed.insert(r.clone()))
+                            && (boundary.is_some() || !excluded_dir(&path, &child, &name, ignored))
+                            && followed.insert(real)
                         {
                             stack.push((path, child));
                         }
@@ -343,10 +558,14 @@ pub fn snapshot(root: &Path, ignored: Option<&[String]>, cache: &mut StatCache) 
                         record_file(&mut found, &mut racy, cache, racy_after, child, path, &meta)
                     }
                     // A dangling link: its text is all there is.
-                    Err(_) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
                 }
-            } else if let Ok(meta) = entry.metadata() {
+            } else if kind.is_file() {
+                let meta = entry.metadata()?;
                 record_file(&mut found, &mut racy, cache, racy_after, child, path, &meta);
+            } else if boundary.is_some() {
+                return Err(invalid(format!("unsupported file type at {child:?}")));
             }
         }
     }
@@ -380,13 +599,12 @@ pub fn snapshot(root: &Path, ignored: Option<&[String]>, cache: &mut StatCache) 
                 .collect()
         });
         for (i, hash) in hashed {
-            // A file that vanished or cannot be read is an input in a state of its own.
-            found[i].3 = Some(hash.unwrap_or_else(|| "unreadable".into()));
+            found[i].3 = hash;
         }
     }
     let mut files = Vec::with_capacity(found.len());
     for (rel, _, stat, hash) in found {
-        let hash = hash.unwrap_or_default();
+        let hash = hash.ok_or_else(|| io::Error::other(format!("could not hash input {rel:?}")))?;
         if let Some(stat) = stat {
             if racy.contains(&rel) {
                 cache.map.remove(&rel);
@@ -401,8 +619,40 @@ pub fn snapshot(root: &Path, ignored: Option<&[String]>, cache: &mut StatCache) 
     }
     files.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     let keep: std::collections::HashSet<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
-    cache.map.retain(|p, _| keep.contains(p.as_str()));
-    Files { files }
+    cache
+        .map
+        .retain(|p, _| Path::new(p).is_absolute() || keep.contains(p.as_str()));
+    let outputs = boundary.map_or(Outputs::Undeclared, |b| {
+        let complete = b
+            .outputs
+            .iter()
+            .all(|o| files.binary_search_by(|(p, _)| p.cmp(o)).is_ok());
+        let mut hasher = Sha256::new();
+        files.retain(|(p, h)| {
+            if !b.output(p) {
+                return true;
+            }
+            digest_entry(&mut hasher, p, h);
+            // A generated executable must be named itself, not just sit somewhere under an output directory.
+            if b.outputs.contains(p) {
+                return false;
+            }
+            let path = Path::new(p);
+            lockfile(p.rsplit('/').next().unwrap_or(p))
+                || h.ends_with('x')
+                || path.extension().is_some_and(|ext| {
+                    ["exe", "bat", "cmd", "com"]
+                        .iter()
+                        .any(|e| ext.eq_ignore_ascii_case(e))
+                })
+        });
+        if complete {
+            Outputs::Present(finish_sha256(hasher))
+        } else {
+            Outputs::Missing
+        }
+    });
+    Ok(Files { files, outputs })
 }
 
 /// Variables that differ between terminals, sessions and agents without changing what a test does. Only named
@@ -460,7 +710,7 @@ pub fn volatile_env(name: &str) -> bool {
 }
 
 fn version_of(program: &str, args: &[&str]) -> Option<String> {
-    let mut child = Command::new(program)
+    let mut child = child_command(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -538,22 +788,116 @@ impl InputSet {
             .collect()
     }
 
-    /// Files outside `root` that `argv` names (a wrapper script), by content.
-    pub fn outside_files(root: &Path, cwd: &Path, argv: &[String]) -> BTreeMap<String, String> {
+    /// Command/script arguments stay inputs even outside the checkout or behind an ignored directory.
+    pub(crate) fn command_files(
+        cwd: &Path,
+        argv: &[String],
+        env: &BTreeMap<String, String>,
+        root: &Path,
+        boundary: Option<&Boundary>,
+        files: &Files,
+        cache: &mut StatCache,
+    ) -> io::Result<BTreeMap<String, String>> {
         let mut out = BTreeMap::new();
-        for arg in argv {
-            if arg.starts_with('-') || !(arg.contains('/') || arg.contains('\\')) {
+        let Some(program) = argv.first() else {
+            return Ok(out);
+        };
+        #[cfg(windows)]
+        let executable = if program.contains(['/', '\\']) {
+            crate::cli::resolve_windows(&cwd.join(program).to_string_lossy(), env)
+        } else {
+            crate::cli::resolve_windows(program, env)
+        };
+        #[cfg(unix)]
+        let executable = if program.contains('/') {
+            Some(cwd.join(program))
+        } else {
+            env.get("PATH").and_then(|value| {
+                std::env::split_paths(value)
+                    .map(|dir| cwd.join(dir).join(program))
+                    .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && stat_of(&m).exec))
+            })
+        };
+        let real_root = fs::canonicalize(root)?;
+        for (program, path) in
+            executable
+                .into_iter()
+                .map(|p| (true, p))
+                .chain(argv.iter().skip(1).map(|arg| {
+                    let value = arg
+                        .strip_prefix('-')
+                        .and_then(|a| a.split_once('='))
+                        .map_or(arg.as_str(), |(_, v)| v);
+                    (false, cwd.join(value))
+                }))
+        {
+            if !path.is_file() {
                 continue;
             }
-            let path = cwd.join(arg);
-            if path.starts_with(root) || !path.is_file() {
-                continue;
+            let path = fs::canonicalize(path)?;
+            let key = path.display().to_string();
+            if program {
+                out.insert("@executable".into(), key.clone());
             }
-            if let Ok(hash) = hash_file(&path) {
-                out.insert(path.display().to_string(), hash);
+            if let Ok(rel) = path.strip_prefix(&real_root) {
+                let rel = rel
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                if boundary.is_some_and(|b| b.outputs.iter().any(|o| under(&rel, o))) {
+                    return Err(invalid(format!("output overlaps command argument {rel:?}")));
+                }
+                if files
+                    .files
+                    .binary_search_by(|(p, _)| p.as_str().cmp(&rel))
+                    .is_ok()
+                {
+                    continue;
+                }
+            }
+            let meta = fs::metadata(&path)?;
+            let stat = stat_of(&meta);
+            let cacheable = meta.modified()?.elapsed().is_ok_and(|age| age >= RACY);
+            let hash = match cache.map.get(&key) {
+                Some((old, hash)) if cacheable && old == &stat => hash.clone(),
+                _ => {
+                    let hash = hash_file(&path)?;
+                    if cacheable {
+                        cache.map.insert(key.clone(), (stat, hash.clone()));
+                    } else {
+                        cache.map.remove(&key);
+                    }
+                    hash
+                }
+            };
+            out.insert(key, if stat.exec { format!("{hash}x") } else { hash });
+        }
+        cache
+            .map
+            .retain(|p, _| !Path::new(p).is_absolute() || out.contains_key(p));
+        Ok(out)
+    }
+
+    pub(crate) fn changed_during(&self, end: &Self) -> Vec<String> {
+        let mut changed = if self.files.files == end.files.files {
+            Vec::new()
+        } else {
+            changed_paths(&self.files, &end.files)
+        };
+        for (label, before, after) in [
+            ("command file", &self.outside, &end.outside),
+            ("environment variable", &self.env, &end.env),
+            ("tool", &self.tools, &end.tools),
+        ] {
+            for (key, value) in before {
+                if after.get(key) != Some(value) {
+                    changed.push(format!("{label}: {key}"));
+                }
+            }
+            for key in after.keys().filter(|key| !before.contains_key(*key)) {
+                changed.push(format!("{label}: {key}"));
             }
         }
-        out
+        changed
     }
 
     pub fn digest(&self) -> String {
@@ -575,11 +919,7 @@ impl InputSet {
             hasher.update(a.as_bytes());
             hasher.update([0]);
         }
-        hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        finish_sha256(hasher)
     }
 
     /// `F`, `X`, `E`, `T` lines: files, outside files, environment, tools.
@@ -707,6 +1047,10 @@ pub fn changed_paths(a: &Files, b: &Files) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn snapshot(root: &Path, ignored: Option<&[String]>, cache: &mut StatCache) -> Files {
+        super::snapshot(root, ignored, None, cache).unwrap()
+    }
+
     fn temp(name: &str) -> PathBuf {
         use std::hash::{BuildHasher, RandomState};
         let dir = std::env::temp_dir().join(format!(
@@ -716,6 +1060,162 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn policy(root: &Path, checks: serde_json::Value) {
+        fs::create_dir_all(root.join(".ompdesk")).unwrap();
+        fs::write(
+            root.join(POLICY),
+            serde_json::json!({"checks": checks}).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn only_the_declared_producers_generated_files_are_not_inputs() {
+        let base = temp("build-boundary");
+        let root = base.join("repo");
+        fs::create_dir_all(root.join("src")).unwrap();
+        git(&root, &["init", "-q"]).unwrap();
+        fs::write(root.join(".gitignore"), ".next/\n.env.local\n").unwrap();
+        for p in ["src/page.js", "package-lock.json", "build.js", ".env.local"] {
+            fs::write(root.join(p), "before").unwrap();
+        }
+        git(&root, &["add", "src", "package-lock.json", "build.js"]).unwrap();
+        let argv = vec!["../tool.cmd".to_string(), "build.js".to_string()];
+        fs::write(base.join("tool.cmd"), "tool v1").unwrap();
+        policy(
+            &root,
+            serde_json::json!([{
+                "cwd": ".", "argv": argv, "inputs": ["src", "build.js"], "outputs": [".next", "generated.exe"]
+            }]),
+        );
+        let capture = |argv: &[String]| {
+            let b = Boundary::load(&root, &root, argv).unwrap();
+            let mut cache = StatCache::load(&base, &root);
+            let files =
+                super::snapshot(&root, ignored(&root).as_deref(), b.as_ref(), &mut cache).unwrap();
+            let outside = InputSet::command_files(
+                &root,
+                argv,
+                &BTreeMap::new(),
+                &root,
+                b.as_ref(),
+                &files,
+                &mut cache,
+            )
+            .unwrap();
+            InputSet {
+                files,
+                outside,
+                argv: argv.to_vec(),
+                ..InputSet::default()
+            }
+        };
+        let before = capture(&argv);
+        assert_eq!(before.files.outputs, Outputs::Missing);
+        fs::create_dir_all(root.join(".next/server")).unwrap();
+        fs::write(root.join(".next/server/chunk.js"), "bundle").unwrap();
+        fs::write(root.join("generated.exe"), "generated tool").unwrap();
+        let built = capture(&argv);
+        assert_eq!(before.digest(), built.digest());
+        let Outputs::Present(hash) = &built.files.outputs else {
+            panic!("missing build artifacts")
+        };
+        let proof = base.join("outputs.sha256");
+        fs::write(&proof, hash).unwrap();
+        assert!(capture(&argv).files.outputs.matches_proof(&proof));
+        fs::write(root.join("generated.exe"), "modified tool").unwrap();
+        assert!(!capture(&argv).files.outputs.matches_proof(&proof));
+        fs::write(root.join("generated.exe"), "generated tool").unwrap();
+        let consumer = ["../tool.cmd".to_string(), "serve".to_string()];
+        let serving = capture(&consumer);
+        fs::write(root.join(".next/server/chunk.js"), "updated bundle").unwrap();
+        assert_ne!(serving.digest(), capture(&consumer).digest());
+        assert!(!capture(&argv).files.outputs.matches_proof(&proof));
+        fs::remove_dir_all(root.join(".next")).unwrap();
+        assert_eq!(capture(&argv).files.outputs, Outputs::Missing);
+        assert!(!capture(&argv).files.outputs.matches_proof(&proof));
+        fs::create_dir_all(root.join(".next/server")).unwrap();
+        fs::write(root.join(".next/server/chunk.js"), "bundle").unwrap();
+        assert!(capture(&argv).files.outputs.matches_proof(&proof));
+        for protected in [".next/pnpm-lock.yaml", ".next/tool.exe"] {
+            fs::write(root.join(protected), "unexpected build input").unwrap();
+            assert_eq!(before.changed_during(&capture(&argv)), [protected]);
+            fs::remove_file(root.join(protected)).unwrap();
+        }
+        for p in ["src/page.js", "package-lock.json", "build.js", ".env.local"] {
+            fs::write(root.join(p), "after").unwrap();
+            let changed = capture(&argv);
+            assert_eq!(before.changed_during(&changed), [p]);
+            assert_ne!(before.digest(), changed.digest());
+            fs::write(root.join(p), "before").unwrap();
+        }
+        fs::write(base.join("tool.cmd"), "tool v2").unwrap();
+        let changed = capture(&argv);
+        assert_ne!(before.digest(), changed.digest());
+        assert!(
+            before
+                .changed_during(&changed)
+                .iter()
+                .any(|p| p.ends_with("tool.cmd"))
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn ambiguous_boundaries_and_hidden_command_inputs_are_rejected() {
+        let root = temp("invalid-boundary");
+        git(&root, &["init", "-q"]).unwrap();
+        fs::create_dir_all(root.join("tracked")).unwrap();
+        fs::write(root.join("tracked/source"), "tracked").unwrap();
+        git(&root, &["add", "tracked"]).unwrap();
+        let argv = vec!["./tool".to_string(), ".next/build.js".to_string()];
+        let check = |outputs: &[&str]| {
+            serde_json::json!({
+                "cwd": ".", "argv": argv, "inputs": ["src"], "outputs": outputs
+            })
+        };
+        for outputs in [
+            &["../outside"][..],
+            &["/absolute"],
+            &["."],
+            &["dist/*"],
+            &[".git"],
+            &["src/out"],
+            &["tracked"],
+            &[".next", ".next/cache"],
+            &["pkg", "PKG"],
+        ] {
+            policy(&root, serde_json::json!([check(outputs)]));
+            assert!(Boundary::load(&root, &root, &argv).is_err(), "{outputs:?}");
+        }
+        let next = check(&[".next"]);
+        policy(&root, serde_json::json!([next, next]));
+        assert!(Boundary::load(&root, &root, &argv).is_err());
+        policy(&root, serde_json::json!([next]));
+        fs::create_dir_all(root.join(".next")).unwrap();
+        fs::write(root.join(".next/build.js"), "script").unwrap();
+        let b = Boundary::load(&root, &root, &argv).unwrap();
+        assert!(
+            InputSet::command_files(
+                &root,
+                &argv,
+                &BTreeMap::new(),
+                &root,
+                b.as_ref(),
+                &Files::default(),
+                &mut StatCache::load(&root, &root)
+            )
+            .is_err()
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("..", root.join("alias")).unwrap();
+            policy(&root, serde_json::json!([check(&["alias/generated"])]));
+            assert!(Boundary::load(&root, &root, &argv).is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

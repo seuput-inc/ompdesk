@@ -2,8 +2,8 @@
 //! and `usage.ts`'s `diskBytes`). What each directory held directly (its files' bytes and its child directories) is
 //! kept with the directory's mtime and inode, and reused while both are unchanged and the mtime is more than
 //! `RACY_MS` older than the reading that saw it (git's racy rule, for coarse timestamps). A directory's mtime moves
-//! whenever an entry is added, removed or renamed in it; a file rewritten in place does not move it, so main asks
-//! for a full walk at least every `FULL_WALK_EVERY_MS` (`tree-sizes.ts`).
+//! whenever an entry is added, removed or renamed in it; a file rewritten in place does not move it, so a reading
+//! expires seven days after the last full walk.
 //!
 //! Bytes are what `du` counts where the system reports allocated blocks (a sparse file what it holds, a clone in
 //! full), the size on Windows; a file with several hard links counts once per measured target. Nothing is followed:
@@ -31,6 +31,7 @@ use crate::server::{Fault, Scope};
 
 /// A directory is reused only when its mtime is this much older than the reading that saw it.
 const RACY_MS: f64 = 2_000.0;
+const FULL_WALK_EVERY_MS: f64 = 7.0 * 86_400_000.0;
 /// Threads one walk runs on, and file system calls in flight at once across every walk of this process (measured,
 /// `native-rust.md` › 2g: 4 is where this Mac's walk of `node_modules` stops getting faster).
 pub const WALK_THREADS: usize = 4;
@@ -123,6 +124,13 @@ pub struct Work {
 pub struct Walked {
     pub bytes: u64,
     pub root: Root,
+    pub work: Work,
+}
+
+#[derive(Serialize)]
+pub struct Measured {
+    pub bytes: u64,
+    #[serde(flatten)]
     pub work: Work,
 }
 
@@ -475,9 +483,8 @@ fn wall_ms() -> f64 {
         .map_or(0.0, |since| since.as_millis() as f64)
 }
 
-/// Starts a reading of `file`: an earlier measurement that is missing, unreadable or older than `full_walk_every_ms`
-/// (by main's clock `now`) makes it a full walk. Answers the reading's id and whether it reuses anything.
-pub fn open(file: &Path, now: f64, full_walk_every_ms: f64) -> (u64, bool) {
+/// An absent, unreadable or week-old reading starts a full walk.
+pub fn open(file: &Path, now: f64) -> (u64, bool) {
     let read_at = wall_ms();
     let kept: Option<SizesFile> = std::fs::read(file)
         .ok()
@@ -487,7 +494,7 @@ pub fn open(file: &Path, now: f64, full_walk_every_ms: f64) -> (u64, bool) {
             && kept.read_at.is_some()
             && kept
                 .full_at
-                .is_some_and(|full_at| now - full_at < full_walk_every_ms)
+                .is_some_and(|full_at| now - full_at < FULL_WALK_EVERY_MS)
     });
     let (old, full_at, read_before) = match kept {
         Some(kept) if reusing => (
@@ -524,24 +531,22 @@ fn reading(id: u64) -> Result<Arc<Reading>, Fault> {
 
 /// Bytes `target` (a resolved path) takes now: with a reading, reused where nothing changed (`reuse`) and kept for
 /// its save; without one, a full walk that keeps nothing.
-pub fn bytes(id: Option<u64>, target: &str, reuse: bool, scope: &Scope) -> Result<Walked, Fault> {
-    let Some(id) = id else {
-        return measure(Path::new(target), None, 0.0, scope);
-    };
-    let reading = reading(id)?;
-    let old = match reading.old.get(target) {
+pub fn bytes(id: Option<u64>, target: &str, reuse: bool, scope: &Scope) -> Result<Measured, Fault> {
+    let reading = id.map(reading).transpose()?;
+    let old = match reading.as_ref().and_then(|r| r.old.get(target)) {
         Some(Root::Tree(node)) if reuse => Some(node),
         _ => None,
     };
-    let walked = measure(Path::new(target), old, reading.read_before, scope)?;
-    if reuse {
+    let read_before = reading.as_ref().map_or(0.0, |r| r.read_before);
+    let Walked { bytes, root, work } = measure(Path::new(target), old, read_before, scope)?;
+    if let Some(reading) = reading.filter(|_| reuse) {
         reading
             .next
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(target.to_owned(), walked.root.clone());
+            .insert(target.to_owned(), root);
     }
-    Ok(walked)
+    Ok(Measured { bytes, work })
 }
 
 /// Keeps what the reading measured for the next run (0600 in a 0700 folder, replaced atomically, never after a
@@ -836,12 +841,12 @@ console.log(JSON.stringify(Object.fromEntries(fs.readdirSync(root).map(
         let file = dir.join("sizes.json");
         let key = target.to_string_lossy().into_owned();
         let scope = Scope::detached();
-        let (first, reused) = open(&file, 1_000.0, 7.0 * 86_400_000.0);
+        let (first, reused) = open(&file, 1_000.0);
         assert!(!reused);
         let walked = bytes(Some(first), &key, true, &scope).unwrap();
         assert_eq!(walked.work.readdir, 3);
         save(first, 1_000.0, &scope).unwrap();
-        let (second, reused) = open(&file, 2_000.0, 7.0 * 86_400_000.0);
+        let (second, reused) = open(&file, 2_000.0);
         assert!(reused);
         let again = bytes(Some(second), &key, true, &scope).unwrap();
         assert_eq!((again.bytes, again.work.readdir), (walked.bytes, 0));
@@ -853,7 +858,7 @@ console.log(JSON.stringify(Object.fromEntries(fs.readdirSync(root).map(
             kept["fullAt"], 1_000.0,
             "a reused reading keeps its full walk's time"
         );
-        let (late, reused) = open(&file, 1_000.0 + 7.0 * 86_400_000.0, 7.0 * 86_400_000.0);
+        let (late, reused) = open(&file, 1_000.0 + 7.0 * 86_400_000.0);
         assert!(
             !reused,
             "a reading past the full-walk period reuses nothing"

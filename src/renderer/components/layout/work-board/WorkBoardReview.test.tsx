@@ -241,9 +241,9 @@ describe("work board opened sessions", () => {
 				["/s/closed.jsonl", "done"],
 			],
 		);
-		// Now never takes the warning tone (it tinted every row); Needs you does.
+		// Now never takes the attention tone (it tinted every row); Needs you does.
 		expect(opened()?.hasAttribute("data-tone")).toBe(false);
-		expect(needs()?.getAttribute("data-tone")).toBe("warning");
+		expect(needs()?.getAttribute("data-tone")).toBe("attention");
 		// One line each: the title on the row; what it does now, its branch and merge state in the tooltip.
 		expect(rows[1]?.textContent).toContain("Run the suite");
 		expect(rows[1]?.getAttribute("title")).toContain("running bash (vitest)");
@@ -283,6 +283,21 @@ describe("work board opened sessions", () => {
 		await mount([child("c-run", { status: "running", task: "Run the suite" })]);
 		expect(pane.querySelector(".omp-work-board-pulse")?.getAttribute("data-state")).toBe("working");
 		expect(pane.querySelector("[data-board-status]")?.textContent).toBe("Working…");
+	});
+
+	it("reads Stopping in place of a child's step while a stop of it is in flight", async () => {
+		listed = [item({ tabId: "c-run", state: "running", step: "running bash (vitest)", stopping: true })];
+		await mount([child("c-run", { status: "running", task: "Run the suite" })]);
+		const activity = () =>
+			opened()?.querySelector('[data-board-opened="c-run"] [data-board-child-activity]')?.textContent;
+		expect(activity()).toBe("Stopping…");
+		const title = opened()?.querySelector('[data-board-opened="c-run"]')?.getAttribute("title");
+		expect(title).toContain("Stopping…");
+		expect(title).not.toContain("running bash");
+		// The stop ended: main's next list has no flag, and the step is back.
+		const running = item({ tabId: "c-run", state: "running", step: "running bash (vitest)" });
+		await act(async () => useAgentReviewStore.getState().apply({ tabId: "t1", items: [running] }));
+		expect(activity()).toBe("running bash (vitest)");
 	});
 
 	it("shows four running opened sessions as one-line rows named by their task, none under Needs review", async () => {
@@ -330,5 +345,28 @@ describe("work board opened sessions", () => {
 			(opened()?.querySelector("[data-board-opened]") as unknown as HTMLButtonElement | null)?.click(),
 		);
 		expect(applyAgentView).toHaveBeenCalledWith({ tabId: "c1", how: "focus" });
+	});
+
+	it("offers a paired host's child as a button only once its session file is known, then opens that file there", async () => {
+		const openTab = vi.fn(async () => "view-1");
+		useTabsStore.setState({ openTab } as never);
+		await mount();
+		const remote = (patch: Partial<AgentReviewItem>) =>
+			item({ tabId: "h1", title: "Remote child", state: "running", foreign: true, device: "host-1", ...patch });
+		const row = () => opened()?.querySelector('[data-board-opened="h1"]') as unknown as HTMLElement | null;
+		// Still starting on its host: no file yet, and the host's tab id is no tab here, so nothing could open it.
+		await act(async () => useAgentReviewStore.getState().apply({ tabId: "t1", items: [remote({})] }));
+		expect(row()?.textContent).toContain("Remote child");
+		expect(row()?.tagName).not.toBe("BUTTON");
+		await act(async () => row()?.click());
+		expect(openTab).not.toHaveBeenCalled();
+		await act(async () =>
+			useAgentReviewStore.getState().apply({ tabId: "t1", items: [remote({ sessionPath: "/host/s/h1.jsonl" })] }),
+		);
+		expect(row()?.tagName).toBe("BUTTON");
+		await act(async () => row()?.click());
+		expect(openTab).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionPath: "/host/s/h1.jsonl", device: "host-1", kind: "agent" }),
+		);
 	});
 });

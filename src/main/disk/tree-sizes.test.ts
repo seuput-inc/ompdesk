@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FULL_WALK_EVERY_MS, TreeSizes } from "./tree-sizes";
+import { TreeSizes } from "./tree-sizes";
 
 let root = "";
 let tree = "";
@@ -130,7 +130,7 @@ describe("TreeSizes", () => {
 			await change();
 			const stale = (await measured()).bytes;
 			expect(stale).not.toBe(await truth());
-			const later = await measured(Date.now() + FULL_WALK_EVERY_MS + 1);
+			const later = await measured(Date.now() + 7 * 24 * 60 * 60_000);
 			expect(later.bytes).toBe(await truth());
 			expect(later.readdir).toBe(5);
 			expect(first).toBeGreaterThan(0);

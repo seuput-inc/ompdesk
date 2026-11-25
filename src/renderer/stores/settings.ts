@@ -36,12 +36,12 @@ export interface SettingsStore {
 	pasteMenuThreshold: number;
 	/** Agent `emojiAutocomplete` setting: `:name:`/emoticon completion and expansion in the composer. */
 	emojiAutocomplete: boolean;
-	setFromState: (state: RpcSessionState) => void;
+	setFromState: (state: RpcSessionState, options?: { readOnly?: boolean }) => void;
 	setApprovalMode: (mode: ApprovalMode) => Promise<void>;
 	/** Re-read the live display settings via get_settings. */
-	syncDisplaySettings: () => Promise<void>;
+	syncDisplaySettings: () => Promise<boolean>;
 	/** Re-read the live tools.approvalMode into the store (config_update / TUI edits). */
-	syncApproval: () => Promise<void>;
+	syncApproval: (options?: { readOnly?: boolean }) => Promise<boolean>;
 	update: (
 		partial: Partial<
 			Pick<
@@ -82,31 +82,37 @@ async function syncApprovalMode(
 	set: (partial: Partial<SettingsStore>) => void,
 	command: TabCommand,
 	isCurrent: () => boolean,
-): Promise<void> {
+	readOnly: boolean,
+): Promise<boolean> {
 	try {
 		let res = await command({ type: "get_settings", paths: ["tools.approvalMode"] });
-		if (!isCurrent() || !res.success) return;
+		if (!isCurrent() || !res.success) return false;
 		const provenance = (res.data as { provenance?: Record<string, SettingProvenance> } | undefined)?.provenance?.[
 			"tools.approvalMode"
 		];
 		// Only migrate when the core proves that no global, project, or runtime override exists.
-		if (provenance?.layers.length === 0) {
+		if (!readOnly && provenance?.layers.length === 0) {
 			const pref = await window.omp.prefs.get("approvalMode");
-			if (!isCurrent()) return;
+			if (!isCurrent()) return false;
 			if (isApprovalMode(pref)) {
 				const migrated = await command({ type: "set_setting", path: "tools.approvalMode", value: pref });
-				if (!migrated.success) return;
+				if (!migrated.success) return false;
 				await window.omp.prefs.set("approvalMode", null);
 				res = await command({ type: "get_settings", paths: ["tools.approvalMode"] });
 			}
 		}
-		if (!isCurrent()) return;
+		if (!isCurrent()) return false;
 		if (res.success) {
 			const value = (res.data as { values?: Record<string, unknown> } | undefined)?.values?.["tools.approvalMode"];
-			if (isApprovalMode(value)) set({ approvalMode: value });
+			if (isApprovalMode(value)) {
+				set({ approvalMode: value });
+				return true;
+			}
 		}
+		return false;
 	} catch {
 		// Settings unreadable - keep the current value.
+		return false;
 	}
 }
 
@@ -150,25 +156,26 @@ async function syncDisplaySettings(
 	set: (partial: Partial<SettingsStore>) => void,
 	command: TabCommand,
 	isCurrent: () => boolean,
-): Promise<void> {
+): Promise<boolean> {
 	try {
 		const res = await command({ type: "get_settings", paths: [...DISPLAY_SYNC_KEYS, ...DISPLAY_NUM_KEYS] });
-		if (!isCurrent()) return;
-		if (res.success) {
-			const values = (res.data as { values?: Record<string, unknown> } | undefined)?.values;
-			const partial: Partial<SettingsStore> = {};
-			for (const [path, field] of Object.entries(DISPLAY_BOOL_MAP)) {
-				const value = values?.[path];
-				if (typeof value === "boolean") partial[field] = value;
-			}
-			for (const [path, field] of Object.entries(DISPLAY_NUM_MAP)) {
-				const value = values?.[path];
-				if (typeof value === "number") partial[field] = value;
-			}
-			if (Object.keys(partial).length > 0) set(partial);
+		if (!isCurrent() || !res.success) return false;
+		const values = (res.data as { values?: Record<string, unknown> } | undefined)?.values;
+		if (!values || typeof values !== "object") return false;
+		const partial: Partial<SettingsStore> = {};
+		for (const [path, field] of Object.entries(DISPLAY_BOOL_MAP)) {
+			const value = values[path];
+			if (typeof value === "boolean") partial[field] = value;
 		}
+		for (const [path, field] of Object.entries(DISPLAY_NUM_MAP)) {
+			const value = values[path];
+			if (typeof value === "number") partial[field] = value;
+		}
+		if (Object.keys(partial).length > 0) set(partial);
+		return Object.keys(partial).length === DISPLAY_SYNC_KEYS.length + DISPLAY_NUM_KEYS.length;
 	} catch {
 		// Settings unreadable - keep the current values.
+		return false;
 	}
 }
 
@@ -177,22 +184,27 @@ export const createSettingsStore = (command: TabCommand = activeTabCommand) => {
 	let displaySyncVersion = 0;
 	// The latest read of each kind since the store was reset: a session state (setFromState, after every get_state)
 	// joins it rather than reading again. A change (config_update, a hydration, a save) reads afresh.
-	let approvalRead: Promise<void> | undefined;
-	let displayRead: Promise<void> | undefined;
+	let approvalRead: Promise<boolean> | undefined;
+	let displayRead: Promise<boolean> | undefined;
 	return createStore<SettingsStore>()(set => {
-		const syncApproval = (): Promise<void> => {
+		const syncApproval = (options?: { readOnly?: boolean }): Promise<boolean> => {
 			const version = ++approvalSyncVersion;
-			approvalRead = syncApprovalMode(set, command, () => version === approvalSyncVersion);
+			approvalRead = syncApprovalMode(
+				set,
+				command,
+				() => version === approvalSyncVersion,
+				options?.readOnly === true,
+			);
 			return approvalRead;
 		};
-		const syncDisplay = (): Promise<void> => {
+		const syncDisplay = (): Promise<boolean> => {
 			const version = ++displaySyncVersion;
 			displayRead = syncDisplaySettings(set, command, () => version === displaySyncVersion);
 			return displayRead;
 		};
 		return {
 			...initialState,
-			setFromState: state => {
+			setFromState: (state, options) => {
 				set({
 					steeringMode: state.steeringMode,
 					followUpMode: state.followUpMode,
@@ -200,7 +212,7 @@ export const createSettingsStore = (command: TabCommand = activeTabCommand) => {
 					autoCompaction: state.autoCompactionEnabled,
 					autoRetry: state.autoRetryEnabled,
 				});
-				void (approvalRead ?? syncApproval());
+				void (approvalRead ?? syncApproval(options));
 				void (displayRead ?? syncDisplay());
 			},
 			setApprovalMode: async mode => {

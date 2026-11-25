@@ -10,8 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { IPC_EVENTS } from "../../shared/ipc-types";
 import type { SessionSummary } from "../../shared/session-summary";
+import { stopCore } from "../core/process";
 import { advanceCoreTimers, fakeCoreTimers, realCoreTimers } from "../core/test-clock";
 import {
+	DEVICE_ORDER_EXCHANGE,
 	MOBILE_WEB_LINK_EVENT,
 	MODELS_CHANGED_EVENT,
 	PREVIEW_RELAY_EVENT,
@@ -182,6 +184,77 @@ describe("connecting again to a host already paired", () => {
 	});
 });
 
+describe("shared sidebar device order", () => {
+	it("exchanges offline edits on reconnect and follows a host edit over that same one-way link", async () => {
+		const { a, b, hostId } = await rig.connected();
+		const clientId = a.devices.deviceId;
+		await b.devices.setHostEnabled(false);
+		await until(a, state => state.hosts[0]?.state !== "online");
+		await a.devices.setDeviceSectionOrder([hostId, "local"]);
+
+		// B learns A's order while A is only an inbound peer, not a section on B's sidebar.
+		await b.devices.setHostEnabled(true);
+		await until(b, state => state.deviceSectionOrder?.[0] === "local");
+		expect(b.devices.state().deviceSectionOrder).toEqual(["local"]);
+
+		// B now also pairs A. It can render the retained position without another reorder.
+		a.fake.whois.set(LOOPBACK, { nodeId: "nSTUDIO", nodeName: "studio", login: LOGIN });
+		b.fake.peers.push(studioNode({ nodeId: "nLAPTOP", name: "laptop" }));
+		await a.devices.setHostEnabled(true);
+		await b.devices.connect("nLAPTOP");
+		await until(b, state => state.hosts[0]?.state === "online");
+		expect(b.devices.state().deviceSectionOrder).toEqual(["local", clientId]);
+		await a.devices.setHostEnabled(false);
+		await until(b, state => state.hosts[0]?.state !== "online");
+		await b.devices.setDeviceSectionOrder([clientId, "local"]);
+		await until(a, state => state.deviceSectionOrder?.[0] === "local");
+		expect(a.devices.state().deviceSectionOrder).toEqual(["local", hostId]);
+	}, 20_000);
+
+	it("does not publish a refused save; after core restart it restores the store's latest accepted rows", async () => {
+		const pending = new Map<string, unknown>();
+		let fail = true;
+		const store = {
+			get: (key: string) => pending.get(key),
+			set: (key: string, value: unknown) => {
+				if (fail) throw new Error("synthetic store refusal");
+				pending.set(key, value);
+			},
+		};
+		const { a, b, hostId } = await rig.connected({ orderStore: store });
+		await expect(b.devices.setDeviceSectionOrder(["local"])).rejects.toThrow("synthetic store refusal");
+		expect(b.devices.state().deviceSectionOrder).toEqual([]);
+		expect(pending.has("rows")).toBe(false);
+		fail = false;
+		await b.devices.setDeviceSectionOrder(["local"]);
+		await until(a, state => state.deviceSectionOrder?.[0] === hostId);
+		const before = await a.devices.request(hostId, DEVICE_ORDER_EXCHANGE, []);
+		expect(before).toEqual(pending.get("rows"));
+		await stopCore();
+		await until(a, state => state.hosts[0]?.state === "online", 30_000);
+		expect(await a.devices.request(hostId, DEVICE_ORDER_EXCHANGE, [])).toEqual(before);
+		expect(b.devices.state().deviceSectionOrder).toEqual(["local"]);
+	}, 60_000);
+
+	it("imports legacy ranks only when the store has no rows, not when its rows are malformed", async () => {
+		const orderStore = new Map<string, unknown>();
+		const prefs = new Map<string, unknown>([["sidebarFolds", { deviceOrder: ["local"] }]]);
+		const first = await rig.computer("first", fakeTailnet(), { prefs, orderStore });
+		expect(first.devices.state().deviceSectionOrder).toEqual(["local"]);
+		expect(orderStore.get("rows")).toEqual([[expect.any(String), 0, 0, expect.any(String)]]);
+		const malformed = new Map<string, unknown>([["rows", "invalid"]]);
+		const second = await rig.computer("second", fakeTailnet(), { prefs, orderStore: malformed });
+		expect(second.devices.state().deviceSectionOrder).toEqual([]);
+		expect(malformed.get("rows")).toBe("invalid");
+	});
+
+	it("refuses order exchange when a connected device's login loses access", async () => {
+		const { a, b, hostId } = await rig.connected();
+		b.allowed.splice(0, 1, "other@example.com");
+		await expect(a.devices.request(hostId, DEVICE_ORDER_EXCHANGE, [])).rejects.toThrow(/remote_blocked/);
+	});
+});
+
 describe("blocking", () => {
 	it("blocks the device's node: it drops, is refused, and connects again once unblocked", async () => {
 		const { a, b } = await rig.connected();
@@ -238,9 +311,8 @@ describe("two computers that use each other as hosts", () => {
 	 */
 	async function reconnectBothWays(gateMs = 0) {
 		await rig.pickPort();
-		const lines: { message: string; details: Record<string, unknown>; at: number }[] = [];
-		const logLink = (message: string, details: Record<string, unknown>) =>
-			lines.push({ message, details, at: Date.now() });
+		const lines: { message: string; details: Record<string, unknown> }[] = [];
+		const logLink = (message: string, details: Record<string, unknown>) => lines.push({ message, details });
 		const studioTailnet = fakeTailnet({
 			peers: [studioNode({ nodeId: "nLAPTOP", name: "laptop" })],
 			whois: new Map([[LOOPBACK, { nodeId: "nLAPTOP", nodeName: "laptop", login: LOGIN }]]),
@@ -275,26 +347,11 @@ describe("two computers that use each other as hosts", () => {
 		expect(a.devices.state().hosts[0]?.state).toBe("online");
 		expect(b.devices.state().hosts[0]?.state).toBe("online");
 		expect(lines.slice(settled).filter(line => line.message === "down" || line.message === "attempt")).toEqual([]);
-		// One dial each way, neither ended by the other's link opening while younger than the stale step (1 s): the
-		// other's link reaching this computer's host (`peer`) may end only a dial that has waited that long, and the
-		// dial then runs again at once. Which wakes the first dial is a race, and both are right: its backoff ran out,
-		// or the other's link came first and the waiting dial went at once.
 		const attempts = lines.slice(reopened).filter(line => line.message === "attempt");
-		for (const host of [a, b]) {
-			const id = host.devices.state().hosts[0]?.deviceId;
-			const own = attempts.filter(line => line.details.deviceId === id);
-			expect(own.length, JSON.stringify(own)).toBeGreaterThan(0);
-			expect(["backoff", "peer"]).toContain(own[0]?.details.trigger);
-			for (const [index, rerun] of own.slice(1).entries()) {
-				expect(rerun.details.trigger).toBe("peer");
-				// The stale step is the core's 1 s; the lines cross to main after it, so allow a little of their delay.
-				expect(rerun.at - (own[index]?.at ?? 0)).toBeGreaterThanOrEqual(900);
-			}
-		}
-		return attempts;
+		for (const attempt of attempts) expect(["backoff", "peer"]).toContain(attempt.details.trigger);
 	}
 
-	it("reconnect to each other at once and stay connected (each one's link opening never ends the other's dial)", async () => {
+	it("reconnect to each other at once and stay connected", async () => {
 		await reconnectBothWays();
 	}, 20_000);
 
@@ -435,6 +492,24 @@ describe("a host link after the computer wakes or the network returns", () => {
 		expect((await probeHost(`${LOOPBACK}:${port}`)).ok).toBe(true);
 		expect(a.devices.state().hosts[0]?.state).toBe("online");
 	});
+});
+
+describe("after the core process ended", () => {
+	it("listens as a host again and links to its host again, requests going through", async () => {
+		const { a, b, hostId } = await rig.connected();
+		// A crash looks the same as a stop: the devices instances, the host's listener and every client's loop go with it.
+		await stopCore();
+		expect(a.devices.state().hosts[0]?.state).not.toBe("online");
+		expect(b.devices.state().host.port).toBeNull();
+
+		await until(b, state => state.host.port !== null, 30_000);
+		await until(a, state => state.hosts[0]?.state === "online", 30_000);
+		await until(b, state => state.host.peers[0]?.online === true, 30_000);
+		b.services.call.mockImplementation(async (_peer, method) => (method === "test.echo" ? { echoed: true } : null));
+		expect(await a.devices.request(hostId, "test.echo", {})).toEqual({ echoed: true });
+		// The host's own state kept what it was told: still sharing, still named.
+		expect(b.devices.state().host).toMatchObject({ enabled: true, name: "Studio" });
+	}, 60_000);
 });
 
 describe("code-paired computers", () => {

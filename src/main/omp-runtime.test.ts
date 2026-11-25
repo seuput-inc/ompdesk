@@ -1,9 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { core } from "./core/process";
 import {
-	isCompiledOmp,
+	firstPackageCandidate,
 	MIN_OMP_VERSION,
 	ompBunDefaults,
 	ompBunMinimum,
@@ -13,8 +14,9 @@ import {
 	ompUpdateEnv,
 	parseOmpVersion,
 	parseUpdateCheck,
-	pickOmp,
 	resolveOmp,
+	resolveOmpAmong,
+	TESTED_OMP_VERSION,
 } from "./omp-runtime";
 import { RM_TEMP, writeFakeOmp } from "./test-fake-omp";
 import { itWithFileSymlinks } from "./test-symlinks";
@@ -31,6 +33,9 @@ async function fakeOmp(versionLine: string): Promise<{ bin: string; dir: string 
 	const bin = await writeFakeOmp(dir, `console.log(${JSON.stringify(versionLine)});\n`);
 	return { bin, dir };
 }
+
+/** The PATH a fake omp's `env bun` shebang resolves on. */
+const LOOKUP_PATH = process.env.PATH ?? "";
 
 /** The first bytes of a Mach-O 64-bit executable (`MH_MAGIC_64`, little-endian on disk). */
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01]);
@@ -85,24 +90,24 @@ describe("omp version parsing", () => {
 });
 
 describe("parseUpdateCheck", () => {
-	it("reads the installed version when already up to date", () => {
-		expect(parseUpdateCheck("Current version: 18.6.1\n✔ Already up to date\n")).toEqual({
+	it("reads the installed version when already up to date", async () => {
+		await expect(parseUpdateCheck("Current version: 18.6.1\n✔ Already up to date\n")).resolves.toEqual({
 			currentVersion: "18.6.1",
 			latestVersion: "18.6.1",
 		});
 	});
 
-	it("reads the newer release on a pending update", () => {
-		expect(
+	it("reads the newer release on a pending update", async () => {
+		await expect(
 			parseUpdateCheck(
 				"Current version: 18.6.1\r\nCurrent channel: canary\r\nNew version available: 18.7.0-canary.3\r\n",
 			),
-		).toEqual({ currentVersion: "18.6.1", latestVersion: "18.7.0-canary.3" });
+		).resolves.toEqual({ currentVersion: "18.6.1", latestVersion: "18.7.0-canary.3" });
 	});
 
-	it("rejects output it cannot account for", () => {
-		expect(parseUpdateCheck("Failed to check for updates: offline")).toBeNull();
-		expect(parseUpdateCheck("Current version: 18.6.1\n")).toBeNull();
+	it("rejects output it cannot account for", async () => {
+		await expect(parseUpdateCheck("Failed to check for updates: offline")).resolves.toBeNull();
+		await expect(parseUpdateCheck("Current version: 18.6.1\n")).resolves.toBeNull();
 	});
 });
 
@@ -200,20 +205,17 @@ describe("omp lookup", () => {
 				'@"%dp0%\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist\\cli.js" %*\r\n',
 			);
 
-			expect(isCompiledOmp(script, "darwin")).toBe(false);
-			expect(isCompiledOmp(macho, "darwin")).toBe(true);
-			expect(isCompiledOmp(elf, "linux")).toBe(true);
-			expect(isCompiledOmp(standalone, "win32")).toBe(true);
-			expect(isCompiledOmp(shim, "win32")).toBe(false);
-			expect(isCompiledOmp(npmShim, "win32")).toBe(false);
-			expect(isCompiledOmp(path.join(dir, "missing"), "darwin")).toBe(false);
-			expect(isCompiledOmp(await file("compiled-real.exe", peWithSection(...REAL_COMPILED_OMP)), "win32")).toBe(
-				true,
-			);
-			expect(isCompiledOmp(await file("shim-real.exe", peWithSection(...REAL_BUN_SHIM)), "win32")).toBe(false);
-			expect(
-				isCompiledOmp(await file("bun-real.exe", peWithSection(...REAL_COMPILED_OMP.slice(0, -1))), "win32"),
-			).toBe(false);
+			expect(await firstPackageCandidate([macho, elf, script], "darwin")).toBe(2);
+			expect(await firstPackageCandidate([elf], "linux")).toBe(1);
+			expect(await firstPackageCandidate([standalone, shim], "win32")).toBe(1);
+			expect(await firstPackageCandidate([npmShim], "win32")).toBe(0);
+			expect(await firstPackageCandidate([path.join(dir, "missing")], "darwin")).toBe(0);
+			const compiled = await file("compiled-real.exe", peWithSection(...REAL_COMPILED_OMP));
+			expect(await firstPackageCandidate([compiled], "win32")).toBe(1);
+			const bunShim = await file("shim-real.exe", peWithSection(...REAL_BUN_SHIM));
+			expect(await firstPackageCandidate([bunShim], "win32")).toBe(0);
+			const bun = await file("bun-real.exe", peWithSection(...REAL_COMPILED_OMP.slice(0, -1)));
+			expect(await firstPackageCandidate([bun], "win32")).toBe(0);
 		} finally {
 			await fs.rm(dir, RM_TEMP);
 		}
@@ -221,16 +223,56 @@ describe("omp lookup", () => {
 
 	it("runs the first omp that runs from its package, past a compiled one earlier in the lookup", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-pick-"));
+		const usable = await fakeOmp(`omp/${MIN_OMP_VERSION}`);
+		const calls = vi.spyOn(core(), "call");
 		try {
 			const compiled = path.join(dir, "compiled-omp");
 			await fs.writeFile(compiled, compiledOmpBytes());
-			const script = path.join(dir, "script-omp");
-			await fs.writeFile(script, "#!/usr/bin/env bun\n");
-			expect(pickOmp([compiled, script])).toEqual({ bin: script, compiled });
-			expect(pickOmp([compiled])).toEqual({ bin: null, compiled });
-			expect(pickOmp([])).toEqual({ bin: null, compiled: null });
+			const second = path.join(dir, "second-compiled-omp");
+			await fs.writeFile(second, compiledOmpBytes());
+			expect(await resolveOmpAmong([compiled, second, usable.bin], LOOKUP_PATH)).toMatchObject({
+				ok: true,
+				runtime: { bin: usable.bin, version: MIN_OMP_VERSION },
+			});
+			expect(calls.mock.calls.filter(([method]) => method === "setup.firstPackageCandidate")).toHaveLength(1);
+			expect(await resolveOmpAmong([compiled], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "compiled", bin: compiled },
+			});
+			expect(await resolveOmpAmong([], LOOKUP_PATH)).toBeNull();
 		} finally {
+			calls.mockRestore();
 			await fs.rm(dir, RM_TEMP);
+			await fs.rm(usable.dir, RM_TEMP);
+		}
+	});
+
+	it("runs the omp Bun installed past an omp below the minimum earlier in the lookup (one neither Bun nor npm owns, which setup leaves alone)", async () => {
+		const old = await fakeOmp("omp/18.0.0");
+		const older = await fakeOmp("omp/17.9.0");
+		const tested = await fakeOmp(`omp/${TESTED_OMP_VERSION}`);
+		const broken = await fakeOmp("no version here");
+		try {
+			expect(await resolveOmpAmong([old.bin, older.bin, old.bin, tested.bin], LOOKUP_PATH)).toMatchObject({
+				ok: true,
+				runtime: { bin: tested.bin, version: TESTED_OMP_VERSION },
+			});
+			// With no usable omp behind it, the refusal is the first one's: that is the omp setup calls outdated.
+			expect(await resolveOmpAmong([old.bin, older.bin], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "too-old", version: "18.0.0", minimum: MIN_OMP_VERSION, bin: old.bin },
+			});
+			// Only a too-old omp is passed over: one that does not run ends the lookup, as before.
+			expect(await resolveOmpAmong([broken.bin, tested.bin], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "cannot-run", bin: broken.bin },
+			});
+			expect(await resolveOmpAmong([old.bin, broken.bin, tested.bin], LOOKUP_PATH)).toMatchObject({
+				ok: false,
+				reason: { kind: "too-old", version: "18.0.0", bin: old.bin },
+			});
+		} finally {
+			for (const fake of [old, older, tested, broken]) await fs.rm(fake.dir, RM_TEMP);
 		}
 	});
 
@@ -342,6 +384,45 @@ describe("resolveOmp", () => {
 			const resolution = await resolveOmp();
 			if (!resolution.ok) throw new Error(resolution.error);
 			expect(resolution.runtime).toMatchObject({ bin, version: MIN_OMP_VERSION });
+		} finally {
+			await fs.rm(dir, RM_TEMP);
+		}
+	});
+
+	it("probes with --version on the session's PATH and with telemetry off", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-probe-"));
+		try {
+			const record = path.join(dir, "probe.json");
+			const bin = await writeFakeOmp(
+				dir,
+				[
+					`import { writeFileSync } from "node:fs";`,
+					`writeFileSync(${JSON.stringify(record)}, JSON.stringify([process.argv.slice(2), process.env.PATH, process.env.OTEL_SDK_DISABLED]));`,
+					`console.log("omp/${MIN_OMP_VERSION}");`,
+				].join("\n"),
+			);
+			const base = [dir, LOOKUP_PATH].join(path.delimiter);
+			expect(await resolveOmpAmong([bin], base)).toMatchObject({ ok: true, runtime: { bin } });
+			expect(JSON.parse(await fs.readFile(record, "utf8"))).toEqual([["--version"], ompPathEnv(bin, base), "true"]);
+		} finally {
+			await fs.rm(dir, RM_TEMP);
+		}
+	});
+
+	it("takes the version from the launcher, not a package found only by its neighboring layout", async () => {
+		const { bin, dir } = await fakeOmp(`omp/${MIN_OMP_VERSION}`);
+		try {
+			const pkg = path.join(path.dirname(bin), "node_modules", "@oh-my-pi", "pi-coding-agent");
+			await fs.mkdir(pkg, { recursive: true });
+			await fs.writeFile(
+				path.join(pkg, "package.json"),
+				JSON.stringify({ name: "@oh-my-pi/pi-coding-agent", version: "1.2.3" }),
+			);
+			expect(ompPackageRoot(bin)).toBe(pkg);
+			expect(await resolveOmpAmong([bin], LOOKUP_PATH)).toMatchObject({
+				ok: true,
+				runtime: { bin, version: MIN_OMP_VERSION },
+			});
 		} finally {
 			await fs.rm(dir, RM_TEMP);
 		}

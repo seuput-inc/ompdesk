@@ -9,7 +9,7 @@
  * least recently read going first) are the core's (`remotebytes/transcripts.rs`); the host is asked here, over the link.
  */
 import type { RpcResponse } from "../../shared/rpc-types";
-import { core } from "../core/process";
+import { CoreError, core } from "../core/process";
 import { askingCall } from "./bytes-asks";
 
 /** The folder's bound: a few weeks of a heavy user's subagents without their pictures (those are `ImageBlobCache`'s). */
@@ -49,23 +49,26 @@ export class TranscriptCache {
 		return { ...fetched, data: { ...read, fromByte: 0, reset: false, messages: [...held, ...read.messages] } };
 	}
 
-	/** The tail page kept for `key`, with the version it was read at. */
+	/** The tail page kept for `key`, with the version it was read at; null when none, or the core could not answer. */
 	async page(key: string): Promise<{ version: string; page: object } | null> {
 		try {
 			return (
 				await core().call<{ version: string; page: object } | null>("remotebytes.page", { dir: this.#dir, key })
 			).result;
-		} catch {
+		} catch (error) {
+			console.warn(`[transcript-cache] page not read: ${errorText(error)}`);
 			return null;
 		}
 	}
 
-	/** Keeps the tail page read at `version` for `key`, replacing the last. */
+	/** Keeps the tail page read at `version` for `key`, replacing the last. A page the core could not keep is read from the host again next time. */
 	async keepPage(key: string, version: string, page: object): Promise<void> {
 		await core()
 			.call("remotebytes.keepPage", { dir: this.#dir, limit: this.#limit, key, version, page })
-			.catch(() => {
-				// The core is gone: the page is read from the host again next time.
-			});
+			.catch(error => console.warn(`[transcript-cache] page not kept: ${errorText(error)}`));
 	}
+}
+
+function errorText(error: unknown): string {
+	return error instanceof CoreError ? `${error.code} ${error.message}` : String(error);
 }

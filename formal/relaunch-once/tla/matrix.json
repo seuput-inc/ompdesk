@@ -1,0 +1,23 @@
+{
+	"runs": [
+		{
+			"name": "short-command-all-invariants",
+			"config": "MC.cfg",
+			"expect": "pass",
+			"deadlock": false
+		},
+		{
+			"name": "long-command-four-lives",
+			"config": "MC_long.cfg",
+			"expect": "pass",
+			"deadlock": false
+		},
+		{
+			"name": "an-effect-is-reachable",
+			"config": "MC_sanity_NeverEffect.cfg",
+			"expect": "invariant",
+			"property": "NeverEffect",
+			"deadlock": false
+		}
+	]
+}

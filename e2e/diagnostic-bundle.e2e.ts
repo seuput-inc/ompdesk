@@ -1,6 +1,6 @@
 /**
- * "Save diagnostic bundle" on the fake omp (e2e/fixture/rpc-ui.ts answers the bridge's `session_dump` with a real
- * zip in the temp dir): the session row's menu saves stock's dump members plus ompdesk-diagnostics.txt where the
+ * "Save diagnostic bundle" on the fake omp (e2e/fixture/rpc-ui.ts answers `session_dump_redacted` in a core-owned
+ * temp folder): the session row's menu saves stock's dump members plus ompdesk-diagnostics.txt where the
  * (stubbed) save dialog points, and Option/Alt takes the anonymized archive (the menu has one item, not a twin);
  * the temp archive is gone afterwards. The real bridge method against stock is src/main/bridge-dump-stock.test.ts.
  */
@@ -16,7 +16,9 @@ async function members(file: string): Promise<string[]> {
 }
 
 async function tempArchives(): Promise<string[]> {
-	return (await fs.readdir(os.tmpdir())).filter(name => /^omp-dump-.*\.zip$/.test(name));
+	return (await fs.readdir(os.tmpdir())).filter(name =>
+		/^(?:omp-dump-.*\.zip|ompdesk-archive-[a-f0-9]{32})$/.test(name),
+	);
 }
 
 test("the session row menu saves a diagnostic bundle, anonymized with Alt", async () => {
@@ -27,6 +29,25 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 	await fs.writeFile(
 		path.join(desktop as string, "prefs.json"),
 		JSON.stringify({ language: "en", themeName: "light", firstRunComplete: true }),
+	);
+	const logs = path.join(desktop as string, "logs");
+	await fs.mkdir(logs);
+	const marker = path.join(logs, "main-thread-hang.json");
+	await fs.writeFile(
+		marker,
+		JSON.stringify({
+			detectedAt: Date.UTC(2025, 4, 6),
+			pid: 4242,
+			unresponsiveMs: 7312,
+			selfRecovered: false,
+			phase: "quit",
+			steps: ["update:quit-and-install", "quit:teardown:sidecars"],
+			machine: { availMB: 317, cpuBusyPct: 98.5 },
+		}),
+	);
+	await fs.writeFile(
+		path.join(logs, "gui-runtime.jsonl.1"),
+		'{"source":"slow-step","message":"이전 실행: sample@example.invalid"}\n',
 	);
 	const before = new Set(await tempArchives());
 	const app = await launchApp({
@@ -42,6 +63,7 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 		await expect
 			.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 			.toBe("ready");
+		await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
 
 		const input = page.locator(".omp-composer-input").first();
 		await input.fill("hello there");
@@ -76,6 +98,27 @@ test("the session row menu saves a diagnostic bundle, anonymized with Alt", asyn
 			"ompdesk-diagnostics.txt"
 		]?.async("string");
 		expect(diagnostics).toContain("OMPdesk");
+		const probes = diagnostics?.split("## Probes")[1]?.split("## Runtime log")[0];
+		expect(probes).toContain('{"source":"slow-step","message":"이전 실행: <email>"}');
+		const lines = diagnostics?.split("\n") ?? [];
+		const hang = lines.find(line => line.includes('"source":"main-thread-hang"'));
+		expect(JSON.parse(hang ?? "null")).toMatchObject({
+			message: "Main thread stalled for 7s and never recovered",
+			details: {
+				previousPid: 4242,
+				unresponsiveMs: 7312,
+				selfRecovered: false,
+				detectedAt: "2025-05-06T00:00:00.000Z",
+				phase: "quit",
+				steps: "update:quit-and-install > quit:teardown:sidecars",
+			},
+		});
+		const machine = lines.find(line => line.includes('"message":"hang during"'));
+		expect(JSON.parse(machine ?? "null")).toMatchObject({
+			source: "machine-state",
+			details: { trigger: "hang", when: "during", at: "2025-05-06T00:00:00.000Z", availMB: 317, cpuBusyPct: 98.5 },
+		});
+		expect(diagnostics).not.toContain("sample@example.invalid");
 
 		const held = path.join(profile, "alt.zip");
 		await chooseTarget(held);

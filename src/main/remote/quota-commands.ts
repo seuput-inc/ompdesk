@@ -59,6 +59,8 @@ export const MODEL_COMMAND_TYPES = [
 	"agent_control_judge",
 	// A report from another session (bridge agent-control.ts): `triggerTurn` wakes the receiver for a turn.
 	"agent_control_mail",
+	// Another session's message joining a running turn (bridge agent-control.ts): read at its next model request.
+	"agent_control_aside",
 ] as const satisfies readonly RpcType[];
 
 /** Commands that call a model only for some arguments; `commandUsesModel` decides. */
@@ -84,9 +86,16 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"agent_control_confirm",
 	"agent_control_note",
 	"agent_control_worker",
+	// A bot chat's context journaled in its omp (bridge `agent_control.bot`): no model.
+	"agent_control_bot",
 	"agent_control_turn",
 	// Which messages a session's journal holds (main's durable sends): a journal read, no model.
 	"agent_control_sent",
+	// One attachment's bytes read where the session's omp runs (`ompdesk_session_send` / `ompdesk_report`): a file or
+	// conversation picture read, no model.
+	"agent_control_attachment",
+	// The answer of `ompdesk_session_answer` with attachments: a note and an extension-UI response, no model.
+	"agent_control_answer",
 	"autopilot_bridge",
 	"agent_control_review",
 	"agent_control_family_edits",
@@ -167,6 +176,7 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"get_login_providers",
 	"get_marketplaces",
 	"get_mcp_servers",
+	"get_model_release_dates",
 	"get_model_role_metadata",
 	"get_model_roles",
 	"get_model_setup_facts",
@@ -254,10 +264,13 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"preview_share_session",
 	"promote_queued_message",
 	"prompt_origin_set",
+	"project_ask_form",
 	"queue_clear",
 	"queue_edit",
+	"queue_hold",
 	"queue_move",
 	"queue_remove",
+	"queue_take_held",
 	"read_agent_file",
 	// One image's bytes from stock's blob store (local/extensions.ts): no model.
 	"read_image_blob",
@@ -317,6 +330,7 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"typed_prompt",
 	"worktree_create",
 	"worktree_lifecycle_settings",
+	"worktree_prefetch",
 	"worktree_remove",
 	"write_agent_file",
 	"write_local_paste",

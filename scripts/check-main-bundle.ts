@@ -335,20 +335,85 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // The markdown chunk gains `remark-dollar-math.ts` (13 Nov 2026: prices stay text, Pandoc's rule on single-dollar math;
 // the phone's first screen renders replies with it): measured 2,201,852 by the runner's build of the branch, 902
 // bytes over.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_201_900;
+// The sidebar usage block's grouping (`usageAccountGroups`, about 630 bytes) moved out of `lib/usage-reports.ts`, which
+// the first screen loads, into `sidebar/usage-groups.ts`, which only the session list's chunk imports: measured
+// 2,201,221 by the runner's build (13 Nov 2026, branch run 43449213441), 631 bytes under the budget above. The budget is
+// that measure plus 79 bytes, so the next change that grows the first screen has to say so here. Run 43487947733 on the
+// branch merged with main (14 Nov 2026) passed `build` under it.
+// The turn rail's window (14 Nov 2026: `ConversationNavigator` draws the newest 20 turns and an "N earlier" item, the
+// transcript is the phone's first screen though its CSS hides the rail there): about 1,730 bytes more than the budget
+// above measured (2,203,581 against 2,201,852 on the branch before the usage grouping moved out). Run 43497845095 on the
+// branch merged with main passed `build` under the budget below.
+// The input history's hydrate stops logging a paired host's `remote_offline` as a failed read (16 Nov 2026, 1326c4dc0;
+// `stores/input-history.ts` is on the phone's first screen): measured 2,203,024 by the runner's build (branch run
+// 43849653388), 24 bytes over. The budget is that measure plus 76 bytes.
+// The side panel paints its last width on the first frame (16 Nov 2026, `PanelContainer` reads `lib/last-read`), and the
+// Tauri preload stays out of subframes: measured 2,203,306 by the runner's build (branch run 43874132984), 206 bytes
+// over. The budget is that measure plus 94 bytes.
+// A row clicked while a session switch runs opens beside it (17 Nov 2026, `use-session-switch.ts` counts switches in
+// flight; the sidebar is on the phone's first screen): measured 2,203,472 (branch run 43943178767), 72 bytes over. The
+// budget is that measure plus 78 bytes.
+// A phone fetches a large picture over HTTP by its `blobUrl` (17 Nov 2026, cf9fc87f0; the transcript's image content is
+// on the phone's first screen) and a finished run settles calls whose end frame never came (df9455c53, `stores/tools.ts`):
+// measured 2,204,283 (branch run 44004040626), 733 bytes over. The budget is that measure plus 77 bytes.
+// An image card names its provider, model, size and quality under the picture (17 Nov 2026, 14f4f39e5; the image card
+// is on the phone's first screen): measured 2,204,690 (main run 44050798438), 330 bytes over. The budget is that
+// measure plus 80 bytes.
+// A tab list answered after a tab's status push keeps what the push said (18 Nov 2026, `stores/tabs.ts` counts the
+// pushes), with the boot status read that keeps the page's seeded stores (20025ddf7, `hooks/use-rpc-events.ts`): measured
+// 2,204,879 (branch run 44144695375), 109 bytes over. The budget is that measure plus 80 bytes.
+// omp 18.22.2's Kiro provider draws its lobe-icons mark (18 Nov 2026; `provider-marks.ts` imports every mark statically
+// and is on the phone's first screen): measured 2,205,745 (branch run 44219676729), 786 bytes over. The budget is that
+// measure plus 80 bytes.
+// The title bar says a paired device's session waits on that device (18 Nov 2026, `TitleBar.tsx`, on the phone's first
+// screen): measured 2,205,912 (branch run 44261937715), 87 bytes over. The budget is that measure plus 80 bytes.
+// The setup screen says "Updating" for a too-old omp by its outdated state, since setup installs the tested omp over
+// it with Bun and no longer runs stock `omp update` (19 Nov 2026, `MachineSetupView.tsx`, on the phone's first screen):
+// measured 2,206,029 (branch run 44494564628), 37 bytes over.
+// A window answers an agent's close with what it did (19 Nov 2026, `stores/tabs.ts` `closeRefusal` and
+// `applyAgentView`; the tab store is on the phone's first screen): measured 2,206,451 (branch run 44519094423), 459
+// bytes over. The budget is that measure plus 80 bytes.
+// A todo list says when it last changed and why it is behind the work (20 Nov 2026, `chat/dock/TodoFreshness.tsx`; the
+// work strip and the dock's todo card are on the phone's first screen): measured 2,207,770 (branch run 44579782922),
+// 1,778 bytes over. The budget is that measure plus 80 bytes.
+// It also lists the instructions received since that change (20 Nov 2026, `TodoReceived` with the board's rows): measured
+// 2,208,877 (branch run 44589770282), 1,027 bytes over. The budget is that measure plus 80 bytes.
+// They lead with their count, say what the count measures, and a tap shows a cut line whole (20 Nov 2026): measured
+// 2,209,713 (branch run 44596214057), 756 bytes over. The budget is that measure plus 80 bytes.
+// A paired host's refusal of a view's return after its window closed it (20 Nov 2026, C2: `view_ended` in
+// `shared/ipc-error-codes.ts`, which the phone's first screen loads): measured 2,206,000 (branch run 44589727329), 8 bytes
+// over. The budget is that measure plus 80 bytes.
+// Those branches together with close-visible B, the page watchdog, the to-do panel's wording, the C fixes and the rest
+// of next-line (20 Nov 2026): measured 2,208,648 (branch run 44601435767). The budget is that measure plus 80 bytes.
+// A compaction's line and card say what happens and how long (20 Nov 2026, a50471797: `ChatStream.tsx`,
+// `MessageBubble.tsx`, `lib/compaction-action.ts`), with the work board's release-gate check row (830248735): measured
+// 2,207,914 (branch run 44612367045), 1,922 bytes over. The budget is that measure plus 80 bytes.
+// Five theme sets, each light and dark (20 Nov 2026, 7d7e723de: `lib/theme-palettes.ts`, the set picker's model in
+// `lib/themes.ts`): measured 2,208,335 (branch run 44615749422), 341 bytes over. The budget is that measure plus 80 bytes.
+// A turn refused because credits are off reads as the plan's limit, not a failed response (20 Nov 2026, f8aedbc24:
+// `lib/messages.ts`, `TurnErrorNotice.tsx`): measured 2,208,473 (branch run 44622480250), 58 bytes over. The budget is
+// that measure plus 80 bytes.
+// next-line with relaunch-keeps-work, the board fix, earlier-list's compaction line, theme sets and limit card, and G12
+// (20 Nov 2026): measured 2,211,213 (branch run 44627539158). The budget is that measure plus 80 bytes.
+// Session rows read their repository, branch and image (19 Nov 2026, `sessions.targets`/`sessions.artwork` in
+// `shared/omp-api.ts` and the two-line row): measured 2,206,290 with both halves (parity run 44491251735, the API alone
+// 2,206,183 in branch run 44489431846), 298 bytes over. The budget is that measure plus 80 bytes.
+// next-line with 0.135.0 merged (its session rows and bridge-health) and the board's transcript child lines (20 Nov
+// 2026): measured 2,211,541 (branch run 44628708913). The budget is that measure plus 80 bytes.
+// The empty-transcript probe (20 Nov 2026) put 790 bytes on it inline (2,212,331 in branch run 44655288339; the
+// branches merged with it add types only). Its report now loads by import() when a pane shows no rows; what stays is
+// the per-tab seeded/written record and that import: measured 2,212,013 (branch run 44656064987), 392 bytes over. The
+// budget is that measure plus 80 bytes.
+// The first-run gate deciding from omp's catalog before the stock helper answers (G22, `servingVerdict` and the split
+// wait in `FirstRunGate`, 20 Nov 2026), which runs on every first screen: measured 2,212,279 (branch run 44673408959),
+// 266 bytes over. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_212_359;
 
-// Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which Electron's
-// Node does not have: a bundle importing `ws` at runtime must fail here, not pass because Bun runs this check.
+// Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
+// runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
+// because Bun runs this check. `electron` is not allowed: main bundles the shim (`src/main/shell-host/electron`) in its place.
 const nodeBuiltins = builtinModules.filter(m => !m.startsWith("bun") && m !== "ws" && m !== "undici");
-// `original-fs` is not in `builtinModules` but Electron always resolves it: it is
-// the asar-bypassing alias of `fs`, which is exactly what reads app files.
-const allowed = new Set<string>([
-	"electron",
-	"original-fs",
-	"node:original-fs",
-	...nodeBuiltins,
-	...nodeBuiltins.map(m => `node:${m}`),
-]);
+const allowed = new Set<string>([...nodeBuiltins, ...nodeBuiltins.map(m => `node:${m}`)]);
 
 const external = new Set<string>();
 const source = await fs.readFile(BUNDLE, "utf8");
@@ -363,6 +428,30 @@ if (external.size > 0) {
 			"Add each to MAIN_BUNDLED_DEPS in electron.vite.config.ts so the packaged app needs no node_modules.",
 	);
 	process.exit(1);
+}
+
+// out/preload/shell.js (CEF) and tauri.js (Tauri) are classic scripts the host injects into every page before its own
+// scripts: no module syntax (no import, no require, no exports) and wrapped, so none of their names joins the page's
+// global scope, and no shared chunk next to them.
+for (const name of ["shell", "tauri"]) {
+	const preload = await fs.readFile(fileURLToPath(new URL(`../out/preload/${name}.js`, import.meta.url)), "utf8");
+	const preloadImports = new Bun.Transpiler({ loader: "js" }).scanImports(preload).map(entry => entry.path);
+	const preloadProblems = [
+		...(preloadImports.length > 0 ? [`imports ${preloadImports.join(", ")}`] : []),
+		...(/\brequire\s*\(/.test(preload) ? ["calls require()"] : []),
+		...(/\b(?:module\.exports|exports\.[A-Za-z_$]|Object\.defineProperty\(exports)/.test(preload)
+			? ["exports something"]
+			: []),
+		...(/^\(\(\)\s*=>\s*\{/.test(preload.trimStart()) && preload.trimEnd().endsWith("})();")
+			? []
+			: ["is not wrapped in an IIFE"]),
+	];
+	if (preloadProblems.length > 0) {
+		console.error(
+			`out/preload/${name}.js ${preloadProblems.join(", ")}: it must be one self-contained classic script.`,
+		);
+		process.exit(1);
+	}
 }
 
 // The bundled ws, built the way out/main is (electron-vite under Node, as scripts/build-cache.ts runs it),
@@ -480,6 +569,6 @@ const sessionListBytes = (await fs.stat(path.join(RENDERER, sessionListFiles[0] 
 console.log(
 	"main bundle is self-contained: no un-bundled runtime imports, no optional-peer stubs, the bundled ws carries " +
 		`masked frames; the renderer ships no axe-core and no .woff/.ttf fonts; the phone's first screen loads ` +
-		`${(firstScreenBytes / 1e6).toFixed(2)} MB of JavaScript, a first visit ` +
+		`${firstScreenBytes.toLocaleString("en-US")} bytes of JavaScript in ${firstScreen.size} files, a first visit ` +
 		`${((firstScreenBytes + sessionListBytes) / 1e6).toFixed(2)} MB with the session list`,
 );

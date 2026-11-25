@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapAgentMessage } from "../shared/agent-control";
-import type { IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
+import type { IpcCutOff, IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { ConnectivityMonitor } from "./connectivity";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
@@ -143,6 +143,7 @@ describe("launch rules", () => {
 		expect(launchAction(marker({ reason: "running" }))).toBe("restore");
 		expect(launchAction(marker({ reason: "network" }))).toBe("retry");
 		expect(launchAction(marker({ reason: "limit" }))).toBe("retry");
+		expect(launchAction(marker({ reason: "retry" }))).toBe("retry");
 		expect(launchAction(marker({ reason: "asking" }))).toBe("restore");
 		expect(launchAction(marker({ background: true }))).toBe("revive");
 	});
@@ -257,25 +258,27 @@ type Answer = RpcResponse | Error | (() => Promise<RpcResponse>);
 
 /**
  * A tab's sidecar: records the commands main sends (and the timeout each was given) and answers them as scripted;
- * an `Error` answer rejects like the RPC client's timeout; `setStatus` moves it like a spawn.
+ * an `Error` answer rejects like the RPC client's timeout; `setStatus` moves it like a spawn; `setConnected(false)`
+ * drops its RPC client as a restart does until the next omp is up.
  */
 function fakeSidecar(answers: Partial<Record<string, Answer>> = {}, status = "ready") {
 	const commands: RpcCommand[] = [];
 	const timeouts: Array<[string, number | undefined]> = [];
 	const events = new EventEmitter();
+	const client = {
+		command: async (cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse> => {
+			commands.push(cmd);
+			timeouts.push([cmd.type, timeoutMs]);
+			const answer = answers[cmd.type];
+			if (answer instanceof Error) throw answer;
+			if (typeof answer === "function") return answer();
+			return answer ?? { type: "response", command: cmd.type, success: true, data: {} };
+		},
+	};
 	const sidecar = Object.assign(events, {
 		status,
 		statusPayload: { status } as { status: string; sessionHeld?: true },
-		rpcClient: {
-			command: async (cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse> => {
-				commands.push(cmd);
-				timeouts.push([cmd.type, timeoutMs]);
-				const answer = answers[cmd.type];
-				if (answer instanceof Error) throw answer;
-				if (typeof answer === "function") return answer();
-				return answer ?? { type: "response", command: cmd.type, success: true, data: {} };
-			},
-		},
+		rpcClient: client as typeof client | null,
 	});
 	const setStatus = (next: string, detail: { sessionHeld?: true } = {}) => {
 		sidecar.status = next;
@@ -287,6 +290,9 @@ function fakeSidecar(answers: Partial<Record<string, Answer>> = {}, status = "re
 		commands,
 		timeouts,
 		setStatus,
+		setConnected: (connected: boolean) => {
+			sidecar.rpcClient = connected ? client : null;
+		},
 		listeners: () => events.listenerCount("status"),
 	};
 }
@@ -310,11 +316,13 @@ interface Harness {
 	timeouts: Array<[string, number | undefined]>;
 	/** `reachable`: what a probe of the way out answers while the link says it is up; `verified`: each host probed. */
 	net: { online: boolean; wake: boolean; reachable: boolean; verified: Array<string | undefined> };
-	state: { enabled: boolean; frozen: boolean; opened: ResumeMarker[] };
+	state: { enabled: boolean; frozen: boolean; opened: ResumeMarker[]; now: number };
 	resume: TurnResume;
 	pool: ResumePool;
 	/** Moves the tab's sidecar to another status (a spawn becoming ready, a crash). */
 	setStatus: (status: string, detail?: { sessionHeld?: true }) => void;
+	/** Drops or gives back the sidecar's RPC client (a restart drops it until the next omp is up). */
+	setConnected: (connected: boolean) => void;
 	/** How many `status` listeners the resume left on the sidecar. */
 	statusListeners: () => number;
 	/** Every `setScheduledRetry` call the resume made, in order (`undefined` = cleared). */
@@ -331,6 +339,10 @@ interface Harness {
 	moves: MovesInFlight;
 	/** How each launch continuation ended for its goal (`goalSettled`), in order. */
 	goals: Array<[string, GoalSettlement]>;
+	/** Every `setCutOff` call (the cut-off row), in order (`undefined` = cleared). */
+	cutOffs: Array<[string, IpcCutOff | undefined]>;
+	/** What each cut-off told the tab's opener (`cutNote`), in order. */
+	cutNotes: Array<[string, IpcCutOff | "dismissed"]>;
 }
 
 function setup(
@@ -351,6 +363,8 @@ function setup(
 		goalSettled?: (tabId: string, outcome: GoalSettlement) => void;
 		/** The real connectivity monitor in place of the scripted `net` (whose `online` it then drives). */
 		network?: ResumeDeps["network"];
+		/** The tab `openTab` answers (main's: a device's turn revived on a session a window's tab here holds is that tab's). */
+		openTab?: (marker: ResumeMarker) => string | null;
 	} = {},
 ): Harness {
 	const dir = mkdtempSync(join(tmpdir(), "ompdesk-resume-"));
@@ -365,7 +379,12 @@ function setup(
 	const logs: Array<[string, ResumeLogDetails]> = [];
 	const moves = new MovesInFlight();
 	const goals: Array<[string, GoalSettlement]> = [];
-	const { sidecar, commands, timeouts, setStatus, listeners } = fakeSidecar(options.answers, options.status);
+	const cutOffs: Array<[string, IpcCutOff | undefined]> = [];
+	const cutNotes: Array<[string, IpcCutOff | "dismissed"]> = [];
+	const { sidecar, commands, timeouts, setStatus, setConnected, listeners } = fakeSidecar(
+		options.answers,
+		options.status,
+	);
 	const net = {
 		online: options.online ?? true,
 		wake: options.waitAfterWake ?? false,
@@ -376,6 +395,7 @@ function setup(
 		enabled: options.enabled ?? true,
 		frozen: false,
 		opened: [] as ResumeMarker[],
+		now: 1_000,
 	};
 	const pool: ResumePool = {
 		resumeFacts: () => facts.map(entry => ({ ...entry })),
@@ -401,6 +421,9 @@ function setup(
 		},
 		setResuming: (tabId, value) => {
 			resuming.push([tabId, value]);
+		},
+		setCutOff: (tabId, value) => {
+			cutOffs.push([tabId, value]);
 		},
 	};
 	const resume = new TurnResume({
@@ -430,9 +453,10 @@ function setup(
 			},
 		},
 		frozen: () => state.frozen,
-		now: () => 1_000,
+		now: () => state.now,
 		openTab: markerToOpen => {
 			state.opened.push(markerToOpen);
+			if (options.openTab) return options.openTab(markerToOpen);
 			facts.push(fact({ tabId: "opened", sessionFile: markerToOpen.sessionPath }));
 			return "opened";
 		},
@@ -440,6 +464,9 @@ function setup(
 		goalSettled: (tabId, outcome) => {
 			goals.push([tabId, outcome]);
 			options.goalSettled?.(tabId, outcome);
+		},
+		cutNote: (tabId, what) => {
+			cutNotes.push([tabId, what]);
 		},
 		log: (message, details) => {
 			logs.push([message, details]);
@@ -458,6 +485,7 @@ function setup(
 		resume,
 		pool,
 		setStatus,
+		setConnected,
 		statusListeners: listeners,
 		retries,
 		timers,
@@ -466,6 +494,8 @@ function setup(
 		logs,
 		moves,
 		goals,
+		cutOffs,
+		cutNotes,
 	};
 }
 
@@ -680,6 +710,32 @@ describe("TurnResume launch", () => {
 		h.resume.launch();
 		await settle();
 		expect(h.state.opened).toEqual([marker({ tab: "peer:device-a:r1", peer: "device-a" })]);
+		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+	});
+
+	it("continues a device's turn in the window's tab that holds its session, and keeps its marker on that tab", async () => {
+		// The relaunch restored a window's tab on the session, so the device's revived tab views that tab's omp
+		// (`LocalHostServices.reviveTab` answers the window's tab).
+		h = setup({ answers: { restore_interrupted: RESTORED }, status: "starting", openTab: () => "t1" });
+		h.facts.push(fact({ tabId: "t1" }));
+		new InterruptedTurnStore(h.file).write([marker({ tab: "peer:device-a:r1", peer: "device-a" })]);
+		h.resume.launch();
+		await settle();
+		// While the omp comes up the marker is the window tab's own, so a relaunch now continues it there.
+		expect(h.store.read()).toEqual([marker({ tab: "t1" })]);
+		h.setStatus("ready");
+		await settle();
+		expect(h.started).toEqual(["t1"]);
+		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+		expect(h.logs.at(-1)).toMatchObject(["continue", { tab: "t1", restored: "turn", started: true }]);
+	});
+
+	it("continues a session's turn once when its window tab's marker and a device's revived one name the same tab", async () => {
+		h = setup({ answers: { restore_interrupted: RESTORED }, openTab: () => "t1" });
+		h.facts.push(fact({ tabId: "t1" }));
+		new InterruptedTurnStore(h.file).write([marker(), marker({ tab: "peer:device-a:r1", peer: "device-a" })]);
+		h.resume.launch();
+		await settle();
 		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
 	});
 
@@ -1267,6 +1323,63 @@ describe("TurnResume launch", () => {
 			expect(h.store.read()).toEqual([]);
 		});
 
+		it("a restore an omp update's restart cuts (the bridge closed under it) keeps the marker and goes again at the new omp's ready", async () => {
+			// The Mac mini, 19 Nov 2026: the launch's omp update restarted the idle tab while its restore ran. The local
+			// handler's failure reaches the core as a response (`runLocalCommand`), not a throw; no omp answered it.
+			const cut: RpcResponse = {
+				type: "response",
+				command: "restore_interrupted",
+				success: false,
+				error: "GUI bridge closed",
+				code: "bridge_unavailable",
+			};
+			let restores = 0;
+			h = setup({
+				answers: {
+					restore_interrupted: () => {
+						if (++restores > 1) return Promise.resolve(RESTORED);
+						// The update finishes while the restore is on its way: the tab's omp is replaced under it, and the
+						// sidecar has no RPC client until the next omp is up.
+						h.setStatus("starting");
+						h.setConnected(false);
+						return Promise.resolve(cut);
+					},
+				},
+			});
+			new InterruptedTurnStore(h.file).write([marker()]);
+			h.facts.push(fact({ tabId: "restored", running: false }));
+			h.resume.launch();
+			await settle();
+			// Only the restore reached the omp; stock's retry found no connection.
+			expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+			expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
+			expect(h.goals).toEqual([]);
+			expect(h.logs.at(-1)).toEqual([
+				"continue",
+				expect.objectContaining({
+					restoreCode: "bridge_unavailable",
+					retryError: "the tab has no omp connection",
+					started: false,
+					attempt: 1,
+					retrying: true,
+				}),
+			]);
+
+			// The new omp is up: the continuation goes again on it.
+			h.setConnected(true);
+			h.setStatus("ready");
+			await settle();
+			expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted", "restore_interrupted"]);
+			expect(h.logs.at(-1)).toEqual(["continue", expect.objectContaining({ restored: "turn", started: true })]);
+			// The marker leaves only once the restored turn really runs.
+			expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
+			h.facts[0] = fact({ tabId: "restored", running: true });
+			h.resume.sync();
+			h.facts[0] = fact({ tabId: "restored", running: false });
+			h.resume.sync();
+			expect(h.store.read()).toEqual([]);
+		});
+
 		it("stops after the bounded attempts: nothing more is sent in this launch, the marker stays for the next one", async () => {
 			h = setup({ answers: { restore_interrupted: closed, retry: closed } });
 			new InterruptedTurnStore(h.file).write([marker()]);
@@ -1492,6 +1605,101 @@ describe("TurnResume after the omp died under its tab (`exits`)", () => {
 		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted", "restore_interrupted"]);
 		expect(h.goals).toEqual([["restored", "none"]]);
 		expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
+	});
+});
+
+describe("TurnResume cut-off turns the person continues", () => {
+	let h: Harness;
+	afterEach(() => rmSync(h.dir, { recursive: true, force: true }));
+
+	/** The tab's omp dies under a running turn: its `n`th exit. */
+	const dies = async (n: number) => {
+		h.facts[0] = fact({ running: true, exits: n - 1 });
+		h.resume.sync();
+		h.facts[0] = fact({ exits: n });
+		h.resume.sync();
+		await settle();
+	};
+	const restores = () => h.commands.filter(cmd => cmd.type === "restore_interrupted").length;
+
+	it("continues a turn whose omp keeps dying three times in five minutes, then waits for the person's Continue", async () => {
+		h = setup({ answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		for (const n of [1, 2, 3]) await dies(n);
+		expect(restores()).toBe(3);
+		expect(h.cutOffs).toEqual([]);
+
+		await dies(4);
+		expect(restores()).toBe(3);
+		expect(h.cutOffs).toEqual([["t1", "crash-loop"]]);
+		expect(h.cutNotes).toEqual([["t1", "crash-loop"]]);
+		expect(h.logs).toContainEqual([
+			"marker",
+			{ session: "/s/a.jsonl", reason: "running", tab: "t1", via: "exit", skipped: "crash-loop" },
+		]);
+
+		h.resume.continueCut("t1");
+		await settle();
+		expect(restores()).toBe(4);
+		expect(h.cutOffs.at(-1)).toEqual(["t1", undefined]);
+		// The person's Continue starts the count afresh: the next death continues by itself.
+		await dies(5);
+		expect(restores()).toBe(5);
+	});
+
+	it("counts only the deaths of the last five minutes", async () => {
+		h = setup({ answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		for (const n of [1, 2, 3]) await dies(n);
+		h.state.now += 5 * 60_000;
+		await dies(4);
+		expect(restores()).toBe(4);
+		expect(h.cutOffs).toEqual([]);
+	});
+
+	it("with automatic continuation off, offers a turn whose omp died and sends nothing until Continue", async () => {
+		h = setup({ enabled: false, answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		await dies(1);
+		expect(h.commands).toEqual([]);
+		expect(h.store.read()).toEqual([]);
+		expect(h.cutOffs).toEqual([["t1", "off"]]);
+
+		h.resume.continueCut("t1");
+		await settle();
+		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+	});
+
+	it("Dismiss leaves the cut-off turn as it is and tells the opener; a Continue after it sends nothing", async () => {
+		h = setup({ enabled: false, answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		await dies(1);
+		h.resume.dismissCut("t1");
+		h.resume.continueCut("t1");
+		await settle();
+		expect(h.commands).toEqual([]);
+		expect(h.cutOffs.at(-1)).toEqual(["t1", undefined]);
+		expect(h.cutNotes).toEqual([
+			["t1", "off"],
+			["t1", "dismissed"],
+		]);
+	});
+
+	it("a turn the person started, or another session on the tab, ends the offer: Continue then sends nothing", async () => {
+		h = setup({ enabled: false, answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		await dies(1);
+		h.facts[0] = fact({ exits: 1, sessionFile: "/s/other.jsonl" });
+		h.resume.sync();
+		expect(h.cutOffs.at(-1)).toEqual(["t1", undefined]);
+		h.resume.continueCut("t1");
+		await settle();
+		expect(h.commands).toEqual([]);
 	});
 });
 
@@ -2230,9 +2438,20 @@ describe("TurnResume scheduled retry", () => {
 		expect(h.timers.map(timer => timer.ms).at(-1)).toBe(30_000);
 	});
 
-	it("does not touch the marker file: a scheduled retry is not an interrupted turn", async () => {
+	// B4 (4) of the owner's 20 Nov 2026 list: the scheduled retry lived in this process only, so a relaunch before its
+	// time dropped the turn for good. Its marker says `retry` while it waits, and the relaunch retries the turn.
+	it("is in the marker file while it waits, and a relaunch before its time retries the turn", async () => {
 		await failed();
-		expect(h.store.read()).toEqual([]);
+		expect(h.store.read().map(entry => entry.reason)).toEqual(["retry"]);
+		const [saved] = h.store.read();
+		const before = h.dir;
+		h = setup({ answers: { retry: RETRIED } });
+		rmSync(before, { recursive: true, force: true });
+		new InterruptedTurnStore(h.file).write([saved as ResumeMarker]);
+		h.facts.push(fact({ tabId: "restored", running: false }));
+		h.resume.launch();
+		await settle();
+		expect(h.commands.map(command => command.type)).toEqual(["retry"]);
 	});
 });
 
