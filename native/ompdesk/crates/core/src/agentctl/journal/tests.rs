@@ -1134,7 +1134,8 @@ fn a_redelivery_pass_skips_a_held_receiver() {
             })
         }
     }
-    let outbox = MailOutbox::new(None);
+    // A clock beside the mail's time, so the outbox's three-day expiry keeps both.
+    let outbox = MailOutbox::with_clock(None, fixed(1.0));
     for (id, path) in [("m1", "/s/bot.jsonl"), ("m2", "/s/other.jsonl")] {
         outbox.keep(OutboxMail {
             id: id.into(),
