@@ -633,6 +633,8 @@ export const en: Record<string, string> = {
 	"input.skills.none": "No skills are on. Turn them on in Settings › Tools & extensions.",
 	"input.slash.unknown": "No command named {name}. Enter sends it as plain text.",
 	"input.menu.more": "+{count} more. Keep typing to narrow the list.",
+	"input.mention.childSession": "Session this one opened",
+	"input.mention.session": "Session in this project",
 	"input.menu.filesTruncated": "Showing the first {count} files. Type a longer path to reach the rest.",
 	"input.menu.hintMove": "move",
 	"input.menu.hintPick": "pick",

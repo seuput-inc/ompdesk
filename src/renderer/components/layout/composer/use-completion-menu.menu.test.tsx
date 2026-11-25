@@ -61,6 +61,8 @@ interface Derived {
 }
 
 let root: Root | undefined;
+/** One stable list: a new array each render would derive the menu again. */
+const NO_SESSIONS: never[] = [];
 let latest: Derived;
 
 function Probe({ text, filePaths, commands }: { text: string; filePaths: string[]; commands: AvailableCommand[] }) {
@@ -68,7 +70,15 @@ function Probe({ text, filePaths, commands }: { text: string; filePaths: string[
 	const setMenu = useRef((menu: CompletionMenu | null) => {
 		latest = { ...latest, menu };
 	}).current;
-	const hint = useCompletionMenu({ text, filePaths, commands, emojiAutocomplete: false, textareaRef: ref, setMenu });
+	const hint = useCompletionMenu({
+		text,
+		filePaths,
+		sessions: NO_SESSIONS,
+		commands,
+		emojiAutocomplete: false,
+		textareaRef: ref,
+		setMenu,
+	});
 	useEffect(() => {
 		latest = { ...latest, hint };
 	}, [hint]);

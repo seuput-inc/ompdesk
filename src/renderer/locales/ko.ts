@@ -625,6 +625,8 @@ export const ko: Record<string, string> = {
 	"input.skills.none": "켜진 스킬이 없어요. 설정 › 도구 및 확장에서 켤 수 있어요.",
 	"input.slash.unknown": "{name} 명령은 없어요. Enter를 누르면 일반 텍스트로 보내요.",
 	"input.menu.more": "{count}개 더 있어요. 더 입력해서 좁혀 보세요.",
+	"input.mention.childSession": "이 세션이 연 세션",
+	"input.mention.session": "이 프로젝트의 세션",
 	"input.menu.filesTruncated": "처음 {count}개 파일만 보여요. 경로를 더 길게 입력하면 나머지도 찾을 수 있어요.",
 	"input.menu.hintMove": "이동",
 	"input.menu.hintPick": "선택",
