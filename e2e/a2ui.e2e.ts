@@ -223,13 +223,15 @@ test("an A2UI form is answered from the chat card, skipped from the dock, answer
 		await test.step("an older client's plain-text answer ends the call as text", async () => {
 			await askForm(b);
 			const form = await pendingForm(b);
-			await b.evaluate(
+			// An older OMPdesk on the paired computer draws the marker form as an ordinary ask and sends what was typed.
+			const older = await pendingForm(a);
+			await a.evaluate(
 				({ id, tab, field }) =>
 					window.omp.ui.respondExtensionUi(
 						{ type: "extension_ui_response", id, data: { [field]: "plain words" } },
 						tab,
 					),
-				{ id: form.id, tab: form.tabId, field: A2UI_ANSWER_FIELD },
+				{ id: older.id, tab: older.tabId, field: A2UI_ANSWER_FIELD },
 			);
 			await expect.poll(() => a2uiResults(b, tabId), { timeout: 30_000 }).toHaveLength(4);
 			expect((await a2uiResults(b, tabId))[3]).toContain("plain words");

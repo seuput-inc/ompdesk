@@ -65,10 +65,12 @@ export function A2uiCard({ toolCallId, live = false }: { toolCallId: string; liv
 	const call = session.call(toolCallId);
 	const callId = callIdOfEntryKey(toolCallId);
 	const pending = usePendingForm(callId);
-	const answering = live && pending !== undefined;
+	const entry = useToolsStore(state => selectToolEntry(state, toolCallId));
+	// A call that has its result waits for nobody, whatever request this view still holds.
+	const answering = live && pending !== undefined && (entry?.status === "pending" || entry?.status === "running");
 	const respond = useExtensionUiResponder();
 	const removeRequest = useExtensionUiStore(state => state.removeRequest);
-	const details = useToolsStore(state => resultDetails(selectToolEntry(state, toolCallId)?.result));
+	const details = resultDetails(entry?.result);
 	const sending = useRef<string | null>(null);
 
 	const answer = async (data: { [A2UI_ANSWER_FIELD]: string } | null): Promise<void> => {

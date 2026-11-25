@@ -79,7 +79,7 @@ async function show(transcript: AgentMessage[], { live, pending }: { live: boole
 	Object.assign(window, { omp: { ui: { respondExtensionUi: respond } } });
 	await act(async () => {
 		useMessagesStore.setState({ messages: transcript });
-		useToolsStore.getState().hydrateMessages(transcript);
+		useToolsStore.getState().hydrateMessages(transcript, { turnIsLive: true });
 		if (pending) {
 			useExtensionUiStore.getState().pushRequest({
 				type: "extension_ui_request",
@@ -170,6 +170,21 @@ describe("A2uiCard answers", () => {
 		const card = await show([call], { live: true, pending: true });
 		await click(card.querySelector("[data-a2ui-skip]"));
 		expect(respond).toHaveBeenCalledWith({ type: "extension_ui_response", id: "form-1", cancelled: true });
+	});
+
+	it("no longer answers once the call has its result, even if this view still holds the form", async () => {
+		const result: AgentMessage = {
+			role: "toolResult",
+			toolCallId: "call_1",
+			toolName: "a2ui",
+			isError: false,
+			details: { text: "plain words" },
+			content: [{ type: "text", text: "plain words" }],
+			timestamp: 2,
+		};
+		const card = await show([call, result], { live: true, pending: true });
+		expect(card.querySelector("[data-a2ui-live]")).toBeNull();
+		expect(card.querySelector("[data-a2ui-skip]")).toBeNull();
 	});
 
 	it("shows what the person sent once the transcript has the answer, with the submitted values", async () => {
