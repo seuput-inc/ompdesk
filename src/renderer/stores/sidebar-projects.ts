@@ -27,10 +27,38 @@ import { toastError } from "./toast";
 
 const SNAPSHOT_KEY = "sidebar-projects";
 const pending = new Map<string, symbol>();
-/** A host's project folders removed while its link was down, sent when it comes back. */
-const OWED_KEY = "sidebar-projects-owed";
+/**
+ * A host's project folders removed while its link was down, by device, sent when it comes back. In `localStorage`
+ * (as the outbox is), so a removal outlives a reload or a restart; memory only where there is none.
+ */
+const OWED_KEY = "omp.sidebar.owedRemovals.v1";
+const owedInMemory: Record<string, string[]> = {};
 
-const owedOf = (device: string) => lastRead<string[]>(device, OWED_KEY) ?? [];
+function owedAll(): Record<string, string[]> {
+	try {
+		const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(OWED_KEY);
+		const parsed: unknown = raw ? JSON.parse(raw) : owedInMemory;
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, string[]>) : {};
+	} catch {
+		return owedInMemory;
+	}
+}
+
+const owedOf = (device: string): string[] => {
+	const paths = owedAll()[device];
+	return Array.isArray(paths) ? paths.filter(path => typeof path === "string") : [];
+};
+
+function setOwed(device: string, paths: string[]): void {
+	const all = { ...owedAll(), [device]: paths };
+	if (paths.length === 0) delete all[device];
+	Object.assign(owedInMemory, { [device]: paths });
+	try {
+		if (typeof localStorage !== "undefined") localStorage.setItem(OWED_KEY, JSON.stringify(all));
+	} catch {
+		// Private mode or a full quota: memory only, as on the first launch.
+	}
+}
 
 function online(device: string): boolean {
 	return (
@@ -109,7 +137,7 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 			} catch (error) {
 				// The host is out of reach: the removal waits for its link, and the row stays gone meanwhile.
 				if (device !== undefined && ipcErrorCode(error) === "remote_offline") {
-					rememberRead(device, OWED_KEY, [...owedOf(device).filter(entry => entry !== path), path]);
+					setOwed(device, [...owedOf(device).filter(entry => entry !== path), path]);
 					return;
 				}
 				if (get().lists[keyOf(device)] === optimistic) apply(device, before);
@@ -134,9 +162,8 @@ async function replayOwed(device: string | undefined): Promise<void> {
 			if (ipcErrorCode(error) === "remote_offline") return;
 			toastError({ title: translate("sidebar.removeProjectFailed"), error });
 		}
-		rememberRead(
+		setOwed(
 			device,
-			OWED_KEY,
 			owedOf(device).filter(entry => entry !== path),
 		);
 	}
