@@ -1,6 +1,6 @@
 /**
  * Health check for what OMPdesk downloads to set a machine up: both pinned
- * PortableGits (plans.ts), the gh and Node.js archives a Mac without Homebrew
+ * PortableGits (the core's `tools/setup/plans.rs`), the gh and Node.js archives a Mac without Homebrew
  * installs, the agent-desktop archives of macOS and Windows its updates install
  * (archives.ts, resolved exactly the way the app resolves them), and the
  * agent-desktop release the app ships (scripts/agent-desktop-pin.json, which
@@ -21,7 +21,6 @@ import { join } from "node:path";
 import { stopCore } from "../src/main/core/process";
 import { type LookupOptions, resolveAgentDesktopRelease, resolveArchiveRelease } from "../src/main/setup/archives";
 import { downloadVerified } from "../src/main/setup/download";
-import { PORTABLE_GIT } from "../src/main/setup/plans";
 import agentDesktopPin from "./agent-desktop-pin.json" with { type: "json" };
 import { ensureNative } from "./build-native";
 
@@ -34,6 +33,22 @@ export interface PinnedAsset {
 export type AssetResult = { ok: true; bytes: number } | { ok: false; error: string };
 
 const ATTEMPTS = 3;
+
+/**
+ * Git for Windows' PortableGit as machine setup pins it (`PORTABLE_GIT_*` in `crates/core/src/tools/setup/plans.rs`,
+ * with the SHA-256 its release notes publish); `setup-assets-health.test.ts` holds the two equal.
+ */
+export const PORTABLE_GIT = {
+	version: "2.56.0.2",
+	x64: {
+		url: "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-64-bit.7z.exe",
+		sha256: "075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b",
+	},
+	arm64: {
+		url: "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/PortableGit-2.56.0.2-arm64.7z.exe",
+		sha256: "0f21e681bd33e006e0348dfa1a2be6769efd77e3bfdb247320314facde23a46c",
+	},
+} as const;
 
 /** Every download machine setup can start, with its expected SHA-256; lookups that failed are listed instead. */
 export async function pinnedAssets(lookup: LookupOptions): Promise<{ assets: PinnedAsset[]; failures: string[] }> {

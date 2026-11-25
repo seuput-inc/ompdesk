@@ -68,7 +68,7 @@ export interface MobileWebPrefsPort {
 	delete(key: string): void;
 }
 
-/** The part of SetupService Mobile web uses (item `tailscale`). */
+/** The part of machine setup (the core's `tools` instance, `tools/client.ts`) Mobile web uses (item `tailscale`). */
 export interface MobileWebSetupPort {
 	installForConnection(item: "tailscale"): Promise<SetupItemState>;
 	cancel(): boolean;

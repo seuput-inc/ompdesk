@@ -385,6 +385,65 @@ async fn version(params: VersionParams, scope: Scope) -> Result<Option<String>, 
         .flatten())
 }
 
+/// Machine setup's Tailscale in process (was `detectTailscale`): where its CLI is, found as Mobile web finds it with
+/// main's environment `env` and the login shell's `path_env`, and the version it says within 15 s; none without one.
+pub(crate) async fn setup_install(
+    platform: &str,
+    path_env: &str,
+    env: &BTreeMap<String, String>,
+) -> Option<(String, Option<String>)> {
+    const TIMEOUT_MS: u64 = 15_000;
+    const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+    let platform = match platform {
+        "win32" => locate::Platform::Win32,
+        "darwin" => locate::Platform::Darwin,
+        _ => return None,
+    };
+    let located = locate(
+        LocateParams {
+            platform,
+            forced: env.get("OMP_GUI_TAILSCALE").cloned(),
+            pref: None,
+            program_files: [
+                env.get("ProgramFiles").cloned(),
+                env.get("ProgramFiles(x86)").cloned(),
+            ],
+            path_env: path_env.to_owned(),
+            bundle: false,
+            rules: Rules {
+                env: env.clone(),
+                timeout_ms: 10_000,
+                max_bytes: MAX_OUTPUT,
+            },
+        },
+        Scope::detached(),
+    )
+    .await
+    .ok()??;
+    let mut cli_env = env.clone();
+    for (name, value) in &located.env {
+        cli_env.insert((*name).to_owned(), (*value).to_owned());
+    }
+    let runner = Runner {
+        bin: located.path.clone(),
+        args: Vec::new(),
+        env: cli_env,
+        timeout_ms: TIMEOUT_MS,
+        max_bytes: MAX_OUTPUT,
+    };
+    let found = version(
+        VersionParams {
+            tailscale: runner,
+            timeout_ms: TIMEOUT_MS,
+        },
+        Scope::detached(),
+    )
+    .await
+    .ok()
+    .flatten();
+    Some((located.path, found))
+}
+
 #[derive(Deserialize)]
 struct PublishParams {
     tailscale: Runner,
