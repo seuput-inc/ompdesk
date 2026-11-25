@@ -2,12 +2,10 @@
  * Default browser (Settings › Agent behavior › Default browser; rules in src/shared/default-browser.ts): main
  * resolves the setting against what is installed and passes the result (`./default-browser-contracts.ts`) as
  * `OMP_GUI_BROWSER` at spawn and through `default_browser_set` on change.
- *   ego      one static section pointing agents at ego-browser's CLI instead of omp's built-in `browser` tool.
- *   relay    stock's `browser.relay` and `browser.relayUrl` held as runtime overrides of the session's settings, so the
- *            built-in `browser` tool drives the user's own signed-in browser through the relay only that browser's
- *            extension dials, plus one static section naming it.
- *   builtin  nothing: stock omp.
- *   unavailable  no verified relay for the selected browser: disable the browser prelude, without changing config.
+ *   ego          one static section pointing agents at ego-browser's CLI instead of omp's built-in `browser` tool.
+ *   builtin      nothing: stock omp.
+ *   unavailable  the picked browser's profile cannot be verified: `browser.enabled` held off as a runtime override
+ *                (config untouched), plus one static section saying so.
  * No omp imports, so the GUI's vitest runs it.
  */
 import { type PromptSectionHost, registerPromptSection } from "../prompt-sections";
@@ -22,19 +20,13 @@ const EGO_SECTION = `<browser>
 ego-browser (ego lite) is this computer's browser for agents. For any task that needs a web browser (opening sites, signing in, forms, clicks, screenshots, page data, web app checks), run \`ego-browser skill\` once and follow its guide; drive pages with \`ego-browser nodejs\`. Do not use the built-in \`browser\` tool or Eval's \`browser\` object unless ego-browser fails or the user asks for it; say so when you fall back. A project's own test runners (Playwright and the like) stay as they are.
 </browser>`;
 
-function relaySection(name: string): string {
-	return `<browser>
-The built-in \`browser\` tool and Eval's \`browser\` object drive the user's own signed-in ${name} through the omp Browser Relay, so pages open with their logins. Open a tab of your own for a task; never navigate or close a tab the user opened unless asked. If the relay reports no connected extension, tell the user to open ${name}. A project's own test runners (Playwright and the like) stay as they are.
-</browser>`;
-}
-
 /** The prompt section for `browser`; undefined for the built-in browser (stock omp's own prompt). */
 export function browserSection(browser: AgentBrowser): string | undefined {
 	if (browser.kind === "ego") return EGO_SECTION;
 	if (browser.kind === "unavailable") {
 		return `<browser>omp cannot verify a relay for the selected ${browser.name} profile. Do not use another browser or discover a relay. Tell the user to choose another default browser in Settings, or start a chat in the omp side panel of a supported browser.</browser>`;
 	}
-	return browser.kind === "relay" ? relaySection(browser.name) : undefined;
+	return undefined;
 }
 
 let current: AgentBrowser = parseAgentBrowserEnv(process.env[DEFAULT_BROWSER_ENV]);
@@ -49,52 +41,46 @@ export function setDefaultBrowser(params: unknown): { browser: AgentBrowser } {
 	const value = typeof params === "object" && params !== null && "browser" in params ? params.browser : undefined;
 	const browser = parseAgentBrowser(value);
 	if (!browser) {
-		throw new Error(
-			'default_browser_set needs {browser: {kind: "ego" | "builtin" | "relay" | "unavailable", name?, url?}}',
-		);
+		throw new Error('default_browser_set needs {browser: {kind: "ego" | "builtin" | "unavailable", name?}}');
 	}
 	current = browser;
 	return { browser };
 }
 
-/** The session settings the relay choice holds: `browser.relay` and `browser.relayUrl`, one scope at a time. */
-export interface RelaySetting {
-	hold(scope: object, url: string): void;
-	release(scope: object): void;
+/** The session setting an unavailable choice holds off: `browser.enabled`, one scope at a time. */
+export interface BrowserSetting {
 	block(scope: object): void;
 	unblock(scope: object): void;
 }
 
-/** A URL holds a named relay. False holds the browser prelude off because discovery cannot prove its profile. */
-const held = new WeakMap<object, string | false>();
-/** Scopes where Preview's agent browsing holds the same overrides: its pair wins while it runs. */
+/** Scopes whose browser the unavailable choice holds off. */
+const blocked = new WeakSet<object>();
+/** Scopes where Preview's agent browsing holds the browser: its relay wins while it runs. */
 const previewing = new Set<object>();
 
-/** Make `scope`'s relay overrides match the current choice. */
-export function applyDefaultBrowser(scope: object, setting: RelaySetting): void {
+/** Make `scope`'s browser override match the current choice. */
+export function applyDefaultBrowser(scope: object, setting: BrowserSetting): void {
 	if (previewing.has(scope)) return;
-	const next = current.kind === "relay" ? current.url : current.kind === "unavailable" ? false : undefined;
-	const previous = held.get(scope);
-	if (previous === next) return;
-	if (next === false) setting.block(scope);
-	if (typeof next === "string") setting.hold(scope, next);
-	if (previous === false) setting.unblock(scope);
-	if (typeof previous === "string" && typeof next !== "string") setting.release(scope);
-	if (next === undefined) held.delete(scope);
-	else held.set(scope, next);
+	const block = current.kind === "unavailable";
+	if (block === blocked.has(scope)) return;
+	if (block) {
+		setting.block(scope);
+		blocked.add(scope);
+	} else {
+		setting.unblock(scope);
+		blocked.delete(scope);
+	}
 }
 
-/** Preview's relay took `scope`'s `browser.relay`. */
-export function previewRelayStarted(scope: object, setting: RelaySetting): void {
-	if (held.get(scope) === false) setting.unblock(scope);
-	held.delete(scope);
+/** Preview's relay took `scope`'s browser. */
+export function previewRelayStarted(scope: object, setting: BrowserSetting): void {
+	if (blocked.delete(scope)) setting.unblock(scope);
 	previewing.add(scope);
 }
 
-/** Preview's relay stopped and cleared `scope`'s overrides: the default browser's choice comes back. */
-export function previewRelayStopped(scope: object, setting: RelaySetting): void {
+/** Preview's relay stopped and cleared its overrides: the default browser's choice comes back. */
+export function previewRelayStopped(scope: object, setting: BrowserSetting): void {
 	previewing.delete(scope);
-	held.delete(scope);
 	applyDefaultBrowser(scope, setting);
 }
 

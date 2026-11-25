@@ -6338,15 +6338,9 @@ export const ko: Record<string, string> = {
 	"settings.gui.defaultBrowserMissing": "ego-browser가 설치돼 있지 않아 에이전트가 내장 브라우저(omp)를 써요.",
 	"settings.gui.defaultBrowserLoadFailed": "기본 브라우저 설정을 읽지 못했어요",
 	"settings.gui.defaultBrowser.notInstalled": "{name} (설치 안 됨)",
-	"settings.gui.defaultBrowserBrowserMissing":
-		"{name} 브라우저가 설치돼 있지 않아요. 다른 브라우저를 대신 사용하지 않아요.",
-	"settings.gui.defaultBrowserRelayMissing":
-		"{name}에 omp 확장을 설치하면 에이전트가 로그인된 내 브라우저를 쓸 수 있어요. 다른 브라우저를 대신 사용하지 않아요.",
 	"settings.gui.defaultBrowserInstall": "확장 설치",
 	"settings.gui.defaultBrowserRelayUnverified":
 		"omp가 {name}의 릴레이를 확인할 수 없어 다른 브라우저로 연결하지 않아요. 다른 기본 브라우저를 선택하거나 지원되는 브라우저의 omp 사이드 패널에서 대화를 시작하세요.",
-	"settings.gui.defaultBrowserRelayConnected": "연결됨: 에이전트가 로그인된 {name} 브라우저를 써요.",
-	"settings.gui.defaultBrowserRelayWaiting": "{name} 브라우저를 열면 연결돼요. 열려 있어야 에이전트가 쓸 수 있어요.",
 	"settings.gui.defaultBrowserInstallFailed": "확장을 설치하지 못했어요",
 	"settings.gui.defaultBrowserStepsTitle": "{name}에 확장 추가하기",
 	"settings.gui.defaultBrowserSteps":

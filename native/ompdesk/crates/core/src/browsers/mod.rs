@@ -1,10 +1,10 @@
 //! The Chromium browsers the Default browser setting can point agents at, as this computer has them (was
-//! `src/main/agent-browsers.ts`): each one in its standard install place (`browsers.find`), whether a profile of it
-//! loaded its own copy of the omp Browser Relay extension and whether that copy is connected to its relay
-//! (`browsers.status`), writing that copy (`browsers.installRelay`, `relay.rs`) and opening the browser at its
-//! extensions page (`browsers.openExtensions`).
+//! `src/main/agent-browsers.ts`): each one in its standard install place (`browsers.find`), the installed ones with
+//! ego-browser and the browsers stock's native host serves (`browsers.status`), writing a browser's copy of the omp
+//! Browser Relay extension (`browsers.installRelay`, `relay.rs`) and opening the browser at its extensions page
+//! (`browsers.openExtensions`).
 //!
-//! Main hands over what it also spells for the page: the browsers in `auto` order with their names and relay ports
+//! Main hands over what it also spells for the page: the browsers in `auto` order with their names
 //! (`src/shared/default-browser.ts`), where this machine keeps things (`systemBrowserPlaces`), and how it runs omp.
 //! The core caches ego-browser's path and the status snapshot, including its automatic browser choice.
 
@@ -13,10 +13,8 @@ mod relay;
 mod status;
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::server::{Fault, Registry, Reply, Scope};
 
@@ -103,8 +101,6 @@ impl Id {
 struct Named {
     id: Id,
     name: String,
-    /// Only older omp versions have a fixed port per browser.
-    port: Option<u16>,
 }
 
 /// Where the machine keeps things; a test points these at a temp folder.
@@ -129,7 +125,7 @@ struct FindParams {
     browsers: Vec<Named>,
 }
 
-/// A browser found on disk: what the launch and the relay check need.
+/// A browser found on disk: what the launch needs.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Found {
@@ -141,17 +137,11 @@ struct Found {
     extensions_url: String,
 }
 
-/// An installed browser with the state of its own relay extension copy.
+/// An installed browser as the status names it.
 #[derive(Serialize)]
-#[cfg_attr(test, derive(Deserialize))]
-#[serde(rename_all = "camelCase")]
 struct Installed {
     id: Id,
     name: String,
-    relay_installed: bool,
-    relay_connected: bool,
-    #[serde(skip_serializing)]
-    port: Option<u16>,
 }
 
 fn joined(root: &str, parts: &[&str]) -> PathBuf {
@@ -211,80 +201,6 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(work)
         .await
         .map_err(|_| Fault::new("internal", "The browser read panicked"))
-}
-
-/// Is `port`'s relay serving a connected extension? Stock answers `/json/version` 200 then, 503 while it waits. The
-/// status line within 500 ms, as the TypeScript's `fetch` with its 500 ms signal; anything else is no.
-async fn relay_connected(port: u16) -> bool {
-    let probe = async {
-        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .ok()?;
-        let request = format!(
-            "GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-        );
-        stream.write_all(request.as_bytes()).await.ok()?;
-        let mut head = Vec::new();
-        let mut chunk = [0_u8; 256];
-        while !head.contains(&b'\n') && head.len() < 4096 {
-            let read = stream.read(&mut chunk).await.ok()?;
-            if read == 0 {
-                break;
-            }
-            head.extend_from_slice(&chunk[..read]);
-        }
-        let line = head.split(|&byte| byte == b'\n').next()?;
-        let mut words = line.split(|&byte| byte == b' ');
-        Some(words.next()?.starts_with(b"HTTP/1.") && words.next()? == b"200")
-    };
-    matches!(
-        tokio::time::timeout(Duration::from_millis(500), probe).await,
-        Ok(Some(true))
-    )
-}
-
-/// The installed browsers with the state of their own relay extension copy. The profiles are read first, then the
-/// relays of the installed copies are asked together.
-async fn installed(params: FindParams, native_host: bool) -> Result<Vec<Installed>, Fault> {
-    let read = blocking(move || {
-        params
-            .browsers
-            .into_iter()
-            .filter_map(|named| {
-                let port = if native_host { None } else { named.port };
-                let browser = find_one(named, &params.places)?;
-                let dir = text(relay::extension_dir(&params.places.home, browser.id));
-                let installed = relay::loaded_in(&browser.data_dir, &dir);
-                Some((browser, installed, port))
-            })
-            .collect::<Vec<_>>()
-    })
-    .await?;
-    let asks: Vec<_> = read
-        .into_iter()
-        .map(|(browser, relay_installed, port)| {
-            tokio::spawn(async move {
-                Installed {
-                    id: browser.id,
-                    name: browser.name,
-                    relay_installed,
-                    port,
-                    relay_connected: match port {
-                        Some(port) if relay_installed => relay_connected(port).await,
-                        _ => false,
-                    },
-                }
-            })
-        })
-        .collect();
-    let mut installed = Vec::with_capacity(asks.len());
-    for ask in asks {
-        installed.push(
-            ask.await
-                .map_err(|_| Fault::new("internal", "The relay probe panicked"))?,
-        );
-    }
-    Ok(installed)
 }
 
 #[derive(Deserialize)]
@@ -348,57 +264,4 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&())
         })
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn the_relay_is_connected_only_when_its_status_line_says_200() {
-        async fn answering(status: &'static str) -> u16 {
-            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-                .await
-                .unwrap();
-            let port = listener.local_addr().unwrap().port();
-            tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0_u8; 512];
-                let _ = socket.read(&mut request).await;
-                let _ = socket.write_all(status.as_bytes()).await;
-            });
-            port
-        }
-        assert!(
-            relay_connected(answering("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await).await
-        );
-        assert!(
-            !relay_connected(answering("HTTP/1.1 503 Service Unavailable\r\n\r\n").await).await
-        );
-        assert!(!relay_connected(answering("HTTP/1.1 2000 OK\r\n\r\n").await).await);
-        // Nothing listening.
-        let closed = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let port = closed.local_addr().unwrap().port();
-        drop(closed);
-        assert!(!relay_connected(port).await);
-    }
-
-    #[tokio::test]
-    async fn a_relay_that_never_answers_is_not_connected_after_half_a_second() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let held = tokio::spawn(async move {
-            let accepted = listener.accept().await;
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            drop(accepted);
-        });
-        let started = std::time::Instant::now();
-        assert!(!relay_connected(port).await);
-        assert!(started.elapsed() < Duration::from_secs(2));
-        held.abort();
-    }
 }

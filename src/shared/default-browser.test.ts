@@ -1,33 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
 	type AgentBrowserStatus,
-	CHROMIUM_BROWSER_IDS,
-	CHROMIUM_RELAY_PORTS,
 	chromiumBrowserOf,
 	type DefaultBrowserPref,
 	parseDefaultBrowser,
-	relayUrl,
 	resolveAgentBrowser,
 } from "./default-browser";
 
-const chrome = (relayInstalled: boolean) => ({
-	id: "chrome" as const,
-	name: "Google Chrome",
-	relayInstalled,
-	relayConnected: false,
-});
-const brave = (relayInstalled: boolean) => ({
-	id: "brave" as const,
-	name: "Brave",
-	relayInstalled,
-	relayConnected: false,
-});
+const chrome = { id: "chrome" as const, name: "Google Chrome" };
+const brave = { id: "brave" as const, name: "Brave" };
 const status = (egoInstalled: boolean, ...browsers: AgentBrowserStatus["browsers"]): AgentBrowserStatus => ({
-	auto: { kind: "builtin" },
+	auto: egoInstalled ? { kind: "ego" } : { kind: "builtin" },
 	egoInstalled,
 	browsers,
+	nativeHostBrowsers: ["chrome", "brave", "chromium"],
 });
-const CHROME_RELAY = { kind: "relay", name: "Google Chrome", url: "http://127.0.0.1:9231" };
 
 describe("default browser pref", () => {
 	it("reads a missing or invalid pref as auto", () => {
@@ -45,66 +32,36 @@ describe("default browser pref", () => {
 	});
 });
 
-describe("relay endpoints", () => {
-	it("gives every browser its own port, none of them stock's shared default", () => {
-		const ports = CHROMIUM_BROWSER_IDS.map(id => CHROMIUM_RELAY_PORTS[id]);
-		expect(new Set(ports).size).toBe(CHROMIUM_BROWSER_IDS.length);
-		expect(ports).not.toContain(9224);
-		expect(relayUrl("edge")).toBe("http://127.0.0.1:9232");
-	});
-});
-
 describe("resolveAgentBrowser", () => {
-	it("never assigns a discovered native host to a named browser even when its unpacked copy is loaded", () => {
-		const machine: AgentBrowserStatus = {
-			...status(false, chrome(true), brave(true)),
-			nativeHostBrowsers: ["chrome", "brave"],
-		};
-		expect(resolveAgentBrowser("chromium:brave", machine)).toEqual({ kind: "unavailable", name: "Brave" });
-		expect(resolveAgentBrowser("auto", machine)).toEqual({ kind: "builtin" });
-		expect(resolveAgentBrowser("chromium:brave", undefined)).toEqual({ kind: "unavailable", name: "Brave" });
-		expect(resolveAgentBrowser("auto", undefined)).toEqual({ kind: "builtin" });
-	});
-
-	it.each<[string, DefaultBrowserPref, AgentBrowserStatus, unknown]>([
-		[
-			"auto follows the core's answer, not the available browser list",
-			"auto",
-			{ ...status(true, chrome(true)), auto: { kind: "relay", name: "Brave", url: "http://127.0.0.1:9233" } },
-			{ kind: "relay", name: "Brave", url: "http://127.0.0.1:9233" },
-		],
+	it.each<[string, DefaultBrowserPref, AgentBrowserStatus | undefined, unknown]>([
+		["auto follows the core's answer", "auto", status(true, chrome), { kind: "ego" }],
+		["auto before the first read is built-in", "auto", undefined, { kind: "builtin" }],
 		["ego when installed", "ego", status(true), { kind: "ego" }],
 		[
 			"ego without ego-browser is built-in, never a missing binary",
 			"ego",
-			status(false, chrome(true)),
+			status(false, chrome),
 			{ kind: "builtin" },
 		],
 		[
-			"a browser with its extension is driven through its own relay",
-			"chromium:chrome",
-			status(true, chrome(true)),
-			CHROME_RELAY,
-		],
-		[
-			"a browser without its extension stays unavailable",
-			"chromium:chrome",
-			status(true, chrome(false)),
-			{ kind: "unavailable", name: "Google Chrome" },
-		],
-		[
-			"a pick is never another browser's relay",
-			"chromium:chrome",
-			status(false, chrome(false), brave(true)),
-			{ kind: "unavailable", name: "Google Chrome" },
-		],
-		[
-			"a browser that is gone stays unavailable",
+			"a named browser is never driven, installed or not, since its profile cannot be verified",
 			"chromium:brave",
-			status(false, chrome(true)),
+			status(false, chrome, brave),
 			{ kind: "unavailable", name: "Brave" },
 		],
-		["built-in stays built-in whatever is installed", "builtin", status(true, chrome(true)), { kind: "builtin" }],
+		[
+			"a named browser that is gone stays unavailable",
+			"chromium:chrome",
+			status(false),
+			{ kind: "unavailable", name: "Google Chrome" },
+		],
+		[
+			"a named browser before the first read stays unavailable",
+			"chromium:chrome",
+			undefined,
+			{ kind: "unavailable", name: "Google Chrome" },
+		],
+		["built-in stays built-in whatever is installed", "builtin", status(true, chrome), { kind: "builtin" }],
 	])("%s", (_name, pref, machine, expected) => {
 		expect(resolveAgentBrowser(pref, machine)).toEqual(expected);
 	});
