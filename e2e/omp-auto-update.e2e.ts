@@ -33,6 +33,10 @@ import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible } from "./har
 const UNVERIFIED = "99.0.0";
 /** This OMPdesk release: the verified list's key. */
 const APP_VERSION: string = JSON.parse(readFileSync(path.join(import.meta.dirname, "../package.json"), "utf8")).version;
+/** The omp this release was tested with (`src/shared/omp-tested.json`). */
+const TESTED: string = JSON.parse(
+	readFileSync(path.join(import.meta.dirname, "../src/shared/omp-tested.json"), "utf8"),
+).version;
 /** The hidden pref that makes omp follow the verified list (desktop-prefs.ts `OMP_FOLLOW_VERIFIED_PREF`). */
 const FOLLOW = { ompFollowVerified: true };
 
@@ -309,15 +313,16 @@ test("an omp runners have not verified waits: nothing installs on its own, Setti
 		});
 		await expect.poll(() => boots(launched), { timeout: 30_000 }).toEqual([FLOOR, UNVERIFIED]);
 		await expect(held).toHaveCount(0);
-		// Who installed what: the launch's check held it (and tried the tested omp, which only Bun or npm can install by
-		// name, so nothing ran), the person's pass installed it (a later repair check may follow). The stock take-over
-		// writes its own lines to the same log, at whatever moment its `omp config` calls answer.
+		// Who installed what: the launch's check held it (and, from a floor below the tested omp, tried the tested omp,
+		// which only Bun or npm can install by name, so nothing ran), the person's pass installed it (a later repair check
+		// may follow). The stock take-over writes its own lines to the same log, at whatever moment its `omp config` calls
+		// answer.
+		const triedTested = FLOOR === TESTED ? [] : ["started launch", "skipped launch"];
 		const passes = (await updateLog(launched)).filter(line => !line.startsWith("stock-auto"));
-		expect(passes.slice(0, 7)).toEqual([
+		expect(passes.slice(0, 5 + triedTested.length)).toEqual([
 			"checked launch",
 			"held launch",
-			"started launch",
-			"skipped launch",
+			...triedTested,
 			"checked manual",
 			"started manual",
 			"finished manual",

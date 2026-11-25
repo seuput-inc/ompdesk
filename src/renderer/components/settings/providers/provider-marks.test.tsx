@@ -29,6 +29,7 @@ const STOCK_PROVIDER_IDS: readonly string[] = [
 	"amazon-bedrock",
 	"antigravity-cli",
 	"anthropic",
+	"anthropic-long-lived",
 	"apple",
 	"azure",
 	"baseten",

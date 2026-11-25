@@ -62,7 +62,7 @@ process.stdout.write('{"nameWithOwner":"o/r","defaultBranchRef":{"name":"main"}}
 		const system = await fs.readFile(path.resolve("native/ompdesk/crates/core/src/gh/pr-draft-system.md"), "utf8");
 		const user = `Base: main — Head: topic\n\nCommits (1):\n${subject}\n\nChanged files (1):\nsub/a.txt\n\n\nDiff stat:\n1\t0\tsub/a.txt\n\n\nDraft the PR title and body as the JSON object.\n`;
 		expect(run).toHaveBeenCalledWith(
-			["-p", "--no-session", "--no-tools", "--no-lsp", "-e", path.join(bin, "credit-spend-run.ts")],
+			["-p", "--no-session", "--tools=", "--no-lsp", "-e", path.join(bin, "credit-spend-run.ts")],
 			{
 				cwd: repo,
 				input: `${system.trim()}\n\n---\n\n${user}`,

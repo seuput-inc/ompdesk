@@ -24,6 +24,7 @@ import { probe } from "./health";
 import { bindEnv } from "./modes/shared";
 import type { RoleSettings } from "./ompdesk-roles";
 import type { BridgeEnv, BridgeEvent, BridgeMethods } from "./types";
+import { registerWait } from "./waste-guards-wait";
 
 interface Area {
 	name: string;
@@ -345,6 +346,12 @@ const processBind = holder[PROCESS_BIND] as ProcessBind;
 export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 	const address = process.env.OMP_GUI_BRIDGE;
 	if (!address) return;
+	// Every bind (main, a subagent's rebind, a task worker) before stock builds that session: see waste-guards-wait.ts.
+	try {
+		registerWait(pi);
+	} catch (err) {
+		pi.logger.error("gui-bridge: wait guard failed", { error: String(err) });
+	}
 	if (processBind.bound) {
 		processBind.startLoading?.();
 		const loaded = await processBind.bound;

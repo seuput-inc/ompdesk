@@ -22,6 +22,8 @@ const REPLIES: ReadonlyArray<[status: number, body: string]> = [
 	[429, "Too Many Requests"],
 	[429, "Rate limit exceeded: 50 requests per minute"],
 	[429, "Resource exhausted: quota exceeded for this project, it resets tomorrow"],
+	// A credit reservation held by in-flight requests: a transient slot, freed as they finish (stock from 19.2).
+	[429, "This request would exceed your available credits given your current in-flight requests"],
 	// An account out of money.
 	[402, "the organization is out of credit, add more to continue (type=insufficient_quota)"],
 	[402, "Payment Required"],
@@ -30,7 +32,6 @@ const REPLIES: ReadonlyArray<[status: number, body: string]> = [
 		429,
 		'{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota"}}',
 	],
-	[429, "This request would exceed your available credits given your current in-flight requests"],
 	[429, "Insufficient credits"],
 	[429, "Your prepaid balance is used up: Add funds or enable auto top-up (usage_pricing_required)"],
 	[429, "You have reached your monthly spend limit"],
@@ -47,9 +48,9 @@ describe.skipIf(!rateLimit || !retryAfter)("the limit rules main copies from sto
 		);
 		const ours = REPLIES.map(([status, body]) => isBillingCap(`${status} ${body}`));
 		expect(ours).toEqual(billing);
-		// The first five are limits both sides wait for; none of the rest is.
-		expect(billing).toEqual(REPLIES.map((_reply, index) => index >= 5));
-		for (const [status, body] of REPLIES.slice(0, 5)) expect(isLimitWording(`${status} ${body}`)).toBe(true);
+		// The first six are limits both sides wait for; none of the rest is.
+		expect(billing).toEqual(REPLIES.map((_reply, index) => index >= 6));
+		for (const [status, body] of REPLIES.slice(0, 6)) expect(isLimitWording(`${status} ${body}`)).toBe(true);
 	}, 90_000);
 
 	it("reads the wait stock appends to a failed reply as stock reads it back", () => {

@@ -479,12 +479,12 @@ function runProbe(fake: string, scenario: Scenario, home?: string): Promise<Prob
 }
 
 /** A scheduled run's and a PR draft's own arguments (schedules.ts `ompRunLauncher`, local/git/pr.ts). */
-const PRINT_RUN = ["--no-session", "--no-tools", "--no-lsp", "--no-extensions", "--no-skills", "--no-rules"];
+const PRINT_RUN = ["--no-session", "--tools=", "--no-lsp", "--no-extensions", "--no-skills", "--no-rules"];
 /** The core's for memory's upkeep and curation (native/ompdesk/crates/core/src/upkeep/model.rs `run_smol`). */
 const UPKEEP_RUN = [
 	"--mode",
 	"json",
-	"--no-tools",
+	"--tools=",
 	"--no-session",
 	"--no-extensions",
 	"--no-skills",

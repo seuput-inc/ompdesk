@@ -1200,8 +1200,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/**
 	 * waste-guards.ts: the public `tool_call` (`block`) and `tool_result` (`content`) hooks, `registerTool` over the
-	 * built-in `wait` with the same-tool `ctx.invokeTool` (present since before 18.18.2), and on Windows stock's
-	 * `WaitTool` from the package index over the process settings, which connects the folder's service broker client.
+	 * built-in `wait` (waste-guards-wait.ts, from the factory) with the same-tool `ctx.invokeTool` (present since before
+	 * 18.18.2), and on Windows stock's `WaitTool` from the package index over the process settings, which connects the
+	 * folder's service broker client.
 	 */
 	wasteGuards: {
 		pkg: ["WaitTool.prototype.execute()", "Settings.instance"],
