@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "11c349746695d248fac742d59ef16ed5687042e1",
+			"syncCommit": "24c2f63778d68827d9be9c7dc02a2d398701a08c",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
