@@ -114,6 +114,7 @@ fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
     let ctx = Ctx {
         out,
         pool: Rc::new(RefCell::new(pool)),
+        channels: Rc::new(serde_json::from_value(opts["channels"].clone()).unwrap_or_default()),
     };
     POOLS.with(|pools| pools.borrow_mut().insert(id, ctx));
     Ok(())

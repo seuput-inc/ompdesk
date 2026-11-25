@@ -87,7 +87,10 @@ async function rig(options: RigOptions = {}) {
 	/** The devices whose Files-edit report the core recorded, in the order main heard (`web.fileEdits`). */
 	const fileEditReports: string[] = [];
 	let routerRef: WsRouter | null = null;
-	const windows = new WebWindows((id, channel, payload) => routerRef?.deliver(id, channel, payload));
+	const windows = new WebWindows(
+		(id, channel, payload) => routerRef?.deliver(id, channel, payload),
+		(win, alive) => routerRef?.noteWindow(win, alive),
+	);
 	const host = await TestRouterHost.open(
 		{
 			registry: { invoke, send },
@@ -776,6 +779,22 @@ describe("events", () => {
 		expect(r.socket.frames("evt")).toHaveLength(1);
 		expect(second?.socket.frames("evt")).toHaveLength(1);
 		expect(stranger?.socket.frames("evt")).toHaveLength(0);
+	});
+
+	it("takes a push the core makes to the device's window under the same rules as main's", async () => {
+		const r = await rig({ grants: ["device-self"] });
+		const win = r.windows.windowFor("dev1");
+		const send = (ch: string, data: unknown) =>
+			core().call("web.router.test.pageSend", { wins: [win.webContents.id], ch, data });
+		await send(IPC_EVENTS.TAB_STATUS, { tabId: "a" });
+		await send(WEB_DEVICES_CHANGED, []);
+		await send(IPC_EVENTS.REMOTE_STATE, { deviceSectionOrder: ["local"] });
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: IPC_EVENTS.TAB_STATUS, d: { tabId: "a" } }]);
+		r.windows.destroy("dev1");
+		await send(IPC_EVENTS.TAB_STATUS, { tabId: "b" });
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toHaveLength(1);
 	});
 });
 

@@ -5,6 +5,7 @@ mod app_window;
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+mod core_pages;
 mod diagnostic_bundle_name;
 mod entry;
 mod evaluate;
@@ -62,18 +63,31 @@ mod owner;
 /// Main's connection to the core owner, while one is open: where the owner's events go.
 static CORE_OWNER_FRAMES: std::sync::Mutex<Option<owner::Frames>> = std::sync::Mutex::new(None);
 
-/// Spawns the cores main asks for, holds their stdio and reports their end to main (`core.*` events).
+/// Spawns the cores main asks for, holds their stdio and reports their end to main (`core.*` events). Each core's page
+/// pushes go into the windows' outboxes (`core_pages`), in its stdout's order.
 fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
     static OWNER: std::sync::LazyLock<std::sync::Arc<owner::Owner>> =
         std::sync::LazyLock::new(|| {
-            owner::Owner::new(std::sync::Arc::new(|event: &str, data: Value| {
-                let frames = CORE_OWNER_FRAMES
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(frames) = frames.as_ref() {
-                    let _ = frames.send(Some(owner::event(event, data)));
-                }
-            }))
+            owner::Owner::with_pages(
+                std::sync::Arc::new(|event: &str, data: Value| {
+                    let frames = CORE_OWNER_FRAMES
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if let Some(frames) = frames.as_ref() {
+                        let _ = frames.send(Some(owner::event(event, data)));
+                    }
+                }),
+                Some(std::sync::Arc::new(|page: owner::PageEvent| match page {
+                    owner::PageEvent::Push(push) => core_pages::push(
+                        push.generation,
+                        push.win,
+                        &push.ch,
+                        push.pushed,
+                        &push.data,
+                    ),
+                    owner::PageEvent::Ended { generation } => core_pages::ended(generation),
+                })),
+            )
         });
     &OWNER
 }
@@ -1724,7 +1738,11 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
             }
             let started = std::time::Instant::now();
             let answer = tauri::async_runtime::spawn_blocking(move || {
-                host::request_blocking("ipc.invoke", params, Duration::from_secs(180))
+                let mut answer =
+                    host::request_blocking("ipc.invoke", params, Duration::from_secs(180))?;
+                // The answer reaches the page after every push the core made before main read it (C4's fence).
+                core_pages::fence(&mut answer);
+                Ok::<_, WireError>(answer)
             })
             .await
             .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
