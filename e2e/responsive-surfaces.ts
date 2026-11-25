@@ -86,7 +86,7 @@ export interface Surface {
 	};
 }
 
-export type ParitySession = "work" | "reply" | "steer" | "advisor" | "limit" | "turns" | "long";
+export type ParitySession = "work" | "reply" | "steer" | "advisor" | "ci" | "limit" | "turns" | "long";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -685,7 +685,7 @@ async function pressUntilVisible(page: Page, shortcut: string, target: Locator):
 async function openPageTab(
 	page: Page,
 	command: "stats" | "agents",
-	tab: "session" | "usage" | "live" | null,
+	tab: "session" | "usage" | "live" | "prs" | "github" | null,
 ): Promise<void> {
 	// The palette's own field: another dialog a harness page left open has a combobox too.
 	const search = page.locator('[role="dialog"]:has([data-palette-index]) [role="combobox"]');
@@ -1083,6 +1083,19 @@ export const SURFACES: readonly Surface[] = [
 		settle: 900,
 		when: () => false,
 		parity: { session: "advisor", inView: "[data-card]:has-text('결론을 정정하세요')" },
+	},
+	{
+		id: "reply-ci-note",
+		area: "A",
+		title: "The CI lines a session's push brings between turns: one passed, one failed with its jobs and the run link",
+		open: async page => {
+			await showTurn(page, "fixture ci note");
+			await page.getByText("Pushed main.", { exact: true }).last().waitFor({ timeout: 15_000 });
+		},
+		ready: '[data-ci-note="failure"]',
+		settle: 900,
+		when: () => false,
+		parity: { session: "ci", inView: '[data-ci-note="failure"]' },
 	},
 	...(
 		[
@@ -1841,10 +1854,11 @@ export const SURFACES: readonly Surface[] = [
 			id: `agents-${tab}`,
 			area: "B",
 			title: `Agents › ${tab}`,
-			// Live opens through the palette and its tab (real controls), so the parity sheet takes it.
-			open: tab === "live" ? page => openPageTab(page, "agents", "live") : page => ui(page, "openAgents", tab),
+			// Live, Pull requests and GitHub open through the palette and their tab (real controls), so the parity sheet
+			// takes them.
+			open: tab === "definitions" ? page => ui(page, "openAgents", tab) : page => openPageTab(page, "agents", tab),
 			settle: 900,
-			...(tab === "live" ? { parity: { session: "work" as const } } : {}),
+			...(tab === "definitions" ? {} : { parity: { session: "work" as const } }),
 		}),
 	),
 	{

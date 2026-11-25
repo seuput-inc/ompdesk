@@ -5254,6 +5254,44 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					endTurn(turn);
 				}, 300);
 			}, 300);
+		} else if (message === "fixture ci note") {
+			// A push and the CI lines the bridge's CI watch delivers between turns (customType `ompdesk-ci`,
+			// resources/gui-bridge/modes/ci-watch-contracts.ts): one run passed, one failed (parity `reply-ci-note`).
+			const answer: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Pushed main." }],
+				timestamp: Date.now(),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+			};
+			const ci = (sha: string, outcome: "success" | "failure", failed: string[]): AgentMessage => ({
+				role: "custom",
+				customType: "ompdesk-ci",
+				content: `CI ${outcome === "success" ? "passed" : "failed"} for o/r@${sha.slice(0, 7)} (main).`,
+				display: true,
+				details: {
+					id: `ci-${sha}`,
+					host: "github.com",
+					repo: "o/r",
+					branch: "main",
+					sha,
+					outcome,
+					failed,
+					url: "https://github.com/o/r/actions/runs/101",
+				},
+				timestamp: Date.now(),
+			});
+			const passed = ci("a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "success", []);
+			const failed = ci("0f1e2d3c4b5a69788796a5b4c3d2e1f001234567", "failure", [
+				"check (node 1/2)",
+				"native (linux)",
+			]);
+			for (const entry of [answer, passed, failed]) {
+				appendMessage(entry);
+				write({ type: "message_end", message: entry });
+			}
+			endTurn([user, answer, passed, failed]);
 		} else if (message === "fixture advisor note") {
 			// A standalone advisor card (customType `advisor`, the shape stock files): prices that once drew as KaTeX, a
 			// bare URL and one long unbroken formula, all of which must stay inside the card (parity `reply-advisor-note`).

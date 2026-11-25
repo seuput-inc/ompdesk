@@ -429,11 +429,13 @@ if (dir) {
 							: session === "advisor"
 								? // A session of its own too: a turn more in the reply session shifts what its other surfaces reach.
 									answeredSession("Parity advisor", [["fixture advisor note", "Advisor note delivered."]])
-								: session === "turns"
-									? turnsSession()
-									: session === "long"
-										? longSession()
-										: limitSession();
+								: session === "ci"
+									? answeredSession("Parity CI", [["fixture ci note", "Pushed main."]])
+									: session === "turns"
+										? turnsSession()
+										: session === "long"
+											? longSession()
+											: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
