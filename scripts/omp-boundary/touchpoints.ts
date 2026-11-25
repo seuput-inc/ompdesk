@@ -1800,6 +1800,27 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/gh-guard-stock.test.ts", "src/main/gh-guard.test.ts"],
 	},
 	{
+		id: "B66",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"CI watch: reads a session's pushed commit's workflow runs with stock's `fetchRunsForCommit`, `getRunCollectionOutcome`, `resolveGitHubBranchHead`, `GH_RATE_LIMIT_ERROR_PATTERN`, gh-common's repo parsing and `github.json`, loaded on the first push through the omp adapter layer.",
+		files: [
+			"resources/gui-bridge/modes/ci-watch.ts",
+			"resources/gui-bridge/omp/pi-coding-agent/tools/gh-run-watch.ts",
+			"resources/gui-bridge/omp/pi-coding-agent/tools/gh-common.ts",
+			"resources/gui-bridge/omp/pi-coding-agent/utils/github.ts",
+			"resources/gui-bridge/capabilities.ts",
+			"resources/gui-bridge/health.ts",
+		],
+		stock: [
+			"@oh-my-pi/pi-coding-agent/tools/gh-run-watch",
+			"@oh-my-pi/pi-coding-agent/tools/gh-common",
+			"@oh-my-pi/pi-coding-agent/utils/github",
+		],
+		tests: ["src/main/bridge-ci-watch.test.ts", "src/main/bridge-capabilities.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",
