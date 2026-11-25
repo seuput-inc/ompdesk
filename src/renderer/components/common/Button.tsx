@@ -94,9 +94,9 @@ export function withoutPress<T extends Partial<Record<PressHandler, unknown>>>(p
 }
 
 const SIZE_CLASSES: Record<ButtonSize, string> = {
-	sm: "h-(--sc-control-sm) gap-1.5 rounded-(--sc-radius-sm) px-2.5 text-sc-sm [&>svg]:size-(--sc-icon-sm)",
-	md: "h-(--sc-control-md) gap-1.5 rounded-(--sc-radius-md) px-3 text-sc-md [&>svg]:size-(--sc-icon-sm)",
-	lg: "h-(--sc-control-lg) gap-2 rounded-(--sc-radius-md) px-4 text-sc-md [&>svg]:size-(--sc-icon-md)",
+	sm: "h-[var(--sc-button-sm,var(--sc-control-sm))] gap-1.5 rounded-(--sc-radius-sm) px-2.5 text-sc-sm [&>svg]:size-(--sc-icon-sm)",
+	md: "h-[var(--sc-button-md,var(--sc-control-md))] gap-1.5 rounded-(--sc-radius-md) px-3 text-sc-md [&>svg]:size-(--sc-icon-sm)",
+	lg: "h-[var(--sc-button-lg,var(--sc-control-lg))] gap-2 rounded-(--sc-radius-md) px-4 text-sc-md [&>svg]:size-(--sc-icon-md)",
 };
 
 /** Native button props, `ref` included (React 19) so Popover/Tooltip anchors can point at a Button. */

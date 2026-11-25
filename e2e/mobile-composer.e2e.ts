@@ -610,18 +610,18 @@ for (const engine of ENGINES) {
 								expect(size.hit.height, `${label} ${size.label} height`).toBeGreaterThanOrEqual(min);
 							}
 						};
-						// Orca's phone composer (the owner's decision, 25 Nov 2026): +, the context ring and Send/Stop are drawn
-						// 38 px and the Run and model chips 32, each reaching past its box without taking a neighbour's tap.
-						await reach(plus(page), "+", 38);
-						await reach(contextRing(page), "context ring", 38);
-						await reach(sendSlot(page).locator("button"), "Send/mic", 44);
-						for (const locator of [plus(page), contextRing(page), sendSlot(page).locator("button")]) {
+						// Every composer control is drawn 44 px on a phone (the owner's decision, 25 Nov 2026), so each is its
+						// own 44 px target without taking a neighbour's tap.
+						for (const [locator, label] of [
+							[plus(page), "+"],
+							[contextRing(page), "context ring"],
+							[sendSlot(page).locator("button"), "Send/mic"],
+							[runChip(page), "Run chip"],
+							[modelChip(page), "model chip"],
+						] as const) {
+							await reach(locator, label, 44);
 							for (const size of await hitSizes(locator))
-								expect(size.visual.height).toBeGreaterThanOrEqual(37.5);
-						}
-						for (const locator of [runChip(page), modelChip(page)]) {
-							await reach(locator, "row chip", 32);
-							for (const size of await hitSizes(locator)) expect(size.visual.height).toBeLessThanOrEqual(32.5);
+								expect(size.visual.height, `${label} drawn height`).toBeGreaterThanOrEqual(43.5);
 						}
 						for (const locator of [
 							plus(page),

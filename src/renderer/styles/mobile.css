@@ -1015,17 +1015,22 @@ html[data-input="touch"] .omp-file-card-actions {
 
 /* ── Phone density: smaller and denser than the desktop, like a phone chat app ────────────────────────────── */
 /* A phone is read at arm's length on 390 px: type, gutters and the chrome around the transcript shrink so the
-   conversation keeps the screen. Its controls are Orca's phone app's (the owner's decision, 25 Nov 2026): 32 px chips
-   and small buttons, 36 px icon buttons, each reaching 44 px with its invisible ::after. Only `data-shell="phone"`
-   (web build) gets this; a tablet keeps the desktop steps. Fields stay 16 px (iOS zooms into anything smaller). */
+   conversation keeps the screen. Its buttons, chips, ⋯ menus and switches are drawn 44 px (the owner's decision, 25
+   Nov 2026: "on the phone, draw controls at 44 px") through the button and switch tokens; fields, rows and section
+   heads keep the denser control steps. The 36 px top bar keeps its own (below). Only `data-shell="phone"` (web build)
+   gets this; a tablet keeps the desktop steps. Fields stay 16 px (iOS zooms into anything smaller). */
 html[data-shell="phone"] {
 	--phone-type-scale: 0.8667;
 	--sc-font-xs: 12px;
 	--sc-font-sm: 12px;
-	--sc-control-sm: 32px;
-	--sc-control-md: 36px;
-	--sc-control-lg: 40px;
-	--sc-hit-min: 32px;
+	--sc-control-sm: 24px;
+	--sc-control-md: 28px;
+	--sc-control-lg: 32px;
+	--sc-hit-min: 24px;
+	--sc-button-sm: 44px;
+	--sc-button-md: 44px;
+	--sc-button-lg: 44px;
+	--sc-switch-box: 44px;
 	--sc-font-2xs: 12px;
 	--sc-icon-lg: 16px;
 	--sc-row-touch: 36px;
@@ -1033,6 +1038,14 @@ html[data-shell="phone"] {
 	/* Rounder than the desktop, as Orca's phone app is: cards, menus and toasts 12, the composer, dialogs and sheets 16. */
 	--sc-radius-lg: 12px;
 	--sc-radius-xl: 16px;
+}
+
+/* The top bar stays one 36 px line: 44 px buttons would make it 44, and the header, composer and work strip would then
+   pass the 19.4 % chrome budget, so its buttons are as tall as the bar and reach 44 with their ::after. */
+html[data-shell="phone"] .omp-topbar {
+	--sc-button-sm: 36px;
+	--sc-button-md: 36px;
+	--sc-button-lg: 36px;
 }
 
 /* Transcript and composer gutters: 12 px, not the desktop's reading-column margins. */
@@ -1150,22 +1163,22 @@ html[data-shell="phone"] .omp-composer-region.pb-3 {
 }
 
 html[data-shell="phone"] .omp-composer-toolbar {
-	min-height: 38px;
+	min-height: 44px;
 	padding: 0 var(--sc-space-1-5) var(--sc-space-0-5) var(--sc-space-1);
 }
 
-/* Orca's phone composer (the owner's decision, 25 Nov 2026): +, the mic, the context ring and Send/Stop are 38 px
-   (Orca's `COMPOSER_CONTROL_SIZE`), each reaching 44 with its ::after; the Run and model chips are the phone's 32 px
-   chips. The field row gives back what the taller row takes (8 px above the text, none under it), so the box keeps
-   its height and the 19.4 % chrome budget. */
+/* The composer's controls are drawn 44 px like every phone control (the owner's decision, 25 Nov 2026): +, the mic,
+   the context ring and Send/Stop square, the Run and model chips 44 tall through the phone tokens. The field row gives
+   back 8 px of what the taller row takes (6 px above the text, none under it), so the idle chrome stays inside the
+   19.4 % budget. */
 html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action) {
-	width: 38px;
-	height: 38px;
+	width: 44px;
+	height: 44px;
 }
 
 html[data-shell="phone"] .omp-composer-toolbar .omp-context-usage-trigger {
-	min-width: 38px;
-	height: 38px;
+	min-width: 44px;
+	height: 44px;
 }
 
 html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action) > svg:not(.omp-composer-stop-glyph) {
@@ -1178,21 +1191,12 @@ html[data-shell="phone"] .omp-composer-action > .omp-composer-stop-glyph {
 	height: 12px;
 }
 
-/* A phone's switch is Orca's phone app's, 31 × 51 (its `MobileSwitch`, the iOS size): the kit's 18 × 32 track scaled. */
-html[data-shell="phone"] [role="switch"] {
-	height: auto;
-}
-
-html[data-shell="phone"] [role="switch"] > span {
-	zoom: 1.6;
-}
-
 /* The phone composer is always open: the field spans the box's full inner width on its own row, and the controls sit
    in one row under it, inside the box: + at the left, Send at the right (the mic while the field is empty and
    dictation is on), with the Run chip, the model chip and the context ring between them: every composer control stays
    inside the box and nothing folds it. */
 html[data-shell="phone"] .omp-composer-box > div:has(> [data-composer-input]) {
-	padding: 8px var(--sc-space-3) 0;
+	padding: 6px var(--sc-space-3) 0;
 }
 
 html[data-shell="phone"] .omp-composer-scroll > :is(button, [role="button"], span):first-child {

@@ -29,9 +29,9 @@ export type IconButtonTone = "success" | "warning" | "danger";
 
 const SIZE_CLASSES: Record<IconButtonSize, string> = {
 	inline: "size-(--sc-icon-md) rounded-(--sc-radius-sm) [&>svg]:size-(--sc-icon-sm)",
-	sm: "size-(--sc-control-sm) rounded-(--sc-radius-sm) [&>svg]:size-(--sc-icon-sm)",
-	md: "size-(--sc-control-md) rounded-(--sc-radius-md) [&>svg]:size-(--sc-icon-md)",
-	lg: "size-(--sc-control-lg) rounded-(--sc-radius-md) [&>svg]:size-(--sc-icon-lg)",
+	sm: "size-[var(--sc-button-sm,var(--sc-control-sm))] rounded-(--sc-radius-sm) [&>svg]:size-(--sc-icon-sm)",
+	md: "size-[var(--sc-button-md,var(--sc-control-md))] rounded-(--sc-radius-md) [&>svg]:size-(--sc-icon-md)",
+	lg: "size-[var(--sc-button-lg,var(--sc-control-lg))] rounded-(--sc-radius-md) [&>svg]:size-(--sc-icon-lg)",
 };
 
 const TONE_CLASSES: Record<IconButtonTone, string> = {

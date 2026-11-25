@@ -41,12 +41,22 @@ describe("touch targets and type", () => {
 		expect(read("./components.css")).toMatch(/\.markdown-body table \{[^}]*font-size:\s*var\(--sc-font-sm\)/);
 	});
 
-	it("sets the phone's controls to Orca's phone sizes and shrinks its type and icons in one place, with fields still 16 px", () => {
+	it("draws the phone's buttons and switches 44 px (36 in its top bar), its rows and fields at the dense steps", () => {
 		const phone = rule('html[data-shell="phone"]');
-		// Orca's phone app: 32 px chips, 36 px icon buttons (the owner's decision, 25 Nov 2026).
-		expect(phone).toMatch(/--sc-control-sm:\s*32px/);
-		expect(phone).toMatch(/--sc-control-md:\s*36px/);
-		expect(phone).toMatch(/--sc-control-lg:\s*40px/);
+		// The owner's decision, 25 Nov 2026: "on the phone, draw controls at 44 px". Layout heights stay dense.
+		for (const token of ["button-sm", "button-md", "button-lg", "switch-box"])
+			expect(phone).toMatch(new RegExp(`--sc-${token}:\\s*44px`));
+		expect(phone).toMatch(/--sc-control-sm:\s*24px/);
+		expect(phone).toMatch(/--sc-control-md:\s*28px/);
+		expect(phone).toMatch(/--sc-control-lg:\s*32px/);
+		// Every kit button reads the button token, falling back to the control step off the phone.
+		expect(read("../components/common/IconButton.tsx")).toContain("size-[var(--sc-button-md,var(--sc-control-md))]");
+		expect(read("../components/common/Button.tsx")).toContain("h-[var(--sc-button-md,var(--sc-control-md))]");
+		expect(read("../components/common/Switch.tsx")).toContain("h-[var(--sc-switch-box,var(--sc-hit-min))]");
+		// The top bar keeps its 36 px line (the chrome budget), its buttons as tall as the bar.
+		const bar = rule('html[data-shell="phone"] .omp-topbar');
+		for (const token of ["button-sm", "button-md", "button-lg"])
+			expect(bar).toMatch(new RegExp(`--sc-${token}:\\s*36px`));
 		expect(phone).toMatch(/--phone-type-scale:\s*0\.8667/);
 		expect(read("../lib/theme.ts")).toContain("var(--phone-type-scale, 1)");
 		expect(phone).toMatch(/--sc-font-xs:\s*12px/);
@@ -404,16 +414,15 @@ describe("controls close enough to take each other's taps", () => {
 });
 
 describe("the phone composer", () => {
-	it("draws +, the mic, the context ring and Send/Stop 38 px (Orca's phone composer) in a row that holds them", () => {
+	it("draws +, the mic, the context ring and Send/Stop 44 px in a 44 px row", () => {
 		expect(rule('html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action)')).toMatch(
-			/width:\s*38px;\s*height:\s*38px/,
+			/width:\s*44px;\s*height:\s*44px/,
 		);
 		expect(rule('html[data-shell="phone"] .omp-composer-toolbar .omp-context-usage-trigger')).toMatch(
-			/height:\s*38px/,
+			/height:\s*44px/,
 		);
-		expect(rule('html[data-shell="phone"] .omp-composer-toolbar')).toMatch(/min-height:\s*38px/);
+		expect(rule('html[data-shell="phone"] .omp-composer-toolbar')).toMatch(/min-height:\s*44px/);
 		expect(read("../components/layout/composer/ComposerToolbar.tsx")).toContain('className="omp-composer-add"');
-		// Each still reaches 44 within half its gaps.
 		const gap = rule('html[data-shell="phone"] :is(.omp-composer-toolbar, .omp-composer-send-cluster)');
 		expect(gap).toMatch(/--hit-gap-x:\s*18px/);
 		expect(gap).toMatch(/--hit-gap-y:\s*18px/);
