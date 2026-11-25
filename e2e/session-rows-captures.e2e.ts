@@ -245,7 +245,7 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		expect(head.visible.length, `${head.title}: eight characters or none`).toBeGreaterThanOrEqual(
 			Math.min(8, head.shown.length),
 		);
-		expect(head.past, head.title).toBeLessThanOrEqual(0.5);
+		expect(head.past, `${head.title} ${head.why}`).toBeLessThanOrEqual(0.5);
 	}
 
 	// The age slot (composer.md): work starting and ending changes only the leading status lane, so the age stays shown
@@ -348,16 +348,25 @@ function readHeadIn(node: Element): {
 	shown: string;
 	visible: string;
 	past: number;
+	/** The head's geometry, for a failure to say why it stayed on a line too short for it. */
+	why: string;
 } {
 	const text = node.querySelector(".truncate");
 	const tail = node.querySelector("[data-head-tail]");
 	const line = node.closest(".omp-session-row-give")?.getBoundingClientRect();
 	const title = node.getAttribute("title") ?? "";
-	// A head the box wrapped out of sight starts one line (15 px at 12 px type) down; on Windows' fonts a line is a
-	// fraction shorter than the box's 1lh, so "on the line" is a top above the line's middle, not above its bottom.
-	const onLine = Boolean(line && node.getBoundingClientRect().top < line.top + line.height / 2);
+	const onLine = Boolean(line && node.getBoundingClientRect().top < line.bottom - 1);
 	const whole = `${text?.textContent ?? ""}${tail?.textContent ?? ""}`;
-	if (!text?.firstChild || !onLine) return { title, onLine, cut: false, shown: whole, visible: "", past: 0 };
+	const why = JSON.stringify({
+		give: Math.round(line?.width ?? 0),
+		box: Math.round(node.parentElement?.getBoundingClientRect().width ?? 0),
+		head: Math.round(node.getBoundingClientRect().width),
+		top: Math.round(node.getBoundingClientRect().top - (line?.top ?? 0)),
+		min: (node as HTMLElement).style.minWidth,
+		font: getComputedStyle(node).fontFamily.slice(0, 40),
+		fonts: document.fonts.status,
+	});
+	if (!text?.firstChild || !onLine) return { title, onLine, cut: false, shown: whole, visible: "", past: 0, why };
 	const box = text.getBoundingClientRect();
 	const cut = text.scrollWidth > text.clientWidth + 0.5;
 	const style = getComputedStyle(text);
@@ -382,6 +391,7 @@ function readHeadIn(node: Element): {
 		shown: whole,
 		visible: visible + (tail?.textContent ?? ""),
 		past: line ? end - line.right : 0,
+		why,
 	};
 }
 
