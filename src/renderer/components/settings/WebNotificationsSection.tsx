@@ -2,21 +2,26 @@
  * Settings › Mobile web on the web page itself (a paired phone or tablet): this device's notifications and
  * how to install the page as an app. The pairing, Tailscale and the device list are the computer's; here the
  * device only manages its own Web Push subscription — turn it on (the permission prompt needs this click),
- * hide the content, pick the categories, turn it off — and sees why push cannot work when it cannot (denied,
- * unsupported, not HTTPS, iOS in a Safari tab). On iOS push exists only for a page on the Home Screen, so the
- * Add to Home Screen steps show there; Chromium offers its own install prompt; Samsung Internet and Firefox get their menu steps.
+ * send itself a test, hide the content, pick the categories, turn it off — and sees why push cannot work when it
+ * cannot (denied, unsupported, not HTTPS, iOS in a Safari tab). On iOS push exists only for a page on the Home
+ * Screen, so the Add to Home Screen steps show there; Chromium offers its own install prompt; Samsung Internet and
+ * Firefox get their menu steps. A closed Connection fold lists this page's recent link events and what to check
+ * when the link or notifications fail.
  */
-import { Bell, Download } from "lucide-react";
+import { Bell, Download, Send } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import type { IpcPushTestResult } from "../../../shared/ipc-types";
 import { WEB_PUSH_CATEGORIES, type WebPushCategory } from "../../../shared/web-push";
+import { uiLocale } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { toastError } from "../../stores/toast";
 import { installStepKeys } from "../../web/install";
 import { useInstallGuidance } from "../../web/install-ui";
+import { linkLog } from "../../web/link-log";
 import type { PushAvailability, PushViewState } from "../../web/push-client";
 import type { WebPwa } from "../../web/pwa";
-import { Banner, Button, SkeletonRows } from "../common";
-import { SettingsRow, SettingsSection, SettingsSwitchRow } from "./SettingsLayout";
+import { Banner, Button, SectionLabel, SkeletonRows } from "../common";
+import { SettingsAdvanced, SettingsRow, SettingsSection, SettingsSwitchRow } from "./SettingsLayout";
 
 const UNAVAILABLE_KEY: Record<Exclude<PushAvailability, "ready" | "needs-install">, string> = {
 	insecure: "web.push.insecure",
@@ -105,6 +110,8 @@ function NotificationsSection({ pwa }: { pwa: WebPwa }) {
 	);
 	const [loaded, setLoaded] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const [test, setTest] = useState<IpcPushTestResult | null>(null);
+	const [testing, setTesting] = useState(false);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -124,6 +131,14 @@ function NotificationsSection({ pwa }: { pwa: WebPwa }) {
 		void action()
 			.catch(error => toastError({ title: t("web.push.failed"), error }))
 			.finally(() => setBusy(false));
+	};
+
+	const sendTest = () => {
+		setTesting(true);
+		void window.omp.system
+			.testPush()
+			.then(setTest, () => setTest("failed"))
+			.finally(() => setTesting(false));
 	};
 
 	if (view.availability === "needs-install") {
@@ -164,15 +179,27 @@ function NotificationsSection({ pwa }: { pwa: WebPwa }) {
 					compactControl
 					control={
 						view.subscribed ? (
-							<Button
-								data-web-push-disable
-								loading={busy}
-								onClick={() => run(() => pwa.push.disable())}
-								size="sm"
-								variant="secondary"
-							>
-								{t("web.push.disable")}
-							</Button>
+							<span className="flex items-center gap-2.5 [--hit-gap-x:10px]">
+								<Button
+									data-web-push-test
+									icon={<Send />}
+									loading={testing}
+									onClick={sendTest}
+									size="sm"
+									variant="ghost"
+								>
+									{t("web.push.test")}
+								</Button>
+								<Button
+									data-web-push-disable
+									loading={busy}
+									onClick={() => run(() => pwa.push.disable())}
+									size="sm"
+									variant="secondary"
+								>
+									{t("web.push.disable")}
+								</Button>
+							</span>
 						) : (
 							<Button
 								data-web-push-enable
@@ -184,6 +211,20 @@ function NotificationsSection({ pwa }: { pwa: WebPwa }) {
 							>
 								{t("web.push.enable")}
 							</Button>
+						)
+					}
+					footer={
+						view.subscribed &&
+						test && (
+							<p
+								className={
+									test === "sent" ? "text-sc-sm text-(--sc-text-muted)" : "text-sc-sm text-(--sc-warning)"
+								}
+								data-web-push-test-result={test}
+								role="status"
+							>
+								{t(`web.push.test.${test}`)}
+							</p>
 						)
 					}
 					icon={<Bell />}
@@ -226,12 +267,58 @@ function NotificationsSection({ pwa }: { pwa: WebPwa }) {
 	);
 }
 
-/** The device's own notification and install controls (the web page's Settings › Mobile web). */
+const HELP_KEYS = [
+	"web.link.help.tailscale",
+	"web.link.help.network",
+	"web.link.help.ios",
+	"web.link.help.focus",
+] as const;
+
+/** This page's recent link events, newest first, and what to check when the link or notifications fail. */
+function ConnectionFold() {
+	const t = useT();
+	const events = useSyncExternalStore(linkLog.subscribe, linkLog.entries);
+	return (
+		<SettingsAdvanced label={t("web.link.title")}>
+			<div className="flex flex-col gap-3 text-sc-sm" data-web-link-log>
+				{events.length === 0 ? (
+					<p className="text-(--sc-text-muted)">{t("web.link.empty")}</p>
+				) : (
+					<ol className="flex flex-col gap-1">
+						{events.toReversed().map(event => (
+							<li data-link-event={event.kind} key={`${event.at}-${event.kind}-${event.detail ?? ""}`}>
+								<time
+									className="text-(--sc-text-muted) tabular-nums"
+									dateTime={new Date(event.at).toISOString()}
+								>
+									{new Date(event.at).toLocaleTimeString(uiLocale())}
+								</time>{" "}
+								{t(`web.link.${event.kind}`)}
+								{event.detail && <span className="text-(--sc-text-muted)"> · {event.detail}</span>}
+							</li>
+						))}
+					</ol>
+				)}
+				<div>
+					<SectionLabel as="div">{t("web.link.help")}</SectionLabel>
+					<ul className="list-disc ps-5 text-(--sc-text-secondary)">
+						{HELP_KEYS.map(key => (
+							<li key={key}>{t(key)}</li>
+						))}
+					</ul>
+				</div>
+			</div>
+		</SettingsAdvanced>
+	);
+}
+
+/** The device's own notification and install controls and its connection log (the web page's Settings › Mobile web). */
 export function WebNotificationsSection({ pwa }: { pwa: WebPwa }) {
 	return (
 		<div data-web-device-section>
 			<NotificationsSection pwa={pwa} />
 			<InstallSection pwa={pwa} />
+			<ConnectionFold />
 		</div>
 	);
 }

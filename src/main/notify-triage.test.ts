@@ -35,7 +35,7 @@ interface World {
 	shared: Set<string>;
 	clock: { now: number };
 	turns: Map<string, { cwd?: string; reply?: string }>;
-	notify: (callerArg: NotifyCaller, payload: IpcNotifyPayload) => Promise<void>;
+	notify: (callerArg: NotifyCaller, payload: IpcNotifyPayload) => Promise<boolean>;
 }
 
 function build(answer: BridgeAsk = async () => ({ needsUser: true })): World {

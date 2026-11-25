@@ -4,6 +4,7 @@ import {
 	AlertTriangle,
 	Archive,
 	ArchiveRestore,
+	BellOff,
 	type Bot,
 	CircleHelp,
 	Compass,
@@ -532,9 +533,11 @@ export function Sidebar() {
 		return standIns.length === 0 ? tabs : [...tabs, ...standIns];
 	}, [tabs, remoteOpened]);
 	const pinnedGroups = useSidebarPrefs(s => s.pinnedGroups);
+	const mutedGroups = useSidebarPrefs(s => s.mutedGroups);
 	const groupOrder = useSidebarPrefs(s => s.groupOrder);
 	const sessionOrder = useSidebarPrefs(s => s.sessionOrder);
 	const pinnedSessions = useSidebarPrefs(s => s.pinnedSessions);
+	const mutedSessions = useSidebarPrefs(s => s.mutedSessions);
 	const agentHidden = useSidebarPrefs(s => s.agentHidden);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
 	const archivedSessions = useSidebarPrefs(s => s.archivedSessions);
@@ -2023,6 +2026,15 @@ export function Sidebar() {
 											data-sidebar-group-pin
 										/>
 									)}
+									{mutedGroups.includes(group.cwd) && (
+										<BellOff
+											aria-label={t("sidebar.muted")}
+											className="size-3 shrink-0 text-(--sc-text-subtle)"
+											data-sidebar-group-muted
+										>
+											<title>{t("sidebar.muted")}</title>
+										</BellOff>
+									)}
 									{summary && <SidebarFoldSummary summary={summary} />}
 								</SidebarFoldButton>
 							)}
@@ -2419,6 +2431,7 @@ export function Sidebar() {
 							items={projectMenuItems({
 								facts: {
 									pinned: pinnedGroups.includes(group.cwd),
+									muted: mutedGroups.includes(group.cwd),
 									canMoveUp: index > 0,
 									canMoveDown: index !== -1 && index < allGroups.length - 1,
 									archivable: archivable.length,
@@ -2436,6 +2449,7 @@ export function Sidebar() {
 									moveUp: then(() => move(index - 1)),
 									moveDown: then(() => move(index + 1)),
 									togglePin: then(() => useSidebarPrefs.getState().toggleGroupPin(group.cwd)),
+									toggleMute: then(() => useSidebarPrefs.getState().toggleGroupMuted(group.cwd)),
 									archiveAll: then(() => setArchived(archivable, true)),
 									remove: then(() => setPendingDelete({ kind: "group", group })),
 								},
@@ -2465,9 +2479,11 @@ export function Sidebar() {
 							tabFocused: targetTab !== undefined && targetTab.id === activeTabId,
 							tabInSplit: targetTab !== undefined && split !== null && splitTabIds(split).includes(targetTab.id),
 							splitShown: split !== null,
+							unread: targetTab?.unreadDone === true,
 							canCloseTab: tabs.length > 1,
 							chat: session.kind === "chat",
 							pinned: pinnedSessions.includes(session.path),
+							muted: mutedSessions.includes(session.path),
 							archived: archivedIds.has(session.id),
 							agentHidden: agentHidden.includes(session.path),
 							canMoveUp: canMoveWithin(list, session.path, -1),
@@ -2484,6 +2500,7 @@ export function Sidebar() {
 												void useTabsStore.getState().splitTab(targetTab.id, placement);
 											})(),
 										unsplit: then(() => void useTabsStore.getState().unsplit(targetTab.id)),
+										markUnread: then(() => useTabsStore.getState().markUnread(targetTab.id)),
 										closeTab: then(() => performTabClose(targetTab)),
 									}
 								: {}),
@@ -2496,6 +2513,7 @@ export function Sidebar() {
 									if (!response.success) failed();
 								}, failed);
 							}),
+							toggleMute: then(() => void useSidebarPrefs.getState().toggleSessionMuted(session.path)),
 							...(list
 								? {
 										moveUp: then(() => void moveSession(session, -1)),
