@@ -28,9 +28,13 @@ export interface A2uiAnswer {
 	dataModel?: unknown;
 	[key: string]: unknown;
 }
+
 /** One `a2ui` tool call as the transcript holds it. */
 export interface A2uiCall {
+	/** The stock call id; providers may reuse one within a session. */
 	id: string;
+	/** Unique per call: the id for its first occurrence in transcript order, `<id>#<n>` for the n-th repeat. */
+	key: string;
 	/** The call's `messages` argument, as far as it arrived. */
 	messages: readonly unknown[];
 	/** Its arguments are still streaming: the last element may be cut off. */
@@ -67,12 +71,20 @@ export function a2uiCalls(
 ): A2uiCall[] {
 	const calls: A2uiCall[] = [];
 	const unanswered = new Map<string, number>();
+	const occurrences = new Map<string, number>();
+	const add = (id: string, args: Record<string, unknown>, isStreaming: boolean): number => {
+		const n = occurrences.get(id) ?? 0;
+		occurrences.set(id, n + 1);
+		const key = n === 0 ? id : `${id}#${n}`;
+		calls.push({ id, key, messages: messagesOf(args), streaming: isStreaming, refused: false });
+		return calls.length - 1;
+	};
 	for (const message of transcript) {
 		if (message.role === "assistant" && Array.isArray(message.content)) {
 			for (const block of message.content) {
-				if (block.type !== "toolCall" || block.name !== TOOL_NAME) continue;
-				unanswered.set(block.id, calls.length);
-				calls.push({ id: block.id, messages: messagesOf(block.arguments), streaming: false, refused: false });
+				if (block.type === "toolCall" && block.name === TOOL_NAME) {
+					unanswered.set(block.id, add(block.id, block.arguments, false));
+				}
 			}
 		} else if (message.role === "toolResult" && message.toolName === TOOL_NAME && message.toolCallId) {
 			const at = unanswered.get(message.toolCallId);
@@ -85,10 +97,9 @@ export function a2uiCalls(
 			else if (!message.isError && isObject(details?.action)) calls[at] = { ...call, answer: details.action };
 		}
 	}
-	const seen = new Set(calls.map(call => call.id));
+	// A streaming call whose id's newest transcript call is still unanswered is that call; otherwise it is a new one.
 	for (const call of streaming) {
-		if (!seen.has(call.id))
-			calls.push({ id: call.id, messages: messagesOf(call.args), streaming: true, refused: false });
+		if (!unanswered.has(call.id)) add(call.id, call.args, true);
 	}
 	return calls;
 }
@@ -161,17 +172,18 @@ export class A2uiSession {
 		return this.#processor.getSurface(surfaceId);
 	}
 
-	/** The newest call that touched the surface: the one card that draws it. */
+	/** The `key` of the newest call that touched the surface: the one card that draws it. */
 	owner(surfaceId: string): string | undefined {
 		return this.#owners.get(surfaceId);
 	}
 
-	call(callId: string): A2uiCallState | undefined {
-		return this.#calls.get(callId);
+	/** What the call with this `key` (`A2uiCall.key`) drew. */
+	call(key: string): A2uiCallState | undefined {
+		return this.#calls.get(key);
 	}
 
 	sync(calls: readonly A2uiCall[]): void {
-		const plan = calls.filter(call => !call.refused).map(call => ({ id: call.id, steps: stepsOf(call) }));
+		const plan = calls.filter(call => !call.refused).map(call => ({ id: call.key, steps: stepsOf(call) }));
 		const last = this.#applied.length - 1;
 		const grows =
 			this.#applied.length <= plan.length &&

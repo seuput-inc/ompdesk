@@ -13,7 +13,7 @@ const components = (list: Record<string, unknown>[], surfaceId = "s") =>
 
 function show(messages: unknown[]): A2uiSession {
 	const session = new A2uiSession("en-US");
-	session.sync([{ id: "call", messages, streaming: false, refused: false }]);
+	session.sync([{ id: "call", key: "call", messages, streaming: false, refused: false }]);
 	return session;
 }
 

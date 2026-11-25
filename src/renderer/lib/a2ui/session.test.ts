@@ -85,17 +85,14 @@ describe("a2uiCalls", () => {
 			assistant("c3", [{ broken: true }]),
 			result("c3", { errors: [{ code: "VALIDATION_FAILED", surfaceId: "x", path: "/", message: "bad" }] }, true),
 			assistant("c4", CHART),
-			result("c4", undefined, true),
+			result("c4", {}, true),
 		];
-		const calls = a2uiCalls(transcript, [
-			{ id: "c5", args: { messages: [] } },
-			{ id: "c4", args: {} },
-		]);
+		const calls = a2uiCalls(transcript, [{ id: "c5", args: { messages: [] } }]);
 		expect(calls.map(c => [c.id, c.refused, c.streaming, c.answer?.sourceComponentId])).toEqual([
 			["c1", false, false, undefined],
 			["c2", false, false, "send"],
 			["c3", true, false, undefined],
-			// A Stop throws: no details, so its card stays drawn.
+			// A Stop throws: stock reports `details: {}`, so its card stays drawn.
 			["c4", false, false, undefined],
 			["c5", false, true, undefined],
 		]);
@@ -108,7 +105,32 @@ describe("a2uiCalls", () => {
 			assistant("call_0", FORM),
 			result("call_0", { dismissed: true }),
 		]);
-		expect(calls.map(c => c.messages.length)).toEqual([2, 3]);
+		expect(calls.map(c => [c.key, c.messages.length])).toEqual([
+			["call_0", 2],
+			["call_0#1", 3],
+		]);
+	});
+
+	it("takes a streaming call for the transcript's unanswered call of its id, else for a new one", () => {
+		const answered = [assistant("call_0", CHART), result("call_0", { shown: ["chart"] })];
+		expect(a2uiCalls(answered, [{ id: "call_0", args: { messages: FORM } }]).map(c => [c.key, c.streaming])).toEqual([
+			["call_0", false],
+			["call_0#1", true],
+		]);
+		expect(a2uiCalls([assistant("call_0", CHART)], [{ id: "call_0", args: {} }]).map(c => c.key)).toEqual(["call_0"]);
+	});
+});
+
+describe("A2uiSession with a reused call id", () => {
+	it("keeps each call's surfaces apart and names the newest as the owner", () => {
+		const session = new A2uiSession("en-US");
+		const first = [assistant("call_0", CHART), result("call_0", { shown: ["chart"] })];
+		session.sync(a2uiCalls(first, [{ id: "call_0", args: { messages: [...FORM, {}] } }]));
+		expect(session.owner("contact")).toBe("call_0#1");
+		session.sync(a2uiCalls([...first, assistant("call_0", FORM)]));
+		expect([...(session.call("call_0")?.surfaces ?? [])]).toEqual(["chart"]);
+		expect([...(session.call("call_0#1")?.surfaces ?? [])]).toEqual(["contact"]);
+		expect([session.owner("chart"), session.owner("contact")]).toEqual(["call_0", "call_0#1"]);
 	});
 });
 
