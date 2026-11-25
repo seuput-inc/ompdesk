@@ -61,9 +61,9 @@ import { SavedWorktreeStore, setSavedWorktreeStore } from "../disk/saved-worktre
 import { gitSync, initRepo } from "../local/git/test-repos";
 import type { MachineServices } from "../machine-services";
 import { localDay } from "../omp-log-tail";
+import { PrefsStore } from "../prefs-store";
 import { RpcTimeoutError } from "../rpc-client";
 import { SessionSummaries, SUMMARY_DEBOUNCE_MS } from "../session-summaries";
-import { updateSidebarPrefs } from "../sidebar-prefs";
 import { SidebarProjects } from "../sidebar-projects";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import { setTurnStopLog } from "../turn-stop-log";
@@ -412,7 +412,7 @@ function setup(graceMs = 60_000, extra: Partial<HostServicesDeps> = {}) {
 		agentHidden: () => new Set(["/hidden/session.jsonl"]),
 		renameStoredSession,
 		defaultWorkspace: () => workDir,
-		launchProfiles: { get: () => undefined, set: () => {} },
+		launchProfiles: { launchProfile: () => ({}), updateLaunchProfile: () => ({}) },
 		machine,
 		localTabs: local.localTabs,
 		trashItem: async () => {},
@@ -4673,19 +4673,15 @@ describe("LocalHostServices host.* calls", () => {
 		const privateRow = { ...first, path: "/hidden.jsonl", id: "hidden-id" };
 		const a = first.path;
 		const b = second.path;
-		let stored: unknown = {
+		// The host's prefs file in the real core, which applies each layout change as the app's does.
+		const prefs = new PrefsStore<Record<string, unknown>>(join(workDir, "prefs.json"));
+		prefs.set("sidebar", {
 			pinnedGroups: ["other-device\nelsewhere"],
 			pinnedSessions: [privateRow.path],
 			archivedSessions: [privateRow.id, "stale-id"],
 			agentHidden: [privateRow.path],
 			sessionOrder: { [cwd]: [a, privateRow.path, b], elsewhere: [privateRow.path] },
-		};
-		const storage = {
-			get: () => stored,
-			set: (_key: string, value: unknown) => {
-				stored = value;
-			},
-		};
+		});
 		const list = new SidebarProjects({
 			read: () => undefined,
 			write: () => {},
@@ -4694,9 +4690,9 @@ describe("LocalHostServices host.* calls", () => {
 			projectOf: async path => path,
 			exists: async () => true,
 			layout: {
-				read: () => readSidebarPrefs(stored),
+				read: () => readSidebarPrefs(prefs.get("sidebar")),
 				write: change => {
-					updateSidebarPrefs(storage, change, "host", () => {});
+					prefs.updateSidebar(change, "host");
 				},
 			},
 			onState: state => services.sidebarProjectsChanged(state),
@@ -4720,7 +4716,7 @@ describe("LocalHostServices host.* calls", () => {
 		const ids = rows.map(row => row.id);
 		await command(x, { action: "layout", change: { op: "set-sessions-archived", ids, archived: true } });
 		const localPin = { op: "set-session-pinned", path: a, pinned: true } as const;
-		updateSidebarPrefs(storage, localPin, "window", () => {});
+		prefs.updateSidebar(localPin, "window");
 		list.layoutChanged();
 		const expected = {
 			pinnedGroups: [cwd],
@@ -4755,7 +4751,7 @@ describe("LocalHostServices host.* calls", () => {
 			),
 		).rejects.toThrow();
 		await command(y, { action: "layout", change: { op: "set-sessions-archived", ids, archived: false } });
-		expect(stored).toMatchObject({
+		expect(prefs.get("sidebar")).toMatchObject({
 			pinnedGroups: ["other-device\nelsewhere", cwd],
 			pinnedSessions: [privateRow.path, a],
 			archivedSessions: [privateRow.id, "stale-id"],

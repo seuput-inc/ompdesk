@@ -87,8 +87,8 @@ export interface LocalSidecarDeps {
 	creditSpendPref?: () => unknown;
 	/** The OMPdesk model-role picks file every omp on this machine shares. */
 	ompdeskRolesFile?: string;
-	/** The stored per-workspace launch profiles (`launchProfiles`), read per spawn. */
-	launchProfilesPref: () => unknown;
+	/** The flags the workspace's launch profile adds to a spawn in `cwd` (the core's `launchFlags`), read per spawn. */
+	launchFlags: (cwd: string) => string[];
 	/** Grace period a closed tab's omp gets to shut down by itself (ai-memory's session-end rides it); absent: none. */
 	gracefulStopMs?: () => number;
 	/**
@@ -252,7 +252,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			accountRotationLedger: deps.accountRotationLedger,
 			...(deps.creditSpendPref ? { creditSpend: () => creditSpendEnabled(deps.creditSpendPref?.()) } : {}),
 			...(deps.ompdeskRolesFile ? { ompdeskRolesFile: deps.ompdeskRolesFile } : {}),
-			launchProfiles: deps.launchProfilesPref,
+			launchFlags: deps.launchFlags,
 			...(deps.gracefulStopMs ? { gracefulStopMs: deps.gracefulStopMs } : {}),
 			...(deps.startQueue ? { startQueue: deps.startQueue } : {}),
 			...(deps.ledgerFile ? { ledgerFile: deps.ledgerFile } : {}),
