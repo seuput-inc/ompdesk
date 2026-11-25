@@ -411,7 +411,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // `stores/review-notes.ts`, the store and its localStorage list) and the composer takes handed text into a hidden tab's
 // store (`lib/composer-handoff.ts`); the transcript's Add to chat is lazy (`TranscriptQuote`): measured 2,215,498 (branch
 // run 45687946641), 3,139 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_215_578;
+// With main's queued-edit requeue (8c6217faf, b99ecc9af: the composer store's `editsRequeueing`) merged: measured
+// 2,215,938 (branch run 45699393025). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_216_018;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
