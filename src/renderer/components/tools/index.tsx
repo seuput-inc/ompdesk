@@ -273,7 +273,7 @@ const REGISTRY: Record<string, ComponentType<ToolRendererProps>> = {
 	reject: (props: ToolRendererProps) => <ResolveRenderer {...props} operation="reject" />,
 	think: ThinkRenderer,
 	yield: YieldRenderer,
-	a2ui: A2uiRenderer,
+	a2ui: A2uiChatCard,
 	...NOTE_DEVICES,
 };
 
@@ -290,28 +290,20 @@ function AgentDesktopRenderer(props: ToolRendererProps) {
 	);
 }
 
-// Its own chunk too: the A2UI engine (web_core, zod) and its views load with the first card that needs them.
-const a2uiChunk = () => import("./renderers/A2uiRenderer");
-const LazyA2uiRenderer = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiRenderer })));
-const LazyA2uiCard = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiCard })));
-/** While the chunk loads: a block in the card's place, never a spinner (no-loading-screens). */
-const A2UI_SKELETON = <Skeleton className="h-24 w-full" />;
+// Its own chunk too: the A2UI engine (web_core, zod) and its views load with the first card that needs them. One loader
+// for both places it draws, since what this file adds runs on the phone's first screen.
+const LazyA2uiCard = lazyChunk(() => import("./renderers/A2uiRenderer").then(module => ({ default: module.A2uiCard })));
 
-function A2uiRenderer(props: ToolRendererProps) {
-	return (
-		<Suspense fallback={A2UI_SKELETON}>
-			<LazyA2uiRenderer {...props} />
+/**
+ * An `a2ui` call's card: `live`, its own row in the chat under the work card (the one that may answer); otherwise the
+ * step's folded body, drawn inert. While the chunk loads, a block in the card's place, never a spinner.
+ */
+export function A2uiChatCard({ toolCallId, live }: { toolCallId?: string; live?: boolean }) {
+	return toolCallId ? (
+		<Suspense fallback={<Skeleton className="h-24 w-full" />}>
+			<LazyA2uiCard live={live} toolCallId={toolCallId} />
 		</Suspense>
-	);
-}
-
-/** An `a2ui` call's own row in the chat, under the work card that holds the turn's other steps. */
-export function A2uiChatCard({ toolCallId }: { toolCallId: string }) {
-	return (
-		<Suspense fallback={A2UI_SKELETON}>
-			<LazyA2uiCard toolCallId={toolCallId} />
-		</Suspense>
-	);
+	) : null;
 }
 
 export function getToolRenderer(name: string): ComponentType<ToolRendererProps> {

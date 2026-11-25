@@ -3,15 +3,14 @@
  * `a2ui` calls (`lib/a2ui/session.ts`); a call's card draws each surface it touched while it is the newest call that
  * touched it, and one line "Updated below" otherwise.
  *
- * The call's own chat row under the work card (`A2uiCard`, cut out by `buildHistoryRows`) is the one that may answer;
- * the step's folded body in the work card (`A2uiRenderer`, also the live card while the arguments stream) draws the
+ * The call's own chat row under the work card (`A2uiCard live`, cut out by `buildHistoryRows`) is the one that may answer;
+ * the step's folded body in the work card (the REGISTRY's `A2uiChatCard`, also the live card while the arguments stream) draws the
  * same surfaces inert, never a second answerable copy.
  */
 
 import { useA2uiSession } from "../../../lib/a2ui/use-session";
 import { SurfaceView } from "../../../lib/a2ui/views/SurfaceView";
 import { useT } from "../../../lib/i18n";
-import type { ToolRendererProps } from "../ToolCard";
 
 export function A2uiCard({ toolCallId, live = false }: { toolCallId: string; live?: boolean }) {
 	const t = useT();
@@ -40,8 +39,4 @@ export function A2uiCard({ toolCallId, live = false }: { toolCallId: string; liv
 			) : null}
 		</div>
 	);
-}
-
-export function A2uiRenderer({ toolCallId }: ToolRendererProps) {
-	return toolCallId ? <A2uiCard toolCallId={toolCallId} /> : null;
 }

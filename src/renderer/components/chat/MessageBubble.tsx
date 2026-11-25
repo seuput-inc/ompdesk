@@ -657,7 +657,7 @@ export const MessageBubble = memo(function MessageBubble({
 			case "toolCall": {
 				blocks.push(
 					block.name === A2UI_TOOL ? (
-						<A2uiChatCard key={toolEntryKey(block)} toolCallId={toolEntryKey(block)} />
+						<A2uiChatCard key={toolEntryKey(block)} live toolCallId={toolEntryKey(block)} />
 					) : (
 						<ToolCardWithResult key={toolEntryKey(block)} call={block} runningIndicator={runningIndicator} />
 					),
