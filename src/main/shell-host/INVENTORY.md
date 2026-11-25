@@ -24,9 +24,9 @@ frames; `electron/*.ts` has the shim. `electron-log` is a dependency nothing imp
 | `nativeImage` | `createFromPath`, `createFromDataURL`; `addRepresentation`, `setTemplateImage` |
 | `safeStorage` | `isEncryptionAvailable`, `encryptString`, `decryptString` |
 | `systemPreferences` | `getAnimationSettings` |
-| `autoUpdater` (native) | `on`, `emit` only: `electron-updater` listens to it, and `NsisUpdater`/`MacUpdater` in the modes main uses never call its Squirrel methods |
+| `autoUpdater` (native) | `on`, `emit` only; nothing in main listens since electron-updater left the app (U1, 25 Nov 2026) |
 | `electron-store` | `app.getPath("userData")`, `app.getVersion()`, `ipcMain.on("electron-store-get-data")`, `shell.openPath` |
-| `electron-updater` | `app.{getVersion,getName,isPackaged,getPath,getAppPath,whenReady,quit,relaunch,once("quit")}`, `process.resourcesPath`, `net.request` through `session.fromPartition("electron-updater")`, `shell.openPath`, `Notification` (unused here); `OmpNsisUpdater` replaces stock's `before-quit-for-update` + `app.quit()` with `installerQuitPending()`/`installerQuitReceipt()` (`app.quit` intents the shell orders) |
+| `electron-updater` | none since U1 (25 Nov 2026): the core reads the release and downloads the installer (`updateFeed.fetch`, `updateFeed.download`); `updater.ts` starts the Windows setup itself. `net.request` (and its `login`) has no caller left in main |
 | `process` | `resourcesPath` (defined by the shim from the facts), `versions.chrome` (CEF's), `versions.shell`, `versions.cef` |
 
 ## Made different, and what each call site does now

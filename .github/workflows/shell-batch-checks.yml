@@ -651,7 +651,7 @@ jobs:
           bun run gen:licenses
           bun run licenses:check
       - name: Check the packaging and automatic-update consumers
-        run: bunx vitest run src/main/packaging-config.test.ts src/main/update-compatibility.test.ts src/main/update-provider.test.ts src/main/update-release.test.ts src/main/updater-state.test.ts
+        run: bunx vitest run src/main/packaging-config.test.ts src/main/update-compatibility.test.ts src/main/update-lookup.test.ts src/main/update-release.test.ts src/main/updater-state.test.ts
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -4,6 +4,8 @@
  * nothing); only "Restart & install" installs it, with the start check. Any other staged version installs at a quit as
  * before (updater.ts `launchStagedSwap`).
  */
+
+import type * as ChildProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -12,22 +14,18 @@ import { NO_BACKGROUND_WORK } from "./background-work";
 import { MAIN_TEXT, type MainTextKey } from "./i18n-text";
 import { IpcRegistry } from "./web/ipc-registry";
 
+type ChildProcessModule = typeof ChildProcess;
+
 const mocks = vi.hoisted(() => ({
 	userData: { dir: "" },
 	appEvents: new Map<string, Array<() => void>>(),
 	forcedExit: [] as Array<() => void>,
 	spawned: [] as string[][],
 	runtimeLog: [] as Array<{ message: string; details: Record<string, unknown> }>,
-	updater: {
-		on: () => {},
-		setFeedURL: () => {},
-		autoInstallOnAppQuit: false,
-		autoDownload: false,
-	},
 }));
 
 vi.mock("node:child_process", async importOriginal => ({
-	...(await importOriginal<typeof import("node:child_process")>()),
+	...(await importOriginal<ChildProcessModule>()),
 	spawn: (_command: string, args: string[]) => {
 		mocks.spawned.push(args.slice(3));
 		return { unref: () => {} };
@@ -48,11 +46,8 @@ vi.mock("electron", () => ({
 	powerMonitor: { getSystemIdleTime: () => 0 },
 	shell: {},
 }));
-vi.mock("electron-updater", () => ({ default: { autoUpdater: mocks.updater } }));
-vi.mock("./nsis-updater", () => ({ OmpNsisUpdater: class {} }));
 vi.mock("./app-quit", () => ({
 	confirmUpdateRestart: async () => true,
-	disarmQuitWatchdog: () => {},
 	onQuitForcedExit: (listener: () => void) => mocks.forcedExit.push(listener),
 	logQuitAsked: () => {},
 	requestQuit: () => {},
@@ -70,7 +65,6 @@ vi.mock("./update-auth", () => ({
 	storeUpdateToken: async () => {},
 	updateAuthInfo: async () => ({}),
 }));
-vi.mock("./update-provider", () => ({ releaseUpdateProvider: () => ({}) }));
 
 const realPlatform = process.platform;
 const env = { ...process.env };
@@ -109,6 +103,7 @@ async function launch(staged: string, failed?: string) {
 		compacting: () => false,
 		opening: () => false,
 		backgroundWork: async () => NO_BACKGROUND_WORK,
+		proxy: async () => undefined,
 	});
 	const quit = () => {
 		for (const listener of mocks.appEvents.get("will-quit") ?? []) listener();

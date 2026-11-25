@@ -7,9 +7,6 @@ mod diagnostic_bundle_name;
 mod js_date;
 #[path = "../../src/launch_protection.rs"]
 mod launch_protection;
-#[allow(dead_code)]
-#[path = "../../../shell/src/launcher.rs"]
-mod launcher;
 #[path = "../../src/diagnostic_logs/log_tail.rs"]
 mod log_tail;
 #[path = "../../src/watchdog/marker.rs"]
@@ -44,7 +41,7 @@ fn main() -> io::Result<()> {
         let answer = match call["method"].as_str().unwrap() {
             method if method.starts_with("clipboard.") => clipboard.call(method, params),
             "app.admitNotification" => notify.admit(params).unwrap(),
-            method @ ("app.updateDestination" | "app.updateDigest" | "app.sweepUpdateFiles") => {
+            method @ ("app.updateDestination" | "app.sweepUpdateFiles") => {
                 let mut args = params.clone();
                 let directory = args.as_object_mut().unwrap().remove("directory").unwrap();
                 let dir = Path::new(directory.as_str().unwrap());

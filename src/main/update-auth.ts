@@ -20,7 +20,7 @@
  * saving a new one fails with the same reason.
  */
 
-import { net, safeStorage } from "electron";
+import { safeStorage } from "electron";
 import { codedError } from "../shared/ipc-error-codes";
 import type { UpdateAccess, UpdateAuthInfo, UpdateTokenSource } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
@@ -31,7 +31,8 @@ import { resolveLoginShellEnv } from "./shell-env";
 import { safeStorageUnavailableReason, updateHost } from "./shell-host/shell-calls";
 import { executableName } from "./spawn";
 import { scrubUpdateText } from "./update-log-core";
-import { classifyRepoAccess, firstUpdateToken, githubApiHeaders, type ResolvedUpdateToken } from "./updater-state";
+import { githubGet } from "./update-release";
+import { classifyRepoAccess, firstUpdateToken, type ResolvedUpdateToken } from "./updater-state";
 
 export const GITHUB_API_REPO = `https://api.github.com/repos/${PRODUCT_REPO}`;
 
@@ -109,17 +110,17 @@ export function resolveUpdateToken(): Promise<ResolvedUpdateToken | undefined> {
 	return firstUpdateToken(lookups);
 }
 
-/** Whether the release repo is readable with `token`, or anonymously without one. */
 /** The repository probe's deadline: a connection that never answers reads as a network failure. */
 const REPO_ACCESS_TIMEOUT_MS = 10_000;
 
+/** Whether the release repo is readable with `token`, or anonymously without one. */
 export async function checkRepoAccess(token: string | undefined): Promise<UpdateAccess> {
 	try {
-		const response = await net.fetch(GITHUB_API_REPO, {
-			headers: githubApiHeaders(token),
-			signal: AbortSignal.timeout(REPO_ACCESS_TIMEOUT_MS),
+		const answer = await githubGet(GITHUB_API_REPO, {
+			...(token ? { token } : {}),
+			timeoutMs: REPO_ACCESS_TIMEOUT_MS,
 		});
-		return classifyRepoAccess(response.status, response.headers.get("x-ratelimit-remaining") === "0");
+		return classifyRepoAccess(answer.status, answer.rateLimitRemaining === "0");
 	} catch {
 		return "network";
 	}

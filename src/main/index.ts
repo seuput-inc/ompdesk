@@ -2585,6 +2585,7 @@ app.whenReady().then(async () => {
 		// Running subagents and background jobs: `composer.jobs` of every omp whose run is on (background-work.ts).
 		backgroundWork: () =>
 			askBackgroundWork(() => [...sidecarPool.runningBridges(), ...hostServices.runningBridges()]),
+		proxy: async () => (await spawnProxy()).url,
 	});
 	// The first page loaded: the start mark a macOS update's swap helper waits for, then the previous install's report.
 	void firstWindowReady.then(noteAppStarted);

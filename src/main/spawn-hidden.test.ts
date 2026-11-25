@@ -17,6 +17,8 @@ const START = /(^|[^.\w#])(spawn|spawnSync|execFile|execFileSync|exec|execSync|f
 const WINDOWLESS: Record<string, string> = {
 	"src/main/installer-spawn.ts: workerData.command": "the NSIS setup, a window program whose own window must show",
 	"src/main/shell-env.ts: shell": "the login shell's environment, macOS and Linux only",
+	"src/main/updater.ts: command":
+		"the NSIS setup started at an approved quit (or elevate.exe, which asks UAC for it), as electron-updater started them",
 	'src/main/updater.ts: "/bin/bash"': "the relaunch swap, macOS only",
 	'src/main/power/lid-awake-runtime.ts: "/usr/bin/caffeinate"': "macOS only",
 };

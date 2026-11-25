@@ -13,7 +13,7 @@ pub(super) fn dispatch(call: Call) -> Option<Call> {
             tauri::async_runtime::spawn_blocking(move || stage(call));
         }
         #[cfg(target_os = "macos")]
-        "app.updateDestination" | "app.updateDigest" | "app.sweepUpdateFiles" => {
+        "app.updateDestination" | "app.sweepUpdateFiles" => {
             tauri::async_runtime::spawn_blocking(move || {
                 let host = runtime();
                 match crate::update_files::handle(

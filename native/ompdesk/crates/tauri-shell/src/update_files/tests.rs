@@ -7,7 +7,7 @@ use tempfile::tempdir;
 const ASSET: &str = "ompdesk-1.2.3-rc.4+build.5-arm64.dmg";
 
 #[test]
-fn transfer_uses_linked_downloads_but_never_follows_installer_links() {
+fn destination_uses_linked_downloads_but_never_follows_installer_links() {
     let tmp = tempdir().unwrap();
     let volume = tmp.path().join("volume");
     fs::create_dir(&volume).unwrap();
@@ -40,17 +40,6 @@ fn transfer_uses_linked_downloads_but_never_follows_installer_links() {
         json!([debris])
     );
     assert!(!volume.join(debris).exists());
-    let partial = root.join(format!("{chosen}.partial"));
-    fs::write(&partial, b"abc").unwrap();
-    let params = json!({"asset": chosen, "area": "downloads"});
-    assert_eq!(
-        handle("app.updateDigest", &params, root, root).unwrap(),
-        "3a81oZNherrMQXNJriBBMRLm+k6JqX6iCp7u5ktV05ohkpkqJ0/BqDa6PCOj/uu9RU1EI2Q86A4qmslPpUyknw=="
-    );
-    fs::remove_file(&partial).unwrap();
-    fs::write(root.join("other"), b"abc").unwrap();
-    symlink("other", partial).unwrap();
-    assert!(handle("app.updateDigest", &params, root, root).is_err());
 }
 
 #[test]
