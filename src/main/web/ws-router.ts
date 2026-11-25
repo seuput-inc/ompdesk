@@ -82,12 +82,8 @@ const HEAVY_CHANNELS: readonly string[] = [
 	IPC_COMMANDS.REMOTE_LIST_DIRS,
 ];
 
-/** Pushes for the desktop's own windows: a web window never gets them. */
-const DESKTOP_ONLY_PUSH: Readonly<Record<string, true>> = {
-	[WEB_DEVICES_CHANGED]: true,
-	[WEB_DEVICE_CONNECTED]: true,
-	[WEB_PAIRING_REQUEST]: true,
-};
+/** Pushes for the desktop's own windows: the core's router never sends them to a device. */
+const DESKTOP_ONLY_PUSH: readonly string[] = [WEB_DEVICES_CHANGED, WEB_DEVICE_CONNECTED, WEB_PAIRING_REQUEST];
 
 /** The caller of a web-only channel: who, and the window their pushes and tabs belong to. */
 export interface WebCallContext {
@@ -113,7 +109,7 @@ export interface WsRouterDeps {
 		send(channel: string, caller: IpcCaller, args: readonly unknown[]): void;
 	};
 	devices: Pick<WebDevices, "get">;
-	windows: Pick<WebWindows, "windowFor"> & { callerFor(deviceId: string, connId?: string): IpcCaller };
+	windows: Pick<WebWindows, "windowFor" | "all"> & { callerFor(deviceId: string, connId?: string): IpcCaller };
 	quota: Pick<PeerQuota, "reserve" | "record">;
 	webChannels: WebChannelTable;
 	features: () => WebFeatures;
@@ -144,6 +140,9 @@ export interface RouterConfig {
 		heavy: readonly string[];
 		prefsSet: string;
 		fileEditReport: string;
+		desktopOnly: readonly string[];
+		workspaceOnly: readonly string[];
+		tabList: string;
 	};
 	protocol: number;
 	features: WebFeatures;
@@ -244,19 +243,6 @@ function isCommandWithType(command: unknown): command is Parameters<typeof comma
 	return typeof command === "object" && command !== null && "type" in command && typeof command.type === "string";
 }
 
-/** The tab ids a `TAB_LIST_CHANGED` payload names, absent when it is not a list. */
-function listedTabs(payload: unknown): string[] | undefined {
-	if (typeof payload !== "object" || payload === null || !("tabs" in payload) || !Array.isArray(payload.tabs)) {
-		return undefined;
-	}
-	const ids: string[] = [];
-	for (const tab of payload.tabs as unknown[]) {
-		if (typeof tab === "object" && tab !== null && "tabId" in tab && typeof tab.tabId === "string")
-			ids.push(tab.tabId);
-	}
-	return ids;
-}
-
 /** An RPC response that reports failure: the request it reserved is given back. */
 function refused(result: unknown): boolean {
 	return typeof result === "object" && result !== null && "success" in result && result.success === false;
@@ -316,8 +302,6 @@ export class WsRouter {
 	readonly #drivers = new Map<string, string>();
 	/** A streamed push's data JSON, made once for every device that gets the pool's very push object. */
 	readonly #texts = new WeakMap<object, Uint8Array>();
-	/** Devices told of a push they had no connection for: until one connects, one word is all the core needs. */
-	readonly #unsent = new Set<string>();
 	readonly #pictures: PageImages;
 	/** The generation of the core whose router this host started in (`started`); 0 before the first start. */
 	#startedIn = 0;
@@ -349,6 +333,9 @@ export class WsRouter {
 				heavy: HEAVY_CHANNELS,
 				prefsSet: IPC_COMMANDS.PREFS_SET,
 				fileEditReport: IPC_COMMANDS.FILE_EDIT_REPORT,
+				desktopOnly: DESKTOP_ONLY_PUSH,
+				workspaceOnly: [SIDEBAR_PROJECTS_STATE, IPC_EVENTS.REMOTE_STATE],
+				tabList: IPC_EVENTS.TAB_LIST_CHANGED,
 			},
 			protocol: WEB_PROTOCOL_VERSION,
 			features: this.#deps.features(),
@@ -360,6 +347,15 @@ export class WsRouter {
 	/** The core of `generation` answered `web.start`: its router holds this host until that core ends. */
 	started(generation: number): void {
 		this.#startedIn = generation;
+		for (const win of this.#deps.windows.all()) this.noteWindow(win, true);
+	}
+
+	/** The core's router learns which device a window id is, for the pushes the core makes to it (`pages.rs`). */
+	noteWindow(win: WebClientWindow, alive: boolean): void {
+		if (!this.#open()) return;
+		const id = win.webContents.id;
+		const named = alive ? { win: id, host: this.host, device: win.deviceId } : { win: id };
+		core().push("web.window", named, undefined, this.#startedIn);
 	}
 
 	/** Whether the core running now is the one that started this host's router (a later core has not). */
@@ -400,22 +396,13 @@ export class WsRouter {
 		this.#deliver(deviceId, channel, payload);
 	}
 
+	/** What may reach the device and what it missed are the core router's rules; main writes the data once. */
 	#deliver(deviceId: string, channel: string, payload: unknown, page?: PageConnection): void {
-		const policy = Object.hasOwn(IPC_POLICY, channel) ? IPC_POLICY[channel as keyof typeof IPC_POLICY] : undefined;
-		if (policy?.dir !== "push" || policy.mode === "client" || Object.hasOwn(DESKTOP_ONLY_PUSH, channel)) return;
-		if (
-			(channel === SIDEBAR_PROJECTS_STATE || channel === IPC_EVENTS.REMOTE_STATE) &&
-			!this.#deps.devices.get(deviceId)?.grants.includes("workspace")
-		)
-			return;
 		if (!this.#open()) return;
-		const tabs = !page && channel === IPC_EVENTS.TAB_LIST_CHANGED ? listedTabs(payload) : undefined;
-		if (!this.#connections.has(deviceId)) {
-			// Counted, so a page that comes back is not told it missed nothing; its data would reach no socket.
-			const alreadyMissed = this.#unsent.has(deviceId);
-			if (alreadyMissed && !tabs) return;
-			this.#unsent.add(deviceId);
-			core().push("web.deliver", { host: this.host, device: deviceId, tabs, onlyTabs: alreadyMissed });
+		const message = { host: this.host, device: deviceId, connId: page?.connId, ch: channel };
+		// A stream to a device with no page only counts as missed there: no need to write it.
+		if (!page && !this.#connections.has(deviceId) && STREAM_CHANNELS.has(channel)) {
+			core().push("web.deliver", { ...message, missed: true });
 			return;
 		}
 		let data: Uint8Array | undefined;
@@ -426,10 +413,10 @@ export class WsRouter {
 					: payload;
 			data = this.#dataBytes(channel, pictured);
 		} catch {
-			if (tabs) core().push("web.deliver", { host: this.host, device: deviceId, tabs, onlyTabs: true });
+			core().push("web.deliver", { ...message, missed: true });
 			return;
 		}
-		core().push("web.deliver", { host: this.host, device: deviceId, connId: page?.connId, ch: channel, tabs }, data);
+		core().push("web.deliver", message, data);
 	}
 
 	/** `JSON.stringify(payload)`'s bytes; a stream's made once per push object. Throws as `JSON.stringify` does. */
@@ -465,7 +452,6 @@ export class WsRouter {
 	connections(event: ConnsEvent): void {
 		if (event.conns.length > 0) {
 			this.#connections.set(event.device, event.conns);
-			this.#unsent.delete(event.device);
 		} else {
 			this.#connections.delete(event.device);
 		}
@@ -486,7 +472,6 @@ export class WsRouter {
 
 	/** The core ended, and every page socket with it. */
 	coreExited(): void {
-		this.#unsent.clear();
 		const ended = [...this.#connections.keys()];
 		this.#connections.clear();
 		for (const deviceId of ended) this.#deps.onConnectionsChanged?.(deviceId);

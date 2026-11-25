@@ -401,7 +401,7 @@ in the other:
 
 | Method | Asks | Params | Result |
 |---|---|---|---|
-| `ipc.invoke` | shell→Node | `{wcId, frameUrl, channel, args}` | `{value}`; a handler's rejection is an error answer (`code "failed"`, `message` = the thrown message) and the page's promise rejects with `Error(message)` |
+| `ipc.invoke` | shell→Node | `{wcId, frameUrl, channel, args}` | `{value, after?}`; a handler's rejection is an error answer (`code "failed"`, `message` = the thrown message) and the page's promise rejects with `Error(message)`. Tauri: `after: {generation, pushed}` (C5) is the highest `pushed` main read from that core generation before answering; the shell removes it and resolves the page's call only once it admitted that push of the core's stdout (12a) into its outbox, or that core's stdout ended |
 | `ipc.send` (event) | shell→Node | `{wcId, frameUrl, channel, args}` | fire and forget |
 | `ipc.routes` | Node | `{invoke: string[], send: string[]}` | `{}` — Tauri: the channels main serves, once, before its first window; refused (`invalid`) when one is also native or on a second hand-over |
 | `ipc.call` | Node | `{channel, dir, args, caller: {key, window, connId}}` | `{value}` — Tauri: a native channel's call by one of main's callers (a paired page's connection, an agent); `args` and `value` carry `$bin`; refused (`invalid`) for a channel the shell does not serve |
@@ -431,6 +431,15 @@ ends it. Main speaks to the core over its own connection (`OMPDESK_CLIENTS`), ne
 | `core.stderr` (event) | shell→Node | `{generation, line}` | |
 | `core.ended` (event) | shell→Node | `{generation, code, signal}` | the process exited |
 | `core.gone` (event) | shell→Node | `{generation, empty}` | what is left of its process group was killed and is gone (`empty`), or 3 s passed |
+
+The core's stdout carries its desktop page pushes after its first line (C4): `{"event":"page.push","data":{win, ch,
+pushed},"bin":n}` then the push's argument as n bytes of JSON (the core's wire frame, `crates/core/src/wire.rs`).
+`win` is the window's webContents id, `ch` the `IPC_EVENTS` channel, `pushed` the push's number: 1, 2, 3 … per core
+generation, desktop pushes only (a paired page's push goes to the core's router and takes no number). The shell puts
+each into that id's current app document's outbox exactly as `wc.send` (a push for no live document is dropped) and
+counts it admitted either way; the end of the core's stdout ends its generation, which releases every `ipc.invoke`
+answer waiting on it (12). `ompdesk-core --own` writes each as its event `core.page {generation, win, ch, pushed,
+data}` instead. Other stdout frames are skipped.
 
 The shell ends every core it holds before it exits.
 

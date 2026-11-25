@@ -4,8 +4,12 @@
 //! web-only channels and the device's grants before main runs them.
 //!
 //! Main hands the router what its windows push to a device (`web.deliver {host, device, ch}` with the data's JSON as
-//! `bin`; with no `ch`, the device missed a push). With `connId`, only that live page can receive the push.
-//! Only device-wide `tabs` lists release pictures; `onlyTabs` skips counting another missed push.
+//! `bin`; `missed` when main wrote no data: a stream to a device with no page, or data it could not write). With
+//! `connId`, only that live page can receive the push. The router decides what a device may be pushed (`IPC_POLICY`'s
+//! push channels but the page's own and the desktop's, workspace state only with the `workspace` grant), counts what a
+//! device without a page missed, and releases pictures of tabs a device-wide `TAB_LIST_CHANGED` no longer lists. The
+//! core's own pushes to a device's window (`pages.rs`) take the same rules: main names each window's device
+//! (`web.window {win, host, device}`, `{win}` once it is gone).
 //! `web.diskFullState {host, files}` sends the aggregate file names to all pages of that host. Main answers a page's call
 //! (`web.reply {host, call, ok, e}` with the value's JSON as `bin`), says a resync was prepared (`web.resynced {host,
 //! conn}`) and closes a device's sockets (`web.closeDevice`). The router tells main which connections a device has and
@@ -488,6 +492,12 @@ struct Channels {
     disk_full: String,
     /// `FILE_EDIT_REPORT`, which the router answers itself (`file_edits.rs`).
     file_edit_report: String,
+    /// Pushes for the desktop's own windows: a device never gets them.
+    desktop_only: Vec<String>,
+    /// Pushes of the computer's workspace (its sidebar, its paired computers): only to a device with `workspace`.
+    workspace_only: Vec<String>,
+    /// `TAB_LIST_CHANGED`: a device-wide one releases the pictures of tabs it no longer lists.
+    tab_list: String,
 }
 
 /// What main hands the router at the start: the page protocol it speaks, the host's features,
@@ -668,6 +678,34 @@ pub(crate) fn unless_dirty<T>(
     let released = release();
     drop(state);
     released
+}
+
+/// Each paired device's window by its id (below zero, main's `WebWindows`): the host's router and the device.
+static WINDOWS: LazyLock<Mutex<HashMap<i64, (u64, String)>>> = LazyLock::new(Mutex::default);
+
+/// A push the core made to a paired device's window (`pages.rs`), under the rules of main's (`deliver_push`). A
+/// window main has not named, or whose router is gone, has no recipient.
+pub(crate) fn deliver_window(win: i64, ch: &str, text: Vec<u8>) {
+    let named = WINDOWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&win)
+        .cloned();
+    let Some((host, device)) = named else {
+        return;
+    };
+    let Some(router) = host_of(host) else {
+        return;
+    };
+    let params = DeliverParams {
+        host,
+        device,
+        conn_id: None,
+        ch: ch.to_owned(),
+        missed: false,
+    };
+    router.deliver_push(params, Some(text));
+    router.drain_test();
 }
 
 fn now_ms() -> i64 {
@@ -1010,7 +1048,54 @@ impl Host {
         }
     }
 
-    /// A push main made to the device's window; `None` when main sent no data because the device had no connection.
+    /// A push main made to the device's window (`ws-router.ts` `#deliver`'s rules until 25 Nov 2026): a push channel
+    /// that is neither the page's own (`client`) nor the desktop's, workspace state only with the `workspace` grant.
+    fn deliver_push(&self, params: DeliverParams, bin: Option<Vec<u8>>) {
+        let DeliverParams {
+            device,
+            conn_id,
+            ch,
+            missed,
+            ..
+        } = params;
+        let channels = &self.config.channels;
+        let pushable = self
+            .config
+            .policy
+            .get(&ch)
+            .is_some_and(|p| p.dir == Dir::Push && p.mode.as_deref() != Some("client"));
+        if !pushable || channels.desktop_only.contains(&ch) {
+            return;
+        }
+        if channels.workspace_only.contains(&ch)
+            && !self
+                .grants
+                .grants(&device)
+                .is_some_and(|grants| grants.iter().any(|g| g == "workspace"))
+        {
+            return;
+        }
+        let data = bin
+            .and_then(|bin| String::from_utf8(bin).ok())
+            .and_then(|text| RawValue::from_string(text).ok());
+        if conn_id.is_none()
+            && ch == channels.tab_list
+            && let Some(tabs) = data.as_deref().and_then(listed_tabs)
+        {
+            self.blobs.tabs_changed(&device, &tabs);
+        }
+        let pushed = (!missed).then(|| Pushed::new(ch, data));
+        match conn_id {
+            Some(conn_id) => {
+                if let Some(pushed) = &pushed {
+                    self.deliver_connection(&device, &conn_id, pushed);
+                }
+            }
+            None => self.deliver(&device, pushed),
+        }
+    }
+
+    /// A push to the device's pages; `None` when it missed it (main sent no data).
     fn deliver(&self, device: &str, pushed: Option<Arc<Pushed>>) {
         let mut state = self.state();
         *state.pushes.entry(device.to_owned()).or_insert(0) += 1;
@@ -1568,16 +1653,31 @@ struct DeliverParams {
     device: String,
     #[serde(default, deserialize_with = "connection_target")]
     conn_id: Option<String>,
+    ch: String,
+    /// Main sent no data: a stream to a device it holds no page of, or data it could not write.
     #[serde(default)]
-    ch: Option<String>,
-    tabs: Option<std::collections::HashSet<String>>,
-    #[serde(default)]
-    only_tabs: bool,
+    missed: bool,
 }
 
 // Only an absent connId means fanout. A present null or non-string must not widen the target.
 fn connection_target<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     String::deserialize(d).map(Some)
+}
+
+/// The tab ids a `TAB_LIST_CHANGED` payload names (`{tabs: [{tabId}]}`), none when it is not a list.
+fn listed_tabs(data: &RawValue) -> Option<std::collections::HashSet<String>> {
+    #[derive(Deserialize)]
+    struct Listed {
+        tabs: Vec<Value>,
+    }
+    let listed: Listed = serde_json::from_str(data.get()).ok()?;
+    Some(
+        listed
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.get("tabId")?.as_str().map(str::to_owned))
+            .collect(),
+    )
 }
 
 #[derive(Deserialize, serde::Serialize)]
@@ -1618,28 +1718,7 @@ fn deliver(push: PushCall) {
     let Some(host) = host_of(params.host) else {
         return;
     };
-    if params.conn_id.is_none()
-        && let Some(tabs) = &params.tabs
-    {
-        host.blobs.tabs_changed(&params.device, tabs);
-    }
-    if params.only_tabs {
-        return;
-    }
-    let pushed = params.ch.map(|ch| {
-        let data = push
-            .bin
-            .and_then(|bin| String::from_utf8(bin).ok())
-            .and_then(|text| RawValue::from_string(text).ok());
-        Pushed::new(ch, data)
-    });
-    if let Some(conn_id) = &params.conn_id {
-        if let Some(pushed) = &pushed {
-            host.deliver_connection(&params.device, conn_id, pushed);
-        }
-    } else {
-        host.deliver(&params.device, pushed);
-    }
+    host.deliver_push(params, push.bin);
     host.drain_test();
 }
 
@@ -1699,12 +1778,37 @@ fn close_device(push: PushCall) {
     }
 }
 
+#[derive(Deserialize)]
+struct WindowParams {
+    win: i64,
+    /// The host's router and the device; absent once main destroyed the window (the device was revoked).
+    host: Option<u64>,
+    device: Option<String>,
+}
+
+/// `web.window {win, host, device}`: main made a device's window; `{win}` alone: it is gone.
+fn window(push: PushCall) {
+    let Ok(params) = serde_json::from_str::<WindowParams>(push.params.get()) else {
+        return;
+    };
+    let mut windows = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    match (params.host, params.device) {
+        (Some(host), Some(device)) if params.win < 0 => {
+            windows.insert(params.win, (host, device));
+        }
+        _ => {
+            windows.remove(&params.win);
+        }
+    }
+}
+
 pub fn register(registry: &mut Registry) {
     registry.add_push("web.deliver", deliver);
     registry.add_push("web.diskFullState", disk_full);
     registry.add_push("web.reply", reply);
     registry.add_push("web.resynced", resynced);
     registry.add_push("web.closeDevice", close_device);
+    registry.add_push("web.window", window);
     test_hooks::register(registry);
 }
 
@@ -1937,9 +2041,23 @@ mod test_hooks {
         Reply::json(&result)
     }
 
+    /// `web.router.test.pageSend {wins, ch, data}`: a push the core makes itself (`pages.rs`), as the pool will.
+    async fn page_send(call: Call) -> Result<Reply, Fault> {
+        #[derive(Deserialize)]
+        struct PageSend {
+            wins: Vec<i64>,
+            ch: String,
+            data: Value,
+        }
+        let params: PageSend = call.params()?;
+        crate::pages::send(&params.wins, &params.ch, &params.data);
+        Reply::json(&Value::Null)
+    }
+
     pub(super) fn register(registry: &mut Registry) {
         registry.add("web.router.test.open", |call| Box::pin(open(call)));
         registry.add("web.router.test", |call| Box::pin(op(call)));
+        registry.add("web.router.test.pageSend", |call| Box::pin(page_send(call)));
     }
 }
 

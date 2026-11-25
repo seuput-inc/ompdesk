@@ -586,6 +586,12 @@ export class CoreProcess {
 			this.#cores.delete(generation);
 			core.gone.resolve(empty === true);
 		});
+		// Where no shell is (`--own`), a core's pushes to desktop windows (`pages.rs`) come here, as the event
+		// `page.push {win, ch, pushed, data}` of that core.
+		owner.on("core.page", data => {
+			const { generation, ...push } = data as { generation: number };
+			for (const listener of this.#listeners.get("page.push") ?? []) listener(push, null, generation);
+		});
 	}
 
 	#start(): Running {

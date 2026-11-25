@@ -537,6 +537,7 @@ export class SidecarPool {
 					layoutVersion: TAB_LAYOUT_VERSION,
 					maxFormerTabIds: MAX_FORMER_TAB_IDS,
 					stopSessionWaitMs: STOP_SESSION_WAIT_MS,
+					channels: IPC_EVENTS,
 				},
 				{
 					item: item => this.#item(item),
