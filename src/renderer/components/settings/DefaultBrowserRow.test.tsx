@@ -74,24 +74,15 @@ async function choose(value: string): Promise<void> {
 const options = () => Array.from(field().querySelectorAll("option")).map(option => option.value);
 const labels = () => Array.from(field().querySelectorAll("option")).map(option => option.textContent);
 const text = () => document.body.textContent ?? "";
-const installButton = () => document.body.querySelector("[data-default-browser-relay-missing] button");
+const installButton = () => document.body.querySelector("[data-default-browser-unverified] button");
 
-const chrome = (relayInstalled: boolean, relayConnected = false) => ({
-	id: "chrome" as const,
-	name: "Google Chrome",
-	relayInstalled,
-	relayConnected,
-});
-const brave = (relayInstalled: boolean) => ({
-	id: "brave" as const,
-	name: "Brave",
-	relayInstalled,
-	relayConnected: false,
-});
+const chrome = { id: "chrome" as const, name: "Google Chrome" };
+const brave = { id: "brave" as const, name: "Brave" };
+const edge = { id: "edge" as const, name: "Microsoft Edge" };
 
 beforeEach(() => {
 	stored = undefined;
-	status = { auto: { kind: "builtin" }, egoInstalled: false, browsers: [] };
+	status = { auto: { kind: "builtin" }, egoInstalled: false, browsers: [], nativeHostBrowsers: ["chrome", "brave"] };
 });
 
 afterEach(async () => {
@@ -108,7 +99,7 @@ afterEach(async () => {
 
 describe("DefaultBrowserRow", () => {
 	it("offers automatic, ego-browser, each browser found and built-in", async () => {
-		status = { auto: { kind: "ego" }, egoInstalled: true, browsers: [chrome(false), brave(true)] };
+		status = { ...status, auto: { kind: "ego" }, egoInstalled: true, browsers: [chrome, brave] };
 		await mount();
 		expect(options()).toEqual(["auto", "ego", "chromium:chrome", "chromium:brave", "builtin"]);
 		expect(field().value).toBe("auto");
@@ -118,12 +109,11 @@ describe("DefaultBrowserRow", () => {
 
 	it.each([
 		[{ kind: "ego" }, "ego-browser"],
-		[{ kind: "relay", name: "Brave", url: "http://127.0.0.1:9233" }, "Brave"],
 		[{ kind: "builtin" }, translate("settings.gui.defaultBrowser.builtin")],
 	] satisfies [AgentBrowserStatus["auto"], string][])(
 		"labels Automatic with the core's %j pick",
 		async (auto, browser) => {
-			status = { auto, egoInstalled: true, browsers: [chrome(true)] };
+			status = { ...status, auto, egoInstalled: true, browsers: [chrome] };
 			await mount();
 			expect(labels()[0]).toBe(translate("settings.gui.defaultBrowser.autoResolved", { browser }));
 		},
@@ -137,7 +127,7 @@ describe("DefaultBrowserRow", () => {
 	});
 
 	it("saves a Chromium pick, and refuses a value outside the list", async () => {
-		status.browsers = [chrome(true)];
+		status.browsers = [chrome];
 		await mount();
 		await choose("chromium:chrome");
 		expect(prefs.set).toHaveBeenCalledWith("defaultBrowser", "chromium:chrome");
@@ -146,20 +136,23 @@ describe("DefaultBrowserRow", () => {
 		expect(prefs.set).toHaveBeenCalledTimes(1);
 	});
 
-	it("keeps a stored pick whose browser is gone, saying it is not installed", async () => {
+	it("keeps a stored pick whose browser is gone, saying it is not installed and cannot be used", async () => {
 		stored = "chromium:brave";
-		status.browsers = [chrome(true)];
+		status.browsers = [chrome];
 		await mount();
 		expect(field().value).toBe("chromium:brave");
 		expect(labels()).toContain(translate("settings.gui.defaultBrowser.notInstalled", { name: "Brave" }));
-		expect(text()).toContain(translate("settings.gui.defaultBrowserBrowserMissing", { name: "Brave" }));
+		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayUnverified", { name: "Brave" }));
+		expect(installButton()).toBeNull();
 	});
 
-	it("asks to install the extension for a pick without it, and runs the install", async () => {
+	it("says a picked browser cannot be verified, keeps the pick, and offers its extension install", async () => {
 		stored = "chromium:chrome";
-		status.browsers = [chrome(false)];
+		status.browsers = [chrome];
 		await mount();
-		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayMissing", { name: "Google Chrome" }));
+		expect(field().value).toBe("chromium:chrome");
+		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayUnverified", { name: "Google Chrome" }));
+		expect(prefs.set).not.toHaveBeenCalled();
 		const button = installButton();
 		expect(button?.textContent).toBe(translate("settings.gui.defaultBrowserInstall"));
 		await act(async () => reactProps(button as Element).onClick?.());
@@ -169,9 +162,17 @@ describe("DefaultBrowserRow", () => {
 		expect(toast?.title).toBe(translate("settings.gui.defaultBrowserStepsTitle", { name: "Google Chrome" }));
 	});
 
+	it("offers no install for a browser stock registers no native host for", async () => {
+		stored = "chromium:edge";
+		status.browsers = [edge];
+		await mount();
+		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayUnverified", { name: "Microsoft Edge" }));
+		expect(installButton()).toBeNull();
+	});
+
 	it("toasts when the install fails", async () => {
 		stored = "chromium:chrome";
-		status.browsers = [chrome(false)];
+		status.browsers = [chrome];
 		prefs.installBrowserRelay.mockRejectedValueOnce(new Error("omp missing"));
 		await mount();
 		await act(async () => reactProps(installButton() as Element).onClick?.());
@@ -180,50 +181,22 @@ describe("DefaultBrowserRow", () => {
 		);
 	});
 
-	it("shows no note for a pick that has the extension, or for automatic and built-in", async () => {
-		stored = "chromium:chrome";
-		status.browsers = [chrome(true)];
+	it("shows no note for automatic and built-in", async () => {
+		status.browsers = [chrome];
 		await mount();
-		expect(installButton()).toBeNull();
-		expect(text()).not.toContain(translate("settings.gui.defaultBrowserBrowserMissing", { name: "Google Chrome" }));
 		await choose("builtin");
 		expect(installButton()).toBeNull();
 		await choose("auto");
 		expect(installButton()).toBeNull();
+		expect(text()).not.toContain(translate("settings.gui.defaultBrowserRelayUnverified", { name: "Google Chrome" }));
 	});
 
-	it("keeps an unverified profile selected without claiming its old extension is connected", async () => {
-		stored = "chromium:chrome";
-		status = { ...status, browsers: [chrome(true, true)], nativeHostBrowsers: ["chrome"] };
+	it("looks again when the window regains focus, so a browser installed meanwhile is listed", async () => {
 		await mount();
-		expect(field().value).toBe("chromium:chrome");
-		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayUnverified", { name: "Google Chrome" }));
-		expect(text()).not.toContain(translate("settings.gui.defaultBrowserRelayConnected", { name: "Google Chrome" }));
-		expect(prefs.set).not.toHaveBeenCalled();
-	});
-
-	it("tells a pick with its extension whether it is connected, and to open the browser when it is not", async () => {
-		stored = "chromium:chrome";
-		status.browsers = [chrome(true, true)];
-		await mount();
-		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayConnected", { name: "Google Chrome" }));
-		await act(async () => {
-			roots.pop()?.unmount();
-		});
-		status.browsers = [chrome(true, false)];
-		await mount();
-		expect(text()).toContain(translate("settings.gui.defaultBrowserRelayWaiting", { name: "Google Chrome" }));
-		expect(text()).not.toContain(translate("settings.gui.defaultBrowserRelayConnected", { name: "Google Chrome" }));
-	});
-
-	it("looks again when the window regains focus, so the note goes once the extension is loaded", async () => {
-		stored = "chromium:chrome";
-		status.browsers = [chrome(false)];
-		await mount();
-		expect(installButton()).not.toBeNull();
+		expect(options()).not.toContain("chromium:chrome");
 		const probes = prefs.defaultBrowserStatus.mock.calls.length;
 
-		status = { ...status, browsers: [chrome(true)] };
+		status = { ...status, browsers: [chrome] };
 		await act(async () => {
 			window.dispatchEvent(new Event("focus"));
 		});
@@ -231,6 +204,6 @@ describe("DefaultBrowserRow", () => {
 			await Promise.resolve();
 		});
 		expect(prefs.defaultBrowserStatus.mock.calls.length).toBe(probes + 1);
-		expect(installButton()).toBeNull();
+		expect(options()).toContain("chromium:chrome");
 	});
 });

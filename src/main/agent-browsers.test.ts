@@ -1,9 +1,7 @@
 /**
- * Which Chromium browsers this computer has and whether each one's own copy of the omp Browser Relay extension is
- * loaded in one of its profiles, over a temp HOME with fake bundles and preference files; and the install that binds
- * a copy to its browser's own relay port. Every case runs through the core process
- * (`native/ompdesk/crates/core/src/browsers/`): the relays are loopback servers of this test and omp is a stand-in
- * executable the core runs. Binding the port alone is a Rust table (`browsers/captured.json`).
+ * Which Chromium browsers this computer has, over a temp HOME with fake bundles; the status snapshot and its
+ * automatic choice; and the extension install. Every case runs through the core process
+ * (`native/ompdesk/crates/core/src/browsers/`): omp is a stand-in executable the core runs.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -18,17 +16,10 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	type AgentBrowserStatus,
-	CHROMIUM_BROWSER_IDS,
-	CHROMIUM_BROWSER_NAMES,
-	type ChromiumBrowserId,
-} from "../shared/default-browser";
+import { type AgentBrowserStatus, CHROMIUM_BROWSER_IDS, CHROMIUM_BROWSER_NAMES } from "../shared/default-browser";
 import { type BrowserPlaces, findChromiumBrowsers, installRelayExtension, resolveEgoBrowser } from "./agent-browsers";
 import * as coreProcess from "./core/process";
 import type { OmpRuntime } from "./local/types";
@@ -39,7 +30,6 @@ import { OMP_COMMAND, stockSource } from "./test-bridge-probe";
 const { CoreProcess } = coreProcess;
 let root: string;
 let home: string;
-const servers: Server[] = [];
 
 function place(path: string, content?: string): void {
 	if (content === undefined) {
@@ -59,54 +49,18 @@ const mac = (): BrowserPlaces => ({
 });
 
 const support = (...parts: string[]) => join(home, "Library", "Application Support", ...parts);
-const prefsNaming = (dir: string) => JSON.stringify({ extensions: { settings: { abc: { path: dir } } } });
-/** Where `id`'s own copy lives, as a profile records loading it. */
-const relayExtensionDir = (id: ChromiumBrowserId) => join(home, ".omp", "browser-relay", `extension-${id}`);
+/** Where `id`'s own copy lives. */
+const relayExtensionDir = (id: string) => join(home, ".omp", "browser-relay", `extension-${id}`);
+const NATIVE = ["chrome", "brave", "chromium"] as const;
 
-/** A loopback relay answering `/json/version` with `status`; `asked` counts the asks. */
-async function relay(status: number | (() => number)): Promise<{ port: number; asked: () => number }> {
-	let asked = 0;
-	const server = createServer((request, response) => {
-		if (request.url === "/json/version") asked += 1;
-		response.writeHead(typeof status === "number" ? status : status()).end("{}");
-	});
-	servers.push(server);
-	const { promise, resolve } = Promise.withResolvers<void>();
-	server.listen(0, "127.0.0.1", resolve);
-	await promise;
-	return { port: (server.address() as AddressInfo).port, asked: () => asked };
-}
-
-/** Every browser's relay port at one relay still waiting for its extension (503): never connected. */
-async function waiting(): Promise<Record<ChromiumBrowserId, number>> {
-	const { port } = await relay(503);
-	return Object.fromEntries(CHROMIUM_BROWSER_IDS.map(id => [id, port])) as Record<ChromiumBrowserId, number>;
-}
-
-async function readStatus(
-	host: coreProcess.CoreProcess,
-	places: BrowserPlaces,
-	ports: Record<ChromiumBrowserId, number>,
-	refresh: boolean,
-	nativeHostBrowsers?: readonly ChromiumBrowserId[],
-) {
-	const browsers = CHROMIUM_BROWSER_IDS.map(id => ({ id, name: CHROMIUM_BROWSER_NAMES[id], port: ports[id] }));
+async function readStatus(host: coreProcess.CoreProcess, places: BrowserPlaces, refresh: boolean) {
+	const browsers = CHROMIUM_BROWSER_IDS.map(id => ({ id, name: CHROMIUM_BROWSER_NAMES[id] }));
 	return (
 		await host.call<{ status: AgentBrowserStatus; changed: boolean }>("browsers.status", {
-			nativeHostBrowsers,
+			nativeHostBrowsers: NATIVE,
 			probe: { places, browsers, ego: { pathEnv: root, home: places.home, cwd: root }, refresh },
 		})
 	).result;
-}
-
-async function detectChromiumBrowsers(places: BrowserPlaces, ports: Record<ChromiumBrowserId, number>) {
-	return (await readStatus(coreProcess.core(), places, ports, true)).status.browsers;
-}
-
-/** Whether `id`, installed in `places`, has a profile that loaded its own copy. */
-async function loaded(id: ChromiumBrowserId, places: BrowserPlaces = mac()): Promise<boolean> {
-	const browsers = await detectChromiumBrowsers(places, await waiting());
-	return browsers.find(browser => browser.id === id)?.relayInstalled ?? false;
 }
 
 beforeEach(() => {
@@ -115,7 +69,6 @@ beforeEach(() => {
 	mkdirSync(home, { recursive: true });
 });
 afterEach(() => {
-	for (const server of servers.splice(0)) server.close();
 	rmSync(root, { recursive: true, force: true });
 });
 
@@ -241,174 +194,53 @@ describe("findChromiumBrowsers", () => {
 	});
 });
 
-describe("relay extension detection", () => {
-	it("keys the extension by browser: each browser needs a profile naming its own folder", async () => {
-		place(join(root, "Applications", "Google Chrome.app"));
-		place(join(root, "Applications", "Microsoft Edge.app"));
-		place(join(root, "Applications", "Brave Browser.app"));
-		place(join(support("Google", "Chrome"), "Default", "Preferences"), prefsNaming(relayExtensionDir("chrome")));
-		// Edge loaded Chrome's copy, Brave loaded the old shared folder: neither is its own copy.
-		place(join(support("Microsoft Edge"), "Default", "Preferences"), prefsNaming(relayExtensionDir("chrome")));
-		place(
-			join(support("BraveSoftware", "Brave-Browser"), "Default", "Preferences"),
-			prefsNaming(join(home, ".omp", "browser-relay", "extension")),
-		);
-		expect(await detectChromiumBrowsers(mac(), await waiting())).toEqual([
-			{ id: "chrome", name: "Google Chrome", relayInstalled: true, relayConnected: false },
-			{ id: "edge", name: "Microsoft Edge", relayInstalled: false, relayConnected: false },
-			{ id: "brave", name: "Brave", relayInstalled: false, relayConnected: false },
-		]);
-	});
-
-	it("does not take Chrome's folder for Chromium's, whose name begins with it", async () => {
-		place(join(root, "Applications", "Google Chrome.app"));
-		const data = support("Google", "Chrome");
-		place(join(data, "Default", "Preferences"), prefsNaming(relayExtensionDir("chromium")));
-		expect(await loaded("chrome")).toBe(false);
-		place(join(data, "Default", "Secure Preferences"), prefsNaming(relayExtensionDir("chrome")));
-		expect(await loaded("chrome")).toBe(true);
-	});
-
-	it("probes the connection of an installed copy at its own port, and only of an installed one", async () => {
-		place(join(root, "Applications", "Google Chrome.app"));
-		place(join(root, "Applications", "Microsoft Edge.app"));
-		place(join(support("Google", "Chrome"), "Default", "Preferences"), prefsNaming(relayExtensionDir("chrome")));
-		const chrome = await relay(200);
-		const others = await relay(200);
-		const ports = { ...(await waiting()), edge: others.port, brave: others.port, chrome: chrome.port };
-		const browsers = await detectChromiumBrowsers(mac(), ports);
-		expect([chrome.asked(), others.asked()]).toEqual([1, 0]);
-		expect(browsers.map(browser => [browser.id, browser.relayInstalled, browser.relayConnected])).toEqual([
-			["chrome", true, true],
-			["edge", false, false],
-		]);
-	});
-
-	it("is not installed without any profile files", async () => {
-		place(join(root, "Applications", "Google Chrome.app"));
-		expect(await detectChromiumBrowsers(mac(), await waiting())).toEqual([
-			{ id: "chrome", name: "Google Chrome", relayInstalled: false, relayConnected: false },
-		]);
-	});
-
-	it("reads the profiles Local State lists, and Secure Preferences too", async () => {
-		place(join(root, "Applications", "Google Chrome.app"));
-		const data = support("Google", "Chrome");
-		place(join(data, "Local State"), JSON.stringify({ profile: { info_cache: { Default: {}, "Profile 2": {} } } }));
-		place(join(data, "Default", "Preferences"), "{}");
-		place(join(data, "Profile 2", "Secure Preferences"), prefsNaming(relayExtensionDir("chrome")));
-		expect(await loaded("chrome")).toBe(true);
-	});
-
-	it("looks in Default when Local State is missing or has no profile list, and ignores profiles it does not list", async () => {
-		place(join(root, "Applications", "Google Chrome.app"));
-		place(join(root, "Applications", "Brave Browser.app"));
-		const data = support("Google", "Chrome");
-		place(join(data, "Local State"), "not json");
-		place(join(data, "Default", "Preferences"), relayExtensionDir("chrome"));
-		expect(await loaded("chrome")).toBe(true);
-
-		const other = support("BraveSoftware", "Brave-Browser");
-		place(join(other, "Local State"), JSON.stringify({ profile: { info_cache: { Default: {} } } }));
-		place(join(other, "Default", "Preferences"), "{}");
-		place(join(other, "Profile 9", "Preferences"), relayExtensionDir("brave"));
-		expect(await loaded("brave")).toBe(false);
-	});
-
-	it("matches a Windows path as JSON escapes it", async () => {
-		// The core joins with this host's separator: on Windows the folder holds `\`, which the file escapes.
-		const localAppData = join(root, "Local");
-		const programFiles = join(root, "Program Files");
-		place(join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"), "");
-		place(
-			join(localAppData, "Microsoft", "Edge", "User Data", "Default", "Preferences"),
-			JSON.stringify({ path: relayExtensionDir("edge") }),
-		);
-		const places: BrowserPlaces = { platform: "win32", home, appDirs: [], programDirs: [programFiles], localAppData };
-		expect(await loaded("edge", places)).toBe(true);
-	});
-});
-
 describe("browsers.status", () => {
-	it("shares the first probe and reports binding changes, not connection changes", async () => {
+	it("shares the first probe, lists the installed browsers and reports a change of what is installed", async () => {
 		const host = new CoreProcess({ binary: () => nativeBinPath("ompdesk-core"), log: () => {} });
 		try {
-			let code = 503;
-			const chrome = await relay(() => code);
-			const ports = { ...(await waiting()), chrome: chrome.port };
-			const read = (refresh = false) => readStatus(host, mac(), ports, refresh);
-			expect((await host.call("browsers.status", {})).result).toBeNull();
+			const read = (refresh = false) => readStatus(host, mac(), refresh);
+			expect((await host.call("browsers.status", { nativeHostBrowsers: NATIVE })).result).toBeNull();
 			place(join(root, "Applications", "Google Chrome.app"));
-			place(join(support("Google", "Chrome"), "Default", "Preferences"), prefsNaming(relayExtensionDir("chrome")));
 			const first = await Promise.all([read(), read()]);
 			expect(first[0]).toEqual(first[1]);
 			expect(first[0]).toEqual({
 				changed: false,
 				status: {
-					auto: { kind: "relay", name: "Google Chrome", url: `http://127.0.0.1:${chrome.port}` },
+					auto: { kind: "builtin" },
 					egoInstalled: false,
-					browsers: [{ id: "chrome", name: "Google Chrome", relayInstalled: true, relayConnected: false }],
+					browsers: [{ id: "chrome", name: "Google Chrome" }],
+					nativeHostBrowsers: NATIVE,
 				},
 			});
-			expect((await host.call("browsers.status", {})).result).toEqual(first[0]);
-			expect(chrome.asked()).toBe(1);
-
-			code = 200;
-			expect(await read()).toEqual(first[0]);
-			expect(chrome.asked()).toBe(1);
-			const connected = await read(true);
-			expect(connected.changed).toBe(false);
-			expect(connected.status.browsers[0]?.relayConnected).toBe(true);
+			expect((await host.call("browsers.status", { nativeHostBrowsers: NATIVE })).result).toEqual(first[0]);
+			expect((await read(true)).changed).toBe(false);
 
 			place(join(root, "Applications", "Microsoft Edge.app"));
-			expect((await read(true)).changed).toBe(true);
-			place(join(support("Microsoft Edge"), "Default", "Preferences"), prefsNaming(relayExtensionDir("edge")));
-			const edgeLoaded = await read(true);
-			expect(edgeLoaded.changed).toBe(true);
-			expect(edgeLoaded.status.auto).toEqual(connected.status.auto);
-			expect(edgeLoaded.status.browsers[1]?.relayInstalled).toBe(true);
+			const edge = await read(true);
+			expect(edge.changed).toBe(true);
+			expect(edge.status.browsers.map(browser => browser.id)).toEqual(["chrome", "edge"]);
 			expect((await read(true)).changed).toBe(false);
 		} finally {
 			await host.stop();
 		}
 	});
 
-	it("invalidates the cache on relay mode changes and shares ego discovery with explicit lookup", async () => {
+	it("invalidates the cache on another native-host list and shares ego discovery with explicit lookup", async () => {
 		const host = new CoreProcess({ binary: () => nativeBinPath("ompdesk-core"), log: () => {} });
 		try {
-			const chrome = await relay(200);
-			const ports = { ...(await waiting()), chrome: chrome.port };
-			const native = ["chrome", "brave", "chromium"] as const;
-			const read = (refresh: boolean, ids?: readonly ChromiumBrowserId[]) =>
-				readStatus(host, mac(), ports, refresh, ids);
 			place(join(root, "Applications", "Google Chrome.app"));
-			place(join(support("Google", "Chrome"), "Default", "Preferences"), prefsNaming(relayExtensionDir("chrome")));
-			expect((await read(true)).changed).toBe(false);
-			expect((await host.call("browsers.status", { nativeHostBrowsers: native })).result).toBeNull();
-			const switched = await read(false, native);
-			expect(switched).toEqual({
-				changed: true,
-				status: {
-					auto: { kind: "builtin" },
-					egoInstalled: false,
-					browsers: [{ id: "chrome", name: "Google Chrome", relayInstalled: true, relayConnected: false }],
-					nativeHostBrowsers: native,
-				},
-			});
-			expect(chrome.asked()).toBe(1);
-			expect((await read(true, native)).changed).toBe(false);
-			expect(chrome.asked()).toBe(1);
+			expect((await readStatus(host, mac(), true)).changed).toBe(false);
+			expect((await host.call("browsers.status", { nativeHostBrowsers: ["chrome"] })).result).toBeNull();
 
 			const bin = join(home, ".local", "bin", "ego-browser");
 			place(bin, "");
 			chmodSync(bin, 0o755);
-			expect((await read(false, native)).status.egoInstalled).toBe(false);
-			const refreshed = await read(true, native);
+			expect((await readStatus(host, mac(), false)).status.egoInstalled).toBe(false);
+			const refreshed = await readStatus(host, mac(), true);
 			expect(refreshed.changed).toBe(true);
 			expect(refreshed.status.auto).toEqual({ kind: "ego" });
 			expect(refreshed.status.egoInstalled).toBe(true);
 			expect((await host.call("browsers.cachedEgo", {})).result).toBe(bin);
-			expect((await read(false)).status.auto).toEqual({ kind: "ego" });
 		} finally {
 			await host.stop();
 		}
