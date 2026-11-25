@@ -1317,7 +1317,11 @@ export const SURFACES: readonly Surface[] = [
 		open: async (page, look) => {
 			await page.reload();
 			await openDrawer(page, look);
-			await page.locator("[data-sidebar-group-new]:visible").first().click({ force: true });
+			// This computer's project header's +, or on a paired computer's view the host project's.
+			await page
+				.locator(":is([data-sidebar-group-new], [data-device-group-new]):visible")
+				.first()
+				.click({ force: true });
 		},
 		ready: '[data-first-run-step="connect"] [role="progressbar"]',
 		// Parity only, and only over a host whose fake omp has no signed-in provider (`OMP_GUI_TEST_SIGNED_OUT=1`).

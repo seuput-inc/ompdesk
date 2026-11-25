@@ -1042,7 +1042,7 @@ html[data-shell="phone"] {
 
 /* The top bar stays one 36 px line: 44 px buttons would make it 44, and the header, composer and work strip would then
    pass the 19.4 % chrome budget, so a phone's top bar buttons are as tall as the bar, their reach kept inside it. */
-html[data-shell="phone"] .omp-topbar {
+html[data-shell="phone"] :is(.omp-topbar, .omp-sidebar-header) {
 	--sc-button-sm: 36px;
 	--sc-button-md: 36px;
 	--sc-button-lg: 36px;
@@ -1290,11 +1290,11 @@ html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 	}
 }
 
-/* With every control 44 px (the owner's decision, 25 Nov 2026) a 360 px phone's row is 1 em short: the name may give
-   back down to 2.5 em there before anything scrolls. */
+/* With every control 44 px (the owner's decision, 25 Nov 2026) a 360 px phone's row has no room for the model's name:
+   there (a toolbar of 340 px or less) the chip is its mark alone, the name its tooltip and accessible name. */
 @container omp-toolbar (max-width: 340px) {
 	html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
-		min-width: 2.5em;
+		display: none;
 	}
 }
 
@@ -1554,12 +1554,13 @@ html[data-shell] .omp-topbar:not(.omp-titlebar) {
 }
 
 /* A phone's top bar buttons are as tall as the bar (36 px, 34 inside the border): 1 px of reach up and down. A
-   tablet's right group is 32 px (30 inside): 3 px. Either way the work strip under the bar keeps its taps. */
-html[data-shell] .omp-titlebar > div {
+   tablet's 32 px buttons (30 inside) in the bar's right group reach 3 px, its 28 px ones the bar's 10 px bound: either
+   way the work strip under the bar keeps its taps. */
+html[data-shell]:not([data-shell="phone"]) .omp-titlebar [class*="sc-button-md"] {
 	--hit-gap-y: 6px;
 }
 
-html[data-shell="phone"] :is(.omp-titlebar, .omp-titlebar > div, .omp-topbar:not(.omp-titlebar)) {
+html[data-shell="phone"] :is(.omp-titlebar, .omp-titlebar > div, .omp-topbar:not(.omp-titlebar), .omp-sidebar-header) {
 	--hit-gap-y: 2px;
 }
 
