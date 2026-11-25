@@ -993,7 +993,9 @@ mod clones {
     static NEXT: AtomicU64 = AtomicU64::new(1);
 
     fn newest() -> std::sync::MutexGuard<'static, HashMap<String, u64>> {
-        NEWEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        NEWEST
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// This clone is now the newest of `destination`.
@@ -1030,7 +1032,8 @@ mod clones {
 
         #[tokio::test]
         async fn a_failed_clone_removes_only_its_own_folder() {
-            let root = std::env::temp_dir().join(format!("ompdesk-core-clone-{}", std::process::id()));
+            let root =
+                std::env::temp_dir().join(format!("ompdesk-core-clone-{}", std::process::id()));
             let place = root.join("repo");
             let destination = place.to_string_lossy().into_owned();
             std::fs::create_dir_all(place.join(".git")).unwrap();
@@ -1041,9 +1044,19 @@ mod clones {
             assert!(place.exists());
             release(&destination, older);
             // gh said the place exists: it is not this clone's.
-            clear_failed(&destination, newer, "fatal: destination path 'repo' already exists").await;
+            clear_failed(
+                &destination,
+                newer,
+                "fatal: destination path 'repo' already exists",
+            )
+            .await;
             assert!(place.exists());
-            clear_failed(&destination, newer, "gh repo clone timed out after 600000ms").await;
+            clear_failed(
+                &destination,
+                newer,
+                "gh repo clone timed out after 600000ms",
+            )
+            .await;
             assert!(!place.exists());
             release(&destination, newer);
             assert!(newest().get(&destination).is_none());

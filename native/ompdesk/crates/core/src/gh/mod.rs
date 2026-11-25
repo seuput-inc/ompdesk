@@ -92,7 +92,10 @@ impl Gh {
             .map(|(_, value)| value.clone())
             .collect();
         Gh {
-            bin: runner.as_ref().map(|runner| runner.bin.clone()).unwrap_or_default(),
+            bin: runner
+                .as_ref()
+                .map(|runner| runner.bin.clone())
+                .unwrap_or_default(),
             exec: runner.map(|runner| Exec::new(runner, scope, "gh")),
             secrets,
             background,

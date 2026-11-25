@@ -3974,7 +3974,7 @@ export const ko: Record<string, string> = {
 	"github.section.repos": "저장소",
 	"github.needsRepo": "선택한 저장소가 없어요",
 	"github.needsRepoHint": "GitHub 원격 저장소가 없어요. 위에 owner/name을 입력하거나 저장소에서 고르세요.",
-	"github.pausedUntil": "GitHub 읽기 일시 중지: {time}까지",
+	"github.pausedUntil": "GitHub 읽기 일시정지: {time}까지",
 	"github.actionFailed": "GitHub에서 요청을 처리하지 못했어요",
 	"github.openOnGithub": "GitHub에서 열기",
 	"github.openOnGithubFor": "{title} GitHub에서 열기",
