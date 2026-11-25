@@ -29,6 +29,7 @@ import { CHATS_ORDER_KEY } from "../../../../shared/sidebar-rows";
 import { PHONE_QUERY, TOUCH_QUERY } from "../../../hooks/shell-queries";
 import { resetShellModeForTests } from "../../../hooks/use-shell-mode";
 import { useWorkspaceRecency } from "../../../hooks/use-workspace-recency";
+import { useBotsFeature } from "../../../lib/bots-source";
 import { DEVICE_COLORS } from "../../../lib/device-color";
 import { formatTimeAgo } from "../../../lib/format";
 import { I18nProvider, translate } from "../../../lib/i18n";
@@ -505,35 +506,50 @@ function groupToggle(cwd: string): Element {
 }
 
 describe("Sidebar menus and pinned ordering", () => {
-	it("ends with Settings and a help menu; Agents and Stats join only once pinned", async () => {
+	it("leads with the nav rows (Bots only once the bots feature is available) and ends with Settings and a help menu", async () => {
 		installMockOmp(LIST);
 		seedStores();
 		await mount(<Sidebar />);
-		const bare = container.querySelector("[data-sidebar-destinations]");
+		const nav = container.querySelector("[data-sidebar-nav]");
+		const navRows = () =>
+			[...container.querySelectorAll("[data-sidebar-nav-row]")].map(row => row.getAttribute("data-sidebar-nav-row"));
+		expect(navRows()).toEqual(["agents", "schedules", "stats", "phone"]);
+		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
+		await act(async () => useBotsFeature.setState({ available: true }));
+		expect(navRows()).toEqual(["agents", "schedules", "bots", "stats", "phone"]);
+		expect(container.querySelector("[data-sidebar-bots]")?.textContent).toContain("No bots yet");
+		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
+		expect(useUiStore.getState().destination).toBe("bots");
+		await act(async () => useBotsFeature.setState({ available: false }));
+		expect(nav?.textContent).toContain("⌥A");
+
+		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onClick");
+		expect(useUiStore.getState().destination).toBe("insights");
+		expect(container.querySelector('[data-sidebar-nav-row="stats"]')?.getAttribute("aria-current")).toBe("page");
+		await fire(container.querySelector('[data-sidebar-nav-row="schedules"]'), "onClick");
+		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "schedules" });
+		expect(container.querySelector('[data-sidebar-nav-row="schedules"]')?.getAttribute("aria-current")).toBe("page");
+		await fire(container.querySelector('[data-sidebar-nav-row="phone"]'), "onClick");
+		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "connections:mobile-web" });
+		await fire(container.querySelector('[data-sidebar-nav-row="agents"]'), "onClick");
+		expect(useUiStore.getState().destination).toBe("agents");
+
+		// A row's menu hides it from this device's sidebar; Customize sidebar shows it again.
+		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onContextMenu");
+		expect(menuItemLabels()).toEqual(["Hide from sidebar"]);
+		await fire(menuItem("Hide from sidebar"), "onClick");
+		expect(navRows()).toEqual(["agents", "schedules", "phone"]);
+		expect(useSidebarFolds.getState().navHidden).toEqual({ stats: true });
+
+		const footer = container.querySelector("[data-sidebar-destinations]");
 		expect(
-			[...(bare?.querySelectorAll("button[data-destination]") ?? [])].map(button =>
+			[...(footer?.querySelectorAll("button[data-destination]") ?? [])].map(button =>
 				button.getAttribute("data-destination"),
 			),
 		).toEqual(["settings"]);
-		await act(async () => useSidebarPrefs.getState().toggleRailPin("agents"));
-		await act(async () => useSidebarPrefs.getState().toggleRailPin("stats"));
-
-		expect(container.querySelector("[data-sidebar-navigation]")).toBeNull();
-		const footer = container.querySelector("[data-sidebar-destinations]");
-		const destinations = [...(footer?.querySelectorAll("button[data-destination]") ?? [])].map(button =>
-			(button.textContent ?? "").trim(),
-		);
-		expect(destinations.map(label => label.replace(/[⌥⌘,A]+$/, ""))).toEqual(["Agents", "Stats", "Settings"]);
-		expect(footer?.textContent).toContain("⌥A");
 		expect(footer?.textContent).toContain("⌘,");
-
-		await fire(footer?.querySelector('[data-destination="insights"]') ?? null, "onClick");
-		expect(useUiStore.getState().destination).toBe("insights");
-		expect(footer?.querySelector('[data-destination="insights"]')?.getAttribute("aria-current")).toBe("page");
 		await fire(footer?.querySelector('[data-destination="settings"]') ?? null, "onClick");
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "general" });
-		await fire(footer?.querySelector('[data-destination="agents"]') ?? null, "onClick");
-		expect(useUiStore.getState().destination).toBe("agents");
 
 		// Help: shortcuts, palette, features, what's new, feedback, about, then Customize sidebar.
 		await fire(footer?.querySelector('[aria-label="Help"]') ?? null, "onClick");
@@ -551,11 +567,13 @@ describe("Sidebar menus and pinned ordering", () => {
 		);
 		await fire(shortcuts as Element, "onClick");
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "keyboard" });
-		// Customize sidebar opens its own sheet, not Settings.
+		// Customize sidebar opens its own sheet, not Settings; its nav switch shows the hidden row again.
 		await fire(footer?.querySelector('[aria-label="Help"]') ?? null, "onClick");
 		await fire(menuItem("Customize sidebar…"), "onClick");
 		expect(document.body.querySelector("[data-sidebar-pins]")).not.toBeNull();
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "keyboard" });
+		await fire(document.body.querySelector("#sidebar-nav-stats"), "onClick");
+		expect(navRows()).toEqual(["agents", "schedules", "stats", "phone"]);
 	});
 
 	it("pins only the usage block by default (it draws nothing without a subscription account); other pinned ones sit above the destinations in a fixed order and open their view", async () => {
@@ -566,27 +584,28 @@ describe("Sidebar menus and pinned ordering", () => {
 		const footer = container.querySelector("[data-sidebar-destinations]");
 		expect(footer?.querySelectorAll("[data-rail-pin]")).toHaveLength(0);
 		const pin = (railPin: RailPin) => act(async () => useSidebarPrefs.getState().toggleRailPin(railPin));
-		await pin("schedules");
+		await pin("jobs");
 		await pin("files");
-		expect(useSidebarPrefs.getState().railPins).toEqual(["usage", "files", "schedules"]);
-		expect(omp.prefs.updateSidebar).toHaveBeenCalledWith({ op: "set-rail-pin", pin: "schedules", pinned: true });
+		expect(useSidebarPrefs.getState().railPins).toEqual(["usage", "files", "jobs"]);
+		expect(omp.prefs.updateSidebar).toHaveBeenCalledWith({ op: "set-rail-pin", pin: "jobs", pinned: true });
 		const pinned = [...(footer?.querySelectorAll("[data-rail-pin]") ?? [])].map(row => [
 			row.getAttribute("data-rail-pin"),
 			(row.textContent ?? "").trim(),
 		]);
 		expect(pinned).toEqual([
 			["files", "Files"],
-			["schedules", "Schedules"],
+			["jobs", "Background tasks"],
 		]);
 
 		await act(async () => useUiStore.setState({ destination: "insights", panelVisible: false }));
 		await fire(footer?.querySelector('[data-rail-pin="files"]') ?? null, "onClick");
 		expect(useUiStore.getState()).toMatchObject({ destination: "session", panelVisible: true, panelTab: "files" });
-		await fire(footer?.querySelector('[data-rail-pin="schedules"]') ?? null, "onClick");
-		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "schedules" });
 
+		// A pin the nav rows replaced (Agents, Stats, Schedules) stays stored as the core keeps it and draws nothing.
+		await pin("schedules");
+		expect(footer?.querySelector('[data-rail-pin="schedules"]')).toBeNull();
 		await pin("files");
-		expect(useSidebarPrefs.getState().railPins).toEqual(["usage", "schedules"]);
+		expect(useSidebarPrefs.getState().railPins).toEqual(["usage", "jobs", "schedules"]);
 	});
 
 	it("Help › Customize sidebar opens a sheet whose switches pin and unpin; a pinned row's menu unpins", async () => {
@@ -600,7 +619,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(footer?.querySelector('[aria-label="Help"]') ?? null, "onClick");
 		await fire(menuItem("Customize sidebar…"), "onClick");
 		const sheet = document.body.querySelector("[data-sidebar-pins]");
-		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(9);
+		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(10);
 		const switchFor = (pin: string) => document.body.querySelector(`#sidebar-pin-${pin}`);
 		expect(switchFor("usage")?.getAttribute("aria-checked")).toBe("true");
 		expect(switchFor("files")?.getAttribute("aria-checked")).toBe("false");
@@ -616,11 +635,6 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(menuItem("Unpin from sidebar"), "onClick");
 		expect(useSidebarPrefs.getState().railPins).toEqual(["usage"]);
 		expect(footer?.querySelector('[data-rail-pin="files"]')).toBeNull();
-
-		await fire(switchFor("agents"), "onClick");
-		await fire(footer?.querySelector('[data-destination="agents"]') ?? null, "onContextMenu");
-		await fire(menuItem("Unpin from sidebar"), "onClick");
-		expect(useSidebarPrefs.getState().railPins).toEqual(["usage"]);
 	});
 
 	it("opens the command palette from the header and selecting a session returns from a page", async () => {

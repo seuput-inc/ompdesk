@@ -92,7 +92,7 @@ async function openHarness(browser: Browser, device: Device, look: Look, extra =
 	page.on("pageerror", error => {
 		throw error;
 	});
-	// `rail=all` pins Agents and Stats under the session list, so the drawer reaches every page.
+	// Agents and Stats are the sidebar's nav rows, so the drawer reaches every page; `rail=all` pins the usage block too.
 	await page.goto(`${origin}/harness.html?theme=${look.theme}&lang=${look.lang}&rail=all${extra}`);
 	await reassertTouch(page);
 	await expect(page.locator("[data-titlebar-session-name]")).toBeVisible({ timeout: 30_000 });

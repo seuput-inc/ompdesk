@@ -1,22 +1,37 @@
 /**
- * "Customize sidebar…": one switch per footer shortcut (`RAIL_PINS`), the only place besides a pinned row's own
- * context menu that pins and unpins. `toggleRailPin` is the single writer of the stored `railPins`.
+ * "Customize sidebar…": one switch per nav row this view offers (`SidebarNav`, device-local `navHidden`) and one per
+ * footer shortcut (`RAIL_PINS`), the only place besides a row's own context menu that shows and hides them.
+ * `toggleRailPin` is the single writer of the stored `railPins`.
  */
 
 import { createElement, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { RAIL_PINS, type RailPin } from "../../../../shared/sidebar-prefs";
+import { FOOTER_PINS, type FooterPin } from "../../../../shared/sidebar-prefs";
 import { useT } from "../../../lib/i18n";
+import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { RAIL_PIN_LABEL_KEYS, useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { anchorFromEvent, ContextMenu, type ContextMenuAnchor, Modal, SwitchTile } from "../../common";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
+import { SIDEBAR_NAV_ROWS, useOfferedNavRows } from "./SidebarNav";
 
 export function SidebarPinsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
 	const t = useT();
 	const railPins = useSidebarPrefs(s => s.railPins);
+	const navHidden = useSidebarFolds(s => s.navHidden);
+	const navRows = useOfferedNavRows();
 	return (
 		<Modal onClose={onClose} open={open} size="sm" title={t("help.customizeSidebar")}>
 			<div className="flex flex-col gap-px" data-sidebar-pins>
-				{RAIL_PINS.map(pin => (
+				{navRows.map(row => (
+					<SwitchTile
+						checked={navHidden[row] !== true}
+						icon={createElement(SIDEBAR_NAV_ROWS[row].icon)}
+						id={`sidebar-nav-${row}`}
+						key={row}
+						label={t(SIDEBAR_NAV_ROWS[row].labelKey)}
+						onCheckedChange={shown => useSidebarFolds.getState().setNavHidden(row, !shown)}
+					/>
+				))}
+				{FOOTER_PINS.map(pin => (
 					<SwitchTile
 						checked={railPins.includes(pin)}
 						icon={createElement(RAIL_PIN_ICONS[pin])}
@@ -32,12 +47,12 @@ export function SidebarPinsSheet({ open, onClose }: { open: boolean; onClose: ()
 }
 
 export interface PinMenuState {
-	pin: RailPin;
+	pin: FooterPin;
 	anchor: ContextMenuAnchor;
 }
 
 /** Handlers that open a pinned row's menu: right click, long press on touch (the shell sends it as a contextmenu), Shift+F10. */
-export function pinMenuHandlers(pin: RailPin, open: (menu: PinMenuState) => void) {
+export function pinMenuHandlers(pin: FooterPin, open: (menu: PinMenuState) => void) {
 	return {
 		onContextMenu: (event: ReactMouseEvent) => open({ pin, anchor: anchorFromEvent(event) }),
 		onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => {

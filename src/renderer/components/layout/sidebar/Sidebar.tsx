@@ -4,8 +4,7 @@ import {
 	AlertTriangle,
 	Archive,
 	ArchiveRestore,
-	BarChart3,
-	Bot,
+	type Bot,
 	CircleHelp,
 	Compass,
 	Download,
@@ -44,7 +43,7 @@ import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
 import { autopilotRunOf, worktreeKindOf, worktreeLabel } from "../../../../shared/project-origin";
 import { hostedSummaries, type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
-import type { RailPin } from "../../../../shared/sidebar-prefs";
+import { FOOTER_PINS, type FooterPin } from "../../../../shared/sidebar-prefs";
 import {
 	CHATS_ORDER_KEY,
 	familyRows,
@@ -63,6 +62,7 @@ import { requestSessionSwitch, useSwitchingTabs } from "../../../hooks/use-sessi
 import { useShellInput } from "../../../hooks/use-shell-mode";
 import { useTabListRows } from "../../../hooks/use-tab-list-rows";
 import { ATTENTION_LABEL_KEY, type AttentionKind, isAsk } from "../../../lib/attention";
+import { useBotsAvailable } from "../../../lib/bots-source";
 import { activeComposerInput } from "../../../lib/composer-focus";
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { hideNativeDragImage } from "../../../lib/drag-image";
@@ -106,7 +106,7 @@ import { useProjectList } from "../../../stores/sidebar-projects";
 import { toggleSidebarSubagents, useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { type SessionTab, tabAutoTitle, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
-import { type PageDestination, type PanelTab, useUiStore } from "../../../stores/ui";
+import { type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
 import {
 	anchorFromEvent,
@@ -141,6 +141,7 @@ import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
 import { logSelection, useRowSelection } from "./row-selection";
+import { SidebarBots } from "./SidebarBots";
 import { SidebarChats } from "./SidebarChats";
 import { SidebarDeviceSections } from "./SidebarDeviceSections";
 import { SidebarDeviceSection, SidebarLocalHeader } from "./SidebarDevices";
@@ -148,6 +149,7 @@ import { SidebarDoneMark } from "./SidebarDoneMark";
 import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
+import { SidebarNav } from "./SidebarNav";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
@@ -230,13 +232,6 @@ function focusComposer(): void {
 /** This computer's lists leave out no session another section nests: each is a row of its own project too. */
 const NO_SESSIONS: ReadonlySet<string> = new Set();
 
-/** Destinations in the sidebar footer: the only three. */
-const DESTINATIONS: { id: PageDestination; labelKey: string; icon: typeof Bot }[] = [
-	{ id: "agents", labelKey: "destination.agents", icon: Bot },
-	{ id: "insights", labelKey: "destination.insights", icon: BarChart3 },
-	{ id: "settings", labelKey: "destination.settings", icon: Settings },
-];
-
 /** A pinned side panel view: back to the session (a page hides the panel) with that view open. */
 function showPanelView(tab: PanelTab): void {
 	const ui = useUiStore.getState();
@@ -245,13 +240,12 @@ function showPanelView(tab: PanelTab): void {
 }
 
 /** Footer shortcuts the user pins from Customize sidebar (usage renders as bars, the rest as rows). */
-const RAIL_PIN_ROWS: Record<Exclude<RailPin, "usage" | "agents" | "stats">, { icon: typeof Bot; open: () => void }> = {
+const RAIL_PIN_ROWS: Record<Exclude<FooterPin, "usage">, { icon: typeof Bot; open: () => void }> = {
 	terminal: { icon: RAIL_PIN_ICONS.terminal, open: () => showPanelView("terminal") },
 	diff: { icon: RAIL_PIN_ICONS.diff, open: () => showPanelView("diff") },
 	preview: { icon: RAIL_PIN_ICONS.preview, open: () => showPanelView("preview") },
 	files: { icon: RAIL_PIN_ICONS.files, open: () => showPanelView("files") },
 	jobs: { icon: RAIL_PIN_ICONS.jobs, open: () => useUiStore.getState().openJobs() },
-	schedules: { icon: RAIL_PIN_ICONS.schedules, open: () => useUiStore.getState().openSettings("schedules") },
 };
 
 function useHelpItems(customizeSidebar: () => void): ContextMenuItem[] {
@@ -312,7 +306,7 @@ function useHelpItems(customizeSidebar: () => void): ContextMenuItem[] {
 	];
 }
 
-/** Footer: Agents · Stats (each shown only while pinned) · Settings, with the help menu closing the Settings row. */
+/** Footer: the pinned shortcuts, then Settings with the help menu closing its row. The pages are the nav rows above. */
 function SidebarFooter() {
 	const t = useT();
 	const destination = useUiStore(s => s.destination);
@@ -322,28 +316,15 @@ function SidebarFooter() {
 	const [pinMenu, setPinMenu] = useState<PinMenuState | null>(null);
 	const helpItems = useHelpItems(() => setPinsSheet({ open: true }));
 	const railPins = useSidebarPrefs(s => s.railPins);
-	const shortcutFor = (id: PageDestination) =>
-		id === "agents"
-			? actionKbd("agents.hub", keymapOverrides)
-			: id === "settings"
-				? actionKbd("settings", keymapOverrides)
-				: undefined;
-	const open = (id: PageDestination) => {
-		const ui = useUiStore.getState();
-		if (id === "agents") ui.openAgents();
-		else if (id === "insights") ui.openInsights();
-		else ui.openSettings();
-	};
+	const settingsHere = destination === "settings";
 	return (
 		<nav
 			aria-label={t("sidebar.destinations")}
 			className="flex shrink-0 flex-col gap-px border-t border-(--sc-divider) p-2"
 			data-sidebar-destinations
 		>
-			{railPins.map(pin => {
+			{FOOTER_PINS.filter(pin => railPins.includes(pin)).map(pin => {
 				if (pin === "usage") return <SidebarUsage key={pin} {...pinMenuHandlers(pin, setPinMenu)} />;
-				// Agents and Stats are the destination rows below, shown only while pinned.
-				if (pin === "agents" || pin === "stats") return null;
 				const { icon: Icon, open: openPin } = RAIL_PIN_ROWS[pin];
 				return (
 					<Button
@@ -359,46 +340,33 @@ function SidebarFooter() {
 					</Button>
 				);
 			})}
-			{DESTINATIONS.filter(
-				({ id }) => id === "settings" || railPins.includes(id === "agents" ? "agents" : "stats"),
-			).map(({ id, labelKey, icon: Icon }) => {
-				const current = destination === id;
-				const shortcut = shortcutFor(id);
-				const pinnable = id === "agents" || id === "insights";
-				const row = (
+			{/* Help closes the Settings row: one footer, no orphaned icon underneath. */}
+			<div className="flex min-w-0 items-center gap-1">
+				<div className="flex min-w-0 flex-1">
 					<Button
-						{...(pinnable ? pinMenuHandlers(id === "agents" ? "agents" : "stats", setPinMenu) : {})}
-						aria-current={current ? "page" : undefined}
+						aria-current={settingsHere ? "page" : undefined}
 						className={cx(
 							"omp-sidebar-destination w-full min-w-0 justify-start gap-2.5 px-2.5",
-							current ? "bg-(--sc-selected) text-(--sc-text)" : "text-(--sc-text-secondary)",
+							settingsHere ? "bg-(--sc-selected) text-(--sc-text)" : "text-(--sc-text-secondary)",
 						)}
-						data-destination={id}
-						icon={<Icon />}
-						key={id}
-						onClick={() => open(id)}
+						data-destination="settings"
+						icon={<Settings />}
+						onClick={() => useUiStore.getState().openSettings()}
 						variant="ghost"
 					>
-						<span className="min-w-0 flex-1 truncate text-left">{t(labelKey)}</span>
-						{shortcut && <Kbd className="omp-sidebar-kbd" shortcut={shortcut} />}
+						<span className="min-w-0 flex-1 truncate text-left">{t("destination.settings")}</span>
+						<Kbd className="omp-sidebar-kbd" shortcut={actionKbd("settings", keymapOverrides)} />
 					</Button>
-				);
-				if (id !== "settings") return row;
-				// Help closes the last row: one footer, no orphaned icon underneath.
-				return (
-					<div className="flex min-w-0 items-center gap-1" key={id}>
-						<div className="flex min-w-0 flex-1">{row}</div>
-						<MenuButton
-							align="end"
-							className="text-(--sc-text-secondary)"
-							icon={<CircleHelp />}
-							items={helpItems}
-							label={t("help.menu")}
-							variant="ghost"
-						/>
-					</div>
-				);
-			})}
+				</div>
+				<MenuButton
+					align="end"
+					className="text-(--sc-text-secondary)"
+					icon={<CircleHelp />}
+					items={helpItems}
+					label={t("help.menu")}
+					variant="ghost"
+				/>
+			</div>
 			{pinMenu && (
 				<PinMenu menu={pinMenu} onClose={() => setPinMenu(null)} onCustomize={() => setPinsSheet({ open: true })} />
 			)}
@@ -427,6 +395,7 @@ export function Sidebar() {
 	const tabRpc = useTabRpc();
 	const t = useT();
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
+	const botsAvailable = useBotsAvailable();
 	// This computer's no-project workspace decides whether a session's row is a chat (`isChatSession`): its last answer
 	// paints the first frame, as a paired host's does (host-workspace.ts). Without it such a session was missing
 	// from the first frame's list and its row and selection came one frame later (300 ms on a slow machine).
@@ -2269,6 +2238,7 @@ export function Sidebar() {
 							/>
 						)}
 					</div>
+					<SidebarNav />
 				</div>
 
 				<div
@@ -2287,6 +2257,7 @@ export function Sidebar() {
 					data-sidebar-held-back={rowsHeldBack}
 				>
 					<SidebarHoldContext.Provider value={pointing}>
+						{botsAvailable && <SidebarBots />}
 						{/* One tree whether or not a host is paired, so pairing (or the host list's first read at launch)
 					    never remounts this device's list. */}
 						<SidebarDeviceSections

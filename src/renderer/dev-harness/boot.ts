@@ -40,9 +40,10 @@ if (platform === "win32") {
 	document.body.appendChild(buttons);
 }
 
-// `?rail=all` pins Agents and Stats under the session list, the way the footer shortcut toggles do.
+// `?rail=all` pins the usage block and the Jobs shortcut in the footer, the way the Customize sidebar switches do
+// (Agents, Schedules and Stats are always nav rows).
 const prefs: Record<string, unknown> = {};
-if (query.get("rail") === "all") prefs.sidebar = { railPins: ["usage", "agents", "stats"] };
+if (query.get("rail") === "all") prefs.sidebar = { railPins: ["usage", "jobs"] };
 // The app takes its theme from prefs once they load (and resolves "system" from the OS, not from localStorage),
 // so `?theme=` has to be a pref too or a dark capture paints light. Any theme id works (`?theme=github-dark`).
 const theme = migrateThemeName(query.get("theme"));

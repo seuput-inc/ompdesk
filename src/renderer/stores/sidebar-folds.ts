@@ -37,6 +37,8 @@ interface SidebarFoldsStore extends SidebarFolds {
 	setUsageCollapsed: (collapsed: boolean) => void;
 	/** One provider's accounts in the usage block, folded or open. */
 	setUsageGroupFolded: (providerId: string, folded: boolean) => void;
+	/** A nav row hidden from the sidebar or shown again. */
+	setNavHidden: (row: string, hidden: boolean) => void;
 	/** Drops the folds of groups `exists` refuses. Call only once the folders are known (a live read answered). */
 	pruneGroups: (exists: (cwd: string) => boolean) => void;
 	/**
@@ -60,6 +62,7 @@ function saved(state: SidebarFolds): SidebarFolds {
 		starterOpen: state.starterOpen,
 		usageCollapsed: state.usageCollapsed,
 		usageGroups: state.usageGroups,
+		navHidden: state.navHidden,
 		knownHosts: state.knownHosts,
 	};
 }
@@ -97,6 +100,7 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 		},
 		setUsageGroupFolded: (providerId, folded) =>
 			edit({ usageGroups: withFlag(get().usageGroups, providerId, folded) }),
+		setNavHidden: (row, hidden) => edit({ navHidden: withFlag(get().navHidden, row, hidden) }),
 		pruneGroups: exists => {
 			const { groups } = get();
 			const kept = Object.entries(groups).filter(([cwd]) => exists(cwd));
