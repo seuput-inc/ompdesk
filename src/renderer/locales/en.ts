@@ -1764,6 +1764,8 @@ export const en: Record<string, string> = {
 	"ipcError.provider_builtin_delete": "Built-in providers can't be removed here.",
 	"ipcError.stats_not_ready": "The stats server is still starting. Try again in a moment.",
 	"ipcError.stats_api_error": "The stats server couldn't answer this request.",
+	"ipcError.attachment_gone":
+		"An attached file is no longer on the computer (attachments are kept for 24 hours), so nothing was sent. Attach it again; the file is named below.",
 	"ipcError.safe_storage_unavailable": "This system can't encrypt the token, so it can't be saved.",
 	"ipcError.keychain_would_ask":
 		"macOS would ask for your login password to open OMPdesk's keychain item, so no secret can be saved on this computer.",

@@ -1755,6 +1755,8 @@ export const ko: Record<string, string> = {
 	"ipcError.provider_builtin_delete": "내장 프로바이더는 여기서 삭제할 수 없어요.",
 	"ipcError.stats_not_ready": "통계 서버가 아직 시작하는 중이에요. 잠시 후 다시 시도해 보세요.",
 	"ipcError.stats_api_error": "통계 서버가 이 요청에 응답하지 못했어요.",
+	"ipcError.attachment_gone":
+		"첨부한 파일이 더 이상 컴퓨터에 없어서(첨부 파일은 24시간 보관돼요) 아무것도 보내지 않았어요. 다시 첨부하세요. 파일 이름은 아래에 있어요.",
 	"ipcError.safe_storage_unavailable": "이 시스템에서는 토큰을 암호화할 수 없어서 저장하지 못해요.",
 	"ipcError.keychain_would_ask":
 		"macOS가 OMPdesk의 키체인 항목을 열려면 로그인 암호를 물어봐야 해서, 이 컴퓨터에는 비밀 정보를 저장할 수 없어요.",

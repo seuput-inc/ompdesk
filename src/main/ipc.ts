@@ -303,7 +303,7 @@ export interface IpcDeps {
 	 * Where a file attached to a prompt of this computer's own tab lands when it has no path here (pasted, dragged out
 	 * of another app): the phones' upload folder (web/uploads.ts), its limits and its 24-hour lifetime.
 	 */
-	uploads?: Pick<UploadStore, "attachHere">;
+	uploads?: Pick<UploadStore, "attachHere" | "goneIn">;
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
@@ -1079,6 +1079,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// A prompt from a paired web device names its device to the omp first: the bridge journals it for the
 			// message with that text, so every window can say who typed it.
 			if ((cmd.type === "prompt" || cmd.type === "steer" || cmd.type === "follow_up") && !sidecar.device) {
+				// A prompt naming an attached file that is gone (swept after 24 h, taken) is not sent at all: the draft comes
+				// back and the toast names the file, instead of the agent getting a path that leads nowhere.
+				const gone = channel !== undefined ? await deps.uploads?.goneIn(cmd.message, sidecar.cwd) : undefined;
+				if (gone?.length) {
+					return {
+						id: _id,
+						type: "response",
+						command: cmd.type,
+						success: false,
+						error: gone.join(", "),
+						code: "attachment_gone",
+					};
+				}
 				const origin = promptOriginOf(win);
 				if (origin)
 					await client.command({ type: "prompt_origin_set", origin, text: cmd.message }).catch(() => undefined);
@@ -2598,17 +2611,26 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				return deps.uploads.attachHere(payload.name, data);
 			}
 			const device = target.device;
-			return uploadToHost(
-				(method, params, timeoutMs) =>
-					remoteDevices.request(
-						device,
-						method,
-						{ ...params, rtab: target.tabId, cwd: target.sidecar.cwd },
-						timeoutMs,
-					),
-				payload.name,
-				data,
-			);
+			// A window that closes stops what it attached (host-upload.ts): waiting files are never sent.
+			const closed = new AbortController();
+			const abort = () => closed.abort();
+			caller.win?.once("closed", abort);
+			try {
+				return await uploadToHost(
+					(method, params, timeoutMs) =>
+						remoteDevices.request(
+							device,
+							method,
+							{ ...params, rtab: target.tabId, cwd: target.sidecar.cwd },
+							timeoutMs,
+						),
+					payload.name,
+					data,
+					closed.signal,
+				);
+			} finally {
+				caller.win?.removeListener("closed", abort);
+			}
 		},
 	);
 
