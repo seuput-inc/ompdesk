@@ -259,6 +259,7 @@ describe("the queue gate's steps, run as the runner runs them", () => {
 	// call, which took 120 s for this file on a loaded Windows runner (run 43452782575, a 20 s timeout), so they run
 	// where the steps run and on a developer's POSIX machine.
 	const posix = process.platform !== "win32";
+	const bash = posix && spawnSync("bash", ["--version"]).status === 0;
 	const jq = posix && spawnSync("jq", ["--version"]).status === 0;
 	const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-queue-gate-"));
 	afterAll(() => fs.rmSync(scratch, { recursive: true, force: true }));
