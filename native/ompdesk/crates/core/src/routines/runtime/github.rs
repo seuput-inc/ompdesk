@@ -60,7 +60,8 @@ pub(super) async fn run(
             let key = format!("github {repo}: {}", kind.name());
             let result = match context.ask::<Tool>("github", None).await {
                 Ok(tool) => {
-                    let gh = Gh::new(tool.runner, scope.clone());
+                    // A trigger's read is never the person's own: it waits behind the GitHub gate (`gh/gate.rs`).
+                    let gh = Gh::paced(tool.runner, scope.clone(), true);
                     github::read(
                         &GhApi {
                             gh: &gh,
