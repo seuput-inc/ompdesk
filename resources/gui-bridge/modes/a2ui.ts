@@ -3,19 +3,27 @@
  * (a2ui-core.ts) and drawn by the renderer from the tool call itself. A surface with an event button waits for the
  * person through stock's blocking form channel (`ctx.ui.formDialog` with the marker form of a2ui-contracts.ts), so the
  * question's attention, notification, first-answer rule, paired relay and phone are the ask form's.
+ *
+ * Registered by index.ts's factory on the main bind only, before stock builds the session (as the waste guards'
+ * `wait`): a tool added later moves in omp's tool order and rebuilds the prompt, and a turn stock's restore continues
+ * runs no `before_agent_start`, so an activation there left a relaunched turn without the tool and with another prompt.
+ * Subagents never get it: nobody looks at their transcript.
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "../health";
 import { validateJsonSchemaValue } from "../omp/pi-ai";
-import { A2UI_ANSWER_FIELD, A2UI_TOOL, type A2uiToolDetails, a2uiMarkerForm } from "./a2ui-contracts";
+import { A2UI_ANSWER_FIELD, A2UI_TOOL, type A2uiError, type A2uiToolDetails, a2uiMarkerForm } from "./a2ui-contracts";
 import { a2uiAnswer, a2uiErrorText, a2uiPriorCalls, a2uiToolDescription, checkA2uiCall } from "./a2ui-core";
 
 function result(text: string, details: A2uiToolDetails, isError = false) {
 	return { content: [{ type: "text" as const, text }], details, ...(isError ? { isError: true } : {}) };
 }
 
-/** Called once per extension instance (main and every subagent rebinding) by index.ts. */
-export function install(pi: ExtensionAPI): void {
+function refused(errors: A2uiError[]) {
+	return result(a2uiErrorText(errors), { errors }, true);
+}
+
+export function registerA2ui(pi: ExtensionAPI): void {
 	const z = pi.pi.z;
 	pi.registerTool({
 		name: A2UI_TOOL,
@@ -24,8 +32,6 @@ export function install(pi: ExtensionAPI): void {
 		parameters: z.object({
 			messages: z.array(z.record(z.string(), z.unknown())).describe("A2UI v1.0 messages, applied in order"),
 		}),
-		// Only the main agent's transcript has a person looking at it: activated for it below, never for a subagent.
-		defaultInactive: true,
 		loadMode: "essential",
 		approval: "read",
 		async execute(
@@ -41,14 +47,26 @@ export function install(pi: ExtensionAPI): void {
 				a2uiPriorCalls(ctx.sessionManager.getBranch(), A2UI_TOOL, toolCallId),
 				validateJsonSchemaValue,
 			);
-			if (check.errors.length > 0) return result(a2uiErrorText(check.errors), { errors: check.errors }, true);
+			if (check.errors.length > 0) return refused(check.errors);
 			if (!check.interactive) {
 				return result(`Shown to the person: ${check.touched.join(", ") || "nothing left"}. It needs no answer.`, {
 					shown: check.touched,
 				});
 			}
-			if (!ctx.hasUI || typeof ctx.ui.formDialog !== "function") {
-				throw new Error("No one can answer here: this session has no OMPdesk window. Ask in text instead.");
+			// An unattended run (Autopilot turns `ask` off) or a session without a window: a button would wait forever.
+			const unanswered = !pi.getActiveTools().includes("ask")
+				? "Nobody is there to press a button: this is an unattended run."
+				: !ctx.hasUI || typeof ctx.ui.formDialog !== "function"
+					? "Nobody can press a button here: this session has no OMPdesk window."
+					: undefined;
+			if (unanswered) {
+				return refused([
+					{
+						code: "VALIDATION_FAILED",
+						path: "/messages",
+						message: `${unanswered} Show the surface without an event button, or decide yourself.`,
+					},
+				]);
 			}
 			const answer = await ctx.ui.formDialog(a2uiMarkerForm(toolCallId), { signal });
 			if (signal?.aborted) throw new Error("Stopped before the person answered.");
@@ -57,13 +75,7 @@ export function install(pi: ExtensionAPI): void {
 			return result(text, details);
 		},
 	});
-	pi.on("before_agent_start", async (_event, ctx) => {
-		if (ctx.agent.kind !== "main") return undefined;
-		const active = pi.getActiveTools();
-		if (!active.includes(A2UI_TOOL)) await pi.setActiveTools([...active, A2UI_TOOL]);
-		return undefined;
-	});
 }
 
-/** Tool and hook only. */
+/** The tool only (index.ts registers it); the area lists the feature for the compatibility check. */
 export const methods = guard("a2ui", {});

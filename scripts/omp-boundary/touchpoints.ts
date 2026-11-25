@@ -1843,9 +1843,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"A2UI: the `a2ui` tool through the extension API (`registerTool` defaultInactive, put in the main agent's active set with `getActiveTools`/`setActiveTools` at `before_agent_start`), the person's answer through `ctx.ui.formDialog` (stock's RPC `form` request carrying OMPdesk's marker form), and A2UI messages checked by pi-ai's root `validateJsonSchemaValue`, which resolves local refs only and treats `unevaluatedProperties` as permissive.",
+			"A2UI: the `a2ui` tool through the extension API (`registerTool` in the factory's main bind, before stock builds the session; `getActiveTools` to refuse a button in a run with `ask` off), the person's answer through `ctx.ui.formDialog` (stock's RPC `form` request carrying OMPdesk's marker form), and A2UI messages checked by pi-ai's root `validateJsonSchemaValue`, which resolves local refs only and treats `unevaluatedProperties` as permissive.",
 		files: [
 			"resources/gui-bridge/modes/a2ui.ts",
+			"resources/gui-bridge/index.ts",
 			"resources/gui-bridge/modes/a2ui-core.ts",
 			"resources/gui-bridge/omp/pi-ai.ts",
 			"resources/gui-bridge/capabilities.ts",

@@ -2311,13 +2311,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** image-subscription.ts: the public `tool_call` hook (`input`, `block`) only. Imports nothing from omp. */
 	imageSubscription: {},
 	/**
-	 * modes/a2ui.ts: the extension API's tool registration and active tool set (the `a2ui` tool, on for the main agent
-	 * only), its zod for the tool schema, and pi-ai's JSON-Schema validator for the A2UI messages. The person's answer
-	 * is the public `ctx.ui.formDialog`, checked on each call.
+	 * modes/a2ui.ts: the extension API's tool registration (the `a2ui` tool, registered on the main bind by index.ts's
+	 * factory) and active tool set (no button waits in a run with `ask` off), its zod for the tool schema, and pi-ai's
+	 * JSON-Schema validator for the A2UI messages. The person's answer is the public `ctx.ui.formDialog`.
 	 */
 	a2ui: {
 		pkg: ["z.object()", "z.array()", "z.record()", "z.string()", "z.unknown()"],
-		api: ["registerTool()", "getActiveTools()", "setActiveTools()"],
+		api: ["registerTool()", "getActiveTools()"],
 		modules: { "@oh-my-pi/pi-ai": ["validateJsonSchemaValue()"] },
 	},
 };
