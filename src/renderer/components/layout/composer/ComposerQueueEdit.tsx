@@ -62,6 +62,7 @@ function letGo(rpc: TabRpc, token: string): void {
 /**
  * Queue `text` (the edit's or the original) in the edited message's lane, then let the core's hold go. `cancel`: no turn
  * runs any more, so the original waits in the restored tray instead of starting one. A refused send holds it there too.
+ * The queue pill stays away until then (`editsRequeueing`).
  */
 async function requeue(
 	rpc: TabRpc,
@@ -70,35 +71,40 @@ async function requeue(
 	text: string,
 	cancel: boolean,
 ): Promise<void> {
-	// Nothing to queue again until the core holds it and stock's queue let it go; an edit that never began left both as they were.
-	if (!(await editing.began)) return;
-	const images = editing.images.length > 0 ? editing.images : undefined;
-	const hold = () => {
-		const entry = [{ text, images }];
-		restoreAbortedQueue(stores.composer.getState(), {
-			steering: editing.lane === "steering" ? entry : [],
-			followUp: editing.lane === "followUp" ? entry : [],
-		});
-	};
-	if (cancel && !stores.session.getState().isStreaming) hold();
-	else {
-		// Saved: the edit's new chip, whenever its frame comes, is where it landed (the last of its lane).
-		const forget = cancel ? undefined : stores.queue.getState().expectEdited(text, editing.lane);
-		try {
-			if (images) stores.queue.getState().expectImages(text, images);
-			const response = await rpc.prompt(text, images, editing.lane === "steering" ? "steer" : "followUp");
-			if (!response.success) {
+	stores.composer.getState().noteRequeueing(1);
+	try {
+		// Nothing to queue again until the core holds it and stock's queue let it go; an edit that never began left both as they were.
+		if (!(await editing.began)) return;
+		const images = editing.images.length > 0 ? editing.images : undefined;
+		const hold = () => {
+			const entry = [{ text, images }];
+			restoreAbortedQueue(stores.composer.getState(), {
+				steering: editing.lane === "steering" ? entry : [],
+				followUp: editing.lane === "followUp" ? entry : [],
+			});
+		};
+		if (cancel && !stores.session.getState().isStreaming) hold();
+		else {
+			// Saved: the edit's new chip, whenever its frame comes, is where it landed (the last of its lane).
+			const forget = cancel ? undefined : stores.queue.getState().expectEdited(text, editing.lane);
+			try {
+				if (images) stores.queue.getState().expectImages(text, images);
+				const response = await rpc.prompt(text, images, editing.lane === "steering" ? "steer" : "followUp");
+				if (!response.success) {
+					forget?.();
+					toastError({ title: translate("input.sendFailed"), error: response });
+					hold();
+				}
+			} catch (error) {
 				forget?.();
-				toastError({ title: translate("input.sendFailed"), error: response });
+				toastError({ title: translate("input.sendFailed"), error });
 				hold();
 			}
-		} catch (error) {
-			forget?.();
-			toastError({ title: translate("input.sendFailed"), error });
-			hold();
 		}
+		letGo(rpc, editing.token);
+	} finally {
+		stores.composer.getState().noteRequeueing(-1);
 	}
-	letGo(rpc, editing.token);
 }
 
 /**

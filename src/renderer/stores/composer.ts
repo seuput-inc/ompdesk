@@ -88,6 +88,12 @@ export interface ComposerStore {
 	restoredTrayMounted: number;
 	/** A queued message is being edited in the field (Edit queued): its draft and pictures wait in the snapshot. */
 	editingQueued: EditingQueued | null;
+	/**
+	 * Edits that ended (Save, Cancel) whose message is not back in stock's queue yet: it is queued again only once the
+	 * core holds it and stock let it go, and a queue row shown meanwhile could name the copy about to be replaced.
+	 */
+	editsRequeueing: number;
+	noteRequeueing: (delta: 1 | -1) => void;
 	setSending: (value: boolean) => void;
 	setCancelSubmit: (cancel: (() => boolean) | null) => void;
 	setSubmissionUncertain: (value: boolean) => void;
@@ -137,6 +143,9 @@ export const createComposerStore = () =>
 		restoredQueue: [],
 		restoredTrayMounted: 0,
 		editingQueued: null,
+		// Not reset: it counts requeues in flight, and each one takes itself off when it settles.
+		editsRequeueing: 0,
+		noteRequeueing: delta => set(state => ({ editsRequeueing: Math.max(0, state.editsRequeueing + delta) })),
 		setSending: sending => set({ sending }),
 		setCancelSubmit: cancelSubmit => set({ cancelSubmit }),
 		setSubmissionUncertain: submissionUncertain => set({ submissionUncertain }),

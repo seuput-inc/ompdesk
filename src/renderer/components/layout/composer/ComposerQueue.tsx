@@ -227,7 +227,8 @@ export function ComposerQueuePill({ onSettled }: { onSettled: () => void }) {
 	const t = useT();
 	const { steering, followUp } = useQueuedMessages();
 	const actions = useQueueActions();
-	const editing = useComposerStore(state => state.editingQueued !== null);
+	// A message an ended edit is still queuing again would show here under the id it is about to lose.
+	const editing = useComposerStore(state => state.editingQueued !== null || state.editsRequeueing > 0);
 	const edited = useQueueStore(state => state.moved?.kind === "edit");
 	const phone = useShellMode() === "phone";
 	const [open, setOpen] = useState(false);
