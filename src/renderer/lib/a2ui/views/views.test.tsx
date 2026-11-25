@@ -3,6 +3,7 @@
  * an inert card that takes nothing, and a type the catalog does not draw (docs/design/a2ui.md §2, §4).
  */
 
+import { getValue, NodeResolver } from "@a2ui/web_core";
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -10,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import catalogDocument from "../../../../../resources/gui-bridge/modes/a2ui-catalog.json";
 import { I18nProvider } from "../../i18n";
 import { A2uiSession } from "../session";
+import { chartSeries } from "./Chart";
 import { SurfaceView } from "./SurfaceView";
 
 const v = (body: Record<string, unknown>) => ({ version: "1.0", ...body });
@@ -204,5 +206,36 @@ describe("A2UI views", () => {
 			expect(document.querySelector("[data-a2ui-unsupported]")?.textContent).toContain("Marquee");
 			expect(document.querySelector("marquee")).toBeNull();
 		});
+	});
+});
+
+describe("Chart series", () => {
+	it("reads a bound series from the data model and follows it", () => {
+		const session = sessionOf(
+			[
+				{
+					id: "root",
+					component: "Chart",
+					kind: "bar",
+					labels: ["Mon", "Tue"],
+					series: [
+						{ label: "Runs", values: { "@path": "/runs" } },
+						{ label: "Goal", values: [4, 4] },
+					],
+					description: "Runs against the goal",
+				},
+			],
+			{ runs: [3, 5] },
+		);
+		const surface = session.surface("s");
+		const node = surface && getValue(new NodeResolver(surface).rootNode);
+		if (!surface || !node) throw new Error("no chart");
+		const shown = () => chartSeries(getValue(node.props).series);
+		expect(shown()).toEqual([
+			{ label: "Runs", values: [3, 5] },
+			{ label: "Goal", values: [4, 4] },
+		]);
+		surface.dataModel.set("/runs", [6, 7]);
+		expect(shown()[0]).toEqual({ label: "Runs", values: [6, 7] });
 	});
 });
