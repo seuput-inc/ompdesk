@@ -145,6 +145,14 @@ async fn serve(
                 head.push_str("\r\n");
                 let _ = socket.write_all(head.as_bytes()).await;
                 let _ = socket.write_all(&answer.body).await;
+                // A route that answers `x-test-stall` keeps the connection open after its bytes: a stalled body.
+                if answer
+                    .headers
+                    .iter()
+                    .any(|(name, _)| *name == "x-test-stall")
+                {
+                    tokio::time::sleep(Duration::from_secs(120)).await;
+                }
                 let _ = socket.shutdown().await;
             });
         }
@@ -177,8 +185,9 @@ fn has(headers: &[String], line: &str) -> bool {
     headers.iter().any(|header| header == line)
 }
 
+/// Larger than the 1 MiB the hash reads at a time, and not a multiple of it.
 fn installer() -> Vec<u8> {
-    (0..300_000_u32).map(|n| (n % 251) as u8).collect()
+    (0..1_048_583_u32).map(|n| (n % 251) as u8).collect()
 }
 
 fn download(server: &Server, file: &Path, body: &[u8], extra: Value) -> Value {
@@ -484,5 +493,68 @@ async fn a_partial_longer_than_the_release_starts_over() {
             .iter()
             .all(|line| !line.starts_with("range:"))
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_body_that_stops_arriving_fails_as_stalled_and_its_bytes_stay_for_the_next_attempt() {
+    let body = installer();
+    let server = {
+        let half = body[..1000].to_vec();
+        let total = body.len();
+        serve(move |_, _| {
+            Some(Answer {
+                status: 200,
+                headers: vec![
+                    ("content-length", total.to_string()),
+                    ("x-test-stall", String::new()),
+                ],
+                body: half.clone(),
+            })
+        })
+        .await
+    };
+    let dir = temp("stalled");
+    let file = dir.join("setup.exe");
+    let mut core = Core::start().await;
+    let frames = core
+        .call(
+            "updateFeed.download",
+            download(&server, &file, &body, json!({})),
+        )
+        .await;
+    let error = &frames.last().unwrap()["error"];
+    assert_eq!(error["code"], "update_stalled");
+    assert_eq!(error["message"], "No data received for 1 s");
+    assert_eq!(
+        std::fs::read(dir.join("setup.exe.partial")).unwrap(),
+        body[..1000]
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn never_writes_through_a_link_in_place_of_the_partial() {
+    let body = installer();
+    let server = {
+        let body = body.clone();
+        serve(move |_, _| Some(Answer::ok(&body))).await
+    };
+    let dir = temp("linked");
+    let file = dir.join("setup.exe");
+    let other = dir.join("other");
+    std::fs::write(&other, b"keep").unwrap();
+    std::os::unix::fs::symlink(&other, dir.join("setup.exe.partial")).unwrap();
+    let mut core = Core::start().await;
+    let frames = core
+        .call(
+            "updateFeed.download",
+            download(&server, &file, &body, json!({})),
+        )
+        .await;
+    assert_eq!(frames.last().unwrap()["error"]["code"], "update_write");
+    assert_eq!(std::fs::read(&other).unwrap(), b"keep");
+    assert!(server.seen.lock().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }

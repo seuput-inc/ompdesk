@@ -6,7 +6,6 @@
 import * as electron from "electron";
 import type { StageBundleReply, StageBundleRequest } from "../updater-state";
 
-export type UpdateFileArea = "downloads" | "updates";
 export type UpdateSweep = { area: "downloads"; asset?: string } | { area: "updates"; asset: string };
 export type InstallerStartReceipt =
 	| { kind: "started"; pid: number }
@@ -15,7 +14,6 @@ export type InstallerStartReceipt =
 export interface UpdateHost {
 	stageUpdateBundle(request: StageBundleRequest): Promise<StageBundleReply>;
 	updateDestination(asset: string): Promise<string>;
-	updateDigest(area: UpdateFileArea, asset: string): Promise<string>;
 	sweepUpdateFiles(request: UpdateSweep): Promise<void>;
 	readUpdateTokenCiphertext(): Promise<Buffer | null>;
 	updateTokenFileStatus(): Promise<{ hasStoredToken: boolean; droppedReason: string | null }>;

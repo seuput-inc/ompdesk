@@ -146,7 +146,6 @@ export const admitNotification: AdmitNotification = report => client.call("app.a
 export const updateHost: UpdateHost = {
 	stageUpdateBundle: request => client.call("app.stageUpdateBundle", request),
 	updateDestination: asset => client.call("app.updateDestination", { asset }),
-	updateDigest: (area, asset) => client.call("app.updateDigest", { area, asset }),
 	async sweepUpdateFiles(request) {
 		await client.call("app.sweepUpdateFiles", request);
 	},

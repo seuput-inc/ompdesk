@@ -1,10 +1,20 @@
 import { createHash } from "node:crypto";
+// The frozen v0.131.0 client is electron-updater's; it stays a dev dependency for this comparison only.
 import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { stopCore } from "./core/process";
-import { type ReleaseFeed, releaseUpdateProvider } from "./update-provider";
-import { RELEASE_LOOKUP_ERROR, UPDATE_COMPATIBILITY_ERROR, UPDATE_METADATA_ERROR } from "./update-release";
-import { releaseUpdateProvider as frozenProvider } from "./update-release.fixtures/v0.131.0/update-provider";
+import { type FeedServer, serveFeed } from "./update-feed-test-rig";
+import {
+	lookupRelease,
+	RELEASE_LOOKUP_ERROR,
+	UPDATE_COMPATIBILITY_ERROR,
+	UPDATE_METADATA_ERROR,
+	type UpdatePlatform,
+} from "./update-release";
+import {
+	releaseUpdateProvider as frozenProvider,
+	type ReleaseFeed,
+} from "./update-release.fixtures/v0.131.0/update-provider";
 import { parseUpdateMetadata as parseFrozenMetadata } from "./update-release.fixtures/v0.131.0/update-release";
 
 afterAll(stopCore);
@@ -31,13 +41,13 @@ function payload(data: unknown = metadata) {
 	};
 }
 
-function makeFeed(platform: "mac" | "windows", systemVersion: string, responseBody = JSON.stringify(payload())) {
+/** The released v0.131.0 client: its electron-updater provider over an in-memory GitHub. */
+function frozenFeed(platform: UpdatePlatform, responseBody = JSON.stringify(payload())) {
 	const requests: { url: string; headers: Record<string, string> }[] = [];
 	const resolved: unknown[] = [];
 	const feed: ReleaseFeed = {
 		apiRepo: API,
 		platform,
-		systemVersion,
 		allowPrerelease: false,
 		apiHeaders: headers,
 		downloadHeaders,
@@ -47,16 +57,26 @@ function makeFeed(platform: "mac" | "windows", systemVersion: string, responseBo
 		},
 		onResolved: release => resolved.push(release),
 	};
-	return { feed, requests, resolved };
-}
-
-function providerFor(factory: typeof releaseUpdateProvider | typeof frozenProvider, feed: ReleaseFeed) {
-	const Provider = factory(feed);
-	return new Provider({ provider: "custom" }, undefined, {
+	const Provider = frozenProvider(feed);
+	const provider = new Provider({ provider: "custom" }, undefined, {
 		isUseMultipleRangeRequest: false,
-		platform: feed.platform === "mac" ? "darwin" : "win32",
+		platform: platform === "mac" ? "darwin" : "win32",
 		executor: new ElectronHttpExecutor(),
 	});
+	return { feed, provider, requests, resolved };
+}
+
+let feed: FeedServer | undefined;
+afterEach(async () => {
+	await feed?.close();
+	feed = undefined;
+});
+
+/** The current client: the core's lookup of a stand-in GitHub answering `body`. */
+async function current(platform: UpdatePlatform, systemVersion: string, body = JSON.stringify(payload())) {
+	await feed?.close();
+	feed = await serveFeed({ body });
+	return lookupRelease({ apiRepo: API, platform, allowPrerelease: false, token: "test-token", systemVersion });
 }
 
 describe("released and current updater compatibility", () => {
@@ -66,8 +86,7 @@ describe("released and current updater compatibility", () => {
 	] as const)(
 		"the frozen v0.131 consumer admits the v1 %s asset without enforcing the optional minimum",
 		async (platform, file, assetId) => {
-			const { feed, requests, resolved } = makeFeed(platform, "23.0.0");
-			const provider = providerFor(frozenProvider, feed);
+			const { provider, requests, resolved } = frozenFeed(platform);
 			const info = await provider.getLatestVersion();
 			expect(info.minimumSystemVersion).toBeUndefined();
 			expect(info.files).toEqual([{ url: file.name, sha512: file.sha512, size: file.size }]);
@@ -80,44 +99,44 @@ describe("released and current updater compatibility", () => {
 		},
 	);
 
-	describe.each([
-		{ client: "frozen v0.131", factory: frozenProvider },
-		{ client: "current", factory: releaseUpdateProvider },
-	])("$client provider", ({ factory }) => {
+	describe("with 20,000 nested arrays in the answer", () => {
 		const deepField = "<deep array>";
 		const nestedArray = `${"[".repeat(20_000)}0${"]".repeat(20_000)}`;
 		function responseWithDeepFields(value: unknown) {
 			return JSON.stringify(value).replaceAll(JSON.stringify(deepField), nestedArray);
 		}
+		const release = payload();
+		const unknownFields = responseWithDeepFields([
+			{ ...release, extra: deepField, assets: release.assets.map(asset => ({ ...asset, extra: deepField })) },
+		]);
+		const deepSize = responseWithDeepFields({ ...release, assets: [{ ...release.assets[0], size: deepField }] });
+		const refusal = {
+			code: RELEASE_LOOKUP_ERROR,
+			message: "Unexpected release payload: assets.0.size: Invalid input: expected number, received array",
+		};
 
-		it("admits a release list with 20,000 nested arrays in unknown release and asset fields", async () => {
-			const release = payload();
-			const body = responseWithDeepFields([
-				{ ...release, extra: deepField, assets: release.assets.map(asset => ({ ...asset, extra: deepField })) },
-			]);
-			const { feed, resolved, requests } = makeFeed("windows", "23.0.0", body);
-			feed.allowPrerelease = true;
-			const provider = providerFor(factory, feed);
-			const info = await provider.getLatestVersion();
-			const file = { url: windows.name, sha512: windows.sha512, size: windows.size };
-			expect(info.files).toEqual([file]);
-			expect(provider.resolveFiles(info)).toEqual([{ url: new URL(`${API}/releases/assets/12`), info: file }]);
-			expect(resolved).toHaveLength(1);
-			expect(requests).toEqual([{ url: `${API}/releases?per_page=30`, headers }]);
+		it("both clients admit a release list with them in unknown release and asset fields", async () => {
+			const frozen = frozenFeed("windows", unknownFields);
+			frozen.feed.allowPrerelease = true;
+			const info = await frozen.provider.getLatestVersion();
+			expect(info.files).toEqual([{ url: windows.name, sha512: windows.sha512, size: windows.size }]);
+			feed = await serveFeed({ body: unknownFields });
+			const now = await lookupRelease({
+				apiRepo: API,
+				platform: "windows",
+				allowPrerelease: true,
+				token: "test-token",
+			});
+			expect(now.file).toEqual({ name: windows.name, sha512: windows.sha512, size: windows.size });
+			expect(now.assetUrl).toBe(`${API}/releases/assets/12`);
+			expect(feed.requests.map(request => request.url)).toEqual([`${API}/releases?per_page=30`]);
 		});
 
-		it("refuses 20,000 nested arrays in a known asset size without requesting a download", async () => {
-			const release = payload();
-			const body = responseWithDeepFields({ ...release, assets: [{ ...release.assets[0], size: deepField }] });
-			const { feed, resolved, requests } = makeFeed("mac", "23.0.0", body);
-			const provider = providerFor(factory, feed);
-			await expect(provider.getLatestVersion()).rejects.toMatchObject({
-				name: "ReleaseFeedError",
-				code: RELEASE_LOOKUP_ERROR,
-				message: "Unexpected release payload: assets.0.size: Invalid input: expected number, received array",
-			});
-			expect(resolved).toEqual([]);
-			expect(requests).toEqual([{ url: `${API}/releases/latest`, headers }]);
+		it("both clients refuse them in a known asset size", async () => {
+			const frozen = frozenFeed("mac", deepSize);
+			await expect(frozen.provider.getLatestVersion()).rejects.toMatchObject(refusal);
+			expect(frozen.resolved).toEqual([]);
+			await expect(current("mac", "23.0.0", deepSize)).rejects.toMatchObject(refusal);
 		});
 	});
 
@@ -128,91 +147,64 @@ describe("released and current updater compatibility", () => {
 	});
 
 	it.each(["21.0.0", "22.0.0", "invalid", "23.0.0-beta", ""])(
-		"rejects Darwin %s before exposing a resolved release or an admitted file",
+		"rejects Darwin %s before answering a release",
 		async systemVersion => {
-			const { feed, requests, resolved } = makeFeed("mac", systemVersion);
-			const provider = providerFor(releaseUpdateProvider, feed);
-			await expect(provider.getLatestVersion()).rejects.toMatchObject({
+			await expect(current("mac", systemVersion)).rejects.toMatchObject({
 				code: UPDATE_COMPATIBILITY_ERROR,
 				message: `Update ${metadata.version} requires Darwin 23.0.0; this system reports ${systemVersion}`,
 			});
-			expect(resolved).toEqual([]);
-			expect(() =>
-				provider.resolveFiles({
-					version: metadata.version,
-					releaseDate: metadata.releaseDate,
-					files: [],
-					path: mac.name,
-					sha512: mac.sha512,
-				}),
-			).toThrow();
-			expect(requests).toEqual([{ url: `${API}/releases/latest`, headers }]);
+			expect(feed?.requests.map(request => request.url)).toEqual([`${API}/releases/latest`]);
 		},
 	);
 
-	it.each(["23.0.0", "24.1.0"])("admits Darwin %s with the minimum in UpdateInfo", async systemVersion => {
-		const { feed, resolved } = makeFeed("mac", systemVersion);
-		const provider = providerFor(releaseUpdateProvider, feed);
-		const info = await provider.getLatestVersion();
-		expect(info.minimumSystemVersion).toBe("23.0.0");
-		expect(info.files).toEqual([{ url: mac.name, sha512: mac.sha512, size: mac.size }]);
-		expect(provider.resolveFiles(info)).toEqual([{ url: new URL(`${API}/releases/assets/11`), info: info.files[0] }]);
-		expect(resolved).toHaveLength(1);
+	it.each(["23.0.0", "24.1.0"])("admits Darwin %s with the minimum in the release", async systemVersion => {
+		const release = await current("mac", systemVersion);
+		expect(release.minimumSystemVersion).toBe("23.0.0");
+		expect(release.file).toEqual({
+			name: mac.name,
+			sha512: mac.sha512,
+			size: mac.size,
+			minimumSystemVersion: "23.0.0",
+		});
+		expect(release.assetUrl).toBe(`${API}/releases/assets/11`);
 	});
 
 	it("uses the Darwin 23 floor when the optional minimum is absent", async () => {
 		const file = { name: mac.name, size: mac.size, sha512: mac.sha512 };
 		const body = JSON.stringify(payload({ ...metadata, files: { mac: file, windows } }));
-		const supported = providerFor(releaseUpdateProvider, makeFeed("mac", "23.0.0", body).feed);
-		expect((await supported.getLatestVersion()).minimumSystemVersion).toBe("23.0.0");
-		const unsupported = providerFor(releaseUpdateProvider, makeFeed("mac", "22.0.0", body).feed);
-		await expect(unsupported.getLatestVersion()).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });
+		expect((await current("mac", "23.0.0", body)).minimumSystemVersion).toBe("23.0.0");
+		await expect(current("mac", "22.0.0", body)).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });
 	});
 
 	it("honors a release minimum above the Darwin 23 floor", async () => {
 		const body = JSON.stringify(
 			payload({ ...metadata, files: { mac: { ...mac, minimumSystemVersion: "24.0.0" }, windows } }),
 		);
-		const { feed, resolved } = makeFeed("mac", "23.0.0", body);
-		const provider = providerFor(releaseUpdateProvider, feed);
-		await expect(provider.getLatestVersion()).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });
-		expect(resolved).toEqual([]);
-		const supported = providerFor(releaseUpdateProvider, makeFeed("mac", "24.0.0", body).feed);
-		expect((await supported.getLatestVersion()).minimumSystemVersion).toBe("24.0.0");
+		await expect(current("mac", "23.0.0", body)).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });
+		expect((await current("mac", "24.0.0", body)).minimumSystemVersion).toBe("24.0.0");
 	});
 
-	it("does not reuse a prior admission after the system version becomes incompatible", async () => {
-		const { feed, resolved } = makeFeed("mac", "23.0.0");
-		const provider = providerFor(releaseUpdateProvider, feed);
-		const info = await provider.getLatestVersion();
-		expect(provider.resolveFiles(info)).toHaveLength(1);
-		feed.systemVersion = "22.0.0";
-		expect(() => provider.resolveFiles(info)).toThrow();
-		await expect(provider.getLatestVersion()).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });
-		expect(resolved).toHaveLength(1);
-		expect(() => provider.resolveFiles(info)).toThrow();
+	it("admits by this system's version at each lookup, never by an earlier one", async () => {
+		expect((await current("mac", "23.0.0")).version).toBe("0.132.0");
+		await expect(current("mac", "22.0.0")).rejects.toMatchObject({ code: UPDATE_COMPATIBILITY_ERROR });
 	});
 
 	it.each(["", "23.x.0", "23.0.0-beta", " 23.0.0", "14.0.0"])(
 		"rejects invalid metadata minimum %s",
 		async minimumSystemVersion => {
 			const data = { ...metadata, files: { mac: { ...mac, minimumSystemVersion }, windows } };
-			const { feed, resolved } = makeFeed("mac", "23.0.0", JSON.stringify(payload(data)));
-			const provider = providerFor(releaseUpdateProvider, feed);
-			await expect(provider.getLatestVersion()).rejects.toMatchObject({ code: UPDATE_METADATA_ERROR });
-			expect(resolved).toEqual([]);
+			await expect(current("mac", "23.0.0", JSON.stringify(payload(data)))).rejects.toMatchObject({
+				code: UPDATE_METADATA_ERROR,
+			});
 		},
 	);
 
 	it("leaves Windows admission, integrity metadata and authorization unchanged", async () => {
-		const { feed, requests, resolved } = makeFeed("windows", "invalid");
-		const provider = providerFor(releaseUpdateProvider, feed);
-		const info = await provider.getLatestVersion();
-		expect(info.minimumSystemVersion).toBeUndefined();
-		expect(info.files).toEqual([{ url: windows.name, sha512: windows.sha512, size: windows.size }]);
-		expect(provider.resolveFiles(info)).toEqual([{ url: new URL(`${API}/releases/assets/12`), info: info.files[0] }]);
-		expect(provider.fileExtraDownloadHeaders).toEqual(downloadHeaders);
-		expect(requests).toEqual([{ url: `${API}/releases/latest`, headers }]);
-		expect(resolved).toHaveLength(1);
+		const release = await current("windows", "invalid");
+		expect(release.minimumSystemVersion).toBeUndefined();
+		expect(release.file).toEqual({ name: windows.name, sha512: windows.sha512, size: windows.size });
+		expect(release.assetUrl).toBe(`${API}/releases/assets/12`);
+		expect(feed?.requests.map(request => request.url)).toEqual([`${API}/releases/latest`]);
+		expect(feed?.requests[0]?.headers).toMatchObject(headers);
 	});
 });

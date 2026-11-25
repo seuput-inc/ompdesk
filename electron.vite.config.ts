@@ -80,7 +80,7 @@ function separatePreload(name: string): Plugin {
  * that package — in this nested checkout bun hoists most deps to the monorepo root, so a
  * traversal misses them and the app dies at launch with ERR_MODULE_NOT_FOUND.
  */
-const MAIN_BUNDLED_DEPS = ["electron-updater", "jszip", "ws", "yaml", "zod"];
+const MAIN_BUNDLED_DEPS = ["jszip", "ws", "yaml", "zod"];
 
 /**
  * Optional native addons of bundled packages, switched off at build time. Vite resolves an optional peer

@@ -102,7 +102,7 @@ runs:
         src/main/ext-update/mcp-plans.test.ts
         src/main/ext-update/updater.test.ts
         src/main/update-release.test.ts
-        src/main/update-provider.test.ts
+        src/main/update-lookup.test.ts
         src/main/update-compatibility.test.ts
         src/main/github-auth/service.test.ts
         src/main/checkout-peers*.test.ts

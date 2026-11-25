@@ -1,33 +1,27 @@
 import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { stopCore } from "./core/process";
 import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 import { checkRepoAccess } from "./update-auth";
+import { serveFeed } from "./update-feed-test-rig";
 import { lastSwapEntry } from "./update-log-core";
 import {
 	classifyRepoAccess,
-	DOWNLOAD_IDLE_TIMEOUT_MS,
 	firstUpdateToken,
-	githubApiHeaders,
-	installerPartialPath,
 	isSwappableBundleLocation,
 	macBundlePath,
-	planInstallerTransfer,
 	SingleTransfer,
 	StageBundleError,
 	SWAP_SCRIPT,
 	settleFailedUpdateCheck,
 	settleIncompleteUpdateCheck,
 	stageBundleFromDmg,
-	TransferStalledError,
-	withinIdle,
 } from "./updater-state";
 
-const updateFetch = vi.hoisted(() => vi.fn());
-vi.mock("electron", () => ({ app: {}, net: { fetch: updateFetch }, safeStorage: {} }));
+vi.mock("electron", () => ({ app: {}, safeStorage: {} }));
 
 let files: ShellPolicyFixture;
 beforeAll(async () => {
@@ -35,7 +29,10 @@ beforeAll(async () => {
 	await prepareShellPolicyFixture();
 	files = await shellPolicyFixture();
 }, 120_000);
-afterAll(async () => files?.close());
+afterAll(async () => {
+	await files?.close();
+	await stopCore();
+});
 
 function sweepInstallerPartials(directory: string, activePartial?: string): Promise<string[]> {
 	const asset = activePartial && path.basename(activePartial, ".partial");
@@ -43,15 +40,36 @@ function sweepInstallerPartials(directory: string, activePartial?: string): Prom
 }
 
 describe("update repository access", () => {
-	it("requests the canonical repository without a token", async () => {
-		updateFetch.mockResolvedValueOnce(new Response(null, { status: 200 }));
-		expect(await checkRepoAccess(undefined)).toBe("ok");
-		expect(updateFetch).toHaveBeenCalledWith(
-			"https://api.github.com/repos/seuput-inc/ompdesk",
-			expect.objectContaining({
-				headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
-			}),
-		);
+	it("asks the canonical repository through the core, without a token", async () => {
+		const feed = await serveFeed({ body: "{}" });
+		try {
+			expect(await checkRepoAccess(undefined)).toBe("ok");
+			expect(feed.requests.map(request => request.url)).toEqual(["https://api.github.com/repos/seuput-inc/ompdesk"]);
+			expect(feed.requests[0]?.headers).toMatchObject({
+				accept: "application/vnd.github+json",
+				"x-github-api-version": "2022-11-28",
+			});
+			expect(feed.requests[0]?.headers.authorization).toBeUndefined();
+		} finally {
+			await feed.close();
+		}
+	});
+
+	it("reads GitHub's hourly limit as a failed request and a refused token as invalid", async () => {
+		const limited = await serveFeed({ status: 403, body: "{}" });
+		try {
+			// The stand-in sends no rate-limit header: a plain 403 is no access.
+			expect(await checkRepoAccess("abc")).toBe("denied");
+			expect(limited.requests[0]?.headers.authorization).toBe("Bearer abc");
+		} finally {
+			await limited.close();
+		}
+		const refused = await serveFeed({ status: 401, body: "{}" });
+		try {
+			expect(await checkRepoAccess("abc")).toBe("invalid");
+		} finally {
+			await refused.close();
+		}
 	});
 });
 
@@ -80,44 +98,6 @@ describe("installer transfer concurrency", () => {
 		const retry = vi.fn(async () => {});
 		await transfers.start(retry);
 		expect(retry).toHaveBeenCalledTimes(1);
-	});
-});
-
-describe("installer transfer idle timeout", () => {
-	afterEach(() => {
-		vi.useRealTimers();
-	});
-
-	it("aborts a step that delivers nothing and fails with a stall", async () => {
-		vi.useFakeTimers();
-		const abort = vi.fn();
-		const stalled = withinIdle(new Promise<never>(() => {}), DOWNLOAD_IDLE_TIMEOUT_MS, abort);
-		const outcome = expect(stalled).rejects.toBeInstanceOf(TransferStalledError);
-
-		await vi.advanceTimersByTimeAsync(DOWNLOAD_IDLE_TIMEOUT_MS);
-		await outcome;
-		expect(abort).toHaveBeenCalledTimes(1);
-	});
-
-	it("reports the stall even when the abort rejects the step synchronously", async () => {
-		vi.useFakeTimers();
-		const { promise: step, reject } = Promise.withResolvers<never>();
-		const outcome = expect(
-			withinIdle(step, DOWNLOAD_IDLE_TIMEOUT_MS, () => reject(new Error("aborted"))),
-		).rejects.toBeInstanceOf(TransferStalledError);
-
-		await vi.advanceTimersByTimeAsync(DOWNLOAD_IDLE_TIMEOUT_MS);
-		await outcome;
-	});
-
-	it("passes a step that arrives in time through and never aborts it", async () => {
-		vi.useFakeTimers();
-		const abort = vi.fn();
-		const chunk = withinIdle(Promise.resolve("bytes"), DOWNLOAD_IDLE_TIMEOUT_MS, abort);
-
-		await expect(chunk).resolves.toBe("bytes");
-		await vi.advanceTimersByTimeAsync(DOWNLOAD_IDLE_TIMEOUT_MS * 2);
-		expect(abort).not.toHaveBeenCalled();
 	});
 });
 
@@ -444,42 +424,7 @@ fi`,
 	});
 });
 
-describe("manual installer transfer", () => {
-	it("continues a partial only when the server answers for exactly the bytes it holds", () => {
-		expect(planInstallerTransfer(500, { status: 206, contentRange: "bytes 500-999/1000" })).toEqual({
-			offset: 500,
-			append: true,
-		});
-	});
-
-	it("rewrites from the top whenever appended bytes would corrupt the installer", () => {
-		const restarts = [
-			planInstallerTransfer(0, { status: 206, contentRange: "bytes 0-999/1000" }),
-			planInstallerTransfer(500, { status: 200 }),
-			planInstallerTransfer(500, { status: 206 }),
-			planInstallerTransfer(500, { status: 206, contentRange: "bytes 0-999/1000" }),
-		];
-		for (const plan of restarts) expect(plan).toEqual({ offset: 0, append: false });
-	});
-
-	it.runIf(process.platform !== "win32")("hashes every byte of an installer larger than its read buffer", async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-installer-"));
-		try {
-			for (const size of [1024 * 1024 + 7, 2 * 1024 * 1024]) {
-				const bytes = new Uint8Array(size);
-				for (let index = 0; index < size; index += 1) bytes[index] = index % 251;
-				const asset = "ompdesk-1.2.3-arm64 (2).dmg";
-				const file = path.join(dir, installerPartialPath(asset));
-				fs.writeFileSync(file, bytes);
-				expect(await files.call("app.updateDigest", { directory: dir, area: "downloads", asset })).toBe(
-					createHash("sha512").update(bytes).digest("base64"),
-				);
-			}
-		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
-});
+// The transfer itself (resume, hash, stall) is the core's: crates/core/src/update_feed/net_tests.rs.
 
 describe.runIf(process.platform !== "win32")("installer debris sweep", () => {
 	const ENTRIES = [
@@ -516,7 +461,7 @@ describe.runIf(process.platform !== "win32")("installer debris sweep", () => {
 	});
 
 	it("drops a superseded release's partial once the current download names its own", async () => {
-		const active = installerPartialPath(path.join(dir, "ompdesk-0.9.9-arm64.dmg"));
+		const active = path.join(dir, "ompdesk-0.9.9-arm64.dmg.partial");
 		fs.writeFileSync(active, "x");
 		const removed = await sweepInstallerPartials(dir, active);
 		expect(removed.sort()).toEqual([
@@ -529,7 +474,7 @@ describe.runIf(process.platform !== "win32")("installer debris sweep", () => {
 	});
 
 	it("leaves files the updater never wrote where they are", async () => {
-		const active = installerPartialPath(path.join(dir, "ompdesk-0.9.9-arm64.dmg"));
+		const active = path.join(dir, "ompdesk-0.9.9-arm64.dmg.partial");
 		await sweepInstallerPartials(dir, active);
 		await sweepInstallerPartials(dir);
 		for (const name of [
@@ -571,19 +516,6 @@ describe("release access with an optional token", () => {
 		expect(classifyRepoAccess(403)).toBe("denied");
 		expect(classifyRepoAccess(404)).toBe("denied");
 		expect(classifyRepoAccess(502)).toBe("network");
-	});
-
-	it("sends no Authorization header without a token and a Bearer one with a token", () => {
-		expect(githubApiHeaders(undefined)).toEqual({
-			accept: "application/vnd.github+json",
-			"x-github-api-version": "2022-11-28",
-		});
-		expect(githubApiHeaders("", "application/octet-stream")).not.toHaveProperty("authorization");
-		expect(githubApiHeaders("gho_abc", "application/octet-stream")).toEqual({
-			accept: "application/octet-stream",
-			authorization: "Bearer gho_abc",
-			"x-github-api-version": "2022-11-28",
-		});
 	});
 
 	it("reads GitHub's hourly rate limit as a failed request, not as missing access", () => {

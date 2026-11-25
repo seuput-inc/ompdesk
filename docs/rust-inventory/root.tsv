@@ -263,7 +263,7 @@ src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, setup and s
 src/main/initial-cwd.test.ts	tooling	-	Real-core parity for startup cwd selection and default workspace creation.
 src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path or an existing directory before falling back to home.
 src/main/installer-spawn.test.ts	tooling	-	Vitest suite: spawnDetachedOffThread.
-src/main/installer-spawn.ts	port	1	G: replace the Node worker with native launch of the verified Windows asset, including elevation and the real setup PID. The shell's quit chain (quit_chain.rs) observes the first worker attempt only; never expose a detached spawn by path.
+src/main/installer-spawn.ts	port	1	U1: updater.ts starts the Windows setup through it on a restart (a worker thread, Defender's scan inside CreateProcess) and hands the first attempt to the shell's quit chain (quit_chain.rs). U2 moves the start into the shell, with the setup's real PID and the elevation retry; it moves with that install start (§1.3a,c).
 src/main/ipc.ts	mixed	4	registerIpcHandlers still routes session commands and renderer events. Desktop runtime:log-path and runtime:log-tail bypass Node; paired requests use the same Tauri reader after the workspace permission check. Clipboard and image conversion already use the shell and stock worker.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
@@ -321,8 +321,6 @@ src/main/notification-batch.test.ts	tooling	-	Vitest suite: NotificationBatcher.
 src/main/notification-batch.ts	port	2	The first notice immediately returns a closable window notification; retract, dropWindow and will-quit cancel the same live batch. Desktop IPC and WebPushNotifier share it. Move with those notification sinks, not an asynchronous timer RPC per notice (§1.3a,c).
 src/main/notify-triage.test.ts	tooling	-	Vitest suite: a completion the judge says waits for the person.
 src/main/notify-triage.ts	mixed	3	The shell owns repeat admission and the judge deadline. §1.3(a,c): the window's local bridge is a live capability; its focus must be read after the judge result with no yield before enqueueing the notice.
-src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
-src/main/nsis-updater.ts	port	4	Hands the first worker result (PID or failure) to the shell's quit chain (quit_chain.rs) before teardown. An elevate.exe PID identifies the helper, not setup; stock EACCES/UNKNOWN elevation and ENOENT openPath fallbacks are not additional receipts. G replaces this adapter with verified-asset launch and its own elevation path (§1.3a,c).
 src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
 src/main/omp-auto-takeover.ts	port	2	Shell updater batch, §1.3a,c: OmpUpdater.state reads taken() synchronously at startup and on every change. Move that snapshot with the stock update.auto record and its serialized read/write/restore; a stale copy can report ownership the person revoked.
 src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
@@ -491,22 +489,22 @@ src/main/turn-stop-log.ts	port	1	dispatchedCommand/recordTurnStop log the origin
 src/main/turn-wait-watch.test.ts	tooling	-	Vitest suite: turn wait watch.
 src/main/turn-wait-watch.ts	mixed	3	sessions.journalWait reads the bounded journal tail and extracts pending calls. The watch timestamps synchronous pool activity, retries and resume transitions before its next sweep; main logs those facts with the native evidence.
 src/main/update-auth.test.ts	tooling	-	Vitest suite: a stored update token when the keychain would ask.
-src/main/update-auth.ts	mixed	2	The shell stores only sealed token bytes and the keychain-would-ask marker. Main selects the login environment, gh and safeStorage sources in order and uses the default HTTP session for the repository probe.
+src/main/update-auth.ts	mixed	2	The shell stores only sealed token bytes and the keychain-would-ask marker; the repository probe is the core's updateFeed.fetch (U1). Main selects the login environment, gh and safeStorage sources in order: safeStorage is main's until the stored token's owner moves (§1.3a).
 src/main/update-compatibility.test.ts	tooling	-	Vitest suite: released and current updater compatibility.
+src/main/update-feed-test-rig.ts	tooling	-	serveFeed: a stand-in for api.github.com on 127.0.0.1 that the core's updateFeed.fetch reaches as the updater's mirror.
 src/main/update-log-core.test.ts	tooling	-	Vitest suite: scrubUpdateText.
 src/main/update-log-core.ts	port	1	No file I/O: the first-window and will-quit handlers synchronously project the previous install and redact reasons with the shared diagnostics redactor. Move with those marker writes, not as another log writer (§1.3a,b,d).
-src/main/update-provider.test.ts	tooling	-	Vitest suite: release-notes update provider.
-src/main/update-provider.ts	mixed	4	The shell fetches through the default session (system proxy and certificates); updateFeed.resolve in core selects the release. electron-updater calls resolveFiles synchronously on this provider's last admitted release (§1.3a,c).
+src/main/update-lookup.test.ts	tooling	-	Vitest suite: the release lookup through the core.
 src/main/update-release.test.ts	tooling	-	Vitest suite: update metadata comment.
-src/main/update-release.ts	mixed	4	updateFeed.resolve validates the release, metadata, asset and declared OS floor in Rust. Both provider admission and synchronous resolveFiles recheck the running OS with shared compareVersions (§1.3a,d).
+src/main/update-release.ts	mixed	4	U1: the release lookup and the installer download are the core's (updateFeed.fetch, updateFeed.download; update_feed/net.rs) and updateFeed.resolve validates the release. What stays is the typed client: the error codes the check classifies, the JSON-syntax wording a malformed answer keeps, and the OS admission against node:os release() with the shared compareVersions, read with UpdateStatus in main until U4 (§1.3a,d).
 src/main/update-scheduler.test.ts	tooling	-	Vitest suite: nextCheckDelay.
 src/main/update-scheduler.ts	port	2	OmpUpdater, CliUpdater and ExtensionUpdater read started and disposed in the same tick to decide whether to enqueue or publish. Move the timer and serial callback queue with these services, not the app's installer (§1.3a,c).
 src/main/updater-check.test.ts	tooling	-	Vitest suite: Check for Updates while the background check runs.
 src/main/updater-held-quit.test.ts	tooling	-	Vitest suite: a quit with a staged version that failed to start before.
 src/main/updater-install.test.ts	tooling	-	Vitest suite: Restart & install with background work running.
 src/main/updater-state.test.ts	tooling	-	Vitest suite: update repository access.
-src/main/updater-state.ts	mixed	2	The shell hashes the partial, cleans installer debris and stages and verifies the DMG. SingleTransfer, progress and the quit-time swap handoff remain with the owner of UpdateStatus (§1.3a,c).
-src/main/updater.ts	mixed	4	The shell resolves the Downloads destination, sweeps stale files and returns the verified staged bundle. Main owns the live HTTP stream, electron-updater events, quit approval and synchronous install handoff (§1.3a,c).
+src/main/updater-state.ts	mixed	2	The shell cleans installer debris and stages and verifies the DMG; the core downloads and hashes the installer (U1). SingleTransfer, the check's settling and the swap script remain with the owner of UpdateStatus, main until U4 (§1.3a,c).
+src/main/updater.ts	mixed	4	U1: the core reads the release and downloads the installer (no electron-updater); main starts the Windows setup and the macOS swap. UpdateStatus, the install's start, quit approval and the scheduler stay in main until U2-U4: beginInstall, the quit hooks and the scheduler's tick write and read the status in the same tick (§1.3a,c).
 src/main/window-chrome.test.ts	tooling	-	Vitest suite: nativeThemeSource, sanitizeChromeColors.
 src/main/window-chrome.ts	port	1	The chrome options and the Mica decision are the shell's (tauri-shell/src/app_window.rs, W1). nativeThemeSource is read with the prefs store at startup and on each theme change; WINDOW_CHROME_SET validates unknown input before setTitleBarOverlay. Move with the prefs owner (B) and trusted IPC dispatch.
 src/main/window-spawn-target.test.ts	tooling	-	Vitest suite: resolveWindowSpawnTarget.

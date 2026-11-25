@@ -39,7 +39,11 @@ const USER_AGENT: &str = "ompdesk-updater";
 /// What GitHub's REST API version the requests are written for.
 const API_VERSION: &str = "2022-11-28";
 /// A transfer that receives nothing for this long fails; its partial stays for the next attempt.
+#[cfg(not(test))]
 pub(crate) const IDLE: Duration = Duration::from_secs(30);
+/// A second in the tests, which stall a transfer on purpose.
+#[cfg(test)]
+pub(crate) const IDLE: Duration = Duration::from_secs(1);
 /// How often the bytes received so far are reported while they grow.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
@@ -204,16 +208,34 @@ fn stalled() -> Fault {
     )
 }
 
+/// The length of a regular file at `path`, `None` when nothing is there. A link or anything else is refused: an
+/// installer and its partial are only ever this download's own files (the shell's hash of the partial refused a link
+/// the same way), so another file is never hashed, kept, appended to or run in their place.
+fn regular(path: &Path) -> io::Result<Option<u64>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() => Ok(Some(meta.len())),
+        Ok(_) => Err(io::Error::other(format!(
+            "{} is not a regular file",
+            path.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 async fn download(call: Call) -> Result<Reply, Fault> {
     let params: DownloadParams = call.params()?;
     let file = PathBuf::from(&params.file);
     let partial = partial_of(&params.file);
     let (kept, expected) = (file.clone(), params.sha512.clone());
     // The installer a former download left (electron-updater's cache too): kept when it is this release's.
-    if blocking(move || Ok(sha512_of(&kept).ok() == Some(expected)))
-        .await
-        .unwrap_or(false)
-    {
+    // A link there is not this download's installer: the rename at the end replaces it.
+    let done = blocking(move || {
+        Ok(matches!(regular(&kept), Ok(Some(_))) && sha512_of(&kept).ok() == Some(expected))
+    })
+    .await
+    .unwrap_or(false);
+    if done {
         return Reply::json(&json!({}));
     }
     if let Some(parent) = file
@@ -226,9 +248,9 @@ async fn download(call: Call) -> Result<Reply, Fault> {
             .map_err(|error| write_failed(&error))?;
     }
     let held = partial.clone();
-    let mut existing = blocking(move || Ok(std::fs::metadata(held).map(|m| m.len()).unwrap_or(0)))
+    let mut existing = blocking(move || Ok(regular(&held)?.unwrap_or(0)))
         .await
-        .unwrap_or(0);
+        .map_err(|error| write_failed(&error))?;
     if existing > params.size {
         let stale = partial.clone();
         let _ = blocking(move || std::fs::remove_file(stale)).await;

@@ -1,26 +1,27 @@
 /**
  * GitHub release updates. A release carries two assets, `ompdesk-mac-arm64.dmg`
  * and `ompdesk-windows-setup.exe`, and their version, size and SHA-512 in an
- * HTML comment in its notes (src/main/update-release.ts); a custom
- * electron-updater provider (src/main/update-provider.ts) turns that into
- * electron-updater's UpdateInfo. Install paths:
+ * HTML comment in its notes. The core reads the release (`lookupRelease`,
+ * src/main/update-release.ts) and downloads the installer, checking its SHA-512
+ * and continuing an interrupted `.partial` (`downloadInstaller`). Install paths:
  *
- * - Windows keeps electron-updater's NSIS flow, downloaded in the background
- *   and applied on restart or quit (full download: no blockmaps ship);
+ * - Windows downloads the NSIS setup in the background to
+ *   `%LOCALAPPDATA%\ompdesk-updater\pending` and starts it on restart (off the
+ *   main thread, the shell's quit chain waiting for that start) or at any approved
+ *   quit (silent, no relaunch);
  * - macOS builds in a writable location ("relaunch") download the DMG in the
- *   background, verify its SHA-512, copy the app out of the mounted image,
+ *   background, copy the app out of the mounted image,
  *   verify its signature/identity, and swap the bundle in place from a
  *   detached helper once the app exits — on "Restart" (then relaunch) or on
- *   any approved quit (no relaunch). This covers certificate-signed builds
- *   too: Squirrel would need a ZIP the release no longer ships;
+ *   any approved quit (no relaunch);
  * - builds the app cannot replace (read-only volume, translocated) fall back
  *   to the verified DMG opened in Finder ("manual").
  *
  * Transfers report progress through one shared renderer state machine; an
  * interrupted transfer keeps its `.partial` and continues from that offset.
- * Only one macOS transfer runs at a time (a check or download request meanwhile
- * just returns its status), and one that receives nothing for
- * DOWNLOAD_IDLE_TIMEOUT_MS fails as retryable.
+ * Only one transfer runs at a time (a check or download request meanwhile
+ * just returns its status), and one that receives nothing for 30 s fails as
+ * retryable.
  *
  * The release repo is public, so a check and a download carry no credentials
  * by default. A configured GitHub token (src/main/update-auth.ts) is added to
@@ -31,22 +32,29 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { app, BrowserWindow, net, shell } from "electron";
-import type { AppUpdater, UpdateInfo } from "electron-updater";
-import pkg from "electron-updater";
+import { app, BrowserWindow, shell } from "electron";
 import type { UpdateAuthTestResult, UpdateInstallMode, UpdateStatus } from "../shared/ipc-types";
 import { IPC_COMMANDS, IPC_EVENTS } from "../shared/ipc-types";
+import { compareVersions } from "../shared/version";
 import { AutoInstallScheduler, type InstallTrigger } from "./app-auto-update";
-import { confirmUpdateRestart, disarmQuitWatchdog, logQuitAsked, onQuitForcedExit, requestQuit } from "./app-quit";
+import { confirmUpdateRestart, logQuitAsked, onQuitForcedExit, requestQuit } from "./app-quit";
 import { writeFileAtomicSync } from "./atomic-file";
 import { type BackgroundWork, NO_BACKGROUND_WORK } from "./background-work";
+import { CoreError } from "./core/process";
 import { markMainStep } from "./hang-watchdog";
 import { mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
-import { OmpNsisUpdater } from "./nsis-updater";
+import { spawnDetachedOffThread } from "./installer-spawn";
 import { writeRuntimeLog } from "./runtime-log";
-import { systemIdleSeconds, updateHost } from "./shell-host/shell-calls";
+import {
+	type InstallerStartReceipt,
+	installerQuitPending,
+	installerQuitReceipt,
+	systemIdleSeconds,
+	updateHost,
+} from "./shell-host/shell-calls";
 import {
 	checkRepoAccess,
 	clearUpdateToken,
@@ -74,32 +82,30 @@ import {
 	type WindowPresence,
 	windowPresenceOf,
 } from "./update-log-core";
-import { releaseUpdateProvider } from "./update-provider";
-import { type MacRelease, UPDATE_METADATA_ERROR, UPDATE_PLATFORM_ERROR } from "./update-release";
 import {
-	DOWNLOAD_IDLE_TIMEOUT_MS,
-	githubApiHeaders,
-	installerPartialPath,
+	downloadInstaller,
+	lookupRelease,
+	type PlatformRelease,
+	setUpdateNetwork,
+	UPDATE_ASSETS,
+	UPDATE_METADATA_ERROR,
+	UPDATE_PLATFORM_ERROR,
+} from "./update-release";
+import {
 	isSwappableBundleLocation,
 	macBundlePath,
-	planInstallerTransfer,
 	SingleTransfer,
 	StageBundleError,
 	SWAP_SCRIPT,
 	settleFailedUpdateCheck,
 	settleIncompleteUpdateCheck,
 	stageBundleFromDmg,
-	withinIdle,
 } from "./updater-state";
 import type { IpcRegistry } from "./web/ipc-registry";
-
-/** Windows: electron-updater's NSIS updater, its installer started off the main thread (nsis-updater.ts). */
-const autoUpdater: AppUpdater = process.platform === "win32" ? new OmpNsisUpdater() : pkg.autoUpdater;
 
 // Five minutes: a release reaches users within one interval. One GitHub API
 // call per check is 12 an hour, under the 60/h anonymous limit.
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
-const PROGRESS_INTERVAL_MS = 100;
 
 /**
  * App version for the updates row. `app.getVersion()` reads the HOST
@@ -123,11 +129,9 @@ export function appVersion(): string {
 /** Current status, replayed to any window that asks (renderer boot/refresh). */
 let current: UpdateStatus = { state: "idle" };
 let installMode: UpdateInstallMode = "automatic";
-let activeUpdate: UpdateInfo | undefined;
-/** The release the last check resolved; macOS takes its DMG from here. */
-let resolvedRelease: MacRelease | undefined;
-/** The DMG the current macOS mode downloads (manual: to Downloads; relaunch: to staging). */
-let macAsset: MacRelease | undefined;
+/** The update the last check found (its installer is what a download fetches). */
+let release: PlatformRelease | undefined;
+/** The verified installer: the Windows setup in electron-updater's old cache folder, or the manual DMG in Downloads. */
 let downloadedInstallerPath: string | undefined;
 /** Running bundle the relaunch mode replaces (`/Applications/OMPdesk.app`). */
 let ownBundle: string | undefined;
@@ -149,8 +153,8 @@ let updateToken: string | undefined;
 let checkRun: Promise<void> | null = null;
 /** Someone asked for the check under way: its outcome is shown, a failure or "no result" included. */
 let checkAsked = false;
-/** The macOS DMG download; a second one would append to the same `.partial`. */
-const macTransfer = new SingleTransfer();
+/** The installer download; a second one would append to the same `.partial`. */
+const transfer = new SingleTransfer();
 /** Installs a downloaded update by itself at a quiet moment (Settings › Updates & about); null before `setupUpdater`. */
 let autoInstall: AutoInstallScheduler | null = null;
 /**
@@ -189,12 +193,12 @@ export interface AutoInstallProbe {
 	opening: () => boolean;
 	/** Running background subagents and jobs of every tab on this computer, asked fresh (`background-work.ts`). */
 	backgroundWork: () => Promise<BackgroundWork>;
+	/** The proxy `proxy.resolve` picks; the release lookup and the installer download go through it. */
+	proxy: () => Promise<string | undefined>;
 }
 
 /** The trigger of the install in progress; unset until one starts, so an approved quit with an update staged counts as `quit`. */
 let installTrigger: InstallTrigger | undefined;
-/** When electron-updater's own (Windows NSIS) download started; unset outside one. */
-let nsisDownloadStartedAt: number | undefined;
 
 /**
  * One decision line in `gui-runtime.jsonl` (source `app-update`, info level). The caller never passes a token or
@@ -344,7 +348,6 @@ function startFailedPath(): string {
 
 function rememberStartFailure(failure: StartFailure): void {
 	startFailure = failure;
-	syncQuitInstall();
 	try {
 		writeFileAtomicSync(startFailedPath(), JSON.stringify(failure));
 	} catch (error) {
@@ -374,20 +377,79 @@ function startFailedBefore(): boolean {
 function clearStartFailure(): void {
 	startFailure = undefined;
 	fs.rmSync(startFailedPath(), { force: true });
-	syncQuitInstall();
+}
+
+/** Where the Windows setup is kept: electron-updater's cache folder, so a setup the last Electron build fetched is reused. */
+function windowsInstallerFile(): string {
+	const local = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+	return path.join(local, "ompdesk-updater", "pending", UPDATE_ASSETS.windows);
 }
 
 /**
- * Windows: electron-updater installs a downloaded update by itself at an approved quit and downloads what a check
- * finds. While the downloaded version is held as start-failed neither may happen: a quit never installs it (only
- * "Restart & install" does, through `quitAndInstall`), and a check that finds that same version again must not fetch it
- * a second time (a newer one is downloaded by hand, `update-available`). Read by electron-updater when it quits or
- * when a check ends, so it follows every status and the record.
+ * Starts the downloaded Windows setup with `args`, once. A failed start is retried as electron-updater's NSIS updater
+ * did: through `elevate.exe` beside the app when Windows refused it (`EACCES`, `UNKNOWN`), opened by the shell when
+ * the file is gone (`ENOENT`); those retries report nothing more. Answers the first attempt.
  */
-function syncQuitInstall(): void {
-	const automatic = installMode === "automatic";
-	autoUpdater.autoInstallOnAppQuit = automatic && !heldStartFailed();
-	autoUpdater.autoDownload = automatic && !heldStartFailed();
+function startInstaller(args: string[], start: (command: string, args: string[]) => Promise<number>): Promise<number> {
+	const installer = downloadedInstallerPath ?? windowsInstallerFile();
+	const first = start(installer, args);
+	first.catch((error: unknown) => {
+		const code = error instanceof Error && "code" in error ? error.code : undefined;
+		logUpdate("swap", { event: "installer-start-failed", code: String(code), reason: failureReason(error) });
+		if (code === "EACCES" || code === "UNKNOWN") {
+			spawnDetached(path.join(process.resourcesPath, "elevate.exe"), [installer, ...args]).catch(() => {});
+		} else if (code === "ENOENT") {
+			void shell.openPath(installer).catch(() => {});
+		}
+	});
+	return first;
+}
+
+/** A detached start on this thread (the install at quit must exist before the process ends). */
+function spawnDetached(command: string, args: string[]): Promise<number> {
+	const { promise, resolve, reject } = Promise.withResolvers<number>();
+	try {
+		const child = spawn(command, args, { detached: true, stdio: "ignore" });
+		child.once("error", reject);
+		child.once("spawn", () => resolve(child.pid ?? 0));
+		child.unref();
+	} catch (error) {
+		reject(error);
+	}
+	return promise;
+}
+
+/**
+ * "Restart & install" on Windows: the setup starts on a worker thread (Defender scans a fresh unsigned file inside
+ * `CreateProcess`, which froze the main thread for seconds), and the shell's quit chain holds the quit until that
+ * attempt reports, started or not (`installerQuitPending`, `installerQuitReceipt`; `quit_chain.rs`).
+ */
+function startInstallerForRestart(): void {
+	installerQuitPending();
+	void startInstaller(["--updated", "--force-run"], spawnDetachedOffThread)
+		.then<InstallerStartReceipt, InstallerStartReceipt>(
+			pid => ({ kind: "started", pid }),
+			(error: unknown) => ({
+				kind: "failed",
+				message: error instanceof Error ? error.message : String(error),
+				...(error instanceof Error && "code" in error && typeof error.code === "string"
+					? { code: error.code }
+					: {}),
+			}),
+		)
+		.then(installerQuitReceipt);
+}
+
+/**
+ * Windows: an approved quit (exit code 0) installs a downloaded update silently and starts nothing after it. Only a
+ * quit that is the install's own trigger does (`will-quit` made it so): never after a restart already started the
+ * setup, and never for a version whose start failed before, which only "Restart & install" installs, with its start
+ * check.
+ */
+function installAtQuit(exitCode: number): void {
+	if (installMode !== "automatic" || devDryInstall || exitCode !== 0) return;
+	if (installTrigger !== "quit" || !downloadedInstallerPath) return;
+	void startInstaller(["--updated", "/S"], spawnDetached).catch(() => {});
 }
 
 function isWritable(target: string): boolean {
@@ -475,172 +537,119 @@ function launchSwap(
 	noteInstallHelper("relaunch", trigger, { relaunch });
 }
 
-async function fileSize(filePath: string): Promise<number> {
-	try {
-		return (await fs.promises.stat(filePath)).size;
-	} catch {
-		return 0;
-	}
-}
-
 async function openManualInstaller(filePath: string): Promise<void> {
 	shell.showItemInFolder(filePath);
 	const openError = await shell.openPath(filePath);
 	if (openError) throw new Error(mainT("updates.openInstallerFailed"));
 }
 
-/**
- * Signed CDN URL for a release asset. The API asset endpoint answers an
- * `application/octet-stream` request with a redirect to a short-lived signed
- * URL (a private repo 404s on `releases/download/...`, so this one path serves
- * both). The redirect is taken by hand because Chromium would forward the
- * Authorization header, when there is one, to the CDN, which rejects a second
- * auth mechanism.
- */
-async function signedAssetUrl(assetApiUrl: string, token: string | undefined, signal: AbortSignal): Promise<string> {
-	const { promise, resolve, reject } = Promise.withResolvers<string>();
-	const request = net.request({ url: assetApiUrl, redirect: "manual" });
-	for (const [name, value] of Object.entries(githubApiHeaders(token, "application/octet-stream"))) {
-		request.setHeader(name, value);
-	}
-	request.on("redirect", (_status, _method, redirectUrl) => {
-		resolve(redirectUrl);
-		request.abort();
-	});
-	request.on("response", response => {
-		reject(new Error(`${mainT("updates.downloadFailed")} (${response.statusCode})`));
-		request.abort();
-	});
-	request.on("error", reject);
-	signal.addEventListener("abort", () => request.abort(), { once: true });
-	request.end();
-	return promise;
+/** A failed download in the words a person reads; anything else keeps the core's text (shown as the detail). */
+function downloadError(error: unknown): unknown {
+	if (!(error instanceof CoreError)) return error;
+	if (error.code === "update_status") return new Error(`${mainT("updates.downloadFailed")} (${error.message})`);
+	if (error.code === "update_hash") return new Error(mainT("updates.hashMismatch"));
+	return new Error(error.message);
 }
 
-async function downloadMacAsset(
-	{ version, macDownloadName, assetUrl: apiUrl, file: asset }: MacRelease,
-	token: string | undefined,
-	mode: "manual" | "relaunch",
-): Promise<void> {
+/** The file the installer is downloaded to, after the files a superseded release left are gone. */
+async function installerDestination(update: PlatformRelease, mode: UpdateInstallMode): Promise<string> {
+	if (mode === "automatic") {
+		const file = windowsInstallerFile();
+		// The setup's name carries no version: a partial another release left would fail its hash at the end.
+		const marker = `${file}.version`;
+		await fs.promises.mkdir(path.dirname(file), { recursive: true });
+		const kept = await fs.promises.readFile(marker, "utf8").catch(() => "");
+		if (kept !== update.version) {
+			await fs.promises.rm(`${file}.partial`, { force: true });
+			await fs.promises.writeFile(marker, update.version);
+		}
+		return file;
+	}
+	if (update.minimumSystemVersion === undefined) throw new Error(mainT("updates.installerMissing"));
 	// Manual installers land in Downloads for Finder; relaunch DMGs are private staging.
 	if (mode === "relaunch") await fs.promises.mkdir(updatesDirectory(), { recursive: true });
-	const area = mode === "manual" ? "downloads" : "updates";
-	const destinationPath =
+	const destination =
 		mode === "manual"
-			? await updateHost().updateDestination(macDownloadName)
-			: path.join(updatesDirectory(), macDownloadName);
-	const fileName = path.basename(destinationPath);
-	const partialPath = installerPartialPath(destinationPath);
-	// Every network step gets the idle timeout: a stalled transfer fails as
-	// retryable instead of sitting in `downloading` forever.
-	const controller = new AbortController();
-	const abort = () => controller.abort();
-	const assetUrl = await withinIdle(signedAssetUrl(apiUrl, token, controller.signal), DOWNLOAD_IDLE_TIMEOUT_MS, abort);
+			? await updateHost().updateDestination(update.macDownloadName)
+			: path.join(updatesDirectory(), update.macDownloadName);
 	// Partials of releases this one superseded can never be continued.
-	await updateHost().sweepUpdateFiles({ area, asset: fileName });
-
-	let existing = await fileSize(partialPath);
-	if (existing > asset.size) {
-		await fs.promises.rm(partialPath, { force: true });
-		existing = 0;
-	}
-	const response = await withinIdle(
-		// `no-store`: a 100 MB installer in Chromium's disk cache is dead weight (it filled userData/Cache to 1.2 GB).
-		net.fetch(assetUrl, {
-			signal: controller.signal,
-			cache: "no-store",
-			...(existing > 0 ? { headers: { range: `bytes=${existing}-` } } : {}),
-		}),
-		DOWNLOAD_IDLE_TIMEOUT_MS,
-		abort,
-	);
-	const plan = planInstallerTransfer(existing, {
-		status: response.status,
-		contentRange: response.headers.get("content-range") ?? undefined,
+	await updateHost().sweepUpdateFiles({
+		area: mode === "manual" ? "downloads" : "updates",
+		asset: path.basename(destination),
 	});
-	if (!response.ok || !response.body) {
-		// A 416 means the offset is past the release's bytes, so the partial could
-		// never complete; everything else leaves it for the next attempt.
-		if (response.status === 416) await fs.promises.rm(partialPath, { force: true });
-		throw new Error(`${mainT("updates.downloadFailed")} (${response.status})`);
-	}
+	return destination;
+}
 
-	const total = asset.size;
-	let transferred = plan.offset;
-	let lastProgressAt = 0;
-	const file = await fs.promises.open(partialPath, plan.append ? "a" : "w");
-
+async function downloadAsset(
+	update: PlatformRelease,
+	token: string | undefined,
+	mode: UpdateInstallMode,
+): Promise<void> {
+	const { version, file: asset } = update;
+	const destination = await installerDestination(update, mode);
 	try {
-		const reader = response.body.getReader();
-		for (;;) {
-			const { done, value } = await withinIdle(reader.read(), DOWNLOAD_IDLE_TIMEOUT_MS, abort);
-			if (done) break;
-			let offset = 0;
-			while (offset < value.byteLength) {
-				const { bytesWritten } = await file.write(value, offset, value.byteLength - offset);
-				offset += bytesWritten;
-			}
-			transferred += value.byteLength;
-			const now = performance.now();
-			if (now - lastProgressAt >= PROGRESS_INTERVAL_MS || (total > 0 && transferred === total)) {
+		await downloadInstaller({
+			url: update.assetUrl,
+			...(token ? { token } : {}),
+			file: destination,
+			size: asset.size,
+			sha512: asset.sha512,
+			onProgress: received =>
 				broadcast({
 					state: "downloading",
 					version,
 					mode,
-					percent: total > 0 ? Math.min(100, Math.round((transferred / total) * 100)) : 0,
-				});
-				lastProgressAt = now;
-			}
-		}
-		await file.sync();
-	} finally {
-		// Bytes already written stay: an interrupted transfer resumes from here.
-		await file.close();
+					percent: asset.size > 0 ? Math.min(100, Math.round((received / asset.size) * 100)) : 0,
+				}),
+		});
+	} catch (error) {
+		throw downloadError(error);
 	}
-
-	if ((await updateHost().updateDigest(area, fileName)) !== asset.sha512) {
-		await fs.promises.rm(partialPath, { force: true });
-		throw new Error(mainT("updates.hashMismatch"));
-	}
-
-	await fs.promises.rename(partialPath, destinationPath);
 	if (mode === "relaunch") {
-		staged = { app: await stageBundle(destinationPath, version), version };
-		await fs.promises.rm(destinationPath, { force: true });
+		staged = { app: await stageBundle(destination, version), version };
+		await fs.promises.rm(destination, { force: true });
 		broadcast({ state: "downloaded", version, mode });
 		return;
 	}
-	downloadedInstallerPath = destinationPath;
+	downloadedInstallerPath = destination;
 	// e2e/headless runs verify the download but never put Finder on screen.
-	if (process.env.OMP_GUI_HEADLESS !== "1") await openManualInstaller(destinationPath);
+	if (mode === "manual" && process.env.OMP_GUI_HEADLESS !== "1") await openManualInstaller(destination);
 	broadcast({ state: "downloaded", version, mode });
 }
 
-/** Background download for relaunch mode; failures stay out of the banner like any passive check. */
-async function prepareRelaunchUpdate(): Promise<void> {
-	if (!macAsset) return;
+/** A download nobody clicked for (the automatic and relaunch modes); failures stay out of the banner like any passive check. */
+async function downloadInBackground(): Promise<void> {
+	if (!release) return;
 	try {
-		await startMacDownload(macAsset, updateToken, "relaunch");
+		await startDownload(release, updateToken, installMode);
 	} catch (error) {
 		broadcast(failureStatus(error, "updates.downloadFailed", false));
 	}
 }
 
-/** The one macOS asset download; callers return early while `macTransfer.running`. */
-function startMacDownload(release: MacRelease, token: string | undefined, mode: "manual" | "relaunch"): Promise<void> {
-	const { version, file } = release;
-	return macTransfer.start(async () => {
+/** The one installer download; callers return early while `transfer.running`. */
+function startDownload(update: PlatformRelease, token: string | undefined, mode: UpdateInstallMode): Promise<void> {
+	const { version, file } = update;
+	// The update log names the Windows path as electron-updater's NSIS flow, as before.
+	const logMode = mode === "automatic" ? "nsis" : mode;
+	return transfer.start(async () => {
 		broadcast({ state: "downloading", version, mode, percent: 0 });
 		const startedAt = Date.now();
-		logUpdate("download", { event: "started", version, mode, bytes: file.size });
+		logUpdate("download", { event: "started", version, mode: logMode, bytes: file.size });
 		try {
-			await downloadMacAsset(release, token, mode);
+			await downloadAsset(update, token, mode);
 		} catch (error) {
-			logUpdate("download", { event: "failed", version, mode, reason: failureReason(error) });
+			logUpdate("download", { event: "failed", version, mode: logMode, reason: failureReason(error) });
 			throw error;
 		}
 		// The SHA-512 matched and, for the relaunch mode, the bundle is staged and verified.
-		logUpdate("download", { event: "verified", version, mode, bytes: file.size, ms: Date.now() - startedAt });
+		logUpdate("download", {
+			event: "verified",
+			version,
+			mode: logMode,
+			bytes: file.size,
+			ms: Date.now() - startedAt,
+		});
 	});
 }
 
@@ -654,7 +663,6 @@ export function onUpdateStatus(listener: (status: UpdateStatus) => void): () => 
 
 function broadcast(status: UpdateStatus): void {
 	current = status.state === "downloaded" && !status.installing ? withNotice(status) : status;
-	syncQuitInstall();
 	for (const win of BrowserWindow.getAllWindows()) {
 		win.webContents.send(IPC_EVENTS.UPDATER_STATUS, current);
 	}
@@ -722,17 +730,6 @@ function failureStatus(error: unknown, fallback: MainTextKey, showInBanner: bool
 	const raw = error instanceof Error ? error.message : String(error);
 	if (OWN_FAILURE_KEYS.some(key => raw.startsWith(mainT(key)))) return { state: "error", message: raw, showInBanner };
 	return { state: "error", message: mainT(fallback), detail: raw, showInBanner };
-}
-
-/** Release-notes excerpt for the banner; updater carries HTML/markdown-ish notes. */
-function notesOf(info: { releaseNotes?: unknown }): string | undefined {
-	const notes = info.releaseNotes;
-	if (typeof notes === "string") return notes.slice(0, 500);
-	if (Array.isArray(notes)) {
-		const first = notes[0] as { note?: string } | undefined;
-		return first?.note?.slice(0, 500);
-	}
-	return undefined;
 }
 
 /**
@@ -816,30 +813,59 @@ async function checkOnce(): Promise<void> {
 	broadcast(settled);
 }
 
-/** Points electron-updater at the release feed with `token` (none = anonymous) and checks once. */
+/**
+ * Looks once with `token` (none = anonymous) and acts on what it found. An unpackaged app checks only when
+ * `OMP_DEV_UPDATE_CHECK=1` asks it to (the test harness), as electron-updater did: otherwise nothing is looked up and
+ * the check settles without a result.
+ */
 async function attemptCheck(token: string | undefined): Promise<{ error: unknown } | undefined> {
-	resolvedRelease = undefined;
-	autoUpdater.setFeedURL({
-		provider: "custom",
-		updateProvider: releaseUpdateProvider({
+	if (!app.isPackaged && process.env.OMP_DEV_UPDATE_CHECK !== "1") return undefined;
+	if (!heldStartFailed() && current.state !== "checking") broadcast({ state: "checking" });
+	let found: PlatformRelease;
+	try {
+		found = await lookupRelease({
 			apiRepo: GITHUB_API_REPO,
 			platform: process.platform === "win32" ? "windows" : "mac",
 			// A pre-release only exists for the updater test harness; never in a release bundle.
 			allowPrerelease: !app.isPackaged && process.env.OMP_DEV_UPDATE_PRERELEASE === "1",
-			apiHeaders: githubApiHeaders(token),
-			downloadHeaders: githubApiHeaders(token, "application/octet-stream"),
-			fetch: (url, init) => net.fetch(url, init),
-			onResolved: release => {
-				resolvedRelease = release.minimumSystemVersion === undefined ? undefined : release;
-			},
-		}),
-	});
-	try {
-		await autoUpdater.checkForUpdates();
-		return undefined;
+			...(token ? { token } : {}),
+		});
 	} catch (error) {
 		return { error };
 	}
+	if ((compareVersions(found.version, appVersion()) ?? -1) > 0) foundUpdate(found);
+	else {
+		logUpdate("check", { event: "no-update", current: appVersion() });
+		if (!heldStartFailed()) broadcast({ state: "not-available", version: appVersion() });
+	}
+	return undefined;
+}
+
+/** A check found a newer release: say so, and fetch its installer unless only a click may (the manual DMG). */
+function foundUpdate(found: PlatformRelease): void {
+	logUpdate("check", { event: "found", version: found.version, current: appVersion(), mode: installMode });
+	// The held version again (it is the latest): it stays downloaded and held, nothing is fetched twice.
+	if (heldStartFailed() && current.state === "downloaded" && current.version === found.version) return;
+	// The transfer in flight keeps its release and version; restarting it would append a second stream to the same
+	// partial.
+	if (transfer.running) return;
+	// A manual re-check of the release already staged must not fetch it again.
+	if (installMode === "relaunch" && staged?.version === found.version) {
+		release = found;
+		broadcast({ state: "downloaded", version: found.version, mode: "relaunch" });
+		return;
+	}
+	release = undefined;
+	downloadedInstallerPath = undefined;
+	staged = undefined;
+	// Only Apple Silicon builds ship; an Intel Mac has no installer to fetch.
+	if (installMode !== "automatic" && process.arch !== "arm64") {
+		broadcast({ state: "error", message: mainT("updates.unsupportedArchitecture") });
+		return;
+	}
+	release = found;
+	broadcast({ state: "available", version: found.version, notes: found.notes.slice(0, 500), mode: installMode });
+	if (installMode !== "manual") void downloadInBackground();
 }
 
 async function testAuth(token: string | undefined): Promise<UpdateAuthTestResult> {
@@ -862,7 +888,7 @@ export function updateStatus(): UpdateStatus {
  * round (the countdown or the waiting notice went, the max wait started over).
  */
 export async function checkForUpdate(): Promise<UpdateStatus> {
-	if (macTransfer.running || (current.state === "downloaded" && !heldStartFailed())) return current;
+	if (transfer.running || (current.state === "downloaded" && !heldStartFailed())) return current;
 	// A downloaded version held as start-failed is looked past: a newer release replaces it, and the card keeps it meanwhile.
 	if (!heldStartFailed()) broadcast({ state: "checking" });
 	await runCheck(true);
@@ -871,14 +897,10 @@ export async function checkForUpdate(): Promise<UpdateStatus> {
 
 /** Start the download of the update a check found. */
 export async function downloadUpdate(): Promise<UpdateStatus> {
-	if (current.state !== "available" || macTransfer.running) return current;
+	if (current.state !== "available" || transfer.running) return current;
 	try {
-		if (current.mode === "manual" || current.mode === "relaunch") {
-			if (!macAsset) throw new Error(mainT("updates.installerMissing"));
-			await startMacDownload(macAsset, updateToken, current.mode);
-		} else {
-			await autoUpdater.downloadUpdate();
-		}
+		if (!release) throw new Error(mainT("updates.installerMissing"));
+		await startDownload(release, updateToken, current.mode);
 	} catch (error) {
 		broadcast(failureStatus(error, "updates.downloadFailed", true));
 	}
@@ -898,7 +920,7 @@ export function restartableUpdate(): boolean {
 
 /**
  * Quit into the downloaded update and reopen (relaunch: the swap helper;
- * automatic: electron-updater's installer). Callers have already confirmed
+ * automatic: the NSIS setup). Callers have already confirmed
  * the quit; it stops every tab this computer runs.
  */
 export function restartIntoUpdate(trigger: InstallTrigger): void {
@@ -914,8 +936,8 @@ export function restartIntoUpdate(trigger: InstallTrigger): void {
 		requestQuit("update", { relaunch: true, detail: trigger });
 		return;
 	}
-	// quitAndInstall() holds the quit (installer pending) and starts the installer off the main thread; its first
-	// launch's receipt lets the shell run the update teardown and the quit (nsis-updater.ts, quit_chain.rs).
+	// The setup starts off the main thread and holds the quit until that start reports; its receipt lets the shell run
+	// the update teardown and the quit (quit_chain.rs).
 	if (current.mode === "automatic") {
 		markMainStep("update", "quit-and-install");
 		beginInstall(trigger);
@@ -925,7 +947,7 @@ export function restartIntoUpdate(trigger: InstallTrigger): void {
 		}
 		noteInstallHelper("nsis", trigger);
 		logQuitAsked("update", { relaunch: true, detail: `${trigger}, installer` });
-		autoUpdater.quitAndInstall();
+		startInstallerForRestart();
 	}
 }
 
@@ -950,6 +972,11 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 	try {
 		startFailure = parseStartFailure(fs.readFileSync(startFailedPath(), "utf8"));
 	} catch {}
+	setUpdateNetwork({
+		proxy: probe.proxy,
+		// A test's stand-in for GitHub (`http://127.0.0.1:<port>`, every host's path under it: `setup::net::routed`).
+		...(process.env.OMP_GUI_TEST_UPDATE_MIRROR ? { mirror: process.env.OMP_GUI_TEST_UPDATE_MIRROR } : {}),
+	});
 	autoInstall = new AutoInstallScheduler({
 		now: Date.now,
 		facts: () => {
@@ -993,12 +1020,6 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 	}
 	// Updates download in the background as soon as a check finds one (Claude/Codex
 	// style); the only prompt is "Restart & install". Manual DMGs still wait for a click.
-	syncQuitInstall();
-	// Releases publish no blockmaps; NSIS always downloads the whole installer.
-	autoUpdater.disableDifferentialDownload = true;
-	// Dev/preview verification gate: electron-updater skips unpackaged apps
-	// unless forced. Pair with OMP_DEV_UPDATE_MODE to exercise the DMG paths.
-	if (process.env.OMP_DEV_UPDATE_CHECK === "1") autoUpdater.forceDevUpdateConfig = true;
 	// Relaunch mode: any approved quit installs the staged bundle; "Restart"
 	// additionally reopens it. `will-quit` only fires once the quit guard agreed; the quit watchdog's
 	// forced `app.exit` skips it, so it starts the swap through the same once-only call.
@@ -1018,95 +1039,15 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 		app.on("will-quit", launchStagedSwap);
 		onQuitForcedExit(launchStagedSwap);
 	}
-	// Windows: electron-updater installs a downloaded update by itself on an approved quit (`autoInstallOnAppQuit`).
+	// Windows: an approved quit installs a downloaded update silently (`installAtQuit`, at the process's `quit`, after
+	// `will-quit` wrote the install marker).
 	if (installMode === "automatic") {
 		app.on("will-quit", () => {
 			if (installTrigger === undefined && current.state === "downloaded" && !heldStartFailed())
 				noteInstallHelper("nsis", quitInstallTrigger());
 		});
+		app.on("quit", (_event: unknown, exitCode: number) => installAtQuit(exitCode));
 	}
-
-	autoUpdater.on("checking-for-update", () => {
-		if (!heldStartFailed()) broadcast({ state: "checking" });
-	});
-	autoUpdater.on("update-available", info => {
-		logUpdate("check", { event: "found", version: info.version, current: appVersion(), mode: installMode });
-		// The held version again (it is the latest): it stays downloaded and held, nothing is fetched twice.
-		if (heldStartFailed() && current.state === "downloaded" && current.version === info.version) return;
-		// Held downloads switch electron-updater's own download off; the newer release found now is fetched here.
-		const downloadByHand = installMode === "automatic" && !autoUpdater.autoDownload;
-		// The transfer in flight keeps its asset and version; restarting it would
-		// append a second stream to the same partial.
-		if (macTransfer.running) return;
-		activeUpdate = info;
-		// A manual re-check of the release already staged must not fetch it again.
-		if (installMode === "relaunch" && staged?.version === info.version) {
-			broadcast({ state: "downloaded", version: info.version, mode: "relaunch" });
-			return;
-		}
-		macAsset = undefined;
-		downloadedInstallerPath = undefined;
-		staged = undefined;
-		if (installMode === "manual" || installMode === "relaunch") {
-			// Only Apple Silicon builds ship; an Intel Mac has no installer to fetch.
-			if (process.arch !== "arm64") {
-				broadcast({ state: "error", message: mainT("updates.unsupportedArchitecture") });
-				return;
-			}
-			const release = resolvedRelease?.version === info.version ? resolvedRelease : undefined;
-			if (!release) {
-				broadcast({ state: "error", message: mainT("updates.installerMissing") });
-				return;
-			}
-			macAsset = release;
-		}
-		broadcast({ state: "available", version: info.version, notes: notesOf(info), mode: installMode });
-		if (installMode === "automatic") {
-			// autoDownload: electron-updater fetches the installer right now.
-			nsisDownloadStartedAt = Date.now();
-			logUpdate("download", { event: "started", version: info.version, mode: "nsis" });
-			if (downloadByHand) void autoUpdater.downloadUpdate().catch(() => {});
-		}
-		if (installMode === "relaunch") void prepareRelaunchUpdate();
-	});
-	autoUpdater.on("update-not-available", () => {
-		logUpdate("check", { event: "no-update", current: appVersion() });
-		if (heldStartFailed()) return;
-		broadcast({ state: "not-available", version: appVersion() });
-	});
-	autoUpdater.on("download-progress", progress => {
-		if (installMode !== "automatic") return;
-		broadcast({
-			state: "downloading",
-			version: activeUpdate?.version ?? appVersion(),
-			mode: "automatic",
-			percent: Math.round(progress.percent),
-		});
-	});
-	autoUpdater.on("update-downloaded", info => {
-		logUpdate("download", {
-			event: "verified",
-			version: info.version,
-			mode: "nsis",
-			bytes: info.files[0]?.size ?? 0,
-			ms: nsisDownloadStartedAt === undefined ? 0 : Date.now() - nsisDownloadStartedAt,
-		});
-		nsisDownloadStartedAt = undefined;
-		broadcast({ state: "downloaded", version: info.version, mode: "automatic" });
-	});
-	autoUpdater.on("error", error => {
-		// A quitAndInstall() that failed natively leaves the app running: the committed quit is off.
-		disarmQuitWatchdog("update");
-		if (checkRun) return;
-		installTrigger = undefined;
-		if (nsisDownloadStartedAt !== undefined) {
-			nsisDownloadStartedAt = undefined;
-			logUpdate("download", { event: "failed", mode: "nsis", reason: failureReason(error) });
-		}
-		// Passive failures remain unobtrusive. Explicit IPC actions catch and
-		// rebroadcast the same failure as user-visible.
-		broadcast(failureStatus(error, "updates.failed", false));
-	});
 
 	ipc.handle(IPC_COMMANDS.UPDATER_CHECK, () => checkForUpdate());
 	ipc.handle(IPC_COMMANDS.UPDATER_DOWNLOAD, () => downloadUpdate());

@@ -1,11 +1,9 @@
-use crate::launcher::sha512_of;
 use regex::Regex;
 use rustix::fs::{AtFlags, Dir, Mode, OFlags, Stat, fstat, open, openat, statat, unlinkat};
 use rustix::io::Errno;
 use serde_json::Value;
 use std::ffi::CStr;
 use std::fmt::Write;
-use std::fs::File;
 use std::io;
 use std::os::fd::OwnedFd;
 use std::path::Path;
@@ -54,10 +52,6 @@ pub(crate) fn handle(
         ("app.updateDestination", None, Some(name)) if !name.contains('(') => {
             destination(downloads, name)
         }
-        ("app.updateDigest", Some("downloads"), Some(name)) => {
-            digest(Area::Downloads(downloads), name)
-        }
-        ("app.updateDigest", Some("updates"), Some(name)) => digest(Area::Updates(updates), name),
         ("app.sweepUpdateFiles", Some("downloads"), active) => sweep_downloads(downloads, active),
         ("app.sweepUpdateFiles", Some("updates"), Some(name)) => sweep_updates(updates, name),
         _ => return Err("invalid update file method, area or asset".into()),
@@ -107,20 +101,6 @@ fn destination(downloads: &Path, asset: &str) -> io::Result<Value> {
             }
         }
     }
-}
-
-fn digest(root: Area<'_>, asset: &str) -> io::Result<Value> {
-    let file: File = openat(
-        root.open()?,
-        format!("{asset}.partial"),
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY,
-        Mode::empty(),
-    )?
-    .into();
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::other("expected a regular installer partial"));
-    }
-    Ok(Value::String(sha512_of(file)?.1))
 }
 
 fn sweep_downloads(downloads: &Path, active: Option<&str>) -> io::Result<Value> {
