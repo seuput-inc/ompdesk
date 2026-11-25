@@ -3,7 +3,7 @@
  * runs the resolved stock CLI. `ompUpdateEnv` points stock at this install and its registry.
  * Installing stays with the computer's OmpUpdater, including on a paired host.
  */
-import type { RpcOmpUpdateResult, RpcPluginDoctorResult } from "../../shared/rpc-types";
+import type { RpcOmpUpdateResult, RpcPluginDoctorResult, RpcWebPeek } from "../../shared/rpc-types";
 import { clearAgentWorktrees, listAgentWorktrees, type OmpCliLaunch } from "../agent-worktrees";
 import { CoreError, core } from "../core/process";
 import { ompRunEnv, ompUpdateEnv } from "../omp-runtime";
@@ -70,4 +70,7 @@ export const handlers: Record<string, LocalHandler> = {
 	// Agent-managed worktrees under ~/.omp/wt (stock `omp worktree list|clear --json`, orphaned only).
 	get_agent_worktrees: (_command, ctx) => listAgentWorktrees(ompLaunch(ctx, "worktrees"), ctx.cwd),
 	clear_agent_worktrees: (_command, ctx) => clearAgentWorktrees(ompLaunch(ctx, "worktrees"), ctx.cwd),
+	// A conversation link's hover card: the core reads the page (crates/core/src/web_peek.rs) on this tab's computer.
+	web_peek: async command =>
+		(await core().call<RpcWebPeek | null>("webPeek.get", { url: String(command.url) }, { timeoutMs: 10_000 })).result,
 };

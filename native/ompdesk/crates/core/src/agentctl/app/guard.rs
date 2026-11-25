@@ -234,7 +234,9 @@ pub fn rpc_tier(command: &Value, full: bool) -> Tier {
         | "get_providers"
         | "get_model_roles"
         | "get_available_models"
-        | "get_mcp_servers" => Tier::Read,
+        | "get_mcp_servers"
+        | "session_links" => Tier::Read,
+        "session_link_add" | "session_link_remove" => Tier::Change,
         "get_settings" => {
             let Some(paths) = command
                 .get("paths")

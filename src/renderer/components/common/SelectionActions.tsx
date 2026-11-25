@@ -11,9 +11,12 @@
  * `root`'s box, and closes on a press elsewhere, a changed selection, a resize or the window losing focus. A
  * selection that `accept` refuses (empty, outside the parts that may be quoted) offers nothing.
  */
+import { Copy } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { copyText } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import { toast } from "../../stores/toast";
 import { Button } from "./Button";
 
 /** Shown at once, a double click's button would sit under the pointer and take the third click. */
@@ -37,6 +40,24 @@ export function selectionWithin(root: HTMLElement): { text: string; range: Range
 	if (!root.contains(range.commonAncestorContainer)) return null;
 	const text = selection.toString().trim();
 	return text ? { text, range } : null;
+}
+
+/** "Copy" for the selected text (Orca's `clipboard/SelectedTextCopyMenu.tsx`, MIT): every surface's bar offers it. */
+export function useCopySelectionAction(): SelectionAction {
+	const t = useT();
+	return {
+		id: "copy",
+		label: t("common.copy"),
+		icon: <Copy />,
+		run: text =>
+			void copyText(text).then(done =>
+				toast(
+					done
+						? { variant: "success", message: t("common.copied") }
+						: { variant: "error", message: t("common.copyFailed") },
+				),
+			),
+	};
 }
 
 export function SelectionActions({

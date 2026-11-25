@@ -2,10 +2,12 @@ import { ChevronRight } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { checkKind, commandProgram } from "../../../../resources/gui-bridge/command-verdict-core";
 import type { AgentMessage } from "../../../shared/rpc-types";
+import { githubItemLink } from "../../../shared/session-links";
 import { useFrameSelector } from "../../hooks/use-frame-selector";
 import { agentDesktopCall } from "../../lib/agent-desktop-name";
 import { cx, formatDuration, resultText } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import { openExternal } from "../../lib/open-external";
 import { asRecord } from "../../lib/wire-value";
 import { useSessionStore } from "../../stores/session";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
@@ -635,6 +637,27 @@ export function ExecutionGroup({
 				sentence: t("chat.work.chip.previewOpen", { url: previewUrl }),
 				title: t("chat.work.chip.previewOpen", { url: previewUrl }),
 				onSelect: () => openPreview(previewUrl),
+			});
+		}
+		// The pull requests its `gh pr create` opened (Orca's opened-PR row under the reply), each opening in the PR
+		// Center when it is this checkout's repository's (loaded on use: the PR Center's store stays off the first screen).
+		for (const url of new Set(outcome.commands.flatMap(command => command.pullRequestUrl ?? []))) {
+			const link = githubItemLink(url);
+			metrics.push({
+				key: `pr:${url}`,
+				finding: "pull-request",
+				tone: "neutral",
+				icon: "pr",
+				label: link ? `#${link.number}` : t("chat.work.chip.pullRequest"),
+				sentence: t("chat.work.chip.pullRequestOpen", { url }),
+				title: url,
+				onSelect: () => {
+					if (!link) return openExternal(url);
+					import("../../lib/open-pull-request").then(
+						module => module.openPullRequest({ device, cwd }, link, url),
+						() => openExternal(url),
+					);
+				},
 			});
 		}
 		if (skills.length) {

@@ -30,6 +30,7 @@ import type { AgentBrowserStatus, ChromiumBrowserId } from "./default-browser";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
 import type { DiskCareState } from "./disk-care";
 import type { ExtensionUpdateState } from "./extension-update";
+import type { GithubBranchPr } from "./github";
 import type { GithubAuthState, GithubStarState } from "./github-auth";
 import type { IpcErrorCode } from "./ipc-error-codes";
 import type { LaunchProfile } from "./launch-profile";
@@ -152,6 +153,8 @@ export const IPC_EVENTS = {
 	REMOTE_OPENED_TABS_CHANGED: "sessions:remote-opened-changed",
 	/** The session files this computer's windows' tabs hold changed (`string[]`, `SESSIONS_HELD`) */
 	SESSIONS_HELD_CHANGED: "sessions:held-changed",
+	/** A session's attached links on this computer changed (`session_link_add`/`_remove`, a delete): read them again. */
+	SESSION_LINKS_CHANGED: "sessions:links-changed",
 	/** Log line appended */
 	LOG_LINE: "log:line",
 	/** Native application menu action */
@@ -269,6 +272,8 @@ export const IPC_COMMANDS = {
 	SESSIONS_TARGETS: "sessions:targets",
 	/** Repository images by root, looked up when not cached (`string[]` → `SessionArtworks`) */
 	SESSIONS_ARTWORK: "sessions:artwork",
+	/** The pull request of a row's branch, read in its repository root (`{root, branch}` → `GithubBranchPr | null`) */
+	SESSIONS_PULL_REQUEST: "sessions:pull-request",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -1347,6 +1352,14 @@ export interface IpcSessionsArtworkPayload {
 	device?: string;
 }
 
+export interface IpcSessionsPullRequestPayload {
+	/** The row's repository root (`SessionTargetRepository.root`). */
+	root: string;
+	/** Its checkout's branch (`SessionTargetHead` of kind `branch`). */
+	branch: string;
+	device?: string;
+}
+
 export interface IpcSessionsSearchPayload {
 	query: string;
 	scope: "local" | "global";
@@ -2412,6 +2425,8 @@ export interface OmpApi {
 		onRemoteOpenedChanged(callback: (tabs: RemoteOpenedTab[]) => void): () => void;
 		/** The session files this computer's windows' tabs hold changed (the whole list, `SESSIONS_HELD`). */
 		onHeldSessionsChanged(callback: (files: string[]) => void): () => void;
+		/** A session's attached links on this computer changed (`SESSION_LINKS_CHANGED`): read `session_links` again. */
+		onSessionLinksChanged(callback: () => void): () => void;
 		onLogBatch(callback: (batch: LogBatch) => void): () => void;
 		onMenuAction(callback: (action: MenuAction) => void): () => void;
 		onDeepLink(callback: (link: DeepLinkPayload) => void): () => void;
@@ -2610,6 +2625,8 @@ export interface OmpApi {
 		targets(sessions: SessionTargetQuery[], device?: string): Promise<SessionTargets>;
 		/** Repository images by root, looked up where missing (bounded and cached there); null where none. */
 		artwork(roots: string[], device?: string): Promise<SessionArtworks>;
+		/** The pull request of a row's branch, read in its repository root on that computer; null: it has none. */
+		pullRequest(root: string, branch: string, device?: string): Promise<GithubBranchPr | null>;
 		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.

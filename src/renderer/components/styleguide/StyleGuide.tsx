@@ -62,6 +62,7 @@ import {
 	ErrorDetail,
 	FieldLabel,
 	FieldShell,
+	HoverCard,
 	IconButton,
 	InlineNotice,
 	Input,
@@ -73,6 +74,7 @@ import {
 	ListRow,
 	LiveSweep,
 	LiveText,
+	MarkdownComposer,
 	MasterDetail,
 	MenuButton,
 	Modal,
@@ -384,6 +386,19 @@ const SAMPLE_TREE: TreeNode[] = [
 ];
 
 const SWAP_TITLES = ["New session", "Fix the login redirect", "Fix the login redirect loop on Safari"];
+
+/** A Markdown box with Write/Preview and an @mention list of three people. */
+function MarkdownComposerSample() {
+	const [text, setText] = useState("Looks good to me, @oc");
+	return (
+		<MarkdownComposer
+			label="Review comment"
+			mentions={["octocat", "octo-org", "monalisa"]}
+			onChange={setText}
+			value={text}
+		/>
+	);
+}
 
 /** Throws while `crash` is set, so the error boundaries' samples show their fallback on demand. */
 function CrashOnRender({ crash, children }: { crash: boolean; children: ReactNode }) {
@@ -957,6 +972,9 @@ export default function StyleGuide() {
 						</div>
 						<div className="col-span-2">
 							<TextArea autoGrow label="Instructions" placeholder="Describe the task…" rows={2} />
+						</div>
+						<div className="col-span-3">
+							<MarkdownComposerSample />
 						</div>
 					</div>
 					<Block className="grid grid-cols-2 gap-x-10" label="Switch · SwitchField">
@@ -1770,6 +1788,18 @@ export default function StyleGuide() {
 						<Tooltip content="Tooltips show after a short hover or on keyboard focus" shortcut="⌘/">
 							<Button variant="ghost">Hover for tooltip</Button>
 						</Tooltip>
+						<HoverCard
+							content={
+								<div className="space-y-1">
+									<div className="text-sc-xs text-(--sc-text-muted)">octo/app #42 · open</div>
+									<div className="font-semibold">Show a card on a link's hover or keyboard focus</div>
+								</div>
+							}
+						>
+							<a className="self-center text-(--sc-accent) underline" href="#overlays">
+								Hover or focus for a link card
+							</a>
+						</HoverCard>
 					</div>
 					<div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] items-start gap-6 rounded-(--sc-radius-xl) bg-(--sc-surface-1) p-6">
 						<DialogSurface

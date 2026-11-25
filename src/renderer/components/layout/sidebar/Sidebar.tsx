@@ -98,14 +98,15 @@ import { useTabRpc } from "../../../lib/tab-rpc";
 import { isTabFailed } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
+import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/closed-children";
 import { useComposerStore } from "../../../stores/composer";
 import { LOCAL_SUMMARIES, summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { useMessagesStore } from "../../../stores/messages";
-import { usePullRequestBranches } from "../../../stores/pr-center";
 import { useQueueStore } from "../../../stores/queue";
 import { usePairedHosts, useRemoteStore } from "../../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
+import { useAllSessionLinks } from "../../../stores/session-links";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
@@ -160,6 +161,7 @@ import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { SidebarNav } from "./SidebarNav";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
 import { SidebarRenameField } from "./SidebarRenameField";
+import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SidebarUpdateCard } from "./SidebarUpdateCard";
 import { SidebarUsage, useOfferedFooterPins } from "./SidebarUsage";
@@ -167,6 +169,7 @@ import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
 import {
+	branchPrWords,
 	headWords,
 	resolveRowTarget,
 	SessionRowArtwork,
@@ -407,7 +410,14 @@ export function Sidebar() {
 	const t = useT();
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
 	const botsAvailable = useBotsAvailable();
-	const hasPullRequest = usePullRequestBranches();
+	// Each shown row's branch PR (stores/branch-prs.ts): this render collects the rows, the effect after it paces reads.
+	const branchPrs = useBranchPrs(state => state.prs);
+	// Links a person or an agent attached to this computer's sessions: said in each row's tooltip.
+	const sessionLinks = useAllSessionLinks();
+	const shownBranches: BranchRow[] = [];
+	const selectedBranches: BranchRow[] = [];
+	useEffect(() => watchBranchPrs("local", shownBranches, selectedBranches));
+	useEffect(() => () => watchBranchPrs("local", [], []), []);
 	// This computer's no-project workspace decides whether a session's row is a chat (`isChatSession`): its last answer
 	// paints the first frame, as a paired host's does (host-workspace.ts). Without it such a session was missing
 	// from the first frame's list and its row and selection came one frame later (300 ms on a slow machine).
@@ -461,6 +471,8 @@ export function Sidebar() {
 	const [renameDraft, setRenameDraft] = useState("");
 	const [groupMenu, setGroupMenu] = useState<{ anchor: ContextMenuAnchor; group: WorkspaceGroup } | null>(null);
 	const [sessionMenu, setSessionMenu] = useState<{ anchor: ContextMenuAnchor; session: SidebarSession } | null>(null);
+	/** The session whose links dialog is open. */
+	const [linksFor, setLinksFor] = useState<string | null>(null);
 	// A session row's actions are one ⋯ on every input, so the title keeps its width: at rest under touch (no hover
 	// to reveal it), on hover or keyboard focus elsewhere.
 	const touchInput = useShellInput() === "touch";
@@ -1753,6 +1765,18 @@ export function Sidebar() {
 			<GitFork aria-hidden className="size-(--sc-icon-sm)" data-sidebar-fork />
 		) : null;
 		const openTabId = tab?.id;
+		const branchRow: BranchRow | null =
+			target?.root && target.head?.kind === "branch" ? { root: target.root, branch: target.head.name } : null;
+		if (branchRow) {
+			shownBranches.push(branchRow);
+			// An open tab's row is in the minute tier, the current one first.
+			if (isCurrent) selectedBranches.unshift(branchRow);
+			else if (tab) selectedBranches.push(branchRow);
+		}
+		const pr = branchPrOf(branchPrs, branchRow);
+		const prWords = pr ? branchPrWords(t, pr) : null;
+		const linkWords =
+			indexed && session.device === undefined ? sessionLinksWords(t, sessionLinks[session.path] ?? []) : null;
 		const folderMissing = missingFolders.has(session.path);
 		// The leading status lane (Orca's, the owner's decision of 25 Nov 2026): what needs the person, a failure, the
 		// working arc while the session or anything it started works, an unseen finish, its branch's pull request.
@@ -1769,7 +1793,7 @@ export function Sidebar() {
 				waiting: false,
 			}),
 			stopped: tab?.lastRun?.stopReason === "aborted",
-			pullRequest: target !== null && hasPullRequest(target),
+			pullRequest: pr?.state === "OPEN",
 			open: tab !== undefined,
 		});
 		const waitingBadge = waiting ? (
@@ -1788,7 +1812,11 @@ export function Sidebar() {
 				<ListRow
 					leading={
 						<span className="omp-session-leading">
-							<SessionStatusLane fresh={doneBefore.current.get(session.path) === false} state={lane} />
+							<SessionStatusLane
+								fresh={doneBefore.current.get(session.path) === false}
+								prTone={pr ? branchPrTone(pr) : undefined}
+								state={lane}
+							/>
 							<SessionRowArtwork target={target} />
 						</span>
 					}
@@ -1902,6 +1930,8 @@ export function Sidebar() {
 							{fork && <span className="sr-only">, {fork.label}</span>}
 							{worktree?.label && <span className="sr-only">, {worktree.label}</span>}
 							{statusLabel && <span className="sr-only">, {statusLabel}</span>}
+							{prWords && <span className="sr-only">, {prWords}</span>}
+							{linkWords && <span className="sr-only">, {linkWords}</span>}
 						</>
 					}
 					titleText={[
@@ -1911,6 +1941,8 @@ export function Sidebar() {
 						statusLabel,
 						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
 						target?.head ? headWords(t, target.head).tip : null,
+						prWords,
+						linkWords,
 						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 						indexed ? formatClock(session.modified) : null,
 					]
@@ -2530,6 +2562,7 @@ export function Sidebar() {
 										toggleAgentHidden: then(
 											() => void useSidebarPrefs.getState().toggleAgentHidden(session.path),
 										),
+										links: then(() => setLinksFor(session.path)),
 									}
 								: {}),
 							reveal: then(() => void revealSession(session)),
@@ -2615,6 +2648,7 @@ export function Sidebar() {
 				/>
 			)}
 
+			{linksFor && <SessionLinksDialog onClose={() => setLinksFor(null)} sessionPath={linksFor} />}
 			<ConfirmDialog
 				open={pendingDelete !== null && pendingDelete.kind !== "group"}
 				title={pendingDelete?.kind === "archived" ? t("sidebar.deleteArchivedConfirm") : t("sidebar.deleteConfirm")}

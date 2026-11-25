@@ -95,6 +95,7 @@ import type {
 	IpcSessionsListPayload,
 	IpcSessionsMessagesPayload,
 	IpcSessionsMovePayload,
+	IpcSessionsPullRequestPayload,
 	IpcSessionsRenamePayload,
 	IpcSessionsSearchPayload,
 	IpcSessionsTargetsPayload,
@@ -168,6 +169,13 @@ import type { MainTextKey } from "./i18n-text";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
+import {
+	answerSessionLinks,
+	dropSessionLinks,
+	onSessionLinksChanged,
+	handlers as sessionLinkHandlers,
+} from "./local/session-links";
+import { LocalCommandError } from "./local/types";
 import type { LogWatcher } from "./log-watcher";
 import type { MacPermissions } from "./mac-permissions";
 import { type LocalMachine, type MachineServices, machineFor as pickMachine } from "./machine-services";
@@ -200,7 +208,14 @@ import type { RunProcess, ScheduleService } from "./schedules";
 import type { SessionIndex } from "./session-index";
 import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, renameSession } from "./session-mutations";
 import type { SessionSummaries } from "./session-summaries";
-import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "./session-targets";
+import {
+	SessionArtworkParams,
+	SessionPullRequestParams,
+	SessionTargetsParams,
+	sessionArtwork,
+	sessionPullRequest,
+	sessionTargets,
+} from "./session-targets";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
 import { publishLanguage } from "./shell-host/electron/index";
 import { readClipboardText } from "./shell-host/shell-calls";
@@ -728,6 +743,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		remoteDevices.hostSessionsChanged();
 		deps.sidebarProjects?.schedule();
 	};
+	// A session's links changed (a window, a phone page, an agent here or a paired device's tab here): every window and
+	// page here reads them again.
+	onSessionLinksChanged(() => everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, undefined));
 	// What every row shows of this computer's sessions: each change reaches every window and phone page here (a push no
 	// router drops for a hidden page) and every paired device; a view whose copy is on another version reads it whole.
 	deps.summaries.onChange(delta => {
@@ -873,6 +891,23 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				success: true,
 				data: desktopSlot.state(),
 			};
+		}
+		// A window's (or phone page's) session links are this computer's, its rows', whatever tab it shows: answered here
+		// like the slot. An agent's (no channel) go through its tab below, to the computer its session runs on.
+		if (channel !== undefined && Object.hasOwn(sessionLinkHandlers, slotCommand)) {
+			try {
+				const data = answerSessionLinks(payload.command, undefined);
+				return { id: payload.command.id, type: "response", command: slotCommand, success: true, data };
+			} catch (err) {
+				return {
+					id: payload.command.id,
+					type: "response",
+					command: slotCommand,
+					success: false,
+					error: err instanceof Error ? err.message : String(err),
+					...(err instanceof LocalCommandError ? { code: err.code } : {}),
+				};
+			}
 		}
 		// A tab whose omp is still starting (its place in the start queue, its first answer, a stalled start begun again)
 		// is waited for, not refused: a relaunch's restored tabs got "Sidecar not ready" for every read while they started.
@@ -1701,6 +1736,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return device ? remoteDevices.request(device, "sessions.artwork", params) : sessionArtwork(params);
 	});
 
+	ipc.handle(IPC_COMMANDS.SESSIONS_PULL_REQUEST, async (_caller, payload: IpcSessionsPullRequestPayload) => {
+		const params = SessionPullRequestParams.parse({ root: payload?.root, branch: payload?.branch });
+		const device = deviceOf(payload?.device);
+		return device ? remoteDevices.request(device, "sessions.pullRequest", params) : sessionPullRequest(params);
+	});
+
 	// Open a session (or a fresh project window) in a NEW parallel window with
 	// its own sidecar. The calling window's sidecar is left running untouched —
 	// this is the explicit parallel action. Returns false when the window's
@@ -2146,9 +2187,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	};
 	// A deleted session leaves the closed-children record (its opener's family) with its file, also
 	// when a paired device asked the delete; a delete before this rule left its record, which goes now.
-	onSessionDeleted(() => {
+	onSessionDeleted((sessionPath, device) => {
 		agentControl.control.changed();
 		void agentControl.forgetDeleted();
+		// A paired host's file keeps its links there, and its own delete drops them.
+		if (!device) dropSessionLinks(sessionPath);
 	});
 	void agentControl.forgetDeleted();
 	ipc.handle(IPC_COMMANDS.PREFS_SET, (caller, payload: IpcPrefsSetPayload) => {

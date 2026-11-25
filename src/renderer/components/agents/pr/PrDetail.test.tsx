@@ -7,6 +7,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GithubRequest, GithubResults } from "../../../../shared/github";
 import type { RpcCommand, RpcPrDetail } from "../../../../shared/rpc-types";
 import { I18nProvider, setLanguageOverride } from "../../../lib/i18n";
 import { usePrCenterStore } from "../../../stores/pr-center";
@@ -51,6 +52,15 @@ const DETAIL: RpcPrDetail = {
 let root: Root;
 let container: TestElement;
 
+function githubAnswer(request: GithubRequest): GithubResults[keyof GithubResults] | Record<string, never> {
+	if (request.op === "pr_conversation") {
+		return { id: "PR_7", bodyImages: {}, comments: [], reviews: [], threads: [], timeline: [] };
+	}
+	if (request.op === "pr_files_viewed") return { id: "PR_7", files: [] };
+	if (request.op === "pr_stack" || request.op === "assignable") return [];
+	return {};
+}
+
 function install(): void {
 	(window as unknown as { omp: unknown }).omp = {
 		rpc: {
@@ -58,7 +68,7 @@ function install(): void {
 				type: "response",
 				command: cmd.type,
 				success: true,
-				data: cmd.type === "pr_comments" ? { entries: [] } : {},
+				data: cmd.type === "github" ? githubAnswer(cmd.request) : {},
 			})),
 		},
 	};
