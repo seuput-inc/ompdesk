@@ -571,6 +571,9 @@ impl AgentControl {
         }
         if let Some(worktree) = worktree {
             notes.push(format!("worktree {}", worktree.branch));
+            if !reopened && joined.is_none() {
+                notes.extend(self.starts_behind(&caller.tab_id, tab_id, worktree).await);
+            }
         }
         if let Some(prepared) = prepared.filter(|prepared| !prepared.is_empty()) {
             notes.push(prepared.to_owned());
@@ -715,6 +718,35 @@ impl AgentControl {
             worktree: worktree.as_ref().map(|worktree| worktree.branch.clone()),
             started: args.message.is_some(),
             where_: None,
+        })
+    }
+
+    /// How far a new worktree already starts behind where its branch lands (a `base` older than the parent's HEAD),
+    /// as an open note; none when it does not or its branch cannot be read (that never fails the open).
+    async fn starts_behind(
+        &self,
+        caller_tab_id: &str,
+        tab_id: &str,
+        worktree: &crate::agentctl::service::types::TabWorktree,
+    ) -> Option<String> {
+        let device = self
+            .host
+            .state()
+            .tabs(caller_tab_id)
+            .and_then(|tabs| tabs.into_iter().find(|tab| tab.tab_id == tab_id))
+            .and_then(|tab| tab.device);
+        let facts = self
+            .host
+            .branch_facts(&worktree.reference(), device.as_deref())
+            .await
+            .ok()?;
+        (facts.commits_behind > 0).then(|| {
+            format!(
+                "the worktree starts {} commit{} behind {}",
+                facts.commits_behind,
+                if facts.commits_behind == 1 { "" } else { "s" },
+                facts.base_branch.as_deref().unwrap_or("the parent's HEAD")
+            )
         })
     }
 

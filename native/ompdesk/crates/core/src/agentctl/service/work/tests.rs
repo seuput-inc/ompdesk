@@ -159,7 +159,11 @@ async fn compare_gives_each_branch_its_facts_its_answer_and_runs_no_tests() {
         family(),
         Caps::default(),
         main_of(|method, args| match method {
-            "branchFacts" if branch_of(args) == "omp/agent/b" => Some(facts("omp/agent/b", 3)),
+            "branchFacts" if branch_of(args) == "omp/agent/b" => {
+                let mut facts = facts("omp/agent/b", 3);
+                facts["commitsBehind"] = json!(12);
+                Some(facts)
+            }
             _ => None,
         }),
     );
@@ -183,6 +187,11 @@ async fn compare_gives_each_branch_its_facts_its_answer_and_runs_no_tests() {
         text.contains("cannot merge yet: omp/agent/b has 3 uncommitted file(s)"),
         "{text}"
     );
+    assert!(
+        text.contains("12 commits behind main (rebase or merge main before landing)"),
+        "{text}"
+    );
+    assert_eq!(text.matches("behind main").count(), 1, "{text}");
     assert!(text.contains("Compare runs no tests"), "{text}");
     // Reading them counts as collecting their answers.
     assert!(control.mem().collected.contains("alpha001"));

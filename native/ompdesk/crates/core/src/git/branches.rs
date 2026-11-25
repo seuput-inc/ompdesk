@@ -452,6 +452,8 @@ struct Measure {
     base: Base,
     tip: String,
     landed: bool,
+    /// The ref the branch lands in (or landed in), as `landing` chose it.
+    target: String,
     merge_base: String,
 }
 
@@ -468,6 +470,7 @@ async fn measure(git: &Git, worktree: &WorktreeRef) -> Result<Measure, Fault> {
         base,
         tip,
         landed,
+        target: diff_base,
         merge_base,
     })
 }
@@ -482,6 +485,10 @@ pub struct BranchFacts {
     pub base_branch: Option<String>,
     #[serde(default)]
     pub commits_ahead: u64,
+    /// Commits in the landing target that the tip lacks; 0 once the branch's own work landed. An older paired host
+    /// leaves it out.
+    #[serde(default)]
+    pub commits_behind: u64,
     #[serde(default)]
     pub files: Vec<FileChange>,
     #[serde(default)]
@@ -501,13 +508,18 @@ pub async fn facts(git: &Git, worktree: &WorktreeRef) -> Result<BranchFacts, Fau
         base,
         tip,
         landed,
+        target,
         merge_base,
     } = measure(git, worktree).await?;
     let range = format!("{merge_base}..{tip}");
     let ahead_args = ["rev-list", "--count", &range];
+    let behind_range = format!("{tip}..{target}");
+    let behind_args = ["rev-list", "--count", &behind_range];
     let numstat_args = ["diff", "--numstat", "--no-renames", &merge_base];
-    let (ahead, numstat_text, own, parent) = tokio::try_join!(
+    let (ahead, behind, created, numstat_text, own, parent) = tokio::try_join!(
         text(git, &worktree.path, &ahead_args),
+        text(git, &worktree.path, &behind_args),
+        created_at(git, &worktree.base_cwd, &worktree.branch),
         text(git, &worktree.path, &numstat_args),
         dirtiness(git, &worktree.path),
         dirtiness(git, &worktree.base_cwd),
@@ -515,10 +527,17 @@ pub async fn facts(git: &Git, worktree: &WorktreeRef) -> Result<BranchFacts, Fau
     let mut files = numstat(&numstat_text);
     let files_truncated = files.len() > MAX_FILES;
     files.truncate(MAX_FILES);
+    // An untouched branch "landed" only by sitting in its base's history: how far behind it starts still counts.
+    let has_work = created.is_some_and(|created| created != tip);
     Ok(BranchFacts {
         branch: worktree.branch.clone(),
         base_branch: base.branch,
         commits_ahead: count(&ahead),
+        commits_behind: if landed && has_work {
+            0
+        } else {
+            count(&behind)
+        },
         files,
         files_truncated,
         uncommitted: own.tracked,
@@ -1522,6 +1541,81 @@ pub(crate) mod tests {
             let expected: Vec<String> = serde_json::from_value(row[1].clone()).unwrap();
             assert_eq!(conflicted(row[0].as_str().unwrap()), expected);
         }
+    }
+
+    fn sh(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    fn commit(dir: &std::path::Path, file: &str) {
+        std::fs::write(dir.join(file), file).unwrap();
+        sh(dir, &["add", file]);
+        sh(dir, &["commit", "-qm", file]);
+    }
+
+    #[tokio::test]
+    async fn counts_the_commits_a_branch_is_behind_where_it_lands() {
+        let dir = std::env::temp_dir().join(format!("ompdesk-core-behind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        sh(&main, &["init", "-q", "-b", "main"]);
+        commit(&main, "one");
+        let at = |name: &str, branch: &str| WorktreeRef {
+            path: dir.join(name).to_string_lossy().into_owned(),
+            branch: branch.to_owned(),
+            base_cwd: main.to_string_lossy().into_owned(),
+        };
+        let git = crate::git::run::tests::git();
+        let child = at("a", "omp/agent/a");
+        sh(
+            &main,
+            &["worktree", "add", "-q", &child.path, "-b", &child.branch],
+        );
+        let fresh = facts(&git, &child).await.unwrap();
+        assert_eq!(fresh.commits_behind, 0, "made from HEAD");
+
+        commit(std::path::Path::new(&child.path), "work");
+        for file in ["two", "three", "four"] {
+            commit(&main, file);
+        }
+        let behind = facts(&git, &child).await.unwrap();
+        assert_eq!(
+            (behind.merged, behind.commits_ahead, behind.commits_behind),
+            (false, 1, 3)
+        );
+
+        sh(
+            &main,
+            &["merge", "-q", "--no-ff", "--no-edit", &child.branch],
+        );
+        let merged = facts(&git, &child).await.unwrap();
+        assert_eq!((merged.merged, merged.commits_behind), (true, 0));
+
+        // A worktree made from an older base starts behind, though its untouched tip reads as landed.
+        let late = at("b", "omp/agent/b");
+        sh(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &late.path,
+                "-b",
+                &late.branch,
+                "HEAD~2",
+            ],
+        );
+        let late = facts(&git, &late).await.unwrap();
+        assert_eq!((late.merged, late.commits_behind), (true, 3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

@@ -34,6 +34,11 @@ export interface BranchFacts {
 	/** The parent checkout's current branch; null while its HEAD is detached. */
 	baseBranch: string | null;
 	commitsAhead: number;
+	/**
+	 * Commits where the branch lands (see "Where a branch lands" in control-tools.md) that its tip lacks; 0 once its
+	 * own work landed. Absent from a paired host older than this field.
+	 */
+	commitsBehind?: number;
 	/** Tracked files that differ from where the branch left the parent, committed or not. */
 	files: FileChange[];
 	filesTruncated: boolean;

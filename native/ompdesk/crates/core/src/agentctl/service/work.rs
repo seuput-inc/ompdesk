@@ -20,6 +20,7 @@ mod review;
 mod schedule;
 #[cfg(test)]
 mod tests;
+mod watch;
 
 pub use app::{ServicePorts, command_timeout};
 
@@ -226,6 +227,15 @@ impl AgentControl {
                             removed,
                             if facts.merged { ", already merged" } else { "" }
                         ));
+                        if facts.commits_behind > 0 {
+                            let target =
+                                facts.base_branch.as_deref().unwrap_or("the parent's HEAD");
+                            lines.push(format!(
+                                "  {} commit{} behind {target} (rebase or merge {target} before landing)",
+                                number(facts.commits_behind as f64),
+                                if facts.commits_behind == 1 { "" } else { "s" }
+                            ));
+                        }
                         lines.push(format!(
                             "  uncommitted {}, untracked {}{}",
                             number(facts.uncommitted as f64),
