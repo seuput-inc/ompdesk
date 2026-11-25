@@ -1,7 +1,8 @@
 /**
- * Run by `formal-stock.test.ts` under Bun (stock omp's source needs Bun's runtime): builds a real omp session with
- * the given extension roots in the caller's isolated HOME and agent dir and prints, as one JSON line, what the
- * formal-verification skill costs and exposes. Args: `<omp package root> <cwd> <extension root>...`.
+ * Run by `formal-stock.test.ts` and `interfaces-stock.test.ts` under Bun (stock omp's source needs Bun's runtime):
+ * builds a real omp session with the given extension roots in the caller's isolated HOME and agent dir and prints, as
+ * one JSON line, what the bundled skills cost and expose. Args: `<omp package root> <cwd> <extension root>...`;
+ * `STOCK_PROBE_READ` (comma-separated `skill://` URLs) names what to read, else the formal skill's.
  */
 export {};
 
@@ -23,7 +24,11 @@ const skills: { name: string; filePath: string; hide?: boolean; disableModelInvo
 ];
 const handler = new SkillProtocolHandler();
 const read: Record<string, string> = {};
-for (const url of ["skill://ompdesk-formal-verify", "skill://ompdesk-formal-verify/references/workflows.md"]) {
+const urls = process.env.STOCK_PROBE_READ?.split(",") ?? [
+	"skill://ompdesk-formal-verify",
+	"skill://ompdesk-formal-verify/references/workflows.md",
+];
+for (const url of urls) {
 	try {
 		const resource = await handler.resolve(parseInternalUrl(url), { skills });
 		read[url] = String(resource.content ?? "").slice(0, 300);
