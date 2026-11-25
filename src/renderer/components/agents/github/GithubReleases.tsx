@@ -19,7 +19,7 @@ import {
 	Switch,
 	TextArea,
 } from "../../common";
-import { type GithubSectionProps, GithubToolbar, NeedsRepo, useGithubMutation } from "./shared";
+import { type GithubSectionProps, GithubToolbar, NeedsRepo, pausedNotice, useGithubMutation } from "./shared";
 
 interface ReleaseDraft {
 	tag: string;
@@ -298,6 +298,7 @@ export function GithubReleases({ target, repoName, targetKey }: GithubSectionPro
 							error={detail.error}
 							hasData={detail.data !== null}
 							loading={detail.loading && !detail.data}
+							notice={pausedNotice(detail.pausedUntil)}
 							onRetry={detail.reload}
 						>
 							{detail.data && (
@@ -322,6 +323,7 @@ export function GithubReleases({ target, repoName, targetKey }: GithubSectionPro
 						error={list.error}
 						hasData={rows.length > 0}
 						loading={list.loading && !list.data}
+						notice={pausedNotice(list.pausedUntil)}
 						onRetry={list.reload}
 					>
 						<ul className="flex flex-col gap-0.5">

@@ -12,7 +12,7 @@ use super::super::host::{Caps, HostState};
 use super::super::tuning::Tuning;
 use super::super::{AgentControl, Files};
 use super::command_timeout;
-use super::review::{cost_split_of, turn_edits};
+use super::review::{cost_split_of, saved_edits};
 use crate::agentctl::journal::system_clock;
 use crate::ports::Port;
 
@@ -159,7 +159,11 @@ async fn compare_gives_each_branch_its_facts_its_answer_and_runs_no_tests() {
         family(),
         Caps::default(),
         main_of(|method, args| match method {
-            "branchFacts" if branch_of(args) == "omp/agent/b" => Some(facts("omp/agent/b", 3)),
+            "branchFacts" if branch_of(args) == "omp/agent/b" => {
+                let mut facts = facts("omp/agent/b", 3);
+                facts["commitsBehind"] = json!(12);
+                Some(facts)
+            }
             _ => None,
         }),
     );
@@ -183,6 +187,11 @@ async fn compare_gives_each_branch_its_facts_its_answer_and_runs_no_tests() {
         text.contains("cannot merge yet: omp/agent/b has 3 uncommitted file(s)"),
         "{text}"
     );
+    assert!(
+        text.contains("12 commits behind main (rebase or merge main before landing)"),
+        "{text}"
+    );
+    assert_eq!(text.matches("behind main").count(), 1, "{text}");
     assert!(text.contains("Compare runs no tests"), "{text}");
     // Reading them counts as collecting their answers.
     assert!(control.mem().collected.contains("alpha001"));
@@ -520,12 +529,12 @@ async fn schedule_says_so_without_a_service_and_needs_one_start() {
     .await;
     assert_eq!(
         text,
-        "create needs exactly one of every_minutes, daily_at, at, in_minutes or on."
+        "Invalid arguments for ompdesk_schedule: create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on"
     );
     let (text, _) = run(
         &control,
         "ompdesk_schedule",
-        json!({ "action": "create", "name": "x", "every_minutes": 5, "folder": "repo" }),
+        json!({ "action": "create", "name": "x", "prompt": "p", "every_minutes": 5, "folder": "repo" }),
     )
     .await;
     assert_eq!(text, "folder must be an absolute path.");
@@ -788,8 +797,9 @@ async fn a_merged_clean_child_is_no_review_item_but_a_conflict_one_is() {
 async fn family_edits_read_each_childs_turn_and_each_closed_childs_file_once() {
     let mut state = family();
     state["tabs"][2]["status"] = json!("asleep");
+    state["tabs"][2]["cwd"] = json!("/worktree/asleep");
     state["closedChildren"] = json!([
-        { "path": "/s/old.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Old", "cwd": "/repo", "closedAt": 2000 },
+        { "path": "/s/old.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Old", "cwd": "/worktree/closed", "closedAt": 2000 },
         { "path": "/s/older.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Older", "cwd": "/repo", "closedAt": 500 },
         { "path": "/s/a.jsonl", "openedBySession": "/s/boss.jsonl", "title": "Open still", "cwd": "/repo", "closedAt": 3000 },
     ]);
@@ -839,10 +849,12 @@ async fn family_edits_read_each_childs_turn_and_each_closed_childs_file_once() {
     assert_eq!(members[0]["unlanded"]["target"], "main");
     // Asleep: read from its saved file, and no git read.
     assert_eq!(members[1]["key"], "/s/b.jsonl");
+    assert_eq!(members[1]["edits"]["cwd"], "/worktree/asleep");
     assert_eq!(members[1]["edits"]["messages"].as_array().unwrap().len(), 2);
     assert_eq!(members[1]["unlanded"], Value::Null);
     // Closed since `since`: its last turn only; a close before it, or one still open, is left out.
     assert_eq!(members[2]["key"], "/s/old.jsonl");
+    assert_eq!(members[2]["edits"]["cwd"], "/worktree/closed");
     assert_eq!(members[2]["edits"]["startedAt"], 100);
     assert_eq!(members[2]["edits"]["endedAt"], 102);
     let before = *stored_reads.lock().unwrap();
@@ -858,6 +870,33 @@ async fn family_edits_read_each_childs_turn_and_each_closed_childs_file_once() {
             .unwrap()
             .len(),
         2
+    );
+}
+
+#[tokio::test]
+async fn stored_edits_resolve_relative_paths_in_the_owner_not_the_session_index() {
+    let row = super::super::types::StoredSession {
+        path: "/s/asleep.jsonl".into(),
+        cwd: "/original".into(),
+        ..Default::default()
+    };
+    let (control, _) = rig(
+        219,
+        family(),
+        Caps::default(),
+        main_of(|method, args| {
+            (method == "storedMessages" && args["session"]["cwd"] == "/original").then(|| {
+                json!([{ "role": "assistant", "content": [
+                    { "type": "toolCall", "name": "edit", "arguments": { "path": "src/app.ts" } }
+                ] }])
+            })
+        }),
+    );
+    let edits = control.stored_edits(&row, "/current").await.unwrap();
+    assert_eq!(edits["cwd"], "/current");
+    assert_eq!(
+        edits["messages"][0]["content"][0]["arguments"]["path"],
+        "src/app.ts"
     );
 }
 
@@ -959,12 +998,41 @@ fn same(a: &Value, b: &Value) -> bool {
 #[test]
 fn a_turn_s_edit_calls_are_cut_as_the_typescript_cut_them() {
     for (index, case) in captured("turnEdits").iter().enumerate() {
-        let messages: Vec<Value> = case["in"][0].as_array().unwrap().clone();
-        let got = turn_edits(&messages, case["in"][1].as_str().unwrap());
+        let messages = serde_json::value::to_raw_value(&case["in"][0]).unwrap();
+        let got = saved_edits(&messages, case["in"][1].as_str().unwrap()).unwrap();
         assert!(
             same(&got, &case["out"]),
             "turnEdits case {index}\n got  {got}\n want {}",
             case["out"]
+        );
+    }
+}
+
+#[test]
+fn saved_results_follow_their_call_and_only_a_nullish_end_uses_the_prompt_time() {
+    let call = json!({"type": "toolCall", "name": "write", "id": "x"});
+    let assistant = json!({"role": "assistant", "timestamp": null, "content": [call]});
+    let result = json!({"role": "toolResult", "toolCallId": "x", "extra": {"kept": true}});
+    for (last, ended) in [
+        (json!({"role": "custom"}), json!(42)),
+        (json!({"role": "custom", "timestamp": null}), json!(42)),
+        (
+            json!({"role": "custom", "timestamp": "invalid"}),
+            Value::Null,
+        ),
+        (json!({"role": "custom", "timestamp": false}), Value::Null),
+    ] {
+        let rows = json!([
+            {"role": "user", "timestamp": 42},
+            result,
+            assistant,
+            result,
+            last
+        ]);
+        let raw = serde_json::value::to_raw_value(&rows).unwrap();
+        assert_eq!(
+            saved_edits(&raw, "/r").unwrap(),
+            json!({"cwd": "/r", "startedAt": 42, "endedAt": ended, "messages": [assistant, result]})
         );
     }
 }

@@ -14,7 +14,7 @@ interface AgentReviewStore {
 	/** Child session file → what it runs on and has cost (from whichever parent's push named it last). */
 	usage: Readonly<Record<string, AgentChildUsage>>;
 	apply: (event: AgentReviewEvent) => void;
-	refresh: (tabId: string) => Promise<void>;
+	refresh: (tabId: string) => Promise<boolean>;
 	reset: () => void;
 }
 
@@ -29,11 +29,21 @@ export const useAgentReviewStore = create<AgentReviewStore>()((set, get) => ({
 			usage: { ...state.usage, ...event.usage },
 		})),
 	refresh: async tabId => {
+		const before = get().byTab[tabId];
 		// A read that fails (a paired host's link down, a tab starting) keeps what is known; main's next push replaces it.
 		const response = await window.omp?.rpc
 			?.commandForTab?.(tabId, { type: "agent_control_review" })
 			.catch(() => undefined);
-		if (response?.success) get().apply({ tabId, ...(response.data as AgentReviewResult) });
+		if (
+			!response?.success ||
+			typeof response.data !== "object" ||
+			response.data === null ||
+			!("items" in response.data) ||
+			!Array.isArray(response.data.items)
+		)
+			return false;
+		if (get().byTab[tabId] === before) get().apply({ tabId, ...(response.data as AgentReviewResult) });
+		return true;
 	},
 	reset: () => set({ byTab: {}, usage: {} }),
 }));

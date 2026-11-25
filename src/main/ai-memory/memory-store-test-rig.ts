@@ -35,7 +35,10 @@ export interface ServedStore {
 const METADATA = ["entities", "abstract", "relations", "applies_to", "enforced_by"] as const;
 
 /** Serves `store()` (read at each request, so a test may swap the store) on 127.0.0.1. */
-export async function serveMemoryStore(store: () => Partial<MemoryStore>): Promise<ServedStore> {
+export async function serveMemoryStore(
+	store: () => Partial<MemoryStore>,
+	healthy: () => boolean = () => true,
+): Promise<ServedStore> {
 	const json = (body: unknown, status = 200) =>
 		new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 	const served = await fakeMemoryServer(async (url, request) => {
@@ -43,6 +46,7 @@ export async function serveMemoryStore(store: () => Partial<MemoryStore>): Promi
 		const body = request.body ? (JSON.parse(request.body) as Record<string, unknown>) : {};
 		const fake = store();
 		try {
+			if (pathname === "/healthz") return json({}, healthy() ? 200 : 503);
 			if (pathname === "/api/v1/projects" && fake.projects) {
 				const projects = await fake.projects();
 				return json(

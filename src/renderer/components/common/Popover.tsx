@@ -49,12 +49,12 @@ function preferredRoom(anchor: DOMRect, placement: PopoverPlacement): number {
 	return anchor.top - GAP - ceiling - MARGIN;
 }
 
-/** Popover panel visuals. */
+/** Popover panel visuals: the floating glass (`.omp-floating`, global.css). */
 export function PopoverSurface({ className, children }: { className?: string; children: ReactNode }) {
 	return (
 		<div
 			className={cx(
-				"max-w-[min(22.5rem,calc(100vw-1rem))] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-elevated) p-3 text-(--sc-text) shadow-(--sc-shadow-md)",
+				"omp-floating max-w-[min(22.5rem,calc(100vw-1rem))] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-(--sc-radius-lg) border border-(--sc-border-subtle) p-3 text-(--sc-text)",
 				className,
 			)}
 		>

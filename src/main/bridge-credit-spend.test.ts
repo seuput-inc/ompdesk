@@ -1,15 +1,25 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+	CREDITS_HELD,
+	holdsCredits,
 	isCreditProvider,
+	NEAR_SPENT_AGE_MS,
 	overageCoversAccount,
 	overageUntil,
 	type PlanLimitLike,
+	parseLimited,
 	planSpentError,
 	planSpentUntil,
+	REPORT_LIFE_MS,
+	reportTrust,
 	setCreditSpend,
+	UNREAD_USAGE_ERROR,
 	UNTIMED_SPENT_MS,
 	withoutCredits,
 } from "../../resources/gui-bridge/credit-spend-core";
+import { CREDIT_SPEND_OFF_WORDING } from "../shared/credit-spend";
+import { isBillingCap, isLimitWording } from "../shared/quota-reset";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -74,6 +84,99 @@ describe("planSpentUntil", () => {
 		const fable = limit("anthropic:7d:fable", 1, HOUR, { scope: {} });
 		expect(planSpentUntil("anthropic", { limits: [extra, fable] }, NOW)).toBeUndefined();
 		expect(planSpentUntil("anthropic", { limits: [], metadata: { limitReached: true } }, NOW)).toBeUndefined();
+	});
+
+	it("stops a Claude model whose own week is spent before its first request, and only when asked for that model", () => {
+		const shared = [limit("anthropic:5h", 0.6, 2 * HOUR), limit("anthropic:7d", 0.4, 80 * HOUR)];
+		const fable = limit("anthropic:7d:fable", 1, 50 * HOUR, { scope: {} });
+		const report = { limits: [...shared, fable] };
+		// The rows stock counts for the request's model: the shared windows and that model's own.
+		expect(planSpentUntil("anthropic", report, NOW, [...shared, fable])).toBe(NOW + 50 * HOUR);
+		// Another model of the account: its rows hold no spent window.
+		expect(planSpentUntil("anthropic", report, NOW, shared)).toBeUndefined();
+		const opus = limit("anthropic:7d:opus", 0.99, HOUR, { scope: {} });
+		expect(planSpentUntil("anthropic", report, NOW, [opus])).toBeUndefined();
+		// Without a reset time it stays limited for stock's default block; a reset that passed is not spent.
+		const untimed: PlanLimitLike = { id: "anthropic:7d:fable", scope: {}, amount: { usedFraction: 1 } };
+		expect(planSpentUntil("anthropic", report, NOW, [untimed])).toBe(NOW + UNTIMED_SPENT_MS);
+		const passed = limit("anthropic:7d:fable", 1, -1, { scope: {} });
+		expect(planSpentUntil("anthropic", report, NOW, [passed])).toBeUndefined();
+		// Codex's other meters (its spend cap, Spark) are never its plan, whatever rows are handed in.
+		const codex = { limits: [limit("openai-codex:primary", 0.5, HOUR)] };
+		const cap = limit("openai-codex:spend-cap", 1, HOUR, { scope: {} });
+		expect(planSpentUntil("openai-codex", codex, NOW, [cap])).toBeUndefined();
+	});
+});
+
+describe("reportTrust", () => {
+	const report = (used: number, age: number, credits = true) => ({
+		limits: [limit("openai-codex:primary", used, 3 * HOUR), limit("openai-codex:secondary", 0, 90 * HOUR)],
+		metadata: credits ? { [CREDITS_HELD]: true } : {},
+		fetchedAt: NOW - age,
+	});
+
+	it("lets a report under 90 % be as old as the plan it shows left, and asks for a read past that", () => {
+		const cases: Array<[used: number, age: number, trust: string]> = [
+			[0, REPORT_LIFE_MS, "current"],
+			[0, REPORT_LIFE_MS + 1, "aging"],
+			[0.5, REPORT_LIFE_MS / 2, "current"],
+			[0.5, REPORT_LIFE_MS / 2 + 1_000, "aging"],
+			[0.89, 32_000, "current"],
+			[0.89, 34_000, "aging"],
+		];
+		for (const [used, age, trust] of cases) expect(reportTrust(report(used, age), NOW), `${used} ${age}`).toBe(trust);
+		// A request of this omp since the read changes nothing while the plan has room.
+		expect(reportTrust(report(0.5, 1_000), NOW, NOW)).toBe("current");
+	});
+
+	it("from 90 % on lets nothing out once this omp sent a request since the read, or 15 s passed", () => {
+		const fresh = report(0.9, 1_000);
+		expect(reportTrust(fresh, NOW)).toBe("current");
+		// Sent before the read: the read already counts it.
+		expect(reportTrust(fresh, NOW, fresh.fetchedAt - 1)).toBe("current");
+		expect(reportTrust(fresh, NOW, fresh.fetchedAt)).toBe("unconfirmed");
+		expect(reportTrust(fresh, NOW, NOW)).toBe("unconfirmed");
+		expect(reportTrust(report(0.97, NEAR_SPENT_AGE_MS), NOW)).toBe("current");
+		expect(reportTrust(report(0.97, NEAR_SPENT_AGE_MS + 1), NOW)).toBe("unconfirmed");
+	});
+
+	it("reads the fuller of the two plan windows, and never Codex's other meters", () => {
+		const weekly = {
+			limits: [limit("openai-codex:primary", 0.1, HOUR), limit("openai-codex:secondary", 0.9, 90 * HOUR)],
+			metadata: { [CREDITS_HELD]: true },
+			fetchedAt: NOW - 31_000,
+		};
+		expect(reportTrust(weekly, NOW)).toBe("unconfirmed");
+		const spark = { ...weekly, limits: [limit("openai-codex:spark:primary", 0.99, HOUR)] };
+		expect(reportTrust(spark, NOW)).toBe("current");
+	});
+
+	it("leaves an account without credits, and a report that names no read time, to stock", () => {
+		expect(reportTrust(report(0.99, REPORT_LIFE_MS, false), NOW, NOW)).toBe("current");
+		expect(reportTrust({ limits: [], metadata: { [CREDITS_HELD]: true } }, NOW)).toBe("current");
+		expect(reportTrust(null, NOW)).toBe("current");
+	});
+});
+
+describe("holdsCredits", () => {
+	it("is true for a balance or unlimited credits, false for anything else", () => {
+		expect(holdsCredits({ credits: { has_credits: true, unlimited: false, balance: "500" } })).toBe(true);
+		expect(holdsCredits({ credits: { has_credits: false, unlimited: true } })).toBe(true);
+		for (const none of [{ credits: { has_credits: false } }, { credits: null }, { rate_limit: {} }, null, "text"]) {
+			expect(holdsCredits(none)).toBe(false);
+		}
+	});
+});
+
+describe("parseLimited", () => {
+	it("keeps the entries still ahead and reads anything malformed as empty", () => {
+		const text = JSON.stringify({
+			"anthropic\u00007": NOW + HOUR,
+			"anthropic\u00008": NOW - 1,
+			"openai-codex\u00002": "soon",
+		});
+		expect(parseLimited(text, NOW)).toEqual({ "anthropic\u00007": NOW + HOUR });
+		for (const bad of ["", "not json", "[1]", "null", '"text"']) expect(parseLimited(bad, NOW)).toEqual({});
 	});
 });
 
@@ -163,5 +266,30 @@ describe("the switch and the refusal", () => {
 		expect(message).toContain("ChatGPT");
 		expect(message).toContain("about 3 hours");
 		expect(planSpentError("anthropic", NOW + 20 * 60_000, NOW)).toContain("about 20 minutes");
+	});
+
+	it("words it so the turn it ends waits for the limit and the card says credit use is off", () => {
+		// The rows the core's copy of the limit rules is held to (its test and src/shared/quota-reset.test.ts read them).
+		const captured = JSON.parse(
+			readFileSync(
+				new URL("../../native/ompdesk/crates/core/src/resume/classifiers-captured.json", import.meta.url),
+				"utf8",
+			),
+		) as Array<{ message?: string; limit: boolean }>;
+		for (const provider of ["openai-codex", "anthropic"] as const) {
+			const message = planSpentError(provider, NOW + 3 * HOUR, NOW);
+			expect(isLimitWording(message)).toBe(true);
+			expect(isBillingCap(message)).toBe(false);
+			expect(message).toMatch(CREDIT_SPEND_OFF_WORDING);
+			// Stock's hint as credit-spend.ts appends it (pi-ai utils/retry-after.ts).
+			const row = captured.find(entry => entry.message === `${message} retry-after-ms=${3 * HOUR}`);
+			expect(row, provider).toMatchObject({ limit: true });
+		}
+		// The wait while a nearly spent ChatGPT account's usage cannot be read reads the same way.
+		expect(isBillingCap(UNREAD_USAGE_ERROR)).toBe(false);
+		expect(UNREAD_USAGE_ERROR).toMatch(CREDIT_SPEND_OFF_WORDING);
+		expect(captured.find(entry => entry.message === `${UNREAD_USAGE_ERROR} retry-after-ms=60000`)).toMatchObject({
+			limit: true,
+		});
 	});
 });

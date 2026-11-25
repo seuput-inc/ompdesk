@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { RM_TEMP } from "../test-fake-omp";
-import { journalTail } from "./extensions";
 import { localHandlerFor } from "./index";
 import type { BridgeClient, LocalCommandContext } from "./types";
 
@@ -91,14 +90,14 @@ describe("a subagent journal's tail", () => {
 		const { file, ask, asked } = await journal();
 		const first = await ask({ tails: true });
 		expect(first.messages.map(message => message.content)).toEqual(["one", "two"]);
-		expect(first.tail).toBe(await journalTail(file, first.nextByte));
+		expect(first.tail).toBe("170:iQLLzm3LTb8ny_MlZCAVH_");
 		// Stock never sees the flags.
 		expect(asked[0]).toEqual({ type: "get_subagent_messages", subagentId: "Scout" });
 		await appendFile(file, line("three", 3));
 		const next = await ask({ tails: true, fromByte: first.nextByte, knownTail: first.tail });
 		expect(next.reset).toBe(false);
 		expect(next.messages.map(message => message.content)).toEqual(["three"]);
-		expect(next.tail).toBe(await journalTail(file, next.nextByte));
+		expect(next.tail).toBe("257:mBEhSiouByKSQ4IKl-FwSJ");
 		expect(asked).toHaveLength(2);
 		// Without `tails` nothing is added.
 		expect(await ask({ fromByte: next.nextByte })).not.toHaveProperty("tail");
@@ -113,6 +112,6 @@ describe("a subagent journal's tail", () => {
 		expect(again.reset).toBe(true);
 		expect(again.fromByte).toBe(0);
 		expect(again.messages.map(message => message.content)).toEqual(["uno", "dos", "tres"]);
-		expect(again.tail).toBe(await journalTail(file, again.nextByte));
+		expect(again.tail).toBe("262:zQahq5Nz4-EN66O8jdrTha");
 	});
 });

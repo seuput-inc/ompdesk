@@ -13,12 +13,13 @@ Why tests miss it: the claim lives in two processes (A's bridge and main), main'
 ## In scope
 
 - A's claim state machine: `ClaimBook` (`resources/gui-bridge/modes/checkout-claims.ts`): `begin`, `end`, `agentEnded`, `retire`/`retireFrom`, `restore`/`snapshot`, `#confirm`, `#revert`, `#clean` (a commit, restore or checkout of paths by A's own call that succeeded), `status`.
-- The bridge's journal round trip across an omp restart (`modes/checkout-peers.ts` `install`: `session_shutdown`, `session_start`).
+- The bridge's journal round trip across an omp restart (`modes/checkout-peers.ts` `install`: `session_shutdown`, `session_start`): the journal written as whole sets and deltas (`writeJournal`, `nextClaimsEntry`), a load replaying the newest whole set and the deltas after it (`journaledClaims`, `replayClaims`), the writer's base after a load (`journalFrom`). Since 20 Nov 2026; before, the journal was the ledger's set itself.
 - Main's pass for one member with company: `CheckoutPeerCoordinator.#statusOf`, the git listing, `judgeClaim`, `#retire`, `#committed`, `#send` (`src/main/checkout-peers.ts`).
 
 ## Abstracted
 
 - One file F, A's main agent and one subagent, one peer B that only receives what main tells it. Calls are file tools, shell writes, or A's own `git commit -- F`. Fast run: at most 2 calls, stamp counter ≤ 5, one omp restart, 2 world events (commits of F, by anyone, or B's own writes). Own-commit run: 3 calls, stamps ≤ 7, no restart. Deep run: 3 calls, stamps ≤ 7, one restart, 3 world events.
+- The journal for one file: a delta either puts F in front or removes it. A set larger than F, which makes a delta smaller than a whole set, is abstracted by letting any write be whole and a delta be written while fewer than `FullEvery` (1 in every run) came since the last whole one. The order of files in a set, and `CLAIMS_MAX`, are the generated sequences' (`checkout-claims-journal.test.ts`, 40 files). A move in the session tree (`session_tree`, `session_branch`) is not modeled; the code makes the next entry whole and takes its base from the new branch's journal. A restart without `session_shutdown` (a crash, a forced quit) is not modeled, as before.
 - One call per agent at a time (stock runs a batch's calls; a batch of several calls on F is several claims of one file in one step).
 - A background job is a call that stays pending until its job ends: `end` with a job id plus `settleJob` is the same as one longer call.
 - The guard's refusals and notices are not modeled: they decide which calls start, not what a claim means once taken. Of the git runs that make files clean only the commit is modeled; a restore or checkout of paths takes the same `#clean` path.

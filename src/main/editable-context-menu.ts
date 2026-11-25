@@ -13,19 +13,6 @@ interface EditableContextMenuActions {
 	copyImageAt: (x: number, y: number) => void;
 }
 
-/** The native edit items, shared by the Edit menu and a text field's context menu. */
-export function editRoleItems(labels: EditLabels): MenuItemConstructorOptions[] {
-	return [
-		{ role: "undo", label: labels.undo },
-		{ role: "redo", label: labels.redo },
-		{ type: "separator" },
-		{ role: "cut", label: labels.cut },
-		{ role: "copy", label: labels.copy },
-		{ role: "paste", label: labels.paste },
-		{ role: "selectAll", label: labels.selectAll },
-	];
-}
-
 /**
  * Native edit menu with platform spellchecker suggestions for editable fields;
  * on an image (a reply's picture, an attachment preview) a "Copy image" item.
@@ -53,6 +40,12 @@ export function editableContextMenuTemplate(
 	return [
 		...spelling,
 		...(spelling.length > 0 ? ([{ type: "separator" }] as MenuItemConstructorOptions[]) : []),
-		...editRoleItems(labels),
+		{ role: "undo", label: labels.undo },
+		{ role: "redo", label: labels.redo },
+		{ type: "separator" },
+		{ role: "cut", label: labels.cut },
+		{ role: "copy", label: labels.copy },
+		{ role: "paste", label: labels.paste },
+		{ role: "selectAll", label: labels.selectAll },
 	];
 }

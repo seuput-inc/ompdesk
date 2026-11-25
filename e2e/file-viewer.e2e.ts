@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import { writeViewerSamples } from "./file-viewer-fixtures";
+import { leavesTheApp } from "./fixture/shell-launch";
 import { exitApp, launchApp, pressShortcutUntilVisible } from "./harness";
 
 // The Files drawer viewer in the built app on the fake omp: the pdf.js worker
@@ -30,7 +31,7 @@ test("file viewer renders pdf, image, csv, code, office and binary files", async
 		page.on("pageerror", error => errors.push(error.message));
 		const network: string[] = [];
 		page.on("request", request => {
-			if (/^(https?|wss?):/i.test(request.url())) network.push(request.url());
+			if (leavesTheApp(request.url())) network.push(request.url());
 		});
 		await page.waitForFunction(() => window.omp?.rpc != null);
 		await expect

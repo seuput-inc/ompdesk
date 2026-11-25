@@ -2,8 +2,8 @@
  * The composer's side of the automatic mode choice (Plan or Goal only; rules in
  * resources/gui-bridge/modes/auto-mode-core.ts). Called just before a typed prompt is sent: when the pref is on and no
  * mode is active, asks the tab's omp (`auto_mode_decide`; the host's for a paired host's tab) and mirrors the
- * result in the session store, which shows the "This request: Plan" chip. It never throws and never waits longer than
- * the decision's own deadline plus a margin: a failure is "none" and the prompt goes out unchanged.
+ * result in the session store, which shows the "This request: Plan" chip. The host bounds the classification before
+ * it starts a mode; Stop can withdraw the prompt while the host answers.
  *
  * A decision is used for one request only, never as the session's mode (the Mode picker leaves it out): an automatic
  * plan still on when the user sends something that is not a reply to it (no proposal awaits approval) is ended
@@ -14,16 +14,12 @@
 import type { StoreApi } from "zustand";
 import {
 	AUTO_MODE_PREF,
-	AUTO_MODE_TIMEOUT_MS,
 	type AutoModeDecision,
 	autoModeFromPref,
 } from "../../../resources/gui-bridge/modes/auto-mode-contracts";
 import { autoModeSkip } from "../../../resources/gui-bridge/modes/auto-mode-core";
 import type { SessionStore } from "../stores/session";
 import type { TabRpc } from "./tab-rpc";
-
-/** The transport may add a little to the host's own 2 s deadline before the prompt stops waiting. */
-const CLIENT_DEADLINE_MS = AUTO_MODE_TIMEOUT_MS + 1000;
 
 export function goalIsActive(state: Pick<SessionStore, "goal" | "goalState">): boolean {
 	return state.goalState?.status === "active" || state.goalState?.status === "paused" || !!state.goal;
@@ -101,7 +97,6 @@ export async function runAutoMode(input: RunAutoModeInput): Promise<AutoModeDeci
 		const request = rpc.autoModeDecide(message);
 		const response = await Promise.race([
 			request,
-			new Promise<null>(resolve => setTimeout(() => resolve(null), CLIENT_DEADLINE_MS)),
 			new Promise<typeof ABORTED>(resolve =>
 				signal?.addEventListener("abort", () => resolve(ABORTED), { once: true }),
 			),

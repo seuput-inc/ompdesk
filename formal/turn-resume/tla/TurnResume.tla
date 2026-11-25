@@ -157,9 +157,9 @@ Init ==
 ----------------------------------------------------------------------------
 \* ===== the relaunch =====
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:2230-2366 Inst::launch: launch(): the marker finds its tab (layout, unwritten, opened) and is kept as a launch marker (#pending)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:2338-2364 Inst::launch[hold-or-run]: each marker's continuation holds (offline) or runs (online) with the tab's session file and `touched` (HeldWait.since / #run's `since`)
-\* @code src/main/autopilot.ts:1133-1134 #onReady: a launch marker means the run waits for the continuation's goalSettled (`apWait`)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2496-2646 Inst::launch: launch(): the marker finds its tab (layout, unwritten, opened) and is kept as a launch marker (#pending)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2618-2644 Inst::launch[hold-or-run]: each marker's continuation holds (offline) or runs (online) with the tab's session file and `touched` (HeldWait.since / #run's `since`)
+\* @code native/ompdesk/crates/core/src/autopilot/cycle.rs:1182-1188 Coordinator::on_ready: a launch marker means the run waits for the continuation's goalSettled (`apWait`)
 Launch(t) ==
     /\ Idle /\ ~launched /\ ~online /\ nStarts = 0 /\ run[t] = "idle" /\ ~awaiting[t]
     /\ launched' = TRUE
@@ -177,9 +177,9 @@ Launch(t) ==
 ----------------------------------------------------------------------------
 \* ===== pool events: each is followed by the `sync()` the pool triggers =====
 
-\* @code src/main/ipc.ts:876-879 the person's prompt: personsPrompt -> SidecarPool.notePrompted (host-services.ts:2263-2269 a device's, a view's through its window tab), before the command is sent
-\* @code native/ompdesk/crates/core/src/pool/run.rs:243-247 Tracking::track[agent_start]: agent_start: a new run clears lastRun, stopped, retry
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts: judge every fact
+\* @code src/main/ipc.ts:881-884 the person's prompt: personsPrompt -> SidecarPool.notePrompted (host-services.ts:2866-2872 a device's, a view's through its window tab), before the command is sent
+\* @code native/ompdesk/crates/core/src/pool/run.rs:359-363 Tracking::track[agent_start]: agent_start: a new run clears lastRun, stopped, retry
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:575-577 Inst::sync_inner[judge-all]: sync() starts: judge every fact
 UserPrompt(t) ==
     /\ Idle /\ run[t] = "idle" /\ ready /\ nStarts < MaxStarts       \* a prompt reaches an omp that is up (also while a continuation is on its way: A11 closed)
     /\ pk' = [pk EXCEPT ![t] = pk[t] \/ runWait[t] >= 0]               \* a continuation on its way (`#run`'s `prompted`) sees the count move
@@ -193,8 +193,8 @@ UserPrompt(t) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<kindOf, sg, awaiting, ready, nO, retryIn, store, resV, monV, rp, bad1, bad2, bad2h, bad6, sentFor, calledOffH, launched, mvV, runSg, bad7, bad8>>
 
-\* @code native/ompdesk/crates/core/src/pool/run.rs:255-259 Tracking::track[agent_end]: agent_end sets lastRun to the run's outcome (the run may still be settling)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
+\* @code native/ompdesk/crates/core/src/pool/run.rs:371-375 Tracking::track[agent_end]: agent_end sets lastRun to the run's outcome (the run may still be settling)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:575-577 Inst::sync_inner[judge-all]: sync() starts
 EndRun(t, k) ==
     /\ Idle /\ run[t] = "running" /\ last[t] = 0
     /\ runWait[t] < 0 /\ ~restoring[t]     \* A13 (not modeled): a run's end, and so a second `#run` of the tab, waits for the continuation on its way
@@ -204,16 +204,16 @@ EndRun(t, k) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<run, stopped, sg, awaiting, userRun, ready, nStarts, retryIn, store, resV, monV, rp, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/pool/run.rs:114-123 RunState::settle: the run settles (background work done)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
+\* @code native/ompdesk/crates/core/src/pool/run.rs:116-125 RunState::settle: the run settles (background work done)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:575-577 Inst::sync_inner[judge-all]: sync() starts
 Settle(t) ==
     /\ Idle /\ run[t] = "running" /\ last[t] # 0
     /\ run' = [run EXCEPT ![t] = "idle"]
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<last, kindOf, stopped, sg, awaiting, userRun, ready, nStarts, nO, retryIn, store, resV, monV, rp, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/pool/api.rs:985-995 Ctx::note_stopped: noteStopped: Stop pressed (a run or the probe row)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:538-540 Inst::sync_inner[judge-all]: sync() starts
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1058-1068 Ctx::note_stopped: noteStopped: Stop pressed (a run or the probe row)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:575-577 Inst::sync_inner[judge-all]: sync() starts
 UserStop(t) ==
     /\ Idle /\ ~stopped[t] /\ (run[t] = "running" \/ probing[t] # 0)
     /\ stopped' = [stopped EXCEPT ![t] = TRUE]
@@ -221,15 +221,15 @@ UserStop(t) ==
     /\ pc' = "s_watch" /\ ct' = t
     /\ UNCHANGED <<run, last, kindOf, sg, awaiting, userRun, ready, nStarts, nO, retryIn, store, resV, monV, rp, bad1, bad2, bad2h, bad6, sentFor, calledOffH, launched, mvV, runSg, pk, rk, bad7, bad8>>
 
-\* @code src/main/turn-resume.ts:248-265 trackMove: a TOUCH_COMMANDS command goes out and is marked in flight (MovesInFlight.begin); `touched` counts it only at its answer
-\* @code src/main/ipc.ts:1063-1075 the window tab's move command; src/main/remote/host-services.ts:2276-2300 a device's
+\* @code src/main/turn-resume.ts:255-272 trackMove: a TOUCH_COMMANDS command goes out and is marked in flight (MovesInFlight.begin); `touched` counts it only at its answer
+\* @code src/main/ipc.ts:1114-1123 the window tab's move command; src/main/remote/host-services.ts:2882-2911 a device's
 MoveSend(t, k) ==
     /\ Idle /\ mv[t] = "none" /\ sg[t] < MaxSess
     /\ mv' = [mv EXCEPT ![t] = k]          \* k = "moves": the answer will count (or it times out); "stays": cancelled or failed
     /\ UNCHANGED <<poolV, resV, rg, restoring, restGen, rsg, apWait, runSg, pk, rk, monV, ctlV, histV>>
 
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1013-1027 Ctx::note_counter: noteTouched (called by trackMove at the answer, a timed-out command included: movesTabUnknown), then onRunningChange -> sync()
-\* @code src/main/turn-resume.ts:248-265 trackMove: `end()` runs after `touched` counted, so every continuation waiting in movesSettled resumes then (RunGo)
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1091-1105 Ctx::note_counter: noteTouched (called by trackMove at the answer, a timed-out command included: movesTabUnknown), then onRunningChange -> sync()
+\* @code src/main/turn-resume.ts:255-272 trackMove: `end()` runs after `touched` counted, so every continuation waiting in movesSettled resumes then (RunGo)
 MoveReply(t) ==
     /\ Idle /\ mv[t] # "none"
     /\ mv' = [mv EXCEPT ![t] = "none"]
@@ -247,7 +247,7 @@ MoveReply(t) ==
 \* Environment: the tab's session moves and no sync() follows (a path that does not tell the resume rules: the model
 \* drops the sync() a held wait's file move now triggers, so the continuations' own re-check must hold without it).
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of: #registerSessionFile: a window tab's file moves (a paired device's switch through a view)
-\* @code src/main/remote/host-services.ts:1987-1995 a device's own hosted tab reports another session file
+\* @code src/main/remote/host-services.ts:2472-2480 a device's own hosted tab reports another session file
 FileMoved(t) ==
     /\ Idle /\ sg[t] + (IF mv[t] = "moves" THEN 1 ELSE 0) < MaxSess
     /\ sg' = [sg EXCEPT ![t] = sg[t] + 1]
@@ -256,8 +256,8 @@ FileMoved(t) ==
     /\ UNCHANGED <<run, last, kindOf, stopped, awaiting, userRun, ready, nStarts, nO, retryIn, store, resV, monV, ctlV,
                    bad1, bad2, bad2h, bad6, sentFor, launched, mvV, runSg, pk, rk, bad7, bad8>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:2151-2154 Inst::cancel_wait: cancelWait / #dropWait: a held launch continuation tells Autopilot `cancelled` (goalSettled); a restore in flight is called off by the generation
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:2119-2148 Inst::drop_wait
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2338-2341 Inst::cancel_wait: cancelWait / #dropWait: a held launch continuation tells Autopilot `cancelled` (goalSettled); a restore in flight is called off by the generation
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2306-2335 Inst::drop_wait
 Cancel(t) ==
     /\ Idle /\ nCancels < MaxCancels
     /\ (waiting[t] \/ probing[t] # 0 \/ armO[t] # 0 \/ restoring[t])
@@ -275,7 +275,7 @@ Cancel(t) ==
                    waitFor, wsg, psg, armSg, armAtt, armId, planning, attempts, judged, runWait, runFor, fireId, nUnready,
                    mv, rg, restoring, restGen, rsg, runSg, pk, rk, monV, rp, bad1, bad2, bad2h, bad6, bad7, bad8, sentFor, calledOffH, launched>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1555-1596 Inst::send: the `retry` command lands: stock starts the retried run (agent_start), or has nothing to retry
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1714-1757 Inst::send: the `retry` command lands: stock starts the retried run (agent_start), or has nothing to retry
 RetryTaken(t) ==
     /\ Idle /\ retryIn[t]
     /\ retryIn' = [retryIn EXCEPT ![t] = FALSE]
@@ -301,10 +301,10 @@ Unready ==
                    waiting, waitFor, wsg, probing, psg, armO, armSg, armAtt, armId, planning, cancels, attempts, own,
                    judged, runWait, runFor, fireId, nCancels, monV, ctlV, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1153-1182 Inst::when_ready: whenReady: the sidecar's status becomes ready; its resolution is a microtask, so every #run waiting on it continues in this same macrotask (RunGo)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1184-1206 Inst::finish_wait
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1100-1111 Inst::stale: #run: a continuation also waits in movesSettled while a move is on its way; it resumes with MoveReply instead
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:375-380 Inst::settled
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1302-1331 Inst::when_ready: whenReady: the sidecar's status becomes ready; its resolution is a microtask, so every #run waiting on it continues in this same macrotask (RunGo)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1333-1355 Inst::finish_wait
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1249-1260 Inst::stale: #run: a continuation also waits in movesSettled while a move is on its way; it resumes with MoveReply instead
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:412-417 Inst::settled
 Boot ==
     /\ Idle /\ ~ready
     /\ ready' = TRUE
@@ -312,12 +312,12 @@ Boot ==
     /\ UNCHANGED <<run, last, kindOf, stopped, sg, userRun, nStarts, nO, retryIn, store, resV, mv, restoring, restGen, rsg,
                    apWait, runSg, pk, rk, monV, ctlV, histV>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1245-1441 Inst::run: #run after whenReady and movesSettled: the session, branch and the person's prompts are checked again (holdEnd "continuing") and the cancel generation; a moved or cancelled continuation sends nothing
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1100-1111 Inst::stale
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1394-1590 Inst::run: #run after whenReady and movesSettled: the session, branch and the person's prompts are checked again (holdEnd "continuing") and the cancel generation; a moved or cancelled continuation sends nothing
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1249-1260 Inst::stale
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:109-121 ends::hold_end: holdEnd("continuing"): moved ends every hold of the tab (dropWait), personsPrompt ends this continuation
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:50-77 ends::applies
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1555-1596 Inst::send: send(): the launch's `restore_interrupted`, or stock `retry` for a failed turn
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1444-1489 Inst::not_continued: a call-off ends the run: goalSettled `cancelled` reaches Autopilot (apWait)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1714-1757 Inst::send: send(): the launch's `restore_interrupted`, or stock `retry` for a failed turn
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1593-1638 Inst::not_continued: a call-off ends the run: goalSettled `cancelled` reaches Autopilot (apWait)
 RunGo(t) ==
     /\ pc = "idle" /\ t \in rg
     /\ rg' = rg \ {t}
@@ -348,8 +348,8 @@ RunGo(t) ==
                    awaiting, waiting, waitFor, wsg, probing, psg, armO, armSg, armAtt, armId, planning, cancels, judged, runFor,
                    fireId, nCancels, nUnready, mv, runSg, monV, ctlV, bad6, calledOff, calledOffH, launched>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1555-1596 Inst::send: send("retry") after the restore answered (`run` also waits so before the unwritten prompt and the goal resume): `await stale()` waits for a move in flight, then a moved or called-off tab sends nothing
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1365-1440 Inst::run[end]: the run ends (continues = the restore went on with the turn, no retry is sent): goalSettled
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1714-1757 Inst::send: send("retry") after the restore answered (`run` also waits so before the unwritten prompt and the goal resume): `await stale()` waits for a move in flight, then a moved or called-off tab sends nothing
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1514-1589 Inst::run[end]: the run ends (continues = the restore went on with the turn, no retry is sent): goalSettled
 RestoreDone(t, c) ==
     /\ Idle /\ restoring[t] /\ ~Moving(t)
     /\ restoring' = [restoring EXCEPT ![t] = FALSE]
@@ -375,7 +375,7 @@ RestoreDone(t, c) ==
 ----------------------------------------------------------------------------
 \* ===== sync(): the synchronous judge chain for the tab `ct` =====
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:901-913 Inst::watch_scheduled_retry: #watchScheduledRetry: a user run ends the chain; an armed retry that no longer holds is dropped
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1050-1062 Inst::watch_scheduled_retry: #watchScheduledRetry: a user run ends the chain; an armed retry that no longer holds is dropped
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:109-121 ends::hold_end: holdEnd("armed"): personsRun, stopped, moved, otherOutcome, notRetryable (S_Watch's `newUser \/ ~HoldsArm`)
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:50-77 ends::applies
 S_Watch ==
@@ -390,11 +390,11 @@ S_Watch ==
     /\ UNCHANGED <<poolV, awaiting, waiting, waitFor, wsg, probing, psg, armSg, armAtt, armId, planning, own, judged, runWait, runFor,
                    fireId, nCancels, nUnready, monV, ct, rp, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:763-781 Inst::judge[ends]: #judge: the person's new run or Stop on a probe, a move on a held wait: #ends("wait" | "probe") ends it (dropWait)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:912-930 Inst::judge[ends]: #judge: the person's new run or Stop on a probe, a move on a held wait: #ends("wait" | "probe") ends it (dropWait)
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:54-55 ends::applies[personsRun..stopped]: HOLD_ENDS personsRun (wait, probe), stopped (probe)
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:56-56 ends::applies[moved]: HOLD_ENDS moved (wait)
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:37-42 ends::moved_since: movedSince: `touched` or the session file the hold was taken on changed
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:2119-2148 Inst::drop_wait: #dropWait
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2306-2335 Inst::drop_wait: #dropWait
 S_NewRun ==
     /\ pc = "s_newrun"
     /\ LET t == ct
@@ -410,11 +410,11 @@ S_NewRun ==
     /\ UNCHANGED <<run, last, kindOf, stopped, sg, userRun, ready, nStarts, nO, retryIn, store, waitFor, wsg, psg, armSg, armAtt,
                    armId, planning, attempts, judged, runWait, runFor, fireId, nCancels, nUnready, mv, rg, restoring, restGen, rsg, runSg, pk, rk, monV, ct, rp, histV>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:757-820 Inst::judge: #judge: the run's final outcome decides: hold, probe the lookup, or plan a scheduled retry
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:825-847 Inst::verify_network: #verifyNetwork: show the wait, ask ConnectivityMonitor.verify (one probe per host, shared)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1738-1758 Inst::plan_retry: #planRetry: a transient failure awaits stock `retry.enabled`, a limit (kind `limit`) `#readLimit`, before arming
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1760-1835 Inst::planned
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:974-983 Inst::hold: #hold: the wait records the session and branch it holds for
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:906-969 Inst::judge: #judge: the run's final outcome decides: hold, probe the lookup, or plan a scheduled retry
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:974-996 Inst::verify_network: #verifyNetwork: show the wait, ask ConnectivityMonitor.verify (one probe per host, shared)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1899-1919 Inst::plan_retry: #planRetry: a transient failure awaits stock `retry.enabled`, a limit (kind `limit`) `#readLimit`, before arming
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1921-2003 Inst::planned
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1123-1132 Inst::hold: #hold: the wait records the session and branch it holds for
 S_Judge ==
     /\ pc = "s_judge"
     /\ LET t == ct
@@ -455,7 +455,7 @@ S_Judge ==
                                     /\ UNCHANGED attempts
     /\ UNCHANGED <<poolV, armO, armSg, armAtt, armId, cancels, runWait, runFor, fireId, nCancels, nUnready, ct, rp, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/resume/facts.rs:118-161 facts::derive_markers: sync(): deriveMarkers writes the marker file (awaitingConnection wins, then Stop, then running)
+\* @code native/ompdesk/crates/core/src/resume/facts.rs:130-180 facts::derive_markers: sync(): deriveMarkers writes the marker file (awaitingConnection wins, then Stop, then running)
 S_Marker ==
     /\ pc = "s_marker"
     /\ store' = [store EXCEPT ![ct] =
@@ -467,7 +467,7 @@ S_Marker ==
 ----------------------------------------------------------------------------
 \* ===== TurnResume continuations =====
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:849-889 Inst::verified: the probe answered: Stop/Cancel/new run/session change ended it, else hold (unreachable) or plan a retry
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:998-1038 Inst::verified: the probe answered: Stop/Cancel/new run/session change ended it, else hold (unreachable) or plan a retry
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:109-121 ends::hold_end: holdEnd("probeAnswer"): gone, frozen, stopped, moved, fileWritten, otherOutcome
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:50-77 ends::applies
 VerifyThen(t, o, reachable) ==
@@ -496,8 +496,8 @@ VerifyThen(t, o, reachable) ==
                                runWait, runFor, fireId, nCancels, nUnready, rp, histV, mvV, runSg, pk, rk>>
     /\ UNCHANGED <<poolV, vN, vLink0, vW, online, recovering, probingM, timer, link, defOK, hostOK, aLink, flaps, mvV, runSg, pk, rk, bad7, bad8>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1760-1835 Inst::planned: #planRetry's continuation after `await #stockRetryOn` (a limit: `await #readLimit`); #arm shows the row and starts the timer
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1839-1892 Inst::arm: #arm
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1921-2003 Inst::planned: #planRetry's continuation after `await #stockRetryOn` (a limit: `await #readLimit`); #arm shows the row and starts the timer
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2007-2060 Inst::arm: #arm
 PlanResume(t, o, gen, used) ==
     /\ Idle /\ <<t, o, gen, used>> \in planning
     /\ planning' = planning \ {<<t, o, gen, used>>}
@@ -510,11 +510,11 @@ PlanResume(t, o, gen, used) ==
     /\ UNCHANGED <<poolV, awaiting, waiting, waitFor, wsg, probing, psg, cancels, attempts, own, judged, runWait, runFor, fireId,
                    nCancels, nUnready, monV, ctlV, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:2016-2073 Inst::fire: #fire: the timer ran; re-check everything before asking stock's retry setting
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2184-2241 Inst::fire: #fire: the timer ran; re-check everything before asking stock's retry setting
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:109-121 ends::hold_end: holdEnd("firing"): the armed rows and busy (`run[t] = "idle" /\ HoldsArm(t)`)
 \* @code native/ompdesk/crates/core/src/resume/ends.rs:50-77 ends::applies
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1918-2001 Inst::look_task: #look: a limit wait's timer syncs, then holds the wait while the tab runs (`#awaitLook` again) and reaches #fire only on an idle tab
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1896-1912 Inst::await_look
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2086-2169 Inst::look_task: #look: a limit wait's timer syncs, then holds the wait while the tab runs (`#awaitLook` again) and reaches #fire only on an idle tab
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2064-2080 Inst::await_look
 FireStart(t) ==
     /\ Idle /\ armO[t] # 0 /\ fireId[t] < 0 /\ ~Moving(t)     \* #fire: `await movesSettled` before it looks
     /\ ~(kindOf[armO[t]] \in Limits /\ run[t] = "running")    \* #look: a limit wait outlasts the failed turn's background work
@@ -528,8 +528,8 @@ FireStart(t) ==
     /\ UNCHANGED <<poolV, awaiting, waiting, waitFor, wsg, probing, psg, armSg, armAtt, armId, planning, own, judged, runWait, runFor,
                    nCancels, nUnready, monV, ctlV, histV, mvV, runSg, pk, rk>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:2016-2073 Inst::fire: #fire after `await #stockRetryOn`: re-check, release the row, then hold and sync() (offline) or #run for the armed session (online)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:974-983 Inst::hold: #hold: the wait records the armed retry's session and branch
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:2184-2241 Inst::fire: #fire after `await #stockRetryOn`: re-check, release the row, then hold and sync() (offline) or #run for the armed session (online)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1123-1132 Inst::hold: #hold: the wait records the armed retry's session and branch
 FireResume(t) ==
     /\ Idle /\ fireId[t] >= 0
     /\ fireId' = [fireId EXCEPT ![t] = -1]
@@ -569,10 +569,10 @@ FireResume(t) ==
     /\ UNCHANGED <<run, last, kindOf, stopped, sg, userRun, ready, nStarts, nO, store, probing, psg, armSg, armAtt, armId,
                    planning, judged, nCancels, nUnready, mvV, monV, bad6, calledOff, calledOffH, launched>>
 
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:987-997 Inst::flush_prefix: flush(): every held tab leaves the wait and runs its continuation with the wait's `since`
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1024-1040 Inst::flush
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1245-1441 Inst::run: #run: capture the cancel generation; a wait whose tab moved since is dropped (holdEnd "continuing": moved); with a ready sidecar and no move in flight the first command goes out in the same macrotask, else the continuation waits (runWait; Boot / MoveReply resume it)
-\* @code native/ompdesk/crates/core/src/resume/machine.rs:1100-1111 Inst::stale
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1136-1146 Inst::flush_prefix: flush(): every held tab leaves the wait and runs its continuation with the wait's `since`
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1173-1189 Inst::flush
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1394-1590 Inst::run: #run: capture the cancel generation; a wait whose tab moved since is dropped (holdEnd "continuing": moved); with a ready sidecar and no move in flight the first command goes out in the same macrotask, else the continuation waits (runWait; Boot / MoveReply resume it)
+\* @code native/ompdesk/crates/core/src/resume/machine.rs:1249-1260 Inst::stale
 FlushStep ==
     /\ pc = "flush"
     /\ pc' = rp /\ rp' = "idle"
@@ -608,6 +608,7 @@ FlushStep ==
 ----------------------------------------------------------------------------
 \* ===== ConnectivityMonitor =====
 
+\* @code native/ompdesk/crates/core/src/resume/probe.rs:19-34 probe: the transport result underlying defOK and hostOK; the model abstracts DNS, sockets and their deadline
 \* @code native/ompdesk/crates/core/src/resume/connectivity.rs:281-307 Monitor::check: #check: the probe answered; unreachable takes the state offline and starts the recovery loop
 \* @code native/ompdesk/crates/core/src/resume/connectivity.rs:310-312 Monitor::reachable: #reachable: the default way out or the host answers
 \* @code native/ompdesk/crates/core/src/resume/connectivity.rs:315-326 Monitor::answers

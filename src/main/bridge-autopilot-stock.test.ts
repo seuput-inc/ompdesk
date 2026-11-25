@@ -196,6 +196,7 @@ async function startOmp(provider: Provider, previous?: Harness): Promise<Harness
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			"        reasoning: false",
 			"        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }",
 			"",
 		].join("\n"),

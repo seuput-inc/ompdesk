@@ -3,11 +3,14 @@
  * that stock omp does not implement. The sidecar's dispatcher answers them in
  * the main process instead of forwarding them to omp.
  */
+import type { LeftProcesses } from "../../../resources/gui-bridge/restart-core";
 
 /** The user's installed omp CLI, resolved and version-checked once. */
 export interface OmpRuntime {
 	/** Absolute path to the omp executable (or `.cmd` shim on Windows). */
 	bin: string;
+	/** PATH used to resolve this install. Injected runtimes that only implement `run` have no native launcher. */
+	basePath?: string;
 	/** `omp --version` semver, e.g. `18.6.1`. */
 	version: string;
 	/** Run a short-lived `omp …` subcommand to completion. Never rejects on a non-zero exit; rejects on spawn failure or timeout. */
@@ -24,7 +27,7 @@ export interface OmpRuntime {
  */
 export interface BridgeClient {
 	/** Call a bridge method; rejects with the bridge's error message, or when disconnected. */
-	request<T = unknown>(method: string, params?: unknown): Promise<T>;
+	request<T = unknown>(method: string, params?: unknown, options?: { timeoutMs?: number }): Promise<T>;
 	readonly connected: boolean;
 }
 
@@ -37,6 +40,11 @@ export interface LocalCommandContext {
 	/** Forward to the stock sidecar; resolves with response.data, rejects with Error(response.error). */
 	send<T = unknown>(command: { type: string; [k: string]: unknown }): Promise<T>;
 	bridge: BridgeClient;
+	/**
+	 * What the session's commands left running across the last relaunch, once this launch ended what of it had no
+	 * reader of its output; absent for a tab that took over nothing (`SessionProcesses`' handle `leftover`).
+	 */
+	leftProcesses?(): Promise<LeftProcesses | undefined>;
 }
 
 /** The returned value becomes `response.data`; a throw becomes `success: false` with the error message. */

@@ -27,6 +27,14 @@ pub struct Outcome {
     pub error_message: Option<String>,
 }
 
+/// How an `askClosed` was answered.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Answered {
+    pub title: String,
+    pub choice: String,
+}
+
 /// One pool activity with what only main knows at that moment.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,16 +42,19 @@ pub struct Activity {
     #[serde(rename = "type")]
     pub kind: ActivityKind,
     pub tab_id: String,
-    /// An `ask`: the request's id.
+    /// An `ask` or `askClosed`: the request's id.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// An `askClosed` a window, a page or an agent answered: the card's title and the choice in its words.
+    #[serde(default)]
+    pub answered: Option<Answered>,
     /// An `idle`: how the turn ended.
     #[serde(default)]
     pub outcome: Option<Outcome>,
     /// The tab that opened this one (`#openerOf`: the one this launch saw open it, else the pool's across a relaunch).
     #[serde(default)]
     pub parent: Option<String>,
-    /// An `ask` its opener is to hear of: not an Autopilot run's child (the run reads those itself).
+    /// An `ask` or `askClosed` its opener is to hear of: not an Autopilot run's child (the run reads those itself).
     #[serde(default)]
     pub announce: bool,
     /// A `released`: the saved session the tab held, with the hidden mark and the opener's session file, when main
@@ -85,6 +96,21 @@ impl Runtime {
                 let _ = control.child_asked(&parent, &child, &request).await;
             });
         }
+        // The card its opener was told of closed without the opener's answer: the opener hears how, once.
+        if activity.kind == ActivityKind::AskClosed
+            && activity.announce
+            && let (Some(parent), Some(request)) = (&parent, &activity.request_id)
+        {
+            let control = self.control.clone();
+            let (parent, child, request) = (parent.clone(), tab.to_owned(), request.clone());
+            let answered = activity.answered.clone();
+            tokio::spawn(async move {
+                let choice = answered.as_ref().map(|answered| answered.choice.as_str());
+                control
+                    .child_ask_closed(&parent, &child, &request, choice)
+                    .await;
+            });
+        }
         // A turn that ended changed the session's own cost, the base of its family's (sidebar chip, Work tree).
         if activity.kind == ActivityKind::Idle {
             self.push_review(tab);
@@ -99,7 +125,16 @@ impl Runtime {
                 rt.moved.remove(tab);
                 rt.listed_in.remove(tab);
             }
-            self.control.released(tab, activity.session.as_ref());
+            // Its resting children close with it; none while the app quits (the session is left out then, and
+            // the next launch restores those tabs).
+            let orphans = self.control.opened_of(tab);
+            let _ = self.control.released(tab, activity.session.as_ref());
+            if let Some(session) = &activity.session
+                && !orphans.is_empty()
+            {
+                let (control, opener) = (self.control.clone(), session.path.clone());
+                tokio::spawn(async move { control.close_orphans(orphans, Some(opener)).await });
+            }
         }
     }
 

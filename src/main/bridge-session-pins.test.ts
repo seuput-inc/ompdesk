@@ -22,6 +22,7 @@ describe.skipIf(!fs.existsSync(stockRoot))("gui-bridge session pins against stoc
 		try {
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			fs.copyFileSync("resources/gui-bridge/session-pins.ts", path.join(dir, "session-pins.ts"));
+			fs.cpSync("resources/gui-bridge/omp", path.join(dir, "omp"), { recursive: true });
 			const script = `
 import assert from "node:assert/strict";
 import * as fs from "node:fs";

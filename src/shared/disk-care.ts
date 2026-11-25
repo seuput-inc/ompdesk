@@ -20,6 +20,7 @@ export type DiskPartId =
 	| "bunCache"
 	| "bunTranspilerCache"
 	| "npmCache"
+	| "checks"
 	| "scratch";
 
 export interface DiskUsagePart {
@@ -43,6 +44,7 @@ export interface DiskUsage {
  * - `bun-cache`: Bun's install cache cleared past its size bound while no install ran;
  * - `bun-transpiler-cache`: Bun's runtime transpiler cache cleared past its size bound;
  * - `npm-cache`: npm's cache cleared past its size bound while no npm ran;
+ * - `check-inputs`: generated input lists and hash caches removed from idle checks;
  * - `scratch`: a closed session's scratch folder removed, or its files no reply shows.
  */
 export type DiskCareActionKind =
@@ -53,6 +55,7 @@ export type DiskCareActionKind =
 	| "bun-cache"
 	| "bun-transpiler-cache"
 	| "npm-cache"
+	| "check-inputs"
 	| "scratch";
 
 export type DiskCareTrigger = "launch" | "daily" | "user" | "agent";

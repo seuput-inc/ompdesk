@@ -32,15 +32,18 @@ export function prependToDraft(restored: string, draft: string): string {
 }
 
 /**
- * One queued message a Stop withdrew (stock's `abort_and_restore_queue`), held apart from the draft until the
- * user decides: Resume sends it, Edit brings it into the field, Remove drops it. `text` is "" for a picture-only
- * message (stock's `[Image]` chip text is not content); show it with `restoredQueueLabel`.
+ * One queued message a Stop withdrew (stock's `abort_and_restore_queue`), or one the core kept when the tab's omp went
+ * with it still queued (`kept`, core `sidecar/held_queue.rs`), held apart from the draft until the user decides: Resume
+ * sends it, Edit brings it into the field, Remove drops it. `text` is "" for a picture-only message (stock's `[Image]`
+ * chip text is not content); show it with `restoredQueueLabel`.
  */
 export interface RestoredQueueItem {
 	id: string;
 	lane: "steering" | "followUp";
 	text: string;
 	images: ComposerImage[];
+	/** Kept from an omp that ended, not withdrawn by a Stop. */
+	kept?: boolean;
 }
 
 type QueueLaneName = "steering" | "followUp";
@@ -49,8 +52,12 @@ type QueueLaneName = "steering" | "followUp";
 export interface EditingQueued {
 	id: string;
 	lane: QueueLaneName;
-	/** The message's text when the edit began. */
+	/** The message's text when the edit began: out of stock's queue, held by the core under `token` until Save or Cancel. */
 	original: string;
+	/** The message's pictures: Save and Cancel queue them again with the text. */
+	images: ImageContent[];
+	/** The core's hold of the message while it is edited (`queue_hold`). */
+	token: string;
 	/** The draft and pictures the field held before the edit took it over. */
 	snapshot: { draft: string; images: ComposerImage[] };
 }
@@ -96,9 +103,15 @@ export interface ComposerStore {
 	/** A tray registers while mounted; the count keeps two panes of one store from unregistering each other. */
 	setRestoredTrayMounted: (mounted: boolean) => void;
 	/** The field takes over a queued message (snapshotting the draft and pictures it held). */
-	beginEditQueued: (target: { id: string; lane: QueueLaneName; text: string }) => void;
-	/** Leave the edit: the snapshot returns exactly; `prepend` (an edit whose message was already delivered) goes ahead of it. */
-	endEditQueued: (prepend?: string) => void;
+	beginEditQueued: (target: {
+		id: string;
+		lane: QueueLaneName;
+		text: string;
+		images?: ImageContent[];
+		token: string;
+	}) => void;
+	/** Leave the edit: the draft and pictures it replaced come back exactly. */
+	endEditQueued: () => void;
 	images: ComposerImage[];
 	/** Replace the draft, or compute the next value from the current one
 	 * (React setState parity — InputArea's updater-form call sites unchanged). */
@@ -158,26 +171,28 @@ export const createComposerStore = () =>
 			}),
 		setRestoredTrayMounted: mounted =>
 			set(state => ({ restoredTrayMounted: Math.max(0, state.restoredTrayMounted + (mounted ? 1 : -1)) })),
-		beginEditQueued: ({ id, lane, text }) =>
+		beginEditQueued: ({ id, lane, text, images = [], token }) =>
 			set(state => ({
 				// A second Edit while one runs keeps the first snapshot: Cancel still returns to what the user typed.
 				editingQueued: {
 					id,
 					lane,
 					original: text,
+					images,
+					token,
 					snapshot: state.editingQueued?.snapshot ?? { draft: state.draft, images: state.images },
 				},
 				draft: text,
 				images: [],
 				stopArmedAt: null,
 			})),
-		endEditQueued: prepend =>
+		endEditQueued: () =>
 			set(state => {
 				const editing = state.editingQueued;
 				if (!editing) return state;
 				return {
 					editingQueued: null,
-					draft: prepend ? prependToDraft(prepend, editing.snapshot.draft) : editing.snapshot.draft,
+					draft: editing.snapshot.draft,
 					images: editing.snapshot.images,
 					stopArmedAt: null,
 				};

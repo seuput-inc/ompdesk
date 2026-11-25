@@ -45,6 +45,8 @@ async function seedProject(project: string): Promise<void> {
 }
 
 const dir = process.env.OMP_GUI_PARITY;
+const BLOCKED_USAGE = process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "blocked";
+const language = process.env.OMP_GUI_PARITY_LANGUAGE === "ko" ? "ko" : "en";
 
 const VIEWS = ["local", "remote", "phone"] as const;
 type View = (typeof VIEWS)[number];
@@ -54,11 +56,18 @@ const DESKTOP: Look = {
 	height: 860,
 	dpr: 1,
 	orientation: "landscape",
-	theme: "light",
-	lang: "en",
+	theme: BLOCKED_USAGE ? "dark" : "light",
+	lang: BLOCKED_USAGE ? "ko" : language,
 	device: "electron",
 };
-const PHONE: Look = { width: 390, height: 844, dpr: 3, orientation: "portrait", theme: "light", lang: "en" };
+const PHONE: Look = {
+	width: 390,
+	height: 844,
+	dpr: 3,
+	orientation: "portrait",
+	theme: DESKTOP.theme,
+	lang: DESKTOP.lang,
+};
 
 const VIEW_LOOK: Record<View, Look> = { local: DESKTOP, remote: DESKTOP, phone: PHONE };
 const VIEW_LABEL: Record<View, string> = {
@@ -154,20 +163,27 @@ if (dir) {
 		const pageErrors: string[] = [];
 		try {
 			const hostProfile = await makeRemoteProfile(parent, "host", {
-				language: "en",
-				theme: "light",
+				language: DESKTOP.lang,
+				theme: DESKTOP.theme,
 				// The usage row under a reply (`reply-usage`): on here, on the paired computer and through to the phone.
-				prefs: { displayPreferences: { showTokenUsage: true } },
+				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
 				// Only the host's omp starts under the hold: its slow-start bound is short, so the banner shows within seconds.
-				env: { OMP_GUI_START_SLOW_MS: "1500" },
+				env: { OMP_GUI_START_SLOW_MS: "1500", OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1" },
 			});
 			await seedProject(hostProfile.project);
 			const clientProfile = await makeRemoteProfile(parent, "client", {
-				language: "en",
-				theme: "light",
+				language: DESKTOP.lang,
+				theme: DESKTOP.theme,
 				port: hostProfile.port,
-				prefs: { displayPreferences: { showTokenUsage: true } },
+				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
+				env: { OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1" },
 			});
+			// `settings-updates-token-dropped`: a token the keychain would not release was removed at an earlier launch, and
+			// the marker it left is what Settings › Updates shows (src/main/update-auth.ts).
+			if (surfaces.some(surface => surface.id === "settings-updates-token-dropped")) {
+				for (const profile of [hostProfile, clientProfile])
+					await fs.writeFile(path.join(profile.desktop, "update-token.dropped"), "keychain-would-ask");
+			}
 			host = await launchRemote(hostProfile);
 			client = await launchRemote(clientProfile);
 			const b = host.page;
@@ -217,7 +233,7 @@ if (dir) {
 					...devices["Pixel 7"],
 					viewport: { width: PHONE.width, height: PHONE.height },
 					deviceScaleFactor: PHONE.dpr,
-					colorScheme: "light",
+					colorScheme: PHONE.theme,
 				})
 			).newPage();
 			for (const [name, page] of [
@@ -230,6 +246,14 @@ if (dir) {
 			await phonePaired(phone);
 			// The phone's display switches are its own (device prefs), read when each view loads its page afresh.
 			await phone.evaluate(() => window.omp.prefs.set("displayPreferences.showTokenUsage", true));
+			if (BLOCKED_USAGE) {
+				await phone.evaluate(async () => {
+					await window.omp.prefs.set("language", "ko");
+					await window.omp.prefs.set("themeName", "dark");
+					await window.omp.prefs.set("sidebarWidth", 227);
+					localStorage.setItem("omp.sidebarWidth", "227");
+				});
+			}
 			// B announces the new phone in a toast; the toasts are dismissed before each capture (openRow), so let it land.
 			await expect
 				.poll(() => b.locator('[data-toast-stack] button[aria-label="Close"]').count(), { timeout: 10_000 })
@@ -352,6 +376,106 @@ if (dir) {
 				answered.set("Parity limit wait", session);
 				return session;
 			};
+			/**
+			 * A session of its own whose omp died under four turns in a row (`fixture crash`: the fake omp exits 300 ms into
+			 * the turn): B's resume rules continue the first three and offer the fourth (turn-resume.ts, the cut-off row with
+			 * Continue and Dismiss), which stays for the rest of the run.
+			 */
+			const cutSession = async (): Promise<HostSession> => {
+				const made = answered.get("Parity cut off");
+				if (made) return made;
+				// One tab, one session: its first turn is answered, so its file exists before the omp starts dying.
+				const tabId = await titledTab("Parity cut off");
+				await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "Parity turn 1" }),
+					tabId,
+				);
+				let sessionPath = "";
+				await expect
+					.poll(
+						async () =>
+							(sessionPath = await b.evaluate(async id => {
+								await window.omp.rpc.commandForTab(id, { type: "get_state" });
+								return (await window.omp.tabs.list()).find(entry => entry.tabId === id)?.sessionPath ?? "";
+							}, tabId)),
+						{ timeout: 30_000 },
+					)
+					.not.toBe("");
+				const tabOf = () =>
+					b.evaluate(async id => (await window.omp.tabs.list()).find(entry => entry.tabId === id), tabId);
+				for (let crash = 0; crash < 4 && (await tabOf())?.cutOff === undefined; crash++) {
+					// The omp dies before it answers, so the prompt's own answer may never come.
+					void b
+						.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "fixture crash" }), tabId)
+						.catch(() => undefined);
+					// Its omp died: the "continuing" row holds until the next omp's continuation starts (or the offer stands).
+					await expect
+						.poll(
+							async () => {
+								const tab = await tabOf();
+								return tab?.resuming === true || tab?.cutOff !== undefined;
+							},
+							{ timeout: 30_000 },
+						)
+						.toBe(true);
+					// The next omp is up and its continuation (or the offer) has settled.
+					await expect
+						.poll(
+							async () => {
+								const tab = await tabOf();
+								return tab?.status === "ready" && tab.resuming !== true;
+							},
+							{ timeout: 60_000 },
+						)
+						.toBe(true);
+				}
+				await expect.poll(async () => (await tabOf())?.cutOff, { timeout: 30_000 }).toBe("crash-loop");
+				const session = { path: sessionPath, cwd: work.cwd };
+				answered.set("Parity cut off", session);
+				return session;
+			};
+			/**
+			 * A long session of short turns, for the turn rail (`transcript-turn-rail*`): more turns than the rail draws
+			 * ticks. The fake omp answers "Parity turn N" with "Answer to Parity turn N".
+			 */
+			const turnsSession = () =>
+				answeredSession(
+					"Parity turns",
+					Array.from({ length: 44 }, (_, index): [string, string] => [
+						`Parity turn ${index + 1}`,
+						`Answer to Parity turn ${index + 1}`,
+					]),
+				);
+			/**
+			 * A session longer than the page a transcript opens with, for `transcript-older-history`: the fake omp's own
+			 * long session (`fixture:long-session`: 250 turns of six messages, "Long session turn 000" to "Long session
+			 * answer 249", written to its file at once), of which a view first reads the newest 200 messages.
+			 */
+			const longSession = async (): Promise<HostSession> => {
+				const made = answered.get("Parity long");
+				if (made) return made;
+				const tabId = await titledTab("Parity long");
+				const seeded = await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:long-session" }),
+					tabId,
+				);
+				expect(seeded, "the fake omp seeds its long session").toMatchObject({ success: true });
+				let sessionPath = "";
+				await expect
+					.poll(
+						async () =>
+							(sessionPath = await b.evaluate(async id => {
+								// Main learns a tab's session file from a `get_state` that passes through it.
+								await window.omp.rpc.commandForTab(id, { type: "get_state" });
+								return (await window.omp.tabs.list()).find(entry => entry.tabId === id)?.sessionPath ?? "";
+							}, tabId)),
+						{ timeout: 30_000 },
+					)
+					.not.toBe("");
+				const session = { path: sessionPath, cwd: work.cwd };
+				answered.set("Parity long", session);
+				return session;
+			};
 			/** B's `session` as it is when a view shows it. */
 			const hostSession = async (session: ParitySession): Promise<HostSession> =>
 				session === "work"
@@ -363,7 +487,15 @@ if (dir) {
 							: session === "advisor"
 								? // A session of its own too: a turn more in the reply session shifts what its other surfaces reach.
 									answeredSession("Parity advisor", [["fixture advisor note", "Advisor note delivered."]])
-								: limitSession();
+								: session === "ci"
+									? answeredSession("Parity CI", [["fixture ci note", "Pushed main."]])
+									: session === "turns"
+										? turnsSession()
+										: session === "long"
+											? longSession()
+											: session === "cut"
+												? cutSession()
+												: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
@@ -394,6 +526,15 @@ if (dir) {
 						if (!tabId) throw new Error(`the phone could not view ${session}: ${JSON.stringify(viewed)}`);
 					}
 					await phone.goto(`${phoneUrl}/#/open?tab=${tabId}`);
+					// The route switches the page's tab after the load, so wait for it: a surface that prompts the shown tab
+					// must not reach the tab the page opened on (todo-behind's phone prompt never reached the work session
+					// on run 44590307837, while the views before it did).
+					await expect
+						.poll(
+							async () => (await phone.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId,
+							{ timeout: 30_000 },
+						)
+						.toBe(tabId);
 				},
 			};
 

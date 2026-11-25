@@ -1,9 +1,18 @@
 import { existsSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { atEnd, type Frame, HOLD, mail, runCleanups, startOmp, startProvider } from "./bridge-agent-mail-stock-harness";
+import {
+	atEnd,
+	CLEANUP_MS,
+	type Frame,
+	HOLD,
+	mail,
+	runCleanups,
+	startOmp,
+	startProvider,
+} from "./bridge-agent-mail-stock-harness";
 import { INSTALLED_OMP as omp } from "./test-bridge-probe";
 
-afterAll(runCleanups);
+afterAll(runCleanups, CLEANUP_MS);
 
 /**
  * Who started the main agent's current run (resources/gui-bridge/turn-origin.ts, `agent_control.turn`), on the

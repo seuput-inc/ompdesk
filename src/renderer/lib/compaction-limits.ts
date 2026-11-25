@@ -8,10 +8,10 @@
  */
 
 import { useEffect, useState } from "react";
-import { z } from "zod";
 import type { CompactionPoint, CompactionPointsResult } from "../../shared/rpc-types";
 import { useSessionStore } from "../stores/session";
 import { formatTokens } from "./format";
+import { z } from "./rpc-schema";
 import { useTabRpc } from "./tab-rpc";
 
 export const MODEL_THRESHOLDS_PATH = "compaction.modelThresholds";
@@ -27,8 +27,8 @@ export const compactionLimitCommitSchema = z.discriminatedUnion("ok", [
 	z.object({ ok: z.literal(true), value: z.union([z.number(), z.string()]) }),
 	z.object({
 		ok: z.literal(false),
-		modelError: z.enum(["empty", "star", "shape"]).optional(),
-		limitError: z.enum(["percent", "invalid"]).optional(),
+		modelError: z.optional(z.enum(["empty", "star", "shape"])),
+		limitError: z.optional(z.enum(["percent", "invalid"])),
 	}),
 ]);
 
@@ -41,10 +41,10 @@ export function compactionPointValue(point: CompactionPoint, options?: { trimZer
 }
 
 const pointSchema = z.object({
-	tokens: z.number().optional(),
-	percent: z.number().optional(),
+	tokens: z.optional(z.number()),
+	percent: z.optional(z.number()),
 	source: z.string(),
-	draft: z.string().optional(),
+	draft: z.optional(z.string()),
 });
 
 const pointsSchema = z.object({
@@ -52,7 +52,7 @@ const pointsSchema = z.object({
 	roles: z.array(z.object({ role: z.string(), selector: z.string(), autoSelected: z.boolean(), point: pointSchema })),
 });
 
-const settingsValuesSchema = z.object({ values: z.record(z.unknown()) });
+const settingsValuesSchema = z.object({ values: z.record(z.string(), z.unknown()) });
 
 export interface CompactionPoints {
 	bySelector: ReadonlyMap<string, CompactionPoint>;

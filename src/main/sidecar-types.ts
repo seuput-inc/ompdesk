@@ -3,6 +3,7 @@
  * `turn-resume.ts`, `ipc.ts`, `remote/`) share it without importing one another.
  */
 import type { EventEmitter } from "node:events";
+import type { HostCloseTurn } from "../shared/ipc-types";
 import type { SidecarStatus, SidecarStatusPayload } from "../shared/rpc-types";
 import type { ExtensionApplyPlan } from "./extension-reload";
 import type { RpcClient } from "./rpc-client";
@@ -14,6 +15,16 @@ import type { SidecarStartGate } from "./sidecar";
  * closes quietly, as a viewer's does when its owner closes, never as an exited omp.
  */
 export const VIEW_ENDED_EVENT = "viewEnded";
+
+/** A single local omp spawn. None of its operations may target a replacement in the same tab. */
+export interface DesktopSlotProcess {
+	readonly client: Pick<RpcClient, "command">;
+	readonly absentAtAcquire: boolean;
+	readonly exited: Promise<boolean>;
+	/** Rechecks still-missing evidence for this spawn (e.g. the body outliving its launcher). */
+	gone(): boolean;
+	stop(restart: boolean): void;
+}
 
 /**
  * What the pool, ipc.ts and the host-tool executor need from a tab's sidecar:
@@ -76,15 +87,24 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	syncAccountRotation(): void;
 	/** Local sidecars only: push this machine's credit-use switch to the live omp. */
 	syncCreditSpend?(): void;
+	/** Remote owner only. A refusal or lost reply keeps the proxy; a manual dispose is unconditional. */
+	closeHostTurn?(expected: HostCloseTurn | null): Promise<boolean>;
 	dispose(): void;
 	/** Local sidecars: hold the first spawn at `starting` until `gate` settles (worktree.onStart). */
 	setStartGate?(gate: SidecarStartGate): void;
 	/** Local sidecars: resolves once the omp process has exited. Call before dispose(). */
 	whenExited?(): Promise<void>;
+	desktopSlotProcess?(owner: number, acquire: boolean): DesktopSlotProcess | null;
 	/**
 	 * Remote sidecars and hosted views: the user's Cancel on the waiting row or on a scheduled retry. The host (or, for a
 	 * device's view of a window's tab, this computer's resume rules) holds that wait; a remote sidecar rejects
 	 * `remote_offline` while the host is unreachable.
 	 */
 	cancelHostWait?(): Promise<void>;
+	/**
+	 * Remote sidecars and hosted views of a window's tab: the person's Continue or Dismiss on the cut-off row of the
+	 * window's tab they show, which that computer's resume rules hold (`remote_offline` while the host is unreachable).
+	 */
+	continueHostCut?(): Promise<void>;
+	dismissHostCut?(): Promise<void>;
 }

@@ -35,14 +35,29 @@ function slugify(name: string): string {
 		.replace(/^-+|-+$/g, "");
 }
 
-/** One toast for what `.worktreeinclude` copied and how `.ompdesk/worktree-setup` went; nothing when neither ran. */
+/**
+ * One toast for what fetching the remote default branch brought, what `.worktreeinclude` copied and how
+ * `.ompdesk/worktree-setup` went; nothing when none ran.
+ */
 export function announcePreparation(
 	result: RpcWorktreeCreateResult,
 	t: (key: string, params?: Record<string, string | number>) => string,
 ): void {
-	const { seed, setup } = result;
-	if (!seed && !setup) return;
+	const { base, seed, setup } = result;
+	if (!base && !seed && !setup) return;
 	const lines: string[] = [];
+	if (base) {
+		const ref = base.ref;
+		lines.push(
+			base.error
+				? t("worktree.baseFetchFailed", { ref })
+				: !base.fetched
+					? t("worktree.baseRecent", { ref })
+					: base.behind
+						? t("worktree.baseFetched", { ref, count: base.behind })
+						: t("worktree.baseUpToDate", { ref }),
+		);
+	}
 	if (seed) {
 		lines.push(
 			seed.skipped.length
@@ -55,11 +70,12 @@ export function announcePreparation(
 			setup.ok ? t("worktree.setupOk") : t(setup.timedOut ? "worktree.setupTimedOut" : "worktree.setupFailed"),
 		);
 	const detail = [
+		...(base?.error ? [base.error] : (base?.subjects ?? [])),
 		...(seed?.skipped.map(item => `${item.path}: ${item.reason}`) ?? []),
 		...(setup && !setup.ok ? [setup.logPath, setup.outputTail] : []),
 	].join("\n");
 	toast({
-		variant: setup && !setup.ok ? "warning" : "info",
+		variant: base?.error || (setup && !setup.ok) ? "warning" : "info",
 		message: lines.join(" · "),
 		...(detail ? { detail } : {}),
 	});
@@ -81,6 +97,8 @@ export function WorktreeDialog() {
 	const [error, setError] = useState<InlineFailure | null>(null);
 	const [branchPrefix, setBranchPrefix] = useState<string | null>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+	// One id per opening: a create whose answer was lost and is sent again gets the same worktree back.
+	const requestId = useRef("");
 
 	useEffect(() => {
 		if (!dialog) return;
@@ -89,6 +107,7 @@ export function WorktreeDialog() {
 		setCreating(false);
 		setCreated(null);
 		setError(null);
+		requestId.current = crypto.randomUUID();
 		requestAnimationFrame(() => inputRef.current?.focus());
 		let live = true;
 		// Started inside a promise so a missing prefs API (tests) leaves the default prefix.
@@ -104,6 +123,13 @@ export function WorktreeDialog() {
 			live = false;
 		};
 	}, [dialog]);
+
+	// Fetch the remote default branch while the person names the worktree, so a `default`-based create finds it fresh.
+	const prefetchCwd = dialog ? (dialog.baseCwd ?? sessionCwd) : null;
+	useEffect(() => {
+		if (!prefetchCwd) return;
+		tabRpc.worktreePrefetch(prefetchCwd).catch(() => undefined);
+	}, [prefetchCwd, tabRpc]);
 
 	const slug = slugify(name);
 	const validName = /^[a-z0-9 -]+$/i.test(name) && /^[a-z0-9][a-z0-9-]{0,40}$/.test(slug);
@@ -121,6 +147,7 @@ export function WorktreeDialog() {
 					baseCwd: dialog?.baseCwd ?? sessionCwd,
 					baseRef,
 					...(branchPrefix ? { branchPrefix } : {}),
+					requestId: requestId.current,
 				});
 				if (!response.success) {
 					setError(

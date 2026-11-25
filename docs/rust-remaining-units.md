@@ -1,5 +1,34 @@
 # What remains of `src/main` for the core, cut into units
 
+## Runtime scope at v0.137.1
+
+The packaged Tauri shell still starts Node. In `native/ompdesk/crates/tauri-shell/src/main.rs`, the shell checks for `app/out/main/index.js`, reads `out/preload/tauri.js`, calls `node::spawn`, and forwards quit requests to Node. The app cannot start without that main entry. The release checks for both platforms require `tauri.js` and exclude the legacy `shell.js`. The injected page API is browser code, not a Node dependency.
+
+Run `bun scripts/rust-runtime-scope.ts` at the checkout root for the file-by-file import graph. It includes tracked TypeScript and JavaScript in `src`, `resources/gui-bridge`, and `native/ompdesk/crates/tauri-shell/src`. The v0.137.1 Node graph contained 486 files, including 380 in `src/main`. At `094bd8f43`, after removing the test-only PNG decoder from the host, the inventory lists 3,075 paths:
+
+| Importing runtime | Paths | Migration boundary |
+|---|---:|---|
+| Node main or its hang watchdog | 485 | 379 are in `src/main`. Move the host implementation and its callers before removing Node. |
+| Desktop or paired page, including preload | 1,024 | Keep browser APIs and UI in the page. 78 paths are also imported by Node. Moving one caller does not retire a shared module. |
+| Stock omp extensions and their lazy imports | 320 | Includes the stand-alone credit switch, memory judge and Ponytail registration. Keep calls that need the live `AgentSession` in the extension. Inspect OMPdesk-owned I/O separately. |
+| Stock helper worker | 23 | Keep stock API calls in the worker. Rust already owns its process lifetime. |
+| Stats host | 2 | The standalone Bun process loads stock's stats implementation. It is not the desktop Node process. |
+| Boot model lookup | 2 | A separate Bun invocation reads the installed stock catalog when a session has no default model. |
+| MCP hub | 4 | Historical Bun host; now `ompdesk-core --mcp-hub` serves the memory endpoint. |
+| No static import from these entries | 1,344 | Includes tests, types, dynamic paths, and other build inputs. An absent import is not proof that a file is dead. |
+
+Counts overlap. The command follows literal imports, including conditional test code, and excludes packages and assets. It does not measure which branches executed. Build scripts, verification tools, and third-party packages are outside this count.
+
+The file inventories in `docs/rust-inventory/` record ownership, not import reach. In `root.tsv`, wave 1 moves leaf operations, wave 2 moves services and their state, wave 3 moves session and window coordination, and wave 4 removes Node dispatch and startup. A dash marks code outside these runtime waves. `shell.tsv` separates the Node adapters from the browser preload and the test driver.
+
+CI runs `bun scripts/rust-runtime-scope.ts --check-inventory` against Git. Every tracked path under `src/main` and `src/preload` must appear exactly once, including fixtures and test drivers. The check also follows imports from the desktop Node entry and the three separately launched Bun hosts (stock worker, stats, catalog), and includes the stock worker’s type-only files. A module shared with the page or stock extension is not exempt: the inventory distinguishes host decisions from the contracts those callers still need. This checks coverage, not whether the implementation has moved.
+
+Use `bun scripts/rust-runtime-scope.ts --remaining` to list every path marked `port` or `mixed` with its reason. A path is not a unit of effort: one transaction can replace code in several files. Thin Rust clients do not count as remaining host implementations; they still need a non-Node caller before Node can be removed.
+
+A unit is complete when its production caller uses Rust, its previous host implementation is gone, and the same inputs still produce the expected results. To retire the desktop Node process, the packaged app must also start, service requests, and quit without the Node executable on both platforms.
+
+## Historical inventory at `b0c90dd3`
+
 Status 12 Nov 2026, read from `main` at `b0c90dd3`. Units 1, 2a–2i, 3a–3d and 4a–4c are on `main`; 4d (GitHub sign-in) and 4e (routines) are running. This document cuts what is left of the scope below into units for the strangler in `.omp/rules/native-rust.md`. It was made by reading and counting only: nothing was built or run. Every count is measured (Appendix A says how). A claim this document could not check by reading is marked **[not determined]**.
 
 Scope: `src/main/remote/**`, `src/main/web/**`, `src/main/ai-memory/**`, `src/main/agent-control/**`, `src/main/setup/**`, `src/main/cli-tools/**`, the hubs (`sidecar*.ts`, `turn-resume*.ts`, `autopilot*.ts`) and the root files over 300 lines that reach no Electron at runtime (`schedules.ts`, `models-config.ts`, `omp-processes.ts`, `agent-browsers.ts`, `model-setup-runner.ts`, `desktop-slot.ts`, `i18n-text.ts`, `omp-runtime.ts`, `updater-state.ts`), plus `workspace-search.ts` (71 lines, named in the order). 147 files, 59,062 lines.
@@ -216,6 +245,8 @@ R4 waits for the hubs (decided 12 Nov 2026, B2). Its encoder takes the raw omp e
 8a and 8b are one unit of work split in two sessions so that the security code lands reviewed before it serves. That leaves Rust on `main` that nothing calls for the time between them, which the ledger has not done before; the alternative is one longer session. That is the owner's call.
 
 ### 2.7 What is left of `setup/**` and `cli-tools/**` under 4c's constraint
+
+Done by slice G T2 (`docs/rust-node-removal.md`, native-rust's ledger, 25 Nov 2026): every file below except `setup/{paths,archives,download,runner,supervisor,apple-git}.ts` is deleted, its work now the core's `crates/core/src/tools/` (`setup.rs` and `setup/`, `omp/`, `cli/`, `ext.rs`). The table is kept as measured.
 
 Movable: the supervisor (6a, 478 lines), and the downloads (`setup/download.ts` 98 `downloadVerified`, `setup/archives.ts` 177 `resolveArchiveRelease`/`resolveAgentDesktopRelease`/`resolveTailscaleRelease`/`fetchText`: 275 lines) once an HTTPS client is chosen (§1.4; `sha2` for the checksums). Parity `setup/download.test.ts` 181, `setup/archives.test.ts` 202. **Done as ledger 6c** (the downloads and lookups; the supervisor was 6a).
 
@@ -496,6 +527,9 @@ Generated on 12 Nov 2026 from this checkout by reading every `import`/`export �
 | `agent-control/pickup.ts` | 30 | 18 |  |  | agent-control/service.ts (pickupOf) | src/shared/agent-control.ts | agent-control/pickup.test.ts 29 |
 
 ### setup (11 files, 3,466 lines, 2,754 code)
+
+Since slice G T2: `service.ts`, `plans.ts`, `detect.ts`, `git-aslr.ts`, `compiled-launcher.ts` and `ipc.ts` are deleted (the core's `tools/setup.rs` and `tools/setup/`; the IPC is `src/main/tools/ipc.ts`). The rows below are as measured.
+
 | File | Lines | Code | Flags | Electron via | Imported by | Imports | Tests |
 |---|---:|---:|---|---|---|---|---|
 | `setup/service.ts` | 1187 | 975 | child fs timer | runtime-log.ts | scripts/omp-update-lock-check.ts; scripts/setup-install-check.ts; cli-tools/updater.ts (type); ext-update/updater.ts (type); index.ts (SetupService); omp-updater.ts (type) | omp-runtime.ts, runtime-log.ts, serial-chain.ts, setup/archives.ts, setup/compiled-launcher.ts, setup/detect.ts, setup/download.ts, setup/git-aslr.ts, setup/paths.ts, setup/plans.ts, +4 more | setup/service.test.ts 1366, ext-update/updater.test.ts 1270, cli-tools/updater.test.ts 612, omp-updater.test.ts 420, setup/omp-update-install.test.ts 259 |
@@ -511,6 +545,9 @@ Generated on 12 Nov 2026 from this checkout by reading every `import`/`export �
 | `setup/ipc.ts` | 35 | 27 |  |  | index.ts (registerSetupIpc) | src/shared/ipc-types.ts, src/shared/setup.ts | setup/ipc.test.ts 70 |
 
 ### cli-tools (4 files, 1,025 lines, 817 code)
+
+Since slice G T2 the whole folder is deleted (the core's `tools/cli/`). The rows below are as measured.
+
 | File | Lines | Code | Flags | Electron via | Imported by | Imports | Tests |
 |---|---:|---:|---|---|---|---|---|
 | `cli-tools/updater.ts` | 397 | 335 | child fs | runtime-log.ts | ext-update/updater.ts (runCheckProcess); index.ts (CliUpdater, psCommands, registerCliUpdateIpc) | cli-tools/catalog.ts, cli-tools/detect.ts, cli-tools/plans.ts, omp-runtime.ts, serial-chain.ts, spawn.ts, src/shared/cli-update.ts, src/shared/ipc-types.ts, src/shared/version.ts, update-scheduler.ts | cli-tools/updater.test.ts 612 |

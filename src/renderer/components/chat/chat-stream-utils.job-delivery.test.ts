@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../../shared/rpc-types";
+import { createMessagesStore } from "../../stores/messages";
 import { buildHistoryRows } from "./chat-stream-utils";
 
 // Shapes from a real omp 18.10 session: a detached agent the user stopped waiting for, whose
@@ -52,6 +53,57 @@ const reply: AgentMessage = {
 };
 
 describe("background job deliveries", () => {
+	it("omits stock's progress and inventory notices from live and reloaded chat, not the input or result", () => {
+		const output = '{"tools":[{"name":"read"}]}';
+		const progress = {
+			role: "custom",
+			customType: "async-notify",
+			display: true,
+			content: `<system-notice>\nBackground job bg_1 (list-tools) is still running. Its output matched /tools/:\n${output}\n</system-notice>`,
+			attribution: "agent",
+			details: {
+				reports: [
+					{
+						id: "bg_1",
+						type: "bash",
+						pattern: "tools",
+						lines: [output],
+						omitted: 0,
+						running: true,
+						stopped: false,
+					},
+				],
+			},
+			timestamp: 2,
+		} satisfies AgentMessage;
+		const transcript: AgentMessage[] = [
+			user(progress.content, 1),
+			progress,
+			{ role: "custom", customType: "xdev-mount-notice", display: false, content: output, timestamp: 3 },
+			{ role: "developer", content: "<system-reminder>Use the mounted tools.</system-reminder>", timestamp: 4 },
+			{ role: "custom", customType: "extension-question", display: true, content: "Which tool?", timestamp: 5 },
+			delivery,
+			reply,
+		];
+		const live = createMessagesStore();
+		live.getState().applyEvents(transcript.map(message => ({ type: "message_end", message })));
+		const restored = createMessagesStore();
+		const journal = transcript.map(message => ({ ...message, entryId: String(message.timestamp) }));
+		restored.getState().reconcileFetched(journal);
+		for (const messages of [live.getState().liveMessages, restored.getState().messages]) {
+			expect(messages).toHaveLength(transcript.length);
+			for (const detail of ["compact", "full"] as const) {
+				const rows = buildHistoryRows(messages, detail);
+				expect(rows.map(row => row.kind === "message" && row.message.content)).toEqual([
+					progress.content, // The identical text pasted by the person.
+					"Which tool?",
+					delivery.content,
+					reply.content,
+				]);
+			}
+		}
+	});
+
 	it("join the card of a run that stopped before replying", () => {
 		const rows = buildHistoryRows([user("Start Sleeper", 1), ...spawn, delivery, reply], "compact");
 		expect(rows.map(row => row.kind)).toEqual(["message", "process", "message"]);

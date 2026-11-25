@@ -3,6 +3,7 @@ import { createServer as createNetServer } from "node:net";
 import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Locator, type Page, test, webkit } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
+import { closeBrowser, launchBrowser } from "./harness";
 
 /**
  * The phone's Run settings sheet and the composer row above it, on the dev harness (Pixel 8 emulation, touch input,
@@ -48,7 +49,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
 	await browser?.close();
-	await webkitBrowser?.close();
+	if (webkitBrowser) await closeBrowser(webkitBrowser);
 	await server?.close();
 });
 
@@ -63,7 +64,7 @@ interface PhoneOptions {
 /** A phone on the harness with the composer idle and a model that offers every speed tier. */
 async function openPhone(options: PhoneOptions = {}): Promise<Page> {
 	const { lang = "ko", theme = "dark", width = 390, height = 844, engine = "pixel8" } = options;
-	if (engine === "webkit") webkitBrowser ??= await webkit.launch();
+	if (engine === "webkit") webkitBrowser ??= await launchBrowser(webkit);
 	const target = engine === "webkit" ? webkitBrowser : browser;
 	if (!target) throw new Error("no browser");
 	const context = await target.newContext({
@@ -219,7 +220,7 @@ for (const width of WIDTHS) {
 					"idle row needs no scroll",
 				).toBeLessThanOrEqual(width === 360 ? 8 : 1);
 				await setRunning(page, true);
-				await expect(page.locator("[data-send-mode]")).toBeVisible();
+				await expect(page.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible();
 				await expectRowClear(page, "running");
 			} finally {
 				await page.context().close();

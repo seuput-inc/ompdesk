@@ -2,16 +2,14 @@
  * What disk care reads of one worktree before it touches it: its files split by what git and the project say about
  * them, when anyone last changed anything in it, whether a git operation is half done, its HEAD, and which running
  * processes sit inside it. Read-only. The reads run in the core process (`native/ompdesk/crates/core/src/disk/facts.rs`
- * and `regenerable.rs`, the rule table of what a project makes again); what stays here is main's: where stock omp keeps
- * a folder's sessions, whether a process folder is inside a worktree (real paths, `realFolder`), and the secret check,
- * which reads the central redactor.
+ * and `regenerable.rs`, the rule table of what a project makes again). Main supplies its profile and filesystem roots,
+ * checks whether a process folder is inside a worktree, and reads the central redactor.
  */
 import * as os from "node:os";
 import * as path from "node:path";
 import { redactDiagnosticsText } from "../../../resources/gui-bridge/redactor";
 import { agentDir } from "../agent-paths";
-import { fs } from "../fenced-fs";
-import { coreGit, coreHeld } from "../local/git/exec";
+import { coreGit, coreHeld, heldAnswer } from "../local/git/exec";
 import { isInside } from "../local/git/parse";
 import { stepStalled } from "../serial-chain";
 import { realFolder } from "../worktree-removals";
@@ -71,27 +69,6 @@ export function worktreeHead(worktree: string): Promise<string> {
 }
 
 /**
- * stock omp's session folder for a cwd (`worktree`, a real path), as `getDefaultSessionDirName` names it
- * (pi-coding-agent `session/session-paths.ts`; main reads it without an omp): under the temp folder `-tmp-<path
- * from it>`, else under the home folder `-<path from it>`, else `--<the whole path>--`, each with `/`, `\` and `:`
- * as `-`. A worktree made by hand can be anywhere, so all three count. Pinned by `worktree-facts.test.ts`.
- */
-export function sessionFolder(worktree: string): string {
-	const within = (root: string): string | null => {
-		const relative = path.relative(realFolder(root), worktree);
-		return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)) ? relative : null;
-	};
-	const dashed = (text: string): string => text.replace(/[/\\:]/g, "-");
-	const temp = within(os.tmpdir());
-	const home = within(os.homedir());
-	let name = `--${dashed(worktree.replace(/^[/\\]/, ""))}--`;
-	// The temp folder first: it is the more specific one where it sits inside the home folder (Windows).
-	if (temp !== null) name = temp === "" ? "-tmp" : `-tmp-${dashed(temp)}`;
-	else if (home !== null) name = `-${dashed(home)}`;
-	return path.join(agentDir(), "sessions", name);
-}
-
-/**
  * When anything in the worktree last changed (epoch ms): its HEAD commit, its git dir's HEAD, index and reflog, the
  * folder, every tracked and untracked file, every ignored entry no tool makes again (a seeded `.env` someone edited)
  * and the newest session file stock omp wrote for it. Regenerable output is left out: a build is no one's work.
@@ -102,9 +79,14 @@ export async function lastActivity(worktree: string, files: WorktreeFiles): Prom
 		"disk.lastActivity",
 		{
 			worktree,
-			stamps: [...files.tracked, ...files.untrackedFiles],
-			ignored: files.ignored.filter(entry => !entry.regenerable).map(entry => entry.path),
-			sessions: sessionFolder(worktree),
+			activity: {
+				tracked: files.tracked,
+				untrackedFiles: files.untrackedFiles,
+				ignored: files.ignored.filter(entry => !entry.regenerable).map(entry => entry.path),
+				sessionsRoot: path.join(agentDir(), "sessions"),
+				temp: realFolder(os.tmpdir()),
+				home: realFolder(os.homedir()),
+			},
 		},
 		ACTIVITY_ROUNDS,
 	);
@@ -133,8 +115,6 @@ export function processInside(worktree: string, folders: readonly string[] | nul
 /** A file whose name says it holds a secret: never committed, kept in the private archive instead. */
 const SECRET_NAME =
 	/(?:^|\/)(?:\.env(?:\..+)?|\.envrc|\.npmrc|\.netrc|\.pypirc|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|credentials[^/]*|[^/]*secret[^/]*|[^/]*\.(?:pem|key|p12|pfx|keystore|jks|kdbx))$/i;
-/** Files are read whole up to this size; a bigger one is never committed (it goes to the archive unread). */
-export const SECRET_SCAN_MAX_BYTES = 16 * 1024 * 1024;
 const MARKERS = /<secret>|<token>/g;
 
 /**
@@ -148,18 +128,20 @@ function holdsCredential(text: string): boolean {
 
 /**
  * Whether a file named `relative` with these bytes may never enter a commit: its name says secret, its content holds a
- * credential, or it was not read whole (`complete` false, over `SECRET_SCAN_MAX_BYTES`).
+ * credential, or it was not read whole (`complete` false).
  */
 export function secretIn(relative: string, bytes: Buffer, complete = true): boolean {
 	return !complete || SECRET_NAME.test(relative) || holdsCredential(bytes.toString("latin1"));
 }
 
-/** The worktree's file `relative` may never enter a commit (`secretIn`); a file that cannot be read whole counts. */
+/** Only regular files can contribute secret contents to a commit. Never read a link target or send these bytes to a page. */
 export async function looksSecret(worktree: string, relative: string): Promise<boolean> {
-	if (SECRET_NAME.test(relative)) return true;
-	const file = path.join(worktree, relative);
-	const stat = await fs.stat(file).catch(() => null);
-	if (!stat || stat.size > SECRET_SCAN_MAX_BYTES) return true;
-	const bytes = await fs.readFile(file).catch(() => null);
-	return bytes === null || secretIn(relative, bytes);
+	const { result, bin } = await heldAnswer<"skip" | "archive" | "scan">(
+		"disk.worktreeBlob",
+		async () => ({ worktree, path: relative, namedSecret: SECRET_NAME.test(relative) }),
+		60_000,
+	);
+	if (result === "skip") return false;
+	if (result !== "scan" || !bin?.byteLength) return true;
+	return holdsCredential(Buffer.from(bin.buffer, bin.byteOffset, bin.byteLength).toString("latin1"));
 }

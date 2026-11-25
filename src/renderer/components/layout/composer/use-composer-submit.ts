@@ -1,7 +1,7 @@
 /**
  * useComposerSubmit: the composer submit controller extracted from InputArea.
  * Owns the entire send pipeline: bash/python mode dispatch, yield-queue
- * shorthand, slash-command routing, and the prompt/steer/followUp dispatch.
+ * shorthand, slash-command routing, and the prompt/steer dispatch.
  */
 
 import { useCallback, useEffect, useRef } from "react";
@@ -39,15 +39,12 @@ import { toast, toastError } from "../../../stores/toast";
 import { webRuntime } from "../../../web/runtime";
 import { useAutoModePrefetch } from "./use-auto-mode-prefetch";
 
-type SendMode = "prompt" | "steer" | "followUp";
-
 export function useComposerSubmit({
 	text,
 	images,
 	sending,
 	status,
 	isStreaming,
-	mode,
 	queuedMessageCount,
 	commands,
 	emojiAutocomplete,
@@ -62,7 +59,6 @@ export function useComposerSubmit({
 	sending: boolean;
 	status: string;
 	isStreaming: boolean;
-	mode: SendMode;
 	queuedMessageCount: number;
 	commands: AvailableCommand[];
 	emojiAutocomplete: boolean;
@@ -83,18 +79,17 @@ export function useComposerSubmit({
 		[emojiAutocomplete],
 	);
 	useAutoModePrefetch({ text, isStreaming, status, tabId: runtimeTabId, rpc, expand: expandProse });
-	const heldSend = useRef<{ message: string; overrideText?: string; forceMode?: SendMode } | null>(null);
+	const heldSend = useRef<{ message: string; overrideText?: string } | null>(null);
 	const send = useCallback(
 		// `overrideText` sends a freshly computed value (voice dictation submit
 		// trigger) instead of the rendered `text` state, which lags a setText.
-		// `forceMode` overrides the steer/followUp toggle for one send (the follow-up chord).
-		(overrideText?: string, forceMode?: SendMode) => {
+		(overrideText?: string) => {
 			const message = (overrideText ?? text).trim();
 			if (!message && images.length === 0) return;
 			// The previous send is still being answered (a prompt's round trip, a `!` command's whole run): the Enter is
 			// held, not dropped, and goes out once that send settles (the effect below).
 			if (sending) {
-				heldSend.current = { message, overrideText, forceMode };
+				heldSend.current = { message, overrideText };
 				return;
 			}
 			// An edit that cut into a paste marker left text that names a paste but is not one: sending it would
@@ -180,11 +175,7 @@ export function useComposerSubmit({
 					toast({ variant: "warning", message: t("outbox.messagesOnly") });
 					return;
 				}
-				holdMessage(originTab, {
-					text: expandedMessage,
-					images: images.map(image => image.content),
-					behavior: (forceMode ?? mode) === "followUp" ? "followUp" : "steer",
-				});
+				holdMessage(originTab, { text: expandedMessage, images: images.map(image => image.content) });
 				setText("");
 				setImages([]);
 				setMenu(null);
@@ -382,13 +373,12 @@ export function useComposerSubmit({
 				typed: message,
 				images: payload,
 				isStreaming,
-				mode: forceMode ?? mode,
 				commands,
 				hostDecides,
 				rpc,
 				signal: withdraw.signal,
 				beforePrompt: async () => {
-					if (withdraw.signal.aborted) return null;
+					if (withdraw.signal.aborted) return;
 					const choice = await runAutoMode({
 						message: expandedMessage,
 						isStreaming,
@@ -410,7 +400,6 @@ export function useComposerSubmit({
 					else if (choice?.mode === "plan") await endAutoPlan(session, rpc);
 					// Stock's `goal create` already started the goal's own turn: stopping it ends the goal too.
 					else if (choice?.mode === "goal") await abortActiveTurn(rpc, originTabId, "auto-mode");
-					return choice;
 				},
 			});
 			if (submit.kind === "blocked") return;
@@ -538,7 +527,6 @@ export function useComposerSubmit({
 			sending,
 			status,
 			isStreaming,
-			mode,
 			queuedMessageCount,
 			commands,
 			expandProse,
@@ -562,7 +550,7 @@ export function useComposerSubmit({
 		if (sending || !held) return;
 		heldSend.current = null;
 		if (held.overrideText === undefined && text.trim() !== held.message) return;
-		latestSend.current(held.overrideText, held.forceMode);
+		latestSend.current(held.overrideText);
 	}, [sending, text]);
 
 	return send;

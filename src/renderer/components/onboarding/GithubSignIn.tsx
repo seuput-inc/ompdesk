@@ -6,7 +6,7 @@
  * first-run step, Settings › General and the PR center's signed-out state.
  */
 
-import { ExternalLink, Github, LogOut, RefreshCw, Users } from "lucide-react";
+import { ExternalLink, GitFork, LogOut, RefreshCw, Users } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { type GithubAuthState, type GithubLoginFlow, githubLoginLive } from "../../../shared/github-auth";
 import { copyText, cx } from "../../lib/format";
@@ -133,7 +133,7 @@ export function GithubSignIn({ framed = true, onSignedIn, className }: GithubSig
 	const content = (
 		<>
 			<div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-				<Github aria-hidden className="size-(--sc-icon-md) shrink-0 text-(--sc-text)" />
+				<GitFork aria-hidden className="size-(--sc-icon-md) shrink-0 text-(--sc-text)" />
 				<div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
 					<span className="truncate text-sc-md font-medium text-(--sc-text)">
 						{authenticated && status?.login ? status.login : t("githubAuth.connect")}
@@ -202,7 +202,7 @@ export function GithubSignIn({ framed = true, onSignedIn, className }: GithubSig
 						<div>
 							<Button
 								data-testid="github-sign-in-start"
-								icon={<Github />}
+								icon={<GitFork />}
 								onClick={startLogin}
 								size="sm"
 								variant="primary"
@@ -271,7 +271,7 @@ export function GithubSignIn({ framed = true, onSignedIn, className }: GithubSig
 					<div>
 						<Button
 							data-testid="github-sign-in-start"
-							icon={<Github />}
+							icon={<GitFork />}
 							onClick={startLogin}
 							size="sm"
 							variant="primary"

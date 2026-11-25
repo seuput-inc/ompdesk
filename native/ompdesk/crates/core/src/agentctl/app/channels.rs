@@ -37,6 +37,10 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("log:snapshot", Risk::Never(DENY)),
     ("app:quit", Risk::Tier(Sensitive, &["app.quit"])),
     ("bridge-health:take", Risk::Never(DENY)),
+    (
+        "bridge-health:get",
+        Risk::Tier(Read, &["omp.bridge_health"]),
+    ),
     ("disk-full:get", Risk::Never(DENY)),
     ("rpc:command", Risk::Never(RAW_RPC)),
     ("rpc:command-for-tab", Risk::Never(RAW_RPC)),
@@ -63,6 +67,8 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("sessions:search", Risk::Tier(Read, &["sessions.search"])),
     ("sessions:messages", Risk::Never(SESSION_TOOLS)),
     ("sessions:move", Risk::Never(SESSION_TOOLS)),
+    ("sessions:targets", Risk::Never(SESSION_TOOLS)),
+    ("sessions:artwork", Risk::Never(SESSION_TOOLS)),
     (
         "sessions:dump-bundle",
         Risk::Tier(Change, &["sessions.dump_bundle"]),
@@ -72,6 +78,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("tab:spawn", Risk::Never(SESSION_TOOLS)),
     ("tab:close", Risk::Never(SESSION_TOOLS)),
     ("tab:file-edit-report", Risk::Never(SESSION_TOOLS)),
+    ("tab:agent-close-answer", Risk::Never(SESSION_TOOLS)),
     ("tab:set-active", Risk::Never(SESSION_TOOLS)),
     ("tab:set-view", Risk::Never(SESSION_TOOLS)),
     ("tab:reorder", Risk::Never(SESSION_TOOLS)),
@@ -85,6 +92,8 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("project-origin:get", Risk::Never(DENY)),
     ("resume:cancel-wait", Risk::Never(DENY)),
     ("resume:stop", Risk::Never(DENY)),
+    ("resume:continue", Risk::Never(DENY)),
+    ("resume:dismiss", Risk::Never(DENY)),
     ("connectivity:report", Risk::Never(DENY)),
     ("stats:fetch", Risk::Never(DENY)),
     ("bench:run", Risk::Never(DENY)),
@@ -128,14 +137,6 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     (
         "account-rotation:set",
         Risk::Tier(Sensitive, &["app.undo", "settings.rotation"]),
-    ),
-    (
-        "builtin-rea:get",
-        Risk::Tier(Read, &["settings.get", "settings.builtinRea"]),
-    ),
-    (
-        "builtin-rea:set",
-        Risk::Tier(Sensitive, &["app.undo", "settings.builtinRea"]),
     ),
     (
         "local-engines:get",
@@ -276,6 +277,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("github-auth:fill-identity", Risk::Never(OPERATOR)),
     ("github-auth:product-star", Risk::Never(OPERATOR)),
     ("remote:get-state", Risk::Tier(Read, &["remote.devices"])),
+    ("remote:set-device-section-order", Risk::Never(DENY)),
     ("remote:set-host-enabled", Risk::Never(OPERATOR)),
     (
         "remote:set-device-name",

@@ -15,7 +15,7 @@
 					"lts": "Krypton"
 				}
 			],
-			"expect": "v24.11.0"
+			"expect": "v24.10.0"
 		},
 		{
 			"index": [
@@ -24,7 +24,7 @@
 					"lts": "Iron"
 				}
 			],
-			"expect": null
+			"expect": "v20.19.0"
 		},
 		{
 			"index": {
@@ -215,7 +215,7 @@
 					"lts": "J"
 				}
 			],
-			"expect": "v22.19.0"
+			"expect": "v24.10.9"
 		},
 		{
 			"index": [
@@ -228,7 +228,7 @@
 					"lts": "J"
 				}
 			],
-			"expect": "v22.19.0"
+			"expect": "v22.18.9"
 		},
 		{
 			"index": [
@@ -255,7 +255,7 @@
 					"lts": "L"
 				}
 			],
-			"expect": null
+			"expect": "v25.9.9"
 		},
 		{
 			"index": [

@@ -6,7 +6,8 @@
  * is what reads main's state in the same tick: a call the core let through (`web.call`) runs on the one `IpcRegistry`
  * (`invoke` for `inv`, `send` for `snd`) with the device's `WebClientWindow` as the caller, after the model-use quota
  * counted it and a picture the page sent by upload (`WebUploadedImage`) was read back into it; the window's pushes
- * go to the core once per device (`web.deliver`), a stream's data text made once for every device; and a copy of
+ * go to the core once per device (`web.deliver`), a stream's data text made once for every device unless a large
+ * picture of a transcript goes behind the device's `/blob` URL (page-images.ts); and a copy of
  * each device's connections (`web.conns`) answers who is connected and whose page is in the foreground.
  *
  * Every message between the core and main is handled in the order it came: a page's call reaches main before the
@@ -16,6 +17,7 @@ import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICE_CONNECTED, WEB_DEVICES_CHANGED, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
+import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import {
 	holdsBlock,
 	isWebUploadedImage,
@@ -32,6 +34,7 @@ import type { BlobStore } from "./blobs";
 import type { WebDevice, WebDevices } from "./devices-store";
 import { IPC_POLICY } from "./ipc-policy";
 import type { IpcCaller } from "./ipc-registry";
+import { PageImages } from "./page-images";
 import type { UploadStore } from "./uploads";
 import type { WebClientWindow, WebWindows } from "./web-client-window";
 
@@ -54,6 +57,23 @@ const STREAM_CHANNELS: ReadonlySet<string> = new Set([
 	IPC_EVENTS.COMMAND_OUTPUT,
 ]);
 
+/**
+ * The pushes that carry transcript messages and tool results: a picture in one goes behind a `/blob` URL
+ * (page-images.ts). Streamed ones are never shared between devices once it does, since a blob belongs to one.
+ */
+const PICTURE_CHANNELS: Readonly<Record<string, true>> = {
+	[IPC_EVENTS.EVENTS_BATCH]: true,
+	[IPC_EVENTS.SUBAGENT_FRAMES]: true,
+};
+
+/** The RPC commands whose answer is a transcript: its large pictures go behind `/blob` URLs too. */
+const TRANSCRIPT_COMMANDS: Readonly<Record<string, true>> = {
+	get_transcript: true,
+	get_transcript_page: true,
+	get_subagent_transcript: true,
+	get_subagent_messages: true,
+};
+
 /** Calls that read or scan a lot: a device runs a few at once. */
 const HEAVY_CHANNELS: readonly string[] = [
 	IPC_COMMANDS.FS_SEARCH,
@@ -62,12 +82,8 @@ const HEAVY_CHANNELS: readonly string[] = [
 	IPC_COMMANDS.REMOTE_LIST_DIRS,
 ];
 
-/** Pushes for the desktop's own windows: a web window never gets them. */
-const DESKTOP_ONLY_PUSH: Readonly<Record<string, true>> = {
-	[WEB_DEVICES_CHANGED]: true,
-	[WEB_DEVICE_CONNECTED]: true,
-	[WEB_PAIRING_REQUEST]: true,
-};
+/** Pushes for the desktop's own windows: the core's router never sends them to a device. */
+const DESKTOP_ONLY_PUSH: readonly string[] = [WEB_DEVICES_CHANGED, WEB_DEVICE_CONNECTED, WEB_PAIRING_REQUEST];
 
 /** The caller of a web-only channel: who, and the window their pushes and tabs belong to. */
 export interface WebCallContext {
@@ -93,12 +109,10 @@ export interface WsRouterDeps {
 		send(channel: string, caller: IpcCaller, args: readonly unknown[]): void;
 	};
 	devices: Pick<WebDevices, "get">;
-	windows: Pick<WebWindows, "windowFor"> & { callerFor(deviceId: string, connId?: string): IpcCaller };
+	windows: Pick<WebWindows, "windowFor" | "all"> & { callerFor(deviceId: string, connId?: string): IpcCaller };
 	quota: Pick<PeerQuota, "reserve" | "record">;
 	webChannels: WebChannelTable;
 	features: () => WebFeatures;
-	/** The page build this host serves (`WEB_BUILD_META` of its `web.html`); null in a dev run. */
-	build?: () => string | null;
 	/** The tab a window's untargeted calls act on, to know whose model command it was. */
 	activeTab?: (win: WebClientWindow) => string | null;
 	/** `/blob` URLs for bytes and streams a reply carries. */
@@ -111,18 +125,27 @@ export interface WsRouterDeps {
 	toModelImage: (image: InlineImage) => Promise<InlineImage>;
 	/** A device's connection count changed (the settings list shows who is connected). */
 	onConnectionsChanged?: (deviceId: string) => void;
-	/** One connection of the device ended (its socket closed, was retired or timed out); others of the device may remain. */
-	onConnectionEnded?: (deviceId: string, connId: string) => void;
+	/** The core's router recorded a page's Files-edit report (`web.fileEdits`; the store is the core's, C2). */
+	onFileEditReport?: (deviceId: string) => void;
 	/** The device's page got a hello it must resync from (`resumed: false`): it missed pushes. */
 	onResync?: (deviceId: string) => void;
 }
 
 /** What the core's router is started with (`web.start`'s `router`). */
 export interface RouterConfig {
-	channels: { batch: string; streams: string[]; heavy: readonly string[]; prefsSet: string };
+	channels: {
+		batch: string;
+		diskFull: string;
+		streams: string[];
+		heavy: readonly string[];
+		prefsSet: string;
+		fileEditReport: string;
+		desktopOnly: readonly string[];
+		workspaceOnly: readonly string[];
+		tabList: string;
+	};
 	protocol: number;
 	features: WebFeatures;
-	build: string | null;
 	policy: Record<string, { dir: string; permission?: string; mode: string }>;
 	webChannels: Record<string, { dir: string; permission: string; heavy: boolean }>;
 }
@@ -149,7 +172,6 @@ interface ConnsEvent {
 	device: string;
 	conns: PageConnection[];
 	change: "attach" | "end" | "presence";
-	connId: string;
 }
 
 interface TabBatch {
@@ -249,17 +271,21 @@ let routed: CoreProcess | null = null;
 function route(process: CoreProcess): void {
 	if (routed === process) return;
 	routed = process;
-	process.on("web.call", (data, bin) => {
+	process.on("web.call", (data, bin, generation) => {
 		const event = data as CallEvent;
-		routers.get(event.host)?.call(event, bin === null ? "[]" : Buffer.from(bin).toString("utf8"));
+		routers.get(event.host)?.call(event, bin === null ? "[]" : Buffer.from(bin).toString("utf8"), generation);
 	});
 	process.on("web.conns", data => {
 		const event = data as ConnsEvent;
 		routers.get(event.host)?.connections(event);
 	});
-	process.on("web.resync", data => {
+	process.on("web.fileEdits", data => {
+		const { host, device } = data as { host: number; device: string };
+		routers.get(host)?.fileEditReported(device);
+	});
+	process.on("web.resync", (data, _bin, generation) => {
 		const { host, conn, device } = data as { host: number; conn: number; device: string };
-		routers.get(host)?.resync(conn, device);
+		routers.get(host)?.resync(conn, device, generation);
 	});
 	process.on(CORE_EXITED, () => {
 		for (const router of routers.values()) router.coreExited();
@@ -276,13 +302,13 @@ export class WsRouter {
 	readonly #drivers = new Map<string, string>();
 	/** A streamed push's data JSON, made once for every device that gets the pool's very push object. */
 	readonly #texts = new WeakMap<object, Uint8Array>();
-	/** Devices told of a push they had no connection for: until one connects, one word is all the core needs. */
-	readonly #unsent = new Set<string>();
-	/** The core's router was started (`config`) and has not ended with its core since. */
-	#open = false;
+	readonly #pictures: PageImages;
+	/** The generation of the core whose router this host started in (`started`); 0 before the first start. */
+	#startedIn = 0;
 
 	constructor(deps: WsRouterDeps) {
 		this.#deps = deps;
+		this.#pictures = new PageImages(deps.blobs);
 	}
 
 	get deps(): WsRouterDeps {
@@ -293,7 +319,6 @@ export class WsRouter {
 	config(): RouterConfig {
 		route(core());
 		routers.set(this.host, this);
-		this.#open = true;
 		const webChannels = Object.fromEntries(
 			Object.entries(this.#deps.webChannels).map(([channel, entry]) => [
 				channel,
@@ -303,16 +328,39 @@ export class WsRouter {
 		return {
 			channels: {
 				batch: IPC_EVENTS.EVENTS_BATCH,
+				diskFull: IPC_EVENTS.DISK_FULL,
 				streams: [...STREAM_CHANNELS],
 				heavy: HEAVY_CHANNELS,
 				prefsSet: IPC_COMMANDS.PREFS_SET,
+				fileEditReport: IPC_COMMANDS.FILE_EDIT_REPORT,
+				desktopOnly: DESKTOP_ONLY_PUSH,
+				workspaceOnly: [SIDEBAR_PROJECTS_STATE, IPC_EVENTS.REMOTE_STATE],
+				tabList: IPC_EVENTS.TAB_LIST_CHANGED,
 			},
 			protocol: WEB_PROTOCOL_VERSION,
 			features: this.#deps.features(),
-			build: this.#deps.build?.() ?? null,
 			policy: routerPolicy(),
 			webChannels,
 		};
+	}
+
+	/** The core of `generation` answered `web.start`: its router holds this host until that core ends. */
+	started(generation: number): void {
+		this.#startedIn = generation;
+		for (const win of this.#deps.windows.all()) this.noteWindow(win, true);
+	}
+
+	/** The core's router learns which device a window id is, for the pushes the core makes to it (`pages.rs`). */
+	noteWindow(win: WebClientWindow, alive: boolean): void {
+		if (!this.#open()) return;
+		const id = win.webContents.id;
+		const named = alive ? { win: id, host: this.host, device: win.deviceId } : { win: id };
+		core().push("web.window", named, undefined, this.#startedIn);
+	}
+
+	/** Whether the core running now is the one that started this host's router (a later core has not). */
+	#open(): boolean {
+		return this.#startedIn !== 0 && this.#startedIn === core().generation;
 	}
 
 	connectionCount(deviceId: string): number {
@@ -328,26 +376,47 @@ export class WsRouter {
 		return this.#connections.get(deviceId)?.some(connection => connection.visible) ?? false;
 	}
 
+	publishDiskFull(files: readonly string[]): void {
+		if (this.#open()) core().push("web.diskFullState", { host: this.host, files }, undefined, this.#startedIn);
+	}
+
+	/** A native event for one authenticated caller, never the other pages of its device. */
+	deliverToConnection(connId: string, channel: string, payload: unknown): void {
+		for (const [deviceId, connections] of this.#connections) {
+			const page = connections.find(connection => connection.connId === connId);
+			if (!page) continue;
+			if (this.#deps.devices.get(deviceId)) this.#deliver(deviceId, channel, payload, page);
+			return;
+		}
+	}
+
 	/** A push the pool or a handler made to the device's window. */
 	deliver(deviceId: string, channel: string, payload: unknown): void {
 		this.#recordTokens(deviceId, channel, payload);
-		const policy = Object.hasOwn(IPC_POLICY, channel) ? IPC_POLICY[channel as keyof typeof IPC_POLICY] : undefined;
-		if (policy?.dir !== "push" || policy.mode === "client" || Object.hasOwn(DESKTOP_ONLY_PUSH, channel)) return;
-		if (!this.#open) return;
-		if (!this.#connections.has(deviceId)) {
-			// Counted, so a page that comes back is not told it missed nothing; its data would reach no socket.
-			if (this.#unsent.has(deviceId)) return;
-			this.#unsent.add(deviceId);
-			core().push("web.deliver", { host: this.host, device: deviceId });
+		this.#deliver(deviceId, channel, payload);
+	}
+
+	/** What may reach the device and what it missed are the core router's rules; main writes the data once. */
+	#deliver(deviceId: string, channel: string, payload: unknown, page?: PageConnection): void {
+		if (!this.#open()) return;
+		const message = { host: this.host, device: deviceId, connId: page?.connId, ch: channel };
+		// A stream to a device with no page only counts as missed there: no need to write it.
+		if (!page && !this.#connections.has(deviceId) && STREAM_CHANNELS.has(channel)) {
+			core().push("web.deliver", { ...message, missed: true });
 			return;
 		}
 		let data: Uint8Array | undefined;
 		try {
-			data = this.#dataBytes(channel, payload);
+			const pictured =
+				Object.hasOwn(PICTURE_CHANNELS, channel) && (page ? page.visible : this.isDeviceVisible(deviceId))
+					? this.#pictures.lift(deviceId, isTabBatch(payload) ? payload.tabId : undefined, payload)
+					: payload;
+			data = this.#dataBytes(channel, pictured);
 		} catch {
+			core().push("web.deliver", { ...message, missed: true });
 			return;
 		}
-		core().push("web.deliver", { host: this.host, device: deviceId, ch: channel }, data);
+		core().push("web.deliver", message, data);
 	}
 
 	/** `JSON.stringify(payload)`'s bytes; a stream's made once per push object. Throws as `JSON.stringify` does. */
@@ -363,7 +432,7 @@ export class WsRouter {
 	}
 
 	closeDevice(deviceId: string, code: number, reason: string): void {
-		if (this.#open) core().push("web.closeDevice", { host: this.host, device: deviceId, code, reason });
+		if (this.#open()) core().push("web.closeDevice", { host: this.host, device: deviceId, code, reason });
 	}
 
 	noteDriver(tabId: string, deviceId: string): void {
@@ -383,35 +452,37 @@ export class WsRouter {
 	connections(event: ConnsEvent): void {
 		if (event.conns.length > 0) {
 			this.#connections.set(event.device, event.conns);
-			this.#unsent.delete(event.device);
 		} else {
 			this.#connections.delete(event.device);
 		}
 		if (event.change === "presence") return;
 		this.#deps.onConnectionsChanged?.(event.device);
-		if (event.change === "end") this.#deps.onConnectionEnded?.(event.device, event.connId);
+	}
+
+	/** The core's router recorded a Files-edit report of one of the device's connections. */
+	fileEditReported(deviceId: string): void {
+		this.#deps.onFileEditReport?.(deviceId);
 	}
 
 	/** A page is about to be told to resync: the pool sends whole stream snapshots from now, then the hello goes. */
-	resync(conn: number, deviceId: string): void {
+	resync(conn: number, deviceId: string, generation: number): void {
 		this.#deps.onResync?.(deviceId);
-		core().push("web.resynced", { host: this.host, conn });
+		core().push("web.resynced", { host: this.host, conn }, undefined, generation);
 	}
 
 	/** The core ended, and every page socket with it. */
 	coreExited(): void {
-		this.#open = false;
-		this.#unsent.clear();
-		const ended = [...this.#connections];
+		const ended = [...this.#connections.keys()];
 		this.#connections.clear();
-		for (const [deviceId, connections] of ended) {
-			this.#deps.onConnectionsChanged?.(deviceId);
-			for (const { connId } of connections) this.#deps.onConnectionEnded?.(deviceId, connId);
-		}
+		for (const deviceId of ended) this.#deps.onConnectionsChanged?.(deviceId);
 	}
 
-	/** A call the core let through: run here, and answered when the core waits for it. */
-	call(event: CallEvent, argsText: string): void {
+	/**
+	 * A call the core let through: run here, and answered when the core waits for it. The answer goes only to the core
+	 * of `generation` that asked: the next core numbers its calls from 1 again, and a reply to its same-numbered call
+	 * would hand this device's answer to another device's page.
+	 */
+	call(event: CallEvent, argsText: string, generation: number): void {
 		let args: unknown[];
 		try {
 			args = JSON.parse(argsText) as unknown[];
@@ -421,29 +492,33 @@ export class WsRouter {
 		const running = this.#dispatch(event, args);
 		if (event.dir === "send") {
 			const done = () => {
-				if (event.answer) core().push("web.reply", { host: this.host, call: event.call, ok: true });
+				if (event.answer) this.#answer(generation, { call: event.call, ok: true });
 			};
 			running.then(done, done);
 			return;
 		}
 		running.then(
-			value => this.#reply(event, value),
-			error => core().push("web.reply", { host: this.host, call: event.call, ok: false, e: webError(error) }),
+			value => this.#reply(event, value, generation),
+			error => this.#answer(generation, { call: event.call, ok: false, e: webError(error) }),
 		);
 	}
 
+	#answer(generation: number, reply: object, bin?: Uint8Array): void {
+		core().push("web.reply", { host: this.host, ...reply }, bin, generation);
+	}
+
 	/** An invoke's answer; a value JSON cannot carry fails the call instead of leaving the page to wait forever. */
-	#reply(event: CallEvent, value: unknown): void {
+	#reply(event: CallEvent, value: unknown, generation: number): void {
 		let text: string | undefined;
 		try {
 			text = JSON.stringify(value);
 		} catch {
 			const e = { message: `The computer's answer to ${event.ch} could not be sent to this page` };
-			core().push("web.reply", { host: this.host, call: event.call, ok: false, e });
+			this.#answer(generation, { call: event.call, ok: false, e });
 			return;
 		}
 		const bin = text === undefined ? undefined : Buffer.from(text, "utf8");
-		core().push("web.reply", { host: this.host, call: event.call, ok: true }, bin);
+		this.#answer(generation, { call: event.call, ok: true }, bin);
 	}
 
 	async #dispatch(event: CallEvent, args: readonly unknown[]): Promise<unknown> {
@@ -451,6 +526,18 @@ export class WsRouter {
 		const { device: deviceId, ch: channel, dir } = event;
 		const device = devices.get(deviceId);
 		if (!device) throw codedError("web_forbidden", "This device is no longer paired");
+		const request = args[0];
+		if (
+			channel === SIDEBAR_PROJECTS_COMMAND &&
+			request &&
+			typeof request === "object" &&
+			"action" in request &&
+			request.action === "layout" &&
+			!device.grants.includes("settings-write")
+		)
+			throw codedError("web_forbidden", "Changing sidebar preferences requires settings-write");
+		if (channel === IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER && !device.grants.includes("workspace"))
+			throw codedError("web_forbidden", "Moving device sections requires workspace access");
 		const win = windows.windowFor(deviceId);
 		const own = Object.hasOwn(webChannels, channel) ? webChannels[channel] : undefined;
 		if (own) return own.handler({ deviceId, device, win }, args);
@@ -475,7 +562,7 @@ export class WsRouter {
 			}
 			const result = await registry.invoke(channel, caller, landed);
 			if (refund && refused(result)) refund();
-			return this.#shape(deviceId, channel, args, result);
+			return this.#shape(deviceId, channel, args, result, win);
 		} catch (error) {
 			refund?.();
 			throw error;
@@ -521,7 +608,7 @@ export class WsRouter {
 	}
 
 	/** What a page may see: no secret-looking preferences, no raw bytes or `omp-media://` address. */
-	#shape(deviceId: string, channel: string, args: readonly unknown[], result: unknown): unknown {
+	#shape(deviceId: string, channel: string, args: readonly unknown[], result: unknown, win: WebClientWindow): unknown {
 		if (channel === IPC_COMMANDS.PREFS_GET) {
 			const payload = args[0];
 			const keyed = typeof payload === "object" && payload !== null && "key" in payload && payload.key;
@@ -531,6 +618,13 @@ export class WsRouter {
 		if (channel === IPC_COMMANDS.FS_READ_BINARY || channel === IPC_COMMANDS.FS_SAVE_COPY)
 			return this.#binaryResult(deviceId, result);
 		if (channel === IPC_COMMANDS.FS_MEDIA_STREAM) return this.#mediaResult(deviceId, result);
+		if (channel === IPC_COMMANDS.SESSIONS_MESSAGES) return this.#pictures.lift(deviceId, undefined, result);
+		if (channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB) {
+			const { command, tabId } = rpcPayload(args[0]);
+			if (isCommandWithType(command) && Object.hasOwn(TRANSCRIPT_COMMANDS, command.type)) {
+				return this.#pictures.lift(deviceId, tabId ?? this.#deps.activeTab?.(win) ?? undefined, result);
+			}
+		}
 		return result;
 	}
 

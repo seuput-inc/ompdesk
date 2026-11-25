@@ -136,8 +136,7 @@ caveats is in [`docs/support-matrix.md`](docs/support-matrix.md).
 | Codex | Supported |
 | Command Code | Supported |
 | Devin CLI | Supported |
-| OpenCode (V1/V2 auto-detected) | Supported |
-| OpenCode V2 compatibility aliases (`opencode2`, `opencode-v2`, `open-code2`) | Supported |
+| OpenCode (V1/V2 auto-detected; legacy force-V2 aliases retained) | Supported |
 | Cursor | Supported |
 | Gemini CLI | Supported |
 | Oh My Pi / OMP | Supported |
@@ -159,9 +158,13 @@ caveats is in [`docs/support-matrix.md`](docs/support-matrix.md).
 | Meta Muse Code | Supported |
 | CodeBuddy Code | Hooks-only |
 | IBM Bob | Supported |
+| Qwen Code | Supported |
+| Qoder | Supported |
 | VS Code Copilot | MCP-only |
 | Zed | MCP-only |
-| DeepSeek Harness (DSH) | MCP-only |
+| DeepSeek Harness (DSH) | Hooks + MCP |
+| Cline CLI | Hooks + MCP |
+| FreeBuff | MCP-only |
 | Prime Agent | MCP-only |
 | Hermes Agent | Supported |
 | GrizzyBot | Supported |
@@ -265,6 +268,16 @@ sign in, with no console window, and restarts if it fails. Details and the
 other Windows setups (WSL2, Docker Desktop, a real Windows service) are in
 [`docs/windows.md`](docs/windows.md).
 
+With [Scoop](https://scoop.sh) (ai-memory 3.4.0 or later):
+
+```powershell
+scoop bucket add akitaonrails https://github.com/akitaonrails/scoop-bucket
+scoop install ai-memory
+ai-memory setup
+```
+
+Update it with `scoop update ai-memory`.
+
 ### Arch Linux (AUR)
 
 For native Arch installs, use the AUR packages. They install
@@ -276,6 +289,20 @@ yay -S ai-memory-bin    # prebuilt Linux x86_64/aarch64 binary
 yay -S ai-memory        # builds from source
 ai-memory setup         # data dir, user service, agents, self-check
 ```
+
+### Homebrew (macOS and Linux)
+
+The tap installs the prebuilt binary and its hook sources on macOS and on
+Linux, including atomic distributions such as Bazzite or Fedora Silverblue
+where Homebrew is the usual way to add tools:
+
+```bash
+brew install akitaonrails/tap/ai-memory
+ai-memory setup         # data dir, user service, agents, self-check
+```
+
+Use either `ai-memory setup` or `brew services start ai-memory`, not both.
+Details are in [`docs/install.md`](docs/install.md#homebrew-macos-and-linux).
 
 ### Fedora (RPM)
 
@@ -390,16 +417,19 @@ docker run -d --name ai-memory \
 # 3. Wire your agent CLI in two commands. The wrapper takes care of
 #    mounts and each client's config-path detection. Re-run with
 #    `--agent codex`, `--agent command-code`, `--agent devin`, `--agent opencode`, `--agent opencode2`, `--agent gemini-cli`,
-#    `--agent grok`, `--agent kimi-code`, `--agent kiro-cli`, `--agent copilot-cli`, `--agent droid`, `--agent muse`, `--agent omp`,
+#    `--agent grok`, `--agent kimi-code`, `--agent kiro-cli`, `--agent copilot-cli`, `--agent droid`, `--agent muse`, `--agent cline`, `--agent qwen-code`, `--agent qoder`, `--agent omp`,
 #    `--agent oh-my-pi`, `--client cursor`,
-#    `--client gemini-cli`, `--client grok`, `--client kiro-cli`, etc.
+#    `--client gemini-cli`, `--client grok`, `--client kiro-cli`,
+#    `--client cline`, `--client freebuff`, etc.
 #    for additional agents; full list in docs/install.md.
 ai-memory install-mcp   --client claude-code --apply
 ai-memory install-hooks --agent  claude-code --apply
 ```
 
 On Linux and macOS, the Docker wrapper runs `install-hooks` through its
-checksum-verified native host client. The installed hooks therefore enforce
+checksum-verified native host client. Global options may precede the command,
+for example `ai-memory --config /path/to/config.toml run codex`; the native
+client receives the complete argument list. The installed hooks therefore enforce
 client-side capture controls such as `[capture] ignore_paths` and allowlist
 mode before an event reaches the spool or network. Set
 `AI_MEMORY_HOOK_PLATFORM=posix` explicitly only when you need the legacy shell
@@ -425,9 +455,10 @@ Wiring another agent is the same two commands with a different name:
 matrix. OpenCode is version-detected by host-side commands; when generating its
 artifacts inside a container, use `setup-agent --agent opencode
 --opencode-dialect v1|v2 --to /tmp/unused` because the container cannot inspect
-the host executable. The `opencode2` aliases remain force-V2 compatibility
-spellings. The full per-agent guide, including Windows and remote servers, is
-[`docs/install.md`](docs/install.md).
+the host executable. The legacy `opencode2`, `opencode-v2`, and `open-code2`
+aliases remain force-V2 compatibility spellings for old scripts; use
+`opencode` for new commands. The full per-agent guide, including Windows and
+remote servers, is [`docs/install.md`](docs/install.md).
 
 Two agents in the same project at once, or teammates on one server, work
 out of the box: the "current project" pointer is isolated per caller
@@ -475,6 +506,15 @@ off" mean to read that file first when the three managed-run variables are
 present. A switch on another machine still gets the server's portable ledger
 and handoff, but cannot read a native transcript that exists only on the first
 machine.
+
+Without the managed launcher, a harness cut off the same way leaves no handoff
+at all, so the next one could pick up an older handoff or session page. When the
+newest captured work in the project is in another of your sessions that never
+ended and left no handoff after that work, the next session start carries a
+one-line notice that names that session. The agent then reads its newest prompts and
+tool results with `memory_read_session_observations`. The same session is
+listed first in `memory_briefing`'s `recent_sessions`, and `memory_handoff_list`
+names it as `newer_unended_session`.
 
 If that variable is absent on a real same-machine switch, run
 `type -a ai-memory` and `ai-memory --version` in the launching shell. This path
@@ -581,15 +621,40 @@ prompts, tool calls, and session boundaries; session end turns them into
 readable wiki pages; the next session starts with a handoff.
 
 - Ask "where did we leave off?" to continue from the pending handoff.
+- Import a local PDF, DOCX, PPTX, XLSX, Markdown file, or VTT/SRT transcript as
+  attributed, sanitized memory with the optional
+  [`ai-memory-importer`](companions/ai-memory-importer) `document` command.
 - Ask "have we discussed X?" or "search memory for Y" to query the wiki.
-- Ask "catch me up" for a prose digest of recent project activity.
+- Narrow a large wiki before ranking with `memory_query` filters such as
+  `path_prefix: "procedures/"`, `tag: "rust"`, `kind: "decision"`, or
+  `tier: "procedural"`.
+- Inspect content-free per-workload LLM call, outcome, latency, and usage
+  telemetry with `ai-memory status --json`; it diagnoses the configured
+  provider but does not route different workloads to different models.
+- Ask "catch me up" for a prose digest of recent project activity, or run
+  `ai-memory recent` (`--global` for every project) to list the newest pages.
+- Search Chinese, Japanese and Korean text without spaces: zero-LLM search
+  matches unspaced Han, Kana and Hangul substrings.
 - Run `ai-memory bootstrap` once when adopting an existing project with
   months of history.
 - Start the server with `--enable-web` for a read-only browser view of
-  the wiki and a JSON API under `/api/v1`. On a server with a bearer token
+  the wiki, a link graph at `/web/graph`, a root/operator managed-workstream
+  overview at `/web/workstreams`,
+  and a JSON API under `/api/v1`. On a server with a bearer token
   and no user accounts (every fresh install), the browser asks for a username
   and password: any username, and the contents of
   `<data_dir>/auth-tokens/default` as the password.
+- Investigate Claude Code and Codex response-token usage in the project
+  dashboard, and pick a Light, Dark or System theme. See
+  [Investigate token usage](docs/usage.md#investigate-token-usage-in-the-dashboard)
+  for capture coverage, cache accounting and the investigation flags. You can
+  drill down from a project to an agent, its sessions and individual responses.
+  The web [agent inbox](docs/agent-messaging.md#in-the-web-ui) lets an operator
+  queue requests for registered agents and read the received and sent history.
+  Token filters run on the full authorized ledger, with native turn and tool
+  context when reported. Pages show their sources, declared contradictions and
+  recall explanations, and the [feature guide](docs/features.md) shows the
+  effective installation states in the web UI.
 - Back up host-side harness configuration with
   `ai-memory backup-agents -o agent-assets.tar.gz`; inspect a restore with
   `ai-memory restore-agents -i agent-assets.tar.gz`, then add `--apply` only
@@ -597,6 +662,13 @@ readable wiki pages; the next session starts with a handoff.
 
 Search modes, entities, feedback, briefings, and the web API are covered in [`docs/usage.md`](docs/usage.md) and
 [`docs/use-cases.md`](docs/use-cases.md).
+
+### Interface language
+
+Use `ai-memory --language pt-BR status` or set `AI_MEMORY_LANGUAGE=pt-BR`
+for Brazilian Portuguese. The web interface follows the browser's language
+and offers an independent language selector. See [interface languages](docs/localization.md)
+for configuration, translation boundaries and contributor instructions.
 
 ## Teams and multiple machines
 
@@ -630,6 +702,10 @@ a reverse proxy. Capture is sanitized at a typed privacy boundary before
 anything is stored, and per-repository `[capture]` rules can exclude
 paths or invert to allowlist mode. A repository can also route its capture
 to a different server than the one the hooks were installed against.
+Human login beyond loopback requires an HTTPS posture by default. Operators
+who explicitly accept plaintext passwords, cookies, credentials, and memory
+traffic on a private LAN can opt in with `serve --allow-insecure-human-auth`;
+the server never enables that exception implicitly.
 
 The full model is in [`docs/security.md`](docs/security.md),
 [`docs/users.md`](docs/users.md), and
@@ -648,6 +724,13 @@ any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM) are supported
 for consolidation; OpenAI, Voyage, Gemini, and keyless OpenAI-compatible
 endpoints for embeddings. Configuration lives in
 [`docs/llm-providers.md`](docs/llm-providers.md).
+
+For optional synthesized query answers, operators can set
+`[query_answer] max_context_tokens` to limit admitted evidence while retaining
+all retrieval hits. Known newer corrections take priority, and whole snippets
+are preferred over sentence-bounded fragments. It is disabled by default. See the
+[configuration reference](docs/ARCHITECTURE.md#configuration-configtoml) for the
+conservative counting rule and omission receipt.
 
 ## Architecture
 
@@ -678,6 +761,7 @@ diagram, crate breakdown, schema notes, and invariants.
 
 | File | What it is |
 |---|---|
+| [`docs/testing-dashboard.md`](docs/testing-dashboard.md) | Dashboard behavior tests, real-browser CI and mutation probes that prove regression guards fail. |
 | [`docs/cookbook.md`](docs/cookbook.md) | **Task-oriented cheat sheet.** "I want to do X" → how: recall prior work, keep a project rule, import an existing knowledge base, get two agents/repos working together. Start here. |
 | [`docs/install.md`](docs/install.md) | **Installation cookbook.** Every agent CLI, every alternative (curl, source build, no-docker, no-auth), and the server-on-a-different-machine walkthrough. |
 | [`docs/usage.md`](docs/usage.md) | Handoffs, proactive memory queries, slim routing snippet + managed Agent Skills, web UI, raw-wiki inspection, and the rules, memory and profile precedence. |
@@ -694,7 +778,7 @@ diagram, crate breakdown, schema notes, and invariants.
 | [`docs/users.md`](docs/users.md) | **Multi-user attribution and human login.** Four-rung bearer ladder, password sessions, `ai-memory user` / `api-key` walkthrough, brownfield migration. |
 | [`docs/management-ui.md`](docs/management-ui.md) | Optional server-rendered console: feature gates, user and session management, MCP keys, public deployment, and frontend checks. |
 | [`docs/https-via-proxy.md`](docs/https-via-proxy.md) | **HTTPS via a reverse proxy.** When you need TLS and when you don't, with copy-paste Caddy / nginx / Cloudflare Tunnel templates and the "secure when you're not" failure modes. |
-| [`docs/lifecycle-ops.md`](docs/lifecycle-ops.md) | **Read before purge / rename / backup / restore / reset / reindex / restore-page.** Safety matrix, per-project disk layout, checkpoint page recovery, and operator workflows. |
+| [`docs/lifecycle-ops.md`](docs/lifecycle-ops.md) | **Read before purge / rename / merge / backup / restore / reset / reindex / restore-page.** Safety matrix, lossless project-identity merge, per-project disk layout, retained-version recovery, and operator workflows. |
 | [`docs/backup.md`](docs/backup.md) | Backing up the wiki + data dir to a remote git repository: what to include, what to exclude, scheduled push pattern, restore, and security posture. Companion to `docs/lifecycle-ops.md` (which covers the on-box `ai-memory backup` snapshot). |
 | [`docs/design-backup-agent-assets.md`](docs/design-backup-agent-assets.md) | Host agent-asset backup/restore: supported paths, filtering, redaction limits, archive bounds, active-content warning, and rollback behavior. |
 | [`docs/llm-providers.md`](docs/llm-providers.md) | Provider configuration for consolidation and embeddings. |
@@ -720,12 +804,24 @@ diagram, crate breakdown, schema notes, and invariants.
 | [`docs/external-lifecycle.md`](docs/external-lifecycle.md) | External lifecycle producers: per-execution native capture suppression, preserved handoffs, batch ingestion and stable retry identity. |
 | [`docs/auto-improvement-loop.md`](docs/auto-improvement-loop.md) | Auto-improvement design notes: scheduled review, auto-approval default, manual review opt-in, pending proposal storage, and curator work. |
 
+Dated `design-*`, `research-*`, `issues-*`, `desktop/`, and `benchmarks/`
+files are evidence and design records, not current operating instructions.
+Their status or snapshot banner says whether work shipped, remains proposed,
+or has been superseded. Use the user guides and `ARCHITECTURE.md` for current
+behavior; the older records remain only when current design rationale links to
+them.
+
 ### Community articles
 
 Written by users; not maintained here, so check them against the version you run.
 
 - [Installing and configuring ai-memory on Linux](https://www.linuxpro.com.br/2026/09/ai-memory-instalar-configurar-agentes-linux/) (pt-BR, LinuxPro, covers v2.6.3)
 - [ai-memory from v2.4 to v2.6.3](https://www.linuxpro.com.br/2026/10/ai-memory-a-evolucao-da-2-4-a-2-6-3/) (pt-BR, LinuxPro)
+
+The built-in web UI also has Documentation at `/web/docs` and a Changelog at
+`/web/docs/changelog`. The [feature activation guide](docs/features.md) covers
+prerequisites and verification. Agents can read the same bundled guides through
+authenticated `/api/v1/docs` JSON or each guide's Markdown link.
 
 ## License
 

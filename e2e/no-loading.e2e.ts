@@ -233,15 +233,18 @@ async function newSession(page: Page): Promise<{ composerMs: number; sentMs: num
 	const started = Date.now();
 	await page.keyboard.press("ControlOrMeta+t");
 	const input = page.locator('section[data-active="true"][data-tab-id] [data-composer-input]').first();
+	// ⌘T switches once main answered the spawn: until then the old tab's section is still the active one.
 	await expect
 		.poll(
-			async () =>
-				page.evaluate(() => document.querySelector('section[data-active="true"]')?.getAttribute("data-tab-id")),
-			{
-				timeout: 15_000,
+			async () => {
+				const id = await page.evaluate(() =>
+					document.querySelector('section[data-active="true"]')?.getAttribute("data-tab-id"),
+				);
+				return id != null && !before.includes(id);
 			},
+			{ timeout: 15_000 },
 		)
-		.not.toBeNull();
+		.toBe(true);
 	await expect(input).toBeVisible({ timeout: 15_000 });
 	const tabId = await page.evaluate(() =>
 		document.querySelector('section[data-active="true"]')?.getAttribute("data-tab-id"),

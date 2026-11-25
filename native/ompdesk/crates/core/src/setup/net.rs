@@ -42,6 +42,8 @@ pub fn describe(failure: &Failure) -> String {
         Failure::TooLarge => "the answer is too large".to_owned(),
         Failure::Tls(reason) => reason.clone(),
         Failure::Redirect => "too many redirects".to_owned(),
+        Failure::Proxy => "the proxy refused or ended the connection".to_owned(),
+        Failure::ProxyUnsupported => "the proxy's scheme is not supported".to_owned(),
     }
 }
 
@@ -51,10 +53,12 @@ fn text_of(body: &[u8]) -> String {
 }
 
 /// Pages read over HTTP(S). `token` goes as `authorization: Bearer` to `https://api.github.com/` only (60 requests an
-/// hour without one), and is dropped by `http` at the first redirect to another origin.
+/// hour without one), and is dropped by `http` at the first redirect to another origin. `proxy` is the one
+/// `proxy.resolve` picked.
 pub struct Http<'a> {
     pub mirror: Option<&'a str>,
     pub token: Option<&'a str>,
+    pub proxy: Option<&'a str>,
 }
 
 impl Pages for Http<'_> {
@@ -74,6 +78,7 @@ impl Pages for Http<'_> {
                 url: &target,
                 headers: &headers,
                 body: None,
+                proxy: self.proxy,
             }),
         )
         .await

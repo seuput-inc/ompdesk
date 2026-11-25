@@ -5,18 +5,19 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use serde_json::Value;
 use serde_json::value::RawValue;
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::folder::folder;
-use super::{blobs, signin, transcripts};
-use crate::server::Fault;
+use super::{answer, blobs, signin, transcripts};
+use crate::server::{Call, Events, Fault, PushCall, Scope};
 
 fn captured() -> Value {
     serde_json::from_str(include_str!("captured.json")).unwrap()
 }
 
-fn temp_dir(name: &str) -> std::path::PathBuf {
+pub(super) fn temp_dir(name: &str) -> std::path::PathBuf {
     let mut salt = [0u8; 8];
     crate::sys::random(&mut salt).unwrap();
     let dir = std::env::temp_dir().join(format!(
@@ -235,4 +236,62 @@ fn writes_the_failure_page_as_the_typescript_did() {
             row["html"].as_str().unwrap()
         );
     }
+}
+
+/// The relay ends (main's close, or the timeout) between the listener's check and its ask: main released its asker
+/// with the end, so it answers the ask `failed`. Nothing was forwarded, so the browser hears the 409 of a relay that
+/// was closed already, never the 502 of a host that could not take the callback.
+#[tokio::test]
+async fn a_callback_asked_after_the_relay_ended_is_answered_409() {
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let (events, _keep, mut frames) = Events::capture();
+    let start = json!({
+        "relay": 7, "port": port, "path": "/callback", "state": "xyz", "hosts": ["127.0.0.1"],
+        "loopbackHosts": ["127.0.0.1", "localhost"], "timeoutMs": 60_000,
+    });
+    let started = signin::start(Call {
+        params: raw(&start.to_string()),
+        bin: None,
+        scope: Scope::detached(),
+        events: events.clone(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(started.result.get(), r#"{"listening":true}"#);
+
+    let mut browser = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let request =
+        format!("GET /callback?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    browser.write_all(request.as_bytes()).await.unwrap();
+    let asked: Value = {
+        let frame = frames.recv().await.unwrap();
+        serde_json::from_slice(frame.parts().0).unwrap()
+    };
+    assert_eq!(asked["event"], "remotebytes.ask");
+
+    signin::close(PushCall {
+        params: raw(r#"{"relay":7}"#),
+        bin: None,
+        events: events.clone(),
+    });
+    let failed = json!({"call": asked["data"]["call"], "failed": true});
+    answer(Call {
+        params: raw(&failed.to_string()),
+        bin: None,
+        scope: Scope::detached(),
+        events,
+    })
+    .await
+    .unwrap();
+
+    let mut page = Vec::new();
+    browser.read_to_end(&mut page).await.unwrap();
+    let page = String::from_utf8_lossy(&page);
+    assert!(page.starts_with("HTTP/1.1 409"), "{page}");
 }

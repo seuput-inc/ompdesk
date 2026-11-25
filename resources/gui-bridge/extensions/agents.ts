@@ -4,19 +4,8 @@
  * rpc-mode theme cases onto stock omp internals.
  */
 import path from "node:path";
-import { formatModelString } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { type ParsedAgentFields, parseAgentFields } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { createAgentsHubDeps } from "@oh-my-pi/pi-coding-agent/modes/agents-hub-deps";
-import { readRpcSubagentTranscript } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import type { ParsedAgentFields } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { BlobStore, parseBlobRef } from "@oh-my-pi/pi-coding-agent/session/blob-store";
-import { AgentParsingError } from "@oh-my-pi/pi-coding-agent/task/agents";
-import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
-import { getResolvedThemeColors } from "@oh-my-pi/pi-tui/theme";
-import { getBlobsDir, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { guard } from "../health";
 import type { BridgeMethods } from "../types";
 import { paramsOf, requireString } from "./shared";
@@ -24,7 +13,7 @@ import { paramsOf, requireString } from "./shared";
 /** Where omp's discovery reads `.omp` task agents for this session: the user dir and the nearest project dir (or where it would be). */
 async function agentDirs(session: AgentSession): Promise<{ user: string; project: string }> {
 	// Dynamic: `config` is a source copy whose first import transpiles omp's source tree (~540 ms of omp's only thread), so it loads on use, not at startup.
-	const { findAllNearestProjectConfigDirs, getConfigDirs } = await import("@oh-my-pi/pi-coding-agent/config");
+	const { findAllNearestProjectConfigDirs, getConfigDirs } = await import("../omp/pi-coding-agent/config");
 	const cwd = path.resolve(session.sessionManager.getCwd());
 	const user = getConfigDirs("agents", { project: false }).find(entry => entry.source === ".omp")?.path;
 	if (!user) throw new Error("omp reports no user agents directory");
@@ -33,27 +22,40 @@ async function agentDirs(session: AgentSession): Promise<{ user: string; project
 }
 
 async function discover(session: AgentSession) {
+	const { discoverAgents } = await import("../omp/pi-coding-agent/task/discovery");
 	const { agents } = await discoverAgents(session.sessionManager.getCwd(), undefined, session.effectiveExtensionRoots);
 	return agents;
 }
 
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
 export const methods: BridgeMethods = {
-	...guard("agents", {
+	...guard("agentValidate", {
 		/** Same field/YAML parser as stock task agents; never writes a file. */
 		validate_agent_definition: async params => {
 			const p = paramsOf(params);
 			const content = requireString(p, "content");
 			const source = typeof p.source === "string" ? p.source : "agent-definition.md";
+			const [{ parseFrontmatter }, { parseAgentFields }] = await Promise.all([
+				import("../omp/pi-utils"),
+				import("../omp/pi-coding-agent/discovery/helpers"),
+			]);
 			const { frontmatter, body } = parseFrontmatter(content, { location: source, level: "fatal" });
 			const fields = parseAgentFields(frontmatter);
 			if (!fields) {
+				const { AgentParsingError } = await import("../omp/pi-coding-agent/task/agents");
 				throw new AgentParsingError(new Error(`Invalid agent field: ${source}\n${content}`), source);
 			}
 			return { fields, body };
 		},
+	}),
+	...guard("agents", {
 		/** Workspace-visible definitions plus the TUI control center's model/prewalk projection. */
 		get_agent_definitions: async (_params, env) => {
 			const session = env.session();
+			const [{ createAgentsHubDeps }, { formatModelString }] = await Promise.all([
+				import("../omp/pi-coding-agent/modes/agents-hub-deps"),
+				import("../omp/pi-coding-agent/config/model-resolver"),
+			]);
 			const hub = createAgentsHubDeps(
 				session.sessionManager.getCwd(),
 				session.settings,
@@ -109,7 +111,8 @@ export const methods: BridgeMethods = {
 				}),
 			};
 		},
-
+	}),
+	...guard("agentDefinition", {
 		/** One discovered definition with its system prompt (the editor's Duplicate of bundled/extension agents). */
 		get_agent_definition: async (params, env) => {
 			const name = requireString(paramsOf(params), "name");
@@ -133,10 +136,12 @@ export const methods: BridgeMethods = {
 				advisor: agent.advisor,
 			};
 		},
-
+	}),
+	...guard("agentAuthoring", {
 		/** Agent directories discovery reads, plus omp's tool names for the editor's tool picker. */
 		get_agent_authoring: async (_params, env) => {
 			const session = env.session();
+			const { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } = await import("../omp/pi-coding-agent/tools/builtin-names");
 			const hidden = new Set<string>(HIDDEN_TOOL_NAMES);
 			const registered = typeof session.getAllToolNames === "function" ? session.getAllToolNames() : [];
 			return {
@@ -145,10 +150,15 @@ export const methods: BridgeMethods = {
 				registeredTools: registered.filter(name => !hidden.has(name)),
 			};
 		},
-
+	}),
+	...guard("reviveSubagent", {
 		/** AgentLifecycleManager.ensureLive: idempotent for live agents, revives parked ones (Agent Hub `r`). */
 		revive_subagent: async params => {
 			const agentId = requireString(paramsOf(params), "agentId");
+			const [{ AgentRegistry, MAIN_AGENT_ID }, { AgentLifecycleManager }] = await Promise.all([
+				import("../omp/pi-coding-agent/registry/agent-registry"),
+				import("../omp/pi-coding-agent/registry/agent-lifecycle"),
+			]);
 			if (agentId === MAIN_AGENT_ID) return { ok: false, reason: "main_agent" };
 			const ref = AgentRegistry.global().get(agentId);
 			if (!ref) return { ok: false, reason: "not_found" };
@@ -161,7 +171,8 @@ export const methods: BridgeMethods = {
 				return { ok: false, reason: "not_parked" };
 			}
 		},
-
+	}),
+	...guard("subagentTranscript", {
 		/**
 		 * A settled subagent's transcript after a relaunch. Stock's RPC registry learns
 		 * session files only from live lifecycle frames, while the executor writes every
@@ -177,9 +188,11 @@ export const methods: BridgeMethods = {
 			const sessionFile = path.join(artifactsDir, `${subagentId}.jsonl`);
 			if (!(await Bun.file(sessionFile).exists()))
 				throw new Error(`Unknown subagent or session file unavailable: ${subagentId}`);
+			const { readRpcSubagentTranscript } = await import("../omp/pi-coding-agent/modes/rpc/rpc-subagents");
 			return readRpcSubagentTranscript(sessionFile, typeof p.fromByte === "number" ? p.fromByte : 0);
 		},
-
+	}),
+	...guard("imageBlob", {
 		/**
 		 * The bytes behind one persisted image reference (`blob:sha256:<hex>`), base64, or
 		 * `null` once the blob is gone. Stock externalizes image data to its blob store and
@@ -187,17 +200,21 @@ export const methods: BridgeMethods = {
 		 * JSONL (subagents) keep the reference. The store is the one stock's session manager uses.
 		 */
 		read_image_blob: async params => {
+			const [{ BlobStore, parseBlobRef }, { getBlobsDir }] = await Promise.all([
+				import("../omp/pi-coding-agent/session/blob-store"),
+				import("../omp/pi-utils"),
+			]);
 			const hash = parseBlobRef(requireString(paramsOf(params), "ref"));
 			if (!hash) throw new Error("Invalid image blob reference");
 			const bytes = await new BlobStore(getBlobsDir()).get(hash);
 			return { data: bytes ? bytes.toString("base64") : null };
 		},
 	}),
-
 	...guard("themes", {
 		/** Resolved CSS colors (variable refs and ANSI-256 indices resolved) keyed by theme token. */
 		get_theme_colors: async params => {
 			const name = requireString(paramsOf(params), "name");
+			const { getResolvedThemeColors } = await import("../omp/pi-tui/theme");
 			return { name, colors: await getResolvedThemeColors(name) };
 		},
 	}),

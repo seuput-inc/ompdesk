@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::parse;
 use super::read::{self, blocking};
-use super::run::Git;
+use super::run::{Git, failure};
 use crate::fs::disk;
 use crate::fs::error::{Codes, NodeError};
 use crate::fs::order::js_trim;
@@ -28,9 +28,14 @@ const MAX_FILES: usize = 200;
 const PATCH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DIFF_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CONTENT_VERDICTS: usize = 256;
+/// Each network git of the remote copy's cleanup (`ls-remote`, `fetch`, `push`) may take this long, as main's own push
+/// and fetch (`REMOTE_TIMEOUT_MS` in `scm.ts`).
+const NETWORK_MS: u64 = 300_000;
+/// The one remote whose copy of a session branch is cleaned up.
+const ORIGIN: &str = "origin";
 
 /// The worktree binding of a tab (`IpcTabWorktree`): the checkout, its branch and the repo it forked from.
-#[derive(Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeRef {
     pub path: String,
@@ -447,6 +452,8 @@ struct Measure {
     base: Base,
     tip: String,
     landed: bool,
+    /// The ref the branch lands in (or landed in), as `landing` chose it.
+    target: String,
     merge_base: String,
 }
 
@@ -463,6 +470,7 @@ async fn measure(git: &Git, worktree: &WorktreeRef) -> Result<Measure, Fault> {
         base,
         tip,
         landed,
+        target: diff_base,
         merge_base,
     })
 }
@@ -477,6 +485,10 @@ pub struct BranchFacts {
     pub base_branch: Option<String>,
     #[serde(default)]
     pub commits_ahead: u64,
+    /// Commits in the landing target that the tip lacks; 0 once the branch's own work landed. An older paired host
+    /// leaves it out.
+    #[serde(default)]
+    pub commits_behind: u64,
     #[serde(default)]
     pub files: Vec<FileChange>,
     #[serde(default)]
@@ -496,13 +508,18 @@ pub async fn facts(git: &Git, worktree: &WorktreeRef) -> Result<BranchFacts, Fau
         base,
         tip,
         landed,
+        target,
         merge_base,
     } = measure(git, worktree).await?;
     let range = format!("{merge_base}..{tip}");
     let ahead_args = ["rev-list", "--count", &range];
+    let behind_range = format!("{tip}..{target}");
+    let behind_args = ["rev-list", "--count", &behind_range];
     let numstat_args = ["diff", "--numstat", "--no-renames", &merge_base];
-    let (ahead, numstat_text, own, parent) = tokio::try_join!(
+    let (ahead, behind, created, numstat_text, own, parent) = tokio::try_join!(
         text(git, &worktree.path, &ahead_args),
+        text(git, &worktree.path, &behind_args),
+        created_at(git, &worktree.base_cwd, &worktree.branch),
         text(git, &worktree.path, &numstat_args),
         dirtiness(git, &worktree.path),
         dirtiness(git, &worktree.base_cwd),
@@ -510,10 +527,17 @@ pub async fn facts(git: &Git, worktree: &WorktreeRef) -> Result<BranchFacts, Fau
     let mut files = numstat(&numstat_text);
     let files_truncated = files.len() > MAX_FILES;
     files.truncate(MAX_FILES);
+    // An untouched branch "landed" only by sitting in its base's history: how far behind it starts still counts.
+    let has_work = created.is_some_and(|created| created != tip);
     Ok(BranchFacts {
         branch: worktree.branch.clone(),
         base_branch: base.branch,
         commits_ahead: count(&ahead),
+        commits_behind: if landed && has_work {
+            0
+        } else {
+            count(&behind)
+        },
         files,
         files_truncated,
         uncommitted: own.tracked,
@@ -606,19 +630,46 @@ pub async fn predict(git: &Git, worktree: &WorktreeRef) -> Result<Prediction, Fa
     }
 }
 
+/// What a merge needs before its hooks run: the parent's branch, or the refusal `merge_problem` gives (a
+/// `branch_error`), and `git merge-tree`'s prediction.
 #[derive(Serialize)]
-pub struct Evidence {
-    raw: String,
-    truncated: bool,
+#[serde(rename_all = "camelCase")]
+pub struct MergeCheck {
+    base_branch: Option<String>,
     merge: Prediction,
 }
 
-/// The child's diff when `diff` asks for it (`git diff <mergeBase>` in its worktree, the committed and uncommitted
-/// tracked work `facts` counts, git's output capped: `truncated`), and what merging it would do. Main cuts the diff
-/// to its budget (`boundDiff`, which the compare's judge shares).
-pub async fn evidence(git: &Git, worktree: &WorktreeRef, diff: bool) -> Result<Evidence, Fault> {
+/// A merge's checks before anything is touched (`mergeBranch`'s first steps): the branch's facts, what a merge
+/// would lose or tangle (refused), then the prediction.
+pub async fn merge_check(git: &Git, worktree: &WorktreeRef) -> Result<MergeCheck, Fault> {
+    let facts = facts(git, worktree).await?;
+    if let Some(problem) = merge_problem(worktree, &facts) {
+        return Err(branch_error(problem));
+    }
+    Ok(MergeCheck {
+        base_branch: facts.base_branch,
+        merge: predict(git, worktree).await?,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Evidence {
+    diff: String,
+    diff_omitted: usize,
+    merge: Prediction,
+}
+
+/// The child's diff cut to `diff_chars` (`git diff <mergeBase>` in its worktree, the committed and uncommitted
+/// tracked work `facts` counts, cut fairly across files by `bound_diff`; git's own output is capped, and a capped one
+/// still counts as cut), and what merging it would do. `diff_chars` 0 reads no diff.
+pub async fn evidence(
+    git: &Git,
+    worktree: &WorktreeRef,
+    diff_chars: usize,
+) -> Result<Evidence, Fault> {
     let shown = async {
-        if !diff {
+        if diff_chars == 0 {
             return Ok((String::new(), false));
         }
         let Measure { merge_base, .. } = measure(git, worktree).await?;
@@ -649,9 +700,10 @@ pub async fn evidence(git: &Git, worktree: &WorktreeRef, diff: bool) -> Result<E
     // Both run to their end, so the prediction's scratch store goes before the request answers either way.
     let (shown, merge) = tokio::join!(shown, predict(git, worktree));
     let (raw, truncated) = shown?;
+    let (diff, omitted) = bound_diff(&raw, diff_chars);
     Ok(Evidence {
-        raw,
-        truncated,
+        diff,
+        diff_omitted: if truncated { omitted.max(1) } else { omitted },
         merge: merge?,
     })
 }
@@ -775,11 +827,49 @@ pub async fn standing(
 
 /// What a safe removal did: worktree and branch gone, or the worktree gone but the branch kept (asked to, or it moved
 /// after its landing was judged). None: nothing went.
-#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum Removal {
     Removed,
     BranchKept,
+}
+
+/// What became of a session branch's copy on `origin`: deleted because its tip is in `origin/<base>`, or kept and why.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteOutcome {
+    Deleted,
+    /// Its tip is not in `origin/<base>`, by ancestry or by content.
+    NotLanded,
+    /// It moved on `origin` after it was judged: something new may be there.
+    Moved,
+    /// It is the branch work lands in (the base, `origin`'s default or the parent's own).
+    Base,
+    /// No branch on `origin` to judge it against.
+    NoBase,
+    /// `origin` refused the deletion (a protected branch, a hook).
+    Refused,
+    /// `origin` could not be reached, or git failed.
+    Failed,
+    /// `origin` pushes somewhere other than where it is read (`pushurl`, several push URLs): the copy that would be
+    /// deleted is not the one judged.
+    PushElsewhere,
+}
+
+/// `outcome` with one sentence for the agent that names the branch and says why.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct RemoteCopy {
+    pub outcome: RemoteOutcome,
+    pub message: String,
+}
+
+/// A safe removal's answer: what went here, and what became of the branch's copy on `origin` (none when `origin` holds
+/// none).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct SafeRemoval {
+    pub removal: Removal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteCopy>,
 }
 
 /// `git worktree remove` without `--force` of `path`, only when git lists it as a linked worktree of the repository at
@@ -808,9 +898,7 @@ pub async fn remove_linked(git: &Git, base_cwd: &str, path: &str) -> Result<Opti
     if !linked.contains(&wanted) {
         return Ok(None);
     }
-    let removed = git
-        .run(primary, &["worktree", "remove", &wanted], slow())
-        .await?;
+    let removed = super::worktree::git_remove(git, primary, &[], &wanted, slow()).await?;
     Ok((removed.code == 0).then(|| primary.clone()))
 }
 
@@ -826,14 +914,275 @@ async fn delete_at(git: &Git, primary: &str, reference: &str, tip: &str) -> Resu
     })
 }
 
+fn network() -> Opts<'static> {
+    Opts {
+        timeout_ms: Some(NETWORK_MS),
+        ..Opts::default()
+    }
+}
+
+/// One network git: its output when it exited 0, else git's words (a failed run, a timeout, a nonzero exit). A cancel
+/// still fails.
+async fn over_network(
+    git: &Git,
+    cwd: &str,
+    args: &[&str],
+) -> Result<Result<Output, String>, Fault> {
+    match git.run(cwd, args, network()).await {
+        Err(fault) if is_cancel(&fault) => Err(fault),
+        Err(fault) => Ok(Err(fault.message)),
+        Ok(output) if output.code != 0 => Ok(Err(failure(args, &output).message)),
+        Ok(output) => Ok(Ok(output)),
+    }
+}
+
+/// The tips `origin` holds now for `refs` (full names), by `git ls-remote`; git's words when it could not be read.
+async fn remote_tips(
+    git: &Git,
+    cwd: &str,
+    refs: &[&str],
+) -> Result<Result<HashMap<String, String>, String>, Fault> {
+    let mut args = vec!["ls-remote", ORIGIN];
+    args.extend_from_slice(refs);
+    Ok(over_network(git, cwd, &args).await?.map(|output| {
+        output
+            .text()
+            .split('\n')
+            .filter_map(|line| line.split_once('\t'))
+            .filter(|(_, name)| refs.contains(name))
+            .map(|(sha, name)| (name.to_owned(), sha.to_owned()))
+            .collect()
+    }))
+}
+
+/// Whether this repository holds both commits (a tip `ls-remote` named may not be fetched yet).
+async fn both_present(git: &Git, cwd: &str, one: &str, other: &str) -> Result<bool, Fault> {
+    for sha in [one, other] {
+        let wanted = format!("{sha}^{{commit}}");
+        if git.raw(cwd, &["cat-file", "-e", &wanted]).await?.code != 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The branch name `origin/<name>` names, from a full `refs/remotes/origin/<name>`.
+fn on_origin(output: &Output) -> Option<String> {
+    (output.code == 0)
+        .then(|| trimmed(output))
+        .and_then(|full| full.strip_prefix("refs/remotes/origin/").map(str::to_owned))
+        .filter(|name| !name.is_empty() && name != "HEAD")
+}
+
+/// Where a child's work lands on `origin`: the branch the parent's branch tracks there, else `origin`'s default branch
+/// as last fetched, else the parent's own branch. Every one of them is protected: none is ever deleted.
+struct RemoteBase {
+    base: Option<String>,
+    protected: Vec<String>,
+}
+
+async fn remote_base(git: &Git, cwd: &str) -> Result<RemoteBase, Fault> {
+    let symbolic = git
+        .raw(cwd, &["symbolic-ref", "--short", "-q", "HEAD"])
+        .await?;
+    let own = Some(trimmed(&symbolic)).filter(|name| symbolic.code == 0 && !name.is_empty());
+    let tracked = match &own {
+        Some(own) => {
+            let upstream = format!("{own}@{{upstream}}");
+            let args = ["rev-parse", "--symbolic-full-name", &upstream];
+            on_origin(&git.raw(cwd, &args).await?)
+        }
+        None => None,
+    };
+    let default = on_origin(
+        &git.raw(cwd, &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
+            .await?,
+    );
+    let base = tracked
+        .clone()
+        .or_else(|| default.clone())
+        .or_else(|| own.clone());
+    Ok(RemoteBase {
+        base,
+        protected: [tracked, default, own].into_iter().flatten().collect(),
+    })
+}
+
+/// Delete `branch`'s copy on `origin` once its work landed there: only when the tip `origin` holds is in the tip of
+/// `origin/<base>` it holds now, by ancestry or by content (`landed_by_content`), never judged against a local branch,
+/// so a merge here that was never pushed keeps it. The push deletes with a lease on the very tip judged, so a copy that
+/// moved since stays. None when there is no `origin` or it holds no such branch; else what happened and why. Never
+/// deletes any other branch, nor the base.
+async fn drop_landed_remote(
+    git: &Git,
+    cwd: &str,
+    branch: &str,
+) -> Result<Option<RemoteCopy>, Fault> {
+    let remotes = git.raw(cwd, &["remote"]).await?;
+    if !remotes
+        .text()
+        .split('\n')
+        .any(|name| js_trim(name) == ORIGIN)
+    {
+        return Ok(None);
+    }
+    let kept = |outcome: RemoteOutcome, why: String| -> Result<Option<RemoteCopy>, Fault> {
+        Ok(Some(RemoteCopy {
+            outcome,
+            message: format!("Its copy on origin ({branch}) stays: {why}."),
+        }))
+    };
+    // Judged by what `ls-remote`/`fetch` read, deleted by what `push` reaches: when those differ, an identical tip at
+    // the push destination says nothing of its base there.
+    let urls = |push: bool| async move {
+        let mut args = vec!["remote", "get-url", "--all"];
+        if push {
+            args.push("--push");
+        }
+        args.push(ORIGIN);
+        git.raw(cwd, &args).await.map(|out| {
+            let mut list: Vec<String> = out
+                .text()
+                .split('\n')
+                .map(js_trim)
+                .filter(|url| !url.is_empty())
+                .map(str::to_owned)
+                .collect();
+            list.sort();
+            list
+        })
+    };
+    // Several `url`s: git fetches from the first and pushes to every one, so one URL each way, the same, or keep.
+    let (fetch_urls, push_urls) = (urls(false).await?, urls(true).await?);
+    let push_elsewhere = fetch_urls.len() != 1 || fetch_urls != push_urls;
+    let RemoteBase { base, protected } = remote_base(git, cwd).await?;
+    let copy = format!("refs/heads/{branch}");
+    let base_ref = base.as_ref().map(|base| format!("refs/heads/{base}"));
+    let wanted: Vec<&str> = [Some(copy.as_str()), base_ref.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let tips = match remote_tips(git, cwd, &wanted).await? {
+        Ok(tips) => tips,
+        Err(words) => {
+            return kept(
+                RemoteOutcome::Failed,
+                format!("origin could not be read ({words})"),
+            );
+        }
+    };
+    let Some(tip) = tips.get(&copy).cloned() else {
+        return Ok(None);
+    };
+    if push_elsewhere {
+        return kept(
+            RemoteOutcome::PushElsewhere,
+            "origin pushes to another URL than it is read from".to_owned(),
+        );
+    }
+    if protected.iter().any(|name| name == branch) {
+        return kept(
+            RemoteOutcome::Base,
+            "it is the branch work lands in".to_owned(),
+        );
+    }
+    let base_tip = base_ref.and_then(|name| tips.get(&name).cloned());
+    let (Some(base), Some(base_tip)) = (base.as_deref(), base_tip) else {
+        let on = base
+            .as_deref()
+            .map_or_else(|| "no base branch".to_owned(), |base| format!("no {base}"));
+        return kept(
+            RemoteOutcome::NoBase,
+            format!("origin has {on} to judge it against"),
+        );
+    };
+    if !both_present(git, cwd, &tip, &base_tip).await? {
+        let base_ref = format!("refs/heads/{base}");
+        let args = [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            ORIGIN,
+            &base_ref,
+            &copy,
+        ];
+        if let Err(words) = over_network(git, cwd, &args).await? {
+            return kept(
+                RemoteOutcome::Failed,
+                format!("origin could not be fetched ({words})"),
+            );
+        }
+        if !both_present(git, cwd, &tip, &base_tip).await? {
+            return kept(
+                RemoteOutcome::Moved,
+                "it moved on origin while it was judged".to_owned(),
+            );
+        }
+    }
+    let landed = contains(git, cwd, &base_tip, &tip).await?
+        || landed_by_content(git, cwd, &base_tip, &tip).await?;
+    if !landed {
+        let short = tip.get(..9).unwrap_or(&tip);
+        return kept(
+            RemoteOutcome::NotLanded,
+            format!("{short} is not in origin/{base}"),
+        );
+    }
+    let lease = format!("--force-with-lease={copy}:{tip}");
+    let delete = format!(":{copy}");
+    let refused =
+        match over_network(git, cwd, &["push", "--porcelain", &lease, ORIGIN, &delete]).await? {
+            Ok(_) => {
+                return Ok(Some(RemoteCopy {
+                    outcome: RemoteOutcome::Deleted,
+                    message: format!(
+                        "Its copy on origin ({branch}) had landed in origin/{base} and was deleted."
+                    ),
+                }));
+            }
+            Err(words) => words,
+        };
+    match remote_tips(git, cwd, &[copy.as_str()]).await? {
+        Ok(now) if now.get(&copy) != Some(&tip) => kept(
+            RemoteOutcome::Moved,
+            "it moved on origin after it was judged landed".to_owned(),
+        ),
+        Ok(_) => kept(
+            RemoteOutcome::Refused,
+            format!("origin refused to delete it ({refused})"),
+        ),
+        Err(_) => kept(
+            RemoteOutcome::Failed,
+            format!("origin could not be reached ({refused})"),
+        ),
+    }
+}
+
+/// `drop_landed_remote` that never fails what it follows (a merge, a removal): a git that failed reads as kept. A
+/// cancel still fails.
+async fn remote_copy(git: &Git, cwd: &str, branch: &str) -> Result<Option<RemoteCopy>, Fault> {
+    match drop_landed_remote(git, cwd, branch).await {
+        Err(fault) if !is_cancel(&fault) => Ok(Some(RemoteCopy {
+            outcome: RemoteOutcome::Failed,
+            message: format!(
+                "Its copy on origin ({branch}) stays: git failed ({}).",
+                fault.message
+            ),
+        })),
+        outcome => outcome,
+    }
+}
+
 /// Remove an agent session's worktree and its branch, losing nothing: only a registered linked worktree with no
 /// uncommitted or untracked file whose work has landed in the parent's HEAD or upstream goes. `judge_landing` is the
-/// one judge of landed; the branch goes with `update-ref -d` against the tip it judged, never `branch -d`.
+/// one judge of landed; the branch goes with `update-ref -d` against the tip it judged, never `branch -d`. Its copy on
+/// `origin` goes too once it landed in `origin/<base>` (`drop_landed_remote`), also when `keep_branch` keeps the local
+/// one.
 pub async fn remove_safe(
     git: &Git,
     worktree: &WorktreeRef,
     keep_branch: bool,
-) -> Result<Option<Removal>, Fault> {
+) -> Result<Option<SafeRemoval>, Fault> {
     let (facts, tip) = judge_landing(git, worktree).await?;
     let Some(tip) = tip.filter(|_| facts.landed && facts.clean) else {
         return Ok(None);
@@ -841,11 +1190,14 @@ pub async fn remove_safe(
     let Some(primary) = remove_linked(git, &worktree.base_cwd, &worktree.path).await? else {
         return Ok(None);
     };
-    if keep_branch {
-        return Ok(Some(Removal::BranchKept));
-    }
-    let reference = format!("refs/heads/{}", worktree.branch);
-    Ok(Some(delete_at(git, &primary, &reference, &tip).await?))
+    let remote = remote_copy(git, &primary, &worktree.branch).await?;
+    let removal = if keep_branch {
+        Removal::BranchKept
+    } else {
+        let reference = format!("refs/heads/{}", worktree.branch);
+        delete_at(git, &primary, &reference, &tip).await?
+    };
+    Ok(Some(SafeRemoval { removal, remote }))
 }
 
 /// A worktree an open just made and nobody used, as its `prepare` hears of it.
@@ -923,6 +1275,8 @@ pub enum Merged {
         merged: bool,
         sha: String,
         summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        remote: Option<RemoteCopy>,
     },
     Conflict {
         merged: bool,
@@ -934,7 +1288,8 @@ pub enum Merged {
 
 /// `git merge --no-ff` of the branch into the parent checkout's current branch `base_branch`, with a merge commit
 /// that names `label`. One that fails is aborted, so the parent's checkout is never left half merged: with conflicted
-/// files it is a conflict, else a `branch_error` with git's words.
+/// files it is a conflict, else a `branch_error` with git's words. After a merge the branch's copy on `origin` goes
+/// when it already landed in `origin/<base>` (`drop_landed_remote`; the merge itself pushes nothing).
 pub async fn merge(
     git: &Git,
     worktree: &WorktreeRef,
@@ -986,11 +1341,163 @@ pub async fn merge(
     }
     let sha = text(git, cwd, &["rev-parse", "--short", "HEAD"]).await?;
     let summary = text(git, cwd, &["diff", "--shortstat", "HEAD~1", "HEAD"]).await?;
+    let remote = remote_copy(git, cwd, &worktree.branch).await?;
     Ok(Merged::Done {
         merged: true,
         sha,
         summary,
+        remote,
     })
+}
+
+// ---- the rules over facts and diffs a merge and the compare's judge read (were `branches.ts`'s) ---------------------
+
+/// `text.length`: UTF-16 units.
+fn utf16_len(text: &str) -> usize {
+    text.chars().map(char::len_utf16).sum()
+}
+
+/// Why a merge of this branch cannot go ahead (what it would lose or tangle), or None.
+pub fn merge_problem(worktree: &WorktreeRef, facts: &BranchFacts) -> Option<String> {
+    let Some(base) = facts.base_branch.as_deref().filter(|base| !base.is_empty()) else {
+        return Some(format!(
+            "The parent checkout ({}) is on a detached HEAD; check out a branch there first.",
+            worktree.base_cwd
+        ));
+    };
+    if facts.uncommitted > 0 {
+        return Some(format!(
+            "{} has {} uncommitted file(s) in {}; ask that session to commit them first (ompdesk_session_send).",
+            worktree.branch, facts.uncommitted, worktree.path
+        ));
+    }
+    if facts.base_uncommitted > 0 {
+        return Some(format!(
+            "{} has {} uncommitted file(s); commit or stash them first so the merge cannot mix with them.",
+            worktree.base_cwd, facts.base_uncommitted
+        ));
+    }
+    if facts.merged || facts.commits_ahead == 0 {
+        return Some(format!(
+            "{} has nothing to merge into {base}.",
+            worktree.branch
+        ));
+    }
+    None
+}
+
+/// The `diff --git` header's path; the header itself when it is quoted or odd.
+fn section_path(section: &str) -> String {
+    let header = match section.find('\n') {
+        Some(at) if at > 0 => &section[..at],
+        _ => section,
+    };
+    if let Some(both) = header.strip_prefix("diff --git a/") {
+        let count = both.chars().count();
+        if count >= 5 && (count - 3) % 2 == 0 {
+            let half = (count - 3) / 2;
+            let middle = both
+                .char_indices()
+                .nth(half)
+                .map_or(both.len(), |(at, _)| at);
+            let (first, rest) = both.split_at(middle);
+            if let Some(second) = rest.strip_prefix(" b/")
+                && first == second
+                && !first.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+            {
+                return first.to_owned();
+            }
+        }
+    }
+    header
+        .strip_prefix("diff --git ")
+        .unwrap_or(header)
+        .to_owned()
+}
+
+/// Where JavaScript's multiline `^` matches: the start, and after a line terminator.
+fn line_starts(text: &str) -> impl Iterator<Item = usize> + '_ {
+    std::iter::once(0).chain(text.char_indices().filter_map(|(at, c)| {
+        matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}').then_some(at + c.len_utf8())
+    }))
+}
+
+/// `diff.split(/^(?=diff --git )/m)`.
+fn diff_sections(diff: &str) -> Vec<&str> {
+    let mut cuts: Vec<usize> = line_starts(diff)
+        .filter(|at| *at > 0 && diff[*at..].starts_with("diff --git "))
+        .collect();
+    cuts.dedup();
+    let mut sections = Vec::new();
+    let mut from = 0;
+    for at in cuts {
+        sections.push(&diff[from..at]);
+        from = at;
+    }
+    sections.push(&diff[from..]);
+    sections
+}
+
+/// `section.match(/[^\n]*\n|[^\n]+$/g)`: its lines, each with its newline.
+fn section_lines(section: &str) -> Vec<&str> {
+    section.split_inclusive('\n').collect()
+}
+
+/// Cut a unified diff to about `chars` characters, fairly across files: each file gets an equal share, and what a
+/// small file does not use goes to the larger ones. A cut file ends at a line boundary with one line saying how many
+/// lines went. `omitted` counts the characters of the diff left out.
+pub fn bound_diff(diff: &str, chars: usize) -> (String, usize) {
+    if chars == 0 {
+        return (String::new(), utf16_len(diff));
+    }
+    if utf16_len(diff) <= chars {
+        return (diff.to_owned(), 0);
+    }
+    let sections = diff_sections(diff);
+    let mut order: Vec<(usize, usize)> = sections
+        .iter()
+        .enumerate()
+        .map(|(index, section)| (index, utf16_len(section)))
+        .collect();
+    order.sort_by_key(|(_, size)| *size);
+    let mut shares = vec![0usize; sections.len()];
+    let mut remaining = chars;
+    for (rank, (index, size)) in order.iter().enumerate() {
+        let share = remaining / (order.len() - rank);
+        shares[*index] = (*size).min(share);
+        remaining -= shares[*index];
+    }
+    let mut out = String::new();
+    let mut omitted = 0;
+    for (index, section) in sections.iter().enumerate() {
+        let share = shares[index];
+        if utf16_len(section) <= share {
+            out.push_str(section);
+            continue;
+        }
+        let lines = section_lines(section);
+        let path = section_path(section);
+        let marker = |left: usize| {
+            format!(
+                "… {left} more line{} of {path} left out\n",
+                if left == 1 { "" } else { "s" }
+            )
+        };
+        // Reserve the longest the marker can be (every line left out) so the cut file stays within its share.
+        let mut budget = share as i64 - utf16_len(&marker(lines.len())) as i64;
+        let mut kept = 0;
+        while kept < lines.len() && (utf16_len(lines[kept]) as i64) <= budget {
+            budget -= utf16_len(lines[kept]) as i64;
+            out.push_str(lines[kept]);
+            kept += 1;
+        }
+        omitted += lines[kept..]
+            .iter()
+            .map(|line| utf16_len(line))
+            .sum::<usize>();
+        out.push_str(&marker(lines.len() - kept));
+    }
+    (out, omitted)
 }
 
 #[cfg(test)]
@@ -1036,6 +1543,81 @@ pub(crate) mod tests {
         }
     }
 
+    fn sh(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    fn commit(dir: &std::path::Path, file: &str) {
+        std::fs::write(dir.join(file), file).unwrap();
+        sh(dir, &["add", file]);
+        sh(dir, &["commit", "-qm", file]);
+    }
+
+    #[tokio::test]
+    async fn counts_the_commits_a_branch_is_behind_where_it_lands() {
+        let dir = std::env::temp_dir().join(format!("ompdesk-core-behind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        sh(&main, &["init", "-q", "-b", "main"]);
+        commit(&main, "one");
+        let at = |name: &str, branch: &str| WorktreeRef {
+            path: dir.join(name).to_string_lossy().into_owned(),
+            branch: branch.to_owned(),
+            base_cwd: main.to_string_lossy().into_owned(),
+        };
+        let git = crate::git::run::tests::git();
+        let child = at("a", "omp/agent/a");
+        sh(
+            &main,
+            &["worktree", "add", "-q", &child.path, "-b", &child.branch],
+        );
+        let fresh = facts(&git, &child).await.unwrap();
+        assert_eq!(fresh.commits_behind, 0, "made from HEAD");
+
+        commit(std::path::Path::new(&child.path), "work");
+        for file in ["two", "three", "four"] {
+            commit(&main, file);
+        }
+        let behind = facts(&git, &child).await.unwrap();
+        assert_eq!(
+            (behind.merged, behind.commits_ahead, behind.commits_behind),
+            (false, 1, 3)
+        );
+
+        sh(
+            &main,
+            &["merge", "-q", "--no-ff", "--no-edit", &child.branch],
+        );
+        let merged = facts(&git, &child).await.unwrap();
+        assert_eq!((merged.merged, merged.commits_behind), (true, 0));
+
+        // A worktree made from an older base starts behind, though its untouched tip reads as landed.
+        let late = at("b", "omp/agent/b");
+        sh(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &late.path,
+                "-b",
+                &late.branch,
+                "HEAD~2",
+            ],
+        );
+        let late = facts(&git, &late).await.unwrap();
+        assert_eq!((late.merged, late.commits_behind), (true, 3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_cancelled_merge_tree_has_exited_before_its_scratch_store_goes() {
@@ -1074,5 +1656,55 @@ pub(crate) mod tests {
         assert!(!dir.exists());
         let _ = std::fs::remove_file(&marker);
         let _ = std::fs::remove_file(started);
+    }
+    /// A unified diff's section for `file` with `lines` added lines.
+    fn section(file: &str, lines: usize) -> String {
+        let mut out =
+            format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n");
+        for line in 0..lines {
+            out.push_str(&format!("+line {line}\n"));
+        }
+        out
+    }
+
+    /// Ported from `branches-worktrees.test.ts` (`boundDiff`) when the TypeScript copy went.
+    #[test]
+    fn bound_diff_returns_the_whole_diff_when_it_fits_and_nothing_without_a_budget() {
+        let diff = section("a.ts", 3);
+        assert_eq!(bound_diff(&diff, diff.len()), (diff.clone(), 0));
+        assert_eq!(bound_diff(&diff, 0), (String::new(), diff.len()));
+        assert_eq!(bound_diff("", 100), (String::new(), 0));
+    }
+
+    #[test]
+    fn bound_diff_gives_a_small_source_file_its_whole_hunk_beside_a_huge_lockfile() {
+        let source = section("src/app.ts", 4);
+        let lock = section("package-lock.json", 5000);
+        let (text, omitted) = bound_diff(&format!("{lock}{source}"), 2000);
+        assert!(text.contains(&source));
+        assert!(utf16_len(&text) <= 2000);
+        let marker = text
+            .lines()
+            .find(|line| line.starts_with("… ") && line.ends_with(" of package-lock.json left out"))
+            .expect("the lockfile's marker");
+        let kept = utf16_len(&text) - utf16_len(marker) - 1;
+        assert_eq!(omitted, utf16_len(&lock) + utf16_len(&source) - kept);
+    }
+
+    #[test]
+    fn bound_diff_cuts_at_a_line_boundary_and_says_how_many_lines_it_left_out() {
+        let (text, _) = bound_diff(&section("big.ts", 100), 300);
+        assert!(text.ends_with(" left out\n"));
+        let kept = text
+            .lines()
+            .filter(|line| line.starts_with("+line "))
+            .count();
+        let left: usize = text
+            .rsplit("… ")
+            .next()
+            .and_then(|tail| tail.split(' ').next())
+            .and_then(|count| count.parse().ok())
+            .unwrap();
+        assert_eq!(kept + left, 100);
     }
 }

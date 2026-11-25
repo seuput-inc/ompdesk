@@ -109,7 +109,47 @@ describe("CoreProcess", () => {
 
 	it("answers a request", async () => {
 		const answer = await echo(startCore(), { value: { list: [1, "two", null], text: "é ✓ 😀" } });
-		expect(answer).toEqual({ result: { value: { list: [1, "two", null], text: "é ✓ 😀" } }, bin: null });
+		expect(answer).toEqual({
+			result: { value: { list: [1, "two", null], text: "é ✓ 😀" } },
+			bin: null,
+			generation: expect.any(Number),
+		});
+	});
+
+	it("names the core that answered or sent an event, and fences a call to the core it was meant for", async () => {
+		const core = startCore();
+		const ready = Promise.withResolvers<number>();
+		core.on("ready", (_data, _bin, generation) => ready.resolve(generation));
+		const first = await echo(core, { value: 1 });
+		expect(await ready.promise).toBe(first.generation);
+		expect(core.generation).toBe(first.generation);
+		await core.stop();
+		expect(core.generation).toBe(0);
+		// The numbers a core asks by start over with the next one: an answer to the first must not reach the second.
+		await expect(core.call("core.echo", { value: 2 }, { generation: first.generation })).rejects.toMatchObject({
+			code: "core_exited",
+		});
+		expect(core.pid).toBeNull();
+		const second = await echo(core, { value: 3 });
+		expect(second.generation).not.toBe(first.generation);
+		await expect(core.call("core.echo", { value: 4 }, { generation: first.generation })).rejects.toMatchObject({
+			code: "core_exited",
+		});
+		expect((await core.call("core.echo", { value: 5 }, { generation: second.generation })).result).toEqual({
+			value: 5,
+		});
+	});
+
+	it("drops a push meant for a core that ended, and starts none for it", async () => {
+		const core = startCore();
+		const first = await echo(core, { value: 1 });
+		await core.stop();
+		core.push("core.echo", { value: 2 }, undefined, first.generation);
+		expect(core.pid).toBeNull();
+		const second = await echo(core, { value: 3 });
+		// Written to the core that runs now, because that is the generation it names.
+		core.push("core.echo", { value: 4 }, undefined, second.generation);
+		expect(core.pid).not.toBeNull();
 	});
 
 	it("carries a megabyte of raw bytes each way", async () => {
@@ -241,12 +281,28 @@ describe("CoreProcess", () => {
 			standIn = pid;
 			const group = core.pid as number;
 			const settled = answer.catch((error: unknown) => error);
-			// stdin's end leaves the request running, so this waits for stop()'s kill.
+			// EOF cancels the request; its answer arrives only after the git is gone.
 			await core.stop();
 			expect(alive(standIn)).toBe(false);
 			expect(alive(group)).toBe(false);
 			if (process.platform !== "win32") expect(() => process.kill(-group, 0)).toThrow(/ESRCH/);
-			expect(await settled).toMatchObject({ code: "core_exited" });
+			expect(await settled).toMatchObject({ code: "cancelled" });
+		}, 60_000);
+
+		it("a second stop waits for the first stop's running git to exit", async () => {
+			dir = await mkdtemp(join(tmpdir(), "omp-core-stop-join-"));
+			const core = startCore();
+			const { answer, pid } = await standInRequest(core, dir);
+			standIn = pid;
+			const settled = answer.catch((error: unknown) => error);
+			const first = core.stop();
+			const second = core.stop();
+			await second;
+			const aliveWhenSecondStopped = alive(standIn);
+			if (aliveWhenSecondStopped) process.kill(standIn, "SIGKILL");
+			await first;
+			await settled;
+			expect(aliveWhenSecondStopped).toBe(false);
 		}, 60_000);
 	});
 

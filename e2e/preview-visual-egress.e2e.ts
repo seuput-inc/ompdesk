@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
-import { exitApp, fixtureOmp } from "./harness";
+import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
 
 // Security #3: a visual's page (C135) reads what its folder serves and must not
 // carry it anywhere. A sentinel on 127.0.0.1 (TCP and UDP on one port) records
@@ -18,18 +18,52 @@ import { exitApp, fixtureOmp } from "./harness";
 // hears nothing, while the page still shows its own image and stylesheet. DNS
 // prefetch (static, dynamic, in srcdoc and about:blank frames, with
 // x-dns-prefetch-control on) must not ask the resolver for any of its names: the
-// visual session's net-log shows no host resolution for them. A link the user
+// net-log of the Preview's own Chromium (OMP_GUI_TEST_PREVIEW_NET_LOG, a
+// test-automation host only) holds a resolution for a control name the Preview
+// tab itself opens, and for none of the visual's. A link the user
 // clicks is offered in full and opens only when they choose to.
 
 /** Names the page spells for a DNS prefetch; none may reach a resolver (`.invalid` never leaves the machine). */
 const DNS_SUFFIX = "egress.invalid";
+const NAME = new RegExp(`[a-z0-9-]+\\.${DNS_SUFFIX.replaceAll(".", "\\.")}`, "g");
+const MAPPED_VISUAL_HOST = /^(?:[0-9a-f]{32}\.){4}localhost$/;
+/** The address the visual's link points at; the user opens it in a web tab that must show this page. */
+const APPROVED_LINK_PATH = "/link?d=secret";
+const APPROVED_LINK_TITLE = "Approved link";
+
+function record(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Chromium names event IDs in constants.logEventTypes; only resolver requests count as resolutions. */
+function egressNames(log: string): { all: Set<string>; resolved: Set<string> } {
+	const document: unknown = JSON.parse(log);
+	if (!record(document) || !record(document.constants) || !record(document.constants.logEventTypes)) {
+		throw new Error("Preview net-log has no event type dictionary");
+	}
+	const resolver = document.constants.logEventTypes.HOST_RESOLVER_MANAGER_REQUEST;
+	if (typeof resolver !== "number" || !Array.isArray(document.events)) {
+		throw new Error("Preview net-log has no resolver request contract");
+	}
+	const resolved = new Set<string>();
+	for (const event of document.events) {
+		if (!record(event) || event.type !== resolver || !record(event.params)) continue;
+		if (typeof event.params.host !== "string") continue;
+		for (const name of event.params.host.match(NAME) ?? []) resolved.add(name);
+	}
+	return { all: new Set(log.match(NAME)), resolved };
+}
 
 interface Hit {
 	kind: "tcp" | "udp";
 	head: string;
 }
 
-/** Records every TCP connection (and its first bytes) and UDP packet on one loopback port; answers HTTP with 204. */
+/**
+ * Records every TCP connection (and its first bytes) and UDP packet on one loopback port. It answers the approved
+ * link with a real page, so the web tab the user opens commits a document and holds its address; everything else
+ * gets 204, which Chromium treats as "no navigation" and so would leave such a tab with no URL.
+ */
 async function sentinel() {
 	const hits: Hit[] = [];
 	const tcp = net.createServer(socket => {
@@ -38,7 +72,12 @@ async function sentinel() {
 		hits.push(hit);
 		socket.once("data", data => {
 			hit.head = data.subarray(0, 120).toString("latin1");
-			socket.end("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+			if (hit.head.startsWith(`GET ${APPROVED_LINK_PATH} `)) {
+				const body = `<!doctype html><title>${APPROVED_LINK_TITLE}</title><p>${APPROVED_LINK_TITLE}</p>`;
+				socket.end(
+					`HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+				);
+			} else socket.end("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
 		});
 		socket.on("error", () => {});
 		socket.setTimeout(2000, () => socket.destroy());
@@ -157,6 +196,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 	const project = path.join(profile, "project");
 	const agent = path.join(profile, "agent");
 	const record = path.join(profile, "record.jsonl");
+	const netLog = path.join(profile, "preview-net-log.json");
 	await Promise.all([fs.mkdir(desktop), fs.mkdir(project), fs.mkdir(agent)]);
 	await fs.writeFile(
 		path.join(desktop, "prefs.json"),
@@ -175,6 +215,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		PI_CODING_AGENT_DIR: agent,
 		OMP_GUI_OMP: await fixtureOmp(profile),
 		OMP_GUI_TEST_RECORD: record,
+		OMP_GUI_TEST_PREVIEW_NET_LOG: netLog,
 	};
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	const app = await electron.launch({
@@ -187,31 +228,47 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 	});
 	const shell = await app.firstWindow();
 	/** Run in the visual's page (its main world), found by its omp-visual address. */
-	const inPage = (code: string) =>
-		app.evaluate(async ({ webContents }, source) => {
-			const contents = webContents.getAllWebContents().find(item => item.getURL().startsWith("omp-visual://"));
-			if (!contents) throw new Error("No visual page");
-			return contents.executeJavaScript(source, true);
-		}, code);
+	const inPage = (code: string, address?: string) =>
+		app.evaluate(
+			async ({ webContents }, { source, address }) => {
+				const contents = webContents
+					.getAllWebContents()
+					.find(item => (address ? item.getURL() === address : item.getURL().startsWith("omp-visual://")));
+				if (!contents) throw new Error("No visual page");
+				return contents.executeJavaScript(source, true);
+			},
+			{ source: code, address },
+		);
 	try {
 		await shell.waitForFunction(() => window.omp?.rpc != null);
 		await expect
 			.poll(async () => (await shell.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 			.toBe("ready");
-		// The visual session's network log, from before the page loads: every host name it is asked to resolve.
-		const netLog = path.join(profile, "visual-net-log.json");
-		await app.evaluate(async ({ BrowserWindow, session }, file) => {
-			const [win] = BrowserWindow.getAllWindows();
-			if (!win) throw new Error("No window");
-			await session.fromPartition(`preview-visual-${win.id}`).netLog.startLogging(file);
-		}, netLog);
+		// The control: the Preview tab itself opens a name nothing else asks for, so the net-log of the Preview's
+		// Chromium must hold its resolution, or an empty or unwritten log would pass for "nothing was resolved".
+		const aside = shell.locator("aside[data-docked]");
+		await pressShortcutUntilVisible(shell, "ControlOrMeta+j", aside);
+		await aside.getByRole("button", { name: "Preview", exact: true }).click();
+		const address = shell.getByRole("textbox", { name: "Preview URL" });
+		await address.fill(`http://control.${DNS_SUFFIX}/`);
+		await address.press("Enter");
+		await expect(aside.getByRole("alert")).toContainText("ERR_NAME_NOT_RESOLVED");
 		const composer = shell.locator("textarea").first();
 		await composer.fill(
 			`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "egress.html" })}`,
 		);
 		await composer.press("Enter");
-		const aside = shell.locator("aside[data-docked]");
 		await expect(shell.locator("[data-preview-status]")).toHaveText("Egress");
+		// The page sees its real private HTTP origin; only host metadata is unmapped to omp-visual.
+		// Keep that exact document across denied navigation, rather than accepting any loopback page.
+		const firstHref = await inPage("location.href");
+		if (typeof firstHref !== "string") throw new Error("Visual page reported no document URL");
+		const firstAddress = new URL(firstHref);
+		expect(firstAddress.protocol).toBe("http:");
+		expect(firstAddress.hostname).toMatch(MAPPED_VISUAL_HOST);
+		expect(firstAddress.port).not.toBe("");
+		expect(firstAddress.pathname).toBe("/egress.html");
+		expect(await inPage("location.origin")).toBe(firstAddress.origin);
 		// The page reads what its folder serves; that is what it would try to send.
 		expect(await inPage("fetch('secrets.json').then(response => response.text())")).toBe('{"token":"secret"}');
 
@@ -219,21 +276,14 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		// Long enough for the meta refresh (1 s), ICE gathering and every retry.
 		await sleep(5000);
 		expect(listener.hits).toEqual([]);
-		// No DNS prefetch asked for a name; a resolution main itself asks for is in the log, so the log would show one.
-		await app.evaluate(async ({ BrowserWindow, session }, suffix) => {
-			const [win] = BrowserWindow.getAllWindows();
-			const visual = session.fromPartition(`preview-visual-${win?.id}`);
-			await visual.resolveHost(`control.${suffix}`).catch(() => {});
-			await visual.netLog.stopLogging();
-		}, DNS_SUFFIX);
-		const resolved = new Set((await fs.readFile(netLog, "utf8")).match(/[a-z-]+\.egress\.invalid/g));
-		expect([...resolved]).toEqual([`control.${DNS_SUFFIX}`]);
-
 		// The visual is still there, with its own assets.
 		const urls = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map(item => item.getURL()));
-		expect(urls.filter(url => url.startsWith("omp-visual://"))).toHaveLength(1);
+		expect(
+			urls.filter(url => url.startsWith("omp-visual://")),
+			`actual live URLs after denied navigation: ${JSON.stringify(urls)}`,
+		).toHaveLength(1);
 		expect(urls.some(url => url.startsWith(origin))).toBe(false);
-		expect(await inPage("location.href")).toMatch(/^omp-visual:\/\/v1-[0-9a-f]{16}\/egress\.html$/);
+		expect(await inPage("location.href")).toBe(firstHref);
 		expect(await inPage("document.getElementById('logo').naturalWidth")).toBe(40);
 		expect(await inPage("getComputedStyle(document.getElementById('title')).color")).toBe("rgb(51, 102, 255)");
 
@@ -258,13 +308,154 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		expect(listener.hits).toEqual([]);
 		expect(await inPage("location.href")).toMatch(/egress\.html$/);
 
-		// The user chooses to open it: a new web tab fetches exactly that address.
+		// The user chooses to open it: a new web tab fetches exactly that address and shows its page.
+		const approvedLink = `${origin}${APPROVED_LINK_PATH}`;
 		await aside.getByRole("button", { name: "Open in new tab", exact: true }).click();
 		await expect
 			.poll(() => listener.hits.map(hit => hit.head.split("\r\n")[0]))
-			.toContain("GET /link?d=secret HTTP/1.1");
+			.toContain(`GET ${APPROVED_LINK_PATH} HTTP/1.1`);
 		await expect(offer).toHaveCount(0);
+		// The tab the user just opened is the one on screen: its address, its title, no spinner.
+		await expect(address).toHaveValue(approvedLink);
+		await expect(shell.locator("[data-preview-status]")).toHaveText(APPROVED_LINK_TITLE);
+		// Its live web contents hold that address, finished loading, before any cookie is set through it.
+		await expect
+			.poll(
+				() =>
+					app.evaluate(
+						({ webContents }, link) =>
+							webContents
+								.getAllWebContents()
+								.some(item => !item.isDestroyed() && item.getURL() === link && !item.isLoading()),
+						approvedLink,
+					),
+				{ message: "live web tab on the approved link, loaded" },
+			)
+			.toBe(true);
 		expect(await inPage("location.href")).toMatch(/egress\.html$/);
+
+		// Distinct origins must isolate browser storage even inside the same visual session.
+		const originalVisual = urls.find(url => url.startsWith("omp-visual://"));
+		if (!originalVisual) throw new Error("No canonical visual URL");
+		expect(originalVisual).toMatch(/^omp-visual:\/\/v1-[0-9a-f]{16}\/egress\.html$/);
+		await fs.writeFile(path.join(project, "isolation.html"), "<!doctype html><title>Peer visual</title>");
+		await composer.fill(
+			`!fixture:host-tool:gui_visualize ${JSON.stringify({ action: "open", target: "isolation.html" })}`,
+		);
+		await composer.press("Enter");
+		await expect(shell.locator("[data-preview-status]")).toHaveText("Peer visual");
+		const peer = await app.evaluate(({ webContents }, canonical) => {
+			const pages = webContents.getAllWebContents();
+			const first = pages.find(item => item.getURL() === canonical);
+			const second = pages.find(item => item.getURL().startsWith("omp-visual://") && item.getURL() !== canonical);
+			if (!first || !second) throw new Error("The two visual pages are not live together");
+			return { canonical: second.getURL(), sameSession: second.session === first.session };
+		}, originalVisual);
+		expect(peer.sameSession).toBe(true);
+		const peerHref = await inPage("location.href", peer.canonical);
+		if (typeof peerHref !== "string") throw new Error("Peer visual reported no document URL");
+		const peerAddress = new URL(peerHref);
+		expect(peerAddress.protocol).toBe("http:");
+		expect(peerAddress.hostname).toMatch(MAPPED_VISUAL_HOST);
+		expect(peerAddress.port).toBe(firstAddress.port);
+		expect(peerAddress.pathname).toBe("/isolation.html");
+		expect(peerAddress.hostname).not.toBe(firstAddress.hostname);
+		expect(peerAddress.origin).not.toBe(firstAddress.origin);
+		expect(peerAddress.hostname.split(".").slice(2)).toEqual(firstAddress.hostname.split(".").slice(2));
+		expect(await inPage("location.origin", peer.canonical)).toBe(peerAddress.origin);
+		const webCookies = await app.evaluate(
+			async ({ webContents }, { webUrl, visualUrl }) => {
+				const web = webContents
+					.getAllWebContents()
+					.find(contents => !contents.isDestroyed() && contents.getURL() === webUrl && !contents.isLoading());
+				if (!web)
+					throw new Error(
+						`No approved web tab in the visual's window; live URLs: ${JSON.stringify(webContents.getAllWebContents().map(contents => contents.getURL()))}`,
+					);
+				web.debugger.attach("1.3");
+				try {
+					await web.debugger.sendCommand("Network.setCookie", {
+						name: "web_partition",
+						value: "web",
+						url: visualUrl,
+						path: "/",
+					});
+					return await web.debugger.sendCommand("Network.getCookies", { urls: [visualUrl] });
+				} finally {
+					web.debugger.detach();
+				}
+			},
+			{ webUrl: approvedLink, visualUrl: firstHref },
+		);
+		expect(webCookies).toMatchObject({
+			cookies: expect.arrayContaining([expect.objectContaining({ name: "web_partition", value: "web" })]),
+		});
+		expect(
+			await inPage(
+				`(async () => ({
+				document: document.cookie.includes("web_partition="),
+				store: await cookieStore.get("web_partition"),
+			}))()`,
+				originalVisual,
+			),
+		).toEqual({ document: false, store: null });
+		// Exercise the same canonical Session, including cookies scoped above the capability host.
+		await inPage(
+			`(() => {
+				localStorage.setItem("visual-origin-isolation", "first");
+				sessionStorage.setItem("visual-origin-isolation", "first");
+				document.cookie = "visual_host=first; Path=/; SameSite=Strict";
+				document.cookie = "visual_domain=first; Domain=" + location.hostname.split(".").slice(2).join(".") + "; Path=/; SameSite=Strict";
+				return true;
+			})()`,
+			originalVisual,
+		);
+		// CookieStore bypasses Blink's document.cookie toggle; it must use the isolated browser jar too.
+		expect(await inPage("typeof cookieStore", originalVisual)).toBe("object");
+		expect(
+			await inPage(
+				`(async () => {
+					await cookieStore.set({name:"visual_store", value:"first",
+						domain:location.hostname.split(".").slice(2).join("."), path:"/"});
+					return (await cookieStore.get("visual_store"))?.value;
+				})()`,
+				originalVisual,
+			),
+		).toBe("first");
+		expect(
+			await inPage("cookieStore.getAll().then(cookies => cookies.map(cookie => cookie.name))", peer.canonical),
+		).toEqual([]);
+		const isolated = await inPage(
+			`({local: localStorage.getItem("visual-origin-isolation"),
+				session: sessionStorage.getItem("visual-origin-isolation"), cookies: document.cookie})`,
+			peer.canonical,
+		);
+		expect(isolated).toEqual({ local: null, session: null, cookies: "" });
+		expect(
+			await inPage(
+				`(() => { localStorage.setItem("visual-origin-isolation", "peer");
+				sessionStorage.setItem("visual-origin-isolation", "peer"); return true; })()`,
+				peer.canonical,
+			),
+		).toBe(true);
+		expect(
+			await inPage(
+				`({local: localStorage.getItem("visual-origin-isolation"),
+				session: sessionStorage.getItem("visual-origin-isolation")})`,
+				originalVisual,
+			),
+		).toEqual({ local: "first", session: "first" });
+
+		// Chromium finalizes its net-log when it quits: read it from the app that has exited.
+		await exitApp(app);
+		const log = await fs.readFile(netLog, "utf8").catch(() => {
+			throw new Error(
+				`No Preview net-log at ${netLog}: the host must be a test-automation build (bun run build:tauri -- --test-automation)`,
+			);
+		});
+		const { all, resolved } = egressNames(log);
+		expect([...resolved]).toEqual([`control.${DNS_SUFFIX}`]);
+		expect([...all]).toEqual([`control.${DNS_SUFFIX}`]);
 	} finally {
 		await exitApp(app);
 		await listener.close();

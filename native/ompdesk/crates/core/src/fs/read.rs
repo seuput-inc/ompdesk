@@ -1,14 +1,12 @@
-//! Reads: text with a byte cap, bytes for the viewer and a download in parts, a markdown image, the plan file, the
-//! head of a media file, and a stat. Bytes travel as the reply's `bin` tail; main sniffs their type
-//! (`sniffMime`, which its callers need synchronously).
+//! Workspace reads. Only requested file contents travel as a reply's binary tail.
 
 use std::io::{Seek, SeekFrom};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::disk;
 use super::error::Codes;
+use super::{disk, mime};
 use crate::server::{Fault, Reply};
 
 const READ_DEFAULT_MAX_BYTES: f64 = 200_000.0;
@@ -83,8 +81,6 @@ pub struct BinaryParams {
     max_bytes: Option<Value>,
     /// Whole files up to this many bytes (the local or the paired-host cap).
     cap: f64,
-    /// The head an over-cap answer carries: what main sniffs a type from.
-    head: u64,
 }
 
 #[derive(Serialize)]
@@ -92,11 +88,11 @@ pub struct BinaryParams {
 struct Binary {
     size: u64,
     truncated: bool,
-    /// Over the cap: the tail holds only the head main sniffs a type from.
+    mime: &'static str,
     too_large: bool,
 }
 
-/// The viewer's read: a whole file up to `cap`; over it, `tooLarge` with the head. A `maxBytes` below the cap asks
+/// The viewer's read: a whole file up to `cap`; over it, `tooLarge` with its MIME. A `maxBytes` below the cap asks
 /// for a prefix instead (the hex view).
 pub fn read_binary(params: &BinaryParams) -> Result<Reply, Fault> {
     let cap = params.cap;
@@ -112,13 +108,15 @@ pub fn read_binary(params: &BinaryParams) -> Result<Reply, Fault> {
     let size = meta.len();
     let mut file = disk::open(&params.path).map_err(fail)?;
     if prefix.is_none() && size as f64 > cap {
-        let head = read_head(&mut file, size.min(params.head), Codes::Missing)?;
-        return Ok(Reply::json(&Binary {
+        let mut head = [0; mime::HEAD_BYTES];
+        let len = size.min(head.len() as u64) as usize;
+        let n = disk::read_into(&mut file, &mut head[..len]).map_err(fail)?;
+        return Reply::json(&Binary {
+            mime: mime::viewer(&head[..n], &params.path),
             size,
             truncated: false,
             too_large: true,
-        })?
-        .with_bin(head));
+        });
     }
     let length = match prefix {
         None => size,
@@ -126,6 +124,7 @@ pub fn read_binary(params: &BinaryParams) -> Result<Reply, Fault> {
     };
     let data = read_head(&mut file, length, Codes::Missing)?;
     Ok(Reply::json(&Binary {
+        mime: mime::viewer(&data, &params.path),
         size,
         truncated: size > length,
         too_large: false,
@@ -145,6 +144,7 @@ pub struct RangeParams {
 
 #[derive(Serialize)]
 struct Range {
+    mime: &'static str,
     size: u64,
     truncated: bool,
 }
@@ -171,6 +171,7 @@ pub fn read_range(params: &RangeParams) -> Result<Reply, Fault> {
     }
     data.truncate(read);
     Ok(Reply::json(&Range {
+        mime: mime::viewer(if params.offset == 0 { &data } else { &[] }, &params.path),
         size,
         truncated: params.offset + (read as u64) < size,
     })?
@@ -187,13 +188,14 @@ pub struct ImageParams {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Image {
+    mime: Option<&'static str>,
     size: u64,
     mtime_ms: f64,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     unchanged: bool,
 }
 
-/// A markdown image: a regular file under 25 MB, whole in the tail; main checks it sniffs as an image.
+/// A markdown image: only signature-checked bytes are sent, never a type inferred from a suffix.
 pub fn read_image(params: &ImageParams) -> Result<Reply, Fault> {
     let fail = |error: super::error::NodeError| error.fault(Codes::None);
     let meta = disk::stat(&params.path).map_err(fail)?;
@@ -213,6 +215,7 @@ pub fn read_image(params: &ImageParams) -> Result<Reply, Fault> {
     };
     if known("mtimeMs") == Some(mtime_ms) && known("size") == Some(size as f64) {
         return Reply::json(&Image {
+            mime: None,
             size,
             mtime_ms,
             unchanged: true,
@@ -222,7 +225,10 @@ pub fn read_image(params: &ImageParams) -> Result<Reply, Fault> {
     // The size the stat gave: a file that shrank since reads as zeros past its end, as the TypeScript's buffer did.
     let mut body = vec![0; size as usize];
     disk::read_into(&mut file, &mut body).map_err(fail)?;
+    let mime = mime::image(&body)
+        .ok_or_else(|| Fault::new("unsupported_image", "Not a supported image"))?;
     Ok(Reply::json(&Image {
+        mime: Some(mime),
         size,
         mtime_ms,
         unchanged: false,
@@ -297,27 +303,56 @@ fn newest_plan_file(dir: &str) -> Option<(String, String)> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaParams {
     path: String,
-    /// The head's length: what main sniffs a type from.
-    head: u64,
+    /// The web blob picker rejects a large file before opening it. Streamed media has no such limit.
+    web_blob_max_bytes: Option<u64>,
 }
 
 #[derive(Serialize)]
 struct Media {
+    mime: &'static str,
     size: u64,
 }
 
-/// A stream's file: a regular file, its size and its head (main checks it sniffs as audio or video).
+/// The workspace stream accepts only audio or video. The web blob picker serves any regular file under its cap.
 pub fn resolve_media(params: &MediaParams) -> Result<Reply, Fault> {
-    let fail = |error: super::error::NodeError| error.fault(Codes::Missing);
-    let meta = disk::stat(&params.path).map_err(fail)?;
+    let missing = || Fault::new("file_not_found", "File not found");
+    let web = params.web_blob_max_bytes.is_some();
+    let meta = disk::stat(&params.path).map_err(|error| {
+        if web {
+            missing()
+        } else {
+            error.fault(Codes::Missing)
+        }
+    })?;
     if !meta.is_file() {
-        return Err(not_a_file());
+        return Err(if web { missing() } else { not_a_file() });
     }
-    let mut file = disk::open(&params.path).map_err(fail)?;
-    let head = read_head(&mut file, meta.len().min(params.head), Codes::Missing)?;
-    Ok(Reply::json(&Media { size: meta.len() })?.with_bin(head))
+    if params
+        .web_blob_max_bytes
+        .is_some_and(|cap| meta.len() > cap)
+    {
+        return Err(Fault::new("file_too_large", "File too large"));
+    }
+    let codes = if web { Codes::None } else { Codes::Missing };
+    let mut file = disk::open(&params.path).map_err(|error| error.fault(codes))?;
+    let mut head = [0; mime::HEAD_BYTES];
+    let len = meta.len().min(head.len() as u64) as usize;
+    let n = disk::read_into(&mut file, &mut head[..len]).map_err(|error| error.fault(codes))?;
+    // The web picker's fixed buffer kept its zero suffix if the file shrank after stat.
+    let mime = mime::viewer(&head[..if web { len } else { n }], &params.path);
+    if !web && !mime.starts_with("audio/") && !mime.starts_with("video/") {
+        return Err(Fault::new(
+            "unsupported",
+            format!("Not audio or video ({mime})"),
+        ));
+    }
+    Reply::json(&Media {
+        size: meta.len(),
+        mime,
+    })
 }
 
 #[derive(Serialize)]
@@ -343,6 +378,92 @@ pub fn stat(params: &PathParams) -> Result<Reply, Fault> {
         size: meta.len(),
         mtime_ms: disk::mtime_ms(&meta),
     })
+}
+
+/// The cwd a paired device opens or restarts. Stat the supplied path before resolving any `..`.
+pub(super) fn directory(params: &PathParams) -> Result<Reply, Fault> {
+    let path = &params.path;
+    let meta = disk::stat(path)
+        .map_err(|_| Fault::new("file_not_found", format!("Directory not found: {path}")))?;
+    if !meta.is_dir() {
+        return Err(Fault::new(
+            "not_a_directory",
+            format!("Not a directory: {path}"),
+        ));
+    }
+    #[cfg(unix)]
+    if let Some(resolved) = node_cwd(path) {
+        return Reply::json(&resolved.to_string_lossy());
+    }
+    Reply::json(path)
+}
+
+/// Node's realpathSync folds `..` before following links, including in each link's target.
+/// The kernel's canonicalize follows the link first and can return a different project.
+#[cfg(unix)]
+fn node_cwd(path: &str) -> Option<std::path::PathBuf> {
+    use crate::git::read::resolve;
+    use std::collections::{HashMap, HashSet, hash_map::Entry};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::path::{Component, Path, PathBuf};
+
+    let mut path = PathBuf::from(resolve("/", std::path::absolute(path).ok()?.to_str()?));
+    let mut out = PathBuf::new();
+    let mut links: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut hard = HashSet::new();
+    let mut targets = HashMap::new();
+    let mut pipe_or_socket = false;
+    'walk: loop {
+        let mut parts = path.components();
+        while let Some(part) = parts.next() {
+            out.push(part);
+            if part == Component::RootDir {
+                continue;
+            }
+            if hard.contains(&out) {
+                // realpathSync stops on reaching a known prefix after a link to a pipe or socket.
+                if pipe_or_socket {
+                    let tails = links.iter().rev().map(|(_, tail)| tail.as_path());
+                    for tail in std::iter::once(parts.as_path()).chain(tails) {
+                        if !tail.as_os_str().is_empty() {
+                            out.push(tail);
+                        }
+                    }
+                    return Some(out);
+                }
+                continue;
+            }
+            let meta = std::fs::symlink_metadata(&out).ok()?;
+            if !meta.is_symlink() {
+                if !targets.is_empty() {
+                    hard.insert(out.clone());
+                }
+                continue;
+            }
+            if links.iter().any(|(link, _)| *link == out) {
+                return None;
+            }
+            if targets.is_empty() {
+                hard.extend(out.ancestors().skip(1).map(Path::to_path_buf));
+            }
+            let target = match targets.entry((meta.dev(), meta.ino())) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let kind = std::fs::metadata(&out).ok()?.file_type();
+                    pipe_or_socket = kind.is_fifo() || kind.is_socket();
+                    entry.insert(std::fs::read_link(&out).ok()?)
+                }
+            };
+            let next = resolve(out.parent()?.to_str()?, &target.to_string_lossy());
+            links.push((std::mem::take(&mut out), parts.as_path().to_owned()));
+            path = next.into();
+            continue 'walk;
+        }
+        let Some((_, tail)) = links.pop() else {
+            return Some(out);
+        };
+        path = tail;
+    }
 }
 
 #[cfg(test)]

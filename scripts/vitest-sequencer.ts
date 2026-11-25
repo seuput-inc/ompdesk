@@ -53,7 +53,7 @@ export class CostSequencer extends BaseSequencer {
 	override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
 		const order = files.map(spec => {
 			const file = this.#file(spec);
-			const cached = this.ctx.cache.getFileTestResults(`${spec.project.name}:${file}`);
+			const cached = this.ctx.cache.getTestSpecificationResult(spec);
 			return { spec, failed: cached?.failed ?? false, ms: cached?.duration ?? fileSeconds(file) * 1000 };
 		});
 		return order.sort((a, b) => Number(b.failed) - Number(a.failed) || b.ms - a.ms).map(entry => entry.spec);

@@ -109,7 +109,7 @@ export function MenuSurface({
 	return (
 		<div
 			className={cx(
-				"min-w-48 max-w-[min(20rem,calc(100vw-1rem))] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-elevated) p-1 shadow-(--sc-shadow-md)",
+				"omp-floating min-w-48 max-w-[min(20rem,calc(100vw-1rem))] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-(--sc-radius-lg) border border-(--sc-border-subtle) p-1",
 				className,
 			)}
 			style={style}

@@ -39,8 +39,10 @@ describe("assets/toolchain.json", () => {
 
 	it("pins TLC, the community modules, a JRE, elan and Lean by SHA-256 over https", () => {
 		expect(pins.tla.tla2tools.version).toMatch(/^1\.8\./);
+		// Upstream's v1.8.0 is a prerelease whose CI re-uploads tla2tools.jar on every master push, so the pin is an
+		// immutable release of seuput-inc/ompdesk-formal-tools, never that URL.
 		expect(pins.tla.tla2tools.url).toMatch(
-			/^https:\/\/github\.com\/tlaplus\/tlaplus\/releases\/download\/v1\.8\.0\//,
+			/^https:\/\/github\.com\/seuput-inc\/ompdesk-formal-tools\/releases\/download\/tla2tools-1\.8\.0-[0-9a-f]{7}\/tla2tools\.jar$/,
 		);
 		expect(pins.lean.toolchain).toBe(`leanprover/lean4:v${pins.lean.version}`);
 		for (const url of [pins.tla.tla2tools.url, pins.tla.communityModules.url]) expect(url).toMatch(/^https:\/\//);

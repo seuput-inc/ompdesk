@@ -450,13 +450,14 @@ impl Task {
         if let Some(timer) = entry.timer {
             timer.abort();
         }
+        if entry.reply.is_closed() {
+            return;
+        }
         let ok = frame
             .get("ok")
             .is_some_and(|ok| serde_json::from_str::<bool>(ok.get()).unwrap_or(false));
         if ok {
-            let result = frame
-                .get("result")
-                .and_then(|raw| RawValue::from_string(raw.get().to_owned()).ok());
+            let result = frame.get("result").copied().map(RawValue::to_owned);
             let _ = entry.reply.send(Ok(result));
             return;
         }

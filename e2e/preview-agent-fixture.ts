@@ -1,6 +1,6 @@
 /**
  * Agent browsing's e2e pieces on stock's own code (preview-agent.e2e.ts, preview-agent-remote.e2e.ts): the fake omp's
- * bridge starts the relay server of the installed omp (`OMP_E2E_STOCK_RELAY`) and writes its address to
+ * bridge forwards browser requests to an isolated installed omp and writes the relay address to
  * `OMP_E2E_RELAY_FILE`; stock's puppeteer-core connects through it the way the browser tool's relay mode does; a small
  * site gives the agent something to drive.
  */
@@ -10,17 +10,17 @@ import { createServer } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect } from "@playwright/test";
+import { test as base, expect } from "@playwright/test";
+import { INSTALLED_OMP } from "../src/main/test-bridge-probe";
+import { startStockBrowserSession } from "../src/main/test-stock-browser-session";
 
-const stockRoot = path.join(os.homedir(), ".bun/install/global/node_modules/@oh-my-pi/pi-coding-agent");
-export const relayModule = path.join(stockRoot, "src/tools/browser/relay/server.ts");
 export const puppeteerEntry = path.join(
 	os.homedir(),
 	".bun/install/global/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js",
 );
 
 /** Whether the installed omp and its puppeteer-core are there (a spec skips without them). */
-export const stockRelayInstalled = () => existsSync(relayModule) && existsSync(puppeteerEntry);
+export const stockRelayInstalled = () => existsSync(INSTALLED_OMP) && existsSync(puppeteerEntry);
 
 export interface PuppeteerPage {
 	url(): string;
@@ -41,10 +41,21 @@ interface PuppeteerModule {
 	connect(options: { browserURL: string; defaultViewport: null }): Promise<PuppeteerBrowser>;
 }
 
-/** The env that makes a fake omp's bridge start stock's relay and write its address to `relayFile`. */
-export function relayEnv(relayFile: string): Record<string, string> {
-	return { OMP_E2E_STOCK_RELAY: relayModule, OMP_E2E_RELAY_FILE: relayFile };
-}
+/** The spec owns the real stock process even if its Electron app or fake omp exits early. */
+export const test = base.extend<{ relayEnv: (relayFile: string) => Promise<Record<string, string>> }>({
+	// biome-ignore lint/correctness/noEmptyPattern: Playwright reads fixture dependencies from this destructuring pattern.
+	relayEnv: async ({}, use) => {
+		let stock: Awaited<ReturnType<typeof startStockBrowserSession>> | undefined;
+		try {
+			await use(async relayFile => {
+				stock ??= await startStockBrowserSession();
+				return { OMP_E2E_STOCK_RELAY: stock.address, OMP_E2E_RELAY_FILE: relayFile };
+			});
+		} finally {
+			await stock?.close();
+		}
+	},
+});
 
 /**
  * The installed puppeteer-core is chosen at run time (it is not a dependency of this repo). Stock's relay answers

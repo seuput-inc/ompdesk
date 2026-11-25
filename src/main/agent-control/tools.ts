@@ -5,11 +5,15 @@
  * lists every host tool in the session's xd:// device notice.
  */
 import { z } from "zod";
+import { ATTACHMENT_MAX_BYTES } from "../../../resources/gui-bridge/agent-control-contracts";
 import { AUTOPILOT_AREAS } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import { AGENT_SCHEDULE_PREFIX, type AgentControlToolName, AGENT_CONTROL_TOOLS as T } from "../../shared/agent-control";
 import type { HostToolDefinition } from "../../shared/rpc-types";
 import { GITHUB_EVENT_KINDS, GITHUB_REPO, SESSION_EVENT_KINDS } from "../../shared/schedules";
 import { MAIL_KINDS } from "./mail";
+
+/** An attachment as the tool takes it (exactly one field): a file where the caller's omp runs, or one of its conversation's pictures. */
+export type Attachment = { path?: string; image?: number };
 
 export type ReportArgs = {
 	kind: (typeof MAIL_KINDS)[number];
@@ -19,6 +23,7 @@ export type ReportArgs = {
 	to?: string;
 	dispatch?: string;
 	id?: string;
+	attachments?: Attachment[];
 };
 
 /** `ompdesk_session_result` waits at most this long by default, and never longer than the maximum. */
@@ -45,6 +50,28 @@ const DEVICE = {
 	description:
 		'A paired device (Settings › Devices) by name or id; "local" is this computer. ompdesk_sessions lists them.',
 } as const;
+/** The pictures and files `ompdesk_session_send` and `ompdesk_report` carry (attachments.ts). */
+const ATTACHMENTS = {
+	type: "array",
+	items: {
+		type: "object",
+		properties: {
+			path: {
+				type: "string",
+				description: "A file on the computer YOUR session runs on: absolute, or relative to your folder.",
+			},
+			image: {
+				type: "integer",
+				minimum: 1,
+				description:
+					"The n-th newest picture of YOUR conversation: 1 is the newest (the one the user just pasted, or a tool returned).",
+			},
+		},
+		additionalProperties: false,
+	},
+	description: `Pictures and files to send along; each item is {path} or {image}, exactly one. A picture reaches the session inline, any other file is put on its computer and the message names its path there. Each at most ${ATTACHMENT_MAX_BYTES / (1024 * 1024)} MiB; any number of items; the same bytes twice go once; nothing is sent if one cannot be read.`,
+} as const;
+
 const PLACEMENT = ["focus", "split-right", "split-down"] as const;
 
 const OPEN_ONE = {
@@ -139,17 +166,22 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 	{
 		name: T.open,
 		label: "Open OMPdesk session",
-		description:
-			"Open new sessions (tabs) to work in parallel with you; returns ids.\n" +
-			`Open new sessions (tabs) so they work in parallel with you; returns their ids. Give one session's fields, or sessions: [...] to fan out. See skill://ompdesk.`,
+		description: "Open new sessions (tabs) to work in parallel with you; returns ids.\nSee skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
 				...OPEN_ONE,
 				sessions: {
 					type: "array",
-					items: { type: "object", properties: OPEN_ONE, additionalProperties: false },
-					description: "Several sessions in one call; instead of the single-session fields.",
+					items: {
+						type: "object",
+						properties: Object.fromEntries(
+							Object.entries(OPEN_ONE).map(([key, { description: _, ...schema }]) => [key, schema]),
+						),
+						additionalProperties: false,
+					},
+					description:
+						"For a batch, use this array instead of the single-session fields described above. Each item takes those same fields.",
 				},
 				show: {
 					type: "string",
@@ -166,25 +198,26 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Message OMPdesk session",
 		description:
 			"Send a message to another open session.\n" +
-			'Send a message to any other open session. An idle session starts on it; a running one reads it between its steps (steer, the default). follow_up holds it until that turn ends, and only for a session you opened: to queue its next task behind the one it works on, never for an answer, a result or news it needs now (the user sees a held message waiting in that session\'s queue). To a session you did not open it goes as steer. A session that shows the user a question card never takes a steer (it would close the card): the message queues behind the card, which stays open, and is read after the user answers. A session blocked in ompdesk_session_result with wait takes a steer at once: its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached (title, saved id, computer) and what it is doing, and what will actually happen to the message. It cannot answer that session\'s pending question: only the user does. See skill://ompdesk.',
+			'An idle session starts on it; a running one reads it at its next step, together with every other message waiting for it (it cuts no tool and leaves a question card the user has open, which it reads the message after). There is no way to hold a message until the turn ends. A session still starting gets it kept, and reads it once it is up: the call returns at once, so do not send it again. A session blocked in ompdesk_session_result with wait takes it at once: its wait returns early. The session sees it as sent by you, an agent: `<ompdesk-agent-message from="<your title>" session="<your saved id>">`, so it answers you by that saved id. The receipt names the session it reached (title, saved id, computer) and what it is doing, and what will actually happen to the message. Pictures and files go along in attachments. It cannot answer that session\'s pending question: only the user does. See skill://ompdesk.',
 		parameters: {
 			type: "object",
 			properties: {
 				session: SESSION,
-				message: { type: "string" },
-				delivery: {
-					type: "string",
-					enum: ["follow_up", "steer"],
+				sessions: {
+					type: "array",
+					items: { type: "string" },
 					description:
-						"For a running session. steer (default): read between its steps. follow_up: held until its turn ends, only for a session you opened (its next task); any other session gets it as steer. A session showing the user a question card always queues it behind the card, whichever you ask.",
+						"Several sessions at once, instead of session: each gets the message and its own receipt line. @children names every open session you opened, @idle those of them that are idle (not running, no card waiting).",
 				},
+				message: { type: "string" },
 				request_id: {
 					type: "string",
 					description:
 						"Your id for this message; sending again with the same id never delivers it twice (returns the first receipt).",
 				},
+				attachments: ATTACHMENTS,
 			},
-			required: ["session", "message"],
+			required: ["message"],
 			additionalProperties: false,
 		},
 	},
@@ -193,13 +226,14 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Report to OMPdesk opener",
 		description:
 			"Report progress or results to the session that opened you.\n" +
-			"Tell the session that opened you (or a sibling it opened) about your work, instead of waiting to be asked; or tell a session working in the same checkout (the <shared-checkout> section names it) what you are about to do, or ask it to commit or hold off. Every report reaches a working session between its steps (its tool calls are not cut, a `wait` returns on it). kind: progress (a short status; coalesced; never wakes an idle session), done (the work is finished: summary, changed files, checks you ran; wakes it when idle), question or blocked (you need its decision; wakes it when idle; do not guess meanwhile), review (ready for its review; wakes it when idle), note (to a sibling or a session in the same checkout: e.g. 'I am committing src/a.ts'; never wakes an idle session). See skill://ompdesk.",
+			"Tell the session that opened you (or a sibling it opened) about your work, instead of waiting to be asked; or tell a session working in the same checkout (the <shared-checkout> section names it) what you are about to do, or ask it to commit or hold off. Every report reaches a working session between its steps (its tool calls are not cut, a `wait` returns on it). kind: progress (a short status; coalesced; never wakes an idle session), done (the work is finished: summary, changed files, checks you ran; wakes it when idle), question or blocked (you need its decision; wakes it when idle; do not guess meanwhile), review (ready for its review; wakes it when idle), note (to a sibling or a session in the same checkout: e.g. 'I am committing src/a.ts'; never wakes an idle session). A picture or file goes along in attachments. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
 				kind: { type: "string", enum: ["progress", "done", "blocked", "question", "review", "note"] },
 				text: { type: "string", description: "What to tell; for done, the summary." },
 				files: { type: "array", items: { type: "string" }, description: "done: files you changed." },
+				attachments: ATTACHMENTS,
 				checks: {
 					type: "array",
 					items: {
@@ -233,7 +267,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Read OMPdesk session result",
 		description:
 			"Read another session's last answer and state, optionally waiting for it.\n" +
-			"Read the last answer and state of one session (session) or several at once (sessions: a compact table). wait: true waits until they have finished (until all, the default, or any), one needs the user's answer, or the timeout passes; it also returns early, saying so, when a message (a steer or a report) reaches you meanwhile, so you read it at once and may wait again. See skill://ompdesk.",
+			"Multiple results form a compact table. A wait also ends if a session needs the user's answer or the timeout expires. An incoming steer or report returns the wait early with a notice; read it before waiting again. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -264,7 +298,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Read OMPdesk session transcript",
 		description:
 			"Read another session's transcript, open or stored.\n" +
-			"Read the most recent messages of any session's transcript, open or stored (user, assistant, tool calls; bounded). Pass the returned before cursor to page further back. Read-only. See skill://ompdesk.",
+			"Returns a bounded page of the newest user messages, assistant messages and tool calls. Read-only. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -301,7 +335,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Notify the user",
 		description:
 			"Show the user a system notification when work finishes or needs them.\n" +
-			"Show the user a system notification (for work that finished or needs them while they look elsewhere); clicking it opens this session.",
+			"Use while the user is looking elsewhere. Clicking the notification opens this session.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -317,11 +351,12 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Answer OMPdesk session question",
 		description:
 			"Answer the question another session is waiting on.\n" +
-			"Answer the question another session is waiting on (shown by ompdesk_sessions as waiting for the user's answer or for plan approval). The answer is marked as given by an agent. A tool approval or a plan approval is approved only if the user allowed agents to (Settings), else the user must; deny and plan feedback always work. See skill://ompdesk.",
+			"Answer the question another session is waiting on (shown by ompdesk_sessions as waiting for the user's answer or for plan approval). The answer is marked as given by an agent. A tool approval or a plan approval is approved only if the user allowed agents to (Settings), else the user must; deny and plan feedback always work. attachments (a picture or file) reach that session first, as a note ahead of the answer; if one cannot be sent, nothing is. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
 				session: SESSION,
+				attachments: ATTACHMENTS,
 				request: { type: "string", description: "Request id when several wait; default the oldest." },
 				choice: {
 					type: "string",
@@ -335,7 +370,8 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				},
 				text: {
 					type: "string",
-					description: "Typed answer (input and editor prompts), or a rejected plan's feedback.",
+					description:
+						"Typed answer (input and editor prompts), a rejected plan's feedback, or why a denied tool approval was denied (sent to the session after the denial).",
 				},
 				answers: {
 					type: "array",
@@ -360,7 +396,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Compare OMPdesk sessions' work",
 		description:
 			"Compare and judge sessions' work: checks, branches, optional ranked verdict.\n" +
-			"Compare and judge sessions' work: for each one the final answer, the checks it ran (test, build, lint commands from its transcript, with their outcome) and, for a git worktree, branch, commits ahead, changed files with line counts and uncommitted work. With criteria, a judge model (your slow role) grades each against them and returns a ranked verdict with reasons and a winner. It runs no tests itself. Default: every worktree session you opened. See skill://ompdesk.",
+			"For each session, shows the final answer, the checks it ran (test, build, lint commands from its transcript, with their outcome) and, for a git worktree, branch, commits ahead, changed files with line counts and uncommitted work. With criteria, a judge model (your slow role) grades each against them and returns a ranked verdict with reasons and a winner. It runs no tests itself. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -383,7 +419,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Merge an OMPdesk session's branch",
 		description:
 			"Merge a worktree session's branch into the parent checkout.\n" +
-			"Merge a worktree session's branch into the parent checkout's current branch on the computer the session runs on (a merge commit, never pushed). No card by default; the user confirms first only if they turned off \"Let agents manage other sessions\". A conflict aborts the merge and lists the files. The repository's .ompdesk/worktree-pre-merge (run in the worktree) must exit 0 before the merge starts, and .ompdesk/worktree-post-merge (run in the parent checkout) runs after it landed; a failing post-merge hook is reported and the merge stays. Refuses when the session or the parent has uncommitted changes. See skill://ompdesk.",
+			"Targets the parent's current branch on the session's computer; creates a merge commit, never pushes. No card by default; the user confirms first only if they turned off \"Let agents manage other sessions\". A conflict aborts the merge and lists the files. The repository's .ompdesk/worktree-pre-merge (run in the worktree) must exit 0 before the merge starts, and .ompdesk/worktree-post-merge (run in the parent checkout) runs after it landed; a failing post-merge hook is reported and the merge stays. Refuses when the session or the parent has uncommitted changes. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: { session: SESSION },
@@ -611,6 +647,15 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 	},
 ];
 
+const attachmentsArg = z.array(
+	z
+		.object({ path: z.string().trim().min(1).max(4096).optional(), image: z.number().int().min(1).optional() })
+		.strict()
+		.refine(item => (item.path === undefined) !== (item.image === undefined), {
+			message: "an attachment is {path} or {image}, exactly one",
+		}),
+);
+
 const sessionArg = z.string().trim().min(1).max(200);
 const deviceArg = z.string().trim().min(1).max(200);
 const placement = z.enum(PLACEMENT);
@@ -733,12 +778,16 @@ export const ARGS = {
 		.refine(...reopenAlone),
 	[T.send]: z
 		.object({
-			session: sessionArg,
+			session: sessionArg.optional(),
+			sessions: z.array(sessionArg).min(1).optional(),
 			message: z.string().trim().min(1).max(MESSAGE_MAX_CHARS),
-			delivery: z.enum(["follow_up", "steer"]).optional(),
 			request_id: z.string().trim().min(1).max(200).optional(),
+			attachments: attachmentsArg.optional(),
 		})
-		.strict(),
+		.strict()
+		.refine(args => (args.session === undefined) !== (args.sessions === undefined), {
+			message: "give session or sessions (one of them)",
+		}),
 	[T.report]: z
 		.object({
 			kind: z.enum(MAIL_KINDS),
@@ -750,6 +799,7 @@ export const ARGS = {
 			to: sessionArg.optional(),
 			dispatch: z.string().trim().min(1).max(100).optional(),
 			id: z.string().trim().min(1).max(200).optional(),
+			attachments: attachmentsArg.optional(),
 		})
 		.strict(),
 	[T.result]: z
@@ -789,6 +839,7 @@ export const ARGS = {
 						.strict(),
 				)
 				.optional(),
+			attachments: attachmentsArg.optional(),
 		})
 		.strict(),
 	[T.focus]: z.object({ session: sessionArg, how: placement.optional() }).strict(),
@@ -813,6 +864,7 @@ export const ARGS = {
 		})
 		.strict(),
 	[T.merge]: z.object({ session: sessionArg }).strict(),
+	// Zod checks fields (including Date.parse); the core checks their combination for the action.
 	[T.schedule]: z
 		.object({
 			action: z.enum(["create", "list", "cancel", "update", "pause", "resume", "run", "runs"]),
@@ -882,36 +934,14 @@ export const ARGS = {
 			device: deviceArg.optional(),
 			target: z.enum(["self"]).optional(),
 		})
-		.strict()
-		.superRefine((args, ctx) => {
-			const problem = (message: string) => ctx.addIssue({ code: "custom", message });
-			const starts = [args.every_minutes, args.daily_at, args.at, args.in_minutes, args.on].filter(
-				start => start !== undefined,
-			).length;
-			if (args.days !== undefined && args.daily_at === undefined) problem("days goes with daily_at");
-			if (args.action === "create") {
-				if (!args.name) problem("create needs name");
-				if (!args.prompt) problem("create needs prompt");
-				if (starts !== 1) problem("create needs exactly one of every_minutes, daily_at, at, in_minutes or on");
-				if (args.target === "self") {
-					if (args.folder !== undefined) problem("target self wakes this session: it takes no folder");
-					if (args.model !== undefined) problem("target self wakes this session: it takes no model");
-					if (args.device !== undefined)
-						problem("target self wakes this session on this computer: it takes no device");
-				}
-			} else {
-				if (args.action !== "list" && !args.id) problem(`${args.action} needs id`);
-				if (args.action === "update" && starts > 1)
-					problem("update takes at most one of every_minutes, daily_at, at, in_minutes or on");
-				if (args.action !== "update" && (starts > 0 || args.name || args.prompt || args.model || args.target))
-					problem(`${args.action} takes only id (and device)`);
-			}
-		}),
+		.strict(),
 	[T.autopilot]: autopilotArgs,
 	[T.appList]: z
 		.object({ area: z.string().trim().max(60).optional(), query: z.string().trim().max(200).optional() })
 		.strict(),
-	[T.app]: z.object({ action: z.string().trim().min(1).max(100), args: z.record(z.unknown()).optional() }).strict(),
+	[T.app]: z
+		.object({ action: z.string().trim().min(1).max(100), args: z.record(z.string(), z.unknown()).optional() })
+		.strict(),
 } as const;
 
 /** The slice of a tool's JSON schema `looseArgs` reads. */
@@ -962,6 +992,7 @@ function loosen(schema: LooseSchema | undefined, value: unknown): unknown {
  * JSON text (`"true"`, `"{\"base\":\"main\"}"`; measured 10 Nov 2026: 4 of one session's 15 failed opens in a week): a field
  * whose schema takes no string reads that text as the value it spells. Everything else passes as it came, so the strict
  * parser (`ARGS`) still refuses what the schema does not take. One rule for every control tool and every nesting.
+ * Keep Number/JSON.parse before Zod: overflowing numbers and escaped lone surrogates aren't Rust JSON values.
  */
 export function looseArgs(tool: AgentControlToolName, raw: unknown): unknown {
 	const definition = AGENT_CONTROL_DEFINITIONS.find(entry => entry.name === tool);

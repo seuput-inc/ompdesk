@@ -160,23 +160,23 @@ describe("yield (stock tools/yield.ts)", () => {
 
 describe("MCP tools (stock tools/mcp.ts)", () => {
 	it("splits names at the first underscore, as stock parseMCPToolName does", () => {
-		expect(parseMcpToolName("mcp__rea_open_binary")).toEqual({ server: "rea", tool: "open_binary" });
+		expect(parseMcpToolName("mcp__files_open_binary")).toEqual({ server: "files", tool: "open_binary" });
 		expect(parseMcpToolName("mcp__github")).toBeNull();
 		expect(parseMcpToolName("read")).toBeNull();
 	});
 
 	it("labels the call by server and tool and renders JSON as a tree", async () => {
-		const header = getToolHeader("mcp__rea_open_binary", { path: "/bin/ls" });
+		const header = getToolHeader("mcp__files_open_binary", { path: "/bin/ls" });
 		expect(header.labelKey).toBe("tools.label.mcpTool");
-		expect(header.labelParams).toEqual({ server: "rea", tool: "open_binary" });
-		expect(getToolRenderer("mcp__rea_open_binary")).toBe(McpRenderer);
+		expect(header.labelParams).toEqual({ server: "files", tool: "open_binary" });
+		expect(getToolRenderer("mcp__files_open_binary")).toBe(McpRenderer);
 		await mount(
 			<McpRenderer
 				args={{ path: "/bin/ls", i: "Opening" }}
 				result={{
 					content: [{ type: "text", text: '{"format":"mach-o","arch":"arm64"}' }],
 					details: {
-						serverName: "rea",
+						serverName: "files",
 						mcpToolName: "open_binary",
 						providerName: "MCP Config",
 						rawContent: [{ type: "text", text: "raw duplicate" }],
@@ -199,7 +199,7 @@ describe("MCP tools (stock tools/mcp.ts)", () => {
 				isError
 				result={{
 					content: [{ type: "text", text: "server exited" }],
-					details: { serverName: "rea", mcpToolName: "x", isError: true },
+					details: { serverName: "files", mcpToolName: "x", isError: true },
 				}}
 			/>,
 		);

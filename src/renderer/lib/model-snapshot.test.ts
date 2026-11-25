@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { codexPickerSequence, hasCodexProbe } from "../../main/test-codex-picker";
 import type { ModelInfo } from "../../shared/rpc-types";
 import { createModelStore } from "../stores/model";
 import { seedModelStore, writeModelSnapshot } from "./model-snapshot";
-import { resetSnapshotsForTest } from "./snapshot-cache";
+import { resetSnapshotsForTest, snapshots } from "./snapshot-cache";
 
 class Memory {
 	readonly map = new Map<string, string>();
@@ -44,6 +45,61 @@ describe("model snapshot", () => {
 		expect(next.getState().availableModels.map(m => m.id)).toEqual(["a", "b"]);
 		expect(next.getState().model?.id).toBe("a");
 		expect(next.getState().catalogGeneration).toBe(0);
+	});
+
+	it("restores the selected model, but not the last account's confirmation for the picker", () => {
+		const selected = { provider: "openai-codex", id: "shared" };
+		const verified = { ...selected, pickerAvailability: "account-verified" } as const;
+		const local = { provider: "local-api", id: "shared" };
+		const live = createModelStore();
+		live.setState({ availableModels: [verified, local], model: selected });
+		writeModelSnapshot(undefined, "path:/s", live.getState());
+
+		const next = createModelStore();
+		seedModelStore(next, undefined, "path:/s");
+		expect(next.getState().model).toEqual(selected);
+		expect(next.getState().availableModels).toEqual([
+			{ ...selected, pickerAvailability: "account-unverified" },
+			local,
+		]);
+	});
+
+	it.skipIf(!hasCodexProbe)("does not restore an account A mixed route as authority after removing its key", () => {
+		const { mixed } = codexPickerSequence();
+		for (const row of mixed) expect(row).not.toHaveProperty("accountAccess");
+		const alternate = { provider: "openai", id: "fixture-private" };
+		const old = createModelStore();
+		old.setState({ availableModels: [...mixed, alternate] });
+		writeModelSnapshot(undefined, null, old.getState());
+		const restored = createModelStore();
+		seedModelStore(restored, undefined, null);
+		expect(
+			restored.getState().availableModels.filter(row => row.pickerAvailability !== "account-unverified"),
+		).toEqual([alternate]);
+	});
+
+	it("marks legacy Codex subscription rows without hiding independent routes to the same model", () => {
+		const subscription = {
+			provider: "openai-codex",
+			api: "openai-codex-responses",
+			baseUrl: "https://chatgpt.com/backend-api",
+			id: "shared",
+			accountAccess: { fixture: {} },
+		};
+		const custom = { ...subscription, api: "openai-responses", baseUrl: "http://localhost:8080/v1" };
+		const otherProvider = { ...subscription, provider: "local-api" };
+		snapshots().write("models", "local", "catalog", {
+			availableModels: [subscription, custom, otherProvider],
+			providers: [],
+		});
+
+		const next = createModelStore();
+		seedModelStore(next, undefined, null);
+		expect(next.getState().availableModels.map(row => [row.provider, row.id, row.pickerAvailability])).toEqual([
+			["openai-codex", "shared", "account-unverified"],
+			["openai-codex", "shared", undefined],
+			["local-api", "shared", undefined],
+		]);
 	});
 
 	it("keeps selections per session and catalogs per host", () => {

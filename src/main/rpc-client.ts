@@ -22,7 +22,9 @@ export interface RpcClientOptions {
 	send: (command: RpcCommand, timeoutMs: number) => Promise<RpcResponse>;
 	timeout?: number;
 	/** Answers a GUI-side command, or returns undefined to forward it to omp. */
-	local?: (command: RpcCommand & { id: string }) => Promise<RpcResponse> | undefined;
+	local?: (
+		command: RpcCommand & { id: string },
+	) => Promise<RpcResponse> | { response: Promise<RpcResponse>; cancel: () => void } | undefined;
 }
 
 export class RpcClient {
@@ -48,11 +50,15 @@ export class RpcClient {
 		const local = this.#local?.({ ...cmd, id });
 		if (!local) return this.stock(cmd, timeoutMs);
 		const timeout = timeoutMs ?? this.#timeout;
+		const response = "response" in local ? local.response : local;
 		// setTimeout would read Infinity as 1 ms.
-		if (!Number.isFinite(timeout)) return local;
+		if (!Number.isFinite(timeout)) return response;
 		const { promise, resolve, reject } = Promise.withResolvers<RpcResponse>();
-		const timer = setTimeout(() => reject(new RpcTimeoutError(timeout, cmd.type)), timeout);
-		local.then(resolve, reject).finally(() => clearTimeout(timer));
+		const timer = setTimeout(() => {
+			reject(new RpcTimeoutError(timeout, cmd.type));
+			if ("cancel" in local) local.cancel();
+		}, timeout);
+		response.then(resolve, reject).finally(() => clearTimeout(timer));
 		return promise;
 	}
 

@@ -47,7 +47,7 @@ export const statsLive = () => ({ start() {} });
 		{ "./judgment/standalone": "./index.ts" },
 		"export async function openStandaloneJudge() { return { judge: null }; }\n",
 	);
-	const child = spawn("bun", [path.resolve("resources/gui-bridge/stats-host.ts"), "127.0.0.1", "0"], {
+	const child = spawn("bun", [path.resolve("resources/gui-bridge/stats-host.ts")], {
 		stdio: ["pipe", "pipe", "pipe"],
 		env: { ...process.env, OMP_PACKAGE_ROOT: root },
 	});

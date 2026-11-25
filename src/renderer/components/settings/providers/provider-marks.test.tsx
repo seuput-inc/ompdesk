@@ -1,8 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import {
+	diffDictionaries,
+	INSTALLED_OMP_ROOT,
+	missingStrings,
+	readStockFacts,
+} from "../../../../../scripts/omp-bump/dictionaries";
 import { ProviderMark } from "./ProviderMark";
 import {
 	FALLBACK_PROVIDER_IDS,
@@ -22,13 +27,16 @@ const STOCK_PROVIDER_IDS: readonly string[] = [
 	"alibaba-coding-plan",
 	"alibaba-token-plan",
 	"amazon-bedrock",
+	"antigravity-cli",
 	"anthropic",
 	"apple",
 	"azure",
 	"baseten",
 	"bedrock-mantle",
+	"bifrost",
 	"cerebras",
 	"charm-hyper",
+	"chutes",
 	"cline-pass",
 	"cloudflare-ai-gateway",
 	"cloudflare-workers-ai",
@@ -60,6 +68,7 @@ const STOCK_PROVIDER_IDS: readonly string[] = [
 	"kagi",
 	"kilo",
 	"kimi-code",
+	"kiro",
 	"liquid",
 	"litellm",
 	"llama.cpp",
@@ -71,6 +80,7 @@ const STOCK_PROVIDER_IDS: readonly string[] = [
 	"minimax-code",
 	"minimax-code-cn",
 	"mistral",
+	"modal",
 	"modular",
 	"moonshot",
 	"muse-code",
@@ -124,9 +134,6 @@ const STOCK_PROVIDER_IDS: readonly string[] = [
 	"zhipu-coding-plan",
 ];
 
-/** The installed stock's own list, when this machine has omp: a provider added by an update fails here. */
-const STOCK_AUTH_IDS = join(homedir(), ".bun/install/global/node_modules/@oh-my-pi/pi-catalog/src/compat/auth-ids.ts");
-
 describe("provider marks", () => {
 	it("resolves every stock provider id to a vendored mark or to a deliberate fallback", () => {
 		for (const id of STOCK_PROVIDER_IDS) {
@@ -144,15 +151,16 @@ describe("provider marks", () => {
 		}
 	});
 
-	it.skipIf(!existsSync(STOCK_AUTH_IDS))("covers every id of the installed stock omp", () => {
-		const ids = Array.from(
-			readFileSync(STOCK_AUTH_IDS, "utf8").matchAll(/^\s*\| "([^"]+)"/gm),
-			match => match[1] ?? "",
-		);
-		expect(ids.length).toBeGreaterThan(50);
-		const missing = ids.filter(id => !(id in PROVIDER_BRANDS) && !FALLBACK_PROVIDER_IDS.includes(id));
-		expect(missing).toEqual([]);
-	});
+	// Read as `bun scripts/omp-bump/extract.ts --check` reads any omp: its `/login` providers and catalog providers.
+	it.skipIf(!existsSync(join(INSTALLED_OMP_ROOT, "package.json")))(
+		"covers every id of the installed stock omp",
+		() => {
+			const facts = readStockFacts(INSTALLED_OMP_ROOT);
+			expect(facts.providerIds.length).toBeGreaterThan(50);
+			expect(missingStrings(diffDictionaries(facts), ["providers.mark"])).toEqual([]);
+		},
+		60_000,
+	);
 
 	it("names every company's marks the way the brand covers them: the big names have the real symbol", () => {
 		const marks = (ids: string[]) => ids.map(id => providerBrand({ id, name: id }).mark);
@@ -184,6 +192,11 @@ describe("provider marks", () => {
 		expect(html).toContain('data-provider-mark="anthropic"');
 		expect(html).toContain('fill="currentColor"');
 		expect(html).not.toMatch(/#[0-9a-f]{3,6}/i);
+		const antigravity = renderToStaticMarkup(
+			<ProviderMark provider={{ id: "antigravity-cli", name: "Antigravity CLI" }} />,
+		);
+		expect(antigravity).toContain('data-provider-mark="antigravity"');
+		expect(providerBrand({ id: "antigravity-cli", name: "Antigravity CLI" }).company).toBe("Google");
 	});
 
 	it("falls back to the first letter in a hairline square for an unknown id or a custom endpoint", () => {

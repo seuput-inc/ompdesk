@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { bootModelSelector, FALLBACK_BOOT_MODEL, isNoModelBootFailure } from "./boot-model";
 import { RM_TEMP } from "./test-fake-omp";
 
@@ -68,3 +68,42 @@ test("falls back to a known selector when the catalog cannot be read", async () 
 		await fs.rm(dir, RM_TEMP);
 	}
 });
+
+test("shares the first probe and its warning, and probes again for a new omp version", async () => {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-boot-model-cache-"));
+	const warn = vi.spyOn(console, "warn");
+	try {
+		const bin = await fakeInstall(dir, {});
+		const count = path.join(dir, "probes");
+		const packageRoot = path.join(dir, "node_modules", "@oh-my-pi", "pi-coding-agent");
+		await fs.writeFile(
+			path.join(dir, "boot-model.ts"),
+			`import { appendFileSync } from "node:fs";
+			import { delimiter } from "node:path";
+			if (process.cwd() !== ${JSON.stringify(process.cwd())}
+				|| process.env.OMP_PACKAGE_ROOT !== ${JSON.stringify(packageRoot)}
+				|| !process.env.PATH.split(delimiter).includes(${JSON.stringify(dir)})) throw Error("wrong launch");
+			appendFileSync(${JSON.stringify(count)}, process.env.OMP_GUI_TEST_BOOT_PROBE + "\\n");
+			if (process.env.OMP_GUI_TEST_BOOT_PROBE === "first") console.log("provider/model");
+			else { process.stderr.write("bad catalog\\r\\nmore"); process.exitCode = 9; }
+			`,
+		);
+		const pick = (version: string, bridge = dir) => bootModelSelector({ bin, version, run }, bridge);
+		const missing = path.join(dir, "missing");
+		vi.stubEnv("OMP_GUI_TEST_BOOT_PROBE", "first");
+		expect(await Promise.all([pick("1"), pick("1", missing)])).toEqual(["provider/model", "provider/model"]);
+		vi.stubEnv("OMP_GUI_TEST_BOOT_PROBE", "second");
+		expect(await pick("1", missing)).toBe("provider/model");
+		expect(await Promise.all([pick("2"), pick("2", missing)])).toEqual([FALLBACK_BOOT_MODEL, FALLBACK_BOOT_MODEL]);
+		vi.stubEnv("OMP_GUI_TEST_BOOT_PROBE", "first");
+		expect(await pick("2")).toBe(FALLBACK_BOOT_MODEL);
+		expect(await fs.readFile(count, "utf8")).toBe("first\nsecond\n");
+		expect(warn.mock.calls.filter(([line]) => String(line).startsWith("[boot-model]"))).toEqual([
+			[`[boot-model] catalog lookup failed (exit 9: bad catalog\r); using ${FALLBACK_BOOT_MODEL}`],
+		]);
+	} finally {
+		vi.unstubAllEnvs();
+		warn.mockRestore();
+		await fs.rm(dir, RM_TEMP);
+	}
+}, 30_000);

@@ -20,7 +20,6 @@ import {
 	readWorkspaceImage,
 	readWorkspaceRange,
 	resolveWorkspaceFile,
-	sniffMime,
 	statWorkspacePath,
 } from "./workspace-fs";
 
@@ -45,7 +44,7 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-describe("sniffMime", () => {
+describe("file viewer MIME", () => {
 	it.each([
 		["doc.bin", ascii("%PDF-1.7"), "application/pdf"],
 		["pic.bin", PNG, "image/png"],
@@ -67,22 +66,17 @@ describe("sniffMime", () => {
 		["bundle.bin", ZIP, "application/zip"],
 		["logs.bin", [0x1f, 0x8b, 0x08], "application/gzip"],
 		["app.bin", ascii("SQLite format 3\0"), "application/vnd.sqlite3"],
-	])("%s starting %j is %s", (name, head, mime) => {
-		expect(sniffMime(fileOf(head), name)).toBe(mime);
-	});
-
-	it("trusts the bytes over the extension, refining only within a container family", () => {
-		expect(sniffMime(fileOf(PNG), "notes.pdf")).toBe("image/png");
-		expect(sniffMime(fileOf(ZIP), "notes.mp3")).toBe("application/zip");
-		expect(sniffMime(fileOf([0, 0, 0, 0x18, ...ascii("ftypisom")]), "voice.m4a")).toBe("audio/mp4");
-		expect(sniffMime(fileOf(ascii("OggS")), "clip.ogv")).toBe("video/ogg");
-	});
-
-	it("falls back to the extension, then to octet-stream", () => {
-		expect(sniffMime(fileOf(ascii("no magic here")), "track.aac")).toBe("audio/aac");
-		expect(sniffMime(fileOf(ascii("no magic here")), "Movie.MKV")).toBe("video/x-matroska");
-		expect(sniffMime(fileOf(ascii("no magic here")), "data.bin")).toBe("application/octet-stream");
-		expect(sniffMime(new Uint8Array(0), "empty")).toBe("application/octet-stream");
+		["notes.pdf", PNG, "image/png"],
+		["notes.mp3", ZIP, "application/zip"],
+		["voice.m4a", [0, 0, 0, 0x18, ...ascii("ftypisom")], "audio/mp4"],
+		["clip.ogv", ascii("OggS"), "video/ogg"],
+		["track.aac", ascii("no magic here"), "audio/aac"],
+		["Movie.MKV", ascii("no magic here"), "video/x-matroska"],
+		["data.bin", ascii("no magic here"), "application/octet-stream"],
+		["empty", [], "application/octet-stream"],
+	])("%s starting %j is %s", async (name, head, mime) => {
+		writeFileSync(join(root, name), head.length ? fileOf(head) : new Uint8Array(0));
+		await expect(readWorkspaceBinary(root, { path: name })).resolves.toMatchObject({ ok: true, mime });
 	});
 });
 
@@ -99,8 +93,8 @@ describe("readWorkspaceBinary", () => {
 	});
 
 	it("refuses a file over the cap with file_too_large, its size and type", async () => {
-		writeFileSync(join(root, "big.png"), fileOf(PNG, 4096));
-		const result = await readWorkspaceBinary(root, { path: "big.png" }, 1024);
+		writeFileSync(join(root, "big.bin"), fileOf(PNG, 4096));
+		const result = await readWorkspaceBinary(root, { path: "big.bin" }, 1024);
 		expect(result).toMatchObject({
 			ok: false,
 			code: "file_too_large",
@@ -110,7 +104,7 @@ describe("readWorkspaceBinary", () => {
 		});
 		expect(result.data).toHaveLength(0);
 		// A maxBytes at or above the cap is not a prefix request: still too large.
-		await expect(readWorkspaceBinary(root, { path: "big.png", maxBytes: 5000 }, 1024)).resolves.toMatchObject({
+		await expect(readWorkspaceBinary(root, { path: "big.bin", maxBytes: 5000 }, 1024)).resolves.toMatchObject({
 			ok: false,
 			code: "file_too_large",
 		});
@@ -123,6 +117,12 @@ describe("readWorkspaceBinary", () => {
 		const result = await readWorkspaceBinary(root, { path: "big.png", maxBytes: 100 }, 1024);
 		expect(result).toMatchObject({ ok: true, mime: "image/png", size: 4096, truncated: true });
 		expect(result.data).toEqual(bytes.slice(0, 100));
+		writeFileSync(join(root, "big.bin"), bytes);
+		await expect(readWorkspaceBinary(root, { path: "big.bin", maxBytes: 1 }, 1024)).resolves.toMatchObject({
+			ok: true,
+			mime: "application/octet-stream",
+			data: bytes.slice(0, 1),
+		});
 		// A file that fits the prefix is whole.
 		writeFileSync(join(root, "small.png"), bytes.subarray(0, 50));
 		await expect(readWorkspaceBinary(root, { path: "small.png", maxBytes: 100 })).resolves.toMatchObject({
@@ -177,12 +177,13 @@ describe("readWorkspaceRange", () => {
 	});
 
 	it("sniffs the type from the file's start only, else from the extension", async () => {
-		writeFileSync(join(root, "pic.png"), fileOf(PNG, 300));
-		await expect(readWorkspaceRange(root, { path: "pic.png", offset: 0, length: 100 })).resolves.toMatchObject({
+		const file = fileOf(PNG, 300);
+		file.set(PNG, 100);
+		writeFileSync(join(root, "pic.mp3"), file);
+		await expect(readWorkspaceRange(root, { path: "pic.mp3", offset: 0, length: 100 })).resolves.toMatchObject({
 			mime: "image/png",
 		});
-		writeFileSync(join(root, "song.mp3"), new Uint8Array(300));
-		await expect(readWorkspaceRange(root, { path: "song.mp3", offset: 100, length: 100 })).resolves.toMatchObject({
+		await expect(readWorkspaceRange(root, { path: "pic.mp3", offset: 100, length: 100 })).resolves.toMatchObject({
 			mime: "audio/mpeg",
 		});
 	});
@@ -268,6 +269,29 @@ describe("readWorkspaceImage", () => {
 			ok: false,
 			code: "unsupported_image",
 		});
+	});
+
+	it.each([
+		["\uFEFF\u00A0<SVG />", true],
+		["<?XML bad\uFFFD <SvG/>", true],
+		[" ".repeat(508) + "<svg", true],
+		[" ".repeat(509) + "<svg", false],
+		["\u0085<svg", false],
+		["<html><svg", false],
+		["%PDF- <svg", false],
+		["hello", false],
+	] as const)("checks the SVG prolog, not the suffix, for %j", async (text, image) => {
+		writeFileSync(join(root, "image.svg"), text);
+		const result = await readWorkspaceImage(root, { path: "image.svg" });
+		if (image) {
+			expect(result).toMatchObject({
+				ok: true,
+				mime: "image/svg+xml",
+				dataUrl: `data:image/svg+xml;base64,${Buffer.from(text).toString("base64")}`,
+			});
+		} else {
+			expect(result).toMatchObject({ ok: false, code: "unsupported_image", mime: null, dataUrl: null });
+		}
 	});
 
 	it("answers a copy the caller knows as unchanged, without bytes, until the file changes", async () => {

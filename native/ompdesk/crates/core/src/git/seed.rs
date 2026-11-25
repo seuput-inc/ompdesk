@@ -996,7 +996,6 @@ mod tests {
         let report = world.seed(volume_cloner()).await;
 
         assert_eq!(snapshot(&world.base, &kept), before);
-        assert_eq!(report.copied, 3);
         let out = entry_of("bundle", "out");
         let mut refused = vec![
             ("../outside/secret", "outside"),
@@ -1016,25 +1015,32 @@ mod tests {
         let mut left_out = skipped(&report);
         left_out.sort_unstable();
         refused.sort_unstable();
-        assert_eq!(left_out, refused);
         let made: Vec<String> = snapshot(&world.target, &[&world.target.join(".git")])
             .into_keys()
             .map(|path| path[world.target.to_string_lossy().len() + 1..].replace('\\', "/"))
             .collect();
+        let expected = [
+            ".env",
+            ".gitignore",
+            "README.md",
+            "bundle",
+            "bundle/file",
+            "bundle/in",
+            "store",
+            "store/pkg.js",
+            "trap",
+        ];
         assert_eq!(
-            made,
-            [
-                ".env",
-                ".gitignore",
-                "README.md",
-                "bundle",
-                "bundle/file",
-                "bundle/in",
-                "store",
-                "store/pkg.js",
-                "trap"
-            ]
+            report.copied,
+            3,
+            "skipped={left_out:?}; missing entries={:?}",
+            expected
+                .into_iter()
+                .filter(|entry| !made.iter().any(|path| path == *entry))
+                .collect::<Vec<_>>()
         );
+        assert_eq!(left_out, refused);
+        assert_eq!(made, expected);
         // The link written with an absolute path names the worktree's own copy.
         assert_eq!(
             fs::canonicalize(world.target.join("bundle").join("in")).unwrap(),

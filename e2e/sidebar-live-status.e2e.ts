@@ -16,7 +16,7 @@ import { chromium, devices, expect, type Locator, type Page, test } from "@playw
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { captureTo, controlToolCaller, cssString, exitApp, fixtureOmp } from "./harness";
+import { captureTo, controlToolCaller, cssString, exitApp, fixtureOmp, fixtureSessionPid } from "./harness";
 
 const CAPTURES = process.env.OMP_GUI_SIDEBAR_LIVE;
 
@@ -47,10 +47,38 @@ async function rowOf(page: Page, scope: Locator, tabId: string): Promise<Locator
 	return scope.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`);
 }
 
-/** The running count on a row's family chip, or 0 without one. */
+/**
+ * The running count on a row's family chip, or 0 without one. One read in the page: a count then a `getAttribute`
+ * auto-waits for a pill that left between the two calls (the chip goes with the last subagent), and that wait outlasts
+ * the poll, which then reports the last value it saw.
+ */
 async function running(row: Locator): Promise<number> {
-	const pill = row.locator("[data-family-running]");
-	return (await pill.count()) === 0 ? 0 : Number(await pill.getAttribute("data-family-running"));
+	const counts = await row
+		.locator("[data-family-running]")
+		.evaluateAll(pills => pills.map(pill => pill.getAttribute("data-family-running")));
+	return counts.length === 0 ? 0 : Number(counts[0]);
+}
+
+/**
+ * The running count of `row` (the tab's session) reaching `count`. A miss says what main's own summary of the session
+ * lists then, which is the one source the chip reads: a subagent main still lists is a frame it never took, and none
+ * listed while the chip stays is a push of main's change that never reached the window.
+ */
+async function runningBecomes(page: Page, row: Locator, tabId: string, count: number): Promise<void> {
+	try {
+		await expect.poll(() => running(row), { timeout: 15_000 }).toBe(count);
+	} catch (error) {
+		const sessionPath = (await tabsOf(page)).find(tab => tab.tabId === tabId)?.sessionPath ?? "";
+		const listed = await page.evaluate(
+			async path =>
+				(await window.omp.sessions.summaries())?.sessions.find(session => session.sessionPath === path)?.agents,
+			sessionPath,
+		);
+		throw new Error(
+			`${error instanceof Error ? error.message : String(error)}\nmain's summary of ${sessionPath} lists these subagents: ${JSON.stringify(listed)}`,
+			{ cause: error },
+		);
+	}
 }
 
 test("a session no window shows keeps its sidebar row current: subagents, run state, a split pane, the phone", async () => {
@@ -150,9 +178,9 @@ test("a session no window shows keeps its sidebar row current: subagents, run st
 
 		// They finish one by one: the count goes down, then the chip goes.
 		await send(desk, back, { type: "bash", command: "fixture:subagents:finish:sa-explore" });
-		await expect.poll(() => running(backRow), { timeout: 15_000 }).toBe(1);
+		await runningBecomes(desk, backRow, back, 1);
 		await send(desk, back, { type: "bash", command: "fixture:subagents:finish:sa-nested" });
-		await expect.poll(() => running(backRow), { timeout: 15_000 }).toBe(0);
+		await runningBecomes(desk, backRow, back, 0);
 		await captureTo(CAPTURES, desk, "desktop-2-subagents-finished");
 
 		// The turn ends unseen (done), then the session waits on an approval.
@@ -178,7 +206,7 @@ test("a session no window shows keeps its sidebar row current: subagents, run st
 		await captureTo(CAPTURES, desk, "desktop-4-split-unfocused");
 		for (const id of ["sa-explore", "sa-nested"])
 			await send(desk, back, { type: "bash", command: `fixture:subagents:finish:${id}` });
-		await expect.poll(() => running(backRow), { timeout: 15_000 }).toBe(0);
+		await runningBecomes(desk, backRow, back, 0);
 
 		// The phone: a tab of its own it does not show.
 		await desk.evaluate(() => window.omp.mobileWeb.command({ action: "enable" }));
@@ -319,7 +347,7 @@ test("a hidden session's row counts the subagents its agent starts after its omp
 			id => window.omp.rpc.commandForTab(id, { type: "get_state", brief: true }),
 			back,
 		);
-		const pid = Number((state.data as { sessionId?: string } | undefined)?.sessionId?.replace("fixture-", ""));
+		const pid = fixtureSessionPid((state.data as { sessionId?: string } | undefined)?.sessionId);
 		expect(pid).toBeGreaterThan(0);
 		process.kill(pid, "SIGKILL");
 		// The app starts another omp for the tab: two fake omps run again, the killed one not among them.

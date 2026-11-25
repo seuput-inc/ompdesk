@@ -35,9 +35,54 @@ use ai_memory_llm::{
     ProviderConfig, Role, complete_structured,
 };
 
-use super::RetrievalArgs;
 use super::query::{HitContext, QueryOutcome};
 use super::report::QaReportMeta;
+
+/// Shared opt-in QA provider arguments. Both retrieval QA and the abstention
+/// benchmark use this exact construction path so auth/provider behavior cannot
+/// drift between evaluators.
+#[derive(clap::Args, Debug, Default)]
+pub struct QaArgs {
+    /// Enable live-LLM QA. OFF by default; missing credentials produce a skip.
+    #[arg(long = "qa")]
+    pub enabled: bool,
+    /// QA answerer/judge provider.
+    #[arg(long)]
+    qa_provider: Option<String>,
+    /// QA answerer model id.
+    #[arg(long)]
+    qa_model: Option<String>,
+    /// QA answerer base URL (omit for native vendors).
+    #[arg(long)]
+    qa_base_url: Option<String>,
+    /// QA answerer API key. Prefer `--qa-api-key-env`.
+    #[arg(long)]
+    qa_api_key: Option<String>,
+    /// Env var containing the QA answerer API key.
+    #[arg(long)]
+    qa_api_key_env: Option<String>,
+    /// Auth file for OAuth/Codex/Copilot answerers.
+    #[arg(long)]
+    qa_token_file: Option<std::path::PathBuf>,
+    /// QA grader provider; defaults to the answerer.
+    #[arg(long)]
+    qa_grader_provider: Option<String>,
+    /// QA grader model; defaults to the answerer.
+    #[arg(long)]
+    qa_grader_model: Option<String>,
+    /// QA grader base URL; defaults to the answerer.
+    #[arg(long)]
+    qa_grader_base_url: Option<String>,
+    /// QA grader API key; defaults to the answerer.
+    #[arg(long)]
+    qa_grader_api_key: Option<String>,
+    /// Env var for the QA grader API key; defaults to the answerer.
+    #[arg(long)]
+    qa_grader_api_key_env: Option<String>,
+    /// QA grader auth file; defaults to the answerer.
+    #[arg(long)]
+    qa_grader_token_file: Option<std::path::PathBuf>,
+}
 
 /// chars/4 heuristic divisor, matching `query.rs`'s context-token estimate.
 const CHARS_PER_TOKEN: usize = 4;
@@ -52,6 +97,9 @@ const GRADE_MAX_TOKENS: u32 = 256;
 pub struct QaOutcome {
     /// LLM-judge verdict: did the candidate correctly answer the question?
     pub correct: bool,
+    /// Structured evidence-sufficiency verdict from synthesis (or from the
+    /// server answer's validated citation presence).
+    pub answerability: Answerability,
     /// Where the candidate came from: `synthesized` (harness LLM over the
     /// retrieved snippets) or `memory_query` (a server-provided `answer`).
     pub answer_source: &'static str,
@@ -70,10 +118,25 @@ pub struct QaOutcome {
 
 /// Answer synthesized from retrieved snippets (structured output).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-struct SynthesizedAnswer {
-    /// The answer to the question, grounded strictly in the snippets, or
-    /// "I don't know." when the snippets do not contain it.
+pub(crate) struct SynthesizedAnswer {
+    /// Typed verdict; evaluators never infer abstention from answer prose.
+    answerability: Answerability,
+    /// The answer to the question, grounded strictly in the snippets.
     answer: String,
+}
+
+/// Structured answerability classification used by both QA evaluators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Answerability {
+    /// The snippets contain enough evidence for the requested answer.
+    Answerable,
+    /// The snippets do not contain enough evidence.
+    Insufficient,
+    /// The snippets contain incompatible live claims.
+    Conflicting,
+    /// The snippets support only part of the requested answer.
+    Partial,
 }
 
 /// LLM-as-judge verdict (structured output), LongMemEval-style.
@@ -106,7 +169,7 @@ impl QaEngine {
     /// provider's key is used when the operator does not name one, so
     /// `--qa --qa-provider gemini --qa-model <m>` works with `GEMINI_API_KEY`
     /// already in the environment.
-    pub fn resolve(args: &RetrievalArgs) -> Result<Self> {
+    pub fn resolve(args: &QaArgs) -> Result<Self> {
         let Some(answer_provider_str) = args.qa_provider.as_deref() else {
             bail!("QA mode needs --qa-provider (e.g. anthropic|gemini|openai|openai-compat)");
         };
@@ -131,16 +194,18 @@ impl QaEngine {
             .as_deref()
             .unwrap_or(answer_provider_str);
         let grader_model = args.qa_grader_model.as_deref().unwrap_or(answer_model);
+        // A credential is tied to its endpoint: the grader reuses the
+        // answerer's key only when it targets the same provider and base URL,
+        // never when it is pointed elsewhere (GHSA grader-key-reuse).
+        let grader_auth = grader_auth(args, answer_provider_str, grader_provider_str);
         let grader = build_llm_provider(
             "grader",
             grader_provider_str,
             grader_model,
             args.qa_grader_base_url.or_ref(&args.qa_base_url),
-            args.qa_grader_api_key.or_ref(&args.qa_api_key),
-            args.qa_grader_api_key_env.or_ref(&args.qa_api_key_env),
-            args.qa_grader_token_file
-                .as_deref()
-                .or(args.qa_token_file.as_deref()),
+            grader_auth.api_key,
+            grader_auth.api_key_env,
+            grader_auth.token_file,
         )?;
 
         Ok(Self {
@@ -178,18 +243,36 @@ impl QaEngine {
         gold_answer: &str,
         outcome: &QueryOutcome,
     ) -> Result<QaOutcome> {
-        let (answer, answer_source, answer_latency_ms, answer_tokens) = match &outcome.answer {
-            // Future `answer=true` feature: the server already produced the
-            // answer, so grade it directly (no synthesis call).
-            Some(server_answer) => (server_answer.clone(), "memory_query", 0u128, 0usize),
-            None => {
-                let synth = self.synthesize(question, &outcome.contexts).await?;
-                (synth.answer, "synthesized", synth.latency_ms, synth.tokens)
-            }
-        };
+        let (answer, answerability, answer_source, answer_latency_ms, answer_tokens) =
+            match &outcome.answer {
+                // Future `answer=true` feature: the server already produced the
+                // answer, so grade it directly (no synthesis call).
+                Some(server_answer) => (
+                    server_answer.text.clone(),
+                    if server_answer.citations.is_empty() {
+                        Answerability::Insufficient
+                    } else {
+                        Answerability::Answerable
+                    },
+                    "memory_query",
+                    0u128,
+                    0usize,
+                ),
+                None => {
+                    let synth = self.synthesize(question, &outcome.contexts).await?;
+                    (
+                        synth.answer,
+                        synth.answerability,
+                        "synthesized",
+                        synth.latency_ms,
+                        synth.tokens,
+                    )
+                }
+            };
         let grade = self.grade(question, gold_answer, &answer).await?;
         Ok(QaOutcome {
             correct: grade.correct,
+            answerability,
             answer_source,
             answer,
             grade_reason: grade.reason,
@@ -200,7 +283,11 @@ impl QaEngine {
 
     /// Synthesize an answer from the retrieved snippets (the context an agent
     /// would actually get), measuring latency and a chars/4 token estimate.
-    async fn synthesize(&self, question: &str, contexts: &[HitContext]) -> Result<SynthResult> {
+    pub(crate) async fn synthesize(
+        &self,
+        question: &str,
+        contexts: &[HitContext],
+    ) -> Result<SynthResult> {
         let user = synthesis_user_prompt(question, contexts);
         let prompt_chars = SYNTHESIS_SYSTEM.chars().count() + user.chars().count();
         let request = ChatRequest {
@@ -218,6 +305,7 @@ impl QaEngine {
         let tokens = (prompt_chars + out.answer.chars().count()).div_ceil(CHARS_PER_TOKEN);
         Ok(SynthResult {
             answer: out.answer,
+            answerability: out.answerability,
             latency_ms,
             tokens,
         })
@@ -240,10 +328,11 @@ impl QaEngine {
 }
 
 /// Internal synthesis result carrier.
-struct SynthResult {
-    answer: String,
-    latency_ms: u128,
-    tokens: usize,
+pub(crate) struct SynthResult {
+    pub answer: String,
+    pub answerability: Answerability,
+    pub latency_ms: u128,
+    pub tokens: usize,
 }
 
 /// Convenience: borrow an inner `Option<String>` as `Option<&str>`, falling
@@ -257,10 +346,51 @@ impl OrRef for Option<String> {
     }
 }
 
+/// The grader's endpoint-tied credential material.
+struct GraderAuth<'a> {
+    api_key: Option<&'a str>,
+    api_key_env: Option<&'a str>,
+    token_file: Option<&'a std::path::Path>,
+}
+
+/// The grader's API key / key-env / token file, tied to its endpoint. A
+/// credential belongs to one endpoint: the grader inherits the answerer's key
+/// material only when it targets the **same** provider and base URL (the common
+/// one-judge LongMemEval setup). A grader pointed at a different provider or
+/// base URL must bring its own credential, so an answerer key is never sent to
+/// a different grader endpoint; with none of its own, `build_llm_provider`
+/// fails closed and the run skips. Base URL and model are not credentials and
+/// still default to the answerer's independently.
+fn grader_auth<'a>(
+    args: &'a QaArgs,
+    answer_provider: &str,
+    grader_provider: &str,
+) -> GraderAuth<'a> {
+    let same_endpoint = grader_provider == answer_provider
+        && args.qa_grader_base_url.or_ref(&args.qa_base_url) == args.qa_base_url.as_deref();
+    if same_endpoint {
+        GraderAuth {
+            api_key: args.qa_grader_api_key.or_ref(&args.qa_api_key),
+            api_key_env: args.qa_grader_api_key_env.or_ref(&args.qa_api_key_env),
+            token_file: args
+                .qa_grader_token_file
+                .as_deref()
+                .or(args.qa_token_file.as_deref()),
+        }
+    } else {
+        GraderAuth {
+            api_key: args.qa_grader_api_key.as_deref(),
+            api_key_env: args.qa_grader_api_key_env.as_deref(),
+            token_file: args.qa_grader_token_file.as_deref(),
+        }
+    }
+}
+
 const SYNTHESIS_SYSTEM: &str = "You answer a user's question using ONLY the memory snippets \
     retrieved for them. Base your answer strictly on those snippets — do not use outside \
-    knowledge or guess. Be concise and factual. If the snippets do not contain the answer, \
-    reply exactly: I don't know.";
+    knowledge or guess. Classify `answerability` as `answerable`, `insufficient`, `conflicting`, \
+    or `partial`, then give a concise factual `answer`. For anything except `answerable`, explain \
+    the evidence limitation without filling the gap from outside knowledge.";
 
 const GRADE_SYSTEM: &str = "You are a strict grader for a long-term-memory QA benchmark. Given a \
     question, the gold (reference) answer, and a candidate answer, decide whether the candidate \
@@ -383,6 +513,7 @@ fn build_llm_provider(
         // Comparisons must not differ by engine-side thinking behaviour;
         // keep the product default (off) for every candidate.
         compat_disable_thinking: false,
+        compat_stream: None,
         request_timeout_secs: ai_memory_llm::DEFAULT_REQUEST_TIMEOUT_SECS,
         reasoning_effort: None,
         extra_headers: ai_memory_llm::ExtraHeaders::default(),
@@ -430,6 +561,22 @@ mod tests {
     }
 
     #[test]
+    fn synthesis_requires_structured_answerability() {
+        let parsed: SynthesizedAnswer = serde_json::from_value(serde_json::json!({
+            "answerability": "insufficient",
+            "answer": "The snippets do not contain the port."
+        }))
+        .unwrap();
+        assert_eq!(parsed.answerability, Answerability::Insufficient);
+        assert!(
+            serde_json::from_value::<SynthesizedAnswer>(serde_json::json!({
+                "answer": "I don't know."
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn unknown_provider_is_rejected() {
         let err = build_llm_provider("answerer", "nope", "m", None, None, None, None)
             .map(|_| ())
@@ -455,6 +602,69 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("requires an API key"), "{err}");
+    }
+
+    #[test]
+    fn grader_credential_is_tied_to_its_endpoint() {
+        // Answerer with inline key + key-env + token file, native openai vendor.
+        fn answerer_with(edit: impl FnOnce(&mut QaArgs)) -> QaArgs {
+            let mut a = QaArgs {
+                enabled: true,
+                qa_provider: Some("openai".into()),
+                qa_model: Some("gpt-x".into()),
+                qa_api_key: Some("sk-answerer-inline".into()),
+                qa_api_key_env: Some("ANSWERER_KEY_ENV".into()),
+                qa_token_file: Some("/answerer/token".into()),
+                ..Default::default()
+            };
+            edit(&mut a);
+            a
+        }
+
+        // A grader pointed at a different base URL, with no credentials of its
+        // own, must NOT inherit the answerer's key material (GHSA grader-key
+        // reuse). With the old unconditional fallback these would be `Some`.
+        let diff_url =
+            answerer_with(|a| a.qa_grader_base_url = Some("https://grader.example/v1".into()));
+        let auth = grader_auth(&diff_url, "openai", "openai");
+        assert_eq!(
+            auth.api_key, None,
+            "inline key leaked to a different endpoint"
+        );
+        assert_eq!(
+            auth.api_key_env, None,
+            "key-env leaked to a different endpoint"
+        );
+        assert_eq!(
+            auth.token_file, None,
+            "token file leaked to a different endpoint"
+        );
+
+        // A grader at a different provider also does not inherit.
+        let diff_provider = answerer_with(|_| {});
+        let auth = grader_auth(&diff_provider, "openai", "gemini");
+        assert_eq!(auth.api_key, None);
+        assert_eq!(auth.api_key_env, None);
+        assert_eq!(auth.token_file, None);
+
+        // Control: same provider and base URL (the common single-judge setup)
+        // still inherits the answerer's credential.
+        let same = answerer_with(|_| {});
+        let auth = grader_auth(&same, "openai", "openai");
+        assert_eq!(auth.api_key, Some("sk-answerer-inline"));
+        assert_eq!(auth.api_key_env, Some("ANSWERER_KEY_ENV"));
+        assert_eq!(
+            auth.token_file,
+            Some(std::path::Path::new("/answerer/token"))
+        );
+
+        // The operator may still give a different-endpoint grader its own key.
+        let own = answerer_with(|a| {
+            a.qa_grader_base_url = Some("https://grader.example/v1".into());
+            a.qa_grader_api_key = Some("sk-grader-own".into());
+        });
+        let auth = grader_auth(&own, "openai", "openai");
+        assert_eq!(auth.api_key, Some("sk-grader-own"));
     }
 
     /// Live end-to-end QA smoke over a hand-made retrieval outcome (no eval
@@ -495,6 +705,7 @@ mod tests {
             .await
             .expect("QA evaluate succeeds with a live provider");
         assert_eq!(qa.answer_source, "synthesized");
+        assert_eq!(qa.answerability, Answerability::Answerable);
         assert!(qa.correct, "expected the judge to accept: {qa:?}");
     }
 }

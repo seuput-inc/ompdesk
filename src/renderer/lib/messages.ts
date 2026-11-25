@@ -1,4 +1,5 @@
 import type { StoreApi } from "zustand/vanilla";
+import { CREDIT_SPEND_OFF_WORDING } from "../../shared/credit-spend";
 import type {
 	AgentMessage,
 	ImageContent,
@@ -20,6 +21,7 @@ import { ensureTabRuntime } from "../stores/tab-runtime";
 import { useTabsStore } from "../stores/tabs";
 import { toast, toastError } from "../stores/toast";
 import { endAutoGoal } from "./auto-mode-client";
+import { withCompactionRun } from "./compaction-action";
 import { translate } from "./i18n";
 import { promptDisplayText } from "./prompt-text";
 import { IMAGE_ONLY_CHIP } from "./queue-chip";
@@ -109,6 +111,7 @@ export type TurnErrorKind =
 	| "connection"
 	| "contextOverflow"
 	| "auth"
+	| "creditsOff"
 	| "rateLimit"
 	| "overloaded"
 	| "compaction"
@@ -135,6 +138,8 @@ const TURN_ERROR_ACTIONS: Record<TurnErrorKind, readonly TurnErrorAction[]> = {
 	connection: ["retry", "openProviders"],
 	contextOverflow: ["compact", "changeModel"],
 	auth: ["openProviders", "changeModel"],
+	// Trying again only meets the same refusal: the ways on are the switch (Models & accounts) or another model.
+	creditsOff: ["openProviders", "changeModel"],
 	rateLimit: ["retry", "changeModel"],
 	overloaded: ["retry", "changeModel"],
 	compaction: ["changeModel", "retry"],
@@ -153,6 +158,8 @@ function statusPattern(codes: string): RegExp {
 const TURN_ERROR_PATTERNS: ReadonlyArray<readonly [Exclude<TurnErrorKind, "unknown">, readonly RegExp[]]> = [
 	["aborted", [/request was aborted|operation was aborted|aborted by (?:the )?user|\babort ?error\b/i]],
 	["compaction", [/compaction freed too little|compaction failed|failed to compact|could not compact/i]],
+	// Before `rateLimit`: the bridge's refusal is worded as a usage limit too (the limit wait reads that).
+	["creditsOff", [CREDIT_SPEND_OFF_WORDING]],
 	["rateLimit", [statusPattern("429"), /rate[ _-]?limit|too many requests|quota|usage limit|insufficient_quota/i]],
 	[
 		"contextOverflow",
@@ -252,9 +259,14 @@ function isRestoreResult(value: unknown): value is RpcAbortAndRestoreQueueResult
  * `composer.restoredQueue` mounted (ComposerRestoredQueue) each message stays its own held item, apart from the
  * draft: nothing runs until the user resumes it, edits it or removes it (the queue is paused, never auto-released).
  * Without one it comes back the way the TUI's Esc does: steers then follow-ups, oldest first, joined by blank
- * lines, ahead of any draft (kept after a blank line); images join the strip; one toast says so.
+ * lines, ahead of any draft (kept after a blank line); images join the strip; one toast says so. `kept`: the messages
+ * come from an omp that ended (`takeHeldQueue`), not from a Stop.
  */
-export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortAndRestoreQueueResult): void {
+export function restoreAbortedQueue(
+	composer: ComposerStore,
+	restored: RpcAbortAndRestoreQueueResult,
+	kept = false,
+): void {
 	const entries = [
 		...restored.steering.map(entry => ({ lane: "steering" as const, entry })),
 		...restored.followUp.map(entry => ({ lane: "followUp" as const, entry })),
@@ -266,6 +278,7 @@ export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortA
 		lane,
 		text: entry.text === IMAGE_ONLY_CHIP && entry.images?.length ? "" : entry.text,
 		images: toImages(entry.images),
+		...(kept ? { kept } : {}),
 	}));
 	if (composer.restoredTrayMounted > 0) {
 		composer.holdRestored(items);
@@ -289,6 +302,20 @@ export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortA
 			}),
 		});
 	}
+}
+
+/**
+ * The tab's queued messages the core kept when the omp holding them went (a crash, a restart, a quit, a closed tab:
+ * core `sidecar/held_queue.rs`), taken once into this tray: the core hands each kept queue to the first taker only, so
+ * another window or device, a late exit or the next relaunch never offers it again. Nothing is sent by itself.
+ */
+export async function takeHeldQueue(
+	rpc: Pick<TabRpc, "command">,
+	composer: Pick<StoreApi<ComposerStore>, "getState">,
+): Promise<void> {
+	const response = await rpc.command({ type: "queue_take_held" });
+	if (response.success && isRestoreResult(response.data))
+		restoreAbortedQueue(composer.getState(), response.data, true);
 }
 
 /**
@@ -331,10 +358,15 @@ export async function runManualMaintenance(
 	tabId?: string | null,
 ): Promise<{ response: RpcResponse; cancelled: boolean }> {
 	const session = sessionRuntimeStore<SessionStore>(tabId ?? focusedRuntimeTabId(), "session") ?? useSessionStore;
-	session.setState({ isCompacting: true, compactionInfo: { reason: "manual", action } });
+	session.setState({ isCompacting: true, compactionInfo: { reason: "manual", action, startedAt: Date.now() } });
 	try {
 		const response = await request();
-		return { response, cancelled: session.getState().compactionInfo?.cancelling === true };
+		const info = session.getState().compactionInfo;
+		const cancelled = info?.cancelling === true;
+		// A handoff leaves no compaction card and is no measure of the next compaction.
+		if (action === "compact" && response.success && !cancelled)
+			session.setState({ compactionRuns: withCompactionRun(session.getState().compactionRuns, info) });
+		return { response, cancelled };
 	} finally {
 		if (session.getState().compactionInfo?.reason === "manual")
 			session.setState({ isCompacting: false, compactionInfo: null });
@@ -344,21 +376,25 @@ export async function runManualMaintenance(
 /** A Stop's guard against a second Stop never outlives this: a lost `agent_end` must not leave the button dead. */
 const STOP_SETTLE_MS = 10_000;
 
-/** Hold `stopping` until the stopped turn has ended (or the cap), so a second click or Esc for it sends nothing. */
+/**
+ * Hold `stopping` until the stopped turn has ended (or the cap), so a second click or Esc for it sends nothing. A turn
+ * still running at the cap is said out loud: omp confirmed the Stop, but the run has not ended on screen.
+ */
 function releaseStoppingWhenTurnEnds(composer: ComposerStore, session: StoreApi<SessionStore>): void {
 	if (!session.getState().isStreaming) {
 		composer.setStopping(false);
 		return;
 	}
 	let unsubscribe = () => {};
-	const done = () => {
+	const done = (ended: boolean) => {
 		unsubscribe();
 		clearTimeout(cap);
 		composer.setStopping(false);
+		if (!ended) toast({ variant: "warning", message: translate("input.stopNotEnded") });
 	};
-	const cap = setTimeout(done, STOP_SETTLE_MS);
+	const cap = setTimeout(() => done(!session.getState().isStreaming), STOP_SETTLE_MS);
 	unsubscribe = session.subscribe(state => {
-		if (!state.isStreaming) done();
+		if (!state.isStreaming) done(true);
 	});
 }
 
@@ -372,6 +408,11 @@ function releaseStoppingWhenTurnEnds(composer: ComposerStore, session: StoreApi<
  * abort until it finished on its own. A goal the automatic choice started ends
  * with the stopped turn (lib/auto-mode-client.ts). One Stop is in flight per turn
  * (`composer.stopping`, until the turn ends): a double click or a double Esc sends one command.
+ *
+ * What became of the Stop is said, never left to a click that did nothing (Orca's separate stop target and outcome,
+ * MapGapB N70): omp refusing it is an error toast, and a Stop whose answer never came (a dropped link, a timeout) is
+ * a warning that it may not have stopped; neither throws, so every `void` caller is covered. The turn stays shown as
+ * running either way and Stop works again at once.
  */
 export async function abortActiveTurn(
 	rpc: Pick<TabRpc, "abortAndRestoreQueue" | "abortRetry" | "abortMaintenance"> &
@@ -406,9 +447,17 @@ export async function abortActiveTurn(
 				// Generic abort below also cancels retry server-side.
 			}
 		}
-		const response = await rpc.abortAndRestoreQueue({ surface });
+		let response: RpcResponse;
+		try {
+			response = await rpc.abortAndRestoreQueue({ surface });
+		} catch (error) {
+			composer.setStopping(false);
+			toastError({ title: translate("input.stopUnconfirmed"), error, variant: "warning" });
+			return { type: "response", command: "abort_and_restore_queue", success: false, error: String(error) };
+		}
 		if (!response.success) {
 			composer.setStopping(false);
+			toastError({ title: translate("input.stopRefused"), error: response });
 			return response;
 		}
 		if (isRestoreResult(response.data)) restoreAbortedQueue(composer, response.data);

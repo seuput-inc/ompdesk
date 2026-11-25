@@ -31,7 +31,6 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
-import type { BuiltinReaState } from "./builtin-mcp";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
@@ -39,6 +38,7 @@ import type { DiskCareState } from "./disk-care";
 import type { ExtensionUpdateState } from "./extension-update";
 import type { GithubAuthState, GithubStarState } from "./github-auth";
 import type {
+	AutoCloseTurn,
 	CustomProviderInput,
 	CustomProvidersConfig,
 	DeepLinkPayload,
@@ -169,6 +169,7 @@ import type {
 import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE, type SchedulesState } from "./schedules";
 import type { VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
+import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
 import type { GitAslrAction, GitAslrResult, SetupItemId, SetupState } from "./setup";
 import { type IpcSidebarProjects, SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "./sidebar-projects";
 import {
@@ -421,6 +422,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		resume: {
 			cancelWait: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_CANCEL_WAIT, tabId),
 			stop: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_STOP, tabId),
+			continueCut: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_CONTINUE, tabId),
+			dismissCut: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_DISMISS, tabId),
 			reportOnline: (online: boolean) => transport.send(IPC_COMMANDS.CONNECTIVITY_REPORT, online),
 		},
 
@@ -572,6 +575,12 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				transport.invoke(IPC_COMMANDS.SESSIONS_MESSAGES, { sessionPath, device }) as Promise<AgentMessage[]>,
 			move: (sessionPath: string, cwd: string, device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_MOVE, { sessionPath, cwd, device }) as Promise<string>,
+			/** What each row's session works in (`session-target.ts`), read on the computer that runs it. */
+			targets: (sessions: SessionTargetQuery[], device?: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_TARGETS, { sessions, device }) as Promise<SessionTargets>,
+			/** Repository images by root; resolves once each was looked up (bounded, cached on that computer). */
+			artwork: (roots: string[], device?: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_ARTWORK, { roots, device }) as Promise<SessionArtworks>,
 			saveDiagnosticBundle: (request: DiagnosticBundleRequest) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_DUMP_BUNDLE, request) as Promise<DiagnosticBundleResult>,
 			openInNewWindow: (payload: IpcSessionOpenNewWindowPayload) =>
@@ -587,7 +596,11 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			list: () => transport.invoke(IPC_COMMANDS.GET_TABS) as Promise<IpcTabInfo[]>,
 			spawn: (payload: IpcSpawnTabPayload) =>
 				transport.invoke(IPC_COMMANDS.SPAWN_TAB, payload) as Promise<IpcSpawnTabResult | null>,
-			close: (tabId: string) => transport.invoke(IPC_COMMANDS.CLOSE_TAB, { tabId }) as Promise<boolean>,
+			close: (tabId: string, expectedTurn?: AutoCloseTurn) =>
+				transport.invoke<boolean>(
+					IPC_COMMANDS.CLOSE_TAB,
+					expectedTurn === undefined ? { tabId } : { tabId, expectedTurn },
+				),
 			setActive: async (tabId: string) => {
 				const switched = await transport.invoke<boolean>(IPC_COMMANDS.SET_ACTIVE_TAB, { tabId });
 				if (switched) activeTabId = tabId;
@@ -613,6 +626,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				const payload: IpcFileEditReportPayload = { dirtyTabId };
 				await transport.invoke(IPC_COMMANDS.FILE_EDIT_REPORT, payload);
 			},
+			answerAgentClose: async answer => {
+				await transport.invoke(IPC_COMMANDS.AGENT_CLOSE_ANSWER, answer);
+			},
 			getSessionOwner: (sessionPath: string, device?: string) =>
 				transport.invoke(IPC_COMMANDS.GET_SESSION_OWNER, {
 					sessionPath,
@@ -622,6 +638,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 
 		remote: {
 			getState: () => transport.invoke(IPC_COMMANDS.REMOTE_GET_STATE) as Promise<RemoteState>,
+			setDeviceSectionOrder: async order => {
+				await transport.invoke(IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER, order);
+			},
 			setHostEnabled: (enabled: boolean) =>
 				transport.invoke(IPC_COMMANDS.REMOTE_SET_HOST_ENABLED, enabled) as Promise<RemoteState>,
 			setDeviceName: (name: string) =>
@@ -751,11 +770,6 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				transport.invoke(IPC_COMMANDS.ACCOUNT_ROTATION_GET, device) as Promise<AccountRotationState>,
 			set: (mode: AccountRotationMode, device?: string) =>
 				transport.invoke(IPC_COMMANDS.ACCOUNT_ROTATION_SET, mode, device) as Promise<AccountRotationState>,
-		},
-		builtinRea: {
-			get: (device?: string) => transport.invoke(IPC_COMMANDS.BUILTIN_REA_GET, device) as Promise<BuiltinReaState>,
-			set: (enabled: boolean, device?: string) =>
-				transport.invoke(IPC_COMMANDS.BUILTIN_REA_SET, enabled, device) as Promise<BuiltinReaState>,
 		},
 		localEngines: {
 			get: (device?: string) =>

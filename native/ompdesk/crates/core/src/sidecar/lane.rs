@@ -17,7 +17,9 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::bridge::{Bridge, CONNECT_TIMEOUT, Out, Sink, new_address, remove_address};
+use super::chips::{Chips, Lane as ChipLane};
 use super::frames::{Decoder, Frame, head_of, js_trim, strip_vt_control_characters, supports_v2};
+use super::held_queue;
 use super::launch::{
     MAX_RESTART_ATTEMPTS, Open, WINDOWS_SESSION_END_EXIT_CODE, file_exists, restart_delay,
     session_open,
@@ -25,6 +27,7 @@ use super::launch::{
 use super::messages::complete_run_messages;
 use super::process::{self, Exit, Start, pump_stderr, pump_stdout, signal_name};
 use super::queue::{Slot, queue};
+use super::queue_commands::{self, Continuation, Step};
 use super::stop::{Proc, StdinMsg, Timing};
 use super::stream::Stream;
 use crate::server::{Events, Fault};
@@ -43,6 +46,7 @@ const START_SLOW: Duration = Duration::from_millis(20_000);
 /// How long the lane's own protocol commands (`negotiate_protocol`, the filter) may wait for an answer
 /// (`RpcClient`'s default timeout).
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(8_000);
+const QUEUE_STOCK_TIMEOUT: Duration = Duration::from_secs(120);
 /// `--model` of a spawn that boots on the configured default model (`DEFAULT_ROLE_MODEL_SELECTOR`).
 const DEFAULT_MODEL_SELECTOR: &str = "@default";
 const OWNED_TEXT: &str = "This session is still open in another omp process.";
@@ -55,13 +59,18 @@ fn disconnected() -> Fault {
     Fault::new("sidecar_disconnected", "Sidecar disconnected")
 }
 
-fn no_bridge() -> Fault {
+fn queue_json_error(error: serde_json::Error) -> Fault {
+    Fault::new("queue_error", error.to_string())
+}
+
+pub(super) fn no_bridge() -> Fault {
     Fault::new("bridge_disconnected", "gui-bridge not connected")
 }
 
 /// A stock command's answer is an event (`sidecar.answer`, in order with the frames); this settles the request behind it.
 pub type StockReply = oneshot::Sender<Result<(), Fault>>;
 pub type BridgeReply = oneshot::Sender<Result<Option<Box<RawValue>>, Fault>>;
+type QueueReply = oneshot::Sender<Result<Box<RawValue>, Fault>>;
 
 /// What main sent that the lane applies in `seq` order.
 pub enum Command {
@@ -83,8 +92,24 @@ pub enum Command {
         timeout: Option<Duration>,
         reply: StockReply,
     },
+    Queue {
+        spawn_id: u64,
+        command: Box<RawValue>,
+        bridge_connected: bool,
+        reply: QueueReply,
+    },
     Send(Box<RawValue>),
+    DesktopProcess {
+        spawn_id: u64,
+        action: DesktopProcessAction,
+        reply: oneshot::Sender<bool>,
+    },
+    TurnEdits {
+        spawn_id: u64,
+        reply: oneshot::Sender<(Bridge, String)>,
+    },
     Bridge {
+        spawn_id: Option<u64>,
         method: String,
         params: Option<Box<RawValue>>,
         timeout: Option<Duration>,
@@ -94,10 +119,24 @@ pub enum Command {
     WhenExited(oneshot::Sender<()>),
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopProcessAction {
+    Watch,
+    Abort,
+    Restart,
+}
+
 impl Command {
     /// What a command is answered when there is no lane to apply it (the tab is gone).
     pub fn refuse(self) {
         match self {
+            Command::DesktopProcess { reply, .. } => {
+                let _ = reply.send(false);
+            }
+            Command::Queue { reply, .. } => {
+                let _ = reply.send(Err(disconnected()));
+            }
             Command::Stock { reply, .. } => {
                 let _ = reply.send(Err(disconnected()));
             }
@@ -164,6 +203,7 @@ pub enum Msg {
     Frame {
         spawn_id: u64,
         frame: Frame,
+        bridge: bool,
     },
     BridgeLost {
         spawn_id: u64,
@@ -195,6 +235,10 @@ pub enum Msg {
     },
     RestartTimer {
         epoch: u64,
+    },
+    QueueTimeout {
+        generation: u64,
+        id: String,
     },
     NegotiateTimeout {
         generation: u64,
@@ -239,6 +283,8 @@ pub struct OpenParams {
     #[serde(default)]
     pub bridge: bool,
     pub ledger_file: Option<String>,
+    /// The journal of the person's queued messages (`held_queue.rs`); absent: kept in memory only (tests).
+    pub held_queue_file: Option<String>,
     pub start_slow_ms: Option<u64>,
     pub entry_id_timeout_ms: Option<u64>,
     pub tuning: Option<Tuning>,
@@ -308,6 +354,12 @@ struct Identity {
 enum Waiter {
     /// `sidecar.command`: main's call.
     Caller(u64, StockReply),
+    Queue {
+        generation: u64,
+        next: Box<Continuation>,
+        reply: QueueReply,
+        _cancel_timer: oneshot::Sender<()>,
+    },
     /// The lane's own `negotiate_protocol` of that spawn.
     Negotiate(u64),
     /// The lane's own `get_state`, whose answer lets the tab read `ready` (no deadline).
@@ -335,8 +387,10 @@ struct Pending {
 struct Running {
     spawn_id: u64,
     proc: Arc<Proc>,
+    confirmed_exit: watch::Receiver<bool>,
     pending: Vec<Pending>,
     next_id: u64,
+    chips: Chips,
     bridge: Bridge,
     bridge_address: Option<String>,
     /// True once the omp's stderr closed.
@@ -403,6 +457,7 @@ pub struct Lane {
     event_filter: Vec<String>,
     bridge_enabled: bool,
     ledger_file: Option<String>,
+    held_queue_file: Option<std::path::PathBuf>,
     start_slow: Duration,
     entry_id_timeout: Duration,
     tuning: Tuning,
@@ -524,6 +579,7 @@ impl Lane {
             event_filter: params.event_filter,
             bridge_enabled: params.bridge,
             ledger_file: params.ledger_file,
+            held_queue_file: params.held_queue_file.map(Into::into),
             start_slow: params
                 .start_slow_ms
                 .map_or(START_SLOW, Duration::from_millis),
@@ -721,13 +777,30 @@ impl Lane {
             Msg::Gated { ask, cwd } => self.on_gated(ask, cwd),
             Msg::SlowLog { ask, lines } => self.on_slow_log(ask, lines),
             Msg::SessionFreed { ask, free } => self.on_session_freed(ask, free),
-            Msg::Frame { spawn_id, frame } => {
+            Msg::Frame {
+                spawn_id,
+                frame,
+                bridge,
+            } => {
                 if self
                     .running
                     .as_ref()
                     .is_some_and(|r| r.spawn_id == spawn_id)
                 {
-                    self.route_frame(frame);
+                    if matches!(
+                        frame.ty.as_deref(),
+                        Some(
+                            "desktop_slot_acquire" | "desktop_slot_touch" | "desktop_slot_release"
+                        )
+                    ) {
+                        if bridge && !self.quiet {
+                            let data = json!({"tab": self.tab, "cmd": self.applied, "desktopSpawnId": spawn_id});
+                            super::tap(&self.tab, "sidecar.frame", &data, Some(&frame.raw));
+                            self.events.send_bin("sidecar.frame", &data, frame.raw);
+                        }
+                    } else {
+                        self.route_frame(frame);
+                    }
                 }
             }
             Msg::BridgeLost { spawn_id } => {
@@ -761,6 +834,14 @@ impl Lane {
                 }
             }
             Msg::NegotiateTimeout { generation, id } => self.on_negotiate_timeout(generation, &id),
+            Msg::QueueTimeout { generation, id } => {
+                if self.is_live(generation)
+                    && let Some(running) = &mut self.running
+                    && let Some(at) = running.pending.iter().position(|pending| pending.id == id)
+                {
+                    Self::expire_queue(running.pending.remove(at));
+                }
+            }
             Msg::QueueWaits { generation } => {
                 if self.is_live(generation) && self.status == "starting" && !self.detail.queued {
                     self.set_status(
@@ -817,18 +898,104 @@ impl Lane {
                 timeout,
                 reply,
             } => self.stock(seq, &command, timeout, reply),
+            Command::Queue {
+                spawn_id,
+                command,
+                bridge_connected,
+                reply,
+            } => {
+                if !self
+                    .running
+                    .as_ref()
+                    .is_some_and(|r| r.spawn_id == spawn_id)
+                {
+                    let _ = reply.send(Err(disconnected()));
+                    return;
+                }
+                // Consume the sequence even when the GUI's command cannot be decoded.
+                let command: Value = match serde_json::from_str(command.get()) {
+                    Ok(command) => command,
+                    Err(error) => {
+                        let _ = reply.send(Err(queue_json_error(error)));
+                        return;
+                    }
+                };
+                let session = self.held_session();
+                let held = held_queue::command(
+                    &command,
+                    self.held_queue_file.as_deref(),
+                    session.as_deref(),
+                    now_ms(),
+                );
+                let step = match held {
+                    Some(step) => step,
+                    None => {
+                        let Some(running) = self.running.as_mut() else {
+                            let _ = reply.send(Err(disconnected()));
+                            return;
+                        };
+                        queue_commands::start(
+                            command,
+                            &mut running.chips,
+                            bridge_connected,
+                            now_ms(),
+                        )
+                    }
+                };
+                self.queue_step(step, reply);
+            }
             Command::Send(frame) => {
                 let mut line = frame.get().as_bytes().to_vec();
                 line.push(b'\n');
                 self.write_line(line);
             }
+            Command::DesktopProcess {
+                spawn_id,
+                action,
+                reply,
+            } => {
+                let Some(running) = self.running.as_ref().filter(|r| r.spawn_id == spawn_id) else {
+                    let _ = reply.send(false);
+                    return;
+                };
+                match action {
+                    DesktopProcessAction::Watch => {
+                        let mut proof = running.confirmed_exit.clone();
+                        tokio::spawn(async move {
+                            let confirmed = proof.wait_for(|gone| *gone).await.is_ok();
+                            let _ = reply.send(confirmed);
+                        });
+                    }
+                    DesktopProcessAction::Abort | DesktopProcessAction::Restart => {
+                        self.internal(
+                            json!({ "type": "abort" }),
+                            Waiter::Ignore,
+                            Some(COMMAND_TIMEOUT),
+                        );
+                        if matches!(action, DesktopProcessAction::Restart) {
+                            self.restart(None, None);
+                        }
+                        let _ = reply.send(true);
+                    }
+                }
+            }
+            Command::TurnEdits { spawn_id, reply } => {
+                if let Some(running) = self.running.as_ref().filter(|r| r.spawn_id == spawn_id) {
+                    let _ = reply.send((running.bridge.clone(), self.cwd.clone()));
+                }
+            }
             Command::Bridge {
+                spawn_id,
                 method,
                 params,
                 timeout,
                 reply,
             } => {
-                let Some(running) = &self.running else {
+                let Some(running) = self
+                    .running
+                    .as_ref()
+                    .filter(|r| spawn_id.is_none_or(|id| id == r.spawn_id))
+                else {
                     let _ = reply.send(Err(no_bridge()));
                     return;
                 };
@@ -1105,7 +1272,11 @@ impl Lane {
             tokio::spawn(async move {
                 pump_stdout(started.stdout, |line| {
                     if let Some(frame) = decoder.line(line) {
-                        let _ = inbox.send(Msg::Frame { spawn_id, frame });
+                        let _ = inbox.send(Msg::Frame {
+                            spawn_id,
+                            frame,
+                            bridge: false,
+                        });
                     }
                 })
                 .await;
@@ -1142,7 +1313,11 @@ impl Lane {
             let inbox = inbox.clone();
             Arc::new(move |out| {
                 let _ = inbox.send(match out {
-                    Out::Event(frame) => Msg::Frame { spawn_id, frame },
+                    Out::Event(frame) => Msg::Frame {
+                        spawn_id,
+                        frame,
+                        bridge: true,
+                    },
                     Out::Lost => Msg::BridgeLost { spawn_id },
                 });
             })
@@ -1151,14 +1326,20 @@ impl Lane {
         self.running = Some(Running {
             spawn_id,
             proc: Arc::clone(&proc),
+            confirmed_exit: started.confirmed_exit,
             pending: Vec::new(),
             next_id: 0,
+            chips: Chips::default(),
             bridge,
             bridge_address,
             drained: drain_wait,
         });
         self.arm_slow_timer(generation);
-        self.emit("sidecar.spawned", json!({ "pid": proc.pid }));
+        let mut spawned = json!({ "pid": proc.pid, "spawnId": spawn_id, "wrapped": cfg!(windows) && start.shell });
+        if let Some(error) = started.priority_error {
+            spawned["priorityError"] = error.to_string().into();
+        }
+        self.emit("sidecar.spawned", spawned);
     }
 
     fn arm_slow_timer(&mut self, generation: u64) {
@@ -1262,6 +1443,76 @@ impl Lane {
             self.send_command(map, info, Waiter::Caller(seq, reply), timeout)
         {
             let _ = reply.send(Err(disconnected()));
+        }
+    }
+
+    fn queue_step(&mut self, step: Step, reply: QueueReply) {
+        match step {
+            Step::Done(value) => {
+                let _ =
+                    reply.send(serde_json::value::to_raw_value(&value).map_err(queue_json_error));
+            }
+            Step::Fail(fault) => {
+                let _ = reply.send(Err(fault));
+            }
+            Step::DequeueBridge => {
+                let Some(bridge) = self.running.as_ref().map(|r| r.bridge.clone()) else {
+                    let _ = reply.send(Err(disconnected()));
+                    return;
+                };
+                tokio::spawn(async move {
+                    let result = bridge
+                        .request("composer.dequeue", None, None)
+                        .await
+                        .and_then(|raw| {
+                            let messages = raw.filter(|v| v.get() != "null");
+                            // Only wrap stock's payload: images and message text do not need decoding.
+                            #[derive(serde::Serialize)]
+                            struct Popped<'a> {
+                                messages: &'a [Box<RawValue>],
+                            }
+                            serde_json::value::to_raw_value(&Popped {
+                                messages: messages.as_slice(),
+                            })
+                            .map_err(queue_json_error)
+                        });
+                    let _ = reply.send(result);
+                });
+            }
+            Step::Stock(command, next) => {
+                let generation = self.generation;
+                let (cancel, cancelled) = oneshot::channel();
+                let waiter = Waiter::Queue {
+                    generation,
+                    next: Box::new(next),
+                    reply,
+                    _cancel_timer: cancel,
+                };
+                if let Some(id) = self.internal(command, waiter, Some(QUEUE_STOCK_TIMEOUT)) {
+                    let inbox = self.inbox.clone();
+                    tokio::spawn(async move {
+                        tokio::select! {
+                            _ = cancelled => {}
+                            () = tokio::time::sleep(QUEUE_STOCK_TIMEOUT) => {
+                                let _ = inbox.send(Msg::QueueTimeout { generation, id });
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    fn expire_queue(pending: Pending) {
+        if let Waiter::Queue { reply, .. } = pending.waiter {
+            let _ = reply.send(Err(Fault::new(
+                "queue_error",
+                format!(
+                    "RPC timeout ({}ms): {}",
+                    QUEUE_STOCK_TIMEOUT.as_millis(),
+                    pending.command.ty
+                ),
+            )));
         }
     }
 
@@ -1382,7 +1633,7 @@ impl Lane {
         self.release_barriers();
     }
 
-    fn dispatch_frame(&mut self, frame: Frame) {
+    fn dispatch_frame(&mut self, mut frame: Frame) {
         match frame.ty.as_deref() {
             Some("ready") => {
                 if let Ok(ready) = serde_json::from_slice::<Value>(&frame.raw) {
@@ -1392,9 +1643,51 @@ impl Lane {
             }
             // A response nobody waits for is a frame like any other.
             Some("response") if self.on_response(&frame) => return,
+            Some("queue_update") => {
+                if let Some(raw) = self
+                    .running
+                    .as_mut()
+                    .and_then(|r| r.chips.project(&frame.raw, now_ms()))
+                {
+                    frame.raw = raw;
+                }
+                self.note_held_queue();
+            }
             _ => {}
         }
         self.emit_frame(frame);
+    }
+
+    /// The session the person's queued messages belong to: the tab's, else the one omp named.
+    fn held_session(&self) -> Option<String> {
+        self.session_path
+            .clone()
+            .or_else(|| self.session.as_ref()?.session_file.clone())
+    }
+
+    /// Journals the live omp's queue as stock just reported it (`held_queue.rs`).
+    fn note_held_queue(&self) {
+        let (Some(running), Some(session)) = (&self.running, self.held_session()) else {
+            return;
+        };
+        let texts = |lane| {
+            running
+                .chips
+                .lane(lane)
+                .iter()
+                .map(|chip| chip.text.clone())
+                .collect()
+        };
+        held_queue::note(
+            self.held_queue_file.as_deref(),
+            &session,
+            &held_queue::spawn_owner(&self.tab, running.spawn_id),
+            held_queue::Lanes {
+                steering: texts(ChipLane::Steering),
+                follow_up: texts(ChipLane::FollowUp),
+            },
+            now_ms(),
+        );
     }
 
     /// Routes an omp response to its waiting command; false when nobody waits (it was never asked, timed out or its
@@ -1416,7 +1709,7 @@ impl Lane {
         let abandoned =
             matches!(&running.pending[at].waiter, Waiter::Caller(_, reply) if reply.is_closed());
         if expired || abandoned {
-            running.pending.remove(at);
+            Self::expire_queue(running.pending.remove(at));
             return false;
         }
         let pending = running.pending.remove(at);
@@ -1426,6 +1719,19 @@ impl Lane {
                 // The answer is an event, in the order omp wrote it among the frames; the request answers behind it.
                 self.answer_event(seq, Some(text.into_owned().into_bytes()));
                 let _ = reply.send(Ok(()));
+            }
+            Waiter::Queue {
+                generation,
+                next,
+                reply,
+                ..
+            } => {
+                if !self.is_live(generation) {
+                    let _ = reply.send(Err(disconnected()));
+                } else if let Some(r) = self.running.as_mut() {
+                    let step = next.answer(&text, &mut r.chips, now_ms());
+                    self.queue_step(step, reply);
+                }
             }
             Waiter::Negotiate(generation) => self.after_negotiate(generation, true),
             Waiter::Answered(generation) => self.after_answered(generation),
@@ -1438,25 +1744,33 @@ impl Lane {
     // formal/tab-session `Observe`, `Switch(f)`, `NewSession` (findings F1, F2; CORRESPONDENCE A5).
     fn observe(&mut self, command: &CommandInfo, response: &str) {
         #[derive(Deserialize)]
-        struct Response {
-            success: Option<Value>,
-            data: Option<Box<RawValue>>,
+        struct Response<'a> {
+            success: Option<bool>,
+            #[serde(borrow)]
+            data: Option<&'a RawValue>,
         }
         let Ok(response) = serde_json::from_str::<Response>(response) else {
             return;
         };
-        if response.success != Some(Value::Bool(true)) {
+        if response.success != Some(true) {
             return;
         }
-        let data = response
-            .data
-            .as_ref()
-            .and_then(|data| serde_json::from_str::<Value>(data.get()).ok());
         if command.ty == "get_state" {
-            let Some(data @ (Value::Object(_) | Value::Array(_))) = data else {
-                return;
+            use std::collections::BTreeMap;
+            let Some(raw) = response.data else { return };
+            // Like JSON.parse, duplicate keys keep the last value; arrays have no named identity fields.
+            let fields = match raw.get().as_bytes().first() {
+                Some(b'{') => {
+                    let Ok(map) = serde_json::from_str::<BTreeMap<String, &RawValue>>(raw.get())
+                    else {
+                        return;
+                    };
+                    map
+                }
+                Some(b'[') => Default::default(),
+                _ => return,
             };
-            let text = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_owned);
+            let text = |key: &str| serde_json::from_str::<String>(fields.get(key)?.get()).ok();
             let next = Identity {
                 session_id: text("sessionId"),
                 session_file: text("sessionFile"),
@@ -1476,7 +1790,9 @@ impl Lane {
             // Stock's answer names no file, and the next get_state may come after a crash: the tab is on the session it
             // asked for, or on a new one stock has not named yet (formal/tab-session F2). A fork, branch or handoff
             // keeps the session it came from until get_state names the copy (formal/tab-session CORRESPONDENCE A5).
-            let cancelled = data
+            let cancelled = response
+                .data
+                .and_then(|data| serde_json::from_str::<Value>(data.get()).ok())
                 .as_ref()
                 .and_then(|data| data.get("cancelled"))
                 .is_some_and(|cancelled| cancelled == &Value::Bool(true));
@@ -1989,6 +2305,12 @@ impl Lane {
         self.run_messages.clear();
         let mut running = self.running.take();
         if let Some(running) = running.as_mut() {
+            // From here the omp's queue is no longer stock's to clear: whatever it held is offered to the tab.
+            held_queue::release(
+                self.held_queue_file.as_deref(),
+                &held_queue::spawn_owner(&self.tab, running.spawn_id),
+                now_ms(),
+            );
             for pending in running.pending.drain(..) {
                 if let Waiter::Caller(_, reply) = pending.waiter {
                     let _ = reply.send(Err(disconnected()));

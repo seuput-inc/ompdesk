@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	extractImageDataUrl,
 	extractImageDataUrls,
+	extractResultImage,
 	formatElapsed,
 	formatPricePerMillion,
 	formatShortClock,
@@ -224,6 +225,20 @@ describe("image result extraction", () => {
 		};
 
 		expect(extractImageDataUrls(result)).toEqual(["data:image/png;base64,first", "data:image/jpeg;base64,second"]);
+	});
+
+	it("draws a paired page's picture from the /blob/ URL its host kept it behind, not from empty bytes", () => {
+		const block = { type: "image", data: "", mimeType: "image/jpeg", blobUrl: "/blob/tok_1-A" };
+		expect(extractResultImage(block)).toEqual({ key: "/blob/tok_1-A", src: "/blob/tok_1-A" });
+		expect(extractImageDataUrl({ content: [block] })).toBe("/blob/tok_1-A");
+		const result = { details: { images: [{ data: "", mimeType: "image/webp", blobUrl: "/blob/second" }] } };
+		expect(extractImageDataUrls(result)).toEqual(["/blob/second"]);
+	});
+
+	it("takes no other address for a picture's source", () => {
+		const elsewhere = { type: "image", data: "", mimeType: "image/png", blobUrl: "https://example.com/a.png" };
+		expect(extractResultImage(elsewhere)).toEqual({ key: "", src: null });
+		expect(extractImageDataUrls({ content: [elsewhere] })).toEqual([]);
 	});
 });
 

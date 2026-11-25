@@ -1,5 +1,5 @@
 /**
- * The daily skill-pack bump (`.github/workflows/skills-bump.yml`, `scripts/skill-packs.ts`) moves pstack, ECC and REA
+ * The daily skill-pack bump (`.github/workflows/skills-bump.yml`, `scripts/skill-packs.ts`) moves vendored packs
  * to upstream's newest release and commits to main when the pack's tests pass. These checks run with every pack's
  * bump, so an upstream release cannot quietly undo the built-in formal-verification skill: bring back a second skill
  * for the same job, point at the pstack skills it replaced, or drop the routing that sends race and state bugs to it.
@@ -14,7 +14,7 @@ const BUILTIN = path.join(ROOT, "resources/omp-builtin");
 const SKILL = "ompdesk-formal-verify";
 const SKILL_FILE = path.join(BUILTIN, "formal/skills", SKILL, "SKILL.md");
 /** The packs a bump rewrites, and the always-on pstack text generated from them. */
-const BUMPED_PACKS = ["pstack", "ecc", "rea"].map(name => path.join(BUILTIN, name));
+const BUMPED_PACKS = ["pstack", "ecc", "ponytail"].map(name => path.join(BUILTIN, name));
 const PSTACK_TEXT = path.join(ROOT, "resources/gui-bridge/modes/pstack-text.ts");
 /** What a skill for the same job says about itself. */
 const SAME_JOB =

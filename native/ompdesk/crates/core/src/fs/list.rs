@@ -240,6 +240,13 @@ pub struct ListDirsParams {
     dir: String,
     query: Option<Value>,
     locale: String,
+    web: Option<WebPicker>,
+}
+
+#[derive(Deserialize)]
+struct WebPicker {
+    files: bool,
+    limit: usize,
 }
 
 #[derive(Serialize)]
@@ -248,8 +255,21 @@ struct DirNames {
     truncated: bool,
 }
 
-/// One level of subfolders of `dir`, hidden ones skipped, those whose name contains `query` (trimmed,
-/// case-insensitive by `toLocaleLowerCase`) when one is given, in name order, at most 2000.
+#[derive(Serialize)]
+struct WebEntry {
+    name: String,
+    // Folders have no byte size in WebHostEntry.
+    size: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct WebEntries {
+    entries: Vec<WebEntry>,
+    truncated: bool,
+}
+
+/// One directory level. The computer picker lists real folders; the web picker also follows links
+/// and can list files with their sizes. Both filter and sort before applying their limit.
 pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
     let order = NameOrder::new(&params.locale);
     let needle = match &params.query {
@@ -264,20 +284,57 @@ pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
     };
     let entries = disk::read_dir(&params.dir).map_err(|error| match error.code {
         "ENOTDIR" => Fault::new("not_a_directory", "Not a directory"),
-        "ENOENT" => Fault::new("file_not_found", "Directory not found"),
-        // Windows answers a file listed as a folder with ERROR_DIRECTORY, which libuv's scandir reported as ENOTDIR.
+        // Windows' directory search can report ENOENT for an existing file as well as a missing path.
+        #[cfg(windows)]
         _ if std::fs::metadata(&params.dir).is_ok_and(|meta| !meta.is_dir()) => {
             Fault::new("not_a_directory", "Not a directory")
         }
+        "ENOENT" => Fault::new("file_not_found", "Directory not found"),
         _ => Fault::new(IO, error.message),
     })?;
+    let visible = |name: &str| {
+        !name.starts_with('.') && (needle.is_empty() || order.lowercase(name).contains(&needle))
+    };
+    if let Some(web) = &params.web {
+        let dir = std::path::Path::new(&params.dir);
+        let mut found: Vec<_> = entries
+            .into_iter()
+            .filter(|entry| visible(&entry.name))
+            .filter_map(|entry| {
+                let size = match entry.kind {
+                    Kind::Dir => None,
+                    Kind::Link | Kind::File => {
+                        let meta = std::fs::metadata(dir.join(&entry.name)).ok()?;
+                        if !meta.is_dir() && !web.files {
+                            return None;
+                        }
+                        (!meta.is_dir()).then_some(meta.len())
+                    }
+                    #[cfg(not(windows))]
+                    Kind::Other => return None,
+                };
+                Some(WebEntry {
+                    name: entry.name,
+                    size,
+                })
+            })
+            .collect();
+        found.sort_by(|a, b| {
+            a.size
+                .is_some()
+                .cmp(&b.size.is_some())
+                .then_with(|| order.compare(&a.name, &b.name))
+        });
+        let truncated = found.len() > web.limit;
+        found.truncate(web.limit);
+        return Reply::json(&WebEntries {
+            entries: found,
+            truncated,
+        });
+    }
     let mut names: Vec<String> = entries
         .into_iter()
-        .filter(|entry| {
-            entry.kind == Kind::Dir
-                && !entry.name.starts_with('.')
-                && (needle.is_empty() || order.lowercase(&entry.name).contains(&needle))
-        })
+        .filter(|entry| entry.kind == Kind::Dir && visible(&entry.name))
         .map(|entry| entry.name)
         .collect();
     names.sort_by(|a, b| order.compare(a, b));

@@ -11,6 +11,7 @@
 
 /** Section headings declared in the schema's TAB_GROUPS. */
 export const KO_GROUP_TITLES: Record<string, string> = {
+	"Binary Ninja": "Binary Ninja",
 	Theme: "테마",
 	"Status Line": "상태 표시줄",
 	Display: "표시",
@@ -70,12 +71,39 @@ export const KO_GROUP_TITLES: Record<string, string> = {
 	Sharpshooter: "Sharpshooter",
 	Skills: "스킬",
 	"IDA Pro": "IDA Pro",
+	Disassembler: "디스어셈블러",
+	Ghidra: "Ghidra",
 	Stream: "스트림",
 };
 
 /** Per-setting row text, keyed by schema setting path. */
 export const KO_SETTINGS: Record<string, { label: string; description?: string }> = {
 	"auth.accountPolicies": { label: "계정별 인증 정책" },
+	"auth.unpausedProviders": {
+		label: "일시정지된 프로바이더 다시 사용",
+		description:
+			"일시정지된 프로바이더의 로그인·토큰 갱신·저장된 인증 정보를 다시 사용해요. 각 중지 사유에 표시된 계정 위험을 수락하는 설정이에요. 프로젝트 설정으로는 켤 수 없어요.",
+	},
+	"todo.backend": {
+		label: "할 일 목록 연동",
+		description: "할 일 목록을 복사할 확장 기능을 선택해요. 네이티브를 선택하면 목록을 세션 안에만 보관해요.",
+	},
+	"todo.midRunNudges": {
+		label: "작업 중 할 일 알림",
+		description: "긴 턴에서 수정이나 명령을 계속 실행하는 동안 할 일 목록 갱신을 얼마나 자주 알릴지 정해요.",
+	},
+	"commit.enabled": {
+		label: "선택적 커밋",
+		description: "이 에이전트와 서브에이전트가 작성한 줄만 커밋하는 commit eval 기능과 /commit을 사용해요.",
+	},
+	"bash.allowedEnvVars": {
+		label: "허용할 Bash 환경 변수",
+		description:
+			"bash.patterns 허용 규칙과 대조할 때 명령 앞의 KEY=VALUE 접두어로 허용할 정확한 변수 이름이에요. 와일드카드는 지원하지 않아요. 어떤 값이든 허용하므로 안전한 빌드·시험 변수만 넣으세요. PATH·LD_PRELOAD·BASH_ENV·*_RUNNER·*_WRAPPER처럼 실행을 바꾸는 변수는 임의 명령 실행을 허용해요.",
+	},
+	"models.noJudge": { label: "판정 모델의 프로바이더 제한" },
+	"models.noSpotlight": { label: "Spotlight 프로바이더 제한" },
+	"models.offline": { label: "보조 모델의 프로바이더 제한" },
 	modelPresets: { label: "모델 프리셋" },
 	"terminal.programStatus": {
 		label: "프로그램 상태 (OSC 7501)",
@@ -103,11 +131,12 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	"providers.anthropic.slowMode": { label: "Anthropic 저속 모드" },
 	"tts.localSpeed": {
 		label: "로컬 TTS 속도",
-		description: "로컬 TTS 백엔드의 말하기 속도예요 (tts 도구, omp say). 1은 보통 속도이며 0.5–2.5 범위로 제한돼요.",
+		description:
+			"로컬 TTS 백엔드의 말하기 속도예요 (tts 도구, omp say). 1은 보통 속도이며 백엔드가 지원하는 범위로 제한돼요.",
 	},
 	"speech.speed": {
 		label: "응답 읽기 속도",
-		description: "어시스턴트 출력을 소리 내어 읽는 속도예요. 1은 보통 속도이며 0.5–2.5 범위로 제한돼요.",
+		description: "어시스턴트 출력을 소리 내어 읽는 속도예요. 1은 보통 속도이며 백엔드가 지원하는 범위로 제한돼요.",
 	},
 	"contextFiles.extra": {
 		label: "추가 컨텍스트 파일",
@@ -218,6 +247,53 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "사용량 제한 시 대체 모델로 넘어가기",
 		description:
 			"사용량 제한에 걸리면, 실패한 모델이 서명한 생각이 있는 턴이어도 retry.fallbackChains 순서대로 다음 모델로 넘어가요. 끄면(기본값) 그런 턴은 retry.maxRetries를 다 쓸 때까지 같은 모델로 다시 시도한 뒤에야 다음 모델로 넘어가요.",
+	},
+	"binja.installDir": {
+		label: "Binary Ninja 설치 폴더",
+		description:
+			"핵심 라이브러리가 있는 폴더나 macOS 앱을 지정해요. 비워 두면 $BN_INSTALL_DIR, 사용자 폴더의 lastrun 파일, 기본 설치 위치 순서로 찾아요.",
+	},
+	"binja.python": {
+		label: "Binary Ninja용 Python",
+		description:
+			"설치 경로 아래의 python 폴더에서 Binary Ninja API를 불러올 Python 3을 지정해요. 비워 두면 자동으로 찾아요.",
+	},
+	"edit.magic.model": {
+		label: "매직 편집 모델",
+		description: "매직 모드의 변경을 적용할 모델이나 역할(예: @slow)이에요. 비워 두면 smol 역할을 사용해요.",
+	},
+	"mcp.idleStopMinutes": {
+		label: "미사용 MCP 서버 종료 시간",
+		description: "공유 서버를 이 시간(분) 동안 쓰지 않으면 종료해요. 다음 요청이 오면 다시 시작해요.",
+	},
+	"mcp.shared": {
+		label: "MCP 서버 공유",
+		description:
+			"omp들이 데몬을 통해 서버 프로세스와 도구 목록을 공유해요. 세션 상태가 있는 서버나 공유할 수 없는 서버는 따로 실행해요.",
+	},
+	"pty.notify": {
+		label: "콘솔 입력 대기 알림",
+		description: "대화형 bash 콘솔(pty)이 입력을 기다릴 때 알려요.",
+	},
+	"tools.commandDocs": {
+		label: "프롬프트에 넣을 명령 도움말",
+		description:
+			"시스템 프롬프트에 어떤 명령의 --help를 넣을지 골라요. ‘내장만’이면 MCP와 확장 명령의 도움말은 필요할 때 읽어요.",
+	},
+	"tools.commandInline": {
+		label: "도움말을 함께 넣을 명령",
+		description:
+			"‘내장만’일 때 이 패턴(예: mcp__context_mode_*)과 이름이 맞는 명령의 도움말도 넣어요. ‘목록만’에서는 적용하지 않아요.",
+	},
+	"tools.commandNotices": {
+		label: "도구 명령 변경 알림",
+		description:
+			"MCP나 확장 도구가 명령 목록에 추가되거나 빠질 때 알려요. 꺼도 모델은 다음 프롬프트에서 변경을 확인해요.",
+	},
+	"tools.commands": {
+		label: "도구를 bash 명령으로 사용",
+		description:
+			"자주 쓰지 않는 도구는 매번 스키마를 보내지 않고 bash 명령과 --help로 제공해요. 끄거나 bash가 없는 세션에서는 활성 도구를 모두 직접 제공해요.",
 	},
 	"tools.xdevNotices": {
 		label: "xd:// 연결 알림",
@@ -975,16 +1051,20 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	},
 	"speechgen.enabled": {
 		label: "음성 생성",
-		description: "온디바이스(Kokoro) 또는 xAI Grok Voice로 음성 파일을 합성하는 tts 도구를 사용해요",
+		description: "온디바이스 또는 xAI Grok Voice로 음성 파일을 합성하는 tts 도구를 사용해요",
 	},
 	"generate_image.enabled": {
 		label: "이미지 생성",
-		description:
-			"generate_image 도구(텍스트→이미지 및 이미지 편집)를 사용해요. tools.xdev가 켜져 있으면 xd:// 장치로 노출돼요.",
+		description: "generate_image 도구로 설명에 맞는 이미지를 만들거나 기존 이미지를 편집해요.",
 	},
 	"computer.enabled": {
 		label: "데스크톱 제어",
 		description: "스크립트로 호스트 데스크톱을 다루는 eval 프렐류드(스크린샷, 입력, 접근성)를 사용해요",
+	},
+	"computer.takeover": {
+		label: "데스크톱 입력 전환",
+		description:
+			"창에 백그라운드로 입력하는 대신 실제 포인터와 키보드를 사용할 때를 정해요. Esc 키를 누르면 제어가 멈춰요.",
 	},
 	"computer.display": {
 		label: "데스크톱 제어 디스플레이",
@@ -1300,9 +1380,19 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	},
 	"providers.fireworksTier": { label: "Fireworks 등급", description: "기본 서비스 경로예요(service_tier 없음)" },
 	"live.voice": { label: "실시간 음성 목소리", description: "Codex 기반 실시간 음성 세션에서 쓸 목소리예요" },
+	"live.endpoint": {
+		label: "실시간 엔드포인트",
+		description:
+			"Codex 대신 실시간 음성에 쓸 OpenAI Realtime WebRTC 호환 서버의 기본 URL이에요(예: http://127.0.0.1:8080/v1). 비워 두면 Codex를 써요",
+	},
+	"live.apiKey": {
+		label: "실시간 엔드포인트 API 키",
+		description:
+			"실시간 엔드포인트에만 보내는 Bearer 키예요. 값을 그대로 적거나, 환경 변수 이름이나 !command 형식의 명령을 적어요",
+	},
 	"tts.localVoice": {
 		label: "로컬 TTS 목소리",
-		description: "로컬 TTS 백엔드가 쓰는 Kokoro 목소리예요(미국/영국식, 여성/남성)",
+		description: "로컬 TTS 백엔드가 쓰는 목소리예요(미국/영국식, 여성/남성)",
 	},
 	"speech.enabled": { label: "음성 읽기", description: "어시스턴트 출력이 스트리밍되는 대로 스피커로 읽어 줘요" },
 	"speech.mode": {
@@ -1314,7 +1404,7 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		description:
 			"합성 전에 tiny/smol 모델로 어시스턴트 출력을 자연스러운 구어체로 바꿔요(코드를 설명하고 링크와 markdown을 제거). 실패하면 기계적 정리로 대체해요",
 	},
-	"speech.voice": { label: "음성 읽기 목소리", description: "어시스턴트 출력을 읽을 때 쓸 Kokoro 목소리예요" },
+	"speech.voice": { label: "음성 읽기 목소리", description: "어시스턴트 출력을 읽을 때 쓸 목소리예요" },
 	"providers.tinyModelDevice": {
 		label: "Tiny 모델 디바이스",
 		description:
@@ -1556,6 +1646,10 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "서브에이전트별 사전 탐색 덮어쓰기",
 		description: "서브에이전트 이름과 prewalk 켜짐 상태의 매핑이에요(/agents 패널에서 P로 전환)",
 	},
+	"task.agentPrewalkAuto": {
+		label: "서브에이전트별 자동 사전 탐색 덮어쓰기",
+		description: "서브에이전트 이름과 자동 prewalk 설정(on/off 또는 모델 패턴)의 매핑이에요",
+	},
 	// 스킬
 	"skills.enabled": { label: "스킬 활성화", description: "스킬 검색과 로딩의 전체 스위치예요" },
 	"skills.enableCodexUser": { label: "Codex 사용자 스킬", description: "~/.codex/skills에서 스킬을 불러와요" },
@@ -1688,6 +1782,11 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "웹 검색 타임아웃",
 		description:
 			"프로바이더별 검색 전송 하드 타임아웃이에요. 시간이 지나면 web_search가 다음 대체 항목을 시도해요. 단위는 초예요(최대 300)",
+	},
+	"providers.webKeyless": {
+		label: "키 없는 웹 서비스",
+		description:
+			"웹 검색과 URL 읽기가 내 자격 증명 없이 제3자 서비스를 쓰게 해요. 키 없는 Parallel, Exa, Firecrawl, Keenable, Perplexity와 Jina 리더, 스크레이핑하는 검색 엔진(Startpage, DuckDuckGo, Ecosia, Google, Mojeek, Hacker News)이 해당돼요. 끄면 직접 설정한 서비스만 써요.",
 	},
 	"providers.openaiLiveSteering": {
 		label: "OpenAI 실시간 추가 지시",
@@ -2001,10 +2100,40 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		description:
 			"이 초 수보다 오래 유휴 상태인 IDA 데이터베이스를 저장하고 닫아요(0 = 닫지 않음). 다시 열면 exec 네임스페이스가 초기화돼요.",
 	},
+	"disassembler.backend": {
+		label: "디스어셈블러",
+		description:
+			"read의 분석 선택자와 eval의 dsm 네임스페이스가 쓰는 분석 엔진이에요. 선택자 없이 실행 파일을 읽으면 메타데이터만 보여요. 자동은 IDA Pro가 설치돼 있으면 IDA Pro를, 없으면 Ghidra(첫 분석 때 내려받음)를 써요.",
+	},
+	"disassembler.maxOpen": {
+		label: "최대 열린 데이터베이스",
+		description:
+			"프로젝트당 동시에 열 수 있는 데이터베이스(omp ps의 omp.ida.*·omp.ghidra.* 데몬) 수예요. 더 열면 참조되지 않는 유휴 데이터베이스 하나를 닫아요. 다 쓴 dsm 핸들은 닫아 주세요.",
+	},
+	"disassembler.idleCloseSec": {
+		label: "유휴 닫기 시간",
+		description:
+			"이 초 수보다 오래 유휴 상태인, 참조되지 않는 데이터베이스를 저장하고 닫아요(0 = 닫지 않음). 붙잡아 둔 dsm 핸들은 열린 채로 둬요. 다시 열면 exec 네임스페이스가 초기화돼요.",
+	},
+	"ghidra.installDir": {
+		label: "Ghidra 설치 폴더",
+		description:
+			"Ghidra 12 이상의 설치 폴더(Ghidra/application.properties가 있는 곳)예요. 비우면 $GHIDRA_INSTALL_DIR, Homebrew 순으로 찾고, 없으면 ~/.omp/ghidra에 관리용으로 내려받아요.",
+	},
+	"ghidra.python": {
+		label: "Ghidra Python",
+		description:
+			"pyghidra를 import할 수 있는 Python 인터프리터예요. 비우면 설치본에 들어 있는 wheel로 만든 관리용 가상 환경을 써요.",
+	},
 	"tui.renderSvg": {
 		label: "SVG 그림 렌더링",
 		description:
 			"에이전트가 다이어그램과 차트를 SVG로 그리게 하고, 그래픽을 표시하는 터미널에서는 이미지로 바로 보여 줘요",
+	},
+	"tui.renderEmbeds": {
+		label: "이미지와 웹 페이지 삽입 렌더링",
+		description:
+			"에이전트가 <img>로 그림을, <iframe>으로 웹 페이지를 보여 주게 해요. 원격 주소를 포함해 불러온 뒤, 그래픽을 표시하는 터미널에서는 바로 그려요",
 	},
 	"tui.autoGraph": {
 		label: "표 자동 차트",
@@ -2017,5 +2146,33 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 	"title.generator": {
 		label: "제목 생성 방식",
 		description: "제목 없는 세션에 사용자의 메시지를 바탕으로 이름을 붙이는 방식이에요",
+	},
+	// ── omp 19.0 업스트림 신규 설정 ──────────────────────────────────────────────
+	"mcp.builtinTransforms": {
+		label: "MCP 내장 변환",
+		description: "omp 자체 도구가 대신하는 MCP 서버는 건너뛰어요(eval이 JavaScript를 실행할 때 Codex의 node_repl)",
+	},
+	"mcp.evalNamespaces": {
+		label: "MCP eval 네임스페이스",
+		description: "각 MCP 서버를 최상위 도구나 xd:// 도구 대신 eval 전역(github.create_issue(...))으로 노출해요",
+	},
+	"providers.cacheWarmingCompactPercent": {
+		label: "캐시 브리지 압축 비율",
+		description:
+			"긴 도구 호출을 압축으로 이어 주려면 프롬프트가 컨텍스트 창의 이 비율에 닿아야 해요. 이 값과 토큰 한도 중 낮은 쪽을 적용해요",
+	},
+	"providers.cacheWarmingCompactTokens": {
+		label: "캐시 브리지 압축 토큰 수",
+		description:
+			"프롬프트가 이 토큰 수부터 긴 도구 호출을 압축으로 이어 줄 수 있어요. 이 값과 창 비율 중 낮은 쪽을 적용해요",
+	},
+	"providers.cacheWarmingStrategy": {
+		label: "캐시 워밍 방식",
+		description:
+			"갱신이 더는 이득이 아닐 때 긴 도구 호출을 잇는 방식이에요. 캐시가 만료되기 전에 기록을 압축하거나 그대로 만료되게 둬요",
+	},
+	"task.crossInstance": {
+		label: "인스턴스 간 에이전트 메시지",
+		description: "이 폴더의 다른 omp 인스턴스가 에이전트 출력을 읽고, 에이전트를 깨울 수 있는 메시지를 보내게 해요",
 	},
 };

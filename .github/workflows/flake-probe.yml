@@ -10,10 +10,11 @@
 # concurrency would cancel a probe on the next push (or one probe the next). Manual only; inputs reach the
 # shell through `env`, never inline.
 #
-# The macOS leg is the account's scarcest runner: it needs the queue gate's admission (main or a MAC_REFS branch) and
-# runs in the account-wide `mac-dispatch` lane. A probe is meant to be repeated, so no green run of the same name
-# cancels a new one; an identical dispatch waits for the one running, and a third replaces the waiting one.
-# See .omp/rules/e2e-ci-windows.md › CI › The check queue.
+# An e2e spec drives the app through
+# Playwright, which cannot attach to macOS's WKWebView, so `--os all` runs an e2e spec on Windows alone and `--os macos`
+# fails it at once (macOS's app check is scripts/tauri-native-smoke.ts, in mac-checks.yml). A probe is meant to be
+# repeated, so no green run of the same name cancels a new one; an identical dispatch waits for the one running, and a
+# third replaces the waiting one. See .omp/rules/e2e-ci-windows.md › CI › The check queue.
 name: flake-probe
 run-name: "flake ${{ inputs.spec }} ×${{ inputs.repeat }} (${{ inputs.os }})"
 
@@ -33,7 +34,7 @@ on:
         type: number
         default: 10
       os:
-        description: "Runners (an e2e spec runs on macOS and Windows only; all = those for an e2e spec)"
+        description: "Runners (an e2e spec runs on Windows only; all = macOS, Windows and Ubuntu for a vitest file, Windows for an e2e spec)"
         type: choice
         options: [all, macos, windows, ubuntu]
         default: all
@@ -54,17 +55,12 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: flake-probe.yml
-      mac: ${{ inputs.os == 'macos' || inputs.os == 'all' }}
-      mac-refs: ${{ vars.MAC_REFS }}
       dedupe: false
 
   probe:
     name: probe (${{ matrix.os }})
     needs: gate
-    if: ${{ !cancelled() && (inputs.os != 'macos' || needs.gate.outputs.mac_ok == 'true') }}
-    concurrency:
-      group: ${{ matrix.os == 'macos' && 'mac-dispatch' || format('flake-probe-{0}-{1}', github.run_id, matrix.os) }}
-      cancel-in-progress: false
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.os }}-latest
     timeout-minutes: 60
     permissions:
@@ -73,7 +69,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(format('[{0}]', inputs.os != 'all' && format('"{0}"', inputs.os) || format('{0}"windows"{1}', needs.gate.outputs.mac_ok == 'true' && '"macos",' || '', !endsWith(inputs.spec, '.e2e.ts') && ',"ubuntu"' || ''))) }}
+        os: ${{ fromJSON(format('[{0}]', inputs.os != 'all' && format('"{0}"', inputs.os) || format('{0}"windows"{1}', !endsWith(inputs.spec, '.e2e.ts') && '"macos",' || '', !endsWith(inputs.spec, '.e2e.ts') && ',"ubuntu"' || ''))) }}
     defaults:
       run:
         shell: bash
@@ -82,8 +78,12 @@ jobs:
       GREP: ${{ inputs.grep }}
       REPEAT: ${{ inputs.repeat }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: runner.os == 'macOS' && endsWith(inputs.spec, '.e2e.ts')
+        run: |
+          echo "::error::An e2e spec cannot run on macOS: Playwright cannot attach to WKWebView. Probe it with --os windows; macOS's app check is scripts/tauri-native-smoke.ts."
+          exit 1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # See release.yml's win job: bun's cache on the workspace volume.
@@ -92,17 +92,22 @@ jobs:
         run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       # Tests import electron and e2e launches it: the shared install fetches the binary.
       - uses: ./.github/actions/install
+      # An e2e spec launches the Tauri host (WebView2) and the pinned Node (the tauri-shell action: a cached build),
+      # built with test-automation: only that build leaves WebView2's DevTools port open for Playwright.
+      - if: endsWith(inputs.spec, '.e2e.ts')
+        uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      # The unpackaged host finds Preview's browser under resources/preview-browser/<platform>-<arch>.
+      - if: endsWith(inputs.spec, '.e2e.ts')
+        name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       # As ci.yml's check: the stock suites skip without omp, real-core launches it.
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          bun pm bin -g >> "$GITHUB_PATH"
-          "$(bun pm bin -g)/omp" --version
+      - uses: ./.github/actions/install-omp
       - name: Repeat the spec
         run: bun scripts/flake.ts "$SPEC" --repeat "$REPEAT" ${GREP:+--grep "$GREP"}
       - if: ${{ !cancelled() && endsWith(inputs.spec, '.e2e.ts') }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: flake-${{ matrix.os }}
           path: |

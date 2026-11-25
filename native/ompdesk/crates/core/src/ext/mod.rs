@@ -2,19 +2,19 @@
 //! `src/main/ext-update/`): what an MCP server's configured launch is (`ext.mcpClasses`), the row each marketplace,
 //! plugin, skill and MCP server gets, with the method that keeps it current or the reason it is left alone
 //! (`ext.seeds`), what the file a server's command resolves to says about itself (`ext.binaryFacts`), whether an
-//! update must wait for a running server (`ext.defersWhileRunning`, `ext.serverRunning`), and the newest version in a
+//! update must wait for a running server or CLI (`ext.defersWhileRunning`, `ext.cliWaitsForIdle`, `ext.updateRunning`), and the newest version in a
 //! registry lookup's output (`ext.pipLatest`, `ext.registryLatest`).
 //!
-//! Main keeps the schedule, the stock helper's inventory and upgrades, the lookups and updates it runs, and what it
-//! shares with the tool CLIs and machine setup: finding a command along the spawn PATH and telling which package
-//! manager owns an install. Those answer synchronously while omp is found and repaired, before this process can be
-//! counted on.
+//! Main keeps the schedule, stock's inventory and upgrades, the spawn PATH lookup and package-manager commands.
+//! CLI updates, MCP updates and setup all read installed package ownership through `ext.binaryFacts`.
 
 mod binary;
-mod latest;
-mod mcp;
-mod running;
-mod seeds;
+pub(crate) mod install;
+pub(crate) mod latest;
+pub(crate) mod mcp;
+pub(crate) mod plan;
+pub(crate) mod running;
+pub(crate) mod seeds;
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -43,11 +43,8 @@ fn params<T: DeserializeOwned>(params: &RawValue) -> Result<T, Fault> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ClassesParams {
     servers: Vec<mcp::Server>,
-    /// The built-in REA's root (a server whose source is under it is the built-in).
-    rea_root: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,25 +59,29 @@ struct OutputParams {
     output: String,
 }
 
+/// `ext.binaryFacts` in process (the tools hub's install reads), as the JSON the method answers.
+pub(crate) fn binary_facts(params: serde_json::Value) -> Result<serde_json::Value, Fault> {
+    let params: install::Params = serde_json::from_value(params)
+        .map_err(|error| Fault::new("invalid_params", error.to_string()))?;
+    serde_json::to_value(install::facts(&params))
+        .map_err(|error| Fault::new("internal", error.to_string()))
+}
+
 pub fn register(registry: &mut Registry) {
     registry.add("ext.mcpClasses", |call| {
         Box::pin(async move {
             let params: ClassesParams = params(&call.params)?;
-            let classes: Vec<_> = params
-                .servers
-                .iter()
-                .map(|server| mcp::classify(server, params.rea_root.as_deref()))
-                .collect();
+            let classes: Vec<_> = params.servers.iter().map(mcp::classify).collect();
             Reply::json(&classes)
         })
     });
     registry.add("ext.seeds", |call| {
-        Box::pin(async move { Reply::json(&seeds::seeds(params(&call.params)?)?) })
+        Box::pin(async move { Reply::json(&seeds::seeds(params(&call.params)?)) })
     });
     registry.add("ext.binaryFacts", |call| {
         Box::pin(async move {
-            let params: binary::Params = params(&call.params)?;
-            let facts = tokio::task::spawn_blocking(move || binary::facts(&params))
+            let params: install::Params = params(&call.params)?;
+            let facts = tokio::task::spawn_blocking(move || install::facts(&params))
                 .await
                 .map_err(|_| Fault::new("internal", "The file read panicked"))?;
             Reply::json(&facts)
@@ -92,8 +93,11 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&running::defers(params.method.as_deref(), params.script))
         })
     });
-    registry.add("ext.serverRunning", |call| {
-        Box::pin(async move { Reply::json(&running::server_running(&params(&call.params)?)) })
+    registry.add("ext.cliWaitsForIdle", |call| {
+        Box::pin(async move { Reply::json(&running::cli_defers(params(&call.params)?)) })
+    });
+    registry.add("ext.updateRunning", |call| {
+        Box::pin(async move { Reply::json(&running::update_running(params(&call.params)?).await) })
     });
     registry.add("ext.pipLatest", |call| {
         Box::pin(async move {
@@ -123,7 +127,7 @@ mod tests {
     #[test]
     fn a_refused_shape_tells_nothing_of_what_it_held() {
         // A server whose arguments came as one string: serde's own words would quote it.
-        let text = r#"{"servers":[{"name":"s","type":"stdio","command":"npx","args":"--token=hunter2","url":null,"enabled":true,"sourcePath":null}],"reaRoot":null}"#;
+        let text = r#"{"servers":[{"name":"s","type":"stdio","command":"npx","args":"--token=hunter2","url":null,"enabled":true}]}"#;
         let raw = RawValue::from_string(text.into()).unwrap();
         let fault = params::<ClassesParams>(&raw).err().unwrap();
         assert_eq!(fault.code, "invalid_params");

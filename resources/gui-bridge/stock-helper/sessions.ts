@@ -1,8 +1,9 @@
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { loadOmpModule } from "../omp-package";
 import { PROMPT_ORIGIN_ENTRY } from "../prompt-origin-contracts";
 import { NO_TEXT_PROMPT } from "../session-list-contracts";
-import { lastActivity } from "./session-activity";
-import { forgetAutoTitles, listedAutoTitle } from "./session-auto-title";
+import { mapImagePayloads } from "./image-payloads";
 
 /** The fields of stock's `SessionInfo` this helper reads; the rest pass through untouched. */
 interface StockSessionInfo {
@@ -13,8 +14,6 @@ interface StockSessionInfo {
 	firstMessage: string;
 	/** OMPdesk's: the paired device the first prompt came from (stock's journal holds OMPdesk's prompt-origin entry). */
 	promptOriginDevice?: string;
-	/** OMPdesk's: the automatic title beside a name the person typed (`session-auto-title.ts`). */
-	autoTitle?: string;
 }
 
 interface StockSessions {
@@ -46,17 +45,10 @@ interface StockSessionManagerStatic {
 	): Promise<{ moveTo(cwd: string): Promise<void>; getSessionFile(): string | undefined; close(): Promise<void> }>;
 }
 
-/** Runtime-selected installed paths: static imports would use the app's resolver. */
-function importFromOmp(specifier: string): Promise<Record<string, unknown>> {
-	const root = process.env.OMP_PACKAGE_ROOT;
-	if (!root) throw new Error("OMP_PACKAGE_ROOT is not set");
-	return import(Bun.resolveSync(specifier, join(root, "package.json")));
-}
-
 async function loadStockSessions(): Promise<StockSessions> {
 	const [listing, storageModule] = await Promise.all([
-		importFromOmp("@oh-my-pi/pi-coding-agent/session/session-listing"),
-		importFromOmp("@oh-my-pi/pi-coding-agent/session/session-storage"),
+		loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-listing"),
+		loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-storage"),
 	]);
 	const FileSessionStorage = storageModule.FileSessionStorage as new () => StockSessions["storage"];
 	return { listing: listing as unknown as StockSessions["listing"], storage: new FileSessionStorage() };
@@ -65,8 +57,8 @@ async function loadStockSessions(): Promise<StockSessions> {
 async function loadStockFirstPrompt(): Promise<StockFirstPrompt | null> {
 	try {
 		const [loader, transcript] = await Promise.all([
-			importFromOmp("@oh-my-pi/pi-coding-agent/session/session-loader"),
-			importFromOmp("@oh-my-pi/pi-tui/chat/transcript-entry"),
+			loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-loader"),
+			loadOmpModule<Record<string, unknown>>("pi-tui/chat/transcript-entry"),
 		]);
 		const { visitEntriesFromFileStream } = loader;
 		const { textContent } = transcript;
@@ -119,7 +111,9 @@ async function sessionHeaderId(sessionPath: string): Promise<string | undefined>
 		.slice(0, 64 * 1024)
 		.text()
 		.catch(() => "");
-	const slots = await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-title-slot").catch(() => null);
+	const slots = await loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-title-slot").catch(
+		() => null,
+	);
 	const parseSlot = slots?.parseTitleSlotFromContent;
 	if (typeof parseSlot !== "function") throw new Error("stock session-title-slot exports changed");
 	if ((parseSlot as (content: string) => unknown)(prefix)) prefix = prefix.slice(prefix.indexOf("\n") + 1);
@@ -258,69 +252,41 @@ function withoutPlaceholder(rows: StockSessionInfo[]): StockSessionInfo[] {
 	return rows;
 }
 
-/** Each row's newest message time, keyed by path and valid for one `modified:size` stamp (null: none in reach). */
-const activity = new Map<string, { stamp: string; at: number | null }>();
-
-/**
- * A row's `modified` becomes when the session last did something (`session-activity.ts`): stock's mtime moves on
- * every relaunch (a `session_exit`, a recap, a report) and every reader of `modified` means recency (the sidebar's
- * age and order, the session picker, the projects' recency). A row with no message in reach keeps stock's mtime.
- */
-async function withLastActivity(rows: StockSessionInfo[]): Promise<StockSessionInfo[]> {
-	await Promise.all(
-		rows.map(async row => {
-			const stamp = `${new Date(row.modified).getTime()}:${row.size}`;
-			let found = activity.get(row.path);
-			if (found?.stamp !== stamp) {
-				try {
-					found = { stamp, at: await lastActivity(row.path, row.size) };
-				} catch {
-					// Unreadable now (stock's own scan skips such files too): keep stock's mtime.
-					return;
-				}
-				activity.set(row.path, found);
-			}
-			if (found.at !== null) row.modified = new Date(found.at);
-		}),
-	);
-	return rows;
-}
-
-/**
- * Each row's automatic title beside a typed name (`SessionInfo.autoTitle`); a row that cannot be read has none. Before
- * {@link withLastActivity}: the stamp is stock's own `modified:size`.
- */
-async function withAutoTitles(rows: StockSessionInfo[]): Promise<StockSessionInfo[]> {
-	await Promise.all(
-		rows.map(async row => {
-			try {
-				const stamp = `${new Date(row.modified).getTime()}:${row.size}`;
-				const autoTitle = await listedAutoTitle(row.path, row.size, stamp);
-				if (autoTitle) row.autoTitle = autoTitle;
-			} catch {
-				// Unreadable now (stock's own scan skips such files too): the row shows its name alone.
-			}
-		}),
-	);
-	return rows;
-}
-
 /** Read-only probes the stock worker answers at once, beside its serial queue (`createDispatcher`): a restored tab's
  * omp spawns only after `sessions.owned` answers, and queued behind launch's session-list scan it waited ~0.3–0.5 s
  * for the scan, not the lease. The probe takes the lease for an instant and touches no journal. */
 export const UNQUEUED_METHODS: Readonly<Record<string, true>> = { "sessions.owned": true };
 
+/** Stock's SHA-256 address without blob-store writes: stored transcript reads must stay read-only. */
+export function withImageRefs<T>(messages: T): T {
+	return mapImagePayloads(messages, (record, data) => {
+		if (data.length < 1024) return null; // Stock's BLOB_EXTERNALIZE_THRESHOLD; existing references are shorter.
+		const hash = createHash("sha256").update(Buffer.from(data, "base64")).digest("hex");
+		return { ...record, data: `blob:sha256:${hash}` };
+	});
+}
+
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
+	"sessions.parseDates": async groups => {
+		if (!Array.isArray(groups)) throw new Error("Invalid session date groups");
+		return groups.map(group => {
+			if (!Array.isArray(group)) throw new Error("Invalid session dates");
+			for (const token of group) {
+				if (typeof token !== "string") throw new Error("Invalid session date");
+				const date: unknown = JSON.parse(token);
+				if (typeof date !== "string") throw new Error("Expected a session timestamp string");
+				const at = Date.parse(date);
+				if (Number.isFinite(at)) return at;
+			}
+			return null;
+		});
+	},
 	"sessions.list": async params => {
 		const { sessionsRoot } = paths(params);
 		const { listing, storage } = await stockSessions();
-		const rows = await withLastActivity(
-			await withAutoTitles(await withFirstPrompts(await listing.listAllSessions(storage, sessionsRoot))),
-		);
+		const rows = await withFirstPrompts(await listing.listAllSessions(storage, sessionsRoot));
 		const listed = new Set(rows.map(row => row.path));
 		for (const path of firstPrompts.keys()) if (!listed.has(path)) firstPrompts.delete(path);
-		for (const path of activity.keys()) if (!listed.has(path)) activity.delete(path);
-		forgetAutoTitles(listed);
 		return withoutPlaceholder(rows);
 	},
 	"sessions.list_directory": async params => {
@@ -328,11 +294,7 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		if (!sessionPath) throw new Error("Invalid session path");
 		const { listing, storage } = await stockSessions();
 		return withoutPlaceholder(
-			await withLastActivity(
-				await withAutoTitles(
-					await withFirstPrompts(await listing.listSessionsReadOnly(dirname(sessionPath), storage)),
-				),
-			),
+			await withFirstPrompts(await listing.listSessionsReadOnly(dirname(sessionPath), storage)),
 		);
 	},
 	/** Stock `deleteSessionWithArtifacts`; like stock's own `dropSession`, a file already gone (a tab's session never written) counts as deleted. */
@@ -357,9 +319,9 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		if (!sessionPath) throw new Error("Invalid session path");
 		const cwd = typeof params === "object" && params !== null && "cwd" in params ? params.cwd : undefined;
 		if (typeof cwd !== "string" || !isAbsolute(cwd)) throw new Error("Invalid target folder");
-		const { SessionManager } = (await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-manager")) as {
-			SessionManager: StockSessionManagerStatic;
-		};
+		const { SessionManager } = await loadOmpModule<{ SessionManager: StockSessionManagerStatic }>(
+			"pi-coding-agent/session/session-manager",
+		);
 		const manager = await SessionManager.open(sessionPath, undefined, undefined, { throwIfMissing: true });
 		try {
 			await manager.moveTo(resolve(cwd));
@@ -379,7 +341,7 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 		if (!sessionPath) throw new Error("Invalid session path");
 		const id = await sessionHeaderId(sessionPath);
 		if (!id) return false;
-		const storage = await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-storage");
+		const storage = await loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-storage");
 		const tryAcquire = storage.tryAcquireSessionLease;
 		if (typeof tryAcquire !== "function") return false;
 		const lease = (tryAcquire as (sessionId: string) => { release(): void } | null)(id);
@@ -394,10 +356,13 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"sessions.messages": async params => {
 		const { sessionPath } = paths(params);
 		if (!sessionPath) throw new Error("Invalid session path");
-		const loader = await importFromOmp("@oh-my-pi/pi-coding-agent/session/session-loader");
+		const loader = await loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-loader");
 		const read = loader.loadSessionMessagesReadOnly;
 		if (typeof read !== "function")
 			throw new Error("This omp cannot read stored sessions (loadSessionMessagesReadOnly).");
-		return (await (read as (path: string) => Promise<unknown[]>)(sessionPath)) ?? [];
+		const messages = (await (read as (path: string) => Promise<unknown[]>)(sessionPath)) ?? [];
+		return typeof params === "object" && params !== null && "imageRefs" in params && params.imageRefs === true
+			? withImageRefs(messages)
+			: messages;
 	},
 };

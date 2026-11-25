@@ -4,9 +4,11 @@ import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { BLOCKING_UI_METHODS } from "../shared/rpc-types";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp, stopOmpDaemon } from "./test-bridge-probe";
+import { RM_TEMP } from "./test-fake-omp";
 
 /**
  * A card open when the app quits into an update comes back after the relaunch (bridge `composer.restore_interrupted`
@@ -18,8 +20,6 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  * `pending`), and the automatic update keeps waiting for it.
  */
 const PROMPT = "CARD-MARK go";
-/** The extension UI methods that wait for the person's answer (the rest are fire-and-forget). */
-const DIALOGS: Record<string, true> = { select: true, confirm: true, input: true, editor: true };
 
 interface Step {
 	tool: string;
@@ -31,6 +31,7 @@ interface Frame {
 	id?: string;
 	method?: string;
 	title?: string;
+	html?: string;
 	options?: unknown;
 }
 
@@ -120,8 +121,8 @@ interface Omp {
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
-afterAll(async () => {
-	for (const cleanup of cleanups.reverse()) await cleanup();
+afterEach(async () => {
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 async function startOmp(
@@ -144,6 +145,7 @@ async function startOmp(
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			"        reasoning: false",
 			"        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }",
 			"",
 		].join("\n"),
@@ -238,8 +240,8 @@ async function startOmp(
 /** The cards an omp asked the person: what each one showed. */
 const cards = (o: Omp) =>
 	o.frames
-		.filter(frame => frame.type === "extension_ui_request" && DIALOGS[String(frame.method)] === true)
-		.map(({ method, title, options }) => ({ method, title, options }));
+		.filter(frame => frame.type === "extension_ui_request" && BLOCKING_UI_METHODS[String(frame.method)] === true)
+		.map(({ method, title, options, html }) => (method === "form" ? { method, html } : { method, title, options }));
 
 /** The tab's turn waits on `step`'s card when the app quits into an update; the relaunch continues it as TurnResume does. */
 async function relaunchOverCard(step: Step, how: Stop, extra: string[] = []) {
@@ -249,8 +251,9 @@ async function relaunchOverCard(step: Step, how: Stop, extra: string[] = []) {
 	chmodSync(isolated, 0o700);
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-card-repo-")));
 	cleanups.push(() => {
-		rmSync(isolated, { recursive: true, force: true });
-		rmSync(root, { recursive: true, force: true });
+		stopOmpDaemon(isolated);
+		rmSync(isolated, RM_TEMP);
+		rmSync(root, RM_TEMP);
 	});
 	const first = await startOmp(provider, isolated, root, false, extra);
 	await first.send({ type: "prompt", message: PROMPT });
@@ -279,7 +282,11 @@ describe.skipIf(!existsSync(omp))("a card open when the app quits into an update
 	for (const how of ["sigterm", "stdin"] as const) {
 		it(`reopens the same ask card after the relaunch (${how})`, async () => {
 			const { before, after, outcome, askedAgain } = await relaunchOverCard(ASK, how);
-			expect(before).toEqual([{ method: "select", title: "Which color?", options: ["red", "blue"] }]);
+			expect(before).toEqual([
+				before[0]?.method === "form"
+					? { method: "form", html: ASK.args.html }
+					: { method: "select", title: "Which color?", options: ["red", "blue"] },
+			]);
 			expect(after).toEqual(before);
 			expect(outcome).toMatchObject({ turn: true });
 			expect(askedAgain).toBe(0);

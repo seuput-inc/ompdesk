@@ -3,8 +3,8 @@
 #
 #   sh tests/hooks/test_lib.sh
 #
-# Exits non-zero on any failure. POSIX shell + sed/awk only, so no extra
-# CI setup needed.
+# Exits non-zero on any failure. POSIX shell; the loopback HTTP fixture uses
+# Python's standard library.
 set -eu
 
 # shellcheck source=../../hooks/_lib.sh
@@ -23,7 +23,9 @@ export HOME
 CALLER_SPOOL="${AI_MEMORY_DATA_DIR:-${XDG_DATA_HOME:-$ORIG_HOME/.local/share}/ai-memory}/hook-spool"
 unset AI_MEMORY_DATA_DIR XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME XDG_CACHE_HOME
 unset AI_MEMORY_RUN_ID AI_MEMORY_MANAGED_WORKSTREAM_ID AI_MEMORY_MANAGED_WORKSTREAM_NAME
-trap 'rm -rf "$TMP"; HOME=$ORIG_HOME' EXIT
+unset AI_MEMORY_AUTO_HANDOFF AI_MEMORY_SESSION_ID AI_MEMORY_CAPTURE_OWNER
+HTTP_PID=""
+trap '[ -z "$HTTP_PID" ] || { kill "$HTTP_PID" 2>/dev/null || true; wait "$HTTP_PID" 2>/dev/null || true; }; rm -rf "$TMP"; HOME=$ORIG_HOME' EXIT
 
 assert_eq() {
     desc="$1"; want="$2"; got="$3"
@@ -48,6 +50,102 @@ host_path() {
     fi
 }
 
+# --- only successful HTTP replies become context ----------------------
+# Exercise real curl, including all three auth branches. Without the status
+# guard, a redirect or error page is printed as the agent's handoff or brief.
+# Windows runners ship `python` but not always a working `python3` (Git Bash
+# may find only the Store alias), so take the first that runs Python 3.
+HTTP_PYTHON=""
+for HTTP_CANDIDATE in python3 python; do
+    if "$HTTP_CANDIDATE" -c 'import sys; sys.exit(sys.version_info[0] != 3)' >/dev/null 2>&1; then
+        HTTP_PYTHON=$HTTP_CANDIDATE
+        break
+    fi
+done
+[ -n "$HTTP_PYTHON" ] || { printf 'the HTTP fixture needs Python 3 (python3 or python)\n' >&2; exit 1; }
+"$HTTP_PYTHON" - "$TMP/http-port" <<'PY' &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlsplit
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        url = urlsplit(self.path)
+        status = int(url.path.split('/')[1])
+        auth = parse_qs(url.query)['auth'][0]
+        expected = {'none': None, 'env': 'Bearer env-fixture', 'file': 'Bearer file-fixture'}
+        if (self.headers.get('Authorization') != expected[auth]
+                or self.headers.get('X-AI-Memory-Client') != 'hook-sh'):
+            status = 401
+        bodies = {200: b'context line one\ncontext line two',
+                  201: b'context with final newlines\n\n',
+                  204: b'', 299: b'context ending in digits\n500'}
+        body = bodies.get(status, b'HTTP error body must not become context')
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        if 300 <= status < 400:
+            self.send_header('Location', '/200/handoff?' + url.query)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+server = HTTPServer(('127.0.0.1', 0), Handler)
+with open(sys.argv[1], 'w') as ready:
+    ready.write(str(server.server_port))
+server.serve_forever()
+PY
+HTTP_PID=$!
+HTTP_WAIT=0
+while [ ! -s "$TMP/http-port" ]; do
+    kill -0 "$HTTP_PID" 2>/dev/null || { printf 'HTTP fixture exited\n' >&2; exit 1; }
+    HTTP_WAIT=$((HTTP_WAIT + 1))
+    [ "$HTTP_WAIT" -lt 100 ] || { printf 'HTTP fixture did not start\n' >&2; exit 1; }
+    sleep 0.05
+done
+HTTP_SERVER="http://127.0.0.1:$(cat "$TMP/http-port")"
+for HTTP_AUTH in none env file; do
+    AI_MEMORY_DATA_DIR="$TMP/http-$HTTP_AUTH"
+    export AI_MEMORY_DATA_DIR
+    mkdir -p "$AI_MEMORY_DATA_DIR"
+    unset AI_MEMORY_AUTH_TOKEN
+    case "$HTTP_AUTH" in
+        env) AI_MEMORY_AUTH_TOKEN=env-fixture; export AI_MEMORY_AUTH_TOKEN ;;
+        file) printf 'Authorization: Bearer file-fixture\n' >"$AI_MEMORY_DATA_DIR/auth-header" ;;
+    esac
+    for HTTP_HELPER in ai_memory_get_handoff ai_memory_get_brief; do
+        for HTTP_STATUS in 200 201 204 299 302 307 308 401 404 500; do
+            case "$HTTP_STATUS" in
+                200) HTTP_WANT='context line one
+context line two|' ;;
+                201) HTTP_WANT='context with final newlines
+
+|' ;;
+                299) HTTP_WANT='context ending in digits
+500|' ;;
+                *) HTTP_WANT='|' ;;
+            esac
+            # The sentinel preserves final newlines across command substitution.
+            HTTP_GOT=$(set +e
+                "$HTTP_HELPER" "$HTTP_SERVER/$HTTP_STATUS/context?auth=$HTTP_AUTH&cwd=%2Ffixture"
+                printf '|')
+            assert_eq "$HTTP_HELPER: $HTTP_STATUS context ($HTTP_AUTH auth)" "$HTTP_WANT" "$HTTP_GOT"
+        done
+    done
+done
+kill "$HTTP_PID"
+wait "$HTTP_PID" 2>/dev/null || true
+HTTP_PID=""
+unset AI_MEMORY_AUTH_TOKEN AI_MEMORY_DATA_DIR
+for HTTP_HELPER in ai_memory_get_handoff ai_memory_get_brief; do
+    assert_eq "$HTTP_HELPER: connection failure stays empty with curl's exit code" '|7' \
+        "$(set +e; "$HTTP_HELPER" "$HTTP_SERVER/200/context?auth=none&cwd=%2Ffixture" 2>/dev/null; printf '|%s' "$?")"
+done
+
 # --- parse_toml_key ---------------------------------------------------
 cat >"$TMP/sample.toml" <<EOF
 # Comment line
@@ -63,6 +161,18 @@ assert_eq "parse project"             "pe-portais" "$(ai_memory_parse_toml_key "
 assert_eq "parse project_strategy"    "repo-root"  "$(ai_memory_parse_toml_key "$TMP/sample.toml" project_strategy)"
 assert_eq "absent key returns empty"  ""           "$(ai_memory_parse_toml_key "$TMP/sample.toml" missing)"
 assert_eq "absent file returns empty" ""           "$(ai_memory_parse_toml_key "$TMP/no-such-file.toml" workspace)"
+
+printf '\357\273\277workspace = "bom-workspace"\ndefault_global = true\n' >"$TMP/bom.toml"
+assert_eq "BOM does not hide first-line key" "bom-workspace" \
+    "$(ai_memory_parse_toml_key "$TMP/bom.toml" workspace)"
+assert_eq "BOM does not hide first-line flag" "true" \
+    "$(ai_memory_parse_toml_flag "$TMP/bom.toml" default_global)"
+printf '\357\273\277aliases = ["former-name"]\n' >"$TMP/bom-aliases.toml"
+bom_aliases_declared=no
+ai_memory_marker_declares_settings "$TMP/bom-aliases.toml" && bom_aliases_declared=yes
+assert_eq "BOM does not hide first-line aliases boundary" "yes" "$bom_aliases_declared"
+assert_eq "BOM does not hide first-line aliases value" '["former-name"]' \
+    "$(ai_memory_aliases_json "$TMP/bom-aliases.toml")"
 
 # --- find_marker ------------------------------------------------------
 mkdir -p "$TMP/a/b/c/d"
@@ -175,6 +285,28 @@ assert_eq "antigravity initial invocation after a 256 KB field" "yes" \
 assert_eq "extract session id after a 256 KB field" "agy" \
     "$(ai_memory_extract_session_id "$PAYLOAD_AGY_BIG")"
 
+# A subagent marker only counts as a top-level key with a non-empty string
+# value, so a tool result that quotes the key name is still a root payload.
+subagent_payload() {
+    if ai_memory_payload_is_subagent "$1"; then printf 'yes'; else printf 'no'; fi
+}
+assert_eq "top-level agent_id marks a subagent" "yes" \
+    "$(subagent_payload '{"session_id":"s","agent_id":"planner"}')"
+assert_eq "top-level parentSessionId marks a subagent" "yes" \
+    "$(subagent_payload '{"parentSessionId":"p","session_id":"s"}')"
+assert_eq "blank marker value is not a subagent" "no" \
+    "$(subagent_payload '{"session_id":"s","agent_id":"  "}')"
+assert_eq "marker key quoted in a tool result is not a subagent" "no" \
+    "$(subagent_payload '{"session_id":"s","tool_response":"keys = [\"subagentType\", \"agent_id\"]"}')"
+assert_eq "marker key and value quoted in a tool result is not a subagent" "no" \
+    "$(subagent_payload '{"session_id":"s","tool_response":"{\"agent_id\": \"x\"}"}')"
+assert_eq "marker nested in tool input is not a subagent" "no" \
+    "$(subagent_payload '{"session_id":"s","tool_input":{"agent_id":"x"}}')"
+assert_eq "marker nested after a non-string field is not a subagent" "no" \
+    "$(subagent_payload '{"session_id":"s","tool_input":{"timeout":30,"agent_id":"x"}}')"
+assert_eq "no marker at all is not a subagent" "no" \
+    "$(subagent_payload '{"session_id":"s","tool_name":"read_file"}')"
+
 FAKE_CURL_BIN="$TMP/fake-curl-bin"
 FAKE_CURL_LOG="$TMP/fake-curl.log"
 mkdir -p "$FAKE_CURL_BIN"
@@ -184,6 +316,7 @@ printf '%s\n' "$*" >>"$AI_MEMORY_CURL_LOG"
 case "$*" in
     *'/handoff?'*) printf 'next-session-context' ;;
 esac
+case "$*" in *'\n%{http_code}'*) printf '\n200' ;; esac
 EOF
 chmod +x "$FAKE_CURL_BIN/curl"
 
@@ -200,14 +333,68 @@ AGY_INITIAL_OUTPUT=$(printf '%s' '{"invocationNum":0,"conversationId":"agy","wor
     | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
         AI_MEMORY_HOOK_URL='http://memory.test' sh hooks/antigravity-cli/session-start.sh)
 assert_eq "antigravity initial invocation injects handoff" \
-    '{"injectSteps":[{"ephemeralMessage":"next-session-context"}]}' "$AGY_INITIAL_OUTPUT"
+    '{"injectSteps":[{"systemMessage":{"systemMessage":"next-session-context"}}]}' "$AGY_INITIAL_OUTPUT"
 assert_eq "antigravity initial invocation posts then fetches" "2" \
     "$(wc -l <"$FAKE_CURL_LOG" | tr -d ' ')"
 assert_eq "antigravity handoff fetch carries conversation id" "yes" \
     "$(grep -q '/handoff?.*session_id=agy' "$FAKE_CURL_LOG" && printf 'yes' || printf 'no')"
 
-PS_ANTIGRAVITY_STATIC=$(grep -q 'function Test-AiMemoryAntigravityInitialInvocation' hooks/lib/ai-memory-hook.ps1 \
-    && grep -q '\$AntigravityPreInvocationOutput -and -not' hooks/lib/ai-memory-hook.ps1 \
+# Native SessionStart: no invocationNum, so it is a start boundary.
+rm -f "$FAKE_CURL_LOG"
+AGY_SESSION_START_OUTPUT=$(printf '%s' '{"conversationId":"agy-native","workspacePaths":["/work"]}' \
+    | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
+        AI_MEMORY_DATA_DIR="$TMP/agy-native" AI_MEMORY_HOOK_URL='http://memory.test' \
+        sh hooks/antigravity-cli/session-start.sh)
+assert_eq "antigravity SessionStart injects a persistent handoff" \
+    '{"injectSteps":[{"systemMessage":{"systemMessage":"next-session-context"}}]}' "$AGY_SESSION_START_OUTPUT"
+assert_eq "antigravity SessionStart posts session-start" "yes" \
+    "$(grep -q '/hook?event=session-start&agent=antigravity-cli' "$FAKE_CURL_LOG" && printf 'yes' || printf 'no')"
+
+# PreInvocation: a later invocation, or one without its counter, does nothing.
+for agy_payload in '{"invocationNum":2,"conversationId":"agy-pre","workspacePaths":["/work"]}' \
+    '{"conversationId":"agy-pre","workspacePaths":["/work"]}'; do
+    rm -f "$FAKE_CURL_LOG"
+    AGY_PRE_OUTPUT=$(printf '%s' "$agy_payload" \
+        | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
+            AI_MEMORY_DATA_DIR="$TMP/agy-pre" AI_MEMORY_HOOK_URL='http://memory.test' \
+            sh hooks/antigravity-cli/pre-invocation.sh)
+    assert_eq "antigravity PreInvocation outside invocation zero is empty: $agy_payload" "{}" "$AGY_PRE_OUTPUT"
+    assert_eq "antigravity PreInvocation outside invocation zero sends nothing: $agy_payload" "0" \
+        "$([ -f "$FAKE_CURL_LOG" ] && wc -l <"$FAKE_CURL_LOG" | tr -d ' ' || printf '0')"
+done
+# Without a SessionStart, the first turn's PreInvocation starts the
+# conversation; the conversation's second turn is a no-op.
+rm -f "$FAKE_CURL_LOG"
+AGY_PRE_FIRST=$(printf '%s' '{"invocationNum":0,"conversationId":"agy-pre","workspacePaths":["/work"]}' \
+    | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
+        AI_MEMORY_DATA_DIR="$TMP/agy-pre" AI_MEMORY_HOOK_URL='http://memory.test' \
+        sh hooks/antigravity-cli/pre-invocation.sh)
+assert_eq "antigravity first PreInvocation without SessionStart injects the handoff" \
+    '{"injectSteps":[{"systemMessage":{"systemMessage":"next-session-context"}}]}' "$AGY_PRE_FIRST"
+rm -f "$FAKE_CURL_LOG"
+AGY_PRE_SECOND=$(printf '%s' '{"invocationNum":0,"conversationId":"agy-pre","workspacePaths":["/work"]}' \
+    | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
+        AI_MEMORY_DATA_DIR="$TMP/agy-pre" AI_MEMORY_HOOK_URL='http://memory.test' \
+        sh hooks/antigravity-cli/pre-invocation.sh)
+assert_eq "antigravity later turn PreInvocation is empty" "{}" "$AGY_PRE_SECOND"
+assert_eq "antigravity later turn PreInvocation sends nothing" "0" \
+    "$([ -f "$FAKE_CURL_LOG" ] && wc -l <"$FAKE_CURL_LOG" | tr -d ' ' || printf '0')"
+# SessionStart then the first turn's PreInvocation: one start, one handoff.
+rm -f "$FAKE_CURL_LOG"
+for agy_step in 'session-start {"conversationId":"agy-once","workspacePaths":["/work"]}' \
+    'pre-invocation {"invocationNum":0,"conversationId":"agy-once","workspacePaths":["/work"]}'; do
+    printf '%s' "${agy_step#* }" \
+        | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
+            AI_MEMORY_DATA_DIR="$TMP/agy-once" AI_MEMORY_HOOK_URL='http://memory.test' \
+            sh "hooks/antigravity-cli/${agy_step%% *}.sh" >/dev/null
+done
+assert_eq "antigravity SessionStart plus first PreInvocation claims one handoff" "1" \
+    "$(grep -c '/handoff?' "$FAKE_CURL_LOG")"
+
+PS_ANTIGRAVITY_STATIC=$(grep -q 'function Test-AiMemoryAntigravityStartBoundary' hooks/lib/ai-memory-hook.ps1 \
+    && grep -q '\$AntigravityStartOutput -and -not' hooks/lib/ai-memory-hook.ps1 \
+    && grep -q 'systemMessage = @{ systemMessage =' hooks/lib/ai-memory-hook.ps1 \
+    && grep -q -- '-AntigravityPreInvocation' hooks/antigravity-cli/pre-invocation.ps1 \
     && printf 'ok' || printf 'missing')
 assert_eq "powershell antigravity hook has invocation guard" "ok" "$PS_ANTIGRAVITY_STATIC"
 
@@ -265,7 +452,7 @@ printf 'project = "acme-api"\naliases = [" former-name ", "legacy_name", "former
 ALIAS_JSON='["former-name","legacy_name"]'
 ALIAS_QS=$(ai_memory_marker_qs "$TMP/aliases")
 assert_eq "marker aliases keep canonical project and forward remote identity" "yes" \
-    "$(case "$ALIAS_QS" in *'&project=acme-api&project_src=marker'*"&identity=git.example.test%2Facme%2Fapi&identity_src=git_remote&identity_style=path&aliases=$(ai_memory_url_encode "$ALIAS_JSON")"*) printf yes ;; *) printf no ;; esac)"
+    "$(case "$ALIAS_QS" in (*'&project=acme-api&project_src=marker'*"&identity=git.example.test%2Facme%2Fapi&identity_src=git_remote&identity_style=path&aliases=$(ai_memory_url_encode "$ALIAS_JSON")"*) printf yes ;; (*) printf no ;; esac)"
 
 mkdir -p "$TMP/home-routes/src/api/lib" "$TMP/home-routes/src/api-sibling"
 HOME="$TMP/home-routes"
@@ -283,9 +470,9 @@ route_aliases = ["old-api"]
 EOF
 HOME_ROUTE=$(ai_memory_marker_qs "$HOME/src/api/lib")
 assert_eq "home route uses longest component path and marker provenance" "yes" \
-    "$(case "$HOME_ROUTE" in *'&workspace=oss&project=acme-api&project_src=marker'*) printf yes ;; *) printf no ;; esac)"
+    "$(case "$HOME_ROUTE" in (*'&workspace=oss&project=acme-api&project_src=marker'*) printf yes ;; (*) printf no ;; esac)"
 assert_eq "non-git home path route omits aliases" "no" \
-    "$(case "$HOME_ROUTE" in *'&aliases='*) printf yes ;; *) printf no ;; esac)"
+    "$(case "$HOME_ROUTE" in (*'&aliases='*) printf yes ;; (*) printf no ;; esac)"
 PS_ROUTE_STATIC=$(grep -Fq 'if ($aliases) { $qs += "&aliases=' hooks/lib/ai-memory-hook.ps1 \
     && grep -Fq 'if (-not $stack.Count) { return $null }' hooks/lib/ai-memory-hook.ps1 \
     && printf ok || printf fail)
@@ -305,14 +492,21 @@ route_project = "wrong"
 EOF
 HOME_IDENTITY_ROUTE=$(ai_memory_marker_qs "$HOME/src/api/lib")
 assert_eq "home exact hostful identity wins path and forwards aliases safely" "yes" \
-    "$(case "$HOME_IDENTITY_ROUTE" in *'&workspace=identity&project=identity-api&project_src=marker'*'&identity=github.com%2Facme%2Fapi&identity_src=git_remote&identity_style=path'*'&aliases=%5B%22main%22%5D'*) printf yes ;; *) printf no ;; esac)"
+    "$(case "$HOME_IDENTITY_ROUTE" in (*'&workspace=identity&project=identity-api&project_src=marker'*'&identity=github.com%2Facme%2Fapi&identity_src=git_remote&identity_style=path'*'&aliases=%5B%22main%22%5D'*) printf yes ;; (*) printf no ;; esac)"
+# The route's fields are split with an unquoted expansion; `["main"]` is a
+# bracket glob, so a one-letter file in the hook's own cwd must not replace it.
+mkdir -p "$TMP/glob-cwd"
+: >"$TMP/glob-cwd/m"
+HOME_GLOB_ROUTE=$(cd "$TMP/glob-cwd" && ai_memory_marker_qs "$HOME/src/api/lib")
+assert_eq "home route aliases are not glob-expanded in the hook's cwd" "yes" \
+    "$(case "$HOME_GLOB_ROUTE" in (*'&aliases=%5B%22main%22%5D'*) printf yes ;; (*) printf no ;; esac)"
 HOME_SIBLING=$(ai_memory_marker_qs "$HOME/src/api-sibling")
 assert_eq "home route does not string-prefix match a sibling" "yes" \
-    "$(case "$HOME_SIBLING" in *'&project=broad&project_src=marker'*) printf yes ;; *) printf no ;; esac)"
+    "$(case "$HOME_SIBLING" in (*'&project=broad&project_src=marker'*) printf yes ;; (*) printf no ;; esac)"
 printf 'workspace = "local"\nproject = "local-project"\n' >"$HOME/src/api/.ai-memory.toml"
 LOCAL_ROUTE=$(ai_memory_marker_qs "$HOME/src/api/lib")
 assert_eq "local settings marker wins over home route" "yes" \
-    "$(case "$LOCAL_ROUTE" in *'&workspace=local&project=local-project&project_src=marker'*) printf yes ;; *) printf no ;; esac)"
+    "$(case "$LOCAL_ROUTE" in (*'&workspace=local&project=local-project&project_src=marker'*) printf yes ;; (*) printf no ;; esac)"
 rm -f "$HOME/src/api/.ai-memory.toml"
 cat >"$HOME/.ai-memory.toml" <<EOF
 workspace = "wrong"
@@ -333,13 +527,13 @@ route_project = "api"
 EOF
 HOME_FLAG_ROUTE=$(ai_memory_marker_qs "$HOME/src/api")
 assert_eq "home route replaces scope and keeps root privacy settings" "yes" \
-    "$(case "$HOME_FLAG_ROUTE" in *'&workspace=right&project=api&project_src=marker'*'&drop_subagent=true&default_global=true&profile_contribute=1&profile_consume=0'*) printf yes ;; *) printf no ;; esac)"
+    "$(case "$HOME_FLAG_ROUTE" in (*'&workspace=right&project=api&project_src=marker'*'&drop_subagent=true&default_global=true&profile_contribute=1&profile_consume=0'*) printf yes ;; (*) printf no ;; esac)"
 printf 'workspace = "wrong"\nproject = "wrong"\n[routes.path."relative"]\nroute_workspace = "oss"\nroute_project = "api"\n' >"$HOME/.ai-memory.toml"
 assert_eq "malformed home routes fail closed instead of root fallback" "&ai_memory_invalid_home_routes=1" \
     "$(ai_memory_marker_qs "$HOME/src/api")"
 printf 'workspace = wrong\n' >"$HOME/.ai-memory.toml"
 assert_eq "malformed root-only home marker keeps legacy parser behavior" "yes" \
-    "$(case "$(ai_memory_marker_qs "$HOME/src/api")" in *'&ai_memory_invalid_home_routes=1'*) printf no ;; *) printf yes ;; esac)"
+    "$(case "$(ai_memory_marker_qs "$HOME/src/api")" in (*'&ai_memory_invalid_home_routes=1'*) printf no ;; (*) printf yes ;; esac)"
 ai_memory_home
 ROUTE_FS=$(printf '\034')
 printf '[routes.path."C:/Work/API"]\nroute_workspace="windows"\nroute_project="drive"\n[routes.path."//Server/Share/API"]\nroute_workspace="windows"\nroute_project="unc"\n' >"$HOME/.ai-memory.toml"
@@ -347,6 +541,10 @@ assert_eq "home drive route matches components" "windows${ROUTE_FS}drive${ROUTE_
     "$(ai_memory_home_route "$HOME/.ai-memory.toml" 'c:/work/api/lib' '')"
 assert_eq "home UNC route matches components" "windows${ROUTE_FS}unc${ROUTE_FS}${ROUTE_FS}" \
     "$(ai_memory_home_route "$HOME/.ai-memory.toml" '//server/share/api/lib' '')"
+# A Windows cwd keeps its backslashes all the way into the matcher: awk's
+# `-v` would read `\b` and `\n` as escapes before `cleanpath` saw them.
+assert_eq "home drive route matches a backslash cwd" "windows${ROUTE_FS}drive${ROUTE_FS}${ROUTE_FS}" \
+    "$(ai_memory_home_route "$HOME/.ai-memory.toml" 'C:\Work\API\bin\new' '')"
 printf '[routes.path."C:/"]\nroute_workspace="windows"\nroute_project="drive"\n' >"$HOME/.ai-memory.toml"
 assert_eq "home drive root route is rejected" "invalid" \
     "$(ai_memory_home_route "$HOME/.ai-memory.toml" 'C:/child' '')"
@@ -371,6 +569,15 @@ assert_eq "capture-only marker: find_marker still resolves nearest" \
 assert_eq "capture-only marker: find_settings_marker skips it for the outer" \
     "$TMP/scope/.ai-memory.toml" \
     "$(ai_memory_find_settings_marker "$TMP/scope/inner")"
+# `[messaging] inbox_notice_on_prompt` is a setting like the others: the
+# native walk (`declares_more_than_capture`) stops at such a marker, so the
+# script walk must too, or the two resolve different scopes for one cwd.
+mkdir -p "$TMP/inbox-scope/inner"
+printf 'workspace = "acme"\n' >"$TMP/inbox-scope/.ai-memory.toml"
+printf '[messaging]\ninbox_notice_on_prompt = true\n' >"$TMP/inbox-scope/inner/.ai-memory.toml"
+assert_eq "inbox-notice-only marker is a settings boundary" \
+    "$TMP/inbox-scope/inner/.ai-memory.toml" \
+    "$(ai_memory_find_settings_marker "$TMP/inbox-scope/inner")"
 assert_eq "capture-only marker: marker_qs forwards the OUTER scope" \
     "&cwd=$(ai_memory_url_encode "$TMP/scope/inner")&workspace=acme&project=infra&project_src=marker&profile_contribute=1&profile_consume=1" \
     "$(ai_memory_marker_qs "$TMP/scope/inner")"
@@ -436,6 +643,72 @@ assert_eq "marker_qs forwards [profile] contribute and consume" \
 assert_eq "marker_qs sends explicit [profile] defaults when a marker omits the keys" \
     "&cwd=$(ai_memory_url_encode "$TMP/profile-only")&workspace=outer&profile_contribute=1&profile_consume=1" \
     "$(ai_memory_marker_qs "$TMP/profile-only")"
+# AI_MEMORY_AUTO_HANDOFF=off opts this execution out of the automatic handoff
+# (#1951); only an explicit falsy value is forwarded, next to the managed run.
+assert_eq "auto handoff unset sends nothing" "" "$(ai_memory_managed_qs)"
+assert_eq "auto handoff off is forwarded" "&auto_handoff=0" \
+    "$(AI_MEMORY_AUTO_HANDOFF=' Off ' ai_memory_managed_qs)"
+assert_eq "auto handoff on sends nothing" "" "$(AI_MEMORY_AUTO_HANDOFF=on ai_memory_managed_qs)"
+assert_eq "auto handoff rides with the managed run" "&managed_run=r1&auto_handoff=0" \
+    "$(AI_MEMORY_RUN_ID=r1 AI_MEMORY_AUTO_HANDOFF=0 ai_memory_managed_qs)"
+
+# `[handoff] deliver_on_session_start = false` is sent as &handoff=0 only when
+# explicitly falsy, and a [handoff]-only marker is a settings boundary.
+mkdir -p "$TMP/handoff-off/inner" "$TMP/handoff-on"
+printf 'workspace = "outer"\n' >"$TMP/handoff-off/.ai-memory.toml"
+printf '[handoff]\ndeliver_on_session_start = "false"\n' >"$TMP/handoff-off/inner/.ai-memory.toml"
+printf '[handoff]\ndeliver_on_session_start = true\n' >"$TMP/handoff-on/.ai-memory.toml"
+assert_eq "handoff-only marker is a settings boundary" \
+    "$TMP/handoff-off/inner/.ai-memory.toml" "$(ai_memory_find_settings_marker "$TMP/handoff-off/inner")"
+assert_eq "marker_qs forwards the [handoff] opt-out" \
+    "&cwd=$(ai_memory_url_encode "$TMP/handoff-off/inner")&profile_contribute=1&profile_consume=1&handoff=0" \
+    "$(ai_memory_marker_qs "$TMP/handoff-off/inner")"
+assert_eq "marker_qs omits handoff for a sibling project and for a truthy value" \
+    "&cwd=$(ai_memory_url_encode "$TMP/handoff-off")&workspace=outer&profile_contribute=1&profile_consume=1" \
+    "$(ai_memory_marker_qs "$TMP/handoff-off")"
+assert_eq "marker_qs omits handoff when deliver_on_session_start is true" \
+    "&cwd=$(ai_memory_url_encode "$TMP/handoff-on")&profile_contribute=1&profile_consume=1" \
+    "$(ai_memory_marker_qs "$TMP/handoff-on")"
+# [recovery] uses the same key without opting out of handoffs.
+mkdir -p "$TMP/recovery-off/inner" "$TMP/recovery-on"
+printf 'workspace = "outer"\n' >"$TMP/recovery-off/.ai-memory.toml"
+printf '[recovery]\ndeliver_on_session_start = "false"\n' >"$TMP/recovery-off/inner/.ai-memory.toml"
+printf '[recovery]\ndeliver_on_session_start = true\n' >"$TMP/recovery-on/.ai-memory.toml"
+assert_eq "recovery-only marker is a settings boundary" \
+    "$TMP/recovery-off/inner/.ai-memory.toml" "$(ai_memory_find_settings_marker "$TMP/recovery-off/inner")"
+assert_eq "marker_qs forwards recovery without disabling handoff" \
+    "&cwd=$(ai_memory_url_encode "$TMP/recovery-off/inner")&profile_contribute=1&profile_consume=1&recovery=0" \
+    "$(ai_memory_marker_qs "$TMP/recovery-off/inner")"
+assert_eq "marker_qs omits recovery for a truthy value" \
+    "&cwd=$(ai_memory_url_encode "$TMP/recovery-on")&profile_contribute=1&profile_consume=1" \
+    "$(ai_memory_marker_qs "$TMP/recovery-on")"
+printf '[handoff]\ndeliver_on_session_start = false\n[recovery]\ndeliver_on_session_start = false\n' >"$TMP/recovery-on/.ai-memory.toml"
+assert_eq "marker_qs forwards independent handoff and recovery opt-outs" \
+    "&cwd=$(ai_memory_url_encode "$TMP/recovery-on")&profile_contribute=1&profile_consume=1&handoff=0&recovery=0" \
+    "$(ai_memory_marker_qs "$TMP/recovery-on")"
+# `[briefing] inject_on_subagent_start` alone is a settings boundary too, and
+# only the subagent-start query forwards it; the session-start opt-in stays
+# its own.
+mkdir -p "$TMP/subagent-only/inner" "$TMP/subagent-key-only/inner" "$TMP/session-brief-only"
+printf 'workspace = "outer"\n' >"$TMP/subagent-only/.ai-memory.toml"
+printf '[briefing]\ninject_on_subagent_start = true\nmax_chars = 6000\n' >"$TMP/subagent-only/inner/.ai-memory.toml"
+printf 'workspace = "outer"\n' >"$TMP/subagent-key-only/.ai-memory.toml"
+printf '[briefing]\ninject_on_subagent_start = true\n' >"$TMP/subagent-key-only/inner/.ai-memory.toml"
+printf '[briefing]\ninject_on_session_start = true\n' >"$TMP/session-brief-only/.ai-memory.toml"
+assert_eq "subagent-brief-only marker is a settings boundary" \
+    "$TMP/subagent-key-only/inner/.ai-memory.toml" "$(ai_memory_find_settings_marker "$TMP/subagent-key-only/inner")"
+assert_eq "the subagent briefing query forwards its own opt-in" \
+    "&briefing=true&briefing_budget=6000" "$(ai_memory_subagent_briefing_qs "$TMP/subagent-only/inner")"
+assert_eq "the session-start briefing query ignores the subagent opt-in" \
+    "" "$(ai_memory_briefing_qs "$TMP/subagent-only/inner")"
+assert_eq "the subagent briefing query ignores the session-start opt-in" \
+    "" "$(ai_memory_subagent_briefing_qs "$TMP/session-brief-only")"
+HF_PS=$(grep -q 'deliver_on_session_start' hooks/lib/ai-memory-hook.ps1 \
+    && grep -q '&handoff=0' hooks/lib/ai-memory-hook.ps1 \
+    && grep -q '&recovery=0' hooks/lib/ai-memory-hook.ps1 \
+    && grep -q 'Get-AiMemoryTomlScopedFlag' hooks/lib/ai-memory-hook.ps1 \
+    && printf 'ok' || printf 'missing')
+assert_eq "powershell marker query forwards independent delivery opt-outs (static)" "ok" "$HF_PS"
 PSH=""
 if command -v pwsh >/dev/null 2>&1; then
     PSH=$(command -v pwsh)
@@ -457,6 +730,48 @@ else
         && grep -q '&profile_consume=' hooks/lib/ai-memory-hook.ps1 \
         && printf 'ok' || printf 'missing')
     assert_eq "powershell marker query forwards [profile] flags (static)" "ok" "$PS_PROFILE"
+fi
+if [ -n "$PSH" ]; then
+    PS_REC_CWD=$(host_path "$TMP/recovery-off/inner")
+    PS_REC_QS=$(HOME="$TMP" "$PSH" -NoProfile -ExecutionPolicy Bypass -Command \
+        ". '$PS_LIB'; Get-AiMemoryMarkerQuery -Cwd '$PS_REC_CWD'")
+    case "$PS_REC_QS" in
+        *"&profile_contribute=1&profile_consume=1&recovery=0"*) PS_RECOVERY="ok" ;;
+        *) PS_RECOVERY="got: $PS_REC_QS" ;;
+    esac
+    case "$PS_REC_QS" in
+        *"&handoff="*) PS_RECOVERY="unexpected handoff opt-out: $PS_REC_QS" ;;
+    esac
+    assert_eq "powershell forwards recovery without disabling handoff" "ok" "$PS_RECOVERY"
+fi
+if [ -n "$PSH" ]; then
+    PS_SUB_CWD=$(host_path "$TMP/subagent-only/inner")
+    PS_SUB_MARKER=$(host_path "$TMP/subagent-key-only/inner/.ai-memory.toml")
+    PS_SUB=$(HOME="$TMP" "$PSH" -NoProfile -ExecutionPolicy Bypass -Command \
+        ". '$PS_LIB'; (Get-AiMemoryBriefingQuery -Cwd '$PS_SUB_CWD' -Key 'inject_on_subagent_start') + '|' + (Get-AiMemoryBriefingQuery -Cwd '$PS_SUB_CWD') + '|' + (Test-AiMemoryMarkerDeclaresSettings -File '$PS_SUB_MARKER')")
+    assert_eq "powershell forwards only the subagent opt-in, a settings boundary" \
+        "&briefing=true&briefing_budget=6000||True" "$PS_SUB"
+else
+    PS_SUB=$(grep -q '"inject_on_subagent_start"' hooks/lib/ai-memory-hook.ps1 \
+        && grep -q '/brief?agent=' hooks/lib/ai-memory-hook.ps1 \
+        && grep -q 'SubagentStartBrief' hooks/claude-code/subagent-start.ps1 \
+        && printf 'ok' || printf 'missing')
+    assert_eq "powershell delivers the subagent brief (static)" "ok" "$PS_SUB"
+fi
+# #2134: a hook installed without a baked token relies on the server's token
+# file; the wrapper must fall back to it when AI_MEMORY_AUTH_TOKEN is unset.
+PS_TOKEN_STATIC=$(grep -q 'function Get-AiMemoryStoredToken' hooks/lib/ai-memory-hook.ps1 \
+    && grep -Fq 'if (-not $BearerToken) { $BearerToken = Get-AiMemoryStoredToken }' hooks/lib/ai-memory-hook.ps1 \
+    && printf 'ok' || printf 'missing')
+assert_eq "powershell wrapper falls back to the stored token file (static)" "ok" "$PS_TOKEN_STATIC"
+if [ -n "$PSH" ]; then
+    mkdir -p "$TMP/ps-token/auth-tokens" "$TMP/ps-token-empty"
+    printf 'stored-secret\n' > "$TMP/ps-token/auth-tokens/default"
+    PS_TOKEN_DIR=$(host_path "$TMP/ps-token")
+    PS_TOKEN_EMPTY_DIR=$(host_path "$TMP/ps-token-empty")
+    PS_TOKEN_OUT=$("$PSH" -NoProfile -ExecutionPolicy Bypass -Command \
+        "\$env:AI_MEMORY_DATA_DIR='$PS_TOKEN_DIR'; . '$PS_LIB'; \$present = Get-AiMemoryStoredToken; \$env:AI_MEMORY_DATA_DIR='$PS_TOKEN_EMPTY_DIR'; \$absent = Get-AiMemoryStoredToken; \$present + '|' + \$absent")
+    assert_eq "powershell reads the stored token file, empty when absent" "stored-secret|" "$PS_TOKEN_OUT"
 fi
 
 # A capture-only marker with no scope-declaring ancestor: still transparent,
@@ -567,6 +882,29 @@ assert_eq "url_encode encodes an accented macOS path" \
     "$(ai_memory_url_encode '/Users/me/Área de Trabalho')"
 
 # --- offline spool ----------------------------------------------------
+# Without an explicit data-dir, the script fallback must agree with the
+# native client's platform default. In particular, macOS setup stores state
+# under Application Support rather than a shadow ~/.local/share tree.
+MAC_HOME="$TMP/mac-home"
+mkdir -p "$MAC_HOME/Library/Application Support/ai-memory"
+: > "$MAC_HOME/Library/Application Support/ai-memory/auth-header"
+MAC_STATE=$(
+    HOME="$MAC_HOME"; export HOME
+    unset AI_MEMORY_DATA_DIR XDG_DATA_HOME
+    uname() { printf 'Darwin\n'; }
+    ai_memory_state_dir
+)
+assert_eq "state_dir uses the macOS data directory" \
+    "$MAC_HOME/Library/Application Support/ai-memory" "$MAC_STATE"
+MAC_AUTH=$(
+    HOME="$MAC_HOME"; export HOME
+    unset AI_MEMORY_DATA_DIR XDG_DATA_HOME
+    uname() { printf 'Darwin\n'; }
+    ai_memory_auth_header_file
+)
+assert_eq "auth header follows the macOS state directory" \
+    "$MAC_HOME/Library/Application Support/ai-memory/auth-header" "$MAC_AUTH"
+
 # The spool dir follows the data dir, which the harness pins inside $TMP.
 AI_MEMORY_DATA_DIR="$TMP/spool-data"
 export AI_MEMORY_DATA_DIR
@@ -679,6 +1017,53 @@ assert_eq "drain keeps entry queued on 429 saturation" "1" \
     "$(ls "$TMP/spool-data/hook-spool/"*.json 2>/dev/null | wc -l | tr -d ' ')"
 unset -f curl
 
+# Native OIDC entries carry no inline token: only the native drain can resolve
+# auth.json. Script drains must leave them byte-identical and continue with
+# entries they can deliver, even if an anonymous POST would return 200.
+for OIDC_STATUS in 200 401; do
+    AI_MEMORY_DATA_DIR="$TMP/oidc-drain-$OIDC_STATUS"
+    export AI_MEMORY_DATA_DIR
+    OIDC_DIR="$AI_MEMORY_DATA_DIR/hook-spool"
+    mkdir -p "$OIDC_DIR"
+    OIDC_ENTRY="$OIDC_DIR/0000000000000-1-0000000000000000.json"
+    OIDC_CREATED=$(ai_memory_now_ms)
+    printf '{"url":"http://127.0.0.1:49374/hook?event=oidc","body":"{\\"e\\":\\"native-oidc\\"}","created_ms":%s,"auth_mode":"oidc","attempts":0}' "$OIDC_CREATED" >"$OIDC_ENTRY"
+    cp "$OIDC_ENTRY" "$AI_MEMORY_DATA_DIR/expected.json"
+    OIDC_LOG="$AI_MEMORY_DATA_DIR/requests.log"
+    : >"$OIDC_LOG"
+    curl() {
+        _oidc_url=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in http://*) _oidc_url="$1" ;; esac
+            shift
+        done
+        cat >/dev/null
+        printf '%s\n' "$_oidc_url" >>"$OIDC_LOG"
+        case "$_oidc_url" in
+            *event=oidc) printf '%s' "$OIDC_STATUS" ;;
+            *) printf '200' ;;
+        esac
+    }
+    AI_MEMORY_AUTH_TOKEN=static-probe
+    export AI_MEMORY_AUTH_TOKEN
+    ai_memory_spool_event 'http://127.0.0.1:49374/hook?event=static' '{"auth_mode":"oidc","e":"static"}'
+    unset AI_MEMORY_AUTH_TOKEN
+    ai_memory_spool_event 'http://127.0.0.1:49374/hook?event=none' '{"auth_mode":"oidc","e":"anonymous"}'
+    printf '{"url":"http://127.0.0.1:49374/hook?event=legacy","body":"{\\"auth_mode\\":\\"oidc\\"}","created_ms":%s,"attempts":0}' "$OIDC_CREATED" >"$OIDC_DIR/9999999999999-1-0000000000000000.json"
+    ai_memory_drain_spool 64 >/dev/null 2>&1
+    assert_eq "OIDC drain ($OIDC_STATUS): native entry is untouched" yes \
+        "$(cmp -s "$OIDC_ENTRY" "$AI_MEMORY_DATA_DIR/expected.json" && printf yes || printf no)"
+    assert_eq "OIDC drain ($OIDC_STATUS): native entry is never posted" 0 \
+        "$(grep -c 'event=oidc$' "$OIDC_LOG" || true)"
+    for OIDC_CONTROL in static none legacy; do
+        assert_eq "OIDC drain ($OIDC_STATUS): $OIDC_CONTROL control delivers" 1 \
+            "$(grep -Ec "event=$OIDC_CONTROL(&|\$)" "$OIDC_LOG" || true)"
+    done
+    assert_eq "OIDC drain ($OIDC_STATUS): only the native entry stays queued" 1 \
+        "$(find "$OIDC_DIR" -name '*.json' | wc -l | tr -d ' ')"
+    unset -f curl
+done
+
 unset AI_MEMORY_DATA_DIR
 
 # --- PowerShell bundle spool parity (static) ---------------------------
@@ -737,6 +1122,8 @@ curl() {
     _tm=GET
     _tu=""
     _tdata=""
+    _twrite=no
+    case "$*" in *'\n%{http_code}'*) _twrite=yes ;; esac
     while [ "$#" -gt 0 ]; do
         case "$1" in
             -X) shift; [ "$#" -gt 0 ] || break; _tm="$1" ;;
@@ -755,6 +1142,7 @@ curl() {
     else
         printf 'GET %s\n' "$_tu" >>"$CURL_LOG"
         printf 'HANDOFF BODY'
+        case "$_twrite" in yes) printf '\n200' ;; esac
     fi
     return 0
 }
@@ -785,14 +1173,25 @@ printf '%s' '{"e":"owned"}' \
 assert_eq "owner: post_hook sends nothing" "0" "$(owner_requests)"
 assert_eq "owner: post_hook spools nothing and drains nothing" "$BACKLOG" "$(owner_spooled)"
 
-# 2. Delivery is untouched: the handoff GET still runs and still returns.
+# 2. Delivery is untouched: the handoff GET still runs and still returns, but
+#    it OFFERS the baton (claim=0) rather than consuming a handoff the owner's
+#    own interactive session left open (#2148).
 HANDOFF=$(set +e; ai_memory_get_handoff "http://127.0.0.1:49374/handoff?agent=cursor&cwd=%2Fwork")
 assert_eq "owner: handoff GET still delivered" "HANDOFF BODY" "$HANDOFF"
 assert_eq "owner: the GET is the only request" "1" "$(owner_requests)"
 assert_eq "owner: still no POST"               "0" "$(owner_posts)"
+assert_eq "owner: the handoff GET offers the baton (claim=0)" "1" \
+    "$(awk '/^GET .*\/handoff\?.*claim=0/{n++} END{print n+0}' "$CURL_LOG")"
+
+# 2b. Claim control: with no owner the same handoff GET claims (no claim=0).
+unset AI_MEMORY_CAPTURE_OWNER
+owner_case claim_control
+HANDOFF=$(set +e; ai_memory_get_handoff "http://127.0.0.1:49374/handoff?agent=cursor&cwd=%2Fwork")
+assert_eq "no owner: handoff GET still delivered" "HANDOFF BODY" "$HANDOFF"
+assert_eq "no owner: the handoff GET claims (no claim=0)" "0" \
+    "$(awk '/claim=0/{n++} END{print n+0}' "$CURL_LOG")"
 
 # 3. Standalone control: with no owner the same call POSTs as before.
-unset AI_MEMORY_CAPTURE_OWNER
 owner_case control
 printf '%s' '{"e":"control"}' \
     | ai_memory_post_hook "http://127.0.0.1:49374/hook?event=post-tool-use&agent=cursor" >/dev/null 2>&1
@@ -842,6 +1241,8 @@ cat >"$TMP/bin/curl" <<'EOF'
 # Fake curl: log "METHOD URL"; answer 200 to a POST, HANDOFF BODY to a GET.
 _gm=GET
 _gu=""
+_gw=no
+case "$*" in *'\n%{http_code}'*) _gw=yes ;; esac
 while [ $# -gt 0 ]; do
     case "$1" in
         -X) shift; [ $# -gt 0 ] || break; _gm=$1 ;;
@@ -851,6 +1252,7 @@ while [ $# -gt 0 ]; do
 done
 printf '%s %s\n' "$_gm" "$_gu" >>"$GROK_LOG"
 if [ "$_gm" = POST ]; then printf '200'; else printf 'HANDOFF BODY'; fi
+if [ "$_gm" = GET ] && [ "$_gw" = yes ]; then printf '\n200'; fi
 EOF
 chmod +x "$TMP/bin/curl"
 PATH="$TMP/bin:$PATH"
@@ -903,8 +1305,111 @@ for key in subagentType subagent_type agent_type agent_id parentSessionId; do
     assert_eq "grok: $key payload sent zero GETs" "0" "$(grok_gets)"
 done
 
+# 3b. A marker key nested in a tool's arguments or result is data, not a
+# claim about the session: a root payload like this still fetches.
+grok_case nested-marker
+NESTED='{"session_id":"g-nested","cwd":"'"$GROK_CASE_DIR"'","tool_name":"bash","tool_input":{"timeout":30,"agent_id":"planner-a"}}'
+OUT=$(grok_run "$NESTED")
+case "$OUT" in
+    *'"additionalContext":"HANDOFF BODY"'*)
+        PASS=$((PASS + 1))
+        printf '  ok  %s\n' "grok: a marker nested in tool input still fetches" ;;
+    *)
+        FAIL=$((FAIL + 1))
+        printf '  FAIL grok: a marker nested in tool input still fetches\n    got =%s\n' "$OUT" ;;
+esac
+assert_eq "grok: nested marker payload GETs the handoff once" "1" "$(grok_gets)"
+
+# 3c. A blank top-level marker is not a child session either — parity with
+# `payload_is_subagent`, which requires a non-empty string.
+grok_case blank-marker
+BLANK='{"session_id":"g-blank","cwd":"'"$GROK_CASE_DIR"'","tool_name":"read_file","agent_id":"   "}'
+OUT=$(grok_run "$BLANK")
+case "$OUT" in
+    *'"additionalContext":"HANDOFF BODY"'*)
+        PASS=$((PASS + 1))
+        printf '  ok  %s\n' "grok: a blank marker value still fetches" ;;
+    *)
+        FAIL=$((FAIL + 1))
+        printf '  FAIL grok: a blank marker value still fetches\n    got =%s\n' "$OUT" ;;
+esac
+assert_eq "grok: blank marker payload GETs the handoff once" "1" "$(grok_gets)"
+
 unset AI_MEMORY_DATA_DIR GROK_LOG
 PATH=${PATH#"$TMP/bin:"}
+export PATH
+
+# --- gemini-cli bundle: @ files and the reply never leave the script ---
+# Gemini CLI appends every @-referenced file to the prompt BeforeAgent and
+# AfterAgent carry, and AfterAgent adds the model's reply as prompt_response.
+# The fallback cannot cut either out of the JSON, so it drops such an event
+# before posting or spooling it. The shipped scripts run through a PATH curl
+# shim that logs every request and answers 503, so an event the script does
+# not drop is both attempted and spooled.
+mkdir -p "$TMP/gemini-bin"
+cat >"$TMP/gemini-bin/curl" <<'EOF'
+#!/bin/sh
+_gm=GET
+_gu=""
+_gdata=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -X) shift; [ $# -gt 0 ] || break; _gm=$1 ;;
+        --data-binary) shift; [ $# -gt 0 ] || break; _gdata=$1 ;;
+        http://* | https://*) _gu=$1 ;;
+    esac
+    shift
+done
+[ "$_gdata" = "@-" ] && cat >/dev/null
+printf '%s %s\n' "$_gm" "$_gu" >>"$GEMINI_LOG"
+printf '503'
+EOF
+chmod +x "$TMP/gemini-bin/curl"
+PATH="$TMP/gemini-bin:$PATH"
+export PATH
+gemini_case() {
+    GEMINI_CASE_DIR="$TMP/gemini-$1"
+    mkdir -p "$GEMINI_CASE_DIR/data"
+    AI_MEMORY_DATA_DIR="$GEMINI_CASE_DIR/data"
+    export AI_MEMORY_DATA_DIR
+    GEMINI_LOG="$GEMINI_CASE_DIR/curl.log"
+    : >"$GEMINI_LOG"
+    export GEMINI_LOG
+}
+gemini_posts() { grep -c "^POST .*event=$1&" "$GEMINI_LOG"; }
+gemini_spooled() { find "$AI_MEMORY_DATA_DIR" -name '*.json' -path '*hook-spool*' | wc -l | tr -d ' '; }
+gemini_run() {
+    printf '%s' "$2" | sh "$(dirname "$0")/../../hooks/gemini-cli/$1.sh" 2>/dev/null
+}
+
+gemini_case prompt
+gemini_run user-prompt-submit "{\"session_id\":\"g1\",\"cwd\":\"$GEMINI_CASE_DIR\",\"hook_event_name\":\"BeforeAgent\",\"prompt\":\"Refactor the auth middleware\"}"
+assert_eq "gemini: a plain prompt is posted" "1" "$(gemini_posts user-prompt)"
+
+gemini_case at-files
+gemini_run user-prompt-submit "{\"session_id\":\"g1\",\"cwd\":\"$GEMINI_CASE_DIR\",\"hook_event_name\":\"BeforeAgent\",\"prompt\":\"explain @.env\\n--- Content from referenced files ---\\nAPI_KEY=secret\\n--- End of content ---\"}"
+assert_eq "gemini: a prompt carrying @ files is not posted" "0" "$(gemini_posts user-prompt)"
+assert_eq "gemini: a prompt carrying @ files is not spooled" "0" "$(gemini_spooled)"
+
+gemini_case stop
+gemini_run stop "{\"session_id\":\"g1\",\"cwd\":\"$GEMINI_CASE_DIR\",\"hook_event_name\":\"AfterAgent\",\"prompt\":\"x\",\"stop_hook_active\":false}"
+assert_eq "gemini: a Stop without the reply is posted" "1" "$(gemini_posts stop)"
+
+gemini_case reply
+gemini_run stop "{\"session_id\":\"g1\",\"cwd\":\"$GEMINI_CASE_DIR\",\"hook_event_name\":\"AfterAgent\",\"prompt\":\"x\",\"prompt_response\":\"the reply\",\"stop_hook_active\":false}"
+assert_eq "gemini: a Stop carrying the reply is not posted" "0" "$(gemini_posts stop)"
+assert_eq "gemini: a Stop carrying the reply is not spooled" "0" "$(gemini_spooled)"
+
+# The PowerShell lib drops the same two events (static, no pwsh needed).
+GEMINI_PS_STATIC=$(grep -Fq '$Agent -eq "gemini-cli" -and $Event -eq "user-prompt" -and $Payload' "$PS_LIB" \
+    && grep -Fq "Contains('--- Content from referenced files ---')" "$PS_LIB" \
+    && grep -Fq '$Agent -eq "gemini-cli" -and $Event -eq "stop" -and $Payload' "$PS_LIB" \
+    && grep -Fq "Contains('\"prompt_response\"')" "$PS_LIB" \
+    && printf ok || printf bad)
+assert_eq "gemini: the powershell bundle drops the same events (static)" "ok" "$GEMINI_PS_STATIC"
+
+unset AI_MEMORY_DATA_DIR GEMINI_LOG
+PATH=${PATH#"$TMP/gemini-bin:"}
 export PATH
 
 # --- session-start bundles that must never fetch a handoff (#998) ------
@@ -1029,42 +1534,93 @@ mkdir -p "$BRIEF_REPO" "$PLAIN_REPO"
 printf '[briefing]\ninject_on_session_start = true\nmax_chars = 6000\n' >"$BRIEF_REPO/.ai-memory.toml"
 printf '[briefing]\ninject_on_session_start = false\nmax_chars = 6000\n' >"$PLAIN_REPO/.ai-memory.toml"
 
-# Runs bundle "$1" from repository "$2" with a fresh state dir and prints the
+# Runs script "$1" from repository "$2" with a fresh state dir and prints the
 # handoff GET it sent. The payload carries every cwd and session field the
 # bundles read, plus Antigravity's first-invocation marker.
-session_start_handoff_get() {
+briefing_handoff_get() {
     rm -rf "$TMP/brief-data" "$FAKE_CURL_LOG"
-    printf '{"cwd":"%s","workspacePaths":["%s"],"invocationNum":0,"session_id":"brief-s","conversationId":"brief-s"}' "$2" "$2" \
+    printf '{"cwd":"%s","workspacePaths":["%s"],"invocationNum":0,"session_id":"brief-s","conversationId":"brief-s","prompt":"continue","tool_name":"read_file","tool_input":{}}' "$2" "$2" \
         | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
             AI_MEMORY_DATA_DIR="$TMP/brief-data" AI_MEMORY_HOOK_URL='http://memory.test' \
-            sh "$(dirname "$0")/../../hooks/$1/session-start.sh" >/dev/null 2>&1
+            sh "$1" >/dev/null 2>&1
     grep '/handoff?' "$FAKE_CURL_LOG" 2>/dev/null || true
 }
 
-BRIEF_BUNDLES=0
-for script in "$(dirname "$0")"/../../hooks/*/session-start.sh; do
-    grep -q 'ai_memory_get_handoff' "$script" || continue
-    bundle=$(basename "$(dirname "$script")")
-    BRIEF_BUNDLES=$((BRIEF_BUNDLES + 1))
-    GET=$(session_start_handoff_get "$bundle" "$BRIEF_REPO")
+BRIEF_SCRIPTS=0
+for script in "$(dirname "$0")"/../../hooks/*/*.sh; do
+    grep -Eq 'ai_memory_get_(start_)?handoff "' "$script" || continue
+    name="$(basename "$(dirname "$script")")/$(basename "$script")"
+    BRIEF_SCRIPTS=$((BRIEF_SCRIPTS + 1))
+    GET=$(briefing_handoff_get "$script" "$BRIEF_REPO")
     case "$GET" in
         *'&briefing=true&briefing_budget=6000'*)
-            PASS=$((PASS + 1)); printf '  ok  %s\n' "$bundle: opted-in handoff GET carries the briefing keys" ;;
-        *) FAIL=$((FAIL + 1)); printf '  FAIL %s: opted-in handoff GET carries the briefing keys\n    got =%s\n' "$bundle" "$GET" ;;
+            PASS=$((PASS + 1)); printf '  ok  %s\n' "$name: opted-in handoff GET carries the briefing keys" ;;
+        *) FAIL=$((FAIL + 1)); printf '  FAIL %s: opted-in handoff GET carries the briefing keys\n    got =%s\n' "$name" "$GET" ;;
     esac
-    GET=$(session_start_handoff_get "$bundle" "$PLAIN_REPO")
+    GET=$(briefing_handoff_get "$script" "$PLAIN_REPO")
     case "$GET" in
         *'/handoff?'*briefing*)
-            FAIL=$((FAIL + 1)); printf '  FAIL %s: opted-out handoff GET omits the briefing keys\n    got =%s\n' "$bundle" "$GET" ;;
+            FAIL=$((FAIL + 1)); printf '  FAIL %s: opted-out handoff GET omits the briefing keys\n    got =%s\n' "$name" "$GET" ;;
         *'/handoff?'*)
-            PASS=$((PASS + 1)); printf '  ok  %s\n' "$bundle: opted-out handoff GET omits the briefing keys" ;;
-        *) FAIL=$((FAIL + 1)); printf '  FAIL %s: opted-out session start still fetches the handoff\n    got =%s\n' "$bundle" "$GET" ;;
+            PASS=$((PASS + 1)); printf '  ok  %s\n' "$name: opted-out handoff GET omits the briefing keys" ;;
+        *) FAIL=$((FAIL + 1)); printf '  FAIL %s: opted-out session start still fetches the handoff\n    got =%s\n' "$name" "$GET" ;;
     esac
 done
 # Guards the discovery itself: an empty glob or a renamed helper would
 # otherwise pass with nothing checked.
-assert_eq "session-start bundles that fetch the handoff were found" "yes" \
-    "$([ "$BRIEF_BUNDLES" -ge 9 ] && printf 'yes' || printf 'no (%s)' "$BRIEF_BUNDLES")"
+assert_eq "all handoff-fetching scripts were checked for briefing" "13" "$BRIEF_SCRIPTS"
+
+# --- the subagent-start bundle hands the subagent its brief --------------
+# `[briefing] inject_on_subagent_start` gives each subagent the
+# project brief from the read-only `/brief` route, as the native hook does,
+# and never asks `/handoff`, whose fetch claims the parent session's baton.
+# Without that opt-in (the session-start one alone included) the bundle
+# replies `{}` as it always did.
+SUB_CURL_BIN="$TMP/fake-brief-curl-bin"
+mkdir -p "$SUB_CURL_BIN"
+cat >"$SUB_CURL_BIN/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$AI_MEMORY_CURL_LOG"
+case "$*" in
+    *'/brief?'*) printf 'subagent-brief-context' ;;
+    *'/handoff?'*) printf 'parent-handoff' ;;
+esac
+case "$*" in *'\n%{http_code}'*) printf '\n200' ;; esac
+EOF
+chmod +x "$SUB_CURL_BIN/curl"
+SUB_REPO="$TMP/subagent-brief-on"
+mkdir -p "$SUB_REPO"
+printf '[briefing]\ninject_on_subagent_start = true\nmax_chars = 6000\n' >"$SUB_REPO/.ai-memory.toml"
+
+# Runs the subagent-start.sh bundle from repository "$1" and prints its stdout.
+subagent_start_output() {
+    rm -rf "$TMP/subagent-data" "$FAKE_CURL_LOG"
+    printf '{"cwd":"%s","session_id":"parent-s","hook_event_name":"SubagentStart","agent_id":"agent-1","agent_type":"Explore"}' "$1" \
+        | PATH="$SUB_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
+            AI_MEMORY_DATA_DIR="$TMP/subagent-data" AI_MEMORY_HOOK_URL='http://memory.test' \
+            sh "$(dirname "$0")/../../hooks/claude-code/subagent-start.sh" 2>/dev/null
+}
+
+assert_eq "the subagent-start bundle injects the opted-in brief" \
+    '{"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"subagent-brief-context"}}' \
+    "$(subagent_start_output "$SUB_REPO")"
+assert_eq "the subagent brief GET carries the opt-in and the budget" "yes" \
+    "$(grep -q '/brief?agent=claude-code&cwd=.*&briefing=true&briefing_budget=6000' "$FAKE_CURL_LOG" && printf 'yes' || printf 'no')"
+assert_eq "a subagent start never fetches the handoff" "no" \
+    "$(grep -q '/handoff?' "$FAKE_CURL_LOG" && printf 'yes' || printf 'no')"
+assert_eq "a subagent start without the subagent opt-in replies {}" "{}" \
+    "$(subagent_start_output "$BRIEF_REPO")"
+assert_eq "a subagent start without the subagent opt-in asks for no brief" "no" \
+    "$(grep -q '/brief?' "$FAKE_CURL_LOG" 2>/dev/null && printf 'yes' || printf 'no')"
+# Hook scripts run without `set -e`; this suite's would end the substitution at
+# the auth-header lookup's non-zero status.
+rm -f "$FAKE_CURL_LOG"
+assert_eq "get_brief refuses a URL without cwd" "" \
+    "$(set +e; export PATH="$SUB_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG"
+        ai_memory_get_brief 'http://memory.test/brief?agent=claude-code&briefing=true')"
+assert_eq "get_brief fetches a URL with cwd" "subagent-brief-context" \
+    "$(set +e; export PATH="$SUB_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG"
+        ai_memory_get_brief 'http://memory.test/brief?agent=claude-code&cwd=%2Frepo&briefing=true')"
 
 # --- a handoff is never claimed without a project directory -------------
 # `GET /handoff` claims the newest open handoff in whatever project the server
@@ -1101,7 +1657,7 @@ scope_handoff_gets() {
 }
 SCOPE_SCRIPTS=0
 for script in "$HOOKS_ABS"/*/*.sh; do
-    grep -q 'ai_memory_get_handoff "' "$script" || continue
+    grep -Eq 'ai_memory_get_(start_)?handoff "' "$script" || continue
     name="$(basename "$(dirname "$script")")/$(basename "$script")"
     SCOPE_SCRIPTS=$((SCOPE_SCRIPTS + 1))
     SCOPE_RUN=$((SCOPE_RUN + 1))
@@ -1150,7 +1706,7 @@ if [ -n "$PSH" ]; then
         rm -f "$TMP/ps-scope.log"
         printf '%s' "$1" | (cd "$SCOPE_ELSEWHERE" && HOME="$TMP" AI_MEMORY_DATA_DIR="$TMP/ps-scope-data-$2" \
             AI_MEMORY_TEST_LOG="$(host_path "$TMP/ps-scope.log")" "$PSH" -NoProfile -ExecutionPolicy Bypass -Command \
-            ". '$PS_LIB'; function Invoke-WebRequest { param([switch] \$UseBasicParsing, [int] \$TimeoutSec, [string] \$Method = 'Get', [string] \$Uri, \$Headers, [string] \$ContentType, \$Body) Add-Content -LiteralPath \$env:AI_MEMORY_TEST_LOG -Value ('{0} {1}' -f \$Method.ToUpperInvariant(), \$Uri); if (\$Method -eq 'Post') { return \$null }; return [pscustomobject]@{ Content = 'HANDOFF' } }; Invoke-AiMemoryHook -Event 'session-start' -Agent 'claude-code' -FetchHandoff") >/dev/null 2>&1 || true
+            ". '$PS_LIB'; function Invoke-WebRequest { param([switch] \$UseBasicParsing, [switch] \$NoProxy, [int] \$TimeoutSec, [int] \$MaximumRedirection, [string] \$Method = 'Get', [string] \$Uri, \$Headers, [string] \$ContentType, \$Body) Add-Content -LiteralPath \$env:AI_MEMORY_TEST_LOG -Value ('{0} {1}' -f \$Method.ToUpperInvariant(), \$Uri); if (\$Method -eq 'Post') { return \$null }; return [pscustomobject]@{ Content = 'HANDOFF'; StatusCode = 200 } }; Invoke-AiMemoryHook -Event 'session-start' -Agent 'claude-code' -FetchHandoff") >/dev/null 2>&1 || true
         grep '/handoff?' "$TMP/ps-scope.log" 2>/dev/null || true
     }
     assert_eq "powershell: no project directory claims no handoff" "" \
@@ -1169,6 +1725,37 @@ PS_BRIEF_STATIC=$(grep -Fq 'if ($Event -eq "session-start" -and -not $BriefingOn
             END {exit !ok}' hooks/lib/ai-memory-hook.ps1 \
     && printf 'ok' || printf 'missing')
 assert_eq "powershell session-start handoff GET carries the briefing keys" "ok" "$PS_BRIEF_STATIC"
+
+# The PowerShell subagent-start brief, with Invoke-WebRequest shadowed: the
+# subagent opt-in reads `/brief`, never `/handoff`, and prints the
+# SubagentStart envelope; the session-start opt-in alone asks for nothing.
+if [ -n "$PSH" ]; then
+    ps_subagent_start() {
+        rm -f "$TMP/ps-subagent.log"
+        printf '{"session_id":"ps-sub","cwd":"%s","hook_event_name":"SubagentStart","agent_id":"a-1","agent_type":"Explore"}' \
+            "$(host_path "$1" | sed 's/\\/\\\\/g')" \
+            | (HOME="$TMP" AI_MEMORY_DATA_DIR="$TMP/ps-subagent-data" \
+                AI_MEMORY_TEST_LOG="$(host_path "$TMP/ps-subagent.log")" "$PSH" -NoProfile -ExecutionPolicy Bypass -Command \
+                ". '$PS_LIB'; function Invoke-WebRequest { param([switch] \$UseBasicParsing, [switch] \$NoProxy, [int] \$TimeoutSec, [int] \$MaximumRedirection, [string] \$Method = 'Get', [string] \$Uri, \$Headers, [string] \$ContentType, \$Body) Add-Content -LiteralPath \$env:AI_MEMORY_TEST_LOG -Value ('{0} {1}' -f \$Method.ToUpperInvariant(), \$Uri); if (\$Method -eq 'Post') { return \$null }; return [pscustomobject]@{ Content = 'SUBAGENT-BRIEF'; StatusCode = 200 } }; Invoke-AiMemoryHook -Event 'subagent-start' -Agent 'claude-code' -SubagentStartBrief") 2>/dev/null
+    }
+    PS_SUB_OUT=$(ps_subagent_start "$SUB_REPO")
+    case "$PS_SUB_OUT" in
+        *'"hookEventName":"SubagentStart"'*) case "$PS_SUB_OUT" in
+            *'"additionalContext":"SUBAGENT-BRIEF"'*) PS_SUB_ENVELOPE=ok ;;
+            *) PS_SUB_ENVELOPE="got: $PS_SUB_OUT" ;;
+        esac ;;
+        *) PS_SUB_ENVELOPE="got: $PS_SUB_OUT" ;;
+    esac
+    assert_eq "powershell: a subagent start injects the opted-in brief" "ok" "$PS_SUB_ENVELOPE"
+    assert_eq "powershell: the subagent brief GET carries the opt-in" "yes" \
+        "$(grep -q 'GET .*/brief?agent=claude-code&cwd=.*&briefing=true&briefing_budget=6000' "$TMP/ps-subagent.log" && printf 'yes' || printf 'no')"
+    assert_eq "powershell: a subagent start never fetches the handoff" "no" \
+        "$(grep -q '/handoff?' "$TMP/ps-subagent.log" && printf 'yes' || printf 'no')"
+    assert_eq "powershell: a subagent start without the subagent opt-in prints nothing" "" \
+        "$(ps_subagent_start "$BRIEF_REPO")"
+    assert_eq "powershell: a subagent start without the subagent opt-in asks for no brief" "no" \
+        "$(grep -q '/brief?' "$TMP/ps-subagent.log" 2>/dev/null && printf 'yes' || printf 'no')"
+fi
 
 # --- client marker header on every request ------------------------------
 # An unauthenticated server reached through a non-loopback host name refuses
@@ -1224,17 +1811,80 @@ assert_eq "client marker: no request went out without it" "0" \
     "$(grep -c UNMARKED "$MARKER_LOG")"
 unset AI_MEMORY_DATA_DIR
 
+# --- no environment proxy on any request --------------------------------
+# A sandbox that exports a proxy with an empty NO_PROXY (ai-jail) otherwise
+# sends the loopback POST and the handoff GET to that proxy, which answers
+# 4xx. `ai_memory_post_hook` treats a 4xx as a permanent rejection, so the
+# observation is dropped outright rather than spooled. The native client
+# (`hook_capture::build_client`) and the MCP bridge both build with
+# `no_proxy()`; every curl branch in the shell bundle must match them.
+curl() {
+    _tnp=PROXYABLE
+    _tdata=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --noproxy) shift; [ "$#" -gt 0 ] || break
+                [ "$1" = '*' ] && _tnp=noproxy ;;
+            -H|-X|-w|-o) shift ;;
+            --data-binary) shift; [ "$#" -gt 0 ] || break; _tdata="$1" ;;
+        esac
+        shift
+    done
+    [ "$_tdata" = "@-" ] && cat >/dev/null
+    printf '%s\n' "$_tnp" >>"$NOPROXY_LOG"
+    printf '200'
+    return 0
+}
+AI_MEMORY_DATA_DIR="$TMP/noproxy"
+export AI_MEMORY_DATA_DIR
+mkdir -p "$AI_MEMORY_DATA_DIR"
+NOPROXY_LOG="$AI_MEMORY_DATA_DIR/noproxy.log"
+: >"$NOPROXY_LOG"
+noproxy_round() {
+    ai_memory_get_handoff "http://127.0.0.1:49374/handoff?agent=cursor&cwd=%2Fwork" >/dev/null 2>&1 || true
+    printf '%s' '{"e":"noproxy"}' \
+        | ai_memory_post_hook "http://127.0.0.1:49374/hook?event=stop&agent=cursor" >/dev/null 2>&1
+}
+noproxy_round                                  # no auth
+(umask 077; printf 'Authorization: Bearer file-token\n' >"$AI_MEMORY_DATA_DIR/auth-header")
+noproxy_round                                  # header file
+rm -f "$AI_MEMORY_DATA_DIR/auth-header"
+ai_memory_spool_event "http://127.0.0.1:49374/hook?event=stop&agent=cursor" '{"e":"n1"}'
+ai_memory_drain_spool 64 >/dev/null 2>&1       # drain without a token
+AI_MEMORY_AUTH_TOKEN=env-token
+export AI_MEMORY_AUTH_TOKEN
+noproxy_round                                  # env token
+ai_memory_spool_event "http://127.0.0.1:49374/hook?event=stop&agent=cursor" '{"e":"n2"}'
+unset AI_MEMORY_AUTH_TOKEN
+ai_memory_drain_spool 64 >/dev/null 2>&1       # drain with the spooled token
+unset -f curl
+assert_eq "no proxy: every curl branch was exercised" "yes" \
+    "$([ "$(awk 'END { print NR + 0 }' "$NOPROXY_LOG")" -ge 8 ] && printf 'yes' || printf 'no')"
+assert_eq "no proxy: no request could reach an environment proxy" "0" \
+    "$(grep -c PROXYABLE "$NOPROXY_LOG")"
+unset AI_MEMORY_DATA_DIR
+
 # The PowerShell helper builds its request headers in one hashtable per call
 # site; each must carry the marker, and every Invoke-WebRequest must pass one.
 PS_HELPER=hooks/lib/ai-memory-hook.ps1
 PS_HEADER_TABLES=$(grep -Ec '^[[:space:]]*\$[Hh]eaders = @\{\}' "$PS_HELPER")
 PS_MARKED_TABLES=$(grep -Ec '^[[:space:]]*\$[Hh]eaders\["X-AI-Memory-Client"\] = "hook-ps"' "$PS_HELPER")
-PS_REQUESTS=$(grep -c 'Invoke-WebRequest `' "$PS_HELPER")
-PS_REQUESTS_WITH_HEADERS=$(grep -A6 'Invoke-WebRequest `' "$PS_HELPER" | grep -Ec -- '-Headers \$[Hh]eaders')
+PS_REQUESTS=$(grep -Ec '^[^#]*Invoke-WebRequest( @NoProxy)? `$' "$PS_HELPER")
+PS_REQUESTS_WITH_HEADERS=$(grep -E -A6 '^[^#]*Invoke-WebRequest( @NoProxy)? `$' "$PS_HELPER" | grep -Ec -- '-Headers \$[Hh]eaders')
+PS_REQUESTS_NO_PROXY=$(grep -Ec '^[^#]*Invoke-WebRequest @NoProxy `$' "$PS_HELPER")
 assert_eq "powershell: header tables found" "yes" \
     "$([ "$PS_HEADER_TABLES" -ge 2 ] && printf 'yes' || printf 'no (%s)' "$PS_HEADER_TABLES")"
 assert_eq "powershell: every header table carries the client marker" "$PS_HEADER_TABLES" "$PS_MARKED_TABLES"
 assert_eq "powershell: every request passes the header table" "$PS_REQUESTS" "$PS_REQUESTS_WITH_HEADERS"
+assert_eq "powershell: every request call site found" "yes" \
+    "$([ "$PS_REQUESTS" -ge 3 ] && [ "$PS_REQUESTS" -eq "$(grep -Ec '^[^#]*Invoke-WebRequest' "$PS_HELPER")" ] && printf 'yes' || printf 'no (%s)' "$PS_REQUESTS")"
+# PowerShell 7 reads HTTP_PROXY/HTTPS_PROXY/ALL_PROXY for Invoke-WebRequest;
+# `Get-AiMemoryNoProxy` supplies -NoProxy there, like the curl branches above.
+assert_eq "powershell: every request skips environment proxies" "$PS_REQUESTS" "$PS_REQUESTS_NO_PROXY"
+# MaximumRedirection 0 matches the native hook: Invoke-WebRequest follows
+# five hops by default, so a 302 login page counted as delivery.
+assert_eq "powershell: the request splat refuses redirects" "ok" \
+    "$(grep -Fq 'MaximumRedirection = 0' "$PS_HELPER" && grep -Fq 'function Get-AiMemoryResponseStatus' "$PS_HELPER" && printf ok || printf missing)"
 
 # A spooled fixture event names this run's temp tree or targets the fake
 # `memory.test` host. Live sessions share the spool and may mention that host
@@ -1255,7 +1905,242 @@ assert_eq "antigravity later turn of the same conversation prints an empty reply
     "$(printf '%s' "$AGY_TURN" | AI_MEMORY_DATA_DIR="$AGY_DATA" AI_MEMORY_HOOK_URL="http://127.0.0.1:9" \
         sh -x hooks/antigravity-cli/session-start.sh 2>"$TMP/agy-trace")"
 assert_eq "antigravity later turn sends no request" "" \
-    "$(grep -E 'ai_memory_(post_hook|get_handoff)' "$TMP/agy-trace" | head -n 1)"
+    "$(grep -E 'ai_memory_(post_hook|get_(start_)?handoff)' "$TMP/agy-trace" | head -n 1)"
+
+# --- a compaction's SessionStart claims nothing (#1983) ----------------
+# `"source": "compact"` is mid-session: every session-start script that
+# fetches a handoff must skip the claim, like the native hook. Control: the
+# same payload with `"source": "startup"` still claims.
+COMPACT_SCRIPTS=0
+for script in "$(dirname "$0")"/../../hooks/*/session-start.sh; do
+    grep -q 'ai_memory_get_start_handoff "' "$script" || continue
+    name="$(basename "$(dirname "$script")")/$(basename "$script")"
+    COMPACT_SCRIPTS=$((COMPACT_SCRIPTS + 1))
+    for source in compact startup; do
+        rm -f "$FAKE_CURL_LOG"
+        printf '{"session_id":"compact-s","cwd":"%s","source":"%s"}' "$TMP" "$source" \
+            | PATH="$FAKE_CURL_BIN:$PATH" AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG" \
+                AI_MEMORY_DATA_DIR="$TMP/compact-data-$source" AI_MEMORY_HOOK_URL='http://memory.test' \
+                sh "$script" >/dev/null 2>&1 || true
+        GETS=$(grep -c '/handoff?' "$FAKE_CURL_LOG" 2>/dev/null || true)
+        case "$source" in
+            compact) assert_eq "$name: a compaction start claims no handoff" "0" "${GETS:-0}" ;;
+            *) assert_eq "$name: a $source start claims the handoff" "1" "${GETS:-0}" ;;
+        esac
+    done
+done
+assert_eq "every handoff-fetching session-start script was checked for compaction" "10" "$COMPACT_SCRIPTS"
+# PowerShell parity, pinned statically (no pwsh needed).
+assert_eq "powershell: a compaction start claims no handoff" "yes" \
+    "$(grep -Fq '$Event -eq "session-start" -and $ParsedPayload -and [string]$ParsedPayload.source -eq "compact"' \
+        "$(dirname "$0")/../../hooks/lib/ai-memory-hook.ps1" && printf yes || printf no)"
+assert_eq "a compact source is a compaction start" "yes" \
+    "$(ai_memory_is_compaction_start '{"source": "compact"}' && printf yes || printf no)"
+assert_eq "a resume source is not a compaction start" "no" \
+    "$(ai_memory_is_compaction_start '{"source":"resume","x":"compact"}' && printf yes || printf no)"
+assert_eq "a payload without a source is not a compaction start" "no" \
+    "$(ai_memory_is_compaction_start '{"session_id":"s"}' && printf yes || printf no)"
+
+# --- Devin session-id pin and native session-id parity (#2256) --------
+devin_has_sid() {
+    if ai_memory_payload_has_session_id "$1"; then printf 'yes'; else printf 'no'; fi
+}
+for _am_key in session_id sessionId sessionID session conversationId taskId; do
+    _am_sample="{\"$_am_key\":\"sid-$_am_key\"}"
+    assert_eq "top-level $_am_key counts as native session id" "yes" "$(devin_has_sid "$_am_sample")"
+    assert_eq "top-level $_am_key extracts value" "sid-$_am_key" \
+        "$(ai_memory_payload_session_id "$_am_sample" || true)"
+done
+assert_eq "whitespace native session id is ignored" "no" \
+    "$(devin_has_sid '{"session_id":"  \t "}')"
+assert_eq "escaped backslash-t native session id counts as present" "yes" \
+    "$(devin_has_sid '{"session_id":"\\t"}')"
+assert_eq "whitespace primary key falls through to taskId" "t-1" \
+    "$(ai_memory_payload_session_id '{"session_id":"  \n\r\t ","taskId":"t-1"}' || true)"
+assert_eq "nested session_id inside tool_input does not count as native" "no" \
+    "$(devin_has_sid '{"tool_input":{"session_id":"nested"},"cwd":"/work"}')"
+assert_eq "quoted taskId inside tool_response does not count as native" "no" \
+    "$(devin_has_sid '{"tool_response":"{\"taskId\":\"quoted\"}","cwd":"/work"}')"
+assert_eq "top-level session_id wins after nested session_id" "real-top" \
+    "$(ai_memory_payload_session_id '{"tool_input":{"session_id":"nested"},"session_id":"real-top"}' || true)"
+
+DEVIN_REPO="$TMP/devin-repo"
+DEVIN_DATA="$TMP/devin-data"
+DEVIN_SLOT="$DEVIN_DATA/hook-state/devin-session-id"
+mkdir -p "$DEVIN_REPO" "$DEVIN_DATA/hook-state"
+DEVIN_BARE="{\"cwd\":\"$DEVIN_REPO\"}"
+DEVIN_NATIVE="{\"cwd\":\"$DEVIN_REPO\",\"session_id\":\"devin-native-1\"}"
+DEVIN_TASK="{\"cwd\":\"$DEVIN_REPO\",\"taskId\":\"devin-task-1\"}"
+DEVIN_NESTED="{\"cwd\":\"$DEVIN_REPO\",\"tool_input\":{\"session_id\":\"nested\"}}"
+
+run_devin_hook() {
+    _rdh_script="$1"
+    _rdh_payload="$2"
+    _rdh_pin="${3-}"
+    _rdh_pin_set="${4-unset}"
+    _rdh_owner="${5-}"
+    rm -f "$FAKE_CURL_LOG"
+    printf '%s' "$_rdh_payload" | (
+        unset AI_MEMORY_SESSION_ID AI_MEMORY_CAPTURE_OWNER DEVIN_PROJECT_DIR
+        if [ "$_rdh_pin_set" = "set" ]; then
+            AI_MEMORY_SESSION_ID="$_rdh_pin"
+            export AI_MEMORY_SESSION_ID
+        fi
+        if [ -n "$_rdh_owner" ]; then
+            AI_MEMORY_CAPTURE_OWNER="$_rdh_owner"
+            export AI_MEMORY_CAPTURE_OWNER
+        fi
+        PATH="$FAKE_CURL_BIN:$PATH"
+        AI_MEMORY_CURL_LOG="$FAKE_CURL_LOG"
+        AI_MEMORY_DATA_DIR="$DEVIN_DATA"
+        AI_MEMORY_HOOK_URL='http://memory.test'
+        export PATH AI_MEMORY_CURL_LOG AI_MEMORY_DATA_DIR AI_MEMORY_HOOK_URL
+        sh "$_rdh_script"
+    ) >/dev/null
+}
+
+curl_hook_lines() { grep '/hook?' "$FAKE_CURL_LOG" 2>/dev/null || true; }
+curl_handoff_lines() { grep '/handoff?' "$FAKE_CURL_LOG" 2>/dev/null || true; }
+
+# 1. Pinned AI_MEMORY_SESSION_ID + bare payload preserves slot across session-end.
+printf 'stale-slot' >"$DEVIN_SLOT"
+run_devin_hook hooks/devin/session-start.sh "$DEVIN_BARE" "devin-pin-1" set ""
+assert_eq "devin sh pinned start POSTs pinned session_id" "yes" \
+    "$(curl_hook_lines | grep -Fq '&session_id=devin-pin-1' && printf yes || printf no)"
+assert_eq "devin sh pinned start handoff GET sends pinned session_id" "yes" \
+    "$(curl_handoff_lines | grep -Fq '&session_id=devin-pin-1' && printf yes || printf no)"
+run_devin_hook hooks/devin/session-end.sh "$DEVIN_BARE" "devin-pin-1" set ""
+assert_eq "devin sh pinned end preserves devin-session-id" "stale-slot" \
+    "$([ -f "$DEVIN_SLOT" ] && cat "$DEVIN_SLOT" || printf missing)"
+run_devin_hook hooks/devin/session-end.sh "$DEVIN_BARE" "devin-pin-1" set external
+assert_eq "devin sh pinned owned end makes no HTTP call" "0" \
+    "$([ -f "$FAKE_CURL_LOG" ] && wc -l <"$FAKE_CURL_LOG" | tr -d ' ' || printf '0')"
+assert_eq "devin sh pinned owned end preserves devin-session-id" "stale-slot" \
+    "$([ -f "$DEVIN_SLOT" ] && cat "$DEVIN_SLOT" || printf missing)"
+
+# 2. Pinned + native payload clears slot on session-end (unowned and external).
+run_devin_hook hooks/devin/session-start.sh "$DEVIN_NATIVE" "devin-pin-1" set ""
+assert_eq "devin sh native payload suppresses pin on /hook" "no" \
+    "$(curl_hook_lines | grep -Fq 'session_id=' && printf yes || printf no)"
+assert_eq "devin sh native payload sends native id on /handoff" "yes" \
+    "$(curl_handoff_lines | grep -Fq '&session_id=devin-native-1' && printf yes || printf no)"
+run_devin_hook hooks/devin/session-end.sh "$DEVIN_NATIVE" "devin-pin-1" set external
+assert_eq "devin sh native owned end clears devin-session-id" "missing" \
+    "$([ -e "$DEVIN_SLOT" ] && printf present || printf missing)"
+printf 'stale-slot' >"$DEVIN_SLOT"
+run_devin_hook hooks/devin/session-end.sh "$DEVIN_NATIVE" "devin-pin-1" set ""
+assert_eq "devin sh native unowned end suppresses pin on /hook" "no" \
+    "$(curl_hook_lines | grep -Fq 'session_id=' && printf yes || printf no)"
+assert_eq "devin sh native unowned end clears devin-session-id" "missing" \
+    "$([ -e "$DEVIN_SLOT" ] && printf present || printf missing)"
+
+# 3. taskId and nested fake session_id handling.
+printf 'stale-slot' >"$DEVIN_SLOT"
+run_devin_hook hooks/devin/session-start.sh "$DEVIN_TASK" "devin-pin-1" set ""
+assert_eq "devin sh taskId suppresses pin on /hook" "no" \
+    "$(curl_hook_lines | grep -Fq 'session_id=' && printf yes || printf no)"
+assert_eq "devin sh taskId sends taskId on /handoff" "yes" \
+    "$(curl_handoff_lines | grep -Fq '&session_id=devin-task-1' && printf yes || printf no)"
+run_devin_hook hooks/devin/session-end.sh "$DEVIN_TASK" "devin-pin-1" set ""
+assert_eq "devin sh taskId end clears devin-session-id" "missing" \
+    "$([ -e "$DEVIN_SLOT" ] && printf present || printf missing)"
+
+printf 'stale-slot' >"$DEVIN_SLOT"
+run_devin_hook hooks/devin/session-start.sh "$DEVIN_NESTED" "devin-pin-1" set ""
+assert_eq "devin sh nested session_id keeps pin on /hook" "yes" \
+    "$(curl_hook_lines | grep -Fq '&session_id=devin-pin-1' && printf yes || printf no)"
+run_devin_hook hooks/devin/session-end.sh "$DEVIN_NESTED" "devin-pin-1" set ""
+assert_eq "devin sh nested session_id preserves slot on end" "stale-slot" \
+    "$([ -f "$DEVIN_SLOT" ] && cat "$DEVIN_SLOT" || printf missing)"
+
+# 4. Whitespace pin does not pin or preserve the slot.
+printf 'stale-slot' >"$DEVIN_SLOT"
+run_devin_hook hooks/devin/session-start.sh "$DEVIN_BARE" "   	" set ""
+_am_ws_minted=$(cat "$DEVIN_SLOT" 2>/dev/null || true)
+_am_ws_fresh=no
+case "$_am_ws_minted" in
+    devin-*) [ "$_am_ws_minted" != "stale-slot" ] && _am_ws_fresh=yes ;;
+esac
+assert_eq "devin sh whitespace pin mints fresh fallback session id" "yes" "$_am_ws_fresh"
+assert_eq "devin sh whitespace pin sends minted id on /hook" "yes" \
+    "$(curl_hook_lines | grep -Fq "&session_id=$_am_ws_minted" && printf yes || printf no)"
+assert_eq "devin sh whitespace pin sends minted id on /handoff" "yes" \
+    "$(curl_handoff_lines | grep -Fq "&session_id=$_am_ws_minted" && printf yes || printf no)"
+run_devin_hook hooks/devin/post-tool-use.sh "$DEVIN_BARE" "   	" set ""
+assert_eq "devin sh whitespace pin reuses fallback id mid-session" "yes" \
+    "$(curl_hook_lines | grep -Fq "&session_id=$_am_ws_minted" && printf yes || printf no)"
+run_devin_hook hooks/devin/session-end.sh "$DEVIN_BARE" "   	" set ""
+assert_eq "devin sh whitespace pin clears slot on session-end" "missing" \
+    "$([ -e "$DEVIN_SLOT" ] && printf present || printf missing)"
+
+# 5. Every Devin POSIX script forwards payloads consistently.
+DEVIN_SCRIPT_COUNT=0
+for _am_devin_script in hooks/devin/*.sh; do
+    DEVIN_SCRIPT_COUNT=$((DEVIN_SCRIPT_COUNT + 1))
+    _am_dname=$(basename "$_am_devin_script")
+    run_devin_hook "$_am_devin_script" "$DEVIN_BARE" "devin-pin-all" set ""
+    assert_eq "devin/$_am_dname sends pin when bare" "yes" \
+        "$(curl_hook_lines | grep -Fq '&session_id=devin-pin-all' && printf yes || printf no)"
+    run_devin_hook "$_am_devin_script" "$DEVIN_NATIVE" "devin-pin-all" set ""
+    assert_eq "devin/$_am_dname suppresses pin when native" "no" \
+        "$(curl_hook_lines | grep -Fq 'session_id=' && printf yes || printf no)"
+done
+assert_eq "all 7 Devin shell scripts covered" "7" "$DEVIN_SCRIPT_COUNT"
+
+# 6. PowerShell Devin parity, under Invoke-WebRequest shadow where PowerShell exists.
+if [ -n "$PSH" ]; then
+    PS_DEVIN_DATA="$TMP/ps-devin-data"
+    PS_DEVIN_SLOT="$PS_DEVIN_DATA/hook-state/devin-session-id"
+    PS_DEVIN_LOG="$TMP/ps-devin.log"
+    PS_DEVIN_REPO=$(host_path "$DEVIN_REPO")
+    PS_DEVIN_REPO_ESC=$(printf '%s' "$PS_DEVIN_REPO" | sed 's/\\/\\\\/g')
+    mkdir -p "$PS_DEVIN_DATA/hook-state"
+    ps_devin_hook() {
+        _pd_event="$1"; _pd_payload="$2"; _pd_pin="${3-}"; _pd_pin_set="${4-unset}"; _pd_owner="${5-}"
+        _pd_extra=""
+        [ "$_pd_event" = "session-start" ] && _pd_extra=" -FetchHandoff -SessionStartEnvelope"
+        rm -f "$PS_DEVIN_LOG"
+        printf '%s' "$_pd_payload" | (
+            unset AI_MEMORY_SESSION_ID AI_MEMORY_CAPTURE_OWNER
+            if [ "$_pd_pin_set" = "set" ]; then
+                AI_MEMORY_SESSION_ID="$_pd_pin"
+                export AI_MEMORY_SESSION_ID
+            fi
+            if [ -n "$_pd_owner" ]; then
+                AI_MEMORY_CAPTURE_OWNER="$_pd_owner"
+                export AI_MEMORY_CAPTURE_OWNER
+            fi
+            HOME="$TMP"
+            USERPROFILE="$TMP"
+            AI_MEMORY_DATA_DIR="$(host_path "$PS_DEVIN_DATA")"
+            AI_MEMORY_TEST_LOG="$(host_path "$PS_DEVIN_LOG")"
+            export HOME USERPROFILE AI_MEMORY_DATA_DIR AI_MEMORY_TEST_LOG
+            "$PSH" -NoProfile -ExecutionPolicy Bypass -Command \
+                ". '$PS_LIB'; function Invoke-WebRequest { param([switch] \$UseBasicParsing, [switch] \$NoProxy, [int] \$TimeoutSec, [int] \$MaximumRedirection, [string] \$Method = 'Get', [string] \$Uri, \$Headers, [string] \$ContentType, \$Body) Add-Content -LiteralPath \$env:AI_MEMORY_TEST_LOG -Value ('{0} {1}' -f \$Method.ToUpperInvariant(), \$Uri); if (\$Method -eq 'Post') { return \$null }; return [pscustomobject]@{ Content = 'HANDOFF'; StatusCode = 200 } }; Invoke-AiMemoryHook -Event '$_pd_event' -Agent 'devin'$_pd_extra"
+        ) >/dev/null 2>&1 || true
+    }
+    PS_BARE="{\"cwd\":\"$PS_DEVIN_REPO_ESC\"}"
+    PS_NATIVE="{\"cwd\":\"$PS_DEVIN_REPO_ESC\",\"session_id\":\"ps-native-1\"}"
+
+    printf 'stale-slot' >"$PS_DEVIN_SLOT"
+    ps_devin_hook session-start "$PS_BARE" "ps-pin-1" set ""
+    assert_eq "powershell devin pinned bare sends pin on /hook" "yes" \
+        "$(grep -Fq 'POST ' "$PS_DEVIN_LOG" && grep 'POST ' "$PS_DEVIN_LOG" | grep -Fq '&session_id=ps-pin-1' && printf yes || printf no)"
+    assert_eq "powershell devin pinned bare sends pin on /handoff" "yes" \
+        "$(grep -Fq 'GET ' "$PS_DEVIN_LOG" && grep 'GET ' "$PS_DEVIN_LOG" | grep -Fq '&session_id=ps-pin-1' && printf yes || printf no)"
+    ps_devin_hook session-end "$PS_BARE" "ps-pin-1" set ""
+    assert_eq "powershell devin pinned bare preserves slot on end" "stale-slot" \
+        "$([ -f "$PS_DEVIN_SLOT" ] && cat "$PS_DEVIN_SLOT" || printf missing)"
+
+    ps_devin_hook session-start "$PS_NATIVE" "ps-pin-1" set ""
+    assert_eq "powershell devin pinned native suppresses pin on /hook" "no" \
+        "$(grep 'POST ' "$PS_DEVIN_LOG" 2>/dev/null | grep -Fq 'session_id=' && printf yes || printf no)"
+    assert_eq "powershell devin pinned native sends native id on /handoff" "yes" \
+        "$(grep 'GET ' "$PS_DEVIN_LOG" 2>/dev/null | grep -Fq '&session_id=ps-native-1' && printf yes || printf no)"
+    ps_devin_hook session-end "$PS_NATIVE" "ps-pin-1" set external
+    assert_eq "powershell devin pinned native owned end clears slot" "missing" \
+        "$([ -e "$PS_DEVIN_SLOT" ] && printf present || printf missing)"
+fi
 
 # --- summary ----------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

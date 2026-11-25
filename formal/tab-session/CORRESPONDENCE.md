@@ -19,7 +19,7 @@
 ## Assumptions (each a place a bug could hide)
 
 - A1: `start`'s wait for main's `sidecar.resolve` answer (omp, proxy, shell env, builtin extensions, `sessionFree`) does not change `session_path` or `is_new`: it only gates when `spawn` runs (a restart in between supersedes it by `start_seq`).
-- A2: the `get_state` answer names the session the running omp is on (stock `get_state.sessionFile`), written or not.
+- A2: the `get_state` answer names the session the running omp is on (stock `get_state.sessionFile`). `Observe` reads the three identity strings without decoding unrelated state. `src/main/local/queue.test.ts` puts a 160-level tool schema beside them and counts the stock requests on the same spawn; JSON depth and request counts are not model variables.
 - A3: stock's `autoResume` picks only a written session of the tab's folder.
 - A5: a `fork`, `branch` or `handoff` inside the omp (also `SESSION_CHANGING_COMMANDS`) keeps `session_path` on the session it came from until the next `get_state` names the copy; a crash in between reopens that parent session. Not modeled: its file is the conversation the copy was made from, written and intact, so nothing is lost and no other conversation opens; the renderer's hydrate sends that `get_state` right after the command. Starting a new one instead would put the tab on an empty session, further from what it showed.
 - A4: `entry.sessionFile` (the pool) equals the lane's `session_path` after the same `get_state`; an omp update's restart therefore reopens what `Restart` does.

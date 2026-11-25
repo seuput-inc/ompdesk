@@ -23,6 +23,7 @@ export const IPC_ERROR_CODES = [
 	"session_owned_elsewhere",
 	"session_kind_mismatch",
 	"session_open_in_tab",
+	"view_ended",
 	"session_hidden",
 	"session_not_open",
 	"no_messages",
@@ -62,6 +63,8 @@ export const IPC_ERROR_CODES = [
 	"stats_not_ready",
 	"stats_api_error",
 	"safe_storage_unavailable",
+	// macOS would ask for the login password to open the keychain item (src/shared/keychain.ts): no secret is stored this run.
+	"keychain_would_ask",
 	// LocalCommandError codes (src/main/local) that reach toasts unchanged.
 	"busy",
 	"gh_missing",
@@ -86,6 +89,8 @@ export const IPC_ERROR_CODES = [
 	"detached_head",
 	"nothing_staged",
 	"commit_message_failed",
+	// The commit-message button with Credit use off: the plan is spent, or the tab's omp could not check it.
+	"credit_spend_off",
 	"branch_checked_out",
 	"unsupported",
 	"invalid_content",
@@ -120,6 +125,7 @@ export const IPC_ERROR_CODES = [
 	"update_not_ready",
 	// Another window that shows the tab answered this ask or approval first (multi-viewer, sidecar-pool.ts).
 	"already_answered",
+	"being_answered",
 	// A paired web device asked for something its grants or the web policy do not allow (main/web/ws-router.ts).
 	"web_forbidden",
 	// A paired host has no browser relay running for the tab a device's Preview page tunnels to (host-services.ts `host.previewRelay.*`).

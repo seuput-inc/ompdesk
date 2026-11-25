@@ -496,6 +496,7 @@ async fn raw_observation_fallback_recovers_detail_when_wiki_misses() {
                 title: "raw prompt".into(),
                 body: "raw fallback detail mentions capybara exactly once".into(),
                 importance: 5,
+                file_path: None,
             },
             &Sanitizer::builtin(),
         ))
@@ -516,7 +517,10 @@ async fn raw_observation_fallback_recovers_detail_when_wiki_misses() {
         .expect("raw search");
     assert_eq!(raw_hits.len(), 1);
     assert_eq!(raw_hits[0].session_id, session_id);
-    assert!(raw_hits[0].snippet.contains("<mark>capybara</mark>"));
+    assert!(
+        ai_memory_store::highlighted_snippet_html(&raw_hits[0].snippet)
+            .contains("<mark>capybara</mark>")
+    );
 }
 
 /// Cross-project profile recall (`docs/cross-project-profile.md`): a habit the
@@ -526,6 +530,7 @@ async fn raw_observation_fallback_recovers_detail_when_wiki_misses() {
 #[tokio::test]
 async fn profile_recall_across_projects() {
     use ai_memory_consolidate::profile::{ProfilePassConfig, run_profile_pass};
+    use ai_memory_core::profile::{ProfileEnabled, ProfileSettings};
 
     let tmp = TempDir::new().expect("tempdir");
     let store = Store::open(tmp.path()).expect("open store");
@@ -580,6 +585,7 @@ async fn profile_recall_across_projects() {
                     title: "prompt".into(),
                     body: prompt.into(),
                     importance: 5,
+                    file_path: None,
                 },
                 &Sanitizer::builtin(),
             ))
@@ -587,7 +593,10 @@ async fn profile_recall_across_projects() {
             .expect("insert observation");
     }
     let config = ProfilePassConfig {
-        settings: ai_memory_core::profile::ProfileSettings::default(),
+        settings: ProfileSettings {
+            enabled: ProfileEnabled::Auto,
+            ..ProfileSettings::default()
+        },
         distinguishes_operators: false,
     };
     run_profile_pass(&store.reader, &store.writer, &wiki, None, &config)

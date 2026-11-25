@@ -14,7 +14,17 @@
  *
  * No omp imports (not even types): the GUI's vitest installs it on a fake `pi`.
  */
-import { hasMailEntry, journaledMarks, MAIL_CUSTOM_TYPE } from "./agent-control-contracts";
+import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
+import {
+	ATTACHMENT_MAX_BYTES,
+	type AttachmentWire,
+	hasMailEntry,
+	journaledMarks,
+	MAIL_CUSTOM_TYPE,
+	sniffImageType,
+} from "./agent-control-contracts";
 import { crossFamily, JUDGE_ROLES, modelFamily } from "./agent-control-judge-core";
 import { completeOnSmol, type ModelLike, type NextPromptSession } from "./modes/next-prompt-engine";
 import { type PromptSectionContext, type PromptSectionHost, registerPromptSection } from "./prompt-sections";
@@ -26,7 +36,23 @@ import { type PromptSectionContext, type PromptSectionHost, registerPromptSectio
 interface ControlSession {
 	/** Stock `AgentSession.isStreaming`: a turn runs (or a prompt is being set up). */
 	isStreaming: boolean;
+	/** Stock `AgentSession.messages`: the live conversation, oldest first. */
+	messages: readonly unknown[];
+	/** Stock `AgentSession.agent`: the loop's peeks at the session's queues (`AgentLoopConfig`), see `interruptFor`. */
+	agent: AsidePeeks;
+	/** Stock `AgentSession.prompt`: `streamingBehavior: "aside"` queues for the next step boundary while a turn runs. */
+	prompt(
+		text: string,
+		options: {
+			streamingBehavior: "aside";
+			expandPromptTemplates: false;
+			throwOnDrop: true;
+			images?: { type: "image"; data: string; mimeType: string }[];
+			onPromptAdmitted: () => void;
+		},
+	): Promise<boolean>;
 	sessionManager: {
+		getCwd(): string;
 		getBranch(): { customType?: unknown; data?: unknown }[];
 		appendCustomEntry(customType: string, data: unknown): unknown;
 	};
@@ -53,6 +79,8 @@ Another agent opened this session and handed you its first message; the person s
 - Never use \`git stash\`: every worktree of a repository shares one stash, so another session's stash can land in yours. Commit work in progress to your branch instead.
 - Stay inside the files and scope the message names. If the task needs more, say so in your answer rather than widening it.
 - Done means the observable acceptance in the message holds, checked by you, and any requested commit is on your branch.
+- Sessions you open yourself are part of your work: before your final answer, end your turn and let their reports wake you until they are done; your opener is not nudged while they run.
+- In a git worktree, before your final answer check that your branch is not behind the branch it lands on (\`git log --oneline HEAD..<that branch>\`); if it is, merge or rebase it and run your checks again.
 - Your final answer is what the other agent reads: what changed (files, commits), how you checked it with the actual result, and anything left undone.
 - End your final answer with one last line: \`Result: ok\` when the acceptance holds and every check you ran passed, else \`Result: problem — <reason>\` (a failed or skipped check, work left undone). The other agent reads that line, not your prose. That final answer is delivered to it automatically as your done report: do not send a done report yourself.
 - Use ompdesk_report only for question or blocked when you need its decision (then wait for its answer; never guess an approval), progress at real milestones, and kind note with to set to a sibling it opened. Pass the dispatch id its message names.
@@ -69,11 +97,85 @@ export function isWorkerSession(ctx: PromptSectionContext): boolean {
 	return ctx.sessionManager.getBranch().some(entry => entry.customType === WORKER_ENTRY);
 }
 
+/** What a report carries to its receiver: text, and the pictures sent along (stock's `(TextContent | ImageContent)[]`). */
+type MailContent = string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
+
 interface MailMessage {
 	customType: string;
-	content: string;
+	content: MailContent;
 	display: boolean;
 	details?: unknown;
+}
+
+/**
+ * Stock agent-core's non-consuming peeks the tool batch polls every 250 ms (`executeToolCalls` `checkAsideInterrupts`).
+ * `hasIrcInterrupts` true is an urgent message: it ends an interruptible `wait` and raises the cooperative steering
+ * signal, on which a running `bash` or `eval` backgrounds itself; no call is killed or skipped but a not-yet-started
+ * `wait`, and a question card stays open (stock's `ask` closes only for a user steer). `hasQueuedAsides` true only ends
+ * a `wait`. Typed as functions or unset, as stock's `Agent` holds them.
+ */
+interface AsidePeeks {
+	hasIrcInterrupts?: () => boolean | Promise<boolean>;
+	hasQueuedAsides?: () => boolean | Promise<boolean>;
+}
+
+/**
+ * Urgent asides of ours stock has not handed to the model yet, by key (`urgentKey`). A mark goes at the `message_end`
+ * stock emits as it hands that message over at a step boundary, before the next model request and so before the next
+ * tool batch peeks, or at `agent_end`; never because a peek found the queue empty, which a progress report that lands
+ * after the handover but before the next peek would read as still urgent (formal/urgent-asides).
+ */
+const urgent = new Set<string>();
+const ownPeeks = new WeakSet<object>();
+
+/** Stock's message as `message_end` carries it: a report (custom `ompdesk.mail`) or a message from another session (user). */
+function urgentKey(message: unknown): string | undefined {
+	if (!message || typeof message !== "object") return undefined;
+	const record = message as { role?: unknown; customType?: unknown; details?: unknown; content?: unknown };
+	if (record.role === "custom" && record.customType === MAIL_CUSTOM_TYPE) {
+		const id = (record.details as { id?: unknown } | undefined)?.id;
+		return typeof id === "string" ? `mail:${id}` : undefined;
+	}
+	if (record.role !== "user") return undefined;
+	const text =
+		typeof record.content === "string"
+			? record.content
+			: Array.isArray(record.content)
+				? record.content
+						.filter((block): block is { type: "text"; text: string } => block?.type === "text")
+						.map(block => block.text)
+						.join("")
+				: "";
+	return `aside:${text}`;
+}
+
+/**
+ * Puts OMPdesk's peek in front of stock's `hasIrcInterrupts` on the main agent, once: it answers true also while an
+ * urgent aside of ours is pending (`urgent`) and stock's aside queue holds anything. Stock copies the peek into each
+ * run's loop config when the run starts (`Agent` `#runLoop`), so it is put there at every main run's
+ * `before_agent_start` and kept: a run already going when the first message comes still reads the plain aside.
+ */
+function watchAsides(agent: AsidePeeks | undefined): void {
+	if (!agent || typeof agent.hasQueuedAsides !== "function") return;
+	const stock = agent.hasIrcInterrupts;
+	if (stock && ownPeeks.has(stock)) return;
+	const peek = async (): Promise<boolean> =>
+		(await stock?.()) === true || (urgent.size > 0 && (await agent.hasQueuedAsides?.()) === true);
+	ownPeeks.add(peek);
+	agent.hasIrcInterrupts = peek;
+}
+
+/**
+ * Makes an aside handed to stock urgent: another session's message (`ompdesk_session_send`) or a report that asks for a
+ * turn reaches a working session at its next step even while a shell runs, where a plain aside waits for the running
+ * call or its 60 s auto-background (measured 58.6 s on omp 18.22.2, `bridge-steer-now-stock.test.ts`). A progress or
+ * note report never arms it. A report is armed before `sendMessage`'s own awaits queue it, so for that moment a quiet
+ * aside already queued can cut a shell for it; the urgent one is read at the same step.
+ */
+function interruptFor(agent: AsidePeeks | undefined, key: string): void {
+	if (!agent) return;
+	urgent.add(key);
+	watchAsides(agent);
 }
 
 /** Stock's `pi.sendMessage` (a custom message, journaled and shown per its delivery). */
@@ -84,12 +186,129 @@ interface MailHost {
 /** The main session's `pi` (the first install; a subagent's rebinding never replaces it). */
 let mailHost: MailHost | undefined;
 
-export function install(pi: PromptSectionHost & Partial<MailHost>): void {
+/** The stock package index on the extension's `pi`: the live main session's `Agent`. */
+interface RegistryHost {
+	pi?: {
+		AgentRegistry: { global(): { get(id: string): { session?: { agent?: AsidePeeks } } | undefined } };
+		MAIN_AGENT_ID: string;
+	};
+}
+
+/** The stock events agent-control listens to besides its prompt section; `ctx.agent` names whose event it is. */
+type AgentContext = { agent: { kind: string } };
+type ControlHost = PromptSectionHost & {
+	on(event: "message_end", handler: (event: { message?: unknown }, ctx: AgentContext) => void): void;
+	on(event: "agent_end", handler: (event: unknown, ctx: AgentContext) => void): void;
+};
+
+export function install(pi: ControlHost & Partial<MailHost> & RegistryHost): void {
 	if (!mailHost && typeof pi.sendMessage === "function") mailHost = pi as MailHost;
 	// The main agent only: its own subagents are briefed by it, not by this contract.
 	registerPromptSection(pi, "ompdesk-worker", ctx =>
 		ctx.agent.kind === "main" && isWorkerSession(ctx) ? WORKER_CONTRACT : undefined,
 	);
+	pi.on("before_agent_start", (_event, ctx) => {
+		if (ctx.agent.kind === "main" && pi.pi)
+			watchAsides(pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session?.agent);
+		return undefined;
+	});
+	// The marks are the main agent's: a rebind installs these hooks on every subagent's `pi` too (index.ts), and a
+	// subagent's own messages and turn ends must leave them alone.
+	pi.on("message_end", (event, ctx) => {
+		if (ctx.agent.kind !== "main") return;
+		const key = urgentKey(event.message);
+		if (key) urgent.delete(key);
+	});
+	// A mark whose aside stock never handed over (dropped with its turn) must not make later quiet ones urgent; one
+	// still queued starts the next turn, whose first step reads it before any tool runs.
+	pi.on("agent_end", (_event, ctx) => {
+		if (ctx.agent.kind === "main") urgent.clear();
+	});
+}
+
+const EXTENSION_TYPES: Record<string, string> = {
+	".pdf": "application/pdf",
+	".txt": "text/plain",
+	".md": "text/markdown",
+	".json": "application/json",
+	".csv": "text/csv",
+	".html": "text/html",
+	".zip": "application/zip",
+	".log": "text/plain",
+};
+const IMAGE_EXTENSIONS: Record<string, string> = {
+	"image/png": "png",
+	"image/jpeg": "jpg",
+	"image/webp": "webp",
+	"image/gif": "gif",
+};
+
+function tooBig(bytes: number): Error {
+	return new Error(`it is ${bytes} bytes; an attachment is at most ${ATTACHMENT_MAX_BYTES} bytes (10 MiB)`);
+}
+
+function wire(name: string, mimeType: string, bytes: Buffer): AttachmentWire {
+	return {
+		name,
+		mimeType,
+		dataBase64: bytes.toString("base64"),
+		sha256: createHash("sha256").update(bytes).digest("hex"),
+	};
+}
+
+/** A file on this computer: absolute, or relative to the session's folder. */
+async function attachFile(requested: string, env: ControlEnv): Promise<AttachmentWire> {
+	const file = path.resolve(env.session().sessionManager.getCwd(), requested);
+	const info = await stat(file);
+	if (!info.isFile()) throw new Error(`${file} is not a file`);
+	if (info.size > ATTACHMENT_MAX_BYTES) throw tooBig(info.size);
+	const bytes = await readFile(file);
+	if (bytes.length > ATTACHMENT_MAX_BYTES) throw tooBig(bytes.length);
+	const name = path.basename(file);
+	const mimeType =
+		sniffImageType(bytes) ?? EXTENSION_TYPES[path.extname(name).toLowerCase()] ?? "application/octet-stream";
+	return wire(name, mimeType, bytes);
+}
+
+/** Every picture of the live conversation (a person's, a tool result's, a message's), newest first. */
+function conversationImages(messages: readonly unknown[]): { data: string; mimeType: string }[] {
+	const found: { data: string; mimeType: string }[] = [];
+	for (const message of messages) {
+		const content = (message as { content?: unknown } | null)?.content;
+		if (!Array.isArray(content)) continue;
+		for (const block of content as Record<string, unknown>[])
+			if (block?.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string")
+				found.push({ data: block.data, mimeType: block.mimeType });
+	}
+	return found.reverse();
+}
+
+const BLOBS_MODULE = "./agent-control-blobs";
+
+/** The n-th newest picture (1 = newest) of this session's conversation; a blob reference is read from stock's store. */
+async function attachImage(n: number, env: ControlEnv): Promise<AttachmentWire> {
+	const images = conversationImages(env.session().messages);
+	const image = images[n - 1];
+	if (!image)
+		throw new Error(
+			`this conversation holds ${images.length} picture${images.length === 1 ? "" : "s"}, so there is no image ${n}`,
+		);
+	let bytes: Buffer;
+	if (image.data.startsWith("blob:")) {
+		// Stock's own store, as `read_image_blob` reads it. The specifier is a variable so the GUI's `tsc` (which has no
+		// omp to resolve) does not follow it; it is loaded only here, so the module stands on a fake `pi`.
+		const { readBlob } = (await import(BLOBS_MODULE)) as { readBlob(ref: string): Promise<Buffer | null> };
+		const stored = await readBlob(image.data);
+		if (!stored) throw new Error(`image ${n} is no longer in omp's picture store`);
+		bytes = stored;
+	} else {
+		if (image.data.length > Math.ceil(ATTACHMENT_MAX_BYTES / 3) * 4 + 4)
+			throw tooBig(Math.floor((image.data.length * 3) / 4));
+		bytes = Buffer.from(image.data, "base64");
+	}
+	if (bytes.length > ATTACHMENT_MAX_BYTES) throw tooBig(bytes.length);
+	const extension = IMAGE_EXTENSIONS[image.mimeType] ?? "bin";
+	return wire(`image-${n}.${extension}`, image.mimeType, bytes);
 }
 
 /** Report ids this process handed to stock (an aside is journaled only once the receiver's loop takes it). */
@@ -100,6 +319,19 @@ const queuedMail = new Set<string>();
  * tells "the omp I handed a message to, which still queues it" from "a new omp, whose predecessor's queue is gone".
  */
 const OMP_INSTANCE = `${process.pid}-${Math.round(performance.timeOrigin)}`;
+
+/** A report's content: text, or text blocks and picture blocks with some text in them; undefined when it holds none. */
+function mailContent(value: unknown): MailContent | undefined {
+	if (typeof value === "string") return value.trim() ? value : undefined;
+	if (!Array.isArray(value)) return undefined;
+	const blocks: Exclude<MailContent, string> = [];
+	for (const block of value as Record<string, unknown>[]) {
+		if (block?.type === "text" && typeof block.text === "string") blocks.push({ type: "text", text: block.text });
+		else if (block?.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string")
+			blocks.push({ type: "image", data: block.data, mimeType: block.mimeType });
+	}
+	return blocks.some(block => block.type === "text" && block.text.trim()) ? blocks : undefined;
+}
 
 export const methods: BridgeMethods = {
 	/**
@@ -112,24 +344,85 @@ export const methods: BridgeMethods = {
 	 */
 	"agent_control.mail": async (params, env) => {
 		const record = (params ?? {}) as Record<string, unknown>;
-		const content = typeof record.content === "string" ? record.content : "";
-		if (!content.trim()) throw new Error("agent_control.mail needs content");
+		const content = mailContent(record.content);
+		if (!content) throw new Error("agent_control.mail needs content");
 		if (!mailHost) throw new Error("This omp cannot receive reports (no extension sendMessage).");
 		const details = (record.details ?? {}) as Record<string, unknown>;
 		const id = typeof details.id === "string" ? details.id : undefined;
 		// Idempotent across restarts of either side: the journal is the record of what arrived, and until stock's loop
 		// takes a queued aside this process remembers it. `journaled` tells main which of the two it is: main keeps a
 		// report until the receiver's journal holds it (a killed omp loses an aside it still queued).
-		const branch = env.session().sessionManager.getBranch();
+		const session = env.session();
+		const branch = session.sessionManager.getBranch();
 		const journaled = id !== undefined && hasMailEntry(branch, id);
 		if (id && (journaled || queuedMail.has(id))) return { duplicate: true, journaled };
 		if (id) queuedMail.add(id);
 		const message = { customType: MAIL_CUSTOM_TYPE, content, display: true, details };
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
-		const deliverAs = record.deliverAs === "aside" || env.session().isStreaming ? "aside" : undefined;
+		const deliverAs = record.deliverAs === "aside" || session.isStreaming ? "aside" : undefined;
 		const triggerTurn = record.triggerTurn === true;
+		// A report that asks for a turn (question, blocked, done, review) is read at once; progress and notes wait.
+		if (id && triggerTurn && session.isStreaming) interruptFor(session.agent, `mail:${id}`);
 		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
 		return {};
+	},
+	/**
+	 * `{message, images?}` → `{}`, or `{idle: true}` with nothing sent: a message another session sends one that works
+	 * (`ompdesk_session_send`), as stock's `aside` (`AgentSession.prompt`, `streamingBehavior: "aside"`). Stock hands
+	 * over every aside waiting at a step boundary together, where its steering queue hands over one steer per boundary
+	 * (`steeringMode` one-at-a-time, the default), so six messages cost six model requests; an aside sits in no queue the
+	 * person sees, is urgent (`interruptFor`: a running shell backgrounds, no call is killed) and leaves a question card
+	 * open (stock's `ask` closes only for a user steer). An idle session gets main's plain prompt instead, which starts
+	 * its turn as before. Answers once stock admitted it.
+	 */
+	"agent_control.aside": async (params, env) => {
+		const record = (params ?? {}) as Record<string, unknown>;
+		const message = typeof record.message === "string" ? record.message : "";
+		if (!message.trim()) throw new Error("agent_control.aside needs message");
+		const content = mailContent([
+			{ type: "text", text: message },
+			...(Array.isArray(record.images) ? record.images : []),
+		]);
+		const images = Array.isArray(content) ? content.filter(block => block.type === "image") : [];
+		const session = env.session();
+		if (!session.isStreaming) return { idle: true };
+		const admitted = Promise.withResolvers<void>();
+		session
+			.prompt(message, {
+				streamingBehavior: "aside",
+				expandPromptTemplates: false,
+				throwOnDrop: true,
+				...(images.length > 0 ? { images } : {}),
+				onPromptAdmitted: () => {
+					interruptFor(session.agent, `aside:${message}`);
+					admitted.resolve();
+				},
+			})
+			.then(
+				() => admitted.resolve(),
+				(error: unknown) => admitted.reject(error),
+			);
+		await admitted.promise;
+		return {};
+	},
+	/**
+	 * `{path}` or `{image}` → `{name, mimeType, dataBase64, sha256}`: one attachment of `ompdesk_session_send` /
+	 * `ompdesk_report`, read where this omp runs, so a caller on a paired host hands over its own computer's file or
+	 * its own conversation's picture (`image` n is the n-th newest, 1 = the newest). Refuses a folder, a missing
+	 * file, one over `ATTACHMENT_MAX_BYTES` and a picture the conversation does not hold.
+	 */
+	"agent_control.attachment": async (params, env) => {
+		const record = (params ?? {}) as Record<string, unknown>;
+		if (typeof record.path === "string" && record.path.trim() && record.image === undefined)
+			return attachFile(record.path, env);
+		if (
+			typeof record.image === "number" &&
+			Number.isInteger(record.image) &&
+			record.image >= 1 &&
+			record.path === undefined
+		)
+			return attachImage(record.image, env);
+		throw new Error("agent_control.attachment needs {path} or {image} (a whole number from 1), one of them");
 	},
 	/**
 	 * `{marks}` → `{instance, journaled}`: which of the message markers main sent (`[ompdesk dispatch d2:`, `[ompdesk

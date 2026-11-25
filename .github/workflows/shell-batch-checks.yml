@@ -1,0 +1,998 @@
+# Batch S's checks that need a machine other than this Windows desktop (native-rust ledger › S). A branch-only workflow:
+# it exists only on `omp/agent/rust-batch-shell` and runs nothing on main. A pushed workflow file is not dispatchable
+# from a branch until it is on the default branch, so it also runs on a push to that branch that touches it (or the move
+# scripts); `gh workflow run shell-batch-checks.yml --ref omp/agent/rust-batch-shell` runs it by hand once it is there.
+#  shell-mac   the shell builds on macos-15 and macos-26 (`bun run build:shell`, clippy, cargo test): compile errors of the
+#              macOS code written without a Mac come back here.
+#  title-bar   the real title-bar drag check (scripts/shell-drag-check.ts, written by the shell's owner) on windows-latest,
+#              macos-15 and macos-26.
+#  move-mac    the whole update move on the Mac (scripts/shell-move/move-mac.sh): the released v0.127.0, re-signed with a
+#              throwaway certificate, updates itself into the real shell bundle through its unchanged updater (check found …
+#              swap helper, swap.log installed, the shell on Electron's profile with Local Storage and the seeded token), and
+#              a move that fails (read-only apps folder) rolls back; no SecurityAgent or coreauthd line.
+#  move-win    the whole update move on windows-latest (scripts/shell-move/run-move.ts, a test identity, silent): the released
+#              v0.127.0, v0.128.0 and v0.131.0 each update through their unchanged updater into the real Tauri app (the success run:
+#              the main's app-started.json of the new version appears, the Local Storage journal is done, the token file is kept and
+#              the old folder's backup is gone), an unpack made incomplete puts the Electron app back and leaves
+#              update-start-failed.json (the same unpack, offered again, is held), and a new shell that exits right after its native
+#              start (OMP_GUI_TEST_SHELL_FAIL_START=1) gets Electron back too, started, `swap result outcome rolled back`, no window,
+#              no dialog; and the same version offered again after that failure is held.
+#  move-mac-release1  the same move from the real v0.128.0 and v0.131.0 DMGs, re-signed with the throwaway certificate:
+#              its start-checked swap script keeps `<app>.previous` until the
+#              new app writes app-started.json for the offered version (the success path says `started`), and puts it back
+#              by itself when the shell does not come up (OMP_GUI_TEST_SHELL_FAIL_START=1), no dialog.
+#  keychain    S's landing gate for the macOS keychain (scripts/shell-move/keychain-ci.sh): a release-signed item read by the
+#              shell, an ad-hoc item never asked about, a profile without ciphertext never reading; no SecurityAgent or
+#              coreauthd line. macOS 27 has no hosted runner: the owner's Mac covers it.
+#  phone-webkit-mac  only=phone-webkit-mac: e2e/mobile-attach.e2e.ts's WebKit photo test (a camera JPEG, a 12 MB JPEG, a HEIC)
+#              on macos-15, where the phone's browser is Playwright's WebKit (closer to iOS Safari than the Windows build). The
+#              desktop side is the test-automation host driven through its native WebDriver (Playwright cannot attach to
+#              WKWebView), the phone side is the spec unchanged. Uploads test-results/ (the host's logs, the phone's wire and
+#              close codes in a failure's message) and the run's output as `phone-webkit-mac`.
+#  release-verify  only=release-verify, `tag` (default v0.132.0): what is PUBLISHED, on GitHub's runners (nothing built, nothing here
+#              runs on a person's Mac).
+#              release-assets-mac (macos-15)  the DMG from `gh release download`: size and SHA-512 equal the release notes'
+#                ompdesk-update metadata (and GitHub's size and digest); mounted read-only, the app copied out with `ditto
+#                --noextattr --norsrc --noqtn`; `codesign --verify --deep --strict`; the designated requirement and the leaf
+#                certificate (SHA-1, common name) equal scripts/mac-signing.json; nested binaries verify; LSMinimumSystemVersion 14.x
+#                and the metadata's minimumSystemVersion equal app-compatibility.json at the tag; the Tauri build record
+#                (no WebDriver, no CEF). `spctl --assess`, `xcrun stapler validate` and the quarantine state are EVIDENCE lines, not
+#                assertions: the certificate is OMPdesk's own, self-signed (AGENTS.md › Signing: "nothing is notarized").
+#              release-assets-win (windows-latest)  the setup: size, SHA-512, GitHub's digest, PE header, and Get-AuthenticodeSignature
+#                status and signer as evidence (release.yml signs and checks nothing of it; only a broken signature fails).
+#              release-update-mac (macos-15)  move-mac.sh with OMP_MOVE_REAL_FEED=<tag>: the released v0.131.0 app, as shipped, runs
+#                with no stand-in feed and no host-resolver mapping (the seed feed that stores its token is stopped first), its
+#                updater reads api.github.com's real /releases/latest, downloads the published DMG (the update log's download size and
+#                SHA-512 check against the metadata, the staged app is that version), swaps, and the published Tauri app starts on the profile: token decrypted, setting kept, conversation
+#                listed (read from disk: a release has no page to ask), window photographed (screencapture), swap.log installed/started, app-started.json for
+#                <tag>. S4 (a new shell that does not start) is skipped: it needs a broken DMG.
+#              only=release-update-mac uses a stand-in feed instead. The published old_tag updates into the exact dispatch SHA's
+#                signed release.yml artifact. The candidate must start from /Applications with the same profile canary.
+#              win-update-real  only=win-update-real, `tag` or `candidate_run`: the Windows update, published v0.131.0 into a candidate
+#                setup on a clean windows-latest runner under the real identity: `installer` runs the setup with the arguments v0.131.0's
+#                NsisUpdater passes, `feed` lets the published app's own updater fetch and start it (job win-update-real;
+#                scripts/shell-move/win-update-real.ps1 says what is asserted and uploaded). move-win is the harness under a test identity
+#                (build-setups.ts), where the setups are rebuilt and the test launcher and move-test.nsh carry the profile into the app
+#                the setup starts through Explorer, which the published setup has none of.
+#              win-update-gate  only=win-update-gate, `candidate_run`, `next_run`, `old_tag`: a release's update gate, the INSTALLED Tauri
+#                app's own updater against feed.ts (mapped in the hosts file, its certificate trusted by the system: the shell's
+#                native network ignores Chromium's switches; GitHub's public Latest is never touched). Windows, three modes (job
+#                win-update-gate, scripts/shell-move/win-update-gate.ps1): `break` published old_tag is offered the candidate
+#                and its first download must fail as 0.134.0/0.134.1's do ("session electron-updater does not exist"); `manual`
+#                the candidate setup /S --force-run over the running old_tag starts it on the kept profile, where both saved tabs
+#                come back and the turn the setup cut off (stock omp from install-omp, a scripted loopback provider:
+#                scripts/shell-move/scripted-provider.ts) is continued once; `update` the installed candidate updates itself
+#                into next_run's higher build. macOS (job mac-update-gate, scripts/shell-move/mac-update-gate.sh): `update` once.
+# macOS jobs follow main's check queue (queue-gate.yml): a push runs only the Windows jobs (move-win, title-bar on
+# windows-latest). The macOS jobs need a dispatch (`bun scripts/ci-run.ts`).
+# Deleted with the branch's landing; the checks that stay move into ci.yml's batch run.
+name: shell-batch-checks
+# The subset is in the name: queue-gate cancels a second run of the same name on one commit, so different subsets must differ.
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('shell-batch-checks [mac only={0}{1}]', inputs.only, inputs.only == 'release-verify' && format(' tag={0}', inputs.tag) || inputs.only == 'release-update-mac' && format(' old={0} run={1}', inputs.old_tag, inputs.candidate_run) || inputs.only == 'win-update-real' && format(' tag={0} run={1} load={2}', inputs.tag, inputs.candidate_run, inputs.cpu_load) || inputs.only == 'win-update-gate' && format(' old={0} run={1} next={2}', inputs.old_tag, inputs.candidate_run, inputs.next_run) || '') || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Diagnostic subset, not the full shell landing gate"
+        type: choice
+        options: [all, move-current-mac, tauri-native, preview-browser, tauri-inputs, tauri-move, preview-transport, phone-webkit-mac, release-verify, release-update-mac, win-update-real, win-update-gate]
+        default: all
+      tag:
+        description: "release-verify: the published release to check (assets, signatures, and the real update path into it). win-update-real: the published setup to update into when candidate_run is empty"
+        type: string
+        default: v0.132.0
+      candidate_run:
+        description: "release.yml run id for the candidate artifact. release-update-mac requires a release-signed ompdesk-mac at the dispatch SHA; win-update-gate requires a run; win-update-real uses the published tag when empty"
+        type: string
+        default: ""
+      cpu_load:
+        description: "win-update-real: busy loops per logical processor kept running while the setup runs (0 = none), to slow the setup the way a busy or scanned computer would"
+        type: string
+        default: "0"
+      next_run:
+        description: "win-update-gate: id of a release.yml dry run of the same change with a HIGHER version (a probe/* branch), the build the installed candidate updates into"
+        type: string
+        default: ""
+      old_tag:
+        description: "Published starting release for win-update-gate and release-update-mac (macOS needs a lower Tauri version with automatic relaunch)"
+        type: string
+        default: v0.134.1
+  push:
+    branches: [omp/agent/rust-batch-shell]
+    paths:
+      - .github/workflows/shell-batch-checks.yml
+      - .github/actions/shell*/**
+      - scripts/shell-move/**
+      - .github/actions/shell-mac-inputs/**
+      - scripts/package-mac.ts
+      - scripts/build-shell.ts
+      - scripts/shell-drag-check.ts
+      - resources/installer.nsh
+      - electron-builder.win.yml
+      - scripts/after-pack.cjs
+      - native/ompdesk/crates/shell/**
+
+# Identical dispatches share a group. A push cannot displace a dispatch.
+concurrency:
+  group: shell-batch-checks-${{ github.ref }}-${{ inputs.only || 'push' }}-tag=${{ inputs.tag }}-old=${{ inputs.old_tag }}-run=${{ inputs.candidate_run }}-next=${{ inputs.next_run }}-load=${{ inputs.cpu_load }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The queue gate: skipped on a push (only the Windows jobs run); on a dispatch it cancels a commit's second identical run.
+  gate:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/queue-gate.yml
+    with:
+      workflow: shell-batch-checks.yml
+
+  shell-mac:
+    name: shell-mac (${{ matrix.os }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/shell-check
+      - name: Build and stage the shell
+        run: bun run build:shell
+      - name: Keep the compile errors in the summary
+        if: failure()
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  title-bar:
+    name: title-bar (windows-latest)
+    if: github.event_name == 'push' || inputs.only == 'all'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+      - uses: ./.github/actions/shell
+      - run: bun run build
+      - name: The shell's title-bar drag check
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f scripts/shell-drag-check.ts || { echo "::error::scripts/shell-drag-check.ts is not there yet"; exit 1; }
+          bun scripts/shell-drag-check.ts
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+
+  title-bar-mac:
+    name: title-bar (${{ matrix.os }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # macOS runs the shell from an .app bundle (CEF finds its framework and helpers by that layout),
+      # ad-hoc signed, assembled by scripts/package-mac.ts.
+      - uses: ./.github/actions/shell-mac-inputs
+      - name: The .app bundle
+        shell: bash
+        run: bun scripts/package-mac.ts --historical-cef --no-dmg --version 0.200.0 --sign-with -
+      - name: The shell's title-bar drag check
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f scripts/shell-drag-check.ts || { echo "::error::scripts/shell-drag-check.ts is not there yet"; exit 1; }
+          if [ "$RUNNER_OS" = macOS ]; then export OMPDESK_SHELL_EXE="$PWD/dist/mac-arm64/OMPdesk.app/Contents/MacOS/OMPdesk"; fi
+          bun scripts/shell-drag-check.ts
+      # The stopgap's question: only `OMPdesk Helper*` apps in the bundle (the shell names CEF's helper path itself). Its
+      # result is an EVIDENCE line, not a gate: while it is red the bundle keeps both sets.
+      - name: One helper set (decides whether the second set can go)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          export OMP_HELPER_SETS=product
+          bun scripts/package-mac.ts --historical-cef --no-dmg --version 0.200.0 --sign-with -
+          ls "$PWD/dist/mac-arm64/OMPdesk.app/Contents/Frameworks" | sed 's/^/EVIDENCE: one-set bundle holds: /'
+          export OMPDESK_SHELL_EXE="$PWD/dist/mac-arm64/OMPdesk.app/Contents/MacOS/OMPdesk"
+          if bun scripts/shell-drag-check.ts; then echo "EVIDENCE: ONE helper set (OMPdesk Helper*): the shell's drag check passes on ${{ matrix.os }}"; else echo "EVIDENCE: ONE helper set: the drag check FAILS on ${{ matrix.os }}"; exit 1; fi
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  move-mac:
+    name: move-mac (${{ matrix.os }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/shell-mac-inputs
+      - name: The update move (success, then a failed move)
+        shell: bash
+        run: set -o pipefail; OMPDESK_SHELL_ENGINE=cef OMP_MOVE_RELEASED_TAG=v0.127.0 bash scripts/shell-move/move-mac.sh 2>&1 | tee move-mac.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### update move from v0.127.0, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: move-mac-${{ matrix.os }}
+          path: move-mac.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - if: failure()
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  move-win:
+    name: move-win (${{ matrix.released-tag }})
+    if: github.event_name == 'push' || inputs.only == 'all'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        released-tag: [v0.127.0, v0.128.0, v0.131.0]
+    env:
+      ELECTRON_BUILDER_COMPRESSION_LEVEL: "4"
+      OMP_MOVE_RELEASED_TAG: ${{ matrix.released-tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - name: Put bun's cache on the workspace volume
+        shell: bash
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
+      # Rebuild each old setup under the test identity using its own released installer.nsh.
+      - name: The released tag
+        shell: bash
+        run: git fetch --no-tags --depth=1 origin tag "$OMP_MOVE_RELEASED_TAG"
+      - uses: ./.github/actions/shell-mac-inputs
+        with:
+          builder: "true"
+          playwright: "false"
+          runtime: tauri
+          test-automation: "false"
+      # Each run starts from nothing (a fresh profile, update log and setup log); the old setup is kept between them.
+      - name: The success move
+        shell: bash
+        run: set -o pipefail; bun scripts/shell-move/run-move.ts --work "$RUNNER_TEMP/omv" --label success 2>&1 | tee move-win-success.log
+      - name: A move whose unpack is incomplete
+        if: always()
+        shell: bash
+        run: set -o pipefail; bun scripts/shell-move/run-move.ts --work "$RUNNER_TEMP/omv" --fail-at swap 2>&1 | tee move-win-fail-swap.log
+      - name: A move whose unpack is incomplete, twice in a row (the old app's updater holds the second round)
+        if: always()
+        shell: bash
+        run: set -o pipefail; bun scripts/shell-move/run-move.ts --work "$RUNNER_TEMP/omv" --fail-at swap-twice 2>&1 | tee move-win-fail-swap-twice.log
+      - name: A move whose new shell does not start
+        if: always()
+        shell: bash
+        run: set -o pipefail; bun scripts/shell-move/run-move.ts --work "$RUNNER_TEMP/omv" --fail-at start 2>&1 | tee move-win-fail-start.log
+      - name: A new shell that does not start, twice in a row (the second round is skipped)
+        if: always()
+        shell: bash
+        run: set -o pipefail; bun scripts/shell-move/run-move.ts --work "$RUNNER_TEMP/omv" --fail-at start-twice 2>&1 | tee move-win-fail-start-twice.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### update move from $OMP_MOVE_RELEASED_TAG, windows-latest"; for f in move-win-*.log; do echo "#### $f"; echo '```'; grep -E '"step":"(ok|FAILED)|^RESULT|OWNER CHANGED' "$f" | cut -c1-400 || true; echo '```'; done; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: move-win-${{ matrix.released-tag }}
+          path: |
+            move-win-*.log
+            ${{ runner.temp }}/omv/runs/*/evidence.json
+            ${{ runner.temp }}/omv/runs/*/*.log
+            ${{ runner.temp }}/omv/runs/*/profile/tauri-shell.jsonl
+            ${{ runner.temp }}/omv/runs/*/profile/app-started.json
+            ${{ runner.temp }}/omv/runs/*/profile/update-start-failed.json
+            ${{ runner.temp }}/omv/runs/*/profile/tauri-local-storage-import.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  move-mac-release1:
+    name: move-mac-release1 (${{ matrix.released-tag }}, ${{ matrix.os }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && (inputs.only == 'all' || inputs.only == 'move-current-mac' || inputs.only == 'tauri-move')"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.only == 'move-current-mac' && '["macos-15"]' || '["macos-15","macos-26"]') }}
+        released-tag: ${{ fromJSON((inputs.only == 'move-current-mac' || inputs.only == 'tauri-move') && '["v0.131.0"]' || '["v0.128.0","v0.131.0"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/shell-mac-inputs
+        with:
+          runtime: ${{ inputs.only == 'tauri-move' && 'tauri' || 'cef' }}
+      - name: The update move from ${{ matrix.released-tag }} (success, then a new shell that does not start)
+        shell: bash
+        run: set -o pipefail; OMPDESK_SHELL_ENGINE=${{ inputs.only == 'tauri-move' && 'tauri' || 'cef' }} OMP_MOVE_RELEASED_TAG=${{ matrix.released-tag }} bash scripts/shell-move/move-mac.sh 2>&1 | tee move-mac-release1.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### update move from ${{ matrix.released-tag }}, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' move-mac-release1.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "Screenshots (artifact move-mac-release1-${{ matrix.released-tag }}-${{ matrix.os }}, folder move-shots):"; ls "${{ runner.temp }}/move-shots" 2>/dev/null | sed 's/^/- /' || true; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: move-mac-release1-${{ matrix.released-tag }}-${{ matrix.os }}
+          path: |
+            move-mac-release1.log
+            ${{ runner.temp }}/move-shots/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - if: failure()
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  keychain:
+    name: keychain (${{ matrix.os }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'all'"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/shell-mac-inputs
+      - name: The keychain gate (release-signed item, ad-hoc item, profile without ciphertext)
+        run: set -o pipefail; bash scripts/shell-move/keychain-ci.sh 2>&1 | tee keychain-ci.log
+        shell: bash
+      - name: Evidence lines
+        if: always()
+        run: |
+          { echo "### keychain gate, ${{ matrix.os }}"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' keychain-ci.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: keychain-${{ matrix.os }}
+          path: keychain-ci.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - if: failure()
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  tauri-native:
+    name: tauri-native (${{ matrix.os }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && (inputs.only == 'tauri-native' || inputs.only == 'preview-browser')"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - uses: ./.github/actions/native-toolchain
+        with:
+          workspaces: |
+            native/ompdesk/crates/tauri-shell
+            native/ompdesk/crates/shell-preview
+      - name: Compile the actual system-WebView host
+        shell: bash
+        if: inputs.only == 'tauri-native'
+        run: cargo build --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --bin ompdesk-tauri-shell
+      - name: Test the host identity and page boundaries
+        shell: bash
+        if: inputs.only == 'tauri-native'
+        run: cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml
+        env:
+          OMPDESK_PROFILE_TEST_ROOT: ${{ runner.temp }}/ompdesk-profile
+      - name: Exercise the real preload attachment and migration consumers
+        shell: bash
+        if: inputs.only == 'tauri-native'
+        run: |
+          set -euo pipefail
+          bun native/ompdesk/crates/tauri-shell/tests/preload.ts
+          bun native/ompdesk/crates/tauri-shell/tests/profile-preload.ts
+          bun native/ompdesk/crates/tauri-shell/tests/ipc-post-message.ts
+          OMPDESK_TAURI_TEST_BINARY="$(bun -p 'require("node:path").resolve("native/ompdesk/crates/tauri-shell/target/debug/ompdesk-tauri-shell" + (process.platform === "win32" ? ".exe" : ""))')" \
+            bunx vitest run --project=node src/main/legacy-user-data.test.ts
+      - name: Test and lint the test-only WebDriver build
+        shell: bash
+        if: inputs.only == 'tauri-native'
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --features test-automation automation::
+          cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets --features test-automation -- -D warnings
+      - name: Test the original Local Storage exporter without CEF
+        shell: bash
+        if: inputs.only == 'tauri-native'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/native/ompdesk/crates/tauri-shell/target
+        run: cargo test --locked --manifest-path native/ompdesk/crates/shell/Cargo.toml --no-default-features --lib migrate::local_storage::tests
+      - name: Test the Preview pipe and lifecycle unit
+        shell: bash
+        run: cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib
+      - name: Exercise the actual Preview browser consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunx --no-install playwright install chromium
+          browser=$(bun -e 'import { chromium } from "@playwright/test"; console.log(chromium.executablePath())')
+          mkdir -p "$RUNNER_TEMP/preview-browser-fixture"
+          OMPDESK_PREVIEW_TEST_BROWSER="$browser" \
+          OMPDESK_PREVIEW_TEST_SCRATCH="$RUNNER_TEMP/preview-browser-fixture" \
+            cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --test browser -- --ignored --exact real_chromium_preview
+      - name: Check the changed native host
+        if: inputs.only == 'tauri-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --all-targets -- -D warnings
+      - name: Check the changed Preview consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --all-targets -- -D warnings
+      - name: Refuse an active CEF dependency
+        shell: bash
+        if: inputs.only == 'tauri-native'
+        run: |
+          set -euo pipefail
+          cargo tree --locked --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml --edges normal --prefix none --format '{p}' > tauri-dependencies.txt
+          if grep -E '^cef(-| )|^cef_dll_sys ' tauri-dependencies.txt; then
+            echo "::error::The system-WebView host still links CEF"
+            exit 1
+          fi
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-native-${{ matrix.os }}
+          path: |
+            tauri-dependencies.txt
+            native/ompdesk/crates/tauri-shell/target/debug/ompdesk-tauri-shell
+            native/ompdesk/crates/tauri-shell/target/debug/ompdesk-tauri-shell.exe
+          if-no-files-found: ignore
+          retention-days: 7
+
+  phone-webkit-mac:
+    name: phone-webkit-mac (macos-15)
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'phone-webkit-mac'"
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+      # The host the spec starts: the Tauri shell (WKWebView) built with the test-automation feature, which brings the embedded
+      # WebDriver the spec's desktop side talks to (as mac-checks.yml's mac-smoke), and the pinned Node.
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      - run: bun run build
+      - name: Playwright's WebKit (the phone's browser)
+        run: bunx playwright install webkit
+      - name: The WebKit photo test on the phone
+        shell: bash
+        env:
+          OMP_GUI_MOBILE_ATTACH: ${{ runner.temp }}/phone-webkit-mac-captures
+        run: |
+          set -euo pipefail
+          export OMPDESK_TAURI_TEST_BINARY="$PWD/resources/ompdesk-tauri/darwin-arm64/ompdesk-shell"
+          bunx playwright test e2e/mobile-attach.e2e.ts --grep 'A photo attached on the phone \(webkit\)' --global-timeout=1200000 2>&1 | tee phone-webkit-mac.log
+      - name: Host crash reports
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p test-results/crash-reports
+          find "$HOME/Library/Logs/DiagnosticReports" -name '*.ips' -mmin -90 -exec cp {} test-results/crash-reports/ \; 2>/dev/null || true
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: phone-webkit-mac
+          path: |
+            phone-webkit-mac.log
+            test-results/
+            playwright-report/
+            ${{ runner.temp }}/phone-webkit-mac-captures/
+          if-no-files-found: ignore
+          retention-days: 7
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  preview-transport:
+    name: preview-transport (ubuntu)
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'preview-transport'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/native-toolchain
+        with:
+          workspaces: native/ompdesk/crates/shell-preview
+      - run: cargo test --locked --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib
+
+  tauri-package-inputs:
+    name: tauri-package-inputs (ubuntu)
+    if: github.event_name == 'workflow_dispatch' && (inputs.only == 'tauri-native' || inputs.only == 'tauri-inputs')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - uses: ./.github/actions/native-toolchain
+        with:
+          workspaces: |
+            native/ompdesk/crates/tauri-shell
+            native/ompdesk/crates/shell-preview
+      - name: Resolve only the newly declared Tauri dependencies
+        if: inputs.only == 'tauri-inputs'
+        run: cargo metadata --format-version 1 --manifest-path native/ompdesk/crates/tauri-shell/Cargo.toml > tauri-input-metadata.json
+      - name: Check the changed TypeScript consumers
+        if: inputs.only == 'tauri-inputs'
+        run: |
+          bunx biome check scripts/tauri-native-smoke.ts
+          bun run check:types
+      - name: Generate the actual linked-crate notices
+        run: |
+          bun scripts/gen-crate-notices.ts tauri preview
+          bun run gen:licenses
+          bun run licenses:check
+      - name: Check the packaging and automatic-update consumers
+        run: bunx vitest run src/main/packaging-config.test.ts src/main/update-compatibility.test.ts src/main/update-lookup.test.ts src/main/update-release.test.ts src/main/updater-state.test.ts
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-generated-notices
+          path: |
+            LICENSES/ompdesk-tauri-dependencies.txt
+            LICENSES/ompdesk-preview-dependencies.txt
+            THIRD_PARTY_NOTICES.txt
+            native/ompdesk/crates/tauri-shell/Cargo.lock
+            tauri-input-metadata.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Verify the published release on GitHub-hosted runners.
+  release-assets-mac:
+    name: release-assets-mac (macos-15, ${{ inputs.tag }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'release-verify'"
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The published DMG (size, SHA-512, signature, requirement, leaf certificate, Gatekeeper and notarization evidence)
+        shell: bash
+        run: set -o pipefail; bash scripts/shell-move/release-assets.sh mac "$RELEASE_TAG" 2>&1 | tee release-assets-mac.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### published $RELEASE_TAG DMG, macos-15"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' release-assets-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets-mac-${{ inputs.tag }}
+          path: |
+            release-assets-mac.log
+            ${{ runner.temp }}/release-verify-mac/release.json
+            ${{ runner.temp }}/release-verify-mac/update-metadata.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+
+  release-assets-win:
+    name: release-assets-win (windows-latest, ${{ inputs.tag }})
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'release-verify'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The published setup (size and SHA-512 against the metadata, GitHub's digest, PE header)
+        shell: bash
+        run: set -o pipefail; bash scripts/shell-move/release-assets.sh win "$RELEASE_TAG" 2>&1 | tee release-assets-win.log
+      - name: Authenticode signature and signer (evidence; a broken signature fails)
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'release-verify-win\ompdesk-windows-setup.exe'
+          & ./scripts/shell-move/release-authenticode.ps1 -Path $setup 2>&1 | Tee-Object -FilePath release-authenticode.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### published $RELEASE_TAG setup, windows-latest"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED)' release-assets-win.log release-authenticode.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets-win-${{ inputs.tag }}
+          path: |
+            release-assets-win.log
+            release-authenticode.log
+            ${{ runner.temp }}/release-verify-win/release.json
+            ${{ runner.temp }}/release-verify-win/update-metadata.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+
+  # The released app (scripts/shell-move/move-mac.sh, OMP_MOVE_RELEASED_TAG) updates through the REAL GitHub feed into the published tag.
+  # No Windows counterpart: see the release-verify note in this file's header (move-win's setups are rebuilt under a test identity).
+  release-update-mac:
+    name: release-update-mac (macos-15, ${{ inputs.only == 'release-update-mac' && format('{0} to run {1}', inputs.old_tag, inputs.candidate_run) || format('v0.131.0 to {0}', inputs.tag) }})
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && (inputs.only == 'release-verify' || inputs.only == 'release-update-mac')"
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # Neither mode rebuilds an app. The move scripts need the e2e fake omp and the released Electron's CDP client.
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      # OMP_MOVE_API_TOKEN, not GH_TOKEN: the released app reads GH_TOKEN/GITHUB_TOKEN before its stored token, and the move check
+      # asserts the stored one is decrypted. The script seeds this token as the app's own update token.
+      - name: The update move from the released v0.131.0 through the real feed
+        if: inputs.only == 'release-verify'
+        shell: bash
+        env:
+          OMP_MOVE_API_TOKEN: ${{ github.token }}
+        run: set -o pipefail; OMPDESK_SHELL_ENGINE=tauri OMP_MOVE_RELEASED_TAG=v0.131.0 OMP_MOVE_REAL_FEED="$RELEASE_TAG" bash scripts/shell-move/move-mac.sh 2>&1 | tee release-update-mac.log
+      - name: Evidence lines
+        if: always() && inputs.only == 'release-verify'
+        shell: bash
+        run: |
+          { echo "### real-feed update v0.131.0 to $RELEASE_TAG, macos-15"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED)' release-update-mac.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "Screenshots (artifact release-update-mac-$RELEASE_TAG, folder move-shots):"; ls "$RUNNER_TEMP/move-shots" 2>/dev/null | sed 's/^/- /' || true; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always() && inputs.only == 'release-verify'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-update-mac-${{ inputs.tag }}
+          path: |
+            release-update-mac.log
+            ${{ runner.temp }}/move-shots/*.png
+            ${{ runner.temp }}/kc/*.json
+            ${{ runner.temp }}/kc/feed.log
+            ${{ runner.temp }}/kc/s1/ud/logs/gui-runtime.jsonl
+            ${{ runner.temp }}/kc/s1/ud/updates/swap.log
+            ${{ runner.temp }}/kc/s1/ud/app-started.json
+            ${{ runner.temp }}/kc/s1/ud/prefs.json
+            ${{ runner.temp }}/kc/s1/ud/tauri-local-storage-import.json
+            ${{ runner.temp }}/kc/s1/ud/tauri-shell.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Verify the candidate run's source
+        if: inputs.only == 'release-update-mac'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_RUN" =~ ^[1-9][0-9]*$ ]] || { echo "::error::release-update-mac requires a numeric candidate_run"; exit 1; }
+          RUN="repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN"
+          gh api "$RUN" | jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+            select(.path == ".github/workflows/release.yml" and .conclusion == "success" and
+              .head_repository.full_name == $repo and .head_sha == $sha) | {html_url, head_sha, run_attempt}' ||
+            { echo "::error::candidate_run must be a successful release.yml run for $GITHUB_REPOSITORY@$GITHUB_SHA"; exit 1; }
+          echo "Candidate from release.yml run $CANDIDATE_RUN at $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+      - if: inputs.only == 'release-update-mac'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.candidate_run }}
+          name: ompdesk-mac
+          digest-mismatch: error
+          path: ${{ runner.temp }}/mac-candidate
+      - if: inputs.only == 'release-update-mac'
+        uses: ./.github/actions/mac-update-candidate
+        with:
+          candidate-dmg: ${{ runner.temp }}/mac-candidate/ompdesk-mac-arm64.dmg
+          old-tag: ${{ inputs.old_tag }}
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # only=win-update-real: the update a Windows user gets, on a clean windows-latest runner under the REAL identity
+  # (%LOCALAPPDATA%\Programs\ompdesk, the real uninstall entry, %APPDATA%\ompdesk), from the PUBLISHED v0.131.0 (scripts/shell-move/
+  # last-electron.json) into a candidate setup: `candidate_run` (the `ompdesk-win` artifact of a release.yml dry run on the branch:
+  # the setup a release would publish) or, when it is empty, the published setup of `tag` (default v0.132.0: the loop's repro).
+  # Two modes, each its own runner, both asserting what a person sees (installed version, app-started.json of the new version, no
+  # rollback line in %TEMP%\ompdesk-setup.log, userData kept) and uploading everything the run left (win-update-real.ps1's header):
+  #   installer  the candidate setup runs with exactly the arguments v0.131.0's NsisUpdater passes (`--updated --force-run
+  #              --package-file=<pending file>`, no /S: quitAndInstall() with no arguments), from the updater's pending folder.
+  #   feed       the published v0.131.0 app runs its own updater, so the real check, download, SHA-512 check, countdown, setup
+  #              start and quit run unchanged: for a candidate_run against feed.ts, which offers it (Chromium's
+  #              --host-resolver-rules maps api.github.com there), for a tag against GitHub's real feed (the tag must be latest).
+  win-update-real:
+    name: win-update-real (${{ matrix.mode }}, ${{ inputs.candidate_run && format('run {0}', inputs.candidate_run) || inputs.tag }})
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'win-update-real'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [installer, feed]
+    permissions:
+      contents: read
+      actions: read # gh run download reads the dry run's artifact
+    env:
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      CANDIDATE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - name: Download the candidate setup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/win-update-real"
+          if [ -n "$CANDIDATE_RUN" ]; then
+            gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-win --dir "$W/new"
+          else
+            gh release download "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --pattern ompdesk-windows-setup.exe --dir "$W/new" --clobber
+          fi
+      - uses: ./.github/actions/win-update-real
+        with:
+          mode: ${{ matrix.mode }}
+          stand-in-feed: ${{ inputs.candidate_run != '' && 'true' || 'false' }}
+          cpu-load: ${{ inputs.cpu_load }}
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # only=win-update-gate: a release's Windows update gate (win-update-gate.ps1 says what each mode asserts and uploads).
+  win-update-gate:
+    name: win-update-gate (${{ matrix.mode }})
+    if: github.event_name == 'workflow_dispatch' && inputs.only == 'win-update-gate'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [break, manual, update]
+    permissions:
+      contents: read
+      actions: read # gh run download reads the dry runs' artifacts
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      NEXT_RUN: ${{ inputs.next_run }}
+      OLD_TAG: ${{ inputs.old_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # manual: the turn the setup cuts off runs on stock omp, the version every other workflow tests against.
+      - if: matrix.mode == 'manual'
+        uses: ./.github/actions/install-omp
+      - name: The published, candidate and next setups
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$CANDIDATE_RUN" ] || { echo "::error::win-update-gate needs candidate_run"; exit 1; }
+          W="$RUNNER_TEMP/win-update-gate"
+          mkdir -p "$W/old" "$W/candidate" "$W/next"
+          gh release download "$OLD_TAG" --repo "$GITHUB_REPOSITORY" --pattern ompdesk-windows-setup.exe --dir "$W/old" --clobber
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-win --dir "$W/candidate"
+          if [ "${{ matrix.mode }}" = update ]; then
+            [ -n "$NEXT_RUN" ] || { echo "::error::the update mode needs next_run"; exit 1; }
+            gh run download "$NEXT_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-win --dir "$W/next"
+          fi
+          ls -l "$W"/*
+      - name: The update (${{ matrix.mode }})
+        shell: pwsh
+        run: |
+          $w = Join-Path $env:RUNNER_TEMP 'win-update-gate'
+          function Version([string] $Setup) { ((Get-Item -LiteralPath $Setup).VersionInfo.ProductVersion -split '\.')[0..2] -join '.' }
+          $old = Join-Path $w 'old\ompdesk-windows-setup.exe'
+          $candidate = Join-Path $w 'candidate\ompdesk-windows-setup.exe'
+          $next = Join-Path $w 'next\ompdesk-windows-setup.exe'
+          $from, $to = if ('${{ matrix.mode }}' -eq 'update') { $candidate, $next } else { $old, $candidate }
+          $fromVersion = if ($from -eq $old) { $env:OLD_TAG.TrimStart('v') } else { Version $from }
+          & ./scripts/shell-move/win-update-gate.ps1 -Mode '${{ matrix.mode }}' -OldSetup $from -OldVersion $fromVersion `
+            -NewSetup $to -NewVersion (Version $to) -Out (Join-Path $w 'out') -FeedScript (Resolve-Path 'scripts/shell-move/feed.ts').Path
+          exit $LASTEXITCODE
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### win-update-gate ${{ matrix.mode }}"; echo '```'; grep -h -E '^(EVIDENCE|ok|FAILED|RESULT)' "$RUNNER_TEMP/win-update-gate/out/run.log" | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: win-update-gate-${{ matrix.mode }}
+          path: ${{ runner.temp }}/win-update-gate/out/
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # only=win-update-gate, macOS: the installed candidate updates itself into next_run's build once (relaunch mode;
+  # scripts/shell-move/mac-update-gate.sh says what it asserts and uploads). Same stand-in as Windows: /etc/hosts and the
+  # System keychain's trust, the app opened unchanged.
+  mac-update-gate:
+    name: mac-update-gate (macos-15)
+    needs: [gate]
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.only == 'win-update-gate'"
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read # the dry runs' artifacts; the failure report reads this run's jobs
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      NEXT_RUN: ${{ inputs.next_run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # Nothing is built: the e2e fake omp needs the repository's dependencies; the apps are the dry runs'.
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "false"
+      - name: The two dry runs' DMGs (before api.github.com is mapped to the stand-in)
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$CANDIDATE_RUN" ] && [ -n "$NEXT_RUN" ] || { echo "::error::mac-update-gate needs candidate_run and next_run"; exit 1; }
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-mac --dir "$RUNNER_TEMP/candidate"
+          gh run download "$NEXT_RUN" --repo "$GITHUB_REPOSITORY" --name ompdesk-mac --dir "$RUNNER_TEMP/next"
+          ls -l "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/next"
+          mkdir "$RUNNER_TEMP/next-mount"
+          hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$RUNNER_TEMP/next-mount" "$RUNNER_TEMP/next/ompdesk-mac-arm64.dmg" >/dev/null
+          echo "NEXT_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$RUNNER_TEMP/next-mount/OMPdesk.app/Contents/Info.plist")" >> "$GITHUB_ENV"
+          hdiutil detach "$RUNNER_TEMP/next-mount" >/dev/null
+      # No token: the app is opened through launchd and checks anonymously, as an installed app does.
+      - name: The installed candidate updates itself into the next build
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          CANDIDATE_DMG: ${{ runner.temp }}/candidate/ompdesk-mac-arm64.dmg
+          NEXT_DMG: ${{ runner.temp }}/next/ompdesk-mac-arm64.dmg
+          OUT: ${{ runner.temp }}/mac-update-gate
+          FEED_SCRIPT: scripts/shell-move/feed.ts
+        run: set -o pipefail; bash scripts/shell-move/mac-update-gate.sh 2>&1 | tee mac-update-gate.log
+      - name: Evidence lines
+        if: always()
+        shell: bash
+        run: |
+          { echo "### mac-update-gate: run $CANDIDATE_RUN to run $NEXT_RUN (${NEXT_VERSION:-unknown})"; echo '```'; grep -E '^(EVIDENCE|ok|FAILED|RESULT)' mac-update-gate.log | cut -c1-600 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-update-gate
+          path: |
+            mac-update-gate.log
+            ${{ runner.temp }}/mac-update-gate/
+          if-no-files-found: ignore
+          retention-days: 14
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

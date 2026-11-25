@@ -7,8 +7,9 @@ import { wrapAgentMessage } from "../../../shared/agent-control";
 import type { AgentMessage } from "../../../shared/rpc-types";
 import { TOUCH_QUERY } from "../../hooks/shell-queries";
 import { resetShellModeForTests } from "../../hooks/use-shell-mode";
-import { I18nProvider } from "../../lib/i18n";
+import { I18nProvider, translate } from "../../lib/i18n";
 import { preloadMarkdownPipeline } from "../../lib/markdown";
+import { useSessionStore } from "../../stores/session";
 import { useToolsStore } from "../../stores/tools";
 
 import { CustomMessageCard } from "./CustomMessageCard";
@@ -336,7 +337,9 @@ describe("MessageBubble user content", () => {
 });
 
 describe("MessageBubble compaction summaries", () => {
-	it("shows the maintenance method and before-to-after context size", () => {
+	const took = translate("chat.context.took", { duration: "" }).trim();
+
+	it("says in plain words what was done and how much it freed, on one line with no duration nobody measured", () => {
 		const html = renderToStaticMarkup(
 			<I18nProvider>
 				<MessageBubble
@@ -353,28 +356,77 @@ describe("MessageBubble compaction summaries", () => {
 			</I18nProvider>,
 		);
 
-		expect(html).toContain("Remote compacted · 256.0k → 20.0k");
+		expect(html).toContain(
+			`${translate("chat.context.compacted")} · ${translate("chat.context.smaller", { percent: 92 })}`,
+		);
+		expect(html).not.toContain(took);
 		expect(html).toContain("Kept the active work.");
+		// The method's name, the exact sizes and the full summary wait behind Details.
+		expect(html).not.toContain(translate("chat.context.compactionMethod.remote"));
 		expect(html).not.toContain("Long archived context details.");
 	});
 
-	it("preserves an unknown maintenance method and a zero-token starting point", () => {
-		const html = renderToStaticMarkup(
-			<I18nProvider>
-				<MessageBubble
-					message={{
-						role: "compactionSummary",
-						summary: "Future compactor finished.",
-						method: "future",
-						tokensBefore: 0,
-						tokensAfter: 12,
-						timestamp: "2026-08-20T00:00:00.000Z",
-					}}
-				/>
-			</I18nProvider>,
-		);
+	it("says how long the compaction took when this window watched it run, and nothing for one it did not", async () => {
+		const at = Date.parse("2026-08-20T00:00:00.000Z");
+		useSessionStore.setState({
+			compactionRuns: [{ action: "compact", startedAt: at - 42_000, endedAt: at + 500 }],
+		});
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+		// A live render: a static one reads the store's initial state.
+		const card = async (timestamp: string) => {
+			await act(async () =>
+				root.render(
+					<I18nProvider>
+						<MessageBubble message={{ role: "compactionSummary", summary: "Kept the active work.", timestamp }} />
+					</I18nProvider>,
+				),
+			);
+			return container.textContent;
+		};
+		try {
+			expect(await card("2026-08-20T00:00:00.000Z")).toContain(
+				translate("chat.context.took", { duration: "42.5s" }),
+			);
+			expect(await card("2026-08-20T01:00:00.000Z")).not.toContain(took);
+		} finally {
+			await act(async () => root.unmount());
+			container.remove();
+			useSessionStore.getState().reset();
+		}
+	});
 
-		expect(html).toContain("future · 0 → 12");
+	it("keeps the method's name (an unknown one as written) and the exact sizes behind Details, and claims no saving that is none", async () => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+		await act(async () =>
+			root.render(
+				<I18nProvider>
+					<MessageBubble
+						message={{
+							role: "compactionSummary",
+							summary: "Future compactor finished.",
+							method: "future",
+							tokensBefore: 0,
+							tokensAfter: 12,
+							timestamp: "2026-08-20T00:00:00.000Z",
+						}}
+					/>
+				</I18nProvider>,
+			),
+		);
+		expect(container.textContent).not.toContain("%");
+		expect(container.querySelector("[data-compaction-facts]")).toBeNull();
+		await act(async () =>
+			container.querySelector("button[aria-expanded]")?.dispatchEvent(new Event("click", { bubbles: true })),
+		);
+		const facts = container.querySelector("[data-compaction-facts]")?.textContent;
+		expect(facts).toContain("future");
+		expect(facts).toContain(translate("chat.context.tokensFromTo", { before: "0", after: "12" }));
+		await act(async () => root.unmount());
+		container.remove();
 	});
 
 	it("opens the full summary from a chevron disclosure button", async () => {

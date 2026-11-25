@@ -449,7 +449,7 @@ html[data-shell] .omp-composer-region.pb-3 {
 }
 
 .omp-work-chip[data-state="waiting"] {
-	border-color: var(--sc-warning);
+	border-color: var(--sc-attention);
 }
 
 .omp-work-chip > .omp-work-chip-label {
@@ -1032,6 +1032,9 @@ html[data-shell="phone"] {
 	--sc-icon-lg: 16px;
 	--sc-row-touch: 36px;
 	--sc-row-action: 44px;
+	/* Rounder than the desktop, as Orca's phone app is: cards, menus and toasts 12, the composer, dialogs and sheets 16. */
+	--sc-radius-lg: 12px;
+	--sc-radius-xl: 16px;
 }
 
 /* Transcript and composer gutters: 12 px, not the desktop's reading-column margins. */
@@ -1208,18 +1211,6 @@ html[data-shell="phone"] .omp-composer-toolbar > .omp-composer-actions {
 	margin-left: 3px;
 }
 
-/* The lane chip is its icon on a phone (the width ladder folds it; its name and the lane are its accessible name and
-   tooltip). While it shows, a turn runs: the model is its provider mark alone, so the row still ends before the
-   action button. */
-html[data-shell="phone"] .omp-composer-toolbar [data-send-mode] {
-	height: 28px;
-	padding-inline: 6px;
-}
-
-html[data-shell="phone"] .omp-composer-scroll:has([data-send-mode]) .omp-composer-model-label {
-	display: none;
-}
-
 /* The queue pill and the action button sit 8 px apart (the desktop ladder narrows it to 4): each one's reach ends where
    its neighbour's drawn box begins. */
 html[data-shell="phone"] .omp-composer-actions {
@@ -1256,9 +1247,8 @@ html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 	max-width: 6em;
 }
 
-/* A 360 px phone's idle row has ~120 px of empty row beside the chip, so it keeps the name there (6 em at most, "Sonnet
-   5.5" whole). While a turn runs the lane chip appears and the name goes (above, `[data-send-mode]`); a 320 px phone
-   (a toolbar under 300 px) keeps the mark alone. */
+/* A 360 px phone's row has ~120 px of empty row beside the chip, so it keeps the name there (6 em at most, "Sonnet
+   5.5" whole), idle and while a turn runs; a 320 px phone (a toolbar under 300 px) keeps the mark alone. */
 @container omp-toolbar (max-width: 300px) {
 	html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 		display: none;
@@ -1663,6 +1653,13 @@ html[data-input="touch"] [data-stats-sync] {
 html[data-input="touch"] [data-stats-sync] > [data-setting-info] {
 	--hit-gap-x: 20px;
 	--hit-gap-y: 20px;
+}
+
+/* The compaction row's (i) follows its words, with a manual pass's Cancel on the line under it (6 px): on touch it
+   reaches 10 px sideways and 6 px up and down (a 36 px wide target), so it never takes Cancel's taps. */
+html[data-input="touch"] [data-compaction-status] [data-setting-info] {
+	--hit-gap-x: 20px;
+	--hit-gap-y: 12px;
 }
 
 /* Tabs (common/Tabs.tsx): on touch a tab is a row tall and its reach stays inside its own bar. An underline bar's tabs
@@ -2385,21 +2382,18 @@ html[data-shell] .omp-session-sidebar [data-sidebar-row-menu][data-sidebar-row-m
 	min-width: 44px;
 }
 
-/* A docked sidebar on a tablet is 248 px wide, and a finger has no hover to keep the 44 px ⋯ off the row: beside the
-   ⋯ and the age the title kept ~13 characters ("Fix the flaky s…") with the age beside it saying the same date on every
-   row. The idle age (still read aloud) gives its place to the title; the ✓, a waiting badge and a working arc stay.
-   The drawer on a phone is wider and keeps it. */
-html[data-input="touch"]
-	.omp-session-sidebar:not(.omp-drawer .omp-session-sidebar)
-	.omp-sidebar-session-row
-	[data-sidebar-row-end]
-	> time {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	overflow: hidden;
-	clip-path: inset(50%);
-	white-space: nowrap;
+/* A session row's ⋯ and family chip sit on its second line (sidebar.css): they stay line-high under a finger and
+   reach past it by their invisible hit area (44 px tall, bounded by the row), so the row stays two lines. The ⋯
+   keeps its 44 px slot across; the chip's reach stops half way to it. */
+html[data-shell] .omp-session-sidebar .omp-sidebar-session-row [data-sidebar-row-menu][data-sidebar-row-menu][data-sidebar-row-menu] {
+	min-width: 44px;
+	min-height: 0;
+	--hit-gap-x: 0px;
+	--hit-gap-y: 200vmax;
+}
+
+html[data-shell] .omp-session-sidebar .omp-sidebar-session-row .omp-family-chip {
+	--hit-gap-y: 200vmax;
 }
 
 /* With a mouse, the project row's ⋯ appears on hover over the title's faded end and shares the row's end with "new

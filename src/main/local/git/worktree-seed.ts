@@ -15,7 +15,7 @@
  * `runWorktreeHook` also runs `.ompdesk/worktree-pre-merge` (in the worktree, before `ompdesk_merge` starts git) and
  * `.ompdesk/worktree-post-merge` (in the parent checkout, after the merge landed), found and logged the same way.
  *
- * The script runs under the core binary's supervise mode (`ompdesk-core --supervise`, `spawnSupervised`), not as a
+ * The script runs under the core binary's supervise mode (`ompdesk-core --supervise`, `superviseWorktreeHook`), not as a
  * request of the running core. A hook is a shell whose children (`bun install`) must end with it at its timeout, and
  * it must never outlive the app. The running core's processes end with a dead core because they stay in its process
  * group, so on POSIX it cannot give a hook a group of its own to kill, and a hook in it would end with every restart
@@ -25,15 +25,14 @@
  * here is OMPdesk's own (`worktree.ts`), so nothing of stock is duplicated.
  */
 
-import * as path from "node:path";
-import type { WorktreeSeedReport, WorktreeSetupReport } from "../../../shared/rpc-types";
-import { fs } from "../../fenced-fs";
-import { SUPERVISOR_STOPPED_CODE, spawnSupervised } from "../../setup/supervisor";
+import type { WorktreeBaseFetch, WorktreeSeedReport, WorktreeSetupReport } from "../../../shared/rpc-types";
+import { currentStepSignal, fencedEffect } from "../../serial-chain";
+import { superviseWorktreeHook } from "../../setup/supervisor";
 import { coreGit, DEFAULT_TIMEOUT_MS } from "./exec";
 
 const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
 export const SETUP_TIMEOUT_MS = 120_000;
-const SETUP_OUTPUT_TAIL = 4096;
+const runFoundHook = fencedEffect("worktree hook", superviseWorktreeHook);
 /** The repository's own scripts around a worktree's life: when it is made, and either side of `ompdesk_merge`. */
 export type WorktreeHook = "setup" | "pre-merge" | "post-merge";
 const HOOK_EXTENSION = process.platform === "win32" ? ".cmd" : "";
@@ -83,46 +82,7 @@ export async function runWorktreeHook(
 		{ primary, worktree, script: WORKTREE_HOOK_SCRIPTS[hook], log: `ompdesk-worktree-${hook}.log` },
 		1,
 	);
-	if (!found) return null;
-	const { script, logPath } = found;
-	const windows = process.platform === "win32";
-	const spec = windows
-		? { file: `"${script}"`, args: [], shell: true }
-		: { file: "/bin/sh", args: [script], shell: false };
-	const started = Date.now();
-	const chunks: Buffer[] = [];
-	return new Promise<WorktreeSetupReport>(resolve => {
-		let timedOut = false;
-		const child = spawnSupervised(
-			spec,
-			{ ...process.env, OMPDESK_ROOT_PATH: primary, OMPDESK_WORKTREE_PATH: worktree, OMPDESK_HOOK: hook },
-			cwd,
-		);
-		const timer = setTimeout(() => {
-			timedOut = true;
-			child.stdin?.end();
-		}, timeoutMs);
-		child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk));
-		child.stderr?.on("data", (chunk: Buffer) => chunks.push(chunk));
-		const finish = async (code: number | null, error?: string) => {
-			clearTimeout(timer);
-			const output = Buffer.concat(chunks).toString("utf8") + (error ? `${error}\n` : "");
-			await fs.writeFile(logPath, output).catch(() => undefined);
-			// A timed-out script's own exit code (a trap that exits 0) is never taken as success.
-			const exitCode = timedOut || code === SUPERVISOR_STOPPED_CODE ? null : code;
-			resolve({
-				script: path.relative(path.dirname(path.dirname(script)), script) || script,
-				ok: !timedOut && exitCode === 0,
-				exitCode,
-				timedOut,
-				durationMs: Date.now() - started,
-				logPath,
-				outputTail: output.slice(-SETUP_OUTPUT_TAIL),
-			});
-		};
-		child.on("error", error => void finish(null, error.message));
-		child.on("close", code => void finish(code));
-	});
+	return found ? runFoundHook(hook, { primary, worktree, cwd, timeoutMs }, found, currentStepSignal()) : null;
 }
 
 /** Both steps after a successful `worktree add`; neither ever fails the creation. */
@@ -142,9 +102,23 @@ export async function prepareWorktree(
 	return { ...(seed ? { seed } : {}), ...(setup ? { setup } : {}) };
 }
 
-/** One line for the agent's `ompdesk_session_open` notes and Autopilot's log, or null when neither step ran. */
-export function describePreparation(result: { seed?: WorktreeSeedReport; setup?: WorktreeSetupReport }): string | null {
+/** One line for the agent's `ompdesk_session_open` notes and Autopilot's log, or null when no step ran. */
+export function describePreparation(result: {
+	base?: WorktreeBaseFetch;
+	seed?: WorktreeSeedReport;
+	setup?: WorktreeSetupReport;
+}): string | null {
 	const parts: string[] = [];
+	if (result.base) {
+		const { ref, fetched, behind, subjects, error } = result.base;
+		parts.push(
+			error
+				? `${ref} not fetched (${error}); cut from the local copy`
+				: fetched
+					? `${ref} fetched: ${behind} new commit(s)${subjects.length ? ` (${subjects.join("; ")})` : ""}`
+					: `${ref} fetched under 30 s ago`,
+		);
+	}
 	if (result.seed) {
 		const skipped = result.seed.skipped.length;
 		parts.push(

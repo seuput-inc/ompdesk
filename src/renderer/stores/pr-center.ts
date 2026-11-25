@@ -1,8 +1,17 @@
 import { create } from "zustand";
 import type { RpcPrDetail, RpcPrListItem, RpcPrListView, RpcPrRepo } from "../../shared/rpc-types";
 import type { FocusedScope } from "../lib/focused-scope";
+import {
+	afterFailure,
+	afterSuccess,
+	backoff,
+	type Freshness,
+	pausedUntil,
+	shouldReread,
+} from "../lib/github-freshness";
 import { translate } from "../lib/i18n";
 import { lastRead, rememberRead } from "../lib/last-read";
+import { hidden, onWindowReturn } from "../lib/visible-poll";
 import { useTabsStore } from "./tabs";
 import { toast, toastError } from "./toast";
 
@@ -26,6 +35,8 @@ interface PrCenterStore {
 	/** Expanded file paths and their diff state. */
 	expandedFiles: Record<string, { phase: "loading" } | { phase: "ready"; diff: string } | { phase: "error" }>;
 	error: string | null;
+	/** GitHub holds reads until then (`gh_paused`): one muted line instead of an error, timers wait. */
+	pausedUntil: number | null;
 
 	/**
 	 * The panel opens on `scope`: what it showed last time (repo, list) is the state at once, the probe reads again
@@ -33,7 +44,11 @@ interface PrCenterStore {
 	 */
 	enter: (scope: FocusedScope) => void;
 	probe: () => Promise<void>;
-	refresh: () => Promise<void>;
+	/**
+	 * Read the shown list again. One read runs at a time; one asked meanwhile (only the latest) runs right after it.
+	 * `background`: the window came back, not a person: no in-progress mark, a failure leaves the rows and no error.
+	 */
+	refresh: (background?: boolean) => Promise<void>;
 	setListState: (state: "open" | "closed" | "merged" | "all") => void;
 	setListView: (view: RpcPrListView) => void;
 	/** Re-read the selected PR and the list after an action changed it (merge, review, edit). */
@@ -44,6 +59,11 @@ interface PrCenterStore {
 	toggleFile: (path: string) => Promise<void>;
 	checkout: (number: number) => Promise<void>;
 	reset: () => void;
+	/**
+	 * While the panel is shown: a return to the window reads the list and the PR again when a minute old and not held,
+	 * and a PR whose checks still run is read again after 1, 2, 4 … 15 minutes. Returns the stop.
+	 */
+	watch: () => () => void;
 }
 
 const NO_SCOPE: FocusedScope = { device: undefined, cwd: "" };
@@ -66,7 +86,150 @@ const initialState = {
 	detailLoading: false,
 	expandedFiles: {},
 	error: null,
+	pausedUntil: null,
 };
+
+/** A list read older than this no longer counts as in flight: its mark clears and the next one runs. */
+const READ_EXPIRES_MS = 120_000;
+
+// Outside the state: nothing here paints. Each read keeps its generation and writes its outcome only while it is
+// still the newest of its kind for the scope, filter or PR it started on.
+const fresh = new Map<string, Freshness>();
+let probeGen = 0;
+let listGen = 0;
+let listRunning: { gen: number; timer: ReturnType<typeof setTimeout> } | null = null;
+let listQueued: { gen: number; background: boolean } | null = null;
+let detailGen = 0;
+let detailReads = 0;
+let watchers = 0;
+let pendingRounds = 0;
+let pendingTimer: ReturnType<typeof setTimeout> | undefined;
+let pauseTimer: ReturnType<typeof setTimeout> | undefined;
+
+const store = () => usePrCenterStore.getState();
+
+/** What a failed read leaves: a `gh_paused` hold, a person's read its error, a background read nothing. */
+function failed(key: string, error: { code?: string; message: string }, background: boolean): Partial<PrCenterStore> {
+	fresh.set(key, afterFailure(fresh.get(key), Date.now(), error));
+	const until = error.code === "gh_paused" ? pausedUntil(error.message) : null;
+	if (until !== null) return { pausedUntil: until };
+	return background ? {} : { error: error.message };
+}
+
+function apply(patch: Partial<PrCenterStore>): void {
+	usePrCenterStore.setState(patch);
+	const until = patch.pausedUntil;
+	if (until == null) return;
+	clearTimeout(pauseTimer);
+	// The hold ends by itself: the line goes and what is shown reads again.
+	pauseTimer = setTimeout(() => {
+		if (store().pausedUntil !== until) return;
+		usePrCenterStore.setState({ pausedUntil: null });
+		freshen();
+	}, until - Date.now());
+}
+
+async function readList(gen: number, background: boolean): Promise<void> {
+	listRunning = { gen, timer: setTimeout(() => settleList(gen), READ_EXPIRES_MS) };
+	const { scope, listState, listView } = store();
+	const key = listKey(scope, listState, listView);
+	const current = () => {
+		const now = store();
+		return gen === listGen && now.scope === scope && now.listState === listState && now.listView === listView;
+	};
+	try {
+		const response = await window.omp.rpc.prList(listState, 50, listView, background);
+		if (response.success) {
+			const list = response.data as RpcPrListItem[];
+			rememberRead(scope.device, key, list);
+			fresh.set(key, afterSuccess(Date.now()));
+			if (current()) apply({ list, listLoading: false, error: null, pausedUntil: null });
+		} else {
+			const patch = failed(key, { code: response.code, message: response.error }, background);
+			if (current()) apply({ ...patch, listLoading: false });
+		}
+	} catch (error) {
+		const patch = failed(key, { message: String(error) }, background);
+		if (current()) apply({ ...patch, listLoading: false });
+	} finally {
+		settleList(gen);
+	}
+}
+
+function settleList(gen: number): void {
+	if (listRunning?.gen !== gen) return;
+	clearTimeout(listRunning.timer);
+	listRunning = null;
+	if (gen === listGen) usePrCenterStore.setState({ listLoading: false });
+	const next = listQueued;
+	listQueued = null;
+	if (next) void readList(next.gen, next.background);
+}
+
+async function readDetail(number: number, background: boolean): Promise<void> {
+	const gen = ++detailGen;
+	const scope = store().scope;
+	const key = detailKey(scope, number);
+	// A slower answer for an earlier choice never replaces the PR shown now.
+	const current = () => gen === detailGen && store().selected === number && store().scope === scope;
+	detailReads++;
+	try {
+		const response = await window.omp.rpc.prGet(number, background);
+		if (!current()) return;
+		if (response.success) {
+			const detail = response.data as RpcPrDetail;
+			rememberRead(scope.device, key, detail);
+			fresh.set(key, afterSuccess(Date.now()));
+			apply({ detail, detailLoading: false, pausedUntil: null });
+		} else {
+			apply({ ...failed(key, { code: response.code, message: response.error }, background), detailLoading: false });
+		}
+		schedulePending();
+	} catch (error) {
+		if (current()) apply({ ...failed(key, { message: String(error) }, background), detailLoading: false });
+	} finally {
+		detailReads--;
+	}
+}
+
+/** The window came back: read again, in place and in the background, what is a minute old and not held. */
+function freshen(): void {
+	if (watchers === 0 || hidden()) return;
+	const { scope, repo, listState, listView, selected } = store();
+	if (!repo?.available) return;
+	const now = Date.now();
+	if ((store().pausedUntil ?? 0) > now) return;
+	if (!listRunning && shouldReread(fresh.get(listKey(scope, listState, listView)), now)) void store().refresh(true);
+	if (selected === null || detailReads > 0) return;
+	if (shouldReread(fresh.get(detailKey(scope, selected)), now)) void readDetail(selected, true);
+	else if (pendingTimer === undefined) schedulePending();
+}
+
+/** A shown PR whose checks still run is read again after 1, 2, 4 … 15 minutes; a hidden window waits for its return. */
+function schedulePending(): void {
+	clearTimeout(pendingTimer);
+	pendingTimer = undefined;
+	const { scope, selected, detail, pausedUntil: paused } = store();
+	const running =
+		watchers > 0 &&
+		selected !== null &&
+		detail?.number === selected &&
+		detail.checks.some(check => !check.conclusion && ["IN_PROGRESS", "QUEUED", "PENDING"].includes(check.status));
+	if (!running) {
+		pendingRounds = 0;
+		return;
+	}
+	const held = Math.max(fresh.get(detailKey(scope, selected))?.holdUntil ?? 0, paused ?? 0) - Date.now();
+	pendingTimer = setTimeout(
+		() => {
+			pendingTimer = undefined;
+			if (hidden() || store().selected !== selected) return;
+			pendingRounds++;
+			void readDetail(selected, true);
+		},
+		Math.max(backoff(pendingRounds), held),
+	);
+}
 
 export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 	...initialState,
@@ -88,45 +251,38 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 	},
 
 	probe: async () => {
+		const gen = ++probeGen;
 		set({ error: null });
 		const scope = get().scope;
+		const current = () => gen === probeGen && get().scope === scope;
 		try {
 			const response = await window.omp.rpc.prRepo();
+			if (!current()) return;
 			if (!response.success) {
+				// A held read keeps the repository painted; the muted line says until when.
+				const until = response.code === "gh_paused" ? pausedUntil(response.error) : null;
+				if (until !== null && get().repo) return apply({ pausedUntil: until });
 				set({ repo: null, error: response.error });
 				return;
 			}
 			const repo = response.data as RpcPrRepo;
-			if (get().scope !== scope) return;
 			set({ repo });
 			if (repo.available) rememberRead(scope.device, repoKey(scope), repo);
 			if (repo.available) await get().refresh();
 		} catch (error) {
-			set({ repo: null, error: String(error) });
+			if (current()) set({ repo: null, error: String(error) });
 		}
 	},
 
-	refresh: async () => {
-		if (get().listLoading) return;
-		set({ listLoading: true, error: null });
-		const { scope, listState, listView } = get();
-		try {
-			const response = await window.omp.rpc.prList(listState, 50, listView);
-			if (!response.success) {
-				set({ error: response.error, listLoading: false });
-				return;
-			}
-			const list = response.data as RpcPrListItem[];
-			rememberRead(scope.device, listKey(scope, listState, listView), list);
-			// Only if the person still looks at this list (another filter or repository seeded its own).
-			if (get().scope !== scope || get().listState !== listState || get().listView !== listView) {
-				set({ listLoading: false });
-				return;
-			}
-			set({ list, listLoading: false });
-		} catch (error) {
-			set({ error: String(error), listLoading: false });
+	refresh: async (background = false) => {
+		const gen = ++listGen;
+		if (!background) set({ listLoading: true, error: null });
+		if (listRunning) {
+			// A person's ask stays a person's even when a background one comes after it.
+			listQueued = { gen, background: background && (listQueued?.background ?? true) };
+			return;
 		}
+		await readList(gen, background);
 	},
 
 	setListState: state => {
@@ -164,6 +320,7 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 
 	select: async number => {
 		const scope = get().scope;
+		pendingRounds = 0;
 		// A PR seen before shows at once (its last read), the read below replaces it in place.
 		set({
 			selected: number,
@@ -172,20 +329,7 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 			expandedFiles: {},
 			error: null,
 		});
-		try {
-			const response = await window.omp.rpc.prGet(number);
-			// A slower answer for an earlier choice never replaces the PR shown now.
-			if (get().selected !== number) return;
-			if (!response.success) {
-				set({ error: response.error, detailLoading: false });
-				return;
-			}
-			const detail = response.data as RpcPrDetail;
-			rememberRead(scope.device, detailKey(scope, number), detail);
-			set({ detail, detailLoading: false });
-		} catch (error) {
-			if (get().selected === number) set({ error: String(error), detailLoading: false });
-		}
+		await readDetail(number, false);
 	},
 
 	toggleFile: async path => {
@@ -251,5 +395,29 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 		}
 	},
 
-	reset: () => set(initialState),
+	reset: () => {
+		probeGen++;
+		listGen++;
+		detailGen++;
+		if (listRunning) clearTimeout(listRunning.timer);
+		listRunning = null;
+		listQueued = null;
+		fresh.clear();
+		clearTimeout(pendingTimer);
+		clearTimeout(pauseTimer);
+		pendingTimer = undefined;
+		pendingRounds = 0;
+		set(initialState);
+	},
+
+	watch: () => {
+		watchers++;
+		const stop = onWindowReturn(freshen);
+		schedulePending();
+		return () => {
+			stop();
+			watchers--;
+			if (watchers === 0) schedulePending();
+		};
+	},
 }));

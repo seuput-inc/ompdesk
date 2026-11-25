@@ -7,7 +7,7 @@
  * `.then(onFulfilled, onRejected)`. A deliberate exception carries `unhandled-ok: <reason>` in a comment on the
  * statement. Links go through lib/open-external.ts, update buttons through stores/updater.ts runUpdaterAction.
  */
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 /** @param {ts.Expression} node */
 function startsAtWindowOmp(node) {

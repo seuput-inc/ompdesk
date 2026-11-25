@@ -1,47 +1,50 @@
 /**
- * GUI-side record of which sessions are chats, so the sidebar lists them in
- * its Chats section. Stock omp has no session kind: a chat tab is plain omp with
- * its full tool set, started in the GUI's default workspace, so the GUI
- * remembers the ids of the sessions its chat tabs created. Sessions written by
- * the old forked agent carry `kind: "chat"` in their header and need no entry.
+ * GUI-side record of which sessions are chats, so the sidebar lists them in its Chats section: main's client of the
+ * core's record (`native/ompdesk/crates/core/src/sessions/kinds.rs`, hub kind `kinds`). Stock omp has no session kind:
+ * a chat tab is plain omp started in the GUI's default workspace, so the GUI remembers the ids of the sessions its chat
+ * tabs created; the core labels them when the session index lists (`file`, passed to `sessions.listed`). The mark is a
+ * synchronous hub call, so a new chat is labelled before the next list is read.
  */
-import { readFileSync } from "node:fs";
-import { z } from "zod";
-import { AtomicSaver } from "./atomic-file";
+import { hub } from "./core/hub";
 
-const StoredKinds = z.object({ chat: z.array(z.string()) });
+let instanceId: number | null = null;
+
+function instance(): number {
+	if (instanceId !== null) return instanceId;
+	const id = hub().nextId();
+	hub().open(
+		id,
+		"kinds",
+		{},
+		{
+			item: () => {},
+			ask: q => {
+				throw new Error(`the session kinds ask nothing (${q})`);
+			},
+			lost: () => {
+				if (instanceId === id) instanceId = null;
+			},
+		},
+	);
+	instanceId = id;
+	return id;
+}
 
 export class SessionKindStore {
-	readonly #file: string;
-	readonly #saver: AtomicSaver;
-	#chat: Set<string> | null = null;
+	readonly file: string;
 
 	constructor(file: string) {
-		this.#file = file;
-		this.#saver = new AtomicSaver(file, {}, err =>
-			console.warn(`[session-kinds] could not persist ${file}: ${err instanceof Error ? err.message : String(err)}`),
-		);
+		this.file = file;
 	}
 
-	#load(): Set<string> {
-		if (this.#chat) return this.#chat;
-		try {
-			this.#chat = new Set(StoredKinds.parse(JSON.parse(readFileSync(this.#file, "utf8"))).chat);
-		} catch {
-			this.#chat = new Set();
-		}
-		return this.#chat;
-	}
-
-	isChat(sessionId: string): boolean {
-		return this.#load().has(sessionId);
-	}
-
-	/** Record a chat session id; saved atomically and again later when the disk is full, never thrown. */
+	/** Record a chat session id; saved by the core, and again later when the disk is full. Never throws into the event. */
 	markChat(sessionId: string): void {
-		const chat = this.#load();
-		if (chat.has(sessionId)) return;
-		chat.add(sessionId);
-		this.#saver.save(JSON.stringify({ chat: [...chat] }));
+		try {
+			hub().callOnce(instance, "mark", { file: this.file, id: sessionId });
+		} catch (err) {
+			console.warn(
+				`[session-kinds] could not mark ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	}
 }

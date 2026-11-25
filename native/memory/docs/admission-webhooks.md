@@ -31,6 +31,10 @@ in a single atomic step (see
 [ARCHITECTURE.md](ARCHITECTURE.md) on the writer actor / atomic write
 invariants).
 
+A caller's explicit title takes precedence over a webhook's `frontmatter.title`.
+The final frontmatter records that same selected title. Without an explicit
+title, the final frontmatter and body determine the indexed title.
+
 Webhooks run **sequentially**, in the order declared in config. Each one
 sees the (possibly mutated) page from the previous webhook, so a
 `contributors` hook that adds frontmatter is followed by a `git-mirror`
@@ -354,6 +358,13 @@ events = ["write_page", "consolidate", "delete", "purge_project", "move_project"
 blocking = false                                         # fire-and-forget after the write; never blocks it
 ```
 
+Only `http://` and `https://` webhook URLs are accepted; any other scheme, a
+bare hostname, or an empty `url` fails server startup when the chain is
+built. Redirects are followed only when the target stays on the same
+`scheme://host:port` origin as the configured `url` (up to 10 hops); a redirect
+to another origin fails the webhook request without forwarding the payload or
+applying any response mutation.
+
 ### `blocking` (default `true`)
 
 A webhook is either **blocking** or **non-blocking**:
@@ -442,7 +453,7 @@ under the webhook's `timeout_ms`.
 
 ## 10. Tests
 
-`crates/ai-memory-wiki/tests/admission.rs` covers the wire contract end
+`crates/ai-memory-wiki/tests/suite/admission.rs` covers the wire contract end
 to end against an axum loopback server. Categories:
 
 - Mutating frontmatter and body propagates correctly.

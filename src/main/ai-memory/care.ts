@@ -12,9 +12,8 @@
  * checkpoint that still holds the page as it was) so Settings › Memory › Maintenance can show one line and undo it
  * through the page's restore. A page the person brought back that way is the person's: no unit touches it again.
  *
- * This file keeps the timers (each tick is one request to the core) and answers what the core asks of main: in
- * production the omp to run (`omp`); a test's fake client and its own units are asked for through `core-asks.ts`. The production configuration (the sessions folder, this computer's device id, how to judge,
- * git's rules) travels with every tick.
+ * The native memory service schedules its units while ready. This client answers with the current judge settings,
+ * device id and git runner at each admission. Tests can also run a unit directly.
  */
 import type { AiMemoryCareSummary } from "../../shared/ai-memory";
 import { core } from "../core/process";
@@ -23,8 +22,6 @@ import type { AiMemoryClient } from "./client";
 import { type AskHandler, answerAsks, type CoreSide, collatorLocale, coreSide, onLog, serviceName } from "./core-asks";
 import type { OmpLaunch } from "./distill-model";
 
-export const CARE_TICK_MS = 15 * 60_000;
-const FIRST_TICK_MS = 5 * 60_000;
 /** A tick is one unit's step: a backfill budget of journals, a judge run (180 s) or the checks of every project. */
 const TICK_TIMEOUT_MS = 30 * 60_000;
 const SUMMARY_TIMEOUT_MS = 30_000;
@@ -78,8 +75,6 @@ export interface CareDeps {
 	omp?: () => Promise<OmpLaunch>;
 	/** The clock the core reads while a request runs (a test drives it); the system's without it. */
 	now?: () => number;
-	tickMs?: number;
-	firstTickMs?: number;
 }
 
 /** `value[key]` when `value` is an object holding it. */
@@ -89,73 +84,35 @@ function field(value: unknown, key: string): unknown {
 
 export class MemoryCare {
 	readonly #deps: CareDeps;
-	readonly #service = serviceName();
+	readonly service = serviceName();
 	readonly #side: CoreSide;
-	#timer: NodeJS.Timeout | null = null;
-	#first: NodeJS.Timeout | null = null;
-	#disposed = false;
-	/** Ends the answers of the core's asks and the log lines of this service; null before the first request. */
-	#unlisten: (() => void) | null = null;
+	readonly #stopAsks: () => void;
+	readonly #stopLog: () => void;
 
 	constructor(deps: CareDeps) {
 		this.#deps = deps;
 		const answers: Record<string, AskHandler> = {};
+		answers.settings = () => this.#tickParams("nativeServer");
 		if (deps.units) answers.unit = params => this.#runUnit(params);
 		if (deps.omp) answers.omp = () => deps.omp?.();
 		this.#side = coreSide(deps.client, answers);
-	}
-
-	ready(): void {
-		if (this.#disposed || this.#timer) return;
-		this.#first = setTimeout(() => void this.#safeTick(), this.#deps.firstTickMs ?? FIRST_TICK_MS);
-		this.#first.unref();
-		this.#timer = setInterval(() => void this.#safeTick(), this.#deps.tickMs ?? CARE_TICK_MS);
-		this.#timer.unref();
-	}
-
-	pause(): void {
-		clearTimeout(this.#first ?? undefined);
-		clearInterval(this.#timer ?? undefined);
-		this.#first = null;
-		this.#timer = null;
+		this.#stopAsks = answerAsks(this.service, this.#side.handlers);
+		this.#stopLog = onLog(this.service, deps.log);
 	}
 
 	dispose(): void {
-		this.#disposed = true;
-		this.pause();
-		if (!this.#unlisten) return;
-		this.#unlisten();
-		this.#unlisten = null;
-		// What the core remembered of this service goes with it; a core that is gone has nothing to forget.
-		void core()
-			.call("care.close", { service: this.#service })
-			.catch(() => {});
-	}
-
-	async #safeTick(): Promise<void> {
-		try {
-			await this.tick();
-		} catch (error) {
-			this.#deps.log("care-failed", {
-				unit: "tick",
-				detail: error instanceof Error ? error.message : String(error),
-			});
-		}
+		this.#stopAsks();
+		this.#stopLog();
+		const host = core();
+		const generation = host.generation;
+		if (generation) void host.call("care.close", { service: this.service }, { generation }).catch(() => {});
 	}
 
 	/** One request's members: the service, what main answers, the server, and the clock. */
-	#request(): Record<string, unknown> {
-		if (!this.#unlisten) {
-			const stopAsks = answerAsks(this.#service, this.#side.handlers);
-			const stopLog = onLog(this.#service, (message, details) => this.#deps.log(message, details));
-			this.#unlisten = () => {
-				stopAsks();
-				stopLog();
-			};
-		}
+	#request(nativeServer?: "nativeServer"): Record<string, unknown> {
 		return {
-			service: this.#service,
-			...this.#side.wire(),
+			service: this.service,
+			...this.#side.wire(nativeServer),
 			locale: collatorLocale(),
 			...(this.#deps.now ? { now: this.#deps.now() } : {}),
 		};
@@ -173,7 +130,7 @@ export class MemoryCare {
 			(
 				await core().call(
 					"care.unitCall",
-					{ service: this.#service, run, op, args },
+					{ service: this.service, run, op, args },
 					{ timeoutMs: UNIT_CALL_TIMEOUT_MS },
 				)
 			).result;
@@ -187,25 +144,27 @@ export class MemoryCare {
 		return { ...result, memo };
 	}
 
-	/** One unit's step, the first one due; null when none is. Public for the tests. */
-	async tick(): Promise<CareUnitName | null> {
+	async #tickParams(nativeServer?: "nativeServer"): Promise<Record<string, unknown>> {
 		const deps = this.#deps;
 		const production = deps.units
 			? { units: deps.units.map(unit => ({ name: unit.name, everyMs: unit.everyMs })) }
 			: {
 					sessionsDir: deps.sessionsDir ?? "",
+					// A git that is not installed is git not knowing: the freshness check finds no checkout.
+					git: await gitRunner().catch(() => null),
 					origin: deps.origin?.() ?? "",
 					...(deps.judge
 						? { judge: { enabled: deps.judge.enabled(), hostFile: deps.judge.hostFile, cwd: deps.judge.cwd } }
 						: {}),
-					// A git that is not installed is git not knowing: the freshness check finds no checkout.
-					git: await gitRunner().catch(() => null),
 				};
-		const answer = await core().call<CareUnitName | null>(
-			"care.tick",
-			{ ...this.#request(), stateFile: deps.stateFile, version: deps.version, ...production },
-			{ timeoutMs: TICK_TIMEOUT_MS },
-		);
+		return { ...this.#request(nativeServer), stateFile: deps.stateFile, version: deps.version, ...production };
+	}
+
+	/** One unit's step, the first one due; null when none is. Public for the tests. */
+	async tick(): Promise<CareUnitName | null> {
+		const answer = await core().call<CareUnitName | null>("care.tick", await this.#tickParams(), {
+			timeoutMs: TICK_TIMEOUT_MS,
+		});
 		return answer.result;
 	}
 

@@ -81,6 +81,11 @@ export interface SessionSummary {
 	ask?: SummaryAsk;
 	/** The turn waits for the internet connection (turn-resume.ts). */
 	awaitingConnection?: true;
+	/**
+	 * The turn has waited past the notice grace on a call only `openFor`'s device runs (a GUI host tool, a URI read)
+	 * while that device is away: its name (host-services.ts `#syncHostWait`).
+	 */
+	waitsForDevice?: string;
 	/** With `error`: another omp still holds the session, a wait that ends by itself. */
 	sessionHeld?: true;
 	/** With `starting`: it waits its turn in the computer's start queue (`SidecarStatusPayload.queued`). */

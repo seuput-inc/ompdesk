@@ -31,7 +31,7 @@ test.afterEach(async () => {
 async function standingIn(chip: Locator): Promise<void> {
 	await expect(chip).toHaveAttribute("data-model-standin", "", { timeout: 60_000 });
 	await expect(chip.locator(".omp-composer-model-label")).toHaveText("Local fixture");
-	await expect(chip).toHaveAttribute("aria-label", new RegExp(STOOD_IN));
+	await expect(chip).toHaveAccessibleName(new RegExp(STOOD_IN));
 }
 
 test("the model chip keeps the person's model while a fallback answers (ko, light; desktop and phone)", async () => {
@@ -82,7 +82,7 @@ test("the model chip keeps the person's model while a fallback answers (ko, ligh
 		await desk.locator("[data-model-option]", { hasText: "Local fixture" }).first().click();
 		await expect.poll(() => chip.getAttribute("data-model-standin")).toBeNull();
 		await expect(chip.locator(".omp-composer-model-label")).toHaveText("Local fixture");
-		expect(await chip.getAttribute("aria-label")).not.toContain("GPT-6.1 SOL");
+		await expect(chip).not.toHaveAccessibleName(/GPT-6\.1 SOL/);
 		await desk.screenshot({ path: test.info().outputPath("desktop-ko-light-after-pick.png") });
 
 		await phoneChip.click();

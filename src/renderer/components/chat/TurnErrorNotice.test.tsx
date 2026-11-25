@@ -9,6 +9,7 @@ import { useMessagesStore } from "../../stores/messages";
 import { useModelStore } from "../../stores/model";
 import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
+import { useUiStore } from "../../stores/ui";
 import { TurnErrorNotice } from "./TurnErrorNotice";
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
@@ -274,6 +275,27 @@ describe("TurnErrorNotice scheduled retry", () => {
 			expect(cancelWait).toHaveBeenCalledWith("t1");
 		},
 	);
+
+	it("says a plan limit stopped the turn because Credit use is off, waits for the reset, and opens Models & accounts", async () => {
+		const refusal =
+			"usage_limit_reached: this Claude account reached its plan's usage limit, which resets in about 3 hours, and OMPdesk's Credit use setting is off, so it does not run on extra usage. retry-after-ms=10800000";
+		vi.stubGlobal("localStorage", { getItem: () => "en", setItem: vi.fn() });
+		const at = Date.now() + 3 * HOUR;
+		arm({ at, limit: true });
+		await mount(2, refusal);
+		const card = container.querySelector(".omp-message-error");
+		expect(card?.textContent).toContain("Plan limit reached");
+		expect(card?.textContent).toContain("Credit use is off");
+		expect(container.querySelector("[data-limit-wait]")?.textContent).toContain(formatClock(at));
+		const buttons = [...container.querySelectorAll("button")];
+		expect(buttons.map(button => button.textContent)).not.toContain("Try again");
+		const openProviders = vi.fn();
+		const stock = useUiStore.getState().openProviders;
+		useUiStore.setState({ openProviders });
+		await act(async () => buttons.find(button => button.textContent === "Open providers")?.click());
+		useUiStore.setState({ openProviders: stock });
+		expect(openProviders).toHaveBeenCalledOnce();
+	});
 
 	it("Cancel asks main to call the retry off", async () => {
 		arm();

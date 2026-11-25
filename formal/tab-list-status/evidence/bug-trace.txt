@@ -1,0 +1,26 @@
+TLC (tla2tools release 1.8.0)  java 21 (cache)  spec TabListStatus.tla
+  TLC reports itself as version 2026.11.06.222357
+FAIL  invariant violated: QuietAgrees  (124 distinct states, 187 generated, depth 6, 0.2s)
+Trace (6 states, shortest first):
+  #1  Init
+        pushCount = 0
+        view = 0
+        req = ( r1 :> [phase |-> "idle", sent |-> 0, snap |-> 0] @@ r2 :> [phase |-> "idle", sent |-> 0, snap |-> 0] )
+        late = 0
+        mainV = 0
+        pushes = <<>>
+  #2  Send(r1)   [src/renderer/stores/tabs.ts:722-725]
+        req: ( r1 :> [phase |-> "idle", sent |-> 0, snap |-> 0] @@ r2 :> [phase |-> "idle", sent |-> 0, snap |-> 0] )  ->  ( r1 :> [phase |-> "sent", sent |-> 0, snap |-> 0] @@ r2 :> [phase |-> "idle", sent |-> 0, snap |-> 0] )
+  #3  Answer(r1)   [native/ompdesk/crates/core/src/pool/windows.rs:647]
+        req: ( r1 :> [phase |-> "sent", sent |-> 0, snap |-> 0] @@ r2 :> [phase |-> "idle", sent |-> 0, snap |-> 0] )  ->  ( r1 :> [phase |-> "answered", sent |-> 0, snap |-> 0] @@ r2 :> [phase |-> "idle", sent |-> 0, snap |-> 0] )
+  #4  MainChange   [native/ompdesk/crates/core/src/pool/listen.rs:58-65, native/ompdesk/crates/core/src/pool/state.rs:563-573]
+        mainV: 0  ->  1
+        pushes: <<>>  ->  <<1>>
+  #5  Push   [src/renderer/stores/tabs.ts:1353-1356]
+        pushCount: 0  ->  1
+        view: 0  ->  1
+        pushes: <<1>>  ->  <<>>
+  #6  Apply(r1)   [src/renderer/stores/tabs.ts:769-810]   <-- violation
+        view: 1  ->  0
+        req: ( r1 :> [phase |-> "answered", sent |-> 0, snap |-> 0] @@ r2 :> [phase |-> "idle", sent |-> 0, snap |-> 0] )  ->  ( r1 :> [phase |-> "done", sent |-> 0, snap |-> 0] @@ r2 :> [phase |-> "idle", sent |-> 0, snap |-> 0] )
+        late: 0  ->  1

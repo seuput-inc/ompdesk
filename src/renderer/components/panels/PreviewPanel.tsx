@@ -123,7 +123,9 @@ export function PreviewPanel() {
 			) {
 				throw new Error("omp returned no browser relay endpoint");
 			}
-			await window.omp.preview.command({ action: "agentStart", tabId, url: relay.url, token: relay.token });
+			const url = "extensionUrl" in relay ? relay.extensionUrl : relay.url;
+			if (typeof url !== "string") throw new Error("omp returned no preview extension endpoint");
+			await window.omp.preview.command({ action: "agentStart", tabId, url, token: relay.token });
 		} catch (error) {
 			releaseAgentRelay(tabId);
 			toastError({ title: t("panel.preview.agent.failed"), error });
@@ -254,14 +256,14 @@ export function PreviewPanel() {
 			icon: ZoomIn,
 			disabled: !pageReady || state.zoom >= PREVIEW_ZOOM_MAX,
 			separatorBefore: true,
-			onSelect: () => zoomTo(state.zoom + 0.1),
+			onSelect: () => command({ action: "zoomIn" }),
 		},
 		{
 			id: "zoom-out",
 			label: t("panel.preview.zoomOut"),
 			icon: ZoomOut,
 			disabled: !pageReady || state.zoom <= PREVIEW_ZOOM_MIN,
-			onSelect: () => zoomTo(state.zoom - 0.1),
+			onSelect: () => command({ action: "zoomOut" }),
 		},
 		{
 			id: "zoom-reset",

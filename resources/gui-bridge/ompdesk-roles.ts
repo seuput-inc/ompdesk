@@ -24,13 +24,12 @@
  *   write itself: however long the command takes and whatever path saves a
  *   preset (RPC, TUI, ACP), a held role never reaches config.yml. A role the
  *   user set (config, project, `--config`) is not held, so it is saved as is.
+ * - Stock modules load where a settle or a hook uses them: settings.ts imports this module, and a static import
+ *   would tie every settings action to them at link time.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
-import { discoverAgents, getAgent } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { AGENT_TIERS, heldRoleValue, OMPDESK_ROLES, OMPDESK_ROLES_ENV, parseRolePicks } from "./ompdesk-role-contracts";
 
 export const methods = {};
@@ -44,6 +43,9 @@ export interface RoleSettings {
 	overlayLayers(): { overrides: unknown };
 	overrideModelRoles(roles: Record<string, string>): void;
 }
+
+/** Stock's `lookup` (config/registry), handed in by the caller that loaded it. */
+type Lookup = (id: string) => unknown;
 
 /** What OMPdesk wrote into each Settings' runtime layer: `role:<id>` / `agent:<name>` → value. */
 const held = new WeakMap<object, Map<string, string>>();
@@ -93,7 +95,13 @@ export function roleConfigured(settings: RoleSettings, id: string): boolean {
 }
 
 /** Drop key `key` of the record setting `id` from the runtime layer (the rest of that layer stays). */
-function dropRuntimeEntry(settings: RoleSettings, id: string, segments: readonly string[], key: string): void {
+function dropRuntimeEntry(
+	lookup: Lookup,
+	settings: RoleSettings,
+	id: string,
+	segments: readonly string[],
+	key: string,
+): void {
 	const handle = lookup(id) as { override(scope: object, value: unknown): void; clearOverride(scope: object): void };
 	let layer: unknown = settings.overlayLayers().overrides;
 	for (const segment of segments) layer = record(layer)[segment];
@@ -115,7 +123,7 @@ export function withoutHeldRoles(scope: object, entry: unknown): unknown {
 	return { ...record(entry), modelRoles: kept };
 }
 
-function settleRoles(settings: RoleSettings, mine: Map<string, string>): void {
+function settleRoles(lookup: Lookup, settings: RoleSettings, mine: Map<string, string>): void {
 	const picks = readRolePicks();
 	const runtime = record(record(settings.overlayLayers().overrides).modelRoles);
 	for (const role of OMPDESK_ROLES) {
@@ -128,7 +136,7 @@ function settleRoles(settings: RoleSettings, mine: Map<string, string>): void {
 			continue;
 		}
 		if (roleConfigured(settings, role.id)) {
-			if (ours !== undefined) dropRuntimeEntry(settings, "modelRoles", ["modelRoles"], role.id);
+			if (ours !== undefined) dropRuntimeEntry(lookup, settings, "modelRoles", ["modelRoles"], role.id);
 			mine.delete(key);
 			continue;
 		}
@@ -144,7 +152,12 @@ function persistedAgentModel(settings: RoleSettings, agent: string): boolean {
 	);
 }
 
-function settleAgentTiers(settings: RoleSettings, mine: Map<string, string>): void {
+function settleAgentTiers(
+	lookup: Lookup,
+	bundledAgent: (name: string) => { model?: readonly string[] } | undefined,
+	settings: RoleSettings,
+	mine: Map<string, string>,
+): void {
 	const handle = lookup("task.agentModelOverrides") as { override(scope: object, value: unknown): void } | undefined;
 	if (!handle) return;
 	for (const [agent, tier] of Object.entries(AGENT_TIERS)) {
@@ -158,10 +171,10 @@ function settleAgentTiers(settings: RoleSettings, mine: Map<string, string>): vo
 			continue;
 		}
 		// Only the hole stock leaves: its bundled agent without a model line, and nothing the user set.
-		const bundled = getBundledAgent(agent);
+		const bundled = bundledAgent(agent);
 		if (!bundled || (bundled.model?.length ?? 0) > 0 || persistedAgentModel(settings, agent)) {
 			if (ours !== undefined)
-				dropRuntimeEntry(settings, "task.agentModelOverrides", ["task", "agentModelOverrides"], agent);
+				dropRuntimeEntry(lookup, settings, "task.agentModelOverrides", ["task", "agentModelOverrides"], agent);
 			mine.delete(key);
 			continue;
 		}
@@ -170,18 +183,26 @@ function settleAgentTiers(settings: RoleSettings, mine: Map<string, string>): vo
 	}
 }
 
-/** Bring the held roles and agent tiers in line with the picks file and the user's persisted layers. */
-export function settleOmpdeskRoles(settings: RoleSettings): void {
+/**
+ * Bring the held roles and agent tiers in line with the picks file and the user's persisted layers. Nothing awaits
+ * once stock's modules are here: one settle reads and writes the runtime layer in one go.
+ */
+export async function settleOmpdeskRoles(settings: RoleSettings): Promise<void> {
+	const [{ lookup }, { getBundledAgent }] = await Promise.all([
+		import("./omp/pi-coding-agent/config/registry"),
+		import("./omp/pi-coding-agent/task/agents"),
+	]);
 	const mine = heldIn(settings);
-	settleRoles(settings, mine);
-	settleAgentTiers(settings, mine);
+	settleRoles(lookup, settings, mine);
+	settleAgentTiers(lookup, getBundledAgent, settings, mine);
 }
 
 /** Settings whose `modelRoles` changes are watched (one listener per instance, whatever the rebinds). */
 const watched = new WeakSet<object>();
 
-export function install(pi: ExtensionAPI): void {
-	const settings = (): RoleSettings => pi.pi.Settings.instance as unknown as RoleSettings;
+/** Guard the preset writes and watch `scope`'s roles, once per handle and per Settings. */
+async function watchRoles(pi: ExtensionAPI, scope: RoleSettings): Promise<void> {
+	const { lookup } = await import("./omp/pi-coding-agent/config/registry");
 	const presets = lookup("modelPresets") as
 		| { setEntry?(scope: object, key: string, value: unknown): void }
 		| undefined;
@@ -191,23 +212,35 @@ export function install(pi: ExtensionAPI): void {
 		presets.setEntry = (scope, key, value) =>
 			write(scope, key, value === undefined ? value : withoutHeldRoles(scope, value));
 	}
-	const scope = settings();
 	const roles = lookup("modelRoles") as { listen?(scope: object, onChange: () => void): unknown } | undefined;
 	if (!watched.has(scope) && roles?.listen) {
 		watched.add(scope);
 		// `/modelpreset switch` clears every runtime role its preset does not list (stock `writePresetRoles`); a
 		// preset never lists a held role, so it comes back once that write is done. Holding is runtime-only.
-		roles.listen(scope, () => queueMicrotask(() => settleOmpdeskRoles(scope)));
+		roles.listen(scope, () => {
+			void settleOmpdeskRoles(scope).catch(error =>
+				pi.logger.error("gui-bridge: OMPdesk roles failed", { error: String(error) }),
+			);
+		});
 	}
+}
+
+export function install(pi: ExtensionAPI): void {
+	const settings = (): RoleSettings => pi.pi.Settings.instance as unknown as RoleSettings;
+	// The hooks below register in this tick; the guards need stock's registry, loaded by the startup settle already.
+	void watchRoles(pi, settings()).catch(error =>
+		pi.logger.error("gui-bridge: OMPdesk role guards failed", { error: String(error) }),
+	);
 	// A pick made on another tab, or a config.yml edit, applies from this session's next turn.
-	pi.on("before_agent_start", () => {
-		settleOmpdeskRoles(settings());
+	pi.on("before_agent_start", async () => {
+		await settleOmpdeskRoles(settings());
 		return undefined;
 	});
 	// The held tier outranks an agent file's own `model:` line; a user's own agent of that name keeps its line.
 	pi.on("before_subagent_spawn", async (event, ctx) => {
 		if (!(event.agent in AGENT_TIERS) || !held.get(settings())?.has(`agent:${event.agent}`)) return undefined;
 		const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
+		const { discoverAgents, getAgent } = await import("./omp/pi-coding-agent/task/discovery");
 		const { agents } = await discoverAgents(ctx.cwd, undefined, session?.effectiveExtensionRoots);
 		const own = getAgent(agents, event.agent);
 		if (!own || own.source === "bundled" || !own.model?.length) return undefined;

@@ -57,7 +57,11 @@ const sequences = [
 	[{ type: "result" }],
 ];
 for (const items of sequences) {
-	assert.deepEqual(assembleReviewYield(items), assembleYieldResult(items, undefined, shapes)?.data, JSON.stringify(items));
+	// Ours first: stock appends into the caller's own section arrays.
+	const ours = assembleReviewYield(items);
+	// omp 18.22.1 dropped the second parameter, \`lastAssistantText\` (18.22.0: \`(items, lastAssistantText, shapes)\`).
+	const stock = assembleYieldResult.length >= 3 ? assembleYieldResult(items, undefined, shapes) : assembleYieldResult(items, shapes);
+	assert.deepEqual(ours, stock?.data, JSON.stringify(items));
 }
 
 const findings = [

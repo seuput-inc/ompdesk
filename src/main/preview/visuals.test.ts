@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stopCore } from "../core/process";
 import { itWithFileSymlinks } from "../test-symlinks";
 import { runVisualizeTool, VISUALIZE_DEFINITION, type VisualChoice, type VisualPages, VisualStore } from "./visuals";
 
@@ -23,6 +25,7 @@ beforeEach(async () => {
 afterEach(async () => {
 	await fs.rm(root, { recursive: true, force: true });
 });
+afterAll(stopCore);
 
 const pages = (overrides: Partial<VisualPages> = {}): VisualPages => ({
 	close: () => {},
@@ -74,6 +77,12 @@ describe("VisualStore", () => {
 			expect(await at("%2E%2E/outside.css")).toBeNull();
 			await fs.symlink(path.join(root, "outside.css"), path.join(project, "site", "link.css"));
 			expect(await at("site/link.css")).toBeNull();
+			const snapshot = path.join(root, "visuals", record.id, "v1.html");
+			await fs.rm(snapshot);
+			await fs.symlink(path.join(root, "outside.css"), snapshot);
+			const missing = await store.serve(store.url(record.id) ?? "");
+			expect(missing.status).toBe(404);
+			expect(await missing.text()).toBe("Not found");
 			expect(await store.resolve("omp-visual://v1-0000000000000000/site/index.html")).toBeNull();
 			expect(await store.resolve("https://example.com/")).toBeNull();
 		},
@@ -161,6 +170,79 @@ describe("VisualStore", () => {
 		await expect(store.open("tab", project, {})).rejects.toThrow(/either target or html/);
 	});
 
+	it("serves the exact bytes at the file limit and keeps the snapshot when a later open is too large", async () => {
+		const target = "sample.PNG";
+		const file = path.join(project, target);
+		const bytes = Buffer.alloc(5 * 1024 * 1024, 0xf1);
+		await fs.writeFile(file, bytes);
+		const { record } = await store.open("tab", project, { target });
+		await fs.appendFile(file, "x");
+		await expect(store.open("tab", project, { target })).rejects.toThrow("is larger than 5 MB");
+		const url = store.url(record.id) ?? "";
+		const response = await store.serve(url);
+		expect(response.headers.get("Content-Type")).toBe("image/png");
+		expect(Buffer.from(await response.arrayBuffer()).equals(bytes)).toBe(true);
+		await fs.rm(path.join(root, "visuals", record.id, "v1.png"));
+		expect((await store.serve(url)).status).toBe(404);
+	});
+
+	it("continues a pre-native history, retaining user labels and bytes across pruning and restart", async () => {
+		const dir = path.join(root, "visuals");
+		const id = "abcdef1234567890";
+		const label = "사용자가 붙인 제목 <&>";
+		const folder = path.join(dir, id);
+		const html = (n: number) => `<p data-choice="한글">수정 ${n} 🌱</p>\r\n`;
+		await fs.mkdir(folder, { recursive: true });
+		const versions = await Promise.all(
+			Array.from({ length: 20 }, async (_, index) => {
+				const version = index + 1;
+				const file = `v${version}.html`;
+				await fs.writeFile(path.join(folder, file), html(version));
+				return {
+					version,
+					createdAt: version,
+					file,
+					hash: createHash("sha256").update(html(version)).digest("hex"),
+				};
+			}),
+		);
+		const original = {
+			id,
+			label,
+			kind: "inline",
+			target: "",
+			cwd: project,
+			root: folder,
+			entry: "index.html",
+			createdAt: 1,
+			updatedAt: 20,
+			versions,
+		};
+		await fs.writeFile(path.join(dir, "history.json"), JSON.stringify([original]));
+		const prior = await store.serve(`omp-visual://v20-${id}/index.html`);
+		expect(await prior.text()).toBe(html(20));
+		expect(await store.addToTab("tab", id)).toBe(true);
+		expect(await store.open("tab", project, { label, html: html(20) })).toMatchObject({ added: false, version: 20 });
+		const referenced = await store.open("other", folder, { target: "v1.html", label: "사용자가 연 파일" });
+		const changed = await Promise.all([21, 22].map(n => store.open("tab", project, { visual: id, html: html(n) })));
+		expect(changed.map(opened => opened.version)).toEqual([21, 22]);
+		await expect(fs.stat(path.join(folder, "v2.html"))).rejects.toMatchObject({ code: "ENOENT" });
+		await stopCore();
+		const reopened = new VisualStore(dir);
+		expect((await reopened.serve(`omp-visual://v1-${id}/index.html`)).status).toBe(404);
+		expect(await fs.readFile(path.join(folder, "v1.html"), "utf8")).toBe(html(1));
+		expect(await reopened.list()).toEqual([
+			expect.objectContaining({ id, label, cwd: project, createdAt: 1, versions: 20 }),
+			expect.objectContaining({ id: referenced.record.id, label: "사용자가 연 파일" }),
+		]);
+		expect(reopened.view(id, 1)?.version).toBe(22);
+		expect(reopened.view(id, 3)?.versions[0]).toEqual({ version: 3, createdAt: 3 });
+		for (const version of [3, 20, 21, 22]) {
+			const response = await reopened.serve(reopened.url(id, version) ?? "");
+			expect(await response.text()).toBe(html(version));
+		}
+	});
+
 	it("keeps inline HTML by label, web addresses without versions, and history across instances", async () => {
 		const inline = await store.open("tab", project, { html: "<p>a</p>", label: "Chart" });
 		const inline2 = await store.open("tab", project, { html: "<p>b</p>", label: "Chart" });
@@ -175,6 +257,13 @@ describe("VisualStore", () => {
 		const reloaded = new VisualStore(path.join(root, "visuals"));
 		const list = await reloaded.list();
 		expect(list.map(entry => entry.label)).toEqual(["example.com", "Chart"]);
+		expect(list[0]).toMatchObject({ kind: "url", versions: 1 });
+		expect(reloaded.view(web.record.id, 999)).toEqual({
+			id: web.record.id,
+			label: "example.com",
+			version: 1,
+			versions: [],
+		});
 		expect(list[1]).toMatchObject({ kind: "inline", versions: 2 });
 		// A new launch knows the visuals but no tab shows them until one is opened again.
 		expect(reloaded.forTab("tab")).toEqual([]);

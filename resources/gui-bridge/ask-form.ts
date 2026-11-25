@@ -1,19 +1,7 @@
 /**
- * Stock's `ask` tool takes one HTML `<form>` (omp 18.18.3) and draws it whole only where the UI context has a
- * `formDialog` (the TUI, ACP). RPC has none, so stock walked the form field by field through `select`/`input`, and
- * the person saw each field's question and option labels only: the form's paragraphs, tables and pictures never
- * reached OMPdesk (9 Nov 2026: an agent asked the owner to pick one of three pictures it had drawn, and the card
- * showed none of them).
- *
- * This gives the session's RPC UI context a `formDialog` that asks the whole form as one ask card (stock's opt-in
- * `askDialog`, which sidecar.ts enables with `set_ask_dialog`): one question per named field, the content before it
- * (paragraphs, lists, tables, `<pre>`, `<img>`, `<svg>`) as Markdown in the question's `context`, which the card draws
- * above it the way a reply draws Markdown (a run of pictures side by side, each zoomable; a local picture read through
- * `fs.readImage`, so a paired computer and the phone read it from the host). The form's rules stay stock's:
- * `parseHtmlForm`, `fieldQuestions`, `choiceValue`, `textValue`, `fieldError`, `defaultFormData`.
- *
- * A field the person leaves unanswered keeps the form's own value (its preselected option, its prefilled text), as a
- * submitted form does. A timeout submits the values so far, as stock's form does.
+ * Stock 19.1 sends the HTML in one RPC `form` request. The card asks this module to project that HTML
+ * into questions and to check the person's answers with the same installed stock parser. Never mount
+ * agent-written HTML in the page. Older RPC contexts use the same projection through `askDialog`.
  */
 import type {
 	ExtensionAPI,
@@ -29,7 +17,7 @@ import {
 	fieldQuestions,
 	type HtmlFormData,
 	textValue,
-} from "@oh-my-pi/pi-tui/html-form/data";
+} from "./omp/pi-tui/html-form/data";
 import {
 	type FormBlock,
 	type FormField,
@@ -37,11 +25,63 @@ import {
 	type HtmlForm,
 	parseHtmlForm,
 	spansText,
-} from "@oh-my-pi/pi-tui/html-form/parse";
-import { disambiguateDisplayLabels } from "@oh-my-pi/pi-tui/render/render-utils";
+} from "./omp/pi-tui/html-form/parse";
+import { disambiguateDisplayLabels } from "./omp/pi-tui/render/render-utils";
 import type { BridgeMethods } from "./types";
 
-export const methods: BridgeMethods = {};
+export const methods: BridgeMethods = {
+	async project_ask_form(params) {
+		if (!params || typeof params !== "object" || !("html" in params) || typeof params.html !== "string")
+			throw new Error("Expected form HTML");
+		const form = parseHtmlForm(params.html);
+		const slots = formSlots(form);
+		if (!("answers" in params)) {
+			return {
+				...(slots.length
+					? {}
+					: {
+							context: form.sections
+								.flatMap(section => [
+									spansMarkdown(section.title),
+									blocksMarkdown(section.blocks.filter(block => block.kind !== "field")),
+								])
+								.filter(Boolean)
+								.join("\n\n"),
+						}),
+				questions: slots.map(({ field, labels, optionIndices, question }) => ({
+					...question,
+					formField: {
+						custom: field.kind === "text" || field.other,
+						multiline: field.kind === "text" && field.multiline,
+						initialText: field.kind === "text" ? field.value : "",
+						checked:
+							field.kind === "choice" ? labels.filter((_, i) => field.options[optionIndices[i]]?.checked) : [],
+					},
+				})),
+			};
+		}
+		const { answers } = params;
+		if (!Array.isArray(answers) || answers.length !== slots.length) throw new Error("Expected one answer per field");
+		const data: HtmlFormData = Object.assign(Object.create(null), Object.fromEntries(form.hidden));
+		for (const [i, slot] of slots.entries()) {
+			const answer = answers[i];
+			if (
+				answer?.id !== slot.question.id ||
+				!Array.isArray(answer.selectedOptions) ||
+				!answer.selectedOptions.every(
+					(label: unknown) => typeof label === "string" && slot.labels.includes(label),
+				) ||
+				(answer.customInput !== undefined && typeof answer.customInput !== "string")
+			)
+				throw new Error("Invalid form answer");
+			const value = answerValue(slot, answer.selectedOptions, answer.customInput ?? "");
+			const problem = fieldError(slot.field, value);
+			if (problem) return { problem, index: i };
+			if (value !== undefined) data[slot.field.name] = value;
+		}
+		return { data };
+	},
+};
 
 /** One card question: its form field, the field's option index behind each card option, and the card's labels. */
 interface Slot {
@@ -176,6 +216,16 @@ function formSlots(form: HtmlForm): Slot[] {
 	return slots;
 }
 
+function answerValue(slot: Slot, picked: string[], custom: string) {
+	return slot.field.kind === "text"
+		? textValue(slot.field, custom)
+		: choiceValue(
+				slot.field,
+				new Set(picked.flatMap(label => slot.optionIndices[slot.labels.indexOf(label)] ?? [])),
+				custom,
+			);
+}
+
 /** The form's data with the card's answers applied; a question left unanswered keeps the form's own value. */
 function applyAnswers(
 	data: HtmlFormData,
@@ -188,14 +238,7 @@ function applyAnswers(
 		const picked = result?.selectedOptions ?? [];
 		if (picked.length === 0 && custom.trim() === "") return;
 		const { field } = slot;
-		const value =
-			field.kind === "text"
-				? textValue(field, custom)
-				: choiceValue(
-						field,
-						new Set(picked.flatMap(label => slot.optionIndices[slot.labels.indexOf(label)] ?? [])),
-						custom,
-					);
+		const value = answerValue(slot, picked, custom);
 		if (value === undefined) delete data[field.name];
 		else data[field.name] = value;
 	});

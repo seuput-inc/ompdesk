@@ -1,5 +1,5 @@
 //! The edge serving (native-rust ledger 8b; was `src/main/web/server.ts`): `web.start {host, userData, port,
-//! staticRoot, router}` → `{port}` listens on `127.0.0.1` (`port` 0 picks one; a taken port is the fault `EADDRINUSE`, as
+//! staticRoot, buildMeta, router}` → `{port}` listens on `127.0.0.1` (`port` 0 picks one; a taken port is the fault `EADDRINUSE`, as
 //! node's `listen` failed), `web.stop {host}` ends the accept loop, gives the page sockets a second to close and lets the
 //! port go. `host` is main's number for its `WebServer`: every ask and socket event of the edge carries it
 //! (`relay.rs`, `router.rs`). The edge reads the paired devices, the blocks, the uploads, the blob tokens and the kept builds from
@@ -12,12 +12,13 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::archive::{self, AssetArchive};
 use super::assets::Assets;
 use super::auth::Policy;
 use super::relay::Relay;
 use super::router;
 use super::server::{Deps, Edge, Running, SERVER_HOST};
-use crate::server::{Call, Fault, Registry, Reply};
+use crate::server::{Answer, Call, Fault, Registry, Reply, at_once};
 
 static RUNNING: LazyLock<Mutex<HashMap<u64, Running>>> = LazyLock::new(Mutex::default);
 
@@ -30,7 +31,7 @@ fn running() -> MutexGuard<'static, HashMap<u64, Running>> {
 /// The built renderer main named at the start, and the builds kept beside it.
 struct Built {
     root: Option<PathBuf>,
-    user_data: PathBuf,
+    archive: Arc<AssetArchive>,
 }
 
 impl Assets for Built {
@@ -39,7 +40,7 @@ impl Assets for Built {
     }
 
     fn previous_builds(&self) -> Vec<PathBuf> {
-        super::archive::open(&self.user_data).roots()
+        self.archive.roots()
     }
 }
 
@@ -50,7 +51,9 @@ struct StartParams {
     user_data: PathBuf,
     port: u16,
     static_root: Option<PathBuf>,
-    /// The page sockets' router: `IPC_POLICY`, the web-only channels, the protocol, features and build.
+    archive_now: Option<i64>,
+    build_meta: String,
+    /// The page sockets' router: `IPC_POLICY`, the web-only channels, the protocol and features.
     router: router::Config,
 }
 
@@ -60,10 +63,26 @@ fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// The PWA plugin's nonempty meta content, not the archive's hash of web.html.
+fn page_build(html: &[u8], meta: &str) -> Option<String> {
+    let html = String::from_utf8_lossy(html);
+    let prefix = format!(r#"<meta name="{meta}" content=""#);
+    html.match_indices(&prefix).find_map(|(at, _)| {
+        let (build, _) = html[at + prefix.len()..].split_once('"')?;
+        (!build.is_empty()).then(|| build.to_owned())
+    })
+}
+
 async fn start(call: Call) -> Result<Reply, Fault> {
-    let params: StartParams = call.params()?;
+    let mut params: StartParams = call.params()?;
+    super::push::initialize(params.user_data.clone()).await?;
     if let Some(running) = running().get(&params.host) {
         return Reply::json(&json!({ "port": running.port }));
+    }
+    if let Some(root) = &params.static_root
+        && let Ok(html) = tokio::fs::read(root.join("web.html")).await
+    {
+        params.router.build = page_build(&html, &params.build_meta);
     }
     let user_data = params.user_data;
     let stores = super::store::stores(&user_data);
@@ -75,8 +94,12 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         call.events.clone(),
         params.router,
         stores.devices.clone(),
+        Arc::clone(&blobs),
     );
-    let key_dir = user_data.clone();
+    let assets = Arc::new(Built {
+        root: params.static_root,
+        archive: archive::open(&user_data),
+    });
     let edge = Edge::new(Deps {
         // Main's policy is read for every request (`Desktop::policy`); this one only stands in until it answers.
         policy: Policy {
@@ -91,16 +114,13 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         blocks: stores.blocks.clone(),
         whois: relay.clone(),
         desktop: relay.clone(),
-        router,
+        router: router.clone(),
         uploads: super::uploads::open(&user_data),
         blobs,
         hooks: Some(relay),
-        assets: Arc::new(Built {
-            root: params.static_root,
-            user_data,
-        }),
+        assets: assets.clone(),
         push_public_key: Arc::new(move || {
-            super::push::loaded(&key_dir)
+            super::push::loaded(&user_data)
                 .map_or_else(String::new, |vapid| vapid.public_key().to_owned())
         }),
         clock: Arc::new(now_ms),
@@ -129,6 +149,13 @@ async fn start(call: Call) -> Result<Reply, Fault> {
         match table.get(&params.host) {
             Some(existing) => Some((existing.port, started)),
             None => {
+                if let Some(root) = &assets.root {
+                    router.archive_copy.get_or_init(|| {
+                        assets
+                            .archive
+                            .start(root, params.archive_now.unwrap_or_else(now_ms))
+                    });
+                }
                 table.insert(params.host, started);
                 None
             }
@@ -146,17 +173,32 @@ struct StopParams {
     host: u64,
 }
 
-async fn stop(call: Call) -> Result<Reply, Fault> {
-    let params: StopParams = call.params()?;
-    let started = running().remove(&params.host);
+fn stop(call: Call) -> Answer {
+    let params: StopParams = match call.params() {
+        Ok(params) => params,
+        Err(error) => return at_once(Err(error)),
+    };
+    // Drain on receipt, before a later desktop answer or computer visit can be read.
+    super::pairing::decline_all(params.host);
+    Box::pin(stop_listener(params.host))
+}
+
+async fn stop_listener(host: u64) -> Result<Reply, Fault> {
+    let started = running().remove(&host);
     if let Some(started) = started {
         started.stop().await;
+    }
+    if let Some(mut done) = router::host_of(host).and_then(|host| host.archive_copy.get().cloned())
+    {
+        let _ = done.changed().await;
     }
     Reply::json(&serde_json::Value::Null)
 }
 
 pub fn register(registry: &mut Registry) {
     registry.add("web.start", |call| Box::pin(start(call)));
-    registry.add("web.stop", |call| Box::pin(stop(call)));
+    registry.add("web.stop", stop);
+    super::pairing::register(registry);
+    super::save::register(registry);
     super::relay::register(registry);
 }

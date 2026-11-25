@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { SessionInfo } from "../shared/ipc-types";
 import type { AgentMessage } from "../shared/rpc-types";
-import { configureStockHelper, stockHelperRequest, stopStockHelper } from "./stock-helper";
+import { core } from "./core/process";
+import { configureStockHelper, stockHelperHost, stockHelperRequest, stopStockHelper } from "./stock-helper";
 
 const sessionRows = z.array(
 	z.object({
@@ -20,29 +21,50 @@ const sessionRows = z.array(
 		firstMessage: z.string(),
 		parentSessionPath: z.string().optional(),
 		promptOriginDevice: z.string().optional(),
-		autoTitle: z.string().optional(),
 	}),
 );
+
+const patches = z.array(z.object({ row: z.number(), at: z.number().optional(), autoTitle: z.string().optional() }));
 
 const movedSession = z.object({ sessionPath: z.string() });
 
 /** Session wire adaptation only. Listing/deletion share the app's stock helper. */
 export class StockSessionStore {
 	readonly #sessionsRoot: string;
+	readonly #index: string;
 
-	constructor(sessionsRoot: string, bridgeDir: string) {
+	constructor(sessionsRoot: string, bridgeDir: string, index: string) {
 		this.#sessionsRoot = sessionsRoot;
+		this.#index = index;
 		configureStockHelper(bridgeDir);
 	}
 
-	async list(): Promise<SessionInfo[]> {
-		return sessionRows.parse(await stockHelperRequest("sessions.list", { sessionsRoot: this.#sessionsRoot }));
+	list(): Promise<SessionInfo[]> {
+		return this.#read("sessions.list");
 	}
 
-	async listDirectory(sessionPath: string): Promise<SessionInfo[]> {
-		return sessionRows.parse(
-			await stockHelperRequest("sessions.list_directory", { sessionsRoot: this.#sessionsRoot, sessionPath }),
+	listDirectory(sessionPath: string): Promise<SessionInfo[]> {
+		return this.#read("sessions.list_directory", sessionPath);
+	}
+
+	/** Only a global read may evict journals not listed. */
+	async #read(method: "sessions.list" | "sessions.list_directory", sessionPath?: string): Promise<SessionInfo[]> {
+		const rows: SessionInfo[] = sessionRows.parse(
+			await stockHelperRequest(method, { sessionsRoot: this.#sessionsRoot, sessionPath }),
 		);
+		const { result } = await core().call("sessions.enrich", {
+			index: this.#index,
+			host: stockHelperHost(),
+			root: this.#sessionsRoot,
+			full: method === "sessions.list",
+			rows: rows.map(({ path, id, size, modified }) => ({ path, id, size, modified })),
+		});
+		for (const { row, at, autoTitle } of patches.parse(result)) {
+			const info = rows[row]!;
+			if (at !== undefined) info.modified = new Date(at).toISOString();
+			if (autoTitle !== undefined) info.autoTitle = autoTitle;
+		}
+		return rows;
 	}
 
 	async delete(sessionPath: string): Promise<void> {
@@ -58,8 +80,12 @@ export class StockSessionStore {
 	}
 
 	/** A stored session's transcript (stock `loadSessionMessagesReadOnly` in the helper). */
-	async messages(sessionPath: string): Promise<AgentMessage[]> {
-		const result = await stockHelperRequest("sessions.messages", { sessionsRoot: this.#sessionsRoot, sessionPath });
+	async messages(sessionPath: string, imageRefs?: boolean): Promise<AgentMessage[]> {
+		const result = await stockHelperRequest("sessions.messages", {
+			sessionsRoot: this.#sessionsRoot,
+			sessionPath,
+			imageRefs,
+		});
 		return Array.isArray(result) ? (result as AgentMessage[]) : [];
 	}
 

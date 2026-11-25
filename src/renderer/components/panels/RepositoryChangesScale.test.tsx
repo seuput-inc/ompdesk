@@ -21,6 +21,12 @@ globals.Event = Event;
 globals.HTMLElement = HTMLElement;
 globals.Node = Node;
 globals.IS_REACT_ACT_ENVIRONMENT = true;
+// Linkedom has no layout. The file list and diff both open at the top of a 600 px viewport.
+Object.defineProperties(HTMLElement.prototype, {
+	clientWidth: { configurable: true, value: 800 },
+	clientHeight: { configurable: true, value: 600 },
+	scrollTop: { configurable: true, writable: true, value: 0 },
+});
 
 // After the linkedom globals: react-dom reads `document` and `window` when it loads.
 const { createRoot } = await import("react-dom/client");

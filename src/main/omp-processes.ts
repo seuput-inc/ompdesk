@@ -59,7 +59,7 @@ export class OmpProcesses {
 	 * says so, or after the bound. A core that is not running runs no omp: it is never started to say so.
 	 */
 	async stopAll(boundMs = QUIT_OMP_STOP_MS): Promise<void> {
-		if (core().pid === null) return;
+		if (core().generation === 0) return;
 		await core()
 			.call("sidecar.stopAll", { boundMs }, { timeoutMs: boundMs + STOP_ANSWER_SLACK_MS })
 			.catch(() => {

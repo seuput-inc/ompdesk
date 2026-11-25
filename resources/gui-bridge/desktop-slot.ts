@@ -9,11 +9,11 @@
  * runs (`this` of each patched call) are kept so a revoke can `revokeControl()` every one before main grants on.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import * as supervisorModule from "@oh-my-pi/pi-coding-agent/tools/computer/supervisor";
 import { hasPath } from "./capabilities";
 import { DESKTOP_SLOT_REVOKED_NOTICE, DESKTOP_SLOT_STALE_NOTICE } from "./desktop-slot-contracts";
 import { DesktopSlotCore, needsSlot, type RunSnapshot } from "./desktop-slot-core";
 import { emit, errorMessage, record } from "./modes/shared";
+import * as supervisorModule from "./omp/pi-coding-agent/tools/computer/supervisor";
 import type { BridgeMethods } from "./types";
 
 /** The stock controller members this module calls. */
@@ -37,7 +37,7 @@ const ORIGINAL = Symbol.for("ompdesk.desktopSlot.originalRun");
 const controllers = new Set<SlotController>();
 
 const core = new DesktopSlotCore({
-	emit,
+	emit: frame => emit({ ...frame, processId: process.pid }),
 	newId: () => crypto.randomUUID(),
 	async revokeControllers() {
 		// Every controller is tried, but one that rejects makes the whole revoke fail: the slot is handed on only when

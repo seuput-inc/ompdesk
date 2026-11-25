@@ -18,14 +18,16 @@ use serde_json::{Value, json};
 use super::fail::{Fail, R, SavedFolder};
 use super::types::{
     AgentMessage, BranchEvidence, BranchFacts, ClosedChild, ControlDevice, ControlTab,
-    LandingFacts, MergeOutcome, OpenedChild, RpcCommand, RpcResponse, ScheduleCreated,
-    ScheduleDraft, SchedulesState, SessionSummary, SpawnRequest, Spawned, StoredSession,
+    LandingFacts, MergeOutcome, OpenedChild, RpcCommand, RpcResponse, SafeRemoval, ScheduleCreated,
+    ScheduleDraft, SchedulesState, SessionSummary, SpawnRequest, Spawned, StoredSession, Tool,
     WorktreeRef, WorktreeRemoval,
 };
 use crate::agentctl::app::AppState;
 use crate::agentctl::journal::Clock;
+use crate::agentctl::journal::attachments::{AttachedSet, AttachmentStore, LandedCache};
 use crate::agentctl::journal::mail_outbox::{MailAnswer, MailOutbox, OutboxMail};
 use crate::agentctl::rules::mail::MailDelivery;
+use crate::pool::AutoCloseTurn;
 use crate::ports::Port;
 
 /// Who opened a tab (`host.parentOf`): the opener's tab, and the tag the open carried (`autopilot-child`).
@@ -279,6 +281,29 @@ pub enum Deadline {
     None,
 }
 
+#[derive(Serialize)]
+struct ParseArgs<'a> {
+    tool: &'static str,
+    args: &'a Value,
+    loose: bool,
+}
+
+#[derive(Deserialize)]
+struct PartialSchedule {
+    action: String,
+    fields: HashMap<String, bool>,
+}
+
+#[derive(Deserialize)]
+struct ParsedArgs {
+    ok: bool,
+    #[serde(default)]
+    args: Value,
+    #[serde(default)]
+    error: String,
+    schedule: Option<PartialSchedule>,
+}
+
 /// A typed wrapper over the port: main's snapshot, its asks and its tells.
 #[derive(Clone)]
 pub struct Host {
@@ -286,6 +311,14 @@ pub struct Host {
     caps: Caps,
     /// Accepted reports wait here until the receiver's journal holds them (`mail-outbox`); None keeps none.
     outbox: Option<(Arc<MailOutbox>, Clock)>,
+    /// The bytes of what the outboxes' messages carry, by content (`journal/attachments.rs`).
+    pub(super) attachments: Arc<AttachmentStore>,
+    /// The paths files landed at on each computer today, so the same bytes are put there once.
+    pub(super) landed: Arc<LandedCache>,
+    /// What each sender was told about a delivery that cannot go (once each).
+    pub(super) troubled: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// `Date.now()`.
+    pub(super) clock: Clock,
 }
 
 impl Host {
@@ -294,7 +327,23 @@ impl Host {
             port,
             caps,
             outbox: None,
+            attachments: Arc::new(AttachmentStore::new(None)),
+            landed: Arc::new(LandedCache::default()),
+            troubled: Arc::default(),
+            clock: crate::agentctl::journal::system_clock(),
         }
+    }
+
+    /// `Date.now()` for what the host stamps (a test fixes it).
+    pub fn with_clock(mut self, clock: Clock) -> Host {
+        self.clock = clock;
+        self
+    }
+
+    /// The attachments the outboxes still owe are kept in `store`.
+    pub fn with_attachments(mut self, store: Arc<AttachmentStore>) -> Host {
+        self.attachments = store;
+        self
     }
 
     /// This host keeps every report it hands to a tab until the receiver's journal holds it.
@@ -372,33 +421,58 @@ impl Host {
 
     // ---- asks ---------------------------------------------------------------------------------------------------
 
-    async fn ask<T: serde::de::DeserializeOwned>(&self, method: &str, args: Value) -> R<T> {
+    pub(super) async fn ask<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        args: Value,
+    ) -> R<T> {
         Ok(self.port.ask(method, &args).await?)
     }
 
-    /// `args.parse {tool, args, loose}` → `{ok: true, args}` | `{ok: false, error}`: `looseArgs` and the tool's zod
-    /// schema (`tools.ts` `ARGS`), which stay in TypeScript beside the tools' JSON schemas.
-    pub async fn parse_args(
-        &self,
-        tool: &str,
-        args: &Value,
-        loose: bool,
-    ) -> R<Result<Value, String>> {
-        let answer: Value = self
-            .ask(
-                "args.parse",
-                json!({ "tool": tool, "args": args, "loose": loose }),
-            )
-            .await?;
-        Ok(if answer.get("ok").and_then(Value::as_bool) == Some(true) {
-            Ok(answer.get("args").cloned().unwrap_or(Value::Null))
+    /// Zod and JavaScript's string coercions run in main. Schedule action checks follow every
+    /// continuable field error, before the caller is resolved or a schedule is touched.
+    pub async fn parse_args(&self, tool: Tool, args: &Value, loose: bool) -> R<Value> {
+        let request = ParseArgs {
+            tool: tool.name(),
+            args,
+            loose,
+        };
+        let answer: ParsedArgs = self.port.ask("args.parse", &request).await?;
+        let mut issues = answer.error;
+        if tool == Tool::Schedule {
+            let issue = |message: &str| {
+                if !issues.is_empty() {
+                    issues.push_str("; ");
+                }
+                issues.push_str(message);
+            };
+            if answer.ok {
+                let action = answer.args["action"].as_str().unwrap_or("");
+                super::schedules::action_issues(
+                    action,
+                    |key| answer.args.get(key).map(|value| value.as_str() != Some("")),
+                    issue,
+                );
+            } else if let Some(partial) = answer.schedule {
+                super::schedules::action_issues(
+                    &partial.action,
+                    |key| partial.fields.get(key).copied(),
+                    issue,
+                );
+            }
+        }
+        if answer.ok && issues.is_empty() {
+            Ok(answer.args)
+        } else if issues.is_empty() {
+            Err(Fail::Tool("invalid arguments".to_owned()))
+        } else if loose {
+            Err(Fail::Tool(format!(
+                "Invalid arguments for {}: {issues}",
+                tool.name()
+            )))
         } else {
-            Err(answer
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("invalid arguments")
-                .to_owned())
-        })
+            Err(Fail::Tool(format!("Invalid arguments: {issues}")))
+        }
     }
 
     /// `mail(tabId, content, details, delivery)`: one report into a session. A queued aside is journaled at the
@@ -413,22 +487,56 @@ impl Host {
         details: &Value,
         delivery: MailDelivery,
     ) -> R<()> {
+        self.mail_attached(tab_id, content, details, delivery, None)
+            .await
+    }
+
+    /// `mail` with what the report carries: its pictures go inline (read from the attachment store), its files are
+    /// named in the text. The entry kept names them, so a redelivery brings them again.
+    pub async fn mail_attached(
+        &self,
+        tab_id: &str,
+        content: &str,
+        details: &Value,
+        delivery: MailDelivery,
+        attached: Option<&AttachedSet>,
+    ) -> R<()> {
+        let images = self.stored_images(attached).await?;
         let kept = self.outbox.as_ref().and_then(|(outbox, clock)| {
             let id = details.get("id")?.as_str()?;
             let state = self.state();
             let tab = state.tabs.iter().find(|tab| tab.tab_id == tab_id)?;
+            // The reporting session, told when this cannot be delivered with its attachments.
+            let sender = details.get("from").and_then(Value::as_str).map(|from| {
+                match state.tabs.iter().find(|tab| tab.tab_id == from) {
+                    Some(tab) => (
+                        tab.session_path
+                            .clone()
+                            .filter(|p| !p.is_empty())
+                            .unwrap_or_else(|| from.to_owned()),
+                        tab.device.clone().filter(|d| !d.is_empty()),
+                    ),
+                    None => (from.to_owned(), None),
+                }
+            });
             outbox.keep(OutboxMail {
                 id: id.to_owned(),
                 session_path: tab.session_path.clone().filter(|path| !path.is_empty())?,
                 device: tab.device.clone().filter(|device| !device.is_empty()),
+                from: sender.as_ref().map(|(path, _)| path.clone()),
+                from_device: sender.as_ref().and_then(|(_, device)| device.clone()),
                 content: content.to_owned(),
                 details: details.clone(),
                 delivery,
+                attachments: attached.cloned(),
+                attachments_corrupt: false,
                 at: clock(),
             });
             Some((outbox, id.to_owned()))
         });
-        let answer = self.send_mail(tab_id, content, details, delivery).await?;
+        let answer = self
+            .send_mail_with(tab_id, content, details, delivery, &images)
+            .await?;
         if let (Some((outbox, id)), Some(answer)) = (kept, answer)
             && answer.duplicate
             && answer.journaled
@@ -446,6 +554,26 @@ impl Host {
         details: &Value,
         delivery: MailDelivery,
     ) -> R<Option<MailAnswer>> {
+        self.send_mail_with(tab_id, content, details, delivery, &[])
+            .await
+    }
+
+    /// `send_mail` with pictures: stock's custom message content is then the text and its image blocks.
+    pub async fn send_mail_with(
+        &self,
+        tab_id: &str,
+        content: &str,
+        details: &Value,
+        delivery: MailDelivery,
+        images: &[Value],
+    ) -> R<Option<MailAnswer>> {
+        let content = if images.is_empty() {
+            json!(content)
+        } else {
+            let mut blocks = vec![json!({ "type": "text", "text": content })];
+            blocks.extend(images.iter().cloned());
+            Value::Array(blocks)
+        };
         let answer: Value = self
             .ask(
                 "mail",
@@ -505,13 +633,18 @@ impl Host {
             .map_err(|error| Fail::other(format!("spawn: main answered {error}")))
     }
 
-    /// `release(callerTabId, tabId)`: release a tab a paired web page owns in main.
-    pub async fn release(&self, caller_tab_id: &str, tab_id: &str) -> R<bool> {
-        self.ask(
-            "release",
-            json!({ "callerTabId": caller_tab_id, "tabId": tab_id }),
-        )
-        .await
+    /// Release a tab a paired web page owns in main.
+    pub(crate) async fn release(
+        &self,
+        caller_tab_id: &str,
+        tab_id: &str,
+        expected_turn: Option<&AutoCloseTurn>,
+    ) -> R<bool> {
+        let mut args = json!({ "callerTabId": caller_tab_id, "tabId": tab_id });
+        if let Some(turn) = expected_turn {
+            args["expectedTurn"] = json!(turn);
+        }
+        self.ask("release", args).await
     }
 
     /// `exited(tabId)`: resolves once the omp of a tab the window closed has exited.
@@ -635,7 +768,7 @@ impl Host {
         &self,
         worktree: &WorktreeRef,
         device: Option<&str>,
-    ) -> R<Option<WorktreeRemoval>> {
+    ) -> R<Option<SafeRemoval>> {
         self.ask(
             "removeSafeWorktree",
             json!({ "worktree": worktree, "device": device }),
@@ -812,12 +945,33 @@ impl Host {
             .tell("setTask", &json!({ "tabId": tab_id, "task": task }));
     }
 
-    /// `view(callerTabId, event)`: show or close a tab in the caller's window (`AgentControlViewEvent`).
-    pub fn view(&self, caller_tab_id: &str, tab_id: &str, how: &str, auto: bool) {
-        let mut event = json!({ "tabId": tab_id, "how": how });
+    /// `view(callerTabId, event)`: show a tab in the caller's window (`AgentControlViewEvent`).
+    pub fn view(&self, caller_tab_id: &str, tab_id: &str, how: &str) {
+        self.tell_view(caller_tab_id, json!({ "tabId": tab_id, "how": how }));
+    }
+
+    /// `view(callerTabId, event)` with `how: "close"`: the window holding the tab closes it as the person's close
+    /// would and answers `close_id` with what it did (main's `answerClose`, read back as `ControlTab.close_answer`).
+    /// `auto`: a close the app decided on itself, which the window refuses for a tab the person is at.
+    pub(crate) fn close_view(
+        &self,
+        caller_tab_id: &str,
+        tab_id: &str,
+        auto: bool,
+        close_id: u64,
+        expected_turn: Option<&AutoCloseTurn>,
+    ) {
+        let mut event = json!({ "tabId": tab_id, "how": "close", "closeId": close_id });
         if auto {
             event["auto"] = json!(true);
         }
+        if let Some(turn) = expected_turn {
+            event["expectedTurn"] = json!(turn);
+        }
+        self.tell_view(caller_tab_id, event);
+    }
+
+    fn tell_view(&self, caller_tab_id: &str, event: Value) {
         self.port.tell(
             "view",
             &json!({ "callerTabId": caller_tab_id, "event": event }),

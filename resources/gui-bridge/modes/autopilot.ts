@@ -14,9 +14,9 @@
  *   `set_goal pause`, journals the state through `set_state`, and settles/audits/ships.
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "../health";
+import { lookup } from "../omp/pi-coding-agent/config/registry";
 import { registerPromptSection } from "../prompt-sections";
 import type { BridgeMethods } from "../types";
 import {
@@ -219,11 +219,14 @@ function siblingCalls(session: Session, callId: string): string[] {
  * still running.
  */
 async function settledBeside(session: Session, state: LiveState, callId: string | undefined): Promise<string[]> {
-	if (callId) await untilToolEvents(() => state.pending.has(callId), OWN_START_WAIT_MS);
-	const siblings = callId ? siblingCalls(session, callId) : [];
-	// An autopilot call never waits for another (or for itself, reached as its `xd://` device).
+	// Stock reports only the enclosing Bash call's start/end for a nested <callId>:cmd:<index>.
+	const shellId = callId?.match(/^(.+):cmd:\d+$/)?.[1];
+	const eventId = () => (shellId && state.pending.get(shellId)?.tool === "bash" ? shellId : callId);
+	if (callId) await untilToolEvents(() => state.pending.has(eventId() ?? callId), OWN_START_WAIT_MS);
+	const own = eventId();
+	const siblings = own ? siblingCalls(session, own) : [];
 	const ours = (id: string, call: { tool: string; args: unknown }) =>
-		id === callId || call.tool === "autopilot" || String(record(call.args).path ?? "").startsWith("xd://autopilot");
+		id === own || call.tool === "autopilot" || String(record(call.args).path ?? "").startsWith("xd://autopilot");
 	const running = () => [
 		...[...state.pending].filter(([id, call]) => !ours(id, call)).map(([, call]) => call.tool),
 		...siblings.filter(id => !state.ended.has(id) && !state.pending.has(id)).map(() => "tool"),
@@ -358,16 +361,19 @@ async function applyTools(session: Session, role: "parent" | "child"): Promise<s
 	return removed;
 }
 
-/** Tools presented as `xd://` devices rather than top level (stock `getMountedXdevToolNames`); [] on an omp without it. */
-function mountedTools(session: Session): string[] {
-	return typeof session.getMountedXdevToolNames === "function" ? session.getMountedXdevToolNames() : [];
+/** Restore the original partition, whether stock mounted the tool as a command or (before 19.1) a device. */
+function mountedTools(
+	session: { getMountedToolCommandNames(): string[] } | { getMountedXdevToolNames(): string[] },
+): string[] {
+	return "getMountedToolCommandNames" in session
+		? session.getMountedToolCommandNames()
+		: session.getMountedXdevToolNames();
 }
 
 /**
  * The session's tool set without the run: `autopilot` off, the excluded tools back. `getEnabledToolNames` lists the
- * `xd://` devices too, and stock's `setActiveToolsByName` keeps a device mounted only while it is mounted now, so a
- * device taken off at arm (`debug`) would come back top level. `setActiveToolPresentation` takes the partition
- * explicitly: what was a device at arm (`mounted`) or is one now stays one.
+ * mounted tools too; stock's `setActiveToolsByName` keeps a tool mounted only while it is mounted now, so a
+ * tool taken off at arm (`debug`) would come back top level. Restore the original partition explicitly.
  */
 async function restoreTools(session: Session, excluded: readonly string[], mounted: readonly string[]): Promise<void> {
 	const enabled = session.getEnabledToolNames();
@@ -877,7 +883,6 @@ async function runTool(
 			if (!landed) return toolText({ due: false, reason: `no ${state.baseBranch} branch to release from` });
 			const readiness = releaseReadiness(
 				landed.commits,
-				now(),
 				typeof params.urgent === "string" ? params.urgent : undefined,
 			);
 			const contents = {
@@ -919,7 +924,7 @@ function registerTool(pi: ExtensionAPI): void {
 		name: AUTOPILOT_TOOL,
 		label: "Autopilot",
 		description:
-			"Autopilot cycle ledger. op=begin: start the cycle (returns focus, notes, rotation, recent cycles, follow-ups, ship state, what to do next, hints). op=pick: name the item you chose after your audit (area + title). op=end: report the finished cycle (the runtime checks the commit and the check against your tool calls). op=ship: pass on the user's own push/release request (kind + their exact words as quote). op=propose_release: ask whether a release is due (auto release set to agent): it is by what landed since the last release, never by the time since it (3 user-visible changes, an urgent one, or one that waited a day).",
+			"Autopilot cycle ledger. op=begin: start the cycle (returns focus, notes, rotation, recent cycles, follow-ups, ship state, what to do next, hints). op=pick: name the item you chose after your audit (area + title). op=end: report the finished cycle (the runtime checks the commit and the check against your tool calls). op=ship: pass on the user's own push/release request (kind + their exact words as quote). op=propose_release: ask whether a release is due (auto release set to agent): it is by what landed since the last release, never by the time since it (3 user-visible changes or an urgent one).",
 		parameters: z.object({
 			op: z.enum(["begin", "pick", "end", "ship", "propose_release"]),
 			area: z

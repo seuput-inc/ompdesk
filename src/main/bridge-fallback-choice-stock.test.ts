@@ -179,6 +179,9 @@ function makeHome(fake: Fake, revertPolicy: "cooldown-expiry" | "never"): Home {
 		"    models:",
 		`      - id: ${model}`,
 		`        name: Model ${path.toUpperCase()}`,
+		// Declared, not left unknown: omp 18.21 probes an unknown model's thinking controls with seven extra requests, gives
+		// it a thinking level (`fakea/a1:high` in its events) and judges the first prompts' effort. None is the subject here.
+		"        reasoning: false",
 		"        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }",
 	];
 	writeFileSync(

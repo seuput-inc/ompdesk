@@ -2,7 +2,7 @@
  * The one project-header menu, for this computer's list (Sidebar.tsx) and a paired host's (SidebarDevices.tsx, the
  * phone's page draws both): the list gathers the project's facts and the actions it supports, and this decides what
  * the menu holds and in what order. An action the list does not support is absent, never a disabled item (a host
- * has no rename or pin of its own).
+ * has no project rename).
  *
  * Groups, each set apart: new sessions · edit (rename, pin, move up and down, archive all) · Delete, last. There is
  * ONE Delete: it takes the project out of its computer's project list, and its confirm (`ProjectDeleteDialog`)

@@ -15,9 +15,9 @@
  * `ompdesk_sessions` and `ompdesk_session_result` put that number in front of the session that wrote the brief.
  */
 
-import * as fs from "node:fs/promises";
 import { checkKinds } from "../../resources/gui-bridge/command-verdict-core";
 import { createPollTracker, waitWindowElapsed } from "../../resources/gui-bridge/waste-guards-core";
+import { core } from "./core/process";
 
 const IDLE_S = 600;
 /** Model calls per tool call from which a session is reading and thinking instead of working. */
@@ -158,7 +158,19 @@ function readTarget(part: ToolCallPart): string | undefined {
 	return part.arguments.path.replace(/(?<=.):[^\\/]*$/, "");
 }
 
+/** A pace read line by line: `add` each journal line in order; `result` answers at any point and changes nothing. */
+interface PaceFold {
+	add(line: string): void;
+	result(): Pace;
+}
+
 export function pace(lines: Iterable<string>): Pace {
+	const fold = paceFold();
+	for (const line of lines) fold.add(line);
+	return fold.result();
+}
+
+function paceFold(): PaceFold {
 	const starts = new Map<string, number>();
 	const tools: Record<string, ToolRow> = {};
 	const intervals: [number, number][] = [];
@@ -181,20 +193,20 @@ export function pace(lines: Iterable<string>): Pace {
 	const checkSaved = new Map<string, number>();
 	let prev: number | undefined;
 	const gaps: [number, number][] = [];
-	for (const line of lines) {
+	const add = (line: string): void => {
 		let entry: Entry;
 		try {
 			entry = JSON.parse(line) as Entry;
 		} catch {
-			continue;
+			return;
 		}
 		const at = seconds(entry);
-		if (at === undefined) continue;
+		if (at === undefined) return;
 		if (entry.type === "custom" && entry.customType === "tool_execution_start") {
 			if (entry.data?.toolCallId) starts.set(entry.data.toolCallId, at);
-			continue;
+			return;
 		}
-		if (entry.type !== "message" || !entry.message) continue;
+		if (entry.type !== "message" || !entry.message) return;
 		first ??= at;
 		if (prev !== undefined && at - prev > IDLE_S) gaps.push([prev, at]);
 		const since = prev !== undefined ? at - prev : undefined;
@@ -209,7 +221,7 @@ export function pace(lines: Iterable<string>): Pace {
 					const target = readTarget(part);
 					if (target !== undefined) reads.set(target, (reads.get(target) ?? 0) + 1);
 					if (part.type !== "toolCall" || !part.name || !part.arguments) continue;
-					const kind = pollTracker.observe(part.name, part.arguments)[0];
+					const kind = pollTracker.observe(part.name, part.arguments, at * 1000)[0];
 					if (kind) polled(kind);
 					if (
 						part.name === "bash" &&
@@ -251,37 +263,42 @@ export function pace(lines: Iterable<string>): Pace {
 			}
 			tools[name] = row;
 		}
-	}
-	const wallS = first !== undefined && prev !== undefined ? prev - first : 0;
-	let savedS = 0;
-	for (const saved of checkSaved.values()) savedS += saved;
-	const toolS = unionSeconds(intervals);
-	// A long gap is idle only where no tool ran through it (a `wait` that returned after 20 min is that tool's time).
-	const idleS = gaps.reduce((sum, [from, to]) => sum + (to - from) - unionSeconds(clip(intervals, from, to)), 0);
-	let repeatRead: Pace["repeatRead"];
-	for (const [path, count] of reads) if (count > 1 && count > (repeatRead?.count ?? 0)) repeatRead = { path, count };
-	return {
-		wallS,
-		toolS,
-		modelS: Math.max(0, wallS - toolS - idleS),
-		idleS,
-		modelCalls,
-		outputTokens,
-		tools,
-		thinkGaps,
-		polls,
-		...(repeatRead ? { repeatRead } : {}),
-		...(polls > 0 ? { pollKinds } : {}),
-		...(checkCalls.size > 0
-			? {
-					checks: {
-						runs: checkCalls.size,
-						seconds: unionSeconds(checkIntervals),
-						...(savedS > 0 ? { savedS } : {}),
-					},
-				}
-			: {}),
 	};
+	const result = (): Pace => {
+		const wallS = first !== undefined && prev !== undefined ? prev - first : 0;
+		let savedS = 0;
+		for (const saved of checkSaved.values()) savedS += saved;
+		const toolS = unionSeconds(intervals);
+		// A long gap is idle only where no tool ran through it (a `wait` that returned after 20 min is that tool's time).
+		const idleS = gaps.reduce((sum, [from, to]) => sum + (to - from) - unionSeconds(clip(intervals, from, to)), 0);
+		let repeatRead: Pace["repeatRead"];
+		for (const [path, count] of reads)
+			if (count > 1 && count > (repeatRead?.count ?? 0)) repeatRead = { path, count };
+		// Copies: the fold goes on adding lines after this answer was handed out (readPace).
+		return {
+			wallS,
+			toolS,
+			modelS: Math.max(0, wallS - toolS - idleS),
+			idleS,
+			modelCalls,
+			outputTokens,
+			tools: Object.fromEntries(Object.entries(tools).map(([name, row]) => [name, { ...row }])),
+			thinkGaps: [...thinkGaps],
+			polls,
+			...(repeatRead ? { repeatRead } : {}),
+			...(polls > 0 ? { pollKinds: { ...pollKinds } } : {}),
+			...(checkCalls.size > 0
+				? {
+						checks: {
+							runs: checkCalls.size,
+							seconds: unionSeconds(checkIntervals),
+							...(savedS > 0 ? { savedS } : {}),
+						},
+					}
+				: {}),
+		};
+	};
+	return { add, result };
 }
 
 function clip(intervals: readonly [number, number][], from: number, to: number): [number, number][] {
@@ -354,20 +371,73 @@ export function paceLine(result: Pace): string {
 	return `Pace: ${parts.join(" · ")}`;
 }
 
-const cache = new Map<string, { size: number; mtimeMs: number; pace: Pace }>();
+/** Sessions whose fold is kept, the least recently read dropped first; a fold of 60,000 entries is a few MB. */
+const CACHED_SESSIONS = 64;
+// Only the core interprets a cursor's file identity, snapshot size, timestamp, offset and seam.
+interface Cursor {
+	more: boolean;
+}
+
+interface Folded {
+	cursor: Cursor;
+	fold: PaceFold;
+	pace: Pace;
+}
+
+const cache = new Map<string, Folded>();
+const reading = new Map<string, Promise<Pace | undefined>>();
 
 /**
- * The pace of a session file, read once per change (a list of 50 sessions asks for each on every call). Undefined
- * when the file cannot be read: a pace never keeps a report or a list from going out.
+ * The pace of a session file (a list of 50 sessions asks for each on every call). Undefined when the file cannot be
+ * read: a pace never keeps a report or a list from going out.
+ *
+ * A journal only grows while its omp runs, so the lines folded last time are kept and only what was appended since
+ * is read; a file replaced (another inode, shorter, other bytes before the offset) is read again from the start.
+ * Never the whole file at once: `readFile` + `split` of the 367 MB journal of an orchestrator session held 1.3 GB in
+ * main per call, and `ompdesk_sessions` asks for every listed tab together (2.5 GB peak, Mac mini, 20 Nov 2026).
  */
-export async function readPace(sessionPath: string): Promise<Pace | undefined> {
+export function readPace(sessionPath: string): Promise<Pace | undefined> {
+	// One read of a file at a time: two at once would fold the same appended lines twice.
+	const run = (reading.get(sessionPath) ?? Promise.resolve(undefined)).then(() => readPaceNow(sessionPath));
+	reading.set(sessionPath, run);
+	void run.then(() => {
+		if (reading.get(sessionPath) === run) reading.delete(sessionPath);
+	});
+	return run;
+}
+
+async function readPaceNow(sessionPath: string): Promise<Pace | undefined> {
+	const kept = cache.get(sessionPath);
+	// Out of the cache while it is read: a fold a failed read left half-advanced is never used again.
+	cache.delete(sessionPath);
 	try {
-		const info = await fs.stat(sessionPath);
-		const hit = cache.get(sessionPath);
-		if (hit && hit.size === info.size && hit.mtimeMs === info.mtimeMs) return hit.pace;
-		const result = pace((await fs.readFile(sessionPath, "utf8")).split("\n"));
-		cache.set(sessionPath, { size: info.size, mtimeMs: info.mtimeMs, pace: result });
-		return result;
+		let fold = kept?.fold;
+		let cursor: Cursor | undefined = kept?.cursor;
+		do {
+			const { result, bin } = await core().call<{ reset: boolean; cursor: Cursor } | null>("sessions.pacePage", {
+				path: sessionPath,
+				cursor,
+			});
+			if (!result) {
+				if (kept) cache.set(sessionPath, kept);
+				return kept?.pace;
+			}
+			if (!fold || result.reset) fold = paceFold();
+			// Pages contain only fold inputs. Journal prose, tool output and images stay in the core.
+			if (bin?.length) {
+				const rows = Buffer.from(bin.buffer, bin.byteOffset, bin.byteLength);
+				let from = 0;
+				for (let end = rows.indexOf(10); end >= 0; end = rows.indexOf(10, from)) {
+					fold.add(rows.toString("utf8", from, end));
+					from = end + 1;
+				}
+			}
+			cursor = result.cursor;
+		} while (cursor.more);
+		const next: Folded = { cursor, fold, pace: fold.result() };
+		cache.set(sessionPath, next);
+		if (cache.size > CACHED_SESSIONS) cache.delete(cache.keys().next().value as string);
+		return next.pace;
 	} catch {
 		return undefined;
 	}

@@ -3,11 +3,81 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { gitSync } from "../local/git/test-repos";
 import { diskCareWorld, exists, SLOW, write } from "./disk-care-fixture";
-import { listSavedWorktrees, restoreSavedWorktree, SavedWorktreeStore } from "./saved-worktrees";
+import { KeepWorktree, listSavedWorktrees, restoreSavedWorktree, saveAndRemoveWorktree } from "./saved-worktrees";
+import { readWorktreeFiles } from "./worktree-facts";
 
 const w = diskCareWorld();
 
 describe("disk care › saving", () => {
+	it("reads the original saved.json format, canonicalizes repository aliases, and preserves disk order on ties", async () => {
+		const file = path.join(w.saved.dir, "saved.json");
+		const alias = path.join(w.root, "repo-alias");
+		await fs.symlink(w.repo, alias, "junction");
+		const closed = path.join(w.root, "closed");
+		const row = {
+			path: closed,
+			repo: w.repo,
+			branch: null,
+			head: "abc",
+			savedBranch: null,
+			archivedFiles: 0,
+			archivedBytes: 0,
+		};
+		await fs.mkdir(w.saved.dir, { recursive: true });
+		for (const invalid of ["{", "{}"]) {
+			await fs.writeFile(file, invalid);
+			expect(await w.saved.list(alias)).toEqual([]);
+			await expect(w.saved.settle({ ...row, id: "new", removedAt: 4 }, true)).rejects.toThrow();
+			expect(await fs.readFile(file, "utf8")).toBe(invalid);
+		}
+		const before = [
+			{ ...row, id: "tie-b", repo: alias, removedAt: 2, futureField: "retained" },
+			{ ...row, id: "other", repo: w.root, removedAt: 3 },
+			{ ...row, id: "tie-a", removedAt: 2 },
+			{ ...row, id: "older", removedAt: 1 },
+		];
+		await fs.writeFile(file, JSON.stringify(before));
+		expect((await w.saved.list(w.repo)).map(r => r.id)).toEqual(["tie-b", "tie-a", "older"]);
+		expect((await w.saved.find({ folder: closed }))?.id).toBe("tie-b");
+		expect(await w.saved.find({ id: "absent" })).toBeNull();
+		await Promise.all(["new-a", "new-b"].map(id => w.saved.settle({ ...row, id, removedAt: 4 }, true)));
+		const text = await fs.readFile(file, "utf8");
+		const after = JSON.parse(text);
+		expect(after.slice(2)).toEqual(before);
+		expect(text).toBe(`${JSON.stringify(after, null, 2)}\n`);
+	});
+
+	it.each(["README.md", ".env"])(
+		"rechecks %s bytes even when main's final process and activity proof passes",
+		async file => {
+			const dir = await w.busyWorktree("contents");
+			const original = await fs.readFile(path.join(dir, file));
+			const changed = Buffer.from(original);
+			changed[0] = 88;
+			const target = {
+				path: dir,
+				primary: w.repo,
+				branch: gitSync(dir, "branch", "--show-current"),
+				unlanded: true,
+			};
+			const files = await readWorktreeFiles(dir);
+			await expect(
+				saveAndRemoveWorktree(target, files, w.saved, async () => {
+					await fs.writeFile(path.join(dir, file), changed);
+					return true;
+				}),
+			).rejects.toBeInstanceOf(KeepWorktree);
+			expect(w.listed()).toContain(dir);
+			expect(await fs.readFile(path.join(dir, file))).toEqual(changed);
+			const [record] = await w.saved.list(w.repo);
+			expect(record?.savedBranch).toBeTruthy();
+			if (!record) throw new Error("missing recovery record");
+			if (file === ".env")
+				expect(await fs.readFile(path.join(w.saved.dir, "saved", record.id, "files", file))).toEqual(original);
+		},
+		SLOW,
+	);
+
 	it.skipIf(process.platform === "win32")(
 		"keeps the saved branch, archive and record when git stops removing a worktree half way",
 		async () => {
@@ -36,11 +106,7 @@ describe("disk care › saving", () => {
 		"leaves the worktree untouched and keeps no stray branch or archive when the record cannot be written",
 		async () => {
 			const dir = await w.busyWorktree("unrecorded");
-			w.saved = new (class extends SavedWorktreeStore {
-				override update(): Promise<void> {
-					return Promise.reject(new Error("disk full"));
-				}
-			})(path.join(w.userData, "disk-care"));
+			await fs.mkdir(path.join(w.saved.dir, "saved.json"), { recursive: true });
 			await w.care().run("user");
 			expect(w.listed()).toContain(dir);
 			expect(await fs.readFile(path.join(dir, ".env"), "utf8")).toBe("API_KEY=edited-in-worktree\n");

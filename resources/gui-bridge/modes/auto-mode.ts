@@ -87,17 +87,22 @@ interface Answer {
 }
 
 /**
- * Load the stock modules the first decision needs when the bridge starts (index.ts calls `install`), so the first
- * prompt of a session does not pay their import time inside its 2 s deadline, and warm the judge as the main session
- * starts (`warmJudge`). A module that is missing fails later, in `decide`, with the capability guard's coded error.
+ * The stock modules the first decision needs. `install` starts loading them as the bridge starts, so the first prompt
+ * of a session does not pay their import time inside its 2 s deadline; a module that is missing fails later, in
+ * `decide`, with the capability guard's coded error.
  */
-export function install(pi: BridgeEnv["pi"]): void {
-	void Promise.allSettled([
-		import("@oh-my-pi/pi-coding-agent/judgment"),
-		import("@oh-my-pi/pi-coding-agent/tiny/message-preproc"),
-		import("@oh-my-pi/pi-coding-agent/plan-mode/settings"),
-		import("@oh-my-pi/pi-coding-agent/config/registry"),
+export function preloadStock(): Promise<unknown> {
+	return Promise.allSettled([
+		import("../omp/pi-coding-agent/judgment"),
+		import("../omp/pi-coding-agent/tiny/message-preproc"),
+		import("../omp/pi-coding-agent/plan-mode/settings"),
+		import("../omp/pi-coding-agent/config/registry"),
 	]);
+}
+
+/** Load the first decision's stock modules (index.ts calls `install`) and warm the judge as the main session starts. */
+export function install(pi: BridgeEnv["pi"]): void {
+	void preloadStock();
 	pi.on("session_start", (_event, ctx) => {
 		const env = boundEnv();
 		if (ctx.agent.kind === "main" && env) void warmJudge(env);
@@ -107,17 +112,15 @@ export function install(pi: BridgeEnv["pi"]): void {
 /** `goal.enabled` comes through stock's registry: omp's bundle has no `goals/settings` (an import is a copy). */
 async function enabledByStock(session: AgentSession): Promise<{ plan: boolean; goal: boolean }> {
 	const [{ cfgPlanEnabled }, { lookup }] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent/plan-mode/settings"),
-		import("@oh-my-pi/pi-coding-agent/config/registry"),
+		import("../omp/pi-coding-agent/plan-mode/settings"),
+		import("../omp/pi-coding-agent/config/registry"),
 	]);
 	return { plan: cfgPlanEnabled.get(session.settings), goal: lookup("goal.enabled")?.get(session.settings) === true };
 }
 
 /** Stock's judge for this session, on the `judge` role chain. `billed` journals usage and uses the answer cache. */
 async function judgeFor(session: AgentSession, billed: boolean) {
-	const { resolveJudge, sharedJudgmentCache, journalJudgmentUsage } = await import(
-		"@oh-my-pi/pi-coding-agent/judgment"
-	);
+	const { resolveJudge, sharedJudgmentCache, journalJudgmentUsage } = await import("../omp/pi-coding-agent/judgment");
 	return resolveJudge({
 		settings: session.settings,
 		registry: session.modelRegistry,
@@ -140,7 +143,7 @@ async function ask(
 ): Promise<Asked> {
 	const [judge, { preprocessTinyMessage }] = await Promise.all([
 		judgeFor(session, true),
-		import("@oh-my-pi/pi-coding-agent/tiny/message-preproc"),
+		import("../omp/pi-coding-agent/tiny/message-preproc"),
 	]);
 	const mode = {
 		type: "choice" as const,
@@ -217,7 +220,7 @@ export function warmJudge(env: BridgeEnv): Promise<boolean> {
 	warming ??= (async () => {
 		try {
 			const session = attach(env);
-			const { hasNativeJudge } = await import("@oh-my-pi/pi-coding-agent/judgment");
+			const { hasNativeJudge } = await import("../omp/pi-coding-agent/judgment");
 			if (!hasNativeJudge(session.settings, session.modelRegistry)) return false;
 			const judge = await judgeFor(session, false);
 			await judge.judge(
@@ -320,18 +323,23 @@ async function decide(env: BridgeEnv, params: unknown): Promise<AutoModeDecision
 	}
 }
 
-export const methods: BridgeMethods = guard("autoMode", {
-	"modes.auto_mode_decide": (params, env) => decide(env, params),
-	/**
-	 * While the user types: asks the question the decision at Enter will ask for `{message}` (its answer is cached).
-	 * Changes nothing; answers whether a request was made.
-	 */
-	"modes.auto_mode_prefetch": (params, env) => prefetch(env, params),
-	/** The user undid an automatic decision: leave plan mode if it is the mode, and stop deciding for this session. */
-	"modes.auto_mode_undo": async (params, env) => {
-		const session = attach(env);
-		markSuppressed(session.sessionManager.getSessionId());
-		if (record(params).mode === "plan" && session.getPlanModeState()?.enabled) await exitPlanMode(session);
-		return { suppressed: true };
-	},
-});
+export const methods: BridgeMethods = {
+	// One id for both: the prefetch asks the decision's own question, and the decision reads its cached answer.
+	...guard("autoMode", {
+		"modes.auto_mode_decide": (params, env) => decide(env, params),
+		/**
+		 * While the user types: asks the question the decision at Enter will ask for `{message}` (its answer is cached).
+		 * Changes nothing; answers whether a request was made.
+		 */
+		"modes.auto_mode_prefetch": (params, env) => prefetch(env, params),
+	}),
+	...guard("autoModeUndo", {
+		/** The user undid an automatic decision: leave plan mode if it is the mode, and stop deciding for this session. */
+		"modes.auto_mode_undo": async (params, env) => {
+			const session = attach(env);
+			markSuppressed(session.sessionManager.getSessionId());
+			if (record(params).mode === "plan" && session.getPlanModeState()?.enabled) await exitPlanMode(session);
+			return { suppressed: true };
+		},
+	}),
+};

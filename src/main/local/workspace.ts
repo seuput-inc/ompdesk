@@ -8,10 +8,9 @@
  * refusals as chat text, so the refusals the GUI can foresee are checked here
  * first and the outcome is read back from the session afterwards.
  */
-import type { Stats } from "node:fs";
-import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { RpcWorkspaceDirectoriesResult } from "../../shared/rpc-types";
+import { CoreError, core } from "../core/process";
 import { runSlashCommand } from "./slash";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
@@ -27,8 +26,6 @@ function directories(ctx: LocalCommandContext): Promise<RpcWorkspaceDirectoriesR
 }
 
 export const handlers: Record<string, LocalHandler> = {
-	get_directories: async (_command, ctx) => directories(ctx),
-
 	add_directory: async (command, ctx) =>
 		ctx.bridge.request<RpcWorkspaceDirectoriesResult>("workspace.add_directory", { path: requirePath(command.path) }),
 
@@ -46,13 +43,14 @@ export const handlers: Record<string, LocalHandler> = {
 		if (state?.isStreaming) throw new LocalCommandError("Cannot move while streaming.", "busy");
 		const previousCwd = before.directories.find(directory => directory.primary)?.path ?? ctx.cwd;
 		const { path: target } = await ctx.bridge.request<{ path: string }>("workspace.resolve_path", { path: raw });
-		let info: Stats;
-		try {
-			info = await stat(target);
-		} catch {
-			throw new Error(`Directory does not exist: ${target}`);
-		}
-		if (!info.isDirectory()) throw new Error(`Not a directory: ${target}`);
+		const { result } = await core()
+			.call<{ directory: boolean }>("fs.stat", { path: target })
+			.catch((error: unknown) => {
+				if (error instanceof CoreError && ["file_not_found", "io", "exists"].includes(error.code))
+					throw new Error(`Directory does not exist: ${target}`);
+				throw error;
+			});
+		if (!result.directory) throw new Error(`Not a directory: ${target}`);
 
 		await runSlashCommand(ctx, `/move ${target}`);
 		const after = await directories(ctx);

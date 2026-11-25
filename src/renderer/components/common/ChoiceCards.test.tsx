@@ -89,7 +89,7 @@ describe("ChoiceCards", () => {
 		expect(onChange).toHaveBeenCalledWith("c");
 	});
 
-	it("in parts, keeps one radio group whose arrows cross from one part's grid to the next", async () => {
+	it("draws a card with a picture as one radio named by its title, the arrows crossing every card", async () => {
 		const onChange = vi.fn();
 		const host = document.createElement("div");
 		document.body.appendChild(host);
@@ -98,26 +98,18 @@ describe("ChoiceCards", () => {
 			root?.render(
 				<ChoiceCards
 					aria-label="Theme"
-					groups={[
-						{ key: "system", options: [{ value: "a", title: "System", preview: <i /> }] },
-						{
-							key: "light",
-							label: "Light",
-							attrs: { "data-group": "light" },
-							options: [
-								{ value: "b", title: "Paper", preview: <i /> },
-								{ value: "c", title: "Sand", preview: <i />, tooltip: "Warm, low glare" },
-							],
-						},
-					]}
 					onChange={onChange}
 					optionAttr="data-pick"
+					options={[
+						{ value: "a", title: "System", preview: <i /> },
+						{ value: "b", title: "Paper", preview: <i /> },
+						{ value: "c", title: "Sand", preview: <i />, tooltip: "Warm, low glare" },
+					]}
 					value="a"
 				/>,
 			),
 		);
 		expect(document.querySelectorAll("[role=radiogroup]").length).toBe(1);
-		expect(document.querySelector("[data-group=light] h3")?.textContent).toBe("Light");
 		const cards = Array.from(document.querySelectorAll("[role=radio]")) as unknown as HTMLElement[];
 		// The picture is decoration: the card is named by its title.
 		expect(cards.map(card => card.textContent)).toEqual(["System", "Paper", "Sand"]);

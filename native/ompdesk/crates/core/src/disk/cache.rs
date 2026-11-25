@@ -1,6 +1,5 @@
-//! Clearing a cache its tool fills again (`src/main/disk/caches.ts` is the table: where each one is, its bound and
-//! whether it is in use). The core takes only what the tool's own layout names inside the folder main resolved, so a
-//! folder that is not that cache (a variable pointing somewhere else) loses nothing else:
+//! Clearing a cache its tool fills again. `cache_policy` owns locations, bounds and process holds. This module
+//! takes only what the tool's own layout names in the cache, so a variable pointing elsewhere loses nothing else:
 //! - Bun's runtime transpiler cache: the `<hash>.pile` files directly in it (`RuntimeTranspilerCache.zig`
 //!   `getCacheFilePath`; its temp files carry the same extension). Bun reads a missing entry as a miss and makes the
 //!   folder again on its next write, so a running Bun loses nothing.
@@ -13,23 +12,20 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-
 use super::tree::{fault, live, remove};
 use crate::server::{Fault, Scope};
 
-#[derive(Deserialize, Clone, Copy, Debug)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug)]
 pub enum Kind {
     BunTranspiler,
     Npm,
 }
 
-#[derive(Serialize, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Cleared {
-    removed: u64,
+    pub(super) removed: u64,
     /// Entries of the cache that could not be removed.
-    left: u64,
+    pub(super) left: u64,
 }
 
 /// `content-v2`, `index-v5`: the prefix and a version number.

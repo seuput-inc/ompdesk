@@ -1,22 +1,12 @@
-/**
- * Which directory a window or tab starts in when nothing named one. Pure so the
- * rule is testable without Electron; the caller supplies the candidates in
- * priority order.
- */
-import { isExistingDirectory } from "./launch-argv";
+import { homedir } from "node:os";
+import { core } from "./core/process";
 
-/**
- * The first candidate that is a real directory. The volume root is never an
- * answer: launched from Finder a process cwd *is* "/", and a session started
- * there runs outside every project and writes wherever nobody intended.
- */
-export function firstUsableCwd(
-	candidates: readonly (string | null | undefined)[],
-	directoryExists: (path: string) => boolean = isExistingDirectory,
-): string | undefined {
-	for (const candidate of candidates) {
-		if (!candidate || candidate === "/") continue;
-		if (directoryExists(candidate)) return candidate;
-	}
-	return undefined;
+export async function startupCwd(
+	lastProject: string | null | undefined,
+	argv = process.argv.slice(2),
+	cwd = process.cwd(),
+	home = homedir(),
+): Promise<{ cwd: string; explicit: boolean }> {
+	return (await core().call<{ cwd: string; explicit: boolean }>("fs.initialCwd", { lastProject, argv, cwd, home }))
+		.result;
 }

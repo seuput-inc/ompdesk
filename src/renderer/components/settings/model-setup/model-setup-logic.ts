@@ -414,6 +414,7 @@ export function effectiveAdvisorModel(
 const OptionalNumber = z.number().optional();
 const FactsSchema = z.object({
 	providers: z.record(
+		z.string(),
 		z.object({
 			billing: z.enum(["subscription", "free", "metered"]),
 			// A basis a newer bridge adds still reads: the reason text falls back to "unknown".
@@ -421,6 +422,7 @@ const FactsSchema = z.object({
 		}),
 	),
 	models: z.record(
+		z.string(),
 		z.object({
 			provider: z.string(),
 			id: z.string(),
@@ -435,7 +437,7 @@ const FactsSchema = z.object({
 			image: z.boolean(),
 		}),
 	),
-	roles: z.record(z.object({ persisted: z.string().optional() })),
+	roles: z.record(z.string(), z.object({ persisted: z.string().optional() })),
 	judgePins: z.array(z.string()),
 });
 
@@ -452,9 +454,9 @@ const LOCAL_DEVICE = "local";
 const AppliedSchema = z.object({
 	at: z.number(),
 	/** Role → the model OMPdesk wrote. */
-	values: z.record(z.string()),
+	values: z.record(z.string(), z.string()),
 	/** Role → what it held before (null: nothing set). */
-	before: z.record(z.string().nullable()),
+	before: z.record(z.string(), z.string().nullable()),
 });
 export type AppliedSetup = z.infer<typeof AppliedSchema>;
 
@@ -464,7 +466,7 @@ const SetupRecordSchema = z.object({
 	signature: z.string().optional(),
 });
 export type SetupRecord = z.infer<typeof SetupRecordSchema>;
-const Records = z.record(z.unknown());
+const Records = z.record(z.string(), z.unknown());
 
 async function readRecords(): Promise<Record<string, unknown>> {
 	const parsed = Records.safeParse(await window.omp.prefs.get(MODEL_SETUP_PREFS_KEY));

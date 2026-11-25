@@ -7,7 +7,8 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { AgentMessage, RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
+import type { AgentMessage, MessagesPage, RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
+import * as sessionHydration from "../../../hooks/session-hydration";
 import { resetSessionSurface } from "../../../hooks/use-session-switch";
 import { filePickInProgress } from "../../../lib/file-pick";
 import { clearHistoryImages, rememberHistoryImages } from "../../../lib/history-images";
@@ -119,7 +120,10 @@ async function typeInto(element: TestElement, value: string): Promise<void> {
 }
 
 /** Drive the textarea's React onKeyDown with an Enter press. */
-async function pressEnter(element: TestElement): Promise<void> {
+async function pressEnter(
+	element: TestElement,
+	modifiers: { ctrlKey?: boolean; altKey?: boolean } = {},
+): Promise<void> {
 	const record = element as unknown as Record<string, unknown>;
 	const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$"));
 	const props = propsKey
@@ -130,9 +134,9 @@ async function pressEnter(element: TestElement): Promise<void> {
 		props.onKeyDown?.({
 			key: "Enter",
 			shiftKey: false,
-			ctrlKey: false,
+			ctrlKey: modifiers.ctrlKey === true,
 			metaKey: false,
-			altKey: false,
+			altKey: modifiers.altKey === true,
 			nativeEvent: { isComposing: false },
 			keyCode: 13,
 			preventDefault: () => {},
@@ -246,6 +250,8 @@ async function mount(withRuntime = false): Promise<void> {
 					planModeEnabled: false,
 					todoPhases: [],
 				});
+			if (command.type === "get_transcript_page")
+				return ok({ messages: [], totalMessages: 0 } satisfies MessagesPage);
 			return ok({});
 		});
 	}
@@ -339,6 +345,7 @@ describe("InputArea queue shorthand submit", () => {
 
 	it("restores an unacknowledged send after process recovery and blocks duplicate submission", async () => {
 		await mount(true);
+		const hydration = vi.spyOn(sessionHydration, "hydrateTabSession");
 		const pending = Promise.withResolvers<RpcResponse>();
 		prompt.mockReturnValueOnce(pending.promise);
 		await typeInto(findTextarea(), "preserve in-flight input");
@@ -372,6 +379,10 @@ describe("InputArea queue shorthand submit", () => {
 			error: "Process restarted before acknowledgement",
 		});
 		await flush();
+		expect(hydration).toHaveBeenCalledExactlyOnceWith("t0");
+		await act(async () => {
+			await expect(hydration.mock.results[0]?.value).resolves.toBeUndefined();
+		});
 		// Joined like every restore (prependToDraft): a blank line between.
 		expect(useComposerStore.getState().draft).toBe("preserve in-flight input\n\nnext draft");
 		expect(useComposerStore.getState().submissionUncertain).toBe(true);
@@ -504,7 +515,7 @@ describe("InputArea queue shorthand submit", () => {
 		await pressEnter(findTextarea());
 		await flush();
 
-		expect(prompt).toHaveBeenCalledWith("slow network prompt", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("slow network prompt");
 		expect(useMessagesStore.getState().liveMessages).toMatchObject([
 			{
 				role: "user",
@@ -538,24 +549,25 @@ describe("InputArea queue shorthand submit", () => {
 		await flush();
 	});
 
-	it("starts every run as Steer: a Follow-up picked on the chip lasts for that run only", async () => {
+	it("steers a running turn from Send, and the retired follow-up chords steer too", async () => {
 		await mount();
-		const chip = () => document.querySelector("[data-send-mode]") as unknown as TestElement | null;
-		expect(chip()?.getAttribute("data-send-mode")).toBe("steer");
-		await click(chip() as TestElement);
-		expect(chip()?.getAttribute("data-send-mode")).toBe("followUp");
-		await typeInto(findTextarea(), "after this run");
+		expect(document.querySelector("[data-send-mode]")).toBeNull();
+		await typeInto(findTextarea(), "do this now");
+		expect(document.querySelector('[data-slot="send"] button')?.getAttribute("data-send-lane")).toBe("steer");
 		await pressEnter(findTextarea());
 		await flush();
-		expect(followUp).toHaveBeenCalledWith("after this run", []);
+		expect(steer).toHaveBeenLastCalledWith("do this now", []);
 
-		await act(async () => useSessionStore.setState({ isStreaming: false }));
-		await act(async () => useSessionStore.setState({ isStreaming: true }));
-		expect(chip()?.getAttribute("data-send-mode")).toBe("steer");
-		await typeInto(findTextarea(), "next run steer");
-		await pressEnter(findTextarea());
-		await flush();
-		expect(steer).toHaveBeenCalledWith("next run steer", []);
+		for (const [text, modifiers] of [
+			["by ctrl enter", { ctrlKey: true }],
+			["by alt enter", { altKey: true }],
+		] as const) {
+			await typeInto(findTextarea(), text);
+			await pressEnter(findTextarea(), modifiers);
+			await flush();
+			expect(steer).toHaveBeenLastCalledWith(text, []);
+		}
+		expect(followUp).not.toHaveBeenCalled();
 	});
 
 	it("offers Stop while the automatic mode choice holds a prompt back, and Stop withdraws it into the draft", async () => {
@@ -662,7 +674,7 @@ describe("InputArea prompt history", () => {
 		await flush();
 		await flush();
 
-		expect(prompt).toHaveBeenCalledWith("delivered prompt", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("delivered prompt");
 		expect(useInputHistoryStore.getState().entries.map(entry => entry.prompt)).toEqual(["delivered prompt"]);
 	});
 
@@ -675,7 +687,7 @@ describe("InputArea prompt history", () => {
 		await flush();
 		await flush();
 
-		expect(prompt).toHaveBeenCalledWith(`look: ${blob.content}`, []);
+		expect(prompt.mock.lastCall?.[0]).toBe(`look: ${blob.content}`);
 		expect(useInputHistoryStore.getState().entries.map(entry => entry.prompt)).toEqual([`look: ${blob.content}`]);
 	});
 
@@ -694,7 +706,7 @@ describe("InputArea prompt history", () => {
 			await pressEnter(findTextarea());
 			await flush();
 			await flush();
-			expect(prompt).toHaveBeenLastCalledWith(blob.content, []);
+			expect(prompt.mock.lastCall?.[0]).toBe(blob.content);
 		}
 		expect(bash).not.toHaveBeenCalled();
 		expect(evaluate).not.toHaveBeenCalled();
@@ -1097,7 +1109,7 @@ describe("InputArea next-prompt suggestion", () => {
 		await pressKey({ key: "Tab" });
 		await pressEnter(findTextarea());
 		await flush();
-		expect(prompt).toHaveBeenCalledWith(SUGGESTION, []);
+		expect(prompt.mock.lastCall?.[0]).toBe(SUGGESTION);
 		await act(async () => useComposerStore.getState().setSending(false));
 
 		expect(useComposerStore.getState().draft).toBe("");
@@ -1193,7 +1205,7 @@ describe("InputArea expanded composer", () => {
 
 		await pressKey({ key: "Enter", metaKey: true });
 		await flush();
-		expect(prompt).toHaveBeenCalledWith("long draft", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("long draft");
 		expect(isExpanded()).toBe(false);
 	});
 
@@ -1585,7 +1597,7 @@ describe("InputArea composer keys", () => {
 		await flush();
 		await pressKey({ key: "Enter" });
 		await flush();
-		expect(prompt).toHaveBeenCalledWith("use /skill:gone here", []);
+		expect(prompt.mock.lastCall?.[0]).toBe("use /skill:gone here");
 		expect(useToastStore.getState().toasts.map(toast => toast.message)).toContain(
 			translate("input.skills.off", { name: "gone" }),
 		);
@@ -1661,22 +1673,19 @@ describe("InputArea run settings and modes", () => {
 		await click(option);
 	}
 
-	/** The chip's words: the provider mark's fallback letter is decoration. */
-	function modelChipText(chip: TestElement | null): string | undefined {
-		const element = chip as unknown as Element | null;
-		const mark = element?.querySelector("[data-provider-mark]")?.textContent ?? "";
-		return element?.textContent?.replace(mark, "");
-	}
-
 	it("keeps one calm toolbar at every width: the model and its effort, the Run chip", async () => {
 		useModelStore.setState({ model: { provider: "acme", id: "acme-opus-5", name: "Acme Opus 5" } });
 		for (const width of [1200, 600, 380]) {
 			setWindowWidth(width);
 			await mount();
-			const model = document.querySelector("button[data-model-chip]") as unknown as TestElement | null;
 			// The chip shows the display name and the effort (`Model · Thinking`); the id stays in its tooltip.
-			expect(modelChipText(model)).toBe(`Acme Opus 5· ${translate("input.thinking.name.high")}`);
-			expect(model?.getAttribute("aria-label" as never)).toContain(translate("input.thinking.name.high"));
+			expect(document.querySelector("[data-model-chip] .omp-composer-model-label")?.textContent).toBe("Acme Opus 5");
+			expect(document.querySelector("[data-model-chip] .omp-composer-effort")?.textContent).toBe(
+				`· ${translate("input.thinking.name.high")}`,
+			);
+			expect(document.querySelector("[data-model-chip] .sr-only")?.textContent).toContain(
+				translate("input.thinking.name.high"),
+			);
 			expect(document.querySelectorAll("button[data-composer-modes-trigger]").length).toBe(0);
 			const runSettings = document.querySelector("button[data-run-settings-trigger]");
 			expect(runSettings?.textContent).toContain(translate("input.runSettings.title"));
@@ -1690,14 +1699,13 @@ describe("InputArea run settings and modes", () => {
 	it("shows Auto alone on the model chip; the effort Auto picked stays in its name, a fixed level shows itself", async () => {
 		useModelStore.setState({ model: { provider: "acme", id: "acme-opus-5", name: "Acme Opus 5" } });
 		await mount();
-		const chip = () => document.querySelector("button[data-model-chip]") as unknown as TestElement | null;
 		const effort = () => document.querySelector("button[data-model-chip] .omp-composer-effort")?.textContent;
 		await act(async () => useModelStore.setState({ thinkingConfigured: "auto" }));
 		expect(effort()).toBe(`· ${translate("input.thinking.name.auto")}`);
 		await act(async () => useModelStore.setState({ thinkingAutoResolved: "xhigh" }));
 		expect(effort()).toBe(`· ${translate("input.thinking.name.auto")}`);
 		const resolved = translate("input.thinking.autoResolved", { level: translate("input.thinking.name.xhigh") });
-		expect(chip()?.getAttribute("aria-label" as never)).toContain(resolved);
+		expect(document.querySelector("[data-model-chip] .sr-only")?.textContent).toContain(resolved);
 		await act(async () => useModelStore.setState({ thinkingConfigured: "high" }));
 		expect(effort()).toBe(`· ${translate("input.thinking.name.high")}`);
 	});

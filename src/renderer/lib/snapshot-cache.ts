@@ -98,8 +98,9 @@ function scrubValue(value: unknown, depth: number): unknown {
 	const isImage = record.type === "image";
 	for (const [key, item] of Object.entries(record)) {
 		if (CREDENTIAL_KEY.test(key)) continue;
-		// Picture bytes are the largest thing a transcript carries and are re-read with the live page.
-		if (isImage && key === "data") continue;
+		// Picture bytes are the largest thing a transcript carries and are re-read with the live page; a paired page's
+		// blob URL (`ImageContent.blobUrl`) dies with its host's blob, so a snapshot would only draw a dead link.
+		if (isImage && (key === "data" || key === "blobUrl")) continue;
 		const next = scrubValue(item, depth + 1);
 		if (next !== undefined) out[key] = next;
 	}

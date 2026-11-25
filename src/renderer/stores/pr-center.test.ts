@@ -80,8 +80,14 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	vi.useRealTimers();
 	resetLastReadForTest();
+	delete (globalThis as Record<string, unknown>).document;
 });
+
+async function flush(): Promise<void> {
+	for (let i = 0; i < 10; i++) await Promise.resolve();
+}
 
 describe("pr-center store", () => {
 	it("probe stores the repo and loads the list when available", async () => {
@@ -176,5 +182,164 @@ describe("pr-center: the last read paints at once", () => {
 		await reading;
 		expect(usePrCenterStore.getState().selected).toBe(43);
 		expect(usePrCenterStore.getState().detail?.number).toBe(43);
+	});
+});
+
+describe("pr-center: one list read at a time, and only its own outcome", () => {
+	const C_ITEM = { ...LIST_ITEM, number: 7, title: "Merged one" };
+
+	it.each(["success", "failure"] as const)(
+		"switching B→C during A's read reads C once afterwards; A's late %s leaves C's list, error and mark alone",
+		async outcome => {
+			const omp = installMockOmp();
+			const a = Promise.withResolvers<RpcResponse>();
+			const c = Promise.withResolvers<RpcResponse>();
+			omp.rpc.prList.mockReturnValueOnce(a.promise as never).mockReturnValueOnce(c.promise as never);
+			const reading = usePrCenterStore.getState().refresh();
+			usePrCenterStore.getState().setListState("closed");
+			usePrCenterStore.getState().setListState("merged");
+			expect(omp.rpc.prList).toHaveBeenCalledTimes(1);
+
+			a.resolve(outcome === "success" ? ok([LIST_ITEM]) : fail("boom", "github_failed"));
+			await reading;
+			await flush();
+			expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
+			expect(omp.rpc.prList).toHaveBeenLastCalledWith("merged", 50, "all", false);
+			let state = usePrCenterStore.getState();
+			expect(state.list).toEqual([]);
+			expect(state.error).toBeNull();
+			expect(state.listLoading).toBe(true);
+
+			c.resolve(ok([C_ITEM]));
+			await flush();
+			state = usePrCenterStore.getState();
+			expect(state.list).toEqual([C_ITEM]);
+			expect(state.listLoading).toBe(false);
+			expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it("a refresh asked while one runs runs once right after it", async () => {
+		const omp = installMockOmp();
+		const a = Promise.withResolvers<RpcResponse>();
+		omp.rpc.prList.mockReturnValueOnce(a.promise as never);
+		const reading = usePrCenterStore.getState().refresh();
+		void usePrCenterStore.getState().refresh();
+		void usePrCenterStore.getState().refresh();
+		expect(omp.rpc.prList).toHaveBeenCalledTimes(1);
+		a.resolve(ok([LIST_ITEM]));
+		await reading;
+		await flush();
+		expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
+		expect(usePrCenterStore.getState().listLoading).toBe(false);
+	});
+
+	it("a probe's failure for a folder no longer shown writes nothing", async () => {
+		const omp = installMockOmp();
+		const answer = Promise.withResolvers<RpcResponse>();
+		omp.rpc.prRepo.mockReturnValueOnce(answer.promise as never);
+		usePrCenterStore.getState().enter({ device: undefined, cwd: "/work/a" });
+		const probing = usePrCenterStore.getState().probe();
+		rememberRead(undefined, "pr:repo:/work/b", REPO, false);
+		usePrCenterStore.getState().enter({ device: undefined, cwd: "/work/b" });
+		answer.resolve(fail("not a repo", "not_a_repo"));
+		await probing;
+		expect(usePrCenterStore.getState().repo).toEqual(REPO);
+		expect(usePrCenterStore.getState().error).toBeNull();
+	});
+});
+
+describe("pr-center: the window coming back reads stale rows in place", () => {
+	const T0 = Date.parse("2026-11-25T10:00:00.000Z");
+
+	function showing(omp: ReturnType<typeof installMockOmp>) {
+		const doc = Object.assign(new EventTarget(), { visibilityState: "visible" });
+		Object.assign(globalThis, { document: doc, window: Object.assign(new EventTarget(), { omp }) });
+		return (state: "visible" | "hidden", at: number) => {
+			vi.setSystemTime(at);
+			doc.visibilityState = state;
+			doc.dispatchEvent(new Event("visibilitychange"));
+		};
+	}
+
+	it("a return within a minute reads nothing, a hidden window never reads, a later return reads in the background", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(T0);
+		const omp = installMockOmp();
+		const turn = showing(omp);
+		await usePrCenterStore.getState().probe();
+		const stop = usePrCenterStore.getState().watch();
+		expect(omp.rpc.prList).toHaveBeenCalledTimes(1);
+
+		turn("visible", T0 + 30_000);
+		await flush();
+		expect(omp.rpc.prList).toHaveBeenCalledTimes(1);
+		turn("hidden", T0 + 90_000);
+		await flush();
+		expect(omp.rpc.prList).toHaveBeenCalledTimes(1);
+		turn("visible", T0 + 91_000);
+		await flush();
+		expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
+		expect(omp.rpc.prList).toHaveBeenLastCalledWith("open", 50, "all", true);
+		stop();
+	});
+
+	it("GitHub holding a background read shows until when, keeps the rows and reads nothing before then", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(T0);
+		const omp = installMockOmp();
+		const turn = showing(omp);
+		await usePrCenterStore.getState().probe();
+		const stop = usePrCenterStore.getState().watch();
+		omp.rpc.prList.mockResolvedValueOnce(
+			fail("background reads spent; paused until 2026-11-25T10:31:00.000Z", "gh_paused"),
+		);
+		turn("visible", T0 + 61_000);
+		await flush();
+		let state = usePrCenterStore.getState();
+		expect(state.pausedUntil).toBe(Date.parse("2026-11-25T10:31:00.000Z"));
+		expect(state.list).toEqual([LIST_ITEM]);
+		expect(state.error).toBeNull();
+
+		turn("visible", T0 + 20 * 60_000);
+		await flush();
+		expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
+
+		// A person's read still runs, and its success ends the hold.
+		await usePrCenterStore.getState().refresh();
+		state = usePrCenterStore.getState();
+		expect(omp.rpc.prList).toHaveBeenLastCalledWith("open", 50, "all", false);
+		expect(state.pausedUntil).toBeNull();
+		stop();
+	});
+
+	it("a shown PR whose checks still run reads again after 60 s, then 120 s, in the background", async () => {
+		vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+		vi.setSystemTime(T0);
+		const omp = installMockOmp();
+		showing(omp);
+		omp.rpc.prGet.mockResolvedValue(
+			ok({
+				number: 42,
+				title: "Add widget",
+				files: [],
+				checks: [{ name: "ci", status: "IN_PROGRESS", conclusion: null }],
+			}) as never,
+		);
+		await usePrCenterStore.getState().probe();
+		const stop = usePrCenterStore.getState().watch();
+		await usePrCenterStore.getState().select(42);
+		expect(omp.rpc.prGet).toHaveBeenCalledTimes(1);
+
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(omp.rpc.prGet).toHaveBeenCalledTimes(2);
+		expect(omp.rpc.prGet).toHaveBeenLastCalledWith(42, true);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(omp.rpc.prGet).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(omp.rpc.prGet).toHaveBeenCalledTimes(3);
+		stop();
+		await vi.advanceTimersByTimeAsync(900_000);
+		expect(omp.rpc.prGet).toHaveBeenCalledTimes(3);
 	});
 });

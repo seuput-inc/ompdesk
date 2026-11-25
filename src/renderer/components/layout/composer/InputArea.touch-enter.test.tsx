@@ -123,9 +123,12 @@ async function flush(): Promise<void> {
 	});
 }
 
+// A tray's claim of the queue an earlier omp left (`queue_take_held`) and the queue read send nothing.
 const sent = () => [
 	...prompt.mock.calls,
-	...rpcCommand.mock.calls.map(([command]) => [command]).filter(([command]) => command.type !== "get_queue"),
+	...rpcCommand.mock.calls
+		.map(([command]) => [command])
+		.filter(([command]) => command.type !== "get_queue" && command.type !== "queue_take_held"),
 ];
 
 async function mount(): Promise<void> {

@@ -1,0 +1,35 @@
+{
+	"runs": [
+		{
+			"name": "fix",
+			"config": "MC.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "fix-three-quits",
+			"config": "MC.cfg",
+			"constants": {
+				"MaxQuits": "3"
+			},
+			"expect": "pass"
+		},
+		{
+			"name": "v0134-loses-the-brief",
+			"config": "MC_bug_nokeep.cfg",
+			"expect": "invariant",
+			"property": "NeverLost"
+		},
+		{
+			"name": "same-omp-twice",
+			"config": "MC_bug_noinstance.cfg",
+			"expect": "invariant",
+			"property": "OnceAtMost"
+		},
+		{
+			"name": "cut-open-arrives",
+			"config": "MC_sanity.cfg",
+			"expect": "invariant",
+			"property": "NoCutArrival"
+		}
+	]
+}

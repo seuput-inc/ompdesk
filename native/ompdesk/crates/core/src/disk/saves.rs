@@ -1,4 +1,4 @@
-//! A store's save that finds the disk full (`ENOSPC`): the file keeps its old bytes (`write_atomic_if` removes its
+//! A store's save that finds the disk or its quota full: the file keeps its old bytes (`write_atomic_if` removes its
 //! temp file), the caller still gets the error and keeps its state in memory, and the same content is tried again
 //! here on a backoff until it lands or a newer save of that file replaces it. Main hears of it as
 //! `store.saveFailed {file}` once per file and `store.saved {file}` when the file is no longer waiting for space, and
@@ -22,12 +22,11 @@ const RETRY_MS: [u64; 5] = [5_000, 10_000, 20_000, 40_000, 60_000];
 
 type Writer = dyn Fn(&Path, &[u8], Option<u32>, u32) -> Result<bool, Fault> + Send + Sync;
 
-/// Whether a failed write ran out of room: its message is node's `ENOSPC: no space left on device, open '…'`.
+/// A disk without room or a writer at its disk quota.
 pub(crate) fn disk_full(fault: &Fault) -> bool {
-    fault.message.starts_with("ENOSPC:")
+    fault.message.starts_with("ENOSPC:") || fault.message.starts_with("EDQUOT:")
 }
 
-#[derive(Clone)]
 struct Kept {
     bytes: Vec<u8>,
     mode: Option<u32>,
@@ -119,6 +118,10 @@ impl Saves {
     }
 
     fn retry(self: &Arc<Self>, file: &Path) {
+        #[cfg(test)]
+        if self.delays.is_empty() {
+            return;
+        }
         let saves = Arc::clone(self);
         let file = file.to_path_buf();
         std::thread::spawn(move || {
@@ -126,27 +129,44 @@ impl Saves {
             loop {
                 std::thread::sleep(saves.delay(tries));
                 tries += 1;
-                let mut state = saves.lock();
-                let Some(kept) = state.kept.get(&file).cloned() else {
+                if saves.retry_once(&file) {
                     return;
-                };
-                let (path, bytes) = (file.as_path(), kept.bytes.as_slice());
-                let result = (saves.writer)(path, bytes, kept.mode, kept.dir_mode);
-                if matches!(&result, Err(fault) if disk_full(fault)) {
-                    continue;
                 }
-                if let Err(fault) = result {
-                    eprintln!(
-                        "ompdesk-core: couldn't save {} after the disk was full: {}",
-                        file.display(),
-                        fault.message
-                    );
-                }
-                state.kept.remove(&file);
-                state.tell("store.saved", &file);
-                return;
             }
         });
+    }
+
+    pub(crate) fn waiting_for_space(&self, file: &Path) -> bool {
+        self.lock().kept.contains_key(file)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn manual(writer: Box<Writer>) -> Arc<Self> {
+        Arc::new(Self::new(writer, Vec::new()))
+    }
+
+    pub(crate) fn retry_once(&self, file: &Path) -> bool {
+        let mut state = self.lock();
+        let Some(kept) = state.kept.get(file) else {
+            return true;
+        };
+        let result = (self.writer)(file, &kept.bytes, kept.mode, kept.dir_mode);
+        if matches!(&result, Err(fault) if disk_full(fault)) {
+            return false;
+        }
+        let kept = state.kept.remove(file).expect("held under this lock");
+        state.tell("store.saved", file);
+        drop(state);
+        match result {
+            Ok(true) => crate::visuals::saved_after_retry(file, &kept.bytes, self),
+            Err(fault) => eprintln!(
+                "ompdesk-core: couldn't save {} after the disk was full: {}",
+                file.display(),
+                fault.message
+            ),
+            Ok(false) => (),
+        }
+        true
     }
 }
 
@@ -168,6 +188,10 @@ pub(crate) fn write_kept(
     dir_mode: u32,
 ) -> Result<bool, Fault> {
     SAVES.write(file, bytes, mode, dir_mode)
+}
+
+pub(crate) fn waiting_content(file: &Path) -> Option<Vec<u8>> {
+    SAVES.lock().kept.get(file).map(|kept| kept.bytes.clone())
 }
 
 /// Where `store.saveFailed` and `store.saved` go: the connection main speaks on.
@@ -264,6 +288,36 @@ mod tests {
         assert_eq!(heard(&mut frames), vec![("store.saved".to_string(), name)]);
         assert!(fs::read_dir(&dir).unwrap().count() == 1, "no temp file");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_disk_quota_error_keeps_the_write_until_quota_is_available() {
+        let dir = temp("quota");
+        let file = dir.join("state.json");
+        fs::write(&file, b"old").unwrap();
+        #[cfg(unix)]
+        let quota = libc::EDQUOT;
+        #[cfg(windows)]
+        let quota = 1295; // ERROR_DISK_QUOTA_EXCEEDED
+        let full = AtomicBool::new(true);
+        let saves = Saves::manual(Box::new(move |file, bytes, mode, dir_mode| {
+            if full.swap(false, Ordering::SeqCst) {
+                Err(super::super::tree::fault(
+                    &std::io::Error::from_raw_os_error(quota),
+                    "write",
+                    file,
+                ))
+            } else {
+                write_atomic_if(file, bytes, mode, dir_mode, &|| true)
+            }
+        }));
+        let failed = saves.write(&file, b"new", Some(0o600), 0o700).unwrap_err();
+        assert!(failed.message.starts_with("EDQUOT:"));
+        assert_eq!(fs::read(&file).unwrap(), b"old");
+        assert!(saves.waiting_for_space(&file));
+        assert!(saves.retry_once(&file));
+        assert_eq!(fs::read(&file).unwrap(), b"new");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stockHelperRequest as stockHelperRequestImport } from "../stock-helper";
 import { type BridgeProviderAccounts, handlers, mergeProviderAccounts, type StockLogoutAccount } from "./settings";
 import type { LocalCommandContext } from "./types";
@@ -8,6 +8,7 @@ import type { LocalCommandContext } from "./types";
 vi.mock("../stock-helper", () => ({ stockHelperRequest: vi.fn() }));
 const stockHelperRequest = vi.mocked(stockHelperRequestImport);
 beforeEach(() => stockHelperRequest.mockReset());
+afterEach(() => vi.unstubAllGlobals());
 
 const work: StockLogoutAccount = {
 	credentialId: 7,
@@ -39,6 +40,53 @@ function fakeCtx(send: Fake, request: Fake): LocalCommandContext {
 		},
 	};
 }
+
+describe("get_available_models handler", () => {
+	it("returns the catalog when release metadata cannot be fetched", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+		const catalog = {
+			models: [{ provider: "openrouter", id: "lab/model", name: "Model" }],
+			discoveryStates: [],
+			refreshPending: false,
+			generation: 4,
+		};
+		const request = vi.fn(async () => catalog);
+		const result = await handlers.get_available_models(
+			{ type: "get_available_models", forceRefresh: true },
+			fakeCtx(vi.fn(), request),
+		);
+		expect(result).toEqual(catalog);
+		expect(request).toHaveBeenCalledWith("models_catalog", { forceRefresh: true });
+	});
+
+	it("returns the stock catalog without starting or awaiting optional release metadata", async () => {
+		const started = Promise.withResolvers<void>();
+		const metadata = Promise.withResolvers<Response>();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(() => {
+				started.resolve();
+				return metadata.promise;
+			}),
+		);
+		const catalog = { models: [{ provider: "openrouter", id: "sample/model" }], generation: 1 };
+		try {
+			const read = handlers.get_available_models(
+				{ type: "get_available_models" },
+				fakeCtx(
+					vi.fn(),
+					vi.fn(async () => catalog),
+				),
+			);
+			expect(
+				await Promise.race([Promise.resolve(read).then(() => "catalog"), started.promise.then(() => "metadata")]),
+			).toBe("catalog");
+			expect(await read).toEqual(catalog);
+		} finally {
+			metadata.resolve(Response.json({ providers: { openrouter: { models: {} } }, models: {} }));
+		}
+	});
+});
 
 describe("mergeProviderAccounts", () => {
 	it("joins stock accounts with per-account quota by credentialId", () => {
@@ -243,12 +291,12 @@ describe("reset passes", () => {
 });
 
 describe("login_cancel handler", () => {
-	it("reaches the sign-in's loopback callback with a denial and the flow's state, as a provider's Deny does", async () => {
+	it.each([500, 302])("sends the denial only to the callback when stock answers %i", async status => {
 		const seen: string[] = [];
 		const server = createServer((request, response) => {
 			seen.push(request.url ?? "");
-			// Stock's callback server answers a denial with its error page.
-			response.writeHead(500).end();
+			if (status === 302 && seen.length === 1) response.writeHead(302, { Location: "/elsewhere" }).end();
+			else response.writeHead(status === 500 ? 500 : 200).end();
 		});
 		await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
 		try {
@@ -261,6 +309,7 @@ describe("login_cancel handler", () => {
 				},
 				fakeCtx(vi.fn(), vi.fn()),
 			);
+			expect(seen).toHaveLength(1);
 			const [callback] = seen.map(url => new URL(url, "http://127.0.0.1"));
 			expect(callback?.pathname).toBe("/callback");
 			expect(Object.fromEntries(callback?.searchParams ?? [])).toEqual({
@@ -274,19 +323,13 @@ describe("login_cancel handler", () => {
 	});
 
 	it("refuses a sign-in without a loopback callback and never fetches it", async () => {
-		const fetchSpy = vi.spyOn(globalThis, "fetch");
-		try {
-			const redirect = encodeURIComponent("vscode://gitlab.gitlab-workflow/authentication");
-			await expect(
-				handlers.login_cancel(
-					{ type: "login_cancel", url: `https://gitlab.com/oauth/authorize?redirect_uri=${redirect}` },
-					fakeCtx(vi.fn(), vi.fn()),
-				),
-			).rejects.toThrow("no loopback callback");
-			expect(fetchSpy).not.toHaveBeenCalled();
-		} finally {
-			fetchSpy.mockRestore();
-		}
+		const redirect = encodeURIComponent("vscode://gitlab.gitlab-workflow/authentication");
+		await expect(
+			handlers.login_cancel(
+				{ type: "login_cancel", url: `https://gitlab.com/oauth/authorize?redirect_uri=${redirect}` },
+				fakeCtx(vi.fn(), vi.fn()),
+			),
+		).rejects.toMatchObject({ code: "no_loopback_callback" });
 	});
 });
 

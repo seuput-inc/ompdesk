@@ -6,7 +6,8 @@
  * What ships: electron-builder packs `out/**` and no node_modules, so a package is in
  * the app when main, preload or the renderer bundle it. The shipped set is taken as the
  * production closure of package.json `dependencies` (plus `optionalDependencies` that
- * are installed), read from node_modules, and Electron itself. This is a superset of
+ * are installed), read from node_modules. The engine (CEF and Chromium), Node and the shell's crates are sections
+ * 2 and 5; no Electron ships. This is a superset of
  * what Rollup tree-shook into `out/`, never a subset. The few devDependencies the
  * bundles import are type-only (unified, remark-parse, micromark-*), so none are added.
  * A package built for some platforms only (its package.json names `os` or `cpu`: a
@@ -20,8 +21,11 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import aiMemorySource from "../native/memory/ompdesk.json" with { type: "json" };
+import cefPin from "../native/ompdesk/crates/shell/cef-pin.json" with { type: "json" };
+import ponytailPin from "../resources/omp-builtin/ponytail/ponytail-config.json" with { type: "json" };
 import agentDesktopPin from "./agent-desktop-pin.json" with { type: "json" };
 import { committedCrateList } from "./gen-crate-notices";
+import nodePin from "./node-runtime-pin.json" with { type: "json" };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUTPUT = join(ROOT, "THIRD_PARTY_NOTICES.txt");
@@ -142,20 +146,6 @@ function collect(): { components: Component[]; missing: string[] } {
 	return { components, missing };
 }
 
-function electronComponent(): Component {
-	const dir = join(ROOT, "node_modules", "electron");
-	const pkg = readJson(join(dir, "package.json"));
-	const license = join(dir, "dist", "LICENSE");
-	if (!existsSync(license)) throw new Error("node_modules/electron/dist/LICENSE is missing; run bun install");
-	return {
-		name: "electron",
-		version: pkg.version,
-		spdx: declaredLicense(pkg),
-		text: readFileSync(license, "utf8").replace(/\r\n?/g, "\n").trim(),
-		dir: "node_modules/electron",
-	};
-}
-
 /** First line that states a copyright, to head a group with. */
 function copyrightLines(text: string): string[] {
 	return text
@@ -196,7 +186,6 @@ const MIT_TEXT = [
 function vendoredSections(): string {
 	const read = (rel: string): string => readFileSync(join(ROOT, rel), "utf8").replace(/\r\n?/g, "\n").trim();
 	const aiMemoryLicense = read("LICENSES/ai-memory-LICENSE");
-	const reaLicense = read("resources/omp-builtin/rea/skills/reverse-engineer-anything/LICENSE");
 	const pstackLicense = read("LICENSES/MIT-pstack.txt");
 	const eccLicense = read("LICENSES/MIT-ecc.txt");
 	const proofLicense = read("LICENSES/proof-skills-MIT.txt");
@@ -209,6 +198,7 @@ function vendoredSections(): string {
 		version: string;
 	};
 	const lobeLicense = read("LICENSES/MIT-lobe-icons.txt");
+	const cefLicense = read("LICENSES/CEF-LICENSE.txt");
 	return [
 		[
 			"Mixdog (https://github.com/tribgames/mixdog)",
@@ -243,20 +233,37 @@ function vendoredSections(): string {
 			"statically link the Rust crates listed in section 4, each under its own license.",
 		].join("\n"),
 		[
+			`Chromium Embedded Framework ${cefPin.cefVersion} (https://bitbucket.org/chromiumembedded/cef) and Chromium ${cefPin.chromium}`,
+			"The app's browser engine: the release archive `native/ompdesk/crates/shell/cef-pin.json` pins (libcef and its",
+			"runtime files, unmodified) ships beside the app's executable on Windows (libcef.dll, chrome_elf.dll and the",
+			"rest) and as Chromium Embedded Framework.framework on macOS. CEF is licensed under the BSD 3-Clause License",
+			"(full text below, in LICENSES/CEF-LICENSE.txt and shipped as LICENSE.cef.txt). Chromium and the libraries it",
+			"bundles are under their own licenses, listed in LICENSES.chromium.html (CEF's CREDITS.html), which ships",
+			"beside this file.",
+			"",
+			cefLicense,
+		].join("\n"),
+		[
+			`Node.js ${nodePin.version} (https://nodejs.org)`,
+			"The unmodified release binary (scripts/node-runtime-pin.json: nodejs.org's archive, checked against its",
+			"published SHA-256) ships as node/node (node/node.exe on Windows) and runs the app's TypeScript main. Node.js is",
+			"under the MIT License, with the licenses of the libraries it bundles (V8, OpenSSL, ICU, zlib, undici and",
+			"others); Node's complete LICENSE file ships beside the binary as node/LICENSE.",
+		].join("\n"),
+		[
+			"OMPdesk's CEF shell (native/ompdesk/crates/shell)",
+			"OMPdesk's own Rust source is built into the shell that ships as the app's executable (OMPdesk.exe,",
+			"OMPdesk.app/Contents/MacOS/OMPdesk and the helper apps copied from it). It is OMPdesk's, under the Apache",
+			"License, Version 2.0 (LICENSE), and statically links the Rust crates listed in section 5, each under its own",
+			"license.",
+		].join("\n"),
+		[
 			`agent-desktop ${agentDesktopPin.version} (https://github.com/${agentDesktopPin.repo}, tag v${agentDesktopPin.version})`,
 			"The upstream release binaries (agent-desktop and agent-desktop-macos-helper on macOS, agent-desktop.exe",
 			"on Windows) ship unmodified inside the app under agent-desktop-bin/, unpacked from the release archive",
 			"scripts/agent-desktop-pin.json pins by scripts/build-agent-desktop.ts; on macOS they are re-signed with",
 			"the app. Licensed under the Apache License, Version 2.0 (full text: LICENSES/agent-desktop-LICENSE,",
 			"also shipped as agent-desktop-bin/LICENSE). Upstream publishes no NOTICE file.",
-		].join("\n"),
-		[
-			"reverse-engineer-anything skill from REA (rea-agents, https://github.com/morluto/rea)",
-			"Copyright (c) 2026 morluto, licensed under the MIT License. Copied unmodified from the pinned",
-			"rea-agents release into resources/omp-builtin/rea/skills/reverse-engineer-anything/, except",
-			'for one added "OMPdesk built-in" section in SKILL.md.',
-			"",
-			reaLicense,
 		].join("\n"),
 		[
 			"pstack engineering skills (https://github.com/cursor/plugins/tree/main/pstack)",
@@ -295,9 +302,26 @@ function vendoredSections(): string {
 			eccLicense,
 		].join("\n"),
 		[
-			"AI provider brand symbols of @lobehub/icons (@lobehub/icons-static-svg 1.95.1,",
-			"https://github.com/lobehub/lobe-icons), Copyright (c) 2023 LobeHub, licensed under the MIT",
-			"License (LICENSES/MIT-lobe-icons.txt). The monochrome SVG files are copied unmodified into",
+			`Ponytail ${ponytailPin.version} (https://github.com/DietrichGebert/ponytail, commit ${ponytailPin.commit})`,
+			"Six unmodified skill documents in resources/omp-builtin/ponytail/skills/. No plugin or hooks are bundled.",
+			"Licensed under the MIT License (full text below and in LICENSES/MIT-ponytail.txt).",
+			"",
+			read("LICENSES/MIT-ponytail.txt"),
+		].join("\n"),
+		[
+			"dot-prop 10.2.0 (https://github.com/sindresorhus/dot-prop) and conf 16.0.0",
+			"(https://github.com/sindresorhus/conf). dot-prop's parsePath and conf's own-property get, set and",
+			"delete of a dotted key, which electron-store gave the preference files, are ported to Rust in",
+			"native/ompdesk/crates/core/src/prefs/path.rs. Licensed under the MIT License (full text below and",
+			"in LICENSES/MIT-sindresorhus.txt).",
+			"",
+			read("LICENSES/MIT-sindresorhus.txt"),
+		].join("\n"),
+		[
+			"AI provider brand symbols of @lobehub/icons (@lobehub/icons-static-svg 1.95.1;",
+			"Chutes: 1.102.0; https://github.com/lobehub/lobe-icons), Copyright (c) 2023 LobeHub,",
+			"licensed under the MIT License (LICENSES/MIT-lobe-icons.txt). The monochrome SVG files",
+			"are copied unmodified into",
 			"src/renderer/assets/provider-marks/ and shown beside the provider they identify. The symbols",
 			"are trademarks or logos of their owners (Anthropic, OpenAI, Google, xAI, DeepSeek, Meta,",
 			"GitHub and the others) and identify those providers only; their use here implies no",
@@ -307,19 +331,18 @@ function vendoredSections(): string {
 		].join("\n"),
 		[
 			"Theme palettes (src/renderer/lib/theme-palettes.ts)",
-			"The Solarized Light, Nord, Tokyo Night, Gruvbox Dark and GitHub Light themes start from the",
+			"The Solarized, Gruvbox and GitHub themes (each a light and a dark one), and the near-monochrome",
+			"OMPdesk Light and Dark themes, start from the",
 			"colors their authors publish; where a published color fails WCAG AA for text on its own",
 			"background it is replaced by a shade of the same hue (see the header of that file). Each",
 			"palette is credited below with its license; every one is MIT.",
 			"",
 			"- Solarized, https://github.com/altercation/solarized, Copyright (c) 2011 Ethan Schoonover",
-			"- Nord, https://github.com/nordtheme/nord, Copyright (c) 2016-present Sven Greb",
-			"  <development@svengreb.de> (https://www.svengreb.de)",
-			"- Tokyo Night, https://github.com/tokyo-night/tokyo-night-vscode-theme,",
-			"  Copyright (c) 2018-present Enkia",
 			"- Gruvbox, https://github.com/morhetz/gruvbox, by Pavel Pertsev (morhetz), licensed MIT",
 			"  (package.json; the repository ships no separate license file)",
 			"- GitHub Primer primitives, https://github.com/primer/primitives, Copyright (c) 2018 GitHub Inc.",
+			"- Orca (OMPdesk Light and Dark, and the app's elevation shadows), https://github.com/stablyai/orca,",
+			"  Copyright (c) 2026 Lovecast Inc.",
 			"",
 			MIT_TEXT,
 		].join("\n"),
@@ -337,7 +360,7 @@ function vendoredSections(): string {
 function generate(): { text: string; flagged: string[] } {
 	const { components, missing } = collect();
 	if (missing.length) throw new Error(`dependencies not installed (run bun install): ${missing.join(", ")}`);
-	const all = [electronComponent(), ...components];
+	const all = components;
 
 	const groups = new Map<string, Component[]>();
 	const flagged: string[] = [];
@@ -365,13 +388,14 @@ function generate(): { text: string; flagged: string[] } {
 		"",
 		"OMPdesk itself is Copyright 2026 SeuPut and licensed under the Apache License 2.0 (LICENSE,",
 		"NOTICE); versions up to and including v0.41.0 were released under the MIT License.",
-		"The app is built from the components below and the vendored code credited in sections 2 and 3;",
+		"The app is built from the components below and the vendored code credited in section 2;",
 		"each is used under the license shown. This file is generated by",
 		"scripts/generate-third-party-notices.ts from node_modules (bun run gen:licenses); do not",
 		"edit it by hand.",
 		"",
-		"Electron (MIT) bundles Chromium and its third-party components, whose notices ship in",
-		"LICENSES.chromium.html beside this file.",
+		"The desktop shell uses Tauri 2 and the operating system's WebView. The TypeScript main runs on Node.js;",
+		"its complete license file, with those of the libraries it bundles, ships as node/LICENSE beside this file.",
+		"The historical CEF dependency list remains in section 5 for migration builds, not as a bundled Tauri engine.",
 		"",
 		`${all.length} npm components, in ${groups.size + unlicensed.length} license texts.`,
 		"",
@@ -381,7 +405,12 @@ function generate(): { text: string; flagged: string[] } {
 		"",
 	);
 	for (const [text, list] of ordered) {
-		for (const component of list) out.push(`${component.name} ${component.version} (${component.spdx})`);
+		for (const component of list) {
+			out.push(`${component.name} ${component.version} (${component.spdx})`);
+			if (component.name === "elkjs") {
+				out.push(`Source available under EPL-2.0: https://github.com/kieler/elkjs/tree/${component.version}`);
+			}
+		}
 		const copyrights = [...new Set(list.flatMap(component => copyrightLines(component.text)))];
 		if (copyrights.length > 1 && list.length > 1) out.push("", ...copyrights);
 		out.push("", text, "", THIN, "");
@@ -409,6 +438,24 @@ function generate(): { text: string; flagged: string[] } {
 		RULE,
 		"",
 		committedCrateList("ompdesk"),
+		"",
+		RULE,
+		"5. Rust crates linked into OMPdesk's CEF shell (native/ompdesk/crates/shell)",
+		RULE,
+		"",
+		committedCrateList("shell"),
+		"",
+		RULE,
+		"6. Rust crates linked into OMPdesk's Tauri shell (native/ompdesk/crates/tauri-shell)",
+		RULE,
+		"",
+		committedCrateList("tauri"),
+		"",
+		RULE,
+		"7. Rust crates linked into OMPdesk's Preview driver (native/ompdesk/crates/shell-preview)",
+		RULE,
+		"",
+		committedCrateList("preview"),
 		"",
 	);
 	return { text: `${out.join("\n").replace(/\n{4,}/g, "\n\n\n")}`, flagged };

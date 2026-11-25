@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { z } from "zod";
-import { AGENT_POWERS_MIGRATION_PREF, AGENT_POWERS_MIGRATION_VERSION } from "../src/main/agent-power-migration";
+import { AGENT_POWERS_MIGRATION_PREF, AGENT_POWERS_MIGRATION_VERSION } from "../src/shared/agent-control";
 import { cleanupAp, command, launchAp, mainTab, makeApProfile, startRun, waitForStatus } from "./autopilot-harness";
 import { exitApp, launchApp, recordsOfType } from "./harness";
 

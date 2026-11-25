@@ -9,14 +9,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { BrowserWindow } from "electron";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
-import { DIAGNOSTICS_MEMBER, type DiagnosticBundleResult } from "../shared/diagnostic-bundle";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { redactedDumpMembers } from "../../resources/gui-bridge/session-dump-core";
+import { bundleFileName, DIAGNOSTICS_MEMBER, type DiagnosticBundleResult } from "../shared/diagnostic-bundle";
 import type { IpcFsReadBinaryResult } from "../shared/ipc-types";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { type BundleTab, type DiagnosticBundleDeps, poolTabFor, saveDiagnosticBundle } from "./diagnostic-bundle";
 import { runLocalCommand } from "./local";
 import { handlers } from "./local/session-dump";
 import type { LocalCommandContext } from "./local/types";
+import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 import type { ClientWindow } from "./web/client-window";
 import type { IpcCaller } from "./web/ipc-registry";
 
@@ -24,6 +26,14 @@ const DIAGNOSTICS = "OMPdesk diagnostics\nversion 0.35.1\n";
 const NOW = new Date(2026, 9, 19, 12, 0, 0);
 
 const roots: string[] = [];
+let fixture: ShellPolicyFixture;
+beforeAll(prepareShellPolicyFixture, 180_000);
+beforeAll(async () => {
+	fixture = await shellPolicyFixture();
+});
+afterAll(async () => {
+	await fixture?.close();
+});
 
 async function tmp(): Promise<string> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bundle-"));
@@ -50,14 +60,16 @@ async function membersOf(file: string): Promise<Record<string, string>> {
 
 type Members = Record<string, string | Uint8Array>;
 
-/** A tab's omp: the local handlers over a bridge that writes stock's members (or `members`) into `dumpDir`. */
-function fakeTab(options: { dumpDir: string; messages?: boolean; device?: string; members?: Members }) {
+/** A tab's local handlers over a bridge fixture that writes only redacted stock members. */
+function fakeTab(options: { messages?: boolean; device?: string; members?: Members }) {
 	const commands: RpcCommand[] = [];
 	const asked: { anonymized: boolean }[] = [];
 	const bridge: LocalCommandContext["bridge"] = {
 		connected: true,
 		async request<T>(method: string, params?: unknown): Promise<T> {
-			if (method !== "session_dump") throw new Error(`unexpected bridge method ${method}`);
+			if (method !== "session_dump_redacted") throw new Error(`unexpected bridge method ${method}`);
+			if (!params || typeof params !== "object" || !("output" in params) || typeof params.output !== "string")
+				throw new Error("missing output");
 			const anonymized =
 				typeof params === "object" && params !== null && "anonymized" in params && params.anonymized === true;
 			asked.push({ anonymized });
@@ -67,11 +79,24 @@ function fakeTab(options: { dumpDir: string; messages?: boolean; device?: string
 				(anonymized
 					? { "session.jsonl": '{"type":"session"}\n' }
 					: { "session.md": "# transcript\n", "llm-request.json": "{}\n" });
+			const { members: clean, dropped } = await redactedDumpMembers(
+				Object.keys(members).map(path => ({ path, isDirectory: false })),
+				async name => {
+					const content = members[name]!;
+					return typeof content === "string" ? Buffer.from(content) : content;
+				},
+			);
 			const zip = new JSZip();
-			for (const [name, content] of Object.entries(members)) zip.file(name, content);
-			const file = path.join(options.dumpDir, `omp-dump-${anonymized ? "anon-" : ""}${asked.length}.zip`);
-			await fs.writeFile(file, await zip.generateAsync({ type: "nodebuffer" }));
-			return { path: file, files: Object.keys(members), subagentCount: 0, anonymized } as T;
+			for (const [name, text] of clean) zip.file(name, text, { createFolders: false });
+			await fs.writeFile(params.output, await zip.generateAsync({ type: "nodebuffer" }));
+			return {
+				path: params.output,
+				files: [...clean.keys()],
+				subagentCount: 0,
+				anonymized,
+				redacted: true,
+				dropped,
+			} as T;
 		},
 	};
 	const ctx: LocalCommandContext = {
@@ -125,6 +150,7 @@ function setup(options: {
 			const data = await fs.readFile(file);
 			return { ok: true, data, mime: "application/zip", size: data.length, truncated: false };
 		},
+		fileName: params => fixture.call("app.diagnosticBundleFileName", params),
 		chooseFile: async (_caller, defaultPath) => {
 			dialogs.push(defaultPath);
 			return options.chosen ?? null;
@@ -173,6 +199,28 @@ describe("saving through the dialog", () => {
 		expect(result.anonymized).toBe(true);
 		expect(Object.keys(await membersOf(target)).sort()).toEqual([DIAGNOSTICS_MEMBER, "session.jsonl"]);
 		expect(dialogs).toEqual([path.join(root, "Downloads", "omp-dump-2026-10-19-anon.zip")]);
+	});
+
+	it("offers the paired page's name on the caller's local day, without splitting a letter at the UTF-16 cap", async () => {
+		const root = await tmp();
+		const { deps, dialogs } = setup({ dumpDir: root });
+		const now = new Date(2026, 8, 30, 0, 15);
+		deps.now = () => now;
+		const letter = "\u{10400}";
+		const prefix = "x".repeat(38);
+		for (const [title, slug] of [
+			[".._Cafe\u0301/\\\u1100\u1161_Ⅷ.²\u{1F600}\u093Eend.__", "Café-가_Ⅷ.²-end"],
+			["x\uD800y\uDC00z", "x-y-z"],
+			[`${prefix}${letter}z`, `${prefix}${letter}`],
+			[`${prefix}x${letter}z`, `${prefix}x`],
+			[`${prefix}_${letter}`, prefix],
+		] as const) {
+			const expected = `omp-dump-${slug}-2026-09-30-anon.zip`;
+			expect(bundleFileName(title, now, true)).toBe(expected);
+			const result = await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", title, anonymized: true });
+			expect(result).toEqual({ ok: false, cancelled: true });
+			expect(dialogs.pop()).toBe(path.join(root, "Downloads", expected));
+		}
 	});
 
 	it("does nothing when the person cancels the dialog: no dump is made", async () => {
@@ -337,6 +385,19 @@ describe("naming the tab", () => {
 	});
 });
 
+it("overwrites the chosen file through its existing hard link", async () => {
+	const root = await tmp();
+	const original = path.join(root, "original.zip");
+	const chosen = path.join(root, "chosen.zip");
+	await fs.writeFile(original, "previous bundle");
+	await fs.link(original, chosen);
+	const { deps } = setup({ dumpDir: root, chosen });
+
+	ok(await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false }));
+
+	expect((await membersOf(original))[DIAGNOSTICS_MEMBER]).toBe(DIAGNOSTICS);
+});
+
 describe("a tab on a paired host", () => {
 	it("dumps on the host, reads the bytes back over the host file route, writes here and has the host delete its archive", async () => {
 		const root = await tmp();
@@ -351,11 +412,56 @@ describe("a tab on a paired host", () => {
 			"session.md",
 		]);
 		expect(remoteReads).toEqual([expect.stringMatching(/ompdesk-dump-[\w-]+\.zip$/)]);
-		expect(path.dirname(remoteReads[0] ?? "")).toBe(root);
+		const privateDir = path.dirname(remoteReads[0] ?? "");
+		expect(path.basename(privateDir)).toMatch(/^ompdesk-archive-[0-9a-f]{32}$/);
+		await expect(fs.access(privateDir)).rejects.toMatchObject({ code: "ENOENT" });
 		expect(commands.map(command => command.type)).toEqual(["dump_session_archive", "discard_session_archive"]);
 		expect(result.path).toBe(target);
 		expect(dialogs).toHaveLength(1);
 		expect(await fs.readdir(root)).toEqual(["from-host.zip"]);
+	});
+
+	it("refuses a truncated host response even when its prefix parses as a ZIP", async () => {
+		const root = await tmp();
+		const { deps } = setup({ dumpDir: root, device: "host-1", chosen: path.join(root, "chosen.zip") });
+		const data = await new JSZip().file("session.md", "incomplete").generateAsync({ type: "nodebuffer" });
+		deps.readHostFile = async () => ({
+			ok: true,
+			data,
+			mime: "application/zip",
+			size: data.length + 1,
+			truncated: true,
+		});
+
+		await expect(
+			saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false }),
+		).resolves.toMatchObject({
+			ok: false,
+			code: "file_too_large",
+		});
+		expect(await fs.readdir(root)).toEqual([]);
+	});
+
+	it("leaves the chosen file alone and discards the host's archive when the bytes are not a ZIP", async () => {
+		const root = await tmp();
+		const chosen = path.join(root, "chosen.zip");
+		await fs.writeFile(chosen, "previous bundle");
+		const { deps, commands } = setup({ dumpDir: root, device: "host-1", chosen });
+		const data = Buffer.from("not a zip");
+		deps.readHostFile = async () => ({
+			ok: true,
+			data,
+			mime: "application/zip",
+			size: data.length,
+			truncated: false,
+		});
+
+		const result = await saveDiagnosticBundle(deps, caller(true), { tabId: "tab-1", anonymized: false });
+
+		expect(result).toMatchObject({ ok: false, error: expect.any(String) });
+		expect(commands.map(command => command.type)).toEqual(["dump_session_archive", "discard_session_archive"]);
+		expect(await fs.readFile(chosen, "utf8")).toBe("previous bundle");
+		expect(await fs.readdir(root)).toEqual(["chosen.zip"]);
 	});
 
 	it("reports the host's refusal to send an archive past its cap, and still has the host delete it", async () => {

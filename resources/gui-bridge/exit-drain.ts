@@ -6,9 +6,9 @@
  * ending, so only the main agent's shutdown counts.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { postmortem } from "@oh-my-pi/pi-utils";
 import { drainOnExit } from "./exit-drain-core";
 import { guard } from "./health";
+import { postmortem } from "./omp/pi-utils";
 
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */
 export function install(pi: ExtensionAPI): void {

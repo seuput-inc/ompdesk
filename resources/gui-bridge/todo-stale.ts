@@ -7,9 +7,9 @@
  * knows a list was named already.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { getLatestTodoPhasesFromEntries, getLatestTodoSnapshotIdentity } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { guard } from "./health";
 import { autopilotRunning } from "./modes/autopilot-core";
+import { getLatestTodoPhasesFromEntries, getLatestTodoSnapshotIdentity } from "./omp/pi-coding-agent/tools/todo";
 import { staleTodoMessage, type TodoStaleEntry, todoStaleness } from "./todo-stale-core";
 
 /** Called once per extension instance (main and every subagent rebinding) by index.ts. */

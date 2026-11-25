@@ -11,6 +11,7 @@ import { CoreError, core } from "./core/process";
 import { OmpUnavailableError, ompAvailability, refuseWithoutOmp } from "./omp-availability";
 import { ompPackageRoot, ompPathEnv, systemOmp } from "./omp-runtime";
 import { spawnPath } from "./shell-env";
+import { tookStep } from "./slow-steps";
 
 /** How long one request may wait (queued behind others included) before only that request fails. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -31,9 +32,6 @@ export interface WorkerLaunch {
 	bin: string;
 	args: string[];
 	env: NodeJS.ProcessEnv;
-	/** The file whose time and size identify the installed omp (its package.json): a stock or extensions worker that
-	 * was started on another install is let go when idle and started fresh. */
-	stampFile?: string;
 }
 
 export interface StockHelperOptions {
@@ -91,7 +89,6 @@ async function ompWorkerLaunch(bridgeDir: string, worker: HelperWorker): Promise
 			OMP_PACKAGE_ROOT: root,
 			PI_NOTIFICATIONS: "off",
 		},
-		stampFile: join(root, "package.json"),
 	};
 }
 
@@ -119,9 +116,9 @@ export class StockHelper {
 	async request<T>(method: string, params: unknown, options: StockHelperRequestOptions = {}): Promise<T> {
 		if (this.#stopped) throw new Error("Stock helper stopped");
 		const timeoutMs = options.timeoutMs ?? this.#requestTimeoutMs;
-		// The params and the result cross the core as the JSON text main and the worker wrote, in the frame's bytes: the
-		// core passes them on unread (a terminal's scrollback is a megabyte). No bytes is JavaScript's `undefined`.
+		// JSON travels in the frame's bytes. No bytes is JavaScript's `undefined`.
 		const text: string | undefined = JSON.stringify(params);
+		const started = performance.now();
 		try {
 			const { bin } = await core().call(
 				"stock.request",
@@ -135,6 +132,8 @@ export class StockHelper {
 			if (!(error instanceof CoreError)) throw error;
 			if (error.code === "omp_unavailable") throw new OmpUnavailableError(error.message);
 			throw error.code.startsWith("stock_") ? new Error(error.message) : error;
+		} finally {
+			tookStep("stock", method, performance.now() - started);
 		}
 	}
 
@@ -144,7 +143,7 @@ export class StockHelper {
 		this.#stopped = true;
 		launchers.delete(this.#host);
 		// No core, no workers (they end with it); a core is never started to stop nothing.
-		if (core().pid === null) return;
+		if (core().generation === 0) return;
 		await core()
 			.call("stock.stop", { host: this.#host })
 			.catch(() => {});

@@ -370,6 +370,20 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
 }
 
 impl UploadStore {
+    /// The host resolves the path in its working directory. Compare the spelling even on Windows,
+    /// as the page's save contract did, and never let a parent segment reach the copy.
+    pub(super) fn owns(&self, device: &str, file: &str) -> bool {
+        let mut folder = self.inner.device_dir(device).into_os_string();
+        folder.push(std::path::MAIN_SEPARATOR_STR);
+        let Some(rest) = folder.to_str().and_then(|prefix| file.strip_prefix(prefix)) else {
+            return false;
+        };
+        !rest.is_empty()
+            && Path::new(rest)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+    }
+
     /// How much of the device's day is spoken for, reserved before anything is read or written.
     async fn reserve(
         &self,
@@ -745,20 +759,44 @@ fn fault(failure: &UploadFailure) -> Fault {
     )
 }
 
-async fn store(mut call: Call) -> Result<Reply, Fault> {
-    let params = Params::of(&call)?;
-    let bytes = call.bin.take().unwrap_or_default();
-    let upload = open(&params.user_data)
+async fn write_upload(
+    params: &Params,
+    device: &str,
+    bytes: Vec<u8>,
+) -> Result<Upload, UploadFailure> {
+    open(&params.user_data)
         .store(
             params.now(),
             params.limits.limits(),
-            &params.device_id,
+            device,
             &params.name,
             bytes,
         )
         .await
+}
+
+pub(crate) async fn store(call: Call) -> Result<Reply, Fault> {
+    let params = Params::of(&call)?;
+    let upload = write_upload(&params, &params.device_id, call.bin.unwrap_or_default())
+        .await
         .map_err(|failure| fault(&failure))?;
     Reply::json(&json!({ "path": upload.path, "name": upload.name, "size": upload.size }))
+}
+
+async fn attach_here(call: Call) -> Result<Reply, Fault> {
+    let params = Params::of(&call)?;
+    match write_upload(&params, LOCAL_DEVICE, call.bin.unwrap_or_default()).await {
+        Ok(upload) => Reply::json(&json!({ "ok": true, "path": upload.path })),
+        Err(failure) => {
+            let mut result = json!({ "ok": false, "error": failure.message });
+            match failure.status {
+                413 => result["code"] = json!("file_too_large"),
+                429 => result["code"] = json!("upload_refused"),
+                _ => {}
+            }
+            Reply::json(&result)
+        }
+    }
 }
 
 async fn take(call: Call) -> Result<Reply, Fault> {
@@ -823,6 +861,7 @@ async fn receive(mut call: Call) -> Result<Reply, Fault> {
 
 pub fn register(registry: &mut Registry) {
     registry.add("web.uploads.store", |call| Box::pin(store(call)));
+    registry.add("web.uploads.attachHere", |call| Box::pin(attach_here(call)));
     registry.add("web.uploads.take", |call| Box::pin(take(call)));
     registry.add("web.uploads.sweep", |call| Box::pin(sweep(call)));
     registry.add("web.uploads.removeDevice", |call| {

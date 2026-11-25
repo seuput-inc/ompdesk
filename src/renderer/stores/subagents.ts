@@ -50,7 +50,7 @@ export interface SubagentsStore {
 	 * finished agents vanish from the UI on every poll. Best-effort — a
 	 * failed fetch leaves frame-driven state untouched.
 	 */
-	refresh: (options?: { expect?: () => boolean }) => Promise<void>;
+	refresh: (options?: { expect?: () => boolean }) => Promise<boolean>;
 	reset: () => void;
 }
 
@@ -423,15 +423,15 @@ export const createSubagentsStore = (command: TabCommand = activeTabCommand) => 
 				// Post-await guard: the poll may have been sent for a tab/session
 				// that is no longer foreground — its snapshots must not merge into
 				// the new session's store.
-				if (version !== refreshVersion || (options?.expect && !options.expect())) return;
+				if (version !== refreshVersion || (options?.expect && !options.expect())) return false;
 				if (!res.success) {
 					if (get().error !== res.error) set({ error: res.error });
-					return;
+					return false;
 				}
 				const data = res.data as { subagents?: SubagentNode[] } | undefined;
-				if (!data?.subagents) {
-					if (get().error !== null) set({ error: null });
-					return;
+				if (!Array.isArray(data?.subagents)) {
+					if (get().error === null) set({ error: "Subagent roster unavailable" });
+					return false;
 				}
 				const current = get().subagents;
 				const fetched = new Set<string>();
@@ -462,15 +462,17 @@ export const createSubagentsStore = (command: TabCommand = activeTabCommand) => 
 					// Same ids, same objects (every surviving current row was re-set
 					// or carried over): only the error may need clearing.
 					if (get().error !== null) set({ error: null });
-					return;
+					return true;
 				}
 				set({ subagents, error: null });
 				for (const id of subagents.keys()) void get().recoverAssignment(id);
+				return true;
 			} catch (cause) {
 				// Best-effort poll: frames + hydration remain authoritative. The
 				// failure is still recorded so the empty roster can name it.
-				if (version !== refreshVersion || (options?.expect && !options.expect())) return;
+				if (version !== refreshVersion || (options?.expect && !options.expect())) return false;
 				set({ error: cause instanceof Error ? cause.message : String(cause) });
+				return false;
 			}
 		},
 		reset: () => {

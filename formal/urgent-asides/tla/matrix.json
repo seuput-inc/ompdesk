@@ -1,0 +1,8 @@
+{
+	"runs": [
+		{ "name": "handover-2x2", "config": "MC.cfg", "expect": "pass" },
+		{ "name": "handover-3x2", "config": "MC.cfg", "constants": { "Urgent": "{u1, u2, u3}" }, "expect": "pass" },
+		{ "name": "observe-stale-mark", "config": "MC_bug.cfg", "expect": "invariant", "property": "QuietNeverInterrupts" },
+		{ "name": "peek-says-yes", "config": "MC_sanity.cfg", "expect": "invariant", "property": "NeverAnswers" }
+	]
+}

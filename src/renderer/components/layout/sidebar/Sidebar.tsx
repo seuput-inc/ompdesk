@@ -12,11 +12,9 @@ import {
 	Folder,
 	FolderOpen,
 	FolderPlus,
-	GitBranch,
 	GitFork,
 	Info,
 	Keyboard,
-	MessageCircle,
 	MessageSquareWarning,
 	MoreHorizontal,
 	PanelLeft,
@@ -24,7 +22,6 @@ import {
 	Pin,
 	Plus,
 	RefreshCw,
-	Rocket,
 	Search,
 	Settings,
 	Sparkles,
@@ -62,7 +59,7 @@ import {
 } from "../../../../shared/sidebar-rows";
 import { splitTabIds } from "../../../../shared/split-layout";
 import { useSessionList } from "../../../hooks/use-session-list";
-import { requestSessionSwitch } from "../../../hooks/use-session-switch";
+import { requestSessionSwitch, useSwitchingTabs } from "../../../hooks/use-session-switch";
 import { useShellInput } from "../../../hooks/use-shell-mode";
 import { useTabListRows } from "../../../hooks/use-tab-list-rows";
 import { ATTENTION_LABEL_KEY, type AttentionKind, isAsk } from "../../../lib/attention";
@@ -73,7 +70,7 @@ import { cx, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { actionKbd, onEscape } from "../../../lib/keymap";
-import { moveInOrder, reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
+import { reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
 import { useProjectNames, useWorktreeKindLabels } from "../../../lib/project-origin";
 import { sessionForkOrigin } from "../../../lib/session-fork";
 import type { RunFacts } from "../../../lib/session-run";
@@ -102,6 +99,7 @@ import { useQueueStore } from "../../../stores/queue";
 import { usePairedHosts, useRemoteStore } from "../../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
+import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { RAIL_PIN_LABEL_KEYS, useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { useProjectList } from "../../../stores/sidebar-projects";
@@ -131,7 +129,6 @@ import {
 	SkeletonRows,
 	TimeAgo,
 } from "../../common";
-import { WorkspaceDialog } from "../../dialogs/WorkspaceDialog";
 import { StarterGuide } from "../../onboarding/StarterGuide";
 import { ForkParent } from "../ForkParent";
 import { workingAgentCount } from "../live-work";
@@ -159,6 +156,14 @@ import { SidebarUsage } from "./SidebarUsage";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
+import {
+	headWords,
+	resolveRowTarget,
+	SessionRowArtwork,
+	SessionRowEnd,
+	SessionRowLine,
+	targetFromOrigin,
+} from "./session-row-target";
 import { CHILD_TOKEN, hasFamilyChip, isShownOpened, openedChildStatus, reviewKey } from "./sidebar-family";
 import { SidebarHoldContext, useHeld, usePointingAt } from "./sidebar-hold";
 import { useSidebarListMotion } from "./use-sidebar-list-motion";
@@ -198,6 +203,11 @@ function activeTabUntouched(): boolean {
 	const tab = tabs.tabs.find(entry => entry.id === tabs.activeTabId);
 	// A remote tab runs on its host: it can never be re-rooted to this device's sessions or folders.
 	if (!tab || tab.device !== undefined || tab.worktree || tab.status === "running" || tab.compacting) return false;
+	// A pick still loading has not reached the stores below: the tab is not empty, whatever they read yet.
+	if (useSwitchingTabs.getState().includes(tab.id)) return false;
+	// Main names a saved session there (a switch it answered, a restored tab): its transcript may still be loading, and
+	// a pick that ends the switch before the replacement's stores fill would otherwise re-root it.
+	if (tab.sessionPath && tab.unstarted !== true) return false;
 	const session = useSessionStore.getState();
 	const composer = useComposerStore.getState();
 	const queue = useQueueStore.getState();
@@ -410,7 +420,7 @@ function focusRovingItem(item: HTMLElement) {
 /**
  * Sessions-first sidebar and the app's only session
  * navigator: one search, sessions grouped by project and then the Chats section
- * (newest first, status as icon + text; every open tab keeps a row),
+ * (oldest first, a new session at the bottom; status as icon + text; every open tab keeps a row),
  * and a footer with the three destinations plus help.
  */
 export function Sidebar() {
@@ -467,7 +477,6 @@ export function Sidebar() {
 	// consequence before anything is removed.
 	const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 	const [renamingSessionPath, setRenamingSessionPath] = useState<string | null>(null);
-	const [workspaceDialog, setWorkspaceDialog] = useState<"switch" | "new-session" | null>(null);
 	const [renameDraft, setRenameDraft] = useState("");
 	const [groupMenu, setGroupMenu] = useState<{ anchor: ContextMenuAnchor; group: WorkspaceGroup } | null>(null);
 	const [sessionMenu, setSessionMenu] = useState<{ anchor: ContextMenuAnchor; session: SidebarSession } | null>(null);
@@ -660,6 +669,21 @@ export function Sidebar() {
 		sessions,
 	);
 	const kindLabels = useWorktreeKindLabels();
+	// What each row's session works in (its picture and branch), asked of this computer for every row this list holds;
+	// a row whose journal moved is asked again (a turn may have switched its branch), a window coming back asks again.
+	const sessionTargets = useSessionTargets();
+	useEffect(() => {
+		ensureSessionTargetsOnFocus();
+		// One query per session: the index's (with its journal's time) outranks a tab's for the same file.
+		const rows = new Map<string, { sessionPath: string; cwd: string; stamp?: string }>();
+		for (const tab of localTabs)
+			if (tab.sessionPath && tab.kind !== "chat" && !tab.device)
+				rows.set(tab.sessionPath, { sessionPath: tab.sessionPath, cwd: tab.cwd });
+		for (const session of sessions)
+			if (!isChatSession(session, defaultWorkspace))
+				rows.set(session.path, { sessionPath: session.path, cwd: session.cwd, stamp: session.modified });
+		requestSessionTargets(undefined, [...rows.values()]);
+	}, [sessions, localTabs, defaultWorkspace]);
 	// The tabs that hold this computer's sessions as this window knows them: its own, as the tab list names them (the
 	// focused one included: no second source names its session), and a stand-in for each a paired device runs here. A
 	// row made from one before the index lists its session keeps the time this sidebar first saw it (one shared "now"
@@ -733,7 +757,11 @@ export function Sidebar() {
 			removed: projectList.removed,
 			folder: at => {
 				const shown = projectName(at);
-				const project = shown.worktree ? shown.root : projectList.worktrees[at];
+				// Git's answer, else main's list, else, for a worktree being made that git cannot place yet, the binding of a
+				// tab here (`worktree_create` names the main checkout as `baseCwd`), as `runOf` reads it below.
+				const project = shown.worktree
+					? shown.root
+					: (projectList.worktrees[at] ?? localTabs.find(tab => tab.worktree?.path === at)?.worktree?.baseCwd);
 				// Git's answer, else what main's list says of the folder (the device's only source).
 				const kind = shown.worktree?.worktree?.kind ?? projectList.worktreeKinds?.[at];
 				return {
@@ -933,7 +961,7 @@ export function Sidebar() {
 		if (query) return lists;
 		const add = (key: string, rows: readonly SidebarSession[]) => {
 			const paths = rows
-				.filter(row => row.liveTabId === undefined && !runParentOf.has(row.path))
+				.filter(row => row.liveTabId === undefined && !row.departed && !runParentOf.has(row.path))
 				.map(row => row.path);
 			const list: SessionList = { key, paths, pinned: pinnedSessions };
 			for (const path of paths) if (!lists.has(path)) lists.set(path, list);
@@ -949,16 +977,11 @@ export function Sidebar() {
 			const found = allSessions.find(session => session.path === path);
 			return found ? sessionDisplayLabel(found, "") : "";
 		},
-		save: (list, next) => void useSidebarPrefs.getState().setSessionOrder(list.key, [...next]),
+		save: (list, next) => void useSidebarPrefs.getState().setSessionOrder(list.key, next),
 	});
 	/** A neighbour on the other side of the pinned rows' edge never trades places: pins stay on top. */
-	const moveSession = (session: SidebarSession, delta: -1 | 1): boolean => {
-		const list = sessionListOf(session);
-		const next = canMoveWithin(list, session.path, delta) && list && moveInOrder(list.paths, session.path, delta);
-		if (!list || !next) return false;
-		reorder.move(list, session.path, next, sessionDisplayLabel(session, ""));
-		return true;
-	};
+	const moveSession = (session: SidebarSession, delta: -1 | 1) =>
+		reorder.moveBy(sessionListOf(session), session.path, delta, sessionDisplayLabel(session, ""));
 	const onProjectDragEnd = ({ active, over }: DragEndEvent) => {
 		if (!over || active.id === over.id) return;
 		projectDropped();
@@ -1005,9 +1028,6 @@ export function Sidebar() {
 			recordedCwd && projectName(session.cwd).gone && session.liveTabId === undefined
 				? { ...session, cwd: recordedCwd }
 				: session;
-		// Already open in a tab: go there. An untouched empty tab is replaced
-		// instead of left behind; anything else keeps its tab and the session
-		// opens next to it.
 		const owner = tabForSession(session);
 		const how = owner ? "focus" : activeTabUntouched() ? "reroot" : "open";
 		logSelection(
@@ -1688,60 +1708,64 @@ export function Sidebar() {
 		const tabIndex = -1;
 		if (renamingSessionPath === session.path)
 			return renderRenameField(session, key, tab?.id, nested ? "omp-sidebar-session-rename-nested" : "pl-1");
-		// What a session in a linked worktree is for (an Autopilot run, parallel work, a branch): it lists among its
-		// project's rows, so its mark and tooltip say it. git's answer, else (a worktree being made) the tab's binding.
-		// An Autopilot child reads as its run's, under the run's row.
-		const worktreeOrigin =
-			session.kind === "chat" || runChild
-				? null
-				: (projectName(session.cwd).worktree ??
-					(tab?.worktree
-						? {
-								project: "",
-								root: tab.worktree.baseCwd,
-								worktree: {
-									kind: worktreeKindOf(tab.worktree.branch),
-									branch: tab.worktree.branch,
-									slug: tab.worktree.name,
-								},
-							}
-						: null));
+		// What a session in a linked worktree is for (an Autopilot run, parallel work, a branch): its tooltip and
+		// screen-reader text say it. git's answer, else (a worktree being made) the tab's binding. An Autopilot child
+		// reads as its run's, under the run's row.
+		const chat = session.kind === "chat";
+		const shownFolder = projectName(session.cwd);
+		const origin = chat
+			? null
+			: (shownFolder.worktree ??
+				(tab?.worktree
+					? {
+							project: "",
+							root: tab.worktree.baseCwd,
+							worktree: {
+								kind: worktreeKindOf(tab.worktree.branch),
+								branch: tab.worktree.branch,
+								slug: tab.worktree.name,
+							},
+						}
+					: null));
+		const worktreeOrigin = runChild ? null : origin;
 		const worktree = worktreeOrigin?.worktree
 			? { kind: worktreeOrigin.worktree.kind, label: worktreeLabel(worktreeOrigin, kindLabels) }
 			: null;
-		// The state is the row's own title sweeping (`SessionLiveTitle`) or its left-edge bar (sidebar.css `data-signal`), its words the
-		// tooltip and screen-reader text. Nothing leads the row: its title starts at the group's content edge. One small
-		// mark sits at the end, before the age: an unseen finish (no light or bar says it) as a ✓, a shape, not a colour
-		// alone; else a chat, a pin, a worktree's kind or a fork.
-		// Anything that needs the person is the warning signal; a failed run is the danger one.
+		// The picture and the second line's branch: what this computer read of the session's checkout
+		// (`stores/session-targets.ts`), until it answers what this view's git said of the folder.
+		const target = chat
+			? null
+			: resolveRowTarget(sessionTargets, undefined, session.path, targetFromOrigin(origin, shownFolder.name));
+		// Two fixed lines (the owner's approved design, 15 Nov 2026): the title alone on the first; the state, the
+		// checkout's branch, the family count and the one ⋯ on the second. The state is also the title sweeping
+		// (`SessionLiveTitle`) or the left-edge bar (sidebar.css `data-signal`), its words the tooltip and screen-reader
+		// text. Anything that needs the person is the warning signal; a failed run is the danger one.
 		const signal = waiting ? "waiting" : running ? "running" : failed ? "error" : undefined;
-		const WorktreeMark = worktree?.kind === "autopilot" ? Rocket : GitBranch;
+		// One small mark before the state: an unseen finish (no light or bar says it) as a ✓, a shape, not a colour
+		// alone; else a pin or a fork.
 		const marker: ReactNode = done ? (
 			<SidebarDoneMark fresh={doneBefore.current.get(session.path) === false} />
-		) : session.kind === "chat" ? (
-			<MessageCircle aria-hidden className="size-(--sc-icon-sm)" data-sidebar-session-icon />
 		) : pinned ? (
 			<Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" />
-		) : worktree ? (
-			<WorktreeMark aria-hidden className="size-(--sc-icon-sm)" data-sidebar-worktree={worktree.kind} />
 		) : fork ? (
 			<GitFork aria-hidden className="size-(--sc-icon-sm)" data-sidebar-fork />
 		) : null;
 		const openTabId = tab?.id;
 		const folderMissing = missingFolders.has(session.path);
-		// The age slot: the waiting token, else the working arc while the session or anything it started works, else
-		// the time since it last did something.
+		// The age slot: the waiting token (a mark that stays), else the working arc while the session or anything it
+		// started works, else the time since it last did something (both give way first on a short line).
 		const runningOpened = opened.filter(child => child.status === "running").length;
 		const workingAgents = workingAgentCount(summary?.agents ?? []);
-		const age = waiting ? (
-			<Badge className="omp-sidebar-approval" variant="warning">
+		const waitingBadge = waiting ? (
+			<Badge className="omp-sidebar-approval" variant="attention">
 				{/* The glyph stays when the word has no room left beside the title (it truncates, then hides). */}
 				<AlertTriangle aria-hidden className="size-3 shrink-0" />
 				<span className="min-w-0 truncate" title={waitingLabel ?? undefined}>
 					{waitingLabel}
 				</span>
 			</Badge>
-		) : (
+		) : null;
+		const age = waiting ? null : (
 			<SessionLiveAge
 				agents={workingAgents}
 				iso={indexed ? session.modified : null}
@@ -1754,21 +1778,7 @@ export function Sidebar() {
 		return (
 			<Fragment key={session.path}>
 				<ListRow
-					actionsAtRest={touchInput}
-					actionsOnHover={!touchInput}
-					actionCount={1}
-					actions={
-						indexed ? (
-							<IconButton
-								data-sidebar-row-menu
-								icon={<MoreHorizontal />}
-								label={t("sidebar.sessionMenu")}
-								onClick={event => setSessionMenu({ anchor: anchorBelow(event.currentTarget), session })}
-								size="sm"
-								tabIndex={-1}
-							/>
-						) : undefined
-					}
+					leading={<SessionRowArtwork target={target} />}
 					buttonProps={{
 						tabIndex,
 						"data-roving-item": key,
@@ -1799,15 +1809,42 @@ export function Sidebar() {
 						},
 					}}
 					className={cx("omp-sidebar-session-row", runChild && "omp-sidebar-session-run-child")}
-					meta={
-						folderMissing || marker || age ? (
-							<span className="inline-flex min-w-0 items-center gap-1.5" data-sidebar-row-end>
-								{folderMissing && <SidebarFolderMissingMark />}
-								{marker}
-								{/* The mark takes the age's place: the title keeps the room, the time is in the tooltip. */}
-								{folderMissing ? null : age}
-							</span>
-						) : undefined
+					secondary={
+						<SessionRowLine
+							// The mark takes the age's place: the time is in the tooltip.
+							age={folderMissing ? null : age}
+							head={target?.head ?? null}
+							marks={
+								<>
+									{folderMissing && <SidebarFolderMissingMark />}
+									{marker}
+									{folderMissing ? null : waitingBadge}
+								</>
+							}
+							worktree={worktree?.kind}
+						/>
+					}
+					secondaryEnd={
+						<SessionRowEnd>
+							{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(session.path)) && (
+								<SidebarSubagentsToggle
+									agents={summary?.agents}
+									opened={opened}
+									sessionKey={session.path}
+									tabId={openTabId ?? null}
+								/>
+							)}
+							{indexed && (
+								<IconButton
+									data-sidebar-row-menu
+									icon={<MoreHorizontal />}
+									label={t("sidebar.sessionMenu")}
+									onClick={event => setSessionMenu({ anchor: anchorBelow(event.currentTarget), session })}
+									size="sm"
+									tabIndex={-1}
+								/>
+							)}
+						</SessionRowEnd>
 					}
 					onClick={() => {
 						// Clicking the session already in view folds/unfolds its family rows.
@@ -1852,27 +1889,18 @@ export function Sidebar() {
 							{statusLabel && <span className="sr-only">, {statusLabel}</span>}
 						</>
 					}
-					// The age slot reads "3w"; the exact time is here, since hovering puts the ⋯ in the age's place.
 					titleText={[
 						title,
 						worktree?.label,
 						fork?.tooltip,
 						statusLabel,
+						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
+						target?.head ? headWords(t, target.head).tip : null,
 						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 						indexed ? formatClock(session.modified) : null,
 					]
 						.filter(Boolean)
 						.join("\n")}
-					trailing={
-						hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(session.path)) ? (
-							<SidebarSubagentsToggle
-								agents={summary?.agents}
-								opened={opened}
-								sessionKey={session.path}
-								tabId={openTabId ?? null}
-							/>
-						) : undefined
-					}
 				/>
 				{(openTabId || opened.length > 0 || (summary?.agents.length ?? 0) > 0) && (
 					<SidebarSubagents
@@ -1904,7 +1932,7 @@ export function Sidebar() {
 				{dragHandle => (
 					<>
 						<div
-							className="group/head relative flex h-7 [html[data-input=touch]_&]:h-8 cursor-default items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+							className="omp-sidebar-head group/head relative flex cursor-default items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 							data-flip-key={`group:${group.cwd}`}
 							data-workspace-group={group.cwd}
 							data-project-missing={group.missing ? "" : undefined}
@@ -2080,7 +2108,7 @@ export function Sidebar() {
 							<span>{t("sidebar.emptyCode")}</span>
 							<Button
 								icon={<FolderOpen />}
-								onClick={() => setWorkspaceDialog("new-session")}
+								onClick={() => useUiStore.getState().openProjectPicker("new-session")}
 								size="sm"
 								variant="ghost"
 							>
@@ -2112,7 +2140,7 @@ export function Sidebar() {
 				{archivedRows.length > 0 && (
 					<section className="mt-3" data-sidebar-archived ref={archivedRef}>
 						<div
-							className="group/head relative flex h-7 [html[data-input=touch]_&]:h-8 items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+							className="omp-sidebar-head group/head relative flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 							data-flip-key="archived"
 							onContextMenu={event => setArchivedMenu(anchorFromEvent(event))}
 						>
@@ -2333,13 +2361,6 @@ export function Sidebar() {
 					tabIndex={0}
 				/>
 			</aside>
-			<WorkspaceDialog
-				intent={workspaceDialog ?? "switch"}
-				onClose={() => setWorkspaceDialog(null)}
-				open={workspaceDialog !== null}
-				thisDevice
-			/>
-
 			{/* Project menu: the one builder every computer's project headers use (project-menu.ts). */}
 			{groupMenu &&
 				(() => {

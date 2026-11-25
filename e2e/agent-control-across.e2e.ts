@@ -56,7 +56,9 @@ test.describe("on this computer", () => {
 	let errors: string[];
 
 	test.beforeEach(async () => {
-		profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-agent-across-"));
+		// Canonical, as the folder a reopened session records: a runner's TEMP is an 8.3 short path (RUNNER~1) that
+		// `realpath` expands, and the session file keeps the path its child was started with.
+		profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-agent-across-")));
 		const project = path.join(profile, "project");
 		const desktop = path.join(profile, "desktop");
 		const agent = path.join(profile, "agent");
@@ -530,7 +532,11 @@ test.describe("on a paired device", () => {
 		test.setTimeout(240_000);
 		const { hostProfile, clientProfile, call, client: app } = await pairApps();
 		const parentTab = (await app.page.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId ?? "";
-		const open = await call("ompdesk_session_open", { device: "PC-B", message: "Title: ask there\nAsk me" });
+		// Finish the setup turn: otherwise its missing-result reminder is another mail delivered to the host.
+		const open = await call("ompdesk_session_open", {
+			device: "PC-B",
+			message: "Title: ask there\nfixture:result-ok",
+		});
 		expect(open.isError, open.text).toBe(false);
 		const [child] = opened(open.text);
 		await call("ompdesk_session_result", { session: child, wait: true, timeout_seconds: 60 });

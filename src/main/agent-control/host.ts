@@ -7,7 +7,6 @@
  * wait outlives the executor's stack frame and the tab list belongs to that window.
  */
 
-import { stat } from "node:fs/promises";
 import { isAbsolute, posix, resolve } from "node:path";
 import type { AutopilotAction, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
@@ -22,6 +21,8 @@ import {
 	AGENT_CONTROL_VIEW,
 	AGENT_HIDDEN_PREFS_KEY,
 	AGENT_SCHEDULE_PREFIX,
+	type AgentCloseAnswer,
+	type AgentCloseOutcome,
 	type AgentControlToolName,
 	type AgentControlViewEvent,
 	type AgentReviewEvent,
@@ -38,7 +39,9 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
+import type { SessionStatus } from "../../shared/control-protocol";
 import type {
+	AutoCloseTurn,
 	HostView,
 	IpcSpawnTabPayload,
 	IpcSpawnTabResult,
@@ -53,14 +56,18 @@ import {
 	type AgentMessage,
 	BLOCKING_UI_METHODS,
 	type ExtensionUIResponse,
+	type ImageContent,
 	isSignInRequest,
 	type RpcCommand,
 	type RpcResponse,
+	type RpcSafeRemoval,
 	type RpcWorktreeCreateResult,
+	type TextContent,
 } from "../../shared/rpc-types";
 import type { Schedule } from "../../shared/schedules";
 import type { SessionSummary, VersionedSummaries } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
+import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { discardOpenedWorktree } from "../disk/saved-worktrees";
 import { createWorktree, tablessWorktreeBridge, WORKTREE_COMMAND_BUDGETS_MS } from "../local/git/worktree";
@@ -72,14 +79,16 @@ import {
 	SchedulesStateSchema,
 	WorktreeCreateReply,
 } from "../remote/app-protocol";
+import { uploadToHost } from "../remote/host-upload";
 import type { RunProcess, ScheduleService } from "../schedules";
 import type { Pace } from "../session-pace";
 import { SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
-import type { SidecarPool, TabActivity } from "../sidecar-pool";
+import type { ControlTabInfo, SidecarPool, TabActivity } from "../sidecar-pool";
 import type { SidecarLike } from "../sidecar-types";
 import { recordTurnStop } from "../turn-stop-log";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
-import type { FileEditReports } from "../web/file-edit-reports";
+import type { FileEditReports, FileEditTarget } from "../web/file-edit-reports";
+import type { UploadStore } from "../web/uploads";
 import { sessionOpenFolders } from "../worktree-orphans";
 import {
 	type BranchEvidence,
@@ -90,6 +99,7 @@ import {
 	landingFacts,
 	type MergeOutcome,
 	mergeBranch,
+	REMOTE_COPY_MS,
 	removeSafeWorktree,
 	type WorktreeRef,
 	type WorktreeRemoval,
@@ -102,6 +112,7 @@ import {
 	type ControlAsk,
 	type ControlTab,
 	type HostTab,
+	type Landing,
 	type MailAnswer,
 	type OpenElsewhere,
 	type OpenedChild,
@@ -122,6 +133,20 @@ export const CARD_TIMEOUT_MS = 10 * 60_000;
 const WORKTREE_PREFIX = "omp/agent/";
 /** A receiver's bridge answers which messages its journal holds within this (a socket request, no omp command queue). */
 const SENT_MARKS_TIMEOUT_MS = 8_000;
+/** After a new session's first prompt was answered, long enough for its turn to reach the relaunch marker. */
+const OPENING_SETTLE_MS = 3_000;
+/** An open that never sent its first prompt (it failed, or its omp never came up) stops holding a restart after this. */
+const OPENING_MAX_MS = 5 * 60_000;
+
+async function localPathIs(path: string, kind: "file" | "directory"): Promise<boolean> {
+	try {
+		const { result } = await core().call<{ file: boolean; directory: boolean }>("fs.stat", { path });
+		return result[kind];
+	} catch (error) {
+		if (error instanceof CoreError && ["file_not_found", "io", "exists"].includes(error.code)) return false;
+		throw error;
+	}
+}
 
 /** Every tombstone, by file and computer and by saved id (stock names a session file `<time>_<session id>.jsonl`). */
 function tombstones(): Tombstones {
@@ -146,20 +171,15 @@ export interface AgentControlHostDeps {
 	pool: Pick<
 		SidecarPool,
 		| "tabsForWindow"
-		| "tabFacts"
-		| "pendingPlan"
+		| "controlTabs"
 		| "observeTabs"
-		| "openRequests"
 		| "routeSideChannel"
 		| "sidecarOf"
 		| "startTab"
 		| "setTabTask"
-		| "formerTabIds"
 		| "setTabOpener"
-		| "hasDraft"
 		| "windowOfTab"
 		| "windowsShowingTab"
-		| "tabWindows"
 		| "sessionOwner"
 		| "whenTabExited"
 	>;
@@ -207,6 +227,10 @@ export interface AgentControlHostDeps {
 	runtimeTuning?: RuntimeTuning;
 	/** Where accepted reports wait for their receiver's journal (`mail-outbox`); absent: kept in memory only. */
 	mailOutboxFile?: string | null;
+	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
+	attachmentsDir?: string | null;
+	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
+	uploads?: Pick<UploadStore, "attachHere">;
 	/** Where sent messages wait for their receiver's journal (`send-outbox`); absent: kept in memory only. */
 	sendOutboxFile?: string | null;
 	/** Where the control-tool calls that change something are recorded (`call-journal`); absent: in memory only. */
@@ -233,14 +257,20 @@ export interface AgentControlHostDeps {
 			command: { type: "get_autopilot" } | ({ type: "set_autopilot" } & AutopilotAction),
 		) => Promise<RpcResponse>;
 	};
-	/** What paired web pages last reported about unsaved Files edits in their tabs (ipc.ts `FILE_EDIT_REPORT`). */
-	fileEdits: Pick<FileEditReports, "edits" | "onReport">;
+	/** What paired web pages last reported about unsaved Files edits in their tabs (kept by the core's web router). */
+	fileEdits: Pick<FileEditReports, "edits" | "onReport" | "target">;
 	/**
 	 * Close a tab of `win` the way the window's own close does (ipc.ts `closeWindowTab`) and tell that window it is
 	 * gone. Only for a paired web page's window: a desktop window closes its own tab when asked (`AGENT_CONTROL_VIEW`).
-	 * `stillReleasable` is asked again after the release's awaits, right before it lets the tab go.
+	 * `unlessDirty` names the page whose live reports are checked again after the release's awaits, and once more by
+	 * the core in the step that lets the tab go.
 	 */
-	releaseTab: (win: ClientWindow, tabId: string, stillReleasable: () => boolean) => Promise<boolean>;
+	releaseTab: (
+		win: ClientWindow,
+		tabId: string,
+		unlessDirty: FileEditTarget | undefined,
+		expectedTurn?: AutoCloseTurn,
+	) => Promise<boolean>;
 	/** Settings › Schedules (`ScheduleService`); absent or null where there is none. */
 	schedules?: () => Pick<ScheduleService, "command" | "create"> | null;
 	/** The app's own handlers `ompdesk_app` goes through (src/main/ipc.ts): the `IpcRegistry` for the window, `PREFS_SET`, the language. */
@@ -306,6 +336,13 @@ export interface OutsideCaller {
 	cwd: string;
 }
 
+/** Only the facts that a control socket watch needs. Never serialize the full host tab. */
+export interface ControlTabSnapshot extends Pick<ControlTab, "tabId" | "title" | "status" | "busy" | "hidden"> {
+	resuming: boolean;
+	hasAsk: boolean;
+	hasPlan: boolean;
+}
+
 export class AgentControlRuntime {
 	readonly #deps: AgentControlHostDeps;
 	readonly #windows = new Map<string, ClientWindow>();
@@ -324,6 +361,14 @@ export class AgentControlRuntime {
 	readonly #outsideCards = new Map<string, Promise<void>>();
 	/** The routines' wake-ups waiting for their turn, by run: how each ended is what the core tells (`wakeDone`). */
 	readonly #wakes = new Map<string, (result: { code: number | null; error?: string }) => void>();
+	/** Each tab's window's latest answer to an agent close (`AGENT_CLOSE_ANSWER`), read by the core's close. */
+	readonly #closeAnswers = new Map<string, { closeId: number; outcome: AgentCloseOutcome }>();
+	/**
+	 * Sessions an agent is opening with a first message, by tab: since when, and when the message's prompt was answered.
+	 * An update restart waits for them (`opening`), because until the new session's omp took the prompt (and its turn
+	 * reached the relaunch marker) nothing would send it again after the relaunch.
+	 */
+	readonly #opening = new Map<string, { since: number; prompted?: number }>();
 
 	constructor(deps: AgentControlHostDeps) {
 		this.#deps = deps;
@@ -336,6 +381,7 @@ export class AgentControlRuntime {
 				calls: deps.callJournalFile ?? null,
 				sendOutbox: deps.sendOutboxFile ?? null,
 				mailOutbox: deps.mailOutboxFile ?? null,
+				attachments: deps.attachmentsDir ?? null,
 			},
 		});
 		// Every tab activity goes to the core's runtime, which decides what it means (the sweep of the opened sessions,
@@ -351,18 +397,35 @@ export class AgentControlRuntime {
 		return this.#parents.get(tabId);
 	}
 
+	/**
+	 * An agent is opening a session that has not taken its first message yet, or took it moments ago: an update restart
+	 * now would lose the message (B3 of the owner's 20 Nov 2026 list). A tab that went, or an open that never sent its
+	 * message within `OPENING_MAX_MS`, holds nothing.
+	 */
+	opening(now = Date.now()): boolean {
+		for (const [tabId, entry] of this.#opening) {
+			const over =
+				!this.#deps.pool.sidecarOf(tabId) ||
+				(entry.prompted === undefined
+					? now - entry.since >= OPENING_MAX_MS
+					: now - entry.prompted >= OPENING_SETTLE_MS);
+			if (over) this.#opening.delete(tabId);
+		}
+		return this.#opening.size > 0;
+	}
+
 	/** One pool activity, to the core's runtime with the opener, the card rule and the released session main knows. */
 	#activity(activity: TabActivity): void {
 		const { pool } = this.#deps;
 		const parent = this.#openerOf(activity.tabId);
-		// A child's question card tells its opener (local and paired-device children alike); an Autopilot run's
-		// children are answered by its approver, and the run reads them itself.
-		const announce =
-			activity.type === "ask" &&
+		// A child's question card, and its close, tell its opener (local and paired-device children alike), and so does
+		// its tab closing; an Autopilot run's children are answered by its approver, and the run reads them itself.
+		const ownChild =
 			parent !== undefined &&
 			this.#parents.get(activity.tabId)?.tag === undefined &&
 			!this.#autopilotRuns.has(parent) &&
 			!this.#deps.isAutopilotRun?.(parent);
+		const announce = (activity.type === "ask" || activity.type === "askClosed") && ownChild;
 		let session: ReleasedSession | undefined;
 		if (activity.type === "released") {
 			const held = this.#deps.quitting?.() ? undefined : activity.session;
@@ -376,13 +439,15 @@ export class AgentControlRuntime {
 					...held,
 					...(!held.device && this.#hiddenPaths().has(held.path) ? { hidden: true } : {}),
 					...(opener ? { openedBySession: opener } : {}),
+					...(opener && ownChild ? { tellOpener: true as const } : {}),
 				};
 		}
 		void this.control.runtime
 			.activity({
 				type: activity.type,
 				tabId: activity.tabId,
-				...(activity.type === "ask" ? { requestId: activity.requestId } : {}),
+				...(activity.type === "ask" || activity.type === "askClosed" ? { requestId: activity.requestId } : {}),
+				...(activity.type === "askClosed" && activity.answered ? { answered: activity.answered } : {}),
 				...(activity.type === "idle" && activity.outcome ? { outcome: activity.outcome } : {}),
 				...(parent ? { parent } : {}),
 				...(announce ? { announce: true } : {}),
@@ -408,13 +473,7 @@ export class AgentControlRuntime {
 	async wakeSession(schedule: Schedule, runId: string): Promise<RunProcess> {
 		if (schedule.wakeSession === undefined) throw new Error("This schedule wakes no session");
 		const sessionPath = schedule.wakeSession;
-		if (
-			!(await stat(sessionPath).then(
-				entry => entry.isFile(),
-				() => false,
-			))
-		)
-			throw new Error(`The session to wake is gone (${sessionPath})`);
+		if (!(await localPathIs(sessionPath, "file"))) throw new Error(`The session to wake is gone (${sessionPath})`);
 		const { promise: done, resolve } = Promise.withResolvers<{ code: number | null; error?: string }>();
 		this.#wakes.set(runId, resolve);
 		try {
@@ -473,6 +532,26 @@ export class AgentControlRuntime {
 	/** The person typed a prompt to `tabId` in a window, on the phone page or on a paired device (main's word, not the text). */
 	personTyped(tabId: string): void {
 		void this.control.personTyped(tabId).catch(() => undefined);
+	}
+
+	/**
+	 * The window that holds `tabId` answered the agent close `closeId` (its own `applyAgentView`). Only the window that
+	 * owns the tab may answer for it; the core reads the answer with the next snapshot.
+	 */
+	answerClose(win: ClientWindow, answer: AgentCloseAnswer): void {
+		if (this.#deps.pool.windowOfTab(answer.tabId) !== win) return;
+		this.#closeAnswers.set(answer.tabId, { closeId: answer.closeId, outcome: answer.outcome });
+		this.control.changed();
+	}
+
+	/**
+	 * Tells `tabId`'s opener what main saw happen to that tab, as an `ompdesk_report` of the tab's own: through the
+	 * core's mail outbox, so an opener whose omp is not up yet gets it once it is; `id` makes a repeat one report.
+	 * Nothing for a tab nobody opened.
+	 */
+	reportFor(tabId: string, report: { kind: "blocked"; text: string; id: string }): void {
+		if (!this.#openerOf(tabId)) return;
+		void this.control.run(tabId, "ompdesk_report", report).catch(() => undefined);
 	}
 
 	/**
@@ -580,15 +659,29 @@ export class AgentControlRuntime {
 	}
 
 	/** The open session `name` names for an outside caller, by the tools' own name rules (hidden refused). */
-	async resolveOutside(caller: OutsideCaller, name: string): Promise<ControlTab> {
+	async resolveOutside(caller: OutsideCaller, name: string): Promise<SessionStatus> {
 		const entered = this.#enterOutside(caller);
 		if (entered) throw new Error(entered);
 		return this.control.openTarget(caller.id, name);
 	}
 
-	/** Every open tab of the app as the tools see it, from no session's window (the control socket's waits). */
-	controlTabs(): ControlTab[] {
-		return this.#hostTabs().map(({ window: _window, ...tab }) => tab);
+	/** Visible tabs at this pool edge, before a later activity can change them. */
+	controlTabs(): ControlTabSnapshot[] {
+		const tabs: ControlTabSnapshot[] = [];
+		for (const tab of this.#hostTabs()) {
+			if (tab.hidden) continue;
+			tabs.push({
+				tabId: tab.tabId,
+				title: tab.title,
+				status: tab.status,
+				busy: tab.busy,
+				hidden: tab.hidden,
+				resuming: tab.resuming === true,
+				hasAsk: tab.asks.length > 0,
+				hasPlan: tab.plan !== undefined,
+			});
+		}
+		return tabs;
 	}
 
 	onOutsideMail(listener: (callerId: string, text: string) => void): () => void {
@@ -656,33 +749,36 @@ export class AgentControlRuntime {
 		return agentHiddenPaths(this.#deps.prefs.get(AGENT_HIDDEN_PREFS_KEY));
 	}
 
-	/** Every open tab of the app once, in the pool's order, with the window it is in (any window). */
+	/**
+	 * Every open tab of the app once, in the pool's order, with the window it is in (any window). One read of the pool
+	 * (`controlTabs`): the core asks for this on every answer and push, and each read waits on main's thread.
+	 */
 	#hostTabs(): HostTab[] {
-		const { pool } = this.#deps;
 		const hidden = this.#hiddenPaths();
 		const seen = new Set<string>();
 		const tabs: HostTab[] = [];
-		for (const win of pool.tabWindows()) {
+		for (const { win, tabs: rows, asks: open } of this.#deps.pool.controlTabs()) {
 			if (win.isDestroyed()) continue;
-			const open = pool.openRequests(win);
-			for (const info of pool.tabsForWindow(win)) {
-				if (seen.has(info.tabId)) continue;
-				seen.add(info.tabId);
+			for (const row of rows) {
+				if (seen.has(row.tabId)) continue;
+				seen.add(row.tabId);
 				const asks = open
-					.filter(entry => entry.tabId === info.tabId && !entry.signIn && askOf(entry.request))
+					.filter(entry => entry.tabId === row.tabId && !entry.signIn && askOf(entry.request))
 					.map(entry => ({ id: entry.request.id, request: entry.request }));
-				tabs.push({ ...this.#controlTab(info, asks, hidden), window: String(win.webContents.id) });
+				const opener = this.#parents.get(row.tabId)?.callerTabId ?? this.#restoredOpener(row);
+				tabs.push({
+					...this.#controlTab(row, asks, hidden),
+					window: String(win.webContents.id),
+					...(opener ? { opener } : {}),
+				});
 			}
 		}
 		return tabs;
 	}
 
-	#controlTab(info: IpcTabInfo, asks: ControlAsk[], hidden: Set<string>): ControlTab {
-		const plan = this.#deps.pool.pendingPlan(info.tabId);
+	#controlTab(row: ControlTabInfo, asks: ControlAsk[], hidden: Set<string>): ControlTab {
+		const { facts, plan, formerIds, hasDraft, owner, ...info } = row;
 		const autoClosable = this.#autoClosable(info);
-		const formerIds = this.#deps.pool.formerTabIds(info.tabId);
-		const facts = this.#deps.pool.tabFacts(info.tabId);
-		const owner = this.#deps.pool.windowOfTab(info.tabId);
 		// A paired web page's tab: what its page last said about unsaved Files edits in it (never assumed clean).
 		const webEdits =
 			owner && isWebWindow(owner.webContents.id)
@@ -696,12 +792,14 @@ export class AgentControlRuntime {
 			...(info.device ? { device: info.device, deviceName: this.#deps.deviceName(info.device) } : {}),
 			status: info.status,
 			...(this.#deps.pool.sidecarOf(info.tabId)?.statusPayload?.sessionHeld ? { sessionHeld: true } : {}),
+			...(this.#deps.pool.sidecarOf(info.tabId)?.shared === true ? { viewing: true as const } : {}),
 			...(info.message && (info.status === "error" || info.status === "exited") ? { failure: info.message } : {}),
 			...(info.status === "starting" && (info.queued || info.slow)
 				? { startWait: info.queued ? ("queued" as const) : ("slow" as const) }
 				: {}),
 			busy: facts?.busy === true,
 			...(info.resuming ? { resuming: true } : {}),
+			...(info.cutOff ? { cutOff: info.cutOff } : {}),
 			asks,
 			...(plan ? { plan } : {}),
 			hidden: !info.device && typeof info.sessionPath === "string" && hidden.has(info.sessionPath),
@@ -709,15 +807,42 @@ export class AgentControlRuntime {
 			...(info.sessionPath ? { sessionPath: info.sessionPath } : {}),
 			...(info.task ? { task: info.task } : {}),
 			...(info.lastRun ? { lastRun: info.lastRun } : {}),
+			...(info.closeTurn ? { closeTurn: info.closeTurn } : {}),
 			autoClosable,
 			...(autoClosable && !this.#parents.has(info.tabId) ? { restored: true } : {}),
 			looked: info.active === true || info.visible === true || (info.viewerCount ?? 0) > 0,
-			userTouched: this.#userPrompted.has(info.tabId) || this.#deps.pool.hasDraft(info.tabId),
-			...(this.#deps.pool.hasDraft(info.tabId) ? { drafting: true } : {}),
+			userTouched: this.#userPrompted.has(info.tabId) || hasDraft,
+			...(hasDraft ? { drafting: true } : {}),
 			...(facts?.runningSince !== undefined ? { busySince: facts.runningSince } : {}),
-			...(formerIds.length > 0 ? { formerIds } : {}),
+			...(formerIds.length > 0 ? { formerIds: [...formerIds] } : {}),
 			...(webEdits ? { webEdits } : {}),
+			...(this.#closeAnswers.has(info.tabId) ? { closeAnswer: this.#closeAnswers.get(info.tabId) } : {}),
+			...this.#hostOpen(info),
+			...(info.settling ? { settling: true } : {}),
+			...(info.retrySaga
+				? {
+						retrySaga: {
+							attempt: info.retrySaga.attempt,
+							maxAttempts: info.retrySaga.maxAttempts,
+							errorMessage: info.retrySaga.errorMessage,
+						},
+					}
+				: {}),
+			...(info.scheduledRetry ? { scheduledRetry: info.scheduledRetry } : {}),
+			...(info.awaitingConnection ? { awaitingConnection: true } : {}),
 		};
+	}
+
+	/**
+	 * A tab here a relaunch restored and nobody showed since (`asleep`) runs no omp, yet its paired host may run the
+	 * session in a tab of its own: who holds it there and what that tab does, from the host's summary every row reads.
+	 */
+	#hostOpen(info: IpcTabInfo): { hostOpen: OpenElsewhere } | undefined {
+		if (info.status !== "asleep" || !info.device || !info.sessionPath) return undefined;
+		const summary = this.#deps.summaries?.(info.device)?.sessions.find(row => row.sessionPath === info.sessionPath);
+		const work = summary ? summaryWork(summary) : undefined;
+		if (!summary || !work) return undefined;
+		return { hostOpen: { ...(summary.openFor ? { holder: summary.openFor } : {}), work } };
 	}
 
 	/** A paired host's folder as typed, or this computer's resolved against the caller's. */
@@ -725,8 +850,7 @@ export class AgentControlRuntime {
 		if (!folder) return caller.cwd;
 		if (caller.device) return /^([a-zA-Z]:[\\/]|\/)/.test(folder) ? folder : posix.join(caller.cwd, folder);
 		const target = isAbsolute(folder) ? folder : resolve(caller.cwd, folder);
-		const info = await stat(target).catch(() => null);
-		if (!info?.isDirectory()) throw new Error(`"${target}" is not a folder on this computer.`);
+		if (!(await localPathIs(target, "directory"))) throw new Error(`"${target}" is not a folder on this computer.`);
 		return target;
 	}
 
@@ -797,6 +921,7 @@ export class AgentControlRuntime {
 			throw new Error("The new session could not be started.");
 		}
 		this.#windows.set(result.tabId, win);
+		if (request.task) this.#opening.set(result.tabId, { since: Date.now() });
 		// A view of a tab that holds the session elsewhere stays whoever's it was: no parent, no opener.
 		if (request.join) return { tabId: result.tabId };
 		this.#parents.set(result.tabId, { callerTabId, ...(request.tag ? { tag: request.tag } : {}) });
@@ -957,20 +1082,22 @@ export class AgentControlRuntime {
 				agentControlFullEnabled(deps.prefs.get(AGENT_CONTROL_FULL_PREF)) ||
 				agentControlManageEnabled(deps.prefs.get(AGENT_CONTROL_MANAGE_PREF)),
 			checkoutPeers: tabId => deps.checkoutPeers?.(tabId) ?? [],
-			// The opener this launch saw, else the one the pool kept across a relaunch: its tab id, or (tab ids are new
-			// after a relaunch) the tab now holding the opener's session file.
-			parentOf: tabId => this.#openerOf(tabId),
 			parentTag: tabId => this.#parents.get(tabId)?.tag,
 			// What the receiver's bridge answers: the core keeps the report until the receiver's journal holds it
 			// (`mail-outbox`) and sends it again to whatever omp holds the receiver's session next.
 			mail: async (tabId, content, details, delivery) => {
 				// A report to a caller outside OMPdesk goes to its event stream (the control socket), not into a session.
 				if (isOutside(tabId)) {
-					for (const listener of this.#outsideMail) listener(tabId, content);
+					const text =
+						typeof content === "string"
+							? content
+							: content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
+					for (const listener of this.#outsideMail) listener(tabId, text);
 					return undefined;
 				}
 				return this.#sendMail(tabId, content, details, delivery);
 			},
+			land: (tabId, name, bytes) => this.#land(tabId, name, bytes),
 			sentMarks: async (tabId, marks) => {
 				const response = await this.#hostCommand(
 					tabId,
@@ -1110,19 +1237,28 @@ export class AgentControlRuntime {
 						success: false,
 						error: "That session is gone.",
 					} as RpcResponse);
-				return deps.dispatch(win, sidecar, tabId, command, timeoutMs);
+				const sent = deps.dispatch(win, sidecar, tabId, command, timeoutMs);
+				const opening = this.#opening.get(tabId);
+				if (opening && (command.type === "prompt" || command.type === "set_goal"))
+					void sent.then(
+						() => {
+							opening.prompted = Date.now();
+						},
+						() => this.#opening.delete(tabId),
+					);
+				return sent;
 			},
 			spawn: (callerTabId, request) => this.#spawn(callerTabId, request),
 			autopilot: this.#autopilotSource(),
 			start: tabId => void deps.pool.startTab(tabId),
 			setTask: (tabId, task) => deps.pool.setTabTask(tabId, task),
-			release: async (_callerTabId, tabId) => {
+			release: async (_callerTabId, tabId, expectedTurn) => {
 				const win = deps.pool.windowOfTab(tabId);
 				if (!win || !isWebWindow(win.webContents.id)) return false;
 				// The page's word may change while the release awaits: the core's rule (`rules/tab_close.rs`) released a
-				// page's tab only while its page held no unsaved Files edits, and that is asked again on the store now.
-				const id = win.webContents.id;
-				return deps.releaseTab(win, tabId, () => deps.fileEdits.edits(id, tabId) !== "dirty");
+				// page's tab only while its page held no unsaved Files edits, and the core asks its store again in the
+				// step that removes the tab. No target: no web server runs, so no page has reported.
+				return deps.releaseTab(win, tabId, deps.fileEdits.target(win.webContents.id) ?? undefined, expectedTurn);
 			},
 			view: (callerTabId, event: AgentControlViewEvent) => {
 				// The window that holds the session (another window's tab closes or shows there), else the caller's.
@@ -1166,16 +1302,24 @@ export class AgentControlRuntime {
 					GIT_METHODS.merge,
 					{ worktree: gitRef(worktree), label },
 					() => mergeBranch(worktree, label),
-					MERGE_HOOKS_BUDGET_MS,
+					MERGE_HOOKS_BUDGET_MS + REMOTE_COPY_MS,
 				),
 			landing: (worktree, device) =>
 				this.#git<LandingFacts>(device, GIT_METHODS.landing, { worktree: gitRef(worktree) }, () =>
 					landingFacts(worktree),
 				),
-			removeSafeWorktree: (worktree, device) =>
-				this.#git<WorktreeRemoval>(device, GIT_METHODS.removeWorktree, { worktree: gitRef(worktree) }, () =>
-					removeSafeWorktree(worktree),
-				),
+			removeSafeWorktree: async (worktree, device) => {
+				// `withRemote` asks a paired host for the whole answer; one older than the remote copy's cleanup ignores it
+				// and answers the bare removal.
+				const answer = await this.#git<RpcSafeRemoval | WorktreeRemoval>(
+					device,
+					GIT_METHODS.removeWorktree,
+					{ worktree: gitRef(worktree), withRemote: true },
+					() => removeSafeWorktree(worktree),
+					REMOTE_COPY_MS,
+				);
+				return typeof answer === "string" ? { removal: answer } : answer;
+			},
 			discardWorktree: (worktree, device) =>
 				this.#git<WorktreeRemoval>(device, GIT_METHODS.discardWorktree, { worktree: gitRef(worktree) }, () =>
 					discardOpenedWorktree(worktree, { openFolders: sessionOpenFolders }),
@@ -1287,9 +1431,32 @@ export class AgentControlRuntime {
 	}
 
 	/** One report to a tab's omp; the bridge's answer (`{duplicate, journaled}` for an id it already holds or queued). */
+	/** Put a file on the computer `tabId`'s session runs on: this one's upload folder, or a paired host's through the link. */
+	async #land(tabId: string, name: string, bytes: Uint8Array): Promise<Landing> {
+		const deps = this.#deps;
+		const sidecar = isOutside(tabId) ? undefined : deps.pool.sidecarOf(tabId);
+		const device = sidecar?.device;
+		if (!device) {
+			if (!deps.uploads)
+				return { ok: false, error: "This computer does not take attached files", code: "unsupported" };
+			return deps.uploads.attachHere(name, bytes);
+		}
+		const remote = deps.remote;
+		if (!remote) return { ok: false, error: "No link to that computer", code: "unsupported" };
+		const stored = await uploadToHost(
+			(method, params, timeoutMs) =>
+				remote.request(device, method, { ...params, rtab: tabId, cwd: sidecar?.cwd }, timeoutMs),
+			name,
+			bytes,
+		);
+		return stored.ok && stored.path
+			? { ok: true, path: stored.path }
+			: { ok: false, error: stored.error ?? "The upload failed", ...(stored.code ? { code: stored.code } : {}) };
+	}
+
 	async #sendMail(
 		tabId: string,
-		content: string,
+		content: string | (TextContent | ImageContent)[],
 		details: Record<string, unknown>,
 		delivery: MailDelivery,
 	): Promise<MailAnswer | undefined> {

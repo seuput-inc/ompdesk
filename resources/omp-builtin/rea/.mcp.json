@@ -1,9 +1,0 @@
-{
-	"mcpServers": {
-		"rea": {
-			"type": "http",
-			"url": "${OMP_GUI_MCP_HUB}/rea?cwd=${OMP_GUI_MCP_CWD}",
-			"headers": { "Authorization": "${OMP_GUI_MCP_AUTH}" }
-		}
-	}
-}

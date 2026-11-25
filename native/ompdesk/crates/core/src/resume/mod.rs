@@ -10,18 +10,23 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 use crate::hub::{self, Kind, Out, Outcome};
-use crate::server::Fault;
+use crate::server::{Fault, Registry};
 
 mod connectivity;
 mod ends;
 mod facts;
 mod jsre;
 mod machine;
+mod probe;
 mod text;
 mod util;
 
 use facts::{Fact, MarkerData};
 use machine::{Env, Inst};
+
+pub fn register(registry: &mut Registry) {
+    registry.add("resume.probe", |call| Box::pin(probe::probe(call)));
+}
 
 pub const RESUME_KIND: Kind = Kind {
     name: "resume",
@@ -56,6 +61,12 @@ struct TabParams {
     tab: String,
     #[serde(default)]
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct CutParams {
+    tab: String,
+    env: Env,
 }
 
 #[derive(Deserialize)]
@@ -168,6 +179,16 @@ fn call_resume(id: u64, method: &str, params: &RawValue) -> Outcome {
                 inst.cancel_wait(&p.tab).await?;
                 Ok(Value::Null)
             })
+        }
+        "continueCut" => {
+            let p = parsed!(CutParams);
+            inst.continue_cut(&p.tab, p.env);
+            Outcome::done()
+        }
+        "dismissCut" => {
+            let p = parsed!(CutParams);
+            inst.dismiss_cut(&p.tab, p.env);
+            Outcome::done()
         }
         "stopResumed" => {
             let p = parsed!(TabParams);

@@ -10,6 +10,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
+import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "../../src/main/bridge-client";
+import { createSettingsStore } from "../../src/renderer/stores/settings";
+import type { RpcCommand, RpcResponse } from "../../src/shared/rpc-types";
 
 const FIXTURE = path.resolve("e2e/sidecar-fixture.ts");
 
@@ -58,12 +61,13 @@ async function profile(): Promise<{ agent: string; cwd: string; stored: string }
 	return { agent, cwd, stored };
 }
 
-async function start(agent: string, cwd: string, args: string[]): Promise<Fake> {
+async function start(agent: string, cwd: string, args: string[], bridge?: string): Promise<Fake> {
 	const env: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
 	Object.assign(env, { PI_CODING_AGENT_DIR: agent, OMP_GUI_TEST_SESSION_FILES: "1" });
 	for (const key of ["OMP_GUI_BRIDGE", "OMP_GUI_TEST_RECORD", "OMP_GUI_README_SCENE"])
 		Reflect.deleteProperty(env, key);
+	if (bridge) env.OMP_GUI_BRIDGE = bridge;
 	const child = spawn("bun", [FIXTURE, "--mode", "rpc-ui", ...args], { cwd, env, stdio: ["pipe", "pipe", "inherit"] });
 	children.push(child);
 	const frames: Frame[] = [];
@@ -96,8 +100,9 @@ async function answer(fake: Fake): Promise<void> {
 	await fake.next(frame => frame.type === "agent_end");
 }
 
+/** The session files, not the fake's `<file>.<pid>.tmp` of a journal write still under way. */
 async function sessionFiles(agent: string): Promise<string[]> {
-	return (await fs.readdir(path.join(agent, "sessions", "fixture"))).sort();
+	return (await fs.readdir(path.join(agent, "sessions", "fixture"))).filter(name => name.endsWith(".jsonl")).sort();
 }
 
 /** One line of a session file, as the fake writes it. */
@@ -144,5 +149,38 @@ describe("fake omp session file", () => {
 
 		expect(await sessionFiles(agent)).toEqual(["stored-1.jsonl"]);
 		expect(await roles(stored)).toEqual(["user", "user", "assistant"]);
+	});
+});
+
+describe("fake omp settings", () => {
+	it("provides the authoritative display and approval values required by recovery", async () => {
+		const { agent, cwd } = await profile();
+		const address = newBridgeAddress();
+		const bridge = new GuiBridgeClient(address);
+		try {
+			await start(agent, cwd, ["-e", FIXTURE], address);
+			await bridge.connect();
+			const command = async (request: RpcCommand): Promise<RpcResponse> => {
+				if (request.type !== "get_settings") throw new Error(`Unexpected command ${request.type}`);
+				return {
+					type: "response",
+					command: request.type,
+					success: true,
+					data: await bridge.request("settings_get", { paths: request.paths }),
+				};
+			};
+			const store = createSettingsStore(command);
+			store.setState({ approvalMode: "always-ask", hideThinkingBlock: true, pasteMenuThreshold: 1 });
+			expect(await store.getState().syncDisplaySettings()).toBe(true);
+			expect(await store.getState().syncApproval({ readOnly: true })).toBe(true);
+			expect(store.getState()).toMatchObject({
+				approvalMode: "yolo",
+				hideThinkingBlock: false,
+				pasteMenuThreshold: 100,
+			});
+		} finally {
+			bridge.close();
+			removeBridgeAddress(address);
+		}
 	});
 });

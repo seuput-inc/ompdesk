@@ -6,6 +6,7 @@
  */
 import { journalFacts, promptFacts } from "../../../resources/gui-bridge/stock-helper/memory";
 import { core } from "../core/process";
+import type { CreditSpendRun } from "../omp-launch";
 import { ompRunEnv, systemOmp } from "../omp-runtime";
 import { spawnPath } from "../shell-env";
 import { stockHelperHost } from "../stock-helper";
@@ -35,7 +36,8 @@ function field(value: unknown, key: string): unknown {
  * handler is refused, so the core's request fails with a message instead of waiting.
  */
 export function answerAsks(service: string, handlers: Readonly<Record<string, AskHandler>>): () => void {
-	return core().on("upkeep.ask", data => {
+	return core().on("upkeep.ask", (data, _bin, generation) => {
+		if (generation !== core().generation) return;
 		const ask = field(data, "ask");
 		const kind = field(data, "kind");
 		if (field(data, "service") !== service || typeof ask !== "number" || typeof kind !== "string") return;
@@ -48,7 +50,7 @@ export function answerAsks(service: string, handlers: Readonly<Record<string, As
 				return { ask, ok: false, error: error instanceof Error ? error.message : String(error) };
 			}
 		})()
-			.then(answer => core().call("upkeep.answer", answer))
+			.then(answer => core().call("upkeep.answer", answer, { generation }))
 			// A core that ended meanwhile has nothing left that waits for it.
 			.catch(() => {});
 	});
@@ -72,13 +74,28 @@ export async function ompLaunch(): Promise<OmpLaunch> {
 	return ompLaunchOf(omp.runtime.bin);
 }
 
-/** How the omp at `bin` starts: its binary and the environment it runs with (omp's own folders on `PATH`, telemetry off). */
+/**
+ * What every omp the core starts for a model carries: the Credit use switch (omp-launch.ts `creditSpendRun`). Those
+ * omps (the upkeep's and the curation's `omp -p`, the memory judge's host) have no bridge to apply it, so stock alone
+ * served a spent plan from credits. Main names it once at startup; with none named (a test) omp starts as it did.
+ */
+let modelRun: (() => CreditSpendRun) | undefined;
+
+export function configureModelRuns(run: () => CreditSpendRun): void {
+	modelRun = run;
+}
+
+/**
+ * How the omp at `bin` starts: its binary, the environment it runs with (omp's own folders on `PATH`, telemetry off)
+ * and the Credit use switch as it stands now.
+ */
 export async function ompLaunchOf(bin: string): Promise<OmpLaunch> {
 	const env: Record<string, string> = {};
 	for (const [name, value] of Object.entries(ompRunEnv(bin, await spawnPath()))) {
 		if (value !== undefined) env[name] = value;
 	}
-	return { bin, env };
+	const run = modelRun?.();
+	return run ? { bin, env: { ...env, ...run.env }, args: run.args } : { bin, env };
 }
 
 /**
@@ -155,8 +172,12 @@ export function collatorLocale(): string {
 export interface CoreSide {
 	handlers: Record<string, AskHandler>;
 	/** The members every request of this client carries: the kinds main answers, and for the real client the server
-	 * and the stock helper the core reads memory through itself. */
-	wire(): { asks: string[]; server?: { url: string | null; dataDir: string | null }; stockHost?: string };
+	 * and the stock helper the core reads memory through itself. A scheduled request already has its native server. */
+	wire(nativeServer?: "nativeServer"): {
+		asks: string[];
+		server?: { url: string | null; dataDir: string | null };
+		stockHost?: string;
+	};
 }
 
 /** The side of a request that works for no memory client (a judge): it answers `handlers` and nothing else. */
@@ -173,7 +194,11 @@ export function coreSide(client: object, more: Readonly<Record<string, AskHandle
 	if (client instanceof AiMemoryClient) {
 		return {
 			handlers: { ...more },
-			wire: () => ({ asks: Object.keys(more), server: client.server(), stockHost: stockHelperHost() }),
+			wire: nativeServer => ({
+				asks: Object.keys(more),
+				...(nativeServer ? {} : { server: client.server() }),
+				stockHost: stockHelperHost(),
+			}),
 		};
 	}
 	const handlers = { client: clientAsk(client), facts: factsAsk(), ...more };

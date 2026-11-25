@@ -110,7 +110,9 @@ for (const language of variants(["en", "ko"] as const))
 				await expect(page.locator("[data-model-chip] .omp-composer-effort")).toHaveText(
 					`· ${text.autoHigh.split(" · ")[0]}`,
 				);
-				await expect(page.locator("[data-model-chip]")).toHaveAttribute("aria-label", new RegExp(text.autoHigh));
+				await expect(page.locator("[data-model-chip]")).toHaveAccessibleName(
+					new RegExp(`Local fixture · ${text.autoHigh}`),
+				);
 
 				// CJK: the bold survives glued Korean; the bare URL stops before it.
 				await expect(reply.locator("strong", { hasText: "0.118%" })).toHaveCount(1);
@@ -152,9 +154,14 @@ for (const language of variants(["en", "ko"] as const))
 				// Run in terminal: the fence reaches the tab's shell and the Terminal panel opens.
 				await reply.locator(".omp-code-block").hover();
 				await reply.getByRole("button", { name: text.run }).click();
+				// The panel is about 58 columns wide and a Windows prompt is a long path, so the typed command wraps anywhere
+				// ("…\project>echo o" / "mpdesk-run-in-terminal"): read the rows without whitespace. The typed command, then
+				// its output, must follow each other.
 				await expect
-					.poll(() => aside.locator(".xterm-rows").innerText(), { timeout: 30_000 })
-					.toMatch(/echo ompdesk-run-in-terminal[\s\S]*\nompdesk-run-in-terminal/);
+					.poll(async () => (await aside.locator(".xterm-rows").innerText()).replace(/\s+/g, ""), {
+						timeout: 30_000,
+					})
+					.toContain("echoompdesk-run-in-terminalompdesk-run-in-terminal");
 				await capture(page, `${language}-${theme}-run-in-terminal`);
 
 				// `$` offers the fixture's skill anywhere and inserts stock's token.

@@ -156,6 +156,8 @@ pub struct PrepareWorkstreamRun {
     pub workspace_id: WorkspaceId,
     /// Resolved project.
     pub project_id: ProjectId,
+    /// Pin managed hook routing after an explicit, authorized ID selection.
+    pub scope_by_id: bool,
     /// Repository identity hash.
     pub repo_fingerprint: String,
     /// Worktree identity hash.
@@ -256,6 +258,95 @@ pub struct LinkManagedRunSessionInScope {
     pub owner_user: Option<String>,
 }
 
+/// Native hook identity checked before an ID-selected run may supply scope.
+pub struct ManagedRunHookIdentity {
+    /// Invocation named by the hook.
+    pub run_id: ManagedRunId,
+    /// Harness sending the hook.
+    pub agent: AgentKind,
+    /// Client checkout; required for startup and the first session binding.
+    pub cwd: Option<String>,
+    /// Original, privacy-validated native session identifier.
+    pub native_session_id: String,
+    /// Operator derived from authenticated middleware.
+    pub owner_user: Option<String>,
+    /// Startup always checks the checkout, even for an already linked session.
+    pub session_start: bool,
+    /// The documented Claude SessionStart boundary this hook reports.
+    pub claude_boundary: ClaudeSessionBoundary,
+}
+
+/// A Claude Code SessionStart `source` that may repoint an ID-selected run
+/// already linked to another native session. Claude documents `clear` and
+/// `resume` separately from `startup` and `compact`:
+/// <https://code.claude.com/docs/en/hooks#sessionstart-input>.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaudeSessionBoundary {
+    /// Any other event or source: the linked session must match exactly.
+    Other,
+    /// `/clear` started a fresh conversation with a never-seen native id.
+    Clear,
+    /// `/resume` returned to a conversation this workstream already held.
+    Resume,
+}
+
+impl ClaudeSessionBoundary {
+    /// The boundary a hook's agent, event and `source` describe.
+    #[must_use]
+    pub fn from_session_start(agent: AgentKind, session_start: bool, source: Option<&str>) -> Self {
+        if agent != AgentKind::ClaudeCode || !session_start {
+            return Self::Other;
+        }
+        match source {
+            Some("clear") => Self::Clear,
+            Some("resume") => Self::Resume,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Read the opt-in scope without turning an arbitrary run ID into authority.
+/// The caller must still authorize this scope and atomically link the native
+/// session before using it; that link closes races between initial hooks.
+pub(crate) fn pinned_hook_scope(
+    conn: &Connection,
+    input: &ManagedRunHookIdentity,
+) -> StoreResult<Option<(WorkspaceId, ProjectId)>> {
+    let tx = conn.unchecked_transaction()?;
+    let pin: Option<(bool, bool, bool, i64)> = tx.query_row(
+        "SELECT scope_by_id, native_session_linked_at IS NOT NULL, context_delivered, lease_expires_at \
+         FROM managed_runs WHERE id = ?1",
+        params![input.run_id.as_bytes()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional()?;
+    let Some((true, linked, delivered, expires)) = pin else {
+        return Ok(None);
+    };
+    let refused = || StoreError::ManagedRunBoundaryRefused;
+    let run = ManagedRunBoundaryRow::read(&tx, input.run_id)?.ok_or_else(refused)?;
+    let native = NativeSessionIdentity::parse(&input.native_session_id, &Sanitizer::builtin())
+        .map_err(|_| refused())?;
+    if run.state != "active"
+        || run.agent != input.agent.as_str()
+        || run.owner_user != input.owner_user
+        || ((linked || delivered)
+            && run.native_session.as_deref() != Some(native.as_str())
+            && !(input.claude_boundary != ClaudeSessionBoundary::Other
+                && input.session_start
+                && input.agent == AgentKind::ClaudeCode))
+        || ((input.session_start || !linked) && input.cwd.as_deref() != Some(run.cwd.as_str()))
+    {
+        return Err(refused());
+    }
+    if expires <= Timestamp::now().as_microsecond() {
+        return Err(StoreError::ManagedRunLeaseLapsed);
+    }
+    Ok(Some((
+        WorkspaceId::from_slice(&run.workspace)?,
+        ProjectId::from_slice(&run.project)?,
+    )))
+}
+
 /// Store-level finish input after the raw segment has been made durable.
 #[derive(Debug, Clone)]
 pub struct FinishWorkstreamRun {
@@ -332,6 +423,33 @@ pub struct StoredManagedRunStatus {
     pub state: String,
 }
 
+/// The project that already holds the native session a managed run asked to
+/// link, when it is not the run's own project (#1993).
+///
+/// Only reported for a session with the run's harness and owner: the caller
+/// owns that session, so naming its project discloses nothing new.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeSessionHolder {
+    /// Workspace holding the session.
+    pub workspace: String,
+    /// Project holding the session.
+    pub project: String,
+    /// That project's id.
+    pub project_id: ProjectId,
+    /// Project the managed run was prepared in.
+    pub run_project: String,
+    /// The run project's id.
+    pub run_project_id: ProjectId,
+    /// Workspace of the run project.
+    pub run_workspace: String,
+    /// The run project's legacy folder-name key, if it has one.
+    pub run_legacy_name: Option<String>,
+    /// Sessions already recorded in the run project.
+    pub run_sessions: u64,
+    /// Pages (every version) already written in the run project.
+    pub run_pages: u64,
+}
+
 /// Checkout-local workstream metadata used by read-only discovery surfaces.
 #[derive(Debug, Clone)]
 pub struct StoredWorkstreamSummary {
@@ -347,6 +465,92 @@ pub struct StoredWorkstreamSummary {
     pub current: bool,
     /// Harnesses with a current native session, newest link first.
     pub linked_harnesses: Vec<AgentKind>,
+}
+
+/// Trusted lifecycle state shown by the operator workstream overview.
+///
+/// This deliberately does not infer intent from transcript text. In
+/// particular, "waiting for input" cannot be distinguished reliably from an
+/// assistant narrating a future step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkstreamOperationalStatus {
+    /// The newest managed run holds an unexpired lease.
+    Active,
+    /// The newest run expired, exited unsuccessfully, or ended by signal.
+    Interrupted,
+    /// The newest run completed successfully and portable evidence exists.
+    Completed,
+    /// No portable evidence has been imported yet.
+    Empty,
+}
+
+impl WorkstreamOperationalStatus {
+    /// Stable display/filter name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Interrupted => "interrupted",
+            Self::Completed => "completed",
+            Self::Empty => "empty",
+        }
+    }
+}
+
+/// One bounded row in the root/operator managed-workstream overview.
+///
+/// Native session ids, checkout paths, repository fingerprints and lease
+/// owner strings are intentionally absent: operators need lifecycle state,
+/// not host-local or harness-local identifiers.
+#[derive(Debug, Clone)]
+pub struct OperationalWorkstreamSummary {
+    /// Stable workstream identifier.
+    pub workstream_id: WorkstreamId,
+    /// Workspace display name.
+    pub workspace_name: String,
+    /// Project display name.
+    pub project_name: String,
+    /// Human-readable workstream name.
+    pub name: String,
+    /// Derived only from trusted run columns and event count.
+    pub status: WorkstreamOperationalStatus,
+    /// Newest run identifier, when the workstream has been launched.
+    pub latest_run_id: Option<ManagedRunId>,
+    /// Harness used by the newest run.
+    pub latest_agent: Option<AgentKind>,
+    /// Portable events imported across every run.
+    pub event_count: u64,
+    /// Harnesses with a current native-session link, newest first.
+    pub linked_harnesses: Vec<AgentKind>,
+    /// Last selection or import timestamp in microseconds.
+    pub last_active_at: i64,
+    /// Newest run start timestamp in microseconds.
+    pub latest_started_at: Option<i64>,
+    /// Newest run end timestamp in microseconds.
+    pub latest_ended_at: Option<i64>,
+}
+
+fn operational_status(
+    run_state: Option<&str>,
+    lease_expires_at: Option<i64>,
+    exit_code: Option<i32>,
+    event_count: u64,
+    now_us: i64,
+) -> WorkstreamOperationalStatus {
+    if run_state == Some("active") && lease_expires_at.is_some_and(|lease| lease > now_us) {
+        return WorkstreamOperationalStatus::Active;
+    }
+    if run_state == Some("expired")
+        || (run_state == Some("active") && lease_expires_at.is_none_or(|lease| lease <= now_us))
+        || (run_state == Some("finished") && exit_code != Some(0))
+    {
+        return WorkstreamOperationalStatus::Interrupted;
+    }
+    if event_count == 0 {
+        WorkstreamOperationalStatus::Empty
+    } else {
+        WorkstreamOperationalStatus::Completed
+    }
 }
 
 /// How a rename addresses the workstream it retitles.
@@ -409,6 +613,7 @@ struct LinkRunRow {
     native_session_linked: bool,
     sync_through: i64,
     context_delivered: bool,
+    scope_by_id: bool,
 }
 
 struct ManagedRunBoundaryRow {
@@ -565,8 +770,8 @@ pub(crate) fn prepare_run(
         "INSERT INTO managed_runs( \
              id, workstream_id, agent_kind, lease_owner, native_session_id, owner_user, state, \
              sync_after, sync_through, context_delivered, lease_expires_at, started_at, \
-             previous_agent_kind, previous_native_session_id \
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8, 0, ?9, ?10, ?11, ?12)",
+             previous_agent_kind, previous_native_session_id, scope_by_id \
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8, 0, ?9, ?10, ?11, ?12, ?13)",
         params![
             run_id.as_bytes(),
             workstream_id.as_bytes(),
@@ -584,6 +789,7 @@ pub(crate) fn prepare_run(
             previous_native_session
                 .as_ref()
                 .map(|source| source.native_session_id.as_str()),
+            input.scope_by_id,
         ],
     )?;
     tx.execute(
@@ -792,7 +998,14 @@ pub(crate) fn link_native_session(
         };
     let now = Timestamp::now().as_microsecond();
     let tx = conn.transaction()?;
-    let linked = link_native_session_in_transaction(&tx, run_id, agent, &native_identity, now)?;
+    let linked = link_native_session_in_transaction(
+        &tx,
+        run_id,
+        agent,
+        &native_identity,
+        now,
+        ClaudeSessionBoundary::Other,
+    )?;
     tx.commit()?;
     Ok(linked)
 }
@@ -803,12 +1016,13 @@ fn link_native_session_in_transaction(
     agent: AgentKind,
     native_session_id: &NativeSessionIdentity,
     now: i64,
+    boundary: ClaudeSessionBoundary,
 ) -> StoreResult<bool> {
     let native_session_id = native_session_id.as_str();
     let run: Option<LinkRunRow> = tx
         .query_row(
             "SELECT workstream_id, agent_kind, native_session_id, \
-                    native_session_linked_at IS NOT NULL, sync_through, context_delivered \
+                    native_session_linked_at IS NOT NULL, sync_through, context_delivered, scope_by_id \
              FROM managed_runs WHERE id = ?1 AND state = 'active'",
             params![run_id.as_bytes()],
             |row| {
@@ -819,6 +1033,7 @@ fn link_native_session_in_transaction(
                     native_session_linked: row.get(3)?,
                     sync_through: row.get(4)?,
                     context_delivered: row.get(5)?,
+                    scope_by_id: row.get(6)?,
                 })
             },
         )
@@ -829,13 +1044,68 @@ fn link_native_session_in_transaction(
     if run.agent != agent.as_str() {
         return Ok(false);
     }
+    if run.scope_by_id {
+        // A native session already captured in another scope or by another
+        // operator cannot be adopted just because it lives in the same cwd.
+        let foreign: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions s \
+             JOIN managed_runs mr ON mr.id = ?1 JOIN workstreams w ON w.id = mr.workstream_id \
+             WHERE s.id = ?2 AND (s.workspace_id <> w.workspace_id OR s.project_id <> w.project_id \
+               OR s.agent_kind <> mr.agent_kind OR s.actor_user IS NOT mr.owner_user))",
+            params![
+                run_id.as_bytes(),
+                ai_memory_core::SessionId::from_native(native_session_id).as_bytes()
+            ],
+            |row| row.get(0),
+        )?;
+        if foreign {
+            return Ok(false);
+        }
+    }
     if (run.context_delivered || run.native_session_linked)
         && run
             .native_session
             .as_deref()
             .is_some_and(|linked| linked != native_session_id)
     {
-        return Ok(false);
+        if boundary == ClaudeSessionBoundary::Other
+            || !run.scope_by_id
+            || agent != AgentKind::ClaudeCode
+        {
+            return Ok(false);
+        }
+        let admitted = if boundary == ClaudeSessionBoundary::Clear {
+            // A clear starts a fresh conversation. Refuse an old binding
+            // (including another workstream's) so a delayed spool replay of a
+            // clear cannot rewind the run.
+            !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM workstream_native_sessions \
+                 WHERE agent_kind = ?1 AND native_session_id = ?2)",
+                params![agent.as_str(), native_session_id],
+                |row| row.get::<_, bool>(0),
+            )?
+        } else {
+            // A resume returns to an earlier conversation, so only one this
+            // workstream already held qualifies, and never one another live
+            // run currently holds: a parallel harness keeps its own session.
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM workstream_native_sessions \
+                     WHERE workstream_id = ?1 AND agent_kind = ?2 AND native_session_id = ?3) \
+                 AND NOT EXISTS(SELECT 1 FROM managed_runs \
+                     WHERE id <> ?4 AND agent_kind = ?2 AND native_session_id = ?3 \
+                       AND state = 'active')",
+                params![
+                    run.workstream,
+                    agent.as_str(),
+                    native_session_id,
+                    run_id.as_bytes()
+                ],
+                |row| row.get::<_, bool>(0),
+            )?
+        };
+        if !admitted {
+            return Ok(false);
+        }
     }
     let workstream = run.workstream;
     let sync_through = run.sync_through;
@@ -888,6 +1158,7 @@ fn link_native_session_in_transaction(
 pub(crate) fn link_or_adopt_native_session(
     conn: &mut Connection,
     input: &LinkOrAdoptManagedRunSession,
+    boundary: ClaudeSessionBoundary,
 ) -> StoreResult<ManagedRunSessionLink> {
     if input.native_session_id.trim().is_empty()
         || input.cwd.trim().is_empty()
@@ -907,6 +1178,18 @@ pub(crate) fn link_or_adopt_native_session(
     let now = Timestamp::now().as_microsecond();
     let tx = conn.transaction()?;
     let supplied = ManagedRunBoundaryRow::read(&tx, input.supplied_run_id)?;
+
+    if boundary != ClaudeSessionBoundary::Other {
+        let live_pin: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM managed_runs WHERE id = ?1 \
+             AND state = 'active' AND scope_by_id = 1 AND lease_expires_at > ?2)",
+            params![input.supplied_run_id.as_bytes(), now],
+            |row| row.get(0),
+        )?;
+        if input.agent != AgentKind::ClaudeCode || !live_pin {
+            return Ok(ManagedRunSessionLink::Refused);
+        }
+    }
 
     let selected = match supplied {
         Some(run) if run.state == "active" => {
@@ -963,7 +1246,14 @@ pub(crate) fn link_or_adopt_native_session(
         }
     };
 
-    if !link_native_session_in_transaction(&tx, selected.0, input.agent, &native_identity, now)? {
+    if !link_native_session_in_transaction(
+        &tx,
+        selected.0,
+        input.agent,
+        &native_identity,
+        now,
+        boundary,
+    )? {
         tx.commit()?;
         return Ok(ManagedRunSessionLink::Refused);
     }
@@ -1021,8 +1311,14 @@ pub(crate) fn link_native_session_in_scope(
             },
         );
     }
-    let linked =
-        link_native_session_in_transaction(&tx, input.run_id, input.agent, &native_identity, now)?;
+    let linked = link_native_session_in_transaction(
+        &tx,
+        input.run_id,
+        input.agent,
+        &native_identity,
+        now,
+        ClaudeSessionBoundary::Other,
+    )?;
     tx.commit()?;
     Ok(if linked {
         ManagedRunSessionLink::Exact(input.run_id)
@@ -1462,6 +1758,69 @@ fn validate_finished_recovery(
 }
 
 /// Reader-side managed-run status.
+/// The other project holding `native_session_id` for this run's harness and
+/// owner, if any (see [`NativeSessionHolder`]).
+pub(crate) fn native_session_holder(
+    conn: &Connection,
+    run_id: ManagedRunId,
+    native_session_id: &str,
+) -> StoreResult<Option<NativeSessionHolder>> {
+    let session_id = ai_memory_core::SessionId::from_native(native_session_id);
+    conn.query_row(
+        "SELECT ws.name, p.name, p.id, rp.name, rp.id, rws.name, NULLIF(rp.legacy_name, ''), \
+                (SELECT COUNT(*) FROM sessions WHERE project_id = rp.id), \
+                (SELECT COUNT(*) FROM pages WHERE project_id = rp.id) \
+         FROM managed_runs mr \
+         JOIN workstreams w ON w.id = mr.workstream_id \
+         JOIN projects rp ON rp.id = w.project_id \
+         JOIN workspaces rws ON rws.id = w.workspace_id \
+         JOIN sessions s ON s.id = ?2 \
+         JOIN projects p ON p.id = s.project_id \
+         JOIN workspaces ws ON ws.id = s.workspace_id \
+         WHERE mr.id = ?1 AND s.agent_kind = mr.agent_kind \
+           AND s.actor_user IS mr.owner_user \
+           AND (s.workspace_id <> w.workspace_id OR s.project_id <> w.project_id)",
+        params![run_id.as_bytes(), session_id.as_bytes()],
+        |row| {
+            Ok((
+                (
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ),
+                (
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ),
+                (row.get::<_, i64>(7)?, row.get::<_, i64>(8)?),
+            ))
+        },
+    )
+    .optional()?
+    .map(
+        |(
+            (workspace, project, project_id),
+            (run_project, run_project_id, run_workspace, run_legacy_name),
+            (run_sessions, run_pages),
+        )| {
+            Ok(NativeSessionHolder {
+                workspace,
+                project,
+                project_id: ProjectId::from_slice(&project_id)?,
+                run_project,
+                run_project_id: ProjectId::from_slice(&run_project_id)?,
+                run_workspace,
+                run_legacy_name,
+                run_sessions: u64::try_from(run_sessions).unwrap_or(0),
+                run_pages: u64::try_from(run_pages).unwrap_or(0),
+            })
+        },
+    )
+    .transpose()
+}
+
 pub(crate) fn run_status(
     conn: &Connection,
     run_id: ManagedRunId,
@@ -1581,6 +1940,142 @@ pub(crate) fn list_recent(
             });
         }
         if let Some(agent) = agent
+            && let Some(summary) = summaries.last_mut()
+        {
+            summary.linked_harnesses.push(AgentKind::from_wire(&agent));
+        }
+    }
+    Ok(summaries)
+}
+
+/// List managed workstreams across every scope for the root/operator console.
+///
+/// The page is selected before current harness links are joined, so a
+/// workstream with several linked harnesses still consumes exactly one slot.
+/// Status ordering puts live and interrupted work ahead of completed and empty
+/// ledgers. The caller supplies `now_us` so stale-lease classification is
+/// deterministic in tests and does not mutate persisted run state.
+pub(crate) fn list_operational(
+    conn: &Connection,
+    limit: usize,
+    offset: usize,
+    now_us: i64,
+) -> StoreResult<Vec<OperationalWorkstreamSummary>> {
+    let limit = i64::try_from(limit.clamp(1, 101)).unwrap_or(101);
+    let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+    let mut statement = conn.prepare(
+        "WITH latest_runs AS ( \
+             SELECT id, workstream_id, agent_kind, state, lease_expires_at, \
+                    started_at, ended_at, exit_code, \
+                    ROW_NUMBER() OVER ( \
+                        PARTITION BY workstream_id ORDER BY started_at DESC, id DESC \
+                    ) AS row_num \
+             FROM managed_runs \
+         ), event_totals AS ( \
+             SELECT workstream_id, COUNT(*) AS event_count \
+             FROM workstream_events GROUP BY workstream_id \
+         ), selected AS ( \
+             SELECT w.id, ws.name AS workspace_name, p.name AS project_name, \
+                    w.name, w.updated_at, lr.id AS run_id, \
+                    lr.agent_kind, lr.state, lr.lease_expires_at, \
+                    lr.started_at, lr.ended_at, lr.exit_code, \
+                    COALESCE(events.event_count, 0) AS event_count, \
+                    CASE \
+                      WHEN lr.state = 'active' AND lr.lease_expires_at > ?1 THEN 0 \
+                      WHEN lr.state = 'expired' \
+                        OR (lr.state = 'active' AND lr.lease_expires_at <= ?1) \
+                        OR (lr.state = 'finished' AND lr.exit_code IS NOT 0) THEN 1 \
+                      WHEN COALESCE(events.event_count, 0) > 0 THEN 2 \
+                      ELSE 3 \
+                    END AS attention \
+             FROM workstreams w \
+             JOIN workspaces ws ON ws.id = w.workspace_id \
+             JOIN projects p ON p.id = w.project_id \
+             LEFT JOIN latest_runs lr \
+               ON lr.workstream_id = w.id AND lr.row_num = 1 \
+             LEFT JOIN event_totals events ON events.workstream_id = w.id \
+             ORDER BY attention ASC, w.updated_at DESC, w.id DESC \
+             LIMIT ?2 OFFSET ?3 \
+         ) \
+         SELECT selected.id, selected.workspace_name, selected.project_name, \
+                selected.name, selected.updated_at, selected.run_id, \
+                selected.agent_kind, selected.state, selected.lease_expires_at, \
+                selected.started_at, selected.ended_at, selected.exit_code, \
+                selected.event_count, native.agent_kind \
+         FROM selected \
+         LEFT JOIN workstream_native_sessions native \
+           ON native.workstream_id = selected.id AND native.is_current = 1 \
+         ORDER BY selected.attention ASC, selected.updated_at DESC, selected.id DESC, \
+                  native.updated_at DESC, native.agent_kind ASC",
+    )?;
+    let rows = statement.query_map(params![now_us, limit, offset], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, Option<Vec<u8>>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<i64>>(8)?,
+            row.get::<_, Option<i64>>(9)?,
+            row.get::<_, Option<i64>>(10)?,
+            row.get::<_, Option<i32>>(11)?,
+            row.get::<_, u64>(12)?,
+            row.get::<_, Option<String>>(13)?,
+        ))
+    })?;
+
+    let mut summaries: Vec<OperationalWorkstreamSummary> = Vec::new();
+    for row in rows {
+        let (
+            raw_id,
+            workspace_name,
+            project_name,
+            name,
+            last_active_at,
+            raw_run_id,
+            latest_agent,
+            run_state,
+            lease_expires_at,
+            latest_started_at,
+            latest_ended_at,
+            exit_code,
+            event_count,
+            linked_agent,
+        ) = row?;
+        let workstream_id = WorkstreamId::from_slice(&raw_id)?;
+        if summaries
+            .last()
+            .is_none_or(|summary| summary.workstream_id != workstream_id)
+        {
+            let latest_run_id = raw_run_id
+                .as_deref()
+                .map(ManagedRunId::from_slice)
+                .transpose()?;
+            summaries.push(OperationalWorkstreamSummary {
+                workstream_id,
+                workspace_name,
+                project_name,
+                name,
+                status: operational_status(
+                    run_state.as_deref(),
+                    lease_expires_at,
+                    exit_code,
+                    event_count,
+                    now_us,
+                ),
+                latest_run_id,
+                latest_agent: latest_agent.as_deref().map(AgentKind::from_wire),
+                event_count,
+                linked_harnesses: Vec::new(),
+                last_active_at,
+                latest_started_at,
+                latest_ended_at,
+            });
+        }
+        if let Some(agent) = linked_agent
             && let Some(summary) = summaries.last_mut()
         {
             summary.linked_harnesses.push(AgentKind::from_wire(&agent));
@@ -1808,10 +2303,7 @@ pub(crate) fn search_events(
     sanitizer: &Sanitizer,
 ) -> StoreResult<Vec<WorkstreamEvent>> {
     let limit = i64::try_from(limit.clamp(1, 100)).unwrap_or(100);
-    let free_text = query
-        .replace("title:", "")
-        .replace("body:", "")
-        .replace("content:", "");
+    let free_text = strip_column_prefixes(query);
     let fts_query = crate::prepare_fts5_query(&free_text, stopwords);
     let sql = if fts_query.is_empty() {
         "SELECT sequence, event_id, agent_kind, native_session_id, kind, role, content, occurred_at, \
@@ -1842,6 +2334,29 @@ pub(crate) fn search_events(
         }
     }
     Ok(events)
+}
+
+/// Drop the `title:` / `body:` / `content:` column prefixes the search
+/// surface accepts: the ledger's FTS table has only a `content` column, so a
+/// kept `title:` would fail with "no such column". Only a prefix that starts
+/// a word is a column filter; `subtitle:` or `somebody:` keeps its text.
+fn strip_column_prefixes(query: &str) -> String {
+    const PREFIXES: [&str; 3] = ["title:", "body:", "content:"];
+    let mut out = String::with_capacity(query.len());
+    let mut rest = query;
+    let mut prev: Option<char> = None;
+    while let Some(c) = rest.chars().next() {
+        let starts_word = prev.is_none_or(|p| !(p.is_alphanumeric() || p == '_' || p == '/'));
+        if starts_word && let Some(prefix) = PREFIXES.iter().find(|p| rest.starts_with(**p)) {
+            rest = &rest[prefix.len()..];
+            prev = Some(':');
+            continue;
+        }
+        out.push(c);
+        prev = Some(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 type EventRow = (
@@ -1905,4 +2420,62 @@ fn stored_event(row: EventRow, sanitizer: &Sanitizer) -> StoreResult<WorkstreamE
         content,
         occurred_at,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkstreamOperationalStatus, operational_status, strip_column_prefixes};
+
+    #[test]
+    fn column_prefixes_are_stripped_only_at_word_starts() {
+        assert_eq!(strip_column_prefixes("title:zebra"), "zebra");
+        assert_eq!(strip_column_prefixes("body:a content:b"), "a b");
+        assert_eq!(strip_column_prefixes("(title:a OR -body:b)"), "(a OR -b)");
+        assert_eq!(
+            strip_column_prefixes("subtitle:rendering"),
+            "subtitle:rendering"
+        );
+        assert_eq!(strip_column_prefixes("somebody: help"), "somebody: help");
+        assert_eq!(
+            strip_column_prefixes("café_title:x a/body:y"),
+            "café_title:x a/body:y"
+        );
+        assert_eq!(strip_column_prefixes("título:x"), "título:x");
+    }
+
+    #[test]
+    fn operational_status_uses_only_trusted_lifecycle_fields() {
+        use WorkstreamOperationalStatus::{Active, Completed, Empty, Interrupted};
+
+        assert_eq!(
+            operational_status(Some("active"), Some(11), None, 0, 10),
+            Active
+        );
+        assert_eq!(
+            operational_status(Some("active"), Some(10), None, 9, 10),
+            Interrupted
+        );
+        assert_eq!(
+            operational_status(Some("expired"), Some(99), Some(0), 9, 10),
+            Interrupted
+        );
+        assert_eq!(
+            operational_status(Some("finished"), Some(0), None, 9, 10),
+            Interrupted
+        );
+        assert_eq!(
+            operational_status(Some("finished"), Some(0), Some(2), 9, 10),
+            Interrupted
+        );
+        assert_eq!(
+            operational_status(Some("finished"), Some(0), Some(0), 9, 10),
+            Completed
+        );
+        assert_eq!(
+            operational_status(Some("finished"), Some(0), Some(0), 0, 10),
+            Empty
+        );
+        assert_eq!(operational_status(None, None, None, 3, 10), Completed);
+        assert_eq!(operational_status(None, None, None, 0, 10), Empty);
+    }
 }

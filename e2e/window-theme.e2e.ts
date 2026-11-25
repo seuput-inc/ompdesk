@@ -3,8 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
-import { micaSupported } from "../src/main/window-chrome";
-import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
+import { exitApp, fixtureOmp, pressShortcutUntilVisible, windowsDrawsMica } from "./harness";
 
 // A new window opens in the saved theme exactly like the first one, whatever the OS is set to:
 // main creates every window under `nativeTheme.themeSource` = the saved scheme (the Windows Mica
@@ -86,7 +85,7 @@ for (const scheme of ["light", "dark"] as const) {
 			await expect(first.locator(".omp-workspace-main")).toBeVisible();
 			const expected = await surfaces(first);
 			expect(expected.prefersDark).toBe(scheme === "dark");
-			expect(expected.bg).toBe(scheme === "dark" ? "#19191c" : "#ffffff");
+			expect(expected.bg).toBe(scheme === "dark" ? "#0a0a0a" : "#ffffff");
 
 			// The theme pre-paint gives the new document, before the renderer has read any preference.
 			await app.context().addInitScript(() => {
@@ -106,7 +105,7 @@ for (const scheme of ["light", "dark"] as const) {
 			expect(await second.evaluate(() => Reflect.get(window, "__prePaintTheme"))).toBe(scheme);
 			await expect.poll(() => surfaces(second), { timeout: 30_000 }).toEqual(expected);
 			if (process.platform === "win32") {
-				expect(expected.mica).toBe(micaSupported("win32", os.release()) ? "true" : undefined);
+				expect(expected.mica).toBe(windowsDrawsMica() ? "true" : undefined);
 			}
 			// Picking another theme in Settings moves the native theme with it, so later windows open in that one;
 			// back on System, the window settles on the OS scheme once the native theme stops forcing one.
@@ -114,23 +113,23 @@ for (const scheme of ["light", "dark"] as const) {
 			const settings = second.locator("[data-settings-page]");
 			await pressShortcutUntilVisible(second, "ControlOrMeta+Comma", settings);
 			await settings.locator('[data-settings-section="appearance"]').click();
-			await settings.locator(`[data-theme-option="${other}"]`).click();
+			await settings.locator(`[data-theme-mode="${other}"]`).click();
 			await expect.poll(() => app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe(other);
 			await expect.poll(() => surfaces(second).then(s => s.theme)).toBe(other);
-			await settings.locator('[data-theme-option="system"]').click();
+			await settings.locator('[data-theme-mode="system"]').click();
 			await expect.poll(() => app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe("system");
 			const osScheme = (await app.evaluate(({ nativeTheme }) => nativeTheme.shouldUseDarkColors)) ? "dark" : "light";
 			await expect.poll(() => surfaces(second).then(s => s.theme)).toBe(osScheme);
-			// System pairs the light and the dark theme the user picked: the one for the OS scheme shows.
-			await settings.locator("#setting-gui-systemDarkTheme select").selectOption("nord");
-			await settings.locator("#setting-gui-systemLightTheme select").selectOption("sepia");
-			const paired = osScheme === "dark" ? { name: "nord", bg: "#2e3440" } : { name: "sepia", bg: "#f4ecd8" };
+			// A set follows the OS between its halves: the half for the OS scheme shows.
+			await settings.locator('[data-theme-set="gruvbox"]').click();
+			const paired =
+				osScheme === "dark" ? { name: "gruvbox-dark", bg: "#282828" } : { name: "gruvbox-light", bg: "#fbf1c7" };
 			await expect.poll(() => second.evaluate(() => document.documentElement.dataset.themeName)).toBe(paired.name);
 			expect((await surfaces(second)).bg).toBe(paired.bg);
-			// A theme picked by name moves the native theme to that theme's scheme.
-			await settings.locator('[data-theme-option="sepia"]').click();
+			// A set kept on one half moves the native theme to that half's scheme.
+			await settings.locator('[data-theme-mode="light"]').click();
 			await expect.poll(() => app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe("light");
-			await expect.poll(() => surfaces(second).then(s => s.bg)).toBe("#f4ecd8");
+			await expect.poll(() => surfaces(second).then(s => s.bg)).toBe("#fbf1c7");
 			expect(errors).toEqual([]);
 		} finally {
 			await exitApp(app);

@@ -15,10 +15,10 @@ import {
 	isAccountRotationMode,
 	parseAccountRotationPref,
 } from "../shared/account-rotation";
-import type { BuiltinReaState } from "../shared/builtin-mcp";
 import { type CreditSpendState, creditSpendEnabled } from "../shared/credit-spend";
 import { codedError, type IpcErrorCode, ipcErrorCode } from "../shared/ipc-error-codes";
 import type {
+	BridgeHealthReport,
 	CustomProviderInput,
 	CustomProvidersConfig,
 	HostDesktopState,
@@ -42,15 +42,12 @@ import type { OmpUpdateState } from "../shared/omp-update";
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../shared/schedules";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../shared/sidebar-projects";
 import { BENCHMARK_TIMEOUT_MS, BenchmarkRunner } from "./benchmark-runner";
-import { builtinReaState } from "./builtin-mcp";
 import { ModelSetupRunner } from "./model-setup-runner";
-import { deleteModelsProvider, listModelsProviders, setModelOverride, upsertModelsProvider } from "./models-config";
-import { modelsConfigMetadata } from "./models-config-stock";
+import { deleteModelsProvider, modelsCatalog, setModelOverride, upsertModelsProvider } from "./models-config";
 import type { OmpResolution } from "./omp-runtime";
-import type { OmpUpdater } from "./omp-updater";
 import {
 	AccountRotationStateSchema,
-	BuiltinReaStateSchema,
+	BridgeHealthReportSchema,
 	CreditSpendStateSchema,
 	HOST_STATS_TIMEOUT_MS,
 	HostDesktopStateSchema,
@@ -62,10 +59,9 @@ import {
 	SchedulesStateSchema,
 	SidebarProjectsStateSchema,
 } from "./remote/app-protocol";
-import type { Revive } from "./restart-policy";
 import type { ScheduleService } from "./schedules";
 import type { SidebarProjects } from "./sidebar-projects";
-import type { StatsClient } from "./stats-client";
+import type { StatsRead } from "./stats-server";
 
 export interface MachineServices {
 	listProviders(): Promise<CustomProvidersConfig>;
@@ -98,8 +94,6 @@ export interface MachineServices {
 	creditSpend(): Promise<CreditSpendState>;
 	/** Store the switch; every omp this machine runs follows from its next request. */
 	setCreditSpend(enabled: boolean): Promise<CreditSpendState>;
-	builtinRea(): Promise<BuiltinReaState>;
-	setBuiltinRea(enabled: boolean): Promise<BuiltinReaState>;
 	/** Whether that machine looks for local inference engines (FreeToken, colibri) and lists their models by itself. */
 	localEngineDetect(): Promise<LocalEngineDetectState>;
 	setLocalEngineDetect(enabled: boolean): Promise<LocalEngineDetectState>;
@@ -125,6 +119,8 @@ export interface MachineServices {
 	createSchedule(draft: ScheduleDraft, origin?: string): Promise<ScheduleCreated>;
 	/** The sidebar's project list on that machine (sidebar-projects.ts): read it, add a folder, remove one. */
 	sidebarProjects(request: SidebarProjectsRequest): Promise<SidebarProjectsState>;
+	/** The bridge self-check's latest result per omp version that machine ran in its launch (bridge-health.ts). */
+	bridgeHealth(): Promise<BridgeHealthReport>;
 }
 
 /** The stats server's down-state texts, in this computer's UI language. */
@@ -161,10 +157,14 @@ function failure(error: unknown): { error: string; unavailable: false; code?: Ip
 	};
 }
 
+/** This computer's omp updater as a paired device drives it: its state, and Update now (a pass joins a running one). */
+export interface OmpUpdateDriver {
+	state(): OmpUpdateState;
+	updateNow(): Promise<unknown>;
+}
+
 export interface LocalMachineDeps {
-	stats: Pick<StatsClient, "port" | "fetch">;
-	/** Demand-driven revive for the bundled stats server (no server → "exhausted"). */
-	statsRestart: () => Revive;
+	stats: (path: string, params?: Record<string, string>) => Promise<StatsRead>;
 	statsText: StatsText;
 	/** The system omp `omp bench` and the model setup research run. */
 	benchmarkOmp: () => Promise<OmpResolution>;
@@ -179,7 +179,7 @@ export interface LocalMachineDeps {
 	localEngines: {
 		/** The stored pref `LOCAL_ENGINE_DETECT_PREF`, unparsed. */
 		read(): unknown;
-		/** Store the switch and let the detector follow it (`LocalEngineDetector.setEnabled`). */
+		/** Store the switch and let the core's detector follow it (`LocalEngines.setEnabled`). */
 		set(enabled: boolean): Promise<void>;
 	};
 	modelSetupPick: {
@@ -188,19 +188,15 @@ export interface LocalMachineDeps {
 		/** Store the pick; null removes it. */
 		write(pick: string | null): void;
 	};
-	builtinRea: {
-		read(): unknown;
-		write(enabled: boolean): void;
-		/** REA was turned on while Node.js is missing or too old: machine setup installs it now, in the background. */
-		installNode?(): void;
-	};
 	desktop: DesktopDeps;
-	/** This computer's omp updater (`omp-updater.ts`); it exists once startup has built it. */
-	ompUpdater: () => Pick<OmpUpdater, "state" | "updateNow">;
+	/** This computer's omp updater (the core's `tools` instance); it exists once startup has built it. */
+	ompUpdater: () => OmpUpdateDriver;
 	/** This computer's ScheduleService; it exists once startup has built it. */
 	schedules: () => Pick<ScheduleService, "command" | "create" | "readLog"> | null;
 	/** This computer's sidebar project list; it exists once startup has built it. */
 	sidebarProjects: () => Pick<SidebarProjects, "command"> | null;
+	/** This computer's bridge self-check results (`BridgeHealth.report`). */
+	bridgeHealth: () => BridgeHealthReport;
 }
 
 export interface AccountRotationDeps {
@@ -244,9 +240,8 @@ export class LocalMachine implements MachineServices {
 		this.#deps = deps;
 	}
 
-	async listProviders(): Promise<CustomProvidersConfig> {
-		const [providers, options] = await Promise.all([listModelsProviders(), modelsConfigMetadata()]);
-		return { providers, options };
+	listProviders(): Promise<CustomProvidersConfig> {
+		return modelsCatalog();
 	}
 
 	async upsertProvider(input: CustomProviderInput): Promise<void> {
@@ -263,14 +258,9 @@ export class LocalMachine implements MachineServices {
 
 	async fetchStats(path: string, params?: Record<string, string>): Promise<unknown> {
 		if (typeof path !== "string") throw codedError("invalid_stats_path", "Invalid stats path");
-		if (!this.#deps.stats.port) {
-			// Nothing is listening: ask for it and let the caller keep waiting — but
-			// only while a revive is actually possible, so a permanently dead stats
-			// server ends in an error instead of an endless "loading".
-			return statsUnavailable(this.#deps.statsRestart() === "exhausted", this.#deps.statsText);
-		}
 		try {
-			return await this.#deps.stats.fetch(path, params);
+			const result = await this.#deps.stats(path, params);
+			return result.ready ? result.data : statsUnavailable(result.exhausted, this.#deps.statsText);
 		} catch (err) {
 			// A request that reached the server and failed is a failure, not a
 			// booting server: the dashboard must show it, not retry for a budget.
@@ -372,21 +362,6 @@ export class LocalMachine implements MachineServices {
 		return this.localEngineDetect();
 	}
 
-	async builtinRea(): Promise<BuiltinReaState> {
-		return builtinReaState(this.#deps.builtinRea.read());
-	}
-
-	async setBuiltinRea(enabled: boolean): Promise<BuiltinReaState> {
-		if (typeof enabled !== "boolean") throw codedError("invalid_preference_key", "Invalid built-in REA preference");
-		this.#deps.builtinRea.write(enabled);
-		const state = await this.builtinRea();
-		// Turning REA on is the connection that needs Node: install it right then (setup's node item shows it).
-		if (enabled && (state.reason === "node-missing" || state.reason === "node-version")) {
-			this.#deps.builtinRea.installNode?.();
-		}
-		return state;
-	}
-
 	async desktop(): Promise<HostDesktopState> {
 		const { version, update, appearance } = this.#deps.desktop;
 		const { themeName, language } = appearance();
@@ -433,10 +408,11 @@ export class LocalMachine implements MachineServices {
 	}
 
 	/**
-	 * A paired device asks this computer to update its omp: the computer's own OmpUpdater does it
+	 * A paired device asks this computer to update its omp: the computer's own omp updater does it
 	 * (helpers released and resumed, the setup supervisor, the tabs moved to the new omp, one run at a
-	 * time with its scheduled one), in the background. The reply carries the state at that moment;
-	 * every change after it reaches the device as a pushed event (`LocalHostServices.ompUpdateChanged`).
+	 * time with its scheduled one), in the background. The reply carries the state at that moment, which already
+	 * shows the pass (the core runs the call before the state read); every change after it reaches the device as a
+	 * pushed event (`LocalHostServices.ompUpdateChanged`).
 	 */
 	async startOmpUpdate(): Promise<OmpUpdateState> {
 		const updater = this.#deps.ompUpdater();
@@ -460,6 +436,10 @@ export class LocalMachine implements MachineServices {
 		const projects = this.#deps.sidebarProjects();
 		if (!projects) throw new Error("The project list is not available yet");
 		return projects.command(request);
+	}
+
+	async bridgeHealth(): Promise<BridgeHealthReport> {
+		return this.#deps.bridgeHealth();
 	}
 
 	#scheduleService(): Pick<ScheduleService, "command" | "create" | "readLog"> {
@@ -574,14 +554,6 @@ export class RemoteMachine implements MachineServices {
 		return CreditSpendStateSchema.parse(await this.#request<unknown>("host.creditSpend.set", { enabled }));
 	}
 
-	async builtinRea(): Promise<BuiltinReaState> {
-		return BuiltinReaStateSchema.parse(await this.#request<unknown>("host.builtinRea.get", {}));
-	}
-
-	async setBuiltinRea(enabled: boolean): Promise<BuiltinReaState> {
-		return BuiltinReaStateSchema.parse(await this.#request<unknown>("host.builtinRea.set", { enabled }));
-	}
-
 	async localEngineDetect(): Promise<LocalEngineDetectState> {
 		return LocalEngineDetectStateSchema.parse(await this.#request<unknown>("host.localEngines.get", {}));
 	}
@@ -623,6 +595,10 @@ export class RemoteMachine implements MachineServices {
 
 	async sidebarProjects(request: SidebarProjectsRequest): Promise<SidebarProjectsState> {
 		return SidebarProjectsStateSchema.parse(await this.#request<unknown>("host.projects.command", { request }));
+	}
+
+	async bridgeHealth(): Promise<BridgeHealthReport> {
+		return BridgeHealthReportSchema.parse(await this.#request<unknown>("host.bridgeHealth.get", {}));
 	}
 }
 

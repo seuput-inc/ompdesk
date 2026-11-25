@@ -9,9 +9,9 @@
 //!   every request as its own task, so the number is what keeps main's order: a push is applied only once the one
 //!   before it was. The numbers also date things: a tab's step is "after" a send when its push came after the one
 //!   main had sent last as it started the send tool (`began`).
-//! - Every push main sends while it is watched carries the sessions agents may see, as they were at that moment
-//!   (`views`). The TypeScript read them synchronously at each step; here each waiting request is handed what main
-//!   saw at each step, in order (`Glance`), so a state that held only between two steps is still seen.
+//! - Every push main sends while it is watched carries the visible tabs' facts as they were at that moment. The
+//!   core projects them into public `View`s. Each waiting request sees every moment in order (`Glance`), including
+//!   a state that held only between two steps.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};

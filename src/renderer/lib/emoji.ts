@@ -58,8 +58,6 @@ const EMOTICONS: ReadonlyArray<readonly [pattern: string, char: string]> = [
 	["<3", "❤️"],
 	["xD", "😆"],
 	["XD", "😆"],
-	["B)", "😎"],
-	["8)", "😎"],
 ];
 
 const MAX_SUGGESTIONS = 12;

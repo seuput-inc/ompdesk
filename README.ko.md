@@ -9,10 +9,10 @@
 
 **omp 코딩 에이전트를 위한 데스크톱 앱: 병렬 세션, 오토파일럿, 그리고 내 휴대폰까지.**
 
-<a href="https://github.com/SeuPut0705/ompdesk/releases/latest/download/ompdesk-mac-arm64.dmg"><img src="resources/brand/download-macos.svg" alt="macOS(Apple Silicon)용 다운로드" width="280" height="64"></a>
-<a href="https://github.com/SeuPut0705/ompdesk/releases/latest/download/ompdesk-windows-setup.exe"><img src="resources/brand/download-windows.svg" alt="Windows(x64)용 다운로드" width="280" height="64"></a>
+<a href="https://github.com/seuput-inc/ompdesk/releases/latest/download/ompdesk-mac-arm64.dmg"><img src="resources/brand/download-macos.svg" alt="macOS(Apple Silicon)용 다운로드" width="280" height="64"></a>
+<a href="https://github.com/seuput-inc/ompdesk/releases/latest/download/ompdesk-windows-setup.exe"><img src="resources/brand/download-windows.svg" alt="Windows(x64)용 다운로드" width="280" height="64"></a>
 
-[![최신 릴리스](https://img.shields.io/github/v/release/SeuPut0705/ompdesk?style=flat-square&color=5B5BD6)](https://github.com/SeuPut0705/ompdesk/releases/latest)
+[![최신 릴리스](https://img.shields.io/github/v/release/seuput-inc/ompdesk?style=flat-square&color=5B5BD6)](https://github.com/seuput-inc/ompdesk/releases/latest)
 ![macOS와 Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Windows-5B5BD6?style=flat-square)
 [![Apache-2.0 라이선스](https://img.shields.io/badge/license-Apache--2.0-5B5BD6?style=flat-square)](LICENSE)
 
@@ -59,7 +59,7 @@
 
 - **메모리.** 결정, 규칙, 턴마다의 결론을 로컬에 남겨 두고 나중 프롬프트에 필요할 때 떠올려요. 연결한 내 컴퓨터끼리 함께 써요. 설정 › 메모리에서 보고 고칠 수 있어요.
 - **대화 속 파일.** 내가 붙이거나 에이전트가 건넨 파일은 미리보기가 있는 카드로 보여요: 사진, PDF 첫 쪽, 웹 페이지, 표의 첫 줄. 버튼 하나로 Finder나 탐색기에서 위치를 보거나, 파일이 다른 컴퓨터에 있으면 지금 쓰는 기기에 저장해요.
-- **스킬.** [pstack](https://github.com/cursor/plugins/tree/main/pstack)의 엔지니어링 플레이북, [ECC](https://github.com/affaan-m/ECC)의 언어·프레임워크 스킬, REA의 리버스 엔지니어링 도구가 들어 있어요. 각각 설정에서 끌 수 있어요.
+- **스킬.** [Ponytail](https://github.com/DietrichGebert/ponytail)의 공식 코딩·리뷰 스킬 6개는 따로 설치할 필요 없이 앱과 함께 업데이트돼요. 새 OMPdesk 세션은 Full 모드로 시작해요. [pstack](https://github.com/cursor/plugins/tree/main/pstack)의 엔지니어링 플레이북, [ECC](https://github.com/affaan-m/ECC)의 언어·프레임워크 스킬은 설정에서 각각 끌 수 있어요.
 - **작은 자동화.** 요청마다 계획·목표 모드를 골라 주고, 세션 제목이 작업을 따라가고, 다음 프롬프트를 추천해요. 설정 › 에이전트 동작에서 하나씩 끌 수 있어요.
 - **컴퓨터 사용.** 기본으로 켜져 있고, 한 번에 한 세션만 화면을 써요. `/computer off`로 꺼요.
 - **키보드로 다 돼요.** F6으로 사이드바, 대화, 입력창, 작업 보드, 오른쪽 패널을 오가고, 단축키는 설정 › 키보드 단축키에서 모두 바꿀 수 있어요.
@@ -73,7 +73,7 @@
 
 macOS 첫 실행: 빌드는 서명했지만 공증은 받지 않아서, 앱을 우클릭하고 **열기**를 한 번 선택하세요. Windows SmartScreen: **추가 정보 → 실행**을 누르세요.
 
-Apple Silicon Mac 또는 Windows 10/11 x64가 필요해요. omp 18.18.9 이상이 필요하고, 알아서 설치돼요.
+macOS 14 이상의 Apple Silicon Mac 또는 Windows 10/11 x64가 필요해요. omp 18.18.9 이상이 필요하고, 알아서 설치돼요.
 
 ## 업데이트
 
@@ -85,7 +85,7 @@ OMPdesk, omp, 연결한 계정의 도구 CLI, omp의 플러그인·스킬·MCP �
 - **비용이 드나요?** 아니요. Apache License 2.0 오픈소스이고 계정이 필요 없어요. 모델 비용은 터미널에서처럼 프로바이더가 청구해요.
 - **에이전트가 내 컴퓨터를 조작하나요?** 컴퓨터 사용은 기본으로 켜져 있고, 한 번에 한 세션만 화면을 써요. macOS에서는 OMPdesk에 화면 기록과 손쉬운 사용 권한을 줘야 동작해요. omp 기본 도구 승인에서는 묻지 않고 조작하니, 설정 › 권한 및 보안의 **도구 승인**을 "항상 묻기"로 바꾸거나 `/computer off`로 끄세요.
 - **창을 닫았는데 앱이 꺼지지 않아요.** 의도한 동작이에요. 종료(⌘Q, 트레이 메뉴)하기 전까지 작업은 계속돼요.
-- **다른 문제가 생겼어요.** [문제 해결](docs/troubleshooting.ko.md)을 보거나 [이슈](https://github.com/SeuPut0705/ompdesk/issues)를 남겨 주세요.
+- **다른 문제가 생겼어요.** [문제 해결](docs/troubleshooting.ko.md)을 보거나 [이슈](https://github.com/seuput-inc/ompdesk/issues)를 남겨 주세요.
 
 ## 개인정보
 
@@ -105,16 +105,18 @@ OMPdesk, omp, 연결한 계정의 도구 CLI, omp의 플러그인·스킬·MCP �
 
 ## 소스에서 실행하기
 
-Bun, Git, omp 18.18.9 이상이 필요해요.
+Bun, Git, `native/ompdesk/rust-toolchain.toml`에 지정된 Rust, omp 18.18.9 이상이 필요해요.
 
 ```bash
-git clone https://github.com/SeuPut0705/ompdesk.git
+git clone https://github.com/seuput-inc/ompdesk.git
 cd ompdesk
 bun install
 bun run dev
 ```
 
 개발·검사·배포 규칙은 [AGENTS.md](AGENTS.md), 버전별 변경 내역은 [CHANGELOG.md](CHANGELOG.md)에 있어요. 위 미디어를 다시 녹화하려면 `bun run readme:media`를 실행하세요.
+
+데스크톱 창은 Rust(Tauri 2)와 운영체제 기본 웹뷰(macOS의 WebKit, Windows의 WebView2)로 동작하고, Preview 패널은 앱에 들어 있는 Chromium 계열 브라우저(Brave)를 별도 프로필로 실행해요. 기존 Node 메인 프로세스와 서비스는 그대로 쓰며, React 화면과 순정 omp 확장은 TypeScript로 남아요.
 
 ## 기여 · 보안 · 라이선스
 

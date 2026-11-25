@@ -313,7 +313,8 @@ impl Client {
         });
     }
 
-    /// Stop reconnecting and drop the link.
+    /// Stop reconnecting and drop the link once what main already sent has gone out: the quit's `tab.close` is
+    /// queued a moment before this, and a destroyed link would drop it with the host's tab still running.
     pub fn close(&self) {
         let mut inner = self.inner();
         clear(&mut inner.stale);
@@ -322,7 +323,7 @@ impl Client {
         if let Some(link) = inner.link
             && let Some(handle) = super::super::state().links.get(&link)
         {
-            handle.command(Command::Destroy(Reason::Local));
+            handle.command(Command::Close);
         }
         self.set_state(&mut inner, LinkState::Offline);
     }
@@ -349,6 +350,10 @@ impl Client {
             }
             self.log("attempt", details);
         }
+        // The address lookup is a step of its own: a `peer` wake while it runs measures against it, never against
+        // the last dial of an earlier attempt, whose age would end this attempt before it dialed (run 43496522688).
+        inner.step += 1;
+        inner.step_at = clock::now_ms();
         self.set_state(inner, LinkState::Connecting);
         let cancel = Scope::detached();
         inner.cancel = Some(cancel.clone());
@@ -676,4 +681,75 @@ pub async fn connect_first(
         .put(record.clone())
         .map_err(|error| Failure::new("protocol", error.to_string()))?;
     Ok(store.get(&host.device_id).unwrap_or(record))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::Pin;
+
+    use tokio::sync::{Notify, mpsc};
+
+    use super::*;
+
+    /// Addresses that answer once the test lets them: the attempt stays in its lookup meanwhile.
+    struct Held(Arc<Notify>);
+
+    impl Addresses for Held {
+        fn resolve(
+            &self,
+            _host: Map<String, Value>,
+        ) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
+            let release = Arc::clone(&self.0);
+            Box::pin(async move {
+                release.notified().await;
+                Vec::new()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_peer_link_only_ends_a_host_lookup_after_the_stale_step() {
+        let _serial = clock::TEST_CLOCK.lock().await;
+        clock::set_real();
+        let dir = std::env::temp_dir().join(format!("ompdesk-client-peer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (frames, _read) = mpsc::unbounded_channel();
+        let release = Arc::new(Notify::new());
+        let mut host = Map::new();
+        host.insert("deviceId".into(), "studio".into());
+        let client = Client::new(ClientOptions {
+            events: crate::server::test_events(&frames),
+            identity: Arc::new(crate::remote::identity::load_or_create(&dir).unwrap()),
+            host,
+            name: "laptop".into(),
+            app_version: "0.0.0".into(),
+            capabilities: Map::new(),
+            liveness: Liveness::default(),
+            store: None,
+            addresses: Box::new(Held(Arc::clone(&release))),
+        });
+        clock::set_manual(10_000);
+        client.connect();
+        let original = client.inner().cancel.clone();
+        client.wake("peer");
+        clock::advance(STALE_STEP_MS - 1).await;
+        let before_deadline = original.as_ref().is_some_and(|cancel| !cancel.cancelled())
+            && client.inner().rerun.is_none();
+        clock::advance(1).await;
+        let at_deadline = original.as_ref().is_some_and(Scope::cancelled)
+            && client.inner().rerun.as_deref() == Some("peer");
+        client.close();
+        release.notify_one();
+        clock::set_real();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            before_deadline,
+            "a peer ended the original lookup before its stale deadline"
+        );
+        assert!(
+            at_deadline,
+            "a stale original lookup was not cancelled for its peer retry"
+        );
+    }
 }

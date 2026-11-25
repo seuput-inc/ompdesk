@@ -1,9 +1,6 @@
 # The macOS checks of a push to main and of a dispatched landing gate (`ci.yml -f mac=true`), one unit with two callers:
-# mac-main.yml (every push to main, a queue of its own: one run going, the newest waiting) and ci.yml's `mac` job (a
-# dispatch the queue gate admitted, in the account-wide `mac-dispatch` lane, one holder and one waiting request; see
-# queue-gate.yml). Four runners at once, as release.yml's `mac`, `mac-native`, `native` and the memory build use. Whether
-# a run may have them is the caller's: nothing here reads `inputs`, which in a called workflow are this workflow's own.
-# `github` is the caller's.
+# mac-main.yml (every push to main) and ci.yml's `mac` job (on dispatch). The callers decide when to run these
+# four jobs; `inputs` in a called workflow are its own, not the caller's.
 name: mac-checks
 
 on:
@@ -13,32 +10,54 @@ permissions:
   contents: read
 
 jobs:
-  # release.yml's `mac` pre-flight half: the @smoke specs on the fake omp, on the built app (out/), on macOS.
+  # release.yml's `mac` pre-flight half: the staged Tauri host (WKWebView) on the fake omp, driven through its native
+  # WebDriver (scripts/tauri-native-smoke.ts; Playwright cannot attach to WKWebView), on the built app (out/), on macOS.
   mac-smoke:
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      # See release.yml's mac job: a plain install may leave no Electron binary; the shared install fetches it.
-      - uses: ./.github/actions/install
-      - run: bun run build
-      # The real terminal smoke runs stock omp's PTY natives, as release.yml's mac does.
-      - name: Install omp
+      # install, the Tauri host with the test-automation feature (the embedded WebDriver server the smoke drives; a released
+      # host has none), the rollback launcher, the pinned Node, the Preview browser, the build, memory and agent-desktop: what
+      # the smoke and the packaged app below need.
+      - uses: ./.github/actions/shell-mac-inputs
+        with:
+          runtime: tauri
+          playwright: "false"
+      # The same driver release.yml's `mac` runs on the packaged app, here on the staged host: bridge, new tab, a prompt
+      # round trip on the fake omp, `open -a` with omp://new and a folder (the shell's entry points), settings, a clean quit.
+      - name: Smoke the staged Tauri host
         run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
-      # pwa-install and device-prefs drive a phone page in Playwright's own Chromium.
-      - name: Playwright browsers
-        run: bunx playwright install chromium
-      - run: bunx playwright test --grep "@smoke"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tauri-smoke"
+          export OMPDESK_TAURI_TEST_BINARY="$PWD/resources/ompdesk-tauri/darwin-arm64/ompdesk-shell"
+          export OMPDESK_TAURI_TEST_OUTPUT="$RUNNER_TEMP/tauri-smoke"
+          OMPDESK_TEST_EDIT_MENU=1 bun scripts/tauri-native-smoke.ts
+      # The packaged app (ad-hoc signed, the test host above inside) started as a person starts it: one app whose pid is the
+      # shell's, a second `open` handing over, a quit leaving nothing behind (scripts/mac-launch-check.sh). The launcher
+      # starts the shell and exits since the macOS 27 tray hang (launcher_main.rs); these say that changed nothing else.
+      - name: Package the app
+        run: bun scripts/package-mac.ts --no-dmg --sign-with -
+      - name: Launch, hand over and quit the packaged app
+        run: bash scripts/mac-launch-check.sh dist/mac-arm64/OMPdesk.app
+      # The update from the released Tauri app keeps the page's WebKit store (Local Storage, IndexedDB, cookies, caches): the
+      # released shell's store sits under its process name, this one's under the bundle identifier, and its page must still
+      # read what the released page kept (scripts/shell-move/webkit-store-mac.sh).
+      - name: The update from v0.132.0 keeps the WebKit store
+        run: bash scripts/shell-move/webkit-store-mac.sh dist/mac-arm64/OMPdesk.app
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tauri-smoke-macos-staged
+          path: ${{ runner.temp }}/tauri-smoke/
+          if-no-files-found: ignore
+          retention-days: 3
       - if: failure()
         run: bash scripts/ci-failure.sh
         env:
@@ -47,24 +66,21 @@ jobs:
   # The vitest files that drive the real ompdesk-core binary, on macOS, as release.yml's `mac-native`.
   mac-native:
     runs-on: macos-latest
-    timeout-minutes: 10
+    # 45, not 25: on a staged-binary cache miss the install step builds native/ompdesk first, 20 min of it on the hub
+    # batch's 45263226632 (23 Nov 2026), which left under 3 min for the parity tests (10 ran out on 17 Nov before that).
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Stages resources/ompdesk-bin (built on a cache miss), which the tests' core process runs.
       - uses: ./.github/actions/install
       # session-index.test.ts reads stock omp's session storage.
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+      - uses: ./.github/actions/install-omp
       - uses: ./.github/actions/native-parity
       - if: failure()
         run: bash scripts/ci-failure.sh
@@ -76,12 +92,41 @@ jobs:
     name: native (macos arm64)
     runs-on: macos-latest
     timeout-minutes: 30
+    env:
+      # Keep file and line numbers in backtraces, without debugger data for every local variable.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     permissions:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: ./.github/actions/native-check
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Identify the native test build
+        id: test-inputs
+        shell: bash
+        run: |
+          digest=$(git rev-parse HEAD:native/ompdesk HEAD:scripts/mac-signing.json \
+            HEAD:.github/actions/native-check HEAD:.github/actions/native-toolchain HEAD:.github/workflows/mac-checks.yml \
+            | shasum -a 256 | cut -d ' ' -f 1)
+          echo "key=rustc-test-$RUNNER_OS-$RUNNER_ARCH-${ImageVersion:-$(sw_vers -buildVersion)}-$digest" >> "$GITHUB_OUTPUT"
+      - id: check
+        uses: ./.github/actions/native-check
+        with:
+          test-cache-key: ${{ steps.test-inputs.outputs.key }}
+      - name: Measure the test compiler state
+        if: steps.check.outputs.unsaved-test-cache-key != ''
+        id: size
+        run: |
+          kib=$(du -sk native/ompdesk/target/debug/incremental | cut -f 1)
+          echo "rustc incremental state: $kib KiB (save limit: 1536 MiB)"
+          if (( kib > 0 && kib <= 1536 * 1024 )); then echo "save=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Save the test compiler state
+        if: steps.size.outputs.save == 'true'
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: native/ompdesk/target/debug/incremental
+          key: ${{ steps.check.outputs.unsaved-test-cache-key }}
       - if: failure()
         shell: bash
         run: bash scripts/ci-failure.sh
@@ -95,11 +140,12 @@ jobs:
   # was built before) only runs `--check`. A dispatched gate has no pushed range, so it builds.
   memory:
     runs-on: macos-latest
-    timeout-minutes: 40
+    # 60, not 40: the install step can build native/ompdesk (20 min on a cache miss) before the memory build itself.
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Did native/memory change?
@@ -117,7 +163,7 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.changed.outputs.changed == 'true'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Electron's binary stays: licenses:check reads node_modules/electron/dist/LICENSE.
@@ -129,17 +175,21 @@ jobs:
         with:
           path: resources/ai-memory-bin
           key: ai-memory-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/memory/**', 'scripts/build-memory.ts', 'resources/gui-bridge/memory-prompt.ts', 'resources/gui-bridge/redactor.ts') }}
-      - if: steps.changed.outputs.changed == 'true' && steps.memory-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95
+      - if: steps.changed.outputs.changed == 'true'
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
         with:
           toolchain: "1.95"
-      - if: steps.changed.outputs.changed == 'true' && steps.memory-cache.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - if: steps.changed.outputs.changed == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/memory
       - if: steps.changed.outputs.changed == 'true' && steps.memory-cache.outputs.cache-hit != 'true'
         name: Build the memory binary
         run: bun run build:memory
+      - if: steps.changed.outputs.changed == 'true'
+        name: Verify the previous memory database survives the upgrade
+        working-directory: native/memory
+        run: cargo test --locked --release -p ai-memory-store --lib v85_backup::tests
       - if: steps.changed.outputs.changed == 'true' && steps.memory-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

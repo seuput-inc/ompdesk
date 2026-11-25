@@ -53,6 +53,8 @@ test.beforeEach(async () => {
 			OMP_GUI_TEST_RECORD: record,
 			OMP_GUI_TEST_AGENT_SWEEP_MS: "500",
 			OMP_GUI_TEST_SESSION_COST: "0.25",
+			// Each session writes its file as stock does: the sidebar ties a child to main's review item by that file.
+			OMP_GUI_TEST_SESSION_FILES: "1",
 		},
 	});
 	page = await app.firstWindow();
@@ -101,6 +103,48 @@ async function children(): Promise<{ tabId: string; path: string; branch: string
 		.map(tab => ({ tabId: tab.tabId, path: tab.worktree?.path ?? "", branch: tab.worktree?.branch ?? "" }));
 }
 
+/**
+ * Why a family lists fewer children than were opened: each child's tab, main's review item for it and the session
+ * index's row for its file, the three things the sidebar's status rule reads (`familyChildFor`, Sidebar.tsx).
+ */
+async function familyEvidence(children: { tabId: string }[]): Promise<string> {
+	return page.evaluate(
+		async ([opener, ids]) => {
+			const [tabs, review, index] = await Promise.all([
+				window.omp.tabs.list(),
+				window.omp.rpc.commandForTab(opener, { type: "agent_control_review" }),
+				window.omp.sessions.list("local"),
+			]);
+			const items = (review.data as { items?: Record<string, unknown>[] } | undefined)?.items ?? [];
+			return JSON.stringify(
+				ids.map(id => {
+					const tab = tabs.find(entry => entry.tabId === id);
+					const item = items.find(entry => entry.tabId === id);
+					const indexed = index.find(row => row.path === tab?.sessionPath);
+					return {
+						tab: tab && {
+							status: tab.status,
+							sessionPath: tab.sessionPath,
+							lastRun: tab.lastRun?.stopReason ?? null,
+							openedBySession: tab.openedBySession,
+						},
+						item: item && {
+							state: item.state,
+							sessionPath: item.sessionPath,
+							commitsAhead: item.commitsAhead,
+							uncommitted: item.uncommitted,
+							failed: item.failed,
+							waiting: item.waiting,
+						},
+						indexed: indexed && { messageCount: indexed.messageCount },
+					};
+				}),
+			);
+		},
+		[main, children.map(child => child.tabId)] as const,
+	);
+}
+
 test("fan out into worktrees, compare, merge two through the tool, close a third; the board shows no review", async () => {
 	test.setTimeout(240_000);
 	const opened = await call("ompdesk_session_open", {
@@ -134,9 +178,19 @@ test("fan out into worktrees, compare, merge two through the tool, close a third
 	await expect(chip).toHaveCount(1, { timeout: 30_000 });
 	if ((await chip.getAttribute("aria-expanded")) !== "true") await chip.click();
 	const family = page.locator("[data-sidebar-family] [data-sidebar-opened-session]");
-	await expect(family).toHaveCount(3, { timeout: 30_000 });
+	await expect(family, "the family's rows")
+		.toHaveCount(3, { timeout: 30_000 })
+		.catch(async (error: Error) => {
+			throw new Error(
+				`${error.message}\nthe children as the sidebar's rule reads them: ${await familyEvidence(made)}`,
+				{
+					cause: error,
+				},
+			);
+		});
+	// Listed because its branch holds work nothing merged: main's review item says so, read by the child's session file.
 	for (const label of ["attempt a", "attempt b", "attempt c"])
-		await expect(family.filter({ hasText: label })).toHaveCount(1);
+		await expect(family.filter({ hasText: label })).toHaveAttribute("data-child-status", "unmerged");
 	await expect.poll(async () => page.locator("body").innerText()).not.toMatch(/gui-2026|gui-agent/);
 
 	const compared = await call("ompdesk_compare");

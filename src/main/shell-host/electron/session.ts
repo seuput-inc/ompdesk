@@ -1,0 +1,426 @@
+/**
+ * `session` and `protocol`: a partition is a CEF request context in the shell (PROTOCOL.md §6). Main's use of it is
+ * small and all declarative: a proxy, languages, "deny every permission", "cancel every download", a preload script
+ * for the Preview's dialogs, and custom schemes served by main (`omp-media://`, `omp-visual://`). The permission
+ * handlers Electron takes as functions are probed once (main's are `callback(false)`), because a function cannot
+ * cross the socket; a handler that would grant something is refused loudly.
+ */
+
+import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { Answered } from "../client";
+import { type Host, makeEvent } from "./host";
+
+/** The partition of `session.defaultSession`: the app's own pages. */
+export const DEFAULT_PARTITION = "app";
+
+const PROBED_PERMISSIONS = [
+	"media",
+	"geolocation",
+	"notifications",
+	"clipboard-read",
+	"clipboard-sanitized-write",
+	"midi",
+	"fullscreen",
+	"pointerLock",
+	"openExternal",
+	"display-capture",
+] as const;
+
+export type ProtocolHandler = (request: Request) => Response | Promise<Response>;
+
+interface SessionCreated {
+	userAgent: string;
+	acceptLanguages: string;
+	spellCheckerLanguages: string[];
+	availableSpellCheckerLanguages: string[];
+	/** The folder of the partition's HTTP cache; null: it has none on disk (an in-memory partition). */
+	cachePath: string | null;
+}
+
+export class Protocol {
+	readonly #host: Host;
+	readonly #partition: string;
+	readonly #handlers = new Map<string, ProtocolHandler>();
+
+	constructor(host: Host, partition: string) {
+		this.#host = host;
+		this.#partition = partition;
+	}
+
+	handle(scheme: string, handler: ProtocolHandler): void {
+		const name = scheme.toLowerCase();
+		if (this.#handlers.has(name)) throw new Error(`The scheme '${name}' has been registered`);
+		this.#handlers.set(name, handler);
+		this.#host.post("session.op", { partition: this.#partition, op: "handleScheme", args: { scheme: name } });
+	}
+
+	unhandle(scheme: string): void {
+		const name = scheme.toLowerCase();
+		if (!this.#handlers.delete(name)) return;
+		this.#host.post("session.op", { partition: this.#partition, op: "unhandleScheme", args: { scheme: name } });
+	}
+
+	isProtocolHandled(scheme: string): boolean {
+		return this.#handlers.has(scheme.toLowerCase());
+	}
+
+	handlerFor(scheme: string): ProtocolHandler | undefined {
+		return this.#handlers.get(scheme.toLowerCase());
+	}
+}
+
+export interface DownloadItem {
+	getURL(): string;
+	getFilename(): string;
+	getMimeType(): string;
+	getTotalBytes(): number;
+	cancel(): void;
+}
+
+export class Session extends EventEmitter {
+	readonly partition: string;
+	readonly protocol: Protocol;
+	readonly #host: Host;
+	#userAgent = "";
+	#acceptLanguages = "";
+	#spellChecker: string[] = [];
+	#availableSpellChecker: string[] = [];
+	#cachePath: string | null = null;
+	readonly ready: Promise<void>;
+
+	constructor(host: Host, partition: string, options: { cache?: boolean } = {}) {
+		super();
+		this.#host = host;
+		this.partition = partition;
+		this.protocol = new Protocol(host, partition);
+		this.ready = host.client.call<SessionCreated>("session.create", { partition, cache: options.cache ?? true }).then(
+			created => {
+				this.#userAgent = created.userAgent;
+				this.#acceptLanguages = created.acceptLanguages;
+				this.#spellChecker = created.spellCheckerLanguages;
+				this.#availableSpellChecker = created.availableSpellCheckerLanguages;
+				this.#cachePath = created.cachePath ?? null;
+			},
+			(error: unknown) => {
+				host.warn(`session.create ${partition}: ${error instanceof Error ? error.message : String(error)}`);
+			},
+		);
+		this.on("newListener", name => {
+			if (name === "will-download") this.#op("setDownloads", { mode: "deny" });
+		});
+	}
+
+	#op<T = unknown>(op: string, args: unknown = {}): Promise<T> {
+		return this.ready.then(() => this.#host.client.call<T>("session.op", { partition: this.partition, op, args }));
+	}
+
+	/** The folder of this session's HTTP cache (known once `ready`); null for an in-memory partition. */
+	getCachePath(): string | null {
+		return this.#cachePath;
+	}
+
+	getUserAgent(): string {
+		return this.#userAgent;
+	}
+
+	/** Sets the user agent, and the Accept-Language list when given (what a Preview page announces). */
+	setUserAgent(userAgent: string, acceptLanguages?: string): void {
+		this.#userAgent = userAgent;
+		if (acceptLanguages !== undefined) this.#acceptLanguages = acceptLanguages;
+		void this.#op("setUserAgent", { userAgent, ...(acceptLanguages === undefined ? {} : { acceptLanguages }) }).catch(
+			(error: unknown) => this.#host.warn(`setUserAgent: ${String(error)}`),
+		);
+	}
+
+	getAcceptLanguages(): string {
+		return this.#acceptLanguages;
+	}
+
+	get availableSpellCheckerLanguages(): string[] {
+		return [...this.#availableSpellChecker];
+	}
+
+	getSpellCheckerLanguages(): string[] {
+		return [...this.#spellChecker];
+	}
+
+	setSpellCheckerLanguages(languages: string[]): void {
+		this.#spellChecker = [...languages];
+		void this.#op("setSpellCheckerLanguages", { languages }).catch((error: unknown) =>
+			this.#host.warn(`setSpellCheckerLanguages: ${String(error)}`),
+		);
+	}
+
+	addWordToSpellCheckerDictionary(word: string): boolean {
+		void this.#op("addWordToSpellCheckerDictionary", { word }).catch((error: unknown) =>
+			this.#host.warn(`addWordToSpellCheckerDictionary: ${String(error)}`),
+		);
+		return true;
+	}
+
+	async setProxy(config: {
+		mode?: string;
+		proxyRules?: string;
+		pacScript?: string;
+		proxyBypassRules?: string;
+	}): Promise<void> {
+		await this.#op("setProxy", config);
+	}
+
+	async clearCache(): Promise<void> {
+		await this.#op("clearCache");
+	}
+
+	async clearStorageData(): Promise<void> {
+		await this.#op("clearStorageData");
+	}
+
+	/** Denies every permission request: the handler is probed, since a function cannot cross the socket. */
+	setPermissionRequestHandler(handler: ((...args: never[]) => void) | null): void {
+		if (handler === null) {
+			void this.#op("setPermissions", { mode: "default" });
+			return;
+		}
+		let granted = false;
+		let answered = 0;
+		for (const permission of PROBED_PERMISSIONS) {
+			(handler as (...args: unknown[]) => void)(
+				null,
+				permission,
+				(allow: boolean) => {
+					answered += 1;
+					if (allow) granted = true;
+				},
+				{ requestingUrl: "about:blank", isMainFrame: true },
+			);
+		}
+		if (granted || answered !== PROBED_PERMISSIONS.length)
+			throw new Error("Only a permission handler that denies everything is supported under the shell");
+		void this.#op("setPermissions", { mode: "deny-all" });
+	}
+
+	setPermissionCheckHandler(handler: ((...args: never[]) => boolean) | null): void {
+		if (handler === null) return;
+		for (const permission of PROBED_PERMISSIONS) {
+			if ((handler as (...args: unknown[]) => boolean)(null, permission, "about:blank", {}))
+				throw new Error("Only a permission check that denies everything is supported under the shell");
+		}
+		void this.#op("setPermissions", { mode: "deny-all" });
+	}
+
+	/** Runs a script file in every frame of this partition before page scripts (`__ompdeskSendSync` in scope). */
+	registerPreloadScript(script: { type: "frame"; filePath: string; id?: string }): string {
+		const id = script.id ?? randomUUID();
+		void this.#op("registerPreload", { id, source: readFileSync(script.filePath, "utf8") }).catch((error: unknown) =>
+			this.#host.warn(`registerPreloadScript: ${String(error)}`),
+		);
+		return id;
+	}
+}
+
+/** What the shell reports of a download it cancelled (`session.download`). */
+interface ShellDownload {
+	partition: string;
+	wcId: number;
+	url: string;
+	filename: string;
+	mimeType: string;
+	totalBytes: number;
+}
+
+/**
+ * Serves `session.download`: the session's `will-download` with the page that started it. The shell has already
+ * cancelled the download (`setDownloads deny`, sent once a listener was added), so `cancel()` does nothing more.
+ */
+export function serveDownloads(host: Host, sessions: (partition: string) => Session | undefined): void {
+	host.client.on("session.download", (download: ShellDownload) => {
+		const item: DownloadItem = {
+			getURL: () => download.url,
+			getFilename: () => download.filename,
+			getMimeType: () => download.mimeType,
+			getTotalBytes: () => download.totalBytes,
+			cancel() {},
+		};
+		sessions(download.partition)?.emit("will-download", makeEvent(), item, host.pages.get(download.wcId) ?? null);
+	});
+}
+
+interface ProtocolWindow {
+	bytes: number;
+	chunks: number;
+	chunkBytes: number;
+}
+
+interface ProtocolStream {
+	controller: AbortController;
+	window: ProtocolWindow;
+	sent: number;
+	acked: number;
+	sentChunks: number;
+	ackedChunks: number;
+	wake: (() => void) | null;
+	error?: string;
+}
+
+/** Serves the head first; only bytes the native consumer took release the producer's receive window. */
+export function serveProtocolRequests(host: Host, sessions: (partition: string) => Session): void {
+	const streams = new Map<number, ProtocolStream>();
+	host.client.on("protocol.cancel", ({ streamId }: { streamId: number }) => streams.get(streamId)?.controller.abort());
+	// A cancelled request can outlive its head handler while the native reader has not received the stream ID.
+	host.client.on("host.cancelRequest", ({ requestId }: { requestId: number }) =>
+		streams.get(requestId)?.controller.abort(),
+	);
+	host.client.on(
+		"protocol.ack",
+		({ streamId, bytes, chunks }: { streamId: number; bytes: number; chunks: number }) => {
+			const state = streams.get(streamId);
+			if (!state) return;
+			if (
+				!Number.isSafeInteger(bytes) ||
+				bytes <= 0 ||
+				bytes > state.sent - state.acked ||
+				!Number.isSafeInteger(chunks) ||
+				chunks < 0 ||
+				chunks > state.sentChunks - state.ackedChunks
+			) {
+				state.error = "invalid protocol consumption credit";
+				state.controller.abort();
+				return;
+			}
+			state.acked += bytes;
+			state.ackedChunks += chunks;
+			state.wake?.();
+		},
+	);
+	host.client.onClose(() => {
+		for (const state of streams.values()) state.controller.abort();
+		streams.clear();
+	});
+	host.client.handle(
+		"protocol.request",
+		async (
+			params: {
+				scheme: string;
+				partition: string;
+				url: string;
+				method: string;
+				headers: Array<[string, string]>;
+				hasBody?: boolean;
+				window: ProtocolWindow;
+			},
+			{ requestId, bin, signal },
+		) => {
+			const window = params.window;
+			if (
+				!window ||
+				!Number.isSafeInteger(window.bytes) ||
+				window.bytes <= 0 ||
+				!Number.isSafeInteger(window.chunks) ||
+				window.chunks <= 0 ||
+				!Number.isSafeInteger(window.chunkBytes) ||
+				window.chunkBytes <= 0 ||
+				window.chunkBytes > window.bytes
+			) {
+				throw new Error("invalid protocol receive window");
+			}
+			const handler = sessions(params.partition).protocol.handlerFor(params.scheme);
+			if (!handler) throw new Error(`No handler for ${params.scheme}`);
+			const hasBody = params.hasBody === true && params.method !== "GET" && params.method !== "HEAD";
+			const request = new Request(params.url, {
+				method: params.method,
+				headers: params.headers,
+				...(hasBody ? { body: bin ?? new Uint8Array(), duplex: "half" } : {}),
+				signal,
+			} as RequestInit);
+			const response = await handler(request);
+			if (signal.aborted || host.client.closed) {
+				await response.body?.cancel();
+				throw new Error("protocol request was cancelled");
+			}
+			// Keep the original request's cancellation authority after ShellClient releases the head handler.
+			const streamId = requestId;
+			const controller = new AbortController();
+			const state: ProtocolStream = {
+				controller,
+				window,
+				sent: 0,
+				acked: 0,
+				sentChunks: 0,
+				ackedChunks: 0,
+				wake: null,
+			};
+			controller.signal.addEventListener("abort", () => state.wake?.(), { once: true });
+			streams.set(streamId, state);
+			const abort = () => controller.abort();
+			signal.addEventListener("abort", abort, { once: true });
+			setImmediate(
+				() =>
+					void pump(host, streamId, response, state, streams).finally(() =>
+						signal.removeEventListener("abort", abort),
+					),
+			);
+			return {
+				status: response.status,
+				statusText: response.statusText,
+				headers: [...response.headers.entries()],
+				streamId,
+			};
+		},
+	);
+}
+
+async function pump(
+	host: Host,
+	streamId: number,
+	response: Response,
+	state: ProtocolStream,
+	streams: Map<number, ProtocolStream>,
+): Promise<void> {
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+	const { signal } = state.controller;
+	const cancel = () => void reader?.cancel().catch(() => undefined);
+	signal.addEventListener("abort", cancel, { once: true });
+	try {
+		reader = response.body?.getReader();
+		while (reader && !signal.aborted) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			for (let offset = 0; offset < value.byteLength && !signal.aborted; ) {
+				const size = Math.min(state.window.chunkBytes, value.byteLength - offset);
+				while (
+					!signal.aborted &&
+					(state.sent - state.acked + size > state.window.bytes ||
+						state.sentChunks - state.ackedChunks >= state.window.chunks)
+				) {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					state.wake = resolve;
+					await promise;
+					state.wake = null;
+				}
+				if (signal.aborted) break;
+				state.sent += size;
+				state.sentChunks += 1;
+				await host.client.event("protocol.chunk", { streamId }, value.subarray(offset, offset + size));
+				offset += size;
+			}
+		}
+		if (state.error) throw new Error(state.error);
+		if (!signal.aborted) await host.client.event("protocol.end", { streamId });
+	} catch (error) {
+		if (!host.client.closed)
+			await host.client
+				.event("protocol.end", {
+					streamId,
+					error: error instanceof Error ? error.message : String(error),
+				})
+				.catch(() => state.controller.abort());
+	} finally {
+		signal.removeEventListener("abort", cancel);
+		await reader?.cancel().catch(() => undefined);
+		streams.delete(streamId);
+	}
+}
+
+export { Answered };

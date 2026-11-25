@@ -8,15 +8,18 @@
  * - every item is done or dropped (the previous task's list), or
  * - items are open and a whole earlier request went by without a todo change (`UNTOUCHED_REQUESTS`),
  *
- * and the agent then gets one hidden line naming the list and what to do. Questions and short replies never get it
- * (`isNewRequest`, no model call); one list gets it at most twice, the second time only after `REMIND_AGAIN_REQUESTS`
- * more requests left it as it was. Everything is read from the journal, so a relaunch keeps the count.
+ * and the agent then gets one hidden line naming the list and what to do. Questions and acknowledgements ("응",
+ * "계속", "ok") never get it (`isNewRequest`, no model call); one list gets it at most twice, the second time only
+ * after `REMIND_AGAIN_REQUESTS` more requests left it as it was. Everything is read from the journal, so a relaunch
+ * keeps the count.
  *
  * Whether the list's items name work the conversation moved past cannot be read without a model; the
  * untouched-request rule stands in for it.
  *
  * No omp imports: the GUI's vitest runs it (src/main/bridge-todo-stale.test.ts).
  */
+
+import { isClosedTodo } from "./todo-compact-core";
 
 export const STALE_TODO_MESSAGE_TYPE = "ompdesk-todo-stale";
 
@@ -59,8 +62,6 @@ export interface StaleTodo {
 	snapshotId: string;
 }
 
-const DONE: Record<string, true> = { completed: true, abandoned: true };
-
 function messageText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
@@ -88,23 +89,39 @@ function isReminderFor(entry: TodoStaleEntry, snapshotId: string): boolean {
 }
 
 const AGENT_MESSAGE_START = /^\s*<ompdesk-agent-message\b/;
-const MIN_REQUEST_CHARS = 8;
 const LONG_REQUEST_CHARS = 240;
+/**
+ * One word or phrase that only acknowledges a reply or lets the agent go on. A message made of these alone, with
+ * spaces and punctuation between and after them, is no request; anything else is, however short ("배포 중단",
+ * "되돌려", "revert"), because a short order often carries the whole task.
+ */
+const ACK_WORD = String.raw`(?:응+|어+|엉|웅|네+|넵|넹|예|예스|ㅇㅇ+|ㅇㅋ|오케이|오키|굿|(?:고|ㄱ)+|좋아(?:요)?|좋습니다|그래(?:요)?|맞아(?:요)?|알겠(?:어|어요|습니다)|알았어(?:요)?|확인|고마워(?:요)?|감사(?:해요|합니다)?|땡큐|부탁(?:해|해요|합니다)|(?:계속|진행)(?:\s?(?:해|해요|하자|하세요|합시다|해\s?줘|해\s?주세요|해\s?주십시오))?|ok(?:ay)?|k+|yes|yeah|yep|yup|sure|please|go(?:\s(?:on|ahead))?|continue|carry\s on|keep\s going|proceed|thanks|thank\s you|thx|ty|cool|great|nice|good|sounds\s good|got\s it|lgtm)`;
+const ACK_ONLY = new RegExp(String.raw`^${ACK_WORD}(?:[\s\p{P}\p{S}]+${ACK_WORD})*[\s\p{P}\p{S}ㅋㅎ]*$`, "iu");
 /** Words that ask for work, also inside a question ("이거 고쳐줄래?", "Can you add …?"); an English verb only as the first word. */
 const REQUEST_CUE =
 	/(줄래|주세요|해줘|해 줘|해봐|해 봐|하자|고쳐|추가|만들|바꿔|지워|넣어|붙여|옮겨)|\b(?:can|could|would|will) you\b|\bplease\b|^(?:add|fix|make|change|implement|write|remove|update|create|build|rename|refactor|move|delete|ship|release|port)\b/i;
-const EN_QUESTION = /^(?:what|which|when|where|why|how|who|whose|is|are|does|do|did|was|were|has|have)\b/i;
+/** A question about work not done ("왜 아직 안 했어?", "Why didn't you push?", "Did you push yet?") presses for it. */
+const PUSH_CUE = /아직\s?(?:안|못)|(?:^|\s|왜)(?:안|못)\s?(?:했|해|하|됐|돼|되|끝)|n't\b|\byet\b/i;
+/** An English question without its `?`: only a question word leads; "do …", "have …" are as often orders. */
+const EN_QUESTION = /^(?:what|which|where|why|how|who|whose)\b/i;
 const KO_QUESTION_START = /^(?:왜|어떻게|뭐가|무엇|언제|어디|누가|어느)\s/;
-const KO_QUESTION_END = /(?:까|나요|가요|니|냐|는지|죠|어때|뭐야|뭐지|인가|는가)[.!~]*$/;
+/** Korean question endings; not `죠`, since "푸시하죠" proposes the work. */
+const KO_QUESTION_END = /(?:까|나요|가요|니|냐|는지|어때|뭐야|뭐지|인가|는가)[.!~]*$/;
 
-/** Whether `prompt` asks for new work rather than asking a question or replying in a word. No model call. */
+/**
+ * Whether `prompt` asks for new work rather than acknowledging a reply or asking a question. No model call. Left out:
+ * a `/`, `!` or `$` command; a single character or no letter at all; a message of acknowledgement words only
+ * (`ACK_WORD`); a question (a trailing `?`, a Korean question ending, a question word first) that holds neither a
+ * request word (`REQUEST_CUE`) nor a push about work not done (`PUSH_CUE`), because a nudge to give a question its own
+ * row only makes the agent pad its list.
+ */
 export function isNewRequest(prompt: string): boolean {
 	const text = prompt.trim();
-	if (text === "" || /^[/!$]/.test(text)) return false;
+	if (/^[/!$]/.test(text)) return false;
 	if (AGENT_MESSAGE_START.test(text)) return true;
-	if ([...text].length < MIN_REQUEST_CHARS) return false;
+	if ([...text].length < 2 || !/[\p{L}\p{N}]/u.test(text) || ACK_ONLY.test(text)) return false;
 	if (text.length > LONG_REQUEST_CHARS || /\n\s*\n/.test(text) || text.split("\n").length >= 3) return true;
-	if (REQUEST_CUE.test(text)) return true;
+	if (REQUEST_CUE.test(text) || PUSH_CUE.test(text)) return true;
 	const question =
 		/[?？]$/.test(text) || EN_QUESTION.test(text) || KO_QUESTION_START.test(text) || KO_QUESTION_END.test(text);
 	return !question;
@@ -130,7 +147,7 @@ export function todoStaleness(input: TodoStaleInput): StaleTodo | undefined {
 		} else if (index !== current && promptText(entry) !== undefined) since++;
 	}
 	if (reminders >= MAX_REMINDERS) return undefined;
-	const done = tasks.filter(task => DONE[task.status]).length;
+	const done = tasks.filter(task => isClosedTodo(task.status)).length;
 	const kind = done === tasks.length ? "finished" : "untouched";
 	const needed = reminders > 0 ? REMIND_AGAIN_REQUESTS : kind === "finished" ? 0 : UNTOUCHED_REQUESTS;
 	if (since < needed) return undefined;
@@ -153,9 +170,9 @@ function listName(stale: StaleTodo): string {
 export function staleTodoText(stale: StaleTodo): string {
 	const what =
 		stale.kind === "finished"
-			? `Your todo list (${listName(stale)}) is finished: it belongs to an earlier task.`
-			: `Your todo list (${listName(stale)}) has not changed since an earlier request.`;
-	return `<system-reminder>\n${what} If this request is new work with steps, replace the list with its steps (todo op "init"); if it continues that work, mark the finished items done. Never leave an old task's list on screen.\n</system-reminder>`;
+			? `Your todo list (${listName(stale)}) is finished. If the new request needs steps, start its list with todo op "init".`
+			: `Your todo list (${listName(stale)}) still has unfinished work. Keep those items and their statuses. Add new steps with todo op "append" in their own phase, and keep working on the earlier request too.`;
+	return `<system-reminder>\n${what}\n</system-reminder>`;
 }
 
 /** The hidden custom message `before_agent_start` returns; `details` mark which list it was for. */

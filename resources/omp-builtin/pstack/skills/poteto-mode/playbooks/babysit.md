@@ -1,6 +1,6 @@
 ### Babysit
 
-> OMPdesk: before step 1, call `todo` with `op: "init"` and the numbered steps below copied in as its first items, one per step in order, each written in the todo language your `<reply-language>` section sets (word for word without one; skill, tool and file names stay as written; a step you skip stays with `skip: <reason>`), then work the list.
+> OMPdesk: before step 1, update the plan. Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. Copy one item per new numbered step in order, before task-specific items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. Keep earlier work going unless the user explicitly cancels or replaces it. Keep skipped steps with `skip: <reason>`.
 
 **You own the merge frontier. Declare a mode, clear one PR at a time, stop where the human's call begins.** This playbook owns these requests, so do not route to any other babysit skill even though its description matches the same words. A request to land or ship is `playbooks/shipping.md`, which begins where this playbook ends.
 

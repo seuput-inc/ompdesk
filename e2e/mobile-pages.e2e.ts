@@ -14,7 +14,7 @@ import {
 } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
 import { reassertTouch } from "./fixture/touch-emulation";
-import { animationsDone, hitSizes, variants } from "./harness";
+import { animationsDone, closeBrowser, hitSizes, launchBrowser, variants } from "./harness";
 
 // Settings, the centers and the model picker on a phone and a portrait tablet (mobile web, design §6/§9 W-F) in
 // Chromium and WebKit device emulation, on the dev harness (src/renderer/dev-harness): a phone pushes Settings'
@@ -243,10 +243,10 @@ for (const { engine, device } of variants(
 		let browser: Browser;
 
 		test.beforeAll(async () => {
-			browser = await engine.type.launch();
+			browser = await launchBrowser(engine.type);
 		});
 		test.afterAll(async () => {
-			await browser.close();
+			await closeBrowser(browser);
 		});
 
 		test("settings: a pushed page per section on a phone, two columns on a tablet", async () => {

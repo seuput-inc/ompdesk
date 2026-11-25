@@ -14,6 +14,8 @@ fn temp(name: &str) -> PathBuf {
 #[test]
 fn a_check_that_cannot_take_a_heavy_slot_never_runs_its_command() {
     let dir = temp("closed");
+    let project = dir.join("project");
+    std::fs::create_dir(&project).unwrap();
     // A file where the pool's folder should be: the pool cannot be made, as when the disk refuses its files.
     let blocked = dir.join("heavy");
     std::fs::write(&blocked, "not a folder").unwrap();
@@ -30,7 +32,7 @@ fn a_check_that_cannot_take_a_heavy_slot_never_runs_its_command() {
         .args(["check", "--"])
         .arg(program)
         .args(&args)
-        .current_dir(&dir)
+        .current_dir(&project)
         .env("OMPDESK_HEAVY_DIR", &blocked)
         .env("OMPDESK_CHECKS_DIR", dir.join("store"))
         .env_remove("OMPDESK_HEAVY_HELD")

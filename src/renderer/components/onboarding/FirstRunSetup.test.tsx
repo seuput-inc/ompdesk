@@ -332,6 +332,80 @@ describe("FirstRunGate", () => {
 		await mount(<FirstRunGate />);
 		expect(useFirstRunStore.getState().phase).toBe("idle");
 	});
+
+	describe("while the stock helper's provider list has not answered (G22)", () => {
+		/** models.yml's endpoints through the stock helper: every read held until the test answers them. */
+		function heldConfigs() {
+			const held = Promise.withResolvers<CustomProvidersConfig>();
+			listProviders.mockImplementation(() => held.promise);
+			return (providers: CustomProviderView[]) => held.resolve({ providers, options: fixtureProviderOptions });
+		}
+		afterEach(() => {
+			listProviders.mockImplementation(async () => ({ providers: [], options: fixtureProviderOptions }));
+		});
+
+		it("shows the provider step at ready when no provider holds a model", async () => {
+			heldConfigs();
+			catalog = { ...catalog, providers: [anthropic], models: [] };
+			signedIn = null;
+			useSessionStore.getState().setStatus("ready", "/tmp/project");
+			await mount(
+				<>
+					<FirstRunGate />
+					<FirstRunSetup />
+				</>,
+			);
+			expect(useFirstRunStore.getState().phase).toBe("connect");
+			expect(text()).toContain(translate("setup.title"));
+		});
+
+		it("never shows it to a returning user whose provider is signed in", async () => {
+			const answer = heldConfigs();
+			catalog = { ...catalog, providers: [acme, apple], models: [onDevice, opus] };
+			signedIn = null;
+			useSessionStore.getState().setStatus("ready", "/tmp/project");
+			await mount(
+				<>
+					<FirstRunGate />
+					<FirstRunSetup />
+				</>,
+			);
+			expect(useFirstRunStore.getState().phase).toBe("idle");
+			expect(text()).not.toContain(translate("setup.title"));
+			await act(async () => answer([]));
+			await act(async () => delay(0));
+			expect(useFirstRunStore.getState().phase).toBe("idle");
+			expect(rpc.setModelRole).toHaveBeenCalledWith("default", "acme/acme-opus-5");
+		});
+
+		it("decides a keyless endpoint only once the list answers, showing nothing meanwhile", async () => {
+			const local = provider({ id: "local", loginAvailable: false, modelCount: 1 });
+			const keyless: CustomProviderView = {
+				id: "local",
+				api: "openai-completions",
+				baseUrl: "http://127.0.0.1:1234/v1",
+				hasApiKey: false,
+				auth: "none",
+				models: [{ id: "m" }],
+				builtin: false,
+			};
+			for (const [configs, phase] of [
+				[[keyless], "idle"],
+				[[], "connect"],
+			] as const) {
+				const answer = heldConfigs();
+				catalog = { ...catalog, providers: [local, anthropic], models: [] };
+				useSessionStore.getState().setStatus("ready", "/tmp/project");
+				await mount(<FirstRunGate />);
+				expect(useFirstRunStore.getState().phase).toBe("idle");
+				await act(async () => answer([...configs]));
+				await act(async () => delay(0));
+				expect(useFirstRunStore.getState().phase).toBe(phase);
+				await act(async () => roots.pop()?.unmount());
+				useFirstRunStore.getState().reset();
+			}
+		});
+	});
 });
 
 describe("FirstRunSetup model step", () => {

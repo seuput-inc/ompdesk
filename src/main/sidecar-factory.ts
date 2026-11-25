@@ -15,7 +15,6 @@ import { normalizeUserProfile } from "../../resources/gui-bridge/modes/user-prof
 import type { PromptOriginEnv } from "../../resources/gui-bridge/prompt-origin-contracts";
 import { parseAccountRotationPref } from "../shared/account-rotation";
 import { agentControlEnabled } from "../shared/agent-control";
-import { reaEnabled, reaExtensionArgs } from "../shared/builtin-mcp";
 import { creditSpendEnabled } from "../shared/credit-spend";
 import { parseDefaultBrowser, resolveAgentBrowser } from "../shared/default-browser";
 import { eccEnabled } from "../shared/ecc";
@@ -24,10 +23,8 @@ import { deviceLanguageTag, replyLanguageName, resolveReplyLanguage } from "../s
 import type { SetupPlatform } from "../shared/setup";
 import { agentBrowserStatus, resolveEgoBrowser } from "./agent-browsers";
 import { computerUseSpawn } from "./agent-desktop";
-import { agentPriorityLowerer } from "./agent-priority";
 import { bootModelSelector } from "./boot-model";
 import type { BridgeConnectResult, BridgeHealth } from "./bridge-health";
-import { builtinReaState, spawnReaState } from "./builtin-mcp";
 import { controlEnvFor } from "./control-socket/env";
 import { mainT, ompFailureText } from "./i18n";
 import { ompAvailability } from "./omp-availability";
@@ -36,7 +33,7 @@ import { writeRuntimeLog } from "./runtime-log";
 import type { SessionKindStore } from "./session-kinds";
 import type { SessionProcesses } from "./session-processes";
 import { shellSpawnEnv } from "./shell-env";
-import { SidecarManager, type SidecarOptions } from "./sidecar";
+import { type RecoveryStuck, SidecarManager, type SidecarOptions } from "./sidecar";
 import { markStartup } from "./startup-timing";
 import { turnStagesReport } from "./turn-stages-log";
 
@@ -45,16 +42,10 @@ export interface LocalSidecarDeps {
 	sessionFree?: (sessionPath: string) => Promise<"free" | "owned">;
 	/** The gui-bridge extension directory. */
 	bridgeDir: string;
-	/** OMPdesk's own extension root (`resources/omp-builtin`): the control tools' skill; REA is its `rea/` sub-root. */
+	/** OMPdesk's own extension root (`resources/omp-builtin`). */
 	builtinDir: string;
-	builtinReaPref: () => unknown;
-	/**
-	 * What an omp spawned in a folder needs to reach OMPdesk's MCP hub (src/main/mcp-hub.ts `ompEnv`), which serves its
-	 * `rea` and `ompdesk-memory` servers; absent: none (tests).
-	 */
-	mcpHubEnv?: (cwd: string) => Promise<Record<string, string>>;
-	/** Where the last launch's REA runtime answer is kept (`spawnReaState`), so a spawn need not wait for `node --version` and `npx --version`; absent = every launch's first spawn waits (tests). */
-	reaRuntimeFile?: string;
+	/** Address and credentials for the memory extension's MCP hub. */
+	mcpHubEnv?: () => Promise<Record<string, string>>;
 	/** Settings › Tools & extensions › OMPdesk control tools (`agentControl`, default on), read per use; absent = off (the caller that answers the tools supplies it). */
 	agentControlPref?: () => unknown;
 	/** Settings › Agent behavior › pstack engineering mode (`pstack`, default on), read per spawn; absent = off (tests only). */
@@ -96,8 +87,8 @@ export interface LocalSidecarDeps {
 	creditSpendPref?: () => unknown;
 	/** The OMPdesk model-role picks file every omp on this machine shares. */
 	ompdeskRolesFile?: string;
-	/** The stored per-workspace launch profiles (`launchProfiles`), read per spawn. */
-	launchProfilesPref: () => unknown;
+	/** The flags the workspace's launch profile adds to a spawn in `cwd` (the core's `launchFlags`), read per spawn. */
+	launchFlags: (cwd: string) => string[];
 	/** Grace period a closed tab's omp gets to shut down by itself (ai-memory's session-end rides it); absent: none. */
 	gracefulStopMs?: () => number;
 	/**
@@ -126,10 +117,17 @@ export interface LocalSidecarDeps {
 	startQueue?: SidecarOptions["startQueue"];
 	/** The file that names the omps the app runs for the next launch's reap (omp-processes.ts); the lanes write it. Absent: none kept (tests). */
 	ledgerFile?: string;
+	/** The journal of the person's queued messages (`SidecarOptions.heldQueueFile`). Absent: kept in memory (tests). */
+	heldQueueFile?: string;
 	/** Test seam: the lanes' clocks (`SidecarOptions.tuning`). */
 	tuning?: SidecarOptions["tuning"];
 	/** Whose the processes an omp starts are (session-processes.ts); absent: none followed (tests). */
 	sessionProcesses?: Pick<SessionProcesses, "open">;
+	/**
+	 * A tab the core's loss took still has no omp after `RECOVERY_NOTICE_MS` (`sidecar` is its manager): the caller
+	 * tells the person and the tab's opener, once. Absent: nobody is told (tests).
+	 */
+	recoveryStuck?: (sidecar: SidecarManager, stuck: RecoveryStuck) => string | undefined;
 }
 
 /** The device language as a BCP 47 subtag (`ko`, `zh-Hant`): not the UI one, which ships only en/ko. */
@@ -162,13 +160,14 @@ export interface DesktopSlotFrameSink {
 
 export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory {
 	const { bridgeDir, bridgeHealth, sessionKinds } = deps;
-	// One for every tab: the first failure is logged, the same one on every later tab would be noise.
-	const lowerPriority = agentPriorityLowerer({
-		report: reason => writeRuntimeLog({ source: "process-priority", message: reason }),
-	});
+	let reportedPriorityFailure = false;
 	return (cwd, kind, fresh, origin, web) => {
 		const sc: SidecarManager = new SidecarManager({
-			lowerPriority,
+			reportPriorityFailure: reason => {
+				if (reportedPriorityFailure) return;
+				reportedPriorityFailure = true;
+				writeRuntimeLog({ source: "process-priority", message: reason });
+			},
 			// The status keeps this reason (Settings, the status snapshot); localize it in the UI language.
 			// While machine setup has omp missing or installing, a half-installed omp is not even resolved.
 			omp: async () => {
@@ -181,18 +180,6 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			},
 			bridgeDir,
 			builtinMcp: async () => {
-				const reaRoot = join(deps.builtinDir, "rea");
-				// Off asks nothing: the probe runs node and npx (seconds on Windows), and runs again behind every
-				// spawn while REA is unavailable.
-				const reaPref = deps.builtinReaPref();
-				const rea = reaEnabled(reaPref)
-					? reaExtensionArgs(
-							reaRoot,
-							await (deps.reaRuntimeFile
-								? spawnReaState(reaPref, deps.reaRuntimeFile)
-								: builtinReaState(reaPref)),
-						)
-					: [];
 				// The control tools' skill loads with them; the tools themselves follow the switch live (hostTools).
 				const own =
 					deps.agentControlPref && agentControlEnabled(deps.agentControlPref()) ? ["-e", deps.builtinDir] : [];
@@ -201,8 +188,9 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 				const ecc = deps.eccPref && eccEnabled(deps.eccPref()) ? ["-e", join(deps.builtinDir, "ecc")] : [];
 				// The formal-verification skill (resources/omp-builtin/formal): no switch, every spawn, skill only.
 				const formal = ["-e", join(deps.builtinDir, "formal")];
+				const ponytail = ["-e", join(bridgeDir, "ponytail.ts")];
 				const memory = (await deps.aiMemoryExtensionArgs?.(cwd)) ?? [];
-				const hub = rea.length || memory.length ? ((await deps.mcpHubEnv?.(cwd)) ?? {}) : {};
+				const hub = memory.length ? ((await deps.mcpHubEnv?.()) ?? {}) : {};
 				// One table for this computer's tabs and the tabs it hosts for a paired device.
 				const computer = deps.computerUse
 					? await computerUseSpawn({
@@ -212,12 +200,13 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 						})
 					: undefined;
 				return {
-					args: [...own, ...rea, ...(computer?.args ?? []), ...pstack, ...ecc, ...formal, ...memory],
-					...(rea.length ? { root: reaRoot } : {}),
+					args: [...own, ...(computer?.args ?? []), ...pstack, ...ecc, ...formal, ...ponytail, ...memory],
 					// A chat (no project) keeps the packs' roots but not their section texts.
 					env: {
 						OMP_GUI_PSTACK: pstack.length && kind === "agent" ? "1" : "0",
 						OMP_GUI_ECC: ecc.length && kind === "agent" ? "1" : "0",
+						// The official extension resolves its session journal before this process-local default.
+						PONYTAIL_DEFAULT_MODE: "full",
 						...(deps.memoryStateFile ? { [MEMORY_ENV]: deps.memoryStateFile } : {}),
 						...(computer?.env ?? {}),
 						...hub,
@@ -239,7 +228,14 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			...(deps.defaultBrowserPref
 				? {
 						defaultBrowser: async () =>
-							resolveAgentBrowser(parseDefaultBrowser(deps.defaultBrowserPref?.()), await agentBrowserStatus()),
+							resolveAgentBrowser(
+								parseDefaultBrowser(deps.defaultBrowserPref?.()),
+								await agentBrowserStatus().catch(() => undefined),
+							),
+						defaultBrowserFallback: () => {
+							const browser = resolveAgentBrowser(parseDefaultBrowser(deps.defaultBrowserPref?.()), undefined);
+							return browser.kind === "unavailable" ? browser : undefined;
+						},
 						egoBrowserDir: async () => {
 							const bin = await resolveEgoBrowser();
 							return bin ? dirname(bin) : null;
@@ -258,10 +254,11 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			accountRotationLedger: deps.accountRotationLedger,
 			...(deps.creditSpendPref ? { creditSpend: () => creditSpendEnabled(deps.creditSpendPref?.()) } : {}),
 			...(deps.ompdeskRolesFile ? { ompdeskRolesFile: deps.ompdeskRolesFile } : {}),
-			launchProfiles: deps.launchProfilesPref,
+			launchFlags: deps.launchFlags,
 			...(deps.gracefulStopMs ? { gracefulStopMs: deps.gracefulStopMs } : {}),
 			...(deps.startQueue ? { startQueue: deps.startQueue } : {}),
 			...(deps.ledgerFile ? { ledgerFile: deps.ledgerFile } : {}),
+			...(deps.heldQueueFile ? { heldQueueFile: deps.heldQueueFile } : {}),
 			...(deps.tuning ? { tuning: deps.tuning } : {}),
 			...(deps.sessionProcesses ? { sessionProcesses: deps.sessionProcesses } : {}),
 			// Test seam: the slow-start parity surface (e2e/parity.e2e.ts) waits seconds, not START_SLOW_MS.
@@ -297,6 +294,11 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 					{ cwd: report.cwd },
 				);
 			},
+			// The way back after a lost core, step by step (source `core-loss`): the next loss names where a tab stopped.
+			reportRecovery: (step, details) => writeRuntimeLog({ source: "core-loss", message: step, details }),
+			// An input a start went on without (the Tauri host's proxy lookup that never answered, …).
+			reportStartInput: (input, details) => writeRuntimeLog({ source: "omp-start-input", message: input, details }),
+			...(deps.recoveryStuck ? { onRecoveryStuck: stuck => deps.recoveryStuck?.(sc, stuck) } : {}),
 			// The coordinator adds what only main knows (children, ship queue) before a window sees the status.
 			frameTransform: (frame): Record<string, unknown> =>
 				frame.type === "autopilot_update" ? (deps.autopilot?.()?.overlay(sc, frame) ?? frame) : frame,
@@ -309,7 +311,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 		sc.on("spawned", () => markStartup("omp-spawned"));
 		sc.on("bridge", (result: BridgeConnectResult) => {
 			markStartup("bridge-connected");
-			void bridgeHealth.observe(result);
+			void bridgeHealth.observe(result, sc);
 		});
 		// The bridge's goal time limit ran out (resources/gui-bridge/modes/goal.ts): pause through stock RPC `goal`
 		// `pause`, the path that also gives back the pre-goal tool set and resets continuation (RpcGoalController

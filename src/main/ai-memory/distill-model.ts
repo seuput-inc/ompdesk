@@ -21,10 +21,14 @@ export interface ModelResult {
 	costUsd: number;
 }
 
-/** How omp starts: its binary and the whole environment it runs with (`core-asks.ts ompLaunch()`). */
+/**
+ * How omp starts: its binary, the whole environment it runs with, and the arguments every omp the core starts for a
+ * model gets beside the call's own (`core-asks.ts ompLaunch()`: the Credit use switch's extension).
+ */
 export interface OmpLaunch {
 	bin: string;
 	env: Record<string, string>;
+	args?: string[];
 }
 
 /** The core's own 180 s limit on omp, and room for it to answer. */

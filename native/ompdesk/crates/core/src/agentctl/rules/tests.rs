@@ -50,6 +50,7 @@ fn mail_of(value: &Value) -> Mail {
         dispatch: value["dispatch"].as_str().map(str::to_owned),
         merged: value["merged"].as_u64(),
         card: value["card"].as_str().map(str::to_owned),
+        attachments: None,
         instruction: value["instruction"].as_str().map(str::to_owned),
         at: value["at"].as_f64().unwrap(),
     }
@@ -283,6 +284,7 @@ fn facts_of(value: &Value) -> BranchFacts {
         branch: s(&value["branch"]),
         base_branch: value["baseBranch"].as_str().map(str::to_owned),
         commits_ahead: value["commitsAhead"].as_u64().unwrap(),
+        commits_behind: value["commitsBehind"].as_u64().unwrap_or(0),
         files: value["files"]
             .as_array()
             .unwrap()
@@ -871,5 +873,186 @@ fn a_paired_pages_clean_or_unreported_tab_is_released_unless_the_person_is_at_it
             );
             assert_eq!(tab_close_step(&at, true), TabCloseStep::Release);
         }
+    }
+}
+
+mod child_watch {
+    use super::super::child_watch::{Armed, ChildWatch, Phase, Tell, WatchFacts};
+
+    fn facts(now: f64) -> WatchFacts {
+        WatchFacts {
+            dispatch: "d1".into(),
+            now,
+            failure_settle_ms: 5_000.0,
+            background_note_ms: 1_200_000.0,
+            ..WatchFacts::default()
+        }
+    }
+
+    #[test]
+    fn a_failed_turn_nothing_retries_is_told_once_after_it_held() {
+        let mut watch = ChildWatch::default();
+        let failed = |now| WatchFacts {
+            failed: Some("500 overloaded".into()),
+            ..facts(now)
+        };
+        assert_eq!(
+            watch.step(&failed(0.0)),
+            vec![],
+            "main may still arm its retry"
+        );
+        assert_eq!(
+            watch.step(&failed(6_000.0)),
+            vec![Tell::Failed("500 overloaded".into())]
+        );
+        assert_eq!(watch.step(&failed(60_000.0)), vec![], "once per turn");
+        // The next turn fails the same way: told again.
+        watch.step(&WatchFacts {
+            phase: Phase::Running,
+            ..facts(70_000.0)
+        });
+        watch.step(&failed(80_000.0));
+        assert_eq!(
+            watch.step(&failed(90_000.0)),
+            vec![Tell::Failed("500 overloaded".into())]
+        );
+    }
+
+    #[test]
+    fn a_failure_main_retries_or_continues_is_no_failure_but_its_wait_is_told_once_per_dispatch() {
+        let mut watch = ChildWatch::default();
+        let armed = |now, limit, attempt| WatchFacts {
+            failed: Some("429 rate_limit_error".into()),
+            armed: Some(Armed {
+                at: 1_000_000.0,
+                attempt,
+                limit,
+            }),
+            ..facts(now)
+        };
+        assert_eq!(
+            watch.step(&armed(0.0, true, 1)),
+            vec![Tell::Limit {
+                at: 1_000_000.0,
+                error: "429 rate_limit_error".into()
+            }]
+        );
+        // The wait fires, fails at the limit again and is armed again: the opener already knows.
+        watch.step(&WatchFacts {
+            phase: Phase::Running,
+            ..facts(10_000.0)
+        });
+        assert_eq!(watch.step(&armed(20_000.0, true, 2)), vec![]);
+        assert_eq!(
+            watch.step(&armed(900_000.0, true, 2)),
+            vec![],
+            "never read as a failure"
+        );
+        let resuming = WatchFacts {
+            failed: Some("network".into()),
+            continues: true,
+            ..facts(0.0)
+        };
+        let mut other = ChildWatch::default();
+        other.step(&resuming);
+        assert_eq!(
+            other.step(&WatchFacts {
+                now: 60_000.0,
+                ..resuming
+            }),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_provider_retry_is_told_once_per_turn() {
+        let mut watch = ChildWatch::default();
+        let retrying = |attempt| WatchFacts {
+            phase: Phase::Running,
+            retrying: Some((attempt, 3, "overloaded".into())),
+            ..facts(0.0)
+        };
+        assert_eq!(
+            watch.step(&retrying(1)),
+            vec![Tell::Retrying {
+                attempt: 1,
+                of: 3,
+                error: "overloaded".into()
+            }]
+        );
+        assert_eq!(watch.step(&retrying(2)), vec![]);
+    }
+
+    #[test]
+    fn background_work_past_its_bound_is_told_once_and_a_new_turn_restarts_the_clock() {
+        let mut watch = ChildWatch::default();
+        let settling = |now| WatchFacts {
+            phase: Phase::Settling,
+            ..facts(now)
+        };
+        assert_eq!(watch.step(&settling(0.0)), vec![]);
+        assert_eq!(watch.step(&settling(1_000_000.0)), vec![]);
+        assert_eq!(
+            watch.step(&settling(1_260_000.0)),
+            vec![Tell::Background { minutes: 21 }]
+        );
+        assert_eq!(watch.step(&settling(3_000_000.0)), vec![]);
+        watch.step(&WatchFacts {
+            phase: Phase::Running,
+            ..facts(3_100_000.0)
+        });
+        assert_eq!(watch.step(&settling(3_200_000.0)), vec![]);
+        assert_eq!(
+            watch.step(&settling(3_300_000.0)),
+            vec![],
+            "its clock started again"
+        );
+    }
+
+    #[test]
+    fn an_omp_that_stays_down_is_told_once_until_it_is_up_again() {
+        let mut watch = ChildWatch::default();
+        let down = WatchFacts {
+            down: Some("exited with code 1".into()),
+            ..facts(0.0)
+        };
+        assert_eq!(
+            watch.step(&down),
+            vec![Tell::Down("exited with code 1".into())]
+        );
+        assert_eq!(watch.step(&down), vec![]);
+        watch.step(&facts(1.0));
+        assert_eq!(
+            watch.step(&down),
+            vec![Tell::Down("exited with code 1".into())]
+        );
+    }
+
+    #[test]
+    fn a_question_the_opener_ended_a_turn_without_answering_is_told_once() {
+        let mut watch = ChildWatch::default();
+        let waiting = |opener_busy, opener_idle| WatchFacts {
+            question: Some("card:q1".into()),
+            opener_busy,
+            opener_idle,
+            ..facts(0.0)
+        };
+        // Idle before it ever ran with the question: it has not seen it yet (an idle opener is woken by it).
+        assert_eq!(watch.step(&waiting(false, true)), vec![]);
+        assert_eq!(watch.step(&waiting(true, false)), vec![]);
+        assert_eq!(watch.step(&waiting(false, true)), vec![Tell::Unanswered]);
+        watch.step(&waiting(true, false));
+        assert_eq!(
+            watch.step(&waiting(false, true)),
+            vec![],
+            "once per question"
+        );
+        // A new question is told again.
+        let next = |opener_busy, opener_idle| WatchFacts {
+            question: Some("card:q2".into()),
+            ..waiting(opener_busy, opener_idle)
+        };
+        watch.step(&next(true, false));
+        assert_eq!(watch.step(&next(false, true)), vec![Tell::Unanswered]);
     }
 }

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSessionList } from "../../hooks/use-session-list";
 import { useShellMode } from "../../hooks/use-shell-mode";
 import { useT } from "../../lib/i18n";
-import { hostOrderKey } from "../../lib/project-order";
 import { sessionDisplayTitle } from "../../lib/session-title";
 import { readTranscriptSnapshot } from "../../lib/transcript-snapshot";
+import { useHostView } from "../../stores/remote";
 import { useSidebarPrefs } from "../../stores/sidebar-prefs";
+import { useProjectList, useSidebarProjects } from "../../stores/sidebar-projects";
 import { useTabsStore } from "../../stores/tabs";
 import { toastError } from "../../stores/toast";
 import type { MissingFolderRequest } from "../../stores/ui";
@@ -55,8 +56,7 @@ function useStoredTranscript(sessionPath: string, device: string | undefined): S
 /**
  * The sheet a click on a stored session whose folder is gone opens instead of resuming work there (main refuses the
  * spawn: `folder-missing`): its transcript, read-only (no composer), and one action. Restore when disk care saved the
- * worktree (the reopen with `restoreSaved`), else Archive (the sidebar's own archive of that row, a paired host's
- * under its `hostOrderKey`).
+ * worktree (the reopen with `restoreSaved`), else Archive on the computer that owns the session.
  */
 export function MissingFolderSheet({
 	request,
@@ -74,6 +74,11 @@ export function MissingFolderSheet({
 	const row = sessions.find(session => session.path === sessionPath);
 	const title = row ? sessionDisplayTitle(row, t("sidebar.untitled")) : t("sidebar.untitled");
 	const transcript = useStoredTranscript(sessionPath, device);
+	const host = useHostView(device);
+	const { layout } = useProjectList(device, host?.state === "online" && !saved);
+	const liveLayout = useSidebarProjects(s => (device === undefined ? undefined : s.liveLayouts[device]));
+	const canArchive =
+		!!row && (device === undefined || (host?.state === "online" && !!layout && layout === liveLayout));
 
 	const restore = () => {
 		onClose();
@@ -87,13 +92,20 @@ export function MissingFolderSheet({
 			})
 			.catch((error: unknown) => toastError({ title: t("tabs.newFailed"), error }));
 	};
-	const archive = () => {
-		if (!row) return;
-		onClose();
-		useSidebarPrefs
-			.getState()
-			.setSessionsArchived([device === undefined ? row.id : hostOrderKey(device, row.id)], true)
-			.catch((error: unknown) => toastError({ title: t("sidebar.archiveFailed"), error }));
+	const archive = async () => {
+		if (!row || !canArchive) return;
+		try {
+			if (device === undefined) await useSidebarPrefs.getState().setSessionsArchived([row.id], true);
+			else if (layout)
+				await useSidebarProjects.getState().changeLayout(device, layout, {
+					op: "set-sessions-archived",
+					ids: [row.id],
+					archived: true,
+				});
+			onClose();
+		} catch (error) {
+			toastError({ title: t("sidebar.archiveFailed"), error });
+		}
 	};
 
 	return (
@@ -105,7 +117,12 @@ export function MissingFolderSheet({
 						{t("missingFolder.restore")}
 					</Button>
 				) : (
-					<Button data-missing-folder-archive disabled={!row} onClick={archive} variant="primary">
+					<Button
+						data-missing-folder-archive
+						disabled={!canArchive}
+						onClick={() => void archive()}
+						variant="primary"
+					>
 						{t("missingFolder.archive")}
 					</Button>
 				)

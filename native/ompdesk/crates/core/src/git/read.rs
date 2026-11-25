@@ -97,7 +97,7 @@ pub async fn primary_root(git: &Git, cwd: &str) -> Result<String, Fault> {
     })
 }
 
-async fn head_sha(git: &Git, cwd: &str) -> Result<Option<String>, Fault> {
+pub(crate) async fn head_sha(git: &Git, cwd: &str) -> Result<Option<String>, Fault> {
     let output = git
         .raw(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"])
         .await?;
@@ -212,7 +212,7 @@ pub async fn head(git: &Git, root: &str) -> Result<Head, Fault> {
 
 #[derive(Serialize)]
 pub struct Fingerprint {
-    fingerprint: String,
+    pub(super) fingerprint: String,
 }
 
 const STATUS_ARGS: [&str; 5] = [
@@ -516,8 +516,7 @@ fn inspect(root: &str, absolute: &str) -> Result<OnDisk, Fault> {
     }
 }
 
-/// One changed path's diff against HEAD; never follows a symlink out of the checkout. Main checked that `file_path`
-/// is a safe relative path (`isSafeRelativePath`).
+/// One changed path's diff against HEAD; never follows a symlink out of the checkout.
 pub async fn diff(git: &Git, cwd: &str, file_path: &str) -> Result<Diff, Fault> {
     let changes = changes(git, cwd).await?;
     let entry = changes

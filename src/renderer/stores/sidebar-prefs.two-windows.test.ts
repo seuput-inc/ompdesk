@@ -1,10 +1,11 @@
 /**
- * Two renderers (a desktop window and a paired phone page) share one stored `sidebar` pref in main. Each keeps its own
- * copy of the store; main applies each change to what it stores and tells every window and page but the one that sent.
- * Main's side here is the real `updateSidebarPrefs`; only the transport is faked.
+ * Two renderers (a desktop window and a paired phone page) share one stored `sidebar` pref on the host. Each keeps its
+ * own copy of the store; the host applies each change to what it stores and tells every window and page but the one
+ * that sent. The host's side here is the page-shared rules the core's copy is held to (`sidebar-captured.json`); only
+ * the transport is faked.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateSidebarPrefs } from "../../main/sidebar-prefs";
+import { readSidebarPrefs, type SidebarChange, sidebarPatch } from "../../shared/sidebar-prefs";
 import type { useSidebarPrefs } from "./sidebar-prefs";
 
 type Listener = (event: { key: string }) => void;
@@ -71,15 +72,9 @@ async function openRenderer(name: string): Promise<Renderer> {
 		},
 		updateSidebar: async (change: unknown) => {
 			await renderer.hold;
-			updateSidebarPrefs(
-				{
-					get: key => structuredClone(stored.get(key)),
-					set: (key, value) => void stored.set(key, structuredClone(value)),
-				},
-				structuredClone(change),
-				"window",
-				() => {},
-			);
+			const current = readSidebarPrefs(stored.get("sidebar"));
+			const patch = sidebarPatch(current, structuredClone(change) as SidebarChange);
+			if (Object.keys(patch).length) stored.set("sidebar", { ...current, ...patch });
 			pushChanged(renderer, "sidebar");
 		},
 		onChanged: (listener: Listener) => {

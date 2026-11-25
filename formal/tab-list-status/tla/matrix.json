@@ -1,0 +1,13 @@
+{
+	"runs": [
+		{ "name": "guarded-2-reconciles", "config": "MC.cfg", "expect": "pass" },
+		{
+			"name": "guarded-3-reconciles-5-changes",
+			"config": "MC.cfg",
+			"constants": { "Reqs": "{r1, r2, r3}", "MaxV": "5" },
+			"expect": "pass"
+		},
+		{ "name": "unguarded-listing", "config": "MC_bug.cfg", "expect": "invariant", "property": "QuietAgrees" },
+		{ "name": "late-answer-is-reachable", "config": "MC_sanity.cfg", "expect": "invariant", "property": "NoLateAnswer" }
+	]
+}

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -9,8 +10,9 @@ import {
 	REPROBE_INTERVAL_MS,
 	RESUME_WINDOW_MS,
 	reaches,
-	tcpConnects,
 } from "./connectivity";
+import { hub } from "./core/hub";
+import { CoreError, core } from "./core/process";
 
 function harness(initialOnline = true) {
 	const state = { online: initialOnline, reachable: true, now: 1_000_000 };
@@ -346,6 +348,51 @@ describe("ConnectivityMonitor", () => {
 	});
 });
 
+describe("ConnectivityMonitor at the quit", () => {
+	it("stopped, sends the core nothing: its sampling, events and timers end, and a probe's waiter hears unreachable", async () => {
+		const { monitor, state, fireTimer, timers } = harness();
+		monitor.report(false);
+		state.online = false;
+		monitor.suspend();
+		const call = vi.spyOn(hub(), "callOnce");
+		const waiting = monitor.verify();
+		call.mockClear();
+		monitor.stop();
+		expect(await waiting).toBe(false);
+		monitor.poll();
+		monitor.report(true);
+		monitor.suspend();
+		monitor.resume();
+		expect(call).not.toHaveBeenCalled();
+		expect(await monitor.verify()).toBe(false);
+		expect(monitor.shouldWait()).toBe(false);
+		// The link's own word once the state machine is gone.
+		expect(monitor.online).toBe(false);
+		expect(timers.every(timer => !timer.live)).toBe(true);
+		await expect(fireTimer()).rejects.toThrow("no live timer");
+		call.mockRestore();
+	});
+
+	it("drops the core's refusal of a call made after the quit began, and still throws any other failure", () => {
+		const { monitor } = harness();
+		const call = vi.spyOn(hub(), "callOnce");
+		call.mockImplementation(() => {
+			throw new CoreError("core_unavailable", "ompdesk-core is shutting down");
+		});
+		// A refusal for another reason (a core that kept failing to start) is not the quit's: it stays an error.
+		expect(() => monitor.poll()).toThrow("shutting down");
+		const shuttingDown = vi.spyOn(core(), "shuttingDown", "get").mockReturnValue(true);
+		expect(() => monitor.poll()).not.toThrow();
+		expect(() => monitor.report(false)).not.toThrow();
+		call.mockImplementation(() => {
+			throw new CoreError("core_exited", "the core ended");
+		});
+		expect(() => monitor.poll()).toThrow("the core ended");
+		shuttingDown.mockRestore();
+		call.mockRestore();
+	});
+});
+
 describe("answersWithin", () => {
 	it("is the probe's answer, and no for one that fails or outlives the deadline", async () => {
 		vi.useFakeTimers();
@@ -365,56 +412,30 @@ describe("answersWithin", () => {
 // 2 Nov 2026: after a hang the resolver answered but every connection was refused (ECONNREFUSED), so a lookup-only
 // probe read the computer as online and ten continued turns failed into the dead network.
 describe("reaches", () => {
-	const target = { host: "api.example.com", port: 443 };
-
-	it("is no when the name resolves but the connection is refused", async () => {
-		const connected: Array<[string, number]> = [];
-		const answer = await reaches(target, {
-			resolve: async () => ["192.0.2.10"],
-			connect: async (address, port) => {
-				connected.push([address, port]);
-				return false;
-			},
-		});
-		expect(answer).toBe(false);
-		expect(connected).toEqual([["192.0.2.10", 443]]);
+	it("is no when the name does not resolve", async () => {
+		const target = { host: "api.example.com", port: 443 };
+		expect(await reaches(target, () => Promise.reject(new Error("ENOTFOUND")))).toBe(false);
+		expect(await reaches(target, async () => [])).toBe(false);
 	});
 
-	it("is yes when one resolved address takes the connection", async () => {
-		const answer = await reaches(target, {
-			resolve: async () => ["192.0.2.10", "192.0.2.11"],
-			connect: async address => address === "192.0.2.11",
-		});
-		expect(answer).toBe(true);
-	});
-
-	it("is no when the name does not resolve, without trying to connect", async () => {
-		let connects = 0;
-		const deps = {
-			connect: async () => {
-				connects++;
-				return true;
-			},
-		};
-		expect(await reaches(target, { ...deps, resolve: () => Promise.reject(new Error("ENOTFOUND")) })).toBe(false);
-		expect(await reaches(target, { ...deps, resolve: async () => [] })).toBe(false);
-		expect(connects).toBe(0);
-	});
-});
-
-describe("tcpConnects", () => {
-	it("is yes for a listening port and no once nothing listens there (refused)", async () => {
+	it("connects to either of the first two answers, never the third, and reports refusal", async () => {
 		const server = createServer(socket => socket.destroy());
-		const listening = Promise.withResolvers<void>();
-		server.listen(0, "127.0.0.1", listening.resolve);
-		await listening.promise;
+		await once(server.listen(0, "127.0.0.1"), "listening");
 		const address = server.address();
 		if (address === null || typeof address === "string") throw new Error("no port");
-		expect(await tcpConnects("127.0.0.1", address.port, PROBE_TIMEOUT_MS)).toBe(true);
-		const closed = Promise.withResolvers<void>();
-		server.close(() => closed.resolve());
-		await closed.promise;
-		expect(await tcpConnects("127.0.0.1", address.port, PROBE_TIMEOUT_MS)).toBe(false);
+		const target = { host: "local.invalid", port: address.port };
+		try {
+			expect(await reaches(target, async () => ["127.0.0.1"])).toBe(true);
+			await server[Symbol.asyncDispose]();
+			expect(await reaches(target, async () => ["127.0.0.1"])).toBe(false);
+
+			// Keep the closed IPv4 port as the refused answer and serve the same port on IPv6 only.
+			await once(server.listen(target.port, "::1"), "listening");
+			expect(await reaches(target, async () => ["127.0.0.1", "::1"])).toBe(true);
+			expect(await reaches(target, async () => ["127.0.0.1", "127.0.0.1", "::1"])).toBe(false);
+		} finally {
+			await server[Symbol.asyncDispose]();
+		}
 	});
 });
 

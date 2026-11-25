@@ -108,7 +108,7 @@ fn launch(call: &Call) -> Result<Reply, Fault> {
         .stderr(output());
     runner.environment(&mut command, &[(SPEC_ENV, &spec)]);
     #[cfg(unix)]
-    crate::sys::new_session(command.as_std_mut());
+    crate::sys::own_group(command.as_std_mut());
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

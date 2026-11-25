@@ -56,6 +56,7 @@ async function pick(page: Page, title: string): Promise<void> {
 	}).toPass({ timeout: 30_000 });
 	if (presses > 1) test.info().annotations.push({ type: "picker-presses", description: `${title}: ${presses}` });
 	await option.click();
+	await expect(page.getByRole("dialog")).toBeHidden({ timeout: 30_000 });
 }
 
 const tabs = (page: Page) => page.evaluate(() => window.omp.tabs.list());

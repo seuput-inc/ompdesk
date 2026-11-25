@@ -204,7 +204,7 @@ describe("the composer's sweep in the stylesheet", () => {
 		const body = keyframes.slice(0, keyframes.indexOf("\n}\n"));
 		expect(body).toContain("transform:");
 		expect(body).not.toMatch(/opacity|background-position|width|left/);
-		expect(rule('.omp-live-sweep[data-working="waiting"]')).toContain("var(--sc-warning)");
+		expect(rule('.omp-live-sweep[data-working="waiting"]')).toContain("var(--sc-attention)");
 		expect(rule('.omp-live-sweep[data-working="waiting"]::before')).toContain("display: none");
 	});
 

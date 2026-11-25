@@ -4,8 +4,10 @@
  * the desktop and on a paired web page once its first screen settled or at the first touch or key. Dialogs main or an
  * agent opens (asks, plan approval, worktree prompts, SSH prompts) stay in App.
  */
+import { useUiStore } from "../../stores/ui";
 import { ActiveToolsDialog } from "./ActiveToolsDialog";
 import { BranchPickerDialog } from "./BranchPickerDialog";
+import { BtwDialog } from "./BtwDialog";
 import { CommandPalette } from "./CommandPalette";
 import { CopySelectorDialog } from "./CopySelectorDialog";
 import { ForceToolDialog } from "./ForceToolDialog";
@@ -18,13 +20,16 @@ import { SessionPickerDialog } from "./SessionPickerDialog";
 import { SessionSwitchDialog } from "./SessionSwitchDialog";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TabOverviewDialog } from "./TabOverviewDialog";
+import { WorkspaceDialog } from "./WorkspaceDialog";
 import { WorktreeCloseDialog } from "./WorktreeCloseDialog";
 import { WorktreeDialog } from "./WorktreeDialog";
 
 export function OnDemandDialogs() {
+	const workspaceIntent = useUiStore(state => state.projectPickerIntent);
 	return (
 		<>
 			<CommandPalette />
+			<BtwDialog />
 			<ModelPicker />
 			<RenameSessionDialog />
 			<WorktreeDialog />
@@ -40,6 +45,12 @@ export function OnDemandDialogs() {
 			<ShareSessionDialog />
 			<ForceToolDialog />
 			<HandoffDialog />
+			<WorkspaceDialog
+				intent={workspaceIntent ?? "switch"}
+				onClose={() => useUiStore.getState().closeProjectPicker()}
+				open={workspaceIntent !== null}
+				thisDevice={workspaceIntent === "new-session"}
+			/>
 		</>
 	);
 }

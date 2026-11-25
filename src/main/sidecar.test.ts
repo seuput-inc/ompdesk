@@ -2,8 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import Store from "electron-store";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
 	CommandOutputFrame,
 	PromptResultFrame,
@@ -13,8 +12,10 @@ import type {
 } from "../shared/rpc-types";
 import { AGENT_CONTROL_DEFINITIONS } from "./agent-control/tools";
 import type { OmpResolution } from "./omp-runtime";
+import { PrefsStore } from "./prefs-store";
 import { type SidecarFailureReport, SidecarManager, type SlowStartReport } from "./sidecar";
 import { ANSWERS_COMMANDS, ompRuns, RM_TEMP, writeFakeOmp } from "./test-fake-omp";
+import type { TurnFixture, TurnPageRequest } from "./test-turn-edits-omp";
 
 /** The stop's grace in the core (`tuning.stopGraceMs`): the core's clock cannot be moved, so a short one is waited out. */
 const STOP_GRACE_MS = 1_000;
@@ -39,6 +40,170 @@ async function waitForReady(sidecar: SidecarManager): Promise<void> {
 		sidecar.off("status", onStatus);
 	}
 }
+
+describe("get_turn_edits through a live sidecar", () => {
+	const command = { type: "get_turn_edits" } as const;
+	const call = (id: string, name: string, args: object) => ({ type: "toolCall", id, name, arguments: args });
+	const assistant = (timestamp: number, ...calls: object[]) => ({
+		role: "assistant",
+		content: [{ type: "text", text: "working" }, ...calls],
+		timestamp,
+	});
+	const result = (toolCallId: string, toolName: string, timestamp: number) => ({
+		role: "toolResult",
+		toolCallId,
+		toolName,
+		content: [{ type: "text", text: "ok" }],
+		details: { diff: "+1 x" },
+		timestamp,
+	});
+	const prompt = (timestamp: string | number) => ({ role: "user", content: "go", timestamp });
+
+	async function open(fixture: TurnFixture) {
+		const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-turn-")));
+		const source = new URL("./test-turn-edits-omp.ts", import.meta.url).href;
+		const bin = await writeFakeOmp(cwd, `import ${JSON.stringify(source)};`);
+		const sidecar = new SidecarManager({ cwd, omp: ompAt(bin), bridgeDir: cwd, fresh: true });
+		onTestFinished(async () => {
+			sidecar.dispose();
+			await sidecar.whenExited();
+			await fs.rm(cwd, RM_TEMP);
+		});
+		await fs.writeFile(path.join(cwd, "transcript.json"), JSON.stringify(fixture));
+		const ready = waitForReady(sidecar);
+		sidecar.start();
+		await ready;
+		const client = sidecar.rpcClient;
+		if (!client) throw new Error("no rpc client");
+		return { cwd, sidecar, client };
+	}
+
+	async function pages(cwd: string): Promise<TurnPageRequest[]> {
+		const log = await fs.readFile(path.join(cwd, "pages.jsonl"), "utf8");
+		return log
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map(line => JSON.parse(line));
+	}
+
+	it("returns only the latest turn's edit calls and matching results without narrowing their JSON", async () => {
+		let deep: unknown = [false, { "not.an.identifier": null }, -1.5];
+		for (let depth = 0; depth < 160; depth++) deep = { inside: [deep] };
+		const write = { ...call("w1", "write", { path: "b.ts", content: "b\n", deep }), provider: [null, 0] };
+		const written = { ...result("w1", "write", 12), entryId: "e12", details: { diff: "+1 x", deep }, extra: [true] };
+		const { client, sidecar, cwd } = await open({
+			messages: [
+				prompt(1),
+				assistant(2, call("old", "edit", { path: "old.ts" })),
+				result("old", "edit", 3),
+				prompt("January 2, 2026 03:04:05 GMT"),
+				result("old", "edit", 10),
+				{ ...assistant(11, write, call("r1", "read", { path: "c.ts" })), entryId: "e11" },
+				written,
+				result("r1", "read", 13),
+				{ ...prompt(14), steering: true },
+				assistant(15, call("b1", "bash", { command: "ls" })),
+				result("b1", "bash", 16),
+				{ role: "assistant", content: "done", timestamp: "Fri, 02 Jan 2026 03:05:06 GMT" },
+			],
+		});
+		const adopted = path.join(cwd, "adopted");
+		await fs.mkdir(adopted);
+		sidecar.adoptCwd(adopted);
+		expect(await client.command(command)).toEqual({
+			type: "response",
+			id: expect.stringMatching(/^gui-\d+$/),
+			command: command.type,
+			success: true,
+			data: {
+				cwd: adopted,
+				startedAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+				endedAt: Date.UTC(2026, 0, 2, 3, 5, 6),
+				messages: [{ role: "assistant", content: [write], timestamp: 11 }, written],
+			},
+		});
+	});
+
+	it.each([600, 1500])("keeps an early edit across %i intervening calls using bounded forward pages", async count => {
+		const previous = Array.from({ length: 400 }, (_, i) => prompt(i));
+		const edit = call("early", "edit", { path: "early.ts" });
+		const edited = result("early", "edit", count + 4);
+		const messages = [
+			...previous,
+			prompt(1),
+			assistant(2, edit),
+			...Array.from({ length: count }, (_, i) => assistant(3 + i, call(`b${i}`, "bash", { command: "true" }))),
+			edited,
+		];
+		const { client, cwd } = await open({ messages });
+		expect((await client.command(command)).data).toEqual({
+			cwd,
+			startedAt: 1,
+			endedAt: count + 4,
+			messages: [{ role: "assistant", content: [edit], timestamp: 2 }, edited],
+		});
+		const [head, ...reads] = await pages(cwd);
+		expect(head).toEqual({ offset: 0, limit: 0, turnStart: true });
+		let next = previous.length;
+		for (const { offset, limit } of reads) {
+			expect(offset).toBe(next);
+			expect(limit).toBeGreaterThan(0);
+			expect(limit).toBeLessThanOrEqual(256);
+			next = Math.min(messages.length, offset + limit);
+		}
+		expect(next).toBe(messages.length);
+	});
+
+	it.each(["moveLeaf", "grow"] as const)("rejects the whole read when a page changes (%s)", async onPage => {
+		const { client } = await open({ messages: [prompt(1)], onPage });
+		const response = await client.command(command);
+		expect(response).toMatchObject({ command: command.type, success: false, code: "stale_cursor" });
+		expect(response).not.toHaveProperty("data");
+	});
+
+	it.each(["codedError", "plainError"] as const)(
+		"passes the bridge's failure back to the caller (%s)",
+		async onPage => {
+			const { client } = await open({ messages: [prompt(1)], onPage });
+			const response = await client.command(command);
+			expect(response).toMatchObject({ success: false, error: "Replay unavailable" });
+			if (onPage === "codedError") expect(response).toHaveProperty("code", "unsupported_omp");
+			else expect(response).not.toHaveProperty("code");
+		},
+	);
+
+	it("never completes an old spawn's held page or services its retired client using the next spawn", async () => {
+		const { client: old, sidecar, cwd } = await open({ messages: [prompt(1)], onPage: "hold" });
+		const nextCwd = path.join(cwd, "next");
+		await fs.mkdir(nextCwd);
+		const edit = call("new", "apply_patch", { patch: "new" });
+		await fs.writeFile(path.join(nextCwd, "transcript.json"), JSON.stringify({ messages: [assistant(42, edit)] }));
+		const held = old.command(command);
+		await expect.poll(async () => (await pages(cwd)).some(page => page.limit > 0)).toBe(true);
+		await expect(old.stock({ type: "get_state" })).resolves.toMatchObject({
+			success: true,
+			data: { sessionId: "fixture" },
+		});
+		const restarted = waitForReady(sidecar);
+		sidecar.restart(nextCwd);
+		await restarted;
+		await expect(held).resolves.toMatchObject({ success: false, code: "bridge_unavailable" });
+		await expect(old.command(command)).resolves.toMatchObject({ success: false, code: "bridge_unavailable" });
+		expect(await pages(nextCwd)).toEqual([]);
+
+		const fresh = sidecar.rpcClient;
+		if (!fresh) throw new Error("no rpc client after restart");
+		expect((await fresh.command(command)).data).toEqual({
+			cwd: nextCwd,
+			startedAt: null,
+			endedAt: 42,
+			messages: [{ role: "assistant", content: [edit], timestamp: 42 }],
+		});
+		sidecar.kill();
+		await expect(fresh.command(command)).resolves.toMatchObject({ success: false, code: "bridge_unavailable" });
+	});
+});
 
 describe("SidecarManager", () => {
 	it("passes the active session path on a manual restart", async () => {
@@ -69,39 +234,36 @@ describe("SidecarManager", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"runs the omp and every process it starts at a lower CPU priority than the app",
-		async () => {
-			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-sidecar-nice-"));
-			const reportPath = path.join(tempDir, "nice.json");
-			// The fake reads its own nice once the app has lowered it (the app does it right after spawn, so the fake
-			// polls the OS), then starts a grandchild the way a tool call does.
-			const binaryPath = await writeFakeOmp(
-				tempDir,
-				[
-					`import * as fs from "node:fs";`,
-					`import { spawn, spawnSync } from "node:child_process";`,
-					`const niceOf = (pid: number) => Number(spawnSync("ps", ["-o", "ni=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim());`,
-					`for (let i = 0; i < 200 && niceOf(process.pid) === 0; i++) await Bun.sleep(10);`,
-					`const tool = spawn("sleep", ["30"], { stdio: "ignore" });`,
-					`fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify({ omp: niceOf(process.pid), tool: niceOf(tool.pid ?? 0) }));`,
-					`tool.kill();`,
-					`process.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");`,
-					ANSWERS_COMMANDS,
-				].join("\n"),
-			);
-			const sidecar = new SidecarManager({ omp: ompAt(binaryPath), cwd: tempDir });
-			try {
-				const ready = waitForReady(sidecar);
-				sidecar.start();
-				await ready;
-				expect(JSON.parse(await fs.readFile(reportPath, "utf8"))).toEqual({ omp: 10, tool: 10 });
-			} finally {
-				sidecar.dispose();
-				await fs.rm(tempDir, RM_TEMP);
-			}
-		},
-	);
+	it("runs the omp and its tool at below-normal CPU priority", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-priority-"));
+		const probe = `const os = require("node:os"); console.log(JSON.stringify({omp: os.getPriority(process.ppid), tool: os.getPriority()}))`;
+		const bin = await writeFakeOmp(
+			dir,
+			`import { execFileSync } from "node:child_process";
+			import { createInterface } from "node:readline";
+			createInterface({ input: process.stdin }).on("line", line => {
+				const { id, type } = JSON.parse(line);
+				const data = type === "get_state" ? JSON.parse(execFileSync(${JSON.stringify(process.execPath)}, ["-e", ${JSON.stringify(probe)}], { encoding: "utf8" })) : {};
+				console.log(JSON.stringify({type: "response", id, command: type, success: true, data}));
+			});
+			console.log(JSON.stringify({type: "ready", supportedProtocolVersions: [1]}));`,
+		);
+		const sc = new SidecarManager({ omp: ompAt(bin), cwd: dir });
+		try {
+			const ready = waitForReady(sc);
+			sc.start();
+			await ready;
+			const priority = os.constants.priority.PRIORITY_BELOW_NORMAL;
+			expect(await sc.rpcClient?.stock({ type: "get_state" })).toMatchObject({
+				success: true,
+				data: { omp: priority, tool: priority },
+			});
+		} finally {
+			sc.dispose();
+			await sc.whenExited();
+			await fs.rm(dir, RM_TEMP);
+		}
+	});
 
 	it.each([
 		{ hostTools: false, extra: [] as string[] },
@@ -366,7 +528,7 @@ describe("SidecarManager", () => {
 		}
 	});
 
-	it("answers GUI-side commands in-process and stamps agent_end entry ids without reordering frames", async () => {
+	it("keeps GUI and stock commands separate and delivers agent_end with its entry ids", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-sidecar-local-"));
 		const commandLog = path.join(tempDir, "commands.json");
 		const script = [
@@ -379,8 +541,25 @@ describe("SidecarManager", () => {
 			'const entries = [{ type: "message", id: "e1", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: userMessage }];',
 			// The bridge server would keep the fake alive after stdin closes; on Windows the live
 			// process then locks tempDir (its cwd) and the cleanup rmdir fails with EBUSY.
+			"let titles = 0;",
+			"const localReply = r => {",
+			'  if (r.method === "advisor_stats") return { ok: true, result: Object.keys(r.params).length === 0 ? { calls: 3 } : null };',
+			'  if (r.method === "checkout_peers.get") return { ok: true, result: Object.keys(r.params).length === 0 ? { peers: [] } : null };',
+			'  if (r.method === "modes.autopilot_status") return { ok: true, result: Object.keys(r.params).length === 0 ? { active: false } : null };',
+			'  if (r.method === "workspace.directories") return { ok: true, result: "params" in r ? null : { directories: [] } };',
+			'  if (r.method === "composer.last_link") return { ok: true, result: "params" in r ? null : { url: "https://example.org/doc" } };',
+			'  if (r.method === "next_prompt_state") return { ok: true, result: "params" in r ? null : { suggestions: true, inline: false } };',
+			'  if (r.method === "worktree_lifecycle_settings") return { ok: true, result: "params" in r ? null : { onExit: "keep" } };',
+			'  if (r.method !== "regenerate_title") return { ok: true, result: answer(r) };',
+			"  switch (++titles) {",
+			'    case 1: return { ok: true, result: { title: null, reason: "params" in r ? "unexpected params" : "none" } };',
+			'    case 2: return { ok: true, result: { title: "Fresh title" } };',
+			'    case 3: return { ok: false, code: "unsupported_omp", error: "Title unavailable" };',
+			"    default: return undefined;",
+			"  }",
+			"};",
 			'const answer = (request) => request.method === "sessions.transcript" ? { leafId: "e1", total: 1, messages: [{ ...userMessage, entryId: "e1" }] } : request.method === "sessions.attach_entry_ids" ? { messages: request.params.messages.map(message => ({ ...message, entryId: "e1" })) } : null;',
-			'net.createServer(socket => { socket.setEncoding("utf8"); let buffer = ""; socket.on("data", chunk => { buffer += chunk; for (let i = buffer.indexOf("\\n"); i !== -1; i = buffer.indexOf("\\n")) { const request = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1); socket.write(JSON.stringify({ id: request.id, ok: true, result: answer(request) }) + "\\n"); } }); }).listen(process.env.OMP_GUI_BRIDGE, () => out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }));',
+			'net.createServer(socket => { socket.setEncoding("utf8"); let buffer = ""; socket.on("data", chunk => { buffer += chunk; for (let i = buffer.indexOf("\\n"); i !== -1; i = buffer.indexOf("\\n")) { const request = JSON.parse(buffer.slice(0, i)); buffer = buffer.slice(i + 1); const reply = localReply(request); if (reply) socket.write(JSON.stringify({ id: request.id, ...reply }) + "\\n"); } }); }).listen(process.env.OMP_GUI_BRIDGE, () => out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }));',
 			"createInterface({ input: process.stdin }).on('line', line => {",
 			"\tconst command = JSON.parse(line);",
 			"\tseen.push(command.type);",
@@ -431,6 +610,58 @@ describe("SidecarManager", () => {
 			const commands = JSON.parse(await fs.readFile(commandLog, "utf8")) as string[];
 			expect(commands).not.toContain("get_transcript");
 			expect(commands).toEqual(["get_state", "prompt"]);
+			for (const [type, data] of [
+				["get_advisor_stats", { calls: 3 }],
+				["get_checkout_peers", { peers: [] }],
+				["get_autopilot", { active: false }],
+				["get_directories", { directories: [] }],
+				["regenerate_session_title", { title: null, reason: "none" }],
+				["get_last_link", { url: "https://example.org/doc" }],
+				["get_next_prompt", { suggestions: true, inline: false }],
+				["worktree_lifecycle_settings", { onExit: "keep" }],
+			] as const) {
+				const command = { type, id: "renderer-id" };
+				await expect(client.command(command)).resolves.toEqual({
+					id: expect.stringMatching(/^gui-\d+$/),
+					type: "response",
+					command: type,
+					success: true,
+					data,
+				});
+				const direct = await client.stock(command);
+				expect(direct.success).toBe(true);
+				expect(direct).not.toHaveProperty("data");
+			}
+			expect(JSON.parse(await fs.readFile(commandLog, "utf8"))).toEqual([
+				...commands,
+				"get_advisor_stats",
+				"get_checkout_peers",
+				"get_autopilot",
+				"get_directories",
+				"regenerate_session_title",
+				"get_last_link",
+				"get_next_prompt",
+				"worktree_lifecycle_settings",
+			]);
+			await expect(client.command({ type: "regenerate_session_title" })).resolves.toMatchObject({
+				success: true,
+				data: { title: "Fresh title" },
+			});
+			await expect(client.command({ type: "regenerate_session_title" })).resolves.toMatchObject({
+				command: "regenerate_session_title",
+				success: false,
+				code: "unsupported_omp",
+				error: "Title unavailable",
+			});
+			await expect(client.command({ type: "regenerate_session_title" }, 20)).rejects.toThrow(
+				"RPC timeout (20ms): regenerate_session_title",
+			);
+			sidecar.kill();
+			await expect(client.command({ type: "regenerate_session_title" })).resolves.toMatchObject({
+				success: false,
+				code: "bridge_unavailable",
+			});
+			await expect(client.stock({ type: "regenerate_session_title" })).rejects.toThrow("Sidecar disconnected");
 		} finally {
 			sidecar.dispose();
 			await fs.rm(tempDir, RM_TEMP);
@@ -709,11 +940,11 @@ describe("SidecarManager", () => {
 			`import * as fs from "node:fs/promises";\nawait fs.writeFile(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n`,
 		);
 		// The app's prefs store, kept in tempDir: never the developer's own prefs.json.
-		const prefs = new Store<Record<string, unknown>>({ name: "prefs", cwd: path.join(tempDir, "prefs") });
+		const prefs = new PrefsStore<Record<string, unknown>>(path.join(tempDir, "prefs", "prefs.json"));
 		const sidecar = new SidecarManager({
 			omp: ompAt(binaryPath),
 			cwd: workspaceCwd,
-			launchProfiles: () => prefs.get("launchProfiles"),
+			launchFlags: cwd => prefs.launchFlags(cwd),
 		});
 		try {
 			// Written after construction: the profile is read at spawn.
@@ -723,8 +954,8 @@ describe("SidecarManager", () => {
 					noRules: true,
 					addDirs: ["/data/extra"],
 					tools: ["read", "bash"],
-					// Smuggled keys that could reach code-controlled flags —
-					// parseLaunchProfile drops them before the mapping.
+					// Smuggled keys that could reach code-controlled flags: the core's
+					// profile parse drops them before the mapping.
 					"--session": "hijack",
 					session: "hijack",
 				},

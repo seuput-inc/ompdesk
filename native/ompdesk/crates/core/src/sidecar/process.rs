@@ -41,6 +41,9 @@ pub struct Exit {
 /// A started omp: its shared handle and the pipes the lane reads.
 pub struct Started {
     pub proc: Arc<Proc>,
+    pub priority_error: Option<std::io::Error>,
+    /// True only for an OS wait status, not the synthetic failure the crash reporter also consumes.
+    pub confirmed_exit: watch::Receiver<bool>,
     pub stdout: ChildStdout,
     pub stderr: ChildStderr,
 }
@@ -73,52 +76,43 @@ pub fn signal_name(signal: i32) -> String {
     format!("SIG{signal}")
 }
 
-fn command(start: &Start) -> Command {
+pub(crate) fn omp_command(
+    bin: &str,
+    args: &[impl AsRef<str>],
+    #[cfg_attr(not(windows), allow(unused_variables))] shell: bool,
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+) -> Command {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt as _;
-    let runner = Runner {
-        bin: start.bin.clone(),
-        args: Vec::new(),
-        env: start.env.clone(),
-        timeout_ms: 0,
-        max_bytes: 0,
-    };
     let mut command;
     #[cfg(windows)]
-    if start.shell {
+    if shell {
         let shell = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into());
         command = Command::new(shell);
-        let mut line = start.bin.clone();
-        for arg in &start.args {
+        let mut line = bin.to_owned();
+        for arg in args {
             line.push(' ');
-            line.push_str(arg);
+            line.push_str(arg.as_ref());
         }
         command.as_std_mut().raw_arg(format!("/d /s /c \"{line}\""));
     } else {
-        command = Command::new(&start.bin);
-        command.args(&start.args);
+        command = Command::new(bin);
+        command.args(args.iter().map(AsRef::as_ref));
     }
     #[cfg(not(windows))]
     {
-        command = Command::new(&start.bin);
-        command.args(&start.args);
+        command = Command::new(bin);
+        command.args(args.iter().map(AsRef::as_ref));
     }
+    command.current_dir(cwd);
     command
-        .current_dir(&start.cwd)
         .env_clear()
         // Open pipes: omp exits when its stdin closes, so it never outlives the core.
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    runner.environment(&mut command, &[]);
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    // A process group (a session) of its own, so the kill at the end of a stop takes the tools it started with it.
-    #[cfg(unix)]
-    crate::sys::new_session(command.as_std_mut());
+    Runner::apply_environment(env, &mut command);
     command
 }
 
@@ -148,9 +142,11 @@ pub fn start(
     timing: Timing,
     on_exit: impl FnOnce(Exit) + Send + 'static,
 ) -> Result<Started, String> {
-    let mut child = command(start)
-        .spawn()
-        .map_err(|error| refused(start, &error))?;
+    let mut cmd = omp_command(&start.bin, &start.args, start.shell, &start.cwd, &start.env);
+    #[cfg(unix)]
+    crate::sys::own_group(cmd.as_std_mut());
+    let (mut child, priority_error) =
+        crate::sys::spawn_low_priority(&mut cmd).map_err(|e| refused(start, &e))?;
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
@@ -161,6 +157,7 @@ pub fn start(
     tokio::spawn(write_stdin(stdin, written));
     let (signals, mut asked) = mpsc::unbounded_channel::<Signal>();
     let (exit, exited) = watch::channel(false);
+    let (proof, confirmed_exit) = watch::channel(false);
     tokio::spawn(async move {
         let status = loop {
             tokio::select! {
@@ -168,21 +165,43 @@ pub fn start(
                 Some(Signal::Term) = asked.recv() => terminate(&mut child),
             }
         };
-        let info = match status {
-            Ok(status) => exit_of(status),
-            Err(_) => Exit {
-                code: Some(1),
-                signal: None,
-            },
-        };
+        let info = record_wait(status, &proof);
         exit.send_replace(true);
         on_exit(info);
     });
     Ok(Started {
         proc: Proc::new(pid, exited, lines, signals, timing),
+        priority_error,
+        confirmed_exit,
         stdout,
         stderr,
     })
+}
+
+fn record_wait(
+    status: std::io::Result<std::process::ExitStatus>,
+    proof: &watch::Sender<bool>,
+) -> Exit {
+    match status {
+        Ok(status) => {
+            proof.send_replace(true);
+            exit_of(status)
+        }
+        Err(_) => Exit {
+            code: Some(1),
+            signal: None,
+        },
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_wait_error_reports_a_crash_but_never_confirms_the_child_exited() {
+    let (proof, receipt) = watch::channel(false);
+    let report = record_wait(Err(std::io::Error::other("failed to reap child")), &proof);
+    drop(proof);
+    assert_eq!(report.code, Some(1));
+    assert!(!*receipt.borrow());
 }
 
 #[cfg(unix)]
@@ -292,5 +311,33 @@ mod tests {
         // `findstr` found no line to match at the end of input, so the shim's own code is 1: what matters is that it ended.
         assert!(exit.code.is_some(), "{exit:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+
+    /// A tab's omp leads a process group of its own, which a stop kills (`sys::own_group`, started by `posix_spawn`).
+    #[tokio::test]
+    async fn an_omp_leads_a_process_group_of_its_own() {
+        let how = Start {
+            bin: "/bin/sh".into(),
+            args: vec!["-c".into(), "echo $$ $(ps -o pgid= -p $$)".into()],
+            env: std::env::vars().collect(),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            shell: false,
+        };
+        let mut child = start(&how, Timing::default(), |_| {}).unwrap();
+        let mut text = String::new();
+        child.stdout.read_to_string(&mut text).await.unwrap();
+        child
+            .confirmed_exit
+            .wait_for(|exited| *exited)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = text.split_whitespace().collect();
+        assert_eq!(ids.len(), 2, "{text}");
+        assert_eq!(ids[0], ids[1], "the omp does not lead its group: {text}");
     }
 }

@@ -521,6 +521,8 @@ export function isVisibleTranscriptMessage(message: AgentMessage): boolean {
 	// Stock's model-facing developer messages are never shown (TUI ui-helpers renders none); its
 	// todo reminder is the one the live card showed, so it stays as that reminder.
 	if (message.role === "developer") return parseTodoReminder(message) !== null;
+	// Stock's `notify` sends matching output to the agent. The job's outcome arrives separately as an async-result.
+	if (message.role === "custom" && message.customType === "async-notify") return false;
 	if ((message.role === "custom" || message.role === "hookMessage") && message.display === false) return false;
 	if (
 		message.role === "user" ||
@@ -1290,4 +1292,30 @@ export function buildTimelineMarkers(rows: readonly HistoryRow[]): Array<Timelin
 	}
 
 	return markers;
+}
+
+/**
+ * Where the "New" line goes when the person comes back to a session (Orca's unread divider): the key of the first
+ * finalized row after the last one they had when they left (`seenKey`, saved with the transcript's view), or null when
+ * nothing finalized arrived since, or that row is no longer in the transcript (a reload, a compaction, a page dropped).
+ */
+export function firstUnseenRowKey(
+	rows: readonly Row[],
+	rowKeys: readonly string[],
+	seenKey: string | undefined,
+): string | null {
+	if (!seenKey) return null;
+	const seen = rowKeys.indexOf(seenKey);
+	if (seen < 0) return null;
+	const next = rows[seen + 1];
+	if (!next || next.kind === "streaming" || next.kind === "pending" || next.kind === "expander") return null;
+	return rowKeys[seen + 1] ?? null;
+}
+
+/** The key of the transcript's last finalized row: what the person has seen when the transcript closes. */
+export function lastFinalizedRowKey(rows: readonly Row[], rowKeys: readonly string[]): string | undefined {
+	const index = rows.findLastIndex(
+		row => row.kind !== "streaming" && row.kind !== "pending" && row.kind !== "expander",
+	);
+	return index < 0 ? undefined : rowKeys[index];
 }

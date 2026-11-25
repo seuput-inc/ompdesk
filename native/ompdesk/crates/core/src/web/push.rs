@@ -1,13 +1,14 @@
 //! Web Push's sending side (unit 8d; was `src/main/web/push.ts`, `vapid-store.ts` and the `web-push` package): the
 //! host's VAPID keypair (RFC 8292), one message encrypted for one subscription (RFC 8291, `aes128gcm` of RFC 8188)
-//! and its single POST to the push service. Main keeps what decides whether and what to push (`web-push-notifier.ts`
-//! with its batcher) and the rule that a 404 or 410 forgets the subscription.
+//! and its single POST to the push service. Main decides whether and what to push (`web-push-notifier.ts` with its
+//! batcher) and forgets the subscription only if a `gone` answer still names its current endpoint.
 //!
 //! Methods: `push.vapid` `{userData}` → `{publicKey, subject, created}` reads `<userData>/web-push.json` (a missing,
-//! damaged or mismatched file makes a new pair, `created: true`, and every subscription made against the old key can
-//! no longer be pushed to: the caller drops them) and keeps the pair in the process for `push.send` `{userData,
-//! subscription: {endpoint, keys: {p256dh, auth}}, payload, ttl, urgency, topic?, timeoutMs}` → `{statusCode}`. A
-//! push service's refusal is an answer; only a message that cannot be made or sent is a fault (`push_subscription`,
+//! damaged or mismatched file makes a new pair, `created: true`, and clears obsolete subscriptions). `web.start`
+//! does the same before binding. The pair stays in the process for `push.send` `{userData, subscription: {endpoint,
+//! keys: {p256dh, auth}}, payload, ttl, urgency, topic?, timeoutMs}` → `{outcome: "sent" | "gone" | "failed"}`.
+//! A payload over 3800 UTF-8 bytes or an HTTP refusal other than 404/410 answers `failed` with a log message.
+//! A message that cannot be made or sent is a fault (`push_subscription`,
 //! `push_request`, `push_connect`, `push_tls`, `push_broken`, `push_timeout`, `no_vapid`), and no fault carries the
 //! endpoint, which is a capability URL.
 //!
@@ -31,7 +32,7 @@ use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
 use p256::elliptic_curve::sec1::ToSec1Point as _;
 use p256::{PublicKey, SecretKey};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use url::{Host, Position, Url};
@@ -41,7 +42,7 @@ use crate::http;
 use crate::server::{Call, Fault, Registry, Reply};
 
 /// The push services' contact for this sender (RFC 8292 §2.1: a `mailto:` or `https:` URL).
-pub const VAPID_SUBJECT: &str = "https://github.com/SeuPut0705/ompdesk";
+pub const VAPID_SUBJECT: &str = "https://github.com/seuput-inc/ompdesk";
 
 /// A token lives 12 hours (`web-push`'s default; the limit is 24).
 const VAPID_EXPIRY_SECONDS: u64 = 12 * 60 * 60;
@@ -50,6 +51,7 @@ const VAPID_EXPIRY_SECONDS: u64 = 12 * 60 * 60;
 const RECORD_SIZE: usize = 4096;
 const TAG: usize = 16;
 const KEY_LEN: usize = 65;
+const PAYLOAD_MAX_BYTES: usize = 3800;
 
 /// Node's `Buffer.from(text, "base64url")`: the unused bits of the last character are ignored, padding is optional.
 const DECODE: GeneralPurpose = GeneralPurpose::new(
@@ -148,7 +150,7 @@ fn open() -> MutexGuard<'static, HashMap<PathBuf, Arc<Vapid>>> {
 }
 
 /// The pair `load_vapid` last loaded for `user_data`, with no file read and nothing made: the edge's `/api/push`
-/// reads the public key through it on each request. None until main's `push.vapid` (or a `load_vapid`) ran.
+/// reads the public key through it on each request after `web.start`.
 pub fn loaded(user_data: &Path) -> Option<Arc<Vapid>> {
     open().get(user_data).cloned()
 }
@@ -406,6 +408,7 @@ pub async fn deliver(prepared: &Prepared, timeout: Duration) -> Result<u16, Faul
         url: prepared.url.as_str(),
         headers: &headers,
         body: Some(&prepared.body),
+        proxy: None,
     };
     match tokio::time::timeout(timeout, http::status_once(request)).await {
         Err(_) => Err(fault(
@@ -439,12 +442,25 @@ struct VapidParams {
     user_data: PathBuf,
 }
 
+pub(super) async fn initialize(user_data: PathBuf) -> Result<(Arc<Vapid>, bool), Fault> {
+    tokio::task::spawn_blocking(move || {
+        // Two starts of an empty profile must not publish different keys.
+        static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let (vapid, created) =
+            load_vapid(&user_data).map_err(|error| Fault::new("io", error.to_string()))?;
+        if created {
+            super::store::FileDevices::open(&user_data).drop_push_subscriptions();
+        }
+        Ok((vapid, created))
+    })
+    .await
+    .map_err(|error| Fault::new("internal", error.to_string()))?
+}
+
 async fn vapid(call: Call) -> Result<Reply, Fault> {
     let params: VapidParams = call.params()?;
-    let (vapid, created) = tokio::task::spawn_blocking(move || load_vapid(&params.user_data))
-        .await
-        .map_err(|error| Fault::new("internal", error.to_string()))?
-        .map_err(|error| Fault::new("io", error.to_string()))?;
+    let (vapid, created) = initialize(params.user_data).await?;
     Reply::json(&json!({
         "publicKey": vapid.public_key(),
         "subject": VAPID_SUBJECT,
@@ -464,8 +480,34 @@ struct SendParams {
     timeout_ms: u64,
 }
 
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(tag = "outcome", rename_all = "lowercase")]
+enum Delivery {
+    Sent,
+    Gone,
+    Failed { message: String },
+}
+
+impl Delivery {
+    fn from_status(status: u16) -> Self {
+        match status {
+            200..=299 => Self::Sent,
+            404 | 410 => Self::Gone,
+            _ => Self::Failed {
+                message: format!("web push refused with status {status}"),
+            },
+        }
+    }
+}
+
 async fn send(call: Call) -> Result<Reply, Fault> {
     let params: SendParams = call.params()?;
+    let bytes = params.payload.len();
+    if bytes > PAYLOAD_MAX_BYTES {
+        return Reply::json(&Delivery::Failed {
+            message: format!("web push not sent: payload of {bytes} bytes is over the limit"),
+        });
+    }
     let vapid = open().get(&params.user_data).cloned().ok_or_else(|| {
         fault(
             "no_vapid",
@@ -492,7 +534,7 @@ async fn send(call: Call) -> Result<Reply, Fault> {
         status = deliver(&prepared, Duration::from_millis(params.timeout_ms)) => status?,
         () = call.scope.on_cancel() => return Err(Fault::cancelled()),
     };
-    Reply::json(&json!({ "statusCode": status }))
+    Reply::json(&Delivery::from_status(status))
 }
 
 pub fn register(registry: &mut Registry) {
@@ -510,6 +552,24 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn only_a_gone_subscription_is_forgotten() {
+        for status in [200, 201, 204, 299] {
+            assert_eq!(Delivery::from_status(status), Delivery::Sent);
+        }
+        for status in [404, 410] {
+            assert_eq!(Delivery::from_status(status), Delivery::Gone);
+        }
+        for status in [199, 300, 400, 401, 413, 429, 500, 503] {
+            assert_eq!(
+                Delivery::from_status(status),
+                Delivery::Failed {
+                    message: format!("web push refused with status {status}")
+                }
+            );
+        }
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ompdesk-push-{name}-{}", std::process::id()));
@@ -703,7 +763,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(b64(claims)).unwrap(),
             format!(
-                r#"{{"aud":"https://push.example.com","exp":{},"sub":"{VAPID_SUBJECT}"}}"#,
+                r#"{{"aud":"https://push.example.com","exp":{},"sub":"https://github.com/seuput-inc/ompdesk"}}"#,
                 1_000 + 12 * 3600
             )
         );

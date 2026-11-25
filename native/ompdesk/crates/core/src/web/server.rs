@@ -439,7 +439,6 @@ impl Edge {
             }
         }
         drop(listener);
-        self.inner.deps.desktop.decline_all();
         self.inner.deps.router.close_all(1001, "server stopping");
         let mut sockets =
             std::mem::take(&mut *self.inner.sockets.lock().unwrap_or_else(|e| e.into_inner()));
@@ -884,9 +883,12 @@ impl Edge {
             None if trimmed.is_empty() => "Phone".to_owned(),
             None => trimmed.to_owned(),
         };
-        let mut grants: Vec<String> = DEFAULT_GRANTS.iter().map(|g| (*g).to_owned()).collect();
-        let asked = deps.desktop.confirm_new_devices().await;
-        if asked {
+        let asked = deps
+            .desktop
+            .confirm_new_devices()
+            .await
+            .ok_or_else(|| fail(403, "declined"))?;
+        let grants = if asked {
             let outcome = deps
                 .desktop
                 .confirm(PairingDetails {
@@ -897,13 +899,15 @@ impl Edge {
                 })
                 .await;
             match outcome {
-                PairingOutcome::Approved { grants: approved } => grants = approved,
+                PairingOutcome::Approved { grants } => grants,
                 PairingOutcome::Refused(reason) => {
                     self.inner.pair_guard.fail(&address, self.now());
                     return Err(fail(403, reason));
                 }
             }
-        }
+        } else {
+            DEFAULT_GRANTS.iter().map(|g| (*g).to_owned()).collect()
+        };
         self.inner.pair_guard.succeed(&address);
         let (device, cookie) = deps.devices.create(
             NewDevice {
@@ -1477,10 +1481,8 @@ impl Edge {
                 },
                 outgoing = inbox.recv() => match outgoing {
                     Some(Outgoing::Text(text)) => {
-                        let bytes = text.len();
-                        let sent = socket.send(yawc::Frame::text(text)).await;
-                        outbox.written(bytes);
-                        if sent.is_err() { break }
+                        outbox.taken(text.len());
+                        if socket.send(yawc::Frame::text(text)).await.is_err() { break }
                     }
                     Some(Outgoing::Ping) => if socket.send(yawc::Frame::ping(Bytes::new())).await.is_err() { break },
                     Some(Outgoing::Close(code, reason)) => {

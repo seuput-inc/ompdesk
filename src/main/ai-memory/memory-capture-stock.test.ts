@@ -92,7 +92,7 @@ async function makeRig(options: { agentWiring: boolean; disabled?: string[] }): 
 	const cost = "{ input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }";
 	writeFileSync(
 		join(agentDir, "models.yml"),
-		`providers:\n  fake:\n    baseUrl: http://127.0.0.1:1/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        cost: ${cost}\n`,
+		`providers:\n  fake:\n    baseUrl: http://127.0.0.1:1/v1\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: ${cost}\n`,
 	);
 	const disabled = options.disabled?.length
 		? `disabledExtensions:\n${options.disabled.map(id => `  - ${id}\n`).join("")}`
@@ -175,10 +175,9 @@ async function runOmp(rig: Rig, args: string[]): Promise<string[]> {
 	});
 	try {
 		child.stdin.write(`${JSON.stringify({ id: "1", type: "get_state" })}\n`);
-		const started = Date.now();
-		// Real omp on a real clock: the first capture arrives when omp has booted, and a second one would arrive in the
-		// same startup, so the run waits for the first and then a settle time no deterministic clock can stand in for.
-		while (rig.hits.length === 0 && Date.now() - started < WAIT_MS) await sleep(100);
+		const deadline = Date.now() + WAIT_MS;
+		// Stock can finish session_start while MCP is still connecting. Wait for both witnesses before the duplicate check.
+		while (Date.now() < deadline && (rig.hits.length === 0 || mcpOwners(rig).length === 0)) await sleep(100);
 		await sleep(SETTLE_MS);
 		return [...rig.hits].sort();
 	} finally {
@@ -215,6 +214,7 @@ describe.skipIf(!existsSync(omp))("one memory capture per OMPdesk session on sto
 	it("the terminal omp, which OMPdesk never passes the root to, keeps capturing through the agent dir's extension", async () => {
 		const rig = await makeRig({ agentWiring: true });
 		expect(await runOmp(rig, [])).toEqual(["terminal-wiring"]);
+		expect(mcpOwners(rig)).toEqual(["terminal-wiring"]);
 	}, 120_000);
 
 	it("no wiring in the agent dir: the root is the one capture and the one MCP entry", async () => {

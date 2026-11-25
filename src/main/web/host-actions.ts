@@ -4,10 +4,8 @@
  * and fetch a host file over `/blob`. Each is a web-only channel (shared/web-host.ts) with its permission:
  * `workspace` for the disk and blobs, `desktop-control` for what happens on the host's screen.
  */
-import type { Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { constants, promises as fsp } from "original-fs";
 import { z } from "zod";
 import { codedError } from "../../shared/ipc-error-codes";
 import {
@@ -15,18 +13,16 @@ import {
 	WEB_HOST_CHANNELS,
 	WEB_HOST_LIST_MAX_ENTRIES,
 	type WebBlobOpenResult,
-	type WebHostEntry,
 	type WebHostListing,
 	type WebHostOpenResult,
 	type WebHostSaveResult,
 	type WebModelsText,
 	type WebModelsWriteResult,
 } from "../../shared/web-host";
-import { isOpenableExternalUrl } from "../external-url";
-import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin, sniffMime } from "../workspace-fs";
+import { CoreError, core } from "../core/process";
+import { FS_BINARY_LOCAL_MAX_BYTES, resolveWithin } from "../workspace-fs";
 import type { BlobStore } from "./blobs";
 import type { WebDevices } from "./devices-store";
-import type { UploadStore } from "./uploads";
 import type { WebCallContext, WebChannelTable } from "./ws-router";
 
 /** A device's own interface preferences: capped so a page cannot fill the devices file. */
@@ -36,20 +32,20 @@ const SAVE_INLINE_MAX_CHARS = 1_000_000;
 
 export interface HostActionsDeps {
 	devices: Pick<WebDevices, "setUiPrefs">;
-	uploads: Pick<UploadStore, "owns">;
+	userData: string;
 	blobs: Pick<BlobStore, "addFile" | "release">;
 	/** The folder a tab works in on this computer, for a relative path; null when unknown. */
 	cwdFor(context: WebCallContext, tabId: string | undefined): string | null;
 	/** The host's own "open" for a file (launcher types are revealed instead: main/open-path.ts). */
 	openPath(abs: string): Promise<unknown>;
 	reveal(abs: string): void;
-	openExternal(url: string): Promise<void>;
+	openPageExternal(url: string): Promise<void>;
 	/** The agent's models.yml as text, and the checked save (models-config.ts `readModelsText` / `writeModelsText`). */
-	models: { read(): WebModelsText; write(text: string, stamp: string): Promise<string> };
+	models: { read(): Promise<WebModelsText>; write(text: string, stamp: string): Promise<string> };
 	homedir?: () => string;
 }
 
-const NAME_ORDER = new Intl.Collator(undefined, { numeric: true });
+const NAME_LOCALE = new Intl.Collator().resolvedOptions().locale;
 
 const ListRequest = z
 	.object({
@@ -97,9 +93,11 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		const abs = expandHome(raw, home());
 		if (!path.isAbsolute(abs)) throw codedError("not_absolute_path", "Not an absolute path");
 		try {
-			await fsp.access(abs);
-		} catch {
-			throw codedError("file_not_found", "File not found");
+			await core().call("fs.stat", { path: abs });
+		} catch (error) {
+			if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "io"))
+				throw codedError("file_not_found", "File not found");
+			throw error;
 		}
 		return path.normalize(abs);
 	};
@@ -110,41 +108,33 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		const dir = request.path === undefined || request.path === "" ? homeDir : expandHome(request.path, homeDir);
 		if (!path.isAbsolute(dir)) throw codedError("not_absolute_path", "Not an absolute path");
 		const abs = path.resolve(dir);
-		let dirents: Dirent[];
+		let listed: { entries: { name: string; size: number | null }[]; truncated: boolean };
 		try {
-			dirents = await fsp.readdir(abs, { withFileTypes: true });
+			listed = (
+				await core().call<typeof listed>("fs.listDirs", {
+					dir: abs,
+					query: request.query,
+					locale: NAME_LOCALE,
+					web: { files: request.files === true, limit: WEB_HOST_LIST_MAX_ENTRIES },
+				})
+			).result;
 		} catch (error) {
-			const code = error instanceof Error && "code" in error ? error.code : undefined;
-			if (code === "ENOTDIR") throw codedError("not_a_directory", "Not a directory");
-			if (code === "ENOENT") throw codedError("file_not_found", "Directory not found");
+			if (error instanceof CoreError && (error.code === "not_a_directory" || error.code === "file_not_found"))
+				throw codedError(error.code, error.message);
 			throw error;
 		}
-		const needle = request.query?.trim().toLocaleLowerCase() ?? "";
-		const found: WebHostEntry[] = [];
-		for (const dirent of dirents) {
-			if (dirent.name.startsWith(".")) continue;
-			if (needle !== "" && !dirent.name.toLocaleLowerCase().includes(needle)) continue;
-			const full = path.join(abs, dirent.name);
-			let directory = dirent.isDirectory();
-			let size: number | null = null;
-			if (dirent.isSymbolicLink() || dirent.isFile()) {
-				const info = await fsp.stat(full).catch(() => null);
-				if (!info) continue;
-				directory = info.isDirectory();
-				size = directory ? null : info.size;
-			}
-			if (!directory && request.files !== true) continue;
-			if (!directory && !dirent.isFile() && !dirent.isSymbolicLink()) continue;
-			found.push({ name: dirent.name, path: full, directory, size });
-		}
-		found.sort((a, b) => Number(b.directory) - Number(a.directory) || NAME_ORDER.compare(a.name, b.name));
 		const parent = path.dirname(abs);
 		return {
 			path: abs,
 			parent: parent === abs ? null : parent,
 			home: homeDir,
-			entries: found.slice(0, WEB_HOST_LIST_MAX_ENTRIES),
-			truncated: found.length > WEB_HOST_LIST_MAX_ENTRIES,
+			entries: listed.entries.map(({ name, size }) => ({
+				name,
+				path: path.join(abs, name),
+				directory: size === null,
+				size,
+			})),
+			truncated: listed.truncated,
 		};
 	};
 
@@ -156,26 +146,31 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		}
 		const dir = expandHome(request.dir, home());
 		if (!path.isAbsolute(dir)) return { ok: false, error: "Not an absolute path", code: "not_absolute_path" };
-		const info = await fsp.stat(dir).catch(() => null);
-		if (!info?.isDirectory()) return { ok: false, error: "Not a folder", code: "not_a_directory" };
+		const source =
+			request.uploadPath === undefined
+				? "inline"
+				: {
+						upload: {
+							path: path.resolve(request.uploadPath),
+							deviceId: context.deviceId,
+							userData: deps.userData,
+						},
+					};
 		const target = path.join(path.resolve(dir), request.name);
 		try {
-			if (request.uploadPath !== undefined) {
-				if (!deps.uploads.owns(context.deviceId, request.uploadPath)) {
-					return { ok: false, error: "Not one of this device's uploads", code: "path_escapes_roots" };
-				}
-				await fsp.copyFile(request.uploadPath, target, request.overwrite ? 0 : constants.COPYFILE_EXCL);
-			} else {
-				await fsp.writeFile(target, Buffer.from(request.data ?? "", "base64"), {
-					flag: request.overwrite ? "w" : "wx",
-				});
-			}
+			const { result } = await core().call<WebHostSaveResult>(
+				"web.host.save",
+				{ dir, target, source, overwrite: request.overwrite === true },
+				{
+					...(request.data === undefined ? {} : { bin: Buffer.from(request.data, "base64") }),
+					// A slow destination can still be writing after the default RPC deadline.
+					timeoutMs: 2 ** 31 - 1,
+				},
+			);
+			return result;
 		} catch (error) {
-			const code = error instanceof Error && "code" in error ? error.code : undefined;
-			if (code === "EEXIST") return { ok: false, error: "A file with that name exists", code: "exists" };
 			return { ok: false, error: error instanceof Error ? error.message : String(error) };
 		}
-		return { ok: true, path: target };
 	};
 
 	const open = async (_context: WebCallContext, args: readonly unknown[]): Promise<WebHostOpenResult> => {
@@ -196,7 +191,7 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 
 	const openExternal = async (_context: WebCallContext, args: readonly unknown[]): Promise<void> => {
 		const { url } = parse(UrlRequest, args[0]);
-		if (isOpenableExternalUrl(url)) await deps.openExternal(url);
+		await deps.openPageExternal(url);
 	};
 
 	const blobOpen = async (context: WebCallContext, args: readonly unknown[]): Promise<WebBlobOpenResult> => {
@@ -210,20 +205,23 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 			abs = within;
 		}
 		abs = path.normalize(abs);
-		const info = await fsp.stat(abs).catch(() => null);
-		if (!info?.isFile()) return { ok: false, error: "File not found", code: "file_not_found" };
-		if (info.size > FS_BINARY_LOCAL_MAX_BYTES) return { ok: false, error: "File too large", code: "file_too_large" };
-		const header = Buffer.alloc(Math.min(512, info.size));
-		const handle = await fsp.open(abs, "r");
+		let file: { size: number; mime: string };
 		try {
-			await handle.read(header, 0, header.length, 0);
-		} finally {
-			await handle.close();
+			file = (
+				await core().call<typeof file>("fs.resolveMedia", {
+					path: abs,
+					webBlobMaxBytes: FS_BINARY_LOCAL_MAX_BYTES,
+				})
+			).result;
+		} catch (error) {
+			if (error instanceof CoreError && (error.code === "file_not_found" || error.code === "file_too_large"))
+				return { ok: false, error: error.message, code: error.code };
+			throw error;
 		}
-		const mime = sniffMime(header, abs);
+		const { mime, size } = file;
 		const name = path.basename(abs);
 		const url = deps.blobs.addFile(context.deviceId, { abs, mime, name, download: request.download === true });
-		return { ok: true, url, mime, size: info.size, name };
+		return { ok: true, url, mime, size, name };
 	};
 
 	const blobRelease = async (context: WebCallContext, args: readonly unknown[]): Promise<void> => {
@@ -231,7 +229,7 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		await deps.blobs.release(context.deviceId, typeof given === "string" ? given : given.url).catch(() => false);
 	};
 
-	const modelsRead = (): WebModelsText => deps.models.read();
+	const modelsRead = (): Promise<WebModelsText> => deps.models.read();
 
 	const modelsWrite = async (_context: WebCallContext, args: readonly unknown[]): Promise<WebModelsWriteResult> => {
 		const request = parse(ModelsWriteRequest, args[0]);
@@ -262,7 +260,7 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 			dir: "invoke",
 			permission: "device-self",
 			handler: (context, args) => {
-				const prefs = parse(z.record(z.unknown()), args[0]);
+				const prefs = parse(z.record(z.string(), z.unknown()), args[0]);
 				if (JSON.stringify(prefs).length > DEVICE_UI_PREFS_MAX_BYTES) {
 					throw codedError("invalid_content", "Preferences are too large");
 				}

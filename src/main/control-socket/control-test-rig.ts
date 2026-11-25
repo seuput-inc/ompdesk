@@ -14,11 +14,13 @@ import {
 	type ControlResponse,
 	type EventFrame,
 	type SessionState,
+	type SessionStatus,
 } from "../../shared/control-protocol";
+import type { ControlTabSnapshot } from "../agent-control/host";
 import type { ToolOutcome } from "../agent-control/service";
 import type { TabActivity } from "../sidecar-pool";
 import { RM_TEMP } from "../test-fake-omp";
-import type { ControlBackend, OutsideCaller, SessionView } from "./backend";
+import type { ControlBackend, OutsideCaller } from "./backend";
 import { type ControlSocketHandle, type ControlSocketOptions, startControlSocket } from "./index";
 import { ControlServer, type ControlServerOptions } from "./server";
 
@@ -52,7 +54,7 @@ class Changes {
  * `listeners` is empty whenever nothing needs them, and `fire`/`mail` refuse to go nowhere.
  */
 export class TestBackend implements ControlBackend {
-	readonly sessions = new Map<string, SessionView>();
+	readonly sessions = new Map<string, SessionStatus>();
 	readonly listeners = new Set<(activity: TabActivity) => void>();
 	readonly mailListeners = new Set<(callerId: string, text: string) => void>();
 	readonly runs: { caller: OutsideCaller; tool: string; args: unknown }[] = [];
@@ -101,7 +103,7 @@ export class TestBackend implements ControlBackend {
 		return outcome;
 	}
 
-	async resolve(_caller: OutsideCaller, name: string): Promise<SessionView> {
+	async resolve(_caller: OutsideCaller, name: string): Promise<SessionStatus> {
 		this.resolved.push(name);
 		this.#changes.notify();
 		const view = this.sessions.get(name);
@@ -109,12 +111,17 @@ export class TestBackend implements ControlBackend {
 		return view;
 	}
 
-	view(session: string): SessionView | null {
-		return this.sessions.get(session) ?? null;
-	}
-
-	views(): SessionView[] {
-		return [...this.sessions.values()];
+	snapshots(): ControlTabSnapshot[] {
+		return Array.from(this.sessions.values(), ({ session, title, state }) => ({
+			tabId: session,
+			title,
+			status: state === "starting" ? "starting" : state === "stopped" ? "exited" : "ready",
+			busy: state === "working",
+			hidden: false,
+			resuming: false,
+			hasAsk: state === "blocked",
+			hasPlan: false,
+		}));
 	}
 
 	observe(listener: (activity: TabActivity) => void): () => void {

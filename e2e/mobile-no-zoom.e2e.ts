@@ -133,6 +133,7 @@ test("two fingers zoom a picture in the viewer, never the page, and one finger t
 
 	// Closing and opening again starts from the fit.
 	await page.keyboard.press("Escape");
+	await expect(viewer).toHaveCount(0);
 	await picture.click();
 	await expect(viewer).toBeVisible();
 	expect((await imageScale()).scale).toBe(1);

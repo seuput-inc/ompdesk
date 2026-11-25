@@ -4,7 +4,9 @@
  * the device like any other approval) and the bridge raises stock's own extension-UI `confirm`
  * (gui-bridge agent-control.ts). Not stock commands and never sent by a renderer.
  */
+
 import { z } from "zod";
+import { ATTACHMENT_MAX_BYTES } from "../../../resources/gui-bridge/agent-control-contracts";
 import type { LocalHandler } from "./types";
 
 const confirmCommand = z.object({ title: z.string().min(1).max(200), message: z.string().min(1).max(2000) });
@@ -12,8 +14,24 @@ const noteCommand = z.object({ text: z.string().min(1).max(500) });
 const workerCommand = z.object({ from: z.string().min(1).max(200) });
 const sentCommand = z.object({ marks: z.array(z.string().min(1).max(200)).min(1).max(100) });
 const judgeCommand = z.object({ system: z.string().min(1).max(20_000), user: z.string().min(1).max(200_000) });
+const attachmentCommand = z
+	.object({ path: z.string().trim().min(1).max(4096).optional(), image: z.number().int().min(1).optional() })
+	.refine(command => (command.path === undefined) !== (command.image === undefined), {
+		message: "an attachment is {path} or {image}, one of them",
+	});
+const imageBlock = z.object({
+	type: z.literal("image"),
+	data: z
+		.string()
+		.min(1)
+		.max(Math.ceil(ATTACHMENT_MAX_BYTES / 3) * 4),
+	mimeType: z.string().min(1).max(100),
+});
+const mailBlocks = z.array(z.union([z.object({ type: z.literal("text"), text: z.string().max(200_000) }), imageBlock]));
+const asideCommand = z.object({ message: z.string().min(1).max(200_000), images: z.array(imageBlock).optional() });
 const mailCommand = z.object({
-	content: z.string().min(1).max(200_000),
+	// A report with pictures sent along is text blocks and image blocks (stock's `(TextContent | ImageContent)[]`).
+	content: z.union([z.string().min(1).max(200_000), mailBlocks.min(1)]),
 	details: z.record(z.string(), z.unknown()),
 	triggerTurn: z.boolean(),
 	// `followUp`: what a paired device's older main still sends; the bridge turns it into an aside while a turn runs.
@@ -25,6 +43,11 @@ export const handlers: Record<string, LocalHandler> = {
 		const { title, message } = confirmCommand.parse(command);
 		const { approved } = await ctx.bridge.request<{ approved: boolean }>("agent_control.confirm", { title, message });
 		return { approved: approved === true };
+	},
+	/** What a message carries besides text is read where the caller's omp runs (bridge `agent_control.attachment`). */
+	agent_control_attachment: async (command, ctx) => {
+		const { path, image } = attachmentCommand.parse(command);
+		return ctx.bridge.request("agent_control.attachment", path === undefined ? { image } : { path });
 	},
 	agent_control_note: async (command, ctx) => {
 		const { text } = noteCommand.parse(command);
@@ -59,6 +82,15 @@ export const handlers: Record<string, LocalHandler> = {
 		return ctx.bridge.request("agent_control.mail", mail);
 	},
 	/**
+	 * Another session's message to this one (`ompdesk_session_send`) while it works: its bridge hands it to stock as an
+	 * aside, read with every other one waiting at the next step boundary. `{idle: true}`: nothing sent, the caller
+	 * sends the plain prompt that starts the turn.
+	 */
+	agent_control_aside: async (command, ctx) => {
+		const { message, images } = asideCommand.parse(command);
+		return ctx.bridge.request("agent_control.aside", images ? { message, images } : { message });
+	},
+	/**
 	 * Which message markers main sent this session (`[ompdesk dispatch d2:`, `[ompdesk request <id>]`) its journal
 	 * holds, and which omp process answers (`{instance, journaled}`): main sends a message again only to a new omp.
 	 */
@@ -66,6 +98,4 @@ export const handlers: Record<string, LocalHandler> = {
 		const { marks } = sentCommand.parse(command);
 		return ctx.bridge.request("agent_control.sent", { marks });
 	},
-	/** The other live sessions in this session's worktree or repository (the work board's "same checkout" row). */
-	get_checkout_peers: async (_command, ctx) => ctx.bridge.request("checkout_peers.get", {}),
 };

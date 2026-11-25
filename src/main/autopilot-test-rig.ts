@@ -4,6 +4,7 @@
  * run side by side: each runs real git many times, and on a Windows runner the one file took 203 s.
  */
 import { EventEmitter } from "node:events";
+import { writeFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -16,11 +17,10 @@ import {
 	type AutopilotStatus,
 } from "../../resources/gui-bridge/modes/autopilot-contracts";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
-import { Autopilot, type AutopilotNotice, type AutopilotPool, type RepoProbe } from "./autopilot";
+import { Autopilot, type AutopilotNotice, type AutopilotPool, type AutopilotTuning } from "./autopilot";
 import { MAIN_TEXT, type MainTextKey } from "./i18n-text";
 import { gitSync, initRepoWithRemote } from "./local/git/test-repos";
 import { createWorktree } from "./local/git/worktree";
-import { detectReleaseProcedure } from "./release-detect";
 import type { SidecarLike } from "./sidecar-types";
 import type { RelaunchContinuation } from "./turn-resume";
 import type { ClientWindow } from "./web/client-window";
@@ -214,13 +214,29 @@ export let notices: AutopilotNotice[];
 export let endedRoots: string[];
 /** The run summaries written to the runtime log (`runLog`). */
 export let runLogs: Array<{ message: string; details: Record<string, string | number | boolean> }>;
-export let polls: Array<{ run: () => void; stopped: boolean }>;
-export let afters: Array<() => void>;
 export let releaseState: { status: string; conclusion: string | null } | null;
+/** How many times the fake GitHub run was asked about (`ghRun`). */
+export let ghRuns: number;
 export let autopilot: Autopilot;
 export let nextTab = 0;
-export const clock = { value: 1_000 };
 export const win = {} as ClientWindow;
+
+/**
+ * The core's clock cannot be moved, so what a test used to fire by hand (a timer, a fake clock) is a short real duration:
+ * the failed turn's grace, the nudge windows, the quota retry's backoff, the repository's second look and the release
+ * run's poll. The bounds of a step stay the real ones unless a test that needs them short says so (`build({ tuning })`).
+ */
+export const TUNING: AutopilotTuning = {
+	errorGraceMs: 30,
+	nudgeMs: 150,
+	errorNudgeMs: 250,
+	quotaRetryMinMs: 60,
+	quotaRetryMaxMs: 240,
+	repoRecheckMs: 10,
+	releasePollMs: 40,
+};
+
+export const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 export function text(key: MainTextKey, params?: Record<string, string | number>): string {
 	return MAIN_TEXT[key].en.replace(/\{(\w+)\}/g, (match, name: string) =>
@@ -231,13 +247,19 @@ export function text(key: MainTextKey, params?: Record<string, string | number>)
 export function build(
 	over: {
 		releaseProcedure?: boolean;
-		/** The real detection over the run's checkout (the committed guide's Release section counts). */
-		realDetect?: boolean;
 		relaunch?: RelaunchContinuation;
-		prefs?: Record<string, unknown>;
-		probeRepo?: (root: string) => Promise<RepoProbe>;
+		probeRepo?: (root: string) => Promise<"present" | "gone" | "unknown">;
+		/** Over `TUNING`: the durations the core's own clock runs for this test. */
+		tuning?: AutopilotTuning;
 	} = {},
 ): void {
+	if (over.releaseProcedure) {
+		writeFileSync(path.join(main, "AGENTS.md"), "## Release\nTag the tested version.\n");
+		gitSync(main, "add", "AGENTS.md");
+		gitSync(main, "commit", "-qm", "define the release procedure");
+		gitSync(main, "push", "-q", "origin", "HEAD:main");
+	}
+	autopilot?.dispose();
 	const pool: AutopilotPool = {
 		sidecarOf: tab => (world.sidecars.get(tab) as unknown as SidecarLike | undefined) ?? null,
 		tabFacts: tab =>
@@ -290,7 +312,6 @@ export function build(
 			world.onSpawn?.();
 			return { tabId };
 		},
-		prefs: { get: key => over.prefs?.[key] },
 		notify: (_tab, notice) => {
 			notices.push(notice);
 		},
@@ -298,32 +319,21 @@ export function build(
 		runEnded: root => {
 			endedRoots.push(root);
 		},
-		ghRun: async () => releaseState,
+		ghRun: async () => {
+			ghRuns++;
+			return releaseState;
+		},
 		prCreate: async () => ({ url: "https://github.com/o/r/pull/1", number: 1 }),
 		relaunchContinuation: () => over.relaunch ?? "now",
-		now: () => clock.value,
 		today: () => "2026-10-17",
-		after: run => {
-			afters.push(run);
-			return () => undefined;
-		},
-		setTimer: run => {
-			const entry = { run, stopped: false };
-			polls.push(entry);
-			return () => {
-				entry.stopped = true;
-			};
-		},
-		detectRelease: over.realDetect
-			? detectReleaseProcedure
-			: async () => (over.releaseProcedure ? { file: "AGENTS.md", anchors: ["Release"] } : null),
+		tuning: { ...TUNING, ...over.tuning },
 		log: () => undefined,
 		runLog: (message, details) => {
 			runLogs.push({ message, details });
 		},
 		...(over.probeRepo ? { probeRepo: over.probeRepo } : {}),
 	});
-	autopilot.attachControl({ childrenOf: () => [], clearQueue: async () => undefined });
+	autopilot.attachControl({ clearQueue: async () => undefined });
 }
 
 export async function start(
@@ -381,14 +391,14 @@ export function installAutopilotRig(): void {
 		notices = [];
 		endedRoots = [];
 		runLogs = [];
-		polls = [];
-		afters = [];
 		releaseState = null;
+		ghRuns = 0;
 		nextTab = 0;
 		build();
 	});
 
 	afterEach(async () => {
+		autopilot.dispose();
 		// A ship's git child can still hold the folder for a moment on Windows (EBUSY).
 		await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 	});

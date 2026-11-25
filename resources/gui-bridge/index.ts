@@ -17,6 +17,7 @@
  */
 import * as fs from "node:fs";
 import * as net from "node:net";
+import { isMainThread } from "node:worker_threads";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { ALL_FEATURES, type AreaFailure, type FeatureId, mergeAreaFailures, UnsupportedOmpError } from "./capabilities";
 import { probe } from "./health";
@@ -38,38 +39,158 @@ const AREAS: readonly Area[] = [
 	// First: its `before_agent_start` hook (it waits for the engine's startup check) must run before the sections hook
 	// the first `registerPromptSection` caller adds, so a first turn's prompt is built after the check settled.
 	{ name: "modes/computer-use", features: ["computerUse"], load: () => import("./modes/computer-use") },
-	{ name: "composer", features: ["composer", "share"], load: () => import("./composer") },
-	{ name: "sessions", features: ["sessionTree"], load: () => import("./sessions") },
+	{
+		name: "composer",
+		features: [
+			"composerState",
+			"ultrafast",
+			"pythonEval",
+			"abortCompaction",
+			"bashExcluded",
+			"clearContext",
+			"forceTool",
+			"prewalk",
+			"toolExtras",
+			"contextReport",
+			"jobs",
+			"cancelJob",
+			"cycleModelBackward",
+			"relaunchResume",
+			"skillCount",
+			"dequeue",
+			"share",
+			"copyTargets",
+			"lastLink",
+		],
+		load: () => import("./composer"),
+	},
+	{
+		name: "sessions",
+		features: ["transcript", "entryIds", "sessionTree", "entryLabel", "switchLeaf", "forkFrom", "sessionPins"],
+		load: () => import("./sessions"),
+	},
 	{
 		name: "session-extras",
-		features: ["sessionImport", "composer", "usage"],
+		features: ["sessionImport", "usageHistory", "localPaste", "localLinks", "argCompletions"],
 		load: () => import("./session-extras"),
 	},
-	{ name: "workspace", features: ["workspace"], load: () => import("./workspace") },
+	{
+		name: "workspace",
+		features: ["workspace", "resolvePath", "workspaceEdit"],
+		load: () => import("./workspace"),
+	},
 	{
 		name: "settings",
-		features: ["settings", "models", "providers", "usage", "modelRoles"],
+		features: [
+			"settingsSchema",
+			"settings",
+			"imageGeneration",
+			"models",
+			"providers",
+			"providerLogout",
+			"providerAccounts",
+			"usage",
+			"modelRoles",
+			"modelRoleMetadata",
+			"modelRoleSet",
+		],
 		load: () => import("./settings"),
 	},
-	{ name: "model-setup-facts", features: ["modelSetupFacts"], load: () => import("./model-setup-facts") },
-	{ name: "ompdesk-roles", features: ["modelRoles"], load: () => import("./ompdesk-roles") },
-	{ name: "voice", features: ["voice"], load: () => import("./voice") },
+	{
+		name: "model-setup-facts",
+		features: ["modelSetupFacts", "sessionSpend"],
+		load: () => import("./model-setup-facts"),
+	},
+	{ name: "ompdesk-roles", features: ["ompdeskRoles"], load: () => import("./ompdesk-roles") },
+	{ name: "voice", features: ["dictation", "readAloud"], load: () => import("./voice") },
 	{ name: "debug", features: ["debug"], load: () => import("./debug") },
-	{ name: "security", features: ["security"], load: () => import("./security") },
-	{ name: "ssh", features: ["ssh"], load: () => import("./ssh") },
+	{
+		name: "security",
+		features: ["security", "securityScanDetail", "securityRun", "securityDisposition", "securityValidation"],
+		load: () => import("./security"),
+	},
+	{ name: "ssh", features: ["ssh", "sshManage", "sshTest"], load: () => import("./ssh") },
 	{ name: "reset-passes", features: ["resetPasses"], load: () => import("./reset-passes") },
-	{ name: "extensions/agents", features: ["agents", "themes"], load: () => import("./extensions/agents") },
-	{ name: "extensions/mcp", features: ["mcp"], load: () => import("./extensions/mcp") },
-	{ name: "extensions/plugins", features: ["plugins"], load: () => import("./extensions/plugins") },
-	{ name: "extensions/skills", features: ["skills"], load: () => import("./extensions/skills") },
-	{ name: "extensions/update", features: ["plugins", "mcp"], load: () => import("./extensions/update") },
-	{ name: "modes/plan", features: ["planMode"], load: () => import("./modes/plan") },
-	{ name: "modes/goal", features: ["goalMode"], load: () => import("./modes/goal") },
+	{
+		name: "extensions/agents",
+		features: [
+			"agentValidate",
+			"agents",
+			"agentDefinition",
+			"agentAuthoring",
+			"reviveSubagent",
+			"subagentTranscript",
+			"imageBlob",
+			"themes",
+		],
+		load: () => import("./extensions/agents"),
+	},
+	{
+		name: "extensions/mcp",
+		features: [
+			"mcp",
+			"mcpToggle",
+			"mcpReconnect",
+			"mcpRemove",
+			"mcpAdopt",
+			"mcpAdd",
+			"mcpTest",
+			"mcpReauth",
+			"mcpSync",
+			"mcpReload",
+		],
+		load: () => import("./extensions/mcp"),
+	},
+	{
+		name: "extensions/plugins",
+		features: [
+			"plugins",
+			"marketplaces",
+			"marketplaceEdit",
+			"pluginInstall",
+			"pluginToggle",
+			"pluginThemes",
+			"pluginDetail",
+			"pluginFeatures",
+			"pluginSettings",
+		],
+		load: () => import("./extensions/plugins"),
+	},
+	{
+		name: "extensions/skills",
+		features: [
+			"skills",
+			"skillDetail",
+			"skillToggle",
+			"manageSkill",
+			"hooks",
+			"hookToggle",
+			"contextFiles",
+			"contextFileToggle",
+			"promptTemplates",
+		],
+		load: () => import("./extensions/skills"),
+	},
+	{
+		name: "extensions/update",
+		features: ["pluginReload", "mcpUpdateReconnect"],
+		load: () => import("./extensions/update"),
+	},
+	{ name: "modes/plan", features: ["planMode", "planApproval"], load: () => import("./modes/plan") },
+	{
+		name: "modes/goal",
+		features: ["guidedGoal", "goalReplace", "goalBudget", "goalTimeLimit"],
+		load: () => import("./modes/goal"),
+	},
 	{ name: "modes/reply-language", features: ["replyLanguage"], load: () => import("./modes/reply-language") },
-	{ name: "modes/next-prompt", features: ["nextPrompt"], load: () => import("./modes/next-prompt") },
+	{
+		name: "modes/next-prompt",
+		features: ["nextPrompt", "inlineCompletion"],
+		load: () => import("./modes/next-prompt"),
+	},
 	{ name: "modes/memory-recall", features: ["memoryRecall"], load: () => import("./modes/memory-recall") },
 	{ name: "modes/auto-title", features: ["autoTitle"], load: () => import("./modes/auto-title") },
-	{ name: "modes/auto-mode", features: ["autoMode"], load: () => import("./modes/auto-mode") },
+	{ name: "modes/auto-mode", features: ["autoMode", "autoModeUndo"], load: () => import("./modes/auto-mode") },
 	{ name: "modes/judge-assist", features: ["judgeAssist"], load: () => import("./modes/judge-assist") },
 	{ name: "modes/output-style", features: ["outputStyle"], load: () => import("./modes/output-style") },
 	{ name: "modes/user-profile", features: ["userProfile"], load: () => import("./modes/user-profile") },
@@ -88,21 +209,37 @@ const AREAS: readonly Area[] = [
 	{ name: "modes/bots", features: ["bots"], load: () => import("./modes/bots") },
 	{ name: "modes/scratch", features: ["scratch"], load: () => import("./modes/scratch") },
 	{ name: "modes/check-runs", features: ["checkRuns"], load: () => import("./modes/check-runs") },
+	{ name: "modes/ci-watch", features: ["ciWatch"], load: () => import("./modes/ci-watch") },
 	{ name: "xdev-notice", features: ["xdevNotice", "contextHookIdle"], load: () => import("./xdev-notice") },
 	{ name: "account-rotation", features: ["accountRotation"], load: () => import("./account-rotation") },
 	{ name: "credit-spend", features: ["creditSpend"], load: () => import("./credit-spend") },
 	{ name: "modes/actions", features: ["tan", "omfg", "agentPause"], load: () => import("./modes/actions") },
-	{ name: "compaction-limits", features: ["compactionLimits"], load: () => import("./compaction-limits") },
-	{ name: "idle-compaction", features: ["idleCompaction"], load: () => import("./idle-compaction") },
-	{ name: "session-recap", features: ["sessionRecap", "contextHookIdle"], load: () => import("./session-recap") },
-	{ name: "context-inspect", features: ["contextInspector"], load: () => import("./context-inspect") },
+	{
+		name: "compaction-limits",
+		features: ["compactionPoints", "compactionLimits"],
+		load: () => import("./compaction-limits"),
+	},
+	{
+		name: "idle-maintenance",
+		features: ["idleMaintenance", "contextHookIdle"],
+		load: () => import("./idle-maintenance"),
+	},
+	{
+		name: "context-inspect",
+		features: ["contextInspector", "contextEntry"],
+		load: () => import("./context-inspect"),
+	},
 	{ name: "prompt-origin", features: ["promptOrigin"], load: () => import("./prompt-origin") },
 	{ name: "typed-prompts", features: ["typedPrompts"], load: () => import("./typed-prompts") },
 	{ name: "answer-first", features: ["answerFirst"], load: () => import("./answer-first") },
 	{ name: "recent-models", features: ["recentModels"], load: () => import("./recent-models") },
 	{ name: "model-choice", features: ["modelChoice"], load: () => import("./model-choice") },
 	{ name: "input-history", features: ["inputHistory"], load: () => import("./input-history") },
-	{ name: "worktree-lifecycle", features: ["worktreeLifecycle"], load: () => import("./worktree-lifecycle") },
+	{
+		name: "worktree-lifecycle",
+		features: ["worktreeLocation", "prCheckout", "worktreeLifecycle"],
+		load: () => import("./worktree-lifecycle"),
+	},
 	{ name: "stream-metadata", features: ["streamMetadata"], load: () => import("./stream-metadata") },
 	{ name: "browser-relay", features: ["agentBrowser"], load: () => import("./browser-relay") },
 	{ name: "agent-control", features: ["agentControl"], load: () => import("./agent-control") },
@@ -115,11 +252,14 @@ const AREAS: readonly Area[] = [
 	{ name: "todo-wait", features: ["todoWait"], load: () => import("./todo-wait") },
 	{ name: "todo-stale", features: ["todoStale"], load: () => import("./todo-stale") },
 	{ name: "todo-compact", features: ["todoCompact"], load: () => import("./todo-compact") },
+	{ name: "todo-drift", features: ["todoDrift"], load: () => import("./todo-drift") },
 	{ name: "waste-guards", features: ["wasteGuards"], load: () => import("./waste-guards") },
 	{ name: "quit-journal", features: ["quitJournal"], load: () => import("./quit-journal") },
+	{ name: "kept-jobs", features: ["keptJobs"], load: () => import("./kept-jobs") },
 	{ name: "exit-drain", features: ["exitDrain"], load: () => import("./exit-drain") },
 	{ name: "turn-stages", features: ["turnStages"], load: () => import("./turn-stages") },
 	{ name: "ask-form", features: ["askForm"], load: () => import("./ask-form") },
+	{ name: "image-subscription", features: ["imageSubscription"], load: () => import("./image-subscription") },
 ];
 
 function builtins(failures: readonly AreaFailure[]): BridgeMethods {
@@ -210,6 +350,12 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 		processBind.startLoading?.();
 		const loaded = await processBind.bound;
 		for (const install of loaded?.installs ?? []) install(pi);
+		return;
+	}
+	if (!isMainThread) {
+		// Stock reimports file extensions in its task workers. Install their hooks without replacing the main socket.
+		processBind.bound = loadMethods(pi);
+		await processBind.bound;
 		return;
 	}
 	const first = Promise.withResolvers<LoadedMethods | undefined>();

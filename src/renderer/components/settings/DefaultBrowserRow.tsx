@@ -10,7 +10,6 @@
 import { Globe } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import {
-	type AgentBrowser,
 	type AgentBrowserStatus,
 	CHROMIUM_BROWSER_NAMES,
 	type ChromiumBrowserId,
@@ -19,7 +18,6 @@ import {
 	type DefaultBrowserPref,
 	isDefaultBrowserPref,
 	parseDefaultBrowser,
-	resolveAgentBrowser,
 } from "../../../shared/default-browser";
 import { saveGuiPreference } from "../../lib/display-preferences";
 import { useT } from "../../lib/i18n";
@@ -76,7 +74,7 @@ export function DefaultBrowserRow() {
 		};
 	}, [t, probe]);
 
-	const browserLabel = (resolved: AgentBrowser): string => {
+	const browserLabel = (resolved: AgentBrowserStatus["auto"]): string => {
 		if (resolved.kind === "ego") return t("settings.gui.defaultBrowser.ego");
 		return resolved.kind === "relay" ? resolved.name : t("settings.gui.defaultBrowser.builtin");
 	};
@@ -88,10 +86,8 @@ export function DefaultBrowserRow() {
 		{
 			value: "auto",
 			// What automatic picks on this computer, once known.
-			label: status
-				? t("settings.gui.defaultBrowser.autoResolved", {
-						browser: browserLabel(resolveAgentBrowser("auto", status)),
-					})
+			label: status?.auto
+				? t("settings.gui.defaultBrowser.autoResolved", { browser: browserLabel(status.auto) })
 				: t("settings.gui.defaultBrowser.auto"),
 		},
 		{
@@ -135,6 +131,17 @@ export function DefaultBrowserRow() {
 	let note: ReactNode = null;
 	if (status && pref === "ego" && !status.egoInstalled) {
 		note = <span data-default-browser-missing="true">{t("settings.gui.defaultBrowserMissing")}</span>;
+	} else if (status?.nativeHostBrowsers && picked) {
+		note = (
+			<span className="inline-flex flex-wrap items-center justify-end gap-2">
+				{t("settings.gui.defaultBrowserRelayUnverified", { name: CHROMIUM_BROWSER_NAMES[picked] })}
+				{pickedBrowser && status.nativeHostBrowsers.includes(picked) && (
+					<Button loading={installing} onClick={() => install(picked)} size="sm" variant="secondary">
+						{t("settings.gui.defaultBrowserInstall")}
+					</Button>
+				)}
+			</span>
+		);
 	} else if (status && picked && !pickedBrowser) {
 		note = (
 			<span data-default-browser-missing="true">

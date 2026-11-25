@@ -1,31 +1,24 @@
 /**
- * Settings › Appearance › Theme: System first, then the light themes and the dark themes as cards, each
- * previewing its own surface, text, accent and a line of code; below them the two themes System pairs
- * (the light one for a light OS, the dark one for a dark OS). Every choice applies at once.
+ * Settings › Appearance › Theme: the five sets as cards, each previewing its light and its dark half, and under
+ * them whether the chosen set follows the OS or stays on its light or dark half. Every choice applies at once.
  */
 
-import { Moon, Sun } from "lucide-react";
-import { useEffect, useId, useState } from "react";
-import {
-	DARK_THEME_NAMES,
-	type DarkThemeName,
-	LIGHT_THEME_NAMES,
-	type LightThemeName,
-	type ThemeName,
-} from "../../../shared/theme-names";
+import { SunMoon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { THEME_SETS, type ThemeSet } from "../../../shared/theme-names";
 import { useT } from "../../lib/i18n";
+import type { ThemeMode } from "../../lib/theme";
 import {
-	applyThemeByName,
+	applyThemeSet,
 	getPersistedThemeSelection,
-	getSystemThemePair,
 	resolveTokenColor,
-	setSystemThemePair,
 	THEMES,
 	type ThemeDefinition,
-	type ThemeSelection,
+	type ThemeSetChoice,
+	themeSetChoice,
 } from "../../lib/themes";
 import { useUiStore } from "../../stores/ui";
-import { type ChoiceCard, ChoiceCards, Select } from "../common";
+import { ChoiceCards, SegmentedChoice } from "../common";
 import { SettingsRow } from "./SettingsLayout";
 
 /**
@@ -51,7 +44,7 @@ export function ThemePreview({ theme }: { theme: ThemeDefinition }) {
 					<span className="h-1.5 w-1/4 rounded-(--sc-radius-full)" style={{ background: color("--omp-accent") }} />
 				</span>
 				<span className="h-1 w-2/3 rounded-(--sc-radius-full)" style={{ background: color("--omp-muted") }} />
-				{/* A line of code as syntax-colored runs: they scale with the swatch, so a half-width System preview never cuts text. */}
+				{/* A line of code as syntax-colored runs: they scale with the swatch, so a half-width preview never cuts text. */}
 				<span
 					className="flex h-3 items-center gap-0.5 overflow-hidden rounded-(--sc-radius-sm) px-1"
 					style={{ background: color("--omp-code-bg") }}
@@ -76,143 +69,79 @@ export function ThemePreview({ theme }: { theme: ThemeDefinition }) {
 	);
 }
 
-/** The two themes System pairs, as two selects under the cards. */
-function SystemThemeRows({
-	pair,
-	onChange,
-}: {
-	pair: { light: LightThemeName; dark: DarkThemeName };
-	onChange: () => void;
-}) {
-	const t = useT();
-	const lightId = useId();
-	const darkId = useId();
-	const options = (names: readonly ThemeName[]) =>
-		names.map(name => (
-			<option key={name} value={name}>
-				{t(`themePicker.theme.${name}.label`)}
-			</option>
-		));
+/** A set drawn as its two halves side by side, the light one first. */
+export function ThemeSetPreview({ set }: { set: ThemeSet }) {
 	return (
 		<>
-			<SettingsRow
-				control={
-					<Select
-						id={lightId}
-						onChange={event => {
-							setSystemThemePair({ light: event.target.value as LightThemeName });
-							onChange();
-						}}
-						value={pair.light}
-					>
-						{options(LIGHT_THEME_NAMES)}
-					</Select>
-				}
-				htmlFor={lightId}
-				icon={<Sun />}
-				id="setting-gui-systemLightTheme"
-				label={t("themePicker.systemLight")}
-			/>
-			<SettingsRow
-				control={
-					<Select
-						id={darkId}
-						onChange={event => {
-							setSystemThemePair({ dark: event.target.value as DarkThemeName });
-							onChange();
-						}}
-						value={pair.dark}
-					>
-						{options(DARK_THEME_NAMES)}
-					</Select>
-				}
-				htmlFor={darkId}
-				icon={<Moon />}
-				id="setting-gui-systemDarkTheme"
-				label={t("themePicker.systemDark")}
-			/>
+			<span className="w-1/2 overflow-hidden">
+				<ThemePreview theme={THEMES[set.light]} />
+			</span>
+			<span className="w-1/2 overflow-hidden">
+				<ThemePreview theme={THEMES[set.dark]} />
+			</span>
 		</>
 	);
 }
 
-/** Theme choice: one radio per theme, grouped by scheme; arrow keys move across the groups, a choice applies at once. */
+const MODES: readonly ThemeMode[] = ["system", "light", "dark"];
+
+/** Theme choice: one radio per set, and one of follow the OS, light or dark for the set chosen. A choice applies at once. */
 export function ThemePicker() {
 	const t = useT();
-	const [current, setCurrent] = useState<ThemeSelection | null>(null);
-	const [pair, setPair] = useState(getSystemThemePair);
+	const [choice, setChoice] = useState<ThemeSetChoice | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
 		void getPersistedThemeSelection().then(selection => {
-			if (!cancelled) setCurrent(selection);
+			// A read sent before a click answers with the prefs from before it: the choice wins.
+			if (!cancelled) setChoice(chosen => chosen ?? themeSetChoice(selection));
 		});
 		return () => {
 			cancelled = true;
 		};
 	}, []);
 
-	const choose = (selection: ThemeSelection) => {
-		applyThemeByName(selection);
-		useUiStore.getState().setTheme(selection === "system" ? "system" : THEMES[selection].scheme);
-		setCurrent(selection);
-	};
-
-	// Until the stored choice is read, the store's scheme says whether it is System (no row flashes in or out).
+	// Until the stored choice is read, the store's scheme is the mode (no segment flashes) and the System pair names the set.
 	const uiTheme = useUiStore(state => state.theme);
-	const selected = current ?? (uiTheme === "system" ? "system" : null);
-	const card = (name: ThemeName): ChoiceCard<ThemeSelection> => ({
-		value: name,
-		title: t(`themePicker.theme.${name}.label`),
-		preview: <ThemePreview theme={THEMES[name]} />,
-		tooltip: t(`themePicker.theme.${name}.description`),
-	});
+	const mode = choice?.mode ?? uiTheme;
+	const choose = (next: Partial<ThemeSetChoice>) => {
+		const chosen = { set: choice?.set ?? themeSetChoice("system").set, mode, ...next };
+		applyThemeSet(chosen);
+		useUiStore.getState().setTheme(chosen.mode);
+		setChoice(chosen);
+	};
 
 	return (
 		<>
 			<div className="scroll-mt-4 py-2" data-setting-row="true" id="setting-gui-theme">
 				<ChoiceCards
 					aria-label={t("settings.gui.theme")}
-					gridClassName="settings-theme-grid"
-					groups={[
-						{
-							key: "system",
-							options: [
-								{
-									value: "system",
-									title: t("themePicker.system"),
-									preview: (
-										<>
-											<span className="w-1/2 overflow-hidden">
-												<ThemePreview theme={THEMES[pair.light]} />
-											</span>
-											<span className="w-1/2 overflow-hidden">
-												<ThemePreview theme={THEMES[pair.dark]} />
-											</span>
-										</>
-									),
-									tooltip: t("themePicker.systemDesc"),
-								},
-							],
-						},
-						{
-							key: "light",
-							label: t("themePicker.group.light"),
-							options: LIGHT_THEME_NAMES.map(card),
-							attrs: { "data-theme-group": "light" },
-						},
-						{
-							key: "dark",
-							label: t("themePicker.group.dark"),
-							options: DARK_THEME_NAMES.map(card),
-							attrs: { "data-theme-group": "dark" },
-						},
-					]}
-					onChange={choose}
-					optionAttr="data-theme-option"
-					value={selected}
+					className="settings-theme-grid"
+					onChange={set => choose({ set })}
+					optionAttr="data-theme-set"
+					options={THEME_SETS.map(set => ({
+						value: set.id,
+						title: t(`themePicker.set.${set.id}.label`),
+						preview: <ThemeSetPreview set={set} />,
+						tooltip: t(`themePicker.set.${set.id}.description`),
+					}))}
+					value={choice?.set ?? null}
 				/>
 			</div>
-			{selected === "system" && <SystemThemeRows onChange={() => setPair(getSystemThemePair())} pair={pair} />}
+			<SettingsRow
+				control={
+					<SegmentedChoice
+						aria-label={t("themePicker.mode")}
+						onChange={next => choose({ mode: next })}
+						optionAttr="data-theme-mode"
+						options={MODES.map(value => ({ value, label: t(`themePicker.mode.${value}`) }))}
+						value={mode}
+					/>
+				}
+				icon={<SunMoon />}
+				id="setting-gui-themeMode"
+				label={t("themePicker.mode")}
+			/>
 		</>
 	);
 }

@@ -11,7 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { CheckoutPeers } from "../../resources/gui-bridge/modes/checkout-peers-contracts";
 import { CheckoutLedger } from "../../resources/gui-bridge/modes/checkout-peers-core";
 import { type CheckoutMember, CheckoutPeerCoordinator, readCheckoutClaims, readCheckoutPlace } from "./checkout-peers";
-import { readOriginFacts } from "./local/git/origin";
+import { core } from "./core/process";
 
 let dir: string;
 let main: string;
@@ -78,13 +78,40 @@ function coordinator(
 ) {
 	return new CheckoutPeerCoordinator({
 		members,
-		place: cwd => readCheckoutPlace(cwd, readOriginFacts),
+		place: readCheckoutPlace,
 		hiddenPaths: () => hidden,
 		gitStatus,
 	});
 }
 
 describe("checkout peers", () => {
+	it("uses the physical checkout and common directory through an alias, and finds no checkout for a bare or missing folder", async () => {
+		const alias = path.join(dir, "linked-alias");
+		const bare = path.join(dir, "bare");
+		fs.symlinkSync(linked, alias, process.platform === "win32" ? "junction" : "dir");
+		git(dir, "init", "-q", "--bare", bare);
+		expect(await readCheckoutPlace(alias)).toEqual({ toplevel: linked, commonDir: path.join(main, ".git") });
+		expect(await readCheckoutPlace(bare)).toBeNull();
+		expect(await readCheckoutPlace(path.join(dir, "missing"))).toBeNull();
+	});
+
+	it("exposes report recipients as the bridge is told its peers, including a peer just hidden", async () => {
+		const a = member("a", main);
+		const b = member("b", main);
+		const hidden = new Set<string>();
+		const peers = coordinator(() => [a, b], hidden);
+		const recipients: string[][] = [];
+		const request = a.request;
+		a.request = (method, params, timeout) => {
+			if (method === "checkout_peers_set") recipients.push([...peers.peersOf(a.key)]);
+			return request(method, params, timeout);
+		};
+		await peers.refresh();
+		hidden.add("/sessions/b.jsonl");
+		await peers.refresh();
+		expect(recipients).toEqual([["b"], []]);
+	});
+
 	it("tells sessions in one worktree about each other with their files, and another worktree's as the repository's", async () => {
 		const a = member("a", main, [path.join(main, "src/a.ts")]);
 		const b = member("b", path.join(main, "src"), [path.join(main, "src/b.ts")]);
@@ -545,6 +572,30 @@ describe("checkout peers: what main keeps, asks and waits for", () => {
 		};
 		return fake;
 	}
+
+	it("shows a new pending file through an alias while git is unavailable, without claiming an outside file", async () => {
+		const alias = path.join(dir, "alias-to-src");
+		fs.symlinkSync(path.join(main, "src"), alias, process.platform === "win32" ? "junction" : "dir");
+		const pending = path.join(alias, "not-landed");
+		const outside = path.join(dir, "scratch-file");
+		const writer = scripted("w", main);
+		const peer = scripted("p", main);
+		const peers = coordinator(() => [writer, peer]);
+		await peers.refresh();
+		writer.status = { files: [outside], stamps: [1], pending: [pending] };
+		await peers.refresh();
+		expect(peer.sent.at(-1)?.worktree[0]?.files).toEqual([pending]);
+		expect(writer.retired).toEqual([{ instance: "i1", files: [{ file: outside, stamp: 1 }] }]);
+		writer.status = { files: [pending], stamps: [2] };
+		const unavailable = vi.spyOn(core(), "call").mockRejectedValue(new Error("unanswered core request"));
+		try {
+			await peers.refresh();
+			expect(peer.sent.at(-1)?.worktree[0]?.files).toEqual([pending]);
+			expect(writer.retired).toHaveLength(1);
+		} finally {
+			unavailable.mockRestore();
+		}
+	});
 
 	it("tells every other member of every repository when one omp never answers a send", async () => {
 		let hang = false;

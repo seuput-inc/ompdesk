@@ -35,7 +35,7 @@ import {
 	type TodoPhase,
 } from "../../shared/rpc-types";
 import { messageSourceTimestamp } from "../components/chat/work/work-turn";
-import { compactionActionKey } from "../lib/compaction-action";
+import { compactionActionKey, withCompactionRun } from "../lib/compaction-action";
 import { errorDetail } from "../lib/error-detail";
 import { formatClock } from "../lib/format";
 import { translate } from "../lib/i18n";
@@ -74,6 +74,7 @@ import { toastError, useToastStore } from "../stores/toast";
 import { useTodoStore } from "../stores/todo";
 import { useToolsStore } from "../stores/tools";
 import { useUiStore } from "../stores/ui";
+import { webRuntime } from "../web/runtime";
 
 /**
  * Frames that change nothing a `get_state` or transcript snapshot reports, so
@@ -420,6 +421,10 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 							if (phases) useTodoStore.getState().setPhases(phases);
 							break;
 						}
+						case "todo_drift": {
+							useTodoStore.getState().setDrift(event.state);
+							break;
+						}
 						case "agent_end": {
 							useSessionStore.setState({ isStreaming: false, awaitingModelSince: null });
 							// Releases a todo list this turn finished — the dock card goes away.
@@ -439,12 +444,25 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 							// for the whole compaction window, not just a flag.
 							useSessionStore.setState({
 								isCompacting: true,
-								compactionInfo: { reason: event.reason, action: event.action },
+								compactionInfo: { reason: event.reason, action: event.action, startedAt: Date.now() },
 							});
 							break;
 						}
 						case "auto_compaction_end": {
-							useSessionStore.setState({ isCompacting: false, compactionInfo: null });
+							// Only a pass that ran to its end is a measurement (the card's duration, the row's "last time"):
+							// the outcomes worded below as a result or as completed.
+							const ran =
+								!event.aborted &&
+								!event.skipped &&
+								!event.errorMessage &&
+								(event.result != null || event.action === "shake" || event.action === "handoff");
+							useSessionStore.setState(state => ({
+								isCompacting: false,
+								compactionInfo: null,
+								...(ran
+									? { compactionRuns: withCompactionRun(state.compactionRuns, state.compactionInfo) }
+									: {}),
+							}));
 							if (!event.aborted) {
 								void (tabId && sessionRuntime(tabId) ? hydrateTabSession(tabId) : hydrateSession());
 								bumpVersion = true;
@@ -671,10 +689,22 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 		// tab is called unresponsive only after WEDGE_PROBES failed probes in a row with no frame from it in between.
 		let heartbeat: ReturnType<typeof setInterval> | null = null;
 		const probing = new Set<string>();
+		const linkOpen = () => (webRuntime()?.connectionState() ?? "open") === "open";
+		const missedProbe = (tabId: string, sentAt: number) => {
+			if (!linkOpen()) {
+				missedProbes.delete(tabId);
+				return;
+			}
+			const session = sessionRuntimeStore<SessionStore>(tabId, "session") ?? useSessionStore;
+			if (session.getState().status !== "ready" || (lastEventAt.get(tabId) ?? 0) > sentAt) return;
+			const misses = (missedProbes.get(tabId) ?? 0) + 1;
+			missedProbes.set(tabId, misses);
+			if (misses >= WEDGE_PROBES) session.getState().setSidecarError(translate("events.sidecarNoResponse"));
+		};
 		const startHeartbeat = () => {
 			if (heartbeat) return;
 			heartbeat = setInterval(() => {
-				if (document.visibilityState === "hidden") return;
+				if (document.visibilityState === "hidden" || !linkOpen()) return;
 				const ids = visibleTabIds(useTabsStore.getState());
 				if (ids.length === 0) ids.push("");
 				for (const probeTabId of ids) {
@@ -688,10 +718,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 					const sentAt = performance.now();
 					const missed = () => {
 						if (!current()) return;
-						if ((lastEventAt.get(probeTabId) ?? 0) > sentAt) return;
-						const misses = (missedProbes.get(probeTabId) ?? 0) + 1;
-						missedProbes.set(probeTabId, misses);
-						if (misses >= WEDGE_PROBES) session.getState().setSidecarError(translate("events.sidecarNoResponse"));
+						missedProbe(probeTabId, sentAt);
 					};
 					void command({ type: "get_state", brief: true })
 						.then(res => {
@@ -718,7 +745,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 
 		/** Tabs whose `starting` was a paired host's re-attach (`reconnecting`): the page was kept, and the next `ready` catches up. */
 		const reattaching = new Set<string>();
-		const handleStatus = (payload: IpcSidecarStatusPayload, statusTabId: string) => {
+		const handleStatus = (payload: IpcSidecarStatusPayload, statusTabId: string, boot = false) => {
 			if (disposed || !openTabFrame(statusTabId)) return;
 			statusVersion++;
 			const isFocused = () => useTabsStore.getState().activeTabId === statusTabId;
@@ -727,9 +754,12 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 			if (payload.status === "starting" && !payload.slow && !payload.queued) {
 				retryPendingTabs.delete(statusTabId);
 				// A paired host may still run the omp the page shows: transcript, cards and state stay on screen, and
-				// its `ready` reads only what was missed. A plain `starting` (any new omp) clears them.
+				// its `ready` reads only what was missed. A plain `starting` (any new omp) clears them, except in the window's
+				// boot read: it finds the stores as this page painted them (a restored tab's or a ghost's seeded rows, while
+				// main answers for its real tab), nothing of an earlier omp, and clearing them put the transcript skeleton
+				// in for the frames before the tab list adopted the ghost.
 				if (payload.reconnecting && statusTabId !== "") reattaching.add(statusTabId);
-				else {
+				else if (!boot) {
 					reattaching.delete(statusTabId);
 					withSessionRuntime(statusTabId, () => {
 						useMessagesStore.getState().reset();
@@ -772,6 +802,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 					const isCurrent = () =>
 						!disposed &&
 						(runtime ? sessionRuntime(statusTabId) === runtime : focusedSessionRuntime() === focusedAtStart);
+					const sentAt = performance.now();
 					try {
 						// A window opened "in new window" for a specific session
 						// switches to it BEFORE hydrating, so the first transcript
@@ -784,10 +815,9 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						const res = await command({ type: "get_state", brief: true });
 						if (!isCurrent()) return;
 						if (!res.success) {
-							withSessionRuntime(statusTabId, () =>
-								useSessionStore.getState().setSidecarError(translate("events.sidecarNoResponse")),
-							);
+							missedProbe(statusTabId, sentAt);
 						} else {
+							missedProbes.delete(statusTabId);
 							withSessionRuntime(statusTabId, () => useSessionStore.getState().clearSidecarError());
 							if (runtime) {
 								// A pending open just switched sessions: never join a fetch started before it.
@@ -812,16 +842,14 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						}
 					} catch {
 						if (!isCurrent()) return;
-						withSessionRuntime(statusTabId, () =>
-							useSessionStore.getState().setSidecarError(translate("events.sidecarHealthFailed")),
-						);
+						missedProbe(statusTabId, sentAt);
 					}
 				})();
 			}
 			// A failure's reason reaches the banner with the tab's listing (`applyTabFailure` in stores/tabs.ts), shown or not.
 		};
 
-		const unsubStatus = window.omp.events.onTabSidecarStatus(handleStatus);
+		const unsubStatus = window.omp.events.onTabSidecarStatus((payload, tabId) => handleStatus(payload, tabId));
 		const snapshotTabId = focusedTabId();
 		const snapshotRuntime = sessionRuntime(snapshotTabId);
 		const snapshotVersion = statusVersion;
@@ -837,7 +865,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 					sessionRuntime(snapshotTabId) !== snapshotRuntime
 				)
 					return;
-				handleStatus(status, snapshotTabId);
+				handleStatus(status, snapshotTabId, true);
 			})
 			.catch(() => {
 				// Status pushes and GET_TABS remain authoritative when this read fails.
@@ -914,6 +942,8 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						sessionName: frame.title === undefined ? state.sessionName : frame.title,
 						autoTitle,
 						sessionId: frame.sessionId ?? state.sessionId,
+						// get_state reports the name: a snapshot taken before this frame must not put the old one back.
+						eventVersion: state.eventVersion + 1,
 					};
 				});
 			});

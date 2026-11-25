@@ -20,6 +20,7 @@ import baiducloud from "../../../assets/provider-marks/baiducloud.svg?raw";
 import baseten from "../../../assets/provider-marks/baseten.svg?raw";
 import bedrock from "../../../assets/provider-marks/bedrock.svg?raw";
 import cerebras from "../../../assets/provider-marks/cerebras.svg?raw";
+import chutes from "../../../assets/provider-marks/chutes.svg?raw";
 import cline from "../../../assets/provider-marks/cline.svg?raw";
 import cloudflare from "../../../assets/provider-marks/cloudflare.svg?raw";
 import commandcode from "../../../assets/provider-marks/commandcode.svg?raw";
@@ -38,6 +39,7 @@ import inception from "../../../assets/provider-marks/inception.svg?raw";
 import kagi from "../../../assets/provider-marks/kagi.svg?raw";
 import kilocode from "../../../assets/provider-marks/kilocode.svg?raw";
 import kimi from "../../../assets/provider-marks/kimi.svg?raw";
+import kiro from "../../../assets/provider-marks/kiro.svg?raw";
 import liquid from "../../../assets/provider-marks/liquid.svg?raw";
 import lmstudio from "../../../assets/provider-marks/lmstudio.svg?raw";
 import meta from "../../../assets/provider-marks/meta.svg?raw";
@@ -80,6 +82,7 @@ export const MARK_SOURCES = {
 	baseten,
 	bedrock,
 	cerebras,
+	chutes,
 	cline,
 	cloudflare,
 	commandcode,
@@ -98,6 +101,7 @@ export const MARK_SOURCES = {
 	kagi,
 	kilocode,
 	kimi,
+	kiro,
 	liquid,
 	lmstudio,
 	meta,
@@ -144,6 +148,7 @@ export const PROVIDER_BRANDS: Readonly<Record<string, Brand>> = {
 	"alibaba-coding-plan": brand("alibabacloud", "Alibaba"),
 	"alibaba-token-plan": brand("alibabacloud", "Alibaba"),
 	"amazon-bedrock": brand("bedrock", "Amazon"),
+	"antigravity-cli": brand("antigravity", "Google"),
 	"bedrock-mantle": brand("bedrock", "Amazon"),
 	"cline-pass": brand("cline", "Cline"),
 	"cloudflare-ai-gateway": brand("cloudflare", "Cloudflare"),
@@ -177,6 +182,7 @@ export const PROVIDER_BRANDS: Readonly<Record<string, Brand>> = {
 	azure: brand("azure", "Microsoft"),
 	baseten: brand("baseten", "Baseten"),
 	cerebras: brand("cerebras", "Cerebras"),
+	chutes: brand("chutes", "Chutes"),
 	commandcode: brand("commandcode", "Command Code"),
 	cursor: brand("cursor", "Cursor"),
 	deepinfra: brand("deepinfra", "DeepInfra"),
@@ -193,6 +199,7 @@ export const PROVIDER_BRANDS: Readonly<Record<string, Brand>> = {
 	inception: brand("inception", "Inception"),
 	kagi: brand("kagi", "Kagi"),
 	kilo: brand("kilocode", "Kilo Code"),
+	kiro: brand("kiro", "Amazon"),
 	liquid: brand("liquid", "Liquid AI"),
 	meta: brand("meta", "Meta"),
 	minimax: brand("minimax", "MiniMax"),
@@ -228,6 +235,7 @@ export const FALLBACK_PROVIDER_IDS: readonly string[] = [
 	"abliteration",
 	"aiand",
 	"aimlapi",
+	"bifrost",
 	"charm-hyper",
 	"coralbricks",
 	"coreweave",
@@ -238,6 +246,7 @@ export const FALLBACK_PROVIDER_IDS: readonly string[] = [
 	"litellm",
 	"llama.cpp",
 	"local",
+	"modal",
 	"modular",
 	"muse-code",
 	"nace",

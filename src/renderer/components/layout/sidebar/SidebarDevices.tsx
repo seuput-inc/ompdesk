@@ -16,19 +16,19 @@ import {
 	Folder,
 	FolderOpen,
 	FolderPlus,
-	MessageCircle,
 	Monitor,
 	MoreHorizontal,
 	Pin,
 	Plus,
 	Settings2,
 } from "lucide-react";
-import { Fragment, type ReactNode, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { reviewUnmerged } from "../../../../shared/agent-control";
 import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionKind } from "../../../../shared/ipc-types";
 import { unsavedSessionKey } from "../../../../shared/session-summary";
+import type { SidebarLayoutChange } from "../../../../shared/sidebar-projects";
 import {
 	CHATS_ORDER_KEY,
 	familyRows,
@@ -45,7 +45,7 @@ import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { basename, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
-import { hostOrderKey, moveInOrder, reorderProjects } from "../../../lib/project-order";
+import { moveInOrder, reorderProjects } from "../../../lib/project-order";
 import {
 	combinedTitle,
 	sessionDisplayLabel,
@@ -63,9 +63,9 @@ import { pickRemoteDirectory } from "../../../stores/remote";
 import type { SessionStore } from "../../../stores/session";
 import { sessionListFeed } from "../../../stores/session-list";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
+import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
-import { useSidebarPrefs } from "../../../stores/sidebar-prefs";
-import { useProjectList } from "../../../stores/sidebar-projects";
+import { useProjectList, useSidebarProjects } from "../../../stores/sidebar-projects";
 import { useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { type SessionTab, tabChipLabel, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
@@ -106,7 +106,8 @@ import { SidebarRenameField } from "./SidebarRenameField";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
-import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
+import { canDropOn, canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
+import { headWords, resolveRowTarget, SessionRowArtwork, SessionRowEnd, SessionRowLine } from "./session-row-target";
 import { CHILD_TOKEN, hasFamilyChip, openedChildStatus, reviewKey } from "./sidebar-family";
 import { useHeld } from "./sidebar-hold";
 import { useSidebarListMotion } from "./use-sidebar-list-motion";
@@ -115,6 +116,7 @@ import { useSidebarListMotion } from "./use-sidebar-list-motion";
 type DeviceSession = RowSession;
 
 const NO_PATHS: ReadonlySet<string> = new Set();
+const NO_KEYS: readonly string[] = [];
 
 interface RemoteOpenArgs {
 	cwd: string;
@@ -390,7 +392,7 @@ export function SidebarDeviceSection({
 						onNewChat={() => onNewChat(host.deviceId)}
 						onOpen={openRemote}
 						query={query}
-						read={online}
+						read={online && !pending}
 					/>
 				) : host.state === "connecting" ? (
 					<p className="flex items-center gap-2 px-2.5 py-1.5 text-sc-xs text-(--sc-text-muted)">
@@ -453,29 +455,27 @@ function DeviceSessions({
 	const split = useTabsStore(state => state.split);
 	const splitIds = useMemo(() => (split ? new Set(splitTabIds(split)) : null), [split]);
 	const deviceGroupFolds = useSidebarFolds(s => s.deviceGroups);
-	// The order the person set for this host's projects and each of its lists, kept with this computer's own.
-	const groupOrder = useSidebarPrefs(s => s.groupOrder);
-	const sessionOrder = useSidebarPrefs(s => s.sessionOrder);
-	// This host's pins and archive, kept in this computer's prefs under the host's id (`hostOrderKey`) beside the
-	// order, so this computer's own pins and archive never move with it. The local pin's omp resume-list sync does
-	// not apply to a host.
-	const pinnedSessions = useSidebarPrefs(s => s.pinnedSessions);
-	const archivedSessions = useSidebarPrefs(s => s.archivedSessions);
-	const prefix = hostOrderKey(host.deviceId, "");
-	const hostPins = useMemo(
-		() => pinnedSessions.filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)),
-		[pinnedSessions, prefix],
-	);
-	const hostArchived = useMemo(
-		() => new Set(archivedSessions.filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length))),
-		[archivedSessions, prefix],
-	);
 	const deviceTabs = useMemo(() => allTabs.filter(tab => tab.device === host.deviceId), [allTabs, host.deviceId]);
 	// The host's own rule (Sidebar.tsx): a session in its no-project workspace (`~/.omp/work`, where a session opened
 	// there without a folder starts) is one of its chats, so it is here too.
 	const hostWorkspace = useHostWorkspace(host.deviceId, read);
 	// The host's own project list: its empty projects show here too, and one removed there (or here) is gone from both.
 	const projectList = useProjectList(host.deviceId, read);
+	const layout = projectList.layout;
+	const liveLayout = useSidebarProjects(s => s.liveLayouts[host.deviceId]);
+	const editable = read && layout !== undefined && layout === liveLayout;
+	const hostPins = layout?.pinnedSessions ?? NO_KEYS;
+	const hostArchived = useMemo(() => new Set(layout?.archivedSessions), [layout?.archivedSessions]);
+	const changeLayout = async (change: SidebarLayoutChange): Promise<boolean> => {
+		try {
+			if (!editable) return false;
+			await useSidebarProjects.getState().changeLayout(host.deviceId, layout, change);
+			return true;
+		} catch (error) {
+			toastError({ title: t("settings.saveFailed"), error });
+			return false;
+		}
+	};
 
 	// Stand-ins for the tabs the host's windows hold on paired devices that its sessions opened (`host.remoteOpened`).
 	const remoteTabs = useMemo(() => (host.remoteOpened ?? []).map(remoteOpenedTab), [host.remoteOpened]);
@@ -532,12 +532,11 @@ function DeviceSessions({
 				},
 				archived: hostArchived,
 				nested: NO_PATHS,
-				// Kept in this computer's prefs under the host's id, so this computer's own lists never move with it.
 				order: {
 					pinnedSessions: hostPins,
-					pinnedGroups: [],
-					groupOrder: groupOrder.filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)),
-					sessionOrder: list => sessionOrder[hostOrderKey(host.deviceId, list)],
+					pinnedGroups: layout?.pinnedGroups ?? NO_KEYS,
+					groupOrder: layout?.groupOrder ?? NO_KEYS,
+					sessionOrder: list => layout?.sessionOrder[list],
 				},
 				query,
 				nameOf: cwd => basename(cwd) || cwd,
@@ -549,21 +548,28 @@ function DeviceSessions({
 		deviceTabs,
 		remoteTabs,
 		hostSummaries,
-		host.deviceId,
 		projectList,
 		hostWorkspace,
-		groupOrder,
-		sessionOrder,
+		layout,
 		hostPins,
 		hostArchived,
-		prefix,
 		query,
 	]);
+	// What each of the host's sessions works in (picture, branch), asked of the host, as this computer's rows ask it.
+	const sessionTargets = useSessionTargets();
+	useEffect(() => {
+		ensureSessionTargetsOnFocus();
+		const rows = new Map<string, { sessionPath: string; cwd: string; stamp?: string }>();
+		for (const tab of deviceTabs)
+			if (tab.sessionPath && tab.kind !== "chat")
+				rows.set(tab.sessionPath, { sessionPath: tab.sessionPath, cwd: tab.cwd });
+		for (const session of sessions)
+			if (session.kind !== "chat")
+				rows.set(session.path, { sessionPath: session.path, cwd: session.cwd, stamp: session.modified });
+		requestSessionTargets(host.deviceId, [...rows.values()]);
+	}, [sessions, deviceTabs, host.deviceId]);
 	// While the pointer is on the sidebar the host's rows keep their places (`sidebar-hold.ts`), as this computer's do.
-	const ownOrder = useMemo(
-		() => JSON.stringify([groupOrder, sessionOrder, hostPins, [...hostArchived], query]),
-		[groupOrder, sessionOrder, hostPins, hostArchived, query],
-	);
+	const ownOrder = useMemo(() => JSON.stringify([layout, query]), [layout, query]);
 	const rows = useHeld(tree.rows, holdRows, ownOrder);
 	const { chats, groups, children: familyChildrenOf, archived: archivedRows, folderMissing: missingFolders } = rows;
 	// The host's tabs on paired devices its sessions opened, by the row they nest under.
@@ -584,62 +590,44 @@ function DeviceSessions({
 		query.length > 0,
 	);
 
-	/** Moves a project of this host up or down; the other projects of every device keep their order. */
-	const saveGroupOrder = (next: readonly string[]) => {
-		const others = useSidebarPrefs.getState().groupOrder.filter(key => !key.startsWith(prefix));
-		void useSidebarPrefs
-			.getState()
-			.setGroupOrder([...others, ...next.map(item => hostOrderKey(host.deviceId, item))]);
-	};
-	const moveGroup = (cwd: string, delta: number) => {
-		const next = moveInOrder(
-			groups.map(group => group.cwd),
-			cwd,
-			delta,
-		);
-		if (next) saveGroupOrder(next);
+	const projectPaths = groups.map(group => group.cwd);
+	const projectListOrder = { paths: projectPaths, pinned: layout?.pinnedGroups ?? NO_KEYS };
+	const moveGroup = (cwd: string, delta: -1 | 1) => {
+		const next = canMoveWithin(projectListOrder, cwd, delta) && moveInOrder(projectPaths, cwd, delta);
+		if (next) void changeLayout({ op: "set-group-order", order: next });
 	};
 	// Dragging a project header moves it, as on this computer's own list (a 6 px move arms it, so a click still folds).
 	const groupSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 	const onGroupDragEnd = ({ active, over }: DragEndEvent) => {
-		if (!over || active.id === over.id) return;
+		if (!editable || query || !over || !canDropOn(projectListOrder, String(active.id), String(over.id))) return;
 		groupDropped();
-		saveGroupOrder(
-			reorderProjects(
-				groups.map(group => group.cwd),
-				String(active.id),
-				String(over.id),
-			),
-		);
+		void changeLayout({
+			op: "set-group-order",
+			order: reorderProjects(projectPaths, String(active.id), String(over.id)),
+		});
 	};
 	/** The list a session row sits in (its project, or the Chats section) and that list's visible order. */
 	const listOf = (session: DeviceSession): SessionList | null => {
 		// A filtered list shows only some rows: a move there would forget where the hidden ones were.
-		if (query || session.liveTabId !== undefined) return null;
+		if (!editable || query || session.liveTabId !== undefined) return null;
 		// A row the host has no file for yet (a new tab's) has no place to keep.
 		const stored = (list: readonly DeviceSession[]) =>
-			list.filter(row => row.liveTabId === undefined).map(row => row.path);
+			list.filter(row => row.liveTabId === undefined && !row.departed).map(row => row.path);
 		if (chats.some(item => item.path === session.path))
 			return { key: CHATS_ORDER_KEY, paths: stored(chats), pinned: hostPins };
 		const group = groups.find(item => item.sessions.some(row => row.path === session.path));
 		return group ? { key: group.cwd, paths: stored(group.sessions), pinned: hostPins } : null;
 	};
-	// Kept in this computer's prefs under the host's id, so this computer's own lists never move with it.
 	const reorder = useSessionReorder({
 		titleOf: path => {
 			const found = tree.rows.sessions.find(session => session.path === path);
 			return found ? sessionDisplayLabel(found, "") : "";
 		},
-		save: (list, next) =>
-			void useSidebarPrefs.getState().setSessionOrder(hostOrderKey(host.deviceId, list.key), [...next]),
+		save: (list, order, path, over) =>
+			changeLayout({ op: "set-session-order", list: list.key, order, move: { path, over } }),
 	});
-	const moveSession = (session: DeviceSession, delta: -1 | 1): boolean => {
-		const list = listOf(session);
-		const next = canMoveWithin(list, session.path, delta) && list && moveInOrder(list.paths, session.path, delta);
-		if (!list || !next) return false;
-		reorder.move(list, session.path, next, sessionDisplayLabel(session, ""));
-		return true;
-	};
+	const moveSession = (session: DeviceSession, delta: -1 | 1) =>
+		reorder.moveBy(listOf(session), session.path, delta, sessionDisplayLabel(session, ""));
 
 	// A window viewing an opener here hears main's review list of what its agent opened (Sidebar.tsx): the child's
 	// verdict by its one identity, this host and its session file (`reviewKey`), whatever tab here holds it.
@@ -863,14 +851,7 @@ function DeviceSessions({
 	const moveStoredSession = async (session: DeviceSession, target: string) => {
 		setMoveMenu(null);
 		try {
-			const movedPath = await window.omp.sessions.move(session.path, target, host.deviceId);
-			// Pins are kept by file path, which the move changed.
-			const prefs = useSidebarPrefs.getState();
-			const pinKey = hostOrderKey(host.deviceId, session.path);
-			if (movedPath !== session.path && prefs.pinnedSessions.includes(pinKey)) {
-				await prefs.toggleSessionPin(pinKey);
-				await prefs.toggleSessionPin(hostOrderKey(host.deviceId, movedPath));
-			}
+			await window.omp.sessions.move(session.path, target, host.deviceId);
 			toast({ variant: "success", message: t("sidebar.moved", { name: basename(target) || target }) });
 			refresh();
 		} catch (error) {
@@ -935,8 +916,14 @@ function DeviceSessions({
 						}
 					: {}),
 				rename: () => startRename(session),
-				togglePin: () =>
-					void useSidebarPrefs.getState().toggleSessionPin(hostOrderKey(host.deviceId, session.path)),
+				togglePin: editable
+					? () =>
+							void changeLayout({
+								op: "set-session-pinned",
+								path: session.path,
+								pinned: !hostPins.includes(session.path),
+							})
+					: undefined,
 				...(list
 					? {
 							moveUp: () => void moveSession(session, -1),
@@ -944,10 +931,14 @@ function DeviceSessions({
 						}
 					: {}),
 				moveToProject: () => setMoveMenu({ session, ...menuAnchor.current }),
-				toggleArchive: () =>
-					void useSidebarPrefs
-						.getState()
-						.setSessionsArchived([hostOrderKey(host.deviceId, session.id)], !hostArchived.has(session.id)),
+				toggleArchive: editable
+					? () =>
+							void changeLayout({
+								op: "set-sessions-archived",
+								ids: [session.id],
+								archived: !hostArchived.has(session.id),
+							})
+					: undefined,
 				saveBundle: anonymized => {
 					if (tab)
 						void saveDiagnosticBundle({ tabId: tab.id, title: sessionDisplayTitle(session, "") }, anonymized);
@@ -1039,10 +1030,18 @@ function DeviceSessions({
 				</div>
 			);
 		}
-		// No leading slot (the local rows' rule, Sidebar.tsx): the title starts at the group's content edge, a chat's
-		// glyph sits at the end before the age, and a tab open elsewhere is said in words only.
+		// The same two lines as this computer's rows (Sidebar.tsx): the picture of the repository the host says it
+		// works in, the title, then the state, branch, family count and the one ⋯; a tab open elsewhere is said in
+		// words only.
 		const openElsewhere = tab !== undefined && !current && !inVisibleSplit;
-		const chat = session.kind === "chat" ? <MessageCircle aria-hidden className="size-(--sc-icon-sm)" /> : null;
+		const target =
+			session.kind === "chat"
+				? null
+				: resolveRowTarget(sessionTargets, host.deviceId, session.path, {
+						name: basename(projectList.worktrees[session.cwd] ?? session.cwd) || session.cwd,
+						artwork: null,
+						head: null,
+					});
 		// Its family, as a local row's (Sidebar.tsx): the tab's subagents and the sessions its agent opened. The ones
 		// running light the row as on the host, though no tab here holds it.
 		const opened = openedOf(session);
@@ -1059,30 +1058,14 @@ function DeviceSessions({
 		);
 		const list = listOf(session);
 		const pinned = hostPins.includes(session.path);
-		const marker = chat ?? (pinned ? <Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" /> : null);
+		const marker = pinned ? <Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" /> : null;
 		const family = tab !== undefined || opened.length > 0 || (summary?.agents.length ?? 0) > 0;
 		// Its own key: two hosts may keep a session at the same path, and this computer's prune never sees host rows.
 		const familyKey = `device:${host.deviceId}:${session.path}`;
 		return (
 			<Fragment key={session.path}>
 				<ListRow
-					// One ⋯ on every input, so the title keeps its width; at rest under touch, on hover or focus elsewhere.
-					actions={
-						<IconButton
-							data-sidebar-row-menu
-							icon={<MoreHorizontal />}
-							label={t("sidebar.sessionMenu")}
-							onClick={event => {
-								const rect = event.currentTarget.getBoundingClientRect();
-								setRowMenu({ x: rect.left, y: rect.bottom + 4, items: menuFor(session), label: title });
-							}}
-							size="sm"
-							tabIndex={-1}
-						/>
-					}
-					actionCount={1}
-					actionsAtRest={touchInput}
-					actionsOnHover={!touchInput}
+					leading={<SessionRowArtwork target={target} />}
 					buttonProps={{
 						tabIndex: -1,
 						"data-roving-item": `device-session:${host.deviceId}:${session.path}`,
@@ -1102,14 +1085,40 @@ function DeviceSessions({
 					}}
 					className="omp-sidebar-session-row"
 					key={session.path}
-					meta={
-						folderMissing || marker || age ? (
-							<span className="inline-flex min-w-0 items-center gap-1.5">
-								{folderMissing && <SidebarFolderMissingMark />}
-								{marker}
-								{folderMissing ? null : age}
-							</span>
-						) : undefined
+					secondary={
+						<SessionRowLine
+							age={folderMissing ? null : age}
+							head={target?.head ?? null}
+							marks={
+								<>
+									{folderMissing && <SidebarFolderMissingMark />}
+									{marker}
+								</>
+							}
+						/>
+					}
+					secondaryEnd={
+						<SessionRowEnd>
+							{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(familyKey)) && (
+								<SidebarSubagentsToggle
+									agents={summary?.agents}
+									opened={opened}
+									sessionKey={familyKey}
+									tabId={tab?.id ?? null}
+								/>
+							)}
+							<IconButton
+								data-sidebar-row-menu
+								icon={<MoreHorizontal />}
+								label={t("sidebar.sessionMenu")}
+								onClick={event => {
+									const rect = event.currentTarget.getBoundingClientRect();
+									setRowMenu({ x: rect.left, y: rect.bottom + 4, items: menuFor(session), label: title });
+								}}
+								size="sm"
+								tabIndex={-1}
+							/>
+						</SessionRowEnd>
 					}
 					onClick={() => openSession(session)}
 					rowProps={{
@@ -1144,24 +1153,15 @@ function DeviceSessions({
 					}
 					titleText={[
 						title,
+						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
+						target?.head ? headWords(t, target.head).tip : null,
 						openElsewhere && !working ? t("sidebar.row.open") : null,
 						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 						reason ?? null,
-						// The age slot reads "3w"; the exact time is here, since hovering puts the ⋯ in the age's place.
 						indexed ? formatClock(session.modified) : null,
 					]
 						.filter(Boolean)
 						.join("\n")}
-					trailing={
-						hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(familyKey)) ? (
-							<SidebarSubagentsToggle
-								agents={summary?.agents}
-								opened={opened}
-								sessionKey={familyKey}
-								tabId={tab?.id ?? null}
-							/>
-						) : undefined
-					}
 				/>
 				{family && (
 					<SidebarSubagents
@@ -1288,21 +1288,36 @@ function DeviceSessions({
 			{reorder.status}
 			{dialog}
 			<DndContext collisionDetection={closestCenter} onDragEnd={onGroupDragEnd} sensors={groupSensors}>
-				<SortableContext items={groups.map(group => group.cwd)} strategy={verticalListSortingStrategy}>
+				<SortableContext items={projectPaths} strategy={verticalListSortingStrategy}>
 					{groups.map(group => {
 						const groupCollapsed = !query && deviceGroupFolds[deviceGroupKey(host.deviceId, group.cwd)] === true;
 						const FolderIcon = groupCollapsed ? Folder : FolderOpen;
 						const name = basename(group.cwd) || group.cwd;
-						const groupIndex = query ? -1 : groups.indexOf(group);
+						const pinned = layout?.pinnedGroups.includes(group.cwd) === true;
+						const archivable = group.sessions.filter(
+							row => !row.departed && isStoredRow(row) && !rows.held.has(row.path),
+						);
 						const groupItems = projectMenuItems({
 							facts: {
-								pinned: false,
-								canMoveUp: groupIndex > 0,
-								canMoveDown: groupIndex !== -1 && groupIndex < groups.length - 1,
-								archivable: 0,
+								pinned,
+								canMoveUp: canMoveWithin(projectListOrder, group.cwd, -1),
+								canMoveDown: canMoveWithin(projectListOrder, group.cwd, 1),
+								archivable: archivable.length,
 							},
 							actions: {
-								...(groupIndex === -1
+								...(editable
+									? {
+											togglePin: () =>
+												void changeLayout({ op: "set-group-pinned", cwd: group.cwd, pinned: !pinned }),
+											archiveAll: () =>
+												void changeLayout({
+													op: "set-sessions-archived",
+													ids: archivable.map(row => row.id),
+													archived: true,
+												}),
+										}
+									: {}),
+								...(!editable || query
 									? {}
 									: { moveUp: () => moveGroup(group.cwd, -1), moveDown: () => moveGroup(group.cwd, 1) }),
 								remove: () => setPendingProject(group),
@@ -1310,11 +1325,16 @@ function DeviceSessions({
 							t,
 						});
 						return (
-							<SortableProject className="" disabled={query.length > 0} id={group.cwd} key={group.cwd}>
+							<SortableProject
+								className=""
+								disabled={!editable || query.length > 0}
+								id={group.cwd}
+								key={group.cwd}
+							>
 								{dragHandle => (
 									<div data-device-group={group.cwd} data-project-missing={group.missing ? "" : undefined}>
 										<div
-											className="group/head flex h-7 [html[data-input=touch]_&]:h-8 items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+											className="omp-sidebar-head group/head flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 											data-flip-key={`group:${group.cwd}`}
 											onContextMenu={event =>
 												setRowMenu({ ...anchorFromEvent(event), items: groupItems, label: name })
@@ -1335,6 +1355,13 @@ function DeviceSessions({
 												icon={<FolderIcon aria-hidden className="size-(--sc-icon-sm) shrink-0" />}
 											>
 												<span className="min-w-0 flex-1 truncate">{name}</span>
+												{pinned && (
+													<Pin
+														aria-label={t("sidebar.pinned")}
+														className="size-3 shrink-0 text-(--sc-text-subtle)"
+														data-sidebar-group-pin
+													/>
+												)}
 												{group.missing && <span className="sr-only">, {t("sidebar.project.missing")}</span>}
 												{groupCollapsed && (
 													<SidebarFoldSummary
@@ -1404,7 +1431,7 @@ function DeviceSessions({
 			{archivedRows.length > 0 && (
 				<section className="mt-1" data-sidebar-archived={host.deviceId}>
 					<div
-						className="flex h-7 [html[data-input=touch]_&]:h-8 items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+						className="omp-sidebar-head flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 						data-flip-key="archived"
 					>
 						<SidebarFoldButton

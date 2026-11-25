@@ -1,7 +1,7 @@
 /**
  * The sheet a click on a stored session whose folder is gone opens (`openTab`'s `folder-missing` refusal): its
  * transcript read-only with no composer, a banner naming the folder, and Restore when disk care saved the worktree
- * else Archive, which archives the session under its own id on this computer and under `hostOrderKey` on a device.
+ * else Archive, which saves on the computer that owns the session.
  */
 import { parseHTML } from "linkedom";
 import { act } from "react";
@@ -9,11 +9,13 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { SessionInfo } from "../../../shared/ipc-types";
 import type { AgentMessage } from "../../../shared/rpc-types";
+import type { SidebarProjectsRequest } from "../../../shared/sidebar-projects";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { preloadMarkdownPipeline } from "../../lib/markdown";
-import { hostOrderKey } from "../../lib/project-order";
+import { useRemoteStore } from "../../stores/remote";
 import { resetSessionListFeeds } from "../../stores/session-list";
 import { useSidebarPrefs } from "../../stores/sidebar-prefs";
+import { useSidebarProjects } from "../../stores/sidebar-projects";
 import { useTabsStore } from "../../stores/tabs";
 import { useToastStore } from "../../stores/toast";
 import { type MissingFolderRequest, useUiStore } from "../../stores/ui";
@@ -74,6 +76,18 @@ let messages: Mock<(sessionPath: string, device?: string) => Promise<AgentMessag
 let listShared: Mock<(device?: string) => Promise<unknown>>;
 let openTab: Mock<(args?: unknown) => Promise<string | null>>;
 let setSessionsArchived: Mock<(ids: readonly string[], archived: boolean) => Promise<void>>;
+const projectCommand = vi.fn(async (request: SidebarProjectsRequest, _device?: string) => ({
+	projects: [],
+	removed: [],
+	worktrees: {},
+	layout: {
+		pinnedGroups: [],
+		pinnedSessions: [],
+		archivedSessions: request.action === "layout" ? ["moda-id"] : [],
+		groupOrder: [],
+		sessionOrder: {},
+	},
+}));
 
 async function flush(): Promise<void> {
 	await act(async () => {
@@ -115,6 +129,7 @@ beforeEach(() => {
 	openTab = vi.fn(async () => null);
 	setSessionsArchived = vi.fn(async () => {});
 	(window as unknown as { omp: unknown }).omp = {
+		sidebarProjects: { command: projectCommand, onState: () => () => {} },
 		sessions: { messages, listShared },
 		events: new Proxy({}, { get: () => () => () => {} }),
 		prefs: { get: async () => undefined, set: async () => {} },
@@ -132,6 +147,9 @@ afterEach(async () => {
 		root = undefined;
 	}
 	document.body.innerHTML = "";
+	projectCommand.mockClear();
+	useRemoteStore.getState().reset();
+	useSidebarProjects.getState().reset();
 	useUiStore.setState({ missingFolder: null });
 	useToastStore.setState({ toasts: [] });
 });
@@ -174,14 +192,41 @@ describe("the missing-folder sheet", () => {
 		expect(useUiStore.getState().missingFolder).toBeNull();
 	});
 
-	it("reads a paired device's session from that device and archives it under the device's key", async () => {
+	it("reads and archives a paired host's session there, not in viewer prefs", async () => {
+		useRemoteStore.getState().apply({
+			tailnet: "ready",
+			host: {
+				enabled: false,
+				name: "viewer",
+				port: null,
+				addresses: [],
+				listenError: null,
+				peers: [],
+				keepAwake: false,
+				keepingAwake: false,
+				usedBy: [],
+			},
+			hosts: [{ deviceId: "dev-1", name: "host", state: "online" }],
+			forgotten: [],
+		});
 		await open({ device: "dev-1" });
 		expect(messages).toHaveBeenCalledWith(PATH, "dev-1");
 		expect(listShared).toHaveBeenCalledWith("dev-1");
 
 		await act(async () => archiveButton()?.click());
 		await flush();
-		expect(setSessionsArchived).toHaveBeenCalledWith([hostOrderKey("dev-1", "moda-id")], true);
+		expect(projectCommand).toHaveBeenCalledWith(
+			{
+				action: "layout",
+				change: {
+					op: "set-sessions-archived",
+					ids: ["moda-id"],
+					archived: true,
+				},
+			},
+			"dev-1",
+		);
+		expect(setSessionsArchived).not.toHaveBeenCalled();
 	});
 
 	it("restores a device's session on that device", async () => {

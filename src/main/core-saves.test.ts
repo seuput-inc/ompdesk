@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { IPC_EVENTS } from "../shared/ipc-types";
 import { CORE_EXITED } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
 import { DiskFullWatch } from "./disk-full";
-import { bindDiskFullNotice, bindDiskFullPush } from "./disk-full-notice";
+import { bindDiskFullNotice } from "./disk-full-notice";
 
 type Listener = (data: unknown, bin: Uint8Array | null) => void;
 
@@ -95,38 +94,5 @@ describe("the core's stores on a full disk", () => {
 		expect(core.count("store.saveFailed")).toBe(0);
 		expect(core.count("store.saved")).toBe(0);
 		expect(core.count(CORE_EXITED)).toBe(0);
-	});
-});
-
-describe("the disk-full push to every window and page", () => {
-	const target = (destroyed = false) => {
-		const sent: Array<[string, unknown]> = [];
-		return {
-			sent,
-			isDestroyed: () => destroyed,
-			webContents: { send: (channel: string, data: unknown) => sent.push([channel, data]) },
-		};
-	};
-
-	it("sends the files that wait, then an empty list, to each live target and none to a destroyed one", async () => {
-		const watch = new DiskFullWatch();
-		const window = target();
-		const phone = target();
-		const gone = target(true);
-		const stop = bindDiskFullPush(watch, () => [window, phone, gone]);
-
-		watch.report("/data/web-devices.json");
-		await tick();
-		watch.clear("/data/web-devices.json");
-		await tick();
-		stop();
-
-		const expected = [
-			[IPC_EVENTS.DISK_FULL, { files: ["web-devices.json"] }],
-			[IPC_EVENTS.DISK_FULL, { files: [] }],
-		];
-		expect(window.sent).toEqual(expected);
-		expect(phone.sent).toEqual(expected);
-		expect(gone.sent).toEqual([]);
 	});
 });

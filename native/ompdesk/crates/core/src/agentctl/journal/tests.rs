@@ -15,8 +15,7 @@ use super::mail_outbox::{
 };
 use super::pending_cleanups::{PendingCleanup, PendingCleanups};
 use super::send_outbox::{
-    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, StreamingBehavior, deliver_owed,
-    redeliver_sends,
+    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, deliver_owed, redeliver_sends,
 };
 use super::session_fates::{FatedSession, SessionFates, fate_when};
 use super::{Clock, js_number};
@@ -215,6 +214,7 @@ fn send_outbox_replays_the_typescripts() {
                         op["path"].as_str().unwrap(),
                         device,
                         op["body"].as_str().unwrap(),
+                        "",
                     )
                     .map_or(Value::Null, |entry| entry.to_json()),
                 other => panic!("{other}"),
@@ -547,12 +547,16 @@ fn mail(id: &str) -> OutboxMail {
         id: id.into(),
         session_path: "/s/boss.jsonl".into(),
         device: None,
+        from: None,
+        from_device: None,
         content: format!("<ompdesk-mail>{id}</ompdesk-mail>"),
         details: json!({"id": id, "kind": "done"}),
         delivery: super::super::rules::mail::MailDelivery {
             trigger_turn: true,
             aside: true,
         },
+        attachments: None,
+        attachments_corrupt: false,
         at: 1_000.0,
     }
 }
@@ -769,7 +773,6 @@ fn send(n: i64) -> OutboxSend {
         "/s/boss.jsonl".into(),
         format!("do part {n}"),
         format!("do part {n}\n\n[ompdesk dispatch d{n}: report]"),
-        StreamingBehavior::FollowUp,
         1_000.0,
     )
 }
@@ -956,11 +959,11 @@ fn a_dispatch_is_numbered_past_the_one_still_owed_and_a_resend_is_recognized() {
     outbox.keep(other);
     assert_eq!(outbox.last_dispatch("/s/kid.jsonl", None), 4);
     assert_eq!(outbox.last_dispatch("/s/kid.jsonl", Some("dev-1")), 0);
-    let joined = outbox.waiting("/s/boss.jsonl", "/s/kid.jsonl", None, "do part 4");
+    let joined = outbox.waiting("/s/boss.jsonl", "/s/kid.jsonl", None, "do part 4", "");
     assert_eq!(joined.map(|entry| entry.dispatch), Some(Some(4)));
     assert!(
         outbox
-            .waiting("/s/else.jsonl", "/s/kid.jsonl", None, "do part 4")
+            .waiting("/s/else.jsonl", "/s/kid.jsonl", None, "do part 4", "")
             .is_none()
     );
 }

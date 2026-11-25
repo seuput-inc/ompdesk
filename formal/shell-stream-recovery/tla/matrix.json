@@ -1,0 +1,79 @@
+{
+	"runs": [
+		{
+			"name": "capacity-two-three-events",
+			"config": "MC.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "capacity-one-three-events",
+			"config": "MC.cfg",
+			"constants": {
+				"Capacity": "1"
+			},
+			"expect": "pass"
+		},
+		{
+			"name": "capacity-one-four-events",
+			"config": "MC.cfg",
+			"constants": {
+				"Capacity": "1",
+				"MaxEvents": "4"
+			},
+			"expect": "pass"
+		},
+		{
+			"name": "capacity-two-four-events",
+			"config": "MC.cfg",
+			"constants": {
+				"MaxEvents": "4"
+			},
+			"expect": "pass"
+		},
+		{
+			"name": "drops-partial-frame",
+			"config": "MC.cfg",
+			"constants": {
+				"KeepPartial": "FALSE"
+			},
+			"expect": "invariant",
+			"property": "NoPartialFrameLoss"
+		},
+		{
+			"name": "old-reader-consumes-replacement",
+			"config": "MC.cfg",
+			"constants": {
+				"FenceReader": "FALSE"
+			},
+			"expect": "invariant",
+			"property": "NoStaleReaderEffect"
+		},
+		{
+			"name": "overflow-without-reset",
+			"config": "MC.cfg",
+			"constants": {
+				"AnnounceLoss": "FALSE"
+			},
+			"expect": "invariant",
+			"property": "NoUnsignalledLoss"
+		},
+		{
+			"name": "old-token-clears-new-loss",
+			"config": "MC.cfg",
+			"constants": {
+				"FenceAck": "FALSE"
+			},
+			"expect": "invariant",
+			"property": "CurrentReadBeforeAck"
+		},
+		{
+			"name": "ack-before-authority-read",
+			"config": "MC.cfg",
+			"constants": {
+				"WaitRead": "FALSE"
+			},
+			"expect": "invariant",
+			"property": "CurrentReadBeforeAck"
+		}
+	]
+}

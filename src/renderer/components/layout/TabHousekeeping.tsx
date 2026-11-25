@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { splitTabIds } from "../../../shared/split-layout";
 import { useSessionList } from "../../hooks/use-session-list";
+import { useSwitchingTabs } from "../../hooks/use-session-switch";
 import { sessionHasContent } from "../../lib/session-title";
 import { type ComposerStore, useComposerStore } from "../../stores/composer";
 import { type MessagesStore, useMessagesStore } from "../../stores/messages";
@@ -43,6 +44,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 	const liveRenderedMessages = useMessagesStore(s => s.messages.length);
 	const liveQueuedMessages = useQueueStore(s => s.steering.length + s.followUp.length);
 	const armedCloseTab = useUiStore(s => s.armedCloseTab);
+	const switchingTabs = useSwitchingTabs();
 	const cancelCloseTab = useUiStore(s => s.cancelCloseTab);
 	const pruningPlaceholderRef = useRef<string | null>(null);
 	const split = useTabsStore(s => s.split);
@@ -59,7 +61,9 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 	}, [armedCloseTab, cancelCloseTab, confirmCloseMs]);
 
 	useEffect(() => {
-		if (tabs.length <= 1 || pruningPlaceholderRef.current) return;
+		// Last launch's ghosts are a picture until main's list replaces them: a real start tab whose status push came
+		// first is not in company, and closing it on a ghost's account left the window with no tab at all.
+		if (tabs.length <= 1 || pruningPlaceholderRef.current || tabs.some(tab => tab.ghost)) return;
 		const inSplit = new Set(split ? splitTabIds(split) : []);
 		const emptyBehind = (tab: (typeof tabs)[number]) => {
 			const session = sessionRuntimeStore<SessionStore>(tab.id, "session")?.getState();
@@ -87,6 +91,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 		const left = tabs.find(
 			tab =>
 				tab.unstarted === true &&
+				!switchingTabs.includes(tab.id) &&
 				tab.id !== activeTabId &&
 				shownRef.current.has(tab.id) &&
 				!inSplit.has(tab.id) &&
@@ -110,6 +115,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 					indexedSession !== undefined &&
 					!sessionHasContent(indexedSession);
 				if (tab.placeholder !== true && !legacyEmptyStartupChat) return false;
+				if (switchingTabs.includes(tab.id)) return false;
 				if (indexedSession && sessionHasContent(indexedSession)) return false;
 				if (tab.worktree || tab.pendingSessionPath || tab.status === "running" || tab.compacting) return false;
 				// A tab already closing (its session is being deleted) is no reason for the start tab to go.
@@ -148,6 +154,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 		sessionsById,
 		sessionsByPath,
 		tabs,
+		switchingTabs,
 		split,
 	]);
 

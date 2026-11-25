@@ -151,7 +151,13 @@ for (const [language, theme] of variants([
 				.filter(Boolean)
 				.map(line => JSON.parse(line))
 				.filter(frame => frame.type === "print");
-			expect(printed).toEqual([expect.objectContaining({ argv: ["-p"], prompt: "fixture hello" })]);
+			// A scheduled run is `omp -p` with the credit switch's extension (omp-launch.ts `creditSpendRun`).
+			expect(printed).toEqual([
+				expect.objectContaining({
+					argv: ["-p", "-e", expect.stringMatching(/credit-spend-run\.ts$/)],
+					prompt: "fixture hello",
+				}),
+			]);
 			expect(await fs.realpath(printed[0].cwd)).toBe(await fs.realpath(project));
 			await shot("schedules-run");
 

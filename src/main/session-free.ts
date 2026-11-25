@@ -18,6 +18,8 @@ const SLOW_POLL_MS = 2_000;
 
 export interface SessionFreeDeps {
 	owned: (sessionPath: string) => Promise<boolean>;
+	/** The ownership check failed (no stock helper answer): the start goes on, and this says so. */
+	unknown?: (error: unknown) => void;
 	sleep?: (ms: number) => Promise<void>;
 	now?: () => number;
 }
@@ -29,7 +31,10 @@ export async function whenSessionFree(sessionPath: string, deps: SessionFreeDeps
 	const started = now();
 	const deadline = started + SESSION_FREE_WAIT_MS;
 	for (;;) {
-		const owned = await deps.owned(sessionPath).catch(() => false);
+		const owned = await deps.owned(sessionPath).catch((error: unknown) => {
+			deps.unknown?.(error);
+			return false;
+		});
 		if (!owned) return "free";
 		if (now() >= deadline) return "owned";
 		await sleep(now() - started < FAST_FOR_MS ? FAST_POLL_MS : SLOW_POLL_MS);

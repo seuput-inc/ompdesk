@@ -102,6 +102,15 @@ function useSessionToggle() {
 }
 
 /**
+ * The tile grids' two columns, the left a tenth wider. The long labels sit in the left column ("추가 지시 묶음", "Auto-retry"
+ * where the right one holds "즉시 중단", "Prewalk"), and on Windows the Korean face (Malgun Gothic) is about 4 px wider
+ * per label than macOS's: equal columns left 80 px for a label that needs 84, so it was cut at the popover's width. The
+ * left column gains 8 px and the right keeps 72, more than its longest label needs; both grids use it so their (i)
+ * glyphs still stand in one column.
+ */
+const TILE_COLUMNS = "grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]";
+
+/**
  * Fast, Slow and Ultrafast as switch tiles, two to a row (each only where the model offers the tier). The explanation
  * of each is behind its (i); "not on this model" dims the glyph and joins the explanation instead of a badge.
  */
@@ -121,7 +130,10 @@ export function SpeedFields() {
 	return (
 		// Tiles pair up; a tile left alone on its row (Fast without Slow, Ultrafast after the pair) takes the whole row,
 		// so its switch lines up at the right edge with the rows above instead of stopping mid-sheet.
-		<div className="-mx-1.5 grid grid-cols-2 gap-x-1 [&>:last-child:nth-child(odd)]:col-span-2" data-switch-grid>
+		<div
+			className={cx("-mx-1.5 grid gap-x-1 [&>:last-child:nth-child(odd)]:col-span-2", TILE_COLUMNS)}
+			data-switch-grid
+		>
 			<SwitchTile
 				infoEnd
 				checked={fastEnabled}
@@ -196,7 +208,7 @@ export function AdvancedAndRoles({ onClose }: { onClose: () => void }) {
 				</Button>
 				{advancedOpen && (
 					// 2 px in: with the row's 4 px, a tile's 6 px padding puts its (i) in the sheet's one column at 12 px.
-					<div className="grid grid-cols-2 gap-x-1 px-0.5 pb-1" data-switch-grid>
+					<div className={cx("grid gap-x-1 px-0.5 pb-1", TILE_COLUMNS)} data-switch-grid>
 						<SwitchTile
 							infoEnd
 							checked={autoCompaction}

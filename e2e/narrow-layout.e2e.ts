@@ -35,7 +35,8 @@ for (const language of variants(["en", "ko"] as const, language => language === 
 			await expect
 				.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 				.toBe("ready");
-			await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 640));
+			// The page's 800×640 is what the layout answers to; `setSize` is the window with the OS frame around it.
+			await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(800, 640));
 			await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(800);
 
 			const settings = page.locator("[data-settings-page]");
@@ -119,7 +120,7 @@ test("pull requests fit the smallest window", async () => {
 		await expect
 			.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 			.toBe("ready");
-		await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 640));
+		await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(800, 640));
 		await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(800);
 		await openDestination(page, "agents");
 		const agents = page.locator('section[data-destination="agents"]');

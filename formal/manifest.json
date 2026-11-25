@@ -3,6 +3,59 @@
 	"codeRoot": "..",
 	"models": [
 		{
+			"id": "shell-stream-recovery",
+			"title": "CEF stream loss: partial frames, reader incarnation and current successful read before ACK",
+			"kind": "tla",
+			"dir": "shell-stream-recovery/tla",
+			"spec": "ShellStreamRecovery.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"native/ompdesk/crates/shell/src/ipc.rs",
+				"native/ompdesk/crates/shell/src/scheme.rs:28-32",
+				"native/ompdesk/crates/shell/src/scheme.rs:358-366",
+				"native/ompdesk/crates/shell/src/scheme.rs:509-542",
+				"native/ompdesk/crates/shell/src/scheme.rs:568-577",
+				"src/preload/shell.ts:69-123",
+				"src/preload/shell.ts#readEvents",
+				"src/renderer/web/resync.ts#installShellResync",
+				"src/renderer/web/resync-page.ts#resyncPage"
+			],
+			"syncCommit": "9a2fa9ce01622b6b931b6766aedcce5d53590570",
+			"verifySkill": ".omp/skills/shell-stream-recovery-verify/SKILL.md"
+		},
+		{
+			"id": "shell-exit-receipt",
+			"title": "Shell exit acceptance, receipt and Node join before relaunch",
+			"kind": "tla",
+			"dir": "shell-exit-receipt/tla",
+			"spec": "ShellExitReceipt.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/main/shell-host/electron/app.ts#relaunch",
+				"src/main/shell-host/electron/app.ts#exit",
+				"src/main/shell-host/electron/index.ts#endMain",
+				"src/main/shell-host/electron/index.ts:196-197",
+				"src/main/shell-host/client.ts#request",
+				"src/main/shell-host/client.ts#call",
+				"src/main/shell-host/client.ts#event",
+				"src/main/shell-host/client.ts#write",
+				"src/main/shell-host/client.ts#receive",
+				"src/main/shell-host/client.ts#dispatch",
+				"src/main/shell-host/client.ts#answer",
+				"native/ompdesk/crates/shell/src/dispatch.rs:19-25",
+				"native/ompdesk/crates/shell/src/dispatch.rs:55-62",
+				"native/ompdesk/crates/shell/src/host.rs#spawn_writer",
+				"native/ompdesk/crates/shell/src/host.rs#read_loop",
+				"native/ompdesk/crates/shell/src/lifecycle.rs:64-107",
+				"native/ompdesk/crates/shell/src/node.rs#stop",
+				"native/ompdesk/crates/shell/src/main.rs:343-362",
+				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
+			],
+			"syncCommit": "d794ee70cefd06343b72cd22e72c0c40a188b58f"
+		},
+		{
 			"id": "turn-resume",
 			"title": "Connection wait of a failed turn: probe, hold, flush, scheduled retry",
 			"kind": "tla",
@@ -15,20 +68,21 @@
 				"native/ompdesk/crates/core/src/resume/ends.rs",
 				"native/ompdesk/crates/core/src/resume/facts.rs",
 				"native/ompdesk/crates/core/src/resume/connectivity.rs",
+				"native/ompdesk/crates/core/src/resume/probe.rs",
 				"native/ompdesk/crates/core/src/resume/hold-ends.json",
 				"native/ompdesk/crates/core/src/pool/run.rs",
 				"native/ompdesk/crates/core/src/pool/api.rs#note_stopped",
 				"native/ompdesk/crates/core/src/pool/api.rs#note_counter",
 				"native/ompdesk/crates/core/src/pool/routes.rs#register_session_file_of",
-				"src/main/turn-resume.ts:174-265",
-				"src/main/turn-resume.ts:818-832",
+				"src/main/turn-resume.ts:181-272",
+				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2234-2238",
+				"src/main/index.ts:2226-2230",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
+			"syncCommit": "f49f9994414de5aced7373c428b80017468d15aa",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -41,7 +95,7 @@
 			"mutations": "mutations.json",
 			"covers": [
 				"src/main/remote/host-services.ts",
-				"native/ompdesk/crates/core/src/pool/windows.rs#acquire_inner",
+				"native/ompdesk/crates/core/src/pool/windows.rs#finish_acquire",
 				"native/ompdesk/crates/core/src/pool/windows.rs#release_entry",
 				"native/ompdesk/crates/core/src/pool/windows.rs#release_detached",
 				"native/ompdesk/crates/core/src/pool/api.rs#release_tab",
@@ -57,19 +111,25 @@
 				"src/main/session-list-share.ts",
 				"src/shared/session-list-delta.ts",
 				"src/main/remote/host-session-list.ts",
-				"src/main/remote/client.ts:403-420",
+				"src/main/remote/client.ts#told",
+				"src/main/remote/client.ts#dropLink",
+				"src/main/remote/client.ts:443-460",
 				"src/main/remote/wire.ts:161-166",
-				"src/main/core/process.ts:163-200",
+				"src/main/core/process.ts#FrameReader.push",
 				"native/ompdesk/crates/core/src/remote/link.rs:503-561",
-				"src/main/remote/devices.ts:636-652",
-				"src/main/remote/devices.ts:650-652",
-				"src/main/remote/devices.ts:925-953",
-				"src/main/session-index.ts:273-275",
-				"src/main/session-index.ts:329-338",
-				"src/main/session-index.ts:369-383",
-				"src/main/session-index.ts:441-444"
+				"src/main/remote/devices.ts#hostSessions",
+				"src/main/remote/devices.ts#listHostSessions",
+				"src/main/remote/devices.ts#hostSessionsStale",
+				"src/main/remote/devices.ts#hostSessionsChanged",
+				"src/main/remote/devices.ts#link",
+				"src/main/session-index.ts#onChanged",
+				"src/main/session-index.ts#relist",
+				"src/main/session-index.ts#deleteSession",
+				"src/main/session-index.ts#moveSession",
+				"src/main/session-index.ts#notifyChange",
+				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
+			"syncCommit": "d794ee70cefd06343b72cd22e72c0c40a188b58f",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -81,19 +141,20 @@
 			"matrix": "matrix.json",
 			"mutations": "mutations.json",
 			"covers": [
-				"src/main/web/file-edit-reports.ts",
+				"native/ompdesk/crates/core/src/web/file_edits.rs",
 				"native/ompdesk/crates/core/src/agentctl/rules/tab_close.rs",
 				"src/renderer/web/FileEditReporter.tsx",
 				"native/ompdesk/crates/core/src/web/router.rs#finish",
 				"native/ompdesk/crates/core/src/web/router.rs#receive",
 				"native/ompdesk/crates/core/src/web/router.rs#dispatch",
-				"src/main/web/ws-router.ts#WsRouter.connections",
-				"src/main/web/ws-router.ts#WsRouter.call",
-				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:138-177",
+				"native/ompdesk/crates/core/src/web/router.rs#file_edit_report",
+				"native/ompdesk/crates/core/src/web/router.rs#unless_dirty",
+				"native/ompdesk/crates/core/src/pool/windows.rs#release_entry",
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs#close_tab",
 				"src/main/tab-release.ts#closeWindowTab",
-				"src/main/agent-control/host.ts:1119-1126"
+				"src/main/agent-control/host.ts:1240-1247"
 			],
-			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
+			"syncCommit": "c08ca9e738baf8368a91a765938e9cda118dfca0",
 			"verifySkill": ".omp/skills/web-close-reports-verify/SKILL.md"
 		},
 		{
@@ -108,7 +169,7 @@
 				"native/ompdesk/crates/core/src/sidecar/launch.rs",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "00fe764465cc83c1683062fb293c828dfcff1d1e",
+			"syncCommit": "d0e83f711ce8443cce494bd736fa26b980403f5c",
 			"verifySkill": ".omp/skills/tab-session-verify/SKILL.md"
 		},
 		{
@@ -127,7 +188,7 @@
 				"src/main/checkout-peers.ts#CheckoutPeerCoordinator.#retire",
 				"src/main/checkout-peers.ts#CheckoutPeerCoordinator.#send"
 			],
-			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
+			"syncCommit": "190195f97c928a6a52653d897ed45987f1d639fc",
 			"verifySkill": ".omp/skills/checkout-claims-verify/SKILL.md"
 		},
 		{
@@ -146,6 +207,8 @@
 				"src/main/local/git/exec.ts#coreHeld",
 				"src/main/local/git/scm.ts#mutate",
 				"src/main/core/process.ts",
+				"native/ompdesk/crates/core/src/owner.rs",
+				"native/ompdesk/crates/core/src/clients.rs",
 				"src/main/serial-chain.ts",
 				"native/ompdesk/crates/core/src/server.rs",
 				"native/ompdesk/crates/core/src/run.rs",
@@ -153,9 +216,10 @@
 				"native/ompdesk/crates/core/src/main.rs",
 				"native/ompdesk/crates/core/src/git/branches.rs:194-217",
 				"native/ompdesk/crates/core/src/disk/tree.rs#live",
+				"native/ompdesk/crates/core/src/disk/saved_records.rs#change",
 				"native/ompdesk/crates/core/src/git/read.rs#blocking"
 			],
-			"syncCommit": "44942cdad4b6095b2ea0820140586d83f78acdd1",
+			"syncCommit": "61dff7a2f636cf4911e0455fd5ada292eee4dc54",
 			"verifySkill": ".omp/skills/repo-lock-core-verify/SKILL.md"
 		},
 		{
@@ -170,7 +234,7 @@
 				"src/main/session-processes.ts",
 				"native/ompdesk/crates/core/src/sidecar/lane.rs"
 			],
-			"syncCommit": "00fe764465cc83c1683062fb293c828dfcff1d1e",
+			"syncCommit": "2b09c3dfbdf583027dbb69fc9693e3c0e82b27b5",
 			"verifySkill": ".omp/skills/session-processes-verify/SKILL.md"
 		},
 		{
@@ -184,8 +248,89 @@
 			"covers": [
 				"native/ompdesk/crates/core/src/stock/mod.rs"
 			],
-			"syncCommit": "b1e89124da2858444ffa69308c75c8d2c1823e7f",
+			"syncCommit": "abc106eacae6ff1553decb6db9a74add55ba5ea2",
 			"verifySkill": ".omp/skills/stock-lane-verify/SKILL.md"
+		},
+		{
+			"id": "tab-list-status",
+			"title": "A late tab list never undoes a tab status push",
+			"kind": "tla",
+			"dir": "tab-list-status/tla",
+			"spec": "TabListStatus.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/renderer/stores/tabs.ts:758-843",
+				"src/renderer/stores/tabs.ts:1394-1397",
+				"native/ompdesk/crates/core/src/pool/listen.rs#feed_status",
+				"native/ompdesk/crates/core/src/pool/state.rs#forward_status",
+				"native/ompdesk/crates/core/src/pool/windows.rs#tabs_for_window"
+			],
+			"syncCommit": "f5b622ca060afedd22a5585e024780276ab63857"
+		},
+		{
+			"id": "away-calls",
+			"title": "A device tab's control calls while the device is away: the host carries out unhanded calls and keeps reports for the device",
+			"kind": "tla",
+			"dir": "away-calls/tla",
+			"spec": "AwayCalls.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/main/remote/host-services.ts",
+				"src/main/remote/kept-calls.ts",
+				"native/ompdesk/crates/core/src/remote/kept_calls.rs",
+				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
+				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
+				"src/main/ipc.ts:638-657"
+			],
+			"syncCommit": "2e392233c260a59a92dc597957ed08ea32630ae4"
+		},
+		{
+			"id": "open-first-message",
+			"title": "An open's setup and first message across a quit: kept before it goes out, handed once per omp",
+			"kind": "tla",
+			"dir": "open-first-message/tla",
+			"spec": "OpenFirstMessage.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"native/ompdesk/crates/core/src/agentctl/service/sessions/open.rs",
+				"native/ompdesk/crates/core/src/agentctl/journal/send_outbox.rs",
+				"native/ompdesk/crates/core/src/agentctl/service/messages.rs:155-213"
+			],
+			"syncCommit": "8c19dda90c71d408a50b0733e336064986263e9d"
+		},
+		{
+			"id": "urgent-asides",
+			"title": "Urgent asides background a running shell; a progress report or note never does",
+			"kind": "tla",
+			"dir": "urgent-asides/tla",
+			"spec": "UrgentAsides.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/agent-control.ts#urgentKey",
+				"resources/gui-bridge/agent-control.ts#watchAsides",
+				"resources/gui-bridge/agent-control.ts#interruptFor",
+				"resources/gui-bridge/agent-control.ts#install",
+				"resources/gui-bridge/agent-control.ts:343-397"
+			],
+			"syncCommit": "aa5384b6e6511a59962de6257e137c76c65e7d26"
+		},
+		{
+			"id": "relaunch-once",
+			"title": "A command across a relaunch runs once and a stop does not cut a short one",
+			"kind": "tla",
+			"dir": "relaunch-once/tla",
+			"spec": "RelaunchOnce.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"resources/gui-bridge/quit-journal.ts",
+				"resources/gui-bridge/quit-journal-core.ts#replayOfEarlierLife"
+			],
+			"syncCommit": "df9f756aab26a6e4688887ad724e5584d869aeda"
 		}
 	]
 }

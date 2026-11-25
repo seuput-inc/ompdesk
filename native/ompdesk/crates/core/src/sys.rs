@@ -6,6 +6,39 @@
 //! dial that fails at once when refused.
 #![allow(unsafe_code)]
 
+/// Set the child's priority before publishing its PID. A denied adjustment does not prevent a launch.
+pub(crate) fn spawn_low_priority(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<(tokio::process::Child, Option<std::io::Error>)> {
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
+        // A .cmd shim may start Bun immediately; set the class on creation.
+        match command
+            .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
+            .spawn()
+        {
+            Ok(child) => Ok((child, None)),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok((
+                command.creation_flags(CREATE_NO_WINDOW).spawn()?,
+                Some(error),
+            )),
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(unix)]
+    {
+        let child = command.spawn()?;
+        let error = child.id().and_then(|pid| {
+            // SAFETY: the child has not been reaped, so its PID cannot name another process.
+            (unsafe { libc::setpriority(libc::PRIO_PROCESS, pid, 10) } != 0)
+                .then(std::io::Error::last_os_error)
+        });
+        Ok((child, error))
+    }
+}
+
 /// Fills `bytes` from the system's random generator (the control socket's token), as node's `randomBytes` does.
 #[cfg(unix)]
 pub fn random(bytes: &mut [u8]) -> std::io::Result<()> {
@@ -28,6 +61,139 @@ pub fn random(bytes: &mut [u8]) -> std::io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// The normalized DOS path of this open handle, in the same namespace as `std::fs::canonicalize`.
+#[cfg(windows)]
+pub(crate) fn final_file_path(file: &std::fs::File) -> std::io::Result<std::path::PathBuf> {
+    use std::ffi::{OsString, c_void};
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFinalPathNameByHandleW(
+            handle: *mut c_void,
+            path: *mut u16,
+            len: u32,
+            flags: u32,
+        ) -> u32;
+    }
+    let mut short = [0_u16; 260];
+    let mut long = Vec::new();
+    let mut buffer = short.as_mut_slice();
+    loop {
+        // SAFETY: `file` owns the handle and `buffer` is writable for the supplied number of UTF-16 units.
+        let n = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                0,
+            )
+        } as usize;
+        if n == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if n < buffer.len() {
+            return Ok(OsString::from_wide(&buffer[..n]).into());
+        }
+        // The required length includes the terminator; success returns the length without it.
+        long.resize(n, 0);
+        buffer = long.as_mut_slice();
+    }
+}
+
+// Main supplies resolved paths; pass long drive and UNC paths in the same namespace as Node.
+#[cfg(windows)]
+fn wide_path(path: &str) -> std::io::Result<Vec<u16>> {
+    if path.contains('\0') {
+        return Err(std::io::Error::from_raw_os_error(123));
+    }
+    let (prefix, tail) = if path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
+        ("", path)
+    } else if let Some(unc) = path.strip_prefix(r"\\") {
+        (r"\\?\UNC\", unc)
+    } else {
+        (r"\\?\", path)
+    };
+    Ok(prefix
+        .encode_utf16()
+        .chain(tail.encode_utf16())
+        .chain([0])
+        .collect())
+}
+
+/// `fs.copyFile` on Windows uses CopyFileW, including its alternate data streams and exclusive-create behavior.
+#[cfg(windows)]
+pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io::Result<()> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CopyFileW(source: *const u16, target: *const u16, fail_if_exists: i32) -> i32;
+    }
+    let from = wide_path(source)?;
+    let to = wide_path(target)?;
+    // SAFETY: both buffers are NUL-terminated and remain alive for the synchronous call.
+    if unsafe { CopyFileW(from.as_ptr(), to.as_ptr(), i32::from(exclusive)) } != 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    // libuv accepts a sharing violation only if both names identify the same file.
+    if crate::fs::error::uv_code(&error) == "EBUSY"
+        && same_file::is_same_file(source, target).unwrap_or(false)
+    {
+        return Ok(());
+    }
+    Err(error)
+}
+
+/// The setup repair must not replace a destination created between its probe and the rename.
+pub(crate) fn move_launcher_exclusive(
+    from: &std::path::Path,
+    to: &std::path::Path,
+) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let ok = {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes())?;
+        let to = CString::new(to.as_os_str().as_bytes())?;
+        #[cfg(target_os = "macos")]
+        let (rename, flag) = (libc::renameatx_np, libc::RENAME_EXCL);
+        #[cfg(target_os = "linux")]
+        let (rename, flag) = (libc::renameat2, libc::RENAME_NOREPLACE);
+        // SAFETY: both NUL-terminated path buffers live through the synchronous call.
+        unsafe {
+            rename(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                flag,
+            ) == 0
+        }
+    };
+    #[cfg(windows)]
+    let ok = {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+        }
+        let wide = |path: &std::path::Path| {
+            wide_path(
+                path.to_str()
+                    .ok_or_else(|| std::io::Error::from_raw_os_error(123))?,
+            )
+        };
+        let from = wide(from)?;
+        let to = wide(to)?;
+        // SAFETY: both buffers are NUL-terminated and valid for the call. Zero flags forbids replacement.
+        unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) != 0 }
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Windows answers a refused connect by sending its SYN again (about 2 s on loopback). libuv turns those retries off
@@ -164,10 +330,23 @@ impl StopSignals {
     }
 }
 
+/// Starts `command`'s process as the leader of a process group of its own (`setpgid` through `posix_spawn`'s
+/// `POSIX_SPAWN_SETPGROUP`), so `signal_group` with its pid reaches it and everything it starts that stays in its group.
+/// The core is many threads: a `pre_exec` closure (or `setsid`, which std on macOS cannot hand `posix_spawn`) makes std
+/// fork, and a fork while another thread holds libsystem's state killed the child before its exec ("os_once_t is
+/// corrupt … crashed on child side of fork pre-exec", the Mac mini, 18 Nov 2026), so a tab's omp never came back. The
+/// core has no controlling terminal and blocks no signal, so the group is all `new_session` gave these children.
+#[cfg(unix)]
+pub fn own_group(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
 /// Starts `command`'s process in a session and process group of its own (`setsid`), as node's `detached: true` does,
 /// so `signal_group` with its pid reaches it and everything it starts that stays in its group. Its signal mask is
 /// emptied, as libuv's spawn empties it: the supervisor blocks SIGTERM and SIGINT (`StopSignals`), and std passes a
-/// thread's mask on to the child (`SigBlk` read 0x4002 before this).
+/// thread's mask on to the child (`SigBlk` read 0x4002 before this). The closure makes std fork: only for the
+/// supervisor, whose mask must go; the core's children take `own_group`.
 #[cfg(unix)]
 pub fn new_session(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
@@ -239,17 +418,234 @@ pub fn procargs(pid: u32, buffer: &mut [u8]) -> Option<&[u8]> {
     (read == 0).then(|| &buffer[..size.min(buffer.len())])
 }
 
+/// `phys_footprint` of `pid` (`proc_pid_rusage`, `RUSAGE_INFO_V4`): what Activity Monitor's Memory column and
+/// `footprint` show, its compressed and swapped pages included. None for a process this user may not read (another
+/// user's, as launchd) and one that is gone.
+#[cfg(target_os = "macos")]
+pub fn footprint(pid: u32) -> Option<u64> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
+    // SAFETY: `info` is a live `rusage_info_v4`, the struct `RUSAGE_INFO_V4` tells the call to write, and it writes
+    // no more than that.
+    let read =
+        unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V4, info.as_mut_ptr().cast()) };
+    if read != 0 {
+        return None;
+    }
+    // SAFETY: all of `rusage_info_v4` is integers, zeroed was already a valid value, and a zero status filled it.
+    Some(unsafe { info.assume_init() }.ri_phys_footprint)
+}
+
+/// Whether `pid`'s standard output or error path is closed, so a write to it fails, and what is known of the other end
+/// (`Peer`): none while both can be written. A pipe whose other end closed (`PIPE_EOF`) has its peer closed. A stream
+/// socket that can send no more (`SS_CANTSENDMORE`; a `socketpair`, which libuv and Bun give a child for `pipe`) is
+/// closed two ways in XNU's `uipc_usrreq.c`: the peer's close disconnects both ends (`unp_disconnect`: clears
+/// `SS_ISCONNECTED`), while this end's own `shutdown(SHUT_WR)` (`uipc_shutdown`: `socantsendmore`) leaves it connected
+/// to a peer that may still be reading. So a Unix socket's peer is closed when disconnected and open when connected;
+/// any other family's is unknown. With both descriptors closed, the less certain peer counts.
+#[cfg(target_os = "macos")]
+pub fn output_closed(pid: u32) -> Option<crate::procs::Peer> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    [1, 2]
+        .into_iter()
+        .filter_map(|fd| descriptor_closed(pid, fd))
+        .min()
+}
+
+#[cfg(target_os = "macos")]
+fn descriptor_closed(pid: libc::c_int, fd: libc::c_int) -> Option<crate::procs::Peer> {
+    use crate::procs::Peer;
+    // `<sys/proc_info.h>`: `struct socket_fdinfo` and `struct pipe_fdinfo` each start with a `proc_fileinfo` (24
+    // bytes) and then a `vinfo_stat` (136). `socket_info` goes on with `soi_so`, `soi_pcb`, `soi_type` (+152),
+    // `soi_protocol`, `soi_family` (+160), `soi_options`, `soi_linger`, `soi_state` (+168, a short); `pipe_info` with
+    // `pipe_handle`, `pipe_peerhandle`, `pipe_status` (+152).
+    const PROC_PIDFDSOCKETINFO: libc::c_int = 3;
+    const PROC_PIDFDPIPEINFO: libc::c_int = 6;
+    const SOCKET_TYPE: usize = 24 + 152;
+    const SOCKET_FAMILY: usize = 24 + 160;
+    const SOCKET_STATE: usize = 24 + 168;
+    const PIPE_STATUS: usize = 24 + 152;
+    /// `<sys/socketvar.h>`.
+    const SS_ISCONNECTED: i16 = 0x0002;
+    const SS_CANTSENDMORE: i16 = 0x0010;
+    /// `<sys/pipe.h>`: the other end closed.
+    const PIPE_EOF: i32 = 0x0080;
+    // Larger than either structure; the call writes the one asked for and answers its size.
+    let mut buffer = [0u8; 2048];
+    let size = libc::c_int::try_from(buffer.len()).unwrap_or(libc::c_int::MAX);
+    let info = |flavor, buffer: &mut [u8; 2048]| {
+        // SAFETY: `buffer` is valid for writes of `size` bytes, the most the call writes.
+        let read =
+            unsafe { libc::proc_pidfdinfo(pid, fd, flavor, buffer.as_mut_ptr().cast(), size) };
+        usize::try_from(read).unwrap_or(0)
+    };
+    let int = |buffer: &[u8], at: usize| {
+        i32::from_ne_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]])
+    };
+    if info(PROC_PIDFDSOCKETINFO, &mut buffer) > SOCKET_STATE + 2 {
+        let state = i16::from_ne_bytes([buffer[SOCKET_STATE], buffer[SOCKET_STATE + 1]]);
+        if int(&buffer, SOCKET_TYPE) != libc::SOCK_STREAM || state & SS_CANTSENDMORE == 0 {
+            return None;
+        }
+        return Some(if int(&buffer, SOCKET_FAMILY) != libc::AF_UNIX {
+            Peer::Unknown
+        } else if state & SS_ISCONNECTED == 0 {
+            Peer::Closed
+        } else {
+            Peer::Open
+        });
+    }
+    (info(PROC_PIDFDPIPEINFO, &mut buffer) > PIPE_STATUS + 4
+        && int(&buffer, PIPE_STATUS) & PIPE_EOF != 0)
+        .then_some(Peer::Closed)
+}
+
+/// Linux runs OMPdesk's tests and CI only, and does not tell a closed pipe's writer from another: never closed.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn output_closed(_pid: u32) -> Option<crate::procs::Peer> {
+    None
+}
+
+/// `proc_pidinfo` of one flavor, whole or none: a process this user may not read, or one that is gone, has none.
+#[cfg(target_os = "macos")]
+fn pid_info<T>(pid: u32, flavor: libc::c_int) -> Option<T> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let size = libc::c_int::try_from(size_of::<T>()).ok()?;
+    let mut info = std::mem::MaybeUninit::<T>::zeroed();
+    // SAFETY: `info` is valid for writes of `size` bytes, the most the call writes; `T` is one of libc's
+    // `proc_*info` structures, plain integers and arrays for which all zeroes or what the kernel wrote is a value.
+    let read = unsafe { libc::proc_pidinfo(pid, flavor, 0, info.as_mut_ptr().cast(), size) };
+    // SAFETY: as above; the call wrote the whole structure.
+    (read == size).then(|| unsafe { info.assume_init() })
+}
+
+/// The CPU time `pid` has used, in ns (`PROC_PIDTASKINFO`, whose times are Mach time units: ns on Intel, 125/3 ns on
+/// Apple silicon).
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // libc points to the mach2 crate for `mach_timebase_info`; one call does not earn the crate.
+pub fn cpu_ns(pid: u32) -> Option<u64> {
+    let info: libc::proc_taskinfo = pid_info(pid, libc::PROC_PIDTASKINFO)?;
+    let ticks = info.pti_total_user.checked_add(info.pti_total_system)?;
+    let mut base = libc::mach_timebase_info { numer: 0, denom: 0 };
+    // SAFETY: `base` is a live `mach_timebase_info`, which the call fills.
+    if unsafe { libc::mach_timebase_info(&raw mut base) } != 0 || base.denom == 0 {
+        return None;
+    }
+    u64::try_from(u128::from(ticks) * u128::from(base.numer) / u128::from(base.denom)).ok()
+}
+
+/// When `pid` started, in ms since the Unix epoch, to the microsecond the kernel keeps (`PROC_PIDTBSDINFO`): the
+/// same number however often it is read, unlike `ps`'s elapsed seconds.
+#[cfg(target_os = "macos")]
+pub fn started_ms(pid: u32) -> Option<u64> {
+    let info: libc::proc_bsdinfo = pid_info(pid, libc::PROC_PIDTBSDINFO)?;
+    info.pbi_start_tvsec
+        .checked_mul(1000)?
+        .checked_add(info.pbi_start_tvusec / 1000)
+}
+
+/// `pid`'s working folder (`PROC_PIDVNODEPATHINFO`).
+#[cfg(target_os = "macos")]
+pub fn cwd(pid: u32) -> Option<String> {
+    let info: libc::proc_vnodepathinfo = pid_info(pid, libc::PROC_PIDVNODEPATHINFO)?;
+    let bytes: Vec<u8> = info
+        .pvi_cdir
+        .vip_path
+        .iter()
+        .flatten()
+        .map(|&unit| unit as u8)
+        .take_while(|&byte| byte != 0)
+        .collect();
+    (!bytes.is_empty()).then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The TCP ports each of `pids` listens on, as `lsof` reads them (macOS has no other public way to a socket's port
+/// by process than walking every descriptor's `socket_fdinfo` union).
+#[cfg(target_os = "macos")]
+pub fn listening_ports(pids: &[u32]) -> std::collections::HashMap<u32, Vec<u16>> {
+    let listed: Vec<String> = pids.iter().map(u32::to_string).collect();
+    let output = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-w", "-a", "-iTCP", "-sTCP:LISTEN", "-Fn", "-p"])
+        .arg(listed.join(","))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    output.map_or_else(
+        |_| std::collections::HashMap::new(),
+        |output| parse_lsof_ports(&String::from_utf8_lossy(&output.stdout)),
+    )
+}
+
+/// `lsof -Fn`: a `p<pid>` line starts each process, an `n<address>:<port>` line names each socket (`*:3000`,
+/// `127.0.0.1:3000`, `[::1]:3000`). Each port once per process.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn parse_lsof_ports(text: &str) -> std::collections::HashMap<u32, Vec<u16>> {
+    let mut ports: std::collections::HashMap<u32, Vec<u16>> = std::collections::HashMap::new();
+    let mut pid = None;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix('p') {
+            pid = value.parse().ok();
+        } else if let (Some(pid), Some(name)) = (pid, line.strip_prefix('n')) {
+            let port = name
+                .rsplit_once(':')
+                .and_then(|(_, port)| port.parse().ok());
+            if let Some(port) = port {
+                let found = ports.entry(pid).or_default();
+                if !found.contains(&port) {
+                    found.push(port);
+                }
+            }
+        }
+    }
+    ports
+}
+
+/// Linux runs OMPdesk's tests and CI only: no CPU measure.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn cpu_ns(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// Linux runs OMPdesk's tests and CI only: `ps`'s start, to the second, stays.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn started_ms(_pid: u32) -> Option<u64> {
+    None
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn cwd(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Linux runs OMPdesk's tests and CI only, and never has a process whose output lost its reader.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn listening_ports(_pids: &[u32]) -> std::collections::HashMap<u32, Vec<u16>> {
+    std::collections::HashMap::new()
+}
+
 /// Whether this process may execute `path`, as node's `accessSync(path, X_OK)` answers: `access(2)`, which follows
 /// links and asks with the real user.
 #[cfg(unix)]
 pub fn may_execute(path: &std::path::Path) -> bool {
+    may_access(path, libc::X_OK)
+}
+
+#[cfg(unix)]
+pub fn may_write(path: &std::path::Path) -> bool {
+    may_access(path, libc::W_OK)
+}
+
+#[cfg(unix)]
+fn may_access(path: &std::path::Path, mode: libc::c_int) -> bool {
     use std::os::unix::ffi::OsStrExt;
 
     let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
         return false;
     };
     // SAFETY: `path` is a NUL-terminated string that lives through the call, which only reads it.
-    unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
+    unsafe { libc::access(path.as_ptr(), mode) == 0 }
 }
 
 /// Puts this process in a new job object that kills every process in it once its last handle closes, which is when
@@ -263,6 +659,26 @@ pub fn end_children_with_this_process() -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Gives a process with no console one that is never shown. Main starts the core detached on Windows (libuv's job
+/// object would otherwise kill it with main, and the omps with it, before they closed their sessions), and a detached
+/// process has no console: every console program it starts without `CREATE_NO_WINDOW` (a git) would then open a window
+/// of its own. A console made here takes the hidden state main started this process in, and the standard handles main
+/// passed stay as they are.
+#[cfg(windows)]
+pub fn ensure_console() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        fn AllocConsole() -> i32;
+    }
+    // SAFETY: both calls take no arguments and only read or create this process's own console.
+    unsafe {
+        if GetConsoleWindow().is_null() {
+            AllocConsole();
+        }
+    }
 }
 
 /// Makes this process's own stdin, stdout and stderr (main's pipes) not inheritable, so a process that leaves the job
@@ -689,10 +1105,19 @@ pub fn junction(target: &std::path::Path, link: &std::path::Path) -> std::io::Re
     set
 }
 
-/// This computer's physical memory and what of it is available, in bytes (`GlobalMemoryStatusEx`, which Electron's
-/// `process.getSystemMemoryInfo()` read).
+/// What `GlobalMemoryStatusEx` says of this computer, in bytes: physical memory and what of it is available, and the
+/// commit limit (RAM plus page files) with what of it is still free to promise.
 #[cfg(windows)]
-pub fn physical_memory() -> std::io::Result<(u64, u64)> {
+pub struct PhysicalMemory {
+    pub total: u64,
+    pub available: u64,
+    pub commit_limit: u64,
+    pub commit_available: u64,
+}
+
+/// This computer's memory now (`GlobalMemoryStatusEx`, which Electron's `process.getSystemMemoryInfo()` read).
+#[cfg(windows)]
+pub fn physical_memory() -> std::io::Result<PhysicalMemory> {
     /// `MEMORYSTATUSEX`.
     #[repr(C)]
     #[derive(Default)]
@@ -724,11 +1149,131 @@ pub fn physical_memory() -> std::io::Result<(u64, u64)> {
     if unsafe { GlobalMemoryStatusEx(&raw mut status) } == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok((status.total_phys, status.avail_phys))
+    Ok(PhysicalMemory {
+        total: status.total_phys,
+        available: status.avail_phys,
+        commit_limit: status.total_page_file,
+        commit_available: status.avail_page_file,
+    })
+}
+
+/// What Windows' performance counters say now: threads ready to run with no processor free, requests waiting on the
+/// disks, and the share of time the disks were busy since the look before. A counter Windows does not have, or has
+/// no value for yet, is absent.
+#[cfg(windows)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Queues {
+    pub run_queue: Option<f64>,
+    pub disk_queue: Option<f64>,
+    pub disk_busy_pct: Option<f64>,
+}
+
+/// One look at the counters (PDH). The query is opened at the first look and kept for the life of the process: a
+/// share of time is the difference between two looks.
+#[cfg(windows)]
+pub fn queues() -> Queues {
+    /// `PDH_FMT_COUNTERVALUE`, its union read as the double `PDH_FMT_DOUBLE` asks for.
+    #[repr(C)]
+    struct Value {
+        status: u32,
+        value: f64,
+    }
+
+    const _: () = assert!(size_of::<Value>() == 16);
+    const PDH_FMT_DOUBLE: u32 = 0x200;
+    /// `PDH_CSTATUS_VALID_DATA` is 0 and `PDH_CSTATUS_NEW_DATA` 1; every other status is no value.
+    const NEW_DATA: u32 = 1;
+    /// The busy share is what `% Idle Time` leaves: `% Disk Time` is the queue's length times 100, not a share.
+    const PATHS: [&str; 3] = [
+        r"\System\Processor Queue Length",
+        r"\PhysicalDisk(_Total)\Current Disk Queue Length",
+        r"\PhysicalDisk(_Total)\% Idle Time",
+    ];
+
+    // PDH's handles are pointer-sized; kept as integers so the open query can live in a static.
+    #[link(name = "pdh")]
+    unsafe extern "system" {
+        fn PdhOpenQueryW(source: *const u16, user_data: usize, query: *mut isize) -> u32;
+        fn PdhAddEnglishCounterW(
+            query: isize,
+            path: *const u16,
+            user_data: usize,
+            counter: *mut isize,
+        ) -> u32;
+        fn PdhCollectQueryData(query: isize) -> u32;
+        fn PdhGetFormattedCounterValue(
+            counter: isize,
+            format: u32,
+            kind: *mut u32,
+            value: *mut Value,
+        ) -> u32;
+    }
+
+    /// The open query and its counters in `PATHS`' order, 0 for one Windows would not add.
+    static QUERY: std::sync::Mutex<Option<(isize, [isize; 3])>> = std::sync::Mutex::new(None);
+
+    let Ok(mut held) = QUERY.lock() else {
+        return Queues::default();
+    };
+    let (query, counters) = match *held {
+        Some(open) => open,
+        None => {
+            let mut query = 0;
+            // SAFETY: a null source is the live counters; `query` is written only during the call.
+            if unsafe { PdhOpenQueryW(std::ptr::null(), 0, &raw mut query) } != 0 {
+                return Queues::default();
+            }
+            let counters = PATHS.map(|path| {
+                let path: Vec<u16> = path.encode_utf16().chain([0]).collect();
+                let mut counter = 0;
+                // SAFETY: `query` is the open query; `path` is NUL-terminated UTF-16 that outlives the call, and
+                // `counter` is written only during it.
+                let added =
+                    unsafe { PdhAddEnglishCounterW(query, path.as_ptr(), 0, &raw mut counter) };
+                if added == 0 { counter } else { 0 }
+            });
+            // The first look of a share of time has none behind it, so one is taken here and the first reading
+            // (a new core's, right after a lost one) covers these 100 ms.
+            // SAFETY: `query` is the open query.
+            unsafe { PdhCollectQueryData(query) };
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            *held.insert((query, counters))
+        }
+    };
+    // SAFETY: `query` is the open query, never closed.
+    if unsafe { PdhCollectQueryData(query) } != 0 {
+        return Queues::default();
+    }
+    let read = |counter: isize| {
+        let mut value = Value {
+            status: 0,
+            value: 0.0,
+        };
+        // SAFETY: `counter` belongs to the open query; `value` is a `PDH_FMT_COUNTERVALUE` laid out as C lays it out
+        // (`repr(C)`, size checked above), written only during the call; the counter's type is not asked for.
+        let status = unsafe {
+            PdhGetFormattedCounterValue(
+                counter,
+                PDH_FMT_DOUBLE,
+                std::ptr::null_mut(),
+                &raw mut value,
+            )
+        };
+        (counter != 0 && status == 0 && value.status <= NEW_DATA && value.value.is_finite())
+            .then_some(value.value)
+    };
+    Queues {
+        run_queue: read(counters[0]),
+        disk_queue: read(counters[1]),
+        disk_busy_pct: read(counters[2]).map(|idle| (100.0 - idle).clamp(0.0, 100.0)),
+    }
 }
 
 #[cfg(windows)]
-pub use process_list::{Process, ask_to_close, process_started_ms, processes, resume_process};
+pub use process_list::{
+    ConsoleWindow, Process, ask_to_close, console_windows, listening_ports, outputs_closed,
+    process_started_ms, processes, resume_process,
+};
 
 /// This computer's processes: a Toolhelp32 snapshot with each one's working set (`memory.processes`) and, for
 /// `procs.*`, its start and a handle to read its environment and command line and to end it.
@@ -851,6 +1396,24 @@ mod process_list {
     const PAGE: usize = 4096;
     /// 1970-01-01 in `FILETIME`'s milliseconds since 1601-01-01.
     const UNIX_EPOCH_MS: u64 = 11_644_473_600_000;
+    const PROCESS_DUP_HANDLE: u32 = 0x0040;
+    const DUPLICATE_SAME_ACCESS: u32 = 0x2;
+    /// `RTL_USER_PROCESS_PARAMETERS.StandardOutput` and `StandardError`: the handle values as the process holds them.
+    const STANDARD_OUTPUTS: [usize; 2] = [0x28, 0x30];
+    /// `FilePipeLocalInformation`; its `FILE_PIPE_LOCAL_INFORMATION` is ten `u32`s, `NamedPipeState` the ninth, which
+    /// is `FILE_PIPE_CLOSING_STATE` once the other end of the pipe closed (`FILE_PIPE_CONNECTED_STATE`, 3, before).
+    const PIPE_LOCAL_INFORMATION: u32 = 24;
+    const PIPE_STATE: usize = 8;
+    const PIPE_CLOSING_STATE: u32 = 4;
+    /// `RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath`, a `UNICODE_STRING` like `CommandLine`.
+    const CURRENT_DIRECTORY: usize = 0x38;
+    /// `GetExtendedTcpTable`'s families and `TCP_TABLE_OWNER_PID_LISTENER`; a row of the IPv4 table is six `u32`s
+    /// (state, local address, local port, remote address, remote port, process id), one of the IPv6 table 56 bytes
+    /// with the local port at +20 and the process id at +52. A port is in network order in its `u32`'s low half.
+    const AF_INET: u32 = 2;
+    const AF_INET6: u32 = 23;
+    const TCP_TABLE_OWNER_PID_LISTENER: u32 = 3;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -879,6 +1442,16 @@ mod process_list {
         fn Thread32Next(snapshot: Handle, entry: *mut ThreadEntry) -> i32;
         fn OpenThread(access: u32, inherit: i32, thread_id: u32) -> Handle;
         fn ResumeThread(thread: Handle) -> u32;
+        fn DuplicateHandle(
+            source_process: Handle,
+            source: Handle,
+            target_process: Handle,
+            target: *mut Handle,
+            access: u32,
+            inherit: i32,
+            options: u32,
+        ) -> i32;
+        fn GetCurrentProcess() -> Handle;
     }
 
     #[link(name = "ntdll")]
@@ -890,6 +1463,13 @@ mod process_list {
             length: u32,
             returned: *mut u32,
         ) -> i32;
+        fn NtQueryInformationFile(
+            file: Handle,
+            status: *mut [u64; 2],
+            information: *mut c_void,
+            length: u32,
+            class: u32,
+        ) -> i32;
     }
 
     #[link(name = "user32")]
@@ -898,14 +1478,18 @@ mod process_list {
         fn GetWindowThreadProcessId(window: Handle, process_id: *mut u32) -> u32;
         fn GetClassNameW(window: Handle, name: *mut u16, capacity: i32) -> i32;
         fn PostMessageW(window: Handle, message: u32, wparam: usize, lparam: isize) -> i32;
+        fn IsWindowVisible(window: Handle) -> i32;
+        fn GetWindowTextW(window: Handle, text: *mut u16, capacity: i32) -> i32;
     }
 
     /// One process of the list: `working_set` in bytes, 0 for the idle process and for one this user may not open;
-    /// `image` its executable's file name (`conhost.exe`).
+    /// `cpu_ms` the processor time it has used so far, kernel and user, absent for those too; `image` its
+    /// executable's file name (`conhost.exe`).
     pub struct ProcessEntry {
         pub pid: u32,
         pub parent: u32,
         pub working_set: u64,
+        pub cpu_ms: Option<u64>,
         pub image: String,
         /// When it started, in ms since the Unix epoch; read only when `processes` was asked to open each one.
         pub started_ms: Option<u64>,
@@ -942,7 +1526,8 @@ mod process_list {
         (read != 0).then_some(counters.working_set_size as u64)
     }
 
-    fn started_ms(process: &OwnedHandle) -> Option<u64> {
+    /// When the process started, in ms since the Unix epoch, and the processor time it has used, kernel and user, in ms.
+    fn times(process: &OwnedHandle) -> Option<(Option<u64>, u64)> {
         let mut times: [FileTime; 4] = Default::default();
         let [creation, exit, kernel, user] = &mut times;
         // SAFETY: `process` is an open handle; the four are `FILETIME`s laid out as C lays them out (`repr(C)`, size
@@ -952,16 +1537,21 @@ mod process_list {
         if read == 0 {
             return None;
         }
-        let ticks = (u64::from(times[0].high) << 32) | u64::from(times[0].low);
-        (ticks / 10_000).checked_sub(UNIX_EPOCH_MS)
+        let ticks = |time: &FileTime| (u64::from(time.high) << 32) | u64::from(time.low);
+        Some((
+            (ticks(&times[0]) / 10_000).checked_sub(UNIX_EPOCH_MS),
+            (ticks(&times[2]) + ticks(&times[3])) / 10_000,
+        ))
+    }
+
+    fn started_ms(process: &OwnedHandle) -> Option<u64> {
+        times(process)?.0
     }
 
     /// UTF-16 units out of little-endian bytes (Windows runs little-endian only).
     fn units(bytes: &[u8]) -> Vec<u16> {
-        bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect()
+        let (pairs, _) = bytes.as_chunks::<2>();
+        pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect()
     }
 
     fn word(bytes: &[u8], at: usize) -> Option<usize> {
@@ -1079,6 +1669,79 @@ mod process_list {
             (!bytes.is_empty()).then(|| units(&bytes))
         }
 
+        /// Its working folder as it holds it now.
+        pub fn current_directory(&self) -> Option<String> {
+            let parameters = self.parameters()?;
+            let length = usize::from(u16::from_le_bytes([
+                parameters[CURRENT_DIRECTORY],
+                parameters[CURRENT_DIRECTORY + 1],
+            ]));
+            let address = word(&parameters, CURRENT_DIRECTORY + 8)?;
+            if address == 0 || length == 0 {
+                return None;
+            }
+            let mut bytes = vec![0; length];
+            (self.read(address, &mut bytes) == length)
+                .then(|| String::from_utf16_lossy(&units(&bytes)))
+        }
+
+        /// The CPU time it has used, kernel and user, in ns.
+        pub fn cpu_ns(&self) -> Option<u64> {
+            let mut times: [FileTime; 4] = Default::default();
+            let [creation, exit, kernel, user] = &mut times;
+            // SAFETY: the handle is open with PROCESS_QUERY_INFORMATION; the four are `FILETIME`s laid out as C lays
+            // them out (`repr(C)`, size checked above), written only during the call.
+            let read =
+                unsafe { GetProcessTimes(self.0.as_raw_handle(), creation, exit, kernel, user) };
+            if read == 0 {
+                return None;
+            }
+            let ticks = |time: &FileTime| (u64::from(time.high) << 32) | u64::from(time.low);
+            ticks(&times[2])
+                .checked_add(ticks(&times[3]))?
+                .checked_mul(100)
+        }
+
+        /// Its standard output and error, as handles of this process to the same pipes, files or consoles; those that
+        /// are unset or cannot be copied are left out. `pid` is its id, which no other process can have while `self`
+        /// is open.
+        pub fn outputs(&self, pid: u32) -> Vec<OwnedHandle> {
+            let Some(parameters) = self.parameters() else {
+                return Vec::new();
+            };
+            let Some(source) = open_handle(pid, PROCESS_DUP_HANDLE) else {
+                return Vec::new();
+            };
+            STANDARD_OUTPUTS
+                .iter()
+                .filter_map(|&at| {
+                    let value = word(&parameters, at)?;
+                    if value == 0 || value == usize::MAX {
+                        return None;
+                    }
+                    let mut copy: Handle = std::ptr::null_mut();
+                    // SAFETY: `source` is open with PROCESS_DUP_HANDLE; `value` is a handle value in that process,
+                    // which the call checks there (an invalid one fails it); `copy` is a live pointer the call writes.
+                    let copied = unsafe {
+                        DuplicateHandle(
+                            source.as_raw_handle(),
+                            std::ptr::without_provenance_mut(value),
+                            GetCurrentProcess(),
+                            &raw mut copy,
+                            0,
+                            0,
+                            DUPLICATE_SAME_ACCESS,
+                        )
+                    };
+                    if copied == 0 || copy.is_null() {
+                        return None;
+                    }
+                    // SAFETY: `copy` is the handle DuplicateHandle just made in this process; nothing else owns it.
+                    Some(unsafe { OwnedHandle::from_raw_handle(copy) })
+                })
+                .collect()
+        }
+
         /// Whether the process has exited.
         pub fn exited(&self) -> bool {
             // SAFETY: the handle is open with SYNCHRONIZE; a wait of 0 ms only looks.
@@ -1090,6 +1753,135 @@ mod process_list {
             // SAFETY: the handle is open with PROCESS_TERMINATE.
             unsafe { TerminateProcess(self.0.as_raw_handle(), 1) != 0 }
         }
+    }
+
+    /// Whether `handle` is a pipe whose other end closed: a write to it fails. The pipe file system enters the closing
+    /// state only in the cleanup of an end's last handle (ReactOS's NPFS, `NpCommonCleanup` → `NpSetClosingPipeState`;
+    /// `DisconnectNamedPipe` gives the disconnected state instead), and a pipe has no half-close, so this end's own
+    /// doing cannot set it while the other end lives.
+    fn pipe_closed(handle: &OwnedHandle) -> bool {
+        let mut status = [0u64; 2];
+        let mut information = [0u32; 10];
+        let length = u32::try_from(size_of_val(&information)).unwrap_or(u32::MAX);
+        // SAFETY: `handle` is open; `status` is an `IO_STATUS_BLOCK` (two pointer-sized words) and `information` a
+        // `FILE_PIPE_LOCAL_INFORMATION` of `length` bytes, written only during the call. A handle that is no pipe fails
+        // the call.
+        let read = unsafe {
+            NtQueryInformationFile(
+                handle.as_raw_handle(),
+                &raw mut status,
+                information.as_mut_ptr().cast(),
+                length,
+                PIPE_LOCAL_INFORMATION,
+            )
+        };
+        read >= 0 && information[PIPE_STATE] == PIPE_CLOSING_STATE
+    }
+
+    /// For each process's `outputs`, whether one of them is a pipe whose other end closed. The query waits behind a
+    /// call another process has in flight on the same pipe (a write into a full one), so the checks run on a thread of
+    /// their own: a process whose check has not answered within `wait` counts as heard, and the thread ends once the call
+    /// it waits behind does.
+    pub fn outputs_closed(outputs: Vec<Vec<OwnedHandle>>, wait: std::time::Duration) -> Vec<bool> {
+        let mut closed = vec![false; outputs.len()];
+        let (send, receive) = std::sync::mpsc::channel();
+        let checks = std::thread::Builder::new()
+            .name("procs-outputs".to_owned())
+            .spawn(move || {
+                for (index, handles) in outputs.into_iter().enumerate() {
+                    if send.send((index, handles.iter().any(pipe_closed))).is_err() {
+                        return;
+                    }
+                }
+            });
+        if checks.is_err() {
+            return closed;
+        }
+        let deadline = std::time::Instant::now() + wait;
+        while let Ok((index, dead)) =
+            receive.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        {
+            closed[index] = dead;
+        }
+        closed
+    }
+
+    /// The TCP ports each of `pids` listens on, IPv4 and IPv6 (`GetExtendedTcpTable`).
+    pub fn listening_ports(pids: &[u32]) -> std::collections::HashMap<u32, Vec<u16>> {
+        let mut ports: std::collections::HashMap<u32, Vec<u16>> = std::collections::HashMap::new();
+        for (family, row_size, port_at, pid_at) in [(AF_INET, 24, 8, 20), (AF_INET6, 56, 20, 52)] {
+            let table = tcp_listeners(family);
+            let count = table.get(..4).map_or(0, |count| {
+                u32::from_le_bytes([count[0], count[1], count[2], count[3]])
+            });
+            for index in 0..count as usize {
+                let Some(row) = table.get(4 + index * row_size..4 + (index + 1) * row_size) else {
+                    break;
+                };
+                let at = |offset: usize| {
+                    u32::from_le_bytes([
+                        row[offset],
+                        row[offset + 1],
+                        row[offset + 2],
+                        row[offset + 3],
+                    ])
+                };
+                let pid = at(pid_at);
+                if !pids.contains(&pid) {
+                    continue;
+                }
+                let port = u16::from_be(at(port_at) as u16);
+                let found = ports.entry(pid).or_default();
+                if !found.contains(&port) {
+                    found.push(port);
+                }
+            }
+        }
+        ports
+    }
+
+    /// `GetExtendedTcpTable`'s listening sockets of `family` with their process ids; empty when it cannot be read.
+    fn tcp_listeners(family: u32) -> Vec<u8> {
+        #[link(name = "iphlpapi")]
+        unsafe extern "system" {
+            fn GetExtendedTcpTable(
+                table: *mut c_void,
+                size: *mut u32,
+                order: i32,
+                family: u32,
+                class: u32,
+                reserved: u32,
+            ) -> u32;
+        }
+        let mut size = 0u32;
+        // A socket may open between the size and the read: a few tries.
+        for _ in 0..4 {
+            // `u32`s, so the rows' integers are aligned as the call writes them.
+            let mut table = vec![0u32; (size as usize).div_ceil(4)];
+            // SAFETY: `table` is valid for writes of `size` bytes (none on the first call, which only asks the size);
+            // `size` is a live u32 the call sets to what it needs or wrote.
+            let status = unsafe {
+                GetExtendedTcpTable(
+                    table.as_mut_ptr().cast(),
+                    &raw mut size,
+                    0,
+                    family,
+                    TCP_TABLE_OWNER_PID_LISTENER,
+                    0,
+                )
+            };
+            if status == 0 {
+                return table
+                    .iter()
+                    .flat_map(|unit| unit.to_le_bytes())
+                    .take(size as usize)
+                    .collect();
+            }
+            if status != ERROR_INSUFFICIENT_BUFFER {
+                break;
+            }
+        }
+        Vec::new()
     }
 
     /// When the running process `pid` started, in ms since the Unix epoch (`GetProcessTimes`, the value `Get-Process`
@@ -1163,13 +1955,15 @@ mod process_list {
                 .iter()
                 .position(|unit| *unit == 0)
                 .unwrap_or(name.len());
+            let times = handle.and_then(times);
             entries.push(ProcessEntry {
                 pid,
                 parent: entry.parent_process_id,
                 working_set: handle.and_then(working_set).unwrap_or(0),
+                cpu_ms: times.map(|(_, cpu)| cpu),
                 image: String::from_utf16_lossy(&name[..end]),
                 started_ms: if open {
-                    handle.and_then(started_ms)
+                    times.and_then(|(started, _)| started)
                 } else {
                     None
                 },
@@ -1273,13 +2067,76 @@ mod process_list {
 
     /// Whether `window` is a console's: conhost's, or a pseudoconsole's hidden one.
     fn console(window: Handle) -> bool {
+        class_among(window, &["ConsoleWindowClass", "PseudoConsoleWindow"]).is_some()
+    }
+
+    /// Which of `names` is the window's class, if any.
+    fn class_among(window: Handle, names: &[&'static str]) -> Option<&'static str> {
         let mut class = [0u16; 32];
         // SAFETY: `class` is valid for writes of the 32 units the call is told, which it does not exceed.
         let length = unsafe { GetClassNameW(window, class.as_mut_ptr(), 32) };
         let class = &class[..usize::try_from(length).unwrap_or(0).min(class.len())];
-        ["ConsoleWindowClass", "PseudoConsoleWindow"]
+        names
             .iter()
-            .any(|name| name.encode_utf16().eq(class.iter().copied()))
+            .copied()
+            .find(|name| name.encode_utf16().eq(class.iter().copied()))
+    }
+
+    /// A console window a person sees.
+    pub struct ConsoleWindow {
+        pub window: usize,
+        /// The process Windows names for the window: the program whose console a conhost window shows, and for a
+        /// Windows Terminal window the terminal itself, whatever runs in it.
+        pub pid: u32,
+        pub class: &'static str,
+        pub title: String,
+    }
+
+    /// The classes of a shown console: conhost's own window, and Windows Terminal's, which shows the console of a
+    /// program started without one wherever it is the default terminal.
+    const SHOWN_CONSOLES: [&str; 2] = ["ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"];
+
+    /// Every visible console window of this process's desktop (`procs.consoles`). A console that is never shown (the
+    /// one a program started with `CREATE_NO_WINDOW` gets) is not among them.
+    pub fn console_windows() -> Vec<ConsoleWindow> {
+        extern "system" fn visit(window: Handle, data: isize) -> i32 {
+            // SAFETY: `data` is the address of the `Vec` that `console_windows` lends EnumWindows, which calls this on
+            // the same thread, one window at a time, before it returns; nothing else touches it meanwhile.
+            let found = unsafe {
+                &mut *std::ptr::with_exposed_provenance_mut::<Vec<ConsoleWindow>>(data as usize)
+            };
+            let Some(class) = class_among(window, &SHOWN_CONSOLES) else {
+                return 1;
+            };
+            // SAFETY: `window` is a handle EnumWindows passed (a window gone since only fails the call).
+            if unsafe { IsWindowVisible(window) } == 0 {
+                return 1;
+            }
+            let mut pid = 0;
+            let mut title = [0u16; 256];
+            // SAFETY: as above; `pid` is a live u32, and `title` is valid for writes of the 256 units the call is told,
+            // which it does not exceed. Another process's title is read from the window, never asked of that process.
+            let length = unsafe {
+                GetWindowThreadProcessId(window, &raw mut pid);
+                GetWindowTextW(window, title.as_mut_ptr(), 256)
+            };
+            let title = &title[..usize::try_from(length).unwrap_or(0).min(title.len())];
+            found.push(ConsoleWindow {
+                window: window.addr(),
+                pid,
+                class,
+                title: String::from_utf16_lossy(title),
+            });
+            1
+        }
+
+        let mut found: Vec<ConsoleWindow> = Vec::new();
+        // SAFETY: `visit` has the callback's signature, and `data` is the address of `found`, which lives and is used
+        // by nothing else until EnumWindows returns.
+        unsafe {
+            EnumWindows(visit, (&raw mut found).expose_provenance() as isize);
+        }
+        found
     }
 }
 
@@ -1885,3 +2742,55 @@ mod zone {
 
 #[cfg(windows)]
 pub use zone::{local_day, local_instant};
+#[cfg(test)]
+mod priority_tests {
+    use std::process::Stdio;
+    use tokio::process::{Child, Command};
+
+    #[cfg(unix)]
+    fn priority(child: Option<&Child>) -> i32 {
+        let pid = child.map_or(0, |c| c.id().unwrap());
+        // SAFETY: zero selects this process; the other PID is our unreaped child.
+        unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) }
+    }
+
+    #[cfg(windows)]
+    fn priority(child: Option<&Child>) -> i32 {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetPriorityClass(process: super::job::Handle) -> u32;
+        }
+        // SAFETY: both the current-process pseudohandle and the borrowed child handle remain valid.
+        let class = unsafe {
+            let handle = child.map_or_else(
+                || super::job::GetCurrentProcess(),
+                |c| c.raw_handle().unwrap(),
+            );
+            GetPriorityClass(handle)
+        };
+        assert_ne!(class, 0);
+        class as i32
+    }
+
+    #[tokio::test]
+    async fn lowers_only_the_child_before_returning_it() {
+        #[cfg(unix)]
+        let (mut command, expected) = (Command::new("cat"), 10);
+        #[cfg(windows)]
+        let (mut command, expected) = (Command::new("cmd.exe"), 0x4000);
+        #[cfg(windows)]
+        command.args(["/d", "/q"]);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let parent = priority(None);
+        let (mut child, warning) = super::spawn_low_priority(&mut command).unwrap();
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(priority(Some(&child)), expected);
+        assert_eq!(priority(None), parent);
+        drop(child.stdin.take());
+        child.wait().await.unwrap();
+    }
+}

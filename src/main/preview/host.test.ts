@@ -5,7 +5,7 @@
  */
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PREVIEW_COMMAND, type PreviewState, VISUAL_SCHEME } from "../../shared/preview";
+import { PREVIEW_COMMAND, PREVIEW_TAB_LIMIT, type PreviewState, VISUAL_SCHEME } from "../../shared/preview";
 import { IpcRegistry } from "../web/ipc-registry";
 import { type PreviewRelayTunnel, registerPreviewHost } from "./host";
 import { type CapturedImage, PREVIEW_CHECK_BEHIND_MS } from "./preview-check";
@@ -198,16 +198,18 @@ const WEB_VISUAL = "aaaaaaaaaaaaaaaa";
 const WEB_URL = "https://example.com/";
 
 function register(serve = vi.fn(async () => new Response("served")), remote?: { tunnel: PreviewRelayTunnel }) {
-	// Only the slice of the store the host reads: one file visual, `VISUAL`, with versions 1 and 2, and one web visual.
+	// Only the slice of the store the host reads: two file visuals, `VISUAL` and `OTHER`, with versions 1 and 2, and
+	// one web visual.
+	const file = (id: string) => id === VISUAL || id === OTHER;
 	const visuals = {
 		parse: parseVisualUrl,
 		view: (id: string, version?: number) =>
-			id === VISUAL ? { version: version ?? 2 } : id === WEB_VISUAL ? { version: 1 } : null,
+			file(id) ? { version: version ?? 2 } : id === WEB_VISUAL ? { version: 1 } : null,
 		url: (id: string, version = 2) =>
-			id === VISUAL ? `${VISUAL_SCHEME}://v${version}-${id}/index.html` : id === WEB_VISUAL ? WEB_URL : null,
+			file(id) ? `${VISUAL_SCHEME}://v${version}-${id}/index.html` : id === WEB_VISUAL ? WEB_URL : null,
 		serve,
 		list: async () => [],
-		forTab: () => [VISUAL, WEB_VISUAL],
+		forTab: () => [VISUAL, OTHER, WEB_VISUAL],
 		addToTab: async () => true,
 	};
 	const ipc = new IpcRegistry({ handle: (channel, handler) => electron.handlers.set(channel, handler), on: () => {} });
@@ -242,6 +244,19 @@ beforeEach(() => {
 });
 
 describe("preview host", () => {
+	it("applies consecutive zoom steps to the host's latest level before a renderer receives state", async () => {
+		register();
+		const { ask } = openWindow();
+		const first = ask({ action: "zoomIn" });
+		const second = ask({ action: "zoomIn" });
+		expect((await first).zoom).toBe(1.1);
+		expect((await second).zoom).toBe(1.2);
+		expect((await ask({ action: "zoomOut" })).zoom).toBe(1.1);
+		expect((await ask({ action: "zoom", zoom: 1 })).zoom).toBe(1);
+		await ask({ action: "zoom", zoom: 2 });
+		expect((await ask({ action: "zoomIn" })).zoom).toBe(2);
+	});
+
 	it("keeps one pair of sessions per window across hosts and forgets what the last host browsed", async () => {
 		register();
 		const first = openWindow();
@@ -341,6 +356,24 @@ describe("preview host", () => {
 		expect(web?.loaded).toEqual(["https://example.com/"]);
 		expect(web?.webrtc).toBe("default");
 		expect(page.loaded).toHaveLength(1);
+	});
+
+	it("at the tab limit shows another visual in a new page, never in the page the first one used", async () => {
+		const { ask, page, pages } = await showVisual();
+		const first = (await ask({ action: "layout", bounds: { x: 0, y: 0, width: 600, height: 400 }, visible: true }))
+			.tabs[0];
+		if (!first) throw new Error("no tab");
+		for (let opened = 1; opened < PREVIEW_TAB_LIMIT; opened++) await ask({ action: "newTab" });
+		expect(pages()).toHaveLength(PREVIEW_TAB_LIMIT);
+		await ask({ action: "selectTab", id: first.id });
+		await ask({ action: "showVisual", tabId: "tab", visualId: OTHER });
+		// The native host gives every visual page its own cookie jar: the old page would carry VISUAL's cookies to OTHER.
+		expect(page.closed).toBe(true);
+		expect(page.loaded).toEqual([`omp-visual://v2-${VISUAL}/index.html`]);
+		const replacement = pages().find(contents => contents.loaded.includes(`omp-visual://v2-${OTHER}/index.html`));
+		expect(replacement).toBeDefined();
+		expect(replacement).not.toBe(page);
+		expect(pages()).toHaveLength(PREVIEW_TAB_LIMIT);
 	});
 
 	it("keeps a visual's page inside its own visual, whatever the page starts", async () => {

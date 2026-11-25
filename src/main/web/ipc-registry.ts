@@ -12,9 +12,15 @@
  * hands the core `IPC_POLICY` as data and takes its table of channels: each call of one goes to the core's
  * `ipc.call`, every other channel stays here and never touches the core, so a core that is down or resting fails
  * only its own channels.
+ *
+ * The channels the Tauri shell serves itself (`crates/tauri-shell/src/ipc_router.json`) never reach main from an app
+ * page. `routeShell` hands the shell the channels main serves (the shell refuses every other one) and registers each
+ * native channel here only for main's own callers (a paired page, an agent), which reach the shell's handler through
+ * `ipc.call`. `handle`/`on` refuse a native channel: one channel, one owner.
  */
 import { BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { CoreAnswer, CoreCallOptions } from "../core/process";
+import { tookIpc } from "../slow-steps";
 import type { ClientWindow } from "./client-window";
 
 /** The page that made the call: Electron's `event.sender`. */
@@ -34,6 +40,37 @@ export interface IpcCaller {
 }
 
 type IpcHandler = (caller: IpcCaller, ...args: unknown[]) => unknown;
+
+/** A channel and the direction it is called in. */
+export interface IpcRoute {
+	channel: string;
+	dir: "invoke" | "send";
+}
+
+/** What `routeShell` needs of the Tauri shell (`shell-host/electron/index.ts`). */
+export interface IpcShell {
+	/** The channels the shell serves itself: `hello`'s `nativeIpc`. */
+	readonly channels: readonly IpcRoute[];
+	/** `ipc.routes`: the channels main serves, handed over once. */
+	routes(main: { invoke: string[]; send: string[] }): Promise<unknown>;
+	/** `ipc.call`: a native channel's call for one of main's callers; the handler's value. */
+	call(params: IpcRoute & { caller: IpcCallerParams; args: unknown[] }): Promise<unknown>;
+}
+
+/** A caller as the core and the shell take it: its lane key (one per window page, one per paired connection). */
+interface IpcCallerParams {
+	key: string;
+	window: number | null;
+	connId: string | null;
+}
+
+function callerParams(caller: IpcCaller): IpcCallerParams {
+	return {
+		key: caller.connId === undefined ? `w${caller.sender.id}` : `c${caller.connId}`,
+		window: caller.win?.webContents.id ?? null,
+		connId: caller.connId ?? null,
+	};
+}
 
 /** What `routeCore` needs of the core: `CoreProcess`. */
 export interface IpcCore {
@@ -70,6 +107,19 @@ class ElectronCaller implements IpcCaller {
 	}
 }
 
+/** `handler`, with the slow-step probe told how long its answer took and how much of that held main's thread. */
+function timed(channel: string, handler: IpcHandler): IpcHandler {
+	return (caller, ...args) => {
+		const started = performance.now();
+		const result = handler(caller, ...args);
+		const syncMs = performance.now() - started;
+		const done = () => tookIpc(channel, performance.now() - started, syncMs);
+		if (result instanceof Promise) void result.then(done, done);
+		else done();
+		return result;
+	};
+}
+
 export class IpcRegistry {
 	readonly #ipcMain: ElectronIpc;
 	readonly #invokeHandlers = new Map<string, IpcHandler>();
@@ -81,6 +131,8 @@ export class IpcRegistry {
 	#starting: Promise<unknown> | null = null;
 	/** Core calls made while the policy was being handed over, in the order they came; given the hand-over's failure. */
 	#held: Array<(failure: unknown) => void> = [];
+	/** The channels the Tauri shell serves itself; main registers no handler of its own for them. */
+	readonly #native = new Set<string>();
 
 	constructor(ipcMain: ElectronIpc) {
 		this.#ipcMain = ipcMain;
@@ -104,6 +156,40 @@ export class IpcRegistry {
 					);
 				});
 		}
+	}
+
+	/**
+	 * Registers each channel the shell serves for main's own callers only (never on `ipcMain`: an app page's call of one
+	 * never comes here), then hands the shell the channels of `policy` (`IPC_POLICY`) main serves. Rejects when a
+	 * channel would have both owners or the shell refuses the hand-over; call it before the first window opens.
+	 */
+	async routeShell(shell: IpcShell, policy: Readonly<Record<string, { dir: string; mode?: string }>>): Promise<void> {
+		for (const { channel, dir } of shell.channels) {
+			if (this.#invokeHandlers.has(channel) || this.#sendHandlers.has(channel))
+				throw new Error(`'${channel}' is served by both main and the shell`);
+			this.#native.add(channel);
+			const call = (caller: IpcCaller, args: unknown[]) =>
+				shell.call({ channel, dir, caller: callerParams(caller), args });
+			if (dir === "invoke")
+				this.#invokeHandlers.set(
+					channel,
+					timed(channel, (caller, ...args) => call(caller, args)),
+				);
+			else
+				this.#sendHandlers.set(
+					channel,
+					timed(channel, (caller, ...args) => {
+						call(caller, args).catch((error: unknown) =>
+							console.warn(`[ipc] ${channel}: ${error instanceof Error ? error.message : String(error)}`),
+						);
+					}),
+				);
+		}
+		const main: { invoke: string[]; send: string[] } = { invoke: [], send: [] };
+		for (const [channel, { dir, mode }] of Object.entries(policy))
+			if ((dir === "invoke" || dir === "send") && mode !== "core" && !this.#native.has(channel))
+				main[dir].push(channel);
+		await shell.routes(main);
 	}
 
 	/** `ipc.start` on the running core (starting it), once at a time; its table of channels. */
@@ -145,11 +231,7 @@ export class IpcRegistry {
 		if (!core) return Promise.reject(new Error(`No handler registered for '${channel}'`));
 		const params = {
 			// The lane the call is ordered in, in the core: one per window page, one per paired page's connection.
-			caller: {
-				key: caller.connId === undefined ? `w${caller.sender.id}` : `c${caller.connId}`,
-				window: caller.win?.webContents.id ?? null,
-				connId: caller.connId ?? null,
-			},
+			caller: callerParams(caller),
 			channel,
 			dir,
 			args,
@@ -172,15 +254,17 @@ export class IpcRegistry {
 	/** An invoke channel's handler; its result (or rejection) is the caller's. A second one for a channel throws, as in Electron. */
 	handle<A extends unknown[]>(channel: string, handler: (caller: IpcCaller, ...args: A) => unknown): void {
 		// The IPC boundary is untyped: each handler checks the arguments it declares.
-		const run = handler as IpcHandler;
+		if (this.#native.has(channel)) throw new Error(`'${channel}' is the shell's (ipc_router.json), not main's`);
+		const run = timed(channel, handler as IpcHandler);
 		this.#ipcMain.handle(channel, (event, ...args: unknown[]) => run(new ElectronCaller(event.sender), ...args));
 		this.#invokeHandlers.set(channel, run);
 	}
 
 	/** A fire-and-forget channel's handler (the renderer's `send`). One per channel. */
 	on<A extends unknown[]>(channel: string, handler: (caller: IpcCaller, ...args: A) => void): void {
+		if (this.#native.has(channel)) throw new Error(`'${channel}' is the shell's (ipc_router.json), not main's`);
 		if (this.#sendHandlers.has(channel)) throw new Error(`Attempted to register a second listener for '${channel}'`);
-		const run = handler as IpcHandler;
+		const run = timed(channel, handler as IpcHandler);
 		this.#ipcMain.on(channel, (event, ...args: unknown[]) => run(new ElectronCaller(event.sender), ...args));
 		this.#sendHandlers.set(channel, run);
 	}

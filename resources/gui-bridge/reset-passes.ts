@@ -15,9 +15,10 @@
  * Stock helpers are imported inside the guarded method, so a missing export
  * fails only feature `resetPasses` (literal specifiers: see health.ts).
  */
-import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
+
 import { guard } from "./health";
 import { lastReport } from "./last-reports";
+import { getOAuthCredentialProvider } from "./omp/pi-ai/oauth";
 import { asRecord } from "./params";
 import { type ChosenOffer, chosenClaims, redeemResetPass } from "./reset-passes-core";
 import type { BridgeMethods } from "./types";
@@ -34,9 +35,10 @@ export const methods: BridgeMethods = {
 			}
 			if (creditId !== undefined && typeof creditId !== "string") throw new Error("creditId must be a string");
 			const session = env.session();
-			const { describeRedeemOutcome } = await import("@oh-my-pi/pi-coding-agent/slash-commands/helpers/reset-usage");
+			const { describeRedeemOutcome } = await import("./omp/pi-coding-agent/slash-commands/helpers/reset-usage");
 			const storage = session.modelRegistry.authStorage;
-			return redeemResetPass(
+			const provider = getOAuthCredentialProvider(providerId);
+			const result = await redeemResetPass(
 				{
 					redeem: target => session.redeemResetCredit(target),
 					describe: (outcome, label) => describeRedeemOutcome(outcome, label),
@@ -44,7 +46,7 @@ export const methods: BridgeMethods = {
 						const access = await storage.oauth.accessById(provider, id);
 						if (!access) return { code: "no_account" };
 						if (!access.ok) return { code: "account_unavailable" };
-						const { listClaudeResetCredits, consumeClaudeResetCredit } = await import("@oh-my-pi/pi-ai");
+						const { listClaudeResetCredits, consumeClaudeResetCredit } = await import("./omp/pi-ai");
 						const auth = {
 							...access,
 							baseUrl: session.modelRegistry.getProviderBaseUrl?.(provider),
@@ -75,13 +77,18 @@ export const methods: BridgeMethods = {
 					},
 					settle: provider => storage.usage.invalidate(provider),
 				},
-				{
-					provider: getOAuthCredentialProvider(providerId),
-					credentialId,
-					...(creditId ? { creditId } : {}),
-				},
+				{ provider, credentialId, ...(creditId ? { creditId } : {}) },
 				claims,
 			);
+			// The plan is back, so what the account's answers said before no longer holds. Loaded here like the stock
+			// helpers above: a credit-spend.ts this omp cannot load must not take reset passes with it.
+			if (result.ok) {
+				await import("./credit-spend").then(
+					spend => spend.forgetLimited(provider, credentialId),
+					() => undefined,
+				);
+			}
+			return result;
 		},
 	}),
 };

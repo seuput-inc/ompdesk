@@ -304,10 +304,32 @@ struct PageParams {
 
 /// The tail page kept: `{version, page}` when its version is a string and its page an object.
 pub(super) fn load_page(file: &Path) -> Option<String> {
-    let bytes = std::fs::read(file).ok()?;
-    let mut fields: Fields = serde_json::from_str(&String::from_utf8_lossy(&bytes)).ok()?;
-    let version = fields.remove("version").filter(|raw| js::is_string(raw))?;
-    let page = fields.remove("page").filter(|raw| js::is_object(raw))?;
+    let missed = |why: String| {
+        if *folder::TRACE {
+            eprintln!(
+                "ompdesk-core: cache page {} not read: {why}",
+                file.display()
+            );
+        }
+    };
+    let bytes = match std::fs::read(file) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            missed(format!("{:?} {error}", error.kind()));
+            return None;
+        }
+    };
+    let Ok(mut fields) = serde_json::from_str::<Fields>(&String::from_utf8_lossy(&bytes)) else {
+        missed(format!("{} bytes that are no JSON object", bytes.len()));
+        return None;
+    };
+    let (Some(version), Some(page)) = (
+        fields.remove("version").filter(|raw| js::is_string(raw)),
+        fields.remove("page").filter(|raw| js::is_object(raw)),
+    ) else {
+        missed("no string version or no object page".into());
+        return None;
+    };
     folder::touch(file);
     Some(format!(
         "{{\"version\":{},\"page\":{}}}",

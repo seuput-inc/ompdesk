@@ -1,30 +1,17 @@
-# The full Playwright suite on GitHub's macOS runners, split over a matrix of
+# The full Playwright suite on GitHub's Windows runners, split over a matrix of
 # shards and run against the `out/` bundle another job of the same run uploaded.
 # Called by e2e-nightly.yml and by ci.yml's manual `e2e=true`, each after its
 # own `build-out` job; release.yml no longer calls it. It never runs on its own.
 #
-# The callers hold the account-wide macOS lane for the whole call (a concurrency group on the calling job: `mac-dispatch`
-# for a dispatch, `mac-nightly` for the nightly); this workflow sets no group of its own.
+# Windows because that is where Playwright can drive the app: the Tauri host's page is WebView2, which opens a
+# DevTools port for the test child (e2e/fixture/shell-launch.ts). macOS's WKWebView has no CDP endpoint, so no
+# Playwright spec can launch the app there; macOS is checked by `scripts/tauri-native-smoke.ts` (mac-checks.yml's
+# `mac-smoke`, release.yml's `mac`). The staged host (resources/ompdesk-tauri/win32-x64) runs the built `out/` as an
+# unpackaged app, as the harness always did; Preview's own browser is staged beside it.
 #
-# Sharding is scripts/e2e-shard.ts (whole spec files, dealt by estimated cost),
-# not `playwright test --shard`, which counts tests that skip inside their body
-# and so leaves one shard nearly empty. Every shard runs against the real latest
-# omp (real-core and deep-audit) and the fake omp (everything else); playwright
-# runs one worker per shard (3-core runner; playwright.config.ts).
-#
-# At most 5 macOS jobs run at once on a public repo's free tier, so the suite runs in five shards: with six the sixth
-# queued behind the first to finish and the run took two rounds (nightly 42609763294: shard 6 started 994 s in, the
-# run ended after 38 min of which the shards themselves were 933 to 1158 s). The suite sums ~6200 s of test time on
-# the runner, ~1250 s a shard dealt from that run's per-file times (`bun scripts/e2e-shard-costs.ts <run-id>`), so
-# Playwright's `--global-timeout` is 35 minutes under the job's 40: at 25 under 30, five shards of ~1350 s stopped
-# with tests not run (9 in 41916393486; 36 in 41817431850, with four shards). `fail-fast: false`: one run reports
-# every failing shard, and `gh run rerun <id> --failed` reruns only those.
-#
-# One worker per shard: with two (run 42693732758) the shards summed 3856 s instead of 6376 s, but four tests that
-# pass with one failed, `preview-stream`'s frame pacing every time (3.9 frames a second where it asserts 5).
-#
-# `specs` (space-separated e2e/*.e2e.ts paths) runs those files alone in one shard instead of the whole suite: the
-# check after a fix, at the cost of the files plus ~1 min of setup, not ~25 min (e2e-nightly.yml's dispatch input).
+# On runs 44970103705 and 44971979122 the slowest of 18 shards spent 568 s and 588 s in test
+# bodies. Dealing the same selectors and replaying their logged durations at 20 gave 434 s and
+# 432 s. That excludes setup and queue time. A focused dispatch still uses one worker.
 name: e2e-shards
 
 on:
@@ -45,59 +32,69 @@ permissions:
 jobs:
   e2e:
     name: e2e (shard ${{ matrix.shard }}/${{ strategy.job-total }})
-    runs-on: macos-latest
-    timeout-minutes: 40
+    runs-on: windows-latest
+    # Windows setup (install, the Tauri test host) takes about 20 minutes before Playwright's 35-minute global timeout.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.specs != '' && '[1]' || '[1, 2, 3, 4, 5]') }}
+        shard: ${{ fromJSON(inputs.specs != '' && '[1]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]') }}
+    defaults:
+      run:
+        shell: bash
     env:
       SHARD: ${{ matrix.shard }}
       SHARDS: ${{ strategy.job-total }}
       SPECS_INPUT: ${{ inputs.specs }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+      # See release.yml's win job: bun's cache on the workspace volume.
+      - name: Put bun's cache on the workspace volume
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install
-      # The runner is ephemeral: real-core and deep-audit run the real omp.
-      - name: Install omp
+      # The Tauri host (WebView2) and the pinned Node, which every e2e launches (the tauri-shell action: a cached build),
+      # built with test-automation: only that build leaves WebView2's DevTools port open for Playwright.
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      # Preview uses staged Brave; phone and web specs launch Playwright's headless Chromium or WebKit.
+      - name: Prepare Preview and Playwright browsers
         run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
-      # mobile-*.e2e.ts drive the web build in Playwright's own browsers, which a fresh runner lacks.
-      - name: Playwright browsers
-        run: bunx playwright install chromium webkit
+          bun scripts/stage-preview-browser.ts &
+          preview=$!
+          status=0
+          bunx playwright install --only-shell chromium webkit || status=$?
+          wait "$preview" || status=$?
+          exit "$status"
+      # The runner is ephemeral: real-core and deep-audit run the real omp.
+      - uses: ./.github/actions/install-omp
       # The bundle is the same bytes whichever OS built it.
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ inputs.out-artifact }}
           path: out
       - name: Playwright, this shard's spec files
         run: |
           set -euo pipefail
+          list="$RUNNER_TEMP/e2e-shard.txt"
           if [ -n "$SPECS_INPUT" ]; then
             read -r -a SPECS <<< "$SPECS_INPUT"
-            # Only existing spec files: a typo must fail here, not match nothing or (as a Playwright regex) more.
             for spec in "${SPECS[@]}"; do
-              [[ "$spec" =~ ^e2e/[A-Za-z0-9._/-]+\.e2e\.ts$ && -f "$spec" ]] || { echo "::error::not an e2e spec file: $spec"; exit 1; }
-            done
+              [[ "$spec" =~ ^e2e/([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\.e2e\.ts$ && -f "$spec" ]] || { echo "::error::not an e2e spec file: $spec"; exit 1; }
+              printf '%s\n' "${spec#e2e/}"
+            done > "$list"
           else
-            # A failed listing must stop here: an empty list would run every spec.
-            FILES=$(bun scripts/e2e-shard.ts "$SHARD/$SHARDS")
-            read -r -a SPECS <<< "$FILES"
+            bun scripts/e2e-shard.ts "$SHARD/$SHARDS" > "$list"
           fi
-          test "${#SPECS[@]}" -gt 0
-          # Playwright stops itself 5 minutes before the job's limit, so a shard that runs long still prints every
-          # failure and leaves its traces (nightly 39749113072: shard 2 hit 30 minutes and its one failure left nothing).
-          bunx playwright test --global-timeout=2100000 "${SPECS[@]}"
+          test -s "$list"
+          bunx playwright test --global-timeout=2100000 --test-list "$list"
       - if: failure() || cancelled()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: e2e-macos-shard-${{ matrix.shard }}
+          name: e2e-windows-shard-${{ matrix.shard }}
           path: |
             test-results/
             playwright-report/

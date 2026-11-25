@@ -14,12 +14,15 @@
  * resolve. A compiled omp earlier in the lookup is passed over; with none other
  * the resolution fails `compiled` and machine setup reinstalls the package.
  * The package's `engines.bun` gates the Bun that would run it the same way.
+ * An omp below MIN_OMP_VERSION is passed over too when a usable one follows:
+ * setup installs the tested omp with Bun beside a too-old one it does not own.
  */
-import { execFile, spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { isNewer } from "../shared/version";
+import ompTested from "../shared/omp-tested.json";
+import { core } from "./core/process";
 import type { OmpRuntime } from "./local/types";
 import { bunInstallDir } from "./setup/paths";
 import { spawnPath } from "./shell-env";
@@ -42,9 +45,9 @@ import {
  * per-skill estimator it used before (`estimateSkillsTokens`) is gone from 18.18.9.
  * Earlier floors: 18.18.2's `logoutCredential(session, …)`
  * (`slash-commands/helpers/logout`), which Settings' Disconnect calls (`provider_logout`,
- * gui-bridge settings.ts); 18.12.6's pi-catalog `isPromptCachePersistent`, which idle compaction
- * asks so it never throws away a logged-in Codex session's warm cache (stock's own rule
- * since that release, `idle-compaction-core.ts`); 18.12.3's `always-ask-cached` ("Ask and
+ * gui-bridge settings.ts); 18.13.2's `AgentSession.enableIdleMaintenance`, stock's idle
+ * compaction and recap scheduler the bridge opts each session into (`idle-maintenance.ts`);
+ * 18.12.3's `always-ask-cached` ("Ask and
  * remember") tool approval mode the composer offers (`src/shared/tool-approval.ts`);
  * 18.12.2's `@oh-my-pi/pi-ai` `nativeJudgmentImageBounds` (the
  * judge-model preview check, `capabilities.ts` `judgeAssist`); the stock internals
@@ -55,7 +58,17 @@ import {
  */
 export const MIN_OMP_VERSION = "18.18.9";
 
-const VERSION_TIMEOUT_MS = 15_000;
+/**
+ * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`, moved by the omp bump). OMPdesk
+ * installs this one where it installs omp itself (machine setup), and nothing it installs unasked goes above its
+ * major (crates/core/src/tools/omp): 19 Nov 2026, omp 19.0.0 came out and reached two computers within hours, on an
+ * OMPdesk that had only ever run against 18.
+ */
+export const TESTED_OMP_VERSION: string = ompTested.version;
+
+/** omp's npm package. */
+export const OMP_PACKAGE = "@oh-my-pi/pi-coding-agent";
+
 const DEFAULT_RUN_TIMEOUT_MS = 60_000;
 const INSTALL_HINT = "OMPdesk's machine setup installs the omp package on its own.";
 
@@ -88,13 +101,8 @@ interface OmpUpdateCheck {
  * (`update.channel`) and, for a standalone binary, the build service: its answer is the one
  * `omp update` acts on.
  */
-export function parseUpdateCheck(output: string): OmpUpdateCheck | null {
-	const current = /Current version:\s*(\d+\.\d+\.\d+\S*)/.exec(output)?.[1];
-	if (!current) return null;
-	const latest =
-		/New version available:\s*(\d+\.\d+\.\d+\S*)/.exec(output)?.[1] ??
-		(/Already up to date/.test(output) ? current : undefined);
-	return latest ? { currentVersion: current, latestVersion: latest } : null;
+export async function parseUpdateCheck(output: string): Promise<OmpUpdateCheck | null> {
+	return (await core().call<OmpUpdateCheck | null>("omp.parseUpdateCheck", { output })).result;
 }
 
 /**
@@ -136,23 +144,33 @@ export function ompBunDefaults(platform: NodeJS.Platform = process.platform): Re
 }
 
 /**
+ * Bun's root when `bin` is the launcher of its global omp package (`<root>/bin/omp` beside
+ * `<root>/install/global/node_modules/@oh-my-pi/pi-coding-agent`); null for any other omp (npm's, a checkout's).
+ * Only that omp can be installed at a version OMPdesk names: `bun install -g <package>@<version>` under
+ * `BUN_INSTALL=<root>` replaces it in place.
+ */
+export function ompBunRoot(bin: string): string | null {
+	const root = dirname(dirname(bin));
+	return existsSync(join(root, "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json"))
+		? root
+		: null;
+}
+
+/**
  * What points stock `omp update` (and `--check`) at `bin`'s own install. Stock updates the first `omp` on PATH
  * (`resolveOmpPath` = `$which("omp")`) and calls it a Bun install only when that launcher sits in `bun pm bin -g`
  * (BUN_INSTALL's `bin`); otherwise it routes through npm, Homebrew or a standalone-binary replacement. So `bin`'s
- * directory goes first on `basePath`, and a `bun install -g` launcher (`<root>/bin/omp` beside
- * `<root>/install/global/node_modules/@oh-my-pi/pi-coding-agent`) gets `BUN_INSTALL=<root>`; without these an
- * update could install into another omp than the one OMPdesk runs, or judge the wrong one up to date.
+ * directory goes first on `basePath`, and a `bun install -g` launcher (`ompBunRoot`) gets `BUN_INSTALL=<root>`;
+ * without these an update could install into another omp than the one OMPdesk runs, or judge the wrong one up to
+ * date.
  */
 export function ompUpdateEnv(bin: string, basePath: string): { PATH: string; BUN_INSTALL?: string } {
 	const own = dirname(bin);
 	const rest = basePath.split(delimiter).filter(entry => entry && entry !== own);
-	const root = dirname(own);
-	const bunGlobal = existsSync(
-		join(root, "install", "global", "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json"),
-	);
+	const root = ompBunRoot(bin);
 	return {
 		PATH: ompPathEnv(bin, [own, ...rest].join(delimiter)),
-		...(bunGlobal ? { BUN_INSTALL: root } : {}),
+		...(root ? { BUN_INSTALL: root } : {}),
 	};
 }
 
@@ -168,55 +186,6 @@ export function ompCandidates(pathEnv: string, home: string, platform: NodeJS.Pl
 		candidates.push(join(home, ".bun", "bin", "omp"), "/opt/homebrew/bin/omp", "/usr/local/bin/omp");
 	}
 	return candidates;
-}
-
-/**
- * Whether `file` is a compiled omp: Bun's standalone build (`bun build --compile`), which embeds omp's modules
- * under `/$bunfs` where the bridge's `@oh-my-pi/*` imports cannot reach them. A bun or npm install launches omp
- * through its `#!/usr/bin/env bun` script (a symlink to `dist/cli.js` on POSIX, an npm `.cmd`), so on POSIX any
- * native executable is a compiled omp. On Windows bun's launcher is itself a PE (`bun_shim_impl.exe` beside
- * `omp.bunx`), so there it is a PE carrying the `.bun` section a compiled Bun program keeps its module graph in.
- */
-export function isCompiledOmp(file: string, platform: NodeJS.Platform = process.platform): boolean {
-	const head = Buffer.alloc(4096);
-	let read: number;
-	try {
-		const fd = openSync(file, "r");
-		try {
-			read = readSync(fd, head, 0, head.length, 0);
-		} finally {
-			closeSync(fd);
-		}
-	} catch {
-		return false;
-	}
-	if (read < 4) return false;
-	if (platform === "win32") {
-		if (head.toString("latin1", 0, 2) !== "MZ" || read < 0x40) return false;
-		const pe = head.readUInt32LE(0x3c);
-		if (pe + 24 > read || head.toString("latin1", pe, pe + 4) !== "PE\0\0") return false;
-		const sections = head.readUInt16LE(pe + 6);
-		const table = pe + 24 + head.readUInt16LE(pe + 20);
-		for (let index = 0; index < sections && table + (index + 1) * 40 <= read; index++) {
-			if (head.toString("latin1", table + index * 40, table + index * 40 + 8) === ".bun\0\0\0\0") return true;
-		}
-		return false;
-	}
-	if (head.toString("latin1", 0, 4) === "\x7fELF") return true;
-	return [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe].includes(head.readUInt32BE(0));
-}
-
-/** The first of `candidates` that runs from its package, and the first compiled one passed over on the way. */
-export function pickOmp(
-	candidates: readonly string[],
-	platform: NodeJS.Platform = process.platform,
-): { bin: string | null; compiled: string | null } {
-	let compiled: string | null = null;
-	for (const file of candidates) {
-		if (!isCompiledOmp(file, platform)) return { bin: file, compiled };
-		compiled ??= file;
-	}
-	return { bin: null, compiled };
 }
 
 /**
@@ -262,7 +231,7 @@ export function ompPackageRoot(bin: string): string | null {
 		try {
 			const manifest: unknown = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
 			if (typeof manifest === "object" && manifest !== null && "name" in manifest) {
-				if (manifest.name === "@oh-my-pi/pi-coding-agent") return dir;
+				if (manifest.name === OMP_PACKAGE) return dir;
 			}
 		} catch {
 			// Not this layout.
@@ -271,22 +240,8 @@ export function ompPackageRoot(bin: string): string | null {
 	return null;
 }
 
-/**
- * The version of the package a symlinked `bin` runs (bun's and npm's global install on macOS: `<root>/dist/cli.js`),
- * read from its package.json; null for any other layout. Measured on an M4 Mac (omp 18.12.5): `omp --version`
- * takes 0.3 s, all of it in front of the first session's start, and the manifest is what it prints. Only the file the
- * bin resolves to counts, never a layout guess (`ompPackageRoot`'s): a guess could name a package this bin does not run.
- */
-function installedVersion(bin: string): string | null {
-	try {
-		const root = dirname(dirname(realpathSync(bin)));
-		const manifest: unknown = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-		if (typeof manifest !== "object" || manifest === null) return null;
-		const { name, version } = manifest as { name?: unknown; version?: unknown };
-		return name === "@oh-my-pi/pi-coding-agent" && typeof version === "string" ? parseOmpVersion(version) : null;
-	} catch {
-		return null;
-	}
+function ompRunOverrides(bin: string, basePath: string) {
+	return { PATH: ompPathEnv(bin, basePath), ...OMP_TELEMETRY_OFF };
 }
 
 /**
@@ -294,7 +249,7 @@ function installedVersion(bin: string): string | null {
  * telemetry off. The core process runs `omp browser-relay install` with it too.
  */
 export function ompRunEnv(bin: string, basePath: string, env: Record<string, string> = {}): NodeJS.ProcessEnv {
-	return { ...process.env, ...env, PATH: ompPathEnv(bin, env.PATH ?? basePath), ...OMP_TELEMETRY_OFF };
+	return { ...process.env, ...env, ...ompRunOverrides(bin, env.PATH ?? basePath) };
 }
 
 function runOmp(
@@ -344,7 +299,7 @@ function runOmp(
 	return promise;
 }
 
-/** Find omp, run `omp --version`, and gate it on MIN_OMP_VERSION. */
+/** Find omp among the lookup's candidates (`resolveOmpAmong`); the override, when set, is the only candidate. */
 export async function resolveOmp(): Promise<OmpResolution> {
 	const basePath = await spawnPath();
 	const override = process.env.OMP_GUI_OMP;
@@ -353,76 +308,116 @@ export async function resolveOmp(): Promise<OmpResolution> {
 			? [override]
 			: []
 		: ompCandidates(basePath, homedir(), process.platform).filter(file => isExecutableFile(file, process.platform));
-	const { bin, compiled } = pickOmp(candidates);
-	if (!bin) {
-		if (compiled) {
-			return {
+	const resolution = await resolveOmpAmong(candidates, basePath);
+	if (resolution) return resolution;
+	return override
+		? {
 				ok: false,
-				error: `omp at ${compiled} is a compiled build, which OMPdesk cannot load its bridge into. ${INSTALL_HINT}`,
-				reason: { kind: "compiled", bin: compiled },
-			};
-		}
-		return override
-			? {
-					ok: false,
-					error: `OMP_GUI_OMP points at a missing file (${override}).`,
-					reason: { kind: "override-missing", path: override },
-				}
-			: { ok: false, error: `omp not found. ${INSTALL_HINT}`, reason: { kind: "not-found" } };
+				error: `OMP_GUI_OMP points at a missing file (${override}).`,
+				reason: { kind: "override-missing", path: override },
+			}
+		: { ok: false, error: `omp not found. ${INSTALL_HINT}`, reason: { kind: "not-found" } };
+}
+
+/** Skip consecutive standalone binaries in one request. Do not open candidates after the first package launcher. */
+export async function firstPackageCandidate(
+	files: readonly string[],
+	platform: NodeJS.Platform = process.platform,
+): Promise<number> {
+	return (await core().call<number>("setup.firstPackageCandidate", { files, windows: platform === "win32" })).result;
+}
+
+/**
+ * The first of `candidates` (in lookup order) that OMPdesk can run. Two kinds are passed over for a later one: a
+ * compiled omp, and an omp below MIN_OMP_VERSION. The second is what lets machine setup leave a too-old omp it does
+ * not own (npm's, another Bun root's) where it is: setup installs the tested omp with Bun and that one runs, while
+ * stock `omp update` on the old one would install the registry's newest whatever its major. Any other refusal ends
+ * the lookup. With none usable the answer is the first refusal, else `compiled`; null without a candidate.
+ */
+export async function resolveOmpAmong(candidates: readonly string[], basePath: string): Promise<OmpResolution | null> {
+	let compiled: string | null = null;
+	let refused: OmpResolution | null = null;
+	const bins = [...new Set(candidates)];
+	for (let i = 0; i < bins.length; ) {
+		const skipped = await firstPackageCandidate(i === 0 ? bins : bins.slice(i));
+		if (skipped) compiled ??= bins[i];
+		i += skipped;
+		if (i === bins.length) break;
+		const resolution = await examineOmp(bins[i++], basePath);
+		if (resolution.ok) return resolution;
+		refused ??= resolution;
+		if (resolution.reason?.kind !== "too-old") break;
 	}
-	const bunMinimum = ompBunMinimum(ompPackageRoot(bin));
-	// The Bun omp's `env bun` shebang (or bun's Windows launcher) finds on the PATH omp is spawned with.
-	const bun = bunMinimum
-		? findOnPath([executableName("bun", process.platform)], ompPathEnv(bin, basePath), process.platform)
-		: null;
-	if (bunMinimum && bun) {
-		const { promise, resolve } = Promise.withResolvers<string | null>();
-		execFile(bun, ["--version"], { timeout: VERSION_TIMEOUT_MS, windowsHide: true }, (error, stdout) =>
-			resolve(error ? null : parseOmpVersion(stdout)),
-		);
-		const bunVersion = await promise;
-		if (bunVersion && isNewer(bunMinimum, bunVersion)) {
-			return {
-				ok: false,
-				error: `omp at ${bin} needs Bun ${bunMinimum} or newer, but ${bun} is ${bunVersion}. OMPdesk's machine setup upgrades Bun on its own.`,
-				reason: { kind: "bun-too-old", bin, bun, bunVersion, minimum: bunMinimum },
-			};
-		}
-	}
-	let version = installedVersion(bin);
-	if (!version) {
-		let output: { code: number; stdout: string; stderr: string };
-		try {
-			output = await runOmp(bin, ["--version"], { timeoutMs: VERSION_TIMEOUT_MS }, basePath);
-		} catch (err) {
-			const detail = err instanceof Error ? err.message : String(err);
-			return {
-				ok: false,
-				error: `omp at ${bin} could not run: ${detail}`,
-				reason: { kind: "cannot-run", bin, detail },
-			};
-		}
-		version = output.code === 0 ? parseOmpVersion(output.stdout) : null;
-		if (!version) {
-			const detail = (output.stderr || output.stdout).trim().split("\n")[0] ?? "";
-			return {
-				ok: false,
-				error: `omp at ${bin} failed \`omp --version\`${detail ? `: ${detail}` : ""}. ${INSTALL_HINT}`,
-				reason: { kind: "cannot-run", bin, detail },
-			};
-		}
-	}
-	if (isNewer(MIN_OMP_VERSION, version)) {
-		return {
-			ok: false,
-			error: `omp ${version} is too old; this GUI needs omp ${MIN_OMP_VERSION} or newer. OMPdesk updates it on its own.`,
-			reason: { kind: "too-old", version, minimum: MIN_OMP_VERSION, bin },
-		};
-	}
+	if (refused || !compiled) return refused;
 	return {
-		ok: true,
-		runtime: { bin, version, run: (args, opts = {}) => runOmp(bin, args, opts, basePath) },
+		ok: false,
+		error: `omp at ${compiled} is a compiled build, which OMPdesk cannot load its bridge into. ${INSTALL_HINT}`,
+		reason: { kind: "compiled", bin: compiled },
 	};
+}
+
+type PackageProbe =
+	| { kind: "usable" | "too-old"; version: string }
+	| { kind: "bun-too-old"; bun: string; bunVersion: string; minimum: string }
+	| { kind: "cannot-run" | "failed-version"; detail: string };
+
+/** Whether the package omp at `bin` runs here: its Bun, then its version (`omp --version`), gated on MIN_OMP_VERSION. */
+async function examineOmp(bin: string, basePath: string): Promise<OmpResolution> {
+	const bunMinimum = ompBunMinimum(ompPackageRoot(bin));
+	const ompEnv = ompRunOverrides(bin, basePath);
+	const bun = bunMinimum ? findOnPath([executableName("bun", process.platform)], ompEnv.PATH, process.platform) : null;
+	const { result } = await core().call<PackageProbe>(
+		"setup.probeOmp",
+		{
+			bin,
+			minimum: MIN_OMP_VERSION,
+			bun: bun && bunMinimum ? { bin: bun, minimum: bunMinimum } : null,
+			cwd: process.cwd(),
+			env: process.env,
+			ompEnv,
+		},
+		{ timeoutMs: 37_000 }, // Two 15 s probes plus the core round trip.
+	);
+	switch (result.kind) {
+		case "usable":
+			return {
+				ok: true,
+				runtime: {
+					bin,
+					basePath,
+					version: result.version,
+					run: (args, opts = {}) => runOmp(bin, args, opts, basePath),
+				},
+			};
+		case "too-old":
+			return {
+				ok: false,
+				error: `omp ${result.version} is too old; this GUI needs omp ${MIN_OMP_VERSION} or newer. OMPdesk updates it on its own.`,
+				reason: { kind: "too-old", version: result.version, minimum: MIN_OMP_VERSION, bin },
+			};
+		case "bun-too-old":
+			return {
+				ok: false,
+				error: `omp at ${bin} needs Bun ${result.minimum} or newer, but ${result.bun} is ${result.bunVersion}. OMPdesk's machine setup upgrades Bun on its own.`,
+				reason: {
+					kind: "bun-too-old",
+					bin,
+					bun: result.bun,
+					bunVersion: result.bunVersion,
+					minimum: result.minimum,
+				},
+			};
+		case "cannot-run":
+		case "failed-version":
+			return {
+				ok: false,
+				error:
+					result.kind === "cannot-run"
+						? `omp at ${bin} could not run: ${result.detail}`
+						: `omp at ${bin} failed \`omp --version\`${result.detail ? `: ${result.detail}` : ""}. ${INSTALL_HINT}`,
+				reason: { kind: "cannot-run", bin, detail: result.detail },
+			};
+	}
 }
 
 let cached: Promise<OmpResolution> | null = null;
@@ -436,9 +431,13 @@ export function systemOmp(): Promise<OmpResolution> {
 	if (cached) return cached;
 	const pending = resolveOmp();
 	cached = pending;
+	// A rejection (the core ended under the probe) is a failure too, and handled here: the caller sees it on `pending`.
+	const forget = () => {
+		if (cached === pending) cached = null;
+	};
 	void pending.then(result => {
-		if (!result.ok && cached === pending) cached = null;
-	});
+		if (!result.ok) forget();
+	}, forget);
 	return pending;
 }
 

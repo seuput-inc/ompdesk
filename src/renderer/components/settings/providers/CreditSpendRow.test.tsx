@@ -1,7 +1,8 @@
 /**
  * Settings › Models & accounts › Credit use: reads the machine's switch (off unless stored on), saves a change through
  * `window.omp.creditSpend` (to the paired host when `device` names one), puts the old state back with a toast when a
- * save fails, and shows no row when the machine can't answer.
+ * save fails, and shows no row when the machine can't answer. Auto top-up is one line with a link to each provider's
+ * own page: pressing one opens that page and sets nothing.
  */
 
 import { parseHTML } from "linkedom";
@@ -34,7 +35,8 @@ const creditSpend = {
 		return state;
 	}),
 };
-Object.assign(window as unknown as Record<string, unknown>, { omp: { creditSpend } });
+const openExternal = vi.fn(async (_url: string) => {});
+Object.assign(window as unknown as Record<string, unknown>, { omp: { creditSpend, system: { openExternal } } });
 
 const roots: Root[] = [];
 
@@ -91,7 +93,7 @@ describe("CreditSpendRow", () => {
 		const text = document.body.textContent ?? "";
 		expect(text).toContain(translate("providers.creditSpend.label"));
 		expect(text).toContain(translate("providers.creditSpend.desc"));
-		expect(translate("providers.creditSpend.desc")).toMatch(/never buys or tops up credits/);
+		expect(text).toContain(translate("providers.creditSpend.topUp"));
 		await act(async () => {
 			toggle().click();
 		});
@@ -99,6 +101,30 @@ describe("CreditSpendRow", () => {
 		expect(creditSpend.set).toHaveBeenCalledWith(true, undefined);
 		expect(shown()).toBe("on");
 		expect(toggle().getAttribute("aria-checked")).toBe("true");
+	});
+
+	it("opens each provider's own billing page from the top-up line and touches no setting", async () => {
+		await mount();
+		const links = [...document.body.querySelectorAll("[data-credit-top-up] button")] as HTMLButtonElement[];
+		expect(links.map(link => link.textContent)).toEqual(["ChatGPT", "Claude"]);
+		expect(links.map(link => link.getAttribute("aria-label"))).toEqual([
+			translate("providers.creditSpend.topUpOpen", { provider: "ChatGPT" }),
+			translate("providers.creditSpend.topUpOpen", { provider: "Claude" }),
+		]);
+		for (const link of links) {
+			await act(async () => {
+				link.click();
+			});
+		}
+		expect(openExternal.mock.calls).toEqual([
+			["https://chatgpt.com/codex/settings/usage"],
+			["https://claude.ai/settings/usage"],
+		]);
+		expect(creditSpend.set).not.toHaveBeenCalled();
+		expect(shown()).toBe("off");
+		// The one line and its links are the whole of it: no top-up control stands in the row.
+		expect(document.body.querySelectorAll("[data-credit-spend] input, [data-credit-spend] select")).toHaveLength(0);
+		expect(document.body.querySelectorAll('[data-credit-spend] [role="switch"]')).toHaveLength(1);
 	});
 
 	it("reads and writes a paired host's own switch", async () => {

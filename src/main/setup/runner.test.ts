@@ -5,9 +5,14 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { DIES_WITH_TEST, RM_TEMP } from "../test-fake-omp";
-import type { SpawnSpec } from "./plans";
 import { SetupRunner, type SupervisedChild } from "./runner";
-import { isolatedLaunch, quoteWindowsArg, SUPERVISOR_STOPPED_CODE, spawnSupervised } from "./supervisor";
+import {
+	isolatedLaunch,
+	quoteWindowsArg,
+	type SpawnSpec,
+	SUPERVISOR_STOPPED_CODE,
+	spawnSupervised,
+} from "./supervisor";
 
 class FakeChild extends EventEmitter implements SupervisedChild {
 	readonly stdout = new PassThrough();

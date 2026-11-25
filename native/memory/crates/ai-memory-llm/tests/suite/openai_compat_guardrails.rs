@@ -20,7 +20,7 @@ use ai_memory_llm::{LlmError, LlmProvider, OpenAiCompatProvider, OpenAiProvider}
 use secrecy::SecretString;
 use serde_json::json;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const QWEN_MODEL: &str = "applianceai01/qwen3.8-27b";
 
@@ -174,6 +174,44 @@ async fn tolerant_truncated_response_is_terminal_truncated_response() {
     );
 }
 
+/// A gateway that relays Claude's `max_tokens` stop reason is truncation too:
+/// without that, the cut-off JSON reaches the tolerant parser and fails as an
+/// unrelated shape or schema error, hiding that the budget ran out.
+#[tokio::test]
+async fn tolerant_relayed_max_tokens_stop_is_terminal_truncated_response() {
+    let server = MockServer::start().await;
+    body_mock(qwen_body(
+        Some("{\"items\":[{\"index\":0,\"keep\":false},{\"index\":1,"),
+        "max_tokens",
+        2000,
+    ))
+    .mount(&server)
+    .await;
+
+    let provider = tolerant_provider(server.uri());
+    let err = provider
+        .complete_structured_raw(tiny_request(), tiny_schema())
+        .await
+        .expect_err("a max_tokens stop must not parse");
+
+    assert!(
+        matches!(
+            err,
+            LlmError::TruncatedResponse {
+                completion_tokens: Some(2000),
+                ..
+            }
+        ),
+        "expected TruncatedResponse, got {err:?}"
+    );
+    let requests = server.received_requests().await.expect("requests recorded");
+    assert_eq!(
+        requests.len(),
+        1,
+        "a max_tokens stop must not trigger a second upstream call"
+    );
+}
+
 /// Strict path: the same `length` stop must NOT fall through to the
 /// tolerant parser — that would be a second HTTP call re-truncating the
 /// same output and doubling the spend.
@@ -197,6 +235,53 @@ async fn strict_truncated_response_is_terminal_without_fallback() {
         requests.len(),
         1,
         "strict length stop must hit upstream exactly once (no tolerant fallback)"
+    );
+}
+
+/// Production shape: an engine serving a model without structured output
+/// answers HTTP 501 `structured output is unavailable`. That is a capability
+/// gap, so the strict path falls back to the tolerant parser once instead of
+/// surfacing a transient 5xx that callers would retry identically.
+#[tokio::test]
+async fn strict_501_structured_output_unavailable_falls_back_to_tolerant_parser() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(|req: &Request| {
+            let request: serde_json::Value =
+                serde_json::from_slice(&req.body).expect("request body is JSON");
+            if request.get("response_format").is_some() {
+                ResponseTemplate::new(501).set_body_json(json!({
+                    "error": {
+                        "message": "structured output is unavailable",
+                        "type": "api_error",
+                        "param": null,
+                        "code": null
+                    }
+                }))
+            } else {
+                ResponseTemplate::new(200).set_body_json(qwen_body(
+                    Some("{\"findings\": []}"),
+                    "stop",
+                    5,
+                ))
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let provider = tolerant_provider(server.uri()).with_strict(true);
+    let value = provider
+        .complete_structured_raw(tiny_request(), tiny_schema())
+        .await
+        .expect("a 501 structured-output rejection must use the tolerant fallback");
+
+    assert_eq!(value, json!({ "findings": [] }));
+    let requests = server.received_requests().await.expect("requests recorded");
+    assert_eq!(
+        requests.len(),
+        2,
+        "strict call, then exactly one tolerant call"
     );
 }
 

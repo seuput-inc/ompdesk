@@ -1,7 +1,7 @@
 <#
 Checks the packaged Windows setup (electron-builder.win.yml: one click, per
-user) on a real Windows. ci.yml's manual `installer-check` job runs every mode
-on windows-latest (`gh workflow run ci.yml -f installer_check=true`).
+user). ci.yml runs each mode on its own windows-latest runner
+(`gh workflow run ci.yml -f installer_check=true`).
 
   -Mode silent  `setup /S`: per-user install in %LOCALAPPDATA%\Programs\ompdesk,
                 Start-menu and desktop shortcuts to it, one HKCU uninstall
@@ -19,7 +19,7 @@ on windows-latest (`gh workflow run ci.yml -f installer_check=true`).
                 users first; `setup /S` must remove that copy (HKLM entry,
                 Program Files folder, all-users shortcuts) and install per user.
 
-Each mode uninstalls what it installed, so they run one after another.
+Each mode needs a machine without an existing install and uninstalls what it installed.
 #>
 param(
 	[Parameter(Mandatory)] [string] $Setup,
@@ -38,7 +38,14 @@ $uninstallKeys = @{
 	HKLM = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 }
 
-function Fail([string] $Message) { throw "FAIL ($Mode): $Message" }
+function Fail([string] $Message) {
+	# What main logged last: a launch that never opened its window says why here.
+	$runtime = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+	if (Test-Path -LiteralPath $runtime) {
+		Get-Content -LiteralPath $runtime -Tail 15 | ForEach-Object { Write-Host "     runtime: $($_.Substring(0, [Math]::Min(700, $_.Length)))" }
+	}
+	throw "FAIL ($Mode): $Message"
+}
 function Ok([string] $Message) { Write-Host "ok   $Message" }
 
 function Get-UninstallEntries([string] $Hive) {
@@ -197,8 +204,8 @@ function Stop-App {
 	Wait-Until { -not (Get-Process OMPdesk -ErrorAction SilentlyContinue) } 30 'OMPdesk to exit'
 }
 
-# Electron's main process: an OMPdesk.exe whose parent is no OMPdesk.exe and with no `--type=` switch. The switch alone
-# is not enough: an OMPdesk.exe that main starts without one (once the setup supervisor, run as Node) is no main.
+# The desktop shell (or Electron main): no `--type=` and no other OMPdesk.exe parent.
+# Node runs under resources\node in the Rust shell and is not this process.
 function Get-MainPids {
 	$all = @(Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue)
 	$ids = @($all | ForEach-Object { $_.ProcessId })
@@ -206,9 +213,28 @@ function Get-MainPids {
 			ForEach-Object { $_.ProcessId })
 }
 
+# OMPdesk.exe and this app's WebView2 processes (their command lines carry its <userData>\tauri-webview folder).
 function Show-AppProcesses {
-	Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue |
-		ForEach-Object { Write-Host "     pid $($_.ProcessId) parent $($_.ParentProcessId): $($_.CommandLine)" }
+	Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe' or Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue |
+		Where-Object { $_.Name -eq 'OMPdesk.exe' -or $_.CommandLine -match 'ompdesk\\tauri-webview' } |
+		ForEach-Object { Write-Host "     $($_.Name) pid $($_.ProcessId) parent $($_.ParentProcessId): $($_.CommandLine)" }
+}
+
+function Show-GpuEvidence {
+	Show-AppProcesses
+	$data = Join-Path $env:APPDATA 'ompdesk'
+	foreach ($spec in @(
+		@{ Name = 'gpu-runtime.jsonl'; Path = 'logs\gui-runtime.jsonl'; Pattern = '"source":"(gpu-fallback|launch-guard|child-process)"' },
+		@{ Name = 'gpu-shell.jsonl'; Path = 'shell-webview\shell.log.jsonl'; Pattern = '"event":"(child\.[^"]+|node\.[^"]+|app\.[^"]+|cef\.[^"]+)"' }
+	)) {
+		$file = Join-Path $data $spec.Path
+		if (-not (Test-Path -LiteralPath $file)) { continue }
+		$lines = @(Get-Content -LiteralPath $file -Tail 1000 | Where-Object { $_ -match $spec.Pattern })
+		foreach ($line in $lines) { Write-Host "     $line" }
+		if ($Captures) { $lines | Set-Content -LiteralPath (Join-Path $Captures $spec.Name) -Encoding utf8 }
+	}
+	$marker = Join-Path $data 'gpu-fallback.json'
+	if (Test-Path -LiteralPath $marker) { Write-Host "     GPU marker: $(Get-Content -LiteralPath $marker -Raw)" }
 }
 
 # A fresh install must not open and close by itself (v0.44.0: a GPU-fallback relaunch loop on a laptop): the
@@ -236,9 +262,19 @@ function Assert-StaysUp([int] $Seconds = 60) {
 	Ok "no GPU relaunch and no safe mode in gui-runtime.jsonl ($($lines.Count) lines)"
 }
 
-# Ends the app's GPU process the way a driver crash does (exit code 0xC0000005, which Chromium reports as
-# "crashed"; Stop-Process's exit code 1 reads as "killed", which the fallback ignores).
-function Stop-GpuProcessAsCrash {
+# This app's WebView2 GPU process: msedgewebview2.exe --type=gpu-process under the WebView2 browser process the main
+# OMPdesk.exe started (its --user-data-dir is <userData>\tauri-webview), never another app's WebView2 or Edge.
+function Get-WebViewGpuPids([int] $MainId) {
+	$all = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue)
+	$browsers = @($all | Where-Object { $_.ParentProcessId -eq $MainId -and $_.CommandLine -notmatch '--type=' } |
+			ForEach-Object { $_.ProcessId })
+	@($all | Where-Object { $browsers -contains $_.ParentProcessId -and $_.CommandLine -match '--type=gpu-process' } |
+			ForEach-Object { $_.ProcessId })
+}
+
+# Ends a process the way a driver crash does (exit code 0xC0000005, which Chromium reports as "crashed";
+# Stop-Process's exit code 1 reads as "killed"). Throws with the Win32 error when it cannot.
+function Stop-ProcessAsCrash([int] $ProcessId) {
 	if (-not ('GpuCrash' -as [type])) {
 		Add-Type -TypeDefinition @'
 using System;
@@ -247,76 +283,239 @@ public static class GpuCrash {
 	[DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
 	[DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
 	[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-	public static bool Crash(int pid) {
+	public static void Crash(int pid) {
 		IntPtr handle = OpenProcess(0x0001, false, pid);
-		if (handle == IntPtr.Zero) return false;
-		try { return TerminateProcess(handle, 0xC0000005); } finally { CloseHandle(handle); }
+		if (handle == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+		try {
+			if (!TerminateProcess(handle, 0xC0000005))
+				throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+		} finally { CloseHandle(handle); }
 	}
 }
 '@
 	}
-	$gpu = @(Get-CimInstance Win32_Process -Filter "Name = 'OMPdesk.exe'" -ErrorAction SilentlyContinue |
-			Where-Object { $_.CommandLine -match '--type=gpu-process' })
-	if ($gpu.Count -eq 0) { return $false }
-	[GpuCrash]::Crash([int] $gpu[0].ProcessId) | Out-Null
-	return $true
+	[GpuCrash]::Crash($ProcessId)
 }
 
-# The loop a laptop hit on v0.44.0: a GPU crash in a hardware launch relaunches once into software rendering;
-# GPU crashes in that software launch must leave it running (Chromium restarts its GPU process itself).
-function Assert-NoGpuRelaunchLoop {
-	$first = Get-MainPids
-	if ($first.Count -ne 1) { Fail "expected one OMPdesk main process, found $($first.Count)" }
-	Wait-Until { Stop-GpuProcessAsCrash } 30 'a GPU process to crash'
-	Wait-Until {
-		$now = Get-MainPids
-		$now.Count -eq 1 -and $now[0] -ne $first[0]
-	} 60 'the one relaunch into software rendering'
-	$second = (Get-MainPids)[0]
-	Ok "a GPU crash in the hardware launch relaunched it once ($($first[0]) -> $second)"
-	Wait-Until { @(Get-Process OMPdesk -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count -gt 0 } 60 'the relaunched window'
-	$crashes = 0
-	for ($i = 0; $i -lt 2; $i++) {
-		Start-Sleep -Seconds 5
-		if (Stop-GpuProcessAsCrash) { $crashes++ }
+# How painted OMPdesk's window is: PrintWindow with PW_RENDERFULLCONTENT (2) reads the composed window, WebView2's
+# content included, even when another window covers it. A grid of 48 x 32 samples gives the distinct colors and the
+# share of near-black ones; the picture is saved as a capture. The app's painted UI shows dozens of colors (text,
+# borders, icons); a window WebView2 stopped drawing is one flat color (black or the background).
+function Measure-WindowPaint([int] $ProcessId, [string] $Name) {
+	if (-not ('WindowPaint' -as [type])) {
+		Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WindowPaint {
+	[StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+	public delegate bool EnumProc(IntPtr window, IntPtr data);
+	[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect);
+	[DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+	[DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr data);
+	[DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+	[DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+	[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+	// Grows (or shrinks) the window by dx, dy without moving or activating it: an area no earlier frame covered.
+	public static void Grow(IntPtr window, int dx, int dy) {
+		Rect rect;
+		if (GetWindowRect(window, out rect))
+			SetWindowPos(window, IntPtr.Zero, 0, 0, rect.Right - rect.Left + dx, rect.Bottom - rect.Top + dy, 0x0002 | 0x0004 | 0x0010);
 	}
-	if ($crashes -eq 0) { Fail 'the software launch runs no GPU process to crash: the check proves nothing' }
-	Write-Host "     crashed the software launch's GPU process $crashes times"
-	$deadline = (Get-Date).AddSeconds(30)
-	while ((Get-Date) -lt $deadline) {
-		$now = Get-MainPids
-		if ($now.Count -eq 0) {
-			Fail "the software launch ($second) exited after $crashes GPU process crashes (Chromium gave up?)"
+	// The process's largest visible top-level window: the Tauri host also owns small helper windows.
+	public static IntPtr Largest(uint pid) {
+		IntPtr best = IntPtr.Zero;
+		long bestArea = 0;
+		EnumWindows((window, data) => {
+			uint owner;
+			GetWindowThreadProcessId(window, out owner);
+			Rect rect;
+			if (owner == pid && IsWindowVisible(window) && GetWindowRect(window, out rect)) {
+				long area = (long)(rect.Right - rect.Left) * (rect.Bottom - rect.Top);
+				if (area > bestArea) { bestArea = area; best = window; }
+			}
+			return true;
+		}, IntPtr.Zero);
+		return best;
+	}
+}
+'@
+	}
+	Add-Type -AssemblyName System.Drawing
+	$window = [WindowPaint]::Largest([uint32] $ProcessId)
+	if ($window -eq [IntPtr]::Zero) { return @{ Painted = $false; Text = 'no visible window' } }
+	$rect = New-Object WindowPaint+Rect
+	[void][WindowPaint]::GetWindowRect($window, [ref] $rect)
+	$width = $rect.Right - $rect.Left
+	$height = $rect.Bottom - $rect.Top
+	if ($width -lt 48 -or $height -lt 32) { return @{ Painted = $false; Text = "window $width x $height" } }
+	$bitmap = New-Object System.Drawing.Bitmap $width, $height
+	$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+	$dc = $graphics.GetHdc()
+	$printed = [WindowPaint]::PrintWindow($window, $dc, 2)
+	$graphics.ReleaseHdc($dc)
+	$colors = @{}
+	$black = 0
+	$samples = 0
+	for ($y = 0; $y -lt 32; $y++) {
+		for ($x = 0; $x -lt 48; $x++) {
+			$pixel = $bitmap.GetPixel([math]::Floor(($x + 0.5) * $width / 48), [math]::Floor(($y + 0.5) * $height / 32))
+			$colors[$pixel.ToArgb()] = $true
+			if ($pixel.R + $pixel.G + $pixel.B -lt 30) { $black++ }
+			$samples++
 		}
-		if ($now.Count -ne 1 -or $now[0] -ne $second) {
-			Save-Screen 'gpu-loop'
-			Show-AppProcesses
-			Fail "the software launch relaunched after a GPU crash ($second -> $($now -join ', ')): the relaunch loop"
-		}
+	}
+	if ($Captures) {
+		New-Item -ItemType Directory -Force -Path $Captures | Out-Null
+		$bitmap.Save((Join-Path $Captures "$Name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+	}
+	$graphics.Dispose()
+	$bitmap.Dispose()
+	$share = [math]::Round(100 * $black / $samples)
+	@{
+		Painted = $printed -and $colors.Count -ge 8
+		Colors = $colors.Count
+		Text = "$width x $height, PrintWindow $printed, $($colors.Count) colors, $share% near-black"
+	}
+}
+
+# A WebView2 process of this app ending, on the Tauri host (open-work G12; installer-check run 44616509774 before the
+# host reported it). The GPU process: WebView2 starts a new one and repaints, so one crash never relaunches the app
+# (a second within 10 minutes is a GPU that keeps dying and relaunches once into software, src/main/gpu-fallback.ts,
+# pinned by gpu-fallback-loop.test.ts), and main's log names the crash the host reported. The renderer: WebView2
+# shows its own error page until main reloads the app, which it does on the `render-process-gone` the host reports.
+# Each failure says which went wrong: no process of this app found, the crash request failed, the app did not
+# survive, the window was not repainted, or the host reported nothing.
+function Assert-SurvivesWebViewCrashes {
+	$main = Get-MainPids
+	if ($main.Count -ne 1) { Fail "expected one OMPdesk main process, found $($main.Count)" }
+	$main = [int] $main[0]
+	$crashed = @()
+	$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+	$logLines = { if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log) } else { @() } }
+	$paint = {
+		param($label)
+		$seen = Measure-WindowPaint $main "paint-$label"
+		Write-Host "     paint $label`: $($seen.Painted) ($($seen.Text))"
+		$seen
+	}
+	# A repaint, not a kept frame: the grown area exists only if WebView2 draws again.
+	$grown = {
+		param($label)
+		[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), 200, 100)
 		Start-Sleep -Seconds 2
+		$seen = & $paint $label
+		[WindowPaint]::Grow([WindowPaint]::Largest([uint32] $main), -200, -100)
+		$seen
 	}
-	Ok "the software launch ($second) stayed up through $crashes GPU process crashes"
+	try {
+		[void](& $paint 'before')
+		if (-not (& $grown 'before-grown').Painted) { Fail 'the window was not painted when grown before any crash: the paint check proves nothing' }
+		for ($i = 0; $i -lt 1; $i++) {
+			$gpu = @()
+			$deadline = (Get-Date).AddSeconds(30)
+			while ((Get-Date) -lt $deadline) {
+				$gpu = @(Get-WebViewGpuPids $main | Where-Object { $crashed -notcontains $_ })
+				if ($gpu.Count -gt 0) { break }
+				Start-Sleep -Milliseconds 500
+			}
+			if ($gpu.Count -eq 0) {
+				$previous = if ($crashed.Count -gt 0) { " after crashing $($crashed -join ', ') (WebView2 did not start a new one)" } else { '' }
+				Fail "no WebView2 GPU process of OMPdesk $main within 30 s$previous"
+			}
+			try { Stop-ProcessAsCrash $gpu[0] } catch { Fail "the crash request for GPU pid $($gpu[0]) failed: $($_.Exception.Message)" }
+			Write-Host "     crashed WebView2 GPU pid $($gpu[0]) of OMPdesk $main"
+			$crashed += $gpu[0]
+			Start-Sleep -Seconds 6
+			if (-not (& $grown "crash$($i + 1)-grown").Painted) { Fail "the window was not repainted after GPU crash $($i + 1)" }
+		}
+		$deadline = (Get-Date).AddSeconds(30)
+		while ((Get-Date) -lt $deadline) {
+			$now = Get-MainPids
+			if ($now.Count -ne 1 -or $now[0] -ne $main) {
+				Save-Screen 'gpu-crash'
+				Fail "the app did not survive the GPU crashes: main was $main, now $($now -join ', ')"
+			}
+			Start-Sleep -Seconds 2
+		}
+		$lines = & $logLines
+		if (@($lines | Where-Object { $_ -match '"source":"launch-guard"' }).Count -ne 0) { Fail 'the app went into safe mode' }
+		$reported = @($lines | Where-Object { $_ -match '"source":"child-process"' -and $_ -match '"type":"GPU"' })
+		foreach ($line in @($lines | Where-Object { $_ -match '"source":"(child-process|gpu-fallback)"' })) { Write-Host "     log: $line" }
+		if ($reported.Count -lt $crashed.Count) { Fail "main heard of $($reported.Count) of $($crashed.Count) GPU crashes: the host did not report WebView2's ProcessFailed" }
+	} catch {
+		Show-GpuEvidence
+		throw
+	}
+	$now = @(Get-WebViewGpuPids $main)
+	Ok "OMPdesk $main stayed up and repainted through $($crashed.Count) WebView2 GPU crashes ($($crashed -join ', ')), each reported to main; GPU now: $(if ($now.Count) { $now -join ', ' } else { 'none running' })"
+
+	$all = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue)
+	$browsers = @($all | Where-Object { $_.ParentProcessId -eq $main -and $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.ProcessId })
+	$renderers = @($all | Where-Object { $browsers -contains $_.ParentProcessId -and $_.CommandLine -match '--type=renderer' -and $_.CommandLine -notmatch '--extension-process' } |
+			ForEach-Object { $_.ProcessId })
+	if ($renderers.Count -eq 0) { Fail "no WebView2 renderer of OMPdesk $main" }
+	foreach ($renderer in $renderers) {
+		try { Stop-ProcessAsCrash $renderer } catch { Fail "the crash request for renderer pid $renderer failed: $($_.Exception.Message)" }
+		Write-Host "     crashed WebView2 renderer pid $renderer of OMPdesk $main"
+	}
+	# The app's own UI shows dozens of colors (41 to 48 on this window); WebView2's error page about 10.
+	$recovered = $null
+	$deadline = (Get-Date).AddSeconds(30)
+	while ((Get-Date) -lt $deadline -and -not $recovered) {
+		Start-Sleep -Seconds 2
+		if (@(Get-MainPids) -notcontains $main) { Fail "the app exited after its renderer crashed (main was $main)" }
+		$seen = & $paint 'renderer'
+		if ($seen.Colors -ge 30) { $recovered = $seen }
+	}
+	$reloads = @(& $logLines | Where-Object { $_ -match '"source":"renderer-process"' })
+	foreach ($line in $reloads) { Write-Host "     log: $line" }
+	if ($reloads.Count -eq 0) { Fail 'main never heard the renderer crash: the host did not report render-process-gone' }
+	if (-not $recovered) { Save-Screen 'renderer-crash'; Fail 'the window still shows no app 30 s after its renderer crashed' }
+	Ok "a renderer crash was reported to main and the app reloaded ($($recovered.Text))"
 	Stop-App
 	foreach ($file in 'gpu-fallback.json', 'launch-history.json') {
 		Remove-Item -LiteralPath (Join-Path $env:APPDATA "ompdesk\$file") -Force -ErrorAction SilentlyContinue
 	}
 }
 
-# Headless (no tray, no automatic machine setup); the CDP page list proves the window loaded its renderer.
-function Assert-Launches {
+# Headless (no tray, no automatic machine setup). A release build of the Tauri shell opens no DevTools port (only the
+# test-automation build does), so the launch is proven from what the app itself writes, in the order it happens:
+# the process, <userData>\app-started.json with this version (main writes it at the first window's first
+# did-finish-load, which can be the shell's /__profile/migrate page), then gui-runtime.jsonl's startup-timing
+# `renderer-mounted` line of the same main pid (the app's React shell mounted, so past the migrate page). A failure
+# names the last stage reached.
+function Assert-Launches([string] $Version) {
+	$mark = Join-Path $env:APPDATA 'ompdesk\app-started.json'
+	$log = Join-Path $env:APPDATA 'ompdesk\logs\gui-runtime.jsonl'
+	Remove-Item -LiteralPath $mark -Force -ErrorAction SilentlyContinue
+	$launchedAt = Get-Date
 	$env:OMP_GUI_HEADLESS = '1'
-	Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9333' | Out-Null
+	Start-Process -FilePath $exe | Out-Null
 	Remove-Item Env:OMP_GUI_HEADLESS
-	$script:page = $null
-	Wait-Until {
-		try {
-			$script:page = Invoke-RestMethod -Uri 'http://127.0.0.1:9333/json/list' -TimeoutSec 2 |
-				Where-Object { $_.type -eq 'page' -and $_.url -like '*index.html*' } |
-				Select-Object -First 1
-		} catch { $script:page = $null }
-		$null -ne $script:page
-	} 120 'the installed app to load its window'
-	Ok "the installed app opened its window: '$($script:page.title)' $($script:page.url)"
+	$script:started = $null
+	$script:stage = 'started OMPdesk.exe'
+	try {
+		Wait-Until {
+			if (@(Get-Process OMPdesk -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count -gt 0) {
+				$script:stage = 'OMPdesk.exe running'
+			}
+			try {
+				$item = Get-Item -LiteralPath $mark -ErrorAction Stop
+				$read = Get-Content -LiteralPath $mark -Raw -ErrorAction Stop | ConvertFrom-Json
+				if ($item.LastWriteTime -ge $launchedAt -and $read.version -eq $Version) {
+					$script:started = $read
+					$script:stage = "app-started.json written (version $Version, pid $($read.pid))"
+				}
+			} catch {}
+			$null -ne $script:started -and (Test-Path -LiteralPath $log) -and
+				@(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue |
+					Where-Object { $_ -match '"source":"startup-timing"' -and $_ -match '"message":"renderer-mounted"' -and $_ -match "`"pid`":$($script:started.pid)\b" }).Count -gt 0
+		} 120 'the installed app to mount its renderer'
+	} catch {
+		Write-Host "last stage reached: $($script:stage)"
+		throw
+	}
+	Ok "the installed app mounted its renderer: version $($script:started.version), pid $($script:started.pid)"
 	Stop-App
 }
 
@@ -386,7 +585,7 @@ switch ($Mode) {
 	'silent' {
 		Invoke-SilentSetup $Setup @('/S')
 		$entry = Assert-PerUserInstall
-		Assert-Launches
+		Assert-Launches $entry.DisplayVersion
 		Assert-AiMemoryService
 		try {
 			# The staged ai-memory.exe is running from the tools dir, not the install folder: the uninstaller must not care.
@@ -441,7 +640,7 @@ switch ($Mode) {
 		Save-Screen 'app-started'
 		Assert-StaysUp 60
 		Save-Screen 'app-after-60s'
-		Assert-NoGpuRelaunchLoop
+		Assert-SurvivesWebViewCrashes
 		Uninstall-PerUser $entry
 	}
 	'legacy' {

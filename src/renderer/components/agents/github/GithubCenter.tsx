@@ -5,7 +5,7 @@
  * server) and the repository: the tab checkout's by default, or any
  * `OWNER/NAME` the user names.
  */
-import { CircleDot, Github } from "lucide-react";
+import { CircleDot, GitFork } from "lucide-react";
 import { useState } from "react";
 import { GITHUB_REPO_PATTERN, type GithubTarget } from "../../../../shared/github";
 import { useGithubLoad } from "../../../lib/github";
@@ -66,7 +66,7 @@ export function GithubCenter() {
 							</span>
 						)
 					}
-					icon={<Github />}
+					icon={<GitFork />}
 					title={t(missing ? "prCenter.unavailable.gh_missing" : "github.probeFailed")}
 				/>
 			);
@@ -106,7 +106,7 @@ export function GithubCenter() {
 							? "prCenter.unavailableHint.gh_unauthenticated"
 							: "prCenter.unavailableHint.gh_unauthenticated_remote",
 					)}
-					icon={<Github />}
+					icon={<GitFork />}
 					title={t("prCenter.unavailable.gh_unauthenticated")}
 				/>
 				{local && <GithubSignIn className="mb-8 w-full max-w-lg" onSignedIn={probe.reload} />}

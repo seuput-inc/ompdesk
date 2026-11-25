@@ -16,7 +16,7 @@ import { _electron as electron } from "playwright";
 import { assertAppBuilt } from "../scripts/e2e-app-entry";
 import { freePortRun } from "../src/main/remote/test-ports";
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
-import { fixtureOmp, walkRemotePicker } from "./harness";
+import { E2E_GIT_IDENTITY, exitApp, fixtureOmp, walkRemotePicker } from "./harness";
 
 export type Language = "en" | "ko";
 export type Theme = "light" | "dark";
@@ -198,7 +198,7 @@ export async function makeRemoteProfile(
 	await fs.symlink(natives, path.join(path.dirname(bin), "node_modules/@oh-my-pi/pi-natives"), "junction");
 	const tailscale = await remoteTailscale(root, name, options.devices, options.hostAddress);
 	const port = options.port ?? (await freePort());
-	const env: Record<string, string> = {};
+	const env: Record<string, string> = { ...E2E_GIT_IDENTITY };
 	for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
 	Object.assign(env, {
 		PI_CODING_AGENT_DIR: agent,
@@ -229,17 +229,24 @@ export async function launchRemote(
 	if (options.project !== false) args.push(profile.project);
 	args.push(`--user-data-dir=${profile.desktop}`);
 	const app = await electron.launch({ args, env: profile.env });
-	const page = await app.firstWindow();
-	const errors: string[] = [];
-	page.on("pageerror", error => errors.push(error.message));
-	await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 860));
-	await page.waitForFunction(() => window.omp?.remote != null);
-	if (options.ready !== false) {
-		await expect
-			.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
-			.toBe("ready");
+	// An app that never comes up is closed here: the caller holds no instance to close, so it would run on, and its
+	// native log and host output (`retainDiagnostics`, which `exitApp` runs) would never reach the failure's artifacts.
+	try {
+		const page = await app.firstWindow();
+		const errors: string[] = [];
+		page.on("pageerror", error => errors.push(error.message));
+		await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 860));
+		await page.waitForFunction(() => window.omp?.remote != null);
+		if (options.ready !== false) {
+			await expect
+				.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
+				.toBe("ready");
+		}
+		return { app, page, profile, errors };
+	} catch (error) {
+		await exitApp(app).catch(() => undefined);
+		throw error;
 	}
-	return { app, page, profile, errors };
 }
 
 /** A's view of the tailnet: the first computer that shares OMPdesk and lets A in (its node id), once one does. */

@@ -1,7 +1,7 @@
 /**
- * The `extensions.*` methods of the stock helper's `extensions` worker (extensions.ts), as main's
- * ExtensionUpdater (src/main/ext-update/) calls them. Types only, no omp imports: main and the worker both
- * import this file. Every method works on this computer's omp state with no tab open: user scope always, a
+ * The `extensions.*` methods of the stock helper's `extensions` worker (extensions.ts), as the extension updater
+ * (the core's `tools/ext.rs`, through main's stock relay) calls them. Types only, no omp imports: the worker and its
+ * tests import this file. Every method works on this computer's omp state with no tab open: user scope always, a
  * project's scope for each folder in `cwds` (the workspaces of the open local tabs). No answer carries a
  * credential, a token or an environment variable value; the MCP inventory carries `command`/`args`/`url`
  * only because the package is parsed out of them (by the core process, for main; they never reach the renderer).
@@ -58,8 +58,6 @@ export interface HelperMcpServer {
 	args: string[];
 	url: string | null;
 	enabled: boolean;
-	/** The config file or plugin dir the server came from; main marks the built-in REA by it. */
-	sourcePath: string | null;
 	/** `user`, `project` or `plugin` (a plugin or another tool's config provided it). */
 	origin: "user" | "project" | "other";
 }

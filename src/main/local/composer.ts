@@ -11,6 +11,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { BridgeJobItem, BridgeJobRow } from "../../../resources/gui-bridge/jobs-contracts";
+import type { TodoDriftState } from "../../../resources/gui-bridge/todo-drift-contracts";
 import type {
 	ModelInfo,
 	RpcActiveTool,
@@ -24,6 +25,8 @@ import type {
 	RpcToolSource,
 	ThinkingLevel,
 } from "../../shared/rpc-types";
+import { core } from "../core/process";
+import { ompRunEnv } from "../omp-runtime";
 import { runSlashCommand } from "./slash";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
@@ -79,19 +82,14 @@ function reasoningLevels(levels: readonly string[] | undefined): ThinkingLevel[]
 	return (levels ?? []).filter((level): level is ThinkingLevel => level !== "off");
 }
 
-/** `omp plugin list --json` → installed plugin count; 0 when the CLI fails. */
-async function pluginCount(ctx: LocalCommandContext): Promise<number> {
-	const { code, stdout } = await ctx.omp.run(["plugin", "list", "--json"], { cwd: ctx.cwd, timeoutMs: 30_000 });
-	if (code !== 0) return 0;
-	try {
-		const parsed: unknown = JSON.parse(stdout);
-		if (typeof parsed !== "object" || parsed === null) return 0;
-		let count = 0;
-		for (const list of Object.values(parsed)) if (Array.isArray(list)) count += list.length;
-		return count;
-	} catch {
-		return 0;
-	}
+async function pluginCount({ omp, cwd }: LocalCommandContext): Promise<number> {
+	if (omp.basePath === undefined) throw new Error("No resolved omp launcher for omp.pluginCount");
+	const { result } = await core().call<number>(
+		"omp.pluginCount",
+		{ bin: omp.bin, env: ompRunEnv(omp.bin, omp.basePath), cwd },
+		{ timeoutMs: 40_000 },
+	);
+	return result;
 }
 
 const evalCommand = z.object({
@@ -122,12 +120,14 @@ function briefState(state: RpcSessionState): RpcSessionState {
 
 export const handlers: Record<string, LocalHandler> = {
 	get_state: async (command, ctx) => {
-		const [whole, levels, extras, choice] = await Promise.all([
+		const [whole, levels, extras, choice, todoDrift] = await Promise.all([
 			ctx.send<RpcSessionState>({ type: "get_state" }),
 			ctx.send<{ levels?: string[] }>({ type: "get_available_thinking_levels" }).catch(() => undefined),
 			stateRead<StateExtras>(ctx, "composer.state"),
 			// The person's model while a fallback answers (bridge model-choice.ts): what the composer shows as chosen.
 			stateRead<{ chosen: ModelInfo | null }>(ctx, "model_choice"),
+			// When the todo list last changed and whether it is behind the work (bridge todo-drift.ts).
+			stateRead<TodoDriftState>(ctx, "todoDrift.state"),
 		]);
 		const state = command.brief === true ? briefState(whole) : whole;
 		const result: RpcSessionState = {
@@ -144,6 +144,7 @@ export const handlers: Record<string, LocalHandler> = {
 		};
 		if (extras?.agentsPausedAt !== undefined) result.agentsPausedAt = extras.agentsPausedAt;
 		if (choice?.chosen) result.chosenModel = choice.chosen;
+		if (todoDrift) result.todoDrift = todoDrift;
 		return result;
 	},
 
@@ -173,9 +174,6 @@ export const handlers: Record<string, LocalHandler> = {
 	set_ultrafast_mode: async (command, ctx) =>
 		ctx.bridge.request("composer.set_ultrafast", { enabled: ultrafastCommand.parse(command).enabled }),
 
-	// Esc during a manual /compact or handoff (stock's serial queue holds a plain `abort` behind it).
-	abort_maintenance: (_command, ctx) => ctx.bridge.request("composer.abort_maintenance"),
-
 	// Stock `bash` ignores `excluded`; only the context-excluded (`!!`) form needs the session.
 	bash: async (command, ctx) => {
 		const { command: line, excluded } = bashCommand.parse(command);
@@ -189,8 +187,14 @@ export const handlers: Record<string, LocalHandler> = {
 		return { retried: agentInvoked };
 	},
 
-	// Stock `omp --restore` (restoreSession) on the live session, for a relaunch that finds a turn cut off.
-	restore_interrupted: async (_command, ctx) => ctx.bridge.request("composer.restore_interrupted"),
+	// Stock `omp --restore` (restoreSession) on the live session, for a relaunch that finds a turn cut off; the follow-up
+	// also names what the session's commands left running.
+	restore_interrupted: async (_command, ctx) => {
+		const processes = await ctx.leftProcesses?.().catch(() => undefined);
+		return processes
+			? ctx.bridge.request("composer.restore_interrupted", { processes })
+			: ctx.bridge.request("composer.restore_interrupted");
+	},
 
 	clear_context: async (_command, ctx) => {
 		const result = await ctx.bridge.request<{ droppedCount: number } | null>("composer.clear_context");
@@ -235,8 +239,6 @@ export const handlers: Record<string, LocalHandler> = {
 		return ctx.bridge.request("composer.set_force_tool", clear === true ? { clear: true } : { tool });
 	},
 
-	get_force_tool: async (_command, ctx) => ctx.bridge.request("composer.get_force_tool"),
-
 	// Arming is stock /prewalk (its resolution/auth failures print as command output); disarming needs the session.
 	set_prewalk: async (command, ctx) => {
 		const enabled = z.boolean().parse(command.enabled);
@@ -266,8 +268,6 @@ export const handlers: Record<string, LocalHandler> = {
 		};
 	},
 
-	get_context_report: async (_command, ctx) => ctx.bridge.request("composer.context_report"),
-
 	// Context inspector (bridge context-inspect.ts): every entry of the live context with its tokens.
 	get_context_inspect: async (command, ctx) =>
 		ctx.bridge.request("context.inspect", { entries: z.boolean().optional().parse(command.entries) !== false }),
@@ -290,8 +290,6 @@ export const handlers: Record<string, LocalHandler> = {
 
 	cancel_job: async (command, ctx) =>
 		ctx.bridge.request("composer.cancel_job", { id: z.string().min(1).parse(command.jobId) }),
-
-	preview_share_session: async (_command, ctx) => ctx.bridge.request("composer.share_preview"),
 
 	share_session: async (command, ctx) =>
 		ctx.bridge.request("composer.share", { snapshotId: z.string().optional().parse(command.snapshotId) }),

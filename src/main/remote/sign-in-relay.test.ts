@@ -226,7 +226,9 @@ describe("startSignInRelay", () => {
 
 	it("forwards nothing once closed, even a callback that reaches the core before the close does", async () => {
 		// The close crosses to the core as a push while the callback is already on its way: whichever the core reads
-		// first, the browser hears 409 or a refused connection and the host never gets the callback.
+		// first, the browser hears 409 (the core checks `closed` before it asks main, or main released its asker after
+		// the check, so the ask is unanswered) or a refused connection, never the 502 of a host that could not take
+		// the callback, and the host never gets the callback.
 		for (let round = 0; round < 10; round++) {
 			const port = await freePort();
 			const stand = relay({ callback: `http://127.0.0.1:${port}/callback` });

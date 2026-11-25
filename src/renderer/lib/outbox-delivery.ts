@@ -75,6 +75,7 @@ export function holdMessage(tab: SessionTab, send: Omit<Extract<OutboxSend, { ki
 function answerSummary(response: ExtensionUIResponse): string {
 	if ("cancelled" in response) return translate("outbox.answerDismissed");
 	if ("confirmed" in response) return translate(response.confirmed ? "common.yes" : "common.no");
+	if ("data" in response) return translate("outbox.formAnswer");
 	if ("answers" in response)
 		return response.answers
 			.flatMap(answer => [...answer.selectedOptions, ...(answer.customInput ? [answer.customInput] : [])])
@@ -116,7 +117,7 @@ type Outcome = "delivered" | "later" | { failed: string };
 
 async function deliverMessage(item: OutboxItem, tab: SessionTab): Promise<Outcome> {
 	if (item.send.kind !== "message") return "delivered";
-	const { text, images, behavior } = item.send;
+	const { text, images } = item.send;
 	// The host's echo of this message is this page's own, not "from another device".
 	sessionRuntimeStore<MessagesStore>(tab.id, "messages")?.getState().noteOwnSend(text);
 	let response: RpcResponse;
@@ -125,7 +126,7 @@ async function deliverMessage(item: OutboxItem, tab: SessionTab): Promise<Outcom
 			type: "prompt",
 			message: text,
 			images,
-			streamingBehavior: behavior,
+			streamingBehavior: "steer",
 			deliveryId: item.id,
 		});
 	} catch (error) {

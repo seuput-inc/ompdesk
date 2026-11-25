@@ -1,7 +1,7 @@
 /**
  * Lean trust audit holes found by the audit: each case is a false PASS (or a wrong name) on the code it was written
  * against. The cases that need the real Lean toolchain run with `OMP_GUI_REAL_FORMAL=1` and
- * `OMPDESK_FORMAL_CACHE` pointing at a cache that has Lean 4.35.0. One scaffold is built once and copied (with its
+ * `OMPDESK_FORMAL_CACHE` pointing at a cache that has the pinned Lean toolchain. One scaffold is built once and copied (with its
  * `.lake`) per case, so a case costs one `lake build` of what it changed.
  *
  * `FORMAL_SKILL_DIR` points the cases at another copy of the skill (a `git archive` of an older commit).
@@ -62,17 +62,17 @@ async function leanCheck(dir: string, args: string[] = []): Promise<Checked> {
 	return { ...ran, json };
 }
 
-const toolchainBin = (): string => path.join(CACHE, "elan", "toolchains", "leanprover--lean4---v4.35.0", "bin");
+let toolchainBin: string;
 
 function lake(dir: string, args: string[]): Promise<Ran> {
 	const { promise, resolve } = Promise.withResolvers<Ran>();
 	execFile(
-		path.join(toolchainBin(), `lake${EXE}`),
+		path.join(toolchainBin, `lake${EXE}`),
 		args,
 		{
 			cwd: dir,
 			encoding: "utf8",
-			env: { ...process.env, PATH: `${toolchainBin()}${path.delimiter}${process.env.PATH}` },
+			env: { ...process.env, PATH: `${toolchainBin}${path.delimiter}${process.env.PATH}` },
 		},
 		(error, stdout, stderr) =>
 			resolve({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, out: `${stdout}${stderr}` }),
@@ -98,6 +98,9 @@ describe("Lean trust audit: holes found by the audit", () => {
 
 	beforeAll(async () => {
 		if (!REAL) return;
+		const { leanPaths } = await lib("lean-env");
+		const paths = leanPaths({ ...process.env, OMPDESK_FORMAL_CACHE: CACHE });
+		toolchainBin = path.join(paths.toolchainDir, "bin");
 		base = path.join(temp, "base");
 		const created = await bun("new-lean.ts", [base, "Atk"]);
 		expect(created.code, created.out).toBe(0);

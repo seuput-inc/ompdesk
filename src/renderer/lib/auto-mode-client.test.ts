@@ -160,14 +160,30 @@ describe("runAutoMode", () => {
 		expect(refused.session.getState().planModeEnabled).toBe(false);
 	});
 
-	it("does not wait for a decision that never comes", async () => {
+	it("sends the original prompt and attachment once when stock acknowledges a goal after the classifier deadline", async () => {
+		const gate = Promise.withResolvers<RpcResponse>();
+		const { session, rpc } = rig(gate.promise);
+		const prompt = vi.fn(async () => ok({}));
+		const images = [{ type: "image" as const, mimeType: "image/png", data: "AA==" }];
+		const submit = planComposerSubmit({
+			message: BIG,
+			images,
+			commands: [],
+			isStreaming: false,
+			rpc: { prompt, steer: vi.fn(), compact: vi.fn() },
+			beforePrompt: () =>
+				runAutoMode({ message: BIG, isStreaming: false, session, rpc, readPref: async () => true }),
+		});
+		if (submit.kind !== "send") throw new Error("expected send");
 		vi.useFakeTimers();
 		try {
-			const { session, rpc } = rig(new Promise<RpcResponse>(() => {}));
-			const pending = runAutoMode({ message: BIG, isStreaming: false, session, rpc, readPref: async () => true });
+			const pending = submit.request();
 			await vi.advanceTimersByTimeAsync(3100);
-			await expect(pending).resolves.toBeNull();
-			expect(session.getState().planModeEnabled).toBe(false);
+			expect(prompt).not.toHaveBeenCalled();
+			gate.resolve(ok({ mode: "goal", objective: BIG, latencyMs: 800 }));
+			await pending;
+			expect(prompt).toHaveBeenCalledExactlyOnceWith(BIG, images, "steer");
+			expect(session.getState()).toMatchObject({ autoMode: "goal", goal: { objective: BIG } });
 		} finally {
 			vi.useRealTimers();
 		}
@@ -256,7 +272,7 @@ describe("runAutoMode", () => {
 
 describe("planComposerSubmit and the automatic choice", () => {
 	const rpc = { compact: vi.fn(), followUp: vi.fn(), steer: vi.fn(), prompt: vi.fn(async () => ok({})) };
-	const base = { images: [], commands: [], mode: "prompt" as const, rpc };
+	const base = { images: [], commands: [], rpc };
 
 	it("runs the choice before a plain prompt and sends the prompt unchanged afterwards", async () => {
 		const order: string[] = [];
@@ -269,7 +285,7 @@ describe("planComposerSubmit and the automatic choice", () => {
 		if (plan.kind !== "send") throw new Error("expected send");
 		await plan.request();
 		expect(order).toEqual(["choice", "prompt"]);
-		expect(rpc.prompt).toHaveBeenLastCalledWith(BIG, []);
+		expect(rpc.prompt).toHaveBeenLastCalledWith(BIG, [], "steer");
 	});
 
 	it("sends the prompt as a steer after a goal decision, so the goal's own turn cannot refuse it", async () => {
@@ -311,16 +327,15 @@ describe("planComposerSubmit and the automatic choice", () => {
 			});
 			if (plain.kind !== "send") throw new Error("expected send");
 			await plain.request();
-			expect(rpc.prompt).toHaveBeenLastCalledWith(BIG, []);
+			expect(rpc.prompt).toHaveBeenLastCalledWith(BIG, [], "steer");
 		}
 	});
 
-	it("never runs it for steer, follow-up or a slash command", async () => {
+	it("never runs it for a steer or a slash command", async () => {
 		const beforePrompt = vi.fn(async () => null);
 		for (const input of [
-			{ message: BIG, isStreaming: true, mode: "steer" as const },
-			{ message: BIG, isStreaming: true, mode: "followUp" as const },
-			{ message: "/skill:review now", isStreaming: false, mode: "prompt" as const },
+			{ message: BIG, isStreaming: true },
+			{ message: "/skill:review now", isStreaming: false },
 		]) {
 			const plan = planComposerSubmit({ ...base, ...input, beforePrompt });
 			if (plan.kind === "send") await plan.request();
@@ -379,7 +394,7 @@ describe("asking while the user types", () => {
 
 describe("the mode is in place before the prompt leaves", () => {
 	const rpc = { compact: vi.fn(), followUp: vi.fn(), steer: vi.fn(), prompt: vi.fn(async () => ok({})) };
-	const base = { images: [], commands: [], mode: "prompt" as const, rpc };
+	const base = { images: [], commands: [], rpc };
 
 	it("a plan decision has put the session in plan mode when the prompt is sent", async () => {
 		const plan = rig(planned);
@@ -406,6 +421,6 @@ describe("the mode is in place before the prompt leaves", () => {
 		// The decision's round trip (main applies stock's plan mode before it answers) ends before the prompt.
 		expect(plan.autoModeDecide).toHaveBeenCalledBefore(rpc.prompt);
 		expect(planAtPrompt).toBe(true);
-		expect(rpc.prompt).toHaveBeenLastCalledWith(BIG, []);
+		expect(rpc.prompt).toHaveBeenLastCalledWith(BIG, [], "steer");
 	});
 });

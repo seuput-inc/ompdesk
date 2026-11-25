@@ -148,7 +148,7 @@ fn rename_blocked(_error: &io::Error) -> bool {
 }
 
 /// The waits of main's `writeFileAtomicSync` (`atomic-file.ts`), in milliseconds.
-const RENAME_RETRY_MS: [u64; 6] = [10, 20, 40, 80, 160, 320];
+pub(super) const RENAME_RETRY_MS: [u64; 6] = [10, 20, 40, 80, 160, 320];
 
 /// Replaces `file` with `data` in one step, owner only: a sibling temp file, then a rename over the target, as main's
 /// `writeFileAtomicSync` does (the same temp name shape, mode and retries).

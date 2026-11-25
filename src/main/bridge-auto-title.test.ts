@@ -727,13 +727,14 @@ describe("title language and length", () => {
 		await send(world.session, { type: "message_end", message: operator("작업 현황판 디자인을 바꾸고 싶어") });
 		await flush();
 		expect(world.script.shorter).toHaveBeenCalledExactlyOnceWith(
-			"작업 현황판 디자인을 바꾸고 싶어",
+			"Task: 작업 현황판 디자인을 바꾸고 싶어\n\nTitle to shorten: 작업 현황판 화면 디자인",
 			expect.any(String),
 		);
 		const retryPrompt = world.script.shorter.mock.calls[0]?.[1] ?? "";
 		expect(retryPrompt.startsWith(world.session.titleSystemPrompt ?? "-")).toBe(true);
-		expect(retryPrompt).toContain('Shorter: the title "작업 현황판 화면 디자인" is too long');
-		expect(retryPrompt).toContain("Keep the subject and the head noun");
+		for (const example of ['"로그인 오류 수정"', '"Empty CSV export"', '"현황판 디자인"', '"결제 재시도"']) {
+			expect(retryPrompt.split(example)).toHaveLength(2);
+		}
 		expect(world.script.retryModels).toEqual(["anthropic/default-model"]);
 		// The first pass stays on the cheap title chain.
 		expect(world.script.generate).toHaveBeenCalledTimes(1);
@@ -804,7 +805,7 @@ describe("title language and length", () => {
 		expect(await regenerate(world.session)).toEqual({ title: "🔑 PWERR: Dark mode toggle" });
 		expect(world.script.shorter).toHaveBeenCalledExactlyOnceWith(
 			"Dark mode toggle support for settings",
-			expect.stringContaining('the title "Dark mode toggle support for settings" is too long'),
+			expect.not.stringContaining("Dark mode toggle support for settings"),
 		);
 	});
 

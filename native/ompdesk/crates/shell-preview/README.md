@@ -1,0 +1,103 @@
+# Chromium Preview driver
+
+This standalone crate controls one real Chromium target per Preview page over private CDP pipes. It does not embed CEF, Electron, a second WebKit page, or a browser downloader. The Tauri compositor and phone stream must consume frames from this same target.
+
+## Host contract
+
+`Browser::launch(LaunchConfig { executable, profile_root, command_timeout })` takes an absolute executable chosen by trusted packaging and an application-owned disposable storage root. There is no PATH search, installed-browser discovery, user-profile reuse, caller-supplied Chromium flag, or runtime download. Each launch makes a new private profile. Each `create_partition()` makes an off-the-record browser context, denies all permissions and downloads, and returns Chromium's actual `context_id`.
+
+`create_page(&partition, Viewport { width, height, device_scale_factor })` returns a `Page` with actual `target_id` and flattened `session_id`. Native `wcId`, `viewId`, frame sequence counters, viewer ownership, and authorization remain in Main and the Tauri host. This crate creates no second authorization registry.
+
+Viewport dimensions are applied through `Emulation.setDeviceMetricsOverride`, not `Target.createTarget` window bounds: Chromium rejects window bounds when it reuses an existing browser window for a second tab in that context.
+
+| API | Result or effect |
+| --- | --- |
+| `Browser::subscribe()` | `EventReceiver`: `recv()` yields every later CDP `Event` (`method`, shared `Arc<Value>` `params`, optional actual `session_id`) in wire order from a reliable queue bounded by 32 MiB of wire bytes per subscriber; exhausting it fails the connection with `event_overflow` (never silent loss), and the reader never waits on the consumer |
+| `Browser::command(method, params, session)` | Raw CDP result on the browser or a trusted actual session; fails with `timeout` after `command_timeout` |
+| `Browser::command_settled(method, params, session)` | Same, for host mutations: waits for Chromium's actual answer or connection loss, never the read deadline |
+| `Page::command(method, params)` | Raw CDP result on this page's session, including Input, Accessibility, DOM, Network, and nested target attach |
+| `Page::command_settled(method, params)` | Same session, settled like `Browser::command_settled`; navigation, viewport, screencast, frame ACK and close use it |
+| `Page::navigate(url)` | HTTP(S) or empty-document navigation, rejects `Page.navigate.errorText` |
+| `Page::evaluate(expression, user_gesture)` | Awaited by-value result; script exceptions fail the call |
+| `Page::isolated_world(name)` | Actual isolated execution context ID, without universal access |
+| `Page::capture(options)` | Actual PNG or JPEG bytes; CDP clip and scale options pass unchanged |
+| `Page::pdf(options)` | Actual PDF bytes, using CDP ReturnAsBase64 |
+| `Page::resize(viewport)` | CDP device metrics override |
+| `Page::start_screencast(options)` | Actual `Page.screencastFrame` events, not a screenshot loop or a mirror |
+| `Page::ack_frame(id)` | ACKs the frame ID from `params.sessionId` on this page |
+| `Page::stop_screencast()` | Ends this page's stream |
+| `Page::close()` | Closes the actual target |
+| `Browser::close_partition(partition)` | Disposes its actual browser context and targets |
+| `Browser::shutdown()` | Joins the exact process exit, then removes only the profile this launch created |
+
+Use `launch_with_navigation(config, Arc<dyn NavigationHandler>)` to adapt Main's existing `wc.navigate` policy. `allow(Navigation { session_id, frame_id, url })` returns a boxed `Future<Output = bool>`. Document requests stay paused until the host answers. The driver denies on a two-second timeout, before continuing the request. It also applies the HTTP(S) and empty-document restriction. The host maps the actual session and frame back to its existing checked owner. It must install this adapter for remote-tab and visual navigation rules.
+
+`launch_with_hooks(config, navigation, initializer)` adds the host's `PageInitializer`. Its `initialize(AttachedPage)` returns `Pin<Box<dyn Future<Output = Result<()>> + Send>>`. The capability has actual `target_id`, `session_id`, and `context_id` strings plus `command(method, params)` on that actual session. It needs no reference back to `Browser` while launch is in progress. Store `Arc<Browser>` externally rather than cloning its shutdown ownership or introducing a strong callback cycle.
+
+The callback applies the canonical host registry's UA, Accept-Language, and pre-document scripts while a page or iframe is paused. `create_page` waits for target initialization before returning. Competing CDP attachments join one actual-target completion rather than injecting the preload twice. The completion map contains only actual target/session lifecycle facts and is removed on detach; partition names, proxy rules, cookies, native IDs, and permission authority stay with the host.
+
+`launch_with_request_handler(config, navigation, initializer, requests)` adds the single `RequestHandler`. `handle(PausedRequest)` returns a boxed future of `Result<RequestDisposition>`. `PausedRequest` contains `request_id`, `page: AttachedPage`, and unmodified shared CDP `params` with `/request/method`, `/request/url`, `/request/headers`, optional `postData`, and optional `postDataEntries`. Popup denial, document scheme restrictions, and the existing host navigation approval run before delegation; a denied document never reaches the request handler. The host responds through `request.page.command(...)` on that exact session. `Handled` means that response completed; `Unhandled` continues the approved navigation or resource request. A handler error or timeout fails that request without reporting success.
+
+Only the driver's primary auto-attached session enables Fetch. With a request handler it intercepts all resource requests; otherwise it intercepts only documents. The returned `Page` uses that same primary session. The initializer must not independently call `Fetch.enable`, and an observer must not race another fulfill/continue/fail against the handler. This gives the canonical host registry one interception owner, without a second listener or authorization registry.
+
+CDP fulfillment accepts a whole base64 body, not a writable response-body stream. Large media must use the host's actual checked HTTP(S) resource transport with incremental body and Range handling, not collection of `Body.next()` into a video-sized `Fetch.fulfillRequest`. An actual Chromium 153 private-pipe probe with wildcard Fetch interception returned `net::ERR_ABORTED` for `omp-visual://v1-0000000000000000/index.html` and emitted no `Fetch.requestPaused` through the following `Page.getFrameTree` response barrier (check `20261116-002601-0c5b`). Direct custom-scheme navigation therefore cannot supply this transport on the tested runtime.
+
+Popups attach paused, arm document interception, and request closure before releasing the debugger pause so the opener's input cannot deadlock. Any popup document request is denied using the actual target's opener metadata. Downloads and permission checks are denied at context creation, not after a page asks. Raw CDP is a trusted-host interface, not a renderer, phone, or unauthenticated socket API. A host granting raw Browser/Target/Fetch commands must preserve its existing command authorization.
+
+## Frames, coordinates, and ordering
+
+`Page.screencastFrame` retains Chromium's `data`, `metadata`, and numeric frame `sessionId`. Base64 image bytes and metadata refer to the same actual target as evaluation and input. Subscribers share the payload without copying an encoded image per receiver. Subscribe before enabling events and handle channel closure or lag as failure, never as an empty successful frame.
+
+Security-policy events have a separate bounded consumer. A slow raw observer receives `Lagged` without ending other pages. A missing or lagging policy consumer ends the browser instead of losing a paused navigation or popup decision. Navigation approvals run concurrently with event intake, each with its own two-second deadline.
+
+The compositor decodes the image and retains `offsetTop`, `pageScaleFactor`, `deviceWidth`, `deviceHeight`, and scroll offsets. The phone adapter maps it to its existing checked frame sequence and binary JPEG wire. It ACKs this target's CDP frame only after consumption. It must not treat the CDP ACK number as the phone's global sequence counter.
+
+CDP input coordinates are CSS pixels. The host subtracts its compositor or panel offset and accounts for displayed-image scaling once. `device_scale_factor` changes image pixels, not mouse coordinates. `capture.clip.scale` is passed through, so a half-scale clip at device scale two has one image pixel per CSS pixel. The single pipe writer preserves enqueue order, while response IDs route out-of-order completion. An awaited JavaScript promise does not hold input behind it. Callers await dependent operations such as resize then capture.
+
+Explicitly call `shutdown()` before ending the Tokio runtime. Dropping a browser schedules cleanup when a runtime is alive, but is not a joined shutdown receipt. A cancelled context or target creation ends the browser because its CDP side effect may already have happened. A sent CDP operation cannot in general be rolled back after cancellation. A timed command that times out or is dropped loses its pending slot at once; one not yet written is never sent, and a late answer to one already written is ignored. A settled command dropped before its frame is written is likewise never sent. Once a settled command is being written, its pending slot stays until Chromium answers or the pipe fails, so an abandoned mutation keeps its capacity and the transport never reports it as finished early. Request IDs are not reused and late replies cannot satisfy another caller.
+
+Transport bounds are 16 MiB per CDP JSON frame, 32 MiB of queued outgoing bytes, 256 pending commands, and a 32 MiB per-observer budget charged for wire bytes and per-event overhead. Oversized capture or PDF results fail rather than being truncated. Policy intake is separate; a lost critical event fails closed. These are explicit driver limits, not an unbounded large-document claim.
+
+Page creation errors identify target creation, initialization, or viewport setup. Rejected CDP replies retain only the numeric protocol error code; Chromium's message and data are not exposed because they can contain page URLs or credentials.
+
+On POSIX, Chromium's blocking child endpoint is mapped to fd3 and fd4 of a private `socketpair`; only the parent endpoint is nonblocking. There is no listening socket or TCP debugging port. Named FIFOs are not used: on Darwin, a large blocking write can wait for a reader while the reader waits for the vnode notification posted only after that write completes. The actual PDF regression exposed this deadlock.
+
+The host must also prevent unrelated child launches from inheriting unlisted descriptors. [Rust 1.95's macOS `Socket::new_pair`](https://github.com/rust-lang/rust/blob/1.95.0/library/std/src/sys/net/connection/socket/unix.rs#L111-L138) sets CLOEXEC after `socketpair`, rather than atomically. A concurrent inheriting spawn can race that interval. Main's process-launch boundary must use close-unlisted-fd semantics or a shared spawn fence. This is a confirmed standard-library interval, not a measured leak in the integrated host. This crate cannot impose a fence on spawns its host performs elsewhere.
+
+## Runtime supply evidence
+
+The repository's `bun.lock` pins Playwright 1.63.0. Its `browsers.json` pins chrome-headless-shell revision 1243, Chromium 153.0.8010.12. This is a development proof runtime, not an approved production browser version.
+
+The inspected binary's `LICENSE.headless_shell` begins with the Chromium BSD redistribution terms and includes its third-party notices. Redistribution must retain the actual binary's complete license and notice file, not only Playwright's Apache-2.0 license or Chromium's top-level license. No Playwright source is copied into this crate. Main owns the packaged browser provenance, current security version, verification, signing, notices, and update cadence.
+
+Sources:
+
+- [Chromium license](https://raw.githubusercontent.com/chromium/chromium/main/LICENSE)
+- [Chromium headless shell documentation](https://raw.githubusercontent.com/chromium/chromium/main/headless/README.md)
+- [Playwright license](https://raw.githubusercontent.com/microsoft/playwright/main/LICENSE)
+- [Chrome for Testing usage guidance](https://developer.chrome.com/docs/automation-and-testing/chrome-for-testing/)
+
+The official Chrome for Testing guidance limits its intended use to automation and trustworthy content. That is security and usage guidance, not evidence of a legal redistribution prohibition. Production Preview browses untrusted content and needs a current, sandboxed packaged Chromium supply. This crate does not approve the older cached testing build for that use.
+
+WebRTC over UDP is closed by two launch switches because the two runtimes read different ones. Chromium's `headless/` library applies `--force-webrtc-ip-handling-policy` to each [`HeadlessWebContentsImpl`](https://chromium.googlesource.com/chromium/src/+/157.0.8103.79/headless/lib/browser/headless_web_contents_impl.cc). The pinned Brave runs `--headless=new` through Chrome's browser layer, which has no reader for that switch: it maps `--webrtc-ip-handling-policy` to the `webrtc.ip_handling_policy` preference ([`ChromeCommandLinePrefStore`](https://chromium.googlesource.com/chromium/src/+/157.0.8103.79/chrome/browser/prefs/chrome_command_line_pref_store.cc)). A DevTools off-the-record context keeps that store ([`OffTheRecordProfileImpl`](https://chromium.googlesource.com/chromium/src/+/157.0.8103.79/chrome/browser/profiles/off_the_record_profile_impl.cc) forks prefs with [`CreateIncognitoPrefService`](https://chromium.googlesource.com/chromium/src/+/157.0.8103.79/components/sync_preferences/pref_service_syncable.cc), which passes no command-line store and so inherits it). `disable_non_proxied_udp` makes Blink's [`PeerConnectionDependencyFactory`](https://chromium.googlesource.com/chromium/src/+/157.0.8103.79/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc) clear `enable_nonproxied_udp`, and [`P2PPortAllocator`](https://chromium.googlesource.com/chromium/src/+/157.0.8103.79/third_party/blink/renderer/platform/p2p/port_allocator.cc) then sets `PORTALLOCATOR_DISABLE_UDP`, `DISABLE_STUN` and `DISABLE_UDP_RELAY`. The switch is browser-wide: every page of this launch, not only a visual, loses direct UDP, so a web tab's WebRTC call can use only a TCP relay through its context's proxy. It is read from source of Chromium 157.0.8103.79; no browser was run for this evidence.
+
+## Integration not provided by a frame stream
+
+The driver exposes real CDP Accessibility trees, `Input.imeSetComposition`, `Input.insertText`, key and pointer dispatch, drag dispatch, runtime bindings, and dialog events through `command` and `subscribe`. It does not bridge these to native accessibility APIs, native IME candidate positioning, the operating system clipboard, native drag-and-drop, context menus, spellchecking UI, or an audio output/phone audio stream. Those are real host integration requirements, not parity supplied by a canvas.
+
+`Page.javascriptDialogOpening` requires the host's existing dialog UI and a `Page.handleJavaScriptDialog` response; this crate only passes the event and the command. The tauri-shell host's `preview/dialogs.rs` is that consumer, answering over the host wire's `ipc.sendSync` (Chromium's pipe does not implement the previous synchronous `__ompdeskSendSync` preload). `omp-visual:` and `omp-media:` protocol streaming are not automatically registered in standalone Chromium. Main must preserve their checked request and response semantics through its actual host transport. This crate alone is not a whole-app or Preview-parity completion claim.
+
+## Narrow proof
+
+The real-browser test requires an explicit test executable and scratch root. It serves deterministic local HTTP content and uses the actual driver for input, isolated worlds, context isolation, permission denial, PNG scales, PDF, resize, screencast and ACK, download denial, and popup policy. It also checks the before-resume preload and UA headers, one same-session POST fulfillment owner, host-error request failure without a network leak, and quarter-scale layout metrics and image pixels. `Viewport` accepts device scale factors from 0.25 through 8. The runtime is never discovered or downloaded by the test. `--ignored` is explicit so a normal source-only unit run does not launch a browser or silently claim runtime coverage.
+
+The same real-browser scenario also holds one host navigation approval while another partition emits 100 console events, closes the held page, and proves the other partition still evaluates. The unit suite covers out-of-order replies, fragmented frames, cancellation before send, late replies, timeout, wrong-session success versus Chromium's browser-level detached-session error, observer lag versus policy lag, event EOF, and exact joined shutdown.
+
+```sh
+ompdesk check -- cargo +1.95 test --locked --offline --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --lib
+OMPDESK_PREVIEW_TEST_BROWSER=<trusted-test-executable> \
+OMPDESK_PREVIEW_TEST_SCRATCH=<owned-scratch-directory> \
+ompdesk check -- cargo +1.95 test --locked --offline --manifest-path native/ompdesk/crates/shell-preview/Cargo.toml --test browser -- --ignored
+```
+
+Windows inherits only the CDP and standard handles using STARTUPINFOEX, passes actual read/write handles with `--remote-debugging-io-pipes`, creates the process hidden and suspended, assigns a kill-on-close job, then resumes it. Windows execution is not performed on this macOS host. Cross-platform compilation and runtime parity remain Main's hosted checks.

@@ -42,9 +42,13 @@ function handlerTable(pi: ContextHookHost): Map<string, unknown[]> | undefined {
 	return handlers instanceof Map ? handlers : undefined;
 }
 
-function contains(entries: readonly unknown[], customType: string): boolean {
+function contains(entries: readonly unknown[], customType: string, alternate?: string): boolean {
 	return entries.some(
-		entry => typeof entry === "object" && entry !== null && "customType" in entry && entry.customType === customType,
+		entry =>
+			typeof entry === "object" &&
+			entry !== null &&
+			"customType" in entry &&
+			(entry.customType === customType || (alternate !== undefined && entry.customType === alternate)),
 	);
 }
 
@@ -59,7 +63,7 @@ function perSession<V>(tables: Map<string, WeakMap<object, V>>, customType: stri
 
 /**
  * Puts the `customType` hook of the session `sessionManager` belongs to back on the request path and keeps it there
- * until the returned release: called around the bridge adding such a message outside a prompt (session-recap.ts), so
+ * until the returned release: called around the bridge adding such a message outside a prompt (idle-maintenance.ts), so
  * a side request of the session that runs before the message is in the branch cannot take the hook off. Release once
  * the message is in (the branch then keeps the hook) or the add failed.
  */
@@ -85,6 +89,7 @@ export function installContextHook<Event extends { messages: readonly unknown[] 
 	pi: ContextHookHost,
 	customType: string,
 	handler: (event: Event, ctx: Ctx) => R,
+	alternate?: string,
 ): void {
 	const table = handlerTable(pi);
 	const sessions = perSession(armers, customType);
@@ -108,8 +113,8 @@ export function installContextHook<Event extends { messages: readonly unknown[] 
 			table &&
 			!preparing &&
 			!held.has(ctx.sessionManager) &&
-			!contains(event.messages, customType) &&
-			!contains(ctx.sessionManager.getBranch(), customType);
+			!contains(event.messages, customType, alternate) &&
+			!contains(ctx.sessionManager.getBranch(), customType, alternate);
 		if (leave) {
 			const list = table.get("context") ?? [];
 			table.set(

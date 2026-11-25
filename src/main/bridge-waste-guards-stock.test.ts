@@ -1,7 +1,16 @@
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fakeAgent, sse, startOmp, startProvider, toolCall } from "./bridge-todo-stock-rig";
+import {
+	type Frame,
+	fakeAgent,
+	type Omp,
+	onCleanup,
+	sse,
+	startOmp,
+	startProvider,
+	toolCall,
+} from "./bridge-todo-stock-rig";
 import { INSTALLED_OMP as omp } from "./test-bridge-probe";
 
 /**
@@ -18,6 +27,36 @@ function occurrences(text: string, needle: string): number {
 	return text.split(needle).length - 1;
 }
 
+/**
+ * A job that runs until the test lets it go, so no test here waits for a clock to run out. The output is computed
+ * by the command that follows, so the job's label (the command) never contains it.
+ */
+const HOLD = "while [ ! -e release ]; do sleep 0.1; done";
+
+/** Stock's first `wait` window is 5 s (`WAIT_LADDER_MS` in omp's tools/wait.ts); twice that has outlived it. */
+const PAST_FIRST_WINDOW_MS = 10_000;
+
+/**
+ * Lets the session's held jobs go now, and again when the test ends whatever way it ends: a job still running when
+ * omp exits keeps its folder open on Windows (the cleanup's EBUSY).
+ */
+function releaseJobs(session: Omp): () => void {
+	const release = () => writeFileSync(join(session.root, "release"), "");
+	onCleanup(release);
+	return release;
+}
+
+/** The longest a job has run while the `wait` tool watched it, from the progress the tool streams. */
+function watchedRunningMs(frames: readonly Frame[]): number {
+	let longest = 0;
+	for (const frame of frames) {
+		if (frame.type !== "tool_execution_update" || frame.toolName !== "wait") continue;
+		const partial = frame.partialResult as { details?: { jobs?: Array<{ status?: string; durationMs?: number }> } };
+		for (const job of partial?.details?.jobs ?? [])
+			if (job.status === "running") longest = Math.max(longest, job.durationMs ?? 0);
+	}
+	return longest;
+}
 describe.skipIf(!existsSync(omp))("waste guards, on stock omp", () => {
 	it("refuses a ready.log that cannot match at once, without running the command", async () => {
 		const script = [
@@ -95,9 +134,8 @@ describe.skipIf(!existsSync(omp))("waste guards, on stock omp", () => {
 	}, 180_000);
 
 	it("blocks a wait until the job it watches finishes, past stock's first windows", async () => {
-		// The output is computed, so the job's label (the command) never contains it.
 		const script = [
-			toolCall("bash", { command: "sleep 12; echo JOB_$((40 + 2))", async: true }),
+			toolCall("bash", { command: `${HOLD}; echo JOB_$((40 + 2))`, async: true }),
 			toolCall("wait", {}),
 		];
 		const provider = await startProvider(step =>
@@ -108,11 +146,25 @@ describe.skipIf(!existsSync(omp))("waste guards, on stock omp", () => {
 			model: "fake/m1",
 			bridge: resolve("resources/gui-bridge/index.ts"),
 		});
-		const frames = await session.turn("Start a job and wait for it");
+		const release = releaseJobs(session);
+		const done = session.turn("Start a job and wait for it", 90_000);
+		done.catch(() => undefined);
+		// Stock's wait returns after its first window with the job still running, and the model would be asked again for
+		// nothing: the job is let go only once the wait has watched it run past that window.
+		try {
+			await expect
+				.poll(() => watchedRunningMs(session.frames), { timeout: 60_000 })
+				.toBeGreaterThan(PAST_FIRST_WINDOW_MS);
+		} catch (error) {
+			throw new Error(`the wait never watched the job past stock's first window\n${session.diagnose()}`, {
+				cause: error,
+			});
+		}
+		release();
+		const frames = await done;
 		const waits = frames
 			.filter(frame => frame.type === "tool_execution_end" && frame.toolName === "wait")
 			.map(frame => JSON.stringify(frame.result));
-		// Stock's wait returns after its 5 s window with the job still running, and the model is asked again for nothing.
 		expect(waits).toHaveLength(1);
 		expect(waits[0]).toContain("JOB_42");
 		expect(provider.bodies[2]).toContain("JOB_42");
@@ -120,7 +172,7 @@ describe.skipIf(!existsSync(omp))("waste guards, on stock omp", () => {
 	}, 180_000);
 
 	it("still ends a blocked wait at once when a message comes in", async () => {
-		const script = [toolCall("bash", { command: "sleep 90; echo LATE", async: true }), toolCall("wait", {})];
+		const script = [toolCall("bash", { command: `${HOLD}; echo LATE`, async: true }), toolCall("wait", {})];
 		const provider = await startProvider(step =>
 			step <= script.length ? sse(script[step - 1], "tool_calls") : sse([{ content: "DONE" }], "stop"),
 		);
@@ -129,15 +181,17 @@ describe.skipIf(!existsSync(omp))("waste guards, on stock omp", () => {
 			model: "fake/m1",
 			bridge: resolve("resources/gui-bridge/index.ts"),
 		});
+		const release = releaseJobs(session);
 		const from = session.frames.length;
-		void session.turn("Start a long job and wait for it");
+		const done = session.turn("Start a long job and wait for it", 90_000);
+		done.catch(() => undefined);
 		await expect
 			.poll(() => session.frames.slice(from).some(f => f.type === "tool_execution_start" && f.toolName === "wait"), {
 				timeout: 60_000,
 			})
 			.toBe(true);
 		await session.send({ type: "steer", message: "Stop waiting and answer" });
-		// Far inside the job's 90 s: only the message can have ended the wait.
+		// The job holds until released: only the message can have ended the wait.
 		await expect
 			.poll(() => session.frames.slice(from).find(f => f.type === "tool_execution_end" && f.toolName === "wait"), {
 				timeout: 30_000,
@@ -147,5 +201,8 @@ describe.skipIf(!existsSync(omp))("waste guards, on stock omp", () => {
 			.slice(from)
 			.find(frame => frame.type === "tool_execution_end" && frame.toolName === "wait");
 		expect(JSON.stringify(ended?.result)).toContain("interrupted by message");
+		// The session settles once the job's result has been delivered: its process is gone before the folder is removed.
+		release();
+		await done;
 	}, 180_000);
 });

@@ -10,15 +10,16 @@
 //!   sidecar emitted it. Every call carries main's clock (`now`) and whether main's layout hook is installed (`wt`).
 //! - Items the core pushes (their effects need nothing back): `send` (a window send, by `IPC_EVENTS` key), `wireFull`
 //!   and `unwireFull`, `listenClosed`, `command` (a command to a sidecar whose answer nobody reads), `emitView`,
-//!   `settleWatch`, `modelWaitForget`, `turnStop`, `reloadExtensions`, `immediate` and `stopTimer` (a tick and a timer
-//!   run by main's clock), and `settle` (the end of a method that was `async`).
-//! - Questions the core asks (the collaborator answers at once, `ask`): `blocked`, `spawn`, `wire`, `acquired`,
+//!   `settleWatch`, `modelWaitForget`, `turnStop`, `reloadExtensions`, `immediate` (a tick run by main's event loop)
+//!   and `settle` (the end of a method that was `async`).
+//! - Questions the core asks (the collaborator answers at once, `ask`): `blocked`, `spawn`, `acquired`,
 //!   `facts`, `window`, `start`, `restart`, `sleep`, `adoptCwd`, `sideChannel`, `endViews`, `dispose`, `disposeSidecars`,
-//!   `announce`, `decide`, `mergePlans`, `deletedAdd`, `selfDevice`, `snowflake`, the hooks `onRunningChange`,
+//!   `announce`, `decide`, `selfDevice`, `snowflake`, the hooks `onRunningChange`,
 //!   `onSessionFilesChanged` and `onWindowTabsChanged`; and, for what main answers with a promise (`ask_later`):
 //!   `rpc`, `sideChannelLater` and `exiting`.
 
 mod api;
+mod claims;
 mod later;
 pub mod layout;
 mod listen;
@@ -36,6 +37,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
@@ -43,6 +45,48 @@ pub(crate) use crate::hub::spawn;
 use crate::hub::{Kind, Out, Outcome};
 use crate::server::Fault;
 use state::{Ctx, LevelKey, P, Pool, R};
+use windows::FileEditGuard;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HostCloseTurn {
+    pub omp: String,
+    pub turn: u64,
+}
+
+impl HostCloseTurn {
+    fn valid(&self) -> bool {
+        !self.omp.is_empty() && self.turn < (1 << 53)
+    }
+
+    fn from_payload(payload: &Value) -> Option<Self> {
+        let value = payload.get("hostTurn")?;
+        value.as_object()?;
+        Self::deserialize(value).ok().filter(Self::valid)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AutoCloseTurn {
+    pub pool: u64,
+    pub entry: u64,
+    pub turn: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostCloseTurn>,
+}
+
+impl AutoCloseTurn {
+    fn parse(value: &Value) -> Option<Self> {
+        value.as_object()?;
+        if let Some(host) = value.get("host") {
+            host.as_object()?;
+        }
+        Self::deserialize(value)
+            .ok()
+            .filter(|fence| fence.host.as_ref().is_none_or(HostCloseTurn::valid))
+    }
+}
 
 pub const KIND: Kind = Kind {
     name: "pool",
@@ -58,6 +102,7 @@ thread_local! {
 fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
     let opts: Value = serde_json::from_str(opts.get()).unwrap_or(Value::Null);
     let pool = Pool {
+        epoch: id,
         layout_version: opts["layoutVersion"].as_i64().unwrap_or(1),
         max_former_tab_ids: opts["maxFormerTabIds"]
             .as_u64()
@@ -69,6 +114,7 @@ fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
     let ctx = Ctx {
         out,
         pool: Rc::new(RefCell::new(pool)),
+        channels: Rc::new(serde_json::from_value(opts["channels"].clone()).unwrap_or_default()),
     };
     POOLS.with(|pools| pools.borrow_mut().insert(id, ctx));
     Ok(())
@@ -158,17 +204,61 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         }),
         "windowClosed" => later(async move { done(ctx.window_closed(p.i("win")?).await) }),
         "immediate" => later(async move { done(ctx.immediate(&p.s("tab")?, &p.s("kind")?).await) }),
-        "stopTimeout" => {
-            ctx.stop_timeout(
-                p.oi("token")
-                    .and_then(|t| u64::try_from(t).ok())
+        "size" => now(Value::from(ctx.with(|pool| pool.entries.len()))),
+        "tabFacts" => now(ctx.tab_facts(&p.s("tab").unwrap_or_default())),
+        "pendingPlan" => now(ctx.pending_plan(&p.s("tab").unwrap_or_default())),
+        "isRequestOpen" => now(Value::from(ctx.is_request_open(
+            &p.s("tab").unwrap_or_default(),
+            &p.s("id").unwrap_or_default(),
+        ))),
+        "claimRequest" => now(ctx.claim_request(
+            &p.s("tab").unwrap_or_default(),
+            &p.s("id").unwrap_or_default(),
+        )),
+        "releaseRequest" => {
+            ctx.release_request(
+                &p.s("id").unwrap_or_default(),
+                p.oi("claim")
+                    .and_then(|c| u64::try_from(c).ok())
                     .unwrap_or(0),
             );
             Outcome::done()
         }
-        "size" => now(Value::from(ctx.with(|pool| pool.entries.len()))),
-        "tabFacts" => now(ctx.tab_facts(&p.s("tab").unwrap_or_default())),
-        "pendingPlan" => now(ctx.pending_plan(&p.s("tab").unwrap_or_default())),
+        "guardAsk" => Outcome::Now(
+            ctx.guard_ask(
+                &p.s("id").unwrap_or_default(),
+                p.oi("claim").and_then(|c| u64::try_from(c).ok()),
+            )
+            .map(|()| Value::Null),
+        ),
+        "claimPlan" => now(ctx.claim_plan(
+            &p.s("tab").unwrap_or_default(),
+            &p.s("file").unwrap_or_default(),
+            p.oi("generation")
+                .and_then(|c| u64::try_from(c).ok())
+                .unwrap_or(0),
+        )),
+        "planStillClaimed" => now(Value::from(
+            ctx.plan_still_claimed(
+                &p.s("tab").unwrap_or_default(),
+                p.oi("claim")
+                    .and_then(|c| u64::try_from(c).ok())
+                    .unwrap_or(0),
+            ),
+        )),
+        "releasePlan" => {
+            ctx.release_plan(
+                &p.s("tab").unwrap_or_default(),
+                p.oi("claim")
+                    .and_then(|c| u64::try_from(c).ok())
+                    .unwrap_or(0),
+            );
+            Outcome::done()
+        }
+        "guardPlan" => Outcome::Now(
+            ctx.guard_plan(&p.s("tab").unwrap_or_default(), p.b("own"))
+                .map(|()| Value::Null),
+        ),
         "restartHolds" => now(ctx.restart_holds()),
         "runningBridges" => later(async move { ctx.running_bridges().await }),
         "isHostedView" => now(Value::from(ctx.with(|pool| {
@@ -231,6 +321,7 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                     p.os("tab").as_deref(),
                     p.oi("responder"),
                     &p.os("choice").unwrap_or_default(),
+                    p.oi("claim").and_then(|c| u64::try_from(c).ok()),
                 )
                 .await,
             )
@@ -296,7 +387,46 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                 .await?,
             ))
         }),
-        "releaseTab" => later(async move { Ok(Value::from(ctx.release_tab(&p.s("tab")?).await?)) }),
+        "canReleaseTab" => now(Value::Bool(ctx.with(|pool| {
+            let Some(entry) = p.0["tab"].as_str().and_then(|tab| pool.entry(tab)) else {
+                return false;
+            };
+            AutoCloseTurn::parse(&p.0["expectedTurn"])
+                .is_some_and(|expected| pool.can_release(entry, &expected))
+        }))),
+        "releaseTab" => later(async move {
+            let expected = match p.0.get("expectedTurn") {
+                None => None,
+                Some(value) => match AutoCloseTurn::parse(value) {
+                    Some(turn) => Some(turn),
+                    None => return Ok(Value::Bool(false)),
+                },
+            };
+            // A guard main sent but the core cannot read keeps the tab: never a release it did not check.
+            let guard = match p.0.get("unlessDirty") {
+                None => None,
+                Some(value) => match FileEditGuard::parse(value) {
+                    Some(guard) => Some(guard),
+                    None => return Ok(Value::Bool(false)),
+                },
+            };
+            Ok(Value::from(
+                ctx.release_tab(&p.s("tab")?, expected, guard.as_ref())
+                    .await?,
+            ))
+        }),
+        // What a paired page's live connections report of one of its tabs' Files edits (`FileEditReports.edits`).
+        "fileEdits" => now(Value::from(
+            FileEditGuard::parse(&p.0)
+                .map_or(crate::web::file_edits::FileEdits::Unreported, |guard| {
+                    crate::web::router::file_edits(
+                        guard.host,
+                        &guard.device,
+                        p.0["tab"].as_str().unwrap_or(""),
+                    )
+                })
+                .as_str(),
+        )),
         "announceClosed" => later(async move {
             let closed = [p.s("tab")?];
             done(ctx.send_tab_list(p.i("win")?, Some(&closed), None).await)
@@ -324,6 +454,7 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "windowOfTab" => now(ctx.window_of_tab(&p.s("tab").unwrap_or_default())),
         "windowsShowingTab" => now(ctx.windows_showing_tab(&p.s("tab").unwrap_or_default())),
         "tabWindows" => now(ctx.tab_windows()),
+        "controlTabs" => later(async move { ctx.control_tabs().await }),
         "extensionUiState" => now(ctx.extension_ui_state(p.i("win").unwrap_or(0))),
         "openRequests" => now(ctx.open_requests(p.i("win").unwrap_or(0))),
         "broadcastTargets" => now(ctx.broadcast_targets()),
@@ -380,6 +511,9 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         }),
         "setResuming" => {
             later(async move { done(ctx.set_resuming(&p.s("tab")?, p.b("resuming")).await) })
+        }
+        "setCutOff" => {
+            later(async move { done(ctx.set_cut_off(&p.s("tab")?, p.os("cutOff")).await) })
         }
         "resumeRank" => now(Value::from(
             ctx.resume_rank(&p.s("tab").unwrap_or_default()),
@@ -439,6 +573,10 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "memoryTabs" => later(async move { ctx.memory_tabs().await }),
         "workspaceDirs" => later(async move { ctx.workspace_dirs().await }),
         "restartOnNewOmp" => later(async move { Ok(Value::from(ctx.restart_on_new_omp().await?)) }),
+        "ompRestartIfWaiting" => later(async move {
+            ctx.schedule_omp_restart(&p.s("tab")?);
+            Ok(Value::Null)
+        }),
         "applyExtensionUpdate" => {
             later(async move { Ok(Value::from(ctx.apply_extension_update(&p.v("plan")).await?)) })
         }

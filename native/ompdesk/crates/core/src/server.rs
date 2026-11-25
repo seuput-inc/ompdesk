@@ -1,6 +1,6 @@
 //! Methods and dispatch. A handler is an async function from a request's params (and its `bin` tail) to a result or
-//! a coded error. Requests run concurrently and are answered in completion order; at end of input the server waits
-//! for the ones in flight, then returns. A `{"cancel": id}` frame stops the request `id` where its handler looks
+//! a coded error. Requests run concurrently and are answered in completion order; when input ends the server cancels
+//! the ones in flight and waits for them. A `{"cancel": id}` frame stops the request `id` where its handler looks
 //! (every git it runs, `Scope`), and a request answers only once every process it started has ended. What a request
 //! leaves running on purpose (a watch) reports through `Events` and ends with the process.
 
@@ -74,9 +74,32 @@ impl Scope {
         }
     }
 
-    /// Cancels the scope as a request's `cancel` frame would.
+    /// A detached scope with the means to wait for the work it was handed to end: `Gone` resolves once every clone of the
+    /// scope is dropped, which a process being ended after its cancel holds off until it exited.
+    pub fn watched() -> (Scope, Gone) {
+        let (alive, gone) = mpsc::channel(1);
+        (
+            Scope {
+                cancel: Arc::new(watch::channel(false).0),
+                _alive: alive,
+            },
+            Gone(gone),
+        )
+    }
+
+    /// Cancels the scope as a `cancel` frame cancels its request (tests, and work that ends what it ran).
     pub fn cancel(&self) {
         self.cancel.send_replace(true);
+    }
+}
+
+/// The end of a `Scope::watched` scope's last clone.
+pub struct Gone(mpsc::Receiver<()>);
+
+impl Gone {
+    pub async fn wait(mut self) {
+        // Nothing is ever sent: `recv` answers `None` once the last sender (a clone of the scope) is gone.
+        while self.0.recv().await.is_some() {}
     }
 }
 
@@ -220,21 +243,28 @@ pub fn registry() -> Registry {
     let mut registry = Registry::default();
     registry.add("core.echo", |call| Box::pin(echo(call)));
     crate::aimemory::register(&mut registry);
+    crate::archive::register(&mut registry);
     crate::browsers::register(&mut registry);
     crate::clock::register(&mut registry);
+    crate::diagnostic_bundle::register(&mut registry);
     crate::disk::register(&mut registry);
     crate::ext::register(&mut registry);
     crate::fs::register(&mut registry);
     crate::git::register(&mut registry);
     crate::gh::register(&mut registry);
     crate::keepawake::register(&mut registry);
+    crate::logs::register(&mut registry);
+    crate::mcp_hub::register(&mut registry);
     crate::memory::register(&mut registry);
     crate::memsync::register(&mut registry);
     crate::models::register(&mut registry);
     crate::omp::register(&mut registry);
     crate::procs::register(&mut registry);
+    crate::proxy::register(&mut registry);
     crate::remote::register(&mut registry);
     crate::remotebytes::register(&mut registry);
+    crate::repo_images::register(&mut registry);
+    crate::resume::register(&mut registry);
     crate::routines::register(&mut registry);
     crate::schedules::register(&mut registry);
     crate::sessions::register(&mut registry);
@@ -242,17 +272,21 @@ pub fn registry() -> Registry {
     crate::control::register(&mut registry);
     crate::tailscale::register(&mut registry);
     crate::ssh::register(&mut registry);
+    crate::stats::register(&mut registry);
     crate::stock::register(&mut registry);
+    crate::update_feed::register(&mut registry);
     crate::upkeep::register(&mut registry);
     crate::care::register(&mut registry);
     crate::sidecar::register(&mut registry);
     crate::ipc::register(&mut registry);
+    crate::visuals::register(&mut registry);
     crate::web::bytes::register(&mut registry);
     crate::web::host::register(&mut registry);
     crate::web::push::register(&mut registry);
     crate::web::router::register(&mut registry);
     crate::web::store::register(&mut registry);
     crate::agentctl::register(&mut registry);
+    crate::autopilot::register(&mut registry);
     crate::ports::register(&mut registry);
     registry
 }
@@ -274,8 +308,28 @@ fn in_flight(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Serves requests from `input`, answering on `output`, until `input` ends. Announces `ready` first.
+/// Serves requests from `input`, answering on `output`, until `input` ends. Announces `ready` first. Main's connection
+/// (stdio today) is where `store.saveFailed` and `store.saved` go.
 pub async fn serve<R, W>(input: R, output: W, registry: Registry) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    serve_as(input, output, registry, Peer::Main).await
+}
+
+/// Who is on the other end of a connection: main's (where the process-wide sinks, `disk::saves`, report: the latest
+/// connection of main's, never another client's), the core's owner (its stdio when main speaks elsewhere: the page
+/// pushes go there, `pages.rs`), or another client.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Peer {
+    Main,
+    Owner,
+    Other,
+}
+
+/// `serve` for `peer`.
+pub async fn serve_as<R, W>(input: R, output: W, registry: Registry, peer: Peer) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -287,10 +341,14 @@ where
         protocol: PROTOCOL,
     };
     let _ = frames.send(Frame::event("ready", &ready));
-    // Where `store.saveFailed` and `store.saved` go: a store whose disk is full tells main on this connection.
-    crate::disk::saves::attach(Events {
+    let events = Events {
         frames: frames.downgrade(),
-    });
+    };
+    match peer {
+        Peer::Main => crate::disk::saves::attach(events),
+        Peer::Owner => crate::pages::attach(events),
+        Peer::Other => {}
+    }
     let mut reader = BufReader::new(input);
     let mut line = Vec::new();
     let mut tasks = JoinSet::new();
@@ -343,27 +401,34 @@ where
         }
         while tasks.try_join_next().is_some() {}
     };
+    for cancel in in_flight(&requests).values() {
+        cancel.send_replace(true);
+    }
     // Listeners outlive their starting request, but not the input. Check again as each in-flight request ends,
     // including one that was still binding a listener when EOF arrived.
     let ending = Events {
         frames: frames.downgrade(),
     };
+    crate::logs::close_all(&ending);
+    let mcp_hub_closed = crate::mcp_hub::close_all(&ending);
     crate::control::close_all(&ending).await;
     crate::ssh::close_all(&ending);
-    crate::schedules::close_all(&ending);
+    crate::schedules::close_all(&ending).await;
     crate::aimemory::service::close_all(&ending);
+    crate::stats::close_all(&ending).await;
     crate::stock::close_all(&ending).await;
     crate::sidecar::close_all(&ending).await;
     crate::ports::close_all(&ending);
     while tasks.join_next().await.is_some() {
         crate::control::close_all(&ending).await;
         crate::ssh::close_all(&ending);
-        crate::schedules::close_all(&ending);
+        crate::schedules::close_all(&ending).await;
         crate::aimemory::service::close_all(&ending);
         crate::stock::close_all(&ending).await;
         crate::sidecar::close_all(&ending).await;
         crate::ports::close_all(&ending);
     }
+    mcp_hub_closed.await;
     crate::web::store::flush_all().await;
     drop(frames);
     let written = writer.await.map_err(io::Error::other)?;
@@ -572,6 +637,109 @@ mod tests {
         assert_eq!(ids[1]["id"], 3);
         client_write.shutdown().await.unwrap();
         drop(client_write);
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn input_eof_cancels_every_outstanding_request() {
+        use std::time::Duration;
+
+        let (mut lines, mut client_write, server) = start(registry()).await;
+        client_write
+            .write_all(b"{\"id\":1,\"method\":\"core.echo\",\"params\":{\"waitFor\":\"eof-held\"}}\n{\"id\":2,\"method\":\"core.echo\",\"params\":{\"value\":\"ready\"}}\n")
+            .await
+            .unwrap();
+        assert_eq!(next(&mut lines).await["id"], 2);
+        client_write.shutdown().await.unwrap();
+        drop(client_write);
+        let answer = tokio::time::timeout(Duration::from_secs(5), next(&mut lines)).await;
+        if answer.is_err() {
+            server.abort();
+        } else {
+            server.await.unwrap().unwrap();
+        }
+        let answer = answer.expect("EOF did not cancel the outstanding request");
+        assert_eq!(answer["id"], 1);
+        assert_eq!(answer["error"]["code"], "cancelled");
+    }
+
+    #[test]
+    fn eof_child_process() {
+        use std::io::{Read, Write};
+
+        let Ok(address) = std::env::var("OMPDESK_TEST_EOF_CHILD") else {
+            return;
+        };
+        let mut socket = std::net::TcpStream::connect(address).unwrap();
+        socket.write_all(b"r").unwrap();
+        let _ = socket.read(&mut [0]);
+    }
+
+    #[tokio::test]
+    async fn input_eof_cancels_a_running_child_and_waits_for_its_exit() {
+        use std::collections::BTreeMap;
+        use std::time::Duration;
+
+        use crate::run::{Exec, Opts, Runner};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let mut env: BTreeMap<String, String> = std::env::vars().collect();
+        env.insert(
+            "OMPDESK_TEST_EOF_CHILD".into(),
+            listener.local_addr().unwrap().to_string(),
+        );
+        let mut registry = Registry::default();
+        registry.add("test.run", |call| {
+            Box::pin(async move {
+                let runner: Runner = call.params()?;
+                Exec::new(runner, call.scope, "git")
+                    .run(".", &[], Opts::default())
+                    .await?;
+                Reply::json(&())
+            })
+        });
+        let (mut lines, mut client_write, server) = start(registry).await;
+        let request = serde_json::json!({
+            "id": 1,
+            "method": "test.run",
+            "params": {
+                "bin": std::env::current_exe().unwrap(),
+                "args": ["--exact", "server::tests::eof_child_process", "--nocapture"],
+                "env": env,
+                "timeoutMs": 600_000,
+                "maxBytes": 1024
+            }
+        });
+        client_write
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let (mut child, _) = tokio::time::timeout(Duration::from_secs(15), listener.accept())
+            .await
+            .expect("child did not connect")
+            .unwrap();
+        let mut byte = [0];
+        child.read_exact(&mut byte).await.unwrap();
+        assert_eq!(byte, *b"r");
+        client_write.shutdown().await.unwrap();
+        drop(client_write);
+
+        let answer = tokio::time::timeout(Duration::from_secs(10), next(&mut lines)).await;
+        if answer.is_err() {
+            drop(child);
+            server.await.unwrap().unwrap();
+            panic!("EOF did not cancel the running child");
+        }
+        let answer = answer.unwrap();
+        assert_eq!(answer["id"], 1);
+        assert_eq!(answer["error"]["code"], "cancelled");
+        let ended = child.read(&mut byte).await;
+        assert!(
+            matches!(&ended, Ok(0))
+                || matches!(&ended, Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset),
+            "child still holds its socket: {ended:?}"
+        );
         server.await.unwrap().unwrap();
     }
 

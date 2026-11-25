@@ -1,0 +1,45 @@
+# The one place a workflow installs stock omp (@oh-my-pi/pi-coding-agent) globally.
+#
+# CI, e2e and release test the omp OMPdesk was verified against, `src/shared/omp-tested.json`, so a push or a release
+# never turns red because omp published something that day, and a green run says which omp it held. omp-latest.yml alone
+# asks for another: the newest version, read once by its `plan` job so every job of the run installs the same one. The
+# `--minimum-release-age 0` lets the named version install however new it is (bunfig.toml's 3-day hold is for the
+# repository's own dependencies).
+#
+# Run it after actions/checkout and oven-sh/setup-bun; it puts Bun's global bin folder on PATH.
+name: Install omp
+description: Install stock omp, the tested version or the latest
+inputs:
+  version:
+    description: "`tested` (src/shared/omp-tested.json), `latest`, or an exact X.Y.Z"
+    default: tested
+outputs:
+  version:
+    description: The omp version installed (`omp --version`)
+    value: ${{ steps.omp.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: omp
+      shell: bash
+      env:
+        WANT: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$WANT" in
+          tested) SPEC="@oh-my-pi/pi-coding-agent@$(jq -er .version src/shared/omp-tested.json)" ;;
+          latest) SPEC="@oh-my-pi/pi-coding-agent@latest" ;;
+          [0-9]*.[0-9]*.[0-9]*) SPEC="@oh-my-pi/pi-coding-agent@$WANT" ;;
+          *) echo "::error::install-omp version must be tested, latest or X.Y.Z, got: $WANT"; exit 1 ;;
+        esac
+        bun install -g --minimum-release-age 0 "$SPEC"
+        BIN=$(bun pm bin -g)
+        echo "$BIN" >> "$GITHUB_PATH"
+        VERSION=$("$BIN/omp" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+        echo "omp $VERSION"
+        EXPECT="${SPEC##*@}"
+        if [ "$EXPECT" != latest ] && [ "$VERSION" != "$EXPECT" ]; then
+          echo "::error::installed omp $VERSION, asked for $EXPECT"
+          exit 1
+        fi
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"

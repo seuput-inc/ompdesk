@@ -11,6 +11,6 @@ it("keeps the known list when the read fails (a paired host's link is down), nev
 	vi.stubGlobal("window", {
 		omp: { rpc: { commandForTab: vi.fn(async () => Promise.reject(new Error("The link to the computer dropped"))) } },
 	});
-	await expect(useAgentReviewStore.getState().refresh("boss")).resolves.toBeUndefined();
+	await expect(useAgentReviewStore.getState().refresh("boss")).resolves.toBe(false);
 	expect(useAgentReviewStore.getState().byTab.boss).toEqual([{ tabId: "kid" }]);
 });

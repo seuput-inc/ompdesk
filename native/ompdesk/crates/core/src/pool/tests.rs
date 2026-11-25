@@ -86,6 +86,13 @@ impl Main {
     }
 
     async fn request(&mut self, method: &str, params: Value) -> Value {
+        let frame = self.exchange(method, params).await;
+        assert_eq!(frame["ok"], true, "{method} failed: {frame}");
+        frame["result"].clone()
+    }
+
+    /// The whole reply frame of a request, a refusal included.
+    async fn exchange(&mut self, method: &str, params: Value) -> Value {
         self.next += 1;
         let id = self.next;
         let line = json!({"id": id, "method": method, "params": params}).to_string() + "\n";
@@ -98,8 +105,7 @@ impl Main {
             );
             let frame: Value = serde_json::from_str(&line).unwrap();
             if frame["id"] == id {
-                assert_eq!(frame["ok"], true, "{method} failed: {frame}");
-                return frame["result"].clone();
+                return frame;
             }
             if frame["event"] == "hub.out" {
                 for item in frame["data"]["items"].as_array().unwrap() {
@@ -125,6 +131,17 @@ impl Main {
         params["now"] = json!(1_000);
         let to = self.instance;
         self.request(
+            "hub.call",
+            json!({"to": to, "method": method, "params": params}),
+        )
+        .await
+    }
+
+    /// A call that may be refused: the reply frame as it came.
+    async fn try_call(&mut self, method: &str, mut params: Value) -> Value {
+        params["now"] = json!(1_000);
+        let to = self.instance;
+        self.exchange(
             "hub.call",
             json!({"to": to, "method": method, "params": params}),
         )
@@ -323,14 +340,30 @@ async fn a_request_routes_back_to_the_tab_that_raised_it_and_the_first_answer_of
         main.call("openRequests", json!({"win": 2})).await[0]["tabId"],
         "a"
     );
+    main.call("attachViewer", json!({"win": -1, "tab": "b"}))
+        .await;
+    assert_eq!(main.sends("EXTENSION_UI").len(), 1);
+    main.call("attachViewer", json!({"win": -1, "tab": "a"}))
+        .await;
+    main.call("attachViewer", json!({"win": -1, "tab": "a"}))
+        .await;
+    let sent = main.sends("EXTENSION_UI");
+    assert_eq!(sent.len(), 2);
+    assert_eq!(
+        sent[1],
+        (
+            vec![-1],
+            json!({"tabId": "a", "request": request, "resent": true})
+        )
+    );
     assert_eq!(
         main.call("resumeFacts", json!({})).await[0]["awaitingUi"],
         true
     );
-    // The window 2 answers first (the frame goes through main's sidecar: the scripted main answers at once).
+    // The late viewer answers first.
     main.call(
         "routeSideChannel",
-        json!({"token": 1, "id": "r1", "frame": {"id": "r1"}, "responder": 2, "choice": "yes"}),
+        json!({"token": 1, "id": "r1", "tab": "a", "frame": {"type": "extension_ui_response", "id": "r1", "confirmed": true}, "responder": -1, "choice": "yes"}),
     )
     .await;
     let settled = |main: &Main, token: u64| {
@@ -344,9 +377,9 @@ async fn a_request_routes_back_to_the_tab_that_raised_it_and_the_first_answer_of
         main.call("size", json!({})).await;
     }
     assert_eq!(settled(&main, 1).unwrap()["value"], true);
-    // The owner's card closes through a synthetic cancel; the answering window's does not.
+    // The owner and the first viewer close the card. The answering window gets no cancel.
     let cancel = main.sends("EXTENSION_UI").pop().unwrap();
-    assert_eq!(cancel.0, vec![1]);
+    assert_eq!(cancel.0, vec![1, 2]);
     assert_eq!(cancel.1["answeredElsewhere"], true);
     assert_eq!(cancel.1["request"]["targetId"], "r1");
     // A later answer from the other window is refused, as a second answer of the same window is not.
@@ -479,4 +512,296 @@ async fn a_new_core_is_seeded_with_the_tabs_main_holds() {
     // The window's closing still releases what was seeded.
     main.call("windowClosed", json!({"win": 1})).await;
     assert_eq!(main.call("size", json!({})).await, 0);
+}
+
+#[tokio::test]
+async fn an_agent_s_answer_claims_the_ask_and_no_other_answer_lands_until_it_is_released() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("a", 1, None, false).await;
+    let request =
+        json!({"type": "extension_ui_request", "id": "r1", "method": "confirm", "title": "Go?"});
+    main.call(
+        "feed",
+        json!({"tab": "a", "event": "extensionUi",
+               "payload": {"request": request, "kinds": {"blocking": true, "signIn": false, "approval": false}}}),
+    )
+    .await;
+    assert_eq!(
+        main.call("isRequestOpen", json!({"tab": "a", "id": "r1"}))
+            .await,
+        true
+    );
+    let claim = main
+        .call("claimRequest", json!({"tab": "a", "id": "r1"}))
+        .await;
+    assert!(claim.as_u64().is_some());
+    // Taken once: a second claim and an answer with no claim are refused.
+    assert_eq!(
+        main.call("claimRequest", json!({"tab": "a", "id": "r1"}))
+            .await,
+        Value::Null
+    );
+    let refused = main.try_call("guardAsk", json!({"id": "r1"})).await;
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["error"]["code"], "being_answered", "{refused}");
+    assert_eq!(
+        main.try_call("guardAsk", json!({"id": "r1", "claim": claim}))
+            .await["ok"],
+        true
+    );
+    // A device viewing the tab is refused the same way.
+    let device = main
+        .try_call("deviceAnswer", json!({"tab": "a", "frame": {"type": "extension_ui_response", "id": "r1"}, "view": 1, "token": 9}))
+        .await;
+    assert_eq!(device["ok"], false);
+    // Released: anyone may answer again, and the claim can be taken anew.
+    main.call("releaseRequest", json!({"id": "r1", "claim": claim}))
+        .await;
+    assert_eq!(
+        main.try_call("guardAsk", json!({"id": "r1"})).await["ok"],
+        true
+    );
+    assert!(
+        main.call("claimRequest", json!({"tab": "a", "id": "r1"}))
+            .await
+            .as_u64()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_plan_is_claimed_by_its_file_and_generation_and_a_revision_that_reuses_the_file_is_another_plan()
+ {
+    let mut main = Main::start(opts()).await;
+    main.acquire("a", 1, None, false).await;
+    let proposal = |title: &str| {
+        json!({"tab": "a", "event": "events",
+               "payload": [{"type": "plan_proposal", "planFilePath": "local://PLAN.md", "title": title}]})
+    };
+    main.call("feed", proposal("Plan")).await;
+    let read = main.call("pendingPlan", json!({"tab": "a"})).await;
+    let generation = read["generation"].as_u64().unwrap();
+    // The revision reuses the plan file between the agent's read and its claim.
+    main.call("feed", proposal("Plan, revised")).await;
+    assert_ne!(
+        main.call("pendingPlan", json!({"tab": "a"})).await["generation"],
+        read["generation"]
+    );
+    assert_eq!(
+        main.call(
+            "claimPlan",
+            json!({"tab": "a", "file": "local://PLAN.md", "generation": generation})
+        )
+        .await,
+        Value::Null
+    );
+    let now = main.call("pendingPlan", json!({"tab": "a"})).await["generation"]
+        .as_u64()
+        .unwrap();
+    let claim = main
+        .call(
+            "claimPlan",
+            json!({"tab": "a", "file": "local://PLAN.md", "generation": now}),
+        )
+        .await;
+    assert!(claim.as_u64().is_some());
+    assert_eq!(
+        main.try_call("guardPlan", json!({"tab": "a"})).await["error"]["code"],
+        "being_answered"
+    );
+    assert_eq!(
+        main.try_call("guardPlan", json!({"tab": "a", "own": true}))
+            .await["ok"],
+        true
+    );
+    assert_eq!(
+        main.call("planStillClaimed", json!({"tab": "a", "claim": claim}))
+            .await,
+        true
+    );
+    // A new proposal while the note goes in: the claimed plan is not the pending one any more.
+    main.call("feed", proposal("Plan, revised again")).await;
+    assert_eq!(
+        main.call("planStillClaimed", json!({"tab": "a", "claim": claim}))
+            .await,
+        false
+    );
+    main.call("releasePlan", json!({"tab": "a", "claim": claim}))
+        .await;
+    assert_eq!(
+        main.try_call("guardPlan", json!({"tab": "a"})).await["ok"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn a_tab_a_paired_host_runs_keeps_the_host_s_plan_generation_and_a_local_tab_is_numbered_here()
+ {
+    let mut main = Main::start(opts()).await;
+    main.acquire("local", 1, None, false).await;
+    main.call(
+        "acquire",
+        json!({"cwd": "/work", "win": 1, "tab": "remote", "kind": "agent", "device": "dev-1"}),
+    )
+    .await;
+    let proposal = |tab: &str, generation: Option<u64>| {
+        let mut event =
+            json!({"type": "plan_proposal", "planFilePath": "local://PLAN.md", "title": "Plan"});
+        if let Some(generation) = generation {
+            event["generation"] = json!(generation);
+        }
+        json!({"tab": tab, "event": "events", "payload": [event]})
+    };
+    // This computer has numbered other plans already, so its counter is not the host's.
+    for _ in 0..3 {
+        main.call("feed", proposal("local", None)).await;
+    }
+    assert_eq!(
+        main.call("pendingPlan", json!({"tab": "local"})).await["generation"],
+        3
+    );
+    main.call("feed", proposal("remote", Some(42))).await;
+    assert_eq!(
+        main.call("pendingPlan", json!({"tab": "remote"})).await["generation"],
+        42
+    );
+    // The host's number is what a claim names; this computer's counter is not consulted for it.
+    assert!(
+        main.call(
+            "claimPlan",
+            json!({"tab": "remote", "file": "local://PLAN.md", "generation": 42})
+        )
+        .await
+        .as_u64()
+        .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_shell_line_typed_in_the_start_tab_makes_it_a_tab_of_its_own() {
+    let mut main = Main::start(opts()).await;
+    main.call(
+        "acquire",
+        json!({"cwd": "/work", "win": 1, "tab": "start", "kind": "agent", "fresh": true, "placeholder": true}),
+    )
+    .await;
+    let tabs = main.call("tabsForWindow", json!({"win": 1})).await;
+    assert_eq!(tabs[0]["placeholder"], true);
+    // A `bash` or `eval` the tab ran (main's TYPED_COMMANDS) starts no agent turn, so `agent_start` never clears
+    // the start tab's mark; the window's housekeeping would then close the tab, and with it a host tool call its omp
+    // still waits on (an ompdesk_session_open from it never answered: e2e probes 44523723439, 44523730496).
+    main.call("noteUnstarted", json!({"tab": "start", "unstarted": false}))
+        .await;
+    let tabs = main.call("tabsForWindow", json!({"win": 1})).await;
+    assert!(tabs[0].get("unstarted").is_none());
+    assert_eq!(tabs[0]["placeholder"], false);
+}
+
+#[tokio::test]
+async fn the_control_snapshot_reads_every_window_s_tabs_and_their_facts_in_one_call() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("a", 1, None, false).await;
+    main.acquire("b", 1, None, false).await;
+    main.acquire("c", 2, None, false).await;
+    main.call("attachViewer", json!({"win": 1, "tab": "c"}))
+        .await;
+    main.call(
+        "noteDraft",
+        json!({"tab": "b", "win": 1, "command": "set_next_prompt_draft", "empty": false}),
+    )
+    .await;
+    let windows = main.call("controlTabs", json!({})).await;
+    let windows = windows.as_array().unwrap();
+    assert_eq!(windows.len(), 2);
+    for window in windows {
+        let win = window["win"].as_i64().unwrap();
+        let mut rows = window["tabs"].as_array().unwrap().clone();
+        for row in &mut rows {
+            let control = row.as_object_mut().unwrap().remove("control").unwrap();
+            let tab = row["tabId"].clone();
+            assert_eq!(
+                control["facts"],
+                main.call("tabFacts", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["plan"],
+                main.call("pendingPlan", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["formerIds"],
+                main.call("formerTabIds", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["hasDraft"],
+                main.call("hasDraft", json!({"tab": tab})).await
+            );
+            assert_eq!(
+                control["owner"],
+                main.call("windowOfTab", json!({"tab": tab})).await
+            );
+        }
+        assert_eq!(
+            Value::Array(rows),
+            main.call("tabsForWindow", json!({"win": win})).await
+        );
+        assert_eq!(
+            window["asks"],
+            main.call("openRequests", json!({"win": win})).await
+        );
+    }
+    // The viewer's window lists the tab it views; its owner is the other window.
+    let viewed = &windows[0]["tabs"][2];
+    assert_eq!(
+        (
+            viewed["tabId"].as_str(),
+            viewed["control"]["owner"].as_i64()
+        ),
+        (Some("c"), Some(2))
+    );
+    assert_eq!(windows[0]["tabs"][1]["control"]["hasDraft"], true);
+}
+
+#[tokio::test]
+async fn a_stop_whose_run_never_ends_fails_session_running_on_the_core_s_clock_and_one_that_ends_settles_once()
+ {
+    let mut main =
+        Main::start(json!({"layoutVersion": 1, "maxFormerTabIds": 8, "stopSessionWaitMs": 50}))
+            .await;
+    main.acquire("a", 1, Some("/s/a.jsonl"), false).await;
+    main.acquire("b", 1, Some("/s/b.jsonl"), false).await;
+    for tab in ["a", "b"] {
+        main.call(
+            "feed",
+            json!({"tab": tab, "event": "status", "payload": {"status": "ready", "failure": null}}),
+        )
+        .await;
+        main.call(
+            "feed",
+            json!({"tab": tab, "event": "events", "payload": [{"type": "agent_start"}]}),
+        )
+        .await;
+    }
+    main.call("stopSession", json!({"token": 1, "path": "/s/a.jsonl"}))
+        .await;
+    main.call("stopSession", json!({"token": 2, "path": "/s/b.jsonl"}))
+        .await;
+    // b's run ends before the wait does: settled once, ok.
+    main.call(
+        "feed",
+        json!({"tab": "b", "event": "events", "payload": [{"type": "agent_end", "messages": []}]}),
+    )
+    .await;
+    // Nothing from main fires the wait: the core's own timer does.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    main.call("size", json!({})).await;
+    let settles: Vec<&Value> = main
+        .items
+        .iter()
+        .filter(|item| item["k"] == "settle")
+        .collect();
+    assert_eq!(settles.len(), 2, "{settles:?}");
+    let of = |token: u64| settles.iter().find(|item| item["token"] == token).unwrap();
+    assert_eq!(of(1)["code"], "session_running");
+    assert_eq!(of(2)["ok"], true);
+    assert!(!main.items.iter().any(|item| item["k"] == "stopTimer"));
 }

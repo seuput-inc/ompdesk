@@ -2,16 +2,15 @@
  * Scheduled runs: stock `omp -p` started in a project folder when a schedule comes due, only while OMPdesk is open
  * (contract in src/shared/schedules.ts). This is the typed client of the core's schedules
  * (`native/ompdesk/crates/core/src/schedules`), which keeps the clock, the journal (`<userData>/schedules.json`), the
- * run logs (`<userData>/schedule-runs/<runId>.log`), the routines' events with their loop guard, the webhook key and
- * its check, and starts each omp under the supervisor.
+ * run logs (`<userData>/schedule-runs/<runId>.log`), routine sources and their marks (`routine-marks.json`), the
+ * loop guard and webhook validation, and starts each omp under the supervisor.
  *
  * What stays here is what only main has:
- * - a copy of the state, written from the core's `schedules.state` events alone, for the readers that cannot wait
- *   (`state()`: the routine triggers read it as each change arrives);
+ * - a copy of the state, written from the core's `schedules.state` events alone, for synchronous UI readers;
+ * - the first-window gate, stock pool observations and private, per-read machine/keystore lookups;
  * - what the core asks for: whether a paired device has a model request left (`reserve`, main's `PeerQuota`), a
  *   session's own wake-up (`wake`, the control tools), and a run's omp with its environment and extensions, which
- *   `ompRunLauncher` resolves and hands to the core's launcher;
- * - the cleaning of a draft the page or an agent sent (`cleanDraft`), before the core checks and saves it.
+ *   `ompRunLauncher` resolves and hands to the core's launcher.
  *
  * Requests go to the core one after the other, in the order they were made here, because the core takes requests
  * side by side: two saves, or an event and the end of the run it came during, keep their order.
@@ -29,13 +28,13 @@ import {
 	type Schedule,
 	type ScheduleCreated,
 	type ScheduleDraft,
-	type ScheduleFrequency,
 	type SchedulesRequest,
 	type SchedulesState,
 } from "../shared/schedules";
 import { CoreError, core } from "./core/process";
 import { nativeBinPath } from "./native-bin";
 import { OMP_TELEMETRY_OFF, type OmpResolution, ompPathEnv } from "./omp-runtime";
+import type { RoutineHost } from "./routines/ports";
 import { needsShell, spawnArgs, spawnCommand } from "./spawn";
 
 /** How often due schedules are checked; a wall-clock check survives system sleep, a long timer would not. */
@@ -105,69 +104,19 @@ interface StartAsk {
 	charge: number | null;
 }
 
+interface RoutineToken {
+	id: string;
+	generation: number;
+}
+interface RoutineAsk {
+	token: RoutineToken;
+	ask: number;
+	kind: "git" | "github" | "email";
+	account: string;
+}
+
 /** Names a service and a launched omp to the core; one counter for this process. */
 let sequence = 0;
-
-/** A draft's timing as stored: unknown fields dropped. A webhook's key stays as sent (empty: the core makes or keeps one). */
-function cleanFrequency(frequency: ScheduleFrequency | undefined): ScheduleFrequency {
-	switch (frequency?.kind) {
-		case "daily":
-			return { kind: "daily", time: String(frequency.time), days: [...new Set(frequency.days)].toSorted() };
-		case "once":
-			return { kind: "once", at: String(frequency.at) };
-		case "event": {
-			const event = frequency.event;
-			switch (event?.source) {
-				case "webhook":
-					return { kind: "event", event: { source: "webhook", key: String(event.key ?? "") } };
-				case "github":
-					return {
-						kind: "event",
-						event: { source: "github", repo: String(event.repo), events: [...new Set(event.events)].toSorted() },
-					};
-				case "files":
-					return { kind: "event", event: { source: "files", path: String(event.path) } };
-				case "git":
-					return {
-						kind: "event",
-						event: { source: "git", repo: String(event.repo), branch: String(event.branch) },
-					};
-				case "session":
-					return {
-						kind: "event",
-						event: {
-							source: "session",
-							events: [...new Set(event.events)].toSorted(),
-							...(typeof event.folder === "string" && event.folder.trim()
-								? { folder: event.folder.trim() }
-								: {}),
-						},
-					};
-				default:
-					return frequency;
-			}
-		}
-		default:
-			return { kind: "interval", minutes: Number(frequency?.minutes) };
-	}
-}
-
-/**
- * What a draft the page, an agent or a paired device sent is saved as: every member of its own type, in the order the
- * journal keeps them. The core checks it (`scheduleDraftProblem`'s rule) and adds what the schedule already had.
- */
-function cleanDraft(draft: ScheduleDraft): ScheduleDraft {
-	return {
-		name: String(draft.name ?? "").trim(),
-		prompt: String(draft.prompt ?? ""),
-		cwd: String(draft.cwd ?? ""),
-		frequency: cleanFrequency(draft.frequency),
-		model: typeof draft.model === "string" && draft.model.trim() ? draft.model.trim() : null,
-		autoApprove: draft.autoApprove === true,
-		enabled: draft.enabled === true,
-		...(draft.wakeSession == null ? {} : { wakeSession: String(draft.wakeSession) }),
-	};
-}
 
 /** A refusal of the core as the service threw it: a plain error with its words, the device's limit with its code. */
 function refusal(error: unknown): unknown {
@@ -179,8 +128,6 @@ function refusal(error: unknown): unknown {
 export class ScheduleService {
 	readonly #options: ScheduleServiceOptions;
 	readonly #name = `${process.pid}.${++sequence}`;
-	/** The core's last word; replaced whole by each `schedules.state`, never changed in place. */
-	#state: SchedulesState = { paused: false, schedules: [], runs: [], nextRuns: {} };
 	/** The requests' queue: each is sent once the one before it was answered. */
 	#lane: Promise<unknown> = Promise.resolve();
 	/** The runs main started and still follows, by run id; null while one is being started. */
@@ -188,6 +135,8 @@ export class ScheduleService {
 	/** What gives a counted request back, by the ask it answered, until its run started. */
 	readonly #refunds = new Map<number, () => void>();
 	#unsubscribe: (() => void)[] = [];
+	#routineHost: RoutineHost | undefined;
+	readonly #routineObservers = new Map<number, () => void>();
 	#tick: NodeJS.Timeout | null = null;
 	#retry: NodeJS.Timeout | null = null;
 	#started = false;
@@ -200,23 +149,22 @@ export class ScheduleService {
 	}
 
 	/** Open the saved schedules in the core (a run left `running` by a crash ends as stopped) and start the clock. */
-	async start(): Promise<void> {
+	async start(routines?: RoutineHost): Promise<void> {
+		this.#routineHost = routines;
 		const host = core();
 		const mine =
-			<T>(handle: (told: T) => void) =>
-			(data: unknown) => {
+			<T>(handle: (told: T, generation: number) => void) =>
+			(data: unknown, _bin: Uint8Array | null, generation: number) => {
 				// A frame of this app's own core, spelled by `schedules/mod.rs`.
 				const told = data as T & { service: string };
-				if (told.service === this.#name) handle(told);
+				if (told.service === this.#name && generation === host.generation) handle(told, generation);
 			};
 		this.#started = true;
 		this.#unsubscribe = [
 			host.on(
 				"schedules.state",
 				mine<{ state: SchedulesState }>(({ state }) => {
-					if (this.#disposed) return;
-					this.#state = state;
-					this.#options.onState(state);
+					if (!this.#disposed) this.#options.onState(state);
 				}),
 			),
 			host.on(
@@ -237,6 +185,35 @@ export class ScheduleService {
 					this.#refunds.get(charge)?.();
 					this.#refunds.delete(charge);
 				}),
+			),
+			host.on(
+				"schedules.routineAsk",
+				mine<RoutineAsk>((ask, generation) => void this.#routineAnswer(ask, generation)),
+			),
+			host.on(
+				"schedules.routineSession",
+				mine<{ token: RoutineToken; on: boolean; wake?: string }>(({ token, on, wake }, generation) => {
+					if (!routines || this.#disposed) return;
+					if (!on) {
+						this.#routineObservers.get(token.generation)?.();
+						this.#routineObservers.delete(token.generation);
+						return;
+					}
+					this.#routineObservers.set(
+						token.generation,
+						routines.observe(wake ?? null, (activity, tab) => {
+							if (this.#disposed) return;
+							void this.#send("schedules.routineActivity", { token, activity, tab }, generation).catch(error => {
+								if (!this.#disposed && generation === host.generation)
+									routines.log(`A session event was lost: ${String(error)}`);
+							});
+						}),
+					);
+				}),
+			),
+			host.on(
+				"schedules.routineLog",
+				mine<{ message: string }>(({ message }) => routines?.log(message)),
 			),
 		];
 		await this.#opening();
@@ -283,13 +260,30 @@ export class ScheduleService {
 			this.#tick = setInterval(() => void this.#send("schedules.tick").catch(() => undefined), tickMs);
 		}
 		void this.#hold();
+		const routines = this.#routineHost;
+		if (routines) {
+			const generation = core().generation;
+			const attach = () => {
+				if (!this.#disposed && generation !== 0 && generation === core().generation)
+					return this.#call<void>(
+						"schedules.routinesReady",
+						{ file: routines.file, timing: routines.timing },
+						generation,
+					);
+			};
+			if (routines.ready)
+				void routines.ready
+					.then(attach)
+					.catch(error => routines.log(`Could not start routine sources: ${String(error)}`));
+			else await attach();
+		}
 	}
 
 	/** Keeps a request open on the service; when the core dies under it, opens the schedules on the next one. */
 	async #hold(): Promise<void> {
 		const host = core();
-		const home = host.pid;
-		while (!this.#disposed && host.pid === home) {
+		const home = host.generation;
+		while (!this.#disposed && host.generation === home) {
 			try {
 				await host.call("schedules.closed", { service: this.#name }, { timeoutMs: HOLD_MS });
 				return;
@@ -302,43 +296,49 @@ export class ScheduleService {
 		// The core's omps went with it and the journal reads them stopped; a woken session's turn goes on unfollowed.
 		this.#runs.clear();
 		this.#refunds.clear();
+		this.#dropRoutineHost();
 		if (this.#disposed) return;
 		this.#opening().catch(error => console.error("[schedules] couldn't open in ompdesk-core:", error));
 	}
 
-	/** The schedules as the core last told them. */
-	state(): SchedulesState {
-		return this.#state;
+	#dropRoutineHost(): void {
+		for (const off of this.#routineObservers.values()) off();
+		this.#routineObservers.clear();
+	}
+
+	async #routineAnswer({ token, ask, kind, account }: RoutineAsk, generation: number): Promise<void> {
+		const host = this.#routineHost;
+		if (!host || this.#disposed) return;
+		let answer: { value: unknown } | { error: string };
+		try {
+			answer = { value: kind === "email" ? host.email(account) : await host[kind]() };
+		} catch (error) {
+			answer = { error: error instanceof Error ? error.message : String(error) };
+		}
+		if (!this.#disposed) {
+			// Only a request on the private core pipe; never include its contents in an event or diagnostic.
+			await this.#call("schedules.routineAnswer", { token, ask, ...answer }, generation).catch(() => undefined);
+		}
 	}
 
 	/** One request to the core, at once. */
-	async #call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+	async #call<T>(method: string, params: Record<string, unknown> = {}, generation?: number): Promise<T> {
 		const now = this.#options.now;
 		try {
 			const sent = { service: this.#name, ...(now ? { now: now() } : {}), ...params };
-			return (await core().call<T>(method, sent)).result;
+			return (await core().call<T>(method, sent, generation === undefined ? {} : { generation })).result;
 		} catch (error) {
 			throw refusal(error);
 		}
 	}
 
 	/** One request to the core in its turn; it carries the time it was made at, not the time it is sent at. */
-	#send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+	#send<T>(method: string, params: Record<string, unknown> = {}, generation?: number): Promise<T> {
 		const now = this.#options.now;
 		const stamped = now ? { now: now(), ...params } : params;
-		const sent = this.#lane.then(() => this.#call<T>(method, stamped));
+		const sent = this.#lane.then(() => this.#call<T>(method, stamped, generation));
 		this.#lane = sent.catch(() => undefined);
 		return sent;
-	}
-
-	/**
-	 * An event schedule's trigger fired (src/main/routines; `detail`: one English line saying what happened). Starts a
-	 * run now, or keeps the event for one more run after the running one. False when nothing will run on it: no such
-	 * routine, it is no event schedule, off, everything is paused, or the app is closing.
-	 */
-	async fire(id: string, detail: string): Promise<boolean> {
-		if (this.#disposed) return false;
-		return this.#send<boolean>("schedules.fire", { id, detail });
 	}
 
 	/**
@@ -352,23 +352,12 @@ export class ScheduleService {
 	}
 
 	/**
-	 * A routine's trigger cannot watch what it names (GitHub refused, a folder is gone, git or the mailbox failed;
-	 * src/main/routines tells each distinct failure once): recorded as a failed run with the reason, so the routine's
-	 * history shows it, and nothing runs. False when the routine is gone, off or paused.
-	 */
-	async triggerFailed(id: string, reason: string): Promise<boolean> {
-		if (this.#disposed) return false;
-		return this.#send<boolean>("schedules.triggerFailed", { id, reason });
-	}
-
-	/**
 	 * `origin`: the paired device a request comes from (`host.schedules.command`). A save from a device makes the
 	 * schedule that device's (its runs count against its daily model limit here); a save here makes it this computer's.
 	 * A run now from a device is charged to that device and refused past its limit.
 	 */
 	async command(request: SchedulesRequest, origin?: string): Promise<SchedulesState> {
-		const sent = request.action === "save" ? { ...request, draft: cleanDraft(request.draft) } : request;
-		return this.#send<SchedulesState>("schedules.command", { request: sent, origin });
+		return this.#send<SchedulesState>("schedules.command", { request, origin });
 	}
 
 	/**
@@ -376,7 +365,7 @@ export class ScheduleService {
 	 * could share. `origin`: the paired device it is made for (its runs count against that device), as in `command`.
 	 */
 	async create(draft: ScheduleDraft, origin?: string): Promise<ScheduleCreated> {
-		return this.#send<ScheduleCreated>("schedules.create", { draft: cleanDraft(draft), origin });
+		return this.#send<ScheduleCreated>("schedules.create", { draft, origin });
 	}
 
 	/** The run's captured output, from its end when long. */
@@ -403,6 +392,7 @@ export class ScheduleService {
 	dispose(boundMs = QUIT_SCHEDULES_CLOSE_MS): Promise<void> {
 		if (this.#closing) return this.#closing;
 		this.#disposed = true;
+		this.#dropRoutineHost();
 		clearInterval(this.#tick ?? undefined);
 		clearTimeout(this.#retry ?? undefined);
 		for (const off of this.#unsubscribe) off();
@@ -467,19 +457,24 @@ export function ompRunLauncher(options: {
 	extensionArgs?: (cwd: string) => Promise<string[]>;
 	/** What a run with those extensions needs to reach their MCP servers (src/main/mcp-hub.ts `ompEnv`). */
 	extensionEnv?: (cwd: string) => Promise<Record<string, string>>;
+	/** The Credit use switch for this run (omp-launch.ts `creditSpendRun`): a run has no bridge to apply it. */
+	creditSpend?: () => { args: string[]; env: Record<string, string> };
 }): RunLauncher {
 	return async (schedule, files) => {
 		const resolution = await options.omp();
 		if (!resolution.ok) throw new Error(resolution.error);
 		const { bin } = resolution.runtime;
 		const extensions = (await options.extensionArgs?.(schedule.cwd)) ?? [];
+		const creditSpend = options.creditSpend?.();
 		const env = {
 			...(await options.env()),
 			...(extensions.length ? await options.extensionEnv?.(schedule.cwd) : {}),
+			...creditSpend?.env,
 		};
 		const args = [
 			"-p",
 			...extensions,
+			...(creditSpend?.args ?? []),
 			...(schedule.model ? ["--model", schedule.model] : []),
 			...(schedule.autoApprove ? ["--yolo"] : []),
 		];
@@ -503,7 +498,7 @@ export function ompRunLauncher(options: {
 			}),
 			// A core that started after the one the omp was started on holds nothing of it: it ended with its core.
 			host.on("ready", () => {
-				if (host.pid !== home) ended.resolve({ code: null, error: "ompdesk-core exited during the run" });
+				if (host.generation !== home) ended.resolve({ code: null, error: "ompdesk-core exited during the run" });
 			}),
 		];
 		const done = ended.promise.then(({ code, error }) => {
@@ -522,7 +517,7 @@ export function ompRunLauncher(options: {
 			prompt: files.prompt,
 			header: `$ omp ${args.join(" ")}\n# ${schedule.cwd}\n\n`,
 		});
-		const home = host.pid;
+		const home = host.generation;
 		try {
 			await started;
 		} catch (error) {

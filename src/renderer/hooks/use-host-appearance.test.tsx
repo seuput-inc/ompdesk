@@ -101,7 +101,7 @@ const shownAccent = () => document.documentElement.style.getPropertyValue("--omp
 
 beforeEach(() => {
 	for (const key of Object.keys(prefs)) delete prefs[key];
-	Object.assign(prefs, { language: "en", themeName: "nord" });
+	Object.assign(prefs, { language: "en", themeName: "github-dark" });
 	window.localStorage?.setItem("omp.lang", "en");
 	omp.hostDesktop.get.mockClear();
 	omp.prefs.set.mockClear();
@@ -134,7 +134,7 @@ describe("useHostAppearance", () => {
 		await act(async () => focusTab());
 		await settle();
 		expect(probeText()).toBe("Cancel");
-		expect(shownAccent()).toBe(THEMES.nord.tokens["--omp-accent"]);
+		expect(shownAccent()).toBe(THEMES["github-dark"].tokens["--omp-accent"]);
 		expect(omp.prefs.set).not.toHaveBeenCalled();
 	});
 

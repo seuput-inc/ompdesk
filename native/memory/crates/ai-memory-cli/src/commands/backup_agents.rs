@@ -9,6 +9,7 @@ use ai_memory_core::agent_backup::{
     AgentAssetKind, AgentAssetScope, AgentBackupEntry, AgentBackupManifest, HostInfo,
 };
 use ai_memory_core::ids::AgentKind;
+use ai_memory_core::routing_skills::{COPILOT_SKILL_DIR, GITHUB_SKILL_DIR, SKILLS_DIR};
 use ai_memory_core::sanitize::{SanitizeConfig, Sanitizer};
 use anyhow::{Context, Result};
 use flate2::Compression;
@@ -18,6 +19,7 @@ use tar::{Builder, Header};
 use tracing::info;
 
 use crate::cli::{AgentBackupScope, BackupAgentsArgs, McpClient};
+use crate::commands::backup::human_bytes;
 use crate::commands::path_util::{claude_config_dir, home_dir};
 use crate::config::Config;
 
@@ -46,8 +48,10 @@ pub struct DiscoveredAsset {
 /// Returns an error if directory traversal fails, source files cannot be read,
 /// or writing the output archive fails.
 pub fn run(_config: &Config, args: BackupAgentsArgs) -> Result<()> {
-    let home = home_dir().context("locating user home directory")?;
-    let cwd = std::env::current_dir().context("locating current working directory")?;
+    let i18n = &_config.i18n;
+    let home = home_dir().context(i18n.text("cli-backup-agents-locating-user-home-directory"))?;
+    let cwd = std::env::current_dir()
+        .context(i18n.text("cli-backup-agents-locating-current-working-directory"))?;
 
     let mut discovered = discover_assets(&home, &cwd, &args)?;
 
@@ -62,12 +66,15 @@ pub fn run(_config: &Config, args: BackupAgentsArgs) -> Result<()> {
     discovered.sort_by(|a, b| a.archive_path.cmp(&b.archive_path));
 
     if discovered.is_empty() {
-        println!("No AI agent assets detected for backup.");
+        println!(
+            "{}",
+            i18n.text("cli-backup-agents-no-ai-agent-assets-detected-for-backup")
+        );
         return Ok(());
     }
 
     if args.dry_run {
-        print_dry_run(&discovered);
+        print_dry_run(i18n, &discovered);
         return Ok(());
     }
 
@@ -98,14 +105,14 @@ pub fn run(_config: &Config, args: BackupAgentsArgs) -> Result<()> {
     let count = build_archive(
         temporary
             .reopen()
-            .context("reopening temporary agent archive")?,
+            .context(i18n.text("cli-backup-agents-reopening-temporary-agent-archive"))?,
         &discovered,
         args.include_secrets,
     )?;
     temporary
         .as_file()
         .sync_all()
-        .context("syncing temporary agent archive")?;
+        .context(i18n.text("cli-backup-agents-syncing-temporary-agent-archive"))?;
     let persisted = temporary
         .persist(dest)
         .map_err(|error| error.error)
@@ -121,25 +128,32 @@ pub fn run(_config: &Config, args: BackupAgentsArgs) -> Result<()> {
     info!(path = %dest.display(), bytes = size, count, "agent assets backup written");
 
     println!(
-        "✓ Backed up {} agent assets to {} ({})",
-        count,
-        dest.display(),
-        human_bytes(size)
+        "{}",
+        i18n.format(
+            "cli-backup-agents-backed-up-agent-assets-to",
+            &[
+                ("value0", format!("{}", count)),
+                ("value1", format!("{}", dest.display())),
+                ("value2", human_bytes(size).to_string())
+            ]
+        )
     );
 
     if args.include_secrets {
         eprintln!(
-            "⚠️  Warning: Secrets were included without sanitization. Archive mode is 0600 on Unix; protect the file on other platforms."
-        );
+            "{}", i18n.text("cli-backup-agents-warning-secrets-were-included-without-sanitization-archive-mode-is-0600-on-u"));
     }
 
     Ok(())
 }
 
-fn print_dry_run(discovered: &[DiscoveredAsset]) {
+fn print_dry_run(i18n: &ai_memory_core::i18n::Localizer, discovered: &[DiscoveredAsset]) {
     println!(
-        "Found {} assets across AI agents (dry-run):",
-        discovered.len()
+        "{}",
+        i18n.format(
+            "cli-backup-agents-found-assets-across-ai-agents-dry-run",
+            &[("value0", format!("{}", discovered.len()))]
+        )
     );
     for asset in discovered {
         println!(
@@ -360,14 +374,25 @@ pub fn discover_assets(
                 ".gemini/antigravity-cli/mcp_config.json",
                 "antigravity/antigravity_mcp.json",
             );
+            let [app_skills, cli_skills] =
+                super::install_skills::antigravity_global_skill_roots(home);
             collect_dir_assets(
                 &mut assets,
                 AgentKind::AntigravityCli,
                 AgentAssetKind::Skill,
                 AgentAssetScope::Global,
-                &gemini_dir.join("antigravity-cli").join("skills"),
+                &app_skills,
+                ".gemini/config/skills",
+                "antigravity/app-ide-skills",
+            )?;
+            collect_dir_assets(
+                &mut assets,
+                AgentKind::AntigravityCli,
+                AgentAssetKind::Skill,
+                AgentAssetScope::Global,
+                &cli_skills,
                 ".gemini/antigravity-cli/skills",
-                "antigravity/skills",
+                "antigravity/cli-skills",
             )?;
             collect_dir_assets(
                 &mut assets,
@@ -379,15 +404,18 @@ pub fn discover_assets(
                 "antigravity/plugins",
             )?;
         }
-        if want_project {
+        // `.agents/skills` is shared with Codex. Attribute it to Codex when
+        // both agents are selected so one archive never maps two entries to
+        // the same restore target; an Antigravity-only backup still owns it.
+        if want_project && !filter_agent(AgentKind::Codex) {
             collect_dir_assets(
                 &mut assets,
                 AgentKind::AntigravityCli,
                 AgentAssetKind::Skill,
                 AgentAssetScope::Project,
-                &cwd.join(".gemini").join("skills"),
-                ".gemini/skills",
-                "project/gemini/skills",
+                &cwd.join(".agents").join("skills"),
+                ".agents/skills",
+                "project/antigravity/skills",
             )?;
         }
     }
@@ -424,6 +452,106 @@ pub fn discover_assets(
                 cwd.join("GEMINI.md"),
                 "GEMINI.md",
                 "project/GEMINI.md",
+            );
+        }
+    }
+
+    // 4b. Qwen Code
+    if filter_agent(AgentKind::QwenCode) {
+        let qwen_dir = home.join(".qwen");
+        if want_global {
+            push_if_file(
+                &mut assets,
+                AgentKind::QwenCode,
+                AgentAssetKind::McpConfig,
+                AgentAssetScope::Global,
+                qwen_dir.join("settings.json"),
+                ".qwen/settings.json",
+                "qwen/settings.json",
+            );
+            collect_dir_assets(
+                &mut assets,
+                AgentKind::QwenCode,
+                AgentAssetKind::Skill,
+                AgentAssetScope::Global,
+                &qwen_dir.join("skills"),
+                ".qwen/skills",
+                "qwen/skills",
+            )?;
+            // `~/.agents/skills` is shared with Codex. Attribute it to Codex
+            // when both are selected; a Qwen-only backup must still preserve
+            // the shared skills Qwen documents and loads.
+            if !filter_agent(AgentKind::Codex) {
+                collect_dir_assets(
+                    &mut assets,
+                    AgentKind::QwenCode,
+                    AgentAssetKind::Skill,
+                    AgentAssetScope::Global,
+                    &home.join(".agents").join("skills"),
+                    ".agents/skills",
+                    "qwen/skills/agents",
+                )?;
+            }
+        }
+        if want_project {
+            push_if_file(
+                &mut assets,
+                AgentKind::QwenCode,
+                AgentAssetKind::Instruction,
+                AgentAssetScope::Project,
+                cwd.join("QWEN.md"),
+                "QWEN.md",
+                "project/QWEN.md",
+            );
+            // Qwen also reads AGENTS.md. Codex owns the shared file in a
+            // combined backup so the archive remains one-to-one.
+            if !filter_agent(AgentKind::Codex) {
+                push_if_file(
+                    &mut assets,
+                    AgentKind::QwenCode,
+                    AgentAssetKind::Instruction,
+                    AgentAssetScope::Project,
+                    cwd.join("AGENTS.md"),
+                    "AGENTS.md",
+                    "project/qwen/AGENTS.md",
+                );
+            }
+        }
+    }
+
+    // 4c. Qoder CLI and IDE
+    if filter_agent(AgentKind::Qoder) {
+        if want_global {
+            push_if_file(
+                &mut assets,
+                AgentKind::Qoder,
+                AgentAssetKind::McpConfig,
+                AgentAssetScope::Global,
+                home.join(".qoder").join("settings.json"),
+                ".qoder/settings.json",
+                "qoder/settings.json",
+            );
+            if !filter_agent(AgentKind::Codex) && !filter_agent(AgentKind::QwenCode) {
+                collect_dir_assets(
+                    &mut assets,
+                    AgentKind::Qoder,
+                    AgentAssetKind::Skill,
+                    AgentAssetScope::Global,
+                    &home.join(".agents").join("skills"),
+                    ".agents/skills",
+                    "qoder/skills/agents",
+                )?;
+            }
+        }
+        if want_project && !filter_agent(AgentKind::Codex) && !filter_agent(AgentKind::QwenCode) {
+            push_if_file(
+                &mut assets,
+                AgentKind::Qoder,
+                AgentAssetKind::Instruction,
+                AgentAssetScope::Project,
+                cwd.join("AGENTS.md"),
+                "AGENTS.md",
+                "project/qoder/AGENTS.md",
             );
         }
     }
@@ -695,7 +823,42 @@ pub fn discover_assets(
         )?;
     }
 
-    // 12. VS Code / Copilot
+    // 12. GitHub Copilot CLI: the same skill roots `install-skills --agent
+    // copilot-cli` writes, `$COPILOT_HOME/skills` (default `~/.copilot/skills`)
+    // and the repository's `.github/skills`. The shared roots the same page
+    // lists (`~/.agents/skills`, `.agents/skills`, `.claude/skills`) are
+    // collected above for Codex and Claude Code. See
+    // https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills
+    if filter_agent(AgentKind::CopilotCli) {
+        if want_global {
+            let copilot_dir =
+                crate::commands::path_util::agent_config_home(std::env::var_os("COPILOT_HOME"))
+                    .unwrap_or_else(|| home.join(COPILOT_SKILL_DIR));
+            collect_dir_assets(
+                &mut assets,
+                AgentKind::CopilotCli,
+                AgentAssetKind::Skill,
+                AgentAssetScope::Global,
+                &copilot_dir.join(SKILLS_DIR),
+                ".copilot/skills",
+                "copilot-cli/skills",
+            )?;
+        }
+
+        if want_project {
+            collect_dir_assets(
+                &mut assets,
+                AgentKind::CopilotCli,
+                AgentAssetKind::Skill,
+                AgentAssetScope::Project,
+                &cwd.join(GITHUB_SKILL_DIR).join(SKILLS_DIR),
+                ".github/skills",
+                "project/copilot-cli/skills",
+            )?;
+        }
+    }
+
+    // 13. VS Code / Copilot
     if want_project {
         push_if_file(
             &mut assets,
@@ -751,7 +914,11 @@ fn collect_dir_assets(
         if file_type.is_dir() {
             let dir_name = entry.file_name();
             let dir_name_str = dir_name.to_string_lossy();
-            if dir_name_str.starts_with('.')
+            // A plugin's manifest directory is the one dot-directory a
+            // restored plugin or marketplace cannot load without.
+            if (dir_name_str.starts_with('.')
+                && dir_name_str != ".claude-plugin"
+                && dir_name_str != ".codex-plugin")
                 || dir_name_str == "cache"
                 || dir_name_str == "node_modules"
                 || dir_name_str == "target"
@@ -909,21 +1076,6 @@ fn portable_mode(path: &Path) -> Result<Option<u32>> {
     {
         let _ = path;
         Ok(None)
-    }
-}
-
-fn human_bytes(n: u64) -> String {
-    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB"];
-    let mut value = n as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{n} {}", UNITS[0])
-    } else {
-        format!("{value:.2} {}", UNITS[unit])
     }
 }
 

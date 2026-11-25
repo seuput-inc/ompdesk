@@ -9,7 +9,8 @@
  * only those at once, beside the stock worker's queue: a read-only probe a tab's start waits on (`sessions.owned`)
  * otherwise waited for a whole session-list scan queued before it at launch.
  */
-export type HelperMethods = Record<string, (params: unknown) => unknown | Promise<unknown>>;
+export type HelperMethods = Record<string, (params: unknown, frame: (terminal: object) => symbol) => unknown>;
+const FRAMED = Symbol();
 
 export function createDispatcher(
 	methods: HelperMethods,
@@ -25,8 +26,12 @@ export function createDispatcher(
 		try {
 			const handler = Object.hasOwn(methods, method) ? methods[method] : undefined;
 			if (!handler) throw new Error("Unknown stock helper method");
-			const result = await handler(params);
-			write(JSON.stringify({ id, result }));
+			const result = await handler(params, terminal => {
+				// A terminal transfer is written in the step that drains it, before another concurrent reply.
+				write(JSON.stringify({ terminal, id }));
+				return FRAMED;
+			});
+			if (result !== FRAMED) write(JSON.stringify({ id, result }));
 		} catch (error) {
 			write(JSON.stringify({ id, error: error instanceof Error ? error.message : String(error) }));
 		}

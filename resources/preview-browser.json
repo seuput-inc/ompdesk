@@ -1,0 +1,48 @@
+{
+	"vendor": "Brave Browser",
+	"vendorVersion": "1.100.57",
+	"chromiumVersion": "158.0.8127.37",
+	"release": "https://github.com/brave/brave-browser/releases/tag/v1.100.57",
+	"sources": [
+		"https://github.com/brave/brave-browser/tree/v1.100.57",
+		"https://github.com/brave/brave-core/tree/v1.100.57",
+		"https://chromium.googlesource.com/chromium/src/+/158.0.8127.37/"
+	],
+	"license": "MPL-2.0",
+	"licenseText": {
+		"url": "https://raw.githubusercontent.com/brave/brave-core/v1.100.57/LICENSE",
+		"size": 16726,
+		"sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+	},
+	"licenseTerms": "https://www.mozilla.org/en-US/MPL/2.0/",
+	"repackaging": "https://github.com/brave/brave-browser/wiki/%28Re%29packaging",
+	"signingPolicy": "https://brave.com/signing-keys/",
+	"targets": {
+		"darwin-arm64": {
+			"platform": "darwin",
+			"arch": "arm64",
+			"assetId": 759200187,
+			"archive": "Brave-Browser-arm64.dmg",
+			"url": "https://github.com/brave/brave-browser/releases/download/v1.100.57/Brave-Browser-arm64.dmg",
+			"size": 252909074,
+			"sha256": "c017188562bcc21a1da78e4b6ff89915a2d47638ebefd7a77db142bcb3c9ece5",
+			"binary": "vendor/Brave Browser.app/Contents/MacOS/Brave Browser",
+			"bundleId": "com.brave.Browser",
+			"teamId": "KL8N8XSYF4"
+		},
+		"win32-x64": {
+			"platform": "win32",
+			"arch": "x64",
+			"assetId": 758516011,
+			"archive": "brave-v1.100.57-win32-x64.zip",
+			"url": "https://github.com/brave/brave-browser/releases/download/v1.100.57/brave-v1.100.57-win32-x64.zip",
+			"size": 259471213,
+			"sha256": "9091887febc3a408c341ebefa1fc3a9b599cfb359d01cac292814f7fa4067574",
+			"binary": "vendor/brave.exe",
+			"authenticodeThumbprints": [
+				"8903F2BD47465A4F0F080AA7CEEC31A31B74DE42",
+				"F8AC5F11DE7E26383B7A389FC19A2613835799D7"
+			]
+		}
+	}
+}

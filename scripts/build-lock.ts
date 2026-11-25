@@ -212,6 +212,7 @@ export async function acquireLock(command: readonly string[], options: AcquireOp
 	if (covered(kind) || (heavyInherited() && kind !== "build")) return { release() {} };
 	const time = new Date().toISOString();
 	const lease = await acquireHold(locks, kind, { owner: ownerId(), command: text }, { heavyHeld: heavyInherited() });
+	if (!lease) return { release() {} };
 	const hold: Hold = {
 		lease,
 		command: text,

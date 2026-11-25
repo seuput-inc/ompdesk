@@ -17,8 +17,9 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { guard } from "./health";
 import type { BridgeMethods } from "./types";
 
+// One guard per action (capabilities.ts): a missing internal refuses only the methods that use it.
 export const methods: BridgeMethods = {
-	...guard("worktreeLifecycle", {
+	...guard("worktreeLocation", {
 		/** Naming and authorization use the running stock process's worktree.base and Bun hash. */
 		"git.worktree_location": async (params, env) => {
 			const primaryRoot = (params as { primaryRoot?: unknown } | null)?.primaryRoot;
@@ -26,9 +27,11 @@ export const methods: BridgeMethods = {
 				throw new Error("primaryRoot must be an absolute path");
 			}
 			env.session();
-			const { getWorktreesDir, hashPath } = await import("@oh-my-pi/pi-utils");
+			const { getWorktreesDir, hashPath } = await import("./omp/pi-utils");
 			return { root: getWorktreesDir(), hash: hashPath(primaryRoot) };
 		},
+	}),
+	...guard("prCheckout", {
 		"git.pr_checkout": async (params, env) => {
 			const input = params as { number?: unknown; repo?: unknown } | null;
 			if (!Number.isSafeInteger(input?.number) || Number(input?.number) <= 0 || typeof input?.repo !== "string") {
@@ -43,7 +46,7 @@ export const methods: BridgeMethods = {
 				// This operation has no child-agent surface, like stock's selector ToolSession.
 				getSessionSpawns: () => null,
 			};
-			const { checkoutPullRequest } = await import("@oh-my-pi/pi-coding-agent/tools/gh-pr-checkout");
+			const { checkoutPullRequest } = await import("./omp/pi-coding-agent/tools/gh-pr-checkout");
 			const outcome = await checkoutPullRequest(toolSession, AbortSignal.timeout(600_000), {
 				prRef: String(input.number),
 				repo: input.repo,
@@ -51,6 +54,9 @@ export const methods: BridgeMethods = {
 			});
 			return { path: outcome.worktreePath, branch: outcome.localBranch };
 		},
+	}),
+	// One id for both: main reads the policies, then has stock create the worktree they ask for.
+	...guard("worktreeLifecycle", {
 		/**
 		 * Both policies as the live session resolves them, plus stock's start
 		 * condition for the session's cwd (`canAutoCreateWorktree`: a primary git
@@ -59,8 +65,8 @@ export const methods: BridgeMethods = {
 		worktree_lifecycle_settings: async (_params, env) => {
 			const session = env.session();
 			const [{ cfgWorktreeOnStart, cfgWorktreeOnExit }, { canAutoCreateWorktree }] = await Promise.all([
-				import("@oh-my-pi/pi-coding-agent/task/settings"),
-				import("@oh-my-pi/pi-coding-agent/session/session-worktree"),
+				import("./omp/pi-coding-agent/task/settings"),
+				import("./omp/pi-coding-agent/session/session-worktree"),
 			]);
 			return {
 				onStart: cfgWorktreeOnStart.get(session.settings),
@@ -84,8 +90,8 @@ export const methods: BridgeMethods = {
 				throw new Error("branchPrefix must be 1-40 characters of letters, digits, . _ - /");
 			}
 			const [{ createSessionWorktree, defaultSessionWorktreeBranch }, { getWorktreesDir }] = await Promise.all([
-				import("@oh-my-pi/pi-coding-agent/session/session-worktree"),
-				import("@oh-my-pi/pi-utils"),
+				import("./omp/pi-coding-agent/session/session-worktree"),
+				import("./omp/pi-utils"),
 			]);
 			const stockBranch = defaultSessionWorktreeBranch();
 			const worktree = await createSessionWorktree(

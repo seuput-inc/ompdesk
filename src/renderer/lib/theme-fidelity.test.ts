@@ -8,16 +8,17 @@ import { describe, expect, it } from "vitest";
 import { buildTheme, type ThemePalette } from "./theme-builder";
 import { mix } from "./theme-color";
 import { contrastPairs, textFloorFor } from "./theme-contrast";
-import { githubLight, gruvboxDark, nord, solarizedLight, tokyoNight } from "./theme-palettes";
+import { githubDark, githubLight, gruvboxDark, gruvboxLight, solarizedDark, solarizedLight } from "./theme-palettes";
 import { PUBLISHED_ROLES } from "./theme-sources";
 import { THEMES, type ThemeName } from "./themes";
 
 const PALETTES: Partial<Record<ThemeName, ThemePalette>> = {
 	"github-light": githubLight,
+	"github-dark": githubDark,
 	"solarized-light": solarizedLight,
-	nord,
-	"tokyo-night": tokyoNight,
+	"solarized-dark": solarizedDark,
 	"gruvbox-dark": gruvboxDark,
+	"gruvbox-light": gruvboxLight,
 };
 
 const PUBLISHED = Object.entries(PUBLISHED_ROLES) as [ThemeName, Readonly<Record<string, string>>][];

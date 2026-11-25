@@ -281,7 +281,7 @@ describe("Model roles grouped by purpose", () => {
 		installRpc();
 		await mount();
 
-		const trigger = button("Model for Image generation");
+		const trigger = button(/ Model for Image generation$/);
 		await act(async () => trigger?.click());
 		const options = [...document.body.querySelectorAll('[role="option"]')].map(
 			option => option.getAttribute("title") ?? "",

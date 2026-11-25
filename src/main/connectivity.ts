@@ -1,5 +1,5 @@
-import { connect } from "node:net";
 import { type HubItem, hub } from "./core/hub";
+import { core, isCoreShutdown } from "./core/process";
 
 /**
  * Whether this computer can reach the internet right now, as far as a waiting
@@ -26,8 +26,7 @@ import { type HubItem, hub } from "./core/hub";
  * The state machine lives in the core (`native/ompdesk/crates/core/src/resume/connectivity.rs`, hub kind
  * `connectivity`); this class is its client. What stays here is what main owns: `net.isOnline()` and the clock (read
  * and sent with each call that needs them), the probe (a promise of main's, asked), the timers (main's, they call back)
- * and the `changed` hook. The transport helpers below (`reaches`, `tcpConnects`, `probeTarget`, `answersWithin`) are the
- * probe's own: node's sockets and the proxy setting, wired in `index.ts`.
+ * and the `changed` hook. The shell resolves the proxy or destination without its DNS cache; the core opens the sockets.
  *
  * When the core is lost the state is gone with it: a new instance starts from `net.isOnline()` (not recovering, no wake
  * window), the timers it had are cancelled and the probes asked of it answer `false`.
@@ -67,37 +66,20 @@ export function probeTarget(host: string, proxyUrl: string | undefined): ProbeTa
 	return { host, port: 443 };
 }
 
-export interface TransportDeps {
-	/** The addresses `host` resolves to, asking the resolver itself (never its cache). */
-	resolve(host: string): Promise<readonly string[]>;
-	/** Whether a TCP connection to `address:port` opens. */
-	connect(address: string, port: number): Promise<boolean>;
-}
-
-/** The name resolves and one of its addresses takes a connection; a failing step is "no". */
-export async function reaches(target: ProbeTarget, deps: TransportDeps): Promise<boolean> {
-	let addresses: readonly string[];
+/** Resolve through the shell's network policy; connect only to the first two addresses it approved. */
+export async function reaches(
+	target: ProbeTarget,
+	resolveHost: (host: string) => Promise<readonly string[]>,
+): Promise<boolean> {
 	try {
-		addresses = await deps.resolve(target.host);
+		const [first, second] = await resolveHost(target.host);
+		if (!first) return false;
+		return (
+			await core().call<boolean>("resume.probe", { first, second, port: target.port, timeoutMs: PROBE_TIMEOUT_MS })
+		).result;
 	} catch {
 		return false;
 	}
-	const answers = await Promise.all(addresses.slice(0, 2).map(address => deps.connect(address, target.port)));
-	return answers.includes(true);
-}
-
-/** Whether a TCP connection to `address:port` opens within `ms`; the socket is closed either way. */
-export function tcpConnects(address: string, port: number, ms: number): Promise<boolean> {
-	const { promise, resolve } = Promise.withResolvers<boolean>();
-	const socket = connect({ host: address, port });
-	const finish = (answer: boolean) => {
-		socket.destroy();
-		resolve(answer);
-	};
-	socket.setTimeout(ms, () => finish(false));
-	socket.once("connect", () => finish(true));
-	socket.once("error", () => finish(false));
-	return promise;
 }
 
 export interface ConnectivityDeps {
@@ -115,6 +97,8 @@ export interface ConnectivityDeps {
 export class ConnectivityMonitor {
 	readonly #deps: ConnectivityDeps;
 	#id: number | null = null;
+	/** `stop()` ran (the quit): nothing reaches the core any more, and the answers are the plain link's. */
+	#stopped = false;
 	readonly #timers = new Map<number, () => void>();
 	/** The promises `verify` handed out, by the core's token. */
 	readonly #tokens = new Map<number, (reachable: boolean) => void>();
@@ -149,6 +133,37 @@ export class ConnectivityMonitor {
 		return hub().callOnce<T>(() => this.#instance(), method, params);
 	}
 
+	/**
+	 * The quit: the core ends next, so the timers and the window's and the OS's events that still arrive must not open
+	 * an instance on a core that refuses (an uncaught `core_unavailable` from `poll` ended Node with code 1). What waits
+	 * for a probe's answer is told unreachable, as when the core is lost.
+	 */
+	stop(): void {
+		if (this.#stopped) return;
+		this.#stopped = true;
+		const id = this.#id;
+		this.#id = null;
+		for (const cancel of this.#timers.values()) cancel();
+		this.#timers.clear();
+		const tokens = [...this.#tokens.values()];
+		this.#tokens.clear();
+		for (const settle of tokens) settle(false);
+		if (id !== null) hub().close(id);
+	}
+
+	/**
+	 * An event the monitor does not own the moment of (a timer, `poll`, a window's report): ignored once stopped, and
+	 * ignored when the core refuses it because the quit already ended it.
+	 */
+	#event(run: () => void): void {
+		if (this.#stopped) return;
+		try {
+			run();
+		} catch (error) {
+			if (!isCoreShutdown(error)) throw error;
+		}
+	}
+
 	#lost(): void {
 		this.#id = null;
 		for (const cancel of this.#timers.values()) cancel();
@@ -166,7 +181,8 @@ export class ConnectivityMonitor {
 			case "schedule": {
 				const timer = item.timer as number;
 				const cancel = this.#deps.schedule(() => {
-					if (this.#id !== null) this.#call("timer", { timer, isOnline: this.#deps.isOnline() });
+					if (this.#id !== null)
+						this.#event(() => this.#call("timer", { timer, isOnline: this.#deps.isOnline() }));
 				}, item.ms as number);
 				this.#timers.set(timer, cancel);
 				break;
@@ -199,32 +215,32 @@ export class ConnectivityMonitor {
 	}
 
 	get online(): boolean {
-		return this.#call<boolean>("online");
+		return this.#stopped ? this.#deps.isOnline() : this.#call<boolean>("online");
 	}
 
 	/** Offline, or inside the window after a wake: a network-class turn error means "wait", not "failed". */
 	shouldWait(): boolean {
-		return this.#call<boolean>("shouldWait", { now: this.#deps.now() });
+		return !this.#stopped && this.#call<boolean>("shouldWait", { now: this.#deps.now() });
 	}
 
 	/** An `online`/`offline` event from a window. */
 	report(online: boolean): void {
-		this.#call("report", { online, isOnline: this.#deps.isOnline() });
+		this.#event(() => this.#call("report", { online, isOnline: this.#deps.isOnline() }));
 	}
 
 	/** Edge-triggered `net.isOnline()` sampling: only a real change reports, so a window's event is not overruled. */
 	poll(): void {
-		this.#call("poll", { isOnline: this.#deps.isOnline() });
+		this.#event(() => this.#call("poll", { isOnline: this.#deps.isOnline() }));
 	}
 
 	/** `powerMonitor` `suspend`: nothing is reachable until the wake is confirmed. */
 	suspend(): void {
-		this.#call("suspend");
+		this.#event(() => this.#call("suspend"));
 	}
 
 	/** `powerMonitor` `resume`: offline until the probe answers. */
 	resume(): void {
-		this.#call("resume", { now: this.#deps.now(), isOnline: this.#deps.isOnline() });
+		this.#event(() => this.#call("resume", { now: this.#deps.now(), isOnline: this.#deps.isOnline() }));
 	}
 
 	/**
@@ -235,6 +251,7 @@ export class ConnectivityMonitor {
 	 * every concurrent ask.
 	 */
 	verify(host?: string): Promise<boolean> {
+		if (this.#stopped) return Promise.resolve(false);
 		const token = this.#call<number>("verify", { host: host ?? null, isOnline: this.#deps.isOnline() });
 		const early = this.#settled.get(token);
 		if (early !== undefined) {

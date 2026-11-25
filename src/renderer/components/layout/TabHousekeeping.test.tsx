@@ -291,6 +291,36 @@ describe("TabHousekeeping", () => {
 		expect(useTabsStore.getState().tabs.map(tab => tab.id)).toEqual(["t-empty", "t-real"]);
 	});
 
+	it("keeps a relaunch's start tab whose ready push came before main's list replaced last launch's ghosts", async () => {
+		omp.sessions.list.mockResolvedValue([]);
+		// The first frame: last launch's tab as a ghost (a session deleted meanwhile, so main will not bring it back).
+		useTabsStore.setState({
+			tabs: [
+				{
+					kind: "chat",
+					id: "ghost-1",
+					sessionPath: "/sessions/deleted.jsonl",
+					cwd: "/work",
+					status: "starting",
+					unreadDone: false,
+					ghost: true,
+				},
+			],
+			activeTabId: "ghost-1",
+			bundles: new Map(),
+		});
+		// Main's start tab is ready before the window listed its tabs: its push adds it beside the ghost.
+		useTabsStore
+			.getState()
+			.applyTabStatus({ kind: "chat", tabId: "t-start", cwd: "/work", status: "ready", placeholder: true });
+
+		await mount(<TabHousekeeping />);
+		await flush();
+
+		expect(omp.tabs.close).not.toHaveBeenCalled();
+		expect(useTabsStore.getState().tabs.map(tab => tab.id)).toEqual(["ghost-1", "t-start"]);
+	});
+
 	it("closes an empty new session the person showed and left, never one it never showed", async () => {
 		omp.sessions.list.mockResolvedValue([]);
 		const fresh = { kind: "agent" as const, cwd: "/work/infron", status: "ready" as const, unreadDone: false };

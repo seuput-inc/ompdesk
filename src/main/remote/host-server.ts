@@ -8,18 +8,17 @@
 import { EventEmitter } from "node:events";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { core } from "../core/process";
-import { DEVICE_RENAME_EVENT, HOST_NAME_EVENT, NAME_METHODS, NameParams } from "./app-protocol";
+import {
+	DEVICE_ORDER_CHANGED,
+	DEVICE_ORDER_EXCHANGE,
+	DEVICE_RENAME_EVENT,
+	HOST_NAME_EVENT,
+	NAME_METHODS,
+	NameParams,
+} from "./app-protocol";
 import { type CoreAsk, onCoreAsk } from "./core-asks";
 import type { PeerInfo } from "./peers-store";
-import {
-	ClientHello,
-	type LinkSlim,
-	SLIM_LOG_NAMES,
-	slimOf,
-	type TabHolder,
-	tabHolderOf,
-	WireRequest,
-} from "./protocol";
+import { type LinkSlim, SLIM_LOG_NAMES, type TabHolder, tabHolderOf, WireRequest } from "./protocol";
 import type { SharingCore } from "./sharing";
 import { Link, type WireMessage } from "./wire";
 
@@ -44,7 +43,7 @@ export interface HostServices {
 
 export interface HostConnection {
 	readonly peer: PeerInfo;
-	/** What the device reads beyond whole frames (`slimOf`, protocol.ts); absent for an older device. */
+	/** The capabilities the core negotiated for this connection. */
 	readonly slim?: LinkSlim;
 	/** Push `{t:"evt"}`; throws when the event exceeds the frame cap. */
 	emit(event: string, data: unknown): void;
@@ -78,6 +77,7 @@ export interface RemoteHostOptions {
 	 * error the device shows.
 	 */
 	renameSelf?: (name: string, by: PeerInfo) => void;
+	exchangeDeviceOrder?: (peer: PeerInfo, ranks: unknown) => unknown;
 	/**
 	 * A device's connection opened or closed (`open`, `closed` with why and how long), or moved a lot in the last
 	 * minute (`traffic`: bytes and frames by kind, never a payload), for the runtime log (`remote-link`).
@@ -134,22 +134,28 @@ export interface HostAsk extends CoreAsk {
 	host: number;
 	link: number;
 	deviceId: string;
-	hello: unknown;
+	hello: { name: string; appVersion: string; slim: LinkSlim };
 	/** The device record the core bound this connection to. */
 	peer: PeerInfo;
 	/** From taking the connection in to its hello. */
 	waitedMs: number;
 }
 
-const hosts = new Map<number, RemoteHost>();
+/** By the devices instance each serves: its number in the core changes when the core ends and it opens again. */
+const hosts = new Map<SharingCore, RemoteHost>();
 let routed = false;
+
+function hostOf(devices: number): RemoteHost | undefined {
+	for (const [sharing, host] of hosts) if (sharing.id === devices) return host;
+	return undefined;
+}
 
 /** The core's `open` asks, traffic lines and link ends reach the host they name. */
 function route(): void {
 	if (routed) return;
 	routed = true;
 	const process = core();
-	onCoreAsk("open", ask => hosts.get(ask.host as number)?.answerAsk(ask as HostAsk) ?? null);
+	onCoreAsk("open", ask => hostOf(ask.host as number)?.answerAsk(ask as HostAsk) ?? null);
 	process.on("remote.traffic", data => {
 		const { link, details } = data as { link: number; details: Record<string, unknown> };
 		for (const host of hosts.values()) host.traffic(link, details);
@@ -164,7 +170,6 @@ export class RemoteHost {
 	readonly #opts: RemoteHostOptions;
 	readonly #now: () => number;
 	readonly #emitter = new EventEmitter();
-	readonly #id: number;
 	readonly #connections = new Set<PeerConnection>();
 	/** Each device link's device, until the core says the link ended (its last traffic line comes before that). */
 	readonly #linkDevices = new Map<number, string>();
@@ -172,9 +177,8 @@ export class RemoteHost {
 	constructor(opts: RemoteHostOptions) {
 		this.#opts = opts;
 		this.#now = opts.now ?? Date.now;
-		this.#id = opts.sharing.id;
 		route();
-		hosts.set(this.#id, this);
+		hosts.set(opts.sharing, this);
 	}
 
 	/** The listening TCP port, or null while not listening. */
@@ -251,24 +255,14 @@ export class RemoteHost {
 		return this.#open(ask);
 	}
 
-	/**
-	 * The device's hello arrived, encrypted: check it, answer the host's hello and take the connection. Null drops it
-	 * (a hello this build cannot read, a device removed or blocked while the handshake ran).
-	 */
-	#open(ask: HostAsk): {
-		hello: Record<string, unknown>;
-		deflate: boolean;
-		context: boolean;
-		deviceName: string;
-	} | null {
-		const parsed = ClientHello.safeParse(ask.hello);
-		if (!parsed.success) return null;
-		const hello = parsed.data;
+	/** The core accepted the device hello. Supply desktop state and subscribe before the link runs. */
+	#open(ask: HostAsk): { hello: Record<string, unknown> } {
+		const { hello } = ask;
 		const answer = { appVersion: this.#opts.appVersion, name: this.#opts.name(), ...this.#opts.hello() };
 		// The core writes the same name and when it was seen into the record once it has this answer.
 		const current: PeerInfo = { ...ask.peer, name: hello.name, lastSeenAt: this.#now() };
 		const link = new Link(ask.link);
-		const conn = new PeerConnection(link, current, slimOf(hello), hello.appVersion);
+		const conn = new PeerConnection(link, current, hello.slim, hello.appVersion);
 		this.#linkDevices.set(ask.link, current.deviceId);
 		this.#connections.add(conn);
 		const openedAt = this.#now();
@@ -291,12 +285,7 @@ export class RemoteHost {
 		link.listen(message => this.#onMessage(conn, message));
 		// Told once the core has the answer: the hello goes out before anything else on the link.
 		queueMicrotask(() => this.#emitter.emit("connectionsChanged"));
-		return {
-			hello: answer,
-			deflate: conn.slim.deflate,
-			context: conn.slim.deflateContext,
-			deviceName: hello.name,
-		};
+		return { hello: answer };
 	}
 
 	#disconnected(conn: PeerConnection): void {
@@ -345,6 +334,13 @@ export class RemoteHost {
 		for (const conn of this.#connections) conn.emit(HOST_NAME_EVENT, { name });
 	}
 
+	/** Invalidate only. A fresh, authorized exchange supplies the ranks. */
+	deviceOrderChanged(except?: string): void {
+		for (const conn of this.#connections) {
+			if (conn.peer.deviceId !== except) conn.emit(DEVICE_ORDER_CHANGED, null);
+		}
+	}
+
 	/** Ask a connected device to rename itself (`device.rename`); false while it is not connected. */
 	askPeerRename(deviceId: string, name: string): boolean {
 		const conns = [...this.#connections].filter(conn => conn.peer.deviceId === deviceId);
@@ -355,7 +351,10 @@ export class RemoteHost {
 	async #serve(conn: PeerConnection, id: number, method: string, params: unknown): Promise<void> {
 		let reply: object;
 		try {
-			const result = await this.#opts.services.call(conn.peer, method, params, conn);
+			const result =
+				method === DEVICE_ORDER_EXCHANGE && this.#opts.exchangeDeviceOrder
+					? await this.#opts.exchangeDeviceOrder(conn.peer, params)
+					: await this.#opts.services.call(conn.peer, method, params, conn);
 			reply = { t: "res", id, ok: true, result };
 		} catch (error) {
 			reply = { t: "res", id, ok: false, error: errorPayload(error) };

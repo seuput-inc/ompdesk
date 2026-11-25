@@ -4,9 +4,10 @@
  * step", follow-ups (sent once the turn ends) under "After this turn". Nothing is added above, under or inside the
  * composer box while messages wait, so the transcript never moves when one queues (DR-8).
  *
- * Per row: lane icon, the text (a click shows all of it), **Steer now** as the primary action of a follow-up (a steer's
- * icon puts it after the turn), Edit (the composer field takes the message over: use-composer-queue-edit.ts) and ⋯ with
- * the lane switch, preview and remove. Stock cannot reorder a lane and re-queues an edited message at the end of its
+ * Per row: lane icon, the text (a click shows all of it), **Steer now** as the primary action of a follow-up (stock's
+ * own lane, filled by stock or an older client; a steer never moves there), Edit (the composer field takes the
+ * message over, held out of stock's queue while it is edited: ComposerQueueEdit.tsx) and ⋯ with preview and remove.
+ * Stock cannot reorder a lane and re-queues an edited message at the end of its
  * lane: the row says so for a moment (`queue.moved`) and the pill reads "Edited · now last". The side panel's Queue tab
  * shares `useQueueActions`, the lane names and the heading (queue-lane.tsx).
  *
@@ -26,6 +27,7 @@ import { type QueueLane, useQueuedMessages, useQueueStore } from "../../../store
 import { useSettingsStore } from "../../../stores/settings";
 import { Button, IconButton, LinkButton, MenuButton, Popover, Tooltip } from "../../common";
 import { type QueueActions, useQueueActions } from "../../panels/use-queue-actions";
+import { useBeginQueueEdit } from "./ComposerQueueEdit";
 import { QueueImageTiles, QueueLaneHeading, queueRowName } from "./queue-lane";
 
 const LANE_ICON: Record<QueueLane, typeof CornerDownRight> = {
@@ -52,7 +54,7 @@ const QueueRow = memo(function QueueRow({
 	last: boolean;
 }) {
 	const t = useT();
-	const beginEdit = useComposerStore(state => state.beginEditQueued);
+	const beginEdit = useBeginQueueEdit();
 	const [open, setOpen] = useState(false);
 	const moved = useQueueStore(state => (state.moved?.id === item.id ? state.moved : null));
 	const rowRef = useRef<HTMLLIElement>(null);
@@ -65,13 +67,8 @@ const QueueRow = memo(function QueueRow({
 	const label = queueChipLabel(item.text, imageCount);
 	const name = queueRowName(item.text, imageCount);
 	const Icon = LANE_ICON[lane];
-	const other: QueueLane = lane === "steering" ? "followUp" : "steering";
-	const OtherIcon = LANE_ICON[other];
-	const steerNow = lane === "followUp";
+	const steerNow = lane === "followUp" ? () => actions.steerNow(item.id) : null;
 	const notConnected = actions.ready ? undefined : t("common.notConnected");
-	const toOther = () => {
-		actions.moveToLane(lane, item.id);
-	};
 	const remove = () => {
 		actions.remove(lane, item.id);
 		if (last) onEmptied();
@@ -121,29 +118,20 @@ const QueueRow = memo(function QueueRow({
 			</div>
 			{imageCount > 0 && <QueueImageTiles count={imageCount} images={item.images} />}
 			<span className="flex shrink-0 items-center gap-2 [--hit-gap-x:8px] [--hit-gap-y:20px]">
-				{steerNow ? (
+				{steerNow && (
 					<Tooltip content={t("composerQueue.steerNowTip")} describe={false}>
 						<Button
 							aria-label={notConnected ?? t("composerQueue.steerNowAria", { text: name })}
 							data-queue-primary
 							disabled={!actions.ready}
 							icon={<CornerDownRight aria-hidden />}
-							onClick={toOther}
+							onClick={steerNow}
 							size="sm"
 							variant="secondary"
 						>
 							<span className="whitespace-nowrap">{t("composerQueue.steerNow")}</span>
 						</Button>
 					</Tooltip>
-				) : (
-					<IconButton
-						data-queue-primary
-						disabled={!actions.ready}
-						icon={<ListPlus />}
-						label={notConnected ?? t("composerQueue.laterAria", { text: name })}
-						onClick={toOther}
-						size="sm"
-					/>
 				)}
 				{item.editable && (
 					<IconButton
@@ -151,8 +139,9 @@ const QueueRow = memo(function QueueRow({
 						icon={<Pencil />}
 						label={notConnected ?? t("composerQueue.editAria", { text: name })}
 						onClick={() => {
-							beginEdit({ id: item.id, lane, text: item.text });
-							onEdit();
+							void beginEdit(item, lane).then(began => {
+								if (began) onEdit();
+							});
 						}}
 						size="sm"
 					/>
@@ -162,12 +151,9 @@ const QueueRow = memo(function QueueRow({
 					disabled={!actions.ready}
 					icon={<Ellipsis />}
 					items={[
-						{
-							id: "switch",
-							label: steerNow ? t("composerQueue.steerNow") : t("composerQueue.lane.followUp"),
-							icon: OtherIcon,
-							onSelect: toOther,
-						},
+						...(steerNow
+							? [{ id: "switch", label: t("composerQueue.steerNow"), icon: CornerDownRight, onSelect: steerNow }]
+							: []),
 						{
 							id: "preview",
 							label: open ? t("composerQueue.previewLess") : t("composerQueue.preview"),
@@ -365,6 +351,8 @@ export function ComposerQueueLive() {
 	const { steering, followUp } = useQueuedMessages();
 	const moved = useQueueStore(state => state.moved);
 	const held = useComposerStore(state => state.restoredQueue.length);
+	/** The newest held messages were kept from an omp that went, not withdrawn by a Stop. */
+	const heldKept = useComposerStore(state => state.restoredQueue.at(-1)?.kept === true);
 	const editingLane = useComposerStore(state => state.editingQueued?.lane ?? null);
 	const [message, setMessage] = useState("");
 	const total = steering.length + followUp.length;
@@ -377,11 +365,12 @@ export function ComposerQueueLive() {
 			setMessage(
 				`${t("composerQueue.editBanner")}. ${t("composerQueue.editSaves", { lane: t(`composerQueue.lane.${editingLane}`) })}`,
 			);
-		else if (held > before.held) setMessage(t("composerQueue.livePaused", { count: held }));
+		else if (held > before.held)
+			setMessage(t(heldKept ? "composerQueue.liveKept" : "composerQueue.livePaused", { count: held }));
 		else if (moved && moved !== before.moved)
 			setMessage(t("composerQueue.liveMoved", { lane: t(`composerQueue.lane.${moved.lane}`) }));
 		else if (!hydrating && total > before.total) setMessage(t("composerQueue.liveQueued", { count: total }));
-	}, [total, moved, held, editingLane, t]);
+	}, [total, moved, held, heldKept, editingLane, t]);
 	useEffect(() => {
 		if (!message) return;
 		const timer = setTimeout(() => setMessage(""), LIVE_CLEAR_MS);

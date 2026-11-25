@@ -26,6 +26,13 @@ afterEach(() => {
 });
 
 describe("subagents store refresh", () => {
+	it("reports a failed roster read without erasing the last known roster", async () => {
+		useSubagentsStore.getState().setSnapshots([snap({ id: "kept" })]);
+		getSubagents.mockRejectedValueOnce(new Error("offline"));
+		expect(await useSubagentsStore.getState().refresh()).toBe(false);
+		expect(useSubagentsStore.getState().subagents.has("kept")).toBe(true);
+	});
+
 	it("keeps completion and new workers received while an older roster is in flight", async () => {
 		useSubagentsStore.getState().setSnapshots([snap({ id: "done", status: "running" })]);
 		const pending = Promise.withResolvers<RpcResponse>();

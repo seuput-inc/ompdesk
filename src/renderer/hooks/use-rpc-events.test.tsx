@@ -44,7 +44,7 @@ import { useTabsStore } from "../stores/tabs";
 import { useToastStore } from "../stores/toast";
 import { selectTodoCardVisible, useTodoStore } from "../stores/todo";
 import { type ToolsStore, useToolsStore } from "../stores/tools";
-import { loadOlderTranscript } from "./session-hydration";
+import { loadOlderTranscript, recoverTabSession } from "./session-hydration";
 import { attachTabSession, hydrateSession, hydrateTabSession, useRpcEvents } from "./use-rpc-events";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -263,11 +263,13 @@ type TabSidecarStatusHandler = (payload: IpcSidecarStatusPayload, tabId: string)
 function installTabRoutedMockOmp(): {
 	emitTabBatch: TabBatchHandler;
 	emitTabStatus: TabSidecarStatusHandler;
+	emitSessionInfo: (frame: SessionInfoUpdateFrame, tabId: string) => void;
 	notify: Mock<(title: string, body: string) => void>;
 	commandForTab: Mock<(tabId: string, command: RpcCommand) => Promise<RpcResponse>>;
 } {
 	let tabBatchHandler: TabBatchHandler = () => {};
 	let tabStatusHandler: TabSidecarStatusHandler = () => {};
+	let sessionInfoHandler: (frame: SessionInfoUpdateFrame, tabId: string) => void = () => {};
 	const commandForTab = vi.fn(async (_tabId: string, command: RpcCommand): Promise<RpcResponse> => {
 		switch (command.type) {
 			case "get_state":
@@ -329,7 +331,10 @@ function installTabRoutedMockOmp(): {
 			onSignInRelay: noopSub,
 			onTabPromptResult: noopSub,
 			onTabCommandOutput: noopSub,
-			onTabSessionInfoUpdate: noopSub,
+			onTabSessionInfoUpdate: vi.fn((callback: (frame: SessionInfoUpdateFrame, tabId: string) => void) => {
+				sessionInfoHandler = callback;
+				return () => {};
+			}),
 			onTabExtensionError: noopSub,
 		},
 		sidecar: { getStatus: vi.fn(async () => ({ status: "ready", cwd: "/tmp" })) },
@@ -341,6 +346,7 @@ function installTabRoutedMockOmp(): {
 	return {
 		emitTabBatch: (events, tabId) => tabBatchHandler(events, tabId),
 		emitTabStatus: (payload, tabId) => tabStatusHandler(payload, tabId),
+		emitSessionInfo: (frame, tabId) => sessionInfoHandler(frame, tabId),
 		notify,
 		commandForTab,
 	};
@@ -428,6 +434,46 @@ it("does not roll a ready task back to starting when its older startup snapshot 
 	await flush();
 	expect(sessionRuntimeStore<SessionStore>("t0", "session")?.getState().status).toBe("ready");
 	expect(messages.getState().messages).toMatchObject([{ content: "History loaded after ready" }]);
+});
+
+it("keeps the transcript a restored ghost tab paints when the window's startup snapshot says its omp is starting", async () => {
+	installTabRoutedMockOmp();
+	// Main answers for the window's real tab, which the ghost stands in for until the tab list adopts it.
+	vi.spyOn(window.omp.sidecar, "getStatus").mockResolvedValue({ status: "starting", cwd: "/alpha" });
+	useTabsStore.setState({
+		tabs: [
+			{
+				id: "ghost",
+				kind: "agent",
+				cwd: "/alpha",
+				status: "starting",
+				unreadDone: false,
+				sessionPath: "/alpha/session.jsonl",
+				ghost: true,
+			},
+		],
+		activeTabId: "ghost",
+	});
+	ensureTabRuntime("ghost");
+	setFocusedSessionRuntime("ghost");
+	const messages = sessionRuntimeStore<MessagesStore>("ghost", "messages")!;
+	messages.getState().appendMessage({ role: "user", content: "Last run's rows", timestamp: 1 });
+	await mount(<RpcEventsProbe />);
+	expect(messages.getState().messages).toMatchObject([{ content: "Last run's rows" }]);
+});
+
+it("still tells a reloaded window's restored tab that its omp is ready, so its transcript loads", async () => {
+	installTabRoutedMockOmp();
+	// A reload while the omp runs: the snapshot's tab carries main's own id, and no later `ready` push comes.
+	vi.spyOn(window.omp.sidecar, "getStatus").mockResolvedValue({ status: "ready", cwd: "/alpha" });
+	useTabsStore.setState({
+		tabs: [{ id: "t0", kind: "agent", cwd: "/alpha", status: "starting", unreadDone: false, ghost: true }],
+		activeTabId: "t0",
+	});
+	ensureTabRuntime("t0");
+	setFocusedSessionRuntime("t0");
+	await mount(<RpcEventsProbe />);
+	expect(sessionRuntimeStore<SessionStore>("t0", "session")?.getState().status).toBe("ready");
 });
 
 const assistantMessage: AgentMessage = { role: "assistant", content: [], timestamp: Date.now() };
@@ -642,6 +688,34 @@ describe("useRpcEvents context usage sync", () => {
 		expect(session.getState().contextUsage).toMatchObject({ tokens: 1200, percent: 60 });
 	});
 
+	it("keeps a rename that arrives while a get_state taken before it is still on its way", async () => {
+		// e2e/session-rename-title.e2e.ts on a paired host (18 Nov 2026): the turn's end asked get_state, the rename's
+		// `session_info_update` reached the page first, and the older answer put "New session" back for good.
+		const { emitTabBatch, emitSessionInfo, commandForTab } = installTabRoutedMockOmp();
+		const session = seedReadyTab("t-rename");
+		await mount(<RpcEventsProbe />);
+		await elapse(60);
+
+		const state = Promise.withResolvers<RpcResponse>();
+		const original = commandForTab.getMockImplementation()!;
+		commandForTab.mockImplementation((id, command) =>
+			command.type === "get_state" ? state.promise : original(id, command),
+		);
+		await act(async () => {
+			emitTabBatch([{ type: "agent_end" }], "t-rename");
+		});
+		await act(async () => {
+			emitSessionInfo({ type: "session_info_update", title: "Named on the device" }, "t-rename");
+		});
+		expect(session.getState().sessionName).toBe("Named on the device");
+		state.resolve(settledState({ sessionName: null, contextUsage: { tokens: 10, contextWindow: 100, percent: 10 } }));
+		await flush();
+
+		expect(session.getState().sessionName).toBe("Named on the device");
+		// What no event carries still lands.
+		expect(session.getState().contextUsage).toMatchObject({ tokens: 10 });
+	});
+
 	it("refreshes the usage ring from the liveness probe while the session idles", async () => {
 		const { emitTabStatus, commandForTab } = installTabRoutedMockOmp();
 		const session = seedReadyTab("t-idle");
@@ -706,6 +780,41 @@ describe("useRpcEvents context usage sync", () => {
 					: original(tabId, command),
 			);
 		}
+
+		it("does not call a live phone session unavailable after its boot check loses the link", async () => {
+			const { emitTabStatus, emitTabBatch, commandForTab } = installTabRoutedMockOmp();
+			const session = seedReadyTab("t-phone");
+			await mount(<RpcEventsProbe heartbeatMs={25} />);
+			await flush();
+			let failures = 1;
+			failGetState(commandForTab, () => failures-- > 0);
+			emitTabStatus({ status: "ready", cwd: "/alpha" }, "t-phone");
+			await flush();
+			expect(session.getState().sidecarError).toBeNull();
+			await act(async () => emitTabBatch([{ type: "turn_start" } as never], "t-phone"));
+			expect(session.getState().sidecarError).toBeNull();
+			await elapse(50);
+			expect(session.getState().sidecarError).toBeNull();
+		});
+
+		it("does not let a late failed boot check override a newer live frame", async () => {
+			const { emitTabStatus, emitTabBatch, commandForTab } = installTabRoutedMockOmp();
+			const session = seedReadyTab("t-boot-frame");
+			await mount(<RpcEventsProbe heartbeatMs={25} />);
+			await flush();
+			const failed = Promise.withResolvers<RpcResponse>();
+			const original = commandForTab.getMockImplementation()!;
+			commandForTab.mockImplementation((tabId, command) =>
+				command.type === "get_state" ? failed.promise : original(tabId, command),
+			);
+			emitTabStatus({ status: "ready", cwd: "/alpha" }, "t-boot-frame");
+			await flush();
+			await elapse(1);
+			await act(async () => emitTabBatch([{ type: "turn_start" } as never], "t-boot-frame"));
+			failed.reject(new Error("Connection to your computer was lost"));
+			await flush();
+			expect(session.getState().sidecarError).toBeNull();
+		});
 
 		it("does not call omp unresponsive for one slow answer that the next probe gets", async () => {
 			const { emitTabStatus, commandForTab } = installTabRoutedMockOmp();
@@ -800,6 +909,108 @@ describe("useRpcEvents on a dropped link", () => {
 			true,
 		);
 		expect(unhandled).toEqual([]);
+	});
+});
+
+describe("stream-loss hydration", () => {
+	function completeRecoveryReads(commandForTab: Mock<(tabId: string, command: RpcCommand) => Promise<RpcResponse>>) {
+		const original = commandForTab.getMockImplementation()!;
+		commandForTab.mockImplementation((tabId, command) => {
+			switch (command.type) {
+				case "get_autopilot":
+					return Promise.resolve(success({ active: false }));
+				case "get_checkout_peers":
+					return Promise.resolve(success({ peers: null }));
+				case "get_next_prompt":
+					return Promise.resolve(
+						success({
+							suggestions: false,
+							inline: false,
+							legacyExtension: false,
+							requests: { suggest: 0, inline: 0 },
+						}),
+					);
+				case "get_settings":
+					return Promise.resolve(
+						success({
+							values: {
+								"tools.approvalMode": "yolo",
+								hideThinkingBlock: false,
+								proseOnlyThinking: true,
+								omitThinking: false,
+								"display.showTokenUsage": false,
+								"display.collapseCompacted": true,
+								"goal.statusInFooter": true,
+								"speech.enabled": false,
+								"stt.enabled": false,
+								emojiAutocomplete: true,
+								"paste.largeMenuThreshold": 100,
+							},
+							provenance: { "tools.approvalMode": { layers: [] } },
+						}),
+					);
+				default:
+					return original(tabId, command);
+			}
+		});
+	}
+
+	it.each(["get_state", "get_transcript_page"] as const)(
+		"keeps the phone's last transcript when %s fails and restores the running tab without writing anything",
+		async missing => {
+			const { commandForTab } = installTabRoutedMockOmp();
+			const id = `t-phone-${missing}`;
+			const session = seedReadyTab(id);
+			const messages = sessionRuntimeStore<MessagesStore>(id, "messages")!;
+			const old: AgentMessage = { role: "user", content: "before the drop", timestamp: 1 };
+			const latest: AgentMessage = { role: "user", content: "while away", timestamp: 2 };
+			messages.getState().appendMessage(old);
+			const original = commandForTab.getMockImplementation()!;
+			let unavailable = true;
+			commandForTab.mockImplementation(async (tabId, command) => {
+				if (unavailable && command.type === missing)
+					return { type: "response", command: missing, success: false, code: "remote_offline", error: "Offline" };
+				if (command.type === "get_state") return success({ sessionId: "s1", isStreaming: true, todoPhases: [] });
+				if (command.type === "get_transcript_page") return success({ messages: [old, latest], totalMessages: 2 });
+				if (command.type === "get_next_prompt")
+					return { type: "response", command: command.type, success: false, error: "Unsupported command" };
+				return original(tabId, command);
+			});
+			expect(await recoverTabSession(id, "core")).toBe(false);
+			expect(messages.getState().messages).toEqual([old]);
+			unavailable = false;
+			expect(await recoverTabSession(id, "core")).toBe(true);
+			expect(messages.getState().messages).toEqual([old, latest]);
+			expect(session.getState().isStreaming).toBe(true);
+			expect(commandForTab.mock.calls.filter(([, command]) => !command.type.startsWith("get_"))).toEqual([]);
+			expect(window.omp.prefs.set).not.toHaveBeenCalled();
+		},
+	);
+
+	it("reports a failed queue read instead of acknowledging a fresh session", async () => {
+		const { commandForTab } = installTabRoutedMockOmp();
+		seedReadyTab("t-loss");
+		completeRecoveryReads(commandForTab);
+		const original = commandForTab.getMockImplementation()!;
+		commandForTab.mockImplementation((tabId, command) =>
+			command.type === "get_queue" ? Promise.reject(new Error("queue unavailable")) : original(tabId, command),
+		);
+		const result = await recoverTabSession("t-loss");
+		expect(result).toBe(false);
+	});
+
+	it("does not migrate approval settings during a stream-loss recovery", async () => {
+		const { commandForTab } = installTabRoutedMockOmp();
+		seedReadyTab("t-loss");
+		vi.mocked(window.omp.prefs.get).mockResolvedValue("write");
+		completeRecoveryReads(commandForTab);
+		const result = await recoverTabSession("t-loss");
+		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "set_setting")).toEqual([]);
+		expect(commandForTab.mock.calls.filter(([, command]) => command.type === "set_subagent_subscription")).toEqual(
+			[],
+		);
+		expect(window.omp.prefs.set).not.toHaveBeenCalled();
+		expect(result).toBe(true);
 	});
 });
 
@@ -1102,7 +1313,7 @@ describe("useRpcEvents awaiting-model marker", () => {
 			emitBatch([{ type: "auto_compaction_start", reason: "overflow", action: "compact" }]);
 		});
 		expect(useSessionStore.getState().isCompacting).toBe(true);
-		expect(useSessionStore.getState().compactionInfo).toEqual({ reason: "overflow", action: "compact" });
+		expect(useSessionStore.getState().compactionInfo).toMatchObject({ reason: "overflow", action: "compact" });
 
 		await act(async () => {
 			emitBatch([
@@ -1111,6 +1322,36 @@ describe("useRpcEvents awaiting-model marker", () => {
 		});
 		expect(useSessionStore.getState().isCompacting).toBe(false);
 		expect(useSessionStore.getState().compactionInfo).toBeNull();
+		// A pass that left no result is no measurement of how long a compaction takes.
+		expect(useSessionStore.getState().compactionRuns).toEqual([]);
+	});
+
+	it("keeps how long a finished compaction took, measured from its start to its end", async () => {
+		const { emitBatch } = installMockOmp();
+		await mount(<RpcEventsProbe />);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+		try {
+			await act(async () => {
+				emitBatch([{ type: "auto_compaction_start", reason: "threshold", action: "compact" }]);
+			});
+			clock.mockReturnValue(1_042_000);
+			await act(async () => {
+				emitBatch([
+					{
+						type: "auto_compaction_end",
+						action: "compact",
+						result: { summary: "Kept the active work." },
+						aborted: false,
+						willRetry: false,
+					},
+				]);
+			});
+		} finally {
+			clock.mockRestore();
+		}
+		expect(useSessionStore.getState().compactionRuns).toEqual([
+			{ action: "compact", startedAt: 1_000_000, endedAt: 1_042_000 },
+		]);
 	});
 
 	it("keeps the marker through the user-prompt echo, clearing only on assistant message_end", async () => {
@@ -1355,6 +1596,50 @@ describe("useRpcEvents todo lifecycle", () => {
 		server = { isStreaming: true, todoPhases: next };
 		await act(async () => emitBatch([todoResult("todo-3", next)]));
 		expect(visible()).toBe(true);
+	});
+
+	it("follows the session's reading of a list behind the work, and a todo call clears it", async () => {
+		const { omp, emitBatch } = installMockOmp();
+		const open: TodoPhase[] = [{ name: "Build", tasks: [{ content: "scaffold", status: "in_progress" }] }];
+		const changedAt = Date.now() - 12 * 60_000;
+		const following = { changedAt, stale: null, received: [], receivedCount: 0 };
+		omp.rpc.getState.mockImplementation(async () =>
+			settledState({ isStreaming: true, todoPhases: open, todoDrift: following }),
+		);
+		await mount(<RpcEventsProbe />);
+		await flush();
+		// What get_state reported: the list last changed twelve minutes ago and still follows the work.
+		expect(useTodoStore.getState().drift).toEqual(following);
+
+		// A steer got no row and the agent worked on: the bridge says so after that tool call, with the steer's line.
+		const behind = {
+			changedAt,
+			stale: "instruction" as const,
+			received: [{ at: changedAt + 60_000, text: "Also wire the footer" }],
+			receivedCount: 1,
+		};
+		await act(async () => emitBatch([{ type: "todo_drift", state: behind }]));
+		expect(useTodoStore.getState().drift).toEqual(behind);
+
+		// The agent adds the row: the list is current again at once, before the bridge's next frame.
+		const before = Date.now();
+		const next: TodoPhase[] = [
+			{
+				name: "Build",
+				tasks: [
+					{ content: "scaffold", status: "in_progress" },
+					{ content: "the steer's row", status: "pending" },
+				],
+			},
+		];
+		await act(async () => emitBatch([todoResult("todo-steer", next)]));
+		expect(useTodoStore.getState().drift).toEqual({
+			changedAt: expect.any(Number),
+			stale: null,
+			received: [],
+			receivedCount: 0,
+		});
+		expect(useTodoStore.getState().drift?.changedAt).toBeGreaterThanOrEqual(before);
 	});
 
 	it("does not resurface a finished list restored from session history", async () => {
@@ -1690,10 +1975,14 @@ describe("TurnStatusRow", () => {
 		expect(document.body.textContent).not.toContain("in 9s");
 	});
 
-	it("renders the compaction loader with TUI reason/action text", async () => {
-		useSessionStore.setState({ compactionInfo: { reason: "overflow", action: "handoff" } });
+	it("renders the compaction row in plain words with its elapsed time", async () => {
+		useSessionStore.setState({
+			compactionInfo: { reason: "overflow", action: "handoff", startedAt: Date.now() - 65_000 },
+		});
 		await mount(<TurnStatusRow />);
-		expect(document.body.textContent).toContain("Context overflow: Auto-handoff…");
+		const row = document.querySelector("[data-compaction-status]");
+		expect(row?.textContent).toContain(translate("chat.compaction.running.handoff"));
+		expect(row?.querySelector("[data-compaction-elapsed]")?.textContent).toMatch(/1m [5-7]s/);
 	});
 });
 
@@ -2021,7 +2310,6 @@ describe("hydrateSession streaming reconcile (F-HYDRATE)", () => {
 
 		// TAB_STATUS ready, the full status channel, and the boot fallback land together.
 		const joined = [attachTabSession("t-once"), attachTabSession("t-once"), attachTabSession("t-once")];
-		expect(new Set(joined).size).toBe(1);
 		await settle(1);
 		await Promise.all(joined);
 		expect(sessionRuntimeStore<MessagesStore>("t-once", "messages")?.getState().messages).toEqual([hydrated]);
@@ -2031,15 +2319,14 @@ describe("hydrateSession streaming reconcile (F-HYDRATE)", () => {
 		// An explicit reload never joins a fetch that started before it...
 		const reload = hydrateTabSession("t-once");
 		// ...but a following attach joins the reload.
-		expect(attachTabSession("t-once")).toBe(reload);
+		const joinedReload = attachTabSession("t-once");
 		// A new session id on the same runtime starts its own fetch.
 		useTabsStore.setState(state => ({
 			tabs: state.tabs.map(tab => (tab.id === "t-once" ? { ...tab, sessionId: "s2" } : tab)),
 		}));
 		const switched = attachTabSession("t-once");
-		expect(switched).not.toBe(reload);
 		await settle(4);
-		await Promise.all([later, reload, switched]);
+		await Promise.all([later, reload, joinedReload, switched]);
 	});
 
 	it("clears the stale streaming bubble when the hydrated tab has settled", async () => {
@@ -2654,7 +2941,7 @@ describe("useRpcEvents background tabs", () => {
 		const session = sessionRuntimeStore<SessionStore>("t-back", "session")!;
 		session.setState({
 			retryInfo: { attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: "529", startedAt: 1 },
-			compactionInfo: { reason: "threshold", action: "compacting" },
+			compactionInfo: { reason: "threshold", action: "compacting", startedAt: 1 },
 		});
 		await act(async () => {
 			await hydrateTabSession("t-back");

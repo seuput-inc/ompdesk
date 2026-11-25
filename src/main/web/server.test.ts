@@ -13,9 +13,9 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { WebSocket } from "ws";
-import { IPC_COMMANDS } from "../../shared/ipc-types";
+import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import {
 	WEB_BLOCKS_LIST,
 	WEB_BLOCKS_REMOVE,
@@ -28,8 +28,9 @@ import {
 	type WebPairingRequest,
 } from "../../shared/mobile-web";
 import { WEB_HOST_CHANNELS, type WebBlobOpenResult } from "../../shared/web-host";
-import { WEB_PROTOCOL_VERSION, type WebServerFrame } from "../../shared/web-protocol";
+import { WEB_BUILD_META, WEB_PROTOCOL_VERSION, type WebServerFrame } from "../../shared/web-protocol";
 import type { WebPushStateResponse } from "../../shared/web-push";
+import { stopCore } from "../core/process";
 import type { TailnetPeer } from "../tailscale/whois";
 import { itWithFileSymlinks } from "../test-symlinks";
 import type { ClientWindow } from "./client-window";
@@ -46,12 +47,17 @@ let base: string;
 let port: number;
 let handlers: Map<string, Handler>;
 let desktopSent: { channel: string; payload: unknown }[];
-let unpaired: ReturnType<typeof vi.fn>;
-let confirmNew: boolean;
+let unpaired: Mock<NonNullable<WebHostDeps["onUnpairedAuth"]>>;
+let confirmNew: boolean | null;
 let approve: boolean;
 let sockets: WebSocket[];
 let peers: Map<string, TailnetPeer>;
 let allowed: string[];
+/** The desktop leaves an approval unanswered (a test answers it by hand). */
+let holdDesktop: boolean;
+/** The addresses `tailscale whois` was asked about, and the answers a test keeps back until it lets them go. */
+let whoisAsked: string[];
+let whoisHeld: Map<string, Promise<void>>;
 let realFetch: typeof fetch;
 
 /** The secret first path segment of the serve target; a request carries it only when it came through serve. */
@@ -62,7 +68,7 @@ const PEER_IP = "100.64.0.9";
 /** What serve adds to every request it forwards. */
 const IDENTITY: Record<string, string> = { "tailscale-user-login": LOGIN, "x-forwarded-for": PEER_IP };
 
-const PAGE = "<!doctype html><title>OMPdesk</title>";
+const PAGE = `<!doctype html><meta name="${WEB_BUILD_META}" content="test-page-build"><title>OMPdesk</title>`;
 const SCRIPT = `${"console.log('x');".repeat(200)}\n`;
 
 function desktop(): ClientWindow {
@@ -71,7 +77,7 @@ function desktop(): ClientWindow {
 			id: 1,
 			send: (channel: string, payload: unknown) => {
 				desktopSent.push({ channel, payload });
-				if (channel === WEB_PAIRING_REQUEST) {
+				if (channel === WEB_PAIRING_REQUEST && !holdDesktop) {
 					const request = payload as WebPairingRequest;
 					queueMicrotask(() => host.confirmations.respond({ id: request.id, approve }));
 				}
@@ -97,6 +103,9 @@ beforeEach(async () => {
 	approve = true;
 	sockets = [];
 	allowed = [LOGIN];
+	holdDesktop = false;
+	whoisAsked = [];
+	whoisHeld = new Map();
 	peers = new Map([[PEER_IP, { nodeId: "nPHONE1", nodeName: "s25u", login: LOGIN }]]);
 	const deps: WebHostDeps = {
 		ipc: {
@@ -115,10 +124,17 @@ beforeEach(async () => {
 		desktopWindows: () => [desktop()],
 		tabs: { activeTab: () => null, cwd: () => null, facts: () => null, resnapshot: () => {} },
 		openMedia: async () => new Response(null, { status: 404 }),
-		shell: { openPath: async () => {}, reveal: () => {}, openExternal: async () => {} },
+		shell: { openPath: async () => {}, reveal: () => {}, openPageExternal: async () => {} },
 		allowedUsers: () => allowed,
-		confirmNewDevices: () => confirmNew,
-		whois: async address => peers.get(address) ?? null,
+		confirmNewDevices: () => {
+			if (confirmNew === null) throw new Error("settings unavailable");
+			return confirmNew;
+		},
+		whois: async address => {
+			whoisAsked.push(address);
+			await whoisHeld.get(address);
+			return peers.get(address) ?? null;
+		},
 		onUnpairedAuth: unpaired,
 		language: () => "en",
 	};
@@ -199,13 +215,13 @@ interface Paired {
 	privateKey: KeyObject | null;
 }
 
-async function pair(options: { withKey?: boolean; name?: string } = {}): Promise<Paired> {
+async function pair(options: { withKey?: boolean; name?: string; instance?: string } = {}): Promise<Paired> {
 	const keys = options.withKey === false ? null : generateKeyPairSync("ec", { namedCurve: "P-256" });
 	const response = await post(
 		"/api/pair",
 		{
 			name: options.name ?? "Test phone",
-			clientInstanceId: "browser-1",
+			clientInstanceId: options.instance ?? "browser-1",
 			...(keys ? { publicKeyJwk: keys.publicKey.export({ format: "jwk" }) } : {}),
 		},
 		{ "user-agent": "TestBrowser/1.0" },
@@ -391,13 +407,16 @@ describe("static files", () => {
 
 	// v0.38.1: a phone's page, older than the computer's update, asked for a lazy chunk the new build no longer had.
 	it("after an update, serves the previous build's hashed assets by name, and nothing else from them", async () => {
-		// This launch kept its build (WebHost.start, queued first); the next one runs a new build without the old chunk.
-		await host.assets.retain(staticRoot);
+		await host.stop();
 		expect(existsSync(join(userData, "web-assets", "builds.json"))).toBe(true);
 		writeFileSync(join(staticRoot, "web.html"), `${PAGE}<!-- next build -->`);
 		rmSync(join(staticRoot, "assets", "app-abc.js"));
 		writeFileSync(join(staticRoot, "assets", "app-def.js"), "next");
-		await host.assets.retain(staticRoot);
+		let clock = Date.now();
+		host = new WebHost({ ...hostDeps, now: () => clock });
+		await host.start({ port });
+		host.server.configure({ host: "127.0.0.1", publicPort: port, secure: false, servePrefix: SECRET });
+		await vi.waitFor(async () => expect((await raw("/assets/app-abc.js")).status).toBe(200));
 		const old = await raw("/assets/app-abc.js");
 		expect(old.status).toBe(200);
 		expect(old.body).toBe(SCRIPT);
@@ -405,13 +424,53 @@ describe("static files", () => {
 		expect((await raw("/assets/app-def.js")).body).toBe("next");
 		expect((await raw("/assets/missing.js")).status).toBe(404);
 		expect((await raw("/assets/../web-assets/builds.json")).status).not.toBe(200);
-	});
+
+		clock += 6 * 24 * 60 * 60_000;
+		await restartCore();
+		await vi.waitFor(async () => expect((await raw("/assets/app-abc.js")).body).toBe(SCRIPT));
+
+		// A core restart reloads the archive, but does not give a replaced build another seven days.
+		clock += 24 * 60 * 60_000;
+		await restartCore();
+		await vi.waitFor(() => {
+			const index = JSON.parse(readFileSync(join(userData, "web-assets", "builds.json"), "utf8"));
+			expect(index.builds).toHaveLength(1);
+		});
+		expect((await raw("/assets/app-abc.js")).status).toBe(404);
+	}, 30_000);
 
 	// Windows CI (release run 39191568825): the teardown's rmSync of userData hit ENOTEMPTY because the start's copy
 	// of the build into web-assets/ was still writing after stop() returned.
 	it("stop() returns only once the start's background work in userData is done", async () => {
+		const stopping = host.stop();
 		await host.stop();
 		expect(existsSync(join(userData, "web-assets", "builds.json"))).toBe(true);
+		await stopping;
+	});
+
+	it("starts archiving only after the host gets a listener", async () => {
+		const otherProfile = join(userData, "other-profile");
+		mkdirSync(otherProfile);
+		const other = new WebHost({ ...hostDeps, userData: otherProfile });
+		const index = join(otherProfile, "web-assets", "builds.json");
+		try {
+			await expect(other.start({ port })).rejects.toMatchObject({ code: "EADDRINUSE" });
+			expect(existsSync(index)).toBe(false);
+			await other.start({ port: 0 });
+		} finally {
+			await other.stop();
+		}
+		expect(JSON.parse(readFileSync(index, "utf8")).builds).toHaveLength(1);
+	});
+
+	it("does not archive a second build when the same host stops and starts again", async () => {
+		await host.stop();
+		const index = join(userData, "web-assets", "builds.json");
+		const original = readFileSync(index, "utf8");
+		writeFileSync(join(staticRoot, "web.html"), `${PAGE}<!-- changed -->`);
+		await host.start({ port });
+		await host.stop();
+		expect(readFileSync(index, "utf8")).toBe(original);
 	});
 });
 
@@ -477,6 +536,30 @@ describe("connecting a device", () => {
 		expect(await response.json()).toEqual({ error: "declined" });
 		expect(host.devices.list()).toEqual([]);
 		expect(sent(WEB_DEVICE_CONNECTED)).toEqual([]);
+	});
+
+	it("declines without enrolling a device when its approval setting cannot be read", async () => {
+		confirmNew = null;
+		const response = await post("/api/pair", { name: "x" });
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "declined" });
+		expect(host.devices.list()).toEqual([]);
+		expect(sent(WEB_PAIRING_REQUEST)).toEqual([]);
+	});
+
+	it("stop refuses a held phone and an approval sent after stop began", async () => {
+		confirmNew = true;
+		holdDesktop = true;
+		const phone = post("/api/pair", { name: "x" });
+		await vi.waitFor(() => expect(sent(WEB_PAIRING_REQUEST)).toHaveLength(1));
+		const [request] = sent(WEB_PAIRING_REQUEST) as WebPairingRequest[];
+		const stopping = host.stop();
+		expect(await host.confirmations.respond({ id: request?.id ?? "", approve: true })).toBe(false);
+		const response = await phone;
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "declined" });
+		await stopping;
+		expect(host.devices.list()).toEqual([]);
 	});
 
 	it("rejects a malformed body, a wrong content type and a private key", async () => {
@@ -759,6 +842,7 @@ describe("WebSocket", () => {
 		expect(frames[0]).toMatchObject({
 			t: "hello",
 			protocol: WEB_PROTOCOL_VERSION,
+			build: "test-page-build",
 			resumed: false,
 			features: { upload: true },
 		});
@@ -768,6 +852,29 @@ describe("WebSocket", () => {
 		expect(res).toMatchObject({ t: "res", id: 5, ok: true, v: { browserWindow: null, args: [{ scope: "global" }] } });
 		expect((res as { v: { win: number } }).v.win).toBeLessThan(0);
 		expect(host.router.isConnected(paired.deviceId)).toBe(true);
+	});
+
+	it("lists the first 500 files in natural order and finds a file beyond the limit by name", async () => {
+		const dir = join(userData, "picker");
+		mkdirSync(dir);
+		for (let i = 0; i <= 500; i++) writeFileSync(join(dir, `item${i}`), "");
+		const paired = await pair();
+		const { socket, frames, arrived } = await open(paired, await ticketFor(paired));
+		const listing = async (id: number, query?: string) => {
+			const request = { path: dir, files: true, query };
+			socket.send(JSON.stringify({ t: "inv", ch: WEB_HOST_CHANNELS.LIST_DIRS, id, a: [request] }));
+			await arrived(frames => frames.some(frame => frame.t === "res" && frame.id === id));
+			return frames.find(frame => frame.t === "res" && frame.id === id);
+		};
+		const entry = (i: number) => ({ name: `item${i}`, path: join(dir, `item${i}`), directory: false, size: 0 });
+		expect(await listing(1)).toMatchObject({
+			ok: true,
+			v: { entries: Array.from({ length: 500 }, (_, i) => entry(i)), truncated: true },
+		});
+		expect(await listing(2, " ITEM500 ")).toMatchObject({
+			ok: true,
+			v: { entries: [entry(500)], truncated: false },
+		});
 	});
 
 	it("compresses the page's frames: permessage-deflate is agreed with context takeover, as ws agreed it", async () => {
@@ -957,12 +1064,14 @@ describe("/api/push", () => {
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		const state = (await response.json()) as WebPushStateResponse;
 		expect(state).toEqual({
-			publicKey: host.sender.publicKey,
+			publicKey: expect.stringMatching(/^[A-Za-z0-9_-]{87}$/),
 			subscribed: false,
 			hideContent: false,
 			categories: ["completion", "error", "ask"],
 		});
-		expect(state.publicKey).toMatch(/^[A-Za-z0-9_-]{87}$/);
+		await host.devices.flush();
+		await restartCore();
+		expect(await (await get(paired)).json()).toEqual(state);
 	});
 
 	it("stores the subscription, hideContent and categories on the device record", async () => {
@@ -1111,4 +1220,103 @@ describe("/api/push", () => {
 		await arrived(frames => frames.length > 0);
 		expect(frames[0]).toMatchObject({ t: "hello", features: { push: true } });
 	});
+});
+
+/** The core ends (a crash looks the same to main): the edge listens again on its port once the next core runs. */
+async function restartCore(): Promise<void> {
+	await stopCore();
+	await vi.waitFor(() => expect(host.server.port).not.toBeNull(), { timeout: 10_000 });
+}
+
+/** `tailscale whois` of `address` answers once the returned function is called. */
+function holdWhois(address: string): () => void {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	whoisHeld.set(address, promise);
+	return resolve;
+}
+
+describe("after the core restarts", () => {
+	it("hears an answer only from the core that asked: a lookup the old core waited on settles no other device's", async () => {
+		// A fresh core numbers its asks from 1, so the next core's first lookup has the old one's number.
+		await restartCore();
+		const early = "100.64.0.21";
+		const late = "100.64.0.22";
+		peers.set(early, { nodeId: "nEARLY", nodeName: "early-phone", login: LOGIN });
+		peers.set(late, { nodeId: "nLATE", nodeName: "late-phone", login: LOGIN });
+		const releaseEarly = holdWhois(early);
+		const releaseLate = holdWhois(late);
+		const abandoned = post("/api/pair", { name: "x" }, { "x-forwarded-for": early }).catch(() => null);
+		await vi.waitFor(() => expect(whoisAsked).toContain(early));
+		await restartCore();
+		const answered = post("/api/pair", { name: "y" }, { "x-forwarded-for": late });
+		await vi.waitFor(() => expect(whoisAsked).toContain(late));
+		releaseEarly();
+		releaseLate();
+		expect((await answered).status).toBe(200);
+		await abandoned;
+		await settled();
+		expect(host.devices.list().map(device => device.nodeId)).toEqual(["nLATE"]);
+	}, 20_000);
+
+	it("declines an approval the old core was holding, so nothing answers it later", async () => {
+		confirmNew = true;
+		holdDesktop = true;
+		const waiting = post("/api/pair", { name: "x" }).catch(() => null);
+		await vi.waitFor(() => expect(sent(WEB_PAIRING_REQUEST)).toHaveLength(1));
+		const [request] = sent(WEB_PAIRING_REQUEST) as WebPairingRequest[];
+		const computer = host.confirmations.request({
+			kind: "computer",
+			name: "peer",
+			userAgent: "",
+			tailscaleLogin: LOGIN,
+			ip: PEER_IP,
+		});
+		await restartCore();
+		await expect(computer).resolves.toEqual({ approved: false, reason: "declined" });
+		expect(await host.confirmations.pending()).toEqual([]);
+		expect(await host.confirmations.respond({ id: request?.id ?? "", approve: true })).toBe(false);
+		await waiting;
+		expect(host.devices.list()).toEqual([]);
+	}, 20_000);
+
+	it("keeps pushing to a phone that connects again", async () => {
+		const paired = await pair();
+		await restartCore();
+		const { frames } = await open(paired, await ticketFor(paired));
+		await vi.waitFor(() => expect(frames.some(frame => frame.t === "hello")).toBe(true));
+		host.router.deliver(paired.deviceId, IPC_EVENTS.SESSIONS_CHANGED, { device: null });
+		await vi.waitFor(() =>
+			expect(frames.some(frame => frame.t === "evt" && frame.ch === IPC_EVENTS.SESSIONS_CHANGED)).toBe(true),
+		);
+	}, 20_000);
+
+	it("answers a call only to the core that made it: a handler that outlives a restart settles no call of the next core", async () => {
+		// A fresh core numbers its calls from 1, so the next core's first call has the old one's number.
+		await restartCore();
+		const gates = new Map<string, () => void>();
+		handlers.set(IPC_COMMANDS.SESSIONS_LIST, async (_caller, tag) => {
+			const gate = Promise.withResolvers<void>();
+			gates.set(String(tag), gate.resolve);
+			await gate.promise;
+			return { from: tag };
+		});
+		const first = await pair({ instance: "first" });
+		const second = await pair({ instance: "second" });
+		const early = await open(first, await ticketFor(first));
+		await early.arrived(frames => frames.length > 0);
+		early.socket.send(JSON.stringify({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_LIST, a: ["first"] }));
+		await vi.waitFor(() => expect(gates.has("first")).toBe(true));
+
+		await restartCore();
+		const late = await open(second, await ticketFor(second));
+		await late.arrived(frames => frames.length > 0);
+		late.socket.send(JSON.stringify({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_LIST, a: ["second"] }));
+		await vi.waitFor(() => expect(gates.has("second")).toBe(true));
+
+		// The first device's handler finishes after the restart, then the second's.
+		gates.get("first")?.();
+		gates.get("second")?.();
+		await late.arrived(frames => frames.some(frame => frame.t === "res"));
+		expect(late.frames.find(frame => frame.t === "res")).toMatchObject({ id: 1, ok: true, v: { from: "second" } });
+	}, 30_000);
 });

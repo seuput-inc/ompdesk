@@ -1,9 +1,8 @@
-import * as path from "node:path";
 import { app } from "electron";
-import { appendRuntimeLogAtPath, type RuntimeLogReport } from "./runtime-log-core";
+import { appendRuntimeLogAtPath, type RuntimeLogReport, runtimeLogFile } from "./runtime-log-core";
 
 export function runtimeLogPath(): string {
-	return path.join(app.getPath("userData"), "logs", "gui-runtime.jsonl");
+	return runtimeLogFile(app.getPath("userData"));
 }
 
 export function writeRuntimeLog(report: RuntimeLogReport, context: { windowId?: number; cwd?: string } = {}): void {

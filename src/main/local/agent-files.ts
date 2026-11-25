@@ -1,19 +1,8 @@
-/**
- * Agent definition files: read, write, delete and template installs for the
- * two directories omp discovers task agents from — the user directory
- * (`~/.omp/agent/agents`) and the nearest project `.omp/agents`. The bridge
- * reports both paths (`get_agent_authoring`, computed with omp's own
- * `getConfigDirs` / `findAllNearestProjectConfigDirs`), so ompdesk writes
- * exactly where discovery reads.
- *
- * Every path from the renderer is checked to be a direct `*.md` child of one
- * of those directories (discovery does not recurse), names go through the
- * same check the editor uses, writes are atomic (temp file + rename) and new
- * files never replace an existing one (`link` fails on an existing target).
- */
+/** Stock owns discovery and validation. The shared editor owns the Markdown and templates.
+ * The core authorizes paths and performs the mutations. */
 
-import { randomBytes } from "node:crypto";
-import { promises as fsp } from "node:fs";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import path from "node:path";
 import { agentFileName, agentNameError, serializeAgentMarkdown } from "../../shared/agent-definition";
 import { AGENT_TEMPLATES, templateDraft } from "../../shared/agent-templates";
@@ -24,7 +13,7 @@ import type {
 	RpcAgentTemplatesInstallResult,
 	RpcParsedAgentDefinition,
 } from "../../shared/rpc-types";
-import { writeFileAtomic } from "../atomic-file";
+import { CoreError, core } from "../core/process";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
 export type AgentDirs = Record<AgentFileScope, string>;
@@ -36,12 +25,42 @@ function scopeOf(value: unknown): AgentFileScope {
 	throw new LocalCommandError('`scope` must be "user" or "project".', "invalid_scope");
 }
 
-async function realDir(dir: string): Promise<string> {
-	const resolved = path.resolve(dir);
+interface AgentEntry extends AgentDirs {
+	file: string;
+	parent: string;
+}
+
+function entry(dirs: AgentDirs, file: unknown): AgentEntry {
+	if (typeof file !== "string" || !path.isAbsolute(file) || path.extname(file) !== ".md") {
+		throw new LocalCommandError("Not an agent definition file path.", "path_outside");
+	}
+	return {
+		file,
+		parent: path.resolve(path.dirname(file)),
+		project: path.resolve(dirs.project),
+		user: path.resolve(dirs.user),
+	};
+}
+
+type DiskRequest =
+	| ({ op: "locate" | "delete" } & AgentEntry)
+	| { op: "prepare"; dir: string }
+	| { op: "install"; dir: string; name: string }
+	| { op: "write"; dir: string; name: string; previous?: AgentEntry };
+
+async function disk<T>(request: DiskRequest, content?: string): Promise<T> {
 	try {
-		return await fsp.realpath(resolved);
-	} catch {
-		return resolved;
+		const { result } = await core().call<T>(
+			"fs.agentFile",
+			request,
+			content === undefined ? undefined : { bin: Buffer.from(content, "utf8") },
+		);
+		return result;
+	} catch (error) {
+		if (error instanceof CoreError && ["path_outside", "invalid_name", "exists"].includes(error.code)) {
+			throw new LocalCommandError(error.message, error.code);
+		}
+		throw error;
 	}
 }
 
@@ -54,35 +73,29 @@ export async function locateAgentFile(
 	dirs: AgentDirs,
 	filePath: unknown,
 ): Promise<{ file: string; scope: AgentFileScope }> {
-	if (typeof filePath !== "string" || !path.isAbsolute(filePath) || path.extname(filePath) !== ".md") {
-		throw new LocalCommandError("Not an agent definition file path.", "path_outside");
-	}
-	const parent = await realDir(path.dirname(filePath));
-	for (const scope of ["project", "user"] as const) {
-		if (parent === (await realDir(dirs[scope]))) return { file: filePath, scope };
-	}
-	throw new LocalCommandError("The file is outside the user and project agent directories.", "path_outside");
+	return disk({ op: "locate", ...entry(dirs, filePath) });
 }
 
 export async function readAgentFile(dirs: AgentDirs, filePath: unknown): Promise<RpcAgentFileContent> {
 	const { file, scope } = await locateAgentFile(dirs, filePath);
-	return { filePath: file, scope, content: await fsp.readFile(file, "utf8") };
-}
-
-/** Write `content` to `target` through a sibling temp file; `exclusive` refuses to replace an existing file. */
-async function atomicWrite(target: string, content: string, exclusive: boolean): Promise<void> {
-	if (!exclusive) return writeFileAtomic(target, content, { mode: 0o644 });
-	const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${randomBytes(6).toString("hex")}.tmp`);
-	await fsp.writeFile(tmp, content, { encoding: "utf8", mode: 0o644 });
+	// Existing definitions have no Studio read cap. A core reply would buffer a second whole file.
+	// As with Node's readFile, a final dotfiles link reads its target; a delete unlinks the entry instead.
+	const flags =
+		process.platform === "win32"
+			? constants.O_RDONLY
+			: constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY;
+	const handle = await open(file, flags);
 	try {
-		await fsp.link(tmp, target);
-	} catch (cause) {
-		if (cause instanceof Error && "code" in cause && cause.code === "EEXIST") {
-			throw new LocalCommandError(`An agent file named ${path.basename(target)} already exists.`, "exists");
+		const meta = await handle.stat();
+		if (meta.isDirectory()) {
+			throw Object.assign(new Error("EISDIR: illegal operation on a directory, read"), { code: "EISDIR" });
 		}
-		throw cause;
+		if (!meta.isFile()) {
+			throw new LocalCommandError("The agent definition is not a regular file.", "invalid_content");
+		}
+		return { filePath: file, scope, content: await handle.readFile("utf8") };
 	} finally {
-		await fsp.rm(tmp, { force: true });
+		await handle.close();
 	}
 }
 
@@ -116,7 +129,9 @@ export async function writeAgentFile(
 	if (Buffer.byteLength(content, "utf8") > MAX_AGENT_FILE_BYTES) {
 		throw new LocalCommandError("The agent file is too large.", "invalid_content");
 	}
-	const source = path.join(path.resolve(dirs[scope]), agentFileName(name));
+	const dir = path.resolve(dirs[scope]);
+	const fileName = agentFileName(name);
+	const source = path.join(dir, fileName);
 	let parsed: RpcParsedAgentDefinition;
 	try {
 		parsed = await validate(content, source);
@@ -127,31 +142,15 @@ export async function writeAgentFile(
 		throw new LocalCommandError("The frontmatter name does not match the file name.", "invalid_content");
 	}
 
-	const dir = path.resolve(dirs[scope]);
-	const target = path.join(dir, agentFileName(name));
-	if (path.dirname(target) !== dir) throw new LocalCommandError("Invalid agent name.", "invalid_name");
-
-	const previous =
-		params.replacePath === undefined || params.replacePath === null
-			? undefined
-			: (await locateAgentFile(dirs, params.replacePath)).file;
-	await fsp.mkdir(dir, { recursive: true });
-
-	// Editing in place (also a case-only rename on a case-insensitive volume): overwrite.
-	const real = (file: string) => fsp.realpath(file).catch(() => file);
-	if (previous !== undefined && (await real(previous)) === (await real(target))) {
-		await atomicWrite(target, content, false);
-		return { filePath: target };
-	}
-	await atomicWrite(target, content, true);
-	if (previous !== undefined) await fsp.rm(previous, { force: true });
-	return { filePath: target };
+	const previous = params.replacePath == null ? undefined : entry(dirs, params.replacePath);
+	await disk({ op: "write", dir, name: fileName, previous }, content);
+	return { filePath: source };
 }
 
 export async function deleteAgentFile(dirs: AgentDirs, filePath: unknown): Promise<{ deleted: string }> {
-	const { file } = await locateAgentFile(dirs, filePath);
-	await fsp.rm(file);
-	return { deleted: file };
+	const at = entry(dirs, filePath);
+	await disk({ op: "delete", ...at });
+	return { deleted: at.file };
 }
 
 /**
@@ -165,14 +164,15 @@ export async function installAgentTemplates(
 ): Promise<RpcAgentTemplatesInstallResult> {
 	const wanted = names ? AGENT_TEMPLATES.filter(template => names.includes(template.name)) : AGENT_TEMPLATES;
 	const resolved = path.resolve(dir);
-	await fsp.mkdir(resolved, { recursive: true });
+	await disk({ op: "prepare", dir: resolved });
 	const installed: string[] = [];
 	const skipped: string[] = [];
 	for (const template of wanted) {
 		const content = serializeAgentMarkdown(templateDraft(template));
-		await validate(content, path.join(resolved, agentFileName(template.name)));
+		const name = agentFileName(template.name);
+		await validate(content, path.join(resolved, name));
 		try {
-			await atomicWrite(path.join(resolved, agentFileName(template.name)), content, true);
+			await disk({ op: "install", dir: resolved, name }, content);
 			installed.push(template.name);
 		} catch (cause) {
 			if (cause instanceof LocalCommandError && cause.code === "exists") skipped.push(template.name);

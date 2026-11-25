@@ -6,10 +6,12 @@
  * service configures), the desktop's say over a new device, `tailscale whois` and the schedule service's webhook. The
  * page sockets are the core's router's (8c); main's side of it is `WsRouter`, whose number is this host's.
  */
+import { WEB_BUILD_META } from "../../shared/web-protocol";
 import { CORE_EXITED, type CoreProcess, core } from "../core/process";
 import type { WebhookOutcome } from "../schedules";
 import type { TailnetPeer } from "../tailscale/whois";
 import type { PairingConfirmations } from "./pairing";
+import { loadVapid } from "./vapid-store";
 import type { WsRouter } from "./ws-router";
 
 export const WEB_SERVER_HOST = "127.0.0.1";
@@ -51,6 +53,7 @@ export interface WebServerDeps {
 	router: WsRouter;
 	/** The folder holding the built renderer's `web.html` and assets; null while there is none. */
 	staticRoot: () => string | null;
+	now?: (() => number) | undefined;
 	/** A device authentication failed three times within a minute; told once. */
 	onUnpairedAuth?: (info: { address: string }) => void;
 	/** The schedule service that answers `POST /hooks/<id>`; null or absent while there is none (503). */
@@ -89,12 +92,13 @@ let routed: CoreProcess | null = null;
 function route(process: CoreProcess): void {
 	if (routed === process) return;
 	routed = process;
-	process.on("web.ask", data => {
+	process.on("web.ask", (data, _bin, generation) => {
 		const ask = data as EdgeAsk;
+		// The core numbers its asks from 1 at every start: only the core that asked may hear the answer.
 		const answer = (result: unknown) =>
-			void process.call("web.answer", { call: ask.call, result }).catch(() => undefined);
+			void process.call("web.answer", { call: ask.call, result }, { generation }).catch(() => undefined);
 		const server = servers.get(ask.host);
-		if (!server) return answer(null);
+		if (!server || generation !== process.generation) return answer(null);
 		server.answerAsk(ask).then(answer, error => {
 			console.warn(`[web] ${ask.kind} failed: ${error instanceof Error ? error.message : String(error)}`);
 			answer(null);
@@ -120,6 +124,7 @@ export class WebServer {
 	readonly #deps: WebServerDeps;
 	readonly #id: number;
 	#port: number | null = null;
+	#stopping: Promise<unknown> | null = null;
 	/** The loopback port asked for at `start`, kept to start again on it after a core that ended. */
 	#asked = 0;
 
@@ -140,19 +145,26 @@ export class WebServer {
 
 	/** Listen on the loopback; `port` 0 picks a free one. Rejects (`EADDRINUSE`) when the port is taken. */
 	async start(options: { port?: number } = {}): Promise<{ port: number }> {
-		if (this.#port !== null) return { port: this.#port };
+		if (this.#port !== null) {
+			await loadVapid(this.#deps.userData);
+			if (this.#port !== null) return { port: this.#port };
+		}
+		if (this.#stopping) await this.#stopping;
 		const process = core();
 		route(process);
 		servers.set(this.#id, this);
 		this.#asked = options.port ?? 0;
 		try {
-			const { result } = await process.call<{ port: number }>("web.start", {
+			const { result, generation } = await process.call<{ port: number }>("web.start", {
 				host: this.#id,
 				userData: this.#deps.userData,
 				port: this.#asked,
 				staticRoot: this.#deps.staticRoot(),
+				archiveNow: this.#deps.now?.(),
+				buildMeta: WEB_BUILD_META,
 				router: this.#deps.router.config(),
 			});
+			this.#deps.router.started(generation);
 			this.#port = result.port;
 			return result;
 		} catch (error) {
@@ -163,14 +175,16 @@ export class WebServer {
 
 	/** Pending approvals are declined, sockets close (1001, a second's grace) and the port is let go. */
 	async stop(): Promise<void> {
-		if (this.#port === null) return;
-		this.#port = null;
-		this.#deps.confirmations.declineAll();
-		try {
-			await core().call("web.stop", { host: this.#id });
-		} finally {
-			servers.delete(this.#id);
+		if (this.#port !== null) {
+			this.#port = null;
+			this.#stopping = core()
+				.call("web.stop", { host: this.#id })
+				.finally(() => {
+					servers.delete(this.#id);
+					this.#stopping = null;
+				});
 		}
+		await this.#stopping;
 	}
 
 	/** One question of the edge (`web.ask`). */
@@ -187,8 +201,9 @@ export class WebServer {
 					allowedUsers: [...policy.allowedUsers()],
 				};
 			case "confirmNew":
-				return this.#deps.confirmNewDevices();
+				return this.#stopping ? null : this.#deps.confirmNewDevices();
 			case "confirm":
+				if (this.#stopping) return { approved: false, reason: "declined" };
 				return this.#deps.confirmations.request({
 					name: ask.name ?? "",
 					userAgent: ask.userAgent ?? "",

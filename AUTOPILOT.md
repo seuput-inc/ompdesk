@@ -48,7 +48,7 @@ Project-wide direction for Autopilot runs on this repository, shared across sess
 
 ## Release cadence
 
-- By content, never by the clock: three user-visible changes (`feat`, `fix`, `perf`) make a release; one urgent fix (a defect that breaks the released app, a regression of the last release) ships on its own; a user-visible change never waits more than a day. Docs, tests, refactors and CI alone never make a release. `propose_release` checks this against the commits since the last tag.
+- By content, never by the clock: three user-visible changes (`feat`, `fix`, `perf`) make a release; one urgent fix (a defect that breaks the released app, a regression of the last release) ships on its own. Docs, tests, refactors and CI alone never make a release. `propose_release` checks this against the commits since the last tag.
 
 ## Long-lived ideas
 
@@ -62,4 +62,4 @@ Releases: yes
 
 ### Cadence
 - 8 releases in the last 90 days, about every 1 day; when this guide was written the latest was v0.49.0 on 2026-10-21.
-- Release when three user-visible changes have gathered, at once for an urgent fix, or when one has waited a day; never because of the time since the last release. Docs-only or internal changes wait for the next release.
+- Release when three user-visible changes have gathered or at once for an urgent fix; never because of the time since the last release. Docs-only or internal changes wait for the next release.

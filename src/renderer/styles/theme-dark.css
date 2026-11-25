@@ -1,5 +1,6 @@
-/* ompdesk Dark — default dark palette. Keep in sync with THEMES.dark (lib/themes.ts, label "OMPdesk Dark"):
-   applyThemeByName() writes that map inline when the theme is picked by name.
+/* ompdesk Dark — default dark palette, built from `ompdeskDark` (lib/theme-palettes.ts: Orca's near-monochrome
+   neutrals). applyThemeByName() writes the built map inline when the theme is picked by name; this file paints the
+   same values before any script runs (styles/tokens.test.ts keeps the two equal).
    Only palette primitives live here; scales, derived washes and the --omp-*
    compatibility aliases are theme-independent (tokens.css). */
 
@@ -8,49 +9,55 @@
 	color-scheme: dark;
 
 	/* ── ompdesk palette (--sc-*) ─────────────────────────────────────── */
-	/* Surfaces */
-	--sc-bg: #19191c;
-	--sc-surface-1: #141416;
-	--sc-surface-2: #1f1f23;
-	--sc-surface-3: #28282d;
-	--sc-elevated: #232327;
-	--sc-field: #1f1f23;
+	/* Surfaces: the sidebar and panels sit a step above the page, as Orca's do */
+	--sc-bg: #0a0a0a;
+	--sc-surface-1: #171717;
+	--sc-surface-2: #171717;
+	--sc-surface-3: #262626;
+	--sc-elevated: #1a1a1a;
+	--sc-field: #171717;
 	--sc-overlay: rgba(0, 0, 0, 0.6);
 	/* Text */
-	--sc-text: #ededf0;
-	--sc-text-secondary: #c4c4cb;
-	--sc-text-muted: #a1a1aa;
-	--sc-text-subtle: #8f8f99;
+	--sc-text: #f0f0f0;
+	--sc-text-secondary: #d4d4d4;
+	--sc-text-muted: #acacac;
+	--sc-text-subtle: #999999;
 	/* Lines */
-	--sc-divider: #2a2a30;
-	--sc-border-subtle: #3a3a41;
-	--sc-border: #6c6c76;
-	/* Accent */
-	--sc-accent: #8b8df8;
-	--sc-accent-hover: #a1a3fa;
-	--sc-accent-fg: #0b0b1a;
+	--sc-divider: #1f1f1f;
+	--sc-border-subtle: #2e2e2e;
+	--sc-border: #737373;
+	/* Accent: near the text color, so a primary button, a switch and a selection read white on black */
+	--sc-accent: #e5e5e5;
+	--sc-accent-hover: #fafafa;
+	--sc-accent-fg: #171717;
 	/* Status */
-	--sc-success: #5bc98c;
-	--sc-warning: #e2b552;
-	--sc-danger: #f27a7d;
-	--sc-danger-fg: #1c0a0b;
-	--sc-info: #79a6f6;
-	/* Elevation */
+	--sc-success: #86efac;
+	--sc-warning: #eab308;
+	--sc-danger: #ff6568;
+	--sc-danger-fg: #450a0a;
+	--sc-info: #4493f8;
+	/* A session waiting on the person, and an unseen finish: hues of their own, never the accent */
+	--sc-attention: #fb923c;
+	--sc-unread: #60a5fa;
+	/* Elevation: Orca's three levels (a hairline lift, a floating menu, a dialog with a top highlight) */
 	--sc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-	--sc-shadow-md: 0 6px 20px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.3);
-	--sc-shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+	--sc-shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
+	--sc-shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 
 	/* ── Domain tokens with a dark-specific value; the rest live in tokens.css ── */
-	--omp-user-msg-bg: #222226;
-	--omp-tool-error-bg: rgba(242, 122, 125, 0.07);
-	--omp-md-code: #f0a1bd;
-	--omp-md-quote-border: #4a4a53;
-	--omp-diff-added-bg: rgba(91, 201, 140, 0.12);
-	--omp-diff-removed-bg: rgba(242, 122, 125, 0.12);
+	--sc-selection: rgba(240, 240, 240, 0.2);
+	--omp-user-msg-bg: #171717;
+	--omp-tool-error-bg: rgba(255, 101, 104, 0.07);
+	--omp-md-code: #f0f0f0;
+	--omp-md-quote-border: #4a4a4a;
+	--omp-md-link: #78b0f9;
+	--omp-link: #78b0f9;
+	--omp-diff-added-bg: rgba(134, 239, 172, 0.12);
+	--omp-diff-removed-bg: rgba(255, 101, 104, 0.12);
 	--omp-syntax-keyword: #a5a7fa;
 	--omp-syntax-function: #6cc7c0;
 	--omp-syntax-string: #e3b77a;
 	--omp-syntax-number: #f0a1bd;
 	--omp-syntax-type: #9fd39a;
-	--omp-scrollbar-thumb: #45454e;
+	--omp-scrollbar-thumb: #494949;
 }

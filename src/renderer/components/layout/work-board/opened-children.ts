@@ -24,6 +24,8 @@ export interface OpenedChildRow {
 	status: ChildStatus | null;
 	/** What a running one is doing now (its open tool call). */
 	step?: string;
+	/** A stop, close or delete of it is in flight (main's review item): its row reads Stopping in place of its step. */
+	stopping?: true;
 	/** When its turn started (epoch ms), for the clock. */
 	since?: number;
 	branch?: string;
@@ -124,6 +126,7 @@ export function openedChildRows(input: {
 			title: tab.title || tab.task || "",
 			status,
 			...(item?.step ? { step: item.step } : {}),
+			...(item?.stopping ? { stopping: true as const } : {}),
 			// The tab list carries the turn's start with its running status; the review item only after its push.
 			...((tab.runningSince ?? item?.runningSince) ? { since: tab.runningSince ?? item?.runningSince } : {}),
 			...((item?.branch ?? tab.worktree?.branch) ? { branch: item?.branch ?? tab.worktree?.branch } : {}),
@@ -158,6 +161,7 @@ export function openedChildRows(input: {
 				unmerged,
 			}),
 			...(item.step ? { step: item.step } : {}),
+			...(item.stopping ? { stopping: true as const } : {}),
 			...(item.runningSince ? { since: item.runningSince } : {}),
 			...(item.branch ? { branch: item.branch } : {}),
 			...(item.baseBranch !== undefined ? { base: item.baseBranch } : {}),

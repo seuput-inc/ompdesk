@@ -3,18 +3,18 @@
  * serves two versions of `@oh-my-pi/pi-coding-agent` (a stand-in CLI with the
  * stock layout: `bin: dist/cli.js`, `src/`, a hashed lazy asset), the real
  * `bun install -g` puts the old one in a throwaway BUN_INSTALL, one `omp hold`
- * process keeps its files open, and the app's own update path
- * (`SetupService.updateOmp`, the code behind omp-updater.ts) runs the stand-in's
- * `omp update`, which is `bun install -g` like stock's. Windows locks files a
- * running process holds (the launcher image, the package tree), so this is the
- * check that the update there ends in a defined state:
+ * process keeps its files open, and the app's own update path (the core's
+ * `tools` instance: a person's Update now, `omp.now`) installs the new release
+ * with `bun install -g`, as stock's update does. Windows locks files a running
+ * process holds (the launcher image, the package tree), so this is the check
+ * that the update there ends in a defined state:
  *
  *   - the running omp keeps answering and keeps the code it loaded;
  *   - the launcher is never left broken: `omp --version` still runs;
- *   - the outcome is `updated` or a `failed` with a reason (`not-updated` is
- *     Bun tolerating EBUSY on the launcher, stock's known Windows case), never
- *     a hang or `unusable`;
- *   - once the running omp exits, the next update succeeds and the new omp runs.
+ *   - the pass ends with the new omp installed or failed with a reason
+ *     (`not-updated` is Bun tolerating EBUSY on the launcher, stock's known
+ *     Windows case), never a hang, a skip or `unusable`;
+ *   - once the running omp exits, the next pass leaves the new omp installed and it runs.
  *
  *   bun scripts/omp-update-lock-check.ts
  *
@@ -30,9 +30,11 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MIN_OMP_VERSION, resolveOmp } from "../src/main/omp-runtime";
+import { stopCore } from "../src/main/core/process";
+import { MIN_OMP_VERSION, resolveOmp, TESTED_OMP_VERSION } from "../src/main/omp-runtime";
 import { bunInstallDir, managedToolsDir, setupPlatform } from "../src/main/setup/paths";
-import type { OmpUpdateOutcome } from "../src/main/setup/service";
+import type { OmpUpdateState } from "../src/shared/omp-update";
+import type { SetupState } from "../src/shared/setup";
 import { isNewer } from "../src/shared/version";
 import { electronOutside } from "./electron-outside";
 
@@ -92,7 +94,7 @@ function tarEntry(name: string, data: Buffer, mode: number): Buffer[] {
 	return [header, data, Buffer.alloc((512 - (data.length % 512)) % 512)];
 }
 
-/** The stand-in CLI: stock's file layout and the four commands the check needs. */
+/** The stand-in CLI: stock's file layout and the commands the check needs (the update itself is OMPdesk's `bun install -g`). */
 const CLI = `#!/usr/bin/env bun
 import { closeSync, openSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -103,16 +105,6 @@ const [command] = process.argv.slice(2);
 if (command === "--version") {
 	console.log("omp/" + pkg.version);
 	process.exit(0);
-}
-if (command === "update") {
-	// Stock's \`omp update\` on a Bun install: \`bun install -g\` of the package's latest release (no cache: Bun
-	// keeps a manifest fresh for minutes, and \`latest\` moves within seconds here).
-	const child = Bun.spawn([process.execPath, "install", "-g", "--no-cache", pkg.name + "@latest"], {
-		stdout: "inherit",
-		stderr: "inherit",
-		env: process.env,
-	});
-	process.exit(await child.exited);
 }
 if (command === "hold") {
 	// A running omp: every file of the package open, its code loaded, a lazy asset not yet loaded.
@@ -154,6 +146,12 @@ if (command === "hold") {
 		for (const handle of handles) closeSync(handle);
 		process.exit(0);
 	});
+} else if (command === "update" && process.argv.includes("--check")) {
+	// Stock's check, reduced to what it answers: the registry's \`latest\`.
+	console.log("Current version: " + pkg.version);
+	const registry = (process.env.BUN_CONFIG_REGISTRY ?? "").replace(/\\/+$/, "");
+	const latest = (await (await fetch(registry + "/" + pkg.name)).json())["dist-tags"].latest;
+	console.log(latest === pkg.version ? "Already up to date" : "New version available: " + latest);
 } else {
 	console.error("unknown command " + command);
 	process.exit(2);
@@ -295,10 +293,10 @@ async function launcherVersion(bin: string): Promise<string> {
 	return out.trim();
 }
 
-const describe = (outcome: OmpUpdateOutcome) =>
-	outcome.kind === "failed"
-		? `failed (${outcome.failure.reason}${outcome.failure.detail ? `: ${outcome.failure.detail}` : ""})`
-		: outcome.kind;
+const outcomeLabel = (state: OmpUpdateState) =>
+	state.failure
+		? `failed (${state.failure.reason}${state.failure.detail ? `: ${state.failure.detail}` : ""})`
+		: `installed ${state.installed}`;
 
 /** Child: HOME, USERPROFILE, BUN_INSTALL and the cache are already the isolated ones. */
 async function check(root: string): Promise<void> {
@@ -330,28 +328,55 @@ async function check(root: string): Promise<void> {
 
 		let printed = 0;
 		electronOutside(join(root, "userData"), "0.0.0-lock-check");
-		// Dynamic: service.ts links runtime-log's `electron` import, which only resolves once electronOutside ran.
-		const { SetupService } = await import("../src/main/setup/service");
-		const service = new SetupService({
-			platform,
-			arch: process.arch,
-			systemRoot: process.env.SystemRoot || "C:\\Windows",
-			toolsDir: managedToolsDir(platform, process.env, home, join(root, "userData")),
-			bunInstall,
-			statePath: join(root, "setup-state.json"),
-			automatic: false,
-			testInstaller: null,
-			spawnEnv: async () => ({ ...process.env }),
-			// The registry's PATH has no throwaway Bun in it.
-			refreshPath: async () => undefined,
-			onState: state => {
-				const output = state.items.find(entry => entry.id === "omp")?.output ?? "";
+		// Dynamic: the client links runtime-log's `electron` import, which only resolves once electronOutside ran.
+		const { ToolsClient } = await import("../src/main/tools/client");
+		const client = new ToolsClient({
+			opts: {
+				platform,
+				arch: process.arch,
+				toolsDir: managedToolsDir(platform, process.env, home, join(root, "userData")),
+				userData: join(root, "userData"),
+				appVersion: "0.0.0-lock-check",
+				testedOmp: TESTED_OMP_VERSION,
+				automatic: false,
+				scheduled: { omp: false, cli: false, ext: false },
+				systemRoot: process.env.SystemRoot || "C:\\Windows",
+				bunInstall,
+				cwd: process.cwd(),
+			},
+			asks: {
+				env: () => ({ ...process.env }),
+				// The registry's PATH has no throwaway Bun in it.
+				refreshPath: async () => {},
+				ompResolution: () => resolveOmp(),
+				ompReady: () => {},
+				firstTab: async () => {},
+				releaseHelpers: async () => {},
+				resume: async () => {},
+				applyExtensionUpdate: () => {},
+				notify: () => {},
+				stock: async () => null,
+				workspaceDirs: () => [],
+			},
+			onState: (part, state) => {
+				if (part !== "setup") return;
+				const output = (state as SetupState).items.find(entry => entry.id === "omp")?.output ?? "";
 				if (output.length < printed) printed = 0;
 				process.stdout.write(output.slice(printed));
 				printed = output.length;
 			},
-			onOmpReady: () => undefined,
 		});
+		// Setup's first pass detects the omp the passes update.
+		client.start();
+		const deadline = Date.now() + 120_000;
+		while (client.state().omp.installed !== older.version) {
+			if (Date.now() > deadline) fail(`setup never detected omp ${older.version}`);
+			await Bun.sleep(100);
+		}
+		const pass = async () => {
+			await client.ompNow();
+			return client.state().omp;
+		};
 
 		// A running omp: its files open, its code loaded.
 		const running = lineProcess([launcher, "hold"]);
@@ -359,11 +384,11 @@ async function check(root: string): Promise<void> {
 		if (ready !== `ready ${older.version} features-${older.version}`) fail(`omp hold said ${ready}`);
 		console.log(`✓ a running omp holds ${PACKAGE}@${older.version}`);
 
-		const first = await service.updateOmp(newer.version);
-		console.log(`→ update while omp runs: ${describe(first)}`);
-		if (first.kind === "skipped") fail("the update was skipped while omp ran");
-		if (first.kind === "failed" && first.failure.reason !== "not-updated" && first.failure.reason !== "install") {
-			fail(`the update ended as ${describe(first)}, not updated, not-updated or install`);
+		const first = await pass();
+		console.log(`→ update while omp runs: ${outcomeLabel(first)}`);
+		if (!first.failure && first.installed !== newer.version) fail("the update was skipped while omp ran");
+		if (first.failure && first.failure.reason !== "not-updated" && first.failure.reason !== "install") {
+			fail(`the update ended as ${outcomeLabel(first)}, not updated, not-updated or install`);
 		}
 		const afterFirst = await launcherVersion(launcher);
 		console.log(`  launcher afterwards: ${afterFirst}`);
@@ -372,7 +397,7 @@ async function check(root: string): Promise<void> {
 			readFileSync(join(bunInstall, "install", "global", "node_modules", PACKAGE, "package.json"), "utf8"),
 		) as { version: string };
 		console.log(`  package on disk afterwards: ${onDisk.version}`);
-		if (first.kind === "updated" && onDisk.version !== newer.version)
+		if (!first.failure && onDisk.version !== newer.version)
 			fail("updated, but the package on disk is not the new one");
 
 		// The running omp is untouched: same code, still answering.
@@ -386,10 +411,12 @@ async function check(root: string): Promise<void> {
 		// It exits; the next check's update must go through.
 		const exit = await running.stop();
 		if (exit !== 0) fail(`omp hold exited ${exit}`);
-		const second = await service.updateOmp(newer.version);
-		console.log(`→ update after omp exited: ${describe(second)}`);
-		if (second.kind !== "updated" || isNewer(newer.version, second.version)) {
-			fail(`the update after omp exited ended as ${describe(second)}`);
+		const second = await pass();
+		client.close();
+		await stopCore();
+		console.log(`→ update after omp exited: ${outcomeLabel(second)}`);
+		if (second.failure || second.installed === null || isNewer(newer.version, second.installed)) {
+			fail(`the update after omp exited ended as ${outcomeLabel(second)}`);
 		}
 		const resolved = await resolveOmp();
 		if (!resolved.ok || isNewer(newer.version, resolved.runtime.version)) {

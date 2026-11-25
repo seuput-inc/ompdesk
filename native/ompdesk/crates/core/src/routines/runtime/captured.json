@@ -1,0 +1,9 @@
+{
+  "initial": {"r0":{"key":"[{\"source\":\"github\",\"repo\":\"o/r\",\"events\":[\"pull_request\"]},null]","mark":{"seen":{"pull_request":[1]}}},"r1":{"key":"[{\"source\":\"git\",\"repo\":\"/fixture\",\"branch\":\"main\"},null]","mark":{"head":"aaa"}},"r2":{"key":"[{\"source\":\"files\",\"path\":\"/fixture\"},null]","mark":{"listing":{"entries":{"file.txt":"10:2"},"complete":true}}},"r3":{"key":"[{\"source\":\"email\",\"account\":\"Work\"},null]","mark":{"accountId":"acc","validity":7,"uid":1}}},
+  "baselineFires": [],
+  "fires": [["r0","Opened PR #2"],["r3","New mail in Work from Ann to Owner: \"Hi there\". It begins: One line"],["r1","1 new commit on main: bbb after aaa"],["r4","Session \"Title\" in /fixture finished its turn"],["r4","Session \"Title\" in /fixture is waiting for an answer: Question?"],["r4","Session \"Title\" in /fixture failed its turn: Nope"],["r2","one.txt, two.txt changed"]],
+  "failures": [],
+  "changed": {"r0":{"key":"[{\"source\":\"github\",\"repo\":\"o/r\",\"events\":[\"pull_request\"]},null]","mark":{"seen":{"pull_request":[2]}}},"r1":{"key":"[{\"source\":\"git\",\"repo\":\"/fixture\",\"branch\":\"main\"},null]","mark":{"head":"bbb"}},"r2":{"key":"[{\"source\":\"files\",\"path\":\"/fixture\"},null]","mark":{"listing":{"entries":{"file.txt":"10:2"},"complete":true}}},"r3":{"key":"[{\"source\":\"email\",\"account\":\"Work\"},null]","mark":{"accountId":"acc","validity":7,"uid":2}}},
+  "afterClose": {"r0":{"key":"[{\"source\":\"github\",\"repo\":\"o/r\",\"events\":[\"pull_request\"]},null]","mark":{"seen":{"pull_request":[2]}}},"r1":{"key":"[{\"source\":\"git\",\"repo\":\"/fixture\",\"branch\":\"main\"},null]","mark":{"head":"bbb"}},"r2":{"key":"[{\"source\":\"files\",\"path\":\"/fixture\"},null]","mark":{"listing":{"entries":{"file.txt":"10:2"},"complete":true}}},"r3":{"key":"[{\"source\":\"email\",\"account\":\"Work\"},null]","mark":{"accountId":"acc","validity":7,"uid":2}}},
+  "afterPause": {}
+}

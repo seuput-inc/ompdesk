@@ -1,6 +1,7 @@
 /**
  * ComposerRestoredQueue: what a Stop withdrew from the queue, held apart from the draft. Mounting it is what makes
  * Stop keep the messages here; Resume sends them in order, a chip's text puts one in the field, and nothing runs by itself.
+ * It also takes the queue the core kept from an omp that went (`queue_take_held`), again one edit lease after mounting.
  */
 import { parseHTML } from "linkedom";
 import { act } from "react";
@@ -9,6 +10,7 @@ import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { I18nProvider } from "../../../lib/i18n";
 import { useComposerStore } from "../../../stores/composer";
 import { useSessionStore } from "../../../stores/session";
+import { HOLD_LEASE_MS } from "./ComposerQueueEdit";
 import { ComposerRestoredQueue } from "./ComposerRestoredQueue";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -59,11 +61,11 @@ function button(label: string, within: ParentNode = document): TestElement {
 	return found as unknown as TestElement;
 }
 
-async function mount(): Promise<void> {
+async function mount(command?: Mock): Promise<void> {
 	settled = vi.fn();
 	prompt = vi.fn(async () => ok());
 	followUp = vi.fn(async () => ok());
-	(window as unknown as Record<string, unknown>).omp = { rpc: { prompt, followUp } };
+	(window as unknown as Record<string, unknown>).omp = { rpc: { prompt, followUp, ...(command ? { command } : {}) } };
 	useSessionStore.setState({ status: "ready" });
 	container = document.createElement("div") as unknown as TestElement;
 	document.body.appendChild(container as never);
@@ -84,6 +86,7 @@ afterEach(async () => {
 	useComposerStore.getState().reset();
 	useSessionStore.getState().reset();
 	vi.restoreAllMocks();
+	vi.useRealTimers();
 });
 
 describe("ComposerRestoredQueue", () => {
@@ -159,6 +162,31 @@ describe("ComposerRestoredQueue", () => {
 		await click(button("Discard all restored messages"));
 		expect(useComposerStore.getState().restoredQueue).toEqual([]);
 		expect(container.textContent).toBe("");
+		expect(prompt).not.toHaveBeenCalled();
+		expect(followUp).not.toHaveBeenCalled();
+	});
+
+	it("takes again one edit lease after mounting: an edit whose window went mid-edit comes back once, not sent", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const none = { steering: [], followUp: [] };
+		// At mount the edit's hold is still leased; one lease later the core offers its original.
+		const answers = [none, { steering: [{ text: "edited away" }], followUp: [] }];
+		const command = vi.fn(async () => ({ ...ok(), data: answers.shift() ?? none }));
+		await mount(command);
+		expect(command).toHaveBeenCalledTimes(1);
+		expect(command).toHaveBeenCalledWith({ type: "queue_take_held" });
+		expect(useComposerStore.getState().restoredQueue).toEqual([]);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(HOLD_LEASE_MS + 5_000);
+		});
+		expect(command).toHaveBeenCalledTimes(2);
+		expect(useComposerStore.getState().restoredQueue.map(({ lane, text, kept }) => ({ lane, text, kept }))).toEqual([
+			{ lane: "steering", text: "edited away", kept: true },
+		]);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(HOLD_LEASE_MS * 3);
+		});
+		expect(command).toHaveBeenCalledTimes(2);
 		expect(prompt).not.toHaveBeenCalled();
 		expect(followUp).not.toHaveBeenCalled();
 	});

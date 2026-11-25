@@ -128,7 +128,6 @@ describe("skills", () => {
 describe("names", () => {
 	const otherSkills = [
 		...readdirSync(path.join(BUILTIN, "pstack/skills")),
-		...readdirSync(path.join(BUILTIN, "rea/skills")),
 		...readdirSync(path.join(BUILTIN, "skills")),
 		// Names users commonly install (the pstack pack keeps the same list).
 		"tdd",

@@ -428,15 +428,17 @@ function fromJournal(session: NextPromptSession): Kept | null {
 }
 
 /** The session's last suggestion, read from the journal the first time this omp is asked about the session. */
-function lastFor(session: NextPromptSession): NextPromptLast | undefined {
-	const key = sessionKey(session);
+function keptFor(session: NextPromptSession, key: string): Kept | null {
 	let entry = kept.get(key);
 	if (entry === undefined) {
 		entry = fromJournal(session);
 		keep(key, entry);
-		// Made for the moment this omp sees too: a trigger that finds the moment unchanged asks the model nothing.
-		if (entry?.key && !lastKeys.has(key) && moment(session).key === entry.key) remember(key, entry.key);
 	}
+	return entry;
+}
+
+function lastFor(session: NextPromptSession): NextPromptLast | undefined {
+	const entry = keptFor(session, sessionKey(session));
 	if (!entry) return undefined;
 	return {
 		...(entry.id ? { id: entry.id } : {}),
@@ -624,7 +626,7 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 		draftEmpty,
 		main: true,
 		hasReply: messages.some(message => message.role === "assistant"),
-		lastKey: lastKeys.get(key),
+		lastKey: lastKeys.get(key) ?? (trigger === "refresh" ? undefined : keptFor(session, key)?.key),
 		key: stateKey,
 		force: trigger === "refresh",
 	});
@@ -634,8 +636,8 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 	}
 	const started = performance.now();
 	try {
-		// Asked early so it runs beside the model lookup; never blocks the gate, never throws.
-		const judging = replyNeedsUser(session, lastReplyText(messages));
+		// An unanswered ask counts even if the text judge would say no.
+		const judging = awaitsDecision(messages, false) ? undefined : replyNeedsUser(session, lastReplyText(messages));
 		const stock = await loadStock();
 		const resolved = await resolveModel(session, stock);
 		const judged = await judging;
@@ -658,8 +660,12 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 			request(trigger);
 			return;
 		}
-		compactedSinceSuggestion = false;
-		remember(key, stateKey);
+		let keptKey = stateKey;
+		if (compactedSinceSuggestion) {
+			compactedSinceSuggestion = false;
+			keptKey = moment(session).key;
+		}
+		remember(key, keptKey);
 		lastModel = resolved.used;
 		const candidates = cleanCandidates(text, {
 			register,
@@ -678,7 +684,7 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 		const wasUnavailable = unavailable !== undefined;
 		unavailable = undefined;
 		const id = crypto.randomUUID();
-		keepSuggestion(session, { id, candidates, used: resolved.used, at: Date.now(), key: stateKey });
+		keepSuggestion(session, { id, candidates, used: resolved.used, at: Date.now(), key: keptKey });
 		const update: NextPromptUpdate = {
 			type: "next_prompt_update",
 			status: "ready",

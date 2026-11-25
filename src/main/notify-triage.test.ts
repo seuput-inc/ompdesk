@@ -1,13 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { JUDGE_ASSIST_NEEDS_USER } from "../../resources/gui-bridge/modes/judge-assist-contracts";
 import type { IpcNotifyPayload } from "../shared/ipc-types";
-import {
-	type BridgeAsk,
-	createNotifyHandler,
-	NEEDS_USER_WAIT_MS,
-	NOTIFY_DEDUPE_MS,
-	type NotifyCaller,
-} from "./notify-triage";
+import { type AdmitNotification, type BridgeAsk, createNotifyHandler, type NotifyCaller } from "./notify-triage";
+import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 import type { ClientWindow } from "./web/client-window";
 
 function windowWithId(id: number): ClientWindow {
@@ -31,6 +26,7 @@ const completion = (tabId = "t1"): IpcNotifyPayload => ({
 
 interface World {
 	delivered: Array<{ winId: number; notice: IpcNotifyPayload }>;
+	admit: Mock<AdmitNotification>;
 	ask: ReturnType<typeof vi.fn<BridgeAsk>>;
 	bridgeFor: ReturnType<typeof vi.fn<(win: ClientWindow, tabId: string) => BridgeAsk | undefined>>;
 	enabled: { current: boolean };
@@ -41,12 +37,14 @@ interface World {
 
 function build(answer: BridgeAsk = async () => ({ needsUser: true })): World {
 	const delivered: World["delivered"] = [];
+	const admit = vi.fn<AdmitNotification>(report => fixture.call("app.admitNotification", report));
 	const ask = vi.fn<BridgeAsk>(answer);
 	const bridgeFor = vi.fn((_win: ClientWindow, _tabId: string): BridgeAsk | undefined => ask);
 	const enabled = { current: true };
 	const shared = new Set<string>();
 	const clock = { now: 1_000 };
 	const notify = createNotifyHandler({
+		admit,
 		now: () => clock.now,
 		isShared: tabId => shared.has(tabId),
 		judgeEnabled: () => enabled.current,
@@ -54,22 +52,26 @@ function build(answer: BridgeAsk = async () => ({ needsUser: true })): World {
 		needsYouTitle: title => `Needs input · ${title}`,
 		deliver: (_win, winId, notice) => void delivered.push({ winId, notice }),
 	});
-	return { delivered, ask, bridgeFor, enabled, shared, clock, notify };
+	return { delivered, admit, ask, bridgeFor, enabled, shared, clock, notify };
 }
 
-beforeEach(() => {
+let fixture: ShellPolicyFixture;
+beforeAll(prepareShellPolicyFixture, 180_000);
+beforeEach(async () => {
+	fixture = await shellPolicyFixture();
 	vi.useFakeTimers();
 });
 
-afterEach(() => {
+afterEach(async () => {
 	vi.useRealTimers();
+	await fixture.close();
 });
 
 describe("a completion the judge says waits for the person", () => {
 	it("is handed on as an ask titled with the tab, with the same body and tab", async () => {
 		const world = build();
 		await world.notify(caller(WIN_1), completion());
-		expect(world.ask).toHaveBeenCalledExactlyOnceWith(JUDGE_ASSIST_NEEDS_USER, {});
+		expect(world.ask).toHaveBeenCalledExactlyOnceWith(JUDGE_ASSIST_NEEDS_USER, {}, 2500);
 		expect(world.delivered).toEqual([
 			{
 				winId: 1,
@@ -98,15 +100,23 @@ describe("anything else is today's notification, untouched", () => {
 	});
 
 	it("a bridge that never answers costs one limit, then the completion shows", async () => {
-		const world = build(() => Promise.withResolvers<never>().promise);
+		const started = Promise.withResolvers<void>();
+		const answer = Promise.withResolvers<{ needsUser: true }>();
+		const world = build(() => {
+			started.resolve();
+			return answer.promise;
+		});
 		let settled = false;
 		const pending = world.notify(caller(WIN_1), completion()).then(() => {
 			settled = true;
 		});
-		await vi.advanceTimersByTimeAsync(NEEDS_USER_WAIT_MS - 1);
+		await started.promise;
+		await vi.advanceTimersByTimeAsync(2499);
 		expect(settled).toBe(false);
 		await vi.advanceTimersByTimeAsync(1);
 		await pending;
+		answer.resolve({ needsUser: true });
+		await Promise.resolve();
 		expect(world.delivered).toEqual([{ winId: 1, notice: completion() }]);
 	});
 
@@ -172,12 +182,34 @@ describe("one classification per tab end", () => {
 		expect(world.delivered[0]?.notice.kind).toBe("ask");
 	});
 
+	it("drops a second reporter while the first judge is held, then checks the first window's current focus", async () => {
+		const started = Promise.withResolvers<void>();
+		const answer = Promise.withResolvers<{ needsUser: true }>();
+		const world = build();
+		world.ask.mockImplementationOnce(() => {
+			started.resolve();
+			return answer.promise;
+		});
+		world.shared.add("t1");
+		let focused = false;
+		const first = world.notify({ win: WIN_1, browserWindow: { isFocused: () => focused } }, completion());
+		await started.promise;
+		await world.notify(caller(WIN_2), completion());
+		expect(world.ask).toHaveBeenCalledTimes(1);
+		expect(world.delivered).toEqual([]);
+		focused = true;
+		answer.resolve({ needsUser: true });
+		await first;
+		expect(world.delivered).toEqual([{ winId: 1, notice: completion() }]);
+	});
+
 	it("the same window repeating a notice within the window is dropped, and shows again after it", async () => {
 		const world = build();
 		await world.notify(caller(WIN_1), completion());
+		world.clock.now += 1499;
 		await world.notify(caller(WIN_1), completion());
 		expect(world.delivered).toHaveLength(1);
-		world.clock.now += NOTIFY_DEDUPE_MS;
+		world.clock.now += 1;
 		await world.notify(caller(WIN_1), completion());
 		expect(world.delivered).toHaveLength(2);
 		expect(world.ask).toHaveBeenCalledTimes(2);
@@ -189,6 +221,27 @@ describe("one classification per tab end", () => {
 		await world.notify(caller(WIN_2), completion("t2"));
 		expect(world.ask).toHaveBeenCalledTimes(2);
 		expect(world.delivered.map(entry => entry.winId)).toEqual([1, 2]);
+	});
+
+	it("compares only the last accepted key, not every key seen in the repeat window", async () => {
+		const world = build();
+		await world.notify(caller(WIN_1), { title: "first" });
+		await world.notify(caller(WIN_1), { title: "second" });
+		await world.notify(caller(WIN_1), { title: "first" });
+		expect(world.delivered.map(entry => entry.notice.title)).toEqual(["first", "second", "first"]);
+	});
+
+	it("preserves the JS concatenated key including lone UTF-16 halves, without sending notice text", async () => {
+		const world = build();
+		const notice = { title: "private\ud800", body: "ab", tabId: "private tab", extra: 1n };
+		await world.notify(caller(WIN_1), notice);
+		await world.notify(caller(WIN_1), { title: "private\ud800a", body: "b" });
+		await world.notify(caller(WIN_1), { title: "private\ud801a", body: "b" });
+		expect(world.delivered.map(entry => entry.notice.title)).toEqual(["private\ud800", "private\ud801a"]);
+		expect(world.admit.mock.calls[0]).toEqual([
+			{ digest: expect.stringMatching(/^[a-f0-9]{64}$/), now: 1000, completion: false, hasTabWindow: true },
+		]);
+		expect(world.delivered[0]?.notice).not.toHaveProperty("extra");
 	});
 });
 

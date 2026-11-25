@@ -226,6 +226,7 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			"        reasoning: false",
 			"        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }",
 			"",
 		].join("\n"),
@@ -547,8 +548,10 @@ describe.skipIf(!existsSync(omp))("revived subagents on stock omp", () => {
 	// call pending, and the process was gone before anything else: the transcript ends on that exit. The relaunch's
 	// prepare step closed the turn with an empty aborted reply but no result for the cut call, stock's retry had no batch
 	// to replay, and each revived subagent ended at once, "failed in 353ms", "Subagent ended without a final message":
-	// the parent redid all their work. Closed the way stock's exit recovery closes it, the cut call runs again.
-	it("runs again the call a stop cut a subagent off in, and names it in the parent's note", async () => {
+	// the parent redid all their work. Closed the way stock's exit recovery closes it, stock replays the cut call; from
+	// 20 Nov 2026 (the owner's B2: a relaunch never runs a command twice) quit-journal.ts answers that replay with what
+	// the earlier process recorded instead of running it, and the revived subagent's model goes on from there.
+	it("goes on with a subagent a stop cut off in a call, without running the call again, and names it in the parent's note", async () => {
 		const BASH: Step = {
 			tool: "bash",
 			args: { command: "echo run >> runs.txt; sleep 300", i: "probing the stream" },
@@ -576,18 +579,16 @@ describe.skipIf(!existsSync(omp))("revived subagents on stock omp", () => {
 			"runs.txt",
 		);
 		expect(outcome).toMatchObject({ subagents: [id] });
-		await expect
-			.poll(() => readFileSync(join(root, "runs.txt"), "utf8").trim().split("\n").length, { timeout: 90_000 })
-			.toBe(2);
-		// Replayed from the transcript as stock replays a fully cut batch: no new model call decided it.
-		expect(provider.subagentRequests).toBe(requestsAtCut);
+		// The cut call is answered, not run again: the subagent's model is asked what to do next, and nothing ran twice.
+		await expect.poll(() => provider.subagentRequests, { timeout: 90_000 }).toBeGreaterThan(requestsAtCut);
+		expect(readFileSync(join(root, "runs.txt"), "utf8").trim().split("\n")).toHaveLength(1);
 		// The parent's note says what the stop cut the subagent in, for the transcript's label: the call stock's
 		// stdout-disconnect exit journals as pending. On Windows a broken stdout makes stock dispose instead (exit reason
 		// `dispose`, the call answered "Command aborted" before it), so no exit names a cut call and the note has no label.
 		if (process.platform !== "win32") {
-			expect(
-				mainJournal(isolated).find(entry => entry.customType === "ompdesk-restart-subagents")?.details,
-			).toMatchObject({ subagents: [{ id, doing: "bash: probing the stream" }] });
+			await expect
+				.poll(() => restartNotes(isolated)[0]?.details, { timeout: 30_000 })
+				.toMatchObject({ subagents: [{ id, doing: "bash: probing the stream" }] });
 		}
 	}, 240_000);
 });

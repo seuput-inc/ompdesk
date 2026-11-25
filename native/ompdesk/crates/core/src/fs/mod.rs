@@ -5,19 +5,39 @@
 //! Files panel's validation and writes. A failure is a fault whose code is the app's `IpcErrorCode` (`io` when the
 //! TypeScript set none) and whose message is node's text.
 
+mod agent_files;
 pub(crate) mod disk;
+mod editor;
 pub(crate) mod error;
 mod ignore;
+mod launch;
+mod launcher_path;
 mod list;
+mod mime;
 mod mutate;
 pub(crate) mod order;
+pub(crate) mod path;
 mod read;
+pub(crate) mod save_copy;
+mod sidebar;
 
 use serde_json::Value;
 
 use crate::server::{Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
+    registry.add("fs.agentFile", |call| {
+        Box::pin(blocking(move || agent_files::run(call)))
+    });
+    registry.add("fs.initialCwd", |call| {
+        Box::pin(blocking(move || launch::initial_cwd(call.params()?)))
+    });
+    registry.add("fs.defaultWorkspace", |call| {
+        Box::pin(blocking(move || launch::workspace(call.params()?)))
+    });
+    registry.add("fs.isLauncherPath", |call| {
+        Box::pin(blocking(move || launcher_path::classify(call.params()?)))
+    });
     registry.add("fs.list", |call| {
         Box::pin(blocking(move || list::list(&call.params()?)))
     });
@@ -45,8 +65,23 @@ pub fn register(registry: &mut Registry) {
     registry.add("fs.stat", |call| {
         Box::pin(blocking(move || read::stat(&call.params()?)))
     });
+    registry.add("fs.directory", |call| {
+        Box::pin(blocking(move || read::directory(&call.params()?)))
+    });
     registry.add("fs.mutate", |call| {
         Box::pin(blocking(move || mutate::mutate(call)))
+    });
+    registry.add("editor.prepare", |call| {
+        Box::pin(blocking(move || editor::prepare(call)))
+    });
+    registry.add("editor.finish", |call| {
+        Box::pin(blocking(move || editor::finish(call)))
+    });
+    registry.add("fs.saveCopy", |call| {
+        Box::pin(blocking(move || save_copy::save(call.params()?)))
+    });
+    registry.add("fs.sidebarFolder", |call| {
+        Box::pin(blocking(move || sidebar::folder(call.params()?)))
     });
 }
 

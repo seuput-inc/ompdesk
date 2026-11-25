@@ -86,10 +86,11 @@ function route(): void {
 	if (routed) return;
 	routed = true;
 	const process = core();
-	process.on("memsync.ask", data => {
+	process.on("memsync.ask", (data, _bin, generation) => {
 		const ask = data as Ask;
+		// The core numbers its asks from 1 at every start: only the core that asked may hear the answer.
 		const answer = (result: unknown) =>
-			void process.call("memsync.answer", { call: ask.call, result }).catch(() => undefined);
+			void process.call("memsync.answer", { call: ask.call, result }, { generation }).catch(() => undefined);
 		if (ask.kind === "redact") answer(ask.texts.map(redactDiagnosticsText));
 		else {
 			const sync = syncs.get(ask.sync);
@@ -145,21 +146,6 @@ export function serveConclusionPush(
 	params: MemoryConclusionPushParams,
 ): Promise<MemoryConclusionPushReply> {
 	return serve("serveConclusionPush", deps, peer, params);
-}
-
-/**
- * A page of a conclusion stream from the cursor `after`, which was read from the database `known`; a cursor of
- * another database, or past the stream's end, reads from 0 (`after: 0`).
- */
-export async function readConclusions(
-	server: AiMemoryServer,
-	source: "native" | "synced",
-	after: number,
-	known: string | undefined,
-	limit: number,
-): Promise<{ page: ConclusionPage; after: number }> {
-	const params = { server, source, after, ...(known === undefined ? {} : { known }), limit };
-	return (await core().call<{ page: ConclusionPage; after: number }>("memsync.readConclusions", params)).result;
 }
 
 let nextSync = 0;

@@ -4,12 +4,10 @@
 # Daily snapshot of an ai-memory single-user install:
 #   1. rsync the mutable data dir into a git-tracked mirror checkout,
 #      excluding derived state and secrets (see .gitignore in this dir).
-#   2. commit + push the mirror to a remote git repository when anything
-#      changed.
-#   3. write a compressed tarball of the same tree to a second location
-#      (a mounted external disk, a network share, or on WSL2 the Windows-side
-#      filesystem) so the SQLite index can be recovered from disk even if the
-#      remote repository is unreachable.
+#   2. commit changes and push the mirror, including any earlier commits
+#      whose push failed.
+#   3. ask the running server for a consistent online backup (wiki + SQLite +
+#      data-dir config.toml) and write it to a second location.
 #
 # Assumptions:
 #   - You already ran `git init && git remote add origin <url>` inside
@@ -19,7 +17,7 @@
 #   - $DATA_SRC is the ai-memory data dir (`ai-memory status` prints it) and
 #     $CFG_SRC is where your provider env-file lives.
 #
-# Configure these four variables for your host, or export them from the
+# Configure these variables for your host, or export them from the
 # systemd unit's Environment= lines. Sample values are commented out.
 : "${REPO_DIR:=$HOME/ai-memory-backup}"           # local mirror checkout, `git init`'d and pointed at a remote
 : "${DATA_SRC:=$HOME/.local/share/ai-memory}"     # ai-memory data dir
@@ -61,6 +59,10 @@ rsync_excludes=(
     --exclude=db/             # SQLite index, derived from wiki via `ai-memory reindex`
     --exclude=logs/           # rotated tracing output
     --exclude=.serve.lock     # server pidfile
+    --exclude=auth-tokens/    # per-profile bearer tokens, incl. the root token (plaintext, 0600) — NEVER mirror
+    --exclude=auth-token      # hook bearer token (plaintext, 0600)
+    --exclude=auth-header     # hook Authorization header value (plaintext, 0600)
+    --exclude=hook-spool/     # pre-delivery hook spool (transient; may hold un-sanitized payloads)
 )
 for glob in $SECRET_EXCLUDES; do
     rsync_excludes+=(--exclude="$glob")
@@ -80,30 +82,20 @@ cd "$REPO_DIR"
 git add -A
 
 if git diff --cached --quiet; then
-    echo "no changes since last snapshot; skipping commit + push"
+    echo "no changes since last snapshot; skipping commit"
 else
     git commit -m "auto: snapshot $stamp" | tail -3
-    echo "--- push ---"
-    timeout 180 git push origin "$(git rev-parse --abbrev-ref HEAD)" 2>&1 | tail -10
+fi
+echo "--- push ---"
+push_status=0
+timeout 180 git push origin "$(git rev-parse --abbrev-ref HEAD)" 2>&1 | tail -10 || push_status=$?
+if (( push_status != 0 )); then
+    echo "mirror push failed (status $push_status); continuing with the online snapshot" >&2
 fi
 
-echo "--- tarball to second location ---"
+echo "--- online data snapshot to second location ---"
 tarball="$TARBALL_DIR/ai-memory-$stamp.tar.gz"
-tar_excludes=(
-    --exclude=.git
-    --exclude=models
-    --exclude=db
-    --exclude=logs
-    --exclude=.serve.lock
-)
-for glob in $SECRET_EXCLUDES; do
-    tar_excludes+=(--exclude="$glob")
-done
-# Use paths relative to $HOME so the archive is portable across usernames.
-tar czf "$tarball" "${tar_excludes[@]}" \
-    -C "$HOME" \
-    "${DATA_SRC#$HOME/}" \
-    "${CFG_SRC#$HOME/}"
+ai-memory --data-dir "$DATA_SRC" backup --to "$tarball"
 echo "tarball: $(ls -lh "$tarball" | awk '{print $5, $9}')"
 
 echo "--- rotate tarballs (retention: ${TARBALL_RETENTION_DAYS}d) ---"
@@ -114,4 +106,8 @@ echo "--- rotate logs (retention: ${LOG_RETENTION_DAYS}d) ---"
 find "$LOG_DIR" -maxdepth 1 -name 'ai-memory-snapshot_*.log' -type f \
     -mtime "+${LOG_RETENTION_DAYS}" -delete -print
 
+if (( push_status != 0 )); then
+    echo "=== $(date -Iseconds) online snapshot done; mirror push failed ===" >&2
+    exit "$push_status"
+fi
 echo "=== $(date -Iseconds) ai-memory snapshot done ==="

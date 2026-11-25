@@ -21,8 +21,9 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, expect } from "vitest";
-import { newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND } from "./test-bridge-probe";
+import { CLEANUP_MS } from "./bridge-agent-mail-stock-harness";
+import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
+import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { RM_TEMP } from "./test-fake-omp";
 
 export type Frame = {
@@ -39,9 +40,11 @@ export type Frame = {
 };
 
 const cleanups: Array<() => Promise<void> | void> = [];
+// The same budget as the agent-mail stock suites: each omp gets up to 30 s to exit and each folder waits for omp's
+// daemon, past vitest's 10 s hook default (bridge-todo-drift-stock's six omps took longer on a busy Linux runner).
 afterAll(async () => {
 	for (const cleanup of cleanups.reverse()) await cleanup();
-});
+}, CLEANUP_MS);
 
 export function onCleanup(cleanup: () => Promise<void> | void): void {
 	cleanups.push(cleanup);
@@ -53,12 +56,12 @@ export function sse(chunks: unknown[], finish: string): string {
 	return `${frame({ role: "assistant", content: "" })}${chunks.map(chunk => frame(chunk)).join("")}${frame({}, finish)}data: [DONE]\n\n`;
 }
 
-export function toolCall(name: string, args: Record<string, unknown>): unknown[] {
+export function toolCall(name: string, args: Record<string, unknown>, index = 0): unknown[] {
 	return [
 		{
 			tool_calls: [
 				{
-					index: 0,
+					index,
 					id: `call_${name}_${Math.random().toString(36).slice(2)}`,
 					type: "function",
 					function: { name, arguments: JSON.stringify(args) },
@@ -69,10 +72,13 @@ export function toolCall(name: string, args: Record<string, unknown>): unknown[]
 }
 
 /**
- * A scripted provider: `reply(step)` answers the main agent's `step`th request (1-based) with an SSE body; requests
- * without the `todo` tool (side models) get a plain answer and are not counted.
+ * A scripted provider: `reply(step, body)` answers the main agent's `step`th request (1-based) with an SSE body; it
+ * gets the request's JSON text, so a scripted agent can act on what the request carries. Requests without the `todo`
+ * tool (side models, compaction) get a plain answer and are not counted.
  */
-export async function startProvider(reply: (step: number) => string): Promise<{ url: string; bodies: string[] }> {
+export async function startProvider(
+	reply: (step: number, body: string) => string,
+): Promise<{ url: string; bodies: string[] }> {
 	const bodies: string[] = [];
 	const server = http.createServer((req, res) => {
 		let body = "";
@@ -88,7 +94,7 @@ export async function startProvider(reply: (step: number) => string): Promise<{ 
 				return;
 			}
 			bodies.push(body);
-			res.end(reply(bodies.length));
+			res.end(reply(bodies.length, body));
 		});
 	});
 	const listening = Promise.withResolvers<void>();
@@ -112,7 +118,7 @@ export function fakeAgent(url: string): { agentDir: string; isolated: string } {
 	mkdirSync(agentDir, { recursive: true });
 	writeFileSync(
 		join(agentDir, "models.yml"),
-		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
+		`providers:\n  fake:\n    baseUrl: ${url}\n    apiKey: x\n    api: openai-completions\n    models:\n      - id: m1\n        name: m1\n        reasoning: false\n        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }\n`,
 	);
 	return { agentDir, isolated };
 }
@@ -151,9 +157,19 @@ export function bridgeAt(ref: string): string {
 export interface Omp {
 	frames: Frame[];
 	send(command: Record<string, unknown>): Promise<Frame>;
-	/** Sends a prompt and resolves with the frames of its turn once the session settled. */
-	turn(message: string): Promise<Frame[]>;
+	/**
+	 * Sends a prompt and resolves with the frames of its turn once the session settled; one that has not settled
+	 * within `timeoutMs` fails with `diagnose()`.
+	 */
+	turn(message: string, timeoutMs?: number): Promise<Frame[]>;
+	/** What a run that stalled left to read: the frames omp wrote, in order with repeats counted, and its stderr. */
+	diagnose(): string;
 	root: string;
+	/** The bridge as main reaches it, connected once omp is ready, and every frame it pushed (`emit`), in order. */
+	bridge: GuiBridgeClient;
+	bridgeEvents: Array<{ type: string; [key: string]: unknown }>;
+	/** OMPdesk's quit of a tab's omp (stdin closes); a second call waits for the same exit. */
+	quit(): Promise<void>;
 }
 
 export async function startOmp(options: {
@@ -163,11 +179,13 @@ export async function startOmp(options: {
 	bridge: string;
 	/** Host tools to register once ready (`set_host_tools`), each answered with its text as it is called. */
 	hostTools?: Record<string, { description: string; parameters: Record<string, unknown>; answer: string }>;
+	/** An earlier run's folder, to continue its newest session there (`--continue`), as a relaunch does. */
+	resume?: string;
+	/** Variables set over the test's environment for this omp (after the OMPdesk ones are removed). */
+	env?: Record<string, string>;
 }): Promise<Omp> {
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-todo-stock-repo-")));
-	execFileSync("git", ["init", "--quiet"], { cwd: root });
-	// Windows: the omp under the launcher (and what it started) keeps this folder open a moment past the launcher's exit.
-	cleanups.push(() => rmSync(root, RM_TEMP));
+	const root = options.resume ?? realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-todo-stock-repo-")));
+	if (!options.resume) execFileSync("git", ["init", "--quiet"], { cwd: root });
 	const address = newBridgeAddress();
 	const env: Record<string, string | undefined> = {
 		...process.env,
@@ -182,6 +200,14 @@ export async function startOmp(options: {
 		Reflect.deleteProperty(env, key);
 	for (const key of Object.keys(env))
 		if (key.startsWith("OMP_GUI_") && key !== "OMP_GUI_BRIDGE") Reflect.deleteProperty(env, key);
+	Object.assign(env, options.env);
+	// Windows: a process whose working folder this is keeps it from removal (EBUSY) while it runs: omp 18's service
+	// broker, which ended with omp here (vitest.setup.ts `OMP_DAEMON_IDLE_GRACE_MS`), and omp 19's daemon, which does not.
+	if (!options.resume)
+		cleanups.push(() => {
+			stopOmpDaemon(options.isolated);
+			rmSync(root, RM_TEMP);
+		});
 	const child: ChildProcessWithoutNullStreams = spawn(
 		OMP_COMMAND.file,
 		[
@@ -191,6 +217,7 @@ export async function startOmp(options: {
 			"--no-extensions",
 			"--no-skills",
 			"--no-rules",
+			...(options.resume ? ["--continue"] : []),
 			"--model",
 			options.model,
 			"-e",
@@ -204,14 +231,23 @@ export async function startOmp(options: {
 	});
 	const exited = Promise.withResolvers<void>();
 	child.once("exit", () => exited.resolve());
-	cleanups.push(async () => {
-		child.stdin.end();
-		// A real omp exits on stdin EOF; SIGKILL only if it does not.
-		const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
-		await exited.promise;
-		clearTimeout(timer);
-		removeBridgeAddress(address);
-	});
+	const bridge = new GuiBridgeClient(address);
+	const bridgeEvents: Omp["bridgeEvents"] = [];
+	bridge.onEvent(event => bridgeEvents.push(event));
+	let exit: Promise<void> | undefined;
+	const quit = () => {
+		exit ??= (async () => {
+			bridge.close();
+			child.stdin.end();
+			// A real omp exits on stdin EOF; SIGKILL only if it does not.
+			const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+			await exited.promise;
+			clearTimeout(timer);
+			removeBridgeAddress(address);
+		})();
+		return exit;
+	};
+	cleanups.push(quit);
 	const frames: Frame[] = [];
 	const responses = new Map<string, (frame: Frame) => void>();
 	createInterface({ input: child.stdout }).on("line", line => {
@@ -233,6 +269,16 @@ export async function startOmp(options: {
 	await expect
 		.poll(() => frames.some(frame => frame.type === "ready"), { timeout: 60_000, message: stderr })
 		.toBe(true);
+	await expect
+		.poll(
+			() =>
+				bridge.connect(1_000).then(
+					() => true,
+					() => false,
+				),
+			{ timeout: 60_000, message: `bridge never came up\n${stderr.slice(-2000)}` },
+		)
+		.toBe(true);
 	let counter = 0;
 	const registered = Object.entries(options.hostTools ?? {}).map(([name, tool]) => ({
 		name,
@@ -248,15 +294,38 @@ export async function startOmp(options: {
 		return answered.promise;
 	};
 	if (registered.length > 0) await send({ type: "set_host_tools", tools: registered });
-	const turn = async (message: string) => {
+	const diagnose = () => {
+		const seen: string[] = [];
+		let last = "";
+		let repeats = 0;
+		const flush = () => {
+			if (last) seen.push(repeats > 1 ? `${last} x${repeats}` : last);
+		};
+		for (const frame of frames) {
+			const name = frame.toolName ? `${frame.type}:${String(frame.toolName)}` : frame.type;
+			if (name === last) repeats++;
+			else {
+				flush();
+				last = name;
+				repeats = 1;
+			}
+		}
+		flush();
+		return `frames: ${seen.join(" > ")}\nomp stderr: ${stderr.slice(-2000)}`;
+	};
+	const turn = async (message: string, timeoutMs = 300_000) => {
 		const from = frames.length;
 		await send({ type: "prompt", message });
-		await expect
-			.poll(() => frames.slice(from).some(frame => frame.type === "session_settled"), { timeout: 300_000 })
-			.toBe(true);
+		try {
+			await expect
+				.poll(() => frames.slice(from).some(frame => frame.type === "session_settled"), { timeout: timeoutMs })
+				.toBe(true);
+		} catch (error) {
+			throw new Error(`the turn never settled\n${diagnose()}`, { cause: error });
+		}
 		return frames.slice(from);
 	};
-	return { frames, send, turn, root };
+	return { frames, send, turn, diagnose, root, bridge, bridgeEvents, quit };
 }
 
 export function todoOps(frames: readonly Frame[]): string[] {

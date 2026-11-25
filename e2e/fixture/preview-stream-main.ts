@@ -1,12 +1,13 @@
 /**
- * Electron main for e2e/preview-stream.e2e.ts: the real preview host (src/main/preview/host.ts) with a paired
- * viewer's virtual window behind the real WsRouter, driven by a fake WebSocket client, against a local test
- * page. Run by Electron itself (the spec bundles this file with bun), prints `RESULT <json>` and exits.
+ * The Node main of e2e/preview-stream.e2e.ts, run by the Tauri host as its main script: the real preview host
+ * (src/main/preview/host.ts) with a paired viewer's virtual window behind the real WsRouter, driven by a fake
+ * WebSocket client, against a local test page. The spec bundles this file with bun, `electron` mapped to the shim
+ * (`preview-stream.tsconfig.json`), prints `RESULT <json>` and exits.
  *
  * What it proves, on real offscreen pages: frames arrive as JPEGs of the size the viewer's surface asks for,
  * none before the acknowledgement and at most 12 a second, a still page sends nothing, a tap reaches the page
  * as a trusted click (and keys and text as trusted input), a pinch zooms, a page's `confirm` waits for the
- * viewer's answer. It also measures: fps, bytes a frame, CPU of every Electron process while streaming and idle.
+ * viewer's answer. It also measures: fps, bytes a frame, and this process's CPU while streaming and idle.
  */
 import { mkdirSync } from "node:fs";
 import http from "node:http";
@@ -18,7 +19,6 @@ import type { VisualStore } from "../../src/main/preview/visuals";
 import { BlobStore } from "../../src/main/web/blobs";
 import type { WebDevice } from "../../src/main/web/devices-store";
 import { IpcRegistry } from "../../src/main/web/ipc-registry";
-import { writeDialogPreload } from "../../src/main/web/preview-dialog";
 import { WebWindows } from "../../src/main/web/web-client-window";
 import type { WsRouter } from "../../src/main/web/ws-router";
 import { TestRouterHost } from "../../src/main/web/ws-router-test-rig";
@@ -71,10 +71,10 @@ const q = new URLSearchParams(location.search);
 let n = 0;
 const send = entry => fetch('/log', { method: 'POST', body: JSON.stringify({ ...entry, n: n++ }) }).catch(() => {});
 document.getElementById('list').innerHTML = Array.from({ length: 400 }, (_, i) => '<div class=row>row ' + i + ' the quick brown fox ' + (i * 7919 % 1000) + '</div>').join('');
-addEventListener('click', e => send({ type: 'click', trusted: e.isTrusted, x: e.clientX, y: e.clientY, target: e.target.id, active: navigator.userActivation.isActive }), true);
+addEventListener('click', e => send({ type: 'click', trusted: e.isTrusted, x: e.clientX, y: e.clientY, target: e.target.id, active: navigator.userActivation.isActive, vw: innerWidth, vh: innerHeight, dpr: devicePixelRatio }), true);
 addEventListener('keydown', e => send({ type: 'keydown', trusted: e.isTrusted, key: e.key, id: e.target.id }), true);
 addEventListener('input', e => send({ type: 'input', trusted: e.isTrusted, value: e.target.value, id: e.target.id }), true);
-addEventListener('wheel', e => send({ type: 'wheel', trusted: e.isTrusted, dy: e.deltaY }), true);
+addEventListener('wheel', e => send({ type: 'wheel', trusted: e.isTrusted, dy: e.deltaY, dx: e.deltaX, mode: e.deltaMode, x: e.clientX, y: e.clientY, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight }), true);
 addEventListener('scroll', () => send({ type: 'scroll', trusted: true, y: scrollY }), true);
 document.getElementById('btn').addEventListener('click', () => {
   if (q.get('dialog')) { const r = confirm('Delete everything?'); send({ type: 'confirm', trusted: true, result: r }); const p = prompt('Name?', 'dflt'); send({ type: 'prompt', trusted: true, result: p }); alert('done'); send({ type: 'alert-returned', trusted: true }); }
@@ -126,9 +126,10 @@ interface Reply {
 	e?: { message: string };
 }
 
-/** CPU seconds spent so far by every Electron process (browser, GPU, renderers, utilities). */
+/** CPU seconds this main process has spent (the page's own Chromium runs in the host's Preview browser, not here). */
 function cpuSeconds(): number {
-	return app.getAppMetrics().reduce((sum, metric) => sum + (metric.cpu.cumulativeCPUUsage ?? 0), 0);
+	const { user, system } = process.cpuUsage();
+	return (user + system) / 1e6;
 }
 
 async function main() {
@@ -153,7 +154,6 @@ async function main() {
 	registerPreviewHost(ipc, () => false, visuals, {
 		isRemote: () => false,
 		hostScale: () => screen.getPrimaryDisplay().scaleFactor,
-		preloadPath: () => writeDialogPreload(userData as string),
 	});
 
 	const device: WebDevice = {
@@ -226,7 +226,8 @@ async function main() {
 	const waitFor = async (what: string, ready: () => boolean, timeoutMs = 8000) => {
 		const started = Date.now();
 		while (!ready()) {
-			if (Date.now() - started > timeoutMs) throw new Error(`Timed out waiting for ${what}`);
+			if (Date.now() - started > timeoutMs)
+				throw new Error(`Timed out waiting for ${what}; the page's last events: ${JSON.stringify(log.slice(-20))}`);
 			await sleep(25);
 		}
 	};
@@ -240,7 +241,16 @@ async function main() {
 		await waitFor(`${url} to load`, () => lastState()?.url === url && lastState()?.loading === false);
 	};
 
-	const result: Record<string, unknown> = {};
+	// Each step's numbers print as they land, so a run the spec kills at its deadline still says where it stopped.
+	const result = new Proxy<Record<string, unknown>>(
+		{},
+		{
+			set(target, key, value) {
+				console.log(`STEP ${String(key)} ${JSON.stringify(value)}`);
+				return Reflect.set(target, key, value);
+			},
+		},
+	);
 	const layout = { x: 0, y: 0, width: 390, height: 700 };
 
 	// 1. A phone-sized surface at 3× is encoded at 2×: 780 px wide, whatever the host screen's density.
@@ -261,9 +271,16 @@ async function main() {
 	// 2. A tap on the button is a trusted click with user activation.
 	log.length = 0;
 	input({ t: "tap", x: 100 / 390, y: 58 / 700 });
-	await waitFor("the click", () => log.some(entry => entry.type === "click"));
-	const click = log.find(entry => entry.type === "click");
-	result.click = { trusted: click?.trusted, target: click?.target, active: click?.active, x: click?.x, y: click?.y };
+	await waitFor("the tap on the button", () => log.some(entry => entry.type === "click" && entry.target === "btn"));
+	const click = log.find(entry => entry.type === "click" && entry.target === "btn");
+	result.click = {
+		trusted: click?.trusted,
+		target: click?.target,
+		active: click?.active,
+		x: click?.x,
+		y: click?.y,
+		page: { vw: click?.vw, vh: click?.vh, dpr: click?.dpr },
+	};
 
 	// 3. Keys and committed text reach a focused field as trusted input.
 	log.length = 0;
@@ -317,7 +334,13 @@ async function main() {
 	input({ t: "pinch", scale: 1 / 1.5 });
 	await waitFor("the zoom to come back", () => lastState()?.zoom === zoomBefore);
 
-	// 6. A still page costs nothing: the poll is held and answers empty.
+	// 6. A still page costs nothing: the poll is held and answers empty. The textarea typed into above still has the
+	// focus, and on the Tauri host's Chromium the page is focused, so its caret blinks a repaint about every 500 ms
+	// (Windows run 44084284161: 7 frames in 3.2 s idle, 779 KB). A tap on the list below the fields takes the focus
+	// off it, as a person's tap would, so the page is still.
+	log.length = 0;
+	input({ t: "tap", x: 200 / 390, y: 650 / 700 });
+	await waitFor("the tap off the fields", () => log.some(entry => entry.type === "click"));
 	await sleep(400);
 	let idleFrames = 0;
 	let idleBytes = 0;
@@ -410,7 +433,10 @@ async function main() {
 		let opened: PreviewStreamPoll | null = null;
 		const waitedFrom = Date.now();
 		while (!opened?.dialogs.length) {
-			if (Date.now() - waitedFrom > 8000) throw new Error("No dialog arrived");
+			if (Date.now() - waitedFrom > 8000)
+				throw new Error(
+					`No dialog arrived (answered ${dialogs.length} of ${answers.length}, taps ${dialogTaps}, page log ${JSON.stringify(log.map(entry => `${entry.type}${entry.target ? `:${entry.target}` : ""}`))})`,
+				);
 			const lost = dialogs.length === 0 && !log.some(entry => entry.type === "click" && entry.target === "btn");
 			if (lost && Date.now() - tappedAt > 2500 && dialogTaps < 3) {
 				input({ t: "tap", x: 100 / 390, y: 58 / 700 });

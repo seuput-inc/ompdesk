@@ -15,7 +15,7 @@
  * and the largest such tree goes first, one per sample, so a short spell frees what it needs and no more. A released
  * tab reads asleep and starts again on its session file the way a restored tab does: when it is shown or messaged.
  */
-import { type MemoryReading, type ProcessRow, treeBytes } from "./memory-sampler";
+import type { MemoryReading, WatchProcesses } from "./memory-sampler";
 
 /** Headroom below which memory reads as short: 15 % of RAM (2.4 GB on 16 GB), before the kernel's warn level. */
 const RESERVE_FRACTION = 0.15;
@@ -28,7 +28,7 @@ export interface ReleaseTab {
 	/** Its omp's pid; none while no omp runs. */
 	pid?: number;
 	/** The pool's word that nothing in it is live (`SidecarPool.memoryTabs`). */
-	quiet: boolean;
+	quiet?: boolean;
 }
 
 /** Memory is short now: the OS's pressure, or less than the reserve available. Unknown is not short. */
@@ -37,54 +37,55 @@ export function memoryShort(reading: MemoryReading | null): boolean {
 	return reading.pressure !== "normal" || reading.availableBytes < reading.totalBytes * RESERVE_FRACTION;
 }
 
-/**
- * Whether the omp under `pid` started a process; a console host (Toolhelp32 image `conhost.exe`) is none. On Windows
- * `pid` is the launcher: its one child besides the console host is the omp, and a launcher of any other shape reads
- * as busy, so it is never released on a guess.
- */
-function hasWork(rows: readonly ProcessRow[], pid: number, platform: NodeJS.Platform): boolean {
-	const children = (parent: number) =>
-		rows.filter(row => row.ppid === parent && row.name?.toLowerCase() !== "conhost.exe");
-	if (platform !== "win32") return children(pid).length > 0;
-	const [omp, ...more] = children(pid);
-	return !omp || more.length > 0 || children(omp.pid).length > 0;
+/** Look up the native facts for the tabs the pool knows now, not the ones it knew before the OS read. */
+export function idleFootprints(sample: WatchProcesses, tabs: readonly ReleaseTab[]): Map<number, number> {
+	const bytes = new Map<number, number>();
+	if (sample.busyParents !== null) {
+		for (const tab of tabs) if (tab.quiet === true && tab.pid !== undefined) bytes.set(tab.pid, 0);
+		for (const pid of sample.busyParents) bytes.delete(pid);
+		if (bytes.size) {
+			for (const row of sample.rows) if (bytes.has(row.pid)) bytes.set(row.pid, row.bytes);
+		}
+	}
+	for (const [pid, size] of sample.quietTrees) bytes.set(pid, size);
+	return bytes;
 }
 
 export class IdleRelease {
 	readonly #quietMs: number;
-	readonly #platform: NodeJS.Platform;
 	/** Since when each quiet tab has been quiet with no child process. */
 	readonly #quietSince = new Map<string, number>();
 
-	constructor(quietMs = IDLE_RELEASE_QUIET_MS, platform: NodeJS.Platform = process.platform) {
+	constructor(quietMs = IDLE_RELEASE_QUIET_MS) {
 		this.#quietMs = quietMs;
-		this.#platform = platform;
 	}
 
 	/** One sample: the tab to release now, or null. A tab picked starts its quiet time again. */
-	pick(
+	pick<T extends ReleaseTab>(
 		now: number,
 		reading: MemoryReading | null,
-		tabs: readonly ReleaseTab[],
-		rows: readonly ProcessRow[],
-	): string | null {
+		tabs: readonly T[],
+		sample: WatchProcesses,
+	): { tab: T; bytes: number } | null {
+		const footprints = idleFootprints(sample, tabs);
 		const seen = new Set<string>();
 		for (const tab of tabs) {
 			seen.add(tab.tabId);
-			if (tab.quiet && tab.pid !== undefined && !hasWork(rows, tab.pid, this.#platform)) {
+			if (tab.quiet === true && tab.pid !== undefined && footprints.has(tab.pid)) {
 				if (!this.#quietSince.has(tab.tabId)) this.#quietSince.set(tab.tabId, now);
 			} else this.#quietSince.delete(tab.tabId);
 		}
 		for (const tabId of this.#quietSince.keys()) if (!seen.has(tabId)) this.#quietSince.delete(tabId);
 		if (!memoryShort(reading)) return null;
-		let best: { tabId: string; bytes: number } | null = null;
+		let best: { tab: T; bytes: number } | null = null;
 		for (const tab of tabs) {
 			const since = this.#quietSince.get(tab.tabId);
 			if (since === undefined || now - since < this.#quietMs || tab.pid === undefined) continue;
-			const bytes = treeBytes(rows, tab.pid);
-			if (!best || bytes > best.bytes) best = { tabId: tab.tabId, bytes };
+			const bytes = footprints.get(tab.pid);
+			if (bytes === undefined) continue;
+			if (!best || bytes > best.bytes) best = { tab, bytes };
 		}
-		if (best) this.#quietSince.delete(best.tabId);
-		return best?.tabId ?? null;
+		if (best) this.#quietSince.delete(best.tab.tabId);
+		return best;
 	}
 }

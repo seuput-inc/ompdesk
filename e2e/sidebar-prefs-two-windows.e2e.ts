@@ -42,10 +42,10 @@ async function seed(agent: string, id: string, cwd: string, title: string, minut
 const order = (page: Page) =>
 	page
 		.locator("[data-session-group] [data-session-path]")
-		.evaluateAll(rows => rows.map(row => row.getAttribute("data-session-path")?.split("/").at(-1)));
+		.evaluateAll(rows => rows.map(row => row.getAttribute("data-session-path")?.split(/[\\/]/).at(-1)));
 
 async function rowMenu(page: Page, id: string, item: string): Promise<void> {
-	await page.locator(`[data-session-group] [data-session-path$="/${id}.jsonl"]`).first().click({ button: "right" });
+	await page.locator(`[data-session-group] [data-session-path$="${id}.jsonl"]`).first().click({ button: "right" });
 	await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
@@ -62,18 +62,19 @@ test("an order one window sets survives what another window, which read the side
 	app = await launch();
 	const first = await app.firstWindow();
 	await first.waitForFunction(() => window.omp?.rpc != null);
-	await expect.poll(() => order(first)).toEqual(["s-1.jsonl", "s-2.jsonl", "s-3.jsonl"]);
+	// Sessions read oldest first (the owner's decision, 24 Nov 2026): Charlie is the oldest, Alpha the newest.
+	await expect.poll(() => order(first)).toEqual(["s-3.jsonl", "s-2.jsonl", "s-1.jsonl"]);
 	expect(await first.evaluate(() => window.omp.sessions.openInNewWindow({}))).toBe(true);
 	await expect.poll(() => app?.windows().length).toBe(2);
 	const second = app.windows().find(page => page !== first);
 	if (!second) throw new Error("The second window has no page");
 	await second.waitForFunction(() => window.omp?.rpc != null);
-	await expect.poll(() => order(second)).toEqual(["s-1.jsonl", "s-2.jsonl", "s-3.jsonl"]);
+	await expect.poll(() => order(second)).toEqual(["s-3.jsonl", "s-2.jsonl", "s-1.jsonl"]);
 
-	// The first window puts Charlie on top; the second, which read the sidebar before that, archives Bravo.
-	await rowMenu(first, "s-3", "Move up");
-	await rowMenu(first, "s-3", "Move up");
-	await expect.poll(() => order(first)).toEqual(["s-3.jsonl", "s-1.jsonl", "s-2.jsonl"]);
+	// The first window puts Alpha on top; the second, which read the sidebar before that, archives Bravo.
+	await rowMenu(first, "s-1", "Move up");
+	await rowMenu(first, "s-1", "Move up");
+	await expect.poll(() => order(first)).toEqual(["s-1.jsonl", "s-3.jsonl", "s-2.jsonl"]);
 	await rowMenu(second, "s-2", "Archive");
 
 	const stored = async () =>
@@ -85,13 +86,13 @@ test("an order one window sets survives what another window, which read the side
 	expect(
 		Object.values((await stored()).sessionOrder ?? {})
 			.flat()
-			.map(file => file.split("/").at(-1)),
-	).toEqual(["s-3.jsonl", "s-1.jsonl", "s-2.jsonl"]);
+			.map(file => file.split(/[\\/]/).at(-1)),
+	).toEqual(["s-1.jsonl", "s-3.jsonl", "s-2.jsonl"]);
 	// Both windows show both changes now, and a relaunch draws them from the stored file.
-	for (const page of [first, second]) await expect.poll(() => order(page)).toEqual(["s-3.jsonl", "s-1.jsonl"]);
+	for (const page of [first, second]) await expect.poll(() => order(page)).toEqual(["s-1.jsonl", "s-3.jsonl"]);
 	await exitApp(app);
 	app = await launch();
 	const again = await app.firstWindow();
 	await again.waitForFunction(() => window.omp?.rpc != null);
-	await expect.poll(() => order(again)).toEqual(["s-3.jsonl", "s-1.jsonl"]);
+	await expect.poll(() => order(again)).toEqual(["s-1.jsonl", "s-3.jsonl"]);
 });

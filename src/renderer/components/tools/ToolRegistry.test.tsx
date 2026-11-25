@@ -203,6 +203,39 @@ describe("tool registry coverage", () => {
 	});
 });
 
+describe("tool commands routed through bash", () => {
+	it("keeps shell output and shows each execution's own outcome, independent of the shell exit", async () => {
+		const args = { command: "resolve --help; resolve one; reject two; echo finished" };
+		const result = {
+			content: [{ type: "text", text: "shell output from echo" }],
+			details: {
+				exitCode: 0,
+				toolCommands: [
+					{ tool: "resolve", mode: "help", exitCode: 0 },
+					{
+						tool: "resolve",
+						mode: "execute",
+						exitCode: 0,
+						args: { reason: "one" },
+						inner: { action: "apply", label: "ast_edit: rename the flag" },
+					},
+					{ tool: "reject", mode: "execute", exitCode: 1, args: { reason: "two" } },
+				],
+			},
+		};
+		useToolsStore.getState().applyEvents([
+			{ type: "tool_execution_start", toolCallId: "cmd", toolName: "bash", args },
+			{ type: "tool_execution_end", toolCallId: "cmd", toolName: "bash", result, isError: false },
+		]);
+		await mountCard("cmd", "bash", args);
+		expect(bodyText()).toContain("shell output from echo");
+		expect(bodyText()).toContain("rename the flag");
+		expect(bodyText().match(/Applied/g)).toHaveLength(1);
+		expect(bodyText()).toContain("Failed");
+		expect(bodyText()).not.toContain("Discarded");
+	});
+});
+
 describe("device calls routed through write", () => {
 	it("renders the scan outcome instead of a file write", async () => {
 		const args = { path: "xd://security_scan", content: '{"action":"start","plan_id":"p-1"}' };

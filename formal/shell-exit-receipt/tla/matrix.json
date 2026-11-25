@@ -1,0 +1,6 @@
+{
+  "runs": [
+    { "name": "accepted-exit", "config": "MC.cfg", "expect": "pass" },
+    { "name": "premature-stdin-close", "config": "MC.cfg", "constants": { "KeepStdin": "FALSE" }, "expect": "invariant", "property": "NoPrematureEOF" }
+  ]
+}

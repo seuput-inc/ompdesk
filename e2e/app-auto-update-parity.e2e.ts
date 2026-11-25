@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { devices, expect, type Page, test, webkit } from "@playwright/test";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { stagedUpdateEnv } from "./fixture/stand-in-bundle";
-import { captureTo, exitApp } from "./harness";
+import { captureTo, closeBrowser, exitApp, launchBrowser } from "./harness";
 import {
 	connectHost,
 	launchRemote,
@@ -47,7 +47,7 @@ test("the restart countdown shows the same here, on a paired computer and on the
 	let host: RemoteInstance | undefined;
 	let client: RemoteInstance | undefined;
 	let proxy: ServeProxy | null = null;
-	const browser = await webkit.launch();
+	const browser = await launchBrowser(webkit);
 	try {
 		const updateRoot = path.join(parent, "update");
 		await fs.mkdir(updateRoot);
@@ -143,7 +143,7 @@ test("the restart countdown shows the same here, on a paired computer and on the
 		await expect(pairedNotice).toHaveCount(0, { timeout: 15_000 });
 		await context.close();
 	} finally {
-		await browser.close().catch(() => undefined);
+		await closeBrowser(browser).catch(() => undefined);
 		await proxy?.close().catch(() => undefined);
 		for (const instance of [client, host]) if (instance) await exitApp(instance.app).catch(() => undefined);
 		expect(client?.errors ?? []).toEqual([]);

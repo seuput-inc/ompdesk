@@ -19,7 +19,7 @@ import {
 	Modal,
 	Select,
 } from "../../common";
-import { type GithubSectionProps, GithubToolbar, useGithubMutation } from "./shared";
+import { type GithubSectionProps, GithubToolbar, pausedNotice, useGithubMutation } from "./shared";
 
 const VISIBILITIES: GithubVisibility[] = ["private", "public", "internal"];
 
@@ -254,6 +254,7 @@ export function GithubRepos({
 							error={detail.error}
 							hasData={repo !== null}
 							loading={detail.loading && !repo}
+							notice={pausedNotice(detail.pausedUntil)}
 							onRetry={detail.reload}
 						>
 							{repo && (
@@ -326,6 +327,7 @@ export function GithubRepos({
 						error={list.error}
 						hasData={rows.length > 0}
 						loading={list.loading && !list.data}
+						notice={pausedNotice(list.pausedUntil)}
 						onRetry={list.reload}
 					>
 						<ul className="flex flex-col gap-0.5">
