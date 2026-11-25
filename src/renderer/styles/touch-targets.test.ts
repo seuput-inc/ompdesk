@@ -108,7 +108,8 @@ describe("the prompt card on touch", () => {
 
 describe("rows and bars on touch", () => {
 	it("a phone's bar and the rows a thumb taps one after another are dense (40 px)", () => {
-		expect(rule('html[data-shell="phone"] .omp-topbar')).toMatch(/height:\s*36px/);
+		// Every bar, the phone's included, is the shell's one 36 px line.
+		expect(read("./tokens.css")).toMatch(/--sc-topbar-h:\s*36px/);
 		for (const row of [
 			'\\[role="menuitem"\\]',
 			"\\.omp-session-sidebar \\[data-workspace-group\\]",

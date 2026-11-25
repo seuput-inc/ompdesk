@@ -73,6 +73,7 @@ import { actionKbd, onEscape } from "../../../lib/keymap";
 import { reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
 import { useProjectNames, useWorktreeKindLabels } from "../../../lib/project-origin";
 import { sessionForkOrigin } from "../../../lib/session-fork";
+import { laneState } from "../../../lib/session-lane";
 import type { RunFacts } from "../../../lib/session-run";
 import {
 	combinedTitle,
@@ -95,6 +96,7 @@ import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/cl
 import { useComposerStore } from "../../../stores/composer";
 import { LOCAL_SUMMARIES, summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { useMessagesStore } from "../../../stores/messages";
+import { usePullRequestBranches } from "../../../stores/pr-center";
 import { useQueueStore } from "../../../stores/queue";
 import { usePairedHosts, useRemoteStore } from "../../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
@@ -132,7 +134,7 @@ import {
 import { StarterGuide } from "../../onboarding/StarterGuide";
 import { ForkParent } from "../ForkParent";
 import { workingAgentCount } from "../live-work";
-import { SessionLiveAge, SessionLiveTitle } from "../SessionLiveTitle";
+import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { openedChildCounts, openedChildRows } from "../work-board/opened-children";
 import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from "./fold-summary";
 import { remoteOpenedTab, summaryRowState } from "./host-row-state";
@@ -141,11 +143,11 @@ import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
 import { logSelection, useRowSelection } from "./row-selection";
+import { SessionStatusLane } from "./SessionStatusLane";
 import { SidebarBots } from "./SidebarBots";
 import { SidebarChats } from "./SidebarChats";
 import { SidebarDeviceSections } from "./SidebarDeviceSections";
 import { SidebarDeviceSection, SidebarLocalHeader } from "./SidebarDevices";
-import { SidebarDoneMark } from "./SidebarDoneMark";
 import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
@@ -396,6 +398,7 @@ export function Sidebar() {
 	const t = useT();
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
 	const botsAvailable = useBotsAvailable();
+	const hasPullRequest = usePullRequestBranches();
 	// This computer's no-project workspace decides whether a session's row is a chat (`isChatSession`): its last answer
 	// paints the first frame, as a paired host's does (host-workspace.ts). Without it such a session was missing
 	// from the first frame's list and its row and selection came one frame later (300 ms on a slow machine).
@@ -1334,6 +1337,7 @@ export function Sidebar() {
 							? t("sidebar.row.open")
 							: null);
 		return {
+			run,
 			isCurrent,
 			tab,
 			summary,
@@ -1627,6 +1631,7 @@ export function Sidebar() {
 		if (session.departed)
 			return <div aria-hidden className="py-1" data-flip-key={key} data-sidebar-gap="session" key={session.path} />;
 		const {
+			run,
 			isCurrent,
 			tab,
 			active,
@@ -1710,21 +1715,32 @@ export function Sidebar() {
 		// (`SessionLiveTitle`) or the left-edge bar (sidebar.css `data-signal`), its words the tooltip and screen-reader
 		// text. Anything that needs the person is the warning signal; a failed run is the danger one.
 		const signal = waiting ? "waiting" : running ? "running" : failed ? "error" : undefined;
-		// One small mark before the state: an unseen finish (no light or bar says it) as a ✓, a shape, not a colour
-		// alone; else a pin or a fork.
-		const marker: ReactNode = done ? (
-			<SidebarDoneMark fresh={doneBefore.current.get(session.path) === false} />
-		) : pinned ? (
+		// One small mark before the state: a pin or a fork. An unseen finish is the status lane's ✓.
+		const marker: ReactNode = pinned ? (
 			<Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" />
 		) : fork ? (
 			<GitFork aria-hidden className="size-(--sc-icon-sm)" data-sidebar-fork />
 		) : null;
 		const openTabId = tab?.id;
 		const folderMissing = missingFolders.has(session.path);
-		// The age slot: the waiting token (a mark that stays), else the working arc while the session or anything it
-		// started works, else the time since it last did something (both give way first on a short line).
+		// The leading status lane (Orca's, the owner's decision of 25 Nov 2026): what needs the person, a failure, the
+		// working arc while the session or anything it started works, an unseen finish, its branch's pull request.
 		const runningOpened = opened.filter(child => child.status === "running").length;
 		const workingAgents = workingAgentCount(summary?.agents ?? []);
+		const lane = laneState({
+			run: { ...run, failed, done },
+			attention: waiting,
+			live: sessionLive({
+				agents: workingAgents,
+				opened: runningOpened,
+				running: signal === "running",
+				settling,
+				waiting: false,
+			}),
+			stopped: tab?.lastRun?.stopReason === "aborted",
+			pullRequest: target !== null && hasPullRequest(target),
+			open: tab !== undefined,
+		});
 		const waitingBadge = waiting ? (
 			<Badge className="omp-sidebar-approval" variant="attention">
 				{/* The glyph stays when the word has no room left beside the title (it truncates, then hides). */}
@@ -1734,20 +1750,17 @@ export function Sidebar() {
 				</span>
 			</Badge>
 		) : null;
-		const age = waiting ? null : (
-			<SessionLiveAge
-				agents={workingAgents}
-				iso={indexed ? session.modified : null}
-				opened={runningOpened}
-				running={signal === "running"}
-				settling={settling}
-				waiting={false}
-			/>
-		);
+		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
+		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
 		return (
 			<Fragment key={session.path}>
 				<ListRow
-					leading={<SessionRowArtwork target={target} />}
+					leading={
+						<span className="omp-session-leading">
+							<SessionStatusLane fresh={doneBefore.current.get(session.path) === false} state={lane} />
+							<SessionRowArtwork target={target} />
+						</span>
+					}
 					buttonProps={{
 						tabIndex,
 						"data-roving-item": key,

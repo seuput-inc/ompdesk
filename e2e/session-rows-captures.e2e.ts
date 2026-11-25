@@ -201,8 +201,8 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	expect(twins[0]?.visible).not.toBe(twins[1]?.visible);
 
 	// The owner's order on a short line, on every row: the age gives way whole before the branch loses a letter, the
-	// branch keeps at least eight characters or goes with its mark (never the mark alone), a working arc stays, and the
-	// family chip and the ⋯ stay whole beside the line.
+	// branch keeps at least eight characters or goes with its mark (never the mark alone), a working arc stays whole in
+	// the row's leading status lane, and the family chip and the ⋯ stay whole beside the line.
 	const lines = await list.locator(".omp-sidebar-session-row:visible").evaluateAll(rows =>
 		rows.map(row => {
 			const give = row.querySelector(".omp-session-row-give")?.getBoundingClientRect();
@@ -222,8 +222,11 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 				age: shown(row.querySelector("[data-session-row-age] > time")),
 				working: Boolean(row.querySelector("[data-session-working]")),
 				arc: (() => {
+					const lane = row.querySelector("[data-status-lane]")?.getBoundingClientRect();
 					const arc = row.querySelector("[data-session-working] .omp-working-arc")?.getBoundingClientRect();
-					return Boolean(arc && give && arc.width > 0 && arc.left >= give.left - 0.5 && arc.right <= give.right);
+					return Boolean(
+						arc && lane && arc.width > 0 && arc.left >= lane.left - 0.5 && arc.right <= lane.right + 0.5,
+					);
 				})(),
 				endClear: Boolean(!end || !give || end.left >= give.right - 0.5),
 			};
@@ -245,8 +248,8 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		expect(head.past, head.title).toBeLessThanOrEqual(0.5);
 	}
 
-	// The age slot (composer.md): with room, a working arc keeps the age's place, so the branch starts where it did
-	// when work starts and ends; at rest the age shows.
+	// The age slot (composer.md): work starting and ending changes only the leading status lane, so the age stays shown
+	// and the branch starts where it did.
 	const restRow = rowFor(list, sessionFile(PROJECT, "sess-1"));
 	const branchStart = () =>
 		restRow.locator("[data-session-head]").evaluate(head => Math.round(head.getBoundingClientRect().left));
@@ -259,7 +262,8 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	expect(await visibleAge()).toBe(true);
 	const atRest = await branchStart();
 	await setRun("running");
-	await expect(restRow.locator("[data-session-working]")).toBeVisible();
+	await expect(restRow.locator("[data-status-lane] [data-session-working]")).toBeVisible();
+	expect(await visibleAge()).toBe(true);
 	expect(await branchStart()).toBe(atRest);
 	await setRun("ready");
 	await expect(restRow.locator("[data-session-working]")).toHaveCount(0);

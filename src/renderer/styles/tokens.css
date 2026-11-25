@@ -215,6 +215,7 @@
 	--omp-attention: var(--sc-attention);
 	--omp-attention-dim: var(--sc-attention-soft);
 	--omp-unread: var(--sc-unread);
+	--omp-working: var(--sc-working);
 	--omp-text: var(--sc-text);
 	--omp-text-secondary: var(--sc-text-secondary);
 	--omp-bg-primary: var(--sc-bg);

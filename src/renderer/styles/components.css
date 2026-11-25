@@ -4497,12 +4497,13 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	transform: translateX(-100%);
 }
 
+/* Orca's working yellow (the owner's decision, 25 Nov 2026): the box's band is the working hue, as the row's arc is. */
 .omp-live-sweep[data-working="turn"] {
-	--live-sweep-band: color-mix(in srgb, var(--sc-accent) 11%, transparent);
+	--live-sweep-band: color-mix(in srgb, var(--sc-working) 14%, transparent);
 }
 
 .omp-live-sweep[data-working="background"] {
-	--live-sweep-band: color-mix(in srgb, var(--sc-accent) 5%, transparent);
+	--live-sweep-band: color-mix(in srgb, var(--sc-working) 6%, transparent);
 }
 
 .omp-live-sweep:is([data-working="turn"], [data-working="background"])::before {
@@ -4536,6 +4537,31 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 
 .omp-composer-region--expanded .omp-live-sweep {
 	display: none;
+}
+
+/* Orca's composer glow (the owner's decision, 25 Nov 2026): text handed to the composer (`omp:fill-composer`: a
+   starter card, a review note, a restored queue item) lights its box once, a ring and a 16 px halo held for the first
+   half of 2 s, then gone. Opacity alone animates, on a layer over the box's edge, so nothing repaints or moves. */
+.omp-composer-box[data-composer-glow]::after {
+	content: "";
+	position: absolute;
+	inset: -1px;
+	border-radius: inherit;
+	box-shadow:
+		0 0 0 1px color-mix(in srgb, var(--sc-text) 50%, transparent),
+		0 0 16px color-mix(in srgb, var(--sc-text) 18%, transparent);
+	pointer-events: none;
+	animation: omp-composer-glow 2s var(--sc-ease-exit) both; /* motion-ok: Orca's 2 s hand-off glow, a held light, not a move */
+}
+
+@keyframes omp-composer-glow {
+	0%,
+	50% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
 }
 
 /* Background work: a still ring on Send (nothing on screen breathes). */
@@ -4575,11 +4601,11 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 
 	.omp-live-text:is([data-working="turn"], [data-working="background"]) {
 		-webkit-text-fill-color: currentColor;
-		color: color-mix(in srgb, var(--sc-accent) 55%, var(--sc-text));
+		color: color-mix(in srgb, var(--sc-working) 55%, var(--sc-text));
 	}
 
 	.omp-live-text[data-working="background"] {
-		color: color-mix(in srgb, var(--sc-accent) 30%, var(--sc-text));
+		color: color-mix(in srgb, var(--sc-working) 30%, var(--sc-text));
 	}
 
 	.omp-live-sweep::before {
@@ -4587,11 +4613,16 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	}
 
 	.omp-live-sweep[data-working="turn"] {
-		background: color-mix(in srgb, var(--sc-accent) 5%, transparent);
+		background: color-mix(in srgb, var(--sc-working) 5%, transparent);
 	}
 
 	.omp-live-sweep[data-working="background"] {
-		background: color-mix(in srgb, var(--sc-accent) 3%, transparent);
+		background: color-mix(in srgb, var(--sc-working) 3%, transparent);
+	}
+
+	.omp-composer-box[data-composer-glow]::after {
+		animation: none;
+		opacity: 0;
 	}
 }
 
@@ -4611,12 +4642,13 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	flex: none;
 	width: 1em;
 	height: 1em;
-	color: var(--sc-accent);
+	/* Orca's working yellow (the owner's decision, 25 Nov 2026): one hue that means work under way. */
+	color: var(--sc-working);
 	vertical-align: -0.125em;
 }
 
 .omp-working-arc[data-working-arc="background"] {
-	color: color-mix(in srgb, var(--sc-accent) 55%, var(--sc-text-subtle));
+	color: color-mix(in srgb, var(--sc-working) 55%, var(--sc-text-subtle));
 }
 
 .omp-working-arc svg {
@@ -4820,23 +4852,6 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	.omp-working-arc-part[data-arc="head"] {
 		transform: rotate(130deg);
 	}
-}
-
-/* A row's age slot while the session works: the age keeps its width (hidden), the arc sits at its end, so the row
-   never moves when work starts or ends. */
-.omp-live-age {
-	position: relative;
-	display: inline-grid;
-	align-items: center;
-	justify-items: end;
-}
-
-.omp-live-age > * {
-	grid-area: 1 / 1;
-}
-
-.omp-live-age > time {
-	visibility: hidden;
 }
 
 /* A device section's header color (lib/device-color.ts): a paired host's header wears its own hue so its rows are told

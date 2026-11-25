@@ -214,12 +214,12 @@ export function SessionRowArtwork({ target }: { target: SessionRowTarget | null 
 }
 
 /**
- * A session row's second line before its controls (`data-sidebar-row-end`): the marks (✓, a missing folder, the
- * waiting badge, which goes down to its ⚠), then the age and the branch, which give way in that order on a short line
- * (the owner's order, 19 Nov 2026; sidebar.css `.omp-session-row-give`): the age goes whole first (a working arc keeps
- * its place and gives up only its hidden age), then the branch ends in an ellipsis down to about eight characters, then
- * goes with its mark, never leaving the mark alone (the tooltip keeps the name). With room, a working arc reserves the
- * age's width (composer.md › The age slot), so the branch stays where it was when work starts or ends.
+ * A session row's second line before its controls (`data-sidebar-row-end`): the marks (a pin or fork, a missing
+ * folder, the waiting badge, which goes down to its ⚠), then the age and the branch, which give way in that order on a
+ * short line (the owner's order, 19 Nov 2026; sidebar.css `.omp-session-row-give`): the age goes whole first, then the
+ * branch ends in an ellipsis down to about eight characters, then goes with its mark, never leaving the mark alone (the
+ * tooltip keeps the name). Work under way and an unseen finish are the row's leading status lane, not this line, so the
+ * branch never moves when work starts or ends.
  */
 export function SessionRowLine({
 	marks,

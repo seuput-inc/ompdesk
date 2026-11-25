@@ -126,7 +126,7 @@ const arcRow = (page: Page, n: number) =>
 		.filter({ has: page.getByText(`Saved session ${n}`, { exact: true }) })
 		.first();
 
-test("ten of fifty rows trade their age for the arc, keep their width and rest while hidden", async () => {
+test("ten of fifty rows turn the arc in their status lane, keep their width and rest while hidden", async () => {
 	test.setTimeout(120_000);
 	const page = await openHarness("desktop");
 	const sidebar = sessionSidebar(page);
@@ -148,8 +148,9 @@ test("ten of fifty rows trade their age for the arc, keep their width and rest w
 	await expect(sidebar.locator("[data-session-working] .omp-working-arc")).toHaveCount(WORKING - 1);
 	await expect(arcRow(page, 1).locator(".omp-working-arc")).toHaveCount(0);
 	await expect(arcRow(page, 1).locator(".omp-sidebar-approval")).toHaveCount(1);
-	// The age stays in the slot, hidden, so the slot keeps its place and width.
-	await expect(arcRow(page, 3).locator("[data-session-working] time")).toHaveCSS("visibility", "hidden");
+	// The arc turns in the row's leading status lane; the age stays shown in its slot, which keeps its place and width.
+	await expect(arcRow(page, 3).locator("[data-status-lane] [data-session-working]")).toHaveCount(1);
+	await expect(arcRow(page, 3).locator("[data-sidebar-row-end] time")).toHaveCSS("visibility", "visible");
 	expect(await width()).toBe(idleWidth);
 
 	// Two transform loops per arc, on one shared phase; nothing else in the sidebar loops but the titles' light.

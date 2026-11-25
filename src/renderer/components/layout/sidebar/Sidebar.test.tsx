@@ -482,16 +482,16 @@ function rowFor(text: string): Element {
 }
 
 /**
- * What a row's age slot shows: "turn" or "background" (the working arc), "age" (the time since it last did
- * something), "waiting" (the waiting token) or null.
+ * What a row says of its work: "turn" or "background" (the working arc in its leading status lane), else what its age
+ * slot shows: "waiting" (the waiting token), "age" (the time since it last did something) or null.
  */
 function slotOf(row: Element): string | null {
-	const end = row.querySelector("[data-sidebar-row-end]") ?? row;
-	const arc = end.querySelector("[data-session-working]");
+	const arc = row.querySelector("[data-status-lane] [data-session-working]");
 	if (arc) {
 		expect(arc.querySelector(".omp-working-arc")).not.toBeNull();
 		return arc.getAttribute("data-session-working");
 	}
+	const end = row.querySelector("[data-sidebar-row-end]") ?? row;
 	if (end.querySelector(".omp-sidebar-approval")) return "waiting";
 	return end.querySelector("time") ? "age" : null;
 }
