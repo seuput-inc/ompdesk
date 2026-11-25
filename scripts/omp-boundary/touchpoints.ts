@@ -621,7 +621,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "public",
 		summary:
-			"Own prompt sections through the public prompt hook and context (reply language, output style, user profile, memory recall, scratch folder, check runs, ECC and formal-verification hints); the formal hint reads a `/skill:<name>` turn's prompt as stock's `prompts/skills/user-invocation.md` rendering and matches only its `User:` line.",
+			"Own prompt sections through the public prompt hook and context (reply language, output style, user profile, memory recall, scratch folder, check runs, ECC and formal-verification hints); none depends on stock prompt templates.",
 		files: [
 			"resources/gui-bridge/modes/reply-language.ts",
 			"resources/gui-bridge/modes/output-style.ts",
@@ -631,12 +631,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"resources/gui-bridge/modes/check-runs.ts",
 			"resources/gui-bridge/modes/ecc-hint.ts",
 			"resources/gui-bridge/modes/formal-hint.ts",
-			"resources/gui-bridge/modes/formal-hint-core.ts",
 			"resources/gui-bridge/capabilities.ts",
 		],
-		stock: ["omp://extensions.md#before_agent_start", "prompts/skills/user-invocation.md"],
+		stock: ["omp://extensions.md#before_agent_start"],
 		tests: [
-			"src/main/bridge-formal-hint.test.ts",
 			"src/main/bridge-first-use-stock.test.ts",
 			"src/main/ecc/ecc-stock.test.ts",
 			"src/main/formal/formal-stock.test.ts",
@@ -1825,6 +1823,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/utils/github",
 		],
 		tests: ["src/main/bridge-ci-watch.test.ts", "src/main/bridge-capabilities.test.ts"],
+	},
+	{
+		id: "B67",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"Formal-verification hint on a `/skill:<name>` turn: the hook's prompt is stock's `prompts/skills/user-invocation.md` rendering (the whole skill body, then a `User:` line), and the hint matches only the `User:` line; an unrecognized shape falls back to matching the whole text.",
+		files: ["resources/gui-bridge/modes/formal-hint-core.ts"],
+		stock: ["prompts/skills/user-invocation.md", "@oh-my-pi/pi-coding-agent/extensibility/skills"],
+		tests: ["src/main/interfaces/interfaces-stock.test.ts", "src/main/bridge-formal-hint.test.ts"],
 	},
 	{
 		id: "H01",

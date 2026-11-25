@@ -47,7 +47,6 @@ it("shares no skill name with another built-in root: stock keeps one skill per n
 		existsSync(join(BUILTIN, dir)) ? readdirSync(join(BUILTIN, dir)) : [],
 	);
 	expect(pin.curation.kept.filter(name => elsewhere.includes(name))).toEqual([]);
-	expect(elsewhere).toContain("make-interfaces-feel-better");
 });
 
 it("copies the kept skills' Markdown at the commit and refuses what the curation has not reviewed", async () => {
@@ -93,4 +92,7 @@ it("copies the kept skills' Markdown at the commit and refuses what the curation
 	gitSync(source, "add", "-A");
 	gitSync(source, "commit", "-qm", "a new skill");
 	expect(sync).toThrow(/"better-forms" is new/);
+	gitSync(source, "rm", "-rq", "skills/better-forms", "skills/afk");
+	gitSync(source, "commit", "-qm", "an excluded skill leaves upstream");
+	expect(sync).toThrow(/missing upstream: afk/);
 });

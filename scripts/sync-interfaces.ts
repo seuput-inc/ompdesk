@@ -44,7 +44,10 @@ export function syncInterfaces(source: string, root: string, { commit, version, 
 		const [mode, file] = [entry.slice(0, 6), entry.slice(7)];
 		const [, skill = "", rest = ""] = /^skills\/([^/]+)\/(.+)$/.exec(file) ?? [];
 		if (mode !== "100644" || !skill) throw new Error(`Unexpected upstream file ${mode} ${file}; review it first`);
-		if (skill in curation.excluded) continue;
+		if (skill in curation.excluded) {
+			seen.add(skill);
+			continue;
+		}
 		if (!kept.has(skill))
 			throw new Error(`Upstream skill "${skill}" is new: keep or exclude it in the pin's curation`);
 		seen.add(skill);
@@ -52,8 +55,8 @@ export function syncInterfaces(source: string, root: string, { commit, version, 
 		if (!/^[^/]+\.md$/.test(rest)) throw new Error(`Unexpected file ${file} in a kept skill; review it first`);
 		docs.push(file);
 	}
-	const gone = [...kept].filter(skill => !seen.has(skill));
-	if (gone.length) throw new Error(`Kept skills missing upstream: ${gone.join(", ")}`);
+	const gone = [...kept, ...Object.keys(curation.excluded)].filter(skill => !seen.has(skill));
+	if (gone.length) throw new Error(`Curated skills missing upstream: ${gone.join(", ")}`);
 	const pack = join(root, "resources/omp-builtin/interfaces");
 	rmSync(join(pack, "skills"), { recursive: true, force: true });
 	const hashes: Record<string, string> = { LICENSE: createHash("sha256").update(license).digest("hex") };
