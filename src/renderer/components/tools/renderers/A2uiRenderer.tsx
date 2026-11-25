@@ -6,8 +6,9 @@
  * The call's own chat row under the work card (`A2uiCard live`, cut out by `buildHistoryRows`) is the one that may
  * answer, and only while the call's marker form is pending here (§2 › Actions back to the agent): a Button's action
  * then answers that form request with the action, through the same responder the ask card uses, so the first answer
- * wins across windows, paired computers and the phone. The step's folded body in the work card (`A2uiRenderer`, also
- * the live card while the arguments stream) draws the same surfaces inert, never a second answerable copy.
+ * wins across windows, paired computers and the phone. The step's folded body in the work card (the REGISTRY's
+ * `A2uiChatCard`, also the live card while the arguments stream) draws the same surfaces inert, never a second
+ * answerable copy.
  */
 
 import type { ActionPayload } from "@a2ui/web_core";
@@ -29,7 +30,6 @@ import { useExtensionUiStore } from "../../../stores/extension-ui";
 import { toast } from "../../../stores/toast";
 import { callIdOfEntryKey, selectToolEntry, useToolsStore } from "../../../stores/tools";
 import { Button } from "../../common";
-import type { ToolRendererProps } from "../ToolCard";
 
 /** The action as the bridge takes it back: the surface's whole data model rides along only when it asked. */
 function answerOf(session: A2uiSession, action: ActionPayload): A2uiAction {
@@ -145,8 +145,4 @@ export function A2uiCard({ toolCallId, live = false }: { toolCallId: string; liv
 			) : null}
 		</div>
 	);
-}
-
-export function A2uiRenderer({ toolCallId }: ToolRendererProps) {
-	return toolCallId ? <A2uiCard toolCallId={toolCallId} /> : null;
 }
