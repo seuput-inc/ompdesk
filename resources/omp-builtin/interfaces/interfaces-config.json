@@ -1,0 +1,31 @@
+{
+	"repo": "jakubkrehel/skills",
+	"commit": "4e8a06c86ecba335a7dd84c0ae4bef00e86c3117",
+	"version": "1.23.0",
+	"curation": {
+		"rule": "Keep every skill that helps build or review interfaces, copied unmodified with upstream's own visibility (domain skills, better-interface and build-design model-invoked; the procedure skills user-invoked through disable-model-invocation, run as /skill:<name>). Leave out a skill that duplicates what OMPdesk or a built-in pack already does or that would fight pstack or Ponytail routing. An upstream skill in neither list fails the sync until it is curated here. No skill may share a name with another built-in root's: stock keeps one skill per name.",
+		"kept": [
+			"better-accessibility",
+			"better-colors",
+			"better-interface",
+			"better-layout",
+			"better-motion",
+			"better-typography",
+			"better-ui",
+			"better-writing",
+			"break",
+			"build-design",
+			"explain-interface",
+			"interface-review",
+			"state-machine",
+			"variant"
+		],
+		"excluded": {
+			"afk": "an unattended hours-long run that commits to a local branch and leaves a report is Autopilot (and pstack's autonomous-run playbook); a second unattended runner would skip Autopilot's guard, board and permissions.",
+			"upskill": "mining past sessions for skills, hooks and automations is ai-memory's learning (memory_auto_improve, consolidation); it also reads Claude Code and Codex transcript folders (~/.claude/projects, ~/.codex), not omp's ~/.omp/agent/sessions."
+		},
+		"otherSources": {
+			"jakubkrehel/make-interfaces-feel-better": "not shipped: the ECC pack already ships a skill named make-interfaces-feel-better (hidden, in its index), and stock keeps one skill per name, so a second copy would shadow or rename one of them; better-ui, better-motion and better-typography here hold the same polish rules in the author's newer family, and a second listed polish skill would compete with better-ui for the same requests."
+		}
+	}
+}

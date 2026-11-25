@@ -638,6 +638,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-first-use-stock.test.ts",
 			"src/main/ecc/ecc-stock.test.ts",
 			"src/main/formal/formal-stock.test.ts",
+			"src/main/interfaces/interfaces-stock.test.ts",
 		],
 	},
 	{
@@ -1822,6 +1823,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/utils/github",
 		],
 		tests: ["src/main/bridge-ci-watch.test.ts", "src/main/bridge-capabilities.test.ts"],
+	},
+	{
+		id: "B67",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"Formal-verification hint on a `/skill:<name>` turn: the hook's prompt is stock's `prompts/skills/user-invocation.md` rendering (the whole skill body, then a `User:` line), and the hint matches only the `User:` line; an unrecognized shape falls back to matching the whole text.",
+		files: ["resources/gui-bridge/modes/formal-hint-core.ts"],
+		stock: ["prompts/skills/user-invocation.md", "@oh-my-pi/pi-coding-agent/extensibility/skills"],
+		tests: ["src/main/interfaces/interfaces-stock.test.ts", "src/main/bridge-formal-hint.test.ts"],
 	},
 	{
 		id: "H01",
