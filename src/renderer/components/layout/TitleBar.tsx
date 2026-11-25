@@ -230,9 +230,10 @@ export function TitleBar() {
 	const statsMessageCount = useMessagesStore(s => s.messages.length);
 	const sidebarVisible = useUiStore(s => s.sidebarVisible);
 	const drawer = useDrawerMode();
-	// The window's open sessions as tabs (Orca's tab bar), once the window lists its tab; a phone keeps its one title.
+	// The window's open sessions as tabs (Orca's tab bar, a desktop window's), once the window lists its tab; a phone
+	// or tablet page keeps its one title.
 	const listed = useTabsStore(s => s.tabs.some(tab => tab.id === s.activeTabId));
-	const tabStrip = useShellMode() !== "phone" && listed;
+	const tabStrip = useShellMode() === null && listed;
 	const panelVisible = useUiStore(s => s.panelVisible);
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
@@ -548,7 +549,11 @@ export function TitleBar() {
 						)}
 					</div>
 				) : tabStrip ? (
-					<SessionTabStrip activeTitle={displayName} onRenameActive={startRename} />
+					<SessionTabStrip
+						activeContent={<SessionTitle noTooltip parts={displayParts} swapScope={sessionId ?? ""} />}
+						activeTitle={displayName}
+						onRenameActive={startRename}
+					/>
 				) : (
 					<Tooltip content={`${displayName} · ${t("titlebar.rename")}`} describe={false} side="bottom">
 						<Button

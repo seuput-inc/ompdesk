@@ -6,10 +6,11 @@
  * the tooltip, and closes by its ✕, a middle click or Delete under ⌘W's rules (`requestTabClose`: a running tab asks
  * first). The chosen tab is the session's name: a click on it renames it, as the title bar's name did. Its menu
  * renames, splits it beside the session on screen, and closes it, the others, or those to its right or left (a running
- * one stays). The + opens a new session tab, chat, worktree, terminal or preview. A phone keeps its one title.
+ * one stays). The + opens a new session tab, chat, worktree, terminal or preview. Only a desktop window has the strip
+ * (Orca's is a desktop app): a phone or tablet page keeps its one title, its tabs being the sidebar's.
  */
 import { GitBranch, Globe, MessageSquarePlus, Plus, SquareTerminal } from "lucide-react";
-import { type KeyboardEvent, type MouseEvent, useMemo, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, type ReactNode, useMemo, useState } from "react";
 import type { SessionInfo } from "../../../../shared/ipc-types";
 import { useSessionList } from "../../../hooks/use-session-list";
 import { useT } from "../../../lib/i18n";
@@ -53,10 +54,13 @@ function showPanel(view: PanelTab): void {
 
 export function SessionTabStrip({
 	activeTitle,
+	activeContent,
 	onRenameActive,
 }: {
 	/** The chosen tab's name (the title bar's, with its automatic title). */
 	activeTitle: string;
+	/** How the chosen tab draws that name: the typed name and the automatic title apart, as the sidebar row does. */
+	activeContent?: ReactNode;
 	onRenameActive: () => void;
 }) {
 	const t = useT();
@@ -88,6 +92,7 @@ export function SessionTabStrip({
 		return {
 			id: tab.id,
 			label,
+			content: active ? activeContent : undefined,
 			tooltip: label,
 			leading: <SessionStatusLane state={tabLane(tab)} />,
 			className: tab.unreadDone && !active ? "omp-tab-strip-tab-unread" : undefined,

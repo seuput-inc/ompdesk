@@ -610,14 +610,19 @@ for (const engine of ENGINES) {
 								expect(size.hit.height, `${label} ${size.label} height`).toBeGreaterThanOrEqual(min);
 							}
 						};
-						// The Run chip sits 4 px from +: its reach stops at the midpoint, so + is 30 px wide.
-						await reach(plus(page), "+", 30);
+						// Orca's phone composer (the owner's decision, 25 Nov 2026): +, the context ring and Send/Stop are drawn
+						// 38 px and the Run and model chips 32, each reaching past its box without taking a neighbour's tap.
+						await reach(plus(page), "+", 38);
+						await reach(contextRing(page), "context ring", 38);
 						await reach(sendSlot(page).locator("button"), "Send/mic", 44);
-						for (const locator of [runChip(page), modelChip(page), contextRing(page)]) {
-							await reach(locator, "row chip", 30);
-							for (const size of await hitSizes(locator)) expect(size.visual.height).toBeLessThanOrEqual(28.5);
+						for (const locator of [plus(page), contextRing(page), sendSlot(page).locator("button")]) {
+							for (const size of await hitSizes(locator))
+								expect(size.visual.height).toBeGreaterThanOrEqual(37.5);
 						}
-						for (const size of await hitSizes(plus(page))) expect(size.visual.width).toBeLessThanOrEqual(28.5);
+						for (const locator of [runChip(page), modelChip(page)]) {
+							await reach(locator, "row chip", 32);
+							for (const size of await hitSizes(locator)) expect(size.visual.height).toBeLessThanOrEqual(32.5);
+						}
 						for (const locator of [
 							plus(page),
 							sendSlot(page).locator("button").first(),

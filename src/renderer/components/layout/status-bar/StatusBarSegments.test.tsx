@@ -110,4 +110,20 @@ describe("the desktop status bar", () => {
 		expect(useSidebarFolds.getState().statusHidden).toEqual({ link: true });
 		expect(container.querySelector("[data-status-link]")).toBeNull();
 	});
+
+	it("opens the usage block over the bar, every account listed, and a second click closes it", async () => {
+		reports = [report("anthropic", 0.42, 0.1, true), report("openai-codex", 0.05, 0.9, false)];
+		useModelStore.setState({ providers: [] });
+		await mount();
+		const usage = container.querySelector("[data-status-usage]") as unknown as { click: () => void } | null;
+		expect(document.body.querySelector("[data-usage-popover]")).toBeNull();
+		await act(async () => usage?.click());
+		const block = document.body.querySelector("[data-usage-popover]");
+		expect(block?.querySelectorAll("[data-usage-account]")).toHaveLength(2);
+		// The popover is the block's fold: no fold toggle of its own, the gear still opens accounts.
+		expect(block?.querySelector("[data-sidebar-usage-toggle]")).toBeNull();
+		expect(block?.querySelector("[data-sidebar-usage-open]")).not.toBeNull();
+		await act(async () => usage?.click());
+		expect((usage as unknown as Element).getAttribute("aria-expanded")).toBe("false");
+	});
 });

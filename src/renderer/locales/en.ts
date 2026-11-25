@@ -6667,6 +6667,7 @@ export const en: Record<string, string> = {
 	"providerList.login.pasteHintRemote":
 		"After you sign in, the browser ends on a page that won't load. Copy its full address and paste it here.",
 	"setup.title": "Set up OMPdesk",
+	"setup.progress": "Step {step} of {total}",
 	"setup.connect.description": "Sign in or paste an API key. Credentials stay on this computer.",
 	"setup.custom.title": "Running your own endpoint?",
 	"setup.custom.description":

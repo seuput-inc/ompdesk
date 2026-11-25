@@ -1,25 +1,24 @@
 /**
  * What the desktop status bar holds (Orca's `StatusBarSurface`, the owner's decision of 25 Nov 2026): a summary of
- * this tab's accounts' usage (a click reveals the sidebar footer's usage block, which stays where it is), the paired
- * computers' link, and an app update on its way. Each item hides from the bar's own context menu (right click,
- * Shift+F10), never in Settings (`sidebarFolds.statusHidden`, device-local). Its own chunk, so the phone's first
- * screen, which has no status bar, never loads it.
+ * this tab's accounts' usage whose click opens the usage block over the bar (the block's desktop home: a phone or
+ * tablet page keeps it in the sidebar footer), the paired computers' link, and an app update on its way. Each item
+ * hides from the bar's own context menu (right click, Shift+F10), never in Settings (`sidebarFolds.statusHidden`,
+ * device-local). Its own chunk, so the phone's first screen, which has no status bar, never loads it.
  */
 import { ArrowUpCircle, Gauge, MonitorSmartphone } from "lucide-react";
-import { type KeyboardEvent, type MouseEvent, useMemo, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, useMemo, useRef, useState } from "react";
 import { useUsageReports } from "../../../hooks/use-usage-reports";
 import { useT } from "../../../lib/i18n";
 import { accountGauges } from "../../../lib/usage-windows";
 import { useModelStore } from "../../../stores/model";
 import { usePairedHosts } from "../../../stores/remote";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
-import { useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { useUiStore } from "../../../stores/ui";
 import { useUpdaterStore } from "../../../stores/updater";
-import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, StatusDot } from "../../common";
+import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, Popover, StatusDot } from "../../common";
 import { quotaLimits } from "../../settings/providers/AccountQuota";
 import { shortProviderName } from "../../settings/providers/provider-groups";
-import { accountStanding, sourceOf } from "../sidebar/SidebarUsage";
+import { accountStanding, SidebarUsage, sourceOf } from "../sidebar/SidebarUsage";
 import { usageAccountGroups } from "../sidebar/usage-groups";
 
 export const STATUS_ITEMS = ["usage", "link", "update"] as const;
@@ -33,23 +32,11 @@ const ITEM_LABEL_KEY: Record<StatusItem, string> = {
 
 const SEGMENT = "h-5 gap-1 rounded-(--sc-radius-sm) px-1.5 text-sc-xs font-normal text-(--sc-text-muted)";
 
-/**
- * The sidebar footer's usage block, shown: the sidebar opened, the block unfolded and scrolled into view; with the
- * block not pinned, Settings › Models & accounts, where every account's usage also is.
- */
-function revealUsageBlock(): void {
-	if (!useSidebarPrefs.getState().railPins.includes("usage")) {
-		useUiStore.getState().openProviders();
-		return;
-	}
-	const ui = useUiStore.getState();
-	if (!ui.sidebarVisible) ui.toggleSidebar();
-	useSidebarFolds.getState().setUsageCollapsed(false);
-	requestAnimationFrame(() => document.querySelector("[data-rail-pin='usage']")?.scrollIntoView({ block: "nearest" }));
-}
-
-/** Per provider: its short name and the in-use account's tightest window, as a share of its limit. */
+/** Per provider: its short name and the in-use account's tightest window, as a share of its limit; a click opens the block. */
 function UsageItem() {
+	const t = useT();
+	const anchor = useRef<HTMLButtonElement>(null);
+	const [open, setOpen] = useState(false);
 	const provider = useModelStore(s => s.model?.provider ?? null);
 	const providers = useModelStore(s => s.providers);
 	const reports = useUsageReports();
@@ -71,21 +58,36 @@ function UsageItem() {
 	);
 	if (chips.length === 0) return null;
 	return (
-		<Button
-			className={SEGMENT}
-			data-status-usage
-			icon={<Gauge />}
-			onClick={revealUsageBlock}
-			size="sm"
-			variant="ghost"
-		>
-			{chips.slice(0, 3).map(chip => (
-				<span className="tabular-nums" data-usage-standing={chip.standing} key={chip.id}>
-					{chip.name} {chip.percent}%
-				</span>
-			))}
-			{chips.length > 3 && <span>+{chips.length - 3}</span>}
-		</Button>
+		<>
+			<Button
+				aria-expanded={open}
+				aria-haspopup="dialog"
+				className={SEGMENT}
+				data-status-usage
+				icon={<Gauge />}
+				onClick={() => setOpen(!open)}
+				ref={anchor}
+				size="sm"
+				variant="ghost"
+			>
+				{chips.slice(0, 3).map(chip => (
+					<span className="tabular-nums" data-usage-standing={chip.standing} key={chip.id}>
+						{chip.name} {chip.percent}%
+					</span>
+				))}
+				{chips.length > 3 && <span>+{chips.length - 3}</span>}
+			</Button>
+			<Popover
+				anchorRef={anchor}
+				ariaLabel={t("sidebar.pin.usage")}
+				className="p-2"
+				onClose={() => setOpen(false)}
+				open={open}
+				placement="top-start"
+			>
+				<SidebarUsage popover />
+			</Popover>
+		</>
 	);
 }
 

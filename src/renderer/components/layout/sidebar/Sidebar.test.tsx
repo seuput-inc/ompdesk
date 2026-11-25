@@ -619,9 +619,10 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(footer?.querySelector('[aria-label="Help"]') ?? null, "onClick");
 		await fire(menuItem("Customize sidebar…"), "onClick");
 		const sheet = document.body.querySelector("[data-sidebar-pins]");
-		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(10);
+		// A desktop window's usage block is the status bar's, so its sheet offers no usage switch (a phone's does).
+		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(9);
 		const switchFor = (pin: string) => document.body.querySelector(`#sidebar-pin-${pin}`);
-		expect(switchFor("usage")?.getAttribute("aria-checked")).toBe("true");
+		expect(switchFor("usage")).toBeNull();
 		expect(switchFor("files")?.getAttribute("aria-checked")).toBe("false");
 
 		await fire(switchFor("files"), "onClick");

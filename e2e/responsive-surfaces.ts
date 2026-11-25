@@ -350,6 +350,15 @@ async function openDrawer(page: Page, look: Look): Promise<void> {
 }
 
 /**
+ * The usage block: a desktop window's opens over its status bar from the usage summary (the owner's decision, 25 Nov
+ * 2026); a phone or tablet page keeps it in the sidebar footer.
+ */
+async function openUsage(page: Page, look: Look): Promise<void> {
+	if ((await page.locator("[data-status-bar]").count()) === 0) return openDrawer(page, look);
+	await page.locator("[data-status-usage]").click({ timeout: 15_000 });
+}
+
+/**
  * The menu of the project header the view's open session sits under: this computer's list, or the paired computer's
  * section for the host. A mouse right-clicks the header; a finger has no right click, so it taps the header's ⋯.
  */
@@ -1273,8 +1282,8 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "sidebar-usage",
 		area: "A",
-		title: "Session list with the usage block listing four Claude and four ChatGPT accounts, the session's own marked",
-		open: openDrawer,
+		title: "The usage block (a desktop window's status bar popover, a phone's sidebar footer) listing four Claude and four ChatGPT accounts, the session's own marked",
+		open: openUsage,
 		ready: "[data-rail-pin='usage'] [data-usage-account]",
 		// Parity only, and only over a host whose fake omp reports those accounts (`OMP_GUI_TEST_USAGE_ACCOUNTS=many`).
 		when: () => false,
@@ -1288,7 +1297,7 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "The same usage block scrolled to its last account: the block scrolls inside its cap, the sidebar does not",
 		open: async (page, look) => {
-			await openDrawer(page, look);
+			await openUsage(page, look);
 			await page.locator("[data-sidebar-usage-scroll]").evaluate(list => {
 				list.scrollTop = list.scrollHeight;
 			});

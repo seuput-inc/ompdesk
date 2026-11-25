@@ -77,6 +77,12 @@ html:not([data-input="touch"]) .omp-session-sidebar .omp-sidebar-head {
 	scrollbar-gutter: stable;
 }
 
+/* Orca's 280 px sidebar in a narrow desktop window: it gives the session at least 200 px (no less than its own 220 px
+   minimum), so the composer's controls stay inside their box in a 420 px window. */
+html:not([data-shell]) .omp-session-sidebar {
+	max-width: max(220px, calc(100vw - 200px));
+}
+
 /* The status lane leads the row, then the picture (Orca's card status lane, the owner's decision of 25 Nov 2026):
    the lane starts where its group header's content does (the header button's `pl-2`), nested in a project group or
    not, so the list reads as one left edge under the project's chevron. */
@@ -352,6 +358,14 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	min-height: 0;
 	max-height: min(16rem, 32dvh);
 	margin-bottom: var(--sc-space-2);
+}
+
+/* In the status bar's popover the block takes the room above the bar (the popover's `--omp-popover-room`). */
+.omp-sidebar-usage[data-usage-popover] {
+	width: 20rem;
+	max-width: 100%;
+	max-height: min(32rem, var(--omp-popover-room, 60dvh));
+	margin-bottom: 0;
 }
 
 .omp-sidebar-usage-groups {

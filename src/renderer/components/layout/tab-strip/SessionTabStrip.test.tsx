@@ -35,7 +35,11 @@ async function mount(onRenameActive = vi.fn()): Promise<void> {
 	await act(async () =>
 		root.render(
 			<I18nProvider>
-				<SessionTabStrip activeTitle="Session b" onRenameActive={onRenameActive} />
+				<SessionTabStrip
+					activeContent={<span data-title-name="">Session b</span>}
+					activeTitle="Session b"
+					onRenameActive={onRenameActive}
+				/>
 			</I18nProvider>,
 		),
 	);
@@ -68,6 +72,9 @@ describe("the title bar's session tabs", () => {
 		expect(tabs().map(element => element.getAttribute("data-tab-id"))).toEqual(["a", "b", "d"]);
 		const chosen = tabs()[1];
 		expect(chosen?.hasAttribute("data-titlebar-session-name")).toBe(true);
+		// The chosen tab draws the title bar's name parts; another tab its plain name.
+		expect(chosen?.querySelector("[data-title-name]")?.textContent).toBe("Session b");
+		expect(tabs()[0]?.querySelector("[data-title-name]")).toBeNull();
 		expect(chosen?.getAttribute("aria-selected")).toBe("true");
 		// A running tab leads with the working arc, an idle one with nothing.
 		expect(tabs()[2]?.querySelector('[data-status-lane="working"]')).not.toBeNull();

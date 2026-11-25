@@ -43,7 +43,7 @@ import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
 import { autopilotRunOf, worktreeKindOf, worktreeLabel } from "../../../../shared/project-origin";
 import { hostedSummaries, type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
-import { FOOTER_PINS, type FooterPin } from "../../../../shared/sidebar-prefs";
+import type { FooterPin } from "../../../../shared/sidebar-prefs";
 import {
 	CHATS_ORDER_KEY,
 	familyRows,
@@ -156,7 +156,7 @@ import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from ".
 import { SidebarRenameField } from "./SidebarRenameField";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SidebarUpdateCard } from "./SidebarUpdateCard";
-import { SidebarUsage } from "./SidebarUsage";
+import { SidebarUsage, useOfferedFooterPins } from "./SidebarUsage";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
@@ -318,6 +318,7 @@ function SidebarFooter() {
 	const [pinMenu, setPinMenu] = useState<PinMenuState | null>(null);
 	const helpItems = useHelpItems(() => setPinsSheet({ open: true }));
 	const railPins = useSidebarPrefs(s => s.railPins);
+	const offeredPins = useOfferedFooterPins();
 	const settingsHere = destination === "settings";
 	return (
 		<nav
@@ -325,23 +326,25 @@ function SidebarFooter() {
 			className="flex shrink-0 flex-col gap-px border-t border-(--sc-divider) p-2"
 			data-sidebar-destinations
 		>
-			{FOOTER_PINS.filter(pin => railPins.includes(pin)).map(pin => {
-				if (pin === "usage") return <SidebarUsage key={pin} {...pinMenuHandlers(pin, setPinMenu)} />;
-				const { icon: Icon, open: openPin } = RAIL_PIN_ROWS[pin];
-				return (
-					<Button
-						{...pinMenuHandlers(pin, setPinMenu)}
-						className="omp-sidebar-destination w-full min-w-0 justify-start gap-2.5 px-2.5 text-(--sc-text-secondary)"
-						data-rail-pin={pin}
-						icon={<Icon />}
-						key={pin}
-						onClick={openPin}
-						variant="ghost"
-					>
-						<span className="min-w-0 flex-1 truncate text-left">{t(RAIL_PIN_LABEL_KEYS[pin])}</span>
-					</Button>
-				);
-			})}
+			{offeredPins
+				.filter(pin => railPins.includes(pin))
+				.map(pin => {
+					if (pin === "usage") return <SidebarUsage key={pin} {...pinMenuHandlers(pin, setPinMenu)} />;
+					const { icon: Icon, open: openPin } = RAIL_PIN_ROWS[pin];
+					return (
+						<Button
+							{...pinMenuHandlers(pin, setPinMenu)}
+							className="omp-sidebar-destination w-full min-w-0 justify-start gap-2.5 px-2.5 text-(--sc-text-secondary)"
+							data-rail-pin={pin}
+							icon={<Icon />}
+							key={pin}
+							onClick={openPin}
+							variant="ghost"
+						>
+							<span className="min-w-0 flex-1 truncate text-left">{t(RAIL_PIN_LABEL_KEYS[pin])}</span>
+						</Button>
+					);
+				})}
 			{/* Help closes the Settings row: one footer, no orphaned icon underneath. */}
 			<div className="flex min-w-0 items-center gap-1">
 				<div className="flex min-w-0 flex-1">

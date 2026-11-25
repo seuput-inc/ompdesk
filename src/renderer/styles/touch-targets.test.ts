@@ -41,11 +41,12 @@ describe("touch targets and type", () => {
 		expect(read("./components.css")).toMatch(/\.markdown-body table \{[^}]*font-size:\s*var\(--sc-font-sm\)/);
 	});
 
-	it("shrinks the phone's controls, type and icons in one place, with fields still 16 px", () => {
+	it("sets the phone's controls to Orca's phone sizes and shrinks its type and icons in one place, with fields still 16 px", () => {
 		const phone = rule('html[data-shell="phone"]');
-		expect(phone).toMatch(/--sc-control-sm:\s*24px/);
-		expect(phone).toMatch(/--sc-control-md:\s*28px/);
-		expect(phone).toMatch(/--sc-control-lg:\s*32px/);
+		// Orca's phone app: 32 px chips, 36 px icon buttons (the owner's decision, 25 Nov 2026).
+		expect(phone).toMatch(/--sc-control-sm:\s*32px/);
+		expect(phone).toMatch(/--sc-control-md:\s*36px/);
+		expect(phone).toMatch(/--sc-control-lg:\s*40px/);
 		expect(phone).toMatch(/--phone-type-scale:\s*0\.8667/);
 		expect(read("../lib/theme.ts")).toContain("var(--phone-type-scale, 1)");
 		expect(phone).toMatch(/--sc-font-xs:\s*12px/);
@@ -403,14 +404,16 @@ describe("controls close enough to take each other's taps", () => {
 });
 
 describe("the phone composer", () => {
-	it("draws + and the mic 44 px and Send/Stop a 40 px disc, Orca's touch composer, in a row that holds them", () => {
-		expect(rule('html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic)')).toMatch(
-			/width:\s*44px;\s*height:\s*44px/,
+	it("draws +, the mic, the context ring and Send/Stop 38 px (Orca's phone composer) in a row that holds them", () => {
+		expect(rule('html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action)')).toMatch(
+			/width:\s*38px;\s*height:\s*38px/,
 		);
-		expect(rule('html[data-shell="phone"] .omp-composer-action')).toMatch(/width:\s*40px;\s*height:\s*40px/);
-		expect(rule('html[data-shell="phone"] .omp-composer-toolbar')).toMatch(/min-height:\s*44px/);
+		expect(rule('html[data-shell="phone"] .omp-composer-toolbar .omp-context-usage-trigger')).toMatch(
+			/height:\s*38px/,
+		);
+		expect(rule('html[data-shell="phone"] .omp-composer-toolbar')).toMatch(/min-height:\s*38px/);
 		expect(read("../components/layout/composer/ComposerToolbar.tsx")).toContain('className="omp-composer-add"');
-		// The chips between them still reach 44 within half their gaps.
+		// Each still reaches 44 within half its gaps.
 		const gap = rule('html[data-shell="phone"] :is(.omp-composer-toolbar, .omp-composer-send-cluster)');
 		expect(gap).toMatch(/--hit-gap-x:\s*18px/);
 		expect(gap).toMatch(/--hit-gap-y:\s*18px/);

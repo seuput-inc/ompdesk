@@ -5,19 +5,21 @@
  */
 
 import { createElement, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { FOOTER_PINS, type FooterPin } from "../../../../shared/sidebar-prefs";
+import type { FooterPin } from "../../../../shared/sidebar-prefs";
 import { useT } from "../../../lib/i18n";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { RAIL_PIN_LABEL_KEYS, useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { anchorFromEvent, ContextMenu, type ContextMenuAnchor, Modal, SwitchTile } from "../../common";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
 import { SIDEBAR_NAV_ROWS, useOfferedNavRows } from "./SidebarNav";
+import { useOfferedFooterPins } from "./SidebarUsage";
 
 export function SidebarPinsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
 	const t = useT();
 	const railPins = useSidebarPrefs(s => s.railPins);
 	const navHidden = useSidebarFolds(s => s.navHidden);
 	const navRows = useOfferedNavRows();
+	const footerPins = useOfferedFooterPins();
 	return (
 		<Modal onClose={onClose} open={open} size="sm" title={t("help.customizeSidebar")}>
 			<div className="flex flex-col gap-px" data-sidebar-pins>
@@ -31,7 +33,7 @@ export function SidebarPinsSheet({ open, onClose }: { open: boolean; onClose: ()
 						onCheckedChange={shown => useSidebarFolds.getState().setNavHidden(row, !shown)}
 					/>
 				))}
-				{FOOTER_PINS.map(pin => (
+				{footerPins.map(pin => (
 					<SwitchTile
 						checked={railPins.includes(pin)}
 						icon={createElement(RAIL_PIN_ICONS[pin])}

@@ -6649,6 +6649,7 @@ export const ko: Record<string, string> = {
 	"providerList.login.pasteHintRemote":
 		"로그인을 마치면 브라우저가 열리지 않는 페이지에서 멈춰요. 그 페이지의 전체 주소를 복사해 여기에 붙여 넣어 주세요.",
 	"setup.title": "OMPdesk 시작하기",
+	"setup.progress": "{total}단계 중 {step}단계",
 	"setup.connect.description": "로그인하거나 API 키를 붙여 넣으세요. 자격 증명은 이 컴퓨터에만 저장돼요.",
 	"setup.custom.title": "직접 운영하는 엔드포인트가 있나요?",
 	"setup.custom.description":

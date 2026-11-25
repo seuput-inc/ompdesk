@@ -1014,17 +1014,18 @@ html[data-input="touch"] .omp-file-card-actions {
 }
 
 /* ── Phone density: smaller and denser than the desktop, like a phone chat app ────────────────────────────── */
-/* A phone is read at arm's length on 390 px: type, controls, gutters and the chrome around the transcript shrink so
-   the conversation keeps the screen. Only `data-shell="phone"` (web build) gets this; a tablet keeps the desktop
-   steps, and the 44 px hit area stays an invisible ::after. Fields stay 16 px (iOS zooms into anything smaller). */
+/* A phone is read at arm's length on 390 px: type, gutters and the chrome around the transcript shrink so the
+   conversation keeps the screen. Its controls are Orca's phone app's (the owner's decision, 25 Nov 2026): 32 px chips
+   and small buttons, 36 px icon buttons, each reaching 44 px with its invisible ::after. Only `data-shell="phone"`
+   (web build) gets this; a tablet keeps the desktop steps. Fields stay 16 px (iOS zooms into anything smaller). */
 html[data-shell="phone"] {
 	--phone-type-scale: 0.8667;
 	--sc-font-xs: 12px;
 	--sc-font-sm: 12px;
-	--sc-control-sm: 24px;
-	--sc-control-md: 28px;
-	--sc-control-lg: 32px;
-	--sc-hit-min: 24px;
+	--sc-control-sm: 32px;
+	--sc-control-md: 36px;
+	--sc-control-lg: 40px;
+	--sc-hit-min: 32px;
 	--sc-font-2xs: 12px;
 	--sc-icon-lg: 16px;
 	--sc-row-touch: 36px;
@@ -1149,21 +1150,22 @@ html[data-shell="phone"] .omp-composer-region.pb-3 {
 }
 
 html[data-shell="phone"] .omp-composer-toolbar {
-	min-height: 44px;
+	min-height: 38px;
 	padding: 0 var(--sc-space-1-5) var(--sc-space-0-5) var(--sc-space-1);
 }
 
-/* Orca's touch composer (the owner's decision, 25 Nov 2026, which lifts "never draw a control 44 px" for these): on a
-   phone + and the mic are drawn 44 px and Send/Stop is a 40 px disc, as Orca's coarse-pointer composer draws them
-   (attach and dictation `size-11`, the round send `size-10`). The chips between them keep the phone's 28 px. */
-html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic) {
-	width: 44px;
-	height: 44px;
+/* Orca's phone composer (the owner's decision, 25 Nov 2026): +, the mic, the context ring and Send/Stop are 38 px
+   (Orca's `COMPOSER_CONTROL_SIZE`), each reaching 44 with its ::after; the Run and model chips are the phone's 32 px
+   chips. The field row gives back what the taller row takes (8 px above the text, none under it), so the box keeps
+   its height and the 19.4 % chrome budget. */
+html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action) {
+	width: 38px;
+	height: 38px;
 }
 
-html[data-shell="phone"] .omp-composer-action {
-	width: 40px;
-	height: 40px;
+html[data-shell="phone"] .omp-composer-toolbar .omp-context-usage-trigger {
+	min-width: 38px;
+	height: 38px;
 }
 
 html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action) > svg:not(.omp-composer-stop-glyph) {
@@ -1172,8 +1174,17 @@ html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer
 }
 
 html[data-shell="phone"] .omp-composer-action > .omp-composer-stop-glyph {
-	width: 14px;
-	height: 14px;
+	width: 12px;
+	height: 12px;
+}
+
+/* A phone's switch is Orca's phone app's, 31 × 51 (its `MobileSwitch`, the iOS size): the kit's 18 × 32 track scaled. */
+html[data-shell="phone"] [role="switch"] {
+	height: auto;
+}
+
+html[data-shell="phone"] [role="switch"] > span {
+	zoom: 1.6;
 }
 
 /* The phone composer is always open: the field spans the box's full inner width on its own row, and the controls sit
@@ -1181,7 +1192,7 @@ html[data-shell="phone"] .omp-composer-action > .omp-composer-stop-glyph {
    dictation is on), with the Run chip, the model chip and the context ring between them: every composer control stays
    inside the box and nothing folds it. */
 html[data-shell="phone"] .omp-composer-box > div:has(> [data-composer-input]) {
-	padding: 10px var(--sc-space-3) var(--sc-space-1);
+	padding: 8px var(--sc-space-3) 0;
 }
 
 html[data-shell="phone"] .omp-composer-scroll > :is(button, [role="button"], span):first-child {

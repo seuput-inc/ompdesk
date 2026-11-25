@@ -7,6 +7,8 @@
 import { Settings2 } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, useMemo } from "react";
 import type { ProviderInfo, UsageReport } from "../../../../shared/rpc-types";
+import { FOOTER_PINS, type FooterPin } from "../../../../shared/sidebar-prefs";
+import { useShellMode } from "../../../hooks/use-shell-mode";
 import { useUsageReports } from "../../../hooks/use-usage-reports";
 import { useT } from "../../../lib/i18n";
 import { accountGauges, gaugeColumn, gaugeColumns, shortWindowLabel } from "../../../lib/usage-windows";
@@ -132,40 +134,61 @@ function UsageGroup({ group, providers }: { group: UsageAccountGroup; providers:
 	);
 }
 
+const DESKTOP_FOOTER_PINS = FOOTER_PINS.filter(pin => pin !== "usage");
+
+/** The footer pins this page offers: a desktop window's usage block lives in its status bar (the owner's decision, 25 Nov 2026). */
+export function useOfferedFooterPins(): readonly FooterPin[] {
+	return useShellMode() === null ? DESKTOP_FOOTER_PINS : FOOTER_PINS;
+}
+
+/**
+ * The usage block: the sidebar footer's on a phone or tablet page, the status bar's popover in a desktop window
+ * (`popover`: no fold, since closing the popover is its fold, and the height the popover has room for).
+ */
 export function SidebarUsage({
 	onContextMenu,
 	onKeyDown,
+	popover = false,
 }: {
 	onContextMenu?: (event: MouseEvent<HTMLElement>) => void;
 	onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
+	popover?: boolean;
 }) {
 	const t = useT();
 	const provider = useModelStore(s => s.model?.provider ?? null);
 	const providers = useModelStore(s => s.providers);
 	const reports = useUsageReports();
 	const groups = useMemo(() => (reports ? usageAccountGroups(reports, provider) : []), [reports, provider]);
-	// The block folds to its header; the fold is remembered (`stores/sidebar-folds.ts`).
-	const collapsed = useSidebarFolds(s => s.usageCollapsed);
+	// The footer block folds to its header; the fold is remembered (`stores/sidebar-folds.ts`).
+	const folded = useSidebarFolds(s => s.usageCollapsed);
+	const collapsed = folded && !popover;
 	if (groups.length === 0) return null;
 	return (
 		<div
 			className="omp-sidebar-usage"
 			data-collapsed={collapsed || undefined}
 			data-rail-pin="usage"
+			data-usage-popover={popover || undefined}
 			onContextMenu={onContextMenu}
 			onKeyDown={onKeyDown}
 		>
 			<div className="flex shrink-0 items-center gap-0.5">
-				<DisclosureButton
-					chevron="end"
-					chevronClassName="size-(--sc-icon-sm)"
-					className="h-6 min-w-0 flex-1 gap-1 rounded-(--sc-radius-md) px-2 text-sc-xs font-medium text-(--sc-text-muted) hover:text-(--sc-text)"
-					data-sidebar-usage-toggle
-					onToggle={() => useSidebarFolds.getState().setUsageCollapsed(!collapsed)}
-					open={!collapsed}
-				>
-					<span className="min-w-0 flex-1 truncate text-left">{t("sidebar.pin.usage")}</span>
-				</DisclosureButton>
+				{popover ? (
+					<span className="min-w-0 flex-1 truncate px-2 text-sc-xs font-medium text-(--sc-text-muted)">
+						{t("sidebar.pin.usage")}
+					</span>
+				) : (
+					<DisclosureButton
+						chevron="end"
+						chevronClassName="size-(--sc-icon-sm)"
+						className="h-6 min-w-0 flex-1 gap-1 rounded-(--sc-radius-md) px-2 text-sc-xs font-medium text-(--sc-text-muted) hover:text-(--sc-text)"
+						data-sidebar-usage-toggle
+						onToggle={() => useSidebarFolds.getState().setUsageCollapsed(!collapsed)}
+						open={!collapsed}
+					>
+						<span className="min-w-0 flex-1 truncate text-left">{t("sidebar.pin.usage")}</span>
+					</DisclosureButton>
+				)}
 				<IconButton
 					data-sidebar-usage-open
 					icon={<Settings2 />}
