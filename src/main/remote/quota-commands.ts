@@ -86,6 +86,8 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"agent_control_confirm",
 	"agent_control_note",
 	"agent_control_worker",
+	// A bot chat's context journaled in its omp (bridge `agent_control.bot`): no model.
+	"agent_control_bot",
 	"agent_control_turn",
 	// Which messages a session's journal holds (main's durable sends): a journal read, no model.
 	"agent_control_sent",

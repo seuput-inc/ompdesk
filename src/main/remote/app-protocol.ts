@@ -861,6 +861,8 @@ export const SchedulesCommandParams: z.ZodType<{ request: SchedulesRequest }> = 
 
 export const SchedulesLogParams = z.object({ runId: ScheduleId });
 export const SchedulesCreateParams = z.object({ draft: ScheduleDraftSchema });
+/** `host.bots.home {name}` → `{path, name}`: one of the host's bots by name, refused unless the asking device is in its reach. */
+export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200) });
 
 /** `host.schedules.command` reply and `host.schedules.changed` event: the host's schedules, runs and next starts. */
 export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({

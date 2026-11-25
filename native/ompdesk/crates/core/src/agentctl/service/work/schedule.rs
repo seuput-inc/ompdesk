@@ -15,18 +15,76 @@ use super::super::text::{
 };
 use super::super::types::{
     AutopilotArgs, AutopilotBranch, AutopilotStart, ControlDevice, ControlTab, RunStatus,
-    ScheduleArgs, ScheduleDraft, ScheduleEvent, ScheduleFrequency, ScheduleOn, SpawnRequest,
+    ScheduleArgs, ScheduleDraft, ScheduleEvent, ScheduleFrequency, ScheduleOn, ScheduleResultsTo,
+    SpawnRequest,
 };
 use super::super::wrap::{AGENT_SCHEDULE_PREFIX, describe_frequency};
 
 /// `path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)`.
-fn is_absolute(path: &str) -> bool {
+pub(super) fn is_absolute(path: &str) -> bool {
     let bytes = path.as_bytes();
     path.starts_with('/')
         || (bytes.len() >= 2
             && bytes[0].is_ascii_alphabetic()
             && bytes[1] == b':'
             && bytes.get(2).is_some_and(|c| matches!(c, b'\\' | b'/')))
+}
+
+/// `precheck`: None when the call names none, `Some(None)` when it names an empty one (an update removing it).
+fn precheck_of(args: &ScheduleArgs, device: Option<&ControlDevice>) -> R<Option<Option<String>>> {
+    let Some(command) = args.precheck.as_deref().map(str::trim) else {
+        return Ok(None);
+    };
+    if command.is_empty() {
+        return Ok(Some(None));
+    }
+    // The core refuses a device's precheck too: a command on another computer is that computer's owner's to allow.
+    if device.is_some() {
+        return fail("precheck works only for this computer's own schedules.");
+    }
+    Ok(Some(Some(command.to_owned())))
+}
+
+/// `results_to`: where a fresh run's answer goes (this session as a note, or a notification).
+fn results_to_of(
+    caller: &ControlTab,
+    args: &ScheduleArgs,
+    device: Option<&ControlDevice>,
+) -> R<Option<ScheduleResultsTo>> {
+    let Some(to) = args.results_to.as_deref() else {
+        return Ok(None);
+    };
+    if args.target.is_some() {
+        return fail(
+            "results_to is for a fresh run; a run with target already answers in that session.",
+        );
+    }
+    match to {
+        "notify" => Ok(Some(ScheduleResultsTo::Notify)),
+        "self" => {
+            // A session file is a path on this computer only.
+            if device.is_some() || caller.device.is_some() {
+                return fail(
+                    "results_to \"self\" works only for this computer's schedules, from a session on this computer.",
+                );
+            }
+            match caller
+                .session_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+            {
+                Some(path) => Ok(Some(ScheduleResultsTo::Session {
+                    session: path.to_owned(),
+                })),
+                None => fail(
+                    "This session has no saved file yet, so no answer can come back to it. Try again after its first message.",
+                ),
+            }
+        }
+        other => fail(format!(
+            "results_to is \"self\" or \"notify\", not \"{other}\"."
+        )),
+    }
 }
 
 fn absolute(path: &str, what: &str) -> R<String> {
@@ -42,6 +100,15 @@ impl AgentControl {
     pub(crate) async fn schedule(&self, caller: &ControlTab, args: ScheduleArgs) -> R<String> {
         // Default: the device the caller's own session runs on, so its folder is a path there.
         let mut device: Option<ControlDevice>;
+        // `bot:<name>`: a wake of that bot's home chat on this computer, in its folder, with its model.
+        let bot = match args
+            .target
+            .as_deref()
+            .and_then(|target| target.strip_prefix("bot:"))
+        {
+            Some(name) => Some(self.bot_named(name)?),
+            None => None,
+        };
         if args.target.as_deref() == Some("self") {
             if let Some(own) = &caller.device {
                 return fail(format!(
@@ -49,6 +116,8 @@ impl AgentControl {
                     caller.device_name.as_deref().unwrap_or(own)
                 ));
             }
+            device = None;
+        } else if bot.is_some() {
             device = None;
         } else if let Some(wanted) = &args.device {
             device = self.device(wanted)?;
@@ -167,8 +236,33 @@ impl AgentControl {
                     let name = args.name.clone().filter(|name| !name.is_empty());
                     let prompt = args.prompt.clone().filter(|prompt| !prompt.is_empty());
                     let model = args.model.clone().filter(|model| !model.is_empty());
+                    let precheck = precheck_of(&args, device.as_ref())?;
+                    let results_to = results_to_of(caller, &args, device.as_ref())?;
+                    // A precheck is a command this computer runs: the user allows each one, whatever else is allowed.
+                    if let Some(Some(command)) = &precheck {
+                        let shown = row
+                            .name
+                            .strip_prefix(AGENT_SCHEDULE_PREFIX)
+                            .unwrap_or(&row.name);
+                        let when = describe_frequency(&row.frequency);
+                        if !self
+                            .confirm_schedule(caller, shown, &when, &row.cwd, Some(command))
+                            .await?
+                        {
+                            return Ok(
+                                "The user declined the precheck. Do not ask again unless they tell you to."
+                                    .to_owned(),
+                            );
+                        }
+                    }
                     let changed = source
                         .update(&row.id, move |mut draft: ScheduleDraft| {
+                            if let Some(precheck) = precheck {
+                                draft.precheck = precheck;
+                            }
+                            if let Some(results_to) = results_to {
+                                draft.results_to = Some(results_to);
+                            }
                             if let Some(name) = name {
                                 draft.name = format!("{AGENT_SCHEDULE_PREFIX}{name}");
                             }
@@ -203,19 +297,34 @@ impl AgentControl {
             );
         };
         // The caller's folder is a path on its own device; another device needs its folder named.
-        if args.folder.as_deref().is_none_or(str::is_empty) && device_id != caller.device.as_deref()
+        if bot.is_none()
+            && args.folder.as_deref().is_none_or(str::is_empty)
+            && device_id != caller.device.as_deref()
         {
             return fail(format!(
                 "folder is required: name an absolute folder {where_}."
             ));
         }
-        let cwd = args.folder.clone().unwrap_or_else(|| caller.cwd.clone());
+        let cwd = match &bot {
+            Some(bot) => bot.folder.clone(),
+            None => args.folder.clone().unwrap_or_else(|| caller.cwd.clone()),
+        };
         if !is_absolute(&cwd) {
             return fail("folder must be an absolute path.");
         }
         // A wake-up goes to the caller's own session file, which is a path on this computer only.
         let mut wake_session: Option<String> = None;
-        if args.target.as_deref() == Some("self") {
+        if let Some(bot) = &bot {
+            match &bot.home {
+                Some(home) => wake_session = Some(home.clone()),
+                None => {
+                    return fail(format!(
+                        "The bot {} has no home chat yet, so nothing can wake it: open a session in {} first.",
+                        bot.name, bot.folder
+                    ));
+                }
+            }
+        } else if args.target.as_deref() == Some("self") {
             match caller
                 .session_path
                 .as_deref()
@@ -233,35 +342,24 @@ impl AgentControl {
             "{AGENT_SCHEDULE_PREFIX}{}",
             args.name.as_deref().unwrap_or("")
         );
-        if !self.host.state().manage_enabled {
-            let state = self.host.state();
+        let precheck = precheck_of(&args, device.as_ref())?.flatten();
+        let results_to = results_to_of(caller, &args, device.as_ref())?;
+        if !self.host.state().manage_enabled || precheck.is_some() {
             let folder = match &device {
                 Some(device) => format!("{cwd} ({})", device.name),
                 None => cwd.clone(),
             };
-            let caller_name = if caller.title.is_empty() {
-                "—"
-            } else {
-                caller.title.as_str()
-            };
             let when = describe_frequency(&frequency);
-            let approved = self
-                .host
-                .confirm(
-                    &caller.tab_id,
-                    &state.text("scheduleTitle", &[]),
-                    &state.text(
-                        "scheduleMessage",
-                        &[
-                            ("caller", caller_name),
-                            ("name", args.name.as_deref().unwrap_or("")),
-                            ("when", &when),
-                            ("folder", &folder),
-                        ],
-                    ),
+            if !self
+                .confirm_schedule(
+                    caller,
+                    args.name.as_deref().unwrap_or(""),
+                    &when,
+                    &folder,
+                    precheck.as_deref(),
                 )
-                .await?;
-            if !approved {
+                .await?
+            {
                 return Ok(
                     "The user declined the schedule. Do not ask again unless they tell you to."
                         .to_owned(),
@@ -274,10 +372,16 @@ impl AgentControl {
                 prompt: args.prompt.clone().unwrap_or_default(),
                 cwd: cwd.clone(),
                 frequency: frequency.clone(),
-                model: args.model.clone(),
-                auto_approve: false,
+                model: args
+                    .model
+                    .clone()
+                    .or_else(|| bot.as_ref().and_then(|bot| bot.model.clone())),
+                // A bot's routine carries its permissions (a wake runs in the bot's chat and ignores both).
+                auto_approve: bot.as_ref().is_some_and(|bot| bot.auto_approve),
                 enabled: true,
                 wake_session: wake_session.clone(),
+                precheck,
+                results_to,
             })
             .await?;
         let when = describe_frequency(&row.frequency);
@@ -348,7 +452,24 @@ impl AgentControl {
                 at: crate::schedules::rules::iso((self.now() + minutes * 60_000.0) as i64),
             }));
         }
+        let by = match (&args.by, args.within_minutes) {
+            (Some(by), _) => {
+                let Some(ms) =
+                    crate::schedules::rules::date_parse(by, &crate::schedules::rules::Local)
+                else {
+                    return Err(Fail::other("Invalid time value"));
+                };
+                Some(crate::schedules::rules::iso(ms))
+            }
+            (None, Some(minutes)) => Some(crate::schedules::rules::iso(
+                (self.now() + minutes * 60_000.0) as i64,
+            )),
+            (None, None) => None,
+        };
         let Some(on) = &args.on else {
+            if by.is_some() {
+                return fail("by and within_minutes go with on: a wait for an event.");
+            }
             return Ok(None);
         };
         let event = match on {
@@ -390,8 +511,46 @@ impl AgentControl {
                 subject: subject.clone().filter(|text| !text.is_empty()),
                 to: to.clone().filter(|text| !text.is_empty()),
             },
+            ScheduleOn::Calendar { url, lead_minutes } => ScheduleEvent::Calendar {
+                url: url.clone(),
+                lead_minutes: lead_minutes.unwrap_or(10),
+            },
         };
-        Ok(Some(ScheduleFrequency::Event { event }))
+        Ok(Some(ScheduleFrequency::Event { event, by }))
+    }
+
+    /// The card a new schedule raises while "Let agents manage other sessions" is off, and every precheck raises:
+    /// whether the user allows it.
+    async fn confirm_schedule(
+        &self,
+        caller: &ControlTab,
+        name: &str,
+        when: &str,
+        folder: &str,
+        precheck: Option<&str>,
+    ) -> R<bool> {
+        let state = self.host.state();
+        let caller_name = if caller.title.is_empty() {
+            "—"
+        } else {
+            caller.title.as_str()
+        };
+        let mut params = vec![
+            ("caller", caller_name),
+            ("name", name),
+            ("when", when),
+            ("folder", folder),
+        ];
+        let message = match precheck {
+            Some(command) => {
+                params.push(("command", command));
+                state.text("schedulePrecheckMessage", &params)
+            }
+            None => state.text("scheduleMessage", &params),
+        };
+        self.host
+            .confirm(&caller.tab_id, &state.text("scheduleTitle", &[]), &message)
+            .await
     }
 
     /// `ompdesk_autopilot`: start, read or stop an Autopilot run through the coordinator the Autopilot screen uses.

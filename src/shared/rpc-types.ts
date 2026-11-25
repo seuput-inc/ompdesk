@@ -9,6 +9,7 @@ import type { McpOffReason } from "../../resources/gui-bridge/extensions/mcp-con
 import type { SkippedPreferred } from "../../resources/gui-bridge/model-role-contracts";
 import type { TitleRegenerateResult } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import type { AutopilotAction, AutopilotStatus } from "../../resources/gui-bridge/modes/autopilot-contracts";
+import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
 import type { CheckoutPeers } from "../../resources/gui-bridge/modes/checkout-peers-contracts";
 import type { DelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
 import type {
@@ -174,6 +175,8 @@ export type RpcCommand =
 	| { id?: string; type: "agent_control_confirm"; title: string; message: string }
 	| { id?: string; type: "agent_control_note"; text: string }
 	| { id?: string; type: "agent_control_worker"; from: string }
+	// A bot chat's context (main/agent-control's core, gui-bridge modes/bots.ts `agent_control.bot`)
+	| { id?: string; type: "agent_control_bot"; context: BotContext }
 	| { id?: string; type: "agent_control_turn" }
 	| { id?: string; type: "agent_control_judge"; system: string; user: string }
 	| {

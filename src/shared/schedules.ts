@@ -1,7 +1,7 @@
 /**
  * Scheduled runs (Settings › Schedules): a prompt run as stock `omp -p` in a
- * project folder on a timer, by OMPdesk's core process, only while OMPdesk is open. Times missed
- * while the app was closed are skipped, never caught up. Stock omp has no
+ * project folder on a timer, by OMPdesk's core process, only while OMPdesk is open. A start missed while the app was
+ * closed runs once at launch when it is under an hour old, else it is recorded as missed. Stock omp has no
  * scheduler, so this one is GUI-owned; each run is one ordinary print-mode
  * session that stock saves like any other. A schedule with `wakeSession` is a session's own wake-up instead: its
  * start delivers the prompt into that existing session (a mail that starts a turn) and spawns no omp.
@@ -34,8 +34,11 @@ export type ScheduleFrequency =
 	| { kind: "daily"; time: string; days: number[] }
 	/** One start at `at` (ISO); then the schedule turns itself off (a follow-up set for a moment). */
 	| { kind: "once"; at: string }
-	/** No clock: started by its event (src/main/routines). */
-	| { kind: "event"; event: ScheduleEvent };
+	/**
+	 * No clock: started by its event (src/main/routines). With `by` (ISO) it is a one-time wait: its first event runs
+	 * it once and spends it (off, like `once`); at `by` with no event it runs once, told the deadline passed.
+	 */
+	| { kind: "event"; event: ScheduleEvent; by?: string };
 
 export const GITHUB_EVENT_KINDS = ["pull_request", "issue", "ci_failure", "release", "push"] as const;
 export type GithubEventKind = (typeof GITHUB_EVENT_KINDS)[number];
@@ -59,10 +62,20 @@ export type ScheduleEvent =
 	 * over IMAP every `EMAIL_POLL_MINUTES`. Each filter is optional text the mail must contain (case aside): `from` in
 	 * its sender, `subject` in its subject, `to` in a recipient address (a plus-address such as `owner+ci@…`).
 	 */
-	| { source: "email"; account: string; from?: string; subject?: string; to?: string };
+	| { source: "email"; account: string; from?: string; subject?: string; to?: string }
+	/**
+	 * An event of an ICS calendar feed (`url`, https; Google, iCloud and Outlook all publish one) about to start: fires
+	 * once per occurrence `leadMinutes` before it starts. The feed is read every `CALENDAR_POLL_MINUTES`.
+	 */
+	| { source: "calendar"; url: string; leadMinutes: number };
 
 /** How often an email trigger asks its mailbox for new mail, in minutes. */
 export const EMAIL_POLL_MINUTES = 2;
+/** How often a calendar trigger reads its feed, in minutes. */
+export const CALENDAR_POLL_MINUTES = 5;
+export const CALENDAR_LEAD_MINUTES_MIN = 1;
+export const CALENDAR_LEAD_MINUTES_MAX = 1440;
+export const CALENDAR_LEAD_MINUTES_DEFAULT = 10;
 
 export type ScheduleEventSource = ScheduleEvent["source"];
 
@@ -82,7 +95,22 @@ export interface ScheduleDraft {
 	 * instead of running it as a fresh `omp -p`. `model` and `autoApprove` mean nothing then. Never set by a paired device.
 	 */
 	wakeSession?: string;
+	/**
+	 * A shell command run in `cwd` before every start, 60 s at most: exit 0 starts the run, anything else records it
+	 * as skipped with the start of its output. In a save: absent keeps the schedule's, empty or null removes it. This
+	 * computer's own schedules only (refused from a paired device).
+	 */
+	precheck?: string | null;
+	/**
+	 * Where a fresh run's answer goes when it succeeds (not a wake-up's: its session has it): a quiet note into a
+	 * session file on this computer, or a notification. An answer ending in `NO_REPLY` goes nowhere. Absent in a save
+	 * keeps the schedule's; null removes it.
+	 */
+	resultsTo?: ScheduleResultsTo | null;
 }
+
+/** Where a fresh run's answer goes (`ScheduleDraft.resultsTo`). */
+export type ScheduleResultsTo = { kind: "session"; session: string } | { kind: "notify" };
 
 export interface Schedule extends ScheduleDraft {
 	id: string;
@@ -107,6 +135,23 @@ export interface ScheduleRun {
 	error: string | null;
 	/** What fired an event run, one line per event (English), as its prompt was told; absent otherwise. */
 	detail?: string;
+	/** The same skip came this many times in a row; this row is the newest of them. Absent = once. */
+	repeats?: number;
+	/** The run failed before it launched (its files, its omp, the wake-up refused): it may be sent again once. */
+	notStarted?: boolean;
+	/** The run `resend` started for it: its one "Send again" is spent. */
+	resentAs?: string;
+	/** What a fresh run's model replies used (stock's session tally, subagents included). Absent for a wake-up run. */
+	usage?: ScheduleRunUsage;
+}
+
+/** Tokens and USD cost of one run (`ScheduleRun.usage`). */
+export interface ScheduleRunUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
 }
 
 export interface SchedulesState {
@@ -126,7 +171,9 @@ export type SchedulesRequest =
 	| { action: "setEnabled"; id: string; enabled: boolean }
 	| { action: "setPaused"; paused: boolean }
 	| { action: "runNow"; id: string }
-	| { action: "stop"; runId: string };
+	| { action: "stop"; runId: string }
+	/** Starts a run that could not start once more (`notStarted`); a second ask starts nothing. This computer only. */
+	| { action: "resend"; runId: string };
 
 /** A new schedule's id as the save that made it reported it, with the state after it. */
 export interface ScheduleCreated {
@@ -178,6 +225,7 @@ export function scheduleDraftProblem(
 		case "once":
 			return typeof frequency.at === "string" && Number.isFinite(Date.parse(frequency.at)) ? null : "once";
 		case "event":
+			if (frequency.by !== undefined && !Number.isFinite(Date.parse(frequency.by))) return "event";
 			return scheduleEventProblem(frequency.event) ? "event" : null;
 		default:
 			return "interval";
@@ -215,6 +263,14 @@ export function scheduleEventProblem(event: ScheduleEvent): string | null {
 				? null
 				: "from, subject and to are short text";
 		}
+		case "calendar":
+			if (typeof event.url !== "string" || !event.url.startsWith("https://") || event.url.length > 2000)
+				return "url is an https:// address of an ICS calendar feed";
+			return Number.isInteger(event.leadMinutes) &&
+				event.leadMinutes >= CALENDAR_LEAD_MINUTES_MIN &&
+				event.leadMinutes <= CALENDAR_LEAD_MINUTES_MAX
+				? null
+				: `leadMinutes is a whole number from ${CALENDAR_LEAD_MINUTES_MIN} to ${CALENDAR_LEAD_MINUTES_MAX}`;
 		default:
 			return "unknown event source";
 	}
@@ -237,28 +293,32 @@ export function describeFrequency(frequency: ScheduleFrequency): string {
 		}
 		case "once":
 			return `once at ${frequency.at}`;
-		case "event": {
-			const event = frequency.event;
-			switch (event.source) {
-				case "webhook":
-					return "on a webhook call";
-				case "github":
-					return `on GitHub ${event.events.join("/")} in ${event.repo}`;
-				case "files":
-					return `when files change under ${event.path}`;
-				case "git":
-					return `on new commits to ${event.branch} in ${event.repo}`;
-				case "session":
-					return `when a session ${event.events.map(kind => (kind === "waiting" ? "waits for the owner" : kind === "done" ? "finishes a turn" : "fails a turn")).join(" or ")}${event.folder ? ` in a folder containing ${event.folder}` : ""}`;
-				case "email": {
-					const filters = [
-						event.from ? `from ${event.from}` : null,
-						event.to ? `to ${event.to}` : null,
-						event.subject ? `with "${event.subject}" in the subject` : null,
-					].filter(Boolean);
-					return `on new mail in ${event.account}${filters.length > 0 ? ` ${filters.join(", ")}` : ""}`;
-				}
-			}
+		case "event":
+			return `${describeEvent(frequency.event)}${frequency.by ? `, once, by ${frequency.by} at the latest` : ""}`;
+	}
+}
+
+function describeEvent(event: ScheduleEvent): string {
+	switch (event.source) {
+		case "webhook":
+			return "on a webhook call";
+		case "github":
+			return `on GitHub ${event.events.join("/")} in ${event.repo}`;
+		case "files":
+			return `when files change under ${event.path}`;
+		case "git":
+			return `on new commits to ${event.branch} in ${event.repo}`;
+		case "session":
+			return `when a session ${event.events.map(kind => (kind === "waiting" ? "waits for the owner" : kind === "done" ? "finishes a turn" : "fails a turn")).join(" or ")}${event.folder ? ` in a folder containing ${event.folder}` : ""}`;
+		case "email": {
+			const filters = [
+				event.from ? `from ${event.from}` : null,
+				event.to ? `to ${event.to}` : null,
+				event.subject ? `with "${event.subject}" in the subject` : null,
+			].filter(Boolean);
+			return `on new mail in ${event.account}${filters.length > 0 ? ` ${filters.join(", ")}` : ""}`;
 		}
+		case "calendar":
+			return `${event.leadMinutes} min before an event of the calendar ${event.url} starts`;
 	}
 }

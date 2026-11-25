@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ScheduleDraft } from "../../shared/schedules";
+import { firedDetail } from "../routines/test-fired";
 import { type RunLauncher, ScheduleService } from "../schedules";
 import type { ClientWindow } from "./client-window";
 import type { IpcCaller } from "./ipc-registry";
@@ -142,7 +143,7 @@ describe("POST /hooks/<id> on the loopback address", () => {
 		const reply = await direct(id, { ...bearer(), "content-type": "application/json" }, body);
 		expect(reply.status).toBe(202);
 		await expect.poll(() => prompts.length).toBe(1);
-		const told = prompts[0]?.split("What fired this run:\n")[1] ?? "";
+		const told = firedDetail(prompts[0] ?? "") ?? "";
 		expect(told.startsWith('Webhook call: {"a": 1, "b": "xxx')).toBe(true);
 		expect(told).toHaveLength("Webhook call: ".length + 400);
 	});

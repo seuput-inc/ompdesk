@@ -830,16 +830,34 @@ pub enum ScheduleEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<String>,
     },
+    /// An ICS feed's events, `leadMinutes` before each starts.
+    Calendar {
+        url: String,
+        #[serde(rename = "leadMinutes")]
+        lead_minutes: i64,
+    },
 }
 
 /// When a schedule starts (`ScheduleFrequency`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ScheduleFrequency {
-    Interval { minutes: f64 },
-    Daily { time: String, days: Vec<u8> },
-    Once { at: String },
-    Event { event: ScheduleEvent },
+    Interval {
+        minutes: f64,
+    },
+    Daily {
+        time: String,
+        days: Vec<u8>,
+    },
+    Once {
+        at: String,
+    },
+    Event {
+        event: ScheduleEvent,
+        /// A wait's deadline (ISO): it runs once, on its event or then.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+    },
 }
 
 /// A scheduled run as the control tools see it.
@@ -899,6 +917,20 @@ pub struct ScheduleDraft {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake_session: Option<String>,
+    /// A shell command that must succeed before each start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precheck: Option<String>,
+    /// Where a fresh run's answer goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results_to: Option<ScheduleResultsTo>,
+}
+
+/// `ScheduleDraft.resultsTo`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ScheduleResultsTo {
+    Session { session: String },
+    Notify,
 }
 
 /// A saved schedule (`Schedule`): its draft plus the id, creation time and the device that saved it.
@@ -1189,6 +1221,9 @@ pub struct OpenOne {
     pub worktree: Option<WorktreeArg>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throwaway: Option<bool>,
+    /// From a bot's chat: the item (its number or id) the session works on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
 }
 
 /// `ompdesk_session_open`'s arguments: the single-session fields, or `sessions`, and where to show the tabs.
@@ -1392,9 +1427,20 @@ pub struct ScheduleArgs {
     pub id: Option<String>,
     #[serde(default)]
     pub device: Option<String>,
-    /// `self`.
+    /// `self` or `bot:<name>`.
     #[serde(default)]
     pub target: Option<String>,
+    /// With `on`: a wait's deadline (ISO), or the same as minutes from now.
+    #[serde(default)]
+    pub by: Option<String>,
+    #[serde(default)]
+    pub within_minutes: Option<f64>,
+    /// A shell command each start waits on; empty removes it.
+    #[serde(default)]
+    pub precheck: Option<String>,
+    /// `self` or `notify`.
+    #[serde(default)]
+    pub results_to: Option<String>,
 }
 
 /// `ompdesk_schedule`'s `on`: the trigger as the tool takes it (a webhook's key is made by the service).
@@ -1427,6 +1473,11 @@ pub enum ScheduleOn {
         subject: Option<String>,
         #[serde(default)]
         to: Option<String>,
+    },
+    Calendar {
+        url: String,
+        #[serde(default)]
+        lead_minutes: Option<i64>,
     },
 }
 
@@ -1515,6 +1566,80 @@ pub struct AppArgs {
     pub args: Option<Map<String, Value>>,
 }
 
+/// `ompdesk_bot`'s arguments (`BotArgs` of `tools.ts`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct BotArgs {
+    /// `create`, `list`, `pause`, `resume`, `set`, `look_around` or `hand`.
+    pub action: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// A bot's name or id.
+    #[serde(default)]
+    pub bot: Option<String>,
+    /// `""` clears it.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub auto_approve: Option<bool>,
+    /// 0 = never stale.
+    #[serde(default)]
+    pub stale_days: Option<f64>,
+    #[serde(default)]
+    pub reach: Option<Vec<String>>,
+    #[serde(default)]
+    pub on: Option<bool>,
+    #[serde(default)]
+    pub time: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+/// `ompdesk_item`'s arguments (`ItemArgs` of `tools.ts`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct ItemArgs {
+    /// `add`, `set`, `comment`, `done`, `cancel`, `link`, `list` or `show`.
+    pub action: String,
+    /// Its number or id.
+    #[serde(default)]
+    pub item: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub done_means: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub ask: Option<String>,
+    #[serde(default)]
+    pub options: Option<Vec<String>>,
+    #[serde(default)]
+    pub recommended: Option<u32>,
+    #[serde(default)]
+    pub wait: Option<String>,
+    #[serde(default)]
+    pub until: Option<String>,
+    #[serde(default)]
+    pub snooze_until: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
+    pub pr: Option<String>,
+}
+
 /// The control tools' names (`AGENT_CONTROL_TOOLS`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -1534,10 +1659,12 @@ pub enum Tool {
     AppList,
     App,
     Report,
+    Bot,
+    Item,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 18] = [
         Tool::List,
         Tool::Open,
         Tool::Send,
@@ -1554,6 +1681,8 @@ impl Tool {
         Tool::AppList,
         Tool::App,
         Tool::Report,
+        Tool::Bot,
+        Tool::Item,
     ];
 
     pub fn name(self) -> &'static str {
@@ -1574,6 +1703,8 @@ impl Tool {
             Tool::AppList => "ompdesk_app_list",
             Tool::App => "ompdesk_app",
             Tool::Report => "ompdesk_report",
+            Tool::Bot => "ompdesk_bot",
+            Tool::Item => "ompdesk_item",
         }
     }
 

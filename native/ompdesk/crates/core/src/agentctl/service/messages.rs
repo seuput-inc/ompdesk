@@ -272,6 +272,8 @@ impl AgentControl {
             return fail("Autopilot is ending: start nothing new.");
         }
         self.refuse_hidden(target, caller)?;
+        // A paused bot takes no message: who holds the session and what it does stay as they are.
+        self.refuse_paused(target)?;
         if caller.tab_id == target.tab_id {
             return fail("A session cannot message itself.");
         }
@@ -952,10 +954,13 @@ impl AgentControl {
             .parent_of(&caller.tab_id)
             .map(str::to_owned);
         let target = match &args.to {
-            Some(to) => Some(
-                self.open(tabs, to, caller, "report to", OpenOptions::default())
-                    .await?,
-            ),
+            Some(to) => Some(match to.strip_prefix("bot:") {
+                Some(name) => self.bot_target(caller, tabs, name).await?,
+                None => {
+                    self.open(tabs, to, caller, "report to", OpenOptions::default())
+                        .await?
+                }
+            }),
             None => None,
         };
         let peer = target.as_ref().is_some_and(|target| {

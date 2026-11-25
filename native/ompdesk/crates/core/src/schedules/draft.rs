@@ -100,7 +100,12 @@ fn frequency(frequency: Option<&Value>) -> Value {
                 // The TypeScript leaves email and unknown event shapes to `scheduleDraftProblem` unchanged.
                 _ => return frequency.cloned().unwrap_or(Value::Null),
             };
-            json!({"kind":"event", "event":clean})
+            let mut clean = json!({"kind":"event", "event":clean});
+            // A wait's deadline (`by`): kept as given, checked by `draft_problem`.
+            if let Some(by) = get("by").filter(|by| !by.is_null()) {
+                clean["by"] = string_of_value(by).into();
+            }
+            clean
         }
         _ => json!({"kind":"interval", "minutes":number(get("minutes"))}),
     }
@@ -120,6 +125,28 @@ pub(super) fn clean(draft: &Value) -> serde_json::Map<String, Value> {
     });
     if let Some(session) = draft.get("wakeSession").filter(|v| !v.is_null()) {
         clean["wakeSession"] = string_of_value(session).into();
+    }
+    // A precheck command, as given; a save that names none keeps the schedule's, an empty one removes it.
+    if let Some(precheck) = draft.get("precheck") {
+        let command = precheck.as_str().map(trim).unwrap_or_default();
+        clean["precheck"] = if command.is_empty() {
+            Value::Null
+        } else {
+            command.into()
+        };
+    }
+    // Where a fresh run's result goes: a session file on this computer (a quiet note) or a notification; null: nowhere.
+    if let Some(to) = draft.get("resultsTo") {
+        clean["resultsTo"] = match to.get("kind").and_then(Value::as_str) {
+            Some("session") => match to.get("session").and_then(Value::as_str).map(trim) {
+                Some(session) if !session.is_empty() => {
+                    json!({"kind": "session", "session": session})
+                }
+                _ => Value::Null,
+            },
+            Some("notify") => json!({"kind": "notify"}),
+            _ => Value::Null,
+        };
     }
     let Value::Object(clean) = clean else {
         unreachable!()

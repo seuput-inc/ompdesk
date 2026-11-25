@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { JUDGE_ASSIST_NEEDS_USER, type NeedsUserResult } from "../../resources/gui-bridge/modes/judge-assist-contracts";
+import { isQuietResult } from "../shared/bots";
 import type { IpcNotifyPayload } from "../shared/ipc-types";
+import { botOfFolder } from "./bots";
 import type { ClientWindow } from "./web/client-window";
 
 export type AdmitNotification = (report: {
@@ -26,6 +28,22 @@ export interface NotifyTriageDeps {
 	needsYouTitle(title: string): string;
 	/** Hand the notice on (window bookkeeping and the batcher). */
 	deliver(win: ClientWindow | null, winId: number, notice: IpcNotifyPayload): void;
+	/** The tab's folder and the start of its last finished reply (the pool's last `idle` outcome). */
+	lastTurn(tabId: string): LastTurn | undefined;
+}
+
+export interface LastTurn {
+	cwd?: string;
+	reply?: string;
+}
+
+/**
+ * A bot chat's turn that ended in `NO_REPLY` (src/shared/bots.ts): nothing for the owner, so nothing notifies.
+ * shortcut: `reply` is the reply's first 4000 characters (`IpcTabRunOutcome.reply`), so a longer quiet reply still
+ * notifies; keep its tail in the outcome if that shows up.
+ */
+export function quietBotTurn(turn: LastTurn | undefined): boolean {
+	return Boolean(turn?.reply && botOfFolder(turn.cwd) && isQuietResult(turn.reply));
 }
 
 export interface NotifyCaller {
@@ -59,9 +77,11 @@ export function createNotifyHandler(
 		let kind = payload.kind;
 		if (kind !== "completion" && kind !== "error" && kind !== "ask") kind = undefined;
 		const body = typeof payload.body === "string" ? payload.body : undefined;
+		const tabId = typeof payload.tabId === "string" ? payload.tabId : undefined;
+		// Before the dedupe: a quiet turn takes no slot from a real notice.
+		if (kind === "completion" && tabId && quietBotTurn(deps.lastTurn(tabId))) return;
 		const win = caller.win;
 		const winId = win?.webContents.id ?? 0;
-		const tabId = typeof payload.tabId === "string" ? payload.tabId : undefined;
 		const scope = tabId && deps.isShared(tabId) ? `tab:${tabId}` : String(winId);
 		// Hash the original JS key as UTF-16 units. Admission never receives the title, body or tab identifier.
 		const digest = createHash("sha256")

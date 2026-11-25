@@ -23,6 +23,15 @@ pub(super) fn action_issues(
     if has("days") && !has("daily_at") {
         issue("days goes with daily_at");
     }
+    if (has("by") || has("within_minutes")) && !has("on") {
+        issue("by and within_minutes go with on");
+    }
+    if has("by") && has("within_minutes") {
+        issue("take one of by or within_minutes");
+    }
+    if has("results_to") && has("target") {
+        issue("results_to is for a fresh run: it takes no target");
+    }
     if action == "create" {
         if !filled("name") {
             issue("create needs name");
@@ -55,7 +64,10 @@ pub(super) fn action_issues(
             && (starts > 0
                 || ["name", "prompt", "model", "target"]
                     .into_iter()
-                    .any(filled))
+                    .any(filled)
+                || ["precheck", "results_to", "by", "within_minutes"]
+                    .into_iter()
+                    .any(has))
         {
             issue(&format!("{action} takes only id (and device)"));
         }
@@ -99,6 +111,11 @@ impl ScheduleSource<'_> {
             .iter()
             .map(|schedule| row_of(&state, schedule))
             .collect())
+    }
+
+    /// Every saved schedule with its draft (`wakeSession` included), as the service holds it.
+    pub async fn schedules(&self) -> R<Vec<Schedule>> {
+        Ok(self.command(json!({ "action": "get" })).await?.schedules)
     }
 
     /// The id comes from the save itself: a diff against an earlier read would hand a concurrent create's schedule to

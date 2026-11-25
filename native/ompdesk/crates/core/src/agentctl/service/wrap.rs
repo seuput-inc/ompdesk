@@ -185,60 +185,74 @@ pub fn describe_frequency(frequency: &ScheduleFrequency) -> String {
             )
         }
         ScheduleFrequency::Once { at } => format!("once at {at}"),
-        ScheduleFrequency::Event { event } => match event {
-            ScheduleEvent::Webhook { .. } => "on a webhook call".to_owned(),
-            ScheduleEvent::Github { repo, events } => {
-                format!("on GitHub {} in {repo}", events.join("/"))
-            }
-            ScheduleEvent::Files { path } => format!("when files change under {path}"),
-            ScheduleEvent::Git { repo, branch } => {
-                format!("on new commits to {branch} in {repo}")
-            }
-            ScheduleEvent::Session { events, folder } => {
-                let kinds: Vec<&str> = events
-                    .iter()
-                    .map(|kind| match kind.as_str() {
-                        "waiting" => "waits for the owner",
-                        "done" => "finishes a turn",
-                        _ => "fails a turn",
-                    })
-                    .collect();
-                let folder = folder
-                    .as_ref()
-                    .filter(|folder| !folder.is_empty())
-                    .map_or_else(String::new, |folder| {
-                        format!(" in a folder containing {folder}")
-                    });
-                format!("when a session {}{folder}", kinds.join(" or "))
-            }
-            ScheduleEvent::Email {
-                account,
-                from,
-                subject,
-                to,
-            } => {
-                let filters: Vec<String> = [
-                    from.as_ref()
-                        .filter(|text| !text.is_empty())
-                        .map(|text| format!("from {text}")),
-                    to.as_ref()
-                        .filter(|text| !text.is_empty())
-                        .map(|text| format!("to {text}")),
-                    subject
+        ScheduleFrequency::Event { event, by } => with_deadline(
+            match event {
+                ScheduleEvent::Webhook { .. } => "on a webhook call".to_owned(),
+                ScheduleEvent::Github { repo, events } => {
+                    format!("on GitHub {} in {repo}", events.join("/"))
+                }
+                ScheduleEvent::Files { path } => format!("when files change under {path}"),
+                ScheduleEvent::Git { repo, branch } => {
+                    format!("on new commits to {branch} in {repo}")
+                }
+                ScheduleEvent::Session { events, folder } => {
+                    let kinds: Vec<&str> = events
+                        .iter()
+                        .map(|kind| match kind.as_str() {
+                            "waiting" => "waits for the owner",
+                            "done" => "finishes a turn",
+                            _ => "fails a turn",
+                        })
+                        .collect();
+                    let folder = folder
                         .as_ref()
-                        .filter(|text| !text.is_empty())
-                        .map(|text| format!("with \"{text}\" in the subject")),
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
-                let filters = if filters.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", filters.join(", "))
-                };
-                format!("on new mail in {account}{filters}")
-            }
-        },
+                        .filter(|folder| !folder.is_empty())
+                        .map_or_else(String::new, |folder| {
+                            format!(" in a folder containing {folder}")
+                        });
+                    format!("when a session {}{folder}", kinds.join(" or "))
+                }
+                ScheduleEvent::Email {
+                    account,
+                    from,
+                    subject,
+                    to,
+                } => {
+                    let filters: Vec<String> = [
+                        from.as_ref()
+                            .filter(|text| !text.is_empty())
+                            .map(|text| format!("from {text}")),
+                        to.as_ref()
+                            .filter(|text| !text.is_empty())
+                            .map(|text| format!("to {text}")),
+                        subject
+                            .as_ref()
+                            .filter(|text| !text.is_empty())
+                            .map(|text| format!("with \"{text}\" in the subject")),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    let filters = if filters.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", filters.join(", "))
+                    };
+                    format!("on new mail in {account}{filters}")
+                }
+                ScheduleEvent::Calendar { lead_minutes, .. } => {
+                    format!("{lead_minutes} min before each calendar event")
+                }
+            },
+            by.as_deref(),
+        ),
+    }
+}
+
+/// A wait's start: its event, once, by its deadline at the latest.
+fn with_deadline(event: String, by: Option<&str>) -> String {
+    match by {
+        Some(by) => format!("{event}, once, by {by} at the latest"),
+        None => event,
     }
 }

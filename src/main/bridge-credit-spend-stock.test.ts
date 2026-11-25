@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve as absolute, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { RUN_USAGE_ENV } from "../../resources/gui-bridge/credit-spend-core";
 import { creditSpendRun } from "./omp-launch";
 import { ompPackageRoot } from "./omp-runtime";
 import { configDirName, INSTALLED_OMP } from "./test-bridge-probe";
@@ -500,12 +501,19 @@ const UPKEEP_RUN = [
  * `omp -p` in `home` as OMPdesk starts it without a bridge: only what `creditSpendRun` (omp-launch.ts) gives every
  * such run right after `-p`, then the run's `own` arguments, the prompt on stdin.
  */
-function runPrint(fake: string, home: string, model: string, enabled: boolean, own = PRINT_RUN): Promise<string> {
+function runPrint(
+	fake: string,
+	home: string,
+	model: string,
+	enabled: boolean,
+	own = PRINT_RUN,
+	extraEnv: Record<string, string> = {},
+): Promise<string> {
 	const { cli, bridge } = stage(home);
 	const run = creditSpendRun(bridge, enabled);
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
 	const child = spawn("bun", [...cli, "-p", ...run.args, ...own, "--model", model], {
-		env: ompEnv(home, fake, run.env),
+		env: ompEnv(home, fake, { ...run.env, ...extraEnv }),
 		stdio: ["pipe", "pipe", "pipe"],
 		timeout: 60_000,
 	});
@@ -698,8 +706,13 @@ describe.skipIf(!existsSync(INSTALLED_OMP))("credit spend on the installed omp",
 				expect(off).toContain("Credit use setting is off");
 			}
 			received.length = 0;
-			const on = await runPrint(base, home, model, true);
+			// A scheduled run's usage: the same extension writes stock's tally where `OMP_GUI_RUN_USAGE` says.
+			const usageFile = join(home, "run.usage.json");
+			const on = await runPrint(base, home, model, true, PRINT_RUN, { [RUN_USAGE_ENV]: usageFile });
 			expect(posts(), on.slice(-800)).toEqual(["spent"]);
+			const usage = JSON.parse(readFileSync(usageFile, "utf8")) as Record<string, unknown>;
+			for (const field of ["input", "output", "cacheRead", "cacheWrite", "cost"])
+				expect(typeof usage[field], field).toBe("number");
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}

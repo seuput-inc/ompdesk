@@ -78,26 +78,18 @@ async function requeue(
 	};
 	if (cancel && !stores.session.getState().isStreaming) hold();
 	else {
+		// Saved: the edit's new chip, whenever its frame comes, is where it landed (the last of its lane).
+		const forget = cancel ? undefined : stores.queue.getState().expectEdited(text, editing.lane);
 		try {
 			if (images) stores.queue.getState().expectImages(text, images);
 			const response = await rpc.prompt(text, images, editing.lane === "steering" ? "steer" : "followUp");
 			if (!response.success) {
+				forget?.();
 				toastError({ title: translate("input.sendFailed"), error: response });
 				hold();
-			} else if (!cancel) {
-				// Stock queued it as the last of its lane (its frames come before the answer): the tray points at it.
-				const items = stores.queue.getState()[editing.lane];
-				const index = items.findLastIndex(entry => entry.text === text);
-				if (index !== -1)
-					stores.queue.getState().noteMoved({
-						id: items[index].id,
-						lane: editing.lane,
-						position: index + 1,
-						count: items.length,
-						kind: "edit",
-					});
 			}
 		} catch (error) {
+			forget?.();
 			toastError({ title: translate("input.sendFailed"), error });
 			hold();
 		}

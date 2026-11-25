@@ -50,6 +50,7 @@ import {
 	sidebarViewOf,
 } from "../shared/agent-control";
 import { AI_MEMORY_TERMINAL_PREF } from "../shared/ai-memory";
+import { BOTS_STATE } from "../shared/bots";
 import { COMPUTER_USE_PREF } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF, creditSpendEnabled } from "../shared/credit-spend";
 import { DEFAULT_BROWSER_PREF } from "../shared/default-browser";
@@ -97,6 +98,7 @@ import { MemoryUpkeep } from "./ai-memory/upkeep";
 import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
+import { onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
@@ -123,6 +125,7 @@ import { installHangWatchdog, markMainStep } from "./hang-watchdog";
 import { getMainLanguage, mainT } from "./i18n";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
+import { shellRunner } from "./local/git/exec";
 import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
@@ -138,6 +141,7 @@ import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
 import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
+import { quietBotTurn } from "./notify-triage";
 import { followSetupState } from "./omp-availability";
 import { creditSpendRun } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
@@ -870,6 +874,8 @@ app.whenReady().then(async () => {
 	const autopilotRef: { current: Autopilot | null } = { current: null };
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
+	const sessionNote: IpcDeps["sessionNote"] = { current: null };
+	const botHome: IpcDeps["botHome"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
 	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
@@ -1282,6 +1288,11 @@ app.whenReady().then(async () => {
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
+		// A device's agent asking one of this computer's bots by name: the control tools answer once they exist.
+		botHome: (name, deviceId, deviceName) => {
+			if (!botHome.current) throw new Error("OMPdesk is still starting");
+			return botHome.current(name, deviceId, deviceName);
+		},
 		sessionMoved: (from, to) => {
 			if (prefs.moveSidebarPin(from, to)) {
 				sidebarPrefsChanged();
@@ -1984,6 +1995,12 @@ app.whenReady().then(async () => {
 		extensionEnv: () => mcpHub?.ompEnv() ?? Promise.resolve({}),
 		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
 	});
+	// The Bots page of every window follows the core's bots state (BOTS_STATE).
+	onBotsState(state => {
+		for (const win of BrowserWindow.getAllWindows()) {
+			if (!win.isDestroyed()) win.webContents.send(BOTS_STATE, state);
+		}
+	});
 	scheduleService = new ScheduleService({
 		file: join(app.getPath("userData"), "schedules.json"),
 		logDir: join(app.getPath("userData"), "schedule-runs"),
@@ -2001,6 +2018,26 @@ app.whenReady().then(async () => {
 			if (!sessionWake.current) throw new Error("OMPdesk is still starting");
 			return sessionWake.current(schedule, runId);
 		},
+		note: (session, text) => {
+			void sessionNote
+				.current?.(session, text)
+				.catch(error => console.error("[schedules] note not delivered:", error));
+		},
+		// A fresh run's answer goes where its schedule says: a quiet note into a session, or a notification.
+		result: (name, to, text) => {
+			if (to.kind === "notify") {
+				new Notification({
+					title: mainT("schedules.result.title", undefined, { name }),
+					body: text.slice(0, 300),
+				}).show();
+				return;
+			}
+			const note = `${mainT("schedules.result.note", "en", { name })}\n\n${text}`;
+			void sessionNote
+				.current?.(to.session, note)
+				.catch(error => console.error("[schedules] result not delivered:", error));
+		},
+		shell: shellRunner,
 		...(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS
 			? { tickMs: Number(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS) }
 			: {}),
@@ -2270,6 +2307,7 @@ app.whenReady().then(async () => {
 	powerMonitor.on("resume", () => {
 		connectivity.resume();
 		devices.wake("resume");
+		scheduleService?.resumed();
 	});
 	powerMonitor.on("unlock-screen", () => devices.wake("unlock"));
 	app.on("browser-window-focus", () => devices.wake("focus"));
@@ -2390,6 +2428,8 @@ app.whenReady().then(async () => {
 		summaries: sessionSummaries,
 		webTabNotice,
 		sessionWake,
+		sessionNote,
+		botHome,
 		tabReport,
 		agentOpening,
 		webPages: () => webHost?.windows.all() ?? [],
@@ -2475,7 +2515,13 @@ app.whenReady().then(async () => {
 	// Uploads expire on their own whether or not Mobile web serves: a paired computer's attached files land there too.
 	void webHost.keepUploadsSwept();
 	// Paired phones hear of finished turns, failures and asks through Web Push (web/web-push-notifier.ts).
-	sidecarPool.observeTabs(activity => webHost?.tabActivity(activity));
+	sidecarPool.observeTabs(activity => {
+		// A bot chat's NO_REPLY turn is no news on a phone either.
+		const quiet =
+			activity.type === "idle" &&
+			quietBotTurn({ cwd: sidecarPool.sidecarOf(activity.tabId)?.cwd, reply: activity.outcome?.reply });
+		if (!quiet) webHost?.tabActivity(activity);
+	});
 	webTabNotice.current = (tabId, notice) => webHost?.tabNotice(tabId, notice);
 	webHost.devices.onRevoked(deviceId => webTabLayouts.drop(deviceId));
 	const host = webHost;

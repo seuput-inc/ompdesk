@@ -183,6 +183,7 @@ export const FEATURES = {
 	checkRuns: "Heavy commands and test suites through ompdesk run --heavy and ompdesk check (prompt section)",
 	ciWatch: "CI results of a session's pushes reach that session (transcript line, no new turn)",
 	checkoutPeers: "Sessions sharing a checkout (prompt section and git guard)",
+	bots: "Bot chats (who the bot is, its items and the turn note)",
 	xdevNotice: "No mounted tool listed twice in a request (mount notice)",
 	contextHookIdle: "Model requests not copied while the message filters have nothing to drop (recap, mount notice)",
 	sessionDump: "Session dump archive saved as a file (/dump all, /dump anon)",
@@ -950,6 +951,10 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	checkoutPeers: {
 		session: ["sessionManager.getBranch()"],
 	},
+	/** modes/bots.ts: the public `before_agent_start` hook (a `message` result) and the journal for the bot's payload. */
+	bots: {
+		session: ["sessionManager.getBranch()", "sessionManager.appendCustomEntry()"],
+	},
 	/** xdev-notice.ts: the public `context` hook and the context's `getSystemPrompt()` (checked at run time). */
 	xdevNotice: {},
 	/**
@@ -979,23 +984,15 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** modes/formal-hint.ts: the public `before_agent_start` hook and its `prompt` only. */
 	formalHint: {},
 	/**
-	 * modes/default-browser.ts: the public `before_agent_start` hook for the section, and `browser.relay` and
-	 * `browser.relayUrl` held as runtime overrides of the session's settings (handles via `lookup`) while the choice is
-	 * the user's own browser.
+	 * modes/default-browser.ts: the public `before_agent_start` hook for the section, and `browser.enabled` held off as a
+	 * runtime override of the session's settings (handles via `lookup`) while the picked browser cannot be verified.
 	 */
 	defaultBrowser: {
 		pkg: ["Settings.instance"],
 		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/tools/browser/settings`]: [
-				"cfgBrowserEnabled.override()",
-				"cfgBrowserEnabled.clearOverride()",
-				"cfgBrowserRelay.override()",
-				"cfgBrowserRelay.clearOverride()",
-				"cfgBrowserRelayUrl.override()",
-				"cfgBrowserRelayUrl.clearOverride()",
-			],
+			[`${AGENT}/tools/browser/settings`]: ["cfgBrowserEnabled.override()", "cfgBrowserEnabled.clearOverride()"],
 		},
 	},
 	/**
@@ -1126,6 +1123,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * strategy) and Claude's last answer for the session's account (`oauth.accounts`), kept in a file of the agent
 	 * directory (`getAgentDir`); a refusal carries stock's retry hint. `credit_spend_commit_check` asks the same checks
 	 * about the models stock's `omp commit` would pick (`resolvePrimaryModel`, `resolveSmolModel`, `resolveApiKeyOnce`).
+	 * credit-spend-run.ts, the same switch's extension for `omp -p` runs, writes a scheduled run's usage from stock's
+	 * tally (`sessionManager.getUsageStatistics`).
 	 */
 	creditSpend: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
@@ -1138,6 +1137,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"modelRegistry.authStorage.usage.report()",
 			"modelRegistry.authStorage.credentials.list()",
 			"modelRegistry.authStorage.oauth.accounts()",
+			"sessionManager.getUsageStatistics()",
 		],
 		modules: {
 			"@oh-my-pi/pi-ai/utils/retry-after": ["appendRetryAfterHint()"],

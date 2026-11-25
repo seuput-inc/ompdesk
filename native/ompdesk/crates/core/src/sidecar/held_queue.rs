@@ -309,8 +309,10 @@ pub(super) fn command(
                 },
                 _ => return error("lane must be \"steering\" or \"followUp\""),
             };
+            // No session to keep it under (stock reports no session file): nothing could ever take it back, so the
+            // edit goes on unheld rather than being refused.
             let Some(session) = session else {
-                return error("The tab has no session yet");
+                return Some(Step::Done(json!({ "held": false })));
             };
             with(file, now, |store| {
                 let changed = store.put(Entry {
@@ -458,6 +460,18 @@ mod tests {
             Some(Step::Fail(_))
         ));
         assert!(command(&json!({"type": "queue_remove"}), None, Some("/s"), 1).is_none());
+        assert!(
+            matches!(
+                command(
+                    &json!({"type": "queue_hold", "token": "k2", "lane": "steering", "text": "t"}),
+                    None,
+                    None,
+                    1
+                ),
+                Some(Step::Done(answer)) if answer == json!({ "held": false })
+            ),
+            "a tab without a session file still edits its queued message, unheld"
+        );
     }
 
     #[test]

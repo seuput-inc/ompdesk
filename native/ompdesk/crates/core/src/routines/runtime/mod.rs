@@ -1,6 +1,7 @@
 //! Sources owned by the live schedules service. Dropping a poll cancels its I/O. Its completion keeps
 //! the service's close pending until the watcher, IMAP connection and any git/gh children are gone.
 
+mod calendar;
 mod email;
 mod files;
 mod git;
@@ -108,6 +109,7 @@ impl Source {
                 }
                 "files" => files::run(get("path").into(), mark, context, &working, timing).await,
                 "email" => email::run(&event, mark, &context, &working, timing).await,
+                "calendar" => calendar::run(&event, mark, &context, &working, timing).await,
                 _ => context.failure("could not start its trigger", Some("unknown source")),
             }
             drop(working);

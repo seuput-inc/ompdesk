@@ -19,6 +19,11 @@
 //!   mailbox login per poll. `routineSession` subscribes/unsubscribes stock facts (`routineActivity`).
 //!   The core owns the source generations, all cursor writes, file watches, timers and acceptance of each event.
 //! - `schedules.state` `{service, state}`: every change, which main keeps as the copy its synchronous readers read.
+//! - `schedules.note` `{service, session, text}`: a quiet note main delivers into a session file (a wake-up that
+//!   turned itself off). `schedules.resumed` is main telling the clock the computer woke.
+//!
+//! A schedule's precheck runs here, under the supervisor (`launch::precheck`), with the shell main handed over at
+//! `schedules.open` (`shell`).
 //!
 //! A service that is still open when the core's input ends is closed then (`close_all`): its running runs read
 //! stopped in the journal, as a quit recorded them. `schedules.closed` is the request main keeps open on a service;
@@ -51,8 +56,14 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::disk::saves::write_kept;
 use crate::disk::tree::fault as node_fault;
+use crate::run::Runner;
 use crate::server::{Call, Events, Fault, Registry, Reply};
 use engine::{Commanded, Engine, Limits, Out};
+
+/// How long a schedule's precheck may run before it counts as a no.
+const PRECHECK_TIMEOUT_MS: u64 = 60_000;
+/// The most of a precheck's output read back.
+const PRECHECK_OUTPUT_BYTES: usize = 16 * 1024;
 
 /// A run's log is read back at most this much from its end.
 const LOG_TAIL_BYTES: u64 = 256 * 1024;
@@ -63,7 +74,7 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn system_now() -> i64 {
+pub(crate) fn system_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_millis() as i64)
@@ -190,6 +201,8 @@ struct Service {
     log_dir: PathBuf,
     /// The clock is main's: every request says the time, and there is no timer here.
     manual: bool,
+    /// How a precheck command runs (main's shell, `-c`, its environment); none: prechecks say no.
+    shell: Option<Runner>,
     journal: Journal,
     /// Run-now commands waiting for main's word on their charge, by ask.
     waits: Mutex<HashMap<u64, oneshot::Sender<Result<(), Fault>>>>,
@@ -309,6 +322,23 @@ impl Service {
                 }
             }
             Out::Stop { run } => self.tell("schedules.stop", serde_json::json!({ "run": run })),
+            Out::Note { session, text } => self.tell(
+                "schedules.note",
+                serde_json::json!({ "session": session, "text": text }),
+            ),
+            Out::Precheck { ask, command, cwd } => self.precheck(ask, command, cwd, now),
+            Out::Result { run, name, to } => {
+                let log = fs::read(self.log_file(&run))
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .unwrap_or_default();
+                let answer = engine::run_answer(&log);
+                if !answer.is_empty() && !engine::quiet_result(&answer) {
+                    self.tell(
+                        "schedules.result",
+                        serde_json::json!({ "run": run, "name": name, "to": to, "text": answer }),
+                    );
+                }
+            }
             Out::RemovePrompt { run } => {
                 let _ = fs::remove_file(self.prompt_file(&run));
             }
@@ -332,6 +362,33 @@ impl Service {
             return Some(node_fault(&error, "open", &file).message);
         }
         (!Path::new(cwd).exists()).then(|| format!("Project folder not found: {cwd}"))
+    }
+
+    /// Runs a start's precheck on a task of its own and gives the engine its answer: yes when it exited 0 within
+    /// `PRECHECK_TIMEOUT_MS`, else no with what it printed (or why it could not run).
+    fn precheck(&self, ask: u64, command: String, cwd: String, now: i64) {
+        let name = self.name.clone();
+        let Some(shell) = self.shell.clone() else {
+            // Under the engine's lock already (`carry_out`): answered on a task, as a run's end is.
+            tokio::spawn(async move {
+                if let Ok(service) = service(&name) {
+                    service.with(|engine| {
+                        engine.prechecked(ask, false, "Prechecks cannot run here", now)
+                    });
+                }
+            });
+            return;
+        };
+        tokio::spawn(async move {
+            let timeout = Duration::from_millis(PRECHECK_TIMEOUT_MS);
+            let (ok, output) =
+                launch::precheck(&shell, &command, &cwd, timeout, PRECHECK_OUTPUT_BYTES).await;
+            let Ok(service) = service(&name) else {
+                return;
+            };
+            let now = service.at(None);
+            service.with(|engine| engine.prechecked(ask, ok, &output, now));
+        });
     }
 
     async fn close(&self, given: Option<f64>) {
@@ -400,6 +457,9 @@ struct OpenParams {
     wakes: bool,
     limits: Limits,
     now: Option<f64>,
+    /// How a precheck runs; absent from an older main: prechecks say no.
+    #[serde(default)]
+    shell: Option<Runner>,
 }
 
 #[derive(Deserialize)]
@@ -449,6 +509,9 @@ struct EndedParams {
     run: String,
     code: Option<i64>,
     error: Option<String>,
+    /// What a fresh run's model replies used, when its omp's extension counted it.
+    #[serde(default)]
+    usage: Option<Value>,
 }
 
 /// A request's service and moment, and its own params.
@@ -478,6 +541,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         triggers: Mutex::default(),
         log_dir: PathBuf::from(&params.log_dir),
         manual: params.manual,
+        shell: params.shell,
         journal: Journal::open(file.clone(), None, "schedules"),
         waits: Mutex::default(),
         clock: Mutex::default(),
@@ -502,6 +566,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
     };
     let state = service.with(|engine| {
         engine.load(stored.as_deref(), now);
+        engine.catch_up(now);
         engine.state()
     });
     if !params.manual {
@@ -624,6 +689,14 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&())
         })
     });
+    // The computer woke from sleep (main's `powerMonitor` `resume`): timed starts wait for the settle.
+    registry.add("schedules.resumed", |call| {
+        Box::pin(async move {
+            let (service, now, _): (_, _, Value) = asked(&call)?;
+            service.with(|engine| engine.resumed(now));
+            Reply::json(&())
+        })
+    });
     registry.add("schedules.tick", |call| {
         Box::pin(async move {
             let (service, now, _): (_, _, Value) = asked(&call)?;
@@ -644,7 +717,12 @@ pub fn register(registry: &mut Registry) {
     registry.add("schedules.ended", |call| {
         Box::pin(async move {
             let (service, now, params): (_, _, EndedParams) = asked(&call)?;
-            service.with(|engine| engine.ended(&params.run, params.code, params.error, now));
+            service.with(|engine| {
+                if let Some(usage) = params.usage {
+                    engine.usage(&params.run, usage);
+                }
+                engine.ended(&params.run, params.code, params.error, now)
+            });
             Reply::json(&())
         })
     });

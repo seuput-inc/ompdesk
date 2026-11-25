@@ -31,6 +31,7 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
+import { BOTS_COMMAND, BOTS_STATE, type BotsState } from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
@@ -253,6 +254,10 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				selectedText: () => transport.invoke(PREVIEW_STREAM_COPY),
 				pdf: () => transport.invoke(PREVIEW_STREAM_PDF),
 			},
+		},
+		bots: {
+			command: request => transport.invoke(BOTS_COMMAND, request),
+			onState: callback => subscribe<BotsState>(BOTS_STATE, callback),
 		},
 		schedules: {
 			command: (request, device) => transport.invoke(SCHEDULES_COMMAND, request, device),

@@ -4605,6 +4605,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.checkRuns": "바뀐 것만 다시 도는 검사와 공유 무거운 자리",
 	"bridgeHealth.feature.ciWatch": "세션이 푸시한 커밋의 CI 결과를 대화에 표시",
 	"bridgeHealth.feature.checkoutPeers": "같은 체크아웃을 쓰는 세션",
+	"bridgeHealth.feature.bots": "봇 채팅",
 	"bridgeHealth.feature.xdevNotice": "요청에 도구 목록 중복 없음",
 	"bridgeHealth.feature.contextHookIdle": "거를 게 없으면 요청 복사 생략",
 
@@ -6052,6 +6053,8 @@ export const ko: Record<string, string> = {
 	"schedules.event.emailFrom": ", 보낸 사람 {from}",
 	"schedules.event.emailTo": ", 받는 주소 {to}",
 	"schedules.event.emailSubject": ", 제목 “{subject}”",
+	"schedules.event.calendar": "캘린더 일정 시작 {minutes}분 전",
+	"schedules.event.by": ", {time}까지 한 번",
 	"schedules.github.pull_request": "풀 리퀘스트",
 	"schedules.github.issue": "이슈",
 	"schedules.github.ci_failure": "CI 실패",
@@ -6125,6 +6128,9 @@ export const ko: Record<string, string> = {
 	"schedules.field.triggerFixed": "저장해도 이 시작 조건은 그대로 유지돼요.",
 	"schedules.exitCode": "omp가 종료 코드 {code}로 끝났어요",
 	"schedules.showLog": "로그 보기",
+	"schedules.repeats": "×{count}",
+	"schedules.usage": "토큰 {tokens} · {cost}",
+	"schedules.resend": "다시 보내기",
 	"schedules.hideLog": "로그 숨기기",
 	"schedules.logLoading": "로그를 불러오는 중…",
 	"schedules.logEmpty": "이 실행은 출력이 없어요.",
@@ -6332,15 +6338,9 @@ export const ko: Record<string, string> = {
 	"settings.gui.defaultBrowserMissing": "ego-browser가 설치돼 있지 않아 에이전트가 내장 브라우저(omp)를 써요.",
 	"settings.gui.defaultBrowserLoadFailed": "기본 브라우저 설정을 읽지 못했어요",
 	"settings.gui.defaultBrowser.notInstalled": "{name} (설치 안 됨)",
-	"settings.gui.defaultBrowserBrowserMissing":
-		"{name} 브라우저가 설치돼 있지 않아요. 다른 브라우저를 대신 사용하지 않아요.",
-	"settings.gui.defaultBrowserRelayMissing":
-		"{name}에 omp 확장을 설치하면 에이전트가 로그인된 내 브라우저를 쓸 수 있어요. 다른 브라우저를 대신 사용하지 않아요.",
 	"settings.gui.defaultBrowserInstall": "확장 설치",
 	"settings.gui.defaultBrowserRelayUnverified":
 		"omp가 {name}의 릴레이를 확인할 수 없어 다른 브라우저로 연결하지 않아요. 다른 기본 브라우저를 선택하거나 지원되는 브라우저의 omp 사이드 패널에서 대화를 시작하세요.",
-	"settings.gui.defaultBrowserRelayConnected": "연결됨: 에이전트가 로그인된 {name} 브라우저를 써요.",
-	"settings.gui.defaultBrowserRelayWaiting": "{name} 브라우저를 열면 연결돼요. 열려 있어야 에이전트가 쓸 수 있어요.",
 	"settings.gui.defaultBrowserInstallFailed": "확장을 설치하지 못했어요",
 	"settings.gui.defaultBrowserStepsTitle": "{name}에 확장 추가하기",
 	"settings.gui.defaultBrowserSteps":
