@@ -18,6 +18,7 @@ use super::super::text::saved_id_of_path;
 use super::super::types::{
     BotArgs, ControlTab, ScheduleDraft, ScheduleFrequency, SendArgs, TabStatus,
 };
+use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
 use crate::agentctl::journal::bots::{BotRecord, STALE_DAYS, slug, specialty};
 use crate::agentctl::journal::items::ItemRecord;
@@ -285,7 +286,7 @@ impl AgentControl {
                     // A sender is a session file on this computer (a paired device's or a tab-only one is not told).
                     if let Some(from) = mail
                         .from
-                        .filter(|from| mail.from_device.is_none() && Path::new(from).is_absolute())
+                        .filter(|from| mail.from_device.is_none() && is_absolute(from))
                         && !chats.contains(&from)
                         && !senders.contains(&from)
                     {

@@ -21,7 +21,7 @@ use super::super::types::{
 use super::super::wrap::{AGENT_SCHEDULE_PREFIX, describe_frequency};
 
 /// `path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)`.
-fn is_absolute(path: &str) -> bool {
+pub(super) fn is_absolute(path: &str) -> bool {
     let bytes = path.as_bytes();
     path.starts_with('/')
         || (bytes.len() >= 2
