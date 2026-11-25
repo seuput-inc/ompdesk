@@ -1351,10 +1351,11 @@ async fn a_paused_bot_holds_its_mail_and_a_resume_hands_each_held_report_over_on
     );
     // Two resumes and a new report, all at once: each report reaches the chat once.
     let resume = json!({ "action": "resume", "bot": "Ada" });
+    let m2 = report("m2");
     let (first, second, sent) = tokio::join!(
         control.run("main0001", "ompdesk_bot", resume.clone(), None),
         control.run("main0001", "ompdesk_bot", resume, None),
-        control.host.mail("bot1", "m2", &report("m2"), NOTE),
+        control.host.mail("bot1", "m2", &m2, NOTE),
     );
     assert!(
         !first.is_error && !second.is_error,

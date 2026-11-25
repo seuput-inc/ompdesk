@@ -360,7 +360,7 @@ impl AgentControl {
                 }
             }
         } else {
-            holder(&*self.host.state())
+            holder(&self.host.state())
         };
         if let Some(tab) = tab {
             mail.to = tab.clone();
@@ -769,7 +769,7 @@ impl AgentControl {
                 .find(|tab| tab.session_path.as_deref() == Some(home) && tab.device.is_none())
                 .cloned()
         };
-        let home_tab = match holder(&*self.host.state()) {
+        let home_tab = match holder(&self.host.state()) {
             Some(tab) => tab,
             None => {
                 self.host.reach(home).await?;
@@ -853,7 +853,7 @@ impl AgentControl {
                 })
                 .cloned()
         };
-        if let Some(tab) = holder(&*self.host.state())
+        if let Some(tab) = holder(&self.host.state())
             && tab.status != TabStatus::Asleep
         {
             return Ok(tab);
@@ -933,15 +933,12 @@ impl AgentControl {
                 {
                     return fail(format!("There is already a bot named \"{name}\"."));
                 }
-                let reach = match request.get("reach").and_then(Value::as_array) {
-                    Some(list) => Some(
-                        list.iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_owned)
-                            .collect::<Vec<String>>(),
-                    ),
-                    None => None,
-                };
+                let reach = request.get("reach").and_then(Value::as_array).map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<String>>()
+                });
                 self.change_bot(&bot.id, |record| {
                     if let Some(name) = name {
                         record.name = name;
