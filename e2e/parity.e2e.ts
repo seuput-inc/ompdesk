@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Locator, type Page, test } from "@playwright/test";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { writeShellGh } from "./fixture/shell-gh";
+import { FIXTURE_NEWER_OMP_VERSION } from "./fixture/version";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
@@ -265,6 +266,12 @@ if (dir) {
 		try {
 			const ghBin = path.join(parent, "ghbin");
 			await writeParityGh(ghBin);
+			// `settings-omp-tested`: the line naming the tested omp shows only beside another omp than the tested one, and the
+			// fake omp runs the floor, which is the tested omp (src/shared/omp-tested.json). B's omp runs the next release.
+			const hostOmpVersion = path.join(parent, "host-omp-version");
+			if (surfaces.some(surface => surface.id === "settings-omp-tested")) {
+				await fs.writeFile(hostOmpVersion, `${FIXTURE_NEWER_OMP_VERSION}\n`);
+			}
 			const hostProfile = await makeRemoteProfile(parent, "host", {
 				language: DESKTOP.lang,
 				theme: DESKTOP.theme,
@@ -276,6 +283,7 @@ if (dir) {
 					OMP_GUI_START_SLOW_MS: "1500",
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					PATH: `${ghBin}${path.delimiter}${process.env.PATH}`,
+					OMP_GUI_TEST_VERSION_FILE: hostOmpVersion,
 				},
 			});
 			await seedProject(hostProfile.project);
