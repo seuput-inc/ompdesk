@@ -7,9 +7,6 @@ mod diagnostic_bundle_name;
 mod js_date;
 #[path = "../../src/launch_protection.rs"]
 mod launch_protection;
-#[allow(dead_code)]
-#[path = "../../../shell/src/launcher.rs"]
-mod launcher;
 #[path = "../../src/diagnostic_logs/log_tail.rs"]
 mod log_tail;
 #[path = "../../src/watchdog/marker.rs"]
