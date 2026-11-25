@@ -49,12 +49,13 @@ export function sessionMentionItems(
 	return items;
 }
 
-/** This tab's opened sessions, then the other sessions of its folder on this computer, newest first. */
+/** This tab's opened sessions, then the other sessions of its folder on the computer it runs on, newest first. */
 export function useMentionSessions(cwd: string): MentionSession[] {
 	const tabId = useRuntimeTabId();
 	const tabs = useTabsStore(state => state.tabs);
-	// The window's whole list (TabHousekeeping and the title bar hold it open); this folder's rows are kept below.
-	const stored = useStore(sessionListFeed("global").store, state => state.sessions);
+	const device = useTabsStore(state => state.tabs.find(tab => tab.id === tabId)?.device);
+	// The whole list of the computer the tab runs on (the sidebar holds it open); this folder's rows are kept below.
+	const stored = useStore(sessionListFeed("global", device).store, state => state.sessions);
 	return useMemo(() => {
 		const own = tabs.find(tab => tab.id === tabId);
 		const seen = new Set<string>(own?.sessionId ? [own.sessionId] : []);
