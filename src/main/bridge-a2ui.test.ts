@@ -171,7 +171,7 @@ describe("the marker form and the answer", () => {
 });
 
 describe("earlier calls on the branch", () => {
-	it("are the a2ui calls with their outcome and turn, without the current one", () => {
+	it("are the a2ui calls with their outcome and turn, without the current one and the ones after it", () => {
 		const call = (id: string) => ({ type: "toolCall", id, name: "a2ui", arguments: { messages: [id] } });
 		const entry = (message: Record<string, unknown>) => ({ type: "message", message });
 		const entries = [
@@ -179,13 +179,23 @@ describe("earlier calls on the branch", () => {
 			entry({ role: "assistant", content: [call("old")] }),
 			entry({ role: "toolResult", toolCallId: "old", isError: false }),
 			entry({ role: "user", content: "two" }),
-			entry({ role: "assistant", content: [call("bad"), call("now")] }),
+			entry({ role: "assistant", content: [call("bad")] }),
 			entry({ role: "toolResult", toolCallId: "bad", isError: true }),
+			entry({ role: "assistant", content: [call("first"), call("now"), call("later")] }),
 		];
 		expect(a2uiPriorCalls(entries, "a2ui", "now")).toEqual([
 			{ messages: ["old"], ok: true, sameTurn: false },
 			{ messages: ["bad"], ok: false, sameTurn: true },
+			{ messages: ["first"], ok: false, sameTurn: true, sibling: true },
 		]);
+		expect(a2uiPriorCalls(entries, "a2ui", "first").filter(prior => prior.sibling)).toEqual([]);
+	});
+
+	it("refuse a call that shares its message with an earlier a2ui call: stock runs the two unordered", () => {
+		const sibling = { messages: [create("s1", [text("root")])], ok: false, sameTurn: true, sibling: true };
+		const update = { version: "1.0", updateDataModel: { surfaceId: "s1", path: "/a", value: 1 } };
+		expect(check([update], [sibling]).errors[0].message).toContain("one a2ui call per message");
+		expect(check([create("s2", [text("root")])], [sibling]).errors).toHaveLength(1);
 	});
 });
 

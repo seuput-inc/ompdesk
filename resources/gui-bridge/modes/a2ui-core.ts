@@ -44,6 +44,8 @@ export interface PriorCall {
 	ok: boolean;
 	/** It belongs to the current turn (after the latest user message). */
 	sameTurn: boolean;
+	/** It sits before this call in the same assistant message: stock runs the two side by side, unordered. */
+	sibling?: boolean;
 }
 
 export interface CheckResult {
@@ -485,6 +487,11 @@ export function checkA2uiMessages(messages: unknown, validate: SchemaValidate): 
 export function checkA2uiCall(messages: unknown, prior: readonly PriorCall[], validate: SchemaValidate): CheckResult {
 	const shape = checkA2uiMessages(messages, validate);
 	if (shape.length > 0 || !Array.isArray(messages)) return { errors: shape, touched: [], interactive: false };
+	if (prior.some(call => call.sibling)) {
+		const message =
+			"Send one a2ui call per message: stock runs calls of one message side by side, so this one's surfaces would race the earlier call's. Put every surface message in that one call.";
+		return { errors: [{ code: "INTEGRITY_ERROR", path: "/messages", message }], touched: [], interactive: false };
+	}
 	const errors: A2uiError[] = [];
 	const done = (): CheckResult => ({ errors: errors.slice(0, A2UI_LIMITS.errors), touched: [], interactive: false });
 
@@ -625,13 +632,16 @@ export function a2uiPriorCalls(entries: readonly unknown[], tool: string, curren
 	const calls: PriorCall[] = [];
 	for (const [index, message] of messages.entries()) {
 		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-		for (const block of message.content) {
-			if (!isRec(block) || block.type !== "toolCall" || block.name !== tool || block.id === current) continue;
+		const blocks = message.content.filter(block => isRec(block) && block.type === "toolCall" && block.name === tool);
+		const own = blocks.findIndex(block => isRec(block) && block.id === current);
+		for (const [position, block] of blocks.entries()) {
+			if (!isRec(block) || position === own || (own >= 0 && position > own)) continue;
 			const id = String(block.id);
 			calls.push({
 				messages: isRec(block.arguments) ? block.arguments.messages : undefined,
 				ok: failed.get(id) === false,
 				sameTurn: index > turnStart,
+				...(own >= 0 ? { sibling: true } : {}),
 			});
 		}
 	}
