@@ -2,9 +2,9 @@
  * Settings › Agent behavior › Default browser: which browser agents use (prefs `defaultBrowser`,
  * src/shared/default-browser.ts). The list is what this computer has: ego-browser and each Chromium browser found.
  * Main resolves the pick against it and pushes a change to every open local session, effective from its next turn.
- * A Chromium browser needs the omp Browser Relay extension loaded to be driven (agents use the built-in browser until
- * then), so the row offers to install it, and looks again when the window regains focus: the person loads it in the
- * browser, then comes back.
+ * Stock's native-host relay cannot verify a Chromium browser's profile, so picking one leaves agents without a
+ * browser and the row says so, offering to install the extension where stock registers its native host. The row
+ * looks again when the window regains focus: the person installs a browser or ego-browser, then comes back.
  */
 
 import { Globe } from "lucide-react";
@@ -74,11 +74,6 @@ export function DefaultBrowserRow() {
 		};
 	}, [t, probe]);
 
-	const browserLabel = (resolved: AgentBrowserStatus["auto"]): string => {
-		if (resolved.kind === "ego") return t("settings.gui.defaultBrowser.ego");
-		return resolved.kind === "relay" ? resolved.name : t("settings.gui.defaultBrowser.builtin");
-	};
-
 	const picked = pref === null ? undefined : chromiumBrowserOf(pref);
 	const pickedBrowser = status?.browsers.find(browser => browser.id === picked);
 
@@ -87,7 +82,13 @@ export function DefaultBrowserRow() {
 			value: "auto",
 			// What automatic picks on this computer, once known.
 			label: status?.auto
-				? t("settings.gui.defaultBrowser.autoResolved", { browser: browserLabel(status.auto) })
+				? t("settings.gui.defaultBrowser.autoResolved", {
+						browser: t(
+							status.auto.kind === "ego"
+								? "settings.gui.defaultBrowser.ego"
+								: "settings.gui.defaultBrowser.builtin",
+						),
+					})
 				: t("settings.gui.defaultBrowser.auto"),
 		},
 		{
@@ -131,43 +132,14 @@ export function DefaultBrowserRow() {
 	let note: ReactNode = null;
 	if (status && pref === "ego" && !status.egoInstalled) {
 		note = <span data-default-browser-missing="true">{t("settings.gui.defaultBrowserMissing")}</span>;
-	} else if (status?.nativeHostBrowsers && picked) {
+	} else if (status && picked) {
 		note = (
-			<span className="inline-flex flex-wrap items-center justify-end gap-2">
+			<span className="inline-flex flex-wrap items-center justify-end gap-2" data-default-browser-unverified="true">
 				{t("settings.gui.defaultBrowserRelayUnverified", { name: CHROMIUM_BROWSER_NAMES[picked] })}
 				{pickedBrowser && status.nativeHostBrowsers.includes(picked) && (
 					<Button loading={installing} onClick={() => install(picked)} size="sm" variant="secondary">
 						{t("settings.gui.defaultBrowserInstall")}
 					</Button>
-				)}
-			</span>
-		);
-	} else if (status && picked && !pickedBrowser) {
-		note = (
-			<span data-default-browser-missing="true">
-				{t("settings.gui.defaultBrowserBrowserMissing", { name: CHROMIUM_BROWSER_NAMES[picked] })}
-			</span>
-		);
-	} else if (picked && pickedBrowser && !pickedBrowser.relayInstalled) {
-		note = (
-			<span
-				className="inline-flex flex-wrap items-center justify-end gap-2"
-				data-default-browser-relay-missing="true"
-			>
-				{t("settings.gui.defaultBrowserRelayMissing", { name: pickedBrowser.name })}
-				<Button loading={installing} onClick={() => install(pickedBrowser.id)} size="sm" variant="secondary">
-					{t("settings.gui.defaultBrowserInstall")}
-				</Button>
-			</span>
-		);
-	} else if (picked && pickedBrowser) {
-		note = (
-			<span data-default-browser-relay-connected={pickedBrowser.relayConnected}>
-				{t(
-					pickedBrowser.relayConnected
-						? "settings.gui.defaultBrowserRelayConnected"
-						: "settings.gui.defaultBrowserRelayWaiting",
-					{ name: pickedBrowser.name },
 				)}
 			</span>
 		);
