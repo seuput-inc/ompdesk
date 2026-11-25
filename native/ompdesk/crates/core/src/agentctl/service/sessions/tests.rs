@@ -1070,7 +1070,13 @@ async fn a_child_reads_stopping_on_its_opener_s_board_while_its_stop_waits_and_n
         "{}",
         outcome.text
     );
-    // A stop that ended in a refusal ends Stopping too, and the board is told again.
+    // A stop that ended in a refusal ends Stopping too, and the board is told again (a tell main reads a moment later).
+    for _ in 0..200 {
+        if told() >= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     assert_eq!(told(), 2);
     let after = control.review_items("a").await.unwrap();
     assert_eq!(after[0]["tabId"], "c1");
