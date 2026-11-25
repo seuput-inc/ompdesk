@@ -102,7 +102,14 @@ import {
 	sessionDeleteInProgress,
 } from "../session-mutations";
 import type { SessionSummaries, SummaryFacts, SummarySource } from "../session-summaries";
-import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "../session-targets";
+import {
+	SessionArtworkParams,
+	SessionPullRequestParams,
+	SessionTargetsParams,
+	sessionArtwork,
+	sessionPullRequest,
+	sessionTargets,
+} from "../session-targets";
 import type { SidecarSessionIdentity } from "../sidecar";
 import { type SidecarPool, STOP_SESSION_WAIT_MS } from "../sidecar-pool";
 import {
@@ -1478,6 +1485,8 @@ export class LocalHostServices implements HostServices {
 				return sessionTargets(parse(SessionTargetsParams, method, params));
 			case "sessions.artwork":
 				return sessionArtwork(parse(SessionArtworkParams, method, params));
+			case "sessions.pullRequest":
+				return sessionPullRequest(parse(SessionPullRequestParams, method, params));
 			// C114: the tab's terminals run here, in the tab's folder, with this machine's shells.
 			case "terminal.shells":
 				return detectShells();

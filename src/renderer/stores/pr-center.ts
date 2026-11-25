@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { create } from "zustand";
 import type { RpcPrDetail, RpcPrListFilter, RpcPrListItem, RpcPrListView, RpcPrRepo } from "../../shared/rpc-types";
 import type { FocusedScope } from "../lib/focused-scope";
@@ -488,21 +487,3 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 		};
 	},
 }));
-
-/**
- * Whether a session row's checkout has a pull request: its repository's name and branch among the PRs the PR center
- * last listed (the status lane's PR mark). shortcut: only the repository the PR center last read is known, so other
- * repositories' rows show none; upgrade to a per-repository PR read when the rows' PR state ships (FB24/FB25).
- */
-export function usePullRequestBranches(): (target: {
-	name: string;
-	head: { kind: string; name?: string } | null;
-}) => boolean {
-	const repo = usePrCenterStore(s => s.repo);
-	const list = usePrCenterStore(s => s.list);
-	return useMemo(() => {
-		const name = repo?.available ? repo.repo.slice(repo.repo.indexOf("/") + 1) : null;
-		const branches = new Set(name ? list.map(pr => pr.headRefName) : []);
-		return target => target.name === name && target.head?.kind === "branch" && branches.has(target.head.name ?? "");
-	}, [repo, list]);
-}

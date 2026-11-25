@@ -18,6 +18,7 @@ import { handlers as modes } from "./modes";
 import { handlers as nextPrompt } from "./next-prompt";
 import { handlers as promptOrigin } from "./prompt-origin";
 import { handlers as sessionDump } from "./session-dump";
+import { handlers as sessionLinks } from "./session-links";
 import { handlers as sessions } from "./sessions";
 import { handlers as settings } from "./settings";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
@@ -38,6 +39,7 @@ export function mergeHandlers(areas: Record<string, Record<string, LocalHandler>
 const LOCAL_HANDLERS = mergeHandlers({
 	sessions,
 	sessionDump,
+	sessionLinks,
 	agentControl,
 	autoMode,
 	judgeAssist,

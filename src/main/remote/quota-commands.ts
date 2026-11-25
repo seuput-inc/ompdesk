@@ -156,6 +156,10 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"desktop_slot_retry",
 	"desktop_slot_kill",
 	"desktop_slot_bridge",
+	// A session's attached links (local/session-links.ts): a preference file, no model.
+	"session_links",
+	"session_link_add",
+	"session_link_remove",
 	// Reads stock's advisor ledger and the session journal (bridge advisor-stats.ts): no model.
 	"get_advisor_stats",
 	"get_delegation",

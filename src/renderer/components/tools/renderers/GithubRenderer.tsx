@@ -2,17 +2,17 @@ import { CircleDot, ExternalLink, GitPullRequest, GitPullRequestArrow } from "lu
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import type { GithubItemPeek } from "../../../../shared/github";
 import { githubConclusionPassed } from "../../../../shared/github-checks";
+import { type GithubItemLink, githubItemLink } from "../../../../shared/session-links";
 import { AnsiText, hasAnsi } from "../../../lib/ansi";
-import { type FocusedScope, useFocusedScope } from "../../../lib/focused-scope";
+import { useFocusedScope } from "../../../lib/focused-scope";
 import { resultText } from "../../../lib/format";
 import { githubStateLabel } from "../../../lib/github-state";
 import { useT } from "../../../lib/i18n";
-import { type GithubItemLink, githubItemLink, githubPeekKey, peekGithubItem } from "../../../lib/link-peek";
+import { githubPeekKey, peekGithubItem } from "../../../lib/link-peek";
 import { openExternal } from "../../../lib/open-external";
+import { openPullRequest } from "../../../lib/open-pull-request";
 import { hidden, pollWhileVisible } from "../../../lib/visible-poll";
 import { asArray, asRecord } from "../../../lib/wire-value";
-import { usePrCenterStore } from "../../../stores/pr-center";
-import { useUiStore } from "../../../stores/ui";
 import { githubItemState, LinkPeek } from "../../chat/LinkPeek";
 import { IconButton } from "../../common";
 import type { ToolRendererProps } from "../ToolCard";
@@ -252,31 +252,6 @@ function useLivePullRequest(
 	return fresh;
 }
 
-/**
- * The pull request in the PR Center when it is the tab repository's (FG26); else, or for an Enterprise host, the
- * browser. A PR Center not read yet for this folder opens and decides once its own read names the repository.
- */
-function openInPrCenter(scope: FocusedScope, link: GithubItemLink, url: string): void {
-	const same = (repo: string) => repo.toLowerCase() === link.repo.toLowerCase();
-	usePrCenterStore.getState().enter(scope);
-	const here = usePrCenterStore.getState().repo;
-	if (link.host || here?.available === false || (here?.available && !same(here.repo))) {
-		openExternal(url);
-		return;
-	}
-	useUiStore.getState().openAgents("prs");
-	if (here) {
-		void usePrCenterStore.getState().select(link.number);
-		return;
-	}
-	const stop = usePrCenterStore.subscribe(state => {
-		if (!state.repo && !state.error) return;
-		stop();
-		if (state.repo?.available && same(state.repo.repo)) void state.select(link.number);
-		else openExternal(url);
-	});
-}
-
 const MENTION = /\b([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)#(\d+)\b/g;
 
 /** `owner/repo#n` mentions in a tool's text as links with their card; the rest as it is. */
@@ -392,7 +367,7 @@ export function GithubRenderer({ args, result, isPartial, partialResult }: ToolR
 							data-github-pr-center
 							icon={<GitPullRequestArrow />}
 							label={t("linkPeek.openInPrCenter")}
-							onClick={() => openInPrCenter(scope, prLink, externalUrl)}
+							onClick={() => openPullRequest(scope, prLink, externalUrl)}
 							size="sm"
 						/>
 					)}

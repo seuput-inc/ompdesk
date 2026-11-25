@@ -70,6 +70,13 @@ async function peek(href: string): Promise<string> {
 	);
 	const link = host.querySelector("a") as unknown as HTMLElement;
 	await act(async () => link.dispatchEvent(new Event("focusin", { bubbles: true })));
+	// The card's body loads on first use (React.lazy): let it arrive and render.
+	await act(async () => {
+		await import("./LinkPeekCard");
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, 0);
+		await promise;
+	});
 	return document.querySelector("[data-hover-card]")?.textContent ?? "";
 }
 

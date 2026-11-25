@@ -8,59 +8,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { GithubItemPeek } from "../../shared/github";
 import type { RpcWebPeek } from "../../shared/rpc-types";
+import type { GithubItemLink } from "../../shared/session-links";
 import { github } from "./github";
 
 export const LINK_PEEK_FRESH_MS = 10 * 60_000;
-
-export interface GithubItemLink {
-	/** A GitHub Enterprise host (`ghe.example.com[:port]`); absent for github.com. */
-	host?: string;
-	/** `OWNER/NAME`. */
-	repo: string;
-	number: number;
-}
-
-const GITHUB_ITEM = /^\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/(?:issues|pull)\/(\d+)(?:\/.*)?$/;
-
-/** `https://<host>/<owner>/<name>/(issues|pull)/<n>` on github.com or an Enterprise host; null for anything else. */
-export function githubItemLink(href: string): GithubItemLink | null {
-	let url: URL;
-	try {
-		url = new URL(href);
-	} catch {
-		return null;
-	}
-	const match = (url.protocol === "https:" || url.protocol === "http:") && GITHUB_ITEM.exec(url.pathname);
-	if (!match) return null;
-	const host = url.host.toLowerCase();
-	return {
-		...(host === "github.com" || host === "www.github.com" ? {} : { host }),
-		repo: `${match[1]}/${match[2]}`,
-		number: Number(match[3]),
-	};
-}
-
-/** The https URL a web card may read, without its fragment; null for anything the core would refuse anyway. */
-export function peekableWebUrl(href: string): string | null {
-	let url: URL;
-	try {
-		url = new URL(href);
-	} catch {
-		return null;
-	}
-	const host = url.hostname;
-	if (
-		url.protocol !== "https:" ||
-		url.username ||
-		url.password ||
-		!host.includes(".") ||
-		host.startsWith("[") ||
-		/^[\d.]+$/.test(host)
-	)
-		return null;
-	url.hash = "";
-	return url.toString();
-}
 
 interface Entry {
 	at: number;

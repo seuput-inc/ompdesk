@@ -24,6 +24,7 @@ import {
 	FileArchive,
 	FolderInput,
 	FolderSearch,
+	Link2,
 	MailCheck,
 	PanelRightClose,
 	Pencil,
@@ -77,6 +78,8 @@ export interface SessionMenuActions {
 	markUnread?: () => void;
 	closeTab?: () => void;
 	rename?: () => void;
+	/** Opens the dialog of the links attached to it (this computer's sessions). */
+	links?: () => void;
 	/** Pins it, or lets it go when pinned. */
 	togglePin?: () => void;
 	/** Mutes its notifications (banners and phone pushes), or lets them through again. */
@@ -174,6 +177,8 @@ export function sessionMenuItems({
 	if (facts.stored) {
 		if (actions.rename)
 			edit.push({ id: "session-rename", label: t("sidebar.rename"), icon: Pencil, onSelect: actions.rename });
+		if (actions.links)
+			edit.push({ id: "session-links", label: t("sidebar.menu.links"), icon: Link2, onSelect: actions.links });
 		if (actions.togglePin)
 			edit.push({
 				id: "session-pin",

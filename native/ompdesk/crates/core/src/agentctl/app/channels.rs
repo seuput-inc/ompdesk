@@ -54,6 +54,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
             Read,
             &[
                 "sessions.saved",
+                "sessions.link",
                 "sidebar.pin_session",
                 "sidebar.archive_sessions",
             ],
@@ -337,6 +338,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("sessions:summaries-changed", Risk::Never(PUSH)),
     ("sessions:remote-opened-changed", Risk::Never(PUSH)),
     ("sessions:held-changed", Risk::Never(PUSH)),
+    ("sessions:links-changed", Risk::Never(PUSH)),
     ("log:line", Risk::Never(PUSH)),
     ("menu:action", Risk::Never(PUSH)),
     ("deep-link", Risk::Never(PUSH)),

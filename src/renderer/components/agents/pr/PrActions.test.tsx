@@ -113,6 +113,7 @@ const loaded = (reload = vi.fn()): GithubLoad<GithubPrConversation> => ({
 	loading: false,
 	pausedUntil: null,
 	reload,
+	refresh: vi.fn(),
 });
 
 let command: Mock<(cmd: RpcCommand) => Promise<unknown>>;

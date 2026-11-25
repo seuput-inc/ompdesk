@@ -25,6 +25,7 @@ import {
 	SkeletonRows,
 } from "../common";
 import { ChangeCounts, ChangeStatus, type ChangeStatusName, PanelToolbar } from "./PanelChrome";
+import { BranchPullRequest } from "./scm/BranchPullRequest";
 import { CommitBox } from "./scm/CommitBox";
 import { DiffLines, DiffSkeleton, VirtualRows } from "./scm/DiffLines";
 import { NameDialog, type NameRequest } from "./scm/NameDialog";
@@ -285,6 +286,7 @@ export function RepositoryChanges({ sourceSelector }: { sourceSelector?: ReactNo
 						runner={runner}
 					/>
 				)}
+				{changes?.isRepo && head?.branch && <BranchPullRequest branch={head.branch} />}
 				{error && (
 					<InlineNotice
 						action={

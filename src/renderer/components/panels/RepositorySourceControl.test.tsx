@@ -217,7 +217,8 @@ describe("Changes panel source control", () => {
 		install(changes([{ path: "src/a.ts", status: " M" }]));
 		await mount();
 		await click(byLabel("Discard changes in src/a.ts")!);
-		expect(sent()).toEqual([]);
+		// Only the branch's pull request read (BranchPullRequest) has gone out; nothing was discarded yet.
+		expect(sent().filter(cmd => cmd.type !== "github")).toEqual([]);
 		expect(document.body.textContent).toContain("src/a.ts goes back to the last commit.");
 		await click(queryAll("[role=dialog] button").find(button => button.textContent === "Discard changes")!);
 		await flush();

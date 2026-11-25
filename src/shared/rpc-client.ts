@@ -267,6 +267,11 @@ export interface SessionRpcClient {
 	retryDesktopSlot(): Promise<RpcResponse>;
 	/** Revoke-failed holder: abort it and end its omp; the slot is freed only once that process has exited. */
 	killDesktopSlot(): Promise<RpcResponse>;
+	/** This computer's session links (`data`: session path → `SessionLink[]`), all or one session's. */
+	sessionLinks(sessionPath?: string): Promise<RpcResponse>;
+	/** `data`: the `SessionLink` kept; a URL `sessionLink` refuses fails. */
+	sessionLinkAdd(sessionPath: string, url: string): Promise<RpcResponse>;
+	sessionLinkRemove(sessionPath: string, url: string): Promise<RpcResponse>;
 	getDelegation(): Promise<RpcResponse>;
 	setDelegation(mode: DelegationMode): Promise<RpcResponse>;
 	/** This session's advisor spend, calls and delivered advisories (`AdvisorUsage`). */
@@ -644,6 +649,10 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		stopDesktopSlot: () => rpcCommand({ type: "desktop_slot_stop" }),
 		retryDesktopSlot: () => rpcCommand({ type: "desktop_slot_retry" }),
 		killDesktopSlot: () => rpcCommand({ type: "desktop_slot_kill" }),
+		sessionLinks: sessionPath =>
+			rpcCommand(sessionPath ? { type: "session_links", sessionPath } : { type: "session_links" }),
+		sessionLinkAdd: (sessionPath, url) => rpcCommand({ type: "session_link_add", sessionPath, url }),
+		sessionLinkRemove: (sessionPath, url) => rpcCommand({ type: "session_link_remove", sessionPath, url }),
 		getDelegation: () => rpcCommand({ type: "get_delegation" }),
 		setDelegation: mode => rpcCommand({ type: "set_delegation", mode }),
 		getAdvisorStats: () => rpcCommand({ type: "get_advisor_stats" }),

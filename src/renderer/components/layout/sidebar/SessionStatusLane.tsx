@@ -10,7 +10,16 @@ import type { LaneState } from "../../../lib/session-lane";
 import { WorkingArc } from "../../common";
 import { SidebarDoneMark } from "./SidebarDoneMark";
 
-export function SessionStatusLane({ state, fresh = false }: { state: LaneState; fresh?: boolean }) {
+export function SessionStatusLane({
+	state,
+	fresh = false,
+	prTone,
+}: {
+	state: LaneState;
+	fresh?: boolean;
+	/** How the branch's pull request stands, tinting the `pr` glyph (`branchPrTone`). */
+	prTone?: string;
+}) {
 	let mark: ReactNode = null;
 	switch (state) {
 		case "approval":
@@ -44,7 +53,12 @@ export function SessionStatusLane({ state, fresh = false }: { state: LaneState; 
 			break;
 	}
 	return (
-		<span aria-hidden className="omp-status-lane" data-status-lane={state}>
+		<span
+			aria-hidden
+			className="omp-status-lane"
+			data-pr-checks={state === "pr" ? prTone : undefined}
+			data-status-lane={state}
+		>
 			{mark}
 		</span>
 	);

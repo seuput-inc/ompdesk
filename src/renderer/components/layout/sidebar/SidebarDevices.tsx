@@ -59,6 +59,7 @@ import { deviceGroupKey, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
 import { tabSignalPresentation } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { useAgentReviewStore } from "../../../stores/agent-review";
+import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { pickRemoteDirectory, useTailscaleHint } from "../../../stores/remote";
 import type { SessionStore } from "../../../stores/session";
@@ -109,7 +110,14 @@ import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubag
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canDropOn, canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
-import { headWords, resolveRowTarget, SessionRowArtwork, SessionRowEnd, SessionRowLine } from "./session-row-target";
+import {
+	branchPrWords,
+	headWords,
+	resolveRowTarget,
+	SessionRowArtwork,
+	SessionRowEnd,
+	SessionRowLine,
+} from "./session-row-target";
 import { CHILD_TOKEN, hasFamilyChip, openedChildStatus, reviewKey } from "./sidebar-family";
 import { useHeld } from "./sidebar-hold";
 import { useSidebarListMotion } from "./use-sidebar-list-motion";
@@ -430,6 +438,13 @@ function DeviceSessions({
 	read: boolean;
 }) {
 	const t = useT();
+	// Each shown row's branch PR, read on the host (stores/branch-prs.ts, as Sidebar.tsx's rows).
+	const branchPrs = useBranchPrs(state => state.prs);
+	const shownBranches: BranchRow[] = [];
+	const selectedBranches: BranchRow[] = [];
+	const prView = `device:${host.deviceId}`;
+	useEffect(() => watchBranchPrs(prView, shownBranches, selectedBranches));
+	useEffect(() => () => watchBranchPrs(prView, [], []), [prView]);
 	// What every row shows of the host's sessions, as the host built it (its windows' tabs, the tabs it runs for any
 	// device): a row reads its run, prompt and subagents from it whether or not a tab here holds the session.
 	const hostSummaries = useSummaryMap(host.deviceId);
@@ -1053,6 +1068,17 @@ function DeviceSessions({
 						artwork: null,
 						head: null,
 					});
+		const branchRow: BranchRow | null =
+			target?.root && target.head?.kind === "branch"
+				? { device: host.deviceId, root: target.root, branch: target.head.name }
+				: null;
+		if (branchRow) {
+			shownBranches.push(branchRow);
+			if (current) selectedBranches.unshift(branchRow);
+			else if (tab) selectedBranches.push(branchRow);
+		}
+		const pr = branchPrOf(branchPrs, branchRow);
+		const prWords = pr ? branchPrWords(t, pr) : null;
 		// Its family, as a local row's (Sidebar.tsx): the tab's subagents and the sessions its agent opened. The ones
 		// running light the row as on the host, though no tab here holds it.
 		const opened = openedOf(session);
@@ -1069,7 +1095,7 @@ function DeviceSessions({
 				waiting,
 			}),
 			stopped: tab?.lastRun?.stopReason === "aborted",
-			pullRequest: false,
+			pullRequest: pr?.state === "OPEN",
 			open: tab !== undefined,
 		});
 		const age = indexed ? <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} /> : null;
@@ -1084,7 +1110,7 @@ function DeviceSessions({
 				<ListRow
 					leading={
 						<span className="omp-session-leading">
-							<SessionStatusLane state={lane} />
+							<SessionStatusLane prTone={pr ? branchPrTone(pr) : undefined} state={lane} />
 							<SessionRowArtwork target={target} />
 						</span>
 					}
@@ -1172,12 +1198,14 @@ function DeviceSessions({
 							/>
 							{working && <span className="sr-only">, {t("sidebar.signal.running")}</span>}
 							{openElsewhere && !working && <span className="sr-only">, {t("sidebar.row.open")}</span>}
+							{prWords && <span className="sr-only">, {prWords}</span>}
 						</>
 					}
 					titleText={[
 						title,
 						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
 						target?.head ? headWords(t, target.head).tip : null,
+						prWords,
 						openElsewhere && !working ? t("sidebar.row.open") : null,
 						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 						reason ?? null,

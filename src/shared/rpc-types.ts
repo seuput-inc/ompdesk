@@ -364,6 +364,12 @@ export type RpcCommand =
 	| { id?: string; type: "desktop_slot_stop" }
 	| { id?: string; type: "desktop_slot_retry" }
 	| { id?: string; type: "desktop_slot_kill" }
+	// Links a person or an agent attached to a session (src/main/local/session-links.ts): main answers them, never omp.
+	// A window's are this computer's, and its `session_links` without `sessionPath` lists every session; through a tab
+	// (an agent's) they go to the computer the session runs on, a missing `sessionPath` naming the tab's own session.
+	| { id?: string; type: "session_links"; sessionPath?: string; all?: true }
+	| { id?: string; type: "session_link_add"; sessionPath?: string; url: string }
+	| { id?: string; type: "session_link_remove"; sessionPath?: string; url: string }
 	/** Main's own calls into the bridge's desktop slot module (src/main/local/desktop-slot.ts allow-lists the methods); never sent by a renderer. */
 	| { id?: string; type: "desktop_slot_bridge"; method: string; params?: unknown }
 	// Delegation strength (composer chip): gui-bridge modes/delegation.ts
