@@ -17,8 +17,9 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::bridge::{Bridge, CONNECT_TIMEOUT, Out, Sink, new_address, remove_address};
-use super::chips::Chips;
+use super::chips::{Chips, Lane as ChipLane};
 use super::frames::{Decoder, Frame, head_of, js_trim, strip_vt_control_characters, supports_v2};
+use super::held_queue;
 use super::launch::{
     MAX_RESTART_ATTEMPTS, Open, WINDOWS_SESSION_END_EXIT_CODE, file_exists, restart_delay,
     session_open,
@@ -282,6 +283,8 @@ pub struct OpenParams {
     #[serde(default)]
     pub bridge: bool,
     pub ledger_file: Option<String>,
+    /// The journal of the person's queued messages (`held_queue.rs`); absent: kept in memory only (tests).
+    pub held_queue_file: Option<String>,
     pub start_slow_ms: Option<u64>,
     pub entry_id_timeout_ms: Option<u64>,
     pub tuning: Option<Tuning>,
@@ -454,6 +457,7 @@ pub struct Lane {
     event_filter: Vec<String>,
     bridge_enabled: bool,
     ledger_file: Option<String>,
+    held_queue_file: Option<std::path::PathBuf>,
     start_slow: Duration,
     entry_id_timeout: Duration,
     tuning: Tuning,
@@ -575,6 +579,7 @@ impl Lane {
             event_filter: params.event_filter,
             bridge_enabled: params.bridge,
             ledger_file: params.ledger_file,
+            held_queue_file: params.held_queue_file.map(Into::into),
             start_slow: params
                 .start_slow_ms
                 .map_or(START_SLOW, Duration::from_millis),
@@ -899,20 +904,44 @@ impl Lane {
                 bridge_connected,
                 reply,
             } => {
-                let Some(running) = self.running.as_mut().filter(|r| r.spawn_id == spawn_id) else {
+                if !self
+                    .running
+                    .as_ref()
+                    .is_some_and(|r| r.spawn_id == spawn_id)
+                {
                     let _ = reply.send(Err(disconnected()));
                     return;
-                };
+                }
                 // Consume the sequence even when the GUI's command cannot be decoded.
-                let command = match serde_json::from_str(command.get()) {
+                let command: Value = match serde_json::from_str(command.get()) {
                     Ok(command) => command,
                     Err(error) => {
                         let _ = reply.send(Err(queue_json_error(error)));
                         return;
                     }
                 };
-                let step =
-                    queue_commands::start(command, &mut running.chips, bridge_connected, now_ms());
+                let session = self.held_session();
+                let held = held_queue::command(
+                    &command,
+                    self.held_queue_file.as_deref(),
+                    session.as_deref(),
+                    now_ms(),
+                );
+                let step = match held {
+                    Some(step) => step,
+                    None => {
+                        let Some(running) = self.running.as_mut() else {
+                            let _ = reply.send(Err(disconnected()));
+                            return;
+                        };
+                        queue_commands::start(
+                            command,
+                            &mut running.chips,
+                            bridge_connected,
+                            now_ms(),
+                        )
+                    }
+                };
                 self.queue_step(step, reply);
             }
             Command::Send(frame) => {
@@ -1622,10 +1651,43 @@ impl Lane {
                 {
                     frame.raw = raw;
                 }
+                self.note_held_queue();
             }
             _ => {}
         }
         self.emit_frame(frame);
+    }
+
+    /// The session the person's queued messages belong to: the tab's, else the one omp named.
+    fn held_session(&self) -> Option<String> {
+        self.session_path
+            .clone()
+            .or_else(|| self.session.as_ref()?.session_file.clone())
+    }
+
+    /// Journals the live omp's queue as stock just reported it (`held_queue.rs`).
+    fn note_held_queue(&self) {
+        let (Some(running), Some(session)) = (&self.running, self.held_session()) else {
+            return;
+        };
+        let texts = |lane| {
+            running
+                .chips
+                .lane(lane)
+                .iter()
+                .map(|chip| chip.text.clone())
+                .collect()
+        };
+        held_queue::note(
+            self.held_queue_file.as_deref(),
+            &session,
+            &held_queue::spawn_owner(&self.tab, running.spawn_id),
+            held_queue::Lanes {
+                steering: texts(ChipLane::Steering),
+                follow_up: texts(ChipLane::FollowUp),
+            },
+            now_ms(),
+        );
     }
 
     /// Routes an omp response to its waiting command; false when nobody waits (it was never asked, timed out or its
@@ -2243,6 +2305,12 @@ impl Lane {
         self.run_messages.clear();
         let mut running = self.running.take();
         if let Some(running) = running.as_mut() {
+            // From here the omp's queue is no longer stock's to clear: whatever it held is offered to the tab.
+            held_queue::release(
+                self.held_queue_file.as_deref(),
+                &held_queue::spawn_owner(&self.tab, running.spawn_id),
+                now_ms(),
+            );
             for pending in running.pending.drain(..) {
                 if let Waiter::Caller(_, reply) = pending.waiter {
                     let _ = reply.send(Err(disconnected()));

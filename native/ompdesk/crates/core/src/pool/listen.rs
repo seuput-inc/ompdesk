@@ -50,6 +50,10 @@ impl Ctx {
                 let retry = (!payload.is_null()).then(|| payload.clone());
                 self.set_scheduled_retry(tab, retry).await
             }
+            "cutOff" => {
+                self.set_cut_off(tab, payload.as_str().map(str::to_owned))
+                    .await
+            }
             "events" => self.feed_events(tab, payload).await,
             other => Err(fault("no_event", format!("The pool hears no `{other}`"))),
         }

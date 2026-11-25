@@ -28,6 +28,7 @@ use crate::server::{Answer, Call, Events, Fault, Registry, Reply};
 pub mod bridge;
 mod chips;
 mod frames;
+mod held_queue;
 mod lane;
 mod launch;
 mod messages;

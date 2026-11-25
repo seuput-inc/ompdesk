@@ -1021,6 +1021,7 @@ app.whenReady().then(async () => {
 		checkoutFiles: sidecar => checkoutFilesRef.current?.(sidecar),
 		startQueue: {},
 		ledgerFile: ompProcesses.file,
+		heldQueueFile: join(app.getPath("userData"), "held-queue.json"),
 		sessionProcesses,
 	});
 	initDeletedSessions(join(app.getPath("userData"), "deleted-sessions.json"));
@@ -2142,6 +2143,8 @@ app.whenReady().then(async () => {
 				turnWait.noteResuming(tabId, resuming);
 			},
 			resumeRank: tabId => sidecarPool.resumeRank(tabId),
+			// Only this computer's own tabs get the cut-off row (the core offers no other).
+			setCutOff: (tabId, cutOff) => sidecarPool.setCutOff(tabId, cutOff),
 			// A window's tab shows its retry; a hosted tab's wait for a provider's limit goes to its device.
 			setScheduledRetry: (tabId, retry) => {
 				sidecarPool.setScheduledRetry(tabId, retry);
@@ -2206,6 +2209,26 @@ app.whenReady().then(async () => {
 			});
 		},
 		log: (message, details) => writeRuntimeLog({ source: "turn-resume", message, details }),
+		// A cut-off turn waits for the person: the opener of a session an agent opened hears it from the session itself
+		// (`reportFor` does nothing for a tab nobody opened). Each cut and each dismissal is its own report.
+		cutNote: (tabId, what) => {
+			const session = sidecarPool.resumeFacts().find(fact => fact.tabId === tabId)?.sessionFile;
+			const name = session ? ` (session ${basename(session)})` : "";
+			const because =
+				what === "crash-loop"
+					? "its omp ended three times within five minutes"
+					: what === "failed"
+						? "continuing it failed three times"
+						: "automatic continuation is off";
+			tabReport.current?.(tabId, {
+				kind: "blocked",
+				id: `cut-${what}-${Date.now()}`,
+				text:
+					what === "dismissed"
+						? `[OMPdesk] The person dismissed this session's cut-off turn${name}: it stays where the cut left it. Send it a message if the work still needs it.`
+						: `[OMPdesk] This session's turn was cut off when its omp ended and did not continue on its own${name} (${because}). It waits for the person's Continue on its tab; send it a message if the work should go on now.`,
+			});
+		},
 	});
 	ipc.handle(IPC_COMMANDS.RESUME_CANCEL_WAIT, async (_caller, tabId: unknown) => {
 		if (typeof tabId !== "string") return;
@@ -2219,6 +2242,22 @@ app.whenReady().then(async () => {
 	ipc.handle(IPC_COMMANDS.RESUME_STOP, async (_caller, tabId: unknown) => {
 		if (typeof tabId === "string") await turnResume.stopResumed(tabId);
 	});
+	// A tab viewing a paired host's window tab: that host holds the offer.
+	ipc.handle(IPC_COMMANDS.RESUME_CONTINUE, async (_caller, tabId: unknown) => {
+		if (typeof tabId !== "string") return;
+		const sidecar = sidecarPool.sidecarOf(tabId);
+		if (sidecar?.continueHostCut) await sidecar.continueHostCut();
+		else turnResume.continueCut(tabId);
+	});
+	ipc.handle(IPC_COMMANDS.RESUME_DISMISS, async (_caller, tabId: unknown) => {
+		if (typeof tabId !== "string") return;
+		const sidecar = sidecarPool.sidecarOf(tabId);
+		if (sidecar?.dismissHostCut) await sidecar.dismissHostCut();
+		else turnResume.dismissCut(tabId);
+	});
+	// A paired device's Continue or Dismiss on the cut-off row of a window's tab it views.
+	sidecarPool.onCutOff = (tabId, choice) =>
+		choice === "continue" ? turnResume.continueCut(tabId) : turnResume.dismissCut(tabId);
 	ipc.on(IPC_COMMANDS.CONNECTIVITY_REPORT, (_caller, online: unknown) => {
 		if (typeof online === "boolean") connectivity.report(online);
 	});

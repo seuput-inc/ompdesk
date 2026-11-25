@@ -1172,6 +1172,27 @@ impl Ctx {
         Ok(())
     }
 
+    /// The tab's cut-off row (TurnResume's offer), or a paired host's for a tab this one views (`listen`): the devices
+    /// viewing the tab show it too, and their Continue and Dismiss come back.
+    pub(super) async fn set_cut_off(&self, tab: &str, cut_off: Option<String>) -> R<()> {
+        let views = self.with(|pool| {
+            let entry = pool.entry_mut(tab)?;
+            if entry.cut_off == cut_off {
+                return None;
+            }
+            entry.cut_off = cut_off.clone();
+            Some(entry.device_views.clone())
+        });
+        let Some(views) = views else {
+            return Ok(());
+        };
+        self.forward_status(tab).await?;
+        for view in views {
+            self.push(&json!({"k": "emitView", "tab": tab, "view": view, "event": "cutOff", "arg": cut_off}));
+        }
+        Ok(())
+    }
+
     /// Which tab a relaunch continues first: 0 the window's focused tab, 1 another pane of its split, 2 the rest.
     pub(super) fn resume_rank(&self, tab: &str) -> i64 {
         self.with(|pool| {
@@ -1654,6 +1675,9 @@ impl Ctx {
             }
             if let Some(retry) = &entry.scheduled_retry {
                 snapshot.insert("scheduledRetry".into(), retry.clone());
+            }
+            if let Some(cut_off) = &entry.cut_off {
+                snapshot.insert("cutOff".into(), Value::from(cut_off.clone()));
             }
             snapshot.insert("run".into(), entry.tracking.run.reading(now));
             Value::Object(snapshot)

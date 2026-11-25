@@ -1,6 +1,6 @@
 /**
- * Queue mutations of the composer's queue popover and its edit-in-field: edit (omp re-queues the text at the end of its lane),
- * Steer now (queue_move of a follow-up into the steering lane, appended to its end),
+ * Queue mutations of the composer's queue popover and the side panel's queue: Steer now (queue_move of a follow-up
+ * into the steering lane, appended to its end),
  * per-item remove (queue_remove) and per-lane clear (queue_clear). omp cannot
  * reorder within a lane. Every mutation applies optimistically, rolls back on
  * a failed response or rejected transport call unless a newer snapshot
@@ -73,7 +73,6 @@ export interface QueueActions {
 	/** Mutations need a ready sidecar; every action is a no-op otherwise. */
 	ready: boolean;
 	remove: (lane: QueueLane, id: string) => void;
-	edit: (lane: QueueLane, id: string, text: string) => void;
 	/** A follow-up (stock's lane) joins the running turn: it moves to the end of the steering lane, pictures kept. */
 	steerNow: (id: string) => void;
 	clearLane: (lane: QueueLane) => void;
@@ -102,28 +101,6 @@ export function useQueueActions(): QueueActions {
 		[ready, t, tabRpc.queueRemove, queueStore],
 	);
 
-	const edit = useCallback(
-		(lane: QueueLane, id: string, text: string) => {
-			if (!ready) return;
-			void applyLaneMutation(
-				queueStore,
-				lane,
-				items => {
-					// omp re-queues edited text at the end of its lane.
-					const edited = items.find(item => item.id === id);
-					return edited ? [...items.filter(item => item.id !== id), { ...edited, text }] : items;
-				},
-				() => tabRpc.queueEdit(id, text),
-				"queuePanel.editFailed",
-				t,
-			);
-			// The re-queue carries the text only.
-			queueStore.getState().forgetImages(id);
-			noteLanded(queueStore, lane, id, "edit");
-		},
-		[ready, t, tabRpc.queueEdit, queueStore],
-	);
-
 	const steerNow = useCallback(
 		(id: string) => {
 			if (!ready) return;
@@ -147,5 +124,5 @@ export function useQueueActions(): QueueActions {
 		[ready, t, tabRpc.queueClear, queueStore],
 	);
 
-	return { ready, remove, edit, steerNow, clearLane };
+	return { ready, remove, steerNow, clearLane };
 }

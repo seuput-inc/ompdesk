@@ -2,6 +2,7 @@ import { type Range, useVirtualizer, type Virtualizer } from "@tanstack/react-vi
 import {
 	BookOpen,
 	Bug,
+	CirclePause,
 	Code2,
 	History,
 	Languages,
@@ -32,7 +33,7 @@ import { useMessagesStore } from "../../stores/messages";
 import { useHostView } from "../../stores/remote";
 import { useSessionStore } from "../../stores/session";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
-import { useActiveTabKind, useAwaitingConnection, useResuming, useTabsStore } from "../../stores/tabs";
+import { useActiveTabKind, useAwaitingConnection, useCutOff, useResuming, useTabsStore } from "../../stores/tabs";
 import { toastError } from "../../stores/toast";
 import { type TodoSnapshot, useTodoStore } from "../../stores/todo";
 import { type ToolEntry, toolEntryKey, useToolsStore } from "../../stores/tools";
@@ -183,6 +184,7 @@ function SessionTranscript() {
 	const childrenAtWork = useHasChildrenAtWork();
 	const awaitingConnection = useAwaitingConnection();
 	const resuming = useResuming();
+	const cutOff = useCutOff();
 	const status = useSessionStore(s => s.status);
 	const sessionId = useSessionStore(s => s.sessionId);
 	// Shared agent compaction preference and GUI-local transcript detail.
@@ -273,6 +275,7 @@ function SessionTranscript() {
 	const showStatusRow =
 		awaitingConnection !== null ||
 		resuming !== null ||
+		(cutOff !== null && !isStreaming) ||
 		retryInfo != null ||
 		compactionInfo != null ||
 		(isStreaming && awaitingModelSince != null && !hasStreamedContent) ||
@@ -1551,6 +1554,7 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 	const compactionInfo = useSessionStore(s => s.compactionInfo);
 	const awaitingConnection = useAwaitingConnection();
 	const resuming = useResuming();
+	const cutOff = useCutOff();
 	const waitHost = useHostView(useTabsStore(s => s.tabs.find(tab => tab.id === awaitingConnection)?.device));
 	const awaitingModelSince = useSessionStore(s => s.awaitingModelSince);
 	const now = Date.now();
@@ -1633,6 +1637,43 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 					variant="ghost"
 				>
 					{t("input.abort")}
+				</Button>
+			</div>
+		);
+	}
+	// A cut-off turn that did not go on by itself (automatic continuation off, an omp that kept dying, continuing
+	// failed): the person decides. Continue runs the continuation main would have run; Dismiss leaves it cut.
+	if (cutOff && !retryInfo && !compactionInfo) {
+		const cutText = t(`chat.cutOff.${cutOff.cutOff}`);
+		const failed = (cause: unknown) => toastError({ title: t("chat.cutOff.failedAction"), error: cause });
+		return (
+			<div
+				className="omp-status-turn flex flex-wrap items-center gap-x-2.5 gap-y-1 ps-(--omp-editorial-inset) pe-(--omp-editorial-edge) py-4 text-sc-md text-(--sc-text-muted)"
+				data-cut-off={cutOff.cutOff}
+			>
+				<span aria-atomic="true" aria-live="polite" className="sr-only" role="status">
+					{cutText}
+				</span>
+				<CirclePause aria-hidden className="size-(--sc-icon-sm) shrink-0" />
+				<span className="text-(--sc-text-secondary)">{cutText}</span>
+				<Button
+					data-cut-off-continue
+					onClick={() => {
+						window.omp.resume.continueCut(cutOff.tabId).catch(failed);
+					}}
+					size="sm"
+					variant="secondary"
+				>
+					{t("chat.cutOff.continue")}
+				</Button>
+				<Button
+					onClick={() => {
+						window.omp.resume.dismissCut(cutOff.tabId).catch(failed);
+					}}
+					size="sm"
+					variant="ghost"
+				>
+					{t("chat.cutOff.dismiss")}
 				</Button>
 			</div>
 		);

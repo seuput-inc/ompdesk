@@ -101,4 +101,10 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	 * `remote_offline` while the host is unreachable.
 	 */
 	cancelHostWait?(): Promise<void>;
+	/**
+	 * Remote sidecars and hosted views of a window's tab: the person's Continue or Dismiss on the cut-off row of the
+	 * window's tab they show, which that computer's resume rules hold (`remote_offline` while the host is unreachable).
+	 */
+	continueHostCut?(): Promise<void>;
+	dismissHostCut?(): Promise<void>;
 }

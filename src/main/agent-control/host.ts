@@ -799,6 +799,7 @@ export class AgentControlRuntime {
 				: {}),
 			busy: facts?.busy === true,
 			...(info.resuming ? { resuming: true } : {}),
+			...(info.cutOff ? { cutOff: info.cutOff } : {}),
 			asks,
 			...(plan ? { plan } : {}),
 			hidden: !info.device && typeof info.sessionPath === "string" && hidden.has(info.sessionPath),

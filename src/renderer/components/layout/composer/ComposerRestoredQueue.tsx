@@ -6,6 +6,10 @@
  * its × drops it, Discard drops all. Nothing is sent until the user chooses. While this is mounted Stop keeps them here
  * (`composer.restoredTrayMounted`); without it Stop merges them into the draft.
  *
+ * The same row holds what the core kept when the tab's omp went with messages still queued (a crash, a restart, a quit:
+ * `takeHeldQueue`, "Kept from before omp stopped"): taken once, by the first tray that mounts for the tab or sees its
+ * omp come up again.
+ *
  * ONE 36 px row at the top of the composer box, on every width: the sentence and the chips scroll together, Resume and
  * Discard stay put at the end. `onSettled`: a control left with its row; the composer takes focus back.
  */
@@ -13,13 +17,14 @@
 import { CornerDownRight, ListPlus, Pause, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useT } from "../../../lib/i18n";
-import { resumeRestoredQueue } from "../../../lib/messages";
+import { resumeRestoredQueue, takeHeldQueue } from "../../../lib/messages";
 import { queueChipLabel } from "../../../lib/queue-chip";
 import { useTabRpc } from "../../../lib/tab-rpc";
-import { type RestoredQueueItem, useComposerStore } from "../../../stores/composer";
+import { type ComposerStore, type RestoredQueueItem, useComposerStore } from "../../../stores/composer";
 import { useSessionStore } from "../../../stores/session";
-import { useRuntimeTabId } from "../../../stores/session-runtime-context";
+import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { Button, Chip, Tooltip } from "../../common";
+import { HOLD_LEASE_MS } from "./ComposerQueueEdit";
 import { QueueImageTiles, queueRowName } from "./queue-lane";
 
 function HeldChip({ item, onSettled }: { item: RestoredQueueItem; onSettled: () => void }) {
@@ -78,7 +83,18 @@ export function ComposerRestoredQueue({ onSettled }: { onSettled: () => void }) 
 		setMounted(true);
 		return () => setMounted(false);
 	}, [setMounted]);
+	// The omp is up (this tray mounted, or the tab's omp came back after it went): take what the core kept for the tab,
+	// and once more after an edit's lease, for a hold whose window reloaded or quit mid-edit (still leased at mount).
+	useEffect(() => {
+		if (!ready) return;
+		const composer = sessionRuntimeStore<ComposerStore>(tabId, "composer") ?? useComposerStore;
+		const take = () => void takeHeldQueue(rpc, composer).catch(() => {});
+		take();
+		const again = setTimeout(take, HOLD_LEASE_MS + 5_000);
+		return () => clearTimeout(again);
+	}, [ready, rpc, tabId]);
 	if (items.length === 0) return null;
+	const kept = items.every(item => item.kept);
 
 	const resume = () => {
 		setResuming(true);
@@ -90,7 +106,7 @@ export function ComposerRestoredQueue({ onSettled }: { onSettled: () => void }) 
 
 	return (
 		<section
-			aria-label={t("composerQueue.pausedLabel")}
+			aria-label={t(kept ? "composerQueue.keptLabel" : "composerQueue.pausedLabel")}
 			className="omp-restored-queue flex h-9 shrink-0 items-center gap-2 pr-2 pl-3 pt-1 [--hit-gap-x:8px] [--hit-gap-y:4px]"
 			data-restored-queue
 		>
@@ -101,7 +117,9 @@ export function ComposerRestoredQueue({ onSettled }: { onSettled: () => void }) 
 			>
 				<li className="inline-flex shrink-0 items-center gap-1.5 text-sc-xs text-(--sc-warning)" data-restored-note>
 					<Pause aria-hidden className="size-(--sc-icon-sm) shrink-0" />
-					<span className="whitespace-nowrap text-(--sc-text-secondary)">{t("composerQueue.paused")}</span>
+					<span className="whitespace-nowrap text-(--sc-text-secondary)">
+						{t(kept ? "composerQueue.pausedKept" : "composerQueue.paused")}
+					</span>
 				</li>
 				{items.map(item => (
 					<HeldChip item={item} key={item.id} onSettled={onSettled} />

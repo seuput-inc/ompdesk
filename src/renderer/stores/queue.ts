@@ -56,8 +56,6 @@ export interface QueueStore {
 	 * (`images` on the item, which the tray counts). `text` is what stock will show: the message, or "[Image]".
 	 */
 	expectImages: (text: string, images: ImageContent[]) => void;
-	/** The message lost its pictures (an edit or a lane move re-queues text only). */
-	forgetImages: (id: string) => void;
 	noteMoved: (moved: QueueMoved) => void;
 }
 
@@ -118,17 +116,6 @@ export const createQueueStore = (command: TabCommand = activeTabCommand) => {
 			},
 			expectImages: (text, images) => {
 				if (images.length > 0) pending.push({ text, images, at: Date.now() });
-			},
-			forgetImages: id => {
-				imagesById.delete(id);
-				// Untouched lanes keep their identity: an optimistic write in flight rolls back by it.
-				set(state => {
-					const holds = (items: RpcQueuedMessage[]) => items.some(item => item.id === id && item.images);
-					if (!holds(state.steering) && !holds(state.followUp)) return state;
-					const strip = (items: RpcQueuedMessage[]) =>
-						items.map(item => (item.id === id && item.images ? { ...item, images: undefined } : item));
-					return { steering: strip(state.steering), followUp: strip(state.followUp) };
-				});
 			},
 			noteMoved: moved => {
 				clearTimeout(movedTimer);

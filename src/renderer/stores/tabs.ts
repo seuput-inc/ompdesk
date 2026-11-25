@@ -36,6 +36,7 @@ import { create, type StoreApi } from "zustand";
 import type { AgentCloseOutcome, AgentControlViewEvent } from "../../shared/agent-control";
 import type {
 	AutoCloseTurn,
+	IpcCutOff,
 	IpcOpenExtensionRequest,
 	IpcRetrySaga,
 	IpcScheduledRetry,
@@ -160,6 +161,8 @@ export interface SessionTab {
 	queued?: true;
 	/** A relaunch continues the tab's interrupted work and its turn has not started yet (main's turn-resume). */
 	resuming?: boolean;
+	/** The tab's cut-off turn waits for the person's Continue or Dismiss (main's turn-resume): why it did not go on. */
+	cutOff?: IpcCutOff;
 	/** `status` is `running` only for stock's background work after the turn ended (main's `settling`). */
 	settling?: true;
 	/** While `running`: when its turn started (main's `runningSince`); the clock of a session another one opened. */
@@ -375,6 +378,7 @@ function projectSessionTab(
 		...(isSessionHeld(info) ? { sessionHeld: true as const } : {}),
 		...(info.status === "starting" && info.queued === true ? { queued: true as const } : {}),
 		...(info.resuming === true ? { resuming: true } : {}),
+		...(info.cutOff ? { cutOff: info.cutOff } : {}),
 		...(info.settling === true ? { settling: true as const } : {}),
 		...(info.status === "running" && info.runningSince !== undefined ? { runningSince: info.runningSince } : {}),
 		...(info.scheduledRetry ? { scheduledRetry: info.scheduledRetry } : {}),
@@ -605,6 +609,13 @@ export function useResuming(): string | null {
 		const tab = state.tabs.find(candidate => candidate.id === (tabId ?? state.activeTabId));
 		return tab?.resuming === true ? tab.id : null;
 	});
+}
+
+/** The calling pane's tab id and why its cut-off turn waits for the person's Continue; null when it does not. */
+export function useCutOff(): { tabId: string; cutOff: IpcCutOff } | null {
+	const tabId = useRuntimeTabId();
+	const tab = useTabsStore(state => state.tabs.find(candidate => candidate.id === (tabId ?? state.activeTabId)));
+	return tab?.cutOff ? { tabId: tab.id, cutOff: tab.cutOff } : null;
 }
 
 /** The calling pane's tab id and its scheduled retry (main re-sends the failed turn at `at`); null when none is armed. */
