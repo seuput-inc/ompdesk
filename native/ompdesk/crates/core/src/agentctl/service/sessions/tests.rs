@@ -92,6 +92,18 @@ fn rig_files(
     files: &Files,
     reply: impl Fn(&str, &Value, &Port<HostState>) -> Result<Value, String> + Send + 'static,
 ) -> (AgentControl, Asked) {
+    rig_tuned(id, state, caps, files, 30, reply)
+}
+
+/// `rig_files` whose closes wait `close_wait_ms` for the tab to leave its window.
+fn rig_tuned(
+    id: u64,
+    state: Value,
+    caps: Caps,
+    files: &Files,
+    close_wait_ms: u64,
+    reply: impl Fn(&str, &Value, &Port<HostState>) -> Result<Value, String> + Send + 'static,
+) -> (AgentControl, Asked) {
     let (writer, reader) = tokio::io::duplex(1 << 20);
     let (tx, _task) = crate::wire::spawn_writer(writer);
     let events = crate::server::test_events(&tx);
@@ -100,7 +112,7 @@ fn rig_files(
         Port::<HostState>::open(&events, id, serde_json::from_value(state).unwrap()).unwrap();
     let asked = play_main(port.clone(), BufReader::new(reader).lines(), reply);
     let tuning = Tuning {
-        close_wait_ms: 30,
+        close_wait_ms,
         abort_before_close_ms: 30,
         omp_exit_wait_ms: 30,
         stop_wait_ms: 100,
@@ -1009,5 +1021,59 @@ async fn an_asleep_tab_whose_host_finished_answers_from_the_saved_file() {
     let read = &names(&asked, "storedMessages")[0]["session"];
     assert_eq!(read["path"], DESK_PATH);
     assert_eq!(read["device"], "d1");
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_child_reads_stopping_on_its_opener_s_board_while_its_stop_waits_and_not_after() {
+    let (control, asked) = rig_tuned(
+        7_316,
+        state_of(
+            vec![tab("a", "/s/x_1.jsonl"), tab("c1", "/s/c_1.jsonl")],
+            json!({ "parents": { "c1": { "callerTabId": "a" } } }),
+        ),
+        Caps {
+            review_changed: true,
+            ..Caps::default()
+        },
+        &Files::default(),
+        300,
+        |method, args, _| main_of(method, args),
+    );
+    let stopping = |items: &Value| items[0]["stopping"].clone();
+    let told = || {
+        names(&asked, "reviewChanged")
+            .iter()
+            .filter(|args| args["parentTabId"] == "a")
+            .count()
+    };
+    let stop = control.run(
+        "a",
+        "ompdesk_session_stop",
+        json!({ "session": "c1", "close": true }),
+        None,
+    );
+    let watch = async {
+        // The window was asked to close the tab and keeps it: the close waits for it to go.
+        while names(&asked, "view").is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        (told(), control.review_items("a").await.unwrap())
+    };
+    let (outcome, (told_during, during)) = tokio::join!(stop, watch);
+    assert_eq!(told_during, 1);
+    assert_eq!(during[0]["tabId"], "c1");
+    assert_eq!(stopping(&during), json!(true));
+    assert!(outcome.is_error, "{}", outcome.text);
+    assert!(
+        outcome.text.starts_with("\"c1\" is still open"),
+        "{}",
+        outcome.text
+    );
+    // A stop that ended in a refusal ends Stopping too, and the board is told again.
+    assert_eq!(told(), 2);
+    let after = control.review_items("a").await.unwrap();
+    assert_eq!(after[0]["tabId"], "c1");
+    assert_eq!(stopping(&after), Value::Null);
     control.host.port().close();
 }

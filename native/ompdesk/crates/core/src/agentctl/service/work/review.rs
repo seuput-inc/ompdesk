@@ -136,6 +136,10 @@ impl AgentControl {
         if running && let Some(since) = tab.busy_since.filter(|since| *since != 0.0) {
             item.insert("runningSince".into(), js_num(since));
         }
+        // A stop, close or delete of it is in flight (`ompdesk_session_stop` waits up to `stop_wait_ms`).
+        if self.mem().closing.contains(&tab.tab_id) {
+            item.insert("stopping".into(), json!(true));
+        }
         let failed = !running
             && (matches!(
                 tab.last_run.as_ref().map(|run| run.stop_reason.as_str()),

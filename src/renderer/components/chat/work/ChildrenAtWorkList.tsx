@@ -18,7 +18,9 @@ import { useBoardDocked } from "./use-board-docked";
 function ChildLine({ row, now }: { row: OpenedChildRow; now: number }) {
 	const t = useT();
 	const title = row.title || t("workBoard.review.untitled");
-	const activity = childActivity(row) ?? (row.status === "waiting" ? t("workBoard.opened.status.waiting") : null);
+	const activity = row.stopping
+		? t("workBoard.opened.stopping")
+		: (childActivity(row) ?? (row.status === "waiting" ? t("workBoard.opened.status.waiting") : null));
 	const clock = row.status === "running" && row.since ? formatElapsed(Math.max(0, now - row.since)) : "";
 	const open = openedChildOpener(row);
 	const body = (

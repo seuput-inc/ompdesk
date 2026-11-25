@@ -330,6 +330,8 @@ export interface AgentReviewItem {
 	runningSince?: number;
 	/** Its last turn ended in an error or was stopped. */
 	failed?: true;
+	/** A stop, close or delete of it (`ompdesk_session_stop`) is in flight: its row reads Stopping. */
+	stopping?: true;
 	note?: string;
 	/** Its last report to its opener (`ompdesk_report`): kind, text and when. */
 	report?: { kind: string; text: string; at: number };

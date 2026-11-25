@@ -285,6 +285,21 @@ describe("work board opened sessions", () => {
 		expect(pane.querySelector("[data-board-status]")?.textContent).toBe("Working…");
 	});
 
+	it("reads Stopping in place of a child's step while a stop of it is in flight", async () => {
+		listed = [item({ tabId: "c-run", state: "running", step: "running bash (vitest)", stopping: true })];
+		await mount([child("c-run", { status: "running", task: "Run the suite" })]);
+		const activity = () =>
+			opened()?.querySelector('[data-board-opened="c-run"] [data-board-child-activity]')?.textContent;
+		expect(activity()).toBe("Stopping…");
+		const title = opened()?.querySelector('[data-board-opened="c-run"]')?.getAttribute("title");
+		expect(title).toContain("Stopping…");
+		expect(title).not.toContain("running bash");
+		// The stop ended: main's next list has no flag, and the step is back.
+		const running = item({ tabId: "c-run", state: "running", step: "running bash (vitest)" });
+		await act(async () => useAgentReviewStore.getState().apply({ tabId: "t1", items: [running] }));
+		expect(activity()).toBe("running bash (vitest)");
+	});
+
 	it("shows four running opened sessions as one-line rows named by their task, none under Needs review", async () => {
 		const tasks = ["Fix upload", "Port the parser", "Write docs", "Audit deps"];
 		// Main pushes each running child with the stored title still empty.

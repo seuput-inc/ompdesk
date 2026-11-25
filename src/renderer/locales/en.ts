@@ -5090,6 +5090,7 @@ export const en: Record<string, string> = {
 	"workBoard.opened.status.failed": "Failed",
 	"workBoard.opened.status.unmerged": "Ready to merge",
 	"workBoard.opened.status.open": "Open",
+	"workBoard.opened.stopping": "Stopping…",
 	"workBoard.opened.report": "⑂ {kind}: {text}",
 	"chat.custom.mail": "⑂ Session report · {from}",
 	"chat.custom.mail.kind.progress": "progress",

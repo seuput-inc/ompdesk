@@ -37,17 +37,19 @@ function OpenedRow({ row, now, tag }: { row: OpenedChildRow; now: number; tag?: 
 	const report = row.report
 		? t("workBoard.opened.report", { kind: t(`chat.custom.mail.kind.${row.report.kind}`), text: row.report.text })
 		: null;
+	const stopping = row.stopping ? t("workBoard.opened.stopping") : null;
 	const note =
-		status === "running" && row.step && !row.report
+		stopping ??
+		(status === "running" && row.step && !row.report
 			? row.step
 			: report && status !== "done"
 				? report
-				: [status === "running" ? null : statusLabel, mergeNote].filter(Boolean).join(" · ");
+				: [status === "running" ? null : statusLabel, mergeNote].filter(Boolean).join(" · "));
 	// A closed child whose folder is gone says so before the click (the open then offers Restore when it was saved).
 	const storedCwd = !row.tabId && !row.deviceId && row.sessionPath ? row.cwd : undefined;
 	const projectName = useProjectNames(storedCwd ? [storedCwd] : []);
 	const gone = storedCwd !== undefined && projectName(storedCwd).gone;
-	const activity = childActivity(row);
+	const activity = stopping ?? childActivity(row);
 	return (
 		<BoardRow
 			data={{

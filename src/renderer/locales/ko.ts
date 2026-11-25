@@ -5085,6 +5085,7 @@ export const ko: Record<string, string> = {
 	"workBoard.opened.status.failed": "실패",
 	"workBoard.opened.status.unmerged": "합칠 준비가 됐어요",
 	"workBoard.opened.status.open": "열림",
+	"workBoard.opened.stopping": "멈추는 중…",
 	"workBoard.opened.report": "⑂ {kind}: {text}",
 	"chat.custom.mail": "⑂ 하위 세션 보고 · {from}",
 	"chat.custom.mail.kind.progress": "진행",
