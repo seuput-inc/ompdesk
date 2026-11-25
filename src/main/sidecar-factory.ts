@@ -117,6 +117,8 @@ export interface LocalSidecarDeps {
 	startQueue?: SidecarOptions["startQueue"];
 	/** The file that names the omps the app runs for the next launch's reap (omp-processes.ts); the lanes write it. Absent: none kept (tests). */
 	ledgerFile?: string;
+	/** The journal of the person's queued messages (`SidecarOptions.heldQueueFile`). Absent: kept in memory (tests). */
+	heldQueueFile?: string;
 	/** Test seam: the lanes' clocks (`SidecarOptions.tuning`). */
 	tuning?: SidecarOptions["tuning"];
 	/** Whose the processes an omp starts are (session-processes.ts); absent: none followed (tests). */
@@ -256,6 +258,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			...(deps.gracefulStopMs ? { gracefulStopMs: deps.gracefulStopMs } : {}),
 			...(deps.startQueue ? { startQueue: deps.startQueue } : {}),
 			...(deps.ledgerFile ? { ledgerFile: deps.ledgerFile } : {}),
+			...(deps.heldQueueFile ? { heldQueueFile: deps.heldQueueFile } : {}),
 			...(deps.tuning ? { tuning: deps.tuning } : {}),
 			...(deps.sessionProcesses ? { sessionProcesses: deps.sessionProcesses } : {}),
 			// Test seam: the slow-start parity surface (e2e/parity.e2e.ts) waits seconds, not START_SLOW_MS.

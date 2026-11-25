@@ -53,6 +53,7 @@ let queueMove: Mock;
 let queueEdit: Mock;
 let queueRemove: Mock;
 let queueClear: Mock;
+let command: Mock;
 let getQueue: Mock;
 
 async function flush(): Promise<void> {
@@ -98,10 +99,12 @@ async function mount(steering: RpcQueuedMessage[], followUp: RpcQueuedMessage[])
 	queueRemove = vi.fn(async () => ok({ removed: true }));
 	queueMove = vi.fn(async () => ok({ lane: "steering", index: 0 }));
 	queueEdit = vi.fn(async () => ok({ updated: true }));
+	command = vi.fn(async () => ok({ held: true }));
 	queueClear = vi.fn(async () => ok({ removed: 0 }));
 	getQueue = vi.fn(async () => ok({ steering, followUp }));
 	(window as unknown as Record<string, unknown>).omp = {
 		rpc: {
+			command,
 			getQueue,
 			queueEdit,
 			queueMove,
@@ -234,15 +237,26 @@ describe("ComposerQueuePill", () => {
 		expect(text.getAttribute("aria-expanded")).toBe("false");
 	});
 
-	it("hands a message to the composer field on Edit, keeping the draft and pictures it replaces", async () => {
+	it("hands a message to the composer field on Edit, held by the core and out of stock's queue first", async () => {
 		const image = { content: { type: "image" as const, data: "AA==", mimeType: "image/png" }, preview: "p" };
 		useComposerStore.getState().setDraft("my draft");
 		useComposerStore.getState().setImages([image]);
 		await mount([queued("s1", "queued text")], []);
 		await openPopover();
 		await click(byLabel("Edit: queued text"));
+		await flush();
+		// The unedited text cannot be delivered while it is edited: the core holds it, then stock's queue lets it go.
+		const hold = command.mock.calls[0]?.[0] as { type: string; lane: string; text: string; token: string };
+		expect(hold).toMatchObject({ type: "queue_hold", lane: "steering", text: "queued text" });
+		expect(queueRemove).toHaveBeenCalledWith("s1");
+		expect(command.mock.invocationCallOrder[0]).toBeLessThan(queueRemove.mock.invocationCallOrder[0]);
 		const state = useComposerStore.getState();
-		expect(state.editingQueued).toMatchObject({ id: "s1", lane: "steering", original: "queued text" });
+		expect(state.editingQueued).toMatchObject({
+			id: "s1",
+			lane: "steering",
+			original: "queued text",
+			token: hold.token,
+		});
 		expect(state.editingQueued?.snapshot).toEqual({ draft: "my draft", images: [image] });
 		expect(state.draft).toBe("queued text");
 		expect(state.images).toEqual([]);

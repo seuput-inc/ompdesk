@@ -1,7 +1,8 @@
 /**
  * The composer's run-state wiring: the Esc hints under the field (Esc again to stop, deciding), Stop busy while a stop is
- * in flight, the placeholder priority (blocked > editing queued > steer > idle) and Edit queued, where the
- * field holds a queued message and Cancel / Esc restore the exact previous draft and pictures.
+ * in flight, the placeholder priority (blocked > editing queued > steer > idle), Edit queued, where the field holds a
+ * queued message (out of stock's queue, held by the core) and Save / Cancel / Esc queue it back, and the queue the core
+ * kept from an omp that went, which comes back into the restored tray and is never sent by itself.
  */
 import { parseHTML } from "linkedom";
 import { act } from "react";
@@ -82,7 +83,9 @@ const image = {
 
 let container: TestElement;
 let root: Root;
-let queueEdit: Mock;
+let rpcCommand: Mock<(command: RpcCommand) => Promise<RpcResponse>>;
+/** What the core answers the tray's `queue_take_held`. */
+let held: unknown;
 let prompt: Mock<(...args: unknown[]) => Promise<unknown>>;
 
 function propsOf(element: unknown): Record<string, Handler | undefined> {
@@ -159,9 +162,13 @@ async function mount(opts: { streaming?: boolean; steering?: RpcQueuedMessage[];
 	const steering = opts.steering ?? [];
 	const followUp = opts.followUp ?? [];
 	prompt = vi.fn(async () => ok());
-	queueEdit = vi.fn(async () => ok({ updated: true }));
-	const rpcCommand = vi.fn(async (command: RpcCommand): Promise<RpcResponse> => {
+	rpcCommand = vi.fn(async (command: RpcCommand): Promise<RpcResponse> => {
 		if (command.type === "get_queue") return ok({ steering, followUp });
+		if (command.type === "queue_take_held") {
+			const answer = held ?? { steering: [], followUp: [] };
+			held = undefined;
+			return ok(answer);
+		}
 		return ok();
 	});
 	(window as unknown as Record<string, unknown>).omp = {
@@ -173,7 +180,8 @@ async function mount(opts: { streaming?: boolean; steering?: RpcQueuedMessage[];
 			historySearch: vi.fn(async () => ok([])),
 			getAvailableCommands: vi.fn(async () => ok({ commands: [] })),
 			command: rpcCommand,
-			queueEdit,
+			followUp: vi.fn(async () => ok()),
+			steer: vi.fn(async () => ok()),
 			prompt,
 		},
 	};
@@ -207,6 +215,7 @@ async function mount(opts: { streaming?: boolean; steering?: RpcQueuedMessage[];
 
 beforeEach(() => {
 	input.current = null;
+	held = undefined;
 	resetHardwareKeyboardForTests();
 });
 
@@ -271,7 +280,9 @@ describe("the field's placeholder, by priority", () => {
 
 	it("puts a pending question above everything, a queued edit above the lane", async () => {
 		await mount({ streaming: true, steering: [queued("s1", "queued text")] });
-		await act(async () => useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "" }));
+		await act(async () =>
+			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "", token: "k1" }),
+		);
 		expect(placeholder()).toBe("Edit the queued message…");
 		await act(async () =>
 			useExtensionUiStore.getState().pushRequest({
@@ -286,12 +297,18 @@ describe("the field's placeholder, by priority", () => {
 });
 
 describe("Edit queued", () => {
-	async function mountEditing(): Promise<void> {
-		await mount({ streaming: true, steering: [queued("s1", "queued text")] });
+	/** The core's hold of the edited message: `queue_hold` with text holds it, without lets it go. */
+	const holds = () =>
+		rpcCommand.mock.calls.map(([command]) => command).filter(command => command.type === "queue_hold");
+
+	async function mountEditing(streaming = true): Promise<void> {
+		await mount({ streaming, steering: [queued("s1", "queued text")] });
 		await act(async () => {
 			useComposerStore.getState().setDraft("my draft");
 			useComposerStore.getState().setImages([image]);
-			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "queued text" });
+			// The row's Edit held the message in the core and took it out of stock's queue (ComposerQueue.test.tsx).
+			useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
+			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "queued text", token: "k1" });
 		});
 	}
 
@@ -307,7 +324,15 @@ describe("Edit queued", () => {
 		expect(document.querySelector("[data-queue-pill]")).toBeNull();
 	});
 
-	it("restores the exact previous draft and pictures on Esc, claiming the key from the app-wide Stop", async () => {
+	it("stays open while stock's queue no longer lists the message: it is held, nothing delivered it", async () => {
+		await mountEditing();
+		await typeInto("better text");
+		await act(async () => useQueueStore.getState().setFromFrame({ steering: [], followUp: [] }));
+		expect(useComposerStore.getState().editingQueued).not.toBeNull();
+		expect(prompt).not.toHaveBeenCalled();
+	});
+
+	it("on Esc restores the exact draft and pictures and queues the original back in its lane", async () => {
 		await mountEditing();
 		await typeInto("changed my mind");
 		const result = await press("Escape");
@@ -315,36 +340,47 @@ describe("Edit queued", () => {
 		expect(useComposerStore.getState().editingQueued).toBeNull();
 		expect(useComposerStore.getState().draft).toBe("my draft");
 		expect(useComposerStore.getState().images).toEqual([image]);
-		expect(queueEdit).not.toHaveBeenCalled();
+		await flush();
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(prompt).toHaveBeenCalledWith("queued text", undefined, "steer");
+		expect(holds()).toEqual([{ type: "queue_hold", token: "k1" }]);
 		expect(document.querySelector("[data-queue-edit-banner]")).toBeNull();
 		expect(fieldValue()).toBe("my draft");
 	});
 
-	it("restores the same on the banner's Cancel", async () => {
-		await mountEditing();
+	it("on Cancel after the turn ended holds the original in the restored tray instead of starting a turn", async () => {
+		await mountEditing(false);
 		const cancel = document.querySelector("[data-queue-edit-cancel]");
 		await act(async () => propsOf(cancel).onClick?.({}));
+		await flush();
 		expect(useComposerStore.getState().draft).toBe("my draft");
 		expect(useComposerStore.getState().images).toEqual([image]);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(useComposerStore.getState().restoredQueue.map(({ lane, text }) => ({ lane, text }))).toEqual([
+			{ lane: "steering", text: "queued text" },
+		]);
+		expect(holds()).toEqual([{ type: "queue_hold", token: "k1" }]);
 	});
 
-	it("saves on Enter: the queue's edit gets the text and the draft comes back", async () => {
+	it("saves on Enter: the edited text is queued in the message's lane and the draft comes back", async () => {
 		await mountEditing();
 		await typeInto("better text");
 		const result = await press("Enter");
 		expect(result.prevented).toBe(true);
 		await flush();
-		expect(queueEdit).toHaveBeenCalledWith("s1", "better text");
-		expect(prompt).not.toHaveBeenCalled();
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(prompt).toHaveBeenCalledWith("better text", undefined, "steer");
+		expect(holds()).toEqual([{ type: "queue_hold", token: "k1" }]);
 		expect(useComposerStore.getState().editingQueued).toBeNull();
 		expect(useComposerStore.getState().draft).toBe("my draft");
 		expect(useComposerStore.getState().images).toEqual([image]);
 	});
 
-	it("saves nothing when the text is unchanged, and still restores", async () => {
+	it("queues the unchanged text back on Enter", async () => {
 		await mountEditing();
 		await press("Enter");
-		expect(queueEdit).not.toHaveBeenCalled();
+		await flush();
+		expect(prompt).toHaveBeenCalledWith("queued text", undefined, "steer");
 		expect(useComposerStore.getState().draft).toBe("my draft");
 	});
 
@@ -352,7 +388,7 @@ describe("Edit queued", () => {
 		await mountEditing();
 		await typeInto("   ");
 		await press("Enter");
-		expect(queueEdit).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
 		expect(useComposerStore.getState().editingQueued).not.toBeNull();
 	});
 
@@ -369,24 +405,37 @@ describe("Edit queued", () => {
 		await typeInto("better text");
 		const result = await press("Enter");
 		expect(result.prevented).toBe(false);
-		expect(queueEdit).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
 		const save = button("Save queued message");
 		await act(async () => propsOf(save).onClick?.({ preventDefault: () => {} }));
 		await flush();
-		expect(queueEdit).toHaveBeenCalledWith("s1", "better text");
+		expect(prompt).toHaveBeenCalledWith("better text", undefined, "steer");
 		expect(useComposerStore.getState().draft).toBe("my draft");
 	});
+});
 
-	it("ends by itself when the message was delivered meanwhile: the edit goes ahead of the restored draft", async () => {
-		await mountEditing();
-		await typeInto("better text");
-		await act(async () => useQueueStore.getState().setFromFrame({ steering: [], followUp: [] }));
-		expect(useComposerStore.getState().editingQueued).toBeNull();
-		expect(useComposerStore.getState().draft).toBe("better text\n\nmy draft");
-		expect(useComposerStore.getState().images).toEqual([image]);
-		expect(useToastStore.getState().toasts.map(toast => toast.message)).toEqual([
-			"“queued text” was already delivered. Your edit is in the field, ahead of your draft.",
+describe("the queue kept from an omp that went", () => {
+	it("comes back into the restored tray once, and nothing is sent by itself", async () => {
+		held = { steering: [{ text: "first" }], followUp: [{ text: "later" }] };
+		await mount();
+		await flush();
+		const takes = rpcCommand.mock.calls.filter(([command]) => command.type === "queue_take_held");
+		expect(takes).toHaveLength(1);
+		expect(useComposerStore.getState().restoredQueue.map(({ lane, text, kept }) => ({ lane, text, kept }))).toEqual([
+			{ lane: "steering", text: "first", kept: true },
+			{ lane: "followUp", text: "later", kept: true },
 		]);
+		expect(document.querySelector("[data-restored-queue]")?.textContent).toContain("Kept from before omp stopped");
+		expect(prompt).not.toHaveBeenCalled();
+		const rpc = (window as unknown as { omp: { rpc: Record<string, Mock> } }).omp.rpc;
+		expect(rpc.followUp).not.toHaveBeenCalled();
+		expect(rpc.steer).not.toHaveBeenCalled();
+		// The omp comes back after another loss: the core has nothing left to offer, the tray keeps what it holds.
+		await act(async () => useSessionStore.setState({ status: "restarting" }));
+		await act(async () => useSessionStore.setState({ status: "ready" }));
+		await flush();
+		expect(rpcCommand.mock.calls.filter(([command]) => command.type === "queue_take_held")).toHaveLength(2);
+		expect(useComposerStore.getState().restoredQueue).toHaveLength(2);
 		expect(prompt).not.toHaveBeenCalled();
 	});
 });

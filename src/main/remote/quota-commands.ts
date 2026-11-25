@@ -265,8 +265,10 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"project_ask_form",
 	"queue_clear",
 	"queue_edit",
+	"queue_hold",
 	"queue_move",
 	"queue_remove",
+	"queue_take_held",
 	"read_agent_file",
 	// One image's bytes from stock's blob store (local/extensions.ts): no model.
 	"read_image_blob",

@@ -87,6 +87,8 @@ const QUEUE_COMMANDS: Record<string, true> = {
 	queue_edit: true,
 	queue_move: true,
 	dequeue: true,
+	queue_take_held: true,
+	queue_hold: true,
 };
 /** A request the core answers when it is done (the longest a timer may be set for): the call has no deadline of its own. */
 const NO_DEADLINE_MS = 2 ** 31 - 1;
@@ -409,6 +411,8 @@ export interface SidecarOptions {
 	startQueue?: { startsAtOnce?: number; startSlotCapMs?: number };
 	/** The file that names the omps the app runs for the next launch's reap (`omp-processes.ts`); the lane writes it. Absent (tests): none kept. */
 	ledgerFile?: string;
+	/** The journal of the person's queued messages (`<userData>/held-queue.json`, core `sidecar/held_queue.rs`); the lane writes it. Absent (tests): kept in memory. */
+	heldQueueFile?: string;
 	/** How long `agent_end` (and every frame behind it) may wait for its entry ids (the lane's default: 5 s). */
 	entryIdTimeoutMs?: number;
 	/** Test seam, the lane's clocks: `stopGraceMs`, `killWaitMs`, `stderrDrainMs`, `restartDelaysMs`. */
@@ -871,6 +875,7 @@ export class SidecarManager extends EventEmitter {
 					eventFilter: Object.keys(AGENT_EVENT_TYPES),
 					bridge: Boolean(options.bridgeDir),
 					...(options.ledgerFile ? { ledgerFile: options.ledgerFile } : {}),
+					...(options.heldQueueFile ? { heldQueueFile: options.heldQueueFile } : {}),
 					startSlowMs: options.startSlowMs ?? START_SLOW_MS,
 					...(options.entryIdTimeoutMs === undefined ? {} : { entryIdTimeoutMs: options.entryIdTimeoutMs }),
 					tuning,

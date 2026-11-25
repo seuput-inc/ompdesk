@@ -5167,6 +5167,8 @@ export const ko: Record<string, string> = {
 	"composerQueue.imageOnlyMany": "이미지만 · {count}",
 	"composerQueue.paused": "멈춰서 대기열이 일시정지됐어요",
 	"composerQueue.pausedLabel": "중단 뒤 보류된 대기 메시지",
+	"composerQueue.pausedKept": "omp가 멈추기 전 대기열을 보관했어요",
+	"composerQueue.keptLabel": "omp가 멈춘 뒤 보관된 대기 메시지",
 	"composerQueue.resume": "다시 시작",
 	"composerQueue.resumeTip": "다시 보내요: 첫 메시지가 새 턴을 시작하고 나머지는 뒤에서 기다려요",
 	"composerQueue.pausedEdit": "입력창으로 가져오기: {text}",
@@ -5203,12 +5205,13 @@ export const ko: Record<string, string> = {
 	"composerQueue.liveQueued": "대기열에 추가됨 ({count})",
 	"composerQueue.liveMoved": "메시지가 {lane}의 맨 끝으로 이동했어요",
 	"composerQueue.livePaused": "멈췄어요. 대기 메시지 {count}개가 돌아왔고, 다시 시작하기 전에는 보내지 않아요",
+	"composerQueue.liveKept": "omp가 멈췄을 때 대기 메시지 {count}개를 보관했고, 다시 시작하기 전에는 보내지 않아요",
 	"composerQueue.editBanner": "대기 메시지 편집",
 	"composerQueue.editSaves": "“{lane}”의 맨 끝으로 저장돼요",
 	"composerQueue.editRestore": "취소하면 작성 중이던 글이 돌아와요",
 	"composerQueue.editSave": "대기 메시지 저장",
 	"composerQueue.editPlaceholder": "대기 메시지를 고쳐 보세요…",
-	"composerQueue.editGone": "“{text}” 메시지는 이미 전달됐어요. 고친 내용은 입력창 맨 앞에 있어요.",
+	"composerQueue.editGone": "“{text}” 메시지는 이미 전달돼서 편집할 게 없어요.",
 
 	// Queue panel
 	"queuePanel.clearLane": "비우기",

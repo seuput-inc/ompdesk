@@ -139,6 +139,11 @@ export type RpcCommand =
 	| { id?: string; type: "queue_remove"; queueId: string }
 	| { id?: string; type: "queue_move"; queueId: string; toIndex: number; toLane?: "steering" | "followUp" }
 	| { id?: string; type: "queue_clear"; lane?: "steering" | "followUp" }
+	// The person's queued messages kept past their omp's death (core `sidecar/held_queue.rs`): `queue_take_held` takes
+	// the tab session's held messages once (an `RpcAbortAndRestoreQueueResult`); `queue_hold` holds the message the field
+	// edits (`lane` and `text`, renewed while the edit lasts) or lets it go (no `text`).
+	| { id?: string; type: "queue_take_held" }
+	| { id?: string; type: "queue_hold"; token: string; lane?: "steering" | "followUp"; text?: string }
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	// Stock's `/dump all|anon` zip (gui-bridge session-dump.ts) repacked with every member redacted in os.tmpdir() (local/session-dump.ts); the answer is a `SessionArchive` (shared/diagnostic-bundle.ts), an error `no_messages` while the session is empty.

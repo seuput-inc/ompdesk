@@ -1761,3 +1761,42 @@ async fn queue_projection_follows_agent_end_through_cleanup_and_stops_at_restart
     assert_eq!(without_bridge, json!({"messages":[{"text":"edit"}]}));
     finish(rig).await;
 }
+
+#[tokio::test]
+async fn the_persons_queue_outlives_its_omp_and_is_offered_once() {
+    let mut rig = Rig::new("held-queue", "queue").await;
+    let seq = rig.seq();
+    let mut params = rig.open_params(seq, no_queue());
+    params["heldQueueFile"] = json!(rig.dir.join("held-queue.json").to_string_lossy());
+    params["sessionPath"] = json!(rig.dir.join("s.jsonl").to_string_lossy());
+    let _open = rig.post("sidecar.open", params);
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let take = json!({"type":"queue_take_held"});
+    let nothing = json!({"steering":[],"followUp":[]});
+    rig.tab_call(
+        "sidecar.command",
+        json!({"command":{"type":"steer","message":"keep me"}}),
+    )
+    .await
+    .unwrap();
+    // The omp lives: its queue is stock's, nothing is offered.
+    let spawn = rig.spawn_id();
+    assert_eq!(rig.queue(spawn, false, take.clone()).await.unwrap(), nothing);
+    // The omp goes with messages queued (what it says while it stops changes nothing); the next one is offered them.
+    rig.tab_call("sidecar.kill", json!({})).await.unwrap();
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    let next = rig.spawn_id();
+    assert_ne!(next, spawn);
+    assert_eq!(
+        rig.queue(next, false, take.clone()).await.unwrap(),
+        json!({
+            "steering":[{"text":"repeat"},{"text":"repeat"},{"text":"edit"},{"text":"keep me"}],
+            "followUp":[{"text":"last"}],
+        })
+    );
+    // Once: another window's take finds nothing.
+    assert_eq!(rig.queue(next, false, take).await.unwrap(), nothing);
+    finish(rig).await;
+}

@@ -259,9 +259,14 @@ function isRestoreResult(value: unknown): value is RpcAbortAndRestoreQueueResult
  * `composer.restoredQueue` mounted (ComposerRestoredQueue) each message stays its own held item, apart from the
  * draft: nothing runs until the user resumes it, edits it or removes it (the queue is paused, never auto-released).
  * Without one it comes back the way the TUI's Esc does: steers then follow-ups, oldest first, joined by blank
- * lines, ahead of any draft (kept after a blank line); images join the strip; one toast says so.
+ * lines, ahead of any draft (kept after a blank line); images join the strip; one toast says so. `kept`: the messages
+ * come from an omp that ended (`takeHeldQueue`), not from a Stop.
  */
-export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortAndRestoreQueueResult): void {
+export function restoreAbortedQueue(
+	composer: ComposerStore,
+	restored: RpcAbortAndRestoreQueueResult,
+	kept = false,
+): void {
 	const entries = [
 		...restored.steering.map(entry => ({ lane: "steering" as const, entry })),
 		...restored.followUp.map(entry => ({ lane: "followUp" as const, entry })),
@@ -273,6 +278,7 @@ export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortA
 		lane,
 		text: entry.text === IMAGE_ONLY_CHIP && entry.images?.length ? "" : entry.text,
 		images: toImages(entry.images),
+		...(kept ? { kept } : {}),
 	}));
 	if (composer.restoredTrayMounted > 0) {
 		composer.holdRestored(items);
@@ -296,6 +302,20 @@ export function restoreAbortedQueue(composer: ComposerStore, restored: RpcAbortA
 			}),
 		});
 	}
+}
+
+/**
+ * The tab's queued messages the core kept when the omp holding them went (a crash, a restart, a quit, a closed tab:
+ * core `sidecar/held_queue.rs`), taken once into this tray: the core hands each kept queue to the first taker only, so
+ * another window or device, a late exit or the next relaunch never offers it again. Nothing is sent by itself.
+ */
+export async function takeHeldQueue(
+	rpc: Pick<TabRpc, "command">,
+	composer: Pick<StoreApi<ComposerStore>, "getState">,
+): Promise<void> {
+	const response = await rpc.command({ type: "queue_take_held" });
+	if (response.success && isRestoreResult(response.data))
+		restoreAbortedQueue(composer.getState(), response.data, true);
 }
 
 /**

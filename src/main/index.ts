@@ -1021,6 +1021,7 @@ app.whenReady().then(async () => {
 		checkoutFiles: sidecar => checkoutFilesRef.current?.(sidecar),
 		startQueue: {},
 		ledgerFile: ompProcesses.file,
+		heldQueueFile: join(app.getPath("userData"), "held-queue.json"),
 		sessionProcesses,
 	});
 	initDeletedSessions(join(app.getPath("userData"), "deleted-sessions.json"));

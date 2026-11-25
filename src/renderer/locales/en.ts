@@ -5172,6 +5172,8 @@ export const en: Record<string, string> = {
 	"composerQueue.imageOnlyMany": "Image only · {count}",
 	"composerQueue.paused": "Queue paused because you stopped",
 	"composerQueue.pausedLabel": "Queued messages held after you stopped",
+	"composerQueue.pausedKept": "Kept from before omp stopped",
+	"composerQueue.keptLabel": "Queued messages kept after omp stopped",
 	"composerQueue.resume": "Resume",
 	"composerQueue.resumeTip": "Send them again: the first starts a new turn, the rest wait behind it",
 	"composerQueue.pausedEdit": "Put in the field: {text}",
@@ -5208,12 +5210,13 @@ export const en: Record<string, string> = {
 	"composerQueue.liveQueued": "Queued ({count})",
 	"composerQueue.liveMoved": "Message moved to the end of {lane}",
 	"composerQueue.livePaused": "Stopped. {count} queued messages are back, nothing will send until you resume",
+	"composerQueue.liveKept": "{count} queued messages were kept when omp stopped, nothing will send until you resume",
 	"composerQueue.editBanner": "Edit queued",
 	"composerQueue.editSaves": "Saves as last in “{lane}”",
 	"composerQueue.editRestore": "Cancel puts your draft back",
 	"composerQueue.editSave": "Save queued message",
 	"composerQueue.editPlaceholder": "Edit the queued message…",
-	"composerQueue.editGone": "“{text}” was already delivered. Your edit is in the field, ahead of your draft.",
+	"composerQueue.editGone": "“{text}” was already delivered, so there is nothing to edit.",
 
 	// Queue panel
 	"queuePanel.clearLane": "Clear",
