@@ -5902,6 +5902,9 @@ export const ko: Record<string, string> = {
 	"turnError.rateLimit.title": "사용 한도 도달",
 	"turnError.rateLimit.guidance":
 		"프로바이더의 요청 한도나 할당량에 도달했어요. 잠시 후 다시 시도하거나 다른 모델을 쓰세요.",
+	"turnError.billing.title": "크레딧 부족",
+	"turnError.billing.guidance":
+		"결제 문제로 프로바이더가 요청을 거부했어요. 계정의 크레딧, 잔액 또는 지출 한도가 바닥났어요. 크레딧을 충전하거나 다른 모델로 바꾸세요.",
 	"turnError.resume.resetsAt": "{time}에 한도가 초기화돼요 · {countdown} 남음.",
 	"turnError.limitWait": "{time}에 스스로 다시 시도해요 · {countdown} 남음. 한도가 먼저 풀리면 바로 이어가요.",
 	"turnError.overloaded.title": "프로바이더 혼잡",

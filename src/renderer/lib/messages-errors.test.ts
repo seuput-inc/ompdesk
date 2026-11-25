@@ -14,6 +14,7 @@ const KINDS: TurnErrorKind[] = [
 	"creditsOff",
 	"modelUnavailable",
 	"rateLimit",
+	"billing",
 	"overloaded",
 	"compaction",
 	"unknown",
@@ -44,7 +45,7 @@ describe("describeTurnError", () => {
 		["No model selected", "auth"],
 		["429 Too Many Requests", "rateLimit"],
 		["Rate limit reached for requests per minute", "rateLimit"],
-		["You exceeded your current quota, please check your plan and billing details.", "rateLimit"],
+		["You exceeded your current quota, please check your plan and billing details.", "billing"],
 		// The gui-bridge's refusal with Credit use off (resources/gui-bridge/credit-spend-core.ts `planSpentError`).
 		[
 			"usage_limit_reached: this ChatGPT account reached its plan's usage limit, which resets in about 3 hours, and OMPdesk's Credit use setting is off, so it does not run on credits. retry-after-ms=10800000",
@@ -58,6 +59,12 @@ describe("describeTurnError", () => {
 		["Error code: model_not_found", "modelUnavailable"],
 		["The model is temporarily unavailable", "overloaded"],
 		["Compaction freed too little context (7.1k of 8.2k)", "compaction"],
+		[
+			"429 You exceeded your current quota, please check your plan and billing details. insufficient_quota",
+			"billing",
+		],
+		["Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.", "billing"],
+		["402 Payment Required", "billing"],
 		["Something unexpected happened", "unknown"],
 	])("maps %j to %s", (raw, kind) => {
 		expect(describeTurnError(raw).kind).toBe(kind);
@@ -89,6 +96,7 @@ describe("describeTurnError", () => {
 			"openProviders",
 			"changeModel",
 		]);
+		expect(describeTurnError("insufficient_quota").actions).toEqual(["openProviders", "changeModel"]);
 		expect(describeTurnError("Overloaded").actions).toEqual(["retry", "changeModel"]);
 		expect(describeTurnError("Compaction freed too little context").actions[0]).toBe("changeModel");
 		expect(describeTurnError("boom").actions).toEqual(["retry", "changeModel"]);

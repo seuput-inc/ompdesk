@@ -133,6 +133,7 @@ Code: `lib/messages.ts` (`abortActiveTurn`, `stopFromEscape`, `restoreAbortedQue
 ### Failed turn kinds
 
 - A failed turn's card and toast name its kind from the error text (`describeTurnError`, `lib/messages.ts`; first pattern wins): aborted, compaction, rate limit, context overflow, auth, overloaded, **model unavailable** (a 404, `not_found_error`, `model_not_found`, "model … not found / does not exist / unavailable"; Orca's model-not-found row, 25 Nov 2026), certificate, timeout, connection, else unknown. Each kind has an en/ko title and one sentence (`turnError.<kind>.*`) and its actions, fixing one first: model unavailable offers Change model, then Open providers, never Retry, since the same request fails the same way. Pinned by `messages-errors.test.ts`.
+- **An account out of money is not a limit** (Orca's billing refusal row, 25 Nov 2026): a rate limit or unknown failure whose text is a billing cap (`isBillingCap`, `src/shared/quota-reset.ts`, the one copy main's limit wait also reads: `insufficient_quota`, HTTP 402, a credit wall) is **billing**, "Out of credit", with Open providers then Change model and no Retry, so the card never shows a usage reset a wait would not bring.
 
 ### Run sheet (one line per row)
 

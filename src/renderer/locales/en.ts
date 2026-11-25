@@ -5909,6 +5909,9 @@ export const en: Record<string, string> = {
 	"turnError.rateLimit.title": "Usage limit reached",
 	"turnError.rateLimit.guidance":
 		"You've hit the provider's rate limit or quota. Try again in a moment or switch to another model.",
+	"turnError.billing.title": "Out of credit",
+	"turnError.billing.guidance":
+		"The provider refused the request for billing: the account's credit, balance or spending limit is used up. Add credit or switch to another model.",
 	"turnError.resume.resetsAt": "The limit resets at {time} · in {countdown}.",
 	"turnError.limitWait": "Tries again by itself at {time} · in {countdown}, or sooner once the limit lifts.",
 	"turnError.overloaded.title": "Provider busy",
