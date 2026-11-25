@@ -14,7 +14,6 @@
  */
 
 import {
-	AppWindow,
 	Check,
 	ChevronLeft,
 	ExternalLink,
@@ -50,10 +49,9 @@ import { useFocusedTabDevice } from "../../stores/remote";
 import { useRuntimeTabId, useTabCommand } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { toast } from "../../stores/toast";
-import { useToolsStore } from "../../stores/tools";
 import { approvalHeldBack } from "../autopilot/autopilot-view";
-import { requestRevealStep } from "../chat/work/reveal-step";
 import { Badge, Button, Card, ChoiceList, Input, Kbd, LinkButton, Tabs, TextArea } from "../common";
+import { A2uiWaitingRow } from "../tools";
 import { ApprovalDialog } from "./ApprovalDialog";
 import { useAskDock, useBelowEditorDock } from "./ask-dock";
 import { PromptCard, PromptQueueContext, TimeoutFooter } from "./PromptCard";
@@ -914,39 +912,6 @@ function NativeFormDialog({
 	);
 }
 
-/** The dock's one row for an `a2ui` form: where to answer, and Skip. */
-function A2uiWaiting({ callId, onSkip, remaining }: { callId: string; onSkip: () => void; remaining: number | null }) {
-	const t = useT();
-	const tabId = useRuntimeTabId();
-	const entryKey = useToolsStore(state => state.entryKeyForCallId(callId));
-	return (
-		<PromptCard
-			footer={
-				<>
-					<Button
-						data-a2ui-jump
-						onClick={() => tabId && requestRevealStep({ tabId, key: entryKey })}
-						size="sm"
-						variant="secondary"
-					>
-						{t("a2ui.jump")}
-					</Button>
-					<Button data-a2ui-dock-skip onClick={onSkip} size="sm" variant="ghost">
-						{t("a2ui.skip")}
-					</Button>
-				</>
-			}
-			icon={AppWindow}
-			label={t("a2ui.waiting")}
-			onCancel={onSkip}
-		>
-			<div data-a2ui-waiting={callId}>
-				<TimeoutFooter remaining={remaining} />
-			</div>
-		</PromptCard>
-	);
-}
-
 function ActiveDialog({
 	request,
 	remaining,
@@ -1014,7 +979,7 @@ function ActiveDialog({
 			// An `a2ui` call's form: its card in the chat answers it (docs/design/a2ui.md §2), the dock only says where.
 			const a2uiCall = a2uiMarkerToolCallId(request.html);
 			if (a2uiCall !== undefined) {
-				return <A2uiWaiting callId={a2uiCall} onSkip={cancel} remaining={remaining} />;
+				return <A2uiWaitingRow callId={a2uiCall} onSkip={cancel} remaining={remaining} />;
 			}
 			return (
 				<NativeFormDialog

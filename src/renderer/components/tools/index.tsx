@@ -292,7 +292,9 @@ function AgentDesktopRenderer(props: ToolRendererProps) {
 
 // Its own chunk too: the A2UI engine (web_core, zod) and its views load with the first card that needs them. One loader
 // for both places it draws, since what this file adds runs on the phone's first screen.
-const LazyA2uiCard = lazyChunk(() => import("./renderers/A2uiRenderer").then(module => ({ default: module.A2uiCard })));
+const a2uiChunk = () => import("./renderers/A2uiRenderer");
+const LazyA2uiCard = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiCard })));
+const LazyA2uiWaiting = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiWaiting })));
 
 /**
  * An `a2ui` call's card: `live`, its own row in the chat under the work card (the one that may answer); otherwise the
@@ -304,6 +306,15 @@ export function A2uiChatCard({ toolCallId, live }: { toolCallId?: string; live?:
 			<LazyA2uiCard live={live} toolCallId={toolCallId} />
 		</Suspense>
 	) : null;
+}
+
+/** The dock's row while an `a2ui` call waits for the person (ExtensionDialog); its chunk is the card's. */
+export function A2uiWaitingRow(props: { callId: string; onSkip: () => void; remaining: number | null }) {
+	return (
+		<Suspense fallback={null}>
+			<LazyA2uiWaiting {...props} />
+		</Suspense>
+	);
 }
 
 export function getToolRenderer(name: string): ComponentType<ToolRendererProps> {

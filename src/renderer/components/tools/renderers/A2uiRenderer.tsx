@@ -12,7 +12,7 @@
  */
 
 import type { ActionPayload } from "@a2ui/web_core";
-import { Check } from "lucide-react";
+import { AppWindow, Check } from "lucide-react";
 import { useEffect, useRef } from "react";
 import {
 	A2UI_ANSWER_FIELD,
@@ -27,9 +27,12 @@ import { SurfaceView } from "../../../lib/a2ui/views/SurfaceView";
 import { resultDetails } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useExtensionUiStore } from "../../../stores/extension-ui";
+import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { toast } from "../../../stores/toast";
 import { callIdOfEntryKey, selectToolEntry, useToolsStore } from "../../../stores/tools";
+import { requestRevealStep } from "../../chat/work/reveal-step";
 import { Button } from "../../common";
+import { PromptCard, TimeoutFooter } from "../../dialogs/PromptCard";
 
 /** The action as the bridge takes it back: the surface's whole data model rides along only when it asked. */
 function answerOf(session: A2uiSession, action: ActionPayload): A2uiAction {
@@ -144,5 +147,49 @@ export function A2uiCard({ toolCallId, live = false }: { toolCallId: string; liv
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * The dock's one row for an `a2ui` form (ExtensionDialog's `form` case): where to answer, and Skip. It lives in this
+ * chunk, which the call's card in the chat has loaded by the time stock raises the form.
+ */
+export function A2uiWaiting({
+	callId,
+	onSkip,
+	remaining,
+}: {
+	callId: string;
+	onSkip: () => void;
+	remaining: number | null;
+}) {
+	const t = useT();
+	const tabId = useRuntimeTabId();
+	const entryKey = useToolsStore(state => state.entryKeyForCallId(callId));
+	return (
+		<PromptCard
+			footer={
+				<>
+					<Button
+						data-a2ui-jump
+						onClick={() => tabId && requestRevealStep({ tabId, key: entryKey })}
+						size="sm"
+						variant="secondary"
+					>
+						{t("a2ui.jump")}
+					</Button>
+					<Button data-a2ui-dock-skip onClick={onSkip} size="sm" variant="ghost">
+						{t("a2ui.skip")}
+					</Button>
+				</>
+			}
+			icon={AppWindow}
+			label={t("a2ui.waiting")}
+			onCancel={onSkip}
+		>
+			<div data-a2ui-waiting={callId}>
+				<TimeoutFooter remaining={remaining} />
+			</div>
+		</PromptCard>
 	);
 }
