@@ -36,7 +36,7 @@
 				"src/main/shell-host/electron/app.ts#relaunch",
 				"src/main/shell-host/electron/app.ts#exit",
 				"src/main/shell-host/electron/index.ts#endMain",
-				"src/main/shell-host/electron/index.ts:197-198",
+				"src/main/shell-host/electron/index.ts:196-197",
 				"src/main/shell-host/client.ts#request",
 				"src/main/shell-host/client.ts#call",
 				"src/main/shell-host/client.ts#event",
@@ -53,7 +53,7 @@
 				"native/ompdesk/crates/shell/src/main.rs:343-362",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "aa5384b6e6511a59962de6257e137c76c65e7d26"
+			"syncCommit": "d794ee70cefd06343b72cd22e72c0c40a188b58f"
 		},
 		{
 			"id": "turn-resume",
@@ -77,12 +77,12 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2361-2365",
+				"src/main/index.ts:2226-2230",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "f4442413a482c90dcc926c7b80e10ecfe74aeed0",
+			"syncCommit": "f49f9994414de5aced7373c428b80017468d15aa",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "f4442413a482c90dcc926c7b80e10ecfe74aeed0",
+			"syncCommit": "d794ee70cefd06343b72cd22e72c0c40a188b58f",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{

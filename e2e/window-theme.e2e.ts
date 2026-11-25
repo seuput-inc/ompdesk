@@ -85,7 +85,7 @@ for (const scheme of ["light", "dark"] as const) {
 			await expect(first.locator(".omp-workspace-main")).toBeVisible();
 			const expected = await surfaces(first);
 			expect(expected.prefersDark).toBe(scheme === "dark");
-			expect(expected.bg).toBe(scheme === "dark" ? "#19191c" : "#ffffff");
+			expect(expected.bg).toBe(scheme === "dark" ? "#0a0a0a" : "#ffffff");
 
 			// The theme pre-paint gives the new document, before the renderer has read any preference.
 			await app.context().addInitScript(() => {

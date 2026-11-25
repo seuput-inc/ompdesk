@@ -1293,3 +1293,29 @@ export function buildTimelineMarkers(rows: readonly HistoryRow[]): Array<Timelin
 
 	return markers;
 }
+
+/**
+ * Where the "New" line goes when the person comes back to a session (Orca's unread divider): the key of the first
+ * finalized row after the last one they had when they left (`seenKey`, saved with the transcript's view), or null when
+ * nothing finalized arrived since, or that row is no longer in the transcript (a reload, a compaction, a page dropped).
+ */
+export function firstUnseenRowKey(
+	rows: readonly Row[],
+	rowKeys: readonly string[],
+	seenKey: string | undefined,
+): string | null {
+	if (!seenKey) return null;
+	const seen = rowKeys.indexOf(seenKey);
+	if (seen < 0) return null;
+	const next = rows[seen + 1];
+	if (!next || next.kind === "streaming" || next.kind === "pending" || next.kind === "expander") return null;
+	return rowKeys[seen + 1] ?? null;
+}
+
+/** The key of the transcript's last finalized row: what the person has seen when the transcript closes. */
+export function lastFinalizedRowKey(rows: readonly Row[], rowKeys: readonly string[]): string | undefined {
+	const index = rows.findLastIndex(
+		row => row.kind !== "streaming" && row.kind !== "pending" && row.kind !== "expander",
+	);
+	return index < 0 ? undefined : rowKeys[index];
+}

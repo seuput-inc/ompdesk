@@ -745,10 +745,10 @@
 	--omp-column-reading: 60rem;
 }
 
-/* Transcript + composer: a ~72ch reading column, narrower
+/* Transcript + composer: a ~70ch reading column (Orca's 46rem), narrower
    than the settings/management canvas. */
 .omp-workspace-main {
-	--omp-column-reading: 48rem;
+	--omp-column-reading: 46rem;
 }
 
 /* Work board (WorkBoard.tsx): a wide pane docks it in the right margin and shifts the transcript and composer
@@ -1109,15 +1109,17 @@
 	--omp-actions-reserve: calc(var(--sc-control-sm) + var(--sc-space-0-5));
 }
 
-/* The person's own prompt sits on a ground one step off the page. Dark pages sit between surface-1 and
-   surface-2, so there surface-2 was a few shades from the page and the bubble's edge vanished; it takes
-   surface-3 instead (inline code in it then reads as a darker inset). */
+/* The person's own prompt: Orca's bubble, a faint text-colored wash over the page with a hairline of the same kind
+   (4 % and 7 % of the text in a light theme, 7 % and 6 % in a dark one, where a page that dark needs the stronger wash
+   to show an edge at all). Washes of the text color, never a surface step, so every theme draws it the same way. */
 .omp-user-bubble {
-	background: var(--sc-surface-2);
+	background: color-mix(in srgb, var(--sc-text) 4%, var(--sc-bg));
+	border: 1px solid color-mix(in srgb, var(--sc-text) 7%, transparent);
 }
 
 :root[data-theme="dark"] .omp-user-bubble {
-	background: var(--sc-surface-3);
+	background: color-mix(in srgb, var(--sc-text) 7%, var(--sc-bg));
+	border-color: color-mix(in srgb, var(--sc-text) 6%, transparent);
 }
 
 /* User turn: a compact soft bubble on the right. Its actions sit at the bubble's bottom-left when the row has room
@@ -1133,8 +1135,35 @@
 	padding: var(--omp-turn-gap) var(--omp-editorial-edge) var(--omp-prompt-gap) var(--omp-editorial-inset) !important;
 }
 
+/* The "New" line (ChatStream `newRowKey`): where what arrived while the person was in another session starts, in
+   the unread color, a hairline and its word at the reading column's edges. It never moves a row: it sits inside the
+   first new row, which the virtualizer measures with it. */
+.omp-transcript-new {
+	display: flex;
+	align-items: center;
+	gap: var(--sc-space-2);
+	padding: var(--sc-space-2) var(--omp-editorial-edge) 0 var(--omp-editorial-inset);
+	font-size: var(--sc-font-xs);
+	font-weight: var(--sc-weight-semibold);
+	color: var(--sc-unread);
+}
+
+.omp-transcript-new::before {
+	content: "";
+	flex: 1;
+	border-top: 1px solid color-mix(in srgb, var(--sc-unread) 45%, transparent);
+}
+
 .omp-transcript-editorial .omp-user-bubble {
-	max-width: min(85%, 40rem);
+	max-width: min(80%, 40rem);
+}
+
+/* A turn under a mouse lifts by a faint wash (Orca's transcript row hover), so the eye keeps its place while a reply
+   streams; a finger has no hover and sees none. */
+@media (hover: hover) {
+	.omp-transcript-editorial :is(.omp-assistant-turn, .omp-user-turn):hover {
+		background: color-mix(in srgb, var(--sc-text) 2%, transparent);
+	}
 }
 
 .omp-transcript-editorial .omp-user-bubble .markdown-body {
@@ -1569,7 +1598,7 @@ button.omp-children-at-work-row:hover {
 }
 
 .omp-children-at-work-dot[data-status="waiting"] {
-	background: var(--sc-warning);
+	background: var(--sc-attention);
 }
 
 .omp-children-at-work-title {
@@ -3096,12 +3125,13 @@ button.omp-children-at-work-row:hover {
 	line-height: var(--sc-leading-normal);
 }
 
-/* Reading body: the answer is the most prominent thing on screen. */
+/* Reading body: the answer is the most prominent thing on screen, set a shade off the text color (Orca's chat body,
+   88 % of the text over the page; lib/theme-contrast.ts "chat body" holds it to the floor). */
 .omp-transcript-editorial .omp-assistant-turn .markdown-body,
 .omp-transcript-editorial .omp-assistant-turn .omp-streaming-tail {
 	font-size: var(--sc-font-lg);
 	line-height: var(--sc-leading-normal);
-	color: var(--sc-text);
+	color: var(--sc-chat-text);
 }
 
 /* Hangul paragraphs read better with a little more air. */
@@ -3681,8 +3711,8 @@ button.omp-children-at-work-row:hover {
 	}
 }
 
-/* A very long draft is set in the system face: the bundled Inter Variable is shaped again for the whole text on
-   every keystroke (30k characters: ~16 ms of text layout per key against ~6 ms for a system face, measured). */
+/* A very long draft is set in the system face: the bundled Geist Variable is shaped again for the whole text on
+   every keystroke (30k characters, measured with Inter: ~16 ms of text layout per key against ~6 ms for a system face). */
 .omp-composer-input[data-long] {
 	font-family: "Apple SD Gothic Neo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 	font-feature-settings: normal;
@@ -4335,7 +4365,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
    (`.omp-live-sweep`), at one pace: every sweep runs `--live-period` with a hold at each end, and `--live-delay`
    (set from the document clock when the work starts) puts every sweep on one shared phase.
    - States never retime: `turn` and `background` run the same animation; `background` only lowers the light's
-     contrast. `waiting` stops the sweep and holds a still warning colour (the title) or tint (the box).
+     contrast. `waiting` stops the sweep and holds a still attention colour (the title) or tint (the box).
    - Every light moves by transform alone, so the compositor draws each frame and nothing repaints (the title's light
      as a background position repainted its text every frame: +9 % of a GPU core with four panes streaming). The
      box's light is one band inside a clipped layer behind the box's content. A title's own glyphs turn transparent
@@ -4368,7 +4398,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 .omp-live-text[data-working="waiting"] {
-	color: var(--sc-warning);
+	color: var(--sc-attention);
 }
 
 /* The copy ends where the title's line does, so its ellipsis falls where the line's own does: a working title
@@ -4480,7 +4510,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 .omp-live-sweep[data-working="waiting"] {
-	background: color-mix(in srgb, var(--sc-warning) 7%, transparent);
+	background: color-mix(in srgb, var(--sc-attention) 7%, transparent);
 }
 
 .omp-live-sweep[data-working="waiting"]::before {
@@ -4531,7 +4561,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 /* Reduced motion: no sweep runs. A working title is still text with an accent cast (fainter for background work),
-   the box a still accent tint; waiting keeps its warning colour. Software compositing (`html[data-gpu="software"]`)
+   the box a still accent tint; waiting keeps its attention colour. Software compositing (`html[data-gpu="software"]`)
    keeps the sweep and the shine, held to ten frames a second by lib/cue-clock.ts. */
 @media (prefers-reduced-motion: reduce) {
 	.omp-live-sweep[data-working]::before,

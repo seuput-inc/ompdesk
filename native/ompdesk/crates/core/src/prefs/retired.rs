@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
 
@@ -151,6 +152,18 @@ pub(super) const RETIRED: &[(&str, &str)] = &[
 /// `panel.<view>` shortcuts leave `keymapOverrides`.
 const RETIRED_PANEL_VIEWS: &[&str] = &["jobs", "plan", "logs", "queue", "tree", "work", "memory"];
 
+/// Theme ids the app no longer ships, each with its nearest successor of the same scheme (`LEGACY_THEME_NAMES` of
+/// `src/shared/theme-names.ts`, which `theme-names.test.ts` holds to this file), so a stored theme pref never
+/// names a missing theme and the saved window opens in the right scheme. The page reads the same map for a paired
+/// device's own `themeName`.
+static LEGACY_THEMES: LazyLock<Map<String, Value>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("legacy-themes.json"))
+        .expect("legacy-themes.json is a JSON object")
+});
+
+/// The prefs that name a theme.
+const THEME_PREFS: &[&str] = &["themeName", "systemLightTheme", "systemDarkTheme"];
+
 fn has(store: &Map<String, Value>, key: &str) -> bool {
     matches!(read_key(store, key), Ok(Some(_)))
 }
@@ -192,6 +205,13 @@ pub(super) fn migrate(store: &mut Map<String, Value>, user_data: &Path) -> bool 
                 .iter()
                 .any(|view| id.strip_prefix("panel.") == Some(*view))
         });
+    }
+    for key in THEME_PREFS {
+        if let Some(Value::String(name)) = store.get(*key)
+            && let Some(successor) = LEGACY_THEMES.get(name)
+        {
+            store.insert((*key).into(), successor.clone());
+        }
     }
     *store != before
 }

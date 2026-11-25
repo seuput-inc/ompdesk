@@ -22,7 +22,7 @@
 					? "dark"
 					: "light";
 		}
-		var background = scheme === "dark" ? "#19191c" : "#ffffff";
+		var background = scheme === "dark" ? "#0a0a0a" : "#ffffff";
 		try {
 			var paint = JSON.parse(localStorage.getItem("omp.themePaint") || "{}");
 			if (paint && typeof paint[scheme] === "string" && /^#[0-9a-f]{6}$/i.test(paint[scheme])) {

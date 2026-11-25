@@ -531,8 +531,12 @@ export type RpcCommand =
 			 * renamed with a suffix; a name that cannot be used fails.
 			 */
 			branch?: { name: string; mode: "new" | "local" | "remote"; remote?: string; from?: string };
+			/** One per dialog opening: a retried request (an answer lost on the way) gets the same worktree, never a second one. */
+			requestId?: string;
 	  }
 	| { id?: string; type: "worktree_remove"; path: string; force?: boolean }
+	// The worktree dialog fetches the remote default branch when it opens, so a `default`-based create finds it fresh.
+	| { id?: string; type: "worktree_prefetch"; baseCwd?: string }
 	// Orphaned worktrees: OMPdesk-made linked worktrees no open session uses, listed for the repository of the tab's
 	// cwd; removal re-checks everything and only takes a landed or untouched one (`LocalCommandError` codes
 	// `not_orphan`, `not_removable`).
@@ -548,14 +552,16 @@ export type RpcCommand =
 	// Pull requests (PR Center, plan/21). pr_diff is per-file (lazy), pr_draft
 	// is a model call, pr_checkout lands the PR in a worktree (plan/20 scheme).
 	| { id?: string; type: "pr_repo" }
+	// `background`: an automatic re-read (core `gh/gate.rs` holds it behind GitHub's rate limit and pace).
 	| {
 			id?: string;
 			type: "pr_list";
 			state?: "open" | "closed" | "merged" | "all";
 			limit?: number;
 			view?: RpcPrListView;
+			background?: boolean;
 	  }
-	| { id?: string; type: "pr_get"; number: number }
+	| { id?: string; type: "pr_get"; number: number; background?: boolean }
 	| { id?: string; type: "pr_diff"; number: number; path: string }
 	| { id?: string; type: "pr_draft"; base?: string; head?: string }
 	| { id?: string; type: "pr_create"; title: string; body: string; base?: string; head?: string; draft?: boolean }
@@ -566,7 +572,7 @@ export type RpcCommand =
 	| { id?: string; type: "pr_comments"; number: number }
 	| { id?: string; type: "pr_edit"; number: number; title?: string; body?: string; base?: string }
 	// Agents › GitHub over gh (src/main/local/git/github.ts; contract src/shared/github.ts).
-	| { id?: string; type: "github"; request: GithubRequest }
+	| { id?: string; type: "github"; request: GithubRequest; background?: boolean }
 	// Source control in the Changes panel (src/main/local/git/scm.ts): plain git
 	// mutations on the session checkout; git_commit_message runs stock
 	// `omp commit --dry-run` and never commits.
@@ -1279,6 +1285,17 @@ export interface RpcWorktreeCreateResult {
 	seed?: WorktreeSeedReport;
 	/** Present when the repo has a `.ompdesk/worktree-setup`. */
 	setup?: WorktreeSetupReport;
+	/** Present for base `default`: what fetching the remote default branch first brought, or why it could not. */
+	base?: WorktreeBaseFetch;
+}
+
+/** `ref`: `origin/<default>`; `behind`: commits the fetch brought (`subjects`: the newest three); `fetched` false when a fetch under 30 s old was reused or it failed. */
+export interface WorktreeBaseFetch {
+	ref: string;
+	fetched: boolean;
+	behind: number;
+	subjects: string[];
+	error?: string;
 }
 
 /**

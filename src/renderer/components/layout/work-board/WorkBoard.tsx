@@ -406,7 +406,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	// One clause, the most important: what needs the person, else what runs, else that the board works (a child at
 	// work alone is "Working…", never "Idle"), else what the last turn left.
 	const clause = counts.attention
-		? { tone: "warning", text: needsText }
+		? { tone: "attention", text: needsText }
 		: counts.running > 0
 			? { tone: undefined, text: t("workBoard.head.running", { count: counts.running }) }
 			: counts.working > 0
@@ -543,7 +543,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 					live={needsText}
 					id="needs"
 					title={t("workBoard.needs")}
-					tone="warning"
+					tone="attention"
 				>
 					<CappedRows cap={SECTION_CAP.asks} items={askItems}>
 						{item => (
@@ -552,9 +552,9 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 								flipKey={`ask:${item.id}`}
 								key={item.id}
 								label={item.label}
-								lead={<StatusDot decorative tone="warning" />}
+								lead={<StatusDot decorative tone="attention" />}
 								onClick={() => focusPrompt(pane)}
-								tag={{ word: t(`workBoard.kind.${item.kind}`), tone: "warning" }}
+								tag={{ word: t(`workBoard.kind.${item.kind}`), tone: "attention" }}
 								title={item.label}
 							/>
 						)}
@@ -564,7 +564,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 							<WaitingChildren
 								now={now}
 								rows={waitingChildren}
-								tag={{ word: t("workBoard.kind.child"), tone: "warning" }}
+								tag={{ word: t("workBoard.kind.child"), tone: "attention" }}
 							/>
 						</Suspense>
 					)}

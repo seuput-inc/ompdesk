@@ -20,8 +20,8 @@ export const WORK_BOARD_MIN_SPARE = 300;
 /** The margin from which the board takes its wide width. */
 export const WORK_BOARD_WIDE_SPARE = 420;
 
-/** `--omp-column-reading` (48rem) and the clamp of `--omp-column-pad` (16px … 3cqw … 40px), components.css. */
-export const READING_COLUMN_PX = 768;
+/** `--omp-column-reading` (46rem, Orca's chat column) and the clamp of `--omp-column-pad` (16px … 3cqw … 40px), components.css. */
+export const READING_COLUMN_PX = 736;
 const COLUMN_PAD_MIN_PX = 16;
 const COLUMN_PAD_MAX_PX = 40;
 const COLUMN_PAD_RATIO = 0.03;
@@ -50,7 +50,7 @@ export function workBoardFits(paneWidth: number): boolean {
 export const WORK_BOARD_MIN_TRANSCRIPT = 503;
 
 /**
- * Whether the board docks in a pane this wide when the transcript column may narrow (below its 48rem) to make room:
+ * Whether the board docks in a pane this wide when the transcript column may narrow (below its 46rem) to make room:
  * the text keeps at least `WORK_BOARD_MIN_TRANSCRIPT` px after the board, its gap and the column's paddings.
  * Measured (web build, sidebar at its default 248 px): with the sidebar open, iPad Pro 12.9" sideways (1366) keeps
  * 763 px of text, iPad Pro 11" (1194) 601, iPad Air (1180) 588 and iPad mini (1133) 544, so all dock; a 1024 px
@@ -61,7 +61,7 @@ export function workBoardFitsNarrowed(paneWidth: number): boolean {
 }
 
 /**
- * Whether the board docks in a pane this wide: beside the full 48rem column, or beside a column narrowed to
+ * Whether the board docks in a pane this wide: beside the full 46rem column, or beside a column narrowed to
  * `WORK_BOARD_MIN_TRANSCRIPT` in a desktop window and on a tablet held sideways. Only a phone and a portrait tablet
  * keep the strip whatever their width. A desktop window narrowed its column for the board too since 22 Oct 2026 (the
  * user's report: on a Windows laptop at 150 % scaling, a 1280 px window beside the sidebar, the board never docked
@@ -204,7 +204,7 @@ export interface BoardCounts {
 	/** Whatever is at work, a parked subagent excluded: the pulse and "Working…" read it. */
 	working: number;
 	/**
-	 * The pulse: a question, an approval or a waiting child (warning), else something works, else nothing.
+	 * The pulse: a question, an approval or a waiting child (attention), else something works, else nothing.
 	 */
 	pulse: "waiting" | "working" | "idle";
 }

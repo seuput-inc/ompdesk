@@ -66,12 +66,7 @@ import {
 import { ECC_PREF } from "../shared/ecc";
 import { IPC_COMMANDS, IPC_EVENTS, type SessionKind } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
-import {
-	LOCAL_ENGINE_DETECT_PREF,
-	LOCAL_ENGINES_LEDGER_PREF,
-	localEngineDetectEnabled,
-	parseLocalEnginesLedger,
-} from "../shared/local-engines";
+import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, MOBILE_WEB_PORT, MOBILE_WEB_STATE } from "../shared/mobile-web";
 import { MODEL_SETUP_RESEARCH_PICK_PREF } from "../shared/model-setup";
 import type { OmpUpdateState } from "../shared/omp-update";
@@ -88,7 +83,6 @@ import {
 	SIDEBAR_PROJECTS_STATE,
 	type SidebarProjectsState,
 } from "../shared/sidebar-projects";
-import { migrateThemeName } from "../shared/theme-names";
 import { WORKTREE_BRANCH_PREFIX_PREF, worktreeBranchPrefix } from "../shared/worktree-branch";
 import { accountRotationDeps } from "./account-rotation";
 import { agentDesktopToRun } from "./agent-desktop";
@@ -131,7 +125,7 @@ import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
-import { LocalEngineDetector, localEngineSettings, probeLocalEngine } from "./local-engines";
+import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
@@ -143,7 +137,6 @@ import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
 import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
-import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { followSetupState } from "./omp-availability";
 import { creditSpendRun } from "./omp-launch";
@@ -382,14 +375,6 @@ function prefsStore(): PrefsStore<MainPrefs> {
 				details: { prefs: powers.prefs.join(","), stock: powers.stock.join(","), error: powers.error ?? null },
 			});
 		}
-		// A theme the app no longer ships (the pre-curated set) is replaced by its nearest successor, so the
-		// stored pref never names a missing theme and the saved window opens in the right scheme.
-		const prefs = mainPrefsStore;
-		for (const key of ["themeName", "systemLightTheme", "systemDarkTheme"]) {
-			const stored = prefs.get(key);
-			const migrated = migrateThemeName(stored);
-			if (typeof stored === "string" && migrated !== null && migrated !== stored) prefs.set(key, migrated);
-		}
 	}
 	return mainPrefsStore;
 }
@@ -470,7 +455,7 @@ const webTabLayouts = new WebTabLayouts({
 	set: value => prefsStore().set("webTabLayouts", value),
 });
 let mobileWebService = null as MobileWebService | null;
-let localEngines: LocalEngineDetector | null = null;
+let localEngines: LocalEngines | null = null;
 let aiMemoryService: AiMemoryService | null = null;
 let aiMemoryUpkeep: MemoryUpkeep | null = null;
 let aiMemoryCare: MemoryCare | null = null;
@@ -1125,20 +1110,10 @@ app.whenReady().then(async () => {
 	// FreeToken and colibri on loopback are listed as providers by themselves (src/main/local-engines.ts). A test
 	// launch never probes the developer's real ports unless its spec names a table (OMP_GUI_TEST_LOCAL_ENGINES).
 	const hostModelsChanged = { current: () => {} };
-	const engineSettings = localEngineSettings(process.env, app.isPackaged);
-	const detector = new LocalEngineDetector({
-		...engineSettings,
-		ledger: {
-			get: () => parseLocalEnginesLedger(prefsStore().get(LOCAL_ENGINES_LEDGER_PREF)),
-			set: value => prefsStore().set(LOCAL_ENGINES_LEDGER_PREF, value),
-		},
-		enabled: () => localEngineDetectEnabled(prefsStore().get(LOCAL_ENGINE_DETECT_PREF)),
-		probe: baseUrl => probeLocalEngine(baseUrl),
-		providers: {
-			ids: async () => new Set((await listModelsProviders()).map(provider => provider.id)),
-			insert: insertModelsProvider,
-			delete: deleteModelsProvider,
-		},
+	const detector = new LocalEngines({
+		...localEngineSettings(process.env, app.isPackaged),
+		start: app.isPackaged || process.env.OMP_GUI_TEST_LOCAL_ENGINES !== undefined,
+		prefs: prefsStore().path,
 		changed: () => {
 			for (const win of BrowserWindow.getAllWindows())
 				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.MODELS_CONFIG_CHANGED);
@@ -1151,11 +1126,11 @@ app.whenReady().then(async () => {
 			writeRuntimeLog({
 				source: "background-task",
 				message: "local-engine-failed",
-				details: { engine: engine?.id ?? null, error: error instanceof Error ? error.message : String(error) },
+				details: { engine, error },
 			}),
 	});
 	localEngines = detector;
-	if (app.isPackaged || process.env.OMP_GUI_TEST_LOCAL_ENGINES !== undefined) detector.start();
+	detector.open();
 	const machine = new LocalMachine({
 		stats: (path, params) =>
 			statsServer?.fetch(path, params) ?? Promise.resolve({ ready: false, exhausted: statsLaunchSettled }),
@@ -1164,9 +1139,10 @@ app.whenReady().then(async () => {
 		benchmarkEnv: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
 		localEngines: {
 			read: () => prefsStore().get(LOCAL_ENGINE_DETECT_PREF),
-			set: async enabled => {
+			// Stored first (committed by the core, read back at once here), then the core's detector follows it.
+			set: enabled => {
 				prefsStore().set(LOCAL_ENGINE_DETECT_PREF, enabled);
-				await detector.setEnabled(enabled);
+				return detector.setEnabled(enabled);
 			},
 		},
 		modelSetupPick: {

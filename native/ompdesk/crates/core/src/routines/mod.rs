@@ -92,7 +92,8 @@ pub fn register(registry: &mut Registry) {
                 Some(state) => state,
                 None => github::State::restore(params.mark.as_ref()),
             };
-            let gh = Gh::new(params.gh, call.scope);
+            // A trigger's read is never the person's own: it waits behind the GitHub gate (`gh/gate.rs`).
+            let gh = Gh::paced(params.gh, call.scope, true);
             let api = GhApi {
                 gh: &gh,
                 home: &params.home,

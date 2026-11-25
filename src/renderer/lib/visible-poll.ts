@@ -15,8 +15,22 @@ export function pollWhileVisible(tick: () => void, ms: number): () => void {
 	};
 }
 
-function hidden(): boolean {
+/** The window is hidden (minimised, another tab or space): nothing reads by itself. */
+export function hidden(): boolean {
 	return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+/** Runs `back` when the window shows again or gains focus: a person looks at it again. Returns the stop. */
+export function onWindowReturn(back: () => void): () => void {
+	const run = () => {
+		if (!hidden()) back();
+	};
+	document.addEventListener("visibilitychange", run);
+	window.addEventListener("focus", run);
+	return () => {
+		document.removeEventListener("visibilitychange", run);
+		window.removeEventListener("focus", run);
+	};
 }
 
 /**

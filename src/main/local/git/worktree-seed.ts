@@ -25,7 +25,7 @@
  * here is OMPdesk's own (`worktree.ts`), so nothing of stock is duplicated.
  */
 
-import type { WorktreeSeedReport, WorktreeSetupReport } from "../../../shared/rpc-types";
+import type { WorktreeBaseFetch, WorktreeSeedReport, WorktreeSetupReport } from "../../../shared/rpc-types";
 import { currentStepSignal, fencedEffect } from "../../serial-chain";
 import { superviseWorktreeHook } from "../../setup/supervisor";
 import { coreGit, DEFAULT_TIMEOUT_MS } from "./exec";
@@ -102,9 +102,23 @@ export async function prepareWorktree(
 	return { ...(seed ? { seed } : {}), ...(setup ? { setup } : {}) };
 }
 
-/** One line for the agent's `ompdesk_session_open` notes and Autopilot's log, or null when neither step ran. */
-export function describePreparation(result: { seed?: WorktreeSeedReport; setup?: WorktreeSetupReport }): string | null {
+/** One line for the agent's `ompdesk_session_open` notes and Autopilot's log, or null when no step ran. */
+export function describePreparation(result: {
+	base?: WorktreeBaseFetch;
+	seed?: WorktreeSeedReport;
+	setup?: WorktreeSetupReport;
+}): string | null {
 	const parts: string[] = [];
+	if (result.base) {
+		const { ref, fetched, behind, subjects, error } = result.base;
+		parts.push(
+			error
+				? `${ref} not fetched (${error}); cut from the local copy`
+				: fetched
+					? `${ref} fetched: ${behind} new commit(s)${subjects.length ? ` (${subjects.join("; ")})` : ""}`
+					: `${ref} fetched under 30 s ago`,
+		);
+	}
 	if (result.seed) {
 		const skipped = result.seed.skipped.length;
 		parts.push(

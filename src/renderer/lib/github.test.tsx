@@ -47,6 +47,7 @@ afterEach(async () => {
 	resetLastReadForTest();
 	useTabsStore.setState({ tabs: [], activeTabId: null });
 	vi.restoreAllMocks();
+	vi.useRealTimers();
 });
 
 describe("useGithubLoad snapshots", () => {
@@ -80,5 +81,61 @@ describe("useGithubLoad snapshots", () => {
 		});
 		expect(seen?.data).toEqual(live);
 		expect(seen?.loading).toBe(false);
+	});
+});
+
+describe("useGithubLoad freshness", () => {
+	const T0 = Date.parse("2026-11-25T10:00:00.000Z");
+
+	it("a return within a minute reads nothing; a later one reads the shown key again in place, in the background", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(T0);
+		const command = vi.fn(async (_command: unknown) => ({
+			type: "response",
+			command: "github",
+			success: true,
+			data: [{ number: 2 }],
+		}));
+		Object.assign(window, { omp: { rpc: { command } } });
+		await mount("key-1");
+		expect(command).toHaveBeenCalledTimes(1);
+		expect(command).toHaveBeenLastCalledWith({ type: "github", request: REQUEST });
+
+		vi.setSystemTime(T0 + 30_000);
+		await act(async () => {
+			window.dispatchEvent(new Event("focus"));
+		});
+		expect(command).toHaveBeenCalledTimes(1);
+
+		vi.setSystemTime(T0 + 61_000);
+		await act(async () => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(command).toHaveBeenCalledTimes(2);
+		expect(command).toHaveBeenLastCalledWith({ type: "github", request: REQUEST, background: true });
+		expect(seen?.data).toEqual([{ number: 2 }]);
+		expect(seen?.loading).toBe(false);
+	});
+
+	it("GitHub holding the read is a time, never an error", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(T0);
+		const message = "rate limit reached; paused until 2026-11-25T10:31:00.000Z";
+		Object.assign(window, {
+			omp: {
+				rpc: {
+					command: vi.fn(async () => ({
+						type: "response",
+						command: "github",
+						success: false,
+						error: message,
+						code: "gh_paused",
+					})),
+				},
+			},
+		});
+		await mount("key-1");
+		expect(seen?.error).toBeNull();
+		expect(seen?.pausedUntil).toBe(Date.parse("2026-11-25T10:31:00.000Z"));
 	});
 });

@@ -26,7 +26,7 @@ import {
 } from "./git/pr";
 import * as scm from "./git/scm";
 import { getGitUnlanded } from "./git/unlanded";
-import { createWorktree, removeWorktree, worktreeBranchSource } from "./git/worktree";
+import { createWorktree, prefetchWorktreeBase, removeWorktree, worktreeBranchSource } from "./git/worktree";
 import { LocalCommandError, type LocalHandler } from "./types";
 
 const str = (value: unknown) => (typeof value === "string" ? value : undefined);
@@ -40,8 +40,9 @@ export const handlers: Record<string, LocalHandler> = {
 	// One watch per checkout for the whole app answers every window's and tab's check (git-fingerprints.ts).
 	get_git_fingerprint: (command, ctx) => gitFingerprints.read(ctx.cwd, str(command.root)),
 	get_git_diff: (command, ctx) => getGitDiff(ctx.cwd, str(command.path) ?? ""),
-	worktree_create: (command, ctx) =>
-		createWorktree(
+	worktree_create: (command, ctx) => {
+		const requestId = str(command.requestId);
+		return createWorktree(
 			ctx.cwd,
 			{
 				name: str(command.name) ?? "",
@@ -49,9 +50,13 @@ export const handlers: Record<string, LocalHandler> = {
 				baseRef: str(command.baseRef) || "HEAD",
 				branchPrefix: str(command.branchPrefix),
 				branch: worktreeBranchSource(command.branch),
+				...(requestId && requestId.length <= 100 ? { request: { caller: "local", id: requestId } } : {}),
 			},
 			ctx.bridge,
-		),
+		);
+	},
+	// The worktree dialog's fetch of the remote default branch when it opens (git/worktree.ts).
+	worktree_prefetch: (command, ctx) => prefetchWorktreeBase(str(command.baseCwd) ?? ctx.cwd),
 	worktree_remove: (command, ctx) =>
 		removeWorktree({ path: str(command.path) ?? "", force: command.force === true }, ctx.bridge, ctx.cwd),
 	// Orphaned worktrees (src/main/worktree-orphans.ts): which folders sessions hold is the whole app's, not this tab's.
@@ -78,14 +83,16 @@ export const handlers: Record<string, LocalHandler> = {
 		}),
 	pr_repo: (_command, ctx) => prRepo(ctx.cwd),
 	// Agents › GitHub: issues, Actions, releases, notifications, repositories (request validated in github.ts).
-	github: (command, ctx) => githubCommand(ctx.cwd, command.request),
+	github: (command, ctx) => githubCommand(ctx.cwd, command.request, command.background === true),
 	pr_list: (command, ctx) =>
 		prList(ctx.cwd, {
 			state: command.state as "open" | "closed" | "merged" | "all" | undefined,
 			limit: typeof command.limit === "number" ? command.limit : undefined,
 			view: command.view === "review" || command.view === "mine" ? command.view : "all",
+			background: command.background === true,
 		}),
-	pr_get: (command, ctx) => prGet(ctx.cwd, { number: Number(command.number) }),
+	pr_get: (command, ctx) =>
+		prGet(ctx.cwd, { number: Number(command.number), background: command.background === true }),
 	pr_diff: (command, ctx) => prDiff(ctx.cwd, { number: Number(command.number), path: str(command.path) ?? "" }),
 	pr_draft: (command, ctx) => prDraft(ctx.cwd, ctx.omp, { base: str(command.base), head: str(command.head) }),
 	pr_create: (command, ctx) =>

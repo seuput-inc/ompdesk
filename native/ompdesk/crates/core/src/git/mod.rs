@@ -727,6 +727,13 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&worktree::plan(&git, &cwd, checkout_spelling, base_ref.as_deref()).await?)
         })
     });
+    registry.add("git.worktreePrefetch", |call| {
+        Box::pin(async move {
+            let At { git, cwd } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&worktree::prefetch(&git, &cwd).await?)
+        })
+    });
     registry.add("git.worktreeAdd", |call| {
         Box::pin(async move {
             let params = call.params()?;

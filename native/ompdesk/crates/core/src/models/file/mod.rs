@@ -139,7 +139,7 @@ pub fn register(registry: &mut Registry) {
     });
 }
 
-fn dir(call: &Call) -> Result<PathBuf, Fault> {
+pub(super) fn dir(call: &Call) -> Result<PathBuf, Fault> {
     #[derive(Deserialize)]
     struct Params {
         dir: PathBuf,
@@ -147,7 +147,7 @@ fn dir(call: &Call) -> Result<PathBuf, Fault> {
     Ok(call.params::<Params>()?.dir)
 }
 
-fn lane(call: &Call) -> Result<StockLane, Fault> {
+pub(super) fn lane(call: &Call) -> Result<StockLane, Fault> {
     #[derive(Deserialize)]
     struct Params {
         host: String,
@@ -167,19 +167,19 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// What stock read of a text: as parsed, and normalized.
-struct Checked {
+pub(super) struct Checked {
     raw: Value,
     config: Value,
 }
 
 /// Stock's side of models.yml; tests stand in for it.
-trait Stock: Sync {
+pub(super) trait Stock: Sync {
     fn roster(&self) -> impl Future<Output = Result<Roster, Fault>> + Send;
     /// Fails with stock's reason when the text does not parse or does not satisfy the schema.
     fn check(&self, text: &str) -> impl Future<Output = Result<Checked, Fault>> + Send;
 }
 
-struct StockLane {
+pub(super) struct StockLane {
     events: Events,
     host: String,
 }
@@ -348,7 +348,7 @@ fn providers(config: &Value) -> serde_json::Map<String, Value> {
 }
 
 /// The providers' views with the vocabularies the form offers (`CustomProvidersConfig`).
-async fn list(stock: &impl Stock, dir: &Path) -> Result<Value, Fault> {
+pub(super) async fn list(stock: &impl Stock, dir: &Path) -> Result<Value, Fault> {
     let roster = stock.roster().await?;
     let loaded = load(stock, dir).await?;
     let providers: Vec<Value> = providers(&loaded.config)
@@ -358,7 +358,7 @@ async fn list(stock: &impl Stock, dir: &Path) -> Result<Value, Fault> {
     Ok(json!({ "providers": providers, "options": roster }))
 }
 
-async fn upsert(
+pub(super) async fn upsert(
     stock: &impl Stock,
     dir: &Path,
     input: &Value,
@@ -384,7 +384,7 @@ async fn upsert(
     Ok(true)
 }
 
-async fn delete(stock: &impl Stock, dir: &Path, id: &str) -> Result<(), Fault> {
+pub(super) async fn delete(stock: &impl Stock, dir: &Path, id: &str) -> Result<(), Fault> {
     let _edit = EDITS.lock().await;
     let roster = stock.roster().await?;
     if roster.builtin(id) {

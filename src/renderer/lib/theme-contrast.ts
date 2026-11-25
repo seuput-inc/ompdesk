@@ -14,13 +14,17 @@ import { resolveTokenColor, type ThemeDefinition, type ThemeName, type ThemeToke
 export const AA_TEXT = 4.5;
 export const AAA_TEXT = 7;
 export const UI_BOUNDARY = 3;
-/** How far a waiting session's warning title on the sidebar's selected row leans toward the text color. */
-export const SELECTED_WARNING_MIX = 0.2;
+/** How far a waiting session's attention-colored title on the sidebar's selected row leans toward the text color. */
+export const SELECTED_ATTENTION_MIX = 0.2;
 /** How far a status color drawn as text on its own soft wash (`--sc-*-on-soft`: badges, chips) leans toward the text color. */
 export const STATUS_ON_SOFT_MIX = 0.35;
 /** A usage gauge's fill (usage-gauges.css): the text color's share, and warning's or danger's once it nears the limit. */
 export const USAGE_PLAIN_FILL = 0.14;
 export const USAGE_ALERT_FILL = 0.26;
+/** An answer's reading text (`--sc-chat-text`, tokens.css): the text color's share over the page. */
+export const CHAT_TEXT_MIX = 0.88;
+/** An active list option's wash (common/OptionRow): the text color's share. */
+export const OPTION_ACTIVE_WASH = 0.11;
 
 /** The surfaces body text sits on. */
 const TEXT_SURFACES: ThemeTokenKey[] = [
@@ -71,6 +75,7 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 			"--omp-warning",
 			"--omp-error",
 			"--omp-info",
+			"--omp-attention",
 		] as const) {
 			add(`${key} (${surfaceKey})`, paint(theme, key, bg), bg, text);
 		}
@@ -109,6 +114,7 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 		["--omp-warning", "--omp-warning-dim"],
 		["--omp-error", "--omp-error-dim"],
 		["--omp-info", "--omp-info-dim"],
+		["--omp-attention", "--omp-attention-dim"],
 		["--omp-accent", "--omp-accent-dim"],
 	] as const) {
 		const bg = flatten(resolveTokenColor(theme, wash), surface(theme, "--omp-bg-primary"));
@@ -121,10 +127,25 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 	add("badge", surface(theme, "--omp-badge-text"), surface(theme, "--omp-badge-bg"), text);
 	const selected = flatten(resolveTokenColor(theme, "--omp-selection-bg"), surface(theme, "--omp-bg-primary"));
 	add("text over selection", surface(theme, "--omp-text"), selected, text);
+	const page = surface(theme, "--omp-bg-primary");
+	add("chat body", mix(page, surface(theme, "--omp-text"), CHAT_TEXT_MIX), page, text);
+	// A popover's or menu's glass (`ThemeDefinition.floating`) shows whatever is behind it: its quiet text holds over
+	// the page and over the text color itself (a line of a reply under a menu).
+	for (const behind of [page, surface(theme, "--omp-text")]) {
+		const glass = flatten(withAlpha(surface(theme, "--omp-bg-elevated"), theme.floating), behind);
+		add(`muted over a floating surface over ${behind}`, paint(theme, "--omp-muted", glass), glass, text);
+	}
+	// A list option under the keyboard or pointer (common/OptionRow `active`, the palette's row): Orca's cmdk row, a text
+	// wash on the menu with a hairline ring; its quiet text reads at secondary there.
+	const optionActive = flatten(
+		withAlpha(surface(theme, "--omp-text"), OPTION_ACTIVE_WASH),
+		surface(theme, "--omp-bg-elevated"),
+	);
+	add("secondary over an active option", paint(theme, "--omp-text-secondary", optionActive), optionActive, text);
 
 	// The sidebar's current session sits on a 9 % text wash (global.css `--sc-sidebar-row-selected`); there its quiet
-	// text reads at secondary (`--sc-text-subtle` and `--sc-text-muted` are lifted to it; muted alone fell under 4.5:1 on solarized-light) and a waiting title's warning is mixed a fifth toward
-	// the text color (`SELECTED_WARNING_MIX`).
+	// text reads at secondary (`--sc-text-subtle` and `--sc-text-muted` are lifted to it; muted alone fell under 4.5:1 on solarized-light) and a waiting title's attention color is mixed a fifth toward
+	// the text color (`SELECTED_ATTENTION_MIX`).
 	const sidebarSelected = flatten(withAlpha(surface(theme, "--omp-text"), 0.09), surface(theme, "--omp-sidebar-bg"));
 	add(
 		"secondary over sidebar selection",
@@ -134,14 +155,14 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 	);
 	add(
 		"waiting title over sidebar selection",
-		mix(paint(theme, "--omp-warning", sidebarSelected), surface(theme, "--omp-text"), SELECTED_WARNING_MIX),
+		mix(paint(theme, "--omp-attention", sidebarSelected), surface(theme, "--omp-text"), SELECTED_ATTENTION_MIX),
 		sidebarSelected,
 		text,
 	);
 
 	// Badges and chips: a status color as text on its own 12 % wash (`--sc-*-on-soft`), over every surface it is laid on
 	// and the sidebar's selected row (a waiting session's badge sits there).
-	for (const status of ["success", "warning", "error", "info", "accent"] as const) {
+	for (const status of ["success", "warning", "error", "info", "accent", "attention"] as const) {
 		for (const base of [...TEXT_SURFACES.map(key => surface(theme, key)), sidebarSelected]) {
 			const bg = flatten(resolveTokenColor(theme, `--omp-${status}-dim`), base);
 			add(
@@ -153,10 +174,10 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 		}
 	}
 
-	// A row that waits on the person wears the warning wash (the work board); its quiet text reads at secondary there.
+	// A row that waits on the person wears the attention wash (the work board); its quiet text reads at secondary there.
 	for (const key of TEXT_SURFACES) {
-		const bg = flatten(resolveTokenColor(theme, "--omp-warning-dim"), surface(theme, key));
-		add(`secondary over a warning wash on ${key}`, paint(theme, "--omp-text-secondary", bg), bg, text);
+		const bg = flatten(resolveTokenColor(theme, "--omp-attention-dim"), surface(theme, key));
+		add(`secondary over an attention wash on ${key}`, paint(theme, "--omp-text-secondary", bg), bg, text);
 	}
 
 	// A usage gauge's text over its fill (usage-gauges.css): the window's name at secondary over the plain fill, and
@@ -189,6 +210,8 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 		add(`border-strong (${surfaceKey})`, surface(theme, "--omp-border-strong"), bg, UI_BOUNDARY);
 		add(`focus ring (${surfaceKey})`, theme.focusRing, bg, UI_BOUNDARY);
 		add(`accent as graphic (${surfaceKey})`, surface(theme, "--omp-accent"), bg, UI_BOUNDARY);
+		// The sidebar's ✓ and the transcript's "New" word: text, so the text floor.
+		add(`unread (${surfaceKey})`, surface(theme, "--omp-unread"), bg, text);
 		for (const [index, color] of theme.chart.entries())
 			add(`chart ${index + 1} (${surfaceKey})`, color, bg, UI_BOUNDARY);
 	}

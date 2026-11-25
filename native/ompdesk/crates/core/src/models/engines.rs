@@ -57,7 +57,7 @@ fn destination(url: &Url) -> Option<(SocketAddr, Option<SocketAddr>)> {
     }
 }
 
-async fn probe(base: &str, max_bytes: usize) -> Option<bool> {
+pub(super) async fn probe(base: &str, max_bytes: usize) -> Option<bool> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let (headers, body) = match timeout_at(deadline, fetch(base, max_bytes)).await {
         Ok(Ok(reply)) => reply,

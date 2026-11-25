@@ -30,7 +30,7 @@ import { Kbd } from "./Kbd";
 export type FieldSize = "sm" | "md" | "lg";
 
 const FIELD_BASE =
-	"w-full rounded-(--sc-radius-md) border bg-(--sc-field) text-(--sc-text) placeholder:text-(--sc-text-subtle) transition-[border-color,box-shadow] duration-(--sc-duration-fast) focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50";
+	"w-full rounded-(--sc-radius-md) border bg-(--sc-field) text-(--sc-text) shadow-(--sc-shadow-sm) placeholder:text-(--sc-text-subtle) transition-[border-color,box-shadow] duration-(--sc-duration-fast) focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50";
 
 const FIELD_SIZE: Record<FieldSize, string> = {
 	sm: "h-(--sc-control-sm) px-2.5 text-sc-sm",

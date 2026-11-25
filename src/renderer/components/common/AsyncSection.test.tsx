@@ -97,4 +97,14 @@ describe("AsyncSection", () => {
 		expect(view.text()).toContain("Nothing here");
 		expect(view.rows()).toBeNull();
 	});
+
+	it("a held read shows its notice over the rows and never claims an empty collection", async () => {
+		const held = await render({ empty: true, notice: <p>Paused until 10:31</p> });
+		expect(held.text()).toContain("Paused until 10:31");
+		expect(held.text()).not.toContain("Nothing here");
+		await act(async () => root?.unmount());
+		const withRows = await render({ hasData: true, notice: <p>Paused until 10:31</p> });
+		expect(withRows.text()).toContain("Paused until 10:31");
+		expect(withRows.rows()).not.toBeNull();
+	});
 });

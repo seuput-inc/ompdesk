@@ -326,6 +326,7 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"typed_prompt",
 	"worktree_create",
 	"worktree_lifecycle_settings",
+	"worktree_prefetch",
 	"worktree_remove",
 	"write_agent_file",
 	"write_local_paste",

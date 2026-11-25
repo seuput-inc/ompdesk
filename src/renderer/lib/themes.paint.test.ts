@@ -113,7 +113,7 @@ describe("pre-paint", () => {
 	});
 
 	it("falls back to the OMPdesk backgrounds with nothing stored, or with a damaged record", () => {
-		expect(prePaint("dark")).toMatchObject({ scheme: "dark", background: "#19191c" });
+		expect(prePaint("dark")).toMatchObject({ scheme: "dark", background: "#0a0a0a" });
 		stored.set("omp.themeScheme", "light");
 		stored.set("omp.themePaint", "{not json");
 		expect(prePaint("dark")).toMatchObject({ scheme: "light", background: "#ffffff" });
@@ -131,5 +131,27 @@ describe("window and page chrome follow the theme", () => {
 			expect(style.getPropertyValue("--sc-surface-1"), name).toBe(theme.tokens["--omp-sidebar-bg"]);
 			expect(style.getPropertyValue("--sc-text"), name).toBe(theme.tokens["--omp-text"]);
 		}
+	});
+});
+
+describe("a theme swap", () => {
+	it("holds every transition off for the frames the new palette paints in, and only when the theme changes", () => {
+		const frames: FrameRequestCallback[] = [];
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+		const nextFrame = () => {
+			for (const frame of frames.splice(0)) frame(0);
+		};
+		const root = document.documentElement;
+		applyThemeByName("light", { persist: false });
+		nextFrame();
+		nextFrame();
+		applyThemeByName("dark", { persist: false });
+		expect(root.hasAttribute("data-theme-switching")).toBe(true);
+		nextFrame();
+		expect(root.hasAttribute("data-theme-switching")).toBe(true);
+		nextFrame();
+		expect(root.hasAttribute("data-theme-switching")).toBe(false);
+		applyThemeByName("dark", { persist: false });
+		expect(root.hasAttribute("data-theme-switching")).toBe(false);
 	});
 });

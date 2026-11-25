@@ -13,7 +13,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { STATUS_ON_SOFT_MIX, USAGE_ALERT_FILL, USAGE_PLAIN_FILL } from "../lib/theme-contrast";
+import { CHAT_TEXT_MIX, STATUS_ON_SOFT_MIX, USAGE_ALERT_FILL, USAGE_PLAIN_FILL } from "../lib/theme-contrast";
 import { SC_TOKEN_SOURCES, type ScTokenKey, scTokensFor, THEME_TOKEN_KEYS, THEMES } from "../lib/themes";
 
 type Scheme = "light" | "dark";
@@ -164,15 +164,26 @@ describe("hairline and spinner clock tokens", () => {
 describe("status text on a soft wash", () => {
 	it("leans toward the text color as far as the contrast pairs measure", () => {
 		const status = Math.round((1 - STATUS_ON_SOFT_MIX) * 100);
-		for (const name of ["accent", "success", "warning", "danger", "info"])
+		for (const name of ["accent", "success", "warning", "danger", "info", "attention"])
 			expect(SHARED[`--sc-${name}-on-soft`]).toBe(
 				`color-mix(in srgb, var(--sc-${name}) ${status}%, var(--sc-text))`,
 			);
 	});
+
+	it("sets an answer's reading text at the share the contrast pairs measure", () => {
+		expect(SHARED["--sc-chat-text"]).toBe(
+			`color-mix(in srgb, var(--sc-text) ${Math.round(CHAT_TEXT_MIX * 100)}%, var(--sc-bg))`,
+		);
+	});
+
+	it("paints the first frame's floating glass as the OMPdesk themes make it", () => {
+		for (const scheme of ["light", "dark"] as const)
+			expect(SHARED["--sc-floating-mix"]).toBe(`${Math.round(THEMES[scheme].floating * 100)}%`);
+	});
 });
 
 describe("status text on its own soft wash", () => {
-	const STATUSES = "accent|success|warning|danger|info";
+	const STATUSES = "accent|success|warning|danger|info|attention";
 	// A glyph needs 3:1, which the bare status color holds on its wash; only text needs the -on-soft color.
 	const ICON_ONLY = new Set([".omp-composer-mic[data-recording],\n.omp-composer-mic[data-recording]:hover"]);
 
@@ -211,7 +222,7 @@ describe("status text on its own soft wash", () => {
 	});
 });
 
-describe("quiet text on a warning-washed row", () => {
+describe("quiet text on an attention-washed row", () => {
 	it("reads at secondary on the work board's waiting rows, where the contrast pairs measure it", () => {
 		const css = readFileSync(join(dir, "work-board.css"), "utf8");
 		const rule =
@@ -219,7 +230,7 @@ describe("quiet text on a warning-washed row", () => {
 		expect(rule).toContain("--sc-text-subtle: var(--sc-text-secondary);");
 		expect(rule).toContain("--sc-text-muted: var(--sc-text-secondary);");
 		expect(css).toMatch(
-			/\.omp-work-board-section\[data-tone="warning"\] button\.omp-work-board-row,\s*button\.omp-work-board-row\[data-board-opened\]\[data-status="waiting"\] \{\s*--sc-text-subtle/,
+			/\.omp-work-board-section\[data-tone="attention"\] button\.omp-work-board-row,\s*button\.omp-work-board-row\[data-board-opened\]\[data-status="waiting"\] \{\s*--sc-text-subtle/,
 		);
 	});
 });

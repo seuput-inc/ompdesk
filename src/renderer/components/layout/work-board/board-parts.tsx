@@ -88,7 +88,7 @@ export function KindMark({
 	tone = "muted",
 }: {
 	icon: LucideIcon;
-	tone?: "info" | "success" | "warning" | "danger" | "muted";
+	tone?: "info" | "success" | "warning" | "attention" | "danger" | "muted";
 }) {
 	return <Icon aria-hidden className="omp-work-board-kind" data-tone={tone} />;
 }
@@ -160,7 +160,7 @@ export function BoardSection({
 	mid?: ReactNode;
 	/** A control of its own after the fold button (the work tree's icon button). */
 	action?: ReactNode;
-	tone?: "warning" | "danger";
+	tone?: "attention" | "danger";
 	/**
 	 * Inside a `SummaryBoard`: the zone's one line while closed, its lead item's words and its figure in the head; a tap
 	 * opens it in place.
@@ -269,7 +269,7 @@ export function WorkTreeButton() {
 /** What a row of Needs you is, in a word of fixed width before its label. */
 export interface RowTag {
 	word: string;
-	tone: "warning" | "danger";
+	tone: "attention" | "danger";
 }
 
 /**

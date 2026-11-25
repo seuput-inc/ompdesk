@@ -241,9 +241,9 @@ describe("work board opened sessions", () => {
 				["/s/closed.jsonl", "done"],
 			],
 		);
-		// Now never takes the warning tone (it tinted every row); Needs you does.
+		// Now never takes the attention tone (it tinted every row); Needs you does.
 		expect(opened()?.hasAttribute("data-tone")).toBe(false);
-		expect(needs()?.getAttribute("data-tone")).toBe("warning");
+		expect(needs()?.getAttribute("data-tone")).toBe("attention");
 		// One line each: the title on the row; what it does now, its branch and merge state in the tooltip.
 		expect(rows[1]?.textContent).toContain("Run the suite");
 		expect(rows[1]?.getAttribute("title")).toContain("running bash (vitest)");

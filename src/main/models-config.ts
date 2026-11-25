@@ -49,15 +49,6 @@ export async function upsertModelsProvider(input: CustomProviderInput): Promise<
 	await call("models.upsert", { input });
 }
 
-/**
- * Insert a custom provider only while no entry has its id; false when one does (nothing written). The check and the
- * write are one edit in the core, so an entry the person adds meanwhile is never overwritten (local-engines.ts
- * registers an engine it detected through this).
- */
-export function insertModelsProvider(input: CustomProviderInput): Promise<boolean> {
-	return call("models.upsert", { input, onlyIfAbsent: true });
-}
-
 /** Delete a custom provider entry (built-ins cannot be removed here). */
 export async function deleteModelsProvider(id: string): Promise<void> {
 	await call("models.delete", { id });

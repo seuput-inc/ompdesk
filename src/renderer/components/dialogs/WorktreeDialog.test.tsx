@@ -1,6 +1,7 @@
 /**
  * WorktreeDialog: the branch it previews and asks for carries the Worktree branch prefix from Settings
- * (`worktreeBranchPrefix`), else omp/gui/.
+ * (`worktreeBranchPrefix`), else omp/gui/; it prefetches the remote default branch when it opens, names each opening's
+ * create with one request id, and toasts what the base fetch brought.
  */
 import { parseHTML } from "linkedom";
 import { act } from "react";
@@ -12,8 +13,9 @@ import { WORKTREE_BRANCH_PREFIX_PREF } from "../../../shared/worktree-branch";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
+import { useToastStore } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
-import { WorktreeDialog } from "./WorktreeDialog";
+import { announcePreparation, WorktreeDialog } from "./WorktreeDialog";
 
 const { document, window, Event, CustomEvent, HTMLElement, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -106,7 +108,14 @@ describe("WorktreeDialog branch prefix", () => {
 		expect(document.body.textContent).toContain(translate("worktree.branchPreview", { branch: "alice/login" }));
 		await submit();
 		expect(commands.filter(command => command.type === "worktree_create")).toEqual([
-			{ type: "worktree_create", name: "Login", baseCwd: "/home/u/app", baseRef: "HEAD", branchPrefix: "alice/" },
+			{
+				type: "worktree_create",
+				name: "Login",
+				baseCwd: "/home/u/app",
+				baseRef: "HEAD",
+				branchPrefix: "alice/",
+				requestId: expect.any(String),
+			},
 		]);
 	});
 
@@ -118,5 +127,48 @@ describe("WorktreeDialog branch prefix", () => {
 		const [create] = commands.filter(command => command.type === "worktree_create");
 		expect(create).toMatchObject({ type: "worktree_create", name: "Login" });
 		expect(create).not.toHaveProperty("branchPrefix");
+	});
+});
+
+describe("WorktreeDialog base fetch", () => {
+	it("prefetches the folder's remote default branch when it opens, and sends one request id per opening", async () => {
+		const { commands } = await mount(undefined);
+		expect(commands.filter(command => command.type === "worktree_prefetch")).toEqual([
+			{ type: "worktree_prefetch", baseCwd: "/home/u/app" },
+		]);
+		await typeName("Login");
+		await submit();
+		await submit();
+		const ids = commands.flatMap(command => (command.type === "worktree_create" ? [command.requestId] : []));
+		expect(ids).toHaveLength(2);
+		expect(ids[0]).toBeTruthy();
+		expect(ids[1]).toBe(ids[0]);
+	});
+
+	it("toasts what the fetch brought even when nothing else was prepared, and warns when it could not fetch", () => {
+		useToastStore.setState({ toasts: [] });
+		const made = { path: "/wt/x", branch: "omp/gui/x", baseCwd: "/home/u/app" };
+		announcePreparation(
+			{ ...made, base: { ref: "origin/main", fetched: true, behind: 3, subjects: ["a", "b", "c"] } },
+			translate,
+		);
+		announcePreparation(
+			{ ...made, base: { ref: "origin/main", fetched: false, behind: 0, subjects: [], error: "no route" } },
+			translate,
+		);
+		expect(
+			useToastStore.getState().toasts.map(({ variant, message, detail }) => ({ variant, message, detail })),
+		).toEqual([
+			{
+				variant: "info",
+				message: translate("worktree.baseFetched", { ref: "origin/main", count: 3 }),
+				detail: "a\nb\nc",
+			},
+			{
+				variant: "warning",
+				message: translate("worktree.baseFetchFailed", { ref: "origin/main" }),
+				detail: "no route",
+			},
+		]);
 	});
 });

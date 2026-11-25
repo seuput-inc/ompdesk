@@ -15,6 +15,8 @@ export interface TranscriptView {
 	anchorKey?: string;
 	anchorOffset: number;
 	measurements: VirtualItem[];
+	/** The last finalized row the person had when the transcript closed: the "New" line goes after it on return. */
+	seenKey?: string;
 }
 
 export interface SessionStore {
