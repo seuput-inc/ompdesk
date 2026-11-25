@@ -12,6 +12,21 @@ export interface TerminalSnapshot {
 	/** Who may size this PTY for the asking viewer: it did (`you`), another viewer did (`other`), or nobody. */
 	lease?: TerminalLeaseState;
 }
+/**
+ * What a restart keeps of one side-panel terminal (`crates/core/src/termhistory.rs`): its tab's session file, its
+ * order among the tab's terminals, the folder its shell was in, the shell, how it ended, and the tail of its output.
+ */
+export interface TerminalCheckpoint {
+	session: string;
+	id: string;
+	order: number;
+	cwd: string;
+	shell?: string;
+	exited: boolean;
+	exitCode?: number;
+	error?: string;
+	history: string;
+}
 /** A viewer's standing on a PTY's size. */
 export type TerminalLeaseState = "you" | "other" | "free";
 /** The selected terminal number as the tool prints it, and the number of trailing lines to read. */
