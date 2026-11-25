@@ -166,15 +166,16 @@ export interface ToastErrorInput {
 	error: unknown;
 	variant?: "error" | "warning";
 	durationMs?: number;
+	action?: ToastAction;
 }
 
 /**
  * Failure toast: localized title, localized one-sentence message (main's
  * coded failures get their own, see lib/error-detail), raw cause as `detail`.
  */
-export function toastError({ title, error, variant = "error", durationMs }: ToastErrorInput): number {
+export function toastError({ title, error, variant = "error", durationMs, action }: ToastErrorInput): number {
 	const detail = errorDetail(error);
 	// Recorded in gui-runtime.jsonl: a toast vanishes, and "it keeps failing" needs the cause afterwards.
 	reportRuntimeError("error-toast", error, { details: { title, detail } });
-	return toast({ variant, title, message: errorMessage(error), detail, durationMs });
+	return toast({ variant, title, message: errorMessage(error), detail, durationMs, action });
 }

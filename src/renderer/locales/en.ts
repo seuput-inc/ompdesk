@@ -7315,5 +7315,10 @@ export const en: Record<string, string> = {
 	"hostUi.update.running":
 		"Sessions running: {count}. Restarting stops them; each continues by itself when OMPdesk is back.",
 	"hostUi.update.confirm": "Restart and update",
+	"fixWithAgent.ask": "Ask agent to fix",
+	"fixWithAgent.failed": "Couldn't prepare the request",
+	"fixWithAgent.resolveConflicts": "Resolve with agent",
+	"fixWithAgent.fixChecks": "Fix failed checks with agent",
+	"fixWithAgent.addressComments": "Ask agent to address comments",
 	...memoryEn,
 };

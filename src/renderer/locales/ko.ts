@@ -7294,5 +7294,10 @@ export const ko: Record<string, string> = {
 	"hostUi.update.running":
 		"세션 {count}개가 실행 중이에요. 다시 시작하면 멈추고, OMPdesk가 돌아오면 각각 저절로 이어서 해요.",
 	"hostUi.update.confirm": "다시 시작하고 업데이트",
+	"fixWithAgent.ask": "에이전트에게 고쳐 달라고 하기",
+	"fixWithAgent.failed": "요청을 준비하지 못했어요",
+	"fixWithAgent.resolveConflicts": "에이전트로 충돌 해결",
+	"fixWithAgent.fixChecks": "실패한 검사를 에이전트로 고치기",
+	"fixWithAgent.addressComments": "에이전트에게 코멘트 반영 요청",
 	...memoryKo,
 };
