@@ -29,6 +29,7 @@ mod memsync;
 pub mod models;
 pub mod omp;
 pub mod owner;
+pub mod pages;
 pub mod pool;
 pub mod ports;
 pub mod prefs;

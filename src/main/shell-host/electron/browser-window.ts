@@ -6,7 +6,7 @@
  */
 import { EventEmitter } from "node:events";
 import type { Rect, WinState } from "../facts";
-import { emitPreventable, type Host, makeEvent } from "./host";
+import { type Host, makeEvent } from "./host";
 import { DEFAULT_PARTITION, type Session } from "./session";
 import { WebContents } from "./web-contents";
 
@@ -238,11 +238,6 @@ export function createWindowClasses(host: Host, app: AppEvents, sessionFor: (par
 			this.emit(name, makeEvent(), ...args);
 		}
 
-		/** `win.closeRequested`: true when a `close` listener prevented the close. */
-		closeRequested(): boolean {
-			return !emitPreventable(this, "close");
-		}
-
 		#finalize(): void {
 			if (this.#destroyed) return;
 			this.#destroyed = true;
@@ -256,16 +251,12 @@ export function createWindowClasses(host: Host, app: AppEvents, sessionFor: (par
 			return this.#destroyed;
 		}
 
+		/**
+		 * Closes the window as its person's close does: the shell decides, so the last shown window may hide or ask for
+		 * the quit instead (`tauri-shell/src/last_close.rs`).
+		 */
 		close(): void {
-			this.tryClose();
-		}
-
-		/** `close()` that says whether the window is going: false when a `close` listener kept it open. */
-		tryClose(): boolean {
-			if (this.#destroyed) return true;
-			if (!emitPreventable(this, "close")) return false;
-			this.#op("close", { force: true });
-			return true;
+			this.#op("close");
 		}
 
 		destroy(): void {
@@ -491,17 +482,12 @@ export function createWindowClasses(host: Host, app: AppEvents, sessionFor: (par
 	host.client.on("win.event", ({ winId, name, args }: { winId: number; name: string; args?: unknown[] }) => {
 		windows.get(winId)?.applyEvent(name, args ?? []);
 	});
-	host.client.handle("win.closeRequested", ({ winId }: { winId: number }) => ({
-		prevent: windows.get(winId)?.closeRequested() ?? false,
-	}));
 
-	/** What a quit does to the windows: each is closed through its `close` listeners; false when one stayed open. */
+	/** What a quit does to the windows: each closes (the quit is approved, so the last one too); false when one stayed. */
 	async function closeAll(): Promise<boolean> {
 		const open = [...windows.values()];
 		const gone = open.map(win => new Promise<void>(resolve => win.once("closed", () => resolve())));
-		let kept = false;
-		for (const win of open) if (!win.tryClose()) kept = true;
-		if (kept) return false;
+		for (const win of open) win.close();
 		let timer: NodeJS.Timeout | undefined;
 		const timeout = new Promise<void>(resolve => {
 			timer = setTimeout(resolve, WINDOW_CLOSE_MS);

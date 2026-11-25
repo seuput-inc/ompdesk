@@ -83,11 +83,6 @@ export const MAIN_TEXT = {
 	"menu.copy": NATIVE_LABELS["menu.copy"],
 	"menu.paste": NATIVE_LABELS["menu.paste"],
 	"menu.selectAll": NATIVE_LABELS["menu.selectAll"],
-	"tray.keepsRunningTitle": { en: "OMPdesk keeps running in the tray", ko: "OMPdesk는 트레이에서 계속 실행돼요" },
-	"tray.keepsRunningBody": {
-		en: "Click the tray icon to bring the window back. Quit from the tray menu.",
-		ko: "트레이 아이콘을 누르면 창이 돌아와요. 종료는 트레이 메뉴에서 해요.",
-	},
 	"agentControl.stopTitle": {
 		en: "An agent wants to stop a session",
 		ko: "에이전트가 세션을 중단하려고 해요",

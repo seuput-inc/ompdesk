@@ -7,12 +7,9 @@
 /**
  * Closing the last window hides it instead of ending the app: to the tray on Windows, and on
  * macOS to the Dock, which brings the same window back (default on; only `false` keeps the quit on Windows).
+ * The shell reads it (`tauri-shell/src/last_close.rs`), with the notice key below.
  */
 export const CLOSE_TO_TRAY_PREF = "closeToTray";
-
-export function closeToTrayEnabled(stored: unknown): boolean {
-	return stored !== false;
-}
 
 /** Set once the "keeps running in the tray" notice has been shown. */
 export const CLOSE_TO_TRAY_NOTICE_PREF = "closeToTrayNoticeShown";

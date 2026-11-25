@@ -7,14 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { closeToTrayEnabled } from "../shared/desktop-prefs";
-import {
-	assessQuitRisk,
-	lastWindowCloseAction,
-	quitNeedsConfirmation,
-	updateRestartConfirmation,
-	type WindowTabFact,
-} from "./quit-guard";
+import { assessQuitRisk, quitNeedsConfirmation, updateRestartConfirmation, type WindowTabFact } from "./quit-guard";
 
 function fact(windowId: number, tabId: string, inFlight: boolean): WindowTabFact {
 	return { windowId, tabId, inFlight };
@@ -62,37 +55,5 @@ describe("an update restart a person starts", () => {
 		expect(updateRestartConfirmation(working, false, subagents)).toBe("running work");
 		expect(updateRestartConfirmation(working, false, none)).toBe("running work");
 		expect(updateRestartConfirmation(idle, false, none)).toBeNull();
-	});
-});
-
-describe("closing the last shown window", () => {
-	const close = (platform: NodeJS.Platform, closeToTray: boolean, quitApproved = false) =>
-		lastWindowCloseAction({ platform, closeToTray, quitApproved });
-
-	it("on Windows quits through the quit guard before the window goes, so running turns are asked about and resume", () => {
-		// Closed first, the window's tabs would end as if their turns had finished (markers cleared),
-		// and window-all-closed would quit afterwards with neither the confirmation nor a resume.
-		expect(close("win32", false)).toBe("quit");
-	});
-
-	it("hides to the tray unless the user turned close-to-tray off", () => {
-		expect(close("win32", true)).toBe("hide");
-	});
-
-	it("just closes once a quit is approved", () => {
-		expect(close("win32", false, true)).toBe("close");
-		expect(close("win32", true, true)).toBe("close");
-		expect(close("darwin", false, true)).toBe("close");
-	});
-
-	it("hides on macOS whatever the pref, so tabs and omp keep running and the Dock brings it back", () => {
-		expect(close("darwin", false)).toBe("hide");
-		expect(close("darwin", true)).toBe("hide");
-	});
-
-	it("reads the close-to-tray pref as on unless explicitly false", () => {
-		expect(closeToTrayEnabled(undefined)).toBe(true);
-		expect(closeToTrayEnabled(true)).toBe(true);
-		expect(closeToTrayEnabled(false)).toBe(false);
 	});
 });

@@ -85,14 +85,13 @@ const fireBeforeQuit = () => {
 };
 
 describe("who asked to quit, in gui-runtime.jsonl", () => {
-	it("a quit main asks for is logged with its asker before the shell hears it, and only once", () => {
-		quit.askQuit("tray");
-		expect(electron.quit).toHaveBeenCalledWith("ask");
+	it("a quit the shell asks for (the tray's Quit, the last window) is logged with its asker once", () => {
+		quit.logQuitAsked("tray");
+		expect(electron.quit).not.toHaveBeenCalled();
 		expect(electron.log).toHaveBeenCalledTimes(1);
 		expect(electron.log).toHaveBeenCalledWith(
 			expect.objectContaining({ source: "app-quit", message: "Quit asked by the tray menu's Quit" }),
 		);
-		expect(electron.log.mock.invocationCallOrder[0]).toBeLessThan(electron.quit.mock.invocationCallOrder[0] ?? 0);
 		fireBeforeQuit();
 		expect(electron.log).toHaveBeenCalledTimes(1);
 	});
@@ -112,7 +111,7 @@ describe("who asked to quit, in gui-runtime.jsonl", () => {
 
 describe("the quit's freeze", () => {
 	it("an approved quit is frozen before the shell hears of it; an ask is not", () => {
-		quit.askQuit("tray");
+		quit.logQuitAsked("tray");
 		expect(quit.quitApproved()).toBe(false);
 		const seenFrozen: boolean[] = [];
 		electron.quit.mockImplementation(() => seenFrozen.push(quit.quitApproved()));

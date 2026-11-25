@@ -12,8 +12,10 @@
 //! `core.gone {generation, empty}` once what is left of its process group is killed and gone (`empty`), or 3 s passed.
 //! Windows has no group to wait on: the core's own kill-on-close job ended its children (`sys.rs`).
 //!
-//! The core's stdout is drained and unread: main speaks to it over its own connection (`clients.rs`). The core is told
-//! (`OMPDESK_STDIO_OWNER`) that its stdio is the owner's, not main's.
+//! Main speaks to a core over its own connection (`clients.rs`); the core is told (`OMPDESK_STDIO_OWNER`) that its
+//! stdio is the owner's, not main's. On its stdout the core writes only its page pushes (`pages.rs`): an owner made
+//! `with_pages` hands them on in order (`--own` as `core.page {generation, win, ch, pushed, data}` events), any other
+//! drains them unread.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -43,8 +45,27 @@ struct Core {
     stdin: Mutex<Option<ChildStdin>>,
 }
 
+/// A push a core made to a desktop window (`pages.rs`): `data` is its JSON as the core wrote it.
+pub struct PagePush {
+    pub generation: u64,
+    pub win: i64,
+    pub ch: String,
+    pub pushed: u64,
+    pub data: Vec<u8>,
+}
+
+/// What an owner made `with_pages` hears of a core's stdout, in order: each push, then once that stdout ended.
+pub enum PageEvent {
+    Push(PagePush),
+    Ended { generation: u64 },
+}
+
+/// Where a core's page pushes go: the shell's window outboxes, or `--own`'s stdout.
+pub type Pages = Arc<dyn Fn(PageEvent) + Send + Sync>;
+
 pub struct Owner {
     sink: Sink,
+    pages: Option<Pages>,
     cores: Mutex<HashMap<u64, Arc<Core>>>,
 }
 
@@ -53,9 +74,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Owner {
+    /// An owner that drains its cores' stdout unread.
     pub fn new(sink: Sink) -> Arc<Owner> {
+        Owner::with_pages(sink, None)
+    }
+
+    /// An owner that hands each core's page pushes to `pages`.
+    pub fn with_pages(sink: Sink, pages: Option<Pages>) -> Arc<Owner> {
         Arc::new(Owner {
             sink,
+            pages,
             cores: Mutex::default(),
         })
     }
@@ -176,13 +204,19 @@ impl Owner {
             stdin: Mutex::new(Some(stdin)),
         });
         lock(&self.cores).insert(generation, Arc::clone(&core));
+        let pages = self.pages.clone();
         thread::spawn(move || {
             // Its first line is `ready`, written after its listeners are bound: main connects on this answer.
             let mut stdout = BufReader::new(stdout);
             let mut ready = String::new();
             let _ = stdout.read_line(&mut ready);
             reply(Ok(json!({ "pid": pid })));
-            let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+            match pages {
+                Some(pages) => read_pages(&mut stdout, generation, &pages),
+                None => {
+                    let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+                }
+            }
         });
         let sink = Arc::clone(&self.sink);
         thread::spawn(move || {
@@ -339,6 +373,50 @@ pub fn writer(mut out: impl Write + Send + 'static) -> (Frames, thread::JoinHand
     (frames, writer)
 }
 
+/// A core's stdout after `ready`: its frames (a JSON line, then `bin` raw bytes when it says so), of which the page
+/// pushes (`page.push {win, ch, pushed}`, the data as `bin`) go to `pages`, in the order the core wrote them, then
+/// `Ended` once the stdout ended (the core exited): no push of that core comes after it.
+fn read_pages(stdout: &mut impl BufRead, generation: u64, pages: &Pages) {
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match stdout.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let head: Value = serde_json::from_slice(&line).unwrap_or(Value::Null);
+        let mut bin = vec![
+            0;
+            head["bin"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(0)
+        ];
+        if stdout.read_exact(&mut bin).is_err() {
+            break;
+        }
+        if head["event"] != "page.push" {
+            continue;
+        }
+        let data = &head["data"];
+        let (Some(win), Some(ch), Some(pushed)) = (
+            data["win"].as_i64(),
+            data["ch"].as_str(),
+            data["pushed"].as_u64(),
+        ) else {
+            continue;
+        };
+        pages(PageEvent::Push(PagePush {
+            generation,
+            win,
+            ch: ch.to_owned(),
+            pushed,
+            data: bin,
+        }));
+    }
+    pages(PageEvent::Ended { generation });
+}
+
 /// An event as a frame.
 pub fn event(event: &str, data: Value) -> Value {
     json!({"event": event, "data": data})
@@ -378,12 +456,64 @@ pub fn serve_lines(owner: &Arc<Owner>, input: impl BufRead, frames: &Frames) {
 pub fn serve_stdio() -> i32 {
     let (frames, writer) = writer(std::io::stdout());
     let events = frames.clone();
-    let owner = Owner::new(Arc::new(move |name: &str, data: Value| {
-        let _ = events.send(Some(event(name, data)));
-    }));
+    let pushes = frames.clone();
+    // Where no shell is, main hears a core's page pushes as `core.page` events (data parsed back).
+    let pages: Pages = Arc::new(move |page: PageEvent| {
+        let PageEvent::Push(push) = page else {
+            return;
+        };
+        let data: Value = serde_json::from_slice(&push.data).unwrap_or(Value::Null);
+        let _ = pushes.send(Some(event(
+            "core.page",
+            json!({
+                "generation": push.generation, "win": push.win, "ch": push.ch, "pushed": push.pushed, "data": data,
+            }),
+        )));
+    });
+    let owner = Owner::with_pages(
+        Arc::new(move |name: &str, data: Value| {
+            let _ = events.send(Some(event(name, data)));
+        }),
+        Some(pages),
+    );
     serve_lines(&owner, BufReader::new(std::io::stdin()), &frames);
     owner.end_all();
     let _ = frames.send(None);
     let _ = writer.join();
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hands_on_page_pushes_in_order_and_skips_other_frames_with_their_bytes() {
+        let data = br#"{"tabId":"t","note":"a\nb"}"#;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"{\"event\":\"other\",\"data\":{},\"bin\":3}\n\n{}");
+        for (win, pushed) in [(4, 1), (9, 2)] {
+            let head = json!({"event": "page.push", "data": {"win": win, "ch": "rpc:tab-status", "pushed": pushed}, "bin": data.len()});
+            out.extend_from_slice(format!("{head}\n").as_bytes());
+            out.extend_from_slice(data);
+        }
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&got);
+        let pages: Pages = Arc::new(move |page: PageEvent| {
+            lock(&seen).push(match page {
+                PageEvent::Push(p) => (p.generation, p.win, p.ch, p.pushed, p.data),
+                PageEvent::Ended { generation } => (generation, 0, "ended".into(), 0, Vec::new()),
+            });
+        });
+        read_pages(&mut std::io::Cursor::new(out), 7, &pages);
+        let pushed = |win, pushed| (7, win, "rpc:tab-status".to_owned(), pushed, data.to_vec());
+        assert_eq!(
+            *lock(&got),
+            [
+                pushed(4, 1),
+                pushed(9, 2),
+                (7, 0, "ended".to_owned(), 0, Vec::new())
+            ]
+        );
+    }
 }

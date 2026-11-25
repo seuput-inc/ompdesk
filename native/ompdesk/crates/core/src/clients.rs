@@ -136,7 +136,12 @@ async fn serve_client(clients: Arc<Clients>, reader: Reader, writer: Writer, tok
         }),
         stopped: false,
     };
-    if let Err(error) = crate::server::serve_as(reader, writer, crate::registry(), main).await {
+    let peer = if main {
+        crate::server::Peer::Main
+    } else {
+        crate::server::Peer::Other
+    };
+    if let Err(error) = crate::server::serve_as(reader, writer, crate::registry(), peer).await {
         eprintln!("ompdesk-core: a client connection ended: {error}");
     }
 }

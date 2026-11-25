@@ -1,19 +1,19 @@
 /**
  * Multi-window management for ompdesk: the record of each app window that the tabs, menus and entry points read.
  * The window itself is the shell's (`tauri-shell/src/app_window.rs`): where it opens and its saved geometry, its
- * chrome and Mica backdrop, its slot, how it first shows, its run progress, and what happens when its page crashes or
- * stops answering. Main answers the shell's questions about that last part here (`serveWindows`): the runtime log line
- * with the window's cwd, and the text of the notice and the two restart dialogs, in the app's language.
+ * chrome and Mica backdrop, its slot, how it first shows, its run progress, what closing the last one does
+ * (`last_close.rs`) and what happens when its page crashes or stops answering. Main answers the shell's questions about
+ * that last part here (`serveWindows`): the runtime log line with the window's cwd, and the text of the notice and the
+ * two restart dialogs, in the app's language.
  */
 
 import { join } from "node:path";
 import { BrowserWindow, Menu, Notification, shell } from "electron";
 import type { SessionKind } from "../shared/ipc-types";
-import { approveQuit, askQuit, logQuitAsked, quitRisk } from "./app-quit";
+import { approveQuit, logQuitAsked, quitRisk } from "./app-quit";
 import { diskFull } from "./disk-full";
 import { editableContextMenuTemplate } from "./editable-context-menu";
 import { editLabels, getMainLanguage, mainT } from "./i18n";
-import type { LastWindowClose } from "./quit-guard";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
 import { serveWindows, type WindowNotice } from "./shell-host/electron/index";
 import type { WindowPresence } from "./update-log-core";
@@ -56,11 +56,6 @@ export class WindowManager {
 		this.#windowClosedListeners.add(listener);
 		return () => this.#windowClosedListeners.delete(listener);
 	}
-
-	/** Installed at startup: what closing the last shown window does (`lastWindowCloseAction`, quit-guard.ts). */
-	lastWindowClose: (() => LastWindowClose) | null = null;
-	/** Installed at startup: the last shown window was just hidden (the one-time tray notice). */
-	lastWindowHidden: (() => void) | null = null;
 
 	constructor() {
 		serveWindows({
@@ -118,21 +113,6 @@ export class WindowManager {
 		// Keep the privileged preload attached only to the desktop shell. Links
 		// and dropped documents must not replace it with arbitrary page content.
 		win.webContents.on("will-navigate", event => event.preventDefault());
-
-		// Closing the last shown window may hide it instead (close to tray: its tabs keep working, the tray brings it
-		// back) or quit the app first (lastWindowCloseAction).
-		win.on("close", event => {
-			if (this.getAllWindows().some(other => other !== win && other.isVisible())) return;
-			const action = this.lastWindowClose?.() ?? "close";
-			if (action === "close") return;
-			event.preventDefault();
-			if (action === "hide") {
-				win.hide();
-				this.lastWindowHidden?.();
-			}
-			// The quit guard asks first; an approved quit then closes every window, this one included.
-			else askQuit("last-window");
-		});
 
 		win.on("closed", () => {
 			this.#records.delete(record.id);

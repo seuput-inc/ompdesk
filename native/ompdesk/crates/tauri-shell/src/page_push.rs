@@ -126,7 +126,7 @@ fn log_failure(id: Identity, error: WireError) {
     }
 }
 
-fn detached(id: Identity, channel: &str, args: &[Value]) {
+pub(super) fn detached(id: Identity, channel: &str, args: &[Value]) {
     if let Err(error) = enqueue(id, channel, args, None) {
         log_failure(id, error);
     }
