@@ -17,6 +17,7 @@ import type {
 	UsageLimit,
 } from "../../shared/rpc-types";
 import { core } from "../core/process";
+import { withDeadline } from "../preview/preview-check";
 import { loopbackCallback } from "../sign-in-callback";
 import { stockHelperRequest } from "../stock-helper";
 import { LocalCommandError, type LocalHandler } from "./types";
@@ -93,6 +94,12 @@ export function mergeProviderAccounts(
 	};
 }
 
+/**
+ * How long the account list waits for its quotas: under the renderer's 60 s for `get_provider_accounts`
+ * (rpc-client.ts), so a quota read stuck on a provider never takes the accounts stock already listed down with it.
+ */
+export const ACCOUNT_QUOTA_WAIT_MS = 45_000;
+
 const providerIdParam = z.string().min(1);
 
 /** What a history read passes on: the command's own `id` and `type` stay here. */
@@ -136,20 +143,25 @@ export const handlers: Record<string, LocalHandler> = {
 		const providerId = providerIdParam.parse(command.providerId);
 		const [stock, usage] = await Promise.allSettled([
 			ctx.send<{ accounts: StockLogoutAccount[] }>({ type: "get_logout_accounts", providerId }),
-			ctx.bridge.request<BridgeProviderAccounts>("provider_accounts", {
-				providerId,
-				refresh: command.refresh === true,
-			}),
+			withDeadline(
+				ctx.bridge.request<BridgeProviderAccounts>("provider_accounts", {
+					providerId,
+					refresh: command.refresh === true,
+				}),
+				ACCOUNT_QUOTA_WAIT_MS,
+			),
 		]);
 		if (stock.status === "rejected") throw stock.reason;
-		return usage.status === "fulfilled"
-			? mergeProviderAccounts(providerId, stock.value.accounts, usage.value)
-			: mergeProviderAccounts(
-					providerId,
-					stock.value.accounts,
-					undefined,
-					usage.reason instanceof Error ? usage.reason.message : String(usage.reason),
-				);
+		if (usage.status === "fulfilled" && usage.value) {
+			return mergeProviderAccounts(providerId, stock.value.accounts, usage.value);
+		}
+		const usageError =
+			usage.status === "fulfilled"
+				? `The quota read took over ${ACCOUNT_QUOTA_WAIT_MS / 1000} s`
+				: usage.reason instanceof Error
+					? usage.reason.message
+					: String(usage.reason);
+		return mergeProviderAccounts(providerId, stock.value.accounts, undefined, usageError);
 	},
 	// Through the tab's own bridge, so a paired host's tab spends the host's account.
 	redeem_reset_pass: async (command, ctx) =>
