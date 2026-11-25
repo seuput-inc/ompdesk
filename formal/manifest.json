@@ -82,11 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-<<<<<<< HEAD
-			"syncCommit": "f4442413a482c90dcc926c7b80e10ecfe74aeed0",
-=======
 			"syncCommit": "9bbe3e8d73a0ed5068e0b40a1afdd9058dc582a6",
->>>>>>> origin/omp/agent/node-removal-prefs-10
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
