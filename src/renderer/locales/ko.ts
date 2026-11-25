@@ -6009,6 +6009,7 @@ export const ko: Record<string, string> = {
 	"app.actionFailed": "요청을 처리하지 못했어요",
 	"command.compactedTitle": "압축 완료",
 	"command.compactCancelled": "압축을 취소했어요",
+	"command.compactNothing": "압축할 내용이 없어요",
 	"common.apply": "적용",
 	"common.copied": "복사했어요",
 	"common.copy": "복사",

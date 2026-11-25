@@ -31,7 +31,7 @@ pub(crate) struct RunState {
     pub saga: Option<Saga>,
     /// The saga's coalesced agent_end arrived while the retry was still outstanding.
     pub ended_while_retrying: bool,
-    /// Automatic compaction state once observed since the spawn.
+    /// Compaction state (automatic, or a manual pass anyone asked for) once observed since the spawn.
     pub compacting: Option<bool>,
     /// When the current turn started, kept while background work follows it; absent while no run is on.
     pub since: Option<i64>,
@@ -175,11 +175,12 @@ impl RunState {
                 }
                 failed_after_end
             }
-            Some("auto_compaction_start") => {
+            // A manual pass (RPC `compact`, `/compact`, a handoff) is announced as its own pair, whoever asked for it.
+            Some("auto_compaction_start" | "manual_compaction_start") => {
                 self.compacting = Some(true);
                 false
             }
-            Some("auto_compaction_end") => {
+            Some("auto_compaction_end" | "manual_compaction_end") => {
                 self.compacting = Some(false);
                 false
             }
@@ -564,5 +565,18 @@ mod tests {
         assert!(tracking.last_outcome().is_none());
         assert!(tracking.track(&failed, 5, &mut serial, false));
         assert_ne!(tracking.close_observation().unwrap().0, first);
+    }
+
+    #[test]
+    fn a_manual_compaction_is_compacting_until_its_end() {
+        let mut run = RunState::default();
+        let start = json!({"type": "manual_compaction_start", "mode": "handoff"});
+        let skipped = json!({"type": "manual_compaction_end", "aborted": false, "skipped": true});
+        assert!(!run.apply(&start, 1));
+        assert_eq!(run.compacting, Some(true));
+        assert!(run.busy());
+        assert!(!run.apply(&skipped, 2));
+        assert_eq!(run.compacting, Some(false));
+        assert!(!run.busy());
     }
 }

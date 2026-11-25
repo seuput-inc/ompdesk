@@ -6020,6 +6020,7 @@ export const en: Record<string, string> = {
 	"app.actionFailed": "Action failed",
 	"command.compactedTitle": "Compacted",
 	"command.compactCancelled": "Compaction cancelled",
+	"command.compactNothing": "Nothing to compact",
 	"common.apply": "Apply",
 	"common.copied": "Copied",
 	"common.copy": "Copy",

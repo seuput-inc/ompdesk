@@ -1354,6 +1354,39 @@ describe("useRpcEvents awaiting-model marker", () => {
 		]);
 	});
 
+	it("shows a manual compaction another window or device asked for, and keeps its measured length", async () => {
+		const { emitBatch } = installMockOmp();
+		await mount(<RpcEventsProbe />);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+		try {
+			await act(async () => emitBatch([{ type: "manual_compaction_start" }]));
+			expect(useSessionStore.getState().isCompacting).toBe(true);
+			expect(useSessionStore.getState().compactionInfo).toMatchObject({ reason: "manual", action: "compact" });
+			clock.mockReturnValue(2_030_000);
+			await act(async () =>
+				emitBatch([{ type: "manual_compaction_end", aborted: false, result: { summary: "Kept the work." } }]),
+			);
+		} finally {
+			clock.mockRestore();
+		}
+		expect(useSessionStore.getState().isCompacting).toBe(false);
+		expect(useSessionStore.getState().compactionInfo).toBeNull();
+		expect(useSessionStore.getState().compactionRuns).toEqual([
+			{ action: "compact", startedAt: 2_000_000, endedAt: 2_030_000 },
+		]);
+	});
+
+	it("leaves a manual compaction this window started to its own request", async () => {
+		const { emitBatch } = installMockOmp();
+		await mount(<RpcEventsProbe />);
+		const own = { reason: "manual" as const, action: "compact", startedAt: 5, local: true };
+		await act(async () => useSessionStore.setState({ isCompacting: true, compactionInfo: own }));
+		await act(async () => emitBatch([{ type: "manual_compaction_start" }]));
+		await act(async () => emitBatch([{ type: "manual_compaction_end", aborted: false, skipped: true }]));
+		expect(useSessionStore.getState().compactionInfo).toEqual(own);
+		expect(useToastStore.getState().toasts).toEqual([]);
+	});
+
 	it("keeps the marker through the user-prompt echo, clearing only on assistant message_end", async () => {
 		const { emitBatch } = installMockOmp();
 		await mount(<RpcEventsProbe />);

@@ -364,20 +364,21 @@ export function ModelPicker() {
 			// switches. The row carries the over-context warning before the pick.
 			const overContext = target !== undefined && isOverContext(target);
 			if (overContext) {
-				const { response: compactRes, cancelled } = await runManualMaintenance(
-					"compact",
-					() => tabRpc.compact(),
-					tabId,
-				);
+				const {
+					response: compactRes,
+					cancelled,
+					skipped,
+				} = await runManualMaintenance("compact", () => tabRpc.compact(), tabId);
 				if (cancelled) {
 					toast({ variant: "info", message: t("command.compactCancelled") });
 					return;
 				}
-				if (!compactRes.success) {
+				// Nothing to compact (said already): the switch the person asked for still goes ahead.
+				if (!skipped && !compactRes.success) {
 					toastError({ title: t("modelPicker.compactFailed"), error: compactRes });
 					return;
 				}
-				toast({ variant: "info", message: t("modelPicker.compactedSwitching") });
+				if (!skipped) toast({ variant: "info", message: t("modelPicker.compactedSwitching") });
 			}
 			const response = await tabRpc.setModel(provider, modelId);
 			if (!response.success) {

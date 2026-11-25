@@ -363,26 +363,45 @@ export async function resumeRestoredQueue(
 }
 
 /**
- * Manual `/compact` and handoff: stock sends no auto_compaction events for them, so the tab's
- * status row (Esc, Cancel) stands here for as long as the request runs. The tab's store is bound
- * before the await, so a tab switch meanwhile leaves every other tab's row alone. `cancelled`
- * says the reader stopped it (Esc or Cancel), so its failure is no error.
+ * Stock's no-op answers to a manual compaction (`ManualCompactionNoOpError` in pi-coding-agent
+ * `session/session-maintenance.ts`: too small, already compacted, the session is switching). The RPC answer carries
+ * only the message, so it is read from there; Orca reads the same reply (`src/main/pi/rpc/rpc-compaction.ts:68`).
+ */
+const COMPACTION_NO_OP = /^(?:Nothing to compact\b|Already compacted\b|Conversation is changing; cannot compact\b)/;
+
+/** True when a failed `compact` answer is stock's "nothing to compact", which is no failure. */
+export function isCompactionNoOp(response: RpcResponse): boolean {
+	return !response.success && COMPACTION_NO_OP.test(response.error ?? "");
+}
+
+/**
+ * Manual `/compact` and handoff started here: the tab's status row (Esc, Cancel) stands here for as long as the
+ * request runs (`local`, so stock's `manual_compaction_*` events, which every window hears, leave it to this one). The
+ * tab's store is bound before the await, so a tab switch meanwhile leaves every other tab's row alone. `cancelled`
+ * says the reader stopped it (Esc or Cancel), so its failure is no error; `skipped` that there was nothing to compact,
+ * already said here as a notice, so it is no failure either.
  */
 export async function runManualMaintenance(
 	action: "compact" | "handoff",
 	request: () => Promise<RpcResponse>,
 	tabId?: string | null,
-): Promise<{ response: RpcResponse; cancelled: boolean }> {
+): Promise<{ response: RpcResponse; cancelled: boolean; skipped: boolean }> {
 	const session = sessionRuntimeStore<SessionStore>(tabId ?? focusedRuntimeTabId(), "session") ?? useSessionStore;
-	session.setState({ isCompacting: true, compactionInfo: { reason: "manual", action, startedAt: Date.now() } });
+	session.setState({
+		isCompacting: true,
+		compactionInfo: { reason: "manual", action, startedAt: Date.now(), local: true },
+	});
 	try {
 		const response = await request();
 		const info = session.getState().compactionInfo;
 		const cancelled = info?.cancelling === true;
+		const skipped = !cancelled && action === "compact" && isCompactionNoOp(response);
+		if (skipped && !response.success)
+			toast({ variant: "info", message: translate("command.compactNothing"), detail: response.error });
 		// A handoff leaves no compaction card and is no measure of the next compaction.
 		if (action === "compact" && response.success && !cancelled)
 			session.setState({ compactionRuns: withCompactionRun(session.getState().compactionRuns, info) });
-		return { response, cancelled };
+		return { response, cancelled, skipped };
 	} finally {
 		if (session.getState().compactionInfo?.reason === "manual")
 			session.setState({ isCompacting: false, compactionInfo: null });
@@ -497,7 +516,7 @@ export function stopFromEscape(now = Date.now()): "armed" | "stopping" {
 	const composer = useComposerStore.getState();
 	const running = (sessionRuntimeStore<SessionStore>(focusedRuntimeTabId(), "session") ?? useSessionStore).getState()
 		.isStreaming;
-	const holdsDraft = composer.draft.trim() !== "" || composer.images.length > 0;
+	const holdsDraft = composer.draft.trim() !== "" || composer.pictureSlots.length > 0;
 	const armed = composer.stopArmedAt !== null && now - composer.stopArmedAt < DOUBLE_ESC_MS;
 	if (running && holdsDraft && !armed) {
 		composer.armStop(now);
@@ -524,7 +543,7 @@ export async function branchSessionFromEntry(entryId: string): Promise<"branched
 /**
  * File a branch's prompt (fork_from's `draft`: a branch from a prompt ends before it) as the new session's saved
  * draft (draft-persistence.ts), so its composer shows it whenever and in whichever window that session opens.
- * Only the text is kept there, as for every saved draft.
+ * Only its text is filed here.
  */
 export function fileBranchDraft(result: RpcForkFromResult, device: string | undefined): void {
 	const keys = draftKeys({ device, sessionFile: result.sessionPath, empty: false });

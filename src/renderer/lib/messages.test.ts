@@ -318,7 +318,7 @@ describe("forkSessionFromEntryInNewTab", () => {
 
 		expect(await branch).toBe("saved");
 		const keys = draftKeys({ sessionFile: "/sessions/branch.jsonl", empty: false });
-		expect(keys && loadDraft(storage, keys, 0)).toBe("second question");
+		expect(keys && loadDraft(storage, keys, 0)?.text).toBe("second question");
 	});
 });
 
