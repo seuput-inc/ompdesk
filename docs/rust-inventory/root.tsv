@@ -256,6 +256,8 @@ src/main/gpu-fallback.test.ts	tooling	-	Vitest suite: isGpuProcessCrash.
 src/main/gpu-fallback.ts	mixed	4	The shell owns markers, trial, cooldown and crash-loop decisions. Node logs the decision, issues its relaunch/exit sequence and samples the compositor for callers; move these with process and window ownership.
 src/main/hang-watchdog.test.ts	tooling	-	Vitest consumes an actual marker through the Rust watchdog and checks both JSONL records.
 src/main/hang-watchdog.ts	mixed	4	The Tauri watchdog owns marker I/O and report formatting. The observed Node event loop must send its own heartbeat, synchronous markMainStep and lifecycle signals until index.ts and app-quit.ts move (§1.3c).
+src/main/health-watch.test.ts	tooling	-	Vitest suite: checkLowDisk.
+src/main/health-watch.ts	port	1	Reads the userData volume's free space (statfs) 2 min after launch and every 6 h; index.ts gives it the stored last-notice time and shows the notice. Move with disk care's measurements (§1.3).
 src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
 src/main/i18n-text.ts	port	1	mainT, notification-batch and web-push-notifier format messages directly from MAIN_TEXT. Move the catalog with its last formatter, not one RPC per label.
 src/main/i18n.ts	port	1	WindowManager.createWindow, the context menu and dialogs consume getMainLanguage, mainT and editLabels synchronously; index.ts and ipc.ts push getMainLanguage to the shell's app menu and tray (app.language). Move with dialog and prefs ownership. Keep shared uiLanguageFromLocale and fillText.
@@ -277,6 +279,8 @@ src/main/log-watcher.test.ts	tooling	-	Vitest suite: opening logs later replays 
 src/main/log-watcher.ts	mixed	2	logs.start/snapshot/close own watching, UTF-8 tails and sequence assignment. Main forwards pushes and holds an opaque cursor per file plus the accepted 1000-line tail in RAM so a replacement core can resume without losing the panel history. Receiver: shell window transport.
 src/main/mac-permissions.test.ts	tooling	-	Vitest suite: MacPermissions.status.
 src/main/mac-permissions.ts	port	2	Shell batch, §1.3c: index.ts window-focus and Settings requests share askMissing and the synchronously updated macPermissionsRequested pref. TCC reads and requests belong to the signed app, not an independent core identity.
+src/main/mac-tcc-watch.test.ts	tooling	-	Vitest suite: OMPdesk's macOS folder dialogs read from the system log.
+src/main/mac-tcc-watch.ts	port	1	Runs `log stream` for tccd's AUTHREQ_PROMPTING under a shell that ends it with its stdin; index.ts shows the one Full Disk Access notice. Move with the shell's permission owner (§1.3c).
 src/main/machine-services.test.ts	tooling	-	Vitest suite: machineFor.
 src/main/machine-services.ts	mixed	3	LocalMachine checks StatsClient.port before reviving stats, and owns per-caller benchmark handles cancelled by IPC or peer disconnect. stats-client and benchmark-runner own their I/O; model setup already uses models.setupRun. RemoteMachine receives the link from its caller.
 src/main/machine-state.test.ts	tooling	-	Vitest suite: machine state around a stall.

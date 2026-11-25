@@ -205,6 +205,7 @@ src/main/ponytail/ponytail-stock.test.ts	exception	Test coverage for Ponytail ho
 src/main/power/lid-awake-runtime.ts	mixed	The core probes Windows battery presence. Keep the platform power handles with LidAwake: index.ts disposes them before will-quit returns (§1.3a,c).
 src/main/power/lid-awake.test.ts	exception	Test coverage for lid hold recovery and AC/work transitions.
 src/main/power/lid-awake.ts	port	The host/work wrappers and will-quit share the live backend; dispose calls releaseNow before returning. Move with the shell quit owner (§1.3a,c).
+src/main/power/lid-backend-mac.test.ts	exception	Test coverage for caffeinate restarting after an unexpected exit.
 src/main/power/lid-backend-mac.ts	port	The synchronous quit path kills this caffeinate handle; pmset has no time limit while every core request has a deadline. Move with the shell power owner (§1.3a,c).
 src/main/power/lid-backend-windows.test.ts	exception	Test coverage for Windows powercfg parsing and restoration.
 src/main/power/lid-backend-windows.ts	port	Async AC reconciliation and synchronous quit restoration read one saved previous value. Each of the three powercfg calls at quit may take 5 s; the synchronous core hub allows 2 s. Move both paths together (§1.3a,c).

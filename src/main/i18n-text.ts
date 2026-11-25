@@ -41,6 +41,12 @@ export const MAIN_TEXT = {
 		en: "Only {gb} GB is free. Free up space before OMPdesk and your sessions can no longer save.",
 		ko: "남은 공간이 {gb} GB뿐이에요. OMPdesk와 세션이 저장하지 못하게 되기 전에 공간을 확보하세요.",
 	},
+	// macOS showed its folder dialog on OMPdesk's account (mac-tcc-watch.ts): once ever; a click opens Full Disk Access.
+	"folderAccess.title": { en: "macOS keeps asking about folders", ko: "macOS가 폴더 접근을 계속 물어봐요" },
+	"folderAccess.body": {
+		en: "Sessions read your Documents, Desktop or Downloads, so macOS asks for OMPdesk each time. Click to turn on Full Disk Access for OMPdesk and stop the dialogs.",
+		ko: "세션이 문서·데스크탑·다운로드 폴더를 읽을 때마다 macOS가 OMPdesk 이름으로 물어봐요. 눌러서 OMPdesk에 전체 디스크 접근 권한을 켜면 더 이상 묻지 않아요.",
+	},
 	// An omp runners found breaking this release, which OMPdesk holds back (the core's tools/omp/hold.rs): once, then after a day.
 	"ompHold.title": { en: "omp {version} is on hold", ko: "omp {version} 판을 보류하고 있어요" },
 	"ompHold.body": {

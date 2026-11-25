@@ -133,6 +133,7 @@ import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
+import { FOLDER_ACCESS_NOTICE_PREF, FULL_DISK_ACCESS_PANE, watchTccPrompts } from "./mac-tcc-watch";
 import { LocalMachine } from "./machine-services";
 import { MachineState } from "./machine-state";
 import { MailAccounts } from "./mail-accounts";
@@ -1593,6 +1594,20 @@ app.whenReady().then(async () => {
 			void askMacPermissions();
 			app.on("browser-window-focus", () => void askMacPermissions());
 		});
+		// The first folder dialog macOS shows on OMPdesk's account (a session reading Documents, Desktop, Downloads)
+		// gets one notice that opens Full Disk Access, once ever (mac-tcc-watch.ts).
+		if (process.platform === "darwin" && prefsStore().get(FOLDER_ACCESS_NOTICE_PREF) !== true) {
+			const stopTccWatch = watchTccPrompts(prompt => {
+				if (prefsStore().get(FOLDER_ACCESS_NOTICE_PREF) === true) return;
+				prefsStore().set(FOLDER_ACCESS_NOTICE_PREF, true);
+				stopTccWatch();
+				writeRuntimeLog({ source: "background-task", message: "mac-folder-prompt", details: { ...prompt } });
+				const notice = new Notification({ title: mainT("folderAccess.title"), body: mainT("folderAccess.body") });
+				notice.on("click", () => void shell.openExternal(FULL_DISK_ACCESS_PANE));
+				notice.show();
+			});
+			app.once("will-quit", stopTccWatch);
+		}
 	}
 
 	// This machine's setup and the omp, tool CLI and extension updaters: one instance of the core's `tools` kind
