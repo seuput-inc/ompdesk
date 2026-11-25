@@ -63,6 +63,8 @@
  *   Changes made here or on a paired device push the host's current arrangement as `host.projects.changed`.
  * - The host's bridge self-check (bridge-health.ts): `host.bridgeHealth.get {}` → BridgeHealthReport, the latest
  *   result per omp version the host ran in its launch, for `ompdesk_app` `omp.bridge_health` on a session there
+ * - Presence (presence.ts): `presence.report {away}` → null, every `PRESENCE_REPORT_MS` while connected; a device
+ *   whose person is at it keeps the host's phone pushes back (an older host answers `unsupported`, ignored)
  * - Agent control on a session the host runs (agent-control/branches.ts and local/git/worktree.ts on the host's
  *   own checkout; `worktree` = `{path, branch, baseCwd}` of the tab's binding): `host.git.facts {worktree}` →
  *   BranchFacts, `host.git.evidence {worktree, diffChars}` → BranchEvidence (the child's diff cut to `diffChars`

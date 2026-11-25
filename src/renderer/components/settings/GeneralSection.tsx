@@ -16,17 +16,21 @@ import {
 	Play,
 	Power,
 	RotateCcw,
+	Send,
 	Volume2,
 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { CLOSE_TO_TRAY_PREF, KEEP_AWAKE_WORKING_PREF, RESUME_INTERRUPTED_PREF } from "../../../shared/desktop-prefs";
+import type { IpcNotifyTestResult } from "../../../shared/ipc-types";
 import { isUiLanguage, UI_LANGUAGE_NAMES, UI_LANGUAGES } from "../../../shared/ui-language";
 import { saveGuiPreference } from "../../lib/display-preferences";
+import { cx } from "../../lib/format";
 import { useLang, useT } from "../../lib/i18n";
 import { PLATFORM } from "../../lib/keymap";
-import { playChime } from "../../lib/notification-sound";
+import { isNotificationTone, NOTIFICATION_TONES, playChime } from "../../lib/notification-sound";
 import { migrateDefaultPanelTab, PANEL_TABS, type PanelSide, type PanelTab, useUiStore } from "../../stores/ui";
-import { Button, Select } from "../common";
+import { webRuntime } from "../../web/runtime";
+import { Button, LinkButton, Select } from "../common";
 import { GithubAccountSection } from "./GithubAccountSection";
 import { ProxyRow } from "./LaunchSettings";
 import { OutputStyleRow } from "./OutputStyleRow";
@@ -61,6 +65,9 @@ export function GeneralSection() {
 	const notifications = useUiStore(state => state.notifications);
 	const notificationSound = useUiStore(state => state.notificationSound);
 	const notificationVolume = useUiStore(state => state.notificationVolume);
+	const notificationTone = useUiStore(state => state.notificationTone);
+	const [notifyTest, setNotifyTest] = useState<IpcNotifyTestResult | null>(null);
+	const [notifyTesting, setNotifyTesting] = useState(false);
 	const linkPreview = useUiStore(state => state.linkPreview);
 	const panelTab = useUiStore(state => state.panelTab);
 	const panelSide = useUiStore(state => state.panelSide);
@@ -71,6 +78,13 @@ export function GeneralSection() {
 	const panelId = useId();
 	const panelSideId = useId();
 	const volumeId = useId();
+	const sendNotifyTest = () => {
+		setNotifyTesting(true);
+		void window.omp.system
+			.notifyTest()
+			.then(setNotifyTest, () => setNotifyTest("failed"))
+			.finally(() => setNotifyTesting(false));
+	};
 	return (
 		<>
 			<SettingsSection title={t("settings.general.language")}>
@@ -97,6 +111,40 @@ export function GeneralSection() {
 				<SettingsSwitchRow
 					checked={notifications}
 					description={t("settings.gui.notificationsDesc")}
+					// A paired page tests its own push in Settings › Mobile web; this banner is the computer's.
+					extra={
+						webRuntime() ? undefined : (
+							<Button
+								data-notify-test
+								icon={<Send />}
+								loading={notifyTesting}
+								onClick={sendNotifyTest}
+								size="sm"
+								variant="ghost"
+							>
+								{t("settings.gui.notifyTest")}
+							</Button>
+						)
+					}
+					footer={
+						notifyTest && (
+							<p
+								className={cx(
+									"text-sc-sm",
+									notifyTest === "shown" ? "text-(--sc-text-muted)" : "text-(--sc-warning)",
+								)}
+								data-notify-test-result={notifyTest}
+								role="status"
+							>
+								{t(`settings.gui.notifyTest.${notifyTest}`)}{" "}
+								<LinkButton
+									onClick={() => void window.omp.system.openNotificationSettings().catch(() => undefined)}
+								>
+									{t("settings.gui.notifyTest.open")}
+								</LinkButton>
+							</p>
+						)
+					}
 					icon={<Bell />}
 					id="setting-gui-notifications"
 					label={t("settings.gui.notifications")}
@@ -107,9 +155,33 @@ export function GeneralSection() {
 				<SettingsSwitchRow
 					checked={notificationSound}
 					extra={
-						<Button icon={<Play />} onClick={() => playChime(notificationVolume)} size="sm" variant="ghost">
-							{t("settings.gui.notificationSoundTest")}
-						</Button>
+						<span className="flex items-center gap-2.5 [--hit-gap-x:10px]">
+							<Select
+								aria-label={t("settings.gui.notificationTone")}
+								controlSize="sm"
+								onChange={event => {
+									const next = event.target.value;
+									if (!isNotificationTone(next)) return;
+									playChime(notificationVolume, next);
+									void saveGuiPreference("notificationTone", next, () =>
+										useUiStore.setState({ notificationTone: next }),
+									);
+								}}
+								options={NOTIFICATION_TONES.map(value => ({
+									value,
+									label: t(`settings.gui.notificationTone.${value}`),
+								}))}
+								value={notificationTone}
+							/>
+							<Button
+								icon={<Play />}
+								onClick={() => playChime(notificationVolume, notificationTone)}
+								size="sm"
+								variant="ghost"
+							>
+								{t("settings.gui.notificationSoundTest")}
+							</Button>
+						</span>
 					}
 					icon={<Volume2 />}
 					id="setting-gui-notificationSound"
@@ -135,8 +207,8 @@ export function GeneralSection() {
 										useUiStore.setState({ notificationVolume: next });
 										void saveGuiPreference("notificationVolume", next, () => {});
 									}}
-									// Letting go of the slider plays the chime at the new volume.
-									onPointerUp={event => playChime(Number(event.currentTarget.value))}
+									// Letting go of the slider plays the chosen sound at the new volume.
+									onPointerUp={event => playChime(Number(event.currentTarget.value), notificationTone)}
 									step={5}
 									type="range"
 									value={notificationVolume}

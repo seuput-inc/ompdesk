@@ -329,6 +329,7 @@ describe("a tab completing", () => {
 					body: "Fixed the parser and added two tests.",
 					tabId: "tab-a",
 					tag: "tab:tab-a",
+					badge: 0,
 				},
 				ttl: 3600,
 				urgency: "normal",
@@ -378,6 +379,7 @@ describe("a tab completing", () => {
 			body: "",
 			tabId: "tab-a",
 			tag: "tab:tab-a",
+			badge: 0,
 		});
 		expect(JSON.stringify(calls)).not.toMatch(/Secret|production/);
 		expect(quiet.deviceId).not.toBe(hidden.deviceId);
@@ -423,6 +425,7 @@ describe("asks", () => {
 					body: "Run the migration?",
 					tabId: "tab-a",
 					tag: "tab:tab-a",
+					badge: 1,
 				},
 				ttl: 6 * 60 * 60,
 				urgency: "high",
@@ -433,7 +436,7 @@ describe("asks", () => {
 		await flush();
 		expect(calls.at(-1)).toMatchObject({
 			endpoint: p.subscription.endpoint,
-			payload: { v: 1, kind: "clear", tabId: "tab-a", tag: "tab:tab-a", silent: true },
+			payload: { v: 1, kind: "clear", tabId: "tab-a", tag: "tab:tab-a", silent: true, badge: 0 },
 		});
 		expect(calls).toHaveLength(2);
 	});
@@ -489,5 +492,38 @@ describe("subscription lifecycle", () => {
 		if (!p.socket) throw new Error("not connected");
 		await arrived(p.socket, p.frames, received => received.length > 0);
 		expect(p.frames[0]).toMatchObject({ t: "hello", features: { push: true } });
+	});
+});
+
+describe("the test push from Settings", () => {
+	it("goes to the device's own subscription whatever its categories, even with its page in the foreground", async () => {
+		const quiet = await phone({ visible: true, push: { categories: ["ask"] } });
+		await phone({ visible: false });
+		language.current = "ko";
+		expect(await host.testPush(quiet.deviceId)).toBe("sent");
+		expect(calls).toEqual([
+			{
+				endpoint: quiet.subscription.endpoint,
+				payload: { v: 1, kind: "completion", title: "OMPdesk", body: "테스트 알림", tag: "test" },
+				ttl: 60,
+				urgency: "normal",
+			},
+		]);
+	});
+
+	it("answers none for a device with no subscription", async () => {
+		expect(await host.testPush("no-such-device")).toBe("none");
+		expect(calls).toEqual([]);
+	});
+
+	it("forgets a subscription the push service answers 410 to", async () => {
+		const p = await phone({ visible: false, connect: false });
+		pushStatus = 410;
+		expect(await host.testPush(p.deviceId)).toBe("gone");
+		await flush();
+		const state = (await (
+			await fetch(`http://127.0.0.1:${port}/${SECRET}/api/push`, { headers: { cookie: p.cookie, ...IDENTITY } })
+		).json()) as WebPushStateResponse;
+		expect(state.subscribed).toBe(false);
 	});
 });

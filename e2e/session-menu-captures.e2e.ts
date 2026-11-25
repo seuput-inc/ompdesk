@@ -146,7 +146,10 @@ for (const language of ["en", "ko"] as const)
 			expect(await menuLabels(a)).toEqual([
 				text("sidebar.menu.openSplit"),
 				text("sidebar.openInNewWindow"),
-				...edits,
+				...edits.slice(0, 2),
+				// Muting is this computer's own: a host's session has no such item.
+				text("sidebar.menu.mute"),
+				...edits.slice(2),
 				text("sidebar.menu.hideFromAgents"),
 				text("sidebar.menu.reveal"),
 				text("common.delete"),

@@ -298,6 +298,14 @@ export const IPC_COMMANDS = {
 	SYSTEM_OPEN_DIALOG: "system:open-dialog",
 	/** Show notification */
 	SYSTEM_NOTIFY: "system:notify",
+	/** Whether the person is away from this computer (presence.ts: locked, or no input for 3 min); null when unknown */
+	SYSTEM_DESKTOP_AWAY: "system:desktop-away",
+	/** Settings › General's test banner: what the system did with it (`IpcNotifyTestResult`). */
+	SYSTEM_NOTIFY_TEST: "system:notify-test",
+	/** Open the system's notification settings (System Settings › Notifications, Windows Settings › Notifications). */
+	SYSTEM_NOTIFY_SETTINGS: "system:notify-settings",
+	/** A paired page's "Send a test": one push to the calling device's own subscription (`WebHost.testPush`). */
+	WEB_PUSH_TEST: "web-push:test",
 	/** Get GUI preferences */
 	PREFS_GET: "prefs:get",
 	/** Set GUI preferences */
@@ -396,6 +404,8 @@ export const IPC_COMMANDS = {
 	REORDER_TABS: "tab:reorder",
 	/** List the calling window's tabs (boot reconciliation) */
 	GET_TABS: "tab:get-all",
+	/** The tabs a person looked at after their last run ended (main's tab-attention.ts), for a page restoring its done marks */
+	TABS_SEEN_SINCE_RUN: "tab:seen-since-run",
 	/** Look up the tab/window currently attached to a session file (F-OWN double-attach guard) */
 	GET_SESSION_OWNER: "tab:get-session-owner",
 	/** Round-trip a draft through the user's $VISUAL/$EDITOR (temp file, exit-0 read-back) */
@@ -759,6 +769,12 @@ export type RuntimeErrorSource =
 	 * `details` the list (local or device), focus/reroot/open, whether it was archived and whether a tab held it.
 	 */
 	| "sidebar"
+	/**
+	 * A finished turn's desktop notification that was not shown (`hooks/use-rpc-events.ts` `notifyRunEnd`; info):
+	 * `message` skipped, `details.reason` why (focus, app-off, setting-off, aborted, retrying, awaiting-connection,
+	 * gone, opened-by-agent, muted), `details.kind` completion or error.
+	 */
+	| "notify"
 	/**
 	 * A known session's pane shown with no rows, info level (src/renderer/hooks/session-hydration.ts
 	 * `reportEmptyTranscript`): `key` the transcript snapshot key looked up and whether the cache has it (`found`,
@@ -1358,6 +1374,18 @@ export interface IpcStatsFetchPayload {
 
 /** Why a tab notifies: a finished turn, a failed one, or a question waiting for the user. */
 export type IpcNotifyKind = "completion" | "error" | "ask";
+
+/**
+ * What became of a desktop notification: shown, left out for a muted project, dropped (a bot's quiet turn, a repeat
+ * another window already reported), or the system refuses banners.
+ */
+export type IpcNotifyResult = "shown" | "muted" | "dropped" | "blocked";
+
+/** The test banner: shown (or no word from the system, as on macOS), refused (Windows' `failed`), or none can show. */
+export type IpcNotifyTestResult = "shown" | "failed" | "unsupported";
+
+/** The test push: sent, the subscription expired (and is forgotten), the push service failed, or no subscription. */
+export type IpcPushTestResult = "sent" | "gone" | "failed" | "none";
 
 export interface IpcNotifyPayload {
 	title: string;
@@ -2606,6 +2634,8 @@ export interface OmpApi {
 	tabs: {
 		/** The calling window's tabs in acquisition order (boot reconciliation). */
 		list(): Promise<IpcTabInfo[]>;
+		/** The tabs a person looked at after their last run ended (main's `TabAttention`). */
+		seenSinceRun(): Promise<string[]>;
 		/**
 		 * Spawn a background tab bound to this window. Null when its sidecar cannot be created.
 		 * When `sessionPath` is already attached to a tab, resolves with
@@ -2699,7 +2729,16 @@ export interface OmpApi {
 			filters?: { name: string; extensions: string[] }[],
 			options?: { directory?: boolean; title?: string; buttonLabel?: string },
 		): Promise<string[] | null>;
-		notify(title: string, body?: string, tabId?: string, kind?: IpcNotifyKind): void;
+		/** What became of it; undefined from a page (which shows its own) or an older main. */
+		notify(title: string, body?: string, tabId?: string, kind?: IpcNotifyKind): Promise<IpcNotifyResult | undefined>;
+		/** Whether the person is away from this computer (locked, or no input for 3 min); null when it cannot be told. */
+		desktopAway(): Promise<boolean | null>;
+		/** One test banner (Settings › General); a page answers `unsupported` (its test is `testPush`). */
+		notifyTest(): Promise<IpcNotifyTestResult>;
+		/** Open the system's notification settings; nothing on a page. */
+		openNotificationSettings(): Promise<void>;
+		/** One test push to this paired device; `none` from a desktop window. */
+		testPush(): Promise<IpcPushTestResult>;
 	};
 	prefs: {
 		get(key?: string): Promise<unknown>;

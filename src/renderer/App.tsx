@@ -41,6 +41,7 @@ import { isImeKeyEvent } from "./lib/ime";
 import { chordFromEvent, compileKeymap, KEYMAP_ACTION_BY_ID, KEYMAP_ACTIONS, type KeymapActionId } from "./lib/keymap";
 import { restoreQueuedMessages, stopFromEscape } from "./lib/messages";
 import { openNotifiedTab } from "./lib/notification-click";
+import { isNotificationTone } from "./lib/notification-sound";
 import { subscribeOmpUpdated } from "./lib/omp-update";
 import { loadOnDemandDialogs } from "./lib/on-demand-dialogs";
 import { installOutboxDelivery } from "./lib/outbox-delivery";
@@ -304,6 +305,7 @@ export function App() {
 				"notifications",
 				"notificationSound",
 				"notificationVolume",
+				"notificationTone",
 				"linkPreview",
 				"panelSide",
 				"thinkingExpanded",
@@ -353,6 +355,9 @@ export function App() {
 					!changedPreferences.has("notificationVolume")
 				) {
 					useUiStore.setState({ notificationVolume: prefs.notificationVolume });
+				}
+				if (isNotificationTone(prefs.notificationTone) && !changedPreferences.has("notificationTone")) {
+					useUiStore.setState({ notificationTone: prefs.notificationTone });
 				}
 				if ((prefs.panelSide === "left" || prefs.panelSide === "right") && !changedPreferences.has("panelSide")) {
 					useUiStore.setState({ panelSide: prefs.panelSide });

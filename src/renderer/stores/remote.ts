@@ -8,7 +8,7 @@
 import { useEffect, useReducer } from "react";
 import { create } from "zustand";
 import type { HostView, RemoteState } from "../../shared/ipc-types";
-import { LINK_NOTICE_GRACE_MS } from "../../shared/link-notice";
+import { LINK_NOTICE_GRACE_MS, TAILSCALE_HINT_AFTER_MS, tailscaleHint } from "../../shared/link-notice";
 import { cacheDeviceOrder } from "../lib/sidebar-memory";
 import { webRuntime } from "../web/runtime";
 import { focusedRuntimeTabId, useRuntimeTabId } from "./session-runtime-context";
@@ -115,15 +115,28 @@ function trackDown(previous: Readonly<Record<string, number>>, hosts: readonly H
  */
 export function useHostLinkLost(deviceId: string | undefined): boolean {
 	const since = useRemoteStore(store => (deviceId === undefined ? undefined : store.downSince[deviceId]));
+	useWakeAt(since === undefined ? undefined : since + LINK_NOTICE_GRACE_MS);
+	return since !== undefined && Date.now() - since >= LINK_NOTICE_GRACE_MS;
+}
+
+/** The host's offline line adds "Check that Tailscale is on" (`tailscaleHint`); re-renders when it turns due. */
+export function useTailscaleHint(deviceId: string | undefined): boolean {
+	const since = useRemoteStore(store => (deviceId === undefined ? undefined : store.downSince[deviceId]));
+	const tailnet = useRemoteStore(store => store.state?.tailnet);
+	useWakeAt(since === undefined ? undefined : since + TAILSCALE_HINT_AFTER_MS);
+	return tailscaleHint(since, tailnet, Date.now());
+}
+
+/** Re-render once at `at` (ms), so a reading that turns true by time alone shows then. */
+function useWakeAt(at: number | undefined): void {
 	const [, wake] = useReducer((count: number) => count + 1, 0);
 	useEffect(() => {
-		if (since === undefined) return;
-		const left = since + LINK_NOTICE_GRACE_MS - Date.now();
+		if (at === undefined) return;
+		const left = at - Date.now();
 		if (left <= 0) return;
 		const timer = setTimeout(wake, left);
 		return () => clearTimeout(timer);
-	}, [since]);
-	return since !== undefined && Date.now() - since >= LINK_NOTICE_GRACE_MS;
+	}, [at]);
 }
 
 /** Paired host the window's focused tab runs on (pane-scoped inside a session pane); undefined = this device. */

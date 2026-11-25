@@ -3,13 +3,14 @@ import { type ProjectMenuActions, type ProjectMenuFacts, projectMenuItems } from
 
 const t = (key: string) => key;
 
-const facts: ProjectMenuFacts = { pinned: false, canMoveUp: true, canMoveDown: true, archivable: 2 };
+const facts: ProjectMenuFacts = { pinned: false, muted: false, canMoveUp: true, canMoveDown: true, archivable: 2 };
 const noop = () => {};
 const every: ProjectMenuActions = {
 	newAgent: noop,
 	newWorktree: noop,
 	rename: noop,
 	togglePin: noop,
+	toggleMute: noop,
 	moveUp: noop,
 	moveDown: noop,
 	archiveAll: noop,
@@ -29,6 +30,7 @@ describe("projectMenuItems", () => {
 			"group-move-up",
 			"group-move-down",
 			"group-pin",
+			"group-mute",
 			"group-archive-all",
 			"group-delete",
 		]);
@@ -77,5 +79,14 @@ describe("projectMenuItems", () => {
 		expect(items.find(item => item.id === "group-pin")?.label).toBe("sidebar.menu.unpin");
 		items.find(item => item.id === "group-delete")?.onSelect();
 		expect(remove).toHaveBeenCalledOnce();
+	});
+
+	it("mutes an unmuted project's notifications and unmutes a muted one", () => {
+		const toggleMute = vi.fn();
+		const mute = build({}, { ...every, toggleMute }).find(item => item.id === "group-mute");
+		expect(mute?.label).toBe("sidebar.menu.mute");
+		mute?.onSelect();
+		expect(toggleMute).toHaveBeenCalledOnce();
+		expect(build({ muted: true }).find(item => item.id === "group-mute")?.label).toBe("sidebar.menu.unmute");
 	});
 });
