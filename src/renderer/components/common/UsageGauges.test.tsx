@@ -17,7 +17,7 @@ Object.assign(globalThis as Record<string, unknown>, {
 
 const { createRoot } = await import("react-dom/client");
 const { UsageGauges } = await import("./UsageGauges");
-const { accountStanding } = await import("../settings/providers/AccountQuota");
+const { accountGauges } = await import("../../lib/usage-windows");
 
 const limits: UsageLimit[] = [
 	{ id: "anthropic:5h", label: "5h", windowId: "5h", usedFraction: 0.64 },
@@ -83,8 +83,9 @@ describe("usage gauges", () => {
 		const percents = [...container.querySelectorAll("[data-usage-percent]")].map(node => node.textContent);
 		expect(percents).toEqual(["0%", "50%"]);
 		expect(container.querySelector(".omp-usage-gauge")?.getAttribute("data-state")).toBe("ok");
-		expect(accountStanding({ limits: spent })).toBe("ok");
+		// The account's standing (sidebar) reads the same gauges: no window of a given-back account counts as spent.
+		expect(accountGauges(spent).some(gauge => gauge.fraction >= 1)).toBe(false);
 		const ahead = spent.map((limit, index) => (index === 0 ? { ...limit, resetsAt: Date.now() + 60_000 } : limit));
-		expect(accountStanding({ limits: ahead })).toBe("limited");
+		expect(accountGauges(ahead).some(gauge => gauge.fraction >= 1)).toBe(true);
 	});
 });
