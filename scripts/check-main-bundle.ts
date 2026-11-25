@@ -419,9 +419,9 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // 2,215,938 (branch run 45699393025). The budget is that measure plus 80 bytes.
 // An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2): `buildHistoryRows` cutting the call out of its
 // card, `MessageBubble` choosing the card for it, and the lazy wrappers that load the A2UI chunk (the engine and views
-// stay in that chunk): 346 bytes over the budget before it (2,212,625 in branch run 45698452559). The budget is main's
-// plus those 346 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_216_364;
+// stay in that chunk): 346 bytes over the budget before it (2,212,625 in branch run 45698452559). With main at
+// 73923cfad merged: measured 2,217,200 (branch run 45706450189). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_217_280;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
