@@ -132,8 +132,6 @@ pub mod lifecycle {
 
 use registry::{Identity, Registry, trusted_url};
 use serde_json::{Value, json};
-#[cfg(target_os = "macos")]
-use shell_core::launcher;
 use shell_core::wire::WireError;
 use shell_core::{conn, facts, startup};
 use std::collections::{HashMap, HashSet};
