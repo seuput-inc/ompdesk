@@ -186,7 +186,7 @@ import { matchReportAccount } from "./accounts-core";
 import { shapeResetPasses } from "./reset-passes-core";
 import { reportMatchesActiveAccount } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/active-oauth-account";
 import { toResetUsageAccounts } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/reset-usage";
-import { summarizeUsageResetCredits } from "@oh-my-pi/pi-tui/overlays/usage-display";
+import { summarizeUsageResetCredits } from "@oh-my-pi/pi-coding-agent/session/usage-display";
 function oldMatch(report, accounts, count) {
  const identity = report.metadata ?? {};
  const sameOrg = account => identity.orgId === undefined || account.orgId === undefined || account.orgId === identity.orgId;

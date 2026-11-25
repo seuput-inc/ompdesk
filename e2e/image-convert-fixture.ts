@@ -1,6 +1,6 @@
 /// <reference types="bun" />
 /**
- * The fake omp package's stand-ins for stock's image path (`pi-tui/chat/image-loading` `ensureSupportedImageInput`
+ * The fake omp package's stand-ins for stock's image path (`pi-coding-agent/utils/image-input` `ensureSupportedImageInput`
  * and `pi-coding-agent/utils/image-resize` `resizeImage`), which the stock helper's `image.toModel` runs on a
  * phone's HEIC. Stock decodes with `Bun.Image`, which reads a HEIC only through the OS (ImageIO on macOS; WIC on
  * Windows, where it needs the Store's "HEIF Image Extensions", absent on a runner), so the decode is not what

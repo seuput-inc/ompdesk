@@ -1,7 +1,7 @@
 import { guard } from "./health";
 import { InternalUrlRouter } from "./omp/pi-coding-agent/internal-urls/router";
-import { splitPathAndSel } from "./omp/pi-tui/tools/read";
-import { splitUrlScheme } from "./omp/pi-tui/tools/url-scheme-host";
+import { splitUrlScheme } from "./omp/pi-coding-agent/internal-urls/url-scheme";
+import { splitPathAndSel } from "./omp/pi-coding-agent/tools/details/read";
 import type { BridgeMethods } from "./types";
 
 export function readGroupTarget(args: Record<string, unknown>): { path: string; selector?: string } | null {

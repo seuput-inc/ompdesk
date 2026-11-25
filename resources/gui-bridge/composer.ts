@@ -13,7 +13,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { RestoreOptions } from "@oh-my-pi/pi-coding-agent/task/restore";
 import type { AgentMessage } from "../../src/shared/rpc-types";
 import { requireFn } from "./capabilities";
-import { buildCopyTargets } from "./copy-targets";
+import { buildCopyTargets, type MarkdownToken } from "./copy-targets";
 import { guard } from "./health";
 import { jobRows } from "./jobs-core";
 import { keepSectionsOnRestore } from "./prompt-sections";
@@ -422,7 +422,7 @@ export const methods: BridgeMethods = {
 	}),
 	...guard("jobs", {
 		/**
-		 * `/jobs` parity: the session's jobs and its subagents' as stock's tree rows (`pi-tui/overlays/job-tree`), with
+		 * `/jobs` parity: the session's jobs and its subagents' as stock's tree rows (`modes/view-model/overlays/job-tree`), with
 		 * stock's own recent limit (10, what `/jobs` and the jobs sheet show; the subagents share it, so 5 would leave
 		 * a busy tree one job each).
 		 */
@@ -431,7 +431,7 @@ export const methods: BridgeMethods = {
 			requireFn(session, "getAsyncJobTree", "jobs");
 			requireFn(session, "inspectAsyncJob", "jobs");
 			// A late import isolates a moved stock internal from the other composer adapters.
-			const { buildJobTree } = await import("./omp/pi-tui/overlays/job-tree");
+			const { buildJobTree } = await import("./omp/pi-coding-agent/modes/view-model/overlays/job-tree");
 			const tree = session.getAsyncJobTree();
 			return tree ? jobRows(tree, buildJobTree, id => session.inspectAsyncJob(id)) : [];
 		},
@@ -646,13 +646,16 @@ export const methods: BridgeMethods = {
 	...guard("copyTargets", {
 		"composer.copy_targets": async (_params, env) => {
 			// Late imports isolate moved stock internals from the other composer adapters.
-			const stock = await import("./omp/pi-tui/overlays/copy-targets");
+			const [stock, { lexMarkdown }] = await Promise.all([
+				import("./omp/pi-coding-agent/modes/view-model/overlays/copy-targets"),
+				import("./omp/pi-tui/text/markdown/lexer"),
+			]);
 			const { buildTranscript } = await import("./session-display");
 			const transcript = await buildTranscript(env.session().sessionManager);
 			const messages = transcript.messages as unknown as AgentMessage[];
 			return {
 				targets: buildCopyTargets(messages, {
-					extractBlocks: stock.extractBlocks,
+					lexMarkdown: text => lexMarkdown(text) as unknown as MarkdownToken[],
 					assistantText: message => stock.assistantText(message as Parameters<typeof stock.assistantText>[0]),
 					commandFromToolCall: call => stock.commandFromToolCall(call),
 				}),
@@ -663,7 +666,7 @@ export const methods: BridgeMethods = {
 		/** `/open`: stock's TUI command opens the newest http(s) link of an assistant message.
 		 * Late imports for the same reason as `composer.copy_targets`. */
 		"composer.last_link": async (_params, env) => {
-			const stock = await import("./omp/pi-tui/overlays/copy-targets");
+			const stock = await import("./omp/pi-coding-agent/modes/view-model/overlays/copy-targets");
 			const { buildTranscript } = await import("./session-display");
 			const transcript = await buildTranscript(env.session().sessionManager);
 			const messages = transcript.messages as unknown as Parameters<typeof stock.extractLastLink>[0];

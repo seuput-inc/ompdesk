@@ -1,5 +1,5 @@
 /**
- * `src/renderer/lib/emoji.ts` copies stock pi-tui `prompt/emoji-autocomplete` and its `prompt/data/emojis.json`,
+ * `src/renderer/lib/emoji.ts` copies stock pi-coding-agent `autocomplete/emoji` and its `autocomplete/data/emojis.json`,
  * because completion runs on every keystroke in the renderer, where omp is not loaded. The installed omp's
  * functions answer the same text here, and the shortcode table is stock's file byte for byte.
  */
@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
 import { expandEmoticons, getEmojiSuggestions, tryEmojiInlineReplace } from "../renderer/lib/emoji";
 import { runStock, stockSource } from "./test-bridge-probe";
 
-const autocomplete = stockSource("pi-tui", path.join("prompt", "emoji-autocomplete.ts"));
-const table = stockSource("pi-tui", path.join("prompt", "data", "emojis.json"));
+const autocomplete = stockSource("pi-coding-agent", path.join("autocomplete", "emoji.ts"));
+const table = stockSource("pi-coding-agent", path.join("autocomplete", "data", "emojis.json"));
 
 /** Text before the cursor: shortcodes, every emoticon on a terminator, boundaries, and prose that must stay. */
 const TYPED = [
@@ -60,7 +60,7 @@ const MESSAGES = [
 	":",
 ];
 
-describe.skipIf(!autocomplete || !table)("emoji completion against the installed stock pi-tui", () => {
+describe.skipIf(!autocomplete || !table)("emoji completion against the installed stock pi-coding-agent", () => {
 	it("ships stock's shortcode table byte for byte", () => {
 		const ours = readFileSync(path.join(__dirname, "..", "renderer", "lib", "data", "emojis.json"));
 		expect(ours.equals(readFileSync(table ?? ""))).toBe(true);

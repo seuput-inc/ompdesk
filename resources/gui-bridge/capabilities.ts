@@ -256,8 +256,8 @@ function union(...parts: readonly FeatureRequirement[]): FeatureRequirement {
 const READ_GROUPS: FeatureRequirement = {
 	modules: {
 		[`${AGENT}/internal-urls/router`]: ["InternalUrlRouter.instance()", "InternalUrlRouter.prototype.spec()"],
-		"@oh-my-pi/pi-tui/tools/url-scheme-host": ["splitUrlScheme()"],
-		"@oh-my-pi/pi-tui/tools/read": ["splitPathAndSel()"],
+		[`${AGENT}/internal-urls/url-scheme`]: ["splitUrlScheme()"],
+		[`${AGENT}/tools/details/read`]: ["splitPathAndSel()"],
 	},
 };
 
@@ -314,14 +314,15 @@ const MCP_LIST: FeatureRequirement = {
 		[`${AGENT}/mcp/oauth-credentials`]: ["hasMcpAuthorizationHeader()", "lookupMcpOAuthCredential()"],
 		[`${AGENT}/mcp/oauth-discovery`]: ["analyzeAuthError()"],
 		[`${AGENT}/mcp/settings`]: ["cfgMcpEnableProjectConfig.get()"],
-		"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": ["inferMcpTransport()"],
+		[`${AGENT}/extensibility/inventory/mcp-runtime`]: ["inferMcpTransport()"],
 		[UTILS]: ["getMCPConfigPath()"],
 	},
 };
 
 /**
  * extensions/mcp.ts `reloadMcpServers`: stock's `MCPCommandController.reloadServers` on a context the bridge builds
- * (manager, session, settings), so what that controller asks of the session and the manager is listed.
+ * (manager, session, settings), so what that controller asks of the session and the manager is listed; its warning
+ * view is painted to text by stock's offline renderer in the plain theme.
  */
 const MCP_RELOAD: FeatureRequirement = {
 	session: [
@@ -334,6 +335,8 @@ const MCP_RELOAD: FeatureRequirement = {
 	],
 	modules: {
 		[`${AGENT}/modes/controllers/mcp-command-controller`]: ["MCPCommandController.prototype.reloadServers()"],
+		"@oh-my-pi/pi-tui/term/render": ["renderBlock()"],
+		"@oh-my-pi/pi-tui/theme/plain": ["PLAIN_THEME"],
 		[`${AGENT}/mcp/manager`]: [
 			"MCPManager.instance()",
 			"MCPManager.prototype.disconnectAll()",
@@ -633,7 +636,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	contextReport: { session: ["getContextBreakdown()", "model"] },
 	jobs: {
 		session: ["getAsyncJobTree()", "inspectAsyncJob()"],
-		modules: { "@oh-my-pi/pi-tui/overlays/job-tree": ["buildJobTree()"] },
+		modules: { [`${AGENT}/modes/view-model/overlays/job-tree`]: ["buildJobTree()"] },
 	},
 	cancelJob: { session: ["cancelAsyncJob()"] },
 	cycleModelBackward: { session: ["cycleModel()"] },
@@ -680,15 +683,19 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	skillCount: { session: ["skills"] },
 	dequeue: { session: ["popLastQueuedMessage()", "getQueuedMessages()"] },
-	/** With `buildTranscript`'s internals: the targets come from session-display's replay of the journal. */
+	/**
+	 * With `buildTranscript`'s internals: the targets come from session-display's replay of the journal, the code and
+	 * quote blocks from stock's markdown lexer (copy-targets.ts `markdownBlocks`).
+	 */
 	copyTargets: union(TRANSCRIPT_REPLAY, {
 		modules: {
-			"@oh-my-pi/pi-tui/overlays/copy-targets": ["extractBlocks()", "commandFromToolCall()", "assistantText()"],
+			[`${AGENT}/modes/view-model/overlays/copy-targets`]: ["commandFromToolCall()", "assistantText()"],
+			"@oh-my-pi/pi-tui/text/markdown/lexer": ["lexMarkdown()"],
 		},
 	}),
 	/** The newest link of the replayed transcript, as copyTargets. */
 	lastLink: union(TRANSCRIPT_REPLAY, {
-		modules: { "@oh-my-pi/pi-tui/overlays/copy-targets": ["extractLastLink()"] },
+		modules: { [`${AGENT}/modes/view-model/overlays/copy-targets`]: ["extractLastLink()"] },
 	}),
 	localPaste: {
 		session: ["sessionManager.getArtifactsDir()", "sessionManager.getSessionId()"],
@@ -1351,7 +1358,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/capability`]: ["loadCapability()", "isForeignUserProvider()", "isUserSourceEnabled()"],
 			[`${AGENT}/mcp/config-writer`]: ["addMCPServer()"],
 			[`${AGENT}/mcp/manager`]: ["MCPManager.prototype.waitForStartup()"],
-			"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": ["inferMcpTransport()"],
+			[`${AGENT}/extensibility/inventory/mcp-runtime`]: ["inferMcpTransport()"],
 			[UTILS]: ["getMCPConfigPath()"],
 		},
 	}),
@@ -1601,17 +1608,15 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[UTILS]: ["getBlobsDir()"],
 		},
 	},
-	themes: {
-		modules: {
-			"@oh-my-pi/pi-tui/theme": ["getResolvedThemeColors()"],
-		},
-	},
+	/** The package index's theme service (`ui/theme/service`, which omp's bundle registers only through the root). */
+	themes: { pkg: ["getResolvedThemeColors()"] },
 	/** settings_schema, guarded with thinkingDefault too: it re-checks OMPdesk's thinking defaults first. */
 	settingsSchema: {
 		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/all-settings`]: ["orderedSettings()"],
-			"@oh-my-pi/pi-tui/overlays/settings-defs": ["SETTING_TABS", "TAB_GROUPS", "TAB_METADATA"],
+			[`${AGENT}/config/settings-defs`]: ["SETTING_TABS", "TAB_GROUPS"],
+			[`${AGENT}/ui/overlays/settings/pages`]: ["SETTINGS_PAGES"],
 			[UTILS]: ["getAgentDir()", "MAIN_CONFIG_FILENAMES"],
 		},
 	},
@@ -2100,7 +2105,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		modules: {
 			[`${AGENT}/session/model-compaction-threshold`]: ["describeModelCompactionPoint()"],
 			[`${AGENT}/modes/model-browser-source`]: ["createModelBrowserSource()"],
-			"@oh-my-pi/pi-tui/overlays/model-browser": ["resolveRoleAssignments()"],
+			[`${AGENT}/modes/view-model/overlays/model-browser`]: ["resolveRoleAssignments()"],
 		},
 	},
 	/** compaction_limits: a typed limit checked and formatted by stock's own parser, before `settings_set` writes it. */
@@ -2126,7 +2131,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"sessionManager.recordRecap()",
 		],
 		modules: {
-			"@oh-my-pi/pi-tui/render/render-utils": ["previewLine()", "TRUNCATE_LENGTHS"],
+			[`${AGENT}/utils/render-utils`]: ["previewLine()", "TRUNCATE_LENGTHS"],
 		},
 	},
 	/** prompt-origin.ts: a host tab journals its device per user message (public `message_end` hook). */
@@ -2161,7 +2166,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		],
 		modules: {
 			[`${AGENT}/session/messages`]: ["convertToLlm()"],
-			"@oh-my-pi/pi-tui/status-line/context-usage": ["estimateToolSchemaTokens()", "claimPromptSources()"],
+			[`${AGENT}/session/context-usage`]: ["estimateToolSchemaTokens()", "claimPromptSources()"],
 		},
 	},
 	/** context.entry: one entry's text as the provider gets it (a tool's schema as stock serializes it). */
@@ -2175,7 +2180,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		],
 		modules: {
 			[`${AGENT}/session/messages`]: ["convertToLlm()"],
-			"@oh-my-pi/pi-tui/status-line/context-usage": ["claimPromptSources()"],
+			[`${AGENT}/session/context-usage`]: ["claimPromptSources()"],
 			"@oh-my-pi/pi-ai/utils/schema": ["toolWireSchema()"],
 		},
 	},
@@ -2263,7 +2268,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		// stock-helper/images.ts `image.toModel`: a phone's HEIC/HEIF made model-safe with stock's image path.
 		session: [],
 		modules: {
-			"@oh-my-pi/pi-tui/chat/image-loading": ["ensureSupportedImageInput()"],
+			[`${AGENT}/utils/image-input`]: ["ensureSupportedImageInput()"],
 			[`${AGENT}/utils/image-resize`]: ["resizeImage()"],
 		},
 	},
@@ -2284,15 +2289,15 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	askForm: {
 		session: ["extensionRunner.hasUI()", "extensionRunner.getUIContext()"],
 		modules: {
-			"@oh-my-pi/pi-tui/html-form/parse": ["parseHtmlForm()", "spansText()"],
-			"@oh-my-pi/pi-tui/html-form/data": [
+			[`${AGENT}/tools/html-form/parse`]: ["parseHtmlForm()", "spansText()"],
+			[`${AGENT}/tools/html-form/data`]: [
 				"fieldQuestions()",
 				"choiceValue()",
 				"textValue()",
 				"fieldError()",
 				"defaultFormData()",
 			],
-			"@oh-my-pi/pi-tui/render/render-utils": ["disambiguateDisplayLabels()"],
+			[`${AGENT}/utils/render-utils`]: ["disambiguateDisplayLabels()"],
 		},
 	},
 	/** image-subscription.ts: the public `tool_call` hook (`input`, `block`) only. Imports nothing from omp. */
@@ -2353,6 +2358,8 @@ export const COPY_SAFE: Readonly<Record<string, string>> = {
 	[`${AGENT}/tts/tts-client`]:
 		"NOT harmless, kept for want of a route: omp's bundle has no `tts/*` at all and only stock's `tts` tool reaches its client, falling through to cloud voices the speech role lists (read-aloud stays local). The copy runs its own worker and, uninitialised, takes the tiny-model device and dtype from the environment instead of `providers.tinyModel*` (needs `tts/*` in omp's bundle upstream)",
 	[`${AGENT}/tts/wav`]: "the WAV encoder: pure",
+	[`${AGENT}/ui/overlays/settings/pages`]:
+		"the settings tabs' labels: constant data importing nothing at run time; omp's bundle registers no `ui/*` module",
 };
 
 /**

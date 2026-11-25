@@ -45,7 +45,7 @@ async function compactionPoints(session: AgentSession, selector?: string) {
 
 	const [{ createModelBrowserSource }, { resolveRoleAssignments }] = await Promise.all([
 		import("./omp/pi-coding-agent/modes/model-browser-source"),
-		import("./omp/pi-tui/overlays/model-browser"),
+		import("./omp/pi-coding-agent/modes/view-model/overlays/model-browser"),
 	]);
 	// The models the hub's Roles view shows: configured values over the whole
 	// catalog, auto picks over the usable models.

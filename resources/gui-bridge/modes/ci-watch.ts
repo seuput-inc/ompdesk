@@ -11,10 +11,10 @@
  */
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { GhRunJobSnapshot, GhRunSnapshot } from "@oh-my-pi/pi-coding-agent/tools/details/github";
 import type * as GhCommon from "@oh-my-pi/pi-coding-agent/tools/gh-common";
 import type * as GhRunWatch from "@oh-my-pi/pi-coding-agent/tools/gh-run-watch";
 import type * as GithubUtils from "@oh-my-pi/pi-coding-agent/utils/github";
-import type { GhRunJobSnapshot, GhRunSnapshot } from "@oh-my-pi/pi-tui/tools/github";
 import { guard, probe } from "../health";
 import { CI_MESSAGE_TYPE, CI_WATCH_END_ENTRY, CI_WATCH_ENTRY, type CiResultDetails } from "./ci-watch-contracts";
 import {

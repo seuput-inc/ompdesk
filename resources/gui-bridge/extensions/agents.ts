@@ -212,10 +212,9 @@ export const methods: BridgeMethods = {
 	}),
 	...guard("themes", {
 		/** Resolved CSS colors (variable refs and ANSI-256 indices resolved) keyed by theme token. */
-		get_theme_colors: async params => {
+		get_theme_colors: async (params, env) => {
 			const name = requireString(paramsOf(params), "name");
-			const { getResolvedThemeColors } = await import("../omp/pi-tui/theme");
-			return { name, colors: await getResolvedThemeColors(name) };
+			return { name, colors: await env.pi.pi.getResolvedThemeColors(name) };
 		},
 	}),
 };

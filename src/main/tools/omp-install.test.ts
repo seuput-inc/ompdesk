@@ -97,7 +97,8 @@ describe.skipIf(bun === null)("omp update through the tools instance with a real
 	};
 	const older = release(MIN_OMP_VERSION);
 	const newer = release(`${major}.${minor + 1}.0`);
-	const tested = release(TESTED_OMP_VERSION);
+	/** The newest release of the tested major, above `newer` even when the floor is the tested version. */
+	const tested = release(`${testedMajor}.99.0`);
 	/** A major this OMPdesk was never tested with. */
 	const beyond = release(`${testedMajor + 1}.0.0`);
 	let latest = older.version;

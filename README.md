@@ -73,7 +73,7 @@
 
 macOS first open: the build is signed but not notarized, so right-click the app and choose **Open** once. Windows SmartScreen: **More info → Run anyway**.
 
-Needs macOS 14 or newer on Apple Silicon, or Windows 10/11 x64. omp 18.18.9 or newer, installed for you.
+Needs macOS 14 or newer on Apple Silicon, or Windows 10/11 x64. omp 19.2.0 or newer, installed for you.
 
 ## Updates
 
@@ -105,7 +105,7 @@ OMPdesk, omp, the CLIs of your connected accounts, and omp's plugins, skills and
 
 ## Build from source
 
-Needs Bun, Git, the Rust version pinned in `native/ompdesk/rust-toolchain.toml`, and omp 18.18.9 or newer.
+Needs Bun, Git, the Rust version pinned in `native/ompdesk/rust-toolchain.toml`, and omp 19.2.0 or newer.
 
 ```bash
 git clone https://github.com/seuput-inc/ompdesk.git

@@ -39,14 +39,14 @@ export const OMP_PACKAGE_MODULES = [
 	"pi-coding-agent/session/session-manager",
 	"pi-coding-agent/session/session-storage",
 	"pi-coding-agent/session/session-title-slot",
+	"pi-coding-agent/session/transcript/transcript-entry",
 	"pi-coding-agent/skillshare/client",
 	"pi-coding-agent/skillshare/installer",
 	"pi-coding-agent/skillshare/manifest",
 	"pi-coding-agent/task/settings",
+	"pi-coding-agent/utils/image-input",
 	"pi-coding-agent/utils/image-resize",
 	"pi-natives",
-	"pi-tui/chat/image-loading",
-	"pi-tui/chat/transcript-entry",
 	"pi-utils",
 ] as const;
 

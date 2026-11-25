@@ -38,12 +38,13 @@ import {
 
 /**
  * Oldest omp whose RPC surface and bridge-extension internals this GUI is written
- * against. 18.18.9 is the first omp that records where it built each instruction file
- * and skill into the system prompt (`session.systemPromptSources`, pi-tui
- * `claimPromptSources`) and counts them as their own categories; Settings' context
- * inspector (gui-bridge context-inspect.ts) lists them from those sources, and the
- * per-skill estimator it used before (`estimateSkillsTokens`) is gone from 18.18.9.
- * Earlier floors: 18.18.2's `logoutCredential(session, …)`
+ * against. 19.2.0 replaced pi-tui with a reactive TUI framework and moved the old
+ * package's helpers the bridge reuses into pi-coding-agent (`modes/view-model/overlays/*`,
+ * `session/context-usage`, `tools/html-form/*`, `utils/render-utils`, …), the only
+ * subpaths its bundle serves; 19.1.x has none of them.
+ * Earlier floors: 18.18.9's `session.systemPromptSources` and `claimPromptSources`,
+ * which Settings' context inspector (gui-bridge context-inspect.ts) lists the prompt's
+ * sources from; 18.18.2's `logoutCredential(session, …)`
  * (`slash-commands/helpers/logout`), which Settings' Disconnect calls (`provider_logout`,
  * gui-bridge settings.ts); 18.13.2's `AgentSession.enableIdleMaintenance`, stock's idle
  * compaction and recap scheduler the bridge opts each session into (`idle-maintenance.ts`);
@@ -56,7 +57,7 @@ import {
  * `worktree.onStart`/`onExit` (18.8.6), per-model compaction limits and account
  * identity keys (18.8.7), stock's project-scoped memory backend call (18.11.0).
  */
-export const MIN_OMP_VERSION = "18.18.9";
+export const MIN_OMP_VERSION = "19.2.0";
 
 /**
  * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`, moved by the omp bump). OMPdesk

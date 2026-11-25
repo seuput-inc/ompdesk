@@ -43,7 +43,7 @@ async function deliverRecap(session: AgentSession, reply: string): Promise<void>
 	// UTF-8 the model wrote as Windows-1252 ("ì§€ê¸ˆ") is no recap: not shown.
 	if (isUtf8Mojibake(reply)) return;
 	// Deferred: stock internals load only after `guard` checked the feature.
-	const { previewLine, TRUNCATE_LENGTHS } = await import("./omp/pi-tui/render/render-utils");
+	const { previewLine, TRUNCATE_LENGTHS } = await import("./omp/pi-coding-agent/utils/render-utils");
 	const preview = previewLine(reply, TRUNCATE_LENGTHS.RECAP);
 	if (!preview) return;
 	// The hook may have left the request path of a session that held no recap: back before the recap lands, and held

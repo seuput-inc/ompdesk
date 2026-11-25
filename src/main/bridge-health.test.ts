@@ -210,7 +210,7 @@ describe("BridgeHealth record", () => {
 		ompVersion: "19.0.0",
 		unavailable: [
 			{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
-			{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+			{ feature: "jobs", missing: ["@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree#buildJobTree"] },
 		],
 	}));
 	const healthy = fakeBridge(async () => ({ ompVersion: "19.0.1", unavailable: [] }));
@@ -241,7 +241,10 @@ describe("BridgeHealth record", () => {
 					ok: false,
 					unavailable: [
 						{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
-						{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+						{
+							feature: "jobs",
+							missing: ["@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree#buildJobTree"],
+						},
 					],
 					level: "warn",
 				},
@@ -287,7 +290,10 @@ describe("BridgeHealth record", () => {
 					running: 2,
 					unavailable: [
 						{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
-						{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+						{
+							feature: "jobs",
+							missing: ["@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree#buildJobTree"],
+						},
 					],
 				},
 				{ ompVersion: "19.0.1", at: 1_002, ok: true, running: 0, unavailable: [] },
@@ -343,7 +349,10 @@ describe("BridgeHealth record", () => {
 						level: "warn",
 						unavailable: [
 							{ feature: "abortCompaction", missing: ["AgentSession.abortCompaction"] },
-							{ feature: "jobs", missing: ["@oh-my-pi/pi-tui/overlays/job-tree#buildJobTree"] },
+							{
+								feature: "jobs",
+								missing: ["@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree#buildJobTree"],
+							},
 						],
 					},
 				},

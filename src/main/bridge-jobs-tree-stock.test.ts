@@ -11,7 +11,7 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  * `cancelAsyncJob` refuses it (stock cancels only the jobs the session's own agent owns, and its jobs sheet offers
  * Cancel on those alone), and the bridge's `composer.jobs` turns stock's `buildJobTree` into rows that say the same:
  * nested one level under the task job that runs the subagent, `cancellable` false. The jobs actions stay available, so
- * `pi-tui/overlays/job-tree` is this omp's own module and not a separate copy.
+ * `modes/view-model/overlays/job-tree` is this omp's own module and not a separate copy.
  */
 
 const HELPER = `

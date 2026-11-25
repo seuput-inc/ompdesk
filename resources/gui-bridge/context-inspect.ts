@@ -3,7 +3,7 @@
  * context holds, entry by entry. Stock's `/context` (`getContextBreakdown`)
  * gives the category totals; this lists every tool, skill, instruction file,
  * system prompt block and message the provider gets, each counted with the
- * session's own tokenizer as stock counts it (`pi-tui/status-line/context-usage.ts`
+ * session's own tokenizer as stock counts it (`session/context-usage.ts`
  * `estimateToolSchemaTokens` per tool; instruction files and skills located by
  * stock's prompt sources through `claimPromptSources`; `Tokenizer.countMessage`),
  * and splits the tools by source (built-in, MCP, extension) the way
@@ -55,7 +55,7 @@ function messageTimestamp(message: object): number {
  * prompt sources still claim the blocks it built.
  */
 async function turnPrompt(session: AgentSession) {
-	const { claimPromptSources } = await import("./omp/pi-tui/status-line/context-usage");
+	const { claimPromptSources } = await import("./omp/pi-coding-agent/session/context-usage");
 	const stock = session.systemPrompt;
 	const parts = withTurnSections(stock, sectionContext(session));
 	return { parts, stockBlocks: stock.length, claims: claimPromptSources(parts, session.systemPromptSources).byBlock };
@@ -105,7 +105,7 @@ async function inspect(session: AgentSession, withEntries: boolean) {
 	});
 
 	// A one-tool roster is summed by the same estimator stock uses for the whole set.
-	const { estimateToolSchemaTokens } = await import("./omp/pi-tui/status-line/context-usage");
+	const { estimateToolSchemaTokens } = await import("./omp/pi-coding-agent/session/context-usage");
 	const revision = session.settings.revision;
 	for (const tool of tools) {
 		const category = TOOL_CATEGORY[toolSource(session, tool.name)];
