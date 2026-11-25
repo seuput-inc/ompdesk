@@ -1,5 +1,5 @@
 /**
- * The GUI's background-jobs rows: stock's tree layout (`pi-tui/overlays/job-tree` `buildJobTree`, passed in) over the
+ * The GUI's background-jobs rows: stock's tree layout (`modes/view-model/overlays/job-tree` `buildJobTree`, passed in) over the
  * running jobs then the recent ones, each job with the output stock's `inspectAsyncJob` has for it.
  */
 import type { BridgeJobItem, BridgeJobRow } from "./jobs-contracts";

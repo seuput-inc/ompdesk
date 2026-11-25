@@ -58,7 +58,7 @@ async function loadStockFirstPrompt(): Promise<StockFirstPrompt | null> {
 	try {
 		const [loader, transcript] = await Promise.all([
 			loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-loader"),
-			loadOmpModule<Record<string, unknown>>("pi-tui/chat/transcript-entry"),
+			loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/transcript/transcript-entry"),
 		]);
 		const { visitEntriesFromFileStream } = loader;
 		const { textContent } = transcript;

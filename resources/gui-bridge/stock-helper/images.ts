@@ -24,7 +24,7 @@ function imageBlock(params: unknown): ImageBlock {
 async function stockImageModules() {
 	// Runtime-selected: the image path belongs to the user's resolved omp installation.
 	const [loading, resize] = await Promise.all([
-		import(ompModuleFile("pi-tui/chat/image-loading")),
+		import(ompModuleFile("pi-coding-agent/utils/image-input")),
 		import(ompModuleFile("pi-coding-agent/utils/image-resize")),
 	]);
 	if (typeof loading.ensureSupportedImageInput !== "function" || typeof resize.resizeImage !== "function") {

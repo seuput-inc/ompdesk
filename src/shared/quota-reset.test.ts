@@ -58,6 +58,7 @@ describe("isLimitWording and isBillingCap", () => {
 		"Monthly usage limit reached",
 		"GoUsageLimitError: weekly limit",
 		"ResourceExhausted: quota exceeded for this project",
+		"429 This request would exceed your available credits given your current in-flight requests",
 	])("%s is a limit that passes with time", message => {
 		expect(isLimitWording(message)).toBe(true);
 		expect(isBillingCap(message)).toBe(false);
@@ -68,7 +69,6 @@ describe("isLimitWording and isBillingCap", () => {
 		"You exceeded your current quota, please check your plan and billing details",
 		"insufficient_quota",
 		"Your credit balance is too low (insufficient funds)",
-		"This request would exceed your available credits given your current in-flight requests",
 		"Your prepaid balance is used up: Add funds or enable auto top-up",
 		"You have reached your monthly spend limit",
 		"Your project has exceeded its monthly spending cap",

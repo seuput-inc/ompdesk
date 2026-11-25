@@ -1984,6 +1984,20 @@ export const KO_SETTINGS: Record<string, { label: string; description?: string }
 		label: "Vim 모드 표시",
 		description: "현재 Vim 모드(예: NORMAL / INSERT)를 표시해요.",
 	},
+	"tui.vimShowCommand": {
+		label: "Vim 입력 중 명령 표시",
+		description:
+			"Vim의 showcmd처럼 입력 중인 명령을 상태 줄에 보여줘요. 15d는 마지막 d를 치기 전까지 보여요. 모드 표시를 숨겨도 보여요",
+	},
+	"tui.vimStartMode": {
+		label: "Vim 시작 모드",
+		description: "새 입력이 시작하는 모드예요. 시작할 때, 메시지를 보낸 뒤마다, 대화 상자의 입력란에서 적용돼요",
+	},
+	"tui.vimYankToClipboard": {
+		label: "Vim 복사를 클립보드에도 복사",
+		description:
+			'Vim에서 clipboard=unnamed처럼 Vim으로 복사(yank)할 때마다 시스템 클립보드에도 복사해요. 끄면 "+y와 "*y만 클립보드에 복사해요',
+	},
 	"magicKeywords.chillax": {
 		label: "Chillax 키워드",
 		description:

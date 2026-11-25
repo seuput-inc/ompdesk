@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.144.0] - 2026-11-25
+
+omp 19.2.0에서 꺼지던 OMPdesk 기능 19개가 다시 동작합니다. 이제 omp 19.2.0 이상이 필요하고, OMPdesk가 알아서 맞는 omp로 업데이트합니다.
+
+- 백그라운드 작업 목록, `/copy`, `/open`, MCP 서버 관리, 테마, 설정 화면, 컨텍스트 들여다보기, 에이전트 질문 양식 등이 omp 19.2.0에서 다시 켜집니다.
+- 끊긴 턴을 앱이 이어가지 못할 때, 그 자리에서 이어가기를 제안합니다. 연결된 컴퓨터와 휴대폰에서도 보입니다. omp가 계속 죽으면 이어가기를 멈춥니다.
+- 대기 중인 메시지가 omp가 다시 시작돼도 남고, 고치는 동안에는 보내지지 않습니다. 멈춤(Stop)이 전달되지 않았거나 거절되면 그렇다고 알려 줍니다.
+- 에이전트가 연 하위 세션이 어떻게 끝났는지(끝남, 다시 시도, 대기, 닫힘)를 연 쪽이 알 수 있고, 멈추는 중인 하위 세션은 작업판에 "멈추는 중"으로 보입니다.
+- 세션이 푸시한 커밋의 CI 결과가 턴 사이에 한 줄로 전해지고, GitHub 화면은 창으로 돌아오면 다시 읽습니다.
+- 색, 글꼴, 채팅 칼럼과 표면을 새 디자인으로 바꿨습니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+The 19 OMPdesk features that went off with omp 19.2.0 work again. OMPdesk now needs omp 19.2.0 or newer and updates omp to a matching version by itself.
+
+- The background job list, `/copy`, `/open`, MCP server management, themes, the settings screen, the context inspector and the agent question form work again on omp 19.2.0.
+- When the app cannot continue a cut-off turn, it offers to continue it in place, on a paired computer's view and the phone too. Continuations stop after repeated omp deaths.
+- Queued messages outlive their omp, and a queued message being edited is not sent. A Stop that was lost or refused now says so.
+- An agent learns how each child session it opened ended (finished, retried, waiting, closed), and a child being stopped reads "Stopping" on its board.
+- CI results of a session's pushes reach it as one line between turns, and GitHub views read again when the window comes back.
+- New colors, fonts, chat column and surfaces.
+
+Known issue: on macOS, pressing the Right arrow key in the composer can insert an icon-like character; this is being investigated.
+
 ## [0.143.0] - 2026-11-25
 
 앱이 작업 중에 내부 연결을 끊고 다시 시작하던 문제를 고쳤고, 설정·업데이트·기계 설정을 맡는 부분을 Rust로 옮겼습니다.

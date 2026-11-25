@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 // omp without `buildJobTree`: the module is there, the export is gone (as omp 19 dropped two AgentSession members).
-vi.mock("@oh-my-pi/pi-tui/overlays/job-tree", () => ({}));
+vi.mock("@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree", () => ({}));
 
 const { methods } = await import("../../resources/gui-bridge/composer");
 
@@ -60,7 +60,7 @@ describe("composer actions on an omp missing one internal", () => {
 		const env = envWith(sessionWithoutAbortCompaction());
 		await expect(methods["composer.jobs"]({}, env)).rejects.toMatchObject({
 			code: "unsupported_omp",
-			message: expect.stringMatching(/missing @oh-my-pi\/pi-tui\/overlays\/job-tree#buildJobTree/),
+			message: expect.stringMatching(/missing @oh-my-pi\/pi-coding-agent\/modes\/view-model\/overlays\/job-tree#buildJobTree/),
 		});
 		await expect(methods["composer.cancel_job"]({ id: "job-1" }, env)).resolves.toEqual({ cancelled: true });
 	});

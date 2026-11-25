@@ -1,13 +1,47 @@
 /**
- * GUI copy-picker ranking, tree labels and handoff adapter. Markdown/text/tool
- * extraction is supplied by stock pi-tui/overlays/copy-targets in the bridge.
+ * GUI copy-picker ranking, tree labels and handoff adapter. Text and tool extraction is stock's
+ * (`modes/view-model/overlays/copy-targets`), markdown tokens stock's lexer, both supplied by the bridge.
  */
 import type { AgentMessage, CopyTarget, MessageContent } from "../../src/shared/rpc-types";
 
+/** A token of stock's markdown lexer (`pi-tui/text/markdown/lexer` `lexMarkdown`): the fields read here. */
+export interface MarkdownToken {
+	type: string;
+	text?: string;
+	lang?: string;
+	codeBlockStyle?: string;
+	tokens?: MarkdownToken[];
+	items?: MarkdownToken[];
+}
+
 export interface CopyExtractors {
-	extractBlocks(text: string): Array<{ kind: "code"; lang: string; code: string } | { kind: "quote"; text: string }>;
+	lexMarkdown(text: string): MarkdownToken[];
 	assistantText(message: AgentMessage): string | undefined;
 	commandFromToolCall(content: Extract<MessageContent, { type: "toolCall" }>): RunnableCommand | undefined;
+}
+
+type MessageBlock = { kind: "code"; lang: string; code: string } | { kind: "quote"; text: string };
+
+/**
+ * Code and quote blocks of a message as stock's `/copy` finds them: the code and quote half of
+ * `ui/overlays/pickers/copy-selector.tsx` `markdownBlocks` (top level and inside lists; indented code is not a block).
+ * A copy because omp's bundle registers no `ui/*` module, so importing stock's would load a second module graph of
+ * its UI; src/main/local/copy-targets.test.ts pins it to stock.
+ */
+export function markdownBlocks(tokens: readonly MarkdownToken[]): MessageBlock[] {
+	const blocks: MessageBlock[] = [];
+	const walk = (list: readonly MarkdownToken[] | undefined): void => {
+		for (const token of list ?? []) {
+			if (token.type === "code" && token.codeBlockStyle !== "indented") {
+				blocks.push({ kind: "code", lang: (token.lang ?? "").trim(), code: token.text ?? "" });
+			} else if (token.type === "blockquote") {
+				blocks.push({ kind: "quote", text: (token.text ?? "").replace(/\n+$/, "") });
+			} else if (token.type === "list") walk(token.items);
+			else if (token.type === "list_item") walk(token.tokens);
+		}
+	};
+	walk(tokens);
+	return blocks;
 }
 
 interface RunnableCommand {
@@ -39,7 +73,7 @@ function firstLine(text: string): string {
 function messageTarget(text: string, rank: number, stock: CopyExtractors): CopyTarget {
 	const id = `msg:${rank}`;
 	const label = firstLine(text);
-	const blocks = stock.extractBlocks(text);
+	const blocks = markdownBlocks(stock.lexMarkdown(text));
 	const copyMessage = rank === 1 ? "Copied last message to clipboard" : "Copied message to clipboard";
 	if (blocks.length === 0) return { id, label, hint: pluralLines(text), preview: text, content: text, copyMessage };
 

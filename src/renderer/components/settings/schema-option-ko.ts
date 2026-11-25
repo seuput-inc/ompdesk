@@ -1013,6 +1013,15 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	Suggest: "제안만",
 	"Classify each task and report the decision without arming prewalk":
 		"작업마다 분류해 결과만 알리고 사전 탐색은 켜지 않아요",
+	"Classify each task and report the decision, and whether Escalate would plan on another model, without arming prewalk":
+		"작업마다 분류해 결과와 함께 상향 모드라면 다른 모델로 계획할지를 알리고, 사전 탐색은 켜지 않아요",
+	Escalate: "상향",
+	"Like On, but plan on the Prewalk planning model (prewalk.from) first: a confidently front-loaded task moves there before setup and hands off from it; the next task starts back where this one started. When the planning model is already active, this is On, except that '@initial' then has nothing to hand back to":
+		"켜기와 같지만 먼저 사전 탐색 계획 모델(prewalk.from)에서 계획해요. 앞단 추론이 확실한 작업은 준비 전에 그 모델로 옮겨 가서 거기서 넘겨줘요. 다음 작업은 이 작업이 시작한 모델에서 다시 시작해요. 계획 모델이 이미 사용 중이면 켜기와 같지만, 그때는 '@initial'이 돌려줄 대상이 없어요",
+	Insert: "입력",
+	Normal: "노멀",
+	"Start on Vim commands; i, a, o and the like to type": "Vim 명령 모드로 시작해요. 입력하려면 i, a, o 등을 눌러요",
+	"Type right away; Escape for Normal mode": "바로 입력해요. Esc를 누르면 노멀 모드로 가요",
 	"For confidently front-loaded tasks, arm a handoff from the active model to the auto target; the next task starts back on the planning model":
 		"앞단 추론이 확실한 작업은 현재 모델에서 자동 대상 모델로 넘기도록 준비해요. 다음 작업은 다시 계획 모델로 시작해요",
 	"Disable the find tool": "find 도구 끄기",

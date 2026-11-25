@@ -17,7 +17,7 @@ import {
 	fieldQuestions,
 	type HtmlFormData,
 	textValue,
-} from "./omp/pi-tui/html-form/data";
+} from "./omp/pi-coding-agent/tools/html-form/data";
 import {
 	type FormBlock,
 	type FormField,
@@ -25,8 +25,8 @@ import {
 	type HtmlForm,
 	parseHtmlForm,
 	spansText,
-} from "./omp/pi-tui/html-form/parse";
-import { disambiguateDisplayLabels } from "./omp/pi-tui/render/render-utils";
+} from "./omp/pi-coding-agent/tools/html-form/parse";
+import { disambiguateDisplayLabels } from "./omp/pi-coding-agent/utils/render-utils";
 import type { BridgeMethods } from "./types";
 
 export const methods: BridgeMethods = {

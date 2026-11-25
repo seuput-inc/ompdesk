@@ -191,9 +191,10 @@ function provenanceReader(settings: SettingsLike, globalPath: string) {
 
 async function settingsSchema(session: AgentSession) {
 	await syncThinkingDefault(session.settings);
-	const [{ orderedSettings }, { SETTING_TABS, TAB_GROUPS, TAB_METADATA }, globalPath] = await Promise.all([
+	const [{ orderedSettings }, { SETTING_TABS, TAB_GROUPS }, { SETTINGS_PAGES }, globalPath] = await Promise.all([
 		import("./omp/pi-coding-agent/config/all-settings"),
-		import("./omp/pi-tui/overlays/settings-defs"),
+		import("./omp/pi-coding-agent/config/settings-defs"),
+		import("./omp/pi-coding-agent/ui/overlays/settings/pages"),
 		globalConfigPath(),
 	]);
 	const provenance = provenanceReader(session.settings as unknown as SettingsLike, globalPath);
@@ -219,7 +220,7 @@ async function settingsSchema(session: AgentSession) {
 	});
 	const tabs = SETTING_TABS.map(tab => ({
 		id: tab,
-		label: TAB_METADATA[tab].label,
+		label: SETTINGS_PAGES[tab].label,
 		groups: [...TAB_GROUPS[tab]],
 	}));
 	return { entries, tabs };

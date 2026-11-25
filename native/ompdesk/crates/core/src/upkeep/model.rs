@@ -294,7 +294,8 @@ async fn run_smol_within(
     let own = [
         "--mode",
         "json",
-        "--no-tools",
+        // No built-in tools; not `--no-tools`, which omp 19.2 refuses beside `launch.args`' `-e`.
+        "--tools=",
         "--no-session",
         "--no-extensions",
         "--no-skills",
@@ -535,7 +536,7 @@ mod tests {
             "credit-spend-run.ts",
             "--mode",
             "json",
-            "--no-tools",
+            "--tools=",
             "--no-session",
             "--no-extensions",
             "--no-skills",

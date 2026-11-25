@@ -35,12 +35,13 @@ const HIDDEN = parseHidden(process.env.OMP_GUI_BRIDGE_PROBE_HIDE);
  * in sync with the table.
  */
 const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
-	"@oh-my-pi/pi-tui/tools/url-scheme-host": () => import("@oh-my-pi/pi-tui/tools/url-scheme-host"),
-	"@oh-my-pi/pi-tui/chat/image-loading": () => import("@oh-my-pi/pi-tui/chat/image-loading"),
+	"@oh-my-pi/pi-coding-agent/internal-urls/url-scheme": () =>
+		import("@oh-my-pi/pi-coding-agent/internal-urls/url-scheme"),
+	"@oh-my-pi/pi-coding-agent/utils/image-input": () => import("@oh-my-pi/pi-coding-agent/utils/image-input"),
 	"@oh-my-pi/pi-coding-agent/utils/image-resize": () => import("@oh-my-pi/pi-coding-agent/utils/image-resize"),
-	"@oh-my-pi/pi-tui/tools/read": () => import("@oh-my-pi/pi-tui/tools/read"),
-	"@oh-my-pi/pi-tui/html-form/parse": () => import("@oh-my-pi/pi-tui/html-form/parse"),
-	"@oh-my-pi/pi-tui/html-form/data": () => import("@oh-my-pi/pi-tui/html-form/data"),
+	"@oh-my-pi/pi-coding-agent/tools/details/read": () => import("@oh-my-pi/pi-coding-agent/tools/details/read"),
+	"@oh-my-pi/pi-coding-agent/tools/html-form/parse": () => import("@oh-my-pi/pi-coding-agent/tools/html-form/parse"),
+	"@oh-my-pi/pi-coding-agent/tools/html-form/data": () => import("@oh-my-pi/pi-coding-agent/tools/html-form/data"),
 	"@oh-my-pi/pi-agent-core": () => import("@oh-my-pi/pi-agent-core"),
 	"@oh-my-pi/pi-ai": () => import("@oh-my-pi/pi-ai"),
 	"@oh-my-pi/pi-ai/auth/blocks": () => import("@oh-my-pi/pi-ai/auth/blocks"),
@@ -209,16 +210,24 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-natives": () => import("@oh-my-pi/pi-natives"),
 	"@oh-my-pi/pi-natives/vcs": () => import("@oh-my-pi/pi-natives/vcs"),
 	"@oh-my-pi/pi-coding-agent/exec/shell-process": () => import("@oh-my-pi/pi-coding-agent/exec/shell-process"),
-	"@oh-my-pi/pi-tui/overlays/copy-targets": () => import("@oh-my-pi/pi-tui/overlays/copy-targets"),
-	"@oh-my-pi/pi-tui/overlays/job-tree": () => import("@oh-my-pi/pi-tui/overlays/job-tree"),
-	"@oh-my-pi/pi-tui/overlays/model-browser": () => import("@oh-my-pi/pi-tui/overlays/model-browser"),
-	"@oh-my-pi/pi-tui/overlays/settings-defs": () => import("@oh-my-pi/pi-tui/overlays/settings-defs"),
-	"@oh-my-pi/pi-tui/render/render-utils": () => import("@oh-my-pi/pi-tui/render/render-utils"),
-	"@oh-my-pi/pi-tui/theme": () => import("@oh-my-pi/pi-tui/theme"),
-	"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": () => import("@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime"),
+	"@oh-my-pi/pi-coding-agent/modes/view-model/overlays/copy-targets": () =>
+		import("@oh-my-pi/pi-coding-agent/modes/view-model/overlays/copy-targets"),
+	"@oh-my-pi/pi-tui/text/markdown/lexer": () => import("@oh-my-pi/pi-tui/text/markdown/lexer"),
+	"@oh-my-pi/pi-tui/term/render": () => import("@oh-my-pi/pi-tui/term/render"),
+	"@oh-my-pi/pi-tui/theme/plain": () => import("@oh-my-pi/pi-tui/theme/plain"),
+	"@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree": () =>
+		import("@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree"),
+	"@oh-my-pi/pi-coding-agent/modes/view-model/overlays/model-browser": () =>
+		import("@oh-my-pi/pi-coding-agent/modes/view-model/overlays/model-browser"),
+	"@oh-my-pi/pi-coding-agent/config/settings-defs": () => import("@oh-my-pi/pi-coding-agent/config/settings-defs"),
+	"@oh-my-pi/pi-coding-agent/ui/overlays/settings/pages": () =>
+		import("@oh-my-pi/pi-coding-agent/ui/overlays/settings/pages"),
+	"@oh-my-pi/pi-coding-agent/utils/render-utils": () => import("@oh-my-pi/pi-coding-agent/utils/render-utils"),
+	"@oh-my-pi/pi-coding-agent/extensibility/inventory/mcp-runtime": () =>
+		import("@oh-my-pi/pi-coding-agent/extensibility/inventory/mcp-runtime"),
 	"@oh-my-pi/pi-utils": () => import("@oh-my-pi/pi-utils"),
 	"@oh-my-pi/pi-utils/ar": () => import("@oh-my-pi/pi-utils/ar"),
-	"@oh-my-pi/pi-tui/status-line/context-usage": () => import("@oh-my-pi/pi-tui/status-line/context-usage"),
+	"@oh-my-pi/pi-coding-agent/session/context-usage": () => import("@oh-my-pi/pi-coding-agent/session/context-usage"),
 	"@oh-my-pi/pi-coding-agent/session/messages": () => import("@oh-my-pi/pi-coding-agent/session/messages"),
 	"@oh-my-pi/pi-coding-agent/utils/title-card": () => import("@oh-my-pi/pi-coding-agent/utils/title-card"),
 	"@oh-my-pi/pi-coding-agent/utils/title-settings": () => import("@oh-my-pi/pi-coding-agent/utils/title-settings"),

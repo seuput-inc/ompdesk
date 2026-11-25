@@ -1,8 +1,8 @@
 /**
  * The task card's review verdict (task-render-utils.ts) against stock: the
  * renderer cannot load stock modules, so its copies of `assembleYieldResult`
- * (pi-tui/src/tools/task-yield-assembly.ts, called with stock's reviewer
- * section shapes) and `parseFindingDetails` (pi-tui/src/tools/task.ts) are
+ * (pi-coding-agent/src/task/yield-sections.ts, called with stock's reviewer
+ * section shapes) and `parseFindingDetails` (pi-coding-agent/src/task/task-details.ts) are
  * run beside the installed omp's on the same yield sequences.
  */
 import { execFileSync } from "node:child_process";
@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const stockModules = path.join(os.homedir(), ".bun/install/global/node_modules");
-const stockRoot = path.join(stockModules, "@oh-my-pi/pi-tui");
+const stockRoot = path.join(stockModules, "@oh-my-pi/pi-coding-agent");
 const utils = path.resolve("src/renderer/components/tools/renderers/task-render-utils.ts");
 
 // Stock uses Bun/native modules, which cannot execute in Vitest's Node worker.
@@ -23,8 +23,8 @@ describe.skipIf(!fs.existsSync(stockRoot))("task review assembly against stock",
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			const script = `
 import assert from "node:assert/strict";
-import { assembleYieldResult } from "@oh-my-pi/pi-tui/tools/task-yield-assembly";
-import { parseFindingDetails } from "@oh-my-pi/pi-tui/tools/task";
+import { assembleYieldResult } from "@oh-my-pi/pi-coding-agent/task/yield-sections";
+import { parseFindingDetails } from "@oh-my-pi/pi-coding-agent/task/task-details";
 import { assembleReviewYield, parseFinding } from ${JSON.stringify(utils)};
 
 const shapes = new Map([

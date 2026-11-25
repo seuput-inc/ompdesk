@@ -14,7 +14,7 @@ import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPServerConfig, MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { UiNode } from "@oh-my-pi/pi-tui/node";
 import { guard } from "../health";
 import type { BridgeEnv, BridgeMethod, BridgeMethods } from "../types";
 import { installMcpConfigRenameRetry } from "./mcp-config-rename";
@@ -108,21 +108,23 @@ export function serializeMcpReload<T>(reload: () => Promise<T>): Promise<T> {
  */
 function reloadMcpServers(session: AgentSession): Promise<string | undefined> {
 	return serializeMcpReload(async () => {
-		const [manager, { MCPCommandController }] = await Promise.all([
+		const [manager, { MCPCommandController }, { renderBlock }, { PLAIN_THEME }] = await Promise.all([
 			mcpManager(),
 			import("../omp/pi-coding-agent/modes/controllers/mcp-command-controller"),
+			import("../omp/pi-tui/term/render"),
+			import("../omp/pi-tui/theme/plain"),
 		]);
 		if (!manager) throw new Error("MCP manager not available.");
 		let warning: string | undefined;
-		// reloadServers reads only these context members; its only output is the connection-error warning.
+		// reloadServers reads only these context members; its only output is the connection-error warning view.
 		const context = {
 			mcpManager: manager,
 			session,
 			settings: session.settings,
-			presentCommandOutput: (output: Component): void => {
-				warning = output.render(120).join("\n").trim();
+			presentCommandOutput: (view: () => UiNode): void => {
+				warning = renderBlock(view(), 120, { theme: PLAIN_THEME }).rows.join("\n").trim();
 			},
-		} as InteractiveModeContext;
+		} as unknown as InteractiveModeContext;
 		await new MCPCommandController(context).reloadServers();
 		return warning;
 	});
@@ -158,7 +160,7 @@ async function listMcpServers(session: AgentSession) {
 		import("../omp/pi-coding-agent/mcp/oauth-credentials"),
 		import("../omp/pi-coding-agent/mcp/oauth-discovery"),
 		import("../omp/pi-coding-agent/mcp/settings"),
-		import("../omp/pi-tui/overlays/extensions/mcp-runtime"),
+		import("../omp/pi-coding-agent/extensibility/inventory/mcp-runtime"),
 		import("../omp/pi-utils"),
 		mcpManager(),
 	]);
@@ -369,7 +371,7 @@ async function adoptServer(session: AgentSession, name: string) {
 	] = await Promise.all([
 		import("../omp/pi-coding-agent/capability"),
 		import("../omp/pi-coding-agent/mcp/config-writer"),
-		import("../omp/pi-tui/overlays/extensions/mcp-runtime"),
+		import("../omp/pi-coding-agent/extensibility/inventory/mcp-runtime"),
 		import("../omp/pi-utils"),
 	]);
 	const cwd = session.sessionManager.getCwd();

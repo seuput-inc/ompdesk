@@ -73,7 +73,7 @@
 
 macOS 첫 실행: 빌드는 서명했지만 공증은 받지 않아서, 앱을 우클릭하고 **열기**를 한 번 선택하세요. Windows SmartScreen: **추가 정보 → 실행**을 누르세요.
 
-macOS 14 이상의 Apple Silicon Mac 또는 Windows 10/11 x64가 필요해요. omp 18.18.9 이상이 필요하고, 알아서 설치돼요.
+macOS 14 이상의 Apple Silicon Mac 또는 Windows 10/11 x64가 필요해요. omp 19.2.0 이상이 필요하고, 알아서 설치돼요.
 
 ## 업데이트
 
@@ -105,7 +105,7 @@ OMPdesk, omp, 연결한 계정의 도구 CLI, omp의 플러그인·스킬·MCP �
 
 ## 소스에서 실행하기
 
-Bun, Git, `native/ompdesk/rust-toolchain.toml`에 지정된 Rust, omp 18.18.9 이상이 필요해요.
+Bun, Git, `native/ompdesk/rust-toolchain.toml`에 지정된 Rust, omp 19.2.0 이상이 필요해요.
 
 ```bash
 git clone https://github.com/seuput-inc/ompdesk.git

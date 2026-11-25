@@ -156,9 +156,10 @@ export async function prDraft(
 		{ cwd, ...input },
 		GITHUB_REPO_MS + 6 * DEFAULT_TIMEOUT_MS,
 	);
-	// The tab's guarded run reads Credit use at launch, after the checkout lookup, not before it.
+	// The tab's guarded run reads Credit use at launch, after the checkout lookup, not before it. `--tools=` (no built-in
+	// tools), not `--no-tools`: omp 19.2 refuses `--no-tools` beside the Credit use run's `-e` (stock cli/args.ts).
 	const output = await omp
-		.run(["-p", "--no-session", "--no-tools", "--no-lsp"], { cwd: root, input: prompt, timeoutMs: DRAFT_TIMEOUT_MS })
+		.run(["-p", "--no-session", "--tools=", "--no-lsp"], { cwd: root, input: prompt, timeoutMs: DRAFT_TIMEOUT_MS })
 		.catch((error: unknown) => {
 			throw new LocalCommandError(`Draft failed: ${errorText(error)}`, "pr_draft_failed");
 		});
