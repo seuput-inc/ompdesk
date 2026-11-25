@@ -144,6 +144,11 @@ export class NotificationBatcher {
 		if (batch?.entries.get(tabId)?.kind === "ask") batch.entries.delete(tabId);
 	}
 
+	/** The person looked at the tab: the window's summary no longer counts it, whatever it was. */
+	forget(windowId: number, tabId: string): void {
+		this.#batches.get(windowId)?.entries.delete(tabId);
+	}
+
 	/** A window closed: its pending summary has nobody to go to. */
 	dropWindow(windowId: number): void {
 		const batch = this.#batches.get(windowId);

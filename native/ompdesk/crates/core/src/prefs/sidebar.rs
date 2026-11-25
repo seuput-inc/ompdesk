@@ -46,9 +46,19 @@ pub enum Change {
         cwd: String,
         pinned: bool,
     },
+    /// This computer's project whose notifications the person muted (its project menu).
+    SetGroupMuted {
+        cwd: String,
+        muted: bool,
+    },
     SetSessionPinned {
         path: String,
         pinned: bool,
+    },
+    /// A session (its file) whose notifications the person muted (its row menu).
+    SetSessionMuted {
+        path: String,
+        muted: bool,
     },
     SetAgentHidden {
         path: String,
@@ -98,7 +108,9 @@ impl Change {
         let paths = |items: &[String]| items.iter().all(|item| layout_path(item));
         match self {
             Change::SetGroupPinned { cwd, .. } => layout_path(cwd),
+            Change::SetGroupMuted { cwd, .. } => layout_path(cwd),
             Change::SetSessionPinned { path, .. } => layout_path(path),
+            Change::SetSessionMuted { path, .. } => layout_path(path),
             Change::SetGroupOrder { order } => paths(order),
             Change::SetSessionOrder { list, order, moved } => {
                 layout_path(list)
@@ -119,7 +131,9 @@ impl Change {
     fn op(&self) -> &'static str {
         match self {
             Change::SetGroupPinned { .. } => "set-group-pinned",
+            Change::SetGroupMuted { .. } => "set-group-muted",
             Change::SetSessionPinned { .. } => "set-session-pinned",
+            Change::SetSessionMuted { .. } => "set-session-muted",
             Change::SetAgentHidden { .. } => "set-agent-hidden",
             Change::SetGroupAlias { .. } => "set-group-alias",
             Change::SetGroupOrder { .. } => "set-group-order",
@@ -278,6 +292,14 @@ pub fn read(value: Option<&Value>) -> Map<String, Value> {
         "agentHidden".into(),
         strings(&string_list(field("agentHidden"))),
     );
+    out.insert(
+        "mutedGroups".into(),
+        strings(&string_list(field("mutedGroups"))),
+    );
+    out.insert(
+        "mutedSessions".into(),
+        strings(&string_list(field("mutedSessions"))),
+    );
     out
 }
 
@@ -334,10 +356,20 @@ pub fn patch(state: &Map<String, Value>, change: &Change, now: f64) -> Map<Strin
             "pinnedGroups",
             with_item(list_of(state, "pinnedGroups"), cwd, *pinned),
         ),
+        Change::SetGroupMuted { cwd, muted } => list_patch(
+            state,
+            "mutedGroups",
+            with_item(list_of(state, "mutedGroups"), cwd, *muted),
+        ),
         Change::SetSessionPinned { path, pinned } => list_patch(
             state,
             "pinnedSessions",
             with_item(list_of(state, "pinnedSessions"), path, *pinned),
+        ),
+        Change::SetSessionMuted { path, muted } => list_patch(
+            state,
+            "mutedSessions",
+            with_item(list_of(state, "mutedSessions"), path, *muted),
         ),
         Change::SetAgentHidden { path, hidden } => list_patch(
             state,

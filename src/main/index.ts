@@ -76,7 +76,7 @@ import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import { SCHEDULES_STATE } from "../shared/schedules";
 import type { SetupState } from "../shared/setup";
-import { readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
+import { isMutedFolder, readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {
 	finishedWorktreeFolders,
 	type IpcSidebarProjects,
@@ -153,6 +153,7 @@ import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
 import { type PrefsStore, prefsFile, takeRecoveredPrefs } from "./prefs-store";
+import { DesktopPresence, PRESENCE_REPORT_MS, readDesktopAway } from "./presence";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
 import { HOST_TAB_GRACE_MS, LocalHostServices } from "./remote/host-services";
@@ -1122,6 +1123,24 @@ app.whenReady().then(async () => {
 			closeFinishedTabs(undefined, state);
 		},
 	});
+	// Whether the person is at this computer or at a paired one that says so (presence.ts): phones stay quiet then.
+	const presence = new DesktopPresence(() => readDesktopAway(powerMonitor));
+	/**
+	 * A tab of this computer whose session or project the person muted (a row's or a project's menu): no banner, no
+	 * phone push. A paired host's tab is the host's session, muted (or not) there.
+	 */
+	const notifyMuted = (tabId: string): boolean => {
+		const { mutedGroups, mutedSessions } = readSidebarPrefs(prefsStore().get(SIDEBAR_PREFS_KEY));
+		if (mutedGroups.length === 0 && mutedSessions.length === 0) return false;
+		const win = sidecarPool.windowOfTab(tabId);
+		const target = win ? sidecarPool.tabTarget(win, tabId) : null;
+		if (!target || target.device) return false;
+		const file = sidecarPool.sessionFileOf(tabId);
+		return (
+			(file !== undefined && mutedSessions.includes(file)) ||
+			isMutedFolder(mutedGroups, sidebarProjects.state().worktrees, target.sidecar.cwd)
+		);
+	};
 	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web) => {
 		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web);
 		// The host runs its own health check, session-kind record and bridge probe; only the probe's verdict comes
@@ -1353,6 +1372,7 @@ app.whenReady().then(async () => {
 		launchProfiles: prefs,
 		machine,
 		localTabs: sidecarPool,
+		presence,
 		summaries: sessionSummaries,
 		windowRemoteOpened: () => sidecarPool.remoteOpenedTabs(),
 		sessionOpeners: () => {
@@ -2376,6 +2396,17 @@ app.whenReady().then(async () => {
 		devices.wake("unlock");
 		wakeSshTools();
 	});
+	// Every host this computer is connected to hears whether its person is at it (presence.ts), so a person here keeps
+	// the host's phones quiet; a link that comes up hears it at once, a lock or unlock without waiting for the next beat.
+	const reportPresence = (hosts: readonly string[]) => {
+		// Unknown counts as away: it must not silence a phone.
+		const away = readDesktopAway(powerMonitor) ?? true;
+		for (const host of hosts) void devices.request(host, "presence.report", { away }).catch(() => undefined);
+	};
+	setInterval(() => reportPresence(devices.onlineHosts()), PRESENCE_REPORT_MS).unref();
+	devices.onHostOnline(host => reportPresence([host]));
+	powerMonitor.on("lock-screen", () => reportPresence(devices.onlineHosts()));
+	powerMonitor.on("unlock-screen", () => reportPresence(devices.onlineHosts()));
 	app.on("browser-window-focus", () => devices.wake("focus"));
 	// Chromium's own link state, sampled for changes the windows' events missed (a window may not exist).
 	connectivityPoll = setInterval(() => connectivity.poll(), 3000);
@@ -2493,6 +2524,11 @@ app.whenReady().then(async () => {
 		hostedTabs: hostServices,
 		summaries: sessionSummaries,
 		webTabNotice,
+		notifyMuted,
+		onTabSeen: tabId => webHost?.tabSeen(tabId),
+		pageVisible: win => webHost?.pageVisible(win) ?? false,
+		desktopAway: () => readDesktopAway(powerMonitor),
+		testPush: deviceId => webHost?.testPush(deviceId),
 		sessionWake,
 		sessionNote,
 		botHome,
@@ -2570,6 +2606,8 @@ app.whenReady().then(async () => {
 		language: () => getMainLanguage(),
 		// Routine webhooks: `POST /hooks/<schedule id>` (web/server.ts) is answered by the schedule service.
 		hooks: () => scheduleService,
+		desktopAway: () => presence.away(),
+		notifyMuted,
 		log: message => console.warn(`[web-push] ${message}`),
 	});
 	// The paired devices and the blocks are the core's: their copies are in before anything reads them (the sharing

@@ -68,18 +68,19 @@ async function asksTheUser(ask: BridgeAsk, timeoutMs: number): Promise<boolean> 
 	}
 }
 
+/** Resolves whether the notice went on to the batcher: false for a quiet bot turn, a repeat, or a malformed one. */
 export function createNotifyHandler(
 	deps: NotifyTriageDeps,
-): (caller: NotifyCaller, payload: IpcNotifyPayload) => Promise<void> {
+): (caller: NotifyCaller, payload: IpcNotifyPayload) => Promise<boolean> {
 	return async (caller, payload) => {
-		if (typeof payload?.title !== "string") return;
+		if (typeof payload?.title !== "string") return false;
 		let title = payload.title;
 		let kind = payload.kind;
 		if (kind !== "completion" && kind !== "error" && kind !== "ask") kind = undefined;
 		const body = typeof payload.body === "string" ? payload.body : undefined;
 		const tabId = typeof payload.tabId === "string" ? payload.tabId : undefined;
 		// Before the dedupe: a quiet turn takes no slot from a real notice.
-		if (kind === "completion" && tabId && quietBotTurn(deps.lastTurn(tabId))) return;
+		if (kind === "completion" && tabId && quietBotTurn(deps.lastTurn(tabId))) return false;
 		const win = caller.win;
 		const winId = win?.webContents.id ?? 0;
 		const scope = tabId && deps.isShared(tabId) ? `tab:${tabId}` : String(winId);
@@ -95,7 +96,7 @@ export function createNotifyHandler(
 			completion: kind === "completion",
 			hasTabWindow: Boolean(win && tabId),
 		});
-		if (plan === "drop") return;
+		if (plan === "drop") return false;
 
 		if (plan !== "deliver" && win && tabId && !win.isDestroyed() && deps.judgeEnabled()) {
 			const ask = deps.bridgeFor(win, tabId);
@@ -106,5 +107,6 @@ export function createNotifyHandler(
 			}
 		}
 		deps.deliver(win, winId, { title, body, tabId, kind });
+		return true;
 	};
 }

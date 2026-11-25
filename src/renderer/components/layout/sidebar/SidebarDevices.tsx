@@ -60,7 +60,7 @@ import { tabSignalPresentation } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { useAgentReviewStore } from "../../../stores/agent-review";
 import { summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
-import { pickRemoteDirectory } from "../../../stores/remote";
+import { pickRemoteDirectory, useTailscaleHint } from "../../../stores/remote";
 import type { SessionStore } from "../../../stores/session";
 import { sessionListFeed } from "../../../stores/session-list";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
@@ -319,6 +319,7 @@ export function SidebarDeviceSection({
 	const online = host.state === "online";
 	const webPage = webPwa() !== null;
 	const stateLabel = t(`remote.state.${host.state}`);
+	const tailscaleHint = useTailscaleHint(host.deviceId);
 	// While the link comes up the host's last known rows stand in (never read: an unlinked host is not asked), so the
 	// rows are already in place when it connects and nothing below them moves.
 	const hasLastKnownRows = useStore(sessionListFeed("global", host.deviceId).store, s => s.sessions.length > 0);
@@ -378,7 +379,11 @@ export function SidebarDeviceSection({
 					<span
 						className="shrink-0 rounded-(--sc-radius-sm) bg-(--sc-hover) px-1 text-sc-xs text-(--sc-text-secondary)"
 						data-device-offline
-						title={t("remote.sidebar.offline")}
+						title={
+							tailscaleHint
+								? `${t("remote.sidebar.offline")} ${t("remote.sidebar.tailscaleHint")}`
+								: t("remote.sidebar.offline")
+						}
 					>
 						{stateLabel}
 					</span>
@@ -888,9 +893,11 @@ function DeviceSessions({
 				tabFocused: tab !== undefined && tab.id === activeTabId,
 				tabInSplit: tab !== undefined && splitIds?.has(tab.id) === true,
 				splitShown: splitIds !== null,
+				unread: tab?.unreadDone === true,
 				canCloseTab: allTabs.length > 1,
 				chat: session.kind === "chat",
 				pinned: hostPins.includes(session.path),
+				muted: false,
 				archived: hostArchived.has(session.id),
 				agentHidden: false,
 				canMoveUp: canMoveWithin(list, session.path, -1),
@@ -914,6 +921,7 @@ function DeviceSessions({
 								void useTabsStore.getState().splitTab(tab.id, placement);
 							},
 							unsplit: () => void useTabsStore.getState().unsplit(tab.id),
+							markUnread: () => useTabsStore.getState().markUnread(tab.id),
 							closeTab: () => void useTabsStore.getState().closeTab(tab.id),
 						}
 					: {}),
@@ -1318,6 +1326,7 @@ function DeviceSessions({
 								canMoveUp: canMoveWithin(projectListOrder, group.cwd, -1),
 								canMoveDown: canMoveWithin(projectListOrder, group.cwd, 1),
 								archivable: archivable.length,
+								muted: false,
 							},
 							actions: {
 								...(editable

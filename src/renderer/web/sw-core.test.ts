@@ -1,6 +1,7 @@
 import { describe, expect, it, type Mock, vi } from "vitest";
 import type { WebPushPayload } from "../../shared/web-push";
 import {
+	type AppBadgeLike,
 	ASSET_OUTAGE_MS,
 	ASSET_RETRY_MS,
 	type CacheLike,
@@ -59,6 +60,8 @@ describe("parsePushPayload", () => {
 		expect(parsePushPayload({ ...PAYLOAD, tabId: 3 })).toBeNull();
 		expect(parsePushPayload(null)).toBeNull();
 		expect(parsePushPayload("text")).toBeNull();
+		expect(parsePushPayload({ ...PAYLOAD, badge: 3 })).toEqual({ ...PAYLOAD, badge: 3 });
+		for (const badge of [-1, 1.5, "3", Number.NaN]) expect(parsePushPayload({ ...PAYLOAD, badge })).toBeNull();
 	});
 });
 
@@ -119,6 +122,45 @@ describe("handlePush", () => {
 		).toBe("ignored");
 		expect(await handlePush(null, api)).toBe("ignored");
 		expect(showNotification).not.toHaveBeenCalled();
+	});
+
+	describe("the app icon's badge", () => {
+		function badgeApi() {
+			const setAppBadge = vi.fn(async (_count: number) => undefined);
+			const clearAppBadge = vi.fn(async () => undefined);
+			return { api: { setAppBadge, clearAppBadge } satisfies AppBadgeLike, setAppBadge, clearAppBadge };
+		}
+		const clear: WebPushPayload = { v: 1, kind: "clear", title: "", body: "", tag: "t1:ask" };
+
+		it("sets the host's count with a shown push", async () => {
+			const { api, setAppBadge, clearAppBadge } = badgeApi();
+			expect(await handlePush({ json: () => ({ ...PAYLOAD, badge: 3 }) }, registration().api, api)).toBe("shown");
+			expect(setAppBadge).toHaveBeenCalledWith(3);
+			expect(clearAppBadge).not.toHaveBeenCalled();
+		});
+
+		it("clears it when a `clear` says nothing needs the person any more", async () => {
+			const { api, setAppBadge, clearAppBadge } = badgeApi();
+			expect(await handlePush({ json: () => ({ ...clear, badge: 0 }) }, registration().api, api)).toBe("cleared");
+			expect(clearAppBadge).toHaveBeenCalledTimes(1);
+			expect(setAppBadge).not.toHaveBeenCalled();
+		});
+
+		it("leaves the badge alone when the host sent no count", async () => {
+			const { api, setAppBadge, clearAppBadge } = badgeApi();
+			await handlePush({ json: () => PAYLOAD }, registration().api, api);
+			await handlePush({ json: () => clear }, registration().api, api);
+			expect(setAppBadge).not.toHaveBeenCalled();
+			expect(clearAppBadge).not.toHaveBeenCalled();
+		});
+
+		it("still shows the notification without the Badging API or when the browser refuses the badge", async () => {
+			const { api, showNotification } = registration();
+			expect(await handlePush({ json: () => ({ ...PAYLOAD, badge: 2 }) }, api, {})).toBe("shown");
+			const refusing: AppBadgeLike = { setAppBadge: () => Promise.reject(new DOMException("denied")) };
+			expect(await handlePush({ json: () => ({ ...PAYLOAD, badge: 2 }) }, api, refusing)).toBe("shown");
+			expect(showNotification).toHaveBeenCalledTimes(2);
+		});
 	});
 });
 

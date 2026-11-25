@@ -485,7 +485,12 @@ struct SendParams {
 enum Delivery {
     Sent,
     Gone,
-    Failed { message: String },
+    /// `retry`: the push service's own fault or its rate limit (5xx, 429), worth one more try.
+    Failed {
+        message: String,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        retry: bool,
+    },
 }
 
 impl Delivery {
@@ -495,6 +500,7 @@ impl Delivery {
             404 | 410 => Self::Gone,
             _ => Self::Failed {
                 message: format!("web push refused with status {status}"),
+                retry: status == 429 || status >= 500,
             },
         }
     }
@@ -506,6 +512,7 @@ async fn send(call: Call) -> Result<Reply, Fault> {
     if bytes > PAYLOAD_MAX_BYTES {
         return Reply::json(&Delivery::Failed {
             message: format!("web push not sent: payload of {bytes} bytes is over the limit"),
+            retry: false,
         });
     }
     let vapid = open().get(&params.user_data).cloned().ok_or_else(|| {
@@ -565,7 +572,8 @@ mod tests {
             assert_eq!(
                 Delivery::from_status(status),
                 Delivery::Failed {
-                    message: format!("web push refused with status {status}")
+                    message: format!("web push refused with status {status}"),
+                    retry: matches!(status, 429 | 500 | 503),
                 }
             );
         }

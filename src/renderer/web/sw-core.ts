@@ -19,6 +19,7 @@ export function parsePushPayload(value: unknown): WebPushPayload | null {
 	if (typeof raw.title !== "string" || typeof raw.body !== "string" || typeof raw.tag !== "string") return null;
 	if (raw.tabId !== undefined && typeof raw.tabId !== "string") return null;
 	if (raw.silent !== undefined && typeof raw.silent !== "boolean") return null;
+	if (raw.badge !== undefined && !(Number.isSafeInteger(raw.badge) && (raw.badge as number) >= 0)) return null;
 	return {
 		v: PAYLOAD_VERSION,
 		kind: raw.kind as WebPushKind,
@@ -27,6 +28,7 @@ export function parsePushPayload(value: unknown): WebPushPayload | null {
 		tag: raw.tag,
 		...(raw.tabId ? { tabId: raw.tabId } : {}),
 		...(raw.silent !== undefined ? { silent: raw.silent } : {}),
+		...(raw.badge !== undefined ? { badge: raw.badge as number } : {}),
 	};
 }
 
@@ -52,6 +54,12 @@ export interface PushRegistrationLike {
 	getNotifications(filter?: { tag?: string }): Promise<NotificationLike[]>;
 }
 
+/** The worker's `navigator` as far as the app icon's badge goes; a browser without the Badging API has neither. */
+export interface AppBadgeLike {
+	setAppBadge?(count: number): Promise<void>;
+	clearAppBadge?(): Promise<void>;
+}
+
 export const NOTIFICATION_ICON = "/icons/icon-192.png";
 /** The status-bar badge (Android keeps only its alpha): the mark in one colour, `badge` of PWA_ICON_SVGS. */
 export const NOTIFICATION_BADGE = "/icons/badge-96.png";
@@ -60,6 +68,7 @@ export const NOTIFICATION_BADGE = "/icons/badge-96.png";
 export async function handlePush(
 	data: { json(): unknown } | null,
 	registration: PushRegistrationLike,
+	badge?: AppBadgeLike,
 ): Promise<"shown" | "cleared" | "ignored"> {
 	let parsed: unknown;
 	try {
@@ -69,6 +78,14 @@ export async function handlePush(
 	}
 	const payload = parsePushPayload(parsed);
 	if (!payload) return "ignored";
+	if (badge && payload.badge !== undefined) {
+		try {
+			if (payload.badge > 0) await badge.setAppBadge?.(payload.badge);
+			else await badge.clearAppBadge?.();
+		} catch {
+			// A browser may refuse the badge (no permission yet); the notification still goes out.
+		}
+	}
 	if (payload.kind === "clear") {
 		// Retract only; a clear shows nothing (the ask was answered elsewhere).
 		for (const shown of await registration.getNotifications({ tag: payload.tag })) shown.close();

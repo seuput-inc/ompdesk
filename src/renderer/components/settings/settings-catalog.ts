@@ -292,7 +292,7 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		id: "notificationSound",
 		section: "general",
 		labelKey: "settings.gui.notificationSound",
-		aliases: "notification sound chime volume test 알림 소리 알림음 볼륨",
+		aliases: "notification sound chime tone bell volume test 알림 소리 알림음 종류 볼륨",
 	},
 	{
 		id: "linkPreview",
