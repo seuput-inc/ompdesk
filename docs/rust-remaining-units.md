@@ -246,6 +246,8 @@ R4 waits for the hubs (decided 12 Nov 2026, B2). Its encoder takes the raw omp e
 
 ### 2.7 What is left of `setup/**` and `cli-tools/**` under 4c's constraint
 
+Done by slice G T2 (`docs/rust-node-removal.md`, native-rust's ledger, 25 Nov 2026): every file below except `setup/{paths,archives,download,runner,supervisor,apple-git}.ts` is deleted, its work now the core's `crates/core/src/tools/` (`setup.rs` and `setup/`, `omp/`, `cli/`, `ext.rs`). The table is kept as measured.
+
 Movable: the supervisor (6a, 478 lines), and the downloads (`setup/download.ts` 98 `downloadVerified`, `setup/archives.ts` 177 `resolveArchiveRelease`/`resolveAgentDesktopRelease`/`resolveTailscaleRelease`/`fetchText`: 275 lines) once an HTTPS client is chosen (Â§1.4; `sha2` for the checksums). Parity `setup/download.test.ts` 181, `setup/archives.test.ts` 202. **Done as ledger 6c** (the downloads and lookups; the supervisor was 6a).
 
 Stays until the core no longer has to repair itself (4c) or until 9a:
@@ -525,6 +527,9 @@ Generated on 12 Nov 2026 from this checkout by reading every `import`/`export â€
 | `agent-control/pickup.ts` | 30 | 18 |  |  | agent-control/service.ts (pickupOf) | src/shared/agent-control.ts | agent-control/pickup.test.ts 29 |
 
 ### setup (11 files, 3,466 lines, 2,754 code)
+
+Since slice G T2: `service.ts`, `plans.ts`, `detect.ts`, `git-aslr.ts`, `compiled-launcher.ts` and `ipc.ts` are deleted (the core's `tools/setup.rs` and `tools/setup/`; the IPC is `src/main/tools/ipc.ts`). The rows below are as measured.
+
 | File | Lines | Code | Flags | Electron via | Imported by | Imports | Tests |
 |---|---:|---:|---|---|---|---|---|
 | `setup/service.ts` | 1187 | 975 | child fs timer | runtime-log.ts | scripts/omp-update-lock-check.ts; scripts/setup-install-check.ts; cli-tools/updater.ts (type); ext-update/updater.ts (type); index.ts (SetupService); omp-updater.ts (type) | omp-runtime.ts, runtime-log.ts, serial-chain.ts, setup/archives.ts, setup/compiled-launcher.ts, setup/detect.ts, setup/download.ts, setup/git-aslr.ts, setup/paths.ts, setup/plans.ts, +4 more | setup/service.test.ts 1366, ext-update/updater.test.ts 1270, cli-tools/updater.test.ts 612, omp-updater.test.ts 420, setup/omp-update-install.test.ts 259 |
@@ -540,6 +545,9 @@ Generated on 12 Nov 2026 from this checkout by reading every `import`/`export â€
 | `setup/ipc.ts` | 35 | 27 |  |  | index.ts (registerSetupIpc) | src/shared/ipc-types.ts, src/shared/setup.ts | setup/ipc.test.ts 70 |
 
 ### cli-tools (4 files, 1,025 lines, 817 code)
+
+Since slice G T2 the whole folder is deleted (the core's `tools/cli/`). The rows below are as measured.
+
 | File | Lines | Code | Flags | Electron via | Imported by | Imports | Tests |
 |---|---:|---:|---|---|---|---|---|
 | `cli-tools/updater.ts` | 397 | 335 | child fs | runtime-log.ts | ext-update/updater.ts (runCheckProcess); index.ts (CliUpdater, psCommands, registerCliUpdateIpc) | cli-tools/catalog.ts, cli-tools/detect.ts, cli-tools/plans.ts, omp-runtime.ts, serial-chain.ts, spawn.ts, src/shared/cli-update.ts, src/shared/ipc-types.ts, src/shared/version.ts, update-scheduler.ts | cli-tools/updater.test.ts 612 |

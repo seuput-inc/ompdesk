@@ -1,6 +1,6 @@
 /**
  * Settings › Updates & about › This computer, after omp's rows: the command-line tools of the connected
- * accounts (main `cli-tools/updater.ts`, contract `shared/cli-update.ts`). One switch (default on), then one
+ * accounts (the core's `tools/cli`, contract `shared/cli-update.ts`). One switch (default on), then one
  * row per tool that is installed here: its installed and newest version, how it is updated, the last result or
  * why OMPdesk leaves it alone, and "Update now". OMPdesk only updates what is already installed; the renderer
  * names tools by id and never a command.

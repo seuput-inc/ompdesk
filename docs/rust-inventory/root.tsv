@@ -318,17 +318,11 @@ src/main/notify-triage.test.ts	tooling	-	Vitest suite: a completion the judge sa
 src/main/notify-triage.ts	mixed	3	The shell owns repeat admission and the judge deadline. §1.3(a,c): the window's local bridge is a live capability; its focus must be read after the judge result with no yield before enqueueing the notice.
 src/main/nsis-updater.test.ts	tooling	-	Vitest suite: OmpNsisUpdater.quitAndInstall.
 src/main/nsis-updater.ts	port	4	Hands the first worker result (PID or failure) to the shell's quit chain (quit_chain.rs) before teardown. An elevate.exe PID identifies the helper, not setup; stock EACCES/UNKNOWN elevation and ENOENT openPath fallbacks are not additional receipts. G replaces this adapter with verified-asset launch and its own elevation path (§1.3a,c).
-src/main/omp-auto-takeover.test.ts	tooling	-	Vitest suite: OmpAutoTakeover.
-src/main/omp-auto-takeover.ts	port	2	Shell updater batch, §1.3a,c: OmpUpdater.state reads taken() synchronously at startup and on every change. Move that snapshot with the stock update.auto record and its serialized read/write/restore; a stale copy can report ownership the person revoked.
 src/main/omp-availability.test.ts	tooling	-	Vitest suite: followSetupState.
 src/main/omp-availability.ts	port	2	§1.3(a,b,c), shell batch: stock-helper.ts records a refused call before admission; index.ts consumes that bit synchronously in followSetupState before restarting tabs and relisting. Move with setup events and worker admission, not across a second state mirror.
-src/main/omp-compat-source.test.ts	tooling	-	Vitest suite: OmpCompatSource.
-src/main/omp-compat-source.ts	mixed	2	setup.readCompatCache and setup.saveCompatCache own the verified list on disk. Shell updater batch retains net.fetch (system proxy), the release tool's shared validator and the newest unconfirmed bytes across core replacement (§1.3d).
 src/main/omp-config-stock.test.ts	tooling	-	Vitest suite: reads stock's default, writes both values, and reads back what it wrote.
 src/main/omp-daemon-folder-stock.test.ts	tooling	-	Vitest suite: is removed once that omp ended, while another session's omp keeps running.
 src/main/omp-exits.ts	port	3	SidecarPool disposal and LocalHostServices close register the exiting spawn's promise by folder. discardOpenedWorktree waits on promises already registered inside its removal claim; looking up current PIDs later could wait for a different spawn.
-src/main/omp-hold-notice.test.ts	tooling	-	Vitest suite: holdNotice: a release runners failed.
-src/main/omp-hold-notice.ts	port	1	index.ts updater firstSeen/onState read the current hold, prefs and time before saving the observation and deciding whether to notify. The thresholds are comparisons; this module schedules no timer.
 src/main/omp-launch.test.ts	tooling	-	Vitest suite: omp launch.
 src/main/omp-launch.ts	port	3	sidecar::lane uses native session_open before requesting launch; no Node session-open decision remains. SidecarManager answers the launch with ompArgs/sessionEnv built from live preference callbacks; withCreditSpendRuns also gates the local handler's omp run through the live bridge.
 src/main/omp-log-tail.test.ts	tooling	-	Vitest suite: ompLogTail.
@@ -339,8 +333,6 @@ src/main/omp-restart.test.ts	tooling	-	Vitest suite: ompRestartDecision.
 src/main/omp-restart.ts	port	1	SidecarPool's decide callback and LocalHostServices.restartOnNewOmp use the current run/restore state to restart or mark the tab pending in the same tick. The helper does no process I/O.
 src/main/omp-runtime.test.ts	tooling	-	Vitest suite: omp version parsing.
 src/main/omp-runtime.ts	mixed	2	setup.firstPackageCandidate and setup.probeOmp classify launchers, read installed versions, run fixed --version probes and enforce version floors. omp.parseUpdateCheck parses stock update reports. Main keeps PATH lookup, general stock commands and ompPackageRoot for synchronous stats startup and the stock helper.
-src/main/omp-updater.test.ts	tooling	-	Vitest suite: OmpUpdater.
-src/main/omp-updater.ts	port	2	Shell updater batch, §1.3a,c,d: registerOmpUpdateIpc reads state synchronously, and onState publishes that same pass and takeover snapshot. Move them with setup update/repair; release tooling shares verified-version selection.
 src/main/ompdesk-check.test.ts	tooling	-	Vitest suite: group.
 src/main/open-path.test.ts	tooling	-	Vitest suite: isLauncherPath.
 src/main/open-path.ts	native-client	1	fs.isLauncherPath checks extensions, resolved targets and POSIX executable bits. The shell adapter reveals a launcher or a path the default app cannot open.
@@ -492,8 +484,6 @@ src/main/update-provider.test.ts	tooling	-	Vitest suite: release-notes update pr
 src/main/update-provider.ts	mixed	4	The shell fetches through the default session (system proxy and certificates); updateFeed.resolve in core selects the release. electron-updater calls resolveFiles synchronously on this provider's last admitted release (§1.3a,c).
 src/main/update-release.test.ts	tooling	-	Vitest suite: update metadata comment.
 src/main/update-release.ts	mixed	4	updateFeed.resolve validates the release, metadata, asset and declared OS floor in Rust. Both provider admission and synchronous resolveFiles recheck the running OS with shared compareVersions (§1.3a,d).
-src/main/update-scheduler.test.ts	tooling	-	Vitest suite: nextCheckDelay.
-src/main/update-scheduler.ts	port	2	OmpUpdater, CliUpdater and ExtensionUpdater read started and disposed in the same tick to decide whether to enqueue or publish. Move the timer and serial callback queue with these services, not the app's installer (§1.3a,c).
 src/main/updater-check.test.ts	tooling	-	Vitest suite: Check for Updates while the background check runs.
 src/main/updater-held-quit.test.ts	tooling	-	Vitest suite: a quit with a staged version that failed to start before.
 src/main/updater-install.test.ts	tooling	-	Vitest suite: Restart & install with background work running.

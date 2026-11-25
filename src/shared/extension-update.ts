@@ -1,10 +1,10 @@
 /**
- * Extensions kept current (src/main/ext-update/): the marketplaces, plugins, skills and MCP servers of this
+ * Extensions kept current (the core's `crates/core/src/tools/ext.rs`): the marketplaces, plugins, skills and MCP servers of this
  * computer's omp. The schedule is the tool CLIs' (launch after machine setup, then every 4 h, a per-item
  * back-off, failures recorded, deferred items retried), the work is stock's own (marketplace refresh,
  * `PluginManager.upgrade`, `MarketplaceManager.upgradePlugin`, `updateSkillPackages`) run in the stock helper's
  * `extensions` worker, or the owner's own command for an MCP server's global binary (run as
- * `SetupService.runToolUpdate`). OMPdesk never writes the user's MCP config and never moves a pinned version.
+ * setup's `run_tool_update`). OMPdesk never writes the user's MCP config and never moves a pinned version.
  * Each computer updates its own; a paired host does its own. The renderer shows this state and may ask for
  * "Update now" by row key; it never names a command, a path or a version to install.
  */

@@ -7,7 +7,10 @@ use serde::Deserialize;
 use crate::disk::saves::write_kept;
 use crate::server::{Call, Fault, Registry, Reply};
 
-const MAX_BYTES: usize = 1024 * 1024;
+/// The largest verified list kept or read (the omp updater's compat source reads at most this from the network).
+pub(crate) const MAX_BYTES: usize = 1024 * 1024;
+/// The kept copy's name in `userData`.
+pub(crate) const FILE: &str = "omp-compat.json";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -23,11 +26,12 @@ fn cache_file(call: &Call) -> Result<PathBuf, Fault> {
             "Expected an absolute userData",
         ));
     }
-    user_data.push("omp-compat.json");
+    user_data.push(FILE);
     Ok(user_data)
 }
 
-fn read(file: &Path) -> Option<Vec<u8>> {
+/// The kept copy's bytes: a regular file of at most [`MAX_BYTES`] of UTF-8, else none.
+pub(crate) fn read(file: &Path) -> Option<Vec<u8>> {
     let meta = file.symlink_metadata().ok()?;
     if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
         return None;

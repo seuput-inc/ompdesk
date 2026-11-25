@@ -1,5 +1,5 @@
 /**
- * What the extension updater (src/main/ext-update/) asks of a live session once the stock helper's
+ * What the extension updater (the core's `tools/ext.rs`) asks of a live session once the stock helper's
  * `extensions` worker has changed files on disk: pick up new plugin state (`extension_update.reload`, the
  * headless `/reload-plugins`) and reconnect the MCP servers whose package was updated
  * (`extension_update.reconnect`, `/mcp reconnect` for several names). Main sends them only to an idle, ready

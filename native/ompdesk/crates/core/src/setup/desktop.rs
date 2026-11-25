@@ -172,6 +172,35 @@ pub(super) async fn select(call: Call) -> Result<Reply, Fault> {
     Reply::json(&pick(copy, bundle, &p.minimum))
 }
 
+/// `pickAgentDesktop` in process (machine setup's detection): the copy a session runs, of the bundle in `bundle_dir`
+/// and the managed copy `managed` (its path and the version it printed), as its path and version.
+pub(crate) async fn pick_copy(
+    win32: bool,
+    bundle_dir: Option<&Path>,
+    managed: Option<(String, String)>,
+    minimum: &str,
+) -> Option<(String, String)> {
+    let platform = if win32 {
+        Platform::Win32
+    } else {
+        Platform::Darwin
+    };
+    let bundle = match bundle_dir {
+        Some(dir) => bundled(dir, platform).await,
+        None => None,
+    };
+    let managed = managed.map(|(path, version)| Copy {
+        path: path.into(),
+        version,
+    });
+    pick(managed, bundle, minimum).map(|selected| {
+        (
+            selected.copy.path.to_string_lossy().into_owned(),
+            selected.copy.version,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

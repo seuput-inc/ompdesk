@@ -4,7 +4,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, openAsBlob } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir, release } from "node:os";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -74,11 +74,12 @@ import {
 } from "../shared/local-engines";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, MOBILE_WEB_PORT, MOBILE_WEB_STATE } from "../shared/mobile-web";
 import { MODEL_SETUP_RESEARCH_PICK_PREF } from "../shared/model-setup";
-import { compatEntry } from "../shared/omp-compat";
+import type { OmpUpdateState } from "../shared/omp-update";
 import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import { SCHEDULES_STATE } from "../shared/schedules";
+import type { SetupState } from "../shared/setup";
 import { readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {
 	finishedWorktreeFolders,
@@ -103,8 +104,6 @@ import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, 
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
-import { runningIn } from "./cli-tools/plans";
-import { CliUpdater, registerCliUpdateIpc } from "./cli-tools/updater";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
 import { installCliLaunchers } from "./control-socket/cli-install";
@@ -122,9 +121,6 @@ import { SavedWorktreeStore, setSavedWorktreeStore } from "./disk/saved-worktree
 import { ScratchCare } from "./disk/scratch";
 import { diskFull } from "./disk-full";
 import { bindDiskFullNotice, describeFiles } from "./disk-full-notice";
-import { registerExtensionUpdateIpc } from "./ext-update/ipc";
-import { runningServer } from "./ext-update/running";
-import { ExtensionUpdater } from "./ext-update/updater";
 import { EMPTY_APPLY_PLAN } from "./extension-reload";
 import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ipc";
 import type { GithubAuthService } from "./github-auth/service";
@@ -149,14 +145,10 @@ import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from 
 import { startMemoryWatch } from "./memory-watch";
 import { deleteModelsProvider, insertModelsProvider, listModelsProviders } from "./models-config";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
-import { OmpAutoTakeover, type OmpCliRun, readStockAuto, writeStockAuto } from "./omp-auto-takeover";
 import { followSetupState } from "./omp-availability";
-import { OmpCompatSource } from "./omp-compat-source";
-import { heldSince, holdNotice, OMP_HELD_SEEN_PREF, OMP_HOLD_TOLD_PREF, parseHoldTold } from "./omp-hold-notice";
 import { creditSpendRun } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
-import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp } from "./omp-runtime";
-import { OmpUpdater, registerOmpUpdateIpc } from "./omp-updater";
+import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp, TESTED_OMP_VERSION } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
@@ -179,9 +171,7 @@ import { listTaggedProcesses, SESSION_PROCESSES_FILE, SessionProcesses } from ".
 import { defaultScratchRoot, SESSION_SCRATCH_FILE, SessionScratch } from "./session-scratch";
 import { SessionSummaries, type SummarySource } from "./session-summaries";
 import { SettleWatch } from "./settle-watch";
-import { registerSetupIpc } from "./setup/ipc";
-import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } from "./setup/paths";
-import { SetupService } from "./setup/service";
+import { applyManagedToolEnv, bunInstallDir, managedToolsDir, refreshPath, setupPlatform } from "./setup/paths";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
 import {
@@ -226,6 +216,8 @@ import { locateTailscale } from "./tailscale/locate";
 import { MobileWebService } from "./tailscale/service";
 import { Tailnet } from "./tailscale/tailnet";
 import { exitWithLauncher } from "./test-launcher-exit";
+import { ToolsClient } from "./tools/client";
+import { registerToolsIpc } from "./tools/ipc";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
 import { journalWait, TurnWaitWatch, WAIT_SWEEP_MS } from "./turn-wait-watch";
@@ -462,7 +454,8 @@ let logWatcher: LogWatcher;
 let remoteDevices: RemoteDevices | null = null;
 let worktreePrompts: WorktreePrompts | null = null;
 let worktreeLifecycle: WorktreeLifecycle | null = null;
-let setupService: SetupService | null = null;
+/** Machine setup and the omp, tool CLI and extension updaters: the core's `tools` instance (src/main/tools/). */
+let tools: ToolsClient | null = null;
 let webHost: WebHost | null = null;
 /** The phones' upload folder, also where a paired computer's attached files land; WebHost's own store once it exists. */
 let earlyUploads: UploadStore | null = null;
@@ -477,14 +470,11 @@ const webTabLayouts = new WebTabLayouts({
 	set: value => prefsStore().set("webTabLayouts", value),
 });
 let mobileWebService = null as MobileWebService | null;
-let ompUpdater: OmpUpdater | null = null;
-let cliUpdater: CliUpdater | null = null;
 let localEngines: LocalEngineDetector | null = null;
 let aiMemoryService: AiMemoryService | null = null;
 let aiMemoryUpkeep: MemoryUpkeep | null = null;
 let aiMemoryCare: MemoryCare | null = null;
 let aiMemorySync: MemorySync | null = null;
-let extensionUpdater: ExtensionUpdater | null = null;
 let githubAuthService: GithubAuthService | null = null;
 let scheduleService: ScheduleService | null = null;
 /** Settles once the core wrote the schedules' journal at a quit, or its bound passed: the core's stop and the exit wait for it. */
@@ -859,9 +849,7 @@ app.whenReady().then(async () => {
 			// One attempt per omp version (BridgeHealth). An omp setup calls missing or broken (a compiled omp, a Bun
 			// below its engines.bun) is repaired by setup, with the tested omp; a usable one by the omp updater's
 			// repair pass, which runs under "Keep tools up to date" and stays within the tested major like the timer's.
-			const presence = setupService?.state().items.find(item => item.id === "omp")?.presence;
-			if (presence && presence.kind !== "present") void setupService?.retry("omp").catch(() => undefined);
-			else void ompUpdater?.repair().catch(() => undefined);
+			void tools?.ompRepair().catch(() => undefined);
 		},
 		// One gui-runtime line per omp version this computer runs, read back by `omp.bridge_health`.
 		{ log: writeRuntimeLog },
@@ -1203,14 +1191,15 @@ app.whenReady().then(async () => {
 			busy: (): boolean => quitRisk().workingTabs > 0 || hostServices.runningPeers().length > 0,
 		},
 		ompUpdater: () => {
-			if (!ompUpdater) throw new Error("OMPdesk is still starting");
-			return ompUpdater;
+			const client = tools;
+			if (!client) throw new Error("OMPdesk is still starting");
+			return { state: () => client.state().omp, updateNow: () => client.ompNow() };
 		},
 		schedules: () => scheduleService,
 		sidebarProjects: () => sidebarProjects,
 		// With the omp update this computer holds back, for `ompdesk_app` `omp.bridge_health`.
 		bridgeHealth: () => {
-			const state = ompUpdater?.state();
+			const state = tools?.state().omp;
 			const held = state?.held;
 			return held
 				? { ...bridgeHealth.report(), held: { ...held, installed: state?.installed ?? null } }
@@ -1570,69 +1559,155 @@ app.whenReady().then(async () => {
 		});
 	}
 
-	// This machine's setup: detect Bun/omp/Git/gh/Node and, in a packaged app,
-	// install what is missing on its own (src/main/setup/). Tests opt in with a
-	// fake installer (OMP_GUI_TEST_INSTALLER); headless test runs never install.
+	// This machine's setup and the omp, tool CLI and extension updaters: one instance of the core's `tools` kind
+	// (src/main/tools/, crates/core/src/tools/) on one queue. Setup detects Bun/omp/Git/gh/Node and, in a packaged app,
+	// installs what is missing on its own; tests opt in with a fake installer (OMP_GUI_TEST_INSTALLER); headless test
+	// runs never install. omp, the vendor CLIs of connected accounts and omp's extensions keep current under "Keep
+	// tools up to date": a packaged app checks on its own, a test launch only with the fake installer and its
+	// OMP_GUI_TEST_*_UPDATES=1. With the hidden pref `ompFollowVerified` omp follows the verified list; a test launch
+	// reads that list from the file OMP_GUI_TEST_OMP_COMPAT names, never from the network. OMPdesk's own update stays
+	// manual.
 	const testInstaller = process.env.OMP_GUI_TEST_INSTALLER || null;
-	// Who installed which omp, and when: one line per step of the updater's passes and of setup's own omp installs.
-	const logOmpUpdate = (step: string, details: Record<string, unknown>) =>
-		writeRuntimeLog({
-			source: "omp-update",
-			message: step,
-			details: { level: step === "failed" ? "warn" : "info", ...details },
-		});
-	const setup = new SetupService({
-		platform,
-		arch: process.arch,
-		systemRoot: process.env.SystemRoot || "C:\\Windows",
-		toolsDir,
-		agentDesktopBundle,
-		bunInstall: bunInstallDir(process.env, homedir()),
-		statePath: join(app.getPath("userData"), "setup-state.json"),
-		appVersion: app.getVersion(),
-		// Safe mode pauses automatic installs; Retry still runs one.
-		automatic: !safeMode && (testInstaller !== null || (app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1")),
-		testInstaller,
-		testDownload:
-			testInstaller && process.env.OMP_GUI_TEST_DOWNLOAD
-				? { url: process.env.OMP_GUI_TEST_DOWNLOAD, sha256: process.env.OMP_GUI_TEST_DOWNLOAD_SHA256 ?? "" }
-				: null,
-		spawnEnv: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
-		proxy: async () => (await spawnProxy()).url,
-		onState: state => {
-			for (const win of BrowserWindow.getAllWindows()) {
-				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.SETUP_STATE, state);
-			}
-			mobileWebService?.onSetupState(state);
-			// ai-memory's wiring waits for Bun on Windows: it runs again (once) when the setup reports Bun present.
-			if (state.items.some(item => item.id === "bun" && item.presence?.kind === "present")) {
-				aiMemoryService?.bunInstalled();
-			}
-			if (state.items.some(item => item.presence !== null)) markStartup("setup-detected");
-			// omp just became usable: local tabs that waited for it start now (tabs on paired hosts are theirs),
-			// and a session list refused meanwhile is read again.
-			const usable = followSetupState(state);
-			if (!usable) return;
-			for (const sidecar of sidecarPool.allSidecars()) {
-				if (sidecar.device === undefined && sidecar.status === "waiting") sidecar.restart();
-			}
-			if (usable.refused) sessionIndex.relist();
+	const scheduledUpdates = (testFlag: string) =>
+		testInstaller ? process.env[testFlag] === "1" : app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1";
+	const toolsClient = new ToolsClient({
+		opts: {
+			platform,
+			arch: process.arch,
+			toolsDir,
+			userData: app.getPath("userData"),
+			appVersion: appVersion(),
+			testedOmp: TESTED_OMP_VERSION,
+			// Safe mode pauses automatic installs; Retry still runs one.
+			automatic: !safeMode && (testInstaller !== null || (app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1")),
+			scheduled: {
+				omp: scheduledUpdates("OMP_GUI_TEST_OMP_UPDATES"),
+				cli: scheduledUpdates("OMP_GUI_TEST_CLI_UPDATES"),
+				ext: scheduledUpdates("OMP_GUI_TEST_EXT_UPDATES"),
+			},
+			testInstaller,
+			testDownload:
+				testInstaller && process.env.OMP_GUI_TEST_DOWNLOAD
+					? { url: process.env.OMP_GUI_TEST_DOWNLOAD, sha256: process.env.OMP_GUI_TEST_DOWNLOAD_SHA256 ?? "" }
+					: null,
+			testOmpCompat: app.isPackaged ? null : (process.env.OMP_GUI_TEST_OMP_COMPAT ?? null),
+			systemRoot: process.env.SystemRoot || "C:\\Windows",
+			agentDesktopBundle,
+			bunInstall: bunInstallDir(process.env, homedir()),
+			locale: new Intl.Collator().resolvedOptions().locale,
+			// A relative PATH entry or launcher resolves against main's directories, not the core's.
+			cwd: process.cwd(),
+			driveCwds:
+				process.platform === "win32"
+					? Object.fromEntries(
+							Object.entries(process.env).flatMap(([key, value]) =>
+								/^=[A-Za-z]:$/.test(key) && value ? [[key, value]] : [],
+							),
+						)
+					: {},
 		},
-		beforeOptional: afterFirstTab,
-		logOmpInstall: logOmpUpdate,
-		onOmpReady: () => {
-			markStartup("omp-ready");
-			void launchStats();
-			// Local tabs that failed for lack of omp start now; tabs on paired hosts are theirs.
-			for (const sidecar of sidecarPool.allSidecars()) {
-				if (sidecar.device === undefined && (sidecar.status === "error" || sidecar.status === "exited")) {
-					sidecar.restart();
+		asks: {
+			// The core adds the proxy itself; detection reads main's own environment with the spawn PATH (detectMachine).
+			env: async detect =>
+				detect ? { ...process.env, PATH: await spawnPath() } : { ...process.env, ...(await shellSpawnEnv()) },
+			refreshPath: () => refreshPath(platform, toolsDir),
+			ompResolution: fresh => (fresh ? refreshSystemOmp() : systemOmp()),
+			ompReady: () => {
+				markStartup("omp-ready");
+				void launchStats();
+				// Local tabs that failed for lack of omp start now; tabs on paired hosts are theirs.
+				for (const sidecar of sidecarPool.allSidecars()) {
+					if (sidecar.device === undefined && (sidecar.status === "error" || sidecar.status === "exited")) {
+						sidecar.restart();
+					}
 				}
+			},
+			firstTab: afterFirstTab,
+			releaseHelpers: async () => {
+				const stats = statsServer;
+				statsServer = null;
+				await Promise.all([stats?.kill(), stopStockHelper()]);
+			},
+			resume: async updated => {
+				if (updated) {
+					const resolution = await refreshSystemOmp();
+					if (resolution.ok) hostOmpVersion = resolution.runtime.version;
+				}
+				await launchStats();
+				if (updated) {
+					sidecarPool.restartOnNewOmp();
+					hostServices.restartOnNewOmp();
+				}
+			},
+			applyExtensionUpdate: plan => {
+				sidecarPool.applyExtensionUpdate(plan);
+				hostServices.applyExtensionUpdate(plan);
+			},
+			// A held omp under the verified list (the core decides when): one runners failed once and once more after a
+			// day, one still waiting for them after 6 hours and then every 24 hours.
+			notify: (kind, params) => {
+				if (kind !== "ompHold") return;
+				const text = params as Record<string, string | number>;
+				const verifying = text.reason === "verifying";
+				const days = Number(text.days) > 0;
+				new Notification({
+					title: mainT(verifying ? "ompHold.verifyingTitle" : "ompHold.title", undefined, text),
+					body: mainT(
+						verifying
+							? days
+								? "ompHold.verifyingBodyDays"
+								: "ompHold.verifyingBody"
+							: days
+								? "ompHold.bodyDays"
+								: "ompHold.body",
+						undefined,
+						text,
+					),
+				}).show();
+			},
+			stock: (method, params, timeoutMs) => stockHelperRequest(method, params, { timeoutMs }),
+			workspaceDirs: () => [...new Set([...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()])],
+		},
+		onState: (part, state) => {
+			const send = (channel: string) => {
+				for (const win of BrowserWindow.getAllWindows()) {
+					if (!win.isDestroyed()) win.webContents.send(channel, state);
+				}
+			};
+			if (part === "omp") {
+				send(IPC_EVENTS.OMP_UPDATE_STATE);
+				// Devices that use this computer as their host show the same state.
+				devices.hostOmpUpdateChanged(state as OmpUpdateState);
+			} else if (part === "cli") send(IPC_EVENTS.CLI_UPDATE_STATE);
+			else if (part === "ext") send(IPC_EVENTS.EXTENSION_UPDATE_STATE);
+			else {
+				const setup = state as SetupState;
+				send(IPC_EVENTS.SETUP_STATE);
+				mobileWebService?.onSetupState(setup);
+				// ai-memory's wiring waits for Bun on Windows: it runs again (once) when the setup reports Bun present.
+				if (setup.items.some(item => item.id === "bun" && item.presence?.kind === "present")) {
+					aiMemoryService?.bunInstalled();
+				}
+				if (setup.items.some(item => item.presence !== null)) markStartup("setup-detected");
+				// omp just became usable: local tabs that waited for it start now (tabs on paired hosts are theirs),
+				// and a session list refused meanwhile is read again.
+				const usable = followSetupState(setup);
+				if (!usable) return;
+				for (const sidecar of sidecarPool.allSidecars()) {
+					if (sidecar.device === undefined && sidecar.status === "waiting") sidecar.restart();
+				}
+				if (usable.refused) sessionIndex.relist();
 			}
+		},
+		// One quiet toast, in one window.
+		onOmpUpdated: version => {
+			const windows = BrowserWindow.getAllWindows().filter(win => !win.isDestroyed());
+			const target = BrowserWindow.getFocusedWindow() ?? windows[0];
+			target?.webContents.send(IPC_EVENTS.OMP_UPDATED, { version });
 		},
 	});
-	setupService = setup;
-	registerSetupIpc(ipc, setup);
+	tools = toolsClient;
+	registerToolsIpc(ipc, toolsClient);
 	const diagnostics: DiagnosticsDeps = {
 		system: () => ({
 			appVersion: appVersion(),
@@ -1646,7 +1721,7 @@ app.whenReady().then(async () => {
 			osVersion: systemVersion(),
 			language: deviceLanguage() ?? null,
 		}),
-		setupState: () => setup.state(),
+		setupState: () => toolsClient.state().setup,
 		readLog: readDiagnosticLog,
 		pairedVersions: () => {
 			const state = devices.state();
@@ -1688,190 +1763,6 @@ app.whenReady().then(async () => {
 		},
 		downloadsDir: () => app.getPath("downloads"),
 	});
-	// omp keeps itself current (src/main/omp-updater.ts): a packaged app checks on its own; a test
-	// launch only with a fake installer and OMP_GUI_TEST_OMP_UPDATES=1 (the fake omp's `update --check`
-	// answers). OMPdesk's own update stays manual. It starts once machine setup's first pass has detected omp.
-	// By default it keeps 0.135.0's passes with the major guard. With the hidden pref `ompFollowVerified` it installs
-	// unasked only what the verified list names for this release (omp-compat-source.ts); a test launch reads that list
-	// from the file OMP_GUI_TEST_OMP_COMPAT names, and never from the network.
-	const followVerified = () => prefs.get(OMP_FOLLOW_VERIFIED_PREF) === true;
-	const testCompat = app.isPackaged ? undefined : process.env.OMP_GUI_TEST_OMP_COMPAT;
-	const compatSource = new OmpCompatSource({
-		cache: { userData: app.getPath("userData"), host: core() },
-		fetch:
-			testCompat !== undefined || testInstaller
-				? async () =>
-						testCompat && existsSync(testCompat)
-							? new Response(await openAsBlob(testCompat))
-							: new Response(null, { status: 404 })
-				: (url, init) => net.fetch(url, init),
-	});
-	app.once("will-quit", () => compatSource.dispose());
-	// OMPdesk is the one owner of omp updates while it follows the verified list: stock's own `update.auto` is taken
-	// while that pref and "Keep tools up to date" are on and given back when either goes off (omp-auto-takeover.ts),
-	// through stock's settings command on the omp OMPdesk runs. Only a launch that updates omp on its own touches it
-	// (never a dev run or a test that did not opt in), and an OMPdesk that does not follow never reads it.
-	const ompUpdatesScheduled = testInstaller
-		? process.env.OMP_GUI_TEST_OMP_UPDATES === "1"
-		: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1";
-	const runOmpCli: OmpCliRun = async args => {
-		const omp = await systemOmp();
-		if (!omp.ok) throw new Error(omp.error);
-		return omp.runtime.run(args, { timeoutMs: 30_000, env: { NO_COLOR: "1", FORCE_COLOR: "0" } });
-	};
-	const stockAuto = new OmpAutoTakeover({
-		enabled: () => followVerified() && prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
-		read: () => readStockAuto(runOmpCli),
-		write: value => writeStockAuto(runOmpCli, value),
-		file: join(app.getPath("userData"), "omp-auto-takeover.json"),
-		app: appVersion(),
-		log: logOmpUpdate,
-		onChanged: () => ompUpdater?.changed(),
-	});
-	const updater = new OmpUpdater({
-		scheduled: ompUpdatesScheduled,
-		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
-		fetchLatest: () => setup.latestOmp(),
-		follow: followVerified,
-		compat: async () => compatEntry((await compatSource.read()) ?? {}, appVersion()),
-		// When this computer first saw a version held for verification, kept across relaunches (omp-hold-notice.ts).
-		firstSeen: version => {
-			const seen = heldSince(prefs.get(OMP_HELD_SEEN_PREF), version, Date.now());
-			if (seen.store) prefs.set(OMP_HELD_SEEN_PREF, seen.store);
-			return seen.since;
-		},
-		newestWithin: major => setup.newestOmpIn(major),
-		stockAutoTaken: () => stockAuto.taken(),
-		installed: () => {
-			const presence = setup.state().items.find(item => item.id === "omp")?.presence;
-			return presence?.kind === "present" ? presence.version : null;
-		},
-		update: (target, beforeInstall, exactOnly) => setup.updateOmp(target, beforeInstall, exactOnly),
-		log: logOmpUpdate,
-		releaseHelpers: async () => {
-			const stats = statsServer;
-			statsServer = null;
-			await Promise.all([stats?.kill(), stopStockHelper()]);
-		},
-		resume: async updated => {
-			if (updated) {
-				const resolution = await refreshSystemOmp();
-				if (resolution.ok) hostOmpVersion = resolution.runtime.version;
-			}
-			await launchStats();
-			if (updated) {
-				sidecarPool.restartOnNewOmp();
-				hostServices.restartOnNewOmp();
-			}
-		},
-		onState: state => {
-			for (const win of BrowserWindow.getAllWindows()) {
-				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.OMP_UPDATE_STATE, state);
-			}
-			// Devices that use this computer as their host show the same state.
-			devices.hostOmpUpdateChanged(state);
-			// A held omp under the verified list is told (omp-hold-notice.ts): one runners failed once and once more after
-			// a day, one still waiting for them after 6 hours and then every 24 hours.
-			const hold = holdNotice(state.held, parseHoldTold(prefs.get(OMP_HOLD_TOLD_PREF)), Date.now());
-			if (hold.notice) {
-				const { notice } = hold;
-				prefs.set(OMP_HOLD_TOLD_PREF, hold.told);
-				logOmpUpdate("told", {
-					version: notice.version,
-					reason: notice.reason,
-					since: state.held?.since ?? null,
-					hours: notice.hours,
-					installed: state.installed,
-					count: hold.told?.count ?? null,
-				});
-				const params = { ...notice, installed: state.installed ?? "" };
-				const body =
-					notice.reason === "verifying"
-						? notice.days > 0
-							? "ompHold.verifyingBodyDays"
-							: "ompHold.verifyingBody"
-						: notice.days > 0
-							? "ompHold.bodyDays"
-							: "ompHold.body";
-				new Notification({
-					title: mainT(
-						notice.reason === "verifying" ? "ompHold.verifyingTitle" : "ompHold.title",
-						undefined,
-						params,
-					),
-					body: mainT(body, undefined, params),
-				}).show();
-			}
-		},
-		// One quiet toast, in one window.
-		onUpdated: notice => {
-			const windows = BrowserWindow.getAllWindows().filter(win => !win.isDestroyed());
-			const target = BrowserWindow.getFocusedWindow() ?? windows[0];
-			target?.webContents.send(IPC_EVENTS.OMP_UPDATED, notice);
-		},
-	});
-	ompUpdater = updater;
-	registerOmpUpdateIpc(ipc, updater);
-	// The vendor CLIs of connected accounts (Claude Code, Codex, Gemini, Cursor Agent, gh, …) keep current
-	// the same way (src/main/cli-tools/, pref `toolsAutoUpdate`): already-installed tools only, through the
-	// method that owns each. A test launch needs the fake installer and OMP_GUI_TEST_CLI_UPDATES=1. A
-	// paired host does its own; remote tabs never reach this computer's tools.
-	const cliToolUpdater = new CliUpdater({
-		scheduled: testInstaller
-			? process.env.OMP_GUI_TEST_CLI_UPDATES === "1"
-			: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1",
-		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
-		platform: platform === "win32" ? "win32" : "darwin",
-		toolsDir,
-		agentDesktopBundle,
-		connectedProviders: () =>
-			stockHelperRequest<{ providers: string[] }>("accounts.providers").then(result => result.providers),
-		env: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
-		testInstaller,
-		managedLatest: item => setup.latestManaged(item),
-		runUpdate: request => setup.runToolUpdate(request),
-		running: testInstaller ? (detection, owner) => runningIn(detection, owner, "") : runningIn,
-		onState: state => {
-			for (const win of BrowserWindow.getAllWindows()) {
-				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.CLI_UPDATE_STATE, state);
-			}
-		},
-	});
-	cliUpdater = cliToolUpdater;
-	registerCliUpdateIpc(ipc, cliToolUpdater);
-	// The marketplaces, plugins, skills and MCP servers of this computer's omp keep current too
-	// (src/main/ext-update/, pref `toolsAutoUpdate`): stock's own refresh and upgrade run in the stock
-	// helper's `extensions` worker, an MCP server's global binary is updated by the package manager that owns
-	// it, and the live local tabs (this computer's own and the ones it hosts for paired devices) pick up the
-	// result between turns. A test launch needs the fake installer and OMP_GUI_TEST_EXT_UPDATES=1.
-	const extensionToolUpdater = new ExtensionUpdater({
-		scheduled: testInstaller
-			? process.env.OMP_GUI_TEST_EXT_UPDATES === "1"
-			: app.isPackaged && process.env.OMP_GUI_HEADLESS !== "1",
-		enabled: () => prefs.get(TOOLS_AUTO_UPDATE_PREF) !== false,
-		platform: platform === "win32" ? "win32" : "darwin",
-		toolsDir,
-		helper: <T>(method: string, params: unknown, timeoutMs: number) =>
-			stockHelperRequest<T>(method, params, { timeoutMs }),
-		cwds: () => [...new Set([...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()])],
-		env: async () => ({ ...process.env, ...(await shellSpawnEnv()), ...(await resolveProxyEnvForSpawn()) }),
-		testInstaller,
-		// While omp is installed the stock helper is stopped; a request would start it again.
-		blocked: () => updater.state().phase !== "idle",
-		runUpdate: request => setup.runToolUpdate(request),
-		running: testInstaller ? (command, binary) => runningServer(command, binary, "") : runningServer,
-		apply: plan => {
-			sidecarPool.applyExtensionUpdate(plan);
-			hostServices.applyExtensionUpdate(plan);
-		},
-		onState: state => {
-			for (const win of BrowserWindow.getAllWindows()) {
-				if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.EXTENSION_UPDATE_STATE, state);
-			}
-		},
-	});
-	extensionUpdater = extensionToolUpdater;
-	registerExtensionUpdateIpc(ipc, extensionToolUpdater);
 	// One session's MCP change (an add, an adopted server, a sign-in, a reload) reaches every live session of this
 	// computer, the tabs it hosts for paired devices included (mcp-live.ts).
 	onMcpChange(change => {
@@ -2082,15 +1973,11 @@ app.whenReady().then(async () => {
 			details: { detail: error instanceof Error ? error.message : String(error) },
 		}),
 	);
-	void setup
-		.start()
-		.catch(() => undefined)
-		.then(() => {
-			updater.start();
-			if (ompUpdatesScheduled) void stockAuto.sync();
-			cliToolUpdater.start();
-			extensionToolUpdater.start();
-		});
+	// Setup's first pass, then the scheduled updaters (and stock's `update.auto` takeover) on their timers. A core that
+	// cannot answer now starts it when the instance opens again on the next one (tools/client.ts).
+	try {
+		toolsClient.start();
+	} catch {}
 	githubAuthService = createGithubAuthService(
 		state => {
 			for (const win of BrowserWindow.getAllWindows()) {
@@ -2099,9 +1986,11 @@ app.whenReady().then(async () => {
 		},
 		{
 			// A sign-in that finds gh missing installs it right then through setup's gh item (no back-off).
-			installGh: () => setup.installForConnection("gh"),
+			installGh: () => toolsClient.installForConnection("gh"),
 			cancelGhInstall: () => {
-				if (setup.state().items.find(item => item.id === "gh")?.phase === "running") setup.cancel();
+				if (toolsClient.state().setup.items.find(item => item.id === "gh")?.phase === "running") {
+					toolsClient.setupCancel();
+				}
 			},
 		},
 	);
@@ -2511,13 +2400,10 @@ app.whenReady().then(async () => {
 			}
 			if (key === RESUME_INTERRUPTED_PREF) turnResume.sync();
 			if (key === APP_AUTO_UPDATE_PREF) void appAutoUpdatePrefChanged();
-			if (key === TOOLS_AUTO_UPDATE_PREF || key === OMP_FOLLOW_VERIFIED_PREF) {
-				updater.prefChanged();
-				if (ompUpdatesScheduled) void stockAuto.sync();
-			}
+			if (key === TOOLS_AUTO_UPDATE_PREF || key === OMP_FOLLOW_VERIFIED_PREF) toolsClient.ompPrefChanged();
 			if (key === TOOLS_AUTO_UPDATE_PREF) {
-				cliToolUpdater.prefChanged();
-				extensionToolUpdater.prefChanged();
+				toolsClient.cliPrefChanged();
+				toolsClient.extPrefChanged();
 			}
 			if (key === "themeName" || key === "theme") {
 				nativeTheme.themeSource = nativeThemeSource(prefsStore().get("themeName"), prefsStore().get("theme"));
@@ -2596,7 +2482,10 @@ app.whenReady().then(async () => {
 			configure: address => host.server.configure(address),
 		},
 		serveSecret: () => host.serveSecret(),
-		setup,
+		setup: {
+			installForConnection: item => toolsClient.installForConnection(item),
+			cancel: () => toolsClient.setupCancel(),
+		},
 		locate: locateTs,
 		startApp: located =>
 			tailscaleOs
@@ -2769,11 +2658,9 @@ installQuitGuard(
 					mcpHubStopped = mcpHub?.kill() ?? Promise.resolve();
 				},
 			],
-			["omp-updater", () => ompUpdater?.dispose()],
+			// Setup and the omp, CLI and extension updaters: the running step and what it started end, nothing queued runs.
+			["tools", () => tools?.close()],
 			["local-engines", () => localEngines?.dispose()],
-			["cli-updater", () => cliUpdater?.dispose()],
-			["extension-updater", () => extensionUpdater?.dispose()],
-			["setup", () => setupService?.dispose()],
 			["ai-memory-sync", () => aiMemorySync?.dispose()],
 			["ai-memory-upkeep", () => aiMemoryUpkeep?.dispose()],
 			["ai-memory-care", () => aiMemoryCare?.dispose()],

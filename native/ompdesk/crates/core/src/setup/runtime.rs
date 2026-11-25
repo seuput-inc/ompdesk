@@ -210,7 +210,20 @@ enum ToolVersion<'a> {
 
 pub(super) async fn tool_version(call: Call) -> Result<Reply, Fault> {
     let Tool { bin, cwd, env } = call.params()?;
-    let name = Path::new(&bin).file_name().and_then(|n| n.to_str());
+    Reply::json(&tool_version_of(&bin, &cwd, &env, &call.scope).await?)
+}
+
+/// `setup.toolVersion` in process: `{kind: "present", version}` or `{kind: "broken", detail}`.
+pub(crate) async fn tool_version_of(
+    bin: &str,
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+    scope: &Scope,
+) -> Result<Value, Fault> {
+    let reply = |answer: ToolVersion<'_>| {
+        serde_json::to_value(answer).map_err(|error| Fault::new("internal", error.to_string()))
+    };
+    let name = Path::new(bin).file_name().and_then(|n| n.to_str());
     let tools: &[&str] = if cfg!(windows) {
         &[
             "bun.exe",
@@ -236,15 +249,15 @@ pub(super) async fn tool_version(call: Call) -> Result<Reply, Fault> {
             "Not a machine setup version probe",
         ));
     }
-    let detail = match version_output(&bin, &cwd, &env, &call.scope, VersionMode::ExecFile).await {
+    let detail = match version_output(bin, cwd, env, scope, VersionMode::ExecFile).await {
         Ok((true, out, _)) => {
             let text = String::from_utf8_lossy(&out);
-            return Reply::json(&ToolVersion::Present {
+            return reply(ToolVersion::Present {
                 version: version_in(&text),
             });
         }
         Ok((false, _, err)) if !err.is_empty() => {
-            return Reply::json(&ToolVersion::Broken {
+            return reply(ToolVersion::Broken {
                 detail: js_trim(&String::from_utf8_lossy(&err))
                     .split('\n')
                     .next()
@@ -255,7 +268,7 @@ pub(super) async fn tool_version(call: Call) -> Result<Reply, Fault> {
         Err(e) => e.message,
         Ok(_) => format!("Command failed: {bin} --version"),
     };
-    Reply::json(&ToolVersion::Broken { detail: &detail })
+    reply(ToolVersion::Broken { detail: &detail })
 }
 
 pub(super) async fn probe(call: Call) -> Result<Reply, Fault> {

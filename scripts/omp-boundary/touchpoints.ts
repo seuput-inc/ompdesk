@@ -95,11 +95,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"Tells a compiled (standalone) omp from a package install by its binary format (Mach-O, ELF, Windows PE .bun section, Bun shims); bridge imports do not resolve inside a standalone bundle.",
 		files: [
 			"src/main/omp-runtime.ts",
-			"src/main/setup/compiled-launcher.ts",
+			"native/ompdesk/crates/core/src/tools/setup.rs",
 			"native/ompdesk/crates/core/src/setup/launcher.rs",
 		],
 		stock: ["Mach-O / ELF / PE .bun section", "Bun shim and .bunx launcher"],
-		tests: ["src/main/omp-runtime.test.ts", "src/main/setup/plans.test.ts"],
+		tests: ["src/main/omp-runtime.test.ts", "native/ompdesk/crates/core/src/tools/setup/tests.rs"],
 	},
 	{
 		id: "L05",
@@ -107,9 +107,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"Reads omp's Bun floor from the package's `engines.bun` (>=X.Y.Z) to pick or refuse the Bun that runs it.",
-		files: ["src/main/omp-runtime.ts", "src/main/setup/service.ts"],
+		files: ["src/main/omp-runtime.ts", "native/ompdesk/crates/core/src/tools/setup/detect.rs"],
 		stock: ["package.json engines.bun (>=X.Y.Z)"],
-		tests: ["src/main/omp-runtime.test.ts", "src/main/setup/service.test.ts"],
+		tests: ["src/main/omp-runtime.test.ts", "native/ompdesk/crates/core/src/tools/setup/tests.rs"],
 	},
 	{
 		id: "L06",
@@ -146,7 +146,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"Parses the human-readable output of `omp update --check` (`Current version:`, `New version available:`, `Already up to date`).",
-		files: ["src/main/omp-runtime.ts", "src/main/local/misc.ts", "src/main/omp-updater.ts"],
+		files: ["src/main/omp-runtime.ts", "src/main/local/misc.ts", "native/ompdesk/crates/core/src/tools/setup.rs"],
 		stock: ["omp update --check", "Current version:", "New version available:", "Already up to date"],
 		tests: ["src/main/omp-runtime.test.ts", "src/main/local/misc.test.ts"],
 	},
@@ -157,10 +157,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		summary:
 			"Updates and installs omp at an exact version through `bun install -g @oh-my-pi/pi-coding-agent@<version>` (with the `@oh-my-pi/pi-natives*` packages Bun's global manifest pins beside it) or, for an omp npm owns, `npm install -g --prefix <prefix> @oh-my-pi/pi-coding-agent@<version>`, and only for an omp neither owns `omp update`; including launcher repair, install-kind detection and how the package files are replaced (a running helper is stopped first so module generations do not mix).",
 		files: [
-			"src/main/omp-updater.ts",
-			"src/main/setup/plans.ts",
-			"src/main/setup/service.ts",
-			"src/main/setup/compiled-launcher.ts",
+			"native/ompdesk/crates/core/src/tools/omp/mod.rs",
+			"native/ompdesk/crates/core/src/tools/setup/plans.rs",
+			"native/ompdesk/crates/core/src/tools/setup.rs",
 			"native/ompdesk/crates/core/src/setup/launcher.rs",
 			"scripts/omp-update-lock-check.ts",
 			"scripts/setup-install-check.ts",
@@ -173,11 +172,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-natives* pinned in <BUN_INSTALL>/install/global/package.json",
 		],
 		tests: [
-			"src/main/setup/omp-update-install.test.ts",
-			"src/main/setup/plans.test.ts",
-			"src/main/setup/service.test.ts",
+			"src/main/tools/omp-install.test.ts",
+			"native/ompdesk/crates/core/src/tools/setup/tests.rs",
 			"native/ompdesk/crates/core/src/setup/tests.rs",
-			"src/main/omp-updater.test.ts",
+			"native/ompdesk/crates/core/src/tools/omp/tests.rs",
 		],
 	},
 	{
@@ -218,14 +216,18 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "public",
 		summary:
 			"OMPdesk is the one owner of omp updates: it reads stock's `update.auto` with `omp config get update.auto --json`, turns it off with `omp config set update.auto false --json` while it keeps omp current, and sets it back to true when the person turns that off (an `overriddenBy` in set's reply counts as not written).",
-		files: ["src/main/index.ts", "src/main/omp-auto-takeover.ts"],
+		files: ["src/main/index.ts", "native/ompdesk/crates/core/src/tools/omp/takeover.rs"],
 		stock: [
 			"omp config get <key> --json",
 			"omp config set <key> <value> --json",
 			"update.auto (default false)",
 			"omp://settings.md",
 		],
-		tests: ["src/main/omp-auto-takeover.test.ts", "src/main/omp-config-stock.test.ts", "e2e/omp-auto-update.e2e.ts"],
+		tests: [
+			"src/main/omp-config-stock.test.ts",
+			"e2e/omp-auto-update.e2e.ts",
+			"native/ompdesk/crates/core/src/tools/omp/tests.rs",
+		],
 	},
 	{
 		id: "Q01",

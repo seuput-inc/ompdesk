@@ -61,7 +61,7 @@ pub fn parse_plan(output: &str) -> Option<Plan> {
 }
 
 /// `text` without its CSI escape sequences (`/\x1b\[[0-9;?]*[ -/]*[@-~]/g`).
-fn without_csi(text: &str) -> String {
+pub(crate) fn without_csi(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find("\u{1b}[") {

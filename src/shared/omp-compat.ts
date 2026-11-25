@@ -1,7 +1,7 @@
 /**
  * The verified-omp list (docs/design/follow-omp.md): which omp versions runners verified against each OMPdesk
  * release's code, and the one held because it failed. omp-latest.yml writes it (`recordVerdict`) to `omp-compat.json`
- * on the `omp-compat` branch; the app reads its own release's entry (main `omp-compat-source.ts`) and a pass nobody
+ * on the `omp-compat` branch; the app reads its own release's entry (the core's `tools/omp/compat.rs`) and a pass nobody
  * asked for installs only what `followTarget` picks from it. One file, one writer, read strictly: a list of another
  * shape is not used at all (the reader keeps its last good one), so a broken or hostile file can never name a range,
  * a tag, a URL or a package; the app installs only `@oh-my-pi/pi-coding-agent` at an exact version it names itself.

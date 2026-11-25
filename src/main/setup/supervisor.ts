@@ -23,7 +23,24 @@ import type { WorktreeHook } from "../local/git/worktree-seed";
 import { nativeBinPath } from "../native-bin";
 import { findOnPath } from "../spawn";
 import { bunInstallDir } from "./paths";
-import type { SpawnSpec } from "./plans";
+
+/** One process a supervised run starts. */
+export interface SpawnSpec {
+	file: string;
+	args: string[];
+	/** Only for a Windows `.cmd` shim; args are then already quoted for cmd.exe. */
+	shell: boolean;
+	/** A file the supervisor hands the child as stdin (scheduled runs pipe their prompt this way). */
+	inputFile?: string;
+	/**
+	 * The command may leave a descendant that outlives the app by design (ai-memory's `setup` starts ai-memory's own
+	 * per-user service host): it gets no handle of the app's — no pipe, nothing the app inherited — only NUL as stdin
+	 * and a temp file as stdout/stderr, which the supervisor passes on as its own output once the command exited.
+	 * `file` is then an absolute path (or the `.cmd` shim `shell` runs) and `inputFile` is not used. On Windows it starts
+	 * through Bun (`isolatedLaunch`), so it needs Bun installed.
+	 */
+	isolated?: boolean;
+}
 
 /** Where the command reaches the supervisor (`SPEC_ENV` in `supervise.rs`). */
 const SUPERVISOR_SPEC_ENV = "OMPDESK_SETUP_SPEC";

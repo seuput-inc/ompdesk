@@ -12,9 +12,9 @@ import {
 	LocalMachine,
 	type MachineServices,
 	machineFor,
+	type OmpUpdateDriver,
 	RemoteMachine,
 } from "./machine-services";
-import type { OmpUpdater } from "./omp-updater";
 import { HOST_STATS_TIMEOUT_MS, LINK_SLACK_MS } from "./remote/app-protocol";
 
 const statsText = (key: "stats.notRunning" | "stats.notReady") => `local:${key}`;
@@ -71,7 +71,7 @@ function localMachine(
 	revive: "scheduled" | "exhausted" = "scheduled",
 	fetch: StatsFetch = async () => ({ ok: 1 }),
 	accountRotation: AccountRotationDeps = rotationPrefs().deps,
-	updater: Pick<OmpUpdater, "state" | "updateNow"> = fakeUpdater(),
+	updater: OmpUpdateDriver = fakeUpdater(),
 	desktop?: DesktopDeps,
 	localEngines: ConstructorParameters<typeof LocalMachine>[0]["localEngines"] = {
 		read: () => undefined,

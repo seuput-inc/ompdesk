@@ -40,7 +40,7 @@ mod root;
 mod terminal;
 #[cfg(test)]
 mod tests;
-mod text;
+pub(crate) mod text;
 mod unit;
 
 use std::collections::HashMap;

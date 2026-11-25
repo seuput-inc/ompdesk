@@ -1,0 +1,54 @@
+{
+	"about": "Cases both readers of the verified list must agree on: src/shared/omp-compat.test.ts and the core's tools::omp tests (native/ompdesk/crates/core/src/tools/omp/compat.rs).",
+	"refused": [
+		["not JSON", "<html>rate limited</html>"],
+		["an array", "[]"],
+		["a range", "{\"0.134.1\":{\"verified\":[\"^19.0.0\"],\"holding\":null}}"],
+		["a dist-tag", "{\"0.134.1\":{\"verified\":[\"latest\"],\"holding\":null}}"],
+		["a URL", "{\"0.134.1\":{\"verified\":[\"https://evil.example/omp.tgz\"],\"holding\":null}}"],
+		["a package spec", "{\"0.134.1\":{\"verified\":[\"@evil/omp@19.0.0\"],\"holding\":null}}"],
+		["a prerelease", "{\"0.134.1\":{\"verified\":[\"19.0.0-canary.1\"],\"holding\":null}}"],
+		["a leading v", "{\"0.134.1\":{\"verified\":[\"v19.0.0\"],\"holding\":null}}"],
+		["a leading zero", "{\"0.134.1\":{\"verified\":[\"19.01.0\"],\"holding\":null}}"],
+		["an extra field", "{\"0.134.1\":{\"verified\":[],\"holding\":null,\"package\":\"@evil/omp\"}}"],
+		["an app key that is no version", "{\"latest\":{\"verified\":[],\"holding\":null}}"],
+		["a __proto__ key", "{\"__proto__\": {\"verified\": [], \"holding\": null}}"],
+		["a held range", "{\"0.134.1\":{\"verified\":[],\"holding\":{\"version\":\"19.x\",\"since\":\"2026-11-20\",\"issue\":null}}}"],
+		["a held version without a time", "{\"0.134.1\":{\"verified\":[],\"holding\":{\"version\":\"19.1.0\",\"since\":\"soon\",\"issue\":null}}}"],
+		["an issue that is no number", "{\"0.134.1\":{\"verified\":[],\"holding\":{\"version\":\"19.1.0\",\"since\":\"2026-11-20\",\"issue\":\"12\"}}}"],
+		["an issue that is no whole number", "{\"0.134.1\":{\"verified\":[],\"holding\":{\"version\":\"19.1.0\",\"since\":\"2026-11-20\",\"issue\":1.5}}}"],
+		["no verified list", "{\"0.134.1\":{\"holding\":null}}"],
+		["seven digits", "{\"0.134.1\":{\"verified\":[\"1234567.0.0\"],\"holding\":null}}"]
+	],
+	"read": [
+		{
+			"text": "{\"0.134.1\":{\"verified\":[\"18.22.2\",\"19.0.0\"],\"holding\":{\"version\":\"19.1.0\",\"since\":\"2026-11-20T01:00:00.000Z\",\"issue\":12}},\"0.135.0\":{\"verified\":[],\"holding\":null}}",
+			"app": "0.134.1",
+			"entry": { "verified": ["18.22.2", "19.0.0"], "holding": { "version": "19.1.0", "since": "2026-11-20T01:00:00.000Z" } }
+		},
+		{
+			"text": "{\"0.134.1\":{\"verified\":[\"18.22.2\"],\"holding\":null}}",
+			"app": "0.136.0",
+			"entry": { "verified": [], "holding": null }
+		},
+		{
+			"text": " {\"0.135.0\":{\"verified\":[\"0.0.0\"]}}\r\n",
+			"app": "0.135.0",
+			"entry": { "verified": ["0.0.0"], "holding": null }
+		},
+		{
+			"text": "{\"0.135.0\":{\"verified\":[],\"holding\":{\"version\":\"19.1.0\",\"since\":\"2026-11-20\",\"issue\":7}}}",
+			"app": "0.135.0",
+			"entry": { "verified": [], "holding": { "version": "19.1.0", "since": "2026-11-20" } }
+		}
+	],
+	"follow": [
+		{ "installed": "18.22.0", "latest": "19.1.0", "tested": "18.22.2", "verified": ["19.0.0"], "target": "19.0.0" },
+		{ "installed": "18.22.0", "latest": "19.1.0", "tested": "18.22.2", "verified": [], "target": "18.22.2" },
+		{ "installed": "18.22.0", "latest": "19.0.0", "tested": "18.22.2", "verified": ["19.1.0"], "target": "18.22.2" },
+		{ "installed": "19.1.0", "latest": "19.1.0", "tested": "18.22.2", "verified": ["19.0.0"], "target": null },
+		{ "installed": "18.0.0", "latest": "19.1.0", "tested": "x", "verified": ["19.1.0-rc.1"], "target": null },
+		{ "installed": "18.0.0", "latest": "19.1.0", "tested": "18.22.2", "verified": ["19.0.0", "18.23.0", "19.1.0"], "target": "19.1.0" },
+		{ "installed": "18.22.2", "latest": "nightly-3f2a", "tested": "18.22.2", "verified": ["19.0.0"], "target": null }
+	]
+}

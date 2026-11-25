@@ -181,7 +181,7 @@ export const IPC_EVENTS = {
 	WORKTREE_NOTICE: "worktree-lifecycle:notice",
 	/** This machine's automatic setup changed (src/main/setup/); payload is the whole SetupState. */
 	SETUP_STATE: "setup:state",
-	/** omp's automatic update changed (src/main/omp-updater.ts); payload is the whole OmpUpdateState. */
+	/** omp's automatic update changed (the core's `tools/omp`); payload is the whole OmpUpdateState. */
 	OMP_UPDATE_STATE: "omp-update:state",
 	/** omp was just updated on its own; payload is an OmpUpdatedNotice, sent to one window (one quiet toast). */
 	OMP_UPDATED: "omp-update:updated",
@@ -193,11 +193,11 @@ export const IPC_EVENTS = {
 	DISK_CARE_STATE: "disk-care:state",
 	/** A paired host's scheduled runs changed (pushed by the host over the link); payload is an IpcHostSchedules. */
 	HOST_SCHEDULES_STATE: "host-schedules:state",
-	/** The tool CLIs' automatic updates changed (src/main/cli-tools/updater.ts); payload is the whole CliUpdateState. */
+	/** The tool CLIs' automatic updates changed (the core's `tools/cli`); payload is the whole CliUpdateState. */
 	CLI_UPDATE_STATE: "cli-update:state",
 	/** ai-memory's state changed (src/main/ai-memory/); payload is the whole AiMemoryState. */
 	AI_MEMORY_STATE: "ai-memory:state",
-	/** The extensions' automatic updates changed (src/main/ext-update/); payload is the whole ExtensionUpdateState. */
+	/** The extensions' automatic updates changed (the core's `tools/ext.rs`); payload is the whole ExtensionUpdateState. */
 	EXTENSION_UPDATE_STATE: "extension-update:state",
 	/** This machine's GitHub CLI sign-in changed (src/main/github-auth/); payload is the whole GithubAuthState. */
 	GITHUB_AUTH_STATE: "github-auth:state",
@@ -439,7 +439,7 @@ export const IPC_COMMANDS = {
 	SETUP_CANCEL: "setup:cancel",
 	/** Git for Windows' Mandatory ASLR override for its MSYS executables ("fix" | "undo"; anything else is refused). Elevated: a UAC prompt. */
 	SETUP_GIT_ASLR: "setup:git-aslr",
-	/** omp's automatic update (src/main/omp-updater.ts): whole OmpUpdateState snapshot */
+	/** omp's automatic update (the core's `tools/omp`): whole OmpUpdateState snapshot */
 	OMP_UPDATE_GET_STATE: "omp-update:get-state",
 	/** Check npm and update omp now, whatever the pref says (runs in the background) */
 	OMP_UPDATE_NOW: "omp-update:now",
@@ -451,7 +451,7 @@ export const IPC_COMMANDS = {
 	DISK_CARE_GET_STATE: "disk-care:get-state",
 	/** Run disk care now (joins a run already going); resolves when it ends */
 	DISK_CARE_RUN: "disk-care:run",
-	/** The tool CLIs' automatic updates (src/main/cli-tools/updater.ts): whole CliUpdateState snapshot */
+	/** The tool CLIs' automatic updates (the core's `tools/cli`): whole CliUpdateState snapshot */
 	CLI_UPDATE_GET_STATE: "cli-update:get-state",
 	/** Check and update one tool (a CliToolId) or all now, whatever the pref says (runs in the background) */
 	CLI_UPDATE_NOW: "cli-update:now",
@@ -483,7 +483,7 @@ export const IPC_COMMANDS = {
 	AI_MEMORY_CARE: "ai-memory:care",
 	AI_MEMORY_CARE_UNDO: "ai-memory:care-undo",
 	AI_MEMORY_CANCEL_HANDOFF: "ai-memory:cancel-handoff",
-	/** The extensions' automatic updates (src/main/ext-update/): whole ExtensionUpdateState snapshot */
+	/** The extensions' automatic updates (the core's `tools/ext.rs`): whole ExtensionUpdateState snapshot */
 	EXTENSION_UPDATE_GET_STATE: "extension-update:get-state",
 	/** Check and update one row (an ExtensionRow key) or all now, whatever the pref says (runs in the background) */
 	EXTENSION_UPDATE_NOW: "extension-update:now",
@@ -589,7 +589,7 @@ export type RuntimeErrorSource =
 	 */
 	| "app-update"
 	/**
-	 * Every omp install OMPdesk makes (src/main/omp-updater.ts, and machine setup's own omp install): `message` is
+	 * Every omp install OMPdesk makes (the core's `tools/omp`, and machine setup's own omp install): `message` is
 	 * checked (`details.installed`, `latest`, `tested`), held (`version`, `reason`), started (`from`, `target`),
 	 * finished (`version`), failed (`reason`, `detail`) or skipped (`reason`); `details.path` says who started it:
 	 * launch, scheduled, repair, manual or setup.
@@ -648,7 +648,7 @@ export type RuntimeErrorSource =
 	/** The pre-rename profile moved or was copied into userData. */
 	| "user-data-migration"
 	/**
-	 * Machine setup (src/main/setup/detect.ts, service.ts): `message` names the finding or the Git Mandatory ASLR
+	 * Machine setup (the core's `tools/setup.rs`, `tools/setup/detect.rs`): `message` names the finding or the Git Mandatory ASLR
 	 * override and its outcome; `details.level` is `warn` or `info`.
 	 */
 	| "setup"

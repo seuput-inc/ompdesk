@@ -250,7 +250,7 @@ struct Held {
 /// failure is the message node gave (`spawn <file> ENOENT`, `ENOENT: no such file or directory, open '<path>'`).
 fn start(spec: &Spec) -> Result<Held, String> {
     let (mut command, program) = if spec.shell {
-        shell_command(spec)
+        shell_command(&spec.file, &spec.args)
     } else {
         let mut command = Command::new(&spec.file);
         command.args(&spec.args);
@@ -333,9 +333,9 @@ fn spawn_held(
 
 /// The command through the shell, as node's `shell: true` runs it: `[file, ...args]` joined by spaces, given to
 /// `/bin/sh -c`, on Windows to `%ComSpec% /d /s /c "…"` verbatim (callers quote for cmd.exe).
-fn shell_command(spec: &Spec) -> (Command, String) {
-    let mut line = spec.file.clone();
-    for arg in &spec.args {
+pub(crate) fn shell_command(file: &str, args: &[String]) -> (Command, String) {
+    let mut line = file.to_owned();
+    for arg in args {
         line.push(' ');
         line.push_str(arg);
     }
