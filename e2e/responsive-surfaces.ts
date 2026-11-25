@@ -1313,7 +1313,10 @@ export const SURFACES: readonly Surface[] = [
 		id: "first-run",
 		area: "A",
 		title: "First run's provider step with Orca's step pill, on a computer where nothing can serve yet",
-		open: async () => {},
+		// The parity setup's own turn and Escapes settle the launch's check; a fresh load checks again, as a launch does.
+		open: async page => {
+			await page.reload();
+		},
 		ready: '[data-first-run-step="connect"] [role="progressbar"]',
 		// Parity only, and only over a host whose fake omp has no signed-in provider (`OMP_GUI_TEST_SIGNED_OUT=1`).
 		when: () => false,
