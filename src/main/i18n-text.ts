@@ -29,11 +29,11 @@ export const MAIN_TEXT = {
 	"storeRecovered.title": { en: "Settings file was damaged", ko: "설정 파일이 손상됐어요" },
 	"storeRecovered.restored": {
 		en: "OMPdesk couldn't read {file}, so it put back the last good copy. Changes from the last hour may be missing.",
-		ko: "{file}을(를) 읽을 수 없어서 마지막으로 정상이던 사본으로 되돌렸어요. 최근 한 시간의 변경은 빠졌을 수 있어요.",
+		ko: "설정 파일 {file}을 읽을 수 없어서 마지막으로 정상이던 사본으로 되돌렸어요. 최근 한 시간의 변경은 빠졌을 수 있어요.",
 	},
 	"storeRecovered.reset": {
 		en: "OMPdesk couldn't read {file} and had no good copy, so those settings start from the defaults.",
-		ko: "{file}을(를) 읽을 수 없고 정상 사본도 없어서 해당 설정을 기본값으로 시작해요.",
+		ko: "설정 파일 {file}을 읽을 수 없고 정상 사본도 없어서 해당 설정을 기본값으로 시작해요.",
 	},
 	// The volume with OMPdesk's data under 10 GB free (health-watch.ts): at most once a day.
 	"diskLow.title": { en: "Disk is almost full", ko: "디스크 공간이 거의 없어요" },
