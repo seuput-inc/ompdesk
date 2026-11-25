@@ -94,8 +94,9 @@ describe("the desktop status bar", () => {
 		await mount();
 
 		const usage = container.querySelector("[data-status-usage]");
-		expect(usage?.textContent).toContain("42%");
-		expect(usage?.textContent).toContain("90%");
+		// Each provider by its brand, even before the catalog lists it.
+		expect(usage?.textContent).toContain("Claude 42%");
+		expect(usage?.textContent).toContain("ChatGPT 90%");
 		expect(container.querySelector("[data-status-link]")?.getAttribute("data-status-link")).toBe("warning");
 		expect(container.querySelector("[data-status-link]")?.textContent).toContain("1/2");
 		expect(container.querySelector("[data-status-update]")?.textContent).toContain("0.144.0");
