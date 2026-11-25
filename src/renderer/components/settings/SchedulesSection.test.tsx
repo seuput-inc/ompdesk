@@ -323,6 +323,31 @@ describe("SchedulesSection", () => {
 		expect(command).toHaveBeenCalledWith({ action: "resend", runId: "r2" }, undefined);
 	});
 
+	it("shows what a run used", async () => {
+		state = {
+			paused: false,
+			schedules: [SCHEDULE],
+			runs: [
+				{
+					id: "r1",
+					scheduleId: "s1",
+					trigger: "schedule",
+					startedAt: "2026-10-15T09:30:00.000Z",
+					endedAt: "2026-10-15T09:31:00.000Z",
+					status: "succeeded",
+					exitCode: 0,
+					error: null,
+					usage: { input: 10_000, output: 2_000, cacheRead: 300, cacheWrite: 0, cost: 0.0123 },
+				},
+			],
+			nextRuns: { s1: null },
+		};
+		await mount();
+		expect(document.body.querySelector('[data-schedule-run-row="r1"]')?.textContent).toContain(
+			"12.3k tokens · $0.01",
+		);
+	});
+
 	it("offers a retry when the schedules cannot load", async () => {
 		failGet = true;
 		await mount();

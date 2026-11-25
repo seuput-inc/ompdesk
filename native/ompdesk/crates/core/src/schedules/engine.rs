@@ -1426,6 +1426,17 @@ impl Engine {
         }
     }
 
+    /// What a fresh run's model replies used (`ScheduleRun.usage`: tokens and cost as its omp's run extension counted
+    /// them), kept on its row; told just before `ended`.
+    pub fn usage(&mut self, run: &str, usage: Value) {
+        if !usage.is_object() {
+            return;
+        }
+        if let Some(record) = self.runs.iter_mut().find(|record| id_of(record) == run) {
+            record.insert("usage".into(), usage);
+        }
+    }
+
     /// A run is over: `code` is its exit status (0 for a woken turn that ended well), `error` why it has none.
     pub fn ended(&mut self, run: &str, code: Option<i64>, error: Option<String>, now: i64) {
         self.now = now;

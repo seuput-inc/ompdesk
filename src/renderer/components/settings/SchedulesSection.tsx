@@ -23,7 +23,7 @@ import {
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Schedule, ScheduleDraft, ScheduleRun, SchedulesRequest, SchedulesState } from "../../../shared/schedules";
 import { AnsiText } from "../../lib/ansi";
-import { basename, durationBetween, formatClock, formatTimeAgo } from "../../lib/format";
+import { basename, durationBetween, formatClock, formatTimeAgo, formatTokens, formatUsd } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { frequencySummary, RUN_STATUS_BADGE } from "../../lib/schedule-text";
 import { useFocusedTabDevice } from "../../stores/remote";
@@ -388,6 +388,15 @@ function RunRow({
 					<span className="shrink-0 text-sc-xs text-(--sc-text-muted)" tabIndex={0}>
 						{formatTimeAgo(run.startedAt)}
 						{duration ? ` · ${duration}` : ""}
+						{run.usage
+							? ` · ${t("schedules.usage", {
+									tokens: formatTokens(
+										run.usage.input + run.usage.output + run.usage.cacheRead + run.usage.cacheWrite,
+										{ trimZero: true },
+									),
+									cost: formatUsd(run.usage.cost),
+								})}`
+							: ""}
 					</span>
 				</Tooltip>
 				{run.notStarted && !run.resentAs && onResend && (

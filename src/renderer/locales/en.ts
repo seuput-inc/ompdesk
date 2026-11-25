@@ -6120,6 +6120,7 @@ export const en: Record<string, string> = {
 	"schedules.exitCode": "omp exited with code {code}",
 	"schedules.showLog": "Show log",
 	"schedules.repeats": "×{count}",
+	"schedules.usage": "{tokens} tokens · {cost}",
 	"schedules.resend": "Send again",
 	"schedules.hideLog": "Hide log",
 	"schedules.logLoading": "Loading log…",

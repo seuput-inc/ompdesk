@@ -998,6 +998,31 @@ fn a_fresh_runs_result_goes_where_its_schedule_says_unless_it_is_quiet() {
 }
 
 #[test]
+fn keeps_what_a_fresh_run_used_on_its_row() {
+    let mut play = Play::new(0);
+    let id = play
+        .engine
+        .create(
+            &draft(serde_json::json!({"kind": "interval", "minutes": 60})),
+            None,
+            0,
+        )
+        .unwrap();
+    play.settle();
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": id}))
+            .is_ok()
+    );
+    let run = play.launches[0].0.clone();
+    let used = serde_json::json!({"input": 1200, "output": 300, "cacheRead": 0, "cacheWrite": 0, "cost": 0.012});
+    play.engine.usage(&run, used.clone());
+    play.engine.usage(&run, serde_json::json!("not usage"));
+    play.end_last(Some(0), None);
+    assert_eq!(play.runs()[0]["usage"], used);
+    assert_eq!(play.runs()[0]["status"], "succeeded");
+}
+
+#[test]
 fn reads_a_runs_answer_and_tells_a_quiet_one() {
     use super::engine::{quiet_result, run_answer};
     let log = "$ omp -p --model x\n# /work\n\nChecked the feed.\nTwo new releases.";

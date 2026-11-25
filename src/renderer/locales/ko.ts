@@ -6111,6 +6111,7 @@ export const ko: Record<string, string> = {
 	"schedules.exitCode": "omp가 종료 코드 {code}로 끝났어요",
 	"schedules.showLog": "로그 보기",
 	"schedules.repeats": "×{count}",
+	"schedules.usage": "토큰 {tokens} · {cost}",
 	"schedules.resend": "다시 보내기",
 	"schedules.hideLog": "로그 숨기기",
 	"schedules.logLoading": "로그를 불러오는 중…",

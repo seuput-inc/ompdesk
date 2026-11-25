@@ -18,6 +18,9 @@
  * A core that ended took its timers and every omp it ran with it (the journal reads them stopped); the service opens
  * again on the next core, from the journal.
  */
+
+import { readFile, rm } from "node:fs/promises";
+import { RUN_USAGE_ENV } from "../../resources/gui-bridge/credit-spend-core";
 import { AGENT_SCHEDULE_PREFIX } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
 import {
@@ -29,6 +32,7 @@ import {
 	type ScheduleCreated,
 	type ScheduleDraft,
 	type ScheduleResultsTo,
+	type ScheduleRunUsage,
 	type SchedulesRequest,
 	type SchedulesState,
 } from "../shared/schedules";
@@ -54,7 +58,8 @@ const REOPEN_MS = 30_000;
 /** One started run: `stop()` ends it, `done` settles once it ended (an omp: exited, its log flushed). */
 export interface RunProcess {
 	stop(): void;
-	done: Promise<{ code: number | null; error?: string }>;
+	/** `usage`: what a fresh run's model replies used, as its omp counted it (stock's session tally). */
+	done: Promise<{ code: number | null; error?: string; usage?: ScheduleRunUsage }>;
 }
 
 export type RunLauncher = (schedule: Schedule, files: { log: string; prompt: string }) => Promise<RunProcess>;
@@ -498,10 +503,13 @@ export function ompRunLauncher(options: {
 		const { bin } = resolution.runtime;
 		const extensions = (await options.extensionArgs?.(schedule.cwd)) ?? [];
 		const creditSpend = options.creditSpend?.();
-		const env = {
+		// The run extension that carries the Credit use switch also writes stock's usage tally here as the run ends.
+		const usageFile = creditSpend ? `${files.log}.usage.json` : undefined;
+		const env: NodeJS.ProcessEnv = {
 			...(await options.env()),
 			...(extensions.length ? await options.extensionEnv?.(schedule.cwd) : {}),
 			...creditSpend?.env,
+			...(usageFile ? { [RUN_USAGE_ENV]: usageFile } : {}),
 		};
 		const args = [
 			"-p",
@@ -533,9 +541,10 @@ export function ompRunLauncher(options: {
 				if (host.generation !== home) ended.resolve({ code: null, error: "ompdesk-core exited during the run" });
 			}),
 		];
-		const done = ended.promise.then(({ code, error }) => {
+		const done = ended.promise.then(async ({ code, error }) => {
 			for (const off of unsubscribe) off();
-			return error === undefined ? { code } : { code, error };
+			const usage = usageFile ? await readRunUsage(usageFile) : undefined;
+			return { code, ...(error === undefined ? {} : { error }), ...(usage ? { usage } : {}) };
 		});
 		const started = host.call("schedules.launch", {
 			run,
@@ -563,4 +572,27 @@ export function ompRunLauncher(options: {
 			done,
 		};
 	};
+}
+
+/** The tally a run's extension wrote (stock's `UsageStatistics`), kept to the fields a run row shows; the file goes. */
+async function readRunUsage(file: string): Promise<ScheduleRunUsage | undefined> {
+	try {
+		const told = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+		const count = (name: string) => {
+			const value = told[name];
+			return typeof value === "number" && Number.isFinite(value) ? value : 0;
+		};
+		return {
+			input: count("input"),
+			output: count("output"),
+			cacheRead: count("cacheRead"),
+			cacheWrite: count("cacheWrite"),
+			cost: count("cost"),
+		};
+	} catch {
+		// No file: the run never reached a model, or its omp lacks the extension.
+		return undefined;
+	} finally {
+		await rm(file, { force: true }).catch(() => undefined);
+	}
 }

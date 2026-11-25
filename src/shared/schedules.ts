@@ -141,6 +141,17 @@ export interface ScheduleRun {
 	notStarted?: boolean;
 	/** The run `resend` started for it: its one "Send again" is spent. */
 	resentAs?: string;
+	/** What a fresh run's model replies used (stock's session tally, subagents included). Absent for a wake-up run. */
+	usage?: ScheduleRunUsage;
+}
+
+/** Tokens and USD cost of one run (`ScheduleRun.usage`). */
+export interface ScheduleRunUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
 }
 
 export interface SchedulesState {

@@ -509,6 +509,9 @@ struct EndedParams {
     run: String,
     code: Option<i64>,
     error: Option<String>,
+    /// What a fresh run's model replies used, when its omp's extension counted it.
+    #[serde(default)]
+    usage: Option<Value>,
 }
 
 /// A request's service and moment, and its own params.
@@ -714,7 +717,12 @@ pub fn register(registry: &mut Registry) {
     registry.add("schedules.ended", |call| {
         Box::pin(async move {
             let (service, now, params): (_, _, EndedParams) = asked(&call)?;
-            service.with(|engine| engine.ended(&params.run, params.code, params.error, now));
+            service.with(|engine| {
+                if let Some(usage) = params.usage {
+                    engine.usage(&params.run, usage);
+                }
+                engine.ended(&params.run, params.code, params.error, now)
+            });
             Reply::json(&())
         })
     });

@@ -22,6 +22,9 @@
 /** Spawn env: `1` lets accounts run on credits and extra usage (stock); anything else is off. */
 export const CREDIT_SPEND_ENV = "OMP_GUI_CREDIT_SPEND";
 
+/** Spawn env of a scheduled run's omp: the file its run extension writes the run's usage to when it ends. */
+export const RUN_USAGE_ENV = "OMP_GUI_RUN_USAGE";
+
 /** The providers whose accounts can serve past their plan: ChatGPT on credits, Claude on extra usage. */
 export const CREDIT_PROVIDERS = ["openai-codex", "anthropic"] as const;
 export type CreditProvider = (typeof CREDIT_PROVIDERS)[number];
