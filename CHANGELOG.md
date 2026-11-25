@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.143.0] - 2026-11-25
+
+앱이 작업 중에 내부 연결을 끊고 다시 시작하던 문제를 고쳤고, 설정·업데이트·기계 설정을 맡는 부분을 Rust로 옮겼습니다.
+
+- 앱 내부 요청이 겹칠 때 답 하나를 잃어, 2초 뒤 내부 처리기를 버리고 다시 시작하던 문제를 고쳤습니다. 화면이 잠깐 "연결 중"으로 바뀌던 일이 사라집니다.
+- 앱을 다시 켠 직후 새 탭이 "시작 중"에 머물던 문제를 고쳤습니다.
+- 앱 업데이트는 확인과 내려받기를 Rust가 맡습니다. 끊긴 내려받기는 이어 받고, 프록시 설정을 따릅니다.
+- 설치 도구·omp·CLI 도구·확장 업데이트와 기계 설정이 한 줄로 차례대로 실행됩니다. 업데이트가 몇 분 늦게 시작될 수 있지만 서로 겹치지 않습니다.
+- 설치 파일 내려받기도 시스템 프록시(PAC 포함)와 SOCKS5 프록시를 따릅니다.
+- 설정 파일, `models.yml`, 지운 세션 기록, 연결된 기기의 하루 사용 한도를 Rust가 관리합니다. `models.yml`의 주석과 배치는 그대로 남습니다.
+- 창, 메뉴, 트레이, 마지막 창 닫기를 Tauri 셸이 맡습니다. macOS에서 폴더를 열면 그 폴더로 창이 열리고, 메뉴의 개발자 도구 항목이 실제로 켜고 끕니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+Fixed the app dropping and restarting its internal connection mid-work, and moved settings, updates and machine setup into Rust.
+
+- When internal requests overlapped, one answer was lost and the app abandoned its internal service after 2 seconds and started it again. The brief "Connecting" state this caused is gone.
+- A new tab right after a relaunch no longer stays at "Starting".
+- Rust now checks for and downloads app updates. A cut-off download resumes, and the proxy setting applies.
+- Machine setup and the omp, CLI tool and extension updates run one at a time. An update can start a few minutes later, but they no longer overlap.
+- Installer downloads follow the system proxy (PAC included) and SOCKS5 proxies.
+- Rust keeps the settings file, `models.yml`, deleted-session records and a paired device's daily limit. `models.yml` keeps its comments and layout.
+- The Tauri shell owns windows, the menu, the tray and closing the last window. On macOS, opening a folder opens a window there, and the menu's developer tools item really toggles them.
+
+Known issue: on macOS, pressing the Right arrow key in the composer can insert an icon-like character; this is being investigated.
+
 ## [0.142.0] - 2026-11-24
 
 사이드바의 세션 목록이 오래된 순으로 바뀌어, 새 세션은 목록 맨 아래에 추가됩니다.
