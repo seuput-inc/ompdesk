@@ -5543,7 +5543,7 @@ export const ko: Record<string, string> = {
 	"composerQueue.policy.interruptImmediate": "추가 지시가 실행 중인 셸을 백그라운드로 넘김",
 	"composerQueue.steerNow": "지금 추가 지시",
 	"composerQueue.steerNowTip":
-		"지금 추가 지시: 턴을 멈추지 않고 다음 단계에서 전달해요. 대기열 순서는 바꿀 수 없어서, 먼저 보내려면 이 방법뿐이에요.",
+		"지금 추가 지시: 턴을 멈추지 않고 다음 단계에서 전달해요. 대기열 순서는 바꿀 수 없어서, 먼저 보내려면 이 방법뿐이에요. 입력창이 비어 있을 때 {chord}를 누르면 첫 메시지를 이렇게 보내요.",
 	"composerQueue.steerNowAria": "지금 추가 지시: {text}",
 	"composerQueue.editAria": "편집: {text}",
 	"composerQueue.moreAria": "더 보기: {text}",

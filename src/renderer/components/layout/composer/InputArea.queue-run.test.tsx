@@ -12,6 +12,7 @@ import type { RpcCommand, RpcQueuedMessage, RpcResponse } from "../../../../shar
 import type * as ShellMode from "../../../hooks/use-shell-mode";
 import { resetHardwareKeyboardForTests } from "../../../lib/hardware-keyboard";
 import { I18nProvider } from "../../../lib/i18n";
+import { restoreAbortedQueue } from "../../../lib/messages";
 import { useComposerStore } from "../../../stores/composer";
 import { useExtensionUiStore } from "../../../stores/extension-ui";
 import { useInputHistoryStore } from "../../../stores/input-history";
@@ -267,6 +268,34 @@ describe("Esc and Stop in the composer", () => {
 		expect(busy?.getAttribute("aria-busy")).toBe("true");
 		await act(async () => useComposerStore.getState().setStopping(false));
 		expect(button("Stop")?.hasAttribute("disabled")).toBe(false);
+	});
+});
+
+describe("⌘↵ on an empty field", () => {
+	it("steers the first follow-up into the running turn, as its row's Steer now does", async () => {
+		await mount({ streaming: true, followUp: [queued("f1", "first"), queued("f2", "second")] });
+		const queueMove = vi.fn(async () => ({ type: "response", command: "queue_move", success: true }));
+		Object.assign((window as unknown as { omp: { rpc: object } }).omp.rpc, { queueMove });
+		const result = await press("Enter", { metaKey: true });
+		expect(result.prevented).toBe(true);
+		await flush();
+		expect(queueMove.mock.calls).toEqual([["f1", Number.MAX_SAFE_INTEGER, "steering"]]);
+		expect(useQueueStore.getState().steering.map(item => item.id)).toEqual(["f1"]);
+		expect(prompt).not.toHaveBeenCalled();
+	});
+
+	it("resumes what a Stop held once no turn runs, and plain Enter still does nothing", async () => {
+		await mount();
+		await act(async () =>
+			restoreAbortedQueue(useComposerStore.getState(), { steering: [{ text: "held one" }], followUp: [] }),
+		);
+		expect(useComposerStore.getState().restoredQueue).toHaveLength(1);
+		await press("Enter");
+		await flush();
+		expect(prompt).not.toHaveBeenCalled();
+		await press("Enter", { ctrlKey: true });
+		await flush();
+		expect(prompt).toHaveBeenCalledWith("held one", undefined, "followUp");
 	});
 });
 

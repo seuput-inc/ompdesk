@@ -5552,7 +5552,7 @@ export const en: Record<string, string> = {
 	"composerQueue.policy.interruptImmediate": "a steer moves a running shell to the background",
 	"composerQueue.steerNow": "Steer now",
 	"composerQueue.steerNowTip":
-		"Steer now: delivered at the next step without stopping the turn. The queue can't be reordered; this is the only way to jump ahead.",
+		"Steer now: delivered at the next step without stopping the turn. The queue can't be reordered; this is the only way to jump ahead. {chord} in an empty field does it for the first one.",
 	"composerQueue.steerNowAria": "Steer now: {text}",
 	"composerQueue.editAria": "Edit: {text}",
 	"composerQueue.moreAria": "More actions: {text}",
