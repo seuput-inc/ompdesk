@@ -2153,7 +2153,8 @@ export class LocalHostServices implements HostServices {
 			// The device's waiting row and retry countdown may date from before it lost this computer.
 			this.#emit(existing, "awaitingConnection", existing.awaitingConnection === true);
 			this.#emit(existing, "scheduledRetry", scheduledRetryArg(existing.scheduledRetry));
-			this.#emit(existing, "cutOff", existing.cutOff ?? null);
+			// Only a view has a cut-off row: the window's tab it shows (a device's own tab is never offered).
+			if (existing.viewing) this.#emit(existing, "cutOff", existing.cutOff ?? null);
 			// The calls the omp still waits on, every one: a relaunched device (it adopts the tab under a new rtab) lost
 			// those its last process held, and the same device back from a lost link may never have had one handed to the
 			// connection that died (a sleeping computer's link stays up here until it is seen dead).
@@ -2240,7 +2241,6 @@ export class LocalHostServices implements HostServices {
 		this.#emit(tab, "signIn", { active: [] } satisfies TabSignInArg);
 		this.#emit(tab, "awaitingConnection", false);
 		this.#emit(tab, "scheduledRetry", null);
-		this.#emit(tab, "cutOff", null);
 		return { cwd: tab.sidecar.cwd, kind, attached: false };
 	}
 

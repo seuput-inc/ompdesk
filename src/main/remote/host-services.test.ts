@@ -3979,6 +3979,28 @@ describe("LocalHostServices: a device opening a session a window of this compute
 		expect(resume.cancelWait).not.toHaveBeenCalled();
 	});
 
+	it("tells the viewing device the window tab's cut-off turn, on every re-open, and takes its Continue and Dismiss there", async () => {
+		const { services, view, x } = await viewing();
+		expect(x.tabEvents()).toContainEqual({ rtab: "t1", name: "cutOff", arg: null });
+		view.emit("cutOff", "crash-loop");
+		expect(x.tabEvents().at(-1)).toEqual({ rtab: "t1", name: "cutOff", arg: "crash-loop" });
+
+		services.disconnected(x.peer, x);
+		const back = new FakeConnection(peer("device-x"));
+		await services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, back);
+		expect(back.tabEvents()).toContainEqual({ rtab: "t1", name: "cutOff", arg: "crash-loop" });
+
+		const continueHostCut = vi.fn(async () => {});
+		const dismissHostCut = vi.fn(async () => {});
+		Object.assign(view, { continueHostCut, dismissHostCut });
+		await services.call(back.peer, "tab.continueCut", { rtab: "t1" }, back);
+		await services.call(back.peer, "tab.dismissCut", { rtab: "t1" }, back);
+		expect(continueHostCut).toHaveBeenCalledTimes(1);
+		expect(dismissHostCut).toHaveBeenCalledTimes(1);
+		view.emit("cutOff", undefined);
+		expect(back.tabEvents().at(-1)).toEqual({ rtab: "t1", name: "cutOff", arg: null });
+	});
+
 	// Review M1: a device's switch through a view moves the window's tab, whose pool entry counts it (ipc.ts does the same
 	// for a window's own command), so a connection wait held there ends.
 	it("counts a device's session or branch move through a view on the window's tab, not a cancelled one", async () => {
