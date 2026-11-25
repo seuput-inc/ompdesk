@@ -4494,6 +4494,7 @@ export const en: Record<string, string> = {
 	"bridgeHealth.feature.scratch": "Scratch folder for a session's throwaway files",
 	"bridgeHealth.feature.checkRuns": "Test suites rerun only what changed, in shared heavy slots",
 	"bridgeHealth.feature.checkoutPeers": "Sessions sharing a checkout",
+	"bridgeHealth.feature.bots": "Bot chats",
 	"bridgeHealth.feature.xdevNotice": "Tool list not repeated in the request",
 	"bridgeHealth.feature.contextHookIdle": "No request copy when nothing needs filtering",
 

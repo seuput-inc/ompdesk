@@ -83,6 +83,7 @@ export const FEATURES = {
 	scratch: "A scratch folder per session for throwaway files (prompt section)",
 	checkRuns: "Heavy commands and test suites through ompdesk run --heavy and ompdesk check (prompt section)",
 	checkoutPeers: "Sessions sharing a checkout (prompt section and git guard)",
+	bots: "Bot chats (who the bot is, its items and the turn note)",
 	xdevNotice: "No xd:// device listed twice in a request (mount notice)",
 	contextHookIdle: "Model requests not copied while the message filters have nothing to drop (recap, mount notice)",
 	sessionDump: "Session dump archive saved as a file (/dump all, /dump anon)",
@@ -429,6 +430,10 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 */
 	checkoutPeers: {
 		session: ["sessionManager.getBranch()"],
+	},
+	/** modes/bots.ts: the public `before_agent_start` hook (a `message` result) and the journal for the bot's payload. */
+	bots: {
+		session: ["sessionManager.getBranch()", "sessionManager.appendCustomEntry()"],
 	},
 	/** xdev-notice.ts: the public `context` hook and the context's `getSystemPrompt()` (checked at run time). */
 	xdevNotice: {},

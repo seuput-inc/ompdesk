@@ -4487,6 +4487,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.scratch": "세션 임시 파일 폴더",
 	"bridgeHealth.feature.checkRuns": "바뀐 것만 다시 도는 검사와 공유 무거운 자리",
 	"bridgeHealth.feature.checkoutPeers": "같은 체크아웃을 쓰는 세션",
+	"bridgeHealth.feature.bots": "봇 채팅",
 	"bridgeHealth.feature.xdevNotice": "요청에 도구 목록 중복 없음",
 	"bridgeHealth.feature.contextHookIdle": "거를 게 없으면 요청 복사 생략",
 
