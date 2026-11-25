@@ -170,7 +170,7 @@ export function isQuietResult(answer: string): boolean {
 		.filter(Boolean)
 		.at(-1);
 	if (!last) return false;
-	return last.replace(/^(?:#+\s*|[-*>]\s+)/, "").replace(/[*_`~.\s]/g, "") === NO_REPLY;
+	return last.replace(/^(?:#+\s*|[-*>]\s+)/, "").replace(/^[*_`~\s]+|[*_`~.\s]+$/g, "") === NO_REPLY;
 }
 
 /** The open items a bot chat's owner has to answer (Needs you), unsnoozed at `now`. */
