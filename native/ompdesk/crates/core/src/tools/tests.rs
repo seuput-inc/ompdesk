@@ -50,16 +50,9 @@ fn spawn_local(task: LocalFuture<()>) {
     tokio::task::spawn_local(task);
 }
 
-/// Lets the spawned tasks and the blocking pool run until `done` holds (in real time: no test that waits on it pauses
-/// the clock).
+/// Lets the spawned tasks and the outside work they started run until `done` holds.
 async fn until(done: impl Fn() -> bool) {
-    for _ in 0..2_000 {
-        if done() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("never came");
+    crate::tools::spawn::until("the awaited state", done).await;
 }
 
 /// Whether process `pid` still runs.

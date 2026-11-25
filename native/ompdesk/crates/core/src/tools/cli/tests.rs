@@ -250,15 +250,10 @@ async fn later(outcome: Outcome) -> Answer {
     }
 }
 
-/// Lets the spawned tasks and the blocking pool (a pass reads PATH there) run until `done` holds.
+/// Lets the spawned tasks and the outside work they started (a pass reads PATH on the blocking pool) run until `done`
+/// holds.
 async fn until(done: impl Fn() -> bool) {
-    for _ in 0..2_000 {
-        if done() {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
-    panic!("never came");
+    crate::tools::spawn::until("the awaited state", done).await;
 }
 
 async fn settle() {

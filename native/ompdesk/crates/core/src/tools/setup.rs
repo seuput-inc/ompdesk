@@ -405,6 +405,7 @@ pub struct Exec {
 
 /// `execFile` of `file` with exactly `env`, ended after `timeout_ms`; a Windows shim (`shell`) through cmd.exe.
 pub async fn exec(file: &str, args: &[String], shell: bool, env: &Env, timeout_ms: u64) -> Exec {
+    let _outside = crate::tools::spawn::Outside::enter();
     let cwd = std::env::current_dir()
         .map(|dir| dir.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_owned());

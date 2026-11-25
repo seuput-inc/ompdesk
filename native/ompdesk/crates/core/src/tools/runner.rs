@@ -174,9 +174,11 @@ impl Runner {
         let (chunks, mut read) = mpsc::unbounded_channel::<String>();
         let (started, start) = oneshot::channel();
         let (exit, exited) = oneshot::channel();
+        let outside = crate::tools::spawn::Outside::enter();
         // Owns the supervisor and the slot until it exited, also when the step that started it is dropped: a step
         // dropped while the supervisor starts drops the stdin it is handed, which ends the supervisor.
         tokio::spawn(async move {
+            let _outside = outside;
             let mut child = match off_hub(move || command.spawn()).await {
                 Ok(child) => child,
                 Err(error) => {

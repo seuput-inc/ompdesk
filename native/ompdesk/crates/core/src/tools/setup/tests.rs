@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -694,13 +693,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 async fn until(what: &str, done: impl Fn() -> bool) {
-    for _ in 0..2_000 {
-        if done() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("never came: {what}");
+    crate::tools::spawn::until(what, done).await;
 }
 
 fn exits(pairs: &[(&'static str, i32)]) -> HashMap<&'static str, i32> {
@@ -3225,7 +3218,7 @@ fn a_stopped_step_starts_no_installer_and_writes_no_state_after() {
             .unwrap();
         let before = h.states().len();
         lookup.notify_one();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        crate::tools::spawn::quiet().await;
         assert!(!mirror.asked().iter().any(|url| url.ends_with(".zip")));
         assert!(h.items().is_empty());
         assert_eq!(h.states().len(), before);
@@ -3252,8 +3245,6 @@ fn an_updater_step_stopped_by_its_bound_cancels_its_update_and_the_next_install_
             tokio::task::spawn_local(async move {
                 h.in_step(StepKind::CliPass, |tools, ctx| {
                     Box::pin(async move {
-                        // The pass checks for a while before it updates, so its bound comes in the update.
-                        tokio::time::sleep(Duration::from_millis(100)).await;
                         run_tool_update(&tools, &ctx, serde_json::from_value(codex()).unwrap())
                             .await
                             .to_json()

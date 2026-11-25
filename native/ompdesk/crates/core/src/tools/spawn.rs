@@ -109,9 +109,85 @@ pub(crate) fn is_executable_file(file: &Path, windows: bool) -> bool {
 /// Runs `work` on the runtime's blocking pool. The hub thread answers main's synchronous calls within 2 s, so a process
 /// start or a stat along PATH (an entry on an unreachable network share hangs it for seconds) never runs on it.
 pub(crate) async fn off_hub<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    let _outside = Outside::enter();
     match tokio::task::spawn_blocking(work).await {
         Ok(value) => value,
         Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
+/// Held while this thread waits on work that runs outside it (a blocking-pool job, a child process). Tests await its
+/// end ([`until`]) instead of a clock; outside tests it is nothing.
+pub(crate) struct Outside {
+    #[cfg(test)]
+    jobs: std::sync::Arc<OutsideJobs>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct OutsideJobs {
+    running: std::sync::atomic::AtomicUsize,
+    ended: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+thread_local! {
+    static OUTSIDE: std::sync::Arc<OutsideJobs> = std::sync::Arc::default();
+}
+
+impl Outside {
+    pub(crate) fn enter() -> Self {
+        #[cfg(test)]
+        {
+            let jobs = OUTSIDE.with(std::sync::Arc::clone);
+            jobs.running
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Self { jobs }
+        }
+        #[cfg(not(test))]
+        Self {}
+    }
+}
+
+#[cfg(test)]
+impl Drop for Outside {
+    fn drop(&mut self) {
+        self.jobs
+            .running
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.jobs.ended.notify_waiters();
+    }
+}
+
+/// Lets this thread's tasks run until `done` holds, waiting for the end of the outside work they started ([`Outside`])
+/// whenever they have nothing else to do; `what` names it when nothing is left that could make it hold.
+#[cfg(test)]
+pub(crate) async fn until(what: &str, done: impl Fn() -> bool) {
+    assert!(settle(done).await, "never came: {what}");
+}
+
+/// Lets this thread's tasks run until they and the outside work they started have nothing left to do.
+#[cfg(test)]
+pub(crate) async fn quiet() {
+    settle(|| false).await;
+}
+
+/// Whether `done` held before this thread's tasks and their outside work ran out.
+#[cfg(test)]
+async fn settle(done: impl Fn() -> bool) -> bool {
+    let jobs = OUTSIDE.with(std::sync::Arc::clone);
+    loop {
+        let ended = jobs.ended.notified();
+        for _ in 0..1_000 {
+            if done() {
+                return true;
+            }
+            tokio::task::yield_now().await;
+        }
+        if jobs.running.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            return false;
+        }
+        ended.await;
     }
 }
 
@@ -284,6 +360,7 @@ async fn exec(
     cwd: Option<&Path>,
     timeout: Duration,
 ) -> Result<Exited, String> {
+    let _outside = Outside::enter();
     let mut command = if spec.shell {
         Command::from(crate::supervise::shell_command(&spec.file, &spec.args).0)
     } else {

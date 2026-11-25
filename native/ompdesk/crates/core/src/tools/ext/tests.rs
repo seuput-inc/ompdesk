@@ -7,7 +7,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -515,15 +514,9 @@ fn helper_key(table: &Answers, id: &str, error: &str) {
         .insert(id.to_owned(), Err(error.to_owned()));
 }
 
-/// Lets the spawned tasks and the blocking pool run until `done` holds.
+/// Lets the spawned tasks and the outside work they started run until `done` holds.
 async fn until(done: impl Fn() -> bool) {
-    for _ in 0..2_000 {
-        if done() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("never came");
+    crate::tools::spawn::until("the awaited state", done).await;
 }
 
 fn run(test: impl Future<Output = ()>) {
