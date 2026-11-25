@@ -15,6 +15,7 @@ import {
 	type SurfaceModel,
 } from "@a2ui/web_core";
 import type { AgentMessage } from "../../../shared/rpc-types";
+import { toolEntryKey } from "../../stores/tools";
 import { createA2uiCatalog } from "./catalog";
 
 const TOOL_NAME = "a2ui";
@@ -33,7 +34,7 @@ export interface A2uiAnswer {
 export interface A2uiCall {
 	/** The stock call id; providers may reuse one within a session. */
 	id: string;
-	/** Unique per call: the id for its first occurrence in transcript order, `<id>#<n>` for the n-th repeat. */
+	/** The tools store's entry key of the call (`toolEntryKey`): what its card is given as `toolCallId`. */
 	key: string;
 	/** The call's `messages` argument, as far as it arrived. */
 	messages: readonly unknown[];
@@ -44,9 +45,10 @@ export interface A2uiCall {
 	answer?: A2uiAnswer;
 }
 
-/** A call whose arguments are still streaming (the tools store's pending entry). */
+/** A call whose arguments are still streaming: the tools store's pending entry and its key. */
 export interface A2uiStreamingCall {
 	id: string;
+	key: string;
 	args: Record<string, unknown>;
 }
 
@@ -62,8 +64,9 @@ const messagesOf = (args: Record<string, unknown>): readonly unknown[] =>
 	Array.isArray(args.messages) ? args.messages : [];
 
 /**
- * The `a2ui` calls of a transcript in order, then the calls still streaming. A result pairs with the newest call of
- * its id that has none yet, because some providers reuse call ids.
+ * The `a2ui` calls of a transcript in order, then the calls still streaming that the transcript does not hold yet. A
+ * result pairs with the newest call of its id that has none yet, because some providers reuse call ids. Each call is
+ * keyed as the tools store keys it, so a card finds its call by the `toolCallId` it is given.
  */
 export function a2uiCalls(
 	transcript: readonly AgentMessage[],
@@ -71,20 +74,13 @@ export function a2uiCalls(
 ): A2uiCall[] {
 	const calls: A2uiCall[] = [];
 	const unanswered = new Map<string, number>();
-	const occurrences = new Map<string, number>();
-	const add = (id: string, args: Record<string, unknown>, isStreaming: boolean): number => {
-		const n = occurrences.get(id) ?? 0;
-		occurrences.set(id, n + 1);
-		const key = n === 0 ? id : `${id}#${n}`;
-		calls.push({ id, key, messages: messagesOf(args), streaming: isStreaming, refused: false });
-		return calls.length - 1;
-	};
 	for (const message of transcript) {
 		if (message.role === "assistant" && Array.isArray(message.content)) {
 			for (const block of message.content) {
-				if (block.type === "toolCall" && block.name === TOOL_NAME) {
-					unanswered.set(block.id, add(block.id, block.arguments, false));
-				}
+				if (block.type !== "toolCall" || block.name !== TOOL_NAME) continue;
+				unanswered.set(block.id, calls.length);
+				const key = toolEntryKey(block);
+				calls.push({ id: block.id, key, messages: messagesOf(block.arguments), streaming: false, refused: false });
 			}
 		} else if (message.role === "toolResult" && message.toolName === TOOL_NAME && message.toolCallId) {
 			const at = unanswered.get(message.toolCallId);
@@ -97,9 +93,9 @@ export function a2uiCalls(
 			else if (!message.isError && isObject(details?.action)) calls[at] = { ...call, answer: details.action };
 		}
 	}
-	// A streaming call whose id's newest transcript call is still unanswered is that call; otherwise it is a new one.
-	for (const call of streaming) {
-		if (!unanswered.has(call.id)) add(call.id, call.args, true);
+	const known = new Set(calls.map(call => call.key));
+	for (const { id, key, args } of streaming) {
+		if (!known.has(key)) calls.push({ id, key, messages: messagesOf(args), streaming: true, refused: false });
 	}
 	return calls;
 }

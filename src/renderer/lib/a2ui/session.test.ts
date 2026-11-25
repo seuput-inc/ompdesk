@@ -2,6 +2,7 @@ import { getValue, NodeResolver } from "@a2ui/web_core";
 import { describe, expect, it } from "vitest";
 import catalogDocument from "../../../../resources/gui-bridge/modes/a2ui-catalog.json";
 import type { AgentMessage } from "../../../shared/rpc-types";
+import { createToolsStore, selectToolEntry, toolEntryKey } from "../../stores/tools";
 import { parseStreamingArgs } from "../streaming-json";
 import { A2uiSession, a2uiCalls } from "./session";
 
@@ -87,7 +88,7 @@ describe("a2uiCalls", () => {
 			assistant("c4", CHART),
 			result("c4", {}, true),
 		];
-		const calls = a2uiCalls(transcript, [{ id: "c5", args: { messages: [] } }]);
+		const calls = a2uiCalls(transcript, [{ id: "c5", key: "c5", args: { messages: [] } }]);
 		expect(calls.map(c => [c.id, c.refused, c.streaming, c.answer?.sourceComponentId])).toEqual([
 			["c1", false, false, undefined],
 			["c2", false, false, "send"],
@@ -98,26 +99,43 @@ describe("a2uiCalls", () => {
 		]);
 	});
 
-	it("pairs a reused call id with the newest call of that id", () => {
-		const calls = a2uiCalls([
+	it("pairs a reused call id with the newest call of that id, each keyed as the tools store keys it", () => {
+		const transcript = [
+			{
+				role: "assistant" as const,
+				content: [{ type: "toolCall" as const, id: "call_0", name: "read", arguments: { path: "a" } }],
+			},
 			assistant("call_0", CHART),
 			result("call_0", { shown: ["chart"] }),
 			assistant("call_0", FORM),
 			result("call_0", { dismissed: true }),
-		]);
+		];
+		const tools = createToolsStore();
+		tools.getState().hydrateMessages(transcript);
+		const keys = transcript
+			.flatMap(m => (m.role === "assistant" && Array.isArray(m.content) ? m.content : []))
+			.map(b => toolEntryKey(b as never));
+		const calls = a2uiCalls(transcript);
 		expect(calls.map(c => [c.key, c.messages.length])).toEqual([
-			["call_0", 2],
-			["call_0#1", 3],
+			[keys[1], 2],
+			[keys[2], 3],
 		]);
+		// The tools store numbers every call of the id, a `read` included: the card's key is the store's.
+		expect(new Set(keys).size).toBe(3);
+		expect(calls.map(c => selectToolEntry(tools.getState(), c.key)?.toolName)).toEqual(["a2ui", "a2ui"]);
 	});
 
-	it("takes a streaming call for the transcript's unanswered call of its id, else for a new one", () => {
-		const answered = [assistant("call_0", CHART), result("call_0", { shown: ["chart"] })];
-		expect(a2uiCalls(answered, [{ id: "call_0", args: { messages: FORM } }]).map(c => [c.key, c.streaming])).toEqual([
-			["call_0", false],
-			["call_0#1", true],
+	it("adds a streaming call only while the transcript does not hold its key", () => {
+		const answered = [assistant("c1", CHART), result("c1", { shown: ["chart"] })];
+		const streaming = [{ id: "c2", key: "c2", args: { messages: FORM } }];
+		expect(a2uiCalls(answered, streaming).map(c => [c.key, c.streaming])).toEqual([
+			["c1", false],
+			["c2", true],
 		]);
-		expect(a2uiCalls([assistant("call_0", CHART)], [{ id: "call_0", args: {} }]).map(c => c.key)).toEqual(["call_0"]);
+		expect(a2uiCalls([...answered, assistant("c2", FORM)], streaming).map(c => [c.key, c.streaming])).toEqual([
+			["c1", false],
+			["c2", false],
+		]);
 	});
 });
 
@@ -125,12 +143,18 @@ describe("A2uiSession with a reused call id", () => {
 	it("keeps each call's surfaces apart and names the newest as the owner", () => {
 		const session = new A2uiSession("en-US");
 		const first = [assistant("call_0", CHART), result("call_0", { shown: ["chart"] })];
-		session.sync(a2uiCalls(first, [{ id: "call_0", args: { messages: [...FORM, {}] } }]));
-		expect(session.owner("contact")).toBe("call_0#1");
-		session.sync(a2uiCalls([...first, assistant("call_0", FORM)]));
+		session.sync(a2uiCalls(first, [{ id: "call_0", key: "second", args: { messages: [...FORM, {}] } }]));
+		expect(session.owner("contact")).toBe("second");
+		const block = { type: "toolCall" as const, id: "call_0", name: "a2ui", arguments: { messages: FORM } };
+		const second: AgentMessage = { role: "assistant", content: [block] };
+		const tools = createToolsStore();
+		tools.getState().hydrateMessages([...first, second]);
+		session.sync(a2uiCalls([...first, second]));
+		const secondKey = toolEntryKey(block);
+		expect(secondKey).not.toBe("call_0");
 		expect([...(session.call("call_0")?.surfaces ?? [])]).toEqual(["chart"]);
-		expect([...(session.call("call_0#1")?.surfaces ?? [])]).toEqual(["contact"]);
-		expect([session.owner("chart"), session.owner("contact")]).toEqual(["call_0", "call_0#1"]);
+		expect([...(session.call(secondKey)?.surfaces ?? [])]).toEqual(["contact"]);
+		expect([session.owner("chart"), session.owner("contact")]).toEqual(["call_0", secondKey]);
 	});
 });
 
@@ -156,7 +180,7 @@ describe("A2uiSession", () => {
 		const streamed = new A2uiSession("en-US");
 		const createsSeen: number[] = [];
 		for (let end = 1; end < text.length; end++) {
-			streamed.sync(a2uiCalls([], [{ id: "c1", args: parseStreamingArgs(text.slice(0, end)) }]));
+			streamed.sync(a2uiCalls([], [{ id: "c1", key: "c1", args: parseStreamingArgs(text.slice(0, end)) }]));
 			createsSeen.push(streamed.surface("contact") ? 1 : 0);
 		}
 		// While streaming, the form's last envelope (its data model) is held back even once it parsed whole.
@@ -207,7 +231,7 @@ describe("A2uiSession", () => {
 
 	it("drops a call the bridge refused, even after it was drawn while streaming", () => {
 		const session = new A2uiSession("en-US");
-		session.sync(a2uiCalls([], [{ id: "c1", args: { messages: [...CHART, {}] } }]));
+		session.sync(a2uiCalls([], [{ id: "c1", key: "c1", args: { messages: [...CHART, {}] } }]));
 		expect(session.surface("chart")).toBeDefined();
 		session.sync(a2uiCalls([assistant("c1", CHART), result("c1", { errors: [{ code: "INTEGRITY_ERROR" }] }, true)]));
 		expect(session.surface("chart")).toBeUndefined();
