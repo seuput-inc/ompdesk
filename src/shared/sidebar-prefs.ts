@@ -54,6 +54,8 @@ export interface SidebarPrefs {
 	agentHidden: string[];
 	/** This computer's projects (cwds) whose notifications are muted; a folder under one or a worktree of one is too (`isMutedFolder`). */
 	mutedGroups: string[];
+	/** Session files whose notifications are muted (a session row's menu); this computer's sessions only. */
+	mutedSessions: string[];
 }
 
 /**
@@ -64,6 +66,7 @@ export type SidebarChange =
 	| { op: "set-group-pinned"; cwd: string; pinned: boolean }
 	| { op: "set-group-muted"; cwd: string; muted: boolean }
 	| { op: "set-session-pinned"; path: string; pinned: boolean }
+	| { op: "set-session-muted"; path: string; muted: boolean }
 	| { op: "set-agent-hidden"; path: string; hidden: boolean }
 	/** An empty or absent alias shows the folder's own name again. */
 	| { op: "set-group-alias"; cwd: string; alias: string | null }
@@ -134,12 +137,8 @@ export function readSidebarPrefs(value: unknown): SidebarPrefs {
 		railPins: validRailPins(blob.railPins),
 		agentHidden: stringList(blob.agentHidden),
 		mutedGroups: stringList(blob.mutedGroups),
+		mutedSessions: stringList(blob.mutedSessions),
 	};
-}
-
-/** The muted projects of the raw stored blob, for main's notifiers. */
-export function mutedGroupsOf(blob: unknown): string[] {
-	return stringList(blob && typeof blob === "object" ? (blob as Record<string, unknown>).mutedGroups : undefined);
 }
 
 /**
@@ -185,7 +184,14 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 	return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
-type ListField = "pinnedGroups" | "pinnedSessions" | "groupOrder" | "archivedSessions" | "agentHidden" | "mutedGroups";
+type ListField =
+	| "pinnedGroups"
+	| "pinnedSessions"
+	| "groupOrder"
+	| "archivedSessions"
+	| "agentHidden"
+	| "mutedGroups"
+	| "mutedSessions";
 
 /** Empty when the list already holds `next`, so a change that changes nothing writes nothing. */
 function listPatch(state: SidebarPrefs, field: ListField, next: string[]): Partial<SidebarPrefs> {
@@ -208,6 +214,8 @@ export function sidebarPatch(
 			return listPatch(state, "mutedGroups", withItem(state.mutedGroups, change.cwd, change.muted));
 		case "set-session-pinned":
 			return listPatch(state, "pinnedSessions", withItem(state.pinnedSessions, change.path, change.pinned));
+		case "set-session-muted":
+			return listPatch(state, "mutedSessions", withItem(state.mutedSessions, change.path, change.muted));
 		case "set-agent-hidden":
 			return listPatch(state, "agentHidden", withItem(state.agentHidden, change.path, change.hidden));
 		case "set-group-alias": {

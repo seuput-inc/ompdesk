@@ -74,7 +74,6 @@ import { branchEvidence, branchFacts, landingFacts, mergeBranch, removeSafeWorkt
 import { type AnswerStep, TargetAnswer } from "../agent-control/target-answer";
 import { AtomicSaver } from "../atomic-file";
 import type { BackgroundWorkMember } from "../background-work";
-import type { DesktopPresence } from "../presence";
 import type { BridgeConnectResult } from "../bridge-health";
 import type { CheckoutMember } from "../checkout-peers";
 import { controlEnvFor } from "../control-socket/env";
@@ -91,6 +90,7 @@ import type { ModelWaitTracker } from "../model-wait-count";
 import { noteOmpExit } from "../omp-exits";
 import { ompRestartDecision } from "../omp-restart";
 import type { PrefsStore } from "../prefs-store";
+import type { DesktopPresence } from "../presence";
 import { RpcTimeoutError } from "../rpc-client";
 import type { SessionIndex } from "../session-index";
 import { SessionListShare } from "../session-list-share";

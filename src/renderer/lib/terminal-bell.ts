@@ -19,13 +19,11 @@ export function markTabOnBell(tabId: string): void {
 	const tabs = useTabsStore.getState();
 	const tab = tabs.tabs.find(entry => entry.id === tabId);
 	if (!tab) return;
+	const prefs = useSidebarPrefs.getState();
 	const muted =
 		tab.device === undefined &&
-		isMutedFolder(
-			useSidebarPrefs.getState().mutedGroups,
-			useSidebarProjects.getState().lists[LOCAL_DEVICE]?.worktrees ?? {},
-			tab.cwd,
-		);
+		((tab.sessionPath !== undefined && prefs.mutedSessions.includes(tab.sessionPath)) ||
+			isMutedFolder(prefs.mutedGroups, useSidebarProjects.getState().lists[LOCAL_DEVICE]?.worktrees ?? {}, tab.cwd));
 	const marks = bellMarks({
 		shown: visibleTabIds(tabs).includes(tabId),
 		pageHidden: document.visibilityState === "hidden",

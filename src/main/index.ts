@@ -76,7 +76,7 @@ import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import { SCHEDULES_STATE } from "../shared/schedules";
 import type { SetupState } from "../shared/setup";
-import { readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
+import { isMutedFolder, readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {
 	finishedWorktreeFolders,
 	type IpcSidebarProjects,
@@ -149,8 +149,8 @@ import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp, TESTED_OMP_VER
 import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
-import { DesktopPresence, PRESENCE_REPORT_MS, readDesktopAway } from "./presence";
 import { type PrefsStore, prefsFile } from "./prefs-store";
+import { DesktopPresence, PRESENCE_REPORT_MS, readDesktopAway } from "./presence";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
 import { HOST_TAB_GRACE_MS, LocalHostServices } from "./remote/host-services";
@@ -1080,15 +1080,21 @@ app.whenReady().then(async () => {
 	});
 	// Whether the person is at this computer or at a paired one that says so (presence.ts): phones stay quiet then.
 	const presence = new DesktopPresence(() => readDesktopAway(powerMonitor));
-	/** A tab of this computer whose project the person muted (its project menu): no banner, no phone push. */
+	/**
+	 * A tab of this computer whose session or project the person muted (a row's or a project's menu): no banner, no
+	 * phone push. A paired host's tab is the host's session, muted (or not) there.
+	 */
 	const notifyMuted = (tabId: string): boolean => {
-		const muted = mutedGroupsOf(prefsStore().get(AGENT_HIDDEN_PREFS_KEY));
-		if (muted.length === 0) return false;
+		const { mutedGroups, mutedSessions } = readSidebarPrefs(prefsStore().get(SIDEBAR_PREFS_KEY));
+		if (mutedGroups.length === 0 && mutedSessions.length === 0) return false;
 		const win = sidecarPool.windowOfTab(tabId);
 		const target = win ? sidecarPool.tabTarget(win, tabId) : null;
-		// A paired host's tab is the host's project, muted (or not) there.
 		if (!target || target.device) return false;
-		return isMutedFolder(muted, sidebarProjects.state().worktrees, target.sidecar.cwd);
+		const file = sidecarPool.sessionFileOf(tabId);
+		return (
+			(file !== undefined && mutedSessions.includes(file)) ||
+			isMutedFolder(mutedGroups, sidebarProjects.state().worktrees, target.sidecar.cwd)
+		);
 	};
 	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web) => {
 		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web);
@@ -2456,6 +2462,7 @@ app.whenReady().then(async () => {
 		onTabSeen: tabId => webHost?.tabSeen(tabId),
 		pageVisible: win => webHost?.pageVisible(win) ?? false,
 		desktopAway: () => readDesktopAway(powerMonitor),
+		testPush: deviceId => webHost?.testPush(deviceId),
 		sessionWake,
 		sessionNote,
 		botHome,

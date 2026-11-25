@@ -557,6 +557,7 @@ export function Sidebar() {
 	const groupOrder = useSidebarPrefs(s => s.groupOrder);
 	const sessionOrder = useSidebarPrefs(s => s.sessionOrder);
 	const pinnedSessions = useSidebarPrefs(s => s.pinnedSessions);
+	const mutedSessions = useSidebarPrefs(s => s.mutedSessions);
 	const agentHidden = useSidebarPrefs(s => s.agentHidden);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
 	const archivedSessions = useSidebarPrefs(s => s.archivedSessions);
@@ -2461,6 +2462,7 @@ export function Sidebar() {
 							canCloseTab: tabs.length > 1,
 							chat: session.kind === "chat",
 							pinned: pinnedSessions.includes(session.path),
+							muted: mutedSessions.includes(session.path),
 							archived: archivedIds.has(session.id),
 							agentHidden: agentHidden.includes(session.path),
 							canMoveUp: canMoveWithin(list, session.path, -1),
@@ -2490,6 +2492,7 @@ export function Sidebar() {
 									if (!response.success) failed();
 								}, failed);
 							}),
+							toggleMute: then(() => void useSidebarPrefs.getState().toggleSessionMuted(session.path)),
 							...(list
 								? {
 										moveUp: then(() => void moveSession(session, -1)),

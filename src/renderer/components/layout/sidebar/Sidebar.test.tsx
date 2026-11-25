@@ -1315,10 +1315,11 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(labels.some(label => label.includes("Move down"))).toBe(true);
 		expect(labels.some(label => label.includes("Pin to top"))).toBe(true);
 		expect(labels.some(label => label.includes("Archive all"))).toBe(true);
+		expect(labels.some(label => label.includes("Mute notifications"))).toBe(true);
 		expect(labels.some(label => label.includes("Remove from sidebar"))).toBe(false);
 		expect(labels.filter(label => label.includes("Delete"))).toEqual(["Delete"]);
 		expect(labels.at(-1)).toBe("Delete");
-		expect(labels).toHaveLength(8);
+		expect(labels).toHaveLength(9);
 	});
 
 	it("each project header offers + in place of a count, and Move moves the project", async () => {
@@ -1592,6 +1593,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Open in new window",
 			"Rename session",
 			"Pin to top",
+			"Mute notifications",
 			"Move up",
 			"Move down",
 			"Move to project…",
@@ -1998,6 +2000,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Open in new window",
 			"Rename session",
 			"Pin to top",
+			"Mute notifications",
 			"Move up",
 			"Move down",
 			"Move to project…",
@@ -6902,6 +6905,7 @@ describe("Sidebar on a touch screen", () => {
 			"Open in new window",
 			"Rename session",
 			"Pin to top",
+			"Mute notifications",
 			"Move up",
 			"Move down",
 			"Move to project…",

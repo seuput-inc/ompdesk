@@ -6,15 +6,17 @@
  * the session).
  *
  * Groups, each set apart: open and view (split, new window, the open tab's split, mark as unread and close) · edit
- * (rename, pin, move up and down, move to project, archive, hide from agents) · show in folder · diagnostics (one
- * item; Option/Alt while choosing it saves the anonymized bundle) · delete, last. Clicking a row already opens it, so
- * the menu has no "Open" or "Open in new tab".
+ * (rename, pin, mute notifications, move up and down, move to project, archive, hide from agents) · show in folder ·
+ * diagnostics (one item; Option/Alt while choosing it saves the anonymized bundle) · delete, last. Clicking a row
+ * already opens it, so the menu has no "Open" or "Open in new tab".
  */
 import {
 	Archive,
 	ArchiveRestore,
 	ArrowDown,
 	ArrowUp,
+	Bell,
+	BellOff,
 	Columns2,
 	ExternalLink,
 	Eye,
@@ -55,6 +57,8 @@ export interface SessionMenuFacts {
 	/** A chat: it lives in no project, so it cannot move to one. */
 	chat: boolean;
 	pinned: boolean;
+	/** Its notifications are muted (this computer's sessions only). */
+	muted: boolean;
 	archived: boolean;
 	agentHidden: boolean;
 	canMoveUp: boolean;
@@ -75,6 +79,8 @@ export interface SessionMenuActions {
 	rename?: () => void;
 	/** Pins it, or lets it go when pinned. */
 	togglePin?: () => void;
+	/** Mutes its notifications (banners and phone pushes), or lets them through again. */
+	toggleMute?: () => void;
 	moveUp?: () => void;
 	moveDown?: () => void;
 	/** Opens the list of projects it can go to. */
@@ -174,6 +180,13 @@ export function sessionMenuItems({
 				label: facts.pinned ? t("sidebar.menu.unpin") : t("sidebar.menu.pin"),
 				icon: facts.pinned ? PinOff : Pin,
 				onSelect: actions.togglePin,
+			});
+		if (actions.toggleMute)
+			edit.push({
+				id: "session-mute",
+				label: facts.muted ? t("sidebar.menu.unmute") : t("sidebar.menu.mute"),
+				icon: facts.muted ? Bell : BellOff,
+				onSelect: actions.toggleMute,
 			});
 		if (actions.moveUp)
 			edit.push({

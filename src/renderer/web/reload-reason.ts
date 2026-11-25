@@ -74,7 +74,7 @@ export function reloadReport(record: ReloadRecord, build: string | null = null):
 export function flushReloadReasons(
 	storage: ReloadStorage,
 	build: string | null,
-	send: (report: RuntimeErrorReport) => void,
+	send: (report: RuntimeErrorReport, record: ReloadRecord) => void,
 ): number {
 	const pending = readPending(storage);
 	if (pending.length === 0) return 0;
@@ -83,6 +83,6 @@ export function flushReloadReasons(
 	} catch {
 		return 0;
 	}
-	for (const record of pending) send(reloadReport(record, build));
+	for (const record of pending) send(reloadReport(record, build), record);
 	return pending.length;
 }

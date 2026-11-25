@@ -79,10 +79,12 @@ import type {
 	IpcModelSetupRunResult,
 	IpcNotifyPayload,
 	IpcNotifyResult,
+	IpcNotifyTestResult,
 	IpcOpenPathResult,
 	IpcPrefsChangedPayload,
 	IpcPrefsGetPayload,
 	IpcPrefsSetPayload,
+	IpcPushTestResult,
 	IpcRemoteListDirsPayload,
 	IpcRpcCommandForTabPayload,
 	IpcRpcCommandPayload,
@@ -175,7 +177,6 @@ import { modelsPath } from "./models-config";
 import { type NoticeKind, NotificationBatcher, type ShownInfo, type ShownNotice } from "./notification-batch";
 import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
-import { TabAttention } from "./tab-attention";
 import { openLocalPath } from "./open-path";
 import { prefsFile } from "./prefs-store";
 import { registerPreviewHost } from "./preview/host";
@@ -211,6 +212,7 @@ import { registerSshToolsIpc } from "./ssh/ipc";
 import { markStartupFromRenderer } from "./startup-timing";
 import { stockHelperRequest } from "./stock-helper";
 import { shellEngine } from "./system-version";
+import { TabAttention } from "./tab-attention";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
 import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
@@ -222,6 +224,7 @@ import { type ClientWindow, isWebWindow } from "./web/client-window";
 import type { FileEditReports } from "./web/file-edit-reports";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
 import type { UploadStore } from "./web/uploads";
+import { WebClientWindow } from "./web/web-client-window";
 import type { SpawnWindow, WindowManager } from "./window";
 import { sanitizeChromeColors, TOP_BAR_HEIGHT } from "./window-chrome";
 import {
@@ -354,6 +357,8 @@ export interface IpcDeps {
 	pageVisible?: (win: ClientWindow) => boolean;
 	/** Whether the person is away from this computer (presence.ts `readDesktopAway`). */
 	desktopAway?: () => boolean | undefined;
+	/** One test push to a paired device's own subscription (`WebHost.testPush`); undefined while there is no web host. */
+	testPush?: (deviceId: string) => Promise<IpcPushTestResult> | undefined;
 }
 
 /**
@@ -2069,6 +2074,54 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return failing ? "blocked" : "shown";
 	});
 	ipc.handle(IPC_COMMANDS.SYSTEM_DESKTOP_AWAY, () => deps.desktopAway?.() ?? null);
+	// Settings › General's test banner. Windows reports a refused banner (`failed`); macOS reports nothing and Electron
+	// cannot read its permission there, so no word within the wait reads as shown and the page points at the settings.
+	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY_TEST, (): IpcNotifyTestResult | Promise<IpcNotifyTestResult> => {
+		if (!Notification.isSupported()) return "unsupported";
+		const notification = new Notification({ title: mainT("push.test.title"), body: mainT("push.test.body") });
+		const { promise, resolve } = Promise.withResolvers<IpcNotifyTestResult>();
+		// Held until it answers: a collected Notification drops its events.
+		liveNotifications.add(notification);
+		const timer = setTimeout(() => resolve("shown"), 1500);
+		notification.once("show", () => {
+			bannersFailing = false;
+			resolve("shown");
+		});
+		notification.once("failed", () => {
+			bannersFailing = true;
+			resolve("failed");
+		});
+		notification.show();
+		return promise.finally(() => {
+			clearTimeout(timer);
+			liveNotifications.delete(notification);
+		});
+	});
+	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY_SETTINGS, async () => {
+		const panes =
+			process.platform === "darwin"
+				? [
+						"x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+						// macOS 12 and older name the pane this way.
+						"x-apple.systempreferences:com.apple.preference.notifications",
+					]
+				: process.platform === "win32"
+					? ["ms-settings:notifications"]
+					: [];
+		for (const pane of panes) {
+			try {
+				await shell.openExternal(pane);
+				return;
+			} catch {
+				// The next name, if any.
+			}
+		}
+	});
+	ipc.handle(
+		IPC_COMMANDS.WEB_PUSH_TEST,
+		async (caller): Promise<IpcPushTestResult> =>
+			caller.win instanceof WebClientWindow ? ((await deps.testPush?.(caller.win.deviceId)) ?? "none") : "none",
+	);
 
 	// Preferences
 	ipc.handle(IPC_COMMANDS.PREFS_GET, (_caller, payload: IpcPrefsGetPayload) => {

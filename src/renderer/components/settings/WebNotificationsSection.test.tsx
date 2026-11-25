@@ -12,6 +12,7 @@ import type { WebPushRequest, WebPushStateResponse } from "../../../shared/web-p
 import { I18nProvider, translate } from "../../lib/i18n";
 import { useToastStore } from "../../stores/toast";
 import { type InstallEnvironment, InstallPrompt, installGuidance } from "../../web/install";
+import { linkLog } from "../../web/link-log";
 import { PushClient, type PushEnv, type PushPermission, type PushSubscriptionLike } from "../../web/push-client";
 import { setWebPwa, type WebPwa } from "../../web/pwa";
 import { MobileWebSection } from "./MobileWebSection";
@@ -194,6 +195,29 @@ describe("WebNotificationsSection", () => {
 		await press("[data-web-push-disable]");
 		expect(posts.at(-1)).toEqual({ subscription: null });
 		expect(q('[data-web-push-state="off"]')).not.toBeNull();
+	});
+
+	it("sends this device a test push and says what became of it", async () => {
+		const testPush = vi.fn(async () => "gone" as const);
+		Object.assign(window, { omp: { system: { testPush } } });
+		const { pwa } = build({ permission: "granted", local: true, host: { subscribed: true } });
+		await mount(<WebNotificationsSection pwa={pwa} />);
+		await press("[data-web-push-test]");
+		expect(testPush).toHaveBeenCalledTimes(1);
+		expect(q("[data-web-push-test-result]")?.textContent).toBe(translate("web.push.test.gone"));
+	});
+
+	it("lists this page's link events newest first in the closed Connection fold, with what to check", async () => {
+		linkLog.note("dropped", undefined, 1000);
+		linkLog.note("reloaded", "update", 2000);
+		const { pwa } = build();
+		await mount(<WebNotificationsSection pwa={pwa} />);
+		expect(q("[data-settings-advanced]")?.hasAttribute("open")).toBe(false);
+		const kinds = [...document.body.querySelectorAll("[data-link-event]")].map(item =>
+			item.getAttribute("data-link-event"),
+		);
+		expect(kinds).toEqual(["reloaded", "dropped"]);
+		expect(q("[data-web-link-log]")?.textContent).toContain(translate("web.link.help.ios"));
 	});
 
 	it("says the permission is blocked and keeps the button off", async () => {

@@ -68,11 +68,13 @@ import type {
 	IpcModelSetupRunResult,
 	IpcModelWaitTogether,
 	IpcNotifyKind,
-	IpcNotifyResult,
 	IpcNotifyPayload,
+	IpcNotifyResult,
+	IpcNotifyTestResult,
 	IpcOpenExtensionRequest,
 	IpcOpenPathResult,
 	IpcPrefsChangedPayload,
+	IpcPushTestResult,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
 	IpcSessionsChanged,
@@ -725,6 +727,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				} satisfies IpcNotifyPayload) as Promise<IpcNotifyResult | undefined>,
 			/** Whether the person is away from this computer; null when it cannot be told (a page, an error). */
 			desktopAway: () => transport.invoke(IPC_COMMANDS.SYSTEM_DESKTOP_AWAY) as Promise<boolean | null>,
+			notifyTest: () => transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY_TEST) as Promise<IpcNotifyTestResult>,
+			openNotificationSettings: () => transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY_SETTINGS) as Promise<void>,
+			testPush: () => transport.invoke(IPC_COMMANDS.WEB_PUSH_TEST) as Promise<IpcPushTestResult>,
 		},
 
 		prefs: {

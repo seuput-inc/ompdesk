@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isMutedFolder, mutedGroupsOf, readSidebarPrefs, type SidebarChange, sidebarPatch } from "./sidebar-prefs";
+import { isMutedFolder, readSidebarPrefs, type SidebarChange, sidebarPatch } from "./sidebar-prefs";
 
 /** The rows the core's owner of the blob is held to (`crates/core/src/prefs/sidebar.rs`), captured from these. */
 interface Captured {
@@ -35,7 +35,6 @@ describe("the page's sidebar rules", () => {
 	});
 });
 
-
 describe("isMutedFolder", () => {
 	it("mutes the project itself and any folder under it", () => {
 		expect(isMutedFolder(["/a/b"], {}, "/a/b")).toBe(true);
@@ -60,10 +59,24 @@ describe("isMutedFolder", () => {
 	});
 });
 
-describe("mutedGroupsOf", () => {
-	it("reads the muted list of a raw blob and nothing from a malformed one", () => {
-		expect(mutedGroupsOf({ mutedGroups: ["/a", 3, ""], pinnedGroups: ["/p"] })).toEqual(["/a"]);
-		expect(mutedGroupsOf(null)).toEqual([]);
-		expect(mutedGroupsOf({ mutedGroups: "/a" })).toEqual([]);
+describe("muted sessions and projects", () => {
+	it("reads both lists from a raw blob and nothing from a malformed one", () => {
+		const prefs = readSidebarPrefs({
+			mutedGroups: ["/a", 3, ""],
+			mutedSessions: ["/s/1.jsonl"],
+			pinnedGroups: ["/p"],
+		});
+		expect([prefs.mutedGroups, prefs.mutedSessions]).toEqual([["/a"], ["/s/1.jsonl"]]);
+		expect(readSidebarPrefs({ mutedGroups: "/a" }).mutedGroups).toEqual([]);
+	});
+
+	it("mutes and unmutes as set, never toggled: a second mute moves nothing", () => {
+		const muted = sidebarPatch(readSidebarPrefs({}), { op: "set-session-muted", path: "/s/1.jsonl", muted: true });
+		expect(muted).toEqual({ mutedSessions: ["/s/1.jsonl"] });
+		const state = readSidebarPrefs(muted);
+		expect(sidebarPatch(state, { op: "set-session-muted", path: "/s/1.jsonl", muted: true })).toEqual({});
+		expect(sidebarPatch(state, { op: "set-session-muted", path: "/s/1.jsonl", muted: false })).toEqual({
+			mutedSessions: [],
+		});
 	});
 });

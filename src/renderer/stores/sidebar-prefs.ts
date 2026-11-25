@@ -42,6 +42,7 @@ interface SidebarPrefsStore extends SidebarPrefs {
 	hydrate: () => Promise<void>;
 	toggleGroupPin: (cwd: string) => Promise<void>;
 	toggleGroupMuted: (cwd: string) => Promise<void>;
+	toggleSessionMuted: (path: string) => Promise<void>;
 	toggleSessionPin: (path: string) => Promise<void>;
 	toggleAgentHidden: (path: string) => Promise<void>;
 	setGroupAlias: (cwd: string, alias: string | null) => Promise<void>;
@@ -167,6 +168,13 @@ export const useSidebarPrefs = create<SidebarPrefsStore>()((set, get) => {
 				op: "set-group-muted",
 				cwd,
 				muted: !state.mutedGroups.includes(cwd),
+			})),
+
+		toggleSessionMuted: path =>
+			write("sidebar.muteFailed", state => ({
+				op: "set-session-muted",
+				path,
+				muted: !state.mutedSessions.includes(path),
 			})),
 
 		toggleSessionPin: path =>

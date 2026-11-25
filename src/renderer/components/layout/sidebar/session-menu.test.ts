@@ -15,6 +15,7 @@ const stored: SessionMenuFacts = {
 	unread: false,
 	chat: false,
 	pinned: false,
+	muted: false,
 	archived: false,
 	agentHidden: false,
 	canMoveUp: true,
@@ -30,6 +31,7 @@ const every: SessionMenuActions = {
 	closeTab: noop,
 	rename: noop,
 	togglePin: noop,
+	toggleMute: noop,
 	moveUp: noop,
 	moveDown: noop,
 	moveToProject: noop,
@@ -53,6 +55,7 @@ describe("sessionMenuItems", () => {
 			"session-open-window",
 			"session-rename",
 			"session-pin",
+			"session-mute",
 			"session-move-up",
 			"session-move-down",
 			"session-move",
@@ -76,7 +79,12 @@ describe("sessionMenuItems", () => {
 	});
 
 	it("leaves out an action the list does not support instead of disabling it", () => {
-		const host: SessionMenuActions = { ...every, reveal: undefined, toggleAgentHidden: undefined };
+		const host: SessionMenuActions = {
+			...every,
+			reveal: undefined,
+			toggleAgentHidden: undefined,
+			toggleMute: undefined,
+		};
 		expect(ids({}, host)).toEqual([
 			"session-open-split",
 			"session-open-window",
@@ -101,6 +109,7 @@ describe("sessionMenuItems", () => {
 			"session-close-tab",
 			"session-rename",
 			"session-pin",
+			"session-mute",
 			"session-move-up",
 			"session-move-down",
 			"session-move",

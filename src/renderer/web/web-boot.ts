@@ -18,6 +18,7 @@ import { LocalChannels, parseOpenHash } from "./deep-link";
 import { saveBlob } from "./download";
 import { recordVisit, showInstallHintIfDue } from "./install-hint";
 import { startInstall } from "./install-ui";
+import { linkLog } from "./link-log";
 import { mountNotificationSweep } from "./notification-sweep";
 import { listenNotificationClicks, notifyPage, registerServiceWorker, requestNotificationPermission } from "./notify";
 import { createBrowserPwa, setWebPwa } from "./pwa";
@@ -115,6 +116,7 @@ async function bootApp(): Promise<void> {
 		// Events were missed while the link was down (or the host restarted): the page reads its state again in
 		// place (resync-page.ts), never a reload while the person reads, scrolls, types or picks files.
 		onResync: cause => {
+			linkLog.note("resynced", cause);
 			resyncCause = cause;
 			resync?.request();
 		},
@@ -270,10 +272,14 @@ async function bootApp(): Promise<void> {
 		applyUpdate();
 	});
 	transport.onState(state => {
+		linkLog.state(state);
 		if (state === "open") {
 			resync?.linkAvailable();
 			// The reasons of the reloads that led here reach the host's runtime log on each connect.
-			flushReloadReasons(localStorage, PAGE_BUILD, report => web.api.runtime.report(report));
+			flushReloadReasons(localStorage, PAGE_BUILD, (report, record) => {
+				linkLog.note("reloaded", record.reason, record.at);
+				web.api.runtime.report(report);
+			});
 			// `hello` named the host's build: a launch or return moment still open moves the page to it.
 			applyUpdate();
 			return;

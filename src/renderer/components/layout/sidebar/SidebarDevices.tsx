@@ -895,6 +895,7 @@ function DeviceSessions({
 				canCloseTab: allTabs.length > 1,
 				chat: session.kind === "chat",
 				pinned: hostPins.includes(session.path),
+				muted: false,
 				archived: hostArchived.has(session.id),
 				agentHidden: false,
 				canMoveUp: canMoveWithin(list, session.path, -1),

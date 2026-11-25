@@ -491,3 +491,36 @@ describe("subscription lifecycle", () => {
 		expect(p.frames[0]).toMatchObject({ t: "hello", features: { push: true } });
 	});
 });
+
+describe("the test push from Settings", () => {
+	it("goes to the device's own subscription whatever its categories, even with its page in the foreground", async () => {
+		const quiet = await phone({ visible: true, push: { categories: ["ask"] } });
+		await phone({ visible: false });
+		language.current = "ko";
+		expect(await host.testPush(quiet.deviceId)).toBe("sent");
+		expect(calls).toEqual([
+			{
+				endpoint: quiet.subscription.endpoint,
+				payload: { v: 1, kind: "completion", title: "OMPdesk", body: "테스트 알림", tag: "test" },
+				ttl: 60,
+				urgency: "normal",
+			},
+		]);
+	});
+
+	it("answers none for a device with no subscription", async () => {
+		expect(await host.testPush("no-such-device")).toBe("none");
+		expect(calls).toEqual([]);
+	});
+
+	it("forgets a subscription the push service answers 410 to", async () => {
+		const p = await phone({ visible: false, connect: false });
+		pushStatus = 410;
+		expect(await host.testPush(p.deviceId)).toBe("gone");
+		await flush();
+		const state = (await (
+			await fetch(`http://127.0.0.1:${port}/${SECRET}/api/push`, { headers: { cookie: p.cookie, ...IDENTITY } })
+		).json()) as WebPushStateResponse;
+		expect(state.subscribed).toBe(false);
+	});
+});

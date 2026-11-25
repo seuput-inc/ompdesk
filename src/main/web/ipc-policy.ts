@@ -258,6 +258,19 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "Never asked: a page's own visibility is its presence (the shim answers null)",
 	},
+	[C.SYSTEM_NOTIFY_TEST]: {
+		dir: "invoke",
+		permission: "device-self",
+		mode: "web",
+		web: "Never asked: a page tests its own push (WEB_PUSH_TEST); the shim answers unsupported",
+	},
+	[C.SYSTEM_NOTIFY_SETTINGS]: {
+		dir: "invoke",
+		permission: "device-self",
+		mode: "web",
+		web: "Never asked: the host's system settings are not the phone's (the shim does nothing)",
+	},
+	[C.WEB_PUSH_TEST]: { dir: "invoke", permission: "device-self", mode: "pass" },
 	[E.TRAY_STATE_PUSH]: {
 		dir: "send",
 		permission: "device-self",

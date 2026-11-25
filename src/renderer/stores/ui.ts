@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { CustomProviderView, IpcSavedFolder, SessionInfo } from "../../shared/ipc-types";
 import { KEYMAP_ACTIONS, type KeymapOverrides, sanitizeOverrides } from "../lib/keymap";
+import type { NotificationTone } from "../lib/notification-sound";
 import { PREFS_BOOT_RETRY_MS, readPref } from "../lib/prefs-read";
 import { readSidebarVisible, writeSidebarVisible } from "../lib/sidebar-memory";
 import { readPrepaintThemeMode, type ThemeMode } from "../lib/theme";
@@ -243,6 +244,8 @@ interface UiStore {
 	notificationSound: boolean;
 	/** Chime volume, 0–100. */
 	notificationVolume: number;
+	/** Which built-in sound plays (Settings › General, default the chime). */
+	notificationTone: NotificationTone;
 	/** Left-clicked web links in replies open in the Preview panel instead of the browser. */
 	linkPreview: boolean;
 	/** Which edge the side panel docks to (Settings › General › Window). */
@@ -475,6 +478,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	notifications: true,
 	notificationSound: false,
 	notificationVolume: 60,
+	notificationTone: "chime",
 	linkPreview: false,
 	panelSide: "right",
 	thinkingExpanded: false,

@@ -341,6 +341,9 @@ export const MAIN_TEXT = {
 	"push.hidden.completion": { en: "A task finished", ko: "작업이 끝났어요" },
 	"push.hidden.error": { en: "A task stopped with an error", ko: "작업이 오류로 중단됐어요" },
 	"push.hidden.ask": { en: "A task needs you", ko: "작업에 확인이 필요해요" },
+	// The test banner and the test push Settings sends (ipc.ts `SYSTEM_NOTIFY_TEST`, `WebHost.testPush`).
+	"push.test.title": { en: "OMPdesk", ko: "OMPdesk" },
+	"push.test.body": { en: "Test notification", ko: "테스트 알림" },
 	// Status of a tab whose omp runs on a paired device that is unreachable.
 	"remote.offline": {
 		en: "The device running this session is offline. Reconnecting…",
