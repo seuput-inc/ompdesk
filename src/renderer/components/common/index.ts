@@ -95,7 +95,7 @@ export {
 	type SegmentedOption,
 } from "./SegmentedChoice";
 export { Select, type SelectOption, type SelectProps } from "./Select";
-export { type SelectionAction, SelectionActions } from "./SelectionActions";
+export { type SelectionAction, SelectionActions, useCopySelectionAction } from "./SelectionActions";
 export { SessionTitle, type SessionTitleProps } from "./SessionTitle";
 export { INLINE_DESCRIPTION_MAX, SettingInfo, splitDescription } from "./SettingInfo";
 export { Sheet, SheetHandle, type SheetPlacement, type SheetProps, type SheetSize } from "./Sheet";

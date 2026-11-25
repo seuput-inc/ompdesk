@@ -10,7 +10,7 @@ import { useT } from "../../../lib/i18n";
 import { quoteExcerpt } from "../../../lib/review-notes";
 import { type NoteLines, useReviewNotesStore } from "../../../stores/review-notes";
 import { useTabsStore } from "../../../stores/tabs";
-import { Modal, type SelectionAction, SelectionActions } from "../../common";
+import { Modal, type SelectionAction, SelectionActions, useCopySelectionAction } from "../../common";
 import { workspaceRelativePath } from "../FilesPanel";
 import { useAddToChat } from "./AddToChat";
 import { NoteEditor, useNotesOwner } from "./ReviewNotes";
@@ -45,8 +45,9 @@ export function FileSelectionActions({
 	const { tabId, owner } = useNotesOwner();
 	const cwd = useTabsStore(state => state.tabs.find(tab => tab.id === tabId)?.cwd ?? "");
 	const addToChat = useAddToChat(tabId);
+	const copy = useCopySelectionAction();
 	const [noting, setNoting] = useState<{ excerpt: string; lines: NoteLines | null } | null>(null);
-	const actions: SelectionAction[] = [addToChat.action];
+	const actions: SelectionAction[] = [addToChat.action, copy];
 	if (notes && owner) {
 		actions.unshift({
 			id: "note",

@@ -5921,6 +5921,7 @@ export const ko: Record<string, string> = {
 	"command.compactCancelled": "압축을 취소했어요",
 	"common.apply": "적용",
 	"common.copied": "복사했어요",
+	"common.copy": "복사",
 	"common.copyFailed": "클립보드에 복사하지 못했어요",
 	"common.defaultParenthesized": "(기본값)",
 	"common.hide": "숨기기",

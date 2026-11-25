@@ -5932,6 +5932,7 @@ export const en: Record<string, string> = {
 	"command.compactCancelled": "Compaction cancelled",
 	"common.apply": "Apply",
 	"common.copied": "Copied",
+	"common.copy": "Copy",
 	"common.copyFailed": "Couldn't copy to the clipboard",
 	"common.defaultParenthesized": "(default)",
 	"common.hide": "Hide",
