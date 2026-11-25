@@ -96,7 +96,7 @@ impl Gh {
             command: runner
                 .as_ref()
                 .map(|runner| {
-                    [&[runner.bin.clone()], runner.args.as_slice()]
+                    [std::slice::from_ref(&runner.bin), runner.args.as_slice()]
                         .concat()
                         .join("\n")
                 })
