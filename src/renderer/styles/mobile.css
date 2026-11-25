@@ -326,11 +326,6 @@ html[data-shell] .omp-topbar {
 	padding-top: var(--safe-t);
 }
 
-/* A phone's bar is one dense line (the desktop's is 48 px). */
-html[data-shell="phone"] .omp-topbar {
-	height: 36px;
-}
-
 html[data-shell="phone"] .omp-titlebar {
 	gap: 0;
 	padding-inline: var(--sc-space-1);
@@ -394,8 +389,10 @@ html[data-shell="phone"] .omp-titlebar [data-titlebar-session-name] {
 	height: 18px;
 }
 
+/* The shown view: its 2 px line along the bar's top edge, the desktop panel's bottom marker turned to the thumb. */
 .omp-panel-tabbar > button[aria-current="page"] {
-	color: var(--sc-accent);
+	color: var(--sc-text);
+	box-shadow: inset 0 2px 0 var(--sc-text);
 }
 
 /* ── Composer: pinned above the keyboard (body's inset), clear of the home indicator, chips on one line ────── */
@@ -1017,9 +1014,11 @@ html[data-input="touch"] .omp-file-card-actions {
 }
 
 /* ── Phone density: smaller and denser than the desktop, like a phone chat app ────────────────────────────── */
-/* A phone is read at arm's length on 390 px: type, controls, gutters and the chrome around the transcript shrink so
-   the conversation keeps the screen. Only `data-shell="phone"` (web build) gets this; a tablet keeps the desktop
-   steps, and the 44 px hit area stays an invisible ::after. Fields stay 16 px (iOS zooms into anything smaller). */
+/* A phone is read at arm's length on 390 px: type, gutters and the chrome around the transcript shrink so the
+   conversation keeps the screen. Its buttons, chips, ⋯ menus and switches are drawn 44 px (the owner's decision, 25
+   Nov 2026: "on the phone, draw controls at 44 px") through the button and switch tokens; fields, rows and section
+   heads keep the denser control steps. The 36 px top bar keeps its own (below). Only `data-shell="phone"` (web build)
+   gets this; a tablet keeps the desktop steps. Fields stay 16 px (iOS zooms into anything smaller). */
 html[data-shell="phone"] {
 	--phone-type-scale: 0.8667;
 	--sc-font-xs: 12px;
@@ -1028,6 +1027,10 @@ html[data-shell="phone"] {
 	--sc-control-md: 28px;
 	--sc-control-lg: 32px;
 	--sc-hit-min: 24px;
+	--sc-button-sm: 44px;
+	--sc-button-md: 44px;
+	--sc-button-lg: 44px;
+	--sc-switch-box: 44px;
 	--sc-font-2xs: 12px;
 	--sc-icon-lg: 16px;
 	--sc-row-touch: 36px;
@@ -1035,6 +1038,14 @@ html[data-shell="phone"] {
 	/* Rounder than the desktop, as Orca's phone app is: cards, menus and toasts 12, the composer, dialogs and sheets 16. */
 	--sc-radius-lg: 12px;
 	--sc-radius-xl: 16px;
+}
+
+/* The top bar stays one 36 px line: 44 px buttons would make it 44, and the header, composer and work strip would then
+   pass the 19.4 % chrome budget, so a phone's top bar buttons are as tall as the bar, their reach kept inside it. */
+html[data-shell="phone"] :is(.omp-topbar, .omp-sidebar-header) {
+	--sc-button-sm: 36px;
+	--sc-button-md: 36px;
+	--sc-button-lg: 36px;
 }
 
 /* Transcript and composer gutters: 12 px, not the desktop's reading-column margins. */
@@ -1152,8 +1163,32 @@ html[data-shell="phone"] .omp-composer-region.pb-3 {
 }
 
 html[data-shell="phone"] .omp-composer-toolbar {
-	min-height: 32px;
+	min-height: 44px;
 	padding: 0 var(--sc-space-1-5) var(--sc-space-0-5) var(--sc-space-1);
+}
+
+/* The composer's controls are drawn 44 px like every phone control (the owner's decision, 25 Nov 2026): +, the mic,
+   the context ring and Send/Stop square, the Run and model chips 44 tall through the phone tokens. The field row gives
+   back 8 px of what the taller row takes (6 px above the text, none under it), so the idle chrome stays inside the
+   19.4 % budget. */
+html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action) {
+	width: 44px;
+	height: 44px;
+}
+
+html[data-shell="phone"] .omp-composer-toolbar :is(.omp-context-usage-trigger, [data-run-settings-trigger]) {
+	min-width: 44px;
+	height: 44px;
+}
+
+html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action) > svg:not(.omp-composer-stop-glyph) {
+	width: var(--sc-icon-lg);
+	height: var(--sc-icon-lg);
+}
+
+html[data-shell="phone"] .omp-composer-action > .omp-composer-stop-glyph {
+	width: 12px;
+	height: 12px;
 }
 
 /* The phone composer is always open: the field spans the box's full inner width on its own row, and the controls sit
@@ -1161,7 +1196,7 @@ html[data-shell="phone"] .omp-composer-toolbar {
    dictation is on), with the Run chip, the model chip and the context ring between them: every composer control stays
    inside the box and nothing folds it. */
 html[data-shell="phone"] .omp-composer-box > div:has(> [data-composer-input]) {
-	padding: 10px var(--sc-space-3) var(--sc-space-1);
+	padding: 6px var(--sc-space-3) 0;
 }
 
 html[data-shell="phone"] .omp-composer-scroll > :is(button, [role="button"], span):first-child {
@@ -1250,6 +1285,14 @@ html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 /* A 360 px phone's row has ~120 px of empty row beside the chip, so it keeps the name there (6 em at most, "Sonnet
    5.5" whole), idle and while a turn runs; a 320 px phone (a toolbar under 300 px) keeps the mark alone. */
 @container omp-toolbar (max-width: 300px) {
+	html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
+		display: none;
+	}
+}
+
+/* With every control 44 px (the owner's decision, 25 Nov 2026) a 360 px phone's row has no room for the model's name:
+   there (a toolbar of 340 px or less) the chip is its mark alone, the name its tooltip and accessible name. */
+@container omp-toolbar (max-width: 340px) {
 	html[data-shell="phone"] .omp-composer-fold-4 .omp-composer-model-label {
 		display: none;
 	}
@@ -1366,11 +1409,12 @@ html[data-shell="phone"] .omp-panel-topbar {
 }
 
 
-/* The top bar's icons sit 14 px apart so each one's bounded hit area is ≈ 40 px square (the bar's height). */
+/* The top bar's icons sit 14 px apart. The bar is 36 px: a 28 px icon (26 inside its border) reaches 5 px up and
+   down, so its reach is the bar's height and never lies over the work strip under it. */
 html[data-shell] .omp-titlebar {
 	gap: 14px;
 	--hit-gap-x: 14px;
-	--hit-gap-y: 14px;
+	--hit-gap-y: 10px;
 }
 
 /* The composer's controls sit 10 px apart on a tablet: a 28 px chip (26 inside its border) reaches 36 px. */
@@ -1501,18 +1545,23 @@ html[data-shell] .omp-session-sidebar {
 }
 
 /* Page-top bars (Agents, Stats, Settings): the toggle, the back control and the way out sit 10 px apart, so each 26 px
-   icon's reach (half the gap) is 36 px across; the 48 px bar leaves 10 px above and below a 28 px control, so the
-   reach down and up (8 px) stays inside the bar. */
+   icon's reach (half the gap) is 36 px across. The bar is 36 px (--sc-topbar-h): a 28 px control (26 inside its border)
+   reaches 5 px up and down, so its reach is the bar's height and never lies over the page scrolled under it. */
 html[data-shell] .omp-topbar:not(.omp-titlebar) {
 	gap: 10px;
 	--hit-gap-x: 10px;
-	--hit-gap-y: 16px;
+	--hit-gap-y: 10px;
 }
 
-/* A phone's bar is 36 px: a 28 px control (26 inside its border) reaches 5 px up and down, so its reach is the bar's
-   height and never lies over the page scrolled under it. */
-html[data-shell="phone"] .omp-topbar:not(.omp-titlebar) {
-	--hit-gap-y: 10px;
+/* A phone's top bar buttons are as tall as the bar (36 px, 34 inside the border): 1 px of reach up and down. A
+   tablet's 32 px buttons (30 inside) in the bar's right group reach 3 px, its 28 px ones the bar's 10 px bound: either
+   way the work strip under the bar keeps its taps. */
+html[data-shell]:not([data-shell="phone"]) .omp-titlebar [class*="sc-button-md"] {
+	--hit-gap-y: 6px;
+}
+
+html[data-shell="phone"] :is(.omp-titlebar, .omp-titlebar > div, .omp-topbar:not(.omp-titlebar), .omp-sidebar-header) {
+	--hit-gap-y: 2px;
 }
 
 /* The page's own back control in that bar (MasterDetailBack) is drawn 28 px like the bar's icons, so it is a 36 px
@@ -1641,6 +1690,16 @@ html[data-input="touch"] [data-switch-tile][data-info-end] > [data-setting-info]
 html[data-input="touch"] [data-switch-tile] > [role="switch"] {
 	--hit-gap-x: 8px;
 	--hit-gap-y: 12px;
+}
+
+/* A phone draws the switch's box 44 px (the owner's decision, 25 Nov 2026): its tile is 44 tall around it, and the
+   switch needs no reach up or down, so the tile below keeps its own taps. */
+html[data-shell="phone"] [data-switch-tile] {
+	min-height: 44px;
+}
+
+html[data-shell="phone"] [data-switch-tile] > [role="switch"] {
+	--hit-gap-y: 0px;
 }
 
 /* Stats' (i) sits 8 px after Sync: its 44 px reach covered Sync's right edge, which then opened the tooltip. On touch it
@@ -1991,6 +2050,12 @@ html[data-shell] [data-terminal-keybar] > div {
 	column-gap: 10px;
 	--hit-gap-x: 10px;
 	--hit-gap-y: 10px;
+}
+
+/* A phone draws the keys 44 px (the owner's decision, 25 Nov 2026), the bar's whole height: the scroller drops its
+   4 px of padding, so a key's box runs from the bar's top to the panel tab bar under it. */
+html[data-shell="phone"] [data-terminal-keybar] > div {
+	padding-block: 0;
 }
 
 /* Inline code and a reply's keys (<kbd>) keep to the 12 px floor (0.85em of a 13.5 px reply is 11.5). */
@@ -2376,6 +2441,24 @@ html[data-shell]
 	) {
 	height: auto;
 	min-height: 36px;
+}
+
+/* A phone draws those controls 44 px (the owner's decision, 25 Nov 2026): their rows, and a project's header, are
+   44 px too, so no button hangs into the next row. */
+html[data-shell="phone"]
+	.omp-session-sidebar
+	:is(
+		[data-device-state] > div:first-child,
+		[data-device-group] > div:first-child,
+		[data-sidebar-device-header],
+		[data-sidebar-chats] > div:first-child
+	) {
+	min-height: 44px;
+}
+
+/* `[data-input]` outranks sidebar.css's touch rule, which may load after this sheet. */
+html[data-shell="phone"][data-input] :is(.omp-session-sidebar, .omp-sidebar-session-rename) {
+	--omp-sidebar-head-h: 44px;
 }
 
 html[data-shell] .omp-session-sidebar [data-sidebar-row-menu][data-sidebar-row-menu][data-sidebar-row-menu] {

@@ -4,8 +4,7 @@ import {
 	AlertTriangle,
 	Archive,
 	ArchiveRestore,
-	BarChart3,
-	Bot,
+	type Bot,
 	CircleHelp,
 	Compass,
 	Download,
@@ -44,7 +43,7 @@ import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
 import { autopilotRunOf, worktreeKindOf, worktreeLabel } from "../../../../shared/project-origin";
 import { hostedSummaries, type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
-import type { RailPin } from "../../../../shared/sidebar-prefs";
+import type { FooterPin } from "../../../../shared/sidebar-prefs";
 import {
 	CHATS_ORDER_KEY,
 	familyRows,
@@ -63,6 +62,7 @@ import { requestSessionSwitch, useSwitchingTabs } from "../../../hooks/use-sessi
 import { useShellInput } from "../../../hooks/use-shell-mode";
 import { useTabListRows } from "../../../hooks/use-tab-list-rows";
 import { ATTENTION_LABEL_KEY, type AttentionKind, isAsk } from "../../../lib/attention";
+import { useBotsAvailable } from "../../../lib/bots-source";
 import { activeComposerInput } from "../../../lib/composer-focus";
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { hideNativeDragImage } from "../../../lib/drag-image";
@@ -73,6 +73,7 @@ import { actionKbd, onEscape } from "../../../lib/keymap";
 import { reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
 import { useProjectNames, useWorktreeKindLabels } from "../../../lib/project-origin";
 import { sessionForkOrigin } from "../../../lib/session-fork";
+import { laneState } from "../../../lib/session-lane";
 import type { RunFacts } from "../../../lib/session-run";
 import {
 	combinedTitle,
@@ -84,7 +85,12 @@ import {
 	type TitleParts,
 } from "../../../lib/session-title";
 import { isRememberedSession, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
-import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth } from "../../../lib/sidebar-width";
+import {
+	clampSidebarWidth,
+	LANE_MIN_SIDEBAR_WIDTH,
+	readSidebarWidth,
+	writeSidebarWidth,
+} from "../../../lib/sidebar-width";
 import { snapshotNs, snapshots } from "../../../lib/snapshot-cache";
 import { performTabClose } from "../../../lib/tab-close";
 import { useTabRpc } from "../../../lib/tab-rpc";
@@ -95,6 +101,7 @@ import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/cl
 import { useComposerStore } from "../../../stores/composer";
 import { LOCAL_SUMMARIES, summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { useMessagesStore } from "../../../stores/messages";
+import { usePullRequestBranches } from "../../../stores/pr-center";
 import { useQueueStore } from "../../../stores/queue";
 import { usePairedHosts, useRemoteStore } from "../../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
@@ -106,7 +113,7 @@ import { useProjectList } from "../../../stores/sidebar-projects";
 import { toggleSidebarSubagents, useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { type SessionTab, tabAutoTitle, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
-import { type PageDestination, type PanelTab, useUiStore } from "../../../stores/ui";
+import { type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
 import {
 	anchorFromEvent,
@@ -132,7 +139,7 @@ import {
 import { StarterGuide } from "../../onboarding/StarterGuide";
 import { ForkParent } from "../ForkParent";
 import { workingAgentCount } from "../live-work";
-import { SessionLiveAge, SessionLiveTitle } from "../SessionLiveTitle";
+import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { openedChildCounts, openedChildRows } from "../work-board/opened-children";
 import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from "./fold-summary";
 import { remoteOpenedTab, summaryRowState } from "./host-row-state";
@@ -141,18 +148,20 @@ import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
 import { logSelection, useRowSelection } from "./row-selection";
+import { SessionStatusLane } from "./SessionStatusLane";
+import { SidebarBots } from "./SidebarBots";
 import { SidebarChats } from "./SidebarChats";
 import { SidebarDeviceSections } from "./SidebarDeviceSections";
 import { SidebarDeviceSection, SidebarLocalHeader } from "./SidebarDevices";
-import { SidebarDoneMark } from "./SidebarDoneMark";
 import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
+import { SidebarNav } from "./SidebarNav";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SidebarUpdateCard } from "./SidebarUpdateCard";
-import { SidebarUsage } from "./SidebarUsage";
+import { SidebarUsage, useOfferedFooterPins } from "./SidebarUsage";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
@@ -230,13 +239,6 @@ function focusComposer(): void {
 /** This computer's lists leave out no session another section nests: each is a row of its own project too. */
 const NO_SESSIONS: ReadonlySet<string> = new Set();
 
-/** Destinations in the sidebar footer: the only three. */
-const DESTINATIONS: { id: PageDestination; labelKey: string; icon: typeof Bot }[] = [
-	{ id: "agents", labelKey: "destination.agents", icon: Bot },
-	{ id: "insights", labelKey: "destination.insights", icon: BarChart3 },
-	{ id: "settings", labelKey: "destination.settings", icon: Settings },
-];
-
 /** A pinned side panel view: back to the session (a page hides the panel) with that view open. */
 function showPanelView(tab: PanelTab): void {
 	const ui = useUiStore.getState();
@@ -245,13 +247,12 @@ function showPanelView(tab: PanelTab): void {
 }
 
 /** Footer shortcuts the user pins from Customize sidebar (usage renders as bars, the rest as rows). */
-const RAIL_PIN_ROWS: Record<Exclude<RailPin, "usage" | "agents" | "stats">, { icon: typeof Bot; open: () => void }> = {
+const RAIL_PIN_ROWS: Record<Exclude<FooterPin, "usage">, { icon: typeof Bot; open: () => void }> = {
 	terminal: { icon: RAIL_PIN_ICONS.terminal, open: () => showPanelView("terminal") },
 	diff: { icon: RAIL_PIN_ICONS.diff, open: () => showPanelView("diff") },
 	preview: { icon: RAIL_PIN_ICONS.preview, open: () => showPanelView("preview") },
 	files: { icon: RAIL_PIN_ICONS.files, open: () => showPanelView("files") },
 	jobs: { icon: RAIL_PIN_ICONS.jobs, open: () => useUiStore.getState().openJobs() },
-	schedules: { icon: RAIL_PIN_ICONS.schedules, open: () => useUiStore.getState().openSettings("schedules") },
 };
 
 function useHelpItems(customizeSidebar: () => void): ContextMenuItem[] {
@@ -312,7 +313,7 @@ function useHelpItems(customizeSidebar: () => void): ContextMenuItem[] {
 	];
 }
 
-/** Footer: Agents · Stats (each shown only while pinned) · Settings, with the help menu closing the Settings row. */
+/** Footer: the pinned shortcuts, then Settings with the help menu closing its row. The pages are the nav rows above. */
 function SidebarFooter() {
 	const t = useT();
 	const destination = useUiStore(s => s.destination);
@@ -322,83 +323,60 @@ function SidebarFooter() {
 	const [pinMenu, setPinMenu] = useState<PinMenuState | null>(null);
 	const helpItems = useHelpItems(() => setPinsSheet({ open: true }));
 	const railPins = useSidebarPrefs(s => s.railPins);
-	const shortcutFor = (id: PageDestination) =>
-		id === "agents"
-			? actionKbd("agents.hub", keymapOverrides)
-			: id === "settings"
-				? actionKbd("settings", keymapOverrides)
-				: undefined;
-	const open = (id: PageDestination) => {
-		const ui = useUiStore.getState();
-		if (id === "agents") ui.openAgents();
-		else if (id === "insights") ui.openInsights();
-		else ui.openSettings();
-	};
+	const offeredPins = useOfferedFooterPins();
+	const settingsHere = destination === "settings";
 	return (
 		<nav
 			aria-label={t("sidebar.destinations")}
 			className="flex shrink-0 flex-col gap-px border-t border-(--sc-divider) p-2"
 			data-sidebar-destinations
 		>
-			{railPins.map(pin => {
-				if (pin === "usage") return <SidebarUsage key={pin} {...pinMenuHandlers(pin, setPinMenu)} />;
-				// Agents and Stats are the destination rows below, shown only while pinned.
-				if (pin === "agents" || pin === "stats") return null;
-				const { icon: Icon, open: openPin } = RAIL_PIN_ROWS[pin];
-				return (
+			{offeredPins
+				.filter(pin => railPins.includes(pin))
+				.map(pin => {
+					if (pin === "usage") return <SidebarUsage key={pin} {...pinMenuHandlers(pin, setPinMenu)} />;
+					const { icon: Icon, open: openPin } = RAIL_PIN_ROWS[pin];
+					return (
+						<Button
+							{...pinMenuHandlers(pin, setPinMenu)}
+							className="omp-sidebar-destination w-full min-w-0 justify-start gap-2.5 px-2.5 text-(--sc-text-secondary)"
+							data-rail-pin={pin}
+							icon={<Icon />}
+							key={pin}
+							onClick={openPin}
+							variant="ghost"
+						>
+							<span className="min-w-0 flex-1 truncate text-left">{t(RAIL_PIN_LABEL_KEYS[pin])}</span>
+						</Button>
+					);
+				})}
+			{/* Help closes the Settings row: one footer, no orphaned icon underneath. */}
+			<div className="flex min-w-0 items-center gap-1">
+				<div className="flex min-w-0 flex-1">
 					<Button
-						{...pinMenuHandlers(pin, setPinMenu)}
-						className="omp-sidebar-destination w-full min-w-0 justify-start gap-2.5 px-2.5 text-(--sc-text-secondary)"
-						data-rail-pin={pin}
-						icon={<Icon />}
-						key={pin}
-						onClick={openPin}
-						variant="ghost"
-					>
-						<span className="min-w-0 flex-1 truncate text-left">{t(RAIL_PIN_LABEL_KEYS[pin])}</span>
-					</Button>
-				);
-			})}
-			{DESTINATIONS.filter(
-				({ id }) => id === "settings" || railPins.includes(id === "agents" ? "agents" : "stats"),
-			).map(({ id, labelKey, icon: Icon }) => {
-				const current = destination === id;
-				const shortcut = shortcutFor(id);
-				const pinnable = id === "agents" || id === "insights";
-				const row = (
-					<Button
-						{...(pinnable ? pinMenuHandlers(id === "agents" ? "agents" : "stats", setPinMenu) : {})}
-						aria-current={current ? "page" : undefined}
+						aria-current={settingsHere ? "page" : undefined}
 						className={cx(
 							"omp-sidebar-destination w-full min-w-0 justify-start gap-2.5 px-2.5",
-							current ? "bg-(--sc-selected) text-(--sc-text)" : "text-(--sc-text-secondary)",
+							settingsHere ? "bg-(--sc-selected) text-(--sc-text)" : "text-(--sc-text-secondary)",
 						)}
-						data-destination={id}
-						icon={<Icon />}
-						key={id}
-						onClick={() => open(id)}
+						data-destination="settings"
+						icon={<Settings />}
+						onClick={() => useUiStore.getState().openSettings()}
 						variant="ghost"
 					>
-						<span className="min-w-0 flex-1 truncate text-left">{t(labelKey)}</span>
-						{shortcut && <Kbd className="omp-sidebar-kbd" shortcut={shortcut} />}
+						<span className="min-w-0 flex-1 truncate text-left">{t("destination.settings")}</span>
+						<Kbd className="omp-sidebar-kbd" shortcut={actionKbd("settings", keymapOverrides)} />
 					</Button>
-				);
-				if (id !== "settings") return row;
-				// Help closes the last row: one footer, no orphaned icon underneath.
-				return (
-					<div className="flex min-w-0 items-center gap-1" key={id}>
-						<div className="flex min-w-0 flex-1">{row}</div>
-						<MenuButton
-							align="end"
-							className="text-(--sc-text-secondary)"
-							icon={<CircleHelp />}
-							items={helpItems}
-							label={t("help.menu")}
-							variant="ghost"
-						/>
-					</div>
-				);
-			})}
+				</div>
+				<MenuButton
+					align="end"
+					className="text-(--sc-text-secondary)"
+					icon={<CircleHelp />}
+					items={helpItems}
+					label={t("help.menu")}
+					variant="ghost"
+				/>
+			</div>
 			{pinMenu && (
 				<PinMenu menu={pinMenu} onClose={() => setPinMenu(null)} onCustomize={() => setPinsSheet({ open: true })} />
 			)}
@@ -427,6 +405,8 @@ export function Sidebar() {
 	const tabRpc = useTabRpc();
 	const t = useT();
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
+	const botsAvailable = useBotsAvailable();
+	const hasPullRequest = usePullRequestBranches();
 	// This computer's no-project workspace decides whether a session's row is a chat (`isChatSession`): its last answer
 	// paints the first frame, as a paired host's does (host-workspace.ts). Without it such a session was missing
 	// from the first frame's list and its row and selection came one frame later (300 ms on a slow machine).
@@ -1292,6 +1272,26 @@ export function Sidebar() {
 		const item = items[next];
 		if (item) focusRovingItem(item);
 	};
+	// A session made current from outside the list (a title bar tab, the palette, a shortcut) brings its row into view
+	// and outlines it once (Orca's reveal highlight). A pick in the list itself moves nothing: it is told by a press or
+	// key in the list just before, since a click does not focus a button in WebKit (macOS's window).
+	const revealed = useRef(activeSessionKey);
+	const pickedInList = useRef(Number.NEGATIVE_INFINITY);
+	useEffect(() => {
+		if (revealed.current === activeSessionKey) return;
+		revealed.current = activeSessionKey;
+		const list = listRef.current;
+		const picked = performance.now() - pickedInList.current < 5_000;
+		pickedInList.current = Number.NEGATIVE_INFINITY;
+		if (!list || !activeSessionKey || picked || list.contains(document.activeElement)) return;
+		const row = [...list.querySelectorAll<HTMLElement>("[data-roving-item]")]
+			.find(item => item.dataset.rovingItem === `session:${activeSessionKey}`)
+			?.closest<HTMLElement>(".omp-sidebar-session-row");
+		if (!row) return;
+		row.scrollIntoView?.({ block: "nearest" });
+		row.setAttribute("data-reveal", "");
+		row.addEventListener("animationend", () => row.removeAttribute("data-reveal"), { once: true });
+	}, [activeSessionKey]);
 	// After render, exactly one roving item is tabbable: the remembered one,
 	// else the current session, else the first row. Its row's ⋯ (or a section header's own action, such as the Chats
 	// section's New chat) is the next tab stop (focus-within reveals it), so Tab then Enter opens or runs it.
@@ -1365,6 +1365,7 @@ export function Sidebar() {
 							? t("sidebar.row.open")
 							: null);
 		return {
+			run,
 			isCurrent,
 			tab,
 			summary,
@@ -1658,6 +1659,7 @@ export function Sidebar() {
 		if (session.departed)
 			return <div aria-hidden className="py-1" data-flip-key={key} data-sidebar-gap="session" key={session.path} />;
 		const {
+			run,
 			isCurrent,
 			tab,
 			active,
@@ -1741,21 +1743,32 @@ export function Sidebar() {
 		// (`SessionLiveTitle`) or the left-edge bar (sidebar.css `data-signal`), its words the tooltip and screen-reader
 		// text. Anything that needs the person is the warning signal; a failed run is the danger one.
 		const signal = waiting ? "waiting" : running ? "running" : failed ? "error" : undefined;
-		// One small mark before the state: an unseen finish (no light or bar says it) as a ✓, a shape, not a colour
-		// alone; else a pin or a fork.
-		const marker: ReactNode = done ? (
-			<SidebarDoneMark fresh={doneBefore.current.get(session.path) === false} />
-		) : pinned ? (
+		// One small mark before the state: a pin or a fork. An unseen finish is the status lane's ✓.
+		const marker: ReactNode = pinned ? (
 			<Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" />
 		) : fork ? (
 			<GitFork aria-hidden className="size-(--sc-icon-sm)" data-sidebar-fork />
 		) : null;
 		const openTabId = tab?.id;
 		const folderMissing = missingFolders.has(session.path);
-		// The age slot: the waiting token (a mark that stays), else the working arc while the session or anything it
-		// started works, else the time since it last did something (both give way first on a short line).
+		// The leading status lane (Orca's, the owner's decision of 25 Nov 2026): what needs the person, a failure, the
+		// working arc while the session or anything it started works, an unseen finish, its branch's pull request.
 		const runningOpened = opened.filter(child => child.status === "running").length;
 		const workingAgents = workingAgentCount(summary?.agents ?? []);
+		const lane = laneState({
+			run: { ...run, failed, done },
+			attention: waiting,
+			live: sessionLive({
+				agents: workingAgents,
+				opened: runningOpened,
+				running: signal === "running",
+				settling,
+				waiting: false,
+			}),
+			stopped: tab?.lastRun?.stopReason === "aborted",
+			pullRequest: target !== null && hasPullRequest(target),
+			open: tab !== undefined,
+		});
 		const waitingBadge = waiting ? (
 			<Badge className="omp-sidebar-approval" variant="attention">
 				{/* The glyph stays when the word has no room left beside the title (it truncates, then hides). */}
@@ -1765,20 +1778,17 @@ export function Sidebar() {
 				</span>
 			</Badge>
 		) : null;
-		const age = waiting ? null : (
-			<SessionLiveAge
-				agents={workingAgents}
-				iso={indexed ? session.modified : null}
-				opened={runningOpened}
-				running={signal === "running"}
-				settling={settling}
-				waiting={false}
-			/>
-		);
+		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
+		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
 		return (
 			<Fragment key={session.path}>
 				<ListRow
-					leading={<SessionRowArtwork target={target} />}
+					leading={
+						<span className="omp-session-leading">
+							<SessionStatusLane fresh={doneBefore.current.get(session.path) === false} state={lane} />
+							<SessionRowArtwork target={target} />
+						</span>
+					}
 					buttonProps={{
 						tabIndex,
 						"data-roving-item": key,
@@ -1866,6 +1876,8 @@ export function Sidebar() {
 						"data-switch-pending": switchPendingTo === session.id || undefined,
 						"data-session-kind": session.kind ?? "agent",
 						"data-signal": signal,
+						// An unseen finish also bolds the title (Orca's unread card).
+						"data-unseen": lane === "done" || undefined,
 						"data-session-path": session.path,
 						"data-folder-missing": folderMissing || undefined,
 						"data-session-run-child": runChild || undefined,
@@ -2197,12 +2209,13 @@ export function Sidebar() {
 			<aside
 				aria-label={t("sidebar.label")}
 				className="omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-border-subtle) bg-(--sc-surface-1)"
+				data-sidebar-narrow={sidebarWidth < LANE_MIN_SIDEBAR_WIDTH ? "" : undefined}
 				style={{ width: sidebarWidth }}
 			>
 				{/* Traffic-light safe (global.css): on macOS the brand yields its
 				    slot to the window controls and the collapse toggle follows
 				    them; elsewhere the brand leads and the toggle closes the row. */}
-				<div className="omp-sidebar-header drag-region flex h-12 shrink-0 items-center gap-1 pr-2">
+				<div className="omp-sidebar-header drag-region flex h-(--sc-topbar-h) shrink-0 items-center gap-1 pr-2">
 					<span className="omp-sidebar-brand flex min-w-0 flex-1 items-center gap-2 pl-1.5 text-sc-md font-semibold text-(--sc-text)">
 						<BrandMark size={18} />
 						<span className="truncate">OMPdesk</span>
@@ -2269,6 +2282,7 @@ export function Sidebar() {
 							/>
 						)}
 					</div>
+					<SidebarNav />
 				</div>
 
 				<div
@@ -2281,12 +2295,19 @@ export function Sidebar() {
 						const key = event.target instanceof HTMLElement ? event.target.dataset.rovingItem : undefined;
 						if (key && key !== focusKey) setFocusKey(key);
 					}}
+					onKeyDownCapture={() => {
+						pickedInList.current = performance.now();
+					}}
 					onKeyDown={onListKeyDown}
+					onPointerDownCapture={() => {
+						pickedInList.current = performance.now();
+					}}
 					ref={listRef}
 					role="group"
 					data-sidebar-held-back={rowsHeldBack}
 				>
 					<SidebarHoldContext.Provider value={pointing}>
+						{botsAvailable && <SidebarBots />}
 						{/* One tree whether or not a host is paired, so pairing (or the host list's first read at launch)
 					    never remounts this device's list. */}
 						<SidebarDeviceSections

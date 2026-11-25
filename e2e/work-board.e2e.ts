@@ -237,7 +237,7 @@ test("a 30-task plan's bar stays left of its count, and the count stays in the p
 
 for (const language of variants(["en", "ko"] as const))
 	for (const theme of variants(["light", "dark"] as const))
-		test(`the sidebar's usage block: every account grouped by provider, the session's own marked, the gear opens accounts (${language} ${theme})`, async () => {
+		test(`the status bar's usage block: every account grouped by provider, the session's own marked, the gear opens accounts (${language} ${theme})`, async () => {
 			test.setTimeout(180_000);
 			const { app, page, root } = await launch(language, theme);
 			try {
@@ -251,11 +251,13 @@ for (const language of variants(["en", "ko"] as const))
 							scale: "css",
 						});
 				};
-				const block = page.locator("[data-rail-pin='usage']");
+				// A desktop window's usage block opens from the status bar's usage summary (the owner's decision, 25 Nov 2026).
+				const block = page.locator("[data-rail-pin='usage'][data-usage-popover]");
 				const groups = block.locator("[data-provider-row]");
 				const accounts = block.locator("[data-usage-account]");
-				// No subscription account (the fixture provider reports no windows): nothing in the footer.
-				await expect(block).toHaveCount(0);
+				// No subscription account (the fixture provider reports no windows): no summary, no block, no footer block.
+				await expect(page.locator("[data-status-usage]")).toHaveCount(0);
+				await expect(page.locator("[data-rail-pin='usage']")).toHaveCount(0);
 
 				// Providers the fixture adds with each count, and the accounts they hold in all.
 				const accountsOf: Record<number, number> = { 1: 1, 2: 3, 3: 5, 5: 7 };
@@ -263,6 +265,7 @@ for (const language of variants(["en", "ko"] as const))
 					await fixture(page, `fixture:usage-accounts:${count}`);
 					await page.reload();
 					await page.waitForFunction(() => window.omp?.rpc != null);
+					await page.locator("[data-status-usage]").click();
 					// One group per provider and a row per account, none left to Settings, the tab's own provider first.
 					await expect(groups).toHaveCount(count);
 					await expect(accounts).toHaveCount(accountsOf[count] ?? 0);
@@ -297,12 +300,12 @@ for (const language of variants(["en", "ko"] as const))
 						.locator("[data-usage-account] [data-account-label]")
 						.evaluateAll(labels => labels.filter(entry => entry.scrollWidth > entry.clientWidth + 1).length);
 					expect(cut, "no account name is cut").toBe(0);
-					// The accounts scroll, but the whole block (header and explanation too) stays inside its cap.
+					// The accounts scroll, but the whole block (header too) stays inside its cap over the status bar.
 					const scroller = await block.evaluate(block => {
 						const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
 						return {
 							height: block.getBoundingClientRect().height,
-							cap: Math.min(16 * rem, innerHeight * 0.32),
+							cap: Math.min(32 * rem, innerHeight),
 							overflowY: getComputedStyle(block.querySelector("[data-sidebar-usage-scroll]") as Element)
 								.overflowY,
 						};

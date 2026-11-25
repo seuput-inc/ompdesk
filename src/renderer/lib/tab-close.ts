@@ -48,9 +48,14 @@ export function performTabClose(tab: SessionTab): TabCloseOutcome {
 
 /** ⌘W / File → Close Tab: close the active tab under the shared rules. */
 export function closeActiveTab(): TabCloseOutcome {
+	return requestTabClose(useTabsStore.getState().activeTabId);
+}
+
+/** Close one tab under the shared rules: ⌘W's on the active tab, a tab strip ✕ or middle click on any tab. */
+export function requestTabClose(tabId: string | null): TabCloseOutcome {
 	const { tabs, activeTabId } = useTabsStore.getState();
 	const session = useSessionStore.getState();
-	const target = tabs.find(tab => tab.id === activeTabId);
+	const target = tabs.find(tab => tab.id === tabId);
 	if (!target) return "nothing";
 	if (tabs.length <= 1) {
 		window.close();
@@ -71,20 +76,23 @@ export function closeActiveTab(): TabCloseOutcome {
 }
 
 /**
- * "Close other tabs": focus `keepId`, then close every other tab that can go
- * without asking. A live run or a worktree checkout needs its own decision, so
- * those tabs stay open; returns how many stayed.
+ * "Close other tabs" (and the tab strip's "to the right" / "to the left", by the window's tab order): focus `keepId`,
+ * then close every other tab on that side that can go without asking. A live run or a worktree checkout needs its own
+ * decision, so those tabs stay open; returns how many stayed.
  */
-export async function closeOtherTabs(keepId: string): Promise<number> {
+export async function closeOtherTabs(keepId: string, side: "both" | "right" | "left" = "both"): Promise<number> {
 	const store = useTabsStore.getState();
-	if (!store.tabs.some(tab => tab.id === keepId)) return 0;
+	const at = store.tabs.findIndex(tab => tab.id === keepId);
+	if (at < 0) return 0;
 	const session = useSessionStore.getState();
 	const live: LiveTabRuntime = {
 		activeTabId: store.activeTabId,
 		streaming: session.isStreaming,
 		compacting: session.isCompacting,
 	};
-	const others = store.tabs.filter(tab => tab.id !== keepId);
+	const others = store.tabs.filter(
+		(tab, index) => tab.id !== keepId && (side === "both" || (side === "right" ? index > at : index < at)),
+	);
 	const closable = others.filter(
 		tab => !tabNeedsCloseConfirm(tab, live) && !(tab.worktree && !tab.worktree.lifecycle),
 	);

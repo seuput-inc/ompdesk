@@ -80,6 +80,19 @@ export function useComposerEvents({
 					})),
 				]);
 			}
+			// Orca's hand-off glow (components.css `[data-composer-glow]`): the box lights once, restarted by each fill.
+			const box = textareaRef.current?.closest<HTMLElement>(".omp-composer-box");
+			if (box) {
+				box.removeAttribute("data-composer-glow");
+				void box.offsetWidth;
+				box.setAttribute("data-composer-glow", "");
+				const end = (ended: AnimationEvent) => {
+					if (ended.animationName !== "omp-composer-glow") return;
+					box.removeAttribute("data-composer-glow");
+					box.removeEventListener("animationend", end);
+				};
+				box.addEventListener("animationend", end);
+			}
 			// Focus waits a frame: the surface that sent the text (a dialog, a menu) may still
 			// hand focus back as it closes. Focus keeps the caret placed above.
 			requestAnimationFrame(() => {

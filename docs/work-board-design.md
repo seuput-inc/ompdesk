@@ -81,6 +81,8 @@ The user's brief (verbatim, "토큰 아끼지말고 더 개선할래 리디자�
 
 Hard constraints kept: one line per row (only child rows have a muted second line), no row widens the board, long lists fold into "+N more", no close and no setting, docking by the existing fit rules, the strip expands in place, "Current work" keeps its name and content, the money rule, children at work stay visible in the transcript, nothing visible by default disappears unless it duplicates what is on the same screen, one running animation.
 
+Since 25 Nov 2026 (the owner's decision, Orca's dashboard row) a row stays one line only until a tap opens it: a row with no tap of its own shows its whole label and its tooltip's lines in place (`.omp/rules/work-board.md` "One line per row until a tap opens it").
+
 Two structurally different directions were built over the same stores (throwaway prototypes behind the harness's `?design=x|y`), captured in ko dark and en light at 1600×1000, 1300×900 (the narrowest dock, 264 px), 390×844 and in the live "waiting on children" state, and compared:
 
 - **X — four zones.** *Needs you* (every ask in one callout: a question, a plan review, a child waiting for an answer; each row says which in a fixed-width word and jumps to it), *Now* (the turn's current step, subagents, jobs and running children in one section), *Plan* (the goal as the lead line, the bar in the header, then the todos) and *Current work*. A one-clause head.

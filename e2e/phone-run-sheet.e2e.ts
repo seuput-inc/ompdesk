@@ -278,7 +278,28 @@ for (const width of WIDTHS) {
 					expect(height, "a segmented row is one line").toBeLessThanOrEqual(56);
 				// Taps: every switch and segment answers for itself (nothing steals its centre).
 				for (const control of await sheet.locator("[role=switch], [data-choice-row] [role=radio]").all()) {
-					expect(await ownShare(control), "a control keeps its own taps").toBeGreaterThan(0.85);
+					// The sheet scrolls once its 44 px rows (the owner's decision, 25 Nov 2026) pass the screen: a finger
+					// scrolls to a control first, so does the check.
+					await control.scrollIntoViewIfNeeded();
+					// Name the control and what lies over the first of its points it lost, so a failure says who steals it.
+					const name = await control.evaluate(node => {
+						const box = node.getBoundingClientRect();
+						const tag = (element: Element | null) =>
+							element
+								? `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}.${[...element.classList].slice(0, 3).join(".")}`
+								: "nothing";
+						for (let row = 0; row < 6; row++)
+							for (let column = 0; column < 6; column++) {
+								const hit = document.elementFromPoint(
+									box.left + ((column + 0.5) / 6) * box.width,
+									box.top + ((row + 0.5) / 6) * box.height,
+								);
+								if (!hit || (hit !== node && !node.contains(hit)))
+									return `${tag(node)} ${Math.round(box.width)}×${Math.round(box.height)}, lost to ${tag(hit)}`;
+							}
+						return tag(node);
+					});
+					expect(await ownShare(control), `${name}: a control keeps its own taps`).toBeGreaterThan(0.85);
 				}
 				await captureSheet(page, "sheet-full", { lang, width });
 			} finally {

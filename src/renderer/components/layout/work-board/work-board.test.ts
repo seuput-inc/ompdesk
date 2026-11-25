@@ -65,15 +65,15 @@ describe("work board breakpoint", () => {
 	});
 
 	it("docks in a desktop window and on a tablet held sideways beside a column narrowed to what still reads", () => {
-		// Measured panes, web build, sidebar at its default 248 px: iPad Pro 12.9" (1366 → 1118), iPad Air (1180 → 932)
-		// and iPad mini (1133 → 885) sideways, all docked; a 1024 px tablet (776) keeps the strip until its sidebar
-		// folds (1024).
+		// Measured panes, web build, sidebar at its default 280 px: iPad Pro 12.9" (1366 → 1086), iPad Air (1180 → 900)
+		// and iPad mini (1133 → 853) sideways, all docked beside a narrowed column; a 1024 px tablet (744) keeps the
+		// strip until its sidebar folds (1024). A wide desktop pane keeps the full column.
 		expect(workBoardFits(1118)).toBe(true);
-		expect(workBoardDocks(1118, "tablet-landscape")).toBe(true);
-		expect(workBoardWidth(1118)).toBe(WORK_BOARD_WIDTH);
-		expect(workBoardDocks(932, "tablet-landscape")).toBe(true);
-		expect(workBoardDocks(885, "tablet-landscape")).toBe(true);
-		expect(workBoardDocks(776, "tablet-landscape")).toBe(false);
+		expect(workBoardDocks(1086, "tablet-landscape")).toBe(true);
+		expect(workBoardWidth(1086)).toBe(WORK_BOARD_WIDTH);
+		expect(workBoardDocks(900, "tablet-landscape")).toBe(true);
+		expect(workBoardDocks(853, "tablet-landscape")).toBe(true);
+		expect(workBoardDocks(744, "tablet-landscape")).toBe(false);
 		expect(workBoardDocks(1024, "tablet-landscape")).toBe(true);
 		// The floor is the composer toolbar's label fold: the toolbar (the box less its 2 px border) must stay wider
 		// than components.css's `omp-toolbar` 500 px rule, or the model chip loses its name.
