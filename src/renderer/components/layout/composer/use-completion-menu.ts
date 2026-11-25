@@ -99,7 +99,8 @@ export function applyCompletion(text: string, cursor: number, menu: CompletionMe
 
 /**
  * Whether a slash token typed after prompt text (`prose … /tok`) offers the skill `name`: stock's
- * `midPromptSkillTokenMatches` (pi-tui autocomplete.ts), copied because stock cannot run in the renderer.
+ * `midPromptSkillTokenMatches` (pi-coding-agent autocomplete/autocomplete.ts), copied because stock cannot
+ * run in the renderer.
  * The bare `/` and any prefix of `skill:` list every skill, an explicit `skill:…` query matches the name or
  * description as a subsequence, anything else must start the bare name or one of its hyphen segments
  * (`/hum` → `skill:humanizer`, `/last` → `skill:research-last30days`): a stray `/word` in prose opens nothing.

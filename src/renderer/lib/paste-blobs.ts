@@ -1,7 +1,7 @@
-// Stock pi-tui/components/editor paste atoms stay synchronous and draft-owned across tabs; omp is not shipped in the renderer.
+// Stock ui/composer/attachments paste atoms stay synchronous and draft-owned across tabs; omp is not shipped in the renderer.
 /**
  * Large-paste bookkeeping for the composer, mirroring the TUI editor
- * (`packages/tui/src/components/editor.ts`). The draft text carries compact
+ * (omp ≤19.1 pi-tui `components/editor.ts`). The draft text carries compact
  * `[Paste #N, …]` markers; the full blob lives here in memory and is
  * substituted back in at submit time. Marker generation, blob storage, and
  * expansion all go through this one module so the three can never drift

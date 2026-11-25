@@ -416,12 +416,6 @@ describe("browsers.status", () => {
 });
 
 describe("installRelayExtension", () => {
-	const STOCK_FILES: Record<string, string> = {
-		"background.js": "var DEFAULT_PORT = 9224;\nconst stored = { port: DEFAULT_PORT };\n",
-		"options.js": "const DEFAULT_PORT = 9224;\n",
-		"manifest.json": '{"name":"OMP Browser Relay"}',
-	};
-
 	/** What the stand-in omp runs: it records its arguments and, when it succeeds, writes the files to `--dir`. */
 	const FAKE_OMP = `const fs = require("node:fs");
 const path = require("node:path");
@@ -457,7 +451,7 @@ process.stderr.write(stderr, () => process.exit(code));
 		else writeFileSync(bin, `#!/bin/sh\nexec "${node}" "${script}" "${spec}" "$@"\n`, { mode: 0o755 });
 		const omp: OmpRuntime = {
 			bin,
-			version: "18.12.6",
+			version: "19.2.0",
 			run: async () => {
 				throw new Error("the core process runs omp");
 			},
@@ -472,25 +466,9 @@ process.stderr.write(stderr, () => process.exit(code));
 		return { omp, calls: read };
 	}
 
-	it("writes the browser's own copy with its own port in both files, and nothing else changed", async () => {
-		const { omp, calls } = runtime(STOCK_FILES);
-		const dir = await installRelayExtension(omp, "edge", home);
-		expect(dir).toBe(join(home, ".omp", "browser-relay", "extension-edge"));
-		expect(calls()).toHaveLength(1);
-		expect(calls()[0]?.slice(0, 3)).toEqual(["browser-relay", "install", "--dir"]);
-		expect(readFileSync(join(dir, "background.js"), "utf8")).toBe(
-			"var DEFAULT_PORT = 9232;\nconst stored = { port: DEFAULT_PORT };\n",
-		);
-		expect(readFileSync(join(dir, "options.js"), "utf8")).toBe("const DEFAULT_PORT = 9232;\n");
-		expect(readFileSync(join(dir, "manifest.json"), "utf8")).toBe(STOCK_FILES["manifest.json"]);
-		// The staging folder is gone, and another browser's copy is its own.
-		expect(existsSync(`${dir}.new`)).toBe(false);
-		expect(existsSync(relayExtensionDir("chrome"))).toBe(false);
-	});
-
 	it("registers the final extension path on native-host omp without loading it in any Chrome profile", async () => {
 		const { omp, calls } = runtime({ "worker.js": "uses native messaging" });
-		const dir = await installRelayExtension({ ...omp, version: "19.1.0" }, "chrome", home);
+		const dir = await installRelayExtension(omp, "chrome", home);
 		expect(dir).toBe(relayExtensionDir("chrome"));
 		expect(calls()).toEqual([["browser-relay", "install", "--dir", dir, "--no-chrome"]]);
 		expect(readFileSync(join(dir, "worker.js"), "utf8")).toBe("uses native messaging");
@@ -538,23 +516,8 @@ process.stderr.write(stderr, () => process.exit(code));
 
 	it("does not run the installer for a browser the native host cannot register", async () => {
 		const { omp, calls } = runtime({});
-		await expect(installRelayExtension({ ...omp, version: "19.1.0" }, "arc", home)).rejects.toThrow("Arc");
+		await expect(installRelayExtension(omp, "arc", home)).rejects.toThrow("Arc");
 		expect(calls()).toEqual([]);
-	});
-
-	it("rebinds an earlier copy in place", async () => {
-		await installRelayExtension(runtime(STOCK_FILES).omp, "chrome", home);
-		const dir = await installRelayExtension(runtime(STOCK_FILES).omp, "chrome", home);
-		expect(readFileSync(join(dir, "background.js"), "utf8")).toContain("DEFAULT_PORT = 9231;");
-	});
-
-	it("fails when stock's asset cannot be bound, leaving no unbound copy", async () => {
-		const changed = { ...STOCK_FILES, "background.js": "const port = 9224;\n" };
-		await expect(installRelayExtension(runtime(changed).omp, "chrome", home)).rejects.toThrow(
-			"background.js has no single DEFAULT_PORT",
-		);
-		expect(existsSync(relayExtensionDir("chrome"))).toBe(false);
-		expect(existsSync(`${relayExtensionDir("chrome")}.new`)).toBe(false);
 	});
 
 	it("fails with omp's own words", async () => {

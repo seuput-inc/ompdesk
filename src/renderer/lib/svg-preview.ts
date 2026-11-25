@@ -22,12 +22,12 @@
 export type SvgPalette = Readonly<Record<string, string>>;
 
 /**
- * Figure token → app `--sc-*` palette primitive, after stock's PALETTE (pi-tui
- * chat/svg-figure.ts). Named themes mirror their colors onto `--sc-*`
+ * Figure token → app `--sc-*` palette primitive, after stock's `figurePalette` (pi-coding-agent
+ * ui/transcript/figures/svg.ts). Named themes mirror their colors onto `--sc-*`
  * (lib/themes.ts SC_TOKEN_SOURCES), so these follow every theme. `surface`
  * is a card on the figure's chip (`--sc-surface-1`); `border` must still read
- * on it. Stock derives `c1`…`c6` from the accent; the app's series are its
- * accent and status hues plus a neutral.
+ * on it. Stock takes `c1`…`c6` from its theme's accent, border accent, status and link colors; the app's series are
+ * its accent and status hues plus a neutral.
  */
 export const SVG_PALETTE_VARIABLES: Readonly<Record<string, string>> = {
 	fg: "--sc-text",

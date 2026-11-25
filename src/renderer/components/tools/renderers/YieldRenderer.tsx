@@ -7,7 +7,7 @@ import { resultBodyText, resultDetails } from "./result";
 import { ToolTextPreview } from "./ToolTextPreview";
 
 /**
- * Stock's `yield` ("Submit result", pi-tui `tools/yield.ts`): what a subagent
+ * Stock's `yield` ("Submit result", pi-coding-agent `ui/tools/yield.tsx`): what a subagent
  * submitted, not the model-facing "Result submitted." reply. The section labels
  * or workpool item name the target; container data reports its size; string
  * data renders as markdown, anything else as a JSON tree. `details`

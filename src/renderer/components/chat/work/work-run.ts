@@ -132,7 +132,7 @@ export interface TaskCallResult {
 /**
  * The agents an unanswered task call started, from its arguments alone: a batch's `tasks[]`
  * or the flat spec. Stock names each one by its spec name, else `#<position>` (task/index.ts
- * "Task #2: cancelled before start."; pi-tui task.ts renderTaskCallLines); the id it
+ * "Task #2: cancelled before start."; pi-coding-agent ui/tools/task/model.ts requestedSpawns); the id it
  * allocated from that name was never recorded.
  */
 function argumentAgents(args: Record<string, unknown>): Array<{ name: string; agent?: string; task?: string }> {

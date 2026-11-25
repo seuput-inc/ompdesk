@@ -579,11 +579,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * can be started but not stopped is not offered, and the session's shutdown hook stops it the same way.
 	 */
 	agentBrowser: {
-		pkg: ["VERSION"],
 		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/tools/browser/attach`]: ["findFreeCdpPort()"],
 			[`${AGENT}/tools/browser/relay/bridge`]: [
 				"RelayBridge.prototype.extConnected()",
 				"RelayBridge.prototype.extMessage()",

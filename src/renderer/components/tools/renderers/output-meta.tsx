@@ -2,7 +2,7 @@ import { useT } from "../../../lib/i18n";
 import { asNumber, asRecord } from "../../../lib/wire-value";
 
 /**
- * Stock's `details.meta` (OutputMeta, pi-tui `tools/output-meta.ts`): the spill
+ * Stock's `details.meta` (OutputMeta, pi-coding-agent `tools/output-meta-format.ts`): the spill
  * wrapper's truncation record. Renderers strip the LLM-facing notice line from
  * the body and restate it here in the UI language.
  */

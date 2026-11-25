@@ -14,7 +14,6 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { guard } from "./health";
 import { previewRelayStarted, previewRelayStopped } from "./modes/default-browser";
 import { attach } from "./modes/shared";
-import { findFreeCdpPort } from "./omp/pi-coding-agent/tools/browser/attach";
 import { type RelayServer, startRelayServer } from "./omp/pi-coding-agent/tools/browser/relay/server";
 import { overridable } from "./settings-override";
 import type { BridgeMethods } from "./types";
@@ -22,14 +21,14 @@ import type { BridgeMethods } from "./types";
 interface RunningRelay {
 	server: RelayServer;
 	url: string;
-	extension?: Bun.Server<undefined>;
+	extension: Bun.Server<undefined>;
 	token: string;
 	scope: object;
 }
 
 let running: RunningRelay | null = null;
 
-/** Stock 19.1's native-host mode has no token option. Admit Preview to its in-process bridge, not stock's /ext. */
+/** Stock's native-host mode has no token option. Admit Preview to its in-process bridge, not stock's /ext. */
 function listenForPreview(server: RelayServer, token: string) {
 	return Bun.serve<undefined>({
 		hostname: "127.0.0.1",
@@ -55,7 +54,7 @@ function stop(): void {
 	if (!running) return;
 	const { server, extension, scope } = running;
 	running = null;
-	void extension?.stop(true);
+	void extension.stop(true);
 	server.stop();
 	overridable("browser.relay").clearOverride(scope);
 	overridable("browser.relayUrl").clearOverride(scope);
@@ -67,23 +66,15 @@ export const methods: BridgeMethods = guard("agentBrowser", {
 	"browser.relay_start": async (_params, env) => {
 		const scope = attach(env).settings as unknown as object;
 		if (running && running.scope !== scope) stop();
-		const port = !running && Bun.semver.satisfies(env.pi.pi.VERSION, "<19.1.0") ? await findFreeCdpPort() : undefined;
-		if (running && running.scope !== scope) throw new Error("Another session took the Preview relay");
 		if (!running) {
 			const token = Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url");
-			if (port !== undefined) {
-				const options = { port, group: false, token };
-				const server = startRelayServer(options);
-				running = { server, url: `http://127.0.0.1:${port}`, token, scope };
-			} else {
-				const server = startRelayServer({ port: 0, chatOnly: true, group: false });
-				try {
-					const extension = listenForPreview(server, token);
-					running = { server, extension, url: `http://127.0.0.1:${server.port}`, token, scope };
-				} catch (error) {
-					server.stop();
-					throw error;
-				}
+			const server = startRelayServer({ port: 0, chatOnly: true, group: false });
+			try {
+				const extension = listenForPreview(server, token);
+				running = { server, extension, url: `http://127.0.0.1:${server.port}`, token, scope };
+			} catch (error) {
+				server.stop();
+				throw error;
 			}
 		}
 		previewRelayStarted(scope);
@@ -91,7 +82,7 @@ export const methods: BridgeMethods = guard("agentBrowser", {
 		overridable("browser.relayUrl").override(scope, running.url);
 		return {
 			url: running.url,
-			...(running.extension ? { extensionUrl: `http://127.0.0.1:${running.extension.port}` } : {}),
+			extensionUrl: `http://127.0.0.1:${running.extension.port}`,
 			token: running.token,
 		};
 	},

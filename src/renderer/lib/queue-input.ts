@@ -1,7 +1,7 @@
-// Stock pi-tui/prompt/queue-input stays synchronous per keystroke for preview and submit; omp is not shipped in the renderer.
+// Stock modes/view-model/prompt/queue-input stays synchronous per keystroke for preview and submit; omp is not shipped in the renderer.
 /**
  * Queue shorthand parsing, ported verbatim from the TUI
- * (`packages/coding-agent/src/modes/queue-input.ts`). One parser feeds BOTH
+ * (`pi-coding-agent/src/modes/view-model/prompt/queue-input.ts`). One parser feeds BOTH
  * the composer preview badge and the submit dispatch so highlight and split
  * can never drift (see plan/17 §3.1).
  *

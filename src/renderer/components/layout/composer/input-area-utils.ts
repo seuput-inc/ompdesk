@@ -132,8 +132,8 @@ export function listMentionFiles(cwd: string, tabId?: string | null, now = Date.
 }
 
 /**
- * The `@` file token that ends at the caret, read as stock's `extractAtFilePrefix` reads it (pi-tui
- * autocomplete.ts; a renderer copy, stock cannot run here): `@` at the start or after whitespace, then
+ * The `@` file token that ends at the caret, read as stock's `extractAtFilePrefix` reads it (pi-coding-agent
+ * autocomplete/tokens.ts; a renderer copy, stock cannot run here): `@` at the start or after whitespace, then
  * either an open quote (`@"My Re`, a path with spaces) or any run of characters up to stock's path
  * delimiters (space, tab, `"`, `'`, `=`), so Hangul and other non-ASCII names count. `start` is the `@`.
  */

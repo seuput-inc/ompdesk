@@ -14,7 +14,7 @@ export interface EditInputSection {
 }
 
 /**
- * Renderer counterpart of stock pi-tui `tools/edit.ts` `getHashlineInputSections`
+ * Renderer counterpart of stock pi-coding-agent `tools/details/edit.ts` `getHashlineInputSections`
  * (and the header walk behind `getEditInputPaths`), which the renderer cannot import.
  * Tolerant of a payload still streaming: a `[path` header counts before its `#TAG]`
  * arrives, so the call names its file and REM/MV operation without ever showing the
