@@ -5660,6 +5660,8 @@ export const en: Record<string, string> = {
 	"updates.auth.failed": "Couldn't change GitHub access",
 	"updates.auth.dropped.keychain-would-ask":
 		"The saved token was removed: macOS would ask for your login password to read it. GH_TOKEN, GITHUB_TOKEN and your gh login still work; a new token can't be saved on this computer.",
+	"updates.auth.unreadable":
+		"The saved token can't be read on this computer, so updates don't use it. It stays saved as it is: save a new one to replace it, or remove it.",
 	"updates.auth.cannotStore":
 		"This system can't encrypt secrets, so a token can't be saved here. Connect GitHub in Settings › General instead.",
 	"updates.host.name": "OMPdesk on the host computer",

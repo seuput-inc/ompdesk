@@ -853,6 +853,12 @@ export interface UpdateAuthInfo {
 	 * (`KEYCHAIN_WOULD_ASK`), so main dropped the file instead (native-rust › S › The keychain on macOS). Null when none was.
 	 */
 	droppedReason: string | null;
+	/**
+	 * The saved token is still there but this computer could not read it on the last try (the OS key store had no key
+	 * for it, or it did not decrypt): it is kept as it is, never replaced by nothing, until a new one is saved or it is
+	 * removed. Absent from an older host.
+	 */
+	unreadable?: boolean;
 }
 
 export interface UpdateAuthTestResult {

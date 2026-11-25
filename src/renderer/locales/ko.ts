@@ -5653,6 +5653,8 @@ export const ko: Record<string, string> = {
 	"updates.auth.failed": "GitHub 접근 설정을 바꾸지 못했어요",
 	"updates.auth.dropped.keychain-would-ask":
 		"저장한 토큰을 지웠어요. 읽으려면 macOS가 로그인 암호를 물어봐야 해서예요. GH_TOKEN, GITHUB_TOKEN, gh 로그인은 그대로 쓸 수 있고, 이 컴퓨터에는 새 토큰을 저장할 수 없어요.",
+	"updates.auth.unreadable":
+		"저장한 토큰을 이 컴퓨터에서 읽을 수 없어서 업데이트에 쓰지 못해요. 토큰은 그대로 남아 있어요. 새 토큰을 저장해 바꾸거나 삭제하세요.",
 	"updates.auth.cannotStore":
 		"이 시스템에서는 비밀 정보를 암호화할 수 없어 토큰을 저장할 수 없어요. 설정 › 일반에서 GitHub를 연결하세요.",
 	"updates.host.name": "호스트 컴퓨터의 OMPdesk",
