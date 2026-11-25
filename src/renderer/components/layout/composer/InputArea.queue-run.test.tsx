@@ -374,6 +374,19 @@ describe("Edit queued", () => {
 		expect(useComposerStore.getState().editingQueued).toBeNull();
 		expect(useComposerStore.getState().draft).toBe("my draft");
 		expect(useComposerStore.getState().images).toEqual([image]);
+		// The send's answer came before stock's queue frame (separate channels): the chip still says where it landed.
+		await act(async () =>
+			useQueueStore
+				.getState()
+				.setFromFrame({ steering: [queued("s2", "other"), queued("s3", "better text")], followUp: [] }),
+		);
+		expect(useQueueStore.getState().moved).toEqual({
+			id: "s3",
+			lane: "steering",
+			position: 2,
+			count: 2,
+			kind: "edit",
+		});
 	});
 
 	it("queues the unchanged text back on Enter", async () => {
