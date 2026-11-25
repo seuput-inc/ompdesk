@@ -39,6 +39,7 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
+import type { BotsRequest, BotsState } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import type {
 	AutoCloseTurn,
@@ -227,6 +228,12 @@ export interface AgentControlHostDeps {
 	runtimeTuning?: RuntimeTuning;
 	/** Where accepted reports wait for their receiver's journal (`mail-outbox`); absent: kept in memory only. */
 	mailOutboxFile?: string | null;
+	/** Where the bots and their items are kept (`bots.json`, `items.json`) and where a new bot's folder goes (`~/.omp/bots`). */
+	botsFile?: string | null;
+	itemsFile?: string | null;
+	botsRoot?: string | null;
+	/** The core's bots state changed: main keeps it and tells every window. */
+	botsChanged?: (state: BotsState) => void;
 	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
 	attachmentsDir?: string | null;
 	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
@@ -382,6 +389,9 @@ export class AgentControlRuntime {
 				sendOutbox: deps.sendOutboxFile ?? null,
 				mailOutbox: deps.mailOutboxFile ?? null,
 				attachments: deps.attachmentsDir ?? null,
+				bots: deps.botsFile ?? null,
+				items: deps.itemsFile ?? null,
+				botsRoot: deps.botsRoot ?? null,
 			},
 		});
 		// Every tab activity goes to the core's runtime, which decides what it means (the sweep of the opened sessions,
@@ -390,6 +400,21 @@ export class AgentControlRuntime {
 		// A paired page's changed word about its Files editor (its unsaved edits saved or dropped) lets a child it held
 		// back close now, not at the next timer tick.
 		deps.fileEdits.onReport(() => void this.control.runtime.sweepOpeners().catch(() => undefined));
+	}
+
+	/** The owner's change to the bots or their items (`BOTS_COMMAND`): the state after it. */
+	bots(request: BotsRequest): Promise<BotsState> {
+		return this.control.bots(request);
+	}
+
+	/** A quiet note (no turn) into a session file on this computer: now when a tab holds it, else when one opens it. */
+	noteSession(sessionPath: string, text: string): Promise<void> {
+		return this.control.noteSession(sessionPath, text);
+	}
+
+	/** A paired device's `bot:<name>@<this computer>` (`host.bots.home`): refused unless that device may reach it. */
+	botHome(name: string, device: string, deviceName: string): Promise<{ path: string; name: string }> {
+		return this.control.botHome(name, device, deviceName);
 	}
 
 	/** The tab Autopilot (or anyone) opened this one for, if the control tools opened it. */
@@ -1326,6 +1351,20 @@ export class AgentControlRuntime {
 				),
 			recordClosed: child => this.#recordClosed(child),
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
+			botsChanged: state => deps.botsChanged?.(state),
+			setOpener: (tabId, openerTabId) => {
+				// As a session the bot's chat opened: its reports and auto-close go to that chat, across a relaunch too.
+				this.#parents.set(tabId, { callerTabId: openerTabId });
+				deps.pool.setTabOpener(tabId, openerTabId);
+			},
+			botHome: async (device, name) => {
+				const remote = deps.remote;
+				if (!remote) throw new Error("No paired computers here.");
+				const answer = await remote.request<{ path?: unknown }>(device, "host.bots.home", { name });
+				if (typeof answer?.path !== "string")
+					throw new Error("The paired computer did not name the bot's home chat.");
+				return { path: answer.path };
+			},
 			tombstones: () => tombstones(),
 			hasSchedules: device => (device ? deps.remote !== undefined : deps.schedules?.() != null),
 			schedules: device => {

@@ -23,6 +23,7 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
+import type { BotsApi } from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { AgentBrowserStatus, ChromiumBrowserId } from "./default-browser";
@@ -2297,6 +2298,8 @@ export interface OmpApi {
 	preview: PreviewApi;
 	/** Scheduled `omp -p` runs on this machine (Settings › Schedules). */
 	schedules: SchedulesApi;
+	/** This computer's bots and their items (the Bots page; src/shared/bots.ts). */
+	bots: BotsApi;
 	/** This computer's mail accounts for email routines (Settings › Schedules › Email accounts); passwords go one way. */
 	mailAccounts: MailAccountsApi;
 	/** The sidebar's project list of this computer or a paired host (src/main/sidebar-projects.ts). */

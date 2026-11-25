@@ -1300,6 +1300,16 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
                     .await,
             )
         }
+        // A quiet note into a session file on this computer (a schedule's result, a bot's notice): one per text.
+        "noteSession" => {
+            control
+                .note_session(
+                    &text_arg(&args, "sessionPath", method)?,
+                    &text_arg(&args, "text", method)?,
+                )
+                .await;
+            Reply::json(&())
+        }
         // The owner's own change to the bots or their items (`BotsRequest`, Settings and the Bots page): the state after.
         "bots" => reply(control.bots_command(args).await),
         // A paired device asks for a bot's home chat by name (`host.bots.home`): refused unless that device may reach it.

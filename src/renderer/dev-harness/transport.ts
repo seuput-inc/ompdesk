@@ -8,6 +8,7 @@
  * `window.__harness.emit(channel, payload)` plays a main→renderer push (a tab status, a streaming batch, an ask).
  */
 
+import { BOTS_COMMAND } from "../../shared/bots";
 import { EMPTY_GITHUB_AUTH_STATE } from "../../shared/github-auth";
 import {
 	IPC_COMMANDS,
@@ -671,6 +672,8 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				remoteState = { ...remoteState, deviceSectionOrder: [...payload] };
 				emit(IPC_EVENTS.REMOTE_STATE, remoteState);
 				return undefined;
+			case BOTS_COMMAND:
+				return { bots: [], items: [] };
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;
 			case SIDEBAR_PROJECTS_COMMAND:

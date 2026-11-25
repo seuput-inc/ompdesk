@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import * as bots from "../../shared/bots";
 import * as bridgeHealth from "../../shared/bridge-health";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import * as mailAccounts from "../../shared/mail-accounts";
@@ -22,6 +23,7 @@ const NATIVE = JSON.parse(
 	fs.readFileSync(path.join(MAIN, "../../native/ompdesk/crates/tauri-shell/src/ipc_router.json"), "utf8"),
 ) as { invoke: string[]; send: string[] };
 const NAMED: Record<string, unknown> = {
+	...bots,
 	...bridgeHealth,
 	...mailAccounts,
 	...mobileWeb,

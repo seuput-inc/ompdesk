@@ -121,6 +121,14 @@ export const MAIN_TEXT = {
 		en: "The agent in “{caller}” wants to run “{name}” {when} in {folder} while OMPdesk is open. It runs without auto-approve. Schedule it?",
 		ko: "“{caller}”의 에이전트가 OMPdesk가 켜져 있는 동안 {folder} 폴더에서 “{name}” 작업을 {when} 실행하도록 예약하려고 해요. 자동 승인 없이 실행돼요. 예약할까요?",
 	},
+	"agentControl.botTitle": {
+		en: "An agent wants to make a bot",
+		ko: "에이전트가 봇을 만들려고 해요",
+	},
+	"agentControl.botMessage": {
+		en: "The agent in “{caller}” wants to make the bot “{name}”: a folder on this computer whose sessions are its chats. Nothing is sent to it until you write to it. Make it?",
+		ko: "“{caller}”의 에이전트가 “{name}” 봇을 만들려고 해요. 이 컴퓨터의 폴더 하나이고, 그 폴더의 세션이 봇의 대화예요. 직접 말을 걸기 전에는 아무것도 보내지 않아요. 만들까요?",
+	},
 	"agentControl.autopilotTitle": {
 		en: "An agent wants to start Autopilot",
 		ko: "에이전트가 오토파일럿을 시작하려고 해요",

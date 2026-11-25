@@ -214,6 +214,9 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("schedules:command", Risk::Never(OPERATOR)),
     ("mail-accounts:command", Risk::Never(CREDENTIALS)),
     ("schedules:log", Risk::Never(DENY)),
+    // The owner's own Bots page; agents have ompdesk_bot and ompdesk_item.
+    ("bots:command", Risk::Never(OPERATOR)),
+    ("bots:state", Risk::Never(PUSH)),
     (
         "sidebar-projects:command",
         Risk::Tier(

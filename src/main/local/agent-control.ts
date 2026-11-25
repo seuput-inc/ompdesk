@@ -7,11 +7,37 @@
 
 import { z } from "zod";
 import { ATTACHMENT_MAX_BYTES } from "../../../resources/gui-bridge/agent-control-contracts";
+import { BOT_METHOD, type BotContext } from "../../../resources/gui-bridge/modes/bots-contracts";
 import type { LocalHandler } from "./types";
 
 const confirmCommand = z.object({ title: z.string().min(1).max(200), message: z.string().min(1).max(2000) });
 const noteCommand = z.object({ text: z.string().min(1).max(500) });
 const workerCommand = z.object({ from: z.string().min(1).max(200) });
+const botItem = z.object({
+	number: z.number().int().min(1),
+	title: z.string().max(200),
+	status: z.string().max(20),
+	question: z
+		.object({
+			text: z.string().max(8_000),
+			options: z.array(z.string().max(200)).max(10),
+			recommended: z.number().int().min(0).optional(),
+		})
+		.optional(),
+});
+const botCommand = z.object({
+	context: z.object({
+		bot: z.object({
+			id: z.string().min(1).max(100),
+			name: z.string().min(1).max(80),
+			paused: z.boolean(),
+			folder: z.string().min(1).max(4096),
+		}),
+		items: z.array(botItem).max(1000),
+		needsYou: z.array(botItem).max(1000),
+		live: z.array(z.string().max(500)).max(100),
+	}),
+});
 const sentCommand = z.object({ marks: z.array(z.string().min(1).max(200)).min(1).max(100) });
 const judgeCommand = z.object({ system: z.string().min(1).max(20_000), user: z.string().min(1).max(200_000) });
 const attachmentCommand = z
@@ -53,6 +79,12 @@ export const handlers: Record<string, LocalHandler> = {
 		const { text } = noteCommand.parse(command);
 		await ctx.bridge.request("agent_control.note", { text });
 		return {};
+	},
+	/** A bot chat's context (the core's bot pass): its bridge journals it when it changed (`modes/bots.ts`). */
+	agent_control_bot: async (command, ctx) => {
+		const { context } = botCommand.parse(command);
+		const payload: BotContext = context;
+		return ctx.bridge.request(BOT_METHOD, payload);
 	},
 	/** The session was opened by another session's agent: its bridge journals it and adds the worker contract. */
 	agent_control_worker: async (command, ctx) => {

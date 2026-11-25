@@ -50,6 +50,7 @@ import {
 	sidebarViewOf,
 } from "../shared/agent-control";
 import { AI_MEMORY_TERMINAL_PREF } from "../shared/ai-memory";
+import { BOTS_STATE } from "../shared/bots";
 import { COMPUTER_USE_PREF } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF, creditSpendEnabled } from "../shared/credit-spend";
 import { DEFAULT_BROWSER_PREF } from "../shared/default-browser";
@@ -97,6 +98,7 @@ import { MemoryUpkeep } from "./ai-memory/upkeep";
 import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
+import { onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
@@ -869,6 +871,7 @@ app.whenReady().then(async () => {
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
 	const sessionNote: IpcDeps["sessionNote"] = { current: null };
+	const botHome: IpcDeps["botHome"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
 	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
@@ -1281,6 +1284,11 @@ app.whenReady().then(async () => {
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
+		// A device's agent asking one of this computer's bots by name: the control tools answer once they exist.
+		botHome: (name, deviceId, deviceName) => {
+			if (!botHome.current) throw new Error("OMPdesk is still starting");
+			return botHome.current(name, deviceId, deviceName);
+		},
 		sessionMoved: (from, to) => {
 			if (prefs.moveSidebarPin(from, to)) {
 				sidebarPrefsChanged();
@@ -1983,6 +1991,12 @@ app.whenReady().then(async () => {
 		extensionEnv: () => mcpHub?.ompEnv() ?? Promise.resolve({}),
 		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
 	});
+	// The Bots page of every window follows the core's bots state (BOTS_STATE).
+	onBotsState(state => {
+		for (const win of BrowserWindow.getAllWindows()) {
+			if (!win.isDestroyed()) win.webContents.send(BOTS_STATE, state);
+		}
+	});
 	scheduleService = new ScheduleService({
 		file: join(app.getPath("userData"), "schedules.json"),
 		logDir: join(app.getPath("userData"), "schedule-runs"),
@@ -2411,6 +2425,7 @@ app.whenReady().then(async () => {
 		webTabNotice,
 		sessionWake,
 		sessionNote,
+		botHome,
 		tabReport,
 		agentOpening,
 		webPages: () => webHost?.windows.all() ?? [],
