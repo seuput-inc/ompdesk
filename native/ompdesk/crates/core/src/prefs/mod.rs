@@ -17,10 +17,16 @@
 //!
 //! Hub kind `prefs` (no state per instance): `get {file, key}` → `{value}` or `{}` when nothing is there, `has`,
 //! `set {file, key, value}`, `delete {file, key}`, `store {file}` → the whole store, `replace {file, value}`.
+//! The owners of single keys, each a read, change and write under the file's one lock (`launch_profile.rs`,
+//! `sidebar.rs`): `launchProfile {file, cwd}` → the profile, `updateLaunchProfile {file, cwd, patch}` → the profile
+//! stored, `launchFlags {file, cwd}` → a spawn's flags, `updateSidebar {file, change, from}` → `{change, log}` (both
+//! null when nothing moved), `moveSidebarPin {file, from, to}` → whether a pin moved.
 
+mod launch_profile;
 mod path;
 mod powers;
 mod retired;
+mod sidebar;
 #[cfg(test)]
 mod tests;
 
@@ -383,6 +389,22 @@ struct Powers {
     agent_dir: PathBuf,
 }
 
+/// A key owner's call: what the page or a peer sent stays raw, for its owner to check.
+#[derive(Deserialize)]
+struct Owned {
+    file: String,
+    #[serde(default)]
+    cwd: Value,
+    #[serde(default)]
+    patch: Value,
+    #[serde(default)]
+    change: Value,
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+}
+
 fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
     let done = match method {
         "get" => params::<Of>(raw).and_then(|of| {
@@ -406,6 +428,19 @@ fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
         }
         "migratePowers" => params::<Powers>(raw)
             .and_then(|p| migrate_powers(&p.file, &p.agent_dir).map(|report| json!(report))),
+        "launchProfile" => params::<Owned>(raw)
+            .and_then(|o| launch_profile::get(&o.file, &o.cwd).map(Value::Object)),
+        "updateLaunchProfile" => params::<Owned>(raw)
+            .and_then(|o| launch_profile::update(&o.file, &o.cwd, &o.patch).map(Value::Object)),
+        "launchFlags" => params::<Owned>(raw).and_then(|o| {
+            launch_profile::flags(&o.file, o.cwd.as_str().unwrap_or_default())
+                .map(|flags| json!(flags))
+        }),
+        "updateSidebar" => params::<Owned>(raw).and_then(|o| {
+            sidebar::update(&o.file, &o.change, &o.from).map(|applied| json!(applied))
+        }),
+        "moveSidebarPin" => params::<Owned>(raw)
+            .and_then(|o| sidebar::move_pin(&o.file, &o.from, &o.to).map(|moved| json!(moved))),
         _ => Err(Fault::new("no_method", format!("prefs has no {method}"))),
     };
     Outcome::Now(done)

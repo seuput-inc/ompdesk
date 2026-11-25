@@ -191,7 +191,7 @@ function factory(): LocalSidecarFactory {
 		accountRotationLedger: "/ud/rotation.json",
 		creditSpendPref: () => true,
 		ompdeskRolesFile: "/ud/roles.json",
-		launchProfilesPref: () => ({}),
+		launchFlags: () => [],
 		aiMemoryExtensionArgs: async () => ["-e", "/ud/ai-memory/omp-ext"],
 		memoryStateFile: "/ud/memory-recall.json",
 	});
@@ -303,7 +303,7 @@ function hostServices(pool: SidecarPool, create: LocalSidecarFactory): LocalHost
 		},
 		renameStoredSession: async () => {},
 		defaultWorkspace: () => dir,
-		launchProfiles: { get: () => undefined, set: () => {} },
+		launchProfiles: { launchProfile: () => ({}), updateLaunchProfile: () => ({}) },
 		machine: {} as unknown as MachineServices,
 		localTabs: pool,
 		trashItem: async () => {},

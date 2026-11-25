@@ -209,7 +209,6 @@ import {
 	safeStorageUnavailableReason,
 	screenRecordingGranted,
 } from "./shell-host/shell-calls";
-import { moveSidebarPin, updateSidebarPrefs } from "./sidebar-prefs";
 import { SidebarProjects } from "./sidebar-projects";
 import type { RecoveryStuck, SidecarManager } from "./sidecar";
 import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
@@ -1039,7 +1038,7 @@ app.whenReady().then(async () => {
 		accountRotationLedger: join(app.getPath("userData"), ACCOUNT_ROTATION_LEDGER_FILE),
 		creditSpendPref: () => prefsStore().get(CREDIT_SPEND_PREF),
 		ompdeskRolesFile: join(app.getPath("userData"), OMPDESK_ROLES_FILE),
-		launchProfilesPref: () => prefsStore().get("launchProfiles"),
+		launchFlags: cwd => prefsStore().launchFlags(cwd),
 		// ai-memory's `session-end` (the handoff) needs omp's own shutdown, which only a closed stdin triggers.
 		gracefulStopMs: () => (aiMemoryService?.state().phase === "ready" ? 4_000 : 0),
 		aiMemoryExtensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
@@ -1072,7 +1071,9 @@ app.whenReady().then(async () => {
 		layout: {
 			read: () => readSidebarPrefs(prefsStore().get(SIDEBAR_PREFS_KEY)),
 			write: change => {
-				if (updateSidebarPrefs(prefsStore(), change, "host", writeRuntimeLog)) sidebarPrefsChanged();
+				const { change: applied, log } = prefsStore().updateSidebar(change, "host");
+				if (log) writeRuntimeLog(log);
+				if (applied) sidebarPrefsChanged();
 			},
 		},
 		defaultWorkspace: () => sidebarWorkspace,
@@ -1312,7 +1313,7 @@ app.whenReady().then(async () => {
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
 		sessionMoved: (from, to) => {
-			if (moveSidebarPin(prefs, from, to)) {
+			if (prefs.moveSidebarPin(from, to)) {
 				sidebarPrefsChanged();
 				sidebarProjects.schedule();
 			}
@@ -1323,7 +1324,7 @@ app.whenReady().then(async () => {
 			await renameStoredSession(omp.runtime, sessionPath, name);
 		},
 		defaultWorkspace,
-		launchProfiles: { get: key => prefs.get(key), set: (key, value) => prefs.set(key, value) },
+		launchProfiles: prefs,
 		machine,
 		localTabs: sidecarPool,
 		summaries: sessionSummaries,

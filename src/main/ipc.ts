@@ -160,7 +160,6 @@ import { savedWorktreesForSpawn } from "./disk/saved-worktrees";
 import { openInExternalEditor } from "./editor";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
-import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "./launch-profile-store";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
@@ -200,7 +199,6 @@ import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTarg
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
 import { publishLanguage } from "./shell-host/electron/index";
 import { readClipboardText } from "./shell-host/shell-calls";
-import { updateSidebarPrefs } from "./sidebar-prefs";
 import type { SidebarProjects } from "./sidebar-projects";
 import { deviceLanguage } from "./sidecar-factory";
 import type { SidecarPool } from "./sidecar-pool";
@@ -2099,7 +2097,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	ipc.handle(IPC_COMMANDS.PREFS_UPDATE_SIDEBAR, (caller, payload: unknown) => {
 		const from = caller.win && isWebWindow(caller.win.webContents.id) ? "web" : "window";
-		const change = updateSidebarPrefs(prefsStore, payload, from, writeRuntimeLog);
+		const { change, log } = prefsStore.updateSidebar(payload, from);
+		if (log) writeRuntimeLog(log);
 		if (change && change.op !== "touch-workspace" && change.op !== "set-rail-pin" && change.op !== "set-group-alias")
 			deps.sidebarProjects?.layoutChanged();
 		prefChanged(caller.win, SIDEBAR_PREFS_KEY);
@@ -2107,15 +2106,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	// Launch profiles live with the machine that spawns omp: a tab's paired
 	// host keeps its own.
-	const launchProfilePrefs: LaunchProfilePrefs = {
-		get: key => prefsStore.get(key),
-		set: (key, value) => prefsStore.set(key, value),
-	};
 	ipc.handle(IPC_COMMANDS.PREFS_GET_LAUNCH_PROFILE, (_caller, payload: IpcGetLaunchProfilePayload) => {
 		const device = deviceOf(payload?.device);
 		return device
 			? remoteDevices.request(device, "launchProfile.get", { cwd: payload.cwd })
-			: readLaunchProfile(launchProfilePrefs, payload?.cwd);
+			: prefsStore.launchProfile(payload?.cwd);
 	});
 	const syncDefaultBrowserEverywhere = (): void => {
 		for (const sidecar of sidecarPool.allSidecars()) if (!sidecar.device) sidecar.syncDefaultBrowser();
@@ -2152,7 +2147,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const device = deviceOf(payload?.device);
 		return device
 			? remoteDevices.request(device, "launchProfile.update", { cwd: payload.cwd, patch: payload.patch })
-			: updateLaunchProfile(launchProfilePrefs, payload?.cwd, payload?.patch);
+			: prefsStore.updateLaunchProfile(payload?.cwd, payload?.patch);
 	});
 
 	// Sidecar control

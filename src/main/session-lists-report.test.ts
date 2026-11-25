@@ -237,7 +237,7 @@ describe.skipIf(!OUT || !stockRoot)("session lists across windows and paired com
 					sessionIndex: index,
 					renameStoredSession: async () => {},
 					defaultWorkspace: () => "/work/default",
-					launchProfiles: { get: () => undefined, set: () => {} },
+					launchProfiles: { launchProfile: () => ({}), updateLaunchProfile: () => ({}) },
 					machine: { abortBenchmark: async () => true, abortModelSetup: async () => true } as never,
 					localTabs: {
 						sessionOwner: () => null,

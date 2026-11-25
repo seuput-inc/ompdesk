@@ -1,10 +1,11 @@
 /**
  * Launch profiles: per-workspace agent CLI customisation configured in the
  * GUI (Settings → Launch Profile), persisted in GUI prefs under
- * `launchProfiles.<cwd>`, and appended to the sidecar spawn argv by
- * src/main/sidecar.ts. This module is pure mapping/preview — no I/O — so the
- * renderer (settings form + effective-command preview) and the main process
- * (spawn) share one source of truth.
+ * `launchProfiles.<cwd>` by the core (`native/ompdesk/crates/core/src/prefs/launch_profile.rs`,
+ * which also parses them and maps them to a spawn's flags). This module is pure
+ * mapping/preview, no I/O: the renderer's effective-command preview and the
+ * spawn's denylist (`omp-launch.ts`). `profileToFlags` is the core's mapping
+ * again, held to the same rows (`launch-captured.json`).
  *
  * Flag mappings mirror packages/coding-agent/src/cli/flag-tables.ts.
  */
@@ -152,51 +153,6 @@ export function profileToFlags(profile: LaunchProfile): string[] {
 		flags.push("--config", profile.config.trim());
 	}
 	return flags;
-}
-
-/**
- * Sanitize untrusted prefs JSON into a launch profile. Unknown keys — e.g. a
- * hand-edited prefs file smuggling `"--session"` — are dropped before they
- * can reach the mapping, and empty/blank values are normalized away so a
- * cleaned profile with no keys means "no profile".
- */
-export function parseLaunchProfile(raw: unknown): LaunchProfile {
-	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
-	const record = raw as Record<string, unknown>;
-	const profile: LaunchProfile = {};
-	if (typeof record.systemPrompt === "string" && record.systemPrompt.trim() !== "") {
-		profile.systemPrompt = record.systemPrompt;
-	}
-	if (typeof record.appendSystemPrompt === "string" && record.appendSystemPrompt.trim() !== "") {
-		profile.appendSystemPrompt = record.appendSystemPrompt;
-	}
-	if (record.noRules === true) profile.noRules = true;
-	if (Array.isArray(record.addDirs)) {
-		const dirs = record.addDirs
-			.filter((dir): dir is string => typeof dir === "string")
-			.map(dir => dir.trim())
-			.filter(dir => dir !== "");
-		if (dirs.length > 0) profile.addDirs = dirs;
-	}
-	if (Array.isArray(record.tools)) {
-		const tools = record.tools
-			.filter((tool): tool is string => typeof tool === "string")
-			.map(tool => tool.trim())
-			.filter(tool => tool !== "");
-		if (tools.length > 0) profile.tools = tools;
-	}
-	if (record.noLsp === true) profile.noLsp = true;
-	if (record.planYolo === true) profile.planYolo = true;
-	if (typeof record.profile === "string" && record.profile.trim() !== "") {
-		profile.profile = record.profile.trim();
-	}
-	if (typeof record.sessionDir === "string" && record.sessionDir.trim() !== "") {
-		profile.sessionDir = record.sessionDir.trim();
-	}
-	if (typeof record.config === "string" && record.config.trim() !== "") {
-		profile.config = record.config.trim();
-	}
-	return profile;
 }
 
 /** Shell-safe charset: args outside it are single-quoted in the preview. */

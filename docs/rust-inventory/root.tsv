@@ -266,8 +266,6 @@ src/main/installer-spawn.ts	port	1	G: replace the Node worker with native launch
 src/main/ipc.ts	mixed	4	registerIpcHandlers still routes session commands and renderer events. Desktop runtime:log-path and runtime:log-tail bypass Node; paired requests use the same Tauri reader after the workspace permission check. Clipboard and image conversion already use the shell and stock worker.
 src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
-src/main/launch-profile-store.test.ts	tooling	-	Vitest suite: launch profile store.
-src/main/launch-profile-store.ts	port	2	§1.3(a,c), shell batch: local IPC and remote host-services synchronously patch one SafeStore launchProfiles map; index.ts supplies that same map to the sidecar's spawn-time flags. Move with the prefs owner to preserve atomic per-workspace patches.
 src/main/legacy-user-data.test.ts	tooling	-	Runs the Tauri host on an isolated profile; shell-batch-checks tauri-native supplies the executable on macOS and Windows.
 src/main/line-budget.ts	port	1	LineBudget.take enforces an hourly allowance and counts suppressed lines for the next admitted report.
 src/main/local-engines-core.test.ts	tooling	-	Vitest suite: engineAction.
@@ -405,8 +403,6 @@ src/main/shell-env.test.ts	tooling	-	Vitest suite: resolveLoginShellEnv.
 src/main/shell-env.ts	port	2	resolveLoginShellEnv caches shell exports; shellSpawnEnv/spawnPath resolve the launch environment for GUI child processes.
 src/main/shell-policy-test-rig.ts	tooling	-	Vitest drives the Rust shell policies in a test-only process without starting a WebView.
 src/main/sidebar-layout.ts	port	1	SidebarProjects builds the sender's scope from current sessions and prefs, reorders only visible slots, writes the preference and republishes. This synchronous projection uses the page's chat classifier and performs no I/O.
-src/main/sidebar-prefs.test.ts	tooling	-	Vitest suite: updateSidebarPrefs.
-src/main/sidebar-prefs.ts	port	2	ipc.ts and the SidebarProjects layout writer in index.ts read/patch/write the current prefs and then notify without yielding. moveSidebarPin transfers a peer-moved session's pin against that same store; readSidebarPrefs and sidebarPatch are shared with the page.
 src/main/sidebar-projects.test.ts	tooling	-	Vitest suite: SidebarProjects.
 src/main/sidebar-projects.ts	mixed	2	fs.sidebarFolder resolves linked checkout files and missing folders; git.originFacts supplies Git facts. index.ts reads SidebarProjects.state() synchronously for local and paired snapshots; ipc.ts applies layoutChanged() in the preference update, using page-shared project rules.
 src/main/sidecar-core-loss.test.ts	tooling	-	Vitest suite: tabs whose core ended under them.
