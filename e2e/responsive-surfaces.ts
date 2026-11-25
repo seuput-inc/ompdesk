@@ -1522,7 +1522,7 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Composer holding a long multi-line draft",
 		open: async page => {
-			const input = page.locator("[data-composer-input]");
+			const input = page.locator("[data-composer-input]:visible").first();
 			await input.click();
 			await input.fill(
 				Array.from(
@@ -1530,6 +1530,13 @@ export const SURFACES: readonly Surface[] = [
 					(_, line) => `Line ${line + 1} of a long draft that wraps past the width of a narrow phone screen`,
 				).join("\n"),
 			);
+		},
+		// The draft is typed into the shown session's composer; `after` empties it again for the next surface.
+		parity: {
+			session: "work",
+			after: async page => {
+				await page.locator("[data-composer-input]:visible").first().fill("");
+			},
 		},
 	},
 	{
