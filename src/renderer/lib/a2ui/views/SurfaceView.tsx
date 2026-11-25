@@ -20,7 +20,16 @@ function Root({ resolver }: { resolver: NodeResolver }) {
 	return root ? <NodeView node={root} /> : <Skeleton className="h-16 w-full" />;
 }
 
-export function SurfaceView({ surface, inert }: { surface: SurfaceModel; inert: boolean }) {
+export function SurfaceView({
+	surface,
+	inert,
+	pressedId,
+}: {
+	surface: SurfaceModel;
+	inert: boolean;
+	/** The Button whose action the person sent: it keeps a check mark. */
+	pressedId?: string;
+}) {
 	// The resolver holds subscriptions on the surface: made and disposed with the mount (and again for a new surface).
 	const [resolver, setResolver] = useState<NodeResolver>();
 	useLayoutEffect(() => {
@@ -29,7 +38,7 @@ export function SurfaceView({ surface, inert }: { surface: SurfaceModel; inert: 
 		return () => next.dispose();
 	}, [surface]);
 	return (
-		<A2uiViewContext.Provider value={{ surface, inert, primaryId: firstPrimary(surface) }}>
+		<A2uiViewContext.Provider value={{ surface, inert, pressedId, primaryId: firstPrimary(surface) }}>
 			<div className="flex min-w-0 flex-col gap-3" data-a2ui-surface={surface.id}>
 				{resolver && !resolver.disposed ? <Root resolver={resolver} /> : <Skeleton className="h-16 w-full" />}
 			</div>

@@ -309,7 +309,7 @@ function A2uiRenderer(props: ToolRendererProps) {
 export function A2uiChatCard({ toolCallId }: { toolCallId: string }) {
 	return (
 		<Suspense fallback={A2UI_SKELETON}>
-			<LazyA2uiCard toolCallId={toolCallId} />
+			<LazyA2uiCard live toolCallId={toolCallId} />
 		</Suspense>
 	);
 }

@@ -2,6 +2,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
+import { a2uiMarkerForm } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
 import type { ExtensionUIRequest, ExtensionUIResponse, RpcResponseSuccess } from "../../../shared/rpc-types";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { preloadMarkdownPipeline } from "../../lib/markdown";
@@ -302,6 +303,26 @@ describe("ExtensionDialog native RPC form", () => {
 		expect(respondExtensionUi).toHaveBeenCalledWith(
 			{ type: "extension_ui_response", id: "expired", cancelled: true, timedOut: true },
 			"paired-pane",
+		);
+	});
+});
+
+describe("ExtensionDialog a2ui form", () => {
+	it("shows where to answer instead of an ask card, and Skip cancels the stock form", async () => {
+		const command = vi.fn<SessionRuntime["command"]>();
+		await mount({ runtime: { tabId: "pane", command, stores: new Map() } });
+		await push({ type: "extension_ui_request", method: "form", id: "a2ui-1", html: a2uiMarkerForm("call_7") });
+		expect(document.querySelector('[data-a2ui-waiting="call_7"]')).not.toBeNull();
+		expect(document.body.textContent).toContain(translate("a2ui.waiting"));
+		// Nothing is projected: the card in the chat draws the surface, not the form's one text box.
+		expect(command).not.toHaveBeenCalled();
+		expect(document.querySelector("textarea")).toBeNull();
+		const skip = document.querySelector("[data-a2ui-dock-skip]") as unknown as TestElement | null;
+		if (!skip) throw new Error("missing Skip");
+		await click(skip);
+		expect(respondExtensionUi).toHaveBeenCalledWith(
+			{ type: "extension_ui_response", id: "a2ui-1", cancelled: true },
+			"pane",
 		);
 	});
 });

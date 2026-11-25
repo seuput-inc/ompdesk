@@ -4,6 +4,7 @@
  * disables the Button with its first message as the reason, and shows under a field once the person edited it.
  */
 
+import { Check } from "lucide-react";
 import { useContext, useId, useState } from "react";
 import { Button, Checkbox, Chip, FieldShell, Input, Radio, Select, Slider, TextArea } from "../../../components/common";
 import { useT } from "../../i18n";
@@ -15,7 +16,7 @@ const RADIO_MAX = 15;
 
 export function ButtonView({ node, props, inline }: ViewProps & { inline?: boolean }) {
 	const t = useT();
-	const { inert, primaryId } = useContext(A2uiViewContext);
+	const { inert, primaryId, pressedId } = useContext(A2uiViewContext);
 	const label = isNode(props.child) ? <NodeView inline node={props.child} /> : null;
 	if (inline) return label;
 	const errors = checkErrors(props);
@@ -27,11 +28,14 @@ export function ButtonView({ node, props, inline }: ViewProps & { inline?: boole
 				? "ghost"
 				: "secondary";
 	const reason = inert ? t("a2ui.notWaiting") : errors[0];
+	const pressed = node.componentId === pressedId;
 	return (
 		<Button
 			className="self-start"
+			data-a2ui-pressed={pressed ? "" : undefined}
 			disabled={inert || errors.length > 0 || !action}
 			disabledReason={reason}
+			icon={pressed ? <Check aria-hidden /> : undefined}
 			onClick={() => void Promise.resolve(action?.()).catch(() => undefined)}
 			variant={variant}
 		>

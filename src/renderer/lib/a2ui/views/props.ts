@@ -37,6 +37,8 @@ export interface A2uiViewState {
 	inert: boolean;
 	/** The one Button drawn primary: the surface's first `primary` (others are drawn secondary). */
 	primaryId: string | undefined;
+	/** The Button whose action the person sent: it keeps a check mark. */
+	pressedId?: string;
 }
 
 export const A2uiViewContext = createContext<A2uiViewState>({ surface: undefined, inert: true, primaryId: undefined });
