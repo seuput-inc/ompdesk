@@ -372,6 +372,29 @@ describe("Edit queued", () => {
 		expect(document.querySelector("[data-queue-pill]")).not.toBeNull();
 	});
 
+	it("holds a Save's new words in the restored tray when the edit never began (stock delivered the message meanwhile)", async () => {
+		const { promise: began, resolve } = Promise.withResolvers<boolean>();
+		await mountEditing(true, began);
+		await typeInto("better text");
+		await press("Enter");
+		await act(async () => resolve(false));
+		await flush();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(useComposerStore.getState().restoredQueue.map(({ lane, text }) => ({ lane, text }))).toEqual([
+			{ lane: "steering", text: "better text" },
+		]);
+	});
+
+	it("queues nothing on a Cancel whose edit never began: the original never left stock's queue, or went", async () => {
+		const { promise: began, resolve } = Promise.withResolvers<boolean>();
+		await mountEditing(true, began);
+		await press("Escape");
+		await act(async () => resolve(false));
+		await flush();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(useComposerStore.getState().restoredQueue).toEqual([]);
+	});
+
 	it("on Cancel after the turn ended holds the original in the restored tray instead of starting a turn", async () => {
 		await mountEditing(false);
 		const cancel = document.querySelector("[data-queue-edit-cancel]");

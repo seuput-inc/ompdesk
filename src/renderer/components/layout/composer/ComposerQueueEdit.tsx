@@ -61,7 +61,8 @@ function letGo(rpc: TabRpc, token: string): void {
 
 /**
  * Queue `text` (the edit's or the original) in the edited message's lane, then let the core's hold go. `cancel`: no turn
- * runs any more, so the original waits in the restored tray instead of starting one. A refused send holds it there too.
+ * runs any more, so the original waits in the restored tray instead of starting one. A refused send holds it there too,
+ * and so does a Save whose edit never began (the message went meanwhile): the person's words are never dropped.
  * The queue pill stays away until then (`editsRequeueing`).
  */
 async function requeue(
@@ -73,8 +74,6 @@ async function requeue(
 ): Promise<void> {
 	stores.composer.getState().noteRequeueing(1);
 	try {
-		// Nothing to queue again until the core holds it and stock's queue let it go; an edit that never began left both as they were.
-		if (!(await editing.began)) return;
 		const images = editing.images.length > 0 ? editing.images : undefined;
 		const hold = () => {
 			const entry = [{ text, images }];
@@ -83,6 +82,12 @@ async function requeue(
 				followUp: editing.lane === "followUp" ? entry : [],
 			});
 		};
+		// Nothing to queue again until the core holds it and stock's queue let it go; an edit that never began left both
+		// as they were, so only a Save's new words are kept.
+		if (!(await editing.began)) {
+			if (!cancel) hold();
+			return;
+		}
 		if (cancel && !stores.session.getState().isStreaming) hold();
 		else {
 			// Saved: the edit's new chip, whenever its frame comes, is where it landed (the last of its lane).
