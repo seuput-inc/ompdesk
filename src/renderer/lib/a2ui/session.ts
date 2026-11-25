@@ -17,8 +17,8 @@ import {
 import type { AgentMessage } from "../../../shared/rpc-types";
 import { toolEntryKey } from "../../stores/tools";
 import { createA2uiCatalog } from "./catalog";
+import { A2UI_TOOL_NAME as TOOL_NAME } from "./tool-name";
 
-const TOOL_NAME = "a2ui";
 const ENVELOPE_KINDS = ["createSurface", "updateComponents", "updateDataModel", "deleteSurface"] as const;
 
 /** The person's action as the bridge's tool result carries it (`details.action`, `modes/a2ui-contracts.ts`). */

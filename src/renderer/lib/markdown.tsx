@@ -922,7 +922,7 @@ function Paragraph({ node, ...props }: ComponentPropsWithoutRef<"p"> & ExtraProp
 	return node?.children.some(rendersAsBlock) ? <div className="omp-md-p" {...props} /> : <p {...props} />;
 }
 
-function MarkdownImage({ src, alt, title, ...props }: ComponentPropsWithoutRef<"img">) {
+export function MarkdownImage({ src, alt, title, ...props }: ComponentPropsWithoutRef<"img">) {
 	const classified = classifyImageSrc(typeof src === "string" ? src : undefined);
 	const altText = typeof alt === "string" ? alt : "";
 	if (classified.kind === "none") return <MarkdownImageFallback alt={altText} />;

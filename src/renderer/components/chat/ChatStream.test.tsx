@@ -165,6 +165,33 @@ describe("compact transcript rows", () => {
 		expect(liveWorkTail(running, true, true).liveTail).toBe(false);
 	});
 
+	it("draws an a2ui view in the chat, its own row under the card and the text, with no copy left in the card", () => {
+		const view = { type: "toolCall" as const, id: "call-view", name: "a2ui", arguments: { messages: [] } };
+		const rows = buildHistoryRows(
+			[
+				assistant([
+					{ type: "thinking", thinking: "Show them the numbers." },
+					{ type: "text", text: "Here is the week." },
+					{ type: "toolCall", id: "call-read", name: "read", arguments: { path: "stats.json" } },
+					view,
+				]),
+				{ ...assistant([view]), timestamp: "2026-08-05T04:00:02.000Z" },
+				{ ...assistant([{ type: "text", text: "Done." }]), timestamp: "2026-08-05T04:00:03.000Z" },
+			],
+			"compact",
+		);
+		expect(rows.map(row => row.kind)).toEqual(["process", "message", "message", "message", "message"]);
+		const [card, text, first, second] = rows;
+		if (card?.kind !== "process" || text?.kind !== "message" || first?.kind !== "message") {
+			throw new Error("rows missing");
+		}
+		expect(card.toolCallIds).toEqual(["call-read"]);
+		expect(text.message.content).toEqual([{ type: "text", text: "Here is the week." }]);
+		expect(first.message.content).toEqual([view]);
+		// A message holding only views opens no empty card.
+		expect(second?.kind === "message" && second.message.content).toEqual([view]);
+	});
+
 	// What omp 18.18.6 recorded when the owner's steers went unanswered on screen (10 Nov 2026): the reply to the person
 	// as a narration thinking block (pi-ai `ThinkingContent.narration`) beside plain reasoning and the calls, no text.
 	const narrated = (id: string, timestamp: string): AgentMessage => ({

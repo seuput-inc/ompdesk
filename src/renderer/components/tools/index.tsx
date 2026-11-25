@@ -45,6 +45,7 @@ import { lazyChunk } from "../../lib/chunk-load";
 import { resultDetails, sanitizeToolText } from "../../lib/format";
 import { translate } from "../../lib/i18n";
 import { decodeXdevPayload, xdevDispatch, xdevInnerResult, xdevWriteTarget } from "../../lib/xdev";
+import { Skeleton } from "../common";
 import { editArgumentPaths, editArgumentSummary } from "./edit-args";
 import { AskRenderer } from "./renderers/AskRenderer";
 import { AstEditRenderer } from "./renderers/AstEditRenderer";
@@ -272,6 +273,7 @@ const REGISTRY: Record<string, ComponentType<ToolRendererProps>> = {
 	reject: (props: ToolRendererProps) => <ResolveRenderer {...props} operation="reject" />,
 	think: ThinkRenderer,
 	yield: YieldRenderer,
+	a2ui: A2uiRenderer,
 	...NOTE_DEVICES,
 };
 
@@ -284,6 +286,30 @@ function AgentDesktopRenderer(props: ToolRendererProps) {
 	return (
 		<Suspense fallback={null}>
 			<LazyAgentDesktopRenderer {...props} />
+		</Suspense>
+	);
+}
+
+// Its own chunk too: the A2UI engine (web_core, zod) and its views load with the first card that needs them.
+const a2uiChunk = () => import("./renderers/A2uiRenderer");
+const LazyA2uiRenderer = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiRenderer })));
+const LazyA2uiCard = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiCard })));
+/** While the chunk loads: a block in the card's place, never a spinner (no-loading-screens). */
+const A2UI_SKELETON = <Skeleton className="h-24 w-full" />;
+
+function A2uiRenderer(props: ToolRendererProps) {
+	return (
+		<Suspense fallback={A2UI_SKELETON}>
+			<LazyA2uiRenderer {...props} />
+		</Suspense>
+	);
+}
+
+/** An `a2ui` call's own row in the chat, under the work card that holds the turn's other steps. */
+export function A2uiChatCard({ toolCallId }: { toolCallId: string }) {
+	return (
+		<Suspense fallback={A2UI_SKELETON}>
+			<LazyA2uiCard toolCallId={toolCallId} />
 		</Suspense>
 	);
 }
@@ -404,6 +430,7 @@ const VIBE: ToolMeta = { label: "vibe", icon: Sparkles, activity: "other" };
 /** Human label + kind icon per tool name; unknown tools keep their raw name and a wrench. */
 const TOOL_META: Record<string, ToolMeta> = {
 	read: { label: "read", icon: FileText, activity: "read" },
+	a2ui: { label: "a2ui", icon: AppWindow, activity: "other" },
 	write: { label: "write", icon: FilePlus2, activity: "edit" },
 	edit: { label: "edit", icon: Pencil, activity: "edit" },
 	apply_patch: { label: "apply_patch", icon: Pencil, activity: "edit" },

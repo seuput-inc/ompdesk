@@ -7,6 +7,7 @@
 import { elementScroll, type VirtualItem, type Virtualizer } from "@tanstack/react-virtual";
 import { asyncResultJobs } from "../../../shared/async-results";
 import type { AgentMessage, MessageContent } from "../../../shared/rpc-types";
+import { A2UI_TOOL_NAME } from "../../lib/a2ui/tool-name";
 import { messageIdentity } from "../../lib/message-identity";
 import { isRenderableMessageText, messageDisplayText, messageText, splitReaction } from "../../lib/messages";
 import type { ReadGroupEntry, ReadGroupUsage } from "../../lib/read-group";
@@ -704,6 +705,21 @@ export function buildHistoryRows(
 			// right under the person's message, where it streamed, and this message's calls start the card under the answer
 			// (the order the model wrote them in).
 			const text = message.content.filter(block => block.type === "text");
+			// An `a2ui` call is a view drawn for the person (docs/design/a2ui.md §2): like the reply's text it stays in the
+			// chat, its own row under the card holding the message's other steps and under the text, and the run's next
+			// calls start a card under it. The card keeps no copy that could answer.
+			const views = message.content.filter(block => block.type === "toolCall" && block.name === A2UI_TOOL_NAME);
+			if (views.length > 0) {
+				const work = message.content.filter(block => block.type !== "text" && !views.includes(block));
+				if (work.length > 0) processMessages.push({ ...message, content: work });
+				flushProcess();
+				if (text.some(block => isRenderableMessageText(block.text))) {
+					rows.push({ kind: "message", message: { ...message, content: text }, inRun: true });
+				}
+				rows.push({ kind: "message", message: { ...message, content: views }, inRun: true });
+				inRun = true;
+				continue;
+			}
 			if (text.some(block => isRenderableMessageText(block.text))) {
 				const work = { ...message, content: message.content.filter(block => block.type !== "text") };
 				if (

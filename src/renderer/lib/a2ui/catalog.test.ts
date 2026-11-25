@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import catalogDocument from "../../../../resources/gui-bridge/modes/a2ui-catalog.json";
 import { createA2uiCatalog } from "./catalog";
 import { A2uiSession } from "./session";
+import { A2UI_VIEWS } from "./views/NodeView";
 
 const A2UI_CATALOG_ID = catalogDocument.catalogId;
 
@@ -42,6 +43,10 @@ describe("OMPdesk's A2UI catalog", () => {
 		expect([...catalog.functions.keys()].sort()).toEqual(Object.keys(catalogDocument.functions).sort());
 		expect(catalog.agentFunctions.size).toBe(0);
 		for (const fn of catalog.functions.values()) expect(typeof fn.execute, fn.name).toBe("function");
+	});
+
+	it("has a view for every component, and draws no type it does not declare", () => {
+		expect(Object.keys(A2UI_VIEWS).sort()).toEqual(Object.keys(catalogDocument.components).sort());
 	});
 
 	it("opens only http(s) links, through the link opener", () => {

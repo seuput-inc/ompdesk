@@ -9,6 +9,7 @@ import { parseAgentMessage } from "../../../shared/agent-control";
 import { extractFileMentions, replaceFileMentions, splitAttachedMentions } from "../../../shared/file-mentions";
 import type { AgentMessage, ImageContent, MessageContent, ToolCallContent } from "../../../shared/rpc-types";
 import { useShellInput } from "../../hooks/use-shell-mode";
+import { A2UI_TOOL_NAME } from "../../lib/a2ui/tool-name";
 import { AnsiText, hasAnsi } from "../../lib/ansi";
 import { compactionDoneKey, compactionTook } from "../../lib/compaction-action";
 import { basename, cx, extractResultImage, formatClock, formatDuration, uiLocale } from "../../lib/format";
@@ -35,6 +36,7 @@ import {
 	InlineNotice,
 	MenuButton,
 } from "../common";
+import { A2uiChatCard } from "../tools";
 import { isAbsoluteChatPath, referencedFiles } from "../tools/media/chat-media";
 import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
@@ -654,7 +656,11 @@ export const MessageBubble = memo(function MessageBubble({
 			}
 			case "toolCall": {
 				blocks.push(
-					<ToolCardWithResult key={toolEntryKey(block)} call={block} runningIndicator={runningIndicator} />,
+					block.name === A2UI_TOOL_NAME ? (
+						<A2uiChatCard key={toolEntryKey(block)} toolCallId={toolEntryKey(block)} />
+					) : (
+						<ToolCardWithResult key={toolEntryKey(block)} call={block} runningIndicator={runningIndicator} />
+					),
 				);
 				break;
 			}
