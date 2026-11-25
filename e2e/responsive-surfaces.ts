@@ -86,7 +86,7 @@ export interface Surface {
 	};
 }
 
-export type ParitySession = "work" | "reply" | "steer" | "advisor" | "ci" | "limit" | "turns" | "long" | "cut";
+export type ParitySession = "work" | "reply" | "steer" | "advisor" | "ci" | "a2ui" | "limit" | "turns" | "long" | "cut";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -1105,6 +1105,20 @@ export const SURFACES: readonly Surface[] = [
 		settle: 900,
 		when: () => false,
 		parity: { session: "ci", inView: '[data-ci-note="failure"]' },
+	},
+	{
+		id: "reply-a2ui",
+		area: "A",
+		title: "An A2UI surface the agent drew in the chat: a card with a heading, a bar chart and a caption",
+		open: async page => {
+			await showTurn(page, "fixture a2ui show");
+			await page.getByText("A2UI surface shown.", { exact: true }).last().waitFor({ timeout: 15_000 });
+		},
+		ready: "[data-a2ui-card] [data-a2ui-chart] canvas",
+		settle: 900,
+		// The audits' harness page has no such turn; the parity sheet asks the fake omp for it.
+		when: () => false,
+		parity: { session: "a2ui", inView: '[data-a2ui-surface="weekly"]' },
 	},
 	...(
 		[

@@ -489,13 +489,15 @@ if (dir) {
 									answeredSession("Parity advisor", [["fixture advisor note", "Advisor note delivered."]])
 								: session === "ci"
 									? answeredSession("Parity CI", [["fixture ci note", "Pushed main."]])
-									: session === "turns"
-										? turnsSession()
-										: session === "long"
-											? longSession()
-											: session === "cut"
-												? cutSession()
-												: limitSession();
+									: session === "a2ui"
+										? answeredSession("Parity A2UI", [["fixture a2ui show", "A2UI surface shown."]])
+										: session === "turns"
+											? turnsSession()
+											: session === "long"
+												? longSession()
+												: session === "cut"
+													? cutSession()
+													: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

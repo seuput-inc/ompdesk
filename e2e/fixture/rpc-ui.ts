@@ -5437,6 +5437,83 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				}, 250);
 			};
 			run(0);
+		} else if (message === "fixture a2ui show") {
+			// A display-only A2UI surface (no Button) as the bridge's `a2ui` tool answers it: a card with a heading, a bar
+			// chart bound to the data model and a caption (parity `reply-a2ui`, docs/design/a2ui.md).
+			const id = `a2ui-${Date.now()}`;
+			const catalogId = "https://github.com/seuput-inc/ompdesk/a2ui/v1";
+			const args = {
+				messages: [
+					{ version: "1.0", createSurface: { surfaceId: "weekly", catalogId } },
+					{
+						version: "1.0",
+						updateComponents: {
+							surfaceId: "weekly",
+							components: [
+								{ id: "root", component: "Card", child: "col" },
+								{ id: "col", component: "Column", children: ["title", "chart", "note"] },
+								{ id: "title", component: "Text", text: "## Weekly sessions" },
+								{
+									id: "chart",
+									component: "Chart",
+									kind: "bar",
+									labels: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+									series: [{ label: "Sessions", values: { "@path": "/sessions" } }],
+									description: "Sessions per weekday, Monday to Friday",
+								},
+								{ id: "note", component: "Text", text: "Busiest on Wednesday.", variant: "caption" },
+							],
+						},
+					},
+					{ version: "1.0", updateDataModel: { surfaceId: "weekly", value: { sessions: [3, 5, 8, 4, 2] } } },
+				],
+			};
+			const call: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "toolCall", id, name: "a2ui", arguments: args }],
+				timestamp: Date.now(),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "toolUse",
+			};
+			appendMessage(call);
+			write({ type: "message_start", message: call });
+			write({ type: "message_end", message: call });
+			write({ type: "tool_execution_start", toolCallId: id, toolName: "a2ui", args });
+			setTimeout(() => {
+				const content = [{ type: "text" as const, text: "Shown to the person." }];
+				const details = { shown: ["weekly"] };
+				const result: AgentMessage = {
+					role: "toolResult",
+					toolCallId: id,
+					toolName: "a2ui",
+					content,
+					details,
+					isError: false,
+					timestamp: Date.now(),
+				};
+				write({
+					type: "tool_execution_end",
+					toolCallId: id,
+					toolName: "a2ui",
+					result: { content, details },
+					isError: false,
+				});
+				appendMessage(result);
+				write({ type: "message_end", message: result });
+				const answer: AgentMessage = {
+					role: "assistant",
+					content: [{ type: "text", text: "A2UI surface shown." }],
+					timestamp: Date.now(),
+					provider: model.provider,
+					model: model.id,
+					stopReason: "stop",
+				};
+				appendMessage(answer);
+				write({ type: "message_start", message: answer });
+				write({ type: "message_end", message: answer });
+				endTurn([user, call, result, answer]);
+			}, 250);
 		} else if (message === "fixture steps") {
 			// A run of separate assistant messages, each thinking then calling a
 			// tool, with gaps between them — the shape that used to mount a new
