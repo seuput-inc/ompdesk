@@ -51,6 +51,7 @@ export function NoteEditor({
 	context,
 	onSave,
 	onCancel,
+	onChange,
 }: {
 	initial?: string;
 	/** Where the note goes, for its field's name ("Note on lines 3-5"). */
@@ -59,6 +60,8 @@ export function NoteEditor({
 	context?: ReactNode;
 	onSave: (body: string) => void;
 	onCancel: () => void;
+	/** Each edit of the text, for an owner that keeps the draft while this editor unmounts (a scrolled-away row). */
+	onChange?: (body: string) => void;
 }) {
 	const t = useT();
 	const [body, setBody] = useState(initial);
@@ -72,7 +75,10 @@ export function NoteEditor({
 				aria-label={label}
 				autoFocus
 				autoGrow
-				onChange={event => setBody(event.target.value)}
+				onChange={event => {
+					setBody(event.target.value);
+					onChange?.(event.target.value);
+				}}
 				onKeyDown={event => {
 					if (isImeKeyEvent(event)) return;
 					if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {

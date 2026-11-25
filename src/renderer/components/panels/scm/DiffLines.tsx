@@ -182,14 +182,21 @@ export function DiffLines({
 		[allNotes, owner, path],
 	);
 	const [draft, setDraft] = useState<NoteLines | null>(null);
+	// What the person typed in the draft, kept here: the draft's row unmounts while it is scrolled out of view.
+	const [draftBody, setDraftBody] = useState("");
 	// A drag across the +s: where it started and the line under the pointer now.
 	const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
+	// The click that ends a drag over another + is not that range's click; it is dropped once, in this task.
 	const dragged = useRef(false);
 	useEffect(() => {
 		if (!drag) return;
 		const end = () => {
 			if (drag.from !== drag.to) {
 				dragged.current = true;
+				// A release over another row clicks their common parent, not a +: nothing else clears the flag.
+				window.setTimeout(() => {
+					dragged.current = false;
+				}, 0);
 				setDraft({ start: Math.min(drag.from, drag.to), end: Math.max(drag.from, drag.to) });
 			}
 			setDrag(null);
@@ -203,7 +210,10 @@ export function DiffLines({
 	}, [drag]);
 	// Another file's diff drops the note being written on this one.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: path names the file the draft was on.
-	useEffect(() => setDraft(null), [path]);
+	useEffect(() => {
+		setDraft(null);
+		setDraftBody("");
+	}, [path]);
 	const rows = useMemo<DiffRow[]>(() => {
 		// Whole-file notes lead; a line's notes follow its last line.
 		const out: DiffRow[] = fileNotes
@@ -255,11 +265,17 @@ export function DiffLines({
 						return (
 							<div className="border-y border-(--sc-divider) bg-(--sc-surface-2) font-sans">
 								<NoteEditor
+									initial={draftBody}
 									label={t("reviewNotes.newLabel", { place })}
-									onCancel={() => setDraft(null)}
+									onCancel={() => {
+										setDraft(null);
+										setDraftBody("");
+									}}
+									onChange={setDraftBody}
 									onSave={body => {
 										if (owner) useReviewNotesStore.getState().add({ owner, anchor, body });
 										setDraft(null);
+										setDraftBody("");
 									}}
 								/>
 							</div>

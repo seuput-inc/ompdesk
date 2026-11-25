@@ -3,7 +3,8 @@
  * `selection-quotes/SelectionAddToChatPopover.tsx`, MIT): "Add to chat" in a transcript or a file, "Add note" in a
  * document.
  *
- * Rules (Orca's): offered only once the selection settles (a mouse release, a key release); after a double click it
+ * Rules (Orca's): offered only once the selection settles (a mouse release, a key release; with no mouse button down,
+ * as a finger's long press selects, once the selection has kept still for `QUIET_SETTLE_MS`); after a double click it
  * waits `DOUBLE_CLICK_SETTLE_MS` so a third click that selects the paragraph is not taken by a button that appeared under
  * the pointer. It never takes focus, and a press on it keeps the selection (mousedown is held), so the text stays
  * selected until an action takes it. It follows the text as its scroller scrolls, hides while the text is out of
@@ -17,6 +18,8 @@ import { Button } from "./Button";
 
 /** Shown at once, a double click's button would sit under the pointer and take the third click. */
 export const DOUBLE_CLICK_SETTLE_MS = 500;
+/** A selection made without a mouse (a touch screen's long press and handles) settles once it keeps still this long. */
+const QUIET_SETTLE_MS = 600;
 
 export interface SelectionAction {
 	id: string;
@@ -60,6 +63,8 @@ export function SelectionActions({
 		if (!enabled || !root) return;
 		let changed = false;
 		let timer: number | undefined;
+		let quiet: number | undefined;
+		let mouseDown = false;
 		let offered: string | null = null;
 		const show = (next: { text: string; range: Range } | null) => {
 			offered = next?.text ?? null;
@@ -67,6 +72,7 @@ export function SelectionActions({
 		};
 		const close = () => {
 			window.clearTimeout(timer);
+			window.clearTimeout(quiet);
 			show(null);
 		};
 		const settle = (delay: number) => {
@@ -77,9 +83,13 @@ export function SelectionActions({
 			timer = window.setTimeout(() => show(acceptRef.current(root)), delay);
 		};
 		const onPointerDown = (event: PointerEvent) => {
+			if (event.pointerType === "mouse") mouseDown = true;
 			if (event.target instanceof Node && barRef.current?.contains(event.target)) return;
 			close();
 			changed = false;
+		};
+		const onPointerEnd = (event: PointerEvent) => {
+			if (event.pointerType === "mouse") mouseDown = false;
 		};
 		const onMouseUp = (event: MouseEvent) => {
 			if (event.button === 0) settle(event.detail === 2 ? DOUBLE_CLICK_SETTLE_MS : 0);
@@ -88,8 +98,13 @@ export function SelectionActions({
 		const onSelectionChange = () => {
 			changed = true;
 			if (offered !== null && acceptRef.current(root)?.text !== offered) show(null);
+			// A touch selection ends with no mouse or key release: it settles once it stops changing.
+			window.clearTimeout(quiet);
+			if (!mouseDown) quiet = window.setTimeout(() => settle(0), QUIET_SETTLE_MS);
 		};
 		document.addEventListener("pointerdown", onPointerDown, true);
+		document.addEventListener("pointerup", onPointerEnd, true);
+		document.addEventListener("pointercancel", onPointerEnd, true);
 		document.addEventListener("selectionchange", onSelectionChange);
 		window.addEventListener("mouseup", onMouseUp);
 		document.addEventListener("keyup", onKeyUp);
@@ -98,6 +113,8 @@ export function SelectionActions({
 		return () => {
 			close();
 			document.removeEventListener("pointerdown", onPointerDown, true);
+			document.removeEventListener("pointerup", onPointerEnd, true);
+			document.removeEventListener("pointercancel", onPointerEnd, true);
 			document.removeEventListener("selectionchange", onSelectionChange);
 			window.removeEventListener("mouseup", onMouseUp);
 			document.removeEventListener("keyup", onKeyUp);

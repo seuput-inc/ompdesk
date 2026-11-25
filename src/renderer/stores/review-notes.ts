@@ -8,7 +8,8 @@
  * One store for every source. A note belongs to its session (`notesOwner`, the outbox's key: a computer that restarted
  * gives its tabs new ids), so a relaunch, a page change in the Preview or a closed side panel never drops it. Kept in
  * `localStorage` like the outbox; every window of this origin shares the one list (`storage` events). The newest
- * `NOTES_LIMIT` notes are kept.
+ * `NOTES_LIMIT` notes are kept. A Preview region's screenshot stays in the window's memory only (a relaunch keeps the
+ * note and its elements without the picture).
  */
 import { create } from "zustand";
 import type { PreviewElement } from "../../shared/preview";
@@ -30,7 +31,7 @@ export type ReviewNoteAnchor =
 	/** An element or region of the Preview's page, numbered per page as its pin is. */
 	| {
 			kind: "preview";
-			/** The Preview tab and address (`previewPageKey`). */
+			/** The page's address (`previewPageKey`). */
 			page: string;
 			title: string;
 			url: string;
@@ -56,9 +57,12 @@ const STORAGE_KEY = "omp.review-notes.v1";
 /** The session a note belongs to (the outbox's key: the computer and the session id, the tab's while it has none). */
 export const notesOwner = outboxSession;
 
-/** A Preview page's key: the Preview tab and its address. */
-export function previewPageKey(state: { activeTab: string | null; url: string }): string {
-	return `${state.activeTab ?? ""}\n${state.url}`;
+/**
+ * A Preview page's key: its address. Not the Preview tab's id, which is new after a relaunch: the page's notes must
+ * come back with the page.
+ */
+export function previewPageKey(state: { url: string }): string {
+	return state.url;
 }
 
 function storage(): Storage | null {
@@ -120,15 +124,37 @@ interface ReviewNotesStore {
 }
 
 export const useReviewNotesStore = create<ReviewNotesStore>()((set, get) => {
+	/**
+	 * The stored list with this window's region screenshots put back: a screenshot stays in this window's memory and is
+	 * never written to `localStorage`, which drafts and the outbox share (a few region PNGs would fill it).
+	 */
+	const stored = (): ReviewNote[] | null => {
+		const list = readStored();
+		if (!list) return null;
+		const images = new Map(
+			get().notes.flatMap(note =>
+				note.anchor.kind === "preview" && note.anchor.image ? [[note.id, note.anchor.image] as const] : [],
+			),
+		);
+		return list.map(note => {
+			const image = images.get(note.id);
+			return image && note.anchor.kind === "preview" ? { ...note, anchor: { ...note.anchor, image } } : note;
+		});
+	};
 	/** Apply `change` to the stored list (another window may have changed it since this one read it) and keep it. */
 	const write = (change: (notes: ReviewNote[]) => ReviewNote[]) => {
-		const next = change(readStored() ?? get().notes).slice(-NOTES_LIMIT);
+		const next = change(stored() ?? get().notes).slice(-NOTES_LIMIT);
 		let saved = true;
 		try {
 			const store = storage();
 			if (store) {
-				if (next.length === 0) store.removeItem(STORAGE_KEY);
-				else store.setItem(STORAGE_KEY, JSON.stringify(next));
+				const kept = next.map(note => {
+					if (note.anchor.kind !== "preview" || !note.anchor.image) return note;
+					const { image: _image, ...anchor } = note.anchor;
+					return { ...note, anchor };
+				});
+				if (kept.length === 0) store.removeItem(STORAGE_KEY);
+				else store.setItem(STORAGE_KEY, JSON.stringify(kept));
 			}
 		} catch {
 			saved = false;
@@ -166,8 +192,8 @@ export const useReviewNotesStore = create<ReviewNotesStore>()((set, get) => {
 		},
 		rekey: (from, to) => write(notes => notes.map(note => (note.owner === from ? { ...note, owner: to } : note))),
 		reload: () => {
-			const stored = readStored();
-			if (stored) set({ notes: stored });
+			const list = stored();
+			if (list) set({ notes: list });
 		},
 		reset: () => set({ notes: [], saved: true }),
 	};
