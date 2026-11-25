@@ -411,7 +411,11 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // The first-run gate deciding from omp's catalog before the stock helper answers (G22, `servingVerdict` and the split
 // wait in `FirstRunGate`, 20 Nov 2026), which runs on every first screen: measured 2,212,279 (branch run 44673408959),
 // 266 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_212_359;
+// An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2): `buildHistoryRows` cutting the call out of its
+// card, `MessageBubble` choosing the card for it, and the lazy wrappers that load the A2UI chunk (the engine and views
+// stay in that chunk): measured 2,212,625 (branch run 45698452559), 346 bytes over. The budget is that measure plus
+// 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_212_705;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
