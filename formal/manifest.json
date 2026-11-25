@@ -77,7 +77,7 @@
 				"src/main/turn-resume.ts:181-272",
 				"src/main/turn-resume.ts:860-883",
 				"src/main/connectivity.ts",
-				"src/main/index.ts:2360-2364",
+				"src/main/index.ts:2361-2365",
 				"src/main/sidecar-run-state.ts",
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
@@ -282,7 +282,7 @@
 				"native/ompdesk/crates/core/src/remote/kept_calls.rs",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_if",
 				"native/ompdesk/crates/core/src/disk/tree.rs#write_atomic_with_retries",
-				"src/main/ipc.ts:640-659"
+				"src/main/ipc.ts:638-657"
 			],
 			"syncCommit": "5dbb77afeb03c13fdf69d1cd60ab5a379557c96c"
 		},
