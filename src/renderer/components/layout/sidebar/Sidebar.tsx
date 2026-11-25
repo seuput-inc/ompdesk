@@ -2202,7 +2202,7 @@ export function Sidebar() {
 				{/* Traffic-light safe (global.css): on macOS the brand yields its
 				    slot to the window controls and the collapse toggle follows
 				    them; elsewhere the brand leads and the toggle closes the row. */}
-				<div className="omp-sidebar-header drag-region flex h-12 shrink-0 items-center gap-1 pr-2">
+				<div className="omp-sidebar-header drag-region flex h-(--sc-topbar-h) shrink-0 items-center gap-1 pr-2">
 					<span className="omp-sidebar-brand flex min-w-0 flex-1 items-center gap-2 pl-1.5 text-sc-md font-semibold text-(--sc-text)">
 						<BrandMark size={18} />
 						<span className="truncate">OMPdesk</span>

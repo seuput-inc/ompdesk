@@ -141,7 +141,7 @@ function useAgentSlice(agents: readonly SummaryAgent[]): AgentSlice {
 	return useMemo(() => ({ ...roster, owners, ready, rpc }), [roster, owners, ready, rpc]);
 }
 
-/** Below this sidebar width (px) the summary chip shrinks to its running-count pill (default width is 248). */
+/** Below this sidebar width (px) the summary chip shrinks to its running-count pill (default width is 280). */
 const NARROW_SIDEBAR = 300;
 
 /**

@@ -425,7 +425,7 @@ export function TitleBar() {
 	];
 
 	return (
-		<header className="omp-titlebar omp-topbar drag-region flex h-12 min-w-0 shrink-0 items-center gap-1 px-3">
+		<header className="omp-titlebar omp-topbar drag-region flex h-(--sc-topbar-h) min-w-0 shrink-0 items-center gap-1 px-3">
 			{!sidebarVisible && (
 				<IconButton
 					className="no-drag"

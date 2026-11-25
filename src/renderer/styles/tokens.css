@@ -78,6 +78,9 @@
 	--sc-icon-sm: 14px;
 	--sc-icon-md: 16px;
 	--sc-icon-lg: 20px;
+	/* ── Shell (Orca's composition, the owner's decision 25 Nov 2026) ───── */
+	--sc-topbar-h: 36px; /* every top bar: sidebar header, title bar, page bar, side panel header */
+	--sc-statusbar-h: 24px; /* the desktop status bar under the shell */
 	/* Divider and card rule width: one CSS pixel, one device pixel on dense
 	   (2dppx) screens below, so hairlines stay hairline-thin on Retina. */
 	--sc-hairline: 1px;

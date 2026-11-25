@@ -326,11 +326,6 @@ html[data-shell] .omp-topbar {
 	padding-top: var(--safe-t);
 }
 
-/* A phone's bar is one dense line (the desktop's is 48 px). */
-html[data-shell="phone"] .omp-topbar {
-	height: 36px;
-}
-
 html[data-shell="phone"] .omp-titlebar {
 	gap: 0;
 	padding-inline: var(--sc-space-1);
@@ -394,8 +389,10 @@ html[data-shell="phone"] .omp-titlebar [data-titlebar-session-name] {
 	height: 18px;
 }
 
+/* The shown view: its 2 px line along the bar's top edge, the desktop panel's bottom marker turned to the thumb. */
 .omp-panel-tabbar > button[aria-current="page"] {
-	color: var(--sc-accent);
+	color: var(--sc-text);
+	box-shadow: inset 0 2px 0 var(--sc-text);
 }
 
 /* ── Composer: pinned above the keyboard (body's inset), clear of the home indicator, chips on one line ────── */
@@ -1501,17 +1498,11 @@ html[data-shell] .omp-session-sidebar {
 }
 
 /* Page-top bars (Agents, Stats, Settings): the toggle, the back control and the way out sit 10 px apart, so each 26 px
-   icon's reach (half the gap) is 36 px across; the 48 px bar leaves 10 px above and below a 28 px control, so the
-   reach down and up (8 px) stays inside the bar. */
+   icon's reach (half the gap) is 36 px across. The bar is 36 px (--sc-topbar-h): a 28 px control (26 inside its border)
+   reaches 5 px up and down, so its reach is the bar's height and never lies over the page scrolled under it. */
 html[data-shell] .omp-topbar:not(.omp-titlebar) {
 	gap: 10px;
 	--hit-gap-x: 10px;
-	--hit-gap-y: 16px;
-}
-
-/* A phone's bar is 36 px: a 28 px control (26 inside its border) reaches 5 px up and down, so its reach is the bar's
-   height and never lies over the page scrolled under it. */
-html[data-shell="phone"] .omp-topbar:not(.omp-titlebar) {
 	--hit-gap-y: 10px;
 }
 

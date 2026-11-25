@@ -2417,19 +2417,19 @@ describe("Sidebar width", () => {
 		const handle = container.querySelector('aside > [role="separator"]') as unknown as TestElement;
 		expect(handle.getAttribute("aria-label")).toBe("Resize sidebar");
 		expect(handle.getAttribute("tabindex")).toBe("0");
-		expect(handle.getAttribute("aria-valuenow")).toBe("248");
+		expect(handle.getAttribute("aria-valuenow")).toBe("280");
 		const press = async (key: string) => {
 			const record = handle as unknown as Record<string, Record<string, (event: unknown) => void>>;
 			const propsKey = Object.getOwnPropertyNames(record).find(name => name.startsWith("__reactProps$")) ?? "";
 			await act(async () => record[propsKey]?.onKeyDown?.({ key, preventDefault: () => {} }));
 		};
 		await press("ArrowRight");
-		expect(handle.getAttribute("aria-valuenow")).toBe("272");
-		expect(omp.prefs.set).toHaveBeenLastCalledWith("sidebarWidth", 272);
+		expect(handle.getAttribute("aria-valuenow")).toBe("304");
+		expect(omp.prefs.set).toHaveBeenLastCalledWith("sidebarWidth", 304);
 		await press("End");
-		expect(handle.getAttribute("aria-valuenow")).toBe("420");
+		expect(handle.getAttribute("aria-valuenow")).toBe("500");
 		await press("ArrowRight");
-		expect(handle.getAttribute("aria-valuenow")).toBe("420");
+		expect(handle.getAttribute("aria-valuenow")).toBe("500");
 		await press("Home");
 		expect(handle.getAttribute("aria-valuenow")).toBe("220");
 		await press("ArrowLeft");

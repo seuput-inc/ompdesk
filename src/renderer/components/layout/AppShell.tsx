@@ -153,7 +153,7 @@ function PageTopBar({ showSidebarToggle }: { showSidebarToggle: boolean }) {
 	// button and title in the slot, and the way out to the session as an icon at the right.
 	if (shellMode === "phone")
 		return (
-			<div className="omp-topbar drag-region flex h-12 shrink-0 items-center gap-1 px-3">
+			<div className="omp-topbar drag-region flex h-(--sc-topbar-h) shrink-0 items-center gap-1 px-3">
 				{showSidebarToggle && (
 					<IconButton
 						className="no-drag"
@@ -175,7 +175,7 @@ function PageTopBar({ showSidebarToggle }: { showSidebarToggle: boolean }) {
 			</div>
 		);
 	return (
-		<div className="omp-topbar drag-region flex h-12 shrink-0 items-center gap-1 px-3">
+		<div className="omp-topbar drag-region flex h-(--sc-topbar-h) shrink-0 items-center gap-1 px-3">
 			{showSidebarToggle && (
 				<IconButton
 					className="no-drag"

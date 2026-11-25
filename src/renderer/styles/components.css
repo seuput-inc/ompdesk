@@ -4840,9 +4840,9 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 /* A device section's header color (lib/device-color.ts): a paired host's header wears its own hue so its rows are told
-   from this computer's at a glance. The row takes a light wash of it and the device glyph the hue itself; the hues are
-   not status colors, and each is drawn per scheme so the glyph keeps 3:1 against the sidebar. A repository's letter
-   mark (common/ProjectArtwork.tsx, `data-mark-hue`) wears the same hues. */
+   from this computer's at a glance. Only the device glyph takes the hue (the header itself stays near-monochrome); the
+   hues are not status colors, and each is drawn per scheme so the glyph keeps 3:1 against the sidebar. A repository's
+   letter mark (common/ProjectArtwork.tsx, `data-mark-hue`) wears the same hues. */
 :is([data-device-color="blue"], [data-mark-hue="blue"]) {
 	--device-color: oklch(0.55 0.15 255);
 }
@@ -4896,11 +4896,10 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	color: var(--sc-text-muted);
 }
 
-.omp-device-header[data-device-color] {
-	background-color: color-mix(in oklab, var(--device-color) 14%, transparent);
-}
+/* A host's header is a plain section header like this computer's (Orca's near-monochrome chrome, the owner's palette
+   choice, 25 Nov 2026): no wash of its hue, which only its glyph and the menu swatch wear. */
 .omp-device-header[data-device-color]:hover {
-	background-color: color-mix(in oklab, var(--device-color) 22%, transparent);
+	background-color: var(--sc-hover);
 }
 .omp-device-header[data-device-color] [data-device-glyph],
 [data-device-chip][data-device-color] [data-device-glyph] {

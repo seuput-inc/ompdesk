@@ -13,8 +13,8 @@
 import type { WindowChromeColors } from "../shared/ipc-types";
 import { migrateThemeName, schemeOfTheme } from "../shared/theme-names";
 
-/** Height of the renderer's top bar (Tailwind h-12). */
-export const TOP_BAR_HEIGHT = 48;
+/** Height of the renderer's top bar (tokens.css `--sc-topbar-h`, Orca's 36 px). */
+export const TOP_BAR_HEIGHT = 36;
 
 /**
  * `nativeTheme.themeSource` for the saved theme: prefs `themeName` read as a theme (a retired id

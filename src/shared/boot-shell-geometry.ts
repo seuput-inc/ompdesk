@@ -4,8 +4,8 @@
  * pre-paint.js, and the composer box's height.
  */
 
-/** The docked sidebar's width range and its first-run width (Sidebar.tsx drags within it). */
-export const SIDEBAR_WIDTH = { min: 220, max: 420, default: 248 } as const;
+/** The docked sidebar's width range and its first-run width (Sidebar.tsx drags within it): Orca's 280 in 220–500. */
+export const SIDEBAR_WIDTH = { min: 220, max: 500, default: 280 } as const;
 
 /** localStorage mirror of the `sidebarWidth` pref: prefs arrive over IPC, this is readable before the first paint. */
 export const SIDEBAR_WIDTH_STORAGE_KEY = "omp.sidebarWidth";

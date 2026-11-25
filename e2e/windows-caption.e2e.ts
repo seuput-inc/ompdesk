@@ -6,7 +6,7 @@ import { createServer, type ViteDevServer } from "vite";
 import { type Look, openLook, resetPage } from "./responsive-audit";
 import { SURFACES } from "./responsive-surfaces";
 
-// Windows draws its caption buttons (minimize, maximize, close; 3 × 46 px over the 48 px top band) over the app's
+// Windows draws its caption buttons (minimize, maximize, close; 3 × 46 px over the 36 px top band) over the app's
 // top-right corner, and they take every click there. The dev harness painted as a Windows window
 // (`?platform=win32`, src/renderer/dev-harness/boot.ts) stands them in, so this measures what the app puts under
 // them: on every surface below no control may lie in the band. Before 4 Nov 2026 a right sheet's close ✕, a tall
@@ -20,7 +20,7 @@ const COMPACT: Look = { width: 900, height: 640, dpr: 1, orientation: "landscape
 const SHORT: Look = { width: 1280, height: 560, dpr: 1, orientation: "landscape", theme: "light", lang: "en" };
 
 const CAPTION_WIDTH = 138;
-const CAPTION_HEIGHT = 48;
+const CAPTION_HEIGHT = 36;
 
 const SURFACE_LOOKS: ReadonlyArray<{ look: Look; surfaces: readonly string[] }> = [
 	{
