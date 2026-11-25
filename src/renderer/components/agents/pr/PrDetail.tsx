@@ -229,7 +229,7 @@ function Loaded({ detail }: { detail: RpcPrDetail }) {
 	const open = !detail.state || detail.state === "OPEN";
 	const unresolved = conversation.data ? conversation.data.threads.filter(thread => !thread.isResolved).length : null;
 	return (
-		<article className="mx-auto flex max-w-4xl flex-col gap-8 px-6 py-6 min-[1280px]:px-10">
+		<article className="mx-auto flex max-w-4xl flex-col gap-8 px-6 py-6 min-[1280px]:px-10" data-pr-detail>
 			<header className="flex flex-col gap-3">
 				<div className="flex items-start gap-3">
 					{detail.isDraft ? (

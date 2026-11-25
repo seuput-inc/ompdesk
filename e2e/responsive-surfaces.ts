@@ -1935,6 +1935,19 @@ export const SURFACES: readonly Surface[] = [
 		}),
 	),
 	{
+		id: "agents-pr-detail",
+		area: "B",
+		title: "Agents › Pull requests › a PR's detail (state, people, checks, files, review threads)",
+		// The list's first row, clicked as a person does (MasterDetail's list is the `nav`).
+		open: async page => {
+			await openPageTab(page, "agents", "prs");
+			await page.locator('section[data-destination="agents"] nav > ul > li button').first().click();
+		},
+		ready: "[data-pr-detail]",
+		settle: 1200,
+		parity: { session: "work" },
+	},
+	{
 		id: "stats",
 		area: "B",
 		title: "Insights › Stats (this session)",
