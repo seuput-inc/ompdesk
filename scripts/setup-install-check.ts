@@ -121,8 +121,9 @@ async function check(root: string): Promise<void> {
 			cwd: process.cwd(),
 		},
 		asks: {
-			// Installers themselves may need the real Program Files (PowerShell modules).
-			env: () => ({ ...process.env, ...realProgramFiles }),
+			// Detection reads this process's env (Program Files hidden); installers themselves may need the real Program
+			// Files (PowerShell modules).
+			env: detect => (detect ? process.env : { ...process.env, ...realProgramFiles }),
 			// The registry's machine PATH (merged after each install) lists the runner's Git for Windows again.
 			refreshPath: async () => {
 				await refreshPath(platform, toolsDir);

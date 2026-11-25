@@ -390,8 +390,10 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
     let opts = &tools.opts;
     let platform = opts.platform.as_str();
     let win = platform == "win32";
+    // `detectMachine` read main's own `process.env` with the spawn PATH, not the spawn environment: a test that hides
+    // the machine's Git for Windows hides it from detection while its installers still get the real Program Files.
     let mut env: BTreeMap<String, String> = tools
-        .ask("env", json!({}))
+        .ask("env", json!({ "detect": true }))
         .await
         .ok()
         .and_then(|env| serde_json::from_value(env).ok())

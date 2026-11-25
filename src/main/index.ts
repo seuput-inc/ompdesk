@@ -1607,8 +1607,9 @@ app.whenReady().then(async () => {
 					: {},
 		},
 		asks: {
-			// The core adds the proxy itself.
-			env: async () => ({ ...process.env, ...(await shellSpawnEnv()) }),
+			// The core adds the proxy itself; detection reads main's own environment with the spawn PATH (detectMachine).
+			env: async detect =>
+				detect ? { ...process.env, PATH: await spawnPath() } : { ...process.env, ...(await shellSpawnEnv()) },
 			refreshPath: () => refreshPath(platform, toolsDir),
 			ompResolution: fresh => (fresh ? refreshSystemOmp() : systemOmp()),
 			ompReady: () => {

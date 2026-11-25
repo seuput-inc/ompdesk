@@ -71,8 +71,12 @@ export type ToolsItem =
 
 /** What the core asks main, until the owners of these move into the core; each may answer with a promise. */
 export interface ToolsAsks {
-	/** Main's spawn environment: `process.env` with the login shell's (the core adds the proxy). */
-	env(): NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>;
+	/**
+	 * Main's spawn environment: `process.env` with the login shell's (the core adds the proxy). `detect`: what setup's
+	 * detection reads (Git for Windows' roots, `LOCALAPPDATA`), main's own `process.env` with the spawn PATH, as
+	 * `detectMachine` read it.
+	 */
+	env(detect: boolean): NodeJS.ProcessEnv | Promise<NodeJS.ProcessEnv>;
 	/** After an install: main's PATH and its login-shell cache again. */
 	refreshPath(): Promise<void>;
 	/**
@@ -110,7 +114,7 @@ export interface ToolsClientDeps {
 function answer(asks: ToolsAsks, q: string, item: HubItem): unknown {
 	switch (q) {
 		case "env":
-			return asks.env();
+			return asks.env(item.detect === true);
 		case "refreshPath":
 			return asks.refreshPath();
 		case "ompResolution":
