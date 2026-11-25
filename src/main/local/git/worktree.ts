@@ -135,7 +135,13 @@ export function createWorktree(
 	const now = Date.now();
 	for (const [key, entry] of createRequests) if (now - entry.at > CREATE_REQUEST_KEEP_MS) createRequests.delete(key);
 	const key = `${request.caller}:${request.id}`;
-	const argsKey = JSON.stringify([args.name, args.baseCwd ?? sessionCwd, args.baseRef, args.branchPrefix, args.branch]);
+	const argsKey = JSON.stringify([
+		args.name,
+		args.baseCwd ?? sessionCwd,
+		args.baseRef,
+		args.branchPrefix,
+		args.branch,
+	]);
 	const known = createRequests.get(key);
 	if (known) {
 		if (known.args === argsKey) return known.made;

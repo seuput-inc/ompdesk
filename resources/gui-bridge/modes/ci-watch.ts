@@ -82,9 +82,9 @@ function loadStock(): Promise<Stock | undefined> {
 			return undefined;
 		}
 		const [runs, common, utils] = await Promise.all([
-			import("@oh-my-pi/pi-coding-agent/tools/gh-run-watch"),
-			import("@oh-my-pi/pi-coding-agent/tools/gh-common"),
-			import("@oh-my-pi/pi-coding-agent/utils/github"),
+			import("../omp/pi-coding-agent/tools/gh-run-watch"),
+			import("../omp/pi-coding-agent/tools/gh-common"),
+			import("../omp/pi-coding-agent/utils/github"),
 		]);
 		return { runs, common, gh: utils.github };
 	})().catch((error: unknown) => {
