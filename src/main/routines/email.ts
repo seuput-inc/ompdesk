@@ -11,7 +11,9 @@
  * to a mail would be) never fire.
  *
  * A failure (no such account, a refused login, the network) is told once per distinct message (the runtime log and a failed run in the routine's history),
- * never with the password, and polling goes on. The cursor (account, UIDVALIDITY, last UID) is kept across a relaunch
+ * never with the password, and polling goes on, each failed read doubling the wait before the next up to
+ * `FAILING_POLL_MAX_MS` (a provider's outage or rate limit is not asked every two minutes); a good read resets it.
+ * The cursor (account, UIDVALIDITY, last UID) is kept across a relaunch
  * (`context.mark`), so mail that came while OMPdesk was closed fires once on the first read after it starts (the newest
  * `MESSAGES_PER_POLL` of them; older ones are passed over); the mark is saved before the routine fires.
  */
@@ -39,6 +41,8 @@ export interface EmailSourceOptions {
 
 const SNIPPET_CHARS = 600;
 const FIELD_CHARS = 160;
+/** Longest wait between reads while a mailbox keeps failing. */
+const FAILING_POLL_MAX_MS = 30 * 60_000;
 
 export function createEmailSource(options: EmailSourceOptions): RoutineSource {
 	return new EmailSource(options);
@@ -49,6 +53,7 @@ class EmailSource implements RoutineSource {
 	readonly #report: (key: string, error: unknown | null) => void;
 	#cursor: { accountId: string; cursor: MailCursor } | null = null;
 	#timer: ReturnType<typeof setTimeout> | null = null;
+	#failures = 0;
 	#stopped = false;
 
 	constructor(options: EmailSourceOptions) {
@@ -78,6 +83,7 @@ class EmailSource implements RoutineSource {
 			if (this.#stopped) return;
 			this.#cursor = { accountId: account.id, cursor: read.cursor };
 			this.#report("read", null);
+			this.#failures = 0;
 			this.#options.context.saveMark({ accountId: account.id, ...read.cursor });
 			if (known)
 				for (const message of read.messages)
@@ -85,9 +91,12 @@ class EmailSource implements RoutineSource {
 		} catch (error) {
 			if (this.#stopped) return;
 			this.#report("read", error);
+			this.#failures += 1;
 		}
 		if (this.#stopped) return;
-		this.#timer = setTimeout(() => void this.#poll(), this.#options.pollMs ?? EMAIL_POLL_MINUTES * 60_000);
+		const period = this.#options.pollMs ?? EMAIL_POLL_MINUTES * 60_000;
+		const wait = Math.min(period * 2 ** this.#failures, Math.max(period, FAILING_POLL_MAX_MS));
+		this.#timer = setTimeout(() => void this.#poll(), wait);
 		this.#timer.unref?.();
 	}
 

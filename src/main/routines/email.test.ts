@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmailSource, type EmailSourceOptions, type MailPort } from "./email";
 import { type FakeImap, type FakeMail, startFakeImap } from "./fake-imap";
 import { readMailbox } from "./imap";
@@ -175,5 +175,80 @@ describe("the email trigger", () => {
 		await settled.promise;
 		expect(polled()).toBeLessThanOrEqual(before);
 		expect(fired).toEqual([]);
+	});
+});
+
+describe("the email trigger's wait while its mailbox fails", () => {
+	it("doubles the wait after each failed read and goes back to the poll period once a read works", async () => {
+		vi.useFakeTimers();
+		try {
+			let failing = true;
+			let reads = 0;
+			const mailPort: MailPort = {
+				account: () => ({ id: "acc1", label: "Work", address: "owner@example.com" }),
+				read: async () => {
+					reads++;
+					if (failing) throw new Error("server busy");
+					return { cursor: { validity: 1, uid: 0 }, messages: [] };
+				},
+			};
+			source = createEmailSource({
+				account: "Work",
+				mail: mailPort,
+				context: fakeContext().context,
+				pollMs: 60_000,
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			expect(reads).toBe(1);
+			await vi.advanceTimersByTimeAsync(119_999);
+			expect(reads).toBe(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(reads).toBe(2);
+			failing = false;
+			await vi.advanceTimersByTimeAsync(240_000);
+			expect(reads).toBe(3);
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(reads).toBe(4);
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(reads).toBe(5);
+		} finally {
+			source?.stop();
+			source = null;
+			vi.useRealTimers();
+		}
+	});
+
+	it("waits at most 30 minutes between reads however long it fails", async () => {
+		vi.useFakeTimers();
+		try {
+			let reads = 0;
+			const mailPort: MailPort = {
+				account: () => null,
+				read: async () => {
+					throw new Error("unreachable");
+				},
+			};
+			const counting: MailPort = {
+				...mailPort,
+				account: name => {
+					reads++;
+					return mailPort.account(name);
+				},
+			};
+			source = createEmailSource({
+				account: "Work",
+				mail: counting,
+				context: fakeContext().context,
+				pollMs: 60_000,
+			});
+			await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+			const before = reads;
+			await vi.advanceTimersByTimeAsync(30 * 60_000);
+			expect(reads).toBe(before + 1);
+		} finally {
+			source?.stop();
+			source = null;
+			vi.useRealTimers();
+		}
 	});
 });
