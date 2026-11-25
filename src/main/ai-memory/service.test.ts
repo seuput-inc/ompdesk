@@ -297,7 +297,10 @@ async function world(overrides: Partial<AiMemoryServiceDeps> = {}): Promise<Worl
 		onState: snapshot => states.push(snapshot),
 		runner: new SetupRunner(spawner),
 		healthWaitMs: 0,
-		pollMs: 10,
+		// No poll unless a test is about polling: every poll is a new loopback connection, and at 10 ms the file left
+		// ~1500 in TIME_WAIT per run, so a few runs inside Windows' TIME_WAIT window used up its ephemeral ports and the
+		// core could not reach the test's server for tens of seconds (flake-probe 45604394584).
+		pollMs: 3_600_000,
 		now: () => clock.now,
 		...overrides,
 	});
@@ -1155,7 +1158,7 @@ describe("AiMemoryService", () => {
 
 	describe("polling", () => {
 		it("down twice re-runs setup once, then the cooldown holds; after it, setup runs again", async () => {
-			const { service, health, commands, clock } = await make();
+			const { service, health, commands, clock } = await make({ pollMs: 10 });
 			await service.start();
 			const setups = () => commands().filter(command => command === SETUP).length;
 			expect(setups()).toBe(1);
@@ -1176,6 +1179,7 @@ describe("AiMemoryService", () => {
 			const back = Promise.withResolvers<void>();
 			let down = false;
 			const { service, health, commands } = await make({
+				pollMs: 10,
 				onState: snapshot => {
 					if (!down) return;
 					if (snapshot.phase === "unreachable") unreachable.resolve();
@@ -1198,6 +1202,7 @@ describe("AiMemoryService", () => {
 			let removed = false;
 			let sawGone = false;
 			const { service, rootDir, commands } = await make({
+				pollMs: 10,
 				onState: snapshot => {
 					if (!removed) return;
 					if (!snapshot.wiring.app) sawGone = true;
@@ -1234,7 +1239,7 @@ describe("AiMemoryService", () => {
 				for (let turn = 0; turn < 1000 && !holds(); turn++) await sleep(10);
 			};
 			try {
-				const { service, health } = await make();
+				const { service, health } = await make({ pollMs: 10 });
 				await service.start();
 				// start() answers when the pass ends; the core arms its poll timer a moment after, as a task of its own
 				// (`start_polling`), and main registers it when that event arrives. Advancing before then ticks nothing
@@ -1268,7 +1273,6 @@ describe("AiMemoryService", () => {
 		let upkeep: MemoryUpkeep;
 		const { service, clock, health, http, root } = await make({
 			quality: () => ({ care: care.service, upkeep: upkeep.service }),
-			pollMs: 3_600_000,
 		});
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
@@ -1472,7 +1476,7 @@ describe("AiMemoryService", () => {
 
 	describe("refresh", () => {
 		it("re-reads stats at most every few seconds while ready", async () => {
-			const { service, clock, health } = await make({ pollMs: 3_600_000 });
+			const { service, clock, health } = await make();
 			await service.start();
 			const calls = () => health.healthCalls;
 			const before = calls();
