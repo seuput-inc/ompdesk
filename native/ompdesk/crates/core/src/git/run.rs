@@ -470,28 +470,28 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    /// Staging waits out an `index.lock` another git holds for a moment; a commit, which a second run could change,
-    /// fails on it as before.
+    /// Staging tries again past an `index.lock` another git holds: all three waits (50 + 150 + 400 ms, which cannot end
+    /// early) pass before it gives up, and it stages once the lock is gone. A commit, which a second run could change,
+    /// fails on the lock as before.
     #[tokio::test]
-    async fn a_lock_another_git_holds_for_a_moment_is_waited_out_by_a_step_that_can_run_twice() {
+    async fn a_lock_another_git_holds_is_tried_again_by_a_step_that_can_run_twice() {
         let repo = crate::git::scm::tests::repo("lock-retry");
         let cwd = repo.to_str().unwrap().to_owned();
         let lock = repo.join(".git").join("index.lock");
         std::fs::write(repo.join("new.txt"), "new\n").unwrap();
         std::fs::write(&lock, "").unwrap();
-        let held = lock.clone();
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(120));
-            std::fs::remove_file(held).unwrap();
-        });
-        git().text(&cwd, &["add", "-A"]).await.unwrap();
-        release.join().unwrap();
+        let started = std::time::Instant::now();
+        let add = git().raw(&cwd, &["add", "-A"]).await.unwrap();
+        assert_ne!(add.code, 0);
+        assert!(is_lock_contention(&add.stderr), "{}", add.stderr);
+        assert!(started.elapsed() >= Duration::from_millis(LOCK_RETRY_MS.iter().sum()));
 
-        std::fs::write(&lock, "").unwrap();
         let commit = git().raw(&cwd, &["commit", "-qm", "x"]).await.unwrap();
         assert_ne!(commit.code, 0);
         assert!(is_lock_contention(&commit.stderr), "{}", commit.stderr);
+
         std::fs::remove_file(&lock).unwrap();
+        git().text(&cwd, &["add", "-A"]).await.unwrap();
         let _ = std::fs::remove_dir_all(&repo);
     }
 
