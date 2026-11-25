@@ -49,7 +49,8 @@ function UsageItem() {
 				const info = providers.find(entry => entry.id === group.provider);
 				return {
 					id: group.provider,
-					name: info ? shortProviderName(info) : group.provider,
+					// Before the catalog lists the provider, its id still finds the brand ("openai-codex" → "ChatGPT").
+					name: shortProviderName(info ?? { id: group.provider, name: group.provider }),
 					percent: Math.min(100, Math.round(fraction * 100)),
 					standing: accountStanding(source),
 				};

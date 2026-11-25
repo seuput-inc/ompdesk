@@ -1268,13 +1268,17 @@ export function Sidebar() {
 		if (item) focusRovingItem(item);
 	};
 	// A session made current from outside the list (a title bar tab, the palette, a shortcut) brings its row into view
-	// and outlines it once (Orca's reveal highlight); a pick in the list itself has focus there and moves nothing.
+	// and outlines it once (Orca's reveal highlight). A pick in the list itself moves nothing: it is told by a press or
+	// key in the list just before, since a click does not focus a button in WebKit (macOS's window).
 	const revealed = useRef(activeSessionKey);
+	const pickedInList = useRef(Number.NEGATIVE_INFINITY);
 	useEffect(() => {
 		if (revealed.current === activeSessionKey) return;
 		revealed.current = activeSessionKey;
 		const list = listRef.current;
-		if (!list || !activeSessionKey || list.contains(document.activeElement)) return;
+		const picked = performance.now() - pickedInList.current < 5_000;
+		pickedInList.current = Number.NEGATIVE_INFINITY;
+		if (!list || !activeSessionKey || picked || list.contains(document.activeElement)) return;
 		const row = [...list.querySelectorAll<HTMLElement>("[data-roving-item]")]
 			.find(item => item.dataset.rovingItem === `session:${activeSessionKey}`)
 			?.closest<HTMLElement>(".omp-sidebar-session-row");
@@ -2285,7 +2289,13 @@ export function Sidebar() {
 						const key = event.target instanceof HTMLElement ? event.target.dataset.rovingItem : undefined;
 						if (key && key !== focusKey) setFocusKey(key);
 					}}
+					onKeyDownCapture={() => {
+						pickedInList.current = performance.now();
+					}}
 					onKeyDown={onListKeyDown}
+					onPointerDownCapture={() => {
+						pickedInList.current = performance.now();
+					}}
 					ref={listRef}
 					role="group"
 					data-sidebar-held-back={rowsHeldBack}

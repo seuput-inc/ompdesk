@@ -606,6 +606,7 @@ export function FirstRunSetup() {
 				<ProgressBar
 					className="mt-5 w-56"
 					height={4}
+					tone="progress"
 					label={t("setup.progress", { step: step === "connect" ? 1 : 2, total: 2 })}
 					labelCase="keep"
 					value={step === "connect" ? 0.5 : 1}

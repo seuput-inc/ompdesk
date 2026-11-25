@@ -1045,6 +1045,15 @@ describe("Sidebar menus and pinned ordering", () => {
 		await act(async () => useTabsStore.setState({ activeTabId: "t2" }));
 		expect(rowFor("Next run").hasAttribute("data-reveal")).toBe(true);
 		expect(rowFor("Audit session").hasAttribute("data-reveal")).toBe(false);
+		// A press in the list (WebKit focuses no button on a click) then picks the first: that row is not outlined.
+		const list = rowFor("Audit session").closest("[data-sidebar-held-back], [role='group']") as unknown as Record<
+			string,
+			unknown
+		>;
+		const propsKey = Object.getOwnPropertyNames(list).find(key => key.startsWith("__reactProps$")) ?? "";
+		(list[propsKey] as { onPointerDownCapture: () => void }).onPointerDownCapture();
+		await act(async () => useTabsStore.setState({ activeTabId: "t0" }));
+		expect(rowFor("Audit session").hasAttribute("data-reveal")).toBe(false);
 	});
 
 	it("lists open tabs the index does not have yet oldest first, as it will once it does", async () => {
