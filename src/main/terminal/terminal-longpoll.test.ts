@@ -97,7 +97,8 @@ describe("terminal long poll", () => {
 			expect.objectContaining({ id, offset: 0 }),
 		]);
 		await claimed;
-		expect(vi.getTimerCount()).toBe(0);
+		// No hold's timer is left; the one left is the silent shell's startup-input wait (`SHELL_READY_MS`).
+		expect(vi.getTimerCount()).toBe(1);
 	});
 
 	it("a session the viewer has no offset for is no news: the hold runs its length", async () => {

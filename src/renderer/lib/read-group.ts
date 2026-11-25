@@ -48,7 +48,7 @@ export interface ReadGroupUsage {
 }
 
 /**
- * Stock pi-tui/chat/read-tool-group and tools/read attach this metadata in the
+ * Stock pi-coding-agent session/transcript/read-tool-group and tools/read attach this metadata in the
  * bridge. Missing metadata renders a full card; no renderer scheme policy.
  */
 export function collapsibleReadTarget(args: unknown): { path: string; selector?: string } | null {

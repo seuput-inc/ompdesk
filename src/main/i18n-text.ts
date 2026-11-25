@@ -58,6 +58,11 @@ export const MAIN_TEXT = {
 		en: "This session's agent did not come back after OMPdesk's background process restarted. Press Restart.",
 		ko: "OMPdesk 백그라운드 프로세스가 다시 시작된 뒤 이 세션의 에이전트가 돌아오지 않았어요. 다시 시작을 눌러 주세요.",
 	},
+	// The line a side-panel terminal shows between its saved output and the new shell after OMPdesk restarted.
+	"terminal.restored": {
+		en: "Restored after a restart: earlier output above, a new shell below",
+		ko: "재시작 후 복원됨: 위는 이전 출력, 아래는 새 셸",
+	},
 	// A paired device's session here waits on a call that device runs while it is away (host-services.ts `#syncHostWait`).
 	"remote.hostWait.title": { en: "Waiting for {device}", ko: "{device} 연결 대기 중" },
 	"remote.hostWait.body": {

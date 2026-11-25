@@ -208,6 +208,7 @@ import { startTailscaleApp } from "./tailscale/cli";
 import { locateTailscale } from "./tailscale/locate";
 import { MobileWebService } from "./tailscale/service";
 import { Tailnet } from "./tailscale/tailnet";
+import { configureTerminalHistory, saveTerminalsForQuit } from "./terminal/history";
 import { exitWithLauncher } from "./test-launcher-exit";
 import { ToolsClient } from "./tools/client";
 import { registerToolsIpc } from "./tools/ipc";
@@ -469,6 +470,8 @@ let logsClosed: Promise<void> = Promise.resolve();
 let ompsStopped: Promise<void> = Promise.resolve();
 /** The core and the processes it started, after the omps and schedule writes have settled. */
 let coreStopped: Promise<void> = Promise.resolve();
+/** The quit's last save of the side panel's terminals (`terminal/history.ts`, bounded): the core ends only after it. */
+let terminalsSaved: Promise<void> = Promise.resolve();
 
 /** Resolves once a window of the app has loaded its page (at once when one has). */
 function firstWindowLoaded(): Promise<void> {
@@ -805,6 +808,7 @@ app.whenReady().then(async () => {
 		});
 		return { deviceId: "", publicKey: "" };
 	});
+	configureTerminalHistory({ userData: app.getPath("userData"), notice: () => mainT("terminal.restored") });
 	// The CLI the app ships (bun run build:native stages it for an unpacked run).
 	await installCliLaunchers({
 		binary: nativeBinPath("ompdesk"),
@@ -2398,7 +2402,10 @@ app.whenReady().then(async () => {
 		checkoutFilesRef,
 		relaunchContinuation: tabId => turnResume.relaunchContinuation(tabId),
 		mediaStreams,
-		uploads: { attachHere: (name, bytes) => hostUploads().attachHere(name, bytes) },
+		uploads: {
+			attachHere: (name, bytes) => hostUploads().attachHere(name, bytes),
+			goneIn: (text, cwd) => hostUploads().goneIn(text, cwd),
+		},
 		schedules: () => scheduleService,
 		mailAccounts: () => mailAccounts,
 		sidebarProjects,
@@ -2691,6 +2698,13 @@ installQuitGuard(
 			["work-awake", () => workAwakePolicy?.dispose()],
 			["lid-awake", () => lidAwake?.dispose()],
 			["disk-care", () => diskCare?.stop()],
+			// Before the tabs go: their terminals' disposal then keeps every history for the next launch.
+			[
+				"terminals",
+				() => {
+					terminalsSaved = saveTerminalsForQuit();
+				},
+			],
 			[
 				"sidecars",
 				() => {
@@ -2719,6 +2733,7 @@ installQuitGuard(
 						logsClosed,
 						statsStopped,
 						mcpHubStopped,
+						terminalsSaved,
 					]).then(() => shutdownCore());
 					void coreStopped.catch((error: unknown) => console.warn(`[quit] core stop failed: ${String(error)}`));
 				},
@@ -2747,7 +2762,7 @@ installQuitGuard(
 	},
 	// Main must not exit until the core and the processes it started have ended too.
 	async () => {
-		const results = await Promise.allSettled([ompsStopped, schedulesClosed, logsClosed, coreStopped]);
+		const results = await Promise.allSettled([ompsStopped, schedulesClosed, logsClosed, coreStopped, terminalsSaved]);
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
 	},

@@ -1,5 +1,5 @@
-import type { ContextUsage, RpcContextUsageBreakdown } from "../../shared/rpc-types";
-import { formatTokens } from "./format";
+import type { ContextUsage, RpcContextUsageBreakdown, RpcPromptCacheStatus } from "../../shared/rpc-types";
+import { formatClock, formatSpan, formatTokens } from "./format";
 
 /**
  * Context numbers as a display surface should read them.
@@ -56,4 +56,27 @@ export function contextTone(view: ContextUsageView, compactAt?: number): Context
 		return view.usedTokens >= compactAt * NEAR_COMPACTION ? "warning" : "ok";
 	}
 	return view.percent >= 95 ? "danger" : view.percent >= 80 ? "warning" : "ok";
+}
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+/**
+ * One line on the prompt cache, apart from any usage limit's reset (Orca's cache-expiry row, 25 Nov 2026): stock
+ * judges warm or cold and why (`getPromptCacheStatus`); this only words it. A warm entry past its lifetime is one
+ * whose refresh is in flight (stock holds expiry off for it), so it reads "refreshing", never "expired" early; an entry
+ * with no lifetime names no time.
+ */
+export function promptCacheText(status: RpcPromptCacheStatus, now: number, t: Translate): string {
+	if (status.state === "cold") {
+		return status.reason?.kind === "expired" && status.reason.at !== undefined
+			? t("contextUsage.cache.expired", { time: formatClock(status.reason.at) })
+			: t("contextUsage.cache.changed");
+	}
+	if (status.ttlMs === undefined) return t("contextUsage.cache.noExpiry");
+	const expiresAt = status.touchedAt + status.ttlMs;
+	if (expiresAt <= now) return t("contextUsage.cache.refreshing");
+	return t(status.inferred ? "contextUsage.cache.likelyKept" : "contextUsage.cache.kept", {
+		time: formatClock(expiresAt),
+		left: formatSpan(expiresAt - now),
+	});
 }

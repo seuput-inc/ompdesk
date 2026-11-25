@@ -6,6 +6,7 @@ import { useT } from "../../../lib/i18n";
 import { devServerUrl } from "../../../lib/panel-auto-open";
 import { PREVIEW_SCROLL_MD } from "../../../lib/preview";
 import { detectLocalPreviewUrls } from "../../../lib/preview-browser";
+import { devServerOrigin, useDevServerAnswers } from "../../../stores/dev-server-answers";
 import { useUiStore } from "../../../stores/ui";
 import { LinkButton } from "../../common";
 import { ResultImages } from "../media/ResultImages";
@@ -128,10 +129,10 @@ function stripTrailer(text: string, re: RegExp): string {
 
 /**
  * Stock's background-job footer is one line starting `Backgrounded as job <id>` then `;` or a
- * space (its deadline), in every wording stock has used. A renderer copy of pi-tui tools/bash.ts
- * `stripTrailingNotice(text, line => isBackgroundNotice(line, jobId))`: `isBackgroundNotice` is
- * not exported and the renderer cannot import stock. bash-notice-stock.test.ts pins it to every
- * notice stock's `formatBackgroundNotice` writes.
+ * space (its deadline), in every wording stock has used. A renderer copy of the background-notice
+ * `stripTrailingNotice` in pi-coding-agent ui/tools/bash.tsx `stripNotices`: its matcher is inline
+ * and the renderer cannot import stock. bash-notice-stock.test.ts pins it to every notice stock's
+ * `formatBackgroundNotice` (tools/details/bash.ts) writes.
  */
 export function stripBackgroundNotice(text: string, jobId: string): string {
 	const trimmed = text.trimEnd();
@@ -263,6 +264,10 @@ export function BashRenderer({
 	const liveOutput = livePreview ? liveOutputOf(command, parsed.output) : parsed.output;
 	// A server the command started: offered as a quiet link, never opened by itself (panel-auto-open.ts is opt-in).
 	const devServer = devServerUrl({ toolName: "bash", command, text: parsed.output });
+	const serverStopped = useDevServerAnswers(state => {
+		const origin = devServer ? devServerOrigin(devServer) : null;
+		return origin !== null && state.refused[origin] === true;
+	});
 	// Nothing printed yet: the live stage shows the command line alone, never an empty terminal.
 	const silent = !!livePreview && command !== "" && liveOutput === "" && images.length === 0;
 	const outputLines = livePreview ? liveOutput.split("\n") : null;
@@ -355,13 +360,17 @@ export function BashRenderer({
 			</div>
 			{devServer && !isPartial && (
 				<LinkButton
-					className="omp-bash-open-preview inline-flex w-fit items-center gap-1 text-sc-xs"
+					className={cx(
+						"omp-bash-open-preview inline-flex w-fit items-center gap-1 text-sc-xs",
+						serverStopped && "text-(--sc-text-subtle)",
+					)}
 					data-bash-open-preview
+					data-server-stopped={serverStopped || undefined}
 					onClick={() => useUiStore.getState().openPreview(devServer)}
-					title={devServer}
+					title={serverStopped ? t("tools.bash.serverStoppedTitle", { url: devServer }) : devServer}
 				>
 					<AppWindow aria-hidden size={12} />
-					{t("tools.bash.openPreview")}
+					{t(serverStopped ? "tools.bash.openPreviewStopped" : "tools.bash.openPreview")}
 				</LinkButton>
 			)}
 			<ResultImages images={images} livePreview={livePreview} />

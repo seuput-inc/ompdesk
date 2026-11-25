@@ -15,6 +15,8 @@ export async function terminalTestHelper(dir: string): Promise<StockHelper> {
 export class PtySession {
 	startArgv({ application, args, cwd, cols, rows, env }, emit) {
 		this.emit = emit;
+		// A shell's first output, however empty: input written after it is not held for the shell (D90).
+		queueMicrotask(() => emit(null, ""));
 		if (env.STOCK_TEST_LAUNCH_LOG) {
 			appendFileSync(env.STOCK_TEST_LAUNCH_LOG, JSON.stringify({ application, args, cwd, cols, rows }) + "\\n");
 		}

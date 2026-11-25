@@ -62,6 +62,8 @@ export const IPC_ERROR_CODES = [
 	"provider_builtin_delete",
 	"stats_not_ready",
 	"stats_api_error",
+	// A prompt names an attached file that was swept or taken (ipc.ts): nothing is sent, the detail names the files.
+	"attachment_gone",
 	"safe_storage_unavailable",
 	// macOS would ask for the login password to open the keychain item (src/shared/keychain.ts): no secret is stored this run.
 	"keychain_would_ask",

@@ -15,7 +15,7 @@ export function messageTimestampMs(message: AgentMessage): number {
 	return messageSourceTimestamp(message) ?? 0;
 }
 
-/** pi-tui chat/messages.ts `SILENT_ABORT_MARKER`, and pi-ai `AIError.Flag.SilentAbort`. */
+/** pi-coding-agent session/transcript/messages.ts `SILENT_ABORT_MARKER`, and pi-ai `AIError.Flag.SilentAbort`. */
 const SILENT_ABORT_MARKER = "__omp.silent_abort__";
 const SILENT_ABORT_FLAG = 0x0200_0000;
 

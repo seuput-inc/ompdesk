@@ -7,7 +7,13 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { guard } from "./health";
 import { currentReplyLanguage } from "./modes/reply-language";
 import { asRecord, requiredString } from "./params";
-import { SttDictation, type SttSetup, speechLanguageOfName } from "./stt-language-core";
+import {
+	SttDictation,
+	type SttSetup,
+	speechLanguageOfName,
+	transcribeDeadlineMs,
+	transcribeWithin,
+} from "./stt-language-core";
 import type { BridgeMethods } from "./types";
 
 const WAV_HEADER_BYTES = 44;
@@ -62,7 +68,12 @@ async function transcribe(session: AgentSession, params: unknown) {
 	if (samples.length === 0) return { text: "" };
 	const { modelKey, language } = await dictation.sttModel(params, await sttSetup(session));
 	const { sttClient } = await import("./omp/pi-coding-agent/stt/asr-client");
-	return { text: await sttClient.transcribe(modelKey, samples, { language }) };
+	const text = await transcribeWithin(
+		signal => sttClient.transcribe(modelKey, samples, { language, signal }),
+		transcribeDeadlineMs(samples.length / sampleRate),
+		() => sttClient.terminate(),
+	);
+	return { text };
 }
 
 /**

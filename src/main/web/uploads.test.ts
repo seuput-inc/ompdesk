@@ -168,6 +168,20 @@ describe("UploadStore", () => {
 			status: 404,
 		});
 	});
+
+	it("names the attached files a prompt mentions that are gone, and nothing outside the store", async () => {
+		const uploads = store();
+		const kept = await uploads.receive("dev1", await request("kept.pdf", new Uint8Array([1])));
+		const taken = await uploads.receive("dev1", await request("계약서.docx", new Uint8Array([2])));
+		await uploads.take("dev1", taken.path);
+		const outside = join(userData, "notes.md");
+		const text = `@"${kept.path}" 와 @"${taken.path}" 그리고 @${outside} 를 비교해줘`;
+		expect(await uploads.goneIn(text, userData)).toEqual(["계약서.docx"]);
+		expect(await uploads.goneIn(`@"${kept.path}" only`, userData)).toEqual([]);
+		// No upload named: nothing is asked, so the caller never waits.
+		expect(uploads.goneIn("no mentions at all", userData)).toBeNull();
+		expect(uploads.goneIn(`@${outside}`, userData)).toBeNull();
+	});
 });
 
 describe("attachHere", () => {

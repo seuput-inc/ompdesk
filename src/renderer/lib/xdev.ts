@@ -9,7 +9,7 @@ import { resultDetails } from "./format";
  * checkpoints, MCP tools — renders as a file write with a line count.
  */
 
-/** Mirrors `parseXdUrl` in @oh-my-pi/pi-tui/tools/xd-url. */
+/** Mirrors `parseXdUrl` in omp ≤19.0 @oh-my-pi/pi-tui/tools/xd-url (historical: old sessions' xd:// writes). */
 const XD_URL_PREFIX = "xd://";
 
 /** Dispatch metadata the write tool attaches to a device result. */

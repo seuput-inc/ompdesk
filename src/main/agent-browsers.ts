@@ -4,7 +4,7 @@
  * browsers in their standard install places, each with whether the omp Browser Relay extension is loaded in one of
  * its profiles (stock's `omp browser-relay install` writes it; Chrome forbids installing it for the user).
  *
- * The core owns the status snapshot and automatic choice. Main supplies the login-shell PATH and stock relay mode.
+ * The core owns the status snapshot and automatic choice. Main supplies the login-shell PATH.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -15,10 +15,9 @@ import {
 	CHROMIUM_RELAY_PORTS,
 	type ChromiumBrowserId,
 } from "../shared/default-browser";
-import { compareVersions } from "../shared/version";
 import { core } from "./core/process";
 import type { OmpRuntime } from "./local/types";
-import { ompRunEnv, systemOmp } from "./omp-runtime";
+import { ompRunEnv } from "./omp-runtime";
 import { spawnPath } from "./shell-env";
 
 let egoRequest: Promise<string | null> | null = null;
@@ -91,10 +90,6 @@ export async function findChromiumBrowsers(places: BrowserPlaces = systemBrowser
 	return (await core().call<FoundBrowser[]>("browsers.find", params)).result;
 }
 
-function nativeHostRelay(version: string | undefined): boolean {
-	return !version || compareVersions(version, "19.1.0") !== -1;
-}
-
 // Stock registers Google's native-messaging key on Windows; its macOS manifests also cover Brave and Chromium.
 const NATIVE_HOST_BROWSERS: readonly ChromiumBrowserId[] =
 	process.platform === "win32" ? ["chrome"] : ["chrome", "brave", "chromium"];
@@ -105,9 +100,7 @@ interface BrowserStatusRead {
 }
 
 async function readStatus(refresh: boolean): Promise<BrowserStatusRead> {
-	const omp = await systemOmp();
-	const native = nativeHostRelay(omp.ok ? omp.runtime.version : undefined);
-	const nativeHostBrowsers = native ? NATIVE_HOST_BROWSERS : undefined;
+	const nativeHostBrowsers = NATIVE_HOST_BROWSERS;
 	const host = core();
 	if (!refresh) {
 		const cached = (await host.call<BrowserStatusRead | null>("browsers.status", { nativeHostBrowsers })).result;
@@ -136,17 +129,13 @@ export function reprobeAgentBrowserStatus(): Promise<BrowserStatusRead> {
 	return readStatus(true);
 }
 
-/**
- * Stock 19.1 registers the path-derived extension ID, so it must install directly in the final folder.
- * Older copies use a browser-specific port and are staged until their assets have been bound to it.
- */
+/** Stock registers the path-derived extension ID, so it installs directly in the final folder. */
 export async function installRelayExtension(
 	omp: OmpRuntime,
 	id: ChromiumBrowserId,
 	home: string = homedir(),
 ): Promise<string> {
-	const nativeHost = nativeHostRelay(omp.version);
-	if (nativeHost && !NATIVE_HOST_BROWSERS.includes(id)) {
+	if (!NATIVE_HOST_BROWSERS.includes(id)) {
 		throw new Error(
 			`omp does not register a native messaging host for ${CHROMIUM_BROWSER_NAMES[id]} on this platform`,
 		);
@@ -156,7 +145,7 @@ export async function installRelayExtension(
 		id,
 		home,
 		port: CHROMIUM_RELAY_PORTS[id],
-		nativeHost,
+		nativeHost: true,
 	};
 	// Stock's install has 30 s; the copy and the clean-up after it are a few small files.
 	return (await core().call<string>("browsers.installRelay", params, { timeoutMs: 37_000 })).result;

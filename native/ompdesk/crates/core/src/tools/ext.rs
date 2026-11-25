@@ -55,6 +55,7 @@ mod helper {
     pub const INVENTORY: &str = "extensions.inventory";
     pub const MARKETPLACE_REFRESH: &str = "extensions.marketplace.refresh";
     pub const PLUGIN_CHECK: &str = "extensions.plugin.check";
+    pub const PLUGIN_PREVIEW: &str = "extensions.plugin.preview";
     pub const PLUGIN_UPGRADE: &str = "extensions.plugin.upgrade";
     pub const SKILL_CHECK: &str = "extensions.skill.check";
     pub const SKILL_UPDATE: &str = "extensions.skill.update";
@@ -597,7 +598,10 @@ async fn run_pass(tools: &Rc<Tools>, ctx: &Ctx, only: Option<&str>, scheduled: b
             defer_for_omp(tools, &key);
             continue;
         }
-        plan = plan::merge(&plan, &work(tools, ctx, &key, &environment).await);
+        plan = plan::merge(
+            &plan,
+            &work(tools, ctx, &key, &environment, only.is_some()).await,
+        );
     }
     if !plan::is_empty(&plan) {
         // A tab that cannot apply it loads the new files at its next start.
@@ -619,7 +623,14 @@ fn keys(tools: &Tools, keep: impl Fn(&Record) -> bool) -> Vec<String> {
         .collect()
 }
 
-async fn work(tools: &Rc<Tools>, ctx: &Ctx, key: &str, environment: &Environment) -> Value {
+/// `approve`: the person's own "Update now" on this row, the one approval of a held plugin upgrade.
+async fn work(
+    tools: &Rc<Tools>,
+    ctx: &Ctx,
+    key: &str,
+    environment: &Environment,
+    approve: bool,
+) -> Value {
     let Some(target) = read(tools, key, |record| record.target.clone()) else {
         return plan::empty();
     };
@@ -628,7 +639,7 @@ async fn work(tools: &Rc<Tools>, ctx: &Ctx, key: &str, environment: &Environment
             marketplace(tools, key, &name).await;
             plan::empty()
         }
-        Target::Plugin(selector) => plugin(tools, key, selector).await,
+        Target::Plugin(selector) => plugin(tools, key, selector, approve).await,
         Target::Skill(selector) => skill(tools, key, selector).await,
         Target::Runner(runner) => {
             run_runner(tools, key, &runner, environment).await;
@@ -676,7 +687,7 @@ async fn marketplace(tools: &Tools, key: &str, name: &str) {
     finish(tools, key, Last::Refreshed);
 }
 
-async fn plugin(tools: &Tools, key: &str, selector: Value) -> Value {
+async fn plugin(tools: &Tools, key: &str, selector: Value, approve: bool) -> Value {
     set_phase(tools, key, Phase::Checking);
     let check = match helper(
         tools,
@@ -723,6 +734,36 @@ async fn plugin(tools: &Tools, key: &str, selector: Value) -> Value {
         finish(tools, key, Last::Current);
         return plan::empty();
     }
+    // Extensions, tools and hooks run in every session (stock even loads extensions to validate an install): an
+    // upgrade that adds any waits for the person, who approves exactly the installed version, candidate and entries
+    // the hold showed. Anything else (a newer candidate, a moved install) is read again and held again.
+    let preview = match helper(
+        tools,
+        helper::PLUGIN_PREVIEW,
+        selector.clone(),
+        CHECK_TIMEOUT_MS,
+    )
+    .await
+    {
+        Ok(preview) => preview,
+        Err(fault) => {
+            fail(tools, key, "check", Some(fault.message));
+            return plan::empty();
+        }
+    };
+    if let Some(shown) = held_upgrade(&preview, installed.as_deref()) {
+        let approved = approve
+            && read(tools, key, |record| {
+                matches!(&record.row.last, Some(Last::Failed { failure })
+                    if failure.reason == "plugin-needs-approval"
+                        && failure.detail.as_deref() == Some(shown.as_str()))
+            })
+            .unwrap_or(false);
+        if !approved {
+            fail(tools, key, "plugin-needs-approval", Some(shown));
+            return plan::empty();
+        }
+    }
     set_phase(tools, key, Phase::Updating);
     let upgraded = match helper(tools, helper::PLUGIN_UPGRADE, selector, UPGRADE_TIMEOUT_MS).await {
         Ok(upgraded) => upgraded,
@@ -760,6 +801,25 @@ async fn plugin(tools: &Tools, key: &str, selector: Value) -> Value {
     } else {
         reload()
     }
+}
+
+/// What a held plugin upgrade shows (`<installed> → <candidate> · <entries>`), when the preview adds any extension,
+/// tool or hook entry; `None` when it adds none.
+fn held_upgrade(preview: &Value, installed: Option<&str>) -> Option<String> {
+    let added: Vec<&str> = preview["added"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    if added.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} → {} · {}",
+        installed.unwrap_or("?"),
+        preview["version"].as_str().unwrap_or("?"),
+        added.join(", ")
+    ))
 }
 
 async fn skill(tools: &Tools, key: &str, selector: Value) -> Value {

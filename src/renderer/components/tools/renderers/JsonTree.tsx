@@ -3,10 +3,10 @@ import { asRecord } from "../../../lib/wire-value";
 import { type TreeNode, TreeView } from "../../common";
 
 /**
- * Bounded JSON tree for tool output, after stock `pi-tui/tools/json-tree.ts`
- * (`renderJsonTreeLines`): the expanded policy — depth 6, 200 rows, scalars
+ * Bounded JSON tree for tool output, after stock pi-coding-agent `ui/styles/tools/json-tree.ts`
+ * (`jsonTreeRows`): the expanded policy — depth 6, 200 rows, scalars
  * up to 2000 characters — with the collapsed depth (2) open at first. Root
- * keys `i` and `__partialJson` stay hidden like stock's `HIDDEN_ARG_KEYS`.
+ * keys `i` and `__partialJson` stay hidden like stock's `ui/tools/args.ts` `HIDDEN_KEYS`.
  * A card body is already "expanded" in the GUI, so the deeper levels are one
  * keyboard/click step away instead of behind a whole-card toggle.
  */

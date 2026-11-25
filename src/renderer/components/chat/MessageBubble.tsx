@@ -512,7 +512,8 @@ export const MessageBubble = memo(function MessageBubble({
 	const isUser = message.role === "user";
 	const isAssistant = message.role === "assistant";
 	const isSteering = Boolean(message.steering);
-	// Stock renders nothing for a silent abort (pi-tui transcript-render-helpers): no "Stopped", no error.
+	// Stock renders nothing for a silent abort (pi-coding-agent session/transcript/transcript-render-helpers.ts):
+	// no "Stopped", no error.
 	const silentAbort = isAssistant && isSilentAbort(message);
 	const stopped = isAssistant && !silentAbort && message.stopReason === "aborted";
 	const timestamp = formatClock(message.timestamp);

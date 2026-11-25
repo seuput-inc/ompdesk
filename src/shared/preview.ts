@@ -35,6 +35,11 @@ export interface PreviewAgentState {
 	attached: boolean;
 	/** Last CDP method the agent sent, e.g. `Page.navigate`; "" before the first. */
 	lastAction: string;
+	/**
+	 * The paired link under a host tab's agent dropped and main is dialing the relay again (host.ts `redialAgent`): the
+	 * page stays the agent's, and the panel says it is reconnecting instead of dropping the agent.
+	 */
+	reconnecting?: boolean;
 }
 /** A console error or warning the page logged (C144), newest last. */
 export interface PreviewProblem {
@@ -55,11 +60,15 @@ export type PreviewNotice =
 	| { kind: "link"; url: string }
 	/** The page has stopped responding to input. */
 	| { kind: "unresponsive" }
+	/** The page's main-frame load has not committed for `PREVIEW_LOAD_STALL_MS`; it goes once it commits, fails or stops. */
+	| { kind: "slow" }
 	/**
 	 * The judge model (main/preview/preview-check.ts, only while a native judge answers) looked at the page an agent
 	 * visual just loaded and saw an error message or nothing. A quiet line; the page shows as usual.
 	 */
 	| { kind: "check"; problem: "error" | "blank" };
+/** A main-frame load that has not committed after this long gets the `slow` notice (Orca's stall watchdog: 5 s). */
+export const PREVIEW_LOAD_STALL_MS = 5000;
 /** Responsive frame sizes (CSS px); `fill` uses the whole panel. */
 export const PREVIEW_VIEWPORTS = {
 	fill: null,

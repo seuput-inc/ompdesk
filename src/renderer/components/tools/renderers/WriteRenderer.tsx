@@ -51,7 +51,7 @@ function WriteFigureView({
 }
 
 /**
- * `write cfg://path[/save]` (stock pi-tui `tools/cfg-render.ts` describeCfgWrite):
+ * `write cfg://path[/save]` (stock pi-coding-agent `ui/tools/write.tsx` cfgView):
  * the setting, its scope (session or saved), the outcome of the user's
  * approval, and `previous → value`; a saved value a higher layer still
  * shadows says so. `details.cfg` is `CfgWriteDetails` (values display-formatted, secrets redacted).

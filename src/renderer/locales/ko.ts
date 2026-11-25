@@ -821,6 +821,12 @@ export const ko: Record<string, string> = {
 	"contextUsage.ringUnknown": "컨텍스트 {used} · 창 크기 알 수 없음",
 	"contextUsage.compactsAt": "{point}에서 자동 압축",
 	"contextUsage.left": "{tokens} 남음",
+	"contextUsage.cache.kept": "프롬프트 캐시 {time}까지 유지 · {left} 남음",
+	"contextUsage.cache.likelyKept": "프롬프트 캐시 {time}까지 유지될 것으로 보임 · {left} 남음",
+	"contextUsage.cache.noExpiry": "프롬프트 캐시 유지, 만료 없음",
+	"contextUsage.cache.refreshing": "프롬프트 캐시 갱신 중",
+	"contextUsage.cache.expired": "프롬프트 캐시가 {time}에 만료됨: 다음 메시지는 캐시 없이 보내져요",
+	"contextUsage.cache.changed": "프롬프트 캐시 없음: 마지막 응답 뒤로 요청이 바뀌었어요",
 	"contextUsage.title": "컨텍스트 사용량",
 	"contextUsage.used": "사용한 컨텍스트",
 	"contextUsage.windowUnknown": "컨텍스트 창 크기 알 수 없음",
@@ -1755,6 +1761,8 @@ export const ko: Record<string, string> = {
 	"ipcError.provider_builtin_delete": "내장 프로바이더는 여기서 삭제할 수 없어요.",
 	"ipcError.stats_not_ready": "통계 서버가 아직 시작하는 중이에요. 잠시 후 다시 시도해 보세요.",
 	"ipcError.stats_api_error": "통계 서버가 이 요청에 응답하지 못했어요.",
+	"ipcError.attachment_gone":
+		"첨부한 파일이 더 이상 컴퓨터에 없어서(첨부 파일은 24시간 보관돼요) 아무것도 보내지 않았어요. 다시 첨부하세요. 파일 이름은 아래에 있어요.",
 	"ipcError.safe_storage_unavailable": "이 시스템에서는 토큰을 암호화할 수 없어서 저장하지 못해요.",
 	"ipcError.keychain_would_ask":
 		"macOS가 OMPdesk의 키체인 항목을 열려면 로그인 암호를 물어봐야 해서, 이 컴퓨터에는 비밀 정보를 저장할 수 없어요.",
@@ -3535,6 +3543,8 @@ export const ko: Record<string, string> = {
 	"tools.bash.exit": "종료 코드 {code}",
 	"tools.bash.running": "실행 중…",
 	"tools.bash.openPreview": "미리보기 열기",
+	"tools.bash.openPreviewStopped": "미리보기 열기 · 서버 멈춤",
+	"tools.bash.serverStoppedTitle": "미리보기가 마지막으로 {url}을 열었을 때 응답이 없었어요. 열어서 다시 시도하세요.",
 	"tools.bash.failed": "명령 실패",
 	"tools.bash.timedOut": "시간 초과",
 	"tools.bash.wallTime": "실행 시간",
@@ -4941,6 +4951,7 @@ export const ko: Record<string, string> = {
 	"panel.preview.link": "이 시각화가 {url} 주소를 열려고 했어요. 시각화는 스스로 페이지를 벗어나지 않아요.",
 	"panel.preview.linkOpen": "새 탭에서 열기",
 	"panel.preview.unresponsive": "이 페이지가 응답하지 않아요.",
+	"panel.preview.slow": "이 페이지를 불러오는 데 오래 걸리고 있어요.",
 	"panel.preview.check.error": "이 페이지에 오류가 보여요",
 	"panel.preview.check.blank": "이 페이지가 비어 보여요",
 	"panel.preview.problemsCopy": "문제 복사하기",
@@ -4954,6 +4965,7 @@ export const ko: Record<string, string> = {
 	"panel.preview.agent.takeOver": "직접 조작하기",
 	"panel.preview.agent.driving": "에이전트가 이 페이지를 쓰고 있어요.",
 	"panel.preview.agent.waiting": "에이전트가 다음 브라우저 단계에서 이 페이지를 쓸 수 있어요.",
+	"panel.preview.agent.reconnecting": "다른 컴퓨터와의 연결이 끊겼어요. 에이전트를 이 페이지에 다시 연결하는 중…",
 	"panel.preview.agent.webOnly": "에이전트는 시각화가 아닌 웹 페이지만 쓸 수 있어요",
 	"panel.preview.agent.failed": "에이전트가 미리보기를 쓰게 하지 못했어요",
 	"panel.preview.tabs": "미리보기 탭",
@@ -5896,9 +5908,15 @@ export const ko: Record<string, string> = {
 	"turnError.creditsOff.title": "요금제 한도 도달",
 	"turnError.creditsOff.guidance":
 		"이 계정의 요금제 한도를 다 썼고 크레딧 사용이 꺼져 있어서, 크레딧이나 추가 사용량을 쓰지 않고 멈췄어요. 한도 초기화를 기다리거나, 모델을 바꾸거나, 모델 및 계정에서 크레딧 사용을 켜세요.",
+	"turnError.modelUnavailable.title": "모델을 쓸 수 없음",
+	"turnError.modelUnavailable.guidance":
+		"프로바이더가 이 계정에 이 모델을 제공하지 않아요. 다른 모델로 바꾸거나 프로바이더에서 확인하세요.",
 	"turnError.rateLimit.title": "사용 한도 도달",
 	"turnError.rateLimit.guidance":
 		"프로바이더의 요청 한도나 할당량에 도달했어요. 잠시 후 다시 시도하거나 다른 모델을 쓰세요.",
+	"turnError.billing.title": "크레딧 부족",
+	"turnError.billing.guidance":
+		"결제 문제로 프로바이더가 요청을 거부했어요. 계정의 크레딧, 잔액 또는 지출 한도가 바닥났어요. 크레딧을 충전하거나 다른 모델로 바꾸세요.",
 	"turnError.resume.resetsAt": "{time}에 한도가 초기화돼요 · {countdown} 남음.",
 	"turnError.limitWait": "{time}에 스스로 다시 시도해요 · {countdown} 남음. 한도가 먼저 풀리면 바로 이어가요.",
 	"turnError.overloaded.title": "프로바이더 혼잡",
@@ -6955,6 +6973,8 @@ export const ko: Record<string, string> = {
 	"extensionUpdate.failure.not-updated": "업데이트가 끝났지만 아직 이전 버전이에요.",
 	"extensionUpdate.failure.needs-approval":
 		"새 버전에 승인이 필요한 스크립트가 들어 있어요. OMPdesk는 대신 승인하지 않아요.",
+	"extensionUpdate.failure.plugin-needs-approval":
+		"새 버전이 모든 세션에서 실행되는 확장, 도구 또는 훅을 추가해요. 승인하려면 지금 업데이트를 누르세요.",
 	"extensionUpdate.failure.cancelled": "업데이트를 취소했어요.",
 	"settings.connections.mobileWeb": "모바일 웹",
 	"mobileWeb.toggle": "폰과 태블릿에서 OMPdesk 사용",

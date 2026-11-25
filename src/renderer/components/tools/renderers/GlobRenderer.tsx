@@ -12,7 +12,7 @@ const MAX_PATHS = GLOB_PREVIEW_PATHS;
  * Glob: matched-path count + the path list. Prefers the structured
  * `details.files` — parsing text lines miscounts appended notices (timeouts,
  * truncation notes) as paths and offers them as file links. Truncation,
- * timeout and skipped paths follow stock pi-tui `tools/glob.ts`
+ * timeout and skipped paths follow stock pi-coding-agent `ui/tools/glob.tsx`
  * (`GlobToolDetails`): an empty timed-out scan is "incomplete", never "no
  * files", and a cut list names why (result limit, line/size limit).
  */

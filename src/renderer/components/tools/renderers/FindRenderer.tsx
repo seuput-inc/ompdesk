@@ -11,7 +11,7 @@ import {
 import { PathLink } from "../media/PathLink";
 import type { ToolRendererProps } from "../ToolCard";
 
-/** Display projection of pi-tui/tools/find's FindToolDetails, not grep's wire format. */
+/** Display projection of pi-coding-agent tools/details/find.ts's FindToolDetails, not grep's wire format. */
 interface FindRange {
 	start: number;
 	end: number;

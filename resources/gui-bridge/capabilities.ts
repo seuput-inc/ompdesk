@@ -579,11 +579,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * can be started but not stopped is not offered, and the session's shutdown hook stops it the same way.
 	 */
 	agentBrowser: {
-		pkg: ["VERSION"],
 		session: ["settings"],
 		modules: {
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/tools/browser/attach`]: ["findFreeCdpPort()"],
 			[`${AGENT}/tools/browser/relay/bridge`]: [
 				"RelayBridge.prototype.extConnected()",
 				"RelayBridge.prototype.extMessage()",
@@ -633,7 +631,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** composer.prewalk_armed shows what composer.disarm_prewalk drops: an armed mark nobody can disarm is not shown. */
 	prewalk: { session: ["getPrewalkState()", "disarmPrewalk()"] },
 	toolExtras: { session: ["hasBuiltInTool()", "agent.state", "getToolCommandEntries()|getXdevToolEntries()"] },
-	contextReport: { session: ["getContextBreakdown()", "model"] },
+	// `getPromptCacheStatus()`: the breakdown's prompt-cache line (stock's `cache` status-line segment, omp 18.17.0).
+	contextReport: { session: ["getContextBreakdown()", "getPromptCacheStatus()", "model"] },
 	jobs: {
 		session: ["getAsyncJobTree()", "inspectAsyncJob()"],
 		modules: { [`${AGENT}/modes/view-model/overlays/job-tree`]: ["buildJobTree()"] },
@@ -1497,7 +1496,13 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	extensionUpdates: {
 		modules: {
 			[`${AGENT}/extensibility/plugins/manager`]: ["PluginManager.prototype.upgrade()"],
-			[`${AGENT}/extensibility/plugins/marketplace`]: ["MarketplaceManager.prototype.checkForUpdates()"],
+			[`${AGENT}/extensibility/plugins/marketplace`]: [
+				"MarketplaceManager.prototype.checkForUpdates()",
+				// The hold for a plugin upgrade that adds extensions, tools or hooks reads the candidate through these.
+				"MarketplaceManager.prototype.listAvailablePlugins()",
+				"parsePluginId()",
+				"resolvePluginSource()",
+			],
 			[`${AGENT}/extensibility/plugins/git-url`]: ["parseGitUrl()"],
 			[`${AGENT}/cli/npm-registry`]: ["loadNpmRegistryResolver()", "npmRegistryPackageUrl()"],
 			// Registry-skill installs, and skill discovery for the plugin and local counts.
@@ -1512,7 +1517,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 			[`${AGENT}/skillshare/installer`]: ["listInstalledSkills()", "resolveSkillVersion()", "updateSkillPackages()"],
 			[`${AGENT}/skillshare/manifest`]: ["getProjectSkillsInstallPaths()"],
-			[UTILS]: ["getPluginsPackageJson()"],
+			[UTILS]: ["getPluginsPackageJson()", "getPluginsNodeModules()", "expandTilde()"],
 		},
 	},
 	skills: SKILL_LIST,
@@ -1834,7 +1839,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
 			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
 			[`${AGENT}/config/registry`]: ["lookup()"],
-			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()"],
+			// `terminate()` lets go of a worker whose take passed its deadline (voice.ts `transcribeWithin`).
+			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()", "sttClient.terminate()"],
 			[`${AGENT}/stt/downloader`]: ["downloadSttModel()", "isSttModelCached()"],
 			[`${AGENT}/stt/models`]: ["resolveSttModelSpec()"],
 		},
