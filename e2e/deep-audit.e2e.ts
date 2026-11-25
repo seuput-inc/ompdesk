@@ -251,6 +251,7 @@ function conditionGate(condition: string | undefined): Array<{ path: string; val
 			{ path: "plan.autosave", value: true },
 		],
 		unexpectedStopDetection: [{ path: "features.unexpectedStopDetection", value: true }],
+		vimModeEnabled: [{ path: "tui.vimMode", value: true }],
 	};
 	return condition === undefined ? [] : (gates[condition] ?? []);
 }
