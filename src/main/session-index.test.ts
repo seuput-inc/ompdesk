@@ -10,6 +10,7 @@ import { core } from "./core/process";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
 import { ompPackageRoot } from "./omp-runtime";
 import { SessionIndex } from "./session-index";
+import { SessionKindStore } from "./session-kinds";
 import { StockSessionStore } from "./session-store";
 import { INSTALLED_OMP } from "./test-bridge-probe";
 
@@ -35,7 +36,7 @@ async function makeIndex(): Promise<{ index: SessionIndex; dir: string }> {
 	}
 	process.env.PI_CODING_AGENT_DIR = agent;
 	const dir = path.join(agent, "sessions");
-	const index = new SessionIndex(dir, dir);
+	const index = new SessionIndex(dir, dir, path.join(agent, "session-kinds.json"));
 	indexes.push(index);
 	return { index, dir };
 }
@@ -129,6 +130,20 @@ describe.skipIf(!stockRoot)("SessionIndex using real stock storage", () => {
 		expect(infos.find(info => info.id === "agent-one")?.kind).toBeUndefined();
 		expect(await index.kindFor(chat)).toBe("chat");
 		expect(await index.kindFor(path.join(dir, "missing.jsonl"))).toBe("agent");
+	});
+
+	it("labels a session its chat tab marked, in the list and in its kind, and saves the record", async () => {
+		const { index, dir } = await makeIndex();
+		const marked = await writeSession(dir, "marked-chat");
+		await writeSession(dir, "agent-two");
+		new SessionKindStore(path.join(path.dirname(dir), "session-kinds.json")).markChat("marked-chat");
+		const infos = await index.list("global");
+		expect(infos.find(info => info.id === "marked-chat")?.kind).toBe("chat");
+		expect(infos.find(info => info.id === "agent-two")?.kind).toBeUndefined();
+		expect(await index.kindFor(marked)).toBe("chat");
+		expect(JSON.parse(await fs.readFile(path.join(path.dirname(dir), "session-kinds.json"), "utf8"))).toEqual({
+			chat: ["marked-chat"],
+		});
 	});
 
 	it("reads each listed session's header once for the legacy chat flag, again only for another session there", async () => {

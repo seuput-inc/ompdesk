@@ -1,13 +1,13 @@
 /**
  * The saved tab layout: its shape, and its reading back at launch. The rules (`sanitizePersistedTabLayout`: which saved
  * tabs come back and how) are the core's (`native/ompdesk/crates/core/src/pool/layout.rs`, unit 9e); this module is
- * their client. Whether a session was deleted stays main's (`deleted-sessions.ts`) and is asked; the folder, file and
+ * their client. Whether a session was deleted is the core's tombstone record (`deleted-sessions.ts`); the folder, file and
  * content checks are the core's own reads unless the caller hands its own (tests).
  */
 import type { IpcTabWorktree, SessionKind } from "../shared/ipc-types";
 import type { SplitLayout } from "../shared/split-layout";
 import { hub, sharedInstance } from "./core/hub";
-import { deletedSessions } from "./deleted-sessions";
+import { deletedSessionsOpen } from "./deleted-sessions";
 
 export const TAB_LAYOUT_VERSION = 1;
 /** A persisted title is display data only — bound it so prefs cannot grow. */
@@ -79,7 +79,6 @@ let callerChecks: TabLayoutPathChecks | null = null;
 
 const layoutInstance = sharedInstance("layout", (q, item) => {
 	const path = item.path as string;
-	if (q === "deleted") return deletedSessions().has(path, (item.device as string | null) ?? undefined);
 	if (q === "directoryExists") return callerChecks?.directoryExists(path) ?? false;
 	if (q === "fileExists") return callerChecks?.fileExists(path) ?? false;
 	if (q === "sessionHasContent") return callerChecks?.sessionHasContent?.(path) ?? null;
@@ -93,6 +92,7 @@ function sanitize(
 	many: boolean,
 ): unknown {
 	callerChecks = paths ?? null;
+	deletedSessionsOpen();
 	try {
 		const { layout, drops } = hub().callOnce<{ layout: unknown; drops: TabLayoutDrop[] }>(
 			layoutInstance,

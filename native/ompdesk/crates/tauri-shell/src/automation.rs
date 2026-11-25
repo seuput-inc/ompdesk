@@ -89,6 +89,14 @@ pub fn browser_args() -> Result<Vec<String>, String> {
         args.push(format!("--remote-debugging-port={port}"));
     }
     args.extend(SWITCHES.lock().expect("switches").iter().cloned());
+    // Chromium's own log (`EBWebView/chrome_debug.log`) and NetLog (`tauri-webview/netlog.json`, events only) of the
+    // app's WebView2; e2e keeps both with a failed test: why a first navigation can wait 10-30 s for the cookie store.
+    args.push("--enable-logging".to_owned());
+    let netlog = crate::runtime()
+        .user_data
+        .join("tauri-webview")
+        .join("netlog.json");
+    args.push(format!("--log-net-log=\"{}\"", netlog.display()));
     Ok(args)
 }
 

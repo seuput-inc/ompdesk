@@ -148,7 +148,12 @@ impl Ctx {
         hosted: bool,
         query: Value,
     ) -> R<Option<AcquireSlot>> {
-        let blocked = self.ask("blocked", query).await?.as_bool() == Some(true);
+        // A session the user deleted never comes back as a tab, whoever asks (a layout, a marker, a reopen; a hosted
+        // view names the host's own file). Main answers the rest: a handle still held, a worktree being removed.
+        let deleted = query["sessionPath"].as_str().is_some_and(|path| {
+            crate::sessions::deleted::has(path, if hosted { None } else { device })
+        });
+        let blocked = deleted || self.ask("blocked", query).await?.as_bool() == Some(true);
         let slot = self.with(|pool| {
             let Some(at) = pool.index(tab) else {
                 return Some(AcquireSlot::New);

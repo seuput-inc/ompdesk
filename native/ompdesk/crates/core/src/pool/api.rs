@@ -1273,8 +1273,7 @@ impl Ctx {
         paths: &[String],
     ) -> R<Value> {
         for path in paths {
-            self.ask("deletedAdd", json!({"sessionPath": path, "device": device}))
-                .await?;
+            crate::sessions::deleted::add(path, Some(device));
         }
         let held: Vec<String> = self.with(|pool| {
             pool.entries

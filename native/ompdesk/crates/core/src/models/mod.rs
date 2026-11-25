@@ -25,6 +25,7 @@
 mod boot;
 mod engines;
 mod file;
+mod release_dates;
 mod stream;
 
 use std::collections::{BTreeMap, HashMap};
@@ -52,6 +53,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 pub fn register(registry: &mut Registry) {
     file::register(registry);
+    registry.add("models.releaseDates", release_dates::handle);
     registry.add("models.bootSelector", boot::handle);
     registry.add("models.probeLocalEngine", engines::handle);
     registry.add("models.setupRun", |call| {

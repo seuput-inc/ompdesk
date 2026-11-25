@@ -38,7 +38,8 @@ const diagnostics = new WeakMap<ChildProcess, { userData: string; output: string
 
 /**
  * What a failed test keeps of a launch: the host's native log (`<userData>/tauri-shell.jsonl`), the app's runtime log
- * (`<userData>/logs/gui-runtime.jsonl`) and what the host and its Node main wrote (`host-output.txt`: main's own
+ * (`<userData>/logs/gui-runtime.jsonl`), Chromium's log of the app's WebView2 on Windows (test builds pass
+ * `--enable-logging`, automation.rs) and what the host and its Node main wrote (`host-output.txt`: main's own
  * `console.warn` lines, the Autopilot cycle's "ban violation in …" among them).
  */
 export function copyShellDiagnostics(userData: string, output: string, hostOutput = ""): string[] {
@@ -46,6 +47,8 @@ export function copyShellDiagnostics(userData: string, output: string, hostOutpu
 	for (const [source, name] of [
 		["tauri-shell.jsonl", "tauri-shell.jsonl"],
 		[path.join("logs", "gui-runtime.jsonl"), "gui-runtime.jsonl"],
+		[path.join("tauri-webview", "EBWebView", "chrome_debug.log"), "webview2-debug.log"],
+		[path.join("tauri-webview", "netlog.json"), "webview2-netlog.json"],
 	]) {
 		try {
 			fs.mkdirSync(output, { recursive: true });

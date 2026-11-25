@@ -1363,7 +1363,8 @@ export class LocalHostServices implements HostServices {
 				// Which of the paths this device's tabs hold were deleted here (`deleted-sessions.ts`): a device that was
 				// off the link at the delete learns it as its link comes up.
 				const { paths } = parse(SessionsDeletedParams, method, params);
-				return { paths: paths.filter(path => deletedSessions().has(path)) };
+				const deleted = deletedSessions().which(paths);
+				return { paths: paths.filter((_, at) => deleted[at]) };
 			}
 			case MOBILE_WEB_LINK_METHOD:
 				return { url: this.#deps.mobileWebUrl?.() ?? null };

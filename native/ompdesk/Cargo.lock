@@ -1480,6 +1480,7 @@ dependencies = [
  "ompdesk-checks",
  "ompdesk-sysproxy",
  "p256",
+ "percent-encoding",
  "rcgen",
  "rustix",
  "rustls",
@@ -1495,6 +1496,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "url",
+ "webpki-roots",
  "x25519-dalek",
  "yaml-edit",
  "yawc",
@@ -2499,6 +2501,15 @@ name = "webpki-root-certs"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "293198dcebfb821155b5092ab94b5a82ff180eddd7241df3bd6e66a4ffd1a585"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7265c9301c16a8711c992c2d8da90ee77ef54b1ed51482d6dfeb00dc756b1297"
 dependencies = [
  "rustls-pki-types",
 ]
