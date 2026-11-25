@@ -89,7 +89,7 @@ describe("ConversationNavigator", () => {
 	it("marks the current turn and jumps to the selected virtual row", async () => {
 		const onNavigate = vi.fn();
 		await mount(onNavigate);
-		const buttons = Array.from(container.querySelectorAll("button"));
+		const buttons = markers();
 
 		expect(buttons).toHaveLength(3);
 		expect(container.querySelector(".omp-conversation-nav-stack")).not.toBeNull();
@@ -209,5 +209,33 @@ describe("ConversationNavigator", () => {
 			);
 		});
 		expect(focused).toBe(earlier());
+	});
+
+	it("lists every loaded prompt, filters it and jumps to the one picked", async () => {
+		const onNavigate = vi.fn();
+		await mount(onNavigate);
+		await press(container.querySelector<HTMLButtonElement>("[data-prompt-list]"));
+		const rows = () => Array.from(document.querySelectorAll("[data-prompt-list-row]"));
+		expect(rows().map(row => row.textContent)).toEqual([
+			expect.stringContaining("First question"),
+			expect.stringContaining("Second question"),
+			expect.stringContaining("Third question"),
+		]);
+		const props = () => {
+			const field = document.querySelector<HTMLInputElement>("input[role='combobox']") as unknown as Record<
+				string,
+				unknown
+			>;
+			return Object.entries(field).find(([key]) => key.startsWith("__reactProps"))?.[1] as {
+				onChange: (event: unknown) => void;
+				onKeyDown: (event: unknown) => void;
+			};
+		};
+		await act(async () => props().onChange({ target: { value: "third" } }));
+		expect(rows()).toHaveLength(1);
+		expect(document.querySelector("[data-prompt-list-row] mark")?.textContent).toBe("Third");
+		expect(document.querySelector("[data-prompt-list-count]")?.textContent).toBe("1 of 3");
+		await act(async () => props().onKeyDown({ key: "Enter", preventDefault: () => {}, nativeEvent: {} }));
+		expect(onNavigate).toHaveBeenCalledWith(14);
 	});
 });

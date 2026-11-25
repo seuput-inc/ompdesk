@@ -918,6 +918,15 @@
 	width: 100%;
 }
 
+/* The rail's last item: the list of every loaded prompt with its filter (ConversationNavigator `PromptList`). */
+.omp-conversation-nav-list {
+	flex: 0 0 auto;
+	display: flex;
+	justify-content: center;
+	margin-top: var(--sc-space-1);
+	pointer-events: auto;
+}
+
 /* The top item of a windowed rail: how many turns lie above the ticks, one press of it moves the window a page up. */
 .omp-conversation-nav-earlier-slot {
 	position: relative;
