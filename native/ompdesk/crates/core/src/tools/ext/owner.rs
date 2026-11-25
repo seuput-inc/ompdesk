@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 
 use super::super::spawn::{
     CliCommand, Env, InstallContext, PlanTools, brew_bin_dirs, bun_view, command, executable_name,
-    find_on_path, launcher_names, npm_bin, owner_check_command, owner_update_command, parse_latest,
-    probe_output, read_install,
+    find_on_path, launcher_names, npm_bin, off_hub, owner_check_command, owner_update_command,
+    parse_latest, probe_output, read_install,
 };
 use crate::server::Fault;
 
@@ -108,7 +108,11 @@ async fn probe(deps: &OwnerDeps, bin: &str, args: &[&str]) -> Option<String> {
 /// Finds `command`, follows its links, owns it (`detectMcpBinary`). None when nothing on PATH (or at that path)
 /// runs; a fault when the install rules gave no answer, so an owned server is never listed as "unknown install".
 pub async fn detect(command: String, deps: &OwnerDeps) -> Result<Option<McpBinary>, Fault> {
-    let Some(path) = resolve_command(&command, &deps.path_env, &deps.ctx) else {
+    let found = {
+        let (command, path_env, ctx) = (command.clone(), deps.path_env.clone(), deps.ctx.clone());
+        off_hub(move || resolve_command(&command, &path_env, &ctx)).await
+    };
+    let Some(path) = found else {
         return Ok(None);
     };
     let facts = read_install(&path, &deps.ctx, json!({"kind": "mcp", "command": command})).await?;
@@ -126,7 +130,12 @@ pub async fn detect(command: String, deps: &OwnerDeps) -> Result<Option<McpBinar
         let python = if has_separator(named) {
             Some(named.to_owned())
         } else {
-            find_on_path(&[named.to_owned()], &deps.path_env, &deps.ctx.platform, &[])
+            let (named, path_env, platform) = (
+                named.to_owned(),
+                deps.path_env.clone(),
+                deps.ctx.platform.clone(),
+            );
+            off_hub(move || find_on_path(&[named], &path_env, &platform, &[])).await
         };
         if let Some(python) = python {
             let name = mcp["name"].as_str().unwrap_or_default();
@@ -148,8 +157,11 @@ pub async fn detect(command: String, deps: &OwnerDeps) -> Result<Option<McpBinar
                 pip["name"].as_str().unwrap_or_default(),
             );
             // Checked after the entry-point probe, not against a directory observed before python ran.
-            let dir = Path::new(&real).parent().unwrap_or(Path::new(""));
-            if !crate::ext::install::may_write(dir) {
+            let dir = Path::new(&real)
+                .parent()
+                .unwrap_or(Path::new(""))
+                .to_owned();
+            if !off_hub(move || crate::ext::install::may_write(&dir)).await {
                 owner = None;
                 skip = Some("not-writable".to_owned());
             }

@@ -250,13 +250,13 @@ async fn later(outcome: Outcome) -> Answer {
     }
 }
 
-/// Lets the spawned tasks run until `done` holds.
+/// Lets the spawned tasks and the blocking pool (a pass reads PATH there) run until `done` holds.
 async fn until(done: impl Fn() -> bool) {
-    for _ in 0..1_000 {
+    for _ in 0..2_000 {
         if done() {
             return;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     panic!("never came");
 }
@@ -291,9 +291,15 @@ impl H {
         ));
     }
 
+    /// The launch; a scheduled one until its first pass ended (it armed main's 4 h timer: a pass reads PATH on the
+    /// blocking pool, so a few yields do not see it through).
     async fn start(&self) {
         assert!(self.tools.start());
-        settle().await;
+        if self.tools.opts.scheduled.cli {
+            until(|| self.timer(CHECK_INTERVAL_MS).is_some()).await;
+        } else {
+            settle().await;
+        }
     }
 
     fn state(&self) -> Value {
@@ -365,14 +371,14 @@ impl H {
             .next_back()
     }
 
-    /// Main fires the 4 h timer `after` ms past the clock now.
+    /// Main fires the 4 h timer `after` ms past the clock now, and the pass it starts runs until it arms the next.
     async fn tick(&self, after: u64) {
         until(|| self.timer(CHECK_INTERVAL_MS).is_some()).await;
         let timer = self.timer(CHECK_INTERVAL_MS).unwrap();
         self.fired.borrow_mut().push(timer);
         let now = self.tools.clock.now_ms() + after;
         assert!(self.tools.clock.fire(timer, Some(now)));
-        settle().await;
+        until(|| self.timer(CHECK_INTERVAL_MS).is_some()).await;
     }
 }
 

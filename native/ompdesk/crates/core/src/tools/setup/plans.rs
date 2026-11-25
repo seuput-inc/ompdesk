@@ -9,7 +9,7 @@ use super::Presence;
 use super::paths::{dirname, host_join, join, managed_agent_desktop_dir, managed_git_root};
 use crate::fs::path::normalize_win32;
 use crate::tools::runner::SpawnSpec;
-use crate::tools::spawn::{InstallContext, PlanTools, npm_for, read_install, spawn_spec};
+use crate::tools::spawn::{InstallContext, PlanTools, npm_for, off_hub, read_install, spawn_spec};
 
 pub const OMP_PACKAGE: &str = "@oh-my-pi/pi-coding-agent";
 
@@ -83,11 +83,11 @@ pub async fn omp_npm_owner(
     if owner["method"] != "npm" || owner["name"] != OMP_PACKAGE {
         return None;
     }
-    let prefix = owner["prefix"].as_str()?;
+    let prefix = owner["prefix"].as_str()?.to_owned();
     if platform == "win32" {
         let launcher = facts["launcher"].as_str().unwrap_or_default();
         let shim_dir = normalize_win32(&dirname(true, launcher)).to_lowercase();
-        if shim_dir != normalize_win32(prefix).to_lowercase() {
+        if shim_dir != normalize_win32(&prefix).to_lowercase() {
             return None;
         }
     }
@@ -95,11 +95,12 @@ pub async fn omp_npm_owner(
         platform: platform.to_owned(),
         path_env: path_env.to_owned(),
     };
-    let npm = npm_for(prefix, &tools)?;
-    Some(OmpNpm {
-        npm,
-        prefix: prefix.to_owned(),
+    let npm = off_hub({
+        let prefix = prefix.clone();
+        move || npm_for(&prefix, &tools)
     })
+    .await?;
+    Some(OmpNpm { npm, prefix })
 }
 
 struct Pin {

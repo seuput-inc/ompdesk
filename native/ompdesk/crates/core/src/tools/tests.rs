@@ -50,13 +50,14 @@ fn spawn_local(task: LocalFuture<()>) {
     tokio::task::spawn_local(task);
 }
 
-/// Lets the spawned tasks run until `done` holds.
+/// Lets the spawned tasks and the blocking pool run until `done` holds (in real time: no test that waits on it pauses
+/// the clock).
 async fn until(done: impl Fn() -> bool) {
-    for _ in 0..1_000 {
+    for _ in 0..2_000 {
         if done() {
             return;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!("never came");
 }
@@ -333,7 +334,8 @@ async fn a_manual_instance_runs_its_schedule_on_mains_timers() {
                 Ok(json!(false)),
                 "starts once"
             );
-            // The launch tick's pass ran on the queue (ending at once, it armed no bound), then the 4 h timer was armed.
+            // The launch tick's pass ran on the queue, then the 4 h timer was armed. The launch's listings read PATH
+            // on the blocking pool, so their steps armed a bound each; every one was cleared when its step ended.
             let checks = || {
                 main.of("timer")
                     .into_iter()
@@ -343,10 +345,13 @@ async fn a_manual_instance_runs_its_schedule_on_mains_timers() {
             };
             until(|| checks().len() == 1).await;
             let timer = checks()[0].clone();
-            assert_eq!(
-                main.of("timer").len(),
-                1,
-                "no bound for a step that ended at once"
+            let cleared = main.of("clearTimer");
+            assert!(
+                main.of("timer")
+                    .iter()
+                    .filter(|armed| armed["ms"] == STEP_MAX_MS)
+                    .all(|bound| cleared.iter().any(|clear| clear["timer"] == bound["timer"])),
+                "a step's bound is cleared once it ended"
             );
             assert_eq!(
                 now(call(

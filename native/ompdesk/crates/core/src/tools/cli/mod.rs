@@ -27,8 +27,8 @@ use super::queue::{Answer, Ctx, StepKind};
 use super::setup::{self, ToolUpdateOutcome, ToolUpdateRequest};
 use super::spawn::{
     CliCommand, Env, InstallContext, PlanTools, bun_view, command, executable_name, find_brew,
-    find_on_path, is_newer, npm_bin, owner_check_command, owner_update_command, parse_latest,
-    parse_omp_version, probe_output, run_check, spawn_spec,
+    find_on_path, is_newer, npm_bin, off_hub, off_hub_async, owner_check_command,
+    owner_update_command, parse_latest, parse_omp_version, probe_output, run_check, spawn_spec,
 };
 use super::{Backoff, Tools, queued};
 use crate::control::js::string_of_value;
@@ -142,7 +142,7 @@ impl Io for System {
         let params = running_params(detection, owner, commands);
         Box::pin(async move {
             let params = serde_json::from_value(params).map_err(|error| error.to_string())?;
-            Ok(crate::ext::running::update_running(params).await)
+            Ok(off_hub_async(move || crate::ext::running::update_running(params)).await)
         })
     }
 
@@ -339,11 +339,15 @@ async fn detect_deps(tools: &Tools, checks: bool) -> Result<DetectDeps, Fault> {
         })
         .cloned()
         .unwrap_or_default();
+    let brew = {
+        let (path_env, platform) = (path_env.clone(), platform.to_owned());
+        off_hub(move || find_brew(&path_env, &platform)).await
+    };
     Ok(DetectDeps {
         ctx: InstallContext {
             platform: platform.to_owned(),
             tools_dir: tools.opts.tools_dir.clone(),
-            brew: find_brew(&path_env, platform),
+            brew,
         },
         path_env,
         env,
@@ -546,7 +550,11 @@ async fn latest_of(
         platform: deps.ctx.platform.clone(),
         path_env: deps.path_env.clone(),
     };
-    match check_command(detection, owner, &plan) {
+    let check = {
+        let (detection, owner) = (detection.clone(), owner.clone());
+        off_hub(move || check_command(&detection, &owner, &plan)).await
+    };
+    match check {
         Some(check) => {
             let output = io.run_check(&check, &deps.env).await?;
             parse_latest(owner, &output, detection.installed.as_deref()).map(Some)
@@ -610,7 +618,10 @@ async fn check(tools: &Rc<Tools>, ctx: &Ctx, id: &'static str, deps: &DetectDeps
             platform: deps.ctx.platform.clone(),
             path_env: deps.path_env.clone(),
         };
-        let update = update_command(&detection, &owner, latest.as_deref(), &plan);
+        let update = {
+            let (detection, owner, latest) = (detection.clone(), owner.clone(), latest.clone());
+            off_hub(move || update_command(&detection, &owner, latest.as_deref(), &plan)).await
+        };
         if update.is_none() && tools.opts.test_installer.is_none() {
             let detail = format!("no {method} to run the update with");
             return fail(tools, id, "install", Some(detail));

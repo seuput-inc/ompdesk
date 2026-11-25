@@ -63,7 +63,10 @@
 //!
 //! **Timing.** One step at a time in the order asked, each bound by 30 min ([`queue::STEP_MAX_MS`]); a CLI pass and
 //! an extension pass no longer overlap, and an omp pass is bound like the others (the named timing difference of the
-//! ledger). An install an updater pass needs runs inline in that pass's step ([`queue::Ctx`]).
+//! ledger). An install an updater pass needs runs inline in that pass's step ([`queue::Ctx`]). The hub thread also
+//! answers main's synchronous calls within 2 s, so every process start and every PATH or tool-install lookup runs on
+//! the blocking pool ([`spawn::off_hub`]): a PATH entry on an unreachable share or a slow process start costs a step
+//! time, never the hub its deadline.
 //!
 //! **The omp part** (T2.3, `omp/`) adds: opt `testOmpCompat` (the file `OMP_GUI_TEST_OMP_COMPAT` names, an unpacked
 //! app only); calls `omp.repair` (BridgeHealth: setup's retry of omp while setup holds omp missing or broken, else the

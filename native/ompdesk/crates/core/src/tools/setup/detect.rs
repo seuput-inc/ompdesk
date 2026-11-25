@@ -14,7 +14,9 @@ use super::paths::{
 use super::{ITEMS, Presence, exec, git_aslr};
 use crate::server::Scope;
 use crate::tools::Tools;
-use crate::tools::spawn::{brew_bin_dirs, executable_name, find_on_path, is_newer};
+use crate::tools::spawn::{
+    brew_bin_dirs, executable_name, find_on_path, is_newer, off_hub, off_hub_async,
+};
 
 /// `AGENT_DESKTOP_MIN_VERSION`: no `agent-desktop mcp` before it.
 pub const AGENT_DESKTOP_MIN_VERSION: &str = "1.2.0";
@@ -104,7 +106,12 @@ async fn version_of(bin: &str, env: &BTreeMap<String, String>) -> Presence {
     let cwd = std::env::current_dir()
         .map(|dir| dir.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_owned());
-    match crate::setup::runtime::tool_version_of(bin, &cwd, env, &Scope::detached()).await {
+    let (file, probe_env) = (bin.to_owned(), env.clone());
+    let found = off_hub_async(move || async move {
+        crate::setup::runtime::tool_version_of(&file, &cwd, &probe_env, &Scope::detached()).await
+    })
+    .await;
+    match found {
         Ok(found) if found["kind"] == "present" => Presence::Present {
             version: found["version"].as_str().map(str::to_owned),
             path: Some(bin.to_owned()),
@@ -139,7 +146,7 @@ async fn detect_omp(tools: &Rc<Tools>) -> Omp {
         .ask("ompResolution", json!({"fresh": fresh}))
         .await
         .unwrap_or(Value::Null);
-    omp_of(&resolution)
+    off_hub(move || omp_of(&resolution)).await
 }
 
 /// `detectOmp`'s reading of one `OmpResolution`.
@@ -239,22 +246,30 @@ async fn detect_git(
     env: &BTreeMap<String, String>,
 ) -> Presence {
     if platform == "win32" {
-        let lookup = |name: &str| {
-            if name == "PATH" {
-                return Some(path_env.to_owned());
-            }
-            env.iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                .map(|(_, value)| value.clone())
-        };
-        let Some(bash) = find_git_bash(&lookup, &|file| Path::new(file).exists()) else {
+        let (path_env, env_vars) = (path_env.to_owned(), env.clone());
+        let found = off_hub(move || {
+            let lookup = |name: &str| {
+                if name == "PATH" {
+                    return Some(path_env.clone());
+                }
+                env_vars
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, value)| value.clone())
+            };
+            let bash = find_git_bash(&lookup, &|file| Path::new(file).exists())?;
+            let root = dirname(true, &dirname(true, &bash));
+            let git = host_join(&[&root, "cmd", "git.exe"]);
+            let has_sh = Path::new(&host_join(&[&root, "usr", "bin", "sh.exe"])).exists();
+            let has_git = Path::new(&git).exists();
+            Some((root, git, has_sh, has_git))
+        })
+        .await;
+        let Some((root, git, has_sh, has_git)) = found else {
             return Presence::Missing;
         };
-        let root = dirname(true, &dirname(true, &bash));
-        let git = host_join(&[&root, "cmd", "git.exe"]);
-        let has_sh = Path::new(&host_join(&[&root, "usr", "bin", "sh.exe"])).exists();
         let found = async {
-            if Path::new(&git).exists() {
+            if has_git {
                 version_of(&git, env).await
             } else {
                 present_at(&root)
@@ -295,7 +310,9 @@ async fn detect_git(
         .filter(|dir| Path::new(dir) != Path::new("/usr/bin"))
         .collect::<Vec<_>>()
         .join(separator);
-    if let Some(git) = find_on_path(&names, &path_env, platform, &[]) {
+    let lookup_platform = platform.to_owned();
+    if let Some(git) = off_hub(move || find_on_path(&names, &path_env, &lookup_platform, &[])).await
+    {
         return version_of(&git, env).await;
     }
     if platform != "darwin" {
@@ -304,7 +321,12 @@ async fn detect_git(
     let cwd = std::env::current_dir()
         .map(|dir| dir.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_owned());
-    match crate::setup::developer_dir(&cwd, env.clone(), 15_000, Scope::detached()).await {
+    let probe_env = env.clone();
+    let selected = off_hub_async(move || async move {
+        crate::setup::developer_dir(&cwd, probe_env, 15_000, Scope::detached()).await
+    })
+    .await;
+    match selected {
         Ok(Some(_)) => version_of("/usr/bin/git", env).await,
         _ => Presence::Missing,
     }
@@ -323,7 +345,8 @@ pub async fn detect_agent_desktop(
     let win = platform == "win32";
     let exe = managed_agent_desktop(win, tools_dir);
     let mut managed = Presence::Missing;
-    if Path::new(&exe).exists() {
+    let file = exe.clone();
+    if off_hub(move || Path::new(&file).exists()).await {
         managed = match version_of(&exe, env).await {
             broken @ Presence::Broken { .. } => broken,
             Presence::Present { version: None, .. } => Presence::Broken {
@@ -373,7 +396,12 @@ async fn detect_tailscale(
     path_env: &str,
     env: &BTreeMap<String, String>,
 ) -> Presence {
-    match crate::tailscale::setup_install(platform, path_env, env).await {
+    let (platform, path_env, env) = (platform.to_owned(), path_env.to_owned(), env.clone());
+    let found = off_hub_async(move || async move {
+        crate::tailscale::setup_install(&platform, &path_env, &env).await
+    })
+    .await;
+    match found {
         Some((path, version)) => Presence::Present {
             version,
             path: Some(path),
@@ -416,41 +444,12 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
         .unwrap_or_default();
     env.retain(|key, _| !path_key(key));
     env.insert("PATH".to_owned(), path_env.clone());
-    let exe = |name: &str| vec![executable_name(name, platform)];
-    let bun = find_on_path(
-        &exe("bun"),
-        &path_env,
-        platform,
-        &[host_join(&[
-            &opts.bun_install,
-            "bin",
-            &executable_name("bun", platform),
-        ])],
-    );
-    let brew = if win {
-        None
-    } else {
-        find_on_path(
-            &["brew".to_owned()],
-            &path_env,
-            platform,
-            &[
-                "/opt/homebrew/bin/brew".to_owned(),
-                "/usr/local/bin/brew".to_owned(),
-            ],
-        )
-    };
-    let winget = if win {
-        let apps: Vec<String> = env
-            .iter()
-            .find(|(key, value)| key.eq_ignore_ascii_case("LOCALAPPDATA") && !value.is_empty())
-            .map(|(_, local)| host_join(&[local, "Microsoft", "WindowsApps", "winget.exe"]))
-            .into_iter()
-            .collect();
-        find_on_path(&["winget.exe".to_owned()], &path_env, platform, &apps)
-    } else {
-        None
-    };
+    let apps: Vec<String> = env
+        .iter()
+        .find(|(key, value)| key.eq_ignore_ascii_case("LOCALAPPDATA") && !value.is_empty())
+        .map(|(_, local)| host_join(&[local, "Microsoft", "WindowsApps", "winget.exe"]))
+        .into_iter()
+        .collect();
     // Homebrew's gh is the user's even when the login shell's PATH omits Homebrew's bin dir.
     let brew_gh: Vec<String> = if win {
         Vec::new()
@@ -460,8 +459,35 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
             .map(|dir| host_join(&[dir, "gh"]))
             .collect()
     };
-    let gh = find_on_path(&exe("gh"), &path_env, platform, &brew_gh);
-    let node = find_on_path(&exe("node"), &path_env, platform, &[]);
+    let own_bun = host_join(&[&opts.bun_install, "bin", &executable_name("bun", platform)]);
+    let (lookup_path, lookup_platform) = (path_env.clone(), platform.to_owned());
+    let (bun, brew, winget, gh, node) = off_hub(move || {
+        let (path_env, platform) = (lookup_path.as_str(), lookup_platform.as_str());
+        let exe = |name: &str| vec![executable_name(name, platform)];
+        let bun = find_on_path(&exe("bun"), path_env, platform, &[own_bun]);
+        let brew = if win {
+            None
+        } else {
+            find_on_path(
+                &["brew".to_owned()],
+                path_env,
+                platform,
+                &[
+                    "/opt/homebrew/bin/brew".to_owned(),
+                    "/usr/local/bin/brew".to_owned(),
+                ],
+            )
+        };
+        let winget = if win {
+            find_on_path(&["winget.exe".to_owned()], path_env, platform, &apps)
+        } else {
+            None
+        };
+        let gh = find_on_path(&exe("gh"), path_env, platform, &brew_gh);
+        let node = find_on_path(&exe("node"), path_env, platform, &[]);
+        (bun, brew, winget, gh, node)
+    })
+    .await;
     let found = |bin: Option<String>| {
         let env = &env;
         async move {

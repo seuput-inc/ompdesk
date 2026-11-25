@@ -49,7 +49,7 @@ use serde_json::{Value, json};
 
 use super::queue::{Ctx, StepKind};
 use super::runner::{FailedBy, Ran, RunOutcome, SpawnSpec, push_tail};
-use super::spawn::{is_newer, spawn_spec};
+use super::spawn::{is_newer, off_hub, spawn_spec};
 use super::{Opts, Tools, queued};
 use crate::control::js::string_of_value;
 use crate::hub::{LocalFuture, Outcome, params};
@@ -412,7 +412,7 @@ pub async fn exec(file: &str, args: &[String], shell: bool, env: &Env, timeout_m
     command.kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
-    let child = match command.spawn() {
+    let child = match off_hub(move || command.spawn()).await {
         Ok(child) => child,
         Err(error) => {
             return Exec {
@@ -562,7 +562,8 @@ async fn update_env(tools: &Rc<Tools>, omp: &str) -> Result<Env, Fault> {
         })
         .unwrap_or_default();
     env.retain(|key, _| !is_path(key));
-    let (path, root) = paths::omp_update_env(omp, &base, &tools.opts.bun_install);
+    let (bin, bun_install) = (omp.to_owned(), tools.opts.bun_install.clone());
+    let (path, root) = off_hub(move || paths::omp_update_env(&bin, &base, &bun_install)).await;
     env.insert("PATH".to_owned(), path);
     if let Some(root) = root {
         env.insert("BUN_INSTALL".to_owned(), root);
@@ -875,12 +876,13 @@ async fn install_each(tools: &Rc<Tools>, ctx: &Ctx, items: &[&'static str], manu
 
 /// The ompNpm of a detected omp Bun does not manage (`#ompNpm`).
 async fn omp_npm(tools: &Tools, detection: &Detection) -> Option<OmpNpm> {
-    let omp = detection.omp.as_deref()?;
-    if paths::omp_bun_root(omp).is_some() {
+    let omp = detection.omp.clone()?;
+    let bin = omp.clone();
+    if off_hub(move || paths::omp_bun_root(&bin)).await.is_some() {
         return None;
     }
     plans::omp_npm_owner(
-        omp,
+        &omp,
         &tools.opts.platform,
         &tools.opts.tools_dir,
         &detection.path_env,
@@ -889,8 +891,14 @@ async fn omp_npm(tools: &Tools, detection: &Detection) -> Option<OmpNpm> {
 }
 
 /// `#planContext`: setup's own install is the omp this OMPdesk was tested with.
-fn plan_context(tools: &Tools, detection: &Detection, omp_npm: Option<OmpNpm>) -> PlanContext {
+async fn plan_context(
+    tools: &Tools,
+    detection: &Detection,
+    omp_npm: Option<OmpNpm>,
+) -> PlanContext {
     let opts = &tools.opts;
+    let (root, tested) = (opts.bun_install.clone(), opts.tested_omp.clone());
+    let omp_specs = off_hub(move || plans::omp_install_specs(&root, &tested)).await;
     PlanContext {
         platform: opts.platform.clone(),
         arch: opts.arch.clone(),
@@ -898,7 +906,7 @@ fn plan_context(tools: &Tools, detection: &Detection, omp_npm: Option<OmpNpm>) -
         tools_dir: opts.tools_dir.clone(),
         bun: detection.bun.clone(),
         omp: detection.omp.clone(),
-        omp_specs: plans::omp_install_specs(&opts.bun_install, &opts.tested_omp),
+        omp_specs,
         omp_npm,
         omp_version: opts.tested_omp.clone(),
         brew: detection.brew.clone(),
@@ -955,7 +963,7 @@ async fn ensure_once(
     } else {
         None
     };
-    let plan_ctx = plan_context(tools, &detection, npm);
+    let plan_ctx = plan_context(tools, &detection, npm).await;
     if ctx.cancelled() || tools.is_closed() {
         return None;
     }
@@ -1661,15 +1669,16 @@ pub async fn run_tool_update(
             "archive"
         };
         let detection = tools.setup.borrow().detection.clone();
-        let plan = detection.and_then(|detection| {
-            plans::build_plan(
+        let plan = match detection {
+            Some(detection) => plans::build_plan(
                 managed,
                 method,
-                &plan_context(tools, &detection, None),
+                &plan_context(tools, &detection, None).await,
                 Some(&release),
                 None,
-            )
-        });
+            ),
+            None => None,
+        };
         let Some(plan) = plan else {
             return ToolUpdateOutcome::Failed(Some(format!("no {method} plan for {managed}")));
         };
@@ -1836,14 +1845,17 @@ pub async fn update_omp(
         return OmpUpdateOutcome::Skipped;
     };
     let npm = omp_npm(tools, &detection).await;
-    let mut plan_ctx = plan_context(tools, &detection, npm);
+    let mut plan_ctx = plan_context(tools, &detection, npm).await;
     if tools.is_closed() {
         return OmpUpdateOutcome::Skipped;
     }
-    let root = detection
-        .bun
-        .as_ref()
-        .and_then(|_| paths::omp_bun_root(&omp));
+    let root = match detection.bun {
+        Some(_) => {
+            let bin = omp.clone();
+            off_hub(move || paths::omp_bun_root(&bin)).await
+        }
+        None => None,
+    };
     let has_npm = root.is_none() && plan_ctx.omp_npm.is_some();
     if root.is_none() && !has_npm && exact_only {
         return OmpUpdateOutcome::Skipped;
@@ -1858,7 +1870,8 @@ pub async fn update_omp(
     match &root {
         Some(root) => {
             plan_ctx.bun_install = root.clone();
-            plan_ctx.omp_specs = plans::omp_install_specs(root, target);
+            let (root, target) = (root.clone(), target.to_owned());
+            plan_ctx.omp_specs = off_hub(move || plans::omp_install_specs(&root, &target)).await;
         }
         None => plan_ctx.omp_version = target.to_owned(),
     }
@@ -1961,7 +1974,11 @@ pub async fn newest_omp_in(tools: &Rc<Tools>, major: u64) -> Result<Option<Strin
     ) else {
         return Ok(None);
     };
-    if !omp_present_now(tools) || paths::omp_bun_root(&omp).is_none() {
+    if !omp_present_now(tools) {
+        return Ok(None);
+    }
+    let bin = omp.clone();
+    if off_hub(move || paths::omp_bun_root(&bin)).await.is_none() {
         return Ok(None);
     }
     let env = update_env(tools, &omp)

@@ -13,7 +13,8 @@ use crate::hub::LocalFuture;
 use crate::setup::desktop::pick_copy;
 use crate::tools::setup::managed_bin_dirs;
 use crate::tools::spawn::{
-    Env, InstallContext, find_on_path, is_newer, launcher_names, parse_omp_version, read_install,
+    Env, InstallContext, find_on_path, is_newer, launcher_names, off_hub, parse_omp_version,
+    read_install,
 };
 
 /// `AGENT_DESKTOP_MIN_VERSION` of `setup/archives.ts`: the first release with `agent-desktop mcp`.
@@ -132,7 +133,8 @@ async fn detect_installed(
             })
             .collect()
     };
-    let path = find_on_path(&names, &lookup, &ctx.platform, &extra)?;
+    let platform = ctx.platform.clone();
+    let path = off_hub(move || find_on_path(&names, &lookup, &platform, &extra)).await?;
     let source = if id == "gh-copilot" {
         json!({"kind": "ghExtension"})
     } else {

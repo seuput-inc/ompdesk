@@ -32,8 +32,8 @@ use serde_json::{Value, json};
 use super::queue::{Answer, Ctx, StepKind};
 use super::setup::{ToolUpdateOutcome, ToolUpdateRequest, run_tool_update};
 use super::spawn::{
-    self, CliCommand, Env, InstallContext, PlanTools, find_brew, is_newer, parse_omp_version,
-    spawn_spec,
+    self, CliCommand, Env, InstallContext, PlanTools, find_brew, is_newer, off_hub, off_hub_async,
+    parse_omp_version, spawn_spec,
 };
 use super::{Backoff, Tools, queued};
 use crate::control::js::string_of_value;
@@ -207,7 +207,7 @@ impl Default for Deps {
                         "kind": "mcp", "command": command, "binary": binary, "commands": commands,
                     }))
                     .map_err(|error| Fault::new("invalid_params", error.to_string()))?;
-                    Ok(crate::ext::running::update_running(params).await)
+                    Ok(off_hub_async(move || crate::ext::running::update_running(params)).await)
                 })
             }),
         }
@@ -396,10 +396,14 @@ async fn environment(tools: &Tools) -> Result<Environment, Fault> {
         .map(|(_, value)| value.clone())
         .unwrap_or_default();
     let platform = platform(tools);
+    let brew = {
+        let (path_env, platform) = (path_env.clone(), platform.to_owned());
+        off_hub(move || find_brew(&path_env, &platform)).await
+    };
     let ctx = InstallContext {
         platform: platform.to_owned(),
         tools_dir: tools.opts.tools_dir.clone(),
-        brew: find_brew(&path_env, platform),
+        brew,
     };
     Ok(Environment {
         plan: PlanTools {
@@ -857,7 +861,10 @@ async fn run_runner(tools: &Tools, key: &str, runner: &RunnerPackage, environmen
     let looked_up = async {
         let check = match &installer {
             Some(installer) => Some(installer_check(tools, installer, key)),
-            None => owner::runner_check(runner, &environment.plan),
+            None => {
+                let (runner, plan) = (runner.clone(), environment.plan.clone());
+                off_hub(move || owner::runner_check(&runner, &plan)).await
+            }
         };
         let Some(check) = check else {
             return Ok(None);
@@ -910,7 +917,11 @@ async fn update_binary(
             let output = run(tools, installer_check(tools, installer, key), environment).await?;
             return Ok(parse_omp_version(&output).or_else(|| binary.installed.clone()));
         }
-        match owner::owner_check(&owner, &environment.plan) {
+        let check = {
+            let (owner, plan) = (owner.clone(), environment.plan.clone());
+            off_hub(move || owner::owner_check(&owner, &plan)).await
+        };
+        match check {
             Some(check) => {
                 let output = run(tools, check, environment).await?;
                 owner::owner_latest(&owner, &output, binary.installed.as_deref()).map(Some)
@@ -962,7 +973,10 @@ async fn update_binary(
             }
         }
     }
-    let update = owner::owner_update(&owner, latest.as_deref(), &environment.plan);
+    let update = {
+        let (owner, latest, plan) = (owner.clone(), latest.clone(), environment.plan.clone());
+        off_hub(move || owner::owner_update(&owner, latest.as_deref(), &plan)).await
+    };
     if update.is_none() && installer.is_none() {
         fail(
             tools,

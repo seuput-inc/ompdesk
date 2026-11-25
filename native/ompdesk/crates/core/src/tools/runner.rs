@@ -21,6 +21,7 @@ use tokio::process::Command;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use super::queue::Ctx;
+use super::spawn::off_hub;
 use crate::aimemory::service::text::without_csi;
 use crate::fs::order::js_trim;
 
@@ -170,36 +171,31 @@ impl Runner {
         crate::sys::own_group(command.as_std_mut());
         #[cfg(windows)]
         command.creation_flags(0x0800_0000);
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => return failed(error.to_string()),
-        };
-        // Stopping closes the supervisor's stdin; once the run ended there is nothing left to close.
-        let stdin = Rc::new(RefCell::new(child.stdin.take()));
-        let stopped = Rc::new(std::cell::Cell::new(false));
-        ctx.on_stop({
-            let (stdin, stopped) = (Rc::clone(&stdin), Rc::clone(&stopped));
-            move || {
-                let live = stdin.borrow_mut().take().is_some();
-                stopped.set(stopped.get() || live);
-                live
-            }
-        });
         let (chunks, mut read) = mpsc::unbounded_channel::<String>();
+        let (started, start) = oneshot::channel();
         let (exit, exited) = oneshot::channel();
-        let pipes = [
-            child
-                .stdout
-                .take()
-                .map(|pipe| forward(pipe, chunks.clone())),
-            child
-                .stderr
-                .take()
-                .map(|pipe| forward(pipe, chunks.clone())),
-        ];
-        drop(chunks);
-        // Owns the supervisor and the slot until it exited, also when the step that started it is dropped.
+        // Owns the supervisor and the slot until it exited, also when the step that started it is dropped: a step
+        // dropped while the supervisor starts drops the stdin it is handed, which ends the supervisor.
         tokio::spawn(async move {
+            let mut child = match off_hub(move || command.spawn()).await {
+                Ok(child) => child,
+                Err(error) => {
+                    let _ = started.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let pipes = [
+                child
+                    .stdout
+                    .take()
+                    .map(|pipe| forward(pipe, chunks.clone())),
+                child
+                    .stderr
+                    .take()
+                    .map(|pipe| forward(pipe, chunks.clone())),
+            ];
+            drop(chunks);
+            let _ = started.send(Ok(child.stdin.take()));
             let status = child.wait().await;
             let drained = tokio::time::Instant::now() + DRAIN;
             for mut pipe in pipes.into_iter().flatten() {
@@ -210,6 +206,28 @@ impl Runner {
             drop(slot);
             let _ = exit.send(status.ok().and_then(|status| status.code()));
         });
+        // Stopping closes the supervisor's stdin; once the run ended there is nothing left to close. A stop while the
+        // supervisor starts leaves the stdin it is handed unkept, which closes it.
+        let stdin = Rc::new(RefCell::new(None));
+        let starting = Rc::new(std::cell::Cell::new(true));
+        let stopped = Rc::new(std::cell::Cell::new(false));
+        ctx.on_stop({
+            let (stdin, starting, stopped) =
+                (Rc::clone(&stdin), Rc::clone(&starting), Rc::clone(&stopped));
+            move || {
+                let live = starting.get() || stdin.borrow_mut().take().is_some();
+                stopped.set(stopped.get() || live);
+                live
+            }
+        });
+        let handed = start.await;
+        starting.set(false);
+        match handed {
+            Ok(Ok(pipe)) if !stopped.get() => *stdin.borrow_mut() = pipe,
+            Ok(Ok(_)) => {}
+            Ok(Err(detail)) => return failed(detail),
+            Err(_) => return failed("the supervisor did not start".to_owned()),
+        }
         let mut tail = String::new();
         while let Some(chunk) = read.recv().await {
             push_tail(&mut tail, &chunk);

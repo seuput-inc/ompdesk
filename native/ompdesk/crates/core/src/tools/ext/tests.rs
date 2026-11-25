@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -432,6 +433,13 @@ impl Harness {
         }
     }
 
+    /// A scheduled launch: started, and its first pass ended (it armed main's 4 h timer). The pass reads PATH on the
+    /// blocking pool, so it ends after the calls a test makes next.
+    async fn launch(&self) {
+        assert!(self.start());
+        until(|| self.timers(CHECK_INTERVAL_MS).len() == 1).await;
+    }
+
     fn set_pref(&self, on: bool) {
         let prefs = format!("{}/prefs.json", self.tools.opts.user_data);
         crate::prefs::set(&prefs, "toolsAutoUpdate", json!(on)).unwrap();
@@ -507,13 +515,13 @@ fn helper_key(table: &Answers, id: &str, error: &str) {
         .insert(id.to_owned(), Err(error.to_owned()));
 }
 
-/// Lets the spawned tasks run until `done` holds.
+/// Lets the spawned tasks and the blocking pool run until `done` holds.
 async fn until(done: impl Fn() -> bool) {
-    for _ in 0..1_000 {
+    for _ in 0..2_000 {
         if done() {
             return;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!("never came");
 }
@@ -540,6 +548,8 @@ fn a_launch_that_does_not_schedule_lists_everything_and_asks_for_nothing() {
         h.set_inventory("mcpServers", json!([server("web", "npx", &["-y", "pkg"])]));
         assert!(h.start());
         h.rescan().await.unwrap();
+        // The launch's own listing is queued behind this one.
+        until(|| h.fake.calls.borrow().len() == 2).await;
         assert_eq!(h.state()["enabled"], true);
         assert_eq!(h.state()["scheduled"], false);
         assert_eq!(
@@ -889,7 +899,7 @@ fn a_pinned_plugin_is_checked_and_shown_and_never_upgraded_not_even_by_update_no
             plugin_check(json!({"latest": "1.5.0", "pinned": true})),
         );
         Harness::answer(&f.upgrades, "pin-plug", upgrade(json!({})));
-        h.start();
+        h.launch().await;
         h.rescan().await.unwrap();
         h.now(Some("plugin:pin-plug:user")).await.unwrap();
         h.now(None).await.unwrap();
@@ -1453,7 +1463,7 @@ fn a_script_waits_while_its_server_runs_then_updates_at_the_next_check() {
         assert_eq!(row["installed"], "1.0.0");
         assert!(h.fake.applied.borrow().is_empty());
         // Scheduled passes are not held back by it.
-        h.start();
+        h.launch().await;
         h.rescan().await.unwrap();
         assert!(h.fake.updates.borrow().is_empty());
         assert!(h.fake.process_calls.get() > 1);
@@ -1627,7 +1637,7 @@ fn each_row_backs_off_by_itself_update_now_ignores_it_and_a_cancel_does_not_coun
             "good@official",
             plugin_check(json!({"latest": "1.0.0"})),
         );
-        h.start();
+        h.launch().await;
         h.rescan().await.unwrap();
         let counts = || {
             (
@@ -1663,7 +1673,7 @@ fn each_row_backs_off_by_itself_update_now_ignores_it_and_a_cancel_does_not_coun
         let h = harness(true);
         h.with_server(Some(npm_binary("1.0.0")));
         *h.fake.outcome.borrow_mut() = ToolUpdateOutcome::Cancelled;
-        h.start();
+        h.launch().await;
         h.rescan().await.unwrap();
         h.fake.updates.borrow_mut().clear();
         h.pref_changed();
@@ -1685,7 +1695,7 @@ fn while_omp_installs_a_pass_asks_nothing_and_defers_without_a_back_off() {
             "tools@official",
             plugin_check(json!({"latest": "1.0.0"})),
         );
-        h.start();
+        h.launch().await;
         h.rescan().await.unwrap();
         f.calls.borrow_mut().clear();
         h.omp_busy(true);
@@ -1748,7 +1758,7 @@ fn the_pref_gates_scheduled_passes_not_update_now_and_turning_it_on_checks_at_on
             "tools@official",
             plugin_check(json!({"latest": "1.0.0"})),
         );
-        h.start();
+        h.launch().await;
         h.rescan().await.unwrap();
         assert_eq!(
             (h.state()["enabled"].clone(), h.state()["scheduled"].clone()),

@@ -106,6 +106,35 @@ pub(crate) fn is_executable_file(file: &Path, windows: bool) -> bool {
     may_execute(file, windows) && std::fs::metadata(file).map_or(true, |meta| !meta.is_dir())
 }
 
+/// Runs `work` on the runtime's blocking pool. The hub thread answers main's synchronous calls within 2 s, so a process
+/// start or a stat along PATH (an entry on an unreachable network share hangs it for seconds) never runs on it.
+pub(crate) async fn off_hub<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(value) => value,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
+/// [`off_hub`] for a future of the core's other kinds that starts a process (a version probe, `ps`): made and run to
+/// its end on a blocking thread through the runtime's handle, and dropped there once the step awaiting it is dropped.
+pub(crate) async fn off_hub_async<F: Future>(make: impl FnOnce() -> F + Send + 'static) -> F::Output
+where
+    F::Output: Send + 'static,
+{
+    let runtime = tokio::runtime::Handle::current();
+    let (_awaited, dropped) = tokio::sync::oneshot::channel::<()>();
+    let ran = off_hub(move || {
+        runtime.block_on(async move {
+            tokio::select! {
+                output = make() => Some(output),
+                _ = dropped => None,
+            }
+        })
+    })
+    .await;
+    ran.expect("the awaiting step outlives the work it waits for")
+}
+
 fn joined(dir: &str, name: &str) -> String {
     Path::new(dir).join(name).to_string_lossy().into_owned()
 }
@@ -274,8 +303,8 @@ async fn exec(
         .kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
-    let child = command
-        .spawn()
+    let child = off_hub(move || command.spawn())
+        .await
         .map_err(|error| format!("spawn {} {}", spec.file, uv_code(&error)))?;
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => Ok(Exited {
