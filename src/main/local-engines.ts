@@ -1,20 +1,20 @@
 /**
  * Finds the local inference engines of `LOCAL_ENGINES` (FreeToken, colibri) on loopback and keeps a models.yml
- * provider for each one that answers, so its models are listed without the person adding anything. Stock omp
- * watches models.yml and reloads it live; this class only writes entries through the same writer every GUI edit
- * uses. The rules are one table (`engineAction`); a paired computer runs its own detector over its own file.
- *
- * Write order is chosen so a crash between the file and the ledger leaves the harmless state: a made entry is
- * written first (a crash leaves an entry nobody owns, which the person can delete), a removed entry leaves the
- * ledger first (a crash leaves an unowned entry, never a "the person deleted it" tombstone for an engine that
- * merely went away).
+ * provider for each one that answers, so its models are listed without the person adding anything. The detector runs
+ * in the core (`native/ompdesk/crates/core/src/models/detect.rs`): the probes, the rules, the ledger and the switch
+ * pref are its own. This side opens it with this launch's table, routes its two events, hands it the switch and opens
+ * it again on the next core when one dies. A paired computer runs its own detector over its own file.
  */
-import type { CustomProviderInput } from "../shared/ipc-types";
-import { LOCAL_ENGINES, type LocalEngineSpec, type LocalEnginesLedger } from "../shared/local-engines";
-import { core } from "./core/process";
-import { type EngineAction, engineAction } from "./local-engines-core";
+import { LOCAL_ENGINES, type LocalEngineSpec } from "../shared/local-engines";
+import { agentDir } from "./agent-paths";
+import { CoreError, core } from "./core/process";
+import { stockHelperHost } from "./stock-helper";
 
 export const LOCAL_ENGINE_INTERVAL_MS = 60_000;
+/** The open request is kept open on the core: it fails when the core dies, which is how this side learns it. */
+const HOLD_MS = 2 ** 31 - 1;
+/** How long after a core refused the detector it is opened again. */
+const REOPEN_MS = 30_000;
 
 /** The engine table and the pause between passes of this launch. */
 export interface LocalEngineSettings {
@@ -48,207 +48,84 @@ export function localEngineSettings(env: NodeJS.ProcessEnv, packaged: boolean): 
 	return { engines, intervalMs: Number.isFinite(interval) && interval > 0 ? interval : LOCAL_ENGINE_INTERVAL_MS };
 }
 
-/** Null means the reply could not be inspected. Neither that nor a failed core request proves an engine is down. */
-export async function probeLocalEngine(baseUrl: string): Promise<boolean | null> {
-	return (await core().call<boolean | null>("models.probeLocalEngine", { baseUrl })).result;
-}
-
-/** The provider entry of one engine; its models come from stock's `/models` discovery. */
-export function engineProviderInput(engine: LocalEngineSpec): CustomProviderInput {
-	return {
-		id: engine.id,
-		api: "openai-completions",
-		baseUrl: engine.baseUrl,
-		auth: "none",
-		discovery: { type: "openai-models-list" },
-		models: [],
-	};
-}
-
-export interface LocalEngineDetectorDeps {
-	engines: readonly LocalEngineSpec[];
-	ledger: { get(): LocalEnginesLedger; set(value: LocalEnginesLedger): void };
-	/** The pref `LOCAL_ENGINE_DETECT_PREF`, read now. */
-	enabled(): boolean;
-	probe(baseUrl: string): Promise<boolean | null>;
-	providers: {
-		ids(): Promise<Set<string>>;
-		/** Writes the entry only while none has its id, in one turn of models.yml's mutation chain; false: one does. */
-		insert(input: CustomProviderInput): Promise<boolean>;
-		delete(id: string): Promise<void>;
-	};
-	/** models.yml was changed by a pass: windows read the model list again. */
+export interface LocalEnginesOptions extends LocalEngineSettings {
+	/** Passes run by themselves; without it only the switch runs one (a test launch never probes real ports). */
+	start: boolean;
+	/** `prefs.json`, which holds the switch and the ledger. */
+	prefs: string;
+	/** models.yml was changed: windows read the model list again. */
 	changed(): void;
-	/** A read or write failed; the next pass tries again. `engine` is absent when the file itself could not be read. */
-	failed?(error: unknown, engine?: LocalEngineSpec): void;
-	intervalMs: number;
+	/** A read or write failed; the next pass tries again. `engine` is null when models.yml could not be read. */
+	failed(error: string, engine: string | null): void;
 }
 
-export class LocalEngineDetector {
-	readonly #deps: LocalEngineDetectorDeps;
-	#timer: ReturnType<typeof setTimeout> | null = null;
-	#inflight: Promise<void> | null = null;
-	#started = false;
+export class LocalEngines {
+	readonly #options: LocalEnginesOptions;
+	/** The stock helper the open detector edits models.yml through. */
+	#host = "";
+	#retry: NodeJS.Timeout | null = null;
+	readonly #unsubscribe: (() => void)[];
 	#disposed = false;
 
-	constructor(deps: LocalEngineDetectorDeps) {
-		this.#deps = deps;
+	constructor(options: LocalEnginesOptions) {
+		this.#options = options;
+		this.#unsubscribe = [
+			core().on("models.localEngines.changed", () => {
+				if (!this.#disposed) options.changed();
+			}),
+			core().on("models.localEngines.failed", data => {
+				if (this.#disposed) return;
+				const { engine, error } = data as { engine: string | null; error: string };
+				options.failed(error, engine);
+				// An omp update replaced the stock helper: the detector still names the old one.
+				if (stockHelperHost() !== this.#host) this.open();
+			}),
+		];
 	}
 
-	/** One pass now, then one every `intervalMs` after the previous one ends. */
-	start(): void {
-		if (this.#started || this.#disposed) return;
-		this.#started = true;
-		void this.#run();
+	/** Opens the detector in the core, replacing one opened before; when that core dies, opens it on the next. */
+	open(): void {
+		if (this.#disposed) return;
+		clearTimeout(this.#retry ?? undefined);
+		this.#host = stockHelperHost();
+		const { engines, intervalMs, start, prefs } = this.#options;
+		core()
+			.call(
+				"models.localEngines.open",
+				{ dir: agentDir(), host: this.#host, prefs, engines, intervalMs, start },
+				{ timeoutMs: HOLD_MS },
+			)
+			.catch((error: unknown) => {
+				if (this.#disposed) return;
+				if (error instanceof CoreError && (error.code === "core_exited" || error.code === "timeout")) {
+					this.open();
+					return;
+				}
+				console.error("[local-engines] couldn't open in ompdesk-core:", error);
+				this.#retry = setTimeout(() => this.open(), REOPEN_MS);
+				this.#retry.unref();
+			});
+	}
+
+	/**
+	 * The switch, called after `LOCAL_ENGINE_DETECT_PREF` is stored: the core's detector waits for a pass under way,
+	 * then off removes the entries it wrote and stops the timer, on runs a pass now (an entry the person deleted stays
+	 * deleted).
+	 */
+	async setEnabled(on: boolean): Promise<void> {
+		await core().call("models.localEngines.set", { enabled: on }, { timeoutMs: HOLD_MS });
 	}
 
 	dispose(): void {
-		this.#disposed = true;
-		this.#clearTimer();
-	}
-
-	/** Single-flight: a pass already running is the answer to every caller. */
-	tick(): Promise<void> {
-		if (this.#disposed) return Promise.resolve();
-		this.#inflight ??= this.#pass().finally(() => {
-			this.#inflight = null;
-		});
-		return this.#inflight;
-	}
-
-	/**
-	 * The switch, called after `LOCAL_ENGINE_DETECT_PREF` is stored. Off: the entries the detector wrote go and the
-	 * timer stops. On: a pass runs now; an entry the person deleted stays deleted (the tombstones outlive the switch).
-	 */
-	async setEnabled(on: boolean): Promise<void> {
 		if (this.#disposed) return;
-		this.#clearTimer();
-		// A pass begun under the old value skips its writes; wait so it cannot land after what follows.
-		await this.#inflight;
-		if (!on) {
-			await this.#unregisterAll();
-			return;
-		}
-		await this.#run();
-	}
-
-	#clearTimer(): void {
-		clearTimeout(this.#timer ?? undefined);
-		this.#timer = null;
-	}
-
-	/** A pass, then the next one's timer; at most one timer exists, whoever arms it. */
-	#run(): Promise<void> {
-		return this.tick()
-			.catch(() => undefined)
-			.finally(() => {
-				if (this.#disposed || !this.#started || !this.#deps.enabled()) return;
-				this.#clearTimer();
-				this.#timer = setTimeout(() => {
-					this.#timer = null;
-					void this.#run();
-				}, this.#deps.intervalMs);
-				this.#timer.unref?.();
-			});
-	}
-
-	#live(): boolean {
-		return !this.#disposed && this.#deps.enabled();
-	}
-
-	async #pass(): Promise<void> {
-		if (!this.#live()) return;
-		const { engines, providers } = this.#deps;
-		let present: Set<string>;
-		let up: (boolean | null)[];
-		try {
-			[present, up] = await Promise.all([
-				providers.ids(),
-				Promise.all(engines.map(engine => this.#deps.probe(engine.baseUrl))),
-			]);
-		} catch (error) {
-			this.#deps.failed?.(error);
-			return;
-		}
-		let wrote = false;
-		for (const [index, engine] of engines.entries()) {
-			// Re-read after the awaits: the switch may have turned off while the probes ran.
-			if (!this.#live()) break;
-			const ledger = this.#deps.ledger.get();
-			const action = engineAction({
-				up: up[index] ?? null,
-				present: present.has(engine.id),
-				registered: ledger.registered.includes(engine.id),
-				removed: ledger.removed.includes(engine.id),
-			});
-			try {
-				wrote = (await this.#apply(action, engine)) || wrote;
-			} catch (error) {
-				this.#deps.failed?.(error, engine);
-			}
-		}
-		if (wrote) this.#deps.changed();
-	}
-
-	/** Applies one action; true when models.yml changed. */
-	async #apply(action: EngineAction, engine: LocalEngineSpec): Promise<boolean> {
-		switch (action) {
-			case "register":
-				// `present` was read before the probes: an entry the person added meanwhile stays theirs, and the
-				// ledger does not claim it (a later "unregister" would delete it).
-				if (!(await this.#deps.providers.insert(engineProviderInput(engine)))) return false;
-				this.#edit(ledger => ({ ...ledger, registered: [...ledger.registered, engine.id] }));
-				return true;
-			case "tombstone":
-				this.#edit(ledger => ({
-					registered: ledger.registered.filter(id => id !== engine.id),
-					removed: [...ledger.removed, engine.id],
-				}));
-				return false;
-			case "unregister":
-				await this.#release(engine.id);
-				return true;
-			case "none":
-				return false;
-		}
-	}
-
-	/** The ledger lets go of `id` first, then the entry goes; a failed delete gives it back. */
-	async #release(id: string): Promise<void> {
-		this.#edit(ledger => ({ ...ledger, registered: ledger.registered.filter(item => item !== id) }));
-		try {
-			await this.#deps.providers.delete(id);
-		} catch (error) {
-			this.#edit(ledger => ({ ...ledger, registered: [...ledger.registered, id] }));
-			throw error;
-		}
-	}
-
-	/**
-	 * The switch going off: every entry the detector wrote goes, and one already gone was deleted by the person (the
-	 * same rule as a pass: a tombstone, so switching on again does not bring it back).
-	 */
-	async #unregisterAll(): Promise<void> {
-		let present: Set<string>;
-		try {
-			present = await this.#deps.providers.ids();
-		} catch (error) {
-			this.#deps.failed?.(error);
-			return;
-		}
-		let wrote = false;
-		for (const id of [...this.#deps.ledger.get().registered]) {
-			const engine = this.#deps.engines.find(item => item.id === id) ?? { id, name: id, baseUrl: "" };
-			try {
-				wrote = (await this.#apply(present.has(id) ? "unregister" : "tombstone", engine)) || wrote;
-			} catch (error) {
-				this.#deps.failed?.(error, engine);
-			}
-		}
-		if (wrote) this.#deps.changed();
-	}
-
-	#edit(change: (ledger: LocalEnginesLedger) => LocalEnginesLedger): void {
-		this.#deps.ledger.set(change(this.#deps.ledger.get()));
+		this.#disposed = true;
+		clearTimeout(this.#retry ?? undefined);
+		for (const off of this.#unsubscribe) off();
+		// Only the running core: a quit never starts one to close a detector it does not have.
+		const generation = core().generation;
+		if (generation !== 0)
+			core()
+				.call("models.localEngines.close", {}, { generation })
+				.catch(() => undefined);
 	}
 }

@@ -21,8 +21,11 @@
 //! `models.bootSelector {bin, version, port, fallback}` answers with the selector for an unauthenticated
 //! boot. For each `bin@version`, only the first request asks its port for `launch {script, cwd, env}`;
 //! a failed probe tells that port `warn` with the detail and caches `fallback`.
+//!
+//! `models.localEngines.*` keeps a models.yml provider for each local inference engine that answers (`detect.rs`).
 
 mod boot;
+mod detect;
 mod engines;
 mod file;
 mod release_dates;
@@ -53,6 +56,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 pub fn register(registry: &mut Registry) {
     file::register(registry);
+    detect::register(registry);
     registry.add("models.releaseDates", release_dates::handle);
     registry.add("models.bootSelector", boot::handle);
     registry.add("models.probeLocalEngine", engines::handle);

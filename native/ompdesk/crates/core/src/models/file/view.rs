@@ -14,7 +14,7 @@ const MASK_PREVIEW_LEN: usize = 4;
 /// gets them as its options.
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Roster {
+pub(in crate::models) struct Roster {
     pub builtin_providers: Vec<String>,
     pub apis: Vec<String>,
     pub auth: Vec<String>,

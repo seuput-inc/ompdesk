@@ -6,10 +6,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { parse } from "yaml";
 import type { CustomProviderInput } from "../shared/ipc-types";
-import { engineProviderInput } from "./local-engines";
+import { core } from "./core/process";
 import {
 	deleteModelsProvider,
-	insertModelsProvider,
 	listModelsProviders,
 	modelsCatalog,
 	modelsPath,
@@ -20,7 +19,7 @@ import {
 } from "./models-config";
 import { ompPackageRoot, systemOmp } from "./omp-runtime";
 import { CustomProviderInputSchema } from "./remote/app-protocol";
-import { stopStockHelper } from "./stock-helper";
+import { stockHelperHost, stopStockHelper } from "./stock-helper";
 
 const stock = await systemOmp();
 const available = stock.ok && ompPackageRoot(stock.runtime.bin) !== null;
@@ -79,8 +78,25 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 	});
 
 	test("accepts the entry the local engine detector writes and lists it as discovery-only", async () => {
-		const engine = engineProviderInput({ id: "freetoken", name: "FreeToken", baseUrl: "http://127.0.0.1:1919/v1" });
-		expect(await insertModelsProvider(engine)).toBe(true);
+		// What `models/detect.rs` writes for an engine that answers, with its only-if-absent upsert.
+		const engine = {
+			id: "freetoken",
+			api: "openai-completions",
+			baseUrl: "http://127.0.0.1:1919/v1",
+			auth: "none",
+			discovery: { type: "openai-models-list" },
+			models: [],
+		};
+		const insert = async () =>
+			(
+				await core().call<boolean>("models.upsert", {
+					dir,
+					host: stockHelperHost(),
+					input: engine,
+					onlyIfAbsent: true,
+				})
+			).result;
+		expect(await insert()).toBe(true);
 		expect(saved().providers.freetoken).toEqual({
 			api: "openai-completions",
 			baseUrl: "http://127.0.0.1:1919/v1",
@@ -97,9 +113,9 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 		expect((await listModelsProviders()).some(provider => provider.id === "freetoken")).toBe(false);
 		// The person's own entry with that id is never replaced, whichever of the two edits the core runs first.
 		const own = { ...minimal, id: "freetoken", baseUrl: "http://127.0.0.1:1919/v1", apiKey: "sk-own" };
-		await Promise.all([upsertModelsProvider(own), insertModelsProvider(engine)]);
+		await Promise.all([upsertModelsProvider(own), insert()]);
 		expect(saved().providers.freetoken).toMatchObject({ api: own.api, apiKey: "sk-own" });
-		expect(await insertModelsProvider(engine)).toBe(false);
+		expect(await insert()).toBe(false);
 		expect(saved().providers.freetoken).toMatchObject({ apiKey: "sk-own" });
 	});
 

@@ -268,10 +268,8 @@ src/main/launch-guard.test.ts	tooling	-	Vitest suite: crash-loop guard.
 src/main/launch-profile-stock.test.ts	tooling	-	Vitest suite: treats the token after each flag as stock's argv parser reads it.
 src/main/legacy-user-data.test.ts	tooling	-	Runs the Tauri host on an isolated profile; shell-batch-checks tauri-native supplies the executable on macOS and Windows.
 src/main/line-budget.ts	port	1	LineBudget.take enforces an hourly allowance and counts suppressed lines for the next admitted report.
-src/main/local-engines-core.test.ts	tooling	-	Vitest suite: engineAction.
-src/main/local-engines-core.ts	port	1	§1.3a,b,c: the detector checks the current enabled bit, ownership and deletion ledger immediately before applying an action. Move this pure rule with that ledger and the models.yml writer, not via a second RPC after the probe (shell models editor).
-src/main/local-engines.test.ts	tooling	-	Vitest suite: localEngineSettings.
-src/main/local-engines.ts	mixed	2	models.probeLocalEngine checks an HTTP loopback model list. The shell models editor retains its same-tick ownership ledger and shared models.yml write queue. An inconclusive probe does not unregister an existing provider.
+src/main/local-engines.test.ts	tooling	-	Vitest suite: localEngineSettings and the core's models.probeLocalEngine.
+src/main/local-engines.ts	native-client	2	models.localEngines.open/set/close (crates/core/src/models/detect.rs) own the probes, the ledger, the switch pref and the models.yml writes. The client passes this launch's engine table and test seams, opens again on each core and after an omp update replaced the stock helper, and routes changed/failed to windows, devices and the runtime log.
 src/main/log-watcher.test.ts	tooling	-	Vitest suite: opening logs later replays complete lines once, including split appends.
 src/main/log-watcher.ts	mixed	2	logs.start/snapshot/close own watching, UTF-8 tails and sequence assignment. Main forwards pushes and holds an opaque cursor per file plus the accepted 1000-line tail in RAM so a replacement core can resume without losing the panel history. Receiver: shell window transport.
 src/main/mac-permissions.test.ts	tooling	-	Vitest suite: MacPermissions.status.

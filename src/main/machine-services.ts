@@ -174,7 +174,7 @@ export interface LocalMachineDeps {
 	localEngines: {
 		/** The stored pref `LOCAL_ENGINE_DETECT_PREF`, unparsed. */
 		read(): unknown;
-		/** Store the switch and let the detector follow it (`LocalEngineDetector.setEnabled`). */
+		/** Store the switch and let the core's detector follow it (`LocalEngines.setEnabled`). */
 		set(enabled: boolean): Promise<void>;
 	};
 	modelSetupPick: {
