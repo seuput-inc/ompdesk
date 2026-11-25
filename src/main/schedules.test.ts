@@ -12,6 +12,7 @@ import {
 import { core, stopCore } from "./core/process";
 import type { OmpResolution } from "./omp-runtime";
 import { fakeGh, fixture, gate } from "./routines/test-context";
+import { firedDetail } from "./routines/test-fired";
 import { ObservedSchedules } from "./routines/test-state";
 import {
 	ompRunLauncher,
@@ -545,7 +546,8 @@ describe("routines: event triggers, once, run history", () => {
 		expect(service.latest.nextRuns[id]).toBeNull();
 		expect(await fire(service, id, "src/a.ts changed")).toBe("fired");
 		await woke(1);
-		expect(turns[0]?.prompt).toBe("Review the change\n\nWhat fired this run:\nsrc/a.ts changed");
+		expect(turns[0]?.prompt.startsWith("Review the change\n\nWhat fired this run:\n")).toBe(true);
+		expect(firedDetail(turns[0]?.prompt ?? "")).toBe("src/a.ts changed");
 		expect(service.latest.runs[0]).toMatchObject({
 			trigger: "event",
 			status: "running",
@@ -555,7 +557,7 @@ describe("routines: event triggers, once, run history", () => {
 		expect(await fire(service, id, "src/c.ts changed")).toBe("fired");
 		turns[0]?.end({ code: 0 });
 		await woke(2);
-		expect(turns[1]?.prompt).toBe("Review the change\n\nWhat fired this run:\nsrc/b.ts changed\nsrc/c.ts changed");
+		expect(firedDetail(turns[1]?.prompt ?? "")).toBe("src/b.ts changed\nsrc/c.ts changed");
 		turns[1]?.end({ code: null, error: "The turn ended with an error" });
 		await ended(service, 2);
 		expect(service.latest.runs.map(run => [run.status, run.error])).toEqual([

@@ -17,6 +17,22 @@ const TICK_MS: i64 = 30_000;
 const DIR: &str = "/work/ompdesk-replay";
 const KEY: &str = "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK";
 
+const FIRED: &str = "\n\nWhat fired this run:\n";
+
+/// A launch the TypeScript recorded, as the core tells it now: the TypeScript pasted what fired a run raw into its
+/// prompt, the core quotes it fenced as other people's words (`fence_untrusted`).
+fn as_fenced(launch: &Value) -> Value {
+    let mut launch = launch.clone();
+    if let Some((head, detail)) = launch["prompt"]
+        .as_str()
+        .and_then(|prompt| prompt.split_once(FIRED))
+    {
+        let fenced = format!("{head}{FIRED}{}", super::engine::fence_untrusted(detail));
+        launch["prompt"] = fenced.into();
+    }
+    launch
+}
+
 fn limits() -> Limits {
     Limits {
         runs_kept: 200,
@@ -352,7 +368,13 @@ fn does_what_the_typescript_service_did() {
         let mut journals = 0;
         for (index, step) in steps.as_array().unwrap().iter().enumerate() {
             let at = format!("{name}, step {index} {step}");
-            let (result, error) = play.step(step, scenario["launches"].as_array().unwrap());
+            let told: Vec<Value> = scenario["launches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(as_fenced)
+                .collect();
+            let (result, error) = play.step(step, &told);
             play.track();
             // In the order the capture named things: a journal a step wrote, then its error, then its state.
             for journal in play.journals.clone().iter().skip(journals) {
@@ -389,7 +411,10 @@ fn does_what_the_typescript_service_did() {
             })
             .collect();
         let theirs = scenario["launches"].as_array().unwrap();
-        let mut theirs: Vec<String> = theirs.iter().map(Value::to_string).collect();
+        let mut theirs: Vec<String> = theirs
+            .iter()
+            .map(|launch| as_fenced(launch).to_string())
+            .collect();
         ours.sort();
         theirs.sort();
         assert_eq!(ours, theirs, "{name}");

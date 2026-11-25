@@ -10,6 +10,7 @@ import type { ScheduleServiceOptions } from "../schedules";
 import type { TabActivity } from "../sidecar-pool";
 import { RM_TEMP } from "../test-fake-omp";
 import { type RoutineHost, type RoutineTabFact, routinePorts } from "./ports";
+import { firedDetail } from "./test-fired";
 import { ObservedSchedules } from "./test-state";
 
 export const until = (check: () => void) => vi.waitFor(check, { timeout: 10_000, interval: 10 });
@@ -18,6 +19,7 @@ export const idle = (tabId: string, stopReason = "stop", errorMessage?: string):
 	tabId,
 	outcome: { stopReason, ...(errorMessage === undefined ? {} : { errorMessage }) },
 });
+
 export type TestTab = RoutineTabFact & { title: string };
 
 export function draft(cwd: string, event: ScheduleEvent, extra?: Partial<ScheduleDraft>): ScheduleDraft {
@@ -108,8 +110,8 @@ export async function fixture(options: Options = {}) {
 		const { promise, resolve } = Promise.withResolvers<{ code: number }>();
 		const finish = (code = 0) => resolve({ code });
 		launched.push({ schedule, prompt, wake, finish });
-		const detail = prompt.split("\nWhat fired this run:\n")[1]?.trimEnd();
-		if (detail && detail !== "A test run: no event fired") fired.push(...detail.split("\n"));
+		const detail = firedDetail(prompt);
+		if (detail) fired.push(...detail.split("\n"));
 		if (!options.hold) finish();
 		return { done: promise, stop: () => finish(130) };
 	};
