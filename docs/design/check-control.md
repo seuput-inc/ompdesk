@@ -236,7 +236,7 @@ What exists in the repository on 20 Nov 2026, item by item. **Done** means built
 | §4 Who started a run | Partial | `Run.session` (above). Not AgentControl provenance |
 | §4 Release gates | Missing | No gate list. `--release` is the one local gate |
 | §5 Cancel superseded | Partial | P0: `ci.yml` `concurrency`, `queue-gate.yml` rule 2. Outside workflows nothing cancels a run |
-| §5 Release-bound first | Partial | Local: `ompdesk check --release -- CMD` may take the next free slot before older normal checks. Once passed, those checks go before another release. A ticket from an older CLI keeps its FIFO position. No running command is preempted. GitHub still uses `queue-gate.yml` rule 1 (`MAC_REFS`). |
+| §5 Release-bound first | Partial | Local: `ompdesk check --release -- CMD` may take the next free slot before older normal checks. Once passed, those checks go before another release. A ticket from an older CLI keeps its FIFO position. No running command is preempted. |
 | §5 Wait when full | Partial | Local: the heavy slots' ordered queue (`heavy.rs`). No OMPdesk-side queue in front of GitHub |
 | §5 Reuse a green result | Partial | Local: by input digest (`check.rs` `decide`, `inputs.rs`). CI: same commit and inputs (`queue-gate.yml` rule 2) |
 | §5 Merge queue | Missing | P3, not started |
@@ -247,7 +247,7 @@ What exists in the repository on 20 Nov 2026, item by item. **Done** means built
 | §6 `wait` | Done, local | `ompdesk checks wait [ID]` (`board.rs` `wait`): blocks until the run ends, prints the `Answer`, exits 0 green, 1 red, 4 unknown. It follows the run's journal, costs no GitHub request, and under bash `async: true` its end wakes the session. It is not the control socket's wait, and it knows no GitHub run |
 | §6 `status` | Done, local | `ompdesk checks status` (`board.rs` `board`): the pool, every run not finished and the newest 20, each with `session` and `mine`. No `scope` argument |
 | §6 A session cancels only its own runs | Done | `check.rs` `may_cancel`: `ompdesk check cancel` from a session refuses a run of another session or of a terminal. A terminal cancels any. Pinned by the crate's test and `crates/cli/tests/check_runs.rs` |
-| §7.1 Only path | Partial | P0's gate admits macOS from `main` and `MAC_REFS` only. No admission ticket |
+| §7.1 Only path | Partial | P0's gate does not filter macOS by ref. No admission ticket |
 | §7.2 Waiting by notification | Partial | `checks wait` and the prompt section's rule ("never poll it or read its log"). The waste guard's polling hint covers `gh run` already. The board's check row says the session is woken (§8). No server-side wait for a GitHub run |
 | §7.3 Answers carry the judgment | Done, local | `checks wait` separates `commandExitCode` from `verdict`. An exit of zero with changed inputs is `unknown`, not reusable. `timing` separates slot wait from command time; missing timestamps in older journals remain unknown. |
 | §7.4 Policy decides | Partial | A local check decides what runs again. Placement does not exist |

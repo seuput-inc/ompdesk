@@ -4,14 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { asksForMac, decide, type LaneRun, laneOf, parseArgs, refAllowed, runAsksForMac } from "./ci-run";
-
-const run = (id: number, workflow: string, branch: string, ...statuses: string[]): LaneRun => ({
-	id,
-	workflow,
-	branch,
-	jobs: statuses.map(status => ({ status, labels: status === "pending" ? [] : ["macos-latest"] })),
-});
+import { asksForMac, parseArgs } from "./ci-run";
 
 describe("ci-run arguments", () => {
 	it("reads the workflow, the ref and every -f field", () => {
@@ -19,8 +12,6 @@ describe("ci-run arguments", () => {
 			workflow: "ci",
 			ref: "feat/x",
 			inputs: { batch: "true", win_e2e_grep: "@smoke a=b" },
-			wait: false,
-			replace: false,
 			dryRun: false,
 		});
 	});
@@ -45,102 +36,6 @@ describe("ci-run arguments", () => {
 	});
 });
 
-describe("ci-run admission", () => {
-	it("lets main and the listed branches ask for macOS, by exact name", () => {
-		expect(refAllowed("main", "")).toBe(true);
-		expect(refAllowed("a/b", "a/b c")).toBe(true);
-		expect(refAllowed("c", "a/b,c")).toBe(true);
-		expect(refAllowed("a", "a/b")).toBe(false);
-		expect(refAllowed("a/b", "")).toBe(false);
-	});
-
-	it("refuses macOS to a branch outside MAC_REFS, and asks nothing of a run without macOS", () => {
-		const lane = laneOf([], { workflow: "ci", branch: "x" });
-		const refused = decide({ workflow: "ci", inputs: { mac: "true" }, replace: false }, "x", "y", lane);
-		expect(refused).toMatchObject({ go: false, code: 2 });
-		expect(decide({ workflow: "ci", inputs: { batch: "true" }, replace: false }, "x", "y", lane)).toEqual({
-			go: true,
-		});
-	});
-});
-
-describe("ci-run lane", () => {
-	const mine = { workflow: "ci", branch: "mine" };
-
-	it("counts queued and running macOS jobs as the holder and pending ones as waiting, for dispatched runs", () => {
-		const lane = laneOf([run(1, "ci", "a", "in_progress", "queued"), run(2, "e2e-nightly", "b", "pending")], mine);
-		expect(lane.holders.map(r => r.id)).toEqual([1]);
-		expect(lane.waiting.map(r => r.id)).toEqual([2]);
-		expect(lane.openJobs).toBe(2);
-	});
-
-	it("leaves out the run this dispatch replaces, and jobs that are not macOS", () => {
-		const own = run(3, "ci", "mine", "in_progress");
-		const linux: LaneRun = {
-			id: 4,
-			workflow: "ci",
-			branch: "c",
-			jobs: [{ status: "queued", labels: ["ubuntu-latest"] }],
-		};
-		expect(laneOf([own, linux], mine)).toEqual({ holders: [], waiting: [], openJobs: 0 });
-	});
-
-	it("refuses to replace a waiting request unless told to, and notes a busy lane otherwise", () => {
-		const args = { workflow: "ci", inputs: { mac: "true" }, replace: false };
-		const full = laneOf([run(1, "ci", "a", "in_progress"), run(2, "ci", "b", "pending")], mine);
-		const refused = decide(args, "mine", "mine", full);
-		expect(refused).toMatchObject({ go: false, code: 3 });
-		expect(refused.go === false && refused.why).toContain("1 (ci, a)");
-		expect(decide({ ...args, replace: true }, "mine", "mine", full)).toMatchObject({ go: true });
-		const held = laneOf([run(1, "ci", "a", "in_progress")], mine);
-		expect(decide(args, "mine", "mine", held)).toMatchObject({ go: true, note: expect.stringContaining("run 1") });
-	});
-
-	it("refuses a pending-only macOS request from another workflow even without a holder", () => {
-		const lane = laneOf([run(707, "e2e-nightly", "parity-owner", "pending")], { workflow: "ci", branch: "mine" });
-		const decision = decide({ workflow: "ci", inputs: { mac: "true" }, replace: false }, "mine", "mine", lane);
-		expect(decision).toMatchObject({ go: false, code: 3 });
-		expect(decision.go === false && decision.why).toContain("707 (e2e-nightly, parity-owner)");
-	});
-
-	it("permits replacing a pending-only request only when explicitly asked", () => {
-		const lane = laneOf([run(707, "e2e-nightly", "parity-owner", "pending")], { workflow: "ci", branch: "mine" });
-		expect(decide({ workflow: "ci", inputs: { mac: "true" }, replace: true }, "mine", "mine", lane)).toEqual({
-			go: true,
-		});
-	});
-
-	it("counts a run that asked for macOS but has no macOS job yet (still in its gate) as waiting", () => {
-		const gate = [{ status: "in_progress", labels: ["ubuntu-latest"], name: "gate / gate" }];
-		const arriving: LaneRun = { id: 45436987620, workflow: "ci", branch: "b", title: "ci [batch mac ]", jobs: gate };
-		const lane = laneOf([arriving], mine);
-		expect(lane.waiting.map(r => r.id)).toEqual([45436987620]);
-		expect(decide({ workflow: "shell-batch-checks", inputs: {}, replace: false }, "w", "w", lane)).toMatchObject({
-			go: false,
-			code: 3,
-		});
-		// Not a request: a run without macOS, a shell run whose macOS jobs GitHub has made (and skipped), a Windows probe.
-		const skipped = [...gate, { status: "completed", labels: [], name: "tauri-native (macos-15)" }];
-		expect(
-			laneOf(
-				[
-					{ ...arriving, id: 1, title: "ci [batch ]" },
-					{
-						id: 2,
-						workflow: "shell-batch-checks",
-						branch: "c",
-						title: "shell-batch-checks [mac only=]",
-						jobs: skipped,
-					},
-					{ id: 3, workflow: "flake-probe", branch: "d", title: "flake e2e/a.e2e.ts ×5 (all)", jobs: gate },
-				],
-				mine,
-			).waiting,
-		).toEqual([]);
-		expect(runAsksForMac("flake-probe", "flake src/a.test.ts ×5 (macos)")).toBe(true);
-	});
-});
-
 const dispatchDirs: string[] = [];
 afterEach(() => {
 	for (const dir of dispatchDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -149,7 +44,7 @@ afterEach(() => {
 // PATH stand-ins are POSIX executables; the dispatch/parser code is shared with Windows.
 describe.skipIf(process.platform === "win32")("ci-run dispatch receipt consumer", () => {
 	const execute = promisify(execFile);
-	function fixture(pendingOnly = false) {
+	function fixture() {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-dispatch-receipt-"));
 		dispatchDirs.push(dir);
 		fs.writeFileSync(
@@ -158,22 +53,7 @@ describe.skipIf(process.platform === "win32")("ci-run dispatch receipt consumer"
 printf '%s\\n' "$*" >> "$DISPATCH_TRACE"
 for arg do
   case "$arg" in
-    */actions/workflows/e2e-nightly.yml/runs?*)
-      if [ "$PENDING_ONLY" = yes ]; then echo '{"workflow_runs":[{"id":707,"status":"pending","head_branch":"parity-owner"}]}'; else echo '{"workflow_runs":[]}'; fi
-      exit 0 ;;
-    */actions/workflows/ci.yml/runs?*|*/actions/workflows/flake-probe.yml/runs?*)
-      echo '{"workflow_runs":[]}'; exit 0 ;;
-    */actions/workflows/shell-batch-checks.yml/runs?*)
-      # The run list lags a dispatch: the run shows only from the second read after it.
-      if [ -f "$DISPATCH_TRACE.dispatched" ]; then
-        n=$(cat "$DISPATCH_TRACE.dispatched"); echo $((n + 1)) > "$DISPATCH_TRACE.dispatched"
-        if [ "$n" -ge 1 ]; then printf '{"workflow_runs":[{"id":%s,"status":"queued","head_branch":"concurrent-dispatch"}]}\\n' "$OWN_RUN"; exit 0; fi
-      fi
-      echo '{"workflow_runs":[]}'; exit 0 ;;
-    */actions/runs/707/jobs?*)
-      echo '[{"status":"pending","labels":[]}]'; exit 0 ;;
     */dispatches)
-      echo 0 > "$DISPATCH_TRACE.dispatched"
       case "$DISPATCH_BODY" in
         __receipt__) printf '{"workflow_run_id":%s,"html_url":"https://github.com/test/repo/actions/runs/%s"}\\n' "$OWN_RUN" "$OWN_RUN" ;;
         __network__) echo 'connection reset after request was sent' >&2; exit 1 ;;
@@ -205,7 +85,6 @@ fi
 						OWN_RUN: String(id),
 						DISPATCH_TRACE: path.join(dir, `trace-${id}`),
 						DISPATCH_BODY: body,
-						PENDING_ONLY: pendingOnly ? "yes" : "no",
 					},
 				}),
 		};
@@ -219,15 +98,12 @@ fi
 		expect(first.stdout + second.stdout).not.toContain("watch it once: bun scripts/watch-run.ts 999999");
 	});
 
-	it("dispatches an admitted shell run and returns only once the run list shows it", async () => {
+	it("returns the receipt for a macOS dispatch without waiting for a run listing", async () => {
 		const { start, dir } = fixture();
 		const result = await start(505, undefined, ["shell-batch-checks", "--ref", "concurrent-dispatch"]);
 		expect(result.stdout).toContain("watch it once: bun scripts/watch-run.ts 505");
-		const trace = fs.readFileSync(path.join(dir, "trace-505"), "utf8").trim().split("\n");
-		const dispatch = trace.findIndex(line => line.includes("actions/workflows/shell-batch-checks.yml/dispatches"));
-		expect(dispatch).toBeGreaterThanOrEqual(0);
-		// One read that lags, one that shows the run: the next dispatch, of this session or another, will see it.
-		expect(trace.slice(dispatch).filter(line => line.includes("shell-batch-checks.yml/runs?"))).toHaveLength(2);
+		const trace = fs.readFileSync(path.join(dir, "trace-505"), "utf8");
+		expect(trace).not.toContain("shell-batch-checks.yml/runs?");
 	});
 
 	it.each([
@@ -248,19 +124,5 @@ fi
 		});
 		const trace = fs.readFileSync(path.join(dir, "trace-303"), "utf8").trim().split("\n");
 		expect(trace.filter(line => line.includes("/dispatches"))).toHaveLength(1);
-	});
-
-	it("refuses a pending-only lane with --wait and no holder without dispatching, cancelling or blind watching", async () => {
-		const { start, dir } = fixture(true);
-		await expect(
-			start(404, undefined, ["ci", "--ref", "concurrent-dispatch", "-f", "mac=true", "--wait"]),
-		).rejects.toMatchObject({
-			code: 3,
-			stderr: expect.stringContaining("707 (e2e-nightly, parity-owner)"),
-		});
-		const trace = fs.readFileSync(path.join(dir, "trace-404"), "utf8");
-		expect(trace).not.toContain("/dispatches");
-		expect(trace).not.toContain("/cancel");
-		expect(trace).not.toContain("run watch");
 	});
 });

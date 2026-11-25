@@ -14,7 +14,7 @@
 #
 # Every job here is a Windows runner (the suite builds on Linux): Playwright drives the Tauri host's page through
 # WebView2's DevTools port and cannot attach to macOS's WKWebView (e2e/fixture/shell-launch.ts; macOS is checked by
-# the native smoke in mac-checks.yml and release.yml), so no job here takes a macOS runner or the `mac-dispatch` lane.
+# the native smoke in mac-checks.yml and release.yml), so no job here takes a macOS runner.
 # A dispatch whose commit already has a green run with the same inputs cancels itself (queue-gate.yml) unless it passes
 # `-f force=true`. See .omp/rules/e2e-ci-windows.md › CI › The check queue.
 name: e2e-nightly

@@ -9,9 +9,8 @@
 #
 # The queue is managed by the workflow, not by whoever dispatches (.omp/rules/e2e-ci-windows.md › CI › The check
 # queue): a push to main has one run going and the newest waiting (`ci-main`), a dispatch replaces its own older run, `gate`
-# (queue-gate.yml) admits macOS only to main and MAC_REFS branches and cancels a commit's second identical run, and
-# every dispatched macOS job of the account shares one lane (`mac-dispatch`). A push's own macOS checks are
-# mac-main.yml, a queue of their own, so a long wait for a macOS runner never holds back this run's verdict.
+# (queue-gate.yml) cancels a commit's second identical run.
+# A push's macOS checks run separately in mac-main.yml so a runner wait does not delay the Linux and Windows verdict.
 #
 # Pull requests (including from forks) run only the Linux jobs with a read-only
 # token and no secrets; no job here uses `pull_request_target`. Every other job
@@ -109,9 +108,8 @@ permissions:
   contents: read
 
 jobs:
-  # The queue's admission point (queue-gate.yml). A dispatch asking for macOS (`mac`) must come from main or a
-  # MAC_REFS branch, and a dispatch whose commit already has a green run with the same inputs cancels itself. Skipped on
-  # a push (nothing to admit), where the jobs below start at once. The jobs depend on it so a duplicate starts none.
+  # The queue gate cancels a dispatch whose commit already has a green run with the same inputs. Skipped on
+  # a push, where the jobs below start at once. The jobs depend on it so a duplicate starts none.
   gate:
     if: github.event_name == 'workflow_dispatch'
     permissions:
@@ -120,8 +118,6 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: ci.yml
-      mac: ${{ inputs.mac }}
-      mac-refs: ${{ vars.MAC_REFS }}
       force: ${{ inputs.force }}
 
   # Pre-flight: the same blocking checks release.yml runs (types, biome, surface
@@ -325,17 +321,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # The dispatched macOS checks as one unit (mac-checks.yml: mac-smoke, mac-native, memory, `native` on macOS arm64; a push
-  # to main runs the same unit from mac-main.yml). macOS runners are the account's scarcest (5 at once), so a branch takes
-  # them once, at its landing gate (`mac=true`), with the gate's admission (main or a MAC_REFS branch) and the
-  # account-wide `mac-dispatch` lane: one holder, one waiting, a newer request replaces the waiting one
-  # (cancel-in-progress false), so branch work never has more than one unit's runners open.
+  # mac-main.yml calls the same checks on a push to main.
   mac:
     needs: gate
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.mac && needs.gate.outputs.mac_ok == 'true'"
-    concurrency:
-      group: mac-dispatch
-      cancel-in-progress: false
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.mac"
     permissions:
       contents: read
       actions: read # the failure reports read this run's jobs
