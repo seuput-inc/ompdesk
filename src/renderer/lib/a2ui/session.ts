@@ -14,10 +14,10 @@ import {
 	type RendererErrorMessage,
 	type SurfaceModel,
 } from "@a2ui/web_core";
+import { A2UI_TOOL as TOOL_NAME } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
 import type { AgentMessage } from "../../../shared/rpc-types";
 import { toolEntryKey } from "../../stores/tools";
 import { createA2uiCatalog } from "./catalog";
-import { A2UI_TOOL_NAME as TOOL_NAME } from "./tool-name";
 
 const ENVELOPE_KINDS = ["createSurface", "updateComponents", "updateDataModel", "deleteSurface"] as const;
 

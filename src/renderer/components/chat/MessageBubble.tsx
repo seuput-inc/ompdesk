@@ -2,6 +2,7 @@ import { Archive, FileText, GitBranch, MoreHorizontal, Terminal } from "lucide-r
 import type { ReactNode } from "react";
 import { memo, useState } from "react";
 import { MAIL_CUSTOM_TYPE } from "../../../../resources/gui-bridge/agent-control-contracts";
+import { A2UI_TOOL } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
 import { CI_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/ci-watch-contracts";
 import { COMPUTER_USE_NOTICE_TYPE } from "../../../../resources/gui-bridge/modes/computer-use-contracts";
 import { MEMORY_RECALL_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/memory-recall-contracts";
@@ -9,7 +10,6 @@ import { parseAgentMessage } from "../../../shared/agent-control";
 import { extractFileMentions, replaceFileMentions, splitAttachedMentions } from "../../../shared/file-mentions";
 import type { AgentMessage, ImageContent, MessageContent, ToolCallContent } from "../../../shared/rpc-types";
 import { useShellInput } from "../../hooks/use-shell-mode";
-import { A2UI_TOOL_NAME } from "../../lib/a2ui/tool-name";
 import { AnsiText, hasAnsi } from "../../lib/ansi";
 import { compactionDoneKey, compactionTook } from "../../lib/compaction-action";
 import { basename, cx, extractResultImage, formatClock, formatDuration, uiLocale } from "../../lib/format";
@@ -656,7 +656,7 @@ export const MessageBubble = memo(function MessageBubble({
 			}
 			case "toolCall": {
 				blocks.push(
-					block.name === A2UI_TOOL_NAME ? (
+					block.name === A2UI_TOOL ? (
 						<A2uiChatCard key={toolEntryKey(block)} toolCallId={toolEntryKey(block)} />
 					) : (
 						<ToolCardWithResult key={toolEntryKey(block)} call={block} runningIndicator={runningIndicator} />
