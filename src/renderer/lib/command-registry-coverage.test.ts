@@ -141,6 +141,7 @@ const SHORTCUT_ROWS: Record<KeymapActionId, string | null> = {
 	quickOpen: "quick-open",
 	"sessions.search": "resume",
 	"files.search": "search-files",
+	"transcript.find": null,
 	settings: "settings",
 	"sidebar.toggle": "toggle-sidebar",
 	"board.focus": "focus-work-board",

@@ -1,5 +1,6 @@
 import { type ComponentType, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { MenuAction, RunProgressState } from "../shared/ipc-types";
+import { TRANSCRIPT_FIND_EVENT } from "./components/chat/TranscriptFind";
 import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
 import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogDialog";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
@@ -85,6 +86,7 @@ import { useModelWaitTogetherSync } from "./stores/model-wait-together";
 import { usePreviewVisualEvents } from "./stores/preview-visuals";
 import { useRemoteStateSync } from "./stores/remote";
 import { useSessionStore } from "./stores/session";
+import { focusedRuntimeTabId } from "./stores/session-runtime-context";
 import { steppingFromTabId, useActiveTabKind, useSessionTabs, useTabsStore, visibleTabIds } from "./stores/tabs";
 import { toast, toastError } from "./stores/toast";
 import { isSidebarDrawerMode, migrateDefaultPanelTab, useUiStore } from "./stores/ui";
@@ -646,6 +648,12 @@ export function App() {
 					return;
 				case "files.search":
 					ui.openFilesSearch();
+					return;
+				case "transcript.find":
+					// ⌘F — the focused pane's Find bar (chat/TranscriptFind.tsx).
+					window.dispatchEvent(
+						new CustomEvent(TRANSCRIPT_FIND_EVENT, { detail: { tabId: focusedRuntimeTabId() } }),
+					);
 					return;
 				case "panel.toggle":
 					ui.togglePanel();

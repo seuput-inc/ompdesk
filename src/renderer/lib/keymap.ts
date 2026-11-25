@@ -464,6 +464,14 @@ export const KEYMAP_ACTIONS = [
 		overlaySafe: false,
 		hotkeyGroup: "view",
 	},
+	{
+		// ⌘F — find in the focused session's conversation (chat/TranscriptFind.tsx; Orca's `chat.find`).
+		id: "transcript.find",
+		labelKey: "hotkeys.row.transcriptFind",
+		defaults: ["⌘F"],
+		overlaySafe: false,
+		hotkeyGroup: "view",
+	},
 	{ id: "tab.new", labelKey: "hotkeys.row.tabNew", defaults: ["⌘T"], overlaySafe: false, hotkeyGroup: "session" },
 	{
 		id: "tab.newChat",

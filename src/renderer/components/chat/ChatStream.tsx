@@ -109,6 +109,7 @@ import { StreamingText } from "./StreamingText";
 import { installSelectionDrag, selectionRowSpan } from "./selection-drag";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { FoldedReminders } from "./TodoReminderNote";
+import { TranscriptFind } from "./TranscriptFind";
 import { TurnEndAnnouncer } from "./TurnEndAnnouncer";
 import { estimateRowSize, RowSizeLearner, rowSizeKey } from "./transcript-row-estimate";
 import { ChildrenAtWork, useHasChildrenAtWork } from "./work/ChildrenAtWork";
@@ -1032,6 +1033,24 @@ function SessionTranscript() {
 		},
 		[virtualizer],
 	);
+	// Find (⌘F): a step centres its row once; the bar then brings the match itself mid-view (TranscriptFind.tsx).
+	const showFindRow = useCallback(
+		(rowIndex: number) => {
+			prependAnchorRef.current = null;
+			userScrollIntentRef.current = false;
+			gestureAnchorRef.current = null;
+			gestureTowardTailRef.current = null;
+			setPinned(false);
+			const offset = virtualizer.getOffsetForIndex(rowIndex, "center")?.[0];
+			if (offset !== undefined) virtualizer.scrollToOffset(offset);
+		},
+		[virtualizer],
+	);
+	const scrollFindBy = useCallback(
+		(delta: number) => virtualizer.scrollToOffset((virtualizer.scrollOffset ?? 0) + delta),
+		[virtualizer],
+	);
+	const firstRowInView = useCallback(() => virtualizer.range?.startIndex ?? 0, [virtualizer]);
 	const updateProcessExpanded = useCallback((key: string, expanded: boolean) => {
 		setExpandedProcessKeys(current => {
 			if (current.has(key) === expanded) return current;
@@ -1254,6 +1273,15 @@ function SessionTranscript() {
 				</div>
 			</div>
 			<JumpToLatest className="bottom-5" onClick={jumpToLatest} pinned={pinned} />
+			<TranscriptFind
+				firstRowInView={firstRowInView}
+				mountedKey={`${rows.length}:${virtualItems[0]?.index ?? -1}:${virtualItems.at(-1)?.index ?? -1}`}
+				rows={rows}
+				scrollBy={scrollFindBy}
+				scrollerRef={parentRef}
+				showRow={showFindRow}
+				tabId={tabId}
+			/>
 			<Suspense fallback={null}>
 				<TranscriptQuote rootRef={parentRef} tabId={tabId} />
 			</Suspense>
