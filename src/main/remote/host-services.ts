@@ -533,6 +533,9 @@ const Scope = z.enum(["local", "global"]);
 
 const RtabParams = z.object({ rtab: Rtab });
 const CloseParams = RtabParams.extend({ expectedTurn: HostCloseTurnSchema.nullable().optional() });
+const ShownParams = z.object({ rtab: Rtab, shown: z.boolean() });
+/** The device's own `setShown` viewer of its tab here; this computer's windows and other devices' views count apart. */
+const DEVICE_VIEWER = "device";
 const OpenParams = z.object({
 	rtab: Rtab,
 	cwd: AbsolutePath.optional(),
@@ -1394,6 +1397,12 @@ export class LocalHostServices implements HostServices {
 			case "tab.syncImageGeneration":
 				this.#tab(peer, parse(RtabParams, method, params).rtab).sidecar.syncImageGeneration();
 				return null;
+			case "tab.shown": {
+				// A view passes it on as itself (hosted-view.ts), so it counts beside the windows here that show the tab.
+				const { rtab, shown } = parse(ShownParams, method, params);
+				this.#tab(peer, rtab).sidecar.setShown?.(DEVICE_VIEWER, shown);
+				return null;
+			}
 			case "sessions.list": {
 				const { scope, cwd, versioned } = parse(SessionsListParams, method, params);
 				// One folder's rows: decorated, but the shared list's snapshot stays what that list last said, or a change
@@ -2422,6 +2431,8 @@ export class LocalHostServices implements HostServices {
 		if (!view) this.#deps.summaries?.track(sidecar);
 		// A tab opened on a stored session holds it now, though no journal moved.
 		this.listingChanged();
+		// An older device never says whether it shows the tab: count it as shown (its own `tab.shown` follows the open).
+		sidecar.setShown?.(DEVICE_VIEWER, true);
 		if (view) {
 			tab.viewing = view.of;
 			// The window's omp may hold asks already: the device's tab gets them as its open set.

@@ -1056,6 +1056,12 @@ export function runRpcUi(): void {
 	let nextPromptSettings: NextPromptSettings = parseNextPromptEnv(process.env.OMP_GUI_NEXT_PROMPT);
 	/** The user's composer draft is empty (`next_prompt_draft`); a suggestion is only made over an empty one. */
 	let nextPromptDraftEmpty = true;
+	/**
+	 * Main says a window, phone or paired device shows the tab (`next_prompt_shown`): a hidden tab's trigger asks
+	 * nothing (`nextPromptSkipped` remembers it) and showing the tab asks then, as the bridge's gate does.
+	 */
+	let nextPromptShown = true;
+	let nextPromptSkipped: NextPromptTrigger | undefined;
 	let nextPromptFailure: { reason: NextPromptUnavailable; detail: string } | undefined;
 	let nextPromptTimer: NodeJS.Timeout | undefined;
 	const nextPromptRequests = { suggest: 0, inline: 0 };
@@ -1104,6 +1110,7 @@ export function runRpcUi(): void {
 	};
 	const nextPromptRunStarted = () => {
 		nextPromptKept = { candidates: [], at: Date.now() };
+		nextPromptSkipped = undefined;
 	};
 	const pushBridgeEvent = (event: object) => {
 		const frame = `${JSON.stringify({ event })}\n`;
@@ -1279,9 +1286,13 @@ export function runRpcUi(): void {
 		});
 		if (recovered) emitNextPromptConfig();
 	};
-	/** One suggestion after `trigger`, unless a draft is in the way; typing aborts it while pending. */
+	/** One suggestion after `trigger`, unless a draft is in the way or nobody shows the tab; typing aborts it while pending. */
 	const scheduleNextPrompt = (trigger: NextPromptTrigger) => {
 		if (!nextPromptSettings.suggestions || !nextPromptDraftEmpty) return;
+		if (!nextPromptShown) {
+			nextPromptSkipped = trigger;
+			return;
+		}
 		clearTimeout(nextPromptTimer);
 		nextPromptTimer = setTimeout(() => emitNextPrompt(trigger), nextPromptScript.latencyMs ?? 0);
 	};
@@ -2812,6 +2823,14 @@ export function runRpcUi(): void {
 				nextPromptTimer = undefined;
 			}
 			return { empty: nextPromptDraftEmpty };
+		},
+		next_prompt_shown: params => {
+			nextPromptShown = params.shown === true;
+			if (nextPromptShown && nextPromptSkipped) {
+				nextPromptSkipped = undefined;
+				scheduleNextPrompt("shown");
+			}
+			return { shown: nextPromptShown };
 		},
 		next_prompt_refresh: params => {
 			scheduleNextPrompt(params.reason === "bash" || params.reason === "switch" ? params.reason : "refresh");

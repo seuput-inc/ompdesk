@@ -46,6 +46,11 @@ class FakeSidecar extends EventEmitter {
 	rpcCommands: RpcCommand[] = [];
 	/** The levels the pool asked with `set_subagent_subscription`, kept apart from the commands a test sends. */
 	subagentLevels: string[] = [];
+	/** Every `setShown` the pool made, in order. */
+	shownCalls: Array<[viewer: string, shown: boolean]> = [];
+	setShown(viewer: string, shown: boolean): void {
+		this.shownCalls.push([viewer, shown]);
+	}
 	constructor(public cwd: string) {
 		super();
 	}
@@ -4000,6 +4005,20 @@ describe("SidecarPool multi-viewer", () => {
 		expect(pool.isShared("tab-a")).toBe(true);
 		// The saved layout stays the owner's.
 		expect(pool.tabLayoutForWindow(phone.win)).toBeNull();
+	});
+
+	it("tells the tab's omp it is shown while any window shows it, a phone's page alone included", () => {
+		const { pool, sidecar, desktop, phone } = shared();
+		expect(sidecar.shownCalls).toEqual([["windows", true]]);
+		// The desktop moves on; the phone still shows the tab.
+		pool.acquire("/b", desktop.win, "tab-b");
+		expect(pool.setActiveTab(desktop.win, "tab-b")).toBe(true);
+		expect(sidecar.shownCalls).toEqual([["windows", true]]);
+		// The phone leaves too: nobody shows it.
+		expect(pool.detachViewer(phone.win, "tab-a")).toBe(true);
+		expect(sidecar.shownCalls.at(-1)).toEqual(["windows", false]);
+		expect(pool.setActiveTab(desktop.win, "tab-a")).toBe(true);
+		expect(sidecar.shownCalls.at(-1)).toEqual(["windows", true]);
 	});
 
 	it("takes the first answer to an ask; the other window's card closes and its late answer is refused", async () => {

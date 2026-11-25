@@ -1248,12 +1248,22 @@ describe("inline scheduler", () => {
 });
 
 describe("suggestion gate and scheduler", () => {
-	const gate = { enabled: true, idle: true, draftEmpty: true, main: true, hasReply: true, key: "k2", lastKey: "k1" };
+	const gate = {
+		enabled: true,
+		shown: true,
+		idle: true,
+		draftEmpty: true,
+		main: true,
+		hasReply: true,
+		key: "k2",
+		lastKey: "k1",
+	};
 
-	it("generates only for an idle main session with an empty composer, a reply and a moved state", () => {
+	it("generates only for a shown, idle main session with an empty composer, a reply and a moved state", () => {
 		expect(gateSuggestion(gate)).toEqual({ ok: true });
 		expect(gateSuggestion({ ...gate, enabled: false })).toEqual({ ok: false, reason: "disabled" });
 		expect(gateSuggestion({ ...gate, main: false })).toEqual({ ok: false, reason: "subagent" });
+		expect(gateSuggestion({ ...gate, shown: false, force: true })).toEqual({ ok: false, reason: "hidden" });
 		expect(gateSuggestion({ ...gate, idle: false })).toEqual({ ok: false, reason: "busy" });
 		expect(gateSuggestion({ ...gate, draftEmpty: false })).toEqual({ ok: false, reason: "typing" });
 		expect(gateSuggestion({ ...gate, hasReply: false })).toEqual({ ok: false, reason: "no_reply" });

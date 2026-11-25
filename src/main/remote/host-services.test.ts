@@ -119,6 +119,12 @@ class FakeHostSidecar extends EventEmitter {
 	judgeAssistSyncs = 0;
 	accountRotationSyncs = 0;
 	creditSpendSyncs = 0;
+	/** Who shows the tab now (`setShown`), as SidecarManager counts them. */
+	readonly shownBy = new Set<string>();
+	setShown(viewer: string, shown: boolean): void {
+		if (shown) this.shownBy.add(viewer);
+		else this.shownBy.delete(viewer);
+	}
 	commands: RpcCommand[] = [];
 	readonly rpcClient = {
 		command: async (command: RpcCommand): Promise<RpcResponse> => {
@@ -3483,6 +3489,23 @@ describe("LocalHostServices for this computer's own windows", () => {
 		sidecar.emit("session", { sessionId: "s1", sessionFile: SESSION, sessionName: "Fix login" });
 		return { ...context, x, sidecar };
 	}
+
+	it("counts a device's tab as shown while the device or a window here shows it", async () => {
+		const { services, x, sidecar } = await hosted();
+		// An older device never says: it counts as showing its tab.
+		expect([...sidecar.shownBy]).toEqual(["device"]);
+		await services.call(x.peer, "tab.shown", { rtab: "t1", shown: false }, x);
+		expect(sidecar.shownBy.size).toBe(0);
+		// A window here shows it through its view, and no longer once the view goes.
+		const view = viewOf(services);
+		view.setShown?.("windows", true);
+		expect(sidecar.shownBy.size).toBe(1);
+		await services.call(x.peer, "tab.shown", { rtab: "t1", shown: true }, x);
+		expect(sidecar.shownBy.size).toBe(2);
+		view.dispose();
+		expect([...sidecar.shownBy]).toEqual(["device"]);
+		await expect(services.call(x.peer, "tab.shown", { rtab: "t1", shown: "yes" }, x)).rejects.toThrow();
+	});
 
 	it("summarizes the sessions its hosted tabs run for the device, with their live state", async () => {
 		const { builder, sidecar, x, services } = await hostedWithSummaries();

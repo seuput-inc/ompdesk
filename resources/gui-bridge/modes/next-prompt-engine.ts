@@ -16,11 +16,14 @@
  * - The renderer reports whether its composer draft is empty (`next_prompt_draft`); typing aborts the pending
  *   or running suggestion, emptying the draft asks again only when the state moved (the person's own deleted draft
  *   brings the suggestion they saw back, never a new one).
+ * - Main reports whether a window, phone or paired device shows the tab (`next_prompt_shown`, true until told): a
+ *   hidden tab's turn asks the model nothing, and showing it asks for the moment it skipped (the owner's decision,
+ *   25 Nov 2026: a background tab's suggestion was a request nobody might ever see).
  * - The session's last suggestion is kept (and journaled as `NEXT_PROMPT_ENTRY`) and `next_prompt_state` answers
  *   it as `last`: a page that missed the frame (a tab in the background, a reload, a hidden phone, a paired host's
  *   lost link) or an omp started on the session later (a relaunch, an update) shows it again on its next hydration.
- * - Cost: one request per finished turn (a few k tokens in, ≤ 512 out, reasoning off) and, while typing, at most
- *   one per 2 s of typing pauses (cached per draft). `next_prompt_state.requests` counts both.
+ * - Cost: one request per finished turn of a shown tab (a few k tokens in, ≤ 512 out, reasoning off) and, while
+ *   typing, at most one per 2 s of typing pauses (cached per draft). `next_prompt_state.requests` counts both.
  * - The user's own `next-prompt` extension is detected through the loaded extension list; the renderer then
  *   ignores its widget. Its own request cannot be stopped from here.
  */
@@ -323,6 +326,8 @@ interface HookContext {
 
 let settings: NextPromptSettings = parseNextPromptEnv(process.env.OMP_GUI_NEXT_PROMPT);
 let draftEmpty = true;
+/** A window, phone or paired device shows the tab (main's `next_prompt_shown`); true for an omp no main tells. */
+let shown = true;
 let latestEnv: EngineEnv | undefined;
 let host: NextPromptHost | undefined;
 let unavailable: { reason: NextPromptUnavailable; detail?: string } | undefined;
@@ -622,6 +627,7 @@ async function generate(trigger: NextPromptTrigger, signal: AbortSignal): Promis
 	const { appState: ruleAppState, key: stateKey } = moment(session);
 	const gate = gateSuggestion({
 		enabled: settings.suggestions,
+		shown,
 		idle: idle(session),
 		draftEmpty,
 		main: true,
@@ -822,6 +828,18 @@ export const handlers: EngineMethods = {
 		return { empty };
 	},
 
+	/** `{shown}`: whether a window, phone or paired device shows the tab. Showing it asks for a moment it skipped. */
+	next_prompt_shown: async (params, env) => {
+		attach(env);
+		const value = record(params).shown;
+		if (typeof value !== "boolean") throw new Error("next_prompt_shown needs {shown: boolean}");
+		const changed = value !== shown;
+		shown = value;
+		// The gate drops a moment that already has its suggestion; a hidden tab's request runs out at the gate.
+		if (changed && value) request("shown");
+		return { shown };
+	},
+
 	/** `{reason}`: the renderer saw something the bridge does not (a finished `!` command). Forced past the unchanged-state gate. */
 	next_prompt_refresh: async (params, env) => {
 		attach(env);
@@ -929,6 +947,7 @@ export function resetNextPromptState(): void {
 	inlineAbort = undefined;
 	settings = parseNextPromptEnv(process.env.OMP_GUI_NEXT_PROMPT);
 	draftEmpty = true;
+	shown = true;
 	latestEnv = undefined;
 	host = undefined;
 	unavailable = undefined;

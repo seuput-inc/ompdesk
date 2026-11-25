@@ -75,6 +75,11 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	syncUserProfile(): void;
 	/** Push this machine's prompt-suggestion switches to the live session (the omp's own machine decides). */
 	syncNextPrompt(): void;
+	/**
+	 * `viewer` (a pool's windows, a paired device, a view) shows the tab or stopped showing it. The omp hears whether any
+	 * viewer does (bridge `next_prompt_shown`): a tab nobody sees makes no prompt suggestion until one shows it.
+	 */
+	setShown?(viewer: string, shown: boolean): void;
 	/** Push this machine's automatic-title switches to the live session (the omp's own machine decides). */
 	syncAutoTitle(): void;
 	/** Push this machine's judge-assist switch to the live session (the omp's own machine decides). */

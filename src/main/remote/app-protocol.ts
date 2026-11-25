@@ -15,6 +15,8 @@
  * - `tab.cancelWait {rtab}`: Cancel on the tab's connection wait or scheduled retry
  * - `tab.continueCut {rtab}`, `tab.dismissCut {rtab}`: Continue or Dismiss on the cut-off row of the window's tab a view
  *   shows; an older host answers `unsupported`
+ * - `tab.shown {rtab, shown}`: whether a window of the device shows the tab, sent after every open and on each change;
+ *   the host's omp makes prompt suggestions only while someone shows it (an older host answers `unsupported`)
  * - `sessions.list|search|kindFor|delete|rename|move`, `fs.list|read|readImage|readPlan|listDirs`,
  *   `workspace.default`, `launchProfile.get|update`
  * - `sidebar.deviceOrder.exchange` → the merged device ranks, keyed only by hashes of OMPdesk device identities.
