@@ -121,6 +121,21 @@ export function serveTray(tray: {
 	});
 }
 
+/**
+ * Settings › General › Window's close-to-tray prefs as stored, which the shell's last-window close reads
+ * (`tauri-shell/src/last_close.rs`): pushed now (`app.closeToTray`) and on every call of the returned function, never
+ * asked for on a close. The shell's one-time tray notice is recorded through `noticeShown`.
+ */
+export function serveCloseToTray(prefs: {
+	read(): { closeToTray: unknown; noticeShown: unknown };
+	noticeShown(): void;
+}): () => void {
+	client.on("app.closeToTrayNoticeShown", () => prefs.noticeShown());
+	const publish = (): void => void client.event("app.closeToTray", prefs.read());
+	publish();
+	return publish;
+}
+
 export const diagnosticBundleFileName: DiagnosticBundleDeps["fileName"] = params =>
 	client.call("app.diagnosticBundleFileName", params);
 

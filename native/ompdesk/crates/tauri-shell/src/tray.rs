@@ -183,6 +183,11 @@ pub fn set_language(lang: Lang) {
     pushes().lang = lang;
 }
 
+/// Node's UI language, which the shell's own notices speak.
+pub fn language() -> Lang {
+    pushes().lang
+}
+
 struct Tray {
     icon: TrayIcon,
     tooltip: String,
@@ -190,6 +195,11 @@ struct Tray {
 
 thread_local! {
     static TRAY: RefCell<Option<Tray>> = const { RefCell::new(None) };
+}
+
+/// The icon is in the notification area. UI thread.
+pub fn exists() -> bool {
+    TRAY.with(|tray| tray.borrow().is_some())
 }
 
 /// Sets the hover text when what a person reads changed. UI thread.

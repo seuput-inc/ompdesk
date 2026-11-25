@@ -11,6 +11,7 @@ mod evaluate;
 mod gpu;
 mod js_date;
 mod labels;
+mod last_close;
 mod launch_protection;
 mod legacy_user_data;
 mod migrate_watch;
@@ -865,22 +866,9 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
             app_window::closing(&observer);
-            tauri::async_runtime::spawn_blocking(move || {
-                let answer = host::request_blocking(
-                    "win.closeRequested",
-                    json!({"winId":win}),
-                    Duration::from_secs(5),
-                );
-                if !answer.ok().is_some_and(|v| v["prevent"] == true) {
-                    let app = runtime().app.clone();
-                    let _ = app.run_on_main_thread(move || {
-                        if let Ok(w) = window_for_wc(wc) {
-                            drop(w);
-                            destroy_app(wc, None);
-                        }
-                    });
-                }
-            });
+            if last_close::requested(win) == last_close::Action::Close {
+                destroy_app(wc, None);
+            }
         }
         WindowEvent::Destroyed => {
             runtime().registry.lock().expect("registry").begin_close(wc);
@@ -1353,12 +1341,18 @@ fn dispatch_ui(call: host::Call) {
         _ => None,
     };
     if let Some(wc) = closing {
-        // Node's own close (`tryClose`: a quit's, a menu's) saves the geometry as the person's close does.
+        // Node's own close (Electron's `close()`: a quit's, a failed spawn's, a test's) is the person's close: it saves
+        // the geometry, and the last shown window may hide or ask for the quit instead (last_close.rs).
         if call.method == "win.op"
             && call.params["op"] == "close"
+            && let Some(win) = call.params["winId"].as_u64()
             && let Ok(window) = window_for_wc(wc)
         {
             app_window::closing(&window);
+            if last_close::requested(win) != last_close::Action::Close {
+                call.ok(json!({}));
+                return;
+            }
         }
         destroy_app(wc, Some(call));
         return;
@@ -1432,6 +1426,7 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
         }
         "wc.send" => page_push::wc_send(&data),
         "diskFull.state" => page_push::disk_full_state(data),
+        "app.closeToTray" => last_close::prefs_pushed(&data),
         "app.language" => match data["language"].as_str().and_then(labels::Lang::parse) {
             Some(lang) => {
                 tray::set_language(lang);
@@ -1944,6 +1939,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             .find_map(|s| s.strip_prefix("--lang=").map(str::to_owned)),
     };
     let mut facts = facts::collect(&launch, &mut log::log);
+    last_close::set_icon(facts["appIcon"]["path"].as_str());
     #[cfg(target_os = "macos")]
     let downloads = PathBuf::from(
         facts["paths"]["downloads"]

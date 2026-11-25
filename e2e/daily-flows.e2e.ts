@@ -93,9 +93,16 @@ async function flowAProfile(): Promise<FlowAProfile> {
 		OMP_GUI_OMP: await fixtureOmp(root),
 		OMP_GUI_TEST_SESSION_FILES: "1",
 		OMP_GUI_TEST_JOB_TREE: "1",
+		// The fake omp's holds (`holdFlowAResume`).
+		OMP_GUI_TEST_START_FILE: path.join(root, "start.json"),
 	});
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	return { root, desktop, agent, env };
+}
+
+/** Holds the relaunch's resumed turn (the fake omp's `holdResume`) while true, as interrupted-resume.e2e.ts does. */
+async function holdFlowAResume(profile: FlowAProfile, hold: boolean): Promise<void> {
+	await fs.writeFile(path.join(profile.root, "start.json"), JSON.stringify({ holdResume: hold }));
 }
 
 async function flowALaunch(profile: FlowAProfile, ready: boolean): Promise<{ app: ElectronApplication; page: Page }> {
@@ -214,6 +221,10 @@ test("daily flow a: a quit mid-turn with subagents and a background job resumes 
 		});
 
 		await test.step("relaunch: one resuming row, then the turn ends", async () => {
+			// The resumed turn waits until the window can show its "continuing" row: on a loaded runner the window
+			// mounted after the turn had ended (2 of 5 in flake-probe 45505336105, the probe installed 3.3 s after
+			// launch, the turn over at 3.1 s), so nothing could see the row it had shown.
+			await holdFlowAResume(profile, true);
 			const second = await flowALaunch(profile, false);
 			current = second.app;
 			const { page } = second;
@@ -226,6 +237,8 @@ test("daily flow a: a quit mid-turn with subagents and a background job resumes 
 				scan();
 				new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
 			});
+			await expect(page.locator("[data-resuming]")).toHaveCount(1, { timeout: 30_000 });
+			await holdFlowAResume(profile, false);
 			await expect(page.getByText("Continued after the interruption.")).toBeVisible({ timeout: 45_000 });
 			await expect(page.locator("[data-resuming]")).toHaveCount(0, { timeout: 15_000 });
 			const rows = await page.evaluate(

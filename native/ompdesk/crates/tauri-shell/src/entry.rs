@@ -285,8 +285,8 @@ pub fn new_window() {
     push(target(&app_windows()).map_or(Open::Spawn, Open::Window));
 }
 
-/// Close Window: the target window closes as its own close button closes it, so Node still decides whether it hides
-/// to the tray. UI thread.
+/// Close Window: the target window closes as its own close button closes it, so the last one may hide to the tray
+/// (last_close.rs). UI thread.
 pub fn close_target() {
     let Some(win) = target(&app_windows()) else {
         return;

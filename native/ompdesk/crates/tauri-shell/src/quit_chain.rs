@@ -250,8 +250,8 @@ impl Chain {
         self.installer_pending = false;
     }
 
-    /// The quit is committed (Node's `quitApproved`): a Dock click no longer opens or restores a window.
-    #[cfg(target_os = "macos")]
+    /// The quit is committed (Node's `quitApproved`): a Dock click no longer opens or restores a window, and closing the
+    /// last window lets it close.
     pub fn approved(&self) -> bool {
         self.stage != Stage::Open
     }
@@ -286,8 +286,8 @@ pub fn admit(chain: &'static Mutex<Chain>, admission: Admission) {
     send(chain, hook);
 }
 
-/// A quit a person asked for from the app menu or the tray (`asker`): Node logs who asked, as `askQuit` did, before the
-/// chain's first step reaches it on the same stream; then the chain asks as for ⌘Q.
+/// A quit a person asked for from the app menu, the tray or the last window's close (`asker`): Node logs who asked
+/// (`logQuitAsked`) before the chain's first step reaches it on the same stream; then the chain asks as for ⌘Q.
 pub fn ask(asker: &str) {
     host::event(
         "app.quitAsked",
