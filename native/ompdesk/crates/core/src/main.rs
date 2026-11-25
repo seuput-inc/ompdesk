@@ -62,8 +62,13 @@ fn main() -> ExitCode {
             }
         };
     }
-    // The owner's stdio carries none of main's work: the process-wide sinks report on main's own connection.
-    let stdio_is_main = std::env::var_os("OMPDESK_STDIO_OWNER").is_none();
+    // The owner's stdio carries none of main's work: the process-wide sinks report on main's own connection, and the
+    // pages' pushes go to the owner.
+    let stdio = if std::env::var_os("OMPDESK_STDIO_OWNER").is_some() {
+        ompdesk_core::server::Peer::Owner
+    } else {
+        ompdesk_core::server::Peer::Main
+    };
     let served = runtime.block_on(async {
         // Main's synchronous calls (the pool, turn resume) come over their own connection.
         ompdesk_core::hub::listen_from_env();
@@ -73,7 +78,7 @@ fn main() -> ExitCode {
             tokio::io::stdin(),
             tokio::io::stdout(),
             ompdesk_core::registry(),
-            stdio_is_main,
+            stdio,
         )
         .await;
         ompdesk_core::clients::wind_down().await;

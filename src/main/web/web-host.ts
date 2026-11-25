@@ -133,7 +133,10 @@ export class WebHost {
 		this.uploads = new UploadStore({ userData: deps.userData, now });
 		this.blocks = new WebBlocks(deps.userData, now);
 		this.#serveSecret = new ServeSecretStore(deps.userData);
-		this.windows = new WebWindows((deviceId, channel, payload) => this.router.deliver(deviceId, channel, payload));
+		this.windows = new WebWindows(
+			(deviceId, channel, payload) => this.router.deliver(deviceId, channel, payload),
+			(win, alive) => this.router.noteWindow(win, alive),
+		);
 		this.router = new WsRouter({
 			registry: deps.ipc,
 			devices: this.devices,

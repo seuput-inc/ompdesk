@@ -4,10 +4,12 @@
 //! web-only channels and the device's grants before main runs them.
 //!
 //! Main hands the router what its windows push to a device (`web.deliver {host, device, ch}` with the data's JSON as
-//! `bin`; a stream to a device with no page comes without it, and with no data the device missed the push). With
+//! `bin`; `missed` when main wrote no data: a stream to a device with no page, or data it could not write). With
 //! `connId`, only that live page can receive the push. The router decides what a device may be pushed (`IPC_POLICY`'s
 //! push channels but the page's own and the desktop's, workspace state only with the `workspace` grant), counts what a
-//! device without a page missed, and releases pictures of tabs a device-wide `TAB_LIST_CHANGED` no longer lists.
+//! device without a page missed, and releases pictures of tabs a device-wide `TAB_LIST_CHANGED` no longer lists. The
+//! core's own pushes to a device's window (`pages.rs`) take the same rules: main names each window's device
+//! (`web.window {win, host, device}`, `{win}` once it is gone).
 //! `web.diskFullState {host, files}` sends the aggregate file names to all pages of that host. Main answers a page's call
 //! (`web.reply {host, call, ok, e}` with the value's JSON as `bin`), says a resync was prepared (`web.resynced {host,
 //! conn}`) and closes a device's sockets (`web.closeDevice`). The router tells main which connections a device has and
@@ -676,6 +678,34 @@ pub(crate) fn unless_dirty<T>(
     let released = release();
     drop(state);
     released
+}
+
+/// Each paired device's window by its id (below zero, main's `WebWindows`): the host's router and the device.
+static WINDOWS: LazyLock<Mutex<HashMap<i64, (u64, String)>>> = LazyLock::new(Mutex::default);
+
+/// A push the core made to a paired device's window (`pages.rs`), under the rules of main's (`deliver_push`). A
+/// window main has not named, or whose router is gone, has no recipient.
+pub(crate) fn deliver_window(win: i64, ch: &str, text: Vec<u8>) {
+    let named = WINDOWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&win)
+        .cloned();
+    let Some((host, device)) = named else {
+        return;
+    };
+    let Some(router) = host_of(host) else {
+        return;
+    };
+    let params = DeliverParams {
+        host,
+        device,
+        conn_id: None,
+        ch: ch.to_owned(),
+        missed: false,
+    };
+    router.deliver_push(params, Some(text));
+    router.drain_test();
 }
 
 fn now_ms() -> i64 {
@@ -1748,12 +1778,37 @@ fn close_device(push: PushCall) {
     }
 }
 
+#[derive(Deserialize)]
+struct WindowParams {
+    win: i64,
+    /// The host's router and the device; absent once main destroyed the window (the device was revoked).
+    host: Option<u64>,
+    device: Option<String>,
+}
+
+/// `web.window {win, host, device}`: main made a device's window; `{win}` alone: it is gone.
+fn window(push: PushCall) {
+    let Ok(params) = serde_json::from_str::<WindowParams>(push.params.get()) else {
+        return;
+    };
+    let mut windows = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    match (params.host, params.device) {
+        (Some(host), Some(device)) if params.win < 0 => {
+            windows.insert(params.win, (host, device));
+        }
+        _ => {
+            windows.remove(&params.win);
+        }
+    }
+}
+
 pub fn register(registry: &mut Registry) {
     registry.add_push("web.deliver", deliver);
     registry.add_push("web.diskFullState", disk_full);
     registry.add_push("web.reply", reply);
     registry.add_push("web.resynced", resynced);
     registry.add_push("web.closeDevice", close_device);
+    registry.add_push("web.window", window);
     test_hooks::register(registry);
 }
 
@@ -1986,9 +2041,23 @@ mod test_hooks {
         Reply::json(&result)
     }
 
+    /// `web.router.test.pageSend {wins, ch, data}`: a push the core makes itself (`pages.rs`), as the pool will.
+    async fn page_send(call: Call) -> Result<Reply, Fault> {
+        #[derive(Deserialize)]
+        struct PageSend {
+            wins: Vec<i64>,
+            ch: String,
+            data: Value,
+        }
+        let params: PageSend = call.params()?;
+        crate::pages::send(&params.wins, &params.ch, &params.data);
+        Reply::json(&Value::Null)
+    }
+
     pub(super) fn register(registry: &mut Registry) {
         registry.add("web.router.test.open", |call| Box::pin(open(call)));
         registry.add("web.router.test", |call| Box::pin(op(call)));
+        registry.add("web.router.test.pageSend", |call| Box::pin(page_send(call)));
     }
 }
 

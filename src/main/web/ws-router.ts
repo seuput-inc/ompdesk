@@ -109,7 +109,7 @@ export interface WsRouterDeps {
 		send(channel: string, caller: IpcCaller, args: readonly unknown[]): void;
 	};
 	devices: Pick<WebDevices, "get">;
-	windows: Pick<WebWindows, "windowFor"> & { callerFor(deviceId: string, connId?: string): IpcCaller };
+	windows: Pick<WebWindows, "windowFor" | "all"> & { callerFor(deviceId: string, connId?: string): IpcCaller };
 	quota: Pick<PeerQuota, "reserve" | "record">;
 	webChannels: WebChannelTable;
 	features: () => WebFeatures;
@@ -347,6 +347,15 @@ export class WsRouter {
 	/** The core of `generation` answered `web.start`: its router holds this host until that core ends. */
 	started(generation: number): void {
 		this.#startedIn = generation;
+		for (const win of this.#deps.windows.all()) this.noteWindow(win, true);
+	}
+
+	/** The core's router learns which device a window id is, for the pushes the core makes to it (`pages.rs`). */
+	noteWindow(win: WebClientWindow, alive: boolean): void {
+		if (!this.#open()) return;
+		const id = win.webContents.id;
+		const named = alive ? { win: id, host: this.host, device: win.deviceId } : { win: id };
+		core().push("web.window", named, undefined, this.#startedIn);
 	}
 
 	/** Whether the core running now is the one that started this host's router (a later core has not). */

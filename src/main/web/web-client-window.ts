@@ -57,11 +57,14 @@ export class WebClientWindow implements ClientWindow {
 /** One window per device, created on first use and kept until the device is revoked. */
 export class WebWindows {
 	readonly #deliver: WindowDelivery;
+	readonly #named: ((win: WebClientWindow, alive: boolean) => void) | undefined;
 	readonly #windows = new Map<string, WebClientWindow>();
 	#nextId = -1;
 
-	constructor(deliver: WindowDelivery) {
+	/** `named` hears each window made and destroyed (the core's router learns which device an id is). */
+	constructor(deliver: WindowDelivery, named?: (win: WebClientWindow, alive: boolean) => void) {
 		this.#deliver = deliver;
+		this.#named = named;
 	}
 
 	/** The device's window; its id is negative and stays for as long as this process runs. */
@@ -70,6 +73,7 @@ export class WebWindows {
 		if (!win) {
 			win = new WebClientWindow(deviceId, this.#nextId--, this.#deliver);
 			this.#windows.set(deviceId, win);
+			this.#named?.(win, true);
 		}
 		return win;
 	}
@@ -94,6 +98,7 @@ export class WebWindows {
 		if (!win) return;
 		this.#windows.delete(deviceId);
 		win.destroy();
+		this.#named?.(win, false);
 	}
 
 	destroyAll(): void {

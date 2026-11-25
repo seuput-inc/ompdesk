@@ -538,6 +538,8 @@ pub(super) fn highest_subagent_level<'a>(levels: impl Iterator<Item = &'a str>) 
 pub(super) struct Ctx {
     pub out: Out,
     pub pool: Rc<RefCell<Pool>>,
+    /// `IPC_EVENTS`: each channel's name by its key (`TAB_STATUS` → `rpc:tab-status`), for the pages' sender.
+    pub channels: Rc<HashMap<String, String>>,
 }
 
 impl Ctx {
@@ -550,10 +552,16 @@ impl Ctx {
     }
 
     /// A send to the windows `wins` (one object for all of them), as `forwardToWindow` did; main skips a destroyed one.
-    /// `channel` is the key of `IPC_EVENTS` (`TAB_STATUS`), which main resolves: the names stay spelled once.
+    /// `channel` is the key of `IPC_EVENTS` (`TAB_STATUS`), which main resolves: the names stay spelled once (main hands
+    /// the table at open for the pages' sender, `pages.rs`, which a parity test core runs beside main's sends).
     pub(super) fn send(&self, wins: Vec<i64>, channel: &str, data: Value) {
         if wins.is_empty() {
             return;
+        }
+        if crate::pages::shadow()
+            && let Some(name) = self.channels.get(channel)
+        {
+            crate::pages::send(&wins, name, &data);
         }
         self.push(&json!({"k": "send", "wins": wins, "channel": channel, "data": data}));
     }

@@ -28,6 +28,9 @@ import { WebWindows } from "./web/web-client-window";
 import { TestRouterHost } from "./web/ws-router-test-rig";
 import { withRemovalClaim } from "./worktree-removals";
 
+// The core this file starts also sends the pool's pushes itself (`pages.rs`), for the comparison at the end.
+process.env.OMPDESK_TEST_PAGES_SHADOW = "1";
+
 /** Minimal SidecarManager stand-in: an EventEmitter with lifecycle recording. */
 class FakeSidecar extends EventEmitter {
 	started = false;
@@ -4723,5 +4726,69 @@ describe("SidecarPool and a lost core", () => {
 		expect(sidecars[1]!.disposed).toBe(false);
 		expect(pool.releaseTab("tab-b", after)).toBe(true);
 		expect(pool.size).toBe(1);
+	});
+});
+
+describe("the core's page sends (C4, docs/rust-node-removal.md)", () => {
+	/** The pool's own pushes: each is an item main forwards today, and the core sends the same beside it. */
+	const POOL_CHANNELS = new Set<string>([IPC_EVENTS.TAB_STATUS, IPC_EVENTS.TAB_LIST_CHANGED, IPC_EVENTS.EXTENSION_UI]);
+
+	it("sends every window the pool's pushes main sends it, in the same order and the same JSON", async () => {
+		const { pool, sidecars } = fakePool();
+		const windows = [fakeWindow(901), fakeWindow(902)];
+		const fromCore = new Map<number, Array<{ channel: string; data: unknown }>>(
+			windows.map(w => [w.win.webContents.id, []]),
+		);
+		const fromMain = () =>
+			new Map(
+				windows.map(w => [
+					w.win.webContents.id,
+					w.sent
+						.filter(entry => POOL_CHANNELS.has(entry.channel))
+						.map(entry => ({ channel: entry.channel, data: JSON.parse(JSON.stringify(entry.data)) })),
+				]),
+			);
+		// The pool's calls are synchronous, so main has sent everything once the steps ran; the core's frames come over
+		// another connection and may trail them. Compared whenever either moves after that.
+		let ran = false;
+		const same = Promise.withResolvers<void>();
+		const check = () => {
+			if (!ran) return;
+			const main = fromMain();
+			if ([...main].every(([id, sent]) => JSON.stringify(fromCore.get(id)) === JSON.stringify(sent))) same.resolve();
+		};
+		for (const w of windows) {
+			const contents = w.win.webContents;
+			const send = contents.send;
+			contents.send = (channel: string, data: unknown) => {
+				send(channel, data);
+				check();
+			};
+		}
+		const off = core().on("page.push", data => {
+			const push = data as { win: number; ch: string; data: unknown };
+			fromCore.get(push.win)?.push({ channel: push.ch, data: push.data });
+			check();
+		});
+		try {
+			const [one, two] = windows as [FakeWindow, FakeWindow];
+			pool.acquire("/a", one.win, "tab-a");
+			pool.acquire("/b", one.win, "tab-b");
+			sidecars[0]!.emitStatus("ready");
+			pool.attachViewer(two.win, "tab-a");
+			sidecars[0]!.emitExtensionUi("ask-1");
+			sidecars[1]!.emitStatus("ready");
+			expect(pool.releaseTab("tab-b")).toBe(true);
+			pool.detachViewer(two.win, "tab-a");
+			ran = true;
+			check();
+			await same.promise;
+			const main = fromMain();
+			expect(new Set(main.get(901)!.map(entry => entry.channel))).toEqual(POOL_CHANNELS);
+			expect(main.get(902)!.length).toBeGreaterThan(0);
+			expect(fromCore).toEqual(main);
+		} finally {
+			off();
+		}
 	});
 });

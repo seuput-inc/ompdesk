@@ -315,12 +315,21 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    serve_as(input, output, registry, true).await
+    serve_as(input, output, registry, Peer::Main).await
 }
 
-/// `serve`, with `main` saying whether this connection is main's: the process-wide sinks (`disk::saves`) report on the
-/// latest connection of main's, never on another client's.
-pub async fn serve_as<R, W>(input: R, output: W, registry: Registry, main: bool) -> io::Result<()>
+/// Who is on the other end of a connection: main's (where the process-wide sinks, `disk::saves`, report: the latest
+/// connection of main's, never another client's), the core's owner (its stdio when main speaks elsewhere: the page
+/// pushes go there, `pages.rs`), or another client.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Peer {
+    Main,
+    Owner,
+    Other,
+}
+
+/// `serve` for `peer`.
+pub async fn serve_as<R, W>(input: R, output: W, registry: Registry, peer: Peer) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -332,10 +341,13 @@ where
         protocol: PROTOCOL,
     };
     let _ = frames.send(Frame::event("ready", &ready));
-    if main {
-        crate::disk::saves::attach(Events {
-            frames: frames.downgrade(),
-        });
+    let events = Events {
+        frames: frames.downgrade(),
+    };
+    match peer {
+        Peer::Main => crate::disk::saves::attach(events),
+        Peer::Owner => crate::pages::attach(events),
+        Peer::Other => {}
     }
     let mut reader = BufReader::new(input);
     let mut line = Vec::new();
