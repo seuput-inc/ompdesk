@@ -96,6 +96,7 @@ import {
 	Sheet,
 	Skeleton,
 	SkeletonRows,
+	Slider,
 	SortHeader,
 	Spinner,
 	StatusDot,
@@ -532,6 +533,7 @@ export default function StyleGuide() {
 	const [sheetOpen, setSheetOpen] = useState(false);
 	const [popoverOpen, setPopoverOpen] = useState(false);
 	const [switches, setSwitches] = useState({ a: true, b: false, c: true });
+	const [volume, setVolume] = useState(40);
 	const [query, setQuery] = useState("");
 	const [tab, setTab] = useState("changes");
 	const [segment, setSegment] = useState("plan");
@@ -983,6 +985,11 @@ export default function StyleGuide() {
 							<Radio name="styleguide-radio" />
 							Default branch
 						</label>
+					</Block>
+					<Block className="grid grid-cols-3 gap-6" label="Slider">
+						<Slider label="Volume" max={100} onChange={setVolume} step={5} value={volume} />
+						<Slider label="Tokens" max={20_000} min={1000} onChange={() => {}} step={1000} value={12_000} />
+						<Slider disabled label="Disabled" max={10} onChange={() => {}} value={3} />
 					</Block>
 					<Block
 						className="grid grid-cols-3 gap-6"

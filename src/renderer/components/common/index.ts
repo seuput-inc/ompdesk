@@ -97,6 +97,7 @@ export { SessionTitle, type SessionTitleProps } from "./SessionTitle";
 export { INLINE_DESCRIPTION_MAX, SettingInfo, splitDescription } from "./SettingInfo";
 export { Sheet, SheetHandle, type SheetPlacement, type SheetProps, type SheetSize } from "./Sheet";
 export { Skeleton, SkeletonRows } from "./Skeleton";
+export { Slider, type SliderProps } from "./Slider";
 export { type SortDirection, SortHeader, type SortHeaderProps } from "./SortHeader";
 export { Spinner, type SpinnerProps, type SpinnerSize } from "./Spinner";
 export { StatusDot, type StatusDotProps, type StatusTone } from "./StatusDot";

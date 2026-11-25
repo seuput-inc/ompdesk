@@ -178,6 +178,12 @@ html[data-input="touch"] :is(input:not([type="checkbox"], [type="radio"], [type=
 	min-height: 36px;
 }
 
+/* A range input has no ::after either: its box reaches the touch target while its track and thumb stay drawn at
+   their size, centred in it. */
+html[data-input="touch"] input[type="range"] {
+	height: var(--sc-touch-target);
+}
+
 html[data-input="touch"] :is([role="menuitem"], [role="menuitemcheckbox"], [role="option"], [role="treeitem"]),
 html[data-input="touch"]
 	:is(
