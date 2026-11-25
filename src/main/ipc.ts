@@ -1352,9 +1352,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	).unref();
 	deps.summaries.onChange(refreshCheckoutPeers);
 
+	/** Each tab's last finished reply (the `idle` outcome), for the notify triage's quiet bot turns. */
+	const lastReplies = new Map<string, string>();
 	sidecarPool.observeTabs(activity => {
 		autopilot.observeActivity(activity);
 		desktopSlot.observeActivity(activity);
+		if (activity.type === "idle" && activity.outcome) lastReplies.set(activity.tabId, activity.outcome.reply ?? "");
+		if (activity.type === "released") lastReplies.delete(activity.tabId);
 		if (activity.type === "busy" || activity.type === "idle" || activity.type === "released") refreshCheckoutPeers();
 	});
 
@@ -1967,6 +1971,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			}
 			notificationBatcher.notify(winId, notice);
 		},
+		lastTurn: tabId => ({ cwd: sidecarPool.sidecarOf(tabId)?.cwd, reply: lastReplies.get(tabId) }),
 	});
 	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, (caller, payload: IpcNotifyPayload) => notifyHandler(caller, payload));
 

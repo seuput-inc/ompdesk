@@ -8,6 +8,7 @@ import {
 	ownerPrompt,
 	parseBotContext,
 } from "../../resources/gui-bridge/modes/bots-core";
+import { NO_REPLY } from "../shared/bots";
 
 const context = (over: Partial<BotContext> = {}): BotContext => ({
 	bot: { id: "b1", name: "Scout", paused: false, folder: "/Users/me/.omp/bots/scout" },
@@ -35,6 +36,16 @@ describe("a bot chat's prompt section", () => {
 		expect(text).toContain("This is your first run");
 		expect(text).toContain("write SOUL.md in your folder");
 		expect(botSection(context().bot, "")).toContain("This is your first run");
+	});
+
+	it("keeps memory in MEMORY.md, one fact per line, and ends a turn with nothing to say in NO_REPLY", () => {
+		const text = botSection(context().bot, "I keep the owner's CI green.");
+		expect(text).toContain("one list line in MEMORY.md in your folder");
+		expect(text).toContain("forget a fact by deleting its line");
+		expect(text).toContain("read MEMORY.md when a turn needs it");
+		// The literal in the prompt is the contract's word the notify triage reads.
+		expect(text).toContain(`end your answer with a last line ${NO_REPLY}.`);
+		expect(text).not.toContain("Your memory is your folder");
 	});
 });
 

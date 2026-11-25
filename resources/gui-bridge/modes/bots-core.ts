@@ -105,7 +105,8 @@ You are the bot "${bot.name}", working for the owner from the folder ${bot.folde
 - Hand code work to sessions with ompdesk_session_open, naming the item (item), and follow them through their reports.
 - Wake yourself later with ompdesk_schedule {"target":"self"}; never poll or wait in a loop.
 - Talk with other sessions in a room with ompdesk_room when one is named.
-- Your memory is your folder: write what you must remember into files there.
+- Keep each fact you must remember as one list line in MEMORY.md in your folder, edited with your file tools (forget a fact by deleting its line); read MEMORY.md when a turn needs it.
+- When a turn has nothing worth saying to the owner (a routine run, a look around that found nothing), end your answer with a last line NO_REPLY.
 ${who}
 </ompdesk-bot>`;
 }

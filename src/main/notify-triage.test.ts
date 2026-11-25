@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { JUDGE_ASSIST_NEEDS_USER } from "../../resources/gui-bridge/modes/judge-assist-contracts";
+import type { Bot } from "../shared/bots";
 import type { IpcNotifyPayload } from "../shared/ipc-types";
+import { setBotsState } from "./bots";
 import { type AdmitNotification, type BridgeAsk, createNotifyHandler, type NotifyCaller } from "./notify-triage";
 import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 import type { ClientWindow } from "./web/client-window";
@@ -32,6 +34,7 @@ interface World {
 	enabled: { current: boolean };
 	shared: Set<string>;
 	clock: { now: number };
+	turns: Map<string, { cwd?: string; reply?: string }>;
 	notify: (callerArg: NotifyCaller, payload: IpcNotifyPayload) => Promise<void>;
 }
 
@@ -43,6 +46,7 @@ function build(answer: BridgeAsk = async () => ({ needsUser: true })): World {
 	const enabled = { current: true };
 	const shared = new Set<string>();
 	const clock = { now: 1_000 };
+	const turns = new Map<string, { cwd?: string; reply?: string }>();
 	const notify = createNotifyHandler({
 		admit,
 		now: () => clock.now,
@@ -51,8 +55,9 @@ function build(answer: BridgeAsk = async () => ({ needsUser: true })): World {
 		bridgeFor,
 		needsYouTitle: title => `Needs input · ${title}`,
 		deliver: (_win, winId, notice) => void delivered.push({ winId, notice }),
+		lastTurn: tabId => turns.get(tabId),
 	});
-	return { delivered, admit, ask, bridgeFor, enabled, shared, clock, notify };
+	return { delivered, admit, ask, bridgeFor, enabled, shared, clock, turns, notify };
 }
 
 let fixture: ShellPolicyFixture;
@@ -250,5 +255,45 @@ describe("a payload without a title", () => {
 		const world = build();
 		await world.notify(caller(WIN_1), {} as IpcNotifyPayload);
 		expect(world.delivered).toEqual([]);
+	});
+});
+
+describe("a bot chat's quiet turn", () => {
+	const folder = "/Users/me/.omp/bots/scout";
+	const bot: Bot = {
+		id: "b1",
+		name: "Scout",
+		folder,
+		home: null,
+		sessions: [],
+		paused: false,
+		model: null,
+		autoApprove: false,
+		reach: [],
+		staleDays: 7,
+		lookAround: null,
+		createdAt: "2026-11-25T00:00:00.000Z",
+	};
+	beforeEach(() => setBotsState({ bots: [bot], items: [] }));
+	afterEach(() => setBotsState({ bots: [], items: [] }));
+
+	it("notifies nothing, not even a dedupe slot", async () => {
+		const world = build();
+		world.turns.set("t1", { cwd: folder, reply: "Looked around: nothing new.\n\n**NO_REPLY**" });
+		await world.notify(caller(WIN_1), completion());
+		expect(world.admit).not.toHaveBeenCalled();
+		expect(world.delivered).toEqual([]);
+	});
+
+	it("still notifies a quiet answer outside a bot folder, and a bot's answer that is not quiet", async () => {
+		const world = build(async () => ({ needsUser: false }));
+		world.turns.set("t1", { cwd: "/Users/me/code/app", reply: "NO_REPLY" });
+		world.turns.set("t2", { cwd: folder, reply: "CI is red again: NO_REPLY was not an option." });
+		await world.notify(caller(WIN_1), completion("t1"));
+		await world.notify(caller(WIN_2), completion("t2"));
+		expect(world.delivered).toEqual([
+			{ winId: 1, notice: completion("t1") },
+			{ winId: 2, notice: completion("t2") },
+		]);
 	});
 });

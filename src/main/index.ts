@@ -139,6 +139,7 @@ import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
 import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
+import { quietBotTurn } from "./notify-triage";
 import { followSetupState } from "./omp-availability";
 import { creditSpendRun } from "./omp-launch";
 import { OMP_PIDS_FILE, OmpProcesses } from "./omp-processes";
@@ -2492,7 +2493,13 @@ app.whenReady().then(async () => {
 	// Uploads expire on their own whether or not Mobile web serves: a paired computer's attached files land there too.
 	void webHost.keepUploadsSwept();
 	// Paired phones hear of finished turns, failures and asks through Web Push (web/web-push-notifier.ts).
-	sidecarPool.observeTabs(activity => webHost?.tabActivity(activity));
+	sidecarPool.observeTabs(activity => {
+		// A bot chat's NO_REPLY turn is no news on a phone either.
+		const quiet =
+			activity.type === "idle" &&
+			quietBotTurn({ cwd: sidecarPool.sidecarOf(activity.tabId)?.cwd, reply: activity.outcome?.reply });
+		if (!quiet) webHost?.tabActivity(activity);
+	});
 	webTabNotice.current = (tabId, notice) => webHost?.tabNotice(tabId, notice);
 	webHost.devices.onRevoked(deviceId => webTabLayouts.drop(deviceId));
 	const host = webHost;
