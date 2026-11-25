@@ -11,7 +11,7 @@ const E = IPC_EVENTS;
 
 /** A host with its own prefs and one device record, as `PREFS_*` and `web:device.uiPrefs.*` answer them. */
 function rig(options: { host?: Record<string, unknown>; device?: Record<string, unknown> } = {}) {
-	const host: Record<string, unknown> = { language: "ko", themeName: "light", ...options.host };
+	const host: Record<string, unknown> = { replyLanguage: "Korean", themeName: "light", ...options.host };
 	const device: { prefs: Record<string, unknown>; failNext: boolean } = {
 		prefs: { ...options.device },
 		failNext: false,
@@ -84,10 +84,19 @@ describe("a web page's device preferences", () => {
 
 	it("sends a key that is not appearance to the host, and leaves the device's record alone", async () => {
 		const { web, host, device, calls } = rig();
-		await web.api.prefs.set("language", "en");
-		expect(host.language).toBe("en");
+		await web.api.prefs.set("replyLanguage", "English");
+		expect(host.replyLanguage).toBe("English");
 		expect(device.prefs).toEqual({});
 		expect(channelsCalled(calls)).not.toContain(WEB_DEVICE_CHANNELS.UI_PREFS_SET);
+	});
+
+	it("keeps the phone's interface language on the phone: the computer's stays as it was", async () => {
+		const { web, host, device, calls } = rig({ host: { language: "ko" } });
+		await web.api.prefs.set("language", "en");
+		expect(device.prefs).toEqual({ language: "en" });
+		expect(host.language).toBe("ko");
+		expect(channelsCalled(calls)).not.toContain(C.PREFS_SET);
+		expect(await web.api.prefs.get("language")).toBe("en");
 	});
 
 	it("keeps the phone's theme when the computer's changes", async () => {
@@ -96,7 +105,7 @@ describe("a web page's device preferences", () => {
 		host.fontSize = 20;
 		expect(await web.api.prefs.get("themeName")).toBe("dark");
 		const all = (await web.api.prefs.get()) as Record<string, unknown>;
-		expect(all).toMatchObject({ themeName: "dark", language: "ko" });
+		expect(all).toMatchObject({ themeName: "dark", replyLanguage: "Korean" });
 		expect(all.fontSize).toBeUndefined();
 	});
 
@@ -104,7 +113,7 @@ describe("a web page's device preferences", () => {
 		const { web } = rig({ host: { themeName: "light", fontSize: 19, compactDensity: true } });
 		expect(await web.api.prefs.get("themeName")).toBeUndefined();
 		const all = (await web.api.prefs.get()) as Record<string, unknown>;
-		expect(all).toEqual({ language: "ko" });
+		expect(all).toEqual({ replyLanguage: "Korean" });
 	});
 
 	it("ignores the host's PREFS_CHANGED for device-local keys and passes the others", async () => {
@@ -115,7 +124,8 @@ describe("a web page's device preferences", () => {
 		hostPush({ key: "displayPreferences.showTokenUsage" });
 		hostPush({ key: "gui.panelWidth" });
 		hostPush({ key: "language" });
-		expect(seen).toEqual(["language"]);
+		hostPush({ key: "replyLanguage" });
+		expect(seen).toEqual(["replyLanguage"]);
 	});
 
 	it("keeps two quick writes and nests dotted keys when the whole store is read", async () => {

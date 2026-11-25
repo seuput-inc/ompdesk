@@ -10,6 +10,8 @@
 
 /** Exact keys (dotted paths as `prefs.set` takes them). */
 export const DEVICE_LOCAL_PREF_KEYS: readonly string[] = [
+	// The interface's language: a phone set to Korean never turns the desktop Korean (Orca's per-device UI language).
+	"language",
 	// Theme.
 	"theme",
 	"themeName",
