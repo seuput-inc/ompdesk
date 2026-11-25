@@ -6108,6 +6108,8 @@ export const ko: Record<string, string> = {
 	"schedules.field.triggerFixed": "저장해도 이 시작 조건은 그대로 유지돼요.",
 	"schedules.exitCode": "omp가 종료 코드 {code}로 끝났어요",
 	"schedules.showLog": "로그 보기",
+	"schedules.repeats": "×{count}",
+	"schedules.resend": "다시 보내기",
 	"schedules.hideLog": "로그 숨기기",
 	"schedules.logLoading": "로그를 불러오는 중…",
 	"schedules.logEmpty": "이 실행은 출력이 없어요.",

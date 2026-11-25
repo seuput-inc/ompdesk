@@ -151,6 +151,106 @@ fn launch(call: &Call) -> Result<Reply, Fault> {
     Reply::json(&())
 }
 
+#[derive(Serialize)]
+struct PrecheckSpec<'a> {
+    file: &'a str,
+    args: &'a [String],
+    shell: bool,
+}
+
+/// What `pipe` printed, the first `max` bytes of it; read to its end so the command never blocks on a full pipe.
+async fn kept(pipe: Option<impl tokio::io::AsyncRead + Unpin>, max: usize) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut kept = Vec::new();
+    let Some(mut pipe) = pipe else {
+        return kept;
+    };
+    let mut chunk = [0u8; 8192];
+    while let Ok(read @ 1..) = pipe.read(&mut chunk).await {
+        let room = max.saturating_sub(kept.len());
+        kept.extend_from_slice(&chunk[..read.min(room)]);
+    }
+    kept
+}
+
+/// A schedule's precheck: `shell` (its program, its arguments, then the command) in `cwd`, under the supervisor as a
+/// run's omp is, so a timeout, the app's quit or a crash of this process ends the command's whole tree. Yes when it
+/// exited 0 within `timeout`; either way what it printed (the start of it), or why it could not run.
+pub(super) async fn precheck(
+    shell: &Runner,
+    command: &str,
+    cwd: &str,
+    timeout: std::time::Duration,
+    max_bytes: usize,
+) -> (bool, String) {
+    let mut args = shell.args.clone();
+    args.push(command.to_owned());
+    let spec = PrecheckSpec {
+        file: &shell.bin,
+        args: &args,
+        shell: false,
+    };
+    let Ok(spec) = serde_json::to_string(&spec) else {
+        return (false, "the precheck could not be written down".into());
+    };
+    let supervisor = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => return (false, format!("the supervisor cannot be found: {error}")),
+    };
+    let mut started = Command::new(&supervisor);
+    started
+        .arg("--supervise")
+        .env_clear()
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    shell.environment(&mut started, &[(SPEC_ENV, &spec)]);
+    #[cfg(unix)]
+    crate::sys::own_group(started.as_std_mut());
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        started.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = match started.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return (
+                false,
+                format!("spawn {} {}", supervisor.display(), uv_code(&error)),
+            );
+        }
+    };
+    // Held for the whole check: the supervisor ends the command's tree when it closes.
+    let stdin = child.stdin.take();
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let ran = tokio::time::timeout(timeout, async {
+        tokio::join!(
+            kept(stdout, max_bytes),
+            kept(stderr, max_bytes),
+            child.wait()
+        )
+    })
+    .await;
+    drop(stdin);
+    match ran {
+        Ok((out, err, status)) => {
+            let said = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&out),
+                String::from_utf8_lossy(&err)
+            );
+            let code = status.ok().and_then(|status| status.code());
+            (code == Some(0), said.trim().to_owned())
+        }
+        Err(_) => {
+            let _ = child.wait().await;
+            (false, format!("it ran past {} s", timeout.as_secs()))
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct StopParams {
     run: String,

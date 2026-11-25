@@ -1,7 +1,7 @@
 /**
  * Scheduled runs (Settings › Schedules): a prompt run as stock `omp -p` in a
- * project folder on a timer, by OMPdesk's core process, only while OMPdesk is open. Times missed
- * while the app was closed are skipped, never caught up. Stock omp has no
+ * project folder on a timer, by OMPdesk's core process, only while OMPdesk is open. A start missed while the app was
+ * closed runs once at launch when it is under an hour old, else it is recorded as missed. Stock omp has no
  * scheduler, so this one is GUI-owned; each run is one ordinary print-mode
  * session that stock saves like any other. A schedule with `wakeSession` is a session's own wake-up instead: its
  * start delivers the prompt into that existing session (a mail that starts a turn) and spawns no omp.
@@ -82,6 +82,12 @@ export interface ScheduleDraft {
 	 * instead of running it as a fresh `omp -p`. `model` and `autoApprove` mean nothing then. Never set by a paired device.
 	 */
 	wakeSession?: string;
+	/**
+	 * A shell command run in `cwd` before every start, 60 s at most: exit 0 starts the run, anything else records it
+	 * as skipped with the start of its output. In a save: absent keeps the schedule's, empty or null removes it. This
+	 * computer's own schedules only (refused from a paired device).
+	 */
+	precheck?: string | null;
 }
 
 export interface Schedule extends ScheduleDraft {
@@ -107,6 +113,12 @@ export interface ScheduleRun {
 	error: string | null;
 	/** What fired an event run, one line per event (English), as its prompt was told; absent otherwise. */
 	detail?: string;
+	/** The same skip came this many times in a row; this row is the newest of them. Absent = once. */
+	repeats?: number;
+	/** The run failed before it launched (its files, its omp, the wake-up refused): it may be sent again once. */
+	notStarted?: boolean;
+	/** The run `resend` started for it: its one "Send again" is spent. */
+	resentAs?: string;
 }
 
 export interface SchedulesState {
@@ -126,7 +138,9 @@ export type SchedulesRequest =
 	| { action: "setEnabled"; id: string; enabled: boolean }
 	| { action: "setPaused"; paused: boolean }
 	| { action: "runNow"; id: string }
-	| { action: "stop"; runId: string };
+	| { action: "stop"; runId: string }
+	/** Starts a run that could not start once more (`notStarted`); a second ask starts nothing. This computer only. */
+	| { action: "resend"; runId: string };
 
 /** A new schedule's id as the save that made it reported it, with the state after it. */
 export interface ScheduleCreated {

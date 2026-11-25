@@ -287,6 +287,42 @@ describe("SchedulesSection", () => {
 		expect(failed?.querySelector("[data-schedule-log]")?.textContent).toContain("All tidy.");
 	});
 
+	it("folds a repeated skip into one row, and sends a run that could not start again only until it was", async () => {
+		const base = {
+			scheduleId: "s1",
+			trigger: "schedule" as const,
+			startedAt: "2026-10-15T09:30:00.000Z",
+			endedAt: "2026-10-15T09:30:00.000Z",
+			exitCode: null,
+		};
+		state = {
+			paused: false,
+			schedules: [SCHEDULE],
+			runs: [
+				{ ...base, id: "r3", status: "skipped", error: "Its precheck said no: not ready", repeats: 4 },
+				{ ...base, id: "r2", status: "failed", error: "Project folder not found: /work/app", notStarted: true },
+				{
+					...base,
+					id: "r1",
+					status: "failed",
+					error: "Project folder not found",
+					notStarted: true,
+					resentAs: "r2",
+				},
+			],
+			nextRuns: { s1: null },
+		};
+		await mount();
+		const folded = document.body.querySelector('[data-schedule-run-row="r3"]');
+		expect(folded?.querySelector("[data-schedule-run-repeats]")?.textContent).toBe("×4");
+		const spent = document.body.querySelector('[data-schedule-run-row="r1"]');
+		expect(spent?.textContent).not.toContain("Send again");
+		const failed = document.body.querySelector('[data-schedule-run-row="r2"]');
+		const sendAgain = [...(failed?.querySelectorAll("button") ?? [])].find(item => item.textContent === "Send again");
+		await click(sendAgain ?? null);
+		expect(command).toHaveBeenCalledWith({ action: "resend", runId: "r2" }, undefined);
+	});
+
 	it("offers a retry when the schedules cannot load", async () => {
 		failGet = true;
 		await mount();

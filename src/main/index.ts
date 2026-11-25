@@ -123,6 +123,7 @@ import { installHangWatchdog, markMainStep } from "./hang-watchdog";
 import { getMainLanguage, mainT } from "./i18n";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
+import { shellRunner } from "./local/git/exec";
 import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
@@ -866,6 +867,7 @@ app.whenReady().then(async () => {
 	const autopilotRef: { current: Autopilot | null } = { current: null };
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
+	const sessionNote: IpcDeps["sessionNote"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
 	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
@@ -1997,6 +1999,12 @@ app.whenReady().then(async () => {
 			if (!sessionWake.current) throw new Error("OMPdesk is still starting");
 			return sessionWake.current(schedule, runId);
 		},
+		note: (session, text) => {
+			void sessionNote
+				.current?.(session, text)
+				.catch(error => console.error("[schedules] note not delivered:", error));
+		},
+		shell: shellRunner,
 		...(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS
 			? { tickMs: Number(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS) }
 			: {}),
@@ -2266,6 +2274,7 @@ app.whenReady().then(async () => {
 	powerMonitor.on("resume", () => {
 		connectivity.resume();
 		devices.wake("resume");
+		scheduleService?.resumed();
 	});
 	powerMonitor.on("unlock-screen", () => devices.wake("unlock"));
 	app.on("browser-window-focus", () => devices.wake("focus"));
@@ -2386,6 +2395,7 @@ app.whenReady().then(async () => {
 		summaries: sessionSummaries,
 		webTabNotice,
 		sessionWake,
+		sessionNote,
 		tabReport,
 		agentOpening,
 		webPages: () => webHost?.windows.all() ?? [],

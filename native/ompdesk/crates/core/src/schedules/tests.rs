@@ -33,6 +33,30 @@ fn as_fenced(launch: &Value) -> Value {
     launch
 }
 
+/// Run fields the core added after the TypeScript: left out of what is held to the capture, and pinned by the
+/// hand-written tests below.
+const CORE_RUN_FIELDS: [&str; 4] = ["notStarted", "repeats", "resentAs", "usage"];
+
+/// A state or a journal (`pretty`) as the TypeScript would have had it: without `CORE_RUN_FIELDS`.
+fn ts_view(text: &str, pretty: bool) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(text) else {
+        return text.to_owned();
+    };
+    let mut stripped = false;
+    if let Some(runs) = value.get_mut("runs").and_then(Value::as_array_mut) {
+        for run in runs.iter_mut().filter_map(Value::as_object_mut) {
+            for field in CORE_RUN_FIELDS {
+                stripped |= run.shift_remove(field).is_some();
+            }
+        }
+    }
+    match (stripped, pretty) {
+        (false, _) => text.to_owned(),
+        (true, true) => serde_json::to_string_pretty(&value).unwrap(),
+        (true, false) => value.to_string(),
+    }
+}
+
 fn limits() -> Limits {
     Limits {
         runs_kept: 200,
@@ -79,6 +103,9 @@ struct Play {
     names: HashMap<String, String>,
     /// The first schedule's webhook key as it last was, which the capture wrote as `<key>`.
     key: String,
+    /// Prechecks the fake shell was asked to run (it says yes to `true` only), and quiet notes main was asked to send.
+    prechecks: Vec<String>,
+    notes: Vec<(String, String)>,
 }
 
 impl Play {
@@ -98,6 +125,8 @@ impl Play {
             runs: Vec::new(),
             names: HashMap::new(),
             key: String::new(),
+            prechecks: Vec::new(),
+            notes: Vec::new(),
         };
         play.engine.load(None, start);
         play.settle();
@@ -144,6 +173,12 @@ impl Play {
                     // The fake run ends as a stopped supervisor does.
                     Out::Stop { run } => self.engine.ended(&run, Some(130), None, self.now),
                     Out::Closed { journal } => self.journals.push(journal),
+                    Out::Precheck { ask, command, .. } => {
+                        let ok = command == "true";
+                        self.prechecks.push(command);
+                        self.engine.prechecked(ask, ok, "not today\nno", self.now);
+                    }
+                    Out::Note { session, text } => self.notes.push((session, text)),
                     Out::Changed { .. }
                     | Out::WakeLog { .. }
                     | Out::RemovePrompt { .. }
@@ -378,7 +413,7 @@ fn does_what_the_typescript_service_did() {
             play.track();
             // In the order the capture named things: a journal a step wrote, then its error, then its state.
             for journal in play.journals.clone().iter().skip(journals) {
-                let journal = play.normal(journal);
+                let journal = play.normal(&ts_view(journal, true));
                 same(
                     &journal,
                     scenario["journals"][journals].as_str().unwrap(),
@@ -395,7 +430,11 @@ fn does_what_the_typescript_service_did() {
             assert_eq!(error.as_deref(), record["error"].as_str(), "{at}");
             assert_eq!(result.as_ref(), record.get("result"), "{at}");
             let state = play.engine.state().to_string();
-            same(&play.normal(&state), &record["state"].to_string(), &at);
+            same(
+                &play.normal(&ts_view(&state, false)),
+                &record["state"].to_string(),
+                &at,
+            );
             assert_eq!(
                 play.launches.len() as u64,
                 record["launched"].as_u64().unwrap(),
@@ -586,4 +625,279 @@ fn nothing_of_the_journal_lands_after_its_close() {
         );
         std::fs::remove_dir_all(&dir).unwrap_or_else(|error| panic!("round {round}: {error}"));
     }
+}
+
+const HOUR: i64 = 3_600_000;
+
+fn draft(frequency: Value) -> Value {
+    serde_json::json!({
+        "name": "Tidy", "prompt": "Look", "cwd": "/work", "frequency": frequency,
+        "model": null, "autoApprove": false, "enabled": true,
+    })
+}
+
+impl Play {
+    /// OMPdesk closed now and opened again `away` later, as a launch opens the schedules: load, then catch up.
+    fn relaunch(&mut self, away: i64) {
+        self.engine.close(self.now);
+        self.settle();
+        let journal = self.journals.last().unwrap().clone();
+        self.now += away;
+        self.next_tick = self.now + TICK_MS;
+        self.engine = engine(std::sync::Arc::clone(&self.ids));
+        self.engine.load(Some(&journal), self.now);
+        self.engine.catch_up(self.now);
+        self.settle();
+    }
+
+    fn run(&mut self, request: Value) -> Result<Commanded, Fault> {
+        let commanded = self.engine.command(&request, None, self.now);
+        self.settle();
+        commanded
+    }
+
+    fn end_last(&mut self, code: Option<i64>, error: Option<&str>) {
+        let run = self.launches.last().unwrap().0.clone();
+        self.engine
+            .ended(&run, code, error.map(str::to_owned), self.now);
+        self.settle();
+    }
+
+    fn runs(&self) -> Vec<Value> {
+        self.engine.state()["runs"].as_array().unwrap().clone()
+    }
+}
+
+#[test]
+fn a_start_missed_while_closed_runs_once_within_the_grace_and_is_recorded_past_it() {
+    let mut play = Play::new(0);
+    play.engine
+        .create(
+            &draft(serde_json::json!({"kind": "interval", "minutes": 60})),
+            None,
+            0,
+        )
+        .unwrap();
+    play.settle();
+    // Due at one hour, closed until half an hour after: it starts at the first check after the launch.
+    play.relaunch(HOUR + HOUR / 2);
+    assert!(play.launches.is_empty());
+    play.step(&serde_json::json!({"op": "advance", "ms": TICK_MS}), &[]);
+    assert_eq!(play.launches.len(), 1);
+    play.end_last(Some(0), None);
+    // Closed for a day now: recorded once as missed, nothing runs at once, and a launch after it records nothing more.
+    play.relaunch(24 * HOUR);
+    let runs = play.runs();
+    assert_eq!(runs[0]["status"], "skipped");
+    assert!(
+        runs[0]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Missed while OMPdesk was closed (due ")
+    );
+    play.step(&serde_json::json!({"op": "advance", "ms": TICK_MS}), &[]);
+    assert_eq!(play.launches.len(), 1);
+    play.relaunch(60_000);
+    assert_eq!(play.runs().len(), runs.len());
+}
+
+#[test]
+fn a_one_time_start_missed_past_the_grace_is_spent() {
+    let mut play = Play::new(0);
+    let at = rules_iso(HOUR);
+    play.engine
+        .create(
+            &draft(serde_json::json!({"kind": "once", "at": at})),
+            None,
+            0,
+        )
+        .unwrap();
+    play.settle();
+    play.relaunch(3 * HOUR);
+    let state = play.engine.state();
+    assert_eq!(state["schedules"][0]["enabled"], false);
+    assert_eq!(state["runs"][0]["status"], "skipped");
+    play.step(&serde_json::json!({"op": "advance", "ms": HOUR}), &[]);
+    assert!(play.launches.is_empty());
+}
+
+fn rules_iso(ms: i64) -> String {
+    super::rules::iso(ms)
+}
+
+#[test]
+fn just_woken_timed_starts_wait_for_the_settle_then_start() {
+    let mut play = Play::new(0);
+    play.engine
+        .create(
+            &draft(serde_json::json!({"kind": "interval", "minutes": 60})),
+            None,
+            0,
+        )
+        .unwrap();
+    play.settle();
+    play.now = HOUR;
+    play.engine.resumed(HOUR);
+    play.engine.tick(HOUR + TICK_MS);
+    play.settle();
+    assert!(play.launches.is_empty(), "held while the computer settles");
+    assert!(play.runs().is_empty(), "never recorded as skipped");
+    play.engine.tick(HOUR + 2 * 60_000);
+    play.settle();
+    assert_eq!(play.launches.len(), 1);
+}
+
+#[test]
+fn a_precheck_decides_the_start_and_a_repeated_no_folds_into_one_row() {
+    let mut play = Play::new(0);
+    let mut routine =
+        draft(serde_json::json!({"kind": "event", "event": {"source": "files", "path": "/work"}}));
+    routine["precheck"] = "test -f /work/ready".into();
+    let id = play.engine.create(&routine, None, 0).unwrap();
+    play.settle();
+    assert!(play.engine.fire(&id, "a.ts changed", 0));
+    play.settle();
+    assert!(play.engine.fire(&id, "b.ts changed", 0));
+    play.settle();
+    assert_eq!(
+        play.prechecks,
+        ["test -f /work/ready", "test -f /work/ready"]
+    );
+    assert!(play.launches.is_empty());
+    let runs = play.runs();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["error"], "Its precheck said no: not today no");
+    assert_eq!(runs[0]["repeats"], 2);
+    routine["precheck"] = "true".into();
+    let save = serde_json::json!({"action": "save", "id": id, "draft": routine});
+    assert!(play.run(save).is_ok());
+    assert!(play.engine.fire(&id, "c.ts changed", 0));
+    play.settle();
+    assert_eq!(play.launches.len(), 1);
+    // A paired device never sets a shell command that runs on this computer.
+    assert!(play.engine.create(&routine, Some("dev-a"), 0).is_err());
+}
+
+#[test]
+fn a_routines_test_replays_its_last_event_fenced() {
+    let mut play = Play::new(0);
+    let id = play
+        .engine
+        .create(
+            &draft(
+                serde_json::json!({"kind": "event", "event": {"source": "files", "path": "/work"}}),
+            ),
+            None,
+            0,
+        )
+        .unwrap();
+    play.settle();
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": id}))
+            .is_ok()
+    );
+    assert!(
+        play.launches[0]
+            .1
+            .ends_with("Test run:\nA test run: no event fired")
+    );
+    play.end_last(Some(0), None);
+    assert!(play.engine.fire(&id, "Ann pushed `main`", 0));
+    play.settle();
+    play.end_last(Some(0), None);
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": id}))
+            .is_ok()
+    );
+    let prompt = &play.launches[2].1;
+    assert!(prompt.contains("A test run, replaying its last event:\n"));
+    assert!(prompt.contains("```text\nAnn pushed `main`\n```"));
+    assert_eq!(play.runs()[0]["trigger"], "manual");
+}
+
+#[test]
+fn a_run_that_could_not_start_is_sent_again_once_whoever_asks() {
+    let mut play = Play::new(0);
+    let mut gone = draft(serde_json::json!({"kind": "interval", "minutes": 60}));
+    gone["cwd"] = "/work/gone".into();
+    let id = play.engine.create(&gone, None, 0).unwrap();
+    play.settle();
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": id}))
+            .is_ok()
+    );
+    let failed = play.runs()[0].clone();
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["notStarted"], true);
+    let run = failed["id"].as_str().unwrap().to_owned();
+    let resend = serde_json::json!({"action": "resend", "runId": run});
+    // Another computer cannot spend it; this one can, once.
+    assert!(play.engine.command(&resend, Some("dev-a"), 0).is_err());
+    assert!(play.run(resend.clone()).is_ok());
+    assert_eq!(play.runs().len(), 2);
+    let original = play
+        .runs()
+        .into_iter()
+        .find(|r| r["id"] == run.as_str())
+        .unwrap();
+    let sent = original["resentAs"].as_str().unwrap().to_owned();
+    assert_ne!(sent, run);
+    assert!(play.run(resend.clone()).is_ok());
+    play.relaunch(60_000);
+    assert!(play.run(resend).is_ok());
+    assert_eq!(
+        play.runs()
+            .iter()
+            .filter(|r| r["scheduleId"] == id.as_str())
+            .count(),
+        2
+    );
+    // A run that started is never sent again.
+    play.engine
+        .create(
+            &draft(serde_json::json!({"kind": "interval", "minutes": 60})),
+            None,
+            0,
+        )
+        .unwrap();
+    let ok = play.engine.state()["schedules"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": ok}))
+            .is_ok()
+    );
+    play.end_last(Some(1), None);
+    let started = play.runs()[0]["id"].as_str().unwrap().to_owned();
+    assert!(
+        play.run(serde_json::json!({"action": "resend", "runId": started}))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_wake_up_that_fails_three_times_in_a_row_turns_itself_off_and_tells_its_session() {
+    let mut play = Play::new(0);
+    let mut wake = draft(serde_json::json!({"kind": "interval", "minutes": 60}));
+    wake["wakeSession"] = "/sessions/a.jsonl".into();
+    let id = play.engine.create(&wake, None, 0).unwrap();
+    play.settle();
+    for round in 0..3 {
+        assert!(
+            play.run(serde_json::json!({"action": "runNow", "id": id}))
+                .is_ok(),
+            "{round}"
+        );
+        play.end_last(None, Some("The turn ended with an error"));
+    }
+    let state = play.engine.state();
+    assert_eq!(state["schedules"][0]["enabled"], false);
+    assert_eq!(
+        state["runs"][0]["error"],
+        "Turned off after 3 failed runs in a row"
+    );
+    assert_eq!(play.notes.len(), 1);
+    assert_eq!(play.notes[0].0, "/sessions/a.jsonl");
+    assert!(play.notes[0].1.contains("The turn ended with an error"));
 }

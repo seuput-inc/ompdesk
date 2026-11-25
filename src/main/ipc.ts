@@ -324,6 +324,8 @@ export interface IpcDeps {
 	webTabNotice: { current: ((tabId: string, notice: AutopilotNotice) => void) | null };
 	/** Set once the control tools exist: delivers a session's own scheduled wake-up and follows its turn (`ScheduleService`'s `wake`). */
 	sessionWake: { current: ((schedule: Schedule, runId: string) => Promise<RunProcess>) | null };
+	/** Set once the control tools exist: a quiet note (no turn) into a session file on this computer (`ScheduleService`'s `note`). */
+	sessionNote: { current: ((session: string, text: string) => Promise<void>) | null };
 	/** Set once the control tools exist: tells a tab's opener what main saw happen to the tab (`AgentControlRuntime.reportFor`). */
 	tabReport: { current: ((tabId: string, report: { kind: "blocked"; text: string; id: string }) => void) | null };
 	/** Set once the control tools exist: an agent is opening a session that has not taken its first message (`AgentControlRuntime.opening`). */

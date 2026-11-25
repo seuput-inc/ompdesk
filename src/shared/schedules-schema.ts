@@ -53,4 +53,7 @@ export const ScheduleRunSchema: z.ZodType<ScheduleRun> = z.object({
 	exitCode: z.number().nullable(),
 	error: z.string().nullable(),
 	detail: z.string().optional(),
+	repeats: z.number().optional(),
+	notStarted: z.boolean().optional(),
+	resentAs: z.string().optional(),
 });

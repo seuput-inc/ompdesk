@@ -6117,6 +6117,8 @@ export const en: Record<string, string> = {
 	"schedules.field.triggerFixed": "Saving keeps this trigger as it is.",
 	"schedules.exitCode": "omp exited with code {code}",
 	"schedules.showLog": "Show log",
+	"schedules.repeats": "×{count}",
+	"schedules.resend": "Send again",
 	"schedules.hideLog": "Hide log",
 	"schedules.logLoading": "Loading log…",
 	"schedules.logEmpty": "This run wrote nothing.",

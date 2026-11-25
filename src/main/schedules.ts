@@ -32,6 +32,7 @@ import {
 	type SchedulesState,
 } from "../shared/schedules";
 import { CoreError, core } from "./core/process";
+import type { CoreRunner } from "./local/git/exec";
 import { nativeBinPath } from "./native-bin";
 import { OMP_TELEMETRY_OFF, type OmpResolution, ompPathEnv } from "./omp-runtime";
 import type { RoutineHost } from "./routines/ports";
@@ -88,6 +89,13 @@ export interface ScheduleServiceOptions {
 	 * `tickMs` and says the time with each request. Absent: the core's own timer and the system's clock.
 	 */
 	now?: () => number;
+	/**
+	 * A quiet note (no turn) into the session file `session` on this computer: a wake-up that turned itself off after
+	 * failing again and again. Absent: the note is dropped (the run history says it anyway).
+	 */
+	note?: (session: string, text: string) => void;
+	/** How a schedule's precheck command runs (a shell and its `-c`, the login environment); absent: prechecks say no. */
+	shell?: () => Promise<CoreRunner>;
 }
 
 /** What a webhook call came to (`ScheduleService.webhook`): started or kept for after the running one, or why not. */
@@ -215,6 +223,12 @@ export class ScheduleService {
 				"schedules.routineLog",
 				mine<{ message: string }>(({ message }) => routines?.log(message)),
 			),
+			host.on(
+				"schedules.note",
+				mine<{ session: string; text: string }>(({ session, text }) => {
+					if (!this.#disposed) this.#options.note?.(session, text);
+				}),
+			),
 		];
 		await this.#opening();
 	}
@@ -235,7 +249,10 @@ export class ScheduleService {
 
 	async #open(): Promise<void> {
 		const { file, logDir, tickMs = SCHEDULE_TICK_MS, minuteMs = 60_000, now } = this.#options;
+		// A shell that cannot be read leaves prechecks saying no; the schedules still open.
+		const shell = await this.#options.shell?.().catch(() => undefined);
 		await this.#call("schedules.open", {
+			...(shell ? { shell } : {}),
 			file,
 			logDir,
 			tickMs,
@@ -381,6 +398,12 @@ export class ScheduleService {
 	async prune(now: number): Promise<void> {
 		if (this.#disposed) return;
 		await this.#send("schedules.prune", { at: now });
+	}
+
+	/** The computer woke from sleep: the core holds timed starts for a short settle, then starts what came due. */
+	resumed(): void {
+		if (this.#disposed || !this.#started) return;
+		void this.#send("schedules.resumed").catch(() => undefined);
 	}
 
 	/**

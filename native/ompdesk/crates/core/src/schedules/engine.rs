@@ -21,6 +21,18 @@ const PENDING_DETAILS_MAX: usize = 20;
 const STOPPED_CODE: i64 = 130;
 const CLOSED_DURING_RUN: &str = "OMPdesk closed during the run";
 const DAY_MS: i64 = 24 * 60 * 60_000;
+/// After the computer wakes, timed starts wait this long (the network and the disks come back first); after Orca's
+/// wake settle (`awake-clock.ts`, re-implemented). Events and a run by hand are never held.
+const WAKE_SETTLE_MS: i64 = 2 * 60_000;
+/// A timed start missed while OMPdesk was closed runs once at launch when it is at most this old; an older one is
+/// recorded as missed (Orca's missed-run grace, fixed here: no setting).
+const MISSED_GRACE_MS: i64 = 60 * 60_000;
+/// A start due less than this before launch is the last check's, not a miss (the clock checks every 30 s).
+const MISSED_AFTER_MS: i64 = 60_000;
+/// Failed runs in a row after which a session's own wake-up turns itself off.
+const WAKE_FAILURES_OFF: usize = 3;
+/// The most of a precheck's output a skipped run keeps.
+const PRECHECK_OUTPUT_KEPT: usize = 300;
 
 type Object = Map<String, Value>;
 
@@ -40,6 +52,8 @@ pub struct Limits {
 pub enum Trigger {
     Schedule,
     Manual,
+    /// A run by hand of an event routine that replays the newest event it fired on (recorded as `manual`).
+    Replay,
     Event,
 }
 
@@ -47,7 +61,7 @@ impl Trigger {
     fn name(self) -> &'static str {
         match self {
             Trigger::Schedule => "schedule",
-            Trigger::Manual => "manual",
+            Trigger::Manual | Trigger::Replay => "manual",
             Trigger::Event => "event",
         }
     }
@@ -87,6 +101,14 @@ pub enum Out {
     RemovePrompt { run: String },
     /// Runs left the history: their logs go.
     RemoveLogs { runs: Vec<String> },
+    /// Run `command` in `cwd` before a start (60 s at most); answered by `prechecked`.
+    Precheck {
+        ask: u64,
+        command: String,
+        cwd: String,
+    },
+    /// A quiet note (no turn) into the session file `session`: a wake-up that turned itself off, a wait that ended.
+    Note { session: String, text: String },
 }
 
 struct Active {
@@ -111,6 +133,13 @@ enum Held {
     },
     RunNow {
         schedule: String,
+    },
+    /// A start waiting for its precheck (`due`: the timed start it is, so a refusal moves to the next one).
+    Precheck {
+        schedule: String,
+        trigger: Trigger,
+        details: Option<Vec<String>>,
+        due: Option<i64>,
     },
 }
 
@@ -145,6 +174,8 @@ pub struct Engine {
     held: HashMap<u64, Held>,
     last_ask: u64,
     closed: bool,
+    /// Timed starts wait until then (`resumed`).
+    settle_until: i64,
     pub outs: Vec<Out>,
 }
 
@@ -230,6 +261,7 @@ impl Engine {
             held: HashMap::new(),
             last_ask: 0,
             closed: false,
+            settle_until: 0,
             outs: Vec::new(),
         }
     }
@@ -274,6 +306,83 @@ impl Engine {
         }
         self.reschedule_all();
         self.changed();
+    }
+
+    /// Right after `load` at launch: a timed start (interval, daily, once) that fell while OMPdesk was closed runs once
+    /// now when it is at most `MISSED_GRACE_MS` old (the next check starts it); an older one is recorded as a skipped
+    /// run that says it was missed, and a missed one-time start is spent. Never twice for one miss: the record is the
+    /// schedule's newest run, which the next launch counts from.
+    pub fn catch_up(&mut self, now: i64) {
+        self.now = now;
+        if self.paused || self.closed {
+            return;
+        }
+        let mut changed = false;
+        let ids: Vec<String> = self.schedules.iter().map(|s| id_of(s).to_owned()).collect();
+        for id in ids {
+            let Some(at) = self.find(&id) else {
+                continue;
+            };
+            if !self.enabled(at) || self.active.contains_key(&id) {
+                continue;
+            }
+            let Some(due) = self.missed_due(at) else {
+                continue;
+            };
+            if due > now - MISSED_AFTER_MS {
+                continue;
+            }
+            changed = true;
+            if now - due <= MISSED_GRACE_MS {
+                self.next.insert(id, now);
+                continue;
+            }
+            let why = format!("Missed while OMPdesk was closed (due {})", rules::iso(due));
+            self.skipped(at, Trigger::Schedule, &why, None);
+            if kind_of(&self.schedules[at]) == Some("once") {
+                self.schedules[at].insert("enabled".into(), false.into());
+                self.reschedule(at);
+            }
+        }
+        if changed {
+            self.prune_once();
+            self.changed();
+        }
+    }
+
+    /// A timed schedule's first start after its newest run of any kind (a missed record too) or, with none, after it
+    /// was made; a one-time schedule's moment. None for an event routine.
+    fn missed_due(&self, at: usize) -> Option<i64> {
+        let schedule = &self.schedules[at];
+        let frequency = schedule.get("frequency")?;
+        match kind_of(schedule)? {
+            "once" => self.parse(frequency.get("at")),
+            "interval" | "daily" => {
+                let id = id_of(schedule);
+                let base = match self
+                    .runs
+                    .iter()
+                    .find(|run| text(run, "scheduleId") == Some(id))
+                {
+                    Some(run) => self.parse(run.get("startedAt")),
+                    None => self.parse(schedule.get("createdAt")),
+                }?;
+                rules::next_run_at(
+                    frequency,
+                    base,
+                    Some(base),
+                    self.minute_ms,
+                    self.zone.as_ref(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// The computer woke from sleep: timed starts wait `WAKE_SETTLE_MS`, then those that came due start.
+    pub fn resumed(&mut self, now: i64) {
+        self.now = now;
+        self.settle_until = now + WAKE_SETTLE_MS;
     }
 
     /// `readStored`: none where the TypeScript's `catch` answered an empty journal.
@@ -513,6 +622,13 @@ impl Engine {
                 }
                 self.run_now(at, None);
             }
+            Some("resend") => {
+                let run = request
+                    .get("runId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                self.resend(run, origin)?;
+            }
             Some("stop") => {
                 let run = request.get("runId").and_then(Value::as_str);
                 let running = self
@@ -531,9 +647,67 @@ impl Engine {
     }
 
     fn run_now(&mut self, at: usize, charge: Option<u64>) {
-        let test = (kind_of(&self.schedules[at]) == Some("event"))
-            .then(|| vec!["A test run: no event fired".to_owned()]);
-        self.start_run(at, Trigger::Manual, charge, test);
+        if kind_of(&self.schedules[at]) != Some("event") {
+            self.begin(at, Trigger::Manual, charge, None, None);
+            return;
+        }
+        // A routine's Test replays the newest event it fired on, when it has one.
+        let id = id_of(&self.schedules[at]);
+        let last = self
+            .runs
+            .iter()
+            .find(|run| {
+                text(run, "scheduleId") == Some(id) && text(run, "trigger") == Some("event")
+            })
+            .and_then(|run| text(run, "detail"))
+            .map(str::to_owned);
+        match last {
+            Some(detail) => self.begin(at, Trigger::Replay, charge, Some(vec![detail]), None),
+            None => {
+                let test = vec!["A test run: no event fired".to_owned()];
+                self.begin(at, Trigger::Manual, charge, Some(test), None);
+            }
+        }
+    }
+
+    /// "Send again" for a run that failed before it started (`notStarted`): one new run of its schedule with what it was
+    /// told, once, without its precheck (the person asked for it). The original is stamped `resentAs` with the new run's
+    /// id in the same step, so a second ask (another device, a call repeated after a lost answer, a click after a
+    /// relaunch) answers the state as it is and starts nothing.
+    fn resend(&mut self, run: &str, origin: Option<&str>) -> Result<(), Fault> {
+        let record = self
+            .runs
+            .iter()
+            .find(|record| id_of(record) == run)
+            .ok_or_else(|| fault("Run not found"))?;
+        if text(record, "resentAs").is_some() {
+            return Ok(());
+        }
+        if text(record, "status") != Some("failed")
+            || record.get("notStarted") != Some(&Value::Bool(true))
+        {
+            return Err(fault("Only a run that could not start can be sent again"));
+        }
+        if origin.is_some() {
+            return Err(fault("A run is sent again from the computer that runs it"));
+        }
+        let schedule = text(record, "scheduleId").unwrap_or_default().to_owned();
+        let detail = text(record, "detail").map(str::to_owned);
+        let trigger = match text(record, "trigger") {
+            Some("event") => Trigger::Event,
+            _ => Trigger::Manual,
+        };
+        let at = self
+            .find(&schedule)
+            .ok_or_else(|| fault("Schedule not found"))?;
+        if self.active.contains_key(&schedule) {
+            return Err(fault("This schedule is already running"));
+        }
+        let sent = self.start_run(at, trigger, None, detail.map(|detail| vec![detail]));
+        if let Some(record) = self.runs.iter_mut().find(|record| id_of(record) == run) {
+            record.insert("resentAs".into(), sent.into());
+        }
+        Ok(())
     }
 
     /// Saves a new schedule and says which one it is.
@@ -611,6 +785,13 @@ impl Engine {
                     "Invalid schedule: only this computer's own sessions are woken",
                 ));
             }
+        }
+        if origin.is_some()
+            && text(&clean, "precheck").is_some_and(|command| !command.trim().is_empty())
+        {
+            return Err(fault(
+                "Invalid schedule: only this computer's own schedules run a precheck",
+            ));
         }
         if let Some(at) = existing {
             let schedule = &mut self.schedules[at];
@@ -733,6 +914,10 @@ impl Engine {
         if self.paused || self.closed {
             return;
         }
+        // Just woken: timed starts wait for the settle to pass, then start as due (never dropped, never skipped).
+        if now < self.settle_until {
+            return;
+        }
         let mut changed = false;
         // A start may delete spent one-time schedules: the ones listed now are the ones looked at.
         let ids: Vec<String> = self.schedules.iter().map(|s| id_of(s).to_owned()).collect();
@@ -765,7 +950,7 @@ impl Engine {
                 self.held.insert(ask, Held::Due { schedule: id, due });
                 continue;
             }
-            self.start_run(at, Trigger::Schedule, None, None);
+            self.begin(at, Trigger::Schedule, None, None, Some(due));
         }
         if changed {
             self.changed();
@@ -786,7 +971,133 @@ impl Engine {
             );
             return;
         }
-        self.start_run(at, Trigger::Event, None, Some(details));
+        self.begin(at, Trigger::Event, None, Some(details), None);
+    }
+
+    /// A start, after the schedule's precheck said yes when it has one (never for a charged start: a paired device's
+    /// schedule has no precheck).
+    fn begin(
+        &mut self,
+        at: usize,
+        trigger: Trigger,
+        charge: Option<u64>,
+        details: Option<Vec<String>>,
+        due: Option<i64>,
+    ) {
+        let command = text(&self.schedules[at], "precheck")
+            .map(str::trim)
+            .filter(|command| !command.is_empty() && charge.is_none())
+            .map(str::to_owned);
+        let Some(command) = command else {
+            self.start_run(at, trigger, charge, details);
+            return;
+        };
+        let id = id_of(&self.schedules[at]).to_owned();
+        let cwd = self.schedules[at]
+            .get("cwd")
+            .map(string_of_value)
+            .unwrap_or_default();
+        self.last_ask += 1;
+        let ask = self.last_ask;
+        self.active.insert(
+            id.clone(),
+            Active {
+                run: None,
+                launched: false,
+                stop_requested: false,
+                charge: None,
+                prompt: String::new(),
+            },
+        );
+        self.held.insert(
+            ask,
+            Held::Precheck {
+                schedule: id,
+                trigger,
+                details,
+                due,
+            },
+        );
+        self.outs.push(Out::Precheck { ask, command, cwd });
+    }
+
+    /// The host ran a start's precheck: `ok` when it exited 0 in time, `output` what it printed. A no is recorded as a
+    /// skipped run with the start of the output (a repeat of the same no folds into that row), and a timed start moves
+    /// to the next one; a one-time start is spent by it.
+    pub fn prechecked(&mut self, ask: u64, ok: bool, output: &str, now: i64) {
+        self.now = now;
+        let (schedule, trigger, details, due) = match self.held.remove(&ask) {
+            Some(Held::Precheck {
+                schedule,
+                trigger,
+                details,
+                due,
+            }) => (schedule, trigger, details, due),
+            Some(other) => {
+                self.held.insert(ask, other);
+                return;
+            }
+            None => return,
+        };
+        if self
+            .active
+            .get(&schedule)
+            .is_some_and(|active| active.run.is_none())
+        {
+            self.active.remove(&schedule);
+        }
+        let Some(at) = self.find(&schedule).filter(|_| !self.closed) else {
+            return;
+        };
+        if ok {
+            self.start_run(at, trigger, None, details);
+            return;
+        }
+        let said: String = rules::one_line(output)
+            .chars()
+            .take(PRECHECK_OUTPUT_KEPT)
+            .collect();
+        let why = if said.is_empty() {
+            "Its precheck said no".to_owned()
+        } else {
+            format!("Its precheck said no: {said}")
+        };
+        self.pending.remove(&schedule);
+        self.skipped_folding(at, trigger, &why, details.map(|details| details.join("\n")));
+        if trigger == Trigger::Schedule && kind_of(&self.schedules[at]) == Some("once") {
+            self.schedules[at].insert("enabled".into(), false.into());
+            self.reschedule(at);
+        } else if let Some(due) = due {
+            self.skip_to(at, due);
+        }
+        self.changed();
+    }
+
+    /// `skipped`, except that the same reason as the schedule's newest run (skipped too) counts on that row
+    /// (`repeats`) instead of adding one (after Orca's folded refusals).
+    fn skipped_folding(
+        &mut self,
+        at: usize,
+        trigger: Trigger,
+        error: &str,
+        detail: Option<String>,
+    ) {
+        let id = id_of(&self.schedules[at]).to_owned();
+        let ended = rules::iso(self.now);
+        let newest = self
+            .runs
+            .iter_mut()
+            .find(|run| text(run, "scheduleId") == Some(&id))
+            .filter(|run| {
+                text(run, "status") == Some("skipped") && text(run, "error") == Some(error)
+            });
+        if let Some(newest) = newest {
+            let repeats = newest.get("repeats").and_then(Value::as_u64).unwrap_or(1) + 1;
+            newest.insert("repeats".into(), repeats.into());
+            newest.insert("endedAt".into(), ended.into());
+            return;
+        }
+        self.skipped(at, trigger, error, detail);
     }
 
     /// Main's answer to a `Reserve`: `refused` is why the device has no request left. For a run now, how it went
@@ -799,8 +1110,15 @@ impl Engine {
     ) -> Option<Result<(), Fault>> {
         self.now = now;
         let held = self.held.remove(&ask)?;
+        if matches!(held, Held::Precheck { .. }) {
+            self.held.insert(ask, held);
+            return None;
+        }
         let (Held::Due { schedule, .. } | Held::Event { schedule, .. } | Held::RunNow { schedule }) =
-            &held;
+            &held
+        else {
+            unreachable!("a precheck is answered by prechecked");
+        };
         if self
             .active
             .get(schedule)
@@ -831,12 +1149,17 @@ impl Engine {
                     self.skipped(at, Trigger::Schedule, reason, None);
                     self.skip_to(at, due);
                 }
-                None => self.start_run(at, Trigger::Schedule, charge, None),
+                None => {
+                    self.start_run(at, Trigger::Schedule, charge, None);
+                }
             },
             Held::Event { details, .. } => match refused {
                 Some(reason) => self.skipped(at, Trigger::Event, reason, Some(details.join("\n"))),
-                None => self.start_run(at, Trigger::Event, charge, Some(details)),
+                None => {
+                    self.start_run(at, Trigger::Event, charge, Some(details));
+                }
             },
+            Held::Precheck { .. } => {}
         }
         self.changed();
         None
@@ -849,7 +1172,7 @@ impl Engine {
         trigger: Trigger,
         charge: Option<u64>,
         details: Option<Vec<String>>,
-    ) {
+    ) -> String {
         let detail = details.map(|details| details.join("\n"));
         let id = (self.ids)();
         let schedule_id = id_of(&self.schedules[at]).to_owned();
@@ -873,6 +1196,10 @@ impl Engine {
             Some(detail) if trigger == Trigger::Manual => {
                 format!("{prompt}\n\nTest run:\n{detail}")
             }
+            Some(detail) if trigger == Trigger::Replay => format!(
+                "{prompt}\n\nA test run, replaying its last event:\n{}",
+                fence_untrusted(detail)
+            ),
             Some(detail) => format!(
                 "{prompt}\n\nWhat fired this run:\n{}",
                 fence_untrusted(detail)
@@ -904,10 +1231,11 @@ impl Engine {
         }
         self.changed();
         self.outs.push(Out::Prepare {
-            run: id,
+            run: id.clone(),
             prompt,
             cwd,
         });
+        id
     }
 
     fn running(&self, run: &str) -> Option<String> {
@@ -1004,7 +1332,17 @@ impl Engine {
                 error.or(Some(format!("omp exited with code {exit}"))),
             )
         };
+        // A run that failed before it ever launched may be sent again once (`resend`).
+        if status == "failed"
+            && !active.launched
+            && let Some(record) = self.runs.iter_mut().find(|record| id_of(record) == run)
+        {
+            record.insert("notStarted".into(), true.into());
+        }
         self.finish(run, status, code, error);
+        if status == "failed" {
+            self.wake_failures(&id);
+        }
         if self
             .find(&id)
             .is_some_and(|at| kind_of(&self.schedules[at]) == Some("event"))
@@ -1034,6 +1372,45 @@ impl Engine {
             self.delete(at);
             self.changed();
         }
+    }
+
+    /// A session's own wake-up whose last `WAKE_FAILURES_OFF` runs all failed (skipped and stopped ones aside) turns
+    /// itself off, says so in its history and tells its session with a quiet note, so it stops spending turns on a
+    /// cause that does not go away.
+    fn wake_failures(&mut self, id: &str) {
+        let Some(at) = self.find(id).filter(|at| self.enabled(*at)) else {
+            return;
+        };
+        let Some(session) = text(&self.schedules[at], "wakeSession").map(str::to_owned) else {
+            return;
+        };
+        let outcomes: Vec<(&str, Option<&str>)> = self
+            .runs
+            .iter()
+            .filter(|run| text(run, "scheduleId") == Some(id))
+            .filter(|run| !matches!(text(run, "status"), Some("skipped" | "stopped" | "running")))
+            .take(WAKE_FAILURES_OFF)
+            .map(|run| (text(run, "status").unwrap_or_default(), text(run, "error")))
+            .collect();
+        if outcomes.len() < WAKE_FAILURES_OFF
+            || outcomes.iter().any(|(status, _)| *status != "failed")
+        {
+            return;
+        }
+        let last_error = outcomes[0].1.unwrap_or("no reason given").to_owned();
+        self.schedules[at].insert("enabled".into(), false.into());
+        self.reschedule(at);
+        let why = format!("Turned off after {WAKE_FAILURES_OFF} failed runs in a row");
+        self.skipped(at, Trigger::Schedule, &why, None);
+        let name = text(&self.schedules[at], "name").unwrap_or_default();
+        let note = format!(
+            "Your scheduled wake-up \"{name}\" failed {WAKE_FAILURES_OFF} times in a row, so OMPdesk turned it off. The last error: {last_error}. Turn it back on with ompdesk_schedule (action resume) once the cause is fixed."
+        );
+        self.outs.push(Out::Note {
+            session,
+            text: note,
+        });
+        self.changed();
     }
 
     /// A routine's run ended with events kept meanwhile: one more run with all of them, unless every run has been

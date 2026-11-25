@@ -121,6 +121,15 @@ pub(super) fn clean(draft: &Value) -> serde_json::Map<String, Value> {
     if let Some(session) = draft.get("wakeSession").filter(|v| !v.is_null()) {
         clean["wakeSession"] = string_of_value(session).into();
     }
+    // A precheck command, as given; a save that names none keeps the schedule's, an empty one removes it.
+    if let Some(precheck) = draft.get("precheck") {
+        let command = precheck.as_str().map(trim).unwrap_or_default();
+        clean["precheck"] = if command.is_empty() {
+            Value::Null
+        } else {
+            command.into()
+        };
+    }
     let Value::Object(clean) = clean else {
         unreachable!()
     };

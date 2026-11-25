@@ -125,6 +125,21 @@ export async function ghRunner(bin: string): Promise<CoreRunner> {
 	return { bin, args: [], env: await runnerEnv(GH_ENV), timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
 }
 
+/**
+ * How a schedule's precheck command runs in the core: the platform shell with the command as its one argument
+ * (`/bin/sh -c`, `cmd.exe /d /s /c`), the login shell's PATH, ambient repository selectors dropped, read now.
+ */
+export async function shellRunner(): Promise<CoreRunner> {
+	const windows = process.platform === "win32";
+	return {
+		bin: windows ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh",
+		args: windows ? ["/d", "/s", "/c"] : ["-c"],
+		env: await runnerEnv({}),
+		timeoutMs: 60_000,
+		maxBytes: 16 * 1024,
+	};
+}
+
 /** Room past a request's git timeouts for its disk work, the core round trip and the end of a git that ran past one. */
 const CORE_SLACK_MS = KILL_GRACE_MS + 5_000;
 
