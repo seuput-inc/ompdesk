@@ -631,7 +631,8 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** composer.prewalk_armed shows what composer.disarm_prewalk drops: an armed mark nobody can disarm is not shown. */
 	prewalk: { session: ["getPrewalkState()", "disarmPrewalk()"] },
 	toolExtras: { session: ["hasBuiltInTool()", "agent.state", "getToolCommandEntries()|getXdevToolEntries()"] },
-	contextReport: { session: ["getContextBreakdown()", "model"] },
+	// `getPromptCacheStatus()`: the breakdown's prompt-cache line (stock's `cache` status-line segment, omp 18.17.0).
+	contextReport: { session: ["getContextBreakdown()", "getPromptCacheStatus()", "model"] },
 	jobs: {
 		session: ["getAsyncJobTree()", "inspectAsyncJob()"],
 		modules: { [`${AGENT}/modes/view-model/overlays/job-tree`]: ["buildJobTree()"] },
