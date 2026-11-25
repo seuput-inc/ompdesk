@@ -106,9 +106,9 @@ import {
 	Spinner,
 	Tabs,
 } from "../common";
+import { AddToChatButton } from "./notes/AddToChat";
 import { TerminalCommandsDialog } from "./TerminalCommandsDialog";
 import { TerminalFind, type TerminalSearch } from "./TerminalFind";
-import { AddToChatButton } from "./notes/AddToChat";
 import { TerminalKeyBar } from "./TerminalKeyBar";
 import "@xterm/xterm/css/xterm.css";
 
@@ -1256,11 +1256,15 @@ export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch
 							size="sm"
 						/>
 					)}
-					<AddToChatButton
-						disabled={!selected}
-						read={() => (selected ? handles.current.get(selected)?.current?.terminal.getSelection() : "") ?? ""}
-						tabId={tabId}
-					/>
+					{!scratch && (
+						<AddToChatButton
+							disabled={!selected}
+							read={() =>
+								(selected ? handles.current.get(selected)?.current?.terminal.getSelection() : "") ?? ""
+							}
+							tabId={tabId}
+						/>
+					)}
 					<IconButton
 						icon={<Copy />}
 						label={t("panel.terminal.copy")}
