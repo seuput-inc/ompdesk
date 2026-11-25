@@ -1081,7 +1081,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if ((cmd.type === "prompt" || cmd.type === "steer" || cmd.type === "follow_up") && !sidecar.device) {
 				// A prompt naming an attached file that is gone (swept after 24 h, taken) is not sent at all: the draft comes
 				// back and the toast names the file, instead of the agent getting a path that leads nowhere.
-				const gone = channel !== undefined ? await deps.uploads?.goneIn(cmd.message, sidecar.cwd) : undefined;
+				// Only a text that names an upload waits for the store, so every other one keeps its place in the send order.
+				const asked = channel !== undefined ? deps.uploads?.goneIn(cmd.message, sidecar.cwd) : null;
+				const gone = asked ? await asked : null;
 				if (gone?.length) {
 					return {
 						id: _id,

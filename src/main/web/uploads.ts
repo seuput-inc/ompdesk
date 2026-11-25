@@ -95,15 +95,17 @@ export class UploadStore {
 	/**
 	 * The names of the uploads `text` mentions (`@path` as stock reads it, a relative one against `cwd`) that are no
 	 * longer here: swept after 24 h, taken, or their device's folder removed. A prompt naming one is not sent at all
-	 * (ipc.ts, host-services.ts), so the agent never gets a path that leads nowhere.
+	 * (ipc.ts, host-services.ts), so the agent never gets a path that leads nowhere. Null, with no await, when the text
+	 * names no upload: a prompt, steer or follow-up without one reaches omp in the same turn as before, never behind a
+	 * later command.
 	 */
-	async goneIn(text: string, cwd: string): Promise<string[]> {
+	goneIn(text: string, cwd: string): Promise<string[]> | null {
 		const root = join(this.#userData, "web-uploads") + sep;
 		const files = extractFileMentions(text)
 			.map(path => resolve(cwd, path))
 			.filter(file => file.startsWith(root));
-		if (files.length === 0) return [];
-		return (await this.#call<{ missing: string[] }>("web.uploads.missing", { files })).result.missing;
+		if (files.length === 0) return null;
+		return this.#call<{ missing: string[] }>("web.uploads.missing", { files }).then(answer => answer.result.missing);
 	}
 
 	/** A refusal of the core's store (`upload_<status>`) is an `UploadError`, as the page and the composer read it. */
