@@ -329,6 +329,7 @@ describe("a tab completing", () => {
 					body: "Fixed the parser and added two tests.",
 					tabId: "tab-a",
 					tag: "tab:tab-a",
+					badge: 0,
 				},
 				ttl: 3600,
 				urgency: "normal",
@@ -378,6 +379,7 @@ describe("a tab completing", () => {
 			body: "",
 			tabId: "tab-a",
 			tag: "tab:tab-a",
+			badge: 0,
 		});
 		expect(JSON.stringify(calls)).not.toMatch(/Secret|production/);
 		expect(quiet.deviceId).not.toBe(hidden.deviceId);
@@ -423,6 +425,7 @@ describe("asks", () => {
 					body: "Run the migration?",
 					tabId: "tab-a",
 					tag: "tab:tab-a",
+					badge: 1,
 				},
 				ttl: 6 * 60 * 60,
 				urgency: "high",
@@ -433,7 +436,7 @@ describe("asks", () => {
 		await flush();
 		expect(calls.at(-1)).toMatchObject({
 			endpoint: p.subscription.endpoint,
-			payload: { v: 1, kind: "clear", tabId: "tab-a", tag: "tab:tab-a", silent: true },
+			payload: { v: 1, kind: "clear", tabId: "tab-a", tag: "tab:tab-a", silent: true, badge: 0 },
 		});
 		expect(calls).toHaveLength(2);
 	});
