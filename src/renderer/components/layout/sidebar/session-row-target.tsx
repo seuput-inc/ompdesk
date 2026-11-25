@@ -161,14 +161,28 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 		const element = ref.current;
 		const name = element?.querySelector(".truncate");
 		if (!element || !name) return;
-		const style = floor === null ? null : name.ownerDocument.defaultView?.getComputedStyle?.(name);
-		const width =
-			floor === null || !style
-				? null
-				: textWidth(style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, floor);
-		const size = width === null ? "" : `calc(var(--sc-icon-sm) + 0.25rem + ${Math.ceil(width) + 1}px)`;
-		element.style.flexBasis = size;
-		element.style.minWidth = size;
+		const measure = () => {
+			const style = floor === null ? null : name.ownerDocument.defaultView?.getComputedStyle?.(name);
+			const width =
+				floor === null || !style
+					? null
+					: textWidth(style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`, floor);
+			const size = width === null ? "" : `calc(var(--sc-icon-sm) + 0.25rem + ${Math.ceil(width) + 1}px)`;
+			element.style.flexBasis = size;
+			element.style.minWidth = size;
+		};
+		measure();
+		// A canvas measures in the fallback face until the web font has loaded (a cold start, the Windows runners): the
+		// floor came out narrower than the drawn name, so the head stayed on a line too short for it, cut under the ⋯.
+		const fonts = name.ownerDocument.fonts;
+		if (!fonts || fonts.status === "loaded") return;
+		let live = true;
+		void fonts.ready.then(() => {
+			if (live) measure();
+		});
+		return () => {
+			live = false;
+		};
 	}, [floor]);
 	const Mark =
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
