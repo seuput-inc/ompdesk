@@ -68,7 +68,8 @@ export class WindowManager {
 
 	createWindow(opts: { cwd: string }): BrowserWindow {
 		const cwd = opts.cwd;
-		// The shell places, sizes and draws the window, and shows it on its first paint as `presence` says.
+		// The shell places, sizes and draws the window, and shows it as `presence` says at its first paint, or 500 ms
+		// after making it in the page's background when the paint is slower (a cold WebView2 start).
 		const win = new BrowserWindow({
 			show: false,
 			...(this.launchPresence ? { presence: this.launchPresence } : {}),
