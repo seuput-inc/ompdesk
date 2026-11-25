@@ -92,6 +92,8 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("project-origin:get", Risk::Never(DENY)),
     ("resume:cancel-wait", Risk::Never(DENY)),
     ("resume:stop", Risk::Never(DENY)),
+    ("resume:continue", Risk::Never(DENY)),
+    ("resume:dismiss", Risk::Never(DENY)),
     ("connectivity:report", Risk::Never(DENY)),
     ("stats:fetch", Risk::Never(DENY)),
     ("bench:run", Risk::Never(DENY)),
