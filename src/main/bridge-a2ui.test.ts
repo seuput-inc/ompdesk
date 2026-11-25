@@ -11,6 +11,7 @@ import {
 	a2uiAnswer,
 	a2uiPriorCalls,
 	a2uiToolDescription,
+	a2uiUnanswerable,
 	checkA2uiCall,
 	type PriorCall,
 	type SchemaValidate,
@@ -142,6 +143,15 @@ describe("an a2ui call", () => {
 			).toEqual([]);
 			expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
 		}
+	});
+
+	it("refuses an event button when nobody can press it: ask off (an unattended run) or no window", () => {
+		const askOff = a2uiUnanswerable(["read", "a2ui"], true);
+		expect(askOff).toMatchObject({ code: "VALIDATION_FAILED", path: "/messages" });
+		expect(askOff?.message).toContain("unattended run");
+		expect(askOff?.message).toContain("without an event button");
+		expect(a2uiUnanswerable(["ask", "a2ui"], false)?.message).toContain("no OMPdesk window");
+		expect(a2uiUnanswerable(["ask", "a2ui"], true)).toBeUndefined();
 	});
 });
 
