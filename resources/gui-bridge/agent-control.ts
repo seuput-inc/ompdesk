@@ -79,6 +79,8 @@ Another agent opened this session and handed you its first message; the person s
 - Never use \`git stash\`: every worktree of a repository shares one stash, so another session's stash can land in yours. Commit work in progress to your branch instead.
 - Stay inside the files and scope the message names. If the task needs more, say so in your answer rather than widening it.
 - Done means the observable acceptance in the message holds, checked by you, and any requested commit is on your branch.
+- Sessions you open yourself are part of your work: before your final answer, end your turn and let their reports wake you until they are done; your opener is not nudged while they run.
+- In a git worktree, before your final answer check that your branch is not behind the branch it lands on (\`git log --oneline HEAD..<that branch>\`); if it is, merge or rebase it and run your checks again.
 - Your final answer is what the other agent reads: what changed (files, commits), how you checked it with the actual result, and anything left undone.
 - End your final answer with one last line: \`Result: ok\` when the acceptance holds and every check you ran passed, else \`Result: problem — <reason>\` (a failed or skipped check, work left undone). The other agent reads that line, not your prose. That final answer is delivered to it automatically as your done report: do not send a done report yourself.
 - Use ompdesk_report only for question or blocked when you need its decision (then wait for its answer; never guess an approval), progress at real milestones, and kind note with to set to a sibling it opened. Pass the dispatch id its message names.

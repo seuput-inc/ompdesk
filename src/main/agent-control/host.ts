@@ -418,14 +418,14 @@ export class AgentControlRuntime {
 	#activity(activity: TabActivity): void {
 		const { pool } = this.#deps;
 		const parent = this.#openerOf(activity.tabId);
-		// A child's question card tells its opener (local and paired-device children alike); an Autopilot run's
-		// children are answered by its approver, and the run reads them itself.
-		const announce =
-			activity.type === "ask" &&
+		// A child's question card, and its close, tell its opener (local and paired-device children alike), and so does
+		// its tab closing; an Autopilot run's children are answered by its approver, and the run reads them itself.
+		const ownChild =
 			parent !== undefined &&
 			this.#parents.get(activity.tabId)?.tag === undefined &&
 			!this.#autopilotRuns.has(parent) &&
 			!this.#deps.isAutopilotRun?.(parent);
+		const announce = (activity.type === "ask" || activity.type === "askClosed") && ownChild;
 		let session: ReleasedSession | undefined;
 		if (activity.type === "released") {
 			const held = this.#deps.quitting?.() ? undefined : activity.session;
@@ -439,13 +439,15 @@ export class AgentControlRuntime {
 					...held,
 					...(!held.device && this.#hiddenPaths().has(held.path) ? { hidden: true } : {}),
 					...(opener ? { openedBySession: opener } : {}),
+					...(opener && ownChild ? { tellOpener: true as const } : {}),
 				};
 		}
 		void this.control.runtime
 			.activity({
 				type: activity.type,
 				tabId: activity.tabId,
-				...(activity.type === "ask" ? { requestId: activity.requestId } : {}),
+				...(activity.type === "ask" || activity.type === "askClosed" ? { requestId: activity.requestId } : {}),
+				...(activity.type === "askClosed" && activity.answered ? { answered: activity.answered } : {}),
 				...(activity.type === "idle" && activity.outcome ? { outcome: activity.outcome } : {}),
 				...(parent ? { parent } : {}),
 				...(announce ? { announce: true } : {}),
@@ -815,6 +817,18 @@ export class AgentControlRuntime {
 			...(webEdits ? { webEdits } : {}),
 			...(this.#closeAnswers.has(info.tabId) ? { closeAnswer: this.#closeAnswers.get(info.tabId) } : {}),
 			...this.#hostOpen(info),
+			...(info.settling ? { settling: true } : {}),
+			...(info.retrySaga
+				? {
+						retrySaga: {
+							attempt: info.retrySaga.attempt,
+							maxAttempts: info.retrySaga.maxAttempts,
+							errorMessage: info.retrySaga.errorMessage,
+						},
+					}
+				: {}),
+			...(info.scheduledRetry ? { scheduledRetry: info.scheduledRetry } : {}),
+			...(info.awaitingConnection ? { awaitingConnection: true } : {}),
 		};
 	}
 

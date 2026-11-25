@@ -292,6 +292,58 @@ async fn a_child_s_card_reaches_its_opener_once_and_focus_and_notify_tell_main()
     control.host.port().close();
 }
 
+#[tokio::test]
+async fn a_childs_card_closing_tells_its_opener_how_unless_the_opener_answered_it_or_the_omp_went()
+{
+    let card = |id: &str| json!([{ "id": id, "request": { "id": id, "method": "confirm", "title": "Go on?" } }]);
+    let mut child = tab("b");
+    child["asks"] = card("r1");
+    let (control, asked) = rig(
+        9_306,
+        state(vec![tab("a"), child]),
+        Tuning::default(),
+        main_replies,
+    );
+    control.child_asked("a", "b", "r1").await.unwrap();
+    control.child_ask_closed("a", "b", "r1", Some("Yes")).await;
+    control.child_ask_closed("a", "b", "r1", Some("Yes")).await;
+    let notes: Vec<Value> = asked_with(&asked, "mail")
+        .into_iter()
+        .filter(|mail| mail["details"]["kind"] == "note")
+        .collect();
+    assert_eq!(notes.len(), 1, "once per card");
+    assert!(
+        notes[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("answered in its session")
+            && notes[0]["content"].as_str().unwrap().contains("\"Yes\""),
+        "{}",
+        notes[0]
+    );
+    // A card nobody told the opener of closes quietly.
+    control.child_ask_closed("a", "b", "r9", None).await;
+    assert_eq!(asked_with(&asked, "mail").len(), 2);
+    control.host.port().close();
+
+    // The child's omp went away with the card: no withdrawal is told.
+    let mut gone = tab("b");
+    gone["asks"] = card("r2");
+    let (control, asked) = rig(
+        9_307,
+        state(vec![tab("a"), gone]),
+        Tuning::default(),
+        main_replies,
+    );
+    control.child_asked("a", "b", "r2").await.unwrap();
+    let mut down = state(vec![tab("a"), tab("b")]);
+    down["tabs"][1]["status"] = json!("restarting");
+    crate::ports::apply_state(control.host.port(), 1, &down.to_string()).unwrap();
+    control.child_ask_closed("a", "b", "r2", None).await;
+    assert_eq!(asked_with(&asked, "mail").len(), 1, "only the question");
+    control.host.port().close();
+}
+
 fn busy(id: &str) -> Value {
     let mut tab = tab(id);
     tab["busy"] = json!(true);

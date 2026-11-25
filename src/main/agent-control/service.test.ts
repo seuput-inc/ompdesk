@@ -1498,6 +1498,24 @@ describe("ompdesk_session_answer", () => {
 		expect(allowed.answers[0]?.response).toMatchObject({ value: "Approve" });
 	});
 
+	it("sends the reason of a denied tool approval to the session after the denial", async () => {
+		const host = new FakeHost(
+			{ tabId: "main0001", title: "Boss" },
+			{ tabId: "work0002", asks: [select("Allow tool: bash\nrm -rf x", ["Approve", "Deny"])] },
+		);
+		const service = control(host);
+		const deny = await service.run("main0001", T.answer, {
+			session: "work0002",
+			approve: false,
+			text: "do not delete the cache; move it instead",
+		});
+		expect(deny.isError).toBe(false);
+		expect(deny.text).toContain("and sent it the reason");
+		expect(host.answers[0]?.response).toMatchObject({ value: "Deny" });
+		const prompt = host.sent.find(entry => entry.tabId === "work0002" && entry.command.type === "prompt");
+		expect(JSON.stringify(prompt?.command)).toContain("do not delete the cache; move it instead");
+	});
+
 	it("treats stock's approval with the session option the same way, and approving for the session needs leave too", async () => {
 		const options = ["Approve", "Approve bash for this session", "Deny"];
 		const host = new FakeHost(
@@ -3044,9 +3062,11 @@ describe("ompdesk_autopilot", () => {
 
 describe("autoClose: opened sessions whose work landed", () => {
 	/** The caller opens one session; its tab then reads as a finished, agent-opened child with a stored file. */
-	async function finishedChild(options: { worktree?: boolean; throwaway?: boolean; patch?: Partial<FakeTab> } = {}) {
+	async function finishedChild(
+		options: { worktree?: boolean; throwaway?: boolean; patch?: Partial<FakeTab>; tuning?: Tuning } = {},
+	) {
 		const host = new FakeHost({ tabId: "main0001", title: "Boss", sessionPath: "/s/boss.jsonl" });
-		const service = control(host);
+		const service = control(host, options.tuning);
 		await service.run("main0001", T.open, {
 			message: "do it",
 			...(options.worktree ? { worktree: true } : {}),
@@ -3326,6 +3346,126 @@ describe("autoClose: opened sessions whose work landed", () => {
 		const before = host.mails.length;
 		await service.autoClose("main0001");
 		expect(host.mails.slice(before).filter(mail => mail.to === child.tabId)).toHaveLength(0);
+	});
+
+	describe("what the opener hears of a child beyond its reports", () => {
+		const now = { failureSettleMs: 0, backgroundNoteMs: 0 } satisfies Tuning;
+		const toOpener = (host: FakeHost) => host.mails.filter(mail => mail.to === "main0001");
+
+		it("a failed turn nothing retries wakes the opener once, with the error", async () => {
+			const { host, service } = await finishedChild({
+				tuning: now,
+				patch: { lastRun: { stopReason: "error", errorMessage: "500 overloaded_error" }, last: "Half done." },
+			});
+			await service.autoClose("main0001");
+			await service.autoClose("main0001");
+			const told = toOpener(host);
+			expect(told).toHaveLength(1);
+			expect(told[0]?.details.kind).toBe("blocked");
+			expect(told[0]?.content).toContain("500 overloaded_error");
+			expect(told[0]?.delivery).toEqual({ triggerTurn: true, deliverAs: "aside" });
+		});
+
+		it("a failed turn waiting for a usage limit is a quiet note with its time, never a failure", async () => {
+			const { host, service } = await finishedChild({
+				tuning: now,
+				patch: {
+					lastRun: { stopReason: "error", errorMessage: "429 rate_limit_error" },
+					last: "Half done.",
+					scheduledRetry: { at: Date.UTC(2026, 10, 25, 18, 30), attempt: 1, limit: true },
+				},
+			});
+			await service.autoClose("main0001");
+			await service.autoClose("main0001");
+			const told = toOpener(host);
+			expect(told).toHaveLength(1);
+			expect(told[0]?.details.kind).toBe("note");
+			expect(told[0]?.content).toContain("usage limit");
+			expect(told[0]?.content).toContain("2026-11-25 18:30 UTC");
+			expect(told[0]?.delivery).toEqual({ triggerTurn: false });
+		});
+
+		it("a provider retry and background work past its bound are each one quiet note", async () => {
+			const retrying = await finishedChild({
+				tuning: now,
+				patch: { busy: true, retrySaga: { attempt: 1, maxAttempts: 3, errorMessage: "overloaded" } },
+			});
+			await retrying.service.autoClose("main0001");
+			await retrying.service.autoClose("main0001");
+			expect(toOpener(retrying.host).map(mail => mail.content)).toEqual([
+				expect.stringContaining("retries it by itself (attempt 1 of 3)"),
+			]);
+
+			const settling = await finishedChild({ tuning: now, patch: { busy: true, settling: true } });
+			await settling.service.autoClose("main0001");
+			await settling.service.autoClose("main0001");
+			expect(toOpener(settling.host).map(mail => mail.content)).toEqual([
+				expect.stringContaining("its own background work still runs"),
+			]);
+		});
+
+		it("a child's question its opener ended a turn without answering notifies the person once", async () => {
+			const { host, service, child } = await finishedChild({
+				tuning: now,
+				patch: { busy: true, asks: [select("Which database?", ["Postgres", "SQLite"])] },
+			});
+			const opener = host.tabsById.get("main0001") as FakeTab;
+			await service.childAsked("main0001", child.tabId, child.asks[0]?.id ?? "");
+			opener.busy = true;
+			await service.autoClose("main0001");
+			expect(host.notify).not.toHaveBeenCalled();
+			opener.busy = false;
+			await service.autoClose("main0001");
+			await service.autoClose("main0001");
+			expect(host.notify).toHaveBeenCalledTimes(1);
+			expect(host.notify.mock.calls[0]?.[0]).toBe(child.tabId);
+		});
+
+		it("a child the person closed tells its opener once, and nothing when it is not the opener's to hear", async () => {
+			const { host, service, child } = await finishedChild();
+			const session = {
+				path: "/s/kid.jsonl",
+				title: "Fix the parser",
+				cwd: "/repo",
+				formerIds: [],
+				openedBySession: "/s/boss.jsonl",
+			};
+			// An Autopilot run's child (main sends no tellOpener) is read by its run.
+			await service.released(child.tabId, session);
+			expect(toOpener(host)).toHaveLength(0);
+			const other = await finishedChild();
+			await other.service.released(other.child.tabId, { ...session, tellOpener: true });
+			const told = toOpener(other.host);
+			expect(told).toHaveLength(1);
+			expect(told[0]?.content).toContain('"Fix the parser" was closed by the user or its window');
+			expect(told[0]?.delivery).toEqual({ triggerTurn: false });
+		});
+
+		it("a message to a child waiting for a usage limit says so in its receipt", async () => {
+			const { service, child } = await finishedChild({
+				patch: { scheduledRetry: { at: Date.UTC(2026, 10, 25, 18, 30), attempt: 1, limit: true } },
+			});
+			const sent = await service.run("main0001", T.send, { session: child.tabId, message: "go on" });
+			expect(sent.text).toContain("waiting for a provider's usage limit (until about 2026-11-25 18:30 UTC)");
+		});
+
+		it("a group send reaches every open child it names, each with its own receipt", async () => {
+			const host = new FakeHost({ tabId: "main0001", title: "Boss", sessionPath: "/s/boss.jsonl" });
+			const service = control(host);
+			await service.run("main0001", T.open, { sessions: [{ message: "one" }, { message: "two" }] });
+			const [a, b] = [...host.tabsById.values()].filter(tab => tab.tabId !== "main0001") as FakeTab[];
+			if (!a || !b) throw new Error("two children");
+			b.busy = true;
+			const all = await service.run("main0001", T.send, { sessions: ["@children"], message: "rebase on main" });
+			expect(all.isError).toBe(false);
+			expect(all.text).toContain("Sent to 2 of 2 sessions");
+			const idle = await service.run("main0001", T.send, { sessions: ["@idle"], message: "and push" });
+			expect(idle.text).toContain("Sent to 1 of 1 sessions");
+			const pushed = host.sent.filter(
+				entry => entry.command.type === "prompt" && JSON.stringify(entry.command).includes("and push"),
+			);
+			expect(pushed.map(entry => entry.tabId)).toEqual([a.tabId]);
+		});
 	});
 
 	describe("the pace of a session", () => {

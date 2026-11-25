@@ -270,6 +270,7 @@ fn activity(kind: ActivityKind, tab: &str, outcome: Option<(&str, Option<&str>)>
         kind,
         tab_id: tab.to_owned(),
         request_id: None,
+        answered: None,
         outcome: outcome.map(|(reason, message)| Outcome {
             stop_reason: Some(reason.to_owned()),
             error_message: message.map(str::to_owned),

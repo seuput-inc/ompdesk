@@ -181,6 +181,7 @@ impl AgentControl {
                     continue;
                 }
             }
+            self.watch_child(caller, tab, opener_idle).await;
             if tab.busy || waits(tab) {
                 let mut mem = self.mem();
                 mem.collected.remove(&tab.tab_id);
@@ -360,6 +361,18 @@ impl AgentControl {
         if let Some(report) = self.mailbox.state(&tab.tab_id, &caller.tab_id)
             && report.last.dispatch == dispatch
         {
+            return Ok(());
+        }
+        // It ended its turn to wait for sessions it opened itself: that rest is deliberate, and their reports wake it.
+        let own_at_work = {
+            let state = self.host.state();
+            let children = self.children_of(&tab.tab_id);
+            state
+                .tabs
+                .iter()
+                .any(|open| children.contains(&open.tab_id) && (open.busy || waits(open)))
+        };
+        if own_at_work {
             return Ok(());
         }
         let answer = self.session_state(tab).await.last.unwrap_or_default();

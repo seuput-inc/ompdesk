@@ -153,6 +153,10 @@ pub struct Mem {
     pub last_spend: HashMap<String, Spend>,
     /// Closed children's last turns (`familyEdits`), by device, session file and close (`#closedTurns`).
     pub closed_turns: HashMap<String, Shared<Value>>,
+    /// What each opened child's opener was told beyond the child's own reports (`rules::child_watch`).
+    pub watched: HashMap<String, crate::agentctl::rules::child_watch::ChildWatch>,
+    /// Tabs a control tool is closing right now (`close_tab`): their release is no close by the person.
+    pub tool_closing: HashSet<String>,
 }
 
 /// A session inside a blocking wait main owns; counted until this drops, however the wait ends.
@@ -366,8 +370,13 @@ impl AgentControl {
     }
 
     /// `released`: a tab closed. `session`: the saved session it held, when nobody closed it through the control tools
-    /// (those record who did): its ids keep naming that session (`fates`).
-    pub fn released(&self, tab_id: &str, session: Option<&ReleasedSession>) {
+    /// (those record who did): its ids keep naming that session (`fates`). Returns the note to its opener, when the
+    /// person or its window closed an agent's child, so a caller that wants it told can wait for it.
+    pub fn released(
+        &self,
+        tab_id: &str,
+        session: Option<&ReleasedSession>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let closing = self.mem().closing.contains(tab_id);
         if let Some(session) = session
             && !closing
@@ -395,6 +404,16 @@ impl AgentControl {
                 fate_by::PERSON,
             );
         }
+        // A child closed by the person or its window (no tool closed it, no quit, which names no session) tells the
+        // session that opened it, which would otherwise wait for a report that never comes (after Orca's gone report,
+        // `workers/lifecycle/worker-exit-observation.ts`, MIT).
+        let by_tool = closing || self.mem().tool_closing.contains(tab_id);
+        let told = match session {
+            Some(session) if !by_tool && session.tell_opener && !session.hidden => {
+                self.tell_closed(tab_id, session)
+            }
+            _ => None,
+        };
         self.app_released(tab_id);
         {
             let mut mem = self.mem();
@@ -406,10 +425,12 @@ impl AgentControl {
             mem.conflicts.remove(tab_id);
             mem.cards_told.remove(tab_id);
             mem.last_spend.remove(tab_id);
+            mem.watched.remove(tab_id);
             mem.mailed_in
                 .retain(|key, _| !key.split('\n').any(|part| part == tab_id));
         }
         self.mailbox.forget(tab_id);
+        told
     }
 
     /// `openTarget`: the open session `session` names for `caller_tab_id`, by the tools' own name rules, refused when
@@ -845,8 +866,13 @@ impl AgentControl {
             Tool::Open => self.open_tool(&caller, tabs, typed(parsed, tool)?).await,
             Tool::Send => {
                 let args: types::SendArgs = typed(parsed, tool)?;
-                let target = self.send_target(&caller, tabs, &args.session).await?;
-                self.send(&caller, &target, &args).await
+                match &args.sessions {
+                    Some(names) => self.send_group(&caller, tabs, names, &args).await,
+                    None => {
+                        let target = self.send_target(&caller, tabs, &args.session).await?;
+                        self.send(&caller, &target, &args).await
+                    }
+                }
             }
             Tool::Result => {
                 let args: types::ResultArgs = typed(parsed, tool)?;
@@ -1153,7 +1179,23 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
                 Some(Value::Null) | None => None,
                 Some(value) => Some(args_of(value.clone(), method)?),
             };
-            control.released(&text_arg(&args, "tabId", method)?, session.as_ref());
+            // The note to its opener, when there is one, reaches main before the call answers.
+            if let Some(told) =
+                control.released(&text_arg(&args, "tabId", method)?, session.as_ref())
+            {
+                let _ = told.await;
+            }
+            Reply::json(&())
+        }
+        "childAskClosed" => {
+            control
+                .child_ask_closed(
+                    &text_arg(&args, "openerTabId", method)?,
+                    &text_arg(&args, "childTabId", method)?,
+                    &text_arg(&args, "requestId", method)?,
+                    args.get("choice").and_then(Value::as_str),
+                )
+                .await;
             Reply::json(&())
         }
         "openSessions" => {

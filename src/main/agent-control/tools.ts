@@ -203,6 +203,12 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 			type: "object",
 			properties: {
 				session: SESSION,
+				sessions: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						"Several sessions at once, instead of session: each gets the message and its own receipt line. @children names every open session you opened, @idle those of them that are idle (not running, no card waiting).",
+				},
 				message: { type: "string" },
 				request_id: {
 					type: "string",
@@ -211,7 +217,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				},
 				attachments: ATTACHMENTS,
 			},
-			required: ["session", "message"],
+			required: ["message"],
 			additionalProperties: false,
 		},
 	},
@@ -364,7 +370,8 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				},
 				text: {
 					type: "string",
-					description: "Typed answer (input and editor prompts), or a rejected plan's feedback.",
+					description:
+						"Typed answer (input and editor prompts), a rejected plan's feedback, or why a denied tool approval was denied (sent to the session after the denial).",
 				},
 				answers: {
 					type: "array",
@@ -771,12 +778,16 @@ export const ARGS = {
 		.refine(...reopenAlone),
 	[T.send]: z
 		.object({
-			session: sessionArg,
+			session: sessionArg.optional(),
+			sessions: z.array(sessionArg).min(1).optional(),
 			message: z.string().trim().min(1).max(MESSAGE_MAX_CHARS),
 			request_id: z.string().trim().min(1).max(200).optional(),
 			attachments: attachmentsArg.optional(),
 		})
-		.strict(),
+		.strict()
+		.refine(args => (args.session === undefined) !== (args.sessions === undefined), {
+			message: "give session or sessions (one of them)",
+		}),
 	[T.report]: z
 		.object({
 			kind: z.enum(MAIL_KINDS),

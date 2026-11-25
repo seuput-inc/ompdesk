@@ -941,6 +941,7 @@ async fn a_closed_tab_s_id_keeps_naming_its_session_and_a_delete_says_so() {
             former_ids: vec!["older".into()],
             hidden: false,
             opened_by_session: None,
+            tell_opener: false,
         }),
     );
     let tabs = control.host.state().tabs("caller").unwrap();

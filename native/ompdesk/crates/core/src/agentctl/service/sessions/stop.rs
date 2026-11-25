@@ -223,6 +223,23 @@ impl AgentControl {
         }) {
             return Ok(TabClose::Kept);
         }
+        // A close a tool makes is no close by the person: `released` keeps its "closed by the user" note to the opener
+        // for those (a failed open's cleanup and Autopilot's source tab come here without a stop of their own).
+        let marked = self.mem().tool_closing.insert(tab_id.to_owned());
+        let closed = self.close_tab_now(caller_tab_id, tab, how).await;
+        if marked {
+            self.mem().tool_closing.remove(tab_id);
+        }
+        closed
+    }
+
+    async fn close_tab_now(
+        &self,
+        caller_tab_id: &str,
+        tab: &ControlTab,
+        how: CloseHow<'_>,
+    ) -> R<TabClose> {
+        let tab_id = tab.tab_id.as_str();
         match tab_close_step(&facts(tab), how.cleared) {
             TabCloseStep::Keep(reason) => {
                 return Ok(if reason.as_str() == "dirty" {
@@ -614,7 +631,19 @@ impl AgentControl {
                 ));
             }
         }
+        // The opener's board reads Stopping on the child's row (its review item's `stopping`) until this ends.
+        let opener = if own {
+            Some(caller.tab_id.clone())
+        } else {
+            self.host
+                .state()
+                .parent_of(&target.tab_id)
+                .map(str::to_owned)
+        };
         self.mem().closing.insert(target.tab_id.clone());
+        if let Some(opener) = &opener {
+            self.host.review_changed(opener);
+        }
         let running = target.busy && target.status.is_up();
         let mut confirmed = !running;
         let carried = async {
@@ -684,6 +713,9 @@ impl AgentControl {
         }
         .await;
         self.mem().closing.remove(&target.tab_id);
+        if let Some(opener) = &opener {
+            self.host.review_changed(opener);
+        }
         carried?;
         // What was asked is done: nothing of it waits for the caller's next turn of the person's.
         self.cleanups()

@@ -144,6 +144,14 @@ export const MAIN_TEXT = {
 		ko: "“{caller}”의 에이전트가 다음 작업을 하려고 해요: {what}. 허용할까요?",
 	},
 	"agentControl.appChanged": { en: "Agent changed: {what} → {value}", ko: "에이전트가 바꿈: {what} → {value}" },
+	"agentControl.unansweredTitle": {
+		en: "“{child}” is waiting for an answer",
+		ko: "“{child}”이(가) 답을 기다려요",
+	},
+	"agentControl.unansweredMessage": {
+		en: "“{opener}” ended its turn without answering: {question}",
+		ko: "“{opener}”이(가) 답하지 않고 차례를 마쳤어요: {question}",
+	},
 	// Autopilot (src/main/autopilot.ts): notifications and the readable failures of a start.
 	"autopilot.paused.title": { en: "Autopilot paused", ko: "오토파일럿이 멈췄어요" },
 	"autopilot.ended.title": { en: "Autopilot ended", ko: "오토파일럿이 끝났어요" },

@@ -4,6 +4,7 @@
 //! module's header names its seams.
 
 pub mod auto_close;
+pub mod child_watch;
 pub mod custody;
 pub mod mail;
 pub mod pickup;

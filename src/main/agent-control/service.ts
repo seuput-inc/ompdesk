@@ -46,6 +46,7 @@ import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
 	AutoCloseTurn,
 	IpcSavedFolder,
+	IpcScheduledRetry,
 	IpcTabRunOutcome,
 	IpcTabWorktree,
 	TabStatus,
@@ -148,6 +149,14 @@ export interface ControlTab {
 	 * it there and what that tab does, from the host's summary every row reads. Its lines say that, never "not started".
 	 */
 	hostOpen?: OpenElsewhere;
+	/** Its turn ended and stock's background work (subagents, async jobs) still runs (`IpcTabInfo.settling`). */
+	settling?: true;
+	/** Stock's auto-retry saga its running turn is in (`IpcTabInfo.retrySaga`). */
+	retrySaga?: { attempt: number; maxAttempts: number; errorMessage: string };
+	/** Its failed turn retries by itself (`IpcTabInfo.scheduledRetry`): a backoff, or a wait for a provider's limit. */
+	scheduledRetry?: IpcScheduledRetry;
+	/** Its turn waits for the internet connection and goes on once it is back. */
+	awaitingConnection?: true;
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */
@@ -491,6 +500,8 @@ export const TEXT_KEYS = [
 	"appTitle",
 	"appMessage",
 	"appChanged",
+	"unansweredTitle",
+	"unansweredMessage",
 ] as const;
 export type TextKey = (typeof TEXT_KEYS)[number];
 
@@ -505,6 +516,8 @@ export interface ReleasedSession {
 	hidden?: boolean;
 	/** The session file of the session whose agent opened it, when one did. */
 	openedBySession?: string;
+	/** Its opener hears that it was closed: an agent's own child, not an Autopilot run's (the run reads those itself). */
+	tellOpener?: true;
 }
 
 export interface ToolOutcome {
@@ -554,7 +567,9 @@ export type Tuning = Partial<
 		| "promptMs"
 		| "judgeMs"
 		| "whenGoneMs"
-		| "mailCoalesceMs",
+		| "mailCoalesceMs"
+		| "failureSettleMs"
+		| "backgroundNoteMs",
 		number
 	>
 >;

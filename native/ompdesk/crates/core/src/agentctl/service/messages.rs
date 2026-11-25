@@ -26,12 +26,12 @@ use super::resolve::OpenOptions;
 use super::state::SessionState;
 use super::text::{
     JournalMarks, OTHER_OPTION, card_text, cleanup_caller, is_agent_card, journal_marks, label,
-    named, pick_option, response_data, saved_id_of_path, transcript_page, with_dispatch,
+    named, pick_option, response_data, saved_id_of_path, transcript_page, waits, with_dispatch,
 };
 use super::types::{
     AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, StoredSession, UiRequest,
 };
-use super::util::Flight;
+use super::util::{Flight, join};
 use super::wrap::{dispatch_mark, request_mark, wrap_agent_message};
 use crate::agentctl::journal::attachments::{Resolved, image_block, shas_sig, with_attached};
 use crate::agentctl::journal::pending_cleanups::CleanupAction;
@@ -56,7 +56,7 @@ const EVIDENCE_MESSAGES: u64 = 200;
 const APPROVE_DENY: &str = "Deny";
 
 /// `new Date(at).toISOString().slice(0, 16).replace("T", " ")`.
-fn utc_minutes(at: f64) -> String {
+pub(crate) fn utc_minutes(at: f64) -> String {
     let minutes = (at / 60_000.0).floor() as i64;
     let days = minutes.div_euclid(1440);
     let of_day = minutes.rem_euclid(1440);
@@ -321,6 +321,82 @@ impl AgentControl {
                 result
             }
         }
+    }
+
+    /// `ompdesk_session_send` with `sessions`: one message to each named session, side by side, each with its own
+    /// receipt (and dispatch, for a child). `@children` names the caller's open children, `@idle` those of them not
+    /// running and not waiting on a card, as at the send (after Orca's group addresses, `addressing/groups/`, MIT).
+    pub(super) async fn send_group(
+        &self,
+        caller: &ControlTab,
+        tabs: &[ControlTab],
+        names: &[String],
+        args: &SendArgs,
+    ) -> R<String> {
+        let mut ids: Vec<String> = Vec::new();
+        for name in names {
+            let group = match name.as_str() {
+                "@children" => Some(false),
+                "@idle" => Some(true),
+                _ => None,
+            };
+            let Some(idle_only) = group else {
+                if !ids.contains(name) {
+                    ids.push(name.clone());
+                }
+                continue;
+            };
+            let children = self.children_of(&caller.tab_id);
+            for tab in tabs.iter().filter(|tab| children.contains(&tab.tab_id)) {
+                if idle_only && (tab.busy || waits(tab)) {
+                    continue;
+                }
+                if !tab.hidden && !ids.contains(&tab.tab_id) {
+                    ids.push(tab.tab_id.clone());
+                }
+            }
+        }
+        if ids.is_empty() {
+            return fail(format!(
+                "No session to send to: {} named none (no session you opened is open{}).",
+                names.join(", "),
+                if names.iter().any(|name| name == "@idle") {
+                    " and idle"
+                } else {
+                    ""
+                }
+            ));
+        }
+        let sends = join::all(
+            ids.iter()
+                .map(|id| {
+                    join::boxed(async move {
+                        let target = self.send_target(caller, tabs, id).await?;
+                        self.send(caller, &target, args).await
+                    })
+                })
+                .collect(),
+        )
+        .await;
+        let failed = sends.iter().filter(|sent| sent.is_err()).count();
+        let lines: Vec<String> = ids
+            .iter()
+            .zip(&sends)
+            .map(|(id, sent)| match sent {
+                Ok(receipt) => format!("- {receipt}"),
+                Err(error) => format!("- {id}: not sent: {}", error.message()),
+            })
+            .collect();
+        let text = format!(
+            "Sent to {} of {} sessions:\n{}",
+            ids.len() - failed,
+            ids.len(),
+            lines.join("\n")
+        );
+        if failed == ids.len() {
+            return fail(text);
+        }
+        Ok(text)
     }
 
     /// `#untilDraftSent`: a message never starts a turn under the person's hands: while they have a draft in the
@@ -743,8 +819,26 @@ impl AgentControl {
             "delivered as steer (it reads it at its next step, together with every other message waiting for it)"
                 .to_owned()
         };
+        // What it was waiting through when the message came (after Orca's delivery-hold wording, MIT).
+        let waited = match (&target.scheduled_retry, &target.retry_saga) {
+            (Some(retry), _) if retry.limit => format!(
+                " It was waiting for a provider's usage limit (until about {} UTC): this message starts a turn now, which may stop at the same limit, and then it waits again.",
+                utc_minutes(retry.at)
+            ),
+            (Some(retry), _) => format!(
+                " Its last turn had failed and was to try again by itself at {} UTC: this message runs instead.",
+                utc_minutes(retry.at)
+            ),
+            (None, Some(saga)) if running => format!(
+                " It is retrying a failed model request (attempt {} of {}: {}), so it may read this late.",
+                saga.attempt,
+                saga.max_attempts,
+                one_line(&saga.error_message, 160)
+            ),
+            _ => String::new(),
+        };
         let receipt = format!(
-            "Sent to {}: {}{}; {how}.{dispatch_note}{attached_note}",
+            "Sent to {}: {}{}; {how}.{waited}{dispatch_note}{attached_note}",
             named(target),
             if unconfirmed.is_some() {
                 "not confirmed"
@@ -1139,6 +1233,8 @@ impl AgentControl {
         let title_of = |max| one_line(request.title.as_deref().unwrap_or("undefined"), max);
         let response: Value;
         let summary: String;
+        // A tool approval denied with `text`: the reason reaches the session after the denial, as Orca's deny reason does.
+        let mut deny_reason: Option<String> = None;
         match request.method.as_str() {
             "select" => {
                 let approval = approval_once(request);
@@ -1192,6 +1288,14 @@ impl AgentControl {
                 response =
                     json!({ "type": "extension_ui_response", "id": ask.id, "value": choice });
                 summary = format!("\"{choice}\" to \"{}\"", title_of(100));
+                if approval.is_some() && choice == APPROVE_DENY {
+                    deny_reason = args
+                        .text
+                        .as_deref()
+                        .map(trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_owned);
+                }
             }
             "confirm" => {
                 // A yes or no, however it was given.
@@ -1316,6 +1420,12 @@ impl AgentControl {
                 ));
             }
         }
+        // The opener answers a card it was told of: its close is not reported back to it (`child_ask_closed`).
+        if self.host.state().parent_of(&target.tab_id) == Some(caller.tab_id.as_str())
+            && let Some(told) = self.mem().cards_told.get_mut(&target.tab_id)
+        {
+            told.remove(&ask.id);
+        }
         let about = if request.method == "ask" {
             "its questions".to_owned()
         } else {
@@ -1345,10 +1455,34 @@ impl AgentControl {
             &caller.title
         };
         let _ = self.host.mark_answered(&target.tab_id, by).await;
-        Ok(format!(
-            "Answered {}: {summary}. It continues now.",
-            label(target)
-        ))
+        let Some(reason) = deny_reason else {
+            return Ok(format!(
+                "Answered {}: {summary}. It continues now.",
+                label(target)
+            ));
+        };
+        let told = self
+            .send(
+                caller,
+                target,
+                &SendArgs {
+                    session: target.tab_id.clone(),
+                    message: format!("Denied \"{}\": {reason}", title_of(100)),
+                    ..SendArgs::default()
+                },
+            )
+            .await;
+        Ok(match told {
+            Ok(_) => format!(
+                "Answered {}: {summary}, and sent it the reason. It continues now.",
+                label(target)
+            ),
+            Err(error) => format!(
+                "Answered {}: {summary}. It continues now, but the reason was not delivered: {}",
+                label(target),
+                error.message()
+            ),
+        })
     }
 
     /// `#answerPlan`: a plan proposal, through the same `plan_approval` command the plan card sends: approve with an

@@ -242,6 +242,39 @@ pub struct ControlTab {
     /// who holds it there and what that tab does, from the host's summary every row reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_open: Option<OpenElsewhere>,
+    /// Its turn ended and stock's background work (subagents, async jobs) still runs (`IpcTabInfo.settling`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub settling: bool,
+    /// Stock's auto-retry saga its running turn is in (`IpcTabInfo.retrySaga`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_saga: Option<RetrySaga>,
+    /// Its failed turn retries by itself (`IpcTabInfo.scheduledRetry`): a backoff, or a wait for a provider's limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_retry: Option<ScheduledRetry>,
+    /// Its turn waits for the internet connection and goes on once it is back (`IpcTabInfo.awaitingConnection`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub awaiting_connection: bool,
+}
+
+/// Stock's auto-retry saga a running turn is in (`IpcRetrySaga`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrySaga {
+    pub attempt: u32,
+    pub max_attempts: u32,
+    #[serde(default)]
+    pub error_message: String,
+}
+
+/// A failed turn's own retry main armed (`IpcScheduledRetry`): `limit` waits for a provider's usage limit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledRetry {
+    /// Epoch ms.
+    pub at: f64,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub limit: bool,
 }
 
 impl ControlTab {
@@ -450,6 +483,9 @@ pub struct ReleasedSession {
     pub hidden: bool,
     #[serde(default)]
     pub opened_by_session: Option<String>,
+    /// Its opener hears that it was closed: an agent's own child, not an Autopilot run's (the run reads those itself).
+    #[serde(default)]
+    pub tell_opener: bool,
 }
 
 /// A tool call's result: what the agent reads, and whether it failed.
@@ -1186,7 +1222,12 @@ pub struct ListArgs {
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct SendArgs {
+    /// One session; empty when `sessions` names several.
+    #[serde(default)]
     pub session: String,
+    /// Several sessions, each a name or `@children` / `@idle` (the caller's open children, or those of them idle).
+    #[serde(default)]
+    pub sessions: Option<Vec<String>>,
     pub message: String,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,

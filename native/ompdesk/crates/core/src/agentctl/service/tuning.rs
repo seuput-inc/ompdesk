@@ -57,6 +57,10 @@ pub struct Tuning {
     pub when_gone_ms: u64,
     /// The mailbox coalesces progress reports for this long.
     pub mail_coalesce_ms: u64,
+    /// A child's failed turn stands once nothing armed its retry for this long (main arms one a moment after the end).
+    pub failure_settle_ms: u64,
+    /// A child whose own background work keeps it past its turn's end this long is named to its opener.
+    pub background_note_ms: u64,
 }
 
 impl Default for Tuning {
@@ -87,6 +91,8 @@ impl Default for Tuning {
             judge_ms: 180_000,
             when_gone_ms: 10_000,
             mail_coalesce_ms: crate::agentctl::rules::mail::MAIL_COALESCE_MS,
+            failure_settle_ms: 5_000,
+            background_note_ms: 20 * 60_000,
         }
     }
 }
