@@ -9,6 +9,7 @@ import { z } from "zod";
 import type {
 	AccountCredits,
 	AccountUsageState,
+	ModelReleaseDatesResult,
 	ProviderAccount,
 	ProviderAccountsResult,
 	ResetPasses,
@@ -16,7 +17,6 @@ import type {
 	UsageLimit,
 } from "../../shared/rpc-types";
 import { core } from "../core/process";
-import { getModelReleaseDates } from "../model-release-dates";
 import { loopbackCallback } from "../sign-in-callback";
 import { stockHelperRequest } from "../stock-helper";
 import { LocalCommandError, type LocalHandler } from "./types";
@@ -121,7 +121,8 @@ export const handlers: Record<string, LocalHandler> = {
 	set_setting: (command, ctx) => ctx.bridge.request("settings_set", { path: command.path, value: command.value }),
 	get_available_models: (command, ctx) =>
 		ctx.bridge.request("models_catalog", { forceRefresh: command.forceRefresh === true }),
-	get_model_release_dates: () => getModelReleaseDates(),
+	// The core fetches and keeps them (`crates/core/src/models/release_dates.rs`); never an error, unknown dates are absent.
+	get_model_release_dates: async () => (await core().call<ModelReleaseDatesResult>("models.releaseDates", {})).result,
 	get_providers: (command, ctx) => ctx.bridge.request("providers", { forceRefresh: command.forceRefresh === true }),
 	login_cancel: async command => cancelBrowserLogin(z.string().url().parse(command.url)),
 	// One account goes through stock `logout`; the whole provider only when asked for explicitly.

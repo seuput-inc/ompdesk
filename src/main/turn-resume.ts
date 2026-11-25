@@ -43,7 +43,7 @@ import { writeFileAtomicDeferred } from "./atomic-file";
 import { canonicalCwd } from "./canonical-cwd";
 import { type HubItem, hub, sharedInstance } from "./core/hub";
 import { type CoreError, isCoreShutdown } from "./core/process";
-import { deletedSessions } from "./deleted-sessions";
+import { deletedSessionsOpen } from "./deleted-sessions";
 import { RpcTimeoutError } from "./rpc-client";
 import type { SidecarLike } from "./sidecar-types";
 import { recordTurnStop } from "./turn-stop-log";
@@ -557,6 +557,7 @@ export class TurnResume {
 	/** The instance, opened (or opened again after a loss) with what can be read again. */
 	#instance(): number {
 		if (this.#id !== null) return this.#id;
+		deletedSessionsOpen();
 		const id = hub().nextId();
 		const deps = this.#deps;
 		hub().open(
@@ -836,14 +837,8 @@ export class TurnResume {
 				return deps.openTab(item.marker as ResumeMarker);
 			case "resumeRank":
 				return (item.tabs as string[]).map(tab => deps.pool.resumeRank?.(tab) ?? 0);
-			case "launchRead": {
-				const markers = deps.store.read();
-				return {
-					markers,
-					deleted: markers.map(marker => deletedSessions().has(marker.sessionPath)),
-					enabled: deps.enabled(),
-				};
-			}
+			case "launchRead":
+				return { markers: deps.store.read(), enabled: deps.enabled() };
 			case "canonical":
 				return (item.paths as string[]).map(path => canonicalCwd(path));
 			default:

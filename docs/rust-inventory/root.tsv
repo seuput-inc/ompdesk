@@ -217,8 +217,7 @@ src/main/console-window-watch.ts	mixed	2	procs.consoles enumerates and attribute
 src/main/core-saves.test.ts	tooling	-	Vitest suite: the core's stores on a full disk.
 src/main/core-saves.ts	native-client	2	routeCoreSaves consumes store.saveFailed/store.saved from crates/core/src/disk/saves.rs and clears reported names on core exit; retries stay in Rust.
 src/main/default-workspace.ts	native-client	1	fs.defaultWorkspace resolves the work directory beside the profile and creates it on demand.
-src/main/deleted-sessions-disk-full.test.ts	tooling	-	Vitest suite: stores that save on every change, on a full disk.
-src/main/deleted-sessions.ts	port	2	The pool's blocked check, LocalHostServices.#open and layout restore read tombstones synchronously. deleteSession publishes add() before its listeners and AtomicSaver attempts the first save in that tick, retaining the tombstone on disk-full failure.
+src/main/deleted-sessions.ts	native-client	2	Client of crates/core/src/sessions/deleted.rs (hub kind deleted): the core keeps and saves the tombstones (write_kept) and answers the pool, the layout restore and the turn resume itself; main asks it synchronously for the session index (one which per list), a paired device and the agent tools. Goes with those callers.
 src/main/delivery-ledger.test.ts	tooling	-	Vitest suite: deliverOnce.
 src/main/delivery-ledger.ts	port	2	§1.3: ipc.ts and remote/host-services.ts share the in-flight transport Promise itself on duplicate delivery. Receiver: remote-web, with those transports.
 src/main/desktop-slot-exit.ts	mixed	3	Hub batch with sidecar.ts, §1.3(a,c): desktopSlotProcess captures the current spawn and bridge generation synchronously. A replacement core cannot attest to the old holder's exit; keep the receipt and its read-only OS observations with the captured process.
@@ -303,8 +302,6 @@ src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses and procs.pressur
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions (tauri-shell/src/app_menu.rs against MenuAction and NATIVE_CHORDS).
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
 src/main/message-update-slim.ts	port	1	§1.3a,b,c: SidecarPool, the link encoder and subagent frame shaping synchronously strip repeated content using state for this turn. No I/O unit; move with the producer and its ordered sinks, not another round trip per event.
-src/main/model-release-dates.test.ts	tooling	-	Vitest suite: model release dates.
-src/main/model-release-dates.ts	port	2	Shell networking batch: preserve Node fetch's bundled roots, NODE_EXTRA_CA_CERTS and opt-in NODE_USE_ENV_PROXY with HTTPS_PROXY/NO_PROXY. core/http.rs dials directly using platform roots; net.* uses OS proxy settings. Move the GET with the date parser and 24h success / 5min failure cache once transport matches. Never replace last-good dates on a failed refresh.
 src/main/model-role-contracts.test.ts	tooling	-	Vitest suite: role groups.
 src/main/model-roles-stock-coverage.test.ts	tooling	-	Vitest suite: lists each installed role with stock's metadata, or hides it with a reason.
 src/main/model-setup-metering.test.ts	tooling	-	Vitest suite: sees OpenRouter chat models, so the metering checks are not vacuous.
@@ -384,7 +381,7 @@ src/main/session-index-activity.test.ts	tooling	-	Vitest suite: lists when the c
 src/main/session-index-first-prompt.test.ts	tooling	-	Vitest suite: lists the first prompt that stock persists after a long xd:// mount notice.
 src/main/session-index.test.ts	tooling	-	Vitest suite: keeps GUI kind overlays and handles headers with no title slot.
 src/main/session-index.ts	mixed	3	Rust watches the tree, filters listed rows, searches journals and stats move destinations. Main asks stock for the move, then invalidates the shared list before consumers can read it again.
-src/main/session-kinds.ts	port	2	Hub batch, §1.3(a,c): sidecar-factory.ts marks chat IDs on its session event; session-index.ts reads isChat synchronously while classifying each row and resolving kind. Move the store with the index readers; a pending core write must not make a new chat briefly appear as an ordinary session.
+src/main/session-kinds.ts	native-client	2	Client of crates/core/src/sessions/kinds.rs (hub kind kinds): sidecar-factory.ts marks a chat tab's session id with a synchronous hub call, so the mark is in the core before the next list; the core keeps and saves the record (write_kept) and labels rows itself in sessions.listed and sessions.kind (the index passes the record's file). Goes with sidecar-factory.
 src/main/session-launch-parity.test.ts	tooling	-	Vitest suite: a session's omp launches the same way on every start path.
 src/main/session-list-share.test.ts	tooling	-	Vitest suite: SessionListShare.
 src/main/session-list-share.ts	port	3	HostSessionList.hostChanged reads held() and applies a delta against the same base before any await; SessionIndex also checks the held copy on watch warmup. Async scans are injected. Moving the copy alone would split version admission from publication.
