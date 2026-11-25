@@ -417,7 +417,15 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // terminal port, 26 Nov 2026; the saved-command store and parser load with the palette, the sheet and xterm on first
 // open), on top of the review notes: measured 2,218,875 (local build of omp/agent/orca-terminal rebased on 73923cfad),
 // 2,857 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_218_955;
+// The conversation's reading and writing extras (26 Nov 2026, orca-chat-reading), all on the session's first screen:
+// the composer keeps a draft's pictures as ordered slots and their kept-file references (`stores/composer.ts`,
+// `draft-persistence.ts`, `use-composer-draft.ts`, the "Attach again" chip), the `@` menu's sessions
+// (`mention-sessions.ts`), links kept in a paste (`pasted-links.ts`), a long prompt's fold (`MessageBubble`), the
+// manual compaction events and no-op notice, the composer's ⌘↵ and the transcript's Backspace and paste keys. The Find
+// bar (`TranscriptFindBar`) and the rail's list (`PromptListPanel`) load on first use: measured 2,229,435 (local build
+// of omp/agent/orca-chat-reading rebased on cf385789a, over the terminal port), 10,560 bytes over. The budget is that
+// measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_229_515;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

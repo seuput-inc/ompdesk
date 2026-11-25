@@ -215,6 +215,11 @@ describe("ConversationNavigator", () => {
 		const onNavigate = vi.fn();
 		await mount(onNavigate);
 		await press(container.querySelector<HTMLButtonElement>("[data-prompt-list]"));
+		// The list's body loads on its first opening.
+		await act(async () => {
+			await import("./PromptListPanel");
+		});
+		await act(async () => {});
 		const rows = () => Array.from(document.querySelectorAll("[data-prompt-list-row]"));
 		expect(rows().map(row => row.textContent)).toEqual([
 			expect.stringContaining("First question"),
