@@ -571,14 +571,20 @@ describe("AiMemoryService", () => {
 
 		it("the automatic re-runs are bounded: a refusal that never ends stays failed with its reason", async () => {
 			const lines: string[] = [];
+			// The phase each `failed` line was heard in: the line reports a state that is already visible.
+			const phases: string[] = [];
 			const { service, behavior, commands } = await make({
 				retryDelaysMs: [0, 0],
-				log: message => lines.push(message),
+				log: message => {
+					lines.push(message);
+					if (message === "failed") phases.push(service.state().phase);
+				},
 			});
 			behavior.setup = () => BOOTSTRAP_REFUSED;
 			await service.start();
 			// The third failure is logged before the (refused) schedule of a fourth pass, in the same turn.
 			await vi.waitFor(() => expect(lines.filter(message => message === "failed")).toHaveLength(3));
+			expect(phases).toEqual(["failed", "failed", "failed"]);
 			expect(lines.filter(message => message === "retry")).toHaveLength(2);
 			expect(commands().filter(command => command === SETUP)).toHaveLength(3);
 			expect(service.state()).toMatchObject({ phase: "failed" });
