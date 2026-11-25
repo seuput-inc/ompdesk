@@ -118,7 +118,7 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
    indentation: left unpositioned (`inset-inline-start: auto`) an absolutely positioned child of this flex row
    starts at the content edge, the padding that indents nested sessions and subagents, and the negative margin
    pulls it just left of the icon.
-   waiting = warning and error = danger, both still. A running row has no bar: its own title carries the
+   waiting = attention and error = danger, both still. A running row has no bar: its own title carries the
    composer's sweeping light (common/LiveShimmer.tsx, components.css `.omp-live-text`). */
 .omp-sidebar-session-row[data-signal="waiting"]::before,
 .omp-sidebar-session-row[data-signal="error"]::before {
@@ -143,7 +143,7 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 }
 
 .omp-sidebar-session-row[data-signal="waiting"]::before {
-	background: var(--sc-warning);
+	background: var(--sc-attention);
 }
 
 .omp-sidebar-session-row[data-signal="error"]::before {

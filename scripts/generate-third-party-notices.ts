@@ -331,7 +331,8 @@ function vendoredSections(): string {
 		].join("\n"),
 		[
 			"Theme palettes (src/renderer/lib/theme-palettes.ts)",
-			"The Solarized, Gruvbox and GitHub themes (each a light and a dark one) start from the",
+			"The Solarized, Gruvbox and GitHub themes (each a light and a dark one), and the near-monochrome",
+			"OMPdesk Light and Dark themes, start from the",
 			"colors their authors publish; where a published color fails WCAG AA for text on its own",
 			"background it is replaced by a shade of the same hue (see the header of that file). Each",
 			"palette is credited below with its license; every one is MIT.",
@@ -340,6 +341,8 @@ function vendoredSections(): string {
 			"- Gruvbox, https://github.com/morhetz/gruvbox, by Pavel Pertsev (morhetz), licensed MIT",
 			"  (package.json; the repository ships no separate license file)",
 			"- GitHub Primer primitives, https://github.com/primer/primitives, Copyright (c) 2018 GitHub Inc.",
+			"- Orca (OMPdesk Light and Dark, and the app's elevation shadows), https://github.com/stablyai/orca,",
+			"  Copyright (c) 2026 Lovecast Inc.",
 			"",
 			MIT_TEXT,
 		].join("\n"),

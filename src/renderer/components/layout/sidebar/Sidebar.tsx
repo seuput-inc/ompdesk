@@ -1757,7 +1757,7 @@ export function Sidebar() {
 		const runningOpened = opened.filter(child => child.status === "running").length;
 		const workingAgents = workingAgentCount(summary?.agents ?? []);
 		const waitingBadge = waiting ? (
-			<Badge className="omp-sidebar-approval" variant="warning">
+			<Badge className="omp-sidebar-approval" variant="attention">
 				{/* The glyph stays when the word has no room left beside the title (it truncates, then hides). */}
 				<AlertTriangle aria-hidden className="size-3 shrink-0" />
 				<span className="min-w-0 truncate" title={waitingLabel ?? undefined}>

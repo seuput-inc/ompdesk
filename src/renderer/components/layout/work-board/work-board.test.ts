@@ -37,19 +37,19 @@ describe("work board breakpoint", () => {
 	});
 
 	it("needs the transcript's max width plus 300px of spare margin", () => {
-		// 3cqw clamps at 40px from 1334px up: the column is 768 + 80.
-		expect(transcriptColumnWidth(1600)).toBe(848);
+		// 3cqw clamps at 40px from 1334px up: the column is 736 + 80.
+		expect(transcriptColumnWidth(1600)).toBe(816);
 		expect(workBoardFits(1600)).toBe(true);
 		// The smallest pane that fits: its margin beside the column (which grows with the pane until 1334px) is 300px.
 		let narrowest = 0;
 		while (!workBoardFits(narrowest)) narrowest++;
-		expect(narrowest).toBe(1137);
+		expect(narrowest).toBe(1103);
 		expect(narrowest - transcriptColumnWidth(narrowest)).toBeGreaterThanOrEqual(WORK_BOARD_MIN_SPARE);
 		expect(narrowest - 1 - transcriptColumnWidth(narrowest - 1)).toBeLessThan(WORK_BOARD_MIN_SPARE);
 	});
 
 	it("is too narrow for a split pane or a narrow window", () => {
-		for (const width of [0, 480, 800, 1000, 1135]) expect(workBoardFits(width)).toBe(false);
+		for (const width of [0, 480, 800, 1000, 1102]) expect(workBoardFits(width)).toBe(false);
 	});
 
 	it("widens only where the margin holds the wide board with room to spare", () => {
@@ -68,7 +68,7 @@ describe("work board breakpoint", () => {
 		// Measured panes, web build, sidebar at its default 248 px: iPad Pro 12.9" (1366 → 1118), iPad Air (1180 → 932)
 		// and iPad mini (1133 → 885) sideways, all docked; a 1024 px tablet (776) keeps the strip until its sidebar
 		// folds (1024).
-		expect(workBoardFits(1118)).toBe(false);
+		expect(workBoardFits(1118)).toBe(true);
 		expect(workBoardDocks(1118, "tablet-landscape")).toBe(true);
 		expect(workBoardWidth(1118)).toBe(WORK_BOARD_WIDTH);
 		expect(workBoardDocks(932, "tablet-landscape")).toBe(true);
@@ -95,8 +95,8 @@ describe("work board breakpoint", () => {
 		// scaling) has a 1032 px pane. A portrait tablet and a phone keep the strip.
 		expect(workBoardDocks(1032, null)).toBe(true);
 		expect(workBoardDocks(776, null)).toBe(false);
-		expect(workBoardDocks(1118, "tablet-portrait")).toBe(false);
-		expect(workBoardDocks(1118, "phone")).toBe(false);
+		expect(workBoardDocks(1100, "tablet-portrait")).toBe(false);
+		expect(workBoardDocks(1100, "phone")).toBe(false);
 	});
 
 	it("shows the strip wherever it cannot dock, and nothing only with the pref off", () => {

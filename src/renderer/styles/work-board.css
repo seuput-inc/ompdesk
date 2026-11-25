@@ -1,7 +1,7 @@
 /* Work board (components/layout/work-board/WorkBoard.tsx). Layout — the slot, the reserve it takes from the columns and
    the dock strips it replaces — lives in components.css; this file is how the board itself looks. Colourless
    first: text weights and hairlines carry the structure, colour appears only as a state (working = info,
-   done = success, needs you = warning). */
+   done = success, needs you = attention). */
 
 .omp-work-board {
 	display: flex;
@@ -49,7 +49,7 @@
 }
 
 .omp-work-board-pulse[data-state="waiting"] {
-	background: var(--sc-warning);
+	background: var(--sc-attention);
 }
 
 /* The board's name is for screen readers: the sentence under the pulse says what the board is saying. */
@@ -74,8 +74,8 @@
 	color: var(--sc-text);
 }
 
-.omp-work-board-status [data-tone="warning"] {
-	color: var(--sc-warning);
+.omp-work-board-status [data-tone="attention"] {
+	color: var(--sc-attention);
 }
 
 .omp-work-board-status [data-tone="danger"] {
@@ -267,6 +267,10 @@ button.omp-work-board-row:hover {
 	color: var(--sc-warning);
 }
 
+.omp-work-board-kind[data-tone="attention"] {
+	color: var(--sc-attention);
+}
+
 .omp-work-board-kind[data-tone="danger"] {
 	color: var(--sc-danger);
 }
@@ -370,32 +374,32 @@ button.omp-work-board-more:hover {
 	border-radius: var(--sc-radius-md);
 }
 
-.omp-work-board-section[data-tone="warning"] {
-	background: var(--sc-warning-soft);
+.omp-work-board-section[data-tone="attention"] {
+	background: var(--sc-attention-soft);
 }
 
 .omp-work-board-section[data-tone="danger"] {
 	background: var(--sc-danger-soft);
 }
 
-.omp-work-board-section[data-tone="warning"] .omp-work-board-title {
-	color: var(--sc-warning-on-soft);
+.omp-work-board-section[data-tone="attention"] .omp-work-board-title {
+	color: var(--sc-attention-on-soft);
 }
 
-/* The warning wash takes the quiet text's contrast under 4.5:1 (dark: a waiting child's step read 4.33:1): on a washed
-   row it reads at secondary, as on the sidebar's selected row (lib/theme-contrast.ts "secondary over a warning wash"). */
-.omp-work-board-section[data-tone="warning"] button.omp-work-board-row,
+/* The attention wash takes the quiet text's contrast under 4.5:1 (dark: a waiting child's step read 4.33:1): on a washed
+   row it reads at secondary, as on the sidebar's selected row (lib/theme-contrast.ts "secondary over an attention wash"). */
+.omp-work-board-section[data-tone="attention"] button.omp-work-board-row,
 button.omp-work-board-row[data-board-opened][data-status="waiting"] {
 	--sc-text-subtle: var(--sc-text-secondary);
 	--sc-text-muted: var(--sc-text-secondary);
 }
 
-.omp-work-board-section[data-tone="warning"] button.omp-work-board-row {
+.omp-work-board-section[data-tone="attention"] button.omp-work-board-row {
 	color: var(--sc-text);
 }
 
-.omp-work-board-section[data-tone="warning"] button.omp-work-board-row:hover {
-	background: color-mix(in srgb, var(--sc-warning) 14%, transparent);
+.omp-work-board-section[data-tone="attention"] button.omp-work-board-row:hover {
+	background: color-mix(in srgb, var(--sc-attention) 14%, transparent);
 }
 
 .omp-work-board-section[data-tone="danger"] .omp-work-board-title {
@@ -408,12 +412,12 @@ button.omp-work-board-row[data-board-opened][data-status="waiting"] {
 
 /* An opened session that waits on the user: only its own row wears the wash, the list stays plain. */
 button.omp-work-board-row[data-board-opened][data-status="waiting"] {
-	background: var(--sc-warning-soft);
+	background: var(--sc-attention-soft);
 	color: var(--sc-text);
 }
 
 button.omp-work-board-row[data-board-opened][data-status="waiting"]:hover {
-	background: color-mix(in srgb, var(--sc-warning) 18%, transparent);
+	background: color-mix(in srgb, var(--sc-attention) 18%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -516,8 +520,8 @@ button.omp-work-board-row[data-board-opened][data-status="waiting"]:hover {
 	color: var(--sc-text-muted);
 }
 
-.omp-work-board-tag[data-tone="warning"] {
-	color: var(--sc-warning-on-soft);
+.omp-work-board-tag[data-tone="attention"] {
+	color: var(--sc-attention-on-soft);
 }
 
 .omp-work-board-tag[data-tone="danger"] {

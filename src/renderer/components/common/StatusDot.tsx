@@ -9,8 +9,9 @@
  * It renders a single element, so `className` and DOM attributes land on the dot itself (an avatar's corner places it
  * with `absolute` and cuts it out with a `ring-2`).
  *
- * `tone` carries the meaning: `success` done or reachable, `warning` needs a look, `danger` failed or gone, `info`
- * informational, `neutral` idle or pending, `working` going on now (the accent, pulsing unless `pulse={false}`).
+ * `tone` carries the meaning: `success` done or reachable, `warning` needs a look, `attention` waits on the person,
+ * `danger` failed or gone, `info` informational, `neutral` idle or pending, `working` going on now (the accent,
+ * pulsing unless `pulse={false}`).
  * `pulse` on another tone marks a live state of that tone; reduced motion holds it still (global rule). `ring` draws
  * the dot hollow, outlined in its tone: a state of that tone not reached yet or under way (a cycle running, a step
  * queued). The word takes the surrounding font size and colour, so the dot fits any row; `labelClassName` styles the
@@ -21,12 +22,13 @@
 import type { HTMLAttributes } from "react";
 import { cx } from "../../lib/format";
 
-export type StatusTone = "success" | "warning" | "danger" | "info" | "neutral" | "working";
+export type StatusTone = "success" | "warning" | "attention" | "danger" | "info" | "neutral" | "working";
 
 /** Each tone's fill; ProgressBar's segments paint with the same tones. */
 export const STATUS_TONE_FILL: Record<StatusTone, string> = {
 	success: "bg-(--sc-success)",
 	warning: "bg-(--sc-warning)",
+	attention: "bg-(--sc-attention)",
 	danger: "bg-(--sc-danger)",
 	info: "bg-(--sc-info)",
 	neutral: "bg-(--sc-text-muted)",
@@ -36,6 +38,7 @@ export const STATUS_TONE_FILL: Record<StatusTone, string> = {
 const TONE_RING: Record<StatusTone, string> = {
 	success: "shadow-[inset_0_0_0_1px_var(--sc-success)]",
 	warning: "shadow-[inset_0_0_0_1px_var(--sc-warning)]",
+	attention: "shadow-[inset_0_0_0_1px_var(--sc-attention)]",
 	danger: "shadow-[inset_0_0_0_1px_var(--sc-danger)]",
 	info: "shadow-[inset_0_0_0_1px_var(--sc-info)]",
 	neutral: "shadow-[inset_0_0_0_1px_var(--sc-text-muted)]",

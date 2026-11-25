@@ -449,7 +449,7 @@ html[data-shell] .omp-composer-region.pb-3 {
 }
 
 .omp-work-chip[data-state="waiting"] {
-	border-color: var(--sc-warning);
+	border-color: var(--sc-attention);
 }
 
 .omp-work-chip > .omp-work-chip-label {
@@ -1032,6 +1032,9 @@ html[data-shell="phone"] {
 	--sc-icon-lg: 16px;
 	--sc-row-touch: 36px;
 	--sc-row-action: 44px;
+	/* Rounder than the desktop, as Orca's phone app is: cards, menus and toasts 12, the composer, dialogs and sheets 16. */
+	--sc-radius-lg: 12px;
+	--sc-radius-xl: 16px;
 }
 
 /* Transcript and composer gutters: 12 px, not the desktop's reading-column margins. */

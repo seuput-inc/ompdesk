@@ -113,7 +113,7 @@ describe("pre-paint", () => {
 	});
 
 	it("falls back to the OMPdesk backgrounds with nothing stored, or with a damaged record", () => {
-		expect(prePaint("dark")).toMatchObject({ scheme: "dark", background: "#19191c" });
+		expect(prePaint("dark")).toMatchObject({ scheme: "dark", background: "#0a0a0a" });
 		stored.set("omp.themeScheme", "light");
 		stored.set("omp.themePaint", "{not json");
 		expect(prePaint("dark")).toMatchObject({ scheme: "light", background: "#ffffff" });

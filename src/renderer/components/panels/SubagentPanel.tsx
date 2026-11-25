@@ -44,6 +44,7 @@ const DOT_CLASS: Record<StatusMeta["variant"], string> = {
 	success: "bg-(--sc-success)",
 	error: "bg-(--sc-danger)",
 	warning: "bg-(--sc-warning)",
+	attention: "bg-(--sc-attention)",
 	muted: "bg-(--sc-text-subtle)",
 };
 

@@ -2,7 +2,7 @@
  * Badge — a short, non-interactive status or count label (1–2 words).
  *
  * Variants carry meaning, not decoration: `success` done/ok, `warning`
- * needs attention, `error` failed, `info` informational, `accent` the
+ * needs a look, `attention` waits on the person, `error` failed, `info` informational, `accent` the
  * active mode (Plan, Goal), `default` neutral counts and tags, `muted`
  * de-emphasised metadata. Use `dot` (+ `pulse` while live) for running
  * state; the text must still say the state — color is never the only cue.
@@ -17,13 +17,14 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "../../lib/format";
 
-export type BadgeVariant = "default" | "accent" | "success" | "warning" | "error" | "info" | "muted";
+export type BadgeVariant = "default" | "accent" | "success" | "warning" | "attention" | "error" | "info" | "muted";
 
 const VARIANT_CLASSES: Record<BadgeVariant, string> = {
 	default: "bg-(--sc-surface-3) text-(--sc-text-secondary)",
 	accent: "bg-(--sc-accent-soft) text-(--sc-accent-on-soft)",
 	success: "bg-(--sc-success-soft) text-(--sc-success-on-soft)",
 	warning: "bg-(--sc-warning-soft) text-(--sc-warning-on-soft)",
+	attention: "bg-(--sc-attention-soft) text-(--sc-attention-on-soft)",
 	error: "bg-(--sc-danger-soft) text-(--sc-danger-on-soft)",
 	info: "bg-(--sc-info-soft) text-(--sc-info-on-soft)",
 	muted: "bg-transparent text-(--sc-text-muted)",
@@ -34,6 +35,7 @@ const DOT_CLASSES: Record<BadgeVariant, string> = {
 	accent: "bg-(--sc-accent)",
 	success: "bg-(--sc-success)",
 	warning: "bg-(--sc-warning)",
+	attention: "bg-(--sc-attention)",
 	error: "bg-(--sc-danger)",
 	info: "bg-(--sc-info)",
 	muted: "bg-(--sc-text-subtle)",

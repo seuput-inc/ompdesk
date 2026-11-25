@@ -83,7 +83,7 @@ function StatusIcon({ tone }: { tone: StatusTone }) {
 		);
 	if (tone === "pending")
 		return <Circle aria-hidden className="size-2 fill-transparent text-(--sc-text-muted)" strokeWidth={3} />;
-	if (tone === "attention") return <AlertTriangle aria-hidden className="size-(--sc-icon-sm) text-(--sc-warning)" />;
+	if (tone === "attention") return <AlertTriangle aria-hidden className="size-(--sc-icon-sm) text-(--sc-attention)" />;
 	if (tone === "offline") return <WifiOff aria-hidden className="size-(--sc-icon-sm) text-(--sc-warning)" />;
 	if (tone === "error") return <XCircle aria-hidden className="size-(--sc-icon-sm) text-(--sc-danger)" />;
 	return <Circle aria-hidden className="size-2 fill-current text-(--sc-success)" />;

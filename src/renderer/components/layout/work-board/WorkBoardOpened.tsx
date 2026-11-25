@@ -86,7 +86,7 @@ function OpenedRow({ row, now, tag }: { row: OpenedChildRow; now: number; tag?: 
 							status === "failed"
 								? "danger"
 								: status === "waiting"
-									? "warning"
+									? "attention"
 									: status === "running"
 										? "info"
 										: "muted"

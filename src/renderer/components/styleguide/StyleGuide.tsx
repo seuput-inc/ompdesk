@@ -715,7 +715,7 @@ export default function StyleGuide() {
 
 				<Section
 					id="type"
-					intro="Inter for Latin, the system Korean face for Hangul, JetBrains Mono for code. Steps scale with the user font-size preference (default 15px)."
+					intro="Geist for Latin, the system Korean face for Hangul, the system monospace (SF Mono) for code. Steps scale with the user font-size preference (default 15px)."
 					title="Typography"
 				>
 					<Block className="divide-y divide-(--sc-divider)" label="Scale (text-sc-*)">

@@ -368,9 +368,9 @@ SOFTWARE.
 
 ------------------------------------------------------------------------------
 
-@fontsource-variable/inter 5.3.0 (OFL-1.1)
+@fontsource-variable/geist 5.3.0 (OFL-1.1)
 
-Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter) Inter-Italic[opsz,wght].ttf: Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
+Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font) Geist-Italic[wght].ttf: Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -6050,7 +6050,8 @@ SOFTWARE.
 ------------------------------------------------------------------------------
 
 Theme palettes (src/renderer/lib/theme-palettes.ts)
-The Solarized, Gruvbox and GitHub themes (each a light and a dark one) start from the
+The Solarized, Gruvbox and GitHub themes (each a light and a dark one), and the near-monochrome
+OMPdesk Light and Dark themes, start from the
 colors their authors publish; where a published color fails WCAG AA for text on its own
 background it is replaced by a shade of the same hue (see the header of that file). Each
 palette is credited below with its license; every one is MIT.
@@ -6059,6 +6060,8 @@ palette is credited below with its license; every one is MIT.
 - Gruvbox, https://github.com/morhetz/gruvbox, by Pavel Pertsev (morhetz), licensed MIT
   (package.json; the repository ships no separate license file)
 - GitHub Primer primitives, https://github.com/primer/primitives, Copyright (c) 2018 GitHub Inc.
+- Orca (OMPdesk Light and Dark, and the app's elevation shadows), https://github.com/stablyai/orca,
+  Copyright (c) 2026 Lovecast Inc.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of the palettes
 and associated documentation files (the "Software"), to deal in the Software without

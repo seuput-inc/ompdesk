@@ -54,8 +54,13 @@ describe("migrateThemeName", () => {
 	});
 
 	it("keeps every retired id's mapping within a few ΔE of the nearest theme of its scheme", () => {
-		for (const old of OLD_THEMES) {
-			const candidates = names.filter(name => THEMES[name].scheme === old.scheme);
+		// `light` and `dark` survive as ids and were recolored on the owner's call (25 Nov 2026) after every retired id's
+		// successor was fixed and stored, so they are neither measured nor candidates: a retired warm theme stays on the
+		// warm successor it was given, not on the neutral gray its accent now happens to be nearer.
+		for (const old of OLD_THEMES.filter(old => old.id in LEGACY_THEME_NAMES)) {
+			const candidates = names.filter(
+				name => THEMES[name].scheme === old.scheme && name !== "light" && name !== "dark",
+			);
 			const best = Math.min(...candidates.map(name => distance(old, name)));
 			const chosen = migrateThemeName(old.id) as ThemeName;
 			expect(distance(old, chosen), `${old.id} (${old.bg}) → ${chosen}`).toBeLessThanOrEqual(best + 5);
