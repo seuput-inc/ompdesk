@@ -131,6 +131,15 @@ describe("prefs a launch no longer reads", () => {
 		expect(migrated({ defaultPanelTab: "files" })).toEqual({ defaultPanelTab: "files" });
 	});
 
+	it("replaces a theme the app no longer ships with its successor before the first read", () => {
+		expect(migrated({ themeName: "sepia", systemLightTheme: "frost", systemDarkTheme: "hc-dark" })).toEqual({
+			themeName: "gruvbox-light",
+			systemLightTheme: "solarized-light",
+			systemDarkTheme: "hc-dark",
+		});
+		expect(migrated({ themeName: "system" })).toEqual({ themeName: "system" });
+	});
+
 	it("writes nothing to prefs that hold no retired key and an already merged value", async () => {
 		const clean = profile({
 			language: "en",

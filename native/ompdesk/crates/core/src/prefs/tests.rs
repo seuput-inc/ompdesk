@@ -156,6 +156,40 @@ fn every_retired_pref_leaves_and_a_live_one_stays() {
 }
 
 #[test]
+fn a_retired_theme_becomes_its_successor_and_any_other_value_stays() {
+    let dir = temp();
+    let mut store = serde_json::from_value::<Map<String, Value>>(json!({
+        "themeName": "sepia",
+        "systemLightTheme": "frost",
+        "systemDarkTheme": "tokyo-night",
+        "theme": "nord",
+    }))
+    .unwrap();
+    assert!(super::retired::migrate(&mut store, dir.path()));
+    assert_eq!(
+        Value::Object(store.clone()),
+        json!({
+            "themeName": "gruvbox-light",
+            "systemLightTheme": "solarized-light",
+            "systemDarkTheme": "github-dark",
+            "theme": "nord",
+        })
+    );
+    for kept in [
+        json!("system"),
+        json!("hc-dark"),
+        json!("unknown"),
+        json!(3),
+        json!("toString"),
+    ] {
+        let mut store = Map::new();
+        store.insert("themeName".into(), kept.clone());
+        assert!(!super::retired::migrate(&mut store, dir.path()), "{kept}");
+        assert_eq!(store.get("themeName"), Some(&kept));
+    }
+}
+
+#[test]
 fn an_update_patches_the_value_it_read_and_answers_what_is_held() {
     let dir = temp();
     let file = dir.path().join("prefs.json");

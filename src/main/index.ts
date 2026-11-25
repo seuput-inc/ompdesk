@@ -87,7 +87,6 @@ import {
 	SIDEBAR_PROJECTS_STATE,
 	type SidebarProjectsState,
 } from "../shared/sidebar-projects";
-import { migrateThemeName } from "../shared/theme-names";
 import { WORKTREE_BRANCH_PREFIX_PREF, worktreeBranchPrefix } from "../shared/worktree-branch";
 import { accountRotationDeps } from "./account-rotation";
 import { agentDesktopToRun } from "./agent-desktop";
@@ -389,14 +388,6 @@ function prefsStore(): PrefsStore<MainPrefs> {
 				message: "agent-powers-migrated",
 				details: { prefs: powers.prefs.join(","), stock: powers.stock.join(","), error: powers.error ?? null },
 			});
-		}
-		// A theme the app no longer ships (the pre-curated set) is replaced by its nearest successor, so the
-		// stored pref never names a missing theme and the saved window opens in the right scheme.
-		const prefs = mainPrefsStore;
-		for (const key of ["themeName", "systemLightTheme", "systemDarkTheme"]) {
-			const stored = prefs.get(key);
-			const migrated = migrateThemeName(stored);
-			if (typeof stored === "string" && migrated !== null && migrated !== stored) prefs.set(key, migrated);
 		}
 	}
 	return mainPrefsStore;
