@@ -757,7 +757,7 @@ html[data-platform="darwin"] .omp-sidebar-search {
 	animation: omp-row-reveal calc(var(--sc-duration-slow) * 3) var(--sc-ease-exit);
 }
 
-@keyframes omp-row-reveal {
+@keyframes omp-row-reveal { /* motion-ok: one paint-only outline on one row, once, inside its contained box */
 	from {
 		outline: 2px solid var(--sc-accent);
 		outline-offset: -2px;
