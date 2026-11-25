@@ -57,8 +57,9 @@ pub struct Gh {
     exec: Option<Exec>,
     secrets: Vec<String>,
     background: bool,
-    /// The gate's key with the host: each gh install has its own sign-in, so its own quota on a host.
-    bin: String,
+    /// The gate's key with the host: the command (binary and its fixed arguments), since each gh install has its own
+    /// sign-in, so its own quota on a host.
+    command: String,
     /// The request's first gated run happened (its pace is counted once).
     admitted: AtomicBool,
     /// The gate refused or tripped in this request: the time it waits until (0 when it did not).
@@ -92,9 +93,13 @@ impl Gh {
             .map(|(_, value)| value.clone())
             .collect();
         Gh {
-            bin: runner
+            command: runner
                 .as_ref()
-                .map(|runner| runner.bin.clone())
+                .map(|runner| {
+                    [&[runner.bin.clone()], runner.args.as_slice()]
+                        .concat()
+                        .join("\n")
+                })
                 .unwrap_or_default(),
             exec: runner.map(|runner| Exec::new(runner, scope, "gh")),
             secrets,
@@ -148,7 +153,7 @@ impl Gh {
             return exec.run(cwd, args, opts).await;
         }
         let host = Gh::host(exec, &opts);
-        let key = format!("{}\n{host}", self.bin);
+        let key = format!("{}\n{host}", self.command);
         let first = !self.admitted.swap(true, Ordering::SeqCst);
         if self.background && first && gate::quota_due(&key, gate::now_ms()) {
             gate::learn(&key, Gh::quota(exec, cwd, opts).await.as_ref());

@@ -1,4 +1,4 @@
-//! One gate per gh install and GitHub host (the key `Gh::run` builds) in front of every gh run that reaches GitHub's
+//! One gate per gh command (binary and fixed arguments) and GitHub host (the key `Gh::run` builds) in front of every gh run that reaches GitHub's
 //! API (not `gh auth`, `gh config`, a version or help run), so a burst of automatic reads cannot spend the person's
 //! quota (Orca's rate-limit breaker, quota floor and background pacing, re-implemented).
 //!
@@ -25,7 +25,9 @@ use crate::aimemory::value::iso;
 use crate::server::Fault;
 
 pub const PACE_WINDOW_MS: u64 = 5 * 60_000;
-pub const PACE_READS: usize = 20;
+/// A guard against a runaway loop, not the quota's keeper (the floor is): several routines polling every few minutes
+/// with every kind stay under it.
+pub const PACE_READS: usize = 60;
 /// Background reads wait for the reset below this many requests left (core or GraphQL).
 pub const QUOTA_FLOOR: u64 = 50;
 pub const QUOTA_FRESH_MS: u64 = 60_000;
