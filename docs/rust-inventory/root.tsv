@@ -89,6 +89,7 @@ src/main/bridge-autopilot-stock.test.ts	tooling	-	Vitest suite: arms, guards, fi
 src/main/bridge-autopilot-verify.test.ts	tooling	-	Vitest suite: isCheckCommand.
 src/main/bridge-background-checks.test.ts	tooling	-	Vitest suite: background checks section.
 src/main/bridge-browser-relay.test.ts	tooling	-	Vitest suite: serves stock's relay for the session and lists the preview once its extension says hello.
+src/main/bridge-bots.test.ts	tooling	-	Vitest suite: a bot chat's section, payload and turn note.
 src/main/bridge-capabilities.test.ts	tooling	-	Vitest suite: hasPath.
 src/main/bridge-capability-granular-stock.test.ts	tooling	-	Vitest suite: refuses only the action that uses it and reports that action alone.
 src/main/bridge-catalog-stock.test.ts	tooling	-	Vitest suite: leaves stock's compat block on the omp's side and keeps what the windows read.
