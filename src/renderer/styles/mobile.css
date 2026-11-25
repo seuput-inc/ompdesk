@@ -1176,7 +1176,7 @@ html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer
 	height: 44px;
 }
 
-html[data-shell="phone"] .omp-composer-toolbar .omp-context-usage-trigger {
+html[data-shell="phone"] .omp-composer-toolbar :is(.omp-context-usage-trigger, [data-run-settings-trigger]) {
 	min-width: 44px;
 	height: 44px;
 }
@@ -1401,11 +1401,12 @@ html[data-shell="phone"] .omp-panel-topbar {
 }
 
 
-/* The top bar's icons sit 14 px apart so each one's bounded hit area is ≈ 40 px square (the bar's height). */
+/* The top bar's icons sit 14 px apart. The bar is 36 px: a 28 px icon (26 inside its border) reaches 5 px up and
+   down, so its reach is the bar's height and never lies over the work strip under it. */
 html[data-shell] .omp-titlebar {
 	gap: 14px;
 	--hit-gap-x: 14px;
-	--hit-gap-y: 14px;
+	--hit-gap-y: 10px;
 }
 
 /* The composer's controls sit 10 px apart on a tablet: a 28 px chip (26 inside its border) reaches 36 px. */
@@ -1544,6 +1545,11 @@ html[data-shell] .omp-topbar:not(.omp-titlebar) {
 	--hit-gap-y: 10px;
 }
 
+/* A phone's top bar buttons are as tall as the bar (36 px, 34 inside the border): 1 px of reach up and down. */
+html[data-shell="phone"] :is(.omp-titlebar, .omp-topbar:not(.omp-titlebar)) {
+	--hit-gap-y: 2px;
+}
+
 /* The page's own back control in that bar (MasterDetailBack) is drawn 28 px like the bar's icons, so it is a 36 px
    target inside the bar too. */
 html[data-shell="phone"] .omp-topbar [data-master-detail-back] {
@@ -1670,6 +1676,16 @@ html[data-input="touch"] [data-switch-tile][data-info-end] > [data-setting-info]
 html[data-input="touch"] [data-switch-tile] > [role="switch"] {
 	--hit-gap-x: 8px;
 	--hit-gap-y: 12px;
+}
+
+/* A phone draws the switch's box 44 px (the owner's decision, 25 Nov 2026): its tile is 44 tall around it, and the
+   switch needs no reach up or down, so the tile below keeps its own taps. */
+html[data-shell="phone"] [data-switch-tile] {
+	min-height: 44px;
+}
+
+html[data-shell="phone"] [data-switch-tile] > [role="switch"] {
+	--hit-gap-y: 0px;
 }
 
 /* Stats' (i) sits 8 px after Sync: its 44 px reach covered Sync's right edge, which then opened the tooltip. On touch it

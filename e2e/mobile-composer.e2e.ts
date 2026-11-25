@@ -638,13 +638,14 @@ for (const engine of ENGINES) {
 					}
 				});
 
-				test("holds twenty pictures in one scrolling row (a box of 150 px or less) and types at 40 ms or less on a 4x slower CPU", async () => {
+				test("holds twenty pictures in one scrolling row (a box of 154 px or less) and types at 40 ms or less on a 4x slower CPU", async () => {
 					const page = await openPhone(engine, { lang, theme });
 					try {
 						await attach(page, 20);
 						await expect(page.locator(".omp-attach-strip")).toBeVisible();
 						const box = await boxOf(page.locator(".omp-composer-box"));
-						expect(box.height, "20 pictures").toBeLessThanOrEqual(150);
+						// 150 until the controls row was drawn 44 px (the owner's decision, 25 Nov 2026): the box is 4 px taller.
+						expect(box.height, "20 pictures").toBeLessThanOrEqual(154);
 						await capture(page, "attachments", engine, theme, lang);
 						if (engine.type === chromium) {
 							const cdp = await page.context().newCDPSession(page);

@@ -14,4 +14,4 @@ export const SIDEBAR_WIDTH_STORAGE_KEY = "omp.sidebarWidth";
 export const SIDEBAR_VISIBLE_STORAGE_KEY = "omp.sidebarVisible";
 
 /** The idle composer box: 1px border, the input line and the toolbar (measured against the React box by e2e/no-loading.e2e.ts); the phone's always-open box (the field row over its one controls row) is shorter. */
-export const COMPOSER_BOX_PX = { desktop: 92, phone: 81 } as const;
+export const COMPOSER_BOX_PX = { desktop: 92, phone: 84 } as const;

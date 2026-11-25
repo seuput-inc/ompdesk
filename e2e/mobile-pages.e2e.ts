@@ -322,17 +322,20 @@ for (const { engine, device } of variants(
 			await expect(page.locator("#settings-section-title")).toHaveText("Agent behavior");
 			const switches = page.locator(".settings-content [role='switch']");
 			await expect(switches.first()).toBeVisible({ timeout: 15_000 });
-			// A switch is drawn small (a 32 × 28 button around an 18 px track) and hit at 44 × 44 through its ::after.
+			// A phone draws a switch's box 44 px (the owner's decision, 25 Nov 2026); a tablet draws it small (a 32 × 28
+			// button around an 18 px track) and hits it at 44 × 44 through its ::after.
 			const found = await hitSizes(switches);
 			expect(found.length).toBeGreaterThan(0);
 			// Which switch, and whether the page counted itself as touch then (nightly 39519261585: one tablet switch
 			// was hit at its drawn 32 px once; 10 local runs were 44).
 			const input = await page.evaluate(() => document.documentElement.dataset.input ?? "unset");
+			const phone = (await page.evaluate(() => document.documentElement.dataset.shell)) === "phone";
 			for (const { label, visual, hit } of found) {
 				const where = `${label} (data-input ${input}, hit ${hit.width}×${hit.height})`;
 				expect(hit.width, where).toBeGreaterThanOrEqual(43.5);
 				expect(hit.height, where).toBeGreaterThanOrEqual(43.5);
-				expect(visual.height, where).toBeLessThanOrEqual(32);
+				if (phone) expect(visual.height, where).toBeGreaterThanOrEqual(43.5);
+				else expect(visual.height, where).toBeLessThanOrEqual(32);
 			}
 			// "Advanced" stays folded until it is opened.
 			const advanced = page.locator("[data-settings-advanced]").first();

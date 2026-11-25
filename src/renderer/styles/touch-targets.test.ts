@@ -418,9 +418,12 @@ describe("the phone composer", () => {
 		expect(rule('html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action)')).toMatch(
 			/width:\s*44px;\s*height:\s*44px/,
 		);
-		expect(rule('html[data-shell="phone"] .omp-composer-toolbar .omp-context-usage-trigger')).toMatch(
-			/height:\s*44px/,
-		);
+		// The context ring and the Run chip's glyph are 44 px squares at least, not only 44 tall.
+		expect(
+			rule(
+				'html[data-shell="phone"] .omp-composer-toolbar :is(.omp-context-usage-trigger, [data-run-settings-trigger])',
+			),
+		).toMatch(/min-width:\s*44px;\s*height:\s*44px/);
 		expect(rule('html[data-shell="phone"] .omp-composer-toolbar')).toMatch(/min-height:\s*44px/);
 		expect(read("../components/layout/composer/ComposerToolbar.tsx")).toContain('className="omp-composer-add"');
 		const gap = rule('html[data-shell="phone"] :is(.omp-composer-toolbar, .omp-composer-send-cluster)');
