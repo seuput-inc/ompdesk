@@ -53,7 +53,8 @@ export function sessionMentionItems(
 export function useMentionSessions(cwd: string): MentionSession[] {
 	const tabId = useRuntimeTabId();
 	const tabs = useTabsStore(state => state.tabs);
-	const stored = useStore(sessionListFeed("local").store, state => state.sessions);
+	// The window's whole list (TabHousekeeping and the title bar hold it open); this folder's rows are kept below.
+	const stored = useStore(sessionListFeed("global").store, state => state.sessions);
 	return useMemo(() => {
 		const own = tabs.find(tab => tab.id === tabId);
 		const seen = new Set<string>(own?.sessionId ? [own.sessionId] : []);
