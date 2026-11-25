@@ -13,6 +13,8 @@
  *   opens the ones its layout lost, `readopt.ts`); an older host answers `unsupported`
  * - `tab.sideChannel {rtab, frame}`, `tab.syncImageGeneration {rtab}`
  * - `tab.cancelWait {rtab}`: Cancel on the tab's connection wait or scheduled retry
+ * - `tab.continueCut {rtab}`, `tab.dismissCut {rtab}`: Continue or Dismiss on the cut-off row of the window's tab a view
+ *   shows; an older host answers `unsupported`
  * - `sessions.list|search|kindFor|delete|rename|move`, `fs.list|read|readImage|readPlan|listDirs`,
  *   `workspace.default`, `launchProfile.get|update`
  * - `sidebar.deviceOrder.exchange` → the merged device ranks, keyed only by hashes of OMPdesk device identities.
@@ -185,6 +187,10 @@ export const TAB_EVENT_NAMES = [
 	// The retry this computer scheduled for the turn of the window's tab the device views (TabScheduledRetryArg, null when
 	// none), sent as it changes and on every `tab.open`. An older device drops the name; an older host never sends it.
 	"scheduledRetry",
+	// The cut-off row of the window's tab the device views (TabCutOffArg: why its cut-off turn waits for the person, null
+	// when it does not), sent as it changes and on every `tab.open`; its Continue and Dismiss come back as
+	// `tab.continueCut`/`tab.dismissCut`. An older device drops the name; an older host never sends it.
+	"cutOff",
 ] as const;
 
 export type TabEventName = (typeof TAB_EVENT_NAMES)[number];
@@ -631,6 +637,9 @@ export const TabScheduledRetryArg = z
 	})
 	.nullable();
 export type TabScheduledRetryArg = z.infer<typeof TabScheduledRetryArg>;
+
+/** `cutOff` event argument: why the viewed window tab's cut-off turn waits for the person (IpcCutOff), or null. */
+export const TabCutOffArg = z.enum(["off", "crash-loop", "failed"]).nullable();
 
 export const TabOpenResult = z.object({
 	/** Canonical cwd on the host. */

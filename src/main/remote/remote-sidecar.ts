@@ -45,6 +45,7 @@ import {
 	SIGN_IN_CALLBACK_METHOD,
 	SignInCallbackReply,
 	TabBridgeArg,
+	TabCutOffArg,
 	type TabEventMessage,
 	TabOpenAsksArg,
 	TabOpenResult,
@@ -339,6 +340,26 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 		}
 	}
 
+	/** The host's cut-off row of the window's tab this one views: the person's Continue or Dismiss goes there. */
+	async continueHostCut(): Promise<void> {
+		await this.#cutOff("tab.continueCut");
+	}
+
+	async dismissHostCut(): Promise<void> {
+		await this.#cutOff("tab.dismissCut");
+	}
+
+	async #cutOff(method: "tab.continueCut" | "tab.dismissCut"): Promise<void> {
+		if (this.#link.state !== "online") throw codedError("remote_offline", OFFLINE_TEXT);
+		try {
+			await this.#open();
+			await this.#link.request(method, { rtab: this.#rtab });
+		} catch (error) {
+			if (isOfflineError(error)) throw codedError("remote_offline", OFFLINE_TEXT);
+			throw error;
+		}
+	}
+
 	syncImageGeneration(): void {
 		this.#notify("tab.syncImageGeneration", { rtab: this.#rtab });
 	}
@@ -468,6 +489,11 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 								...(retry.limit ? { limit: true as const } : {}),
 							} satisfies IpcScheduledRetry),
 				);
+				return;
+			}
+			case "cutOff": {
+				const parsed = TabCutOffArg.safeParse(message.arg);
+				if (parsed.success) this.emit("cutOff", parsed.data ?? undefined);
 				return;
 			}
 			case "openAsks": {

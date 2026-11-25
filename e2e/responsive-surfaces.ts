@@ -86,7 +86,7 @@ export interface Surface {
 	};
 }
 
-export type ParitySession = "work" | "reply" | "steer" | "advisor" | "ci" | "limit" | "turns" | "long";
+export type ParitySession = "work" | "reply" | "steer" | "advisor" | "ci" | "limit" | "turns" | "long" | "cut";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -2209,6 +2209,20 @@ export const SURFACES: readonly Surface[] = [
 		// The wait is main's: the audits' harness page has no resume rules behind it.
 		when: () => false,
 		parity: { session: "limit", inView: "[data-limit-wait]" },
+	},
+	{
+		id: "turn-cut-off",
+		area: "A",
+		title: "Status row of a turn whose omp kept dying: why it did not go on by itself, with Continue and Dismiss",
+		// The host's fake omp died under four turns of the session in a row (e2e/fixture/rpc-ui.ts "fixture crash"); the
+		// host's resume rules continued three and offer the fourth (e2e/parity.e2e.ts `cutSession`). Nothing is pressed.
+		open: async page => {
+			await page.waitForSelector("[data-transcript-kind]", { timeout: 15_000 });
+		},
+		ready: '[data-cut-off="crash-loop"]',
+		// The offer is main's: the audits' harness page has no resume rules behind it.
+		when: () => false,
+		parity: { session: "cut", inView: "[data-cut-off]" },
 	},
 	{
 		id: "card-approval",

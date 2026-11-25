@@ -477,6 +477,8 @@ export class SidecarPool {
 	 * this computer's resume rules hold both (index.ts hands it to `TurnResume.cancelWait`).
 	 */
 	onCancelWait: ((tabId: string) => void) | null = null;
+	/** A paired device's Continue or Dismiss on the cut-off row of a window's tab it views: this computer's resume rules. */
+	onCutOff: ((tabId: string, choice: "continue" | "dismiss") => void) | null = null;
 	/** `worktree.onStart` (worktree-lifecycle.ts): the gate for a new tab, or null when the tab is not a candidate. */
 	worktreeStartGate: ((tabId: string, winId: number, facts: TabSpawnFacts) => SidecarStartGate | null) | null = null;
 	/** A tab was released (closed, or its window closed); `exited` settles once its omp is gone. */
@@ -1036,6 +1038,8 @@ export class SidecarPool {
 		sidecar.on("awaitingConnection", (awaiting: boolean) => feed("awaitingConnection", awaiting));
 		// And the retry it scheduled for the failed turn of a window's tab this one views.
 		sidecar.on("scheduledRetry", (retry: IpcScheduledRetry | undefined) => feed("scheduledRetry", retry ?? null));
+		// And the cut-off row of that window's tab: its Continue and Dismiss go back to the host (`continueHostCut`).
+		sidecar.on("cutOff", (cutOff: IpcCutOff | undefined) => feed("cutOff", cutOff ?? null));
 		// Agent-end means one run yielded; upstream prompt/session-settled frames keep background async work
 		// represented as running until it is quiet.
 		sidecar.on("events", (events: AgentSessionEvent[], hostEvents = events) => {
@@ -1338,6 +1342,7 @@ export class SidecarPool {
 			},
 			stopped: () => this.noteStopped(tab),
 			cancelWait: () => this.onCancelWait?.(tab),
+			cutOff: choice => this.onCutOff?.(tab, choice),
 			snapshot: () => this.#call("deviceSnapshot", { tab }),
 			subagentLevel: level =>
 				this.#call<SubagentSubscriptionLevel>("deviceSubagentLevel", { tab, view: idOf(view), level }),

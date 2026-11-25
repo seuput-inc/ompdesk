@@ -377,6 +377,51 @@ if (dir) {
 				return session;
 			};
 			/**
+			 * A session of its own whose omp died under four turns in a row (`fixture crash`: the fake omp exits 300 ms into
+			 * the turn): B's resume rules continue the first three and offer the fourth (turn-resume.ts, the cut-off row with
+			 * Continue and Dismiss), which stays for the rest of the run.
+			 */
+			const cutSession = async (): Promise<HostSession> => {
+				const made = answered.get("Parity cut off (offered)");
+				if (made) return made;
+				const { path: sessionPath } = await answeredSession("Parity cut off", [
+					["Parity turn 1", "Answer to Parity turn 1"],
+				]);
+				const tabId = await titledTab("Parity cut off");
+				const tabOf = () =>
+					b.evaluate(async id => (await window.omp.tabs.list()).find(entry => entry.tabId === id), tabId);
+				for (let crash = 0; crash < 4 && (await tabOf())?.cutOff === undefined; crash++) {
+					// The omp dies before it answers, so the prompt's own answer may never come.
+					void b
+						.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "fixture crash" }), tabId)
+						.catch(() => undefined);
+					// Its omp died: the "continuing" row holds until the next omp's continuation starts (or the offer stands).
+					await expect
+						.poll(
+							async () => {
+								const tab = await tabOf();
+								return tab?.resuming === true || tab?.cutOff !== undefined;
+							},
+							{ timeout: 30_000 },
+						)
+						.toBe(true);
+					// The next omp is up and its continuation (or the offer) has settled.
+					await expect
+						.poll(
+							async () => {
+								const tab = await tabOf();
+								return tab?.status === "ready" && tab.resuming !== true;
+							},
+							{ timeout: 60_000 },
+						)
+						.toBe(true);
+				}
+				await expect.poll(async () => (await tabOf())?.cutOff, { timeout: 30_000 }).toBe("crash-loop");
+				const session = { path: sessionPath, cwd: work.cwd };
+				answered.set("Parity cut off (offered)", session);
+				return session;
+			};
+			/**
 			 * A long session of short turns, for the turn rail (`transcript-turn-rail*`): more turns than the rail draws
 			 * ticks. The fake omp answers "Parity turn N" with "Answer to Parity turn N".
 			 */
@@ -435,7 +480,9 @@ if (dir) {
 										? turnsSession()
 										: session === "long"
 											? longSession()
-											: limitSession();
+											: session === "cut"
+												? cutSession()
+												: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

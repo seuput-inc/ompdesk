@@ -45,6 +45,7 @@ import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-contr
 import { codedError, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	HOST_UPDATE_ACTIONS,
+	type IpcCutOff,
 	type IpcScheduledRetry,
 	type RemoteOpenedTab,
 	type SessionInfo,
@@ -445,6 +446,8 @@ interface HostTab extends RunTracking {
 	 */
 	scheduledRetry?: IpcScheduledRetry;
 	resuming?: boolean;
+	/** For a view: the cut-off row of the window's tab it shows (turn-resume.ts), the device's to show. */
+	cutOff?: IpcCutOff;
 	/** Provider ids of the `login` commands running on this tab (a device's sign-in, even if its link dropped). */
 	signIns?: string[];
 	/**
@@ -1182,6 +1185,8 @@ export class LocalHostServices implements HostServices {
 			stopped: () => this.noteStopped(tab.resumeId),
 			prompting: () => expectHostStart(tab),
 			cancelWait: () => this.#resume?.cancelWait(tab.resumeId),
+			// A device's tab here has no cut-off row: the resume offers only a window's own tab (interrupted-work.md).
+			cutOff: () => {},
 			snapshot: () => ({
 				asks: [...tab.asks.values()],
 				...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
@@ -1376,6 +1381,14 @@ export class LocalHostServices implements HostServices {
 				// A view: the wait and the retry are the tab it shows's (a window's, whose id only the pool knows).
 				if (tab.viewing) await tab.sidecar.cancelHostWait?.();
 				else this.#resume?.cancelWait(tab.resumeId);
+				return null;
+			}
+			case "tab.continueCut":
+			case "tab.dismissCut": {
+				// Only a view has a cut-off row: the window's tab it shows, this computer's resume rules (`viewForDevice`).
+				const tab = this.#tab(peer, parse(RtabParams, method, params).rtab);
+				if (method === "tab.continueCut") await tab.sidecar.continueHostCut?.();
+				else await tab.sidecar.dismissHostCut?.();
 				return null;
 			}
 			case "tab.syncImageGeneration":
@@ -2140,6 +2153,7 @@ export class LocalHostServices implements HostServices {
 			// The device's waiting row and retry countdown may date from before it lost this computer.
 			this.#emit(existing, "awaitingConnection", existing.awaitingConnection === true);
 			this.#emit(existing, "scheduledRetry", scheduledRetryArg(existing.scheduledRetry));
+			this.#emit(existing, "cutOff", existing.cutOff ?? null);
 			// The calls the omp still waits on, every one: a relaunched device (it adopts the tab under a new rtab) lost
 			// those its last process held, and the same device back from a lost link may never have had one handed to the
 			// connection that died (a sleeping computer's link stays up here until it is seen dead).
@@ -2174,6 +2188,7 @@ export class LocalHostServices implements HostServices {
 			// The wait and scheduled retry of the tab it shows, if any, follow from the view's snapshot (next microtask).
 			this.#emit(tab, "awaitingConnection", false);
 			this.#emit(tab, "scheduledRetry", null);
+			this.#emit(tab, "cutOff", null);
 			return { cwd: view.cwd, kind: view.kind, attached: true, viewing: true };
 		}
 		if (!params.cwd) throw codedError("no_workspace", "No workspace");
@@ -2225,6 +2240,7 @@ export class LocalHostServices implements HostServices {
 		this.#emit(tab, "signIn", { active: [] } satisfies TabSignInArg);
 		this.#emit(tab, "awaitingConnection", false);
 		this.#emit(tab, "scheduledRetry", null);
+		this.#emit(tab, "cutOff", null);
 		return { cwd: tab.sidecar.cwd, kind, attached: false };
 	}
 
@@ -2323,6 +2339,7 @@ export class LocalHostServices implements HostServices {
 			answer: frame => this.#answer(tab, frame, side, view),
 			stopped: () => this.noteStopped(tab.resumeId),
 			cancelWait: () => this.#resume?.cancelWait(tab.resumeId),
+			cutOff: () => {},
 			snapshot: () => ({
 				asks: [...tab.asks.values()],
 				...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
@@ -2422,6 +2439,10 @@ export class LocalHostServices implements HostServices {
 				tab.scheduledRetry = retry;
 				this.#emit(tab, "scheduledRetry", scheduledRetryArg(retry));
 			});
+			sidecar.on("cutOff", (cutOff: IpcCutOff | undefined) => {
+				tab.cutOff = cutOff;
+				this.#emit(tab, "cutOff", cutOff ?? null);
+			});
 			// The tab it views closed: the device heard `viewEnded` (#wire), and its tab here goes.
 			sidecar.on(VIEW_ENDED_EVENT, () => {
 				const key = this.#key(tab.peerId, tab.rtab);
@@ -2496,6 +2517,7 @@ export class LocalHostServices implements HostServices {
 					break;
 				case "awaitingConnection":
 				case "scheduledRetry":
+				case "cutOff":
 				case "openAsks":
 					// Not the sidecar's: this computer's resume coordinator sets the wait and the tab's scheduled retry
 					// (`setScheduledRetry`; a view forwards its window tab's, #createTab), and `tab.open` sends the asks.

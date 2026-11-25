@@ -4537,7 +4537,11 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 		write({ type: "agent_start" });
 		write({ type: "token_rate", rate: 64 });
 		write({ type: "message_end", message: user });
-		if (message === "fixture work view") {
+		if (message === "fixture crash") {
+			// The omp dies under the turn it just started (an uncaught exception): OMPdesk starts it again and continues the
+			// turn, at most three times in five minutes (interrupted-work.md › A turn that does not go on by itself).
+			setTimeout(() => process.exit(1), 300);
+		} else if (message === "fixture work view") {
 			startWorkView(user);
 		} else if (message === "fixture steer work") {
 			startSteerWork(user);

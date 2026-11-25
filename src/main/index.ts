@@ -2242,12 +2242,22 @@ app.whenReady().then(async () => {
 	ipc.handle(IPC_COMMANDS.RESUME_STOP, async (_caller, tabId: unknown) => {
 		if (typeof tabId === "string") await turnResume.stopResumed(tabId);
 	});
-	ipc.handle(IPC_COMMANDS.RESUME_CONTINUE, (_caller, tabId: unknown) => {
-		if (typeof tabId === "string") turnResume.continueCut(tabId);
+	// A tab viewing a paired host's window tab: that host holds the offer.
+	ipc.handle(IPC_COMMANDS.RESUME_CONTINUE, async (_caller, tabId: unknown) => {
+		if (typeof tabId !== "string") return;
+		const sidecar = sidecarPool.sidecarOf(tabId);
+		if (sidecar?.continueHostCut) await sidecar.continueHostCut();
+		else turnResume.continueCut(tabId);
 	});
-	ipc.handle(IPC_COMMANDS.RESUME_DISMISS, (_caller, tabId: unknown) => {
-		if (typeof tabId === "string") turnResume.dismissCut(tabId);
+	ipc.handle(IPC_COMMANDS.RESUME_DISMISS, async (_caller, tabId: unknown) => {
+		if (typeof tabId !== "string") return;
+		const sidecar = sidecarPool.sidecarOf(tabId);
+		if (sidecar?.dismissHostCut) await sidecar.dismissHostCut();
+		else turnResume.dismissCut(tabId);
 	});
+	// A paired device's Continue or Dismiss on the cut-off row of a window's tab it views.
+	sidecarPool.onCutOff = (tabId, choice) =>
+		choice === "continue" ? turnResume.continueCut(tabId) : turnResume.dismissCut(tabId);
 	ipc.on(IPC_COMMANDS.CONNECTIVITY_REPORT, (_caller, online: unknown) => {
 		if (typeof online === "boolean") connectivity.report(online);
 	});

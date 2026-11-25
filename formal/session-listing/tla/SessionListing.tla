@@ -223,7 +223,7 @@ Open(t, s) ==
 \* @code src/main/remote/host-services.ts:3199-3229 #closeTab removes the tab and calls listingChanged().
 \* @code native/ompdesk/crates/core/src/pool/windows.rs:426-458 Ctx::release_entry removes only the matching entry and awaits release_detached.
 \* @code native/ompdesk/crates/core/src/pool/windows.rs:460-547 Ctx::release_detached calls unregister_session_file_of.
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1364-1375 Ctx::release_tab notifies the window after a successful removal.
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1370-1381 Ctx::release_tab notifies the window after a successful removal.
 Close(t) ==
     /\ ~Busy
     /\ (file[t] # NoS \/ t \in pendReg) /\ nChanges < MaxChanges
@@ -233,7 +233,7 @@ Close(t) ==
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
 \* @code src/main/remote/host-services.ts:2472-2480 The session handler updates tab.sessionFile and announces the change.
-\* @code native/ompdesk/crates/core/src/pool/listen.rs:269-322 Ctx::feed_session: 'session' handler of a window tab: register the file, notify when it changed
+\* @code native/ompdesk/crates/core/src/pool/listen.rs:273-326 Ctx::feed_session: 'session' handler of a window tab: register the file, notify when it changed
 Switch(t, s) ==
     /\ ~Busy
     /\ file[t] # NoS /\ file[t] # s /\ nChanges < MaxChanges
@@ -241,7 +241,7 @@ Switch(t, s) ==
     /\ nChanges' = nChanges + 1
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
-\* @code native/ompdesk/crates/core/src/pool/listen.rs:230-265 Ctx::feed_session_info unregisters the tab's file if a known session ID changes.
+\* @code native/ompdesk/crates/core/src/pool/listen.rs:234-269 Ctx::feed_session_info unregisters the tab's file if a known session ID changes.
 \* @code native/ompdesk/crates/core/src/pool/routes.rs:99-118 Ctx::unregister_session_file_of drops the owner and calls on_session_files_changed.
 \* @code src/main/index.ts:1499-1502 onSessionFilesChanged calls hostServices.listingChanged().
 IdChange(t) ==
@@ -253,7 +253,7 @@ IdChange(t) ==
     /\ nChanges' = nChanges + 1
     /\ UNCHANGED <<rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
-\* @code native/ompdesk/crates/core/src/pool/listen.rs:269-322 Ctx::feed_session: the `session` identity arrives (get_state, heartbeat): register the file and notify
+\* @code native/ompdesk/crates/core/src/pool/listen.rs:273-326 Ctx::feed_session: the `session` identity arrives (get_state, heartbeat): register the file and notify
 Reregister(t, s) ==
     /\ ~Busy
     /\ t \in pendReg

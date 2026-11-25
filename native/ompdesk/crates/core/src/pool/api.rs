@@ -1172,17 +1172,23 @@ impl Ctx {
         Ok(())
     }
 
+    /// The tab's cut-off row (TurnResume's offer), or a paired host's for a tab this one views (`listen`): the devices
+    /// viewing the tab show it too, and their Continue and Dismiss come back.
     pub(super) async fn set_cut_off(&self, tab: &str, cut_off: Option<String>) -> R<()> {
-        let changed = self.with(|pool| {
+        let views = self.with(|pool| {
             let entry = pool.entry_mut(tab)?;
             if entry.cut_off == cut_off {
                 return None;
             }
-            entry.cut_off = cut_off;
-            Some(())
+            entry.cut_off = cut_off.clone();
+            Some(entry.device_views.clone())
         });
-        if changed.is_some() {
-            self.forward_status(tab).await?;
+        let Some(views) = views else {
+            return Ok(());
+        };
+        self.forward_status(tab).await?;
+        for view in views {
+            self.push(&json!({"k": "emitView", "tab": tab, "view": view, "event": "cutOff", "arg": cut_off}));
         }
         Ok(())
     }
@@ -1669,6 +1675,9 @@ impl Ctx {
             }
             if let Some(retry) = &entry.scheduled_retry {
                 snapshot.insert("scheduledRetry".into(), retry.clone());
+            }
+            if let Some(cut_off) = &entry.cut_off {
+                snapshot.insert("cutOff".into(), Value::from(cut_off.clone()));
             }
             snapshot.insert("run".into(), entry.tracking.run.reading(now));
             Value::Object(snapshot)
