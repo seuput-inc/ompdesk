@@ -8,7 +8,13 @@ import {
 	FONT_SCALE_MIN,
 	fontSizeFor,
 	isSingleKey,
+	KEY_USE_STORAGE,
+	keysByUse,
+	noteKeyUse,
+	optionWordMotion,
+	readKeyUse,
 	TERMINAL_KEYS,
+	zoomKey,
 } from "./terminal-keys";
 
 const NONE = { ctrl: false, alt: false };
@@ -116,5 +122,40 @@ describe("font scale", () => {
 		expect(fontSizeFor(50)).toBe(6);
 		expect(fontSizeFor(200)).toBe(24);
 		expect(fontSizeFor(150)).toBe(18);
+	});
+});
+
+describe("keys by use", () => {
+	it("puts the keys this device presses most first, the rest in the bar's own order, and survives bad storage", () => {
+		const store = new Map<string, string>();
+		const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: store.set.bind(store) };
+		noteKeyUse(storage, "ctrl-c");
+		noteKeyUse(storage, "ctrl-c");
+		noteKeyUse(storage, "up");
+		expect(readKeyUse(storage)).toEqual({ "ctrl-c": 2, up: 1 });
+		const ids = keysByUse(readKeyUse(storage)).map(key => key.id);
+		expect(ids.slice(0, 4)).toEqual(["ctrl-c", "up", "esc", "tab"]);
+		expect(ids).toHaveLength(TERMINAL_KEYS.length);
+		store.set(KEY_USE_STORAGE, "{not json");
+		expect(readKeyUse(storage)).toEqual({});
+	});
+});
+
+describe("desktop terminal keys", () => {
+	const key = { metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
+	it("turns the US Option layer's ∫ ƒ ∂ into readline's word motions and leaves composed text alone", () => {
+		expect(optionWordMotion({ ...key, altKey: true, code: "KeyB", key: "∫" })).toBe("\x1bb");
+		expect(optionWordMotion({ ...key, altKey: true, code: "KeyF", key: "ƒ" })).toBe("\x1bf");
+		// With Shift, or on a layout whose Option key types something else, it stays a character.
+		expect(optionWordMotion({ ...key, altKey: true, code: "KeyF", key: "ƒ", shiftKey: true })).toBeNull();
+		expect(optionWordMotion({ ...key, altKey: true, code: "KeyE", key: "´" })).toBeNull();
+		expect(optionWordMotion({ ...key, altKey: true, code: "KeyB", key: "b" })).toBeNull();
+	});
+	it("reads ⌘ = − 0 on macOS and Ctrl on Windows as the terminal's text size", () => {
+		expect(zoomKey({ ...key, metaKey: true, key: "=" }, true)).toBe("larger");
+		expect(zoomKey({ ...key, metaKey: true, key: "-" }, true)).toBe("smaller");
+		expect(zoomKey({ ...key, ctrlKey: true, key: "0" }, false)).toBe("reset");
+		expect(zoomKey({ ...key, ctrlKey: true, key: "=" }, true)).toBeNull();
+		expect(zoomKey({ ...key, metaKey: true, key: "c" }, true)).toBeNull();
 	});
 });

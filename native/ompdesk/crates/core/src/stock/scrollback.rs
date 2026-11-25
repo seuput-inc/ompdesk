@@ -77,6 +77,14 @@ struct Row<'a> {
     /// The viewer's offset was older than the kept scrollback: its output starts at the oldest kept unit (H139).
     #[serde(skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
     gap: bool,
+    /// The shell's program name and the name a person gave the terminal, passed on as the worker said them.
+    #[serde(borrow, skip_serializing_if = "Option::is_none")]
+    shell: Option<&'a RawValue>,
+    #[serde(borrow, skip_serializing_if = "Option::is_none")]
+    title: Option<&'a RawValue>,
+    /// A `busy` answer: whether a command runs in the shell (a close asks first then).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    busy: Option<bool>,
     #[serde(skip_serializing)]
     from: Option<u64>,
     #[serde(borrow, skip_serializing)]
@@ -302,6 +310,19 @@ mod tests {
         let caught_up = list(&mut history, r#""offset":6,"from":4"#);
         assert!(!caught_up.contains("gap"), "{caught_up}");
         assert!(!list(&mut history, r#""offset":6"#).contains("gap"));
+    }
+
+    #[test]
+    fn a_terminal_s_shell_name_title_and_busy_answer_reach_its_viewer() {
+        let mut history = Scrollback::default();
+        let line = br#"{"id":1,"terminal":{"rows":[{"id":"t","offset":0,"exited":false,"cols":80,"rows":24,"shell":"zsh","title":"api \"dev\"","busy":true}]}}"#;
+        let reply = String::from_utf8(history.project(line).unwrap()).unwrap();
+        assert!(reply.contains(r#""shell":"zsh""#), "{reply}");
+        assert!(reply.contains(r#""title":"api \"dev\"""#), "{reply}");
+        assert!(reply.contains(r#""busy":true"#), "{reply}");
+        let plain = br#"{"id":2,"terminal":{"rows":[{"id":"t","offset":0,"exited":false,"cols":80,"rows":24}]}}"#;
+        let reply = String::from_utf8(history.project(plain).unwrap()).unwrap();
+        assert!(!reply.contains("title") && !reply.contains("busy"), "{reply}");
     }
 
     #[test]

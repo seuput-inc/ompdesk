@@ -40,6 +40,8 @@ interface Entry {
 	queued: string[] | null;
 	/** The redraw nudge waiting to give the shell its rows back (H137). */
 	nudge?: ReturnType<typeof setTimeout>;
+	/** The name a person gave it (`rename`), shown to every viewer instead of the program's title. */
+	title?: string;
 }
 /** What a restored terminal is started from (a saved `TerminalCheckpoint` with main's options). */
 export interface RestoredTerminal {
@@ -67,6 +69,11 @@ export function restoredSeparator(notice: string): string {
 	return `\x1b[0m\x1b[?1049l\x1b[?25h\r\n\x1b[2m── ${notice} ──\x1b[0m\r\n`;
 }
 
+/** The shell's program name a tab shows (`/bin/zsh` → `zsh`, `C:\…\pwsh.exe` → `pwsh`). */
+export function shellName(application: string): string {
+	return (application.split(/[\\/]/).at(-1) ?? application).replace(/\.exe$/i, "");
+}
+
 /** The worker hands off unread PTY chunks, never a second copy of the retained history. */
 interface TerminalRow extends Omit<TerminalSnapshot, "output"> {
 	delta?: string | { utf16: string };
@@ -86,6 +93,8 @@ export class TerminalService {
 		readonly factory: () => Pty,
 		/** The folder a running shell is in now, by its pid; null where the OS cannot say (Windows). */
 		readonly cwdOf: (pid: number) => Promise<string | null> = async () => null,
+		/** Whether a command runs in the shell with this pid (not the shell at its prompt); null: cannot tell. */
+		readonly runningUnder: (pid: number) => Promise<boolean | null> = async () => null,
 	) {}
 
 	#wake(changed = false): void {
@@ -195,6 +204,8 @@ export class TerminalService {
 			error: entry.error,
 			cols: entry.options.cols,
 			rows: entry.options.rows,
+			shell: shellName(entry.options.application),
+			...(entry.title ? { title: entry.title } : {}),
 		};
 	}
 
@@ -266,6 +277,10 @@ export class TerminalService {
 				case "redraw":
 					this.#nudge(entry);
 					break;
+				case "rename":
+					entry.title = operation.title.trim() || undefined;
+					this.#wake(true);
+					break;
 			}
 		}
 		return [...this.#entries]
@@ -274,6 +289,18 @@ export class TerminalService {
 				const from = operation.action !== "list" ? undefined : operation.offsets ? operation.offsets[id] : 0;
 				return this.#row(id, entry, from, from !== undefined);
 			});
+	}
+
+	/**
+	 * Whether a command runs in `owner`'s terminal `id` (Orca's close guard, `running-terminal-close-guard.ts`): false
+	 * for an ended one, null when the shell's process cannot be read (a close then asks, as Orca's "unverifiable").
+	 */
+	async busy(owner: string, id: string): Promise<boolean | null> {
+		const entry = this.#entries.get(id);
+		if (!entry || entry.owner !== owner) throw new Error("Terminal not found");
+		if (entry.exited) return false;
+		const pid = entry.pty.pid?.() ?? null;
+		return pid === null ? null : this.runningUnder(pid).catch(() => null);
 	}
 
 	/**

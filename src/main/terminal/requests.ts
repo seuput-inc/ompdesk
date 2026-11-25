@@ -39,12 +39,14 @@ export function validTerminalOperation(value: TerminalOperation): boolean {
 			value.rows <= 1000
 		);
 	if (value.action === "write") return typeof value.data === "string" && value.data.length <= 1_000_000;
+	if (value.action === "rename") return typeof value.title === "string" && value.title.length <= 200;
 	return (
 		value.action === "close" ||
 		value.action === "restart" ||
 		value.action === "clear" ||
 		value.action === "claim" ||
-		value.action === "redraw"
+		value.action === "redraw" ||
+		value.action === "busy"
 	);
 }
 

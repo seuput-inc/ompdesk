@@ -166,6 +166,10 @@ interface UiStore {
 	discardedForTabClose: string | null;
 	/** Terminal session the Terminal panel selects once it lists it ("Run in terminal", /cleanse); cleared then. */
 	terminalFocusId: string | null;
+	/** Bumped by `newTerminal`: the Terminal panel starts a terminal for each bump it has not seen. */
+	terminalNewSeq: number;
+	/** The Terminal panel with a new terminal in it (the keymap's `terminal.new`, the palette). */
+	newTerminal: () => void;
 	/** The Files drawer's viewer asked for a wider docked panel (not persisted; the drag width stays the pref). */
 	filePreviewExpanded: boolean;
 	/** The Terminal panel asked for a wider docked panel, like `filePreviewExpanded` (not persisted). */
@@ -461,6 +465,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	pendingFileSwitch: null,
 	discardedForTabClose: null,
 	terminalFocusId: null,
+	terminalNewSeq: 0,
 	filePreviewExpanded: false,
 	terminalExpanded: false,
 	fileViewModes: new Map(),
@@ -500,6 +505,10 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		const next = { panelTab: tab, panelVisible: true };
 		if (get().fileEditDirty && tab !== get().panelTab) set({ pendingFileSwitch: next });
 		else set(next);
+	},
+	newTerminal: () => {
+		get().setPanelTab("terminal");
+		set({ terminalNewSeq: get().terminalNewSeq + 1 });
 	},
 	openSubagentPanel: subagent => {
 		const next = { panelSubagent: subagent, panelTab: "subagent" as const, panelVisible: true };

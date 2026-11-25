@@ -355,6 +355,15 @@ function vendoredSections(): string {
 			MIT_TEXT,
 		].join("\n"),
 		[
+			"Terminal panel code adapted from Orca (https://github.com/stablyai/orca, commit 02cecc98),",
+			"Copyright (c) 2026 Lovecast Inc.: the OSC 52 clipboard parser (src/renderer/lib/terminal-osc52.ts),",
+			"shell quoting of a dropped path (src/shared/shell-quote.ts), the scrollback find bar's decoration",
+			"colours and its safe find (src/renderer/components/panels/TerminalFind.tsx) and Option's word",
+			"motions (src/renderer/lib/terminal-keys.ts).",
+			"",
+			MIT_TEXT,
+		].join("\n"),
+		[
 			"OMPdesk application icon, tray icons, mark and wordmark (resources/icon.*, resources/brand/,",
 			"src/renderer/public/icons/)",
 			"Copyright 2026 SeuPut. Original work. The files are licensed under the Apache License 2.0",

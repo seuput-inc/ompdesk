@@ -147,6 +147,8 @@ const SHORTCUT_ROWS: Record<KeymapActionId, string | null> = {
 	"panel.toggle": "toggle-panel",
 	"panel.terminal": "terminal",
 	"panel.diff": "git",
+	"terminal.new": "new-terminal",
+	"terminal.find": null,
 	"panel.preview": "preview",
 	"panel.files": "files",
 	hotkeys: "hotkeys",

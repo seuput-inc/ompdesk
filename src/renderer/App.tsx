@@ -649,6 +649,12 @@ export function App() {
 				case "panel.files":
 					ui.setPanelTab(migrateDefaultPanelTab(actionId.slice("panel.".length)));
 					return;
+				case "terminal.new":
+					ui.newTerminal();
+					return;
+				case "terminal.find":
+					// The focused terminal opened its find bar before its shell saw the key; elsewhere the chord does nothing.
+					return;
 				case "hotkeys":
 					// ⌘/ or ⌃/ — Settings › Keyboard (/hotkeys parity); again returns.
 					if (ui.destination === "settings" && ui.settingsTab === "keyboard") ui.closeDestination();

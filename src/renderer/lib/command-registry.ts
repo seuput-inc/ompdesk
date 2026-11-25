@@ -1479,6 +1479,14 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 			affordance: { kind: "window", open: () => useUiStore.getState().setPanelTab(view) },
 		});
 	}
+	add({
+		name: "new-terminal",
+		label: t("hotkeys.row.terminalNew"),
+		description: t("panel.title"),
+		category: "panel",
+		shortcut: kbd("terminal.new"),
+		affordance: { kind: "action", run: () => useUiStore.getState().newTerminal() },
+	});
 	// The session views that open as sheets (`jobs` and `tree` are their own commands above and below).
 	for (const [name, view] of [
 		["logs", "logs"],
