@@ -53,8 +53,8 @@ describe("touch targets and type", () => {
 		expect(read("../components/common/IconButton.tsx")).toContain("size-[var(--sc-button-md,var(--sc-control-md))]");
 		expect(read("../components/common/Button.tsx")).toContain("h-[var(--sc-button-md,var(--sc-control-md))]");
 		expect(read("../components/common/Switch.tsx")).toContain("h-[var(--sc-switch-box,var(--sc-hit-min))]");
-		// The top bar keeps its 36 px line (the chrome budget), its buttons as tall as the bar.
-		const bar = rule('html[data-shell="phone"] .omp-topbar');
+		// The top bar and the drawer's header keep their 36 px line (the chrome budget), their buttons as tall as it.
+		const bar = rule('html[data-shell="phone"] :is(.omp-topbar, .omp-sidebar-header)');
 		for (const token of ["button-sm", "button-md", "button-lg"])
 			expect(bar).toMatch(new RegExp(`--sc-${token}:\\s*36px`));
 		expect(phone).toMatch(/--phone-type-scale:\s*0\.8667/);
