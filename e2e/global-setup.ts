@@ -28,8 +28,19 @@ async function warmWebView2(): Promise<void> {
 		const app = await launchShell({ ...(await appLaunchOptions(world)), timeout: WARMUP_TIMEOUT_MS });
 		try {
 			const page = await app.firstWindow({ timeout: WARMUP_TIMEOUT_MS });
-			const engine = await page.evaluate(() => /Edg\/[\d.]+/.exec(navigator.userAgent)?.[0] ?? navigator.userAgent);
-			console.log(`[e2e] WebView2 warm-up: the first launch took ${Date.now() - started} ms (${engine})`);
+			const took = Date.now() - started;
+			// The user agent names only the major version (157.0.0.0); the high-entropy list names the runtime's build.
+			const engine = await page.evaluate(async () => {
+				type Brands = { brand: string; version: string }[];
+				const data = (
+					navigator as {
+						userAgentData?: { getHighEntropyValues(hints: string[]): Promise<{ fullVersionList?: Brands }> };
+					}
+				).userAgentData;
+				const list = (await data?.getHighEntropyValues(["fullVersionList"]))?.fullVersionList ?? [];
+				return list.find(entry => entry.brand.includes("Edge"))?.version ?? navigator.userAgent;
+			});
+			console.log(`[e2e] WebView2 warm-up: the first launch took ${took} ms (WebView2 ${engine})`);
 		} finally {
 			await exitShellApp(app);
 		}
