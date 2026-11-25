@@ -1,11 +1,19 @@
-import { CircleDot, ExternalLink, GitPullRequest } from "lucide-react";
+import { CircleDot, ExternalLink, GitPullRequest, GitPullRequestArrow } from "lucide-react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import type { GithubItemPeek } from "../../../../shared/github";
 import { githubConclusionPassed } from "../../../../shared/github-checks";
 import { AnsiText, hasAnsi } from "../../../lib/ansi";
+import { type FocusedScope, useFocusedScope } from "../../../lib/focused-scope";
 import { resultText } from "../../../lib/format";
 import { githubStateLabel } from "../../../lib/github-state";
 import { useT } from "../../../lib/i18n";
+import { type GithubItemLink, githubItemLink, githubPeekKey, peekGithubItem } from "../../../lib/link-peek";
 import { openExternal } from "../../../lib/open-external";
+import { hidden, pollWhileVisible } from "../../../lib/visible-poll";
 import { asArray, asRecord } from "../../../lib/wire-value";
+import { usePrCenterStore } from "../../../stores/pr-center";
+import { useUiStore } from "../../../stores/ui";
+import { githubItemState, LinkPeek } from "../../chat/LinkPeek";
 import { IconButton } from "../../common";
 import type { ToolRendererProps } from "../ToolCard";
 import { resultDetails } from "./result";
@@ -198,9 +206,113 @@ function stateLabel(t: (key: string) => string, state: string): string {
 const ENTITY_LINE_RE =
 	/^#\s+(?:Created\s+|Checked\s+Out\s+)?(?:Issue|Pull\s+Request)(?:\s+Worktree)?\s+#\d+|^(?:State|URL):\s*.*$/;
 
+/** How often an open pull request's card reads it again while on screen (Orca's `OPEN_PULL_REQUEST_REFRESH_MS`). */
+export const PR_CARD_REFRESH_MS = 60_000;
+
+function entityLink(entity: GhEntity): GithubItemLink | null {
+	const fromUrl = entity.url ? githubItemLink(entity.url) : null;
+	return fromUrl ?? (entity.repo && entity.number != null ? { repo: entity.repo, number: entity.number } : null);
+}
+
+/**
+ * An open pull request's fresh title and state while its card is on screen and the window is shown: read as it comes
+ * into view, then every minute; once it reads merged or closed it is never read again (Orca's
+ * `NativeChatOpenedPullRequestCard.tsx` `usePullRequestDetails`). A failed read keeps what the card showed.
+ */
+function useLivePullRequest(
+	link: GithubItemLink | null,
+	toolState: string | undefined,
+	cardRef: RefObject<HTMLElement | null>,
+): GithubItemPeek | null {
+	const [fresh, setFresh] = useState<GithubItemPeek | null>(null);
+	// Where nothing can say what is on screen, the card counts as shown.
+	const [onScreen, setOnScreen] = useState(typeof IntersectionObserver === "undefined");
+	const state = (fresh?.state ?? toolState ?? "").toUpperCase();
+	const live = link !== null && state !== "MERGED" && state !== "CLOSED";
+	const key = link && githubPeekKey(link);
+	const linkRef = useRef(link);
+	linkRef.current = link;
+	useEffect(() => {
+		const card = cardRef.current;
+		if (!live || !card || typeof IntersectionObserver === "undefined") return;
+		const observer = new IntersectionObserver(([entry]) => setOnScreen(entry?.isIntersecting ?? false));
+		observer.observe(card);
+		return () => observer.disconnect();
+	}, [live, cardRef]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `key` names the pull request `linkRef` holds.
+	useEffect(() => {
+		const pr = linkRef.current;
+		if (!live || !onScreen || !pr) return;
+		const read = () => {
+			peekGithubItem(pr, { freshMs: PR_CARD_REFRESH_MS, background: true }).then(setFresh, () => undefined);
+		};
+		if (!hidden()) read();
+		return pollWhileVisible(read, PR_CARD_REFRESH_MS);
+	}, [live, onScreen, key]);
+	return fresh;
+}
+
+/**
+ * The pull request in the PR Center when it is the tab repository's (FG26); else, or for an Enterprise host, the
+ * browser. A PR Center not read yet for this folder opens and decides once its own read names the repository.
+ */
+function openInPrCenter(scope: FocusedScope, link: GithubItemLink, url: string): void {
+	const same = (repo: string) => repo.toLowerCase() === link.repo.toLowerCase();
+	usePrCenterStore.getState().enter(scope);
+	const here = usePrCenterStore.getState().repo;
+	if (link.host || here?.available === false || (here?.available && !same(here.repo))) {
+		openExternal(url);
+		return;
+	}
+	useUiStore.getState().openAgents("prs");
+	if (here) {
+		void usePrCenterStore.getState().select(link.number);
+		return;
+	}
+	const stop = usePrCenterStore.subscribe(state => {
+		if (!state.repo && !state.error) return;
+		stop();
+		if (state.repo?.available && same(state.repo.repo)) void state.select(link.number);
+		else openExternal(url);
+	});
+}
+
+const MENTION = /\b([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)#(\d+)\b/g;
+
+/** `owner/repo#n` mentions in a tool's text as links with their card; the rest as it is. */
+function withMentions(text: string): ReactNode[] {
+	const parts: ReactNode[] = [];
+	let last = 0;
+	for (const match of text.matchAll(MENTION)) {
+		const at = match.index ?? 0;
+		const url = `https://github.com/${match[1]}/issues/${match[2]}`;
+		parts.push(
+			text.slice(last, at),
+			<LinkPeek href={url} key={at}>
+				<a
+					className="text-[var(--omp-md-link)] underline decoration-[var(--omp-md-link-url)]"
+					data-github-mention
+					href={url}
+					onClick={event => {
+						event.preventDefault();
+						openExternal(url);
+					}}
+				>
+					{match[0]}
+				</a>
+			</LinkPeek>,
+		);
+		last = at + match[0].length;
+	}
+	parts.push(text.slice(last));
+	return parts;
+}
+
 /** GitHub: op title + entity card (issue/PR) or run-watch jobs; open-external button. */
 export function GithubRenderer({ args, result, isPartial, partialResult }: ToolRendererProps) {
 	const t = useT();
+	const scope = useFocusedScope();
+	const cardRef = useRef<HTMLDivElement>(null);
 	const effective = isPartial ? partialResult : result;
 	const details = resultDetails(effective);
 	const text = resultText(effective);
@@ -220,6 +332,10 @@ export function GithubRenderer({ args, result, isPartial, partialResult }: ToolR
 		.filter(line => !ENTITY_LINE_RE.test(line))
 		.join("\n")
 		.trim();
+	const prLink = entity.kind === "pr" ? entityLink(entity) : null;
+	const live = useLivePullRequest(prLink, entity.state, cardRef);
+	const title = live?.title ?? entity.title;
+	const state = live ? githubItemState(live) : entity.state;
 
 	return (
 		<div className="flex flex-col gap-1.5">
@@ -248,26 +364,37 @@ export function GithubRenderer({ args, result, isPartial, partialResult }: ToolR
 				)}
 			</div>
 
-			{(entity.title || entity.number != null) && (
-				<div className="flex items-center gap-2 rounded-md bg-[var(--omp-code-bg)] px-2 py-1.5">
+			{(title || entity.number != null) && (
+				<div className="flex items-center gap-2 rounded-md bg-[var(--omp-code-bg)] px-2 py-1.5" ref={cardRef}>
 					{entity.number != null && (
 						<span className="shrink-0 font-mono text-omp-sm font-semibold text-[var(--omp-dim)]">
 							#{entity.number}
 						</span>
 					)}
 					<span className="min-w-0 flex-1 truncate text-omp-md font-medium text-[var(--omp-text)]">
-						{entity.title ?? t("tools.github.untitled")}
+						{title ?? t("tools.github.untitled")}
 					</span>
-					{entity.state && (
+					{state && (
 						<span
 							className="shrink-0 rounded-full px-1.5 py-px text-omp-xxs font-semibold capitalize"
+							data-github-state={state.toLowerCase()}
 							style={{
-								color: STATE_COLOR[entity.state.toLowerCase()] ?? "var(--omp-muted)",
+								color: STATE_COLOR[state.toLowerCase()] ?? "var(--omp-muted)",
 								background: "var(--omp-bg-tertiary)",
 							}}
 						>
-							{stateLabel(t, entity.state)}
+							{stateLabel(t, state)}
 						</span>
+					)}
+					{prLink && externalUrl && (
+						<IconButton
+							className="size-5! [&>svg]:size-3!"
+							data-github-pr-center
+							icon={<GitPullRequestArrow />}
+							label={t("linkPeek.openInPrCenter")}
+							onClick={() => openInPrCenter(scope, prLink, externalUrl)}
+							size="sm"
+						/>
 					)}
 					{externalUrl && (
 						<IconButton
@@ -335,7 +462,7 @@ export function GithubRenderer({ args, result, isPartial, partialResult }: ToolR
 
 			{body && (
 				<pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-[var(--omp-code-bg)] px-2 py-1.5 font-mono text-omp-sm leading-[1.45] text-[var(--omp-tool-output)]">
-					{body}
+					{withMentions(body)}
 				</pre>
 			)}
 

@@ -40,6 +40,7 @@ export { DisclosureButton, type DisclosureButtonProps, type DisclosureChevron } 
 export { isTopmostDialog, registerDialogLayer } from "./dialog-layer";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { ErrorDetail } from "./ErrorDetail";
+export { HoverCard, type HoverCardProps } from "./HoverCard";
 export { IconButton, type IconButtonProps, type IconButtonSize, type IconButtonTone } from "./IconButton";
 export { InlineNotice, type InlineNoticeProps, type InlineNoticeTone } from "./InlineNotice";
 export {
@@ -62,6 +63,7 @@ export { LangSwitcher, type LangSwitcherProps } from "./LangSwitcher";
 export { LinkButton, type LinkButtonProps } from "./LinkButton";
 export { ListRow, type ListRowProps } from "./ListRow";
 export { LIVE_PERIOD_MS, type LiveState, LiveSweep, LiveText, useWindowVisible } from "./LiveShimmer";
+export { MarkdownComposer, type MarkdownComposerProps } from "./MarkdownComposer";
 export {
 	MasterDetail,
 	MasterDetailBack,

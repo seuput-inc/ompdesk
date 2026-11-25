@@ -12,11 +12,22 @@ import { useGithubLoad } from "../../../lib/github";
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
 import { focusedTabDevice } from "../../../stores/remote";
-import { Button, EmptyState, ErrorDetail, Input, Select, Skeleton, SkeletonRows, Tabs } from "../../common";
+import {
+	Button,
+	EmptyState,
+	ErrorDetail,
+	Input,
+	SegmentedChoice,
+	Select,
+	Skeleton,
+	SkeletonRows,
+	Tabs,
+} from "../../common";
 import { GithubSignIn } from "../../onboarding/GithubSignIn";
 import { GithubActions } from "./GithubActions";
 import { GithubIssues } from "./GithubIssues";
 import { GithubNotifications } from "./GithubNotifications";
+import { GithubQuota } from "./GithubQuota";
 import { GithubReleases } from "./GithubReleases";
 import { GithubRepos } from "./GithubRepos";
 
@@ -32,6 +43,10 @@ export function GithubCenter() {
 	const [repoOverride, setRepoOverride] = useState<string | null>(null);
 	const [repoInvalid, setRepoInvalid] = useState(false);
 	const probe = useGithubLoad({ op: "hosts" }, "hosts");
+	const origin = useGithubLoad(
+		probe.data?.repo && !host ? { op: "repo_get" } : null,
+		`origin|${probe.data?.repo ?? ""}`,
+	);
 
 	if (!probe.data) {
 		if (probe.error) {
@@ -115,6 +130,8 @@ export function GithubCenter() {
 	}
 
 	const target: GithubTarget = { host: host || undefined, repo: repoOverride ?? undefined };
+	// A fork's checkout offers its upstream's issues and runs too (Orca `IssueSourceSelector.tsx`).
+	const parent = !host && (repoOverride === null || repoOverride === origin.data?.parent) ? origin.data?.parent : null;
 	// Another host has no checkout repository: its sections need a named one.
 	const repoName = repoOverride ?? (host ? null : checkoutRepo);
 	const targetKey = `${host}|${repoOverride ?? ""}`;
@@ -188,6 +205,24 @@ export function GithubCenter() {
 						{repoName ?? t("github.noRepository")}
 					</span>
 				)}
+				{parent && (
+					<SegmentedChoice
+						aria-label={t("github.source.label")}
+						fit="content"
+						onChange={value => {
+							const upstream = value === "upstream";
+							setRepoOverride(upstream ? parent : null);
+							setRepoInput(upstream ? parent : "");
+						}}
+						optionAttr="data-github-source"
+						options={[
+							{ value: "origin", label: t("github.source.origin") },
+							{ value: "upstream", label: t("github.source.upstream") },
+						]}
+						value={repoOverride === parent ? "upstream" : "origin"}
+					/>
+				)}
+				<GithubQuota target={target} />
 				<Tabs
 					activeId={section}
 					ariaLabel={t("github.sections")}

@@ -1,11 +1,13 @@
-import { CircleDot, CircleOff, ExternalLink, MessageSquare, Pencil, Plus, RefreshCw } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { CircleDot, CircleOff, Copy, ExternalLink, MessageSquare, Pencil, Plus, RefreshCw } from "lucide-react";
+import { type FormEvent, useRef, useState } from "react";
 import type { GithubIssueDetail, GithubIssueState } from "../../../../shared/github";
-import { formatTimeAgo } from "../../../lib/format";
+import { copyText, formatTimeAgo } from "../../../lib/format";
 import { github, useGithubLoad } from "../../../lib/github";
+import { uploadGithubImage } from "../../../lib/github-image";
 import { useT } from "../../../lib/i18n";
 import { MarkdownRenderer } from "../../../lib/markdown";
 import { openExternal } from "../../../lib/open-external";
+import { toast, toastError } from "../../../stores/toast";
 import {
 	AsyncSection,
 	Badge,
@@ -14,22 +16,32 @@ import {
 	IconButton,
 	Input,
 	ListRow,
+	MarkdownComposer,
 	MasterDetail,
+	MenuButton,
 	Modal,
 	SearchField,
 	Tabs,
-	TextArea,
 } from "../../common";
+import { PeopleFields, useAssignable } from "../pr/PrPeople";
 import { type GithubSectionProps, GithubToolbar, NeedsRepo, pausedNotice, useGithubMutation } from "./shared";
 
 const STATES: GithubIssueState[] = ["open", "closed", "all"];
 
-/** Title + body editor for a new or edited issue. */
+/** New issues not filed yet, by repository: closing the dialog keeps what was typed (Orca `task-page-new-issue-draft.ts`). */
+const drafts = new Map<string, { title: string; body: string }>();
+
+/**
+ * Title + body editor for a new or edited issue: Write and Preview, @mentions and pasted images; ⌘/Ctrl+Enter files
+ * it. With `draftKey` what was typed outlives a close until the issue is filed.
+ */
 function IssueEditor({
 	open,
 	initial,
 	heading,
 	submitLabel,
+	target,
+	draftKey,
 	onClose,
 	onSubmit,
 }: {
@@ -37,20 +49,32 @@ function IssueEditor({
 	initial: { title: string; body: string };
 	heading: string;
 	submitLabel: string;
+	target: GithubSectionProps["target"];
+	draftKey?: string;
 	onClose: () => void;
 	onSubmit: (value: { title: string; body: string }) => Promise<boolean>;
 }) {
 	const t = useT();
-	const [title, setTitle] = useState(initial.title);
-	const [body, setBody] = useState(initial.body);
+	const mentions = useAssignable(target);
+	const form = useRef<HTMLFormElement>(null);
+	const kept = draftKey ? drafts.get(draftKey) : undefined;
+	const [title, setTitle] = useState(kept?.title ?? initial.title);
+	const [body, setBody] = useState(kept?.body ?? initial.body);
 	const [busy, setBusy] = useState(false);
+	const keep = (next: { title: string; body: string }) => {
+		if (!draftKey) return;
+		if (next.title || next.body) drafts.set(draftKey, next);
+		else drafts.delete(draftKey);
+	};
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
 		if (!title.trim()) return;
 		setBusy(true);
 		const done = await onSubmit({ title: title.trim(), body });
 		setBusy(false);
-		if (done) onClose();
+		if (!done) return;
+		if (draftKey) drafts.delete(draftKey);
+		onClose();
 	};
 	return (
 		<Modal
@@ -75,23 +99,48 @@ function IssueEditor({
 			size="lg"
 			title={heading}
 		>
-			<form className="flex flex-col gap-3" id="github-issue-editor" onSubmit={event => void submit(event)}>
+			<form
+				className="flex flex-col gap-3"
+				id="github-issue-editor"
+				onSubmit={event => void submit(event)}
+				ref={form}
+			>
 				<Input
 					autoFocus
 					label={t("github.issues.title")}
-					onChange={event => setTitle(event.target.value)}
+					onChange={event => {
+						setTitle(event.target.value);
+						keep({ title: event.target.value, body });
+					}}
 					value={title}
 				/>
-				<TextArea
-					autoGrow
+				<MarkdownComposer
 					label={t("github.issues.body")}
-					onChange={event => setBody(event.target.value)}
+					mentions={mentions}
+					onChange={next => {
+						setBody(next);
+						keep({ title, body: next });
+					}}
+					onImage={file => uploadGithubImage(file, target)}
+					onSubmit={() => form.current?.requestSubmit()}
 					rows={8}
 					value={body}
 				/>
 			</form>
 		</Modal>
 	);
+}
+
+/** A branch name for work on an issue: its number and title in lowercase words. */
+function issueBranch(issue: GithubIssueDetail): string {
+	const words = issue.title
+		.toLowerCase()
+		.normalize("NFKD")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48)
+		.replace(/-+$/, "");
+	return words ? `${issue.number}-${words}` : `issue-${issue.number}`;
 }
 
 function IssueDetail({
@@ -105,9 +154,20 @@ function IssueDetail({
 }) {
 	const t = useT();
 	const { busy, run } = useGithubMutation();
+	const mentions = useAssignable(target);
 	const [editing, setEditing] = useState(false);
 	const [comment, setComment] = useState("");
 	const closed = issue.state === "CLOSED";
+	const copy = async (what: "url" | "branch" | "prompt") => {
+		const text =
+			what === "url"
+				? issue.url
+				: what === "branch"
+					? issueBranch(issue)
+					: `${t("github.issues.promptLead", { number: issue.number, title: issue.title })}\n${issue.url}\n\n${issue.body}`;
+		if (await copyText(text)) toast({ variant: "success", message: t(`github.issues.copied.${what}`) });
+		else toastError({ title: t(`github.issues.copyFailed.${what}`), error: "" });
+	};
 	return (
 		<article className="flex flex-col gap-4 px-6 py-5 min-[1280px]:px-10" data-github-issue={issue.number}>
 			<header className="flex flex-col gap-2">
@@ -120,9 +180,6 @@ function IssueDetail({
 					</Badge>
 					<span>{issue.author}</span>
 					<span>{formatTimeAgo(issue.updatedAt)}</span>
-					{issue.labels.map(label => (
-						<Badge key={label}>{label}</Badge>
-					))}
 				</div>
 				<div className="flex flex-wrap gap-2">
 					<Button icon={<Pencil />} onClick={() => setEditing(true)} size="sm" variant="secondary">
@@ -152,7 +209,27 @@ function IssueDetail({
 					<Button icon={<ExternalLink />} onClick={() => openExternal(issue.url)} size="sm" variant="ghost">
 						{t("github.openOnGithub")}
 					</Button>
+					<MenuButton
+						icon={<Copy />}
+						items={[
+							{ id: "url", label: t("github.issues.copy.url"), onSelect: () => void copy("url") },
+							{ id: "branch", label: t("github.issues.copy.branch"), onSelect: () => void copy("branch") },
+							{ id: "prompt", label: t("github.issues.copy.prompt"), onSelect: () => void copy("prompt") },
+						]}
+						label={t("github.issues.copy.label")}
+						size="sm"
+						variant="ghost"
+					/>
 				</div>
+				<PeopleFields
+					assignees={issue.assignees}
+					editable
+					kind="issue"
+					labels={issue.labels}
+					number={issue.number}
+					onChanged={onChanged}
+					target={target}
+				/>
 			</header>
 			<div className="text-sc-md">
 				{issue.body.trim() ? (
@@ -194,10 +271,11 @@ function IssueDetail({
 						});
 					}}
 				>
-					<TextArea
-						autoGrow
+					<MarkdownComposer
 						label={t("github.issues.addComment")}
-						onChange={event => setComment(event.target.value)}
+						mentions={mentions}
+						onChange={setComment}
+						onImage={file => uploadGithubImage(file, target)}
 						rows={3}
 						value={comment}
 					/>
@@ -231,6 +309,7 @@ function IssueDetail({
 					}
 					open
 					submitLabel={t("common.save")}
+					target={target}
 				/>
 			)}
 		</article>
@@ -349,9 +428,11 @@ export function GithubIssues({ target, repoName, targetKey }: GithubSectionProps
 			/>
 			{creating && (
 				<IssueEditor
+					draftKey={`${target.host ?? ""}|${repoName}`}
 					heading={t("github.issues.newTitle", { repo: repoName })}
 					initial={{ title: "", body: "" }}
 					onClose={() => setCreating(false)}
+					target={target}
 					onSubmit={value =>
 						run(
 							"create",

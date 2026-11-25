@@ -9,6 +9,7 @@ import type {
 	RpcCommand,
 	RpcDebugParams,
 	RpcMcpServerInput,
+	RpcPrListFilter,
 	RpcResponse,
 	RpcSecurityDispositionStatus,
 	RpcSecurityTargetInput,
@@ -99,12 +100,16 @@ export interface SessionRpcClient {
 	worktreePrefetch(baseCwd?: string): Promise<RpcResponse>;
 	worktreeRemove(path: string, force?: boolean): Promise<RpcResponse>;
 	prRepo(): Promise<RpcResponse>;
-	/** `background`: an automatic re-read, which waits behind GitHub's rate limit and pace (core `gh/gate.rs`). */
+	/**
+	 * `background`: an automatic re-read, which waits behind GitHub's rate limit and pace (core `gh/gate.rs`);
+	 * `filter`: gh's author, label, assignee and draft filters.
+	 */
 	prList(
 		state?: "open" | "closed" | "merged" | "all",
 		limit?: number,
 		view?: "all" | "review" | "mine",
 		background?: boolean,
+		filter?: RpcPrListFilter,
 	): Promise<RpcResponse>;
 	prGet(number: number, background?: boolean): Promise<RpcResponse>;
 	prDiff(number: number, path: string): Promise<RpcResponse>;
@@ -505,8 +510,15 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		worktreePrefetch: baseCwd => rpcCommand({ type: "worktree_prefetch", ...(baseCwd ? { baseCwd } : {}) }),
 		worktreeRemove: (path, force) => rpcCommand({ type: "worktree_remove", path, force }),
 		prRepo: () => rpcCommand({ type: "pr_repo" }),
-		prList: (state, limit, view, background) =>
-			rpcCommand({ type: "pr_list", state, limit, view, ...(background ? { background } : {}) }),
+		prList: (state, limit, view, background, filter) =>
+			rpcCommand({
+				type: "pr_list",
+				state,
+				limit,
+				view,
+				...(filter && Object.keys(filter).length > 0 ? { filter } : {}),
+				...(background ? { background } : {}),
+			}),
 		prGet: (number, background) => rpcCommand({ type: "pr_get", number, ...(background ? { background } : {}) }),
 		prDiff: (number, path) => rpcCommand({ type: "pr_diff", number, path }),
 		prDraft: options => rpcCommand({ type: "pr_draft", base: options?.base, head: options?.head }),

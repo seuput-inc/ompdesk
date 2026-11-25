@@ -19,7 +19,9 @@ use crate::run::Opts;
 use crate::server::Fault;
 
 const LIST_FIELDS: &str = "number,title,url,isDraft,author,headRefName,baseRefName,additions,deletions,updatedAt,reviewDecision,statusCheckRollup";
-const DETAIL_FIELDS: &str = "number,title,url,isDraft,author,body,state,baseRefName,headRefName,mergeStateStatus,additions,deletions,reviewDecision,files,statusCheckRollup";
+/// `id`, `headRefOid`, `autoMergeRequest`, `reviewRequests`, `assignees` and `labels` feed the PR Center's state,
+/// auto-merge and people controls (Orca `pr-auto-merge.ts:18`, `pr-reviewers.ts`).
+const DETAIL_FIELDS: &str = "number,title,url,isDraft,author,body,state,baseRefName,headRefName,mergeStateStatus,additions,deletions,reviewDecision,files,statusCheckRollup,id,headRefOid,autoMergeRequest,reviewRequests,assignees,labels";
 
 /// The checkout's GitHub repository (`requireGithubRepo`).
 #[derive(Serialize)]
@@ -180,12 +182,24 @@ pub struct ListItem {
     checks: Counts,
 }
 
+/// The PR Center list's filters past its view (Orca `PRFilterSections.tsx`): gh's own `--author`, `--label`,
+/// `--assignee` and `--draft`.
+#[derive(Deserialize, Default)]
+pub struct Filter {
+    author: Option<String>,
+    label: Option<String>,
+    assignee: Option<String>,
+    #[serde(default)]
+    draft: bool,
+}
+
 pub async fn list(
     tools: &Tools,
     cwd: &str,
     state: Option<&str>,
     limit: Option<f64>,
     view: View,
+    filter: &Filter,
 ) -> Result<Vec<ListItem>, Fault> {
     let found = repo(tools, cwd).await?;
     let limit = limit.map_or_else(|| "50".to_owned(), js_number);
@@ -204,36 +218,99 @@ pub async fn list(
         View::Review => args.extend(["--search", "review-requested:@me"]),
         View::Mine => args.extend(["--search", "author:@me"]),
     }
+    for (flag, value) in [
+        ("--author", &filter.author),
+        ("--label", &filter.label),
+        ("--assignee", &filter.assignee),
+    ] {
+        if let Some(value) = value.as_deref().filter(|value| !value.is_empty()) {
+            args.extend([flag, value]);
+        }
+    }
+    if filter.draft {
+        args.push("--draft");
+    }
     args.extend(["--json", LIST_FIELDS]);
     let rows = json::parse(&tools.gh.call(&found.root, &args, Opts::default()).await?)?;
-    Ok(json::list(&rows)
-        .iter()
-        .map(|row| ListItem {
-            number: or(row, "number", 0),
-            title: or(row, "title", ""),
-            url: or(row, "url", ""),
-            is_draft: or(row, "isDraft", false),
-            author_login: json::login(row, "author"),
-            head_ref_name: or(row, "headRefName", ""),
-            base_ref_name: or(row, "baseRefName", ""),
-            additions: or(row, "additions", 0),
-            deletions: or(row, "deletions", 0),
-            updated_at: or(row, "updatedAt", ""),
-            review_decision: or(row, "reviewDecision", Value::Null),
-            checks: rollup_counts(json::rows(row, "statusCheckRollup")),
-        })
-        .collect())
+    Ok(json::list(&rows).iter().map(list_item).collect())
 }
 
+fn list_item(row: &Value) -> ListItem {
+    ListItem {
+        number: or(row, "number", 0),
+        title: or(row, "title", ""),
+        url: or(row, "url", ""),
+        is_draft: or(row, "isDraft", false),
+        author_login: json::login(row, "author"),
+        head_ref_name: or(row, "headRefName", ""),
+        base_ref_name: or(row, "baseRefName", ""),
+        additions: or(row, "additions", 0),
+        deletions: or(row, "deletions", 0),
+        updated_at: or(row, "updatedAt", ""),
+        review_decision: or(row, "reviewDecision", Value::Null),
+        checks: rollup_counts(json::rows(row, "statusCheckRollup")),
+    }
+}
+
+/// A branch's PR: the open one, else the newest of any state (Orca `get-pr-for-branch.ts`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchPr {
+    #[serde(flatten)]
+    item: ListItem,
+    state: Value,
+}
+
+/// The PR whose head is `branch` in the checkout's repository, none when it has none.
+pub async fn for_branch(tools: &Tools, cwd: &str, branch: &str) -> Result<Option<BranchPr>, Fault> {
+    let found = repo(tools, cwd).await?;
+    let fields = format!("{LIST_FIELDS},state");
+    let args = [
+        "pr",
+        "list",
+        "--repo",
+        &found.repo,
+        "--head",
+        branch,
+        "--state",
+        "all",
+        "--limit",
+        "5",
+        "--json",
+        &fields,
+    ];
+    let rows = json::parse(&tools.gh.call(&found.root, &args, Opts::default()).await?)?;
+    let rows = json::list(&rows);
+    let open = rows
+        .iter()
+        .find(|row| row.get("state").and_then(Value::as_str) == Some("OPEN"));
+    Ok(open.or_else(|| rows.first()).map(|row| BranchPr {
+        item: list_item(row),
+        state: or(row, "state", ""),
+    }))
+}
+
+/// A check of the rollup; `url` (its details page, a run's job for Actions), `workflow` and the times when gh gave them.
 #[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Check {
     name: Value,
     status: Value,
     conclusion: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at: Option<Value>,
 }
 
 /// `rollupChecks`: a check run as it is; a commit status (Jenkins, Prow, a deploy hook) has only a `state`, and
-/// SUCCESS, FAILURE and ERROR are finished with that conclusion while PENDING and EXPECTED still wait.
+/// SUCCESS, FAILURE and ERROR are finished with that conclusion while PENDING and EXPECTED still wait. A check run's
+/// `detailsUrl` (an Actions job's page, `…/actions/runs/<run>/job/<job>`) or a status's `targetUrl` rides along, so the
+/// PR Center opens its log and reruns its run (Orca `check-detail-field-mapping.ts`).
 fn rollup_checks(rollup: &[Value]) -> Vec<Check> {
     rollup
         .iter()
@@ -242,30 +319,35 @@ fn rollup_checks(rollup: &[Value]) -> Vec<Check> {
                 .or_else(|| get(check, "context"))
                 .cloned()
                 .unwrap_or_else(|| "check".into());
+            let with = |status: Value, conclusion: Value| Check {
+                name: name.clone(),
+                status,
+                conclusion,
+                url: get(check, "detailsUrl")
+                    .or_else(|| get(check, "targetUrl"))
+                    .filter(|url| json::truthy(url))
+                    .cloned(),
+                workflow: get(check, "workflowName")
+                    .filter(|name| json::truthy(name))
+                    .cloned(),
+                started_at: get(check, "startedAt").cloned(),
+                completed_at: get(check, "completedAt").cloned(),
+            };
             let state = check.get("state");
             if check.get("status").is_none() && state.is_some_and(json::truthy) {
                 let state = state.cloned().unwrap_or_default();
                 let finished = matches!(state.as_str(), Some("SUCCESS" | "FAILURE" | "ERROR"));
                 return if finished {
-                    Check {
-                        name,
-                        status: "COMPLETED".into(),
-                        conclusion: state,
-                    }
+                    with("COMPLETED".into(), state)
                 } else {
-                    Check {
-                        name,
-                        status: state,
-                        conclusion: Value::Null,
-                    }
+                    with(state, Value::Null)
                 };
             }
             let conclusion = check.get("conclusion").filter(|value| json::truthy(value));
-            Check {
-                name,
-                status: or(check, "status", ""),
-                conclusion: conclusion.cloned().unwrap_or(Value::Null),
-            }
+            with(
+                or(check, "status", ""),
+                conclusion.cloned().unwrap_or(Value::Null),
+            )
         })
         .collect()
 }
@@ -341,6 +423,29 @@ pub struct Detail {
     review_decision: Value,
     files: Vec<File>,
     checks: Vec<Check>,
+    /// The PR's GraphQL node id (viewed marks, auto-merge).
+    id: Value,
+    head_ref_oid: Value,
+    /// `{method, by}` while auto-merge is on, else null.
+    auto_merge: Value,
+    /// Requested reviewers: a user's login, a team's `org/slug`.
+    review_requests: Vec<Value>,
+    assignees: Vec<Value>,
+    labels: Vec<Value>,
+}
+
+/// The logins (or team slugs, `name` for anything else) of gh's `reviewRequests`, `assignees` and `labels` rows.
+fn names(row: &Value, key: &str) -> Vec<Value> {
+    json::rows(row, key)
+        .iter()
+        .filter_map(|entry| {
+            get(entry, "login")
+                .or_else(|| get(entry, "slug"))
+                .or_else(|| get(entry, "name"))
+                .filter(|name| json::truthy(name))
+                .cloned()
+        })
+        .collect()
 }
 
 pub async fn detail(tools: &Tools, cwd: &str, number: Option<f64>) -> Result<Detail, Fault> {
@@ -360,6 +465,12 @@ pub async fn detail(tools: &Tools, cwd: &str, number: Option<f64>) -> Result<Det
         Err(fault) => Err(fault),
     }
     .map_err(|fault| Fault::new("pr_not_found", format!("PR #{spelled}: {}", fault.message)))?;
+    let auto_merge = get(&row, "autoMergeRequest").map_or(Value::Null, |request| {
+        serde_json::json!({
+            "method": json::text(request, "mergeMethod").unwrap_or("").to_lowercase(),
+            "by": json::login(request, "enabledBy"),
+        })
+    });
     Ok(Detail {
         number: get(&row, "number")
             .cloned()
@@ -386,6 +497,12 @@ pub async fn detail(tools: &Tools, cwd: &str, number: Option<f64>) -> Result<Det
             })
             .collect(),
         checks: rollup_checks(json::rows(&row, "statusCheckRollup")),
+        id: or(&row, "id", ""),
+        head_ref_oid: or(&row, "headRefOid", ""),
+        auto_merge,
+        review_requests: names(&row, "reviewRequests"),
+        assignees: names(&row, "assignees"),
+        labels: names(&row, "labels"),
     })
 }
 
@@ -430,6 +547,35 @@ pub async fn diff(
     Ok(Diff {
         diff: text[start..end].to_owned(),
     })
+}
+
+/// Every file's unified-diff slice of a PR from one `gh pr diff`, by path: the PR Center's Expand all (Orca
+/// `pull-request-page/files/combined-diff-viewer.tsx` reads the whole diff once).
+pub async fn all_diffs(
+    tools: &Tools,
+    cwd: &str,
+    number: u64,
+) -> Result<std::collections::BTreeMap<String, String>, Fault> {
+    let found = repo(tools, cwd).await?;
+    let spelled = number.to_string();
+    let args = [
+        "pr",
+        "diff",
+        &spelled,
+        "--repo",
+        &found.repo,
+        "--color",
+        "never",
+    ];
+    let text = tools
+        .gh
+        .call(&found.root, &args, Opts::default())
+        .await
+        .map_err(|fault| Fault::new("pr_not_found", format!("PR #{spelled}: {}", fault.message)))?;
+    Ok(unified_diff_files(&text)
+        .into_iter()
+        .map(|file| (file.path, text[file.start..file.end].to_owned()))
+        .collect())
 }
 
 /// One file of a unified multi-file diff: the path the page names it by and its byte range.
@@ -1063,6 +1209,30 @@ mod tests {
                 { "name": "check", "status": "", "conclusion": "skipped" },
                 { "name": "check", "status": "", "conclusion": null },
             ])
+        );
+        // A check run carries its job's page, workflow and times; a commit status its target.
+        let linked = json!([
+            { "__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "FAILURE",
+              "detailsUrl": "https://github.com/o/r/actions/runs/5/job/9", "workflowName": "ci",
+              "startedAt": "2026-01-01T00:00:00Z", "completedAt": "2026-01-01T00:01:00Z" },
+            { "__typename": "StatusContext", "context": "deploy", "state": "PENDING", "targetUrl": "https://ci.test/1" },
+        ]);
+        let checks = serde_json::to_value(rollup_checks(linked.as_array().unwrap())).unwrap();
+        assert_eq!(
+            checks,
+            json!([
+                { "name": "test", "status": "COMPLETED", "conclusion": "FAILURE",
+                  "url": "https://github.com/o/r/actions/runs/5/job/9", "workflow": "ci",
+                  "startedAt": "2026-01-01T00:00:00Z", "completedAt": "2026-01-01T00:01:00Z" },
+                { "name": "deploy", "status": "PENDING", "conclusion": null, "url": "https://ci.test/1" },
+            ])
+        );
+        assert_eq!(
+            names(
+                &json!({ "reviewRequests": [{ "login": "a" }, { "slug": "team" }, {}] }),
+                "reviewRequests"
+            ),
+            vec![json!("a"), json!("team")]
         );
     }
 

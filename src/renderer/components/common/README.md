@@ -33,6 +33,7 @@ allow-list beside the marker.
 | One value from ≤ ~15 fixed options | `Select` (native popup) | a custom dropdown |
 | A long, searchable or rich list (models, sessions, branches) | a picker: `Modal size="picker" placement="top"` | `Select` |
 | Text entry | `Input`, `TextArea` (auto-grow), `SearchField`; long documents `TextEditor` | a raw `<input>` |
+| Markdown a person writes for GitHub (a review, a reply, an issue or PR body) | `MarkdownComposer` (Write/Preview tabs, an @mention list from `mentions`, a pasted or dropped image uploaded through `onImage`, ⌘/Ctrl+Enter `onSubmit`) | a bare `TextArea` with no preview |
 | The label over a control that is not an `Input` (a `SegmentedChoice`, a model select, a group of checkboxes) | `FieldLabel` (`Input`'s label look; `as` `label` with `htmlFor` for a form element, `legend` in a `<fieldset>`, `span` with an `id` the radio group's `aria-labelledby` names) | a hand `text-sc-sm font-medium` label |
 | A field the kit has no primitive for (a list of chips, a folder picked by a button) with its label, hint and error | `FieldShell` (`controlId` when the label names a form element, `labelId` for a group's `aria-labelledby`; its error is announced, `role="alert"`) | a label `htmlFor` an id nothing has, an error nobody hears |
 | A picker's search over its result list | `SearchField` with `listbox` (the field is the list's combobox; rows are `OptionRow`, no tab stops) | rows the Tab key walks |
@@ -56,6 +57,7 @@ allow-list beside the marker.
 | "Yes, really" before something irreversible | `ConfirmDialog` (the safe `ghost` Cancel focused, the danger button the one fill) | `window.confirm` |
 | Detail too big for a popover, smaller than a page | `Sheet` (`right`, `left` drawer, `bottom` action sheet, `full`; `closeButton={false}` when the footer has Cancel; first focus as `Modal`'s) | a Sheet over a Modal |
 | Quick contextual controls by their trigger | `Popover` | a Modal |
+| A peek at what a link points to (a pull request, a web page), on hover or keyboard focus | `HoverCard` (opens after 400 ms of hover or at once on keyboard focus; leave, blur, a press, Escape or a scroll close it; takes no pointer and holds no controls; never on a touch screen; `content` mounts only while open) | a Popover that takes focus from the link, a hand-made floating card |
 | A label for an unspelled control | `Tooltip` (prefer `IconButton`, which wires it) | essential information only in a tooltip |
 | A longer explanation of a row | `SettingInfo` (the (i) glyph), `splitDescription` | a paragraph under a label |
 | A short status or count | `Badge` (`dot` + `pulse` while live; text says the state; `size="xs"` 16 px in a dense line, `truncate` for a long one; DOM attributes reach it) | a clickable badge, a `rounded-full` span of your own |

@@ -328,6 +328,8 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"stt_prepare",
 	"switch_session",
 	"typed_prompt",
+	// A conversation link's hover card: one bounded read of a public web page in the core, no model.
+	"web_peek",
 	"worktree_create",
 	"worktree_lifecycle_settings",
 	"worktree_prefetch",

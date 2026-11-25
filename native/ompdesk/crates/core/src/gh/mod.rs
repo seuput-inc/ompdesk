@@ -22,6 +22,7 @@ mod draft;
 pub(crate) mod gate;
 mod json;
 mod pr;
+mod review;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -440,6 +441,8 @@ struct ListParams {
     limit: Option<f64>,
     #[serde(default)]
     view: pr::View,
+    #[serde(default)]
+    filter: pr::Filter,
 }
 
 #[derive(Deserialize)]
@@ -592,9 +595,10 @@ pub fn register(registry: &mut Registry) {
                 state,
                 limit,
                 view,
+                filter,
             } = call.params()?;
             let tools = Tools::new(runners, call.scope);
-            let outcome = pr::list(&tools, &cwd, state.as_deref(), limit, view).await;
+            let outcome = pr::list(&tools, &cwd, state.as_deref(), limit, view, &filter).await;
             tools.gh.answer(outcome.and_then(|rows| Reply::json(&rows)))
         })
     });

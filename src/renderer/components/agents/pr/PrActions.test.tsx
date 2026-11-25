@@ -1,17 +1,21 @@
 /**
  * PR Center actions (linkedom): merge with a chosen method after the dialog,
- * no merge for a closed PR, the conversation list, and review/comment posts.
+ * no merge for a closed PR, the conversation list with its review threads,
+ * review posts, thread replies and resolves.
  */
 
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { RpcCommand, RpcPrComments, RpcPrDetail } from "../../../../shared/rpc-types";
+import type { GithubPrConversation } from "../../../../shared/github";
+import type { RpcCommand, RpcPrDetail } from "../../../../shared/rpc-types";
+import type { GithubLoad } from "../../../lib/github";
 import { I18nProvider } from "../../../lib/i18n";
 import { usePrCenterStore } from "../../../stores/pr-center";
 import { useToastStore } from "../../../stores/toast";
-import { PrConversation, PrMergeButton } from "./PrActions";
+import { PrMergeButton } from "./PrActions";
+import { hunkTail, PrConversation } from "./PrConversation";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
 const globals = globalThis as Record<string, unknown>;
@@ -54,13 +58,62 @@ const DETAIL: RpcPrDetail = {
 	checks: [],
 };
 
-const COMMENTS: RpcPrComments = {
-	entries: [
-		{ kind: "comment", author: "alice", body: "Looks fine", createdAt: "2026-10-01T00:00:00Z" },
-		{ kind: "review", author: "bob", body: "", createdAt: "2026-10-02T00:00:00Z", state: "APPROVED" },
-		{ kind: "inline", author: "carol", body: "nit", createdAt: "2026-10-03T00:00:00Z", path: "a.ts", line: 3 },
+const CONVERSATION: GithubPrConversation = {
+	id: "PR_7",
+	bodyImages: {},
+	comments: [
+		{
+			id: "IC_1",
+			databaseId: 1,
+			author: "alice",
+			body: "Looks fine",
+			createdAt: "2026-10-01T00:00:00Z",
+			url: "",
+			reactions: [],
+		},
 	],
+	reviews: [
+		{
+			id: "R_1",
+			author: "bob",
+			body: "",
+			state: "APPROVED",
+			createdAt: "2026-10-02T00:00:00Z",
+			url: "",
+			reactions: [],
+		},
+	],
+	threads: [
+		{
+			id: "T_1",
+			isResolved: false,
+			path: "a.ts",
+			line: 3,
+			diffHunk: "@@ -1,3 +1,3 @@\n a\n-b\n+c",
+			comments: [
+				{
+					id: "RC_1",
+					databaseId: 41,
+					author: "carol",
+					body: "nit",
+					createdAt: "2026-10-03T00:00:00Z",
+					url: "",
+					reactions: [],
+				},
+			],
+		},
+	],
+	timeline: [],
 };
+
+const loaded = (reload = vi.fn()): GithubLoad<GithubPrConversation> => ({
+	data: CONVERSATION,
+	error: null,
+	errorCode: null,
+	loading: false,
+	pausedUntil: null,
+	reload,
+});
 
 let command: Mock<(cmd: RpcCommand) => Promise<unknown>>;
 let root: Root;
@@ -71,7 +124,7 @@ function install(): void {
 		type: "response",
 		command: cmd.type,
 		success: true,
-		data: cmd.type === "pr_comments" ? COMMENTS : {},
+		data: cmd.type === "github" && cmd.request.op === "assignable" ? ["alice", "bob"] : {},
 	}));
 	(window as unknown as { omp: unknown }).omp = {
 		rpc: {
@@ -147,10 +200,10 @@ describe("PR Center actions", () => {
 		expect(buttonByText("Merge")).toBeUndefined();
 	});
 
-	it("lists the conversation and posts an approval", async () => {
+	it("lists the conversation with its threads and posts an approval", async () => {
 		install();
-		await mount(<PrConversation detail={DETAIL} />);
-		expect(sent()).toContainEqual({ type: "pr_comments", number: 7 });
+		const reload = vi.fn();
+		await mount(<PrConversation detail={DETAIL} load={loaded(reload)} />);
 		const text = document.body.textContent ?? "";
 		expect(text).toContain("Conversation (3)");
 		expect(text).toContain("@alice");
@@ -160,5 +213,32 @@ describe("PR Center actions", () => {
 		await click(buttonByText("Approve")!);
 		await flush();
 		expect(sent()).toContainEqual({ type: "pr_review", number: 7, event: "approve", body: "" });
+		expect(reload).toHaveBeenCalled();
+	});
+
+	it("resolves a review thread by its id", async () => {
+		install();
+		const reload = vi.fn();
+		await mount(<PrConversation detail={DETAIL} load={loaded(reload)} />);
+		// An unresolved thread shows open.
+		await click(buttonByText("Resolve", "[data-pr-thread]")!);
+		await flush();
+		expect(sent()).toContainEqual({
+			type: "github",
+			request: { op: "thread_resolve", threadId: "T_1", resolved: true },
+		});
+		expect(reload).toHaveBeenCalled();
+	});
+});
+
+describe("hunkTail", () => {
+	it("keeps a short hunk whole", () => {
+		expect(hunkTail("@@ -1,2 +1,2 @@\n a\n b")).toBe("@@ -1,2 +1,2 @@\n a\n b");
+	});
+
+	it("moves the header's starts past the lines it leaves out", () => {
+		const hunk = ["@@ -10,5 +20,5 @@", " one", "-two", "+deux", " three", " four"].join("\n");
+		// Left out: " one" (both sides) and "-two" (old only): old starts at 12, new at 21.
+		expect(hunkTail(hunk, 3)).toBe(["@@ -12,2 +21,3 @@", "+deux", " three", " four"].join("\n"));
 	});
 });

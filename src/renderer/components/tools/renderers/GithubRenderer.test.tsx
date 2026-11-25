@@ -1,13 +1,22 @@
 /**
  * GithubRenderer (linkedom): the entity card's state chip reads in the UI's language, whatever GitHub word stock puts
- * there: a PR or issue state, a draft PR, or a run's conclusion; a state GitHub adds later as GitHub spells it.
+ * there: a PR or issue state, a draft PR, or a run's conclusion; a state GitHub adds later as GitHub spells it. An
+ * open pull request's card reads it again every minute and stops for good once it reads merged.
  */
 import { parseHTML } from "linkedom";
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as GithubLib from "../../../lib/github";
 import { I18nProvider, setLanguageOverride } from "../../../lib/i18n";
 import type { ToolRendererProps } from "../ToolCard";
+
+// No answer unless a test gives one: a card's own read never settles.
+const github = vi.fn((..._args: unknown[]): Promise<unknown> => new Promise(() => {}));
+vi.mock("../../../lib/github", async importOriginal => ({
+	...(await importOriginal<typeof GithubLib>()),
+	github: (...args: unknown[]) => github(...args),
+}));
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -70,5 +79,62 @@ describe("GithubRenderer open in browser", () => {
 		expect(open?.tagName).toBe("BUTTON");
 		expect(open?.getAttribute("aria-label")).toBe("Open in browser");
 		expect(open?.getAttribute("type")).toBe("button");
+	});
+});
+
+describe("GithubRenderer live pull request", () => {
+	const peek = (state: string, title: string) => ({
+		number: 8,
+		title,
+		state,
+		isPr: true,
+		isDraft: false,
+		author: "octocat",
+		comments: 0,
+		url: "https://github.com/o/r/pull/8",
+		updatedAt: "2026-11-26T00:00:00Z",
+	});
+
+	it("reads an open PR again every minute while shown and stops once it is merged", async () => {
+		vi.useFakeTimers();
+		try {
+			github.mockReset();
+			github
+				.mockResolvedValueOnce(peek("OPEN", "Add a thing, renamed"))
+				.mockResolvedValueOnce(peek("MERGED", "Add a thing, renamed"))
+				.mockImplementation(() => new Promise(() => {}));
+			await chip("# Pull Request #8: Add a thing\nState: OPEN");
+			const card = () => ({
+				state: document.querySelector("[data-github-state]")?.getAttribute("data-github-state"),
+				text: document.body.textContent ?? "",
+			});
+			expect(github).toHaveBeenCalledTimes(1);
+			expect(github.mock.calls[0]).toEqual([{ op: "item_peek", number: 8, repo: "o/r" }, true]);
+			expect(card().text).toContain("Add a thing, renamed");
+			expect(card().state).toBe("open");
+			await act(async () => vi.advanceTimersByTime(60_000));
+			expect(github).toHaveBeenCalledTimes(2);
+			expect(card().state).toBe("merged");
+			await act(async () => vi.advanceTimersByTime(5 * 60_000));
+			expect(github).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("never reads a PR the tool already saw merged or closed", async () => {
+		github.mockClear();
+		await chip("# Pull Request #9: Old\nState: MERGED");
+		await act(async () => root?.unmount());
+		container?.remove();
+		await chip("# Pull Request #10: Gone\nState: CLOSED");
+		expect(github).not.toHaveBeenCalled();
+	});
+
+	it("links owner/repo#n mentions in the tool's text", async () => {
+		await chip("# Issue #3: Broken\nState: OPEN\nSee octo/app#42 and docs/readme.md");
+		const mention = document.querySelector("[data-github-mention]");
+		expect(mention?.getAttribute("href")).toBe("https://github.com/octo/app/issues/42");
+		expect(mention?.textContent).toBe("octo/app#42");
 	});
 });
