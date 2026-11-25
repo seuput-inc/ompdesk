@@ -82,6 +82,20 @@ describe("GithubRenderer open in browser", () => {
 	});
 });
 
+describe("GithubRenderer open an issue in the GitHub center", () => {
+	it("asks Agents › GitHub for the issue of a github.com repository", async () => {
+		const { useGithubNav } = await import("../../../stores/github-nav");
+		const { useUiStore } = await import("../../../stores/ui");
+		await chip("# Issue #3: Broken\nState: OPEN\nURL: https://github.com/o/r/issues/3");
+		const open = document.querySelector("[data-github-issue-center]") as unknown as HTMLElement | null;
+		expect(open?.getAttribute("aria-label")).toBe("Open in Agents › GitHub");
+		await act(async () => open?.dispatchEvent(new Event("click", { bubbles: true })));
+		expect(useGithubNav.getState().issue).toEqual({ repo: "o/r", number: 3 });
+		expect(useUiStore.getState().agentsTab).toBe("github");
+		useGithubNav.setState({ issue: null });
+	});
+});
+
 describe("GithubRenderer live pull request", () => {
 	const peek = (state: string, title: string) => ({
 		number: 8,

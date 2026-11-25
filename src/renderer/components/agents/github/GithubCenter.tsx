@@ -6,11 +6,12 @@
  * `OWNER/NAME` the user names.
  */
 import { CircleDot, GitFork } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GITHUB_REPO_PATTERN, type GithubTarget } from "../../../../shared/github";
 import { useGithubLoad } from "../../../lib/github";
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
+import { sameRepo, useGithubNav } from "../../../stores/github-nav";
 import { focusedTabDevice } from "../../../stores/remote";
 import {
 	Button,
@@ -47,6 +48,15 @@ export function GithubCenter() {
 		probe.data?.repo && !host ? { op: "repo_get" } : null,
 		`origin|${probe.data?.repo ?? ""}`,
 	);
+	// An issue another surface asked for: its repository's issues (the checkout's own, else named), on gh's host.
+	const asked = useGithubNav(state => state.issue);
+	const checkout = probe.data?.repo;
+	useEffect(() => {
+		if (!asked || checkout === undefined) return;
+		setSection("issues");
+		setHost("");
+		setRepoOverride(sameRepo(asked.repo, checkout) ? null : asked.repo);
+	}, [asked, checkout]);
 
 	if (!probe.data) {
 		if (probe.error) {

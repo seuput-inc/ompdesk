@@ -3758,6 +3758,7 @@ export const ko: Record<string, string> = {
 	"tools.lsp.results": "결과 {count}개",
 	"tools.github.untitled": "제목 없음",
 	"tools.github.openInBrowser": "브라우저에서 열기",
+	"tools.github.openInGithubCenter": "에이전트 › GitHub에서 열기",
 	"tools.github.querying": "GitHub 조회 중…",
 	"tools.github.noEntity": "반환된 항목이 없어요",
 	"linkPeek.loading": "미리보기를 불러오는 중…",

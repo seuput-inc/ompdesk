@@ -3769,6 +3769,7 @@ export const en: Record<string, string> = {
 	"tools.lsp.results": "{count} result{plural}",
 	"tools.github.untitled": "Untitled",
 	"tools.github.openInBrowser": "Open in browser",
+	"tools.github.openInGithubCenter": "Open in Agents › GitHub",
 	"tools.github.querying": "Querying GitHub…",
 	"tools.github.noEntity": "Nothing returned",
 	"linkPeek.loading": "Loading preview…",

@@ -1,5 +1,5 @@
 import { CircleDot, CircleOff, Copy, ExternalLink, MessageSquare, Pencil, Plus, RefreshCw } from "lucide-react";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { GithubIssueDetail, GithubIssueState } from "../../../../shared/github";
 import { copyText, formatTimeAgo } from "../../../lib/format";
 import { github, useGithubLoad } from "../../../lib/github";
@@ -7,6 +7,7 @@ import { uploadGithubImage } from "../../../lib/github-image";
 import { useT } from "../../../lib/i18n";
 import { MarkdownRenderer } from "../../../lib/markdown";
 import { openExternal } from "../../../lib/open-external";
+import { sameRepo, useGithubNav } from "../../../stores/github-nav";
 import { toast, toastError } from "../../../stores/toast";
 import {
 	AsyncSection,
@@ -324,6 +325,14 @@ export function GithubIssues({ target, repoName, targetKey }: GithubSectionProps
 	const [selected, setSelected] = useState<number | null>(null);
 	const [creating, setCreating] = useState(false);
 	const { run } = useGithubMutation();
+	// The issue another surface asked for, once this list is its repository's.
+	const asked = useGithubNav(nav => nav.issue);
+	useEffect(() => {
+		if (!asked || !sameRepo(asked.repo, repoName)) return;
+		setState("all");
+		setSelected(asked.number);
+		useGithubNav.setState({ issue: null });
+	}, [asked, repoName]);
 	const list = useGithubLoad(
 		repoName ? { ...target, op: "issue_list", state, search: search || undefined } : null,
 		`${targetKey}|${state}|${search}`,

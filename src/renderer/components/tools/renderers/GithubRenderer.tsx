@@ -13,6 +13,7 @@ import { openExternal } from "../../../lib/open-external";
 import { openPullRequest } from "../../../lib/open-pull-request";
 import { hidden, pollWhileVisible } from "../../../lib/visible-poll";
 import { asArray, asRecord } from "../../../lib/wire-value";
+import { showIssue } from "../../../stores/github-nav";
 import { githubItemState, LinkPeek } from "../../chat/LinkPeek";
 import { IconButton } from "../../common";
 import type { ToolRendererProps } from "../ToolCard";
@@ -308,6 +309,8 @@ export function GithubRenderer({ args, result, isPartial, partialResult }: ToolR
 		.join("\n")
 		.trim();
 	const prLink = entity.kind === "pr" ? entityLink(entity) : null;
+	// An issue on this checkout's gh host opens in Agents › GitHub (an Enterprise one in the browser).
+	const issueLink = entity.kind === "issue" ? entityLink(entity) : null;
 	const live = useLivePullRequest(prLink, entity.state, cardRef);
 	const title = live?.title ?? entity.title;
 	const state = live ? githubItemState(live) : entity.state;
@@ -368,6 +371,16 @@ export function GithubRenderer({ args, result, isPartial, partialResult }: ToolR
 							icon={<GitPullRequestArrow />}
 							label={t("linkPeek.openInPrCenter")}
 							onClick={() => openPullRequest(scope, prLink, externalUrl)}
+							size="sm"
+						/>
+					)}
+					{issueLink && !issueLink.host && (
+						<IconButton
+							className="size-5! [&>svg]:size-3!"
+							data-github-issue-center
+							icon={<CircleDot />}
+							label={t("tools.github.openInGithubCenter")}
+							onClick={() => showIssue(issueLink.repo, issueLink.number)}
 							size="sm"
 						/>
 					)}
