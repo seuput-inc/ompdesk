@@ -11,7 +11,7 @@
  */
 
 import * as path from "node:path";
-import type { RpcWorktreeCreateResult } from "../../../shared/rpc-types";
+import type { RpcWorktreeCreateResult, WorktreeBaseFetch } from "../../../shared/rpc-types";
 import { GUI_WORKTREE_BRANCH_PREFIX, worktreeBranchPrefix } from "../../../shared/worktree-branch";
 import { CoreError } from "../../core/process";
 import { SerialChain } from "../../serial-chain";
@@ -24,7 +24,13 @@ import { prepareWorktree, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 /** `git worktree add` checks out the whole tree: minutes on a large repository. */
 export const WORKTREE_ADD_TIMEOUT_MS = 300_000;
 const WORKTREE_REMOVE_TIMEOUT_MS = 120_000;
-const PLAN_AND_ADD_MS = 6 * DEFAULT_TIMEOUT_MS + WORKTREE_ADD_TIMEOUT_MS;
+/** The fetch of the remote default branch before a `default`-based worktree (the core's own timeout). */
+const BASE_FETCH_TIMEOUT_MS = 60_000;
+/** The plan's gits: repo root, primary root, default branch, its sha before and after the fetch, count, subjects. */
+const PLAN_ROUNDS = 7;
+const PLAN_AND_ADD_MS = (PLAN_ROUNDS + 3) * DEFAULT_TIMEOUT_MS + BASE_FETCH_TIMEOUT_MS + WORKTREE_ADD_TIMEOUT_MS;
+/** A create request's answer, by `<caller>:<requestId>`, is kept this long for the caller's retry. */
+const CREATE_REQUEST_KEEP_MS = 10 * 60_000;
 /**
  * Longest each command runs before main answers, counting every git step on
  * its slowest path at that step's timeout. The renderer's RPC timeouts
@@ -32,8 +38,10 @@ const PLAN_AND_ADD_MS = 6 * DEFAULT_TIMEOUT_MS + WORKTREE_ADD_TIMEOUT_MS;
  * the work still lands.
  */
 export const WORKTREE_COMMAND_BUDGETS_MS = {
-	// Planning, stock's location, waiting for the lock and every attempt share one cancellable step.
+	// Planning (its fetch of the remote default branch included), stock's location, waiting for the lock and every
+	// attempt share one cancellable step.
 	worktree_create: PLAN_AND_ADD_MS + WORKTREE_PREPARE_BUDGET_MS,
+	worktree_prefetch: PLAN_ROUNDS * DEFAULT_TIMEOUT_MS + BASE_FETCH_TIMEOUT_MS,
 	// Repo root, primary root, status, prune, and `worktree remove` itself.
 	worktree_remove: 4 * DEFAULT_TIMEOUT_MS + WORKTREE_REMOVE_TIMEOUT_MS,
 } as const;
@@ -110,14 +118,52 @@ interface CreateInput {
 	branch?: WorktreeBranchSource;
 }
 
-export async function createWorktree(
+const createRequests = new Map<string, { args: string; made: Promise<RpcWorktreeCreateResult>; at: number }>();
+
+/**
+ * A create that names its request (`caller`: the paired device asking, else "local"; `id`: the caller's id for this
+ * one create) answers every repeat of that request with the same worktree (a retry after a lost answer), refuses the
+ * id with other arguments, and forgets a failed one so its retry runs again.
+ */
+export function createWorktree(
+	sessionCwd: string,
+	input: CreateInput & { request?: { caller: string; id: string } },
+	bridge: Pick<BridgeClient, "request">,
+): Promise<RpcWorktreeCreateResult> {
+	const { request, ...args } = input;
+	if (!request) return createWorktreeOnce(sessionCwd, args, bridge);
+	const now = Date.now();
+	for (const [key, entry] of createRequests) if (now - entry.at > CREATE_REQUEST_KEEP_MS) createRequests.delete(key);
+	const key = `${request.caller}:${request.id}`;
+	const argsKey = JSON.stringify([args.name, args.baseCwd ?? sessionCwd, args.baseRef, args.branchPrefix, args.branch]);
+	const known = createRequests.get(key);
+	if (known) {
+		if (known.args === argsKey) return known.made;
+		return Promise.reject(
+			new LocalCommandError("This request id was used for a different worktree", "invalid_request"),
+		);
+	}
+	const made = createWorktreeOnce(sessionCwd, args, bridge);
+	createRequests.set(key, { args: argsKey, made, at: now });
+	made.catch(() => {
+		if (createRequests.get(key)?.made === made) createRequests.delete(key);
+	});
+	return made;
+}
+
+/** The remote default branch fetched ahead of a create (the worktree dialog when it opens); null outside a repository or without one. */
+export function prefetchWorktreeBase(cwd: string): Promise<WorktreeBaseFetch | null> {
+	return worktreeGit("git.worktreePrefetch", { cwd }, PLAN_ROUNDS, BASE_FETCH_TIMEOUT_MS);
+}
+
+async function createWorktreeOnce(
 	sessionCwd: string,
 	input: CreateInput,
 	bridge: Pick<BridgeClient, "request">,
 ): Promise<RpcWorktreeCreateResult> {
 	const step = new SerialChain({ name: "worktree create", maxStepMs: PLAN_AND_ADD_MS });
-	const { primary, made } = await step.run(() => planAndAdd(sessionCwd, input, bridge), input.name);
-	return { ...made, ...(await prepareWorktree(primary, made.path)) };
+	const { primary, made, base } = await step.run(() => planAndAdd(sessionCwd, input, bridge), input.name);
+	return { ...made, ...(base ? { base } : {}), ...(await prepareWorktree(primary, made.path)) };
 }
 
 async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<BridgeClient, "request">) {
@@ -144,12 +190,19 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 	if (!stat?.directory) {
 		throw new LocalCommandError(`The folder "${baseCwd}" does not exist.`, "file_not_found");
 	}
-	// The repository, its main checkout, and the commit a new branch starts at (`HEAD`, `default`, or a ref it has).
-	const { primary, startPoint, mainCheckout } = await worktreeGit<{
+	// The repository, its main checkout, and the commit a new branch starts at (`HEAD`, `default` fetched first, or a
+	// ref it has).
+	const { primary, startPoint, mainCheckout, base } = await worktreeGit<{
 		primary: string;
 		startPoint: string;
 		mainCheckout: string;
-	}>("git.worktreePlan", { cwd: baseCwd, checkoutSpelling: path.resolve(baseCwd), baseRef: input.baseRef }, 3);
+		base?: WorktreeBaseFetch;
+	}>(
+		"git.worktreePlan",
+		{ cwd: baseCwd, checkoutSpelling: path.resolve(baseCwd), baseRef: input.baseRef },
+		PLAN_ROUNDS,
+		BASE_FETCH_TIMEOUT_MS,
+	);
 	const { root, hash } = await stockWorktreeLocation(bridge, primary);
 
 	const made = await withRepoLock(primary, async () => {
@@ -178,7 +231,7 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 			);
 		}
 	});
-	return { primary, made: { ...made, baseCwd: mainCheckout } };
+	return { primary, base, made: { ...made, baseCwd: mainCheckout } };
 }
 
 /**

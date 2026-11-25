@@ -9,8 +9,9 @@ import type { BridgeClient } from "../types";
 import { GITHUB_COMMAND_BUDGET_MS } from "./github";
 import { PR_COMMAND_BUDGETS_MS } from "./pr";
 import { SCM_COMMAND_BUDGETS_MS } from "./scm";
-import { gitSync, initRepo, pathExists, stockShapedWorktree } from "./test-repos";
+import { gitSync, initRepo, initRepoWithRemote, pathExists, stockShapedWorktree } from "./test-repos";
 import { createWorktree, removeWorktree, WORKTREE_COMMAND_BUDGETS_MS } from "./worktree";
+import { describePreparation } from "./worktree-seed";
 
 let scratch: string;
 let root: string;
@@ -232,6 +233,44 @@ describe("removeWorktree", () => {
 		await expect(input({ name: "bad name", mode: "new" })).rejects.toMatchObject({ code: "invalid_name" });
 		expect(gitSync(outside, "branch", "--list")).toBe("* main");
 		expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
+	});
+	it("cuts a default-based worktree from the freshly fetched remote tip and says what the fetch brought", async () => {
+		const bare = path.join(scratch, "remote.git");
+		await initRepoWithRemote(outside, bare);
+		gitSync(outside, "remote", "set-head", "origin", "main");
+		gitSync(outside, "commit", "-q", "--allow-empty", "-m", "remote work");
+		gitSync(outside, "push", "-q", "origin", "main");
+		const remoteTip = gitSync(outside, "rev-parse", "HEAD");
+		// This checkout has not seen the pushed commit: its main and origin/main stay one behind.
+		gitSync(outside, "reset", "-q", "--hard", "HEAD~1");
+		gitSync(outside, "update-ref", "refs/remotes/origin/main", "HEAD");
+
+		const made = await createWorktree(outside, { name: "fresh", baseRef: "default" }, bridge);
+		expect(gitSync(made.path, "rev-parse", "HEAD")).toBe(remoteTip);
+		expect(made.base).toEqual({ ref: "origin/main", fetched: true, behind: 1, subjects: ["remote work"] });
+		expect(describePreparation(made)).toBe("origin/main fetched: 1 new commit(s) (remote work)");
+		expect(gitSync(outside, "rev-parse", "main")).not.toBe(remoteTip);
+
+		const head = await createWorktree(outside, { name: "head", baseRef: "HEAD" }, bridge);
+		expect(head.base).toBeUndefined();
+	});
+	it("answers a repeated request id with the same worktree, refuses it with other arguments, and leaves calls without one alone", async () => {
+		await initRepo(outside);
+		const request = { caller: "local", id: "6f9c1c1e-6d1b-4d1a-9f3e-0c3b8d1e2a11" };
+		const [first, again] = await Promise.all([
+			createWorktree(outside, { name: "same", request }, bridge),
+			createWorktree(outside, { name: "same", request }, bridge),
+		]);
+		expect(again).toEqual(first);
+		expect(await createWorktree(outside, { name: "same", request }, bridge)).toEqual(first);
+		expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(2);
+		await expect(createWorktree(outside, { name: "other", request }, bridge)).rejects.toMatchObject({
+			code: "invalid_request",
+		});
+		const other = { caller: "phone-1", id: request.id };
+		expect((await createWorktree(outside, { name: "same", request: other }, bridge)).path).not.toBe(first.path);
+		const plain = await createWorktree(outside, { name: "same" }, bridge);
+		expect(plain.path).not.toBe(first.path);
 	});
 	it("refuses a primary checkout under the root and a linked checkout subdirectory", async () => {
 		const primary = path.join(root, "user-clone");

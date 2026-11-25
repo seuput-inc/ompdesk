@@ -146,14 +146,19 @@ export interface AutopilotDeps {
 	tuning?: AutopilotTuning;
 }
 
-/** `gh run view <url> --json status,conclusion` of the installed gh; null when gh is missing or answers oddly. */
+/**
+ * `gh run view <url> --json status,conclusion` of the installed gh; null when gh is missing, answers oddly or GitHub's
+ * gate holds the poll (a background read: core `gh/gate.rs`), so the poll asks again on its next tick.
+ */
 export async function ghRunStatus(
 	cwd: string,
 	url: string,
 ): Promise<{ status: string; conclusion: string | null } | null> {
 	const gh = await resolveBin("gh");
 	if (!gh) return null;
-	const result = await ghText(cwd, gh, ["run", "view", url, "--json", "status,conclusion"]).catch(() => null);
+	const result = await ghText(cwd, gh, ["run", "view", url, "--json", "status,conclusion"], {
+		background: true,
+	}).catch(() => null);
 	if (result?.code !== 0) return null;
 	try {
 		const parsed: unknown = JSON.parse(result.stdout);

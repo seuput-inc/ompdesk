@@ -58,10 +58,15 @@ export const PR_COMMAND_BUDGETS_MS = {
  */
 export const GITHUB_REPO_MS = 2 * DEFAULT_TIMEOUT_MS + 2 * GH_TEXT_TIMEOUT_MS;
 
-/** The codes the core refuses a PR Center or GitHub center request with, which the page gets as the command's `code`. */
+/**
+ * The codes the core refuses a PR Center or GitHub center request with, which the page gets as the command's `code`.
+ * `gh_paused`: GitHub's rate limit or the background pace holds the request (core `gh/gate.rs`), its message ends with
+ * `paused until <ISO time>`.
+ */
 const REFUSALS = new Set([
 	"gh_missing",
 	"gh_unauthenticated",
+	"gh_paused",
 	"not_a_repo",
 	"no_github_remote",
 	"pr_not_found",
@@ -90,15 +95,16 @@ export function prRepo(cwd: string): Promise<RpcPrRepo> {
 	return ghRequest("gh.prRepo", { cwd }, GITHUB_REPO_MS);
 }
 
+/** `background`: an automatic re-read, held behind GitHub's rate limit and pace. */
 export function prList(
 	cwd: string,
-	input: { state?: "open" | "closed" | "merged" | "all"; limit?: number; view?: RpcPrListView },
+	input: { state?: "open" | "closed" | "merged" | "all"; limit?: number; view?: RpcPrListView; background?: boolean },
 ): Promise<RpcPrListItem[]> {
 	return ghRequest("gh.prList", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }
 
-export function prGet(cwd: string, input: { number: number }): Promise<RpcPrDetail> {
-	return ghRequest("gh.prGet", { cwd, number: input.number }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
+export function prGet(cwd: string, input: { number: number; background?: boolean }): Promise<RpcPrDetail> {
+	return ghRequest("gh.prGet", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }
 
 /** One file's unified-diff slice (lazy per expand — the file index rides pr_get). */

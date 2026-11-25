@@ -627,6 +627,8 @@ const GitWorktreeCreateParams = z.object({
 	name: z.string().min(1).max(64),
 	branchPrefix: z.string().max(200).optional(),
 	baseRef: z.string().min(1).max(200),
+	// The device's id for this one create: its retry gets the same worktree (createWorktree).
+	requestId: z.string().min(1).max(100).optional(),
 });
 /** `runChargesFile`: Autopilot runs devices started here, by worktree root (the run's session, when known). */
 const RunChargesSchema = z.record(
@@ -1674,8 +1676,12 @@ export class LocalHostServices implements HostServices {
 				return mergeBranch(worktree, label);
 			}
 			case GIT_METHODS.worktreeCreate: {
-				const input = parse(GitWorktreeCreateParams, method, params);
-				return createWorktree(input.baseCwd, input, this.#deps.worktreeLocation ?? tablessWorktreeBridge);
+				const { requestId, ...input } = parse(GitWorktreeCreateParams, method, params);
+				return createWorktree(
+					input.baseCwd,
+					{ ...input, ...(requestId ? { request: { caller: peer.deviceId, id: requestId } } : {}) },
+					this.#deps.worktreeLocation ?? tablessWorktreeBridge,
+				);
 			}
 			// Memory: durable pages and session conclusions, through this computer's own server; a device no longer
 			// allowed gets nothing.

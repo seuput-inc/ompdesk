@@ -5,14 +5,17 @@
 //! lock's next holder starts once its gits and disk work have ended. Main gets the worktree root and repo hash
 //! from omp's `git.worktree_location`. A refusal carries the code the TypeScript caller exposes.
 
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::parse;
 use super::read::{self, blocking};
-use super::run::Git;
+use super::run::{Git, failure};
 use crate::disk::tree::live;
 use crate::fs::disk;
 use crate::fs::error::{Codes, NodeError};
@@ -61,18 +64,135 @@ async fn add_worktree(
     git.text_with(primary, args, opts).await.map(drop)
 }
 
-/// The main checkout a new worktree is cut from and the commit its branch starts at.
+/// A fetch of the remote default branch younger than this is not repeated (the dialog's prefetch, then its create).
+const FETCH_FRESH: Duration = Duration::from_secs(30);
+const FETCH_TIMEOUT_MS: u64 = 60_000;
+
+/// Per main checkout, when its default branch was last fetched. One fetch at a time per repository: a create that
+/// follows a prefetch still running waits for it, then skips its own.
+type LastFetch = Arc<tokio::sync::Mutex<Option<Instant>>>;
+static FETCHES: LazyLock<Mutex<HashMap<String, LastFetch>>> = LazyLock::new(Default::default);
+
+/// What fetching the remote default branch before a `default`-based worktree did: `behind` counts the commits the
+/// fetch brought, `subjects` the newest three of them; `fetched` is false when a fetch under 30 s old was reused or
+/// the fetch failed (`error`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseFetch {
+    #[serde(rename = "ref")]
+    reference: String,
+    fetched: bool,
+    behind: u32,
+    subjects: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// The remote's default branch as `origin/<name>`, none when `origin/HEAD` names none.
+async fn default_branch(git: &Git, primary: &str) -> Result<Option<String>, Fault> {
+    let output = git
+        .raw(
+            primary,
+            &[
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ],
+        )
+        .await?;
+    let text = output.text();
+    let name = js_trim(&text);
+    Ok((output.code == 0 && !name.is_empty()).then(|| name.to_owned()))
+}
+
+/// `git fetch origin <branch>` for the remote-tracking `reference` (`origin/main`): only that ref moves, never a
+/// local branch or a checkout. A failed or timed-out fetch is reported, never a fault.
+async fn fetch_base(git: &Git, primary: &str, reference: &str) -> Result<BaseFetch, Fault> {
+    let mut report = BaseFetch {
+        reference: reference.to_owned(),
+        fetched: false,
+        behind: 0,
+        subjects: Vec::new(),
+        error: None,
+    };
+    let Some(branch) = reference.strip_prefix("origin/") else {
+        return Ok(report);
+    };
+    let slot = FETCHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(primary.to_owned())
+        .or_default()
+        .clone();
+    let mut last = slot.lock().await;
+    if last.is_some_and(|at| at.elapsed() < FETCH_FRESH) {
+        return Ok(report);
+    }
+    let before = rev_parse(git, primary, reference).await?;
+    let args = ["fetch", "--quiet", "--no-tags", "origin", branch];
+    let opts = Opts {
+        timeout_ms: Some(FETCH_TIMEOUT_MS),
+        ..Opts::default()
+    };
+    match git.run(primary, &args, opts).await {
+        Ok(output) if output.code == 0 => {}
+        Ok(output) => {
+            report.error = Some(failure(&args, &output).message);
+            return Ok(report);
+        }
+        Err(fault) if fault == Fault::cancelled() => return Err(fault),
+        Err(fault) => {
+            report.error = Some(fault.message);
+            return Ok(report);
+        }
+    }
+    *last = Some(Instant::now());
+    report.fetched = true;
+    let after = rev_parse(git, primary, reference).await?;
+    if let (Some(old), Some(new)) = (before, after)
+        && old != new
+    {
+        let range = format!("{old}..{new}");
+        let count = git.text(primary, &["rev-list", "--count", &range]).await?;
+        report.behind = js_trim(&count).parse().unwrap_or(0);
+        report.subjects = git
+            .text(primary, &["log", "--format=%s", "-3", &range])
+            .await?
+            .lines()
+            .map(str::to_owned)
+            .collect();
+    }
+    Ok(report)
+}
+
+/// The worktree dialog's prefetch when it opens: the fetch `plan` makes for `default`, so the create that follows
+/// within 30 s skips its own. None outside a repository or without a remote default branch.
+pub async fn prefetch(git: &Git, cwd: &str) -> Result<Option<BaseFetch>, Fault> {
+    if read::repo_root(git, cwd).await?.is_none() {
+        return Ok(None);
+    }
+    let primary = read::primary_root(git, cwd).await?;
+    match default_branch(git, &primary).await? {
+        Some(reference) => fetch_base(git, &primary, &reference).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The main checkout a new worktree is cut from and the commit its branch starts at; `base` only for `default`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
     primary: String,
     main_checkout: String,
     start_point: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base: Option<BaseFetch>,
 }
 
 /// Before a worktree is made: `cwd` is in a repository, its main checkout, and the start point `base_ref` names:
-/// `HEAD` (the default), `default` (the remote's default branch, else HEAD), or any branch, tag or commit the
-/// repository resolves. A ref that resolves to no commit, or reads as a git option, is refused.
+/// `HEAD` (the default), `default` (the remote's default branch, fetched first, else HEAD), or any branch, tag or
+/// commit the repository resolves. A ref that resolves to no commit, or reads as a git option, is refused.
 pub async fn plan(
     git: &Git,
     cwd: &str,
@@ -83,28 +203,16 @@ pub async fn plan(
         return Err(refuse("not_a_repo", format!("Not a git repository: {cwd}")));
     }
     let primary = read::primary_root(git, cwd).await?;
+    let mut fetch = None;
     let start_point = match base_ref {
         None | Some("HEAD") => "HEAD".to_owned(),
-        Some("default") => {
-            let output = git
-                .raw(
-                    &primary,
-                    &[
-                        "symbolic-ref",
-                        "--quiet",
-                        "--short",
-                        "refs/remotes/origin/HEAD",
-                    ],
-                )
-                .await?;
-            let text = output.text();
-            let name = js_trim(&text);
-            if output.code == 0 && !name.is_empty() {
-                name.to_owned()
-            } else {
-                "HEAD".to_owned()
+        Some("default") => match default_branch(git, &primary).await? {
+            Some(name) => {
+                fetch = Some(fetch_base(git, &primary, &name).await?);
+                name
             }
-        }
+            None => "HEAD".to_owned(),
+        },
         Some(base) => {
             let resolves = !base.starts_with('-')
                 && rev_parse(git, cwd, &format!("{base}^{{commit}}"))
@@ -138,6 +246,7 @@ pub async fn plan(
         },
         primary,
         start_point,
+        base: fetch,
     })
 }
 
@@ -836,5 +945,115 @@ mod tests {
         assert!(!tree.exists());
         assert!(!listed.contains("refs/heads/held"), "{listed}");
         let _ = std::fs::remove_dir_all(&primary);
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use crate::git::run::tests::git;
+    use crate::git::scm::tests::{repo_at, sh};
+    use std::path::PathBuf;
+
+    /// A bare `origin`, a clone of it (so `origin/HEAD` names `origin/main`), and the repository that pushes to it.
+    fn remote_and_clone(name: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "ompdesk-core-wt-fetch-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pusher = dir.join("pusher");
+        repo_at(&pusher);
+        sh(&dir, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
+        sh(&pusher, &["remote", "add", "origin", "../origin.git"]);
+        sh(&pusher, &["push", "-q", "origin", "main"]);
+        sh(&dir, &["clone", "-q", "origin.git", "clone"]);
+        (pusher, dir.join("clone"))
+    }
+
+    fn push_commit(pusher: &Path, subject: &str) -> String {
+        sh(pusher, &["commit", "-q", "--allow-empty", "-m", subject]);
+        sh(pusher, &["push", "-q", "origin", "main"]);
+        sh(pusher, &["rev-parse", "HEAD"])
+    }
+
+    fn s(path: &Path) -> &str {
+        path.to_str().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_default_base_starts_at_the_freshly_fetched_tip_and_a_second_plan_reuses_the_fetch() {
+        let (pusher, clone) = remote_and_clone("default");
+        let fresh = push_commit(&pusher, "fresh work");
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        assert_eq!(made.start_point, "origin/main");
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), fresh);
+        let base = made.base.unwrap();
+        assert_eq!(
+            (base.reference.as_str(), base.fetched, base.behind),
+            ("origin/main", true, 1)
+        );
+        assert_eq!(base.subjects, ["fresh work"]);
+        assert!(base.error.is_none());
+        assert_ne!(
+            sh(&clone, &["rev-parse", "main"]),
+            fresh,
+            "the local branch stays where it was"
+        );
+
+        push_commit(&pusher, "later work");
+        let again = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        let base = again.base.unwrap();
+        assert_eq!((base.fetched, base.behind), (false, 0));
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), fresh);
+    }
+
+    #[tokio::test]
+    async fn a_prefetch_spares_the_create_that_follows_its_fetch() {
+        let (pusher, clone) = remote_and_clone("prefetch");
+        let fresh = push_commit(&pusher, "fresh work");
+        let fetched = prefetch(&git(), s(&clone)).await.unwrap().unwrap();
+        assert_eq!((fetched.fetched, fetched.behind), (true, 1));
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        let base = made.base.unwrap();
+        assert_eq!((base.fetched, base.behind), (false, 0));
+        assert_eq!(sh(&clone, &["rev-parse", made.start_point.as_str()]), fresh);
+    }
+
+    #[tokio::test]
+    async fn a_head_base_never_fetches() {
+        let (pusher, clone) = remote_and_clone("head");
+        let before = sh(&clone, &["rev-parse", "origin/main"]);
+        push_commit(&pusher, "fresh work");
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), None)
+            .await
+            .unwrap();
+        assert_eq!(made.start_point, "HEAD");
+        assert!(made.base.is_none());
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), before);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_origin_is_reported_and_the_plan_goes_on_from_the_local_ref() {
+        let (_pusher, clone) = remote_and_clone("unreachable");
+        let before = sh(&clone, &["rev-parse", "origin/main"]);
+        sh(
+            &clone,
+            &["remote", "set-url", "origin", "../no-such-origin.git"],
+        );
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        assert_eq!(made.start_point, "origin/main");
+        let base = made.base.unwrap();
+        assert!(!base.fetched);
+        assert!(base.error.is_some_and(|error| !error.is_empty()));
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), before);
     }
 }

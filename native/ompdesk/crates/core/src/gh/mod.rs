@@ -19,11 +19,14 @@
 mod auth;
 mod center;
 mod draft;
+pub(crate) mod gate;
 mod json;
 mod pr;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +34,7 @@ use crate::fs::disk;
 use crate::fs::error::{Codes, NodeError};
 use crate::fs::order::js_trim;
 use crate::git::run::Git;
-use crate::run::{Exec, Opts, Runner};
+use crate::run::{Exec, Opts, Output, Runner};
 use crate::server::{Fault, Registry, Reply, Scope};
 
 /// What a request answers where `requireGithubRepo` and `githubCommand` threw `gh_missing`.
@@ -48,10 +51,18 @@ const TOKEN_VARIABLES: [&str; 4] = [
 /// Shorter values are no token, and replacing them would mangle ordinary words.
 const SHORTEST_SECRET: usize = 8;
 
-/// The gh runs of one request: main's runner (none when gh is not installed), held to the request's scope.
+/// The gh runs of one request: main's runner (none when gh is not installed), held to the request's scope and to
+/// the host's gate (`gate.rs`): a background request is the page's or a timer's, never the person's own.
 pub struct Gh {
     exec: Option<Exec>,
     secrets: Vec<String>,
+    background: bool,
+    /// The gate's key with the host: each gh install has its own sign-in, so its own quota on a host.
+    bin: String,
+    /// The request's first gated run happened (its pace is counted once).
+    admitted: AtomicBool,
+    /// The gate refused or tripped in this request: the time it waits until (0 when it did not).
+    paused_until: AtomicU64,
 }
 
 /// What `ghText` answered.
@@ -64,6 +75,11 @@ pub struct TextOutput {
 
 impl Gh {
     pub fn new(runner: Option<Runner>, scope: Scope) -> Gh {
+        Gh::paced(runner, scope, false)
+    }
+
+    /// `new` for a request that is not the person's own (`background: true`).
+    pub fn paced(runner: Option<Runner>, scope: Scope, background: bool) -> Gh {
         let secrets = runner
             .iter()
             .flat_map(|runner| &runner.env)
@@ -76,8 +92,12 @@ impl Gh {
             .map(|(_, value)| value.clone())
             .collect();
         Gh {
+            bin: runner.as_ref().map(|runner| runner.bin.clone()).unwrap_or_default(),
             exec: runner.map(|runner| Exec::new(runner, scope, "gh")),
             secrets,
+            background,
+            admitted: AtomicBool::new(false),
+            paused_until: AtomicU64::new(0),
         }
     }
 
@@ -92,10 +112,84 @@ impl Gh {
         self.exec().map(|_| ())
     }
 
+    /// The GitHub host a run reaches: `GH_HOST` of the run, else of main's environment, else github.com.
+    fn host<'a>(exec: &'a Exec, opts: &Opts<'a>) -> &'a str {
+        opts.env
+            .iter()
+            .find(|(name, _)| *name == "GH_HOST")
+            .map(|(_, value)| *value)
+            .or_else(|| exec.env("GH_HOST"))
+            .filter(|host| !host.is_empty())
+            .unwrap_or("github.com")
+    }
+
+    /// `gh api rate_limit` (it costs no quota), read as the gate reads it; `None` when it fails.
+    async fn quota(exec: &Exec, cwd: &str, opts: Opts<'_>) -> Option<gate::Quota> {
+        let opts = Opts {
+            timeout_ms: Some(gate::QUOTA_READ_MS),
+            env: opts.env,
+            ..Opts::default()
+        };
+        let output = exec.run(cwd, &["api", "rate_limit"], opts).await.ok()?;
+        if output.code != 0 {
+            return None;
+        }
+        gate::read_quota(&output.text(), gate::QUOTA_FLOOR)
+    }
+
+    /// One gh run through the host's gate: refused while the host waits (`gh_paused`), a read run again on a GitHub
+    /// server error, and gh's "rate limit" trips the gate for every request of the host.
+    async fn run(&self, cwd: &str, args: &[&str], opts: Opts<'_>) -> Result<Output, Fault> {
+        let exec = self.exec()?;
+        if !gate::gated(args) {
+            return exec.run(cwd, args, opts).await;
+        }
+        let host = Gh::host(exec, &opts);
+        let key = format!("{}\n{host}", self.bin);
+        let first = !self.admitted.swap(true, Ordering::SeqCst);
+        if self.background && first && gate::quota_due(&key, gate::now_ms()) {
+            gate::learn(&key, Gh::quota(exec, cwd, opts).await.as_ref());
+        }
+        if let Err(wait) = gate::admit(&key, self.background, first, gate::now_ms()) {
+            self.paused_until.store(wait.until(), Ordering::SeqCst);
+            return Err(wait.fault(host));
+        }
+        let mut retries = gate::RETRY_DELAYS_MS.iter();
+        loop {
+            let output = exec.run(cwd, args, opts).await?;
+            if output.code == 0 {
+                return Ok(output);
+            }
+            if gate::rate_limited(&output.stderr) {
+                let quota = Gh::quota(exec, cwd, opts).await;
+                let until = gate::trip(&key, quota.as_ref(), gate::now_ms());
+                self.paused_until.store(until, Ordering::SeqCst);
+                return Ok(output);
+            }
+            match retries.next() {
+                Some(&delay) if gate::is_read(args) && gate::server_error(&output.stderr) => {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
+                _ => return Ok(output),
+            }
+        }
+    }
+
+    /// ` (paused until …)` after gh's own words when this request tripped the gate.
+    fn pause_note(&self) -> String {
+        match self.paused_until.load(Ordering::SeqCst) {
+            0 => String::new(),
+            until => format!(
+                " (GitHub paused until {})",
+                crate::aimemory::value::iso(until)
+            ),
+        }
+    }
+
     /// `gh()`: stdout as text; a non-zero exit fails with gh's stderr (else `gh <a> <b> exited with code <n>`), an
     /// output past the cap with `gh <a> <b> output exceeded the size cap`.
     pub async fn call(&self, cwd: &str, args: &[&str], opts: Opts<'_>) -> Result<String, Fault> {
-        let output = self.exec()?.run(cwd, args, opts).await?;
+        let output = self.run(cwd, args, opts).await?;
         let command = args[..args.len().min(2)].join(" ");
         // A cut output is told as such whatever the exit: the cap's own SIGTERM ends a gh still writing with a
         // non-zero code, which a gh that exited first does not have (node's maxBuffer error came first the same way).
@@ -112,7 +206,7 @@ impl Gh {
             } else {
                 stderr.to_owned()
             };
-            return Err(Fault::new("gh_exit", message));
+            return Err(Fault::new("gh_exit", message + &self.pause_note()));
         }
         Ok(output.text())
     }
@@ -123,7 +217,7 @@ impl Gh {
             timeout_ms: Some(TEXT_TIMEOUT_MS),
             ..Opts::default()
         };
-        let output = self.exec()?.run(cwd, args, opts).await?;
+        let output = self.run(cwd, args, opts).await?;
         Ok(TextOutput {
             code: output.code,
             stdout: output.text(),
@@ -140,11 +234,20 @@ impl Gh {
         text
     }
 
-    /// The request's answer, no fault carrying a token.
+    /// The request's answer, no fault carrying a token; a request the gate refused or tripped is `gh_paused`
+    /// whatever code its rules gave the failure, so the page and main read the wait.
     fn answer(&self, outcome: Result<Reply, Fault>) -> Result<Reply, Fault> {
-        outcome.map_err(|fault| Fault {
-            message: self.scrub(fault.message),
-            ..fault
+        outcome.map_err(|fault| {
+            let paused =
+                self.paused_until.load(Ordering::SeqCst) != 0 && fault != Fault::cancelled();
+            Fault {
+                code: if paused {
+                    "gh_paused".into()
+                } else {
+                    fault.code
+                },
+                message: self.scrub(fault.message),
+            }
         })
     }
 }
@@ -158,7 +261,7 @@ pub struct Tools {
 impl Tools {
     fn new(runners: Runners, scope: Scope) -> Tools {
         Tools {
-            gh: Gh::new(runners.gh, scope.clone()),
+            gh: Gh::paced(runners.gh, scope.clone(), runners.background),
             git: runners.git.map(|runner| Git::new(runner, scope)),
         }
     }
@@ -206,12 +309,15 @@ impl Drop for BodyFile {
     }
 }
 
-/// How gh and git run, as main hands them over; none for a tool that is not installed.
+/// How gh and git run, as main hands them over; none for a tool that is not installed. `background`: the request is
+/// not the person's own (`gate.rs`).
 #[derive(Deserialize)]
 struct Runners {
     gh: Option<Runner>,
     #[serde(default)]
     git: Option<Runner>,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Deserialize)]
@@ -223,6 +329,8 @@ struct RunParams {
     timeout_ms: Option<u64>,
     #[serde(default)]
     env: BTreeMap<String, String>,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Deserialize)]
@@ -230,6 +338,8 @@ struct TextParams {
     gh: Runner,
     cwd: String,
     args: Vec<String>,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Deserialize)]
@@ -356,8 +466,9 @@ pub fn register(registry: &mut Registry) {
                 args,
                 timeout_ms,
                 env,
+                background,
             } = call.params()?;
-            let gh = Gh::new(Some(gh), call.scope);
+            let gh = Gh::paced(Some(gh), call.scope, background);
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             let env: Vec<(&str, &str)> =
                 env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -372,8 +483,13 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("gh.text", |call| {
         Box::pin(async move {
-            let TextParams { gh, cwd, args } = call.params()?;
-            let gh = Gh::new(Some(gh), call.scope);
+            let TextParams {
+                gh,
+                cwd,
+                args,
+                background,
+            } = call.params()?;
+            let gh = Gh::paced(Some(gh), call.scope, background);
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             let outcome = gh.text(&cwd, &args).await;
             gh.answer(outcome.and_then(|output| Reply::json(&output)))
@@ -651,6 +767,64 @@ mod tests {
             assert!(!message.contains(TOKEN), "{message}");
             assert!(!message.contains(&TOKEN[4..20]), "{message}");
         }
+    }
+
+    /// gh says "rate limit" once: that request answers `gh_paused` with the reset GitHub names, and every later read
+    /// of the host is refused without starting gh, while a sign-in check still runs and another host is not held.
+    #[tokio::test]
+    async fn a_rate_limit_holds_every_read_of_its_host_until_the_reset() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ompdesk-core-gh-gate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let runs = dir.join("runs");
+        let script = dir.join("gh");
+        let reset = gate::now_ms() / 1_000 + 3_600;
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ \"$1 $2\" = \"api rate_limit\" ]; then echo '{{\"resources\":{{\"core\":{{\"remaining\":0,\"reset\":{reset}}}}}}}'; exit 0; fi\necho \"$1\" >> \"{runs}\"\necho 'gh: API rate limit exceeded for user ID 1. (HTTP 403)' >&2\nexit 1\n",
+                runs = runs.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runner = |host: &str| {
+            let mut runner = shell(10_000, 1024);
+            runner.bin = script.to_string_lossy().into_owned();
+            runner.args = Vec::new();
+            runner.env.insert("GH_HOST".into(), host.into());
+            runner
+        };
+        let gh = Gh::new(Some(runner("gate.test")), Scope::detached());
+        let fault = gh
+            .call("/", &["pr", "list"], Opts::default())
+            .await
+            .unwrap_err();
+        let answered = gh.answer(Err(fault)).err().unwrap();
+        let until = crate::aimemory::value::iso(reset * 1_000);
+        assert_eq!(answered.code, "gh_paused");
+        assert_eq!(
+            answered.message,
+            format!(
+                "gh: API rate limit exceeded for user ID 1. (HTTP 403) (GitHub paused until {until})"
+            )
+        );
+        let later = Gh::new(Some(runner("gate.test")), Scope::detached());
+        let refused = later
+            .call("/", &["repo", "view"], Opts::default())
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "gh_paused");
+        assert!(
+            refused.message.ends_with(&format!("paused until {until}")),
+            "{}",
+            refused.message
+        );
+        let _ = later.text("/", &["auth", "status"]).await.unwrap();
+        let other = Gh::new(Some(runner("other-gate.test")), Scope::detached());
+        let _ = other.call("/", &["issue", "list"], Opts::default()).await;
+        assert_eq!(std::fs::read_to_string(&runs).unwrap(), "pr\nauth\nissue\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

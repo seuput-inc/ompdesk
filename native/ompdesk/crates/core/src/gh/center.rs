@@ -710,12 +710,18 @@ pub async fn command(
                 ));
             }
             let repo = center.repo().await?;
-            center
+            let generation = clones::claim(&destination);
+            let outcome = center
                 .call(
                     &["repo", "clone", &repo, &destination],
                     Some(timeouts.clone_ms),
                 )
-                .await?;
+                .await;
+            if let Err(fault) = &outcome {
+                clones::clear_failed(&destination, generation, &fault.message).await;
+            }
+            clones::release(&destination, generation);
+            outcome?;
             Reply::json(&Cloned { path: destination })
         }
         Op::RepoFork => {
@@ -970,6 +976,78 @@ pub async fn command(
         Op::NotificationReadAll => {
             center.api(&["-X", "PUT", "notifications"]).await?;
             Reply::json(&DONE)
+        }
+    }
+}
+
+/// A clone that fails, times out or is cancelled leaves the folder git began, and the next clone to that place is
+/// refused as taken (Orca P97, re-implemented). The folder did not exist when the clone started (the request refuses
+/// a taken destination), so it is removed, but only while that clone is still the newest one of the destination and
+/// gh did not say the place already exists: a newer clone's folder, or one that appeared meanwhile, is never touched.
+mod clones {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{LazyLock, Mutex};
+
+    static NEWEST: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(Mutex::default);
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    fn newest() -> std::sync::MutexGuard<'static, HashMap<String, u64>> {
+        NEWEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// This clone is now the newest of `destination`.
+    pub fn claim(destination: &str) -> u64 {
+        let generation = NEXT.fetch_add(1, Ordering::SeqCst);
+        newest().insert(destination.to_owned(), generation);
+        generation
+    }
+
+    pub fn release(destination: &str, generation: u64) {
+        let mut newest = newest();
+        if newest.get(destination) == Some(&generation) {
+            newest.remove(destination);
+        }
+    }
+
+    /// Removes what a failed clone (gh has exited) left at `destination`.
+    pub async fn clear_failed(destination: &str, generation: u64, message: &str) {
+        if message.contains("already exists") || newest().get(destination) != Some(&generation) {
+            return;
+        }
+        let destination = destination.to_owned();
+        let _ = tokio::task::spawn_blocking(move || {
+            if std::fs::symlink_metadata(&destination).is_ok_and(|meta| meta.is_dir()) {
+                let _ = std::fs::remove_dir_all(&destination);
+            }
+        })
+        .await;
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn a_failed_clone_removes_only_its_own_folder() {
+            let root = std::env::temp_dir().join(format!("ompdesk-core-clone-{}", std::process::id()));
+            let place = root.join("repo");
+            let destination = place.to_string_lossy().into_owned();
+            std::fs::create_dir_all(place.join(".git")).unwrap();
+            // An older clone of the same place fails after a newer one began: the newer one's folder stays.
+            let older = claim(&destination);
+            let newer = claim(&destination);
+            clear_failed(&destination, older, "fatal: early EOF").await;
+            assert!(place.exists());
+            release(&destination, older);
+            // gh said the place exists: it is not this clone's.
+            clear_failed(&destination, newer, "fatal: destination path 'repo' already exists").await;
+            assert!(place.exists());
+            clear_failed(&destination, newer, "gh repo clone timed out after 600000ms").await;
+            assert!(!place.exists());
+            release(&destination, newer);
+            assert!(newest().get(&destination).is_none());
+            let _ = std::fs::remove_dir_all(&root);
         }
     }
 }

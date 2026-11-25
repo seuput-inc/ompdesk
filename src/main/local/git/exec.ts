@@ -241,14 +241,20 @@ export const GH_TEXT_TIMEOUT_MS = 30_000;
 
 /**
  * Run gh (or git) at `bin` with gh's non-interactive env to completion as text (core `gh.text`); never rejects on a
- * non-zero exit, rejects when it could not run or ran past `GH_TEXT_TIMEOUT_MS`.
+ * non-zero exit, rejects when it could not run or ran past `GH_TEXT_TIMEOUT_MS`. `background`: a timer's read, held
+ * behind GitHub's rate limit and pace (core `gh/gate.rs`, refused as `gh_paused`).
  */
 export function ghText(
 	cwd: string,
 	bin: string,
 	args: string[],
+	opts: { background?: boolean } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-	return heldRequest("gh.text", async () => ({ gh: await ghRunner(bin), cwd, args }), GH_TEXT_TIMEOUT_MS);
+	return heldRequest(
+		"gh.text",
+		async () => ({ gh: await ghRunner(bin), cwd, args, ...(opts.background ? { background: true } : {}) }),
+		GH_TEXT_TIMEOUT_MS,
+	);
 }
 
 /**
