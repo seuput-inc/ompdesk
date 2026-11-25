@@ -445,6 +445,56 @@ describe("preview host", () => {
 		).rejects.toThrow("Agent browsing is for web pages, not visuals");
 	});
 
+	it("says a main-frame load that has not committed after 5 s is slow, until it commits, fails or stops", async () => {
+		register();
+		const { ask, pages } = openWindow();
+		await ask({ action: "load", url: "https://example.com/" });
+		const [page] = pages();
+		if (!page) throw new Error("no page");
+		const notice = async () => (await ask({ action: "clearProblems" })).notice;
+		const start = (details = { isMainFrame: true, isSameDocument: false }) =>
+			page.emit("did-start-navigation", details);
+		vi.useFakeTimers();
+		try {
+			start();
+			await vi.advanceTimersByTimeAsync(4999);
+			expect(await notice()).toBeNull();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await notice()).toEqual({ kind: "slow" });
+			page.emit("did-navigate", {}, "https://example.com/");
+			expect(await notice()).toBeNull();
+
+			// A frame's load and an in-page move are never the page's own load.
+			start({ isMainFrame: false, isSameDocument: false });
+			start({ isMainFrame: true, isSameDocument: true });
+			await vi.advanceTimersByTimeAsync(6000);
+			expect(await notice()).toBeNull();
+
+			// A failure ends it; a newer navigation's abort of the old one does not.
+			start();
+			page.emit("did-fail-load", {}, -3, "ERR_ABORTED", "https://example.com/", true);
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(await notice()).toEqual({ kind: "slow" });
+			page.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "https://example.com/", true);
+			expect(await notice()).toBeNull();
+
+			// Stopped before the 5 s: nothing is said.
+			start();
+			await vi.advanceTimersByTimeAsync(3000);
+			page.emit("did-stop-loading");
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(await notice()).toBeNull();
+
+			// A more urgent notice stays.
+			page.emit("unresponsive");
+			start();
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(await notice()).toEqual({ kind: "unresponsive" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	describe("Preview check", () => {
 		const BOUNDS = { x: 0, y: 0, width: 600, height: 400 };
 		const BEHIND = PREVIEW_CHECK_BEHIND_MS;

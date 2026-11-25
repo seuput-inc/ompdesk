@@ -612,7 +612,7 @@ export function PreviewPanel() {
 								</Button>
 							}
 						>
-							{t("panel.preview.unresponsive")}
+							{t(state.notice.kind === "slow" ? "panel.preview.slow" : "panel.preview.unresponsive")}
 						</Banner>
 					)}
 				</div>

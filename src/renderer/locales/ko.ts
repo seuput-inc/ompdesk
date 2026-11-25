@@ -4943,6 +4943,7 @@ export const ko: Record<string, string> = {
 	"panel.preview.link": "이 시각화가 {url} 주소를 열려고 했어요. 시각화는 스스로 페이지를 벗어나지 않아요.",
 	"panel.preview.linkOpen": "새 탭에서 열기",
 	"panel.preview.unresponsive": "이 페이지가 응답하지 않아요.",
+	"panel.preview.slow": "이 페이지를 불러오는 데 오래 걸리고 있어요.",
 	"panel.preview.check.error": "이 페이지에 오류가 보여요",
 	"panel.preview.check.blank": "이 페이지가 비어 보여요",
 	"panel.preview.problemsCopy": "문제 복사하기",

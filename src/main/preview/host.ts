@@ -20,6 +20,7 @@ import {
 	EMPTY_PREVIEW_PAGE,
 	isLoopbackUrl,
 	PREVIEW_COMMAND,
+	PREVIEW_LOAD_STALL_MS,
 	PREVIEW_PAGE,
 	PREVIEW_PROBLEM_LIMIT,
 	PREVIEW_SAVE_PDF,
@@ -531,6 +532,23 @@ export function registerPreviewHost(
 		contents.on("responsive", () => {
 			if (page.state.notice?.kind === "unresponsive") update({ notice: null });
 		});
+		// A main-frame load still not committed after a while says so (M73); it ends with the commit, a failure or a stop.
+		let stall: NodeJS.Timeout | undefined;
+		const endStall = () => {
+			clearTimeout(stall);
+			stall = undefined;
+			if (page.state.notice?.kind === "slow") update({ notice: null });
+		};
+		contents.on("did-start-navigation", details => {
+			if (!details.isMainFrame || details.isSameDocument) return;
+			clearTimeout(stall);
+			stall = setTimeout(() => {
+				stall = undefined;
+				// Another notice (a refused download or link, an unresponsive page) is the more urgent one and stays.
+				if (!page.state.notice) update({ notice: { kind: "slow" } });
+			}, PREVIEW_LOAD_STALL_MS);
+		});
+		contents.once("destroyed", () => clearTimeout(stall));
 		// WebRTC is no CSP directive: over UDP (STUN, TURN) it would leave a visual's page directly; over TCP it
 		// takes the visual session's dead proxy.
 		if (kind === "visual") contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
@@ -568,7 +586,10 @@ export function registerPreviewHost(
 		contents.on("did-start-loading", () =>
 			update({ error: null, crashed: false, ...(page.state.notice?.kind === "check" ? { notice: null } : {}) }),
 		);
-		contents.on("did-stop-loading", () => update());
+		contents.on("did-stop-loading", () => {
+			endStall();
+			update();
+		});
 		contents.on("did-navigate", (_event, url) => {
 			// A visual's page that leaves its own address (for an empty document) no longer shows it; a web visual
 			// browses on.
@@ -582,6 +603,7 @@ export function registerPreviewHost(
 			// A viewer's frame must show the new page now, not at the next paint tick.
 			page.stream?.refresh();
 			update({ problems: [] });
+			endStall();
 			pageUpdated();
 		});
 		contents.on("did-navigate-in-page", () => {
@@ -593,9 +615,13 @@ export function registerPreviewHost(
 			pageUpdated();
 		});
 		contents.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
-			if (mainFrame && code !== -3) update({ error: description, loading: false });
+			// -3 (aborted) is also a newer navigation replacing this one: its own wait stays; a Stop ends it at did-stop-loading.
+			if (!mainFrame || code === -3) return;
+			endStall();
+			update({ error: description, loading: false });
 		});
 		contents.on("render-process-gone", () => {
+			clearTimeout(stall);
 			view?.setVisible(false);
 			stream?.setVisible(false);
 			update({ crashed: true, loading: false, notice: null });

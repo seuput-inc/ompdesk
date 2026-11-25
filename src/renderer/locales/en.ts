@@ -4949,6 +4949,7 @@ export const en: Record<string, string> = {
 	"panel.preview.link": "This visual tried to open {url}. Visuals never leave their page on their own.",
 	"panel.preview.linkOpen": "Open in new tab",
 	"panel.preview.unresponsive": "This page isn't responding.",
+	"panel.preview.slow": "This page is taking a long time to load.",
 	"panel.preview.check.error": "This page shows an error",
 	"panel.preview.check.blank": "This page looks blank",
 	"panel.preview.problemsCopy": "Copy problems",
