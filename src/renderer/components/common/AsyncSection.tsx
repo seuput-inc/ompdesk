@@ -31,6 +31,8 @@ export interface AsyncSectionProps {
 	error: string | null;
 	/** Whether the loaded collection is empty; never consulted while `error` is set. */
 	empty?: boolean;
+	/** A held read, not a failure (one quiet line): shown over the rows, and an empty collection is not claimed under it. */
+	notice?: ReactNode;
 	onRetry?: () => void;
 	loadingLabel?: string;
 	/** Heading above the error message. */
@@ -51,6 +53,7 @@ export function AsyncSection({
 	hasData = false,
 	error,
 	empty = false,
+	notice,
 	onRetry,
 	loadingLabel,
 	errorTitle,
@@ -90,11 +93,12 @@ export function AsyncSection({
 			/>
 		);
 	}
-	if (empty && !error) {
+	if (empty && !error && !notice) {
 		return <EmptyState className={box} icon={<Inbox />} size="sm" title={emptyLabel ?? ""} />;
 	}
 	return (
 		<>
+			{notice && <div className="mb-3">{notice}</div>}
 			{error && (
 				<Banner
 					actions={retryButton}

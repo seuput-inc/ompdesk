@@ -7,7 +7,7 @@
  */
 
 import { CheckCircle2, Circle, GitPullRequest, GitPullRequestDraft, Plus, RefreshCw, XCircle } from "lucide-react";
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import type { RpcPrListItem } from "../../../shared/rpc-types";
 import { useFocusedScope } from "../../lib/focused-scope";
 import { cx, formatTimeAgo } from "../../lib/format";
@@ -30,6 +30,7 @@ import {
 	Tabs,
 } from "../common";
 import { GithubSignIn } from "../onboarding/GithubSignIn";
+import { GithubPaused } from "./github/shared";
 import { PrCreateDialog } from "./pr/PrCreateDialog";
 import { PrDetail } from "./pr/PrDetail";
 
@@ -99,6 +100,7 @@ export function PullRequests() {
 	const listLoading = usePrCenterStore(state => state.listLoading);
 	const selected = usePrCenterStore(state => state.selected);
 	const error = usePrCenterStore(state => state.error);
+	const pausedUntil = usePrCenterStore(state => state.pausedUntil);
 	const [createOpen, setCreateOpen] = useState(false);
 	const [probing, setProbing] = useState(false);
 
@@ -118,6 +120,8 @@ export function PullRequests() {
 		usePrCenterStore.getState().enter(scope);
 		void usePrCenterStore.getState().probe();
 	}, [scope.id]);
+	// Shown again after a while: the list and the PR read again in place (pr-center.ts `watch`).
+	useEffect(() => usePrCenterStore.getState().watch(), []);
 
 	const openProject = async () => {
 		try {
@@ -247,6 +251,7 @@ export function PullRequests() {
 				label={t("prCenter.listLabel")}
 				list={
 					<>
+						{pausedUntil !== null && <GithubPaused className="mb-2" until={pausedUntil} />}
 						{error && list.length > 0 && (
 							<Banner className="mb-2" live title={t("prCenter.loadFailed")} variant="warning">
 								<ErrorDetail error={error} />
@@ -277,15 +282,18 @@ export function PullRequests() {
 						) : listLoading && list.length === 0 ? (
 							<SkeletonRows className="py-1" label={t("prCenter.loading")} widths={[72, 58, 66, 50, 62]} />
 						) : list.length === 0 ? (
-							<EmptyState
-								actions={
-									<Button icon={<Plus />} onClick={() => setCreateOpen(true)} size="sm" variant="secondary">
-										{t("prCenter.create")}
-									</Button>
-								}
-								size="sm"
-								title={t("prCenter.empty")}
-							/>
+							// Held, an empty list is not known to be empty: the line above is the whole state.
+							pausedUntil === null && (
+								<EmptyState
+									actions={
+										<Button icon={<Plus />} onClick={() => setCreateOpen(true)} size="sm" variant="secondary">
+											{t("prCenter.create")}
+										</Button>
+									}
+									size="sm"
+									title={t("prCenter.empty")}
+								/>
+							)
 						) : (
 							<ul className="flex flex-col gap-0.5">
 								{list.map(item => (
