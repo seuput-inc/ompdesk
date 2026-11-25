@@ -78,9 +78,13 @@ async function spawnEnv(env: Record<string, string> | undefined): Promise<NodeJS
 	return { ...withoutGitSelectors(process.env), PATH: await spawnPath(), GIT_OPTIONAL_LOCKS: "0", ...env };
 }
 
-/** Never page, never prompt for credentials from a headless GUI call; paths unquoted, no colour. */
+/**
+ * Never page, never prompt for credentials from a headless GUI call; paths unquoted, no colour. Git Credential
+ * Manager ignores the terminal guard and opens its own window, so it is told not to (`GCM_INTERACTIVE`, Orca
+ * `shared/git/commands/git-credential-prompt-env.ts:70-82`); an ssh git's `BatchMode` is the core's (`git/run.rs`).
+ */
 const GIT_ARGS = ["-c", "core.quotepath=false", "-c", "color.ui=false"];
-const GIT_ENV = { GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", LC_ALL: "C" };
+const GIT_ENV = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_PAGER: "cat", LC_ALL: "C" };
 
 /** How a git or a gh runs, as the core process is told it: the core spawns `bin` with `args` first and exactly `env`. */
 export interface CoreRunner {
