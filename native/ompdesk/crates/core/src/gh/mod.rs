@@ -24,7 +24,7 @@ mod json;
 mod pr;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -131,8 +131,39 @@ impl Gh {
             .unwrap_or("github.com")
     }
 
-    /// `gh api rate_limit` (it costs no quota), read as the gate reads it; `None` when it fails.
-    async fn quota(exec: &Exec, cwd: &str, opts: Opts<'_>) -> Option<gate::Quota> {
+    /// The gh guard's shared reading of the account's quota (`resources/gui-bridge/gh-guard.ts` `budgetDir`):
+    /// `$OMPDESK_GH_BUDGET_DIR`, else `~/.cache/ompdesk/gh-budget`, `rate-limit.json`. Only github.com's: an Enterprise
+    /// host has a quota of its own.
+    fn budget_file(exec: &Exec, host: &str) -> Option<PathBuf> {
+        if host != "github.com" {
+            return None;
+        }
+        let dir = match exec
+            .env("OMPDESK_GH_BUDGET_DIR")
+            .filter(|dir| !dir.is_empty())
+        {
+            Some(dir) => PathBuf::from(dir),
+            None => {
+                let home = exec
+                    .env(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                    .filter(|home| !home.is_empty())?;
+                Path::new(home)
+                    .join(".cache")
+                    .join("ompdesk")
+                    .join("gh-budget")
+            }
+        };
+        Some(dir.join("rate-limit.json"))
+    }
+
+    /// `gh api rate_limit` (it costs no quota), read as the gate reads it, and stored where the gh guard reads it;
+    /// `None` when it fails.
+    async fn quota(
+        exec: &Exec,
+        cwd: &str,
+        opts: Opts<'_>,
+        shared: Option<&Path>,
+    ) -> Option<gate::Quota> {
         let opts = Opts {
             timeout_ms: Some(gate::QUOTA_READ_MS),
             env: opts.env,
@@ -142,7 +173,18 @@ impl Gh {
         if output.code != 0 {
             return None;
         }
-        gate::read_quota(&output.text(), gate::QUOTA_FLOOR)
+        let text = output.text();
+        if let (Some(file), Some(reading)) = (shared, gate::reading_of(&text, gate::now_ms())) {
+            // Written as the guard writes it (a temp file renamed over); a failed write only costs a later read.
+            let temp = file.with_extension(format!("json.{}.tmp", std::process::id()));
+            let _ = file
+                .parent()
+                .map(std::fs::create_dir_all)
+                .transpose()
+                .and_then(|_| std::fs::write(&temp, reading))
+                .and_then(|()| std::fs::rename(&temp, file));
+        }
+        gate::read_quota(&text, gate::QUOTA_FLOOR)
     }
 
     /// One gh run through the host's gate: refused while the host waits (`gh_paused`), a read run again on a GitHub
@@ -154,9 +196,21 @@ impl Gh {
         }
         let host = Gh::host(exec, &opts);
         let key = format!("{}\n{host}", self.command);
+        let shared = Gh::budget_file(exec, host);
         let first = !self.admitted.swap(true, Ordering::SeqCst);
-        if self.background && first && gate::quota_due(&key, gate::now_ms()) {
-            gate::learn(&key, Gh::quota(exec, cwd, opts).await.as_ref());
+        if self.background && first {
+            let stored = shared
+                .as_deref()
+                .and_then(|file| std::fs::read_to_string(file).ok())
+                .and_then(|text| gate::stored_quota(&text, gate::now_ms()));
+            if stored.is_some() {
+                gate::learn(&key, stored.as_ref());
+            } else if gate::quota_due(&key, gate::now_ms()) {
+                gate::learn(
+                    &key,
+                    Gh::quota(exec, cwd, opts, shared.as_deref()).await.as_ref(),
+                );
+            }
         }
         if let Err(wait) = gate::admit(&key, self.background, first, gate::now_ms()) {
             self.paused_until.store(wait.until(), Ordering::SeqCst);
@@ -169,7 +223,7 @@ impl Gh {
                 return Ok(output);
             }
             if gate::rate_limited(&output.stderr) {
-                let quota = Gh::quota(exec, cwd, opts).await;
+                let quota = Gh::quota(exec, cwd, opts, shared.as_deref()).await;
                 let until = gate::trip(&key, quota.as_ref(), gate::now_ms());
                 self.paused_until.store(until, Ordering::SeqCst);
                 return Ok(output);
