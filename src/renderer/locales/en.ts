@@ -4971,6 +4971,7 @@ export const en: Record<string, string> = {
 	"panel.preview.agent.takeOver": "Take over",
 	"panel.preview.agent.driving": "The agent is using this page.",
 	"panel.preview.agent.waiting": "The agent may use this page on its next browser step.",
+	"panel.preview.agent.reconnecting": "The link to the other computer dropped. Reconnecting the agent to this page…",
 	"panel.preview.agent.webOnly": "The agent can use web pages, not visuals",
 	"panel.preview.agent.failed": "Couldn't let the agent use the preview",
 	"panel.preview.tabs": "Preview tabs",

@@ -438,6 +438,26 @@ describe("preview host", () => {
 		expect(pages()[1]?.loaded).toEqual(["https://example.org/popup"]);
 	});
 
+	it("opens at most four tabs a page asks for within two seconds, then lets it open more", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			register();
+			const { ask, pages } = openWindow();
+			await ask({ action: "load", url: "https://example.com/" });
+			const [web] = pages();
+			for (let index = 0; index < 6; index++) web?.openHandler?.({ url: `https://example.org/${index}` });
+			expect(pages()).toHaveLength(5);
+			// The person's own new tab is never counted against the page.
+			await ask({ action: "newTab" });
+			expect(pages()).toHaveLength(6);
+			vi.advanceTimersByTime(2000);
+			web?.openHandler?.({ url: "https://example.org/later" });
+			expect(pages()).toHaveLength(7);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("never lets the agent's browser onto a visual's page", async () => {
 		const { ask } = await showVisual();
 		await expect(
@@ -667,7 +687,7 @@ describe("preview host", () => {
 class FakeRelaySocket {
 	readonly ready: Promise<void>;
 	#messages: Array<(data: string) => void> = [];
-	#closes: Array<() => void> = [];
+	#closes: Array<(lost: boolean) => void> = [];
 	readonly sent: string[] = [];
 	isOpen = false;
 	closed = false;
@@ -681,15 +701,19 @@ class FakeRelaySocket {
 		this.sent.push(data);
 	}
 	close(): void {
+		this.end(false);
+	}
+	/** The socket ends; `lost`: the paired link dropped under it. */
+	end(lost: boolean): void {
 		if (this.closed) return;
 		this.closed = true;
 		this.isOpen = false;
-		for (const listener of this.#closes) listener();
+		for (const listener of this.#closes) listener(lost);
 	}
 	onMessage(listener: (data: string) => void): void {
 		this.#messages.push(listener);
 	}
-	onClose(listener: () => void): void {
+	onClose(listener: (lost: boolean) => void): void {
 		this.#closes.push(listener);
 	}
 	/** The relay sends a frame. */
@@ -705,8 +729,8 @@ describe("agent browsing on a paired host's tab", () => {
 	const RELAY = { action: "agentStart", tabId: "tab", url: "http://127.0.0.1:9333", token: "x".repeat(32) } as const;
 
 	/** A window whose tab runs on a paired host, with `tunnel` giving it the relay's socket. */
-	function remoteWindow(socket: FakeRelaySocket | null) {
-		register(undefined, { tunnel: () => socket });
+	function remoteWindow(socket: FakeRelaySocket | null | (() => FakeRelaySocket | null)) {
+		register(undefined, { tunnel: typeof socket === "function" ? socket : () => socket });
 		const window = openWindow();
 		const dialed = vi.fn();
 		vi.stubGlobal("WebSocket", dialed);
@@ -719,6 +743,7 @@ describe("agent browsing on a paired host's tab", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
 	it("runs the relay's extension on this computer's page over the tunnel, never dialing the host's address", async () => {
@@ -780,6 +805,52 @@ describe("agent browsing on a paired host's tab", () => {
 		await again.ask(RELAY);
 		second.socket.close();
 		expect((await again.ask({ action: "clearProblems" })).agent).toBeNull();
+	});
+
+	it("keeps the page the agent's while the link is down, lets the panel back in without releasing it, and Take over ends the wait", async () => {
+		const tunnels: FakeRelaySocket[] = [];
+		const { ask, sender } = remoteWindow(() => {
+			const socket = new FakeRelaySocket(Promise.resolve());
+			tunnels.push(socket);
+			return socket;
+		});
+		await ask({ action: "load", url: "https://example.com/" });
+		await ask(RELAY);
+		tunnels[0]?.end(true);
+		// The page stays the agent's while the link is down, so the panel does not release the tab's relay.
+		expect((await ask({ action: "clearProblems" })).agent).toMatchObject({ tabId: "tab", reconnecting: true });
+		expect(tunnels).toHaveLength(1);
+
+		// The link is back and the panel lets the agent in again: no state in between drops the agent.
+		const sent = vi.spyOn(sender, "send");
+		expect((await ask(RELAY)).agent).toEqual({ tabId: "tab", attached: false, lastAction: "" });
+		const agents = sent.mock.calls.map(call => ((call as unknown[])[1] as { agent?: unknown } | undefined)?.agent);
+		expect(agents.length).toBeGreaterThan(0);
+		expect(agents.filter(agent => agent === null)).toEqual([]);
+		expect(tunnels[1]?.frames()[0]).toMatchObject({ t: "hello" });
+
+		// Dropped again, then taken back: the agent is gone.
+		tunnels[1]?.end(true);
+		expect((await ask({ action: "agentStop" })).agent).toBeNull();
+	});
+
+	it("lets the agent go when the relay itself closed or another page is shown while the link is down", async () => {
+		const tunnels: FakeRelaySocket[] = [];
+		const { ask } = remoteWindow(() => {
+			const socket = new FakeRelaySocket(Promise.resolve());
+			tunnels.push(socket);
+			return socket;
+		});
+		await ask(RELAY);
+		tunnels[0]?.end(false);
+		expect((await ask({ action: "clearProblems" })).agent).toBeNull();
+
+		await ask(RELAY);
+		tunnels[1]?.end(true);
+		const opened = await ask({ action: "newTab" });
+		expect(opened.agent).toBeNull();
+		const first = opened.tabs[0]?.id;
+		expect((await ask({ action: "selectTab", id: first })).agent).toBeNull();
 	});
 
 	it("says why when the host's relay cannot be reached, and when the tab has no tunnel", async () => {

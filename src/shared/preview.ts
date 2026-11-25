@@ -35,6 +35,11 @@ export interface PreviewAgentState {
 	attached: boolean;
 	/** Last CDP method the agent sent, e.g. `Page.navigate`; "" before the first. */
 	lastAction: string;
+	/**
+	 * The paired link under a host tab's agent dropped and main is dialing the relay again (host.ts `redialAgent`): the
+	 * page stays the agent's, and the panel says it is reconnecting instead of dropping the agent.
+	 */
+	reconnecting?: boolean;
 }
 /** A console error or warning the page logged (C144), newest last. */
 export interface PreviewProblem {

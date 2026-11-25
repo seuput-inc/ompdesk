@@ -4965,6 +4965,7 @@ export const ko: Record<string, string> = {
 	"panel.preview.agent.takeOver": "직접 조작하기",
 	"panel.preview.agent.driving": "에이전트가 이 페이지를 쓰고 있어요.",
 	"panel.preview.agent.waiting": "에이전트가 다음 브라우저 단계에서 이 페이지를 쓸 수 있어요.",
+	"panel.preview.agent.reconnecting": "다른 컴퓨터와의 연결이 끊겼어요. 에이전트를 이 페이지에 다시 연결하는 중…",
 	"panel.preview.agent.webOnly": "에이전트는 시각화가 아닌 웹 페이지만 쓸 수 있어요",
 	"panel.preview.agent.failed": "에이전트가 미리보기를 쓰게 하지 못했어요",
 	"panel.preview.tabs": "미리보기 탭",
