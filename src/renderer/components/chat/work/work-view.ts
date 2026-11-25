@@ -159,6 +159,8 @@ export interface WorkCommandOutcome extends CommandCall {
 	output?: string;
 	/** The address a dev server printed, when this command started one. */
 	previewUrl?: string;
+	/** The pull request `gh pr create` printed, when this command opened one. */
+	pullRequestUrl?: string;
 }
 
 export interface WorkFileOutcome {
@@ -484,6 +486,7 @@ export function workOutcomes(
 				status === "passed"
 					? devServerUrl({ toolName: "bash", command: entry.args.command, text: resultText(entry.result) })
 					: null;
+			const pullRequestUrl = status === "passed" ? openedPullRequest(entry.args.command, ownText) : null;
 			commands.push({
 				command: entry.args.command,
 				status,
@@ -499,6 +502,7 @@ export function workOutcomes(
 				...(entry.endTime !== null ? { endTime: entry.endTime } : {}),
 				...(backgroundId ? { background: true as const } : {}),
 				...(previewUrl ? { previewUrl } : {}),
+				...(pullRequestUrl ? { pullRequestUrl } : {}),
 			});
 		}
 	}
@@ -510,4 +514,15 @@ export function workOutcomes(
 		skills: [...skills.values()],
 		protections,
 	};
+}
+
+const PULL_REQUEST_URL = /https:\/\/[^\s/]+\/[^\s/]+\/[^\s/]+\/pull\/\d+/;
+
+/**
+ * The pull request a `gh pr create` printed (Orca records PRs a chat's tools print on its workspace,
+ * `structured-agent-session-pr-link-observer.ts:9-46`); other commands' output may only mention one.
+ */
+export function openedPullRequest(command: string, output: string): string | null {
+	if (!/\bgh\s+pr\s+create\b/.test(command)) return null;
+	return PULL_REQUEST_URL.exec(output)?.[0] ?? null;
 }

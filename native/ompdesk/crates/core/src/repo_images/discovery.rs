@@ -98,7 +98,7 @@ async fn fetch_image(url: &Url, source: Source) -> Option<Artwork> {
 }
 
 /// Each `<name …>` tag's attribute text, in page order, quotes respected.
-fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
+pub(crate) fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
     let lower = html.to_ascii_lowercase();
     let open = format!("<{name}");
     let mut offset = 0;
@@ -168,7 +168,8 @@ fn uploaded_preview(html: &str) -> Option<Url> {
     (url.scheme() == "https" && url.host_str() == Some(UPLOADED_PREVIEWS)).then_some(url)
 }
 
-fn attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
+/// One attribute's raw value in a tag's attribute text (`tags`), its name matched case-insensitively.
+pub(crate) fn attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
     let bytes = tag.as_bytes();
     let mut at = 0;
     while at < bytes.len() {

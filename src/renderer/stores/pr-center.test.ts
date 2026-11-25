@@ -204,7 +204,7 @@ describe("pr-center: one list read at a time, and only its own outcome", () => {
 			await reading;
 			await flush();
 			expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
-			expect(omp.rpc.prList).toHaveBeenLastCalledWith("merged", 50, "all", false);
+			expect(omp.rpc.prList).toHaveBeenLastCalledWith("merged", 50, "all", false, {});
 			let state = usePrCenterStore.getState();
 			expect(state.list).toEqual([]);
 			expect(state.error).toBeNull();
@@ -218,6 +218,24 @@ describe("pr-center: one list read at a time, and only its own outcome", () => {
 			expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
 		},
 	);
+
+	it("a filter reads its own list, and clearing it paints the plain list read before", async () => {
+		const omp = installMockOmp();
+		await usePrCenterStore.getState().refresh();
+		expect(usePrCenterStore.getState().list).toEqual([LIST_ITEM]);
+		const mine = { ...LIST_ITEM, number: 9, title: "Mine" };
+		const filtered = Promise.withResolvers<RpcResponse>();
+		omp.rpc.prList.mockReturnValueOnce(filtered.promise as never);
+		usePrCenterStore.getState().setListFilter({ author: "me" });
+		expect(omp.rpc.prList).toHaveBeenLastCalledWith("open", 50, "all", false, { author: "me" });
+		expect(usePrCenterStore.getState().list).toEqual([]);
+		filtered.resolve(ok([mine]));
+		await flush();
+		expect(usePrCenterStore.getState().list).toEqual([mine]);
+		omp.rpc.prList.mockReturnValueOnce(Promise.withResolvers<RpcResponse>().promise as never);
+		usePrCenterStore.getState().setListFilter({});
+		expect(usePrCenterStore.getState().list).toEqual([LIST_ITEM]);
+	});
 
 	it("a refresh asked while one runs runs once right after it", async () => {
 		const omp = installMockOmp();
@@ -280,7 +298,7 @@ describe("pr-center: the window coming back reads stale rows in place", () => {
 		turn("visible", T0 + 91_000);
 		await flush();
 		expect(omp.rpc.prList).toHaveBeenCalledTimes(2);
-		expect(omp.rpc.prList).toHaveBeenLastCalledWith("open", 50, "all", true);
+		expect(omp.rpc.prList).toHaveBeenLastCalledWith("open", 50, "all", true, {});
 		stop();
 	});
 
@@ -308,7 +326,7 @@ describe("pr-center: the window coming back reads stale rows in place", () => {
 		// A person's read still runs, and its success ends the hold.
 		await usePrCenterStore.getState().refresh();
 		state = usePrCenterStore.getState();
-		expect(omp.rpc.prList).toHaveBeenLastCalledWith("open", 50, "all", false);
+		expect(omp.rpc.prList).toHaveBeenLastCalledWith("open", 50, "all", false, {});
 		expect(state.pausedUntil).toBeNull();
 		stop();
 	});

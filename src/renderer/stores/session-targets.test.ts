@@ -68,6 +68,7 @@ describe("session targets", () => {
 			name: "app",
 			artwork: PNG,
 			head: { kind: "branch", name: "main" },
+			root: "/repo/app",
 		});
 		expect(resolveRowTarget(state, "host", "/s/b.jsonl", FALLBACK).head).toEqual({
 			kind: "detached",

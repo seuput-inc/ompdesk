@@ -144,6 +144,18 @@ impl Exec {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
+        // A gh may be a shim chain (a version manager's script that starts the real gh): it leads a process group of
+        // its own, so the end of its timeout or of its request reaches every process of the chain (Orca
+        // `gh-exec-file.ts:193-210`). It leaves the core's group, which the owner kills when the core dies: a gh outlives a
+        // crashed core only until its own request ends. git stays in the core's group (a clone can run for minutes).
+        #[cfg(unix)]
+        let group = self.tool == "gh";
+        #[cfg(unix)]
+        if group {
+            command.process_group(0);
+        }
+        #[cfg(windows)]
+        let group = false;
         let mut child = command
             .spawn()
             .map_err(|error| spawn_fault(&runner.bin, cwd, &error))?;
@@ -163,7 +175,7 @@ impl Exec {
             let ((stdout, truncated), (stderr, _), code, ()) = tokio::join!(
                 read_capped(stdout, max_bytes, &ending),
                 read_capped(stderr, STDERR_KEPT, &ignored),
-                supervise(child, &ending, &scope),
+                supervise(child, &ending, &scope, group),
                 feed(stdin, input),
             );
             Output {
@@ -274,8 +286,8 @@ async fn feed(stdin: Option<ChildStdin>, input: Option<Vec<u8>>) {
 }
 
 /// Waits for the process; once asked to end (`end`, or its request cancelled), sends it SIGTERM and kills it after
-/// `KILL_GRACE`.
-async fn supervise(mut child: Child, end: &Notify, scope: &Scope) -> i32 {
+/// `KILL_GRACE`; with `group`, every process of the group it leads.
+async fn supervise(mut child: Child, end: &Notify, scope: &Scope, group: bool) -> i32 {
     let exited = tokio::select! {
         status = child.wait() => Some(status),
         () = end.notified() => None,
@@ -284,17 +296,32 @@ async fn supervise(mut child: Child, end: &Notify, scope: &Scope) -> i32 {
     let status = match exited {
         Some(status) => status,
         None => {
-            terminate(&mut child);
+            end_process(&mut child, group, false);
             match tokio::time::timeout(KILL_GRACE, child.wait()).await {
                 Ok(status) => status,
                 Err(_) => {
-                    let _ = child.start_kill();
+                    end_process(&mut child, group, true);
                     child.wait().await
                 }
             }
         }
     };
     status.ok().and_then(|status| status.code()).unwrap_or(1)
+}
+
+/// Asks the process to end (SIGTERM), or with `force` kills it; with `group`, every process of its group too.
+fn end_process(child: &mut Child, group: bool, force: bool) {
+    #[cfg(unix)]
+    if group && let Some(pid) = child.id() {
+        crate::sys::signal_group(pid, force);
+    }
+    #[cfg(windows)]
+    let _ = group;
+    if force {
+        let _ = child.start_kill();
+    } else {
+        terminate(child);
+    }
 }
 
 /// A spawn that failed because its working folder is gone says so: the OS reports a missing `cwd` as the program's
@@ -398,6 +425,38 @@ pub(crate) mod tests {
             .unwrap()
             .success();
         assert!(!alive, "the process outlived its timeout's fault");
+        let _ = std::fs::remove_file(pid_file);
+    }
+
+    /// A gh past its timeout takes what it started with it: a shim's real gh is in the shim's process group.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ends_a_gh_s_whole_chain_past_its_timeout() {
+        let pid_file =
+            std::env::temp_dir().join(format!("ompdesk-core-gh-chain-{}", std::process::id()));
+        let _ = std::fs::remove_file(&pid_file);
+        let script = format!("sleep 30 & echo $! > '{}'; wait", pid_file.display());
+        let fault = Exec::new(shell(300, 1024), Scope::detached(), "gh")
+            .run("/", &[script.as_str()], Opts::default())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(fault.code, "gh_timeout");
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let mut alive = true;
+        for _ in 0..50 {
+            alive = std::process::Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!alive, "the shim's child outlived the gh's timeout");
         let _ = std::fs::remove_file(pid_file);
     }
 

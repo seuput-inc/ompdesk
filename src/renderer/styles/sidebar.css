@@ -140,6 +140,19 @@ html:not([data-shell]) .omp-session-sidebar {
 	color: var(--sc-success);
 }
 
+/* The branch PR's checks tint its glyph (stores/branch-prs.ts): failing, still running; a draft stays muted. */
+.omp-status-lane[data-status-lane="pr"][data-pr-checks="failure"] {
+	color: var(--sc-danger);
+}
+
+.omp-status-lane[data-status-lane="pr"][data-pr-checks="pending"] {
+	color: var(--sc-warning);
+}
+
+.omp-status-lane[data-status-lane="pr"][data-pr-checks="draft"] {
+	color: var(--sc-text-muted);
+}
+
 .omp-status-lane[data-status-lane="open"] .omp-status-lane-dot {
 	opacity: 0.45;
 }

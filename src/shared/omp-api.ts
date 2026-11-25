@@ -37,6 +37,7 @@ import type { CreditSpendState } from "./credit-spend";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
 import type { DiskCareState } from "./disk-care";
 import type { ExtensionUpdateState } from "./extension-update";
+import type { GithubBranchPr } from "./github";
 import type { GithubAuthState, GithubStarState } from "./github-auth";
 import type {
 	AutoCloseTurn,
@@ -365,6 +366,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				subscribe<RemoteOpenedTab[]>(IPC_EVENTS.REMOTE_OPENED_TABS_CHANGED, callback),
 			onHeldSessionsChanged: (callback: (files: string[]) => void) =>
 				subscribe<string[]>(IPC_EVENTS.SESSIONS_HELD_CHANGED, callback),
+			onSessionLinksChanged: (callback: () => void) =>
+				subscribe<undefined>(IPC_EVENTS.SESSION_LINKS_CHANGED, () => callback()),
 			onLogBatch: (callback: (batch: LogBatch) => void) => subscribe<LogBatch>(IPC_EVENTS.LOG_LINE, callback),
 			onTabBatch: (callback: (events: AgentSessionEvent[], tabId: string) => void) =>
 				subscribeTab<AgentSessionEvent[]>(IPC_EVENTS.EVENTS_BATCH, callback),
@@ -592,6 +595,13 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			/** Repository images by root; resolves once each was looked up (bounded, cached on that computer). */
 			artwork: (roots: string[], device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_ARTWORK, { roots, device }) as Promise<SessionArtworks>,
+			/** The pull request of a row's branch, read in its repository root on that computer (null: none). */
+			pullRequest: (root: string, branch: string, device?: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_PULL_REQUEST, {
+					root,
+					branch,
+					device,
+				}) as Promise<GithubBranchPr | null>,
 			saveDiagnosticBundle: (request: DiagnosticBundleRequest) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_DUMP_BUNDLE, request) as Promise<DiagnosticBundleResult>,
 			openInNewWindow: (payload: IpcSessionOpenNewWindowPayload) =>

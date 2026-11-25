@@ -60,7 +60,6 @@ import { EditRenderer } from "./renderers/EditRenderer";
 import { EvalRenderer } from "./renderers/EvalRenderer";
 import { FindRenderer } from "./renderers/FindRenderer";
 import { GenericRenderer } from "./renderers/GenericRenderer";
-import { GithubRenderer } from "./renderers/GithubRenderer";
 import { GlobRenderer } from "./renderers/GlobRenderer";
 import { GoalRenderer } from "./renderers/GoalRenderer";
 import { GrepRenderer } from "./renderers/GrepRenderer";
@@ -286,6 +285,20 @@ function AgentDesktopRenderer(props: ToolRendererProps) {
 	return (
 		<Suspense fallback={null}>
 			<LazyAgentDesktopRenderer {...props} />
+		</Suspense>
+	);
+}
+
+// Its own chunk too: the GitHub card's live PR reads, mentions and link cards (lib/link-peek.ts, the PR Center's store)
+// stay off the phone's first screen.
+const LazyGithubRenderer = lazyChunk(() =>
+	import("./renderers/GithubRenderer").then(module => ({ default: module.GithubRenderer })),
+);
+
+function GithubRenderer(props: ToolRendererProps) {
+	return (
+		<Suspense fallback={null}>
+			<LazyGithubRenderer {...props} />
 		</Suspense>
 	);
 }

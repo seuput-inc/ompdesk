@@ -1,5 +1,6 @@
 /** Git / worktree / PR / source-control commands (rpc-map §5), answered in main over the git and gh CLIs. */
 
+import type { RpcPrListFilter } from "../../shared/rpc-types";
 import {
 	archiveBeforeRemove,
 	listSavedWorktrees,
@@ -31,6 +32,22 @@ import { LocalCommandError, type LocalHandler } from "./types";
 
 const str = (value: unknown) => (typeof value === "string" ? value : undefined);
 const pathsOrAll = (value: unknown) => (value === "all" ? "all" : Array.isArray(value) ? (value as string[]) : []);
+/** One PR list filter value gh takes after its flag: a login, `@me` or a label, never read as a flag. */
+const filterValue = (value: unknown) => {
+	const text = str(value)?.trim();
+	return text && text.length <= 100 && !text.startsWith("-") ? text : undefined;
+};
+
+/** The PR list's filters the page sent (`RpcPrListFilter`), each one kept only when gh can take it. */
+function prListFilter(raw: unknown): RpcPrListFilter {
+	const filter = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+	return {
+		author: filterValue(filter.author),
+		label: filterValue(filter.label),
+		assignee: filterValue(filter.assignee),
+		draft: filter.draft === true,
+	};
+}
 
 export const handlers: Record<string, LocalHandler> = {
 	get_git_status: (_command, ctx) => getGitStatus(ctx.cwd),
@@ -89,6 +106,7 @@ export const handlers: Record<string, LocalHandler> = {
 			state: command.state as "open" | "closed" | "merged" | "all" | undefined,
 			limit: typeof command.limit === "number" ? command.limit : undefined,
 			view: command.view === "review" || command.view === "mine" ? command.view : "all",
+			filter: prListFilter(command.filter),
 			background: command.background === true,
 		}),
 	pr_get: (command, ctx) =>

@@ -13,6 +13,7 @@ import type {
 	RpcPrCreateResult,
 	RpcPrDetail,
 	RpcPrDraftResult,
+	RpcPrListFilter,
 	RpcPrListItem,
 	RpcPrListView,
 	RpcPrMergeMethod,
@@ -98,7 +99,13 @@ export function prRepo(cwd: string): Promise<RpcPrRepo> {
 /** `background`: an automatic re-read, held behind GitHub's rate limit and pace. */
 export function prList(
 	cwd: string,
-	input: { state?: "open" | "closed" | "merged" | "all"; limit?: number; view?: RpcPrListView; background?: boolean },
+	input: {
+		state?: "open" | "closed" | "merged" | "all";
+		limit?: number;
+		view?: RpcPrListView;
+		filter?: RpcPrListFilter;
+		background?: boolean;
+	},
 ): Promise<RpcPrListItem[]> {
 	return ghRequest("gh.prList", { cwd, ...input }, GITHUB_REPO_MS + DEFAULT_TIMEOUT_MS);
 }

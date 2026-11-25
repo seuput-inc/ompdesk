@@ -208,13 +208,14 @@ export async function fixture(options: Options = {}) {
 
 /**
  * The stand-in gh: `gh api <endpoint>` answers from the answers file and logs each endpoint it was asked. The core's
- * gate reads `rate_limit` before a background read (`gh/gate.rs`): that read is the gate's, not the trigger's, so it
- * is answered with plenty of quota and not logged.
+ * gate reads `rate_limit` (`gh api --hostname <host> rate_limit`) before a background read (`gh/gate.rs`): that read
+ * is the gate's, not the trigger's, so it is answered with plenty of quota and not logged.
  */
 const FAKE_GH = `
 const fs = require("node:fs");
-const [answersFile, callsFile, , endpoint] = process.argv.slice(2);
-if (endpoint === "rate_limit") {
+const [answersFile, callsFile, ...args] = process.argv.slice(2);
+const endpoint = args[1];
+if (args.at(-1) === "rate_limit") {
 	process.stdout.write(JSON.stringify({ resources: { core: { remaining: 5000, reset: 0 }, graphql: { remaining: 5000, reset: 0 } } }));
 	process.exit(0);
 }

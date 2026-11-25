@@ -151,6 +151,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SESSIONS_MOVE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_TARGETS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_ARTWORK]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_PULL_REQUEST]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_DUMP_BUNDLE]: {
 		dir: "invoke",
 		permission: "workspace",
@@ -562,6 +563,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[E.SESSION_SUMMARIES_CHANGED]: { dir: "push", mode: "pass" },
 	[E.REMOTE_OPENED_TABS_CHANGED]: { dir: "push", mode: "pass" },
 	[E.SESSIONS_HELD_CHANGED]: { dir: "push", mode: "pass" },
+	[E.SESSION_LINKS_CHANGED]: { dir: "push", mode: "pass" },
 	[E.LOG_LINE]: { dir: "push", mode: "pass" },
 	[E.MENU_ACTION]: {
 		dir: "push",

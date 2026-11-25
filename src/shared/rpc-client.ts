@@ -9,6 +9,7 @@ import type {
 	RpcCommand,
 	RpcDebugParams,
 	RpcMcpServerInput,
+	RpcPrListFilter,
 	RpcResponse,
 	RpcSecurityDispositionStatus,
 	RpcSecurityTargetInput,
@@ -99,12 +100,16 @@ export interface SessionRpcClient {
 	worktreePrefetch(baseCwd?: string): Promise<RpcResponse>;
 	worktreeRemove(path: string, force?: boolean): Promise<RpcResponse>;
 	prRepo(): Promise<RpcResponse>;
-	/** `background`: an automatic re-read, which waits behind GitHub's rate limit and pace (core `gh/gate.rs`). */
+	/**
+	 * `background`: an automatic re-read, which waits behind GitHub's rate limit and pace (core `gh/gate.rs`);
+	 * `filter`: gh's author, label, assignee and draft filters.
+	 */
 	prList(
 		state?: "open" | "closed" | "merged" | "all",
 		limit?: number,
 		view?: "all" | "review" | "mine",
 		background?: boolean,
+		filter?: RpcPrListFilter,
 	): Promise<RpcResponse>;
 	prGet(number: number, background?: boolean): Promise<RpcResponse>;
 	prDiff(number: number, path: string): Promise<RpcResponse>;
@@ -262,6 +267,11 @@ export interface SessionRpcClient {
 	retryDesktopSlot(): Promise<RpcResponse>;
 	/** Revoke-failed holder: abort it and end its omp; the slot is freed only once that process has exited. */
 	killDesktopSlot(): Promise<RpcResponse>;
+	/** This computer's session links (`data`: session path → `SessionLink[]`), all or one session's. */
+	sessionLinks(sessionPath?: string): Promise<RpcResponse>;
+	/** `data`: the `SessionLink` kept; a URL `sessionLink` refuses fails. */
+	sessionLinkAdd(sessionPath: string, url: string): Promise<RpcResponse>;
+	sessionLinkRemove(sessionPath: string, url: string): Promise<RpcResponse>;
 	getDelegation(): Promise<RpcResponse>;
 	setDelegation(mode: DelegationMode): Promise<RpcResponse>;
 	/** This session's advisor spend, calls and delivered advisories (`AdvisorUsage`). */
@@ -505,8 +515,15 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		worktreePrefetch: baseCwd => rpcCommand({ type: "worktree_prefetch", ...(baseCwd ? { baseCwd } : {}) }),
 		worktreeRemove: (path, force) => rpcCommand({ type: "worktree_remove", path, force }),
 		prRepo: () => rpcCommand({ type: "pr_repo" }),
-		prList: (state, limit, view, background) =>
-			rpcCommand({ type: "pr_list", state, limit, view, ...(background ? { background } : {}) }),
+		prList: (state, limit, view, background, filter) =>
+			rpcCommand({
+				type: "pr_list",
+				state,
+				limit,
+				view,
+				...(filter && Object.keys(filter).length > 0 ? { filter } : {}),
+				...(background ? { background } : {}),
+			}),
 		prGet: (number, background) => rpcCommand({ type: "pr_get", number, ...(background ? { background } : {}) }),
 		prDiff: (number, path) => rpcCommand({ type: "pr_diff", number, path }),
 		prDraft: options => rpcCommand({ type: "pr_draft", base: options?.base, head: options?.head }),
@@ -632,6 +649,10 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		stopDesktopSlot: () => rpcCommand({ type: "desktop_slot_stop" }),
 		retryDesktopSlot: () => rpcCommand({ type: "desktop_slot_retry" }),
 		killDesktopSlot: () => rpcCommand({ type: "desktop_slot_kill" }),
+		sessionLinks: sessionPath =>
+			rpcCommand(sessionPath ? { type: "session_links", sessionPath } : { type: "session_links" }),
+		sessionLinkAdd: (sessionPath, url) => rpcCommand({ type: "session_link_add", sessionPath, url }),
+		sessionLinkRemove: (sessionPath, url) => rpcCommand({ type: "session_link_remove", sessionPath, url }),
 		getDelegation: () => rpcCommand({ type: "get_delegation" }),
 		setDelegation: mode => rpcCommand({ type: "set_delegation", mode }),
 		getAdvisorStats: () => rpcCommand({ type: "get_advisor_stats" }),

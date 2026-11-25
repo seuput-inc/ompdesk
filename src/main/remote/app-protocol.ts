@@ -21,6 +21,7 @@
  *   `sidebar.deviceOrder.changed` carries no data: the device exchanges again, as it does on every link-up.
  * - `sessions.targets {sessions: SessionTargetQuery[]}` → SessionTargets, `sessions.artwork {roots}` → SessionArtworks
  *   (`shared/session-target.ts`, answered by session-targets.ts); an older host answers `unsupported`
+ * - `sessions.pullRequest {root, branch}` → GithubBranchPr | null: a row's branch PR, read on the host (session-targets.ts)
  * - `host.fs.readBinary {rtab?, cwd?, path, maxBytes?}` → HostFsReadBinaryReply: the file
  *   viewer's bytes, base64 on the link, capped at FS_BINARY_REMOTE_MAX_BYTES by the host
  * - `host.fs.readRange {rtab?, cwd?, path, offset, length}` → HostFsReadBinaryReply: one slice of a file for a

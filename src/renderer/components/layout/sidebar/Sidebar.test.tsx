@@ -105,6 +105,7 @@ interface MockOmp {
 		onSessionsChanged: Mock<() => () => void>;
 		onTabStatus: Mock<() => () => void>;
 		onMenuAction: Mock<() => () => void>;
+		onSessionLinksChanged: Mock<() => () => void>;
 	};
 	tabs: {
 		list: Mock<() => Promise<unknown[]>>;
@@ -157,6 +158,7 @@ function installMockOmp(sessionList: SessionInfo[]): MockOmp {
 			onSessionsChanged: vi.fn(() => () => {}),
 			onTabStatus: vi.fn(() => () => {}),
 			onMenuAction: vi.fn(() => () => {}),
+			onSessionLinksChanged: vi.fn(() => () => {}),
 		},
 		tabs: {
 			list: vi.fn(async () => []),
@@ -1641,6 +1643,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Open in split view",
 			"Open in new window",
 			"Rename session",
+			"Link a PR or issue…",
 			"Pin to top",
 			"Mute notifications",
 			"Move up",
@@ -2048,6 +2051,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Open in split view",
 			"Open in new window",
 			"Rename session",
+			"Link a PR or issue…",
 			"Pin to top",
 			"Mute notifications",
 			"Move up",
@@ -6953,6 +6957,7 @@ describe("Sidebar on a touch screen", () => {
 			"Open in split view",
 			"Open in new window",
 			"Rename session",
+			"Link a PR or issue…",
 			"Pin to top",
 			"Mute notifications",
 			"Move up",

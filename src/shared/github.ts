@@ -63,9 +63,185 @@ export type GithubRequest = GithubTarget &
 		| { op: "notification_list"; all: boolean }
 		| { op: "notification_read"; id: string }
 		| { op: "notification_read_all" }
+		/** Close or reopen a PR. */
+		| { op: "pr_state"; number: number; state: "open" | "closed" }
+		/** Auto-merge with `method` once nothing blocks the PR, or off (`enable: false`). */
+		| { op: "pr_auto_merge"; number: number; enable: boolean; method?: GithubMergeMethod }
+		/** Labels, assignees and (on a PR) requested reviewers to add and remove. */
+		| { op: "people"; kind: "pr" | "issue"; number: number; add: GithubPeople; remove: GithubPeople }
+		/** Who can be assigned, asked to review or @mentioned in the repository. */
+		| { op: "assignable" }
+		| { op: "label_list" }
+		| { op: "pr_conversation"; number: number }
+		/** Reply inside a review thread to its first comment (`commentId`: that comment's REST id). */
+		| { op: "thread_reply"; number: number; commentId: number; body: string }
+		| { op: "thread_resolve"; threadId: string; resolved: boolean }
+		| { op: "reaction"; subjectId: string; content: GithubReactionContent; add: boolean }
+		| { op: "pr_files_viewed"; number: number }
+		| { op: "pr_file_viewed"; pullRequestId: string; path: string; viewed: boolean }
+		| { op: "pr_stack"; number: number }
+		/** The PR of a branch of the checkout's repository: its open one, else its newest. */
+		| { op: "pr_for_branch"; branch: string }
+		| { op: "pr_template" }
+		| { op: "rate_limit" }
+		/** An issue's or PR's title and state, for a link's peek and a PR card that follows its PR. */
+		| { op: "item_peek"; number: number }
+		/** A pasted or dropped image uploaded as a GitHub attachment (github.com and `*.ghe.com`); `data` is base64. */
+		| { op: "image_upload"; name: string; contentType: GithubImageType; data: string }
+		/** A private attachment's signed image (a `images` value of a conversation) as a `data:` URL the page can show. */
+		| { op: "attachment"; url: string }
+		/** Every file's diff of a PR from one read, by path (Expand all). */
+		| { op: "pr_diffs"; number: number }
 	);
 
 export type GithubOp = GithubRequest["op"];
+export type GithubMergeMethod = "merge" | "squash" | "rebase";
+export interface GithubPeople {
+	labels?: string[];
+	assignees?: string[];
+	reviewers?: string[];
+}
+/** GraphQL's `ReactionContent`, in GitHub's order. */
+export const GITHUB_REACTIONS = [
+	"THUMBS_UP",
+	"THUMBS_DOWN",
+	"LAUGH",
+	"HOORAY",
+	"CONFUSED",
+	"HEART",
+	"ROCKET",
+	"EYES",
+] as const;
+export type GithubReactionContent = (typeof GITHUB_REACTIONS)[number];
+export interface GithubReactionCount {
+	content: GithubReactionContent;
+	count: number;
+	viewerHasReacted: boolean;
+}
+/** A comment of a PR's conversation or of one of its review threads. */
+export interface GithubThreadComment {
+	/** GraphQL node id (reactions). */
+	id: string;
+	/** REST id (a thread reply names the thread's first comment by it). */
+	databaseId: number | null;
+	author: string;
+	body: string;
+	createdAt: string;
+	url: string;
+	reactions: GithubReactionCount[];
+	/** A private attachment's URL in `body` → the signed URL it shows through (absent when it holds none). */
+	images?: GithubImageMap;
+}
+/** Private attachment URLs as written in a body → the short-lived signed URL GitHub shows each through. */
+export type GithubImageMap = Record<string, string>;
+/** The image types GitHub's attachments take (Orca `shared/github/attachments/image-attachment.ts`), at most 10 MB. */
+export const GITHUB_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"] as const;
+export type GithubImageType = (typeof GITHUB_IMAGE_TYPES)[number];
+export const GITHUB_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export interface GithubReviewThread {
+	id: string;
+	isResolved: boolean;
+	path: string;
+	line: number | null;
+	/** The diff hunk the thread's first comment sits on. */
+	diffHunk: string;
+	comments: GithubThreadComment[];
+}
+export interface GithubReview {
+	id: string;
+	author: string;
+	body: string;
+	/** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED. */
+	state: string;
+	createdAt: string;
+	url: string;
+	reactions: GithubReactionCount[];
+	images?: GithubImageMap;
+}
+export type GithubTimelineKind =
+	| "labeled"
+	| "unlabeled"
+	| "closed"
+	| "reopened"
+	| "merged"
+	| "force_pushed"
+	| "review_requested"
+	| "assigned"
+	| "unassigned"
+	| "ready_for_review"
+	| "converted_to_draft"
+	| "renamed"
+	| "commit"
+	| "referenced";
+export interface GithubTimelineEvent {
+	kind: GithubTimelineKind;
+	actor: string;
+	createdAt: string;
+	/** The label, reviewer, assignee, new title, commit headline, merged ref or referencing item. */
+	subject?: string;
+	url?: string;
+	sha?: string;
+}
+export interface GithubPrConversation {
+	/** The PR's GraphQL node id. */
+	id: string;
+	/** The PR description's private attachments (`images` of its body). */
+	bodyImages: GithubImageMap;
+	comments: GithubThreadComment[];
+	reviews: GithubReview[];
+	threads: GithubReviewThread[];
+	timeline: GithubTimelineEvent[];
+}
+export interface GithubLabel {
+	name: string;
+	color: string;
+	description: string;
+}
+export interface GithubStackEntry {
+	number: number;
+	title: string;
+	state: string;
+	isDraft: boolean;
+	headRefName: string;
+	baseRefName: string;
+	url: string;
+	current: boolean;
+}
+export interface GithubRateResource {
+	name: "core" | "graphql" | "search";
+	limit: number;
+	remaining: number;
+	used: number;
+	/** Seconds since 1970. */
+	reset: number;
+}
+export interface GithubItemPeek {
+	number: number;
+	title: string;
+	state: "OPEN" | "CLOSED" | "MERGED";
+	isPr: boolean;
+	isDraft: boolean;
+	author: string;
+	comments: number;
+	url: string;
+	updatedAt: string;
+}
+export interface GithubBranchPr {
+	number: number;
+	title: string;
+	url: string;
+	isDraft: boolean;
+	authorLogin: string;
+	headRefName: string;
+	baseRefName: string;
+	additions: number;
+	deletions: number;
+	updatedAt: string;
+	reviewDecision: string | null;
+	checks: { success: number; failure: number; pending: number };
+	/** OPEN, CLOSED or MERGED. */
+	state: string;
+}
 
 export interface GithubIssue {
 	number: number;
@@ -73,6 +249,7 @@ export interface GithubIssue {
 	state: "OPEN" | "CLOSED";
 	author: string;
 	labels: string[];
+	assignees: string[];
 	commentCount: number;
 	updatedAt: string;
 	url: string;
@@ -100,6 +277,8 @@ export interface GithubRepoDetail extends GithubRepo {
 	homepage: string;
 	license: string;
 	sshUrl: string;
+	/** `OWNER/NAME` it was forked from, else null. */
+	parent: string | null;
 }
 export interface GithubWorkflow {
 	id: number;
@@ -120,10 +299,21 @@ export interface GithubRun {
 	createdAt: string;
 	url: string;
 }
+export interface GithubAnnotation {
+	path: string;
+	line: number | null;
+	/** notice, warning, failure. */
+	level: string;
+	title: string;
+	message: string;
+}
 export interface GithubJob {
+	id: number;
 	name: string;
 	status: string;
 	conclusion: string;
+	/** A failed job's annotations (the first five failed jobs). */
+	annotations: GithubAnnotation[];
 }
 export interface GithubRunDetail extends GithubRun {
 	jobs: GithubJob[];
@@ -189,4 +379,24 @@ export interface GithubResults {
 	notification_list: GithubNotification[];
 	notification_read: { ok: true };
 	notification_read_all: { ok: true };
+	pr_state: { ok: true };
+	pr_auto_merge: { ok: true };
+	people: { ok: true };
+	assignable: string[];
+	label_list: GithubLabel[];
+	pr_conversation: GithubPrConversation;
+	thread_reply: { ok: true };
+	thread_resolve: { ok: true };
+	reaction: { ok: true };
+	pr_files_viewed: { id: string; files: Array<{ path: string; state: "VIEWED" | "UNVIEWED" | "DISMISSED" }> };
+	pr_file_viewed: { ok: true };
+	/** Bottom first; empty when the PR stands alone. */
+	pr_stack: GithubStackEntry[];
+	pr_for_branch: GithubBranchPr | null;
+	pr_template: { body: string | null };
+	rate_limit: GithubRateResource[];
+	item_peek: GithubItemPeek;
+	image_upload: { url: string };
+	attachment: { dataUrl: string };
+	pr_diffs: Record<string, string>;
 }

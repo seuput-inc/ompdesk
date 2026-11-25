@@ -28,6 +28,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { CodeBlock as SharedCodeBlock } from "../components/chat/CodeBlock";
+import { LinkPeek } from "../components/chat/LinkPeek";
 import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { SvgBlock } from "../components/chat/SvgBlock";
 import { Checkbox } from "../components/common/Checkbox";
@@ -437,15 +438,18 @@ function MarkdownLink({ href, children, node: _node, ...props }: ComponentPropsW
 	};
 	return (
 		<>
-			<a
-				{...props}
-				href={href}
-				onClick={onClick}
-				onContextMenu={onContextMenu}
-				className="text-[var(--omp-md-link)] underline decoration-[var(--omp-md-link-url)] hover:decoration-[var(--omp-md-link)]"
-			>
-				{children}
-			</a>
+			{/* Hover or keyboard focus shows what the link points to (a GitHub issue or PR, a web page's own words). */}
+			<LinkPeek href={href}>
+				<a
+					{...props}
+					href={href}
+					onClick={onClick}
+					onContextMenu={onContextMenu}
+					className="text-[var(--omp-md-link)] underline decoration-[var(--omp-md-link-url)] hover:decoration-[var(--omp-md-link)]"
+				>
+					{children}
+				</a>
+			</LinkPeek>
 			{linkMenu.menu}
 		</>
 	);

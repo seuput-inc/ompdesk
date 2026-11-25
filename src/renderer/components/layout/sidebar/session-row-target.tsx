@@ -6,6 +6,7 @@
  */
 import { GitBranch, GitCommitHorizontal, MessageCircle, Rocket } from "lucide-react";
 import { type ReactNode, useLayoutEffect, useRef } from "react";
+import type { GithubBranchPr } from "../../../../shared/github";
 import {
 	AGENT_BRANCH_PREFIX,
 	AUTOPILOT_BRANCH_PREFIX,
@@ -28,6 +29,8 @@ export interface SessionRowTarget {
 	artwork: string | null;
 	/** Null while nothing says it (no repository, git not answered). */
 	head: SessionHead | null;
+	/** The repository's main checkout, as the computer that runs the session answered; absent until then. */
+	root?: string;
 }
 
 /**
@@ -53,6 +56,7 @@ export function resolveRowTarget(
 		name: target.repository?.name || fallback.name,
 		artwork: picture?.src ?? null,
 		head: target.head,
+		...(root ? { root } : {}),
 	};
 }
 
@@ -93,6 +97,25 @@ export function headWords(
 		text: t("sidebar.row.detached", { commit: shortCommit(head.commit) }),
 		tip: t("sidebar.row.detachedTip", { commit: head.commit }),
 	};
+}
+
+/** The branch's pull request in words, for the row's tooltip and screen-reader text: number, state and checks. */
+export function branchPrWords(
+	t: (key: string, params?: Record<string, string | number>) => string,
+	pr: GithubBranchPr,
+): string {
+	const state = pr.isDraft && pr.state === "OPEN" ? "draft" : pr.state.toLowerCase();
+	const { failure, pending, success } = pr.checks;
+	const checks =
+		failure > 0
+			? t("sidebar.row.prChecks.failure", { count: failure })
+			: pending > 0
+				? t("sidebar.row.prChecks.pending", { count: pending })
+				: success > 0
+					? t("sidebar.row.prChecks.passing")
+					: null;
+	const words = t("sidebar.row.prTip", { number: pr.number, state: t(`sidebar.row.prState.${state}`) });
+	return checks ? `${words} · ${checks}` : words;
 }
 
 /** The worktree prefixes every agent's and Autopilot's branch shares; the row draws `…/` for them (the tooltip keeps it). */
