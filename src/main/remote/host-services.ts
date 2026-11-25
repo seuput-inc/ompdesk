@@ -73,6 +73,7 @@ import { isApprovalSelect } from "../../shared/tool-approval";
 import { branchEvidence, branchFacts, landingFacts, mergeBranch, removeSafeWorktree } from "../agent-control/branches";
 import { AtomicSaver } from "../atomic-file";
 import type { BackgroundWorkMember } from "../background-work";
+import type { DesktopPresence } from "../presence";
 import type { BridgeConnectResult } from "../bridge-health";
 import { canonicalCwd } from "../canonical-cwd";
 import type { CheckoutMember } from "../checkout-peers";
@@ -316,6 +317,8 @@ export interface HostServicesDeps {
 	mobileWebUrl?: () => string | null;
 	/** Where a device's attached files land (`host.files.upload`): the phones' upload folder, same limits and lifetime. */
 	uploads?: Pick<UploadStore, "store">;
+	/** Whether the person is at each paired computer (`presence.report`; presence.ts), for this computer's phone pushes. */
+	presence?: Pick<DesktopPresence, "report" | "forget">;
 }
 
 /** A call of the omp's that a device answers; `delivered` once a connection was handed it. */
@@ -458,6 +461,7 @@ const OpenParams = z.object({
 });
 const RestartParams = z.object({ rtab: Rtab, cwd: AbsolutePath.optional(), sessionPath: SessionPath.optional() });
 const AdoptCwdParams = z.object({ rtab: Rtab, cwd: AbsolutePath });
+const PresenceReportParams = z.object({ away: z.boolean() });
 const CommandParams = z.object({
 	rtab: Rtab,
 	command: z.object({ type: z.string().min(1) }).passthrough(),
@@ -1430,6 +1434,10 @@ export class LocalHostServices implements HostServices {
 					peer.deviceId,
 					parse(MemoryConclusionPushParams, method, params),
 				);
+			// The device says whether its person is at it: a person there keeps this computer's phones quiet.
+			case "presence.report":
+				this.#deps.presence?.report(peer.deviceId, parse(PresenceReportParams, method, params).away);
+				return null;
 			default:
 				throw codedError("unsupported", `Unknown method ${method}`);
 		}
@@ -1438,6 +1446,7 @@ export class LocalHostServices implements HostServices {
 	disconnected(peer: PeerInfo, conn: HostConnection): void {
 		this.#conns.delete(conn);
 		if (this.#connOf.get(peer.deviceId) === conn) this.#connOf.delete(peer.deviceId);
+		if (this.#connOf.get(peer.deviceId) === undefined) this.#deps.presence?.forget(peer.deviceId);
 		// Nobody is left to read the result.
 		void this.#deps.machine.abortBenchmark(benchCaller(peer.deviceId));
 		void this.#deps.machine.abortModelSetup(benchCaller(peer.deviceId));

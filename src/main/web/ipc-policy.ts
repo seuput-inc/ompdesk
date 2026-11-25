@@ -165,6 +165,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SET_TAB_VIEW]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.REORDER_TABS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.GET_TABS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.TABS_SEEN_SINCE_RUN]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.GET_SESSION_OWNER]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSION_SUMMARIES]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.REMOTE_OPENED_TABS]: { dir: "invoke", permission: "workspace", mode: "pass" },
@@ -235,6 +236,12 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		permission: "device-self",
 		mode: "web",
 		web: "In-page toast or the service worker's notification; the host's OS notification only on request",
+	},
+	[C.SYSTEM_DESKTOP_AWAY]: {
+		dir: "invoke",
+		permission: "device-self",
+		mode: "web",
+		web: "Never asked: a page's own visibility is its presence (the shim answers null)",
 	},
 	[E.TRAY_STATE_PUSH]: {
 		dir: "send",

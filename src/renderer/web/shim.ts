@@ -358,6 +358,7 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 			}
 			return pickPhoneFiles(list);
 		},
+		[C.SYSTEM_DESKTOP_AWAY]: async () => null,
 		[C.SYSTEM_NOTIFY]: async (payload: unknown) => {
 			const { title, body, tabId, kind } = payload as {
 				title: string;

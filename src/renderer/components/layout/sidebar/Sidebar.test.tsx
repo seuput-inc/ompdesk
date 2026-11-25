@@ -16,7 +16,8 @@ import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { SidebarProjects } from "../../../../main/sidebar-projects";
 import { type AgentReviewItem, wrapAgentMessage } from "../../../../shared/agent-control";
 import { codedError } from "../../../../shared/ipc-error-codes";
-import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
+import type { HostView, RemoteState, SessionInfo } from "../../../../shared/ipc-types";
+import { TAILSCALE_HINT_AFTER_MS } from "../../../../shared/link-notice";
 import { type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
 import type { RailPin } from "../../../../shared/sidebar-prefs";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../../../../shared/sidebar-projects";
@@ -4887,6 +4888,27 @@ describe("Sidebar device sections", () => {
 		expect(omp.sessions.list).not.toHaveBeenCalledWith("global", "dev-studio");
 		// Nothing can start there: no dead button takes the name's room in a narrow sidebar.
 		expect(section?.querySelector('[data-sidebar-device-add="dev-studio"]')).toBeNull();
+	});
+
+	it("asks to check Tailscale on a long offline line only while this computer's Tailscale is down", async () => {
+		installWithRemote();
+		seedStores();
+		pairHost("offline");
+		useRemoteStore.setState({ downSince: { "dev-studio": Date.now() - TAILSCALE_HINT_AFTER_MS } });
+		await mount(<Sidebar />);
+		const title = () => container.querySelector("[data-device-offline]")?.getAttribute("title");
+		const setTailnet = async (tailnet: RemoteState["tailnet"]) => {
+			const remote = useRemoteStore.getState().state;
+			if (!remote) throw new Error("no remote state");
+			await act(async () => useRemoteStore.getState().apply({ ...remote, tailnet }));
+		};
+
+		// Tailscale up: the host itself is off, which the line already says.
+		expect(title()).toBe(translate("remote.sidebar.offline"));
+		await setTailnet("not-running");
+		expect(title()).toBe(`${translate("remote.sidebar.offline")} ${translate("remote.sidebar.tailscaleHint")}`);
+		await setTailnet("ready");
+		expect(title()).toBe(translate("remote.sidebar.offline"));
 	});
 
 	it("puts the host's no-project sessions in its Chats section, by the host's own workspace, as the host does", async () => {

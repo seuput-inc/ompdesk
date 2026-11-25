@@ -293,6 +293,8 @@ export const IPC_COMMANDS = {
 	SYSTEM_OPEN_DIALOG: "system:open-dialog",
 	/** Show notification */
 	SYSTEM_NOTIFY: "system:notify",
+	/** Whether the person is away from this computer (presence.ts: locked, or no input for 3 min); null when unknown */
+	SYSTEM_DESKTOP_AWAY: "system:desktop-away",
 	/** Get GUI preferences */
 	PREFS_GET: "prefs:get",
 	/** Set GUI preferences */
@@ -391,6 +393,8 @@ export const IPC_COMMANDS = {
 	REORDER_TABS: "tab:reorder",
 	/** List the calling window's tabs (boot reconciliation) */
 	GET_TABS: "tab:get-all",
+	/** The tabs a person looked at after their last run ended (main's tab-attention.ts), for a page restoring its done marks */
+	TABS_SEEN_SINCE_RUN: "tab:seen-since-run",
 	/** Look up the tab/window currently attached to a session file (F-OWN double-attach guard) */
 	GET_SESSION_OWNER: "tab:get-session-owner",
 	/** Round-trip a draft through the user's $VISUAL/$EDITOR (temp file, exit-0 read-back) */
@@ -688,6 +692,12 @@ export type RuntimeErrorSource =
 	 * `details` the list (local or device), focus/reroot/open, whether it was archived and whether a tab held it.
 	 */
 	| "sidebar"
+	/**
+	 * A finished turn's desktop notification that was not shown (`hooks/use-rpc-events.ts` `notifyRunEnd`; info):
+	 * `message` skipped, `details.reason` why (focus, app-off, setting-off, aborted, retrying, awaiting-connection,
+	 * gone, opened-by-agent, muted), `details.kind` completion or error.
+	 */
+	| "notify"
 	| "unknown";
 
 /** Bounded, serializable renderer/main failure payload written as JSONL. */
@@ -1230,6 +1240,9 @@ export interface IpcStatsFetchPayload {
 
 /** Why a tab notifies: a finished turn, a failed one, or a question waiting for the user. */
 export type IpcNotifyKind = "completion" | "error" | "ask";
+
+/** What became of a desktop notification: shown, left out for a muted project, or the system refuses banners. */
+export type IpcNotifyResult = "shown" | "muted" | "blocked";
 
 export interface IpcNotifyPayload {
 	title: string;

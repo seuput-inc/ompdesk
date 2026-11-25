@@ -5,6 +5,7 @@ import {
 	Archive,
 	ArchiveRestore,
 	BarChart3,
+	BellOff,
 	Bot,
 	CircleHelp,
 	Compass,
@@ -543,6 +544,7 @@ export function Sidebar() {
 		return standIns.length === 0 ? tabs : [...tabs, ...standIns];
 	}, [tabs, remoteOpened]);
 	const pinnedGroups = useSidebarPrefs(s => s.pinnedGroups);
+	const mutedGroups = useSidebarPrefs(s => s.mutedGroups);
 	const groupOrder = useSidebarPrefs(s => s.groupOrder);
 	const sessionOrder = useSidebarPrefs(s => s.sessionOrder);
 	const pinnedSessions = useSidebarPrefs(s => s.pinnedSessions);
@@ -1983,6 +1985,15 @@ export function Sidebar() {
 											data-sidebar-group-pin
 										/>
 									)}
+									{mutedGroups.includes(group.cwd) && (
+										<BellOff
+											aria-label={t("sidebar.muted")}
+											className="size-3 shrink-0 text-(--sc-text-subtle)"
+											data-sidebar-group-muted
+										>
+											<title>{t("sidebar.muted")}</title>
+										</BellOff>
+									)}
 									{summary && <SidebarFoldSummary summary={summary} />}
 								</SidebarFoldButton>
 							)}
@@ -2377,6 +2388,7 @@ export function Sidebar() {
 							items={projectMenuItems({
 								facts: {
 									pinned: pinnedGroups.includes(group.cwd),
+									muted: mutedGroups.includes(group.cwd),
 									canMoveUp: index > 0,
 									canMoveDown: index !== -1 && index < allGroups.length - 1,
 									archivable: archivable.length,
@@ -2394,6 +2406,7 @@ export function Sidebar() {
 									moveUp: then(() => move(index - 1)),
 									moveDown: then(() => move(index + 1)),
 									togglePin: then(() => useSidebarPrefs.getState().toggleGroupPin(group.cwd)),
+									toggleMute: then(() => useSidebarPrefs.getState().toggleGroupMuted(group.cwd)),
 									archiveAll: then(() => setArchived(archivable, true)),
 									remove: then(() => setPendingDelete({ kind: "group", group })),
 								},
@@ -2423,6 +2436,7 @@ export function Sidebar() {
 							tabFocused: targetTab !== undefined && targetTab.id === activeTabId,
 							tabInSplit: targetTab !== undefined && split !== null && splitTabIds(split).includes(targetTab.id),
 							splitShown: split !== null,
+							unread: targetTab?.unreadDone === true,
 							canCloseTab: tabs.length > 1,
 							chat: session.kind === "chat",
 							pinned: pinnedSessions.includes(session.path),
@@ -2442,6 +2456,7 @@ export function Sidebar() {
 												void useTabsStore.getState().splitTab(targetTab.id, placement);
 											})(),
 										unsplit: then(() => void useTabsStore.getState().unsplit(targetTab.id)),
+										markUnread: then(() => useTabsStore.getState().markUnread(targetTab.id)),
 										closeTab: then(() => performTabClose(targetTab)),
 									}
 								: {}),

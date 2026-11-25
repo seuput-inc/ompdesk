@@ -2,6 +2,11 @@
  * The sidebar's project lists (contract `src/shared/sidebar-projects.ts`), one per computer: this computer's
  * (`LOCAL_DEVICE`) and each paired host's own, which the host keeps and pushes. The sidebar paints the last read at
  * its first frame (`lib/last-read.ts`) and the live read replaces it in place.
+ *
+ * A paired host's project removed while its link is down is owed (`OWED_KEY`, kept beside the list): its row stays
+ * gone and the removal is sent when the link comes back, before the list is read again. A removal the host refuses
+ * then brings the row back with a toast; only one the host made leaves the list for good (after Orca's pending
+ * project-removal replay, stablyai/orca `pending-runtime-repo-removal-replay.ts`, MIT; re-implemented).
  */
 import { useEffect } from "react";
 import { create } from "zustand";
@@ -11,12 +16,17 @@ import {
 	type SidebarProjectsRequest,
 	type SidebarProjectsState,
 } from "../../shared/sidebar-projects";
+import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import { translate } from "../lib/i18n";
 import { lastRead, rememberRead } from "../lib/last-read";
 import { LOCAL_DEVICE } from "../lib/sidebar-memory";
 import { toastError } from "./toast";
 
 const SNAPSHOT_KEY = "sidebar-projects";
+/** A host's project folders removed while its link was down, sent when it comes back. */
+const OWED_KEY = "sidebar-projects-owed";
+
+const owedOf = (device: string) => lastRead<string[]>(device, OWED_KEY) ?? [];
 
 interface SidebarProjectsStore {
 	/** By device (`LOCAL_DEVICE` for this computer). */
@@ -53,7 +63,9 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 				if (seed) set(current => ({ lists: { ...current.lists, [keyOf(device)]: seed } }));
 			}
 			// A list that cannot be read keeps what was known; the sidebar still groups by sessions meanwhile.
-			void run(device, { action: "get" }).catch(() => undefined);
+			void replayOwed(device)
+				.then(() => run(device, { action: "get" }))
+				.catch(() => undefined);
 		},
 		add: (device, path) => {
 			if (!path || !window.omp?.sidebarProjects) return;
@@ -70,6 +82,11 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 			try {
 				await run(device, { action: "remove", path });
 			} catch (error) {
+				// The host is out of reach: the removal waits for its link, and the row stays gone meanwhile.
+				if (device !== undefined && ipcErrorCode(error) === "remote_offline") {
+					rememberRead(device, OWED_KEY, [...owedOf(device).filter(entry => entry !== path), path]);
+					return;
+				}
 				apply(device, before);
 				toastError({ title: translate("sidebar.removeProjectFailed"), error });
 			}
@@ -77,6 +94,25 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 		reset: () => set({ lists: {} }),
 	};
 });
+
+/** Send a host the removals it is owed, one by one; a refused one leaves the owed list and the next read shows it. */
+async function replayOwed(device: string | undefined): Promise<void> {
+	if (device === undefined) return;
+	for (const path of owedOf(device)) {
+		try {
+			await window.omp.sidebarProjects.command({ action: "remove", path }, device);
+		} catch (error) {
+			// Still out of reach: it stays owed for the next time the link comes up.
+			if (ipcErrorCode(error) === "remote_offline") return;
+			toastError({ title: translate("sidebar.removeProjectFailed"), error });
+		}
+		rememberRead(
+			device,
+			OWED_KEY,
+			owedOf(device).filter(entry => entry !== path),
+		);
+	}
+}
 
 /** One subscription to every computer's pushed list while any sidebar list is mounted. */
 let followers = 0;

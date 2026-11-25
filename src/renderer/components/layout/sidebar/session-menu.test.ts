@@ -12,6 +12,7 @@ const stored: SessionMenuFacts = {
 	tabInSplit: false,
 	splitShown: false,
 	canCloseTab: true,
+	unread: false,
 	chat: false,
 	pinned: false,
 	archived: false,
@@ -185,5 +186,21 @@ describe("sessionMenuItems", () => {
 		expect(ids({ hasTab: true, tabFocused: true })).not.toContain("session-split-right");
 		expect(ids({ hasTab: true, tabInSplit: true, splitShown: true })).not.toContain("session-split-right");
 		expect(ids({ hasTab: true, canCloseTab: false })).not.toContain("session-close-tab");
+	});
+
+	it("offers Mark as unread only for a tab out of view that carries no done mark", () => {
+		const markUnread = vi.fn();
+		const marking = { ...every, markUnread };
+		const item = build({ hasTab: true }, marking).find(entry => entry.id === "session-mark-unread");
+		expect(item?.label).toBe("sidebar.menu.markUnread");
+		item?.onSelect();
+		expect(markUnread).toHaveBeenCalledOnce();
+		for (const facts of [
+			{ hasTab: false },
+			{ tabFocused: true },
+			{ tabInSplit: true, splitShown: true },
+			{ unread: true },
+		])
+			expect(ids({ hasTab: true, ...facts }, marking)).not.toContain("session-mark-unread");
 	});
 });

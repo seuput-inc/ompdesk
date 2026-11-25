@@ -67,6 +67,7 @@ import type {
 	IpcModelSetupRunResult,
 	IpcModelWaitTogether,
 	IpcNotifyKind,
+	IpcNotifyResult,
 	IpcNotifyPayload,
 	IpcOpenExtensionRequest,
 	IpcOpenPathResult,
@@ -585,6 +586,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 
 		tabs: {
 			list: () => transport.invoke(IPC_COMMANDS.GET_TABS) as Promise<IpcTabInfo[]>,
+			seenSinceRun: () => transport.invoke(IPC_COMMANDS.TABS_SEEN_SINCE_RUN) as Promise<string[]>,
 			spawn: (payload: IpcSpawnTabPayload) =>
 				transport.invoke(IPC_COMMANDS.SPAWN_TAB, payload) as Promise<IpcSpawnTabResult | null>,
 			close: (tabId: string) => transport.invoke(IPC_COMMANDS.CLOSE_TAB, { tabId }) as Promise<boolean>,
@@ -689,9 +691,16 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				filters?: { name: string; extensions: string[] }[],
 				options?: { directory?: boolean; title?: string; buttonLabel?: string },
 			) => transport.invoke(IPC_COMMANDS.SYSTEM_OPEN_DIALOG, filters, options),
-			notify: (title: string, body?: string, tabId?: string, kind?: IpcNotifyKind) => {
-				transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY, { title, body, tabId, kind } satisfies IpcNotifyPayload);
-			},
+			/** Resolves what became of it: undefined from a page (which shows its own) or an older main. */
+			notify: (title: string, body?: string, tabId?: string, kind?: IpcNotifyKind) =>
+				transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY, {
+					title,
+					body,
+					tabId,
+					kind,
+				} satisfies IpcNotifyPayload) as Promise<IpcNotifyResult | undefined>,
+			/** Whether the person is away from this computer; null when it cannot be told (a page, an error). */
+			desktopAway: () => transport.invoke(IPC_COMMANDS.SYSTEM_DESKTOP_AWAY) as Promise<boolean | null>,
 		},
 
 		prefs: {

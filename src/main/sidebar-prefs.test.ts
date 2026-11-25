@@ -51,6 +51,16 @@ describe("updateSidebarPrefs", () => {
 		expect(r.stored()).not.toHaveProperty("grouping");
 	});
 
+	it("mutes and unmutes a project, each change setting the flag, never toggling it", () => {
+		const r = rig({ mutedGroups: ["/work/a"] });
+		r.send({ op: "set-group-muted", cwd: "/work/b", muted: true });
+		r.send({ op: "set-group-muted", cwd: "/work/b", muted: true });
+		expect(r.stored()).toMatchObject({ mutedGroups: ["/work/a", "/work/b"] });
+		r.send({ op: "set-group-muted", cwd: "/work/a", muted: false });
+		expect(r.stored()).toMatchObject({ mutedGroups: ["/work/b"] });
+		expect(r.writes).toHaveLength(2);
+	});
+
 	it("writes and logs nothing for a change that changes nothing", () => {
 		const r = rig({ pinnedSessions: ["/s/1"], archivedSessions: ["s1"] });
 		r.send({ op: "set-session-pinned", path: "/s/1", pinned: true });

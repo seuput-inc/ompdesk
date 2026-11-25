@@ -41,6 +41,7 @@ interface SidebarPrefsStore extends SidebarPrefs {
 	hydrated: boolean;
 	hydrate: () => Promise<void>;
 	toggleGroupPin: (cwd: string) => Promise<void>;
+	toggleGroupMuted: (cwd: string) => Promise<void>;
 	toggleSessionPin: (path: string) => Promise<void>;
 	toggleAgentHidden: (path: string) => Promise<void>;
 	setGroupAlias: (cwd: string, alias: string | null) => Promise<void>;
@@ -159,6 +160,13 @@ export const useSidebarPrefs = create<SidebarPrefsStore>()((set, get) => {
 				op: "set-group-pinned",
 				cwd,
 				pinned: !state.pinnedGroups.includes(cwd),
+			})),
+
+		toggleGroupMuted: cwd =>
+			write("sidebar.muteFailed", state => ({
+				op: "set-group-muted",
+				cwd,
+				muted: !state.mutedGroups.includes(cwd),
 			})),
 
 		toggleSessionPin: path =>

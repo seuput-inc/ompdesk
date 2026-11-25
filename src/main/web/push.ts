@@ -1,10 +1,11 @@
 /**
  * One Web Push message to one subscription: the core signs it with the host's VAPID key, encrypts it for the
  * subscription (RFC 8291) and POSTs it (`crates/core/src/web/push.rs`), behind an injectable transport so tests put a
- * fake push service where the network would be. A single attempt, no backoff: a 404/410 means the browser dropped
- * the subscription (the caller forgets it), any other failure is logged and the notice is lost (a push is a courtesy;
- * the page shows the state when opened).
+ * fake push service where the network would be. A send that got no answer, a 5xx or a 429 is tried once more after
+ * 2 s; a 404/410 means the browser dropped the subscription (the caller forgets it); any other failure is logged and
+ * the notice is lost (a push is a courtesy; the page shows the state when opened).
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import type { WebPushPayload, WebPushSubscriptionJson } from "../../shared/web-push";
 import { core } from "../core/process";
 import { loadVapid } from "./vapid-store";
@@ -56,6 +57,7 @@ export function coreTransport(userData: string): PushTransport {
 /** A push service accepts up to 4096 bytes after encryption (RFC 8291 spends 103 on its header and tag). */
 export const PUSH_PAYLOAD_MAX_BYTES = 3800;
 const SEND_TIMEOUT_MS = 10_000;
+export const PUSH_RETRY_DELAY_MS = 2_000;
 
 export type PushResult = "sent" | "gone" | "failed";
 
@@ -63,17 +65,24 @@ export interface PushSenderDeps {
 	/** The folder the core keeps the VAPID keypair in (`web-push.json`). */
 	userData: string;
 	transport?: PushTransport | undefined;
+	/** The pause before the one retry; tests resolve it at once. */
+	wait?: ((ms: number) => Promise<void>) | undefined;
 	log?: ((message: string) => void) | undefined;
 }
 
 export class PushSender {
 	readonly #deps: PushSenderDeps;
 	readonly #transport: PushTransport;
+	readonly #wait: (ms: number) => Promise<void>;
 	#publicKey: string | null = null;
+	/** The newest send per subscription and tag, so a retry never lands over a newer push (a `clear` undone). */
+	readonly #latest = new Map<string, number>();
+	#sends = 0;
 
 	constructor(deps: PushSenderDeps) {
 		this.#deps = deps;
 		this.#transport = deps.transport ?? coreTransport(deps.userData);
+		this.#wait = deps.wait ?? sleep;
 	}
 
 	/**
@@ -104,18 +113,43 @@ export class PushSender {
 			this.#deps.log?.(`web push not sent: payload of ${Buffer.byteLength(body)} bytes is over the limit`);
 			return "failed";
 		}
+		const key = `${subscription.endpoint}\n${payload.tag}`;
+		const mine = ++this.#sends;
+		this.#latest.set(key, mine);
+		try {
+			let answer = await this.#attempt(subscription, body, options);
+			// No answer (network, TLS, timeout), the push service's own fault or its rate limit: one more try.
+			if (answer instanceof Error || answer >= 500 || answer === 429) {
+				await this.#wait(PUSH_RETRY_DELAY_MS);
+				if (this.#latest.get(key) !== mine) {
+					this.#deps.log?.("web push retry dropped: a newer push with its tag went out");
+					return "failed";
+				}
+				answer = await this.#attempt(subscription, body, options);
+			}
+			if (answer instanceof Error) {
+				this.#deps.log?.(`web push failed: ${answer.message}`);
+				return "failed";
+			}
+			if (answer >= 200 && answer < 300) return "sent";
+			if (answer === 404 || answer === 410) return "gone";
+			this.#deps.log?.(`web push refused with status ${answer}`);
+			return "failed";
+		} finally {
+			if (this.#latest.get(key) === mine) this.#latest.delete(key);
+		}
+	}
+
+	/** One POST: the push service's status, or the fault when no answer came. */
+	async #attempt(subscription: WebPushSubscriptionJson, body: string, options: PushOptions): Promise<number | Error> {
 		try {
 			const { statusCode } = await this.#transport.send(subscription, body, {
 				...options,
 				timeoutMs: SEND_TIMEOUT_MS,
 			});
-			if (statusCode >= 200 && statusCode < 300) return "sent";
-			if (statusCode === 404 || statusCode === 410) return "gone";
-			this.#deps.log?.(`web push refused with status ${statusCode}`);
-			return "failed";
+			return statusCode;
 		} catch (error) {
-			this.#deps.log?.(`web push failed: ${error instanceof Error ? error.message : String(error)}`);
-			return "failed";
+			return error instanceof Error ? error : new Error(String(error));
 		}
 	}
 }

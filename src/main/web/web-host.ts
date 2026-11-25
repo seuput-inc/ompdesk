@@ -98,6 +98,10 @@ export interface WebHostDeps {
 	language: () => UiLanguage;
 	/** The schedule service that answers `POST /hooks/<id>` (routine webhooks); read per call, it is made after the host. */
 	hooks?: WebServerDeps["hooks"] | undefined;
+	/** False while the person is at a desktop (presence.ts): phones are not pushed then. */
+	desktopAway?: () => boolean | undefined;
+	/** The tab's project has its notifications muted: phones hear nothing of it. */
+	notifyMuted?: (tabId: string) => boolean;
 }
 
 const DeviceId = z.string().min(1).max(128);
@@ -187,6 +191,8 @@ export class WebHost {
 			language: deps.language,
 			setTimer: deps.pushTimers?.setTimer ?? ((fn, ms) => setTimeout(fn, ms).unref()),
 			clearTimer: deps.pushTimers?.clearTimer ?? (handle => clearTimeout(handle as NodeJS.Timeout)),
+			...(deps.desktopAway ? { desktopAway: deps.desktopAway } : {}),
+			...(deps.notifyMuted ? { muted: deps.notifyMuted } : {}),
 		});
 		const policy: RequestPolicy = {
 			host: "127.0.0.1",
@@ -305,6 +311,16 @@ export class WebHost {
 	/** A tab's notice no turn event carries (an Autopilot run's end, an agent's `ompdesk_notify`): paired phones hear it while the server runs. */
 	tabNotice(tabId: string, notice: { kind: "completion" | "error"; title: string; body: string }): void {
 		if (this.server.port !== null) this.notifier.notice(tabId, notice);
+	}
+
+	/** The person looked at the tab: its banners on the phones go (a `clear` push for each). */
+	tabSeen(tabId: string): void {
+		this.notifier.seen(tabId);
+	}
+
+	/** A paired page's window whose page is in the foreground: the person looks at what it shows. */
+	pageVisible(win: ClientWindow): boolean {
+		return win instanceof WebClientWindow && this.router.isDeviceVisible(win.deviceId);
 	}
 
 	/** The device a web window's prompts come from, as its name stands now; null for any other window. */

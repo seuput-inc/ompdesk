@@ -41,7 +41,7 @@ import { sessionForkOrigin } from "../../lib/session-fork";
 import { combinedTitle } from "../../lib/session-title";
 import { useTabRpc } from "../../lib/tab-rpc";
 import { useMessagesStore } from "../../stores/messages";
-import { useHostLinkLost, useHostView, useRemoteStore } from "../../stores/remote";
+import { useHostLinkLost, useHostView, useRemoteStore, useTailscaleHint } from "../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../stores/session-runtime-context";
 import { useSidebarPrefs } from "../../stores/sidebar-prefs";
@@ -226,6 +226,7 @@ export function TitleBar() {
 	const unpaired = device !== undefined && remoteLoaded && host === undefined;
 	const reconnecting = host !== undefined && host.state !== "online";
 	const hostLinkLost = useHostLinkLost(device);
+	const tailscaleHint = useTailscaleHint(device);
 	const webLinkLost = useWebLinkLost();
 	const statsMessageCount = useMessagesStore(s => s.messages.length);
 	const sidebarVisible = useUiStore(s => s.sidebarVisible);
@@ -574,7 +575,7 @@ export function TitleBar() {
 				data-remote-reconnecting={hostOffline ? device : undefined}
 				aria-label={statusLabel}
 				role="status"
-				title={statusLabel}
+				title={hostOffline && tailscaleHint ? `${statusLabel} ${t("remote.sidebar.tailscaleHint")}` : statusLabel}
 			>
 				<StatusPill label={statusLabel} tone={tone} />
 			</div>

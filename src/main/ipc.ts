@@ -12,7 +12,7 @@
 import { existsSync, promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { app, BrowserWindow, clipboard, dialog, type Notification, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, Notification, screen, shell } from "electron";
 import { AUTO_TITLE_EVOLVE_PREF, AUTO_TITLE_PREF } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { DELEGATION_PREF, isDelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
 import { JUDGE_ASSIST_PREF, judgeAssistEnabled } from "../../resources/gui-bridge/modes/judge-assist-contracts";
@@ -76,6 +76,7 @@ import type {
 	IpcGetSessionOwnerPayload,
 	IpcModelSetupRunResult,
 	IpcNotifyPayload,
+	IpcNotifyResult,
 	IpcOpenPathResult,
 	IpcPrefsChangedPayload,
 	IpcPrefsGetPayload,
@@ -171,9 +172,10 @@ import type { MailAccounts } from "./mail-accounts";
 import type { MediaStreams } from "./media-stream";
 import { createMenu } from "./menu";
 import { modelsPath } from "./models-config";
-import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notification-batch";
+import { type NoticeKind, NotificationBatcher, type ShownInfo, type ShownNotice } from "./notification-batch";
 import { createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
+import { TabAttention } from "./tab-attention";
 import { openLocalPath } from "./open-path";
 import { registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
@@ -326,6 +328,14 @@ export interface IpcDeps {
 	checkoutFilesRef: { current: ((sidecar: object) => void) | null };
 	/** How a tab whose omp came up with an autopilot run `running` goes on (TurnResume's `relaunchContinuation`). */
 	relaunchContinuation: (tabId: string) => RelaunchContinuation;
+	/** The tab's project has its notifications muted (its project menu): no banner, no phone push. */
+	notifyMuted?: (tabId: string) => boolean;
+	/** The person looked at the tab: the paired phones' banners about it are retracted (`WebHost.tabSeen`). */
+	onTabSeen?: (tabId: string) => void;
+	/** A paired page's window is in the foreground (`WebHost.pageVisible`). */
+	pageVisible?: (win: ClientWindow) => boolean;
+	/** Whether the person is away from this computer (presence.ts `readDesktopAway`). */
+	desktopAway?: () => boolean | undefined;
 }
 
 /**
@@ -447,16 +457,33 @@ const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "steer", "follow_
 const liveNotifications = new Set<Notification>();
 /** Windows whose close already cancels their pending notification summary. */
 const notifyBatchedWindows = new Set<number>();
+/** The banners about each tab, closed once the person looks at it; when it was looked at (tab-attention.ts). */
+const tabAttention = new TabAttention();
+/**
+ * The system refused the last banner (Windows reports `failed`; macOS reports nothing, Electron has no read of its
+ * permission): the next notify answers `blocked`, and the window says so once.
+ */
+let bannersFailing = false;
 
-/** One OS notification; one about a tab switches to it on click. */
-function showNotification(windowId: number, notice: ShownNotice): { close: () => void } {
+/** One OS notification; one about a tab switches to it on click. A lone banner about a tab closes once it is seen. */
+function showNotification(windowId: number, notice: ShownNotice, info?: ShownInfo | null): { close: () => void } {
 	const win = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.id === windowId);
 	const notification = appNotification({ title: notice.title, body: notice.body });
 	const { tabId } = notice;
+	notification.on("failed", () => {
+		bannersFailing = true;
+	});
+	notification.on("show", () => {
+		bannersFailing = false;
+	});
 	if (win && tabId) {
 		// Held until clicked or dismissed: a collected Notification drops its click.
 		liveNotifications.add(notification);
-		const release = () => liveNotifications.delete(notification);
+		const forget = info?.summary ? () => undefined : tabAttention.banner(tabId, notification);
+		const release = () => {
+			liveNotifications.delete(notification);
+			forget();
+		};
 		notification.on("close", release);
 		notification.on("click", () => {
 			release();
@@ -520,6 +547,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	/** The same for a window's model setup research. */
 	const remoteModelSetups = new Map<number, string>();
 	const { sidecarPool, sessionIndex, logWatcher, windowManager, remoteDevices } = deps;
+	/** The person looked at the tab: its banners close here and on the phones, and a pending summary forgets it. */
+	const tabSeen = (tabId: string) => {
+		tabAttention.seen(tabId);
+		for (const winId of notifyBatchedWindows) notificationBatcher.forget(winId, tabId);
+		deps.onTabSeen?.(tabId);
+	};
 	const prefsStore = new SafeStore<PrefsSchema>({ name: "prefs" });
 	const remoteMachine = { request: remoteDevices.request.bind(remoteDevices), statsText: mainT };
 	/**
@@ -1721,25 +1754,51 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return Object.fromEntries(folders.map((cwd, index) => [cwd, origins[index] ?? null]));
 	});
 
+	/**
+	 * The person looks at the window's shown tabs: a focused, unminimized desktop window, or a paired page in the
+	 * foreground. Their banners close, on this computer and the phones (tab-attention.ts, web-push-notifier.ts).
+	 */
+	const lookedAt = (caller: IpcCaller, tabIds: readonly string[]) => {
+		const win = caller.browserWindow;
+		const looking = win
+			? win.isFocused() && !win.isMinimized()
+			: caller.win !== null && deps.pageVisible?.(caller.win) === true;
+		if (looking) for (const tabId of tabIds) tabSeen(tabId);
+	};
 	// Move full event forwarding to the window's active tab (listeners move,
 	// never duplicate). The renderer calls this before hydrateSession().
 	ipc.handle(IPC_COMMANDS.SET_ACTIVE_TAB, (caller, payload: IpcSetActiveTabPayload) => {
 		const win = caller.win;
 		if (!win || typeof payload?.tabId !== "string") return false;
-		return deps.sidecarPool.setActiveTab(win, payload.tabId);
+		const switched = deps.sidecarPool.setActiveTab(win, payload.tabId);
+		if (switched) lookedAt(caller, [payload.tabId]);
+		return switched;
 	});
 
 	ipc.handle(IPC_COMMANDS.SET_TAB_VIEW, (caller, payload: IpcSetTabViewPayload) => {
 		const win = caller.win;
 		if (!win || typeof payload?.focusedTabId !== "string" || !Array.isArray(payload.visibleTabIds)) return false;
-		return deps.sidecarPool.setTabView(
+		const shown = deps.sidecarPool.setTabView(
 			win,
 			payload.focusedTabId,
 			payload.visibleTabIds,
 			payload.split,
 			payload.rememberedSplits,
 		);
+		if (shown) lookedAt(caller, payload.visibleTabIds);
+		return shown;
 	});
+	// Coming back to a window is looking at the tab it shows.
+	const onWindowFocus = (_event: unknown, win: BrowserWindow) => {
+		const tabId = deps.sidecarPool.activeTabForWindow(win);
+		if (tabId) tabSeen(tabId);
+	};
+	app.on("browser-window-focus", onWindowFocus);
+	deps.sidecarPool.observeTabs(activity => {
+		if (activity.type === "idle" && activity.outcome) tabAttention.settled(activity.tabId);
+		else if (activity.type === "released") tabAttention.released(activity.tabId);
+	});
+	ipc.handle(IPC_COMMANDS.TABS_SEEN_SINCE_RUN, () => tabAttention.seenSinceRun());
 
 	ipc.handle(IPC_COMMANDS.REORDER_TABS, (caller, payload: { tabIds?: unknown }) => {
 		const win = caller.win;
@@ -1991,7 +2050,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			});
 		},
 	});
-	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, (caller, payload: IpcNotifyPayload) => notifyHandler(caller, payload));
+	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, async (caller, payload: IpcNotifyPayload): Promise<IpcNotifyResult> => {
+		if (typeof payload?.tabId === "string" && deps.notifyMuted?.(payload.tabId)) return "muted";
+		// No banner can show at all; the window says so once and plays its sound.
+		if (!Notification.isSupported()) return "blocked";
+		const failing = bannersFailing;
+		await notifyHandler(caller, payload);
+		return failing ? "blocked" : "shown";
+	});
+	ipc.handle(IPC_COMMANDS.SYSTEM_DESKTOP_AWAY, () => deps.desktopAway?.() ?? null);
 
 	// Preferences
 	ipc.handle(IPC_COMMANDS.PREFS_GET, (_caller, payload: IpcPrefsGetPayload) => {

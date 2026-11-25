@@ -24,6 +24,7 @@ const path = z.string().min(1);
 /** What a page may send, checked here: a page is not trusted to send a well-formed change. */
 const SidebarChangeSchema = z.discriminatedUnion("op", [
 	z.object({ op: z.literal("set-group-pinned"), cwd: path, pinned: z.boolean() }),
+	z.object({ op: z.literal("set-group-muted"), cwd: path, muted: z.boolean() }),
 	z.object({ op: z.literal("set-session-pinned"), path, pinned: z.boolean() }),
 	z.object({ op: z.literal("set-agent-hidden"), path, hidden: z.boolean() }),
 	z.object({ op: z.literal("set-group-alias"), cwd: path, alias: z.string().nullable() }),

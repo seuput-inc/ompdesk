@@ -24,6 +24,11 @@ export interface WebPushPayload {
 	tag: string;
 	/** Silent: shown without sound/vibration (a replaced or retracted one). */
 	silent?: boolean;
+	/**
+	 * The app icon's count: tabs on the host that need the person (open asks). The worker sets it (0 clears it) for a
+	 * shown push and a `clear` alike; absent (an older host) leaves the badge as it is.
+	 */
+	badge?: number;
 }
 
 /** A browser's `PushSubscription.toJSON()`, as far as the host needs it. */

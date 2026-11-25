@@ -1,7 +1,7 @@
 /**
  * What the sidebar remembers, saved as one JSON blob under the `sidebar` prefs key: pinned projects and sessions,
  * project names, the dragged project and session order, archived sessions, the footer shortcuts, the workspace MRU
- * clock and the sessions hidden from other agents.
+ * clock, the sessions hidden from other agents and the projects whose notifications are muted.
  *
  * The stored value in main is the only owner of the blob. A window or a paired page never writes the whole of it
  * from its own copy (a copy read earlier would put an older order back over a newer one): it sends one
@@ -51,6 +51,8 @@ export interface SidebarPrefs {
 	railPins: RailPin[];
 	/** Session files hidden from other agents (`ompdesk_*` tools refuse them). */
 	agentHidden: string[];
+	/** This computer's projects (cwds) whose notifications are muted; a folder under one or a worktree of one is too (`isMutedFolder`). */
+	mutedGroups: string[];
 }
 
 /**
@@ -59,6 +61,7 @@ export interface SidebarPrefs {
  */
 export type SidebarChange =
 	| { op: "set-group-pinned"; cwd: string; pinned: boolean }
+	| { op: "set-group-muted"; cwd: string; muted: boolean }
 	| { op: "set-session-pinned"; path: string; pinned: boolean }
 	| { op: "set-agent-hidden"; path: string; hidden: boolean }
 	/** An empty or absent alias shows the folder's own name again. */
@@ -129,7 +132,31 @@ export function readSidebarPrefs(value: unknown): SidebarPrefs {
 		archivedSessions: stringList(blob.archivedSessions),
 		railPins: validRailPins(blob.railPins),
 		agentHidden: stringList(blob.agentHidden),
+		mutedGroups: stringList(blob.mutedGroups),
 	};
+}
+
+/** The muted projects of the raw stored blob, for main's notifiers. */
+export function mutedGroupsOf(blob: unknown): string[] {
+	return stringList(blob && typeof blob === "object" ? (blob as Record<string, unknown>).mutedGroups : undefined);
+}
+
+/**
+ * Whether a session folder's notifications are muted: its project (`worktrees` maps a linked worktree to the project it
+ * was cut from) is a muted folder or lies under one. `/a/bc` is not under `/a/b`; both separators count.
+ */
+export function isMutedFolder(
+	muted: readonly string[],
+	worktrees: Readonly<Record<string, string>>,
+	cwd: string,
+): boolean {
+	const project = worktrees[cwd] ?? cwd;
+	return muted.some(
+		folder =>
+			project === folder ||
+			(project.startsWith(folder) &&
+				(/[\\/]$/.test(folder) || project[folder.length] === "/" || project[folder.length] === "\\")),
+	);
 }
 
 function nextTimestamp(map: Record<string, number>, now: number): number {
@@ -157,7 +184,7 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 	return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
-type ListField = "pinnedGroups" | "pinnedSessions" | "groupOrder" | "archivedSessions" | "agentHidden";
+type ListField = "pinnedGroups" | "pinnedSessions" | "groupOrder" | "archivedSessions" | "agentHidden" | "mutedGroups";
 
 /** Empty when the list already holds `next`, so a change that changes nothing writes nothing. */
 function listPatch(state: SidebarPrefs, field: ListField, next: string[]): Partial<SidebarPrefs> {
@@ -176,6 +203,8 @@ export function sidebarPatch(
 	switch (change.op) {
 		case "set-group-pinned":
 			return listPatch(state, "pinnedGroups", withItem(state.pinnedGroups, change.cwd, change.pinned));
+		case "set-group-muted":
+			return listPatch(state, "mutedGroups", withItem(state.mutedGroups, change.cwd, change.muted));
 		case "set-session-pinned":
 			return listPatch(state, "pinnedSessions", withItem(state.pinnedSessions, change.path, change.pinned));
 		case "set-agent-hidden":

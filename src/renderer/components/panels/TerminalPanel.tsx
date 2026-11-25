@@ -22,6 +22,7 @@ import {
 import { currentShellMode, useCompactShell, useShellInput } from "../../hooks/use-shell-mode";
 import { cx } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import { markTabOnBell } from "../../lib/terminal-bell";
 import {
 	applyModifiers,
 	clampFontScale,
@@ -97,8 +98,8 @@ export interface TerminalMount {
 		| "dispose"
 		| "attachCustomKeyEventHandler"
 	> &
-		/** xterm always has them; a test double without one never paints predictions or draws another viewer's size. */
-		Partial<Pick<Terminal, "buffer" | "resize">>;
+		/** xterm always has them; a test double without one never paints predictions, draws another viewer's size or rings. */
+		Partial<Pick<Terminal, "buffer" | "resize" | "onBell">>;
 	fit(): void;
 }
 export async function mountTerminal(element: HTMLElement): Promise<TerminalMount> {
@@ -196,6 +197,7 @@ export function TerminalViewport({
 				echo?.input(data);
 				void request({ action: "write", id, data: latest.current.transform?.(data) ?? data });
 			});
+			const bell = view.terminal.onBell?.(() => markTabOnBell(tabId));
 			view.terminal.attachCustomKeyEventHandler(event => {
 				if (event.type !== "keydown") return true;
 				const copy =
@@ -300,6 +302,7 @@ export function TerminalViewport({
 				observer.disconnect();
 				theme.disconnect();
 				input.dispose();
+				bell?.dispose();
 				echo?.dispose();
 				view.terminal.dispose();
 				if (handle.current === view) handle.current = null;

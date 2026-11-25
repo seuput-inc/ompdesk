@@ -5,10 +5,10 @@
  * list supports but this row cannot take right now is disabled with its reason (Move to project… while a tab holds
  * the session).
  *
- * Groups, each set apart: open and view (split, new window, the open tab's split and close) · edit (rename, pin,
- * move up and down, move to project, archive, hide from agents) · show in folder · diagnostics (one item; Option/Alt
- * while choosing it saves the anonymized bundle) · delete, last. Clicking a row already opens it, so the menu has no
- * "Open" or "Open in new tab".
+ * Groups, each set apart: open and view (split, new window, the open tab's split, mark as unread and close) · edit
+ * (rename, pin, move up and down, move to project, archive, hide from agents) · show in folder · diagnostics (one
+ * item; Option/Alt while choosing it saves the anonymized bundle) · delete, last. Clicking a row already opens it, so
+ * the menu has no "Open" or "Open in new tab".
  */
 import {
 	Archive,
@@ -22,6 +22,7 @@ import {
 	FileArchive,
 	FolderInput,
 	FolderSearch,
+	MailCheck,
 	PanelRightClose,
 	Pencil,
 	Pin,
@@ -47,6 +48,8 @@ export interface SessionMenuFacts {
 	tabInSplit: boolean;
 	/** A split is on screen. */
 	splitShown: boolean;
+	/** That tab carries the done mark (`unreadDone`). */
+	unread: boolean;
 	/** Closing the tab leaves another one in the window. */
 	canCloseTab: boolean;
 	/** A chat: it lives in no project, so it cannot move to one. */
@@ -66,6 +69,8 @@ export interface SessionMenuActions {
 	/** The open tab, split in beside the focused one. */
 	splitTab?: (placement: "right" | "bottom") => void;
 	unsplit?: () => void;
+	/** Gives the open tab the done mark again, as if it finished unseen. */
+	markUnread?: () => void;
 	closeTab?: () => void;
 	rename?: () => void;
 	/** Pins it, or lets it go when pinned. */
@@ -139,6 +144,14 @@ export function sessionMenuItems({
 				label: t("tabs.menu.removeSplit"),
 				icon: PanelRightClose,
 				onSelect: unsplit,
+			});
+		// A tab on screen is read the moment it is marked, so only one out of view takes the mark.
+		if (actions.markUnread && !facts.tabFocused && !facts.tabInSplit && !facts.unread)
+			view.push({
+				id: "session-mark-unread",
+				label: t("sidebar.menu.markUnread"),
+				icon: MailCheck,
+				onSelect: actions.markUnread,
 			});
 		if (closeTab && facts.canCloseTab)
 			view.push({

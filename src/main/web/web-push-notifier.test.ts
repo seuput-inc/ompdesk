@@ -178,6 +178,7 @@ describe("completion", () => {
 					body: "Summary Fixed the parser.",
 					tabId: "t1",
 					tag: "tab:t1",
+					badge: 0,
 				},
 				options: { ttl: 3600, urgency: "normal" },
 			},
@@ -286,7 +287,15 @@ describe("asks", () => {
 		expect(r.sent).toEqual([
 			{
 				deviceId: id,
-				payload: { v: 1, kind: "ask", title: "Deploy", body: "Run the migration?", tabId: "t1", tag: "tab:t1" },
+				payload: {
+					v: 1,
+					kind: "ask",
+					title: "Deploy",
+					body: "Run the migration?",
+					tabId: "t1",
+					tag: "tab:t1",
+					badge: 1,
+				},
 				options: { ttl: 6 * 60 * 60, urgency: "high" },
 			},
 		]);
@@ -313,7 +322,7 @@ describe("asks", () => {
 		r.notifier.handle({ type: "askClosed", tabId: "t1", requestId: "q1" });
 		expect(r.sent.at(-1)).toEqual({
 			deviceId: id,
-			payload: { v: 1, kind: "clear", title: "", body: "", tabId: "t1", tag: "tab:t1", silent: true },
+			payload: { v: 1, kind: "clear", title: "", body: "", tabId: "t1", tag: "tab:t1", silent: true, badge: 0 },
 			options: { ttl: 120, urgency: "normal" },
 		});
 		// Closed once: a second close says nothing.
@@ -434,8 +443,8 @@ describe("who is told", () => {
 		r.notifier.handle({ type: "ask", tabId: "t1", requestId: "q1", text: "Drop users?" });
 		const forPrivate = r.sent.filter(item => item.deviceId === id).map(item => item.payload);
 		expect(forPrivate).toEqual([
-			{ v: 1, kind: "completion", title: "A task finished", body: "", tabId: "t1", tag: "tab:t1" },
-			{ v: 1, kind: "ask", title: "A task needs you", body: "", tabId: "t1", tag: "tab:t1" },
+			{ v: 1, kind: "completion", title: "A task finished", body: "", tabId: "t1", tag: "tab:t1", badge: 0 },
+			{ v: 1, kind: "ask", title: "A task needs you", body: "", tabId: "t1", tag: "tab:t1", badge: 1 },
 		]);
 		expect(JSON.stringify(forPrivate)).not.toMatch(/Secret|production|users/);
 		expect(r.sent.find(item => item.deviceId === open)?.payload.title).toBe("Secret migration");
@@ -476,6 +485,7 @@ describe("batching (notification-batch.ts)", () => {
 				body: "Tab c, Tab b, Tab a",
 				tag: "tab:a",
 				silent: true,
+				badge: 0,
 			},
 			options: { ttl: 3600, urgency: "normal" },
 		});

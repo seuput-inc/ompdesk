@@ -41,16 +41,32 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("PushSender", () => {
-	function sender(statusCode: number | Error, log: string[] = []) {
+	/** A fake push service answering `answers` in turn (the last one repeats); the retry's pause is recorded, not waited. */
+	function sender(
+		answers: number | Error | readonly (number | Error)[],
+		log: string[] = [],
+		beforeRetry?: () => Promise<void>,
+	) {
+		const queue = Array.isArray(answers) ? [...answers] : [answers];
 		const calls: Parameters<PushTransport["send"]>[] = [];
+		const waits: number[] = [];
 		const transport: PushTransport = {
 			send: async (...args) => {
 				calls.push(args);
-				if (statusCode instanceof Error) throw statusCode;
-				return { statusCode };
+				const answer = (queue.length > 1 ? queue.shift() : queue[0]) as number | Error;
+				if (answer instanceof Error) throw answer;
+				return { statusCode: answer };
 			},
 		};
-		return { push: new PushSender({ userData: dir, transport, log: message => log.push(message) }), calls };
+		const wait = async (ms: number) => {
+			waits.push(ms);
+			await beforeRetry?.();
+		};
+		return {
+			push: new PushSender({ userData: dir, transport, wait, log: message => log.push(message) }),
+			calls,
+			waits,
+		};
 	}
 
 	it("sends the payload as JSON with the TTL and the urgency, and tells the public key the core signs with", async () => {
@@ -66,31 +82,74 @@ describe("PushSender", () => {
 		expect(sentOptions).toEqual({ ttl: 21600, urgency: "high", timeoutMs: 10_000 });
 	});
 
-	it("says `gone` for 404 and 410 so the caller forgets the subscription, and logs nothing", async () => {
+	it("says `gone` for 404 and 410 so the caller forgets the subscription, logs nothing and does not retry", async () => {
 		for (const status of [404, 410]) {
 			const log: string[] = [];
-			const { push } = sender(status, log);
+			const { push, calls, waits } = sender(status, log);
 			expect(await push.send(browser().subscription, payload, options)).toBe("gone");
+			expect(calls).toHaveLength(1);
+			expect(waits).toEqual([]);
 			expect(log).toEqual([]);
 		}
 	});
 
-	it("logs any other refusal and makes one attempt only", async () => {
-		for (const status of [400, 401, 413, 429, 500, 503]) {
+	it("logs any other 4xx refusal and does not retry it", async () => {
+		for (const status of [400, 401, 413]) {
 			const log: string[] = [];
-			const { push, calls } = sender(status, log);
+			const { push, calls, waits } = sender(status, log);
 			expect(await push.send(browser().subscription, payload, options)).toBe("failed");
 			expect(calls).toHaveLength(1);
+			expect(waits).toEqual([]);
 			expect(log).toEqual([`web push refused with status ${status}`]);
 		}
 	});
 
-	it("logs a network failure instead of throwing", async () => {
+	it("retries a 5xx or 429 once after 2 s and resolves what the retry got", async () => {
+		const { push, calls, waits } = sender([500, 201]);
+		expect(await push.send(browser().subscription, payload, options)).toBe("sent");
+		expect(calls).toHaveLength(2);
+		expect(waits).toEqual([2_000]);
+		for (const status of [429, 500, 503]) {
+			const log: string[] = [];
+			const failing = sender(status, log);
+			expect(await failing.push.send(browser().subscription, payload, options)).toBe("failed");
+			expect(failing.calls).toHaveLength(2);
+			expect(failing.waits).toEqual([2_000]);
+			expect(log).toEqual([`web push refused with status ${status}`]);
+		}
+	});
+
+	it("retries a send that got no answer once, logging instead of throwing", async () => {
 		const log: string[] = [];
-		const { push, calls } = sender(new Error("getaddrinfo ENOTFOUND push.example.com"), log);
+		const { push, calls, waits } = sender(new Error("getaddrinfo ENOTFOUND push.example.com"), log);
 		expect(await push.send(browser().subscription, payload, options)).toBe("failed");
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(2);
+		expect(waits).toEqual([2_000]);
 		expect(log).toEqual(["web push failed: getaddrinfo ENOTFOUND push.example.com"]);
+		const recovered = sender([new Error("socket hang up"), 201]);
+		expect(await recovered.push.send(browser().subscription, payload, options)).toBe("sent");
+	});
+
+	it("retries a `clear` by the same rule", async () => {
+		const clear: WebPushPayload = { v: 1, kind: "clear", title: "", body: "", tag: "tab:t1" };
+		const { push, calls } = sender([503, 201]);
+		expect(await push.send(browser().subscription, clear, options)).toBe("sent");
+		expect(calls.map(([, body]) => JSON.parse(body))).toEqual([clear, clear]);
+	});
+
+	it("drops the retry when a newer push with the same tag went out meanwhile, so an answered ask stays cleared", async () => {
+		const { subscription } = browser();
+		const clear: WebPushPayload = { v: 1, kind: "clear", title: "", body: "", tag: payload.tag };
+		const log: string[] = [];
+		let cleared: Promise<string> | undefined;
+		const { push, calls } = sender([500, 201], log, async () => {
+			cleared = push.send(subscription, clear, options);
+			await cleared;
+		});
+		expect(await push.send(subscription, payload, options)).toBe("failed");
+		expect(await cleared).toBe("sent");
+		expect(calls.map(([, body]) => JSON.parse(body).kind)).toEqual(["completion", "clear"]);
+		expect(log).toEqual(["web push retry dropped: a newer push with its tag went out"]);
 	});
 
 	it("does not send a payload a push service would refuse", async () => {
