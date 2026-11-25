@@ -34,16 +34,37 @@ struct Endpoint {
     queries: mpsc::Sender<page::Query>,
 }
 
+/// How long a read past its deadline gives the server to answer its status before it counts as hung.
+const STATUS_PROBE: Duration = Duration::from_secs(2);
+
 impl Endpoint {
-    async fn fetch(&self, p: front::Fetch) -> Result<Box<serde_json::value::RawValue>, Fault> {
+    /// `None`: the read passed its deadline and the server did not answer even its status (Orca's dead scan
+    /// worker, 25 Nov 2026): its loop is stuck, so the caller replaces it. A server that still answers its status
+    /// was only slow, and the read fails as before.
+    async fn fetch(
+        &self,
+        p: front::Fetch,
+    ) -> Result<Option<Box<serde_json::value::RawValue>>, Fault> {
         let port = self
             .listener
             .local_addr()
             .map_err(|e| Fault::new("stats_api_error", e.to_string()))?
             .port();
+        let read = async {
+            match front::fetch(port, p).await {
+                Err(fault) if fault.code == front::TIMED_OUT => {
+                    if front::answers(port, STATUS_PROBE).await {
+                        Err(Fault::new("stats_api_error", fault.message))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                result => result.map(Some),
+            }
+        };
         // Pin the port against reuse, but don't wait on its backlog after the serving task ends.
         tokio::select! {
-            result = front::fetch(port, p) => result,
+            result = read => result,
             _ = self.queries.closed() => Err(Fault::new("stats_api_error", "Stats server is not answering")),
         }
     }
@@ -94,6 +115,8 @@ impl State {
 struct Host {
     state: Mutex<State>,
     demand: Notify,
+    /// A read found the running server hung (`Endpoint::fetch`): `child` kills it and the restart ladder runs.
+    hung: Notify,
 }
 
 struct Running {
@@ -203,18 +226,21 @@ async fn child(launch: &Launch, host: &Host, stop: &mut watch::Receiver<bool>) -
     let mut child = cmd.spawn()?;
     let input = child.stdin.take().expect("piped stdin");
     let output = child.stdout.take().expect("piped stdout");
-    tokio::select! {
+    let hung = tokio::select! {
         biased;
-        _ = stop.changed() => {}
+        _ = stop.changed() => false,
+        _ = host.hung.notified() => true,
         status = child.wait() => return status.map(|s| s.success()),
         result = serving(host, input, output) => {
             if let Err(e) = result { eprintln!("[stats-server] {e}"); }
             // EOF can precede wait() on a clean exit. Let the process report its actual status.
+            false
         }
-    }
+    };
     // Dropping serving closed stdin, including when the worker never finished its imports or bound a port.
     host.state.lock().unwrap().phase = Phase::Pending;
-    if let Ok(status) = tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+    // A hung worker's blocked loop never reads its stdin's end: it is killed at once, and counts as a crash.
+    if !hung && let Ok(status) = tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
         return status.map(|s| s.success());
     }
     child.kill().await?;
@@ -265,14 +291,14 @@ fn start(call: Call) -> Result<Reply, Fault> {
 
 async fn fetch(call: Call) -> Result<Reply, Fault> {
     let p: front::Fetch = call.params()?;
-    let endpoint = {
+    let (endpoint, host) = {
         let hosts = HOSTS.lock().unwrap();
         let Some(running) = hosts.get(&p.id) else {
             return Reply::json(&json!({"ready": false, "exhausted": true}));
         };
         let mut state = running.host.state.lock().unwrap();
         if let Phase::Ready(endpoint) = &state.phase {
-            endpoint.clone()
+            (endpoint.clone(), running.host.clone())
         } else {
             let revive = state.revive(Instant::now());
             if revive == "scheduled" {
@@ -284,6 +310,16 @@ async fn fetch(call: Call) -> Result<Reply, Fault> {
     let data = tokio::select! {
         result = endpoint.fetch(p) => result?,
         _ = call.scope.on_cancel() => return Err(Fault::cancelled()),
+    };
+    let Some(data) = data else {
+        // Hung: replaced through the restart ladder. The reader hears "not ready", keeps its last figures under the
+        // not-answering note and reads again until the new server answers.
+        let current = matches!(&host.state.lock().unwrap().phase, Phase::Ready(ready) if Arc::ptr_eq(ready, &endpoint));
+        if current {
+            eprintln!("[stats-server] not answering: restarting");
+            host.hung.notify_one();
+        }
+        return Reply::json(&json!({"ready": false, "exhausted": false}));
     };
     #[derive(serde::Serialize)]
     struct Available {
