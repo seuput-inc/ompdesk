@@ -6,7 +6,17 @@
 import * as fs from "node:original-fs";
 import { release } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, Menu, type MessageBoxOptions, nativeTheme, screen, shell } from "electron";
+import {
+	app,
+	BrowserWindow,
+	dialog,
+	Menu,
+	type MessageBoxOptions,
+	nativeTheme,
+	type RenderProcessGoneDetails,
+	screen,
+	shell,
+} from "electron";
 import type Store from "electron-store";
 import type { RunProgressState, SessionKind } from "../shared/ipc-types";
 import { appIconPath } from "./app-icon";
@@ -18,6 +28,7 @@ import type { LastWindowClose } from "./quit-guard";
 import {
 	type ApplicationResourceIdentity,
 	applicationResourcesChanged,
+	RELOAD_FINISH_MS,
 	type RendererFailure,
 	shouldReloadRenderer,
 	shouldRestartForChangedResources,
@@ -294,13 +305,30 @@ export class WindowManager {
 			if (this.#restartForChangedResources(record, { kind: "process-gone", reloadable: shouldReload })) return;
 			if (shouldReload) {
 				queueMicrotask(() => {
-					if (!win.isDestroyed() && !win.webContents.isDestroyed()) this.#loadRenderer(record);
+					if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+					this.#loadRenderer(record);
+					// A reload that never finishes loading leaves the window blank with no crash to react to: past the
+					// bound, the same offer as a repeated crash. Node's timers stand still while the computer sleeps.
+					const watchdog = setTimeout(() => {
+						writeRuntimeLog(
+							{
+								source: "renderer-load",
+								message: "Automatic reload did not finish",
+								url: win.webContents.getURL(),
+							},
+							context(),
+						);
+						void this.#offerCrashRecovery(win, details.reason);
+					}, RELOAD_FINISH_MS);
+					watchdog.unref();
+					win.webContents.once("did-finish-load", () => clearTimeout(watchdog));
+					win.once("closed", () => clearTimeout(watchdog));
 				});
 			} else if (!resourcesChanged) {
 				// Repeated renderer crash inside the cooldown: the window would
 				// sit black forever, so surface a native dialog (a dead renderer
 				// can't show one itself) and let the user relaunch or close.
-				this.#offerCrashRecovery(win);
+				void this.#offerCrashRecovery(win, details.reason);
 			}
 		});
 
@@ -439,7 +467,7 @@ export class WindowManager {
 
 	#crashRecoveryOffered = new Set<number>();
 
-	async #offerCrashRecovery(win: BrowserWindow): Promise<void> {
+	async #offerCrashRecovery(win: BrowserWindow, reason: RenderProcessGoneDetails["reason"]): Promise<void> {
 		// One dialog per window — a renderer that keeps dying would otherwise
 		// queue a new dialog per crash.
 		if (this.#crashRecoveryOffered.has(win.webContents.id)) return;
@@ -451,7 +479,7 @@ export class WindowManager {
 			defaultId: 0,
 			cancelId: 1,
 			message: mainT("crash.title", language),
-			detail: mainT("crash.body", language, { logPath: runtimeLogPath() }),
+			detail: mainT(reason === "oom" ? "crash.bodyMemory" : "crash.body", language, { logPath: runtimeLogPath() }),
 		};
 		const answer = win.isDestroyed()
 			? await dialog.showMessageBox(options)

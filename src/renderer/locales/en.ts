@@ -6225,6 +6225,8 @@ export const en: Record<string, string> = {
 	"settings.gui.agentControl": "OMPdesk control tools",
 	"settings.gui.agentControlDesc":
 		"Let an agent see your other sessions, message them, read their results, answer their questions and show them to you",
+	"settings.gui.controlSocketFailed":
+		"The ompdesk command can't reach OMPdesk this time: its control socket did not start ({reason}). Restart OMPdesk to try again.",
 	"settings.gui.agentControlFull": "Give agents full control of OMPdesk",
 	"settings.gui.agentControlFullDesc":
 		"On by default: agents operate everything in OMPdesk with no confirmation card, approve for other sessions and change these switches. Risk: a prompt-injected page or file can then make an agent delete data or install code unasked. Secrets stay hidden from agents; every action is logged.",

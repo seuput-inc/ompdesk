@@ -689,6 +689,11 @@ impl Engine {
         self.last_ask
     }
 
+    /// Whether a check now would start or skip anything: the clock asks before it reads the Mac's wake state.
+    pub fn has_due(&self, now: i64) -> bool {
+        !self.paused && !self.closed && self.next.values().any(|due| *due <= now)
+    }
+
     /// The clock's check: every schedule whose start is due starts, or is recorded as skipped while its previous run
     /// still goes.
     pub fn tick(&mut self, now: i64) {

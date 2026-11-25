@@ -18,6 +18,22 @@ export const MAIN_TEXT = {
 		en: "OMPdesk couldn't save {what}; it will retry.",
 		ko: "디스크가 가득 차서 {what} 저장에 실패했어요. 자동으로 다시 시도할게요.",
 	},
+	// A settings file that no longer parsed, moved aside at launch (safe-store.ts).
+	"storeRecovered.title": { en: "Settings file was damaged", ko: "설정 파일이 손상됐어요" },
+	"storeRecovered.restored": {
+		en: "OMPdesk couldn't read {file}, so it put back the last good copy. Changes from the last hour may be missing.",
+		ko: "{file}을(를) 읽을 수 없어서 마지막으로 정상이던 사본으로 되돌렸어요. 최근 한 시간의 변경은 빠졌을 수 있어요.",
+	},
+	"storeRecovered.reset": {
+		en: "OMPdesk couldn't read {file} and had no good copy, so those settings start from the defaults.",
+		ko: "{file}을(를) 읽을 수 없고 정상 사본도 없어서 해당 설정을 기본값으로 시작해요.",
+	},
+	// The volume with OMPdesk's data under 10 GB free (health-watch.ts): at most once a day.
+	"diskLow.title": { en: "Disk is almost full", ko: "디스크 공간이 거의 없어요" },
+	"diskLow.body": {
+		en: "Only {gb} GB is free. Free up space before OMPdesk and your sessions can no longer save.",
+		ko: "남은 공간이 {gb} GB뿐이에요. OMPdesk와 세션이 저장하지 못하게 되기 전에 공간을 확보하세요.",
+	},
 	"menu.about": { en: "About OMPdesk", ko: "OMPdesk 정보" },
 	"menu.checkUpdates": { en: "Check for Updates…", ko: "업데이트 확인…" },
 	"menu.services": { en: "Services", ko: "서비스" },
@@ -56,6 +72,10 @@ export const MAIN_TEXT = {
 	"crash.body": {
 		en: "This window crashed repeatedly and can't recover on its own. The failure is in the runtime log ({logPath}). Restarting may help; send the log via Help → Send Feedback so we can fix it.",
 		ko: "이 창이 반복해서 충돌해 스스로 복구할 수 없어요. 실패 내용은 런타임 로그({logPath})에 있어요. 재시작하면 해결될 수 있어요. 도움말 → 피드백 보내기로 로그를 보내 주시면 수정에 도움이 돼요.",
+	},
+	"crash.bodyMemory": {
+		en: "This window ran out of memory and keeps failing. Close other apps or sessions to free memory, then restart OMPdesk. Details are in the runtime log ({logPath}).",
+		ko: "이 창이 메모리가 부족해 계속 실패하고 있어요. 다른 앱이나 세션을 닫아 메모리를 확보한 뒤 OMPdesk를 다시 시작하세요. 자세한 내용은 런타임 로그({logPath})에 있어요.",
 	},
 	"crash.close": { en: "Close", ko: "닫기" },
 	"crash.title": { en: "OMPdesk window crashed", ko: "OMPdesk 창이 충돌했어요" },

@@ -151,7 +151,7 @@ import {
 	readCheckoutPlace,
 } from "./checkout-peers";
 import { createControlBackend } from "./control-socket/backend";
-import { startControlSocket } from "./control-socket/index";
+import { controlSocketFailure, startControlSocket } from "./control-socket/index";
 import { ensureDefaultWorkspace } from "./default-workspace";
 import { deliverOnce } from "./delivery-ledger";
 import { DesktopSlotHost } from "./desktop-slot-host";
@@ -1463,6 +1463,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Autopilot's coordinator (src/main/autopilot.ts): the tab hooks DeskTools calls and the frames the sidecar
 	// factory hands over; index.ts reaches it through `deps.autopilotRef` (TurnResume, the factory).
 	autopilot.attachControl(agentControl.control);
+
+	ipc.handle(IPC_COMMANDS.CONTROL_SOCKET_FAILURE, () => controlSocketFailure());
 
 	ipc.handle(IPC_COMMANDS.RPC_COMMAND, async (caller, payload: IpcRpcCommandPayload) => {
 		const win = caller.win;

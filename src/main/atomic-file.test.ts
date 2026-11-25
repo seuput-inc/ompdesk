@@ -1,8 +1,8 @@
-import { closeSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeFileAtomic, writeFileAtomicDeferred, writeFileAtomicSync } from "./atomic-file";
+import { sweepStaleTemps, writeFileAtomic, writeFileAtomicDeferred, writeFileAtomicSync } from "./atomic-file";
 import { holdOpen } from "./test-hold-open";
 
 // Windows refuses to rename over a file another handle has open. Elsewhere nothing is refused: the waiting cases hold
@@ -106,6 +106,24 @@ describe("atomic file writes", () => {
 			}
 		} finally {
 			vi.useRealTimers();
+		}
+	});
+});
+
+describe("temp files a killed writer left", () => {
+	it("go once a day old; a fresh one and other files stay", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "ompdesk-temps-"));
+		try {
+			const day = 24 * 60 * 60_000;
+			const old = new Date(Date.now() - day - 60_000);
+			for (const name of ["prefs.json.123-0.tmp", "prefs.json.456-7.tmp", "prefs.json", "notes.tmp"]) {
+				writeFileSync(join(dir, name), "x");
+				if (name !== "prefs.json.456-7.tmp") utimesSync(join(dir, name), old, old);
+			}
+			expect(await sweepStaleTemps(dir)).toBe(1);
+			expect(readdirSync(dir).sort()).toEqual(["notes.tmp", "prefs.json", "prefs.json.456-7.tmp"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

@@ -104,6 +104,7 @@ import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, serveP
 import { MemoryUpkeep } from "./ai-memory/upkeep";
 import { appIconPath, appNotification, holdTestNotifications } from "./app-icon";
 import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes } from "./app-quit";
+import { sweepStaleTemps } from "./atomic-file";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
@@ -145,6 +146,7 @@ import {
 	softwareCompositing,
 } from "./gpu-fallback";
 import { installHangWatchdog, markMainStep, reportPreviousHang } from "./hang-watchdog";
+import { startEventLoopWatch, startLowDiskWatch } from "./health-watch";
 import { getMainLanguage, mainT } from "./i18n";
 import { firstUsableCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
@@ -185,7 +187,7 @@ import { FileMarks } from "./routines/marks";
 import { filesChanged, githubPort, gitPort, scanPath, sessionPorts, watchPath } from "./routines/ports";
 import { RoutineTriggers } from "./routines/triggers";
 import { runtimeLogPath, writeRuntimeLog } from "./runtime-log";
-import { SafeStore } from "./safe-store";
+import { SafeStore, takeRecoveredStores } from "./safe-store";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
 import { whenSessionFree } from "./session-free";
@@ -197,7 +199,7 @@ import { defaultScratchRoot, SESSION_SCRATCH_FILE, SessionScratch } from "./sess
 import { SessionSummaries, type SummarySource } from "./session-summaries";
 import { SettleWatch } from "./settle-watch";
 import { registerSetupIpc } from "./setup/ipc";
-import { applyManagedToolEnv, bunInstallDir, managedToolsDir, setupPlatform } from "./setup/paths";
+import { applyManagedToolEnv, bunInstallDir, managedToolsDir, refreshPath, setupPlatform } from "./setup/paths";
 import { SetupService } from "./setup/service";
 import { findBun } from "./setup/supervisor";
 import { shellSpawnEnv, spawnPath } from "./shell-env";
@@ -206,6 +208,7 @@ import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
 import { nextSnowflake } from "./snowflake";
 import { markStartup } from "./startup-timing";
+import { wakeSshTools } from "./ssh/ipc";
 import { StatsClient } from "./stats-client";
 import { StatsServerManager } from "./stats-server";
 import { stockHelperRequest, stopStockHelper } from "./stock-helper";
@@ -597,11 +600,12 @@ function errorMessage(value: unknown): { message: string; stack?: string } {
 
 function installMainRuntimeLogging(): void {
 	// A console line to a stdout/stderr whose reader is gone (the terminal or test runner that started this copy
-	// closed) fails with EPIPE on the stream; with no listener that is an uncaught exception and a crash dialog.
-	// Losing the line is fine: the runtime log keeps what matters.
+	// closed) fails with EPIPE on the stream, or EIO once the terminal itself went away; with no listener that is an
+	// uncaught exception and a crash dialog. Losing the line is fine: the runtime log keeps what matters.
 	for (const stream of [process.stdout, process.stderr]) {
 		stream.on("error", error => {
-			if ((error as NodeJS.ErrnoException).code !== "EPIPE") throw error;
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "EPIPE" && code !== "EIO") throw error;
 		});
 	}
 	process.on("uncaughtExceptionMonitor", (error, origin) => {
@@ -814,11 +818,45 @@ app.whenReady().then(async () => {
 	bindDiskFullPush(diskFull, () => [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])]);
 	// The core's stores (web devices, paired computers, schedules, journals) join it.
 	routeCoreSaves(core(), diskFull);
+	// A settings file that no longer parsed was moved aside and put back from its backup (safe-store.ts): said once.
+	prefsStore();
+	for (const store of takeRecoveredStores()) {
+		writeRuntimeLog({ source: "user-data-migration", message: "store-recovered", details: { ...store } });
+		appNotification({
+			title: mainT("storeRecovered.title"),
+			body: mainT(store.restored ? "storeRecovered.restored" : "storeRecovered.reset", undefined, {
+				file: store.file,
+			}),
+		}).show();
+	}
+	// Temp files a killed write left beside the stores (atomic-file.ts names them `<file>.<pid>-<n>.tmp`).
+	void sweepStaleTemps(app.getPath("userData")).then(removed => {
+		if (removed)
+			writeRuntimeLog({ source: "user-data-migration", message: "stale-temps-removed", details: { removed } });
+	});
 	markStartup("app-ready");
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
 		reportPreviousHang();
 		installHangWatchdog();
+		// Health readings that act before something breaks (health-watch.ts): main's event-loop lag and a disk
+		// running low.
+		startEventLoopWatch(powerMonitor, details =>
+			writeRuntimeLog({ source: "main-thread-hang", message: "event loop lagging", details }),
+		);
+		startLowDiskWatch({
+			path: app.getPath("userData"),
+			lastNoticeAt: () => {
+				const at = prefsStore().get("lowDiskNoticeAt");
+				return typeof at === "number" ? at : undefined;
+			},
+			setLastNoticeAt: at => prefsStore().set("lowDiskNoticeAt", at),
+			notify: free => {
+				const gb = (free / 1024 ** 3).toFixed(1);
+				writeRuntimeLog({ source: "disk-care", message: "disk low", details: { freeGb: Number(gb) } });
+				appNotification({ title: mainT("diskLow.title"), body: mainT("diskLow.body", undefined, { gb }) }).show();
+			},
+		});
 		// The measurement of main's blocked waits on the core's hub (native-rust ledger, H2): one line a minute.
 		if (process.env.OMP_GUI_HUB_STATS === "1")
 			setInterval(() => {
@@ -846,6 +884,16 @@ app.whenReady().then(async () => {
 	const platform = setupPlatform();
 	const toolsDir = managedToolsDir(platform, process.env, homedir(), app.getPath("userData"));
 	applyManagedToolEnv(toolsDir, platform);
+	// Windows: a tool the person installed outside OMPdesk lands in the registry's PATH, merged into this process's
+	// when a window gains focus (at most once a minute), so the next spawn finds it without a restart.
+	if (platform === "win32") {
+		let pathReadAt = Date.now();
+		app.on("browser-window-focus", () => {
+			if (Date.now() - pathReadAt < 60_000) return;
+			pathReadAt = Date.now();
+			void refreshPath(platform, toolsDir);
+		});
+	}
 
 	const initialCwd = resolveInitialCwd();
 	const explicitStartupCwd = resolveExplicitStartupCwd();
@@ -2130,7 +2178,10 @@ app.whenReady().then(async () => {
 		},
 		changed: online => {
 			turnResume.connectivityChanged();
-			if (online) devices.wake("online");
+			if (online) {
+				devices.wake("online");
+				wakeSshTools();
+			}
 		},
 	});
 	const interruptedTurns = new InterruptedTurnStore(join(app.getPath("userData"), "interrupted-turns.json"), error =>
@@ -2229,8 +2280,12 @@ app.whenReady().then(async () => {
 	powerMonitor.on("resume", () => {
 		connectivity.resume();
 		devices.wake("resume");
+		wakeSshTools();
 	});
-	powerMonitor.on("unlock-screen", () => devices.wake("unlock"));
+	powerMonitor.on("unlock-screen", () => {
+		devices.wake("unlock");
+		wakeSshTools();
+	});
 	app.on("browser-window-focus", () => devices.wake("focus"));
 	// Chromium's own link state, sampled for changes the windows' events missed (a window may not exist).
 	setInterval(() => connectivity.poll(), 3000).unref();

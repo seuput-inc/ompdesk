@@ -126,6 +126,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[C.BRIDGE_HEALTH_TAKE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DISK_FULL_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.CONTROL_SOCKET_FAILURE]: { dir: "invoke", permission: "host-admin", mode: "pass" },
 
 	// Sessions and their tabs.
 	[C.RPC_COMMAND]: { dir: "invoke", permission: "workspace", mode: "pass" },

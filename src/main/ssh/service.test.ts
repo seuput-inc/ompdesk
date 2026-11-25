@@ -181,6 +181,24 @@ describe("SshTools", () => {
 		});
 	}, 30_000);
 
+	it("starts a ports watch again after its connection dropped, and at once on a wake", async () => {
+		await fs.writeFile(path.join(fake, "ports"), "22");
+		await tools.command({ action: "watch", target, on: true });
+		await answerNext("hostKey", "yes");
+		await vi.waitFor(() => expect(state.watches[0]).toMatchObject({ ports: [22], error: null }), { timeout: 10_000 });
+
+		await fs.writeFile(path.join(fake, "drop"), "");
+		await vi.waitFor(() => expect(state.watches[0]?.error).toBeTruthy(), { timeout: 10_000 });
+		await fs.rm(path.join(fake, "drop"));
+		await fs.writeFile(path.join(fake, "ports"), "22 8080");
+		tools.wake();
+		await vi.waitFor(() => expect(state.watches[0]).toMatchObject({ ports: [22, 8080], error: null }), {
+			timeout: 10_000,
+		});
+		await tools.command({ action: "watch", target, on: false });
+		expect(state.watches).toEqual([]);
+	}, 30_000);
+
 	it("reports nothing of a password or a passphrase: no status, no prompt, no error, no line the core logs", async () => {
 		const password = "hunter2-on-the-wire";
 		const passphrase = "correct horse battery";

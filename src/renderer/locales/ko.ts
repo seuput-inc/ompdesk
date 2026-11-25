@@ -6215,6 +6215,8 @@ export const ko: Record<string, string> = {
 	"settings.gui.agentControl": "OMPdesk 조작 도구",
 	"settings.gui.agentControlDesc":
 		"에이전트가 다른 세션을 보고, 메시지를 보내고, 결과를 읽고, 질문에 답하고, 화면에 보여 줄 수 있어요",
+	"settings.gui.controlSocketFailed":
+		"이번에는 ompdesk 명령이 OMPdesk에 닿지 않아요. 제어 소켓이 시작되지 않았어요({reason}). OMPdesk를 다시 시작해 보세요.",
 	"settings.gui.agentControlFull": "에이전트에게 OMPdesk 전체 권한 주기",
 	"settings.gui.agentControlFullDesc":
 		"기본값은 켜짐: 에이전트가 확인 카드 없이 OMPdesk의 모든 것을 조작하고, 다른 세션 승인을 대신하고, 이 스위치들도 바꿀 수 있어요. 위험: 프롬프트 인젝션이 담긴 페이지나 파일이 에이전트에게 묻지 않고 데이터를 지우거나 코드를 설치하게 할 수 있어요. 비밀 정보는 에이전트에게 보이지 않고 모든 동작은 기록돼요.",

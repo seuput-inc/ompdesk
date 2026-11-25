@@ -9,6 +9,13 @@ import {
 import type { IpcRegistry } from "../web/ipc-registry";
 import { SshTools } from "./service";
 
+let shared: SshTools | null = null;
+
+/** The computer woke, was unlocked or came back online: dropped forwards and watches go again now (`SshTools.wake`). */
+export function wakeSshTools(): void {
+	shared?.wake();
+}
+
 /** Settings › SSH tools for every window; saved forwards start again right away (C151 restore). */
 export function registerSshToolsIpc(ipc: IpcRegistry): void {
 	const tools = new SshTools({
@@ -18,6 +25,7 @@ export function registerSshToolsIpc(ipc: IpcRegistry): void {
 				if (!win.isDestroyed()) win.webContents.send(kind === "state" ? SSH_TOOLS_STATE : SSH_TOOLS_PROMPT, data);
 		},
 	});
+	shared = tools;
 	ipc.handle(SSH_TOOLS_COMMAND, (_caller, request: unknown) => tools.command(request));
 	ipc.handle(SSH_TOOLS_AGENT, () => tools.agent());
 	// A window that opens (or reloads) while a question waits still sees it.

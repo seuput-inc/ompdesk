@@ -529,3 +529,14 @@ fn nothing_of_the_journal_lands_after_its_close() {
         std::fs::remove_dir_all(&dir).unwrap_or_else(|error| panic!("round {round}: {error}"));
     }
 }
+
+#[test]
+fn a_dark_wake_is_told_by_the_missing_graphics_capability() {
+    let full =
+        "Current System Capabilities are: CPU Graphics Audio Network \nCurrent Power State: 4\n";
+    let dark = "Current System Capabilities are: CPU Network \nCurrent Power State: 4\n";
+    assert!(!super::is_dark_wake(full));
+    assert!(super::is_dark_wake(dark));
+    // An output without the line is read as awake: a run is never held on a guess.
+    assert!(!super::is_dark_wake("pmset: unknown\n"));
+}

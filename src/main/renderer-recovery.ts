@@ -1,6 +1,8 @@
 import type { RenderProcessGoneDetails } from "electron";
 
 export const RENDERER_RECOVERY_COOLDOWN_MS = 30_000;
+/** How long an automatic reload may take to finish loading before the window is offered a relaunch. */
+export const RELOAD_FINISH_MS = 45_000;
 
 export interface ApplicationResourceIdentity {
 	device: number;

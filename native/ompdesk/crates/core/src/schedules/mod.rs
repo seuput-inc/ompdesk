@@ -51,6 +51,32 @@ use engine::{Commanded, Engine, Limits, Out};
 /// A run's log is read back at most this much from its end.
 const LOG_TAIL_BYTES: u64 = 256 * 1024;
 
+/// `pmset -g systemstate` lists the system's capabilities; a dark wake lacks `Graphics` (XNU drops
+/// kIOPMSystemCapabilityGraphics for it, display sleep alone keeps it). Approach after Orca (MIT, stablyai/orca
+/// `src/main/power/macos-full-wake.ts`). An answer that cannot be read counts as awake: work is never held on a guess.
+fn is_dark_wake(systemstate: &str) -> bool {
+    systemstate
+        .lines()
+        .find_map(|line| line.split_once("Current System Capabilities are:"))
+        .is_some_and(|(_, capabilities)| !capabilities.split_whitespace().any(|c| c == "Graphics"))
+}
+
+async fn dark_wake() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let read = tokio::process::Command::new("/usr/bin/pmset")
+        .args(["-g", "systemstate"])
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(Duration::from_secs(2), read).await {
+        Ok(Ok(output)) if output.status.success() => {
+            is_dark_wake(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => false,
+    }
+}
+
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -507,6 +533,12 @@ fn open(call: &Call) -> Result<Reply, Fault> {
                 let Some(service) = ticking.upgrade() else {
                     break;
                 };
+                let now = system_now();
+                // A Mac in a dark wake (Power Nap) runs the CPU with no display: a start then would run while the
+                // person cannot see it and the lid may close again any second, so what is due waits for the full wake.
+                if service.with(|engine| engine.has_due(now)) && dark_wake().await {
+                    continue;
+                }
                 service.with(|engine| engine.tick(system_now()));
             }
         });

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { memoryRecord, processOwners, RECORD_EVERY_MS, RECORD_TOP_PROCESSES, RecordClock } from "./memory-record";
+import {
+	MAIN_RISE_AFTER_MS,
+	MAIN_RISE_EVERY_MS,
+	MainRiseClock,
+	memoryRecord,
+	processOwners,
+	RECORD_EVERY_MS,
+	RECORD_TOP_PROCESSES,
+	RecordClock,
+} from "./memory-record";
 import type { TaggedProcess, TagOwner } from "./session-processes";
 
 const MB = 1024 ** 2;
@@ -120,5 +129,30 @@ describe("when the record is written", () => {
 		// Fine again, then short again: a new spell is recorded at once.
 		expect(clock.due(5_000 + RECORD_EVERY_MS + 5_000, false)).toBe(false);
 		expect(clock.due(5_000 + RECORD_EVERY_MS + 10_000, true)).toBe(true);
+	});
+});
+
+describe("main's own memory rising", () => {
+	it("is due when main grew 300 MB within two minutes after the launch ramp, at most hourly", () => {
+		const clock = new MainRiseClock(0);
+		// Growth while starting is no rise.
+		expect(clock.due(60_000, 200 * MB)).toBeNull();
+		expect(clock.due(90_000, 900 * MB)).toBeNull();
+		let t = MAIN_RISE_AFTER_MS;
+		expect(clock.due(t, 900 * MB)).toBeNull();
+		// A slow climb over more than the window stays under the bar.
+		t += 150_000;
+		expect(clock.due(t, 1_100 * MB)).toBeNull();
+		t += 150_000;
+		expect(clock.due(t, 1_300 * MB)).toBeNull();
+		t += 60_000;
+		expect(clock.due(t, 1_650 * MB)).toBe(350 * MB);
+		const due = t;
+		t += 60_000;
+		expect(clock.due(t, 2_100 * MB)).toBeNull();
+		t = due + MAIN_RISE_EVERY_MS;
+		expect(clock.due(t, 2_100 * MB)).toBeNull();
+		t += 30_000;
+		expect(clock.due(t, 2_500 * MB)).toBe(400 * MB);
 	});
 });

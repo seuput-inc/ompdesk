@@ -4,7 +4,7 @@
  * short, and, as it turns short and while it stays so, the record of who uses it (memory-record.ts).
  */
 import { IdleRelease, memoryShort } from "./idle-release";
-import { memoryRecord, RecordClock } from "./memory-record";
+import { MainRiseClock, memoryRecord, RecordClock } from "./memory-record";
 import { listProcesses, type MemoryReading, readMemory, treeBytes } from "./memory-sampler";
 import { listTaggedProcesses, type TagOwner } from "./session-processes";
 
@@ -40,19 +40,26 @@ function gb(bytes: number): number {
 }
 
 /**
- * One `memory short` line: what the OS reads, the largest processes with their size, age and session, and what the
- * sessions, OMPdesk itself and everything else hold. Lists are JSON text, since the runtime log keeps only primitive
- * details. Nothing is written when the processes cannot be listed.
+ * One `memory short` line (or `main memory rising`, `extra` naming the rise): what the OS reads, the largest processes
+ * with their size, age and session, and what the sessions, OMPdesk itself and everything else hold. Lists are JSON
+ * text, since the runtime log keeps only primitive details. Nothing is written when the processes cannot be listed.
  */
-async function recordShort(deps: MemoryWatchDeps, owners: () => TagOwner[], reading: MemoryReading): Promise<void> {
+async function recordShort(
+	deps: MemoryWatchDeps,
+	owners: () => TagOwner[],
+	reading: MemoryReading | null,
+	message = "memory short",
+	extra: Record<string, number> = {},
+): Promise<void> {
 	const rows = await listTaggedProcesses();
 	if (!rows) return;
 	const record = memoryRecord(rows, owners(), deps.tabs(), process.pid, Date.now());
-	deps.log("memory short", {
+	deps.log(message, {
 		level: "warn",
-		availableGb: gb(reading.availableBytes),
-		totalGb: gb(reading.totalBytes),
-		pressure: reading.pressure,
+		...extra,
+		...(reading
+			? { availableGb: gb(reading.availableBytes), totalGb: gb(reading.totalBytes), pressure: reading.pressure }
+			: {}),
 		sessionsMb: record.sessionsMb,
 		ompdeskMb: record.ompdeskMb,
 		otherMb: record.otherMb,
@@ -66,6 +73,7 @@ export function startMemoryWatch(deps: MemoryWatchDeps): void {
 	let sampling = false;
 	const idle = new IdleRelease(deps.releaseQuietMs);
 	const clock = new RecordClock();
+	const mainRise = new MainRiseClock(Date.now());
 	const sample = async (): Promise<void> => {
 		if (sampling) return;
 		sampling = true;
@@ -76,6 +84,13 @@ export function startMemoryWatch(deps: MemoryWatchDeps): void {
 			]);
 			const owners = deps.owners;
 			if (owners && reading && clock.due(Date.now(), memoryShort(reading))) await recordShort(deps, owners, reading);
+			const rss = process.memoryUsage.rss();
+			const rise = mainRise.due(Date.now(), rss);
+			if (owners && rise !== null)
+				await recordShort(deps, owners, reading, "main memory rising", {
+					mainMb: Math.round(rss / 1024 ** 2),
+					riseMb: Math.round(rise / 1024 ** 2),
+				});
 			const release = deps.release;
 			if (rows && release) {
 				const tabs = deps.tabs();

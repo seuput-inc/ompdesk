@@ -29,6 +29,8 @@ export const CONTROL_CALLER_ENV = "OMPDESK_CALLER";
 
 export const ENDPOINT_FILE = "endpoint.json";
 export const TOKEN_FILE = "token";
+/** Why this computer's OMPdesk could not start the socket (one line of text); gone once a start succeeds. */
+export const START_FAILURE_FILE = "start-failure.txt";
 export const POSIX_SOCKET_FILE = "control.sock";
 export const MAX_FRAME_BYTES = 4 * 1024 * 1024;
 export const CALLER_NAME = /^[a-z0-9_-]{1,32}$/;

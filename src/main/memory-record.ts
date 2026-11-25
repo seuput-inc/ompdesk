@@ -208,3 +208,33 @@ export class RecordClock {
 		return true;
 	}
 }
+
+/** A rise of main's own memory that is worth a record (a leak or a runaway in main, whatever the OS has left). */
+export const MAIN_RISE_BYTES = 300 * 1024 ** 2;
+export const MAIN_RISE_WINDOW_MS = 2 * 60_000;
+/** Main grows while it starts (windows, tabs, caches): nothing before this is a rise. */
+export const MAIN_RISE_AFTER_MS = 5 * 60_000;
+export const MAIN_RISE_EVERY_MS = 60 * 60_000;
+
+/** Main's resident size over the last `MAIN_RISE_WINDOW_MS`: due when it grew `MAIN_RISE_BYTES`, at most hourly. */
+export class MainRiseClock {
+	readonly #startedAt: number;
+	#seen: { at: number; bytes: number }[] = [];
+	#last: number | null = null;
+
+	constructor(startedAt: number) {
+		this.#startedAt = startedAt;
+	}
+
+	/** One sample; the rise in bytes when the record is due, else null. */
+	due(now: number, bytes: number): number | null {
+		this.#seen = this.#seen.filter(seen => now - seen.at <= MAIN_RISE_WINDOW_MS);
+		this.#seen.push({ at: now, bytes });
+		if (now - this.#startedAt < MAIN_RISE_AFTER_MS) return null;
+		if (this.#last !== null && now - this.#last < MAIN_RISE_EVERY_MS) return null;
+		const rise = bytes - Math.min(...this.#seen.map(seen => seen.bytes));
+		if (rise < MAIN_RISE_BYTES) return null;
+		this.#last = now;
+		return rise;
+	}
+}
