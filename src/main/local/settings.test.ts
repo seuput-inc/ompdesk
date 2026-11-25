@@ -2,7 +2,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stockHelperRequest as stockHelperRequestImport } from "../stock-helper";
-import { type BridgeProviderAccounts, handlers, mergeProviderAccounts, type StockLogoutAccount } from "./settings";
+import {
+	ACCOUNT_QUOTA_WAIT_MS,
+	type BridgeProviderAccounts,
+	handlers,
+	mergeProviderAccounts,
+	type StockLogoutAccount,
+} from "./settings";
 import type { LocalCommandContext } from "./types";
 
 vi.mock("../stock-helper", () => ({ stockHelperRequest: vi.fn() }));
@@ -231,6 +237,28 @@ describe("get_provider_accounts handler", () => {
 			usageError: "usage fetch aborted",
 			accounts: [{ credentialId: 7, inUse: false }],
 		});
+	});
+
+	it("lists the accounts stock read when the quota read never answers", async () => {
+		vi.useFakeTimers();
+		try {
+			const send = vi.fn(async () => ({ accounts: [work, home] }));
+			const request = vi.fn(() => new Promise<never>(() => {}));
+			const answer = handlers.get_provider_accounts(
+				{ type: "get_provider_accounts", providerId: "anthropic" },
+				fakeCtx(send, request),
+			);
+			await vi.advanceTimersByTimeAsync(ACCOUNT_QUOTA_WAIT_MS);
+			expect(await answer).toMatchObject({
+				usageError: expect.stringContaining("45 s"),
+				accounts: [
+					{ credentialId: 7, state: "unknown", limits: [] },
+					{ credentialId: 9, state: "unknown", limits: [] },
+				],
+			});
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

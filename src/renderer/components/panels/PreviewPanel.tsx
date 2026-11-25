@@ -42,8 +42,14 @@ import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import { latestBashPreviewUrl } from "../../lib/preview-browser";
 import { chromePlatform } from "../../lib/window-chrome";
+import { noteDevServerLoad } from "../../stores/dev-server-answers";
 import { usePreviewVisualsStore } from "../../stores/preview-visuals";
-import { sessionRuntime, useRuntimeTabId, useSessionRuntime } from "../../stores/session-runtime-context";
+import {
+	type SessionRuntime,
+	sessionRuntime,
+	useRuntimeTabId,
+	useSessionRuntime,
+} from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
 import { useToolsStore } from "../../stores/tools";
@@ -74,6 +80,31 @@ function releaseAgentRelay(tabId: string): void {
 	void sessionRuntime(tabId)
 		?.command({ type: "browser_relay_stop" })
 		.catch(() => {});
+}
+
+/** A host tab's agent whose link dropped is let in again 1 s after the drop, doubling to 30 s, for up to 10 min. */
+const AGENT_RECONNECT_FIRST_MS = 1000;
+const AGENT_RECONNECT_MAX_MS = 30_000;
+const AGENT_RECONNECT_GIVE_UP_MS = 10 * 60_000;
+
+/** Start `tabId`'s relay in its omp (`browser_relay_start`) and let its agent drive this panel's page. */
+async function startAgentRelay(runtime: SessionRuntime, tabId: string): Promise<void> {
+	const response = await runtime.command({ type: "browser_relay_start" });
+	if (!response.success) throw new Error(response.error ?? "browser_relay_start failed");
+	const relay: unknown = response.data;
+	if (
+		!relay ||
+		typeof relay !== "object" ||
+		!("url" in relay) ||
+		typeof relay.url !== "string" ||
+		!("token" in relay) ||
+		typeof relay.token !== "string"
+	) {
+		throw new Error("omp returned no browser relay endpoint");
+	}
+	const url = "extensionUrl" in relay ? relay.extensionUrl : relay.url;
+	if (typeof url !== "string") throw new Error("omp returned no preview extension endpoint");
+	await window.omp.preview.command({ action: "agentStart", tabId, url, token: relay.token });
 }
 export function PreviewPanel() {
 	const t = useT();
@@ -110,22 +141,7 @@ export function PreviewPanel() {
 		if (!tabId || !runtime) return;
 		setAgentStarting(true);
 		try {
-			const response = await runtime.command({ type: "browser_relay_start" });
-			if (!response.success) throw new Error(response.error ?? "browser_relay_start failed");
-			const relay: unknown = response.data;
-			if (
-				!relay ||
-				typeof relay !== "object" ||
-				!("url" in relay) ||
-				typeof relay.url !== "string" ||
-				!("token" in relay) ||
-				typeof relay.token !== "string"
-			) {
-				throw new Error("omp returned no browser relay endpoint");
-			}
-			const url = "extensionUrl" in relay ? relay.extensionUrl : relay.url;
-			if (typeof url !== "string") throw new Error("omp returned no preview extension endpoint");
-			await window.omp.preview.command({ action: "agentStart", tabId, url, token: relay.token });
+			await startAgentRelay(runtime, tabId);
 		} catch (error) {
 			releaseAgentRelay(tabId);
 			toastError({ title: t("panel.preview.agent.failed"), error });
@@ -133,6 +149,30 @@ export function PreviewPanel() {
 			setAgentStarting(false);
 		}
 	};
+	// The paired link under this tab's agent dropped and the host stopped its relay (main's `holdForLink`): let the
+	// agent in again on the same page, 1 s after the drop and doubling to 30 s, until the link answers; after
+	// `AGENT_RECONNECT_GIVE_UP_MS` the page is taken back. Take over, another page or tab ends it (the state changes).
+	const reconnecting = Boolean(tabId && state.agent?.reconnecting && state.agent.tabId === tabId);
+	useEffect(() => {
+		if (!reconnecting || !tabId || !runtime) return;
+		let stopped = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const giveUpAt = Date.now() + AGENT_RECONNECT_GIVE_UP_MS;
+		const attempt = (wait: number) => {
+			timer = setTimeout(() => {
+				startAgentRelay(runtime, tabId).catch(() => {
+					if (stopped) return;
+					if (Date.now() >= giveUpAt) takeOver();
+					else attempt(Math.min(wait * 2, AGENT_RECONNECT_MAX_MS));
+				});
+			}, wait);
+		};
+		attempt(AGENT_RECONNECT_FIRST_MS);
+		return () => {
+			stopped = true;
+			clearTimeout(timer);
+		};
+	}, [reconnecting, tabId, runtime, takeOver]);
 	useEffect(() => window.omp.preview.onState(dispatch), []);
 	const previousTab = useRef(tabId);
 	const initialUrlChosen = useRef(false);
@@ -181,6 +221,10 @@ export function PreviewPanel() {
 			setInvalid(false);
 		}
 	}, [state.url, state.activeTab]);
+	// A dev server that stopped answering marks the bash card's link that opened it (`dev-server-answers.ts`).
+	useEffect(() => {
+		if (state.url && !state.loading) noteDevServerLoad(state.url, state.error);
+	}, [state.url, state.loading, state.error]);
 	// Main lets go of the agent when another preview tab is shown or its page closes; stop that tab's relay too.
 	const agentOwner = useRef<string | null>(null);
 	useEffect(() => {
@@ -500,7 +544,9 @@ export function PreviewPanel() {
 			{state.agent && (
 				<div
 					className="flex min-w-0 shrink-0 items-center gap-2 border-b border-(--sc-divider) bg-(--sc-accent-soft) px-3 py-1.5 text-sc-xs text-(--sc-text)"
-					data-preview-agent={state.agent.attached ? "attached" : "waiting"}
+					data-preview-agent={
+						state.agent.reconnecting ? "reconnecting" : state.agent.attached ? "attached" : "waiting"
+					}
 					role="status"
 				>
 					<StatusDot
@@ -511,7 +557,13 @@ export function PreviewPanel() {
 						pulse={state.agent.attached}
 					/>
 					<span className="min-w-0 flex-1 break-words">
-						{t(state.agent.attached ? "panel.preview.agent.driving" : "panel.preview.agent.waiting")}
+						{t(
+							state.agent.reconnecting
+								? "panel.preview.agent.reconnecting"
+								: state.agent.attached
+									? "panel.preview.agent.driving"
+									: "panel.preview.agent.waiting",
+						)}
 						{state.agent.lastAction && (
 							<span className="block truncate font-mono text-(--sc-text-muted)" data-preview-agent-action>
 								{state.agent.lastAction}
@@ -607,7 +659,7 @@ export function PreviewPanel() {
 								</Button>
 							}
 						>
-							{t("panel.preview.unresponsive")}
+							{t(state.notice.kind === "slow" ? "panel.preview.slow" : "panel.preview.unresponsive")}
 						</Banner>
 					)}
 				</div>

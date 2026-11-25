@@ -31,6 +31,9 @@ struct Request<'a> {
     env: Option<&'a RawValue>,
     #[serde(borrow)]
     read: Option<&'a RawValue>,
+    /// The tab's session file ("" for none), which keeps its terminals across a restart.
+    #[serde(borrow)]
+    session: Option<&'a RawValue>,
     viewer: Option<i64>,
     now: Option<i64>,
 }
@@ -48,6 +51,8 @@ struct Params<'a> {
     shell: Option<Shell>,
     #[serde(skip_serializing_if = "Option::is_none")]
     read: Option<&'a RawValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<&'a RawValue>,
 }
 
 #[derive(Serialize)]
@@ -68,7 +73,7 @@ impl Request<'_> {
             Owner::Peer { device, rtab } => Cow::Owned(format!("peer:{device}:{rtab}")),
         };
         // Leave room for the frame around a large raw write so the closing fields don't recopy it.
-        let payload = [self.cwd, self.operation, self.env, self.read]
+        let payload = [self.cwd, self.operation, self.env, self.read, self.session]
             .into_iter()
             .flatten()
             .map(|field| field.get().len())
@@ -86,6 +91,7 @@ impl Request<'_> {
                     env: self.env,
                     shell,
                     read: self.read,
+                    session: self.session,
                 },
             },
         )
@@ -196,5 +202,24 @@ mod tests {
         );
         assert_eq!(leases.seen("o", r#""\ud800""#, 3, 100), "you");
         assert_eq!(leases.seen("o", r#""\\ud800""#, 3, 100), "free");
+    }
+
+    #[test]
+    fn a_viewer_request_carries_the_tab_s_session_file_to_the_worker() {
+        let line = viewer_frame(
+            2,
+            br#"{"owner":"o","viewer":3,"now":100,"cwd":"c","operation":{"action":"list"},"env":{},"session":"/s/a.jsonl"}"#,
+            &mut Leases::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            line,
+            concat!(
+                r#"{"id":2,"method":"terminal.request","params":{"owner":"o","cwd":"c","operation":{"action":"list"},"env":{},"session":"/s/a.jsonl"}}"#,
+                "\n"
+            )
+            .as_bytes()
+        );
     }
 }

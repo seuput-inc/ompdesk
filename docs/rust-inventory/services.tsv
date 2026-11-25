@@ -257,6 +257,8 @@ src/main/terminal/agent-tool.ts	native-client	Defines the read-only stock host t
 src/main/terminal/ipc.ts	mixed	The native stock lane arbitrates PTY size. Main gets the live pool target, attaches the owning sender's destroyed listener and enqueues work before yielding. Tab release removes that binding before releasing the sidecar, and an outstanding reply rechecks it. Move these shell bindings with the window and pool callback (§1.3a,c).
 src/main/terminal/lease.test.ts	tooling	Two viewers of the real stock lane compete over one synthetic PTY. Exercises returned geometry, arrival order, timed takeover, close and owner disposal.
 src/main/terminal/requests.ts	mixed	The stock lane chooses an allowed shell, derives the paired PTY owner and applies viewer operations before forwarding. Main validates incoming shapes before binding the sender or dispatching to an older paired host (§1.3a,c).
+src/main/terminal/history.test.ts	tooling	Exercises checkpoint pacing, the quit's last pass and restore through a fake worker and core store.
+src/main/terminal/history.ts	mixed	Paces terminal.checkpoints asks to the terminals worker and the quit's last pass; the core's scrollback reader and termhistory.rs write and list the files. Move the pacing with the stock lane's owner (§1.3a,c).
 src/main/terminal/shells.test.ts	exception	Test coverage for installed shell ordering and deduplication.
 src/main/terminal/shells.ts	native-client	terminal.shells lists installed shells in preference order. The same Rust probe restricts a named shell when the stock lane processes a create.
 src/main/terminal/terminal-longpoll.test.ts	exception	Test coverage for idle terminal poll deadlines.

@@ -36,6 +36,8 @@ struct Fake {
     inventory: RefCell<Value>,
     inventory_error: RefCell<Option<String>>,
     plugin_checks: Answers,
+    /// What an upgrade would install; a plugin without an entry adds nothing new.
+    previews: Answers,
     upgrades: Answers,
     skill_checks: Answers,
     skill_updates: Answers,
@@ -75,6 +77,7 @@ impl Default for Fake {
             inventory: RefCell::new(inventory()),
             inventory_error: RefCell::default(),
             plugin_checks: RefCell::default(),
+            previews: RefCell::default(),
             upgrades: RefCell::default(),
             skill_checks: RefCell::default(),
             skill_updates: RefCell::default(),
@@ -141,6 +144,10 @@ impl Fake {
                 None => Ok(json!({"updatedAt": "now"})),
             },
             "plugin.check" => pick(&self.plugin_checks, id),
+            "plugin.preview" if !self.previews.borrow().contains_key(id) => {
+                Ok(json!({"version": null, "added": []}))
+            }
+            "plugin.preview" => pick(&self.previews, id),
             "plugin.upgrade" => pick(&self.upgrades, id),
             "skill.check" => pick(&self.skill_checks, id),
             "skill.update" => pick(&self.skill_updates, id),
@@ -627,8 +634,10 @@ fn goes_marketplaces_plugins_skills_mcp_and_applies_once_at_the_end() {
                 "inventory",
                 "marketplace.refresh official",
                 "plugin.check live-plug",
+                "plugin.preview live-plug",
                 "plugin.upgrade live-plug",
                 "plugin.check tools@official",
+                "plugin.preview tools@official",
                 "plugin.upgrade tools@official",
                 "skill.check @s/skill",
                 "skill.update @s/skill",
@@ -827,6 +836,143 @@ fn a_failed_check_or_upgrade_is_recorded_and_a_linked_plugin_is_never_asked_abou
             (&json!("linked"), &Value::Null, &Value::Null)
         );
         assert_eq!(*h.fake.calls.borrow(), ["inventory"]);
+    });
+}
+
+#[test]
+fn holds_an_upgrade_that_adds_extensions_tools_or_hooks_until_the_row_s_update_now_approves_it() {
+    run(async {
+        let h = harness(true);
+        h.set_inventory(
+            "plugins",
+            json!([
+                plugin(json!({})),
+                plugin(json!({"channel": "npm", "id": "plain", "spec": "^1.0.0"}))
+            ]),
+        );
+        let key = "plugin:tools@official:user";
+        let f = &h.fake;
+        Harness::answer(&f.plugin_checks, "tools@official", plugin_check(json!({})));
+        Harness::answer(&f.plugin_checks, "plain", plugin_check(json!({})));
+        Harness::answer(
+            &f.previews,
+            "tools@official",
+            json!({"version": "1.1.0", "added": ["hooks ./h.ts", "tools ./t.ts"]}),
+        );
+        Harness::answer(
+            &f.upgrades,
+            "tools@official",
+            upgrade(json!({"activation": "restart-required"})),
+        );
+        Harness::answer(&f.upgrades, "plain", upgrade(json!({})));
+        let held = json!({"kind": "failed", "failure": {
+            "reason": "plugin-needs-approval",
+            "detail": "1.0.0 → 1.1.0 · hooks ./h.ts, tools ./t.ts",
+        }});
+
+        // A check of every row: held and not installed; a plugin that adds nothing upgrades as before.
+        h.now(None).await.unwrap();
+        assert_eq!(h.row(key)["last"], held);
+        assert_eq!(h.row(key)["installed"], "1.0.0");
+        assert_eq!(f.count("plugin.upgrade tools@official"), 0);
+        assert_eq!(
+            h.row("plugin:plain:user")["last"],
+            json!({"kind": "updated", "from": "1.0.0", "to": "1.1.0"})
+        );
+        assert_eq!(
+            *f.applied.borrow(),
+            [json!({"reload": true, "restart": false, "reconnect": []})]
+        );
+
+        // The row's own Update now approves what the hold showed: the upgrade runs and the tabs restart.
+        h.now(Some(key)).await.unwrap();
+        let calls = f.calls.borrow().clone();
+        assert_eq!(
+            calls[calls.len() - 3..],
+            [
+                "plugin.check tools@official",
+                "plugin.preview tools@official",
+                "plugin.upgrade tools@official",
+            ]
+        );
+        assert_eq!(h.row(key)["installed"], "1.1.0");
+        assert_eq!(
+            h.row(key)["last"],
+            json!({"kind": "updated", "from": "1.0.0", "to": "1.1.0"})
+        );
+        assert_eq!(
+            f.applied.borrow().last(),
+            Some(&json!({"reload": false, "restart": true, "reconnect": []}))
+        );
+    });
+}
+
+#[test]
+fn an_update_now_with_no_hold_shown_or_a_changed_candidate_holds_what_it_read_and_asks_again() {
+    run(async {
+        let h = harness(true);
+        h.set_inventory("plugins", json!([plugin(json!({}))]));
+        let key = "plugin:tools@official:user";
+        let f = &h.fake;
+        Harness::answer(&f.plugin_checks, "tools@official", plugin_check(json!({})));
+        Harness::answer(
+            &f.previews,
+            "tools@official",
+            json!({"version": "1.1.0", "added": ["hooks ./h.ts"]}),
+        );
+        Harness::answer(
+            &f.upgrades,
+            "tools@official",
+            upgrade(json!({"activation": "restart-required"})),
+        );
+
+        // The person never saw it: the first click only shows the hold.
+        h.now(Some(key)).await.unwrap();
+        assert_eq!(
+            h.row(key)["last"]["failure"]["detail"],
+            "1.0.0 → 1.1.0 · hooks ./h.ts"
+        );
+        // A newer candidate appeared before the approval: read once more and held again, nothing installed.
+        Harness::answer(
+            &f.plugin_checks,
+            "tools@official",
+            plugin_check(json!({"latest": "1.2.0"})),
+        );
+        Harness::answer(
+            &f.previews,
+            "tools@official",
+            json!({"version": "1.2.0", "added": ["extensions ./x.ts", "hooks ./h.ts"]}),
+        );
+        h.now(Some(key)).await.unwrap();
+        assert_eq!(
+            h.row(key)["last"],
+            json!({"kind": "failed", "failure": {
+                "reason": "plugin-needs-approval",
+                "detail": "1.0.0 → 1.2.0 · extensions ./x.ts, hooks ./h.ts",
+            }})
+        );
+        // It was installed meanwhile (outside OMPdesk): nothing left to approve or install.
+        Harness::answer(
+            &f.plugin_checks,
+            "tools@official",
+            plugin_check(json!({"installed": "1.2.0", "latest": "1.2.0"})),
+        );
+        h.now(Some(key)).await.unwrap();
+        assert_eq!(h.row(key)["last"], json!({"kind": "current"}));
+        // A failed read of the candidate never installs it.
+        Harness::answer(
+            &f.plugin_checks,
+            "tools@official",
+            plugin_check(json!({"installed": "1.2.0", "latest": "1.3.0"})),
+        );
+        helper_key(&f.previews, "tools@official", "clone failed");
+        h.now(Some(key)).await.unwrap();
+        assert_eq!(
+            h.row(key)["last"],
+            json!({"kind": "failed", "failure": {"reason": "check", "detail": "clone failed"}})
+        );
+        assert_eq!(f.count("plugin.upgrade tools@official"), 0);
+        assert!(f.applied.borrow().is_empty());
     });
 }
 

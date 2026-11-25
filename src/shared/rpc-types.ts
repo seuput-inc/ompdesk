@@ -676,6 +676,25 @@ export interface RpcContextReportResult {
 	breakdown?: RpcContextUsageBreakdown;
 	contextWindow: number;
 	model: string;
+	/** Stock's `getPromptCacheStatus()` when it was read; absent on an omp without it or when it knows no entry. */
+	promptCache?: RpcPromptCacheStatus;
+}
+
+/**
+ * What the next request finds in the prompt cache, as stock computes it (pi-tui `status-line/host` `PromptCacheStatus`,
+ * the TUI's `cache` segment): the GUI only words it, never judges expiry itself.
+ */
+export interface RpcPromptCacheStatus {
+	state: "warm" | "cold";
+	/** Why it is cold (`expired`, `model`, `tools`, …); absent while warm. */
+	reason?: { kind: string; at?: number };
+	/** Read off a reopened transcript, not a response this omp saw. */
+	inferred: boolean;
+	/** Send time of the last request that read or wrote the entry. */
+	touchedAt: number;
+	/** Lifetime after the last touch; absent when the provider never expires the entry. */
+	ttlMs?: number;
+	warming?: { state: "scheduled" | "refreshing" | "inactive" };
 }
 
 /** Context inspector categories: stock's five, tools split by source, context files out of system context. */

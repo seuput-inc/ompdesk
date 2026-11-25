@@ -11,6 +11,27 @@ export interface TerminalSnapshot {
 	rows?: number;
 	/** Who may size this PTY for the asking viewer: it did (`you`), another viewer did (`other`), or nobody. */
 	lease?: TerminalLeaseState;
+	/**
+	 * The offset this viewer asked from is older than the kept scrollback (it fell behind by more than the scrollback,
+	 * it starts on a stream whose head was cut, or another viewer cleared it): `output` starts at the oldest kept
+	 * character, so the viewer clears its screen before writing it instead of continuing a stream with a hole in it.
+	 */
+	gap?: boolean;
+}
+/**
+ * What a restart keeps of one side-panel terminal (`crates/core/src/termhistory.rs`): its tab's session file, its
+ * order among the tab's terminals, the folder its shell was in, the shell, how it ended, and the tail of its output.
+ */
+export interface TerminalCheckpoint {
+	session: string;
+	id: string;
+	order: number;
+	cwd: string;
+	shell?: string;
+	exited: boolean;
+	exitCode?: number;
+	error?: string;
+	history: string;
 }
 /** A viewer's standing on a PTY's size. */
 export type TerminalLeaseState = "you" | "other" | "free";
@@ -43,6 +64,11 @@ export type TerminalOperation =
 	| { action: "resize"; id: string; cols: number; rows: number }
 	/** Take the PTY's size from whoever has it (the viewer's next `resize` is then applied). */
 	| { action: "claim"; id: string }
+	/**
+	 * Make the program in the PTY draw its screen again (it is resized one row shorter and back): a viewer asks once its
+	 * screen stayed blank after a `gap` replay settled. Answered as a list without output.
+	 */
+	| { action: "redraw"; id: string }
 	| { action: "close" | "restart" | "clear"; id: string };
 export interface TerminalApi {
 	request(tabId: string, operation: TerminalOperation): Promise<TerminalSnapshot[]>;

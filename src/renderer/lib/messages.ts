@@ -1,5 +1,6 @@
 import type { StoreApi } from "zustand/vanilla";
 import { CREDIT_SPEND_OFF_WORDING } from "../../shared/credit-spend";
+import { isBillingCap } from "../../shared/quota-reset";
 import type {
 	AgentMessage,
 	ImageContent,
@@ -112,7 +113,9 @@ export type TurnErrorKind =
 	| "contextOverflow"
 	| "auth"
 	| "creditsOff"
+	| "modelUnavailable"
 	| "rateLimit"
+	| "billing"
 	| "overloaded"
 	| "compaction"
 	| "unknown";
@@ -140,7 +143,9 @@ const TURN_ERROR_ACTIONS: Record<TurnErrorKind, readonly TurnErrorAction[]> = {
 	auth: ["openProviders", "changeModel"],
 	// Trying again only meets the same refusal: the ways on are the switch (Models & accounts) or another model.
 	creditsOff: ["openProviders", "changeModel"],
+	modelUnavailable: ["changeModel", "openProviders"],
 	rateLimit: ["retry", "changeModel"],
+	billing: ["openProviders", "changeModel"],
 	overloaded: ["retry", "changeModel"],
 	compaction: ["changeModel", "retry"],
 	unknown: ["retry", "changeModel"],
@@ -181,6 +186,15 @@ const TURN_ERROR_PATTERNS: ReadonlyArray<readonly [Exclude<TurnErrorKind, "unkno
 		"overloaded",
 		[statusPattern("502|503|529"), /overloaded|service unavailable|temporarily unavailable|over capacity/i],
 	],
+	// The provider does not serve the model asked for (renamed, retired, not on this plan or region).
+	[
+		"modelUnavailable",
+		[
+			statusPattern("404"),
+			/model_not_found|not_found_error|unknown model|invalid model/i,
+			/\bmodels?\b[^.\n]{0,80}\b(?:not found|does not exist|doesn't exist|is not available|unavailable|not supported)\b/i,
+		],
+	],
 	[
 		"certificate",
 		[
@@ -212,6 +226,8 @@ export function describeTurnError(errorMessage: string | undefined, stopReason?:
 	let kind: TurnErrorKind = stopReason === "aborted" ? "aborted" : "unknown";
 	if (kind === "unknown" && detail) {
 		kind = TURN_ERROR_PATTERNS.find(([, patterns]) => patterns.some(pattern => pattern.test(detail)))?.[0] ?? kind;
+		// An account out of money ("insufficient_quota", 402, a credit wall) reads like a limit but no wait lifts it.
+		if ((kind === "rateLimit" || kind === "unknown") && isBillingCap(detail)) kind = "billing";
 	}
 	return {
 		kind,

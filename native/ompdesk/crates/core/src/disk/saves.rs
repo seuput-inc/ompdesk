@@ -168,6 +168,19 @@ impl Saves {
         }
         true
     }
+
+    /// Deletes `file` and forgets what waited to be written to it, under the one lock, so no retry brings back a
+    /// file its store removed (a closed terminal's history).
+    fn remove(&self, file: &Path) -> std::io::Result<()> {
+        let mut state = self.lock();
+        if state.kept.remove(file).is_some() {
+            state.tell("store.saved", file);
+        }
+        match std::fs::remove_file(file) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    }
 }
 
 static SAVES: LazyLock<Arc<Saves>> = LazyLock::new(|| {
@@ -192,6 +205,11 @@ pub(crate) fn write_kept(
 
 pub(crate) fn waiting_content(file: &Path) -> Option<Vec<u8>> {
     SAVES.lock().kept.get(file).map(|kept| kept.bytes.clone())
+}
+
+/// Removes a file `write_kept` writes, with any content still waiting for space (`Saves::remove`).
+pub(crate) fn remove_kept(file: &Path) -> std::io::Result<()> {
+    SAVES.remove(file)
 }
 
 /// Where `store.saveFailed` and `store.saved` go: the connection main speaks on.
@@ -377,6 +395,24 @@ mod tests {
             heard(&mut frames),
             vec![("store.saveFailed".to_string(), name)]
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_removed_file_is_not_written_back_by_the_retry_of_content_that_waited_for_space() {
+        let dir = temp("remove");
+        let file = dir.join("history.json");
+        fs::write(&file, "old").unwrap();
+        let full = Arc::new(AtomicBool::new(true));
+        let saves = Arc::new(Saves::new(disk(&full, None), vec![10]));
+
+        assert!(saves.write(&file, b"secret", Some(0o600), 0o700).is_err());
+        saves.remove(&file).unwrap();
+        assert!(!file.exists());
+        saves.remove(&file).unwrap();
+        full.store(false, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!file.exists(), "the kept content came back");
         let _ = fs::remove_dir_all(&dir);
     }
 }

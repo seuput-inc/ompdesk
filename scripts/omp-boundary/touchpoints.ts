@@ -833,7 +833,6 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		],
 		stock: [
 			"@oh-my-pi/pi-coding-agent/config/registry",
-			"@oh-my-pi/pi-coding-agent/tools/browser/attach",
 			"@oh-my-pi/pi-coding-agent/tools/browser/relay/bridge",
 			"@oh-my-pi/pi-coding-agent/tools/browser/relay/server",
 			"@oh-my-pi/pi-coding-agent/tools/browser/settings",

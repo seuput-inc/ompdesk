@@ -10,7 +10,7 @@ import { countMatches, GroupedMatchList, parseDisplayGroups } from "./GrepRender
 import { ToolTextPreview } from "./ToolTextPreview";
 
 /**
- * AST grep, after stock pi-tui `tools/ast-grep.ts`: the pattern, then
+ * AST grep, after stock pi-coding-agent `ui/tools/ast-grep.tsx`: the pattern, then
  * `N matches · N files · in scope · searched N` (limit reached in warning),
  * the grouped matches from `details.displayContent` with their metavariable
  * bindings, the limit note, and parse issues — which, on an empty result,

@@ -263,6 +263,23 @@ describe("AccountPoolsEditor", () => {
 		expect(noKey?.disabled).toBe(true);
 	});
 
+	it("never calls a saved account signed out while its provider's accounts did not read", async () => {
+		// The quota half failed: stock's list came back without identity keys or the pool id.
+		getProviderAccounts.mockResolvedValue(
+			ok("get_provider_accounts", {
+				providerId: "anthropic",
+				usageError: "timeout",
+				accounts: [account(7, "work@example.com")],
+			}),
+		);
+		getSettings.mockResolvedValue(settingsWith({ task: { anthropic: [WORK] } }));
+		await mount();
+
+		await act(async () => agentRow("task")?.click());
+		expect(checkbox("task", WORK)?.checked).toBe(true);
+		expect(text()).not.toContain(translate("accountPools.signedOut", { key: WORK }));
+	});
+
 	it("writes the pool through set_setting and clears it once nothing is checked", async () => {
 		getProviderAccounts.mockResolvedValue(accountsWithKeys(both));
 		getSettings.mockResolvedValue(settingsWith({ task: { anthropic: [WORK] } }));

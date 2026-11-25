@@ -78,7 +78,7 @@ function WidgetPanel({ name, lines }: { name: string; lines: string[] }) {
 }
 
 /**
- * Stock's status line (pi-tui status-line `hookStatuses`): every `setStatus`
+ * Stock's status line (pi-coding-agent modes/view-model/status-line `hookStatuses`): every `setStatus`
  * text, ordered by key, on one row joined by dots, with runs of whitespace
  * collapsed like stock's `sanitizeStatusText`. SGR colors stay (AnsiText).
  */
@@ -662,8 +662,8 @@ function looksLikeJson(text: string): boolean {
 
 /**
  * Multi-line answer: Cmd/Ctrl+Enter submits, Enter adds a newline, Escape
- * cancels. With `promptStyle` (stock's one-line prompt editor, pi-tui
- * hook-editor) Enter submits and Shift+Enter adds the newline; Cmd/Ctrl+Enter
+ * cancels. With `promptStyle` (stock's one-line prompt editor, pi-coding-agent
+ * ui/overlays/panels/hook-dialogs.tsx) Enter submits and Shift+Enter adds the newline; Cmd/Ctrl+Enter
  * still submits.
  */
 function EditorDialog({

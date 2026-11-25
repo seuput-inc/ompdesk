@@ -53,6 +53,7 @@ pub mod stock;
 pub mod supervise;
 mod sys;
 pub mod tailscale;
+mod termhistory;
 // shortcut: the contract the units T2.2-T2.5 fill is unused until they land; drop this allow with the last of them.
 #[allow(dead_code)]
 mod tools;

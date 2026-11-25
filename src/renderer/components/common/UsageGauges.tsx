@@ -12,7 +12,7 @@ import type { UsageLimit, UsageReport } from "../../../shared/rpc-types";
 import { formatSpan, formatSpanCompact } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { usageLimitLabel } from "../../lib/usage-labels";
-import { accountGauges, accountWindows, gaugeColumn, shortWindowLabel } from "../../lib/usage-windows";
+import { accountGauges, accountWindows, gaugeColumn, shortWindowLabel, usedShare } from "../../lib/usage-windows";
 
 /** Columns drawn on one line; a provider with more wraps the rest under them. */
 export const MAX_USAGE_COLUMNS = 4;
@@ -28,7 +28,7 @@ export function resetText(resetsAt: number | undefined, t: Translate, now = Date
 }
 
 function limitShare(limit: UsageLimit): string | null {
-	const fraction = limit.usedFraction ?? (limit.used !== undefined && limit.limit ? limit.used / limit.limit : null);
+	const fraction = usedShare(limit);
 	return fraction === null ? null : `${Math.round(fraction * 100)}%`;
 }
 

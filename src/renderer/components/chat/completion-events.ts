@@ -48,7 +48,10 @@ export function completionFailureCount(message: AgentMessage): number {
 	);
 }
 
-/** Stock's failure notice at the end of a failed bash job's delivered text (pi-tui tools/bash.ts `formatExitCodeNotice`). */
+/**
+ * Stock's failure notice at the end of a failed bash job's delivered text (pi-coding-agent tools/details/bash.ts
+ * `formatExitCodeNotice`).
+ */
 export function exitCodeOf(output: string | undefined): number | undefined {
 	const code = output?.match(/Command exited with code (\d+)/)?.[1];
 	return code === undefined ? undefined : Number(code);

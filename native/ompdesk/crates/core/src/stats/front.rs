@@ -198,12 +198,57 @@ pub(super) async fn fetch(port: u16, p: Fetch) -> Result<Box<serde_json::value::
         serde_json::from_slice(&body).map_err(|e| Fault::new("stats_api_error", e.to_string()))
     })
     .await
-    .map_err(|_| Fault::new("stats_api_error", "Stats API request timed out"))?
+    .map_err(|_| Fault::new(TIMED_OUT, "Stats API request timed out"))?
+}
+
+/// The fault of a read past its 15 s deadline: the caller asks [`answers`] whether the server is slow or hung.
+pub(super) const TIMED_OUT: &str = "stats_timeout";
+
+/// Whether the stats server behind `port` still answers its status (stock's in-memory ingest state, no database
+/// read) within `deadline`. A read past its deadline with no answer here means the server's loop is stuck.
+pub(super) async fn answers(port: u16, deadline: Duration) -> bool {
+    let Ok(request) = Request::builder()
+        .method(Method::GET)
+        .uri("/api/status")
+        .header("host", format!("127.0.0.1:{port}"))
+        .body(Empty::<Bytes>::new())
+    else {
+        return false;
+    };
+    matches!(
+        tokio::time::timeout(deadline, send(port, request)).await,
+        Ok(Ok(res)) if res.status().is_success()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A loopback server that accepts and then either answers 200 or stays silent, as a hung stats worker does.
+    async fn server(answer: bool) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            if answer {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}")
+                    .await;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_server_that_accepts_but_never_answers_its_status_is_not_answering() {
+        assert!(answers(server(true).await, Duration::from_secs(2)).await);
+        assert!(!answers(server(false).await, Duration::from_millis(200)).await);
+    }
 
     #[test]
     fn a_browser_cannot_rebind_the_listener_or_post_from_another_origin() {

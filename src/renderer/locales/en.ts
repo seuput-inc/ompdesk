@@ -833,6 +833,12 @@ export const en: Record<string, string> = {
 	"contextUsage.ringUnknown": "Context {used} · window size unknown",
 	"contextUsage.compactsAt": "Compacts automatically at {point}",
 	"contextUsage.left": "{tokens} left",
+	"contextUsage.cache.kept": "Prompt cache kept until {time} · {left} left",
+	"contextUsage.cache.likelyKept": "Prompt cache likely kept until {time} · {left} left",
+	"contextUsage.cache.noExpiry": "Prompt cache kept, no expiry",
+	"contextUsage.cache.refreshing": "Prompt cache refreshing",
+	"contextUsage.cache.expired": "Prompt cache expired at {time}: the next message is sent uncached",
+	"contextUsage.cache.changed": "Prompt cache not kept: the request changed since the last reply",
 	"contextUsage.title": "Context usage",
 	"contextUsage.used": "Context used",
 	"contextUsage.windowUnknown": "Context window unknown",
@@ -1764,6 +1770,8 @@ export const en: Record<string, string> = {
 	"ipcError.provider_builtin_delete": "Built-in providers can't be removed here.",
 	"ipcError.stats_not_ready": "The stats server is still starting. Try again in a moment.",
 	"ipcError.stats_api_error": "The stats server couldn't answer this request.",
+	"ipcError.attachment_gone":
+		"An attached file is no longer on the computer (attachments are kept for 24 hours), so nothing was sent. Attach it again; the file is named below.",
 	"ipcError.safe_storage_unavailable": "This system can't encrypt the token, so it can't be saved.",
 	"ipcError.keychain_would_ask":
 		"macOS would ask for your login password to open OMPdesk's keychain item, so no secret can be saved on this computer.",
@@ -3542,6 +3550,9 @@ export const en: Record<string, string> = {
 	"tools.bash.exit": "exit {code}",
 	"tools.bash.running": "running…",
 	"tools.bash.openPreview": "Open Preview",
+	"tools.bash.openPreviewStopped": "Open Preview · server stopped",
+	"tools.bash.serverStoppedTitle":
+		"Nothing answered at {url} the last time the Preview loaded it. Open it to try again.",
 	"tools.bash.failed": "Command failed",
 	"tools.bash.timedOut": "timed out",
 	"tools.bash.wallTime": "Wall time",
@@ -4947,6 +4958,7 @@ export const en: Record<string, string> = {
 	"panel.preview.link": "This visual tried to open {url}. Visuals never leave their page on their own.",
 	"panel.preview.linkOpen": "Open in new tab",
 	"panel.preview.unresponsive": "This page isn't responding.",
+	"panel.preview.slow": "This page is taking a long time to load.",
 	"panel.preview.check.error": "This page shows an error",
 	"panel.preview.check.blank": "This page looks blank",
 	"panel.preview.problemsCopy": "Copy problems",
@@ -4960,6 +4972,7 @@ export const en: Record<string, string> = {
 	"panel.preview.agent.takeOver": "Take over",
 	"panel.preview.agent.driving": "The agent is using this page.",
 	"panel.preview.agent.waiting": "The agent may use this page on its next browser step.",
+	"panel.preview.agent.reconnecting": "The link to the other computer dropped. Reconnecting the agent to this page…",
 	"panel.preview.agent.webOnly": "The agent can use web pages, not visuals",
 	"panel.preview.agent.failed": "Couldn't let the agent use the preview",
 	"panel.preview.tabs": "Preview tabs",
@@ -5904,9 +5917,15 @@ export const en: Record<string, string> = {
 	"turnError.creditsOff.title": "Plan limit reached",
 	"turnError.creditsOff.guidance":
 		"This account's plan limit is used up and Credit use is off, so OMPdesk stopped instead of spending credits or extra usage. Wait for the reset, switch models, or turn Credit use on in Models & accounts.",
+	"turnError.modelUnavailable.title": "Model unavailable",
+	"turnError.modelUnavailable.guidance":
+		"The provider doesn't offer this model to your account. Switch to another model or check the provider in Providers.",
 	"turnError.rateLimit.title": "Usage limit reached",
 	"turnError.rateLimit.guidance":
 		"You've hit the provider's rate limit or quota. Try again in a moment or switch to another model.",
+	"turnError.billing.title": "Out of credit",
+	"turnError.billing.guidance":
+		"The provider refused the request for billing: the account's credit, balance or spending limit is used up. Add credit or switch to another model.",
 	"turnError.resume.resetsAt": "The limit resets at {time} · in {countdown}.",
 	"turnError.limitWait": "Tries again by itself at {time} · in {countdown}, or sooner once the limit lifts.",
 	"turnError.overloaded.title": "Provider busy",
@@ -6978,6 +6997,8 @@ export const en: Record<string, string> = {
 	"extensionUpdate.failure.not-updated": "The update finished, but it still reports the old version.",
 	"extensionUpdate.failure.needs-approval":
 		"The new version ships scripts that need your approval. OMPdesk never approves them for you.",
+	"extensionUpdate.failure.plugin-needs-approval":
+		"The new version adds extensions, tools or hooks that run in every session. Choose Update now to approve it.",
 	"extensionUpdate.failure.cancelled": "The update was cancelled.",
 	"settings.connections.mobileWeb": "Mobile web",
 	"mobileWeb.toggle": "Use OMPdesk from a phone or tablet",

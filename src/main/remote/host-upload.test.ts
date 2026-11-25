@@ -67,4 +67,34 @@ describe("uploadToHost", () => {
 		});
 		expect(any.calls).toEqual([]);
 	});
+
+	it("sends two files at a time and never sends one whose window closed while it waited", async () => {
+		const started: string[] = [];
+		const answers = new Map<string, () => void>();
+		const request: HostRequest = async (_method, params) => {
+			const { name } = params as { name: string };
+			started.push(name);
+			const { promise, resolve } = Promise.withResolvers<void>();
+			answers.set(name, resolve);
+			await promise;
+			return { path: `/host/up/${name}` };
+		};
+		const closed = new AbortController();
+		const sends = ["a", "b", "c", "d"].map(name =>
+			uploadToHost(request, name, new Uint8Array(1), name === "c" ? closed.signal : undefined),
+		);
+		await Promise.resolve();
+		expect(started).toEqual(["a", "b"]);
+		closed.abort();
+		answers.get("a")?.();
+		expect(await sends[0]).toEqual({ ok: true, path: "/host/up/a" });
+		expect(await sends[2]).toMatchObject({ ok: false });
+		expect(started).toEqual(["a", "b", "d"]);
+		answers.get("b")?.();
+		answers.get("d")?.();
+		expect(await Promise.all([sends[1], sends[3]])).toEqual([
+			{ ok: true, path: "/host/up/b" },
+			{ ok: true, path: "/host/up/d" },
+		]);
+	});
 });

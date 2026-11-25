@@ -12,8 +12,8 @@ import { resultDetails } from "./result";
 export const MCP_TOOL_NAME_PREFIX = "mcp__";
 
 /**
- * `mcp__<server>_<tool>` → server and tool, exactly as stock pi-tui
- * `tools/mcp.ts` `parseMCPToolName` splits it (first underscore after the
+ * `mcp__<server>_<tool>` → server and tool, exactly as stock pi-coding-agent
+ * `tools/details/mcp.ts` `parseMCPToolName` splits it (first underscore after the
  * prefix). A renderer copy: the renderer cannot import stock;
  * McpRenderer.test.tsx pins it to stock's cases.
  */
@@ -26,7 +26,7 @@ export function parseMcpToolName(name: string): { server: string; tool: string }
 }
 
 /**
- * An MCP server's tool (stock pi-tui `tools/mcp.ts` `describeMCPResult`):
+ * An MCP server's tool (stock pi-coding-agent `ui/tools/mcp.tsx` `mcpPresenter`):
  * the arguments, the text body — a JSON tree when it parses, the error text on
  * failure — any images the server returned, the truncation notice, and the
  * server's `structuredContent` folded as a tree. `MCPToolDetails.rawContent`

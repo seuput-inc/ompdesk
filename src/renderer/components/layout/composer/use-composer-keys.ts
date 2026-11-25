@@ -332,8 +332,9 @@ export function useComposerKeys({
 		// composer or with the caret at position 0, ↓ a newer entry (and finally the stashed draft) only
 		// with the caret at the very end. Anywhere else the arrows move the caret through the text.
 		// Browsing stays a run of plain presses because a recall places the caret on the edge the key
-		// came from — ↑ at position 0, ↓ at the end (stock pi-tui's directional anchor, #99) — so the
-		// next press in the same direction satisfies the same rule; turning around takes one caret move.
+		// came from — ↑ at position 0, ↓ at the end (stock's directional anchor, pi-coding-agent
+		// ui/composer/composer.tsx `#recall`, #99) — so the next press in the same direction satisfies
+		// the same rule; turning around takes one caret move.
 		if (
 			!expanded &&
 			!queueEdit &&

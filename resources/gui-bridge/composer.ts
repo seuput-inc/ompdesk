@@ -412,11 +412,16 @@ export const methods: BridgeMethods = {
 		"composer.context_report": async (_params, env) => {
 			const session = env.session() as Session;
 			requireFn(session, "getContextBreakdown", "contextReport");
+			requireFn(session, "getPromptCacheStatus", "contextReport");
 			const breakdown = session.getContextBreakdown();
+			// Stock's own judgment of the prompt cache (warm, cold and why, the warmer's refresh); undefined when it knows
+			// no entry (no warmer, a reply that used no cache, a tier with no declared lifetime).
+			const promptCache = session.getPromptCacheStatus(Date.now());
 			return {
 				breakdown,
 				contextWindow: breakdown?.contextWindow ?? session.model?.contextWindow ?? 0,
 				model: session.model?.id ?? "",
+				...(promptCache ? { promptCache } : {}),
 			};
 		},
 	}),

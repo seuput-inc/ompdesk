@@ -102,7 +102,8 @@ function resultCost(row: Record<string, unknown>): number {
 // Yields + review rendering
 // ---------------------------------------------------------------------------
 
-// Stock pi-tui tools/task.ts `formatYieldPreview`: since omp 18.22.1 a data-less yield finalizes the sections.
+// Stock pi-coding-agent ui/tools/task/rows.ts `typedYieldRows`: since omp 18.22.1 a data-less yield finalizes the
+// sections.
 function yieldPreview(item: RenderYieldItem, finalizeLabel: string): string {
 	if (item.data === undefined) return finalizeLabel;
 	if (typeof item.data === "string") return item.data.replace(/\s+/g, " ").trim();

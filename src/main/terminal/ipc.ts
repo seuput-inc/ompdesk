@@ -113,7 +113,8 @@ export function registerTerminalIpc(
 				budget: Math.min(operation.budget ?? TERMINAL_OUTPUT_BUDGET, TERMINAL_OUTPUT_BUDGET),
 			};
 		}
-		// A terminal of a tab the phone page owns is told control is off, as that tab's omp is.
+		// A terminal of a tab the phone page owns is told control is off, as that tab's omp is. A tab that closes while
+		// this is on its way (the lazy Bun worker starting) gets nothing back and keeps no terminal (`terminalRequest`).
 		const host = stockHelperHost();
 		const result = await terminalRequest(
 			owner,
@@ -121,12 +122,8 @@ export function registerTerminalIpc(
 			forwarded,
 			controlEnvFor(isWebWindow(target.winId)),
 			viewer,
+			target.sessionFile,
 		);
-		// A tab can close while the lazy Bun worker is starting.
-		if (!owners.has(owner)) {
-			disposeTerminals(owner);
-			return [];
-		}
 		if (!result.length) return result;
 		const standings = await core().call<TerminalLeaseState[]>("terminal.viewerSeen", {
 			host,

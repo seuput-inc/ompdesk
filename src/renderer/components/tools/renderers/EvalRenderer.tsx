@@ -38,7 +38,7 @@ const CELL_STATUSES: Record<string, CellView["status"]> = {
 };
 
 /**
- * Cells of an eval call (stock pi-tui `tools/eval.ts`, `EvalToolDetails.cells`):
+ * Cells of an eval call (stock pi-coding-agent `tools/details/eval.ts`, `EvalToolDetails.cells`):
  * the result's per-cell code, status, time and output, else the call's
  * `cells[]` (or its single `code`) while the cells still stream.
  */

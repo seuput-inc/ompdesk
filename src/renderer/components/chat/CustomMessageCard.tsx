@@ -433,7 +433,10 @@ function AdvisorCard({ message }: { message: AgentMessage }) {
 // async-result — completed background bash/task job rows
 // ---------------------------------------------------------------------------
 
-/** Stock's background job kinds (pi-tui `JobSnapshot["type"]`), named like the tool that started them. */
+/**
+ * Stock's background job kinds (pi-coding-agent tools/details/wait.ts `JobSnapshot["type"]`), named like the
+ * tool that started them.
+ */
 const JOB_KIND_LABELS: Record<string, string> = {
 	bash: "tools.label.bash",
 	task: "tools.label.task",

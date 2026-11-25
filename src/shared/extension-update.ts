@@ -66,9 +66,17 @@ export type ExtensionSkipReason =
  * - `install`: the update failed or could not start (`detail`).
  * - `not-updated`: it finished, but the item still reports the old version.
  * - `needs-approval`: a new skill version ships scripts; stock asks the user, OMPdesk never approves for them.
+ * - `plugin-needs-approval`: a new plugin version adds extension, tool or hook entries (`detail`: the version and
+ *   the entries); held until the person's own "Update now" on that row approves exactly what it shows.
  * - `cancelled`: stopped by quitting.
  */
-export type ExtensionFailureReason = "check" | "install" | "not-updated" | "needs-approval" | "cancelled";
+export type ExtensionFailureReason =
+	| "check"
+	| "install"
+	| "not-updated"
+	| "needs-approval"
+	| "plugin-needs-approval"
+	| "cancelled";
 
 export interface ExtensionFailure {
 	reason: ExtensionFailureReason;
