@@ -316,7 +316,7 @@
 				"resources/gui-bridge/agent-control.ts#install",
 				"resources/gui-bridge/agent-control.ts:343-397"
 			],
-			"syncCommit": "1661762d43e5eab5ecee11a5a5eb6244b7ec369e"
+			"syncCommit": "aa5384b6e6511a59962de6257e137c76c65e7d26"
 		},
 		{
 			"id": "relaunch-once",
