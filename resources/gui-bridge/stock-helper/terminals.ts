@@ -42,10 +42,15 @@ async function shellCwd(pid: number): Promise<string | null> {
 	}
 	if (process.platform !== "darwin") return null;
 	const { promise, resolve } = Promise.withResolvers<string | null>();
-	execFile("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], { timeout: 2000 }, (error, stdout) => {
-		const line = error ? undefined : stdout.split("\n").find(item => item.startsWith("n"));
-		resolve(line ? line.slice(1) : null);
-	});
+	execFile(
+		"lsof",
+		["-a", "-p", String(pid), "-d", "cwd", "-Fn"],
+		{ timeout: 2000, windowsHide: true },
+		(error, stdout) => {
+			const line = error ? undefined : stdout.split("\n").find(item => item.startsWith("n"));
+			resolve(line ? line.slice(1) : null);
+		},
+	);
 	return promise;
 }
 
