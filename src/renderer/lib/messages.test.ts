@@ -7,6 +7,7 @@ import { useSessionStore } from "../stores/session";
 import { sessionRuntimeStore } from "../stores/session-runtime-context";
 import { useTabsStore } from "../stores/tabs";
 import { useToastStore } from "../stores/toast";
+import { translate } from "./i18n";
 import {
 	abortActiveTurn,
 	forkSessionFromEntryInNewTab,
@@ -569,7 +570,7 @@ describe("one Stop per turn", () => {
 		expect(harness.rpc.abortAndRestoreQueue).toHaveBeenCalledTimes(2);
 	});
 
-	it("lets go at once when nothing ran, and when omp refused the Stop", async () => {
+	it("lets go at once when nothing ran, and when omp refused the Stop, and says it was refused", async () => {
 		const harness = installWindow([]);
 		await abortActiveTurn();
 		expect(useComposerStore.getState().stopping).toBe(false);
@@ -578,11 +579,28 @@ describe("one Stop per turn", () => {
 		harness.rpc.abortAndRestoreQueue.mockResolvedValueOnce({ success: false, error: "no" } as never);
 		await abortActiveTurn();
 		expect(useComposerStore.getState().stopping).toBe(false);
+		expect(useToastStore.getState().toasts.map(toast => [toast.variant, toast.title])).toEqual([
+			["error", translate("input.stopRefused")],
+		]);
 		await abortActiveTurn();
 		expect(harness.rpc.abortAndRestoreQueue).toHaveBeenCalledTimes(3);
 	});
 
-	it("never keeps Stop dead when the turn's end is lost", async () => {
+	it("a Stop whose answer is lost is not read as stopped: it says so, never throws, and Stop works again", async () => {
+		const harness = installWindow([]);
+		useSessionStore.setState({ isStreaming: true });
+		harness.rpc.abortAndRestoreQueue.mockRejectedValueOnce(new Error("link lost"));
+		const response = await abortActiveTurn();
+		expect(response.success).toBe(false);
+		expect(useComposerStore.getState().stopping).toBe(false);
+		expect(useToastStore.getState().toasts.map(toast => [toast.variant, toast.title])).toEqual([
+			["warning", translate("input.stopUnconfirmed")],
+		]);
+		await abortActiveTurn();
+		expect(harness.rpc.abortAndRestoreQueue).toHaveBeenCalledTimes(2);
+	});
+
+	it("never keeps Stop dead when the turn's end is lost, and says the turn has not ended", async () => {
 		vi.useFakeTimers();
 		try {
 			installWindow([]);
@@ -591,6 +609,7 @@ describe("one Stop per turn", () => {
 			expect(useComposerStore.getState().stopping).toBe(true);
 			await vi.advanceTimersByTimeAsync(10_001);
 			expect(useComposerStore.getState().stopping).toBe(false);
+			expect(useToastStore.getState().toasts.map(toast => toast.message)).toEqual([translate("input.stopNotEnded")]);
 		} finally {
 			vi.useRealTimers();
 		}
