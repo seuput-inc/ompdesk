@@ -1154,7 +1154,7 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: {
 			session: "a2uiForm",
-			inView: '[data-a2ui-surface^="contact-"]',
+			inView: '[data-a2ui-card][data-a2ui-live] [data-a2ui-surface^="contact-"]',
 			// The dismissal ends the turn, so the session is idle for the next view's prompt.
 			after: async page => {
 				const skip = page.locator("[data-a2ui-dock-skip]");
