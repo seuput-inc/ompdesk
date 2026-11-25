@@ -2142,6 +2142,8 @@ app.whenReady().then(async () => {
 				turnWait.noteResuming(tabId, resuming);
 			},
 			resumeRank: tabId => sidecarPool.resumeRank(tabId),
+			// Only this computer's own tabs get the cut-off row (the core offers no other).
+			setCutOff: (tabId, cutOff) => sidecarPool.setCutOff(tabId, cutOff),
 			// A window's tab shows its retry; a hosted tab's wait for a provider's limit goes to its device.
 			setScheduledRetry: (tabId, retry) => {
 				sidecarPool.setScheduledRetry(tabId, retry);
@@ -2206,6 +2208,26 @@ app.whenReady().then(async () => {
 			});
 		},
 		log: (message, details) => writeRuntimeLog({ source: "turn-resume", message, details }),
+		// A cut-off turn waits for the person: the opener of a session an agent opened hears it from the session itself
+		// (`reportFor` does nothing for a tab nobody opened). Each cut and each dismissal is its own report.
+		cutNote: (tabId, what) => {
+			const session = sidecarPool.resumeFacts().find(fact => fact.tabId === tabId)?.sessionFile;
+			const name = session ? ` (session ${basename(session)})` : "";
+			const because =
+				what === "crash-loop"
+					? "its omp ended three times within five minutes"
+					: what === "failed"
+						? "continuing it failed three times"
+						: "automatic continuation is off";
+			tabReport.current?.(tabId, {
+				kind: "blocked",
+				id: `cut-${what}-${Date.now()}`,
+				text:
+					what === "dismissed"
+						? `[OMPdesk] The person dismissed this session's cut-off turn${name}: it stays where the cut left it. Send it a message if the work still needs it.`
+						: `[OMPdesk] This session's turn was cut off when its omp ended and did not continue on its own${name} (${because}). It waits for the person's Continue on its tab; send it a message if the work should go on now.`,
+			});
+		},
 	});
 	ipc.handle(IPC_COMMANDS.RESUME_CANCEL_WAIT, async (_caller, tabId: unknown) => {
 		if (typeof tabId !== "string") return;
@@ -2218,6 +2240,12 @@ app.whenReady().then(async () => {
 	sidecarPool.onCancelWait = tabId => turnResume.cancelWait(tabId);
 	ipc.handle(IPC_COMMANDS.RESUME_STOP, async (_caller, tabId: unknown) => {
 		if (typeof tabId === "string") await turnResume.stopResumed(tabId);
+	});
+	ipc.handle(IPC_COMMANDS.RESUME_CONTINUE, (_caller, tabId: unknown) => {
+		if (typeof tabId === "string") turnResume.continueCut(tabId);
+	});
+	ipc.handle(IPC_COMMANDS.RESUME_DISMISS, (_caller, tabId: unknown) => {
+		if (typeof tabId === "string") turnResume.dismissCut(tabId);
 	});
 	ipc.on(IPC_COMMANDS.CONNECTIVITY_REPORT, (_caller, online: unknown) => {
 		if (typeof online === "boolean") connectivity.report(online);

@@ -2307,6 +2307,12 @@ export const ko: Record<string, string> = {
 	"settings.gui.resumeInterruptedDesc":
 		"종료, 비정상 종료, 업데이트 뒤에 하던 작업이 멈춘 곳에서 이어져서 종료할 때 묻지 않아요. 직접 멈춘 턴은 그대로예요.",
 	"chat.resuming": "하던 작업을 이어서 하는 중이에요…",
+	"chat.cutOff.off": "이 턴은 중간에 끊겼고 저절로 이어지지 않았어요.",
+	"chat.cutOff.crash-loop": "이 턴은 중간에 끊겼어요. omp가 계속 종료돼서 저절로 이어가지 않았어요.",
+	"chat.cutOff.failed": "이 턴은 중간에 끊겼고 이어가기에 실패했어요.",
+	"chat.cutOff.continue": "이어서 하기",
+	"chat.cutOff.dismiss": "닫기",
+	"chat.cutOff.failedAction": "턴을 이어가지 못했어요",
 	"chat.connectionWait": "인터넷 연결을 기다리는 중이에요…",
 	"chat.connectionWaitHost": "{device}의 인터넷 연결을 기다리는 중이에요…",
 	"chat.connectionWaitCancelFailed": "대기를 취소하지 못했어요",

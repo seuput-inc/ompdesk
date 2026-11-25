@@ -1172,6 +1172,21 @@ impl Ctx {
         Ok(())
     }
 
+    pub(super) async fn set_cut_off(&self, tab: &str, cut_off: Option<String>) -> R<()> {
+        let changed = self.with(|pool| {
+            let entry = pool.entry_mut(tab)?;
+            if entry.cut_off == cut_off {
+                return None;
+            }
+            entry.cut_off = cut_off;
+            Some(())
+        });
+        if changed.is_some() {
+            self.forward_status(tab).await?;
+        }
+        Ok(())
+    }
+
     /// Which tab a relaunch continues first: 0 the window's focused tab, 1 another pane of its split, 2 the rest.
     pub(super) fn resume_rank(&self, tab: &str) -> i64 {
         self.with(|pool| {

@@ -36,7 +36,7 @@
  */
 import { readFileSync } from "node:fs";
 import { parseAgentMessage } from "../shared/agent-control";
-import type { IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
+import type { IpcCutOff, IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
 import { LIMIT_LOOK_MS, QUOTA_FALLBACK_MS } from "../shared/quota-reset";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
@@ -380,6 +380,8 @@ export interface ResumePool {
 	setAwaitingConnection(tabId: string, awaiting: boolean): void;
 	/** Show or clear the tab's calm "continuing where it left off" row: a relaunch continues it and its turn has not started yet. */
 	setResuming(tabId: string, resuming: boolean): void;
+	/** Show (or with `undefined` clear) the tab's cut-off row: its turn waits for the person's Continue or Dismiss. */
+	setCutOff(tabId: string, cutOff: IpcCutOff | undefined): void;
 	/** Show (or with `undefined` clear) the tab's scheduled retry. */
 	setScheduledRetry(tabId: string, retry: IpcScheduledRetry | undefined): void;
 	/** Spawn a deferred tab's process; the sidecar, or null when the tab is gone. */
@@ -440,6 +442,11 @@ export interface ResumeDeps {
 	 * will run again reports nothing.
 	 */
 	goalSettled?: (tabId: string, outcome: GoalSettlement) => void;
+	/**
+	 * A tab's cut-off turn was offered to the person instead of going on (`what` says why), or the person dismissed it:
+	 * a session an agent opened tells its opener, which otherwise waits for a result that will not come.
+	 */
+	cutNote?: (tabId: string, what: IpcCutOff | "dismissed") => void;
 	/**
 	 * One line of the runtime log (`gui-runtime.jsonl`, source `turn-resume`): each relaunch decision and each limit
 	 * wait's start and try, so a turn that did not continue can be explained afterwards from the user's own files.
@@ -534,7 +541,12 @@ export class TurnResume {
 	/** A token settled before its caller had it (an item that came inside the call): settled when it is waited on. */
 	readonly #settled = new Set<number>();
 	/** What the core has shown the pool, to clear when it is lost: the waiting, "continuing" and scheduled-retry rows. */
-	readonly #shown = { awaiting: new Set<string>(), resuming: new Set<string>(), scheduled: new Set<string>() };
+	readonly #shown = {
+		awaiting: new Set<string>(),
+		resuming: new Set<string>(),
+		scheduled: new Set<string>(),
+		cutOff: new Set<string>(),
+	};
 	/** Tabs whose launch continuation Autopilot's goal waits on (`relaunchContinuation` said so): told `none` if the core is lost. */
 	readonly #owedGoals = new Set<string>();
 
@@ -628,14 +640,16 @@ export class TurnResume {
 		this.#listeners.clear();
 		for (const settle of this.#tokens.values()) settle();
 		this.#tokens.clear();
-		const { awaiting, resuming, scheduled } = this.#shown;
-		const rows = { awaiting: [...awaiting], resuming: [...resuming], scheduled: [...scheduled] };
+		const { awaiting, resuming, scheduled, cutOff } = this.#shown;
+		const rows = { awaiting: [...awaiting], resuming: [...resuming], scheduled: [...scheduled], cutOff: [...cutOff] };
 		awaiting.clear();
 		resuming.clear();
 		scheduled.clear();
+		cutOff.clear();
 		for (const tab of rows.awaiting) this.#deps.pool.setAwaitingConnection(tab, false);
 		for (const tab of rows.scheduled) this.#deps.pool.setScheduledRetry(tab, undefined);
 		for (const tab of rows.resuming) this.#deps.pool.setResuming(tab, false);
+		for (const tab of rows.cutOff) this.#deps.pool.setCutOff(tab, undefined);
 		const owed = [...this.#owedGoals];
 		this.#owedGoals.clear();
 		for (const tab of owed) this.#deps.goalSettled?.(tab, "none");
@@ -680,6 +694,14 @@ export class TurnResume {
 				if (item.resuming) this.#shown.resuming.add(tab);
 				else this.#shown.resuming.delete(tab);
 				deps.pool.setResuming(tab, item.resuming as boolean);
+				break;
+			case "setCutOff":
+				if (item.cutOff) this.#shown.cutOff.add(tab);
+				else this.#shown.cutOff.delete(tab);
+				deps.pool.setCutOff(tab, (item.cutOff ?? undefined) as IpcCutOff | undefined);
+				break;
+			case "cutNote":
+				deps.cutNote?.(tab, item.what as IpcCutOff | "dismissed");
 				break;
 			case "setScheduled":
 				if (item.retry) this.#shown.scheduled.add(tab);
@@ -899,6 +921,19 @@ export class TurnResume {
 	/** The resuming row's Stop: abort what this launch resumed on the tab, drop what still waits. */
 	async stopResumed(tabId: string): Promise<void> {
 		await this.#promise(this.#call<number>("stopResumed", { tab: tabId }));
+	}
+
+	/** The cut-off row's Continue: the tab's cut-off turn goes on, if it is still the one cut. */
+	continueCut(tabId: string): void {
+		this.#call("continueCut", () => ({
+			tab: tabId,
+			env: this.#env(["facts", "fact", "network", "enabled", "now"], tabId),
+		}));
+	}
+
+	/** The cut-off row's Dismiss: the turn stays where the cut left it. */
+	dismissCut(tabId: string): void {
+		this.#call("dismissCut", () => ({ tab: tabId, env: this.#env(["facts", "fact", "enabled", "now"], tabId) }));
 	}
 
 	/**

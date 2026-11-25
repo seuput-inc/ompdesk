@@ -127,6 +127,7 @@ function world(patch: Partial<ResumeFact> = {}, options: WorldOptions = {}) {
 				state.fact.awaitingConnection = awaiting;
 			},
 			setResuming: () => undefined,
+			setCutOff: () => undefined,
 			setScheduledRetry: (_tab, retry) => {
 				shown.push(retry);
 			},

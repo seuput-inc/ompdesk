@@ -512,6 +512,9 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "setResuming" => {
             later(async move { done(ctx.set_resuming(&p.s("tab")?, p.b("resuming")).await) })
         }
+        "setCutOff" => {
+            later(async move { done(ctx.set_cut_off(&p.s("tab")?, p.os("cutOff")).await) })
+        }
         "resumeRank" => now(Value::from(
             ctx.resume_rank(&p.s("tab").unwrap_or_default()),
         )),

@@ -101,6 +101,8 @@ export interface ControlTab {
 	 * opener in this state is not idle.
 	 */
 	resuming?: boolean;
+	/** Its cut-off turn did not go on by itself and waits for the person's Continue (TurnResume's cut-off row). */
+	cutOff?: "off" | "crash-loop" | "failed";
 	/** Open asks and approvals that wait for the person. */
 	asks: ControlAsk[];
 	/** A plan proposal that waits for approval (plan mode); answered like an ask with `ompdesk_session_answer`. */

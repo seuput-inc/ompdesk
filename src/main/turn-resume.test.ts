@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapAgentMessage } from "../shared/agent-control";
-import type { IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
+import type { IpcCutOff, IpcScheduledRetry, IpcTabRunOutcome } from "../shared/ipc-types";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { ConnectivityMonitor } from "./connectivity";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
@@ -316,7 +316,7 @@ interface Harness {
 	timeouts: Array<[string, number | undefined]>;
 	/** `reachable`: what a probe of the way out answers while the link says it is up; `verified`: each host probed. */
 	net: { online: boolean; wake: boolean; reachable: boolean; verified: Array<string | undefined> };
-	state: { enabled: boolean; frozen: boolean; opened: ResumeMarker[] };
+	state: { enabled: boolean; frozen: boolean; opened: ResumeMarker[]; now: number };
 	resume: TurnResume;
 	pool: ResumePool;
 	/** Moves the tab's sidecar to another status (a spawn becoming ready, a crash). */
@@ -339,6 +339,10 @@ interface Harness {
 	moves: MovesInFlight;
 	/** How each launch continuation ended for its goal (`goalSettled`), in order. */
 	goals: Array<[string, GoalSettlement]>;
+	/** Every `setCutOff` call (the cut-off row), in order (`undefined` = cleared). */
+	cutOffs: Array<[string, IpcCutOff | undefined]>;
+	/** What each cut-off told the tab's opener (`cutNote`), in order. */
+	cutNotes: Array<[string, IpcCutOff | "dismissed"]>;
 }
 
 function setup(
@@ -375,6 +379,8 @@ function setup(
 	const logs: Array<[string, ResumeLogDetails]> = [];
 	const moves = new MovesInFlight();
 	const goals: Array<[string, GoalSettlement]> = [];
+	const cutOffs: Array<[string, IpcCutOff | undefined]> = [];
+	const cutNotes: Array<[string, IpcCutOff | "dismissed"]> = [];
 	const { sidecar, commands, timeouts, setStatus, setConnected, listeners } = fakeSidecar(
 		options.answers,
 		options.status,
@@ -389,6 +395,7 @@ function setup(
 		enabled: options.enabled ?? true,
 		frozen: false,
 		opened: [] as ResumeMarker[],
+		now: 1_000,
 	};
 	const pool: ResumePool = {
 		resumeFacts: () => facts.map(entry => ({ ...entry })),
@@ -414,6 +421,9 @@ function setup(
 		},
 		setResuming: (tabId, value) => {
 			resuming.push([tabId, value]);
+		},
+		setCutOff: (tabId, value) => {
+			cutOffs.push([tabId, value]);
 		},
 	};
 	const resume = new TurnResume({
@@ -443,7 +453,7 @@ function setup(
 			},
 		},
 		frozen: () => state.frozen,
-		now: () => 1_000,
+		now: () => state.now,
 		openTab: markerToOpen => {
 			state.opened.push(markerToOpen);
 			if (options.openTab) return options.openTab(markerToOpen);
@@ -454,6 +464,9 @@ function setup(
 		goalSettled: (tabId, outcome) => {
 			goals.push([tabId, outcome]);
 			options.goalSettled?.(tabId, outcome);
+		},
+		cutNote: (tabId, what) => {
+			cutNotes.push([tabId, what]);
 		},
 		log: (message, details) => {
 			logs.push([message, details]);
@@ -481,6 +494,8 @@ function setup(
 		logs,
 		moves,
 		goals,
+		cutOffs,
+		cutNotes,
 	};
 }
 
@@ -1590,6 +1605,101 @@ describe("TurnResume after the omp died under its tab (`exits`)", () => {
 		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted", "restore_interrupted"]);
 		expect(h.goals).toEqual([["restored", "none"]]);
 		expect(h.store.read().map(entry => entry.tab)).toEqual(["restored"]);
+	});
+});
+
+describe("TurnResume cut-off turns the person continues", () => {
+	let h: Harness;
+	afterEach(() => rmSync(h.dir, { recursive: true, force: true }));
+
+	/** The tab's omp dies under a running turn: its `n`th exit. */
+	const dies = async (n: number) => {
+		h.facts[0] = fact({ running: true, exits: n - 1 });
+		h.resume.sync();
+		h.facts[0] = fact({ exits: n });
+		h.resume.sync();
+		await settle();
+	};
+	const restores = () => h.commands.filter(cmd => cmd.type === "restore_interrupted").length;
+
+	it("continues a turn whose omp keeps dying three times in five minutes, then waits for the person's Continue", async () => {
+		h = setup({ answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		for (const n of [1, 2, 3]) await dies(n);
+		expect(restores()).toBe(3);
+		expect(h.cutOffs).toEqual([]);
+
+		await dies(4);
+		expect(restores()).toBe(3);
+		expect(h.cutOffs).toEqual([["t1", "crash-loop"]]);
+		expect(h.cutNotes).toEqual([["t1", "crash-loop"]]);
+		expect(h.logs).toContainEqual([
+			"marker",
+			{ session: "/s/a.jsonl", reason: "running", tab: "t1", via: "exit", skipped: "crash-loop" },
+		]);
+
+		h.resume.continueCut("t1");
+		await settle();
+		expect(restores()).toBe(4);
+		expect(h.cutOffs.at(-1)).toEqual(["t1", undefined]);
+		// The person's Continue starts the count afresh: the next death continues by itself.
+		await dies(5);
+		expect(restores()).toBe(5);
+	});
+
+	it("counts only the deaths of the last five minutes", async () => {
+		h = setup({ answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		for (const n of [1, 2, 3]) await dies(n);
+		h.state.now += 5 * 60_000;
+		await dies(4);
+		expect(restores()).toBe(4);
+		expect(h.cutOffs).toEqual([]);
+	});
+
+	it("with automatic continuation off, offers a turn whose omp died and sends nothing until Continue", async () => {
+		h = setup({ enabled: false, answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		await dies(1);
+		expect(h.commands).toEqual([]);
+		expect(h.store.read()).toEqual([]);
+		expect(h.cutOffs).toEqual([["t1", "off"]]);
+
+		h.resume.continueCut("t1");
+		await settle();
+		expect(h.commands.map(cmd => cmd.type)).toEqual(["restore_interrupted"]);
+	});
+
+	it("Dismiss leaves the cut-off turn as it is and tells the opener; a Continue after it sends nothing", async () => {
+		h = setup({ enabled: false, answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		await dies(1);
+		h.resume.dismissCut("t1");
+		h.resume.continueCut("t1");
+		await settle();
+		expect(h.commands).toEqual([]);
+		expect(h.cutOffs.at(-1)).toEqual(["t1", undefined]);
+		expect(h.cutNotes).toEqual([
+			["t1", "off"],
+			["t1", "dismissed"],
+		]);
+	});
+
+	it("a turn the person started, or another session on the tab, ends the offer: Continue then sends nothing", async () => {
+		h = setup({ enabled: false, answers: { restore_interrupted: RESTORED } });
+		h.resume.launch();
+		h.facts.push(fact());
+		await dies(1);
+		h.facts[0] = fact({ exits: 1, sessionFile: "/s/other.jsonl" });
+		h.resume.sync();
+		expect(h.cutOffs.at(-1)).toEqual(["t1", undefined]);
+		h.resume.continueCut("t1");
+		await settle();
+		expect(h.commands).toEqual([]);
 	});
 });
 

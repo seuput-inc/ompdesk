@@ -196,6 +196,9 @@ pub struct ControlTab {
     pub busy: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub resuming: bool,
+    /// Its cut-off turn did not go on by itself and waits for the person (`off`, `crash-loop`, `failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_off: Option<String>,
     #[serde(default)]
     pub asks: Vec<ControlAsk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

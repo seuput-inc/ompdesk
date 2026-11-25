@@ -74,6 +74,8 @@ pub(super) struct Entry {
     /// Which proposal of the tab it is: bumped for every new one (stock rewrites one plan file for a revision).
     pub plan_generation: u64,
     pub resuming: bool,
+    /// Why the tab's cut-off turn waits for the person's Continue (`off`, `crash-loop`, `failed`).
+    pub cut_off: Option<String>,
     pub unsaved_prompt: Option<String>,
     pub scheduled_retry: Option<Value>,
     pub touched: u64,
@@ -133,6 +135,7 @@ impl Entry {
             plan_proposal: None,
             plan_generation: 0,
             resuming: false,
+            cut_off: None,
             unsaved_prompt: None,
             scheduled_retry: None,
             touched: 0,
@@ -483,6 +486,9 @@ impl Pool {
         }
         if entry.resuming {
             payload.insert("resuming".into(), Value::from(true));
+        }
+        if let Some(cut_off) = &entry.cut_off {
+            payload.insert("cutOff".into(), Value::from(cut_off.clone()));
         }
         if let Some(retry) = &entry.scheduled_retry {
             payload.insert("scheduledRetry".into(), retry.clone());

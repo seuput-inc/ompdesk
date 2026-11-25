@@ -182,6 +182,11 @@ impl AgentControl {
                 }
             }
             self.watch_child(caller, tab, opener_idle).await;
+            // Its cut-off turn waits for the person's Continue (TurnResume's cut-off row): the work is not over, and
+            // its opener heard of the cut by a report of the tab's own.
+            if tab.cut_off.is_some() {
+                continue;
+            }
             if tab.busy || waits(tab) {
                 let mut mem = self.mem();
                 mem.collected.remove(&tab.tab_id);

@@ -2314,6 +2314,12 @@ export const en: Record<string, string> = {
 	"settings.gui.resumeInterruptedDesc":
 		"After a quit, crash or update, running work picks up where it stopped, so quitting doesn't ask. Turns you stopped stay stopped.",
 	"chat.resuming": "Continuing where it left off…",
+	"chat.cutOff.off": "This turn was cut off and did not continue on its own.",
+	"chat.cutOff.crash-loop": "This turn was cut off: omp kept ending under it, so it did not continue on its own.",
+	"chat.cutOff.failed": "This turn was cut off and continuing it failed.",
+	"chat.cutOff.continue": "Continue",
+	"chat.cutOff.dismiss": "Dismiss",
+	"chat.cutOff.failedAction": "Couldn't continue the turn",
 	"chat.connectionWait": "Waiting for the internet connection…",
 	"chat.connectionWaitHost": "Waiting for {device}'s internet connection…",
 	"chat.connectionWaitCancelFailed": "Couldn't cancel the wait",

@@ -53,6 +53,7 @@ import {
 	type AutoCloseTurn,
 	type HostCloseTurn,
 	IPC_EVENTS,
+	type IpcCutOff,
 	type IpcOpenExtensionRequest,
 	type IpcScheduledRetry,
 	type IpcSessionOwner,
@@ -2012,6 +2013,11 @@ export class SidecarPool {
 	/** Show or clear the tab's calm "continuing where it left off" row (a relaunch's resume). */
 	setResuming(tabId: string, resuming: boolean): void {
 		this.#call("setResuming", { tab: tabId, resuming });
+	}
+
+	/** Show (or with `undefined` clear) a tab's cut-off row: its turn waits for the person's Continue or Dismiss. */
+	setCutOff(tabId: string, cutOff: IpcCutOff | undefined): void {
+		this.#call("setCutOff", { tab: tabId, cutOff: cutOff ?? null });
 	}
 
 	/**

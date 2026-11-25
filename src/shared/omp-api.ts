@@ -422,6 +422,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		resume: {
 			cancelWait: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_CANCEL_WAIT, tabId),
 			stop: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_STOP, tabId),
+			continueCut: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_CONTINUE, tabId),
+			dismissCut: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_DISMISS, tabId),
 			reportOnline: (online: boolean) => transport.send(IPC_COMMANDS.CONNECTIVITY_REPORT, online),
 		},
 

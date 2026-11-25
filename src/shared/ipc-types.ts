@@ -429,6 +429,10 @@ export const IPC_COMMANDS = {
 	RESUME_CANCEL_WAIT: "resume:cancel-wait",
 	/** Stop what this launch resumed on one tab (the resuming row's Stop; payload: tab id) */
 	RESUME_STOP: "resume:stop",
+	/** Continue a tab's cut-off turn (the cut-off row's Continue; payload: tab id) */
+	RESUME_CONTINUE: "resume:continue",
+	/** Let a tab's cut-off turn stay as it is (the cut-off row's Dismiss; payload: tab id) */
+	RESUME_DISMISS: "resume:dismiss",
 	/** Renderer → main fire-and-forget: the window's `online`/`offline` event (payload: boolean) */
 	CONNECTIVITY_REPORT: "connectivity:report",
 	/** This machine's automatic setup (src/main/setup/): whole SetupState snapshot */
@@ -1750,6 +1754,13 @@ export type IpcWorktreeNotice =
 	| { kind: "remove-failed"; path: string; message: string };
 
 /**
+ * Why a tab's cut-off turn waits for the person instead of going on by itself (turn-resume.ts): `off` Settings ›
+ * Continue interrupted work is off, `crash-loop` its omp died three times in five minutes, `failed` its continuation
+ * failed three times.
+ */
+export type IpcCutOff = "off" | "crash-loop" | "failed";
+
+/**
  * A retry main scheduled for a tab's failed turn (turn-resume.ts): when it fires (epoch ms) and which attempt it is;
  * never "of how many", the chain has no end.
  */
@@ -1864,6 +1875,11 @@ export interface IpcTabInfo {
 	queued?: true;
 	/** A relaunch continues the tab's interrupted work and its turn has not started yet (resume, src/main/turn-resume.ts). */
 	resuming?: boolean;
+	/**
+	 * The tab's cut-off turn waits for the person's Continue or Dismiss instead of going on by itself (resume,
+	 * src/main/turn-resume.ts): automatic continuation is off, its omp kept dying, or its continuation kept failing.
+	 */
+	cutOff?: IpcCutOff;
 	/** The tab's failed turn retries by itself at `at` (resume, src/main/turn-resume.ts). */
 	scheduledRetry?: IpcScheduledRetry;
 	/**
@@ -2404,6 +2420,10 @@ export interface OmpApi {
 		cancelWait(tabId: string): Promise<void>;
 		/** Stop what the last launch resumed on one tab (the resuming row's Stop). */
 		stop(tabId: string): Promise<void>;
+		/** Continue one tab's cut-off turn (the cut-off row's Continue). */
+		continueCut(tabId: string): Promise<void>;
+		/** Leave one tab's cut-off turn as it is (the cut-off row's Dismiss). */
+		dismissCut(tabId: string): Promise<void>;
 		/** The window's `online`/`offline` event, for main's connectivity state. */
 		reportOnline(online: boolean): void;
 	};
