@@ -382,12 +382,25 @@ if (dir) {
 			 * Continue and Dismiss), which stays for the rest of the run.
 			 */
 			const cutSession = async (): Promise<HostSession> => {
-				const made = answered.get("Parity cut off (offered)");
+				const made = answered.get("Parity cut off");
 				if (made) return made;
-				const { path: sessionPath } = await answeredSession("Parity cut off", [
-					["Parity turn 1", "Answer to Parity turn 1"],
-				]);
+				// One tab, one session: its first turn is answered, so its file exists before the omp starts dying.
 				const tabId = await titledTab("Parity cut off");
+				await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "Parity turn 1" }),
+					tabId,
+				);
+				let sessionPath = "";
+				await expect
+					.poll(
+						async () =>
+							(sessionPath = await b.evaluate(async id => {
+								await window.omp.rpc.commandForTab(id, { type: "get_state" });
+								return (await window.omp.tabs.list()).find(entry => entry.tabId === id)?.sessionPath ?? "";
+							}, tabId)),
+						{ timeout: 30_000 },
+					)
+					.not.toBe("");
 				const tabOf = () =>
 					b.evaluate(async id => (await window.omp.tabs.list()).find(entry => entry.tabId === id), tabId);
 				for (let crash = 0; crash < 4 && (await tabOf())?.cutOff === undefined; crash++) {
@@ -418,7 +431,7 @@ if (dir) {
 				}
 				await expect.poll(async () => (await tabOf())?.cutOff, { timeout: 30_000 }).toBe("crash-loop");
 				const session = { path: sessionPath, cwd: work.cwd };
-				answered.set("Parity cut off (offered)", session);
+				answered.set("Parity cut off", session);
 				return session;
 			};
 			/**
