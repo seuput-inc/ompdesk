@@ -18,12 +18,113 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Locator, type Page, test } from "@playwright/test";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
+import { writeShellGh } from "./fixture/shell-gh";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
 import { type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+
+/**
+ * B's `gh`: signed in, the project's repository `o/r` with one open PR whose detail has a file, a passing check and an
+ * open review thread, and one open issue (`agents-prs`, `agents-pr-detail`, `agents-github`). The project's own branch
+ * has no PR (`--head`), so the sidebar rows show none and the Changes panel offers to link one.
+ */
+async function writeParityGh(bin: string): Promise<void> {
+	const pr = {
+		number: 7,
+		title: "Show each session's pull request beside it",
+		url: "https://github.com/o/r/pull/7",
+		isDraft: false,
+		author: { login: "dev" },
+		headRefName: "feature/session-prs",
+		baseRefName: "main",
+		additions: 42,
+		deletions: 7,
+		updatedAt: "2026-11-20T10:00:00Z",
+		reviewDecision: "REVIEW_REQUIRED",
+		statusCheckRollup: [{ __typename: "CheckRun", name: "check", status: "COMPLETED", conclusion: "SUCCESS" }],
+	};
+	const hunk = "@@ -1,2 +1,3 @@\n export const rows = 1;\n+export const pr = 7;\n export const gap = 4;";
+	const json = (file: string, value: unknown) => fs.writeFile(path.join(bin, file), JSON.stringify(value));
+	await fs.mkdir(bin, { recursive: true });
+	await Promise.all([
+		json("list.json", [pr]),
+		json("view.json", {
+			...pr,
+			body: "Links each session to the pull request of its branch.",
+			state: "OPEN",
+			mergeStateStatus: "BLOCKED",
+			files: [{ path: "src/session-prs.ts", additions: 42, deletions: 7 }],
+			id: "PR_7",
+			headRefOid: "0123456789abcdef0123456789abcdef01234567",
+			autoMergeRequest: null,
+			reviewRequests: [{ login: "reviewer" }],
+			assignees: [{ login: "dev" }],
+			labels: [{ name: "enhancement" }],
+		}),
+		json("comments.json", { comments: [], reviews: [] }),
+		json("graphql.json", {
+			data: {
+				repository: {
+					pullRequest: {
+						id: "PR_7",
+						reviewThreads: {
+							nodes: [
+								{
+									id: "T_1",
+									isResolved: false,
+									path: "src/session-prs.ts",
+									line: 2,
+									comments: {
+										nodes: [
+											{
+												id: "C_1",
+												author: { login: "reviewer" },
+												body: "Should a closed PR keep its row?",
+												createdAt: "2026-11-20T11:00:00Z",
+												url: "https://github.com/o/r/pull/7#discussion_r1",
+												diffHunk: hunk,
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				},
+			},
+		}),
+		fs.writeFile(
+			path.join(bin, "pr.diff"),
+			`diff --git a/src/session-prs.ts b/src/session-prs.ts\n--- a/src/session-prs.ts\n+++ b/src/session-prs.ts\n${hunk}\n`,
+		),
+	]);
+	await writeShellGh(
+		bin,
+		[
+			"#!/bin/sh",
+			'case "$*" in',
+			`"auth status"*) echo "github.com" >&2; echo "  ✓ Logged in to github.com account dev (keyring)" >&2 ;;`,
+			`"api"*graphql*) cat "${bin}/graphql.json" ;;`,
+			`"api"*rate_limit*) echo '{"resources":{"core":{"limit":5000,"remaining":4990,"reset":1900000000},"graphql":{"limit":5000,"remaining":4990,"reset":1900000000}}}' ;;`,
+			`"api user"*) echo '{"login":"dev"}' ;;`,
+			`"api"*) echo '[]' ;;`,
+			`"repo view"*) echo '{"nameWithOwner":"o/r","defaultBranchRef":{"name":"main"}}' ;;`,
+			`"pr list"*--head*) echo '[]' ;;`,
+			`"pr list"*) cat "${bin}/list.json" ;;`,
+			`"pr view"*comments,reviews*) cat "${bin}/comments.json" ;;`,
+			`"pr view"*) cat "${bin}/view.json" ;;`,
+			`"pr diff"*) cat "${bin}/pr.diff" ;;`,
+			`"issue list"*) echo '[{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12"}]' ;;`,
+			`"label list"*|"release list"*|"run list"*|"workflow list"*|"repo list"*) echo '[]' ;;`,
+			"*) exit 1 ;;",
+			"esac",
+			"",
+		].join("\n"),
+	);
+}
 
 /**
  * B's project is a git checkout with uncommitted work, so the work session's Changes panel shows its source control
@@ -162,13 +263,20 @@ if (dir) {
 		const browser = await chromium.launch();
 		const pageErrors: string[] = [];
 		try {
+			const ghBin = path.join(parent, "ghbin");
+			await writeParityGh(ghBin);
 			const hostProfile = await makeRemoteProfile(parent, "host", {
 				language: DESKTOP.lang,
 				theme: DESKTOP.theme,
 				// The usage row under a reply (`reply-usage`): on here, on the paired computer and through to the phone.
 				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
 				// Only the host's omp starts under the hold: its slow-start bound is short, so the banner shows within seconds.
-				env: { OMP_GUI_START_SLOW_MS: "1500", OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1" },
+				// B's `gh` is the stand-in above: every view's GitHub reads reach B's.
+				env: {
+					OMP_GUI_START_SLOW_MS: "1500",
+					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
+					PATH: `${ghBin}${path.delimiter}${process.env.PATH}`,
+				},
 			});
 			await seedProject(hostProfile.project);
 			const clientProfile = await makeRemoteProfile(parent, "client", {
