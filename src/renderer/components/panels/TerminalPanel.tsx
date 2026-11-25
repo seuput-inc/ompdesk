@@ -1186,10 +1186,12 @@ export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch
 				className={cx(
 					"flex min-h-(--sc-space-10) min-w-0 shrink-0 items-center border-b border-(--sc-divider) px-3 py-2",
 					touch ? "gap-2.5 [--hit-gap-x:10px]" : "gap-1",
+					// A phone's row of touch-sized buttons leaves the tabs no room: they take a row of their own.
+					compact && "flex-wrap",
 				)}
 				data-terminal-head
 			>
-				<div className="flex min-w-0 flex-1 items-center" ref={tabsRef}>
+				<div className={cx("flex min-w-0 flex-1 items-center", compact && "basis-full")} ref={tabsRef}>
 					<Tabs
 						activeId={activeId}
 						ariaLabel={t("panel.terminal.title")}
@@ -1243,7 +1245,7 @@ export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch
 					label={t("panel.terminal.commands.menu")}
 					size="sm"
 				/>
-				<div className="ml-auto flex shrink-0 items-center gap-0.5">
+				<div className={cx("ml-auto flex shrink-0 items-center", touch ? "gap-2.5" : "gap-0.5")}>
 					{touch && (
 						<IconButton
 							data-terminal-keys-toggle

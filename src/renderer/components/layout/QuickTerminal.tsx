@@ -24,7 +24,9 @@ export function QuickTerminal() {
 	const close = () => useUiStore.getState().setQuickTerminalOpen(false);
 	return (
 		<Sheet
-			bodyClassName="flex h-[min(70dvh,40rem)] min-h-0 flex-col"
+			// The cap holds the body to its height: a flex child grows past `h-*`, and the terminal's own rows would push the
+			// phone's key bar below the fold.
+			bodyClassName="flex h-[min(70dvh,40rem)] max-h-[min(70dvh,40rem)] min-h-0 flex-col"
 			kind="quick-terminal"
 			onClose={close}
 			open={open}

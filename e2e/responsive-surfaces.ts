@@ -293,15 +293,18 @@ async function clearNotesAndClose(page: Page): Promise<void> {
  * Open the command palette by clicks: the sidebar's search button (Command palette), behind the phone's Open menu
  * drawer where the sidebar is one.
  */
-async function clickCommandPalette(page: Page): Promise<void> {
+async function clickCommandPalette(page: Page, look: Look): Promise<void> {
 	const entry = page.locator("[data-command-center-entry]:visible").first();
 	if (!(await entry.isVisible().catch(() => false)))
-		await page.getByRole("button", { name: "Open menu", exact: true }).first().click();
+		await page
+			.getByRole("button", { name: say(look, "shell.openMenu"), exact: true })
+			.first()
+			.click();
 	await entry.click();
 }
 
-async function openWorkspaceDialog(page: Page): Promise<void> {
-	await clickCommandPalette(page);
+async function openWorkspaceDialog(page: Page, look: Look): Promise<void> {
+	await clickCommandPalette(page, look);
 	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
 	await palette.getByRole("combobox").fill("switch-project");
 	await palette.locator('[data-command-name="switch-project"]').click();
@@ -1605,8 +1608,8 @@ export const SURFACES: readonly Surface[] = [
 		id: "quick-terminal",
 		area: "A",
 		title: "Quick terminal",
-		open: async page => {
-			await clickCommandPalette(page);
+		open: async (page, look) => {
+			await clickCommandPalette(page, look);
 			const palette = page.locator('[role="dialog"]:has([data-palette-index])');
 			await palette.getByRole("combobox").fill("quick-terminal");
 			await palette.locator('[data-command-name="quick-terminal"]').click();
@@ -2070,9 +2073,9 @@ export const SURFACES: readonly Surface[] = [
 			title: dialog.title,
 			open: (page, look) =>
 				dialog.id === "dialog-command-palette"
-					? clickCommandPalette(page)
+					? clickCommandPalette(page, look)
 					: dialog.id === "dialog-workspace"
-						? openWorkspaceDialog(page)
+						? openWorkspaceDialog(page, look)
 						: dialog.id === "dialog-model-setup"
 							? openModelSetup(page, look)
 							: ui(page, dialog.action, ...(dialog.args ?? [])),
