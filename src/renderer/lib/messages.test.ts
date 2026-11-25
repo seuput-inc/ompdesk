@@ -550,6 +550,36 @@ describe("Stop with a queue", () => {
 		expect(useComposerStore.getState().restoredQueue.map(item => item.text)).toEqual(["two"]);
 		expect(useToastStore.getState().toasts.map(toast => toast.variant)).toEqual(["error"]);
 	});
+
+	it("sends each held message once when a second Resume (⌘↵, the tray's) comes while one runs", async () => {
+		useComposerStore.getState().holdRestored([
+			{ lane: "steering", text: "one", images: [] },
+			{ lane: "followUp", text: "two", images: [] },
+		]);
+		const { promise: answered, resolve } = Promise.withResolvers<void>();
+		const sent: string[] = [];
+		const rpc = {
+			prompt: vi.fn(async (text: string) => {
+				sent.push(text);
+				await answered;
+				return { type: "response" as const, command: "prompt", success: true as const };
+			}),
+			followUp: vi.fn(async (text: string) => {
+				sent.push(text);
+				return { type: "response" as const, command: "follow_up", success: true as const };
+			}),
+		};
+		const first = resumeRestoredQueue(rpc);
+		await resumeRestoredQueue(rpc);
+		resolve();
+		await first;
+		expect(sent).toEqual(["one", "two"]);
+		expect(useComposerStore.getState().restoredQueue).toEqual([]);
+		// Done: the next Stop's held messages resume again.
+		useComposerStore.getState().holdRestored([{ lane: "steering", text: "three", images: [] }]);
+		await resumeRestoredQueue(rpc);
+		expect(sent).toEqual(["one", "two", "three"]);
+	});
 });
 
 describe("one Stop per turn", () => {

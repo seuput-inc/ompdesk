@@ -334,31 +334,41 @@ export async function takeHeldQueue(
 		restoreAbortedQueue(composer.getState(), response.data, true);
 }
 
+/** The composers whose held messages are being resumed: a second Resume (the tray's, ⌘↵) meanwhile sends nothing. */
+const resumingQueues = new WeakSet<object>();
+
 /**
  * Resume what a Stop held: the first message starts the turn again (a follow-up behaviour, so it queues instead
  * when another device's turn already runs), the rest queue behind it as follow-ups, in order. Each leaves the held
- * list once omp accepted it; a refusal keeps it and the ones after it held and says why.
+ * list once omp accepted it; a refusal keeps it and the ones after it held and says why. One resume runs per tab at a
+ * time: a held message leaves the list only once omp took it, so a second one meanwhile would send it again.
  */
 export async function resumeRestoredQueue(
 	rpc: Pick<TabRpc, "prompt" | "followUp"> = window.omp.rpc,
 	tabId?: string | null,
 ): Promise<void> {
 	const composer = (tabId ? sessionRuntimeStore<ComposerStore>(tabId, "composer") : null) ?? useComposerStore;
-	const held = composer.getState().restoredQueue;
-	for (const [index, item] of held.entries()) {
-		const images = item.images.length > 0 ? item.images.map(image => image.content) : undefined;
-		try {
-			const response =
-				index === 0 ? await rpc.prompt(item.text, images, "followUp") : await rpc.followUp(item.text, images);
-			if (!response.success) {
-				toastError({ title: translate("input.sendFailed"), error: response });
+	if (resumingQueues.has(composer)) return;
+	resumingQueues.add(composer);
+	try {
+		const held = composer.getState().restoredQueue;
+		for (const [index, item] of held.entries()) {
+			const images = item.images.length > 0 ? item.images.map(image => image.content) : undefined;
+			try {
+				const response =
+					index === 0 ? await rpc.prompt(item.text, images, "followUp") : await rpc.followUp(item.text, images);
+				if (!response.success) {
+					toastError({ title: translate("input.sendFailed"), error: response });
+					return;
+				}
+			} catch (error) {
+				toastError({ title: translate("input.sendFailed"), error });
 				return;
 			}
-		} catch (error) {
-			toastError({ title: translate("input.sendFailed"), error });
-			return;
+			composer.getState().dropRestored(item.id);
 		}
-		composer.getState().dropRestored(item.id);
+	} finally {
+		resumingQueues.delete(composer);
 	}
 }
 
