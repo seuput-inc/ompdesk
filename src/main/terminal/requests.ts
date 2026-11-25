@@ -40,7 +40,11 @@ export function validTerminalOperation(value: TerminalOperation): boolean {
 		);
 	if (value.action === "write") return typeof value.data === "string" && value.data.length <= 1_000_000;
 	return (
-		value.action === "close" || value.action === "restart" || value.action === "clear" || value.action === "claim"
+		value.action === "close" ||
+		value.action === "restart" ||
+		value.action === "clear" ||
+		value.action === "claim" ||
+		value.action === "redraw"
 	);
 }
 

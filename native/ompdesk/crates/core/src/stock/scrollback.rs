@@ -74,6 +74,9 @@ struct Row<'a> {
     error: Option<&'a RawValue>,
     cols: u32,
     rows: u32,
+    /// The viewer's offset was older than the kept scrollback: its output starts at the oldest kept unit (H139).
+    #[serde(skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
+    gap: bool,
     #[serde(skip_serializing)]
     from: Option<u64>,
     #[serde(borrow, skip_serializing)]
@@ -141,6 +144,7 @@ impl Scrollback {
                 if index != 0 {
                     reply.push(b',');
                 }
+                row.gap = row.from.is_some_and(|from| from < base);
                 let from = row.from.unwrap_or(row.offset).clamp(base, row.offset);
                 let start = (from - base) as usize;
                 let mut end = len;
@@ -277,6 +281,27 @@ mod tests {
             "a checkpoint taken before the close wrote it back"
         );
         let _ = std::fs::remove_dir_all(&user_data);
+    }
+
+    #[test]
+    fn a_viewer_behind_the_kept_scrollback_is_told_and_reads_from_its_oldest_unit() {
+        let mut history = Scrollback::default();
+        let list = |history: &mut Scrollback, fields: &str| {
+            let line = format!(
+                r#"{{"id":1,"terminal":{{"rows":[{{"id":"t","exited":false,"cols":80,"rows":24,{fields}}}]}}}}"#
+            );
+            String::from_utf8(history.project(line.as_bytes()).unwrap()).unwrap()
+        };
+        list(&mut history, r#""offset":4,"delta":"abcd","from":0"#);
+        // A clear forgets the kept output; what follows is all a viewer from before it can read.
+        let cleared = r#"{"id":2,"terminal":{"rows":[],"forget":["t"]}}"#;
+        history.project(cleared.as_bytes()).unwrap();
+        let behind = list(&mut history, r#""offset":6,"delta":"ef","from":0"#);
+        assert!(behind.contains(r#""gap":true"#), "{behind}");
+        assert!(behind.contains(r#""output":"ef""#), "{behind}");
+        let caught_up = list(&mut history, r#""offset":6,"from":4"#);
+        assert!(!caught_up.contains("gap"), "{caught_up}");
+        assert!(!list(&mut history, r#""offset":6"#).contains("gap"));
     }
 
     #[test]

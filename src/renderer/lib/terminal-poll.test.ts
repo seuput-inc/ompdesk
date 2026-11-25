@@ -38,6 +38,9 @@ function harness(answers: Answer[]) {
 		},
 		stopped: () => stop,
 		onSnapshot: item => snapshots.push(item),
+		// Markers in the written stream, so a test sees what came before which output.
+		reset: () => written.push("<reset>"),
+		settled: () => written.push("<settled>"),
 		request: async operation => {
 			requests.push(operation);
 			inFlight += 1;
@@ -164,5 +167,22 @@ describe("pollTerminal", () => {
 		answer.resolve([snapshot("late", 4)]);
 		await h.run;
 		expect(h.written).toEqual([]);
+	});
+
+	it("clears the screen before an answer past the cut and says once when it settled after it", async () => {
+		const h = harness([
+			[snapshot("", 9)],
+			[snapshot("kept", 104, { gap: true })],
+			[snapshot("more", 108)],
+			[snapshot("", 108)],
+			[snapshot("", 108)],
+		]);
+		await h.tick();
+		h.parsed();
+		await h.tick();
+		h.parsed();
+		await h.run;
+		expect(h.written).toEqual(["<reset>", "kept", "more", "<settled>"]);
+		expect(h.requests[2]).toMatchObject({ offsets: { [ID]: 104 } });
 	});
 });

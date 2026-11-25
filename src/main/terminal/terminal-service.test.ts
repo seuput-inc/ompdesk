@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	NUDGE_MS,
 	type Pty,
 	type PtyOptions,
 	restoredSeparator,
@@ -212,5 +213,54 @@ describe("terminal history across a restart (D92)", () => {
 		});
 		expect(service.dispose("tab")).toEqual(["gone"]);
 		expect(processes[0].pty.kill).not.toHaveBeenCalled();
+	});
+});
+
+describe("a blank screen after the cut, and a failed restart (DP4)", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+	it("redraws only when a viewer asks: one row shorter, then back after 250 ms, one at a time (H137)", async () => {
+		vi.useFakeTimers();
+		const { service, processes } = fixture();
+		const [one] = service.request("tab", { action: "create", cols: 80, rows: 24 }, options);
+		service.request("tab", { action: "list", offsets: { [one.id]: 0 } }, options);
+		expect(processes[0].pty.resize).not.toHaveBeenCalled();
+		service.request("tab", { action: "redraw", id: one.id }, options);
+		service.request("tab", { action: "redraw", id: one.id }, options);
+		expect(vi.mocked(processes[0].pty.resize).mock.calls).toEqual([[80, 23]]);
+		await vi.advanceTimersByTimeAsync(NUDGE_MS);
+		expect(vi.mocked(processes[0].pty.resize).mock.calls).toEqual([
+			[80, 23],
+			[80, 24],
+		]);
+	});
+	it("keeps a restart that failed failed: nothing starts again until the person restarts (P107)", () => {
+		const started: string[] = [];
+		let attempts = 0;
+		const service = new TerminalService(() => {
+			attempts += 1;
+			const attempt = attempts;
+			return {
+				startArgv: () => {
+					started.push(`start ${attempt}`);
+					if (attempt > 1) throw new Error("spawn failed");
+					return Promise.withResolvers<{ exitCode?: number }>().promise;
+				},
+				write: vi.fn(),
+				resize: vi.fn(),
+				kill: vi.fn(),
+			};
+		});
+		const [one] = service.request("tab", { action: "create", cols: 80, rows: 24 }, options);
+		service.request("tab", { action: "restart", id: one.id }, options);
+		for (let poll = 0; poll < 3; poll += 1)
+			expect(service.request("tab", { action: "list", offsets: { [one.id]: 0 } }, options)[0]).toMatchObject({
+				exited: true,
+				error: "spawn failed",
+			});
+		service.request("tab", { action: "write", id: one.id, data: "ls\r" }, options);
+		service.request("tab", { action: "redraw", id: one.id }, options);
+		expect(started).toEqual(["start 1", "start 2"]);
 	});
 });

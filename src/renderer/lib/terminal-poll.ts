@@ -30,6 +30,17 @@ export interface TerminalPollOptions {
 	/** A snapshot of the session arrived (exit state, size, lease). */
 	onSnapshot(snapshot: TerminalSnapshot): void;
 	stopped(): boolean;
+	/**
+	 * The answer starts past a cut (`gap`: the viewer fell more than the kept scrollback behind, or the stream's head
+	 * was cut before it came): called before its output is written, so the screen starts clean instead of continuing a
+	 * stream with a hole in it (H139).
+	 */
+	reset?(): void;
+	/**
+	 * The first answer with nothing new after a gap: the replay has settled. The viewport asks the program to redraw if
+	 * its screen is still blank (H137).
+	 */
+	settled?(): void;
 	/** Where the stream starts (0 reads the whole scrollback). */
 	offset?: number;
 	now?: () => number;
@@ -47,6 +58,7 @@ export async function pollTerminal(options: TerminalPollOptions): Promise<void> 
 	const now = options.now ?? Date.now;
 	const sleep = options.sleep ?? realSleep;
 	let offset = options.offset ?? 0;
+	let afterGap = false;
 	while (!options.stopped()) {
 		const started = now();
 		const snapshots = await options.request({
@@ -67,6 +79,10 @@ export async function pollTerminal(options: TerminalPollOptions): Promise<void> 
 			continue;
 		}
 		options.onSnapshot(snapshot);
+		if (snapshot.gap) {
+			options.reset?.();
+			afterGap = true;
+		}
 		if (snapshot.output) {
 			// The acknowledgement: asking again only once xterm has the output.
 			await options.write(snapshot.output);
@@ -74,6 +90,10 @@ export async function pollTerminal(options: TerminalPollOptions): Promise<void> 
 			continue;
 		}
 		offset = snapshot.offset;
+		if (afterGap) {
+			afterGap = false;
+			options.settled?.();
+		}
 		const took = now() - started;
 		if (took < MIN_GAP_MS) await sleep(MIN_GAP_MS - took);
 	}

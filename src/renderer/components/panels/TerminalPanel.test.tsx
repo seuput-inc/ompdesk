@@ -117,6 +117,68 @@ describe("TerminalPanel", () => {
 		expect(dispose).toHaveBeenCalledOnce();
 		expect(request.mock.calls.some(([, operation]) => operation.action === "close")).toBe(false);
 	});
+	it("starts clean after a replay past the cut and asks for a redraw only while the screen stays blank", async () => {
+		vi.useFakeTimers();
+		for (const Observer of ["ResizeObserver", "MutationObserver"])
+			vi.stubGlobal(
+				Observer,
+				class {
+					observe() {}
+					disconnect() {}
+				},
+			);
+		const redraws: string[] = [];
+		for (const screen of ["", "htop  CPU 12%"]) {
+			let lists = 0;
+			const request = vi.fn(async (_tabId: string, operation: { action: string }) => {
+				if (operation.action === "redraw") redraws.push(screen);
+				if (operation.action === "list") lists += 1;
+				const first = lists === 1 && operation.action === "list";
+				return [{ id: "term", output: first ? "\u001b[2;1H" : "", offset: 9, exited: false, gap: first }];
+			});
+			Reflect.set(window, "omp", { terminal: { request } });
+			const reset = vi.fn();
+			const view: TerminalMount = {
+				terminal: {
+					cols: 80,
+					rows: 2,
+					options: {},
+					write: (_data: string | Uint8Array, done?: () => void) => done?.(),
+					onData: () => ({ dispose: vi.fn() }),
+					focus: vi.fn(),
+					clear: vi.fn(),
+					getSelection: () => "",
+					dispose: vi.fn(),
+					attachCustomKeyEventHandler: vi.fn(),
+					reset,
+					buffer: {
+						active: {
+							viewportY: 0,
+							getLine: (row: number) => ({ translateToString: () => (row === 1 ? screen : "") }),
+						},
+					} as unknown as TerminalMount["terminal"]["buffer"],
+				},
+				fit: vi.fn(),
+			};
+			await mount(
+				<TerminalViewport
+					tabId="tab"
+					id="term"
+					onStatus={vi.fn()}
+					onError={vi.fn()}
+					mount={() => view}
+					handle={{ current: null }}
+				/>,
+			);
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(500);
+			});
+			expect(reset).toHaveBeenCalledOnce();
+			await act(async () => root?.unmount());
+			root = undefined;
+		}
+		expect(redraws).toEqual([""]);
+	});
 	it("shows an actionable startup error instead of an endless loading state", async () => {
 		Reflect.set(window, "omp", {
 			terminal: {

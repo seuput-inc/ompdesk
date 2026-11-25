@@ -38,6 +38,8 @@ interface Entry {
 	saved: number;
 	/** Input written before the shell's first output, held until then or `SHELL_READY_MS` (D90). */
 	queued: string[] | null;
+	/** The redraw nudge waiting to give the shell its rows back (H137). */
+	nudge?: ReturnType<typeof setTimeout>;
 }
 /** What a restored terminal is started from (a saved `TerminalCheckpoint` with main's options). */
 export interface RestoredTerminal {
@@ -54,6 +56,8 @@ export type CheckpointFacts = Omit<TerminalCheckpoint, "history">;
 const SCROLLBACK_CHARS = 1_000_000;
 /** Startup input waits at most this long for the shell's first output. */
 export const SHELL_READY_MS = 15_000;
+/** How long a redraw nudge keeps the PTY one row shorter, so the program sees two different sizes. */
+export const NUDGE_MS = 250;
 
 /**
  * The line between a restored terminal's saved output and its new shell: the old program's modes ended (main
@@ -161,6 +165,21 @@ export class TerminalService {
 		}
 	}
 
+	/**
+	 * Resizes the PTY one row shorter and back `NUDGE_MS` later, so a full-screen program redraws without any input
+	 * (`redraw`, H137): asked by a viewer whose screen stayed blank after a replay that started past the cut.
+	 */
+	#nudge(entry: Entry): void {
+		if (entry.exited || entry.nudge || entry.options.rows < 2) return;
+		const pty = entry.pty;
+		pty.resize(entry.options.cols, entry.options.rows - 1);
+		entry.nudge = setTimeout(() => {
+			entry.nudge = undefined;
+			// A real resize since then already gave the program its size; this one repeats it.
+			if (entry.pty === pty && !entry.exited) pty.resize(entry.options.cols, entry.options.rows);
+		}, NUDGE_MS);
+	}
+
 	/** `entry` as a viewer sees it; its unread output goes with it when `drain` (the core keeps the scrollback). */
 	#row(id: string, entry: Entry, from: number | undefined, drain: boolean): TerminalRow {
 		const delta = drain && entry.pending ? entry.pending : undefined;
@@ -228,6 +247,7 @@ export class TerminalService {
 					break;
 				case "close":
 					if (!entry.exited) entry.pty.kill();
+					clearTimeout(entry.nudge);
 					this.#entries.delete(operation.id);
 					this.#wake(true);
 					break;
@@ -242,6 +262,9 @@ export class TerminalService {
 					entry.pending = "";
 					entry.version += 1;
 					this.#wake(true);
+					break;
+				case "redraw":
+					this.#nudge(entry);
 					break;
 			}
 		}
@@ -351,6 +374,7 @@ export class TerminalService {
 		for (const [id, entry] of this.#entries) {
 			if (owner !== undefined && entry.owner !== owner) continue;
 			if (!entry.exited) entry.pty.kill();
+			clearTimeout(entry.nudge);
 			this.#entries.delete(id);
 			removed.push(id);
 		}

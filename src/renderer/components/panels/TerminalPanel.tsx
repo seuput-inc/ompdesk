@@ -98,7 +98,7 @@ export interface TerminalMount {
 		| "attachCustomKeyEventHandler"
 	> &
 		/** xterm always has them; a test double without one never paints predictions or draws another viewer's size. */
-		Partial<Pick<Terminal, "buffer" | "resize">>;
+		Partial<Pick<Terminal, "buffer" | "resize" | "reset">>;
 	fit(): void;
 }
 export async function mountTerminal(element: HTMLElement): Promise<TerminalMount> {
@@ -291,6 +291,23 @@ export function TerminalViewport({
 					return promise;
 				},
 				onSnapshot,
+				// The answer starts past the kept scrollback's head: what is on screen has a hole after it (H139).
+				reset: () => view.terminal.reset?.(),
+				// A full-screen program whose first frame was cut leaves the screen blank: only then it is asked to draw
+				// again (H137); a screen with anything on it is left alone.
+				settled: () => {
+					const buffer = view.terminal.buffer?.active;
+					if (!buffer) return;
+					for (let row = 0; row < view.terminal.rows; row += 1)
+						if (
+							buffer
+								.getLine(buffer.viewportY + row)
+								?.translateToString(true)
+								.trim()
+						)
+							return;
+					void window.omp.terminal.request(tabId, { action: "redraw", id }).catch(() => {});
+				},
 				stopped: () => stopped || failed,
 			});
 			cleanup = () => {
