@@ -127,18 +127,48 @@ export async function unstage(cwd: string, paths: string[] | "all"): Promise<voi
 	});
 }
 
-/** Back to HEAD in index and worktree; untracked or newly added paths are removed. */
+/**
+ * Back to HEAD in index and worktree; untracked or newly added paths are removed. Each path is checked before the
+ * index changes and each removal again right before it runs (`removable`), so a folder swapped for a link meanwhile
+ * cannot carry the recursive removal out of the checkout (Orca `shared/git/paths/git-discard-path-safety.ts:109-126`).
+ */
 export async function discard(cwd: string, paths: string[]): Promise<void> {
 	await mutate(cwd, async root => {
-		const { fresh } = await scmGit<{ fresh: string[] }>("git.discard", { root, paths }, 4);
-		if (fresh.length === 0) return;
 		const realRoot = await fs.realpath(root);
-		for (const file of fresh) {
-			const target = path.join(realRoot, file);
-			if (path.relative(realRoot, target).startsWith("..")) continue;
-			await fs.rm(target, { force: true, recursive: true });
-		}
+		for (const file of paths) await removable(root, realRoot, file, false);
+		const { fresh } = await scmGit<{ fresh: string[] }>("git.discard", { root, paths }, 4);
+		const targets: string[] = [];
+		for (const file of fresh) targets.push(await removable(root, realRoot, file, true));
+		for (const target of targets) await fs.rm(target, { force: true, recursive: true });
 	});
+}
+
+const inside = (outer: string, inner: string): boolean => {
+	const relative = path.relative(outer, inner);
+	return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
+
+/**
+ * The absolute path of `file` once it is known to stay inside the checkout (Orca `git-discard-path-safety.ts:25-107`):
+ * judged by the real path of the file, of the folder holding a link (the link itself is what goes, never what it
+ * points to), or of the nearest folder that exists. The root itself is never a removal (`asRemoval`).
+ */
+async function removable(root: string, realRoot: string, file: string, asRemoval: boolean): Promise<string> {
+	const target = path.resolve(root, file);
+	if (!inside(root, target) || (asRemoval && path.relative(root, target) === "")) {
+		throw new LocalCommandError("Invalid repository-relative path", "invalid_path");
+	}
+	for (let probe = target; ; probe = path.dirname(probe)) {
+		let judged = probe;
+		try {
+			if (probe === target && (await fs.lstat(probe)).isSymbolicLink()) judged = path.dirname(probe);
+			if (inside(realRoot, await fs.realpath(judged))) return target;
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT" || probe === path.dirname(probe)) throw error;
+		}
+	}
+	throw new LocalCommandError(`"${file}" resolves outside the repository`, "invalid_path");
 }
 
 export async function commit(cwd: string, input: { message: string; amend?: boolean }): Promise<{ sha: string }> {
