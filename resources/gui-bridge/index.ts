@@ -207,6 +207,7 @@ const AREAS: readonly Area[] = [
 		load: () => import("./modes/background-checks"),
 	},
 	{ name: "modes/checkout-peers", features: ["checkoutPeers"], load: () => import("./modes/checkout-peers") },
+	{ name: "modes/bots", features: ["bots"], load: () => import("./modes/bots") },
 	{ name: "modes/scratch", features: ["scratch"], load: () => import("./modes/scratch") },
 	{ name: "modes/check-runs", features: ["checkRuns"], load: () => import("./modes/check-runs") },
 	{ name: "modes/ci-watch", features: ["ciWatch"], load: () => import("./modes/ci-watch") },

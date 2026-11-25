@@ -319,6 +319,9 @@ pub struct Host {
     pub(super) troubled: Arc<std::sync::Mutex<HashSet<String>>>,
     /// `Date.now()`.
     pub(super) clock: Clock,
+    /// Session files of paused bots' chats on this computer: a report to one is kept, never handed over, until the bot
+    /// is resumed (`journal/bots.rs`; the service keeps this in step with the registry).
+    pub(crate) held: Arc<std::sync::RwLock<HashSet<String>>>,
 }
 
 impl Host {
@@ -331,6 +334,7 @@ impl Host {
             landed: Arc::new(LandedCache::default()),
             troubled: Arc::default(),
             clock: crate::agentctl::journal::system_clock(),
+            held: Arc::default(),
         }
     }
 
@@ -354,6 +358,16 @@ impl Host {
 
     pub fn outbox(&self) -> Option<&Arc<MailOutbox>> {
         self.outbox.as_ref().map(|(outbox, _)| outbox)
+    }
+
+    /// Whether a report to `session_path` (on `device`) is held: a paused bot's chat on this computer.
+    pub fn holds(&self, session_path: &str, device: Option<&str>) -> bool {
+        device.is_none()
+            && self
+                .held
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains(session_path)
     }
 
     pub fn port(&self) -> &Arc<Port<HostState>> {
@@ -532,12 +546,23 @@ impl Host {
                 attachments_corrupt: false,
                 at: clock(),
             });
-            Some((outbox, id.to_owned()))
+            Some((
+                outbox,
+                id.to_owned(),
+                tab.session_path.clone(),
+                tab.device.clone(),
+            ))
         });
+        // A paused bot's chat: kept above, handed over by the pass that runs when the bot is resumed.
+        if let Some((_, _, Some(path), device)) = &kept
+            && self.holds(path, device.as_deref())
+        {
+            return Ok(());
+        }
         let answer = self
             .send_mail_with(tab_id, content, details, delivery, &images)
             .await?;
-        if let (Some((outbox, id)), Some(answer)) = (kept, answer)
+        if let (Some((outbox, id, _, _)), Some(answer)) = (kept, answer)
             && answer.duplicate
             && answer.journaled
         {
@@ -584,6 +609,30 @@ impl Host {
             duplicate: answer.get("duplicate").and_then(Value::as_bool) == Some(true),
             journaled: answer.get("journaled").and_then(Value::as_bool) == Some(true),
         }))
+    }
+
+    /// `botHome {device, name}`: the home chat file of the bot `name` on paired host `device`, which refuses unless this
+    /// computer is in that bot's reach.
+    pub async fn bot_home(&self, device: &str, name: &str) -> R<String> {
+        let answer: Value = self
+            .ask("botHome", json!({ "device": device, "name": name }))
+            .await?;
+        match answer.get("path").and_then(Value::as_str) {
+            Some(path) => Ok(path.to_owned()),
+            None => Err(Fail::other(
+                "The paired computer did not name the bot's home chat.",
+            )),
+        }
+    }
+
+    /// `setOpener {tabId, openerTabId}`: `openerTabId` becomes `tabId`'s opener, as a session it opened would have it
+    /// (the pool's `setTabOpener`, kept across a relaunch): a session handed to a bot.
+    pub async fn set_opener(&self, tab_id: &str, opener_tab_id: &str) -> R<()> {
+        self.ask(
+            "setOpener",
+            json!({ "tabId": tab_id, "openerTabId": opener_tab_id }),
+        )
+        .await
     }
 
     /// `reach {sessionPath}`: the tab holding a session this computer runs, started when it is asleep; with none, the

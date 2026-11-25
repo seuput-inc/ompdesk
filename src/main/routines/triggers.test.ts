@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CoreRunner } from "../local/git/exec";
 import { draft, fixture, gate, idle, testGit, until } from "./test-context";
+import { firedDetail } from "./test-fired";
 
 // Source captions as observed before deleting the TypeScript drivers.
 const capture = JSON.parse(
@@ -148,7 +149,8 @@ describe("sources owned by the running schedule engine", () => {
 		const id = await f.add({ source: "session", events: ["done", "waiting", "failed"] }, {}, "device-a");
 		await f.emit(idle("t"));
 		await until(() => expect(f.launched).toHaveLength(1));
-		expect(f.launched[0]!.prompt).toBe(`Do the thing\n\nWhat fired this run:\n${sessionLines[0]}`);
+		expect(f.launched[0]!.prompt.startsWith("Do the thing\n\nWhat fired this run:\n")).toBe(true);
+		expect(firedDetail(f.launched[0]!.prompt)).toBe(sessionLines[0]);
 		await f.emit({ type: "ask", tabId: "t", requestId: "q", text: "Question?" });
 		await f.emit(idle("t", "error", "Nope"));
 		f.launched[0]!.finish();

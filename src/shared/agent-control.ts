@@ -94,6 +94,8 @@ export const AGENT_CONTROL_TOOLS = {
 	appList: "ompdesk_app_list",
 	app: "ompdesk_app",
 	report: "ompdesk_report",
+	bot: "ompdesk_bot",
+	item: "ompdesk_item",
 } as const;
 
 /** main → window (`AGENT_CONTROL_APP`): what `ompdesk_app` changed, for the window to show or apply. */

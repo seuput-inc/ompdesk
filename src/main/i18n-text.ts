@@ -13,6 +13,12 @@ export const MAIN_TEXT = {
 		en: "Mobile web refused it (no paired device). Nothing to do unless it was you.",
 		ko: "모바일 웹이 거부했어요(페어링된 기기가 아니에요). 직접 시도한 게 아니라면 할 일은 없어요.",
 	},
+	// A scheduled run's answer sent where its schedule says (`ScheduleDraft.resultsTo`).
+	"schedules.result.title": { en: "Scheduled run: {name}", ko: "예약 실행: {name}" },
+	"schedules.result.note": {
+		en: 'The scheduled run "{name}" finished. Its answer:',
+		ko: '예약 실행 "{name}"이 끝났어요. 답:',
+	},
 	// Files main could not save for lack of space (disk-full-notice.ts): one notice, closed once they are saved.
 	"diskFull.title": { en: "Disk is full", ko: "디스크가 가득 찼어요" },
 	"diskFull.body": {
@@ -119,6 +125,19 @@ export const MAIN_TEXT = {
 	"agentControl.scheduleMessage": {
 		en: "The agent in “{caller}” wants to run “{name}” {when} in {folder} while OMPdesk is open. It runs without auto-approve. Schedule it?",
 		ko: "“{caller}”의 에이전트가 OMPdesk가 켜져 있는 동안 {folder} 폴더에서 “{name}” 작업을 {when} 실행하도록 예약하려고 해요. 자동 승인 없이 실행돼요. 예약할까요?",
+	},
+	// Every precheck raises this card, whatever else agents may do: it is a command this computer runs.
+	"agentControl.schedulePrecheckMessage": {
+		en: "The agent in “{caller}” wants “{name}” ({when}, in {folder}) to run this command before each start, and to start only when it succeeds: {command}. Allow it?",
+		ko: "“{caller}”의 에이전트가 “{name}”({when}, {folder})을 시작할 때마다 먼저 이 명령을 실행하고, 성공할 때만 시작하도록 하려고 해요: {command}. 허용할까요?",
+	},
+	"agentControl.botTitle": {
+		en: "An agent wants to make a bot",
+		ko: "에이전트가 봇을 만들려고 해요",
+	},
+	"agentControl.botMessage": {
+		en: "The agent in “{caller}” wants to make the bot “{name}”: a folder on this computer whose sessions are its chats. Nothing is sent to it until you write to it. Make it?",
+		ko: "“{caller}”의 에이전트가 “{name}” 봇을 만들려고 해요. 이 컴퓨터의 폴더 하나이고, 그 폴더의 세션이 봇의 대화예요. 직접 말을 걸기 전에는 아무것도 보내지 않아요. 만들까요?",
 	},
 	"agentControl.autopilotTitle": {
 		en: "An agent wants to start Autopilot",

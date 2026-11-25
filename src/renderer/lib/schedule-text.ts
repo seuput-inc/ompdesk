@@ -2,7 +2,13 @@
  * What a schedule's trigger says, in the UI language: one summary for every place that lists schedules, so the same
  * trigger reads the same everywhere. English text for agents and logs is `describeFrequency` in `shared/schedules.ts`.
  */
-import type { GithubEventKind, ScheduleFrequency, ScheduleRunStatus, SessionEventKind } from "../../shared/schedules";
+import type {
+	GithubEventKind,
+	ScheduleEvent,
+	ScheduleFrequency,
+	ScheduleRunStatus,
+	SessionEventKind,
+} from "../../shared/schedules";
 import type { BadgeVariant } from "../components/common";
 import { basename, formatClock, uiLocale } from "./format";
 import { translate } from "./i18n";
@@ -63,39 +69,45 @@ export function frequencySummary(frequency: ScheduleFrequency): string {
 		case "once":
 			return translate("schedules.once", { time: formatClock(frequency.at) });
 		case "event": {
-			const event = frequency.event;
-			switch (event.source) {
-				case "webhook":
-					return translate("schedules.event.webhook");
-				case "github":
-					return translate("schedules.event.github", {
-						events: list(
-							event.events.map(kind => translate(GITHUB_KIND_KEY[kind])),
-							"conjunction",
-						),
-						repo: event.repo,
-					});
-				case "files":
-					return translate("schedules.event.files", { path: basename(event.path) || event.path });
-				case "git":
-					return translate("schedules.event.git", { branch: event.branch });
-				case "session": {
-					const what = list(
-						event.events.map(kind => translate(SESSION_KIND_KEY[kind])),
-						"disjunction",
-					);
-					return event.folder
-						? translate("schedules.event.sessionIn", { what, folder: basename(event.folder) || event.folder })
-						: translate("schedules.event.session", { what });
-				}
-				case "email":
-					return [
-						translate("schedules.event.email", { account: event.account }),
-						event.from ? translate("schedules.event.emailFrom", { from: event.from }) : "",
-						event.to ? translate("schedules.event.emailTo", { to: event.to }) : "",
-						event.subject ? translate("schedules.event.emailSubject", { subject: event.subject }) : "",
-					].join("");
-			}
+			const by = frequency.by ? translate("schedules.event.by", { time: formatClock(frequency.by) }) : "";
+			return `${eventSummary(frequency.event)}${by}`;
 		}
+	}
+}
+
+function eventSummary(event: ScheduleEvent): string {
+	switch (event.source) {
+		case "webhook":
+			return translate("schedules.event.webhook");
+		case "github":
+			return translate("schedules.event.github", {
+				events: list(
+					event.events.map(kind => translate(GITHUB_KIND_KEY[kind])),
+					"conjunction",
+				),
+				repo: event.repo,
+			});
+		case "files":
+			return translate("schedules.event.files", { path: basename(event.path) || event.path });
+		case "git":
+			return translate("schedules.event.git", { branch: event.branch });
+		case "session": {
+			const what = list(
+				event.events.map(kind => translate(SESSION_KIND_KEY[kind])),
+				"disjunction",
+			);
+			return event.folder
+				? translate("schedules.event.sessionIn", { what, folder: basename(event.folder) || event.folder })
+				: translate("schedules.event.session", { what });
+		}
+		case "email":
+			return [
+				translate("schedules.event.email", { account: event.account }),
+				event.from ? translate("schedules.event.emailFrom", { from: event.from }) : "",
+				event.to ? translate("schedules.event.emailTo", { to: event.to }) : "",
+				event.subject ? translate("schedules.event.emailSubject", { subject: event.subject }) : "",
+			].join("");
+		case "calendar":
+			return translate("schedules.event.calendar", { minutes: event.leadMinutes });
 	}
 }

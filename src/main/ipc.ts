@@ -37,6 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
+import { BOTS_COMMAND, BOTS_FOLDER, type BotsRequest } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -144,6 +145,7 @@ import type { AnswerStep } from "./agent-control/target-answer";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
+import { setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -324,6 +326,12 @@ export interface IpcDeps {
 	webTabNotice: { current: ((tabId: string, notice: AutopilotNotice) => void) | null };
 	/** Set once the control tools exist: delivers a session's own scheduled wake-up and follows its turn (`ScheduleService`'s `wake`). */
 	sessionWake: { current: ((schedule: Schedule, runId: string) => Promise<RunProcess>) | null };
+	/** Set once the control tools exist: a quiet note (no turn) into a session file on this computer (`ScheduleService`'s `note`). */
+	sessionNote: { current: ((session: string, text: string) => Promise<void>) | null };
+	/** Set once the control tools exist: one of this computer's bots by name for a paired device's agent (`host.bots.home`). */
+	botHome: {
+		current: ((name: string, deviceId: string, deviceName: string) => Promise<{ path: string; name: string }>) | null;
+	};
 	/** Set once the control tools exist: tells a tab's opener what main saw happen to the tab (`AgentControlRuntime.reportFor`). */
 	tabReport: { current: ((tabId: string, report: { kind: "blocked"; text: string; id: string }) => void) | null };
 	/** Set once the control tools exist: an agent is opening a session that has not taken its first message (`AgentControlRuntime.opening`). */
@@ -1365,9 +1373,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	).unref();
 	deps.summaries.onChange(refreshCheckoutPeers);
 
+	/** Each tab's last finished reply (the `idle` outcome), for the notify triage's quiet bot turns. */
+	const lastReplies = new Map<string, string>();
 	sidecarPool.observeTabs(activity => {
 		autopilot.observeActivity(activity);
 		desktopSlot.observeActivity(activity);
+		if (activity.type === "idle" && activity.outcome) lastReplies.set(activity.tabId, activity.outcome.reply ?? "");
+		if (activity.type === "released") lastReplies.delete(activity.tabId);
 		if (activity.type === "busy" || activity.type === "idle" || activity.type === "released") refreshCheckoutPeers();
 	});
 
@@ -1416,6 +1428,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if (sessionPath) deps.hostedTabs.agentReviewChanged(sessionPath, review);
 		},
 		mailOutboxFile: path.join(app.getPath("userData"), "mail-outbox.json"),
+		botsFile: path.join(app.getPath("userData"), "bots.json"),
+		itemsFile: path.join(app.getPath("userData"), "items.json"),
+		botsRoot: path.join(os.homedir(), BOTS_FOLDER),
+		botsChanged: setBotsState,
 		sendOutboxFile: path.join(app.getPath("userData"), "send-outbox.json"),
 		attachmentsDir: path.join(app.getPath("userData"), "agent-attachments"),
 		uploads: deps.uploads,
@@ -1493,6 +1509,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.sessionWake.current = (schedule, runId) => agentControl.wakeSession(schedule, runId);
 	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
 	deps.agentOpening.current = () => agentControl.opening();
+	deps.sessionNote.current = (session, text) => agentControl.noteSession(session, text);
+	deps.botHome.current = (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName);
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),
@@ -1980,6 +1998,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			}
 			notificationBatcher.notify(winId, notice);
 		},
+		lastTurn: tabId => ({ cwd: sidecarPool.sidecarOf(tabId)?.cwd, reply: lastReplies.get(tabId) }),
 	});
 	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, (caller, payload: IpcNotifyPayload) => notifyHandler(caller, payload));
 
@@ -2332,6 +2351,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");
 		return machineFor(caller, device).schedules(request as SchedulesRequest);
+	});
+	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
+	ipc.handle(BOTS_COMMAND, (_caller, request: unknown) => {
+		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
+		return agentControl.bots(request as BotsRequest);
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
 	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {

@@ -357,6 +357,14 @@ fn event_sound(event: Option<&Value>) -> bool {
                         Some(value) => value.as_str().is_some_and(short),
                     })
         }
+        // An ICS feed read over HTTPS, and how long before an event starts it fires.
+        Some("calendar") => {
+            let url = text_or_empty(event.get("url"));
+            url.starts_with("https://")
+                && utf16_len(&url) <= 2000
+                && integer(event.get("leadMinutes"))
+                    .is_some_and(|lead| (1.0..=1440.0).contains(&lead))
+        }
         _ => false,
     }
 }
@@ -408,7 +416,13 @@ pub fn draft_problem(draft: &Value, zone: &dyn Zone) -> Result<Option<&'static s
             .and_then(|at| date_parse(at, zone))
             .is_none()
             .then_some("once"),
-        Some("event") => (!event_sound(frequency.get("event"))).then_some("event"),
+        Some("event") => {
+            // A wait's deadline (`by`), when it has one, is a moment.
+            let by = frequency.get("by").filter(|by| !by.is_null());
+            let deadline =
+                by.is_none_or(|by| by.as_str().and_then(|by| date_parse(by, zone)).is_some());
+            (!event_sound(frequency.get("event")) || !deadline).then_some("event")
+        }
         _ => Some("interval"),
     })
 }

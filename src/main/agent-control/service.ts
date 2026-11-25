@@ -41,6 +41,7 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
+import type { BotsRequest, BotsState } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
@@ -451,6 +452,12 @@ export interface AgentControlHost {
 	recordClosed(child: ClosedChild): void;
 	/** The sessions main closed after their work landed (`recordClosed`), newest last. */
 	closedChildren?(): readonly ClosedChild[];
+	/** The bots state changed in the core (`botsChanged`): main keeps it and tells every window. */
+	botsChanged?(state: BotsState): void;
+	/** A session handed to a bot: `openerTabId` (the bot's home chat) becomes `tabId`'s opener, as the pool keeps one. */
+	setOpener?(tabId: string, openerTabId: string): void;
+	/** A paired host's bot by name (`host.bots.home`): its home chat file; the host refuses unless this computer is in its reach. */
+	botHome?(device: string, name: string): Promise<{ path: string }>;
 	/**
 	 * Every tombstone (`deleted-sessions.ts`): when the session was deleted, from any path and any launch (the
 	 * sidebar's Delete, `/delete`, a paired device), by its file and computer, or by its saved id alone.
@@ -492,6 +499,9 @@ export const TEXT_KEYS = [
 	"mergeMessage",
 	"scheduleTitle",
 	"scheduleMessage",
+	"schedulePrecheckMessage",
+	"botTitle",
+	"botMessage",
 	"autopilotTitle",
 	"autopilotMessage",
 	"autopilotShipCommit",
@@ -597,6 +607,11 @@ export interface AgentControlFiles {
 	mailOutbox?: string | null;
 	/** The bytes of the attachments an outbox entry still owes, by content (`<userData>/agent-attachments`). */
 	attachments?: string | null;
+	/** The bots (`bots.json`) and their items (`items.json`); absent: in memory only. */
+	bots?: string | null;
+	items?: string | null;
+	/** Where a new bot's folder goes (`~/.omp/bots`). */
+	botsRoot?: string | null;
 }
 
 export interface AgentControlOptions {
@@ -890,6 +905,21 @@ export class AgentControl {
 		return this.#call("liveReview", { callerTabId, last, ...(only ? { only: [...only] } : {}) });
 	}
 
+	/** The owner's change to the bots or their items (`BotsRequest`): the state after it. */
+	bots(request: BotsRequest): Promise<BotsState> {
+		return this.#call("bots", request as unknown as Record<string, unknown>);
+	}
+
+	/** A quiet note (no turn) into a session file on this computer: now when a tab holds it, else when one opens it. */
+	noteSession(sessionPath: string, text: string): Promise<void> {
+		return this.#call("noteSession", { sessionPath, text });
+	}
+
+	/** A paired device asks for one of this computer's bots by name: its home chat file, unless that device may not reach it. */
+	botHome(name: string, device: string, deviceName: string): Promise<{ path: string; name: string }> {
+		return this.#call("botHome", { name, device, deviceName });
+	}
+
 	/** One pass over the sessions `callerTabId` opened whose work landed. */
 	autoClose(callerTabId: string): Promise<void> {
 		return this.#call("autoClose", { callerTabId });
@@ -948,6 +978,9 @@ export class AgentControl {
 				...(files.sendOutbox !== undefined ? { sendOutbox: file(files.sendOutbox) } : {}),
 				...(files.mailOutbox !== undefined || host.runtime ? { mailOutbox: file(files.mailOutbox ?? null) } : {}),
 				...(files.attachments ? { attachments: files.attachments } : {}),
+				...(files.bots ? { bots: files.bots } : {}),
+				...(files.items ? { items: files.items } : {}),
+				...(files.botsRoot ? { botsRoot: files.botsRoot } : {}),
 			},
 			caps: {
 				reviewChanged: host.reviewChanged !== undefined,
@@ -1211,6 +1244,18 @@ export class AgentControl {
 				coded(async () => (await apps().note(tabId, text)) ?? null),
 			"appPorts.openPrivacyPane": ({ pane }: { pane: Parameters<AppPortsLike["openPrivacyPane"]>[0] }) =>
 				coded(async () => (await apps().openPrivacyPane(pane)) ?? null),
+			botHome: ({ device: where, name }: { device: string; name: string }) =>
+				coded(() => {
+					if (!host.botHome) throw new Error("Paired computers' bots are not reachable here.");
+					return host.botHome(where, name);
+				}),
+			setOpener: ({ tabId, openerTabId }: { tabId: string; openerTabId: string }) =>
+				coded(() => {
+					if (!host.setOpener) throw new Error("Handing a session to a bot is not available here.");
+					host.setOpener(tabId, openerTabId);
+					this.#port.push();
+					return null;
+				}),
 			reach: ({ sessionPath }: { sessionPath: string }) => {
 				const runtime = host.runtime;
 				if (!runtime) throw new Error("This app runs no core runtime.");
@@ -1234,6 +1279,7 @@ export class AgentControl {
 			nextPromptChildren: ({ tabId, children }: { tabId: string; children: { title: string; waiting?: true }[] }) =>
 				told(() => host.runtime?.nextPromptChildren(tabId, children)),
 			closedChildren: ({ rows }: { rows: ClosedChild[] }) => tell(() => host.runtime?.closedChildren(rows)),
+			botsChanged: ({ state }: { state: BotsState }) => told(() => host.botsChanged?.(state)),
 			wakeDone: ({ runId, code, error }: { runId: string; code: number | null; error?: string }) =>
 				told(() => host.runtime?.wakeDone(runId, { code, ...(error === undefined ? {} : { error }) })),
 		};

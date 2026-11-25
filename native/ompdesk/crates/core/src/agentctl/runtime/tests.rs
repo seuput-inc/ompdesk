@@ -226,14 +226,7 @@ async fn a_pass_sends_a_kept_report_again_to_the_tab_that_holds_its_session_unti
             at: control.now(),
         });
     for _ in 0..2 {
-        runtime.redeliver_mail();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while runtime.rt().redelivering {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        control.redeliver_mail_now().await;
     }
     assert!(control.host.outbox().unwrap().pending().is_empty());
     let sent = told_of(&told, "mail");
@@ -633,4 +626,34 @@ async fn an_opener_s_closed_tab_closes_its_resting_children_only() {
     }
     assert_eq!(closes, vec!["rest".to_owned()]);
     control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_wake_of_a_paused_bot_s_chat_is_refused_and_reaches_nothing() {
+    let dir = crate::fs::disk::make_temp_dir("ompdesk-bots-wake-").unwrap();
+    let file = dir.join("bots.json");
+    std::fs::write(
+        &file,
+        json!([{ "id": "bot-1", "name": "Ada", "folder": "/bots/ada", "home": "/s/boss.jsonl", "sessions": ["/s/boss.jsonl"], "paused": true }])
+            .to_string(),
+    )
+    .unwrap();
+    let (control, runtime, told) = rig(
+        7_480,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        Files {
+            bots: Some(file),
+            ..with_outbox()
+        },
+        |_, _| Ok(Value::Null),
+    );
+    let refused = runtime
+        .wake("run-p", "/s/boss.jsonl", "t", "p", 130)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.message(), "The bot Ada is paused");
+    assert!(told_of(&told, "reach").is_empty());
+    assert!(control.host.outbox().unwrap().pending().is_empty());
+    control.host.port().close();
+    let _ = std::fs::remove_dir_all(dir);
 }

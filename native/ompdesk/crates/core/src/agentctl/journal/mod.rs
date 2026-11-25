@@ -21,7 +21,9 @@
 //! - A number that `JSON.stringify` prints with an exponent (`1e+21`) prints as `1e21`.
 
 pub mod attachments;
+pub mod bots;
 pub mod call_journal;
+pub mod items;
 pub mod mail_outbox;
 pub mod pending_cleanups;
 pub mod send_outbox;

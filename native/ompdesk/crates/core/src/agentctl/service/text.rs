@@ -265,6 +265,8 @@ pub fn mutates(tool: Tool, args: &Value) -> bool {
         Tool::Open | Tool::Send | Tool::Answer | Tool::Stop | Tool::Merge | Tool::App => true,
         Tool::Schedule => action != Some("list"),
         Tool::Autopilot => action != Some("status"),
+        Tool::Bot => action != Some("list"),
+        Tool::Item => !matches!(action, Some("list" | "show")),
         _ => false,
     }
 }
@@ -470,6 +472,7 @@ pub fn webhook_line(row: &ScheduleRow) -> String {
     use super::types::{ScheduleEvent, ScheduleFrequency as Frequency};
     let Frequency::Event {
         event: ScheduleEvent::Webhook { key },
+        ..
     } = &row.frequency
     else {
         return String::new();

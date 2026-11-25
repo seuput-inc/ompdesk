@@ -55,6 +55,7 @@ pub(super) async fn run(
         ))
     });
     let key = format!("email {name}: read");
+    let mut failures = 0u32;
     loop {
         if scope.cancelled() || !sink.current() {
             return;
@@ -82,6 +83,7 @@ pub(super) async fn run(
                             Vec::new()
                         };
                         sink.failure(&key, None);
+                        failures = 0;
                         sink.publish(json!({"accountId":account.id,"validity":read.cursor.validity,"uid":read.cursor.uid}), &lines);
                         Ok(())
                     }
@@ -99,11 +101,23 @@ pub(super) async fn run(
         }
         if let Err(error) = result {
             sink.failure(&key, Some(&error));
+            failures = failures.saturating_add(1);
         }
-        if !wait(scope, timing.email_poll_ms).await {
+        if !wait(scope, poll_wait(timing.email_poll_ms, failures)).await {
             return;
         }
     }
+}
+
+/// Longest wait between reads while a mailbox keeps failing (after Orca's per-account Gmail backoff).
+const FAILING_POLL_MAX_MS: u64 = 30 * 60_000;
+
+/// The wait before the next read: the poll period, doubled for each failed read in a row, at most
+/// `FAILING_POLL_MAX_MS` (never below the period itself).
+fn poll_wait(period: u64, failures: u32) -> u64 {
+    period
+        .saturating_mul(1u64.checked_shl(failures).unwrap_or(u64::MAX))
+        .min(FAILING_POLL_MAX_MS.max(period))
 }
 
 fn wanted(message: &MailMessage, own_address: &str, options: &Options) -> bool {
@@ -232,5 +246,21 @@ mod tests {
         message.headers.remove("in-reply-to");
         assert!(wanted(&message, "owner@example.invalid", &all));
         assert!(describe(&message, "Work").contains("It begins: hello"));
+    }
+
+    #[test]
+    fn a_failing_mailbox_is_read_less_often_up_to_thirty_minutes() {
+        let period = 2 * 60_000;
+        assert_eq!(poll_wait(period, 0), period);
+        assert_eq!(poll_wait(period, 1), 2 * period);
+        assert_eq!(poll_wait(period, 3), 8 * period);
+        assert_eq!(poll_wait(period, 4), FAILING_POLL_MAX_MS);
+        assert_eq!(poll_wait(period, 200), FAILING_POLL_MAX_MS);
+        // A test's short period still doubles; one longer than the cap is never cut below itself.
+        assert_eq!(poll_wait(5, 2), 20);
+        assert_eq!(
+            poll_wait(FAILING_POLL_MAX_MS * 2, 3),
+            FAILING_POLL_MAX_MS * 2
+        );
     }
 }

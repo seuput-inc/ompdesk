@@ -245,8 +245,12 @@ pub struct MailAnswer {
 }
 
 pub trait RedeliverDeps: Sync {
-    /// The live tab holding the receiver's session file now (it has a new id after a relaunch), if any.
+    /// The live tab holding the receiver's session now (it has a new id after a relaunch), if any.
     fn tab_of(&self, session_path: &str, device: Option<&str>) -> Option<String>;
+    /// The receiver is a paused bot's chat: its mail stays kept, not handed over, until the bot is resumed.
+    fn held(&self, _session_path: &str, _device: Option<&str>) -> bool {
+        false
+    }
     /// The receiver's bridge answer to the report; `None` when it could not be asked or said nothing.
     fn send(
         &self,
@@ -255,10 +259,13 @@ pub trait RedeliverDeps: Sync {
     ) -> impl Future<Output = Option<MailAnswer>> + Send;
 }
 
-/// One pass over the outbox: each report whose receiver has a live tab is sent again with its id. An answer that says
-/// the journal holds it settles it; any other answer keeps it for the next pass.
+/// One pass over the outbox: each report whose receiver has a live tab and is not held is sent again with its id. An
+/// answer that says the journal holds it settles it; any other answer keeps it for the next pass.
 pub async fn redeliver_mail<D: RedeliverDeps>(outbox: &MailOutbox, deps: &D) {
     for mail in outbox.pending() {
+        if deps.held(&mail.session_path, mail.device.as_deref()) {
+            continue;
+        }
         let Some(tab_id) = deps.tab_of(&mail.session_path, mail.device.as_deref()) else {
             continue;
         };
@@ -268,5 +275,15 @@ pub async fn redeliver_mail<D: RedeliverDeps>(outbox: &MailOutbox, deps: &D) {
         {
             outbox.settle(&mail.id);
         }
+    }
+}
+
+impl MailOutbox {
+    /// The reports kept for `session_path` on this computer (a paused bot's held mail).
+    pub fn kept_for(&self, session_path: &str) -> Vec<OutboxMail> {
+        self.pending()
+            .into_iter()
+            .filter(|mail| mail.session_path == session_path && mail.device.is_none())
+            .collect()
     }
 }

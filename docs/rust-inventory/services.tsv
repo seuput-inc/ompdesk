@@ -221,6 +221,7 @@ src/main/routines/ports.ts	mixed	Rust owns live sources, recursive watches, poll
 src/main/routines/sessions.test.ts	exception	Test coverage for session event triggering and filtering.
 src/main/routines/source.test.ts	exception	Test coverage for text clipping at capture limits.
 src/main/routines/test-context.ts	exception	Test harness observes real schedule runs and marks with temporary repositories, synthetic mail, a fixture gh executable and a controlled session pool.
+src/main/routines/test-fired.ts	exception	Test reader of the fenced trigger text a routine run's prompt carries.
 src/main/routines/test-state.ts	exception	Test observer records the state sent to a window; no production schedule state mirror.
 src/main/routines/triggers.test.ts	exception	Test coverage for live trigger reconciliation on schedule edits.
 src/main/setup/apple-git.ts	native-client	Asks setup.appleDeveloperDir for the fixed xcode-select -p probe; the git trampoline, GitHub sign-in and setup use their original deadlines.

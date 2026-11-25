@@ -154,6 +154,7 @@ import {
 	AUTOPILOT_NOTICE_EVENT,
 	type AutopilotNoticeEvent,
 	BenchmarkOptionsSchema,
+	BotsHomeParams,
 	CustomProviderInputSchema,
 	encodeBinaryRead,
 	GIT_METHODS,
@@ -314,6 +315,8 @@ export interface HostServicesDeps {
 	launchProfiles: Pick<PrefsStore, "launchProfile" | "updateLaunchProfile">;
 	/** This machine's models.yml, stats server and `omp bench`. */
 	machine: MachineServices;
+	/** One of this computer's bots by name for a device's agent: its home chat file, refused unless the device is in its reach. */
+	botHome?: (name: string, deviceId: string, deviceName: string) => Promise<{ path: string; name: string }>;
 	/**
 	 * This machine's own tabs (the local pool): a session file one of them
 	 * holds is changed through that tab (a delete closes it), and a credential
@@ -1661,6 +1664,11 @@ export class LocalHostServices implements HostServices {
 				return this.#deps.machine.scheduleLog(parse(SchedulesLogParams, method, params).runId);
 			case "host.schedules.create":
 				return this.#deps.machine.createSchedule(parse(SchedulesCreateParams, method, params).draft, peer.deviceId);
+			// A device's agent asks one of this computer's bots by name (`bot:<name>@<this computer>`).
+			case "host.bots.home": {
+				if (!this.#deps.botHome) throw new Error("This computer has no bots yet");
+				return this.#deps.botHome(parse(BotsHomeParams, method, params).name, peer.deviceId, peer.name);
+			}
 			case "host.projects.command":
 				return this.#deps.machine.sidebarProjects(parse(ProjectsCommandParams, method, params).request);
 			case "host.bridgeHealth.get":

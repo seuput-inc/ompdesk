@@ -459,6 +459,194 @@ fn build_autopilot(p: &Parsed) -> Result<Built, String> {
     Ok(tool("ompdesk_autopilot", a))
 }
 
+/// A `bot` or `item` action's positionals after the action and the flags it takes; anything else is a usage error.
+fn action_shape(
+    p: &Parsed,
+    command: &str,
+    positionals: &[&str],
+    flags: &[&str],
+) -> Result<(), String> {
+    let action = format!("{command} {}", p.pos(0).unwrap_or_default());
+    let given = p.pos.len().saturating_sub(1);
+    if let Some(what) = positionals.get(given) {
+        return Err(format!("{action} needs {what}"));
+    }
+    if given > positionals.len() {
+        return Err(match positionals.len() {
+            0 => format!("{action} takes no argument"),
+            1 => format!("{action} takes at most 1 argument"),
+            n => format!("{action} takes at most {n} arguments"),
+        });
+    }
+    let mut extra: Vec<&str> =
+        p.v.keys()
+            .copied()
+            .filter(|flag| !flags.contains(flag))
+            .collect();
+    extra.sort_unstable();
+    match extra.first() {
+        Some(flag) => Err(format!("--{flag} does not go with {action}")),
+        None => Ok(()),
+    }
+}
+
+const BOT_ACTIONS: &[&str] = &[
+    "create",
+    "list",
+    "pause",
+    "resume",
+    "set",
+    "look-around",
+    "hand",
+];
+
+fn build_bot(p: &Parsed) -> Result<Built, String> {
+    let action = p.pos(0).unwrap_or_default();
+    one_of(Some(action), BOT_ACTIONS, "action")?;
+    let shape = match action {
+        "create" => action_shape(p, "bot", &["NAME"], &["folder"]),
+        "list" => action_shape(p, "bot", &[], &[]),
+        "set" => action_shape(
+            p,
+            "bot",
+            &["BOT"],
+            &[
+                "model",
+                "auto-approve",
+                "no-auto-approve",
+                "stale-days",
+                "reach",
+            ],
+        ),
+        "look-around" => action_shape(p, "bot", &["BOT", "on|off"], &["time"]),
+        "hand" => action_shape(p, "bot", &["BOT", "SESSION", "TEXT"], &[]),
+        _ => action_shape(p, "bot", &["BOT"], &[]),
+    };
+    shape?;
+    let mut a = Map::new();
+    a.insert("action".into(), action.replace('-', "_").into());
+    if let Some(first) = p.pos(1) {
+        let key = if action == "create" { "name" } else { "bot" };
+        a.insert(key.into(), first.into());
+    }
+    match action {
+        "set" => {
+            if p.bool("auto-approve") && p.bool("no-auto-approve") {
+                return Err("--auto-approve and --no-auto-approve exclude each other".into());
+            }
+            p.args_into(&mut a, &["model", "auto-approve", "stale-days", "reach"]);
+            if p.bool("no-auto-approve") {
+                a.insert("auto_approve".into(), false.into());
+            }
+        }
+        "look-around" => {
+            let on = match p.pos(2) {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err("bot look-around takes on or off".into()),
+            };
+            a.insert("on".into(), on.into());
+        }
+        "hand" => {
+            a.insert("session".into(), p.pos(2).unwrap_or_default().into());
+            return Ok(text_arg(p.pos(3), "ompdesk_bot", a, &["args", "text"]));
+        }
+        _ => {}
+    }
+    p.args_into(&mut a, &["folder", "time"]);
+    Ok(tool("ompdesk_bot", a))
+}
+
+const ITEM_ACTIONS: &[&str] = &[
+    "add", "set", "comment", "done", "cancel", "link", "list", "show",
+];
+const ITEM_STATUSES: &[&str] = &[
+    "planned",
+    "working",
+    "waiting",
+    "needs_you",
+    "done",
+    "canceled",
+];
+const ITEM_LINKS: &[&str] = &["url", "file", "session", "pr"];
+
+fn build_item(p: &Parsed) -> Result<Built, String> {
+    let action = p.pos(0).unwrap_or_default();
+    one_of(Some(action), ITEM_ACTIONS, "action")?;
+    let shape = match action {
+        "add" => action_shape(
+            p,
+            "item",
+            &["TITLE"],
+            &["description", "done-means", "status"],
+        ),
+        "set" => action_shape(
+            p,
+            "item",
+            &["ITEM"],
+            &[
+                "status",
+                "title",
+                "description",
+                "ask",
+                "option",
+                "recommended",
+                "wait",
+                "until",
+                "snooze-until",
+            ],
+        ),
+        "comment" => action_shape(p, "item", &["ITEM", "TEXT"], &[]),
+        "done" | "cancel" => action_shape(p, "item", &["ITEM"], &["note"]),
+        "link" => action_shape(p, "item", &["ITEM"], ITEM_LINKS),
+        "list" => action_shape(p, "item", &[], &["status"]),
+        _ => action_shape(p, "item", &["ITEM"], &[]),
+    };
+    shape?;
+    one_of(p.str("status"), ITEM_STATUSES, "status")?;
+    if action == "link" && ITEM_LINKS.iter().filter(|f| p.str(f).is_some()).count() != 1 {
+        return Err("item link takes one of --url, --file, --session, --pr".into());
+    }
+    let mut a = Map::new();
+    a.insert("action".into(), action.into());
+    if let Some(first) = p.pos(1) {
+        let key = if action == "add" { "title" } else { "item" };
+        a.insert(key.into(), first.into());
+    }
+    if action == "comment" {
+        return Ok(text_arg(p.pos(2), "ompdesk_item", a, &["args", "text"]));
+    }
+    let stdin = p.str("description") == Some("-");
+    p.args_into(&mut a, &["title"]);
+    if !stdin {
+        p.args_into(&mut a, &["description"]);
+    }
+    p.args_into(&mut a, &["done-means", "status", "ask"]);
+    if let Some(options) = p.list("option") {
+        a.insert("options".into(), json!(options));
+    }
+    p.args_into(
+        &mut a,
+        &[
+            "recommended",
+            "wait",
+            "until",
+            "snooze-until",
+            "note",
+            "url",
+            "file",
+            "session",
+            "pr",
+        ],
+    );
+    let built = tool("ompdesk_item", a);
+    Ok(if stdin {
+        with_stdin(built, &["args", "description"], false)
+    } else {
+        built
+    })
+}
+
 fn build_app(p: &Parsed) -> Result<Built, String> {
     let action = p.pos(0).unwrap_or_default();
     if action == "list" {
@@ -706,6 +894,48 @@ pub static SPECS: &[Spec] = &[
         min: 1,
         max: 2,
         build: build_autopilot,
+    },
+    Spec {
+        name: "bot",
+        usage: "bot ACTION [ARGS]; ACTION is create NAME [--folder F] | list | pause BOT | resume BOT | set BOT [--model M] [--auto-approve | --no-auto-approve] [--stale-days N] [--reach DEVICE]... | look-around BOT on|off [--time HH:MM] | hand BOT SESSION TEXT|-",
+        summary: "Bots: a folder whose sessions are its chats (ompdesk_bot). --model \"\" clears it, --stale-days 0 is never.",
+        flags: &[
+            ("folder", S),
+            ("model", S),
+            ("auto-approve", B),
+            ("no-auto-approve", B),
+            ("stale-days", N),
+            ("reach", M),
+            ("time", S),
+        ],
+        min: 1,
+        max: 4,
+        build: build_bot,
+    },
+    Spec {
+        name: "item",
+        usage: "item ACTION [ARGS]; ACTION is add TITLE [--description D|-] [--done-means D] [--status S] | set ITEM [--status S] [--title T] [--description D|-] [--ask Q] [--option O]... [--recommended N] [--wait W] [--until ISO] [--snooze-until ISO] | comment ITEM TEXT|- | done ITEM [--note N] | cancel ITEM [--note N] | link ITEM --url U|--file F|--session S|--pr P | list [--status S] | show ITEM",
+        summary: "A bot's work items (ompdesk_item); ITEM is its number or id, S planned, working, waiting, needs_you, done or canceled.",
+        flags: &[
+            ("description", S),
+            ("done-means", S),
+            ("status", S),
+            ("title", S),
+            ("ask", S),
+            ("option", M),
+            ("recommended", N),
+            ("wait", S),
+            ("until", S),
+            ("snooze-until", S),
+            ("note", S),
+            ("url", S),
+            ("file", S),
+            ("session", S),
+            ("pr", S),
+        ],
+        min: 1,
+        max: 3,
+        build: build_item,
     },
     Spec {
         name: "app",
@@ -1167,6 +1397,166 @@ mod tests {
                 &["call", "ompdesk_merge", r#"{"session":"a"}"#],
                 tool("ompdesk_merge", json!({ "session": "a" })),
             ),
+            (
+                &["bot", "create", "Ops", "--folder", "/b"],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "create", "name": "Ops", "folder": "/b" }),
+                ),
+            ),
+            (
+                &["bot", "list"],
+                tool("ompdesk_bot", json!({ "action": "list" })),
+            ),
+            (
+                &["bot", "pause", "Ops"],
+                tool("ompdesk_bot", json!({ "action": "pause", "bot": "Ops" })),
+            ),
+            (
+                &["bot", "resume", "Ops"],
+                tool("ompdesk_bot", json!({ "action": "resume", "bot": "Ops" })),
+            ),
+            (
+                &[
+                    "bot",
+                    "set",
+                    "Ops",
+                    "--model",
+                    "",
+                    "--no-auto-approve",
+                    "--stale-days",
+                    "0",
+                    "--reach",
+                    "d1",
+                    "--reach",
+                    "d2",
+                ],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "set", "bot": "Ops", "model": "", "stale_days": 0, "reach": ["d1", "d2"], "auto_approve": false }),
+                ),
+            ),
+            (
+                &["bot", "set", "Ops", "--auto-approve"],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "set", "bot": "Ops", "auto_approve": true }),
+                ),
+            ),
+            (
+                &["bot", "look-around", "Ops", "on", "--time", "08:30"],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "look_around", "bot": "Ops", "on": true, "time": "08:30" }),
+                ),
+            ),
+            (
+                &["bot", "look-around", "Ops", "off"],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "look_around", "bot": "Ops", "on": false }),
+                ),
+            ),
+            (
+                &["bot", "hand", "Ops", "s1", "take it"],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "hand", "bot": "Ops", "session": "s1", "text": "take it" }),
+                ),
+            ),
+            (
+                &[
+                    "item",
+                    "add",
+                    "Fix CI",
+                    "--description",
+                    "red",
+                    "--done-means",
+                    "green",
+                    "--status",
+                    "working",
+                ],
+                tool(
+                    "ompdesk_item",
+                    json!({ "action": "add", "title": "Fix CI", "description": "red", "done_means": "green", "status": "working" }),
+                ),
+            ),
+            (
+                &[
+                    "item",
+                    "set",
+                    "3",
+                    "--status",
+                    "needs_you",
+                    "--ask",
+                    "Which?",
+                    "--option",
+                    "a",
+                    "--option",
+                    "b",
+                    "--recommended",
+                    "1",
+                    "--snooze-until",
+                    "2026-12-01",
+                ],
+                tool(
+                    "ompdesk_item",
+                    json!({ "action": "set", "item": "3", "status": "needs_you", "ask": "Which?", "options": ["a", "b"], "recommended": 1, "snooze_until": "2026-12-01" }),
+                ),
+            ),
+            (
+                &[
+                    "item",
+                    "set",
+                    "3",
+                    "--status",
+                    "waiting",
+                    "--wait",
+                    "review",
+                    "--until",
+                    "2026-12-02",
+                ],
+                tool(
+                    "ompdesk_item",
+                    json!({ "action": "set", "item": "3", "status": "waiting", "wait": "review", "until": "2026-12-02" }),
+                ),
+            ),
+            (
+                &["item", "comment", "3", "noted"],
+                tool(
+                    "ompdesk_item",
+                    json!({ "action": "comment", "item": "3", "text": "noted" }),
+                ),
+            ),
+            (
+                &["item", "done", "3", "--note", "shipped"],
+                tool(
+                    "ompdesk_item",
+                    json!({ "action": "done", "item": "3", "note": "shipped" }),
+                ),
+            ),
+            (
+                &["item", "cancel", "3"],
+                tool("ompdesk_item", json!({ "action": "cancel", "item": "3" })),
+            ),
+            (
+                &["item", "link", "3", "--pr", "12"],
+                tool(
+                    "ompdesk_item",
+                    json!({ "action": "link", "item": "3", "pr": "12" }),
+                ),
+            ),
+            (
+                &["item", "list", "--status", "done"],
+                tool(
+                    "ompdesk_item",
+                    json!({ "action": "list", "status": "done" }),
+                ),
+            ),
+            (
+                &["item", "show", "3"],
+                tool("ompdesk_item", json!({ "action": "show", "item": "3" })),
+            ),
             (&["events"], json!({ "method": "subscribe" })),
         ];
         for (args, want) in table {
@@ -1228,6 +1618,18 @@ mod tests {
             run(&["app", "x", "-"]).stdin,
             target(&["args", "args"], true)
         );
+        assert_eq!(
+            run(&["bot", "hand", "Ops", "s", "-"]).stdin,
+            target(&["args", "text"], false)
+        );
+        assert_eq!(
+            run(&["item", "comment", "3", "-"]).stdin,
+            target(&["args", "text"], false)
+        );
+        assert_eq!(
+            run(&["item", "add", "T", "--description", "-"]).stdin,
+            target(&["args", "description"], false)
+        );
         assert_eq!(run(&["send", "s", "hi"]).stdin, None);
     }
 
@@ -1273,6 +1675,9 @@ mod tests {
             help_text(Some("nope"))
                 .starts_with("ompdesk: unknown command \"nope\"\nompdesk: drive")
         );
+        assert!(help_text(None).contains("\n  bot       Bots: "));
+        assert!(help_text(None).contains("\n  item      A bot's work items"));
+        assert!(help_text(Some("bot")).starts_with("ompdesk bot ACTION [ARGS]"));
     }
 
     #[test]
@@ -1375,6 +1780,50 @@ mod tests {
                 &["answer", "s", "--answers", "{"],
                 Some("--answers is not valid JSON"),
             ),
+            (&["bot"], Some("bot needs ACTION")),
+            (
+                &["bot", "explode"],
+                Some("--action is one of create, list, pause, resume, set, look-around, hand"),
+            ),
+            (&["bot", "hand", "Ops", "s"], Some("bot hand needs TEXT")),
+            (&["bot", "list", "x"], Some("bot list takes no argument")),
+            (
+                &["bot", "pause", "Ops", "--model", "m"],
+                Some("--model does not go with bot pause"),
+            ),
+            (
+                &["bot", "set", "Ops", "--auto-approve", "--no-auto-approve"],
+                Some("--auto-approve and --no-auto-approve exclude each other"),
+            ),
+            (
+                &["bot", "look-around", "Ops", "maybe"],
+                Some("bot look-around takes on or off"),
+            ),
+            (
+                &["bot", "set", "Ops", "--stale-days", "x"],
+                Some("--stale-days is a number"),
+            ),
+            (
+                &["item", "set", "3", "--status", "later"],
+                Some("--status is one of planned, working, waiting, needs_you, done, canceled"),
+            ),
+            (
+                &["item", "link", "3"],
+                Some("item link takes one of --url, --file, --session, --pr"),
+            ),
+            (
+                &["item", "link", "3", "--url", "u", "--pr", "1"],
+                Some("item link takes one of --url, --file, --session, --pr"),
+            ),
+            (
+                &["item", "comment", "3", "a", "b"],
+                Some("item takes at most 3 arguments"),
+            ),
+            (
+                &["bot", "pause", "Ops", "x"],
+                Some("bot pause takes at most 1 argument"),
+            ),
+            (&["item", "show"], Some("item show needs ITEM")),
         ];
         for (args, want) in cases {
             match parse(&argv(args)) {

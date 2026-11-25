@@ -18,6 +18,9 @@
  * A core that ended took its timers and every omp it ran with it (the journal reads them stopped); the service opens
  * again on the next core, from the journal.
  */
+
+import { readFile, rm } from "node:fs/promises";
+import { RUN_USAGE_ENV } from "../../resources/gui-bridge/credit-spend-core";
 import { AGENT_SCHEDULE_PREFIX } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
 import {
@@ -28,10 +31,13 @@ import {
 	type Schedule,
 	type ScheduleCreated,
 	type ScheduleDraft,
+	type ScheduleResultsTo,
+	type ScheduleRunUsage,
 	type SchedulesRequest,
 	type SchedulesState,
 } from "../shared/schedules";
 import { CoreError, core } from "./core/process";
+import type { CoreRunner } from "./local/git/exec";
 import { nativeBinPath } from "./native-bin";
 import { OMP_TELEMETRY_OFF, type OmpResolution, ompPathEnv } from "./omp-runtime";
 import type { RoutineHost } from "./routines/ports";
@@ -52,7 +58,8 @@ const REOPEN_MS = 30_000;
 /** One started run: `stop()` ends it, `done` settles once it ended (an omp: exited, its log flushed). */
 export interface RunProcess {
 	stop(): void;
-	done: Promise<{ code: number | null; error?: string }>;
+	/** `usage`: what a fresh run's model replies used, as its omp counted it (stock's session tally). */
+	done: Promise<{ code: number | null; error?: string; usage?: ScheduleRunUsage }>;
 }
 
 export type RunLauncher = (schedule: Schedule, files: { log: string; prompt: string }) => Promise<RunProcess>;
@@ -88,6 +95,15 @@ export interface ScheduleServiceOptions {
 	 * `tickMs` and says the time with each request. Absent: the core's own timer and the system's clock.
 	 */
 	now?: () => number;
+	/**
+	 * A quiet note (no turn) into the session file `session` on this computer: a wake-up that turned itself off after
+	 * failing again and again. Absent: the note is dropped (the run history says it anyway).
+	 */
+	note?: (session: string, text: string) => void;
+	/** A fresh run's answer for where its schedule (`name`) sends it (`resultsTo`); quiet answers never come here. */
+	result?: (name: string, to: ScheduleResultsTo, text: string) => void;
+	/** How a schedule's precheck command runs (a shell and its `-c`, the login environment); absent: prechecks say no. */
+	shell?: () => Promise<CoreRunner>;
 }
 
 /** What a webhook call came to (`ScheduleService.webhook`): started or kept for after the running one, or why not. */
@@ -215,6 +231,18 @@ export class ScheduleService {
 				"schedules.routineLog",
 				mine<{ message: string }>(({ message }) => routines?.log(message)),
 			),
+			host.on(
+				"schedules.note",
+				mine<{ session: string; text: string }>(({ session, text }) => {
+					if (!this.#disposed) this.#options.note?.(session, text);
+				}),
+			),
+			host.on(
+				"schedules.result",
+				mine<{ name: string; to: ScheduleResultsTo; text: string }>(({ name, to, text }) => {
+					if (!this.#disposed) this.#options.result?.(name, to, text);
+				}),
+			),
 		];
 		await this.#opening();
 	}
@@ -235,7 +263,10 @@ export class ScheduleService {
 
 	async #open(): Promise<void> {
 		const { file, logDir, tickMs = SCHEDULE_TICK_MS, minuteMs = 60_000, now } = this.#options;
+		// A shell that cannot be read leaves prechecks saying no; the schedules still open.
+		const shell = await this.#options.shell?.().catch(() => undefined);
 		await this.#call("schedules.open", {
+			...(shell ? { shell } : {}),
 			file,
 			logDir,
 			tickMs,
@@ -383,6 +414,12 @@ export class ScheduleService {
 		await this.#send("schedules.prune", { at: now });
 	}
 
+	/** The computer woke from sleep: the core holds timed starts for a short settle, then starts what came due. */
+	resumed(): void {
+		if (this.#disposed || !this.#started) return;
+		void this.#send("schedules.resumed").catch(() => undefined);
+	}
+
 	/**
 	 * App quit: stop every run main follows (a woken session's turn; an omp's supervisor kills its tree) and have the
 	 * core record them and write the journal. Resolves once the core answered that the journal is written, or after
@@ -466,10 +503,13 @@ export function ompRunLauncher(options: {
 		const { bin } = resolution.runtime;
 		const extensions = (await options.extensionArgs?.(schedule.cwd)) ?? [];
 		const creditSpend = options.creditSpend?.();
-		const env = {
+		// The run extension that carries the Credit use switch also writes stock's usage tally here as the run ends.
+		const usageFile = creditSpend ? `${files.log}.usage.json` : undefined;
+		const env: NodeJS.ProcessEnv = {
 			...(await options.env()),
 			...(extensions.length ? await options.extensionEnv?.(schedule.cwd) : {}),
 			...creditSpend?.env,
+			...(usageFile ? { [RUN_USAGE_ENV]: usageFile } : {}),
 		};
 		const args = [
 			"-p",
@@ -501,9 +541,10 @@ export function ompRunLauncher(options: {
 				if (host.generation !== home) ended.resolve({ code: null, error: "ompdesk-core exited during the run" });
 			}),
 		];
-		const done = ended.promise.then(({ code, error }) => {
+		const done = ended.promise.then(async ({ code, error }) => {
 			for (const off of unsubscribe) off();
-			return error === undefined ? { code } : { code, error };
+			const usage = usageFile ? await readRunUsage(usageFile) : undefined;
+			return { code, ...(error === undefined ? {} : { error }), ...(usage ? { usage } : {}) };
 		});
 		const started = host.call("schedules.launch", {
 			run,
@@ -531,4 +572,27 @@ export function ompRunLauncher(options: {
 			done,
 		};
 	};
+}
+
+/** The tally a run's extension wrote (stock's `UsageStatistics`), kept to the fields a run row shows; the file goes. */
+async function readRunUsage(file: string): Promise<ScheduleRunUsage | undefined> {
+	try {
+		const told = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+		const count = (name: string) => {
+			const value = told[name];
+			return typeof value === "number" && Number.isFinite(value) ? value : 0;
+		};
+		return {
+			input: count("input"),
+			output: count("output"),
+			cacheRead: count("cacheRead"),
+			cacheWrite: count("cacheWrite"),
+			cost: count("cost"),
+		};
+	} catch {
+		// No file: the run never reached a model, or its omp lacks the extension.
+		return undefined;
+	} finally {
+		await rm(file, { force: true }).catch(() => undefined);
+	}
 }

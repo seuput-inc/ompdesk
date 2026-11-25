@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.145.0] - 2026-11-26
+
+대기 중인 메시지를 고치면 사라지거나 편집이 막히던 문제를 고쳤고, 봇과 일정, 터미널 복구, 오류 안내가 좋아졌습니다.
+
+- 대기 중인 메시지를 고칠 때, 아직 세션 파일이 없는 탭에서 편집이 막히거나 고친 메시지가 엉뚱한 자리에 있다고 보이던 문제를 고쳤습니다(v0.144.0에서 생긴 문제).
+- 봇: 메모리(MEMORY.md)를 갖고 일정이나 메일로 일하는 세션을 등록할 수 있습니다. 조용히 끝난 실행은 알림을 보내지 않습니다.
+- 일정: 캘린더 트리거, 기다리기, 실행 전 확인, 결과를 보낼 곳, 놓친 시작의 유예 시간이 생겼습니다. 실패하는 메일함은 점점 덜 자주 읽습니다.
+- 사이드 패널 터미널이 앱을 다시 켜도 돌아오고, 빈 화면으로 남은 터미널은 다시 그립니다.
+- 계정 잔액이 바닥난 경우와 사용량 한도를 구분해 알려 주고, 공급자가 제공하지 않는 모델은 이름을 들어 알려 줍니다.
+- 확장이 새 도구나 훅을 더하는 업그레이드는 승인을 받은 뒤에 적용합니다.
+- Preview가 5초 넘게 페이지를 불러오지 못하거나 개발 서버가 응답하지 않으면 그렇다고 알려 줍니다.
+- 받아쓰기 모델 내려받기가 실패하면 다시 시도하고, 첨부한 파일이 사라진 프롬프트는 보내지 않습니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+Fixed queued messages that could not be edited or seemed to land in the wrong place, and improved bots, schedules, terminal recovery and error notices.
+
+- Editing a queued message no longer gets stuck in a tab whose session file does not exist yet, and a saved edit says where it landed (a v0.144.0 regression).
+- Bots: register sessions that work from schedules or mail with their own memory (MEMORY.md). A run that ends quietly sends no notification.
+- Schedules: calendar triggers, waits, prechecks, where a result goes, and a grace period for a missed start. A failing mailbox is read less and less often.
+- Side-panel terminals come back after a restart, and a terminal left blank is redrawn.
+- An account out of money is told apart from a usage limit, and a model the provider does not serve is named.
+- An extension upgrade that adds tools or hooks waits for approval.
+- Preview says when a page has not loaded after 5 seconds or its dev server stopped answering.
+- A failed dictation model download is retried, and a prompt whose attachment is gone is not sent.
+
+Known issue: on macOS, pressing the Right arrow key in the composer can insert an icon-like character; this is being investigated.
+
 ## [0.144.0] - 2026-11-25
 
 omp 19.2.0에서 꺼지던 OMPdesk 기능 19개가 다시 동작합니다. 이제 omp 19.2.0 이상이 필요하고, OMPdesk가 알아서 맞는 omp로 업데이트합니다.
