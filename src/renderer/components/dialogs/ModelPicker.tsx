@@ -6,7 +6,7 @@
  * owner's rule); a first run with no default is settled by `ensureServingDefault`.
  */
 
-import { Check, Settings2, TriangleAlert } from "lucide-react";
+import { Check, RefreshCw, Settings2, TriangleAlert } from "lucide-react";
 import {
 	type KeyboardEvent as ReactKeyboardEvent,
 	useCallback,
@@ -38,6 +38,7 @@ import {
 	Collapse,
 	DisclosureButton,
 	EmptyState,
+	IconButton,
 	InlineNotice,
 	KeyHints,
 	Modal,
@@ -104,6 +105,7 @@ export function ModelPicker() {
 	const [loginProviders, setLoginProviders] = useState<LoginProvider[]>([]);
 	const [switching, setSwitching] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
+	const [refreshing, setRefreshing] = useState(false);
 	const [error, setError] = useState<InlineFailure | null>(null);
 	const [activeIndex, setActiveIndex] = useState(0);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -438,20 +440,37 @@ export function ModelPicker() {
 			size="picker-compact"
 		>
 			<div className="flex h-full min-h-0 flex-col">
-				<div className="border-b border-(--sc-divider) p-1.5">
-					<SearchField
-						listbox={{
-							id: listboxId,
-							activeId: flatOptions.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined,
+				<div className="flex items-center gap-1 border-b border-(--sc-divider) p-1.5">
+					<div className="min-w-0 flex-1">
+						<SearchField
+							listbox={{
+								id: listboxId,
+								activeId: flatOptions.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined,
+							}}
+							aria-describedby={activeDetail ? detailId : undefined}
+							controlSize="sm"
+							label={t("modelPicker.searchLabel")}
+							onKeyDown={onKeyDown}
+							onValueChange={setQuery}
+							placeholder={t("modelPicker.placeholder")}
+							ref={inputRef}
+							value={query}
+						/>
+					</div>
+					{/* Asks the providers again (Orca's `AgentPickerRefreshModelsButton.tsx`): a model the account just gained shows. */}
+					<IconButton
+						data-model-refresh
+						disabled={!sidecarReady}
+						disabledReason={t("modelPicker.notConnected")}
+						icon={<RefreshCw />}
+						label={t("modelPicker.refresh")}
+						loading={refreshing}
+						onClick={() => {
+							setRefreshing(true);
+							void load(true).finally(() => setRefreshing(false));
 						}}
-						aria-describedby={activeDetail ? detailId : undefined}
-						controlSize="sm"
-						label={t("modelPicker.searchLabel")}
-						onKeyDown={onKeyDown}
-						onValueChange={setQuery}
-						placeholder={t("modelPicker.placeholder")}
-						ref={inputRef}
-						value={query}
+						size="sm"
+						variant="ghost"
 					/>
 				</div>
 				{unconfirmed && !error && (
