@@ -81,6 +81,11 @@ impl Runtime {
             }
             return;
         }
+        // A bot chat's tab came or changed: it joins its bot, and bot chats hear what changed.
+        {
+            let control = self.control.clone();
+            tokio::spawn(async move { control.bots_tick().await });
+        }
         if let Some(parent) = &parent {
             self.push_review(parent);
         }

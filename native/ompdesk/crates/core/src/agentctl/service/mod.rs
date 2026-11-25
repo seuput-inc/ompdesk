@@ -56,7 +56,9 @@ use self::types::{
 };
 use self::util::{Flight, OrderedMap};
 use crate::agentctl::journal::attachments::AttachmentStore;
+use crate::agentctl::journal::bots::Bots;
 use crate::agentctl::journal::call_journal::{CallBegin, CallJournal, CallRecord, CallResult};
+use crate::agentctl::journal::items::Items;
 use crate::agentctl::journal::mail_outbox::MailOutbox;
 use crate::agentctl::journal::pending_cleanups::PendingCleanups;
 use crate::agentctl::journal::send_outbox::SendOutbox;
@@ -157,6 +159,16 @@ pub struct Mem {
     pub watched: HashMap<String, crate::agentctl::rules::child_watch::ChildWatch>,
     /// Tabs a control tool is closing right now (`close_tab`): their release is no close by the person.
     pub tool_closing: HashSet<String>,
+    /// The bot context last handed to each bot chat's omp (JSON), so it goes again only when it changed.
+    pub bot_sent: HashMap<String, String>,
+    /// Bot chats whose bridge has no `agent_control.bot` (an older omp or bridge): logged once each.
+    pub bot_unsupported: HashSet<String>,
+    /// A bot pass runs; another asked meanwhile runs once more when it ends.
+    pub bot_ticking: bool,
+    pub bot_tick_again: bool,
+    /// A mail outbox pass runs (the timer's, a resumed bot's); another asked meanwhile runs once more after it.
+    pub redelivering: bool,
+    pub redeliver_again: bool,
 }
 
 /// A session inside a blocking wait main owns; counted until this drops, however the wait ends.
@@ -185,6 +197,11 @@ pub struct Inner {
     fates: Mutex<SessionFates>,
     cleanups: Mutex<PendingCleanups>,
     calls: Option<Mutex<CallJournal>>,
+    /// The bots (`bots.json`) and their items (`items.json`); take `bots` before `items` when both are held.
+    bots: Mutex<Bots>,
+    items: Mutex<Items>,
+    /// Where a new bot's folder goes (`~/.omp/bots`); None: a bot needs its folder named.
+    pub(crate) bots_root: Option<PathBuf>,
     /// The send outbox, or None where main keeps none (a queued message then lives only in its omp).
     pub send_outbox: Option<SendOutbox>,
     /// Reports between sessions: dispatch ids, coalescing, the last report of each child (`#mailbox`).
@@ -231,6 +248,16 @@ impl Inner {
         self.calls.as_ref().map(lock)
     }
 
+    /// The bots.
+    pub fn bots(&self) -> MutexGuard<'_, Bots> {
+        lock(&self.bots)
+    }
+
+    /// The items.
+    pub fn items(&self) -> MutexGuard<'_, Items> {
+        lock(&self.items)
+    }
+
     /// `Date.now()`.
     pub fn now(&self) -> f64 {
         (self.clock)()
@@ -257,6 +284,11 @@ pub struct Files {
     pub mail_outbox: Option<JournalFile>,
     /// Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only.
     pub attachments: Option<PathBuf>,
+    /// The bots (`bots.json`) and their items (`items.json`); absent: in memory only.
+    pub bots: Option<PathBuf>,
+    pub items: Option<PathBuf>,
+    /// Where a new bot's folder goes (`~/.omp/bots`).
+    pub bots_root: Option<PathBuf>,
 }
 
 impl AgentControl {
@@ -299,7 +331,7 @@ impl AgentControl {
         });
         let mailbox =
             Mailbox::with_coalesce(deliver, Duration::from_millis(tuning.mail_coalesce_ms));
-        AgentControl(Arc::new(Inner {
+        let control = AgentControl(Arc::new(Inner {
             host,
             tuning,
             fates: Mutex::new(SessionFates::with_clock(files.fates.clone(), clock.clone())),
@@ -312,11 +344,16 @@ impl AgentControl {
                 .as_ref()
                 .map(|outbox| SendOutbox::with_clock(outbox.file.clone(), clock.clone())),
             mailbox,
+            bots: Mutex::new(Bots::new(files.bots.clone())),
+            items: Mutex::new(Items::new(files.items.clone())),
+            bots_root: files.bots_root.clone(),
             clock,
             mem: Mutex::new(Mem::default()),
             arrived: tokio::sync::Notify::new(),
             app: std::sync::OnceLock::new(),
-        }))
+        }));
+        control.hold_paused();
+        control
     }
 
     /// A message reached `tab_id`: a blocking wait of its own ends (`#arrived`).
@@ -869,7 +906,11 @@ impl AgentControl {
                 match &args.sessions {
                     Some(names) => self.send_group(&caller, tabs, names, &args).await,
                     None => {
-                        let target = self.send_target(&caller, tabs, &args.session).await?;
+                        // `bot:<name>[@<device>]`: the bot's home chat, by its name.
+                        let target = match args.session.strip_prefix("bot:") {
+                            Some(name) => self.bot_target(&caller, tabs, name).await?,
+                            None => self.send_target(&caller, tabs, &args.session).await?,
+                        };
                         self.send(&caller, &target, &args).await
                     }
                 }
@@ -1005,6 +1046,8 @@ impl AgentControl {
             Tool::Autopilot => self.autopilot(&caller, tabs, typed(parsed, tool)?).await,
             Tool::AppList => self.app_list(typed(parsed, tool)?).await,
             Tool::App => self.app(&caller, typed(parsed, tool)?).await,
+            Tool::Bot => self.bot_tool(&caller, tabs, typed(parsed, tool)?).await,
+            Tool::Item => self.item_tool(&caller, typed(parsed, tool)?).await,
         }
     }
 
@@ -1257,6 +1300,14 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
                     .await,
             )
         }
+        // The owner's own change to the bots or their items (`BotsRequest`, Settings and the Bots page): the state after.
+        "bots" => reply(control.bots_command(args).await),
+        // A paired device asks for a bot's home chat by name (`host.bots.home`): refused unless that device may reach it.
+        "botHome" => reply(control.bot_home(
+            &text_arg(&args, "name", method)?,
+            args.get("device").and_then(Value::as_str),
+            args.get("deviceName").and_then(Value::as_str),
+        )),
         "autoClose" => reply(
             control
                 .auto_close(&text_arg(&args, "callerTabId", method)?)

@@ -101,6 +101,11 @@ impl ScheduleSource<'_> {
             .collect())
     }
 
+    /// Every saved schedule with its draft (`wakeSession` included), as the service holds it.
+    pub async fn schedules(&self) -> R<Vec<Schedule>> {
+        Ok(self.command(json!({ "action": "get" })).await?.schedules)
+    }
+
     /// The id comes from the save itself: a diff against an earlier read would hand a concurrent create's schedule to
     /// this caller.
     pub async fn save(&self, draft: &ScheduleDraft) -> R<ScheduleRow> {

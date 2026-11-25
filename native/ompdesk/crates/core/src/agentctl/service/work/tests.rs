@@ -25,6 +25,17 @@ fn rig(
     caps: Caps,
     reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
 ) -> (AgentControl, Asked) {
+    rig_files(id, state, caps, &Files::default(), reply)
+}
+
+/// `rig` over journals in `files`.
+fn rig_files(
+    id: u64,
+    state: Value,
+    caps: Caps,
+    files: &Files,
+    reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
+) -> (AgentControl, Asked) {
     let (writer, reader) = tokio::io::duplex(1 << 20);
     let (tx, _task) = crate::wire::spawn_writer(writer);
     let events = crate::server::test_events(&tx);
@@ -57,7 +68,7 @@ fn rig(
         ready_poll_ms: 20,
         ..Tuning::default()
     };
-    let control = AgentControl::new(port, caps, &Files::default(), tuning, system_clock());
+    let control = AgentControl::new(port, caps, files, tuning, system_clock());
     (control, asked)
 }
 
@@ -1062,4 +1073,661 @@ fn commands_get_the_windows_the_typescript_gave_them() {
             case["in"][0]
         );
     }
+}
+
+// ---- bots and items ---------------------------------------------------------------------------------------------------
+
+/// A folder of the test's own, gone when it drops.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new() -> Scratch {
+        Scratch(crate::fs::disk::make_temp_dir("ompdesk-bots-").unwrap())
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The ids of the reports main was asked to hand over, and which of them the fake bridge took as new (it drops an id
+/// it already holds, as the real one does).
+type Mails = Arc<Mutex<Vec<(String, bool)>>>;
+
+/// A fake main whose bridge keeps the mail ids it took, plus `extra`.
+fn bots_main(
+    mails: Mails,
+    extra: impl Fn(&str, &Value) -> Option<Value> + Send + 'static,
+) -> impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static {
+    move |method, args| {
+        if let Some(value) = extra(method, args) {
+            return Ok(value);
+        }
+        match method {
+            "args.parse" => Ok(json!({ "ok": true, "args": args["args"] })),
+            "mail" => {
+                let id = args["details"]["id"].as_str().unwrap_or("").to_owned();
+                let mut mails = mails.lock().unwrap();
+                let fresh = !mails.iter().any(|(known, new)| *known == id && *new);
+                mails.push((id, fresh));
+                Ok(json!({ "duplicate": !fresh, "journaled": true }))
+            }
+            "command" => match args["command"]["type"].as_str() {
+                Some("prompt") | Some("agent_control_bot") => Ok(json!({ "success": true })),
+                Some("get_state") => {
+                    Ok(json!({ "success": true, "data": { "isStreaming": false } }))
+                }
+                _ => Ok(json!({ "success": false, "error": "no" })),
+            },
+            "schedules.command" => Ok(json!({ "schedules": [] })),
+            // The tab that holds the bot's chat now.
+            "reach" => Ok(json!("bot1")),
+            _ => Ok(Value::Null),
+        }
+    }
+}
+
+/// Reports each id was delivered as new (the bridge's own count).
+fn delivered(mails: &Mails, id: &str) -> usize {
+    mails
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(known, new)| known == id && *new)
+        .count()
+}
+
+fn bot_files(root: &Scratch) -> Files {
+    Files {
+        mail_outbox: Some(super::super::JournalFile::default()),
+        bots_root: Some(root.0.clone()),
+        ..Files::default()
+    }
+}
+
+/// The caller `main0001`, the bot Ada's chat `bot1` in `folder` and a sender `send1` that reports to it.
+fn bot_world(folder: &str) -> Value {
+    json!({
+        "enabled": true,
+        "manageEnabled": true,
+        "scheduleDevices": [""],
+        "tabs": [
+            tab("main0001", json!({ "title": "Boss", "sessionPath": "/s/boss.jsonl" })),
+            tab("bot1", json!({ "title": "Ada chat", "cwd": folder, "sessionPath": "/s/bot.jsonl" })),
+            tab("send1", json!({ "title": "Sender", "sessionPath": "/s/sender.jsonl" })),
+            tab("work1", json!({ "title": "Work", "sessionPath": "/s/work.jsonl" })),
+        ],
+        "windowOf": { "main0001": "w", "bot1": "w", "send1": "w", "work1": "w" },
+    })
+}
+
+/// Makes the bot Ada, shows main a world where `bot1` runs in its folder and lets the bot see its chat.
+async fn ada(
+    id: u64,
+    root: &Scratch,
+    mails: Mails,
+    extra: impl Fn(&str, &Value) -> Option<Value> + Send + 'static,
+) -> (AgentControl, Asked, String) {
+    let folder = root.0.join("ada").to_string_lossy().into_owned();
+    let (control, asked) = rig_files(
+        id,
+        bot_world(&folder),
+        Caps::default(),
+        &bot_files(root),
+        bots_main(mails, extra),
+    );
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "create", "name": "Ada" }),
+    )
+    .await;
+    assert!(!is_error, "{text}");
+    assert!(text.contains(&folder), "{text}");
+    control.observe_bots();
+    let bot = control.bot_named("Ada").unwrap();
+    (control, asked, bot.id)
+}
+
+fn report(id: &str) -> Value {
+    json!({ "id": id, "from": "send1", "fromTitle": "Sender", "kind": "note", "text": id })
+}
+
+const NOTE: crate::agentctl::rules::mail::MailDelivery =
+    crate::agentctl::rules::mail::MailDelivery {
+        trigger_turn: false,
+        aside: false,
+    };
+
+#[tokio::test]
+async fn a_bot_is_made_in_its_own_folder_and_its_first_chat_becomes_its_home_once() {
+    let root = Scratch::new();
+    let (control, asked, _) = ada(9_701, &root, Mails::default(), |_, _| None).await;
+    assert!(root.0.join("ada").is_dir());
+    let bot = control.bot_named("ada").unwrap();
+    assert_eq!(bot.home.as_deref(), Some("/s/bot.jsonl"));
+    assert_eq!(bot.sessions, vec!["/s/bot.jsonl"]);
+    assert_eq!(bot.stale_days, Some(7.0));
+    // A second bot of the same name is refused; one with another name gets a folder of its own.
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "create", "name": "ada" }),
+    )
+    .await;
+    assert!(is_error && text.contains("already a bot"), "{text}");
+    std::fs::create_dir_all(root.0.join("bo")).unwrap();
+    let (text, _) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "create", "name": "Bo" }),
+    )
+    .await;
+    assert!(
+        text.contains(&*root.0.join("bo-2").to_string_lossy()),
+        "{text}"
+    );
+    // Another chat joins; the home stays the first.
+    let mut world = bot_world(&root.0.join("ada").to_string_lossy());
+    world["tabs"][3]["cwd"] = json!(root.0.join("ada").to_string_lossy());
+    crate::ports::apply_state(control.host.port(), 1, &world.to_string()).unwrap();
+    control.observe_bots();
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.home.as_deref(), Some("/s/bot.jsonl"));
+    assert_eq!(bot.sessions, vec!["/s/bot.jsonl", "/s/work.jsonl"]);
+    let (text, _) = run(&control, "ompdesk_bot", json!({ "action": "list" })).await;
+    assert!(text.contains("- Ada (id "), "{text}");
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, _)| method == "botsChanged")
+    );
+}
+
+#[tokio::test]
+async fn a_paused_bot_holds_its_mail_and_a_resume_hands_each_held_report_over_once() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (control, _, _) = ada(9_702, &root, mails.clone(), |_, _| None).await;
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "pause", "bot": "Ada" }),
+    )
+    .await;
+    assert!(!is_error, "{text}");
+    control
+        .host
+        .mail("bot1", "m1", &report("m1"), NOTE)
+        .await
+        .unwrap();
+    control.redeliver_mail_now().await;
+    assert_eq!(delivered(&mails, "m1"), 0, "held while paused");
+    assert_eq!(
+        control
+            .host
+            .outbox()
+            .unwrap()
+            .kept_for("/s/bot.jsonl")
+            .len(),
+        1
+    );
+    // Two resumes and a new report, all at once: each report reaches the chat once.
+    let resume = json!({ "action": "resume", "bot": "Ada" });
+    let (first, second, sent) = tokio::join!(
+        control.run("main0001", "ompdesk_bot", resume.clone(), None),
+        control.run("main0001", "ompdesk_bot", resume, None),
+        control.host.mail("bot1", "m2", &report("m2"), NOTE),
+    );
+    assert!(
+        !first.is_error && !second.is_error,
+        "{} / {}",
+        first.text,
+        second.text
+    );
+    sent.unwrap();
+    control.redeliver_mail_now().await;
+    control.redeliver_mail_now().await;
+    assert_eq!(delivered(&mails, "m1"), 1);
+    assert_eq!(delivered(&mails, "m2"), 1);
+    assert!(control.host.outbox().unwrap().pending().is_empty());
+}
+
+#[tokio::test]
+async fn a_send_to_a_paused_bot_is_refused_and_nothing_changes() {
+    let root = Scratch::new();
+    let (control, asked, id) = ada(9_703, &root, Mails::default(), |_, _| None).await;
+    control
+        .bots_command(json!({ "action": "update", "id": id, "paused": true }))
+        .await
+        .unwrap();
+    assert_eq!(
+        control.paused_bot_of("/s/bot.jsonl").as_deref(),
+        Some("Ada")
+    );
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_session_send",
+        json!({ "session": "bot1", "message": "hi" }),
+    )
+    .await;
+    assert!(is_error && text.contains("The bot Ada is paused"), "{text}");
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_session_send",
+        json!({ "session": "bot:Ada", "message": "hi" }),
+    )
+    .await;
+    assert!(is_error && text.contains("The bot Ada is paused"), "{text}");
+    assert!(
+        !asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, args)| method == "command" && args["command"]["type"] == "prompt")
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_bot_drops_its_held_mail_with_a_note_to_its_sender_and_removes_its_wakes() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (control, asked, id) = ada(
+        9_704,
+        &root,
+        mails.clone(),
+        |method, args| {
+            (method == "schedules.command" && args["request"]["action"] == "get").then(|| {
+                let wake = |id: &str, session: &str| {
+                    let mut row = scheduled(id, "wake", json!({ "kind": "interval", "minutes": 60 }));
+                    row["wakeSession"] = json!(session);
+                    row
+                };
+                json!({ "schedules": [wake("sch-bot", "/s/bot.jsonl"), wake("sch-other", "/s/sender.jsonl")] })
+            })
+        },
+    )
+    .await;
+    control
+        .bots_command(json!({ "action": "update", "id": id, "paused": true }))
+        .await
+        .unwrap();
+    control
+        .host
+        .mail("bot1", "m1", &report("m1"), NOTE)
+        .await
+        .unwrap();
+    control
+        .host
+        .mail("bot1", "m2", &report("m2"), NOTE)
+        .await
+        .unwrap();
+    let state = control
+        .bots_command(json!({ "action": "delete", "id": id }))
+        .await
+        .unwrap();
+    assert_eq!(state["bots"], json!([]));
+    assert!(root.0.join("ada").is_dir(), "its folder stays");
+    assert!(
+        control
+            .host
+            .outbox()
+            .unwrap()
+            .kept_for("/s/bot.jsonl")
+            .is_empty()
+    );
+    assert_eq!(delivered(&mails, "m1") + delivered(&mails, "m2"), 0);
+    let notes: Vec<Value> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, args)| method == "mail" && args["tabId"] == "send1")
+        .map(|(_, args)| args.clone())
+        .collect();
+    assert_eq!(notes.len(), 1, "one note per sender");
+    assert!(
+        notes[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("The bot Ada was deleted")
+    );
+    assert_eq!(notes[0]["delivery"]["triggerTurn"], false);
+    let deleted: Vec<Value> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, args)| {
+            method == "schedules.command" && args["request"]["action"] == "delete"
+        })
+        .map(|(_, args)| args["request"]["id"].clone())
+        .collect();
+    assert_eq!(deleted, vec![json!("sch-bot")]);
+}
+
+#[tokio::test]
+async fn an_owner_change_is_mailed_once_per_version_and_an_empty_one_or_a_gone_item_mails_nothing()
+{
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (control, _, _) = ada(9_705, &root, mails.clone(), |_, _| None).await;
+    let out = control
+        .run(
+            "bot1",
+            "ompdesk_item",
+            json!({ "action": "add", "title": "Ship it" }),
+            None,
+        )
+        .await;
+    assert!(!out.is_error, "{}", out.text);
+    let out = control
+        .run(
+            "bot1",
+            "ompdesk_item",
+            json!({ "action": "set", "item": "1", "ask": "Which day?", "options": ["Mon", "Tue"], "recommended": 1 }),
+            None,
+        )
+        .await;
+    assert!(
+        out.text.contains("[needs_you]") && out.text.contains("Which day?"),
+        "{}",
+        out.text
+    );
+    let item = control
+        .items()
+        .find(&control.bot_named("Ada").unwrap().id, "1")
+        .cloned()
+        .unwrap();
+    assert_eq!(item.version, 2);
+    // A comment: a quiet note named by the new version.
+    control
+        .bots_command(json!({ "action": "item", "id": item.id, "comment": "soon" }))
+        .await
+        .unwrap();
+    assert_eq!(delivered(&mails, &format!("item-{}-v3", item.id)), 1);
+    // The same change again is a new version; nothing at all is no change.
+    control
+        .bots_command(json!({ "action": "item", "id": item.id }))
+        .await
+        .unwrap();
+    assert_eq!(control.items().get(&item.id).unwrap().version, 3);
+    // The answer starts a turn and clears the question.
+    control
+        .bots_command(json!({ "action": "item", "id": item.id, "answer": { "choice": 1 } }))
+        .await
+        .unwrap();
+    let answered = control.items().get(&item.id).cloned().unwrap();
+    assert_eq!(answered.version, 4);
+    assert!(answered.question.is_none());
+    assert_eq!(answered.status, "working");
+    assert_eq!(delivered(&mails, &format!("item-{}-v4", item.id)), 1);
+    // A change to an item that is gone: no mail, no question, no error.
+    let before = mails.lock().unwrap().len();
+    control
+        .bots_command(json!({ "action": "item", "id": "item-gone", "answer": { "text": "x" } }))
+        .await
+        .unwrap();
+    assert_eq!(mails.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn a_closed_item_writes_its_journal_line_and_items_work_only_in_a_bot_s_chat() {
+    let root = Scratch::new();
+    let (control, _, _) = ada(9_706, &root, Mails::default(), |_, _| None).await;
+    let (text, is_error) = run(&control, "ompdesk_item", json!({ "action": "list" })).await;
+    assert!(
+        is_error && text.contains("ompdesk_item works in a bot's chat"),
+        "{text}"
+    );
+    control
+        .run(
+            "bot1",
+            "ompdesk_item",
+            json!({ "action": "add", "title": "Tidy up" }),
+            None,
+        )
+        .await;
+    let out = control
+        .run(
+            "bot1",
+            "ompdesk_item",
+            json!({ "action": "done", "item": "#1", "note": "done" }),
+            None,
+        )
+        .await;
+    assert!(out.text.contains("[done]"), "{}", out.text);
+    let journal = root.0.join("ada").join("memory").join("journal");
+    let month = std::fs::read_dir(&journal)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let text = std::fs::read_to_string(month).unwrap();
+    assert!(
+        text.starts_with("- 20") && text.trim_end().ends_with("| item #1 | done | Tidy up"),
+        "{text}"
+    );
+    let listed = control
+        .run(
+            "bot1",
+            "ompdesk_item",
+            json!({ "action": "list", "status": "done" }),
+            None,
+        )
+        .await;
+    assert!(listed.text.contains("#1 [done] Tidy up"), "{}", listed.text);
+}
+
+#[tokio::test]
+async fn an_item_reads_stale_snoozed_and_limited_from_what_it_links() {
+    let root = Scratch::new();
+    let (control, _, bot_id) = ada(9_707, &root, Mails::default(), |_, _| None).await;
+    let bot = control.bot_named("Ada").unwrap();
+    let now = control.now();
+    let item = crate::agentctl::journal::items::ItemRecord {
+        id: "item-x".into(),
+        bot: bot_id,
+        number: 1,
+        status: "working".into(),
+        touched: now - 8.0 * 24.0 * 60.0 * 60_000.0,
+        snoozed_until: Some(crate::aimemory::value::iso((now + 60_000.0) as u64)),
+        links: vec![crate::agentctl::journal::items::ItemLink {
+            kind: "session".into(),
+            target: "/s/work.jsonl".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut world = bot_world(&bot.folder);
+    world["tabs"][3]["scheduledRetry"] =
+        json!({ "at": 1_800_000_000_000.0, "attempt": 1, "limit": true });
+    crate::ports::apply_state(control.host.port(), 1, &world.to_string()).unwrap();
+    let read = control.read_item(&control.host.state(), Some(&bot), &item, now);
+    assert_eq!(read.stale, Some(true));
+    assert!(item.snoozed(now));
+    assert_eq!(read.links[0].state.as_deref(), Some("done"));
+    assert_eq!(
+        read.limit_until.as_deref(),
+        Some(&*crate::aimemory::value::iso(1_800_000_000_000))
+    );
+    // A bot that never goes stale, and a linked session that is not waiting for a limit.
+    let calm = crate::agentctl::journal::bots::BotRecord {
+        stale_days: None,
+        ..bot.clone()
+    };
+    world["tabs"][3]["scheduledRetry"] = Value::Null;
+    crate::ports::apply_state(control.host.port(), 2, &world.to_string()).unwrap();
+    let read = control.read_item(&control.host.state(), Some(&calm), &item, now);
+    assert_eq!(read.stale, None);
+    assert_eq!(read.limit_until, None);
+}
+
+#[tokio::test]
+async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one() {
+    let root = Scratch::new();
+    let (control, _, _) = ada(9_708, &root, Mails::default(), |_, _| None).await;
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_session_open",
+        json!({ "message": "go", "item": "1" }),
+    )
+    .await;
+    assert!(
+        is_error && text.contains("item works only from a bot's chat"),
+        "{text}"
+    );
+    control
+        .run(
+            "bot1",
+            "ompdesk_item",
+            json!({ "action": "add", "title": "Build it" }),
+            None,
+        )
+        .await;
+    let caller = control
+        .host
+        .state()
+        .tabs
+        .iter()
+        .find(|tab| tab.tab_id == "bot1")
+        .cloned()
+        .unwrap();
+    control.link_opened(&caller, "1", "child1").unwrap();
+    let bot = control.bot_named("Ada").unwrap();
+    let item = control.items().find(&bot.id, "1").cloned().unwrap();
+    assert_eq!(item.status, "working");
+    assert_eq!(item.links[0].target, "child1");
+    let mut world = bot_world(&bot.folder);
+    world["tabs"]
+        .as_array_mut()
+        .unwrap()
+        .push(tab("child1", json!({ "sessionPath": "/s/child.jsonl" })));
+    crate::ports::apply_state(control.host.port(), 1, &world.to_string()).unwrap();
+    control.observe_bots();
+    assert_eq!(
+        control.items().get(&item.id).unwrap().links[0].target,
+        "/s/child.jsonl"
+    );
+}
+
+#[tokio::test]
+async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_only_when_let() {
+    let root = Scratch::new();
+    let (control, _, _) = ada(9_709, &root, Mails::default(), |_, _| None).await;
+    let tabs = control.host.state().tabs.clone();
+    let caller = tabs[0].clone();
+    assert_eq!(
+        control
+            .bot_target(&caller, &tabs, "Ada")
+            .await
+            .unwrap()
+            .tab_id,
+        "bot1"
+    );
+    let refused = control
+        .bot_home("Ada", Some("dev1"), Some("MacBook"))
+        .unwrap_err();
+    assert_eq!(
+        refused.message(),
+        "This bot does not take messages from MacBook"
+    );
+    control
+        .bots_command(json!({ "action": "update", "id": control.bot_named("Ada").unwrap().id, "reach": ["dev1"] }))
+        .await
+        .unwrap();
+    assert_eq!(
+        control
+            .bot_home("Ada", Some("dev1"), Some("MacBook"))
+            .unwrap()["path"],
+        "/s/bot.jsonl"
+    );
+    assert!(control.bot_target(&caller, &tabs, "Nobody").await.is_err());
+}
+
+#[tokio::test]
+async fn look_around_is_one_daily_wake_of_the_home_chat_and_goes_when_turned_off() {
+    let root = Scratch::new();
+    let (control, asked, id) = ada(9_710, &root, Mails::default(), |method, args| {
+        (method == "schedules.create").then(|| {
+            let mut made = scheduled(
+                "sch-look",
+                args["draft"]["name"].as_str().unwrap(),
+                args["draft"]["frequency"].clone(),
+            );
+            made["wakeSession"] = args["draft"]["wakeSession"].clone();
+            json!({ "id": "sch-look", "state": { "schedules": [made] } })
+        })
+    })
+    .await;
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "look_around", "bot": "Ada", "on": true, "time": "08:30" }),
+    )
+    .await;
+    assert!(!is_error, "{text}");
+    let create = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(method, _)| method == "schedules.create")
+        .map(|(_, args)| args["draft"].clone())
+        .unwrap();
+    assert_eq!(create["name"], "Ada: Look around");
+    assert_eq!(create["wakeSession"], "/s/bot.jsonl");
+    assert_eq!(
+        create["frequency"],
+        json!({ "kind": "daily", "time": "08:30", "days": [] })
+    );
+    assert!(create["prompt"].as_str().unwrap().contains("NO_REPLY"));
+    assert_eq!(
+        control.bot_named("Ada").unwrap().look_around.as_deref(),
+        Some("sch-look")
+    );
+    control
+        .bots_command(json!({ "action": "update", "id": id, "lookAround": { "on": false } }))
+        .await
+        .unwrap();
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, args)| method == "schedules.command"
+                && args["request"]["action"] == "delete"
+                && args["request"]["id"] == "sch-look")
+    );
+    assert_eq!(control.bot_named("Ada").unwrap().look_around, None);
+}
+
+#[tokio::test]
+async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_from_it() {
+    let root = Scratch::new();
+    let (control, asked, id) = ada(9_711, &root, Mails::default(), |_, _| None).await;
+    control
+        .bots_command(json!({ "action": "handTo", "id": id, "session": "work1", "text": "Finish the release notes" }))
+        .await
+        .unwrap();
+    let asked = asked.lock().unwrap().clone();
+    let opener = asked
+        .iter()
+        .find(|(method, _)| method == "setOpener")
+        .unwrap();
+    assert_eq!(opener.1, json!({ "tabId": "work1", "openerTabId": "bot1" }));
+    let prompt = asked
+        .iter()
+        .find(|(method, args)| {
+            method == "command" && args["tabId"] == "work1" && args["command"]["type"] == "prompt"
+        })
+        .unwrap();
+    assert!(
+        prompt.1["command"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Finish the release notes")
+    );
 }

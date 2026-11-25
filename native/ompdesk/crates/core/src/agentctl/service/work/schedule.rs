@@ -42,6 +42,15 @@ impl AgentControl {
     pub(crate) async fn schedule(&self, caller: &ControlTab, args: ScheduleArgs) -> R<String> {
         // Default: the device the caller's own session runs on, so its folder is a path there.
         let mut device: Option<ControlDevice>;
+        // `bot:<name>`: a wake of that bot's home chat on this computer, in its folder, with its model.
+        let bot = match args
+            .target
+            .as_deref()
+            .and_then(|target| target.strip_prefix("bot:"))
+        {
+            Some(name) => Some(self.bot_named(name)?),
+            None => None,
+        };
         if args.target.as_deref() == Some("self") {
             if let Some(own) = &caller.device {
                 return fail(format!(
@@ -49,6 +58,8 @@ impl AgentControl {
                     caller.device_name.as_deref().unwrap_or(own)
                 ));
             }
+            device = None;
+        } else if bot.is_some() {
             device = None;
         } else if let Some(wanted) = &args.device {
             device = self.device(wanted)?;
@@ -203,19 +214,34 @@ impl AgentControl {
             );
         };
         // The caller's folder is a path on its own device; another device needs its folder named.
-        if args.folder.as_deref().is_none_or(str::is_empty) && device_id != caller.device.as_deref()
+        if bot.is_none()
+            && args.folder.as_deref().is_none_or(str::is_empty)
+            && device_id != caller.device.as_deref()
         {
             return fail(format!(
                 "folder is required: name an absolute folder {where_}."
             ));
         }
-        let cwd = args.folder.clone().unwrap_or_else(|| caller.cwd.clone());
+        let cwd = match &bot {
+            Some(bot) => bot.folder.clone(),
+            None => args.folder.clone().unwrap_or_else(|| caller.cwd.clone()),
+        };
         if !is_absolute(&cwd) {
             return fail("folder must be an absolute path.");
         }
         // A wake-up goes to the caller's own session file, which is a path on this computer only.
         let mut wake_session: Option<String> = None;
-        if args.target.as_deref() == Some("self") {
+        if let Some(bot) = &bot {
+            match &bot.home {
+                Some(home) => wake_session = Some(home.clone()),
+                None => {
+                    return fail(format!(
+                        "The bot {} has no home chat yet, so nothing can wake it: open a session in {} first.",
+                        bot.name, bot.folder
+                    ));
+                }
+            }
+        } else if args.target.as_deref() == Some("self") {
             match caller
                 .session_path
                 .as_deref()
@@ -274,8 +300,12 @@ impl AgentControl {
                 prompt: args.prompt.clone().unwrap_or_default(),
                 cwd: cwd.clone(),
                 frequency: frequency.clone(),
-                model: args.model.clone(),
-                auto_approve: false,
+                model: args
+                    .model
+                    .clone()
+                    .or_else(|| bot.as_ref().and_then(|bot| bot.model.clone())),
+                // A bot's routine carries its permissions (a wake runs in the bot's chat and ignores both).
+                auto_approve: bot.as_ref().is_some_and(|bot| bot.auto_approve),
                 enabled: true,
                 wake_session: wake_session.clone(),
             })

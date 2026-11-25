@@ -10,12 +10,16 @@
 //!   (4802-5108).
 //! - `app`: `ServicePorts` (the `AppPorts` of this service), `#appControl`, `#appAutopilot`, `#rpcOn`,
 //!   `#utilityTab`, `#closeUtilityTabs`, `#discardUtility` and the `T.app` / `T.appList` arms with `#appRuns`.
+//! - `bots`, `items`: `ompdesk_bot`, `ompdesk_item` and the owner's `BotsRequest` (new in the core, no TypeScript
+//!   twin).
 //!
 //! Called of the other families (by these names): `close_tab`, `CloseHow`, `TabClose`, `remember_closed`, `fated`
 //! (sessions); `journal_marks`, `report_fields`, `report` (messages).
 
 mod app;
 mod auto;
+mod bots;
+mod items;
 mod review;
 mod schedule;
 #[cfg(test)]

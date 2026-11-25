@@ -8,6 +8,7 @@ import { z } from "zod";
 import { ATTACHMENT_MAX_BYTES } from "../../../resources/gui-bridge/agent-control-contracts";
 import { AUTOPILOT_AREAS } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import { AGENT_SCHEDULE_PREFIX, type AgentControlToolName, AGENT_CONTROL_TOOLS as T } from "../../shared/agent-control";
+import { ITEM_STATUSES } from "../../shared/bots";
 import type { HostToolDefinition } from "../../shared/rpc-types";
 import { GITHUB_EVENT_KINDS, GITHUB_REPO, SESSION_EVENT_KINDS } from "../../shared/schedules";
 import { MAIL_KINDS } from "./mail";
@@ -39,6 +40,12 @@ export const READ_DEFAULT_MESSAGES = 12;
 export const READ_MAX_MESSAGES = 40;
 /** A message another session receives is at most this long. */
 export const MESSAGE_MAX_CHARS = 50_000;
+/** A bot's name, at most (`NAME_MAX` in the core's `agentctl/service/work/bots.rs`). */
+const BOT_NAME_MAX = 80;
+/** An item's title, description and any other text, at most (`work/items.rs` checks the owner's own the same). */
+const ITEM_TITLE_MAX = 200;
+const ITEM_DESCRIPTION_MAX = 20_000;
+const ITEM_TEXT_MAX = 8_000;
 
 const SESSION = {
 	type: "string",
@@ -129,6 +136,11 @@ const OPEN_ONE = {
 		description:
 			"true: a one-off session (a lookup, a check). Once its final answer ends with Result: ok and has reached you, OMPdesk closes it and deletes its saved session, on a paired device too. Not with reopen.",
 	},
+	item: {
+		type: "string",
+		description:
+			"From a bot's chat: the item (its number or id) this session works on; it is linked to the item, and a planned item becomes working. A bot's chat opens with the bot's model unless model names one.",
+	},
 } as const;
 
 export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
@@ -202,7 +214,10 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		parameters: {
 			type: "object",
 			properties: {
-				session: SESSION,
+				session: {
+					...SESSION,
+					description: `${SESSION.description} Or a bot by name: "bot:<name>" (its home chat on this computer, opened if closed), "bot:<name>@<device>" (a bot on a paired computer, which takes it only when this computer is in the bot's reach).`,
+				},
 				sessions: {
 					type: "array",
 					items: { type: "string" },
@@ -247,7 +262,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				to: {
 					type: "string",
 					description:
-						"A sibling's session id (opened by the same session), or a session working in the same checkout; default the session that opened you.",
+						"A sibling's session id (opened by the same session), or a session working in the same checkout; default the session that opened you. \"bot:<name>\" names a bot's home chat (a session handed to a bot reports to it as its opener anyway).",
 				},
 				dispatch: {
 					type: "string",
@@ -497,9 +512,8 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				},
 				target: {
 					type: "string",
-					enum: ["self"],
 					description:
-						'create: "self" delivers the prompt into THIS session at each start, as a message that starts a turn (this session is opened in the background if no tab holds it), instead of running a fresh session: a routine or a follow-up of yours. Give the prompt as a note to yourself, since you keep this conversation. This computer\'s sessions only; no folder, model or device. A repeating or event one runs until you cancel it; a once one turns itself off.',
+						'create: "self" delivers the prompt into THIS session at each start, as a message that starts a turn (this session is opened in the background if no tab holds it), instead of running a fresh session: a routine or a follow-up of yours. Give the prompt as a note to yourself, since you keep this conversation. This computer\'s sessions only; no folder, model or device. A repeating or event one runs until you cancel it; a once one turns itself off. "bot:<name>" does the same into that bot\'s home chat on this computer, in its folder with its model (refused while it has no home chat).',
 				},
 			},
 			required: ["action"],
@@ -645,6 +659,106 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 			additionalProperties: false,
 		},
 	},
+	{
+		name: T.bot,
+		label: "OMPdesk bot",
+		description:
+			"Make, list, pause or set up a bot: a folder whose sessions are its chats.\n" +
+			'A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off "Let agents manage other sessions"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use ("" for omp\'s default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot, on, time?} turns on (daily at time, HH:MM, default 09:00) or off its Look around routine: it reads its projects and saves at most 5 suggestions as planned items. hand {bot, session, text} hands a session to the bot: the bot\'s home chat becomes its opener and the text reaches it from the bot. Only the owner deletes a bot. See skill://ompdesk/references/bots.md.',
+		parameters: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: ["create", "list", "pause", "resume", "set", "look_around", "hand"],
+				},
+				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create: the bot's name." },
+				folder: {
+					type: "string",
+					description: "create: an absolute folder for it; default ~/.omp/bots/<name>, made unique.",
+				},
+				bot: { type: "string", description: "The bot: its name or id." },
+				model: { type: "string", description: 'set: provider/id for its chats and routines; "" clears it.' },
+				auto_approve: { type: "boolean", description: "set: its routines run every tool without asking." },
+				stale_days: {
+					type: "integer",
+					minimum: 0,
+					maximum: 365,
+					description: "set: days an open item may go untouched before it reads stale; 0 never.",
+				},
+				reach: {
+					type: "array",
+					items: { type: "string" },
+					description: "set: paired devices (name or id) whose agents may message it; [] this computer only.",
+				},
+				on: { type: "boolean", description: "look_around: true turns it on, false off." },
+				time: { type: "string", description: "look_around: local time HH:MM; default 09:00." },
+				session: { ...SESSION, description: `hand: the session to hand over. ${SESSION.description}` },
+				text: {
+					type: "string",
+					maxLength: MESSAGE_MAX_CHARS,
+					description: "hand: what the bot asks of it, sent as its first message from the bot.",
+				},
+			},
+			required: ["action"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: T.item,
+		label: "Bot item",
+		description:
+			"Keep a bot's work and its questions to the owner as items (a bot's chat only).\n" +
+			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
+		parameters: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: ["add", "set", "comment", "done", "cancel", "link", "list", "show"],
+				},
+				item: { type: "string", description: "Its number (3 or #3) or id." },
+				title: { type: "string", maxLength: ITEM_TITLE_MAX, description: "add, set: a short title." },
+				description: { type: "string", maxLength: ITEM_DESCRIPTION_MAX, description: "add, set: the details." },
+				done_means: {
+					type: "string",
+					maxLength: ITEM_DESCRIPTION_MAX,
+					description: "add, set: what done means for it.",
+				},
+				status: { type: "string", enum: [...ITEM_STATUSES], description: "add, set, list: its status." },
+				ask: {
+					type: "string",
+					maxLength: ITEM_TEXT_MAX,
+					description: "set: a question for the owner; the item becomes needs_you.",
+				},
+				options: {
+					type: "array",
+					items: { type: "string" },
+					description: "set, with ask: quick answers the owner can pick.",
+				},
+				recommended: {
+					type: "integer",
+					minimum: 0,
+					description: "set, with ask: the option you recommend (0-based).",
+				},
+				wait: {
+					type: "string",
+					maxLength: ITEM_TEXT_MAX,
+					description: "set: what it waits on; the item becomes waiting.",
+				},
+				until: { type: "string", description: "set, with wait: until when (ISO 8601), if known." },
+				snooze_until: { type: "string", description: 'set: hide it until then (ISO 8601); "" wakes it.' },
+				text: { type: "string", maxLength: ITEM_TEXT_MAX, description: "comment: what to add." },
+				note: { type: "string", maxLength: ITEM_TEXT_MAX, description: "done, cancel: how it ended." },
+				url: { type: "string", description: "link: a web address." },
+				file: { type: "string", description: "link: an absolute path." },
+				session: { type: "string", description: "link: a session (id or tab id)." },
+				pr: { type: "string", description: "link: a pull request URL or owner/repo#n." },
+			},
+			required: ["action"],
+			additionalProperties: false,
+		},
+	},
 ];
 
 const attachmentsArg = z.array(
@@ -661,6 +775,10 @@ const deviceArg = z.string().trim().min(1).max(200);
 const placement = z.enum(PLACEMENT);
 
 const positive = z.number().positive().finite();
+const isoTime = z
+	.string()
+	.trim()
+	.regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/, "an ISO 8601 time");
 
 const autopilotBranch = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("new"), name: z.string().trim().min(1).max(200).optional() }).strict(),
@@ -723,6 +841,7 @@ const openFields = {
 	mode: z.enum(["plan", "goal"]).optional(),
 	worktree: worktreeArg.optional(),
 	throwaway: z.boolean().optional(),
+	item: z.string().trim().min(1).max(100).optional(),
 };
 
 const goalNeedsMessage = [
@@ -932,7 +1051,11 @@ export const ARGS = {
 			model: z.string().trim().min(1).max(200).optional(),
 			id: z.string().trim().min(1).max(200).optional(),
 			device: deviceArg.optional(),
-			target: z.enum(["self"]).optional(),
+			target: z
+				.string()
+				.trim()
+				.regex(/^(self|bot:\S.{0,199})$/, 'target is "self" or "bot:<name>"')
+				.optional(),
 		})
 		.strict(),
 	[T.autopilot]: autopilotArgs,
@@ -941,6 +1064,47 @@ export const ARGS = {
 		.strict(),
 	[T.app]: z
 		.object({ action: z.string().trim().min(1).max(100), args: z.record(z.string(), z.unknown()).optional() })
+		.strict(),
+	[T.bot]: z
+		.object({
+			action: z.enum(["create", "list", "pause", "resume", "set", "look_around", "hand"]),
+			name: z.string().trim().min(1).max(BOT_NAME_MAX).optional(),
+			folder: z.string().trim().min(1).max(4096).optional(),
+			bot: z.string().trim().min(1).max(200).optional(),
+			model: z.string().trim().max(200).optional(),
+			auto_approve: z.boolean().optional(),
+			stale_days: z.number().int().min(0).max(365).optional(),
+			reach: z.array(deviceArg).max(50).optional(),
+			on: z.boolean().optional(),
+			time: z
+				.string()
+				.regex(/^([01]\d|2[0-3]):[0-5]\d$/, "time is HH:MM (24 hours)")
+				.optional(),
+			session: sessionArg.optional(),
+			text: z.string().trim().min(1).max(MESSAGE_MAX_CHARS).optional(),
+		})
+		.strict(),
+	[T.item]: z
+		.object({
+			action: z.enum(["add", "set", "comment", "done", "cancel", "link", "list", "show"]),
+			item: z.string().trim().min(1).max(100).optional(),
+			title: z.string().trim().min(1).max(ITEM_TITLE_MAX).optional(),
+			description: z.string().max(ITEM_DESCRIPTION_MAX).optional(),
+			done_means: z.string().max(ITEM_DESCRIPTION_MAX).optional(),
+			status: z.enum(ITEM_STATUSES).optional(),
+			ask: z.string().trim().min(1).max(ITEM_TEXT_MAX).optional(),
+			options: z.array(z.string().trim().min(1).max(200)).max(10).optional(),
+			recommended: z.number().int().min(0).max(9).optional(),
+			wait: z.string().trim().min(1).max(ITEM_TEXT_MAX).optional(),
+			until: isoTime.optional(),
+			snooze_until: z.union([z.literal(""), isoTime]).optional(),
+			text: z.string().trim().min(1).max(ITEM_TEXT_MAX).optional(),
+			note: z.string().max(ITEM_TEXT_MAX).optional(),
+			url: z.string().trim().min(1).max(4096).optional(),
+			file: z.string().trim().min(1).max(4096).optional(),
+			session: sessionArg.optional(),
+			pr: z.string().trim().min(1).max(4096).optional(),
+		})
 		.strict(),
 } as const;
 

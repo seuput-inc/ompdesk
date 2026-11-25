@@ -815,10 +815,40 @@ impl AgentControl {
             show,
             single,
         } = args;
-        let items = sessions.unwrap_or_else(|| vec![single]);
+        let mut items = sessions.unwrap_or_else(|| vec![single]);
+        // From a bot's chat: an open names the item it works on, and takes the bot's model unless it names one.
+        let bot = self
+            .bot_of_folder(&caller.cwd)
+            .filter(|_| caller.device.is_none());
+        for item in &mut items {
+            if let Some(key) = item.item.as_deref() {
+                let Some(bot) = &bot else {
+                    return fail("item works only from a bot's chat.");
+                };
+                if self.items().find(&bot.id, key).is_none() {
+                    return fail(format!(
+                        "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
+                        bot.name
+                    ));
+                }
+            }
+            if item.reopen.is_none()
+                && item.model.as_deref().is_none_or(str::is_empty)
+                && let Some(model) = bot.as_ref().and_then(|bot| bot.model.clone())
+            {
+                item.model = Some(model);
+            }
+        }
         let results = self
             .open_many(caller, tabs, &items, show.as_deref(), None)
             .await?;
+        for (item, result) in items.iter().zip(&results) {
+            if let Some(key) = item.item.as_deref()
+                && !result.tab_id.is_empty()
+            {
+                self.link_opened(caller, key, &result.tab_id)?;
+            }
+        }
         let text = Self::open_text(&results);
         if !results.iter().any(|result| !result.tab_id.is_empty()) {
             return fail(text);
