@@ -58,6 +58,8 @@ export interface EditingQueued {
 	images: ImageContent[];
 	/** The core's hold of the message while it is edited (`queue_hold`). */
 	token: string;
+	/** Settles once the core holds the message and stock's queue let it go (true), or the edit could not begin (false). */
+	began: Promise<boolean>;
 	/** The draft and pictures the field held before the edit took it over. */
 	snapshot: { draft: string; images: ComposerImage[] };
 }
@@ -109,6 +111,7 @@ export interface ComposerStore {
 		text: string;
 		images?: ImageContent[];
 		token: string;
+		began: Promise<boolean>;
 	}) => void;
 	/** Leave the edit: the draft and pictures it replaced come back exactly. */
 	endEditQueued: () => void;
@@ -171,7 +174,7 @@ export const createComposerStore = () =>
 			}),
 		setRestoredTrayMounted: mounted =>
 			set(state => ({ restoredTrayMounted: Math.max(0, state.restoredTrayMounted + (mounted ? 1 : -1)) })),
-		beginEditQueued: ({ id, lane, text, images = [], token }) =>
+		beginEditQueued: ({ id, lane, text, images = [], token, began }) =>
 			set(state => ({
 				// A second Edit while one runs keeps the first snapshot: Cancel still returns to what the user typed.
 				editingQueued: {
@@ -180,6 +183,7 @@ export const createComposerStore = () =>
 					original: text,
 					images,
 					token,
+					began,
 					snapshot: state.editingQueued?.snapshot ?? { draft: state.draft, images: state.images },
 				},
 				draft: text,

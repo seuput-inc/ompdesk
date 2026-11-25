@@ -139,9 +139,8 @@ const QueueRow = memo(function QueueRow({
 						icon={<Pencil />}
 						label={notConnected ?? t("composerQueue.editAria", { text: name })}
 						onClick={() => {
-							void beginEdit(item, lane).then(began => {
-								if (began) onEdit();
-							});
+							beginEdit(item, lane);
+							onEdit();
 						}}
 						size="sm"
 					/>

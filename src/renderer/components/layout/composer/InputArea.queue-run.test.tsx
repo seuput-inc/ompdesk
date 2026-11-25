@@ -281,7 +281,9 @@ describe("the field's placeholder, by priority", () => {
 	it("puts a pending question above everything, a queued edit above the lane", async () => {
 		await mount({ streaming: true, steering: [queued("s1", "queued text")] });
 		await act(async () =>
-			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "", token: "k1" }),
+			useComposerStore
+				.getState()
+				.beginEditQueued({ id: "s1", lane: "steering", text: "", token: "k1", began: Promise.resolve(true) }),
 		);
 		expect(placeholder()).toBe("Edit the queued message…");
 		await act(async () =>
@@ -308,7 +310,13 @@ describe("Edit queued", () => {
 			useComposerStore.getState().setImages([image]);
 			// The row's Edit held the message in the core and took it out of stock's queue (ComposerQueue.test.tsx).
 			useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
-			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "queued text", token: "k1" });
+			useComposerStore.getState().beginEditQueued({
+				id: "s1",
+				lane: "steering",
+				text: "queued text",
+				token: "k1",
+				began: Promise.resolve(true),
+			});
 		});
 	}
 

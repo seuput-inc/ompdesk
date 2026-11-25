@@ -3,9 +3,11 @@
  * ("Edit queued · Saves as last in “After this turn” · Cancel"), the field holds the message, Send becomes a check that
  * saves, and Cancel or Esc puts the exact previous draft (text and pictures) back.
  *
- * While it is edited the message is held, so stock can never deliver it unedited (Orca's edit hold): Edit first has the
+ * While it is edited the message is held, so stock can never deliver it unedited (Orca's edit hold): Edit hands the field
+ * over at once, so what the person types next lands in the edit and never in a send beneath it, and meanwhile has the
  * core keep it (`queue_hold`, a 120 s lease this window renews every 30 s), then takes it out of stock's queue
- * (`queue_remove`); one stock delivered meanwhile is not edited ("editGone"). Save queues the edited text, pictures
+ * (`queue_remove`); one stock delivered meanwhile is not edited ("editGone") and the field gets its draft back. Save and
+ * Cancel wait for that (`EditingQueued.began`) before they queue anything. Save queues the edited text, pictures
  * kept, in the message's lane the way the composer sends (`prompt` with that lane's `streamingBehavior`: queued while a
  * turn runs, a new turn once none does); Cancel queues the original back the same way while a turn runs, and holds it
  * in the restored tray once none does. The core's hold goes only after that. A window or tab that goes mid-edit stops
@@ -68,6 +70,8 @@ async function requeue(
 	text: string,
 	cancel: boolean,
 ): Promise<void> {
+	// Nothing to queue again until the core holds it and stock's queue let it go; an edit that never began left both as they were.
+	if (!(await editing.began)) return;
 	const images = editing.images.length > 0 ? editing.images : undefined;
 	const hold = () => {
 		const entry = [{ text, images }];
@@ -98,53 +102,61 @@ async function requeue(
 }
 
 /**
- * Edit of a queued message (the queue row's Edit): hold it in the core, take it out of stock's queue, then hand the
- * field over. True when the edit began.
+ * Edit of a queued message (the queue row's Edit): hand the field over at once, then hold it in the core and take it
+ * out of stock's queue. An edit that cannot begin gives the field its draft back.
  */
-export function useBeginQueueEdit(): (item: RpcQueuedMessage, lane: QueueLane) => Promise<boolean> {
+export function useBeginQueueEdit(): (item: RpcQueuedMessage, lane: QueueLane) => void {
 	const t = useT();
 	const rpc = useTabRpc();
 	const tabId = useRuntimeTabId();
-	return useStableCallback(async (item: RpcQueuedMessage, lane: QueueLane): Promise<boolean> => {
+	return useStableCallback((item: RpcQueuedMessage, lane: QueueLane): void => {
 		const stores = tabStores(tabId);
 		const hold = {
 			token: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
 			lane,
 			text: item.text,
 		};
-		try {
-			const held = await rpc.command({ type: "queue_hold", ...hold });
-			if (!held.success) {
-				toastError({ title: t("queuePanel.editFailed"), error: held });
-				return false;
-			}
-			const removed = await rpc.queueRemove(item.id).catch(() => null);
-			if (!removed?.success || (removed.data as { removed?: boolean } | undefined)?.removed === false) {
-				letGo(rpc, hold.token);
-				await stores.queue.getState().refresh();
-				const { steering, followUp } = stores.queue.getState();
-				if ([...steering, ...followUp].some(entry => entry.id === item.id))
-					toastError({ title: t("queuePanel.editFailed"), error: removed ?? undefined });
-				else toast({ variant: "info", message: t("composerQueue.editGone", { text: queueRowName(item.text) }) });
-				return false;
-			}
-		} catch (error) {
-			toastError({ title: t("queuePanel.editFailed"), error });
-			return false;
-		}
+		const { promise: began, resolve } = Promise.withResolvers<boolean>();
 		stores.composer
 			.getState()
-			.beginEditQueued({ id: item.id, lane, text: item.text, images: item.images, token: hold.token });
-		// Renewed while this tab's store still edits it; a window or tab that went stops, and the lease lapses.
-		const renew = setInterval(() => {
-			if (
-				tabStores(tabId).composer !== stores.composer ||
-				stores.composer.getState().editingQueued?.token !== hold.token
-			)
-				clearInterval(renew);
-			else rpc.command({ type: "queue_hold", ...hold }).catch(() => {});
-		}, HOLD_RENEW_MS);
-		return true;
+			.beginEditQueued({ id: item.id, lane, text: item.text, images: item.images, token: hold.token, began });
+		const giveUp = () => {
+			resolve(false);
+			if (stores.composer.getState().editingQueued?.token === hold.token) stores.composer.getState().endEditQueued();
+		};
+		void (async () => {
+			try {
+				const held = await rpc.command({ type: "queue_hold", ...hold });
+				if (!held.success) {
+					toastError({ title: t("queuePanel.editFailed"), error: held });
+					return giveUp();
+				}
+				const removed = await rpc.queueRemove(item.id).catch(() => null);
+				if (!removed?.success || (removed.data as { removed?: boolean } | undefined)?.removed === false) {
+					letGo(rpc, hold.token);
+					giveUp();
+					await stores.queue.getState().refresh();
+					const { steering, followUp } = stores.queue.getState();
+					if ([...steering, ...followUp].some(entry => entry.id === item.id))
+						toastError({ title: t("queuePanel.editFailed"), error: removed ?? undefined });
+					else toast({ variant: "info", message: t("composerQueue.editGone", { text: queueRowName(item.text) }) });
+					return;
+				}
+			} catch (error) {
+				toastError({ title: t("queuePanel.editFailed"), error });
+				return giveUp();
+			}
+			resolve(true);
+			// Renewed while this tab's store still edits it; a window or tab that went stops, and the lease lapses.
+			const renew = setInterval(() => {
+				if (
+					tabStores(tabId).composer !== stores.composer ||
+					stores.composer.getState().editingQueued?.token !== hold.token
+				)
+					clearInterval(renew);
+				else rpc.command({ type: "queue_hold", ...hold }).catch(() => {});
+			}, HOLD_RENEW_MS);
+		})();
 	});
 }
 
