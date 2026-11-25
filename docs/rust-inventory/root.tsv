@@ -96,6 +96,7 @@ src/main/bridge-checkout-peers-claims.test.ts	tooling	-	Vitest suite: LedgerLife
 src/main/bridge-checkout-peers-frame.test.ts	tooling	-	Vitest suite: checkout_peers frame.
 src/main/bridge-checkout-peers-rules.test.ts	tooling	-	Vitest suite: 1: a file both sessions changed can be taken by name, never dropped.
 src/main/bridge-checkout-peers.test.ts	tooling	-	Vitest suite: checkout guard: the repository's stash and branches.
+src/main/bridge-ci-watch.test.ts	tooling	-	Vitest suite: the CI watch's push parsers, cadence, end and dedupe rules.
 src/main/bridge-client.test.ts	tooling	-	Vitest suite: GuiBridgeClient.
 src/main/bridge-client.ts	tooling	-	GuiBridgeClient speaks newline-delimited JSON to stock-omp test sockets; production lanes instead use crates/core/src/sidecar/bridge.rs.
 src/main/bridge-compaction-points-stock.test.ts	tooling	-	Vitest suite: answers one model's point, as the whole table has it, when asked for that model.
