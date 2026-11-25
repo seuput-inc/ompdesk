@@ -14,7 +14,9 @@
  *   masked frames: `scripts/ws-bundle-probe.ts` is bundled with the main process's
  *   own Vite config and run in Node.
  * - axe-core (the e2e accessibility audit's engine, a devDependency) never ships
- *   in the renderer.
+ *   in the renderer, and neither does lit: `@a2ui/web_core` depends on it for its
+ *   own custom elements, which OMPdesk's A2UI views do not use; its
+ *   `"sideEffects": false` lets the bundler drop them (docs/design/a2ui.md §2).
  * - the renderer ships no .woff or .ttf font: Electron's Chromium always takes the
  *   .woff2, and the renderer's `woff2OnlyFonts` plugin drops the older fallbacks.
  * - the JavaScript a paired phone loads before its first screen (`web.html`'s entry,
@@ -40,6 +42,8 @@ const WS_PROBE_CONFIG = fileURLToPath(new URL("./ws-bundle-probe.config.ts", imp
 const OPTIONAL_PEER_STUB = /__viteOptionalPeerDep_\w+/g;
 /** A property name only axe-core's source carries; it survives minification. */
 const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
+/** The globals lit's three packages register their versions under; they survive minification. */
+const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVersions"];
 /**
  * The phone's first-screen JavaScript, raw bytes (18 Oct 2026: 4.17 MB, 3.79 MB once the side panel's views went
  * lazy, 3.10 MB once each UI language became its own lazy chunk, 3.255 MB with the remembered sidebar state: the
@@ -499,8 +503,17 @@ if (stubs.size > 0) {
 
 for (const name of await fs.readdir(RENDERER_ASSETS)) {
 	if (!/\.m?js$/.test(name)) continue;
-	if ((await fs.readFile(RENDERER_ASSETS + name, "utf8")).includes(AXE_MARKER)) {
+	const code = await fs.readFile(RENDERER_ASSETS + name, "utf8");
+	if (code.includes(AXE_MARKER)) {
 		console.error(`out/renderer/assets/${name} bundles axe-core, which is for the e2e audit only.`);
+		process.exit(1);
+	}
+	const lit = LIT_MARKERS.find(marker => code.includes(marker));
+	if (lit) {
+		console.error(
+			`out/renderer/assets/${name} bundles lit (${lit}): an import reached @a2ui/web_core's custom elements ` +
+				"(its `universal` entry or a basic-catalog component); import only the engine (docs/design/a2ui.md §2).",
+		);
 		process.exit(1);
 	}
 }
@@ -568,7 +581,7 @@ const sessionListBytes = (await fs.stat(path.join(RENDERER, sessionListFiles[0] 
 
 console.log(
 	"main bundle is self-contained: no un-bundled runtime imports, no optional-peer stubs, the bundled ws carries " +
-		`masked frames; the renderer ships no axe-core and no .woff/.ttf fonts; the phone's first screen loads ` +
+		`masked frames; the renderer ships no axe-core, no lit and no .woff/.ttf fonts; the phone's first screen loads ` +
 		`${firstScreenBytes.toLocaleString("en-US")} bytes of JavaScript in ${firstScreen.size} files, a first visit ` +
 		`${((firstScreenBytes + sessionListBytes) / 1e6).toFixed(2)} MB with the session list`,
 );
