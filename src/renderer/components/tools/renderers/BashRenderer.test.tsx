@@ -19,6 +19,7 @@ Object.assign(globalThis as Record<string, unknown>, {
 const { createRoot } = await import("react-dom/client");
 const { BashRenderer } = await import("./BashRenderer");
 const { useUiStore } = await import("../../../stores/ui");
+const { noteDevServerLoad, useDevServerAnswers } = await import("../../../stores/dev-server-answers");
 
 let container: HTMLElement;
 let root: Root;
@@ -298,6 +299,31 @@ describe("BashRenderer", () => {
 			expect(opened).toEqual(["http://localhost:5173/"]);
 		} finally {
 			await act(async () => useUiStore.setState({ openPreview }));
+		}
+	});
+
+	it("says the dev server stopped once the Preview found nothing listening there, and clears it when it answers", async () => {
+		try {
+			await mount(
+				<BashRenderer
+					args={{ command: "bun run dev" }}
+					result={bashResult("  VITE ready\n  ➜  Local:   http://localhost:5173/\n")}
+				/>,
+			);
+			const link = () => container.querySelector("[data-bash-open-preview]");
+			expect(link()?.textContent).toBe("Open Preview");
+			// A slow or failing page is no sign the server is gone.
+			await act(async () => noteDevServerLoad("http://localhost:5173/app", "ERR_TIMED_OUT"));
+			expect(link()?.hasAttribute("data-server-stopped")).toBe(false);
+			await act(async () => noteDevServerLoad("http://localhost:5173/app", "ERR_CONNECTION_REFUSED"));
+			expect(link()?.textContent).toBe("Open Preview · server stopped");
+			// Another server's refusal leaves this one alone; this origin answering again clears it.
+			await act(async () => noteDevServerLoad("http://localhost:3000/", null));
+			expect(link()?.hasAttribute("data-server-stopped")).toBe(true);
+			await act(async () => noteDevServerLoad("http://localhost:5173/", null));
+			expect(link()?.textContent).toBe("Open Preview");
+		} finally {
+			useDevServerAnswers.getState().reset();
 		}
 	});
 });

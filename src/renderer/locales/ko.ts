@@ -3535,6 +3535,8 @@ export const ko: Record<string, string> = {
 	"tools.bash.exit": "종료 코드 {code}",
 	"tools.bash.running": "실행 중…",
 	"tools.bash.openPreview": "미리보기 열기",
+	"tools.bash.openPreviewStopped": "미리보기 열기 · 서버 멈춤",
+	"tools.bash.serverStoppedTitle": "미리보기가 마지막으로 {url}을 열었을 때 응답이 없었어요. 열어서 다시 시도하세요.",
 	"tools.bash.failed": "명령 실패",
 	"tools.bash.timedOut": "시간 초과",
 	"tools.bash.wallTime": "실행 시간",

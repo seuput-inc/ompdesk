@@ -3542,6 +3542,9 @@ export const en: Record<string, string> = {
 	"tools.bash.exit": "exit {code}",
 	"tools.bash.running": "running…",
 	"tools.bash.openPreview": "Open Preview",
+	"tools.bash.openPreviewStopped": "Open Preview · server stopped",
+	"tools.bash.serverStoppedTitle":
+		"Nothing answered at {url} the last time the Preview loaded it. Open it to try again.",
 	"tools.bash.failed": "Command failed",
 	"tools.bash.timedOut": "timed out",
 	"tools.bash.wallTime": "Wall time",

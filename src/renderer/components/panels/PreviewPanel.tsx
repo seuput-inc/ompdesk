@@ -42,6 +42,7 @@ import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import { latestBashPreviewUrl } from "../../lib/preview-browser";
 import { chromePlatform } from "../../lib/window-chrome";
+import { noteDevServerLoad } from "../../stores/dev-server-answers";
 import { usePreviewVisualsStore } from "../../stores/preview-visuals";
 import { sessionRuntime, useRuntimeTabId, useSessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
@@ -181,6 +182,10 @@ export function PreviewPanel() {
 			setInvalid(false);
 		}
 	}, [state.url, state.activeTab]);
+	// A dev server that stopped answering marks the bash card's link that opened it (`dev-server-answers.ts`).
+	useEffect(() => {
+		if (state.url && !state.loading) noteDevServerLoad(state.url, state.error);
+	}, [state.url, state.loading, state.error]);
 	// Main lets go of the agent when another preview tab is shown or its page closes; stop that tab's relay too.
 	const agentOwner = useRef<string | null>(null);
 	useEffect(() => {
