@@ -266,7 +266,8 @@ async function attach(page: Page, count: number): Promise<void> {
 				content: { type: "image", data: png, mimeType: "image/png", id: `i${index}` },
 				preview: `data:image/png;base64,${png}`,
 			}));
-			window.__stores?.composer.setState({ images });
+			// The strip draws the draft's picture slots; `images` are their ready ones.
+			window.__stores?.composer.setState({ images, pictureSlots: images });
 		},
 		{ n: count, png: PNG },
 	);

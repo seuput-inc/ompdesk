@@ -69,6 +69,8 @@ test("the model chip keeps the person's model while a fallback answers (ko, ligh
 			viewport: { width: 390, height: 844 },
 			screen: { width: 390, height: 844 },
 			colorScheme: "light",
+			// A Korean phone: a paired page with no language of its own follows its browser's, not the computer's.
+			locale: "ko-KR",
 		});
 		const phone = await context.newPage();
 		await phone.goto(`${proxy.url}/`);
