@@ -282,6 +282,13 @@ async function closePanelView(page: Page): Promise<void> {
 	if (await close.isVisible().catch(() => false)) await close.click();
 }
 
+/** Deletes the notes `panel-notes` left (each card's Delete), then closes the panel as `closePanelView`. */
+async function clearNotesAndClose(page: Page): Promise<void> {
+	const remove = page.locator("[data-notes-shelf]:visible [data-review-note] button[aria-label='Delete note']");
+	while ((await remove.count()) > 0) await remove.first().click();
+	await closePanelView(page);
+}
+
 /**
  * Open the command palette by clicks: the sidebar's search button (Command palette), behind the phone's Open menu
  * drawer where the sidebar is one.
@@ -1515,7 +1522,7 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Composer holding a long multi-line draft",
 		open: async page => {
-			const input = page.locator("[data-composer-input]");
+			const input = page.locator("[data-composer-input]:visible").first();
 			await input.click();
 			await input.fill(
 				Array.from(
@@ -1523,6 +1530,13 @@ export const SURFACES: readonly Surface[] = [
 					(_, line) => `Line ${line + 1} of a long draft that wraps past the width of a narrow phone screen`,
 				).join("\n"),
 			);
+		},
+		// The draft is typed into the shown session's composer; `after` empties it again for the next surface.
+		parity: {
+			session: "work",
+			after: async page => {
+				await page.locator("[data-composer-input]:visible").first().fill("");
+			},
 		},
 	},
 	{
@@ -1603,6 +1617,32 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-file-viewer-head]",
 		parity: { session: "work", after: closePanelView },
 		settle: 1200,
+	},
+	{
+		id: "panel-notes",
+		area: "A",
+		title: "Changes › a review note on a diff line, in the notes shelf",
+		open: async (page, look) => {
+			await openPanelView(page, look, "diff");
+			await page.locator("[data-scm-bar]:visible").first().waitFor({ timeout: 20_000 });
+			await page
+				.locator(".omp-changes-list:visible")
+				.getByRole("button", { name: /^Sidebar\.tsx/ })
+				.first()
+				.click();
+			await page.locator("[data-note-add]:visible").first().click();
+			await page.locator("[data-note-editor] textarea:visible").first().fill("Keep the gap at 4.");
+			await page
+				.getByRole("button", { name: say(look, "reviewNotes.save"), exact: true })
+				.first()
+				.click();
+			await page.locator("[data-notes-shelf]:visible button[aria-expanded='false']").first().click();
+		},
+		ready: "[data-notes-shelf] [data-notes-list] [data-review-note]",
+		parity: { session: "work", after: clearNotesAndClose },
+		// The harness page has no git checkout to note on: parity only.
+		when: () => false,
+		settle: 900,
 	},
 
 	// ── Area B: Settings, centers, dialogs ────────────────────────────────────────────────────

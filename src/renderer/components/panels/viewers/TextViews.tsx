@@ -16,6 +16,7 @@ import { CodeBlock } from "../../chat/CodeBlock";
 import { FigureModeToggle } from "../../chat/Figure";
 import { MermaidBlock } from "../../chat/MermaidBlock";
 import { IconButton, ListRow, ZoomableImage } from "../../common";
+import { FileSelectionActions } from "../notes/FileSelection";
 import { CodeView, useWrapToggle } from "./CodeView";
 import { parseDelimited } from "./delimited";
 import { fileExtension } from "./file-kind";
@@ -39,8 +40,15 @@ function TextFileFrame({
 	tabId,
 	toolbar,
 	render,
-}: TextViewProps & { toolbar?: ReactNode; render: (content: string) => ReactNode }) {
+	notes,
+}: TextViewProps & {
+	toolbar?: ReactNode;
+	render: (content: string) => ReactNode;
+	/** The view takes review notes on a selected passage (Markdown, code). */
+	notes?: { markdown: boolean };
+}) {
 	const { state, loadMore } = useTextFile(path, tabId);
+	const scrollRef = useRef<HTMLDivElement>(null);
 	useReportFileInfo(state.status === "ready" || state.status === "binary" ? state.size : null);
 	if (state.status === "loading") return <ViewerLoading />;
 	if (state.status === "error") return <ViewerFailure failure={state.failure} />;
@@ -48,9 +56,10 @@ function TextFileFrame({
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			{toolbar}
-			<div className="min-h-0 flex-1 overflow-auto" data-viewer-scroll>
+			<div className="min-h-0 flex-1 overflow-auto" data-viewer-scroll ref={scrollRef}>
 				{render(state.content)}
 			</div>
+			<FileSelectionActions notes={notes} path={path} rootRef={scrollRef} />
 			{state.truncated && (
 				<TruncatedNote
 					canLoadMore={state.maxBytes < TEXT_FULL_BYTES}
@@ -70,6 +79,7 @@ export function CodeFileView({ path, tabId, line }: TextViewProps) {
 	const log = fileExtension(path) === "log";
 	return (
 		<TextFileFrame
+			notes={log ? undefined : { markdown: false }}
 			path={path}
 			render={content =>
 				// A captured terminal log carries SGR colour escapes: paint them instead of showing ESC bytes.
@@ -187,6 +197,7 @@ export function MarkdownFileView({ path, tabId, line }: TextViewProps) {
 	const { wrap, toggle } = useWrapToggle();
 	return (
 		<TextFileFrame
+			notes={{ markdown: true }}
 			path={path}
 			render={content =>
 				mode === "rendered" ? (

@@ -300,7 +300,7 @@ function Loaded({ detail }: { detail: RpcPrDetail }) {
 
 			<Body body={detail.body} images={conversation.data?.bodyImages} />
 			<PrStack number={detail.number} />
-			{detail.checks.length > 0 && <PrChecks detail={detail} />}
+			{detail.checks.length > 0 && <PrChecks agentFix detail={detail} />}
 			<Files detail={detail} />
 			<PrConversation detail={detail} load={conversation} />
 		</article>

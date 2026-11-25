@@ -7,7 +7,17 @@
  * show through the signed URLs GitHub rendered for them (Orca `body-image-urls.ts`). The box at the end comments,
  * approves or asks for changes, with Preview, @mentions and pasted images (`MarkdownComposer`).
  */
-import { CheckCircle2, GitCommit, MessageSquare, RefreshCw, SmilePlus, Tag, UserRound, XCircle } from "lucide-react";
+import {
+	CheckCircle2,
+	GitCommit,
+	MessageSquare,
+	RefreshCw,
+	SmilePlus,
+	Sparkles,
+	Tag,
+	UserRound,
+	XCircle,
+} from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import {
 	GITHUB_REACTIONS,
@@ -19,8 +29,9 @@ import {
 	type GithubThreadComment,
 	type GithubTimelineEvent,
 } from "../../../../shared/github";
-import type { RpcCommand, RpcPrDetail } from "../../../../shared/rpc-types";
+import type { RpcCommand, RpcPrComments, RpcPrDetail } from "../../../../shared/rpc-types";
 import { DiffView } from "../../../lib/diff";
+import { addressCommentsPrompt } from "../../../lib/fix-prompts";
 import { type GithubLoad, github } from "../../../lib/github";
 import { uploadGithubImage, useGithubImages } from "../../../lib/github-image";
 import { useT } from "../../../lib/i18n";
@@ -43,6 +54,7 @@ import {
 	Skeleton,
 	TimeAgo,
 } from "../../common";
+import { handToPrCheckout } from "./PrActions";
 import { useAssignable } from "./PrPeople";
 
 const REACTION_GLYPH: Record<GithubReactionContent, string> = {
@@ -374,6 +386,44 @@ function EventRow({ event }: { event: GithubTimelineEvent }) {
 	);
 }
 
+/**
+ * What reviewers asked for, for an agent (Orca `pr-comments-resolution-prompt.ts:70-126`): the comments and reviews
+ * with words, and every comment of a thread still unresolved, with its file and line; an approval with no words or a
+ * resolved thread asks for nothing.
+ */
+export function reviewFeedback(conversation: GithubPrConversation): RpcPrComments["entries"] {
+	return [
+		...conversation.comments.map(c => ({
+			kind: "comment" as const,
+			author: c.author,
+			body: c.body,
+			createdAt: c.createdAt,
+			url: c.url,
+		})),
+		...conversation.reviews.map(r => ({
+			kind: "review" as const,
+			author: r.author,
+			body: r.body,
+			createdAt: r.createdAt,
+			url: r.url,
+			state: r.state,
+		})),
+		...conversation.threads
+			.filter(thread => !thread.isResolved)
+			.flatMap(thread =>
+				thread.comments.map(c => ({
+					kind: "inline" as const,
+					author: c.author,
+					body: c.body,
+					createdAt: c.createdAt,
+					url: c.url,
+					path: thread.path,
+					...(thread.line ? { line: thread.line } : {}),
+				})),
+			),
+	].filter(entry => entry.body.trim());
+}
+
 /** Conversation and review form for the selected PR; `load` is the detail's `pr_conversation` read. */
 export function PrConversation({ detail, load }: { detail: RpcPrDetail; load: GithubLoad<GithubPrConversation> }) {
 	const t = useT();
@@ -405,6 +455,14 @@ export function PrConversation({ detail, load }: { detail: RpcPrDetail; load: Gi
 	};
 
 	const list = conversation ? items(conversation) : [];
+	const feedback = conversation ? reviewFeedback(conversation) : [];
+	const askAgent = async () => {
+		setBusy("agent");
+		await handToPrCheckout(number, cwd =>
+			addressCommentsPrompt({ number, title: detail.title, url: detail.url, comments: feedback, cwd }),
+		);
+		setBusy(null);
+	};
 	return (
 		<section aria-label={t("prCenter.section.conversation")} className="flex flex-col gap-2">
 			<div className="flex items-center gap-2">
@@ -413,8 +471,18 @@ export function PrConversation({ detail, load }: { detail: RpcPrDetail; load: Gi
 					{conversation &&
 						` (${conversation.comments.length + conversation.reviews.length + conversation.threads.length})`}
 				</h3>
-				<IconButton
+				<Button
 					className="ml-auto"
+					disabled={busy !== null || feedback.length === 0}
+					icon={<Sparkles />}
+					loading={busy === "agent"}
+					onClick={() => void askAgent()}
+					size="sm"
+					variant="ghost"
+				>
+					{t("fixWithAgent.addressComments")}
+				</Button>
+				<IconButton
 					icon={<RefreshCw />}
 					label={t("common.refresh")}
 					loading={load.loading}

@@ -1,14 +1,17 @@
 /**
  * Pull request actions in the PR Center detail: merge with a method (merge commit, squash, rebase) behind a
  * confirmation, or auto-merge with it once nothing blocks (`PrAutoMergeButton`), and edit title, body (Write and
- * Preview, @mentions, pasted images) and base. Everything runs through `gh` on the active tab's repository.
+ * Preview, @mentions, pasted images) and base. Everything runs through `gh` on the active tab's repository. A fix
+ * the PR needs (its comments, its failed checks) can go to an agent session on its checkout (`handToPrCheckout`).
  */
 import { GitMerge, Pencil } from "lucide-react";
 import { useId, useState } from "react";
 import type { RpcCommand, RpcPrDetail, RpcPrMergeMethod } from "../../../../shared/rpc-types";
+import { handToTab } from "../../../lib/composer-handoff";
 import { uploadGithubImage } from "../../../lib/github-image";
 import { useT } from "../../../lib/i18n";
 import { usePrCenterStore } from "../../../stores/pr-center";
+import { useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
 import { Button, Checkbox, Input, MarkdownComposer, Modal, Select } from "../../common";
 import { useAssignable } from "./PrPeople";
@@ -26,6 +29,14 @@ async function runPr(command: RpcCommand, failure: string): Promise<boolean> {
 		toastError({ title: failure, error });
 	}
 	return false;
+}
+
+/** Open the PR's checkout session and put the prompt in its composer, unsent; nothing when the checkout failed (toasted). */
+export async function handToPrCheckout(number: number, prompt: (cwd: string) => string): Promise<void> {
+	const tabId = await usePrCenterStore.getState().checkout(number);
+	if (!tabId) return;
+	const cwd = useTabsStore.getState().tabs.find(tab => tab.id === tabId)?.cwd ?? "";
+	handToTab(tabId, { text: prompt(cwd), mode: "prepend" });
 }
 
 /** Why GitHub would refuse a merge right now, from `mergeStateStatus`; null when nothing blocks it. */

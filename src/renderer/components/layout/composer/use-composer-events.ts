@@ -1,7 +1,7 @@
 /**
  * Window events other surfaces fill or drive the composer through, each for one tab (`tabId`, else the active tab):
  * `omp:insert-mention` appends an `@path` mention (the Files tree, a drop), `omp:fill-composer` places a text
- * and pictures (starter cards, history recall, a dequeue restore, the editor dialog), `omp:composer-action` runs
+ * and pictures (starter cards, history recall, a dequeue restore, the editor dialog, review notes, a quote), `omp:composer-action` runs
  * History / Expand / Attach (the command palette).
  */
 import { type RefObject, useEffect } from "react";
@@ -11,8 +11,9 @@ import {
 	type ComposerActionDetail,
 	type ComposerWindowAction,
 } from "../../../lib/composer-actions";
+import { composerListening } from "../../../lib/composer-handoff";
 import { dropReferencedPastes } from "../../../lib/paste-blobs";
-import { type ComposerImage, type ComposerStore, prependToDraft } from "../../../stores/composer";
+import { appendToDraft, type ComposerImage, type ComposerStore, prependToDraft } from "../../../stores/composer";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { fileMentionFor } from "./composer-files";
@@ -51,6 +52,8 @@ export function useComposerEvents({
 					text?: string;
 					images?: ImageContent[];
 					prepend?: boolean;
+					/** A quote: after the draft (`appendToDraft`), the caret at the end. */
+					append?: boolean;
 					clearPastes?: boolean;
 					tabId?: string;
 				}>
@@ -63,13 +66,18 @@ export function useComposerEvents({
 			if (detail?.clearPastes)
 				dropReferencedPastes(sessionRuntimeStore<ComposerStore>(runtimeTabId, "composer")?.getState().draft ?? "");
 			if (next) {
-				// prepend (dequeue restore): queued text goes ahead of any draft, TUI-style;
-				// otherwise replace (starter cards, history recall).
+				// prepend (dequeue restore, review notes): the text goes ahead of any draft, TUI-style; append (a quote):
+				// after it; otherwise replace (starter cards, history recall).
 				const current =
 					textareaRef.current?.value ??
 					sessionRuntimeStore<ComposerStore>(runtimeTabId, "composer")?.getState().draft ??
 					"";
-				placeDraft(detail?.prepend ? prependToDraft(next, current) : next, next.length);
+				const placed = detail?.prepend
+					? prependToDraft(next, current)
+					: detail?.append
+						? appendToDraft(next, current)
+						: next;
+				placeDraft(placed, detail?.append ? placed.length : next.length);
 			}
 			if (restoredImages.length > 0) {
 				setImages(current => [
@@ -103,7 +111,11 @@ export function useComposerEvents({
 			});
 		};
 		window.addEventListener("omp:fill-composer", fillComposer);
-		return () => window.removeEventListener("omp:fill-composer", fillComposer);
+		const stopListening = runtimeTabId ? composerListening(runtimeTabId) : null;
+		return () => {
+			window.removeEventListener("omp:fill-composer", fillComposer);
+			stopListening?.();
+		};
 	}, [placeDraft, setImages, runtimeTabId, textareaRef]);
 }
 

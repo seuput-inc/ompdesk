@@ -5,10 +5,11 @@
  * and each GitHub Actions check opening in place to its run (jobs, their annotations, the failed log with a copy
  * button: the GitHub center's `RunDetail`). Another CI's check opens its own page.
  */
-import { CheckCircle2, Circle, ExternalLink, RotateCcw, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, ExternalLink, RotateCcw, Sparkles, XCircle } from "lucide-react";
 import { useState } from "react";
 import { githubConclusionPassed } from "../../../../shared/github-checks";
 import type { RpcPrCheck, RpcPrDetail } from "../../../../shared/rpc-types";
+import { checkFailed, fixChecksPrompt } from "../../../lib/fix-prompts";
 import { github, useGithubLoad } from "../../../lib/github";
 import { githubStateLabel } from "../../../lib/github-state";
 import { useT } from "../../../lib/i18n";
@@ -18,6 +19,7 @@ import { toast, toastError } from "../../../stores/toast";
 import { AsyncSection, Button, Card, Collapse, DisclosureButton, IconButton } from "../../common";
 import { RunDetail } from "../github/GithubActions";
 import { pausedNotice } from "../github/shared";
+import { handToPrCheckout } from "./PrActions";
 
 /** The Actions run a check belongs to: its details page is `…/actions/runs/<run>/job/<job>`. */
 export function checkRunId(url: string | undefined): number | null {
@@ -124,9 +126,10 @@ function CheckRow({ check }: { check: RpcPrCheck }) {
 	);
 }
 
-export function PrChecks({ detail }: { detail: RpcPrDetail }) {
+/** The PR's checks with their runs; `agentFix` offers to hand the failed ones to a session on the PR's checkout. */
+export function PrChecks({ detail, agentFix = false }: { detail: RpcPrDetail; agentFix?: boolean }) {
 	const t = useT();
-	const [busy, setBusy] = useState<"failed" | "all" | null>(null);
+	const [busy, setBusy] = useState<"failed" | "all" | "agent" | null>(null);
 	const runs = (checks: readonly RpcPrCheck[]) => [
 		...new Set(checks.map(check => checkRunId(check.url)).filter((id): id is number => id !== null)),
 	];
@@ -153,6 +156,28 @@ export function PrChecks({ detail }: { detail: RpcPrDetail }) {
 					{t("prCenter.section.checks", { count: String(detail.checks.length) })}
 				</h3>
 				<div className="ml-auto flex gap-2">
+					{agentFix && detail.checks.some(checkFailed) && (
+						<Button
+							disabled={busy !== null}
+							icon={<Sparkles />}
+							loading={busy === "agent"}
+							onClick={() => {
+								setBusy("agent");
+								void handToPrCheckout(detail.number, () =>
+									fixChecksPrompt({
+										number: detail.number,
+										title: detail.title,
+										url: detail.url,
+										checks: detail.checks,
+									}),
+								).finally(() => setBusy(null));
+							}}
+							size="sm"
+							variant="secondary"
+						>
+							{t("fixWithAgent.fixChecks")}
+						</Button>
+					)}
 					{failedRuns.length > 0 && (
 						<Button
 							disabled={busy !== null}

@@ -58,6 +58,7 @@ allow-list beside the marker.
 | Detail too big for a popover, smaller than a page | `Sheet` (`right`, `left` drawer, `bottom` action sheet, `full`; `closeButton={false}` when the footer has Cancel; first focus as `Modal`'s) | a Sheet over a Modal |
 | Quick contextual controls by their trigger | `Popover` | a Modal |
 | A peek at what a link points to (a pull request, a web page), on hover or keyboard focus | `HoverCard` (opens after 400 ms of hover or at once on keyboard focus; leave, blur, a press, Escape or a scroll close it; takes no pointer and holds no controls; never on a touch screen; `content` mounts only while open) | a Popover that takes focus from the link, a hand-made floating card |
+| Actions on text the person selected (Add to chat, Add note) | `SelectionActions` (a bar above a settled selection inside `rootRef`; waits 500 ms after a double click, keeps the selection, follows the scroller, `accept` limits what may be taken) | a popover that steals focus, a context menu as the only way |
 | A label for an unspelled control | `Tooltip` (prefer `IconButton`, which wires it) | essential information only in a tooltip |
 | A longer explanation of a row | `SettingInfo` (the (i) glyph), `splitDescription` | a paragraph under a label |
 | A short status or count | `Badge` (`dot` + `pulse` while live; text says the state; `size="xs"` 16 px in a dense line, `truncate` for a long one; DOM attributes reach it) | a clickable badge, a `rounded-full` span of your own |
