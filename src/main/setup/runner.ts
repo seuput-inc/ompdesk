@@ -3,8 +3,7 @@
  * how it ended. A cancel ends the supervisor's stdin, which kills the
  * installer's process tree; the outcome is then `cancelled`, never `failed`.
  */
-import type { SpawnSpec } from "./plans";
-import { spawnSupervised } from "./supervisor";
+import { type SpawnSpec, spawnSupervised } from "./supervisor";
 
 export interface SupervisedChild {
 	readonly stdin: { end(): void } | null;

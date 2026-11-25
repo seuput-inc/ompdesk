@@ -1,6 +1,6 @@
 /**
  * Settings › Updates & about › This computer, after the tool CLIs: the marketplaces, plugins, skills and MCP
- * servers of this computer's omp (main `ext-update/`, contract `shared/extension-update.ts`). One switch
+ * servers of this computer's omp (the core's `tools/ext.rs`, contract `shared/extension-update.ts`). One switch
  * (default on), then one row per listed item: its installed and newest version, how it is kept current, the
  * last result or why OMPdesk leaves it alone, and "Update now". The renderer names rows by key and never a
  * command, a path or a version to install.

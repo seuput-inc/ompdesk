@@ -138,6 +138,11 @@ fn versions(output: &str) -> Option<Versions<'_>> {
     })
 }
 
+/// `omp.parseUpdateCheck` in process (machine setup's `latestOmp`): the newest version the check names.
+pub(crate) fn update_check_latest(output: &str) -> Option<String> {
+    versions(output).map(|versions| versions.latest_version.to_owned())
+}
+
 pub(super) fn parse_update_check(call: Call) -> Result<Reply, Fault> {
     #[derive(Deserialize)]
     struct Params {

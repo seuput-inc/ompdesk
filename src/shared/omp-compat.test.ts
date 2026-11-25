@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { compatEntry, compatPending, followTarget, parseOmpCompat, recordVerdict } from "./omp-compat";
+// The cases the core's reader (native/ompdesk/crates/core/src/tools/omp/compat.rs) is pinned to as well.
+import vectors from "./omp-compat-vectors.json";
 
 const GOOD = {
 	"0.134.1": {
@@ -16,59 +18,23 @@ describe("parseOmpCompat: the app reads the list strictly", () => {
 		expect(list && compatEntry(list, "0.136.0")).toEqual({ verified: [], holding: null });
 	});
 
-	it.each([
-		["not JSON", "<html>rate limited</html>"],
-		["an array", "[]"],
-		["a range", JSON.stringify({ "0.134.1": { verified: ["^19.0.0"], holding: null } })],
-		["a dist-tag", JSON.stringify({ "0.134.1": { verified: ["latest"], holding: null } })],
-		["a URL", JSON.stringify({ "0.134.1": { verified: ["https://evil.example/omp.tgz"], holding: null } })],
-		["a package spec", JSON.stringify({ "0.134.1": { verified: ["@evil/omp@19.0.0"], holding: null } })],
-		["a prerelease", JSON.stringify({ "0.134.1": { verified: ["19.0.0-canary.1"], holding: null } })],
-		["a leading v", JSON.stringify({ "0.134.1": { verified: ["v19.0.0"], holding: null } })],
-		["a leading zero", JSON.stringify({ "0.134.1": { verified: ["19.01.0"], holding: null } })],
-		["an extra field", JSON.stringify({ "0.134.1": { verified: [], holding: null, package: "@evil/omp" } })],
-		["an app key that is no version", JSON.stringify({ latest: { verified: [], holding: null } })],
-		["a __proto__ key", '{"__proto__": {"verified": [], "holding": null}}'],
-		[
-			"a held range",
-			JSON.stringify({
-				"0.134.1": { verified: [], holding: { version: "19.x", since: "2026-11-20", issue: null } },
-			}),
-		],
-		[
-			"a held version without a time",
-			JSON.stringify({ "0.134.1": { verified: [], holding: { version: "19.1.0", since: "soon", issue: null } } }),
-		],
-		[
-			"an issue that is no number",
-			JSON.stringify({
-				"0.134.1": { verified: [], holding: { version: "19.1.0", since: "2026-11-20", issue: "12" } },
-			}),
-		],
-	])("refuses the whole list for %s, so the reader keeps its last good one", (_name, text) => {
+	it.each(vectors.read)("reads $app's entry of a good list", ({ text, app, entry }) => {
+		const list = parseOmpCompat(text);
+		if (!list) throw new Error("refused");
+		const { verified, holding } = compatEntry(list, app);
+		expect({ verified, holding: holding && { version: holding.version, since: holding.since } }).toEqual(entry);
+	});
+
+	it.each(vectors.refused)("refuses the whole list for %s, so the reader keeps its last good one", (_name, text) => {
 		expect(parseOmpCompat(text)).toBeNull();
 	});
 });
 
 describe("followTarget: what a pass nobody asked for installs", () => {
-	it("is the newest verified or tested omp above the installed one and not above the registry's newest", () => {
-		expect(followTarget({ installed: "18.22.0", latest: "19.1.0", tested: "18.22.2", verified: ["19.0.0"] })).toBe(
-			"19.0.0",
-		);
-		expect(followTarget({ installed: "18.22.0", latest: "19.1.0", tested: "18.22.2", verified: [] })).toBe("18.22.2");
-		// The registry this omp updates from does not offer it yet.
-		expect(followTarget({ installed: "18.22.0", latest: "19.0.0", tested: "18.22.2", verified: ["19.1.0"] })).toBe(
-			"18.22.2",
-		);
-	});
-
-	it("never steps down and never names anything but an exact release", () => {
-		expect(
-			followTarget({ installed: "19.1.0", latest: "19.1.0", tested: "18.22.2", verified: ["19.0.0"] }),
-		).toBeNull();
-		expect(
-			followTarget({ installed: "18.0.0", latest: "19.1.0", tested: "x", verified: ["19.1.0-rc.1"] }),
-		).toBeNull();
+	// The newest verified or tested omp above the installed one and not above the registry's newest; never a step
+	// down, never anything but an exact release.
+	it.each(vectors.follow)("$installed → $target (latest $latest, verified $verified)", ({ target, ...input }) => {
+		expect(followTarget(input)).toBe(target);
 	});
 });
 

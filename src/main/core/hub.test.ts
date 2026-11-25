@@ -68,6 +68,34 @@ describe("the hub connection", () => {
 		expect(instance.items).toEqual([{ k: "n", n: 1 }, { k: "after" }]);
 	});
 
+	it.each([
+		// The question's answer goes out at once; the core's rule answers the outer call before the nested one's.
+		{ outer: "askPoke", nested: "push", result: "from main", nestedResult: 2 },
+		// The nested call wakes the outer one's rule: its answer comes right behind the nested call's.
+		{ outer: "askWaitPoke", nested: "fire", result: "woke", nestedResult: null },
+	])(
+		"hands a call the answer a call nested in its handling read ($outer)",
+		({ outer, nested, result, nestedResult }) => {
+			const hub = new Hub();
+			const answers: unknown[] = [];
+			const id = hub.nextId();
+			hub.open(
+				id,
+				"test:probe",
+				{},
+				{
+					item: item => {
+						if (item.k === "poke") answers.push(hub.call(id, nested, { n: 2 }));
+					},
+					ask: () => "from main",
+					lost: () => {},
+				},
+			);
+			expect(hub.call(id, outer)).toBe(result);
+			expect(answers).toEqual([nestedResult]);
+		},
+	);
+
 	it("answers a later question once main's promise settles, without blocking main", async () => {
 		const hub = new Hub();
 		const instance = probe(hub, () => Promise.resolve("later"));

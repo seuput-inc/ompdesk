@@ -49,12 +49,9 @@ runs:
         src/main/setup/download.test.ts
         src/main/setup/paths.test.ts
         src/main/setup/archives.test.ts
-        src/main/setup/compiled-launcher.test.ts
-        src/main/setup/service.test.ts
-        src/main/setup/plans.test.ts
-        src/main/setup/omp-update-install.test.ts
+        src/main/tools/client.test.ts
+        src/main/tools/omp-install.test.ts
         src/main/omp-runtime.test.ts
-        src/main/omp-compat-source.test.ts
         src/main/boot-model.test.ts
         src/main/local/misc.test.ts
         src/main/local/image-blobs.test.ts
@@ -87,20 +84,8 @@ runs:
         src/main/tailscale/tailnet.test.ts
         src/main/ssh/*.test.ts
         src/main/power/lid-backend-windows.test.ts
-        src/main/ext-update/mcp.test.ts
-        src/main/ext-update/classify.test.ts
         src/main/agent-desktop.test.ts
-        src/main/setup/detect-git-shell.test.ts
-        src/main/setup/detect-agent-desktop.test.ts
-        src/main/setup/detect-brew.test.ts
         src/main/local-engines.test.ts
-        src/main/cli-tools/detect.test.ts
-        src/main/cli-tools/plans.test.ts
-        src/main/cli-tools/updater.test.ts
-        src/main/ext-update/running.test.ts
-        src/main/ext-update/mcp-owner.test.ts
-        src/main/ext-update/mcp-plans.test.ts
-        src/main/ext-update/updater.test.ts
         src/main/update-release.test.ts
         src/main/update-lookup.test.ts
         src/main/update-compatibility.test.ts

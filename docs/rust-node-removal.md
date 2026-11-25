@@ -291,7 +291,7 @@ So C's order gains a remote branch after the event drain: core page sends → ev
 
 **7. Shared paths.** With the shell-owns-core step ((b) above, `omp/agent/node-removal-router`; its owner's answer, 25 Nov 2026): `core.exited` keeps its name and moment and there is no `core.started` event, so `RemoteClient.lost`, `SharingCore.lost` and `core/reopen.ts` `openAgain` stay as they are; which core runs is `core().generation`, never `core().pid` (null for a moment after a start). (b) adds `#dropStale()` to `core/hub.ts` before `#call`/`#write`/`callLater`, the only overlap with R-Q's hub instance, and rewrites `core/process.ts`. Order: (b) → R-Q. With F's page router: `ws-router.ts` `#meter`, R-Q's second caller, which neither (b) nor (c) touches. With F-prefs: none.
 
-### Design: slice G, machine setup and the tool updaters move into the core as one owner (not built)
+### Design: slice G, machine setup and the tool updaters move into the core as one owner (built: T1, T1b, T2.1-T2.6; native-rust's ledger)
 
 Asked by Main on 25 Nov 2026 (dispatch d9) once B1 gave the core the preference files. Read with `.omp/rules/machine-setup-updates.md` (UpdateScheduler, omp self-update, tool CLI and extension updates, the nested-step fence) and the ledger. The map behind it is the scout report of the same day; the line numbers below are from `e526d8af2`.
 
@@ -374,7 +374,7 @@ The Windows 10 check without WinHTTP option 195 (v0.141.2, `2f727c5f6`: the shel
 
 **5. Real updates, both OSes, before each unit lands.**
 - Windows: `win-update-real` both modes (`installer`: v0.131.0 updated by the candidate's setup; `feed`: v0.131.0 updating itself from a feed serving the candidate), plus, from U1, the candidate updating itself to a second build of the same commit with a higher version (`shell-batch-checks` `only=win-update-gate`, mode `update`, `next_run` a release dry run of a `probe/*` branch with the version raised: U1's download and main's own setup start, U2's shell start after it), and the start-failure rollback (`installer.nsh` `ompStartAndVerify`) with a build that never writes `app-started.json`.
-- macOS: `release-update-mac` (a published app updated to the candidate DMG, signature checked) and, from U1, the candidate updating itself to a higher-version build (`mac-update-gate`; it compares the designated requirement, so both builds must be signed with the pinned certificate, which only `main` builds: on a branch the requirement check fails while the download and swap still run), plus `e2e/app-auto-update.e2e.ts`' rollback without a start mark.
+- macOS: `release-update-mac` (a published app updated to the candidate DMG, signature checked; a release-signed DMG, so `main` only) and, from U1, the candidate updating itself to a higher-version build (the same dispatch's `mac-update-gate` job; a branch's two ad-hoc builds both carry an empty designated requirement, so its "keeps the requirement" check holds there too, and `main`'s run proves the pinned one), plus `e2e/app-auto-update.e2e.ts`' rollback without a start mark.
 - `release.yml --ref <branch> -f dry_run=true` before each landing.
 
 **6. Formal.** No model covers the updater. U2 and U3 put an install start into `quit_chain`, which `shell-exit-receipt` covers: rerun and restamp. If U4 runs the scheduler on a task other than the one that sets `installing`, an `app-update` model (check, download, install begun, scheduler tick, quit) is written first; on one task, the `installStarted` guard is a state check the Rust tests prove.

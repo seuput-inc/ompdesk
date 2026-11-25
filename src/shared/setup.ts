@@ -38,7 +38,7 @@ export type SetupPlatform = "darwin" | "win32" | "other";
  */
 export type GitShellProblem = { kind: "mandatory-aslr" } | { kind: "spawn-failed"; detail: string };
 
-/** Setup's Git Mandatory ASLR override (src/main/setup/git-aslr.ts): set it, or remove it again. */
+/** Setup's Git Mandatory ASLR override (the core's `tools/setup/git_aslr.rs`): set it, or remove it again. */
 export type GitAslrAction = "fix" | "undo";
 export type GitAslrResult = { ok: true; images: number } | { ok: false; detail: string };
 

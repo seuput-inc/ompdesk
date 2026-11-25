@@ -8,7 +8,24 @@
  */
 import { CoreError, core } from "../core/process";
 import { NO_TIMEOUT_MS } from "./download";
-import type { ArchiveRelease, TailscaleRelease } from "./plans";
+
+/** A downloaded release for an `archive` install (gh, Node.js) or an `agent-desktop-archive` install: URL and its published SHA-256. */
+export interface ArchiveRelease {
+	item: "gh" | "node" | "agent-desktop";
+	version: string;
+	file: string;
+	url: string;
+	sha256: string;
+}
+
+/** A Tailscale package from the official index, with the SHA-256 published beside it. */
+export interface TailscaleRelease {
+	version: string;
+	/** The file name in the index (`Tailscale-1.104.1-macos.zip`, `tailscale-setup-1.104.1-amd64.msi`). */
+	file: string;
+	url: string;
+	sha256: string;
+}
 
 export interface LookupOptions {
 	/**

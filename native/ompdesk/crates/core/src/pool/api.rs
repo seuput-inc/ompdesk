@@ -1507,19 +1507,12 @@ impl Ctx {
             match decision.as_str() {
                 Some("skip") => continue,
                 Some("wait") => {
-                    let pending = self.with(|pool| {
-                        pool.entry(&tab)
-                            .and_then(|entry| entry.extension_pending.clone())
-                    });
-                    let merged = match pending {
-                        Some(pending) => {
-                            self.ask("mergePlans", json!({"a": pending, "b": plan}))
-                                .await?
-                        }
-                        None => plan.clone(),
-                    };
                     self.with(|pool| {
                         if let Some(entry) = pool.entry_mut(&tab) {
+                            let merged = match &entry.extension_pending {
+                                Some(pending) => crate::ext::plan::merge(pending, plan),
+                                None => plan.clone(),
+                            };
                             entry.extension_pending = Some(merged);
                         }
                     });

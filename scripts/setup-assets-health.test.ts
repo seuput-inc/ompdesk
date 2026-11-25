@@ -1,9 +1,23 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PORTABLE_GIT } from "../src/main/setup/plans";
 import { type Answer, type Mirror, startMirror } from "../src/main/setup/test-mirror";
 import agentDesktopPin from "./agent-desktop-pin.json" with { type: "json" };
-import { checkAsset, healthReport, type PinnedAsset, pinnedAssets } from "./setup-assets-health";
+import { checkAsset, healthReport, type PinnedAsset, PORTABLE_GIT, pinnedAssets } from "./setup-assets-health";
+
+describe("PORTABLE_GIT", () => {
+	it("is the PortableGit machine setup pins in the core", () => {
+		const plans = readFileSync(
+			join(__dirname, "..", "native", "ompdesk", "crates", "core", "src", "tools", "setup", "plans.rs"),
+			"utf8",
+		).replaceAll("\r\n", "\n");
+		expect(plans).toContain(`PORTABLE_GIT_VERSION: &str = "${PORTABLE_GIT.version}"`);
+		for (const pin of [PORTABLE_GIT.x64, PORTABLE_GIT.arm64]) {
+			expect(plans).toContain(`url: "${pin.url}",\n    sha256: "${pin.sha256}",`);
+		}
+	});
+});
 
 /** The agent-desktop release the app ships, as `bun run build:agent-desktop` downloads it: no lookup involved. */
 const SHIPPED = Object.entries(agentDesktopPin.targets).map(([key, target]) => ({

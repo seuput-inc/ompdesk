@@ -1,5 +1,5 @@
 /**
- * omp keeps itself current (src/main/omp-updater.ts): while OMPdesk runs it
+ * omp keeps itself current (the core's `crates/core/src/tools/omp`): while OMPdesk runs it
  * asks stock `omp update --check` for the newest omp and installs, on its own,
  * only an omp it may: by default one within the major it was tested with; with
  * the hidden pref `ompFollowVerified`, only one runners verified against this
@@ -39,7 +39,7 @@ export interface OmpUpdateHold {
 
 /**
  * Runners judge a new omp within the hour, so a `verifying` hold this old means the hourly run reached no verdict:
- * the person is told (src/main/omp-hold-notice.ts) and Settings says how long it has waited.
+ * the person is told (the core's `tools/omp/hold.rs`) and Settings says how long it has waited.
  */
 export const VERIFYING_OVERDUE_MS = 6 * 60 * 60 * 1000;
 
@@ -92,7 +92,7 @@ export interface OmpUpdateState {
 	held?: OmpUpdateHold | null;
 	/**
 	 * omp's own background update (stock `update.auto`) was on and OMPdesk turned it off while it keeps omp current
-	 * (`omp-auto-takeover.ts`); turning "Keep tools up to date" off gives it back. Absent from older hosts.
+	 * (`tools/omp/takeover.rs`); turning "Keep tools up to date" off gives it back. Absent from older hosts.
 	 */
 	stockAutoTaken?: boolean;
 }

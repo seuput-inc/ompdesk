@@ -62,6 +62,28 @@ fn launcher_io(work: impl FnOnce() -> Result<Reply, Fault> + Send + 'static) -> 
     })
 }
 
+/// `setup.setAsideCompiledOmp` in process: moves a compiled omp out of Bun's launcher place; whether it did.
+pub(crate) fn set_aside(bun_install: &Path, windows: bool, now: i64, nonce: u64) -> bool {
+    LauncherRepair {
+        bun_install: bun_install.to_path_buf(),
+        windows,
+        now,
+        nonce,
+    }
+    .set_aside()
+}
+
+/// `setup.settleCompiledOmp` in process: after the install, the aside goes (`installed`) or comes back.
+pub(crate) fn settle(bun_install: &Path, windows: bool, now: i64, nonce: u64, installed: bool) {
+    LauncherRepair {
+        bun_install: bun_install.to_path_buf(),
+        windows,
+        now,
+        nonce,
+    }
+    .settle(installed);
+}
+
 /// A Windows Bun shim is a PE too; only the standalone has a complete `.bun` section header.
 /// Follow symlinks for this read, but rename the launcher itself during repair.
 fn is_compiled(file: &Path, windows: bool) -> Option<bool> {

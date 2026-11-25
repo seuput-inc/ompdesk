@@ -26,6 +26,8 @@ mod log_tail;
 mod rename;
 mod worktrees;
 
+pub(crate) use facts::update_check_latest;
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

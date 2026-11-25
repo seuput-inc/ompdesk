@@ -50,10 +50,10 @@
 				"native/ompdesk/crates/shell/src/host.rs#read_loop",
 				"native/ompdesk/crates/shell/src/lifecycle.rs:64-107",
 				"native/ompdesk/crates/shell/src/node.rs#stop",
-				"native/ompdesk/crates/shell/src/main.rs:344-363",
+				"native/ompdesk/crates/shell/src/main.rs:343-362",
 				"native/ompdesk/crates/shell/src/main.rs#finish_exit"
 			],
-			"syncCommit": "e719976ff0467e5fec73c12079968103d428779d"
+			"syncCommit": "aa5384b6e6511a59962de6257e137c76c65e7d26"
 		},
 		{
 			"id": "turn-resume",
@@ -82,7 +82,7 @@
 				"src/main/remote/host-services.ts",
 				"src/main/ipc.ts"
 			],
-			"syncCommit": "2e392233c260a59a92dc597957ed08ea32630ae4",
+			"syncCommit": "f4442413a482c90dcc926c7b80e10ecfe74aeed0",
 			"verifySkill": ".omp/skills/turn-resume-verify/SKILL.md"
 		},
 		{
@@ -129,7 +129,7 @@
 				"src/main/session-index.ts#notifyChange",
 				"src/main/session-index.ts:87"
 			],
-			"syncCommit": "2afa3de15ada8e55d341baeaa957c19bd4583e7a",
+			"syncCommit": "f4442413a482c90dcc926c7b80e10ecfe74aeed0",
 			"verifySkill": ".omp/skills/session-listing-verify/SKILL.md"
 		},
 		{
@@ -314,9 +314,9 @@
 				"resources/gui-bridge/agent-control.ts#watchAsides",
 				"resources/gui-bridge/agent-control.ts#interruptFor",
 				"resources/gui-bridge/agent-control.ts#install",
-				"resources/gui-bridge/agent-control.ts:343-396"
+				"resources/gui-bridge/agent-control.ts:343-397"
 			],
-			"syncCommit": "1661762d43e5eab5ecee11a5a5eb6244b7ec369e"
+			"syncCommit": "aa5384b6e6511a59962de6257e137c76c65e7d26"
 		},
 		{
 			"id": "relaunch-once",
