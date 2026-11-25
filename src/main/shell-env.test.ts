@@ -463,11 +463,11 @@ describe("SidecarManager spawn env", () => {
 			sidecar.start();
 			await ready.promise;
 			expect(await fs.readFile(envPath, "utf8")).toBe("ego");
-			browser = { kind: "relay", name: "Google Chrome", url: "http://127.0.0.1:9231" };
+			browser = { kind: "unavailable", name: "Google Chrome" };
 			ready = Promise.withResolvers<void>();
 			sidecar.restart();
 			await ready.promise;
-			expect(await fs.readFile(envPath, "utf8")).toBe("relay:Google Chrome@http://127.0.0.1:9231");
+			expect(await fs.readFile(envPath, "utf8")).toBe("unavailable:Google Chrome");
 			browser = { kind: "builtin" };
 			ready = Promise.withResolvers<void>();
 			sidecar.restart();

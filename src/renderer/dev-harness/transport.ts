@@ -602,7 +602,8 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return {
 					egoInstalled: true,
 					auto: { kind: "ego" },
-					browsers: [{ id: "chrome", name: "Google Chrome", relayInstalled: false, relayConnected: false }],
+					browsers: [{ id: "chrome", name: "Google Chrome" }],
+					nativeHostBrowsers: ["chrome", "brave", "chromium"],
 				};
 			case IPC_COMMANDS.DEFAULT_BROWSER_INSTALL_RELAY:
 				return { dir: "/home/dev/.omp/browser-relay/extension-chrome" };
