@@ -229,6 +229,9 @@ const childRoot = process.env[ROOT_ENV];
 if (childRoot) {
 	try {
 		await check(childRoot);
+		// The tools client leaves a handle open after stopCore (CI run 45516956238: "install check passed", then the
+		// child ran on until the job's timeout), and the parent's spawnSync waits for this child.
+		process.exit(0);
 	} catch (error) {
 		console.error(`\n✗ ${error instanceof Error ? error.message : String(error)}`);
 		process.exit(1);
