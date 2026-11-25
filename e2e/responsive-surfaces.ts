@@ -1720,6 +1720,35 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work" },
 	},
 	{
+		id: "settings-appearance",
+		area: "B",
+		title: "Settings › Appearance & input: the theme sets, the OMPdesk pair's near-monochrome previews and the fields",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator('[data-destination="settings"]').first().click();
+			const nav = page.locator('[data-settings-section="appearance"]');
+			await nav.waitFor({ state: "visible", timeout: 15_000 });
+			await nav.click();
+		},
+		ready: "[data-settings-page] #setting-gui-theme",
+		// Parity only: the audits reach Settings through the harness's own surfaces.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "palette-option",
+		area: "A",
+		title: "Command palette from the sidebar's search button, its first command the active option (wash and ring)",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator("[data-command-center-entry]:visible").first().click();
+		},
+		ready: "[data-palette-index][data-active='true']",
+		// Parity only: the audits open the palette through the harness (`dialog-command-palette`).
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
 		id: "settings-computer-use",
 		area: "B",
 		title: "Settings › Agent behavior, scrolled to Computer use engine and the macOS permission rows under it",
