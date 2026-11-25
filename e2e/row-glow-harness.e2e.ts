@@ -317,7 +317,7 @@ if (SHOTS)
 				});
 
 for (const surface of SURFACES)
-	test(`a session row's picture starts at its group's content edge, its title after it; a child sits one step in (${surface.name})`, async () => {
+	test(`a session row's status lane starts at its group's content edge, its picture and title after it; a child sits one step in (${surface.name})`, async () => {
 		test.setTimeout(120_000);
 		const page = await openHarness(surface, "light", false);
 		await seedRunning(page);
@@ -337,8 +337,11 @@ for (const surface of SURFACES)
 			const rows = [...root.querySelectorAll(".omp-sidebar-session-row")].map(row => {
 				const header = headerOf(row);
 				const picture = row.querySelector("[data-project-artwork]")?.getBoundingClientRect();
+				const lane = row.querySelector("[data-status-lane]")?.getBoundingClientRect();
 				return {
 					text: (row.textContent ?? "").slice(0, 20),
+					lane: lane ? Math.round(lane.left) : null,
+					laneEnd: lane ? Math.round(lane.right) : null,
 					picture: picture ? Math.round(picture.left) : null,
 					pictureEnd: picture ? Math.round(picture.right) : null,
 					title: Math.round((row.querySelector("button") as Element).getBoundingClientRect().left),
@@ -353,18 +356,19 @@ for (const surface of SURFACES)
 				childGlyph: child ? Math.round(child.getBoundingClientRect().left) : null,
 			};
 		});
-		// Local rows and a paired host's rows alike: the repository's picture leads, at the group's content edge, and
-		// the title follows it (the approved two-line row, panels-sidebar.md › Session targets).
+		// Local rows and a paired host's rows alike: the status lane leads at the group's content edge (Orca's card, the
+		// owner's decision of 25 Nov 2026), then the repository's picture, then the title.
 		expect(geometry.rows.length).toBeGreaterThan(3);
 		for (const row of geometry.rows) {
-			expect(row, row.text).toMatchObject({ picture: row.group });
+			expect(row, row.text).toMatchObject({ lane: row.group });
+			expect(row.picture, row.text).toBeGreaterThanOrEqual(row.laneEnd ?? Number.POSITIVE_INFINITY);
 			expect(row.title, row.text).toBeGreaterThan(row.pictureEnd ?? Number.POSITIVE_INFINITY);
 		}
 		// A family child's glyph starts 6 px past its parent's picture (its own title one step further in).
 		expect(geometry.childGlyph).toBe((geometry.parentPicture ?? 0) + 6);
-		// The unseen-finish mark, when a row has one, sits at its end.
+		// The unseen-finish mark, when a row has one, is its status lane's.
 		for (const mark of await sidebar.locator("[data-sidebar-done]").all())
-			await expect(mark.locator("xpath=ancestor::*[@data-sidebar-row-end]")).toHaveCount(1);
+			await expect(mark.locator("xpath=ancestor::*[@data-status-lane]")).toHaveCount(1);
 		await page.context().close();
 	});
 

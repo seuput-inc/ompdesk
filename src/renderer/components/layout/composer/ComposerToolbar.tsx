@@ -297,6 +297,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 	const lead = (
 		<>
 			<MenuButton
+				className="omp-composer-add"
 				keepFocus={touchInput}
 				icon={<Plus />}
 				items={[

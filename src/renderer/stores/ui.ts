@@ -81,9 +81,9 @@ export function withFileTab(tabs: FileTab[], path: string, keep: boolean): FileT
 
 /**
  * What fills the main area: the open session (transcript + composer) or one
- * of the three destination pages. The sidebar stays visible for all of them.
+ * of the destination pages. The sidebar stays visible for all of them.
  */
-export type Destination = "session" | "agents" | "insights" | "settings";
+export type Destination = "session" | "agents" | "bots" | "insights" | "settings";
 export type PageDestination = Exclude<Destination, "session">;
 export type AgentsTab = "live" | "definitions" | "prs" | "github";
 export type InsightsTab = "stats" | "usage";
@@ -301,6 +301,8 @@ interface UiStore {
 	/** Back to the session view (Esc on a page, selecting a session). */
 	closeDestination: () => void;
 	openAgents: (tab?: AgentsTab) => void;
+	/** The Bots page (only reachable while `useBotsAvailable`, lib/bots-source.ts). */
+	openBots: () => void;
 	openInsights: (tab?: InsightsTab, scope?: InsightsStatsScope) => void;
 	/** Settings page; without `tab` a cold open lands on the default section and a re-open keeps the current one. */
 	openSettings: (tab?: string) => void;
@@ -590,11 +592,13 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		if (destination === "settings") get().openSettings(section);
 		else if (destination === "agents")
 			get().openAgents(section && AGENTS_TABS.includes(section) ? (section as AgentsTab) : undefined);
+		else if (destination === "bots") get().openBots();
 		else get().openInsights(section && INSIGHTS_TABS.includes(section) ? (section as InsightsTab) : undefined);
 	},
 	closeDestination: () => transitionView(() => set({ destination: "session" })),
 	openAgents: tab =>
 		transitionView(() => set(state => ({ destination: "agents", agentsTab: tab ?? state.agentsTab }))),
+	openBots: () => transitionView(() => set({ destination: "bots" })),
 	openInsights: (tab, scope) =>
 		transitionView(() =>
 			set(state => ({

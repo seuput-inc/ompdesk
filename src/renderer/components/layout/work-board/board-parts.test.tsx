@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "../../../lib/i18n";
-import { CappedRows } from "./board-parts";
+import { BoardRow, CappedRows } from "./board-parts";
 
 const { document, window, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -61,5 +61,35 @@ describe("CappedRows", () => {
 		await act(async () => more.click());
 		expect(document.querySelector("[data-board-more]")).toBeNull();
 		expect(document.activeElement?.textContent).toBe("row c");
+	});
+});
+
+describe("BoardRow", () => {
+	it("opens a row whose tooltip says more in place, and leaves a row with its own tap alone", async () => {
+		const host = document.createElement("div");
+		document.body.append(host);
+		root = createRoot(host);
+		let opened = 0;
+		await act(async () =>
+			root?.render(
+				<ul>
+					<BoardRow label="Reading files" lead={null} title={"Reading files\nsrc/a.ts, src/b.ts"} />
+					<BoardRow label="Jobs" lead={null} onClick={() => opened++} title="2 jobs" />
+					<BoardRow label="Plain" lead={null} />
+				</ul>,
+			),
+		);
+		const [quiet, job] = [...document.querySelectorAll("button")] as unknown as HTMLButtonElement[];
+		expect(document.querySelectorAll("button")).toHaveLength(2);
+		expect(quiet?.getAttribute("aria-expanded")).toBe("false");
+		expect(document.querySelector("[data-board-detail]")).toBeNull();
+		await act(async () => quiet?.click());
+		expect(quiet?.getAttribute("aria-expanded")).toBe("true");
+		expect(document.querySelector("[data-board-detail]")?.textContent).toBe("Reading files\nsrc/a.ts, src/b.ts");
+		await act(async () => quiet?.click());
+		expect(document.querySelector("[data-board-detail]")).toBeNull();
+		await act(async () => job?.click());
+		expect(opened).toBe(1);
+		expect(job?.hasAttribute("aria-expanded")).toBe(false);
 	});
 });

@@ -5025,6 +5025,29 @@ export const ko: Record<string, string> = {
 	"destination.agents": "에이전트",
 	"destination.insights": "통계",
 	"destination.settings": "설정",
+	"destination.bots": "봇",
+	"bots.page.description": "나를 위해 계속 일하는 세션이에요.",
+	"bots.empty.title": "아직 봇이 없어요",
+	"bots.empty.description": "봇을 만들면 여기와 사이드바에 보여요.",
+	"sidebar.nav.label": "탐색",
+	"sidebar.nav.phone": "휴대폰",
+	"sidebar.nav.hide": "사이드바에서 숨기기",
+	"statusBar.label": "상태 표시줄",
+	"statusBar.menu": "상태 표시줄 항목",
+	"statusBar.link": "연결된 컴퓨터",
+	"statusBar.link.count": "컴퓨터 {online}/{total}",
+	"statusBar.link.on": "연결됨",
+	"statusBar.link.off": "연결 안 됨",
+	"statusBar.update": "앱 업데이트",
+	"statusBar.update.ready": "업데이트 {version} 준비됨",
+	"statusBar.update.coming": "업데이트 {version}",
+	"tabStrip.label": "열린 세션",
+	"tabStrip.close": "{name} 닫기",
+	"tabStrip.new": "새 탭…",
+	"tabStrip.menu": "탭 동작",
+	"tabStrip.closeOne": "탭 닫기",
+	"tabStrip.closeRight": "오른쪽 탭 닫기",
+	"tabStrip.closeLeft": "왼쪽 탭 닫기",
 	"help.menu": "도움말",
 	"help.shortcuts": "키보드 단축키",
 	"help.palette": "명령 팔레트",
@@ -5668,6 +5691,8 @@ export const ko: Record<string, string> = {
 	"updates.auth.failed": "GitHub 접근 설정을 바꾸지 못했어요",
 	"updates.auth.dropped.keychain-would-ask":
 		"저장한 토큰을 지웠어요. 읽으려면 macOS가 로그인 암호를 물어봐야 해서예요. GH_TOKEN, GITHUB_TOKEN, gh 로그인은 그대로 쓸 수 있고, 이 컴퓨터에는 새 토큰을 저장할 수 없어요.",
+	"updates.auth.unreadable":
+		"저장한 토큰을 이 컴퓨터에서 읽을 수 없어서 업데이트에 쓰지 못해요. 토큰은 그대로 남아 있어요. 새 토큰을 저장해 바꾸거나 삭제하세요.",
 	"updates.auth.cannotStore":
 		"이 시스템에서는 비밀 정보를 암호화할 수 없어 토큰을 저장할 수 없어요. 설정 › 일반에서 GitHub를 연결하세요.",
 	"updates.host.name": "호스트 컴퓨터의 OMPdesk",
@@ -6397,6 +6422,8 @@ export const ko: Record<string, string> = {
 	"settings.gui.agentControl": "OMPdesk 조작 도구",
 	"settings.gui.agentControlDesc":
 		"에이전트가 다른 세션을 보고, 메시지를 보내고, 결과를 읽고, 질문에 답하고, 화면에 보여 줄 수 있어요",
+	"settings.gui.controlSocketFailed":
+		"이번에는 ompdesk 명령이 OMPdesk에 닿지 않아요. 제어 소켓이 시작되지 않았어요({reason}). OMPdesk를 다시 시작해 보세요.",
 	"settings.gui.agentControlFull": "에이전트에게 OMPdesk 전체 권한 주기",
 	"settings.gui.agentControlFullDesc":
 		"기본값은 켜짐: 에이전트가 확인 카드 없이 OMPdesk의 모든 것을 조작하고, 다른 세션 승인을 대신하고, 이 스위치들도 바꿀 수 있어요. 위험: 프롬프트 인젝션이 담긴 페이지나 파일이 에이전트에게 묻지 않고 데이터를 지우거나 코드를 설치하게 할 수 있어요. 비밀 정보는 에이전트에게 보이지 않고 모든 동작은 기록돼요.",
@@ -6645,6 +6672,7 @@ export const ko: Record<string, string> = {
 	"providerList.login.pasteHintRemote":
 		"로그인을 마치면 브라우저가 열리지 않는 페이지에서 멈춰요. 그 페이지의 전체 주소를 복사해 여기에 붙여 넣어 주세요.",
 	"setup.title": "OMPdesk 시작하기",
+	"setup.progress": "{total}단계 중 {step}단계",
 	"setup.connect.description": "로그인하거나 API 키를 붙여 넣으세요. 자격 증명은 이 컴퓨터에만 저장돼요.",
 	"setup.custom.title": "직접 운영하는 엔드포인트가 있나요?",
 	"setup.custom.description":

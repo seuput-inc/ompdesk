@@ -96,6 +96,7 @@ import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
 import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
+import { sweepStaleTemps } from "./atomic-file";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
 import { onBotsState } from "./bots";
@@ -122,6 +123,7 @@ import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ip
 import type { GithubAuthService } from "./github-auth/service";
 import { applyLaunchDecision, type LaunchDecision, softwareCompositing } from "./gpu-fallback";
 import { installHangWatchdog, markMainStep } from "./hang-watchdog";
+import { startLowDiskWatch } from "./health-watch";
 import { getMainLanguage, mainT } from "./i18n";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
@@ -131,6 +133,7 @@ import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
+import { FOLDER_ACCESS_NOTICE_PREF, FULL_DISK_ACCESS_PANE, watchTccPrompts } from "./mac-tcc-watch";
 import { LocalMachine } from "./machine-services";
 import { MachineState } from "./machine-state";
 import { MailAccounts } from "./mail-accounts";
@@ -149,7 +152,7 @@ import { ompPackageRoot, ompPathEnv, refreshSystemOmp, systemOmp, TESTED_OMP_VER
 import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
-import { type PrefsStore, prefsFile } from "./prefs-store";
+import { type PrefsStore, prefsFile, takeRecoveredPrefs } from "./prefs-store";
 import { DesktopPresence, PRESENCE_REPORT_MS, readDesktopAway } from "./presence";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
@@ -203,6 +206,7 @@ import { deviceLanguage, localSidecarFactory } from "./sidecar-factory";
 import { SidecarPool } from "./sidecar-pool";
 import { installSlowSteps, loopMaxMs } from "./slow-steps";
 import { nextSnowflake } from "./snowflake";
+import { wakeSshTools } from "./ssh/ipc";
 import { markStartup } from "./startup-timing";
 import { StatsServerManager } from "./stats-server";
 import { stockHelperRequest, stopStockHelper } from "./stock-helper";
@@ -505,11 +509,12 @@ let connectivityPoll: ReturnType<typeof setInterval> | null = null;
 
 function installMainRuntimeLogging(): void {
 	// A console line to a stdout/stderr whose reader is gone (the terminal or test runner that started this copy
-	// closed) fails with EPIPE on the stream; with no listener that is an uncaught exception and a crash dialog.
-	// Losing the line is fine: the runtime log keeps what matters.
+	// closed) fails with EPIPE on the stream, or EIO once the terminal itself went away; with no listener that is an
+	// uncaught exception and a crash dialog. Losing the line is fine: the runtime log keeps what matters.
 	for (const stream of [process.stdout, process.stderr]) {
 		stream.on("error", error => {
-			if ((error as NodeJS.ErrnoException).code !== "EPIPE") throw error;
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "EPIPE" && code !== "EIO") throw error;
 		});
 	}
 	installMainFailureLogging(process, report => writeRuntimeLog(report));
@@ -744,6 +749,22 @@ app.whenReady().then(async () => {
 	onPairedPagePush(({ connId, channel, payload }) => webHost?.router.deliverToConnection(connId, channel, payload));
 	// The core's stores (web devices, paired computers, schedules, journals) join it.
 	routeCoreSaves(core(), diskFull);
+	// A preference file that no longer parsed was moved aside and put back from its backup (the core's prefs): said once.
+	prefsStore();
+	for (const store of takeRecoveredPrefs()) {
+		writeRuntimeLog({ source: "user-data-migration", message: "store-recovered", details: { ...store } });
+		new Notification({
+			title: mainT("storeRecovered.title"),
+			body: mainT(store.restored ? "storeRecovered.restored" : "storeRecovered.reset", undefined, {
+				file: store.file,
+			}),
+		}).show();
+	}
+	// Temp files a killed write left beside the stores (atomic-file.ts names them `<file>.<pid>-<n>.tmp`).
+	void sweepStaleTemps(app.getPath("userData")).then(removed => {
+		if (removed)
+			writeRuntimeLog({ source: "user-data-migration", message: "stale-temps-removed", details: { removed } });
+	});
 	markStartup("app-ready");
 	// A stall says how the computer and OMPdesk's own processes stood around it (machine-state.ts).
 	const machineState = new MachineState({
@@ -772,6 +793,20 @@ app.whenReady().then(async () => {
 				machineState.slowStep(details);
 			},
 		});
+		// The disk running low, told before writes fail (health-watch.ts).
+		startLowDiskWatch({
+			path: app.getPath("userData"),
+			lastNoticeAt: () => {
+				const at = prefsStore().get("lowDiskNoticeAt");
+				return typeof at === "number" ? at : undefined;
+			},
+			setLastNoticeAt: at => prefsStore().set("lowDiskNoticeAt", at),
+			notify: free => {
+				const gb = (free / 1024 ** 3).toFixed(1);
+				writeRuntimeLog({ source: "disk-care", message: "disk low", details: { freeGb: Number(gb) } });
+				new Notification({ title: mainT("diskLow.title"), body: mainT("diskLow.body", undefined, { gb }) }).show();
+			},
+		});
 		// The measurement of main's blocked waits on the core's hub (native-rust ledger, H2): one line a minute.
 		if (process.env.OMP_GUI_HUB_STATS === "1")
 			setInterval(() => {
@@ -794,6 +829,16 @@ app.whenReady().then(async () => {
 	const platform = setupPlatform();
 	const toolsDir = managedToolsDir(platform, process.env, homedir(), app.getPath("userData"));
 	applyManagedToolEnv(toolsDir, platform);
+	// Windows: a tool the person installed outside OMPdesk lands in the registry's PATH, merged into this process's
+	// when a window gains focus (at most once a minute), so the next spawn finds it without a restart.
+	if (platform === "win32") {
+		let pathReadAt = Date.now();
+		app.on("browser-window-focus", () => {
+			if (Date.now() - pathReadAt < 60_000) return;
+			pathReadAt = Date.now();
+			void refreshPath(platform, toolsDir);
+		});
+	}
 
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
 	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
@@ -1569,6 +1614,20 @@ app.whenReady().then(async () => {
 			void askMacPermissions();
 			app.on("browser-window-focus", () => void askMacPermissions());
 		});
+		// The first folder dialog macOS shows on OMPdesk's account (a session reading Documents, Desktop, Downloads)
+		// gets one notice that opens Full Disk Access, once ever (mac-tcc-watch.ts).
+		if (process.platform === "darwin" && prefsStore().get(FOLDER_ACCESS_NOTICE_PREF) !== true) {
+			const stopTccWatch = watchTccPrompts(prompt => {
+				if (prefsStore().get(FOLDER_ACCESS_NOTICE_PREF) === true) return;
+				prefsStore().set(FOLDER_ACCESS_NOTICE_PREF, true);
+				stopTccWatch();
+				writeRuntimeLog({ source: "background-task", message: "mac-folder-prompt", details: { ...prompt } });
+				const notice = new Notification({ title: mainT("folderAccess.title"), body: mainT("folderAccess.body") });
+				notice.on("click", () => void shell.openExternal(FULL_DISK_ACCESS_PANE));
+				notice.show();
+			});
+			app.once("will-quit", stopTccWatch);
+		}
 	}
 
 	// This machine's setup and the omp, tool CLI and extension updaters: one instance of the core's `tools` kind
@@ -2161,7 +2220,10 @@ app.whenReady().then(async () => {
 		},
 		changed: online => {
 			turnResume.connectivityChanged();
-			if (online) devices.wake("online");
+			if (online) {
+				devices.wake("online");
+				wakeSshTools();
+			}
 		},
 	});
 	connectivityMonitor = connectivity;
@@ -2328,8 +2390,12 @@ app.whenReady().then(async () => {
 		connectivity.resume();
 		devices.wake("resume");
 		scheduleService?.resumed();
+		wakeSshTools();
 	});
-	powerMonitor.on("unlock-screen", () => devices.wake("unlock"));
+	powerMonitor.on("unlock-screen", () => {
+		devices.wake("unlock");
+		wakeSshTools();
+	});
 	// Every host this computer is connected to hears whether its person is at it (presence.ts), so a person here keeps
 	// the host's phones quiet; a link that comes up hears it at once, a lock or unlock without waiting for the next beat.
 	const reportPresence = (hosts: readonly string[]) => {

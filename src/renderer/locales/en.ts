@@ -5032,6 +5032,29 @@ export const en: Record<string, string> = {
 	"destination.agents": "Agents",
 	"destination.insights": "Stats",
 	"destination.settings": "Settings",
+	"destination.bots": "Bots",
+	"bots.page.description": "Sessions that keep working for you.",
+	"bots.empty.title": "No bots yet",
+	"bots.empty.description": "A bot you create shows here and in the sidebar.",
+	"sidebar.nav.label": "Navigation",
+	"sidebar.nav.phone": "Phone",
+	"sidebar.nav.hide": "Hide from sidebar",
+	"statusBar.label": "Status bar",
+	"statusBar.menu": "Status bar items",
+	"statusBar.link": "Connected computers",
+	"statusBar.link.count": "{online}/{total} computers",
+	"statusBar.link.on": "connected",
+	"statusBar.link.off": "not connected",
+	"statusBar.update": "App update",
+	"statusBar.update.ready": "Update {version} ready",
+	"statusBar.update.coming": "Update {version}",
+	"tabStrip.label": "Open sessions",
+	"tabStrip.close": "Close {name}",
+	"tabStrip.new": "New tab…",
+	"tabStrip.menu": "Tab actions",
+	"tabStrip.closeOne": "Close tab",
+	"tabStrip.closeRight": "Close tabs to the right",
+	"tabStrip.closeLeft": "Close tabs to the left",
 	"help.menu": "Help",
 	"help.shortcuts": "Keyboard shortcuts",
 	"help.palette": "Command palette",
@@ -5676,6 +5699,8 @@ export const en: Record<string, string> = {
 	"updates.auth.failed": "Couldn't change GitHub access",
 	"updates.auth.dropped.keychain-would-ask":
 		"The saved token was removed: macOS would ask for your login password to read it. GH_TOKEN, GITHUB_TOKEN and your gh login still work; a new token can't be saved on this computer.",
+	"updates.auth.unreadable":
+		"The saved token can't be read on this computer, so updates don't use it. It stays saved as it is: save a new one to replace it, or remove it.",
 	"updates.auth.cannotStore":
 		"This system can't encrypt secrets, so a token can't be saved here. Connect GitHub in Settings › General instead.",
 	"updates.host.name": "OMPdesk on the host computer",
@@ -6409,6 +6434,8 @@ export const en: Record<string, string> = {
 	"settings.gui.agentControl": "OMPdesk control tools",
 	"settings.gui.agentControlDesc":
 		"Let an agent see your other sessions, message them, read their results, answer their questions and show them to you",
+	"settings.gui.controlSocketFailed":
+		"The ompdesk command can't reach OMPdesk this time: its control socket did not start ({reason}). Restart OMPdesk to try again.",
 	"settings.gui.agentControlFull": "Give agents full control of OMPdesk",
 	"settings.gui.agentControlFullDesc":
 		"On by default: agents operate everything in OMPdesk with no confirmation card, approve for other sessions and change these switches. Risk: a prompt-injected page or file can then make an agent delete data or install code unasked. Secrets stay hidden from agents; every action is logged.",
@@ -6664,6 +6691,7 @@ export const en: Record<string, string> = {
 	"providerList.login.pasteHintRemote":
 		"After you sign in, the browser ends on a page that won't load. Copy its full address and paste it here.",
 	"setup.title": "Set up OMPdesk",
+	"setup.progress": "Step {step} of {total}",
 	"setup.connect.description": "Sign in or paste an API key. Credentials stay on this computer.",
 	"setup.custom.title": "Running your own endpoint?",
 	"setup.custom.description":

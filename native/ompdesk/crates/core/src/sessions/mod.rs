@@ -354,7 +354,12 @@ async fn search(call: Call) -> Result<Reply, Fault> {
         params.paths.retain(|path| allowed.contains(path));
         (Arc::clone(search), root.clone())
     };
-    Reply::json(&cache.search(&root, params.paths, &params.query).await)
+    // A caller that gives up (a paired device past its deadline) cancels it: the batch in flight is dropped
+    // unanswered and no further file is read.
+    tokio::select! {
+        hits = cache.search(&root, params.paths, &params.query) => Reply::json(&hits),
+        () = call.scope.on_cancel() => Err(Fault::cancelled()),
+    }
 }
 
 /// Each file's legacy chat flag, in order; a first list of many sessions reads them on a few threads.

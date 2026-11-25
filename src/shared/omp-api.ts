@@ -426,6 +426,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		diskFull: {
 			get: () => transport.invoke(IPC_COMMANDS.DISK_FULL_GET),
 		},
+		controlSocket: {
+			failure: () => transport.invoke(IPC_COMMANDS.CONTROL_SOCKET_FAILURE),
+		},
 
 		resume: {
 			cancelWait: (tabId: string) => transport.invoke(IPC_COMMANDS.RESUME_CANCEL_WAIT, tabId),

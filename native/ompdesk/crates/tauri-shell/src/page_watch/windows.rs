@@ -13,8 +13,9 @@ use tauri::WebviewWindow;
 use tauri::webview::PlatformWebview;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
-    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, COREWEBVIEW2_PROCESS_KIND,
-    COREWEBVIEW2_PROCESS_KIND_RENDERER, ICoreWebView2, ICoreWebView2_20,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
+    COREWEBVIEW2_PROCESS_FAILED_REASON, COREWEBVIEW2_PROCESS_FAILED_REASON_OUT_OF_MEMORY,
+    COREWEBVIEW2_PROCESS_KIND, COREWEBVIEW2_PROCESS_KIND_RENDERER, ICoreWebView2, ICoreWebView2_20,
     ICoreWebView2Environment13, ICoreWebView2FrameInfo2, ICoreWebView2ProcessExtendedInfo,
     ICoreWebView2ProcessExtendedInfoCollection, ICoreWebView2ProcessFailedEventArgs2,
 };
@@ -335,14 +336,20 @@ pub fn watch_failures(window: &WebviewWindow, wc: u64) -> tauri::Result<()> {
             unsafe { failure.ProcessFailedKind(&mut kind) }?;
             if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED {
                 RENDERERS.with_borrow_mut(|known| known.remove(&wc));
+                let details = failure.cast::<ICoreWebView2ProcessFailedEventArgs2>().ok();
                 let mut code = 0;
-                let exit = failure
-                    .cast::<ICoreWebView2ProcessFailedEventArgs2>()
+                let exit = details
+                    .as_ref()
                     // SAFETY: as above; `code` outlives the call.
-                    .and_then(|failure| unsafe { failure.ExitCode(&mut code) })
-                    .ok()
+                    .and_then(|failure| unsafe { failure.ExitCode(&mut code) }.ok())
                     .map(|()| code);
-                super::content_process_gone(wc, exit);
+                let mut reason = COREWEBVIEW2_PROCESS_FAILED_REASON::default();
+                // SAFETY: as above; `reason` is a plain out-value.
+                let oom = details.as_ref().is_some_and(|failure| {
+                    unsafe { failure.Reason(&mut reason) }.is_ok()
+                        && reason == COREWEBVIEW2_PROCESS_FAILED_REASON_OUT_OF_MEMORY
+                });
+                super::content_process_gone(wc, exit, oom);
             } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE {
                 super::engine_unresponsive(wc);
             }

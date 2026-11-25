@@ -42,6 +42,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
         Risk::Tier(Read, &["omp.bridge_health"]),
     ),
     ("disk-full:get", Risk::Never(DENY)),
+    ("control-socket:failure", Risk::Never(DENY)),
     ("rpc:command", Risk::Never(RAW_RPC)),
     ("rpc:command-for-tab", Risk::Never(RAW_RPC)),
     ("extension-ui:respond", Risk::Never(CARDS)),

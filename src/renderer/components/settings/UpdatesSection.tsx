@@ -751,6 +751,11 @@ export function UpdateAuthRow({ onChanged }: { onChanged: () => Promise<void> })
 								: info.droppedReason}
 						</p>
 					)}
+					{info?.unreadable && (
+						<p className="text-sc-xs text-(--sc-warning)" data-updates-auth-unreadable role="status">
+							{t("updates.auth.unreadable")}
+						</p>
+					)}
 					{info?.canStore === false && (
 						<p className="text-sc-xs text-(--sc-text-muted)">{t("updates.auth.cannotStore")}</p>
 					)}

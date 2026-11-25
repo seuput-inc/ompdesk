@@ -436,6 +436,7 @@ export const ompdeskLight: ThemePalette = {
 	link: "#0a56b4",
 	attention: "#b83c0b",
 	unread: "#2563eb",
+	working: "#a16207",
 	onError: "#ffffff",
 	inlineCode: "#0a0a0a",
 	syntax: {
@@ -483,6 +484,7 @@ export const ompdeskDark: ThemePalette = {
 	link: "#78b0f9",
 	attention: "#fb923c",
 	unread: "#60a5fa",
+	working: "#eab308",
 	onError: "#450a0a",
 	inlineCode: "#f0f0f0",
 	syntax: {

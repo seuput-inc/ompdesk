@@ -761,4 +761,25 @@ mod end_to_end {
         assert_eq!(ran.code, 3);
         assert!(ran.err.contains("not running"));
     }
+
+    #[test]
+    fn says_why_the_socket_did_not_start() {
+        let dir = std::env::temp_dir().join(format!("ompdesk-cli-failed-{}", process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(crate::protocol::START_FAILURE_FILE),
+            "listen EADDRINUSE: address already in use\n",
+        )
+        .unwrap();
+        let ran = invoke(&["sessions"], &dir, &[], me());
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(ran.code, 3);
+        assert!(
+            ran.err.ends_with(
+                "its control socket did not start: listen EADDRINUSE: address already in use\n"
+            ),
+            "{}",
+            ran.err
+        );
+    }
 }

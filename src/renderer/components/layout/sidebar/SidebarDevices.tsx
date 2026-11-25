@@ -46,6 +46,7 @@ import { basename, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
 import { moveInOrder, reorderProjects } from "../../../lib/project-order";
+import { laneState } from "../../../lib/session-lane";
 import {
 	combinedTitle,
 	sessionDisplayLabel,
@@ -89,7 +90,7 @@ import {
 	TimeAgo,
 } from "../../common";
 import { workingAgentCount } from "../live-work";
-import { SessionLiveAge, SessionLiveTitle } from "../SessionLiveTitle";
+import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { childFoldSignal, type FoldSignal, type FoldSummary, foldSummary } from "./fold-summary";
 import { hostSectionSummary, remoteOpenedTab, summaryRowState } from "./host-row-state";
 import { useHostWorkspace } from "./host-workspace";
@@ -97,6 +98,7 @@ import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { logSelection, useRowSelection } from "./row-selection";
+import { SessionStatusLane } from "./SessionStatusLane";
 import { SidebarChats } from "./SidebarChats";
 import { useDeviceHeaderHandle } from "./SidebarDeviceSections";
 import { SidebarFoldButton } from "./SidebarFoldButton";
@@ -990,7 +992,8 @@ function DeviceSessions({
 		const summary =
 			hostSummaries.get(session.path) ??
 			(tab && !tab.sessionPath ? hostSummaries.get(unsavedSessionKey(tab.id)) : undefined);
-		const { signal, waiting, running, settling, reason } = summaryRowState(summary);
+		const rowRun = summaryRowState(summary);
+		const { signal, waiting, running, settling, reason } = rowRun;
 		const working = signal?.running === true || running;
 		// Every pane of the split on screen reads as selected, like the local list (Sidebar.tsx); the focused one adds data-pane-focus.
 		const { current, inSplit: inVisibleSplit, selected: active } = selectionOf(tab?.id);
@@ -1054,16 +1057,22 @@ function DeviceSessions({
 		// running light the row as on the host, though no tab here holds it.
 		const opened = openedOf(session);
 		const runningOpened = opened.filter(child => child.status === "running").length;
-		const age = (
-			<SessionLiveAge
-				agents={workingAgentCount(summary?.agents ?? [])}
-				iso={indexed ? session.modified : null}
-				opened={runningOpened}
-				running={running}
-				settling={settling}
-				waiting={waiting}
-			/>
-		);
+		// The leading status lane, by this computer's rows' rule (Sidebar.tsx): the host's summary decides it.
+		const lane = laneState({
+			run: rowRun,
+			attention: rowRun.ask,
+			live: sessionLive({
+				agents: workingAgentCount(summary?.agents ?? []),
+				opened: runningOpened,
+				running,
+				settling,
+				waiting,
+			}),
+			stopped: tab?.lastRun?.stopReason === "aborted",
+			pullRequest: false,
+			open: tab !== undefined,
+		});
+		const age = indexed ? <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} /> : null;
 		const list = listOf(session);
 		const pinned = hostPins.includes(session.path);
 		const marker = pinned ? <Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" /> : null;
@@ -1073,7 +1082,12 @@ function DeviceSessions({
 		return (
 			<Fragment key={session.path}>
 				<ListRow
-					leading={<SessionRowArtwork target={target} />}
+					leading={
+						<span className="omp-session-leading">
+							<SessionStatusLane state={lane} />
+							<SessionRowArtwork target={target} />
+						</span>
+					}
 					buttonProps={{
 						tabIndex: -1,
 						"data-roving-item": `device-session:${host.deviceId}:${session.path}`,
@@ -1142,6 +1156,7 @@ function DeviceSessions({
 						"data-pane-focus": (current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-pane-shown": (active && !current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-folder-missing": folderMissing || undefined,
+						"data-unseen": lane === "done" || undefined,
 						"data-live": indexed ? undefined : true,
 					}}
 					selected={active}

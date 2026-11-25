@@ -77,10 +77,77 @@ html:not([data-input="touch"]) .omp-session-sidebar .omp-sidebar-head {
 	scrollbar-gutter: stable;
 }
 
-/* The picture leads the row: it starts where its group header's content does (the header button's `pl-2`), nested
-   in a project group or not, so the list reads as one left edge under the project's chevron. */
+/* Orca's 280 px sidebar in a narrow desktop window: it gives the session at least 200 px (no less than its own 220 px
+   minimum), so the composer's controls stay inside their box in a 420 px window. */
+html:not([data-shell]) .omp-session-sidebar {
+	max-width: max(220px, calc(100vw - 200px));
+}
+
+/* The status lane leads the row, then the picture (Orca's card status lane, the owner's decision of 25 Nov 2026):
+   the lane starts where its group header's content does (the header button's `pl-2`), nested in a project group or
+   not, so the list reads as one left edge under the project's chevron. */
 .omp-session-sidebar .omp-sidebar-session-row {
 	padding-left: var(--sc-space-2);
+}
+
+.omp-session-leading {
+	display: flex;
+	align-items: center;
+	gap: var(--sc-space-1-5);
+}
+
+/* One 16 px column whatever it shows, so a title never moves when the state does; the words are the row's tooltip. */
+.omp-status-lane {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: var(--sc-icon-md);
+	height: var(--sc-icon-md);
+	color: var(--sc-text-subtle);
+	font-size: var(--sc-icon-sm);
+}
+
+.omp-status-lane > svg {
+	width: var(--sc-icon-sm);
+	height: var(--sc-icon-sm);
+}
+
+.omp-status-lane-dot {
+	width: var(--sc-space-1-5);
+	height: var(--sc-space-1-5);
+	border-radius: var(--sc-radius-full);
+	background: currentColor;
+}
+
+.omp-status-lane:is([data-status-lane="approval"], [data-status-lane="question"], [data-status-lane="childWaiting"]) {
+	color: var(--sc-attention);
+}
+
+.omp-status-lane[data-status-lane="failed"] {
+	color: var(--sc-danger);
+}
+
+/* Not up yet (connecting, held, waiting for the network): a hollow dashed ring, never a spinner. */
+.omp-status-lane[data-status-lane="pending"] .omp-status-lane-dot {
+	width: var(--sc-space-2);
+	height: var(--sc-space-2);
+	border: 1.5px dashed currentColor;
+	background: transparent;
+}
+
+.omp-status-lane[data-status-lane="pr"] {
+	color: var(--sc-success);
+}
+
+.omp-status-lane[data-status-lane="open"] .omp-status-lane-dot {
+	opacity: 0.45;
+}
+
+/* A sidebar narrower than `LANE_MIN_SIDEBAR_WIDTH` (lib/sidebar-width.ts, 232 px) keeps the rows' width for their
+   words: there the lane would cut the branch below its eight characters. */
+.omp-session-sidebar[data-sidebar-narrow] .omp-status-lane {
+	display: none;
 }
 
 .omp-sidebar-session-rename-nested {
@@ -233,24 +300,9 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	display: none;
 }
 
-.omp-session-row-give:has(.omp-live-age) {
-	padding-left: calc(1em + var(--sc-space-1-5));
-}
-
-.omp-session-row-age:has(> .omp-live-age) {
-	margin-left: calc(-1em - var(--sc-space-1-5));
-}
-
-.omp-session-row-age > .omp-live-age {
-	position: static;
-	display: inline;
-}
-
-.omp-session-row-age > .omp-live-age > .omp-working-arc {
-	position: absolute;
-	top: 50%;
-	left: 0;
-	translate: 0 -50%;
+/* The branch went (`SessionHeadLabel`: its floor does not fit the line): the age, which gives way first, goes too. */
+.omp-session-row-give[data-head-out] > .omp-session-row-age {
+	display: none;
 }
 
 /* The head's own box drops the whole head, mark too, onto an invisible second line once it cannot hold the head's
@@ -317,6 +369,14 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 	min-height: 0;
 	max-height: min(16rem, 32dvh);
 	margin-bottom: var(--sc-space-2);
+}
+
+/* In the status bar's popover the block takes the room above the bar (the popover's `--omp-popover-room`). */
+.omp-sidebar-usage[data-usage-popover] {
+	width: 20rem;
+	max-width: 100%;
+	max-height: min(32rem, var(--omp-popover-room, 60dvh));
+	margin-bottom: 0;
 }
 
 .omp-sidebar-usage-groups {

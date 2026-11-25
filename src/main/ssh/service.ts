@@ -86,6 +86,10 @@ interface WatchRuntime {
 	/** Null while the ssh is being started; the entry is in the map from the toggle on, so a toggle off finds it. */
 	child: SshRun | null;
 	stopped: boolean;
+	/** Starts that failed or dropped since the last listing; picks the wait on `RETRY_DELAYS_MS`. */
+	attempt: number;
+	/** The start again after a drop, while the toggle stays on. */
+	timer: NodeJS.Timeout | null;
 }
 
 function forwardRuntime(forward: SshForward, active: boolean): ForwardRuntime {
@@ -197,6 +201,22 @@ export class SshTools {
 	/** C149: does an ssh-agent answer, which keys it holds, which key files exist. */
 	agent(): Promise<SshAgentStatus> {
 		return this.#core.agent();
+	}
+
+	/**
+	 * The computer woke, was unlocked or came back online: a forward waiting to reconnect, or a ports watch waiting to
+	 * start again, goes now with a fresh budget, since the drop was the sleep's and not the server's.
+	 */
+	wake(): void {
+		if (this.#disposed) return;
+		for (const runtime of this.#forwards.values()) {
+			if (!runtime.active || runtime.child || !runtime.timer) continue;
+			runtime.attempt = 0;
+			runtime.droppedAt = null;
+			this.#background(this.#connect(runtime));
+		}
+		for (const runtime of [...this.#watches.values()])
+			if (runtime.timer) this.#background(this.#watch(runtime.target).catch(() => {}));
 	}
 
 	dispose(): void {
@@ -399,7 +419,7 @@ export class SshTools {
 		runtime.timer = setTimeout(() => this.#background(this.#connect(runtime)), delay);
 	}
 
-	async #watch(target: SshTarget): Promise<void> {
+	async #watch(target: SshTarget, attempt = 0): Promise<void> {
 		this.#unwatch(target.name);
 		// In the map before the first await: a toggle off (or another toggle on) during the start finds this entry.
 		const runtime: WatchRuntime = {
@@ -407,6 +427,8 @@ export class SshTools {
 			target,
 			child: null,
 			stopped: false,
+			attempt,
+			timer: null,
 		};
 		this.#watches.set(target.name, runtime);
 		let child: SshRun;
@@ -419,11 +441,7 @@ export class SshTools {
 				this.#watches.delete(target.name);
 				throw error;
 			}
-			runtime.watch = {
-				...runtime.watch,
-				loading: false,
-				error: error instanceof Error ? error.message : String(error),
-			};
+			this.#watchDropped(runtime, error instanceof Error ? error.message : String(error));
 			return;
 		}
 		if (runtime.stopped) {
@@ -434,21 +452,35 @@ export class SshTools {
 		child.listen({
 			// The core tells a listing only when it differs from the one before.
 			ports: (ports, opened) => {
+				runtime.attempt = 0;
 				runtime.watch = { ...runtime.watch, ports, opened, loading: false, error: null };
 				this.#changed();
 			},
 			exit: failure => {
 				if (runtime.stopped || this.#watches.get(target.name) !== runtime) return;
-				runtime.watch = { ...runtime.watch, loading: false, error: failure.message };
-				this.#changed();
+				runtime.child = null;
+				this.#watchDropped(runtime, failure.message);
 			},
 		});
+	}
+
+	/** The watch's ssh failed to start or ended by itself: show why, and start it again on the forwards' ladder. */
+	#watchDropped(runtime: WatchRuntime, error: string): void {
+		runtime.watch = { ...runtime.watch, loading: false, error };
+		this.#changed();
+		if (this.#disposed) return;
+		const delay = RETRY_DELAYS_MS[Math.min(runtime.attempt, RETRY_DELAYS_MS.length - 1)] ?? 60_000;
+		runtime.timer = setTimeout(() => {
+			if (this.#watches.get(runtime.target.name) === runtime && !runtime.stopped)
+				this.#background(this.#watch(runtime.target, runtime.attempt + 1).catch(() => {}));
+		}, delay);
 	}
 
 	#unwatch(server: string): void {
 		const runtime = this.#watches.get(server);
 		if (!runtime) return;
 		runtime.stopped = true;
+		clearTimeout(runtime.timer ?? undefined);
 		this.#watches.delete(server);
 		if (runtime.child) this.#end(runtime.child);
 	}

@@ -6,6 +6,13 @@
  */
 import { SIDEBAR_WIDTH, SIDEBAR_WIDTH_STORAGE_KEY } from "../../shared/boot-shell-geometry";
 
+/**
+ * Below this docked width the rows lead without their 16 px status lane (sidebar.css `data-sidebar-narrow`): with it,
+ * a branch's eight-character floor no longer fits its line. Measured on the harness's `…/settings-panel-dark`: the
+ * line is the sidebar less 152 px, the floor needs 78 px on macOS (230 px) and 76 px on Windows (228 px); 2 px spare.
+ */
+export const LANE_MIN_SIDEBAR_WIDTH = 232;
+
 export const clampSidebarWidth = (value: number): number =>
 	Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, value));
 

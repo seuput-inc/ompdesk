@@ -14,9 +14,9 @@
 export const SIDEBAR_PREFS_KEY = "sidebar";
 
 /**
- * What the sidebar footer can hold above its destinations (mixdog's activity-rail
- * pins): usage bars for the tab's provider, side panel views, and Schedules.
- * The footer's Agents and Stats entries are pins too (off by default; the palette, the menu and ⌥A reach them). Only usage is on until the user chooses; Settings › General › Sidebar shortcuts picks them.
+ * The pins the stored blob keeps, in the core's order (`crates/core/src/prefs/sidebar.rs` validates the same list).
+ * The footer draws `FOOTER_PINS` only: Agents, Schedules and Stats became the sidebar's nav rows (Orca's composition,
+ * the owner's decision of 25 Nov 2026), so a saved pin of theirs is kept as the core keeps it and shows nothing.
  */
 export const RAIL_PINS = [
 	"usage",
@@ -30,6 +30,17 @@ export const RAIL_PINS = [
 	"schedules",
 ] as const;
 export type RailPin = (typeof RAIL_PINS)[number];
+
+/** What the sidebar footer can hold above Settings: usage bars for the tab's provider and side panel views. */
+export const FOOTER_PINS = [
+	"usage",
+	"terminal",
+	"diff",
+	"preview",
+	"files",
+	"jobs",
+] as const satisfies readonly RailPin[];
+export type FooterPin = (typeof FOOTER_PINS)[number];
 
 /** Pins on until the user chooses: only the usage block, and only while no choice is saved. */
 const DEFAULT_RAIL_PINS: readonly RailPin[] = ["usage"];

@@ -436,6 +436,8 @@ export const IPC_COMMANDS = {
 	BRIDGE_HEALTH_TAKE: "bridge-health:take",
 	/** The files waiting for space (payload: none; answer: DiskFullState) */
 	DISK_FULL_GET: "disk-full:get",
+	/** Why the control socket the `ompdesk` command reaches did not start (payload: none; answer: string or null) */
+	CONTROL_SOCKET_FAILURE: "control-socket:failure",
 	/** Cancel a tab's wait for the internet connection (payload: tab id) */
 	RESUME_CANCEL_WAIT: "resume:cancel-wait",
 	/** Stop what this launch resumed on one tab (the resuming row's Stop; payload: tab id) */
@@ -867,6 +869,12 @@ export interface UpdateAuthInfo {
 	 * (`KEYCHAIN_WOULD_ASK`), so main dropped the file instead (native-rust › S › The keychain on macOS). Null when none was.
 	 */
 	droppedReason: string | null;
+	/**
+	 * The saved token is still there but this computer could not read it on the last try (the OS key store had no key
+	 * for it, or it did not decrypt): it is kept as it is, never replaced by nothing, until a new one is saved or it is
+	 * removed. Absent from an older host.
+	 */
+	unreadable?: boolean;
 }
 
 export interface UpdateAuthTestResult {
@@ -2444,6 +2452,10 @@ export interface OmpApi {
 	diskFull: {
 		/** The files main could not save for lack of space right now (empty once all are saved). */
 		get(): Promise<DiskFullState>;
+	};
+	controlSocket: {
+		/** Why the control socket did not start this launch (errno and what to do), or null while it runs. */
+		failure(): Promise<string | null>;
 	};
 	/** Turns that continue by themselves: after the connection returns, and after a relaunch. */
 	resume: {
