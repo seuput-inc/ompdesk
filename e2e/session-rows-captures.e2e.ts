@@ -13,6 +13,7 @@ import { createServer as createNetServer } from "node:net";
 import * as path from "node:path";
 import { type Browser, chromium, expect, type Locator, type Page, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
+import { LANE_MIN_SIDEBAR_WIDTH } from "../src/renderer/lib/sidebar-width";
 import { cssString } from "./harness";
 
 const SHOTS = process.env.OMP_GUI_SESSION_ROWS_SHOTS;
@@ -238,7 +239,7 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		if (line.working && surface.name !== "narrow") expect(line.arc, `${line.name}: arc stays`).toBe(true);
 		expect(line.endClear, `${line.name}: chip and ⋯ beside the line`).toBe(true);
 	}
-	// Below the sidebar's 280 px default the rows lead without the status lane, so the branch keeps its words.
+	// Below `LANE_MIN_SIDEBAR_WIDTH` the rows lead without the status lane, so the branch keeps its words.
 	if (surface.name === "narrow") await expect(list.locator("[data-status-lane]:visible")).toHaveCount(0);
 	const heads = await Promise.all(
 		(await list.locator("[data-session-head]:visible").all()).map(head => head.evaluate(readHeadIn)),
@@ -458,3 +459,19 @@ for (const surface of SURFACES)
 				.toContain("sess-2.jsonl");
 			await page.context().close();
 		});
+
+test("from the lane's threshold width the rows lead with the status lane and the branch keeps its words", async () => {
+	test.setTimeout(120_000);
+	const surface: Surface = { ...SURFACES[1], sidebarWidth: LANE_MIN_SIDEBAR_WIDTH };
+	const page = await openHarness(surface, "light", "en");
+	const list = sidebar(page);
+	await expect(list.locator("[data-status-lane]:visible").first()).toBeVisible();
+	for (const file of [sessionFile(PROJECT, "sess-row-2"), sessionFile(PROJECT, "sess-row-4")]) {
+		const head = rowFor(list, file).locator('[data-session-head="branch"]');
+		await head.scrollIntoViewIfNeeded();
+		const read = await head.evaluate(readHeadIn);
+		expect(read.onLine, `${read.title} ${read.why}`).toBe(true);
+		expect(read.past, `${read.title} ${read.why}`).toBeLessThanOrEqual(0.5);
+	}
+	await page.context().close();
+});

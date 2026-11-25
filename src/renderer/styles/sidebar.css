@@ -144,8 +144,8 @@ html:not([data-shell]) .omp-session-sidebar {
 	opacity: 0.45;
 }
 
-/* A sidebar narrower than its 280 px default keeps the rows' width for their words: the lane would cut the branch
-   below its eight characters (the owner's decision of 25 Nov 2026 holds from the default width up). */
+/* A sidebar narrower than `LANE_MIN_SIDEBAR_WIDTH` (lib/sidebar-width.ts, 232 px) keeps the rows' width for their
+   words: there the lane would cut the branch below its eight characters. */
 .omp-session-sidebar[data-sidebar-narrow] .omp-status-lane {
 	display: none;
 }
