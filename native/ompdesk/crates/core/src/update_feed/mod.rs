@@ -1,6 +1,9 @@
 //! The release fields and asset the updater accepts from GitHub. Feed order is newest first.
 
 mod metadata;
+mod net;
+#[cfg(test)]
+mod net_tests;
 
 use crate::fs::order::js_trim;
 use crate::git::parse::js_number;
@@ -108,6 +111,7 @@ pub(crate) fn register(registry: &mut crate::server::Registry) {
     registry.add("updateFeed.resolve", |call| {
         Box::pin(async move { crate::server::Reply::json(&resolve(call.params()?)?) })
     });
+    net::register(registry);
 }
 
 #[cfg(test)]

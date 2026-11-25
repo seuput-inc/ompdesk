@@ -15,7 +15,7 @@ mod compat;
 mod desktop;
 mod download;
 mod launcher;
-mod net;
+pub(crate) mod net;
 mod registry_path;
 mod runtime;
 #[cfg(test)]
