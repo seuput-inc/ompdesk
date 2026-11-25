@@ -1310,6 +1310,16 @@ export const SURFACES: readonly Surface[] = [
 		},
 	},
 	{
+		id: "first-run",
+		area: "A",
+		title: "First run's provider step with Orca's step pill, on a computer where nothing can serve yet",
+		open: async () => {},
+		ready: '[data-first-run-step="connect"] [role="progressbar"]',
+		// Parity only, and only over a host whose fake omp has no signed-in provider (`OMP_GUI_TEST_SIGNED_OUT=1`).
+		when: () => false,
+		parity: { session: "work", available: () => process.env.OMP_GUI_TEST_SIGNED_OUT === "1" },
+	},
+	{
 		id: "sidebar-family",
 		area: "A",
 		title: "Session list with the work session's child running on the paired computer and the other computer's section folded to its count",
