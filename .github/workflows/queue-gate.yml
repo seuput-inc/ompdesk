@@ -1,5 +1,4 @@
-# The one admission point of the check queue (owner's rule, 13 Nov 2026: the account runs 5 macOS jobs at once and
-# sessions queued 71 of them, so every session had to judge the queue and Main cancelled runs by hand all evening).
+# Dispatch admission and duplicate-run checks.
 # Every workflow a session can dispatch calls this first (`needs: gate`), so the rules below hold for a raw
 # `gh workflow run` as well as for `bun scripts/ci-run.ts`:
 #
@@ -12,10 +11,6 @@
 #      the same inputs (the run name, which every caller builds from its inputs) cancels itself, unless `force` or a
 #      re-run (attempt 2 and later). A failed or cancelled run covers nothing, and a run still going is not a twin:
 #      the caller's concurrency group already lets the newest dispatch replace it.
-#
-# The macOS cap itself is not here: it is the caller's job-level concurrency group (`mac-dispatch`, one holder and
-# one waiting request for every dispatched macOS job of every workflow and ref), which GitHub enforces whatever
-# this job does. See .omp/rules/e2e-ci-windows.md › CI › The check queue.
 name: queue-gate
 
 on:

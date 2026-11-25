@@ -3,7 +3,7 @@
  * queue). Four rules, each pinned where a later edit would silently lose it:
  *
  *  1. Overlapping runs cancel themselves: main has one run going and the newest waiting, any other ref its newest run.
- *  2. Every macOS job of a dispatchable workflow sits behind the queue gate and in an account-wide lane.
+ *  2. Every macOS job of a dispatchable workflow sits behind the queue gate without locking out another workflow or ref.
  *  3. macOS is admitted to main and to MAC_REFS branches only.
  *  4. A commit with a green run of the same name is not run again.
  *
@@ -110,11 +110,11 @@ describe("every macOS job of a dispatchable workflow", () => {
 		]);
 	});
 
-	it("holds the account-wide lane for as long as it runs, and never cancels the holder", () => {
-		for (const { name, id, job } of macJobs) {
-			const group = job.concurrency?.group ?? "";
-			expect(group, `${name}:${id}`).toMatch(/mac-dispatch|mac-nightly/);
-			expect(job.concurrency?.["cancel-in-progress"], `${name}:${id}`).toBe(false);
+	it("leaves concurrency to the workflow so other macOS gates can finish", () => {
+		for (const { name, id, job, wf } of macJobs) {
+			expect(job.concurrency, `${name}:${id}`).toBeUndefined();
+			expect(wf.concurrency?.group, name).toContain(`${name.replace(/\.yml$/, "")}-`);
+			expect(wf.concurrency?.group, name).toContain("github.ref");
 		}
 	});
 
@@ -126,14 +126,6 @@ describe("every macOS job of a dispatchable workflow", () => {
 			// A dispatch is admitted by the gate's output, which is read by the first job on the way to the gate.
 			const reads = trail.some(job => String(wf.jobs[job]?.if ?? "").includes("needs.gate.outputs.mac_ok"));
 			expect(reads, `${name}:${id}`).toBe(true);
-		}
-	});
-
-	it("uses only the lanes the queue knows", () => {
-		// The dispatch lane every dispatched macOS job shares, and the nightly's own.
-		for (const { job } of macJobs) {
-			const lanes = [...(job.concurrency?.group ?? "").matchAll(/'(mac-[a-z-]+)'/g)].map(match => match[1]);
-			for (const lane of lanes) expect(["mac-dispatch", "mac-nightly"]).toContain(lane);
 		}
 	});
 });
@@ -163,6 +155,14 @@ describe("main and any other ref", () => {
 		for (const input of Object.keys(ci.on.workflow_dispatch?.inputs ?? {})) {
 			if (input === "force") continue;
 			expect(inName, input).toContain(`inputs.${input}`);
+		}
+	});
+
+	it("keeps distinct shell gates on one ref in separate groups and compares their own receipts for reuse", () => {
+		const shell = workflows.get("shell-batch-checks.yml") as Workflow;
+		for (const input of Object.keys(shell.on.workflow_dispatch?.inputs ?? {})) {
+			expect(shell.concurrency?.group, input).toContain(`inputs.${input}`);
+			expect(shell["run-name"], input).toContain(`inputs.${input}`);
 		}
 	});
 
@@ -226,32 +226,22 @@ describe("the macOS checks of a push to main", () => {
 });
 
 describe.skipIf(process.platform === "win32")("shell dispatch admission", () => {
-	it("requires an admitted ref and protects a pending shell request", () => {
+	it("requires an admitted ref", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-shell-admission-"));
 		try {
 			fs.writeFileSync(
 				path.join(dir, "gh"),
 				`#!/bin/sh
-case "$1 $2" in
-  "variable get") echo allowed; exit 0 ;;
-esac
-case "$2" in
-  */actions/workflows/shell-batch-checks.yml/runs?*)
-    if [ "$SHELL_PENDING" = yes ]; then echo '{"workflow_runs":[{"id":707,"status":"pending","head_branch":"shell-owner"}]}'; else echo '{"workflow_runs":[]}'; fi ;;
-  */actions/workflows/*/runs?*) echo '{"workflow_runs":[]}' ;;
-  */actions/runs/707/jobs?*) echo '[{"status":"pending","labels":[]}]' ;;
-  *) echo '{}' ;;
-esac
+if [ "$1 $2" = 'variable get' ]; then echo allowed; else echo '{}'; fi
 `,
 				{ mode: 0o755 },
 			);
-			const run = (args: string[], pending = false) =>
+			const run = (args: string[]) =>
 				spawnSync("bun", [path.join(REPO, "scripts/ci-run.ts"), ...args, "--dry-run"], {
 					encoding: "utf8",
 					env: {
 						...process.env,
 						PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}`,
-						SHELL_PENDING: pending ? "yes" : "no",
 					},
 				});
 			const denied = run(["shell-batch-checks", "--ref", "unlisted"]);
@@ -259,10 +249,6 @@ esac
 			expect(denied.stderr).toContain("MAC_REFS");
 			expect(run(["shell-batch-checks.yml", "--ref", "allowed"]).status).toBe(0);
 			expect(run(["shell-batch-checks", "--ref", "main"]).status).toBe(0);
-			const blocked = run(["ci", "--ref", "allowed", "-f", "mac=true"], true);
-			expect(blocked.status).toBe(3);
-			expect(blocked.stderr).toContain("707 (shell-batch-checks, shell-owner)");
-			expect(blocked.stdout).not.toContain("dry run:");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

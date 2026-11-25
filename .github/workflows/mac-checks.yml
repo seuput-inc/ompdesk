@@ -1,9 +1,6 @@
 # The macOS checks of a push to main and of a dispatched landing gate (`ci.yml -f mac=true`), one unit with two callers:
-# mac-main.yml (every push to main, a queue of its own: one run going, the newest waiting) and ci.yml's `mac` job (a
-# dispatch the queue gate admitted, in the account-wide `mac-dispatch` lane, one holder and one waiting request; see
-# queue-gate.yml). Four runners at once: mac-smoke (the staged Tauri host), mac-native, native and the memory build. Whether
-# a run may have them is the caller's: nothing here reads `inputs`, which in a called workflow are this workflow's own.
-# `github` is the caller's.
+# mac-main.yml (every push to main) and ci.yml's `mac` job (on dispatch). The callers decide when to run these
+# four jobs; `inputs` in a called workflow are its own, not the caller's.
 name: mac-checks
 
 on:

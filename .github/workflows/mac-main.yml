@@ -1,12 +1,8 @@
 # The macOS checks of every push to main (mac-checks.yml: `mac-smoke`, `mac-native`, `memory`, `native` on macOS arm64), in
-# a queue of their own beside ci.yml's. macOS is the account's scarcest runner (5 at once), and a push's run of these
-# four can wait a long time for one: kept inside ci.yml's `ci-main` group, that wait held every newer push's Linux and
-# Windows verdict back behind it. Here the same rule as ci.yml holds for macOS alone: one run going and the newest push
-# waiting (a newer push replaces the one waiting, a run that started is never cancelled), so main never has more than one
-# run's five runners open. A `release: vX.Y.Z` commit (release.yml runs its checks, macOS included) cancels what runs and
-# waits, so those runners are free for the release.
+# a queue of their own beside ci.yml's. Waiting for a macOS runner must not hold back the Linux and Windows verdict.
+# The newest push waits for a running check; a release commit cancels it because release.yml repeats the checks.
 #
-# Same trigger and path filter as ci.yml. A branch's macOS checks are ci.yml's `mac=true` (the `mac-dispatch` lane).
+# Same trigger and path filter as ci.yml. A branch's macOS checks are ci.yml's `mac=true`.
 name: mac-main
 
 on:
