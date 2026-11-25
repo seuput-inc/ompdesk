@@ -275,7 +275,8 @@ export interface RowTag {
 /**
  * One row: a lead mark, a label that truncates, a muted figure and an optional second line. A row that is not itself a
  * button may end in its own button (`action`: a backlog item's ✕, a follow-up's pin, a pull request's link). `wrap`
- * shows the whole label over as many lines as it needs, for a row a tap opened.
+ * shows the whole label over as many lines as it needs, for a row a tap opened. A row with neither, whose tooltip says
+ * more, opens in place on a tap (Orca's dashboard row): the whole label, then the tooltip's lines under it.
  */
 export function BoardRow({
 	lead,
@@ -304,6 +305,9 @@ export function BoardRow({
 	tag?: RowTag;
 	wrap?: boolean;
 } & ({ onClick?: () => void; action?: never } | { onClick?: never; action?: ReactNode })) {
+	const [open, setOpen] = useState(false);
+	const expands = !onClick && !action && Boolean(title);
+	const whole = wrap || (expands && open);
 	const body = (
 		<>
 			<span className="omp-work-board-lead">{lead}</span>
@@ -315,12 +319,19 @@ export function BoardRow({
 							{tag.word}
 						</span>
 					) : null}
-					<span className={cx("min-w-0 flex-1", wrap ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate")}>
+					<span
+						className={cx("min-w-0 flex-1", whole ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate")}
+					>
 						{label}
 					</span>
 					{meta ? <span className="omp-work-board-meta">{meta}</span> : null}
 				</span>
 				{sub ? <span className="omp-work-board-sub">{sub}</span> : null}
+				{expands && open ? (
+					<span className="omp-work-board-detail" data-board-detail="">
+						{title}
+					</span>
+				) : null}
 			</span>
 		</>
 	);
@@ -331,9 +342,18 @@ export function BoardRow({
 			data-exiting={exiting || undefined}
 			data-flip-key={flipKey}
 		>
-			{onClick ? (
+			{onClick || expands ? (
 				// controls-ok: the omp-work-board-row class draws the whole row
-				<button className="omp-work-board-row" onClick={onClick} title={title} type="button" {...data}>
+				<button
+					aria-expanded={expands ? open : undefined}
+					className="omp-work-board-row"
+					// An opening row keeps the phone's strip panel open for it.
+					data-board-expands={expands ? "" : undefined}
+					onClick={onClick ?? (() => setOpen(!open))}
+					title={expands && open ? undefined : title}
+					type="button"
+					{...data}
+				>
 					{body}
 				</button>
 			) : (
