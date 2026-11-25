@@ -17,6 +17,7 @@ Object.assign(globalThis as Record<string, unknown>, {
 
 const { createRoot } = await import("react-dom/client");
 const { UsageGauges } = await import("./UsageGauges");
+const { accountStanding } = await import("../settings/providers/AccountQuota");
 
 const limits: UsageLimit[] = [
 	{ id: "anthropic:5h", label: "5h", windowId: "5h", usedFraction: 0.64 },
@@ -26,14 +27,14 @@ const limits: UsageLimit[] = [
 let root: Root | undefined;
 let container: HTMLElement;
 
-async function mount(compact: boolean): Promise<void> {
+async function mount(compact: boolean, shown: UsageLimit[] = limits): Promise<void> {
 	container = document.createElement("div") as unknown as HTMLElement;
 	document.body.appendChild(container as never);
 	root = createRoot(container as unknown as Element);
 	await act(async () => {
 		root?.render(
 			<I18nProvider>
-				<UsageGauges compact={compact} limits={limits} />
+				<UsageGauges compact={compact} limits={shown} />
 			</I18nProvider>,
 		);
 	});
@@ -71,5 +72,19 @@ describe("usage gauges", () => {
 		await mount(false);
 		expect(container.querySelector('[role="progressbar"]')?.getAttribute("aria-label")).toBe("5-hour limit 64%");
 		expect(container.querySelector("[data-usage-label]")?.textContent).toBe("5H");
+	});
+
+	it("reads a window whose reset time has passed as given back, not as still spent", async () => {
+		const spent: UsageLimit[] = [
+			{ id: "anthropic:5h", label: "5h", windowId: "5h", usedFraction: 1, resetsAt: Date.now() - 60_000 },
+			{ id: "anthropic:7d", label: "7d", windowId: "7d", usedFraction: 0.5, resetsAt: Date.now() + 86_400_000 },
+		];
+		await mount(false, spent);
+		const percents = [...container.querySelectorAll("[data-usage-percent]")].map(node => node.textContent);
+		expect(percents).toEqual(["0%", "50%"]);
+		expect(container.querySelector(".omp-usage-gauge")?.getAttribute("data-state")).toBe("ok");
+		expect(accountStanding({ limits: spent })).toBe("ok");
+		const ahead = spent.map((limit, index) => (index === 0 ? { ...limit, resetsAt: Date.now() + 60_000 } : limit));
+		expect(accountStanding({ limits: ahead })).toBe("limited");
 	});
 });
