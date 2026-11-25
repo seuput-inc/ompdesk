@@ -403,7 +403,14 @@ describe("controls close enough to take each other's taps", () => {
 });
 
 describe("the phone composer", () => {
-	it("draws +, Send and Stop at 28 px and reaches 44 (18 px of hit gap each way: the reach starts inside the 1 px border)", () => {
+	it("draws + and the mic 44 px and Send/Stop a 40 px disc, Orca's touch composer, in a row that holds them", () => {
+		expect(rule('html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic)')).toMatch(
+			/width:\s*44px;\s*height:\s*44px/,
+		);
+		expect(rule('html[data-shell="phone"] .omp-composer-action')).toMatch(/width:\s*40px;\s*height:\s*40px/);
+		expect(rule('html[data-shell="phone"] .omp-composer-toolbar')).toMatch(/min-height:\s*44px/);
+		expect(read("../components/layout/composer/ComposerToolbar.tsx")).toContain('className="omp-composer-add"');
+		// The chips between them still reach 44 within half their gaps.
 		const gap = rule('html[data-shell="phone"] :is(.omp-composer-toolbar, .omp-composer-send-cluster)');
 		expect(gap).toMatch(/--hit-gap-x:\s*18px/);
 		expect(gap).toMatch(/--hit-gap-y:\s*18px/);

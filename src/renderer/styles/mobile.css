@@ -1149,8 +1149,31 @@ html[data-shell="phone"] .omp-composer-region.pb-3 {
 }
 
 html[data-shell="phone"] .omp-composer-toolbar {
-	min-height: 32px;
+	min-height: 44px;
 	padding: 0 var(--sc-space-1-5) var(--sc-space-0-5) var(--sc-space-1);
+}
+
+/* Orca's touch composer (the owner's decision, 25 Nov 2026, which lifts "never draw a control 44 px" for these): on a
+   phone + and the mic are drawn 44 px and Send/Stop is a 40 px disc, as Orca's coarse-pointer composer draws them
+   (attach and dictation `size-11`, the round send `size-10`). The chips between them keep the phone's 28 px. */
+html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic) {
+	width: 44px;
+	height: 44px;
+}
+
+html[data-shell="phone"] .omp-composer-action {
+	width: 40px;
+	height: 40px;
+}
+
+html[data-shell="phone"] :is(.omp-composer-add, .omp-composer-mic, .omp-composer-action) > svg:not(.omp-composer-stop-glyph) {
+	width: var(--sc-icon-lg);
+	height: var(--sc-icon-lg);
+}
+
+html[data-shell="phone"] .omp-composer-action > .omp-composer-stop-glyph {
+	width: 14px;
+	height: 14px;
 }
 
 /* The phone composer is always open: the field spans the box's full inner width on its own row, and the controls sit
