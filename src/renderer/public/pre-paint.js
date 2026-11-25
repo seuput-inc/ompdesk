@@ -22,7 +22,7 @@
 					? "dark"
 					: "light";
 		}
-		var background = scheme === "dark" ? "#19191c" : "#ffffff";
+		var background = scheme === "dark" ? "#0a0a0a" : "#ffffff";
 		try {
 			var paint = JSON.parse(localStorage.getItem("omp.themePaint") || "{}");
 			if (paint && typeof paint[scheme] === "string" && /^#[0-9a-f]{6}$/i.test(paint[scheme])) {
@@ -54,7 +54,7 @@
 		/* the sidebar shows */
 	}
 	try {
-		if (navigator.userAgent.indexOf("Electron/") >= 0) {
+		if (navigator.userAgent.indexOf("Electron/") >= 0 || window.__TAURI_INTERNALS__) {
 			var platform = navigator.platform.toLowerCase();
 			document.documentElement.dataset.platform =
 				platform.indexOf("mac") === 0 ? "darwin" : platform.indexOf("win") === 0 ? "win32" : "other";

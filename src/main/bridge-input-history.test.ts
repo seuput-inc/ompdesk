@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
 import { StockHelper } from "./stock-helper";
 import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
@@ -97,30 +97,38 @@ describe.skipIf(!existsSync(omp) || !existsSync(stockRoot))("stock history and c
 			await client.connect();
 			// Every area loads and every REQUIREMENTS entry resolves on the installed omp.
 			expect(await client.request("capabilities")).toMatchObject({ unavailable: [] });
-			// Idle compaction attaches to the live session; an empty fresh session never arms it.
-			expect(await client.request("idle_compaction_draft", { empty: true })).toEqual({ armed: false });
-			await expect(client.request("idle_compaction_draft", {})).rejects.toThrow("needs {empty: boolean}");
-			// The idle recap attaches the same way and never arms on a fresh session.
-			expect(await client.request("recap_draft", { empty: true })).toEqual({ armed: false });
-			await expect(client.request("recap_draft", {})).rejects.toThrow("needs {empty: boolean}");
+			// Idle maintenance opts the live session into stock's scheduler on the first draft report.
+			expect(await client.request("idle_maintenance_draft", { empty: true })).toEqual({ empty: true });
+			await expect(client.request("idle_maintenance_draft", {})).rejects.toThrow("needs {empty: boolean}");
 			// No goal yet: no OMPdesk time limit, and setting one is refused.
 			expect(await client.request("modes.goal_time_limit")).toEqual({ timeLimitSeconds: null });
 			await expect(client.request("modes.goal_set_time_limit", { minutes: 5 })).rejects.toThrow("No active goal");
-			// Context inspector: per-tool counts add up to stock's own tool-schema total, entries open.
-			const inspected = await client.request<{
+			// Context inspector: per-tool counts add up to stock's own tool-schema total, entries open. The two answers
+			// come from two requests, and omp's tool roster can still change between them (a CI run with the installed
+			// 18.20.0 counted 23 tokens more in the second), so they are asked again until they describe the same roster.
+			type Inspected = {
 				categories: Record<string, number>;
 				entries: Array<{ id: string; category: string; label: string; tokens: number }>;
-			}>("context.inspect", {});
-			const report = await client.request<{
+			};
+			type Report = {
 				breakdown: {
 					systemToolsTokens: number;
 					systemPromptTokens: number;
 					instructionFilesTokens: number;
 					skillsTokens: number;
 				};
-			}>("composer.context_report");
-			const { builtinTools, mcpTools, extensionTools } = inspected.categories;
-			expect(builtinTools + mcpTools + extensionTools).toBe(report.breakdown.systemToolsTokens);
+			};
+			let inspected!: Inspected;
+			let report!: Report;
+			await vi.waitFor(
+				async () => {
+					inspected = await client.request<Inspected>("context.inspect", {});
+					report = await client.request<Report>("composer.context_report");
+					const { builtinTools, mcpTools, extensionTools } = inspected.categories;
+					expect(builtinTools + mcpTools + extensionTools).toBe(report.breakdown.systemToolsTokens);
+				},
+				{ timeout: 15_000, interval: 100 },
+			);
 			expect(inspected.entries.find(entry => entry.id === "tool:read")).toMatchObject({ category: "builtinTools" });
 			// Stock's prompt sources: the context file and the skill are rows of their own that add up to stock's
 			// totals, and the system prompt block no longer counts the skill list.

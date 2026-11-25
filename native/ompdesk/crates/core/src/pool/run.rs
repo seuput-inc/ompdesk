@@ -8,6 +8,8 @@
 
 use serde_json::{Map, Value, json};
 
+use super::HostCloseTurn;
+
 /// The open retry saga's latest attempt (`IpcRetrySaga`): the four fields the event carried, and when it began.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Saga {
@@ -215,16 +217,33 @@ fn millis(value: Option<&Value>) -> Option<i64> {
     value.and_then(Value::as_f64).map(|ms| ms as i64)
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+enum ObservedTurn {
+    #[default]
+    Initial,
+    /// The previous omp is gone. Do not reuse its zero fence before the new host reports one.
+    HostRestarted,
+    FreshHost(HostCloseTurn),
+    Unfinished,
+    Finished {
+        id: u64,
+        outcome: Value,
+        host: Option<HostCloseTurn>,
+    },
+}
+
 /// A tab's run state plus what the resume rules read from it (`RunTracking`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Tracking {
     pub run: RunState,
-    /// How the last finished run ended; cleared when the next run starts.
-    pub last_run: Option<Value>,
+    observed: ObservedTurn,
     /// The user pressed Stop since the run began. Cleared by the next agent_start.
     pub stopped: bool,
     /// Stock's auto-retry waiting for its next attempt: `errorMessage`, and the serial of its `auto_retry_start`.
     pub retry: Option<Retry>,
+    /// The session's goal is active (stock's last `goal_updated`): between its turns a relaunch must resume it, since
+    /// stock pauses an active goal when the session loads.
+    pub goal_active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,13 +254,110 @@ pub(crate) struct Retry {
 }
 
 impl Tracking {
+    pub(super) fn close_observation(&self) -> Option<(u64, Option<&HostCloseTurn>)> {
+        match &self.observed {
+            ObservedTurn::Initial => Some((0, None)),
+            ObservedTurn::FreshHost(host) => Some((0, Some(host))),
+            ObservedTurn::Finished { id, host, .. } => Some((*id, host.as_ref())),
+            ObservedTurn::Unfinished | ObservedTurn::HostRestarted => None,
+        }
+    }
+
+    pub(super) fn host_status(&mut self, payload: &Value, new_omp: bool) {
+        if new_omp && (payload["status"] == "restarting" || self.observed != ObservedTurn::Initial)
+        {
+            self.observed = ObservedTurn::HostRestarted;
+            self.stopped = false;
+            self.retry = None;
+        }
+        if matches!(
+            self.observed,
+            ObservedTurn::Initial | ObservedTurn::HostRestarted | ObservedTurn::FreshHost(_)
+        ) && let Some(host) = HostCloseTurn::from_payload(payload).filter(|host| host.turn == 0)
+        {
+            self.observed = ObservedTurn::FreshHost(host);
+        }
+    }
+
+    fn finish(&mut self, outcome: Value, host: Option<HostCloseTurn>, serial: &mut u64) {
+        *serial += 1;
+        self.observed = ObservedTurn::Finished {
+            id: *serial,
+            outcome,
+            host,
+        };
+    }
+
+    /// Repeated readings keep the local outcome's identity. A missed turn gets its own even for the same words.
+    pub(super) fn read_host_outcome(&mut self, reading: &Value, serial: &mut u64) -> bool {
+        let host = HostCloseTurn::from_payload(reading);
+        let last = reading.get("lastRun");
+        let observed = self.close_observation().and_then(|(_, host)| host);
+        match (host, last) {
+            (Some(host), None) if host.turn == 0 && !self.run.running => {
+                if observed == Some(&host) {
+                    return false;
+                }
+                self.observed = ObservedTurn::FreshHost(host);
+            }
+            (Some(host), Some(outcome))
+                if host.turn != 0 && !self.run.turn && outcome["stopReason"].is_string() =>
+            {
+                if observed == Some(&host) && self.last_outcome() == last {
+                    return false;
+                }
+                self.finish(outcome.clone(), Some(host), serial);
+            }
+            _ if self.run.turn || observed.is_some() || reading.get("hostTurn").is_some() => {
+                if self.observed == ObservedTurn::Unfinished {
+                    return false;
+                }
+                self.observed = ObservedTurn::Unfinished;
+            }
+            _ => return false,
+        }
+        self.stopped = false;
+        if self.run.saga.is_none() {
+            self.retry = None;
+        }
+        true
+    }
+
+    pub(super) fn last_outcome(&self) -> Option<&Value> {
+        match &self.observed {
+            ObservedTurn::Finished { outcome, .. } => Some(outcome),
+            _ => None,
+        }
+    }
+
+    pub(super) fn numbered_outcome(&self) -> Option<Value> {
+        let ObservedTurn::Finished { id, outcome, .. } = &self.observed else {
+            return None;
+        };
+        let mut outcome = outcome.clone();
+        outcome["id"] = Value::from(*id);
+        Some(outcome)
+    }
+
     /// `trackRunEvent`: `RunState::apply` plus the run's outcome, Stop and pending auto-retry; true when it ended the
-    /// run's last attempt. `serial` numbers the next retry.
-    pub(crate) fn track(&mut self, event: &Value, now: i64, serial: &mut u64) -> bool {
+    /// run's last attempt. `serial` numbers local retries and outcomes, never a host's turns.
+    pub(crate) fn track(
+        &mut self,
+        event: &Value,
+        now: i64,
+        serial: &mut u64,
+        remote: bool,
+    ) -> bool {
+        let host = || {
+            remote
+                .then(|| HostCloseTurn::from_payload(event))
+                .flatten()
+                .filter(|host| host.turn != 0)
+        };
         let ended = self.run.apply(event, now);
         match event["type"].as_str() {
             Some("agent_start") => {
-                self.last_run = None;
+                self.observed = ObservedTurn::Unfinished;
                 self.stopped = false;
                 self.retry = None;
             }
@@ -255,7 +371,11 @@ impl Tracking {
             Some("agent_end")
                 if ended && event.get("isTerminal").and_then(Value::as_bool) != Some(false) =>
             {
-                self.last_run = Some(run_outcome(event.get("messages")));
+                self.finish(run_outcome(event.get("messages")), host(), serial);
+            }
+            Some("agent_end") if remote && ended => self.observed = ObservedTurn::Unfinished,
+            Some("goal_updated") => {
+                self.goal_active = event["goal"]["status"].as_str() == Some("active");
             }
             Some("auto_retry_end") => {
                 self.retry = None;
@@ -265,7 +385,7 @@ impl Tracking {
                     if let Some(error) = event.get("finalError") {
                         outcome.insert("errorMessage".into(), error.clone());
                     }
-                    self.last_run = Some(Value::Object(outcome));
+                    self.finish(Value::Object(outcome), host(), serial);
                 }
             }
             _ => {}
@@ -345,7 +465,7 @@ mod tests {
                 let mut got = Map::new();
                 match step["op"].as_str().expect("op") {
                     "event" => {
-                        let ended = tracking.track(&step["event"], now, &mut serial);
+                        let ended = tracking.track(&step["event"], now, &mut serial, false);
                         got.insert("ended".into(), Value::from(ended));
                     }
                     "settle" => tracking
@@ -367,7 +487,7 @@ mod tests {
                 got.insert("run".into(), tracking.run.to_value());
                 got.insert(
                     "lastRun".into(),
-                    tracking.last_run.clone().unwrap_or(Value::Null),
+                    tracking.last_outcome().cloned().unwrap_or(Value::Null),
                 );
                 got.insert("stopped".into(), Value::from(tracking.stopped));
                 got.insert(
@@ -413,9 +533,36 @@ mod tests {
         let mut serial = 0;
         let mut tracking = Tracking::default();
         let start = json!({"type": "auto_retry_start", "errorMessage": "x"});
-        tracking.track(&start, 1, &mut serial);
+        tracking.track(&start, 1, &mut serial, false);
         let first = tracking.retry.as_ref().map(|retry| retry.serial);
-        tracking.track(&start, 2, &mut serial);
+        tracking.track(&start, 2, &mut serial, false);
         assert_ne!(first, tracking.retry.as_ref().map(|retry| retry.serial));
+    }
+
+    #[test]
+    fn an_outcome_keeps_its_serial_until_the_next_run_ends() {
+        let mut serial = 0;
+        let mut tracking = Tracking::default();
+        let failed = json!({
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "x"}]
+        });
+        tracking.track(&json!({"type": "agent_start"}), 1, &mut serial, false);
+        assert!(tracking.track(&failed, 2, &mut serial, false));
+        let first = tracking.close_observation().unwrap().0;
+        assert_ne!(first, 0);
+        // Events that are not the run's end leave the outcome and its serial as they are.
+        tracking.track(
+            &json!({"type": "auto_compaction_end"}),
+            3,
+            &mut serial,
+            false,
+        );
+        assert_eq!(tracking.close_observation(), Some((first, None)));
+        // The same words after a new run are another outcome.
+        tracking.track(&json!({"type": "agent_start"}), 4, &mut serial, false);
+        assert!(tracking.last_outcome().is_none());
+        assert!(tracking.track(&failed, 5, &mut serial, false));
+        assert_ne!(tracking.close_observation().unwrap().0, first);
     }
 }

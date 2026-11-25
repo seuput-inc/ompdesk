@@ -22,9 +22,14 @@ impl Ctx {
             return Ok(());
         };
         self.with(|pool| Ctx::add_stop_wait(pool, token, &tab, seq));
-        // The timer is main's, so its (fake) clock is the clock here too; main says how long (`STOP_SESSION_WAIT_MS`).
+        // The core's clock: the wait ends `STOP_SESSION_WAIT_MS` (main's one definition, in `opts`) from now, whatever
+        // main's thread is doing; a wait the run's end settled first makes `stop_timeout` a no-op.
         let wait = self.with(|pool| pool.stop_wait_ms);
-        self.push(&json!({"k": "stopTimer", "token": token, "ms": wait}));
+        let ctx = self.clone();
+        super::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            ctx.stop_timeout(token);
+        });
         self.note_stopped(&tab).await?;
         self.push(&json!({"k": "turnStop", "tab": tab, "command": "abort_and_restore_queue", "by": "session-delete"}));
         // Its queued messages go too: they would start the next turn on a session about to be deleted.
@@ -44,8 +49,8 @@ impl Ctx {
         Ok(())
     }
 
-    /// The timer main ran for `stop_session` ended before the run did.
-    pub(super) fn stop_timeout(&self, token: u64) {
+    /// The wait `stop_session` armed ended before the run did.
+    fn stop_timeout(&self, token: u64) {
         let waiting = self.with(|pool| {
             let before = pool.stop_waits.len();
             pool.stop_waits.retain(|wait| wait.token != token);
@@ -81,7 +86,7 @@ impl Ctx {
                 self.settle_ok(token, Value::from(false));
                 return Ok(());
             }
-            self.release_entry(&tab).await?;
+            self.release(&tab).await?;
             self.notify_window_tabs_changed(win).await?;
             self.send_tab_list(win, Some(std::slice::from_ref(&tab)), None)
                 .await?;
@@ -102,6 +107,7 @@ impl Ctx {
     /// sidecar took it. False when the id is unknown. A shared tab's ask takes the first answer: `responder`'s closes
     /// the other windows' cards, and an answer from another window after it is refused (`already_answered`), even
     /// while the first is still on its way.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn route_side_channel(
         &self,
         token: u64,
@@ -110,7 +116,13 @@ impl Ctx {
         tab: Option<&str>,
         responder: Option<i64>,
         choice: &str,
+        claim: Option<u64>,
     ) -> R<()> {
+        // An agent's answer holds this question while its attachments go in: only the holder's answer passes.
+        if let Err(held) = self.guard_ask(id, claim) {
+            self.settle_err(token, Some(&held.code), &held.message);
+            return Ok(());
+        }
         enum Begin {
             Unknown,
             Refused,
@@ -173,6 +185,16 @@ impl Ctx {
         let ctx = self.clone();
         let (id, frame, choice) = (id.to_string(), frame.clone(), choice.to_string());
         super::spawn(async move {
+            // The holder's answer ends its claim whether or not it was delivered (the question reopens to anyone).
+            struct EndClaim(Ctx, String, Option<u64>);
+            impl Drop for EndClaim {
+                fn drop(&mut self) {
+                    if let Some(claim) = self.2 {
+                        self.0.release_request(&self.1, claim);
+                    }
+                }
+            }
+            let _ends = EndClaim(ctx.clone(), id.clone(), claim);
             let delivered = ctx
                 .out
                 .ask_later("sideChannelLater", &json!({"tab": tab, "frame": frame}))
@@ -185,6 +207,8 @@ impl Ctx {
                 pool.answering.remove(&id);
             });
             if let Err(error) = delivered {
+                // A page that joined or reloaded during delivery did not see this question.
+                ctx.replay_failed_question(seq, &id);
                 ctx.settle_err(token, Some(&error.code), &error.message);
                 return;
             }
@@ -379,8 +403,7 @@ impl Ctx {
                 facts.insert("status".into(), Value::from(entry.status.clone()));
                 if let Some(reason) = entry
                     .tracking
-                    .last_run
-                    .as_ref()
+                    .last_outcome()
                     .and_then(|last| last.get("stopReason"))
                 {
                     facts.insert("lastRun".into(), reason.clone());

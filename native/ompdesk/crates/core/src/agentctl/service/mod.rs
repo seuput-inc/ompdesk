@@ -17,6 +17,7 @@
 //! call scope is the task-local `CALL_KEY`, and a `Promise.all` is `util::join::all` on the calling task (never
 //! `tokio::spawn`, which would drop the scope).
 
+pub mod attach;
 pub mod fail;
 pub mod host;
 pub mod js;
@@ -54,7 +55,10 @@ use self::types::{
     Target, Tool, ToolOutcome,
 };
 use self::util::{Flight, OrderedMap};
+use crate::agentctl::journal::attachments::AttachmentStore;
+use crate::agentctl::journal::bots::Bots;
 use crate::agentctl::journal::call_journal::{CallBegin, CallJournal, CallRecord, CallResult};
+use crate::agentctl::journal::items::Items;
 use crate::agentctl::journal::mail_outbox::MailOutbox;
 use crate::agentctl::journal::pending_cleanups::PendingCleanups;
 use crate::agentctl::journal::send_outbox::SendOutbox;
@@ -86,14 +90,6 @@ pub struct Nudge {
     pub told_opener: bool,
 }
 
-/// The newest dispatch queued as a follow-up behind a busy child's turn, until its transcript shows it.
-#[derive(Clone, Debug)]
-pub struct QueuedFollowUp {
-    pub n: u64,
-    pub id: String,
-    pub from: String,
-}
-
 /// A session's last read cost and split, which stand while its omp cannot answer.
 #[derive(Clone, Debug)]
 pub struct Spend {
@@ -110,6 +106,8 @@ pub type Shared<T> = Flight<Result<T, Fail>>;
 pub struct Mem {
     /// Tabs each calling tab opened, for the "opened by you" marks (`#opened`).
     pub opened: HashMap<String, Vec<String>>,
+    /// Views a calling tab's current call joined to reach a session held elsewhere, closed when it ends.
+    pub joined: HashMap<String, Vec<String>>,
     /// Tabs whose stop or close is in flight (`#closing`).
     pub closing: HashSet<String>,
     /// Children whose review item the person settled (`#reviewed`).
@@ -145,16 +143,10 @@ pub struct Mem {
     pub calling: HashMap<String, Flight<ToolOutcome>>,
     /// Sessions (`device\npath`) whose saved name `name_untitled` already looked up (`#namesSought`).
     pub names_sought: HashSet<String>,
-    /// The turn in which each session (`sender\nreceiver`) last reported done, review, a question or a blocker
-    /// (`#reportedAt`): its `busySince` as main saw it at the report. The TypeScript kept the report's time and
-    /// compared it with `busySince`; the core's clock and main's are two processes' (on Windows a tick apart), so
-    /// "the same turn" is told by main's own stamp instead.
-    pub reported_in: HashMap<String, Option<f64>>,
-    /// The turn in which each session (`sender\nreceiver`) sent its last mail, the same way: a turn with another
-    /// `busySince` is one it carried on with.
+    /// The turn in which each session (`sender\nreceiver`) sent its last mail: its `busySince` as main saw it then
+    /// (the core's clock and main's are two processes', on Windows a tick apart, so "the same turn" is told by
+    /// main's own stamp). A turn with another `busySince` is one it carried on with.
     pub mailed_in: HashMap<String, Option<f64>>,
-    /// The newest dispatch queued as a follow-up behind each busy child's turn (`#queuedFollowUp`).
-    pub queued_follow_up: HashMap<String, QueuedFollowUp>,
     /// Sends with a request id still on their way (`#inflight`).
     pub inflight: HashMap<String, Shared<String>>,
     /// The question cards of each child its opener was already told of (`#cardsTold`).
@@ -163,6 +155,20 @@ pub struct Mem {
     pub last_spend: HashMap<String, Spend>,
     /// Closed children's last turns (`familyEdits`), by device, session file and close (`#closedTurns`).
     pub closed_turns: HashMap<String, Shared<Value>>,
+    /// What each opened child's opener was told beyond the child's own reports (`rules::child_watch`).
+    pub watched: HashMap<String, crate::agentctl::rules::child_watch::ChildWatch>,
+    /// Tabs a control tool is closing right now (`close_tab`): their release is no close by the person.
+    pub tool_closing: HashSet<String>,
+    /// The bot context last handed to each bot chat's omp (JSON), so it goes again only when it changed.
+    pub bot_sent: HashMap<String, String>,
+    /// Bot chats whose bridge has no `agent_control.bot` (an older omp or bridge): logged once each.
+    pub bot_unsupported: HashSet<String>,
+    /// A bot pass runs; another asked meanwhile runs once more when it ends.
+    pub bot_ticking: bool,
+    pub bot_tick_again: bool,
+    /// A mail outbox pass runs (the timer's, a resumed bot's); another asked meanwhile runs once more after it.
+    pub redelivering: bool,
+    pub redeliver_again: bool,
 }
 
 /// A session inside a blocking wait main owns; counted until this drops, however the wait ends.
@@ -191,6 +197,11 @@ pub struct Inner {
     fates: Mutex<SessionFates>,
     cleanups: Mutex<PendingCleanups>,
     calls: Option<Mutex<CallJournal>>,
+    /// The bots (`bots.json`) and their items (`items.json`); take `bots` before `items` when both are held.
+    bots: Mutex<Bots>,
+    items: Mutex<Items>,
+    /// Where a new bot's folder goes (`~/.omp/bots`); None: a bot needs its folder named.
+    pub(crate) bots_root: Option<PathBuf>,
     /// The send outbox, or None where main keeps none (a queued message then lives only in its omp).
     pub send_outbox: Option<SendOutbox>,
     /// Reports between sessions: dispatch ids, coalescing, the last report of each child (`#mailbox`).
@@ -237,6 +248,16 @@ impl Inner {
         self.calls.as_ref().map(lock)
     }
 
+    /// The bots.
+    pub fn bots(&self) -> MutexGuard<'_, Bots> {
+        lock(&self.bots)
+    }
+
+    /// The items.
+    pub fn items(&self) -> MutexGuard<'_, Items> {
+        lock(&self.items)
+    }
+
     /// `Date.now()`.
     pub fn now(&self) -> f64 {
         (self.clock)()
@@ -261,6 +282,13 @@ pub struct Files {
     pub send_outbox: Option<JournalFile>,
     /// Where accepted reports wait for their receiver's journal (`mail-outbox.json`); absent: none are kept.
     pub mail_outbox: Option<JournalFile>,
+    /// Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only.
+    pub attachments: Option<PathBuf>,
+    /// The bots (`bots.json`) and their items (`items.json`); absent: in memory only.
+    pub bots: Option<PathBuf>,
+    pub items: Option<PathBuf>,
+    /// Where a new bot's folder goes (`~/.omp/bots`).
+    pub bots_root: Option<PathBuf>,
 }
 
 impl AgentControl {
@@ -272,7 +300,12 @@ impl AgentControl {
         tuning: Tuning,
         clock: Clock,
     ) -> AgentControl {
-        let mut host = Host::new(port, caps);
+        let mut host = Host::new(port, caps)
+            .with_clock(clock.clone())
+            .with_attachments(Arc::new(AttachmentStore::with_clock(
+                files.attachments.clone(),
+                clock.clone(),
+            )));
         if let Some(outbox) = &files.mail_outbox {
             host = host.with_outbox(
                 Arc::new(MailOutbox::with_clock(outbox.file.clone(), clock.clone())),
@@ -283,11 +316,12 @@ impl AgentControl {
         let deliver: Deliver = Arc::new(move |mail: Mail| {
             let host = deliver_host.clone();
             Box::pin(async move {
-                host.mail(
+                host.mail_attached(
                     &mail.to,
                     &mail_text(&mail),
                     &mail_details(&mail),
                     delivery_for(mail.kind),
+                    mail.attachments.as_ref(),
                 )
                 .await
                 .map_err(|error| error.message())?;
@@ -297,7 +331,7 @@ impl AgentControl {
         });
         let mailbox =
             Mailbox::with_coalesce(deliver, Duration::from_millis(tuning.mail_coalesce_ms));
-        AgentControl(Arc::new(Inner {
+        let control = AgentControl(Arc::new(Inner {
             host,
             tuning,
             fates: Mutex::new(SessionFates::with_clock(files.fates.clone(), clock.clone())),
@@ -310,11 +344,16 @@ impl AgentControl {
                 .as_ref()
                 .map(|outbox| SendOutbox::with_clock(outbox.file.clone(), clock.clone())),
             mailbox,
+            bots: Mutex::new(Bots::new(files.bots.clone())),
+            items: Mutex::new(Items::new(files.items.clone())),
+            bots_root: files.bots_root.clone(),
             clock,
             mem: Mutex::new(Mem::default()),
             arrived: tokio::sync::Notify::new(),
             app: std::sync::OnceLock::new(),
-        }))
+        }));
+        control.hold_paused();
+        control
     }
 
     /// A message reached `tab_id`: a blocking wait of its own ends (`#arrived`).
@@ -368,8 +407,13 @@ impl AgentControl {
     }
 
     /// `released`: a tab closed. `session`: the saved session it held, when nobody closed it through the control tools
-    /// (those record who did): its ids keep naming that session (`fates`).
-    pub fn released(&self, tab_id: &str, session: Option<&ReleasedSession>) {
+    /// (those record who did): its ids keep naming that session (`fates`). Returns the note to its opener, when the
+    /// person or its window closed an agent's child, so a caller that wants it told can wait for it.
+    pub fn released(
+        &self,
+        tab_id: &str,
+        session: Option<&ReleasedSession>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let closing = self.mem().closing.contains(tab_id);
         if let Some(session) = session
             && !closing
@@ -397,6 +441,16 @@ impl AgentControl {
                 fate_by::PERSON,
             );
         }
+        // A child closed by the person or its window (no tool closed it, no quit, which names no session) tells the
+        // session that opened it, which would otherwise wait for a report that never comes (after Orca's gone report,
+        // `workers/lifecycle/worker-exit-observation.ts`, MIT).
+        let by_tool = closing || self.mem().tool_closing.contains(tab_id);
+        let told = match session {
+            Some(session) if !by_tool && session.tell_opener && !session.hidden => {
+                self.tell_closed(tab_id, session)
+            }
+            _ => None,
+        };
         self.app_released(tab_id);
         {
             let mut mem = self.mem();
@@ -408,18 +462,17 @@ impl AgentControl {
             mem.conflicts.remove(tab_id);
             mem.cards_told.remove(tab_id);
             mem.last_spend.remove(tab_id);
-            mem.queued_follow_up.remove(tab_id);
-            mem.reported_in
-                .retain(|key, _| !key.split('\n').any(|part| part == tab_id));
+            mem.watched.remove(tab_id);
             mem.mailed_in
                 .retain(|key, _| !key.split('\n').any(|part| part == tab_id));
         }
         self.mailbox.forget(tab_id);
+        told
     }
 
     /// `openTarget`: the open session `session` names for `caller_tab_id`, by the tools' own name rules, refused when
     /// hidden from agents (the control socket's waits).
-    pub async fn open_target(&self, caller_tab_id: &str, session: &str) -> R<ControlTab> {
+    pub async fn open_target(&self, caller_tab_id: &str, session: &str) -> R<crate::control::View> {
         let state = self.host.state();
         if !state.enabled {
             return fail(TURNED_OFF);
@@ -440,7 +493,7 @@ impl AgentControl {
             )
             .await?;
         self.refuse_hidden(&target, &caller)?;
-        Ok(target)
+        Ok(target.into())
     }
 
     /// `run`: one control-tool call. `call` is the host tool call: its id (stock's, the same when a paired host
@@ -577,12 +630,29 @@ impl AgentControl {
         tool: Tool,
         args: Value,
     ) -> ToolOutcome {
-        match self.dispatch(caller_tab_id, tabs, tool, args).await {
+        let outcome = match self.dispatch(caller_tab_id, tabs, tool, args).await {
             Ok(text) => ToolOutcome {
                 text,
                 is_error: false,
             },
             Err(error) => outcome_of(tool.name(), &error),
+        };
+        self.let_go_joined(caller_tab_id).await;
+        outcome
+    }
+
+    /// The views this call joined only to reach a session held elsewhere (`join_stored`) close as it ends: the
+    /// session's own tab keeps its omp, and a view nobody asked to see would otherwise stay in the caller's window.
+    async fn let_go_joined(&self, caller_tab_id: &str) {
+        let joined = self.mem().joined.remove(caller_tab_id).unwrap_or_default();
+        for tab_id in joined {
+            let how = sessions::CloseHow {
+                auto: true,
+                expected_turn: None,
+                wait_ms: self.tuning.close_wait_ms,
+                cleared: true,
+            };
+            let _ = self.close_tab(caller_tab_id, &tab_id, how).await;
         }
     }
 
@@ -807,8 +877,7 @@ impl AgentControl {
         }
     }
 
-    /// `#dispatch`: validates the arguments (in TypeScript: `looseArgs` and the tool's zod schema) and routes the
-    /// tool to its family function.
+    /// Validate before resolving the caller, then move the parsed arguments to their tool body.
     async fn dispatch(
         &self,
         caller_tab_id: &str,
@@ -816,15 +885,11 @@ impl AgentControl {
         tool: Tool,
         given: Value,
     ) -> R<String> {
-        let parsed = match self.host.parse_args(tool.name(), &given, true).await? {
-            Ok(parsed) => parsed,
-            Err(message) => return fail(message),
-        };
+        let parsed = self.host.parse_args(tool, &given, true).await?;
         let state = self.host.state();
         let Some(caller) = self.caller_of(&state, caller_tab_id, tabs) else {
             return fail(TAB_GONE);
         };
-        let args = |_: Tool| -> R<Value> { Ok(parsed.clone()) };
         fn typed<T: serde::de::DeserializeOwned>(value: Value, tool: Tool) -> R<T> {
             serde_json::from_value(value).map_err(|error| {
                 Fail::other(format!(
@@ -834,18 +899,24 @@ impl AgentControl {
             })
         }
         match tool {
-            Tool::List => self.list(&caller, tabs, typed(args(tool)?, tool)?).await,
-            Tool::Open => {
-                self.open_tool(&caller, tabs, typed(args(tool)?, tool)?)
-                    .await
-            }
+            Tool::List => self.list(&caller, tabs, typed(parsed, tool)?).await,
+            Tool::Open => self.open_tool(&caller, tabs, typed(parsed, tool)?).await,
             Tool::Send => {
-                let args: types::SendArgs = typed(args(tool)?, tool)?;
-                let target = self.send_target(&caller, tabs, &args.session).await?;
-                self.send(&caller, &target, &args).await
+                let args: types::SendArgs = typed(parsed, tool)?;
+                match &args.sessions {
+                    Some(names) => self.send_group(&caller, tabs, names, &args).await,
+                    None => {
+                        // `bot:<name>[@<device>]`: the bot's home chat, by its name.
+                        let target = match args.session.strip_prefix("bot:") {
+                            Some(name) => self.bot_target(&caller, tabs, name).await?,
+                            None => self.send_target(&caller, tabs, &args.session).await?,
+                        };
+                        self.send(&caller, &target, &args).await
+                    }
+                }
             }
             Tool::Result => {
-                let args: types::ResultArgs = typed(args(tool)?, tool)?;
+                let args: types::ResultArgs = typed(parsed, tool)?;
                 let several = args.sessions.is_some();
                 let ids: Vec<String> = match (&args.sessions, &args.session) {
                     (Some(sessions), _) => sessions.clone(),
@@ -866,7 +937,7 @@ impl AgentControl {
                 self.result(&caller, targets, args, several).await
             }
             Tool::Read => {
-                let args: types::ReadArgs = typed(args(tool)?, tool)?;
+                let args: types::ReadArgs = typed(parsed, tool)?;
                 match self
                     .resolve_any(tabs, &args.session, &caller, "read", None)
                     .await?
@@ -876,7 +947,7 @@ impl AgentControl {
                 }
             }
             Tool::Answer => {
-                let args: types::AnswerArgs = typed(args(tool)?, tool)?;
+                let args: types::AnswerArgs = typed(parsed, tool)?;
                 let target = self
                     .open(
                         tabs,
@@ -889,7 +960,7 @@ impl AgentControl {
                 self.answer(&caller, &target, &args).await
             }
             Tool::Focus => {
-                let args: types::FocusArgs = typed(args(tool)?, tool)?;
+                let args: types::FocusArgs = typed(parsed, tool)?;
                 let options = resolve::OpenOptions {
                     allow_self: true,
                     reach: false,
@@ -899,11 +970,11 @@ impl AgentControl {
                     .await?;
                 self.refuse_hidden(&target, &caller)?;
                 let how = args.how.as_deref().unwrap_or("focus");
-                self.host.view(&caller.tab_id, &target.tab_id, how, false);
+                self.host.view(&caller.tab_id, &target.tab_id, how);
                 Ok(format!("Showing {} ({how}).", text::label(&target)))
             }
             Tool::Notify => {
-                let args: types::NotifyArgs = typed(args(tool)?, tool)?;
+                let args: types::NotifyArgs = typed(parsed, tool)?;
                 self.host.notify(
                     &caller.tab_id,
                     &args.title,
@@ -912,7 +983,7 @@ impl AgentControl {
                 Ok("Notification shown.".to_owned())
             }
             Tool::Stop => {
-                let args: types::StopArgs = typed(args(tool)?, tool)?;
+                let args: types::StopArgs = typed(parsed, tool)?;
                 let device = match &args.device {
                     None => None,
                     Some(wanted) => Some(self.device(wanted)?),
@@ -934,17 +1005,32 @@ impl AgentControl {
                 };
                 match target {
                     Target::Tab(tab) => self.stop(&caller, tabs, &tab, &args).await,
+                    // Open in a tab no window of this app holds (a paired host's, or one this computer runs for a
+                    // paired device): stopped or closed through that tab, never answered as open nowhere.
+                    Target::Stored(row) if args.delete != Some(true) && row.elsewhere.is_some() => {
+                        match self.rejoin(&caller, &row).await? {
+                            resolve::Rejoined::Held(tab) => {
+                                self.stop(&caller, tabs, &tab, &args).await
+                            }
+                            resolve::Rejoined::Joined(tab) => {
+                                self.stop_joined(&caller, tabs, &tab, &row, &args).await
+                            }
+                            resolve::Rejoined::Nowhere(now) => {
+                                self.stop_stored(&caller, &now, &args).await
+                            }
+                        }
+                    }
                     Target::Stored(row) => self.stop_stored(&caller, &row, &args).await,
                 }
             }
             Tool::Compare => {
-                let args: types::CompareArgs = typed(args(tool)?, tool)?;
+                let args: types::CompareArgs = typed(parsed, tool)?;
                 self.compare(&caller, tabs, args.sessions, args.criteria)
                     .await
             }
-            Tool::Report => self.report(&caller, tabs, typed(args(tool)?, tool)?).await,
+            Tool::Report => self.report(&caller, tabs, typed(parsed, tool)?).await,
             Tool::Merge => {
-                let args: types::MergeArgs = typed(args(tool)?, tool)?;
+                let args: types::MergeArgs = typed(parsed, tool)?;
                 let target = self
                     .open(
                         tabs,
@@ -956,13 +1042,12 @@ impl AgentControl {
                     .await?;
                 self.merge(&caller, &target).await
             }
-            Tool::Schedule => self.schedule(&caller, typed(args(tool)?, tool)?).await,
-            Tool::Autopilot => {
-                self.autopilot(&caller, tabs, typed(args(tool)?, tool)?)
-                    .await
-            }
-            Tool::AppList => self.app_list(typed(args(tool)?, tool)?).await,
-            Tool::App => self.app(&caller, typed(args(tool)?, tool)?).await,
+            Tool::Schedule => self.schedule(&caller, typed(parsed, tool)?).await,
+            Tool::Autopilot => self.autopilot(&caller, tabs, typed(parsed, tool)?).await,
+            Tool::AppList => self.app_list(typed(parsed, tool)?).await,
+            Tool::App => self.app(&caller, typed(parsed, tool)?).await,
+            Tool::Bot => self.bot_tool(&caller, tabs, typed(parsed, tool)?).await,
+            Tool::Item => self.item_tool(&caller, typed(parsed, tool)?).await,
         }
     }
 
@@ -1137,7 +1222,23 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
                 Some(Value::Null) | None => None,
                 Some(value) => Some(args_of(value.clone(), method)?),
             };
-            control.released(&text_arg(&args, "tabId", method)?, session.as_ref());
+            // The note to its opener, when there is one, reaches main before the call answers.
+            if let Some(told) =
+                control.released(&text_arg(&args, "tabId", method)?, session.as_ref())
+            {
+                let _ = told.await;
+            }
+            Reply::json(&())
+        }
+        "childAskClosed" => {
+            control
+                .child_ask_closed(
+                    &text_arg(&args, "openerTabId", method)?,
+                    &text_arg(&args, "childTabId", method)?,
+                    &text_arg(&args, "requestId", method)?,
+                    args.get("choice").and_then(Value::as_str),
+                )
+                .await;
             Reply::json(&())
         }
         "openSessions" => {
@@ -1199,6 +1300,24 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
                     .await,
             )
         }
+        // A quiet note into a session file on this computer (a schedule's result, a bot's notice): one per text.
+        "noteSession" => {
+            control
+                .note_session(
+                    &text_arg(&args, "sessionPath", method)?,
+                    &text_arg(&args, "text", method)?,
+                )
+                .await;
+            Reply::json(&())
+        }
+        // The owner's own change to the bots or their items (`BotsRequest`, Settings and the Bots page): the state after.
+        "bots" => reply(control.bots_command(args).await),
+        // A paired device asks for a bot's home chat by name (`host.bots.home`): refused unless that device may reach it.
+        "botHome" => reply(control.bot_home(
+            &text_arg(&args, "name", method)?,
+            args.get("device").and_then(Value::as_str),
+            args.get("deviceName").and_then(Value::as_str),
+        )),
         "autoClose" => reply(
             control
                 .auto_close(&text_arg(&args, "callerTabId", method)?)

@@ -1,7 +1,8 @@
 /**
  * The renderer's freeform edit-input walk (edit-args.ts `editInputSections`) against stock
- * pi-tui `tools/edit.ts` (`getEditInputPaths`, the edit renderer's activity summary), which the
- * renderer cannot import: both run in Bun over the same streamed hashline payloads.
+ * pi-coding-agent `tools/details/edit.ts` (`getEditInputPaths`) and `ui/tools/edit.tsx` (the edit
+ * presenter's activity summary), which the renderer cannot import: both run in Bun over the same
+ * streamed hashline payloads.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -11,7 +12,9 @@ import { describe, expect, it } from "vitest";
 import { editArgumentPaths, editInputSections } from "./edit-args";
 
 const stockModules = path.join(os.homedir(), ".bun/install/global/node_modules");
-const stockRoot = path.join(stockModules, "@oh-my-pi/pi-tui");
+const stockRoot = path.join(stockModules, "@oh-my-pi/pi-coding-agent");
+// The package exports no `ui/*` subpath, so the presenter loads by file.
+const stockEditPresenter = path.join(stockRoot, "src/ui/tools/edit.tsx");
 const editArgs = path.resolve("src/renderer/components/tools/edit-args.ts");
 
 const CASES = [
@@ -44,12 +47,13 @@ describe.skipIf(!fs.existsSync(stockRoot))("edit input sections against stock", 
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			const script = `
 import assert from "node:assert/strict";
-import { editToolRenderer, getEditInputPaths } from "@oh-my-pi/pi-tui/tools/edit";
+import { getEditInputPaths } from "@oh-my-pi/pi-coding-agent/tools/details/edit";
+import { editToolPresenter } from ${JSON.stringify(stockEditPresenter)};
 import { editArgumentPaths, editInputSections } from ${JSON.stringify(editArgs)};
 for (const input of ${JSON.stringify(CASES)}) {
 	assert.deepEqual(editArgumentPaths({ input }), [...new Set(getEditInputPaths(input, "hashline"))], input);
 	const first = editInputSections(input)[0];
-	const summary = editToolRenderer.activitySummary({ input }, { isPartial: true, renderContext: { editMode: "hashline" } });
+	const summary = editToolPresenter.activity({ input }, { expanded: false, isPartial: true, argsComplete: false, executionStarted: false, renderContext: { editMode: "hashline" } });
 	assert.equal(summary.label, first?.op === "delete" ? "Delete" : "Edit", input);
 	if (first?.rename) assert.ok(summary.detail?.includes(first.rename), input);
 }

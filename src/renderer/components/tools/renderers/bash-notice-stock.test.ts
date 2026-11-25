@@ -1,8 +1,8 @@
 /**
  * The background-job footer the bash and eval cards strip (BashRenderer.tsx
  * `stripBackgroundNotice`) against stock: every notice stock's own
- * `formatBackgroundNotice` (pi-tui/src/tools/bash.ts) writes comes off exactly
- * as stock's `stripTrailingNotice` (pi-tui/src/tools/output-meta.ts) removes it.
+ * `formatBackgroundNotice` (pi-coding-agent/src/tools/details/bash.ts) writes comes off exactly
+ * as stock's `stripTrailingNotice` (pi-coding-agent/src/tools/output-meta-format.ts) removes it.
  * Stock's matcher, `isBackgroundNotice`, is not exported, and the renderer
  * cannot import stock: both run in Bun over the same texts.
  */
@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const stockModules = path.join(os.homedir(), ".bun/install/global/node_modules");
-const stockRoot = path.join(stockModules, "@oh-my-pi/pi-tui");
+const stockRoot = path.join(stockModules, "@oh-my-pi/pi-coding-agent");
 const renderer = path.resolve("src/renderer/components/tools/renderers/BashRenderer.tsx");
 
 // Stock uses Bun/native modules, which cannot execute in Vitest's Node worker.
@@ -24,8 +24,8 @@ describe.skipIf(!fs.existsSync(stockRoot))("background notice against stock", ()
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			const script = `
 import assert from "node:assert/strict";
-import { formatBackgroundNotice } from "@oh-my-pi/pi-tui/tools/bash";
-import { stripTrailingNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { formatBackgroundNotice } from "@oh-my-pi/pi-coding-agent/tools/details/bash";
+import { stripTrailingNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta-format";
 import { stripBackgroundNotice } from ${JSON.stringify(renderer)};
 const bodies = ["", "server ready", "a\\nb\\n", "started\\n\\n", "  indented"];
 for (const id of ["bg_1", "bg-7", "ev_2"]) {

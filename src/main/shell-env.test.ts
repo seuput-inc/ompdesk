@@ -9,6 +9,8 @@ import type { DelegationMode } from "../../resources/gui-bridge/modes/delegation
 import type { NextPromptSettings } from "../../resources/gui-bridge/modes/next-prompt-contracts";
 import type { UserProfile } from "../../resources/gui-bridge/modes/user-profile-contracts";
 import type { AccountRotationMode } from "../shared/account-rotation";
+import { core, stopCore } from "./core/process";
+import { openInExternalEditor } from "./editor";
 import { ompBunDefaults } from "./omp-runtime";
 import { SessionProcesses } from "./session-processes";
 import { SessionScratch } from "./session-scratch";
@@ -254,6 +256,112 @@ describe("resolveEditorCommand", () => {
 	});
 });
 
+describe("external editor round trip", () => {
+	it("uses the configured editor on PATH and releases its private draft on every outcome", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp editor & %PATH% ! test-"));
+		try {
+			const win = process.platform === "win32";
+			await stopCore();
+			if (win) setEnv("TMP", dir);
+			const launcher = path.join(dir, win ? "draft-editor.cmd" : "draft-editor");
+			await fs.writeFile(
+				launcher,
+				win
+					? '@"%DRAFT_TEST_NODE%" "%~dp0edit.cjs" %*\r\n'
+					: '#!/bin/sh\nexec "$DRAFT_TEST_NODE" "$DRAFT_TEST_DIR/edit.cjs" "$@"\n',
+				{ mode: 0o700 },
+			);
+			await fs.writeFile(
+				path.join(dir, "edit.cjs"),
+				`const fs = require("node:fs");
+const [flag, file] = process.argv.slice(2);
+const draft = fs.readFileSync(file, "utf8");
+fs.writeFileSync(process.env.DRAFT_TEST_DIR + "/observed", JSON.stringify({flag, file, draft, mode: fs.statSync(require("node:path").dirname(file)).mode & 0o777}));
+if (draft === "cancel") process.exit(7);
+if (draft === "remove") fs.unlinkSync(file);
+else if (draft === "link") { fs.unlinkSync(file); fs.symlinkSync(__filename, file); }
+else if (draft === "edit") fs.writeFileSync(file, Buffer.from([0xef, 0xbb, 0xbf, 0x78, 0xff, 0x0a]));
+else fs.writeFileSync(file, draft);
+`,
+			);
+			setEnv("DRAFT_TEST_DIR", dir);
+			setEnv("DRAFT_TEST_NODE", process.execPath);
+			if (win) {
+				setEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+				setEnv("VISUAL", "draft-editor --wait");
+			} else {
+				deleteEnv("VISUAL");
+				deleteEnv("EDITOR");
+				const probed = envDumpBody({ PATH: dir, EDITOR: "draft-editor --wait" }, false);
+				setEnv("SHELL", await writeFakeShell(dir, probed));
+			}
+			for (const [before, after] of [
+				["", ""],
+				["keep", "keep"],
+				["edit", "\uFEFFx\uFFFD"],
+				["one\r\n", "one\r"],
+				["한글 & %PATH% $(whoami)\n\n", "한글 & %PATH% $(whoami)\n"],
+				["cancel", null],
+				["remove", null],
+			] as const) {
+				const edited = openInExternalEditor(before);
+				if (before === "remove") await expect(edited).rejects.toThrow(/ENOENT/);
+				else await expect(edited).resolves.toEqual({ text: after });
+				const observation = JSON.parse(await fs.readFile(path.join(dir, "observed"), "utf8"));
+				expect(observation).toMatchObject({ flag: "--wait", draft: before });
+				const draftDir = path.dirname(observation.file);
+				if (!win) expect(observation.mode).toBe(0o700);
+				await expect(fs.stat(draftDir)).rejects.toMatchObject({ code: "ENOENT" });
+			}
+			if (!win) {
+				await expect(openInExternalEditor("link")).rejects.toThrow();
+				setEnv("VISUAL", path.join(dir, "missing-editor"));
+				await expect(openInExternalEditor("spawn error")).rejects.toThrow(/ENOENT/);
+				deleteEnv("VISUAL");
+				deleteEnv("EDITOR");
+				setEnv("SHELL", path.join(dir, "missing-shell"));
+				resetLoginShellEnvCache();
+				await expect(openInExternalEditor("unset")).rejects.toThrow(/\[editor_unset\]/);
+			}
+		} finally {
+			await stopCore();
+			await fs.rm(dir, RM_TEMP);
+		}
+	});
+
+	it("requires the receipt, not a path, even when a new core reads the saved draft", async () => {
+		const client = core();
+		const { result } = await client.call<{ id: { folder: string; token: string }; file: string }>(
+			"editor.prepare",
+			{},
+			{ bin: Buffer.from("saved\n") },
+		);
+		const dir = path.dirname(result.file);
+		const backup = path.join(dir, "user-backup.md");
+		try {
+			await fs.writeFile(backup, "keep");
+			await stopCore();
+			for (const id of [
+				{ ...result.id, token: result.id.token.replace(/^./, c => (c === "0" ? "1" : "0")) },
+				{ ...result.id, folder: `../${result.id.folder}` },
+			]) {
+				await expect(client.call("editor.finish", { id, read: false })).rejects.toMatchObject({
+					code: "invalid_params",
+				});
+			}
+			const answer = await client.call("editor.finish", { id: result.id, read: true });
+			expect(new TextDecoder().decode(answer.bin ?? undefined)).toBe("saved");
+			await expect(fs.stat(result.file)).rejects.toMatchObject({ code: "ENOENT" });
+			expect(await fs.readFile(backup, "utf8")).toBe("keep");
+		} finally {
+			await client.call("editor.finish", { id: result.id, read: false }).catch(() => {});
+			await fs.rm(backup, { force: true });
+			await fs.rmdir(dir);
+			await stopCore();
+		}
+	});
+});
+
 describe("SidecarManager spawn env", () => {
 	it("injects the shellEnv overlay into the spawned process", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-sidecar-env-"));
@@ -336,13 +444,16 @@ describe("SidecarManager spawn env", () => {
 			`import * as fs from "node:fs/promises";\nawait fs.writeFile(${JSON.stringify(envPath)}, process.env.OMP_GUI_BROWSER ?? "");\nprocess.stdout.write(JSON.stringify({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] }) + "\\n");\n${ANSWERS_COMMANDS}\n`,
 		);
 		let browser: AgentBrowser = { kind: "ego" };
+		let probe: () => AgentBrowser | Promise<AgentBrowser> = () => browser;
 		const sidecar = new SidecarManager({
 			omp: async () => ({
 				ok: true,
 				runtime: { bin: binaryPath, version: "18.8.0", run: async () => ({ code: 0, stdout: "", stderr: "" }) },
 			}),
 			cwd: tempDir,
-			defaultBrowser: async () => browser,
+			defaultBrowser: () => probe(),
+			defaultBrowserFallback: () => ({ kind: "unavailable", name: "Brave" }),
+			startInputMs: 100,
 		});
 		let ready = Promise.withResolvers<void>();
 		sidecar.on("status", ({ status }) => {
@@ -362,6 +473,16 @@ describe("SidecarManager spawn env", () => {
 			sidecar.restart();
 			await ready.promise;
 			expect(await fs.readFile(envPath, "utf8")).toBe("builtin");
+			const failed: Record<string, string> = {};
+			for (const failure of ["rejection", "deadline"]) {
+				probe = () =>
+					failure === "rejection" ? Promise.reject(new Error("status unavailable")) : new Promise(() => {});
+				ready = Promise.withResolvers<void>();
+				sidecar.restart();
+				await ready.promise;
+				failed[failure] = await fs.readFile(envPath, "utf8");
+			}
+			expect(failed).toEqual({ rejection: "unavailable:Brave", deadline: "unavailable:Brave" });
 		} finally {
 			sidecar.dispose();
 			await fs.rm(tempDir, RM_TEMP);

@@ -216,20 +216,17 @@ async fn a_pass_sends_a_kept_report_again_to_the_tab_that_holds_its_session_unti
             id: "m-5".into(),
             session_path: "/s/boss.jsonl".into(),
             device: None,
+            from: None,
+            from_device: None,
             content: "c".into(),
             details: mail_details("m-5"),
             delivery: DELIVERY,
+            attachments: None,
+            attachments_corrupt: false,
             at: control.now(),
         });
     for _ in 0..2 {
-        runtime.redeliver_mail();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while runtime.rt().redelivering {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        control.redeliver_mail_now().await;
     }
     assert!(control.host.outbox().unwrap().pending().is_empty());
     let sent = told_of(&told, "mail");
@@ -266,6 +263,7 @@ fn activity(kind: ActivityKind, tab: &str, outcome: Option<(&str, Option<&str>)>
         kind,
         tab_id: tab.to_owned(),
         request_id: None,
+        answered: None,
         outcome: outcome.map(|(reason, message)| Outcome {
             stop_reason: Some(reason.to_owned()),
             error_message: message.map(str::to_owned),
@@ -585,4 +583,77 @@ async fn a_running_child_is_read_again_only_when_it_moved_and_a_list_went_out() 
     settle().await;
     assert_eq!(asks_of(&told, "command"), after_live);
     control.host.port().close();
+}
+
+#[tokio::test]
+async fn an_opener_s_closed_tab_closes_its_resting_children_only() {
+    let child = |id: &str, entry: u64, extra: Value| {
+        let mut tab = tab(id, &format!("/s/{id}.jsonl"));
+        tab["autoClosable"] = json!(true);
+        tab["closeTurn"] = json!({ "pool": 1, "entry": entry, "turn": 0 });
+        for (key, value) in extra.as_object().unwrap() {
+            tab[key] = value.clone();
+        }
+        tab
+    };
+    let mut family = state(vec![
+        tab("boss", "/s/boss.jsonl"),
+        child("rest", 2, json!({})),
+        child("busy", 3, json!({ "busy": true })),
+        child("seen", 4, json!({ "looked": true })),
+    ]);
+    family["parents"] = json!({
+        "rest": { "callerTabId": "boss" },
+        "busy": { "callerTabId": "boss" },
+        "seen": { "callerTabId": "boss" },
+    });
+    let (control, runtime, told) = rig(7_430, family, Files::default(), |_, _| Ok(Value::Null));
+    assert_eq!(control.children_of("boss").len(), 3);
+    let mut released = activity(ActivityKind::Released, "boss", None);
+    released.session = Some(serde_json::from_value(json!({ "path": "/s/boss.jsonl" })).unwrap());
+    runtime.activity(released);
+    let mut closes = Vec::new();
+    for _ in 0..100 {
+        closes = told_of(&told, "view")
+            .into_iter()
+            .filter(|view| view["event"]["how"] == "close")
+            .map(|view| view["event"]["tabId"].as_str().unwrap_or("").to_owned())
+            .collect::<Vec<_>>();
+        if !closes.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(closes, vec!["rest".to_owned()]);
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_wake_of_a_paused_bot_s_chat_is_refused_and_reaches_nothing() {
+    let dir = crate::fs::disk::make_temp_dir("ompdesk-bots-wake-").unwrap();
+    let file = dir.join("bots.json");
+    std::fs::write(
+        &file,
+        json!([{ "id": "bot-1", "name": "Ada", "folder": "/bots/ada", "home": "/s/boss.jsonl", "sessions": ["/s/boss.jsonl"], "paused": true }])
+            .to_string(),
+    )
+    .unwrap();
+    let (control, runtime, told) = rig(
+        7_480,
+        state(vec![tab("boss", "/s/boss.jsonl")]),
+        Files {
+            bots: Some(file),
+            ..with_outbox()
+        },
+        |_, _| Ok(Value::Null),
+    );
+    let refused = runtime
+        .wake("run-p", "/s/boss.jsonl", "t", "p", 130)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.message(), "The bot Ada is paused");
+    assert!(told_of(&told, "reach").is_empty());
+    assert!(control.host.outbox().unwrap().pending().is_empty());
+    control.host.port().close();
+    let _ = std::fs::remove_dir_all(dir);
 }

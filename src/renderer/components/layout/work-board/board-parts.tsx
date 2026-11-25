@@ -5,6 +5,7 @@
 import { ChevronRight, type LucideIcon, Network } from "lucide-react";
 import { createContext, type ReactNode, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useListMotion } from "../../../hooks/use-list-motion";
+import { cx } from "../../../lib/format";
 import { translate, useT } from "../../../lib/i18n";
 import { revealAndFocus } from "../../../lib/reveal-focus";
 import { useUiStore } from "../../../stores/ui";
@@ -87,7 +88,7 @@ export function KindMark({
 	tone = "muted",
 }: {
 	icon: LucideIcon;
-	tone?: "info" | "success" | "warning" | "danger" | "muted";
+	tone?: "info" | "success" | "warning" | "attention" | "danger" | "muted";
 }) {
 	return <Icon aria-hidden className="omp-work-board-kind" data-tone={tone} />;
 }
@@ -159,7 +160,7 @@ export function BoardSection({
 	mid?: ReactNode;
 	/** A control of its own after the fold button (the work tree's icon button). */
 	action?: ReactNode;
-	tone?: "warning" | "danger";
+	tone?: "attention" | "danger";
 	/**
 	 * Inside a `SummaryBoard`: the zone's one line while closed, its lead item's words and its figure in the head; a tap
 	 * opens it in place.
@@ -268,12 +269,13 @@ export function WorkTreeButton() {
 /** What a row of Needs you is, in a word of fixed width before its label. */
 export interface RowTag {
 	word: string;
-	tone: "warning" | "danger";
+	tone: "attention" | "danger";
 }
 
 /**
  * One row: a lead mark, a label that truncates, a muted figure and an optional second line. A row that is not itself a
- * button may end in its own button (`action`: a backlog item's ✕, a follow-up's pin, a pull request's link).
+ * button may end in its own button (`action`: a backlog item's ✕, a follow-up's pin, a pull request's link). `wrap`
+ * shows the whole label over as many lines as it needs, for a row a tap opened.
  */
 export function BoardRow({
 	lead,
@@ -287,6 +289,7 @@ export function BoardRow({
 	exiting = false,
 	flipKey,
 	tag,
+	wrap = false,
 }: {
 	lead: ReactNode;
 	label: ReactNode;
@@ -299,6 +302,7 @@ export function BoardRow({
 	flipKey?: string;
 	/** Needs you's rows say what kind of thing they are, in a word of fixed width before the label ("Ask", "Check"). */
 	tag?: RowTag;
+	wrap?: boolean;
 } & ({ onClick?: () => void; action?: never } | { onClick?: never; action?: ReactNode })) {
 	const body = (
 		<>
@@ -311,7 +315,9 @@ export function BoardRow({
 							{tag.word}
 						</span>
 					) : null}
-					<span className="min-w-0 flex-1 truncate">{label}</span>
+					<span className={cx("min-w-0 flex-1", wrap ? "whitespace-normal [overflow-wrap:anywhere]" : "truncate")}>
+						{label}
+					</span>
 					{meta ? <span className="omp-work-board-meta">{meta}</span> : null}
 				</span>
 				{sub ? <span className="omp-work-board-sub">{sub}</span> : null}

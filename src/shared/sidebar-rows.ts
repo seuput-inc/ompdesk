@@ -147,9 +147,9 @@ export function isChatSession(session: { kind?: SessionKind; cwd: string }, work
 }
 
 /**
- * Sidebar order of projects and of a list's sessions. Pinned items stay on top. Within each partition an item the
- * user placed (by dragging or Move up/down) keeps its place; items they never placed (new since the last move, or
- * before any) come first, newest first, so a freshly opened project or a new session is always in view.
+ * Sidebar order of projects. Pinned items stay on top. Within each partition an item the user placed (by dragging or
+ * Move up/down) keeps its place; items they never placed (new since the last move, or before any) come first, newest
+ * first, so a freshly opened project is always in view. A list's sessions read the other way (`sidebarRows`).
  */
 export function orderByManual<T>(
 	items: readonly T[],
@@ -487,20 +487,15 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	}
 	for (const siblings of children.values()) siblings.sort(byCreated);
 
+	// Every session list reads oldest first, so a new session lands at the bottom (the owner's decision, 24 Nov 2026).
+	// Pins stay on top; a row the person placed keeps its place, and one never placed follows the placed ones.
 	const pinnedSessions = new Set(facts.order.pinnedSessions);
 	const inListOrder = (rows: readonly RowSession[], list: string): RowSession[] => {
-		const sorted = rows.toSorted((a, b) => {
-			const pinned = (pinnedSessions.has(a.path) ? 0 : 1) - (pinnedSessions.has(b.path) ? 0 : 1);
-			return pinned || createdAt(b) - createdAt(a) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-		});
-		const manual = facts.order.sessionOrder(list);
-		if (!manual) return sorted;
-		const at = new Map(sorted.map((session, index) => [session.path, index]));
-		return orderByManual(sorted, session => session.path, {
-			pinned: facts.order.pinnedSessions,
-			manual,
-			recency: session => -(at.get(session.path) ?? 0),
-		});
+		const manual = facts.order.sessionOrder(list) ?? [];
+		const at = new Map(manual.map((path, index) => [path, index]));
+		const place = (session: RowSession) => at.get(session.path) ?? manual.length;
+		const pin = (session: RowSession) => (pinnedSessions.has(session.path) ? 0 : 1);
+		return rows.toSorted((a, b) => pin(a) - pin(b) || place(a) - place(b) || byCreated(a, b));
 	};
 
 	const removed = new Set(facts.removed);
@@ -550,7 +545,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	}
 	const allGroups = orderByManual(
 		[...drafts].map(([key, draft]): RowGroup => {
-			// The project's own order; an Autopilot run's children follow its row, newest first.
+			// The project's own order; an Autopilot run's children follow its row in that order.
 			const sorted = inListOrder(draft.sessions, key);
 			const rows = sorted.filter(session => !runParent.has(session.path));
 			const runChildRows = sorted.filter(session => runParent.has(session.path));
@@ -609,7 +604,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	);
 	const archived = facts.sessions
 		.filter(session => facts.archived.has(session.id) && facts.hasContent(session) && matches(session))
-		.toSorted((a, b) => createdAt(b) - createdAt(a));
+		.toSorted(byCreated);
 	const folderMissing = new Set(
 		code.flatMap(session => (facts.folder(session.cwd).gone && !finished(session) ? [session.path] : [])),
 	);

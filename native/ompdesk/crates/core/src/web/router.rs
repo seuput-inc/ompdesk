@@ -4,7 +4,13 @@
 //! web-only channels and the device's grants before main runs them.
 //!
 //! Main hands the router what its windows push to a device (`web.deliver {host, device, ch}` with the data's JSON as
-//! `bin`; with no `ch`, a push main did not send because the device had no connection then), answers a page's call
+//! `bin`; `missed` when main wrote no data: a stream to a device with no page, or data it could not write). With
+//! `connId`, only that live page can receive the push. The router decides what a device may be pushed (`IPC_POLICY`'s
+//! push channels but the page's own and the desktop's, workspace state only with the `workspace` grant), counts what a
+//! device without a page missed, and releases pictures of tabs a device-wide `TAB_LIST_CHANGED` no longer lists. The
+//! core's own pushes to a device's window (`pages.rs`) take the same rules: main names each window's device
+//! (`web.window {win, host, device}`, `{win}` once it is gone).
+//! `web.diskFullState {host, files}` sends the aggregate file names to all pages of that host. Main answers a page's call
 //! (`web.reply {host, call, ok, e}` with the value's JSON as `bin`), says a resync was prepared (`web.resynced {host,
 //! conn}`) and closes a device's sockets (`web.closeDevice`). The router tells main which connections a device has and
 //! which of them show their page (`web.conns`), asks it to prepare a page's resync (`web.resync`) and hands it each call
@@ -25,7 +31,9 @@ use serde::de::{Deserializer, MapAccess, Visitor};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
+use super::blobs::BlobStore;
 use super::deps::{BoxFuture, Connection, Outbox, Outgoing, Router};
+use super::file_edits::{self, FileEditReports, FileEdits};
 use crate::server::{Call, Events, Fault, PushCall, Registry, Reply};
 
 pub const EVENT_BATCH_MS: u64 = 75;
@@ -481,9 +489,18 @@ struct Channels {
     heavy: Vec<String>,
     /// `PREFS_SET`, which may not write `mobileWeb.*`.
     prefs_set: String,
+    disk_full: String,
+    /// `FILE_EDIT_REPORT`, which the router answers itself (`file_edits.rs`).
+    file_edit_report: String,
+    /// Pushes for the desktop's own windows: a device never gets them.
+    desktop_only: Vec<String>,
+    /// Pushes of the computer's workspace (its sidebar, its paired computers): only to a device with `workspace`.
+    workspace_only: Vec<String>,
+    /// `TAB_LIST_CHANGED`: a device-wide one releases the pictures of tabs it no longer lists.
+    tab_list: String,
 }
 
-/// What main hands the router at the start: the page protocol it speaks, the host's features and build,
+/// What main hands the router at the start: the page protocol it speaks, the host's features,
 /// `IPC_POLICY`, the web-only channels and the channels it treats apart.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -491,8 +508,9 @@ pub struct Config {
     channels: Channels,
     protocol: u32,
     features: Box<RawValue>,
-    #[serde(default)]
-    build: Option<String>,
+    /// The edge reads this from the same web.html it serves.
+    #[serde(skip)]
+    pub(super) build: Option<String>,
     policy: HashMap<String, PolicyEntry>,
     #[serde(default)]
     web_channels: HashMap<String, WebChannel>,
@@ -576,10 +594,17 @@ struct Pending {
 }
 
 #[derive(Default)]
+struct BatchTimers {
+    next: u64,
+    /// Manual timers (a test's): the batch windows open, by connection.
+    due: Vec<(u64, u64)>,
+}
+
+#[derive(Default)]
 struct State {
     next_conn: u64,
     next_call: u64,
-    next_flush: u64,
+    batches: BatchTimers,
     conns: HashMap<u64, Conn>,
     /// Each device's connections in the order they came.
     devices: HashMap<String, Vec<u64>>,
@@ -587,8 +612,18 @@ struct State {
     pushes: HashMap<String, u64>,
     heavy: HashMap<String, usize>,
     calls: HashMap<u64, Pending>,
-    /// Manual timers (a test's): the batch windows open, by connection.
-    due: Vec<(u64, u64)>,
+    /// Each live connection's latest Files-edit report (C2): under the lock that ends connections.
+    file_edits: FileEditReports,
+}
+
+impl State {
+    fn connection(&self, device: &str, conn_id: &str) -> Option<u64> {
+        self.devices
+            .get(device)?
+            .iter()
+            .copied()
+            .find(|conn| self.conns.get(conn).is_some_and(|c| c.conn_id == conn_id))
+    }
 }
 
 /// One host's router.
@@ -597,6 +632,9 @@ pub struct Host {
     events: Mutex<Events>,
     config: Config,
     grants: Arc<dyn Grants>,
+    blobs: Arc<BlobStore>,
+    /// The first successful listen with a renderer starts one archive copy for this host.
+    pub(super) archive_copy: OnceLock<tokio::sync::watch::Receiver<()>>,
     clock: Clock,
     /// A test drives the batch and heartbeat timers (`web.router.test.*`).
     manual: bool,
@@ -610,8 +648,64 @@ fn hosts() -> MutexGuard<'static, HashMap<u64, Arc<Host>>> {
     HOSTS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn host_of(host: u64) -> Option<Arc<Host>> {
+pub(super) fn host_of(host: u64) -> Option<Arc<Host>> {
     hosts().get(&host).cloned()
+}
+
+/// What `device`'s live connections on router `host` report of `tab`; `unreported` while that router is not open.
+pub(crate) fn file_edits(host: u64, device: &str, tab: &str) -> FileEdits {
+    host_of(host).map_or(FileEdits::Unreported, |host| {
+        host.state().file_edits.edits(device, tab)
+    })
+}
+
+/// Runs `release` unless a live connection of `device` names `tab` dirty, holding the router's lock throughout, so
+/// no report lands between the check and what `release` does (`NoLateDirtyRelease`). `None` when it was dirty.
+/// Lock order: called from the pool on the hub thread; the router's threads never reach the pool.
+pub(crate) fn unless_dirty<T>(
+    host: u64,
+    device: &str,
+    tab: &str,
+    release: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    let Some(host) = host_of(host) else {
+        return release();
+    };
+    let state = host.state();
+    if state.file_edits.edits(device, tab) == FileEdits::Dirty {
+        return None;
+    }
+    let released = release();
+    drop(state);
+    released
+}
+
+/// Each paired device's window by its id (below zero, main's `WebWindows`): the host's router and the device.
+static WINDOWS: LazyLock<Mutex<HashMap<i64, (u64, String)>>> = LazyLock::new(Mutex::default);
+
+/// A push the core made to a paired device's window (`pages.rs`), under the rules of main's (`deliver_push`). A
+/// window main has not named, or whose router is gone, has no recipient.
+pub(crate) fn deliver_window(win: i64, ch: &str, text: Vec<u8>) {
+    let named = WINDOWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&win)
+        .cloned();
+    let Some((host, device)) = named else {
+        return;
+    };
+    let Some(router) = host_of(host) else {
+        return;
+    };
+    let params = DeliverParams {
+        host,
+        device,
+        conn_id: None,
+        ch: ch.to_owned(),
+        missed: false,
+    };
+    router.deliver_push(params, Some(text));
+    router.drain_test();
 }
 
 fn now_ms() -> i64 {
@@ -621,36 +715,37 @@ fn now_ms() -> i64 {
 }
 
 /// `randomUUID()`.
-fn uuid() -> String {
+fn uuid() -> Option<String> {
     let mut bytes = [0u8; 16];
-    if crate::sys::random(&mut bytes).is_err() {
-        bytes = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_nanos())
-            .to_le_bytes();
-    }
+    crate::sys::random(&mut bytes).ok()?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     let hex = super::hex(&bytes);
-    format!(
+    Some(format!(
         "{}-{}-{}-{}-{}",
         &hex[..8],
         &hex[8..12],
         &hex[12..16],
         &hex[16..20],
         &hex[20..]
-    )
+    ))
 }
 
 /// The router of `host`, made at its first start; a later start keeps it (resume entries outlive a stop) and takes
 /// the newer events and configuration's build.
-pub fn open(host: u64, events: Events, config: Config, grants: Arc<dyn Grants>) -> Arc<Host> {
+pub fn open(
+    host: u64,
+    events: Events,
+    config: Config,
+    grants: Arc<dyn Grants>,
+    blobs: Arc<BlobStore>,
+) -> Arc<Host> {
     let mut all = hosts();
     if let Some(existing) = all.get(&host) {
         *existing.events.lock().unwrap_or_else(|e| e.into_inner()) = events;
         return Arc::clone(existing);
     }
-    let made = Host::new(host, events, config, grants, Arc::new(now_ms), false);
+    let made = Host::new(host, events, config, grants, blobs, Arc::new(now_ms), false);
     all.insert(host, Arc::clone(&made));
     made
 }
@@ -667,6 +762,7 @@ impl Host {
         events: Events,
         config: Config,
         grants: Arc<dyn Grants>,
+        blobs: Arc<BlobStore>,
         clock: Clock,
         manual: bool,
     ) -> Arc<Host> {
@@ -675,6 +771,8 @@ impl Host {
             events: Mutex::new(events),
             config,
             grants,
+            blobs,
+            archive_copy: OnceLock::new(),
             clock,
             manual,
             state: Mutex::new(State::default()),
@@ -730,9 +828,9 @@ impl Host {
         if state.devices.get(device).map_or(0, Vec::len) >= MAX_CONNECTIONS_PER_DEVICE {
             return None;
         }
+        let conn_id = uuid()?;
         state.next_conn += 1;
         let conn = state.next_conn;
-        let conn_id = uuid();
         state.conns.insert(
             conn,
             Conn {
@@ -864,6 +962,8 @@ impl Host {
             clean,
             at: now,
         });
+        // Under the same lock as `receive`: a report read before this end lands before it, none after.
+        state.file_edits.forget(&conn_id);
         self.tell_conns(state, &device, "end", &conn_id);
         true
     }
@@ -896,12 +996,7 @@ impl Host {
 
     fn retire(&self, device: &str, conn_id: &str) {
         let mut state = self.state();
-        let found = state.devices.get(device).and_then(|list| {
-            list.iter()
-                .copied()
-                .find(|conn| state.conns.get(conn).is_some_and(|c| c.conn_id == conn_id))
-        });
-        if let Some(conn) = found {
+        if let Some(conn) = state.connection(device, conn_id) {
             self.close_conn(&mut state, conn, CLOSE_GOING_AWAY, "resumed");
         }
     }
@@ -916,24 +1011,118 @@ impl Host {
 
     // --- pushes -------------------------------------------------------------------------------------------------
 
-    /// A push main made to the device's window; `None` when main sent no data because the device had no connection.
-    fn deliver(&self, device: &str, pushed: Option<Arc<Pushed>>) {
+    /// A push already admitted and shaped for this page. An ended page has no recipient.
+    fn deliver_connection(&self, device: &str, conn_id: &str, pushed: &Arc<Pushed>) {
         let mut state = self.state();
-        *state.pushes.entry(device.to_owned()).or_insert(0) += 1;
-        let conns = state.devices.get(device).cloned().unwrap_or_default();
-        for conn in conns {
-            match &pushed {
-                Some(pushed) => self.push(&mut state, conn, pushed),
-                // Main thought the page gone; one that came meanwhile missed this push and loads its state again.
-                None => self.resync_missed(&mut state, conn),
+        if let Some(conn) = state.connection(device, conn_id) {
+            let State { conns, batches, .. } = &mut *state;
+            if let Some(c) = conns.get_mut(&conn) {
+                self.push(conn, c, batches, pushed);
             }
         }
     }
 
-    fn push(&self, state: &mut State, conn: u64, pushed: &Arc<Pushed>) {
-        let Some(c) = state.conns.get_mut(&conn) else {
+    fn disk_full(&self, params: &DiskFullParams) {
+        let channel = &self.config.channels.disk_full;
+        if !self.config.policy.get(channel).is_some_and(|policy| {
+            policy.dir == Dir::Push
+                && policy.mode.as_deref() == Some("pass")
+                && policy.permission.is_none()
+        }) {
+            return;
+        }
+        let mut state = self.state();
+        for ended in &mut state.ended {
+            ended.clean = false;
+        }
+        if state.conns.is_empty() {
+            return;
+        }
+        let Ok(data) = serde_json::value::to_raw_value(params) else {
             return;
         };
+        let pushed = Pushed::new(channel.clone(), Some(data));
+        let State { conns, batches, .. } = &mut *state;
+        for (&conn, c) in conns {
+            self.push(conn, c, batches, &pushed);
+        }
+    }
+
+    /// A push main made to the device's window (`ws-router.ts` `#deliver`'s rules until 25 Nov 2026): a push channel
+    /// that is neither the page's own (`client`) nor the desktop's, workspace state only with the `workspace` grant.
+    fn deliver_push(&self, params: DeliverParams, bin: Option<Vec<u8>>) {
+        let DeliverParams {
+            device,
+            conn_id,
+            ch,
+            missed,
+            ..
+        } = params;
+        let channels = &self.config.channels;
+        let pushable = self
+            .config
+            .policy
+            .get(&ch)
+            .is_some_and(|p| p.dir == Dir::Push && p.mode.as_deref() != Some("client"));
+        if !pushable || channels.desktop_only.contains(&ch) {
+            return;
+        }
+        if channels.workspace_only.contains(&ch)
+            && !self
+                .grants
+                .grants(&device)
+                .is_some_and(|grants| grants.iter().any(|g| g == "workspace"))
+        {
+            return;
+        }
+        let data = bin
+            .and_then(|bin| String::from_utf8(bin).ok())
+            .and_then(|text| RawValue::from_string(text).ok());
+        if conn_id.is_none()
+            && ch == channels.tab_list
+            && let Some(tabs) = data.as_deref().and_then(listed_tabs)
+        {
+            self.blobs.tabs_changed(&device, &tabs);
+        }
+        let pushed = (!missed).then(|| Pushed::new(ch, data));
+        match conn_id {
+            Some(conn_id) => {
+                if let Some(pushed) = &pushed {
+                    self.deliver_connection(&device, &conn_id, pushed);
+                }
+            }
+            None => self.deliver(&device, pushed),
+        }
+    }
+
+    /// A push to the device's pages; `None` when it missed it (main sent no data).
+    fn deliver(&self, device: &str, pushed: Option<Arc<Pushed>>) {
+        let mut state = self.state();
+        *state.pushes.entry(device.to_owned()).or_insert(0) += 1;
+        let State {
+            devices,
+            conns,
+            batches,
+            ..
+        } = &mut *state;
+        let Some(list) = devices.get(device) else {
+            return;
+        };
+        if let Some(pushed) = pushed {
+            for conn in list {
+                if let Some(c) = conns.get_mut(conn) {
+                    self.push(*conn, c, batches, &pushed);
+                }
+            }
+        } else {
+            // Main thought the page gone; one that came meanwhile missed this push and loads its state again.
+            for conn in list.clone() {
+                self.resync_missed(&mut state, conn);
+            }
+        }
+    }
+
+    fn push(&self, conn: u64, c: &mut Conn, batches: &mut BatchTimers, pushed: &Arc<Pushed>) {
         if c.closed || c.awaiting_hello {
             return;
         }
@@ -945,13 +1134,11 @@ impl Host {
         if c.flush.is_some() {
             return;
         }
-        state.next_flush += 1;
-        let window = state.next_flush;
-        if let Some(c) = state.conns.get_mut(&conn) {
-            c.flush = Some(window);
-        }
+        batches.next += 1;
+        let window = batches.next;
+        c.flush = Some(window);
         if self.manual {
-            state.due.push((conn, window));
+            batches.due.push((conn, window));
             return;
         }
         let me = self.me.clone();
@@ -1185,6 +1372,9 @@ impl Host {
                 let message = "Mobile web settings can only be changed on the computer";
                 return self.refuse(state, conn, id, message);
             }
+            if ch == self.config.channels.file_edit_report {
+                return self.file_edit_report(state, conn, id, &device, &conn_id, &args);
+            }
             self.config.channels.heavy.iter().any(|heavy| heavy == ch)
         };
         if heavy {
@@ -1225,6 +1415,31 @@ impl Host {
             }),
             args.get().as_bytes().to_vec(),
         );
+    }
+
+    /// `FILE_EDIT_REPORT`, answered here: recorded in the frame's own run under the state lock, so it never lands
+    /// after its connection's `finish` (a picture-carrying shape is not a report: `parse_report` takes only
+    /// `{dirtyTabId}`). Main hears `web.fileEdits` to sweep the openers a page held back. An invoke's answer leaves
+    /// after what was pushed before it.
+    fn file_edit_report(
+        &self,
+        state: &mut State,
+        conn: u64,
+        id: Option<u64>,
+        device: &str,
+        conn_id: &str,
+        args: &RawValue,
+    ) {
+        if let Some(dirty) = file_edits::parse_report(args) {
+            state.file_edits.report(device, conn_id, dirty);
+            self.tell(
+                "web.fileEdits",
+                json!({ "host": self.host, "device": device }),
+            );
+        }
+        if let Some(id) = id {
+            self.reply(state, conn, id, Answer::Value(None));
+        }
     }
 
     /// Main ran a call: its heavy slot is free, and an invoke's answer leaves after everything pushed before it.
@@ -1432,11 +1647,45 @@ impl Router for Host {
 // What main sends.
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DeliverParams {
     host: u64,
     device: String,
+    #[serde(default, deserialize_with = "connection_target")]
+    conn_id: Option<String>,
+    ch: String,
+    /// Main sent no data: a stream to a device it holds no page of, or data it could not write.
     #[serde(default)]
-    ch: Option<String>,
+    missed: bool,
+}
+
+// Only an absent connId means fanout. A present null or non-string must not widen the target.
+fn connection_target<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
+}
+
+/// The tab ids a `TAB_LIST_CHANGED` payload names (`{tabs: [{tabId}]}`), none when it is not a list.
+fn listed_tabs(data: &RawValue) -> Option<std::collections::HashSet<String>> {
+    #[derive(Deserialize)]
+    struct Listed {
+        tabs: Vec<Value>,
+    }
+    let listed: Listed = serde_json::from_str(data.get()).ok()?;
+    Some(
+        listed
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.get("tabId")?.as_str().map(str::to_owned))
+            .collect(),
+    )
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct DiskFullParams {
+    #[serde(skip_serializing)]
+    host: u64,
+    files: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1469,15 +1718,24 @@ fn deliver(push: PushCall) {
     let Some(host) = host_of(params.host) else {
         return;
     };
-    let pushed = params.ch.map(|ch| {
-        let data = push
-            .bin
-            .and_then(|bin| String::from_utf8(bin).ok())
-            .and_then(|text| RawValue::from_string(text).ok());
-        Pushed::new(ch, data)
-    });
-    host.deliver(&params.device, pushed);
+    host.deliver_push(params, push.bin);
     host.drain_test();
+}
+
+fn disk_full(push: PushCall) {
+    let Ok(params) = serde_json::from_str::<DiskFullParams>(push.params.get()) else {
+        return;
+    };
+    if params.files.iter().any(|name| {
+        name.contains(['/', '\\'])
+            || matches!(name.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
+    }) {
+        return;
+    }
+    if let Some(host) = host_of(params.host) {
+        host.disk_full(&params);
+        host.drain_test();
+    }
 }
 
 fn reply(push: PushCall) {
@@ -1520,11 +1778,37 @@ fn close_device(push: PushCall) {
     }
 }
 
+#[derive(Deserialize)]
+struct WindowParams {
+    win: i64,
+    /// The host's router and the device; absent once main destroyed the window (the device was revoked).
+    host: Option<u64>,
+    device: Option<String>,
+}
+
+/// `web.window {win, host, device}`: main made a device's window; `{win}` alone: it is gone.
+fn window(push: PushCall) {
+    let Ok(params) = serde_json::from_str::<WindowParams>(push.params.get()) else {
+        return;
+    };
+    let mut windows = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    match (params.host, params.device) {
+        (Some(host), Some(device)) if params.win < 0 => {
+            windows.insert(params.win, (host, device));
+        }
+        _ => {
+            windows.remove(&params.win);
+        }
+    }
+}
+
 pub fn register(registry: &mut Registry) {
     registry.add_push("web.deliver", deliver);
+    registry.add_push("web.diskFullState", disk_full);
     registry.add_push("web.reply", reply);
     registry.add_push("web.resynced", resynced);
     registry.add_push("web.closeDevice", close_device);
+    registry.add_push("web.window", window);
     test_hooks::register(registry);
 }
 
@@ -1551,7 +1835,10 @@ mod test_hooks {
     pub(super) struct Rig {
         now: Mutex<i64>,
         devices: Arc<TestDevices>,
-        sockets: Mutex<Vec<(u64, mpsc::UnboundedReceiver<Outgoing>)>>,
+        /// Each socket's queue and the outbox counting it: a text the test is handed has left the queue, as a text the
+        /// edge starts writing has (`server.rs` calls `Outbox::taken`), so the slow-consumer budget counts the backlog,
+        /// not every byte the connection ever sent.
+        sockets: Mutex<Vec<(u64, mpsc::UnboundedReceiver<Outgoing>, Outbox)>>,
     }
 
     static RIGS: LazyLock<Mutex<HashMap<u64, Arc<Rig>>>> = LazyLock::new(Mutex::default);
@@ -1568,10 +1855,13 @@ mod test_hooks {
         pub(super) fn drain_test(&self) {
             let Some(rig) = rig(self.host) else { return };
             let mut sockets = rig.sockets.lock().unwrap_or_else(|e| e.into_inner());
-            for (socket, inbox) in sockets.iter_mut() {
+            for (socket, inbox, outbox) in sockets.iter_mut() {
                 while let Ok(outgoing) = inbox.try_recv() {
                     let sent = match outgoing {
-                        Outgoing::Text(text) => json!({ "kind": "text", "text": text }),
+                        Outgoing::Text(text) => {
+                            outbox.taken(text.len());
+                            json!({ "kind": "text", "text": text })
+                        }
                         Outgoing::Ping => json!({ "kind": "ping" }),
                         Outgoing::Close(code, reason) => {
                             json!({ "kind": "close", "code": code, "reason": reason })
@@ -1593,6 +1883,7 @@ mod test_hooks {
         host: u64,
         now: i64,
         manual_timers: bool,
+        blob_user_data: Option<std::path::PathBuf>,
         config: Config,
     }
 
@@ -1633,6 +1924,13 @@ mod test_hooks {
             call.events.clone(),
             params.config,
             devices,
+            match params.blob_user_data {
+                Some(path) => super::super::blobs::open(&path),
+                None => Arc::new(BlobStore::new(
+                    String::new(),
+                    super::super::blobs::IDLE_TTL_MS,
+                )),
+            },
             clock,
             params.manual_timers,
         );
@@ -1662,16 +1960,17 @@ mod test_hooks {
             }
             "attach" => {
                 let (sender, inbox) = mpsc::unbounded_channel();
+                let outbox = Outbox::new(sender);
                 match host.attach_conn(
                     &params.device,
-                    Outbox::new(sender),
+                    outbox.clone(),
                     params.resume_from.as_deref(),
                 ) {
                     Some(conn) => {
                         rig.sockets
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .push((conn, inbox));
+                            .push((conn, inbox, outbox));
                         json!({ "socket": conn })
                     }
                     None => Value::Null,
@@ -1697,6 +1996,7 @@ mod test_hooks {
             "timers" => {
                 let state = host.state();
                 let due: Vec<u64> = state
+                    .batches
                     .due
                     .iter()
                     .filter(|(conn, window)| {
@@ -1708,7 +2008,7 @@ mod test_hooks {
             }
             "flush" => {
                 let mut state = host.state();
-                let due = std::mem::take(&mut state.due);
+                let due = std::mem::take(&mut state.batches.due);
                 for (conn, window) in due {
                     if state.conns.get(&conn).and_then(|c| c.flush) == Some(window) {
                         host.flush(&mut state, conn);
@@ -1729,15 +2029,35 @@ mod test_hooks {
                 Value::Null
             }
             "count" => json!(host.state().devices.get(&params.device).map_or(0, Vec::len)),
+            "edits" => json!(
+                host.state()
+                    .file_edits
+                    .edits(&params.device, &params.text)
+                    .as_str()
+            ),
             _ => return Err(Fault::new("invalid_params", "unknown router test op")),
         };
         host.drain_test();
         Reply::json(&result)
     }
 
+    /// `web.router.test.pageSend {wins, ch, data}`: a push the core makes itself (`pages.rs`), as the pool will.
+    async fn page_send(call: Call) -> Result<Reply, Fault> {
+        #[derive(Deserialize)]
+        struct PageSend {
+            wins: Vec<i64>,
+            ch: String,
+            data: Value,
+        }
+        let params: PageSend = call.params()?;
+        crate::pages::send(&params.wins, &params.ch, &params.data);
+        Reply::json(&Value::Null)
+    }
+
     pub(super) fn register(registry: &mut Registry) {
         registry.add("web.router.test.open", |call| Box::pin(open(call)));
         registry.add("web.router.test", |call| Box::pin(op(call)));
+        registry.add("web.router.test.pageSend", |call| Box::pin(page_send(call)));
     }
 }
 

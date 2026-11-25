@@ -9,6 +9,7 @@ import type { McpOffReason } from "../../resources/gui-bridge/extensions/mcp-con
 import type { SkippedPreferred } from "../../resources/gui-bridge/model-role-contracts";
 import type { TitleRegenerateResult } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import type { AutopilotAction, AutopilotStatus } from "../../resources/gui-bridge/modes/autopilot-contracts";
+import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
 import type { CheckoutPeers } from "../../resources/gui-bridge/modes/checkout-peers-contracts";
 import type { DelegationMode } from "../../resources/gui-bridge/modes/delegation-contracts";
 import type {
@@ -19,6 +20,7 @@ import type {
 	NextPromptState,
 	NextPromptUpdate,
 } from "../../resources/gui-bridge/modes/next-prompt-contracts";
+import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
 import type { ModelRequestFrame } from "../../resources/gui-bridge/turn-stages-contracts";
 import type { GithubRequest } from "./github";
 
@@ -88,6 +90,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_event_filter"; events: string[] | null }
 	/** Opts the host into upstream's `ask` extension-dialog protocol (`answers` responses). */
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
+	| { id?: string; type: "project_ask_form"; html: string; answers?: FormFieldAnswer[] }
 	/** Registers GUI-executed tools (stock `set_host_tools`); calls arrive as `host_tool_call`. */
 	| { id?: string; type: "set_host_tools"; tools: HostToolDefinition[] }
 	| { id?: string; type: "get_subagents" }
@@ -109,6 +112,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model"; direction?: "forward" | "backward" }
 	| { id?: string; type: "get_available_models"; forceRefresh?: boolean }
+	| { id?: string; type: "get_model_release_dates" }
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel | "auto" }
 	| { id?: string; type: "cycle_thinking_level" }
 	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
@@ -136,6 +140,11 @@ export type RpcCommand =
 	| { id?: string; type: "queue_remove"; queueId: string }
 	| { id?: string; type: "queue_move"; queueId: string; toIndex: number; toLane?: "steering" | "followUp" }
 	| { id?: string; type: "queue_clear"; lane?: "steering" | "followUp" }
+	// The person's queued messages kept past their omp's death (core `sidecar/held_queue.rs`): `queue_take_held` takes
+	// the tab session's held messages once (an `RpcAbortAndRestoreQueueResult`); `queue_hold` holds the message the field
+	// edits (`lane` and `text`, renewed while the edit lasts) or lets it go (no `text`).
+	| { id?: string; type: "queue_take_held" }
+	| { id?: string; type: "queue_hold"; token: string; lane?: "steering" | "followUp"; text?: string }
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	// Stock's `/dump all|anon` zip (gui-bridge session-dump.ts) repacked with every member redacted in os.tmpdir() (local/session-dump.ts); the answer is a `SessionArchive` (shared/diagnostic-bundle.ts), an error `no_messages` while the session is empty.
@@ -166,19 +175,48 @@ export type RpcCommand =
 	| { id?: string; type: "agent_control_confirm"; title: string; message: string }
 	| { id?: string; type: "agent_control_note"; text: string }
 	| { id?: string; type: "agent_control_worker"; from: string }
+	// A bot chat's context (main/agent-control's core, gui-bridge modes/bots.ts `agent_control.bot`)
+	| { id?: string; type: "agent_control_bot"; context: BotContext }
 	| { id?: string; type: "agent_control_turn" }
 	| { id?: string; type: "agent_control_judge"; system: string; user: string }
 	| {
 			id?: string;
 			type: "agent_control_mail";
-			content: string;
+			/** Text, or text blocks and the pictures a report carries (`ompdesk_report` attachments). */
+			content: string | (TextContent | ImageContent)[];
 			details: Record<string, unknown>;
 			triggerTurn: boolean;
 			deliverAs?: "aside";
 	  }
+	// Another session's message to this one while it works (main/agent-control, gui-bridge agent-control.ts): stock's
+	// aside, read at the next step boundary with every other one waiting; `{idle: true}` when it sent nothing.
+	| { id?: string; type: "agent_control_aside"; message: string; images?: ImageContent[] }
 	// Which message markers main sent this session its journal holds, and which omp process answers
 	// (main/agent-control/send-outbox.ts): `{instance, journaled}`.
 	| { id?: string; type: "agent_control_sent"; marks: string[] }
+	// An answer that carries attachments, made in one step where the answered session runs
+	// (main/agent-control/target-answer.ts): the note first, then the answer (`askId` + `response`, or `plan`).
+	| {
+			id?: string;
+			type: "agent_control_answer";
+			requestId: string;
+			companion: {
+				content: string | (TextContent | ImageContent)[];
+				details: Record<string, unknown>;
+				delivery: { triggerTurn: boolean; deliverAs?: "aside" };
+			};
+			askId?: string;
+			response?: ExtensionUIResponse;
+			plan?: RpcCommand;
+			/** The plan file of the proposal the answer was about: only that very plan is approved. */
+			planFile?: string;
+			/** Which proposal of the tab the answer was about (`PendingPlan.generation`): a revised plan reuses the file. */
+			planGeneration?: number;
+	  }
+	// One attachment of `ompdesk_session_send` / `ompdesk_report` read where this session's omp runs
+	// (gui-bridge agent-control.ts `agent_control.attachment`): `{path}` a file, `{image}` the n-th newest picture of
+	// its conversation (1 = newest). Answers `{name, mimeType, dataBase64, sha256}`.
+	| { id?: string; type: "agent_control_attachment"; path?: string; image?: number }
 	// The other live sessions in this session's worktree or repository (gui-bridge modes/checkout-peers.ts);
 	// `checkout_peers` frames keep the value current. Answers `{peers}` (null: the session works alone).
 	| { id?: string; type: "get_checkout_peers" }
@@ -501,8 +539,12 @@ export type RpcCommand =
 			 * renamed with a suffix; a name that cannot be used fails.
 			 */
 			branch?: { name: string; mode: "new" | "local" | "remote"; remote?: string; from?: string };
+			/** One per dialog opening: a retried request (an answer lost on the way) gets the same worktree, never a second one. */
+			requestId?: string;
 	  }
 	| { id?: string; type: "worktree_remove"; path: string; force?: boolean }
+	// The worktree dialog fetches the remote default branch when it opens, so a `default`-based create finds it fresh.
+	| { id?: string; type: "worktree_prefetch"; baseCwd?: string }
 	// Orphaned worktrees: OMPdesk-made linked worktrees no open session uses, listed for the repository of the tab's
 	// cwd; removal re-checks everything and only takes a landed or untouched one (`LocalCommandError` codes
 	// `not_orphan`, `not_removable`).
@@ -518,14 +560,16 @@ export type RpcCommand =
 	// Pull requests (PR Center, plan/21). pr_diff is per-file (lazy), pr_draft
 	// is a model call, pr_checkout lands the PR in a worktree (plan/20 scheme).
 	| { id?: string; type: "pr_repo" }
+	// `background`: an automatic re-read (core `gh/gate.rs` holds it behind GitHub's rate limit and pace).
 	| {
 			id?: string;
 			type: "pr_list";
 			state?: "open" | "closed" | "merged" | "all";
 			limit?: number;
 			view?: RpcPrListView;
+			background?: boolean;
 	  }
-	| { id?: string; type: "pr_get"; number: number }
+	| { id?: string; type: "pr_get"; number: number; background?: boolean }
 	| { id?: string; type: "pr_diff"; number: number; path: string }
 	| { id?: string; type: "pr_draft"; base?: string; head?: string }
 	| { id?: string; type: "pr_create"; title: string; body: string; base?: string; head?: string; draft?: boolean }
@@ -536,7 +580,7 @@ export type RpcCommand =
 	| { id?: string; type: "pr_comments"; number: number }
 	| { id?: string; type: "pr_edit"; number: number; title?: string; body?: string; base?: string }
 	// Agents › GitHub over gh (src/main/local/git/github.ts; contract src/shared/github.ts).
-	| { id?: string; type: "github"; request: GithubRequest }
+	| { id?: string; type: "github"; request: GithubRequest; background?: boolean }
 	// Source control in the Changes panel (src/main/local/git/scm.ts): plain git
 	// mutations on the session checkout; git_commit_message runs stock
 	// `omp commit --dry-run` and never commits.
@@ -632,6 +676,25 @@ export interface RpcContextReportResult {
 	breakdown?: RpcContextUsageBreakdown;
 	contextWindow: number;
 	model: string;
+	/** Stock's `getPromptCacheStatus()` when it was read; absent on an omp without it or when it knows no entry. */
+	promptCache?: RpcPromptCacheStatus;
+}
+
+/**
+ * What the next request finds in the prompt cache, as stock computes it (pi-tui `status-line/host` `PromptCacheStatus`,
+ * the TUI's `cache` segment): the GUI only words it, never judges expiry itself.
+ */
+export interface RpcPromptCacheStatus {
+	state: "warm" | "cold";
+	/** Why it is cold (`expired`, `model`, `tools`, …); absent while warm. */
+	reason?: { kind: string; at?: number };
+	/** Read off a reopened transcript, not a response this omp saw. */
+	inferred: boolean;
+	/** Send time of the last request that read or wrote the entry. */
+	touchedAt: number;
+	/** Lifetime after the last touch; absent when the provider never expires the entry. */
+	ttlMs?: number;
+	warming?: { state: "scheduled" | "refreshing" | "inactive" };
 }
 
 /** Context inspector categories: stock's five, tools split by source, context files out of system context. */
@@ -1024,8 +1087,6 @@ export interface RpcMcpServerInfo {
 	toolCount: number;
 	enabled: boolean;
 	authed: boolean;
-	/** True only for OMPdesk's session-local REA declaration, never a user's same-name server. */
-	builtin?: "rea";
 	/** Config provenance (C1). */
 	scope?: "user" | "project";
 	/** stdio only. */
@@ -1251,6 +1312,17 @@ export interface RpcWorktreeCreateResult {
 	seed?: WorktreeSeedReport;
 	/** Present when the repo has a `.ompdesk/worktree-setup`. */
 	setup?: WorktreeSetupReport;
+	/** Present for base `default`: what fetching the remote default branch first brought, or why it could not. */
+	base?: WorktreeBaseFetch;
+}
+
+/** `ref`: `origin/<default>`; `behind`: commits the fetch brought (`subjects`: the newest three); `fetched` false when a fetch under 30 s old was reused or it failed. */
+export interface WorktreeBaseFetch {
+	ref: string;
+	fetched: boolean;
+	behind: number;
+	subjects: string[];
+	error?: string;
 }
 
 /**
@@ -1285,9 +1357,24 @@ export interface RpcOrphanWorktrees {
 	worktrees: RpcOrphanWorktree[];
 }
 
-/** remove_orphan_worktree: the worktree is gone; `branch-kept` when its branch stayed (asked to, or it moved meanwhile). */
-export interface RpcOrphanWorktreeRemoval {
+/**
+ * What became of a session branch's copy on origin when its worktree or merge went (`drop_landed_remote` in the core's
+ * `git/branches.rs`): deleted because its tip is in `origin/<base>` (by ancestry or by content), or kept and why;
+ * `message` says it in one sentence that names the branch.
+ */
+export interface RpcRemoteCopy {
+	outcome: "deleted" | "not-landed" | "moved" | "base" | "no-base" | "refused" | "failed";
+	message: string;
+}
+
+/**
+ * A safe removal of a session's or an orphaned worktree (`removeSafeWorktree`, remove_orphan_worktree): the worktree is
+ * gone; `branch-kept` when its branch stayed (asked to, or it moved meanwhile). `remote`: what became of the branch's
+ * copy on origin, absent when origin holds none.
+ */
+export interface RpcSafeRemoval {
 	removal: "removed" | "branch-kept";
+	remote?: RpcRemoteCopy;
 }
 
 /** pr_repo: gh availability + the session cwd's GitHub repo, or the typed reason it's unusable. */
@@ -1603,6 +1690,8 @@ export interface ModelInfo {
 	id: string;
 	name?: string;
 	description?: string;
+	/** A live route may serve through a key; it is not proof of subscription access after reopening. */
+	pickerAvailability?: "account-verified" | "account-unverified" | "live-route";
 	isNew?: boolean;
 	isBeta?: boolean;
 	isRecommended?: boolean;
@@ -1660,6 +1749,8 @@ export interface RpcSessionState {
 	/** True only when the session is idle with no queued or pending async work. */
 	isSettled?: boolean;
 	todoPhases: TodoPhase[];
+	/** When the todo list last changed and whether it is behind the work (bridge todo-drift.ts); absent without the bridge. */
+	todoDrift?: TodoDriftState;
 	systemPrompt?: string[];
 	dumpTools?: ToolDump[];
 	contextUsage?: ContextUsage | null;
@@ -1716,7 +1807,10 @@ export interface ExtensionAskDialogQuestion {
 	 * (resources/gui-bridge/ask-form.ts) puts an `ask` form's paragraphs, tables and pictures here; stock never sets it.
 	 */
 	context?: string;
+	formField?: { custom: boolean; multiline: boolean; initialText: string; checked: string[] };
 }
+export type FormFieldAnswer = { id: string; selectedOptions: string[]; customInput?: string };
+export type FormDataReply = { data: Record<string, string | number | string[]> };
 export interface ExtensionAskDialogResultItem {
 	id: string;
 	question: string;
@@ -1759,6 +1853,7 @@ export type ExtensionUIRequest =
 			questions: ExtensionAskDialogQuestion[];
 			timeout?: number;
 	  }
+	| { type: "extension_ui_request"; id: string; method: "form"; html: string; timeout?: number }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -1819,6 +1914,7 @@ export type ExtensionUIResponse =
 			id: string;
 			answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
 	  }
+	| ({ type: "extension_ui_response"; id: string } & FormDataReply)
 	| { type: "extension_ui_response"; id: string; cancelled: true; timedOut?: boolean };
 
 // ============================================================================
@@ -2098,6 +2194,7 @@ export const BLOCKING_UI_METHODS: Record<string, true> = {
 	select: true,
 	confirm: true,
 	ask: true,
+	form: true,
 	input: true,
 	editor: true,
 	open_url: true,
@@ -2135,6 +2232,11 @@ export interface ImageContent {
 	type: "image";
 	data: string;
 	mimeType: string;
+	/**
+	 * A paired web page's only: the host kept a picture too large for a frame behind this `/blob/<token>` URL (`data` is
+	 * empty); the page loads it over HTTP with its device cookie (main/web/page-images.ts).
+	 */
+	blobUrl?: string;
 }
 
 export interface TodoPhase {
@@ -2317,8 +2419,20 @@ export interface UsageReport {
 	fetchedAt: number;
 	limits: UsageLimit[];
 	notes?: string[];
-	/** When every exhausted window of this account has reset, epoch ms (stock `usageResetAtMs`); absent while it is not limited. */
+	/**
+	 * When every exhausted window of this account has reset, epoch ms (stock `usageResetAtMs` over every row, a model's
+	 * own week included); absent while none is exhausted. What a wait for a limit reads (shared/quota-reset.ts).
+	 */
 	resetAt?: number;
+	/**
+	 * Until when the omp that read this sends the account no request, epoch ms (gui-bridge usage-standing.ts): an
+	 * exhausted account-wide window, or, with that omp's Credit use off, a plan used up. A model's own week is not in it.
+	 */
+	limitedUntil?: number;
+	/** Until when the account's plan is used up (ChatGPT and Claude), epoch ms, whether or not it runs on past it. */
+	planSpentUntil?: number;
+	/** What the account has left to spend beyond its plan, while above zero (ChatGPT's from the last fetch). */
+	credits?: AccountCredits;
 	account?: string;
 	/** Stored credential the report belongs to, when its identity names one. */
 	credentialId?: number;
@@ -2536,6 +2650,11 @@ export interface AvailableModelsResult {
 	discoveryStates: ProviderDiscoveryState[];
 	refreshPending: boolean;
 	generation: number;
+}
+
+export interface ModelReleaseDatesResult {
+	/** Exact OpenRouter ids mapped to their canonical model's first public release, as UTC epoch milliseconds. */
+	dates: Record<string, number>;
 }
 
 export interface ProvidersResult {
@@ -2872,6 +2991,8 @@ export type AgentSessionEvent =
 	| { type: "ttsr_triggered"; rules: { name: string; description?: string }[] }
 	| { type: "todo_reminder"; todos: TodoTask[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
+	/** The bridge's reading of the todo list changed (todo-drift.ts; `TODO_DRIFT_EVENT`). */
+	| { type: "todo_drift"; state: TodoDriftState }
 	| { type: "irc_message"; message: unknown }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
 	| {
@@ -2893,6 +3014,8 @@ export type AgentSessionEvent =
 			suggestedFileName?: string;
 			planContent: string;
 			options: string[];
+			/** The generation of a tab a paired host runs: that host numbers its plans, and the answer names it. */
+			generation?: number;
 	  }
 	// The proposal stopped waiting (answered in any window or by an agent, or a prompt replied to it).
 	| { type: "plan_proposal_resolved"; planFilePath: string }

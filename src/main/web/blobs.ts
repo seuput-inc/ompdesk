@@ -11,9 +11,9 @@
  * fast as the core consumed them (`web.media.ack`), and stops when the HTTP client went (`web.media.cancel`).
  */
 import { randomBytes, randomUUID } from "node:crypto";
+import { WEB_BLOB_URL_PREFIX } from "../../shared/web-protocol";
 import { CORE_EXITED, type CoreProcess, core } from "../core/process";
 
-export const BLOB_URL_PREFIX = "/blob/";
 export const BLOB_IDLE_TTL_MS = 30 * 60_000;
 
 /** Bytes pushed to the core that it has not reported taking yet, at most. */
@@ -140,8 +140,8 @@ export class BlobStore {
 		});
 	}
 
-	addBytes(deviceId: string, bytes: Uint8Array, mime: string, name = "file"): string {
-		return this.#add(deviceId, { kind: "bytes", mime, name }, bytes);
+	addBytes(deviceId: string, bytes: Uint8Array, mime: string, name = "file", pictureTab?: string): string {
+		return this.#add(deviceId, { kind: "bytes", mime, name, pictureTab }, bytes);
 	}
 
 	/** A stream main's `MediaStreams` serves (`url` is its `omp-media://` address); `open` answers a range request. */
@@ -186,6 +186,7 @@ export class BlobStore {
 			mime: string;
 			name: string;
 			download?: boolean;
+			pictureTab?: string | undefined;
 			abs?: string;
 			url?: string;
 		},
@@ -195,6 +196,6 @@ export class BlobStore {
 		const token = randomBytes(24).toString("base64url");
 		if (open) media.set(token, { userData: this.#userData, open });
 		core().push("web.blobs.add", { userData: this.#userData, deviceId, token, now: this.#now(), ...blob }, bytes);
-		return `${BLOB_URL_PREFIX}${token}`;
+		return `${WEB_BLOB_URL_PREFIX}${token}`;
 	}
 }

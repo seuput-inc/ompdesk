@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	type ActivationPlugin,
+	addedRestartEntries,
 	classifyActivation,
 	pluginRequiresRestart,
 } from "../../resources/gui-bridge/extensions/activation-core";
@@ -195,5 +196,33 @@ describe("pluginRequiresRestart", () => {
 		expect(pluginRequiresRestart({}, resolve)).toBe(true);
 		expect(asked).toEqual(["extensions", "tools", "hooks"]);
 		expect(pluginRequiresRestart({}, () => [])).toBe(false);
+	});
+});
+
+describe("addedRestartEntries", () => {
+	it("lists the extension, tool and hook entries a candidate declares that the installed manifest does not", () => {
+		const installed = { hooks: "h.ts", extensions: ["./a.ts"], commands: ["c.md"] };
+		// Nothing new, and commands or skills never count: they hot-reload.
+		expect(addedRestartEntries(installed, { ...installed, commands: ["c.md", "d.md"], version: "2" })).toEqual([]);
+		expect(addedRestartEntries(installed, { extensions: ["./a.ts"] })).toEqual([]);
+		expect(
+			addedRestartEntries(installed, {
+				hooks: "h.ts",
+				tools: "t.ts",
+				extensions: ["./a.ts", "./b.ts"],
+				// A feature counts whether or not it is on now: it can be turned on later.
+				features: { extra: { hooks: ["./x.ts"] }, moved: { extensions: ["./a.ts"] } },
+			}),
+		).toEqual(["extensions ./b.ts", "hooks ./x.ts", "tools t.ts"]);
+		// A plugin that had no omp manifest gains every entry its new one declares.
+		expect(addedRestartEntries(undefined, { tools: "t.ts" })).toEqual(["tools t.ts"]);
+	});
+
+	it("reads untrusted manifest JSON without throwing", () => {
+		expect(addedRestartEntries(null, "nope")).toEqual([]);
+		expect(addedRestartEntries({}, { hooks: [null, 3], features: "x", tools: { a: 1 } })).toEqual([
+			"hooks 3",
+			'tools {"a":1}',
+		]);
 	});
 });

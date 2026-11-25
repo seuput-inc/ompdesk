@@ -9,8 +9,9 @@ import type { BridgeClient } from "../types";
 import { GITHUB_COMMAND_BUDGET_MS } from "./github";
 import { PR_COMMAND_BUDGETS_MS } from "./pr";
 import { SCM_COMMAND_BUDGETS_MS } from "./scm";
-import { gitSync, initRepo, pathExists, stockShapedWorktree } from "./test-repos";
-import { createWorktree, removableWorktreePath, removeWorktree, WORKTREE_COMMAND_BUDGETS_MS } from "./worktree";
+import { gitSync, initRepo, initRepoWithRemote, pathExists, stockShapedWorktree } from "./test-repos";
+import { createWorktree, removeWorktree, WORKTREE_COMMAND_BUDGETS_MS } from "./worktree";
+import { describePreparation } from "./worktree-seed";
 
 let scratch: string;
 let root: string;
@@ -37,25 +38,16 @@ afterEach(async () => {
 	await fs.rm(scratch, { recursive: true, force: true });
 });
 
-describe("removableWorktreePath", () => {
-	it("accepts a checkout inside the worktree root", async () => {
-		const inside = path.join(root, "gui-fix-1234567");
-		expect(await removableWorktreePath(inside, root)).toBe(inside);
-	});
-
-	it("refuses the user's own checkout, the root itself, and missing or relative paths", async () => {
-		expect(await removableWorktreePath(outside, root)).toBeNull();
-		expect(await removableWorktreePath(root, root)).toBeNull();
-		expect(await removableWorktreePath(path.join(root, "gone"), root)).toBeNull();
-		expect(await removableWorktreePath("wt/gui-fix-1234567", root)).toBeNull();
-		expect(await removableWorktreePath("", root)).toBeNull();
-	});
-
-	it("refuses paths that only look inside the root", async () => {
-		expect(await removableWorktreePath(path.join(root, "..", "projects", "app"), root)).toBeNull();
+describe("worktree removal confinement", () => {
+	it("refuses the root, relative and missing paths, and a symlink to an outside directory", async () => {
 		const link = path.join(root, "gui-link-1234567");
 		await fs.symlink(outside, link, "junction");
-		expect(await removableWorktreePath(link, root)).toBeNull();
+		for (const target of [root, "", "wt/gui-fix-1234567", path.join(root, "gone"), link]) {
+			await expect(removeWorktree({ path: target, force: true }, bridge, outside)).rejects.toMatchObject({
+				code: "worktree_outside_root",
+			});
+		}
+		expect(await pathExists(outside)).toBe(true);
 	});
 });
 
@@ -105,6 +97,65 @@ describe("removeWorktree", () => {
 		expect(gitSync(outside, "branch", "--list", "alice/login")).toContain("alice/login");
 		await expect(createWorktree(outside, { name: "x", branchPrefix: "../evil/" }, bridge)).rejects.toMatchObject({
 			code: "invalid_name",
+		});
+	});
+	it("skips an occupied folder and a taken generated branch without changing either", async () => {
+		await initRepo(outside);
+		const first = path.join(root, "gui-topic-abc1234");
+		await fs.mkdir(first);
+		const taken = "alice/topic-2";
+		const oldTip = gitSync(outside, "rev-parse", "HEAD");
+		gitSync(outside, "branch", taken);
+		gitSync(outside, "commit", "-q", "--allow-empty", "-m", "next");
+
+		const made = await createWorktree(outside, { name: "Topic", branchPrefix: "alice/" }, bridge);
+		expect(made.path).toBe(path.join(root, "gui-topic-3-abc1234"));
+		expect(made.branch).toBe("alice/topic-3");
+		expect(gitSync(made.path, "branch", "--show-current")).toBe(made.branch);
+		expect(gitSync(made.path, "rev-parse", "HEAD")).toBe(gitSync(outside, "rev-parse", "HEAD"));
+		expect(await fs.readdir(first)).toEqual([]);
+		expect(gitSync(outside, "branch", "--list", "alice/topic")).toBe("");
+		expect(gitSync(outside, "rev-parse", taken)).toBe(oldTip);
+		expect(await pathExists(path.join(root, "gui-topic-2-abc1234"))).toBe(false);
+	});
+	it("uses the last free folder for an exact branch and refuses a 101st attempt", async () => {
+		await initRepo(outside);
+		for (let n = 1; n < 100; n++) {
+			await fs.mkdir(path.join(root, n === 1 ? "gui-x-abc1234" : `gui-x-${n}-abc1234`));
+		}
+		const made = await createWorktree(outside, { name: "x", branch: { mode: "new", name: "work/mine" } }, bridge);
+		expect(made.path).toBe(path.join(root, "gui-x-100-abc1234"));
+		expect(made.branch).toBe("work/mine");
+		expect(gitSync(made.path, "branch", "--show-current")).toBe("work/mine");
+		await expect(createWorktree(outside, { name: "x" }, bridge)).rejects.toMatchObject({
+			code: "worktree_create_failed",
+			message: "No available worktree name after 100 attempts",
+		});
+		expect(gitSync(outside, "branch", "--list", "omp/gui/*")).toBe("");
+		expect(await pathExists(path.join(root, "gui-x-101-abc1234"))).toBe(false);
+	});
+	it("creates a missing worktree root and refuses a blocked mkdir before creating a branch", async () => {
+		await initRepo(outside);
+		const parent = path.join(scratch, "nested");
+		root = path.join(parent, "wt");
+		await fs.writeFile(parent, "keep");
+		await expect(createWorktree(outside, { name: "topic" }, bridge)).rejects.toMatchObject({
+			code: "worktree_create_failed",
+			message: expect.stringMatching(/^Failed to create worktree: .*mkdir /),
+		});
+		expect(await fs.readFile(parent, "utf8")).toBe("keep");
+		expect(gitSync(outside, "branch", "--list", "omp/gui/topic")).toBe("");
+
+		await fs.unlink(parent);
+		const made = await createWorktree(outside, { name: "topic" }, bridge);
+		expect(made.path).toBe(path.join(root, "gui-topic-abc1234"));
+		expect(gitSync(made.path, "branch", "--show-current")).toBe("omp/gui/topic");
+	});
+	it("refuses a base folder that does not exist by naming it, never as a missing git", async () => {
+		const gone = path.join(scratch, "projects", "gone");
+		await expect(createWorktree(outside, { name: "x", baseCwd: gone }, bridge)).rejects.toMatchObject({
+			code: "file_not_found",
+			message: `The folder "${gone}" does not exist.`,
 		});
 	});
 	it("starts the worktree's branch at the branch, tag or commit baseRef names, and refuses one that is no commit or reads as an option", async () => {
@@ -182,6 +233,44 @@ describe("removeWorktree", () => {
 		await expect(input({ name: "bad name", mode: "new" })).rejects.toMatchObject({ code: "invalid_name" });
 		expect(gitSync(outside, "branch", "--list")).toBe("* main");
 		expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
+	});
+	it("cuts a default-based worktree from the freshly fetched remote tip and says what the fetch brought", async () => {
+		const bare = path.join(scratch, "remote.git");
+		await initRepoWithRemote(outside, bare);
+		gitSync(outside, "remote", "set-head", "origin", "main");
+		gitSync(outside, "commit", "-q", "--allow-empty", "-m", "remote work");
+		gitSync(outside, "push", "-q", "origin", "main");
+		const remoteTip = gitSync(outside, "rev-parse", "HEAD");
+		// This checkout has not seen the pushed commit: its main and origin/main stay one behind.
+		gitSync(outside, "reset", "-q", "--hard", "HEAD~1");
+		gitSync(outside, "update-ref", "refs/remotes/origin/main", "HEAD");
+
+		const made = await createWorktree(outside, { name: "fresh", baseRef: "default" }, bridge);
+		expect(gitSync(made.path, "rev-parse", "HEAD")).toBe(remoteTip);
+		expect(made.base).toEqual({ ref: "origin/main", fetched: true, behind: 1, subjects: ["remote work"] });
+		expect(describePreparation(made)).toBe("origin/main fetched: 1 new commit(s) (remote work)");
+		expect(gitSync(outside, "rev-parse", "main")).not.toBe(remoteTip);
+
+		const head = await createWorktree(outside, { name: "head", baseRef: "HEAD" }, bridge);
+		expect(head.base).toBeUndefined();
+	});
+	it("answers a repeated request id with the same worktree, refuses it with other arguments, and leaves calls without one alone", async () => {
+		await initRepo(outside);
+		const request = { caller: "local", id: "6f9c1c1e-6d1b-4d1a-9f3e-0c3b8d1e2a11" };
+		const [first, again] = await Promise.all([
+			createWorktree(outside, { name: "same", request }, bridge),
+			createWorktree(outside, { name: "same", request }, bridge),
+		]);
+		expect(again).toEqual(first);
+		expect(await createWorktree(outside, { name: "same", request }, bridge)).toEqual(first);
+		expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(2);
+		await expect(createWorktree(outside, { name: "other", request }, bridge)).rejects.toMatchObject({
+			code: "invalid_request",
+		});
+		const other = { caller: "phone-1", id: request.id };
+		expect((await createWorktree(outside, { name: "same", request: other }, bridge)).path).not.toBe(first.path);
+		const plain = await createWorktree(outside, { name: "same" }, bridge);
+		expect(plain.path).not.toBe(first.path);
 	});
 	it("refuses a primary checkout under the root and a linked checkout subdirectory", async () => {
 		const primary = path.join(root, "user-clone");

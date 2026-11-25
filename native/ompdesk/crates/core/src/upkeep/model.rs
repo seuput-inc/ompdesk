@@ -28,12 +28,16 @@ const TIMEOUT: Duration = Duration::from_secs(180);
 /// What a run's stdout and stderr may hold before the rest is read and dropped (node kept all of it).
 const OUTPUT_CAP: usize = 64 * 1024 * 1024;
 
-/// How omp starts, as main hands it over: the binary and the whole environment (main's, `PATH` with omp's own
-/// folders, telemetry off).
+/// How omp starts, as main hands it over: the binary, the whole environment (main's, `PATH` with omp's own
+/// folders, telemetry off) and the arguments every omp the core starts for a model gets beside the call's own.
+/// Those are main's Credit use switch (`src/main/omp-launch.ts` `creditSpendRun`: `-e credit-spend-run.ts`, with
+/// `OMP_GUI_CREDIT_SPEND` in `env`): such an omp has no bridge to apply it. An older main sends none.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OmpLaunch {
     pub bin: String,
     pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// The system prompt and the text on stdin (`DistillMessage`).
@@ -287,11 +291,11 @@ async fn run_smol_within(
         .map_err(|error| {
             NodeError::new(&error, "mkdir", Some(&cwd.to_string_lossy())).fault(Codes::None)
         })?;
-    let args = [
-        "-p",
+    let own = [
         "--mode",
         "json",
-        "--no-tools",
+        // No built-in tools; not `--no-tools`, which omp 19.2 refuses beside `launch.args`' `-e`.
+        "--tools=",
         "--no-session",
         "--no-extensions",
         "--no-skills",
@@ -303,9 +307,12 @@ async fn run_smol_within(
         "off",
         "--system-prompt",
         &message.system,
-    ]
-    .map(str::to_owned)
-    .to_vec();
+    ];
+    // An explicit `-e` stays loaded under `--no-extensions`, which turns off only what omp would find by itself.
+    let args = std::iter::once("-p".to_owned())
+        .chain(launch.args.iter().cloned())
+        .chain(own.map(str::to_owned))
+        .collect();
     let ran = run_omp(launch, args, cwd, &message.user, timeout).await?;
     let result = parse_omp_json(&ran.stdout);
     match result {
@@ -470,6 +477,7 @@ mod tests {
         OmpLaunch {
             bin: bin.to_owned(),
             env,
+            args: vec!["-e".to_owned(), "credit-spend-run.ts".to_owned()],
         }
     }
 
@@ -524,9 +532,11 @@ mod tests {
         let argv = read(&rec, "argv");
         for flag in [
             "-p",
+            "-e",
+            "credit-spend-run.ts",
             "--mode",
             "json",
-            "--no-tools",
+            "--tools=",
             "--no-session",
             "--no-extensions",
             "--no-skills",
@@ -541,7 +551,8 @@ mod tests {
         ] {
             assert!(argv.contains(flag), "{flag} in {argv}");
         }
-        // The system prompt follows its flag, last.
+        // Main's arguments come right after `-p`; the system prompt follows its flag, last.
+        assert!(argv.find("credit-spend-run.ts").unwrap() < argv.find("--mode").unwrap());
         assert!(argv.find("--system-prompt").unwrap() < argv.find("SYSTEM").unwrap());
         assert!(read(&rec, "stdin").starts_with("USER digest"));
         assert!(read(&rec, "stdin").contains("second line"));
@@ -594,6 +605,7 @@ mod tests {
         let missing = OmpLaunch {
             bin: root.join("no omp here").to_string_lossy().into_owned(),
             env: BTreeMap::new(),
+            args: Vec::new(),
         };
         let fault = run_smol(&missing, &message, &root.join("cwd"))
             .await
@@ -605,6 +617,7 @@ mod tests {
         let slow = OmpLaunch {
             bin,
             env: std::env::vars().collect(),
+            args: Vec::new(),
         };
         let started = std::time::Instant::now();
         let fault = run_smol_within(

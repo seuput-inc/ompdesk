@@ -5,6 +5,15 @@
 name: Check OMPdesk's Rust
 description: cargo fmt (Linux), clippy with warnings denied and the workspace's tests, in native/ompdesk.
 
+inputs:
+  test-cache-key:
+    description: "Exact key for rustc's test compilation state. Empty keeps the dependency-only cache."
+    default: ""
+outputs:
+  unsaved-test-cache-key:
+    description: "Key the caller may save after the tests pass on a miss."
+    value: ${{ steps.test-cache.outputs.cache-hit != 'true' && inputs.test-cache-key || '' }}
+
 runs:
   using: composite
   steps:
@@ -23,8 +32,19 @@ runs:
       working-directory: native/ompdesk
       run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+    # rust-cache restores dependencies but drops workspace crates. Keep only rustc's incremental state,
+    # never Cargo fingerprints, linked executables or test results. Cargo still builds and runs every test.
+    - id: test-cache
+      if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && inputs.test-cache-key != '' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: native/ompdesk/target/debug/incremental
+        key: ${{ inputs.test-cache-key }}
+
     - name: cargo test
       if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
       shell: bash
       working-directory: native/ompdesk
+      env:
+        CARGO_INCREMENTAL: ${{ inputs.test-cache-key != '' && '1' || '0' }}
       run: cargo test --locked --workspace

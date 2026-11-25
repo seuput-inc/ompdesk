@@ -1,4 +1,4 @@
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 import {
 	conclusionExcerpt,
 	explicitTitle,
@@ -8,6 +8,8 @@ import {
 	promptTitle,
 	unwrapPrompt,
 } from "../memory-prompt";
+import { contentTerms } from "../modes/memory-recall-core";
+import { ompModuleFile } from "../omp-package";
 import type { HelperMethods } from "./dispatch";
 
 /**
@@ -118,19 +120,20 @@ function items(params: unknown): PromptItem[] {
 /** Stock `loadSessionMessagesReadOnly` as `sessions.messages` loads it: no writer, no lock, safe against a file a
  * live omp writes; the messages along the persisted leaf. */
 async function readMessages(sessionPath: string): Promise<unknown[]> {
-	const root = process.env.OMP_PACKAGE_ROOT;
-	if (!root) throw new Error("OMP_PACKAGE_ROOT is not set");
 	// Runtime-selected: the loader belongs to the user's resolved omp installation.
-	const loader = await import(
-		Bun.resolveSync("@oh-my-pi/pi-coding-agent/session/session-loader", join(root, "package.json"))
-	);
+	const loader = await import(ompModuleFile("pi-coding-agent/session/session-loader"));
 	const read = loader.loadSessionMessagesReadOnly;
 	if (typeof read !== "function")
 		throw new Error("This omp cannot read stored sessions (loadSessionMessagesReadOnly).");
 	return (await (read as (path: string) => Promise<unknown[]>)(sessionPath)) ?? [];
 }
 
-export const methods: HelperMethods = {
+export const methods = {
+	"memory.recallTerms": bodies => {
+		if (!Array.isArray(bodies) || !bodies.every(body => typeof body === "string"))
+			throw new Error("Invalid conclusion bodies");
+		return bodies.map(contentTerms);
+	},
 	"memory.promptFacts": params => promptFacts(items(params)),
 	"memory.journal": async params => {
 		const sessionPath = field(params, "sessionPath");
@@ -138,4 +141,4 @@ export const methods: HelperMethods = {
 			throw new Error("Invalid session path");
 		return journalFacts(await readMessages(sessionPath));
 	},
-};
+} satisfies HelperMethods;

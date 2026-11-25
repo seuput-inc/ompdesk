@@ -46,14 +46,14 @@ Init ==
     /\ nextHolder = "waiting" /\ spawnedAfterStop = FALSE /\ timedOut = FALSE
     /\ scratch = "none" /\ disk = 0 /\ diskCalls = 0
 
-\* @code src/main/local/git/exec.ts:162-219 heldRequest and heldAnswer (coreGit, coreGitAnswer, coreHeld, coreGh): a live step sends its request; its end is the step's tracked effect
+\* @code src/main/local/git/exec.ts:149-159 heldAnswer: a live step sends its request; its end is the step's tracked effect
 Send ==
     /\ step = "running" /\ req = "none" /\ coreUp
     /\ req' = "pending" /\ toCore' = Append(toCore, "request")
     /\ UNCHANGED <<step, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
 \* Environment: the step ran past its bound (serial-chain.ts #step timer, or its caller's step was stopped).
-\* @code src/main/core/process.ts:259-260 the signal's abort listener writes {"cancel": id} while the call waits
+\* @code src/main/core/process.ts:475-489 the signal's abort listener writes {"cancel": id} while the call waits
 Stop ==
     /\ step = "running"
     /\ step' = "stopped"
@@ -61,7 +61,7 @@ Stop ==
     /\ UNCHANGED <<req, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
 \* Environment: the call's own timeout passes.
-\* @code src/main/core/process.ts:248-254 the caller fails, the request goes on waiting for its end, the core is asked to cancel
+\* @code src/main/core/process.ts:477-483 the caller fails, the request goes on waiting for its end, the core is asked to cancel
 Timeout ==
     /\ req = "pending" /\ coreUp
     /\ req' = IF SettleOnAnswer THEN "late" ELSE "settled"
@@ -74,13 +74,13 @@ StepEnds ==
     /\ step' = "done"
     /\ UNCHANGED <<req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:236-255 a request registers its cancel flag before the next frame is read
+\* @code native/ompdesk/crates/core/src/server.rs:352-365 a request registers its cancel flag before the next frame is read
 CoreReadsRequest ==
     /\ coreUp /\ toCore # <<>> /\ Head(toCore) = "request"
     /\ toCore' = Tail(toCore) /\ registered' = TRUE /\ handler' = "running"
     /\ UNCHANGED <<step, req, toMain, cancelled, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:231-235 a cancel sets the flag of a request still in flight; else nothing
+\* @code native/ompdesk/crates/core/src/server.rs:336-341 a cancel sets the flag of a request still in flight; else nothing
 CoreReadsCancel ==
     /\ coreUp /\ toCore # <<>> /\ Head(toCore) = "cancel"
     /\ toCore' = Tail(toCore)
@@ -113,25 +113,26 @@ DropScratch ==
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, disk, diskCalls>>
 
 \* @code native/ompdesk/crates/core/src/disk/tree.rs:16-23 live: every file system call of disk care's requests first asks whether its request was cancelled
+\* @code native/ompdesk/crates/core/src/disk/saved_records.rs:108-129 change: take the record writer, check cancellation, then replace saved.json through the fenced atomic write
 DiskStarts ==
     /\ coreUp /\ handler = "running" /\ ~cancelled /\ disk = 0 /\ diskCalls < MaxDisk
     /\ disk' = 1 /\ diskCalls' = diskCalls + 1
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch>>
 
-\* @code native/ompdesk/crates/core/src/git/read.rs:63-70 blocking: the call returns on its worker, which held a clone of the request's scope
+\* @code native/ompdesk/crates/core/src/git/read.rs:64-70 blocking: the call returns on its worker, which held a clone of the request's scope
 DiskEnds ==
     /\ disk = 1
     /\ disk' = 0
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:302-311 the handler returns (done, failed or cancelled); a git's task or a disk call's worker may still run, the scratch store is gone
+\* @code native/ompdesk/crates/core/src/server.rs:448-463 the handler returns (done, failed or cancelled); a git's task or a disk call's worker may still run, the scratch store is gone
 HandlerEnds ==
     /\ coreUp /\ handler = "running"
     /\ scratch # "made"
     /\ handler' = "finished"
     /\ UNCHANGED <<step, req, toCore, toMain, registered, cancelled, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code native/ompdesk/crates/core/src/server.rs:312-314 the answer waits until every scope clone (a git's supervisor, a disk call's worker) is gone
+\* @code native/ompdesk/crates/core/src/server.rs:464-467 the answer waits until every scope clone (a git's supervisor, a disk call's worker) is gone
 CoreAnswers ==
     /\ coreUp /\ handler = "finished" /\ ~answered
     /\ WaitGroup => alive = 0
@@ -139,7 +140,7 @@ CoreAnswers ==
     /\ answered' = TRUE /\ toMain' = Append(toMain, "answer")
     /\ UNCHANGED <<step, req, toCore, registered, cancelled, handler, gits, alive, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
-\* @code src/main/core/process.ts:322-354 #receive: the answer, also a late one, calls onEnded
+\* @code src/main/core/process.ts:640-670 #receive: the answer, also a late one, calls onEnded
 MainReceives ==
     /\ toMain # <<>>
     /\ toMain' = Tail(toMain)
@@ -153,7 +154,7 @@ CoreDies ==
     /\ coreUp' = FALSE /\ toCore' = <<>> /\ toMain' = <<>> /\ disk' = 0
     /\ UNCHANGED <<step, req, registered, cancelled, handler, gits, alive, answered, nextHolder, spawnedAfterStop, timedOut, scratch, diskCalls>>
 
-\* @code src/main/core/process.ts:356-387 #ended: once the core's group is gone (groupGone), what waited on it settles
+\* @code src/main/core/process.ts:672-724 #ended: what waited on the core settles on the owner's core.gone, once its group is gone
 MainSeesDeath ==
     /\ ~coreUp /\ req \in {"pending", "late"}
     /\ KillGroup => alive = 0
@@ -161,7 +162,7 @@ MainSeesDeath ==
     /\ UNCHANGED <<step, toCore, toMain, registered, cancelled, handler, gits, alive, answered, coreUp, nextHolder, spawnedAfterStop, timedOut, scratch, disk, diskCalls>>
 
 \* Environment: a git of the dead core outlives SIGKILL past GROUP_GONE_MS (a process stuck in the kernel).
-\* @code src/main/core/process.ts:68-80 groupGone answers false past its bound; #ended settles anyway, naming it
+\* @code native/ompdesk/crates/core/src/owner.rs:261-294 group_gone answers false past its bound; core.gone {empty: false}, #ended settles anyway, naming it
 BoundPasses ==
     /\ BoundMayPass /\ ~coreUp /\ req \in {"pending", "late"} /\ alive > 0
     /\ req' = "settled"

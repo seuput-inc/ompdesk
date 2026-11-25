@@ -24,10 +24,14 @@ async function shown(page: Page, tabId: string): Promise<Shown> {
 	return page.locator(`.omp-session-pane[data-tab-id="${tabId}"]`).evaluate(pane => {
 		const rows = [...pane.querySelectorAll<HTMLElement>("[data-transcript-kind][data-row-key]")];
 		const structure: Record<string, number> = {};
+		// A clock that repeats the one above it moves to the action row (`repeatedClockRows`): which rows share a
+		// minute depends on where the wall-clock minute turns during each tab's run, not on how it renders
+		// (ChatStream.clocks.test.ts pins the rule).
 		for (const row of rows)
 			for (const element of [row, ...row.querySelectorAll("*")])
 				for (const name of element.getAttributeNames())
-					if (name.startsWith("data-")) structure[name] = (structure[name] ?? 0) + 1;
+					if (name.startsWith("data-") && name !== "data-clock-repeats")
+						structure[name] = (structure[name] ?? 0) + 1;
 		const clockless = (text: string) => text.replace(/\d{1,2}:\d{2}/g, "HH:MM").replace(/\b\d+(\.\d+)?s\b/g, "Ns");
 		return { rows: rows.map(row => clockless(`${row.dataset.transcriptKind}: ${row.innerText}`)), structure };
 	});
@@ -73,9 +77,11 @@ test("a host's tab shows a streamed reply, live and finished, as a local tab doe
 			.getByRole("region", { name: "This device" })
 			.getByRole("button", { name: "New agent session here" })
 			.click();
-		const localTab =
+		const activeLocal = async () =>
 			(await a.evaluate(() => window.omp.tabs.list())).find(tab => tab.active && !tab.device)?.tabId ?? "";
-		expect(localTab).not.toBe("");
+		// The click opens the tab asynchronously: a list read right after it still has the host's tab in front.
+		await expect.poll(activeLocal, { timeout: 30_000 }).not.toBe("");
+		const localTab = await activeLocal();
 		// A draft keeps this empty tab when the other one comes to the front (an empty one left is closed, `unstarted`).
 		await a.locator(`.omp-session-pane[data-tab-id="${localTab}"] .omp-composer-input`).fill("a draft");
 

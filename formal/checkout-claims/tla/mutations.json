@@ -112,6 +112,14 @@
 			"breaks": "CommittedIsNobodys",
 			"isolate": true,
 			"config": "MC_clean.cfg"
+		},
+		{
+			"name": "restore-reads-newest-entry-only",
+			"why": "A load as it read the journal before deltas: the newest entry alone, so a delta as the newest entry restores nothing and a relaunch loses the claim of an uncommitted write.",
+			"search": "Replayed == ReplayFrom(jlog, FALSE)",
+			"replace": "Replayed == IF jlog # <<>> /\\ jlog[Len(jlog)].kind = \"whole\" THEN jlog[Len(jlog)].held ELSE FALSE",
+			"breaks": "NoLostClaim",
+			"isolate": true
 		}
 	]
 }

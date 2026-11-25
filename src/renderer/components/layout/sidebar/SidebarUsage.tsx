@@ -1,16 +1,7 @@
 /**
- * Sidebar footer usage block (mixdog's "Rail bars", pin `usage`, on by default): every subscription account that
- * reports usage windows, grouped by provider the way Settings › Models & accounts lists them (the shared
- * `ProviderGroupItem` and `ConnectedRow`, `compact`): a provider header that folds its accounts (the fold is
- * remembered, `usageGroups`), and under it one row per account with the address whole (it wraps, never an
- * ellipsis; the full label is the tooltip), "In use" on the account this tab's session is pinned to, and every
- * measured window as a gauge with its reset beneath (5H, 7D, a model's own weekly limit), a window at its limit in
- * the danger fill and one near it in warning, as in Settings (`AccountQuota.tsx`). The provider this tab uses comes
- * first; inside a group the accounts keep a fixed order, so a reading never moves a row. The accounts scroll inside
- * a capped height, so many of them never take the sidebar. The in-use account's row says why the session is on it
- * (`rotationReason`, the account rotation's last decision) when the report carries one. API-key providers have no
- * windows and are not listed; with no account at all the block renders nothing. The header's gear opens Settings ›
- * Models & accounts. Reads go through `useUsageReports` (live quotas, no polling of its own).
+ * Every measured subscription account, grouped by provider, with shared window headings and compact account rows.
+ * Names are shortened only here; each row retains the full account as its accessible name and tooltip.
+ * Quotas and reset times come from the shared account renderer. Reads go through `useUsageReports`.
  */
 
 import { Settings2 } from "lucide-react";
@@ -18,23 +9,16 @@ import { type KeyboardEvent, type MouseEvent, useMemo } from "react";
 import type { ProviderInfo, UsageReport } from "../../../../shared/rpc-types";
 import { useUsageReports } from "../../../hooks/use-usage-reports";
 import { useT } from "../../../lib/i18n";
-import { type UsageAccountGroup, usageAccountGroups } from "../../../lib/usage-reports";
-import { rotationReason } from "../../../lib/usage-rotation";
-import { gaugeColumns } from "../../../lib/usage-windows";
+import { accountGauges, gaugeColumn, gaugeColumns, shortWindowLabel } from "../../../lib/usage-windows";
 import { useModelStore } from "../../../stores/model";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useUiStore } from "../../../stores/ui";
-import { DisclosureButton, IconButton } from "../../common";
-import {
-	AccountBadges,
-	type AccountQuotaSource,
-	accountNames,
-	accountStanding,
-	QuotaCell,
-	quotaLimits,
-} from "../../settings/providers/AccountQuota";
+import { DisclosureButton, IconButton, MAX_USAGE_COLUMNS, NEAR_FRACTION } from "../../common";
+import { type AccountQuotaSource, QuotaCell, quotaLimits } from "../../settings/providers/AccountQuota";
 import { ConnectedRow, ProviderGroupItem } from "../../settings/providers/ConnectedRow";
 import { type ProviderGroup, providerPlan, shortProviderName } from "../../settings/providers/provider-groups";
+import { bareEmail } from "../AccountLimit";
+import { type UsageAccountGroup, usageAccountGroups } from "./usage-groups";
 
 /** What a row says of a usage report: the account's quota, and its state while omp skips it after a limit. */
 function sourceOf(report: UsageReport, inUse: boolean): AccountQuotaSource {
@@ -67,13 +51,29 @@ function groupOf(id: string, providers: readonly ProviderInfo[]): ProviderGroup 
 	};
 }
 
+function shortAccountNames(labels: readonly string[]): string[] {
+	return labels.map((label, index) => {
+		const stem = bareEmail(label).split("@")[0] || label;
+		return `${stem.slice(0, 4)}·${index + 1}`;
+	});
+}
+
+function accountStanding(account: AccountQuotaSource): "limited" | "low" | "ok" {
+	const gauges = accountGauges(quotaLimits(account));
+	if (account.state === "depleted" || gauges.some(gauge => gauge.fraction >= 1)) return "limited";
+	if (account.state === "reserve" || gauges.some(gauge => gauge.fraction >= NEAR_FRACTION)) return "low";
+	return "ok";
+}
+
 function UsageGroup({ group, providers }: { group: UsageAccountGroup; providers: readonly ProviderInfo[] }) {
 	const t = useT();
 	const folded = useSidebarFolds(s => s.usageGroups[group.provider] === true);
 	const sources = group.accounts.map(({ report, inUse }) => sourceOf(report, inUse));
 	const labels = group.accounts.map(({ report }) => report.account?.trim() || report.provider);
-	const names = accountNames(labels);
-	const columns = gaugeColumns(sources.map(quotaLimits));
+	const names = shortAccountNames(labels);
+	const limits = sources.map(quotaLimits);
+	const columns = gaugeColumns(limits);
+	const headings = accountGauges(limits.flat());
 	const now = Date.now();
 	return (
 		<ProviderGroupItem
@@ -85,24 +85,45 @@ function UsageGroup({ group, providers }: { group: UsageAccountGroup; providers:
 			}}
 			group={groupOf(group.provider, providers)}
 		>
+			{columns.length <= MAX_USAGE_COLUMNS && (
+				<li aria-hidden className="omp-sidebar-usage-columns">
+					<span />
+					<div style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+						{columns.map(column => (
+							<span key={column}>
+								{shortWindowLabel(headings.find(entry => gaugeColumn(entry.limit) === column)!.limit)}
+							</span>
+						))}
+					</div>
+				</li>
+			)}
 			{group.accounts.map(({ report, inUse }, index) => {
 				const source = sources[index] as AccountQuotaSource;
+				const standing = accountStanding(source);
+				const limited = standing === "limited";
 				return (
 					<ConnectedRow
-						account={names[index]?.address ?? labels[index] ?? report.provider}
-						accountSuffix={names[index]?.suffix}
+						account={names[index] ?? labels[index] ?? report.provider}
 						accountTitle={labels[index]}
-						badges={<AccountBadges account={source} />}
+						badges={
+							(source.inUse || limited) && (
+								<span
+									className={`omp-account-state ${limited ? "text-(--sc-warning)" : "text-(--sc-success)"}`}
+								>
+									{source.inUse && limited && <span aria-label={t("providers.accounts.inUse")}>● </span>}
+									{limited ? t("usage.limitedShort") : t("providers.accounts.inUse")}
+								</span>
+							)
+						}
 						compact
 						key={`${report.provider}:${report.credentialId ?? labels[index]}`}
 						quota={<QuotaCell account={source} columns={columns} compact now={now} tracks={0} />}
 						quotaColumns={columns.length}
-						reason={inUse ? rotationReason(report.rotation, t) : null}
 						rowProps={{
 							"data-in-use": inUse || undefined,
 							"data-rail-account": `${report.provider}:${report.account ?? ""}`,
 							"data-usage-account": report.credentialId ?? labels[index],
-							"data-usage-standing": accountStanding(source),
+							"data-usage-standing": standing,
 						}}
 					/>
 				);
@@ -134,7 +155,7 @@ export function SidebarUsage({
 			onContextMenu={onContextMenu}
 			onKeyDown={onKeyDown}
 		>
-			<div className="flex items-center gap-0.5">
+			<div className="flex shrink-0 items-center gap-0.5">
 				<DisclosureButton
 					chevron="end"
 					chevronClassName="size-(--sc-icon-sm)"

@@ -1,5 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,7 +20,7 @@ import { fixtureProviderOptions } from "../../../e2e/models-config-fixture";
 import type { PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import type { AccountRotationMode, AccountRotationState } from "../../shared/account-rotation";
 import { type AgentReviewItem, type AgentReviewResult, wrapAgentMessage } from "../../shared/agent-control";
-import { ipcErrorCode } from "../../shared/ipc-error-codes";
+import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
 	CustomProviderInput,
 	CustomProvidersConfig,
@@ -37,22 +47,27 @@ import type {
 } from "../../shared/rpc-types";
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import { applySummaryChange, type SummaryDelta, type VersionedSummaries } from "../../shared/session-summary";
+import { readSidebarPrefs } from "../../shared/sidebar-prefs";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
 import { branchEvidence, branchFacts, landingFacts, type WorktreeRef } from "../agent-control/branches";
 import type { MemoryPageCopy } from "../ai-memory/client";
 import { serveMemoryStore } from "../ai-memory/memory-store-test-rig";
 import { serveConclusionPull, serveConclusionPush, servePull, servePush } from "../ai-memory/sync";
 import { canonicalCwd } from "../canonical-cwd";
+import { stopCore } from "../core/process";
+import { advanceCoreTimers, fakeCoreTimers, realCoreTimers } from "../core/test-clock";
 import { deletedSessions, initDeletedSessions } from "../deleted-sessions";
 import { SavedWorktreeStore, setSavedWorktreeStore } from "../disk/saved-worktrees";
 import { gitSync, initRepo } from "../local/git/test-repos";
 import type { MachineServices } from "../machine-services";
+import { localDay } from "../omp-log-tail";
+import { PrefsStore } from "../prefs-store";
 import { RpcTimeoutError } from "../rpc-client";
 import { SessionSummaries, SUMMARY_DEBOUNCE_MS } from "../session-summaries";
 import { SidebarProjects } from "../sidebar-projects";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import { setTurnStopLog } from "../turn-stop-log";
-import { UploadError, UploadStore } from "../web/uploads";
+import { UploadStore } from "../web/uploads";
 import { FS_BINARY_REMOTE_MAX_BYTES } from "../workspace-fs";
 import { withRemovalClaim } from "../worktree-removals";
 import {
@@ -69,6 +84,7 @@ import {
 	PROJECTS_EVENT,
 	SCHEDULES_EVENT,
 	SESSIONS_DELETED_EVENT,
+	SESSIONS_DELETED_METHOD,
 	SIGN_IN_CALLBACK_METHOD,
 	SUMMARIES_EVENT,
 	type TabEventMessage,
@@ -76,17 +92,14 @@ import {
 	TabStatusArg,
 } from "./app-protocol";
 import type { HostConnection } from "./host-server";
-import {
-	type HostServicesDeps,
-	LocalHostServices,
-	UPLOAD_PART_IDLE_MS,
-	UPLOAD_PARTS_PER_DEVICE,
-} from "./host-services";
+import { HOST_WAIT_NOTICE_MS, type HostServicesDeps, LocalHostServices } from "./host-services";
 import type { HostedTabView } from "./hosted-view";
+import { KeptCalls } from "./kept-calls";
 import { createLinkEventDecoder, createReadDecoder, type WireSubagentFrame } from "./link-events";
-import { localDay, PeerQuota } from "./peer-quota";
+import { linkSlimFixture } from "./link-slim-fixture";
+import { PeerQuota } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
-import { slimOf, tabHolderOf } from "./protocol";
+import { tabHolderOf } from "./protocol";
 import { FrameTooLargeError } from "./wire";
 
 /** A SidecarManager stand-in for the host side. */
@@ -196,6 +209,16 @@ class FakeConnection implements HostConnection {
 
 function peer(deviceId: string): PeerInfo {
 	return { deviceId, name: deviceId, staticPub: "pub", nodeId: `n-${deviceId}`, login: null, pairedAt: 0 };
+}
+
+/** The core's per-device limit over `peers` (a `remote-peers.json` of its own), and each device's usage today. */
+function quotaOver(...peers: PeerInfo[]) {
+	// Not under `workDir`: the core's writer may still be replacing the file when a case's folder goes.
+	const userData = mkdtempSync(join(tmpdir(), "host-quota-"));
+	const entries = peers.map(entry => ({ ...entry, staticPub: "A".repeat(43) }));
+	writeFileSync(join(userData, "remote-peers.json"), JSON.stringify({ v: 1, peers: entries }));
+	const quota = new PeerQuota("peers", userData, () => {});
+	return { quota, stored: { get: (deviceId: string) => ({ usage: quota.view(deviceId)?.usage }) } };
 }
 
 let workDir: string;
@@ -323,8 +346,6 @@ function fakeMachine() {
 		),
 		creditSpend: vi.fn(async () => ({ enabled: false })),
 		setCreditSpend: vi.fn(async (enabled: boolean) => ({ enabled })),
-		builtinRea: vi.fn(async () => ({ enabled: true, available: true })),
-		setBuiltinRea: vi.fn(async (enabled: boolean) => ({ enabled, available: true })),
 		localEngineDetect: vi.fn(async () => ({ enabled: true })),
 		setLocalEngineDetect: vi.fn(async (enabled: boolean) => ({ enabled })),
 		desktop: vi.fn(async (): Promise<HostDesktopState> => DESKTOP),
@@ -348,6 +369,7 @@ function fakeMachine() {
 				worktrees: {},
 			}),
 		),
+		bridgeHealth: vi.fn(async () => ({ results: [] })),
 	} satisfies MachineServices;
 }
 
@@ -390,7 +412,7 @@ function setup(graceMs = 60_000, extra: Partial<HostServicesDeps> = {}) {
 		agentHidden: () => new Set(["/hidden/session.jsonl"]),
 		renameStoredSession,
 		defaultWorkspace: () => workDir,
-		launchProfiles: { get: () => undefined, set: () => {} },
+		launchProfiles: { launchProfile: () => ({}), updateLaunchProfile: () => ({}) },
 		machine,
 		localTabs: local.localTabs,
 		trashItem: async () => {},
@@ -399,6 +421,82 @@ function setup(graceMs = 60_000, extra: Partial<HostServicesDeps> = {}) {
 	});
 	return { services, sidecars, origins, local, deleteSession, renameStoredSession, machine, recordedCwd };
 }
+
+describe("delete during a pending open", () => {
+	it("refuses the tombstoned saved session after its workspace lookup resumes", async () => {
+		const { services, sidecars, recordedCwd, deleteSession } = setup();
+		const sessionPath = join(workDir, "pending-delete.jsonl");
+		writeFileSync(sessionPath, "");
+		deleteSession.mockImplementation(async path => {
+			rmSync(path);
+		});
+		const lookup = Promise.withResolvers<string | null>();
+		const entered = Promise.withResolvers<void>();
+		recordedCwd.mockImplementation(async () => {
+			entered.resolve();
+			return lookup.promise;
+		});
+		const first = new FakeConnection(peer("device-pending"));
+		const opening = services
+			.call(first.peer, "tab.open", { rtab: "pending", cwd: workDir, kind: "agent", sessionPath }, first)
+			.catch((error: unknown) => error);
+		await entered.promise;
+		await services.call(first.peer, "sessions.delete", { sessionPath }, first);
+		expect(existsSync(sessionPath)).toBe(false);
+		lookup.resolve(workDir);
+		expect(ipcErrorCode(await opening)).toBe("session_deleted");
+		expect(sidecars).toEqual([]);
+		expect(services.viewSession(sessionPath)).toBeNull();
+		expect(services.resumeFacts()).toEqual([]);
+		services.disconnected(first.peer, first);
+		const reconnected = new FakeConnection(first.peer);
+		expect(await services.call(first.peer, SESSIONS_DELETED_METHOD, { paths: [sessionPath] }, reconnected)).toEqual({
+			paths: [sessionPath],
+		});
+		const reopen = await services
+			.call(first.peer, "tab.open", { rtab: "reopened", cwd: workDir, kind: "agent", sessionPath }, reconnected)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(reopen)).toBe("session_deleted");
+		expect(sidecars).toEqual([]);
+	});
+
+	it("refuses an open during storage deletion without tombstoning a session whose delete fails", async () => {
+		const { services, sidecars, deleteSession } = setup();
+		const sessionPath = join(workDir, "pending-failed-delete.jsonl");
+		const storage = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		deleteSession.mockImplementation(async () => {
+			entered.resolve();
+			return storage.promise;
+		});
+		const first = new FakeConnection(peer("device-delete-failed"));
+		const deleting = services
+			.call(first.peer, "sessions.delete", { sessionPath }, first)
+			.catch((error: unknown) => error);
+		await entered.promise;
+		const reconnected = new FakeConnection(first.peer);
+		const opening = await services
+			.call(first.peer, "tab.open", { rtab: "held", cwd: workDir, kind: "agent", sessionPath }, reconnected)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(opening)).toBe("session_running");
+		expect(sidecars).toEqual([]);
+		expect(await services.call(first.peer, SESSIONS_DELETED_METHOD, { paths: [sessionPath] }, reconnected)).toEqual({
+			paths: [],
+		});
+		storage.reject(new Error("fixture storage failure"));
+		expect(await deleting).toMatchObject({ message: "fixture storage failure" });
+		expect(
+			await services.call(
+				first.peer,
+				"tab.open",
+				{ rtab: "retry", cwd: workDir, kind: "agent", sessionPath },
+				reconnected,
+			),
+		).toMatchObject({ attached: false });
+		expect(sidecars).toHaveLength(1);
+		expect(deletedSessions().has(sessionPath)).toBe(false);
+	});
+});
 
 describe("LocalHostServices", () => {
 	it("scopes rtabs per peer: one device can never reach another device's tab", async () => {
@@ -471,6 +569,65 @@ describe("LocalHostServices", () => {
 		}
 	});
 
+	it("opens and restarts in a directory alias with the host's cwd spelling", async () => {
+		const { services, sidecars } = setup();
+		const conn = new FakeConnection(peer("device-x"));
+		const folder = join(workDir, "project");
+		const alias = join(workDir, "alias");
+		mkdirSync(folder);
+		symlinkSync(folder, alias, process.platform === "win32" ? "junction" : "dir");
+		const expected = process.platform === "win32" ? alias : realpathSync(folder);
+		expect(await services.call(conn.peer, "tab.open", { rtab: "t", cwd: alias }, conn)).toMatchObject({
+			cwd: expected,
+		});
+		const restart = vi.spyOn(sidecars[0]!, "restart");
+		await services.call(conn.peer, "tab.restart", { rtab: "t", cwd: alias }, conn);
+		expect(restart).toHaveBeenCalledWith(expected, undefined);
+
+		const file = join(folder, "file");
+		const missing = join(folder, "missing");
+		writeFileSync(file, "");
+		for (const [cwd, message] of [
+			[file, `[not_a_directory] Not a directory: ${file}`],
+			[missing, `[file_not_found] Directory not found: ${missing}`],
+		] as const) {
+			await expect(services.call(conn.peer, "tab.restart", { rtab: "t", cwd }, conn)).rejects.toThrow(message);
+		}
+		expect(restart).toHaveBeenCalledTimes(1);
+	});
+
+	it.skipIf(process.platform === "win32")("keeps Node's cwd for links with a parent step", async () => {
+		const { services } = setup();
+		const conn = new FakeConnection(peer("device-x"));
+		const deep = join(workDir, "nested", "project");
+		mkdirSync(deep, { recursive: true });
+		symlinkSync(deep, join(workDir, "alias"));
+		const indirect = join(workDir, "indirect");
+		symlinkSync("alias/..", indirect);
+		for (const [rtab, cwd] of [
+			["direct", `${workDir}/alias/..`],
+			["indirect", indirect],
+		] as const) {
+			expect(await services.call(conn.peer, "tab.open", { rtab, cwd }, conn)).toMatchObject({ cwd: workDir });
+		}
+		const fallback = `${workDir}/alias/../only-in-nested`;
+		mkdirSync(join(workDir, "nested", "only-in-nested"));
+		expect(await services.call(conn.peer, "tab.open", { rtab: "raw", cwd: fallback }, conn)).toMatchObject({
+			cwd: fallback,
+		});
+		mkdirSync(join(workDir, "nested", "pipe-link", "child"), { recursive: true });
+		execFileSync("mkfifo", [join(workDir, "fifo")]);
+		symlinkSync("fifo", join(workDir, "pipe-link"));
+		const throughPipe = `${workDir}/alias/../pipe-link/child`;
+		expect(await services.call(conn.peer, "tab.open", { rtab: "pipe", cwd: throughPipe }, conn)).toMatchObject({
+			cwd: realpathSync(throughPipe),
+		});
+		const missing = `${workDir}/missing/..`;
+		await expect(services.call(conn.peer, "tab.open", { rtab: "absent", cwd: missing }, conn)).rejects.toThrow(
+			`[file_not_found] Directory not found: ${missing}`,
+		);
+	});
+
 	it("refuses a device's saved session whose recorded folder is gone instead of opening it in another folder", async () => {
 		const { services, sidecars, recordedCwd } = setup();
 		const x = new FakeConnection(peer("device-x"));
@@ -519,7 +676,7 @@ describe("LocalHostServices", () => {
 
 		const store = new SavedWorktreeStore(join(workDir, "disk-care"));
 		setSavedWorktreeStore(store);
-		await store.update(() => [
+		await store.settle(
 			{
 				id: "sv1",
 				path: worktree,
@@ -531,7 +688,8 @@ describe("LocalHostServices", () => {
 				archivedFiles: 0,
 				archivedBytes: 0,
 			},
-		]);
+			true,
+		);
 		expect(await ask(false)).toEqual({
 			folder: worktree,
 			missing: true,
@@ -591,6 +749,7 @@ describe("LocalHostServices", () => {
 					cwd: workDir,
 					kind: "agent",
 					omp: expect.any(String),
+					hostTurn: { omp: expect.any(String), turn: 0 },
 				},
 			},
 			{ rtab: "t1", name: "events", arg: [{ type: "agent_start" }] },
@@ -659,7 +818,152 @@ describe("LocalHostServices", () => {
 		// The turn ended while the device was away: the next re-attach says so.
 		sidecar.emit("events", [{ type: "agent_end", messages: [] }]);
 		const after = TabRunArg.parse((await reattach())[0]?.arg);
-		expect(after).toEqual({ running: false, turn: false });
+		expect(after).toEqual({
+			running: false,
+			turn: false,
+			hostTurn: { omp: expect.any(String), turn: 1 },
+			lastRun: { stopReason: "stop" },
+		});
+	});
+
+	it("closes only the observed host outcome even across identical replies in a single batch", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		const open = () => services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		const close = (expectedTurn: unknown) => services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x);
+		await open();
+		const sidecar = sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		const fresh = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		if (!fresh) throw new Error("expected the new omp's initial turn");
+		const turn = [{ type: "agent_start" }, { type: "agent_end", messages: [] }];
+		sidecar.emit("events", [...turn, ...turn]);
+		const first = { ...fresh, turn: 1 };
+		const second = { ...fresh, turn: 2 };
+		expect(x.tabEvents().at(-1)?.arg).toEqual([
+			turn[0],
+			{ ...turn[1], hostTurn: first },
+			turn[0],
+			{ ...turn[1], hostTurn: second },
+		]);
+		await open();
+		expect(TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg)).toMatchObject({
+			hostTurn: second,
+			lastRun: { stopReason: "stop" },
+		});
+		expect(await close(null)).toBe(false);
+		expect(await close(first)).toBe(false);
+		await expect(close({ ...second, typo: true })).rejects.toThrow();
+		sidecar.setStatus("restarting");
+		sidecar.setStatus("ready");
+		sidecar.emit("events", [...turn, ...turn]);
+		expect(await close(second)).toBe(false);
+		await open();
+		const latest = TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg).hostTurn;
+		expect(sidecar.disposed).toBe(false);
+		expect(await close(latest)).toBe(true);
+		expect(sidecar.disposed).toBe(true);
+		expect(await close(null)).toBe(true);
+	});
+
+	it("withholds the previous stamp while waiting for a start, on nonterminal ends, and through auto-retry", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		const open = () => services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		await open();
+		const tab = sidecars[0];
+		if (!tab) throw new Error("expected a sidecar");
+		tab.setStatus("ready");
+		const initial = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		if (!initial) throw new Error("expected the new omp's initial turn");
+		await services.call(x.peer, "tab.command", { rtab: "t", command: { type: "prompt", message: "next" } }, x);
+		const close = (expectedTurn: unknown) => services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x);
+		const withheld = async () => {
+			await open();
+			expect(TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg).hostTurn).toBeUndefined();
+			expect(await close(initial)).toBe(false);
+		};
+		tab.emit("events", [{ type: "agent_end", messages: [] }]);
+		expect(x.tabEvents().at(-1)?.arg).toEqual([{ type: "agent_end", messages: [] }]);
+		await withheld();
+		tab.emit("events", [{ type: "agent_start" }, { type: "agent_end", messages: [], isTerminal: false }]);
+		await withheld();
+		const retry = { type: "auto_retry_start", attempt: 1, maxAttempts: 2, delayMs: 50, errorMessage: "retry" };
+		tab.emit("events", [retry, { type: "agent_end", messages: [] }]);
+		await withheld();
+		const failure = { type: "auto_retry_end", success: false, finalError: "failed" };
+		const hostTurn = { ...initial, turn: 1 };
+		tab.emit("events", [failure]);
+		expect(x.tabEvents().at(-1)?.arg).toEqual([{ ...failure, hostTurn }]);
+		await open();
+		expect(TabRunArg.parse(x.tabEvents().findLast(event => event.name === "run")?.arg)).toMatchObject({
+			hostTurn,
+			lastRun: { stopReason: "error", errorMessage: "failed" },
+		});
+		const id = services.resumeFacts()[0]?.tabId;
+		if (!id) throw new Error("expected hosted tab's resume id");
+		services.setResuming(id, true);
+		expect(await close(hostTurn)).toBe(false);
+		services.setResuming(id, false);
+		expect(await close(hostTurn)).toBe(true);
+	});
+
+	it("closes the finished turn after coalesced prompts and steers with no separate start", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		await services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		const tab = sidecars[0];
+		if (!tab) throw new Error("expected a sidecar");
+		tab.setStatus("ready");
+		const fresh = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		if (!fresh) throw new Error("expected the new omp's initial turn");
+		const send = (command: RpcCommand) => services.call(x.peer, "tab.command", { rtab: "t", command }, x);
+		await Promise.all(["first", "second"].map(message => send({ type: "prompt", message })));
+		tab.emit("events", [{ type: "agent_start" }]);
+		await send({ type: "steer", message: "correction" });
+		await send({ type: "prompt", message: "another correction", streamingBehavior: "steer" });
+		const end = { type: "agent_end", messages: [] };
+		tab.emit("events", [end]);
+		const expectedTurn = { ...fresh, turn: 1 };
+		expect(x.tabEvents().at(-1)?.arg).toEqual([{ ...end, hostTurn: expectedTurn }]);
+		expect(await services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x)).toBe(true);
+	});
+
+	it("a rejected window prompt releases its own pending start, never a newer one", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		await services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		const tab = sidecars[0];
+		if (!tab) throw new Error("expected a sidecar");
+		tab.setStatus("ready");
+		const expectedTurn = TabStatusArg.parse(x.tabEvents().at(-1)?.arg).hostTurn;
+		const close = () => services.call(x.peer, "tab.close", { rtab: "t", expectedTurn }, x);
+		const sessionFile = join(workDir, "held.jsonl");
+		tab.emit("session", { sessionId: "s", sessionFile });
+		const view = services.viewSession(sessionFile);
+		const client = view?.rpcClient;
+		if (!view || !client) throw new Error("expected a window view");
+		expect(await close()).toBe(false);
+		const first = Promise.withResolvers<RpcResponse>();
+		const second = Promise.withResolvers<RpcResponse>();
+		vi.spyOn(tab.rpcClient, "command").mockImplementation(async command =>
+			command.type === "prompt"
+				? command.message === "first"
+					? first.promise
+					: second.promise
+				: { type: "response", command: command.type, success: true },
+		);
+		const a = client.command({ type: "prompt", message: "first" });
+		const b = client.command({ type: "prompt", message: "second" });
+		view.dispose();
+		expect(await close()).toBe(false);
+		first.resolve({ type: "response", command: "prompt", success: false, error: "refused" });
+		await a;
+		expect(await close()).toBe(false);
+		second.resolve({ type: "response", command: "prompt", success: false, error: "refused" });
+		await b;
+		expect(await close()).toBe(true);
 	});
 
 	it("runs commands on the tab and re-syncs every tab on this machine after a login", async () => {
@@ -684,20 +988,7 @@ describe("LocalHostServices", () => {
 
 	it("counts a device's model requests and reply tokens and refuses its next request past a daily limit", async () => {
 		const { services, sidecars } = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", { ...peer("device-x"), limits: { requestsPerDay: 2 } }]]);
-		const quota = new PeerQuota(
-			{
-				get: id => stored.get(id),
-				update: (id, patch) => {
-					const current = stored.get(id);
-					if (!current) return undefined;
-					const next = { ...current, ...patch };
-					stored.set(id, next);
-					return next;
-				},
-			},
-			() => {},
-		);
+		const { quota, stored } = quotaOver({ ...peer("device-x"), limits: { requestsPerDay: 2 } });
 		services.attachQuota(quota);
 		const x = new FakeConnection(peer("device-x"));
 		await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
@@ -741,34 +1032,15 @@ describe("LocalHostServices", () => {
 		};
 		function limited(limits: { requestsPerDay?: number }, requests = 0) {
 			const fixture = setup();
-			const stored = new Map<string, PeerInfo>([
-				[
-					"device-x",
-					{
-						...peer("device-x"),
-						limits,
-						usage: { day: localDay(new Date()), requests, tokens: 0 },
-					},
-				],
-			]);
-			fixture.services.attachQuota(
-				new PeerQuota(
-					{
-						get: id => stored.get(id),
-						update: (id, patch) => {
-							const current = stored.get(id);
-							if (!current) return undefined;
-							const next = { ...current, ...patch };
-							stored.set(id, next);
-							return next;
-						},
-					},
-					() => {},
-				),
-			);
+			const { quota, stored } = quotaOver({
+				...peer("device-x"),
+				limits,
+				usage: { day: localDay(new Date()), requests, tokens: 0 },
+			});
+			fixture.services.attachQuota(quota);
 			return { ...fixture, stored, x: new FakeConnection(peer("device-x")) };
 		}
-		const used = (stored: Map<string, PeerInfo>) => stored.get("device-x")?.usage?.requests;
+		const used = (stored: ReturnType<typeof quotaOver>["stored"]) => stored.get("device-x")?.usage?.requests;
 
 		it("refuses omfg, tan and a summarizing leaf switch once the limit is used up, and still serves reads", async () => {
 			const { services, sidecars, stored, x } = limited({ requestsPerDay: 1 }, 1);
@@ -1065,6 +1337,17 @@ describe("LocalHostServices", () => {
 		expect(deleteSession).toHaveBeenCalledWith("/s/x.jsonl");
 	});
 
+	it("does not cancel an open that a conditional close reaches before it finishes", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("owner"));
+		const opening = services.call(x.peer, "tab.open", { rtab: "t", cwd: workDir }, x);
+		expect(await services.call(x.peer, "tab.close", { rtab: "t", expectedTurn: null }, x)).toBe(false);
+		await opening;
+		expect(sidecars[0]?.disposed).toBe(false);
+		expect(await services.call(x.peer, "tab.close", { rtab: "t" }, x)).toBeNull();
+		expect(sidecars[0]?.disposed).toBe(true);
+	});
+
 	it("a device's close that arrives while its tab is still opening leaves no tab holding the session", async () => {
 		const { services, sidecars } = setup();
 		const x = new FakeConnection(peer("device-x"));
@@ -1115,19 +1398,17 @@ describe("LocalHostServices", () => {
 		expect(deleteSession).toHaveBeenCalledWith("/s/x.jsonl");
 	});
 
-	it("deletes only after every one of the device's duplicate omps on the file has exited, in any order", async () => {
+	it("revives two of a device's markers on one file as one omp, and deletes only after it has exited", async () => {
 		const { services, sidecars, deleteSession } = setup();
 		const x = peer("device-x");
-		// Two leftovers of an older release on one file (revived markers make them without the open's guard).
+		// Two markers of one file (an older release left a turn of each of two device tabs): the second views the first.
 		services.reviveTab(x, { tab: "peer:device-x:a", cwd: workDir, kind: "agent", sessionPath: "/s/d.jsonl" });
 		services.reviveTab(x, { tab: "peer:device-x:b", cwd: workDir, kind: "agent", sessionPath: "/s/d.jsonl" });
-		expect(sidecars).toHaveLength(2);
+		expect(sidecars).toHaveLength(1);
 		const conn = new FakeConnection(x);
 		const deleting = services.call(x, "sessions.delete", { sessionPath: "/s/d.jsonl" }, conn);
 		await new Promise<void>(resolve => setImmediate(resolve));
-		expect(sidecars.every(sidecar => sidecar.disposed)).toBe(true);
-		sidecars[1]?.exited.resolve();
-		await new Promise<void>(resolve => setImmediate(resolve));
+		expect(sidecars[0]?.disposed).toBe(true);
 		expect(deleteSession).not.toHaveBeenCalled();
 		sidecars[0]?.exited.resolve();
 		await deleting;
@@ -1305,7 +1586,16 @@ describe("LocalHostServices", () => {
 		// The turn and the status are re-sent on attach, the asks its omp holds (none), and whether this computer holds
 		// the turn for its connection.
 		expect(second.tabEvents()).toEqual([
-			{ rtab: "t1", name: "run", arg: { running: false, turn: false } },
+			{
+				rtab: "t1",
+				name: "run",
+				arg: {
+					running: false,
+					turn: false,
+					hostTurn: { omp: expect.any(String), turn: 1 },
+					lastRun: { stopReason: "stop" },
+				},
+			},
 			expect.objectContaining({ name: "status", arg: expect.objectContaining({ status: "ready" }) }),
 			{ rtab: "t1", name: "signIn", arg: { active: [] } },
 			{ rtab: "t1", name: "openAsks", arg: [] },
@@ -1544,7 +1834,7 @@ describe("LocalHostServices", () => {
 		expect(openAsks(fourth)).toEqual([]);
 	});
 
-	it("re-sends the host tool calls its omp still waits on: one made while the device was away, and every open one to a relaunched device", async () => {
+	it("re-sends the host tool calls its omp still waits on: every open one on a re-attach, marked when a connection had it before", async () => {
 		// The 21 Oct 2026 update restart: a hosted child called `ompdesk_report` 7 s after its device quit, the call
 		// reached no connection, nobody ever answered it, and the turn waited on it for good (stock has no timeout).
 		const { services, sidecars } = setup();
@@ -1563,7 +1853,7 @@ describe("LocalHostServices", () => {
 				.filter(event => event.name === "hostToolCall" || event.name === "hostUriRequest")
 				.map(({ arg }) => (typeof arg === "object" && arg !== null && "id" in arg ? arg.id : undefined));
 
-		// The device has this one; the link drops while it runs it.
+		// The device has this one, or never got it: a sleeping computer's link stays up here until it is seen dead.
 		sidecar.emit("hostToolCall", call("seen"));
 		services.disconnected(first.peer, first);
 		// The omp asks while nobody is connected, and withdraws one it gave up on.
@@ -1572,12 +1862,15 @@ describe("LocalHostServices", () => {
 		sidecar.emit("hostToolCall", call("withdrawn"));
 		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-1", targetId: "withdrawn" });
 
-		// The same device comes back (a lost link): it gets what it never had, not the call it already runs.
+		// The same device comes back (a lost link): it gets every call still open. The one the dead connection was handed
+		// may never have reached it (19 Nov 2026: the MacBook slept, its sessions here stood in calls nobody re-sent), so
+		// it goes again, marked: the device answers from its record if it did run it (agent-control/call-journal.ts).
 		const second = new FakeConnection(peer("device-x"));
 		await services.call(second.peer, "tab.open", { rtab: "old", cwd: workDir, fresh: true }, second);
-		expect(resent(second)).toEqual(["away", "uri"]);
+		expect(resent(second)).toEqual(["seen", "away", "uri"]);
 		// Never handed to a connection before: provably new to the device, so not marked re-sent.
-		expect(second.tabEvents().find(event => event.name === "hostToolCall")?.arg).toEqual(call("away"));
+		const sentCalls = second.tabEvents().filter(event => event.name === "hostToolCall");
+		expect(sentCalls.map(event => event.arg)).toEqual([{ ...call("seen"), resent: true }, call("away")]);
 		await services.call(
 			second.peer,
 			"tab.sideChannel",
@@ -1604,6 +1897,204 @@ describe("LocalHostServices", () => {
 		const fourth = new FakeConnection(peer("device-x"));
 		await services.call(fourth.peer, "tab.open", { rtab: "new", cwd: workDir, fresh: true }, fourth);
 		expect(resent(fourth)).toEqual([]);
+	});
+
+	it("reads legacy kept calls at the three-day boundary and keeps the newest 200 in submission order", async () => {
+		await fakeCoreTimers(["Date"]);
+		onTestFinished(realCoreTimers);
+		const file = join(workDir, "kept-calls.json");
+		const store = new KeptCalls(file);
+		const row = (id: string) => ({
+			device: "device-x",
+			sessionPath: "/s/one.jsonl",
+			id: `kept:${id}`,
+			toolName: "ompdesk_report",
+			arguments: { text: id },
+		});
+		const oldest = Date.now() - 3 * 24 * 60 * 60_000;
+		const legacy = Array.from({ length: 200 }, (_, i) => ({ ...row(String(i)), at: oldest }));
+		writeFileSync(file, JSON.stringify([null, { ...row("expired"), at: oldest - 1 }, ...legacy]));
+		expect(await store.for("device-x", "/s/one.jsonl")).toEqual(legacy);
+		const sameId = row("199");
+		await Promise.all([
+			store.keep({ ...sameId, device: "device-y" }),
+			store.keep({ ...sameId, sessionPath: "/s/two.jsonl" }),
+			store.settle("device-x", "/s/one.jsonl", sameId.id),
+		]);
+		const current = await store.for("device-x", "/s/one.jsonl");
+		expect(current).toEqual(legacy.slice(2, -1));
+		expect(await store.for("device-y", "/s/one.jsonl")).toEqual([expect.objectContaining({ id: sameId.id })]);
+		expect(await store.for("device-x", "/s/two.jsonl")).toEqual([expect.objectContaining({ id: sameId.id })]);
+	});
+
+	it("does not hand over a rejected keep when a later write succeeds", async () => {
+		const parent = join(workDir, "not-a-folder");
+		writeFileSync(parent, "blocked");
+		const store = new KeptCalls(join(parent, "kept.json"));
+		const call = {
+			device: "device-x",
+			sessionPath: "/s/one.jsonl",
+			id: "kept:rejected",
+			toolName: "ompdesk_notify",
+			arguments: { text: "synthetic notice" },
+		};
+		await expect(store.keep(call)).rejects.toThrow();
+		rmSync(parent);
+		await store.keep({ ...call, id: "kept:accepted" });
+		expect((await store.for(call.device, call.sessionPath)).map(row => row.id)).toEqual(["kept:accepted"]);
+	});
+
+	it("carries out here the calls its device never got once the device has been away past the notice, keeps its reports for it, and hands those over once when it is back", async () => {
+		// 19 Nov 2026: the MacBook slept 12:55-16:58 and the sessions its hub had opened on the Mac mini stood still,
+		// each in a control call only the sleeping MacBook would run.
+		vi.useFakeTimers();
+		const keptFile = join(workDir, "kept-calls.json");
+		const shown: string[] = [];
+		const carried: Array<{ id: string; toolName: string }> = [];
+		const waits: Array<{ device: string }> = [];
+		let window: HostedTabView | null = null;
+		const { services, sidecars } = setup(10 * 60_000, {
+			keptCallsFile: keptFile,
+			hostWaiting: wait => waits.push(wait),
+		});
+		// A window here opens a view of the session, as its pool would, and runs what the view hands it.
+		services.showAway = sessionPath => {
+			shown.push(sessionPath);
+			window = services.viewSession(sessionPath);
+			window?.on("hostToolCall", (request: { id: string; toolName: string }) => carried.push(request));
+		};
+		const first = new FakeConnection(peer("device-x"));
+		await services.call(first.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, first);
+		await services.call(first.peer, "tab.start", { rtab: "t1" }, first);
+		const sidecar = sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		sidecar.emit("session", { sessionId: "s1", sessionFile: "/s/one.jsonl" });
+		sidecar.emit("events", [{ type: "agent_start" }]);
+		const call = (id: string, toolName: string) => ({
+			type: "host_tool_call",
+			id,
+			toolCallId: `c-${id}`,
+			toolName,
+			arguments: { text: id },
+		});
+		const results = () =>
+			(sidecar.sideFrames as Array<{ type?: string; id?: string; result?: { content?: Array<{ text?: string }> } }>)
+				.filter(frame => frame.type === "host_tool_result")
+				.map(frame => ({ id: frame.id, text: frame.result?.content?.[0]?.text ?? "" }));
+
+		// Handed to the connection before it was seen dead: the device may run it, so this computer never does.
+		sidecar.emit("hostToolCall", call("handed", "ompdesk_sessions"));
+		services.disconnected(first.peer, first);
+		sidecar.emit("hostToolCall", call("open", "ompdesk_session_open"));
+		sidecar.emit("hostToolCall", call("report", "ompdesk_report"));
+
+		// A routine drop and reconnect does nothing here.
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS - 1);
+		await Promise.resolve();
+		expect(shown).toEqual([]);
+		expect(results()).toEqual([]);
+
+		// Away past the notice: a window here takes the session's calls the device never got.
+		vi.advanceTimersByTime(1);
+		await vi.waitFor(() => expect(carried.map(request => request.id)).toEqual(["open"]));
+		expect(shown).toEqual(["/s/one.jsonl"]);
+		// The report waits for the device's opener, kept on disk, and the session is told so at once.
+		await vi.waitFor(() => expect(results().map(result => result.id)).toEqual(["report"]));
+		expect(results()[0]?.text).toContain("device-x");
+		expect(results()[0]?.text).toMatch(/kept/i);
+		// The window's answer reaches the omp, saying where it ran.
+		(window as HostedTabView | null)?.sendSideChannel({
+			type: "host_tool_result",
+			id: "open",
+			result: { content: [{ type: "text", text: "Opened 1 session" }] },
+		});
+		expect(results().map(result => result.id)).toEqual(["report", "open"]);
+		expect(results()[1]?.text).toContain("Opened 1 session");
+		expect(results()[1]?.text).toContain("Host B");
+		// The call the dead connection was handed still waits on the device, and the person here hears it once.
+		expect(waits).toEqual([{ device: "device-x", title: undefined }]);
+		// A call made later while the device is still away goes to the window at once.
+		sidecar.emit("hostToolCall", call("later", "ompdesk_session_send"));
+		await vi.waitFor(() => expect(carried.map(request => request.id)).toEqual(["open", "later"]));
+
+		// The device is back: it gets the call it may never have had, and the kept report to deliver, never the calls
+		// this computer carried out.
+		const back = new FakeConnection(peer("device-x"));
+		await services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, back);
+		const toDevice = () =>
+			back
+				.tabEvents()
+				.filter(event => event.name === "hostToolCall")
+				.map(event => event.arg as { id: string; toolName: string; arguments?: unknown; resent?: boolean });
+		await vi.waitFor(() => expect(toDevice().map(request => request.id)).toEqual(["handed", "kept:report"]));
+		expect(toDevice()[1]).toMatchObject({ toolName: "ompdesk_report", arguments: { text: "report" } });
+		// Kept across this computer's restart until the device has answered it.
+		expect(readFileSync(keptFile, "utf8")).toContain("kept:report");
+
+		// The device's answer to the handed-over report settles it; the omp, answered long ago, hears nothing.
+		await services.call(
+			back.peer,
+			"tab.sideChannel",
+			{ rtab: "t1", frame: { type: "host_tool_result", id: "kept:report", result: { content: [] } } },
+			back,
+		);
+		expect(results().map(result => result.id)).toEqual(["report", "open"]);
+		await vi.waitFor(() => expect(readFileSync(keptFile, "utf8")).not.toContain("kept:report"));
+		services.disconnected(back.peer, back);
+		const again = new FakeConnection(peer("device-x"));
+		await services.call(again.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, again);
+		expect(again.tabEvents().filter(event => event.name === "hostToolCall")).toEqual([
+			{ rtab: "t1", name: "hostToolCall", arg: { ...call("handed", "ompdesk_sessions"), resent: true } },
+		]);
+	});
+
+	it("hands a kept report to its device once it is back, after this computer restarted meanwhile", async () => {
+		vi.useFakeTimers();
+		const keptFile = join(workDir, "kept-calls.json");
+		const before = setup(10 * 60_000, { keptCallsFile: keptFile });
+		const first = new FakeConnection(peer("device-x"));
+		await before.services.call(first.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, first);
+		await before.services.call(first.peer, "tab.start", { rtab: "t1" }, first);
+		const sidecar = before.sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		sidecar.emit("session", { sessionId: "s1", sessionFile: "/s/one.jsonl" });
+		sidecar.emit("events", [{ type: "agent_start" }]);
+		before.services.disconnected(first.peer, first);
+		sidecar.emit("hostToolCall", {
+			type: "host_tool_call",
+			id: "report",
+			toolCallId: "c-report",
+			toolName: "ompdesk_report",
+			arguments: { kind: "done", text: "finished" },
+		});
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS);
+		await vi.waitFor(() => expect(readFileSync(keptFile, "utf8")).toContain("kept:report"));
+
+		// This computer quits and starts again; the device opens the session under the tab it kept.
+		const after = setup(10 * 60_000, { keptCallsFile: keptFile });
+		const back = new FakeConnection(peer("device-x"));
+		await after.services.call(back.peer, "tab.open", { rtab: "t2", cwd: workDir, sessionPath: "/s/one.jsonl" }, back);
+		await after.services.call(back.peer, "tab.start", { rtab: "t2" }, back);
+		const restarted = after.sidecars[0];
+		if (!restarted) throw new Error("expected a sidecar");
+		const lookups = vi.spyOn(KeptCalls.prototype, "for");
+		onTestFinished(() => lookups.mockRestore());
+		restarted.setStatus("ready");
+		restarted.emit("session", { sessionId: "s1", sessionFile: "/s/one.jsonl" });
+		// The lookups triggered by ready/session are still in flight when this link goes away.
+		after.services.disconnected(back.peer, back);
+		const next = new FakeConnection(back.peer);
+		for (let n = 0; n < 2; n++) await after.services.call(next.peer, "tab.open", { rtab: "t2", cwd: workDir }, next);
+		await Promise.all(lookups.mock.results.map(lookup => lookup.value));
+		const expected = {
+			rtab: "t2",
+			name: "hostToolCall",
+			arg: expect.objectContaining({ id: "kept:report", toolName: "ompdesk_report" }),
+		};
+		expect(back.tabEvents().filter(event => event.name === "hostToolCall")).toEqual([]);
+		expect(next.tabEvents().filter(event => event.name === "hostToolCall")).toEqual([expected]);
 	});
 
 	it("tells the device which sign-ins its tab runs: as they start and end, and on every re-attach, link or no link", async () => {
@@ -2038,6 +2529,86 @@ describe("LocalHostServices", () => {
 		expect(sidecars[1]?.disposed).toBe(true);
 	});
 
+	it("revives a device's turn on a session a window here holds in that window's omp, never a second omp on the file", async () => {
+		// The Mac mini, 17 Nov 2026: the relaunch restored a window's tab on the seuoffice session and then revived the
+		// desktop's turn on it with an omp of its own; the window's tab then waited for that omp's lease for good.
+		const context = setup();
+		const window = new FakeHostSidecar(workDir, "agent");
+		context.local.views.set("/s/shared.jsonl", window);
+		context.local.owned.set("/s/shared.jsonl", { tabId: "w1", winId: 1 });
+		const x = peer("device-x");
+		const marker = { tab: "peer:device-x:t1", cwd: workDir, kind: "agent" as const, sessionPath: "/s/shared.jsonl" };
+		// The relaunch's continuation runs in the window's tab: the resume reads that tab's facts, and the device's tab,
+		// a view, has none (a continuation keyed to it was dropped by the next sync: the Mac mini, 17 Nov 2026, 10:46Z).
+		expect(context.services.reviveTab(x, marker)).toBe("w1");
+		expect(context.services.resumeFacts()).toEqual([]);
+		expect(context.sidecars).toEqual([]);
+		expect(context.local.viewed).toEqual([
+			{ origin: { deviceId: "device-x", name: "device-x" }, hostName: "Host B" },
+		]);
+		window.setStatus("ready");
+
+		// The device comes back to the tab it had: it views that same omp.
+		const conn = new FakeConnection(x);
+		expect(await context.services.call(x, "tab.open", { rtab: "t1", cwd: workDir }, conn)).toEqual({
+			cwd: workDir,
+			kind: "agent",
+			attached: true,
+		});
+		expect(context.sidecars).toEqual([]);
+
+		// The device relaunched and its old tab is gone: it opens the session in a new tab (the desktop's 15d15e7d…), which
+		// takes over the revived one, still on the window's omp.
+		const fresh = await context.services.call(
+			x,
+			"tab.open",
+			{ rtab: "t2", cwd: workDir, sessionPath: "/s/shared.jsonl" },
+			new FakeConnection(x),
+		);
+		expect(fresh).toMatchObject({ attached: true });
+		expect(context.services.startTab("peer:device-x:t1")).toBe(window);
+		expect(context.sidecars).toEqual([]);
+	});
+
+	it("continues a device's revived turn on a session another device's tab here runs in that tab, whose facts the resume reads", async () => {
+		const context = setup();
+		const x = new FakeConnection(peer("device-x"));
+		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
+		await context.services.call(x.peer, "tab.start", { rtab: "t1" }, x);
+		const holder = context.sidecars[0];
+		if (!holder) throw new Error("expected a sidecar");
+		holder.setStatus("ready");
+		holder.emit("session", { sessionId: "s1", sessionFile: "/s/held.jsonl" });
+		const marker = { tab: "peer:device-y:u1", cwd: workDir, kind: "agent" as const, sessionPath: "/s/held.jsonl" };
+		expect(context.services.reviveTab(peer("device-y"), marker)).toBe("peer:device-x:t1");
+		expect(context.services.resumeFacts().map(fact => fact.tabId)).toEqual(["peer:device-x:t1"]);
+		expect(context.sidecars).toHaveLength(1);
+	});
+
+	it("joins a device's new tab, and a window, to the omp its revived turn runs when no window held the session", async () => {
+		const context = setup();
+		const x = peer("device-x");
+		const marker = { tab: "peer:device-x:t1", cwd: workDir, kind: "agent" as const, sessionPath: "/s/kept.jsonl" };
+		const revived = context.services.reviveTab(x, marker);
+		if (!revived) throw new Error("expected a revived tab");
+		context.services.startTab(revived);
+		const omp = context.sidecars[0];
+		omp?.setStatus("ready");
+		expect(context.sidecars).toHaveLength(1);
+
+		// The device relaunched and its tab that ran the turn is gone; it opens the session again in another tab.
+		const opened = await context.services.call(
+			x,
+			"tab.open",
+			{ rtab: "t2", cwd: workDir, sessionPath: "/s/kept.jsonl" },
+			new FakeConnection(x),
+		);
+		expect(opened).toMatchObject({ attached: true });
+		// A window of this computer opening it views the same omp.
+		expect(context.services.viewSession("/s/kept.jsonl")?.statusPayload.status).toBe("ready");
+		expect(context.sidecars).toHaveLength(1);
+	});
+
 	it("lets a revived turn with no device run to its end: the grace closes only an idle tab, and its fact stays meanwhile", async () => {
 		vi.useFakeTimers();
 		const { services, sidecars } = setup(1_000);
@@ -2255,7 +2826,7 @@ describe("LocalHostServices", () => {
 			sessionIndex: { list: async () => rows } as unknown as HostServicesDeps["sessionIndex"],
 		});
 		const numbered = Object.assign(new FakeConnection(peer("device-new")), {
-			slim: { ...slimOf({ t: "hello", protocol: 1, appVersion: "1", name: "n" }), sessionLists: true },
+			slim: { ...linkSlimFixture(false), sessionLists: true },
 		});
 		const older = new FakeConnection(peer("device-old"));
 		const first = (await services.call(
@@ -2474,6 +3045,25 @@ describe("LocalHostServices", () => {
 		expect(a.events.filter(entry => entry.event === "sessions.changed").length).toBeGreaterThan(0);
 	});
 
+	it("a device's folder read (scope local) in the gap does not swallow the close the shared list owes the others", async () => {
+		vi.useFakeTimers();
+		const { services, local } = setup(60_000, {
+			sessionIndex: {
+				list: async () => [{ path: "/s/w.jsonl", id: "w", title: "w", cwd: workDir, firstMessage: "" }],
+			} as unknown as HostServicesDeps["sessionIndex"],
+		});
+		const a = new FakeConnection(peer("device-a"));
+		const b = new FakeConnection(peer("device-b"));
+		local.owned.set("/s/w.jsonl", { tabId: "w1", winId: 1 });
+		await services.call(a.peer, "sessions.list", { scope: "global" }, a);
+		// The window's tab lets go; before it is announced, device B reads one folder's sessions.
+		local.owned.delete("/s/w.jsonl");
+		await services.call(b.peer, "sessions.list", { scope: "local", cwd: workDir }, b);
+		services.listingChanged();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(a.events.filter(entry => entry.event === "sessions.changed").length).toBeGreaterThan(0);
+	});
+
 	it("tells a device which listed children its review list holds failed or unlanded, and forgets what landed", async () => {
 		const paths = ["/s/failed.jsonl", "/s/unmerged.jsonl", "/s/clean.jsonl", "/s/elsewhere.jsonl"];
 		const { services } = setup(60_000, {
@@ -2632,13 +3222,7 @@ describe("LocalHostServices", () => {
 			expect(path.endsWith("계약서 수정.docx")).toBe(true);
 			expect(readFileSync(path)).toEqual(bytes);
 
-			const full = setup(60_000, {
-				uploads: {
-					store: async () => {
-						throw new UploadError(413, "too large");
-					},
-				},
-			});
+			const full = setup(60_000, { uploads: new UploadStore({ userData: root, fileMaxBytes: 0 }) });
 			const tooLarge = await full.services
 				.call(x.peer, "host.files.upload", { name: "a.pdf", dataBase64: "AA==" }, x)
 				.catch((error: unknown) => error);
@@ -2672,6 +3256,29 @@ describe("LocalHostServices", () => {
 			expect(path.startsWith(join(root, "web-uploads", "device-x"))).toBe(true);
 			expect(readFileSync(path)).toEqual(Buffer.concat([first, second]));
 
+			// A new connection may finish its device's upload; another device cannot append to or discard it.
+			await part("upload-shared", 0, false, first);
+			const finish = (conn: FakeConnection) =>
+				services.call(
+					conn.peer,
+					"host.files.uploadPart",
+					{
+						upload: "upload-shared",
+						index: 1,
+						last: true,
+						name: "final.bin",
+						dataBase64: second.toString("base64"),
+					},
+					conn,
+				);
+			const other = new FakeConnection(peer("device-y"));
+			expect(ipcErrorCode(await finish(other).catch((error: unknown) => error))).toBe("invalid_path");
+			const reconnected = new FakeConnection(peer("device-x"));
+			const finished = (await finish(reconnected)) as { path: string };
+			expect(finished.path.endsWith("final.bin")).toBe(true);
+			expect(readFileSync(finished.path)).toEqual(Buffer.concat([first, second]));
+			expect(ipcErrorCode(await finish(reconnected).catch((error: unknown) => error))).toBe("invalid_path");
+
 			// A part that skips one drops what was held: the file is never stored with a hole in it.
 			await part("upload-bbbb", 0, false, first);
 			const skipped = await part("upload-bbbb", 2, true, second).catch((error: unknown) => error);
@@ -2703,9 +3310,32 @@ describe("LocalHostServices", () => {
 		}
 	});
 
+	it("rejects the tail of a lost upload after a core restart and stores a fresh attachment", async () => {
+		const root = mkdtempSync(join(tmpdir(), "host-uploads-"));
+		onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+		const { services } = setup(60_000, { uploads: new UploadStore({ userData: root }) });
+		const x = new FakeConnection(peer("device-x"));
+		const part = (upload: string, index: number, last: boolean, bytes: Buffer) =>
+			services.call(
+				x.peer,
+				"host.files.uploadPart",
+				{ upload, index, last, name: "fresh.bin", dataBase64: bytes.toString("base64") },
+				x,
+			);
+		await part("lost-file", 0, false, Buffer.from("discarded"));
+		expect(existsSync(join(root, "web-uploads"))).toBe(false);
+		await stopCore();
+		const head = Buffer.alloc(6000, 0x41);
+		const tail = Buffer.from("tail");
+		await part("fresh-file", 0, false, head);
+		expect(ipcErrorCode(await part("lost-file", 1, true, tail).catch((e: unknown) => e))).toBe("invalid_path");
+		const { path } = (await part("fresh-file", 1, true, tail)) as { path: string };
+		expect(readFileSync(path)).toEqual(Buffer.concat([head, tail]));
+	});
+
 	it("drops parts left waiting and gives their room back", async () => {
 		const root = mkdtempSync(join(tmpdir(), "host-uploads-"));
-		vi.useFakeTimers();
+		await fakeCoreTimers();
 		try {
 			const { services } = setup(60_000, { uploads: new UploadStore({ userData: root }) });
 			const x = new FakeConnection(peer("device-x"));
@@ -2716,15 +3346,16 @@ describe("LocalHostServices", () => {
 					{ upload, index, last, name: "a.bin", dataBase64: Buffer.alloc(10).toString("base64") },
 					x,
 				);
-			for (let n = 0; n < UPLOAD_PARTS_PER_DEVICE; n++) await part(`upload-idle-${n}`, 0, false);
-			await vi.advanceTimersByTimeAsync(UPLOAD_PART_IDLE_MS);
+			for (let n = 0; n < 2; n++) await part(`upload-idle-${n}`, 0, false);
+			await advanceCoreTimers(120_000);
 			// The held parts are gone: their next part has nothing to join, and a new file has room again.
 			expect(ipcErrorCode(await part("upload-idle-0", 1, true).catch((error: unknown) => error))).toBe(
 				"invalid_path",
 			);
 			expect(await part("upload-new0", 0, false)).toEqual({ received: 10 });
+			await part("upload-new0", 1, true);
 		} finally {
-			vi.useRealTimers();
+			await realCoreTimers();
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
@@ -2773,6 +3404,12 @@ describe("LocalHostServices", () => {
 			.call(y.peer, "terminal.request", { rtab: "t1", operation: { action: "list" } }, y)
 			.catch((error: unknown) => error);
 		expect(ipcErrorCode(foreign)).toBe("unknown_tab");
+		const read = { pick: "1", lines: 2 };
+		const denied = await services.call(y.peer, "terminal.read", { rtab: "t1", read }, y).catch(error => error);
+		expect(ipcErrorCode(denied)).toBe("unknown_tab");
+		await expect(
+			services.call(x.peer, "terminal.read", { rtab: "t1", read: { ...read, lines: 0 } }, x),
+		).rejects.toThrow(/Invalid terminal.read/);
 		await expect(
 			services.call(x.peer, "terminal.request", { rtab: "t1", operation: { action: "write", id: 1 } }, x),
 		).rejects.toThrow(/Invalid terminal operation/);
@@ -2815,13 +3452,14 @@ describe("LocalHostServices for this computer's own windows", () => {
 	}
 
 	/** The one builder of this computer's summaries wired to these services as `index.ts` wires it. */
-	function withSummaries(graceMs?: number) {
+	function withSummaries(graceMs?: number, extra: Partial<HostServicesDeps> = {}) {
 		let builder: SessionSummaries | undefined;
 		const live = (): SessionSummaries => {
 			if (!builder) throw new Error("summaries not built yet");
 			return builder;
 		};
 		const context = setup(graceMs, {
+			...extra,
 			summaries: {
 				track: sidecar => live().track(sidecar),
 				changed: () => live().changed(),
@@ -2834,8 +3472,8 @@ describe("LocalHostServices for this computer's own windows", () => {
 	}
 
 	/** A device's agent opened a session here, with this computer's summaries built from it. */
-	async function hostedWithSummaries(graceMs?: number) {
-		const context = withSummaries(graceMs);
+	async function hostedWithSummaries(graceMs?: number, extra: Partial<HostServicesDeps> = {}) {
+		const context = withSummaries(graceMs, extra);
 		const x = new FakeConnection(peer("device-x"));
 		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
 		await context.services.call(x.peer, "tab.start", { rtab: "t1" }, x);
@@ -2884,6 +3522,65 @@ describe("LocalHostServices for this computer's own windows", () => {
 		expect(builder.current().sessions[0]).toMatchObject({ status: "ready", awaitingConnection: true });
 		services.setAwaitingConnection("peer:device-x:t1", false);
 		expect(builder.current().sessions[0]).not.toHaveProperty("awaitingConnection");
+	});
+
+	it("says when a hosted tab's turn waits on a call its device runs while that device is away: after the grace, once a wait, until the device is back or the call ends", async () => {
+		// 18 Nov 2026: a device's session here stood 6 h in an `ompdesk_session_open` its offline device never ran, and
+		// nothing on this computer said so.
+		vi.useFakeTimers();
+		const waits: Array<{ device: string; title: string | undefined }> = [];
+		const { services, builder, sidecar, x } = await hostedWithSummaries(undefined, {
+			hostWaiting: wait => waits.push(wait),
+		});
+		const waitsFor = () => builder.current().sessions[0]?.waitsForDevice;
+		sidecar.emit("events", [{ type: "agent_start" }]);
+		const call = (id: string) => ({
+			type: "host_tool_call",
+			id,
+			toolCallId: `c-${id}`,
+			toolName: "ompdesk_session_open",
+		});
+
+		// The device runs it while connected: nothing to say however long it takes.
+		sidecar.emit("hostToolCall", call("open"));
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS * 3);
+		expect(waitsFor()).toBeUndefined();
+
+		// The link drops under it: a routine reconnect within the grace says nothing.
+		services.disconnected(x.peer, x);
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS - 1);
+		expect(waitsFor()).toBeUndefined();
+		expect(waits).toEqual([]);
+		vi.advanceTimersByTime(1);
+		expect(waitsFor()).toBe("device-x");
+		expect(waits).toEqual([{ device: "device-x", title: "Fix login" }]);
+		// Hours more, another call meanwhile: still the one notice.
+		sidecar.emit("hostToolCall", call("report"));
+		vi.advanceTimersByTime(6 * 60 * 60_000);
+		expect(waits).toHaveLength(1);
+
+		// The device is back: the wait is its again.
+		const back = new FakeConnection(peer("device-x"));
+		await services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, back);
+		expect(waitsFor()).toBeUndefined();
+
+		// Away again: a new wait, a new notice; the omp withdrawing its calls ends it.
+		services.disconnected(back.peer, back);
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS);
+		expect(waitsFor()).toBe("device-x");
+		expect(waits).toHaveLength(2);
+		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-1", targetId: "open" });
+		expect(waitsFor()).toBe("device-x");
+		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-2", targetId: "report" });
+		expect(waitsFor()).toBeUndefined();
+
+		// A call made while away that ends within the grace never says anything.
+		sidecar.emit("hostToolCall", call("brief"));
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS - 1);
+		sidecar.emit("frame", { type: "host_tool_cancel", id: "cancel-3", targetId: "brief" });
+		vi.advanceTimersByTime(HOST_WAIT_NOTICE_MS);
+		expect(waitsFor()).toBeUndefined();
+		expect(waits).toHaveLength(2);
 	});
 
 	it("sends every connected device one `host.summaries` delta per burst of a device tab's turn and ask, and answers `sessions.summaries` with the whole set", async () => {
@@ -3197,6 +3894,28 @@ describe("LocalHostServices: a device opening a session a window of this compute
 		expect(ipcErrorCode(gone)).toBe("unknown_tab");
 	});
 
+	it("a window's close the device missed while away is not undone when it comes back: no omp of its own", async () => {
+		const { services, sidecars, local, view, x } = await viewing();
+		services.disconnected(x.peer, x);
+		// The window here closes its tab while the device is away: it never hears `viewEnded`.
+		local.views.delete(SESSION);
+		view.emit(VIEW_ENDED_EVENT);
+		const back = new FakeConnection(peer("device-x"));
+		const again = await services
+			.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, back)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(again)).toBe("view_ended");
+		expect(sidecars).toHaveLength(0);
+		// Told once: a later open of that rtab (the person reopening the session there) is an open like any other.
+		const later = await services.call(
+			back.peer,
+			"tab.open",
+			{ rtab: "t1", cwd: workDir, sessionPath: SESSION },
+			back,
+		);
+		expect(later).toMatchObject({ attached: false });
+	});
+
 	it("hands the device the asks the window's omp has open when it attaches", async () => {
 		const { view, x } = await viewing();
 		const ask = { type: "extension_ui_request", id: "ask-1", method: "confirm", title: "?", message: "" };
@@ -3258,6 +3977,28 @@ describe("LocalHostServices: a device opening a session a window of this compute
 		await services.call(x.peer, "tab.cancelWait", { rtab: "t1" }, x);
 		expect(cancelHostWait).toHaveBeenCalledTimes(1);
 		expect(resume.cancelWait).not.toHaveBeenCalled();
+	});
+
+	it("tells the viewing device the window tab's cut-off turn, on every re-open, and takes its Continue and Dismiss there", async () => {
+		const { services, view, x } = await viewing();
+		expect(x.tabEvents()).toContainEqual({ rtab: "t1", name: "cutOff", arg: null });
+		view.emit("cutOff", "crash-loop");
+		expect(x.tabEvents().at(-1)).toEqual({ rtab: "t1", name: "cutOff", arg: "crash-loop" });
+
+		services.disconnected(x.peer, x);
+		const back = new FakeConnection(peer("device-x"));
+		await services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, back);
+		expect(back.tabEvents()).toContainEqual({ rtab: "t1", name: "cutOff", arg: "crash-loop" });
+
+		const continueHostCut = vi.fn(async () => {});
+		const dismissHostCut = vi.fn(async () => {});
+		Object.assign(view, { continueHostCut, dismissHostCut });
+		await services.call(back.peer, "tab.continueCut", { rtab: "t1" }, back);
+		await services.call(back.peer, "tab.dismissCut", { rtab: "t1" }, back);
+		expect(continueHostCut).toHaveBeenCalledTimes(1);
+		expect(dismissHostCut).toHaveBeenCalledTimes(1);
+		view.emit("cutOff", undefined);
+		expect(back.tabEvents().at(-1)).toEqual({ rtab: "t1", name: "cutOff", arg: null });
 	});
 
 	// Review M1: a device's switch through a view moves the window's tab, whose pool entry counts it (ipc.ts does the same
@@ -3413,22 +4154,8 @@ describe("LocalHostServices: a device opening a session another device's tab run
 describe("LocalHostServices: Autopilot of a device's tab", () => {
 	it("answers get/set_autopilot through this computer's coordinator, counting a start against the device", async () => {
 		const { services, sidecars } = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", { ...peer("device-x"), limits: { requestsPerDay: 1 } }]]);
-		services.attachQuota(
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			),
-		);
+		const { quota, stored } = quotaOver({ ...peer("device-x"), limits: { requestsPerDay: 1 } });
+		services.attachQuota(quota);
 		const x = new FakeConnection(peer("device-x"));
 		await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
 		const send = (command: Record<string, unknown>) =>
@@ -3535,27 +4262,13 @@ describe("LocalHostServices: Autopilot of a device's tab", () => {
 
 	it("charges an Autopilot run a device started here for its reply tokens until it ends, across a relaunch", async () => {
 		const file = join(workDir, "autopilot-device-runs.json");
-		const stored = new Map<string, PeerInfo>([["device-x", peer("device-x")]]);
-		const quota = () =>
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			);
+		const { quota, stored } = quotaOver(peer("device-x"));
 		const reply = (tokens: number) => [
 			{ type: "message_end", message: { role: "assistant", usage: { totalTokens: tokens } } },
 			{ type: "message_end", message: { role: "user" } },
 		];
 		const first = setup(60_000, { runChargesFile: file }).services;
-		first.attachQuota(quota());
+		first.attachQuota(quota);
 		first.chargeRun("/wt/run", "device-x");
 		first.runEvents("/wt/run", reply(500) as never);
 		first.runEvents("/wt/other", reply(9_000) as never);
@@ -3563,36 +4276,22 @@ describe("LocalHostServices: Autopilot of a device's tab", () => {
 
 		// This computer restarted: the run resumes from its layout and is still the device's.
 		const second = setup(60_000, { runChargesFile: file }).services;
-		second.attachQuota(quota());
+		second.attachQuota(quota);
 		second.runEvents("/wt/run", reply(300) as never);
 		expect(stored.get("device-x")?.usage).toMatchObject({ tokens: 800 });
 		second.endRun("/wt/run");
 		second.runEvents("/wt/run", reply(300) as never);
 		expect(stored.get("device-x")?.usage).toMatchObject({ tokens: 800 });
 		const third = setup(60_000, { runChargesFile: file }).services;
-		third.attachQuota(quota());
+		third.attachQuota(quota);
 		third.runEvents("/wt/run", reply(300) as never);
 		expect(stored.get("device-x")?.usage).toMatchObject({ tokens: 800 });
 	});
 
 	it("counts a run's reply once while the device views it: through the run, not the device's view", async () => {
 		const context = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", peer("device-x")]]);
-		context.services.attachQuota(
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			),
-		);
+		const { quota, stored } = quotaOver(peer("device-x"));
+		context.services.attachQuota(quota);
 		const view = new FakeHostSidecar(workDir, "agent");
 		view.setStatus("ready");
 		context.local.views.set("/s/run.jsonl", view);
@@ -3630,22 +4329,8 @@ describe("LocalHostServices: Autopilot of a device's tab", () => {
 
 	it("counts a run's child's reply once while the device views the child: through the run, not the view", async () => {
 		const context = setup();
-		const stored = new Map<string, PeerInfo>([["device-x", peer("device-x")]]);
-		context.services.attachQuota(
-			new PeerQuota(
-				{
-					get: id => stored.get(id),
-					update: (id, patch) => {
-						const current = stored.get(id);
-						if (!current) return undefined;
-						const next = { ...current, ...patch };
-						stored.set(id, next);
-						return next;
-					},
-				},
-				() => {},
-			),
-		);
+		const { quota, stored } = quotaOver(peer("device-x"));
+		context.services.attachQuota(quota);
 		const child = new FakeHostSidecar(workDir, "agent");
 		child.setStatus("ready");
 		context.local.views.set("/s/child.jsonl", child);
@@ -3747,26 +4432,6 @@ describe("LocalHostServices host.* calls", () => {
 				/Invalid host.desktop.update/,
 			);
 		}
-	});
-
-	it("reads the host's built-in REA preference and validates writes", async () => {
-		const { services, machine } = setup();
-		const x = new FakeConnection(peer("device-x"));
-		await expect(services.call(x.peer, "host.builtinRea.get", {}, x)).resolves.toEqual({
-			enabled: true,
-			available: true,
-		});
-		await expect(services.call(x.peer, "host.builtinRea.set", { enabled: false }, x)).resolves.toEqual({
-			enabled: false,
-			available: true,
-		});
-		expect(machine.setBuiltinRea).toHaveBeenCalledWith(false);
-		for (const bad of [{}, { enabled: "false" }, { enabled: 1 }]) {
-			await expect(services.call(x.peer, "host.builtinRea.set", bad, x)).rejects.toThrow(
-				/Invalid host.builtinRea.set/,
-			);
-		}
-		expect(machine.setBuiltinRea).toHaveBeenCalledTimes(1);
 	});
 
 	it("reads the host's local engine detection and validates writes", async () => {
@@ -4011,6 +4676,112 @@ describe("LocalHostServices host.* calls", () => {
 			);
 	});
 
+	it("shares host pins, order and archive changes without exposing or changing private rows", async () => {
+		const { services, machine } = setup();
+		const x = new FakeConnection(peer("x"));
+		const y = new FakeConnection(peer("y"));
+		const cwd = String.raw`C:\src\app`;
+		const rows = Array.from({ length: 21 }, (_, i) => ({
+			id: `id-${i}`,
+			path: `C:\\sessions\\${i}.jsonl`,
+			cwd,
+			created: "",
+			messageCount: 1,
+			title: "Session",
+			firstMessage: "",
+		}));
+		const [first, second] = rows;
+		if (!first || !second) throw new Error("missing fixture rows");
+		const privateRow = { ...first, path: "/hidden.jsonl", id: "hidden-id" };
+		const a = first.path;
+		const b = second.path;
+		// The host's prefs file in the real core, which applies each layout change as the app's does.
+		const prefs = new PrefsStore<Record<string, unknown>>(join(workDir, "prefs.json"));
+		prefs.set("sidebar", {
+			pinnedGroups: ["other-device\nelsewhere"],
+			pinnedSessions: [privateRow.path],
+			archivedSessions: [privateRow.id, "stale-id"],
+			agentHidden: [privateRow.path],
+			sessionOrder: { [cwd]: [a, privateRow.path, b], elsewhere: [privateRow.path] },
+		});
+		const list = new SidebarProjects({
+			read: () => undefined,
+			write: () => {},
+			sessions: async () => [...rows, privateRow],
+			defaultWorkspace: () => "/work",
+			projectOf: async path => path,
+			exists: async () => true,
+			layout: {
+				read: () => readSidebarPrefs(prefs.get("sidebar")),
+				write: change => {
+					prefs.updateSidebar(change, "host");
+				},
+			},
+			onState: state => services.sidebarProjectsChanged(state),
+		});
+		machine.sidebarProjects.mockImplementation(request => list.command(request));
+		const command = (conn: FakeConnection, request: SidebarProjectsRequest) =>
+			services.call(conn.peer, "host.projects.command", { request }, conn);
+		await command(y, { action: "get" });
+		await command(x, { action: "layout", change: { op: "set-group-pinned", cwd, pinned: true } });
+		await command(x, { action: "layout", change: { op: "set-group-order", order: [cwd] } });
+		const order = [b, a, privateRow.path, "/since-deleted.jsonl"];
+		const change = { op: "set-session-order", list: cwd, order } as const;
+		for (const move of [
+			{ path: privateRow.path, over: a },
+			{ path: b, over: "/since-deleted.jsonl" },
+		])
+			await expect(command(x, { action: "layout", change: { ...change, move } })).rejects.toThrow(
+				"The sidebar row is not available on this host",
+			);
+		await command(x, { action: "layout", change: { ...change, move: { path: b, over: a } } });
+		const ids = rows.map(row => row.id);
+		await command(x, { action: "layout", change: { op: "set-sessions-archived", ids, archived: true } });
+		const localPin = { op: "set-session-pinned", path: a, pinned: true } as const;
+		prefs.updateSidebar(localPin, "window");
+		list.layoutChanged();
+		const expected = {
+			pinnedGroups: [cwd],
+			groupOrder: [cwd],
+			pinnedSessions: [a],
+			archivedSessions: ids,
+			sessionOrder: { [cwd]: [b, a] },
+		};
+		await expect(command(y, { action: "get" })).resolves.toMatchObject({ layout: expected });
+		for (const conn of [x, y]) {
+			const events = conn.events.filter(e => e.event === PROJECTS_EVENT);
+			expect(events.at(-1)?.data).toMatchObject({ layout: expected });
+			expect(JSON.stringify(events)).not.toMatch(
+				/hidden-id|hidden\.jsonl|other-device|elsewhere|stale-id|agentHidden/,
+			);
+		}
+		await expect(
+			command(y, {
+				action: "layout",
+				change: { op: "set-sessions-archived", ids: [privateRow.id], archived: false },
+			}),
+		).rejects.toThrow();
+		await expect(
+			command(y, { action: "layout", change: { op: "set-session-pinned", path: privateRow.path, pinned: false } }),
+		).rejects.toThrow();
+		await expect(
+			services.call(
+				y.peer,
+				"host.projects.command",
+				{ request: { action: "layout", change: { op: "set-agent-hidden", path: a, hidden: true } } },
+				y,
+			),
+		).rejects.toThrow();
+		await command(y, { action: "layout", change: { op: "set-sessions-archived", ids, archived: false } });
+		expect(prefs.get("sidebar")).toMatchObject({
+			pinnedGroups: ["other-device\nelsewhere", cwd],
+			pinnedSessions: [privateRow.path, a],
+			archivedSessions: [privateRow.id, "stale-id"],
+			agentHidden: [privateRow.path],
+			sessionOrder: { [cwd]: [b, privateRow.path, a], elsewhere: [privateRow.path] },
+		});
+	});
+
 	it("serves a tab's file bytes to its own device only, as base64 that decodes to the same bytes", async () => {
 		const { services } = setup();
 		const x = new FakeConnection(peer("device-x"));
@@ -4155,6 +4926,22 @@ describe("LocalHostServices host.git.*: a device's agent working on a session th
 		expect(existsSync(join(worktree.baseCwd, "child.txt"))).toBe(true);
 		expect(await services.call(x.peer, "host.git.removeWorktree", { worktree }, x)).toBe("removed");
 		expect(existsSync(worktree.path)).toBe(false);
+	});
+
+	it("tells a desktop that asks with withRemote what became of the branch's copy on origin", async () => {
+		const { services } = setup();
+		const x = new FakeConnection(peer("device-x"));
+		const worktree = await repoWithChild();
+		const remote = join(workDir, "remote.git");
+		gitSync(workDir, "init", "-q", "--bare", "-b", "main", remote);
+		gitSync(worktree.baseCwd, "remote", "add", "origin", remote);
+		gitSync(worktree.baseCwd, "push", "-q", "-u", "origin", "main");
+		gitSync(worktree.path, "push", "-q", "origin", worktree.branch, "HEAD:main");
+		expect(await services.call(x.peer, "host.git.removeWorktree", { worktree, withRemote: true }, x)).toEqual({
+			removal: "removed",
+			remote: { outcome: "deleted", message: expect.stringContaining(worktree.branch) },
+		});
+		expect(gitSync(remote, "for-each-ref", `refs/heads/${worktree.branch}`)).toBe("");
 	});
 
 	it("refuses relative paths, and sends a merge's refusal back with git's reason", async () => {
@@ -4963,7 +5750,7 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 	}
 
 	/** A device's tab whose omp answers `browser_relay_start` with `relay` (nothing when omitted). */
-	async function tabWith(relay?: { port: number }) {
+	async function tabWith(relay?: { port: number; extensionPort?: number }) {
 		const context = setup();
 		const x = new FakeConnection(peer("device-x"));
 		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
@@ -4974,7 +5761,11 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 			sidecar.commands.push(command);
 			const data =
 				command.type === "browser_relay_start" && relay
-					? { url: `http://127.0.0.1:${relay.port}`, token: TOKEN }
+					? {
+							url: `http://127.0.0.1:${relay.port}`,
+							...(relay.extensionPort ? { extensionUrl: `http://127.0.0.1:${relay.extensionPort}` } : {}),
+							token: TOKEN,
+						}
 					: {};
 			return { type: "response", command: command.type, success: true, data };
 		};
@@ -5010,11 +5801,13 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 
 	it("dials the relay its bridge answered, and carries frames both ways", async () => {
 		const server = await relayServer();
-		const { services, x, command, relayEvents } = await tabWith(server);
+		const cdp = await relayServer();
+		const { services, x, command, relayEvents } = await tabWith({ port: cdp.port, extensionPort: server.port });
 		await command("browser_relay_start");
 
 		await expect(services.call(x.peer, PREVIEW_RELAY_METHODS.open, { rtab: "t1" }, x)).resolves.toBeNull();
 		expect(server.dialed).toEqual([`/ext?token=${TOKEN}`]);
+		expect(cdp.dialed).toEqual([]);
 
 		await services.call(x.peer, PREVIEW_RELAY_METHODS.send, { rtab: "t1", data: '{"t":"hello"}' }, x);
 		await vi.waitFor(() => expect(server.received).toEqual(['{"t":"hello"}']));
@@ -5081,5 +5874,249 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 		await services.call(x.peer, PREVIEW_RELAY_METHODS.open, { rtab: "t1" }, x);
 		server.sockets[0]?.send("a screenshot that does not fit");
 		await vi.waitFor(() => expect(server.sockets[0]?.readyState).toBe(WebSocket.CLOSED));
+	});
+});
+
+describe("an answer with attachments for a tab a device runs here", () => {
+	const companion = {
+		content: "What goes with my answer (the answer follows):",
+		details: { id: "answer-1" },
+		delivery: { triggerTurn: false },
+	};
+	const step = (extra: Record<string, unknown>) => ({
+		type: "agent_control_answer",
+		requestId: "answer-1|ask-1",
+		companion,
+		...extra,
+	});
+	const response = { type: "extension_ui_response", id: "ask-1", value: "Blue" };
+
+	async function hosted() {
+		const context = setup();
+		const x = new FakeConnection(peer("device-x"));
+		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
+		const sidecar = context.sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		sidecar.emit("extensionUi", {
+			type: "extension_ui_request",
+			id: "ask-1",
+			method: "select",
+			title: "Pick",
+			options: ["Red", "Blue"],
+		});
+		const call = (command: Record<string, unknown>) =>
+			context.services.call(x.peer, "tab.command", { rtab: "t1", command }, x);
+		return { ...context, x, sidecar, call };
+	}
+
+	it("appends the note and then answers, in the host's one step", async () => {
+		const { sidecar, call } = await hosted();
+		await call(step({ askId: "ask-1", response }));
+		expect(sidecar.commands.map(command => command.type)).toEqual(["agent_control_mail"]);
+		expect(sidecar.sideFrames).toEqual([response]);
+	});
+
+	it("refuses every other answer while the note goes in, then lands the agent's once", async () => {
+		const { services, sidecar, call, x } = await hosted();
+		const note = Promise.withResolvers<void>();
+		const held = sidecar.rpcClient.command;
+		sidecar.rpcClient.command = async command => {
+			await note.promise;
+			return held(command);
+		};
+		const answering = call(step({ askId: "ask-1", response }));
+		await new Promise(resolve => setTimeout(resolve, 20));
+		const person = await services
+			.call(x.peer, "tab.sideChannel", { rtab: "t1", frame: { ...response, value: "Red" } }, x)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(person)).toBe("being_answered");
+		note.resolve();
+		await answering;
+		expect(sidecar.sideFrames).toEqual([response]);
+	});
+
+	it("refuses an ask that closed meanwhile and appends nothing", async () => {
+		const { sidecar, call } = await hosted();
+		sidecar.emit("extensionUi", { type: "extension_ui_request", id: "c", method: "cancel", targetId: "ask-1" });
+		await expect(call(step({ askId: "ask-1", response }))).rejects.toThrow(/not open any more/);
+		expect(sidecar.commands).toEqual([]);
+		expect(sidecar.sideFrames).toEqual([]);
+	});
+
+	it("refuses a plan approval from a device while an agent's approval holds that plan, and approves the plan once", async () => {
+		const { services, sidecar, call, x } = await hosted();
+		sidecar.emit("events", [{ type: "plan_proposal", planFilePath: "/p/plan.md", title: "Plan" }]);
+		const note = Promise.withResolvers<void>();
+		const held = sidecar.rpcClient.command;
+		sidecar.rpcClient.command = async command => {
+			if (command.type === "agent_control_mail") await note.promise;
+			return held(command);
+		};
+		const answering = call(
+			step({
+				requestId: "answer-1|plan",
+				plan: { type: "plan_approval", approved: true },
+				planFile: "/p/plan.md",
+				planGeneration: 1,
+			}),
+		);
+		await new Promise(resolve => setTimeout(resolve, 20));
+		const person = await services
+			.call(x.peer, "tab.command", { rtab: "t1", command: { type: "plan_approval", approved: false } }, x)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(person)).toBe("being_answered");
+		note.resolve();
+		await answering;
+		expect(sidecar.commands.map(command => command.type)).toEqual(["agent_control_mail", "plan_approval"]);
+	});
+
+	it("sends no approval to a revised plan that reuses the plan file", async () => {
+		const { sidecar, call } = await hosted();
+		sidecar.emit("events", [{ type: "plan_proposal", planFilePath: "/p/plan.md", title: "Plan" }]);
+		sidecar.emit("events", [{ type: "plan_proposal", planFilePath: "/p/plan.md", title: "Plan, revised" }]);
+		await expect(
+			call(
+				step({
+					requestId: "answer-1|plan",
+					plan: { type: "plan_approval", approved: true },
+					planFile: "/p/plan.md",
+					planGeneration: 1,
+				}),
+			),
+		).rejects.toThrow(/plan changed since you read it/);
+		expect(sidecar.commands).toEqual([]);
+	});
+});
+
+describe("a device answering a window's tab meets the pool's claims", () => {
+	it("is refused a plan approval the pool says an agent's approval holds", async () => {
+		const context = setup();
+		const guard = vi.fn((_tabId: string) => {
+			throw codedError("being_answered", "An agent is answering this plan right now");
+		});
+		context.local.localTabs.guardPlan = guard as never;
+		context.local.owned.set("/s/local.jsonl", { tabId: "win1", winId: 1 });
+		const view = new FakeHostSidecar(workDir, "agent");
+		view.setStatus("ready");
+		context.local.views.set("/s/local.jsonl", view);
+		const x = new FakeConnection(peer("device-x"));
+		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: "/s/local.jsonl" }, x);
+		const refused = await context.services
+			.call(x.peer, "tab.command", { rtab: "t1", command: { type: "plan_approval", approved: true } }, x)
+			.catch((error: unknown) => error);
+		expect(guard).toHaveBeenCalledWith("win1");
+		expect(ipcErrorCode(refused)).toBe("being_answered");
+		expect(view.commands).toEqual([]);
+	});
+});
+
+describe("a paired tab's plan generation is the host's, end to end", () => {
+	const proposal = (title: string) => ({
+		type: "plan_proposal",
+		planFilePath: "/p/plan.md",
+		title,
+		planContent: "x",
+		options: [],
+	});
+	const proposals = (conn: FakeConnection) =>
+		conn
+			.tabEvents()
+			.filter(event => event.name === "events")
+			.flatMap(event => event.arg as { type: string; generation?: number }[])
+			.filter(event => event.type === "plan_proposal");
+
+	it("stamps the generation it issued on the proposal it forwards, and on the one a returning device is sent", async () => {
+		const { services, sidecars } = setup();
+		const first = new FakeConnection(peer("device-x"));
+		await services.call(first.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, first);
+		const sidecar = sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		// This host has numbered other plans already (the device's own counter is another, so the two are unequal).
+		sidecar.emit("events", [proposal("one")]);
+		sidecar.emit("events", [proposal("two")]);
+		sidecar.emit("events", [proposal("three")]);
+		const sent = proposals(first).map(event => event.generation);
+		expect(sent).toEqual([1, 2, 3]);
+		// The link drops and comes back: the pending plan is sent again with the very same generation.
+		services.disconnected(first.peer, first);
+		const second = new FakeConnection(peer("device-x"));
+		await services.call(second.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, second);
+		expect(proposals(second).map(event => event.generation)).toEqual([3]);
+	});
+
+	it("answers with attachments for the host's generation, whatever number the device holds for other plans", async () => {
+		const { services, sidecars } = setup();
+		const x = new FakeConnection(peer("device-x"));
+		await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
+		const sidecar = sidecars[0];
+		if (!sidecar) throw new Error("expected a sidecar");
+		sidecar.setStatus("ready");
+		sidecar.emit("events", [proposal("one")]);
+		sidecar.emit("events", [proposal("two")]);
+		const forwarded = proposals(x).at(-1)?.generation;
+		expect(forwarded).toBe(2);
+		const answer = (planGeneration: number) =>
+			services.call(
+				x.peer,
+				"tab.command",
+				{
+					rtab: "t1",
+					command: {
+						type: "agent_control_answer",
+						requestId: `answer-${planGeneration}|plan`,
+						companion: {
+							content: "note",
+							details: { id: `answer-${planGeneration}` },
+							delivery: { triggerTurn: false },
+						},
+						plan: { type: "plan_approval", approved: true },
+						planFile: "/p/plan.md",
+						planGeneration,
+					},
+				},
+				x,
+			);
+		// What the device's own pool numbered (another counter) is refused; the host's own number is accepted.
+		await expect(answer(9)).rejects.toThrow(/plan changed since you read it/);
+		expect(sidecar.commands).toEqual([]);
+		await answer(forwarded ?? 0);
+		expect(sidecar.commands.map(command => command.type)).toEqual(["agent_control_mail", "plan_approval"]);
+	});
+
+	it("stamps a window tab's plan with the pool's generation for a device that views it, on a reconnect too, and its answer is that plan's", async () => {
+		const context = setup();
+		const SESSION = "/s/local.jsonl";
+		context.local.owned.set(SESSION, { tabId: "win1", winId: 1 });
+		const view = new FakeHostSidecar(workDir, "agent");
+		view.setStatus("ready");
+		context.local.views.set(SESSION, view);
+		// The pool numbered this plan 7; this host's own counter has issued one other number.
+		let pending: { title: string; planFilePath: string; generation: number } | null = null;
+		context.local.localTabs.pendingPlan = () => pending;
+		const run = vi.fn(async () => {});
+		Object.assign(context.local.localTabs, { targetAnswer: { run } });
+		const x = new FakeConnection(peer("device-x"));
+		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, x);
+		pending = { title: "Plan", planFilePath: "/p/plan.md", generation: 7 };
+		view.emit("events", [proposal("Plan")]);
+		expect(proposals(x).map(event => event.generation)).toEqual([7]);
+		// The link drops and comes back: the pool's current number goes with the proposal again.
+		context.services.disconnected(x.peer, x);
+		const back = new FakeConnection(peer("device-x"));
+		await context.services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, back);
+		expect(proposals(back).map(event => event.generation)).toEqual([7]);
+		// The device's agent answers for what it was sent; the pool's one step gets that very number.
+		const step = {
+			type: "agent_control_answer",
+			requestId: "answer-1|plan",
+			companion: { content: "note", details: { id: "answer-1" }, delivery: { triggerTurn: false } },
+			plan: { type: "plan_approval", approved: true },
+			planFile: "/p/plan.md",
+			planGeneration: 7,
+		};
+		await context.services.call(back.peer, "tab.command", { rtab: "t1", command: step }, back);
+		expect(run).toHaveBeenCalledWith("win1", expect.objectContaining({ planGeneration: 7 }), expect.any(Function));
 	});
 });

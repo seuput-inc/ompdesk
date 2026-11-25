@@ -7,11 +7,12 @@
 //! code-paired hosts to nodes once, forgets code-paired devices after the grace period and holds the host's
 //! keep-awake policy. Main keeps what only it can say or do and is asked (`remote.ask`): Mobile web's allowed accounts
 //! and blocks (`policy`), the person's approval (`admit`), each device link's hello (`open`), and every request and
-//! event on a link. Main mirrors the records from `remote.devices.state` for its synchronous readers; the quota's
-//! counts are main's writes (`remote.devices.peerPatch`), applied here in the order sent.
+//! event on a link. Main mirrors the records from `remote.devices.state` for its synchronous readers; a device's
+//! limits and counts are the quota's (`remote/quota.rs`), written through the same store.
 
 pub mod client;
 pub(crate) mod gate;
+mod order;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -103,8 +104,6 @@ struct Inner {
     watchers: HashSet<u64>,
     poll_timer: Option<AbortHandle>,
     scan_timer: Option<AbortHandle>,
-    /// The last quota patch applied (main's numbering).
-    patched: u64,
 }
 
 pub struct Devices {
@@ -122,6 +121,8 @@ pub struct Devices {
     keep_awake: Option<u64>,
     peers: Arc<Mutex<Store>>,
     hosts: Arc<Mutex<Store>>,
+    order: Mutex<order::Order>,
+    order_write: tokio::sync::Mutex<()>,
     inner: Mutex<Inner>,
     /// One rebind, migration and scan pass at a time; a call during one waits for it (false: none running).
     binding: Pass,
@@ -276,6 +277,7 @@ impl Devices {
     fn snapshot(&self) -> Value {
         let peers = locked(&self.peers).list();
         let hosts = locked(&self.hosts).list();
+        let order = locked(&self.order).view(&host_ids(&hosts));
         let inner = self.inner();
         let addresses = inner.host.addresses();
         json!({
@@ -289,7 +291,7 @@ impl Devices {
                 },
                 "peers": peers,
                 "hosts": hosts,
-                "patched": inner.patched,
+                "deviceSectionOrder": order,
         })
     }
 
@@ -1064,12 +1066,15 @@ struct OpenParams {
     keep_awake_enabled: bool,
     /// Pref `remote.tailnetMigratedAt`; absent: code-paired hosts are matched on the first poll.
     migrated_at: Option<f64>,
+    #[serde(default)]
+    order_rows: Value,
 }
 
 async fn open(call: Call) -> Result<Reply, Fault> {
     let params: OpenParams = call.params()?;
     let identity = super::identity(&params.identity)?;
     let id = super::next_id();
+    let order = order::Order::new(&identity.device_id, &params.order_rows)?;
     let devices = Arc::new_cyclic(|me| Devices {
         id,
         events: call.events.clone(),
@@ -1085,6 +1090,8 @@ async fn open(call: Call) -> Result<Reply, Fault> {
         keep_awake: params.keep_awake,
         peers: store::open(&params.user_data, Kind::Peers),
         hosts: store::open(&params.user_data, Kind::Hosts),
+        order: Mutex::new(order),
+        order_write: tokio::sync::Mutex::const_new(()),
         inner: Mutex::new(Inner {
             name: params.name,
             loopback: params.loopback,
@@ -1102,7 +1109,6 @@ async fn open(call: Call) -> Result<Reply, Fault> {
             watchers: HashSet::new(),
             poll_timer: None,
             scan_timer: None,
-            patched: 0,
         }),
         binding: Pass::default(),
         migrating: Pass::default(),
@@ -1110,7 +1116,75 @@ async fn open(call: Call) -> Result<Reply, Fault> {
         me: me.clone(),
     });
     locked(&INSTANCES).insert(id, Arc::clone(&devices));
-    Reply::json(&json!({"devices": id, "state": devices.snapshot()}))
+    Reply::json(
+        &json!({"devices": id, "state": devices.snapshot(), "orderRows": locked(&devices.order).wire()}),
+    )
+}
+
+fn host_ids(hosts: &[Map<String, Value>]) -> Vec<String> {
+    hosts
+        .iter()
+        .filter_map(|host| text(host, "deviceId"))
+        .collect()
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum OrderEdit {
+    Set,
+    Merge,
+    Migrate,
+}
+
+#[derive(Deserialize)]
+struct OrderRequest {
+    devices: u64,
+    ticket: u64,
+    op: OrderEdit,
+    #[serde(default)]
+    value: Value,
+}
+
+async fn edit_order(call: Call) -> Result<Reply, Fault> {
+    let req: OrderRequest = call.params()?;
+    let devices = instance_or_fault(req.devices)?;
+    let _writer = devices.order_write.lock().await;
+    let mut next = locked(&devices.order).clone();
+    let changed = match req.op {
+        OrderEdit::Merge => next.merge(&req.value),
+        op => {
+            let hosts = host_ids(&locked(&devices.hosts).list());
+            match op {
+                OrderEdit::Set => next.set(&req.value, &hosts)?,
+                OrderEdit::Migrate => next.migrate(&req.value, &hosts),
+                OrderEdit::Merge => unreachable!(),
+            }
+        }
+    };
+    if !changed {
+        return Reply::json(&false);
+    }
+    let rows = next.wire();
+    // SafeStore owns both the published file and the newest value waiting for disk space.
+    // A failed set must not advance the visible clock or spread the rejected order.
+    let saved = super::ask(
+        &call.events,
+        "saveOrder",
+        json!({"devices": devices.id, "ticket": req.ticket, "rows": rows}),
+    )
+    .await;
+    if saved != Some(Value::Bool(true)) {
+        return Err(Fault::new(
+            "io",
+            saved
+                .as_ref()
+                .and_then(Value::as_str)
+                .unwrap_or("The sidebar device order could not be saved"),
+        ));
+    }
+    *locked(&devices.order) = next;
+    devices.tell();
+    Reply::json(&true)
 }
 
 #[derive(Deserialize)]
@@ -1347,33 +1421,6 @@ fn configure(push: PushCall) {
     devices.keep_awake();
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PatchParams {
-    devices: u64,
-    seq: u64,
-    device_id: String,
-    /// The fields main's quota wrote (`limits`, `usage`); a null value removes the field.
-    patch: Map<String, Value>,
-}
-
-/// Main's quota changed a device's limits or counts: applied in the order sent, told with the next state.
-fn peer_patch(push: PushCall) {
-    let Ok(params) = serde_json::from_str::<PatchParams>(push.params.get()) else {
-        return;
-    };
-    let Some(devices) = instance(params.devices) else {
-        return;
-    };
-    let patch = params
-        .patch
-        .into_iter()
-        .map(|(key, value)| (key, (!value.is_null()).then_some(value)))
-        .collect();
-    let _ = locked(&devices.peers).update(&params.device_id, patch);
-    devices.inner().patched = params.seq;
-}
-
 fn wake_push(push: PushCall) {
     #[derive(Deserialize)]
     struct WakeParams {
@@ -1522,6 +1569,9 @@ async fn connect_first(call: Call) -> Result<Reply, Fault> {
 
 pub fn register(registry: &mut Registry) {
     registry.add("remote.devices.open", |call| Box::pin(open(call)));
+    registry.add("remote.devices.editOrder", |call| {
+        Box::pin(edit_order(call))
+    });
     registry.add("remote.devices.start", |call| Box::pin(start(call)));
     registry.add("remote.devices.poll", |call| Box::pin(poll(call)));
     registry.add("remote.devices.setHost", |call| Box::pin(set_host(call)));
@@ -1535,7 +1585,6 @@ pub fn register(registry: &mut Registry) {
     registry.add("remote.devices.peerName", |call| Box::pin(peer_name(call)));
     registry.add("remote.devices.dispose", |call| Box::pin(dispose(call)));
     registry.add_push("remote.devices.configure", configure);
-    registry.add_push("remote.devices.peerPatch", peer_patch);
     registry.add_push("remote.devices.wake", wake_push);
     registry.add("remote.client.open", |call| Box::pin(client_open(call)));
     registry.add("remote.connectFirst", |call| Box::pin(connect_first(call)));

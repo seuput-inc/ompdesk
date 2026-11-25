@@ -186,7 +186,7 @@ import { matchReportAccount } from "./accounts-core";
 import { shapeResetPasses } from "./reset-passes-core";
 import { reportMatchesActiveAccount } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/active-oauth-account";
 import { toResetUsageAccounts } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/reset-usage";
-import { summarizeUsageResetCredits } from "@oh-my-pi/pi-tui/overlays/usage-display";
+import { summarizeUsageResetCredits } from "@oh-my-pi/pi-coding-agent/session/usage-display";
 function oldMatch(report, accounts, count) {
  const identity = report.metadata ?? {};
  const sameOrg = account => identity.orgId === undefined || account.orgId === undefined || account.orgId === identity.orgId;
@@ -199,6 +199,8 @@ function oldMatch(report, accounts, count) {
 }
 export default function(pi) {
  pi.on("session_start", async (_event, context) => {
+  // Which phase failed and the error's class name only: a stock message can carry an account's identity.
+  let step = "session";
   try {
    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
    const env = {pi, session: () => session, context: () => context, emit: () => {}};
@@ -207,6 +209,7 @@ export default function(pi) {
    const originalIds = auth.credentials.list().map(row => row.id).sort((a,b) => a-b);
    const providers = [...new Set(auth.credentials.list().map(row => row.provider))];
    let oldAccounts = 0, newAccounts = 0;
+   step = "accounts";
    for (const provider of providers) {
     const before = auth.credentials.list(provider).map(row => row.id).sort((a,b) => a-b);
     const result = await methods.provider_accounts({providerId: provider}, env);
@@ -214,14 +217,16 @@ export default function(pi) {
     if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("account listing mismatch");
     oldAccounts += before.length; newAccounts += after.length;
    }
+   step = "usage";
    const raw = await session.fetchUsageReports() ?? [];
    const usage = await methods.usage({}, env);
    let oldAttributed = 0, newAttributed = 0, changedAttribution = 0, oldPasses = 0, newPasses = 0, oldRedeemable = 0, newRedeemable = 0;
+   step = "attribution";
    for (const [index, report] of raw.entries()) {
     const accounts = auth.oauth.accounts(report.provider, session.sessionId);
     const count = raw.filter(peer => peer.provider === report.provider).length;
     const old = oldMatch(report, accounts, count);
-    const next = matchReportAccount(report, accounts, count, reportMatchesActiveAccount);
+    const next = matchReportAccount(report, accounts, count, reportMatchesActiveAccount, typeof report.metadata?.accountId === "string" ? report.metadata.accountId : undefined);
     if (usage.reports[index]?.credentialId !== next?.credentialId) throw new Error("wire attribution differs from stock matching");
     oldAttributed += Number(!!old); newAttributed += Number(!!next);
     changedAttribution += Number(old?.credentialId !== next?.credentialId);
@@ -239,6 +244,7 @@ export default function(pi) {
     }
    }
    if (usage.reports.length !== raw.length) throw new Error("usage report count mismatch");
+   step = "logout";
    const provider = "ompdesk-logout-probe";
    await auth.credentials.upsert(provider, {type: "api_key", key: "throwaway-not-a-real-key"});
    const added = auth.credentials.list(provider).length;
@@ -248,7 +254,7 @@ export default function(pi) {
    if (JSON.stringify(originalIds) !== JSON.stringify(finalIds)) throw new Error("logout touched original accounts");
    console.error("ACCOUNT_COUNTS=" + JSON.stringify({oldAccounts, newAccounts, oldReports: raw.length, newReports: usage.reports.length, oldAttributed, newAttributed, changedAttribution, oldPasses, newPasses, oldRedeemable, newRedeemable, throwawayAdded: added, throwawayRemaining: remaining, originalCredentialsRetained: finalIds.length}));
    process.exit(0);
-  } catch { console.error("ACCOUNT_PROBE_FAILED"); process.exit(1); }
+  } catch (error) { console.error("ACCOUNT_PROBE_FAILED=" + JSON.stringify({ step, error: error?.constructor?.name ?? typeof error })); process.exit(1); }
  });
 }
 `,
@@ -281,7 +287,10 @@ export default function(pi) {
 			);
 			expect(
 				result.status,
-				"Isolated stock account probe failed (diagnostics suppressed to protect identities)",
+				`Isolated stock account probe failed (diagnostics suppressed to protect identities): ${
+					result.stderr.split("\n").find(value => value.startsWith("ACCOUNT_PROBE_FAILED=")) ??
+					`no probe line, signal ${result.signal}`
+				}`,
 			).toBe(0);
 			const line = result.stderr.split("\n").find(value => value.startsWith("ACCOUNT_COUNTS="));
 			if (!line) throw new Error("Stock probe did not return count-only evidence");

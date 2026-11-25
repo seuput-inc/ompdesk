@@ -25,7 +25,7 @@ export function FamilyStatus({ state }: { state: FamilyState }) {
 				// The working arc, the same one a top-level row wears in its age slot.
 				<WorkingArc state="turn" />
 			) : state === "waiting" ? (
-				<TriangleAlert className="size-(--sc-icon-sm) text-(--sc-warning)" />
+				<TriangleAlert className="size-(--sc-icon-sm) text-(--sc-attention)" />
 			) : state === "done" ? (
 				<Check className="size-(--sc-icon-sm) text-(--sc-success)" />
 			) : state === "failed" ? (

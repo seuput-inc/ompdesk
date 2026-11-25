@@ -32,7 +32,7 @@ describe("assertAppBuilt", () => {
 });
 
 describe("playwright without a build", () => {
-	it("fails the whole run at once and starts no Electron", () => {
+	it("fails the whole run at once and starts no app", () => {
 		const started = Date.now();
 		const run = spawnSync(
 			"bunx",
@@ -47,7 +47,7 @@ describe("playwright without a build", () => {
 		const elapsed = Date.now() - started;
 		expect(run.status).not.toBe(0);
 		expect(`${run.stdout}${run.stderr}`).toContain("No build:");
-		// A launched test would take seconds and show the dialog; a refused run is Playwright's startup only.
+		// A launched test would take seconds; a refused run is Playwright's startup only.
 		expect(elapsed).toBeLessThan(30_000);
 		if (process.platform !== "win32") {
 			const processes = spawnSync("ps", ["-axo", "command"], { encoding: "utf8" }).stdout;

@@ -92,6 +92,7 @@ async function judgeWith(loopback: Loopback, role: "native" | "prompted", enable
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			`        reasoning: false`,
 			`        cost: ${cost}`,
 			...(role === "native"
 				? [
@@ -103,6 +104,7 @@ async function judgeWith(loopback: Loopback, role: "native" | "prompted", enable
 						"      - id: jev-latest",
 						"        name: jev-latest",
 						"        input: [text]",
+						`        reasoning: false`,
 						`        cost: ${cost}`,
 					]
 				: []),

@@ -19,6 +19,8 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "../health";
 import { registerPromptSection } from "../prompt-sections";
+import { CLAIMS_FULL_EVERY, journaledClaims, nextClaimsEntry } from "./checkout-claims";
+import { expandGlob } from "./checkout-expand";
 import {
 	CHECKOUT_FILES_EVENT,
 	CHECKOUT_PEERS_EVENT,
@@ -42,28 +44,13 @@ const host = {
 		}
 	},
 	exists: (path: string) => fs.existsSync(path),
-	expand: (glob: string): string[] => {
-		const cut = glob.search(/[*?[]/);
-		const base = glob.slice(0, glob.lastIndexOf("/", cut)) || "/";
-		try {
-			return [
-				...new Bun.Glob(glob.slice(base.length + 1)).scanSync({
-					cwd: base,
-					absolute: true,
-					onlyFiles: true,
-					dot: true,
-				}),
-			].map(file => file.replaceAll("\\", "/"));
-		} catch {
-			return [];
-		}
-	},
+	expand: expandGlob,
 };
 
 const state = new CheckoutPeersState();
 const ledger = new CheckoutLedger();
 
-/** The journal entry holding the session's claims: `{files, stamps, at}`, the newest one wins. */
+/** The journal entry holding the session's claims: a whole set or what changed since (checkout-claims.ts `journaledClaims`). */
 const CLAIMS_ENTRY = "ompdesk.checkout-claims";
 /** The claims are written to the journal at most this often (a burst of edits is one entry), and at the end of a run and at shutdown. */
 const JOURNAL_INTERVAL_MS = 15_000;
@@ -76,6 +63,10 @@ let mainPi: ExtensionAPI | undefined;
 let journaled = ledger.claims.revision;
 let journaledAt = 0;
 let journalTimer: ReturnType<typeof setTimeout> | undefined;
+/** The claims the journal of the session's branch holds now, which the next delta is taken from. */
+let journaledFiles: readonly string[] = [];
+/** Deltas written since the last whole set; at `CLAIMS_FULL_EVERY` the next entry is whole. */
+let deltas = CLAIMS_FULL_EVERY;
 
 function writeJournal(): void {
 	clearTimeout(journalTimer);
@@ -83,8 +74,12 @@ function writeJournal(): void {
 	if (!mainPi || ledger.claims.revision === journaled) return;
 	journaled = ledger.claims.revision;
 	journaledAt = Date.now();
+	const entry = nextClaimsEntry(journaledFiles, ledger.claims, deltas);
+	if (!entry) return;
 	try {
-		mainPi.appendEntry(CLAIMS_ENTRY, { ...ledger.claims.snapshot(), at: journaledAt });
+		mainPi.appendEntry(CLAIMS_ENTRY, { ...entry.data, at: journaledAt });
+		journaledFiles = [...ledger.claims.files];
+		deltas = entry.whole ? 0 : deltas + 1;
 	} catch {
 		// A journal that cannot be written costs only the restart protection; the claims in memory still guard.
 		journaled = -1;
@@ -102,23 +97,32 @@ function journalSoon(): void {
 	}
 }
 
-/** The session loaded: its journal's newest claims entry becomes the ledger's (none when it has none, as after a switch to a new session). */
-function restoreClaims(ctx: ExtensionContext): void {
-	let data: unknown;
+/** What the journal of the session's branch holds (`journaledClaims`); none without an entry or when it is unreadable. */
+function branchJournal(ctx: ExtensionContext): { files: string[] } | undefined {
 	try {
-		for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
-			if ("customType" in entry && entry.customType === CLAIMS_ENTRY && "data" in entry) {
-				data = entry.data;
-				break;
-			}
-		}
+		return journaledClaims(ctx.sessionManager.getBranch(), CLAIMS_ENTRY);
 	} catch {
-		// An unreadable journal restores nothing.
+		return undefined;
 	}
-	ledger.claims.restore(data);
+}
+
+/** The session loaded: its journal's claims become the ledger's (none when it has none, as after a switch to a new session). */
+function restoreClaims(ctx: ExtensionContext): void {
+	const journal = branchJournal(ctx);
+	ledger.claims.restore(journal);
 	journaled = ledger.claims.revision;
+	journalFrom(journal);
 	// Main reads the claims it can no longer see in git (committed while the omp was away) at once.
 	if (ledger.claims.files.length > 0) emit({ type: CHECKOUT_FILES_EVENT });
+}
+
+/**
+ * The branch's journal is another one now (a load, a switch, a move in the session tree): the next entry is whole and
+ * is taken from what that journal holds, so a claim that leaves right after a load is written as gone.
+ */
+function journalFrom(journal: { files: string[] } | undefined): void {
+	journaledFiles = journal?.files ?? [];
+	deltas = CLAIMS_FULL_EVERY;
 }
 
 /** `details.async` of a stock bash result or update: `{state, jobId}`. */
@@ -151,6 +155,13 @@ export function install(pi: ExtensionAPI): void {
 	if (owner === "agent-1") {
 		mainPi = pi;
 		for (const name of ["session_start", "session_switch"] as const) pi.on(name, (_event, ctx) => restoreClaims(ctx));
+		// A move in the session tree puts another branch's journal under the next entry: a delta needs its own base.
+		for (const name of ["session_tree", "session_branch"] as const)
+			pi.on(name, (_event, ctx) => {
+				journalFrom(branchJournal(ctx));
+				// That journal may not hold what the ledger holds: write at the next chance, changed or not.
+				journaled = -1;
+			});
 		// The omp ends (an update's restart, a quit): the last claims must not wait for the interval.
 		pi.on("session_shutdown", () => writeJournal());
 	}
@@ -201,7 +212,7 @@ export function install(pi: ExtensionAPI): void {
 async function readTask(session: { sessionManager: { getBranch(): unknown[] } }): Promise<string | undefined> {
 	try {
 		// Late and literal on purpose (health.ts LOADERS): an omp without this reader must not take the guard down at link time.
-		const { getLatestTodoPhasesFromEntries: read } = await import("@oh-my-pi/pi-coding-agent/tools/todo");
+		const { getLatestTodoPhasesFromEntries: read } = await import("../omp/pi-coding-agent/tools/todo");
 		if (typeof read !== "function") return undefined;
 		const phases = read(session.sessionManager.getBranch() as Parameters<typeof read>[0]);
 		return Array.isArray(phases) ? currentTask(phases) : undefined;

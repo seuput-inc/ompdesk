@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
 
 /// Parse the process argv while making the documented `run` boundary real:
@@ -15,8 +15,13 @@ use clap_complete::Shell;
 /// after the harness keeps the public no-delimiter UX and makes all existing
 /// wrapper-after-harness recovery (`--yolo`, `--fresh`, etc.) explicit in the
 /// run command rather than dependent on clap's option-name knowledge.
-pub(crate) fn parse_process() -> Cli {
-    try_parse_from(std::env::args_os()).unwrap_or_else(|error| error.exit())
+pub(crate) fn parse_process(env: &crate::config::RuntimeEnv) -> Cli {
+    let mut args = std::env::args_os().collect::<Vec<_>>();
+    delimit_run_native_args(&mut args);
+    let language =
+        crate::localization::language_hint(&args, env.var_os("AI_MEMORY_LANGUAGE").as_deref());
+    let i18n = ai_memory_core::i18n::Localizer::new(language);
+    try_parse_localized(args, &i18n).unwrap_or_else(|error| crate::localization::exit(error, &i18n))
 }
 
 pub(crate) fn try_parse_from<I, T>(args: I) -> Result<Cli, clap::Error>
@@ -26,7 +31,30 @@ where
 {
     let mut args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     delimit_run_native_args(&mut args);
-    Cli::try_parse_from(args)
+    let language = crate::localization::language_hint(&args, None);
+    try_parse_localized(args, &ai_memory_core::i18n::Localizer::new(language))
+}
+
+fn try_parse_localized(
+    args: Vec<OsString>,
+    i18n: &ai_memory_core::i18n::Localizer,
+) -> Result<Cli, clap::Error> {
+    let command = <Cli as clap::CommandFactory>::command();
+    let matches = crate::localization::command(command, "root", i18n).try_get_matches_from(args)?;
+    let mut cli = Cli::from_arg_matches(&matches)?;
+    if let Command::Run(run) = &mut cli.command {
+        // The value parser collapses every `claude*` spelling onto
+        // `RunHarnessChoice::Claude`; keep the typed spelling so `run` can
+        // prefer a same-named wrapper executable.
+        run.claude_wrapper = matches
+            .subcommand_matches("run")
+            .and_then(|run_matches| run_matches.get_raw("harness"))
+            .and_then(|mut raw| raw.next())
+            .and_then(std::ffi::OsStr::to_str)
+            .and_then(claude_wrapper_spelling)
+            .map(str::to_owned);
+    }
+    Ok(cli)
 }
 
 fn delimit_run_native_args(args: &mut Vec<OsString>) {
@@ -35,11 +63,14 @@ fn delimit_run_native_args(args: &mut Vec<OsString>) {
         let Some(raw) = args.get(index).and_then(|arg| arg.to_str()) else {
             return;
         };
-        if matches!(raw, "--data-dir" | "--config") {
+        if matches!(raw, "--data-dir" | "--config" | "--language") {
             index += 2;
             continue;
         }
-        if raw.starts_with("--data-dir=") || raw.starts_with("--config=") {
+        if raw.starts_with("--data-dir=")
+            || raw.starts_with("--config=")
+            || raw.starts_with("--language=")
+        {
             index += 1;
             continue;
         }
@@ -49,6 +80,7 @@ fn delimit_run_native_args(args: &mut Vec<OsString>) {
         return;
     };
 
+    let value_flags = run_value_flags();
     index = run_index + 1;
     while index < args.len() {
         let Some(raw) = args[index].to_str() else {
@@ -57,20 +89,7 @@ fn delimit_run_native_args(args: &mut Vec<OsString>) {
         if raw == "--" {
             return;
         }
-        let key = raw.split_once('=').map_or(raw, |(key, _)| key);
-        let takes_separate_value = matches!(
-            key,
-            "--workspace"
-                | "--project"
-                | "--workstream"
-                | "--new"
-                | "--executable"
-                | "--profile"
-                | "--env"
-                | "--env-file"
-                | "--data-dir"
-                | "--config"
-        ) && !raw.contains('=');
+        let takes_separate_value = !raw.contains('=') && value_flags.iter().any(|flag| flag == raw);
         if takes_separate_value {
             index += 2;
             continue;
@@ -88,10 +107,31 @@ fn delimit_run_native_args(args: &mut Vec<OsString>) {
     }
 }
 
+/// The `--long` options of `run` (including the global ones) that take their
+/// value as the next token, read from the clap definition itself so a new
+/// value-taking flag can never be mistaken for the harness (#1998). An option
+/// with `require_equals` (`--jail`) takes its value only after `=`.
+fn run_value_flags() -> Vec<String> {
+    let root = <Cli as clap::CommandFactory>::command();
+    let run_args = root
+        .find_subcommand("run")
+        .map(|run| run.get_arguments().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    root.get_arguments()
+        .cloned()
+        .chain(run_args)
+        .filter(|arg| arg.get_action().takes_values() && !arg.is_require_equals_set())
+        .filter_map(|arg| arg.get_long().map(|long| format!("--{long}")))
+        .collect()
+}
+
 /// Top-level CLI for the `ai-memory` binary.
 #[derive(Debug, Parser)]
 #[command(name = "ai-memory", version, about, long_about = None)]
 pub struct Cli {
+    /// Language for human output (en or pt-BR).
+    #[arg(long, global = true)]
+    pub language: Option<ai_memory_core::i18n::Language>,
     /// Override the data directory.
     ///
     /// Defaults to a platform path under `dirs::data_local_dir()`. The
@@ -172,6 +212,8 @@ pub enum Command {
     AuditContamination(AuditContaminationArgs),
     /// Full-text search the wiki via FTS5.
     Search(SearchArgs),
+    /// List the most recently updated wiki pages.
+    Recent(RecentArgs),
     /// Fetch and display the full body of a wiki page.
     /// Accepts either `--path` (exact path) or a positional query that
     /// searches FTS5 and fetches the top matching page.
@@ -212,7 +254,11 @@ pub enum Command {
     /// Prints what it would remove and changes nothing unless `--confirm` is
     /// passed. See also `ai-memory status` for the reclaimable figure.
     ReclaimLedgerVersions(ReclaimLedgerVersionsArgs),
-    /// Snapshot wiki/, db/, and config.toml into a gzipped tarball.
+    /// Snapshot wiki/, db/, and an in-data-dir config.toml into a gzipped tarball.
+    ///
+    /// This is not a complete host-migration archive: root/hook credentials,
+    /// external config files, raw workstream ledgers, logs, and models are
+    /// intentionally excluded. See docs/lifecycle-ops.md before moving hosts.
     Backup(BackupArgs),
     /// Snapshot AI agent configurations, skills, and plugins into a portable archive.
     #[command(name = "backup-agents")]
@@ -332,6 +378,11 @@ pub enum Command {
     /// Useful after renaming the project's directory on disk so the hook
     /// router keeps writing into the same logical project.
     RenameProject(RenameProjectArgs),
+    /// Join a checkout split in two by its git remote's arrival: move the
+    /// empty remote-named project's repository identity onto the project that
+    /// holds the sessions, and keep the empty one under an archive name.
+    /// Nothing is deleted.
+    RepairSplit(RepairSplitArgs),
     /// Move a project into another workspace. A fresh destination is a
     /// lossless TRUE MOVE (re-stamp workspace_id, keep project_id, rename the
     /// dir) — sessions/observations/handoffs and history all survive. A
@@ -339,6 +390,9 @@ pub enum Command {
     /// copy+purge (only durable pages migrate, source purged). Either way the
     /// operation is irreversible — requires `--confirm`.
     MoveProject(MoveProjectArgs),
+    /// Losslessly merge one project into another inside the same workspace.
+    /// Without `--confirm`, prints an exact server-side dry run.
+    MergeProject(MergeProjectArgs),
     /// Move one session (or every session of a project) to another project,
     /// re-stamping its observations, handoffs, consolidation jobs and its
     /// `sessions/<id>.md` page in one transaction. Without `--confirm` it
@@ -365,8 +419,8 @@ pub enum Command {
     /// file. Requires the root bearer token on a multi-user server.
     Profile(ProfileArgs),
     /// Manage local server profiles, which a repository's `.ai-memory.toml`
-    /// selects with `server = "<name>"` to route its hook capture to a
-    /// different ai-memory server.
+    /// selects with `server = "<name>"` to route its hook capture, and the
+    /// project-scoped commands run there, to a different ai-memory server.
     Server(ServerArgs),
     /// Print a shell-completion script to stdout. Generated from this
     /// binary's own command tree, so it never drifts from the real CLI
@@ -384,8 +438,12 @@ pub struct RunArgs {
     #[arg(long)]
     pub workspace: Option<String>,
     /// Project override. Defaults to the current repository project.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "project_id")]
     pub project: Option<String>,
+    /// Select an existing project by ID and remember it for this checkout.
+    /// Requires a server supporting managed project-ID selection.
+    #[arg(long, conflicts_with = "project")]
+    pub project_id: Option<ai_memory_core::ProjectId>,
     /// Select an existing named workstream instead of the current one.
     #[arg(long, conflicts_with = "new_workstream")]
     pub workstream: Option<String>,
@@ -396,18 +454,15 @@ pub struct RunArgs {
     #[arg(long)]
     pub executable: Option<PathBuf>,
     /// Disable native permission prompts using the selected harness's
-    /// equivalent dangerous-mode option.
+    /// equivalent dangerous-mode option; for Claude also force
+    /// `bypassPermissions` over a settings `defaultMode`.
     #[arg(long)]
     pub yolo: bool,
-    /// Everything `--yolo` does, plus — for Claude — forcing
-    /// `bypassPermissions` via `--settings` over any settings `defaultMode`.
-    /// Claude still honors your own explicit `ask` rules in every mode. For
-    /// every other harness it is interchangeable with `--yolo`; passing both
-    /// is redundant but fine. Off by default; `[claude_true_yolo]` in
-    /// config.toml applies the same Claude extra to an explicit `--yolo`
-    /// launch. Best paired with ai-jail — see
-    /// `docs/design-yolo-safety-ai-jail.md`.
-    #[arg(long = "true-yolo")]
+    /// Deprecated alias of `--yolo`
+    // Hidden: one `--yolo` now does what `--true-yolo` did (for Claude it also
+    // forces `bypassPermissions`). Kept so 3.4.x aliases, scripts and printed
+    // next-run lines, and a jail re-exec of such a launch, keep working.
+    #[arg(long = "true-yolo", hide = true)]
     pub true_yolo: bool,
     /// Re-run this session inside ai-jail without asking. Bare `--jail` uses
     /// the smart defaults (credentials present on this host, SSH for an SSH
@@ -433,6 +488,14 @@ pub struct RunArgs {
     /// `--yolo` warning itself still shows).
     #[arg(long)]
     pub no_jail: bool,
+    /// Mount this folder read-only inside ai-jail (repeatable), e.g. a
+    /// sibling project to study. Refuses your home, credential folders and
+    /// ai-memory's data dir. Needs a jailed run; ignored inside ai-jail.
+    #[arg(long = "jail-map", value_name = "DIR")]
+    pub jail_map: Vec<PathBuf>,
+    /// Like `--jail-map`, but read-write, so the agent can change it.
+    #[arg(long = "jail-rw-map", value_name = "DIR")]
+    pub jail_rw_map: Vec<PathBuf>,
     /// Start a new native session in the selected workstream instead of
     /// resuming or adopting an existing harness session.
     #[arg(long)]
@@ -449,6 +512,11 @@ pub struct RunArgs {
     /// `AI_MEMORY_RUN_AUTOWIRE=false`) to launch without touching harness config.
     #[arg(long)]
     pub no_autowire: bool,
+    /// Return to the shell after the harness exits without offering the
+    /// switch/rerun menu. Also set with `[run] exit_prompt = false` in
+    /// config.toml or `AI_MEMORY_RUN_EXIT_PROMPT=false`.
+    #[arg(long)]
+    pub no_exit_prompt: bool,
     /// Refuse to launch when the ai-memory server is unreachable, restoring
     /// the pre-degraded-launch fail-closed behavior. Without this flag an
     /// unreachable server downgrades the launch: the harness still starts
@@ -479,9 +547,16 @@ pub struct RunArgs {
     /// Agent harness to launch. When omitted, continue the newest managed or
     /// checkout-local session among the auto-detected harnesses. Any value
     /// starting with `claude` (e.g. `claude-corp`, `claude-personal`) also
-    /// selects the Claude harness — see `parse_run_harness_choice`.
+    /// selects the Claude harness — see `parse_run_harness_choice` — and, when
+    /// no `--executable` is given and an executable with that exact name is on
+    /// `PATH`, launches it instead of plain `claude`.
     #[arg(value_parser = parse_run_harness_choice)]
     pub harness: Option<RunHarnessChoice>,
+    /// The `claude*` spelling typed as `harness` when it is a wrapper name
+    /// rather than a fixed alias (`claude`, `claude-code`). Filled by
+    /// [`try_parse_from`]; `run` uses it as the default `--executable`.
+    #[arg(skip)]
+    pub claude_wrapper: Option<String>,
     /// Native harness arguments, forwarded byte-for-byte and in order.
     #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
     pub native_args: Vec<OsString>,
@@ -545,13 +620,13 @@ pub enum RunHarnessChoice {
 /// `PATH`-visible wrapper script per account (a plain shell `alias` is
 /// invisible to us — `ai-memory run` execs directly, without going through
 /// an interactive shell). Naming those wrappers `claude-corp` /
-/// `claude-personal` and then passing `--executable claude-corp` (bare names
-/// resolve through `PATH` just like the default) already selects the right
-/// binary; this parser just stops the harness argument itself from being
-/// rejected as an unknown value, so `ai-memory run claude-corp --executable
-/// claude-corp` (or any other `claude*` spelling used consistently) reads
-/// naturally instead of forcing every account onto the literal `claude`
-/// token.
+/// `claude-personal` makes the spelling itself readable in shell history, and
+/// this parser stops it being rejected as an unknown value.
+///
+/// The typed spelling is kept (see [`RunArgs::claude_wrapper`]): when it names
+/// an executable on the launch `PATH` and `--executable` is absent, `run`
+/// launches that wrapper. Before, the spelling was dropped here and plain
+/// `claude` started on the wrong account without any hint.
 fn parse_run_harness_choice(value: &str) -> Result<RunHarnessChoice, String> {
     use clap::ValueEnum as _;
     if let Ok(choice) = RunHarnessChoice::from_str(value, true) {
@@ -571,6 +646,15 @@ fn parse_run_harness_choice(value: &str) -> Result<RunHarnessChoice, String> {
     ))
 }
 
+/// The wrapper name behind a `claude*` harness spelling, or `None` for the
+/// fixed names (`claude`, `claude-code`, any case) and non-Claude values.
+fn claude_wrapper_spelling(value: &str) -> Option<&str> {
+    use clap::ValueEnum as _;
+    (RunHarnessChoice::from_str(value, true).is_err()
+        && parse_run_harness_choice(value) == Ok(RunHarnessChoice::Claude))
+    .then_some(value)
+}
+
 /// Parse one `KEY=VALUE` entry for `--env` (also reused for `--env-file`
 /// lines). The value is taken literally — no expansion, no interpretation —
 /// so a caller-supplied value reaches the harness exactly as written.
@@ -583,6 +667,16 @@ pub(crate) fn parse_env_kv(value: &str) -> Result<(String, String), String> {
     if key.is_empty() {
         return Err(format!(
             "invalid value '{key}={value}' for --env; KEY must not be empty"
+        ));
+    }
+    // Dotenv files are commonly written `KEY = value`. The caller trims the
+    // line, not the halves, so that spelling yields a key with a trailing
+    // space: nothing the harness or a shell can read, and the override
+    // silently does nothing. Refuse it rather than guess, and leave the value
+    // literal as documented above.
+    if key.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "invalid value '{key}={value}' for --env; KEY must not contain whitespace"
         ));
     }
     Ok((key.to_string(), value.to_string()))
@@ -605,8 +699,9 @@ pub struct ShowArgs {
     /// equivalent dangerous-mode option. Forwarded to `run`.
     #[arg(long)]
     pub yolo: bool,
-    /// Claude-only true-yolo (see `RunArgs::true_yolo`). Forwarded to `run`.
-    #[arg(long = "true-yolo")]
+    /// Deprecated alias of `--yolo`
+    // Hidden, like `RunArgs::true_yolo`. Forwarded to `run`.
+    #[arg(long = "true-yolo", hide = true)]
     pub true_yolo: bool,
     /// Start a new native session instead of resuming or adopting an existing
     /// harness session. Forwarded to `run`.
@@ -631,8 +726,9 @@ pub struct ContinueArgs {
     /// equivalent dangerous-mode option. Forwarded to `run`.
     #[arg(long)]
     pub yolo: bool,
-    /// Claude-only true-yolo (see `RunArgs::true_yolo`). Forwarded to `run`.
-    #[arg(long = "true-yolo")]
+    /// Deprecated alias of `--yolo`
+    // Hidden, like `RunArgs::true_yolo`. Forwarded to `run`.
+    #[arg(long = "true-yolo", hide = true)]
     pub true_yolo: bool,
     /// Start a new native session instead of resuming the linked one.
     /// Forwarded to `run`.
@@ -665,8 +761,9 @@ pub struct ResumeArgs {
     /// equivalent dangerous-mode option. Forwarded to `run`.
     #[arg(long)]
     pub yolo: bool,
-    /// Claude-only true-yolo (see `RunArgs::true_yolo`). Forwarded to `run`.
-    #[arg(long = "true-yolo")]
+    /// Deprecated alias of `--yolo`
+    // Hidden, like `RunArgs::true_yolo`. Forwarded to `run`.
+    #[arg(long = "true-yolo", hide = true)]
     pub true_yolo: bool,
     /// Start a new native session instead of resuming the linked one.
     /// Forwarded to `run`.
@@ -743,6 +840,12 @@ pub struct MessageSendArgs {
     /// Optional one-line subject.
     #[arg(long)]
     pub subject: Option<String>,
+    /// How the sender knows the claim.
+    #[arg(long, default_value = "unknown", value_parser = ["unknown", "measured", "reported", "inferred"])]
+    pub nature: String,
+    /// Supporting evidence. Required by the server for `--nature measured`.
+    #[arg(long)]
+    pub evidence: Option<String>,
     /// Message body. Omitted reads the full body from stdin.
     pub body: Option<String>,
     /// Sender workspace (defaults to the resolved scope).
@@ -779,6 +882,9 @@ pub struct MessageListArgs {
 /// Arguments for `message pop`.
 #[derive(Debug, Args)]
 pub struct MessagePopArgs {
+    /// Receive mail addressed to this harness (for example codex or claude-code).
+    #[arg(long)]
+    pub agent: Option<String>,
     /// Workspace to pop from (defaults to the resolved scope).
     #[arg(long)]
     pub workspace: Option<String>,
@@ -821,8 +927,11 @@ pub struct WorkstreamsArgs {
     #[arg(long)]
     pub workspace: Option<String>,
     /// Project override. Defaults to the current repository project.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "project_id")]
     pub project: Option<String>,
+    /// Select an existing project by ID instead of a name or cached binding.
+    #[arg(long, conflicts_with = "project")]
+    pub project_id: Option<ai_memory_core::ProjectId>,
     /// Maximum workstreams to return, current first then newest activity.
     #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u8).range(1..=100))]
     pub limit: u8,
@@ -964,17 +1073,18 @@ pub enum ProfileCommand {
     Status(ProfileScopeArgs),
     /// List the profile's entries.
     List(ProfileScopeArgs),
-    /// Print one entry (`profile/` prefix optional).
+    /// Print one entry (`profile/` prefix and `.md` suffix optional).
     Show {
-        /// Entry path, e.g. `tools/pnpm.md`.
+        /// Entry path, e.g. `tools/pnpm` or `tools/pnpm.md`.
         path: String,
         #[command(flatten)]
         scope: ProfileScopeArgs,
     },
-    /// Remove one entry (`profile/` prefix optional). Git keeps its history,
-    /// and the harvester leaves the topic alone until you state it again.
+    /// Remove one entry (`profile/` prefix and `.md` suffix optional). Git
+    /// keeps its history, and the harvester leaves the topic alone until you
+    /// state it again.
     Forget {
-        /// Entry path, e.g. `tools/pnpm.md`.
+        /// Entry path, e.g. `tools/pnpm` or `tools/pnpm.md`.
         path: String,
         #[command(flatten)]
         scope: ProfileScopeArgs,
@@ -1480,8 +1590,9 @@ pub struct PurgeProjectArgs {
     /// `workspace`, else `default`.
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo).
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long, conflicts_with = "project_id")]
     pub project: Option<String>,
     /// Project id (UUID) to purge, as an alternative to `--project`.
@@ -1533,8 +1644,9 @@ pub struct PurgeSessionArgs {
     /// `workspace`, else `default`.
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo).
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long)]
     pub project: Option<String>,
     /// REQUIRED for the purge to run. Without this flag the CLI errors
@@ -1575,11 +1687,11 @@ pub struct RenameProjectArgs {
     /// `workspace`, else `default`.
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Current project name. When omitted, auto-derives from the
-    /// basename of the current git repo root (or CWD) — handy when
-    /// running `ai-memory rename-project --to new-name` from a dir
-    /// that was JUST renamed (the basename will be the new name, so
-    /// you'll want to pass --from explicitly in that workflow).
+    /// Current project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name. After renaming the
+    /// directory itself, pass `--from`: a checkout with no marker or
+    /// remote would resolve to the new name.
     #[arg(long, conflicts_with = "project_id")]
     pub from: Option<String>,
     /// Project id (UUID) to rename, as an alternative to `--from`.
@@ -1595,6 +1707,25 @@ pub struct RenameProjectArgs {
     pub to: String,
 }
 
+/// Arguments for `repair-split`.
+#[derive(Debug, Args)]
+pub struct RepairSplitArgs {
+    /// Workspace name. Defaults to the nearest `.ai-memory.toml` marker's
+    /// `workspace`, else `default`.
+    #[arg(long)]
+    pub workspace: Option<String>,
+    /// The project that holds the checkout's sessions (UUID).
+    #[arg(long)]
+    pub project_id: String,
+    /// The empty project that holds the repository identity (UUID).
+    #[arg(long)]
+    pub from_project_id: String,
+    /// Name for the empty project when it held the remote-derived name.
+    /// Defaults to `<name>-split-<YYYYMMDD>`.
+    #[arg(long)]
+    pub archive_name: Option<String>,
+}
+
 /// Arguments for `move-project`.
 #[derive(Debug, Args)]
 pub struct MoveProjectArgs {
@@ -1603,8 +1734,9 @@ pub struct MoveProjectArgs {
     /// `--to-workspace` names the destination and stays literal.
     #[arg(long)]
     pub from_workspace: Option<String>,
-    /// Project name to move. When omitted, auto-derived from the basename
-    /// of the current git repo root (or CWD if no git repo).
+    /// Project name to move. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long, conflicts_with = "project_id")]
     pub project: Option<String>,
     /// Project id (UUID) to move, as an alternative to `--project`.
@@ -1634,6 +1766,39 @@ pub struct MoveProjectArgs {
     /// lands under a de-duplicated path).
     #[arg(long, value_parser = ["block", "overwrite", "duplicate"], default_value = "block")]
     pub on_conflict: String,
+    /// Allow the copy+purge merge when the destination workspace already holds
+    /// a project of the same name.
+    ///
+    /// That path is not a move: it copies the source's latest pages and
+    /// deletes the project with its sessions, observations, handoffs and older
+    /// page versions. Without this flag the server refuses and reports the
+    /// counts it would discard (#1713).
+    #[arg(long)]
+    pub allow_lossy_merge: bool,
+}
+
+/// Arguments for `merge-project`.
+#[derive(Debug, Args)]
+pub struct MergeProjectArgs {
+    /// Workspace containing both projects. Defaults to the nearest marker's
+    /// workspace, then `default`.
+    #[arg(long)]
+    pub workspace: Option<String>,
+    /// Source project name. Mutually exclusive with `--from-project-id`.
+    #[arg(long, conflicts_with = "from_project_id")]
+    pub from: Option<String>,
+    /// Source project UUID, for an ambiguous legacy name.
+    #[arg(long)]
+    pub from_project_id: Option<String>,
+    /// Target project name. Mutually exclusive with `--into-project-id`.
+    #[arg(long, conflicts_with = "into_project_id")]
+    pub into: Option<String>,
+    /// Target project UUID, for an ambiguous legacy name.
+    #[arg(long)]
+    pub into_project_id: Option<String>,
+    /// Apply the merge. Omit for an exact dry-run preview.
+    #[arg(long)]
+    pub confirm: bool,
 }
 
 /// Arguments for `move-session`.
@@ -1732,14 +1897,15 @@ pub enum InstallSkillsScope {
     Global,
 }
 
-/// Where `install-hooks` writes Claude Code's hook configuration.
+/// Where `install-hooks` writes a hook configuration with user/project scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum HookInstallScope {
-    /// The user-level settings file (`~/.claude/settings.json`, or
-    /// `$CLAUDE_CONFIG_DIR/settings.json`): hooks fire in every project.
+    /// The user-level hook location: Claude Code's settings file or Cline
+    /// CLI's `~/.cline/hooks` directory. Hooks fire in every project.
     Global,
-    /// This repository's gitignored `.claude/settings.local.json`: hooks fire
-    /// only for sessions started in this checkout.
+    /// This repository's hook location: Claude Code's gitignored
+    /// `.claude/settings.local.json` or Cline CLI's `.cline/hooks` directory.
+    /// Hooks fire only for sessions started in this checkout.
     Project,
 }
 
@@ -1759,6 +1925,11 @@ pub enum InstallSkillsAgent {
     CopilotCli,
     /// Hermes Agent's `.hermes/skills` directory.
     Hermes,
+    /// Google Antigravity: the workspace `.agents/skills` (project), or both
+    /// global directories, `~/.gemini/config/skills` (App and IDE) and
+    /// `~/.gemini/antigravity-cli/skills` (CLI).
+    #[value(alias = "antigravity-cli", alias = "agy")]
+    Antigravity,
     /// Install into both Claude Code and `.agents` skill directories.
     Both,
 }
@@ -1801,9 +1972,10 @@ pub struct BootstrapArgs {
     /// use, so bootstrap pages land where the session captures do.
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the resolved repo path — same heuristic the hook router uses
-    /// to bucket per-cwd observations, so the bootstrap pages land
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name (not `--repo-path`), the
+    /// same resolution the hook router uses, so the bootstrap pages land
     /// in the same project as future session captures.
     ///
     /// Dot-prefixed dirs are preserved verbatim — `~/.config` becomes
@@ -2115,6 +2287,28 @@ pub struct AuditContaminationArgs {
     pub json: bool,
 }
 
+/// Arguments for `recent`.
+#[derive(Debug, Args)]
+pub struct RecentArgs {
+    /// Workspace name. Defaults to the nearest `.ai-memory.toml` marker's
+    /// `workspace`, else `default`.
+    #[arg(long)]
+    pub workspace: Option<String>,
+    /// Project name. When omitted, auto-derived from the current project.
+    #[arg(long)]
+    pub project: Option<String>,
+    /// List the most recently updated pages of every project instead of the
+    /// current one. Each hit is labelled with its `workspace/project`.
+    #[arg(long, conflicts_with_all = ["workspace", "project"])]
+    pub global: bool,
+    /// Maximum number of pages to return.
+    #[arg(short = 'n', long, default_value_t = 10)]
+    pub limit: usize,
+    /// Emit results as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
 /// Arguments for `search`.
 #[derive(Debug, Args)]
 pub struct SearchArgs {
@@ -2250,6 +2444,16 @@ pub struct RestoreArgs {
     /// Overwrite an existing non-empty data dir.
     #[arg(long)]
     pub force: bool,
+    /// Replace the live `config.toml` with the backup's. Without it an
+    /// existing config is kept and the backup's is saved beside it as
+    /// `config.toml.from-backup` for review: a config can run commands and
+    /// redirect data, so adopt one only from a backup you trust.
+    #[arg(long)]
+    pub with_config: bool,
+    /// Confirm that the configured token pepper is the original one for a
+    /// pre-verifier backup that already contains native API keys.
+    #[arg(long)]
+    pub accept_legacy_api_key_pepper: bool,
 }
 
 /// Arguments for `restore-agents`.
@@ -2290,8 +2494,12 @@ pub struct RestorePageArgs {
     #[arg(long)]
     pub path: String,
     /// Git checkpoint/revision to restore from.
-    #[arg(long)]
-    pub from: String,
+    #[arg(long, conflicts_with = "page_id", required_unless_present = "page_id")]
+    pub from: Option<String>,
+    /// Retained page-version UUID to restore, including a version preserved by
+    /// `merge-project`. Mutually exclusive with `--from`.
+    #[arg(long, conflicts_with = "from", required_unless_present = "from")]
+    pub page_id: Option<String>,
     /// Workspace name. Defaults to the nearest `.ai-memory.toml` marker's
     /// `workspace`, else `default`.
     #[arg(long)]
@@ -2404,16 +2612,21 @@ pub enum AgentChoice {
     #[value(alias = "zai")]
     Zcode,
     /// Hermes Agent (Nous Research) — lifecycle hooks declared in the `hooks:`
-    /// block of `~/.hermes/config.yaml`. Hermes runs each `command` through
+    /// block of the Hermes home's `config.yaml` (`$HERMES_HOME`, else
+    /// `%LOCALAPPDATA%\hermes` on Windows and `~/.hermes` elsewhere). Hermes runs each `command` through
     /// `shlex.split` with the event JSON on stdin and **no shell**, so
     /// ai-memory's native `hook` subcommand is invoked directly (exec form,
-    /// like Zero and ZCode). ai-memory wires the two events that give Hermes
-    /// tool observations — `pre_tool_call` / `post_tool_call`, whose payload
-    /// carries `tool_name` / `tool_input`, the envelope the router already
-    /// recognises for `agent=hermes`. `~/.hermes/config.yaml` is NOT written:
-    /// it is YAML the installer would have to splice, and Hermes gates user
-    /// hooks behind its own acceptance prompt (`hooks_auto_accept`), so
-    /// `install-hooks --agent hermes` prints the ready-to-paste block.
+    /// like Zero and ZCode). ai-memory wires the tool events and the session
+    /// lifecycle (`on_session_start`, `pre_llm_call`, `on_session_end` as a
+    /// turn boundary, `on_session_finalize`); each primary-session
+    /// `pre_llm_call` can bring a pending handoff into the upcoming turn,
+    /// including after resuming an old native session. When the community
+    /// memory-provider plugin is installed under `$HERMES_HOME/plugins`, only
+    /// the tool events are wired, since the plugin owns the rest.
+    /// That `config.yaml` is NOT written: it is YAML the installer would
+    /// have to splice, and Hermes gates user hooks behind its own acceptance
+    /// prompt (`hooks_auto_accept`), so `install-hooks --agent hermes` prints
+    /// the ready-to-paste block.
     #[value(alias = "hermes-agent")]
     Hermes,
     /// GitHub Copilot CLI — JSON-config lifecycle hooks in
@@ -2461,6 +2674,35 @@ pub enum AgentChoice {
     /// and injects plain `SessionStart` stdout into the model context.
     #[value(name = "ibm-bob", alias = "bob")]
     IbmBob,
+    /// DeepSeek Harness (DSH) — lifecycle capture through the official
+    /// `@deepseek-ai/dsh-hooks-claude-code` bridge, which consumes a Claude
+    /// Code `hooks.json`. `install-hooks --agent dsh` stages the hook
+    /// scripts, writes that generated `hooks.json`, and prints the Cordis
+    /// patch fragment to merge into `$DSH_HOME/profiles/<profile>/
+    /// cordis.patch.yml` (no fixed config file is written). The bridge
+    /// delivers exactly seven events and no `SessionEnd`, so close sessions
+    /// with `ai-memory finalize-session --agent dsh`; its detached
+    /// `SessionStart` means handoff recovery goes through the MCP
+    /// `memory_handoff_accept` tool.
+    #[value(alias = "deepseek-harness", alias = "deepseek_harness")]
+    Dsh,
+    /// Cline CLI — lifecycle files under `~/.cline/hooks`. Cline runs
+    /// TaskStart/TaskResume detached by default, so capture works but automatic
+    /// handoff injection does not; accept the handoff through MCP instead.
+    #[value(alias = "cline-cli")]
+    Cline,
+    /// Qwen Code (`qwen`) — lifecycle hooks merged into the `hooks` key of
+    /// `~/.qwen/settings.json`. Qwen sends Claude Code-shaped hook payloads
+    /// on stdin, so each entry runs ai-memory's native `hook` command
+    /// directly; there is no script bundle. SessionStart stdout
+    /// (`hookSpecificOutput.additionalContext`) carries the handoff, and
+    /// Qwen's own `SessionEnd` closes the session.
+    #[value(name = "qwen-code", alias = "qwen", alias = "qwencode")]
+    QwenCode,
+    /// Qoder CLI and IDE — lifecycle hooks merged into the `hooks` key of
+    /// `~/.qoder/settings.json`. Qoder sends Claude Code-shaped JSON on stdin
+    /// and consumes `SessionStart` additional context.
+    Qoder,
 }
 
 impl AgentChoice {
@@ -2496,6 +2738,10 @@ impl AgentChoice {
             Self::Muse => AgentKind::Muse,
             Self::CodeBuddy => AgentKind::CodeBuddy,
             Self::IbmBob => AgentKind::IbmBob,
+            Self::Dsh => AgentKind::Dsh,
+            Self::Cline => AgentKind::Cline,
+            Self::QwenCode => AgentKind::QwenCode,
+            Self::Qoder => AgentKind::Qoder,
         }
     }
 
@@ -2518,7 +2764,10 @@ impl AgentChoice {
             | Self::Droid
             | Self::Muse
             | Self::CodeBuddy
-            | Self::IbmBob => None,
+            | Self::IbmBob
+            | Self::Cline
+            | Self::QwenCode => None,
+            Self::Qoder => None,
             _ => Some(self.kind().as_str()),
         }
     }
@@ -2713,6 +2962,16 @@ pub enum McpClient {
     /// plain-text `SessionStart` handoff delivery.
     #[value(name = "ibm-bob", alias = "bob")]
     IbmBob,
+    /// Qwen Code — `~/.qwen/settings.json`, servers under the root
+    /// `mcpServers` map with `httpUrl` (streamable HTTP; the plain `url`
+    /// key is legacy SSE). Qwen expands `$NAME` and `${NAME}` in every
+    /// string. Pair with `install-hooks --agent qwen-code` for lifecycle
+    /// capture and `SessionStart` handoff delivery.
+    #[value(name = "qwen-code", alias = "qwen", alias = "qwencode")]
+    QwenCode,
+    /// Qoder CLI and IDE — user-level `~/.qoder/settings.json`, with a
+    /// stdio `ai-memory mcp-bridge --no-session-id` entry under `mcpServers`.
+    Qoder,
     /// GitHub Copilot CLI — `$COPILOT_HOME/mcp-config.json` (default
     /// `~/.copilot/mcp-config.json`), servers under the root `mcpServers` map
     /// with `type: "http"` + `url` + optional `headers` (#1040). Pair with
@@ -2771,14 +3030,29 @@ pub enum McpClient {
     /// Pair with `install-hooks --agent muse` for lifecycle capture.
     #[value(alias = "muse-code", alias = "musecode")]
     Muse,
-    /// DeepSeek Harness (DSH) - MCP-only. DSH has no fixed JSON/TOML MCP
+    /// DeepSeek Harness (DSH) MCP writer. DSH has no fixed JSON/TOML MCP
     /// config: the client is a Cordis plugin entry
     /// (@deepseek-ai/dsh-mcp-client) inside a profile's cordis.patch.yml.
     /// This integration is print-only (--apply is refused); merge the
-    /// rendered insert list into the profile patch. No lifecycle capture is
-    /// claimed.
+    /// rendered insert list into the profile patch. Lifecycle capture is
+    /// installed separately with `install-hooks --agent dsh`.
     #[value(alias = "deepseek-harness", alias = "deepseek_harness")]
     Dsh,
+    /// Hermes Agent (Nous Research) — the `mcp_servers:` map of the Hermes
+    /// home's `config.yaml`. Print-only (--apply is refused): ai-memory has
+    /// no YAML editor for that file, which the operator also edits. The entry
+    /// is a stdio `ai-memory mcp-bridge --no-session-id`, so it carries no
+    /// token. Lifecycle capture is installed separately with `install-hooks
+    /// --agent hermes`.
+    #[value(alias = "hermes-agent")]
+    Hermes,
+    /// Cline CLI — `~/.cline/data/settings/cline_mcp_settings.json` (or
+    /// `CLINE_MCP_SETTINGS_PATH`) with an explicit Streamable HTTP transport.
+    #[value(alias = "cline-cli")]
+    Cline,
+    /// FreeBuff CLI — `~/.agents/mcp.json`; MCP-only through ai-memory's
+    /// sessionless stdio-to-HTTP bridge.
+    Freebuff,
     /// Prime Agent (PrimeIntellect-ai/prime-agent) - the `mcpServers` map of
     /// `$PRIME_AGENT_CODING_AGENT_DIR/settings.json` (default
     /// `~/.prime/agent/settings.json`) with `type: "http"` + `url`. A token is
@@ -2835,8 +3109,9 @@ pub struct EmbedArgs {
     /// Workspace name (auto-created if absent).
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo). Matches the
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name. Matches the
     /// hook router's per-cwd convention so this command targets the
     /// same project sessions write into.
     #[arg(long)]
@@ -2852,8 +3127,9 @@ pub struct ForgetSweepArgs {
     /// Workspace name (auto-created if absent).
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo).
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long)]
     pub project: Option<String>,
 }
@@ -2872,8 +3148,9 @@ pub struct LintArgs {
     /// Workspace name (auto-created if absent).
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo).
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long)]
     pub project: Option<String>,
 }
@@ -2891,8 +3168,9 @@ pub struct CuratorArgs {
     /// `workspace`, else `default`.
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo).
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long)]
     pub project: Option<String>,
     /// Emit only machine-readable JSON.
@@ -2907,8 +3185,9 @@ pub struct AutoImproveReportArgs {
     /// `workspace`, else `default`.
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo).
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long)]
     pub project: Option<String>,
     /// Lookback window in days.
@@ -2935,8 +3214,9 @@ pub struct AutoImproveArgs {
     /// `workspace`, else `default`.
     #[arg(long)]
     pub workspace: Option<String>,
-    /// Project name. When omitted, auto-derived from the basename of
-    /// the current git repo root (or CWD if no git repo).
+    /// Project name. When omitted, taken from the nearest
+    /// `.ai-memory.toml` marker's `project`, then from the git remote,
+    /// then from the current directory's name.
     #[arg(long)]
     pub project: Option<String>,
     /// Override `[auto_improve].min_observations` for this run.
@@ -3018,15 +3298,29 @@ pub struct PendingWriteRejectArgs {
 /// Arguments for `llm-test`.
 #[derive(Debug, Args)]
 pub struct LlmTestArgs {
+    /// Probe the server's own configured provider instead of building one
+    /// from this shell's environment.
+    ///
+    /// The retry hint the server and `/web` print uses this form: a server in
+    /// a container or on another host holds the keys, so a client-side
+    /// `llm-test` fails while the server is healthy (#1639). Takes no
+    /// `--provider`/`--model`/`--prompt`/`--base-url`/`--api-key`: the probe
+    /// runs what the server is configured with, and a client cannot point it
+    /// at another URL or hand it a key.
+    #[arg(
+        long,
+        conflicts_with_all = ["provider", "model", "prompt", "structured", "base_url", "api_key"]
+    )]
+    pub server: bool,
     /// Provider to test.
-    #[arg(long, value_enum)]
-    pub provider: LlmProviderChoice,
+    #[arg(long, value_enum, required_unless_present = "server")]
+    pub provider: Option<LlmProviderChoice>,
     /// Model identifier (e.g. `claude-haiku-4-5`, `gpt-5.4-mini`, `llama3.1:8b`).
-    #[arg(long)]
-    pub model: String,
+    #[arg(long, required_unless_present = "server")]
+    pub model: Option<String>,
     /// Prompt to send.
-    #[arg(long)]
-    pub prompt: String,
+    #[arg(long, required_unless_present = "server")]
+    pub prompt: Option<String>,
     /// Request a small JSON-schema response instead of plain text.
     #[arg(long)]
     pub structured: bool,
@@ -3198,18 +3492,16 @@ pub struct InstallHooksArgs {
     /// written next to the original before each modifying write.
     #[arg(long)]
     pub apply: bool,
-    /// Override the settings/plugin/extension file path for the selected agent.
-    /// For OpenClaw, this is the generated plugin package directory.
+    /// Override the settings/plugin/extension path for the selected agent.
+    /// For OpenClaw this is the generated plugin package directory; for Cline
+    /// CLI it is the hook directory.
     #[arg(long)]
     pub config_file: Option<PathBuf>,
-    /// Where to write the hook configuration. `project` targets the
-    /// repository's `.claude/settings.local.json` (at the git root; in the
-    /// current directory outside a repository, on Windows, or when the
-    /// repository root is the home directory) so capture is opted in per
-    /// checkout instead of for every session; Claude Code reads it alongside
-    /// the user-level hooks.
-    /// Claude Code only; ignores `CLAUDE_CONFIG_DIR`. Cannot be combined
-    /// with `--config-file`, which names the target file directly.
+    /// Where to write the hook configuration. For Claude Code, `project`
+    /// targets the repository's `.claude/settings.local.json` (at the git
+    /// root when available) and ignores `CLAUDE_CONFIG_DIR`. For Cline CLI,
+    /// it targets `.cline/hooks` in the current checkout. Cannot be combined
+    /// with `--config-file`, which names the target path directly.
     #[arg(
         long,
         value_enum,
@@ -3319,9 +3611,10 @@ pub struct InstallMcpArgs {
     /// in `[auth].bearer_token_file`.
     #[arg(skip)]
     pub stdio_bridge: bool,
-    /// The data dir a bridge entry passes as `--data-dir`, for a client that
-    /// starts its MCP servers with a cleared environment (Muse Code), where
-    /// the bridge could not otherwise find this install's config and token.
+    /// The data dir a bridge entry passes as `--data-dir`: always for a client
+    /// that starts its MCP servers with a cleared environment (Muse Code), and
+    /// for any other bridge entry when the install was given a data dir, so
+    /// the bridge reads the same config and token as the install's hooks.
     /// Set by the installer, never a flag.
     #[arg(skip)]
     pub bridge_data_dir: Option<std::path::PathBuf>,
@@ -3346,6 +3639,22 @@ pub struct McpBridgeArgs {
     /// different harness's terminal is not forwarded.
     #[arg(long, value_enum, default_value_t = BridgeAgent::ClaudeCode)]
     pub agent: BridgeAgent,
+    /// Opt the bridge into one push channel for the launching session.
+    /// `inbox` declares Claude's experimental `claude/channel` capability and
+    /// pushes a count-only pending-mail notice into the running session when
+    /// the count changes. Off by default: Claude channels are a research
+    /// preview, and this bridge is not on Claude's allowlist, so it only loads
+    /// with `--dangerously-load-development-channels server:<name>`; the flag
+    /// is explicit.
+    #[arg(long, value_enum)]
+    pub channel: Option<BridgeChannel>,
+}
+
+/// A push channel the bridge may declare and emit (#1942).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum BridgeChannel {
+    /// Count-only pending-inbox notices as `notifications/claude/channel`.
+    Inbox,
 }
 
 /// The harness a session-aware `mcp-bridge` forwards the session id of.
@@ -3405,6 +3714,12 @@ pub struct ServeArgs {
     /// or a loopback bind instead.
     #[arg(long)]
     pub allow_insecure_no_auth: bool,
+    /// DANGEROUS: allow human login over plain HTTP on a non-loopback bind.
+    ///
+    /// HTTP-only. Passwords, session cookies, API credentials, and memory data
+    /// can be read or modified by anyone able to intercept the connection.
+    #[arg(long, env = "AI_MEMORY_ALLOW_INSECURE_HUMAN_AUTH")]
+    pub allow_insecure_human_auth: bool,
     /// Skip the filesystem watcher; useful for transient debugging.
     #[arg(long)]
     pub no_watcher: bool,
@@ -3448,15 +3763,15 @@ pub struct ServeArgs {
     /// --enable-web is set.
     #[arg(long, env = "AI_MEMORY_WEB_UI_DIR")]
     pub web_ui_dir: Option<PathBuf>,
-    /// Base path the whole HTTP surface is served under. Empty (default)
-    /// keeps every route at the host root — byte-identical to previous
-    /// behaviour. Set e.g. `/wiki` to host ai-memory under a URL subpath
+    /// Base path the whole HTTP surface is served under (default: from config).
+    /// Empty (the configuration default) keeps every route at the host root.
+    /// Set e.g. `/wiki` to host ai-memory under a URL subpath
     /// behind a reverse proxy that preserves the prefix; then `/mcp`,
     /// `/api/v1`, `/hook` and the web UI all live under it (`/wiki/mcp`,
     /// `/wiki/api/v1`, …). The value is normalised to `/<core>` (leading
     /// slash, no trailing); `/` and `` both mean root.
-    #[arg(long, env = "AI_MEMORY_BASE_PATH", default_value = "")]
-    pub base_path: String,
+    #[arg(long, env = "AI_MEMORY_BASE_PATH")]
+    pub base_path: Option<String>,
     /// Slug the web UI is mounted at, WITHIN `--base-path`. Default `/web`
     /// (the read-only `/api/v1` API always stays at `<base>/api/v1`). Set
     /// `/` to serve the UI at the base root itself (e.g. `/wiki` instead of
@@ -3529,6 +3844,87 @@ pub struct WritePageArgs {
 
 #[cfg(test)]
 mod tests {
+    /// `--env-file` lines are trimmed as a whole, not per half, so the common
+    /// dotenv spelling `KEY = value` used to produce a key with a trailing
+    /// space — an entry no shell and no harness can read, so the override
+    /// silently did nothing.
+    /// The folder flags take one value each and combine in any order
+    /// before the harness (#1998).
+    #[test]
+    fn run_jail_folder_flags_repeat_and_combine_before_the_harness() {
+        let parse = |argv: &[&str]| {
+            let cli =
+                try_parse_from(argv.iter().copied()).unwrap_or_else(|error| panic!("{error}"));
+            let Command::Run(args) = cli.command else {
+                panic!("not run")
+            };
+            args
+        };
+        let args = parse(&[
+            "ai-memory",
+            "run",
+            "--jail=none",
+            "--jail-map",
+            "../ai-jail",
+            "--jail-rw-map",
+            "/srv/tap",
+            "--jail-map",
+            "../docs",
+            "claude",
+            "--model",
+            "opus",
+        ]);
+        assert_eq!(
+            args.jail_map,
+            [PathBuf::from("../ai-jail"), PathBuf::from("../docs")]
+        );
+        assert_eq!(args.jail_rw_map, [PathBuf::from("/srv/tap")]);
+        assert_eq!(args.harness, Some(RunHarnessChoice::Claude));
+        assert_eq!(
+            args.native_args,
+            ["--model", "opus"].map(std::ffi::OsString::from)
+        );
+    }
+
+    #[test]
+    fn env_entries_with_a_whitespace_key_are_refused() {
+        for raw in [
+            "CLAUDE_CONFIG_DIR = /accounts/work",
+            "CLAUDE_CONFIG_DIR =/accounts/work",
+            " CLAUDE_CONFIG_DIR=/accounts/work",
+            "TWO WORDS=value",
+        ] {
+            let err = super::parse_env_kv(raw).expect_err(raw);
+            assert!(
+                err.contains("KEY must not contain whitespace"),
+                "{raw}: {err}"
+            );
+        }
+    }
+
+    /// The controls: a well-formed entry still parses, the value stays
+    /// literal (inner and trailing spaces preserved), and an empty key keeps
+    /// its own distinct error.
+    #[test]
+    fn env_entries_keep_their_value_literal() {
+        assert_eq!(
+            super::parse_env_kv("KEY=VALUE").unwrap(),
+            ("KEY".to_string(), "VALUE".to_string())
+        );
+        assert_eq!(
+            super::parse_env_kv("KEY= two words ").unwrap(),
+            ("KEY".to_string(), " two words ".to_string())
+        );
+        assert_eq!(
+            super::parse_env_kv("KEY=").unwrap(),
+            ("KEY".to_string(), String::new())
+        );
+        let err = super::parse_env_kv("=VALUE").expect_err("empty key");
+        assert!(err.contains("KEY must not be empty"), "{err}");
+        let err = super::parse_env_kv("NOVALUE").expect_err("no separator");
+        assert!(err.contains("expected KEY=VALUE"), "{err}");
+    }
+
     #[test]
     fn session_management_is_runtime_opt_in() {
         let parsed = Cli::try_parse_from(["ai-memory", "serve"]).unwrap();
@@ -3619,6 +4015,37 @@ mod tests {
             let error =
                 Cli::try_parse_from(["ai-memory", "search", "wal", "--global", flag[0], flag[1]])
                     .expect_err("--global must conflict with an explicit scope");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{flag:?}"
+            );
+        }
+    }
+
+    /// `recent --global` drops the scope entirely, so naming one alongside it
+    /// is a contradiction clap rejects rather than one flag silently winning.
+    #[test]
+    fn recent_global_parses_and_conflicts_with_an_explicit_scope() {
+        let parsed = Cli::try_parse_from(["ai-memory", "recent", "--global", "-n", "20"])
+            .expect("recent --global parses");
+        let Command::Recent(args) = parsed.command else {
+            panic!("expected recent command");
+        };
+        assert!(args.global);
+        assert_eq!(args.limit, 20);
+        assert!(args.workspace.is_none() && args.project.is_none());
+
+        let default = Cli::try_parse_from(["ai-memory", "recent"]).expect("recent parses");
+        let Command::Recent(args) = default.command else {
+            panic!("expected recent command");
+        };
+        assert!(!args.global, "global recent stays opt-in");
+        assert_eq!(args.limit, 10);
+
+        for flag in [["--workspace", "acme"], ["--project", "api"]] {
+            let error = Cli::try_parse_from(["ai-memory", "recent", "--global", flag[0], flag[1]])
+                .expect_err("--global must conflict with an explicit scope");
             assert_eq!(
                 error.kind(),
                 clap::error::ErrorKind::ArgumentConflict,
@@ -3746,19 +4173,35 @@ mod tests {
     }
 
     #[test]
-    fn serve_parses_insecure_no_auth_override() {
+    fn serve_parses_insecure_transport_overrides() {
         let parsed = Cli::try_parse_from([
             "ai-memory",
             "serve",
             "--transport",
             "http",
             "--allow-insecure-no-auth",
+            "--allow-insecure-human-auth",
         ])
         .expect("serve override parses");
         let Command::Serve(args) = parsed.command else {
             panic!("expected serve command");
         };
         assert!(args.allow_insecure_no_auth);
+        assert!(args.allow_insecure_human_auth);
+
+        let command = Cli::command();
+        let serve = command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "serve")
+            .expect("serve subcommand exists");
+        let human_override = serve
+            .get_arguments()
+            .find(|argument| argument.get_id() == "allow_insecure_human_auth")
+            .expect("human-auth override exists");
+        assert_eq!(
+            human_override.get_env(),
+            Some(std::ffi::OsStr::new("AI_MEMORY_ALLOW_INSECURE_HUMAN_AUTH"))
+        );
     }
 
     #[test]
@@ -4301,6 +4744,13 @@ mod tests {
                 panic!("expected install-hooks command for alias {alias}");
             };
             assert!(matches!(hook_args.agent, AgentChoice::AntigravityCli));
+
+            let skills_cli = Cli::try_parse_from(["ai-memory", "install-skills", "--agent", alias])
+                .unwrap_or_else(|e| panic!("failed to parse install-skills alias {alias}: {e}"));
+            let Command::InstallSkills(skills_args) = skills_cli.command else {
+                panic!("expected install-skills command for alias {alias}");
+            };
+            assert_eq!(skills_args.agent, InstallSkillsAgent::Antigravity);
         }
     }
 
@@ -4382,7 +4832,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode2_aliases_parse_to_the_beta_variants() {
+    fn opencode2_aliases_parse_to_the_v2_compatibility_variants() {
         for alias in ["opencode2", "opencode-v2", "open-code2"] {
             let cli = Cli::try_parse_from([
                 "ai-memory",
@@ -4447,6 +4897,47 @@ mod tests {
             };
             assert!(matches!(args.harness, Some(RunHarnessChoice::Claude)));
         }
+    }
+
+    #[test]
+    fn claude_wrapper_spelling_is_kept_only_for_non_fixed_names() {
+        let wrapper = |name: &str| {
+            let cli = crate::cli::try_parse_from(["ai-memory", "run", name]).unwrap();
+            let Command::Run(args) = cli.command else {
+                panic!("expected run for {name}");
+            };
+            args.claude_wrapper
+        };
+        assert_eq!(wrapper("claude-glm").as_deref(), Some("claude-glm"));
+        assert_eq!(wrapper("CLAUDE-WORK").as_deref(), Some("CLAUDE-WORK"));
+        assert_eq!(wrapper("claudex").as_deref(), Some("claudex"));
+        for fixed in [
+            "claude",
+            "CLAUDE",
+            "Claude-Code",
+            "claude-code",
+            "codex",
+            "kiro",
+        ] {
+            assert_eq!(wrapper(fixed), None, "{fixed}");
+        }
+
+        // Wrapper-owned flags before the harness, native args after it.
+        let cli = crate::cli::try_parse_from([
+            "ai-memory",
+            "run",
+            "--executable",
+            "/opt/claude-x",
+            "claude-glm",
+            "--model",
+            "opus",
+        ])
+        .unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(args.claude_wrapper.as_deref(), Some("claude-glm"));
+        assert_eq!(args.native_args, ["--model", "opus"]);
     }
 
     #[test]
@@ -4677,6 +5168,14 @@ mod tests {
             panic!("expected finalize-session for hermes");
         };
         assert_eq!(args.agent, ai_memory_core::AgentKind::Hermes);
+        for alias in ["hermes", "hermes-agent"] {
+            let mcp = Cli::try_parse_from(["ai-memory", "install-mcp", "--client", alias])
+                .unwrap_or_else(|error| panic!("{alias}: {error}"));
+            let Command::InstallMcp(args) = mcp.command else {
+                panic!("expected install-mcp for Hermes alias {alias}");
+            };
+            assert_eq!(args.client, McpClient::Hermes);
+        }
     }
 
     #[test]
@@ -4749,6 +5248,45 @@ mod tests {
     }
 
     #[test]
+    fn qwen_code_install_hooks_and_mcp_parse_with_both_aliases() {
+        for alias in ["qwen-code", "qwen", "qwencode"] {
+            let hooks = Cli::try_parse_from(["ai-memory", "install-hooks", "--agent", alias])
+                .unwrap_or_else(|error| panic!("{alias}: {error}"));
+            let Command::InstallHooks(args) = hooks.command else {
+                panic!("expected install-hooks");
+            };
+            assert_eq!(args.agent, AgentChoice::QwenCode);
+            assert_eq!(args.agent.kind(), ai_memory_core::AgentKind::QwenCode);
+            assert_eq!(args.agent.script_hook_subdir(), None);
+
+            let mcp = Cli::try_parse_from(["ai-memory", "install-mcp", "--client", alias])
+                .unwrap_or_else(|error| panic!("{alias}: {error}"));
+            let Command::InstallMcp(args) = mcp.command else {
+                panic!("expected install-mcp");
+            };
+            assert_eq!(args.client, McpClient::QwenCode);
+        }
+    }
+
+    #[test]
+    fn qoder_install_hooks_and_mcp_parse() {
+        let hooks =
+            Cli::try_parse_from(["ai-memory", "install-hooks", "--agent", "qoder"]).unwrap();
+        let Command::InstallHooks(args) = hooks.command else {
+            panic!("expected install-hooks");
+        };
+        assert_eq!(args.agent, AgentChoice::Qoder);
+        assert_eq!(args.agent.kind(), ai_memory_core::AgentKind::Qoder);
+        assert_eq!(args.agent.script_hook_subdir(), None);
+
+        let mcp = Cli::try_parse_from(["ai-memory", "install-mcp", "--client", "qoder"]).unwrap();
+        let Command::InstallMcp(args) = mcp.command else {
+            panic!("expected install-mcp");
+        };
+        assert_eq!(args.client, McpClient::Qoder);
+    }
+
+    #[test]
     fn ibm_bob_install_hooks_and_mcp_parse_with_both_aliases() {
         for alias in ["ibm-bob", "bob"] {
             let hooks = Cli::try_parse_from(["ai-memory", "install-hooks", "--agent", alias])
@@ -4766,6 +5304,29 @@ mod tests {
                 panic!("expected install-mcp");
             };
             assert_eq!(args.client, McpClient::IbmBob);
+        }
+    }
+
+    #[test]
+    fn dsh_install_hooks_and_mcp_parse_with_both_aliases() {
+        for alias in ["dsh", "deepseek-harness", "deepseek_harness"] {
+            let hooks = Cli::try_parse_from(["ai-memory", "install-hooks", "--agent", alias])
+                .unwrap_or_else(|error| panic!("{alias}: {error}"));
+            let Command::InstallHooks(args) = hooks.command else {
+                panic!("expected install-hooks");
+            };
+            assert_eq!(args.agent, AgentChoice::Dsh);
+            assert_eq!(args.agent.kind(), ai_memory_core::AgentKind::Dsh);
+            // DSH runs a staged script bundle through the Claude Code hooks
+            // bridge, so it owns a `hooks/dsh` directory.
+            assert_eq!(args.agent.script_hook_subdir(), Some("dsh"));
+
+            let mcp = Cli::try_parse_from(["ai-memory", "install-mcp", "--client", alias])
+                .unwrap_or_else(|error| panic!("{alias}: {error}"));
+            let Command::InstallMcp(args) = mcp.command else {
+                panic!("expected install-mcp");
+            };
+            assert_eq!(args.client, McpClient::Dsh);
         }
     }
 
@@ -5174,9 +5735,13 @@ mod tests {
         let Command::LlmTest(args) = cli.command else {
             panic!("expected llm-test command");
         };
-        assert!(matches!(args.provider, LlmProviderChoice::AnthropicOauth));
-        assert_eq!(args.model, "claude-sonnet-4-6");
-        assert_eq!(args.prompt, "ping");
+        assert!(matches!(
+            args.provider,
+            Some(LlmProviderChoice::AnthropicOauth)
+        ));
+        assert_eq!(args.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(args.prompt.as_deref(), Some("ping"));
+        assert!(!args.server);
     }
 
     #[test]
@@ -5197,8 +5762,41 @@ mod tests {
         let Command::LlmTest(args) = cli.command else {
             panic!("expected llm-test command");
         };
-        assert!(matches!(args.provider, LlmProviderChoice::Codex));
+        assert!(matches!(args.provider, Some(LlmProviderChoice::Codex)));
         assert!(args.structured);
+    }
+
+    /// `--server` runs the probe on the server, so none of the client-side
+    /// provider flags apply and passing one is a parse error rather than a
+    /// silently ignored key (#1639).
+    #[test]
+    fn llm_test_server_takes_no_client_side_provider_flags() {
+        let cli = Cli::try_parse_from(["ai-memory", "llm-test", "--server"]).unwrap();
+        let Command::LlmTest(args) = cli.command else {
+            panic!("expected llm-test command");
+        };
+        assert!(args.server);
+        assert!(args.provider.is_none() && args.model.is_none() && args.prompt.is_none());
+
+        for flag in [
+            "--provider",
+            "--model",
+            "--prompt",
+            "--api-key",
+            "--base-url",
+        ] {
+            let mut argv = vec!["ai-memory", "llm-test", "--server", flag];
+            let value = match flag {
+                "--provider" => "anthropic",
+                "--api-key" => "sk-x",
+                _ => "x",
+            };
+            argv.push(value);
+            assert!(
+                Cli::try_parse_from(&argv).is_err(),
+                "`{flag}` must conflict with --server"
+            );
+        }
     }
 
     #[test]
@@ -5233,6 +5831,7 @@ mod tests {
     fn upgrade_is_not_a_command() {
         assert!(Cli::try_parse_from(["ai-memory", "upgrade"]).is_err());
         assert!(Cli::try_parse_from(["ai-memory", "upgrade", "--force"]).is_err());
+        assert!(Cli::try_parse_from(["ai-memory", "upgrade-refresh-hooks"]).is_err());
     }
 
     /// #1208: each destructive project op takes `--project-id` as an
@@ -5240,6 +5839,36 @@ mod tests {
     /// ambiguous request never reaches the server to be guessed at.
     #[test]
     fn project_id_flags_parse_and_conflict_with_their_name_flags() {
+        let managed_id = ai_memory_core::ProjectId::new();
+        let id_text = managed_id.to_string();
+        let cli =
+            Cli::try_parse_from(["ai-memory", "run", "--project-id", &id_text, "claude"]).unwrap();
+        let Command::Run(run) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(run.project_id, Some(managed_id));
+        let cli =
+            Cli::try_parse_from(["ai-memory", "workstreams", "--project-id", &id_text]).unwrap();
+        let Command::Workstreams(workstreams) = cli.command else {
+            panic!("expected workstreams");
+        };
+        assert_eq!(workstreams.project_id, Some(managed_id));
+        for command in ["run", "workstreams"] {
+            assert!(
+                Cli::try_parse_from([
+                    "ai-memory",
+                    command,
+                    "--project",
+                    "api",
+                    "--project-id",
+                    &id_text
+                ])
+                .is_err()
+            );
+            assert!(
+                Cli::try_parse_from(["ai-memory", command, "--project-id", "not-a-uuid"]).is_err()
+            );
+        }
         let id = "11111111-2222-3333-4444-555555555555";
 
         let cli = Cli::try_parse_from(["ai-memory", "purge-project", "--project-id", id]).unwrap();
@@ -5317,6 +5946,66 @@ mod tests {
             ])
             .is_err(),
             "--project and --project-id must not both be accepted"
+        );
+
+        let cli = Cli::try_parse_from([
+            "ai-memory",
+            "merge-project",
+            "--workspace",
+            "default",
+            "--from-project-id",
+            id,
+            "--into",
+            "canonical",
+        ])
+        .unwrap();
+        let Command::MergeProject(args) = cli.command else {
+            panic!("expected merge-project");
+        };
+        assert_eq!(args.from_project_id.as_deref(), Some(id));
+        assert_eq!(args.into.as_deref(), Some("canonical"));
+        assert!(
+            Cli::try_parse_from([
+                "ai-memory",
+                "merge-project",
+                "--from",
+                "old",
+                "--from-project-id",
+                id,
+                "--into",
+                "new",
+            ])
+            .is_err(),
+            "--from and --from-project-id must not both be accepted"
+        );
+
+        let cli = Cli::try_parse_from([
+            "ai-memory",
+            "restore-page",
+            "--path",
+            "notes/example.md",
+            "--page-id",
+            id,
+        ])
+        .unwrap();
+        let Command::RestorePage(args) = cli.command else {
+            panic!("expected restore-page");
+        };
+        assert_eq!(args.page_id.as_deref(), Some(id));
+        assert!(args.from.is_none());
+        assert!(
+            Cli::try_parse_from([
+                "ai-memory",
+                "restore-page",
+                "--path",
+                "notes/example.md",
+                "--from",
+                "HEAD",
+                "--page-id",
+                id,
+            ])
+            .is_err(),
+            "--from and --page-id must not both be accepted"
         );
     }
 }

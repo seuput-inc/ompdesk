@@ -2,6 +2,7 @@ import { type Range, useVirtualizer, type Virtualizer } from "@tanstack/react-vi
 import {
 	BookOpen,
 	Bug,
+	CirclePause,
 	Code2,
 	History,
 	Languages,
@@ -16,12 +17,13 @@ import { memo, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo,
 import type { AgentMessage, MessagesPage } from "../../../shared/rpc-types";
 import { hydrateTabSession, loadOlderTranscript } from "../../hooks/session-hydration";
 import { currentShellMode } from "../../hooks/use-shell-mode";
-import { compactionActionKey } from "../../lib/compaction-action";
+import { compactionRunningKey } from "../../lib/compaction-action";
 import { useDisplayPreference } from "../../lib/display-preferences";
-import { cx, formatClock } from "../../lib/format";
+import { cx, formatClock, formatDuration, formatElapsed } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { prewarmMarkdown } from "../../lib/markdown";
 import { abortActiveTurn, describeTurnError, isRenderableMessageText } from "../../lib/messages";
+import { useNowTick } from "../../lib/now-tick";
 import { pointerFocusMark } from "../../lib/pointer-focus";
 import { collapsibleReadTarget, groupReadRows, type ReadGroupEntry } from "../../lib/read-group";
 import { useTabRpc } from "../../lib/tab-rpc";
@@ -31,12 +33,23 @@ import { useMessagesStore } from "../../stores/messages";
 import { useHostView } from "../../stores/remote";
 import { useSessionStore } from "../../stores/session";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
-import { useActiveTabKind, useAwaitingConnection, useResuming, useTabsStore } from "../../stores/tabs";
+import { useActiveTabKind, useAwaitingConnection, useCutOff, useResuming, useTabsStore } from "../../stores/tabs";
 import { toastError } from "../../stores/toast";
 import { type TodoSnapshot, useTodoStore } from "../../stores/todo";
 import { type ToolEntry, toolEntryKey, useToolsStore } from "../../stores/tools";
 import { useUiStore } from "../../stores/ui";
-import { BrandMark, Button, Card, Collapse, DisclosureButton, JumpToLatest, Kbd, Skeleton, Spinner } from "../common";
+import {
+	BrandMark,
+	Button,
+	Card,
+	Collapse,
+	DisclosureButton,
+	JumpToLatest,
+	Kbd,
+	SettingInfo,
+	Skeleton,
+	Spinner,
+} from "../common";
 import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot";
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
@@ -52,10 +65,12 @@ import {
 	createRowEntranceState,
 	endsOnSteer,
 	findConversationAnchorIndex,
+	firstUnseenRowKey,
 	type GestureTowardTail,
 	type HistoryRow,
 	isTranscriptAtLiveEdge,
 	isVisibleTranscriptMessage,
+	lastFinalizedRowKey,
 	liveWorkTail,
 	type MountedTranscriptRow,
 	mergeTodoSnapshots,
@@ -169,6 +184,7 @@ function SessionTranscript() {
 	const childrenAtWork = useHasChildrenAtWork();
 	const awaitingConnection = useAwaitingConnection();
 	const resuming = useResuming();
+	const cutOff = useCutOff();
 	const status = useSessionStore(s => s.status);
 	const sessionId = useSessionStore(s => s.sessionId);
 	// Shared agent compaction preference and GUI-local transcript detail.
@@ -180,6 +196,15 @@ function SessionTranscript() {
 		const tab = state.tabs.find(entry => entry.id === tabId);
 		return Boolean(tab?.sessionPath ?? tab?.pendingSessionPath);
 	});
+	const shownEmpty = knownSession && displayMessages.length === 0;
+	useEffect(() => {
+		if (!shownEmpty || !tabId) return;
+		// A diagnostic line only: a chunk that fails to load loses the line, never the pane.
+		import("../../hooks/empty-transcript-probe").then(
+			probe => probe.reportEmptyTranscript(tabId),
+			() => {},
+		);
+	}, [shownEmpty, tabId]);
 	const savedView = useSessionStore(s => s.transcriptView);
 	const saveView = useSessionStore(s => s.saveTranscriptView);
 	const [restoreView] = useState(() => (savedView?.sessionId === sessionId ? savedView : null));
@@ -250,6 +275,7 @@ function SessionTranscript() {
 	const showStatusRow =
 		awaitingConnection !== null ||
 		resuming !== null ||
+		(cutOff !== null && !isStreaming) ||
 		retryInfo != null ||
 		compactionInfo != null ||
 		(isStreaming && awaitingModelSince != null && !hasStreamedContent) ||
@@ -301,6 +327,11 @@ function SessionTranscript() {
 	);
 	const viewRef = useRef({ pinned, preCompactionOpen, expandedProcessKeys });
 	viewRef.current = { pinned, preCompactionOpen, expandedProcessKeys };
+	// The "New" line: rows that arrived while the person was in another session. It holds until they send.
+	const [seenKey, setSeenKey] = useState(restoreView?.seenKey);
+	const newRowKey = useMemo(() => firstUnseenRowKey(rows, rowKeys, seenKey), [rows, rowKeys, seenKey]);
+	const lastSeenRef = useRef<string | undefined>(undefined);
+	lastSeenRef.current = lastFinalizedRowKey(rows, rowKeys);
 	const emptyRef = useRef(true);
 	emptyRef.current = rows.length === 0;
 
@@ -451,6 +482,7 @@ function SessionTranscript() {
 	);
 	const virtualizer = useVirtualizer({
 		count: rows.length,
+		paddingEnd: 8, // --sc-space-2; include the composer gap in tail-following and restored measurements.
 		initialOffset: restoreView?.scrollOffset ?? 0,
 		initialMeasurementsCache: restoreView?.measurements,
 		getItemKey: index => rowKeys[index] ?? index,
@@ -690,6 +722,7 @@ function SessionTranscript() {
 				anchorKey: typeof anchor?.key === "string" ? anchor.key : undefined,
 				anchorOffset: anchor ? scrollOffset - anchor.start : 0,
 				measurements: virtualizer.takeSnapshot(),
+				seenKey: lastSeenRef.current,
 			});
 		},
 		[sessionId, saveView, virtualizer],
@@ -801,12 +834,14 @@ function SessionTranscript() {
 	}, []);
 
 	const handleScroll = useCallback(() => {
-		if (!userScrollIntentRef.current) return;
 		const el = parentRef.current;
 		if (!el) return;
+		// Asked on every scroll of a view the reader took off the tail, not only while their gesture lasts: a touch
+		// fling scrolls on after the finger lifted (`endScrollGesture`), and a phone reaches the top on those events.
 		if (!viewRef.current.pinned && el.scrollTop < 240 && prevCursor && !isLoadingPage && !pageError) {
 			void requestOlder();
 		}
+		if (!userScrollIntentRef.current) return;
 		const anchor = readingAnchor(el);
 		if (anchor) {
 			const looked = gestureAnchorRef.current;
@@ -964,6 +999,7 @@ function SessionTranscript() {
 	useEffect(() => {
 		if (lastPinNonce.current === pinNonce) return;
 		lastPinNonce.current = pinNonce;
+		setSeenKey(undefined);
 		jumpToLatest();
 	}, [pinNonce, jumpToLatest]);
 
@@ -1130,6 +1166,16 @@ function SessionTranscript() {
 									}}
 								>
 									<div className="omp-transcript-row w-full">
+										{rowKey === newRowKey && (
+											<div
+												aria-label={t("chat.newSince")}
+												className="omp-transcript-new"
+												data-transcript-new
+												role="separator"
+											>
+												<span aria-hidden>{t("chat.newSince")}</span>
+											</div>
+										)}
 										{row.kind === "message" ? (
 											<>
 												<MessageBubble
@@ -1489,8 +1535,9 @@ export function StreamingRows() {
  *   with the humanized reason ("Can't connect") and the raw failure detail.
  *   Enhancement over the TUI: N counts down live instead of freezing at the
  *   initial delay.
- * - compaction: `{reason}{action}…` for auto-maintenance, same
- *   reason/action vocabulary as the TUI loader.
+ * - compaction: what is happening to the conversation in plain words and
+ *   how long it has run ("Summarizing the conversation so far · 42s"), with
+ *   the why, what stays and how long the last one took behind its (i).
  * - waiting: between turn_start and the first streamed event, only a
  *   spinner — on the turn's last work row when there is one (`attached`, so
  *   this row renders nothing), else in place of the reply about to stream.
@@ -1507,11 +1554,15 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 	const compactionInfo = useSessionStore(s => s.compactionInfo);
 	const awaitingConnection = useAwaitingConnection();
 	const resuming = useResuming();
+	const cutOff = useCutOff();
 	const waitHost = useHostView(useTabsStore(s => s.tabs.find(tab => tab.id === awaitingConnection)?.device));
 	const awaitingModelSince = useSessionStore(s => s.awaitingModelSince);
 	const now = Date.now();
-	// Clock for the retry countdown only; it never runs for compaction or a
-	// model wait (the row is mounted for the whole session).
+	// The shared once-a-second clock, only while a compaction runs: its elapsed time.
+	const compactingNow = useNowTick(compactionInfo != null);
+	const compactionRuns = useSessionStore(s => s.compactionRuns);
+	// Clock for the retry countdown only; it never runs for a model wait (the row
+	// is mounted for the whole session).
 	const [, setNowTick] = useState(0);
 	useEffect(() => {
 		if (!retryInfo) return;
@@ -1522,6 +1573,8 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 	let text: string;
 	let reason: string | null = null;
 	let detail: string | null = null;
+	let elapsed = "";
+	let about: string | null = null;
 	let announcement: string;
 
 	// A turn that ended on a network error while offline (or just after a wake) is not a failure:
@@ -1588,6 +1641,43 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 			</div>
 		);
 	}
+	// A cut-off turn that did not go on by itself (automatic continuation off, an omp that kept dying, continuing
+	// failed): the person decides. Continue runs the continuation main would have run; Dismiss leaves it cut.
+	if (cutOff && !retryInfo && !compactionInfo) {
+		const cutText = t(`chat.cutOff.${cutOff.cutOff}`);
+		const failed = (cause: unknown) => toastError({ title: t("chat.cutOff.failedAction"), error: cause });
+		return (
+			<div
+				className="omp-status-turn flex flex-wrap items-center gap-x-2.5 gap-y-1 ps-(--omp-editorial-inset) pe-(--omp-editorial-edge) py-4 text-sc-md text-(--sc-text-muted)"
+				data-cut-off={cutOff.cutOff}
+			>
+				<span aria-atomic="true" aria-live="polite" className="sr-only" role="status">
+					{cutText}
+				</span>
+				<CirclePause aria-hidden className="size-(--sc-icon-sm) shrink-0" />
+				<span className="text-(--sc-text-secondary)">{cutText}</span>
+				<Button
+					data-cut-off-continue
+					onClick={() => {
+						window.omp.resume.continueCut(cutOff.tabId).catch(failed);
+					}}
+					size="sm"
+					variant="secondary"
+				>
+					{t("chat.cutOff.continue")}
+				</Button>
+				<Button
+					onClick={() => {
+						window.omp.resume.dismissCut(cutOff.tabId).catch(failed);
+					}}
+					size="sm"
+					variant="ghost"
+				>
+					{t("chat.cutOff.dismiss")}
+				</Button>
+			</div>
+		);
+	}
 	if (retryInfo) {
 		const remainingSeconds = Math.max(0, Math.ceil((retryInfo.startedAt + retryInfo.delayMs - now) / 1000));
 		text =
@@ -1608,16 +1698,27 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 		reason = cause.kind === "unknown" ? null : t(cause.titleKey);
 		detail = retryInfo.errorMessage || null;
 		announcement = t("chat.retry.inflight", { attempt: retryInfo.attempt, maxAttempts: retryInfo.maxAttempts });
-	} else if (compactionInfo?.reason === "manual") {
-		text = compactionInfo.cancelling
-			? t("chat.compaction.cancelling")
-			: `${t(compactionInfo.action === "handoff" ? "chat.compaction.manual.handoff" : "chat.compaction.manual.compact")}…`;
+	} else if (compactionInfo?.cancelling) {
+		text = t("chat.compaction.cancelling");
 		announcement = text;
 	} else if (compactionInfo) {
-		const compactionReason =
-			compactionInfo.reason === "threshold" ? "" : t(`chat.compaction.reason.${compactionInfo.reason}`);
-		text = `${compactionReason}${t(compactionActionKey(compactionInfo.action))}…`;
-		announcement = text;
+		const kind = compactionRunningKey(compactionInfo.action);
+		const what = t(kind);
+		elapsed = formatElapsed(compactingNow - compactionInfo.startedAt);
+		text = elapsed ? what : `${what}…`;
+		// Announced once: the ticking time stays out of the live region.
+		announcement = `${what}…`;
+		// A manual /compact (`compact`) and stock's automatic one (`context-full`, `remote`) are the same kind of pass.
+		const last = compactionRuns.findLast(run => compactionRunningKey(run.action) === kind);
+		about = [
+			compactionInfo.reason === "manual" ? null : t("chat.compaction.detail.auto"),
+			t("chat.compaction.detail.kept"),
+			last
+				? t("chat.compaction.detail.lastTook", { duration: formatDuration(last.endedAt - last.startedAt) })
+				: null,
+		]
+			.filter(Boolean)
+			.join(" ");
 	} else if (awaitingModelSince != null) {
 		if (attached) return null;
 		// The card's own head in the exact frame the work card mounts in (the work row's
@@ -1637,7 +1738,10 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 	}
 
 	return (
-		<div className="omp-status-turn flex flex-col gap-1.5 ps-(--omp-editorial-inset) pe-(--omp-editorial-edge) py-4 text-sc-md text-(--sc-text-muted)">
+		<div
+			className="omp-status-turn flex flex-col gap-1.5 ps-(--omp-editorial-inset) pe-(--omp-editorial-edge) py-4 text-sc-md text-(--sc-text-muted)"
+			data-compaction-status={compactionInfo && !retryInfo ? "" : undefined}
+		>
 			<span aria-atomic="true" aria-live="polite" className="sr-only" role="status">
 				{announcement}
 			</span>
@@ -1646,6 +1750,12 @@ export function TurnStatusRow({ attached = false }: { attached?: boolean }) {
 					<Spinner size="sm" />
 				</span>
 				<span className="text-(--sc-text-secondary)">{text}</span>
+				{elapsed ? (
+					<span className="tabular-nums" data-compaction-elapsed>
+						· {elapsed}
+					</span>
+				) : null}
+				{about ? <SettingInfo label={t("chat.compaction.about")} text={about} /> : null}
 				{reason ? <span>· {reason}</span> : null}
 				{compactionInfo?.cancelling ? null : (
 					<span className="flex items-center gap-1.5 text-sc-sm text-(--sc-text-subtle)">

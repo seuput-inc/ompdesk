@@ -1,6 +1,6 @@
-import { z } from "zod";
 import { create } from "zustand";
-import { ipcErrorCode } from "../../shared/ipc-error-codes";
+import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
+import { z } from "../lib/rpc-schema";
 import { reportRuntimeError } from "../lib/runtime-errors";
 import { focusedTabRpc, type TabRpc } from "../lib/tab-rpc";
 import { isSessionReplaced } from "./session-runtime-context";
@@ -34,7 +34,7 @@ export function filterHistory(entries: InputHistoryEntry[], query: string, limit
 		.slice(0, Math.max(0, limit));
 }
 
-const historySchema = z.array(z.object({ prompt: z.string(), created_at: z.number(), cwd: z.string().optional() }));
+const historySchema = z.array(z.object({ prompt: z.string(), created_at: z.number(), cwd: z.optional(z.string()) }));
 function stockEntries(data: unknown, device?: string): InputHistoryEntry[] {
 	return historySchema
 		.parse(data)
@@ -51,11 +51,17 @@ export const promptKey = (prompt: string) =>
 		.replace(/[^\S\n]+\n/g, "\n")
 		.trim();
 
+/** A refused history command as an Error that keeps its `code` (`remote_offline` while a paired host's link is down). */
+function refusal(response: { error: string; code?: string }): Error {
+	const code = ipcErrorCode(response);
+	return code ? codedError(code, response.error) : new Error(response.error);
+}
+
 async function stockHolds(rpc: TabRpc, prompt: string, recent: Set<string>): Promise<boolean> {
 	const key = promptKey(prompt);
 	if (recent.has(key)) return true;
 	const response = await rpc.historySearch(prompt, 1000);
-	if (!response.success) throw new Error(response.error);
+	if (!response.success) throw refusal(response);
 	return stockEntries(response.data).some(entry => promptKey(entry.prompt) === key);
 }
 
@@ -69,17 +75,17 @@ async function migratePrefs(rpc: TabRpc): Promise<void> {
 		// already holds would lift an old prompt above newer ones. Only missing prompts are
 		// recorded; they land newest, which is where the GUI's own ↑ showed them before.
 		const recentResponse = await rpc.historyRecent(1000);
-		if (!recentResponse.success) throw new Error(recentResponse.error);
+		if (!recentResponse.success) throw refusal(recentResponse);
 		const recent = new Set(stockEntries(recentResponse.data).map(entry => promptKey(entry.prompt)));
 		// Oldest first preserves the legacy newest-first order after stock upserts.
 		for (const item of [...raw].reverse()) {
 			const entry =
 				typeof item === "string"
 					? { prompt: item }
-					: z.object({ prompt: z.string(), cwd: z.string().optional() }).safeParse(item).data;
+					: z.object({ prompt: z.string(), cwd: z.optional(z.string()) }).safeParse(item).data;
 			if (!entry?.prompt.trim() || (await stockHolds(rpc, entry.prompt, recent))) continue;
 			const result = await rpc.historyRecord(entry.prompt, entry.cwd);
-			if (!result.success) throw new Error(result.error);
+			if (!result.success) throw refusal(result);
 			recent.add(promptKey(entry.prompt));
 		}
 		// Setting undefined removes the serialized prefs key; no second history copy remains.
@@ -122,7 +128,7 @@ export const useInputHistoryStore = create<InputHistoryStore>()((set, get) => ({
 			const response = await rpc.historyRecent(200);
 			// The tab closed or changed sessions while this read was in flight: its new runtime reads again.
 			if (isSessionReplaced(response)) return;
-			if (!response.success) throw new Error(response.error);
+			if (!response.success) throw refusal(response);
 			const incoming = stockEntries(response.data, device);
 			set(state => ({
 				entries: [
@@ -136,7 +142,9 @@ export const useInputHistoryStore = create<InputHistoryStore>()((set, get) => ({
 			}));
 		} catch (error) {
 			// Background: loading recall entries is never something the user asked for, so a
-			// failure must not interrupt with "Command failed"; the next ready/send retries it.
+			// failure must not interrupt with "Command failed"; the next ready/send retries it. A paired
+			// device that went offline reconnects on its own and the tab's next ready reads again.
+			if (ipcErrorCode(error) === "remote_offline") return;
 			reportRuntimeError("background-task", error, { details: { task: "history_recent" } });
 		}
 	},
@@ -155,7 +163,7 @@ export const useInputHistoryStore = create<InputHistoryStore>()((set, get) => ({
 			.then(response => {
 				// The prompt was sent; the tab's runtime was replaced before the write's answer came back.
 				if (isSessionReplaced(response)) return;
-				if (!response.success) throw new Error(response.error);
+				if (!response.success) throw refusal(response);
 				const { skipped } = z.object({ skipped: z.boolean() }).parse(response.data);
 				if (!skipped) {
 					set(state => ({
@@ -174,7 +182,7 @@ export const useInputHistoryStore = create<InputHistoryStore>()((set, get) => ({
 	},
 	search: async (query, limit = 100, cwd, rpc = focusedTabRpc(), device) => {
 		const response = await (query.trim() ? rpc.historySearch(query, limit, cwd) : rpc.historyRecent(limit, cwd));
-		if (!response.success) throw new Error(response.error);
+		if (!response.success) throw refusal(response);
 		const transient = filterHistory(
 			workspaceHistory(
 				get().entries.filter(entry => entry.device === device && entry.transient),

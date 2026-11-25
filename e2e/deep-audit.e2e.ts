@@ -228,7 +228,9 @@ function numberCandidates(input: {
 }
 
 function safeStringValue(entry: SettingEntry, profile: string): string {
-	if (entry.path.includes("Url") || entry.path.toLowerCase().includes("url")) return "http://127.0.0.1:9/gui-audit";
+	// Stock refuses anything but an http(s) URL for these (omp 18.22.2's `live.endpoint` validates on set).
+	const path = entry.path.toLowerCase();
+	if (path.includes("url") || path.endsWith("endpoint")) return "http://127.0.0.1:9/gui-audit";
 	if (entry.path.toLowerCase().includes("path") || entry.path.includes("directory")) return profile;
 	if (entry.path.includes("interpreter")) return "/usr/bin/python3";
 	return `__gui_audit__${entry.path.replaceAll(".", "_")}`;
@@ -375,26 +377,47 @@ async function mutateEntry(
 			for (const candidate of candidates) {
 				await input.fill(String(candidate));
 				await input.press("Enter");
-				const outcome = async () =>
-					(await input.getAttribute("aria-invalid")) === "true"
-						? "refused"
-						: equalJson(await readSetting(page, entry.path), candidate)
-							? "written"
-							: "pending";
-				await expect.poll(outcome, { timeout: 8_000 }).not.toBe("pending");
-				if ((await outcome()) === "written") {
+				// One read decides: the row's refusal and its message come from the same DOM snapshot, and a written value
+				// is the one the poll saw. A second evaluation after the poll could see the row or the value a moment
+				// later (windows run 43915678103: the poll saw 0 written, the re-read saw -1 and no message).
+				const decide = async (): Promise<{ state: "pending" | "written" | "refused"; message: string }> => {
+					const refusal = await input.evaluate(element => ({
+						invalid: element.getAttribute("aria-invalid") === "true",
+						message: (element.getAttribute("aria-describedby") ?? "")
+							.split(/\s+/)
+							.map(id => element.ownerDocument.getElementById(id)?.textContent ?? "")
+							.join(" ")
+							.trim(),
+					}));
+					// A row's error and its note render together; an invalid row without a note is not settled yet.
+					if (refusal.invalid)
+						return { state: refusal.message === "" ? "pending" : "refused", message: refusal.message };
+					return {
+						state: equalJson(await readSetting(page, entry.path), candidate) ? "written" : "pending",
+						message: "",
+					};
+				};
+				let decided: { state: "pending" | "written" | "refused"; message: string } = {
+					state: "pending",
+					message: "",
+				};
+				await expect
+					.poll(
+						async () => {
+							decided = await decide();
+							return decided.state;
+						},
+						{
+							timeout: 8_000,
+							message: `${entry.path}: ${candidate} was neither written nor refused with a message`,
+						},
+					)
+					.not.toBe("pending");
+				if (decided.state === "written") {
 					next = candidate;
 					break;
 				}
-				const message = await input.evaluate(element =>
-					(element.getAttribute("aria-describedby") ?? "")
-						.split(/\s+/)
-						.map(id => element.ownerDocument.getElementById(id)?.textContent ?? "")
-						.join(" ")
-						.trim(),
-				);
-				expect(message, `${entry.path} refused ${candidate} without saying why`).not.toBe("");
-				notes.push(`refused ${candidate}: ${message}`);
+				notes.push(`refused ${candidate}: ${decided.message}`);
 			}
 			if (next === undefined) throw new Error(`${entry.path} refused every candidate: ${notes.join("; ")}`);
 			const readbackValue = await readSetting(page, entry.path);
@@ -482,10 +505,14 @@ async function mutateEntry(
 			const selectControl = row.locator("select").first();
 			const textarea = row.locator("textarea").first();
 			if ((await textarea.count()) > 0) {
+				// An array of records takes records of its own shape (stock drops an item of the wrong shape and reads the
+				// default back): the approval rules are `{match, approval}`, the interceptor's are `{pattern, tool, message}`.
 				const changed =
 					entry.path === "bash.patterns"
 						? [{ match: "echo gui-audit-block", approval: "deny" }]
-						: ["__gui_audit__"];
+						: entry.path === "bashInterceptor.patterns"
+							? [{ pattern: "^gui-audit-block\\s", tool: "bash", message: "gui audit" }]
+							: ["__gui_audit__"];
 				await textarea.fill(JSON.stringify(changed, null, 2));
 				await row.getByRole("button", { name: /Apply/ }).click();
 				const readbackValue = await pollSetting(page, entry.path, changed);
@@ -865,9 +892,7 @@ test("deep GUI audit: settings pages and command discoverability", async () => {
 		await expect(page.locator('aside button[data-command-center-entry="true"]').first()).toHaveAccessibleName(
 			/^(Command palette|명령 팔레트)$/,
 		);
-		// The advertised list is read before the palette opens: the palette reads its own when it opens, and REA's
-		// prompts (rea:*) join the list once it has started, so a list read after the open can name commands the open
-		// palette never had (nightly 41880669356: six rea:* prompts "missing").
+		// The palette takes a snapshot when it opens. A server that connects later can advertise more commands.
 		const available = await page.evaluate(async () => window.omp.rpc.getAvailableCommands());
 		await page.locator('aside button[data-command-center-entry="true"]').first().click();
 		const palette = page.getByRole("dialog");

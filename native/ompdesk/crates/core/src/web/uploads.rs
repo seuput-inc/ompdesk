@@ -6,16 +6,17 @@
 //!
 //! One store per `userData` per core process (`open`): the edge's `POST /upload` and main's requests change the same
 //! object. Methods (`register`): `web.uploads.store` (+ `bin`), `web.uploads.take` (answers with `bin`),
-//! `web.uploads.sweep`, `web.uploads.removeDevice`, and `web.uploads.receive` (the body of a `POST /upload`, as
-//! `bin`; what the edge's `Uploads::receive` does, for the parity tests). A refusal is the fault `upload_<status>`.
+//! `web.uploads.sweep`, `web.uploads.removeDevice`, `web.uploads.missing` (which of the files a prompt names are gone),
+//! and `web.uploads.receive` (the body of a `POST /upload`, as `bin`; what the edge's `Uploads::receive` does, for the
+//! parity tests). A refusal is the fault `upload_<status>`.
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use http_body_util::BodyExt as _;
 use hyper::HeaderMap;
@@ -31,6 +32,12 @@ use crate::server::{Call, Fault, Registry, Reply};
 pub const FILE_MAX_BYTES: u64 = 25 * 1024 * 1024;
 pub const DEVICE_DAILY_MAX_BYTES: u64 = 200 * 1024 * 1024;
 pub const TTL_MS: i64 = 24 * 60 * 60 * 1000;
+/// Upload bodies read at once, every device together: each is held in memory whole, so a burst stays near
+/// `BODIES_MAX` files. One past it is refused 503 before anything is read.
+pub const BODIES_MAX: usize = 8;
+/// A body that sends nothing for this long is given up (408): a phone that lost its link mid-upload would otherwise
+/// hold its slot and its share of the day until the socket died.
+pub const BODY_IDLE_MS: u64 = 60_000;
 /// Multipart framing around the file: a request may be a little over the file limit.
 const MULTIPART_OVERHEAD_BYTES: u64 = 64 * 1024;
 /// The folder of files attached to this computer's own tabs with no path here (ipc.ts FS_UPLOAD_TO_HOST).
@@ -43,6 +50,8 @@ pub struct Limits {
     pub file_max: u64,
     pub daily_max: u64,
     pub ttl_ms: i64,
+    pub bodies_max: usize,
+    pub idle_ms: u64,
 }
 
 impl Default for Limits {
@@ -51,6 +60,8 @@ impl Default for Limits {
             file_max: FILE_MAX_BYTES,
             daily_max: DEVICE_DAILY_MAX_BYTES,
             ttl_ms: TTL_MS,
+            bodies_max: BODIES_MAX,
+            idle_ms: BODY_IDLE_MS,
         }
     }
 }
@@ -70,6 +81,7 @@ impl LimitParams {
             file_max: self.file_max_bytes.unwrap_or(default.file_max),
             daily_max: self.daily_max_bytes.unwrap_or(default.daily_max),
             ttl_ms: self.ttl_ms.unwrap_or(default.ttl_ms),
+            ..default
         }
     }
 }
@@ -93,6 +105,8 @@ struct Inner {
     /// Counts the reservations given back: a reservation whose file landed while another request read the folder is
     /// counted by neither the folder it read nor the pending bytes it then sees, so that request reads again.
     released: AtomicU64,
+    /// Bodies being read now (`Limits::bodies_max`).
+    bodies: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -117,6 +131,7 @@ pub fn open(user_data: &Path) -> Arc<UploadStore> {
                 root,
                 pending: Mutex::default(),
                 released: AtomicU64::new(0),
+                bodies: AtomicUsize::new(0),
             }),
         })
     }))
@@ -250,6 +265,15 @@ impl Drop for Reserved {
     }
 }
 
+/// A body being read, counted against `Limits::bodies_max` until it ends.
+struct Reading(Arc<Inner>);
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        self.0.bodies.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl Inner {
     fn device_dir(&self, device: &str) -> PathBuf {
         join(&self.root, device)
@@ -329,6 +353,25 @@ impl Inner {
     fn remove_device(&self, device: &str) {
         let _ = fs::remove_dir_all(self.device_dir(device));
     }
+
+    /// The names of `files` inside the store that are no longer there (swept after the TTL, taken, or their
+    /// device's folder removed); a path outside the store is no upload and never gone.
+    fn missing(&self, files: &[String]) -> Vec<String> {
+        files
+            .iter()
+            .filter_map(|file| {
+                let target = resolve(Path::new(file));
+                let inside = target
+                    .strip_prefix(&self.root)
+                    .is_ok_and(|rest| rest.components().next().is_some());
+                (inside && fs::symlink_metadata(&target).is_err()).then(|| {
+                    target
+                        .file_name()
+                        .map_or_else(|| file.clone(), |name| name.to_string_lossy().into_owned())
+                })
+            })
+            .collect()
+    }
 }
 
 /// `mkdir(folder, { recursive: true, mode: 0o700 })`.
@@ -370,6 +413,20 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
 }
 
 impl UploadStore {
+    /// The host resolves the path in its working directory. Compare the spelling even on Windows,
+    /// as the page's save contract did, and never let a parent segment reach the copy.
+    pub(super) fn owns(&self, device: &str, file: &str) -> bool {
+        let mut folder = self.inner.device_dir(device).into_os_string();
+        folder.push(std::path::MAIN_SEPARATOR_STR);
+        let Some(rest) = folder.to_str().and_then(|prefix| file.strip_prefix(prefix)) else {
+            return false;
+        };
+        !rest.is_empty()
+            && Path::new(rest)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+    }
+
     /// How much of the device's day is spoken for, reserved before anything is read or written.
     async fn reserve(
         &self,
@@ -475,6 +532,14 @@ impl UploadStore {
         if declared.is_some_and(|declared| declared > limit as f64) {
             return Err(refuse(413, "file too large"));
         }
+        let _reading = self
+            .inner
+            .bodies
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |reading| {
+                (reading < limits.bodies_max).then_some(reading + 1)
+            })
+            .map(|_| Reading(Arc::clone(&self.inner)))
+            .map_err(|_| refuse(503, "too many uploads at once"))?;
         let reserve = declared.map_or(limits.file_max, |declared| {
             declared.min(limit as f64) as u64
         });
@@ -487,8 +552,15 @@ impl UploadStore {
                 }
             })
             .await?;
+        let idle = Duration::from_millis(limits.idle_ms);
         let mut data = Vec::new();
-        while let Some(frame) = body.frame().await {
+        loop {
+            let Ok(next) = tokio::time::timeout(idle, body.frame()).await else {
+                return Err(refuse(408, "upload stalled"));
+            };
+            let Some(frame) = next else {
+                break;
+            };
             let Ok(frame) = frame else {
                 return Err(refuse(400, "malformed upload"));
             };
@@ -533,6 +605,12 @@ impl UploadStore {
         let device = device.to_owned();
         blocking(move || inner.remove_device(&device)).await;
     }
+
+    /// The names of `files` inside the store that are gone: a prompt naming one is not sent.
+    pub async fn missing(&self, files: Vec<String>) -> Vec<String> {
+        let inner = Arc::clone(&self.inner);
+        blocking(move || inner.missing(&files)).await
+    }
 }
 
 /// How much of a refused upload's body is read out before the socket is let go: a little over what the edge ever takes.
@@ -547,20 +625,16 @@ impl Uploads for UploadStore {
         let device = device_id.to_owned();
         Box::pin(async move {
             let (parts, mut body) = request.into_parts();
+            let limits = Limits::default();
             let stored = self
-                .receive_body(
-                    now_ms(),
-                    Limits::default(),
-                    &device,
-                    &parts.headers,
-                    &mut body,
-                )
+                .receive_body(now_ms(), limits, &device, &parts.headers, &mut body)
                 .await;
             if stored.is_err() {
                 // What a refused upload did not read is read out, as node's server dumped it: a socket closed with
-                // unread data resets, and the page then never sees the 413 or 429.
+                // unread data resets, and the page then never sees the 413 or 429. A body that stalls is let go.
+                let idle = Duration::from_millis(limits.idle_ms);
                 let mut left = REFUSED_DRAIN_MAX_BYTES;
-                while let Some(Ok(frame)) = body.frame().await {
+                while let Ok(Some(Ok(frame))) = tokio::time::timeout(idle, body.frame()).await {
                     let read = frame.data_ref().map_or(0, Bytes::len);
                     if read >= left {
                         break;
@@ -725,6 +799,8 @@ struct Params {
     #[serde(default)]
     content_length: Option<f64>,
     #[serde(default)]
+    files: Vec<String>,
+    #[serde(default)]
     limits: LimitParams,
 }
 
@@ -745,20 +821,44 @@ fn fault(failure: &UploadFailure) -> Fault {
     )
 }
 
-async fn store(mut call: Call) -> Result<Reply, Fault> {
-    let params = Params::of(&call)?;
-    let bytes = call.bin.take().unwrap_or_default();
-    let upload = open(&params.user_data)
+async fn write_upload(
+    params: &Params,
+    device: &str,
+    bytes: Vec<u8>,
+) -> Result<Upload, UploadFailure> {
+    open(&params.user_data)
         .store(
             params.now(),
             params.limits.limits(),
-            &params.device_id,
+            device,
             &params.name,
             bytes,
         )
         .await
+}
+
+pub(crate) async fn store(call: Call) -> Result<Reply, Fault> {
+    let params = Params::of(&call)?;
+    let upload = write_upload(&params, &params.device_id, call.bin.unwrap_or_default())
+        .await
         .map_err(|failure| fault(&failure))?;
     Reply::json(&json!({ "path": upload.path, "name": upload.name, "size": upload.size }))
+}
+
+async fn attach_here(call: Call) -> Result<Reply, Fault> {
+    let params = Params::of(&call)?;
+    match write_upload(&params, LOCAL_DEVICE, call.bin.unwrap_or_default()).await {
+        Ok(upload) => Reply::json(&json!({ "ok": true, "path": upload.path })),
+        Err(failure) => {
+            let mut result = json!({ "ok": false, "error": failure.message });
+            match failure.status {
+                413 => result["code"] = json!("file_too_large"),
+                429 => result["code"] = json!("upload_refused"),
+                _ => {}
+            }
+            Reply::json(&result)
+        }
+    }
 }
 
 async fn take(call: Call) -> Result<Reply, Fault> {
@@ -784,6 +884,12 @@ async fn remove_device(call: Call) -> Result<Reply, Fault> {
         .remove_device(&params.device_id)
         .await;
     Reply::json(&json!({}))
+}
+
+async fn missing(call: Call) -> Result<Reply, Fault> {
+    let params = Params::of(&call)?;
+    let missing = open(&params.user_data).missing(params.files).await;
+    Reply::json(&json!({ "missing": missing }))
 }
 
 /// The edge's `receive` over a body main hands in: `contentType` and `contentLength` as the request's headers
@@ -823,11 +929,13 @@ async fn receive(mut call: Call) -> Result<Reply, Fault> {
 
 pub fn register(registry: &mut Registry) {
     registry.add("web.uploads.store", |call| Box::pin(store(call)));
+    registry.add("web.uploads.attachHere", |call| Box::pin(attach_here(call)));
     registry.add("web.uploads.take", |call| Box::pin(take(call)));
     registry.add("web.uploads.sweep", |call| Box::pin(sweep(call)));
     registry.add("web.uploads.removeDevice", |call| {
         Box::pin(remove_device(call))
     });
+    registry.add("web.uploads.missing", |call| Box::pin(missing(call)));
     registry.add("web.uploads.receive", |call| Box::pin(receive(call)));
 }
 
@@ -876,6 +984,8 @@ mod tests {
         file_max: 1000,
         daily_max: 2500,
         ttl_ms: TTL_MS,
+        bodies_max: 2,
+        idle_ms: 1_000,
     };
 
     /// A browser's form body: one part, `name` the field, `file` its file name.
@@ -1088,6 +1198,7 @@ mod tests {
                 root: store.inner.root.clone(),
                 pending: Mutex::default(),
                 released: AtomicU64::new(0),
+                bodies: AtomicUsize::new(0),
             }),
         };
         let again = receive(&restarted, "dev1", form("file", "c", &chunk), true).await;
@@ -1231,6 +1342,100 @@ mod tests {
                 "{path:?}"
             );
         }
+    }
+
+    /// A body that sends its first bytes and then nothing more, as a phone whose link went mid-upload.
+    struct Stalled(Option<Bytes>);
+
+    impl Body for Stalled {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+            match self.0.take() {
+                Some(head) => std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(head)))),
+                None => std::task::Poll::Pending,
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bodies_past_the_bound_are_refused_and_a_stalled_one_gives_its_slot_back() {
+        let scratch = Scratch::new();
+        let store = open(&scratch.0);
+        let (content_type, body) = form("file", "a.bin", &[1; 10]);
+        let head = Bytes::from(body[..20].to_vec());
+        let stalled = |device: &'static str| {
+            let (store, content_type, head) =
+                (Arc::clone(&store), content_type.clone(), head.clone());
+            tokio::spawn(async move {
+                store
+                    .receive_body(
+                        now_ms(),
+                        SMALL,
+                        device,
+                        &headers(&content_type, None),
+                        Stalled(Some(head)),
+                    )
+                    .await
+            })
+        };
+        let reading = [stalled("dev1"), stalled("dev2")];
+        while store.inner.bodies.load(Ordering::SeqCst) < SMALL.bodies_max {
+            tokio::task::yield_now().await;
+        }
+        let busy = receive(&store, "dev3", form("file", "b.bin", &[2]), true).await;
+        assert_eq!(
+            (status(&busy), busy.err().unwrap().message.as_str()),
+            (503, "too many uploads at once")
+        );
+        for task in reading {
+            let given_up = task.await.unwrap();
+            assert_eq!(
+                (status(&given_up), given_up.err().unwrap().message.as_str()),
+                (408, "upload stalled")
+            );
+        }
+        assert_eq!(store.inner.bodies.load(Ordering::SeqCst), 0);
+        assert!(!scratch.0.join(FOLDER).join("dev1").exists());
+        // Their slots and their share of the day are back.
+        receive(&store, "dev1", form("file", "b.bin", &[2]), true)
+            .await
+            .fine();
+    }
+
+    #[tokio::test]
+    async fn missing_names_the_uploads_that_are_gone_and_nothing_outside_the_store() {
+        let scratch = Scratch::new();
+        let store = open(&scratch.0);
+        let kept = store
+            .store(now_ms(), SMALL, "dev1", "kept.pdf", vec![1])
+            .await
+            .fine();
+        let taken = store
+            .store(now_ms(), SMALL, "dev1", "계약서.docx", vec![2])
+            .await
+            .fine();
+        store.take("dev1", &taken.path).await.fine();
+        let root = scratch.0.join(FOLDER);
+        let swept = root.join("dev2").join("some-uuid").join("swept.txt");
+        let path = |path: &Path| path.to_string_lossy().into_owned();
+        assert_eq!(
+            store
+                .missing(vec![
+                    kept.path.clone(),
+                    taken.path.clone(),
+                    path(&swept),
+                    path(&scratch.0.join("elsewhere.txt")),
+                    path(&root),
+                    path(&root.join("..").join("outside.txt")),
+                ])
+                .await,
+            ["계약서.docx", "swept.txt"]
+        );
     }
 
     #[test]

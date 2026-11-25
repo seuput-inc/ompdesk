@@ -101,8 +101,8 @@ async function openAppearance(phone: Page) {
 }
 
 async function pickTheme(phone: Page, name: "light" | "dark") {
-	await phone.locator(`[data-theme-option="${name}"]`).scrollIntoViewIfNeeded();
-	await phone.locator(`[data-theme-option="${name}"]`).click();
+	await phone.locator(`[data-theme-mode="${name}"]`).scrollIntoViewIfNeeded();
+	await phone.locator(`[data-theme-mode="${name}"]`).click();
 	await expect.poll(() => scheme(phone)).toBe(name);
 }
 

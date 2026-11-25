@@ -28,14 +28,18 @@ interface Drop {
 const SESSION_MIME = "application/x-omp-session";
 
 /** Whether `over` may take `from`'s place: both in the list, and on the same side of the pinned edge. */
-export function canDropOn(list: SessionList, from: string, over: string): boolean {
+export function canDropOn(list: Pick<SessionList, "paths" | "pinned">, from: string, over: string): boolean {
 	if (from === over || !list.paths.includes(from) || !list.paths.includes(over)) return false;
 	const pinned = list.pinned ?? [];
 	return pinned.includes(from) === pinned.includes(over);
 }
 
 /** Whether the row can trade places with its neighbour `delta` away: one exists on the same side of the pinned edge. */
-export function canMoveWithin(list: SessionList | null, path: string, delta: -1 | 1): boolean {
+export function canMoveWithin(
+	list: Pick<SessionList, "paths" | "pinned"> | null,
+	path: string,
+	delta: -1 | 1,
+): boolean {
 	const index = list ? list.paths.indexOf(path) : -1;
 	const neighbour = list && index !== -1 ? list.paths[index + delta] : undefined;
 	if (list === null || neighbour === undefined) return false;
@@ -58,27 +62,25 @@ export interface SessionReorder {
 		list: SessionList | null,
 		tab: { id: string; shown: boolean } | undefined,
 	) => HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | true | undefined>;
-	/** Saves a new order for `list` and says so to a screen reader. */
-	move: (list: SessionList, path: string, next: readonly string[], title: string) => void;
+	/** Moves a row to its neighbour's place unless at the end or the pinned edge. */
+	moveBy: (list: SessionList | null, path: string, delta: -1 | 1, title: string) => boolean;
 	/** The polite live region a drop, a menu move or Alt+↑/↓ is told through. */
 	status: ReactNode;
 }
 
-/**
- * `titleOf` names a row for the announcement; `save` writes the list's order (under the caller's prefs key, so a
- * host's rows are kept apart from this computer's).
- */
+/** A remote save confirms the host accepted the order before announcing it. */
 export function useSessionReorder(options: {
 	titleOf: (path: string) => string;
-	save: (list: SessionList, next: readonly string[]) => void;
+	save: (list: SessionList, next: string[], path: string, over: string) => void | Promise<boolean>;
 }): SessionReorder {
 	const t = useT();
 	const [drag, setDrag] = useState<{ list: SessionList; path: string; splits: boolean } | null>(null);
 	const [drop, setDrop] = useState<Drop | null>(null);
 	const [announcement, setAnnouncement] = useState("");
 
-	const move: SessionReorder["move"] = (list, path, next, title) => {
-		options.save(list, next);
+	const move = async (list: SessionList, path: string, over: string, title: string) => {
+		const next = reorderProjects(list.paths, path, over);
+		if ((await options.save(list, next, path, over)) === false) return;
 		setAnnouncement(
 			t("sidebar.sessionOrder.moved", { name: title, position: next.indexOf(path) + 1, count: next.length }),
 		);
@@ -119,10 +121,9 @@ export function useSessionReorder(options: {
 				event.preventDefault();
 				event.stopPropagation();
 				const from = drag.path;
-				const next = reorderProjects(list.paths, from, path);
 				if (drag.splits) window.dispatchEvent(new CustomEvent("omp:tab-drag", { detail: { tabId: null } }));
 				finish();
-				if (next.join("\n") !== list.paths.join("\n")) move(list, from, next, options.titleOf(from));
+				void move(list, from, path, options.titleOf(from));
 			},
 			onDragEnd: () => {
 				if (splits) window.dispatchEvent(new CustomEvent("omp:tab-drag", { detail: { tabId: null } }));
@@ -135,7 +136,12 @@ export function useSessionReorder(options: {
 
 	return {
 		rowDrag,
-		move,
+		moveBy: (list, path, delta, title) => {
+			const over = list?.paths[list.paths.indexOf(path) + delta];
+			if (!list || over === undefined || !canDropOn(list, path, over)) return false;
+			void move(list, path, over, title);
+			return true;
+		},
 		status: (
 			<span aria-live="polite" className="sr-only" data-session-order-status role="status">
 				{announcement}

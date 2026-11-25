@@ -1,19 +1,25 @@
 /**
- * The `extensions` worker (`host.ts extensions`): everything the extension updater (src/main/ext-update/)
+ * The `extensions` worker (`host.ts extensions`): everything the extension updater (the core's `tools/ext.rs`)
  * asks of this computer's omp without a session: what is installed (marketplaces, plugins, registry skills,
  * MCP servers), the catalog refresh, the plugin and skill version checks and their upgrades. The contracts
  * are in extensions-contracts.ts; the pure decisions (pins, origins) in extension-specs.ts.
  *
  * Stock does every mutation (`MarketplaceManager.updateMarketplace` / `upgradePlugin`, `PluginManager.upgrade`,
  * `updateSkillPackages`); this file only reads stock's state, shapes it, and decides what OMPdesk must not
- * touch. Stock modules are imported at call time from the user's omp (`OMP_PACKAGE_ROOT`), never at module
- * load: the stock and terminals workers must start on an install that has none of them. No answer carries an
+ * touch. Stock modules are imported at call time from the user's omp (`OMP_PACKAGE_ROOT`, omp-package.ts), never at
+ * module load: the stock and terminals workers must start on an install that has none of them. No answer carries an
  * env value, a header, a token or a URL credential.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { classifyActivation, type PluginActivation, pluginRequiresRestart } from "../extensions/activation-core";
+import {
+	addedRestartEntries,
+	classifyActivation,
+	type PluginActivation,
+	pluginRequiresRestart,
+} from "../extensions/activation-core";
+import { loadOmpModule } from "../omp-package";
 import {
 	classifySkillOrigin,
 	isExactSkillVersion,
@@ -30,15 +36,13 @@ import type {
 	HelperRegistrySkill,
 	MarketplaceRefreshResult,
 	PluginCheckResult,
+	PluginPreviewResult,
 	PluginSelector,
 	PluginUpgradeResult,
 	SkillCheckResult,
 	SkillSelector,
 	SkillUpdateResult,
 } from "./extensions-contracts";
-
-const AGENT = "@oh-my-pi/pi-coding-agent";
-const UTILS = "@oh-my-pi/pi-utils";
 
 /** One metadata request to an npm registry. */
 const REGISTRY_TIMEOUT_MS = 30_000;
@@ -47,12 +51,21 @@ const REGISTRY_TIMEOUT_MS = 30_000;
 
 interface MarketplaceRegistryEntry {
 	name: string;
+	sourceType: string;
 	sourceUri: string;
+	catalogPath: string;
 	updatedAt: string;
 }
 interface InstalledPluginEntry {
 	version: string;
+	installPath: string;
 	enabled?: boolean;
+}
+/** A catalog's plugin entry, passed back to stock's `resolvePluginSource` as stock read it. */
+interface CatalogPluginEntry {
+	name: string;
+	version?: string;
+	source: unknown;
 }
 interface InstalledPluginSummary {
 	id: string;
@@ -69,6 +82,7 @@ interface MarketplaceManagerOptions {
 }
 interface StockMarketplaceManager {
 	listMarketplaces(): Promise<MarketplaceRegistryEntry[]>;
+	listAvailablePlugins(marketplace?: string): Promise<CatalogPluginEntry[]>;
 	updateMarketplace(name: string): Promise<MarketplaceRegistryEntry>;
 	listInstalledPlugins(): Promise<InstalledPluginSummary[]>;
 	checkForUpdates(): Promise<Array<{ pluginId: string; scope: "user" | "project"; from: string; to: string }>>;
@@ -80,6 +94,11 @@ interface MarketplaceModule {
 	getMarketplacesCacheDir(): string;
 	getMarketplacesRegistryPath(): string;
 	getPluginsCacheDir(): string;
+	parsePluginId(id: string): { name: string; marketplace: string } | null;
+	resolvePluginSource(
+		entry: CatalogPluginEntry,
+		context: { marketplaceClonePath?: string; catalogMetadata?: unknown; tmpDir: string },
+	): Promise<{ dir: string; tempCloneRoot?: string }>;
 }
 interface HelpersModule {
 	clearPluginRootsAndCaches(extraPaths?: readonly string[]): void;
@@ -108,10 +127,12 @@ interface ManagerModule {
 	PluginManager: new (cwd?: string) => StockPluginManager;
 }
 interface GitUrlModule {
-	parseGitUrl(source: string): { ref?: string } | null;
+	parseGitUrl(source: string): { repo?: string; ref?: string } | null;
 }
 interface UtilsModule {
 	getPluginsPackageJson(): string;
+	getPluginsNodeModules(): string;
+	expandTilde(filePath: string): string;
 	getMCPConfigPath(scope: "user" | "project", cwd?: string): string;
 }
 interface NpmRegistry {
@@ -206,25 +227,6 @@ interface McpConfigModule {
 	): Promise<{ configs: Record<string, { type?: string }> }>;
 }
 
-/** Import `specifier` from the user's omp and check the named exports are functions (or present). */
-async function load<T>(specifier: string, ...exports: string[]): Promise<T> {
-	const root = process.env.OMP_PACKAGE_ROOT;
-	if (!root) throw new Error("OMP_PACKAGE_ROOT is required");
-	// Runtime-selected: the modules belong to the user's resolved omp installation.
-	let file: string;
-	try {
-		file = Bun.resolveSync(specifier, path.join(root, "package.json"));
-	} catch {
-		throw new Error(`Installed omp has no ${specifier}`);
-	}
-	const mod = (await import(file)) as Record<string, unknown>;
-	for (const name of exports) {
-		if (mod[name] === undefined) throw new Error(`Installed omp has no ${name} in ${specifier}`);
-	}
-	// The caller names the shape it reads; the exports it needs were checked above.
-	return mod as unknown as T;
-}
-
 /** Where a run that needs a working directory but has no project uses: the user's home, never a project. */
 const neutralCwd = () => os.homedir();
 
@@ -278,16 +280,16 @@ function inventoryCwds(params: unknown): string[] {
 /** The manager `omp plugin` builds (`createMarketplaceManager` in extensions/shared.ts), with an explicit project registry. */
 async function marketplaceManager(projectRegistryPath: string | null): Promise<StockMarketplaceManager> {
 	const [mod, helpers] = await Promise.all([
-		load<MarketplaceModule>(
-			`${AGENT}/extensibility/plugins/marketplace`,
+		loadOmpModule<MarketplaceModule>(
+			"pi-coding-agent/extensibility/plugins/marketplace",
 			"MarketplaceManager",
 			"getInstalledPluginsRegistryPath",
 			"getMarketplacesCacheDir",
 			"getMarketplacesRegistryPath",
 			"getPluginsCacheDir",
 		),
-		load<HelpersModule>(
-			`${AGENT}/discovery/helpers`,
+		loadOmpModule<HelpersModule>(
+			"pi-coding-agent/discovery/helpers",
 			"clearPluginRootsAndCaches",
 			"resolveActiveProjectRegistryPath",
 		),
@@ -304,7 +306,10 @@ async function marketplaceManager(projectRegistryPath: string | null): Promise<S
 
 /** The project registry a `cwd` resolves to (stock's own rule), or null. */
 async function projectRegistryPath(cwd: string): Promise<string | null> {
-	const helpers = await load<HelpersModule>(`${AGENT}/discovery/helpers`, "resolveActiveProjectRegistryPath");
+	const helpers = await loadOmpModule<HelpersModule>(
+		"pi-coding-agent/discovery/helpers",
+		"resolveActiveProjectRegistryPath",
+	);
 	return helpers.resolveActiveProjectRegistryPath(cwd);
 }
 
@@ -344,7 +349,7 @@ function withoutCredentials(source: string): string {
 
 /** `dependencies` of the user's `plugins/package.json`: what stock recorded for every npm/git/linked install. */
 async function recordedSpecs(): Promise<Record<string, string>> {
-	const utils = await load<UtilsModule>(UTILS, "getPluginsPackageJson");
+	const utils = await loadOmpModule<UtilsModule>("pi-utils", "getPluginsPackageJson");
 	let text: string;
 	try {
 		text = await fs.readFile(utils.getPluginsPackageJson(), "utf8");
@@ -362,13 +367,13 @@ async function recordedSpecs(): Promise<Record<string, string>> {
 }
 
 async function pluginManager(cwd: string | null): Promise<StockPluginManager> {
-	const mod = await load<ManagerModule>(`${AGENT}/extensibility/plugins/manager`, "PluginManager");
+	const mod = await loadOmpModule<ManagerModule>("pi-coding-agent/extensibility/plugins/manager", "PluginManager");
 	return new mod.PluginManager(cwd ?? neutralCwd());
 }
 
 async function channelOfSpec(spec: string | undefined): Promise<"npm" | "git" | "linked"> {
 	if (spec === undefined || isLinkedSpec(spec)) return "linked";
-	const gitUrl = await load<GitUrlModule>(`${AGENT}/extensibility/plugins/git-url`, "parseGitUrl");
+	const gitUrl = await loadOmpModule<GitUrlModule>("pi-coding-agent/extensibility/plugins/git-url", "parseGitUrl");
 	return gitUrl.parseGitUrl(spec) ? "git" : "npm";
 }
 
@@ -383,30 +388,136 @@ async function recordedPlugin(id: string, cwd: string | null) {
 /** Whether OMPdesk must leave a recorded npm/git plugin alone (see extension-specs.ts). */
 async function pinnedPlugin(channel: "npm" | "git", spec: string, installed: string | null): Promise<boolean> {
 	if (channel === "npm") return isPinnedNpmSpec(spec, installed);
-	const gitUrl = await load<GitUrlModule>(`${AGENT}/extensibility/plugins/git-url`, "parseGitUrl");
+	const gitUrl = await loadOmpModule<GitUrlModule>("pi-coding-agent/extensibility/plugins/git-url", "parseGitUrl");
 	return isPinnedGitRef(gitUrl.parseGitUrl(spec)?.ref);
 }
 
-/** `dist-tags.latest` of `name` on the registry stock resolves for it (the user's .npmrc / bunfig). */
-async function npmLatest(name: string): Promise<string | null> {
-	const registryModule = await load<NpmRegistryModule>(
-		`${AGENT}/cli/npm-registry`,
+/** The packument of `name` on the registry stock resolves for it (the user's .npmrc / bunfig). */
+async function npmPackument(name: string, accept: string): Promise<unknown> {
+	const registryModule = await loadOmpModule<NpmRegistryModule>(
+		"pi-coding-agent/cli/npm-registry",
 		"loadNpmRegistryResolver",
 		"npmRegistryPackageUrl",
 	);
 	const registry = (await registryModule.loadNpmRegistryResolver())(name);
 	const response = await fetch(registryModule.npmRegistryPackageUrl(registry, name), {
-		headers: {
-			accept: "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8",
-			...(registry.authorization ? { authorization: registry.authorization } : {}),
-		},
+		headers: { accept, ...(registry.authorization ? { authorization: registry.authorization } : {}) },
 		signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
 	});
 	if (!response.ok) throw new Error(`npm registry answered ${response.status} for ${name}`);
-	const body: unknown = await response.json();
-	const tags = typeof body === "object" && body !== null && "dist-tags" in body ? body["dist-tags"] : null;
+	return response.json();
+}
+
+function latestOf(packument: unknown): string | null {
+	const tags =
+		typeof packument === "object" && packument !== null && "dist-tags" in packument ? packument["dist-tags"] : null;
 	const latest = typeof tags === "object" && tags !== null && "latest" in tags ? tags.latest : null;
 	return typeof latest === "string" ? latest : null;
+}
+
+/** `dist-tags.latest` of `name` (the abbreviated packument). */
+async function npmLatest(name: string): Promise<string | null> {
+	return latestOf(await npmPackument(name, "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8"));
+}
+
+// ─── What an upgrade would install ──────────────────────────────────────────────────────────────────────────
+
+interface PackageManifest {
+	/** The omp plugin manifest: `omp`, else `pi` (stock's loader rule); untrusted JSON. */
+	manifest: unknown;
+	version: string | null;
+}
+
+function manifestOf(pkg: unknown): PackageManifest {
+	if (typeof pkg !== "object" || pkg === null) return { manifest: undefined, version: null };
+	const fields = pkg as { omp?: unknown; pi?: unknown; version?: unknown };
+	return { manifest: fields.omp || fields.pi, version: typeof fields.version === "string" ? fields.version : null };
+}
+
+/** A folder's `package.json` as a plugin manifest; a folder without one (a Claude-format plugin) declares nothing. */
+async function folderManifest(dir: string): Promise<PackageManifest> {
+	try {
+		return manifestOf(JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8")));
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return manifestOf(null);
+		throw error;
+	}
+}
+
+/** Read a catalog source the way stock's install fetches it (`resolvePluginSource`: a clone for a remote one), then drop the clone. */
+async function sourceManifest(
+	entry: CatalogPluginEntry,
+	context: { marketplaceClonePath?: string; catalogMetadata?: unknown },
+): Promise<PackageManifest> {
+	const market = await loadOmpModule<MarketplaceModule>(
+		"pi-coding-agent/extensibility/plugins/marketplace",
+		"resolvePluginSource",
+	);
+	const { dir, tempCloneRoot } = await market.resolvePluginSource(entry, { ...context, tmpDir: os.tmpdir() });
+	try {
+		return await folderManifest(dir);
+	} finally {
+		if (tempCloneRoot) await fs.rm(tempCloneRoot, { recursive: true, force: true });
+	}
+}
+
+/** The installed manifest and the candidate's, for a marketplace plugin: the catalog entry an upgrade reinstalls. */
+async function marketplaceCandidate(selector: PluginSelector): Promise<[PackageManifest, PackageManifest]> {
+	const [manager, market, utils] = await Promise.all([
+		managerFor(selector),
+		loadOmpModule<MarketplaceModule>("pi-coding-agent/extensibility/plugins/marketplace", "parsePluginId"),
+		loadOmpModule<UtilsModule>("pi-utils", "expandTilde"),
+	]);
+	const parsed = market.parsePluginId(selector.id);
+	if (!parsed) throw new Error(`Invalid plugin ID: "${selector.id}"`);
+	const registry = (await manager.listMarketplaces()).find(entry => entry.name === parsed.marketplace);
+	if (!registry) throw new Error(`Marketplace "${parsed.marketplace}" not found`);
+	const entry = (await manager.listAvailablePlugins(parsed.marketplace)).find(item => item.name === parsed.name);
+	if (!entry) throw new Error(`Plugin "${parsed.name}" not found in marketplace "${parsed.marketplace}"`);
+	const catalogPath = path.resolve(utils.expandTilde(registry.catalogPath));
+	const catalog: unknown = JSON.parse(await fs.readFile(catalogPath, "utf8"));
+	const catalogMetadata =
+		typeof catalog === "object" && catalog !== null && "metadata" in catalog ? catalog.metadata : undefined;
+	// Stock's `#resolveMarketplaceRoot`: a local marketplace is its own folder, a fetched one the catalog's folder.
+	const marketplaceClonePath =
+		registry.sourceType === "local" ? path.resolve(utils.expandTilde(registry.sourceUri)) : path.dirname(catalogPath);
+	const installed = await installedMarketplacePlugin(manager, selector.id, selector.scope);
+	const candidate = await sourceManifest(entry, { marketplaceClonePath, catalogMetadata });
+	// The version is stock's own (`checkForUpdates`, its catalog-version precedence), the one the check row shows.
+	const outdated = (await manager.checkForUpdates()).find(
+		update => update.pluginId === selector.id && update.scope === selector.scope,
+	);
+	return [
+		await folderManifest(installed.installPath),
+		{ ...candidate, version: outdated?.to ?? (installed.version || null) },
+	];
+}
+
+/** The installed manifest and the candidate's, for an npm or git plugin: what `PluginManager.upgrade` would install. */
+async function packageCandidate(selector: PluginSelector): Promise<[PackageManifest, PackageManifest]> {
+	const { spec } = await recordedPlugin(selector.id, selector.cwd);
+	if (spec === null || isLinkedSpec(spec))
+		throw new Error(`${selector.id} is linked from a local path; nothing to check`);
+	const utils = await loadOmpModule<UtilsModule>("pi-utils", "getPluginsNodeModules");
+	const installed = await folderManifest(path.join(utils.getPluginsNodeModules(), selector.id));
+	if (selector.channel === "npm") {
+		// npm: upgrade installs `dist-tags.latest`; the full packument carries that version's package.json.
+		const packument = await npmPackument(selector.id, "application/json");
+		const latest = latestOf(packument);
+		const versions =
+			typeof packument === "object" && packument !== null && "versions" in packument ? packument.versions : null;
+		const pkg =
+			latest && typeof versions === "object" && versions !== null
+				? (versions as Record<string, unknown>)[latest]
+				: null;
+		return [installed, { ...manifestOf(pkg), version: latest }];
+	}
+	// git: upgrade re-resolves the recorded repository and ref.
+	const gitUrl = await loadOmpModule<GitUrlModule>("pi-coding-agent/extensibility/plugins/git-url", "parseGitUrl");
+	const git = gitUrl.parseGitUrl(spec);
+	if (!git?.repo) throw new Error(`${selector.id} has no git source to read (${spec})`);
+	const source = { source: "url", url: git.repo, ...(git.ref ? { ref: git.ref } : {}) };
+	return [installed, await sourceManifest({ name: selector.id, source }, {})];
 }
 
 // ─── Skills ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -414,8 +525,8 @@ async function npmLatest(name: string): Promise<string | null> {
 /** Run `fn` with stock's read-only settings for `cwd` bound for capability loading (a session's own binding). */
 async function withSettings<T>(cwd: string, fn: (settings: StockSettings) => Promise<T>): Promise<T> {
 	const [settingsModule, discovery] = await Promise.all([
-		load<SettingsModule>(`${AGENT}/config/settings`, "Settings"),
-		load<DiscoveryModule>(`${AGENT}/discovery`, "initializeWithSettings", "loadCapability"),
+		loadOmpModule<SettingsModule>("pi-coding-agent/config/settings", "Settings"),
+		loadOmpModule<DiscoveryModule>("pi-coding-agent/discovery", "initializeWithSettings", "loadCapability"),
 	]);
 	const settings = await settingsModule.Settings.loadReadOnly({ cwd });
 	const release = discovery.initializeWithSettings(settings);
@@ -433,9 +544,9 @@ async function withSettings<T>(cwd: string, fn: (settings: StockSettings) => Pro
  */
 async function discoverSkills(cwd: string): Promise<StockSkill[]> {
 	const [skillsModule, settingsHandles] = await Promise.all([
-		load<SkillsModule>(`${AGENT}/extensibility/skills`, "loadSkills"),
-		load<ExtensionSettingsModule>(
-			`${AGENT}/extensibility/settings`,
+		loadOmpModule<SkillsModule>("pi-coding-agent/extensibility/skills", "loadSkills"),
+		loadOmpModule<ExtensionSettingsModule>(
+			"pi-coding-agent/extensibility/settings",
 			"cfgSkills",
 			"cfgDisabledExtensions",
 			"cfgExtensions",
@@ -463,7 +574,10 @@ async function discoverSkills(cwd: string): Promise<StockSkill[]> {
 }
 
 async function installedSkills(cwd: string | null): Promise<InstalledSkillInfo[]> {
-	const installer = await load<SkillInstallerModule>(`${AGENT}/skillshare/installer`, "listInstalledSkills");
+	const installer = await loadOmpModule<SkillInstallerModule>(
+		"pi-coding-agent/skillshare/installer",
+		"listInstalledSkills",
+	);
 	return installer.listInstalledSkills(cwd ?? neutralCwd());
 }
 
@@ -475,7 +589,7 @@ function splitSkillId(id: string): [string, string] {
 }
 
 async function withSkillClient<T>(fn: (client: StockSkillClient) => Promise<T>): Promise<T> {
-	const clientModule = await load<SkillClientModule>(`${AGENT}/skillshare/client`, "SkillshareClient");
+	const clientModule = await loadOmpModule<SkillClientModule>("pi-coding-agent/skillshare/client", "SkillshareClient");
 	const client = await clientModule.SkillshareClient.create();
 	try {
 		return await fn(client);
@@ -502,9 +616,9 @@ async function skillPackument(client: StockSkillClient, id: string): Promise<Ski
 /** Servers the user's omp loads outside any project: their config, plugins' and other tools' (enabled or not). */
 async function mcpInventory(): Promise<HelperMcpServer[]> {
 	const [discovery, mcpConfig, utils] = await Promise.all([
-		load<DiscoveryModule>(`${AGENT}/discovery`, "initializeWithSettings", "loadCapability"),
-		load<McpConfigModule>(`${AGENT}/mcp/config`, "loadAllMCPConfigs"),
-		load<UtilsModule>(UTILS, "getMCPConfigPath"),
+		loadOmpModule<DiscoveryModule>("pi-coding-agent/discovery", "initializeWithSettings", "loadCapability"),
+		loadOmpModule<McpConfigModule>("pi-coding-agent/mcp/config", "loadAllMCPConfigs"),
+		loadOmpModule<UtilsModule>("pi-utils", "getMCPConfigPath"),
 	]);
 	const cwd = neutralCwd();
 	const userPath = utils.getMCPConfigPath("user", cwd);
@@ -530,7 +644,6 @@ async function mcpInventory(): Promise<HelperMcpServer[]> {
 				args: Array.isArray(item.args) ? item.args.filter(arg => typeof arg === "string") : [],
 				url: item.url ? withoutCredentials(item.url) : null,
 				enabled: live !== undefined,
-				sourcePath: item._source.path || null,
 				origin: item._source.path === userPath ? "user" : "other",
 			});
 		}
@@ -543,8 +656,8 @@ async function mcpInventory(): Promise<HelperMcpServer[]> {
 async function inventory(params: unknown): Promise<HelperInventory> {
 	const cwds = inventoryCwds(params);
 	const probeCwds = cwds.length > 0 ? cwds : [neutralCwd()];
-	const marketplaceModule = await load<MarketplaceModule>(
-		`${AGENT}/extensibility/plugins/marketplace`,
+	const marketplaceModule = await loadOmpModule<MarketplaceModule>(
+		"pi-coding-agent/extensibility/plugins/marketplace",
 		"getInstalledPluginsRegistryPath",
 	);
 	const userRegistry = marketplaceModule.getInstalledPluginsRegistryPath();
@@ -604,8 +717,8 @@ async function inventory(params: unknown): Promise<HelperInventory> {
 
 	const registrySkills: HelperRegistrySkill[] = [];
 	const seenSkills = new Set<string>();
-	const manifestModule = await load<SkillManifestModule>(
-		`${AGENT}/skillshare/manifest`,
+	const manifestModule = await loadOmpModule<SkillManifestModule>(
+		"pi-coding-agent/skillshare/manifest",
 		"getProjectSkillsInstallPaths",
 	);
 	for (const cwd of probeCwds) {
@@ -685,15 +798,26 @@ async function pluginCheck(params: unknown): Promise<PluginCheckResult> {
 	return { installed, latest, pinned, unversioned: false };
 }
 
+async function pluginPreview(params: unknown): Promise<PluginPreviewResult> {
+	const selector = pluginSelector(params);
+	const [installed, candidate] =
+		selector.channel === "marketplace" ? await marketplaceCandidate(selector) : await packageCandidate(selector);
+	return { version: candidate.version, added: addedRestartEntries(installed.manifest, candidate.manifest) };
+}
+
 async function pluginUpgrade(params: unknown): Promise<PluginUpgradeResult> {
 	const selector = pluginSelector(params);
 	const [helpers, loader] = await Promise.all([
-		load<HelpersModule>(
-			`${AGENT}/discovery/helpers`,
+		loadOmpModule<HelpersModule>(
+			"pi-coding-agent/discovery/helpers",
 			"clearPluginRootsAndCaches",
 			"resolveActiveProjectRegistryPath",
 		),
-		load<LoaderModule>(`${AGENT}/extensibility/plugins/loader`, "getEnabledPlugins", "resolvePluginManifestEntries"),
+		loadOmpModule<LoaderModule>(
+			"pi-coding-agent/extensibility/plugins/loader",
+			"getEnabledPlugins",
+			"resolvePluginManifestEntries",
+		),
 	]);
 	const projectRegistry =
 		selector.scope === "project" && selector.cwd ? await projectRegistryPath(selector.cwd) : null;
@@ -739,7 +863,10 @@ function activationOf(before: ScopedPlugin[], after: ScopedPlugin[], loader: Loa
 
 async function skillCheck(params: unknown): Promise<SkillCheckResult> {
 	const selector = skillSelector(params);
-	const installer = await load<SkillInstallerModule>(`${AGENT}/skillshare/installer`, "resolveSkillVersion");
+	const installer = await loadOmpModule<SkillInstallerModule>(
+		"pi-coding-agent/skillshare/installer",
+		"resolveSkillVersion",
+	);
 	const info = (await installedSkills(selector.cwd)).find(
 		skill => skill.id === selector.id && skill.scope === selector.scope,
 	);
@@ -756,7 +883,10 @@ async function skillCheck(params: unknown): Promise<SkillCheckResult> {
 
 async function skillUpdate(params: unknown): Promise<SkillUpdateResult> {
 	const selector = skillSelector(params);
-	const installer = await load<SkillInstallerModule>(`${AGENT}/skillshare/installer`, "updateSkillPackages");
+	const installer = await loadOmpModule<SkillInstallerModule>(
+		"pi-coding-agent/skillshare/installer",
+		"updateSkillPackages",
+	);
 	const before = (await installedSkills(selector.cwd)).find(
 		skill => skill.id === selector.id && skill.scope === selector.scope,
 	);
@@ -787,6 +917,7 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"extensions.inventory": inventory,
 	"extensions.marketplace.refresh": marketplaceRefresh,
 	"extensions.plugin.check": pluginCheck,
+	"extensions.plugin.preview": pluginPreview,
 	"extensions.plugin.upgrade": pluginUpgrade,
 	"extensions.skill.check": skillCheck,
 	"extensions.skill.update": skillUpdate,

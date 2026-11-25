@@ -1,5 +1,37 @@
 /** Korean text for backend-provided settings enum labels and descriptions. */
 export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
+	Fallback: "백그라운드 입력 불가 시 전환",
+	Foreground: "포그라운드",
+	"Background first; a call whose background route is unavailable briefly brings the target forward, then returns focus to your app (on macOS even if you kept typing). The agent may also ask for takeover on a call":
+		"먼저 백그라운드로 입력해요. 불가능하면 대상 창을 잠시 앞으로 가져왔다가 사용하던 앱으로 포커스를 돌려줘요(macOS에서는 계속 타이핑 중이어도 마찬가지예요). 에이전트가 개별 호출에서 입력 전환을 요청할 수도 있어요.",
+	"Never take over: a call whose background route is unavailable fails, and the agent's own takeover, raise, activating open, desktop input and macOS menus (context menus, popup and menu buttons; they take your keyboard while open) are refused too":
+		"입력을 전환하지 않아요. 백그라운드 입력이 불가능하면 호출이 실패해요. 에이전트가 직접 입력을 전환하거나 창을 앞으로 가져오거나 활성화해서 여는 동작과 데스크톱 입력도 차단해요. macOS에서는 열려 있는 동안 키보드 입력을 가로채는 컨텍스트 메뉴, 팝업 버튼, 메뉴 버튼도 차단해요.",
+	"omp, never the agent, decides: take over every window and element input call, bringing the target forward for that call and then returning focus to your app":
+		"에이전트가 아니라 omp가 결정해요. 창이나 요소에 입력할 때마다 대상을 앞으로 가져오고, 입력이 끝나면 사용하던 앱으로 포커스를 돌려줘요.",
+	"omp, never the agent, decides: take over input to a window already in front of you, and a call whose background route is unavailable; stay in the background otherwise":
+		"에이전트가 아니라 omp가 결정해요. 대상 창이 이미 맨 앞에 있거나 백그라운드 입력이 불가능할 때만 입력을 전환해요. 그 밖에는 백그라운드로 입력해요.",
+	"All Commands": "모든 명령",
+	"Binary Ninja": "Binary Ninja",
+	"Binary Ninja via its headless Python API (needs a headless-capable licence); never chosen by Auto; analysis disabled when no install is found":
+		"Binary Ninja의 헤드리스 Python API를 사용해요. 이를 지원하는 라이선스가 필요해요. 자동 모드에서는 선택하지 않아요. 설치본을 찾지 못하면 분석하지 않아요.",
+	"Enable when the first usable judge is native": "첫 번째 사용 가능한 판정 모델이 네이티브일 때 켜기",
+	"IDA Pro when an install with idalib is found, otherwise Ghidra; never Binary Ninja":
+		"idalib가 있는 IDA Pro를 찾으면 사용하고, 없으면 Ghidra를 사용해요. Binary Ninja는 자동으로 선택하지 않아요.",
+	"Inline built-in help; MCP and extension help on demand.":
+		"내장 명령의 도움말만 넣고 MCP와 확장 명령의 도움말은 필요할 때 읽어요.",
+	"Inline help for every mounted command.": "사용 가능한 모든 명령의 도움말을 넣어요.",
+	"List every command; run `--help` on demand.": "명령 이름만 나열하고 필요할 때 --help를 실행해요.",
+	magic: "매직 편집",
+	"Google Antigravity (Gemini, Claude, GPT-OSS)": "Google Antigravity(Gemini·Claude·GPT-OSS)",
+	"Google Antigravity is paused: Google's terms do not allow third-party sign-in and Google has suspended accounts that used it (see #18341). Use GEMINI_API_KEY (AI Studio) or google-vertex instead.":
+		"Google 약관은 타사 로그인을 허용하지 않으며, 이를 사용한 계정이 정지된 사례가 있어 Google Antigravity를 일시정지했어요(#18341). 대신 GEMINI_API_KEY(AI Studio) 또는 google-vertex를 사용하세요.",
+	"Never nudge mid-run": "작업 중에는 알리지 않음",
+	Capped: "횟수 제한",
+	"Nudge after 12 edits or commands, at most twice until the todo list changes or you send a message":
+		"수정이나 명령 12회 뒤에 알려요. 할 일 목록이 바뀌거나 메시지를 보낼 때까지 최대 두 번 알려요.",
+	Backoff: "간격 늘리기",
+	"Keep nudging with a doubling gap: after 12, 24, 48, 96, then every 192 edits or commands":
+		"수정이나 명령 12·24·48·96회 뒤에 알리고, 이후에는 192회마다 계속 알려요.",
 	"This Directory": "이 폴더만",
 	"Only sessions saved for this directory": "이 폴더에 저장된 세션만 보여요",
 	"Repository Worktrees": "저장소 워크트리 전체",
@@ -50,6 +82,11 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	"20%": "20%",
 	"25%": "25%",
 	MLX: "MLX",
+	"0.8×": "0.8×",
+	"0.9×": "0.9×",
+	"1.1×": "1.1×",
+	"1.2×": "1.2×",
+	"1.3×": "1.3×",
 	"0.5×": "0.5×",
 	"0.75×": "0.75×",
 	"1× (normal)": "1× (보통)",
@@ -102,6 +139,18 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	Remove: "제거",
 	"Remove clean worktrees; ask when they have uncommitted changes or new commits. Gitignored files (e.g. `.env`) are deleted too":
 		"변경 사항이 없는 워크트리는 제거해요. 커밋하지 않은 변경이나 새 커밋이 있으면 물어봐요. gitignore로 제외된 파일(예: `.env`)도 삭제돼요.",
+	"Force Remove": "강제 제거",
+	"Remove every worktree without asking, even with uncommitted changes. Uncommitted work, gitignored files (e.g. `.env`), and commits only on a detached HEAD are lost; new commits on the branch are kept":
+		"묻지 않고 모든 워크트리를 제거해요. 커밋하지 않은 변경이 있어도 제거해요. 커밋하지 않은 작업, gitignore로 제외된 파일(예: `.env`), detached HEAD에만 있는 커밋은 사라지고, 브랜치의 새 커밋은 남아요.",
+	"IDA Pro when an install with idalib is found, otherwise Ghidra":
+		"idalib가 있는 IDA Pro 설치를 찾으면 IDA Pro를, 아니면 Ghidra를 써요.",
+	Ghidra: "Ghidra",
+	"Ghidra via PyGhidra; provisions Ghidra 12.2, a JDK 25 and PyGhidra on first analysis when not installed":
+		"PyGhidra로 Ghidra를 써요. 설치돼 있지 않으면 첫 분석 때 Ghidra 12.2, JDK 25, PyGhidra를 준비해요.",
+	"IDA Pro": "IDA Pro",
+	"IDA Pro via idalib; analysis disabled when no install is found":
+		"idalib로 IDA Pro를 써요. 설치를 찾지 못하면 분석을 꺼요.",
+	"Executable metadata only; analysis disabled": "실행 파일 메타데이터만 보여요. 분석은 꺼져요.",
 	"4": "4",
 	"8": "8",
 	"16": "16",
@@ -699,6 +748,18 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	"Emma (British female)": "Emma (영국 여성)",
 	"George (British male)": "George (영국 남성)",
 	"Fable (British male)": "Fable (영국 남성)",
+	"Harper (American female)": "Harper (미국 여성)",
+	"Hadley (American female)": "Hadley (미국 여성)",
+	"Delia (American female)": "Delia (미국 여성)",
+	"Everly (American female)": "Everly (미국 여성)",
+	"Easton (American male)": "Easton (미국 남성)",
+	"Preston (American male)": "Preston (미국 남성)",
+	"Miles (American male)": "Miles (미국 남성)",
+	"Trevor (American male)": "Trevor (미국 남성)",
+	"Maeve (British female)": "Maeve (영국 여성)",
+	"Bryony (British female)": "Bryony (영국 여성)",
+	"Edwin (British male)": "Edwin (영국 남성)",
+	"Hugh (British male)": "Hugh (영국 남성)",
 	"All (messages + thinking)": "전체 (메시지 + 사고)",
 	"Assistant messages": "어시스턴트 메시지",
 	"Final message only": "최종 메시지만",
@@ -952,6 +1013,15 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	Suggest: "제안만",
 	"Classify each task and report the decision without arming prewalk":
 		"작업마다 분류해 결과만 알리고 사전 탐색은 켜지 않아요",
+	"Classify each task and report the decision, and whether Escalate would plan on another model, without arming prewalk":
+		"작업마다 분류해 결과와 함께 상향 모드라면 다른 모델로 계획할지를 알리고, 사전 탐색은 켜지 않아요",
+	Escalate: "상향",
+	"Like On, but plan on the Prewalk planning model (prewalk.from) first: a confidently front-loaded task moves there before setup and hands off from it; the next task starts back where this one started. When the planning model is already active, this is On, except that '@initial' then has nothing to hand back to":
+		"켜기와 같지만 먼저 사전 탐색 계획 모델(prewalk.from)에서 계획해요. 앞단 추론이 확실한 작업은 준비 전에 그 모델로 옮겨 가서 거기서 넘겨줘요. 다음 작업은 이 작업이 시작한 모델에서 다시 시작해요. 계획 모델이 이미 사용 중이면 켜기와 같지만, 그때는 '@initial'이 돌려줄 대상이 없어요",
+	Insert: "입력",
+	Normal: "노멀",
+	"Start on Vim commands; i, a, o and the like to type": "Vim 명령 모드로 시작해요. 입력하려면 i, a, o 등을 눌러요",
+	"Type right away; Escape for Normal mode": "바로 입력해요. Esc를 누르면 노멀 모드로 가요",
 	"For confidently front-loaded tasks, arm a handoff from the active model to the auto target; the next task starts back on the planning model":
 		"앞단 추론이 확실한 작업은 현재 모델에서 자동 대상 모델로 넘기도록 준비해요. 다음 작업은 다시 계획 모델로 시작해요",
 	"Disable the find tool": "find 도구 끄기",
@@ -1045,4 +1115,13 @@ export const KO_SCHEMA_OPTION_TEXT: Readonly<Record<string, string>> = {
 	"Up to 4 workers": "워커 최대 4개",
 	"Up to 8 workers": "워커 최대 8개",
 	med: "중간",
+	// ── omp 19.0 신규 열거형 옵션 ───────────────────────────────────────────────
+	"Compact at the first decision once the prompt reaches the bridge-compaction threshold":
+		"프롬프트가 브리지 압축 기준에 닿으면 첫 판단 시점에 압축해요",
+	"Isolated subagents and `/wt` use ovnfs checkouts when ovnfs is found; otherwise (and for other worktrees) the PAL picks the best available backend":
+		"ovnfs가 있으면 격리된 서브에이전트와 `/wt`가 ovnfs 체크아웃을 써요. 없으면(그리고 다른 워크트리에는) PAL이 쓸 수 있는 가장 좋은 백엔드를 골라요",
+	"Keep Alive": "계속 유지",
+	"Never compact; refresh until it stops paying": "압축하지 않아요. 이득이 없어질 때까지 갱신해요",
+	"Refresh while the refresh spend stays within the cheaper buy-out, then compact large prompts or let the entry expire":
+		"갱신 비용이 더 저렴한 대안 비용 안에 머무는 동안 갱신하고, 그 뒤에는 큰 프롬프트를 압축하거나 항목을 만료되게 둬요",
 };

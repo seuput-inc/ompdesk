@@ -315,11 +315,11 @@ export function ModelRoleRow({
 			// where it only repeats the name (Plan, Advisor).
 			control={
 				<ModelValueSelect
-					ariaLabel={t("modelRoles.select", { role: name })}
 					clearLabel={t("modelRoles.default")}
 					disabled={busy || !sidecarReady}
 					groups={groups}
 					kind="model"
+					labelSuffix={t("modelRoles.select", { role: name })}
 					onCommit={next => onChange(entry.id, next === "" ? null : next)}
 					placeholder={t("modelRoles.default")}
 					title={!sidecarReady ? t("modelRoles.notConnected") : undefined}

@@ -8,20 +8,13 @@
  * A card with a `preview` is a picture to pick: the preview fills a bordered frame (hidden from assistive tech, the
  * title names the card), the held one ringed in the accent with a check in its corner, the title under it on up to two
  * lines. `tooltip` says more about a card in a kit `Tooltip` (hover, keyboard focus, a long press), never as a native
- * title alone.
- *
- * `groups` splits one radio group into named parts (a theme's System, Light and Dark): each part a `SectionLabel`
- * heading over its own grid, the arrows still moving across every card in order. With `options` (one part)
- * `className` is the grid; with `groups` it is the outer column and `gridClassName` each part's grid.
+ * title alone. `className` is the grid.
  */
 
 import { Check } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { cx } from "../../lib/format";
-import { SectionLabel } from "./SectionLabel";
 import { Tooltip } from "./Tooltip";
-
-type DataAttributes = { [key: `data-${string}`]: string | number | boolean | undefined };
 
 export interface ChoiceCard<V extends string> {
 	value: V;
@@ -35,16 +28,8 @@ export interface ChoiceCard<V extends string> {
 	disabled?: boolean;
 }
 
-export interface ChoiceCardGroup<V extends string> {
-	key: string;
-	/** The part's heading; none for a part that needs no name (System above Light and Dark). */
-	label?: ReactNode;
+export interface ChoiceCardsProps<V extends string> {
 	options: readonly ChoiceCard<V>[];
-	/** DOM hooks of the part's `section` (`data-theme-group="light"`). */
-	attrs?: DataAttributes;
-}
-
-interface ChoiceCardsBase<V extends string> {
 	value: V | null;
 	onChange: (next: V) => void;
 	/** Each card carries its value in this attribute (`data-mcp-transport="stdio"`) for tests and callers. */
@@ -55,12 +40,7 @@ interface ChoiceCardsBase<V extends string> {
 	"aria-labelledby"?: string;
 	disabled?: boolean;
 	className?: string;
-	/** Each part's grid, with `groups`. */
-	gridClassName?: string;
 }
-
-export type ChoiceCardsProps<V extends string> = ChoiceCardsBase<V> &
-	({ options: readonly ChoiceCard<V>[]; groups?: never } | { groups: readonly ChoiceCardGroup<V>[]; options?: never });
 
 const NEXT: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
@@ -69,17 +49,14 @@ const FOCUS_RING =
 
 export function ChoiceCards<V extends string>({
 	options,
-	groups,
 	value,
 	onChange,
 	optionAttr,
 	disabled,
 	className,
-	gridClassName,
 	...aria
 }: ChoiceCardsProps<V>) {
-	const all = groups ? groups.flatMap(group => group.options) : (options ?? []);
-	const enabled = all.filter(option => !disabled && !option.disabled);
+	const enabled = options.filter(option => !disabled && !option.disabled);
 	const tabStop = enabled.find(option => option.value === value)?.value ?? enabled[0]?.value;
 
 	const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -87,12 +64,12 @@ export function ChoiceCards<V extends string>({
 		if (step === undefined) return;
 		const cards = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role=radio]"));
 		const at = cards.indexOf(event.target as HTMLElement);
-		const origin = at >= 0 ? all[at]?.value : value;
+		const origin = at >= 0 ? options[at]?.value : value;
 		event.preventDefault();
 		const from = enabled.findIndex(option => option.value === origin);
 		const next = enabled[(from + step + enabled.length) % enabled.length];
 		if (!next) return;
-		cards[all.indexOf(next)]?.focus();
+		cards[options.indexOf(next)]?.focus();
 		if (next.value !== value) onChange(next.value);
 	};
 
@@ -174,21 +151,9 @@ export function ChoiceCards<V extends string>({
 		);
 	};
 
-	if (!groups) {
-		return (
-			<div {...aria} className={cx("grid gap-2", className)} onKeyDown={onKeyDown} role="radiogroup">
-				{all.map(card)}
-			</div>
-		);
-	}
 	return (
-		<div {...aria} className={cx("flex flex-col gap-3", className)} onKeyDown={onKeyDown} role="radiogroup">
-			{groups.map(group => (
-				<section {...group.attrs} key={group.key}>
-					{group.label ? <SectionLabel className="px-1 pb-1">{group.label}</SectionLabel> : null}
-					<div className={cx("grid gap-2", gridClassName)}>{group.options.map(card)}</div>
-				</section>
-			))}
+		<div {...aria} className={cx("grid gap-2", className)} onKeyDown={onKeyDown} role="radiogroup">
+			{options.map(card)}
 		</div>
 	);
 }

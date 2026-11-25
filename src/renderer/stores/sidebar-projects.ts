@@ -10,31 +10,42 @@
  */
 import { useEffect } from "react";
 import { create } from "zustand";
+import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	EMPTY_SIDEBAR_PROJECTS,
 	parseSidebarProjects,
+	type SidebarLayout,
+	type SidebarLayoutChange,
 	type SidebarProjectsRequest,
 	type SidebarProjectsState,
 } from "../../shared/sidebar-projects";
-import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import { translate } from "../lib/i18n";
 import { lastRead, rememberRead } from "../lib/last-read";
 import { LOCAL_DEVICE } from "../lib/sidebar-memory";
+import { useRemoteStore } from "./remote";
 import { toastError } from "./toast";
 
 const SNAPSHOT_KEY = "sidebar-projects";
+const pending = new Map<string, symbol>();
 /** A host's project folders removed while its link was down, sent when it comes back. */
 const OWED_KEY = "sidebar-projects-owed";
 
 const owedOf = (device: string) => lastRead<string[]>(device, OWED_KEY) ?? [];
 
+function online(device: string): boolean {
+	return (
+		useRemoteStore.getState().state?.hosts.some(host => host.deviceId === device && host.state === "online") === true
+	);
+}
+
 interface SidebarProjectsStore {
 	/** By device (`LOCAL_DEVICE` for this computer). */
 	lists: Record<string, SidebarProjectsState>;
+	/** A cached list still paints, but only a layout received on the current link can authorize an edit. */
+	liveLayouts: Record<string, SidebarLayout | undefined>;
+	changeLayout: (device: string, layout: SidebarLayout, change: SidebarLayoutChange) => Promise<void>;
 	/** Read (again) a computer's list: at mount, and for a host each time its link comes up. */
-	load: (device?: string) => void;
-	/** The person opened a folder there: it joins the list (a worktree as its project), removed before or not. */
-	add: (device: string | undefined, path: string) => void;
+	load: (device?: string, read?: boolean) => void;
 	/** "Remove from sidebar": its sessions stay, listed under no project. */
 	remove: (device: string | undefined, path: string) => Promise<void>;
 	reset: () => void;
@@ -52,33 +63,47 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 		rememberRead(device, SNAPSHOT_KEY, state);
 		set(current => ({ lists: { ...current.lists, [keyOf(device)]: state } }));
 	};
-	const run = (device: string | undefined, request: SidebarProjectsRequest) =>
-		window.omp.sidebarProjects.command(request, device).then(state => apply(device, parseSidebarProjects(state)));
+	const run = async (device: string | undefined, request: SidebarProjectsRequest) => {
+		const key = keyOf(device);
+		const token = Symbol();
+		pending.set(key, token);
+		try {
+			const state = parseSidebarProjects(await window.omp.sidebarProjects.command(request, device));
+			if (pending.get(key) === token && (device === undefined || online(device))) accept(device, state);
+			if (request.action === "layout" && !state.layout) throw codedError("remote_protocol", "No host layout");
+		} finally {
+			if (pending.get(key) === token) pending.delete(key);
+		}
+	};
 	return {
 		lists: {},
-		load: device => {
+		liveLayouts: {},
+		changeLayout: async (device, layout, change) => {
+			if (!online(device)) throw codedError("remote_offline", "Host is offline");
+			if (get().liveLayouts[device] !== layout) throw new Error(translate("prefs.unreadable"));
+			await run(device, { action: "layout", change });
+		},
+		load: (device, read = true) => {
 			if (!window.omp?.sidebarProjects) return;
 			if (get().lists[keyOf(device)] === undefined) {
 				const seed = cached(device);
 				if (seed) set(current => ({ lists: { ...current.lists, [keyOf(device)]: seed } }));
 			}
 			// A list that cannot be read keeps what was known; the sidebar still groups by sessions meanwhile.
-			void replayOwed(device)
-				.then(() => run(device, { action: "get" }))
-				.catch(() => undefined);
-		},
-		add: (device, path) => {
-			if (!path || !window.omp?.sidebarProjects) return;
-			void run(device, { action: "add", path }).catch(() => undefined);
+			if (read)
+				void replayOwed(device)
+					.then(() => run(device, { action: "get" }))
+					.catch(() => undefined);
 		},
 		remove: async (device, path) => {
 			const before = get().lists[keyOf(device)] ?? EMPTY_SIDEBAR_PROJECTS;
 			// The row leaves at once; a refused write puts it back.
-			apply(device, {
+			const optimistic = {
 				...before,
 				projects: before.projects.filter(entry => entry.path !== path),
 				removed: [...before.removed.filter(entry => entry !== path), path],
-			});
+			};
+			apply(device, optimistic);
 			try {
 				await run(device, { action: "remove", path });
 			} catch (error) {
@@ -87,11 +112,14 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 					rememberRead(device, OWED_KEY, [...owedOf(device).filter(entry => entry !== path), path]);
 					return;
 				}
-				apply(device, before);
+				if (get().lists[keyOf(device)] === optimistic) apply(device, before);
 				toastError({ title: translate("sidebar.removeProjectFailed"), error });
 			}
 		},
-		reset: () => set({ lists: {} }),
+		reset: () => {
+			pending.clear();
+			set({ lists: {}, liveLayouts: {} });
+		},
 	};
 });
 
@@ -114,20 +142,46 @@ async function replayOwed(device: string | undefined): Promise<void> {
 	}
 }
 
+function accept(device: string | undefined, state: SidebarProjectsState): void {
+	const key = keyOf(device);
+	pending.delete(key);
+	rememberRead(device, SNAPSHOT_KEY, state);
+	useSidebarProjects.setState(current => ({
+		lists: { ...current.lists, [key]: state },
+		...(device === undefined ? {} : { liveLayouts: { ...current.liveLayouts, [device]: state.layout } }),
+	}));
+}
+
 /** One subscription to every computer's pushed list while any sidebar list is mounted. */
 let followers = 0;
 let unfollow: (() => void) | null = null;
 
 function follow(): () => void {
 	followers += 1;
-	unfollow ??=
-		window.omp?.sidebarProjects?.onState(update =>
-			useSidebarProjects.setState(current => {
-				const state = parseSidebarProjects(update.state);
-				rememberRead(update.device, SNAPSHOT_KEY, state);
-				return { lists: { ...current.lists, [keyOf(update.device)]: state } };
-			}),
-		) ?? null;
+	if (!unfollow) {
+		const stopPush = window.omp?.sidebarProjects?.onState(({ device, state }) => {
+			if (device === undefined || online(device)) accept(device, parseSidebarProjects(state));
+		});
+		const stopLink = useRemoteStore.subscribe((next, prev) => {
+			for (const host of prev.state?.hosts ?? []) {
+				if (
+					host.state !== "online" ||
+					next.state?.hosts.some(h => h.deviceId === host.deviceId && h.state === "online")
+				)
+					continue;
+				pending.delete(host.deviceId);
+				useSidebarProjects.setState(current => ({
+					liveLayouts: { ...current.liveLayouts, [host.deviceId]: undefined },
+				}));
+			}
+		});
+		unfollow = () => {
+			stopPush?.();
+			stopLink();
+			pending.clear();
+			useSidebarProjects.setState({ liveLayouts: {} });
+		};
+	}
 	return () => {
 		followers -= 1;
 		if (followers > 0) return;
@@ -143,7 +197,7 @@ function follow(): () => void {
 export function useProjectList(device?: string, read = true): SidebarProjectsState {
 	useEffect(follow, []);
 	useEffect(() => {
-		if (read) useSidebarProjects.getState().load(device);
+		useSidebarProjects.getState().load(device, read);
 	}, [device, read]);
 	return useSidebarProjects(state => state.lists[keyOf(device)] ?? EMPTY_SIDEBAR_PROJECTS);
 }

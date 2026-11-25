@@ -1,7 +1,7 @@
 /**
  * The CLI's client against the real core process, with node standing in for `tailscale` so the file runs on every
- * platform: how a run that fails, cannot start or is cut short is reported, the environment a run gets, and the two
- * things main still decides by itself (which sign-in link may be opened, how the app is started).
+ * platform: how a run that fails, cannot start or is cut short is reported, the environment a run gets, and how
+ * the app is started.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -153,6 +153,14 @@ describe("starting the Tailscale app", () => {
 			line: "fake-tailscale: unsupported command:",
 		});
 		expect(calls).toEqual([[]]);
+	});
+
+	it.runIf(process.platform === "win32")("uses the tray sibling or the custom executable", async () => {
+		const located: LocatedTailscale = { path: join(dir, "TAILSCALE.EXE"), variant: "windows", app: null, env: {} };
+		const tray = join(dir, "tailscale-ipn.exe");
+		expect(await startTailscaleApp(located, "win32", null)).toEqual({ code: null, line: `spawn ${tray} ENOENT` });
+		const path = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "hostname.exe");
+		expect(await startTailscaleApp({ ...located, path }, "win32", null)).toEqual({ code: 0, line: null });
 	});
 
 	it("says so for a Mac's Tailscale that has no app", async () => {

@@ -308,13 +308,25 @@ export function ExecutionGroup({
 	const changed = state !== "running" && outcome.files.length > 0;
 	// The run's todo as its own todo call recorded it, so a reload shows the same row as live.
 	const todo = transcriptTodoSnapshot(groupEntries) ?? todoSnapshots?.at(-1);
-	// A run that ended but whose own check or command failed never wears the green tick.
-	const attention = state === "complete" && error !== undefined;
+	// Finishing the run is not the same as passing its checks or finishing its todo list.
+	const mark =
+		state !== "complete"
+			? undefined
+			: error
+				? "failed"
+				: todo?.phases.some(phase =>
+							phase.tasks.some(task => task.status !== "completed" && task.status !== "abandoned"),
+						)
+					? "pending"
+					: undefined;
 	const headline =
-		finishedHeadline({ goal, todo }) ??
-		(attention
+		mark === "failed"
 			? t(checks.some(check => !check.passed) ? "chat.work.verdict.failed" : "chat.work.verdict.stepFailed")
-			: undefined);
+			: mark === "pending"
+				? t("chat.work.todosRemain")
+				: state === "failed" || state === "interrupted"
+					? t(`chat.work.${state}`)
+					: finishedHeadline({ goal, todo });
 	const lanes = new Set(agents.map(agent => agent.id));
 	const shownNotes = notes?.filter(note => !settlesLanesOnly(note, lanes));
 	// Skills in the order the run met them: the prompt that began it, skills injected into it, then the ones it read.
@@ -651,11 +663,11 @@ export function ExecutionGroup({
 		<section
 			className={cx("omp-execution-group", className)}
 			data-state={state}
-			data-verdict={attention ? "failed" : undefined}
+			data-verdict={mark === "failed" ? mark : undefined}
 			ref={sectionRef}
 		>
 			<LiveStepPeek
-				attention={attention}
+				mark={mark}
 				summaryRow={
 					hasFindings ? (
 						<>

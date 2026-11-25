@@ -6,6 +6,7 @@
  */
 import type { WebPermission, WebServerFrame } from "../../shared/web-protocol";
 import { type CoreProcess, core } from "../core/process";
+import type { FileEdits } from "./file-edit-reports";
 import { WsRouter, type WsRouterDeps } from "./ws-router";
 
 interface Sent {
@@ -88,17 +89,19 @@ export class TestRouterHost {
 	/** A router whose core side has no edge; `timers: "real"` lets the core batch and ping on its own. */
 	static async open(
 		deps: WsRouterDeps,
-		options: { now?: number; timers?: "manual" | "real" } = {},
+		options: { now?: number; timers?: "manual" | "real"; blobUserData?: string } = {},
 	): Promise<TestRouterHost> {
 		listen();
 		const router = new WsRouter(deps);
 		const host = new TestRouterHost(router, options.now ?? 1_000_000);
-		await core().call("web.router.test.open", {
+		const { generation } = await core().call("web.router.test.open", {
 			host: router.host,
 			now: host.clock.now,
 			manualTimers: options.timers !== "real",
+			blobUserData: options.blobUserData,
 			config: router.config(),
 		});
+		router.started(generation);
 		return host;
 	}
 
@@ -161,5 +164,10 @@ export class TestRouterHost {
 	/** The batch windows open now, by the delay each was armed with. */
 	async pending(): Promise<number[]> {
 		return this.op<number[]>("timers");
+	}
+
+	/** What `deviceId`'s live connections reported of `tabId`'s Files edits, as the core's router keeps it. */
+	async edits(deviceId: string, tabId: string): Promise<FileEdits> {
+		return this.op<FileEdits>("edits", { device: deviceId, text: tabId });
 	}
 }

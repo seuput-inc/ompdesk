@@ -59,7 +59,7 @@ async fn harness() -> Harness {
         writer: store.writer.clone(),
         reader: store.reader.clone(),
         wiki,
-        llm: None,
+        llm_providers: Default::default(),
         auto_improve_require_approval: false,
         auto_improve_review_config: Default::default(),
         embedder: None,
@@ -71,7 +71,7 @@ async fn harness() -> Harness {
         db_path: store.db_path().to_path_buf(),
         bind: "127.0.0.1:0".to_string(),
         home_dir: None,
-        bootstrap_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        bootstrap_gate: ai_memory_mcp::BootstrapGate::default(),
         token_pepper: None,
         active_project: ai_memory_core::ActiveProject::new(),
         scope_invalidator: None,
@@ -236,6 +236,7 @@ async fn observe(
         .insert_observation(Sanitized::new(
             NewObservation {
                 occurred_at: None,
+                file_path: None,
                 session_id,
                 workspace_id: h.ws,
                 project_id: project,
@@ -294,6 +295,36 @@ async fn a_written_conclusion_is_answered_by_memory_query_with_its_title_and_exc
     );
     assert_eq!(rows[0]["created_at"], "2026-10-19T10:00:00Z");
     assert!(rows[0]["rank"].as_f64().is_some(), "{payload}");
+}
+
+#[tokio::test]
+async fn merging_projects_preserves_peer_cursors_and_the_targets_copy_of_each_origin() {
+    let h = harness().await;
+    for (project, origin, body) in [
+        (OTHER, "source-only", "marmot"),
+        (OTHER, "shared", "discarded"),
+        (PROJ, "shared", "retained"),
+    ] {
+        let row = item(origin, SessionId::new(), body, body, "2026-10-19T10:00:00Z");
+        let (status, reply) = write(&h, project, vec![row]).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+    }
+    let before = synced_rows(&h).await;
+    let (status, reply) = post(
+        &h.admin,
+        "/admin/merge-project",
+        json!({"workspace": WS, "from": OTHER, "into": PROJ, "confirm": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let mut moved = before[0].clone();
+    moved["project"] = json!(PROJ);
+    assert_eq!(synced_rows(&h).await, [moved, before[2].clone()]);
+    for body in ["marmot", "retained"] {
+        let found = query(&h.mcp, args(body)).await;
+        assert_eq!(found["conclusion_hits"][0]["title"], body, "{found}");
+    }
+    assert!(no_conclusions(&query(&h.mcp, args("discarded")).await));
 }
 
 #[tokio::test]

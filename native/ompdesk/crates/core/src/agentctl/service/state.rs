@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 use super::AgentControl;
 use super::host::{Deadline, HostState};
 use super::js::one_line;
-use super::text::{ask_title, current_step, elapsed_text, transcript_page};
-use super::types::{ControlTab, SessionStateInfo, TabStatus, running_agent_count};
+use super::text::{ask_title, current_step, elapsed_text, open_in_text, transcript_page};
+use super::types::{ControlTab, SessionStateInfo, StoredWork, TabStatus, running_agent_count};
 use crate::agentctl::rules::pickup::{PickupFacts, PickupReport, pickup_of};
 
 /// `SessionState`: a session as its omp says it now.
@@ -99,7 +99,10 @@ impl AgentControl {
         }
         match tab.status {
             TabStatus::Asleep => {
-                return "not started (it starts when shown or messaged)".to_owned();
+                return match tab.host_work() {
+                    Some(work) => asleep_on_host_line(state, tab, work),
+                    None => "not started (it starts when shown or messaged)".to_owned(),
+                };
             }
             TabStatus::Starting | TabStatus::Restarting | TabStatus::Waiting => {
                 let link = tab.device.as_deref().and_then(|id| state.device(id));
@@ -186,4 +189,30 @@ impl AgentControl {
             None => line.to_owned(),
         }
     }
+}
+
+/// An asleep tab here on a session a tab on its paired host holds: what that tab does (`work`, from the host's summary
+/// every row reads), never "not started", which would read a session running there as stopped.
+fn asleep_on_host_line(state: &HostState, tab: &ControlTab, work: StoredWork) -> String {
+    let device = tab.device.as_deref().unwrap_or("");
+    let computer = tab
+        .device_name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .or_else(|| state.device(device).map(|link| link.name.as_str()))
+        .unwrap_or(device);
+    let holder = tab
+        .host_open
+        .as_ref()
+        .and_then(|open| open.holder.as_deref());
+    let work = match work {
+        StoredWork::Turn => "running",
+        StoredWork::Background => "running, background work still going",
+        StoredWork::Waiting => "waiting for the user's answer there",
+        StoredWork::Idle => "idle",
+    };
+    format!(
+        "{work} ({}; this app's tab on it starts when shown or messaged)",
+        open_in_text(computer, holder)
+    )
 }

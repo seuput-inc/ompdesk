@@ -7,12 +7,9 @@
 /**
  * Closing the last window hides it instead of ending the app: to the tray on Windows, and on
  * macOS to the Dock, which brings the same window back (default on; only `false` keeps the quit on Windows).
+ * The shell reads it (`tauri-shell/src/last_close.rs`), with the notice key below.
  */
 export const CLOSE_TO_TRAY_PREF = "closeToTray";
-
-export function closeToTrayEnabled(stored: unknown): boolean {
-	return stored !== false;
-}
 
 /** Set once the "keeps running in the tray" notice has been shown. */
 export const CLOSE_TO_TRAY_NOTICE_PREF = "closeToTrayNoticeShown";
@@ -35,10 +32,27 @@ export const APP_AUTO_UPDATE_PREF = "appAutoUpdate";
 
 /**
  * Keep tools up to date (Settings › Updates & about; default on, only a stored `false` turns it off): omp itself
- * (`omp-updater.ts`), the tool CLIs of connected accounts (`cli-tools/`) and omp's extensions (`ext-update/`).
- * Replaced the three switches `ompAutoUpdate`, `cliAutoUpdate`, `extensionAutoUpdate` (`retired-prefs.ts`).
+ * (the core's `tools/omp`), the tool CLIs of connected accounts (`tools/cli`) and omp's extensions (`tools/ext.rs`).
+ * Replaced the three switches `ompAutoUpdate`, `cliAutoUpdate`, `extensionAutoUpdate` (`crates/core/src/prefs/retired.rs`).
  */
 export const TOOLS_AUTO_UPDATE_PREF = "toolsAutoUpdate";
+
+/**
+ * omp follows the verified list (src/shared/omp-compat.ts): a pass nobody asked for installs only an omp runners
+ * verified against this release, a newer one is held (`verifying`/`failed`) and told, and stock's own `update.auto` is
+ * taken while "Keep tools up to date" is on. Hidden, default off (only a stored `true` turns it on; the hub's call,
+ * 20 Nov 2026): off, omp's passes stay those of 0.135.0 with the major guard, nothing reads the list and stock's config
+ * is never touched.
+ */
+export const OMP_FOLLOW_VERIFIED_PREF = "ompFollowVerified";
+
+/**
+ * A launch ends by itself a restored session's process whose output path is closed with its other end closed and that
+ * keeps spinning (`session-processes.ts`; the owner's answer of 20 Nov 2026). Hidden, default on: only a stored `false`
+ * turns it off, and then such a process is only reported. No Settings row: Settings has no home for session
+ * processes and the minimal-settings rule keeps it out of a section of its own.
+ */
+export const END_SPINNING_ON_CLOSED_OUTPUT_PREF = "endSpinningOnClosedOutput";
 
 /** A dev server's address in a bash result opens the Preview for the focused tab (default off; only `true` turns it on). */
 export const AUTO_PREVIEW_DEV_SERVER_PREF = "autoPreviewDevServer";

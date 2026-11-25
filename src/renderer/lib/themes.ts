@@ -2,13 +2,13 @@
  * Named theme registry for the OMPdesk GUI.
  *
  * Every theme defines the exact same set of `--omp-*` design tokens (see
- * THEME_TOKEN_KEYS — the canonical 119 keys), the terminal's ANSI 16, six chart
- * series and a focus ring. `dark` and `light` (OMPdesk Dark / Light) are written
- * out below and match theme-dark.css / theme-light.css, where the same values are
- * spelled as `--sc-*` primitives plus `--omp-*` aliases (tokens.css);
- * styles/tokens.test.ts keeps the two in sync. Every other theme is a compact
- * palette (theme-palettes.ts) that theme-builder.ts expands. Transcript and ANSI
- * aliases in global.css follow these tokens in every palette.
+ * THEME_TOKEN_KEYS — the canonical 122 keys), the terminal's ANSI 16, six chart
+ * series and a focus ring. Every theme, `dark` and `light` (OMPdesk Dark / Light)
+ * included, is a compact palette (theme-palettes.ts) that theme-builder.ts
+ * expands. The OMPdesk pair is also spelled out in theme-dark.css /
+ * theme-light.css as `--sc-*` primitives plus `--omp-*` aliases (tokens.css), so
+ * the first paint needs no script; styles/tokens.test.ts keeps the two in sync.
+ * Transcript and ANSI aliases in global.css follow these tokens in every palette.
  * applyThemeByName() writes the full token map as inline custom properties on
  * <html> (beating the `:root` stylesheet rules), mirrors it onto the `--sc-*`
  * palette (SC_TOKEN_SOURCES) so migrated surfaces follow named themes too,
@@ -31,10 +31,14 @@ import {
 	isThemeName,
 	migrateThemeName,
 	type SystemThemePair,
+	schemeOfTheme,
 	systemThemeFor,
+	THEME_SETS,
 	type ThemeName,
 	type ThemeScheme,
 	type ThemeSelection,
+	type ThemeSetId,
+	themeSetOf,
 } from "../../shared/theme-names";
 import { saveGuiPreference } from "./display-preferences";
 import { acceptsActiveTabEvents, onActiveTabRouteSettled, onActiveTabRouteState } from "./tab-routing";
@@ -46,16 +50,18 @@ import {
 	THEME_SCHEME_STORAGE_KEY,
 	type ThemeMode,
 } from "./theme";
-import { ANSI_KEYS, ansiRow, buildTheme, CHART_KEYS } from "./theme-builder";
+import { ANSI_KEYS, buildTheme, CHART_KEYS } from "./theme-builder";
 import {
+	githubDark,
 	githubLight,
 	gruvboxDark,
+	gruvboxLight,
 	highContrastDark,
 	highContrastLight,
-	nord as nordPalette,
-	sepia,
+	ompdeskDark,
+	ompdeskLight,
+	solarizedDark,
 	solarizedLight,
-	tokyoNight,
 } from "./theme-palettes";
 
 /** Canonical token keys, in stylesheet order. Every theme defines all of them. */
@@ -75,6 +81,9 @@ export const THEME_TOKEN_KEYS = [
 	"--omp-warning",
 	"--omp-warning-dim",
 	"--omp-info",
+	"--omp-attention",
+	"--omp-attention-dim",
+	"--omp-unread",
 	"--omp-info-dim",
 	"--omp-text",
 	"--omp-text-secondary",
@@ -207,6 +216,8 @@ export const SC_TOKEN_SOURCES = {
 	"--sc-danger": "--omp-error",
 	"--sc-danger-fg": "--omp-btn-danger-text",
 	"--sc-info": "--omp-info",
+	"--sc-attention": "--omp-attention",
+	"--sc-unread": "--omp-unread",
 	"--sc-selection": "--omp-selection-bg",
 	"--sc-shadow-sm": "--omp-shadow-sm",
 	"--sc-shadow-md": "--omp-shadow-md",
@@ -231,283 +242,34 @@ export interface ThemeDefinition {
 	chart: readonly string[];
 	/** Keyboard focus ring. */
 	focusRing: string;
+	/** A floating surface's opacity (0–1): `--sc-floating-mix`, global.css `.omp-floating`. */
+	floating: number;
 }
 
-const dark: ThemeDefinition = {
-	label: "OMPdesk Dark",
-	description: "Neutral charcoal with the OMPdesk indigo accent.",
-	scheme: "dark",
-	ansi: ansiRow({
-		ansi: ["#8f8f99", "#f27a7d", "#5bc98c", "#e2b552", "#a5a7fa", "#f0a1bd", "#6cc7c0", "#c4c4cb"],
-		text: "#ededf0",
-	}),
-	chart: ["#8b8df8", "#79a6f6", "#5bc98c", "#e2b552", "#f27a7d", "#a1a1aa"],
-	focusRing: "#8b8df8",
-	tokens: {
-		"--omp-accent": "#8b8df8",
-		"--omp-accent-bright": "#a1a3fa",
-		"--omp-accent-dim": "rgba(139, 141, 248, 0.12)",
-		"--omp-accent-glow": "rgba(139, 141, 248, 0.22)",
-		"--omp-border": "#3a3a41",
-		"--omp-border-accent": "rgba(139, 141, 248, 0.55)",
-		"--omp-border-muted": "#2a2a30",
-		"--omp-border-strong": "#6c6c76",
-		"--omp-success": "#5bc98c",
-		"--omp-success-dim": "rgba(91, 201, 140, 0.12)",
-		"--omp-error": "#f27a7d",
-		"--omp-error-dim": "rgba(242, 122, 125, 0.12)",
-		"--omp-warning": "#e2b552",
-		"--omp-warning-dim": "rgba(226, 181, 82, 0.12)",
-		"--omp-info": "#79a6f6",
-		"--omp-info-dim": "rgba(121, 166, 246, 0.12)",
-		"--omp-text": "#ededf0",
-		"--omp-text-secondary": "#c4c4cb",
-		"--omp-bg-primary": "#19191c",
-		"--omp-bg-secondary": "#1f1f23",
-		"--omp-bg-tertiary": "#28282d",
-		"--omp-bg-elevated": "#232327",
-		"--omp-selected-bg": "rgba(237, 237, 240, 0.07)",
-		"--omp-user-msg-bg": "#222226",
-		"--omp-user-msg-border": "#3a3a41",
-		"--omp-custom-msg-bg": "#1f1f23",
-		"--omp-code-bg": "#141416",
-		"--omp-tool-pending-bg": "#1f1f23",
-		"--omp-tool-error-bg": "rgba(242, 122, 125, 0.07)",
-		"--omp-tool-output": "#c4c4cb",
-		"--omp-tool-rail-running": "var(--omp-accent)",
-		"--omp-tool-rail-done": "#5bc98c",
-		"--omp-tool-rail-error": "#f27a7d",
-		"--omp-md-heading": "#ededf0",
-		"--omp-md-link": "#8b8df8",
-		"--omp-md-link-url": "#a1a1aa",
-		"--omp-md-code": "#f0a1bd",
-		"--omp-md-code-block": "#ededf0",
-		"--omp-md-code-block-border": "#3a3a41",
-		"--omp-md-quote": "#c4c4cb",
-		"--omp-md-quote-border": "#4a4a53",
-		"--omp-md-hr": "#2a2a30",
-		"--omp-md-list-bullet": "#a1a1aa",
-		"--omp-diff-added": "#5bc98c",
-		"--omp-diff-added-bg": "rgba(91, 201, 140, 0.12)",
-		"--omp-diff-removed": "#f27a7d",
-		"--omp-diff-removed-bg": "rgba(242, 122, 125, 0.12)",
-		"--omp-diff-context": "#a1a1aa",
-		"--omp-syntax-comment": "#8f8f99",
-		"--omp-syntax-keyword": "#a5a7fa",
-		"--omp-syntax-function": "#6cc7c0",
-		"--omp-syntax-variable": "#ededf0",
-		"--omp-syntax-string": "#e3b77a",
-		"--omp-syntax-number": "#f0a1bd",
-		"--omp-syntax-type": "#9fd39a",
-		"--omp-syntax-operator": "#c4c4cb",
-		"--omp-syntax-punctuation": "#a1a1aa",
-		"--omp-thinking-off": "#8f8f99",
-		"--omp-thinking-minimal": "#a1a1aa",
-		"--omp-thinking-low": "#c4c4cb",
-		"--omp-thinking-medium": "#8b8df8",
-		"--omp-thinking-high": "#a1a3fa",
-		"--omp-thinking-xhigh": "#ededf0",
-		"--omp-status-bg": "#141416",
-		"--omp-status-model": "#c4c4cb",
-		"--omp-status-path": "#a1a1aa",
-		"--omp-status-git-clean": "#5bc98c",
-		"--omp-status-git-dirty": "#e2b552",
-		"--omp-status-context": "#c4c4cb",
-		"--omp-status-spend": "#c4c4cb",
-		"--omp-status-subagents": "var(--omp-accent)",
-		"--omp-status-muted": "#a1a1aa",
-		"--omp-status-dim": "#8f8f99",
-		"--omp-status-text": "#ededf0",
-		"--omp-muted": "#a1a1aa",
-		"--omp-dim": "#8f8f99",
-		"--omp-link": "#8b8df8",
-		"--omp-custom-msg-label": "#8b8df8",
-		"--omp-input-bg": "#1f1f23",
-		"--omp-input-border": "#6c6c76",
-		"--omp-input-focus-border": "#8b8df8",
-		"--omp-input-glow": "rgba(139, 141, 248, 0.22)",
-		"--omp-btn-primary-bg": "#8b8df8",
-		"--omp-btn-primary-text": "#0b0b1a",
-		"--omp-btn-secondary-bg": "#28282d",
-		"--omp-btn-danger-bg": "#f27a7d",
-		"--omp-btn-danger-text": "#1c0a0b",
-		"--omp-badge-bg": "#28282d",
-		"--omp-badge-text": "#c4c4cb",
-		"--omp-badge-accent": "#8b8df8",
-		"--omp-overlay-bg": "rgba(0, 0, 0, 0.6)",
-		"--omp-modal-bg": "#232327",
-		"--omp-modal-border": "#3a3a41",
-		"--omp-toast-bg": "#232327",
-		"--omp-toast-text": "#ededf0",
-		"--omp-toast-border": "#3a3a41",
-		"--omp-progress-bg": "#28282d",
-		"--omp-progress-fill": "#8b8df8",
-		"--omp-sidebar-bg": "#141416",
-		"--omp-sidebar-item-hover": "rgba(237, 237, 240, 0.05)",
-		"--omp-sidebar-item-active": "rgba(237, 237, 240, 0.07)",
-		"--omp-selection-bg": "rgba(139, 141, 248, 0.24)",
-		"--omp-scrollbar-thumb": "#45454e",
-		"--omp-scrollbar-track": "transparent",
-		"--omp-streaming-cursor": "var(--omp-accent)",
-		"--omp-panel-bg": "#141416",
-		"--omp-panel-border": "#2a2a30",
-		"--omp-panel-header": "#a1a1aa",
-		"--omp-titlebar-bg": "#19191c",
-		"--omp-titlebar-text": "#ededf0",
-		"--omp-shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.3)",
-		"--omp-shadow-md": "0 6px 20px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.3)",
-		"--omp-shadow-lg": "0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35)",
-	},
-};
-
-const light: ThemeDefinition = {
-	label: "OMPdesk Light",
-	description: "Clean white with the OMPdesk indigo accent.",
-	scheme: "light",
-	ansi: ansiRow({
-		ansi: ["#6a6a73", "#bf3a3e", "#18794e", "#935f00", "#4646c0", "#a3365c", "#0f6b75", "#46464f"],
-		text: "#1b1b1f",
-	}),
-	chart: ["#5b5bd6", "#2f62c4", "#18794e", "#935f00", "#bf3a3e", "#5f5f68"],
-	focusRing: "#5b5bd6",
-	tokens: {
-		"--omp-accent": "#5b5bd6",
-		"--omp-accent-bright": "#4f4fc4",
-		"--omp-accent-dim": "rgba(91, 91, 214, 0.12)",
-		"--omp-accent-glow": "rgba(91, 91, 214, 0.22)",
-		"--omp-border": "#dcdce2",
-		"--omp-border-accent": "rgba(91, 91, 214, 0.55)",
-		"--omp-border-muted": "#ebebee",
-		"--omp-border-strong": "#878790",
-		"--omp-success": "#18794e",
-		"--omp-success-dim": "rgba(24, 121, 78, 0.12)",
-		"--omp-error": "#bf3a3e",
-		"--omp-error-dim": "rgba(191, 58, 62, 0.12)",
-		"--omp-warning": "#935f00",
-		"--omp-warning-dim": "rgba(147, 95, 0, 0.12)",
-		"--omp-info": "#2f62c4",
-		"--omp-info-dim": "rgba(47, 98, 196, 0.12)",
-		"--omp-text": "#1b1b1f",
-		"--omp-text-secondary": "#46464f",
-		"--omp-bg-primary": "#ffffff",
-		"--omp-bg-secondary": "#f3f3f5",
-		"--omp-bg-tertiary": "#ececef",
-		"--omp-bg-elevated": "#ffffff",
-		"--omp-selected-bg": "rgba(27, 27, 31, 0.07)",
-		"--omp-user-msg-bg": "#f3f3f5",
-		"--omp-user-msg-border": "#dcdce2",
-		"--omp-custom-msg-bg": "#f3f3f5",
-		"--omp-code-bg": "#f7f7f8",
-		"--omp-tool-pending-bg": "#f3f3f5",
-		"--omp-tool-error-bg": "rgba(191, 58, 62, 0.06)",
-		"--omp-tool-output": "#46464f",
-		"--omp-tool-rail-running": "var(--omp-accent)",
-		"--omp-tool-rail-done": "#18794e",
-		"--omp-tool-rail-error": "#bf3a3e",
-		"--omp-md-heading": "#1b1b1f",
-		"--omp-md-link": "#5b5bd6",
-		"--omp-md-link-url": "#5f5f68",
-		"--omp-md-code": "#a3365c",
-		"--omp-md-code-block": "#1b1b1f",
-		"--omp-md-code-block-border": "#dcdce2",
-		"--omp-md-quote": "#46464f",
-		"--omp-md-quote-border": "#c9c9d1",
-		"--omp-md-hr": "#ebebee",
-		"--omp-md-list-bullet": "#5f5f68",
-		"--omp-diff-added": "#18794e",
-		"--omp-diff-added-bg": "rgba(24, 121, 78, 0.07)",
-		"--omp-diff-removed": "#bf3a3e",
-		"--omp-diff-removed-bg": "rgba(191, 58, 62, 0.06)",
-		"--omp-diff-context": "#5f5f68",
-		"--omp-syntax-comment": "#6a6a73",
-		"--omp-syntax-keyword": "#4646c0",
-		"--omp-syntax-function": "#0f6b75",
-		"--omp-syntax-variable": "#1b1b1f",
-		"--omp-syntax-string": "#865100",
-		"--omp-syntax-number": "#a3365c",
-		"--omp-syntax-type": "#2b6b3a",
-		"--omp-syntax-operator": "#46464f",
-		"--omp-syntax-punctuation": "#5f5f68",
-		"--omp-thinking-off": "#6a6a73",
-		"--omp-thinking-minimal": "#5f5f68",
-		"--omp-thinking-low": "#46464f",
-		"--omp-thinking-medium": "#5b5bd6",
-		"--omp-thinking-high": "#4f4fc4",
-		"--omp-thinking-xhigh": "#1b1b1f",
-		"--omp-status-bg": "#f7f7f8",
-		"--omp-status-model": "#46464f",
-		"--omp-status-path": "#5f5f68",
-		"--omp-status-git-clean": "#18794e",
-		"--omp-status-git-dirty": "#935f00",
-		"--omp-status-context": "#46464f",
-		"--omp-status-spend": "#46464f",
-		"--omp-status-subagents": "var(--omp-accent)",
-		"--omp-status-muted": "#5f5f68",
-		"--omp-status-dim": "#6a6a73",
-		"--omp-status-text": "#1b1b1f",
-		"--omp-muted": "#5f5f68",
-		"--omp-dim": "#6a6a73",
-		"--omp-link": "#5b5bd6",
-		"--omp-custom-msg-label": "#5b5bd6",
-		"--omp-input-bg": "#ffffff",
-		"--omp-input-border": "#878790",
-		"--omp-input-focus-border": "#5b5bd6",
-		"--omp-input-glow": "rgba(91, 91, 214, 0.22)",
-		"--omp-btn-primary-bg": "#5b5bd6",
-		"--omp-btn-primary-text": "#ffffff",
-		"--omp-btn-secondary-bg": "#ececef",
-		"--omp-btn-danger-bg": "#bf3a3e",
-		"--omp-btn-danger-text": "#ffffff",
-		"--omp-badge-bg": "#ececef",
-		"--omp-badge-text": "#46464f",
-		"--omp-badge-accent": "#5b5bd6",
-		"--omp-overlay-bg": "rgba(15, 15, 20, 0.32)",
-		"--omp-modal-bg": "#ffffff",
-		"--omp-modal-border": "#dcdce2",
-		"--omp-toast-bg": "#ffffff",
-		"--omp-toast-text": "#1b1b1f",
-		"--omp-toast-border": "#dcdce2",
-		"--omp-progress-bg": "#ececef",
-		"--omp-progress-fill": "#5b5bd6",
-		"--omp-sidebar-bg": "#f7f7f8",
-		"--omp-sidebar-item-hover": "rgba(27, 27, 31, 0.05)",
-		"--omp-sidebar-item-active": "rgba(27, 27, 31, 0.07)",
-		"--omp-selection-bg": "rgba(91, 91, 214, 0.24)",
-		"--omp-scrollbar-thumb": "#c6c6ce",
-		"--omp-scrollbar-track": "transparent",
-		"--omp-streaming-cursor": "var(--omp-accent)",
-		"--omp-panel-bg": "#f7f7f8",
-		"--omp-panel-border": "#ebebee",
-		"--omp-panel-header": "#5f5f68",
-		"--omp-titlebar-bg": "#ffffff",
-		"--omp-titlebar-text": "#1b1b1f",
-		"--omp-shadow-sm": "0 1px 2px rgba(16, 16, 24, 0.06)",
-		"--omp-shadow-md": "0 4px 14px rgba(16, 16, 24, 0.08), 0 1px 3px rgba(16, 16, 24, 0.05)",
-		"--omp-shadow-lg": "0 18px 48px rgba(16, 16, 24, 0.16), 0 2px 8px rgba(16, 16, 24, 0.06)",
-	},
-};
+const dark = buildTheme(ompdeskDark);
+const light = buildTheme(ompdeskLight);
 
 const customThemes = {
 	"github-light": buildTheme(githubLight),
 	"solarized-light": buildTheme(solarizedLight),
-	sepia: buildTheme(sepia),
+	"gruvbox-light": buildTheme(gruvboxLight),
 	"hc-light": buildTheme(highContrastLight),
-	nord: buildTheme(nordPalette),
-	"tokyo-night": buildTheme(tokyoNight),
+	"github-dark": buildTheme(githubDark),
+	"solarized-dark": buildTheme(solarizedDark),
 	"gruvbox-dark": buildTheme(gruvboxDark),
 	"hc-dark": buildTheme(highContrastDark),
 } as const;
 
-/** Every theme by id, in picker order (the light group, then the dark group). */
+/** Every theme by id: the light half of each set in picker order, then the dark halves. */
 export const THEMES = {
 	light,
 	"github-light": customThemes["github-light"],
 	"solarized-light": customThemes["solarized-light"],
-	sepia: customThemes.sepia,
+	"gruvbox-light": customThemes["gruvbox-light"],
 	"hc-light": customThemes["hc-light"],
 	dark,
-	nord: customThemes.nord,
-	"tokyo-night": customThemes["tokyo-night"],
+	"github-dark": customThemes["github-dark"],
+	"solarized-dark": customThemes["solarized-dark"],
 	"gruvbox-dark": customThemes["gruvbox-dark"],
 	"hc-dark": customThemes["hc-dark"],
 } as const satisfies Record<ThemeName, ThemeDefinition>;
@@ -519,9 +281,14 @@ export function isThemeSelection(value: unknown): value is ThemeSelection {
 	return value === "system" || isThemeName(value);
 }
 
-/** What System shows per OS scheme; set from the prefs at boot and by {@link setSystemThemePair}. */
+/** What System shows per OS scheme, which is the set last chosen; set from the prefs at boot and by {@link applyThemeSet}. */
 let systemPair: SystemThemePair = { ...DEFAULT_SYSTEM_THEMES };
-let currentSelection: ThemeSelection = "system";
+
+/** A selection as the picker shows it: the set of the theme it shows now, and whether it follows the OS or stays on one half. */
+export interface ThemeSetChoice {
+	set: ThemeSetId;
+	mode: ThemeMode;
+}
 
 export function getSystemThemePair(): SystemThemePair {
 	return systemPair;
@@ -574,13 +341,13 @@ function paintBackgrounds(selection: ThemeSelection): Partial<Record<ThemeScheme
  */
 export function applyThemeByName(selection: ThemeSelection, opts: { persist?: boolean } = {}): void {
 	themeSelectionVersion++;
-	currentSelection = selection;
 	const { persist = true } = opts;
 	const name = resolveThemeName(selection);
 	const theme = THEMES[name];
 	const mode = selection === "system" ? "system" : theme.scheme;
 	applyTheme(mode);
 	const root = document.documentElement;
+	if (root.getAttribute("data-theme-name") !== name) holdTransitions(root);
 	const style = root.style;
 	for (const key of THEME_TOKEN_KEYS) style.setProperty(key, theme.tokens[key]);
 	for (const [key, value] of Object.entries(scTokensFor(theme))) style.setProperty(key, value);
@@ -596,6 +363,17 @@ export function applyThemeByName(selection: ThemeSelection, opts: { persist?: bo
 	}
 }
 
+/**
+ * Every color transition off while a palette swaps (Orca's `.theme-transition-disabled`): otherwise each hover-fading
+ * control eases from the old theme's color to the new one on its own clock and the window repaints for a beat in
+ * mixed colors. The mark stays two frames, so the swap's style recalc lands inside it.
+ */
+function holdTransitions(root: HTMLElement): void {
+	if (typeof requestAnimationFrame !== "function") return;
+	root.setAttribute("data-theme-switching", "");
+	requestAnimationFrame(() => requestAnimationFrame(() => root.removeAttribute("data-theme-switching")));
+}
+
 /** Mirror what pre-paint.js reads on the next cold start: the scheme (or "system") and each scheme's page background. */
 function storePaint(selection: ThemeSelection, mode: ThemeMode): void {
 	try {
@@ -606,22 +384,25 @@ function storePaint(selection: ThemeSelection, mode: ThemeMode): void {
 	}
 }
 
-/**
- * Chooses the light and dark theme System shows, then re-applies System when it is the
- * selection. A name of the wrong scheme falls back to the OMPdesk default of that scheme.
- * `persist: false` is for a host's pair shown without saving it.
- */
-export function setSystemThemePair(next: Partial<SystemThemePair>, opts: { persist?: boolean } = {}): void {
-	const { persist = true } = opts;
-	systemPair = {
-		light: systemThemeFor("light", next.light ?? systemPair.light),
-		dark: systemThemeFor("dark", next.dark ?? systemPair.dark),
+/** How the picker reads a selection. A pair that mixes two sets (stored before the sets) reads as the set of the half on screen. */
+export function themeSetChoice(selection: ThemeSelection): ThemeSetChoice {
+	return {
+		set: themeSetOf(resolveThemeName(selection)).id,
+		mode: selection === "system" ? "system" : schemeOfTheme(selection),
 	};
-	if (persist) {
-		if (next.light !== undefined) void saveGuiPreference("systemLightTheme", systemPair.light, () => {});
-		if (next.dark !== undefined) void saveGuiPreference("systemDarkTheme", systemPair.dark, () => {});
-	}
-	if (currentSelection === "system") applyThemeByName("system", { persist });
+}
+
+/**
+ * Chooses a set and how it shows: `system` follows the OS between the set's halves, `light` or `dark` stays on one.
+ * The set is saved as the System pair either way, so System always means the set last chosen; `themeName` holds
+ * `system` or the half.
+ */
+export function applyThemeSet({ set, mode }: ThemeSetChoice): void {
+	const { light, dark } = THEME_SETS.find(entry => entry.id === set)!;
+	systemPair = { light, dark };
+	void saveGuiPreference("systemLightTheme", light, () => {});
+	void saveGuiPreference("systemDarkTheme", dark, () => {});
+	applyThemeByName(mode === "system" ? "system" : systemPair[mode]);
 }
 
 /**
@@ -722,11 +503,15 @@ export function scTokensFor(theme: ThemeDefinition): Record<ScTokenKey, string> 
 
 /**
  * The custom properties a theme sets beyond THEME_TOKEN_KEYS: the terminal's ANSI 16 (`--omp-ansi-*`),
- * the chart series (`--omp-chart-1…6`) and the focus ring (`--sc-focus-ring`). global.css gives the
- * first two defaults taken from the semantic tokens, so a stylesheet-only first paint still reads.
+ * the chart series (`--omp-chart-1…6`), the focus ring (`--sc-focus-ring`) and the floating glass's opacity
+ * (`--sc-floating-mix`). global.css gives the first two defaults taken from the semantic tokens, so a
+ * stylesheet-only first paint still reads.
  */
 export function themeExtrasFor(theme: ThemeDefinition): Record<string, string> {
-	const extras: Record<string, string> = { "--sc-focus-ring": theme.focusRing };
+	const extras: Record<string, string> = {
+		"--sc-focus-ring": theme.focusRing,
+		"--sc-floating-mix": `${Math.round(theme.floating * 100)}%`,
+	};
 	ANSI_KEYS.forEach((key, index) => {
 		extras[key] = theme.ansi[index] as string;
 	});

@@ -91,6 +91,65 @@ describe("a deferred chunk", () => {
 		expect(onLoaded).toHaveBeenCalledWith("m");
 	});
 
+	it("keeps failure controls usable and single-flights their explicit retry", async () => {
+		const { target, sched } = scheduling();
+		const pending = Promise.withResolvers<string>();
+		const load = vi.fn<() => Promise<string>>().mockRejectedValueOnce(chunkError()).mockReturnValue(pending.promise);
+		const onLoaded = vi.fn();
+		let retry = () => {};
+		loadDeferredChunk(
+			{
+				load,
+				onLoaded,
+				onFailed: next => {
+					retry = next;
+				},
+				canRetryOnInteraction: () => false,
+				start: "now",
+			},
+			sched,
+		);
+		await settle();
+		target.dispatchEvent(new Event("pointerdown"));
+		target.dispatchEvent(new Event("keydown"));
+		await settle();
+		expect(load).toHaveBeenCalledTimes(1);
+		Reflect.apply(retry, undefined, [new Event("click")]);
+		expect(load).toHaveBeenCalledTimes(2);
+		retry();
+		expect(load).toHaveBeenCalledTimes(2);
+		pending.resolve("module");
+		await settle();
+		expect(onLoaded).toHaveBeenCalledExactlyOnceWith("module");
+	});
+
+	it("ignores an explicit retry's late result after cancellation", async () => {
+		const { sched } = scheduling();
+		const pending = Promise.withResolvers<string>();
+		const load = vi.fn<() => Promise<string>>().mockRejectedValueOnce(chunkError()).mockReturnValue(pending.promise);
+		const onLoaded = vi.fn();
+		let retry = () => {};
+		const cancel = loadDeferredChunk(
+			{
+				load,
+				onLoaded,
+				onFailed: next => {
+					retry = next;
+				},
+				start: "now",
+			},
+			sched,
+		);
+		await settle();
+		retry();
+		cancel();
+		pending.resolve("module");
+		await settle();
+		retry();
+		expect(load).toHaveBeenCalledTimes(2);
+		expect(onLoaded).not.toHaveBeenCalled();
+	});
+
 	it("delivers nothing and listens for nothing once cancelled", async () => {
 		const { target, idle, sched } = scheduling();
 		const load = vi.fn(async () => "module");

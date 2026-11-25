@@ -4,9 +4,9 @@
  * theme author states the surfaces, the text tiers, the accent, the four status
  * colors, the syntax roles and the terminal colors; everything derived from them
  * (washes, rails, buttons, badges, panels, shadows) follows one rule here, so
- * twelve themes cannot drift apart in how a diff line or a toast is made.
- * The OMPdesk Light and Dark themes are spelled out token by token in themes.ts
- * because theme-light.css / theme-dark.css must match them (styles/tokens.test.ts).
+ * every theme, OMPdesk Light and Dark included, makes a diff line or a toast the
+ * same way. theme-light.css / theme-dark.css spell the OMPdesk pair out for the
+ * first paint and must match what this builds (styles/tokens.test.ts).
  */
 
 import { mix, withAlpha } from "./theme-color";
@@ -46,6 +46,12 @@ export interface ThemePalette {
 	warning: string;
 	error: string;
 	info: string;
+	/** Links in prose and in the chrome; the accent when absent (a near-black accent needs a hue of its own). */
+	link?: string;
+	/** A session waiting on the person (the sidebar's bar, the working title, the work board); the warning when absent. */
+	attention?: string;
+	/** An unseen finish (the sidebar's ✓); the info color when absent. */
+	unread?: string;
 	/** Ink on an error-filled button. */
 	onError: string;
 	/** Inline `code` in prose. */
@@ -74,6 +80,9 @@ export interface ThemePalette {
 	/** A diff's added and removed line washes; 12 % (dark) or 10 % (light) of success and error when absent. */
 	diffAddedBg?: string;
 	diffRemovedBg?: string;
+	/** How opaque a popover's or menu's glass is (0–1, `--sc-floating-mix`); opaque when absent, because a palette whose
+	 * quiet text sits near its floor on the raised surface has no contrast to give to what shows through. */
+	floating?: number;
 	/** Modal scrim. */
 	overlay: string;
 	/** `r, g, b` of the shadow color. */
@@ -122,6 +131,9 @@ export function buildTheme(p: ThemePalette): ThemeDefinition {
 		"--omp-warning-dim": withAlpha(p.warning, 0.12),
 		"--omp-info": p.info,
 		"--omp-info-dim": withAlpha(p.info, 0.12),
+		"--omp-attention": p.attention ?? p.warning,
+		"--omp-attention-dim": withAlpha(p.attention ?? p.warning, 0.12),
+		"--omp-unread": p.unread ?? p.info,
 		"--omp-text": p.text,
 		"--omp-text-secondary": p.textSecondary,
 		"--omp-bg-primary": p.bg,
@@ -140,7 +152,7 @@ export function buildTheme(p: ThemePalette): ThemeDefinition {
 		"--omp-tool-rail-done": p.success,
 		"--omp-tool-rail-error": p.error,
 		"--omp-md-heading": p.text,
-		"--omp-md-link": p.accent,
+		"--omp-md-link": p.link ?? p.accent,
 		"--omp-md-link-url": p.muted,
 		"--omp-md-code": p.inlineCode,
 		"--omp-md-code-block": p.text,
@@ -182,7 +194,7 @@ export function buildTheme(p: ThemePalette): ThemeDefinition {
 		"--omp-status-text": p.text,
 		"--omp-muted": p.muted,
 		"--omp-dim": p.dim,
-		"--omp-link": p.accent,
+		"--omp-link": p.link ?? p.accent,
 		"--omp-custom-msg-label": p.accent,
 		"--omp-input-bg": dark ? p.secondary : p.elevated,
 		"--omp-input-border": p.borderStrong,
@@ -216,13 +228,15 @@ export function buildTheme(p: ThemePalette): ThemeDefinition {
 		"--omp-panel-header": p.muted,
 		"--omp-titlebar-bg": p.bg,
 		"--omp-titlebar-text": p.text,
-		"--omp-shadow-sm": dark ? `0 1px 2px rgba(${p.shadow}, 0.3)` : `0 1px 2px rgba(${p.shadow}, 0.06)`,
+		// Orca's three elevations (main.css, ui/menu-surface.ts, ui/dialog.tsx): a hairline lift, a floating menu, a dialog
+		// with a top highlight.
+		"--omp-shadow-sm": dark ? `0 1px 2px rgba(${p.shadow}, 0.3)` : `0 1px 2px rgba(${p.shadow}, 0.05)`,
 		"--omp-shadow-md": dark
-			? `0 6px 20px rgba(${p.shadow}, 0.38), 0 1px 3px rgba(${p.shadow}, 0.3)`
-			: `0 4px 14px rgba(${p.shadow}, 0.08), 0 1px 3px rgba(${p.shadow}, 0.05)`,
+			? `0 12px 32px rgba(${p.shadow}, 0.45)`
+			: `0 1px 2px rgba(${p.shadow}, 0.04), 0 8px 24px rgba(${p.shadow}, 0.08)`,
 		"--omp-shadow-lg": dark
-			? `0 24px 64px rgba(${p.shadow}, 0.55), 0 2px 8px rgba(${p.shadow}, 0.35)`
-			: `0 18px 48px rgba(${p.shadow}, 0.16), 0 2px 8px rgba(${p.shadow}, 0.06)`,
+			? `0 20px 60px rgba(${p.shadow}, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08)`
+			: `0 20px 60px rgba(${p.shadow}, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08)`,
 	};
 	return {
 		label: p.label,
@@ -233,5 +247,6 @@ export function buildTheme(p: ThemePalette): ThemeDefinition {
 		ansi: ansiRow(p),
 		chart: p.chart,
 		focusRing: p.focusRing ?? p.accent,
+		floating: p.floating ?? 1,
 	};
 }

@@ -53,6 +53,7 @@ let queueMove: Mock;
 let queueEdit: Mock;
 let queueRemove: Mock;
 let queueClear: Mock;
+let command: Mock;
 let getQueue: Mock;
 
 async function flush(): Promise<void> {
@@ -98,10 +99,12 @@ async function mount(steering: RpcQueuedMessage[], followUp: RpcQueuedMessage[])
 	queueRemove = vi.fn(async () => ok({ removed: true }));
 	queueMove = vi.fn(async () => ok({ lane: "steering", index: 0 }));
 	queueEdit = vi.fn(async () => ok({ updated: true }));
+	command = vi.fn(async () => ok({ held: true }));
 	queueClear = vi.fn(async () => ok({ removed: 0 }));
 	getQueue = vi.fn(async () => ok({ steering, followUp }));
 	(window as unknown as Record<string, unknown>).omp = {
 		rpc: {
+			command,
 			getQueue,
 			queueEdit,
 			queueMove,
@@ -163,15 +166,18 @@ describe("ComposerQueuePill", () => {
 		expect(document.querySelector(".omp-composer-queue")).toBeNull();
 	});
 
-	it("opens a popover with one heading per lane and its count", async () => {
+	it("opens a popover with one heading per lane, its count and how the agent's real modes deliver it", async () => {
 		await mount([queued("s1", "steer first")], [queued("f1", "follow later"), queued("f2", "follow too")]);
+		useSettingsStore.getState().update({ steeringMode: "one-at-a-time", followUpMode: "one-at-a-time" });
 		await openPopover();
 		expect(pill()?.getAttribute("aria-expanded")).toBe("true");
-		const heads = Array.from(document.querySelectorAll("[data-lane-head]")) as unknown as TestElement[];
-		expect(heads.map(head => head.textContent)).toEqual([
-			"After next step1· arrive togetherClear",
-			"After this turn2· sent one by oneClear",
-		]);
+		const heads = () =>
+			(Array.from(document.querySelectorAll("[data-lane-head]")) as unknown as TestElement[]).map(
+				head => head.textContent,
+			);
+		expect(heads()).toEqual(["After next step1· one per stepClear", "After this turn2· sent one by oneClear"]);
+		await act(async () => useSettingsStore.getState().update({ steeringMode: "all", followUpMode: "all" }));
+		expect(heads()).toEqual(["After next step1· arrive togetherClear", "After this turn2· sent togetherClear"]);
 		const rows = Array.from(document.querySelectorAll("[data-queue-row]")) as unknown as TestElement[];
 		expect(rows.map(row => row.getAttribute("data-lane"))).toEqual(["steering", "followUp", "followUp"]);
 	});
@@ -192,7 +198,7 @@ describe("ComposerQueuePill", () => {
 		await act(async () =>
 			useSettingsStore.getState().update({ steeringMode: "one-at-a-time", interruptMode: "immediate" }),
 		);
-		expect(policy()).toBe("Steers arrive one at a time · a steer interrupts the running tool");
+		expect(policy()).toBe("Steers arrive one at a time · a steer moves a running shell to the background");
 	});
 
 	it("names every row action by the start of its message", async () => {
@@ -200,7 +206,6 @@ describe("ComposerQueuePill", () => {
 		await mount([queued("s1", "steer first")], [queued("f1", long)]);
 		await openPopover();
 		expect(byLabel("Edit: steer first")).toBeDefined();
-		expect(byLabel("Move after this turn: steer first")).toBeDefined();
 		expect(byLabel("More actions: steer first")).toBeDefined();
 		const name = `${long.slice(0, 39)}…`;
 		expect(name).toHaveLength(40);
@@ -208,13 +213,13 @@ describe("ComposerQueuePill", () => {
 		expect(byLabel(`Edit: ${name}`)).toBeDefined();
 	});
 
-	it("offers Steer now as the primary action of follow-ups only", async () => {
+	it("offers Steer now on follow-ups only; a steer has no way into the follow-up lane", async () => {
 		await mount([queued("s1", "steer first")], [queued("f1", "follow later")]);
 		await openPopover();
 		const [steerRow, followRow] = Array.from(
 			document.querySelectorAll("[data-queue-row]"),
 		) as unknown as TestElement[];
-		expect(steerRow?.querySelector('[aria-label^="Steer now"]')).toBeNull();
+		expect(steerRow?.querySelector("[data-queue-primary]")).toBeNull();
 		expect(followRow?.querySelector('[aria-label^="Steer now"]')?.textContent).toBe("Steer now");
 		await click(byLabel("Steer now: follow later"));
 		expect(queueMove).toHaveBeenCalledWith("f1", Number.MAX_SAFE_INTEGER, "steering");
@@ -232,15 +237,26 @@ describe("ComposerQueuePill", () => {
 		expect(text.getAttribute("aria-expanded")).toBe("false");
 	});
 
-	it("hands a message to the composer field on Edit, keeping the draft and pictures it replaces", async () => {
+	it("hands a message to the composer field on Edit, held by the core and out of stock's queue first", async () => {
 		const image = { content: { type: "image" as const, data: "AA==", mimeType: "image/png" }, preview: "p" };
 		useComposerStore.getState().setDraft("my draft");
 		useComposerStore.getState().setImages([image]);
 		await mount([queued("s1", "queued text")], []);
 		await openPopover();
 		await click(byLabel("Edit: queued text"));
+		await flush();
+		// The unedited text cannot be delivered while it is edited: the core holds it, then stock's queue lets it go.
+		const hold = command.mock.calls[0]?.[0] as { type: string; lane: string; text: string; token: string };
+		expect(hold).toMatchObject({ type: "queue_hold", lane: "steering", text: "queued text" });
+		expect(queueRemove).toHaveBeenCalledWith("s1");
+		expect(command.mock.invocationCallOrder[0]).toBeLessThan(queueRemove.mock.invocationCallOrder[0]);
 		const state = useComposerStore.getState();
-		expect(state.editingQueued).toMatchObject({ id: "s1", lane: "steering", original: "queued text" });
+		expect(state.editingQueued).toMatchObject({
+			id: "s1",
+			lane: "steering",
+			original: "queued text",
+			token: hold.token,
+		});
 		expect(state.editingQueued?.snapshot).toEqual({ draft: "my draft", images: [image] });
 		expect(state.draft).toBe("queued text");
 		expect(state.images).toEqual([]);

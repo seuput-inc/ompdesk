@@ -5,7 +5,7 @@
  */
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PREVIEW_COMMAND, type PreviewState, VISUAL_SCHEME } from "../../shared/preview";
+import { PREVIEW_COMMAND, PREVIEW_TAB_LIMIT, type PreviewState, VISUAL_SCHEME } from "../../shared/preview";
 import { IpcRegistry } from "../web/ipc-registry";
 import { type PreviewRelayTunnel, registerPreviewHost } from "./host";
 import { type CapturedImage, PREVIEW_CHECK_BEHIND_MS } from "./preview-check";
@@ -198,16 +198,18 @@ const WEB_VISUAL = "aaaaaaaaaaaaaaaa";
 const WEB_URL = "https://example.com/";
 
 function register(serve = vi.fn(async () => new Response("served")), remote?: { tunnel: PreviewRelayTunnel }) {
-	// Only the slice of the store the host reads: one file visual, `VISUAL`, with versions 1 and 2, and one web visual.
+	// Only the slice of the store the host reads: two file visuals, `VISUAL` and `OTHER`, with versions 1 and 2, and
+	// one web visual.
+	const file = (id: string) => id === VISUAL || id === OTHER;
 	const visuals = {
 		parse: parseVisualUrl,
 		view: (id: string, version?: number) =>
-			id === VISUAL ? { version: version ?? 2 } : id === WEB_VISUAL ? { version: 1 } : null,
+			file(id) ? { version: version ?? 2 } : id === WEB_VISUAL ? { version: 1 } : null,
 		url: (id: string, version = 2) =>
-			id === VISUAL ? `${VISUAL_SCHEME}://v${version}-${id}/index.html` : id === WEB_VISUAL ? WEB_URL : null,
+			file(id) ? `${VISUAL_SCHEME}://v${version}-${id}/index.html` : id === WEB_VISUAL ? WEB_URL : null,
 		serve,
 		list: async () => [],
-		forTab: () => [VISUAL, WEB_VISUAL],
+		forTab: () => [VISUAL, OTHER, WEB_VISUAL],
 		addToTab: async () => true,
 	};
 	const ipc = new IpcRegistry({ handle: (channel, handler) => electron.handlers.set(channel, handler), on: () => {} });
@@ -242,6 +244,19 @@ beforeEach(() => {
 });
 
 describe("preview host", () => {
+	it("applies consecutive zoom steps to the host's latest level before a renderer receives state", async () => {
+		register();
+		const { ask } = openWindow();
+		const first = ask({ action: "zoomIn" });
+		const second = ask({ action: "zoomIn" });
+		expect((await first).zoom).toBe(1.1);
+		expect((await second).zoom).toBe(1.2);
+		expect((await ask({ action: "zoomOut" })).zoom).toBe(1.1);
+		expect((await ask({ action: "zoom", zoom: 1 })).zoom).toBe(1);
+		await ask({ action: "zoom", zoom: 2 });
+		expect((await ask({ action: "zoomIn" })).zoom).toBe(2);
+	});
+
 	it("keeps one pair of sessions per window across hosts and forgets what the last host browsed", async () => {
 		register();
 		const first = openWindow();
@@ -343,6 +358,24 @@ describe("preview host", () => {
 		expect(page.loaded).toHaveLength(1);
 	});
 
+	it("at the tab limit shows another visual in a new page, never in the page the first one used", async () => {
+		const { ask, page, pages } = await showVisual();
+		const first = (await ask({ action: "layout", bounds: { x: 0, y: 0, width: 600, height: 400 }, visible: true }))
+			.tabs[0];
+		if (!first) throw new Error("no tab");
+		for (let opened = 1; opened < PREVIEW_TAB_LIMIT; opened++) await ask({ action: "newTab" });
+		expect(pages()).toHaveLength(PREVIEW_TAB_LIMIT);
+		await ask({ action: "selectTab", id: first.id });
+		await ask({ action: "showVisual", tabId: "tab", visualId: OTHER });
+		// The native host gives every visual page its own cookie jar: the old page would carry VISUAL's cookies to OTHER.
+		expect(page.closed).toBe(true);
+		expect(page.loaded).toEqual([`omp-visual://v2-${VISUAL}/index.html`]);
+		const replacement = pages().find(contents => contents.loaded.includes(`omp-visual://v2-${OTHER}/index.html`));
+		expect(replacement).toBeDefined();
+		expect(replacement).not.toBe(page);
+		expect(pages()).toHaveLength(PREVIEW_TAB_LIMIT);
+	});
+
 	it("keeps a visual's page inside its own visual, whatever the page starts", async () => {
 		const { page, pages } = await showVisual();
 		// Leaving for the web, by link, `location`, form, meta refresh or a frame, never happens.
@@ -405,11 +438,81 @@ describe("preview host", () => {
 		expect(pages()[1]?.loaded).toEqual(["https://example.org/popup"]);
 	});
 
+	it("opens at most four tabs a page asks for within two seconds, then lets it open more", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			register();
+			const { ask, pages } = openWindow();
+			await ask({ action: "load", url: "https://example.com/" });
+			const [web] = pages();
+			for (let index = 0; index < 6; index++) web?.openHandler?.({ url: `https://example.org/${index}` });
+			expect(pages()).toHaveLength(5);
+			// The person's own new tab is never counted against the page.
+			await ask({ action: "newTab" });
+			expect(pages()).toHaveLength(6);
+			vi.advanceTimersByTime(2000);
+			web?.openHandler?.({ url: "https://example.org/later" });
+			expect(pages()).toHaveLength(7);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("never lets the agent's browser onto a visual's page", async () => {
 		const { ask } = await showVisual();
 		await expect(
 			ask({ action: "agentStart", tabId: "tab", url: "ws://127.0.0.1:1/extension", token: "x".repeat(32) }),
 		).rejects.toThrow("Agent browsing is for web pages, not visuals");
+	});
+
+	it("says a main-frame load that has not committed after 5 s is slow, until it commits, fails or stops", async () => {
+		register();
+		const { ask, pages } = openWindow();
+		await ask({ action: "load", url: "https://example.com/" });
+		const [page] = pages();
+		if (!page) throw new Error("no page");
+		const notice = async () => (await ask({ action: "clearProblems" })).notice;
+		const start = (details = { isMainFrame: true, isSameDocument: false }) =>
+			page.emit("did-start-navigation", details);
+		vi.useFakeTimers();
+		try {
+			start();
+			await vi.advanceTimersByTimeAsync(4999);
+			expect(await notice()).toBeNull();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await notice()).toEqual({ kind: "slow" });
+			page.emit("did-navigate", {}, "https://example.com/");
+			expect(await notice()).toBeNull();
+
+			// A frame's load and an in-page move are never the page's own load.
+			start({ isMainFrame: false, isSameDocument: false });
+			start({ isMainFrame: true, isSameDocument: true });
+			await vi.advanceTimersByTimeAsync(6000);
+			expect(await notice()).toBeNull();
+
+			// A failure ends it; a newer navigation's abort of the old one does not.
+			start();
+			page.emit("did-fail-load", {}, -3, "ERR_ABORTED", "https://example.com/", true);
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(await notice()).toEqual({ kind: "slow" });
+			page.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "https://example.com/", true);
+			expect(await notice()).toBeNull();
+
+			// Stopped before the 5 s: nothing is said.
+			start();
+			await vi.advanceTimersByTimeAsync(3000);
+			page.emit("did-stop-loading");
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(await notice()).toBeNull();
+
+			// A more urgent notice stays.
+			page.emit("unresponsive");
+			start();
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(await notice()).toEqual({ kind: "unresponsive" });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	describe("Preview check", () => {
@@ -584,7 +687,7 @@ describe("preview host", () => {
 class FakeRelaySocket {
 	readonly ready: Promise<void>;
 	#messages: Array<(data: string) => void> = [];
-	#closes: Array<() => void> = [];
+	#closes: Array<(lost: boolean) => void> = [];
 	readonly sent: string[] = [];
 	isOpen = false;
 	closed = false;
@@ -598,15 +701,19 @@ class FakeRelaySocket {
 		this.sent.push(data);
 	}
 	close(): void {
+		this.end(false);
+	}
+	/** The socket ends; `lost`: the paired link dropped under it. */
+	end(lost: boolean): void {
 		if (this.closed) return;
 		this.closed = true;
 		this.isOpen = false;
-		for (const listener of this.#closes) listener();
+		for (const listener of this.#closes) listener(lost);
 	}
 	onMessage(listener: (data: string) => void): void {
 		this.#messages.push(listener);
 	}
-	onClose(listener: () => void): void {
+	onClose(listener: (lost: boolean) => void): void {
 		this.#closes.push(listener);
 	}
 	/** The relay sends a frame. */
@@ -622,8 +729,8 @@ describe("agent browsing on a paired host's tab", () => {
 	const RELAY = { action: "agentStart", tabId: "tab", url: "http://127.0.0.1:9333", token: "x".repeat(32) } as const;
 
 	/** A window whose tab runs on a paired host, with `tunnel` giving it the relay's socket. */
-	function remoteWindow(socket: FakeRelaySocket | null) {
-		register(undefined, { tunnel: () => socket });
+	function remoteWindow(socket: FakeRelaySocket | null | (() => FakeRelaySocket | null)) {
+		register(undefined, { tunnel: typeof socket === "function" ? socket : () => socket });
 		const window = openWindow();
 		const dialed = vi.fn();
 		vi.stubGlobal("WebSocket", dialed);
@@ -636,6 +743,7 @@ describe("agent browsing on a paired host's tab", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
 	it("runs the relay's extension on this computer's page over the tunnel, never dialing the host's address", async () => {
@@ -697,6 +805,52 @@ describe("agent browsing on a paired host's tab", () => {
 		await again.ask(RELAY);
 		second.socket.close();
 		expect((await again.ask({ action: "clearProblems" })).agent).toBeNull();
+	});
+
+	it("keeps the page the agent's while the link is down, lets the panel back in without releasing it, and Take over ends the wait", async () => {
+		const tunnels: FakeRelaySocket[] = [];
+		const { ask, sender } = remoteWindow(() => {
+			const socket = new FakeRelaySocket(Promise.resolve());
+			tunnels.push(socket);
+			return socket;
+		});
+		await ask({ action: "load", url: "https://example.com/" });
+		await ask(RELAY);
+		tunnels[0]?.end(true);
+		// The page stays the agent's while the link is down, so the panel does not release the tab's relay.
+		expect((await ask({ action: "clearProblems" })).agent).toMatchObject({ tabId: "tab", reconnecting: true });
+		expect(tunnels).toHaveLength(1);
+
+		// The link is back and the panel lets the agent in again: no state in between drops the agent.
+		const sent = vi.spyOn(sender, "send");
+		expect((await ask(RELAY)).agent).toEqual({ tabId: "tab", attached: false, lastAction: "" });
+		const agents = sent.mock.calls.map(call => ((call as unknown[])[1] as { agent?: unknown } | undefined)?.agent);
+		expect(agents.length).toBeGreaterThan(0);
+		expect(agents.filter(agent => agent === null)).toEqual([]);
+		expect(tunnels[1]?.frames()[0]).toMatchObject({ t: "hello" });
+
+		// Dropped again, then taken back: the agent is gone.
+		tunnels[1]?.end(true);
+		expect((await ask({ action: "agentStop" })).agent).toBeNull();
+	});
+
+	it("lets the agent go when the relay itself closed or another page is shown while the link is down", async () => {
+		const tunnels: FakeRelaySocket[] = [];
+		const { ask } = remoteWindow(() => {
+			const socket = new FakeRelaySocket(Promise.resolve());
+			tunnels.push(socket);
+			return socket;
+		});
+		await ask(RELAY);
+		tunnels[0]?.end(false);
+		expect((await ask({ action: "clearProblems" })).agent).toBeNull();
+
+		await ask(RELAY);
+		tunnels[1]?.end(true);
+		const opened = await ask({ action: "newTab" });
+		expect(opened.agent).toBeNull();
+		const first = opened.tabs[0]?.id;
+		expect((await ask({ action: "selectTab", id: first })).agent).toBeNull();
 	});
 
 	it("says why when the host's relay cannot be reached, and when the tab has no tunnel", async () => {

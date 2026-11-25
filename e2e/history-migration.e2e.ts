@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,8 +16,9 @@ test("legacy prompt history migrates once and is recalled with ↑", async () =>
 	const desktop = path.join(profile, "desktop");
 	const agent = path.join(profile, "agent");
 	await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent)]);
-	// realpath: the tab's cwd is the resolved path (/var → /private/var on macOS).
-	const cwd = await fs.realpath(project);
+	// The tab's cwd is the resolved path (/var → /private/var on macOS), spelled as the app sees it: the sync JS
+	// `realpath` keeps windows-latest's 8.3 TEMP (`RUNNER~1`), where `fs.promises.realpath` expands it.
+	const cwd = realpathSync(project);
 	const prefsFile = path.join(desktop, "prefs.json");
 	await fs.writeFile(
 		prefsFile,

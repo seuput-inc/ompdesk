@@ -401,122 +401,91 @@ impl Lines {
     }
 }
 
-fn is_final(c: char) -> bool {
-    matches!(c, '0'..='9' | 'A'..='P' | 'R'..='T' | 'Z' | 'c' | 'f'..='n' | 't' | 'q' | 'r' | 'y' | '=' | '>' | '<' | '~')
-}
-
-fn is_param(c: char) -> bool {
-    c.is_ascii_alphanumeric()
-        || matches!(
-            c,
-            '-' | '/' | '#' | '&' | '.' | ':' | '=' | '?' | '%' | '@' | '~' | '_'
-        )
-}
-
-fn run_of(chars: &[char], from: usize, test: impl Fn(char) -> bool) -> usize {
-    chars[from.min(chars.len())..]
-        .iter()
-        .take_while(|&&c| test(c))
-        .count()
-}
-
-/// `(?:;S*)*` after a letters-and-digits run, greedy: the end of what it takes.
-fn semicolon_params(chars: &[char], mut at: usize) -> usize {
-    while chars.get(at) == Some(&';') {
-        at += 1 + run_of(chars, at + 1, is_param);
+/// The CSI branch of Node's `ansi` regexp in `lib/internal/util/inspect.js`.
+fn csi_end(bytes: &[u8]) -> Option<usize> {
+    let mut at = 0;
+    while matches!(
+        bytes.get(at),
+        Some(b'[' | b']' | b'(' | b')' | b'#' | b';' | b'?')
+    ) {
+        at += 1;
     }
-    at
-}
-
-/// The end of the alternative that closes with BEL, where `at` follows the prefix.
-fn ends_with_bel(chars: &[char], at: usize) -> Option<usize> {
-    let bel = |from: usize| (chars.get(from) == Some(&'\u{7}')).then_some(from + 1);
-    // `(?:;S+)*`
-    let mut end = at;
-    while chars.get(end) == Some(&';') {
-        let params = run_of(chars, end + 1, is_param);
-        if params == 0 {
-            break;
-        }
-        end += 1 + params;
-    }
-    if let Some(found) = bel(end) {
-        return Some(found);
-    }
-    // `[a-zA-Z\d]+(?:;S*)*`
-    let letters = run_of(chars, at, |c| c.is_ascii_alphanumeric());
-    if letters > 0
-        && let Some(found) = bel(semicolon_params(chars, at + letters))
-    {
-        return Some(found);
-    }
-    bel(at)
-}
-
-/// `(?:;\d{0,4})*` then the final character, with the backtracking a regular expression does.
-fn digit_groups(chars: &[char], at: usize) -> Option<usize> {
-    if chars.get(at) == Some(&';') {
-        let digits = run_of(chars, at + 1, |c| c.is_ascii_digit()).min(4);
-        for taken in (0..=digits).rev() {
-            if let Some(end) = digit_groups(chars, at + 1 + taken) {
-                return Some(end);
+    let mut last_digit = None;
+    if bytes.get(at).is_some_and(u8::is_ascii_digit) {
+        loop {
+            for _ in 0..4 {
+                if !bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                    break;
+                }
+                at += 1;
+                last_digit = Some(at);
             }
+            if !matches!(bytes.get(at), Some(b';' | b':')) {
+                break;
+            }
+            at += 1;
         }
     }
-    chars
-        .get(at)
-        .copied()
-        .filter(|&c| is_final(c))
-        .map(|_| at + 1)
-}
-
-/// `(?:\d{1,4}(?:;\d{0,4})*)?` then the final character.
-fn ends_with_final(chars: &[char], at: usize) -> Option<usize> {
-    let digits = run_of(chars, at, |c| c.is_ascii_digit()).min(4);
-    for taken in (1..=digits).rev() {
-        if let Some(end) = digit_groups(chars, at + taken) {
-            return Some(end);
-        }
+    match bytes.get(at) {
+        Some(
+            b'0'..=b'9'
+            | b'A'..=b'P'
+            | b'R'..=b'T'
+            | b'Z'
+            | b'c'
+            | b'f'..=b'n'
+            | b'q'..=b'u'
+            | b'y'
+            | b'='
+            | b'>'
+            | b'<'
+            | b'~',
+        ) => Some(at + 1),
+        // A digit can itself be the final byte when the greedy parameters have no final.
+        _ => last_digit,
     }
-    chars
-        .get(at)
-        .copied()
-        .filter(|&c| is_final(c))
-        .map(|_| at + 1)
 }
 
-/// The end of the control sequence that starts at `start` (an ESC or a CSI), if one does.
-fn control_sequence(chars: &[char], start: usize) -> Option<usize> {
-    let prefix = run_of(chars, start + 1, |c| {
-        matches!(c, '[' | ']' | '(' | ')' | '#' | ';' | '?')
-    });
-    for taken in (0..=prefix).rev() {
-        let at = start + 1 + taken;
-        if let Some(end) = ends_with_bel(chars, at).or_else(|| ends_with_final(chars, at)) {
-            return Some(end);
+fn osc_end(bytes: &[u8]) -> Option<usize> {
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            0x07 => return Some(i + 1),
+            0x1b if bytes.get(i + 1) == Some(&b'\\') => return Some(i + 2),
+            0xc2 if bytes.get(i + 1) == Some(&0x9c) => return Some(i + 2),
+            _ => {}
         }
     }
     None
 }
 
-/// `util.stripVTControlCharacters`: the same regular expression, matched by hand.
+/// Node's `util.stripVTControlCharacters`. An unterminated OSC falls through to CSI.
 pub fn strip_vt_control_characters(text: &str) -> Cow<'_, str> {
-    if !text.contains(['\u{1b}', '\u{9b}']) {
+    let mut out = String::new();
+    let mut kept = 0;
+    let mut scan = 0;
+    let mut osc_possible = true;
+    while let Some(next) = text[scan..].find(['\u{1b}', '\u{9b}']) {
+        let start = scan + next;
+        let esc = text.as_bytes()[start] == 0x1b;
+        scan = start + if esc { 1 } else { 2 };
+        let bytes = &text.as_bytes()[scan..];
+        let osc = if osc_possible && esc && bytes.first() == Some(&b']') {
+            let end = osc_end(&bytes[1..]);
+            osc_possible = end.is_some();
+            end.map(|end| 1 + end)
+        } else {
+            None
+        };
+        if let Some(len) = osc.or_else(|| csi_end(bytes)) {
+            out.push_str(&text[kept..start]);
+            scan += len;
+            kept = scan;
+        }
+    }
+    if kept == 0 {
         return Cow::Borrowed(text);
     }
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    while at < chars.len() {
-        if matches!(chars[at], '\u{1b}' | '\u{9b}')
-            && let Some(end) = control_sequence(&chars, at)
-        {
-            at = end;
-            continue;
-        }
-        out.push(chars[at]);
-        at += 1;
-    }
+    out.push_str(&text[kept..]);
     Cow::Owned(out)
 }
 
@@ -760,10 +729,15 @@ mod tests {
             ("\u{1b}]0;title\u{7}t", "t"),
             ("\u{1b}#8", ""),
             ("\u{1b}[99999;5Hxy", ";5Hxy"),
+            ("\u{1b}[12345678901234567890m", "678901234567890m"),
             ("\u{1b}[1;;2m", ""),
             ("\u{1b}Z", ""),
             ("\u{1b}[;", "\u{1b}[;"),
             ("\u{1b}x", "\u{1b}x"),
+            ("\u{1b}]title\nλ\u{1b}\\done", "done"),
+            ("\u{1b}]x\u{9c}y\u{9b}38:2:0:255:0mz", "yz"),
+            ("\u{1b}]unfinished \u{9b}2J", "nfinished "),
+            ("\0\u{1b}[12:34;!\u{9b}s\u{85}", "\0;!\u{85}"),
         ];
         for (input, expected) in table {
             assert_eq!(strip_vt_control_characters(input), *expected, "{input:?}");

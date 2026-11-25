@@ -32,7 +32,7 @@
  *   promises of released omps (`#exiting`), the moves in flight, the activity observers, the model-wait tracker;
  * - the collaborators, which the core asks (`ask`): the sidecar factory and its lifecycle calls, the hooks
  *   (`onRunningChange`, `onSessionFilesChanged`, `onWindowTabsChanged`, `worktreeStartGate`, `onAcquire`,
- *   `onTabReleased`), the deleted-session list and the removal holds, the clock of the timers and ticks;
+ *   `onTabReleased`), the deleted-session list and the removal holds, the event loop's tick before a restart;
  * - the sidecar's listeners: each event is fed to the core at the moment the sidecar emits it, in the order it came.
  * `hub.ts` explains how a call, an item and a question travel; `pool/mod.rs` lists this protocol.
  */
@@ -50,7 +50,10 @@ import {
 } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
 import {
+	type AutoCloseTurn,
+	type HostCloseTurn,
 	IPC_EVENTS,
+	type IpcCutOff,
 	type IpcOpenExtensionRequest,
 	type IpcScheduledRetry,
 	type IpcSessionOwner,
@@ -78,12 +81,13 @@ import {
 } from "../shared/rpc-types";
 import { failureOf, unsavedSessionKey } from "../shared/session-summary";
 import { isApprovalSelect } from "../shared/tool-approval";
+import { TargetAnswer } from "./agent-control/target-answer";
 import type { BackgroundWorkMember } from "./background-work";
 import { canonicalCwd } from "./canonical-cwd";
 import { type Hub, type HubItem, hub } from "./core/hub";
-import { CoreError } from "./core/process";
-import { deletedSessions } from "./deleted-sessions";
-import { type ExtensionApplyPlan, extensionApplyDecision, mergeApplyPlans } from "./extension-reload";
+import { CoreError, isCoreShutdown } from "./core/process";
+import { deletedSessionsOpen } from "./deleted-sessions";
+import { type ExtensionApplyPlan, extensionApplyDecision } from "./extension-reload";
 import { createMessageUpdateSlimmer } from "./message-update-slim";
 import { ModelWaitTracker } from "./model-wait-count";
 import { noteOmpExit } from "./omp-exits";
@@ -103,6 +107,7 @@ import { MAX_FORMER_TAB_IDS, type PersistedTabLayout, TAB_LAYOUT_VERSION } from 
 import { MovesInFlight, type ResumeFact } from "./turn-resume";
 import { recordTurnStop, type TurnStopBy } from "./turn-stop-log";
 import { type ClientWindow, isWebWindow } from "./web/client-window";
+import type { FileEdits, FileEditTarget } from "./web/file-edit-reports";
 import type { TabSpawnFacts } from "./worktree-lifecycle";
 import { removalHolds } from "./worktree-removals";
 
@@ -195,6 +200,25 @@ export interface TabFacts {
 export interface PendingPlan {
 	title: string;
 	planFilePath: string;
+	/** Which proposal of the tab it is: stock rewrites one plan file for a revised proposal, so the path is no identity. */
+	generation: number;
+}
+
+/** One tab of {@link SidecarPool.controlTabs}: its `tabsForWindow` row and the per-tab reads the control tools' snapshot makes. */
+export interface ControlTabInfo extends IpcTabInfo {
+	facts: TabFacts | null;
+	plan: PendingPlan | null;
+	formerIds: readonly string[];
+	hasDraft: boolean;
+	/** The window that owns the tab (`windowOfTab`): the row's own window for a tab a viewer's window lists. */
+	owner: ClientWindow | null;
+}
+
+/** One window of {@link SidecarPool.controlTabs}: its tabs and the asks they wait on (`openRequests`). */
+export interface ControlWindowTabs {
+	win: ClientWindow;
+	tabs: ControlTabInfo[];
+	asks: IpcOpenExtensionRequest[];
 }
 
 /** How long "Stop and delete" waits for a stopped turn to end before it gives up (`stopSession`). */
@@ -238,6 +262,7 @@ interface TabHandle {
 	win: ClientWindow;
 	/** Paired host deviceId the tab runs on (immutable, set at acquire). */
 	device: string | undefined;
+	hosted: boolean;
 	/** The core released the tab: it is not in the pool any more, its sidecar is still being let go of. */
 	gone: boolean;
 	/**
@@ -248,6 +273,11 @@ interface TabHandle {
 	full: FullWiring | null;
 	/** Paired devices that view this tab through their own tab on this host, by the id the core knows them by. */
 	views: Map<number, HostedTabView>;
+}
+
+interface PendingAcquire {
+	handle?: TabHandle;
+	phase: "pending" | "bound" | "saved" | { bindError: unknown };
 }
 
 /** The facts the core asks of a sidecar (`facts`): what only the live object can say. */
@@ -276,6 +306,13 @@ function messageText(message: AgentMessage): string {
 	return content.map(block => (block.type === "text" ? block.text : "")).join("");
 }
 
+/** A `goal_updated` event's goal status (stock's `Goal.status`), or null without a goal. */
+function goalStatus(goal: unknown): string | null {
+	return typeof goal === "object" && goal !== null && "status" in goal && typeof goal.status === "string"
+		? goal.status
+		: null;
+}
+
 /**
  * The agent events the core's rules read, and of each only what they read. A streaming reply makes a `message_update`
  * per delta, each carrying the whole message so far: none of that crosses (the windows' forwarders have it), nor the
@@ -299,6 +336,7 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 				kept.push({
 					type: event.type,
 					isTerminal: event.isTerminal,
+					hostTurn: "hostTurn" in event ? event.hostTurn : undefined,
 					messages: last
 						? [
 								{
@@ -333,6 +371,7 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 					type: event.type,
 					success: event.success,
 					attempt: event.attempt,
+					hostTurn: "hostTurn" in event ? event.hostTurn : undefined,
 					finalError: event.finalError,
 				});
 				break;
@@ -340,6 +379,10 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 			case "plan_proposal_resolved":
 				// Small, and a hidden tab's row is sent them whole.
 				kept.push(event);
+				break;
+			case "goal_updated":
+				// Only whether the goal is active: an idle goal session gets a relaunch marker (resume/facts.rs).
+				kept.push({ type: event.type, goal: { status: goalStatus(event.goal) } });
 				break;
 			case "message_end":
 				kept.push({
@@ -370,20 +413,23 @@ function poolError(error: unknown): unknown {
 	if (!(error instanceof CoreError)) return error;
 	// A collaborator's own failure comes back as the message it threw.
 	if (error.code === "main_error") return new Error(error.message);
-	if (error.code === "already_answered") return codedError("already_answered", error.message);
+	if (error.code === "already_answered" || error.code === "being_answered")
+		return codedError(error.code, error.message);
 	return error;
 }
 
 export class SidecarPool {
 	readonly #hub: Hub = hub();
-	readonly #id: number;
-	#open = false;
+	#id = 0;
 	readonly #factory: SidecarFactory;
 	/** Tab id → what main holds of it. */
 	readonly #handles = new Map<string, TabHandle>();
+	/** The original handle and last completed hook of a direct acquire still awaiting its reply. */
+	readonly #acquiring = new Map<string, PendingAcquire>();
 	/** Window id (`webContents.id`) → the window: the core names windows by id; a send finds the object here. */
 	readonly #windows = new Map<number, ClientWindow>();
 	readonly #windowIds = new WeakMap<ClientWindow, number>();
+	readonly #listeningForClose = new WeakSet<ClientWindow>();
 	/** Moves whose command is on its way, per tab (`beginMove`). */
 	readonly #moves = new MovesInFlight();
 	/** Session file (F-OWN key) → the exit of the omp a released tab ran it in: a delete waits for it. */
@@ -391,10 +437,7 @@ export class SidecarPool {
 	/** Tab id → the exit of its omp once the tab is released: what a folder the tab worked in waits for. */
 	readonly #exitingTabs = new Map<string, Promise<void>>();
 	/** The methods that were `async` wait here for the core's `settle` item (by token). */
-	readonly #settling = new Map<
-		number,
-		{ resolve: (value: unknown) => void; reject: (error: unknown) => void; timer?: NodeJS.Timeout }
-	>();
+	readonly #settling = new Map<number, { resolve: (value: unknown) => void; reject: (error: unknown) => void }>();
 	#token = 0;
 	/** The summary facts read last (`#summaryFacts`), while nothing has changed since. */
 	#summaryRead: object | null = null;
@@ -403,6 +446,8 @@ export class SidecarPool {
 	#nextView = 0;
 	/** The one retry object per `auto_retry_start` the resume rules compare by identity: tab → the object handed out. */
 	readonly #retries = new Map<string, { id: number; retry: { errorMessage: string } }>();
+	/** The one outcome object per finished run the resume rules judge by identity: tab → the object handed out. */
+	readonly #outcomes = new Map<string, IpcTabRunOutcome & { id: number }>();
 	readonly #activityObservers = new Set<(activity: TabActivity) => void>();
 	/**
 	 * GUI host tools run against Electron in ipc.ts, which the pool cannot import without a cycle. Set once at startup;
@@ -419,6 +464,8 @@ export class SidecarPool {
 	onWindowTabsChanged: ((win: ClientWindow, layout: PersistedTabLayout | null) => void) | null = null;
 	/** Some tab may have started or finished running a turn (keep-awake while working). */
 	onRunningChange: (() => void) | null = null;
+	/** Whether the tab's relaunch continuation is still owed (`TurnResume.relaunchContinuation`): an omp update waits. */
+	continuationOwed: ((tabId: string) => boolean) | null = null;
 	/**
 	 * A tab took or let go of a session file, on any path (acquire, the `session` identity, a session-id change, a
 	 * release): paired devices list which sessions a tab here holds (index.ts hands it to
@@ -430,6 +477,8 @@ export class SidecarPool {
 	 * this computer's resume rules hold both (index.ts hands it to `TurnResume.cancelWait`).
 	 */
 	onCancelWait: ((tabId: string) => void) | null = null;
+	/** A paired device's Continue or Dismiss on the cut-off row of a window's tab it views: this computer's resume rules. */
+	onCutOff: ((tabId: string, choice: "continue" | "dismiss") => void) | null = null;
 	/** `worktree.onStart` (worktree-lifecycle.ts): the gate for a new tab, or null when the tab is not a candidate. */
 	worktreeStartGate: ((tabId: string, winId: number, facts: TabSpawnFacts) => SidecarStartGate | null) | null = null;
 	/** A tab was released (closed, or its window closed); `exited` settles once its omp is gone. */
@@ -446,7 +495,6 @@ export class SidecarPool {
 
 	constructor(factory: SidecarFactory) {
 		this.#factory = factory;
-		this.#id = this.#hub.nextId();
 		this.modelWait.onChange(snapshot => {
 			this.#call("modelWaitTogether", { together: [...snapshot.together] });
 		});
@@ -478,11 +526,12 @@ export class SidecarPool {
 	}
 
 	#ensureOpen(): void {
-		if (!this.#open) this.#openInstance();
+		if (!this.#id) this.#openInstance();
 	}
 
 	#openInstance(): void {
-		this.#open = true;
+		deletedSessionsOpen();
+		this.#id = this.#hub.nextId();
 		try {
 			this.#hub.open(
 				this.#id,
@@ -491,6 +540,7 @@ export class SidecarPool {
 					layoutVersion: TAB_LAYOUT_VERSION,
 					maxFormerTabIds: MAX_FORMER_TAB_IDS,
 					stopSessionWaitMs: STOP_SESSION_WAIT_MS,
+					channels: IPC_EVENTS,
 				},
 				{
 					item: item => this.#item(item),
@@ -499,7 +549,7 @@ export class SidecarPool {
 				},
 			);
 		} catch (error) {
-			this.#open = false;
+			this.#id = 0;
 			throw error;
 		}
 		if (this.#handles.size > 0) this.#reseed();
@@ -510,11 +560,12 @@ export class SidecarPool {
 	 * (`#reseed`); what the calls in between find is an empty pool, as a new core is.
 	 */
 	#lost(): void {
-		this.#open = false;
+		this.#id = 0;
+		this.#outcomes.clear();
+		this.#retries.clear();
 		// Promises waiting for the core's word can never get it: they end as a failed call does.
 		for (const [token, waiting] of this.#settling) {
 			this.#settling.delete(token);
-			clearTimeout(waiting.timer);
 			waiting.reject(new CoreError("hub_lost", "The pool was lost with the core"));
 		}
 	}
@@ -535,14 +586,16 @@ export class SidecarPool {
 				tab,
 				win: this.#windowId(handle.win),
 				device: handle.device ?? null,
-				hosted: handle.sidecar instanceof HostedTabView,
+				hosted: handle.hosted,
+				acquiring: this.#acquiring.get(tab)?.handle === handle,
 				kind: handle.sidecar.kind,
 				status: handle.sidecar.status,
 				sessionFile: handle.sessionFile,
 				full: [...(handle.full?.windows.keys() ?? [])],
 				views: [...handle.views.keys()],
 			}));
-		this.#call("seed", { tabs });
+		// Opening the replacement already seeds it. Retrying seed itself would add every tab twice.
+		this.#hub.call(this.#id, "seed", { tabs, now: Date.now(), wt: this.onWindowTabsChanged !== null });
 	}
 
 	/** One window's id, remembered: a destroyed window's `webContents` can no longer be read. */
@@ -606,7 +659,11 @@ export class SidecarPool {
 			}
 			case "listenClosed": {
 				const id = item.win as number;
-				this.#windows.get(id)?.once("closed", () => this.#windowClosed(id));
+				const win = this.#windows.get(id);
+				if (win && !this.#listeningForClose.has(win)) {
+					this.#listeningForClose.add(win);
+					win.once("closed", () => this.#windowClosed(id));
+				}
 				return;
 			}
 			case "command":
@@ -656,29 +713,15 @@ export class SidecarPool {
 					}
 				});
 				return;
-			case "stopTimer": {
-				const token = item.token as number;
-				const waiting = this.#settling.get(token);
-				if (!waiting) return;
-				waiting.timer = setTimeout(() => {
-					try {
-						this.#call("stopTimeout", { token });
-					} catch {
-						// A lost core ends the wait with the rest.
-					}
-				}, item.ms as number);
-				return;
-			}
 			case "settle": {
 				const token = item.token as number;
 				const waiting = this.#settling.get(token);
 				if (!waiting) return;
 				this.#settling.delete(token);
-				clearTimeout(waiting.timer);
 				if (item.ok === true) waiting.resolve(item.value ?? null);
 				else if (typeof item.code === "string" && item.code !== "main_error")
 					waiting.reject(
-						item.code === "already_answered" || item.code === "session_running"
+						item.code === "already_answered" || item.code === "being_answered" || item.code === "session_running"
 							? codedError(item.code, item.message as string)
 							: new CoreError(item.code, item.message as string),
 					);
@@ -695,18 +738,31 @@ export class SidecarPool {
 		const tab = item.tab as string;
 		switch (q) {
 			case "blocked": {
-				const sessionPath = (item.sessionPath as string | null) ?? undefined;
-				// A session the user deleted never comes back as a tab, whoever asks (a layout, a marker, a reopen);
-				// a worktree being removed is not opened until git is done with it.
-				if (item.hosted === true) return deletedSessions().has(sessionPath);
+				const prior = this.#acquiring.get(tab)?.handle;
+				if (prior && prior !== this.#live(tab)) return true;
+				// A deleted session the core refused before asking; a worktree being removed is not opened until git is
+				// done with it.
+				if (item.hosted === true) return false;
 				const device = (item.device as string | null) ?? undefined;
-				if (deletedSessions().has(sessionPath, device)) return true;
 				return !device && removalHolds(item.cwd as string);
 			}
 			case "spawn": {
 				const win = this.#windows.get(item.win as number);
 				if (!win) throw new Error("The window of the new tab is unknown");
 				const device = (item.device as string | null) ?? undefined;
+				const prior = this.#handles.get(tab);
+				if (prior) {
+					// A nested call can open the replacement core before the factory returns its handle.
+					if (
+						prior !== this.#acquiring.get(tab)?.handle ||
+						prior.gone ||
+						prior.win !== win ||
+						prior.device !== device ||
+						prior.hosted
+					)
+						throw new Error("The tab ID is already held");
+					return { status: prior.sidecar.status };
+				}
 				const cwd = item.cwd as string;
 				// One spelling per directory: the sidecar reports its realpath'd cwd.
 				const sidecar = this.#factory(
@@ -729,28 +785,28 @@ export class SidecarPool {
 					deferStart: item.deferStart === true,
 				});
 				if (gate) sidecar.setStartGate?.(gate);
-				this.#handles.set(tab, {
-					sidecar,
-					win,
-					device,
-					gone: false,
-					sessionFile: null,
-					full: null,
-					views: new Map(),
-				});
+				this.#hold(tab, sidecar, win, device, false);
 				this.#wireLight(tab, sidecar);
 				if (!device) this.summaries?.track(sidecar);
 				return { status };
 			}
-			case "wire": {
-				const handle = this.#handles.get(tab);
-				if (handle) this.#wireLight(tab, handle.sidecar);
-				return null;
-			}
 			case "acquired": {
 				const handle = this.#handles.get(tab);
-				if (handle) this.onAcquire?.(tab, handle.sidecar);
-				return null;
+				const acquire = this.#acquiring.get(tab);
+				const phase = acquire?.phase;
+				if (typeof phase === "object") throw phase.bindError;
+				if (handle && (!phase || phase === "pending")) {
+					try {
+						if (handle.hosted) this.#wireLight(tab, handle.sidecar);
+						else this.onAcquire?.(tab, handle.sidecar);
+					} catch (error) {
+						// A failed hook may already have attached listeners. Return its failure on replay.
+						if (acquire) acquire.phase = { bindError: error };
+						throw error;
+					}
+					if (acquire) acquire.phase = "bound";
+				}
+				return phase === "saved";
 			}
 			case "facts": {
 				const facts: Record<string, SidecarFacts> = {};
@@ -844,13 +900,9 @@ export class SidecarPool {
 				const status = this.#handles.get(tab)?.sidecar.status;
 				if (status === undefined) return "skip";
 				const facts = { status, busy: item.busy === true };
-				return item.kind === "omp" ? ompRestartDecision(facts) : extensionApplyDecision(facts);
+				if (item.kind !== "omp") return extensionApplyDecision(facts);
+				return ompRestartDecision({ ...facts, resuming: this.continuationOwed?.(tab) === true });
 			}
-			case "mergePlans":
-				return mergeApplyPlans(item.a as ExtensionApplyPlan, item.b as ExtensionApplyPlan);
-			case "deletedAdd":
-				deletedSessions().add(item.sessionPath as string, item.device as string);
-				return null;
 			case "selfDevice":
 				return this.selfDeviceId?.() ?? null;
 			case "snowflake":
@@ -864,6 +916,8 @@ export class SidecarPool {
 			case "onWindowTabsChanged": {
 				const win = this.#windows.get(item.win as number);
 				if (win) this.onWindowTabsChanged?.(win, item.layout as PersistedTabLayout | null);
+				const acquire = this.#acquiring.get(item.acquire as string);
+				if (acquire) acquire.phase = "saved";
 				return null;
 			}
 			case "exiting":
@@ -882,7 +936,12 @@ export class SidecarPool {
 
 	/** The window's one "closed" listener (registered at the core's word): every tab it owned or viewed goes. */
 	#windowClosed(id: number): void {
-		this.#call("windowClosed", { win: id });
+		try {
+			this.#call("windowClosed", { win: id });
+		} catch (error) {
+			// The quit closes every window after it ended the core, whose pool (and this window's tabs) went with it.
+			if (!isCoreShutdown(error)) throw error;
+		}
 	}
 
 	// ---- the sidecar's listeners ----------------------------------------------------------------------------------
@@ -890,11 +949,17 @@ export class SidecarPool {
 	/** Per-tab light wiring, attached for the entry's whole life: each event is fed to the core as the sidecar emits it. */
 	#wireLight(tab: string, sidecar: SidecarLike): void {
 		const feed = (event: string, payload: unknown = null): void => {
-			this.#call("feed", { tab, event, payload: payload ?? null, fromLink: sidecar.statusFromLink === true });
+			try {
+				this.#call("feed", { tab, event, payload: payload ?? null, fromLink: sidecar.statusFromLink === true });
+			} catch (error) {
+				// An omp's last words (its exit) arrive after the quit ended the core: nothing is left to tell.
+				if (!isCoreShutdown(error)) throw error;
+			}
 		};
-		sidecar.on("status", (payload: SidecarStatusPayload) => {
+		sidecar.on("status", (payload: SidecarStatusPayload, hostTurn?: HostCloseTurn | null) => {
 			feed("status", {
 				status: payload.status,
+				hostTurn,
 				sessionHeld: payload.sessionHeld,
 				slow: payload.slow,
 				queued: payload.queued,
@@ -973,13 +1038,15 @@ export class SidecarPool {
 		sidecar.on("awaitingConnection", (awaiting: boolean) => feed("awaitingConnection", awaiting));
 		// And the retry it scheduled for the failed turn of a window's tab this one views.
 		sidecar.on("scheduledRetry", (retry: IpcScheduledRetry | undefined) => feed("scheduledRetry", retry ?? null));
+		// And the cut-off row of that window's tab: its Continue and Dismiss go back to the host (`continueHostCut`).
+		sidecar.on("cutOff", (cutOff: IpcCutOff | undefined) => feed("cutOff", cutOff ?? null));
 		// Agent-end means one run yielded; upstream prompt/session-settled frames keep background async work
 		// represented as running until it is quiet.
-		sidecar.on("events", (events: AgentSessionEvent[]) => {
+		sidecar.on("events", (events: AgentSessionEvent[], hostEvents = events) => {
 			const handle = this.#handles.get(tab);
 			handle?.full?.forwardEvents(events);
 			this.modelWait.observe(tab, handle?.device ?? "", events);
-			const projected = projectEvents(events);
+			const projected = projectEvents(hostEvents);
 			if (projected.length > 0) feed("events", projected);
 		});
 	}
@@ -993,7 +1060,7 @@ export class SidecarPool {
 	#wireFull(tab: string, winId: number): void {
 		const handle = this.#handles.get(tab);
 		const win = this.#windows.get(winId);
-		if (!handle || !win) return;
+		if (!handle || !win || handle.full?.windows.has(winId)) return;
 		// A fresh slimmer per window: the first update of each message after the tab becomes visible there keeps
 		// its full snapshot (it missed message_start).
 		const shown = { win, slim: createMessageUpdateSlimmer() };
@@ -1133,6 +1200,32 @@ export class SidecarPool {
 		});
 	}
 
+	#hold(tab: string, sidecar: SidecarLike, win: ClientWindow, device: string | undefined, hosted: boolean): void {
+		const handle: TabHandle = {
+			sidecar,
+			win,
+			device,
+			hosted,
+			gone: false,
+			sessionFile: null,
+			full: null,
+			views: new Map(),
+		};
+		this.#handles.set(tab, handle);
+		const acquire = this.#acquiring.get(tab);
+		if (acquire) acquire.handle = handle;
+	}
+
+	#withAcquire<T>(tab: string, refused: T, acquire: () => T): T {
+		if (this.#handles.has(tab) || this.#acquiring.has(tab)) return refused;
+		this.#acquiring.set(tab, { phase: "pending" });
+		try {
+			return acquire();
+		} finally {
+			this.#acquiring.delete(tab);
+		}
+	}
+
 	/**
 	 * Spawn + bind a sidecar for `cwd` to `win` as a tab. Returns null when creating or starting the sidecar throws.
 	 * `tabId` defaults to a fresh snowflake; `sessionPath` resumes that session on first start. `kind` defaults to
@@ -1163,24 +1256,25 @@ export class SidecarPool {
 		task?: string,
 		formerIds?: string[],
 	): SidecarLike | null {
-		const winId = this.#windowId(win);
-		const result = this.#call<{ ok: boolean; added: boolean }>("acquire", {
-			cwd,
-			win: winId,
-			tab: tabId,
-			sessionPath,
-			kind,
-			worktree,
-			fresh,
-			placeholder,
-			deferStart,
-			title,
-			device,
-			task,
-			formerIds,
+		return this.#withAcquire(tabId, null, () => {
+			const result = this.#call<{ ok: boolean; added: boolean }>("acquire", {
+				cwd,
+				win: this.#windowId(win),
+				tab: tabId,
+				sessionPath,
+				kind,
+				worktree,
+				fresh,
+				placeholder,
+				deferStart,
+				title,
+				device,
+				task,
+				formerIds,
+			});
+			if (!result.added) this.#handles.delete(tabId);
+			return result.ok ? (this.#live(tabId)?.sidecar ?? null) : null;
 		});
-		if (!result.added) this.#handles.delete(tabId);
-		return result.ok ? (this.#handles.get(tabId)?.sidecar ?? null) : null;
 	}
 
 	/**
@@ -1190,29 +1284,23 @@ export class SidecarPool {
 	 * with no tab yet makes it active. False when the session was deleted.
 	 */
 	acquireHostedView(win: ClientWindow, tabId: string, sidecar: SidecarLike, sessionPath: string): boolean {
-		const winId = this.#windowId(win);
-		// Open first: a new core is seeded with the handles held so far, and this tab is not one of them.
-		this.#ensureOpen();
-		this.#handles.set(tabId, {
-			sidecar,
-			win,
-			device: undefined,
-			gone: false,
-			sessionFile: null,
-			full: null,
-			views: new Map(),
+		return this.#withAcquire(tabId, false, () => {
+			const winId = this.#windowId(win);
+			// Open first: the handle belongs to this acquire, not the seed preceding its first attempt.
+			this.#ensureOpen();
+			this.#hold(tabId, sidecar, win, undefined, true);
+			const shown = this.#call<boolean>("acquireHostedView", {
+				win: winId,
+				tab: tabId,
+				kind: sidecar.kind,
+				status: sidecar.status,
+				// The device's tab may be mid-turn as this window joins it: its events so far reached nobody here.
+				reading: sidecar instanceof HostedTabView ? sidecar.runReading() : null,
+				sessionPath,
+			});
+			if (!shown) this.#handles.delete(tabId);
+			return shown;
 		});
-		const shown = this.#call<boolean>("acquireHostedView", {
-			win: winId,
-			tab: tabId,
-			kind: sidecar.kind,
-			status: sidecar.status,
-			// The device's tab may be mid-turn as this window joins it: its events so far reached nobody here.
-			reading: sidecar instanceof HostedTabView ? sidecar.runReading() : null,
-			sessionPath,
-		});
-		if (!shown) this.#handles.delete(tabId);
-		return shown;
 	}
 
 	/** Whether the tab is a window's view of a tab this computer runs for a paired device (`acquireHostedView`). */
@@ -1254,6 +1342,7 @@ export class SidecarPool {
 			},
 			stopped: () => this.noteStopped(tab),
 			cancelWait: () => this.onCancelWait?.(tab),
+			cutOff: choice => this.onCutOff?.(tab, choice),
 			snapshot: () => this.#call("deviceSnapshot", { tab }),
 			subagentLevel: level =>
 				this.#call<SubagentSubscriptionLevel>("deviceSubagentLevel", { tab, view: idOf(view), level }),
@@ -1398,12 +1487,47 @@ export class SidecarPool {
 	}
 
 	/**
+	 * `tabWindows`, then each window's `tabsForWindow` and `openRequests`, with each tab's `tabFacts`, `pendingPlan`,
+	 * `formerTabIds`, `hasDraft` and `windowOfTab`: the control tools' snapshot in one wait of main's thread, which
+	 * rebuilds it on every answer and push to the core, instead of several per tab.
+	 */
+	controlTabs(): ControlWindowTabs[] {
+		type Row = IpcTabInfo & {
+			control: Omit<ControlTabInfo, keyof IpcTabInfo | "owner"> & { owner: number | null };
+		};
+		return this.#call<{ win: number; tabs: Row[]; asks: IpcOpenExtensionRequest[] }[]>("controlTabs").flatMap(
+			({ win: id, tabs, asks }) => {
+				const win = this.#windows.get(id);
+				if (!win) return [];
+				return [
+					{
+						win,
+						asks,
+						tabs: tabs.map(({ control: { owner, ...control }, ...info }) => ({
+							...info,
+							...control,
+							owner: owner === null ? null : (this.#windows.get(owner) ?? null),
+						})),
+					},
+				];
+			},
+		);
+	}
+
+	/**
 	 * omp on this computer was updated: every local tab moves to it (omp-restart.ts).
-	 * Idle tabs restart now on their session file; a tab in a turn restarts when it ends.
-	 * Returns how many tabs still wait. Tabs on paired hosts are the host's; a hosted view's omp is the device tab's.
+	 * Idle tabs restart now on their session file; a tab in a turn, or whose relaunch continuation is still owed
+	 * (`continuationOwed`), restarts when that ends. Returns how many tabs still wait. Tabs on paired hosts are the
+	 * host's; a hosted view's omp is the device tab's.
 	 */
 	restartOnNewOmp(): number {
 		return this.#call<number>("restartOnNewOmp");
+	}
+
+	/** The tab's relaunch continuation ended: a restart for the new omp that waited on it runs now (one tick later). */
+	ompRestartIfWaiting(tabId: string): void {
+		if (this.continuationOwed?.(tabId) === true) return;
+		this.#call("ompRestartIfWaiting", { tab: tabId });
 	}
 
 	/**
@@ -1486,9 +1610,21 @@ export class SidecarPool {
 		return this.#exitingTabs.get(tabId) ?? Promise.resolve();
 	}
 
-	/** Release one tab's sidecar. False when the tab is unknown. */
-	releaseTab(tabId: string): boolean {
-		return this.#call<boolean>("releaseTab", { tab: tabId });
+	canReleaseTab(tabId: string, expectedTurn: AutoCloseTurn): boolean {
+		return this.#call<boolean>("canReleaseTab", { tab: tabId, expectedTurn });
+	}
+
+	/**
+	 * An automatic close releases only the same idle entry and turn. `unlessDirty`: an agent's release of a paired
+	 * page's tab, refused while a live connection of that page names it dirty, checked in the core step that removes it.
+	 */
+	releaseTab(tabId: string, expectedTurn?: AutoCloseTurn, unlessDirty?: FileEditTarget): boolean {
+		return this.#call<boolean>("releaseTab", { tab: tabId, expectedTurn, unlessDirty });
+	}
+
+	/** What `target`'s live connections report of `tabId`'s Files edits (the core's web router keeps them). */
+	fileEdits(target: FileEditTarget, tabId: string): FileEdits {
+		return this.#call<FileEdits>("fileEdits", { ...target, tab: tabId });
 	}
 
 	/** Release one tab like `releaseTab`; resolves once its omp process has exited. */
@@ -1576,15 +1712,79 @@ export class SidecarPool {
 	 * synthetic `cancel`, and an answer from another window after it is refused (`already_answered`), even while the
 	 * first is still on its way.
 	 */
-	routeSideChannel(id: string, frame: object, tabId?: string, responder?: ClientWindow): Promise<boolean> {
+	routeSideChannel(
+		id: string,
+		frame: object,
+		tabId?: string,
+		responder?: ClientWindow,
+		claim?: number,
+	): Promise<boolean> {
 		return this.#later("routeSideChannel", {
 			id,
 			frame,
 			tab: tabId,
 			responder: responder ? this.#windowId(responder) : undefined,
 			choice: describeAnswer(frame),
+			...(claim === undefined ? {} : { claim }),
 		});
 	}
+
+	/**
+	 * An agent's answer takes a question before its attachments go in (`TargetAnswer`): every other answer to it (the
+	 * person's card, another agent, a device viewing the tab) is refused as `being_answered` until it lands or the claim
+	 * is released. The rule lives in the core's pool (`pool/claims.rs`); these are its calls. Null: not open, or taken.
+	 */
+	claimRequest(tabId: string, requestId: string): number | null {
+		return this.#call<number | null>("claimRequest", { tab: tabId, id: requestId });
+	}
+
+	/** Give a claimed question back unanswered. */
+	releaseRequest(requestId: string, claim: number): void {
+		this.#call("releaseRequest", { id: requestId, claim });
+	}
+
+	/** Whether `requestId` is a question `tabId`'s omp still waits on. */
+	isRequestOpen(tabId: string, requestId: string): boolean {
+		return this.#call<boolean>("isRequestOpen", { tab: tabId, id: requestId });
+	}
+
+	/** Throws `being_answered` when an agent's answer holds the question and `claim` is not its own. */
+	guardAsk(requestId: string, claim?: number): void {
+		this.#call("guardAsk", { id: requestId, ...(claim === undefined ? {} : { claim }) });
+	}
+
+	/** Take the plan `tabId` waits on when it is the proposal at `planFilePath` of `generation`; null otherwise or when held. */
+	claimPlan(tabId: string, planFilePath: string, generation: number): number | null {
+		return this.#call<number | null>("claimPlan", { tab: tabId, file: planFilePath, generation });
+	}
+
+	/** Whether the plan `claim` took is still the pending one (a revision is another generation). */
+	planStillClaimed(tabId: string, claim: number): boolean {
+		return this.#call<boolean>("planStillClaimed", { tab: tabId, claim });
+	}
+
+	releasePlan(tabId: string, claim: number): void {
+		this.#call("releasePlan", { tab: tabId, claim });
+	}
+
+	/**
+	 * Throws `being_answered` for an approve or reject of a plan an agent's approval holds, unless it is the claiming
+	 * step's own (`own`): the window dispatcher and a device viewing the tab both call it.
+	 */
+	guardPlan(tabId: string, own = false): void {
+		this.#call("guardPlan", { tab: tabId, own });
+	}
+
+	/** An answer with attachments is one claimed step in this main (`TargetAnswer`), here for this pool's tabs. */
+	readonly targetAnswer: TargetAnswer = new TargetAnswer({
+		askOpen: (tabId, id) => this.isRequestOpen(tabId, id),
+		claim: (tabId, id) => this.claimRequest(tabId, id),
+		release: (id, claim) => this.releaseRequest(id, claim),
+		route: (tabId, id, response, claim) => this.routeSideChannel(id, response, tabId, undefined, claim),
+		claimPlan: (tabId, planFile, generation) => this.claimPlan(tabId, planFile, generation),
+		planStillClaimed: (tabId, claim) => this.planStillClaimed(tabId, claim),
+		releasePlan: (tabId, claim) => this.releasePlan(tabId, claim),
+	});
 
 	/**
 	 * Each of this window's tabs' status texts, widgets and title, for a page that loaded after they were
@@ -1636,20 +1836,43 @@ export class SidecarPool {
 	 */
 	resumeFacts(): ResumeFact[] {
 		const facts =
-			this.#call<Array<Omit<ResumeFact, "retry"> & { retry?: { errorMessage: string; id: number } }>>("resumeFacts");
-		const seen = new Set<string>();
-		const out = facts.map(({ retry, ...fact }): ResumeFact => {
-			if (!retry) return fact;
-			seen.add(fact.tabId);
-			// One object per `auto_retry_start`: the resume rules count the retries they took over by identity.
-			let kept = this.#retries.get(fact.tabId);
-			if (kept?.id !== retry.id) {
-				kept = { id: retry.id, retry: { errorMessage: retry.errorMessage } };
-				this.#retries.set(fact.tabId, kept);
+			this.#call<
+				Array<
+					Omit<ResumeFact, "retry" | "lastRun"> & {
+						retry?: { errorMessage: string; id: number };
+						lastRun?: IpcTabRunOutcome & { id: number };
+					}
+				>
+			>("resumeFacts");
+		const retrying = new Set<string>();
+		const ended = new Set<string>();
+		const out = facts.map(({ retry, lastRun, ...fact }): ResumeFact => {
+			const wired: ResumeFact = fact;
+			if (retry) {
+				retrying.add(fact.tabId);
+				// One object per `auto_retry_start`: the resume rules count the retries they took over by identity.
+				let kept = this.#retries.get(fact.tabId);
+				if (kept?.id !== retry.id) {
+					kept = { id: retry.id, retry: { errorMessage: retry.errorMessage } };
+					this.#retries.set(fact.tabId, kept);
+				}
+				wired.retry = kept.retry;
 			}
-			return { ...fact, retry: kept.retry };
+			if (lastRun) {
+				ended.add(fact.tabId);
+				// One object per finished run: the rules judge an outcome once and hold work for the failure they saw,
+				// by identity, so a fresh parse of the same outcome must read as the same one.
+				let kept = this.#outcomes.get(fact.tabId);
+				if (kept?.id !== lastRun.id) {
+					kept = lastRun;
+					this.#outcomes.set(fact.tabId, kept);
+				}
+				wired.lastRun = kept;
+			}
+			return wired;
 		});
-		for (const tab of [...this.#retries.keys()]) if (!seen.has(tab)) this.#retries.delete(tab);
+		for (const tab of [...this.#retries.keys()]) if (!retrying.has(tab)) this.#retries.delete(tab);
+		for (const tab of [...this.#outcomes.keys()]) if (!ended.has(tab)) this.#outcomes.delete(tab);
 		return out;
 	}
 
@@ -1795,6 +2018,11 @@ export class SidecarPool {
 	/** Show or clear the tab's calm "continuing where it left off" row (a relaunch's resume). */
 	setResuming(tabId: string, resuming: boolean): void {
 		this.#call("setResuming", { tab: tabId, resuming });
+	}
+
+	/** Show (or with `undefined` clear) a tab's cut-off row: its turn waits for the person's Continue or Dismiss. */
+	setCutOff(tabId: string, cutOff: IpcCutOff | undefined): void {
+		this.#call("setCutOff", { tab: tabId, cutOff: cutOff ?? null });
 	}
 
 	/**

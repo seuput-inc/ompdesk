@@ -8,10 +8,12 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use super::{CloseHow, TabClose};
+use crate::agentctl::journal::send_outbox::{OutboxSend, receiver_key};
 use crate::agentctl::service::AgentControl;
 use crate::agentctl::service::fail::{Fail, R, fail};
 use crate::agentctl::service::host::Deadline;
 use crate::agentctl::service::js::one_line;
+use crate::agentctl::service::messages::sent_answer;
 use crate::agentctl::service::resolve::{DeviceScope, Wanted};
 use crate::agentctl::service::text::{
     folder_key, label, open_in_text, response_data, saved_id_of_path, start_failure,
@@ -21,7 +23,7 @@ use crate::agentctl::service::types::{
     ChildWorktree, ControlDevice, ControlTab, ModelInfo, OpenArgs, OpenOne, OpenedChild,
     RpcResponse, SpawnRequest, SpawnWorktree, StoredSession, WorktreeArg, WorktreeRemoval,
 };
-use crate::agentctl::service::wrap::{agent_task_title, wrap_agent_message};
+use crate::agentctl::service::wrap::{agent_task_title, dispatch_mark, wrap_agent_message};
 
 /// One session of an open, as it came out: its tab and what was set up, or why it did not open.
 #[derive(Clone, Debug, Default)]
@@ -233,7 +235,7 @@ impl AgentControl {
         if let (Some(show), Some(first)) = (show, first)
             && show != "background"
         {
-            self.host.view(&caller.tab_id, &first.tab_id, show, false);
+            self.host.view(&caller.tab_id, &first.tab_id, show);
         }
         let state = self.host.state();
         let live = state.tabs(&caller.tab_id);
@@ -456,6 +458,7 @@ impl AgentControl {
                         &closing_id,
                         CloseHow {
                             auto: false,
+                            expected_turn: None,
                             wait_ms,
                             cleared: false,
                         },
@@ -480,6 +483,7 @@ impl AgentControl {
                 &tab_id,
                 CloseHow {
                     auto: false,
+                    expected_turn: None,
                     wait_ms: self.tuning.close_wait_ms,
                     cleared: false,
                 },
@@ -529,6 +533,8 @@ impl AgentControl {
         self.when_ready(tab_id, &caller.tab_id, None).await?;
         let mut send = self.open_commands(tab_id, &caller.tab_id);
         let mut notes: Vec<String> = Vec::new();
+        // What sets the child up before its first message, each with what it does (for its error).
+        let mut setup: Vec<(&str, Value)> = Vec::new();
         // Journaled in the child, so its main agent gets the worker contract (gui-bridge agent-control.ts) from its
         // first turn on, across relaunches; a session the user opened (and reopened here) never carries it.
         if let Some(joined) = joined {
@@ -543,80 +549,173 @@ impl AgentControl {
             } else {
                 &caller.title
             };
-            let answer = send
-                .send(json!({ "type": "agent_control_worker", "from": from }))
-                .await?;
-            response_data(&answer, "Marking the session as a worker")?;
+            setup.push((
+                "Marking the session as a worker",
+                json!({ "type": "agent_control_worker", "from": from }),
+            ));
         }
         if let Some(wanted) = args.model.as_deref().filter(|model| !model.is_empty()) {
             let model = self.resolve_model(&mut send, wanted).await?;
-            let answer = send
-                .send(
-                    json!({ "type": "set_model", "provider": model.provider, "modelId": model.id }),
-                )
-                .await?;
-            response_data(&answer, "Setting the model")?;
+            setup.push((
+                "Setting the model",
+                json!({ "type": "set_model", "provider": model.provider, "modelId": model.id }),
+            ));
             notes.push(format!("model {}/{}", model.provider, model.id));
         }
         if args.mode.as_deref() == Some("plan") {
-            let answer = send
-                .send(json!({ "type": "set_plan_mode", "enabled": true }))
-                .await?;
-            response_data(&answer, "Turning on plan mode")?;
+            setup.push((
+                "Turning on plan mode",
+                json!({ "type": "set_plan_mode", "enabled": true }),
+            ));
             notes.push("plan mode".to_owned());
         }
         if let Some(worktree) = worktree {
             notes.push(format!("worktree {}", worktree.branch));
+            // Made from the parent's HEAD (the default) it starts at where it lands: nothing to read.
+            let based = matches!(
+                &args.worktree,
+                Some(WorktreeArg::Spec(SpawnWorktree { base: Some(base), .. })) if base != "HEAD"
+            );
+            if based && !reopened && joined.is_none() {
+                notes.extend(self.starts_behind(&caller.tab_id, tab_id, worktree).await);
+            }
         }
         if let Some(prepared) = prepared.filter(|prepared| !prepared.is_empty()) {
             notes.push(prepared.to_owned());
         }
-        self.host
-            .before_first_prompt(&OpenedChild {
-                tab_id: tab_id.to_owned(),
-                caller_tab_id: caller.tab_id.clone(),
-                worktree: worktree.as_ref().map(|worktree| ChildWorktree {
-                    path: worktree.path.clone(),
-                    branch: worktree.branch.clone(),
-                }),
-                tag: tag.filter(|tag| !tag.is_empty()).map(str::to_owned),
-            })
-            .await?;
-        // Before its first message: a quick lookup may end before this call returns.
-        if args.throwaway == Some(true) {
-            self.mem().throwaway.insert(tab_id.to_owned());
-            notes.push(
-                "throwaway: closed and deleted once its Result: ok answer reaches you".to_owned(),
-            );
-        }
-        if let Some(message) = args
+        let message = args
             .message
             .as_deref()
-            .filter(|message| !message.is_empty())
-        {
+            .filter(|message| !message.is_empty());
+        // The first message as the child gets it: a goal's objective goes as stock's `set_goal`, which starts the
+        // objective turn itself; anything else as a prompt carrying its dispatch.
+        let first = message.map(|message| {
             if args.mode.as_deref() == Some("goal") {
-                // The goal command starts the objective turn itself.
-                let answer = send
-                    .send(json!({ "type": "set_goal", "objective": message }))
-                    .await?;
+                return (None, json!({ "type": "set_goal", "objective": message }));
+            }
+            let dispatch = self.mailbox.dispatch(tab_id);
+            let command = json!({
+                "type": "prompt",
+                "message": wrap_agent_message(
+                    &with_dispatch(message, Some(&dispatch), None),
+                    &caller.title,
+                    saved_id_of_path(caller.session_path.as_deref()).as_deref(),
+                ),
+                "streamingBehavior": "followUp",
+            });
+            (Some(dispatch), command)
+        });
+        // Kept (send-outbox.json) before any of it goes out: a quit between this tab and its first message (an update's
+        // restart, 19 Nov 2026) left a child "not started", untitled and without its brief. The sweep then hands the
+        // setup and the message to the child's next omp once (`redeliver_sends`, `Owed::prompt`), after the relaunch.
+        let child = self
+            .host
+            .state()
+            .tabs(&caller.tab_id)
+            .and_then(|tabs| tabs.into_iter().find(|tab| tab.tab_id == tab_id));
+        let kept = match (&self.send_outbox, &first, joined, message, child) {
+            (Some(outbox), Some((dispatch, command)), None, Some(message), Some(child)) => {
+                child.session_path.clone().map(|path| {
+                    let mark = dispatch
+                        .as_deref()
+                        .map_or_else(|| format!("open-goal:{tab_id}"), dispatch_mark);
+                    let mut entry = OutboxSend::new(
+                        mark,
+                        dispatch.as_deref().and_then(|d| d[1..].parse::<i64>().ok()),
+                        path,
+                        child.device.clone(),
+                        caller
+                            .session_path
+                            .clone()
+                            .unwrap_or_else(|| caller.tab_id.clone()),
+                        message.to_owned(),
+                        command["message"].as_str().unwrap_or(message).to_owned(),
+                        self.now(),
+                    );
+                    entry.from_device = caller.device.clone().filter(|device| !device.is_empty());
+                    entry.before = setup.iter().map(|(_, command)| command.clone()).collect();
+                    entry.goal = dispatch.is_none();
+                    (outbox, entry)
+                })
+            }
+            _ => None,
+        };
+        let steps = async {
+            if let Some((outbox, entry)) = &kept {
+                outbox.keep(entry.clone());
+            }
+            for (what, command) in &setup {
+                let answer = send.send(command.clone()).await?;
+                response_data(&answer, what)?;
+            }
+            self.host
+                .before_first_prompt(&OpenedChild {
+                    tab_id: tab_id.to_owned(),
+                    caller_tab_id: caller.tab_id.clone(),
+                    worktree: worktree.as_ref().map(|worktree| ChildWorktree {
+                        path: worktree.path.clone(),
+                        branch: worktree.branch.clone(),
+                    }),
+                    tag: tag.filter(|tag| !tag.is_empty()).map(str::to_owned),
+                })
+                .await?;
+            // Before its first message: a quick lookup may end before this call returns.
+            if args.throwaway == Some(true) {
+                self.mem().throwaway.insert(tab_id.to_owned());
+                notes.push(
+                    "throwaway: closed and deleted once its Result: ok answer reaches you"
+                        .to_owned(),
+                );
+            }
+            let Some((dispatch, command)) = &first else {
+                return Ok(());
+            };
+            // The omp it is handed to: that one holds it from now on, so the sweep never hands it there again.
+            let instance = match (&kept, dispatch) {
+                (Some((_, entry)), Some(_)) => self
+                    .host
+                    .sent_marks(tab_id, std::slice::from_ref(&entry.mark))
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|answer| sent_answer(&answer))
+                    .map(|answer| answer.instance),
+                _ => None,
+            }
+            .unwrap_or_else(|| format!("tab:{tab_id}"));
+            let answer = send.send(command.clone()).await?;
+            if dispatch.is_none() {
                 response_data(&answer, "Setting the goal")?;
                 notes.push("goal set".to_owned());
             } else {
-                let dispatch = self.mailbox.dispatch(tab_id);
-                let answer = send
-                    .send(json!({
-                        "type": "prompt",
-                        "message": wrap_agent_message(
-                            &with_dispatch(message, Some(&dispatch), None),
-                            &caller.title,
-                            saved_id_of_path(caller.session_path.as_deref()).as_deref(),
-                        ),
-                        "streamingBehavior": "followUp",
-                    }))
-                    .await?;
                 response_data(&answer, "Sending the first message")?;
             }
+            if let Some((outbox, entry)) = &kept {
+                // A goal's entry holds no marker its journal could show: done once stock took it.
+                if entry.goal {
+                    outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
+                } else {
+                    outbox.handed(entry, &instance);
+                }
+            }
+            Ok::<(), Fail>(())
+        };
+        let done = match &kept {
+            Some((outbox, entry)) => {
+                outbox
+                    .lane(
+                        &receiver_key(&entry.session_path, entry.device.as_deref()),
+                        steps,
+                    )
+                    .await
+            }
+            None => steps.await,
+        };
+        if let (Err(_), Some((outbox, entry))) = (&done, &kept) {
+            // The open fails and its child goes: nothing is owed to it.
+            outbox.settle(&entry.session_path, entry.device.as_deref(), &entry.mark);
         }
+        done?;
         Ok(OpenResult {
             tab_id: tab_id.to_owned(),
             error: None,
@@ -624,6 +723,35 @@ impl AgentControl {
             worktree: worktree.as_ref().map(|worktree| worktree.branch.clone()),
             started: args.message.is_some(),
             where_: None,
+        })
+    }
+
+    /// How far a new worktree already starts behind where its branch lands (a `base` older than the parent's HEAD),
+    /// as an open note; none when it does not or its branch cannot be read (that never fails the open).
+    async fn starts_behind(
+        &self,
+        caller_tab_id: &str,
+        tab_id: &str,
+        worktree: &crate::agentctl::service::types::TabWorktree,
+    ) -> Option<String> {
+        let device = self
+            .host
+            .state()
+            .tabs(caller_tab_id)
+            .and_then(|tabs| tabs.into_iter().find(|tab| tab.tab_id == tab_id))
+            .and_then(|tab| tab.device);
+        let facts = self
+            .host
+            .branch_facts(&worktree.reference(), device.as_deref())
+            .await
+            .ok()?;
+        (facts.commits_behind > 0).then(|| {
+            format!(
+                "the worktree starts {} commit{} behind {}",
+                facts.commits_behind,
+                if facts.commits_behind == 1 { "" } else { "s" },
+                facts.base_branch.as_deref().unwrap_or("the parent's HEAD")
+            )
         })
     }
 
@@ -687,10 +815,40 @@ impl AgentControl {
             show,
             single,
         } = args;
-        let items = sessions.unwrap_or_else(|| vec![single]);
+        let mut items = sessions.unwrap_or_else(|| vec![single]);
+        // From a bot's chat: an open names the item it works on, and takes the bot's model unless it names one.
+        let bot = self
+            .bot_of_folder(&caller.cwd)
+            .filter(|_| caller.device.is_none());
+        for item in &mut items {
+            if let Some(key) = item.item.as_deref() {
+                let Some(bot) = &bot else {
+                    return fail("item works only from a bot's chat.");
+                };
+                if self.items().find(&bot.id, key).is_none() {
+                    return fail(format!(
+                        "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
+                        bot.name
+                    ));
+                }
+            }
+            if item.reopen.is_none()
+                && item.model.as_deref().is_none_or(str::is_empty)
+                && let Some(model) = bot.as_ref().and_then(|bot| bot.model.clone())
+            {
+                item.model = Some(model);
+            }
+        }
         let results = self
             .open_many(caller, tabs, &items, show.as_deref(), None)
             .await?;
+        for (item, result) in items.iter().zip(&results) {
+            if let Some(key) = item.item.as_deref()
+                && !result.tab_id.is_empty()
+            {
+                self.link_opened(caller, key, &result.tab_id)?;
+            }
+        }
         let text = Self::open_text(&results);
         if !results.iter().any(|result| !result.tab_id.is_empty()) {
             return fail(text);

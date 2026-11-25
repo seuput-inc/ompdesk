@@ -3,9 +3,11 @@ import {
 	createHints,
 	createPollTracker,
 	EDIT_HINT,
+	GH_BURST_HINT,
 	POLL_HINT,
 	READY_LOG_REASON,
 	readyLogCannotMatch,
+	skipsGitHooks,
 	waitWindowElapsed,
 } from "../../resources/gui-bridge/waste-guards-core";
 
@@ -75,6 +77,33 @@ describe("ready.log that can never match", () => {
 		expect(READY_LOG_REASON).toContain("ready.log can never match");
 		expect(READY_LOG_REASON).toContain("async: true");
 		expect(READY_LOG_REASON).toContain("| tee file");
+	});
+});
+
+describe("a git push or commit past the hooks", () => {
+	it.each([
+		["push --no-verify", "git push --no-verify origin HEAD:refs/heads/x"],
+		["after a cd", "cd /repo && git push -q --no-verify origin main"],
+		["with -C", "git -C /repo push --no-verify"],
+		["commit --no-verify", 'git commit --no-verify -m "x"'],
+		["commit -n", 'git commit -n -m "x"'],
+		["commit -anm", 'git commit -anm "x"'],
+		["hooks path elsewhere", "git -c core.hooksPath=/dev/null push origin main"],
+		["a full git path", "/usr/bin/git push --no-verify"],
+	])("is refused: %s", (_label, command) => {
+		expect(skipsGitHooks({ command })).toBe(true);
+	});
+
+	it.each([
+		["a plain push", "git push origin HEAD:main"],
+		["push -n is a dry run", "git push -n origin main"],
+		["a probe branch", "git push origin HEAD:refs/heads/probe/red-test"],
+		["the words in a message", 'git commit -m "explain why --no-verify is refused"'],
+		["grep for it", 'rg -n "git push --no-verify" scripts'],
+		["another tool's flag", "npm publish --no-verify"],
+		["not a command", undefined],
+	])("is allowed: %s", (_label, command) => {
+		expect(skipsGitHooks({ command })).toBe(false);
 	});
 });
 
@@ -286,6 +315,33 @@ describe("poll hints", () => {
 		expect(first.note("bash", { command: "pgrep x" })).toBe(POLL_HINT);
 		expect(second.note("bash", { command: "pgrep x" })).toBeUndefined();
 		expect(second.note("bash", { command: "pgrep x" })).toBe(POLL_HINT);
+	});
+
+	it("speak once at a burst of gh commands in ten minutes, async ones counted, and not at the same count spread out", () => {
+		const minute = 60_000;
+		const hints = createHints();
+		// 14 commands in seven calls within ten minutes: quiet; the 15th, in a backgrounded call, is the burst.
+		for (let i = 0; i < 7; i++)
+			expect(
+				hints.note(
+					"bash",
+					{ command: `gh run view ${i} --log-failed | tail; gh api rate_limit` },
+					undefined,
+					i * minute,
+				),
+			).toBeUndefined();
+		expect(hints.note("bash", { command: "gh pr view 1", async: true }, undefined, 8 * minute)).toBe(GH_BURST_HINT);
+		// Told once per process.
+		for (let i = 0; i < 20; i++)
+			expect(hints.note("bash", { command: "gh run view 9 --log" }, undefined, 9 * minute)).toBeUndefined();
+		// Twenty commands, one every minute: never fifteen within ten minutes.
+		const spread = createHints();
+		for (let i = 0; i < 20; i++)
+			expect(spread.note("bash", { command: `gh run view ${i} --log` }, undefined, i * minute)).toBeUndefined();
+		// A mention is no command.
+		const quoted = createHints();
+		for (let i = 0; i < 20; i++)
+			expect(quoted.note("bash", { command: 'grep -c "gh run watch" notes.md' }, undefined, 0)).toBeUndefined();
 	});
 });
 

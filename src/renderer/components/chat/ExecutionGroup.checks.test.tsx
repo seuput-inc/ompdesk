@@ -169,8 +169,8 @@ describe("work card verdict", () => {
 			expanded = next;
 		});
 		expect(mark()?.getAttribute("data-state")).toBe("failed");
-		expect(mark()?.getAttribute("aria-label")).toBe("Done, a check failed");
-		expect(container.querySelector(".omp-work-narrative")?.textContent).toBe("Done, a check failed");
+		expect(mark()?.getAttribute("aria-label")).toBe("A check failed");
+		expect(container.querySelector(".omp-work-narrative")?.textContent).toBe("A check failed");
 		expect(container.querySelector(".omp-execution-group")?.getAttribute("data-verdict")).toBe("failed");
 		expect(container.querySelector('[data-work-finding^="check-"]')).toBeNull();
 		const block = finding("error");

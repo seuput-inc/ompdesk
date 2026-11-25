@@ -129,8 +129,8 @@ Spawn(s) ==
 \* Its own tag and what the last launch left for its session end, unless a quit is underway.
 \* @code src/main/session-processes.ts:262-266 close
 \* @code src/main/session-processes.ts:274-277 sessionReleased
-\* @code native/ompdesk/crates/core/src/sidecar/lane.rs:2046-2053 Lane::dispose: stops the omp; the lane tells main once every omp it stopped has exited (`sidecar.disposed`)
-\* @code native/ompdesk/crates/core/src/sidecar/lane.rs:2057-2069 Lane::when_all_exited: the close follows the omp's exit (main closes the tag on the event)
+\* @code native/ompdesk/crates/core/src/sidecar/lane.rs:2379-2386 Lane::dispose: stops the omp; the lane tells main once every omp it stopped has exited (`sidecar.disposed`)
+\* @code native/ompdesk/crates/core/src/sidecar/lane.rs:2390-2402 Lane::when_all_exited: the close follows the omp's exit (main closes the tag on the event)
 Dispose(s) ==
     /\ app = "up"
     /\ tab[s] # "closed"
@@ -164,8 +164,8 @@ EndFail(t) ==
     /\ \E again \in BOOLEAN : retry' = IF again THEN retry \cup {t} ELSE retry
     /\ UNCHANGED <<app, quitting, swept, launches, tab, held, sess, used, saved, keep, alive, mayEnd, tookOver>>
 
-\* The retry's timer fires: the tag is ended again only if nothing took it over meanwhile.
-\* @code src/main/session-processes.ts:358-363 #endEntry: the retry looks at the entry's state again
+\* The short timer or disk care retries a released tag only if nothing took it over meanwhile.
+\* @code src/main/session-processes.ts:424-432 retryReleased; :488-495 #endEntry: both recheck ownership
 RetryEnds(t) == state[t] = "left"
 
 Retry(t) ==
@@ -176,7 +176,7 @@ Retry(t) ==
     /\ UNCHANGED <<app, quitting, swept, launches, tab, held, sess, used, saved, keep, alive, mayEnd, failed, tookOver>>
 
 \* A quit is approved: the layout is no longer saved, and the teardown that follows closes every tab.
-\* @code src/main/index.ts:918-921 frozen: quitApproved
+\* @code src/main/index.ts:979-984 frozen: quitApproved
 QuitBegin ==
     /\ app = "up" /\ ~quitting
     /\ quitting' = TRUE
@@ -213,7 +213,7 @@ Boot ==
     /\ UNCHANGED <<quitting, held, sess, used, saved, inflight, alive, tookOver, retry>>
 
 \* The launch's sweep.
-\* @code src/main/index.ts:2397-2412 keep: the restored layouts and the markers; sweep after the tabs exist
+\* @code src/main/index.ts:2660-2677 keep: the restored layouts and the markers; sweep after the tabs exist
 Sweep ==
     /\ app = "up" /\ ~swept /\ ~quitting
     /\ swept' = TRUE

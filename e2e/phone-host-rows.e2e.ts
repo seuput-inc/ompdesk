@@ -21,7 +21,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { chromium, devices, _electron as electron, expect, type Page, test } from "@playwright/test";
+import { chromium, devices, expect, type Page, test } from "@playwright/test";
+import { _electron as electron } from "playwright";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { captureTo, cssString, exitApp } from "./harness";
 import {

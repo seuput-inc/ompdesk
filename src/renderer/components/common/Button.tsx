@@ -32,9 +32,10 @@ const PAINT: Record<ButtonVariant, { rest: string; live: string }> = {
 		rest: "border-transparent bg-(--sc-accent) text-(--sc-accent-fg) shadow-(--sc-shadow-sm)",
 		live: "hover:bg-(--sc-accent-hover) active:brightness-95",
 	},
+	// Orca's outline button: the field's ground and a hairline lift, so it reads as a control on any surface.
 	secondary: {
-		rest: "border-(--sc-border-subtle) bg-transparent text-(--sc-text)",
-		live: "hover:border-(--sc-border) hover:bg-(--sc-hover) active:bg-(--sc-pressed)",
+		rest: "border-(--sc-border-subtle) bg-(--sc-field) text-(--sc-text) shadow-(--sc-shadow-sm)",
+		live: "hover:border-(--sc-border) hover:bg-[color-mix(in_srgb,var(--sc-text)_5%,var(--sc-field))] active:bg-[color-mix(in_srgb,var(--sc-text)_9%,var(--sc-field))]",
 	},
 	ghost: {
 		rest: "border-transparent bg-transparent text-(--sc-text-secondary)",

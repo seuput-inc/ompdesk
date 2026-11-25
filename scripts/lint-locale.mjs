@@ -5,7 +5,7 @@
  * German Windows grouped "20.000" in the English UI. Pass `uiLocale()` (lib/format.ts) or use a lib/format helper. A
  * deliberate exception carries `locale-ok: <reason>` in a comment on the line.
  */
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 const METHODS = new Set(["toLocaleString", "toLocaleDateString", "toLocaleTimeString"]);
 

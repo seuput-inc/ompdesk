@@ -14,22 +14,30 @@
 
 pub mod branches;
 mod checkout;
+mod checkout_peers;
+mod fingerprints;
 pub(crate) mod freshness;
-mod origin;
+pub(crate) mod left_behind;
+pub(crate) mod origin;
 mod orphans;
 pub(crate) mod parse;
+mod project;
 pub(crate) mod read;
 pub(crate) mod run;
 mod scm;
 mod seed;
-mod triggers;
+pub(crate) mod triggers;
 mod unlanded;
-mod worktree;
+pub(crate) mod worktree;
+
+#[cfg(all(test, unix))]
+pub(crate) use scm::tests::{repo_at, sh};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::run::Runner;
-use crate::server::{Registry, Reply};
+use crate::server::{Fault, Registry, Reply};
 use run::Git;
 
 #[derive(Deserialize)]
@@ -43,13 +51,14 @@ struct FingerprintParams {
     git: Runner,
     cwd: String,
     root: Option<String>,
+    key: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct DiffParams {
-    git: Runner,
+    git: Option<Runner>,
     cwd: String,
-    path: String,
+    path: Value,
 }
 
 /// A request on the checkout root main resolved.
@@ -59,19 +68,13 @@ struct Root {
     root: String,
 }
 
-/// `paths` none: all of them.
+/// Stage and unstage accept explicit `null` for all; discard always requires a list.
 #[derive(Deserialize)]
 struct PathsParams {
     git: Runner,
     root: String,
-    paths: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-struct DiscardParams {
-    git: Runner,
-    root: String,
-    paths: Vec<String>,
+    #[serde(deserialize_with = "Value::deserialize")]
+    paths: Value,
 }
 
 /// `slowMs`: the timeout of the request's one slow git (a hook, the network, a merge), main's to choose.
@@ -148,7 +151,7 @@ struct CommitDiffParams {
     git: Runner,
     root: String,
     sha: String,
-    path: String,
+    path: Value,
 }
 
 #[derive(Deserialize)]
@@ -179,37 +182,15 @@ struct OriginParams {
 struct PlanParams {
     git: Runner,
     cwd: String,
+    checkout_spelling: String,
     base_ref: Option<String>,
-}
-
-/// `addTimeoutMs`: `worktree add`'s timeout, main's to choose.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AddParams {
-    git: Runner,
-    primary: String,
-    base_cwd: String,
-    path: String,
-    branch: String,
-    start_point: String,
-    add_timeout_ms: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AddNamedParams {
-    git: Runner,
-    primary: String,
-    base_cwd: String,
-    path: String,
-    source: worktree::Source,
-    add_timeout_ms: u64,
 }
 
 #[derive(Deserialize)]
 struct RemovalParams {
     git: Runner,
     path: String,
+    root: String,
     force: bool,
 }
 
@@ -223,10 +204,24 @@ struct RemoveParams {
     timeout_ms: u64,
 }
 
+/// `git.leftBehindRemove`: one folder `left_behind.rs` wrote down, under main's removal claim for it.
+#[derive(Deserialize)]
+struct LeftBehindParams {
+    git: Runner,
+    path: String,
+}
+
 #[derive(Deserialize)]
 struct LifecycleParams {
     git: Runner,
     worktree: worktree::Lifecycle,
+}
+
+#[derive(Deserialize)]
+struct SnapshotParams {
+    #[serde(flatten)]
+    session: LifecycleParams,
+    policy: worktree::ExitPolicy,
 }
 
 /// `target`: the checkout to remove (main's guard passed it), none when it already vanished.
@@ -248,12 +243,13 @@ struct WorktreeParams {
     worktree: branches::WorktreeRef,
 }
 
-/// `diff`: whether the caller reads the diff at all.
+/// `diffChars`: the diff's budget in UTF-16 units; 0 reads no diff.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct EvidenceParams {
     git: Runner,
     worktree: branches::WorktreeRef,
-    diff: bool,
+    diff_chars: usize,
 }
 
 #[derive(Deserialize)]
@@ -278,6 +274,12 @@ struct DiscardRemoveParams {
     git: Runner,
     worktree: branches::WorktreeRef,
     tip: String,
+}
+
+#[derive(Deserialize)]
+struct OrphanLocation {
+    root: String,
+    primary: String,
 }
 
 /// `root`: the worktree root's real path (none: every linked worktree, wherever it is), `open`: the real folders open
@@ -314,6 +316,8 @@ struct RoutineHeadParams {
     git: Runner,
     repo: String,
     branch: String,
+    #[serde(default)]
+    mark: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -383,6 +387,7 @@ struct HookParams {
 }
 
 pub fn register(registry: &mut Registry) {
+    checkout_peers::register(registry);
     registry.add("git.freshnessCheckout", |call| {
         Box::pin(async move {
             let FreshnessCheckoutParams {
@@ -426,16 +431,28 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&checkout::status(&Git::new(git, call.scope), &toplevel, &paths).await?)
         })
     });
-    registry.add("git.checkoutDirs", |call| {
+    registry.add("git.watchedFingerprint", |call| {
         Box::pin(async move {
-            let At { git, cwd } = call.params()?;
-            Reply::json(&checkout::dirs(&Git::new(git, call.scope), &cwd).await?)
+            let FingerprintParams {
+                git,
+                cwd,
+                root,
+                key,
+            } = call.params()?;
+            let git = Git::new(git, call.scope);
+            fingerprints::read(&git, &cwd, key.as_deref().unwrap_or(&cwd), root.as_deref()).await
         })
     });
     registry.add("git.routineHead", |call| {
         Box::pin(async move {
-            let RoutineHeadParams { git, repo, branch } = call.params()?;
-            Reply::json(&triggers::routine_head(&Git::new(git, call.scope), &repo, &branch).await?)
+            let RoutineHeadParams {
+                git,
+                repo,
+                branch,
+                mark,
+            } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&triggers::routine_head(&git, &repo, &branch, &mark).await?)
         })
     });
     registry.add("git.routineCommits", |call| {
@@ -480,7 +497,7 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.fingerprint", |call| {
         Box::pin(async move {
-            let FingerprintParams { git, cwd, root } = call.params()?;
+            let FingerprintParams { git, cwd, root, .. } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&read::fingerprint(&git, &cwd, root.as_deref()).await?)
         })
@@ -495,27 +512,29 @@ pub fn register(registry: &mut Registry) {
     registry.add("git.diff", |call| {
         Box::pin(async move {
             let DiffParams { git, cwd, path } = call.params()?;
-            let git = Git::new(git, call.scope);
-            Reply::json(&read::diff(&git, &cwd, &path).await?)
+            let path = parse::relative_path(&path)?;
+            let git = git
+                .ok_or_else(|| Fault::new("git_missing", "git is not installed or not on PATH"))?;
+            Reply::json(&read::diff(&Git::new(git, call.scope), &cwd, path).await?)
         })
     });
     registry.add("git.stage", |call| {
         Box::pin(async move {
             let PathsParams { git, root, paths } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::stage(&git, &root, paths.as_deref()).await?)
+            Reply::json(&scm::stage(&git, &root, &paths).await?)
         })
     });
     registry.add("git.unstage", |call| {
         Box::pin(async move {
             let PathsParams { git, root, paths } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::unstage(&git, &root, paths.as_deref()).await?)
+            Reply::json(&scm::unstage(&git, &root, &paths).await?)
         })
     });
     registry.add("git.discard", |call| {
         Box::pin(async move {
-            let DiscardParams { git, root, paths } = call.params()?;
+            let PathsParams { git, root, paths } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&scm::discard(&git, &root, &paths).await?)
         })
@@ -650,7 +669,7 @@ pub fn register(registry: &mut Registry) {
                 path,
             } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::commit_diff(&git, &root, &sha, &path).await?)
+            Reply::json(&scm::commit_diff(&git, &root, &sha, parse::relative_path(&path)?).await?)
         })
     });
     registry.add("git.historyAction", |call| {
@@ -684,6 +703,7 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&unlanded::unlanded(&git, &cwd).await?)
         })
     });
+    project::register(registry);
     registry.add("git.originFacts", |call| {
         Box::pin(async move {
             let OriginParams {
@@ -697,57 +717,59 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.worktreePlan", |call| {
         Box::pin(async move {
-            let PlanParams { git, cwd, base_ref } = call.params()?;
+            let PlanParams {
+                git,
+                cwd,
+                checkout_spelling,
+                base_ref,
+            } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&worktree::plan(&git, &cwd, base_ref.as_deref()).await?)
+            Reply::json(&worktree::plan(&git, &cwd, checkout_spelling, base_ref.as_deref()).await?)
+        })
+    });
+    registry.add("git.worktreePrefetch", |call| {
+        Box::pin(async move {
+            let At { git, cwd } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&worktree::prefetch(&git, &cwd).await?)
         })
     });
     registry.add("git.worktreeAdd", |call| {
         Box::pin(async move {
-            let AddParams {
-                git,
-                primary,
-                base_cwd,
-                path,
-                branch,
-                start_point,
-                add_timeout_ms,
-            } = call.params()?;
-            let git = Git::new(git, call.scope);
-            Reply::json(
-                &worktree::add(
-                    &git,
-                    &primary,
-                    &base_cwd,
-                    &path,
-                    &branch,
-                    &start_point,
-                    add_timeout_ms,
-                )
-                .await?,
-            )
-        })
-    });
-    registry.add("git.worktreeAddNamed", |call| {
-        Box::pin(async move {
-            let AddNamedParams {
-                git,
-                primary,
-                base_cwd,
-                path,
-                source,
-                add_timeout_ms,
-            } = call.params()?;
-            let git = Git::new(git, call.scope);
-            worktree::add_named(&git, &primary, &base_cwd, &path, &source, add_timeout_ms).await?;
-            Reply::json(&())
+            let params = call.params()?;
+            Reply::json(&worktree::add(params, call.scope).await?)
         })
     });
     registry.add("git.worktreeRemoval", |call| {
         Box::pin(async move {
-            let RemovalParams { git, path, force } = call.params()?;
+            let RemovalParams {
+                git,
+                path,
+                root,
+                force,
+            } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&worktree::removal(&git, &path, force).await?)
+            Reply::json(&worktree::removal(&git, &path, &root, force).await?)
+        })
+    });
+    registry.add("git.leftBehind", |_call| {
+        Box::pin(async move {
+            let entries = left_behind::file()
+                .map(|file| left_behind::list(&file))
+                .unwrap_or_default();
+            Reply::json(&entries)
+        })
+    });
+    registry.add("git.leftBehindRemove", |call| {
+        Box::pin(async move {
+            let LeftBehindParams { git, path } = call.params()?;
+            let git = Git::new(git, call.scope);
+            let Some(file) = left_behind::file() else {
+                return Reply::json(&left_behind::Swept::Kept {
+                    reason: "nothing is written down".into(),
+                });
+            };
+            Reply::json(&left_behind::sweep_one(&git, &file, &path).await?)
         })
     });
     registry.add("git.worktreeRemove", |call| {
@@ -764,9 +786,9 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.sessionWorktreeSnapshot", |call| {
         Box::pin(async move {
-            let LifecycleParams { git, worktree } = call.params()?;
-            let git = Git::new(git, call.scope);
-            Reply::json(&worktree::snapshot(&git, &worktree).await?)
+            let SnapshotParams { session, policy } = call.params()?;
+            let git = Git::new(session.git, call.scope);
+            Reply::json(&worktree::snapshot(&git, &session.worktree, policy).await?)
         })
     });
     registry.add("git.sessionWorktreeRemoval", |call| {
@@ -813,10 +835,17 @@ pub fn register(registry: &mut Registry) {
             let EvidenceParams {
                 git,
                 worktree,
-                diff,
+                diff_chars,
             } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&branches::evidence(&git, &worktree, diff).await?)
+            Reply::json(&branches::evidence(&git, &worktree, diff_chars).await?)
+        })
+    });
+    registry.add("git.mergeCheck", |call| {
+        Box::pin(async move {
+            let WorktreeParams { git, worktree } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&branches::merge_check(&git, &worktree).await?)
         })
     });
     registry.add("git.predictMerge", |call| {
@@ -868,6 +897,26 @@ pub fn register(registry: &mut Registry) {
             let DiscardRemoveParams { git, worktree, tip } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&branches::discard_remove(&git, &worktree, &tip).await?)
+        })
+    });
+    registry.add("git.orphanRepositories", |call| {
+        Box::pin(async move {
+            let Root { git, root } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&orphans::repositories(&git, root).await?)
+        })
+    });
+    registry.add("git.orphanProject", |call| {
+        Box::pin(async move {
+            let At { git, cwd } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&orphans::project(&git, &cwd).await?)
+        })
+    });
+    registry.add("git.orphanProjectWithEntries", |call| {
+        Box::pin(async move {
+            let OrphanLocation { root, primary } = call.params()?;
+            Reply::json(&orphans::project_with_entries(root, primary).await?)
         })
     });
     registry.add("git.orphanCandidates", |call| {

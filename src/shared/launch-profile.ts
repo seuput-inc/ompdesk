@@ -1,10 +1,11 @@
 /**
  * Launch profiles: per-workspace agent CLI customisation configured in the
  * GUI (Settings → Launch Profile), persisted in GUI prefs under
- * `launchProfiles.<cwd>`, and appended to the sidecar spawn argv by
- * src/main/sidecar.ts. This module is pure mapping/preview — no I/O — so the
- * renderer (settings form + effective-command preview) and the main process
- * (spawn) share one source of truth.
+ * `launchProfiles.<cwd>` by the core (`native/ompdesk/crates/core/src/prefs/launch_profile.rs`,
+ * which also parses them and maps them to a spawn's flags). This module is pure
+ * mapping/preview, no I/O: the renderer's effective-command preview and the
+ * spawn's denylist (`omp-launch.ts`). `profileToFlags` is the core's mapping
+ * again, held to the same rows (`launch-captured.json`).
  *
  * Flag mappings mirror packages/coding-agent/src/cli/flag-tables.ts.
  */
@@ -58,34 +59,34 @@ export const DENYLISTED_FLAGS: readonly string[] = [
 
 const DENYLISTED: Record<string, true> = Object.fromEntries(DENYLISTED_FLAGS.map(flag => [flag, true]));
 
-/** Denylisted flags that consume a separate value token (--flag value). The
- * rest are boolean switches; --resume/--session take an optional value and
- * are treated as value-taking so a smuggled value never survives as a stray
- * positional argument. */
-const DENYLISTED_WITH_VALUE: Record<string, true> = {
-	"--session": true,
+/** Flags whose next token is always their value, even a flag-looking one: stock `STRING_VALUE_FLAGS`
+ * (`cli/flag-tables`), held for the denylisted flags and those `profileToFlags` emits, because this must run
+ * before omp starts and in the renderer's launch-command preview. The value of a kept one is DATA (a prompt, a
+ * path, a tool list), never inspected as a smuggled flag: a prompt that happens to be "--session" is a value, as
+ * stock reads it. Pinned to stock `flagConsumesValue` by `src/main/launch-profile-stock.test.ts`. */
+const VALUED_FLAGS: Record<string, true> = {
 	"--mode": true,
 	"--export": true,
 	"--cwd": true,
-	"--resume": true,
 	"--fork": true,
 	"--api-key": true,
-};
-
-/** Non-denylisted flags that consume a separate value token. The value of one
- * of these is DATA (a prompt, a path, a tool list) and must never be inspected
- * as a potential smuggled flag — a prompt that happens to be "--session" is a
- * legitimate value, not an override. Mirrors stock cli/flag-tables; this must
- * run before omp starts and in the renderer's launch-command preview. */
-const VALUED_FLAGS: Record<string, true> = {
 	"--system-prompt": true,
 	"--append-system-prompt": true,
 	"--add-dir": true,
 	"--tools": true,
-	"--profile": true,
 	"--session-dir": true,
 	"--config": true,
 };
+
+/** Flags that take the next token only when it is value-like and not empty: stock `OPTIONAL_VALUE_FLAGS`. */
+const OPTIONAL_VALUE_FLAGS: Record<string, true> = { "--session": true, "--resume": true };
+
+/** Whether stock reads `next` as the value of the bare flag `name` (stock `flagConsumesValue`). */
+function consumesValue(name: string, next: string | undefined): boolean {
+	if (next === undefined) return false;
+	if (VALUED_FLAGS[name] === true) return true;
+	return OPTIONAL_VALUE_FLAGS[name] === true && next !== "" && !next.startsWith("-");
+}
 
 /** Drop denylisted flags (and their separate value tokens) from a flag list.
  * Handles both `--flag value` and `--flag=value` forms. Pair-aware: the value
@@ -102,23 +103,15 @@ export function stripDenylistedFlags(flags: readonly string[]): string[] {
 		const eq = token.indexOf("=");
 		const name = eq === -1 ? token : token.slice(0, eq);
 		if (DENYLISTED[name] === true) {
-			// `--flag value`: the value rides with the flag unless the next token is
-			// itself flag-looking (then the flag is treated as valueless). The
-			// `--flag=value` form carries its value in the dropped token already.
-			if (eq === -1 && DENYLISTED_WITH_VALUE[name] === true) {
-				const next = flags[i + 1];
-				if (next !== undefined && !next.startsWith("-")) i++;
-			}
+			// `--flag value`: the value goes with the flag. `--flag=value` carries it in the dropped token already.
+			if (eq === -1 && consumesValue(name, flags[i + 1])) i++;
 			continue;
 		}
 		out.push(token);
 		// Value position of a valued non-denylisted flag is opaque data.
-		if (eq === -1 && VALUED_FLAGS[name] === true) {
-			const next = flags[i + 1];
-			if (next !== undefined) {
-				out.push(next);
-				i++;
-			}
+		if (eq === -1 && consumesValue(name, flags[i + 1])) {
+			out.push(flags[i + 1]);
+			i++;
 		}
 	}
 	return out;
@@ -160,51 +153,6 @@ export function profileToFlags(profile: LaunchProfile): string[] {
 		flags.push("--config", profile.config.trim());
 	}
 	return flags;
-}
-
-/**
- * Sanitize untrusted prefs JSON into a launch profile. Unknown keys — e.g. a
- * hand-edited prefs file smuggling `"--session"` — are dropped before they
- * can reach the mapping, and empty/blank values are normalized away so a
- * cleaned profile with no keys means "no profile".
- */
-export function parseLaunchProfile(raw: unknown): LaunchProfile {
-	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
-	const record = raw as Record<string, unknown>;
-	const profile: LaunchProfile = {};
-	if (typeof record.systemPrompt === "string" && record.systemPrompt.trim() !== "") {
-		profile.systemPrompt = record.systemPrompt;
-	}
-	if (typeof record.appendSystemPrompt === "string" && record.appendSystemPrompt.trim() !== "") {
-		profile.appendSystemPrompt = record.appendSystemPrompt;
-	}
-	if (record.noRules === true) profile.noRules = true;
-	if (Array.isArray(record.addDirs)) {
-		const dirs = record.addDirs
-			.filter((dir): dir is string => typeof dir === "string")
-			.map(dir => dir.trim())
-			.filter(dir => dir !== "");
-		if (dirs.length > 0) profile.addDirs = dirs;
-	}
-	if (Array.isArray(record.tools)) {
-		const tools = record.tools
-			.filter((tool): tool is string => typeof tool === "string")
-			.map(tool => tool.trim())
-			.filter(tool => tool !== "");
-		if (tools.length > 0) profile.tools = tools;
-	}
-	if (record.noLsp === true) profile.noLsp = true;
-	if (record.planYolo === true) profile.planYolo = true;
-	if (typeof record.profile === "string" && record.profile.trim() !== "") {
-		profile.profile = record.profile.trim();
-	}
-	if (typeof record.sessionDir === "string" && record.sessionDir.trim() !== "") {
-		profile.sessionDir = record.sessionDir.trim();
-	}
-	if (typeof record.config === "string" && record.config.trim() !== "") {
-		profile.config = record.config.trim();
-	}
-	return profile;
 }
 
 /** Shell-safe charset: args outside it are single-quoted in the preview. */

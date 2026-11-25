@@ -1,100 +1,103 @@
-/** The PTY size lease between the desktop and a phone (design S11): who may resize, and when it moves. */
-import { describe, expect, it } from "vitest";
-import { HOLDER_IDLE_MS, PRESENCE_MS, TerminalLease } from "./lease";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { TerminalLeaseState, TerminalOperation, TerminalSnapshot } from "../../shared/terminal-types";
+import { core } from "../core/process";
+import type { StockHelper } from "../stock-helper";
+import { terminalTestHelper } from "./test-helper";
 
 const DESKTOP = 3;
 const PHONE = -1;
-const TERM = "3:tab|pty";
+const owner = "3:tab";
 
-function setup() {
-	let now = 1_000_000;
-	const lease = new TerminalLease({ now: () => now });
-	return {
-		lease,
-		advance: (ms: number) => {
-			now += ms;
-		},
-	};
-}
-
-describe("TerminalLease", () => {
-	it("lets a lone viewer resize as it always did, and a second one watch", () => {
-		const { lease } = setup();
-		expect(lease.seen(TERM, DESKTOP)).toBe("free");
-		expect(lease.mayResize(TERM, DESKTOP)).toBe(true);
-		expect(lease.seen(TERM, DESKTOP)).toBe("you");
-		expect(lease.seen(TERM, PHONE)).toBe("other");
-		expect(lease.mayResize(TERM, PHONE)).toBe(false);
-		expect(lease.mayResize(TERM, DESKTOP)).toBe(true);
+describe("terminal viewer size through the stock lane", () => {
+	let dir: string;
+	let helper: StockHelper;
+	let id: string;
+	let now: number;
+	beforeEach(async () => {
+		dir = await mkdtemp(join(tmpdir(), "terminal-lease-"));
+		helper = await terminalTestHelper(dir);
+		now = 1_000_000;
+		[{ id }] = await request(DESKTOP, { action: "create", cols: 80, rows: 24 });
+	});
+	afterEach(async () => {
+		await helper?.stop();
+		await rm(dir, { recursive: true, force: true });
 	});
 
-	it("moves to the phone when it claims, and back when the desktop does", () => {
-		const { lease } = setup();
-		lease.mayResize(TERM, DESKTOP);
-		lease.seen(TERM, PHONE);
-		lease.claim(TERM, PHONE);
-		expect(lease.state(TERM, PHONE)).toBe("you");
-		expect(lease.state(TERM, DESKTOP)).toBe("other");
-		expect(lease.mayResize(TERM, DESKTOP)).toBe(false);
-		lease.claim(TERM, DESKTOP);
-		expect(lease.state(TERM, DESKTOP)).toBe("you");
-		expect(lease.state(TERM, PHONE)).toBe("other");
+	function request(viewer: number, operation: TerminalOperation, key = owner) {
+		return helper.request<TerminalSnapshot[]>("terminal.viewerRequest", {
+			owner: key,
+			viewer,
+			now,
+			cwd: dir,
+			env: {},
+			operation,
+		});
+	}
+
+	async function seen(viewer: number, key = owner, terminal = id) {
+		const { result } = await core().call<TerminalLeaseState[]>("terminal.viewerSeen", {
+			host: helper.host,
+			owner: key,
+			viewer,
+			ids: [terminal],
+			now,
+		});
+		return result[0];
+	}
+
+	const resize = (viewer: number, cols: number) => request(viewer, { action: "resize", id, cols, rows: 24 });
+
+	it("orders a claim before a competing resize and samples the holder after the worker replies", async () => {
+		expect(await seen(DESKTOP)).toBe("free");
+		expect(await resize(DESKTOP, 100)).toMatchObject([{ cols: 100 }]);
+		expect(await seen(PHONE)).toBe("other");
+		expect(await resize(PHONE, 60)).toMatchObject([{ cols: 100 }]);
+		const claim = request(PHONE, { action: "claim", id });
+		const later = resize(DESKTOP, 120);
+		expect(await seen(DESKTOP)).toBe("other");
+		await claim;
+		expect(await later).toMatchObject([{ cols: 100 }]);
+		expect(await resize(PHONE, 60)).toMatchObject([{ cols: 60 }]);
+		expect(await seen(PHONE)).toBe("you");
+		await request(DESKTOP, { action: "claim", id });
+		expect(await seen(PHONE)).toBe("other");
 	});
 
-	it("lets go of a holder that stopped asking, so the next resize takes it", () => {
-		const { lease, advance } = setup();
-		lease.mayResize(TERM, DESKTOP);
-		lease.seen(TERM, PHONE);
-		expect(lease.state(TERM, PHONE)).toBe("other");
-		advance(PRESENCE_MS + 1);
-		lease.seen(TERM, PHONE);
-		expect(lease.state(TERM, PHONE)).toBe("free");
-		expect(lease.mayResize(TERM, PHONE)).toBe(true);
-		expect(lease.state(TERM, PHONE)).toBe("you");
+	it("an absent holder gives way at ten seconds; an idle but present holder gives way to a typist at fifteen", async () => {
+		await resize(DESKTOP, 100);
+		now += 9999;
+		expect(await seen(PHONE)).toBe("other");
+		now++;
+		expect(await seen(PHONE)).toBe("free");
+		await request(PHONE, { action: "write", id, data: "a" });
+		now += 8000;
+		expect(await seen(PHONE)).toBe("you");
+		now += 6999;
+		await request(DESKTOP, { action: "write", id, data: "b" });
+		expect(await seen(DESKTOP)).toBe("other");
+		now++;
+		await request(DESKTOP, { action: "write", id, data: "\ud800" });
+		expect(await seen(DESKTOP)).toBe("you");
+		expect(await request(DESKTOP, { action: "list" })).toMatchObject([{ output: "ab\ud800" }]);
 	});
 
-	it("keeps a holder that keeps asking, even without typing", () => {
-		const { lease, advance } = setup();
-		lease.mayResize(TERM, DESKTOP);
-		for (let tick = 0; tick < 8; tick++) {
-			advance(PRESENCE_MS / 2);
-			lease.seen(TERM, DESKTOP);
-		}
-		lease.seen(TERM, PHONE);
-		expect(lease.state(TERM, PHONE)).toBe("other");
-	});
-
-	it("moves to a typist only after the holder has been idle, so two people typing in turn never fight", () => {
-		const { lease, advance } = setup();
-		lease.mayResize(TERM, DESKTOP);
-		lease.seen(TERM, PHONE);
-		lease.typed(TERM, DESKTOP);
-		advance(2000);
-		lease.seen(TERM, DESKTOP);
-		lease.typed(TERM, PHONE);
-		expect(lease.state(TERM, DESKTOP)).toBe("you");
-		advance(HOLDER_IDLE_MS);
-		lease.seen(TERM, DESKTOP);
-		lease.typed(TERM, PHONE);
-		expect(lease.state(TERM, PHONE)).toBe("you");
-		expect(lease.state(TERM, DESKTOP)).toBe("other");
-	});
-
-	it("a typist takes a lease nobody holds", () => {
-		const { lease } = setup();
-		lease.typed(TERM, PHONE);
-		expect(lease.state(TERM, PHONE)).toBe("you");
-	});
-
-	it("forgets a closed terminal and every terminal of a released tab", () => {
-		const { lease } = setup();
-		lease.claim(TERM, DESKTOP);
-		lease.claim("3:tab|other", DESKTOP);
-		lease.claim("3:else|pty", DESKTOP);
-		lease.forget(TERM);
-		expect(lease.state(TERM, DESKTOP)).toBe("free");
-		lease.forgetOwner("3:tab|");
-		expect(lease.state("3:tab|other", DESKTOP)).toBe("free");
-		expect(lease.state("3:else|pty", DESKTOP)).toBe("you");
+	it("a close forgets one terminal; releasing an owner forgets its other terminals but not another owner's", async () => {
+		const sessions = await request(DESKTOP, { action: "create", cols: 80, rows: 24 });
+		const sibling = sessions.find(session => session.id !== id)!;
+		const other = "3:else";
+		const [unrelated] = await request(DESKTOP, { action: "create", cols: 80, rows: 24 }, other);
+		await request(DESKTOP, { action: "claim", id });
+		await request(DESKTOP, { action: "claim", id: sibling.id });
+		await request(PHONE, { action: "claim", id: unrelated.id }, other);
+		await request(DESKTOP, { action: "close", id });
+		expect(await seen(DESKTOP)).toBe("free");
+		expect(await seen(DESKTOP, owner, sibling.id)).toBe("you");
+		await helper.request("terminal.dispose", { owner });
+		expect(await seen(DESKTOP, owner, sibling.id)).toBe("free");
+		expect(await seen(PHONE, other, unrelated.id)).toBe("you");
 	});
 });

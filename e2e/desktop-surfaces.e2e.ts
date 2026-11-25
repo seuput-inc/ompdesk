@@ -4,8 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { type ElectronApplication, _electron as electron } from "playwright";
-import { micaSupported } from "../src/main/window-chrome";
-import { captureTo, exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
+import { captureTo, exitApp, fixtureOmp, pressShortcutUntilVisible, windowsDrawsMica } from "./harness";
 
 // Surfaces the release workflow's @smoke run covers on every platform beside smoke.e2e.ts, on the
 // fake omp: the Model roles page, a file edited in the Files panel, and (Windows only) the Mica
@@ -121,10 +120,10 @@ test("@smoke Model roles lists every purpose with its use, and a role is set thr
 		await expect(roles.locator("#model-role-smol")).toContainText("Quick, cheap work");
 		await captureTo(CAPTURES, page, "model-roles");
 
-		await roles.getByRole("button", { name: "Model for Fast", exact: true }).click();
+		await roles.getByRole("button", { name: /.+ Model for Fast$/ }).click();
 		await page.getByRole("option", { name: "Local fixture", exact: true }).first().click();
 		await expect(page.getByText(/Role "Fast" set to /)).toBeVisible();
-		await expect(roles.locator("#model-role-smol")).toContainText("Local fixture");
+		await expect(roles.getByRole("button", { name: "Local fixture Model for Fast", exact: true })).toBeVisible();
 		await captureTo(CAPTURES, page, "model-roles-set");
 		expect(launched.errors).toEqual([]);
 	} finally {
@@ -196,8 +195,8 @@ test("@smoke Windows: the Mica backdrop is on where the build has it, and closin
 				};
 			});
 
-		// Mica: main asked for the backdrop (`?mica=1`) exactly on Windows 11 22H2+, and the renderer reacted.
-		const mica = micaSupported("win32", os.release());
+		// Mica: the shell gave the window the backdrop (`?mica=1`) exactly on Windows 11 22H2+, and the renderer reacted.
+		const mica = windowsDrawsMica();
 		const chrome = await page.evaluate(() => ({
 			platform: document.documentElement.dataset.platform,
 			mica: document.documentElement.dataset.mica,
@@ -222,7 +221,7 @@ test("@smoke Windows: the Mica backdrop is on where the build has it, and closin
 		expect((await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
 
 		// A second launch from the Start menu hands over to this instance and brings the window back.
-		const executable = await app.evaluate(() => process.execPath);
+		const executable = await app.evaluate(({ app }) => app.getPath("exe"));
 		const second = spawn(
 			executable,
 			[path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"), `--user-data-dir=${launched.desktop}`],

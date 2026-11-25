@@ -25,6 +25,9 @@ mod text;
 mod version;
 mod whois;
 
+pub(crate) use text::version_in;
+pub(crate) use version::compare as compare_versions;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -382,6 +385,65 @@ async fn version(params: VersionParams, scope: Scope) -> Result<Option<String>, 
         .flatten())
 }
 
+/// Machine setup's Tailscale in process (was `detectTailscale`): where its CLI is, found as Mobile web finds it with
+/// main's environment `env` and the login shell's `path_env`, and the version it says within 15 s; none without one.
+pub(crate) async fn setup_install(
+    platform: &str,
+    path_env: &str,
+    env: &BTreeMap<String, String>,
+) -> Option<(String, Option<String>)> {
+    const TIMEOUT_MS: u64 = 15_000;
+    const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+    let platform = match platform {
+        "win32" => locate::Platform::Win32,
+        "darwin" => locate::Platform::Darwin,
+        _ => return None,
+    };
+    let located = locate(
+        LocateParams {
+            platform,
+            forced: env.get("OMP_GUI_TAILSCALE").cloned(),
+            pref: None,
+            program_files: [
+                env.get("ProgramFiles").cloned(),
+                env.get("ProgramFiles(x86)").cloned(),
+            ],
+            path_env: path_env.to_owned(),
+            bundle: false,
+            rules: Rules {
+                env: env.clone(),
+                timeout_ms: 10_000,
+                max_bytes: MAX_OUTPUT,
+            },
+        },
+        Scope::detached(),
+    )
+    .await
+    .ok()??;
+    let mut cli_env = env.clone();
+    for (name, value) in &located.env {
+        cli_env.insert((*name).to_owned(), (*value).to_owned());
+    }
+    let runner = Runner {
+        bin: located.path.clone(),
+        args: Vec::new(),
+        env: cli_env,
+        timeout_ms: TIMEOUT_MS,
+        max_bytes: MAX_OUTPUT,
+    };
+    let found = version(
+        VersionParams {
+            tailscale: runner,
+            timeout_ms: TIMEOUT_MS,
+        },
+        Scope::detached(),
+    )
+    .await
+    .ok()
+    .flatten();
+    Some((located.path, found))
+}
+
 #[derive(Deserialize)]
 struct PublishParams {
     tailscale: Runner,
@@ -580,6 +642,8 @@ struct StartParams {
     stand_in: Option<String>,
     /// The located CLI's app bundle.
     app: Option<String>,
+    #[cfg(windows)]
+    path: String,
     rules: Rules,
 }
 
@@ -589,8 +653,18 @@ struct Started {
     line: Option<String>,
 }
 
-/// Starts the Tailscale app: `open -a <bundle>` on macOS. Windows' tray app has to outlive OMPdesk, and every
-/// process this one starts ends with it, so main starts that one itself.
+#[cfg(any(windows, test))]
+fn tray_path(mut cli: String) -> String {
+    if let Some(at) = cli.len().checked_sub("tailscale.exe".len())
+        && cli
+            .get(at..)
+            .is_some_and(|s| s.eq_ignore_ascii_case("tailscale.exe"))
+    {
+        cli.replace_range(at.., "tailscale-ipn.exe");
+    }
+    cli
+}
+
 async fn start_app(params: StartParams, scope: Scope) -> Result<Started, Fault> {
     let ran = match (params.stand_in, params.platform, params.app) {
         (Some(stand_in), ..) => params.rules.cli(&stand_in, scope).run(&[], None).await?,
@@ -608,9 +682,23 @@ async fn start_app(params: StartParams, scope: Scope) -> Result<Started, Fault> 
             });
         }
         (None, locate::Platform::Win32, _) => {
+            #[cfg(windows)]
+            {
+                let path = tray_path(params.path);
+                crate::user_app::launch(
+                    std::process::Command::new(path)
+                        .env_clear()
+                        .envs(params.rules.env),
+                )?;
+                return Ok(Started {
+                    code: Some(0),
+                    line: None,
+                });
+            }
+            #[cfg(not(windows))]
             return Err(Fault::new(
                 "unsupported",
-                "Windows' Tailscale app is started by main",
+                "The Tailscale tray app requires Windows",
             ));
         }
     };
@@ -651,6 +739,20 @@ mod tests {
     use serde::de::DeserializeOwned;
 
     use super::*;
+
+    #[test]
+    fn tray_sibling_matches_the_located_cli_suffix() {
+        for (cli, tray) in [
+            (
+                "C:/Tailscale/TAILSCALE.EXE",
+                "C:/Tailscale/tailscale-ipn.exe",
+            ),
+            ("XtailScale.exe", "Xtailscale-ipn.exe"),
+            ("C:/custom", "C:/custom"),
+        ] {
+            assert_eq!(tray_path(cli.into()), tray);
+        }
+    }
 
     /// A table of `captured.json`: what the TypeScript answered for the same inputs before it was deleted.
     pub fn captured<T: DeserializeOwned>(table: &str) -> T {

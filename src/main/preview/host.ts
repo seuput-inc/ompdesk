@@ -20,6 +20,7 @@ import {
 	EMPTY_PREVIEW_PAGE,
 	isLoopbackUrl,
 	PREVIEW_COMMAND,
+	PREVIEW_LOAD_STALL_MS,
 	PREVIEW_PAGE,
 	PREVIEW_PROBLEM_LIMIT,
 	PREVIEW_SAVE_PDF,
@@ -40,23 +41,27 @@ import {
 	previewUrl,
 	VISUAL_SCHEME,
 } from "../../shared/preview";
+import { encodeImage, fitImage } from "../shell-host/image";
 import { applyAcceptLanguages, seedSpellchecker } from "../system-languages";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
 import type { IpcCaller, IpcRegistry } from "../web/ipc-registry";
-import { DIALOG_CHANNEL, dialogRequestSchema, dialogReturnValue } from "../web/preview-dialog";
+import { DIALOG_CHANNEL, dialogChannel } from "../web/preview-dialog";
 import { InputMapper, InputSequence, previewStreamBatchSchema } from "../web/preview-input";
 import { streamProfile } from "../web/preview-pacer";
-import { type OsrPage, PageStream, POLL_MAX_WAIT_MS } from "../web/preview-stream";
+import { type OsrPage, PageStream, type PaintImage, POLL_MAX_WAIT_MS } from "../web/preview-stream";
 import { PreviewRelayExtension, relayExtensionUrl } from "./agent-relay";
 import { applyPreviewLayout, fitPreviewFrame, MIN_FRAME_SCALE } from "./layout";
 import { PAGE_WORLD, pageCall } from "./page-scripts";
-import { judgeImage, PREVIEW_CHECK_SETTLE_MS, withDeadline } from "./preview-check";
+import { judgeImage, PREVIEW_CHECK_IMAGE_MAX, PREVIEW_CHECK_SETTLE_MS, withDeadline } from "./preview-check";
 import { localRelaySocket, type RelaySocket } from "./relay-socket";
 import { visualMayNavigate } from "./visual-navigation";
 import type { VisualPages, VisualStore } from "./visuals";
 
 /** Activity marks and console problems reach the panel at most this often. */
 const AGENT_ACTIVITY_MS = 250;
+/** Tabs a page may open itself within `PAGE_OPENS_WINDOW_MS`; more in that time are refused (a popup storm). */
+const PAGE_OPENS_PER_WINDOW = 4;
+const PAGE_OPENS_WINDOW_MS = 2000;
 /** Longest console message kept per problem. */
 const PROBLEM_TEXT_MAX = 2000;
 /** A `data-choice` click counts for the agent only after a real mouse or key release on that page this recently (C143). */
@@ -187,11 +192,25 @@ interface PreviewOwner {
 	tunnel: (tabId?: string) => RelaySocket | null;
 }
 
+/** A paint as the stream sees it: its size now, its JPEG when a frame goes out (the shell holds the pixels). */
+function paintImage(image: NativeImage): PaintImage {
+	return {
+		isEmpty: () => image.isEmpty(),
+		getSize: () => image.getSize(),
+		async jpeg({ quality, width }) {
+			const size = image.getSize();
+			const target = width !== undefined && width < size.width ? width : size.width;
+			const data = await encodeImage(image, { format: "jpeg", quality, width: target });
+			return { data, width: target, height: Math.max(1, Math.round((size.height * target) / size.width)) };
+		},
+	};
+}
+
 /** An offscreen page as the stream sees it: its paints, its frame rate, and whether it paints at all. */
 function osrPage(contents: WebContents): OsrPage {
 	return {
 		onPaint(listener) {
-			const handler = (_event: unknown, _dirty: unknown, image: NativeImage) => listener(image);
+			const handler = (_event: unknown, _dirty: unknown, image: NativeImage) => listener(paintImage(image));
 			contents.on("paint", handler);
 			return () => {
 				if (!contents.isDestroyed()) contents.off("paint", handler);
@@ -227,6 +246,10 @@ interface PreviewHost {
 	pages: PreviewPage[];
 	active: PreviewPage;
 	agent: AgentLink | null;
+	/** The page a host tab's agent holds while its link is down (`holdForLink`); the panel lets the agent in again. */
+	redial: PreviewPage | null;
+	/** When pages of this host last opened tabs themselves (`window.open`, `target=_blank`), for the burst guard. */
+	pageOpens: number[];
 	/** The panel's last surface box, kept to re-fit the page when the viewport frame or the tab changes. */
 	layout: { bounds: PreviewBounds; visible: boolean; dpr: number } | null;
 	/** Frame numbers of a web viewer's streams share one counter, so an acknowledgement never names another page's frame. */
@@ -256,8 +279,6 @@ export interface PreviewWebSupport {
 	isRemote(win: ClientWindow, tabId?: string): boolean;
 	/** Device pixels per DIP of the screen the offscreen windows paint on (a frame is the window's size times this). */
 	hostScale(): number;
-	/** The dialog shim's preload on disk (preview-dialog.ts), written once. */
-	preloadPath(): string;
 }
 
 /**
@@ -282,8 +303,8 @@ const DEFAULT_STREAM_GEOMETRY = {
  * `isRemote(senderId, tabId?)`: the window's active tab (or `tabId`) runs on a paired host.
  *
  * A paired phone's preview (`web`) is the same host with the same rules, its pages offscreen windows instead of
- * views, in sessions of their own (`preview-web-<n>`, `preview-visual-web-<n>`); `web` also gives those sessions
- * the one dialog-shim preload (preview-dialog.ts), the single exception to "no preload".
+ * views, in sessions of their own (`preview-web-<n>`, `preview-visual-web-<n>`); their pages' JS dialogs wait for the
+ * viewer (preview-dialog.ts).
  * Agent browsing on a paired host's tab runs over `tunnel` (the relay is on the host's loopback); without one it is refused.
  * Returns what the agent's `gui_visualize` reads and waits on.
  */
@@ -376,12 +397,36 @@ export function registerPreviewHost(
 		}
 	};
 	const stopAgent = (host: PreviewHost) => {
+		const waiting = host.redial;
+		if (waiting) {
+			host.redial = null;
+			waiting.state = { ...waiting.state, agent: null };
+			send(host);
+		}
 		const link = host.agent;
 		if (!link) return;
 		host.agent = null;
 		link.extension.dispose();
 		link.socket.close();
 		link.page.state = { ...link.page.state, agent: null };
+		send(host);
+	};
+	/**
+	 * The paired link under a host tab's agent dropped (Orca's relay re-dial, 25 Nov 2026). The host stops the tab's
+	 * relay with the connection, so the panel, not main, lets the agent in again once the link is back (a fresh
+	 * `browser_relay_start`, then `agentStart` on this same page); meanwhile the page stays the agent's, "reconnecting",
+	 * so nothing releases it. Take over, another page shown, the page or the panel closing (`stopAgent`) end the wait.
+	 */
+	const holdForLink = (host: PreviewHost, page: PreviewPage) => {
+		const link = host.agent;
+		if (link) {
+			host.agent = null;
+			link.extension.dispose();
+		}
+		const agent = page.state.agent;
+		if (!agent) return;
+		host.redial = page;
+		page.state = { ...page.state, agent: { ...agent, attached: false, reconnecting: true } };
 		send(host);
 	};
 	/** The web address a web page may show, or null: http(s) only, and no loopback for a paired host's tab. */
@@ -399,7 +444,7 @@ export function registerPreviewHost(
 			publish(host, page, { notice: { kind: "link", url: safe } });
 	};
 	const closePage = (host: PreviewHost, page: PreviewPage) => {
-		if (host.agent?.page === page) stopAgent(host);
+		if (host.agent?.page === page || host.redial === page) stopAgent(host);
 		page.stream?.dispose();
 		if (page.view && host.win && !host.win.isDestroyed()) host.win.contentView.removeChildView(page.view);
 		if (page.osr) {
@@ -518,6 +563,23 @@ export function registerPreviewHost(
 		contents.on("responsive", () => {
 			if (page.state.notice?.kind === "unresponsive") update({ notice: null });
 		});
+		// A main-frame load still not committed after a while says so (M73); it ends with the commit, a failure or a stop.
+		let stall: NodeJS.Timeout | undefined;
+		const endStall = () => {
+			clearTimeout(stall);
+			stall = undefined;
+			if (page.state.notice?.kind === "slow") update({ notice: null });
+		};
+		contents.on("did-start-navigation", details => {
+			if (!details.isMainFrame || details.isSameDocument) return;
+			clearTimeout(stall);
+			stall = setTimeout(() => {
+				stall = undefined;
+				// Another notice (a refused download or link, an unresponsive page) is the more urgent one and stays.
+				if (!page.state.notice) update({ notice: { kind: "slow" } });
+			}, PREVIEW_LOAD_STALL_MS);
+		});
+		contents.once("destroyed", () => clearTimeout(stall));
 		// WebRTC is no CSP directive: over UDP (STUN, TURN) it would leave a visual's page directly; over TCP it
 		// takes the visual session's dead proxy.
 		if (kind === "visual") contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
@@ -529,7 +591,14 @@ export function registerPreviewHost(
 			if (kind === "visual") offerLink(host, page, url);
 			else {
 				const safe = allowed(host, url);
-				if (safe && host.pages.length < PREVIEW_TAB_LIMIT) loadInto(host, openPage(host, "web", !host.agent), safe);
+				// A page opening tabs in a burst (Orca's popup-storm guard, 25 Nov 2026): at most
+				// `PAGE_OPENS_PER_WINDOW` in `PAGE_OPENS_WINDOW_MS`; the rest are refused. Tabs the person opens are not counted.
+				const now = Date.now();
+				host.pageOpens = host.pageOpens.filter(at => now - at < PAGE_OPENS_WINDOW_MS);
+				if (safe && host.pages.length < PREVIEW_TAB_LIMIT && host.pageOpens.length < PAGE_OPENS_PER_WINDOW) {
+					host.pageOpens.push(now);
+					loadInto(host, openPage(host, "web", !host.agent), safe);
+				}
 			}
 			return { action: "deny" };
 		});
@@ -555,7 +624,10 @@ export function registerPreviewHost(
 		contents.on("did-start-loading", () =>
 			update({ error: null, crashed: false, ...(page.state.notice?.kind === "check" ? { notice: null } : {}) }),
 		);
-		contents.on("did-stop-loading", () => update());
+		contents.on("did-stop-loading", () => {
+			endStall();
+			update();
+		});
 		contents.on("did-navigate", (_event, url) => {
 			// A visual's page that leaves its own address (for an empty document) no longer shows it; a web visual
 			// browses on.
@@ -569,6 +641,7 @@ export function registerPreviewHost(
 			// A viewer's frame must show the new page now, not at the next paint tick.
 			page.stream?.refresh();
 			update({ problems: [] });
+			endStall();
 			pageUpdated();
 		});
 		contents.on("did-navigate-in-page", () => {
@@ -580,9 +653,13 @@ export function registerPreviewHost(
 			pageUpdated();
 		});
 		contents.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
-			if (mainFrame && code !== -3) update({ error: description, loading: false });
+			// -3 (aborted) is also a newer navigation replacing this one: its own wait stays; a Stop ends it at did-stop-loading.
+			if (!mainFrame || code === -3) return;
+			endStall();
+			update({ error: description, loading: false });
 		});
 		contents.on("render-process-gone", () => {
+			clearTimeout(stall);
 			view?.setVisible(false);
 			stream?.setVisible(false);
 			update({ crashed: true, loading: false, notice: null });
@@ -597,7 +674,7 @@ export function registerPreviewHost(
 		return page;
 	}
 	function select(host: PreviewHost, page: PreviewPage): void {
-		if (host.agent && host.agent.page !== page) stopAgent(host);
+		if ((host.agent && host.agent.page !== page) || (host.redial && host.redial !== page)) stopAgent(host);
 		// A viewer's poll held on the page it leaves must not keep the next one waiting.
 		if (host.active !== page) host.active.stream?.release();
 		host.active = page;
@@ -629,14 +706,19 @@ export function registerPreviewHost(
 	 * `show`), else in a new tab; at the tab limit it replaces the shown page when `show` and is skipped otherwise.
 	 * A tab already on that version keeps its page (and the user's tweaks). A file or inline visual needs a page of
 	 * the visual session and a web visual one of the web session: a tab of the other kind is replaced, never
-	 * reused, so no page ever holds both.
+	 * reused, so no page ever holds both. Nor does a file or inline visual ever take over a page another one showed:
+	 * each such page has its own cookie jar (the native host gives every visual page its own browser context), and a
+	 * reused page would hand the old visual's cookies to the new one.
 	 */
 	function showVisual(host: PreviewHost, visualId: string, version: number | undefined, show: boolean): void {
 		const wanted = visuals.view(visualId, version)?.version;
 		const url = wanted === undefined ? null : visuals.url(visualId, wanted);
 		if (wanted === undefined || !url) return;
 		const kind = visuals.parse(url) ? "visual" : "web";
-		const inSession = (page: PreviewPage) => (page.state.session === kind ? page : replacePage(host, page, kind));
+		const inSession = (page: PreviewPage) =>
+			page.state.session === kind && !(kind === "visual" && page.visual && page.visual.id !== visualId)
+				? page
+				: replacePage(host, page, kind);
 		const shown = host.pages.find(candidate => candidate.visual?.id === visualId);
 		let target: PreviewPage;
 		if (shown) target = inSession(shown);
@@ -679,9 +761,6 @@ export function registerPreviewHost(
 		for (const partition of [web, visual]) {
 			partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
 			partition.setPermissionCheckHandler(() => false);
-			// A viewer's pages get the dialog shim and nothing else (preview-dialog.ts).
-			if (owner.viewer && viewers)
-				partition.registerPreloadScript({ type: "frame", filePath: viewers.preloadPath() });
 		}
 		// Pages see the user's languages, not the en-US the packaged locales leave Chromium (system-languages.ts).
 		const languages = app.getPreferredSystemLanguages();
@@ -760,6 +839,8 @@ export function registerPreviewHost(
 				pages: [first],
 				active: first,
 				agent: null,
+				redial: null,
+				pageOpens: [],
 				layout: null,
 				nextSeq,
 				onClosed: () => disposeHost(created),
@@ -782,6 +863,9 @@ export function registerPreviewHost(
 			if (page.state.session === "visual") throw new Error("Agent browsing is for web pages, not visuals");
 			const target = relayExtensionUrl(request.url, request.token);
 			if (!target) throw new Error("Invalid browser relay endpoint");
+			// The panel letting a host tab's agent back in after its link returned: the page it held is taken over
+			// quietly, never shown released first (that would make the panel release the relay it just started).
+			if (current.redial === page && page.state.agent?.tabId === request.tabId) current.redial = null;
 			stopAgent(current);
 			const { contents } = page;
 			// A paired host's tab runs its agent there: its relay listens on the host's loopback, so the relay's frames
@@ -828,9 +912,12 @@ export function registerPreviewHost(
 			);
 			current.agent = { socket, extension, page };
 			socket.onMessage(data => extension.handle(data));
-			socket.onClose(() => {
+			socket.onClose(lost => {
 				clearTimeout(pending);
-				if (current.agent?.socket === socket) stopAgent(current);
+				if (current.agent?.socket !== socket) return;
+				// The link under a host tab's agent dropped: the page stays the agent's until the panel lets it in again.
+				if (lost && remote) holdForLink(current, page);
+				else stopAgent(current);
 			});
 			publish(current, page, { agent: { tabId: request.tabId, attached: false, lastAction: "" } });
 			try {
@@ -876,8 +963,10 @@ export function registerPreviewHost(
 			const dpr = Number.isFinite(request.dpr) ? Math.min(4, Math.max(0.5, request.dpr ?? 1)) : 1;
 			current.layout = { bounds: request.bounds, visible: request.visible, dpr };
 			place(current);
-		} else if (request.action === "zoom") {
-			page.state = { ...page.state, zoom: clampPreviewZoom(request.zoom) };
+		} else if (request.action === "zoom" || request.action === "zoomIn" || request.action === "zoomOut") {
+			const zoom =
+				request.action === "zoom" ? request.zoom : page.state.zoom + (request.action === "zoomIn" ? 0.1 : -0.1);
+			page.state = { ...page.state, zoom: clampPreviewZoom(zoom) };
 			place(current);
 			publish(current, page);
 		} else if (request.action === "viewport") {
@@ -951,7 +1040,7 @@ export function registerPreviewHost(
 			width: Math.max(1, Math.round(rect.width * factor)),
 			height: Math.max(1, Math.round(rect.height * factor)),
 		});
-		const image = shot.getSize().width > REGION_MAX_WIDTH ? shot.resize({ width: REGION_MAX_WIDTH }) : shot;
+		const image = await fitImage(shot, { width: REGION_MAX_WIDTH });
 		return { image: image.toPNG().toString("base64"), elements };
 	});
 
@@ -1024,20 +1113,10 @@ export function registerPreviewHost(
 		return { name: `${pdfName(page.contents.getTitle())}.pdf`, base64: pdf.toString("base64") };
 	});
 	if (viewers) {
-		// A viewer's page asks `alert`, `confirm` and `prompt` through its session's preload (preview-dialog.ts): the
-		// page stays blocked until the viewer answers, a dismissal (or the page's end) answers it, and a sender that
-		// is no streamed page gets nothing to show.
-		ipcMain.on(DIALOG_CHANNEL, (event, raw: unknown) => {
-			const request = dialogRequestSchema.safeParse(raw);
-			const stream = dialogStreams.get(event.sender.id);
-			if (!request.success || !stream) {
-				event.returnValue = null;
-				return;
-			}
-			void stream.openDialog(request.data).then(answer => {
-				event.returnValue = dialogReturnValue(request.data, answer);
-			});
-		});
+		// A viewer's page opens `alert`, `confirm` and `prompt` in the Preview browser, which blocks the page; its
+		// shell owner asks here (preview-dialog.ts) and answers the dialog with the viewer's answer. A sender that
+		// is no streamed page gets a dismissal.
+		ipcMain.on(DIALOG_CHANNEL, dialogChannel(dialogStreams));
 	}
 
 	/** The first page showing `visualId` (a window's shown page first), or null. */
@@ -1148,7 +1227,12 @@ export function registerPreviewHost(
 							shown.page.contents.capturePage().catch(() => null),
 							Math.max(CAPTURE_MIN_MS, deadline - Date.now()),
 						);
-						return picture ? judgeImage(picture) : null;
+						// The page captures once more at the bound: `judgeImage` only ever sees a picture within it.
+						return picture
+							? judgeImage(
+									await fitImage(picture, { width: PREVIEW_CHECK_IMAGE_MAX, height: PREVIEW_CHECK_IMAGE_MAX }),
+								)
+							: null;
 					}
 				} else if (!onScreenVisualPage(visualId, version) && Date.now() - started >= appearMs) {
 					// No window has put it on screen within what the caller allows (preview-check.ts): waiting longer would only delay the tool.

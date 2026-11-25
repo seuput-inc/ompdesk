@@ -16,7 +16,7 @@ import type { ElectronApplication, Page } from "playwright";
 import { wrapAgentMessage } from "../src/shared/agent-control";
 import { fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { cssString, exitApp, fixtureOmp, launchApp } from "./harness";
+import { cssString, dragRowToRightEdge, exitApp, fixtureOmp, launchApp } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, type RemoteInstance } from "./remote-harness";
 
 let app: ElectronApplication | undefined;
@@ -96,6 +96,7 @@ declare global {
 	interface Window {
 		__orders?: string[];
 		__painted?: string[];
+		__paintDetails?: string[];
 	}
 }
 
@@ -165,17 +166,41 @@ async function recordOrders(page: Page, lists: Lists): Promise<void> {
 		const note = (found, order) => {
 			if (order && order !== found.at(-1)) found.push(order);
 		};
+		const details = [];
+		const detail = () => {
+			const scope = document.querySelector(lists.scope);
+			if (!scope) return "";
+			return [...scope.querySelectorAll(lists.rows)].map(row => {
+				const flips = [];
+				for (let at = row; at && at !== scope; at = at.parentElement) {
+					const key = at.getAttribute && at.getAttribute("data-flip-key");
+					if (!key) continue;
+					const style = getComputedStyle(at);
+					const moving = at.getAnimations().map(a => a.playState + ":" + (a.effect && a.effect.getComputedTiming ? Math.round(a.effect.getComputedTiming().progress * 100) : "?")).join(",");
+					flips.push(key.replace(/^.*[\\\\/]/, "") + "{" + style.transform + (moving ? " " + moving : "") + "}");
+				}
+				return (row.getAttribute("data-device-session") ?? row.getAttribute("data-session-path") ?? "").split(/[\\\\/]/).at(-1) + "@" + Math.round(row.getBoundingClientRect().top) + " " + flips.join(" < ");
+			}).join(" | ");
+		};
+		const notePaint = why => {
+			const before = painted.length;
+			note(painted, paint(lists));
+			if (painted.length > before && painted.length > 1 && details.length < 20)
+				details.push(why + " " + Math.round(performance.now()) + "ms " + detail());
+		};
 		new MutationObserver(() => {
 			note(seen, read(lists));
-			note(painted, paint(lists));
+			notePaint("mutation");
 		}).observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
 		const frame = () => {
-			note(painted, paint(lists));
+			notePaint("frame");
 			requestAnimationFrame(frame);
 		};
 		requestAnimationFrame(frame);
 		window.__orders = seen;
 		window.__painted = painted;
+		window.__paintDetails = details;
+		details.push("start " + Math.round(performance.now()) + "ms " + detail());
 	})()`);
 }
 
@@ -184,11 +209,11 @@ test("selecting a session row selects it and moves no row, an archived one's inc
 	root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-sidebar-select-")));
 	const [project, desktop, agent] = ["project", "desktop", "agent"].map(name => path.join(root, name));
 	await Promise.all([project, desktop, agent].map(dir => fs.mkdir(dir)));
-	await seed(agent, "s-1", project, "Alpha plan", 1);
-	await seed(agent, "s-2", project, "Bravo plan", 2);
+	await seed(agent, "s-1", project, "Alpha plan", 5);
+	await seed(agent, "s-2", project, "Bravo plan", 4);
 	await seed(agent, "s-3", project, "Charlie plan", 3);
-	await seed(agent, "s-4", project, "Delta plan", 4);
-	await seed(agent, "s-5", project, "Echo plan", 5);
+	await seed(agent, "s-4", project, "Delta plan", 2);
+	await seed(agent, "s-5", project, "Echo plan", 1);
 	await fs.writeFile(
 		path.join(desktop, "prefs.json"),
 		JSON.stringify({ language: "en", firstRunComplete: true, sidebar: { archivedSessions: ["s-5"] } }),
@@ -236,9 +261,9 @@ test("selecting a session row selects it and moves no row, an archived one's inc
 
 /**
  * The owner's next report (9 Nov 2026, MacBook, v0.119.8): a click on one row selected another session, one at work.
- * Rows sit newest first, so a session another omp starts lands at the top of its project and pushes every row below it
- * down by one: the pointer that rested on Alpha then rests on the newcomer, and the click a person aimed at Alpha
- * selects it. While the pointer is on the list nothing moves into its place; the newcomer joins once it leaves.
+ * Rows then sat newest first, so a session another omp started landed at the top of its project and pushed every row
+ * below it down by one. Rows now sit oldest first (24 Nov 2026), and a newcomer lands at the bottom, where it still
+ * pushes every list below it down. While the pointer is on the list nothing moves; the newcomer joins once it leaves.
  */
 test("a session another omp starts never moves into the row the pointer rests on: the click selects the row aimed at", async () => {
 	test.setTimeout(120_000);
@@ -321,11 +346,11 @@ test("a session another omp starts never moves into the row the pointer rests on
 		)
 		.toHaveLength(1);
 
-	// The pointer leaves the list: the newcomer takes its place at the top.
+	// The pointer leaves the list: the newcomer takes its place at the bottom.
 	await page.mouse.move(1000, 450);
 	await expect
 		.poll(() => orderOf(page, LOCAL))
-		.toBe("project:s-9.jsonl | project:s-1.jsonl | project:s-2.jsonl | project:s-3.jsonl | project:s-4.jsonl");
+		.toBe("project:s-1.jsonl | project:s-2.jsonl | project:s-3.jsonl | project:s-4.jsonl | project:s-9.jsonl");
 	await shoot("3-pointer-left");
 });
 
@@ -333,7 +358,8 @@ test("a session another omp starts never moves into the row the pointer rests on
 async function expectNoMove(page: Page, order: string, after: string): Promise<void> {
 	expect(await page.evaluate(() => window.__orders), `orders drawn after ${after}`).toEqual([order]);
 	const moved = (await page.evaluate(() => window.__painted ?? [])).filter(painted => painted !== order);
-	expect(moved, `orders painted after ${after}, other than the list's`).toEqual([]);
+	const details = await page.evaluate(() => window.__paintDetails ?? []);
+	expect(moved, `orders painted after ${after}, other than the list's\n${details.join("\n")}`).toEqual([]);
 }
 
 /** Runs every case even when one fails, and names each one's outcome in the report. */
@@ -351,13 +377,13 @@ async function runCases(cases: ReadonlyArray<readonly [name: string, run: () => 
 	expect(failed, "failed cases").toEqual([]);
 }
 
-/** The world both lists show: four plain rows, an archived one and a loose child that needs a look. */
+/** The world both lists show: four plain rows (oldest first), an archived one and a loose child that needs a look. */
 const WORLD = [
-	["s-1", "Alpha plan", 1],
-	["s-2", "Bravo plan", 2],
+	["s-1", "Alpha plan", 5],
+	["s-2", "Bravo plan", 4],
 	["s-3", "Charlie plan", 3],
-	["s-4", "Delta plan", 4],
-	["s-5", "Echo plan", 5],
+	["s-4", "Delta plan", 2],
+	["s-5", "Echo plan", 1],
 ] as const;
 const LOOSE = ["s-6", "Fix the upload", 6] as const;
 const WORLD_ORDER =
@@ -376,7 +402,11 @@ test("a paired computer's section: selecting a host's row selects it and moves n
 	let host: RemoteInstance | undefined;
 	let client: RemoteInstance | undefined;
 	try {
-		const hostProfile = await makeRemoteProfile(parent, "host", { language: "en", theme: "light" });
+		const hostProfile = await makeRemoteProfile(parent, "host", {
+			language: "en",
+			theme: "light",
+			prefs: { sidebar: { archivedSessions: ["s-5"] } },
+		});
 		const clientProfile = await makeRemoteProfile(parent, "client", {
 			language: "en",
 			theme: "light",
@@ -401,12 +431,20 @@ test("a paired computer's section: selecting a host's row selects it and moves n
 		const loose = (id: string) =>
 			section.locator(`[data-sidebar-loose-children] [data-session-path$="${id}.jsonl"]`).first();
 		await expect(section).toHaveAttribute("data-device-state", "online", { timeout: 30_000 });
-		// The person archives the host's fifth session from its menu (this computer keeps it under the host's id).
-		await plain("s-5").click({ button: "right" });
-		await a.getByRole("menuitem", { name: "Archive", exact: true }).click();
 		const toggle = section.locator("[data-sidebar-archived] button[aria-expanded]").first();
 		await expect(toggle).toBeVisible({ timeout: 30_000 });
 		if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+		const archived = section.locator('[data-archived-list] [data-device-session$="s-5.jsonl"]');
+		await expect(archived).toBeVisible();
+		await archived.click({ button: "right" });
+		await a.getByRole("menuitem", { name: "Restore", exact: true }).click();
+		const hostRow = host.page.locator('[data-session-group] [data-session-path$="s-5.jsonl"]');
+		await expect(hostRow).toBeVisible();
+		await hostRow.click({ button: "right" });
+		await host.page.getByRole("menuitem", { name: "Archive", exact: true }).click();
+		await expect(toggle).toBeVisible();
+		if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+		await expect(archived).toBeVisible();
 		// The loose child is listed with no tab anywhere holding it, among its project's rows.
 		await expect.poll(() => orderOf(a, lists), { timeout: 60_000 }).toBe(WORLD_ORDER);
 		await expect(section.locator("[data-sidebar-loose-children] [data-sidebar-opened-session]")).toHaveCount(1);
@@ -571,33 +609,6 @@ test("a phone's drawer: selecting a row selects it and moves no row, archived an
 	]);
 });
 
-/** A real mouse drag of a session row onto the right edge of the workspace: its open tab joins the split there. */
-async function dragRowToRightEdge(page: Page, row: Locator): Promise<void> {
-	const workspace = await page.locator(".omp-split-workspace").boundingBox();
-	if (!workspace) throw new Error("expected the workspace box");
-	const ghost = page.locator("[data-split-ghost]");
-	// A row replaced between the press and the first move starts no drag: a drag that shows no ghost is released
-	// over the workspace and begun again.
-	await expect(async () => {
-		const rowBox = await row.boundingBox();
-		if (!rowBox) throw new Error("expected the row's box");
-		await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(rowBox.x + rowBox.width / 2 + 20, rowBox.y + rowBox.height / 2, { steps: 4 });
-		await page.mouse.move(workspace.x + workspace.width * 0.92 + 2, workspace.y + workspace.height * 0.5, {
-			steps: 10,
-		});
-		await page.mouse.move(workspace.x + workspace.width * 0.92, workspace.y + workspace.height * 0.5, { steps: 2 });
-		try {
-			await expect(ghost).toHaveAttribute("data-split-ghost", "right", { timeout: 1_500 });
-		} catch (error) {
-			await page.mouse.up();
-			throw error;
-		}
-	}).toPass({ timeout: 30_000 });
-	await page.mouse.up();
-}
-
 test("a split's rows read selected only where the window shows the split: a desktop window and a phone page, narrowed and widened", async () => {
 	test.setTimeout(300_000);
 	root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-sidebar-select-split-")));
@@ -662,9 +673,27 @@ test("a split's rows read selected only where the window shows the split: a desk
 						(await tabs()).some(tab => tab.sessionPath?.endsWith(`${id}.jsonl`) && tab.status === "ready"),
 					{ timeout: 60_000 },
 				)
-				.toBe(true);
+				.toBe(true)
+				.catch(async (error: Error) => {
+					const list = (await tabs()).map(tab =>
+						[
+							tab.tabId,
+							tab.status,
+							tab.active ? "active" : "",
+							tab.sessionPath?.split(/[\\/]/).at(-1) ?? "-",
+						].join(" "),
+					);
+					throw new Error(`${error.message}\nafter clicking ${id}, the tabs: ${JSON.stringify(list)}`);
+				});
 		}
+		// The second pick opened a tab of its own: a pick during the first one's hydration would have re-rooted it.
+		await expect
+			.poll(async () => (await tabs()).map(tab => tab.sessionPath?.split(/[\\/]/).at(-1)).sort(), {
+				message: "one tab per picked session",
+			})
+			.toEqual(["s-2.jsonl", "s-3.jsonl"]);
 		await dragRowToRightEdge(page, row("s-3"));
+		await page.mouse.up();
 		await expect(page.locator(".omp-session-pane")).toHaveCount(2);
 		await expect(selected, "both panes of the split").toHaveCount(2);
 		await expect(row("s-2")).toHaveAttribute("data-active", "true");

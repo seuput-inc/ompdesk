@@ -1230,5 +1230,32 @@
 		"billing": false,
 		"host": null,
 		"retryAfter": null
+	},
+	{
+		"message": "usage_limit_reached: this ChatGPT account reached its plan's usage limit, which resets in about 3 hours, and OMPdesk's Credit use setting is off, so it does not run on credits. retry-after-ms=10800000",
+		"network": false,
+		"transient": false,
+		"limit": true,
+		"billing": false,
+		"host": null,
+		"retryAfter": 10800000
+	},
+	{
+		"message": "usage_limit_reached: this Claude account reached its plan's usage limit, which resets in about 3 hours, and OMPdesk's Credit use setting is off, so it does not run on extra usage. retry-after-ms=10800000",
+		"network": false,
+		"transient": false,
+		"limit": true,
+		"billing": false,
+		"host": null,
+		"retryAfter": 10800000
+	},
+	{
+		"message": "usage_limit_reached: this ChatGPT account is close to its plan's usage limit and its usage could not be read just now, and OMPdesk's Credit use setting is off, so the request waits instead of running on credits. retry-after-ms=60000",
+		"network": false,
+		"transient": false,
+		"limit": true,
+		"billing": false,
+		"host": null,
+		"retryAfter": 60000
 	}
 ]

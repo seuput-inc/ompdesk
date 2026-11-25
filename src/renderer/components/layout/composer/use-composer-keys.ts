@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import type { InlineCompletion } from "../../../hooks/use-inline-completion";
 import { composerEnterNewline, noteHardwareKey } from "../../../lib/hardware-keyboard";
 import { isImeKeyEvent } from "../../../lib/ime";
-import { chordFromEvent, isComposerFollowUpKey, PLATFORM } from "../../../lib/keymap";
+import { chordFromEvent, PLATFORM } from "../../../lib/keymap";
 import { listboxTarget } from "../../../lib/listbox-nav";
 import { dropReferencedPastes, releasePaste, widenToPasteMarkers } from "../../../lib/paste-blobs";
 import type { TabRpc } from "../../../lib/tab-rpc";
@@ -85,8 +85,8 @@ export function useComposerKeys({
 	toggleHistorySearch: () => void;
 	/** A run, a prompt not yet sent, or a manual compaction holds Esc: it is their stop/cancel, not the draft's. */
 	runActive: boolean;
-	/** Send the draft (`followUp`: the follow-up lane); true when it went out. */
-	send: (overrideText?: string, forceMode?: "followUp") => boolean;
+	/** Send the draft; true when it went out. */
+	send: (overrideText?: string) => boolean;
 	/** A touch input (phone, tablet): without a physical keyboard plain Enter adds a line and only Send sends. */
 	touchInput: boolean;
 	/** The "Enter sends on mobile" setting: a touch device's Enter sends like the desktop's. */
@@ -332,8 +332,9 @@ export function useComposerKeys({
 		// composer or with the caret at position 0, ↓ a newer entry (and finally the stashed draft) only
 		// with the caret at the very end. Anywhere else the arrows move the caret through the text.
 		// Browsing stays a run of plain presses because a recall places the caret on the edge the key
-		// came from — ↑ at position 0, ↓ at the end (stock pi-tui's directional anchor, #99) — so the
-		// next press in the same direction satisfies the same rule; turning around takes one caret move.
+		// came from — ↑ at position 0, ↓ at the end (stock's directional anchor, pi-coding-agent
+		// ui/composer/composer.tsx `#recall`, #99) — so the next press in the same direction satisfies
+		// the same rule; turning around takes one caret move.
 		if (
 			!expanded &&
 			!queueEdit &&
@@ -362,20 +363,15 @@ export function useComposerKeys({
 			return;
 		}
 		if (e.key === "Enter" && !e.shiftKey) {
-			// Soft keyboard: Enter is the return key. The chords (⌘↵, the follow-up chord) are a physical keyboard's and still send.
+			// Soft keyboard: Enter is the return key. The send chord (⌘↵) is a physical keyboard's and still sends.
 			if (enterNewline && !e.metaKey && !e.ctrlKey && !e.altKey) return;
-			// The follow-up chord (⌃↵ on macOS, ⌥↵ on Windows) sends as a follow-up, queueing
-			// behind the current yield (TUI app.message.followUp); idle sessions start
-			// immediately either way. Every other Enter sends in the chip's mode, so the
-			// platform's send chord (⌘↵, Ctrl+Enter on Windows) steers a running turn.
-			const followUp = isComposerFollowUpKey(e);
 			// Expanded: plain Enter is a newline; ⌘↵ sends and collapses.
-			if (expanded && !e.metaKey && !e.ctrlKey && !followUp) return;
+			if (expanded && !e.metaKey && !e.ctrlKey) return;
 			e.preventDefault();
 			// A held Enter sends once, never again on auto-repeat.
 			if (e.repeat) return;
 			// ⌘↵ collapses the expanded composer only once the draft went out.
-			if (send(undefined, followUp ? "followUp" : undefined) && expanded) collapse();
+			if (send() && expanded) collapse();
 		}
 	};
 

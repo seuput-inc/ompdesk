@@ -110,7 +110,7 @@ describe("runSmol", () => {
 					"-p",
 					"--mode",
 					"json",
-					"--no-tools",
+					"--tools=",
 					"--no-session",
 					"--no-extensions",
 					"--no-skills",

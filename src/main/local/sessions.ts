@@ -8,7 +8,6 @@ import type {
 	RpcSessionTreeResult,
 	RpcSwitchLeafResult,
 } from "../../shared/rpc-types";
-import { isTurnPrompt, type RpcTurnEdits, turnEdits } from "../../shared/turn-edits";
 import { handlers as extraHandlers } from "./session-extras";
 import { renameStoredSession } from "./session-files";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
@@ -23,6 +22,13 @@ const MAX_PAGE_LIMIT = 256;
  */
 export const BACKWARD_PAGE_BUDGET = 256 * 1024;
 const MIN_BACKWARD_PAGE = 20;
+
+/**
+ * How often a tail read that names no cursor is made again when a live commit lands between its metadata read and its
+ * page read: the transcript only moved on, so the newest page is read again here instead of handing the window a
+ * "stale" answer for every step of a running turn (the window read twice, then showed "Couldn't load earlier messages").
+ */
+const TAIL_READ_ATTEMPTS = 4;
 
 const TranscriptCursor = z
 	.object({
@@ -121,82 +127,71 @@ export const handlers: Record<string, LocalHandler> = {
 	},
 
 	get_transcript_page: async (command, ctx): Promise<MessagesPage> => {
-		const limit = pageLimit(command.limit);
-		const imageRefs = command.imageRefs === true;
-		const cursor = command.cursor === undefined ? undefined : decodeCursor(command.cursor);
-		const backward = command.fromEnd === true || cursor?.backward === true;
-		const metadata = backward && !cursor ? await transcriptPage(ctx, 0, 0) : undefined;
-		const version = metadata?.version;
-		const tailKey = `${limit}${imageRefs ? ":refs" : ""}`;
-		if (version !== undefined) {
-			// The caller holds this very transcript: nothing to send. A fresh caller gets the page this omp last read.
-			if (command.ifVersion === version)
-				return { messages: [], totalMessages: metadata?.total ?? 0, version, unchanged: true };
-			const last = lastTails.get(ctx.bridge);
-			const kept = last?.version === version ? last.pages.get(tailKey) : undefined;
-			if (kept) return kept;
+		const read = async (): Promise<MessagesPage> => {
+			const limit = pageLimit(command.limit);
+			const imageRefs = command.imageRefs === true;
+			const cursor = command.cursor === undefined ? undefined : decodeCursor(command.cursor);
+			const backward = command.fromEnd === true || cursor?.backward === true;
+			const metadata = backward && !cursor ? await transcriptPage(ctx, 0, 0) : undefined;
+			const version = metadata?.version;
+			const tailKey = `${limit}${imageRefs ? ":refs" : ""}`;
+			if (version !== undefined) {
+				// The caller holds this very transcript: nothing to send. A fresh caller gets the page this omp last read.
+				if (command.ifVersion === version)
+					return { messages: [], totalMessages: metadata?.total ?? 0, version, unchanged: true };
+				const last = lastTails.get(ctx.bridge);
+				const kept = last?.version === version ? last.pages.get(tailKey) : undefined;
+				if (kept) return kept;
+			}
+			const endIndex = cursor?.offset ?? metadata?.total ?? limit;
+			let take = backward ? Math.min(limit, endIndex) : limit;
+			let offset = backward ? endIndex - take : (cursor?.offset ?? 0);
+			let page = await transcriptPage(ctx, offset, take, backward, imageRefs);
+			while (backward && take > MIN_BACKWARD_PAGE && JSON.stringify(page.messages).length > BACKWARD_PAGE_BUDGET) {
+				take = Math.max(MIN_BACKWARD_PAGE, Math.floor(take / 2));
+				const smaller = await transcriptPage(ctx, endIndex - take, take, true, imageRefs);
+				// One run longer than the budget: the bridge snaps every shorter read back to its start, the same page.
+				if ((smaller.startIndex ?? endIndex - take) === (page.startIndex ?? offset)) break;
+				offset = endIndex - take;
+				page = smaller;
+			}
+			if (
+				(cursor && (page.leafId !== cursor.leafId || page.total !== cursor.total)) ||
+				(metadata && (page.leafId !== metadata.leafId || page.total !== metadata.total))
+			) {
+				throw new LocalCommandError("RPC message cursor is stale", "stale_cursor");
+			}
+			const startIndex = page.startIndex ?? offset;
+			const end = startIndex + page.messages.length;
+			const result: MessagesPage = { messages: page.messages, totalMessages: page.total, startIndex };
+			if (backward && startIndex > 0) {
+				result.prevCursor = encodeCursor({
+					v: 1,
+					leafId: page.leafId,
+					total: page.total,
+					offset: startIndex,
+					backward: true,
+				});
+			} else if (!backward && end < page.total) {
+				result.nextCursor = encodeCursor({ v: 1, leafId: page.leafId, total: page.total, offset: end });
+			}
+			if (metadata && page.version !== undefined && page.version === version) {
+				result.version = page.version;
+				const last = lastTails.get(ctx.bridge);
+				if (last?.version === version) last.pages.set(tailKey, result);
+				else lastTails.set(ctx.bridge, { version, pages: new Map([[tailKey, result]]) });
+			}
+			return result;
+		};
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await read();
+			} catch (error) {
+				// A cursor was minted by a read the caller holds: it refreshes its own tail. A fresh tail holds nothing.
+				const moved = error instanceof LocalCommandError && error.code === "stale_cursor";
+				if (!moved || command.cursor !== undefined || attempt >= TAIL_READ_ATTEMPTS) throw error;
+			}
 		}
-		const endIndex = cursor?.offset ?? metadata?.total ?? limit;
-		let take = backward ? Math.min(limit, endIndex) : limit;
-		let offset = backward ? endIndex - take : (cursor?.offset ?? 0);
-		let page = await transcriptPage(ctx, offset, take, backward, imageRefs);
-		while (backward && take > MIN_BACKWARD_PAGE && JSON.stringify(page.messages).length > BACKWARD_PAGE_BUDGET) {
-			take = Math.max(MIN_BACKWARD_PAGE, Math.floor(take / 2));
-			const smaller = await transcriptPage(ctx, endIndex - take, take, true, imageRefs);
-			// One run longer than the budget: the bridge snaps every shorter read back to its start, the same page.
-			if ((smaller.startIndex ?? endIndex - take) === (page.startIndex ?? offset)) break;
-			offset = endIndex - take;
-			page = smaller;
-		}
-		if (
-			(cursor && (page.leafId !== cursor.leafId || page.total !== cursor.total)) ||
-			(metadata && (page.leafId !== metadata.leafId || page.total !== metadata.total))
-		) {
-			throw new LocalCommandError("RPC message cursor is stale", "stale_cursor");
-		}
-		const startIndex = page.startIndex ?? offset;
-		const end = startIndex + page.messages.length;
-		const result: MessagesPage = { messages: page.messages, totalMessages: page.total, startIndex };
-		if (backward && startIndex > 0) {
-			result.prevCursor = encodeCursor({
-				v: 1,
-				leafId: page.leafId,
-				total: page.total,
-				offset: startIndex,
-				backward: true,
-			});
-		} else if (!backward && end < page.total) {
-			result.nextCursor = encodeCursor({ v: 1, leafId: page.leafId, total: page.total, offset: end });
-		}
-		if (metadata && page.version !== undefined && page.version === version) {
-			result.version = page.version;
-			const last = lastTails.get(ctx.bridge);
-			if (last?.version === version) last.pages.set(tailKey, result);
-			else lastTails.set(ctx.bridge, { version, pages: new Map([[tailKey, result]]) });
-		}
-		return result;
-	},
-
-	/**
-	 * The newest turn's file-changing calls (shared/turn-edits.ts), read back page by page to the prompt that started
-	 * it (a steer joins the running turn), however long the turn: a count cut short would read as exact. Only those
-	 * calls and their results leave, never the turn's reads or command output.
-	 */
-	get_turn_edits: async (_command, ctx): Promise<RpcTurnEdits> => {
-		const head = await transcriptPage(ctx, 0, 0);
-		const tail: AgentMessage[] = [];
-		let end = head.total;
-		let prompted = false;
-		while (end > 0 && !prompted) {
-			const offset = Math.max(0, end - MAX_PAGE_LIMIT);
-			const page = await transcriptPage(ctx, offset, end - offset);
-			if (page.leafId !== head.leafId || page.total !== head.total)
-				throw new LocalCommandError("Transcript changed while it was read", "stale_cursor");
-			prompted = page.messages.some(isTurnPrompt);
-			tail.unshift(...page.messages);
-			end = offset;
-		}
-		return turnEdits(tail, ctx.cwd);
 	},
 
 	/**

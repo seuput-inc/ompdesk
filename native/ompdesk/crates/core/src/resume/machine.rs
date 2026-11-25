@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 
-use super::ends::{Context, HeldFor, hold_end, persons_run};
+use super::ends::{Context, HeldFor, hold_end, moved_since, persons_run};
 use super::facts::{
     Action, Fact, MarkerData, Reason, RunOutcome, derive_markers, launch_action, opened_running,
     restore_summary, truthy,
@@ -164,6 +164,39 @@ enum Timer {
     Look(String, Ar),
 }
 
+/// How many continuations after its omp died one tab gets within `EXIT_WINDOW_MS`; past that a cut turn waits for the
+/// person (the owner's decision, 25 Nov 2026: an omp that keeps dying under the same turn makes no progress).
+const EXIT_CONTINUATIONS: usize = 3;
+const EXIT_WINDOW_MS: f64 = 5.0 * 60_000.0;
+
+/// Why a cut-off turn waits for the person's Continue instead of going on by itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CutWhy {
+    /// Settings › Continue interrupted work is off.
+    Off,
+    /// Its omp died `EXIT_CONTINUATIONS` times within `EXIT_WINDOW_MS`.
+    CrashLoop,
+    /// Its continuation failed `launch_attempts` times.
+    Failed,
+}
+
+impl CutWhy {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::CrashLoop => "crash-loop",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// A cut-off turn offered to the person: Continue runs the continuation the marker would have run.
+struct Offer {
+    marker: MarkerData,
+    action: Action,
+    since: HeldFor,
+}
+
 #[derive(Default)]
 struct State {
     launched: bool,
@@ -195,6 +228,10 @@ struct State {
     own_retries: HashSet<String>,
     resuming_shown: OrdMap<()>,
     exits: HashMap<String, i64>,
+    /// Per tab, when each continuation after its omp died started and for which session (`EXIT_WINDOW_MS` back at most).
+    exit_runs: HashMap<String, Vec<(f64, String)>>,
+    /// Cut-off turns that wait for the person's Continue or Dismiss.
+    offers: OrdMap<Offer>,
     timers: HashMap<u64, Timer>,
     listeners: HashMap<u64, Listener>,
     next: u64,
@@ -564,41 +601,12 @@ impl Inst {
             st.attempts.retain(|tab, _| present.contains(tab));
             st.own_retries.retain(|tab| present.contains(tab));
             st.exits.retain(|tab, _| present.contains(tab));
+            st.exit_runs.retain(|tab, _| present.contains(tab));
         }
+        self.end_offers(&current);
         let exited = self.exited(&current);
         self.settle_retries();
-        let (limited, previous) = {
-            let st = self.st.borrow();
-            let limited: HashSet<String> = st
-                .scheduled
-                .iter()
-                .filter(|(_, armed)| armed.borrow().limit)
-                .map(|(tab, _)| tab.clone())
-                .collect();
-            let previous: Vec<MarkerData> =
-                st.previous.iter().map(|m| m.borrow().d.clone()).collect();
-            (limited, previous)
-        };
-        let live: Vec<Mk> = {
-            let derived = derive_markers(&current, &previous, self.now(), &limited);
-            let st = self.st.borrow();
-            let fresh: Vec<MarkerData> = derived
-                .into_iter()
-                .filter(|m| !st.pending.contains(&m.tab))
-                .collect();
-            drop(st);
-            fresh.into_iter().map(|d| self.marker(d)).collect()
-        };
-        let kept: Vec<Mk> = if self.enabled() {
-            let st = self.st.borrow();
-            st.pending.values().cloned().chain(live).collect()
-        } else {
-            Vec::new()
-        };
-        let rows: Vec<MarkerData> = kept.iter().map(|m| m.borrow().d.clone()).collect();
-        self.st.borrow_mut().previous = kept;
-        self.push(json!({"k": "storeWrite", "markers": rows}));
-        self.show_resuming();
+        self.write_markers(&current);
         for (tab, action, since) in exited {
             if self.should_wait() {
                 self.hold(&tab, action, since);
@@ -608,10 +616,66 @@ impl Inst {
         }
     }
 
+    /// The marker file from `current` and what this process holds (its continuations, its armed retries).
+    fn write_markers(self: &Rc<Self>, current: &[Fact]) {
+        let (limited, previous, marked) = {
+            let st = self.st.borrow();
+            let limited: HashSet<String> = st
+                .scheduled
+                .iter()
+                .filter(|(_, armed)| armed.borrow().limit)
+                .map(|(tab, _)| tab.clone())
+                .collect();
+            let previous: Vec<MarkerData> =
+                st.previous.iter().map(|m| m.borrow().d.clone()).collect();
+            // A scheduled retry of a transient failure lives in this process only: its marker carries it over a relaunch.
+            let mut marked = current.to_vec();
+            for fact in &mut marked {
+                fact.retry_armed = st
+                    .scheduled
+                    .get(&fact.tab_id)
+                    .is_some_and(|armed| !armed.borrow().limit);
+            }
+            (limited, previous, marked)
+        };
+        let live: Vec<Mk> = {
+            let derived = derive_markers(&marked, &previous, self.now(), &limited);
+            let st = self.st.borrow();
+            let fresh: Vec<MarkerData> = derived
+                .into_iter()
+                .filter(|m| !st.pending.contains(&m.tab))
+                .collect();
+            drop(st);
+            fresh.into_iter().map(|d| self.marker(d)).collect()
+        };
+        // With the setting off the file stays empty (a relaunch continues nothing and offers nothing), but this process
+        // still knows each tab's marker: a tab whose omp dies then is offered its Continue (`exited`). With it on, an
+        // offer stays in the file until the person continues or dismisses it, or the tab runs or moves.
+        let kept: Vec<Mk> = {
+            let st = self.st.borrow();
+            st.pending.values().cloned().chain(live).collect()
+        };
+        let mut rows: Vec<MarkerData> = Vec::new();
+        if self.enabled() {
+            rows.extend(kept.iter().map(|m| m.borrow().d.clone()));
+            let st = self.st.borrow();
+            for (tab, offer) in st.offers.iter() {
+                if !rows.iter().any(|row| row.tab == *tab) {
+                    rows.push(offer.marker.clone());
+                }
+            }
+        }
+        self.st.borrow_mut().previous = kept;
+        self.push(json!({"k": "storeWrite", "markers": rows}));
+        self.show_resuming();
+    }
+
     /// Tabs whose omp died under their work since the last look (`exits` moved; its manager starts the next one): the
     /// pool already ended the run, so the marker the tab had goes on as a launch marker, continued once the next omp is
     /// up, as a relaunch continues it. A network or limit marker is not one: its wait and marker outlive the omp. Nor
     /// is a tab whose launch continuation still waits offline. A continuation already on its way is superseded.
+    /// With the setting off, or once the tab's omp died under the same session `EXIT_CONTINUATIONS` times within
+    /// `EXIT_WINDOW_MS`, the turn is offered to the person instead (`offer`).
     fn exited(&self, current: &[Fact]) -> Vec<(String, Action, HeldFor)> {
         let mut exited = Vec::new();
         for fact in current {
@@ -627,7 +691,7 @@ impl Inst {
                 .borrow_mut()
                 .exits
                 .insert(fact.tab_id.clone(), exits);
-            if exits <= seen || !self.enabled() || self.st.borrow().waiting.contains(&fact.tab_id) {
+            if exits <= seen || self.st.borrow().waiting.contains(&fact.tab_id) {
                 continue;
             }
             let marker = self
@@ -638,11 +702,21 @@ impl Inst {
                 .find(|entry| entry.borrow().d.tab == fact.tab_id)
                 .map(|entry| entry.borrow().d.clone());
             let Some(marker) = marker else { continue };
-            if matches!(marker.reason, Reason::Network | Reason::Limit) {
+            if matches!(
+                marker.reason,
+                Reason::Network | Reason::Limit | Reason::Retry
+            ) {
                 continue;
             }
+            let skipped = if !self.enabled() {
+                Some(CutWhy::Off)
+            } else if self.crash_loop(&fact.tab_id, &marker.session_path) {
+                Some(CutWhy::CrashLoop)
+            } else {
+                None
+            };
             let before = self.st.borrow().pending.get(&fact.tab_id).cloned();
-            if let Some(before) = before {
+            if let Some(before) = &before {
                 self.st
                     .borrow_mut()
                     .superseded
@@ -650,11 +724,6 @@ impl Inst {
                 self.bump_cancel(&fact.tab_id);
                 self.end_ready_waits(&fact.tab_id);
             }
-            let next = self.marker(marker.clone());
-            self.st
-                .borrow_mut()
-                .pending
-                .insert(fact.tab_id.clone(), next);
             let mut details = Map::new();
             details.insert("session".into(), json!(marker.session_path));
             details.insert("reason".into(), json!(marker.reason));
@@ -666,18 +735,98 @@ impl Inst {
             if let Some(peer) = marker.peer.as_ref().filter(|peer| !peer.is_empty()) {
                 details.insert("peer".into(), json!(peer));
             }
+            if let Some(why) = skipped {
+                details.insert("skipped".into(), json!(why.name()));
+            }
             self.log("marker", details);
-            exited.push((
-                fact.tab_id.clone(),
-                launch_action(&marker),
-                HeldFor {
-                    session_file: fact.session_file.clone(),
-                    touched: fact.touched(),
-                    ..HeldFor::default()
-                },
-            ));
+            let since = HeldFor {
+                session_file: fact.session_file.clone(),
+                touched: fact.touched(),
+                ..HeldFor::default()
+            };
+            if let Some(why) = skipped {
+                // The superseded continuation reports nothing; nothing replaces it, so its goal hears here.
+                if before.is_some() {
+                    self.st.borrow_mut().pending.remove(&fact.tab_id);
+                    self.goal_settled(&fact.tab_id, "none");
+                }
+                self.offer(fact, marker, since, why);
+                continue;
+            }
+            let now = self.now();
+            self.st
+                .borrow_mut()
+                .exit_runs
+                .entry(fact.tab_id.clone())
+                .or_default()
+                .push((now, marker.session_path.clone()));
+            let next = self.marker(marker.clone());
+            self.st
+                .borrow_mut()
+                .pending
+                .insert(fact.tab_id.clone(), next);
+            exited.push((fact.tab_id.clone(), launch_action(&marker), since));
         }
         exited
+    }
+
+    /// The tab's omp already died under `session` `EXIT_CONTINUATIONS` times within `EXIT_WINDOW_MS`, each time
+    /// continued: one more continuation would make no progress.
+    fn crash_loop(&self, tab: &str, session: &str) -> bool {
+        let now = self.now();
+        let mut st = self.st.borrow_mut();
+        let Some(runs) = st.exit_runs.get_mut(tab) else {
+            return false;
+        };
+        runs.retain(|(at, ran)| now - at < EXIT_WINDOW_MS && ran == session);
+        runs.len() >= EXIT_CONTINUATIONS
+    }
+
+    /// Offers a cut-off turn to the person: the tab's row reads "cut off" with Continue and Dismiss. Only this
+    /// computer's own tabs show the row (a paired device's tab mirrors its host's turn, a hosted one its device's).
+    fn offer(&self, fact: &Fact, marker: MarkerData, since: HeldFor, why: CutWhy) {
+        if truthy(&fact.device) || truthy(&fact.peer) || truthy(&marker.peer) {
+            return;
+        }
+        let action = launch_action(&marker);
+        self.st.borrow_mut().offers.insert(
+            fact.tab_id.clone(),
+            Offer {
+                marker,
+                action,
+                since,
+            },
+        );
+        self.push(json!({"k": "setCutOff", "tab": fact.tab_id, "cutOff": why.name()}));
+        // A session an agent opened leaves its opener without a result: it hears why (a report of the tab's own).
+        self.push(json!({"k": "cutNote", "tab": fact.tab_id, "what": why.name()}));
+    }
+
+    fn end_offer(&self, tab: &str) {
+        if self.st.borrow_mut().offers.remove(tab).is_some() {
+            self.push(json!({"k": "setCutOff", "tab": tab, "cutOff": null}));
+        }
+    }
+
+    /// An offer ends when its tab closed, runs (the person's prompt, any continuation) or shows another session or
+    /// branch: Continue would no longer continue what was cut.
+    fn end_offers(&self, current: &[Fact]) {
+        let ended: Vec<String> = {
+            let st = self.st.borrow();
+            st.offers
+                .iter()
+                .filter(|(tab, offer)| {
+                    current
+                        .iter()
+                        .find(|fact| fact.tab_id == **tab)
+                        .is_none_or(|fact| fact.running || moved_since(fact, &offer.since))
+                })
+                .map(|(tab, _)| tab.clone())
+                .collect()
+        };
+        for tab in ended {
+            self.end_offer(&tab);
+        }
     }
 
     /// The "continuing" row follows the launch markers still waiting for their turn (a reopened card is not one).
@@ -1528,6 +1677,16 @@ impl Inst {
                 .abandoned
                 .insert(marker.borrow().serial);
             self.goal_settled(tab, "none");
+            // Nothing more goes this launch by itself; the person may still try.
+            if let Some(fact) = self.fact_for(tab) {
+                let since = HeldFor {
+                    session_file: fact.session_file.clone(),
+                    touched: fact.touched(),
+                    ..HeldFor::default()
+                };
+                let data = marker.borrow().d.clone();
+                self.offer(&fact, data, since, CutWhy::Failed);
+            }
         }
         self.sync_inner();
     }
@@ -1582,8 +1741,10 @@ impl Inst {
                     json!("the tab has no omp connection"),
                 );
             }
+            // A local handler's `bridge_unavailable` is main saying the tab's bridge is gone (its omp restarting under
+            // the command, as an omp update's restart at launch does): no omp answered, so the try failed.
             Cmd::Response(reply) => {
-                *answered = true;
+                *answered |= reply["code"] != "bridge_unavailable";
                 if reply["success"] != true {
                     failures.insert(format!("{key}Error"), reply["error"].clone());
                     if reply["code"].as_str().is_some_and(|code| !code.is_empty()) {
@@ -1768,10 +1929,17 @@ impl Inst {
     ) -> R<()> {
         if !limit {
             let on = self.stock_retry_on(&tab).await?;
-            let env = self.look(Some(&tab), &["fact", "now"]).await?;
+            // Every fact, not only the tab's: the stretch rewrites the marker file once it arms the retry.
+            let env = self.look(Some(&tab), ALL).await?;
             self.stretch(env, |me| {
-                if let Some(current) = me.still_owed(&tab, &outcome, false, generation, on) {
-                    me.arm(&current, &outcome, used, None);
+                if let Some(current) = me.still_owed(&tab, &outcome, false, generation, on)
+                    && me.arm(&current, &outcome, used, None)
+                    && me.st.borrow().launched
+                    && !me.frozen()
+                {
+                    // The marker says `retry` now, so a relaunch before the retry's time still retries the turn. Only the
+                    // file: a full sync would judge the armed retry against the fact it was armed from and drop it.
+                    me.write_markers(&me.current_facts());
                 }
             });
             return Ok(());
@@ -2082,6 +2250,25 @@ impl Inst {
         }
         self.st.borrow_mut().scheduled.remove(tab);
         self.push(json!({"k": "setScheduled", "tab": tab, "retry": null}));
+        // Its `retry` marker goes with it at once: no sync may follow (a fired or called-off retry from a timer).
+        let rows = {
+            let mut st = self.st.borrow_mut();
+            let pending: HashSet<u64> = st.pending.values().map(|m| m.borrow().serial).collect();
+            let before = st.previous.len();
+            st.previous.retain(|m| {
+                let m = m.borrow();
+                pending.contains(&m.serial) || m.d.tab != tab || m.d.reason != Reason::Retry
+            });
+            (st.previous.len() != before).then(|| {
+                st.previous
+                    .iter()
+                    .map(|m| m.borrow().d.clone())
+                    .collect::<Vec<MarkerData>>()
+            })
+        };
+        if let Some(rows) = rows {
+            self.push(json!({"k": "storeWrite", "markers": rows}));
+        }
     }
 
     /// Call the tab's armed retry off: its timer, its row, and any attempt already on its way.
@@ -2151,6 +2338,85 @@ impl Inst {
     pub async fn cancel_wait(self: &Rc<Self>, tab: &str) -> R<()> {
         self.drop_wait(tab, true);
         self.sync_now().await
+    }
+
+    /// The cut-off row's Continue: the continuation the marker would have run by itself, once more. It looks first
+    /// whether the turn is still the one cut (no run since, the same session and branch); a person's Continue starts
+    /// the tab's crash-loop count afresh.
+    pub fn continue_cut(self: &Rc<Self>, tab: &str, env: Env) {
+        self.stretch(env, |me| {
+            if !me.st.borrow().launched || me.frozen() {
+                return;
+            }
+            let fact = me.fact_for(tab);
+            let offer = {
+                let mut st = me.st.borrow_mut();
+                let current = st.offers.get(tab).is_some_and(|offer| {
+                    fact.as_ref()
+                        .is_some_and(|fact| !fact.running && !moved_since(fact, &offer.since))
+                });
+                if current { st.offers.remove(tab) } else { None }
+            };
+            let (Some(offer), Some(fact)) = (offer, fact) else {
+                me.end_offer(tab);
+                return;
+            };
+            let mut details = Map::new();
+            details.insert("session".into(), json!(offer.marker.session_path));
+            details.insert("reason".into(), json!(offer.marker.reason));
+            details.insert("tab".into(), json!(tab));
+            details.insert("via".into(), json!("person"));
+            me.log("marker", details);
+            let next = me.marker(offer.marker);
+            {
+                let mut st = me.st.borrow_mut();
+                st.exit_runs.remove(tab);
+                st.pending.insert(tab.to_owned(), next);
+            }
+            // The "continuing" row comes before the cut-off row goes, so no look in between reads the tab as let go.
+            me.write_markers(&me.current_facts());
+            me.push(json!({"k": "setCutOff", "tab": tab, "cutOff": null}));
+            let since = HeldFor {
+                session_file: fact.session_file.clone(),
+                touched: fact.touched(),
+                ..HeldFor::default()
+            };
+            if me.should_wait() {
+                me.hold(tab, offer.action, since);
+            } else {
+                me.start_run(tab.to_owned(), offer.action, since);
+            }
+        });
+    }
+
+    /// The cut-off row's Dismiss: the turn stays where the cut left it, and a marker its failed tries left for the next
+    /// launch goes too.
+    pub fn dismiss_cut(self: &Rc<Self>, tab: &str, env: Env) {
+        self.stretch(env, |me| {
+            if !me.st.borrow().offers.contains(tab) {
+                return;
+            }
+            let mut details = Map::new();
+            details.insert("tab".into(), json!(tab));
+            details.insert("via".into(), json!("person"));
+            details.insert("dismissed".into(), json!(true));
+            me.log("marker", details);
+            me.end_offer(tab);
+            me.push(json!({"k": "cutNote", "tab": tab, "what": "dismissed"}));
+            {
+                let mut st = me.st.borrow_mut();
+                let left = st
+                    .pending
+                    .get(tab)
+                    .is_some_and(|marker| st.abandoned.contains(&marker.borrow().serial));
+                if left {
+                    st.pending.remove(tab);
+                }
+            }
+            if me.st.borrow().launched && !me.frozen() {
+                me.write_markers(&me.current_facts());
+            }
+        });
     }
 
     /// The resuming row's Stop: abort what this launch resumed on the tab, drop what still waits. Answers the token
@@ -2231,16 +2497,13 @@ impl Inst {
         let read = self.ask("launchRead", json!({})).await?;
         let all: Vec<MarkerData> =
             serde_json::from_value(read["markers"].clone()).unwrap_or_default();
-        let deleted: Vec<bool> =
-            serde_json::from_value(read["deleted"].clone()).unwrap_or_default();
         let enabled = read["enabled"] == true;
         // A session the user deleted is not continued, not even into a fresh tab in its folder; its marker goes. A
         // never-written session (a first turn cut off before its file) has no tombstone and still continues below.
         let markers: Vec<MarkerData> = all
             .iter()
-            .enumerate()
-            .filter(|(at, _)| !deleted.get(*at).copied().unwrap_or(false))
-            .map(|(_, marker)| marker.clone())
+            .filter(|marker| !crate::sessions::deleted::has(&marker.session_path, None))
+            .cloned()
             .collect();
         if markers.len() != all.len() {
             self.push(json!({"k": "storeWrite", "markers": markers}));
@@ -2309,9 +2572,26 @@ impl Inst {
             }
             self.log("marker", details);
             let Some(tab) = tab_id else { continue };
+            // A device's turn revived on a session this computer's own tab holds is that tab's (`reviveTab` answers the
+            // holder), beside any marker of the holder's own: the tab continues once.
+            if resumable.iter().any(|(held, _)| *held == tab) {
+                continue;
+            }
             resumable.push((tab.clone(), action));
+            // An opened tab may be another's than the marker's (a window's tab for a device's turn): the marker becomes
+            // that tab's, so a relaunch before the turn goes on looks for it there.
+            let peer = if found.is_none() && unwritten.is_none() {
+                let env = self.look(Some(&tab), &["fact"]).await?;
+                self.stretch(env, |me| me.fact_for(&tab)).map_or_else(
+                    || marker.peer.clone(),
+                    |fact| fact.peer.filter(|peer| !peer.is_empty()),
+                )
+            } else {
+                marker.peer.clone()
+            };
             let next = self.marker(MarkerData {
                 tab: tab.clone(),
+                peer,
                 ..marker.clone()
             });
             self.st.borrow_mut().pending.insert(tab, next);

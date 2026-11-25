@@ -14,19 +14,62 @@ runs:
       run: >-
         bunx vitest run --project=node
         src/main/core/process.test.ts
+        src/main/prefs-store.test.ts
+        src/main/retired-prefs.test.ts
+        src/main/agent-power-migration.test.ts
+        src/main/initial-cwd.test.ts
+        src/main/open-path.test.ts
+        src/main/hang-watchdog.test.ts
+        src/main/diagnostic-bundle.test.ts
+        src/main/diagnostics.test.ts
+        src/main/log-watcher.test.ts
+        src/main/quit-log.test.ts
+        src/main/gpu-fallback*.test.ts
+        src/main/launch-guard.test.ts
+        src/main/app-icon.test.ts
+        src/main/external-url.test.ts
+        src/main/notify-triage.test.ts
+        src/main/update-auth.test.ts
+        src/main/updater-state.test.ts
         src/main/agent-browsers.test.ts
+        src/main/preview/visuals.test.ts
         src/main/repo-lock-fence.test.ts
         src/main/session-index.test.ts
+        src/main/session-store-enrichment.test.ts
         src/main/memory-sampler.test.ts
+        src/main/memory-record.test.ts
+        src/main/memory-watch.test.ts
         src/main/model-setup-runner.test.ts
         src/main/schedules.test.ts
         src/main/web/webhook.test.ts
         src/main/omp-processes.test.ts
-        src/main/session-processes.test.ts
+        src/main/omp-log-tail.test.ts
+        src/main/console-window-watch.test.ts
         src/main/setup/runner.test.ts
         src/main/setup/download.test.ts
+        src/main/setup/paths.test.ts
         src/main/setup/archives.test.ts
+        src/main/tools/client.test.ts
+        src/main/tools/omp-install.test.ts
+        src/main/omp-runtime.test.ts
+        src/main/boot-model.test.ts
+        src/main/local/misc.test.ts
+        src/main/local/image-blobs.test.ts
+        src/main/local/agent-files.test.ts
+        src/main/local/session-files.test.ts
+        src/main/local/session-dump.test.ts
+        src/main/diagnostic-bundle.test.ts
+        src/main/bridge-dump-stock.test.ts
+        src/main/local/subagent-journal-tail.test.ts
+        src/main/agent-worktrees.test.ts
         src/main/stock-helper.test.ts
+        src/main/control-socket/cli-install.test.ts
+        src/main/terminal/shells.test.ts
+        src/main/terminal/lease.test.ts
+        src/main/terminal/agent-tool.test.ts
+        src/main/stats-server.test.ts
+        src/main/stats-host.test.ts
+        src/main/stats-host-stock.test.ts
         src/main/models-config.test.ts
         src/main/bridge-input-history.test.ts
         src/main/omp-availability.test.ts
@@ -40,15 +83,16 @@ runs:
         src/main/tailscale/service-restart.test.ts
         src/main/tailscale/tailnet.test.ts
         src/main/ssh/*.test.ts
-        src/main/ext-update/mcp.test.ts
-        src/main/ext-update/classify.test.ts
-        src/main/ext-update/running.test.ts
-        src/main/ext-update/mcp-owner.test.ts
-        src/main/ext-update/mcp-plans.test.ts
-        src/main/ext-update/updater.test.ts
+        src/main/power/lid-backend-windows.test.ts
+        src/main/agent-desktop.test.ts
+        src/main/local-engines.test.ts
+        src/main/update-release.test.ts
+        src/main/update-lookup.test.ts
+        src/main/update-compatibility.test.ts
         src/main/github-auth/service.test.ts
         src/main/checkout-peers*.test.ts
         src/main/git-fingerprints*.test.ts
+        src/main/ai-memory/ipc.test.ts
         src/main/ai-memory/client.test.ts
         src/main/ai-memory/service.test.ts
         src/main/ai-memory/care.test.ts
@@ -61,22 +105,44 @@ runs:
         src/main/ai-memory/ambiguous-names.test.ts
         src/main/ai-memory/distill-model.test.ts
         src/main/stock-helper-memory.test.ts
+        src/main/mcp-hub-memory.test.ts
+        src/main/mcp-hub-lifetime.test.ts
         src/main/ai-memory/sync.test.ts
         src/main/ai-memory/recall-terms.test.ts
+        src/main/bridge-memory-recall-core.test.ts
         src/main/remote/host-services.test.ts
         src/main/routines/*.test.ts
+        src/main/mail-accounts.test.ts
         src/main/local/autopilot*.test.ts
+        src/main/local/composer.test.ts
+        src/main/local/settings.test.ts
         src/main/local/git/changes.test.ts
         src/main/local/git/scm.test.ts
         src/main/local/git/worktree.test.ts
+        src/main/local/git/session-worktree.test.ts
         src/main/local/git/worktree-seed.test.ts
         src/main/local/git/exec-gh.test.ts
+        src/main/local/git/exec.test.ts
+        src/main/local/git/git-env.test.ts
+        src/main/local/git/repo-lock.test.ts
+        src/main/local/git/pr-draft.test.ts
+        src/main/local/git/origin.test.ts
+        src/main/local/git/stock-bridge.test.ts
         src/main/workspace-fs*.test.ts
+        src/main/media-stream.test.ts
+        src/main/workspace-search.test.ts
+        src/main/save-copy.test.ts
+        src/main/sidebar-projects.test.ts
+        src/main/worktree-orphans*.test.ts
+        src/main/turn-wait-watch.test.ts
+        src/main/session-pace*.test.ts
         src/main/disk/*.test.ts
         src/main/sidecar.test.ts
+        src/main/local/queue.test.ts
+        src/main/desktop-slot.test.ts
+        src/main/desktop-slot-host.test.ts
         src/main/shell-env.test.ts
         src/main/sidecar-os-shutdown.test.ts
-        src/main/builtin-mcp-spawn.test.ts
         src/main/session-launch-parity.test.ts
         src/main/remote/link-traffic-relaunch.test.ts
         src/main/remote/fanout-cpu-report.test.ts
@@ -85,7 +151,10 @@ runs:
         src/main/remote/crypto.test.ts
         src/main/remote/devices.test.ts
         src/main/web/server.test.ts
+        src/main/web/pairing.test.ts
+        src/main/web/host-actions.test.ts
         src/main/web/ws-router.test.ts
+        src/main/web/page-images.test.ts
         src/main/web/push.test.ts
         src/main/web/vapid-store.test.ts
         src/main/web/web-push-notifier.test.ts
@@ -100,6 +169,7 @@ runs:
         src/main/remote/transcript-cache.test.ts
         src/main/remote/image-blob-cache.test.ts
         src/main/remote/sign-in-relay.test.ts
+        src/main/sign-in-callback.test.ts
         src/main/remote/link-traffic-images.test.ts
         src/main/remote/link-events-core.test.ts
         src/main/remote/link-traffic-report.test.ts
@@ -115,9 +185,14 @@ runs:
         src/main/tab-spawn.test.ts
         src/main/tab-release.test.ts
         src/main/web/web-tab-layouts.test.ts
-        src/main/remote/host-services.test.ts
         src/main/turn-resume.test.ts
         src/main/turn-resume-limit.test.ts
         src/main/turn-resume-ends.test.ts
         src/main/connectivity.test.ts
-        src/main/autopilot-restart-resume.test.ts
+        src/main/autopilot*.test.ts
+    # Alone, after the rest: its spin cases judge a real process by its share of a core (`SPIN_PERCENT`, 50 %), which
+    # the runner's cores did not give it beside the parallel files above (run 45264017767: the closed-pipe spinner read
+    # under 50 % in both cases); alone it passed 10 of 10 (flake-probe 45364024177).
+    - name: vitest over the session processes, alone
+      shell: bash
+      run: bunx vitest run --project=node src/main/session-processes.test.ts

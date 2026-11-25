@@ -26,7 +26,10 @@ async fn make_state(tmp: &TempDir) -> AdminState {
         writer: store.writer.clone(),
         reader: store.reader.clone(),
         wiki,
-        llm: None,
+        llm_providers: ai_memory_llm::LlmProviders {
+            default: None,
+            overrides: Default::default(),
+        },
         auto_improve_require_approval: false,
         auto_improve_review_config: Default::default(),
         embedder: None,
@@ -38,7 +41,7 @@ async fn make_state(tmp: &TempDir) -> AdminState {
         db_path,
         bind: "127.0.0.1:0".to_string(),
         home_dir: None,
-        bootstrap_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        bootstrap_gate: ai_memory_mcp::BootstrapGate::default(),
         token_pepper: None,
         active_project: ai_memory_core::ActiveProject::new(),
         scope_invalidator: None,
@@ -606,6 +609,14 @@ async fn write_page_conditional_refuses_a_page_that_moved_on() {
             .unwrap()
             .contains("precondition failed"),
         "{body}"
+    );
+    let mut blank = page("must not overwrite second");
+    blank["expected_page_id"] = json!(" ");
+    assert_eq!(
+        post_json(state.clone(), "/admin/write-page", blank)
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     let ws = state
         .writer

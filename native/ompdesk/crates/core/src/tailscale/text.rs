@@ -43,8 +43,12 @@ pub fn control_host(stdout: &str) -> Option<String> {
 
 /// The version in `tailscale version` output: the first `\d+\.\d+\.\d+` of its first line.
 pub fn version(stdout: &str) -> Option<&str> {
-    let line = stdout.split('\n').next()?;
-    let bytes = line.as_bytes();
+    version_in(stdout.split('\n').next()?)
+}
+
+/// The first `\d+\.\d+\.\d+` in a CLI's output.
+pub(crate) fn version_in(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
     let digits = |from: usize| {
         let run = bytes[from..]
             .iter()
@@ -54,8 +58,12 @@ pub fn version(stdout: &str) -> Option<&str> {
     };
     let dotted = |from: usize| (bytes.get(from) == Some(&b'.')).then(|| digits(from + 1))?;
     (0..bytes.len()).find_map(|from| {
+        // Starting inside a run of digits can only retry the same two dots.
+        if from > 0 && bytes[from - 1].is_ascii_digit() {
+            return None;
+        }
         let end = dotted(dotted(digits(from)?)?)?;
-        Some(&line[from..end])
+        Some(&text[from..end])
     })
 }
 

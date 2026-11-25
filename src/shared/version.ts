@@ -63,3 +63,8 @@ export function isNewer(latest: string, installed: string | null): boolean {
 	const order = compareVersions(latest, installed);
 	return order === null ? latest.trim() !== installed.trim() : order > 0;
 }
+
+/** The first number of a version (`18` of `18.22.2`, `v18.22.2` or `18.23.0-canary.3`); null when it has none. */
+export function majorOf(version: string): number | null {
+	return parse(version)?.core[0] ?? null;
+}

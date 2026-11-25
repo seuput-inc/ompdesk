@@ -67,11 +67,11 @@ describe("queue store", () => {
 			error: "unsupported",
 		} satisfies RpcResponse);
 
-		await useQueueStore.getState().refresh();
+		expect(await useQueueStore.getState().refresh()).toBe(false);
 		expect(useQueueStore.getState().followUp.map(entry => entry.id)).toEqual(["f9"]);
 
 		getQueue.mockRejectedValueOnce(new Error("sidecar down"));
-		await useQueueStore.getState().refresh();
+		expect(await useQueueStore.getState().refresh()).toBe(false);
 		expect(useQueueStore.getState().followUp.map(entry => entry.id)).toEqual(["f9"]);
 	});
 });
@@ -109,15 +109,13 @@ describe("pictures sent into a run", () => {
 		expect(useQueueStore.getState().steering.map(entry => entry.images?.length ?? 0)).toEqual([1, 2, 0]);
 	});
 
-	it("drops the pictures of a message an edit re-queued with new text, and of one forgotten on purpose", () => {
+	it("drops the pictures of a message an edit re-queued with new text", () => {
 		const store = useQueueStore.getState();
 		store.expectImages("first", [image]);
 		store.expectImages("second", [image]);
 		store.setFromFrame({ steering: [queued("a", "first"), queued("b", "second")], followUp: [] });
 		store.setFromFrame({ steering: [queued("b", "second"), queued("a", "first, edited")], followUp: [] });
 		expect(useQueueStore.getState().steering.map(entry => entry.images?.length ?? 0)).toEqual([1, 0]);
-		useQueueStore.getState().forgetImages("b");
-		expect(useQueueStore.getState().steering.map(entry => entry.images?.length ?? 0)).toEqual([0, 0]);
 	});
 
 	it("gives a picture-only chip the interface language's word instead of stock's English one", async () => {

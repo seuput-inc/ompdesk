@@ -13,10 +13,10 @@ interface Watch {
 }
 
 /**
- * Tells each tab's bridge whether its composer draft is empty (idle compaction and
- * the built-in prompt suggestions both need it). Stock's idle
- * compaction timer (re-armed by resources/gui-bridge/idle-compaction.ts) skips
- * a session whose input holds text, as the terminal UI does with its editor;
+ * Tells each tab's bridge whether its composer draft is empty (idle compaction, the
+ * idle recap and the built-in prompt suggestions all need it). Stock's idle scheduler
+ * (opted in by resources/gui-bridge/idle-maintenance.ts) holds back while the input
+ * holds text, as the terminal UI does with its editor;
  * the bridge cannot see the GUI draft, so this reports every empty ⇄ non-empty
  * change, and the current state again once a tab's session is ready (a new tab,
  * a restarted omp, a switched session). Mounted once, by App.
@@ -43,17 +43,36 @@ export function useIdleCompactionDraft(): void {
 			current?.unsubscribe();
 			const rpc = createTabRpc(runtime.command);
 			let reported: boolean | undefined;
+			let inFlight = false;
+			let live = true;
+			// One report at a time: two calls in flight may reach omp in either order, and a
+			// stale "non-empty" applied last held suggestions and idle compaction back.
 			const report = () => {
+				if (!live || inFlight) return;
 				const empty = store.getState().draft.trim() === "";
 				if (empty === reported) return;
 				reported = empty;
-				// An omp without the feature answers unsupported_omp; the health toast already says so.
-				void rpc.command({ type: "set_idle_compaction_draft", empty }).catch(() => {});
-				// The prompt suggestions' bridge aborts a pending suggestion once the draft turns non-empty.
-				void rpc.command({ type: "set_next_prompt_draft", empty }).catch(() => {});
+				inFlight = true;
+				void Promise.all([
+					// An omp without the feature answers unsupported_omp; the health toast already says so.
+					rpc.command({ type: "set_idle_compaction_draft", empty }).catch(() => {}),
+					// The prompt suggestions' bridge aborts a pending suggestion once the draft turns non-empty.
+					rpc.command({ type: "set_next_prompt_draft", empty }).catch(() => {}),
+				]).then(() => {
+					inFlight = false;
+					report();
+				});
 			};
 			report();
-			watches.current.set(tab.id, { sessionId, store, unsubscribe: store.subscribe(report) });
+			const unsubscribe = store.subscribe(report);
+			watches.current.set(tab.id, {
+				sessionId,
+				store,
+				unsubscribe: () => {
+					live = false;
+					unsubscribe();
+				},
+			});
 		}
 		for (const [id, watch] of watches.current) {
 			if (open.has(id)) continue;

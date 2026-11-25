@@ -50,6 +50,10 @@ impl Ctx {
                 let retry = (!payload.is_null()).then(|| payload.clone());
                 self.set_scheduled_retry(tab, retry).await
             }
+            "cutOff" => {
+                self.set_cut_off(tab, payload.as_str().map(str::to_owned))
+                    .await
+            }
             "events" => self.feed_events(tab, payload).await,
             other => Err(fault("no_event", format!("The pool hears no `{other}`"))),
         }
@@ -80,6 +84,14 @@ impl Ctx {
             } else {
                 None
             };
+            // A synthetic reattach start can invalidate the prior omp's turn without withdrawing its replayed asks.
+            let replaced = payload.get("hostTurn").is_some_and(Value::is_null);
+            if entry.device.is_some() && (!from_link || replaced) && !session_ended {
+                let new_omp = replaced
+                    || status == "restarting"
+                    || (status == "starting" && entry.start_wait.is_none());
+                entry.tracking.host_status(payload, new_omp);
+            }
             let seq = entry.seq;
             let mut host_sign_in = None;
             // A restart/exit kills any in-flight run along with the process, and the asks and approvals it had
@@ -160,18 +172,29 @@ impl Ctx {
     async fn feed_host_run(&self, tab: &str, reading: &Value) -> R<()> {
         let changed = self.with(|pool| {
             let now = pool.now;
+            let mut serial = pool.retry_serial;
             let entry = pool.entry_mut(tab)?;
             let was_busy = entry.busy();
             entry.run_across_link = false;
             entry.tracking.run = RunState::from_reading(reading, Some(&entry.tracking.run), now);
-            Some(entry.busy() != was_busy)
+            let outcome_changed =
+                entry.device.is_some() && entry.tracking.read_host_outcome(reading, &mut serial);
+            let busy_changed = entry.busy() != was_busy;
+            pool.retry_serial = serial;
+            Some((busy_changed, outcome_changed))
         });
-        if changed != Some(true) {
+        let Some((busy_changed, outcome_changed)) = changed else {
+            return Ok(());
+        };
+        if !busy_changed && !outcome_changed {
             return Ok(());
         }
         self.forward_status(tab).await?;
         self.on_running_change().await?;
-        self.announce_run(tab).await
+        if busy_changed {
+            self.announce_run(tab).await?;
+        }
+        Ok(())
     }
 
     /// A paired host deleted this session while the tab was away: it closes here as a delete from this device would,
@@ -188,13 +211,12 @@ impl Ctx {
             (payload.as_str().filter(|path| !path.is_empty()), &device)
             && !device.is_empty()
         {
-            self.ask("deletedAdd", json!({"sessionPath": path, "device": device}))
-                .await?;
+            crate::sessions::deleted::add(path, Some(device));
         }
         if !self.with(|pool| pool.has(tab)) {
             return Ok(());
         }
-        self.release_entry(tab).await?;
+        self.release(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         self.send_tab_list(win, Some(&[tab.to_string()]), None)
             .await
@@ -204,7 +226,7 @@ impl Ctx {
         let Some(win) = self.with(|pool| pool.entry(tab).map(|entry| entry.win_id)) else {
             return Ok(());
         };
-        self.release_entry(tab).await?;
+        self.release(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         self.send_tab_list(win, None, None).await
     }
@@ -355,9 +377,7 @@ impl Ctx {
         let stale: Vec<String> = self.with(|pool| {
             pool.request_owners
                 .iter()
-                .filter(|(id, owner)| {
-                    **owner == seq && !open.contains(id) && !pool.answering.contains(*id)
-                })
+                .filter(|(id, owner)| **owner == seq && !open.contains(id))
                 .map(|(id, _)| id.clone())
                 .collect()
         });
@@ -493,11 +513,13 @@ impl Ctx {
             was_since: Option<i64>,
             was_saga: Option<super::run::Saga>,
             unsaved_before: Option<String>,
+            goal_before: bool,
         }
-        let list = events.as_array().cloned().unwrap_or_default();
+        let list = events.as_array().map(Vec::as_slice).unwrap_or_default();
         let (seen, run_ended, retry_started, stepped, hidden, win) = self.with(|pool| {
             let now = pool.now;
             let mut serial = pool.retry_serial;
+            let mut plan_serial = pool.plan_serial;
             let Some(entry) = pool.entry_mut(tab) else {
                 return (None, false, false, false, Vec::new(), 0);
             };
@@ -508,13 +530,15 @@ impl Ctx {
                 was_since: entry.tracking.run.since,
                 was_saga: entry.tracking.run.saga.clone(),
                 unsaved_before: entry.unsaved_prompt.clone(),
+                goal_before: entry.tracking.goal_active,
             };
             let mut run_ended = false;
             let mut retry_started = false;
             let mut stepped = false;
             let mut hidden: Vec<Value> = Vec::new();
-            for event in &list {
-                if entry.tracking.track(event, now, &mut serial) {
+            let remote = entry.device.is_some();
+            for event in list {
+                if entry.tracking.track(event, now, &mut serial, remote) {
                     run_ended = true;
                 }
                 match event["type"].as_str() {
@@ -529,6 +553,16 @@ impl Ctx {
                         if kind == "plan_proposal" {
                             let title = event["title"].as_str().unwrap_or("").to_string();
                             entry.plan_proposal = Some((title, path));
+                            // A tab a paired host runs keeps the host's own number: it is what that host's answer step
+                            // compares. Only a tab of this computer is numbered here.
+                            entry.plan_generation =
+                                match (entry.device.is_some(), event["generation"].as_u64()) {
+                                    (true, Some(host)) => host,
+                                    _ => {
+                                        plan_serial += 1;
+                                        plan_serial
+                                    }
+                                };
                         } else if entry
                             .plan_proposal
                             .as_ref()
@@ -561,12 +595,13 @@ impl Ctx {
             }
             let win = entry.win_id;
             pool.retry_serial = serial;
+            pool.plan_serial = plan_serial;
             (Some(seen), run_ended, retry_started, stepped, hidden, win)
         });
         let Some(seen) = seen else {
             return Ok(());
         };
-        let (busy, settling, placeholder, since, saga, unsaved) = self.with(|pool| {
+        let (busy, settling, placeholder, since, saga, unsaved, goal) = self.with(|pool| {
             let entry = pool.entry(tab).expect("the tab is in the pool");
             (
                 entry.busy(),
@@ -575,12 +610,18 @@ impl Ctx {
                 entry.tracking.run.since,
                 entry.tracking.run.saga.clone(),
                 entry.unsaved_prompt.clone(),
+                entry.tracking.goal_active,
             )
         });
         let busy_changed = busy != seen.was_busy;
         // The resume rules first: a failure they turn into a connection wait reaches the window already waiting, so
-        // it never shows (or notifies) as a failure first.
-        if busy_changed || run_ended || retry_started || unsaved != seen.unsaved_before {
+        // it never shows (or notifies) as a failure first. A goal turning active or not changes the tab's marker.
+        if busy_changed
+            || run_ended
+            || retry_started
+            || unsaved != seen.unsaved_before
+            || goal != seen.goal_before
+        {
             self.on_running_change().await?;
         }
         if busy_changed || (run_ended && !busy) {
@@ -763,7 +804,7 @@ impl Ctx {
             let Some(win) = self.with(|pool| pool.entry(tab).map(|entry| entry.win_id)) else {
                 continue;
             };
-            self.release_entry(tab).await?;
+            self.release(tab).await?;
             match closed.iter_mut().find(|(candidate, _)| *candidate == win) {
                 Some((_, list)) => list.push(tab.clone()),
                 None => closed.push((win, vec![tab.clone()])),
@@ -832,7 +873,7 @@ impl Ctx {
         } else {
             None
         };
-        self.release_entry(tab).await?;
+        self.release(tab).await?;
         self.notify_window_tabs_changed(win).await?;
         let closed = [tab.to_string()];
         if let Some((owner_tab, owner_win)) = &owner

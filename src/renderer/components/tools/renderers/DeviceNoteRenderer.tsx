@@ -5,7 +5,7 @@ import { ToolResultBody } from "./GenericRenderer";
 
 /** The prose a note-like device write carries, whatever key its payload used. */
 function noteText(args: Record<string, unknown>): string {
-	for (const key of ["content", "plan", "text", "message", "body"]) {
+	for (const key of ["content", "plan", "text", "message", "body", "title", "report"]) {
 		const value = args[key];
 		if (typeof value === "string" && value.trim()) return value;
 	}
@@ -13,11 +13,8 @@ function noteText(args: Record<string, unknown>): string {
 }
 
 /**
- * `xd://propose` and `xd://report_issue` (stock pi-tui `tools/resolve.ts`
- * describeResolutionDeviceCall, `tools/report-tool-issue.ts`): the device's
- * prose — a proposed plan as markdown, an issue report as text — then the
- * device's reply. Stock heads them "Propose" / "Report Tool Issue" with the
- * first line; the card header names the device and the body keeps the rest.
+ * `propose` and `report_issue`, including old `xd://` writes: a proposal title (or legacy plan text)
+ * as markdown, an issue report as text, then the tool's reply when stock includes it.
  */
 export function DeviceNoteRenderer({
 	args,

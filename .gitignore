@@ -26,3 +26,15 @@ resources/ai-memory-bin/
 resources/agent-desktop-bin/
 # OMPdesk's own Rust built from native/ompdesk: bun run build:native puts the binaries and their build record here (never committed)
 resources/ompdesk-bin/
+# The Node runtime the shell build starts main with (scripts/node-runtime-pin.json): bun run build:node puts node and its record here (never committed)
+resources/node/
+# The CEF shell built from native/ompdesk/crates/shell: bun run build:shell stages it here (never committed)
+resources/ompdesk-shell/
+# CEF's CREDITS.html and LICENSE.txt out of its archive: bun run stage:cef-licenses (never committed)
+resources/shell-licenses/
+# The Tauri host and launcher built from native/ompdesk/crates/tauri-shell: bun run build:tauri stages them here (never committed)
+resources/ompdesk-tauri/
+# tauri-build's generated capability schemas (written into the crate while it compiles)
+native/ompdesk/crates/tauri-shell/gen/
+# The pinned signed Preview browser (resources/preview-browser.json): scripts/stage-preview-browser.ts stages it here (never committed)
+resources/preview-browser/

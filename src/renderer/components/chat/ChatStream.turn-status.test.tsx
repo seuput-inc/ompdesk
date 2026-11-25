@@ -99,6 +99,25 @@ describe("TurnStatusRow", () => {
 		const streaming = frameOf(container.querySelector(".omp-live-step"));
 		expect(streaming.length).toBeGreaterThan(0);
 		expect(pending).toEqual(streaming);
+		expect(container.querySelector(".omp-work-narrative")?.textContent).toBe("Thinking…");
+	});
+
+	it("keeps the turn working without calling a finalized reasoning step live", async () => {
+		await mount(
+			<ProcessGroup
+				expanded
+				live
+				onExpandedChange={() => {}}
+				row={{
+					...STREAMING_WORK_ROW,
+					messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "Read the file." }] }],
+					stepCount: 1,
+				}}
+				rowKey="completed-reasoning"
+			/>,
+		);
+		expect(container.querySelector(".omp-thinking-state")?.textContent).toBe("Thought");
+		expect(container.querySelector(".omp-work-narrative")?.textContent).toBe("Working…");
 	});
 
 	it("renders nothing when the wait rides on the turn's last work row", async () => {
@@ -187,6 +206,63 @@ describe("TurnStatusRow", () => {
 		expect(useToastStore.getState().toasts.at(-1)?.title).toBe("Couldn't cancel the wait");
 		await act(async () => useTabsStore.setState({ activeTabId: null, tabs: [] }));
 		await act(async () => useRemoteStore.getState().reset());
+	});
+
+	it("a running compaction says what happens in plain words and how long it has run, on one line", async () => {
+		useSessionStore.setState({
+			isCompacting: true,
+			compactionInfo: { reason: "overflow", action: "compact", startedAt: Date.now() - 42_000 },
+		});
+		await mount(<TurnStatusRow />);
+
+		const row = container.querySelector("[data-compaction-status]");
+		expect(row?.querySelector('[role="status"]')?.textContent).toBe(
+			`${translate("chat.compaction.running.summarize")}…`,
+		);
+		expect(row?.querySelector("[data-compaction-elapsed]")?.textContent).toMatch(/4[2-4]s/);
+		// The why and what stays sit behind the (i), with no duration nobody measured.
+		const about = row?.querySelector("[data-setting-info]");
+		expect(about?.getAttribute("aria-label")).toBe(translate("chat.compaction.about"));
+		const detail = [...(row?.querySelectorAll(".sr-only") ?? [])].at(-1)?.textContent ?? "";
+		expect(detail).toContain(translate("chat.compaction.detail.kept"));
+		expect(detail).not.toMatch(/\d/);
+		// An automatic pass has no Cancel of its own: Esc stops the turn.
+		expect([...container.querySelectorAll("button")].filter(button => button !== about)).toHaveLength(0);
+	});
+
+	it("shows no elapsed time before the first second, and the last measured pass of its kind as what to expect", async () => {
+		useSessionStore.setState({
+			isCompacting: true,
+			compactionInfo: { reason: "threshold", action: "context-full", startedAt: Date.now() },
+			compactionRuns: [
+				{ action: "compact", startedAt: 0, endedAt: 38_000 },
+				{ action: "shake", startedAt: 50_000, endedAt: 50_400 },
+			],
+		});
+		await mount(<TurnStatusRow />);
+
+		const row = container.querySelector("[data-compaction-status]");
+		expect(row?.querySelector("[data-compaction-elapsed]")).toBeNull();
+		const detail = [...(row?.querySelectorAll(".sr-only") ?? [])].at(-1)?.textContent ?? "";
+		expect(detail).toContain(translate("chat.compaction.detail.lastTook", { duration: "38.0s" }));
+	});
+
+	it("a manual compaction's Cancel stops it through abort_maintenance and the row says so", async () => {
+		const abortMaintenance = vi.fn(async () => ({ type: "response", command: "abort_maintenance", success: true }));
+		Object.assign(window, { omp: { rpc: { abortMaintenance } } });
+		useSessionStore.setState({
+			isCompacting: true,
+			compactionInfo: { reason: "manual", action: "compact", startedAt: Date.now() - 5_000 },
+		});
+		await mount(<TurnStatusRow />);
+
+		const cancel = [...container.querySelectorAll("button")].find(
+			button => button.textContent === translate("common.cancel"),
+		);
+		await act(async () => cancel?.click());
+		expect(abortMaintenance).toHaveBeenCalledTimes(1);
+		expect(container.querySelector('[role="status"]')?.textContent).toBe(translate("chat.compaction.cancelling"));
+		expect(container.querySelector("[data-compaction-elapsed]")).toBeNull();
 	});
 });
 

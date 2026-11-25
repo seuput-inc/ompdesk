@@ -69,6 +69,80 @@ function playerState(player: Locator): Promise<PlayerState> {
 	});
 }
 
+/** A player's stream: `omp-media://stream/<token>`, which WebView2 loads from `http://omp-media.localhost/stream/<token>`. */
+const MEDIA_STREAM_URL = /^(omp-media:\/\/|http:\/\/omp-media\.localhost\/)stream\//;
+
+/**
+ * What the page makes of a clip that got no player (its card is a chip): the stream the host answers, whether a
+ * `<video>` loads it and what a ranged fetch of it gets, and the reply's own text.
+ */
+function whyNoPlayer(page: Page, file: string, reply: Locator): Promise<string> {
+	return page
+		.evaluate(async path => {
+			const tab = (await window.omp.tabs.list()).find(entry => entry.active);
+			const stream = await window.omp.fs.mediaStream(path, tab?.tabId);
+			if (!stream.ok) return JSON.stringify({ stream });
+			const video = document.createElement("video");
+			video.muted = true;
+			video.preload = "metadata";
+			const { promise: loaded, resolve } = Promise.withResolvers<string>();
+			video.onloadedmetadata = () => resolve("loaded");
+			video.onerror = () => resolve(`error ${video.error?.code} ${video.error?.message}`);
+			setTimeout(() => resolve("no event in 10 s"), 10_000);
+			video.src = stream.url;
+			const ranged = await fetch(stream.url, { headers: { Range: "bytes=0-1" } }).then(
+				response => `${response.status} ${response.headers.get("content-type")}`,
+				error => String(error),
+			);
+			return JSON.stringify({ url: stream.url, mime: stream.mime, loaded: await loaded, ranged });
+		}, file)
+		.then(async probe => `${probe}\nreply: ${await reply.innerText().catch(() => "(gone)")}`)
+		.catch((error: Error) => `probe failed: ${error.message}`);
+}
+
+/** Read from the document: a failed player can already have been replaced by its fallback. */
+async function whyNotLoaded(player: Locator): Promise<string> {
+	const detail = await player
+		.page()
+		.evaluate(() => {
+			const timing = performance
+				.getEntriesByType("resource")
+				.filter(entry => (entry as PerformanceResourceTiming).initiatorType !== "script")
+				.filter(entry => /omp-media|127\.0\.0\.1/.test(entry.name))
+				.map(entry => {
+					const resource = entry as PerformanceResourceTiming;
+					return {
+						url: resource.name,
+						status: resource.responseStatus,
+						redirected: resource.redirectEnd > 0,
+						bytes: resource.transferSize,
+						ms: Math.round(resource.duration),
+					};
+				});
+			return {
+				cards: Array.from(document.querySelectorAll(".omp-chat-media"), card => ({
+					text: card.textContent?.slice(0, 120),
+					top: Math.round(card.getBoundingClientRect().top),
+					player: card.querySelector("video, audio")?.tagName ?? null,
+				})),
+				players: Array.from(document.querySelectorAll("video, audio"), element => {
+					const media = element as HTMLMediaElement;
+					return {
+						kind: media.tagName,
+						ready: media.readyState,
+						network: media.networkState,
+						error: media.error?.code,
+					};
+				}),
+				events: Reflect.get(window, "mediaEvents"),
+				violations: Reflect.get(window, "mediaViolations"),
+				timing,
+			};
+		})
+		.catch((error: Error) => ({ probeFailed: error.message }));
+	return JSON.stringify(detail);
+}
+
 /** Metadata loads (duration known) through main's stream, and the player sits paused at the start. */
 async function expectLoadedAndIdle(player: Locator, kind: "video" | "audio"): Promise<PlayerState> {
 	await expect
@@ -76,9 +150,12 @@ async function expectLoadedAndIdle(player: Locator, kind: "video" | "audio"): Pr
 			const state = await playerState(player);
 			return state.readyState >= 1 && Number.isFinite(state.duration) && state.duration > 0;
 		})
-		.toBe(true);
+		.toBe(true)
+		.catch(async (error: Error) => {
+			throw new Error(`${error.message}\nthe player: ${await whyNotLoaded(player)}`);
+		});
 	const state = await playerState(player);
-	expect(state.src).toMatch(/^omp-media:\/\/stream\//);
+	expect(state.src).toMatch(MEDIA_STREAM_URL);
 	expect(state).toMatchObject({ paused: true, autoplay: false, loop: false, currentTime: 0 });
 	if (kind === "video") expect(state.muted).toBe(true);
 	return state;
@@ -92,6 +169,34 @@ for (const language of variants(["en", "ko"] as const))
 			try {
 				const errors: string[] = [];
 				page.on("pageerror", error => errors.push(error.message));
+				await page.evaluate(() => {
+					const seen: string[] = [];
+					Reflect.set(window, "mediaViolations", seen);
+					const events: unknown[] = [];
+					Reflect.set(window, "mediaEvents", events);
+					for (const type of ["loadstart", "loadedmetadata", "error", "abort", "emptied"]) {
+						document.addEventListener(
+							type,
+							event => {
+								const media = event.target;
+								if (!(media instanceof HTMLMediaElement) || events.length >= 64) return;
+								events.push({
+									type,
+									at: Math.round(performance.now()),
+									kind: media.tagName,
+									card: media.closest(".omp-chat-media")?.textContent?.slice(0, 120),
+									ready: media.readyState,
+									code: media.error?.code,
+									message: media.error?.message,
+								});
+							},
+							true,
+						);
+					}
+					document.addEventListener("securitypolicyviolation", event =>
+						seen.push(`${event.violatedDirective} ${event.blockedURI}`),
+					);
+				});
 				const input = page.locator("textarea").first();
 				await input.fill("fixture media");
 				await input.press("Enter");
@@ -101,9 +206,20 @@ for (const language of variants(["en", "ko"] as const))
 				await expect(reply).toBeVisible({ timeout: 30_000 });
 				const playerNamed = (name: string) => reply.locator(".omp-chat-media").filter({ hasText: name });
 				const replyVideo = playerNamed("clip.webm").locator("video");
-				// Players mount near the viewport, and the cards under them push the first ones up: bring each in.
-				await playerNamed("clip.webm").scrollIntoViewIfNeeded();
-				await expectLoadedAndIdle(replyVideo, "video");
+				// Release tail-follow as a reader would; scrollIntoView alone is undone when later cards resize.
+				await page.locator(".omp-transcript-scroll").press("ArrowUp");
+				await playerNamed("clip.webm")
+					.scrollIntoViewIfNeeded()
+					.catch(async (error: Error) => {
+						throw new Error(
+							`${error.message}\nwhy the clip has no player: ${await whyNoPlayer(page, path.join(project, "out", "clip.webm"), reply)}`,
+						);
+					});
+				await expectLoadedAndIdle(replyVideo, "video").catch(async (error: Error) => {
+					throw new Error(
+						`${error.message}\nstream probe: ${await whyNoPlayer(page, path.join(project, "out", "clip.webm"), reply)}`,
+					);
+				});
 				await playerNamed("tone.mp3").scrollIntoViewIfNeeded();
 				await expectLoadedAndIdle(playerNamed("tone.mp3").locator("audio"), "audio");
 				const gone = reply.locator("[data-chat-media-unavailable='video']");
@@ -111,7 +227,7 @@ for (const language of variants(["en", "ko"] as const))
 				await expect(gone.locator("video")).toHaveCount(0);
 				// 40 MB: over any IPC cap, it streams with range requests and seeks.
 				const long = playerNamed("long.mp4").locator("video");
-				await long.scrollIntoViewIfNeeded();
+				await playerNamed("long.mp4").scrollIntoViewIfNeeded();
 				await expectLoadedAndIdle(long, "video");
 				await long.evaluate(element => {
 					(element as HTMLVideoElement).currentTime = 1;
@@ -153,10 +269,24 @@ for (const language of variants(["en", "ko"] as const))
 				await page_
 					.getByRole("button", { name: language === "en" ? "More for page.html" : "page.html 메뉴" })
 					.click();
+				// The reveal item names the OS's file manager, as the app's own label does on this computer.
+				const windows = process.platform === "win32";
 				await expect(page.getByRole("menuitem")).toHaveText(
 					language === "en"
-						? ["Preview", "Open in default app", "Reveal in Finder", "Save a copy…", "Copy path"]
-						: ["미리보기", "기본 앱으로 열기", "Finder에서 보기", "다른 곳에 저장…", "경로 복사"],
+						? [
+								"Preview",
+								"Open in default app",
+								windows ? "Show in Explorer" : "Reveal in Finder",
+								"Save a copy…",
+								"Copy path",
+							]
+						: [
+								"미리보기",
+								"기본 앱으로 열기",
+								windows ? "탐색기에서 보기" : "Finder에서 보기",
+								"다른 곳에 저장…",
+								"경로 복사",
+							],
 				);
 				await page.keyboard.press("Escape");
 				// An archive has nothing to draw: a row named by its extension.
@@ -168,6 +298,9 @@ for (const language of variants(["en", "ko"] as const))
 				// A prompt's attachments: the line that only names them leaves the bubble, their cards come under it.
 				await input.fill("Check these please\n@out/bundle.zip @out/report.pdf");
 				await input.press("Enter");
+				// The composer's echo of the prompt is a stand-in the omp's own delivery replaces (another row, keyed by the
+				// omp's timestamp) about 0.2 s later; the answer comes after it, so the row read from here on is the one that stays.
+				await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
 				const attached = page.locator("[data-prompt-files]").last();
 				await expect(attached.locator("[data-file-card]")).toHaveCount(2, { timeout: 15_000 });
 				await expect(attached.locator("[data-file-card='pdf']")).toHaveAttribute("data-state", "ready");
@@ -202,7 +335,9 @@ for (const language of variants(["en", "ko"] as const))
 				await expect
 					.poll(() => viewer.evaluate(element => (element as HTMLVideoElement).readyState))
 					.toBeGreaterThanOrEqual(1);
-				expect(await viewer.evaluate(element => (element as HTMLVideoElement).currentSrc)).toMatch(/^omp-media:/);
+				expect(await viewer.evaluate(element => (element as HTMLVideoElement).currentSrc)).toMatch(
+					MEDIA_STREAM_URL,
+				);
 				await capture(page, `${language}-${theme}-files-viewer`);
 
 				if (language === "en" && theme === "dark") {

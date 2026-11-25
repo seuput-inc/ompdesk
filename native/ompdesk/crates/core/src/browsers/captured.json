@@ -1,4 +1,37 @@
 {
+	"auto": [
+		[false, [], { "kind": "builtin" }],
+		[false, [
+			{ "id": "chrome", "name": "Google Chrome", "port": 9231, "relayInstalled": false, "relayConnected": false }
+		], { "kind": "builtin" }],
+		[true, [
+			{ "id": "chrome", "name": "Google Chrome", "port": 9231, "relayInstalled": true, "relayConnected": true }
+		], { "kind": "ego" }],
+		[false, [
+			{ "id": "chrome", "name": "Google Chrome", "port": 9231, "relayInstalled": false, "relayConnected": false },
+			{ "id": "brave", "name": "Brave", "port": 9233, "relayInstalled": true, "relayConnected": false }
+		], { "kind": "relay", "name": "Brave", "url": "http://127.0.0.1:9233" }],
+		[false, [
+			{ "id": "chrome", "name": "Google Chrome", "port": 9231, "relayInstalled": true, "relayConnected": false },
+			{ "id": "brave", "name": "Brave", "port": 9233, "relayInstalled": true, "relayConnected": true }
+		], { "kind": "relay", "name": "Google Chrome", "url": "http://127.0.0.1:9231" }],
+		[false, [
+			{ "id": "chrome", "name": "Google Chrome", "relayInstalled": true, "relayConnected": true },
+			{ "id": "brave", "name": "Brave", "relayInstalled": true, "relayConnected": false }
+		], { "kind": "builtin" }],
+		[true, [
+			{ "id": "brave", "name": "Brave", "relayInstalled": true, "relayConnected": false }
+		], { "kind": "ego" }],
+		[false, [
+			{ "id": "edge", "name": "Microsoft Edge", "port": 9232, "relayInstalled": true, "relayConnected": false }
+		], { "kind": "relay", "name": "Microsoft Edge", "url": "http://127.0.0.1:9232" }],
+		[false, [
+			{ "id": "arc", "name": "Arc", "port": 9234, "relayInstalled": true, "relayConnected": false }
+		], { "kind": "relay", "name": "Arc", "url": "http://127.0.0.1:9234" }],
+		[false, [
+			{ "id": "chromium", "name": "Chromium", "port": 9235, "relayInstalled": true, "relayConnected": false }
+		], { "kind": "relay", "name": "Chromium", "url": "http://127.0.0.1:9235" }]
+	],
 	"bind": [
 		{
 			"source": "var DEFAULT_PORT = 9224;\nuse(DEFAULT_PORT);",

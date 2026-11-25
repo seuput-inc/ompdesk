@@ -1,21 +1,11 @@
-/**
- * The desktop slot's rules (contract: resources/gui-bridge/desktop-slot-contracts.ts): one omp session at a time
- * drives this computer's desktop. A session takes the slot at its first acting run and keeps it until it lets go
- * (turn end, idle, abort, Stop), loses it (lease, tab close, crash), and the sessions that asked meanwhile wait in
- * FIFO order. No Electron, no pool, no bridge: the clock, the timers and everything that talks to a tab are injected
- * (`desktop-slot-host.ts` is the wiring).
- *
- * The order that matters: taking the slot from a live holder (Stop, lease, close) first `revoke`s it (the bridge
- * aborts the in-flight input run and awaits stock's `revokeControl()` on every controller) and only a CONFIRMED
- * answer lets the next waiter be granted. A revoke that rejects or never answers leaves the holder in place as
- * revoke-failed (nobody granted, retried on a timer, `retry()` / `killHolder()` for the user); the slot is freed by
- * a confirmed revoke, by the holder's process being confirmed dead (`crashed`), or by a confirmed kill.
- */
+/** The core owns desktop-slot policy. Main delivers its confirmed effects to the bridge and clocks its next deadline. */
 import {
 	DESKTOP_SLOT_LEASE_MS,
 	type DesktopSlotReason,
 	type DesktopSlotState,
 } from "../../resources/gui-bridge/desktop-slot-contracts";
+import { hub } from "./core/hub";
+import { isCoreShutdown } from "./core/process";
 
 /** A revoke with no answer after this long counts as failed (not as done): the slot is held, never handed on. */
 export const DESKTOP_SLOT_REVOKE_TIMEOUT_MS = 10_000;
@@ -51,22 +41,30 @@ export interface DesktopSlotDeps {
 	retryMs?: number;
 }
 
-interface Holder {
-	tabId: string;
-	since: number;
-	lease: unknown;
-	/** Set while a revoke attempt is in flight: it still shows as the holder, and asks queue behind it. */
-	leaving: Promise<void> | null;
-	/** Why the last revoke attempt was not confirmed; while set nobody is granted (revoke-failed). */
-	failed: DesktopSlotReason | null;
-	/** The timer of the next revoke attempt while revoke-failed. */
-	retry: unknown;
+type Step =
+	| { op: "acquire"; tabId: string; requestId: string }
+	| { op: "touch" | "release" | "closed" | "stop" | "crashed"; tabId: string }
+	| { op: "retry" | "tick" }
+	| { op: "answered"; lease: number; attempt: number; ok: boolean }
+	| { op: "killed"; lease: number };
+
+type Effect =
+	| { kind: "grant"; tabId: string; requestId: string; waited: boolean }
+	| { kind: "revoke"; tabId: string; reason: DesktopSlotReason; lease: number; attempt: number }
+	| { kind: "stopWaiter"; tabId: string };
+
+interface Reply {
+	checkpoint: unknown;
+	holder: { tabId: string; since: number; lease: number; failed: boolean } | null;
+	queue: string[];
+	deadline: number | null;
+	pending: number | null;
+	changed: boolean;
+	effects: Effect[];
 }
 
-interface Waiter {
-	tabId: string;
-	requestIds: string[];
-}
+type Done = (wait?: Promise<void>) => void;
+const HUB_RECONNECT_MS = 5_000;
 
 const SYSTEM_TIMERS: DesktopSlotTimers = {
 	set: (callback, ms) => {
@@ -80,24 +78,27 @@ const SYSTEM_TIMERS: DesktopSlotTimers = {
 export class DesktopSlot {
 	readonly #deps: DesktopSlotDeps;
 	readonly #now: () => number;
+	readonly #wall: () => number;
 	readonly #timers: DesktopSlotTimers;
-	readonly #leaseMs: number;
-	readonly #revokeTimeoutMs: number;
-	readonly #retryMs: number;
-	#holder: Holder | null = null;
-	readonly #queue: Waiter[] = [];
+	#id: number | null = null;
+	#disposed = false;
+	#last: Reply | null = null;
+	#attempt: PromiseWithResolvers<void> | null = null;
+	#timer: { deadline: number; handle: unknown } | null = null;
+	#sending = false;
+	#waitingForHub = false;
+	readonly #unsent: { step: Step; done: Done | undefined }[] = [];
 
 	constructor(deps: DesktopSlotDeps) {
 		this.#deps = deps;
-		this.#now = deps.now ?? Date.now;
+		this.#now = deps.now ?? (() => performance.now());
+		this.#wall = deps.now ?? Date.now;
 		this.#timers = deps.timers ?? SYSTEM_TIMERS;
-		this.#leaseMs = deps.leaseMs ?? DESKTOP_SLOT_LEASE_MS;
-		this.#revokeTimeoutMs = deps.revokeTimeoutMs ?? DESKTOP_SLOT_REVOKE_TIMEOUT_MS;
-		this.#retryMs = deps.retryMs ?? DESKTOP_SLOT_REVOKE_RETRY_MS;
 	}
 
 	state(): DesktopSlotState {
-		const holder = this.#holder;
+		const snapshot = this.#last;
+		const holder = snapshot?.holder;
 		return {
 			holder: holder
 				? {
@@ -107,213 +108,213 @@ export class DesktopSlot {
 						...(holder.failed ? { revokeFailed: true as const } : {}),
 					}
 				: null,
-			queue: this.#queue.map(waiter => ({ tabId: waiter.tabId, title: this.#deps.titleOf(waiter.tabId) })),
+			queue: snapshot?.queue.map(tabId => ({ tabId, title: this.#deps.titleOf(tabId) })) ?? [],
 		};
 	}
 
-	/** An acting run of `tabId` wants the slot. */
 	acquire(tabId: string, requestId: string): void {
-		const holder = this.#holder;
-		if (holder && holder.tabId === tabId && !holder.leaving && !holder.failed) {
-			this.#arm(holder);
-			this.#deps.grant(tabId, requestId, false);
-			return;
-		}
-		if (!holder) {
-			this.#become(tabId);
-			this.#emit();
-			this.#deps.grant(tabId, requestId, false);
-			return;
-		}
-		const waiting = this.#queue.find(waiter => waiter.tabId === tabId);
-		if (waiting) waiting.requestIds.push(requestId);
-		else this.#queue.push({ tabId, requestIds: [requestId] });
-		this.#emit();
+		this.#send({ op: "acquire", tabId, requestId });
 	}
 
-	/** Progress by the holder (a run started or ended): its lease starts over. */
 	touch(tabId: string): void {
-		const holder = this.#holder;
-		if (holder && holder.tabId === tabId && !holder.leaving && !holder.failed) this.#arm(holder);
+		this.#send({ op: "touch", tabId });
 	}
 
-	/** The tab lets go (the bridge revoked and confirmed): the holder frees the slot, a waiter leaves the queue. */
 	release(tabId: string): void {
-		const holder = this.#holder;
-		if (holder && holder.tabId === tabId) {
-			if (!holder.leaving) this.#depart(holder, "turn_end", false);
-			return;
-		}
-		this.#dropWaiter(tabId);
+		this.#send({ op: "release", tabId });
 	}
 
-	/** The user's "try again" on a revoke-failed holder: ask the bridge to revoke now. */
 	retry(): void {
-		const holder = this.#holder;
-		if (holder?.failed && !holder.leaving) void this.#start(holder, holder.failed);
+		this.#send({ op: "retry" });
 	}
 
-	/**
-	 * The user's "stop that session" on the holder: `kill` ends its process (abort plus kill if needed) and answers
-	 * whether it is CONFIRMED gone; only then is the slot freed. An unconfirmed kill leaves everything as it was.
-	 */
 	async killHolder(): Promise<boolean> {
-		const holder = this.#holder;
+		const holder = this.#last?.holder;
 		if (!holder) return true;
-		const gone = await Promise.resolve(this.#deps.kill(holder.tabId)).catch(() => false);
-		if (gone && this.#holder === holder) this.#free(holder);
-		return gone;
-	}
-
-	/** The user's Stop on the tab's use of the screen: revoke it, then hand the slot on. */
-	async stop(tabId: string): Promise<void> {
-		const holder = this.#holder;
-		if (holder && holder.tabId === tabId) return this.#depart(holder, "stop", true);
-		if (this.#dropWaiter(tabId)) await Promise.resolve(this.#deps.revoke(tabId, "stop")).catch(() => undefined);
-	}
-
-	/** The tab closed while its process may still run: revoke best effort, then hand on. A waiter just leaves. */
-	async closed(tabId: string): Promise<void> {
-		const holder = this.#holder;
-		if (holder && holder.tabId === tabId) return this.#depart(holder, "closed", true);
-		this.#dropWaiter(tabId);
-	}
-
-	/** The tab's process died (or restarted): nothing left to revoke, hand on at once. */
-	crashed(tabId: string): void {
-		const holder = this.#holder;
-		if (holder && holder.tabId === tabId) {
-			this.#depart(holder, "crashed", false);
-			return;
-		}
-		this.#dropWaiter(tabId);
-	}
-
-	/** Stop every timer (app quit). */
-	dispose(): void {
-		if (this.#holder) {
-			this.#timers.clear(this.#holder.lease);
-			this.#timers.clear(this.#holder.retry);
-		}
-		this.#holder = null;
-		this.#queue.length = 0;
-	}
-
-	#become(tabId: string): void {
-		const holder: Holder = {
-			tabId,
-			since: this.#now(),
-			lease: undefined,
-			leaving: null,
-			failed: null,
-			retry: undefined,
-		};
-		this.#holder = holder;
-		this.#arm(holder);
-	}
-
-	/** (Re)start the lease: it runs out `leaseMs` after the holder's last sign of life. */
-	#arm(holder: Holder): void {
-		this.#timers.clear(holder.lease);
-		holder.lease = this.#timers.set(() => {
-			void this.#depart(holder, "lease", true);
-		}, this.#leaseMs);
-	}
-
-	/**
-	 * The holder leaves. Without `revoke` (the bridge let go after its own confirmed revoke, or the process is
-	 * gone) the slot is free at once. With it, the next waiter is granted only after stock's `revokeControl()` is
-	 * CONFIRMED stopped; a rejection or a timeout leaves the holder in place as revoke-failed (see {@link #start}).
-	 */
-	#depart(holder: Holder, reason: DesktopSlotReason, revoke: boolean): Promise<void> {
-		if (this.#holder !== holder) return Promise.resolve();
-		if (!revoke) {
-			this.#free(holder);
-			return Promise.resolve();
-		}
-		if (holder.leaving) return holder.leaving;
-		this.#timers.clear(holder.lease);
-		return this.#start(holder, reason);
-	}
-
-	/** One revoke attempt on `holder`; on failure it stays the holder, flagged, and the next attempt is scheduled. */
-	#start(holder: Holder, reason: DesktopSlotReason): Promise<void> {
-		this.#timers.clear(holder.retry);
-		holder.retry = undefined;
-		const leaving: Promise<void> = this.#revoke(holder, reason)
-			.then(confirmed => {
-				if (this.#holder !== holder) return;
-				if (confirmed) {
-					this.#free(holder);
-					return;
-				}
-				holder.failed = reason;
-				holder.retry = this.#timers.set(() => {
-					holder.retry = undefined;
-					if (this.#holder === holder && !holder.leaving) void this.#start(holder, reason);
-				}, this.#retryMs);
-				this.#emit();
-			})
-			.finally(() => {
-				if (holder.leaving === leaving) holder.leaving = null;
-			});
-		holder.leaving = leaving;
-		return leaving;
-	}
-
-	/**
-	 * Whether the holder's screen control is confirmed stopped: the revoke answered. A rejection, or no answer within
-	 * the timeout, is false; an answer that comes after the timeout still frees the slot (it is a confirmation).
-	 */
-	async #revoke(holder: Holder, reason: DesktopSlotReason): Promise<boolean> {
-		const answered = new Promise<void>(resolve => resolve(this.#deps.revoke(holder.tabId, reason))).then(
-			() => true,
-			() => false,
-		);
-		void answered.then(confirmed => {
-			if (confirmed && this.#holder === holder) this.#free(holder);
-		});
-		let timer: unknown;
-		const timedOut = new Promise<boolean>(resolve => {
-			timer = this.#timers.set(() => resolve(false), this.#revokeTimeoutMs);
-		});
 		try {
-			return await Promise.race([answered, timedOut]);
-		} finally {
-			this.#timers.clear(timer);
+			if (!(await this.#deps.kill(holder.tabId))) return false;
+		} catch {
+			return false;
 		}
-	}
-
-	/** The slot is free: the holder is gone (confirmed) and the first waiter takes over. */
-	#free(holder: Holder): void {
-		if (this.#holder !== holder) return;
-		this.#timers.clear(holder.lease);
-		this.#timers.clear(holder.retry);
-		this.#holder = null;
-		this.#advance();
-	}
-
-	/** The slot is free: the first waiter takes it and its runs are granted (as having waited). */
-	#advance(): void {
-		const next = this.#queue.shift();
-		if (!next) {
-			this.#emit();
-			return;
-		}
-		this.#become(next.tabId);
-		this.#emit();
-		for (const requestId of next.requestIds) this.#deps.grant(next.tabId, requestId, true);
-	}
-
-	#dropWaiter(tabId: string): boolean {
-		const index = this.#queue.findIndex(waiter => waiter.tabId === tabId);
-		if (index < 0) return false;
-		this.#queue.splice(index, 1);
-		this.#emit();
+		await this.#sendAndWait({ op: "killed", lease: holder.lease });
 		return true;
 	}
 
-	#emit(): void {
-		this.#deps.onChange(this.state());
+	stop(tabId: string): Promise<void> {
+		return this.#sendAndWait({ op: "stop", tabId });
+	}
+
+	closed(tabId: string): Promise<void> {
+		return this.#sendAndWait({ op: "closed", tabId });
+	}
+
+	crashed(tabId: string): Promise<void> {
+		return this.#sendAndWait({ op: "crashed", tabId });
+	}
+
+	dispose(): void {
+		this.#disposed = true;
+		this.#schedule(null);
+		this.#attempt?.resolve();
+		this.#attempt = null;
+		for (const event of this.#unsent) event.done?.();
+		this.#unsent.length = 0;
+		this.#last = null;
+		if (this.#id !== null) hub().close(this.#id);
+		this.#id = null;
+	}
+
+	#instance(): number {
+		if (this.#id !== null) return this.#id;
+		const id = hub().nextId();
+		hub().open(
+			id,
+			"desktopSlot",
+			{
+				leaseMs: this.#deps.leaseMs ?? DESKTOP_SLOT_LEASE_MS,
+				revokeTimeoutMs: this.#deps.revokeTimeoutMs ?? DESKTOP_SLOT_REVOKE_TIMEOUT_MS,
+				retryMs: this.#deps.retryMs ?? DESKTOP_SLOT_REVOKE_RETRY_MS,
+				checkpoint: this.#last?.checkpoint ?? null,
+			},
+			{
+				item: () => {},
+				ask: q => {
+					throw new Error(`desktopSlot has no question ${q}`);
+				},
+				lost: () => {
+					if (this.#id === id) this.#id = null;
+				},
+			},
+		);
+		if (this.#disposed) {
+			hub().close(id);
+			throw new Error("desktopSlot was disposed while opening");
+		}
+		this.#id = id;
+		return id;
+	}
+
+	#sendAndWait(step: Step): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#send(step, resolve);
+		return promise;
+	}
+
+	#send(step: Step, done?: Done): void {
+		if (this.#disposed || (!this.#last && !this.#unsent.length && step.op !== "acquire")) return done?.();
+		this.#unsent.push({ step, done });
+		this.#drain();
+	}
+
+	#drain(): void {
+		if (this.#sending) return;
+		while (!this.#waitingForHub) {
+			const next = this.#unsent[0];
+			if (!next) return;
+			this.#sending = true;
+			let reply: Reply;
+			try {
+				reply = hub().callOnce<Reply>(
+					() => this.#instance(),
+					"step",
+					() => ({ ...next.step, now: Math.max(0, Math.floor(this.#now())), wall: Math.floor(this.#wall()) }),
+				);
+			} catch (error) {
+				if (isCoreShutdown(error)) this.dispose();
+				else if (!this.#disposed) {
+					// Even a confirmed exit or revoke must not get lost if the replacement core is unavailable too.
+					console.warn("Desktop slot is waiting for the core", error);
+					this.#waitingForHub = true;
+					this.#schedule(this.#now() + HUB_RECONNECT_MS);
+				}
+				return;
+			} finally {
+				this.#sending = false;
+			}
+			if (this.#disposed) return;
+			// Commit before any callback can re-enter. A lost core is reseeded here, never by replaying an effect.
+			this.#unsent.shift();
+			const prior = this.#last;
+			this.#last = reply;
+			if (reply.pending !== prior?.pending) {
+				this.#attempt?.resolve();
+				this.#attempt = reply.pending === null ? null : Promise.withResolvers<void>();
+			}
+			this.#schedule(reply.deadline);
+			const waiting =
+				(next.step.op === "stop" || next.step.op === "closed") && next.step.tabId === reply.holder?.tabId
+					? this.#attempt?.promise
+					: undefined;
+			const waiter = this.#effects(reply);
+			next.done?.(waiter ?? waiting);
+		}
+	}
+
+	#effects(reply: Reply): Promise<void> | undefined {
+		let waiter: Promise<void> | undefined;
+		for (const effect of reply.effects) {
+			if (effect.kind === "stopWaiter") {
+				// Send the stop before broadcasting: a listener can already request another lease for this tab.
+				waiter = this.#revoke(effect.tabId, "stop").then(() => {});
+			} else if (effect.kind === "revoke") {
+				const { lease, attempt } = effect;
+				void this.#revoke(effect.tabId, effect.reason).then(ok =>
+					this.#send({ op: "answered", lease, attempt, ok }),
+				);
+			}
+		}
+		try {
+			if (reply.changed && !this.#disposed) this.#deps.onChange(this.state());
+			for (const effect of reply.effects) {
+				if (effect.kind !== "grant") continue;
+				// Broadcasting, or a preceding grant in this batch, can synchronously stop or replace this lease.
+				const current = this.#last;
+				if (
+					!current?.holder ||
+					current.holder.lease !== reply.holder?.lease ||
+					current.pending !== null ||
+					current.holder.failed ||
+					this.#waitingForHub ||
+					this.#id === null
+				)
+					break;
+				this.#deps.grant(effect.tabId, effect.requestId, effect.waited);
+			}
+		} catch (error) {
+			// A failed broadcast or bridge send neither confirms a revoke nor rolls back an accepted checkpoint.
+			console.warn("Desktop slot could not deliver its update", error);
+		}
+		return waiter;
+	}
+
+	async #revoke(tabId: string, reason: DesktopSlotReason): Promise<boolean> {
+		try {
+			await this.#deps.revoke(tabId, reason);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	#schedule(deadline: number | null): void {
+		if (this.#timer?.deadline === deadline) return;
+		if (this.#timer) this.#timers.clear(this.#timer.handle);
+		this.#timer = null;
+		if (deadline === null) return;
+		const timer = {
+			deadline,
+			handle: this.#timers.set(
+				() => {
+					if (this.#timer !== timer) return;
+					this.#timer = null;
+					if (this.#waitingForHub) {
+						this.#waitingForHub = false;
+						this.#drain();
+					} else this.#send({ op: "tick" });
+				},
+				Math.max(0, deadline - Math.floor(this.#now())),
+			),
+		};
+		this.#timer = timer;
 	}
 }

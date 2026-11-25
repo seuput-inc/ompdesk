@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreProcess } from "../core/process";
 import { nativeBinPath } from "../native-bin";
 import type { ClientWindow } from "./client-window";
-import { type IpcCaller, IpcRegistry } from "./ipc-registry";
+import { type IpcCaller, IpcRegistry, type IpcShell } from "./ipc-registry";
 
 const electron = vi.hoisted(() => ({ windows: new Map<object, unknown>() }));
 vi.mock("electron", () => ({
@@ -119,6 +119,60 @@ const TEST_POLICY = {
 	"test:ipc.record": { dir: "send", permission: "workspace", mode: "pass" },
 	"test:ipc.recorded": { dir: "invoke", permission: "workspace", mode: "pass" },
 };
+
+describe("IpcRegistry: the channels the shell serves", () => {
+	function shell() {
+		const calls: unknown[] = [];
+		const routes: unknown[] = [];
+		const fake: IpcShell = {
+			channels: [
+				{ channel: "demo:native", dir: "invoke" },
+				{ channel: "demo:native-send", dir: "send" },
+			],
+			routes: async main => void routes.push(main),
+			call: async params => {
+				calls.push(params);
+				return "from the shell";
+			},
+		};
+		return { fake, calls, routes };
+	}
+	const policy = {
+		"demo:native": { dir: "invoke" },
+		"demo:native-send": { dir: "send" },
+		"demo:main": { dir: "invoke" },
+		"demo:report": { dir: "send" },
+		"demo:pushed": { dir: "push" },
+	};
+
+	it("hands the shell main's channels and reaches the shell's handler with the caller's identity", async () => {
+		const { ipc, invokes, sends } = registry();
+		const { fake, calls, routes } = shell();
+		await ipc.routeShell(fake, policy);
+		expect(routes).toEqual([{ invoke: ["demo:main"], send: ["demo:report"] }]);
+		// An app page's call never comes to main: nothing is registered on ipcMain.
+		expect([...invokes.keys(), ...sends.keys()]).toEqual([]);
+		const paired: IpcCaller = { ...webCaller, connId: "k1" };
+		await expect(ipc.invoke("demo:native", paired, [5])).resolves.toBe("from the shell");
+		ipc.send("demo:native-send", webCaller, ["x"]);
+		expect(calls).toEqual([
+			{ channel: "demo:native", dir: "invoke", caller: { key: "ck1", window: -1, connId: "k1" }, args: [5] },
+			{ channel: "demo:native-send", dir: "send", caller: { key: "w-1", window: -1, connId: null }, args: ["x"] },
+		]);
+	});
+
+	it("refuses a second owner for a channel the shell serves, in either order", async () => {
+		const first = registry();
+		await first.ipc.routeShell(shell().fake, policy);
+		expect(() => first.ipc.handle("demo:native", () => 1)).toThrow("is the shell's");
+		expect(() => first.ipc.on("demo:native-send", () => {})).toThrow("is the shell's");
+		const second = registry();
+		second.ipc.handle("demo:native", () => 1);
+		const { fake, routes } = shell();
+		await expect(second.ipc.routeShell(fake, policy)).rejects.toThrow("served by both main and the shell");
+		expect(routes).toEqual([]);
+	});
+});
 
 describe("IpcRegistry: the channels the core serves", () => {
 	const cores: CoreProcess[] = [];

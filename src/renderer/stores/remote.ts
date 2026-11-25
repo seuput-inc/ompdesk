@@ -9,12 +9,16 @@ import { useEffect, useReducer } from "react";
 import { create } from "zustand";
 import type { HostView, RemoteState } from "../../shared/ipc-types";
 import { LINK_NOTICE_GRACE_MS, TAILSCALE_HINT_AFTER_MS, tailscaleHint } from "../../shared/link-notice";
+import { cacheDeviceOrder } from "../lib/sidebar-memory";
+import { webRuntime } from "../web/runtime";
 import { focusedRuntimeTabId, useRuntimeTabId } from "./session-runtime-context";
 import { useTabsStore } from "./tabs";
 
 export interface RemoteStore {
 	/** Latest snapshot; null until the first read (or push) lands. */
 	state: RemoteState | null;
+	/** Keep showing the last snapshot across a web disconnect, but do not edit it before the next live read. */
+	awaitingReconnectState: boolean;
 	/** The last `getState()` failed and nothing has arrived since. */
 	loadError: unknown;
 	/** Bumped by every push; a read started before a push must not overwrite it. */
@@ -28,31 +32,40 @@ export interface RemoteStore {
 
 const EMPTY_HOSTS: readonly HostView[] = [];
 
-export const useRemoteStore = create<RemoteStore>()(set => ({
+export const useRemoteStore = create<RemoteStore>()((set, get) => ({
 	state: null,
+	awaitingReconnectState: false,
 	loadError: null,
 	revision: 0,
 	downSince: {},
-	apply: state =>
+	apply: state => {
+		const order = state.deviceSectionOrder;
+		const previous = get().state?.deviceSectionOrder;
+		if (order && (!previous || order.length !== previous.length || order.some((id, i) => id !== previous[i])))
+			cacheDeviceOrder(order);
 		set(current => ({
 			state,
+			awaitingReconnectState: false,
 			loadError: null,
 			revision: current.revision + 1,
 			downSince: trackDown(current.downSince, state.hosts),
-		})),
+		}));
+	},
 	setLoadError: error => set({ loadError: error }),
-	reset: () => set({ state: null, loadError: null, revision: 0, downSince: {} }),
+	reset: () => set({ state: null, awaitingReconnectState: false, loadError: null, revision: 0, downSince: {} }),
 }));
 
 /** Read the whole state from main; a push that lands meanwhile wins over the reply. */
-export async function loadRemoteState(): Promise<void> {
+export async function loadRemoteState(): Promise<boolean> {
 	const store = useRemoteStore.getState();
 	const revision = store.revision;
 	try {
 		const state = await window.omp.remote.getState();
 		if (useRemoteStore.getState().revision === revision) useRemoteStore.getState().apply(state);
+		return true;
 	} catch (error) {
 		if (useRemoteStore.getState().revision === revision) useRemoteStore.getState().setLoadError(error);
+		return false;
 	}
 }
 
@@ -60,8 +73,18 @@ export async function loadRemoteState(): Promise<void> {
 export function useRemoteStateSync(): void {
 	useEffect(() => {
 		const unsubscribe = window.omp.remote.onState(state => useRemoteStore.getState().apply(state));
+		const offLink = webRuntime()?.onConnectionState(link => {
+			if (link !== "open") {
+				useRemoteStore.setState(s => ({ awaitingReconnectState: true, revision: s.revision + 1 }));
+			} else if (useRemoteStore.getState().awaitingReconnectState) {
+				void loadRemoteState();
+			}
+		});
 		void loadRemoteState();
-		return unsubscribe;
+		return () => {
+			offLink?.();
+			unsubscribe();
+		};
 	}, []);
 }
 

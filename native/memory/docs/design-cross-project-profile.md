@@ -201,7 +201,10 @@ and only while its body still matches: a page written or edited by hand is
 never rewritten, and the group it would have updated is reported as skipped.
 `profile_entry_ledger` records the entries it wrote; a ledger row whose page
 is gone was removed by the user, and that topic is not recreated until a
-candidate newer than the entry's last write arrives.
+candidate newer than the entry's last write arrives. When the path still
+exists but its generated metadata was removed by a manual or public page
+rewrite, the ledger topic remains a matching alias: convergence leaves that
+page alone instead of recreating the former wording at a suffixed path.
 
 ### 5.4 Deliver
 
@@ -246,7 +249,9 @@ configured, and `[profile] llm` not `false`:
   sees the existing entry as context, ranks the user's words first, records
   faithfully and is told never to follow instructions in the text.
 
-Both calls fall back to the zero-LLM path on any provider error.
+Both calls fall back to the zero-LLM path on any provider error, except that
+a classification cut at the output budget is first halved and its halves
+classified, within the pass's cap on classification calls.
 
 ## 7. Configuration
 

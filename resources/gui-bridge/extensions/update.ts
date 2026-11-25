@@ -1,13 +1,11 @@
 /**
- * What the extension updater (src/main/ext-update/) asks of a live session once the stock helper's
+ * What the extension updater (the core's `tools/ext.rs`) asks of a live session once the stock helper's
  * `extensions` worker has changed files on disk: pick up new plugin state (`extension_update.reload`, the
  * headless `/reload-plugins`) and reconnect the MCP servers whose package was updated
  * (`extension_update.reconnect`, `/mcp reconnect` for several names). Main sends them only to an idle, ready
  * tab; commands and skills reach a running session this way, extensions/tools/hooks need a restart instead.
  */
-import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
-import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
-import { cfgMcpEnableProjectConfig } from "@oh-my-pi/pi-coding-agent/mcp/settings";
+
 import { guard } from "../health";
 import type { BridgeMethods } from "../types";
 import { serializeMcpReload } from "./mcp";
@@ -22,13 +20,13 @@ function serverNames(params: unknown): string[] {
 }
 
 export const methods: BridgeMethods = {
-	...guard("plugins", {
+	...guard("pluginReload", {
 		"extension_update.reload": async (_params, env) => {
 			await reloadPluginState(env.session());
 			return { ok: true };
 		},
 	}),
-	...guard("mcp", {
+	...guard("mcpUpdateReconnect", {
 		/**
 		 * Reconnects each named server the live manager knows and the user's config still enables (a disabled
 		 * server has no connection to refresh and must stay down), serialized with the other MCP mutations, then
@@ -38,6 +36,11 @@ export const methods: BridgeMethods = {
 		"extension_update.reconnect": async (params, env) => {
 			const names = serverNames(params);
 			const session = env.session();
+			const [{ loadAllMCPConfigs }, { MCPManager }, { cfgMcpEnableProjectConfig }] = await Promise.all([
+				import("../omp/pi-coding-agent/mcp/config"),
+				import("../omp/pi-coding-agent/mcp/manager"),
+				import("../omp/pi-coding-agent/mcp/settings"),
+			]);
 			const manager = MCPManager.instance();
 			if (!manager) throw new Error("MCP manager not available.");
 			return serializeMcpReload(async () => {

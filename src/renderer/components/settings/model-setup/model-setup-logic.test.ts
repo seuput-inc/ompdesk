@@ -510,7 +510,7 @@ describe("setupModelView", () => {
 
 const stockSelector = path.join(
 	os.homedir(),
-	".bun/install/global/node_modules/@oh-my-pi/pi-tui/src/overlays/model-selector.ts",
+	".bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/src/config/model-selector.ts",
 );
 
 describe.skipIf(!existsSync(stockSelector))("baseSelector against installed stock", () => {

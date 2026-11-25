@@ -172,7 +172,7 @@ export function LiveStepPeek({
 	stoppedAt,
 	summaryRow,
 	findings,
-	attention = false,
+	mark,
 	liveTail = false,
 	todoSnapshots,
 	notes,
@@ -191,8 +191,8 @@ export function LiveStepPeek({
 	summaryRow?: ReactNode;
 	/** A finished run's findings (failure cause, Changes), right under the head. */
 	findings?: ReactNode;
-	/** A finished run whose own check or command failed: the head's mark says so instead of a green tick. */
-	attention?: boolean;
+	/** A settled run whose result is not success. Its headline names what failed or remains. */
+	mark?: "failed" | "pending";
 	/** Only the transcript's live-tail group lists the sessions its agent waits on. */
 	liveTail?: boolean;
 	todoSnapshots?: readonly TodoSnapshot[];
@@ -528,7 +528,7 @@ export function LiveStepPeek({
 			? completion
 			: entry && surfaceKey !== "thinking"
 				? workNarrative(entry.toolName, settledArgs(entry), t, undefined, entry.intent)
-				: (!nested && modelWait) || t("chat.thinking.live");
+				: (!nested && modelWait) || t(thinkingLive || nested ? "chat.thinking.live" : "workBoard.step.working");
 	const waitsOnModel = !nested && !!modelWait && narrative === modelWait;
 	const waitingNames = waitingFor ? waitingFor.split(", ") : [];
 	// A running session-control call is said in words by the head's own line (CoordinationSub names the children).
@@ -561,7 +561,7 @@ export function LiveStepPeek({
 	const sub =
 		liveSub ||
 		(turnIsLive && !nested && entry && surfaceKey !== "thinking" ? stepDetail(header, narrative, partial) : "");
-	const headState: WorkState = state === "interrupted" ? "stopped" : attention ? "failed" : state;
+	const headState: WorkState = mark ?? (state === "interrupted" ? "stopped" : state);
 	// The step's own clock, or the no-output warning for a silent command that has not exited yet.
 	const exited = typeof resultDetails(partial)?.exitCode === "number";
 	const stalled = running && !exited && (kind === "bash" || kind === "eval") && silentSeconds > 10;
@@ -638,17 +638,19 @@ export function LiveStepPeek({
 				<div className="omp-work-head">
 					<WorkStatus
 						state={headState}
-						label={t(
-							attention
-								? "chat.work.verdict.failed"
-								: state === "running"
-									? "subagent.status.started"
-									: state === "failed"
-										? "subagent.status.failed"
-										: state === "interrupted"
-											? "tools.status.interrupted"
-											: "subagent.status.completed",
-						)}
+						label={
+							mark
+								? completion
+								: t(
+										state === "running"
+											? "subagent.status.started"
+											: state === "failed"
+												? "subagent.status.failed"
+												: state === "interrupted"
+													? "tools.status.interrupted"
+													: "subagent.status.completed",
+									)
+						}
 						motion={motion}
 						pop={donePop}
 					/>

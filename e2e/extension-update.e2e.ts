@@ -10,7 +10,6 @@
  * - `mcp-thing` is a stdio server whose command is a script in a fake global npm prefix on the login-shell PATH;
  *   the fake installer answers its check (1.1.0) and holds, then rewrites the package's version.
  * - `pinned-pkg` runs `npx -y pinned-pkg@1.0.0`: checked (1.2.0 exists), listed as available, never updated.
- * - The built-in REA is listed as part of the OMPdesk release.
  * After the pass the idle tab's omp is asked `extension_update.reload`, then `extension_update.reconnect` for
  * `mcp-thing` (the fixture omp answers the bridge and records each request). With the pref off nothing runs at
  * launch; Update now runs the same cycle for that row. Captures in en/ko.
@@ -63,7 +62,10 @@ export const getPluginsCacheDir = () => DIR + "/plugins-cache";
 export class MarketplaceManager {
 	async listMarketplaces() {
 		const state = read();
-		return [{ name: "mkt", sourceUri: state.marketplaceSource, updatedAt: state.refreshedAt }];
+		return [{ name: "mkt", sourceType: "local", sourceUri: state.marketplaceSource, catalogPath: DIR + "/catalog.json", updatedAt: state.refreshedAt }];
+	}
+	async listAvailablePlugins() {
+		return [{ name: "demo", version: read().catalog, source: "./demo" }];
 	}
 	async updateMarketplace(name) {
 		log("updateMarketplace", name);
@@ -73,7 +75,7 @@ export class MarketplaceManager {
 		return { name, updatedAt: state.refreshedAt };
 	}
 	async listInstalledPlugins() {
-		return [{ id: "demo@mkt", scope: "user", entries: [{ version: read().installed, enabled: true }] }];
+		return [{ id: "demo@mkt", scope: "user", entries: [{ version: read().installed, installPath: DIR + "/plugins/demo", enabled: true }] }];
 	}
 	async checkForUpdates() {
 		log("checkForUpdates");
@@ -89,6 +91,9 @@ export class MarketplaceManager {
 		return { version: state.installed };
 	}
 }
+// What an upgrade would install (the hold for new extensions, tools or hooks): a folder without a manifest, nothing new.
+export const parsePluginId = id => ({ name: id.split("@")[0], marketplace: id.split("@")[1] });
+export const resolvePluginSource = async () => ({ dir: DIR + "/plugins/demo" });
 export const clearPluginRootsAndCaches = () => {};
 export const resolveActiveProjectRegistryPath = async () => null;
 export class PluginManager {
@@ -209,6 +214,7 @@ async function launch(name: string, prefs: Record<string, unknown>, held: boolea
 			],
 		}),
 	);
+	await fs.writeFile(path.join(ext, "catalog.json"), "{}");
 
 	const omp = await fixtureOmp(root);
 	const stock = path.join(path.dirname(omp), "node_modules", "@oh-my-pi", "pi-coding-agent");
@@ -228,6 +234,7 @@ async function launch(name: string, prefs: Record<string, unknown>, held: boolea
 		path.join(utils, "index.ts"),
 		`export const getPluginsPackageJson = () => ${JSON.stringify(path.join(ext, "plugins-package.json"))};
 export const getMCPConfigPath = () => ${JSON.stringify(path.join(agent, "mcp.json"))};
+export const expandTilde = filePath => filePath;
 `,
 	);
 
@@ -327,7 +334,6 @@ const PLUGIN = "plugin-demo-mkt-user";
 const MARKETPLACE = "marketplace-mkt";
 const MCP = "mcp-mcp-thing";
 const PINNED = "mcp-pinned-pkg";
-const BUILTIN = "mcp-rea";
 
 const status = (settings: Locator, id: string) => settings.getByTestId(`extension-status-${id}`);
 
@@ -355,8 +361,8 @@ for (const language of variants(["en", "ko"] as const)) {
 				"aria-checked",
 				"true",
 			);
-			// Everything installed is listed: the marketplace, the plugin, both servers and the built-in REA.
-			await expect(settings.locator("[data-extension-row]")).toHaveCount(5, { timeout: 30_000 });
+			// The default list contains exactly the configured marketplace, plugin and two MCP servers.
+			await expect(settings.locator("[data-extension-row]")).toHaveCount(4, { timeout: 30_000 });
 			await expect(settings.getByTestId(`extension-meta-${MARKETPLACE}`)).toContainText(
 				tr("extensionUpdate.kind.marketplace"),
 			);
@@ -416,9 +422,6 @@ for (const language of variants(["en", "ko"] as const)) {
 				{ timeout: 30_000 },
 			);
 			await expect(settings.getByTestId(`extension-update-now-${PINNED}`)).toBeDisabled();
-			// The built-in REA belongs to this OMPdesk release.
-			await expect(status(settings, BUILTIN)).toHaveText(tr("extensionUpdate.skip.builtin"));
-			await expect(settings.getByTestId(`extension-update-now-${BUILTIN}`)).toBeDisabled();
 
 			// The idle tab's omp is told once the pass is over: plugin state reloaded, then the updated server reconnected.
 			await expect
@@ -455,7 +458,7 @@ test("with the pref off nothing runs at launch; Update now runs that row's cycle
 			"aria-checked",
 			"false",
 		);
-		await expect(settings.locator("[data-extension-row]")).toHaveCount(5, { timeout: 30_000 });
+		await expect(settings.locator("[data-extension-row]")).toHaveCount(4, { timeout: 30_000 });
 		for (const id of [MARKETPLACE, PLUGIN, MCP]) {
 			await expect(status(settings, id)).toHaveText("Not checked yet.");
 		}

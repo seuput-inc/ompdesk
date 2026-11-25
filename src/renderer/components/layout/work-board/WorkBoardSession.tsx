@@ -4,7 +4,17 @@
  * check (a failed one is its own section at the top), the dev servers running, the other sessions in the checkout,
  * and the memory and skills the turn used. `useSessionBoard` reads them all once; the section draws what it found.
  */
-import { BookOpen, Brain, FileDiff, FlaskConical, GitBranch, Globe, Shield, Users } from "lucide-react";
+import {
+	BookOpen,
+	Brain,
+	FileDiff,
+	FlaskConical,
+	GitBranch,
+	GitCommitHorizontal,
+	Globe,
+	Shield,
+	Users,
+} from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { READ_ONLY_TOOLS } from "../../../../shared/agent-definition";
 import type { RpcGitUnlanded } from "../../../../shared/rpc-types";
@@ -16,8 +26,10 @@ import { useT } from "../../../lib/i18n";
 import { useNowTick } from "../../../lib/now-tick";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { useMessagesStore } from "../../../stores/messages";
+import { useProjectOrigins } from "../../../stores/project-origins";
 import { useSessionStore } from "../../../stores/session";
 import { useRuntimeTabId, useTabCommand } from "../../../stores/session-runtime-context";
+import { requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useTabsStore } from "../../../stores/tabs";
 import { useTodoStore } from "../../../stores/todo";
 import { transcriptToolEntries, useToolsStore } from "../../../stores/tools";
@@ -34,6 +46,7 @@ import {
 	type WorkSkillOutcome,
 	workOutcomes,
 } from "../../chat/work/work-view";
+import { headWords, resolveRowTarget, type SessionHead, targetFromOrigin } from "../sidebar/session-row-target";
 import { BoardRow, BoardSection, elapsedLabel, KindMark } from "./board-parts";
 import { openPeer, peerOpen } from "./open-peer";
 import {
@@ -64,7 +77,8 @@ export type SessionRowModel =
 	| ({ kind: "peers" } & PeersSummary)
 	| { kind: "recall"; titles: string[] }
 	| { kind: "skills"; skills: WorkSkillOutcome[] }
-	| { kind: "protected"; protections: WorkProtection[] };
+	| { kind: "protected"; protections: WorkProtection[] }
+	| { kind: "branch"; head: SessionHead };
 
 export interface SessionBoard {
 	/** Changed, not in main yet, last check (passed, failed or running), dev servers, same checkout, memory, skills
@@ -332,12 +346,34 @@ function useLastCheck({ keys, outcome }: { keys: readonly string[]; outcome: Wor
 	}, [tools, live, finishedVersion, cwd, messages, outcome, keys, running]);
 }
 
+/**
+ * The checkout's HEAD the session's sidebar row shows (`resolveRowTarget`, the same target, asked of the computer
+ * that runs the session): the board names the branch the session works on, or the commit a detached HEAD is at.
+ */
+function useSessionHead(): SessionHead | null {
+	const tabId = useBoardTabId();
+	const tab = useTabsStore(state => state.tabs.find(entry => entry.id === tabId));
+	const sessionPath = tab?.sessionPath;
+	const cwd = tab?.cwd ?? "";
+	const device = tab?.device;
+	const chat = tab?.kind === "chat";
+	// This computer's git answer for the folder while the target is not in; a paired host's folder is not ours to ask.
+	const origin = useProjectOrigins(state => (device ? undefined : state.origins[cwd]));
+	const maps = useSessionTargets();
+	useEffect(() => {
+		if (sessionPath && !chat) requestSessionTargets(device, [{ sessionPath, cwd }]);
+	}, [device, sessionPath, cwd, chat]);
+	if (!sessionPath || chat) return null;
+	return resolveRowTarget(maps, device, sessionPath, targetFromOrigin(origin, "")).head;
+}
+
 export function useSessionBoard(turn: TurnWindow | null = null): SessionBoard {
 	const own = useTurnFiles(turn);
 	const family = useFamilyParts(turn);
 	const changes = useMemo(() => familyChanges([{ title: null, files: own }, ...family]), [own, family]);
 	const unlanded = useUnlanded();
 	const newest = useNewestTurn();
+	const head = useSessionHead();
 	const { outcome } = newest;
 	const check = useLastCheck(newest);
 	const jobs = useBackgroundJobs();
@@ -366,18 +402,22 @@ export function useSessionBoard(turn: TurnWindow | null = null): SessionBoard {
 		if (protections.length > 0) rows.push({ kind: "protected", protections });
 		if (titles.length > 0) rows.push({ kind: "recall", titles });
 		if (skills.length > 0) rows.push({ kind: "skills", skills });
+		if (head) rows.push({ kind: "branch", head });
 		return { rows };
-	}, [changes, unlanded, check, servers, peers, protections, titles, skills]);
+	}, [changes, unlanded, check, servers, peers, protections, titles, skills, head]);
 }
 
 const plural = (count: number) => (count === 1 ? "" : "s");
 
 function checkWords(t: (key: string, params?: Record<string, string | number>) => string, check: LastCheck): string {
-	if (check.state === "running") return t(`workBoard.session.check.${check.kind}.running`);
 	const verdict = check.state === "passed" ? "passed" : "failed";
-	return check.count !== undefined
-		? t(`chat.work.check.${check.kind}.${verdict}Count`, { count: check.count })
-		: t(`chat.work.check.${check.kind}.${verdict}`);
+	const words =
+		check.state === "running"
+			? t(`workBoard.session.check.${check.kind}.running`)
+			: check.count !== undefined
+				? t(`chat.work.check.${check.kind}.${verdict}Count`, { count: check.count })
+				: t(`chat.work.check.${check.kind}.${verdict}`);
+	return check.release ? `${words} · ${t("workBoard.session.check.release")}` : words;
 }
 
 function rowWords(t: (key: string, params?: Record<string, string | number>) => string, row: SessionRowModel): string {
@@ -424,6 +464,8 @@ function rowWords(t: (key: string, params?: Record<string, string | number>) => 
 				count: row.protections.length,
 				plural: plural(row.protections.length),
 			});
+		case "branch":
+			return headWords(t, row.head).text;
 	}
 }
 
@@ -444,7 +486,11 @@ function CheckRow({ check }: { check: LastCheck }) {
 			: undefined;
 	return (
 		<BoardRow
-			data={{ "data-board-session": "check", "data-state": check.state }}
+			data={{
+				"data-board-session": "check",
+				"data-state": check.state,
+				...(check.release ? { "data-release": "" } : {}),
+			}}
 			flipKey="session:check"
 			label={label}
 			lead={
@@ -452,7 +498,7 @@ function CheckRow({ check }: { check: LastCheck }) {
 			}
 			meta={meta}
 			onClick={check.state === "failed" && tabId && key ? () => requestRevealStep({ tabId, key }) : undefined}
-			title={check.command}
+			title={check.wakes ? `${check.command}\n${t("workBoard.session.check.wakes")}` : check.command}
 		/>
 	);
 }
@@ -671,6 +717,21 @@ function ProtectedRow({ protections }: { protections: WorkProtection[] }) {
 	);
 }
 
+/** The checkout's branch, or the commit a detached HEAD is at: the same words as the session's sidebar row. */
+function BranchRow({ head }: { head: SessionHead }) {
+	const t = useT();
+	const { text, tip } = headWords(t, head);
+	return (
+		<BoardRow
+			data={{ "data-board-session": "branch", "data-board-head": head.kind }}
+			flipKey="session:branch"
+			label={text}
+			lead={<KindMark icon={head.kind === "detached" ? GitCommitHorizontal : GitBranch} tone="muted" />}
+			title={tip}
+		/>
+	);
+}
+
 function SessionRow({ row }: { row: SessionRowModel }) {
 	switch (row.kind) {
 		case "changes":
@@ -706,6 +767,8 @@ function SessionRow({ row }: { row: SessionRowModel }) {
 			return <SkillsRow skills={row.skills} />;
 		case "protected":
 			return <ProtectedRow protections={row.protections} />;
+		case "branch":
+			return <BranchRow head={row.head} />;
 	}
 }
 

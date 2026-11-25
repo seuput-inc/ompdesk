@@ -1,6 +1,3 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountRotationMode } from "../shared/account-rotation";
 import { codedError, ipcErrorCode } from "../shared/ipc-error-codes";
@@ -8,7 +5,6 @@ import type { CustomProviderInput, IpcBenchmarkRunOptions, UpdateStatus } from "
 import type { OmpUpdateState } from "../shared/omp-update";
 import type { ScheduleDraft, SchedulesState } from "../shared/schedules";
 import { BENCHMARK_TIMEOUT_MS } from "./benchmark-runner";
-import { resetReaRuntimeCache } from "./builtin-mcp";
 import {
 	type AccountRotationDeps,
 	type DesktopDeps,
@@ -16,12 +12,10 @@ import {
 	LocalMachine,
 	type MachineServices,
 	machineFor,
+	type OmpUpdateDriver,
 	RemoteMachine,
 } from "./machine-services";
-import type { OmpUpdater } from "./omp-updater";
 import { HOST_STATS_TIMEOUT_MS, LINK_SLACK_MS } from "./remote/app-protocol";
-import type { Revive } from "./restart-policy";
-import { resetLoginShellEnvCache } from "./shell-env";
 
 const statsText = (key: "stats.notRunning" | "stats.notReady") => `local:${key}`;
 const OPTIONS: IpcBenchmarkRunOptions = { models: ["anthropic/x"], profile: "chat", runs: 1, parallel: 1 };
@@ -74,11 +68,10 @@ function fakeUpdater() {
 
 function localMachine(
 	port: number,
-	revive: Revive = "scheduled",
+	revive: "scheduled" | "exhausted" = "scheduled",
 	fetch: StatsFetch = async () => ({ ok: 1 }),
 	accountRotation: AccountRotationDeps = rotationPrefs().deps,
-	updater: Pick<OmpUpdater, "state" | "updateNow"> = fakeUpdater(),
-	builtinRea: ConstructorParameters<typeof LocalMachine>[0]["builtinRea"] = { read: () => undefined, write: () => {} },
+	updater: OmpUpdateDriver = fakeUpdater(),
 	desktop?: DesktopDeps,
 	localEngines: ConstructorParameters<typeof LocalMachine>[0]["localEngines"] = {
 		read: () => undefined,
@@ -94,8 +87,8 @@ function localMachine(
 	},
 ) {
 	return new LocalMachine({
-		stats: { port, fetch },
-		statsRestart: () => revive,
+		stats: async (path, params) =>
+			port ? { ready: true, data: await fetch(path, params) } : { ready: false, exhausted: revive === "exhausted" },
 		statsText,
 		benchmarkOmp: async () => ({ ok: false, error: "omp missing" }),
 		benchmarkEnv: async () => ({}),
@@ -103,7 +96,6 @@ function localMachine(
 		creditSpend,
 		localEngines,
 		modelSetupPick,
-		builtinRea,
 		desktop: desktop ?? {
 			version: () => "1.2.3",
 			update: {
@@ -120,6 +112,7 @@ function localMachine(
 		ompUpdater: () => updater,
 		schedules: () => null,
 		sidebarProjects: () => null,
+		bridgeHealth: () => ({ results: [] }),
 	});
 }
 
@@ -245,7 +238,7 @@ describe("machineFor", () => {
 	it("reads this computer's credit-use switch as off unless stored on, and stores a change through its deps", async () => {
 		const writes: boolean[] = [];
 		const machine = (value: unknown) =>
-			localMachine(0, "scheduled", undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+			localMachine(0, "scheduled", undefined, undefined, undefined, undefined, undefined, undefined, {
 				read: () => value,
 				write: enabled => writes.push(enabled),
 			});
@@ -258,31 +251,10 @@ describe("machineFor", () => {
 		await expect(machine(undefined).setCreditSpend("yes" as unknown as boolean)).rejects.toThrow(/credit use/);
 	});
 
-	it("routes built-in REA to the paired host and validates its reply", async () => {
-		const host = fakeHost((method, params) =>
-			method === "host.builtinRea.set" && typeof params === "object" && params !== null && "enabled" in params
-				? { enabled: params.enabled, available: false, reason: "node-missing" }
-				: { enabled: true, available: true, nodeVersion: "v26.0.0" },
-		);
-		const remote = new RemoteMachine({ request: host.request, device: "host-b", statsText });
-		await expect(remote.builtinRea()).resolves.toMatchObject({ enabled: true, available: true });
-		await expect(remote.setBuiltinRea(false)).resolves.toMatchObject({ enabled: false, reason: "node-missing" });
-		expect(host.calls.map(({ method, params }) => ({ method, params }))).toEqual([
-			{ method: "host.builtinRea.get", params: {} },
-			{ method: "host.builtinRea.set", params: { enabled: false } },
-		]);
-		const garbled = new RemoteMachine({
-			request: fakeHost(() => ({ enabled: "yes" })).request,
-			device: "host-b",
-			statsText,
-		});
-		await expect(garbled.builtinRea()).rejects.toThrow();
-	});
-
 	it("reads and sets a machine's local engine detection: on until stored off, own switch on each host", async () => {
 		const stored: unknown[] = [undefined];
 		const followed: boolean[] = [];
-		const local = localMachine(0, "scheduled", undefined, undefined, undefined, undefined, undefined, {
+		const local = localMachine(0, "scheduled", undefined, undefined, undefined, undefined, {
 			read: () => stored.at(-1),
 			set: async enabled => {
 				stored.push(enabled);
@@ -318,7 +290,7 @@ describe("machineFor", () => {
 
 	it("keeps one research pick per machine in its own pref, and a paired host's in the host's", async () => {
 		const stored: unknown[] = [undefined];
-		const local = localMachine(0, "scheduled", undefined, undefined, undefined, undefined, undefined, undefined, {
+		const local = localMachine(0, "scheduled", undefined, undefined, undefined, undefined, undefined, {
 			read: () => stored.at(-1),
 			write: pick => stored.push(pick ?? undefined),
 		});
@@ -437,7 +409,7 @@ function busyHost(status: UpdateStatus) {
 		appearance: () => ({ themeName: null, language: null }),
 		busy: () => true,
 	};
-	const machine = localMachine(0, "scheduled", undefined, undefined, undefined, undefined, desktop);
+	const machine = localMachine(0, "scheduled", undefined, undefined, undefined, desktop);
 	return { machine, restart, postpone };
 }
 
@@ -551,54 +523,4 @@ describe("LocalMachine", () => {
 		const machine = localMachine(0, "scheduled", undefined, rotationPrefs().deps, updater);
 		await expect(machine.startOmpUpdate()).resolves.toMatchObject({ phase: "idle" });
 	});
-
-	it.skipIf(process.platform === "win32")(
-		"turning built-in REA on without Node.js asks setup to install Node right then; off, or with Node, it does not",
-		async () => {
-			const dir = await mkdtemp(join(tmpdir(), "ompdesk-rea-enable-"));
-			const saved = { PATH: process.env.PATH, SHELL: process.env.SHELL };
-			try {
-				// A login shell and PATH without node or npx.
-				const shell = join(dir, "fake-shell");
-				await writeFile(shell, `#!/bin/sh\nexec /usr/bin/env -i PATH=${dir}:/usr/bin:/bin /bin/sh -c "$2"\n`, {
-					mode: 0o755,
-				});
-				process.env.SHELL = shell;
-				process.env.PATH = `${dir}:/usr/bin:/bin`;
-				resetLoginShellEnvCache();
-				resetReaRuntimeCache();
-				let stored: unknown;
-				const installNode = vi.fn();
-				const machine = localMachine(0, "scheduled", undefined, rotationPrefs().deps, fakeUpdater(), {
-					read: () => stored,
-					write: enabled => {
-						stored = enabled;
-					},
-					installNode,
-				});
-				await expect(machine.setBuiltinRea(false)).resolves.toMatchObject({
-					enabled: false,
-					reason: "node-missing",
-				});
-				expect(installNode).not.toHaveBeenCalled();
-				await expect(machine.setBuiltinRea(true)).resolves.toMatchObject({ enabled: true, reason: "node-missing" });
-				expect(installNode).toHaveBeenCalledTimes(1);
-
-				for (const [name, output] of [
-					["node", "v26.0.0"],
-					["npx", "11.0.0"],
-				]) {
-					await writeFile(join(dir, name), `#!/bin/sh\necho ${output}\n`, { mode: 0o755 });
-				}
-				await expect(machine.setBuiltinRea(true)).resolves.toMatchObject({ enabled: true, available: true });
-				expect(installNode).toHaveBeenCalledTimes(1);
-			} finally {
-				process.env.PATH = saved.PATH;
-				process.env.SHELL = saved.SHELL;
-				resetLoginShellEnvCache();
-				resetReaRuntimeCache();
-				await rm(dir, { recursive: true, force: true });
-			}
-		},
-	);
 });

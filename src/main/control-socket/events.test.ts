@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EventFrame } from "../../shared/control-protocol";
+import type { ControlTabSnapshot } from "../agent-control/host";
 import { stopCore } from "../core/process";
 import { type Connected, ControlRig, TestBackend } from "./control-test-rig";
 import type { ControlTuning } from "./server";
@@ -131,6 +132,30 @@ describe("control events", () => {
 		backend.fire({ type: "idle", tabId: "hidden", outcome: { stopReason: "stop" } });
 		backend.fire({ type: "released", tabId: "hidden" });
 		expect(await heardBefore(connected, 1)).toEqual([]);
+	});
+
+	it("projects only visible pool facts and gives a pending plan precedence over a stopped session", async () => {
+		const tab: ControlTabSnapshot = {
+			tabId: "t1",
+			title: "Worker",
+			status: "error",
+			busy: true,
+			resuming: true,
+			hasAsk: false,
+			hasPlan: false,
+			hidden: true,
+		};
+		backend.snapshots = () => [{ ...tab }];
+		const connected = await subscribe(await serve(), 1);
+		backend.fire({ type: "ask", tabId: "t1", requestId: "private", text: "private question" });
+		tab.hidden = false;
+		backend.fire({ type: "step", tabId: "t1" });
+		tab.hasPlan = true;
+		backend.fire({ type: "step", tabId: "t1" });
+		expect((await heardBefore(connected, 1)).map(frame => "event" in frame && frame.event)).toEqual([
+			{ type: "session_state", session: "t1", title: "Worker", state: "stopped", previous: null },
+			{ type: "session_state", session: "t1", title: "Worker", state: "blocked", previous: "stopped" },
+		]);
 	});
 
 	it("sees a state change that raised no activity on its poll, and has main forward only while somebody listens", async () => {

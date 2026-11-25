@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde::Serialize;
 use serde_json::Number;
 
 use super::wire::{Copy, PageWire, Source, is_durable_path, page_key};
@@ -310,10 +309,13 @@ impl Located for super::wire::ConclusionWire {
 }
 
 /// A page of a conclusion stream from the cursor `after`, read from the database `known`.
-#[derive(Serialize)]
 pub struct StreamPage {
     pub page: Conclusions,
     pub after: u64,
+}
+
+pub fn cursor_fits(page: &Conclusions, after: u64, known: Option<&str>) -> bool {
+    known == Some(page.store.as_str()) && after <= position(&page.last)
 }
 
 /// A page of a conclusion stream from the cursor `after`, which was read from the database `known`. Seqs restart in a
@@ -328,7 +330,7 @@ pub async fn read_conclusions(
     limit: u64,
 ) -> Result<StreamPage, Fault> {
     let page = store.conclusions(source, after, limit).await?;
-    if after == 0 || (known == Some(page.store.as_str()) && after <= position(&page.last)) {
+    if after == 0 || cursor_fits(&page, after, known) {
         return Ok(StreamPage { page, after });
     }
     Ok(StreamPage {

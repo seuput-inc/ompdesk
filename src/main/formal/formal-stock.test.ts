@@ -8,11 +8,13 @@
  * - the skill adds a small, bounded number of prompt tokens.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { ompPackageRoot, systemOmp } from "../omp-runtime";
+import { stockFixtureEnv, stopOmpDaemon } from "../test-bridge-probe";
+import { removeWhenFree } from "../test-folders";
 
 interface Probe {
 	usedTokens: number;
@@ -25,6 +27,7 @@ const FORMAL = path.join(__dirname, "../../../resources/omp-builtin/formal");
 const stock = await systemOmp();
 const packageRoot = stock.ok ? ompPackageRoot(stock.runtime.bin) : null;
 const home = mkdtempSync(path.join(tmpdir(), "omp-formal-stock-"));
+const env = stockFixtureEnv(home);
 
 function probe(roots: string[], userSkills: Record<string, string> = {}): Probe {
 	const agentDir = path.join(home, "agent");
@@ -36,14 +39,18 @@ function probe(roots: string[], userSkills: Record<string, string> = {}): Probe 
 		writeFileSync(path.join(agentDir, "skills", name, "SKILL.md"), text);
 	}
 	const out = execFileSync("bun", [path.join(__dirname, "stock-probe.ts"), packageRoot ?? "", cwd, ...roots], {
+		cwd,
 		encoding: "utf8",
-		env: { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: agentDir },
+		env,
 		timeout: 90_000,
 	});
 	return JSON.parse(out.trim().split("\n").at(-1) ?? "{}") as Probe;
 }
 
-afterAll(() => rmSync(home, { recursive: true, force: true }));
+afterAll(async () => {
+	if (packageRoot) stopOmpDaemon(home, env);
+	await removeWhenFree(home);
+});
 
 describe.skipIf(!packageRoot)("the formal-verification skill on the installed omp", () => {
 	const without = packageRoot ? probe([]) : undefined;
@@ -76,9 +83,9 @@ describe.skipIf(!packageRoot)("the formal-verification skill on the installed om
 	}, 120_000);
 
 	it("stays the one ompdesk-formal-verify beside every pack a bump rewrites, mounted as a spawn mounts them", () => {
-		// The roots `sidecar-factory.ts` mounts with every switch on (REA's skill root without its server), in its order.
+		// The roots `sidecar-factory.ts` mounts with every switch on, in its order.
 		const builtin = path.dirname(FORMAL);
-		const packs = ["skills", "rea", "pstack", "ecc"].map(name =>
+		const packs = ["skills", "pstack", "ecc", "ponytail"].map(name =>
 			name === "skills" ? builtin : path.join(builtin, name),
 		);
 		const all = probe([...packs, FORMAL]);

@@ -9,22 +9,19 @@
 import { redactDiagnosticsText } from "../../resources/gui-bridge/redactor";
 import { IPC_COMMANDS } from "../shared/ipc-types";
 import type { SetupItemState, SetupPresence, SetupState } from "../shared/setup";
-import { tailLogLines } from "./runtime-log-core";
 import type { IpcRegistry } from "./web/ipc-registry";
 
 /** Runtime-log entries in a report, newest last (a run of one line folded is one entry). */
-export const DIAGNOSTICS_LOG_LINES = 100;
-/** Raw lines read to find them: room for long runs of one repeated line. */
-const RAW_LOG_LINES = 3_000;
+const DIAGNOSTICS_LOG_LINES = 100;
 /** One log line is cut here: a stack can run to tens of kilobytes. */
 const MAX_LINE_CHARS = 3_000;
 const MAX_DETAIL_CHARS = 300;
-/** The read window of a log tail: room for RAW_LOG_LINES short lines, or DIAGNOSTICS_LOG_LINES lines of stacks. */
-const LOG_TAIL_BYTES = 1024 * 1024;
+export const DIAGNOSTICS_PROBE_LINES = 30;
 
 export interface DiagnosticsSystem {
 	appVersion: string;
 	packaged: boolean;
+	/** The browser engine's shell (`shellEngine()`); the key keeps the shared shape's name. */
 	electron: string;
 	chrome: string;
 	node: string;
@@ -32,7 +29,7 @@ export interface DiagnosticsSystem {
 	arch: string;
 	/** `os.release()`: the kernel version. */
 	osRelease: string;
-	/** Electron's `process.getSystemVersion()`: the OS marketing version (macOS 15.5.0, Windows 10.0.22631). */
+	/** `systemVersion()`: the OS marketing version (macOS 15.5.0, Windows 10.0.22631). */
 	osVersion: string;
 	language: string | null;
 }
@@ -44,6 +41,8 @@ export interface DiagnosticsInput {
 	setup: SetupState | null;
 	/** Runtime-log lines, oldest first. */
 	logLines: readonly string[];
+	/** The newest probe lines across both logs, oldest first; none: the section is left out. */
+	probeLines?: readonly string[];
 	/** The OMPdesk versions of the paired computers connected now, never their names: a mismatch explains a refusal. */
 	paired?: PairedVersions | null;
 	/** How the window draws: a bug seen only in software rendering or under Reduce motion is told apart by it. */
@@ -114,7 +113,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
 		"## Versions",
 		`OMPdesk: ${system.appVersion}${system.packaged ? "" : " (dev build)"}`,
 		`omp: ${ompVersion ?? "not detected"}`,
-		`Electron: ${system.electron}, Chrome ${system.chrome}, Node ${system.node}`,
+		`Shell: ${system.electron}, Chrome ${system.chrome}, Node ${system.node}`,
 		`OS: ${system.platform} ${system.osVersion} (kernel ${system.osRelease}), ${system.arch}`,
 		`Language: ${system.language ?? "unknown"}`,
 		...(input.display
@@ -134,6 +133,13 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
 					"",
 				]
 			: []),
+		...(input.probeLines?.length
+			? [
+					`## Probes (console windows, slow steps, long waits, stalls; last ${DIAGNOSTICS_PROBE_LINES})`,
+					...input.probeLines.map(line => clip(redactDiagnosticsText(line), MAX_LINE_CHARS)),
+					"",
+				]
+			: []),
 		`## Runtime log (last ${DIAGNOSTICS_LOG_LINES} entries, repeats folded)`,
 		...(input.logLines.length > 0
 			? input.logLines.map(line => clip(redactDiagnosticsText(line), MAX_LINE_CHARS))
@@ -142,85 +148,10 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
 	return redactDiagnosticsText(lines.join("\n"));
 }
 
-/** One log line and how many times it came in a row (`first` = the first one's timestamp). */
-interface LogEntry {
-	line: string;
-	count: number;
-	first: string | undefined;
-}
-
-/** What makes two lines the same event: everything but the timestamp; a line that is no JSON, its text. */
-function sameEventKey(line: string): { key: string; timestamp: string | undefined } {
-	try {
-		const parsed: unknown = JSON.parse(line);
-		if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-			const { timestamp, ...rest } = parsed as Record<string, unknown>;
-			return { key: JSON.stringify(rest), timestamp: typeof timestamp === "string" ? timestamp : undefined };
-		}
-	} catch {}
-	return { key: line, timestamp: undefined };
-}
-
-/**
- * Lines a timer writes again and again with nothing new: folded into the newest wherever they sit. The background
- * update check writes one every 5 minutes (625 of 728 update lines on one Mac), between the link's traffic lines.
- */
-function periodic(line: string): boolean {
-	return line.includes('"source":"app-update"') && line.includes('"message":"check"') && line.includes('"no-update"');
-}
-
-/**
- * Lines that differ only in their time folded into the newest, the lines between keeping their order: a run of one
- * line anywhere, and a periodic check across the lines between (`periodic`). Any other line that comes back after
- * others stays where each one was, since a sequence such as ready, failed, ready is what diagnostics must show.
- */
-function foldRepeats(lines: readonly string[]): LogEntry[] {
-	const parsed = lines.map(line => ({ line, ...sameEventKey(line) }));
-	const newest = new Map<string, number>();
-	const seen = new Map<string, { count: number; first: string | undefined }>();
-	for (const [index, { line, key, timestamp }] of parsed.entries()) {
-		if (!periodic(line)) continue;
-		newest.set(key, index);
-		const group = seen.get(key);
-		if (group) group.count++;
-		else seen.set(key, { count: 1, first: timestamp });
-	}
-	const entries: (LogEntry & { key: string })[] = [];
-	for (const [index, { line, key, timestamp }] of parsed.entries()) {
-		const group = seen.get(key);
-		if (group) {
-			if (newest.get(key) === index) entries.push({ line, count: group.count, first: group.first, key });
-			continue;
-		}
-		const last = entries.at(-1);
-		if (last && last.key === key) {
-			last.line = line;
-			last.count++;
-		} else entries.push({ line, count: 1, first: timestamp, key });
-	}
-	return entries;
-}
-
-function entryLines(entries: readonly LogEntry[]): string[] {
-	return entries.flatMap(({ line, count, first }) =>
-		count > 1 ? [line, `… the line above ${count} times${first ? `, the first at ${first}` : ""}`] : [line],
-	);
-}
-
-/** The newest entries across the current log and its `.1` archive, oldest first, a run of one line folded. */
-export async function readDiagnosticsLog(logPath: string): Promise<string[]> {
-	const lines = await tailLogLines(logPath, RAW_LOG_LINES, LOG_TAIL_BYTES);
-	const current = foldRepeats(lines);
-	if (current.length >= DIAGNOSTICS_LOG_LINES) return entryLines(current.slice(-DIAGNOSTICS_LOG_LINES));
-	const older = await tailLogLines(`${logPath}.1`, RAW_LOG_LINES, LOG_TAIL_BYTES);
-	const both = foldRepeats([...older, ...lines]);
-	return entryLines(both.slice(-DIAGNOSTICS_LOG_LINES));
-}
-
 export interface DiagnosticsDeps {
 	system: () => DiagnosticsSystem;
 	setupState: () => SetupState | null;
-	runtimeLogPath: () => string;
+	readLog: (selection: "recent" | "probes") => Promise<string[]>;
 	/** The connected paired computers' versions; absent before remote devices exist. */
 	pairedVersions?: () => PairedVersions | null;
 	/** How the window draws (software rendering, Reduce motion). */
@@ -234,7 +165,8 @@ export async function currentDiagnosticsReport(deps: DiagnosticsDeps): Promise<s
 		generatedAt: (deps.now ?? (() => new Date()))(),
 		system: deps.system(),
 		setup: deps.setupState(),
-		logLines: await readDiagnosticsLog(deps.runtimeLogPath()),
+		logLines: await deps.readLog("recent"),
+		probeLines: await deps.readLog("probes"),
 		paired: deps.pairedVersions?.() ?? null,
 		display: deps.display ? await deps.display().catch(() => null) : null,
 	});

@@ -15,8 +15,7 @@ use super::mail_outbox::{
 };
 use super::pending_cleanups::{PendingCleanup, PendingCleanups};
 use super::send_outbox::{
-    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, StreamingBehavior, deliver_owed,
-    redeliver_sends,
+    HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, deliver_owed, redeliver_sends,
 };
 use super::session_fates::{FatedSession, SessionFates, fate_when};
 use super::{Clock, js_number};
@@ -215,6 +214,7 @@ fn send_outbox_replays_the_typescripts() {
                         op["path"].as_str().unwrap(),
                         device,
                         op["body"].as_str().unwrap(),
+                        "",
                     )
                     .map_or(Value::Null, |entry| entry.to_json()),
                 other => panic!("{other}"),
@@ -547,12 +547,16 @@ fn mail(id: &str) -> OutboxMail {
         id: id.into(),
         session_path: "/s/boss.jsonl".into(),
         device: None,
+        from: None,
+        from_device: None,
         content: format!("<ompdesk-mail>{id}</ompdesk-mail>"),
         details: json!({"id": id, "kind": "done"}),
         delivery: super::super::rules::mail::MailDelivery {
             trigger_turn: true,
             aside: true,
         },
+        attachments: None,
+        attachments_corrupt: false,
         at: 1_000.0,
     }
 }
@@ -769,7 +773,6 @@ fn send(n: i64) -> OutboxSend {
         "/s/boss.jsonl".into(),
         format!("do part {n}"),
         format!("do part {n}\n\n[ompdesk dispatch d{n}: report]"),
-        StreamingBehavior::FollowUp,
         1_000.0,
     )
 }
@@ -956,11 +959,11 @@ fn a_dispatch_is_numbered_past_the_one_still_owed_and_a_resend_is_recognized() {
     outbox.keep(other);
     assert_eq!(outbox.last_dispatch("/s/kid.jsonl", None), 4);
     assert_eq!(outbox.last_dispatch("/s/kid.jsonl", Some("dev-1")), 0);
-    let joined = outbox.waiting("/s/boss.jsonl", "/s/kid.jsonl", None, "do part 4");
+    let joined = outbox.waiting("/s/boss.jsonl", "/s/kid.jsonl", None, "do part 4", "");
     assert_eq!(joined.map(|entry| entry.dispatch), Some(Some(4)));
     assert!(
         outbox
-            .waiting("/s/else.jsonl", "/s/kid.jsonl", None, "do part 4")
+            .waiting("/s/else.jsonl", "/s/kid.jsonl", None, "do part 4", "")
             .is_none()
     );
 }
@@ -996,4 +999,169 @@ fn only_acknowledged_calls_are_forgotten() {
     assert!(journal.get("old1\n\nc1").is_none());
     assert!(journal.get("old2\n\nc2").is_some());
     assert!(CALL_JOURNAL_MAX > 0 && js_number(1.0) == json!(1));
+}
+
+// ---- bots and items ---------------------------------------------------------------------------------------------------
+
+use super::bots::{BotRecord, Bots, slug, specialty_of};
+use super::items::{ItemRecord, Items, parse_iso};
+
+fn bot(id: &str, folder: &str) -> BotRecord {
+    BotRecord {
+        id: id.into(),
+        name: format!("Bot {id}"),
+        folder: folder.into(),
+        stale_days: Some(7.0),
+        ..BotRecord::default()
+    }
+}
+
+#[test]
+fn a_bot_s_first_chat_becomes_its_home_once_and_every_chat_joins_it() {
+    let dir = Dir::new();
+    let file = dir.file("bots.json");
+    let mut bots = Bots::new(Some(file.clone()));
+    bots.add(bot("b1", "/bots/ada"));
+    assert!(!bots.observe("/elsewhere", "/s/x.jsonl"));
+    assert!(bots.observe("/bots/ada", "/s/one.jsonl"));
+    assert!(!bots.observe("/bots/ada", "/s/one.jsonl"));
+    assert!(bots.observe("/bots/ada", "/s/two.jsonl"));
+    let again = Bots::new(Some(file));
+    let read = again.find("b1").unwrap();
+    assert_eq!(read.home.as_deref(), Some("/s/one.jsonl"));
+    assert_eq!(read.sessions, vec!["/s/one.jsonl", "/s/two.jsonl"]);
+    assert_eq!(again.of_session("/s/two.jsonl").unwrap().id, "b1");
+    assert_eq!(again.find("BOT B1").unwrap().id, "b1");
+}
+
+#[test]
+fn a_paused_bot_holds_every_chat_of_it() {
+    let mut bots = Bots::new(None);
+    bots.add(bot("b1", "/bots/ada"));
+    bots.add(bot("b2", "/bots/bo"));
+    bots.observe("/bots/ada", "/s/one.jsonl");
+    bots.observe("/bots/bo", "/s/two.jsonl");
+    assert!(bots.paused_sessions().is_empty());
+    bots.change("b1", |bot| bot.paused = true);
+    let held = bots.paused_sessions();
+    assert!(!held.is_empty() && held.iter().all(|session| session == "/s/one.jsonl"));
+    assert!(bots.remove("b1").is_some());
+    assert!(bots.paused_sessions().is_empty());
+}
+
+#[test]
+fn a_bot_s_folder_name_and_specialty() {
+    assert_eq!(slug("  Ada's  Helper!! "), "ada-s-helper");
+    assert_eq!(slug("!!!"), "bot");
+    assert_eq!(slug("한글 봇"), "한글-봇");
+    let soul = "# Ada\n\nI keep the release   notes\nin order.\n\nNever push.";
+    assert_eq!(
+        specialty_of(soul).as_deref(),
+        Some("I keep the release notes in order.")
+    );
+    assert_eq!(specialty_of("# only\n## headings\n"), None);
+    let long = "x".repeat(300);
+    let cut = specialty_of(&long).unwrap();
+    assert_eq!(cut.chars().count(), 120);
+    assert!(cut.ends_with('…'));
+}
+
+#[test]
+fn items_number_per_bot_and_closed_ones_leave_after_seven_days() {
+    let dir = Dir::new();
+    let file = dir.file("items.json");
+    let mut items = Items::new(Some(file.clone()));
+    let item = |id: &str, bot: &str, number: u32| ItemRecord {
+        id: id.into(),
+        bot: bot.into(),
+        number,
+        session: "/s/one.jsonl".into(),
+        title: id.into(),
+        status: "planned".into(),
+        ..ItemRecord::default()
+    };
+    assert_eq!(items.next_number("b1"), 1);
+    items.add(item("i1", "b1", 1));
+    items.add(item("i2", "b1", 2));
+    items.add(item("i3", "b2", 1));
+    assert_eq!(items.next_number("b1"), 3);
+    assert_eq!(items.find("b1", "#2").unwrap().id, "i2");
+    assert_eq!(items.find("b2", "1").unwrap().id, "i3");
+    assert_eq!(items.find("b1", "i1").unwrap().number, 1);
+    items.change("i1", |item| {
+        item.status = "done".into();
+        item.closed = Some(1_000.0);
+    });
+    let week = 7.0 * 24.0 * 60.0 * 60_000.0;
+    assert_eq!(items.all(1_000.0 + week - 1.0).len(), 3);
+    assert_eq!(items.all(1_000.0 + week).len(), 2);
+    assert_eq!(Items::new(Some(file)).all(0.0).len(), 2);
+    items.remove_bot("b1");
+    assert_eq!(items.all(0.0).len(), 1);
+}
+
+#[test]
+fn an_item_snoozed_until_a_time_is_hidden_until_then() {
+    let at = parse_iso("2026-11-25T09:00:00Z").unwrap();
+    assert_eq!(parse_iso("2026-11-25T18:00:00+09:00"), Some(at));
+    assert_eq!(parse_iso("2026-11-25"), Some(at - 9.0 * 3_600_000.0));
+    assert_eq!(parse_iso("tomorrow"), None);
+    let item = ItemRecord {
+        snoozed_until: Some("2026-11-25T09:00:00Z".into()),
+        ..ItemRecord::default()
+    };
+    assert!(item.snoozed(at - 1.0));
+    assert!(!item.snoozed(at));
+}
+
+#[test]
+fn a_redelivery_pass_skips_a_held_receiver() {
+    struct Held {
+        sent: Mutex<Vec<String>>,
+    }
+    impl RedeliverDeps for Held {
+        fn tab_of(&self, _session_path: &str, _device: Option<&str>) -> Option<String> {
+            Some("tab".into())
+        }
+        fn held(&self, session_path: &str, _device: Option<&str>) -> bool {
+            session_path == "/s/bot.jsonl"
+        }
+        async fn send(&self, _tab_id: &str, mail: &OutboxMail) -> Option<MailAnswer> {
+            self.sent.lock().unwrap().push(mail.id.clone());
+            Some(MailAnswer {
+                duplicate: true,
+                journaled: true,
+            })
+        }
+    }
+    // A clock beside the mail's time, so the outbox's three-day expiry keeps both.
+    let outbox = MailOutbox::with_clock(None, fixed(1.0));
+    for (id, path) in [("m1", "/s/bot.jsonl"), ("m2", "/s/other.jsonl")] {
+        outbox.keep(OutboxMail {
+            id: id.into(),
+            session_path: path.into(),
+            device: None,
+            from: None,
+            from_device: None,
+            content: "c".into(),
+            details: json!({ "id": id }),
+            delivery: crate::agentctl::rules::mail::MailDelivery {
+                trigger_turn: false,
+                aside: false,
+            },
+            attachments: None,
+            attachments_corrupt: false,
+            at: 0.0,
+        });
+    }
+    let deps = Held {
+        sent: Mutex::default(),
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(redeliver_mail(&outbox, &deps));
+    assert_eq!(*deps.sent.lock().unwrap(), vec!["m2"]);
+    assert_eq!(outbox.kept_for("/s/bot.jsonl").len(), 1);
+    assert!(outbox.kept_for("/s/other.jsonl").is_empty());
 }

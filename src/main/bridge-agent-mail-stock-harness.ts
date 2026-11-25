@@ -15,9 +15,9 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { expect } from "vitest";
 import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contracts";
-import { deliveryFor, type MailKind } from "./agent-control/mail";
+import type { MailDelivery, MailKind } from "./agent-control/mail";
 import { GuiBridgeClient, newBridgeAddress, removeBridgeAddress } from "./bridge-client";
-import { configDirName, OMP_COMMAND } from "./test-bridge-probe";
+import { configDirName, OMP_COMMAND, stopOmpDaemon } from "./test-bridge-probe";
 import { removeWhenFree } from "./test-folders";
 
 /**
@@ -39,8 +39,16 @@ export const WAIT = "WAIT-MARK run";
 /** A prompt whose turn takes three steps, one shell call each (`sleep 2`), then replies. */
 export const STEPS = "STEPS-MARK run";
 
-/** A prompt whose turn asks the person one question (stock `ask`: a `select` card), then replies. */
+/** `STEPS` with the turn's first model request held until `release` (`held` resolves); it contains `STEPS`. */
+export const HELD_STEPS = "HELD-STEPS-MARK run";
+
+/** A prompt whose first reply asks the person to choose A or B. */
 export const CARD = "CARD-MARK run";
+export const CARD_FORM =
+	'<form><label>Which one? <select name="pick"><option value="a">A</option><option value="b">B</option></select></label></form>';
+
+/** A prompt whose first reply is held until `release` (`held` resolves) and then calls the shell tool (`sleep 300`). */
+export const HELD_SHELL = "HELD-SHELL-MARK run";
 
 export type Frame = {
 	type: string;
@@ -55,6 +63,7 @@ export type Frame = {
 	/** `extension_ui_request`: a card (`select`, …), or a `cancel` whose `targetId` names the card; an answer names `id`. */
 	id?: string;
 	method?: string;
+	html?: string;
 	options?: string[];
 	targetId?: string;
 };
@@ -151,15 +160,23 @@ export async function startProvider(): Promise<Provider> {
 				return;
 			}
 			const wait = toolNamed("wait");
+			if (shell && body.includes(HELD_STEPS) && results === 0) {
+				arrived.resolve();
+				await released.promise;
+			}
 			if (shell && body.includes(STEPS) && results < 3) {
 				reply([{ id: `call_s${results + 1}`, name: shell, args: { command: "sleep 2" } }]);
 				return;
 			}
+			if (shell && body.includes(HELD_SHELL) && results === 0) {
+				arrived.resolve();
+				await released.promise;
+				reply([{ id: "call_held", name: shell, args: { command: "sleep 300" } }]);
+				return;
+			}
 			// `toolNamed("ask")` would also match `task`.
 			if (main && body.includes(CARD) && results === 0) {
-				const html =
-					'<form><label>Which one? <select name="pick"><option value="a">A</option><option value="b">B</option></select></label></form>';
-				reply([{ id: "call_ask", name: "ask", args: { html } }]);
+				reply([{ id: "call_ask", name: "ask", args: { html: CARD_FORM } }]);
 				return;
 			}
 			if (shell && wait && body.includes(WAIT) && results < 2) {
@@ -190,7 +207,12 @@ export async function startProvider(): Promise<Provider> {
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
-/** Run by the suite's `afterAll`: closes every omp, provider and folder a test started. */
+/**
+ * The suite's `afterAll` budget: each omp gets up to 30 s to exit on stdin's end, and on Windows each folder waits for
+ * omp's daemon to end (`stopOmpDaemon` asks `omp ps`, seconds under load), past vitest's 10 s/20 s hook default.
+ */
+export const CLEANUP_MS = 180_000;
+/** Run by the suite's `afterAll` (with `CLEANUP_MS`): closes every omp, provider and folder a test started. */
 export async function runCleanups(): Promise<void> {
 	for (const cleanup of cleanups.reverse()) await cleanup();
 }
@@ -222,6 +244,8 @@ export async function startOmp(
 	const root = again?.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ompdesk-mail-repo-")));
 	if (!again)
 		atEnd(async () => {
+			// omp 19's daemon has the first omp's folder (`root`) as its working folder and outlives it (Windows: EBUSY).
+			if (process.platform === "win32") stopOmpDaemon(isolated);
 			await removeWhenFree(isolated);
 			await removeWhenFree(root);
 		});
@@ -238,6 +262,7 @@ export async function startOmp(
 			"    models:",
 			"      - id: m1",
 			"        name: m1",
+			"        reasoning: false",
 			"        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }",
 			"",
 		].join("\n"),
@@ -361,10 +386,21 @@ export const shown = (frames: readonly Frame[], id: string) =>
 			frame.message.details?.id === id,
 	);
 
+const quiet = { triggerTurn: false };
+const aside = { triggerTurn: true, deliverAs: "aside" } as const;
+const delivery = {
+	progress: quiet,
+	note: quiet,
+	done: aside,
+	blocked: aside,
+	question: aside,
+	review: aside,
+} satisfies Record<MailKind, MailDelivery>;
+
 export function mail(kind: MailKind, id: string) {
 	return {
 		content: `<ompdesk-mail from="child" title="Child" kind="${kind}">\n${id}\n</ompdesk-mail>`,
 		details: { id, from: "child", fromTitle: "Child", kind, text: id },
-		...deliveryFor(kind),
+		...delivery[kind],
 	};
 }

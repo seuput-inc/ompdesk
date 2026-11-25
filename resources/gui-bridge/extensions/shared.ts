@@ -2,24 +2,13 @@
  * Helpers shared by the extensions-domain bridge methods (skills, hooks, MCP,
  * plugins, marketplaces, agents, themes). Ports of the omp-gui fork's
  * rpc-domains/rpc-actions plumbing onto stock omp internals.
+ *
+ * Stock modules load where a helper uses them: every extensions module imports this file, so one vanished stock
+ * export must cost only the helper that calls it.
  */
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import {
-	clearPluginRootsAndCaches,
-	resolveActiveProjectRegistryPath,
-	resolveOrDefaultProjectRegistryPath,
-} from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import {
-	resolvePluginManifestEntries,
-	type ScopedInstalledPlugin,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
-import {
-	getInstalledPluginsRegistryPath,
-	getMarketplacesCacheDir,
-	getMarketplacesRegistryPath,
-	getPluginsCacheDir,
-	MarketplaceManager,
-} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+
+import type { ScopedInstalledPlugin } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+import type { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { classifyActivation, type PluginActivation, pluginRequiresRestart } from "./activation-core";
 
@@ -45,7 +34,8 @@ export function optScope(params: Record<string, unknown>): "user" | "project" | 
 }
 
 /** Read a registered setting off the live session settings; `undefined` when the id is unknown to this omp. */
-export function readSetting<T>(session: AgentSession, id: string): T | undefined {
+export async function readSetting<T>(session: AgentSession, id: string): Promise<T | undefined> {
+	const { lookup } = await import("../omp/pi-coding-agent/config/registry");
 	return lookup(id)?.get(session.settings) as T | undefined;
 }
 
@@ -58,6 +48,7 @@ export async function setExtensionDisabled(
 	extensionId: string,
 	enabled: boolean,
 ): Promise<{ enabled: boolean; provenance: string }> {
+	const { lookup } = await import("../omp/pi-coding-agent/config/registry");
 	const setting = lookup("disabledExtensions");
 	if (!setting) throw new Error("This omp version has no disabledExtensions setting");
 	setting.setMember(session.settings, extensionId, { member: !enabled });
@@ -75,6 +66,9 @@ export async function setExtensionDisabled(
  * pushes a fresh `available_commands_update` to the GUI on its own.
  */
 export async function reloadPluginState(session: AgentSession): Promise<void> {
+	const { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } = await import(
+		"../omp/pi-coding-agent/discovery/helpers"
+	);
 	const projectPath = await resolveActiveProjectRegistryPath(session.sessionManager.getCwd());
 	clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 	await session.refreshSkillsAndCommands();
@@ -82,12 +76,16 @@ export async function reloadPluginState(session: AgentSession): Promise<void> {
 
 /** The marketplace manager `omp plugin` builds, rooted at the session cwd. */
 export async function createMarketplaceManager(cwd: string): Promise<MarketplaceManager> {
-	return new MarketplaceManager({
-		marketplacesRegistryPath: getMarketplacesRegistryPath(),
-		installedRegistryPath: getInstalledPluginsRegistryPath(),
+	const [{ clearPluginRootsAndCaches, resolveOrDefaultProjectRegistryPath }, marketplace] = await Promise.all([
+		import("../omp/pi-coding-agent/discovery/helpers"),
+		import("../omp/pi-coding-agent/extensibility/plugins/marketplace"),
+	]);
+	return new marketplace.MarketplaceManager({
+		marketplacesRegistryPath: marketplace.getMarketplacesRegistryPath(),
+		installedRegistryPath: marketplace.getInstalledPluginsRegistryPath(),
 		projectInstalledRegistryPath: await resolveOrDefaultProjectRegistryPath(cwd),
-		marketplacesCacheDir: getMarketplacesCacheDir(),
-		pluginsCacheDir: getPluginsCacheDir(),
+		marketplacesCacheDir: marketplace.getMarketplacesCacheDir(),
+		pluginsCacheDir: marketplace.getPluginsCacheDir(),
 		clearPluginRootsCache: clearPluginRootsAndCaches,
 	});
 }
@@ -95,10 +93,11 @@ export async function createMarketplaceManager(cwd: string): Promise<Marketplace
 export type { PluginActivation };
 
 /** Classify a completed plugin mutation by diffing the effective runtime state on each side. */
-export function classifyPluginActivation(
+export async function classifyPluginActivation(
 	before: readonly ScopedInstalledPlugin[],
 	after: readonly ScopedInstalledPlugin[],
-): PluginActivation {
+): Promise<PluginActivation> {
+	const { resolvePluginManifestEntries } = await import("../omp/pi-coding-agent/extensibility/plugins/loader");
 	return classifyActivation(before, after, plugin => pluginRequiresRestart(plugin, resolvePluginManifestEntries));
 }
 

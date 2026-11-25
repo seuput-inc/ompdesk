@@ -5,15 +5,22 @@
  *
  * Requests (A → B), served by host-services.ts:
  * - `tab.open {rtab, cwd?, kind?, fresh, sessionPath?}` → TabOpenResult
- * - `tab.start {rtab}`, `tab.restart {rtab, cwd?, sessionPath?}`, `tab.adoptCwd {rtab, cwd}`, `tab.close {rtab}`
+ * - `tab.start {rtab}`, `tab.restart {rtab, cwd?, sessionPath?}`, `tab.adoptCwd {rtab}`
+ * - `tab.close {rtab, expectedTurn?}` → null for an unconditional close (also an old host), boolean for a fenced close
  * - `tab.command {rtab, command, timeoutMs?}` → RpcResponse
  * - `tabs.kept {}` → `{tabs: KeptTab[]}`: the tabs the host keeps for the asking device that no live connection holds
  *   and that are running a turn, settling, waiting on an ask or held for the host's connection (a relaunched device
  *   opens the ones its layout lost, `readopt.ts`); an older host answers `unsupported`
  * - `tab.sideChannel {rtab, frame}`, `tab.syncImageGeneration {rtab}`
  * - `tab.cancelWait {rtab}`: Cancel on the tab's connection wait or scheduled retry
+ * - `tab.continueCut {rtab}`, `tab.dismissCut {rtab}`: Continue or Dismiss on the cut-off row of the window's tab a view
+ *   shows; an older host answers `unsupported`
  * - `sessions.list|search|kindFor|delete|rename|move`, `fs.list|read|readImage|readPlan|listDirs`,
  *   `workspace.default`, `launchProfile.get|update`
+ * - `sidebar.deviceOrder.exchange` → the merged device ranks, keyed only by hashes of OMPdesk device identities.
+ *   `sidebar.deviceOrder.changed` carries no data: the device exchanges again, as it does on every link-up.
+ * - `sessions.targets {sessions: SessionTargetQuery[]}` → SessionTargets, `sessions.artwork {roots}` → SessionArtworks
+ *   (`shared/session-target.ts`, answered by session-targets.ts); an older host answers `unsupported`
  * - `host.fs.readBinary {rtab?, cwd?, path, maxBytes?}` → HostFsReadBinaryReply: the file
  *   viewer's bytes, base64 on the link, capped at FS_BINARY_REMOTE_MAX_BYTES by the host
  * - `host.fs.readRange {rtab?, cwd?, path, offset, length}` → HostFsReadBinaryReply: one slice of a file for a
@@ -43,7 +50,7 @@
  *   theme and language), `host.desktop.update {action: "check"|"download"|"install"|"restart-now"|"postpone"}` →
  *   HostDesktopState (install restarts the host; refused with `host_busy` while anything runs there, except
  *   `restart-now` while the host's automatic-install notice shows; `postpone` is that notice's "Later")
- * - omp on the host updates itself (omp-updater.ts): `host.ompUpdate.get {}` → OmpUpdateState,
+ * - omp on the host updates itself (the core's tools/omp): `host.ompUpdate.get {}` → OmpUpdateState,
  *   `host.ompUpdate.now {}` → OmpUpdateState (starts the host's own check and update in the
  *   background and answers at once); the host pushes every state change as the `host.ompUpdate.changed` event
  * - The host's scheduled runs (schedules.ts): `host.schedules.command {request: SchedulesRequest}` →
@@ -52,15 +59,19 @@
  *   schedule's id from the save that made it, so concurrent creates never swap ids); the host pushes every
  *   change as the `host.schedules.changed` event
  * - The host's sidebar project list (sidebar-projects.ts): `host.projects.command {request: SidebarProjectsRequest}`
- *   → SidebarProjectsState (get, add a folder the person opened there, remove one from the sidebar); the host pushes
- *   every change as the `host.projects.changed` event
+ *   → SidebarProjectsState (get, add/remove a folder, or change the host's pins, order or archive).
+ *   Changes made here or on a paired device push the host's current arrangement as `host.projects.changed`.
+ * - The host's bridge self-check (bridge-health.ts): `host.bridgeHealth.get {}` → BridgeHealthReport, the latest
+ *   result per omp version the host ran in its launch, for `ompdesk_app` `omp.bridge_health` on a session there
  * - Presence (presence.ts): `presence.report {away}` → null, every `PRESENCE_REPORT_MS` while connected; a device
  *   whose person is at it keeps the host's phone pushes back (an older host answers `unsupported`, ignored)
  * - Agent control on a session the host runs (agent-control/branches.ts and local/git/worktree.ts on the host's
  *   own checkout; `worktree` = `{path, branch, baseCwd}` of the tab's binding): `host.git.facts {worktree}` →
  *   BranchFacts, `host.git.evidence {worktree, diffChars}` → BranchEvidence (the child's diff cut to `diffChars`
  *   and a `merge-tree` prediction of its merge), `host.git.landing {worktree}` → LandingFacts, `host.git.merge
- *   {worktree, label}` → MergeOutcome (never pushed), `host.git.removeWorktree {worktree}` → WorktreeRemoval,
+ *   {worktree, label}` → MergeOutcome (never pushed; `remote` says what became of the branch's copy on origin),
+ *   `host.git.removeWorktree {worktree, withRemote?}` → `{removal, remote?}` (RpcSafeRemoval) with `withRemote`,
+ *   else the bare WorktreeRemoval a desktop older than the remote copy's cleanup reads,
  *   `host.git.discardWorktree {worktree}` → WorktreeRemoval (a failed open's unused worktree and branch),
  *   `host.git.worktreeCreate {baseCwd, name, branchPrefix?, baseRef}` → RpcWorktreeCreateResult. Free: no model
  *   call, no quota.
@@ -103,10 +114,10 @@
  */
 import { z } from "zod";
 import { ACCOUNT_ROTATION_MODES, type AccountRotationState } from "../../shared/account-rotation";
-import type { BuiltinReaState } from "../../shared/builtin-mcp";
 import type { CreditSpendState } from "../../shared/credit-spend";
 import { codedError, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import type {
+	BridgeHealthReport,
 	CustomModelEffort,
 	CustomModelThinkingMode,
 	CustomProviderApi,
@@ -130,7 +141,7 @@ import { OMP_UPDATE_FAILURE_REASONS, type OmpUpdateState } from "../../shared/om
 import { BLOCKING_UI_METHODS, type ExtensionUIRequest } from "../../shared/rpc-types";
 import type { ScheduleCreated, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import { ScheduleFrequencySchema, ScheduleRunSchema } from "../../shared/schedules-schema";
-import type { SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
+import type { SidebarLayoutChange, SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
 import { SIGN_IN_PAGE_MAX_CHARS } from "../sign-in-callback";
 
 /**
@@ -178,6 +189,10 @@ export const TAB_EVENT_NAMES = [
 	// The retry this computer scheduled for the turn of the window's tab the device views (TabScheduledRetryArg, null when
 	// none), sent as it changes and on every `tab.open`. An older device drops the name; an older host never sends it.
 	"scheduledRetry",
+	// The cut-off row of the window's tab the device views (TabCutOffArg: why its cut-off turn waits for the person, null
+	// when it does not), sent as it changes and on every `tab.open`; its Continue and Dismiss come back as
+	// `tab.continueCut`/`tab.dismissCut`. An older device drops the name; an older host never sends it.
+	"cutOff",
 ] as const;
 
 export type TabEventName = (typeof TAB_EVENT_NAMES)[number];
@@ -187,6 +202,8 @@ export const AGENT_REVIEW_EVENT = "agentReview" satisfies TabEventName;
 
 export const TAB_EVENT = "tab.event";
 export const SESSIONS_CHANGED_EVENT = "sessions.changed";
+export const DEVICE_ORDER_EXCHANGE = "sidebar.deviceOrder.exchange";
+export const DEVICE_ORDER_CHANGED = "sidebar.deviceOrder.changed";
 /** The host's omp update changed (data: OmpUpdateState); sent to every connected device. */
 export const OMP_UPDATE_EVENT = "host.ompUpdate.changed";
 /**
@@ -399,7 +416,7 @@ export const MemoryPageWire = z.object({
 	metadata: z.object({
 		entities: z.array(z.string().max(200)).max(32).optional(),
 		abstract: z.string().max(4000).optional(),
-		relations: z.record(z.array(z.string().max(1024)).max(64)).optional(),
+		relations: z.record(z.string(), z.array(z.string().max(1024)).max(64)).optional(),
 		applies_to: z.array(z.string().max(64)).max(32).optional(),
 		enforced_by: z.string().max(1000).optional(),
 	}),
@@ -491,12 +508,18 @@ export type MemoryConclusionPushReply = z.infer<typeof MemoryConclusionPushReply
 
 const SessionKind = z.enum(["agent", "chat"]);
 
-export const TabEventMessage = z.object({
-	rtab: z.string().min(1),
-	name: z.enum(TAB_EVENT_NAMES),
-	arg: z.unknown(),
-});
+export const TabEventMessage = z
+	.object({
+		rtab: z.string().min(1),
+		name: z.enum(TAB_EVENT_NAMES),
+		arg: z.unknown().optional(),
+	})
+	.refine(event => event.name === "viewEnded" || event.arg !== undefined);
 export type TabEventMessage = z.infer<typeof TabEventMessage>;
+
+export const HostCloseTurnSchema = z
+	.object({ omp: z.string().min(1), turn: z.number().int().nonnegative().safe() })
+	.strict();
 
 /** `status` event argument: the payload plus what A cannot observe itself. */
 export const TabStatusArg = z.object({
@@ -520,11 +543,16 @@ export const TabStatusArg = z.object({
 	 * lost link keeps what it shows when this is the one it last saw; absent (an older host): treated as new.
 	 */
 	omp: z.string().optional(),
+	hostTurn: HostCloseTurnSchema.optional(),
 });
 export type TabStatusArg = z.infer<typeof TabStatusArg>;
 
 /** `run` event argument: the host's reading of the tab's turn (sidecar-run-state.ts), re-sent on every re-attach. */
 export const TabRunArg = z.object({
+	hostTurn: HostCloseTurnSchema.optional(),
+	lastRun: z
+		.object({ stopReason: z.string(), errorMessage: z.string().optional(), reply: z.string().optional() })
+		.optional(),
 	/** A run is on: a turn in front, or background work (subagents, async jobs) that keeps the session unsettled. */
 	running: z.boolean(),
 	/** A turn runs in front (`running` without it is background work). */
@@ -612,6 +640,9 @@ export const TabScheduledRetryArg = z
 	.nullable();
 export type TabScheduledRetryArg = z.infer<typeof TabScheduledRetryArg>;
 
+/** `cutOff` event argument: why the viewed window tab's cut-off turn waits for the person (IpcCutOff), or null. */
+export const TabCutOffArg = z.enum(["off", "crash-loop", "failed"]).nullable();
+
 export const TabOpenResult = z.object({
 	/** Canonical cwd on the host. */
 	cwd: z.string(),
@@ -652,7 +683,7 @@ export const HOST_COMMAND_TIMEOUT_MS = 8_000;
 /** Extra wait on top of a command's own timeout, covering the link round trip. */
 export const LINK_SLACK_MS = 5_000;
 
-const StringRecord = z.record(z.string());
+const StringRecord = z.record(z.string(), z.string());
 // Transport shape only: host ModelsConfigSchema is the authority for option values.
 const ProviderApi = z.custom<CustomProviderApi>(value => typeof value === "string");
 const Effort = z.custom<CustomModelEffort>(value => typeof value === "string");
@@ -702,7 +733,7 @@ export const CustomProviderInputSchema: z.ZodType<CustomProviderInput> = z.objec
 		.optional(),
 	disableStrictTools: z.boolean().optional(),
 	transport: z.literal("pi-native").optional(),
-	extraBody: z.record(z.unknown()).optional(),
+	extraBody: z.record(z.string(), z.unknown()).optional(),
 	models: z.array(CustomProviderModelInputSchema),
 });
 
@@ -715,7 +746,7 @@ export const ModelOverrideInputSchema: z.ZodType<ModelOverrideInput> = z.object(
 		.object({
 			mode: z.custom<CustomModelThinkingMode>(value => typeof value === "string"),
 			efforts: z.array(Effort).min(1),
-			effortMap: z.record(z.string()).optional(),
+			effortMap: z.record(z.string(), z.string()).optional(),
 		})
 		.optional(),
 	contextWindow: OptionalNumber,
@@ -736,13 +767,6 @@ export const BenchmarkOptionsSchema: z.ZodType<IpcBenchmarkRunOptions> = z.objec
 export const AccountRotationStateSchema: z.ZodType<AccountRotationState> = z.object({
 	mode: z.enum(ACCOUNT_ROTATION_MODES),
 	evenSupported: z.boolean().nullable(),
-});
-
-export const BuiltinReaStateSchema: z.ZodType<BuiltinReaState> = z.object({
-	enabled: z.boolean(),
-	available: z.boolean(),
-	nodeVersion: z.string().optional(),
-	reason: z.enum(["node-missing", "npx-missing", "node-version", "node-failed", "npx-failed"]).optional(),
 });
 
 /** `host.localEngines.*` reply: whether the host looks for local inference engines. */
@@ -799,6 +823,17 @@ export const OmpUpdateStateSchema: z.ZodType<OmpUpdateState> = z.object({
 	checkedAt: z.number().nullable(),
 	updatedTo: z.string().nullable(),
 	failure: z.object({ reason: z.enum(OMP_UPDATE_FAILURE_REASONS), detail: z.string().optional() }).nullable(),
+	tested: z.string().optional(),
+	verified: z.array(z.string()).optional(),
+	held: z
+		.object({
+			version: z.string(),
+			reason: z.enum(["verifying", "failed", "untested-major"]),
+			since: z.string().optional(),
+		})
+		.nullable()
+		.optional(),
+	stockAutoTaken: z.boolean().optional(),
 });
 
 const ScheduleDraftSchema = z.object({
@@ -828,6 +863,8 @@ export const SchedulesCommandParams: z.ZodType<{ request: SchedulesRequest }> = 
 
 export const SchedulesLogParams = z.object({ runId: ScheduleId });
 export const SchedulesCreateParams = z.object({ draft: ScheduleDraftSchema });
+/** `host.bots.home {name}` → `{path, name}`: one of the host's bots by name, refused unless the asking device is in its reach. */
+export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200) });
 
 /** `host.schedules.command` reply and `host.schedules.changed` event: the host's schedules, runs and next starts. */
 export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({
@@ -846,6 +883,21 @@ export const ScheduleCreatedSchema: z.ZodType<ScheduleCreated> = z.object({
 });
 
 const ProjectPath = z.string().min(1).max(4096);
+const ProjectOrder = z.array(ProjectPath);
+
+/** A layout change a device sends; the host's core checks it again as it applies it (`crates/core/src/prefs/sidebar.rs`). */
+const SidebarLayoutChangeSchema = z.discriminatedUnion("op", [
+	z.object({ op: z.literal("set-group-pinned"), cwd: ProjectPath, pinned: z.boolean() }),
+	z.object({ op: z.literal("set-session-pinned"), path: ProjectPath, pinned: z.boolean() }),
+	z.object({ op: z.literal("set-group-order"), order: ProjectOrder }),
+	z.object({
+		op: z.literal("set-session-order"),
+		list: ProjectPath,
+		order: ProjectOrder,
+		move: z.object({ path: ProjectPath, over: ProjectPath }).optional(),
+	}),
+	z.object({ op: z.literal("set-sessions-archived"), ids: ProjectOrder, archived: z.boolean() }),
+]) satisfies z.ZodType<SidebarLayoutChange>;
 
 /** `host.projects.command` params: the device's sidebar reads or edits the host's project list. */
 export const ProjectsCommandParams: z.ZodType<{ request: SidebarProjectsRequest }> = z.object({
@@ -853,11 +905,12 @@ export const ProjectsCommandParams: z.ZodType<{ request: SidebarProjectsRequest 
 		z.object({ action: z.literal("get") }),
 		z.object({ action: z.literal("add"), path: ProjectPath }),
 		z.object({ action: z.literal("remove"), path: ProjectPath }),
+		z.object({ action: z.literal("layout"), change: SidebarLayoutChangeSchema }),
 	]),
 });
 
 /** `host.projects.command` reply and `host.projects.changed` event. */
-export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState, z.ZodTypeDef, unknown> = z.object({
+export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState> = z.object({
 	projects: z.array(z.object({ path: ProjectPath, addedAt: z.number(), missing: z.literal(true).optional() })),
 	removed: z.array(ProjectPath),
 	// An older host sends none: its sessions then group by their own folder, as before.
@@ -865,6 +918,40 @@ export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState, z.ZodTy
 	worktreeKinds: z.record(ProjectPath, z.enum(["autopilot", "agent", "other"])).optional(),
 	autopilotRuns: z.record(ProjectPath, z.object({ run: z.string().min(1), child: z.boolean() })).optional(),
 	gone: z.array(ProjectPath).optional(),
+	layout: z
+		.object({
+			pinnedGroups: z.array(ProjectPath),
+			pinnedSessions: z.array(ProjectPath),
+			archivedSessions: z.array(ProjectPath),
+			groupOrder: z.array(ProjectPath),
+			sessionOrder: z.record(ProjectPath, z.array(ProjectPath)),
+		})
+		.optional(),
+});
+
+/**
+ * `host.bridgeHealth.get` reply: the host's bridge self-check per omp version (bridge-health.ts `report`), and the
+ * omp update it holds back.
+ */
+export const BridgeHealthReportSchema: z.ZodType<BridgeHealthReport> = z.object({
+	results: z.array(
+		z.object({
+			ompVersion: z.string(),
+			at: z.number(),
+			ok: z.boolean(),
+			running: z.number().int().nonnegative(),
+			unavailable: z.array(z.object({ feature: z.string(), missing: z.array(z.string()) })),
+			unreachable: z.string().optional(),
+		}),
+	),
+	held: z
+		.object({
+			version: z.string(),
+			reason: z.string(),
+			since: z.string().optional(),
+			installed: z.string().nullable(),
+		})
+		.optional(),
 });
 
 /** A host-level stats read waits for the host's own stats request (15 s) plus the link. */

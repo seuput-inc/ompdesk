@@ -244,25 +244,6 @@ describe("ExtensionUpdateRows", () => {
 		expect(pinned("v1.2", "1.2.0")).toBe(translate("extensionUpdate.status.pinned", { installed: "v1.2" }));
 	});
 
-	it("names a skipped row's reason, including the built-in REA server", async () => {
-		await mount(
-			extState([
-				extRow({
-					key: "mcp:rea",
-					kind: "mcp",
-					name: "rea",
-					detail: null,
-					installed: "0.9.0",
-					method: null,
-					skip: "builtin",
-				}),
-			]),
-		);
-		expect(text("status", "mcp:rea")).toBe(translate("extensionUpdate.skip.builtin"));
-		expect(row("mcp:rea").textContent).toContain(translate("extensionUpdate.method.none"));
-		expect(nowButton("mcp:rea").disabled).toBe(true);
-	});
-
 	it("asks main to update that row by key, and is off while it runs", async () => {
 		const a = extRow({ key: "plugin:a@m:user", kind: "plugin", name: "a@m" });
 		const b = extRow({ key: "plugin:b@m:user", kind: "plugin", name: "b@m" });

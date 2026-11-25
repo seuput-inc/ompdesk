@@ -14,7 +14,6 @@ import {
 	RECALL_MAX_TOKENS,
 } from "../../resources/gui-bridge/modes/memory-recall-contracts";
 import {
-	addConclusionTerms,
 	codeRuleSelect,
 	contentTerms,
 	estimateTokens,
@@ -302,21 +301,10 @@ describe("the state file", () => {
 
 describe("IDF coverage gate for conclusions", () => {
 	const conclusion = (text: string): RecallCandidate => ({ kind: "conclusion", title: "작업", text, order: 0 });
-	const stats = (bodies: string[]): RecallTermStats => {
-		const built: RecallTermStats = { n: 0, df: {} };
-		for (const body of bodies) addConclusionTerms(built, body);
-		return built;
+	const corpus: RecallTermStats = {
+		n: 31,
+		df: { memory: 30, server: 30, prompt: 30, recall: 30, change: 30, tailscale: 1, pairing: 1, removed: 1 },
 	};
-	// Thirty conclusions mention memory/server/prompt; one mentions tailscale pairing.
-	const corpus = stats([
-		...Array.from({ length: 30 }, (_, i) => `memory server prompt recall change ${i}`),
-		"tailscale pairing removed",
-	]);
-
-	it("counts a term once per conclusion", () => {
-		const built = stats(["memory memory memory server"]);
-		expect(built).toEqual({ n: 1, df: { memory: 1, server: 1 } });
-	});
 
 	it("drops a conclusion sharing only common terms, keeps one sharing a rare term with enough mass", () => {
 		const prompt = "memory server prompt tailscale pairing";
@@ -334,11 +322,10 @@ describe("IDF coverage gate for conclusions", () => {
 
 	it("drops a conclusion whose shared terms are all common, even when they are the whole prompt", () => {
 		// 90 of 100 conclusions say memory and server: their idf is small but not zero, so coverage alone would be 100 %.
-		const busy = stats([
-			...Array.from({ length: 90 }, (_, i) => `memory server note ${i}`),
-			...Array.from({ length: 5 }, (_, i) => `tailscale pairing note ${i}`),
-			...Array.from({ length: 5 }, (_, i) => `other note ${i}`),
-		]);
+		const busy: RecallTermStats = {
+			n: 100,
+			df: { memory: 90, server: 90, note: 100, tailscale: 5, pairing: 5, other: 5 },
+		};
 		expect(codeRuleSelect("memory server", [conclusion("memory server")], busy)).toEqual([]);
 		const rare = conclusion("memory server tailscale");
 		expect(codeRuleSelect("memory server tailscale", [rare], busy)).toEqual([rare]);

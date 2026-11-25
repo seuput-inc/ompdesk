@@ -38,7 +38,11 @@ export function OptionRow({ active, selected, size = "md", pointerMoves, classNa
 			className={cx(
 				"flex w-full items-center rounded-(--sc-radius-md) text-left disabled:cursor-not-allowed disabled:opacity-50",
 				SIZE[size],
-				active ? "bg-(--sc-selected)" : !pointerMoves && "hover:bg-(--sc-hover)",
+				// Orca's cmdk row: a text wash with a hairline ring (lib/theme-contrast.ts OPTION_ACTIVE_WASH); quiet text
+				// lifts to secondary on it.
+				active
+					? "bg-[color-mix(in_srgb,var(--sc-text)_11%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--sc-text)_16%,transparent)] [--sc-text-muted:var(--sc-text-secondary)] [--sc-text-subtle:var(--sc-text-secondary)]"
+					: !pointerMoves && "hover:bg-(--sc-hover)",
 				className,
 			)}
 			role="option"

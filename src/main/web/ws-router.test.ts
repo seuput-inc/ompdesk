@@ -3,16 +3,19 @@
  * call dispatch and its policy and grant checks, error shaping, the quota on model commands, event batching and
  * merging, presence, the limits and the heartbeat. The core's timers and clock are the test's.
  */
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
+import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import { WEB_PERMISSIONS, WEB_PROTOCOL_VERSION, type WebPermission } from "../../shared/web-protocol";
+import { core } from "../core/process";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
-import { FileEditReports, parseFileEditReport } from "./file-edit-reports";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 import type { IpcCaller } from "./ipc-registry";
+import { PAGE_IMAGE_MIN_CHARS } from "./page-images";
 import { WebClientWindow, WebWindows } from "./web-client-window";
 import { CLOSE_REVOKED, convertsForModel, type WebChannelTable, type WsRouter } from "./ws-router";
 import { TestRouterHost } from "./ws-router-test-rig";
@@ -62,7 +65,8 @@ async function rig(options: RigOptions = {}) {
 		reserve: vi.fn(options.reserve ?? (() => ({ ok: true as const, refund }))),
 		record: vi.fn(),
 	};
-	const blobs = new BlobStore();
+	const userData = `private:${randomUUID()}`;
+	const blobs = new BlobStore({ userData });
 	/** This device's uploads by host path; `take` hands one over once. */
 	const uploaded = new Map<string, Buffer>();
 	const uploads = {
@@ -80,23 +84,30 @@ async function rig(options: RigOptions = {}) {
 		mimeType: "image/jpeg",
 	}));
 	const resyncs: string[] = [];
-	const ended: { deviceId: string; connId: string }[] = [];
+	/** The devices whose Files-edit report the core recorded, in the order main heard (`web.fileEdits`). */
+	const fileEditReports: string[] = [];
 	let routerRef: WsRouter | null = null;
-	const windows = new WebWindows((id, channel, payload) => routerRef?.deliver(id, channel, payload));
-	const host = await TestRouterHost.open({
-		registry: { invoke, send },
-		devices: { get: id => (id === current?.deviceId ? current : undefined) },
-		windows,
-		quota,
-		webChannels: options.webChannels ?? {},
-		features: () => ({ push: false, preview: false, upload: true, passkey: false }),
-		activeTab: () => "tab-active",
-		blobs,
-		uploads,
-		toModelImage,
-		onResync: deviceId => resyncs.push(deviceId),
-		onConnectionEnded: (deviceId, connId) => ended.push({ deviceId, connId }),
-	});
+	const windows = new WebWindows(
+		(id, channel, payload) => routerRef?.deliver(id, channel, payload),
+		(win, alive) => routerRef?.noteWindow(win, alive),
+	);
+	const host = await TestRouterHost.open(
+		{
+			registry: { invoke, send },
+			devices: { get: id => (id === current?.deviceId ? current : undefined) },
+			windows,
+			quota,
+			webChannels: options.webChannels ?? {},
+			features: () => ({ push: false, preview: false, upload: true, passkey: false }),
+			activeTab: () => "tab-active",
+			blobs,
+			uploads,
+			toModelImage,
+			onResync: deviceId => resyncs.push(deviceId),
+			onFileEditReport: deviceId => fileEditReports.push(deviceId),
+		},
+		{ blobUserData: userData },
+	);
 	const router = host.router;
 	routerRef = router;
 	await host.device("dev1", current.grants);
@@ -122,13 +133,14 @@ async function rig(options: RigOptions = {}) {
 		callers,
 		windows,
 		blobs,
+		userData,
 		uploaded,
 		uploads,
 		toModelImage,
 		frame,
 		settle,
 		resyncs,
-		ended,
+		fileEditReports,
 		revoke: async () => {
 			current = undefined;
 			await host.device("dev1", null);
@@ -381,6 +393,22 @@ describe("channel policy and grants", () => {
 		expect(r.send).not.toHaveBeenCalled();
 	});
 
+	it("requires settings-write to change a host arrangement and workspace to receive it", async () => {
+		const reader = await rig({ grants: ["workspace"] });
+		const edit = { action: "layout", change: { op: "set-group-pinned", cwd: "/app", pinned: true } };
+		await reader.frame({ t: "inv", id: 1, ch: SIDEBAR_PROJECTS_COMMAND, a: [edit, "paired-host"] });
+		await reader.settle();
+		expect(reader.socket.frames("res").at(-1)).toMatchObject({ ok: false, e: { code: "web_forbidden" } });
+		expect(reader.invoke).not.toHaveBeenCalled();
+		const nonReader = await rig({ grants: ["device-self"] });
+		for (const r of [reader, nonReader]) {
+			r.windows.windowFor("dev1").webContents.send(SIDEBAR_PROJECTS_STATE, { state: { projects: [] } });
+			await r.host.flush();
+		}
+		expect(reader.socket.frames("evt").map(e => e.ch)).toContain(SIDEBAR_PROJECTS_STATE);
+		expect(nonReader.socket.frames("evt").map(e => e.ch)).not.toContain(SIDEBAR_PROJECTS_STATE);
+	});
+
 	it("lets each channel through exactly when the device holds its permission", { timeout: 60_000 }, async () => {
 		const channels = (Object.entries(IPC_POLICY) as [IpcChannel, (typeof IPC_POLICY)[IpcChannel]][]).filter(
 			([, policy]) => policy.dir !== "push" && policy.mode !== "boundary",
@@ -388,7 +416,12 @@ describe("channel policy and grants", () => {
 		expect(channels.length).toBeGreaterThan(100);
 		for (const [channel, policy] of channels) {
 			if (policy.dir === "push" || policy.mode === "boundary") continue;
-			const only = await rig({ grants: [policy.permission] });
+			const only = await rig({
+				grants:
+					channel === IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER
+						? [policy.permission, "workspace"]
+						: [policy.permission],
+			});
 			const allowed = await call(only, channel, policy.dir === "invoke" ? "inv" : "snd");
 			if (policy.dir === "invoke") expect(allowed, channel).toMatchObject({ t: "res", ok: true });
 			else expect(only.send, channel).toHaveBeenCalledOnce();
@@ -400,6 +433,15 @@ describe("channel policy and grants", () => {
 				expect(refused, channel).toMatchObject({ ok: false, e: { code: "web_forbidden" } });
 			expect(without.send, channel).not.toHaveBeenCalled();
 		}
+	});
+
+	it("refuses device moves without access to the workspace whose sections would move", async () => {
+		const r = await rig({ grants: ["settings-write"] });
+		expect(await call(r, IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER)).toMatchObject({
+			ok: false,
+			e: { code: "web_forbidden" },
+		});
+		expect(r.invoke).not.toHaveBeenCalled();
 	});
 
 	it("never serves pairing-admin, even to a device that somehow holds it", async () => {
@@ -557,6 +599,63 @@ describe("events", () => {
 		expect(r.socket.frames("evt")).toHaveLength(1);
 	});
 
+	it("orders a native caller's private push before its reply without notifying its other page", async () => {
+		const r = await rig();
+		const other = await r.host.attach("dev1");
+		if (!other) throw new Error("second page did not attach");
+		r.invoke.mockImplementationOnce(async (_channel, caller) => {
+			if (!caller.connId) throw new Error("no caller connection");
+			r.router.deliverToConnection(caller.connId, WEB_PAIRING_REQUEST, {});
+			r.router.deliverToConnection(caller.connId, IPC_EVENTS.TAB_STATUS, { tabId: "a", status: "ready" });
+			return "answered";
+		});
+		await r.frame({ t: "inv", id: 9, ch: IPC_COMMANDS.SESSIONS_LIST, a: [{ scope: "global" }] });
+		await r.settle();
+		await r.host.flush();
+		expect(r.socket.sent.filter(frame => frame.t === "evt" || frame.t === "res")).toEqual([
+			{ t: "evt", seq: 1, ch: IPC_EVENTS.TAB_STATUS, d: { tabId: "a", status: "ready" } },
+			{ t: "res", id: 9, ok: true, v: "answered" },
+		]);
+		expect(other.socket.frames("evt")).toEqual([]);
+	});
+
+	it("broadcasts the files waiting for disk space and their recovery to both pages", async () => {
+		const r = await rig();
+		const other = await r.host.attach("dev1");
+		if (!other) throw new Error("second page did not attach");
+		r.router.publishDiskFull(["web-devices.json"]);
+		r.router.publishDiskFull([]);
+		await r.host.flush();
+		for (const socket of [r.socket, other.socket]) {
+			expect(socket.frames("evt")).toEqual([
+				{ t: "evt", seq: 1, ch: IPC_EVENTS.DISK_FULL, d: { files: ["web-devices.json"] } },
+				{ t: "evt", seq: 2, ch: IPC_EVENTS.DISK_FULL, d: { files: [] } },
+			]);
+		}
+	});
+
+	it("never widens a stale or malformed connection target to its device", async () => {
+		const r = await rig();
+		const stale = r.connection.connId;
+		await r.connection.dispose();
+		const replacement = await r.host.attach("dev1", stale);
+		if (!replacement) throw new Error("page did not reconnect");
+		for (const connId of [stale, null, 1, ""]) {
+			core().push("web.deliver", { host: r.router.host, device: "dev1", connId, ch: IPC_EVENTS.TAB_STATUS });
+		}
+		await r.host.flush();
+		expect(replacement.socket.frames("evt")).toEqual([]);
+		expect(replacement.socket.frames("hello")[0]).toMatchObject({ resumed: true });
+	});
+
+	it("requires resync when even the last disconnected page missed a disk-full change", async () => {
+		const r = await rig();
+		await r.connection.dispose();
+		r.router.publishDiskFull([]);
+		const back = await r.host.attach("dev1", r.connection.connId);
+		expect(back?.socket.frames("hello")[0]).toMatchObject({ resumed: false });
+	});
+
 	it("joins a tab's neighbouring batches and merges their streaming deltas", async () => {
 		const r = await rig();
 		const win = r.windows.windowFor("dev1");
@@ -664,6 +763,13 @@ describe("events", () => {
 		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: IPC_EVENTS.REMOTE_STATE, d: state }]);
 	});
 
+	it("does not push the remote sidebar or its device IDs without the workspace grant needed to read it", async () => {
+		const r = await rig({ grants: ["device-self"] });
+		r.windows.windowFor("dev1").webContents.send(IPC_EVENTS.REMOTE_STATE, { deviceSectionOrder: ["local", "peer"] });
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toEqual([]);
+	});
+
 	it("goes to every connection of the device, and not to another device's", async () => {
 		const r = await rig();
 		const second = await r.host.attach("dev1");
@@ -673,6 +779,22 @@ describe("events", () => {
 		expect(r.socket.frames("evt")).toHaveLength(1);
 		expect(second?.socket.frames("evt")).toHaveLength(1);
 		expect(stranger?.socket.frames("evt")).toHaveLength(0);
+	});
+
+	it("takes a push the core makes to the device's window under the same rules as main's", async () => {
+		const r = await rig({ grants: ["device-self"] });
+		const win = r.windows.windowFor("dev1");
+		const send = (ch: string, data: unknown) =>
+			core().call("web.router.test.pageSend", { wins: [win.webContents.id], ch, data });
+		await send(IPC_EVENTS.TAB_STATUS, { tabId: "a" });
+		await send(WEB_DEVICES_CHANGED, []);
+		await send(IPC_EVENTS.REMOTE_STATE, { deviceSectionOrder: ["local"] });
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: IPC_EVENTS.TAB_STATUS, d: { tabId: "a" } }]);
+		r.windows.destroy("dev1");
+		await send(IPC_EVENTS.TAB_STATUS, { tabId: "b" });
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toHaveLength(1);
 	});
 });
 
@@ -841,102 +963,97 @@ describe("limits", () => {
 		expect(await r.host.attach("dev2")).not.toBeNull();
 	});
 
-	it("closes every socket of a device, and tells when connections come and go", async () => {
+	it("closes every socket of a device, and forgets each one's Files-edit report", async () => {
 		const r = await rig();
 		const other = await r.host.attach("dev1");
+		const report = { t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: "t1" }] };
+		await r.frame(report);
+		await other?.receive(JSON.stringify(report));
+		expect(await r.host.edits("dev1", "t1")).toBe("dirty");
 		r.router.closeDevice("dev1", CLOSE_REVOKED, "revoked");
 		await r.host.sync();
 		expect(r.socket.closed).toEqual({ code: CLOSE_REVOKED, reason: "revoked" });
 		expect(other?.socket.closed?.code).toBe(CLOSE_REVOKED);
 		expect(r.router.isConnected("dev1")).toBe(false);
-		expect(r.ended.map(end => end.connId)).toEqual([r.connection.connId, other?.connId]);
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
 	});
 });
 
-describe("a connection ending", () => {
-	it("is told for each connection, with its id, whether or not others remain", async () => {
-		const r = await rig();
-		const second = await r.host.attach("dev1");
-		const first = r.connection.connId;
-		await r.connection.dispose();
-		expect(r.ended).toEqual([{ deviceId: "dev1", connId: first }]);
-		await second?.dispose();
-		expect(r.ended.map(end => end.connId)).toEqual([first, second?.connId]);
-	});
-
+describe("a connection's calls", () => {
 	it("carries the connection id on the caller of each call", async () => {
 		const r = await rig();
 		const second = await r.host.attach("dev1");
 		if (!second) throw new Error("attach failed");
-		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: "t1" }] });
+		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_LIST, a: [{ scope: "global" }] });
 		await second.receive(
-			JSON.stringify({ t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: null }] }),
+			JSON.stringify({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_LIST, a: [{ scope: "global" }] }),
 		);
 		await r.settle();
 		expect(r.callers.map(call => call.caller.connId)).toEqual([r.connection.connId, second.connId]);
 		expect(r.connection.connId).not.toBe(second.connId);
 	});
+});
 
-	// The Files-edit report store (`file-edit-reports.ts`) forgets a connection when it ends and never hears from it
-	// again only because its report reaches main in the very event that carries the frame, before the event that
-	// ends the connection, and an ended connection's frames are refused in the core. An `await` in front of the
-	// handler would let a frame read before the drop land after it, and its report would count until the window
-	// closes (formal/web-close-reports: the `SplitDispatch` mutation).
-	it("hands a Files-edit report to main within the frame, and nothing an ended connection sent after", async () => {
-		const r = await rig();
-		const report = (dirtyTabId: string | null) =>
-			r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId }] });
-		await report("t1");
-		expect(r.callers.map(call => call.args)).toEqual([[{ dirtyTabId: "t1" }]]);
-		await r.connection.dispose();
-		await report(null);
-		expect(r.callers).toHaveLength(1);
+// The Files-edit report store is the core's router's (`file_edits.rs`, C2): a frame's report is recorded in the
+// frame's own run under the lock that ends connections, so a frame read before a drop lands before it and an ended
+// connection's frames are refused (formal/web-close-reports: `Deliver`, `Drop`, the `SplitDispatch` mutation).
+describe("a page's Files-edit report", () => {
+	const report = (dirtyTabId: string | null, id = 1) => ({
+		t: "inv",
+		id,
+		ch: IPC_COMMANDS.FILE_EDIT_REPORT,
+		a: [{ dirtyTabId }],
 	});
 
-	it("never lets a report outlive its connection, even one whose arguments carry a picture that has to land first", async () => {
-		// A picture block anywhere in a call's arguments makes `#dispatch` await its upload before the handler runs; a
-		// connection that ends meanwhile was already forgotten, so such a report must never reach the store.
-		const reports = new FileEditReports();
-		const r = await rig();
-		const id = r.windows.windowFor("dev1").webContents.id;
-		r.invoke.mockImplementation(async (channel, caller, args) => {
-			const report = parseFileEditReport(args);
-			if (channel === IPC_COMMANDS.FILE_EDIT_REPORT && report && caller.connId)
-				reports.report(id, caller.connId, report.dirtyTabId);
-			return undefined;
-		});
-		r.uploaded.set("/up/dev1/a/image.png", Buffer.from("PNG"));
-		r.uploaded.set("/up/dev1/b/image.png", Buffer.from("PNG"));
-		const extra = (dir: string) => ({ type: "image", mimeType: "image/png", upload: `/up/dev1/${dir}/image.png` });
-		await r.frame({
-			t: "inv",
-			id: 1,
-			ch: IPC_COMMANDS.FILE_EDIT_REPORT,
-			a: [{ dirtyTabId: "t1", extra: extra("a") }],
-		});
-		await r.frame({ t: "inv", id: 2, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a: [{ dirtyTabId: "t1" }, extra("b")] });
-		await r.connection.dispose();
-		for (const end of r.ended) reports.forget(end.connId);
-		// Both frames reach the handler once their pictures landed (the nested one takes more turns), after the drop.
-		await vi.waitFor(() => expect(r.invoke).toHaveBeenCalledTimes(2));
-		expect(reports.edits(id, "t1")).toBe("unreported");
-	});
-
-	it("lets main drop only that connection's Files-edit report: the other page's stands, none left is unreported", async () => {
-		const reports = new FileEditReports();
+	it("is kept by the core per connection and answered there: main hears that one came, never the call", async () => {
 		const r = await rig();
 		const second = await r.host.attach("dev1");
 		if (!second) throw new Error("attach failed");
-		const id = r.windows.windowFor("dev1").webContents.id;
-		reports.report(id, r.connection.connId, "t1");
-		reports.report(id, second.connId, null);
-		expect(reports.edits(id, "t1")).toBe("dirty");
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
+		await r.frame(report("t1"));
+		await second.receive(JSON.stringify(report(null)));
+		await r.settle();
+		expect(await r.host.edits("dev1", "t1")).toBe("dirty");
+		expect(await r.host.edits("dev1", "t2")).toBe("clean");
+		expect(await r.host.edits("dev2", "t1")).toBe("unreported");
+		expect(r.socket.frames("res")).toEqual([{ t: "res", id: 1, ok: true }]);
+		expect(r.callers).toEqual([]);
+		expect(r.fileEditReports).toEqual(["dev1", "dev1"]);
+	});
+
+	it("forgets an ended connection's report and takes nothing it sent after; the other page's word stands", async () => {
+		const r = await rig();
+		const second = await r.host.attach("dev1");
+		if (!second) throw new Error("attach failed");
+		await r.frame(report("t1"));
+		await second.receive(JSON.stringify(report(null)));
 		await r.connection.dispose();
-		for (const end of r.ended) reports.forget(end.connId);
-		expect(reports.edits(id, "t1")).toBe("clean");
+		expect(await r.host.edits("dev1", "t1")).toBe("clean");
+		await r.frame(report("t1", 2));
+		expect(await r.host.edits("dev1", "t1")).toBe("clean");
 		await second.dispose();
-		for (const end of r.ended) reports.forget(end.connId);
-		expect(reports.edits(id, "t1")).toBe("unreported");
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
+	});
+
+	it("takes no report whose arguments carry anything beyond {dirtyTabId}, a picture least of all", async () => {
+		const r = await rig();
+		r.uploaded.set("/up/dev1/a/image.png", Buffer.from("PNG"));
+		const picture = { type: "image", mimeType: "image/png", upload: "/up/dev1/a/image.png" };
+		const shapes = [
+			[{ dirtyTabId: "t1", extra: picture }],
+			[{ dirtyTabId: "t1" }, picture],
+			[{ dirtyTabId: "t1", x: 1 }],
+			[{ dirtyTabId: 7 }],
+			[],
+		];
+		for (const [index, a] of shapes.entries())
+			await r.frame({ t: "inv", id: index + 1, ch: IPC_COMMANDS.FILE_EDIT_REPORT, a });
+		await r.settle();
+		expect(await r.host.edits("dev1", "t1")).toBe("unreported");
+		expect(r.socket.frames("res")).toHaveLength(shapes.length);
+		expect(r.uploads.take).not.toHaveBeenCalled();
+		expect(r.callers).toEqual([]);
+		expect(r.fileEditReports).toEqual([]);
 	});
 });
 
@@ -1037,6 +1154,91 @@ describe("binary and media results", () => {
 	});
 });
 
+describe("pictures of a transcript", () => {
+	interface PushedMessages {
+		payload: { message: { content: unknown[] } }[];
+	}
+	interface Answered {
+		v: { data: { messages?: { content: unknown[] }[]; note?: string } };
+	}
+	const bigPicture = Buffer.alloc(PAGE_IMAGE_MIN_CHARS).toString("base64");
+	const userMessage = {
+		role: "user",
+		content: [
+			{ type: "text", text: "look" },
+			{ type: "image", mimeType: "image/jpeg", data: bigPicture },
+			{ type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+		],
+	};
+	const end = { type: "message_end", message: userMessage } as AgentSessionEvent;
+	const lifted = {
+		type: "image",
+		mimeType: "image/jpeg",
+		data: "",
+		blobUrl: expect.stringMatching(/^\/blob\/[\w-]+$/),
+	};
+
+	it("pushes a large picture of a message as a blob URL, so the frame stays small", async () => {
+		const r = await rig();
+		r.windows.windowFor("dev1").webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		await r.host.flush();
+		const [sent] = r.socket.frames("evt");
+		const pushed = sent?.d as PushedMessages;
+		expect(pushed.payload[0]?.message.content[1]).toEqual(lifted);
+		expect(pushed.payload[0]?.message.content[2]).toEqual(userMessage.content[2]);
+		expect(JSON.stringify(sent).length).toBeLessThan(1024);
+		expect(await r.blobs.count()).toBe(1);
+	});
+
+	it("answers a transcript read with the same blob URLs, and no other answer is touched", async () => {
+		const r = await rig();
+		r.invoke.mockResolvedValueOnce({ success: true, data: { messages: [userMessage] } });
+		r.invoke.mockResolvedValueOnce({ success: true, data: { note: bigPicture } });
+		const command = (type: string) => [{ tabId: "tab-a", command: { type } }];
+		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB, a: command("get_transcript_page") });
+		await r.frame({ t: "inv", id: 2, ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB, a: command("get_state") });
+		await r.settle();
+		const [page, state] = r.socket.frames("res") as unknown as Answered[];
+		expect(page?.v.data.messages?.[0]?.content[1]).toEqual(lifted);
+		expect(state?.v.data.note).toBe(bigPicture);
+		expect(await r.blobs.count()).toBe(1);
+	});
+
+	it("releases a tab's pictures when the device's tab list no longer holds the tab", async () => {
+		const r = await rig();
+		const win = r.windows.windowFor("dev1");
+		win.webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		win.webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-b", payload: [end] });
+		await r.host.flush();
+		expect(await r.blobs.count()).toBe(2);
+		win.webContents.send(IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [{ tabId: "tab-b" }] });
+		await vi.waitFor(async () => expect(await r.blobs.count()).toBe(1));
+		win.webContents.send(IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [] });
+		await vi.waitFor(async () => expect(await r.blobs.count()).toBe(0));
+	});
+
+	it("releases a closed tab's blobs even after the device's disconnected push was already counted", async () => {
+		const r = await rig();
+		const win = r.windows.windowFor("dev1");
+		win.webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		await r.host.flush();
+		expect(await r.blobs.count()).toBe(1);
+		await r.connection.dispose();
+		win.webContents.send(IPC_EVENTS.TAB_STATUS, { tabId: "tab-a", status: "ready" });
+		win.webContents.send(IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [] });
+		await vi.waitFor(async () => expect(await r.blobs.count()).toBe(0));
+	});
+
+	it("makes no blob for a page that is hidden, whose streamed pushes the core drops", async () => {
+		const r = await rig();
+		await r.frame({ t: "presence", visible: false });
+		await r.settle();
+		r.windows.windowFor("dev1").webContents.send(IPC_EVENTS.EVENTS_BATCH, { tabId: "tab-a", payload: [end] });
+		await r.host.flush();
+		expect(await r.blobs.count()).toBe(0);
+	});
+});
+
 describe("virtual windows", () => {
 	it("gives each device its own negative id, keeps it parked across sockets and closes it on revoke", async () => {
 		const r = await rig();
@@ -1058,5 +1260,75 @@ describe("virtual windows", () => {
 		expect(r.windows.has("dev1")).toBe(false);
 		const fresh = r.windows.windowFor("dev1");
 		expect(fresh).not.toBe(a);
+	});
+});
+
+const atThreshold = Buffer.alloc((PAGE_IMAGE_MIN_CHARS * 3) / 4, 0x5a).toString("base64");
+const picture = { type: "image", mimeType: "image/jpeg", data: atThreshold };
+
+function serve(userData: string, deviceId: string, target: string) {
+	return core().call<{ status: number; headers: [string, string][] }>("web.blobs.serve", {
+		userData,
+		deviceId,
+		target,
+	});
+}
+
+describe("transcript pictures at the page socket", () => {
+	it("lifts stock's image positions at the threshold without changing other records or the original", async () => {
+		const r = await rig();
+		const small = { ...picture, data: atThreshold.slice(4) };
+		const queue = { type: "queue_update", steering: [{ images: [picture] }] };
+		const malformed = { ...picture, mimeType: "text/html", images: [picture] };
+		const message = {
+			content: [picture, small, malformed],
+			details: { images: [{ data: atThreshold, mimeType: "image/webp", blobUrl: "old" }] },
+			notes: [picture, queue, "x\ud800"],
+		};
+		r.invoke.mockResolvedValueOnce(message);
+		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.SESSIONS_MESSAGES, a: [] });
+		await r.settle();
+		const url = expect.stringMatching(/^\/blob\/[\w-]{32}$/);
+		expect(r.socket.frames("res")[0]).toMatchObject({
+			ok: true,
+			v: {
+				content: [{ ...picture, data: "", blobUrl: url }, small, malformed],
+				details: { images: [{ data: "", mimeType: "image/webp", blobUrl: url }] },
+				notes: message.notes,
+			},
+		});
+		expect(picture.data).toBe(atThreshold);
+		r.router.deliver("dev1", IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [] });
+		expect(await r.blobs.count()).toBe(2);
+		r.blobs.releaseDevice("dev1");
+		expect(await r.blobs.count()).toBe(0);
+	});
+
+	it("serves each device's own URL and releases only that device's closed tabs", async () => {
+		const r = await rig();
+		await r.host.device("dev2", []);
+		const other = await r.host.attach("dev2");
+		if (!other) throw new Error("second device did not connect");
+		const batch = { tabId: "same", payload: [{ content: [picture] }] };
+		for (const device of ["dev1", "dev2"]) r.router.deliver(device, IPC_EVENTS.SUBAGENT_FRAMES, batch);
+		await r.host.flush();
+		const urls = [r.socket, other.socket].map(socket => {
+			const event = socket.frames("evt")[0]?.d as { payload: { content: { blobUrl: string }[] }[] };
+			return event.payload[0]?.content[0]?.blobUrl ?? "";
+		});
+		const [first = "", second = ""] = urls;
+		expect(first).not.toBe(second);
+		const got = await serve(r.userData, "dev1", first);
+		expect(got.result.status).toBe(200);
+		expect(got.result.headers).toContainEqual(["content-type", "image/jpeg"]);
+		expect(Buffer.from(got.bin ?? []).toString("base64")).toBe(atThreshold);
+		expect((await serve(r.userData, "dev2", first)).result.status).toBe(404);
+		r.router.deliver("dev1", IPC_EVENTS.TAB_LIST_CHANGED, { tabs: false });
+		expect(await r.blobs.count()).toBe(2);
+		r.router.deliver("dev1", IPC_EVENTS.TAB_LIST_CHANGED, { tabs: [null, { tabId: 42 }] });
+		expect((await serve(r.userData, "dev1", first)).result.status).toBe(404);
+		expect((await serve(r.userData, "dev2", second)).result.status).toBe(200);
+		r.blobs.releaseDevice("dev2");
+		expect((await serve(r.userData, "dev2", second)).result.status).toBe(404);
 	});
 });

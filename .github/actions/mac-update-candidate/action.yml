@@ -1,0 +1,79 @@
+name: Update a published macOS app into the signed candidate
+description: Open the unchanged published app on a disposable macOS runner and verify the installed candidate and profile.
+inputs:
+  candidate-dmg:
+    description: Absolute path of the verified run artifact's DMG
+    required: true
+  old-tag:
+    description: Published starting version; empty selects the greatest stable version below the candidate
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Verify the starting release and candidate before launch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OLD_TAG: ${{ inputs.old-tag }}
+        NEXT_DMG: ${{ inputs.candidate-dmg }}
+      run: |
+        set -euo pipefail
+        NEXT_VERSION=$(jq -er .version package.json)
+        if [[ -z "$OLD_TAG" ]]; then
+          OLD_TAG=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq -ser --arg v "$NEXT_VERSION" '
+            def parts: split(".") | map(tonumber);
+            [ .[][] | select(.draft == false and .prerelease == false) | .tag_name
+              | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | {tag: ., version: (.[1:] | parts)}
+              | select(.version < ($v | parts)) ] | max_by(.version).tag // error("no lower stable published release")')
+        fi
+        [[ "$OLD_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        W="$RUNNER_TEMP/mac-update-inputs"
+        mkdir -p "$W/mount"
+        gh release view "$OLD_TAG" -R "$GITHUB_REPOSITORY" --json isDraft,tagName | jq -e --arg tag "$OLD_TAG" '(.isDraft | not) and .tagName == $tag'
+        gh release download "$OLD_TAG" -R "$GITHUB_REPOSITORY" -p ompdesk-mac-arm64.dmg -O "$W/old.dmg"
+        PIN=$(jq -er .certificateSha1 scripts/mac-signing.json)
+        REQUIREMENT="identifier \"com.seuput.ompdesk\" and certificate root = H\"$PIN\""
+        APP="$W/mount/OMPdesk.app"
+        for dmg in "$W/old.dmg" "$NEXT_DMG"; do
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$W/mount" "$dmg"
+          codesign --verify --deep --strict "$APP"
+          codesign --verify --strict -R "=$REQUIREMENT" "$APP" ||
+            { echo '::error::The app must carry the pinned release signature; an ad-hoc branch build does not qualify'; exit 1; }
+          [[ "$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')" == "$REQUIREMENT" ]]
+          expected=${OLD_TAG#v}
+          if [[ "$dmg" == "$NEXT_DMG" ]]; then
+            expected=$NEXT_VERSION
+            hash=$(codesign -dv --verbose=4 "$APP" 2>&1 | sed -n 's/^CDHash=//p')
+            [[ "$hash" =~ ^[0-9a-f]{40}$ ]]
+            echo "CANDIDATE_CDHASH=$hash" >> "$GITHUB_ENV"
+          fi
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$expected" ]]
+          hdiutil detach "$W/mount"
+        done
+        echo "NEXT_VERSION=$NEXT_VERSION" >> "$GITHUB_ENV"
+        echo "Published $OLD_TAG updating into $NEXT_VERSION at $GITHUB_SHA ($hash)." >> "$GITHUB_STEP_SUMMARY"
+    - name: Verify the installed candidate and kept profile
+      shell: bash
+      env:
+        CANDIDATE_DMG: ${{ runner.temp }}/mac-update-inputs/old.dmg
+        NEXT_DMG: ${{ inputs.candidate-dmg }}
+        OUT: ${{ runner.temp }}/release-update-evidence
+      run: |
+        set -euo pipefail
+        bash scripts/shell-move/mac-update-gate.sh 2>&1 | tee release-update-candidate.log
+        jq -e --arg v "$NEXT_VERSION" '.version == $v and (.pid > 0)' "$OUT/app-started.json"
+        app=/Applications/OMPdesk.app
+        pin=$(jq -er .certificateSha1 scripts/mac-signing.json)
+        [[ "$(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')" == "identifier \"com.seuput.ompdesk\" and certificate root = H\"$pin\"" ]]
+        codesign -dv --verbose=4 "$app" 2>&1 | grep -Fx "CDHash=$CANDIDATE_CDHASH"
+        grep -Fx 'RESULT: ok' release-update-candidate.log
+        grep -Fx 'ok: the canary file in userData survived the update' release-update-candidate.log
+    - if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: release-update-mac-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          release-update-candidate.log
+          ${{ runner.temp }}/release-update-evidence/
+        if-no-files-found: warn
+        retention-days: 14

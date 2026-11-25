@@ -1,5 +1,769 @@
 # Changelog
 
+## [0.144.0] - 2026-11-25
+
+omp 19.2.0에서 꺼지던 OMPdesk 기능 19개가 다시 동작합니다. 이제 omp 19.2.0 이상이 필요하고, OMPdesk가 알아서 맞는 omp로 업데이트합니다.
+
+- 백그라운드 작업 목록, `/copy`, `/open`, MCP 서버 관리, 테마, 설정 화면, 컨텍스트 들여다보기, 에이전트 질문 양식 등이 omp 19.2.0에서 다시 켜집니다.
+- 끊긴 턴을 앱이 이어가지 못할 때, 그 자리에서 이어가기를 제안합니다. 연결된 컴퓨터와 휴대폰에서도 보입니다. omp가 계속 죽으면 이어가기를 멈춥니다.
+- 대기 중인 메시지가 omp가 다시 시작돼도 남고, 고치는 동안에는 보내지지 않습니다. 멈춤(Stop)이 전달되지 않았거나 거절되면 그렇다고 알려 줍니다.
+- 에이전트가 연 하위 세션이 어떻게 끝났는지(끝남, 다시 시도, 대기, 닫힘)를 연 쪽이 알 수 있고, 멈추는 중인 하위 세션은 작업판에 "멈추는 중"으로 보입니다.
+- 세션이 푸시한 커밋의 CI 결과가 턴 사이에 한 줄로 전해지고, GitHub 화면은 창으로 돌아오면 다시 읽습니다.
+- 색, 글꼴, 채팅 칼럼과 표면을 새 디자인으로 바꿨습니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+The 19 OMPdesk features that went off with omp 19.2.0 work again. OMPdesk now needs omp 19.2.0 or newer and updates omp to a matching version by itself.
+
+- The background job list, `/copy`, `/open`, MCP server management, themes, the settings screen, the context inspector and the agent question form work again on omp 19.2.0.
+- When the app cannot continue a cut-off turn, it offers to continue it in place, on a paired computer's view and the phone too. Continuations stop after repeated omp deaths.
+- Queued messages outlive their omp, and a queued message being edited is not sent. A Stop that was lost or refused now says so.
+- An agent learns how each child session it opened ended (finished, retried, waiting, closed), and a child being stopped reads "Stopping" on its board.
+- CI results of a session's pushes reach it as one line between turns, and GitHub views read again when the window comes back.
+- New colors, fonts, chat column and surfaces.
+
+Known issue: on macOS, pressing the Right arrow key in the composer can insert an icon-like character; this is being investigated.
+
+## [0.143.0] - 2026-11-25
+
+앱이 작업 중에 내부 연결을 끊고 다시 시작하던 문제를 고쳤고, 설정·업데이트·기계 설정을 맡는 부분을 Rust로 옮겼습니다.
+
+- 앱 내부 요청이 겹칠 때 답 하나를 잃어, 2초 뒤 내부 처리기를 버리고 다시 시작하던 문제를 고쳤습니다. 화면이 잠깐 "연결 중"으로 바뀌던 일이 사라집니다.
+- 앱을 다시 켠 직후 새 탭이 "시작 중"에 머물던 문제를 고쳤습니다.
+- 앱 업데이트는 확인과 내려받기를 Rust가 맡습니다. 끊긴 내려받기는 이어 받고, 프록시 설정을 따릅니다.
+- 설치 도구·omp·CLI 도구·확장 업데이트와 기계 설정이 한 줄로 차례대로 실행됩니다. 업데이트가 몇 분 늦게 시작될 수 있지만 서로 겹치지 않습니다.
+- 설치 파일 내려받기도 시스템 프록시(PAC 포함)와 SOCKS5 프록시를 따릅니다.
+- 설정 파일, `models.yml`, 지운 세션 기록, 연결된 기기의 하루 사용 한도를 Rust가 관리합니다. `models.yml`의 주석과 배치는 그대로 남습니다.
+- 창, 메뉴, 트레이, 마지막 창 닫기를 Tauri 셸이 맡습니다. macOS에서 폴더를 열면 그 폴더로 창이 열리고, 메뉴의 개발자 도구 항목이 실제로 켜고 끕니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+Fixed the app dropping and restarting its internal connection mid-work, and moved settings, updates and machine setup into Rust.
+
+- When internal requests overlapped, one answer was lost and the app abandoned its internal service after 2 seconds and started it again. The brief "Connecting" state this caused is gone.
+- A new tab right after a relaunch no longer stays at "Starting".
+- Rust now checks for and downloads app updates. A cut-off download resumes, and the proxy setting applies.
+- Machine setup and the omp, CLI tool and extension updates run one at a time. An update can start a few minutes later, but they no longer overlap.
+- Installer downloads follow the system proxy (PAC included) and SOCKS5 proxies.
+- Rust keeps the settings file, `models.yml`, deleted-session records and a paired device's daily limit. `models.yml` keeps its comments and layout.
+- The Tauri shell owns windows, the menu, the tray and closing the last window. On macOS, opening a folder opens a window there, and the menu's developer tools item really toggles them.
+
+Known issue: on macOS, pressing the Right arrow key in the composer can insert an icon-like character; this is being investigated.
+
+## [0.142.0] - 2026-11-24
+
+사이드바의 세션 목록이 오래된 순으로 바뀌어, 새 세션은 목록 맨 아래에 추가됩니다.
+
+- 고정한 세션은 맨 위에 그대로 있고, 직접 옮겨 둔 순서도 유지됩니다. 보관함 목록도 오래된 순입니다. 프로젝트 순서는 바뀌지 않습니다.
+- Windows에서 첫 창이 드물게 30초 넘게 빈 화면으로 남던 문제를 고쳤습니다. 화면을 불러오는 중인 요청을 중간에 끊고 다시 보내지 않습니다.
+- 질문 카드에서 괄호로 감싼 글이 수식처럼 깨져 보이던 문제를 고쳤습니다.
+- 연결된 컴퓨터의 연결이 끊겼을 때 입력 기록 오류가 기록되지 않습니다.
+- 입력창을 비운 직후 다음 프롬프트 제안과 유휴 정리가 막히던 문제를 고쳤습니다.
+- 에이전트가 연 하위 탭이, 닫히기 직전에 새 질문이나 새 턴을 시작하면 닫히지 않고 남습니다. 연결된 컴퓨터의 하위 탭도 같습니다.
+- 탭이 많을 때 에이전트 제어가 앱을 느리게 하던 부분을 줄였습니다.
+- 변경 취소(discard)가 git 상태를 끝까지 읽지 못하면 파일을 건드리지 않고 거부합니다.
+- 앱 업데이트 내려받기·검증, 종료 순서, 파일 대화상자를 Rust로 옮겼습니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+Session lists in the sidebar now read oldest first, so a new session appears at the bottom.
+
+- Pinned sessions stay on top and an order you set is kept. The archive reads oldest first too. Project order is unchanged.
+- Fixed a rare Windows first window that stayed blank for over 30 seconds: a page request still loading is no longer cut off and sent again.
+- Text in parentheses on a question card no longer renders as broken math.
+- An offline paired computer no longer logs input history errors.
+- Prompt suggestions and idle compaction are no longer held back right after you clear the composer.
+- A child tab an agent opened stays open when it starts a new question or turn just before it would close, on a paired computer too.
+- Agent control no longer slows the app down when many tabs are open.
+- Discard refuses and touches no file when it cannot read the complete git status.
+- App update download and verification, the quit sequence and file dialogs now run in Rust.
+
+Known issue: on macOS, pressing the Right arrow key in the composer can insert an icon-like character; this is being investigated.
+
+## [0.141.3] - 2026-11-24
+
+Windows에서 `ompdesk check`가 더 이상 Windows 터미널 창을 띄우지 않고, 사이드바와 공급자 로그인의 빠른 연속 동작에서 생기던 문제를 고쳤습니다.
+
+- 사이드바에서 세션 두 개를 빠르게 연달아 눌러도 첫 세션이 사라지지 않고 둘 다 열립니다.
+- 연결된 다른 컴퓨터의 행이, 저장된 접기 설정이 늦게 도착해도 사이드바에서 사라지지 않습니다.
+- 공급자 로그인에서 취소한 직후 다시 연결을 눌러도 "이미 로그인이 진행 중" 오류가 나지 않습니다. 취소가 끝날 때까지 연결 버튼이 잠깐 비활성화됩니다.
+- Preview에서 페이지가 멈춘 뒤 복원을 누르면 바로 다시 열립니다.
+- 디스크 할당량이 가득 차 저장이 거부되면 다른 디스크 가득 참과 같이 기억해 두었다가 다시 저장합니다.
+- 로컬 명령과 git, 원격·웹 연결, 메모리·예약·디스크 정리, 설치와 업데이트 확인, 앱 시작 보호의 많은 부분을 Rust로 옮겼습니다.
+
+알려진 문제: Windows에서 드물게 첫 창이 30초 넘게 빈 화면으로 남을 수 있습니다. 원인을 좁히는 중이며 다음 업데이트에서 고칩니다.
+
+<!-- en -->
+
+On Windows, `ompdesk check` no longer opens Windows Terminal windows, and quick repeated actions in the sidebar and provider sign-in now work.
+
+- Clicking two sessions in the sidebar in quick succession opens both instead of replacing the first.
+- A paired computer's row no longer disappears from the sidebar when the saved fold settings arrive late.
+- Connecting again right after cancelling a provider sign-in no longer fails with "a sign-in is already in progress". Connect stays disabled until the cancel finishes.
+- Restore in Preview reopens a crashed page right away.
+- A save refused because a disk quota is full is kept and retried, like any other full disk.
+- Much of the local commands and git, the remote and web connections, memory, schedules and disk care, setup and update checks, and launch protection now run in Rust.
+
+Known issue: on Windows the first window can rarely stay blank for more than 30 seconds. The cause is being narrowed down and will be fixed in the next update.
+
+## [0.141.2] - 2026-11-23
+
+Windows 10에서 WinHTTP가 옵션 195를 지원하지 않아도 업데이트를 확인할 수 있습니다.
+
+이미 0.141.1에서 오류 12009가 나서 업데이트를 받을 수 없다면, 이번 한 번은 [Windows 설치 파일](https://github.com/seuput-inc/ompdesk/releases/download/v0.141.2/ompdesk-windows-setup.exe)로 업데이트하세요.
+
+omp 19.1.1에서 추가된 데스크톱 입력 전환과 할 일 목록 연동 설정도 한국어로 표시합니다.
+omp 19.1.1에서 하위 에이전트의 답을 기다리던 작업이 앱 종료로 끊겨도, 다시 열면 원래 작업을 이어갑니다.
+
+<!-- en -->
+
+OMPdesk can check for updates on Windows 10 even when WinHTTP does not support option 195.
+
+If error 12009 prevents version 0.141.1 from updating itself, use the [Windows installer](https://github.com/seuput-inc/ompdesk/releases/download/v0.141.2/ompdesk-windows-setup.exe) for this update.
+
+The new desktop input and todo list settings in omp 19.1.1 now have Korean labels and descriptions.
+On omp 19.1.1, a turn interrupted while waiting for a subagent resumes when OMPdesk reopens.
+
+## [0.141.1] - 2026-11-23
+
+OMPdesk가 다시 쓰지 않는 검사 캐시와 닫힌 세션의 임시 파일을 재시작 없이 정리합니다.
+
+- 자동 디스크 정리가 3일 넘게 쓰지 않은 검사의 입력 파일 목록을 지웁니다. 검사 결과와 로그는 남고, 입력이 그대로면 성공한 결과를 다시 쓸 수 있습니다.
+- 닫힌 세션에 프로세스가 남으면 다음 정리 때 다시 확인합니다. 실행 중인 작업과 답변에 연결된 파일은 지우지 않습니다.
+- 자동 목표가 먼저 시작되더라도 방금 보낸 지시가 입력창으로 돌아오지 않고 진행 중인 작업에 한 번만 전달됩니다.
+- 세션의 작업 폴더를 고르는 일과 이전 실행에서 앱이 멈춘 기록을 읽는 일을 Rust로 옮겼습니다. 내장 ECC를 2.2.3으로 올렸습니다.
+
+<!-- en -->
+
+OMPdesk reclaims unused check data and closed sessions’ temporary files without a restart.
+
+- Automatic disk care removes input file lists for checks idle for more than three days. Results and logs stay available, and passing results can still be reused when the inputs match.
+- If a process outlives a closed session, disk care checks it again on its next pass. Running work and files linked from replies are preserved.
+- If an automatic goal starts before your message arrives, the running turn receives the message once instead of returning it to the composer as unsent.
+- Rust now selects session working folders and reads the previous launch’s hang report. Bundled ECC is now at 2.2.3.
+
+## [0.141.0] - 2026-11-22
+
+OMPdesk에서 내장 REA를 제거했습니다.
+
+이전 버전에서 REA를 켰더라도 OMPdesk는 더 이상 REA를 설치하거나 실행하지 않습니다. ai-memory와 사용자가 직접 등록한 MCP 서버는 그대로 사용할 수 있습니다.
+
+<!-- en -->
+
+OMPdesk no longer ships REA.
+
+Even if you enabled REA in an earlier version, OMPdesk no longer installs or starts it for you. This does not change ai-memory or MCP servers you registered yourself.
+
+## [0.140.0] - 2026-11-22
+
+새 OMPdesk 세션은 Ponytail Full로 시작하고, REA는 설정에서 켰을 때만 불러옵니다.
+
+세션에서 선택한 Ponytail 모드와 기존 REA 설정은 유지합니다. 메모리와 REA를 연결하는 MCP 허브는 이제 Rust로 실행합니다. 채팅을 실행하는 순정 omp에는 여전히 Bun이 필요합니다.
+
+<!-- en -->
+
+New OMPdesk sessions start in Ponytail Full mode and load REA only when you enable it in Settings.
+
+Your session's Ponytail mode and existing REA preference still take precedence. The MCP hub for memory and REA now runs in Rust. Stock omp still needs Bun to run chat sessions.
+
+## [0.139.0] - 2026-11-22
+
+이 컴퓨터에서 `ompdesk heavy limit off`를 실행하면 로컬 검사와 빌드가 슬롯이나 시작 전 디스크 여유를 기다리지 않습니다. `ompdesk heavy limit auto`로 되돌릴 수 있습니다. 같은 빌드 폴더에 동시에 쓰는 잠금과 실행 중 디스크 고갈 보호는 유지합니다.
+
+<!-- en -->
+
+Run `ompdesk heavy limit off` to start local checks and builds on this computer without waiting for a slot or a free-space threshold. Use `ompdesk heavy limit auto` to restore both checks. Builds still lock their shared output, and running commands still stop if disk space becomes critically low.
+
+## [0.138.1] - 2026-11-22
+
+휴대폰의 네트워크 연결이 돌아오면 페이지를 닫았다 열지 않아도 놓친 답변과 작업 상태가 갱신됩니다. 입력 중인 초안은 그대로 남습니다.
+
+<!-- en -->
+
+When your phone reconnects, the open page catches up on missed replies and work status without losing your draft.
+
+## [0.138.0] - 2026-11-22
+
+작업 도중 지시를 추가해도 미완료 할 일이 목록에 남습니다.
+
+- 끝나지 않은 턴을 완료로 표시하지 않고, 다른 할 일이 막혀도 독립된 작업은 계속 진행할 수 있습니다.
+- 검사 결과에서 자리 대기 시간과 실행 시간을 구분합니다. 배포를 막는 검사는 실행 중인 작업을 중단하지 않고 빈 자리를 우선 배정받습니다.
+- omp 19.1의 명령·입력 폼 변경에 대응했습니다.
+- 채팅 모델 선택기는 다른 계정의 Codex 선택지를 제외하고, 사용량 조회만으로 크레딧이 차감됐다고 표시하지 않습니다.
+- 휴대폰의 첫 오프라인 등록은 페어링이 끝난 뒤 시작합니다. 로그인 화면을 다시 열면 브라우저가 중복으로 열리지 않습니다.
+- 사고가 끝나고 다른 작업이 이어지면 ‘사고 중’ 대신 ‘작업 중’으로 표시합니다. 재연결하면 중지 버튼은 호스트의 현재 턴 상태를 따릅니다. 내부 `async-notify` 메시지는 대화에 표시하지 않습니다.
+- 도구가 추가되거나 빠질 때마다 이름 목록이 화면을 덮지 않습니다. 등록 경고와 오류는 계속 표시합니다.
+- 다른 창에서 이미 질문을 기다리는 탭을 휴대폰으로 열어도 질문 내용과 답변 버튼이 표시됩니다. 다른 창이 제출 중인 질문에는 두 번 답하도록 요구하지 않습니다.
+
+<!-- en -->
+
+Adding an instruction during a task no longer replaces unfinished items in the plan.
+
+- Unfinished turns are no longer labeled complete. Independent work can continue when another item is blocked.
+- Check results distinguish queue time from run time. Release-blocking checks get priority for a free slot without interrupting running work.
+- Updated command and form handling for omp 19.1.
+- The chat picker excludes Codex routes belonging to other accounts. A usage read no longer claims credits were spent.
+- The phone registers for offline use after pairing. Returning to an in-progress sign-in no longer opens the browser twice automatically.
+- The turn card shows “Working” once thinking ends and other work continues. On reconnect, the Stop button follows the host’s current turn. Internal `async-notify` messages stay out of the transcript.
+- Routine tool registrations and removals no longer cover the screen with lists of names. Warnings and errors still appear.
+- Opening a tab on your phone after a question arrives now shows the question and its answer controls. A question being answered in another window is not shown a second time.
+
+## [0.137.3] - 2026-11-21
+
+Mac에서 `⌘C`로 선택한 텍스트를 복사하고 `⌘V`로 커서가 있는 입력창에 붙여넣을 수 있어요. 편집 메뉴의 복사와 붙여넣기도 고쳤어요.
+
+<!-- en -->
+
+On Mac, the Edit menu and the `⌘C` and `⌘V` shortcuts now copy the selected text and paste into the focused field.
+
+## [0.137.2] - 2026-11-21
+
+연결된 컴퓨터의 세션 목록에 보호된 행이나 방금 사라진 행이 있어도 다른 두 세션의 순서를 옮길 수 있어요.
+
+- 옮기려는 행이나 놓을 행 자체가 사라졌다면 저장하지 않아요. 보호된 행과 이번 목록에 없던 세션의 기존 위치는 그대로예요.
+- Windows에서 폴더 대신 파일을 선택한 경우와 폴더가 없는 경우를 구분해요. 휴대폰의 푸시 알림은 웹 리스너가 다시 시작돼도 기존 식별자를 유지해요.
+- 미리보기 기록을 저장하기 전에는 이전 버전 파일을 지우지 않아요. Git 작업 폴더를 만드는 재시도도 원래 요청의 제한 시간을 넘기지 않아요.
+- 저장된 세션 검색, 디스크 사용량 집계, 작업 폴더 확인, 업데이트 정보 판독을 Rust로 옮겼어요. macOS 다운로드는 확인한 릴리스 정보를 그대로 써요.
+
+<!-- en -->
+
+You can reorder two sessions on a paired computer even when another row is protected or has just disappeared.
+
+- If the row you move or its drop target is no longer available, the host rejects the move. Protected rows and saved positions outside your list stay in place.
+- On Windows, the folder picker distinguishes a file from a missing folder. Phone push notifications retain their identity when the web listener restarts.
+- Preview keeps old version files until it saves their history. Git worktree creation retries share the original request deadline.
+- Rust now handles saved-session search, disk usage measurements, worktree path checks, and release metadata. macOS downloads use the release already selected.
+
+## [0.137.1] - 2026-11-21
+
+세션 도구의 상세 설명과 `/omfg` 재시도에서 중복 입력을 줄였어요.
+
+- 세션 열기의 단건·배치 공통 설명을 한 번만 보내고, 다른 도구 6개의 반복 문구도 줄였어요.
+- 자동 배포는 변경이 하루 지났다는 이유만으로 시작하지 않아요. 직접 요청한 배포에는 하루 대기가 없어요.
+
+<!-- en -->
+
+Session tool help and `/omfg` retries now send less duplicate input.
+
+- Single and batch session opens share one set of field descriptions. Six other tools have shorter help without changing their arguments.
+- Commit age alone no longer triggers an automatic release. An explicit release request does not wait a day.
+
+## [0.137.0] - 2026-11-21
+
+어느 기기에서 보든 같은 호스트의 사이드바에 같은 프로젝트 순서, 세션 고정 위치, 보관 상태가 표시돼요.
+
+- 연결된 컴퓨터와 휴대폰에서도 호스트가 공유한 항목의 배치를 따라요. 비공개 항목은 보내지 않아요. 기기 자체의 표시 순서도 동기화해요.
+- 공식 Ponytail 스킬 6개를 별도 설치 없이 쓸 수 있어요. 이미 설치한 플러그인이 있으면 그 버전을 우선하고, 꺼 둔 플러그인은 다시 켜지 않아요. 내장 스킬 업데이트는 OMPdesk 업데이트와 함께 받아요.
+- 앱에 포함된 Node.js를 26.13.1 LTS로, 미리보기 브라우저를 Chromium 158 기반 Brave로 올렸어요. 수식은 KaTeX 0.19.1로 표시해요. 컴퓨터에 설치된 Node.js나 omp는 이 변경으로 교체하지 않아요.
+- 휴대폰 미리보기에서 정지한 페이지의 첫 화면이 사라지던 문제를 고쳤어요. 메모리는 3.4.7로 올랐고, 직전 버전의 데이터베이스는 변환 전에 복구용 사본을 남겨요. 사본을 검증할 수 없으면 변환하지 않아요.
+- 대화 압축 뒤 탭으로 돌아오거나 저장된 세션을 다시 열어 입력란을 비워도, 유효한 다음 질문 추천은 모델을 다시 호출하지 않고 그대로 표시해요. 대화가 바뀌거나 직접 새로고침하면 다시 추천해요.
+- 엔지니어링 모드가 매 요청에 보내는 지침을 줄였어요. 일반 모드의 해당 지침은 5,509→4,861토큰이며 플레이북 22개의 경로와 설명은 그대로예요. 자동 제목을 짧게 다시 쓸 때도 같은 후보와 예시를 두 번 보내지 않아요.
+- 공유 중인 탭을 소유자가 닫으면 다른 기기의 보기도 함께 닫혀요. 화면 읽기 도구는 작성창과 역할 설정에서 선택한 모델을 화면에 표시된 이름으로 읽어요.
+- 다른 컴퓨터의 탭이 잠들어 있어도 세션 목록과 결과 조회는 호스트의 실행 상태를 보여줘요. 처음 모델을 연결할 때는 공급자 목록 전체를 기다리지 않고 설정을 시작해요.
+- 재시작 뒤 출력 경로가 닫힌 프로세스를 알려요. 기본값은 출력 상대가 닫혔고 같은 프로세스가 30초 간격으로 세 번 모두 한 코어의 50% 이상을 쓴 경우에만 자동 종료해요. 하위 에이전트 작업·PTY·이름 붙인 서비스까지 복원하는 것은 아니에요.
+- 긴 세션의 작업 속도는 새로 추가된 기록만 읽어 계산해요. 반복 로그는 횟수로 묶고 macOS 메모리는 footprint로 측정해요. 숨긴 탭의 대화가 잠시 비거나 코어 응답이 끊길 때 진단할 기록을 추가했어요.
+- Windows에서 특수 문자가 포함된 인자를 Bun에서 `gh`로 넘길 수 있어요. 저장소 스크립트의 API 잔여량 보호는 유지돼요. 공유 체크아웃의 편집 기록을 갱신할 때는 변경분을 반영해요.
+
+<!-- en -->
+
+A host’s project order, pinned session positions and archived sessions now match across sidebar views.
+
+- Paired computers and phones follow the host’s layout for shared items. Private items stay on the host. The order of the devices themselves also syncs.
+- Six official Ponytail skills are available without a separate installation. An installed plugin takes precedence, and a disabled plugin stays off. Updates to the bundled skills arrive with OMPdesk updates.
+- The app now ships Node.js 26.13.1 LTS and a Chromium 158-based Brave for Preview. Math uses KaTeX 0.19.1. These changes do not replace the Node.js or omp installed on your computer.
+- Phone Preview no longer loses the first frame when a static page refreshes. Memory 3.4.7 keeps a recovery copy before migrating the previous version’s database and stops if it cannot verify that copy.
+- Returning to a tab after compaction or clearing the draft in a reopened session keeps valid prompt suggestions without another model call. Changes to the conversation and manual refresh still generate new suggestions.
+- Engineering mode sends shorter standing instructions. Its standard section drops from 5,509 to 4,861 tokens with all 22 playbook paths and descriptions intact. Automatic title retries no longer send the same candidate and examples twice.
+- Closing a shared tab ends its view on the paired device. Screen readers announce the model shown in the composer and role settings.
+- The session list and result lookup show whether a session is running on its host, even if the viewing computer’s tab is asleep. First-run model setup no longer waits for the entire provider list.
+- After a relaunch, OMPdesk reports processes with a closed output path. By default it ends one only when the output peer is confirmed closed and the same process uses at least 50% of one CPU core in three samples 30 seconds apart. A relaunch still does not restore subagent jobs, PTYs or named services.
+- Long sessions read only newly appended records to calculate pace. Repeated log lines are counted together, and macOS memory is measured by footprint. New diagnostics cover briefly empty transcripts on reopened tabs and lost core responses.
+- On Windows, Bun can pass arguments containing shell metacharacters to `gh`. Repository scripts still protect the API quota. Shared-checkout edit records update incrementally.
+
+## [0.136.0] - 2026-11-20
+
+OMPdesk가 다시 뜰 때(업데이트, 재시작) 끊기던 일 가운데 많은 것이 이제 이어져요: 앞에서 돌던 명령은 20초까지 끝을 보고 다시 실행되지 않으며, `async` 백그라운드 작업, 카운트다운 중 보낸 첫 메시지, 쉬던 탭, 켤 때 omp 업데이트와 겹친 이어 하기가 이어져요.
+
+- 아직 끊기는 것: 하위 에이전트의 작업, pty와 이름 붙은 서비스, 세션 주소(`local://` 등)를 쓰는 명령, 60초가 지나 자동으로 뒤로 넘어간 명령. 다시 뜬 뒤 그 전 세션이 남긴 프로세스가 출력할 곳을 잃고 CPU를 쓰며 계속 도는 경우도 아직 고쳐지지 않았어요.
+- 알려진 것: 숨겨 둔 탭으로 돌아왔을 때 대화가 늦게 보일 수 있어요(조사 중).
+
+- 멈출 때 실행 중인 명령은 20초까지 끝을 보고, 다시 뜬 뒤 같은 명령을 다시 실행하지 않아요(빈 커밋이 두 번 생기던 문제).
+- `async` 백그라운드 bash 작업은 재시작 뒤에도 계속 돌고, 그 결과가 같은 작업으로 전달돼요.
+- 재시작 카운트다운 중에 연 세션은 첫 메시지를 잃지 않아요: 자동 재시작이 그 메시지를 기다려요.
+- 켤 때 omp 업데이트가 끝나는 순간 이어 하기가 끊기지 않아요. 쉬던 goal 세션, 걸어 둔 다시 시도, 화면에 없던 Autopilot 실행도 다시 뜬 뒤 이어지고, 에이전트에게는 재시작이 턴을 이어 간다고 알려요.
+- 할 일 판이 목록을 마지막으로 고친 때와 그 뒤에 받은 지시를 보여 주고, 목록이 일보다 뒤처지면 표시해요. "배포 중단", "되돌려" 같은 짧은 지시도 세요.
+- 테마가 다섯 벌이 됐어요: OMPdesk, GitHub, Solarized, Gruvbox, High Contrast, 각각 밝게와 어둡게. Sepia, Nord, Tokyo Night는 가장 가까운 것으로 옮겨져요.
+- 압축 중에는 무엇을 하는지와 얼마나 걸렸는지 쉬운 말로 보여 줘요.
+- 크레딧 쓰기를 끄면 메모리 정리, 판정 도우미, 커밋 메시지 버튼까지 어떤 경로도 크레딧을 쓰지 않아요.
+- 실행 중에 보내기를 누르면 언제나 그 턴에 바로 끼워 넣어요(후속 전환 단추는 없어졌어요).
+- 폰에서 대화 맨 위까지 빠르게 밀면 이전 메시지를 불러와요.
+- 다른 컴퓨터가 이 컴퓨터에 연 세션은 그 컴퓨터가 꺼져 있어도 계속 일해요.
+- 작업판에서 방금 생긴 자식 세션의 줄을 눌러도 열리지 않던 문제를 고쳤어요(0.135.0에서 알린 것).
+- Windows에서 화면을 그리는 프로세스가 죽으면 앱이 다시 불러오고, GPU 프로세스가 한 번 죽은 것으로는 앱을 다시 띄우지 않아요. 응답이 멈춘 페이지는 다시 띄우고, 되풀이될 때만 알려요.
+- 첫 실행의 프로필 옮기기 화면이 멈추면 다시 불러오고, 세 번 실패하면 까닭과 다시 시도 단추를 보여 줘요.
+- 기계 설정이 stock `omp update`를 쓰지 않고, npm으로 깐 omp는 정확한 판으로 올려요. 설치된 omp가 시험한 주 판보다 높으면 설정에 그렇게 보여요. omp에 내부 기능 하나가 빠지면 그 기능을 쓰는 동작만 꺼져요.
+- Windows에서 mcp.json이 잠깐 잡혀 있어도 로그인과 MCP 변경이 사라지지 않아요.
+- 다른 세션의 메시지나 보고가 오면 돌고 있던 셸을 바로 백그라운드로 돌려요. 닫기는 창의 답을 기다려 그 결과를 말하고, 연 쪽 탭이 닫히면 쉬던 자식도 함께 닫혀요.
+- 에이전트의 gh 호출이 GitHub 계정의 공유 한도를 바닥내지 못해요: 끝난 실행의 로그는 한 번만 받고, 남은 한도가 적으면 넓은 조회를 거절하고, watch는 1분 간격 이상이에요.
+- `ompdesk checks wait`와 `ompdesk checks status`로 점검 결과를 기다리고 볼 수 있어요.
+- 콘솔 창이 뜨거나, 한 단계가 오래 걸리거나, 턴이 오래 기다리면 진단 기록에 남겨요.
+- 시작 탭에서 친 셸이나 eval 줄은 그 탭을 제 탭으로 만들어, 정리가 그 탭을 닫지 않아요. 임시 폴더는 사이드바 프로젝트가 되지 않아요.
+
+<!-- en -->
+
+Much of the work an OMPdesk relaunch (an update or a restart) used to cut now continues: a running foreground command gets up to 20 s to finish and never runs again, and `async` background jobs, a first message sent during the countdown, idle tabs and a resume that overlaps a launch-time omp update continue.
+
+- Still cut: subagents' work, pty and named services, commands that use a session URL (`local://` and the like), and commands stock moved to the background after 60 s. A process a session left that lost its output can still keep spinning on the CPU after a relaunch; not fixed yet.
+- Known: returning to a hidden tab can show its conversation late (being investigated).
+
+- On a stop, a running command gets up to 20 s to finish, and after the relaunch the same command never runs again (the empty commit made twice).
+- `async` background bash jobs keep running through a relaunch and deliver their result as the same job.
+- A session opened during the restart countdown keeps its first message: the automatic restart waits for it.
+- A launch-time omp update finishing no longer cuts a resumed turn. An idle goal session, an armed retry and an Autopilot run whose tab was not shown also continue after the relaunch, and agents are told a relaunch continues their turn.
+- The to-do panel shows when the list last changed and the instructions received since, and marks a list that is behind the work. Short orders such as "stop the deploy" count too.
+- Five theme sets: OMPdesk, GitHub, Solarized, Gruvbox and High Contrast, each light and dark. Sepia, Nord and Tokyo Night move to the closest one.
+- A compaction says in plain words what it does and how long it has run.
+- With credit use off, no path spends credits, memory upkeep, the judge helper and the commit-message button included.
+- Send during a run always steers into that turn (the follow-up toggle is gone).
+- On the phone, a fling to the top of a transcript loads its older messages.
+- A session another computer opened on this one keeps working while that computer is away.
+- A child session's row on the work board that did nothing on its first click right after it appeared now opens (the known issue of 0.135.0).
+- On Windows a crashed renderer reloads the app, and one GPU process crash no longer relaunches it. A page that stops answering is restarted, and you are told only when it repeats.
+- A first-launch profile migration page that stops answering is loaded again; after three tries it shows the reason and a Retry button.
+- Machine setup never runs stock `omp update`, and an omp installed with npm is updated to an exact version. Settings says when the installed omp is above the tested major. When an omp internal is missing, only the action that uses it turns off.
+- On Windows a sign-in or MCP change survives a briefly held mcp.json.
+- Another session's message or report backgrounds a running shell at once. A close waits for the window's answer and says it, and a resting child closes with its opener's tab.
+- Agents' gh calls can no longer empty the GitHub account's shared quota: a finished run's log is fetched once, wide reads are refused when little is left, and watches poll at most once a minute.
+- `ompdesk checks wait` and `ompdesk checks status` wait for and show a check run's verdict.
+- Diagnostics record a console window that appears, a slow step and a long turn wait.
+- A shell or eval line typed in the start tab makes it a tab of its own, so housekeeping never closes it. A scratch folder never becomes a sidebar project.
+
+## [0.135.0] - 2026-11-20
+
+사이드바의 세션 목록이 새로 바뀌었어요: 세션마다 저장소 그림과 작업 중인 가지를 보여 주고, 줄은 더 얇아졌어요.
+
+- 세션 줄이 두 줄이 돼요. 윗줄은 제목, 아랫줄은 저장소 그림(또는 글자 표시)과 그 세션의 가지예요. 컴퓨터에서는 줄 높이가 40px, 터치 화면에서는 48px이에요.
+- 저장소 그림은 GitHub에 올린 대표 이미지, 없으면 주인 프로필 사진, 데스크톱 앱이면 그 앱의 아이콘을 써요. 받아 오는 크기와 시간에는 한도가 있어요.
+- 가지 이름이 길면 가운데를 줄여(`…/끝부분`) 끝이 다른 두 가지도 구별돼요. 좁은 사이드바에서는 쉬는 시간 표시가 먼저 빠지고, 그다음 가지가 줄어요.
+- 같은 화면이 이 컴퓨터의 창, 연결한 다른 컴퓨터의 창, 폰에서 똑같이 보여요.
+- omp가 OMPdesk에 필요한 기능을 갖췄는지 점검한 결과가 이제 로그(gui-runtime.jsonl)에 omp 판마다 한 줄 남고, 에이전트가 `ompdesk_app`의 `omp.bridge_health`로 이 컴퓨터와 연결한 컴퓨터의 결과를 읽을 수 있어요. 빠진 기능이 많아도 목록은 읽을 수 있는 모양으로 남고, 남기지 못한 개수도 적혀요.
+- 연결한 컴퓨터의 omp에 빠진 기능이 있어도 이 컴퓨터의 omp를 고치려 들지 않아요(알림은 그대로 보여요).
+- Windows에서 새 판이 나오면 첫 확인에서 바로 내려받아요. 지금까지는 첫 내려받기가 실패하고 5분 뒤 다음 확인에서 받았어요. 이 고침은 이 판을 깐 뒤부터 효과가 있어요(0.134.0·0.134.1은 이 판을 5분 늦게 받아요).
+- 앱이 끝날 때마다 까닭을 로그에 남겨요: 누가 끝냈는지(트레이, 메뉴, 마지막 창, 업데이트, 다른 컴퓨터의 요청, 시스템 신호), 다시 떴는지, 그리고 앞선 실행이 까닭 없이 끝났으면(강제 종료나 충돌) 다음에 켤 때 그렇게 적어요. 시스템이 보낸 종료 신호도 이제 일반 종료처럼 처리해요.
+- 알려진 것: 작업판에 방금 생긴 자식 세션 줄을 바로 누르면 열리지 않을 수 있어요(다시 누르면 열려요). 다음 판에서 고쳐요.
+
+<!-- en -->
+
+The sidebar's session list is new: each session shows its repository's picture and the branch it works on, in slimmer rows.
+
+- A session row has two lines: the title, then the repository's picture (or letter mark) and the session's branch. Rows are 40 px tall on a computer and 48 px on a touch screen.
+- The repository picture is the social preview uploaded to GitHub, else the owner's avatar, or a desktop app's own icon. What is fetched is bounded in size and time.
+- A long branch name gives way in the middle (`…/tail`), so two branches that differ only at the end still read apart. In a narrow sidebar the idle age goes first, then the branch shortens.
+- The same rows show in this computer's window, a paired computer's window and on the phone.
+- The check of whether omp has everything OMPdesk needs now leaves one line per omp version in the log (gui-runtime.jsonl), and an agent can read it for this computer and a paired one with `ompdesk_app` `omp.bridge_health`. When many features are missing the list stays readable, with a count of the entries left out.
+- A paired computer's omp missing features no longer starts a repair of this computer's omp (its notice still shows).
+- On Windows a new release now downloads at the first check. Until now the first download failed and the next check 5 minutes later fetched it. The fix works once this release is installed (0.134.0 and 0.134.1 still get this one 5 minutes late).
+- Every time the app ends it logs why: who ended it (tray, menu, last window, update, a paired computer's request, a system signal), whether it comes back, and, at the next launch, that the previous run ended without a reason (a force quit or a crash). A system quit signal now quits the app the normal way.
+- Known: clicking a child session's row on the work board right after it appears may not open it (a second click does). The next release fixes it.
+
+## [0.134.1] - 2026-11-19
+
+OMPdesk가 omp 19.0.0을 지원합니다. 이 판은 omp 19.0.0으로 시험했어요.
+
+- omp 19.0.0에서 입력창의 확장 기능(`!` bash, `$` eval, 문맥 보기, 백그라운드 작업, 대기열 빼기, 압축 멈추기 등)과 끊긴 턴·하위 세션 잇기가 다시 돼요.
+- omp 19.0.0에서 Plan 카드가 다시 뜨고, 승인한 계획이 바로 실행돼요.
+- omp 19.0.0의 새 설정을 한국어로 보여 주고, bash 카드가 19의 `local://N.log` 출력 안내 줄을 숨겨요.
+- Bun으로 깐 omp(OMPdesk가 까는 방식)에서, OMPdesk가 스스로 하는 omp 업데이트(켤 때, 4시간마다, 고장 복구)는 이 판이 시험한 omp의 주 판까지만 정확한 판으로 올려요. 더 높은 주 판은 설정 › 업데이트 및 정보에 보이고, 업데이트 버튼을 누를 때만 깔려요. omp를 깔거나 미루거나 실패한 일은 모두 로그에 남아요. npm 등 다른 방법으로 깐 낡은 omp를 고칠 때는 아직 최신이 깔릴 수 있어요(다음 판에서 고쳐요).
+- Windows에서 omp 19가 처음 세션의 폴더를 붙잡고 있어도 worktree가 지워지고, 남은 빈 폴더는 나중에 치워요.
+- 다른 컴퓨터가 답하지 않은 메시지는 '보내지 않음'이 아니라 '확인 안 됨'으로 알리고, 다시 보내면 기록에서 답해 같은 메시지가 두 번 가지 않아요.
+- 에이전트가 만든 화면의 미리보기 검사가 느린 컴퓨터에서도 시간 안에 화면을 보고, 끝내 보지 못하면 '확인 못 함'이라고 에이전트에게 알려요. 보지 못한 화면을 '문제없음'으로 믿지 않게 해요.
+- 두 하위 세션의 완료 보고 id가 같아도 둘 다 연 세션에 닿아요.
+- Windows에서 MCP 서버 로그인과 설정 바꾸기가, 방금 쓴 설정 파일을 다른 프로그램이 잠깐 잡고 있어도 실패하지 않아요.
+- 창이 탭을 닫지 않았을 때 에이전트에게 지어낸 까닭 대신 '창이 닫지 않았다'고 사실대로 알려요.
+
+아직 확인하지 못한 것: Windows 시험에서 한 번, 앱을 끈 직후 시험을 정리할 때 프로젝트 폴더가 잠깐 지워지지 않았어요. 앱을 끈 뒤 마지막 몇 초 동안 남은 프로세스가 그 폴더를 쥐고 있던 것으로 보고, 어느 프로세스인지 찾고 있어요. 자료가 지워지거나 상하는 일은 없어요. OMPdesk가 worktree를 지울 때 같은 일이 생기면 지우기가 실패로 알려지거나 빈 폴더가 남고, 빈 폴더는 나중에 치워요.
+
+<!-- en -->
+
+OMPdesk supports omp 19.0.0. This release was tested with omp 19.0.0.
+
+- On omp 19.0.0 the composer extras (`!` bash, `$` eval, the context view, background jobs, dequeue, cancelling a compaction and the like) and the resume of interrupted turns and subagents work again.
+- On omp 19.0.0 the plan card shows again and an approved plan runs.
+- omp 19.0.0's new settings read in Korean, and the bash card hides 19's `local://N.log` output footer.
+- For omp installed with Bun (the way OMPdesk installs it), OMPdesk's own omp updates (at launch, every 4 hours, repair) install an exact version up to the major this release was tested with. A newer major shows in Settings › Updates & about and installs only when you press Update. Every install, hold and failure is logged. Repairing a too-old omp installed another way (npm and the like) can still install the newest one; the next release fixes that.
+- On Windows a worktree is removed even while omp 19 holds the first session's folder; the empty folder left behind is cleaned up later.
+- The preview check of an agent-made page now sees the page in time on slower computers, and when it cannot it tells the agent "could not check", so an unseen page is never taken as fine.
+- A message a paired computer never answered reads "not confirmed" instead of "not sent", and sending it again answers from the record, so it never arrives twice.
+- Two child sessions' done reports with the same id both reach the session that opened them.
+- On Windows an MCP sign-in or settings change no longer fails when another program briefly holds the config file it just wrote.
+- When a window does not close a tab, the agent is told just that instead of a made-up reason.
+
+Not yet confirmed: once in a Windows test, a project folder could not be removed at test cleanup right after the app quit. A process in its last seconds after quit seems to have held it; which one is still being looked for. No data is removed or damaged: if OMPdesk's worktree removal meets the same, the removal reports a failure or leaves an empty folder, which is cleaned up later.
+
+## [0.134.0] - 2026-11-19
+
+다른 세션이 보낸 메시지가 일하는 세션에 바로 닿고, 앱 안쪽 프로세스가 다시 떠도 세션이 멈춘 채 남지 않습니다.
+
+- 다른 세션이 보낸 메시지를 일하는 세션이 다음 단계에서 한꺼번에 읽어요. 탭에 '대기 중'으로 쌓이지 않아요.
+- 다른 컴퓨터가 연 세션을 이 컴퓨터가 돌리는데 연 컴퓨터가 꺼져 그 세션이 1분 넘게 기다리면, 제목 표시줄에 '<컴퓨터> 연결 대기 중'이 뜨고 알림이 한 번 와요.
+- 아직 시작하지 않은 세션에 보낸 메시지는 보낸 쪽을 붙잡지 않고 '전달 예약됨'으로 바로 돌아와요. 다시 켠 뒤 시작 중인 하위 세션에 보낸 메시지가 사라지던 문제도 고쳤어요.
+- 앱 안쪽 프로세스가 다시 떠도 세션이 다시 살아나 끊긴 턴을 이어요. 3분 안에 못 살아나면 알림과 탭 안내로 알리고, 그 세션을 연 세션에도 알려요.
+- macOS에서 OMPdesk 알림이 다시 떠요. macOS 메뉴 막대 아이콘 때문에 앱이 통째로 멈추던 일과, 세션을 띄울 때 안쪽 프로세스가 죽던 일도 고쳤어요.
+- macOS에서 이 판으로 올라올 때 화면이 저장해 둔 것(작성 중인 글, 화면 기억, 로그인 쿠키)을 그대로 가져와요. 알림 고침 때문에 저장 위치가 바뀌는데, 옛 위치를 새 위치로 옮겨요.
+- 작업 카드가 omp 18.22.1부터 바뀐 결과 정리 방식을 따르고, 데이터 없는 결과를 '섹션 마무리'로 보여 줘요. 이 판은 omp 18.22.2로 시험했어요.
+- omp를 업데이트하는 도중에 뜬 내부 작업자가 계속 실패하던 문제(Windows에서 worktree 세션 열기 실패)를 고쳤어요.
+- omp 18.22.2의 새 설정(실시간 엔드포인트, 키 없는 웹 서비스)과 Kiro·Bifrost 공급자를 한국어와 마크로 보여 줘요.
+- 설정 › 업데이트·정보에서 이 판이 시험한 omp 판이 설치된 판과 다를 때 함께 보여요.
+- 다시 켤 때 대화 기록이 한 프레임 비었다 채워지던 것, 처음 켤 때 탭이 '새 세션'에 멈추던 것, 테마를 고른 직후 선택이 되돌아가던 것을 고쳤어요.
+- Preview: 휴대폰으로 보는 화면이 예전 크기의 틀 낀 화면을 보내지 않고, 제목·글자 변화와 막힌 내려받기 안내가 다시 닿아요.
+- Windows에서 백그라운드 작업이 서비스 연결과 겹쳐 끝나지 않던 문제를 고쳤어요.
+- 유휴 압축과 요약을 omp의 공개 API로 돌려요. 깨진 글자 요약은 기록에도 남지 않아요.
+- 되살린 기기 턴이 세션을 쥔 탭에서 이어지고, 다시 켠 뒤 하위 세션의 완료 보고가 사라지지 않아요.
+- Windows에서 다른 프로세스가 아직 쥔 worktree도 끝까지 지워지고, 세션을 지우거나 쓰지 않는 worktree를 치울 때 origin 사본을 어떻게 했는지 함께 알려요. `bun run dev`가 main이나 preload 빌드 실패로 끝나지 않아요.
+- 페어링한 컴퓨터에서 세션 이름을 바꾼 직후 제목이 다시 '새 세션'으로 돌아가던 문제를 고쳤어요.
+- 새 탭에서 사이드바로 세션을 고른 직후 다른 세션을 고르면, 앞서 연 탭이 닫히거나 덮어써지던 문제를 고쳤어요. 이제 둘 다 탭으로 남아요.
+- 화면이 좁아지면 옆 패널이 바로 접혀요. 앱 안쪽 프로세스가 다시 뜰 때 연결을 기다리던 끊긴 턴의 기록이 '실행 중'으로 잘못 바뀌지 않아요.
+- Autopilot이 자식 세션을 쓸 때, 앞 사이클의 마무리가 늦으면 다음 사이클이 막 만든 브랜치를 '예상 못 한 git 변경'으로 보고 멈추거나 방금 연 자식을 닫던 문제를 고쳤어요.
+- Autopilot이 새 사이클의 자식 세션을 열 때, 사이드바에 자식 폴더 이름의 빈 프로젝트가 잠깐 생기던 문제를 고쳤어요.
+
+알려진 문제: 세션을 연 컴퓨터가 꺼져 있으면, 그 컴퓨터가 다른 컴퓨터에 열어 둔 세션은 다른 세션을 열거나 메시지를 보내는 지점에서 멈춰 기다려요. 연 컴퓨터가 다시 켜지면 이어서 해요.
+
+<!-- en -->
+
+Messages from other sessions reach a working session right away, and sessions no longer sit stuck after the app's inner process restarts.
+
+- A working session reads messages from other sessions together at its next step; they no longer pile up as queued in the tab.
+- When a computer runs a session for another computer that went away, and that session waits on it for more than a minute, its title bar says "Waiting for <computer>" and one notification says so.
+- A message to a session that has not started yet returns at once as "delivery scheduled" instead of holding the sender, and a message to a child still starting after a relaunch is no longer lost.
+- After the app's inner process restarts, sessions come back and continue the interrupted turn; if one cannot within 3 minutes, a notification and a banner in its tab say so, and the session that opened it is told.
+- OMPdesk's notifications show on macOS again. Fixed the whole app freezing over the macOS menu bar icon, and the inner process dying while it started a session.
+- Updating to this release on macOS keeps what the window had stored (drafts, view state, sign-in cookies): the notification fix moves where WebKit keeps it, and the app moves the old store there.
+- The task card follows the result assembly omp 18.22.1 changed and labels a data-less result "finalize sections". This release was tested with omp 18.22.2.
+- A worker started while omp was being updated no longer keeps failing (worktree sessions on Windows).
+- omp 18.22.2's new settings (live endpoint, keyless web services) and its Kiro and Bifrost providers show in Korean and with their marks.
+- Settings › Updates & about names the omp this release was tested with when the installed one differs.
+- Fixed: the transcript blanking for a frame on a warm start, a tab stuck on New session on a cold start, and a theme choice reverting right after the click.
+- Preview: the phone view no longer streams a letterboxed frame of the old size; title, text and blocked-download notices reach the panel again.
+- Fixed a Windows background job that never finished when it overlapped omp's first service connection.
+- Idle compaction and the idle recap run on omp's public API; a garbled recap is not kept either.
+- A revived device turn continues in the tab that holds its session, and a child's done report is no longer lost after a relaunch.
+- On Windows a worktree another process still holds is removed whole; removing a session or an unused worktree also says what became of its copy on origin; `bun run dev` survives a failed main or preload build.
+- A session renamed on a paired computer no longer falls back to "New session" in the title bar a moment later.
+- Picking a session in the sidebar right after a new tab switched to another one no longer closes or replaces that tab; both stay open.
+- The side panel folds away as soon as the window gets narrow, and a cut turn waiting for the network keeps that state across a restart of the app's inner process.
+- Autopilot with child sessions no longer pauses on "a git change it did not expect" or closes the next cycle's new child when the previous cycle's wrap-up runs late.
+- When Autopilot opens a new cycle's child session, the sidebar no longer shows an empty project named after the child's folder for a moment.
+
+Known issue: while the computer that opened a session is off, a session it opened on another computer stops and waits where it opens another session or sends a message; it continues once the computer that opened it is back.
+
+## [0.133.0] - 2026-11-17
+
+이미지 생성은 이제 ChatGPT 구독으로만 하고, 이미지 카드 아래에 어떤 모델이 어떤 크기·품질로 만들었는지 보여 줘요.
+
+### 바뀐 것
+- 이미지 생성(generate_image)은 ChatGPT(Codex) 구독의 이미지 모델로만 해요. 구독이 없거나 요청이 실패하면 오류를 보여 주고, API 키처럼 요금이 따로 나가는 다른 공급자로 조용히 넘어가지 않아요. 품질 값이나 프롬프트를 덧붙이지 않아요.
+- 생성한 이미지 아래에 `공급자 · 모델 · 크기 · 품질` 한 줄이 나와요. 품질은 요청한 값이 아니라 결과가 알려 준 값이에요.
+
+### 고친 것
+- 휴대폰(연결된 웹 페이지)에서 큰 이미지가 있는 대화가 계속 다시 연결되던 문제를 고쳤어요. 큰 이미지는 소켓 메시지에 싣지 않고 HTTP로 따로 받아요.
+- 끝 신호를 못 받은 도구 호출이 실행이 끝난 뒤에도 계속 도는 것처럼 보이던 문제를 고쳤어요.
+- 사이드바에서 세션을 빠르게 연달아 고르면 두 번째 세션이 열리지 않던 문제를 고쳤어요.
+- Preview에서 페이지 이동이 응답을 기다리는 동안 멈춤이나 다른 이동이 처리되지 않던 문제를 고쳤어요.
+- 앱을 다시 켠 뒤 이어 받은 연결된 기기의 턴이, 이미 그 세션을 연 omp에 붙지 않고 omp를 하나 더 띄워 세션이 멈추던 문제를 고쳤어요.
+- 로그인 중계가 묻는 도중 끝나면 로그인 콜백에 응답하지 않던 문제를 고쳤어요(이제 409로 응답해요).
+- Windows: 설치 프로그램이 남긴 임시 배너 폴더를 다음 설치 때 지워요. `OMPdesk.exe`의 파일 버전 정보가 앱 버전과 같아졌어요.
+
+<!-- en -->
+
+Image generation now runs on the ChatGPT subscription only, and each generated image says which model made it, at what size and quality.
+
+### Changed
+- Image generation (generate_image) uses the ChatGPT (Codex) subscription's image model only. Without the subscription, or when its request fails, you see the error; it never switches quietly to another provider that bills separately, such as an API key. No quality value or prompt text is added.
+- Under a generated image, one line reads `provider · model · size · quality`. Quality is what the result reported, not what was asked for.
+
+### Fixed
+- A conversation holding a large picture kept reconnecting on a paired phone. Large pictures now load over HTTP instead of riding in a socket message.
+- A tool call whose end signal never arrived kept looking busy after its run had finished.
+- Picking two sessions in the sidebar in quick succession could leave the second one unopened.
+- In Preview, Stop and a new navigation waited while a page navigation awaited its reply.
+- After a relaunch, a paired device's turn that came back started a second omp instead of joining the one already holding its session, and the session stalled.
+- A sign-in callback that arrived while its relay was closing got no answer; it now gets 409.
+- Windows: the next setup removes the temporary banner folder the last one left, and `OMPdesk.exe`'s file version is the app's version.
+
+## [0.132.1] - 2026-11-17
+
+Windows에서 0.131.0의 업데이트가 0.132.0을 설치한 뒤 0.131.0으로 되돌아가던 문제를 고쳤어요.
+
+### 고친 것
+- Windows 설치 프로그램이 새 폴더를 점검할 때 Tauri 앱에는 없는 이전 화면 엔진 파일을 찾아, 모든 업데이트를 미완성으로 보고 이전 앱을 되살렸어요. 이제 Tauri 앱이 실제로 쓰는 파일만 확인해요. 되돌린 판은 기록해 두어 자동 업데이트가 같은 판을 계속 다시 설치하지 않아요(앱이 약 1분마다 꺼졌다 켜지던 증상).
+- Windows 업데이트가 끝날 때 설치 프로그램이 가끔 비정상 종료하던 문제를 고쳤어요. 설치와 새 앱 시작은 이미 끝난 뒤라 화면에 보이거나 업데이트가 실패하지는 않았어요.
+- 스톡 omp 18.22.0의 새 설정(디스어셈블러, Ghidra, 종료 시 워크트리 강제 제거)에 한국어 설명을 넣었어요.
+
+<!-- en -->
+
+Windows updates from 0.131.0 no longer install 0.132.0 and then fall back to 0.131.0.
+
+### Fixed
+- The Windows setup's check of the new folder looked for a file of the previous rendering engine that the Tauri app does not have, judged every update incomplete and restored the old app. It now checks the files the Tauri app actually uses. A version that was rolled back is recorded, so the automatic update no longer reinstalls it over and over (the app quit and restarted about once a minute).
+- The Windows setup sometimes crashed as it closed after an update. Installing and starting the new app had already finished, so nothing showed on screen and no update failed.
+- Korean text for the settings stock omp 18.22.0 adds (disassembler, Ghidra, force-removing worktrees on exit).
+
+## [0.132.0] - 2026-11-17
+
+데스크톱 창을 Electron 대신 Rust(Tauri 2)와 운영체제 기본 웹뷰로 바꿨어요. 기존 세션, 계정, 원격 기능과 설정은 그대로 이어서 써요.
+
+### 바뀐 것
+- 창·메뉴·트레이 등 데스크톱 기능은 Rust(Tauri 2.12)가 맡고, 화면은 macOS의 WebKit과 Windows의 WebView2로 그려요. 이번 첫 교체판은 기존 Node 서비스를 함께 사용하며, 나머지 Rust 전환은 이어서 진행해요.
+- 이제 macOS 14 이상이 필요해요.
+- Preview 패널은 앱에 함께 들어 있는 서명된 Chromium 계열 브라우저(Brave)를 별도 프로필로 실행해서 보여 줘요.
+- 기존 앱의 자동 업데이트와 사용자 데이터 경로를 유지해요. 시작에 실패한 교체판은 이전 앱으로 되돌려요.
+- 셸의 이벤트 연결이 바뀌거나 버퍼에서 이벤트가 빠지면 목록·대화·대기 요청을 다시 읽어요. 페이지를 새로고침하거나 초안·대기 메시지를 지우지 않아요.
+- 종료 중에는 새 core 실행을 막고 이미 시작한 프로세스의 종료를 기다려요. 중첩된 중지 요청도 같은 종료 결과를 기다려요.
+- 프로젝트 선택과 보조 질문 화면은 첫 화면 이후에 불러와요. 보조 질문을 불러오지 못해도 원문과 다시 시도·취소를 표시하며, Ask 전에는 실행하지 않고 Escape로 본 작업을 중단하지 않아요.
+- 세션마다 정한 프록시(업데이트 확인 등)와 서버·프록시의 로그인 요구(401·407)를 Windows에서도 Electron처럼 처리해요. 설정 화면의 도구 경로가 좁은 창에서 옆으로 넘치지 않고, 사이드 패널은 마지막 너비로 바로 열려요.
+- 중단된 작업의 예약 재시도가 같은 실패를 매번 새 실패로 읽어 걸리지 않던 문제와, 취소한 뒤에도 대기가 남던 문제를 고쳤어요.
+- 스톡 omp 18.21.0을 지원해요. 새 설정의 한국어 설명과 Modal 공급자 표식을 넣었고, 18.21.0에서 빠지던 다이어그램(Mermaid·SVG) 안내를 다시 넣어요.
+- Preview에서 에이전트가 만든 시각화마다 쿠키 저장소를 따로 써요. 한 시각화가 쓴 쿠키를 다른 시각화나 같은 창의 웹 탭이 읽지 못해요.
+
+### 알려진 한계
+- 작성 창에 첨부한 파일은 원래 경로 대신 앱이 받아 둔 사본 경로로 전달돼요. 원래 경로 유지는 다음 판에서 돌아와요.
+- Preview 패널의 브라우저는 WebRTC의 직접 UDP 연결을 쓰지 않아요(주소 유출 방지).
+- 휴대폰에서 보는 Preview 화면은 1배 해상도로 보내요.
+- Windows에서 HEIC 사진을 읽으려면 Microsoft Store의 HEIF 이미지 확장이 필요해요.
+- 큰 사진(약 6MB 이상)이 있는 대화를 휴대폰에서 열면 연결이 되풀이해 끊길 수 있어요(0.131.0부터 있던 문제). Windows의 Playwright WebKit에서 재현했고 macOS의 Playwright WebKit에서는 재현되지 않았으며, 실제 iOS Safari에서는 확인하지 않았어요.
+- macOS 13에서의 동작은 확인하지 않았어요.
+
+<!-- en -->
+
+The desktop window now runs on Rust (Tauri 2) and the operating system's web view instead of Electron. Existing sessions, accounts, remote features and settings carry over.
+
+### Changed
+- Rust (Tauri 2.12) handles desktop windows, menus and the tray; the page is drawn by WebKit on macOS and WebView2 on Windows. This first replacement still uses the existing Node services; the remaining Rust migration continues separately.
+- macOS 14 or newer is now required.
+- The Preview panel runs a bundled, signed Chromium-based browser (Brave) in a separate profile.
+- Existing automatic updates and user-data paths are retained. A replacement that fails to start rolls back to the previous app.
+- A replaced shell event connection or an event-buffer gap triggers authoritative reads of lists, conversations and pending requests, without reloading the page or clearing drafts and queued messages.
+- Shutdown refuses new core launches and waits for processes already started. Overlapping stop requests wait for the same exit result.
+- Project selection and side questions load after the first screen. Failed side-question loads show the retained question with Retry and Cancel; nothing runs before Ask, and Escape does not stop the main turn.
+- A session's own proxy (update checks, for one) and a server's or proxy's login request (401, 407) work on Windows as they did in Electron. Tool paths in Settings no longer run sideways in a narrow window, and the side panel opens at its last width.
+- A scheduled retry of interrupted work read the same failure as a new one on every look and never armed, and a cancelled wait stayed on screen; both are fixed.
+- Stock omp 18.21.0 is supported: Korean text for its new settings, a mark for the Modal provider, and the diagram (Mermaid, SVG) guidance that went missing on 18.21.0.
+- Each visual an agent makes in Preview gets its own cookie jar: a cookie one visual sets cannot be read by another visual or by a web tab of the same window.
+
+### Known limits
+- Files attached in the composer reach omp by the path of the app's received copy, not their original path. Original paths return in a later release.
+- The Preview panel's browser makes no direct UDP WebRTC connections (so a page cannot learn local addresses).
+- The phone's view of Preview is streamed at 1x resolution.
+- Reading HEIC photos on Windows needs Microsoft's HEIF Image Extensions from the Store.
+- A conversation holding a large photo (about 6 MB or more) may keep reconnecting when opened on a phone (present since 0.131.0). Reproduced in Playwright's WebKit on Windows, not reproduced in Playwright's WebKit on macOS; not checked on a real iOS Safari.
+- Behaviour on macOS 13 was not checked.
+
+## [0.131.0] - 2026-11-15
+
+사용 한도에서 설정을 열 때 생기던 하단 공백을 고치고, 대화 끝에 작은 여백을 더했어요.
+
+### 바뀐 것
+- 사이드바 사용 한도 바로가기는 설정 본문 안에서만 이동해요. 설정을 열어도 사이드바와 설정 화면이 위로 밀려 하단에 공백이 생기지 않아요.
+- 마지막 메시지와 입력창 사이에 8px 여백을 더했어요. 입력창 위치와 메시지 사이 간격은 그대로이며, 새 메시지 따라가기와 과거 대화의 읽던 위치를 유지해요.
+
+<!-- en -->
+
+Fixed the bottom gap when opening settings from usage limits and added a small space at the end of a conversation.
+
+### Changed
+- The sidebar usage shortcut scrolls only the settings content. Opening settings no longer displaces the sidebar and settings panes, leaving a blank area below.
+- Added 8px between the last message and composer without moving the composer or changing message spacing. Following new messages and the reading position in earlier history are preserved.
+
+## [0.130.2] - 2026-11-15
+
+모바일 원격의 상태 경고와 재접속 시 화면 복구 오류를 수정했어요.
+
+### 고친 것
+- 일시적인 연결 끊김을 omp 중단으로 잘못 표시하지 않아요. 실제 응답 정지는 계속 감지해요.
+- 같은 기기의 다른 페이지에서 분할 화면을 바꾼 뒤 돌아와도, 현재 화면 안의 탭으로 다시 연결해요.
+- stock omp의 Antigravity CLI 공급자에 기존 브랜드 아이콘을 표시해요.
+
+<!-- en -->
+
+Fixed status warnings and view recovery when reconnecting from the mobile web app.
+
+### Fixed
+- A temporary connection drop no longer reports a working omp session as unavailable. Persistent unresponsiveness is still detected.
+- Returning after another page changes the same device's split view reconnects to a tab inside the current view.
+- The stock Antigravity CLI provider uses its existing brand icon.
+
+## [0.130.1] - 2026-11-15
+
+삭제 중인 세션이 다시 열리거나, 늦게 도착한 목록 응답으로 삭제한 행이 돌아오는 문제를 고쳤어요.
+
+### 고친 것
+- 세션 삭제가 성공하면 이전 목록 읽기와 캐시 버전을 무효화해요. 삭제 전에 시작한 읽기가 나중에 끝나도 세션 행이나 스냅샷에 다시 넣지 않아요.
+- 세션 삭제를 기다리는 동안 연결된 기기의 열기 요청을 거절해요. 삭제가 실패하면 대기 상태를 풀고 삭제 기록을 남기지 않아요.
+- Chutes 공급자에 브랜드 아이콘을 표시해요.
+- 새 omp 설정의 한국어 이름과 설명을 추가했어요. 전역에서만 바꿀 수 있는 목록 설정은 프로젝트 설정에서 전역 값으로 승격하지 못하게 했어요.
+
+<!-- en -->
+
+This fixes session opens during deletion and deleted rows returning through late list replies.
+
+### Fixed
+- Successful deletion invalidates earlier list reads and cache versions. A read started before deletion cannot put the row back into the list or its snapshot.
+- Paired-host open requests are refused while deletion is pending. Failed deletion releases the pending state without recording a tombstone.
+- Chutes now shows its brand icon.
+- New omp settings have Korean labels and descriptions. Global-only list settings are no longer editable through project settings.
+
+## [0.130.0] - 2026-11-14
+
+여러 계정의 사용 한도를 한눈에 보고, OpenRouter 모델 목록을 접어 탐색할 수 있어요.
+
+### 바뀐 것
+- 사이드바의 계정별 한도와 리셋 시간을 압축된 행으로 모았어요. 긴 계정명은 줄이고 전체 식별자는 접근 가능한 이름과 툴팁에 남겨요. 사용 중·제한 상태는 짧게 표시하고 순위와 문장형 설명은 없앴어요. 한도 수치와 계정 선택 기능은 그대로예요.
+- 채팅 모델 선택창의 OpenRouter 목록은 처음에 접혀 있어요. 검색하면 일치하는 모델이 나타나고, 펼친 목록은 models.dev에 기록된 출시일의 최신순으로 보여요. 출시일을 모르는 모델은 뒤에 두며 현재 모델과 최근 사용 모델도 계속 고를 수 있어요.
+- 대화와 할 일의 복사 서식은 복사할 때 불러와요. 첫 화면에서 복사 기능의 서식을 미리 불러오지 않아요.
+- 공식 저장소·업데이트·문제 신고 링크를 `seuput-inc/ompdesk`로 맞췄어요. 이전 업데이트 주소도 계속 작동해요.
+
+### 개발 검사
+- 검사 실행은 GitHub가 반환한 정확한 실행 ID로 추적해요. macOS 실행 자리가 비어 있어도 다른 세션의 대기 요청을 덮어쓰지 않아요.
+
+<!-- en -->
+
+Account limits fit in compact rows, and the OpenRouter model list can stay folded.
+
+### Changed
+- The sidebar groups each account's limits and reset times into compact rows. Long account names are shortened, with the full identifier in the accessible name and tooltip. Short marks replace rank and explanatory sentences. Limit figures and account selection remain available.
+- OpenRouter starts folded in the chat model picker. Search reveals matching models, and the expanded list sorts by the release date recorded in models.dev, newest first. Models without a known release date stay last. Current and recent models remain available.
+- Transcript and todo copy formatting loads when you copy instead of with the first screen.
+- Repository, update, and issue links now use `seuput-inc/ompdesk`. Previous update addresses still work.
+
+### Development checks
+- Check dispatches track the exact run ID returned by GitHub. A free macOS lane no longer permits replacing another session's pending request.
+
+## [0.129.0] - 2026-11-14
+
+좁은 사이드바에서 사용 한도가 세션 목록을 밀어내고 차단 안내가 잘리던 회귀를 고쳤어요.
+
+### 고친 것
+- 사용 한도 전체 높이를 제한하고 계정 목록만 안에서 스크롤해요. 좁은 폭에서도 한도와 리셋 시간을 모두 읽을 수 있고, 사용 중 계정의 차단 안내는 설정 줄 위에 남아요. 계정 선택이나 정보를 숨기지 않아요.
+- 세션에서 모델을 바꿔도 전역 기본 모델을 덮어쓰지 않아요. 새 세션은 모델 역할의 기본값으로 시작해요.
+- Windows 에이전트 셸에서 `ompdesk` 런처가 실행되지 않던 것을 고쳤어요. WSL의 `run --heavy`는 Linux 명령을 돌리면서 Windows와 같은 자리 풀을 쓰고, 중첩 호출은 바깥 자리를 재사용해요.
+- `ompdesk check`가 완료 직후 마지막 판정 로그를 놓치지 않아요. 원격 기기의 연결 시도가 주소를 찾는 동안 새 연결 알림을 받았을 때 이전 시도의 시간으로 끊기던 것도 고쳤어요.
+- 작업 폴더가 없으면 git 실행 파일이 없다는 말 대신 해당 폴더가 없다고 알려요. 네이티브 빌드는 PATH의 Homebrew cargo 대신 저장소가 고정한 Rust 툴체인을 찾아요.
+
+### 바뀐 것
+- 채팅 왼쪽 턴 눈금은 한 번에 20개만 보여요. 위의 이전 항목으로 앞선 턴을 보고, 스크롤하면 현재 턴의 눈금이 따라와요.
+- 푸시 전에 바뀐 파일의 정적 검사를 실행해요. 형식 검사는 작은 작업으로 나눠 돌리고 입력이 같은 확정 결과를 재사용해요. session-listing의 빠른 변이 검사는 탭 변경 2회 범위로 줄였고, 3회 설정은 깊은 검사에 남겼어요.
+- 부하에 따라 흔들리던 시험의 동기화를 고치고 벽시계 성능 단정을 벤치마크로 옮겼어요.
+
+사용 한도 화면은 샘플 계정으로 이 컴퓨터·연결된 컴퓨터·휴대폰을 대조했어요. 실제 계정 정보는 시험 자료에 넣지 않았어요.
+
+<!-- en -->
+
+This fixes the regression where usage filled a narrow sidebar and cut off the blocked-account notice.
+
+### Fixed
+- The usage block has a height limit and scrolls only its account list. Limits and reset times remain readable at narrow widths, and the in-use account's blocked notice stays above Settings. Account selection and information remain available.
+- Picking a session model no longer overwrites the global default role. New sessions start with that role's default.
+- The `ompdesk` launcher now works in the Windows agent shell. Under WSL, `run --heavy` runs a Linux command using the same slot pool as Windows. Nested calls reuse the outer slot.
+- An attached `ompdesk check` no longer misses its final verdict log. A peer wake during address lookup no longer ends a fresh connection attempt using the previous attempt's time.
+- A missing working folder is named instead of being reported as a missing git executable. Native builds resolve the repository's pinned Rust toolchain instead of a Homebrew cargo first on PATH.
+
+### Changed
+- The chat turn rail shows 20 ticks at a time. The earlier item opens preceding turns, and scrolling keeps the current turn in view.
+- Pushes run static checks on changed files. Formal checks run as smaller jobs and reuse settled verdicts on identical inputs. The fast session-listing mutation check now covers 2 tab changes; the 3-change configuration remains in the deep checks.
+- Load-sensitive tests use explicit synchronization, and a wall-clock performance assertion is now a benchmark.
+
+The usage view was compared on this computer, a paired computer and a phone using sample accounts. No real account details were included in the test data.
+
+## [0.128.0] - 2026-11-14
+
+설정 맨 위에서 다른 컴퓨터의 설정을 한 번에 볼 수 있고, 사이드바에서 모든 계정의 사용량과 세션이 그 계정에 있는 이유를 볼 수 있어요.
+
+### 새 기능
+- 설정 맨 위에 기기 알약이 생겼어요. 알약을 누르면 연결된 다른 컴퓨터의 설정이 바로 보여요. 알약으로 다른 기기의 탭으로 옮겨도 설정 페이지는 그대로 열려 있어요.
+- 사이드바의 사용량 블록이 모든 계정을 설정처럼 프로바이더별로 묶어 보여 줘요. 묶음은 접을 수 있고 기억돼요. 계정이 많으면 블록 안에서 스크롤돼요. 세션이 쓰는 계정에는 표시가 붙고, 그 줄에 세션이 왜 그 계정에 있는지 적혀요. 긴 주소는 줄바꿈되고, 사이드바 너비에 맞춰 게이지 열 수가 정해져요.
+- 계정 전환 규칙이 한 가지로 정리됐어요. 몇 시간 도는 세션은 전에는 429를 맞아야 계정을 옮겼어요. 이제 모델 응답이 끝날 때마다(세션당 1분에 한 번 이하) 같은 판단을 다시 해요. 5시간 사용량이 85%에 닿았거나 다 쓴 계정이거나 다른 계정이 8배 빨리 줄 때만 옮기고, 하위 에이전트가 도는 동안이나 어느 쪽 사용량이든 읽을 수 없을 때는 옮기지 않아요. 옮겼든 안 옮겼든 판단마다 이유 코드와 두 계정의 상태가 실행 기록에 남아요.
+- 통계 › 사용량에 계정 아래 한 줄이 생겼어요. 마지막 판단(옮겼어요, 한도에 가까워요, 차이가 작아요, 턴 도중이에요, 사용량을 읽을 수 없어요, 고정돼 있어요 등)을 한국어와 영어로 보여 줘요. 새로고침은 이제 캐시 나이와 상관없이 바로 새로 읽어서 답해요.
+- 계정 전환은 이제 그 세션의 모델에 쓸 창이 다 찼거나 거의 찬 계정으로는 옮기지 않아요. 전에는 모델 전용 주간 한도가 찬 계정으로 세 번 옮겨 갔다가 첫 요청에서 429를 맞았어요.
+- 디스크 관리가 더 많은 것을 치워요. 탭마다 세션 전용 임시 폴더(`~/.cache/ompdesk/scratch`, Windows는 `%LOCALAPPDATA%\ompdesk\scratch`)가 생기고, 에이전트가 /tmp나 홈 폴더 대신 거기에 파일을 만들어요. 세션이 지워지거나 3일 동안 쓰이지 않으면 답변에 나온 파일만 남기고 치워요. 일반 `git worktree add`로 OMPdesk 밖에 만든 연결된 워크트리도 3일 쉬고 있으면 빌드 결과를 지워요. Bun 설치 캐시, Bun 변환 캐시, npm 캐시도 한 표의 한도에 맞춰 줄여요. 디스크 줄의 (i) 풍선은 줄바꿈을 그대로 보여 줘요.
+- 디스크가 가득 차도 앱이 죽지 않아요. 설정과 창 상태, 코어의 저장소를 쓰다 공간이 없으면 내용을 메모리에 쥐고 5초에서 60초 간격으로 다시 저장해요. 모든 창과 연결된 휴대폰 화면에 경고 토스트가 한 번 뜨고, 저장되면 사라져요. 전에는 저장 중 오류가 처리되지 않은 예외로 올라와 OS 충돌 창이 뜰 수 있었어요.
+- 에이전트가 무거운 명령과 테스트를 `ompdesk run --heavy`와 `ompdesk check`로 돌려요. 컴퓨터의 무거운 작업 칸 수를 함께 쓰고, 디스크 공간이 모자라면 기다리고, 디스크가 차기 전에 멈추고, 출력은 앞뒤만 남겨요. 입력이 같으면 이전 결과를 다시 쓰고, 불안정한 테스트는 따로 두어요. 작업 보고의 Pace가 재사용을 세요.
+- 저장소 잠금도 같은 칸을 써서 한 컴퓨터에서 무거운 작업이 한꺼번에 몰리지 않아요.
+- `ompdesk_session_send`, `ompdesk_report`, `ompdesk_session_answer`가 첨부를 받아요. 파일이나 호출한 세션의 최근 그림(1이 가장 새것)이에요. 호출한 쪽의 omp가 직접 읽어서, 연결된 컴퓨터에서 호출해도 그 컴퓨터의 바이트가 넘어가요. 하나에 10 MiB까지고 같은 바이트는 한 번만 보내요. 그림은 받는 세션에 그림으로 가고, 다른 파일은 받는 컴퓨터에 놓여 메시지에 이름이 적혀요. 한 세션에 붙여 넣은 스크린샷이 다른 세션에는 말로 옮겨 적힌 설명으로만 가던 것이 없어졌어요.
+
+### 고친 것
+- 새 버전이 시작되지 못하면 mac 업데이트가 이전 앱을 되돌려 줘요. 새 앱은 첫 화면을 그린 뒤에만 시작됐다고 표시해요. 120초 안에 표시가 없으면 새 앱의 프로세스를 끝내고 이전 앱을 제자리에 옮겨 다시 열어요. 창은 뜨지 않아요. 시작에 실패한 버전은 기억해 두고 자동 설치가 건너뛰어요.
+- 달러 표시가 든 글이 수식으로 그려지지 않아요. "$149 … $26"처럼 가격 두 개 사이의 글이 수식으로 바뀌어 공백이 사라지고 카드 밖으로 넘치던 것을 고쳤어요. 열기 뒤에 공백이 없고 닫기 앞에 공백이 없고 닫기 뒤에 숫자가 없을 때만 수식이에요. 수식이 든 문단은 넘치지 않고 옆으로 스크롤돼요.
+- 다른 세션의 답을 기다리기만 하는 세션을 todo 알림이 깨우지 않아요. 새 메인 세션도 갚아야 할 알림 없이 시작해요. 알림 턴이 위의 답을 그대로 되풀이하면 그 아래에 접혀요.
+- 에이전트 메시지가 받는 쪽의 막는 대기를 끝내요. `ompdesk_session_result {wait}`는 조종 메시지, 보고, 하위 세션의 질문 카드, 사람의 입력이 세션에 닿으면 바로 돌아오고, 보낸 쪽 영수증에 무슨 일이 일어날지 적혀요. 질문 카드가 열려 있으면 메시지는 언제나 후속으로 쌓이고 카드를 닫지 않아요. 이전 보고를 다시 받아 거절한 경우에도 질문의 턴은 그대로 남아요.
+- 느린 omp(재시작 후 부하가 큰 컴퓨터)에서 프로토콜 협상이 늦어지면 `ompdesk_*` 도구 없이 준비 상태가 되던 것을 고쳤어요. 도구는 협상 결과와 상관없이 등록돼요.
+- 다른 기기의 에이전트 세션 때문에 들어온 프로젝트가 그 세션이 지워진 뒤에도 사이드바에 남던 것을 고쳤어요. 사람이 열거나 추가한 프로젝트는 세션이 없어도 남아요. 동기화로 찾은 프로젝트는 마지막 세션과 함께 떠나요(고정한 것은 남아요). 이전 OMPdesk가 저장한 목록은 출처를 알 수 없어서 아무것도 스스로 떠나지 않아요. 세션 목록을 읽을 수 없으면 아무것도 지우지 않아요.
+- Windows에서 앱이 죽고 남은 omp를 다음 실행이 끝내지 못하던 것을 고쳤어요. 이제 남은 omp를 부모 id와 시작 시각으로 찾아 하위 프로세스까지 끝내요. PowerShell을 쓰지 않아서 omp 기록이 훨씬 빨라요.
+- 일정을 저장하는 순간 앱을 종료하면 일정이 일정 파일에 안 남을 수 있던 것을 고쳤어요. 종료가 코어가 저장을 끝낼 때까지(최대 8초) 기다려요.
+- 원격 연결이 SSH 포트가 아직 이전 연결에 잡혀 있을 때 "사용 중"으로 멈추지 않고 다시 시도해요. 이쪽에서 닫은 연결은 상대가 먼저 떠나도 `local`로 끝나요.
+- 이 컴퓨터 자신의 수신 주소로는 호스트에 연결하지 않아요.
+- 메모리 클라이언트가 https 서버 주소를 다시 읽고 리디렉션을 따라가요.
+- omp 18.20.0의 새 설정과 프로바이더 표시의 한국어 문구를 고쳤어요.
+- 라이선스 고지에서 특정 OS에만 있는 패키지를 빼서 모든 OS가 같은 파일을 확인해요. 빌드 자산을 보관할 때 임시 폴더에 복사본이 남지 않아요.
+- 코어의 소켓에서 두 덩어리에 걸쳐 나뉜 여러 바이트 글자(한국어 폴더 경로, 이어 보낸 프롬프트)가 깨져 나오던 것을 고쳤어요. 이제 덩어리 경계를 넘어 글자를 풀어요.
+- 시작에 실패한 버전이 종료할 때 다시 설치되지 않고, 더 새 릴리스가 있으면 그것으로 바뀌어요. 평소 종료는 시작 실패로 묶인 버전의 교체를 시작하지 않고, Windows에서는 묶여 있는 동안 종료 시 설치와 자동 내려받기가 꺼져요. 직접 확인하거나 백그라운드 확인을 하면 더 새 릴리스를 찾아 내려받아요.
+- 멈춘 Autopilot 단계가 이제 자기가 시작한 프로세스(git 실행과 합치기 점검)를 끝내고, 프로세스가 끝난 뒤에만 보고해요. "올리고 멈추기"는 메인의 시계로 시각을 적어서, Windows에서 선택 직후에 시작한 사이클이 선택 이전으로 세어지지 않아요.
+- 에이전트가 질문 카드에 답할 때 메모를 넣기 전에 질문을 먼저 잡아 두어서 그 사이에 다른 답이 끼어들지 않아요. 계획 승인은 바로 그 계획을 잡아요. 메모의 응답이 사라지면 첨부가 세션에 들어갔을 수 있고 답은 보내지 않았다고 알려 주고, 같은 답을 다시 보내면 메모는 한 번만 들어가요. 연결된 기기도 호스트의 같은 단계로 답하고 같은 잠금을 받아요. 연결된 탭은 호스트의 계획 세대를 받아요.
+- 앱의 코어 프로세스가 다시 시작된 뒤에 생기던 문제를 고쳤어요. 휴대폰 짝 맺기에서 한 기기를 승인하면 다른 기기의 요청이 승인될 수 있었어요. 이제 답은 물어본 코어에게만 가고, 이전 코어가 들고 있던 승인 요청은 거절돼요. 휴대폰 화면이 실시간 갱신을 다시 받고, 컴퓨터 사이 공유가 앱을 다시 켜지 않아도 다시 열려요. 메모리 동기화, 원격 파일 전달, 모바일 웹, 정리 작업의 답도 물어본 코어에게만 가요.
+
+### 바뀐 것
+- 앱의 여러 부분이 Rust 코어로 옮겨졌어요. 눈에 띄는 변화는 이렇게 하나예요. 앱이 닫히면 코어가 만든 프로세스도 함께 끝나고, 응답이 길어져도 메인이 덜 멈춰요(답변이 길수록 부담이 제곱으로 늘던 파싱을 줄였어요). 옮겨진 곳은 탭 배치와 이어하기, 연결 감시, 에이전트 제어, Autopilot(단계, 올리기 대기열, git 점검, 합치기 점검), GitHub 로그인, 설치 감독, 휴대폰 웹 페이지와 푸시, 원격 링크의 암호화, 일정이에요. 사용 방법은 그대로예요.
+- 휴대폰 화면이 처음 뜰 때 받는 양이 줄었어요. 사이드바 사용량 블록의 묶음 코드는 세션 목록과 함께 나중에 받아요.
+
+아직 실제로 확인하지 못한 것이 있어요. 계정 전환과 디스크 가득 참 처리, 업데이트 되돌리기는 가짜 omp, 가짜 디스크 오류, 시험용 설치 폴더로만 확인했고 실제 프로바이더의 한도, 실제로 가득 찬 디스크, 실제로 시작 못 하는 새 버전으로는 일으켜 보지 않았어요. Autopilot을 포함해 Rust 코어로 옮긴 부분은 TypeScript가 남긴 기록과 같은 답이 나오는지를 테스트로 맞췄고, 실제 앱에서 오래 돌려 보지는 않았어요. 세션 사이 첨부는 테스트와 가짜 omp로만 확인했고, 컴퓨터 두 대의 실제 세션 둘 사이에 그림을 보내 보지는 않았어요. macOS 27에서 키체인 읽기는 확인하지 못한 채 나가요. 사이드바 사용량의 많은 계정 화면은 지어낸 주소로 만든 가짜 사용량으로만 봤어요.
+
+<!-- en -->
+
+Settings now has device pills at the top for another computer's settings, and the sidebar shows every account's usage and why a session is on its account.
+
+### New
+- Settings has device pills at the top. A click shows a paired computer's settings. Moving to another device's tab with the pills leaves the Settings page open.
+- The sidebar usage block lists every account, grouped by provider like Settings. Groups fold and are remembered. A long list scrolls inside the block. The account a session uses is marked and its row says why the session is on it. A long address wraps, and the number of gauge columns follows the sidebar's width.
+- Account moves follow one rule. Before, a session that ran for hours only moved after a 429. Now the same decision runs after every model response (at most once a minute per session). It moves only when the account is at the 85% 5-hour step or spent, or another account drains 8 times faster. It never moves while a subagent runs or when either account's usage cannot be read. Every decision, moved or not, writes a log line with its reason code and both accounts' facts.
+- Stats › Usage shows one line under the account in use: the last decision (moved, near limit, within margin, mid-turn, usage unreadable, pinned, and so on), in Korean and English. Refresh now reads fresh at once whatever the age of the cache.
+- A session is never moved onto an account whose window for its model is spent or nearly full. Before, a move landed three times on an account whose model-specific weekly cap was full and got a 429 on its first request.
+- Disk care cleans more. Each tab gets a scratch folder for the files it makes only to do its work (`~/.cache/ompdesk/scratch`, `%LOCALAPPDATA%\ompdesk\scratch` on Windows), and the agent uses it instead of /tmp or the home folder. It is removed when its sessions are deleted, or after three idle days, except the files a reply names. Linked worktrees made with a plain `git worktree add` outside OMPdesk lose their build output after three idle days. Bun's install and transpiler caches and npm's cache are kept within a limit from one table. The Disk row's (i) bubble keeps its line breaks.
+- A full disk no longer crashes the app. When settings, window state or the core's stores cannot be written for lack of space, the content is kept in memory and saved again every 5 to 60 seconds. One warning toast appears in every window and on the paired phone page, and goes away once everything is saved. Before, a failed save could reach main as an uncaught exception and show the OS crash dialog.
+- Agents run heavy commands and test suites through `ompdesk run --heavy` and `ompdesk check`. They share the computer's heavy slots, wait for disk space, stop before a disk fills, and keep only the head and tail of the output. A run on the same inputs is reused, and flaky tests are set apart. Pace in the work report counts reuse.
+- The repository lock takes its slot from the same pool, so heavy work does not pile up on one computer.
+- `ompdesk_session_send`, `ompdesk_report` and `ompdesk_session_answer` take attachments: a file or one of the caller's own recent pictures (1 is the newest). The caller's own omp reads each one, so a caller on a paired computer hands over its own computer's bytes. Each is at most 10 MiB and the same bytes are sent once. Pictures arrive as pictures in the receiving session; any other file is put on the receiver's computer and named in the message. A screenshot pasted into one session no longer reaches another as a retyped description.
+
+### Fixed
+- A Mac update that fails to start gets the previous app back. The new app marks itself as started once its first page loads. With no mark after 120 seconds, the helper ends the new app's processes, moves the previous app back and reopens it, with no dialog. A version that failed to start is remembered and the automatic install skips it.
+- Text with dollar signs is no longer drawn as math. The text between two prices such as "$149 … $26" turned into math, lost its spaces and ran past a card's border. Math now needs a non-space after the opener, a non-space before the closer and no digit after it. A paragraph with inline math scrolls sideways instead of overflowing.
+- The todo reminder no longer wakes a session that only waits on another session's reply. A new main session starts with no reminder owed. A reminder turn that only repeats the answer above folds under it.
+- An agent message ends its receiver's blocking wait. `ompdesk_session_result {wait}` returns at once when a steer, a report, a child's question card or the person's prompt reaches its session, and the sender's receipt says what will happen. A message to a session with an open card is always a follow-up and never closes the card. A refused replay of an older report leaves its question's turn as it was.
+- A slow omp (a loaded machine after a relaunch) whose protocol negotiation came late used to be ready with no `ompdesk_*` tools. The tools are now registered whether or not the negotiation answers in time.
+- A project that only another device's agent sessions had brought into the sidebar stayed after those sessions were deleted. A project the person opened or added stays with no session. A project found by sync leaves with its last session unless pinned. A list stored by an older OMPdesk has no origins, so none of its projects leaves by itself. If the session list cannot be read, nothing is dropped.
+- On Windows, a launch now ends the omp a dead app left behind. It finds it by its parent id and start time and ends it with its tree, with no PowerShell, so recording an omp is much faster.
+- A schedule saved as the app quit could be missing from the schedule file. The quit now waits for the core to write it, up to 8 seconds.
+- A remote reconnect asks again for the local SSH port its own closed ssh may still hold, instead of stopping as "taken". A link this side closed ends as `local` even when the peer leaves first.
+- OMPdesk no longer dials a host on this computer's own listening address.
+- The memory client reads https server addresses again and follows redirects.
+- Korean text and the provider mark for the new settings and provider of omp 18.20.0.
+- The license notices leave out platform-only packages, so every OS checks the same file. Keeping a build's assets leaves no copies in the temp folder.
+- A multibyte character split between two chunks on the core's socket came out garbled (Korean folder paths, resumed prompts). The core now decodes the text across chunk boundaries.
+- A version that failed to start is no longer installed by a quit, and a newer release replaces it. An ordinary quit does not start a swap for a version held as start-failed, and on Windows the install at quit and the automatic download are off while it is held. A manual or background check still finds the newer release and stages it.
+- A stopped Autopilot step now ends the processes it started (its git runs and the land check) and reports only after they exited. "Ship, then stop" is dated by main's clock, so on Windows a cycle that started just after the choice no longer counts as before it.
+- An agent's answer to a question card claims the question before its note goes in, so no other answer lands between. A plan approval claims that very plan. If the reply to a note is lost, the answer says the attachments may have reached the session and the answer was not sent, and sending it again adds the note once. A paired device answers through the host's one step and meets the same claims, and a paired tab gets the plan generation of its host.
+- Problems after the app's core process restarted are fixed. Approving one device in phone pairing could approve another device's request; answers now go only to the core that asked, and approvals the old core held are declined. The phone page gets live updates again, and sharing between computers opens again without relaunching the app. Memory sync, remote file transfer, Mobile web and upkeep answers also go only to the core that asked.
+
+### Changed
+- Parts of the app moved into the Rust core. What a person notices: the core's processes end with the app, and main stalls less while a long reply streams (parsing a reply used to grow with its square). Moved parts: the saved tab layout and turn resume, the connectivity monitor, agent control, Autopilot (its steps, ship queue, git audit and land check), the GitHub sign-in, the setup supervisor, the phone web page and Web Push, the remote link's crypto and framing, and schedules. How you use them is the same.
+- The phone page's first screen loads less: the sidebar usage block's grouping code now arrives with the session list, later.
+
+Some of this has not been seen for real. Account moves, the full-disk handling and the update rollback were checked against a fake omp, injected disk errors and a test install folder. No real provider limit, no really full disk and no really failing new version was triggered. The parts moved to the Rust core, Autopilot included, were checked by tests that match the TypeScript's recorded answers, not by running the real app for long. Attachments between sessions were checked with tests and a fake omp, not with a picture sent between two real sessions on two computers. The macOS 27 keychain read ships unchecked. The sidebar's many-accounts view was seen only with a fake usage of made-up addresses.
+
 ## [0.127.0] - 2026-11-12
 
 한도 오류로 멈춘 턴이 이제 버튼을 누르지 않아도 한도가 풀리면 스스로 이어져요.

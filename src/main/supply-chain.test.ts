@@ -7,13 +7,21 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { MIN_OMP_VERSION } from "./omp-runtime";
 
 const ROOT = path.resolve(__dirname, "../..");
 const WORKFLOWS = path.join(ROOT, ".github/workflows");
 const MIN_RELEASE_AGE_SECONDS = 3 * 24 * 60 * 60;
 
 interface Workflow {
-	jobs?: Record<string, { steps?: { uses?: string; with?: Record<string, unknown> }[] }>;
+	jobs?: Record<
+		string,
+		{
+			uses?: string;
+			with?: Record<string, unknown>;
+			steps?: { uses?: string; with?: Record<string, unknown> }[];
+		}
+	>;
 }
 
 function setupBunVersions(): { file: string; job: string; version: unknown }[] {
@@ -48,15 +56,55 @@ describe("supply chain", () => {
 		expect(new Set(uses.map(use => use.version)).size, "workflows pin different Bun versions").toBe(1);
 	});
 
-	it("every workflow's global omp install is exempt from the release hold, so CI tests the newest omp", () => {
-		let installs = 0;
+	it("workflows install omp only through install-omp, and only omp-latest's run asks for another than the tested", () => {
+		// The newest omp, read once by omp-latest.yml's plan job so every job of the run tests the same one. Its vitest
+		// jobs are omp-vitest.yml, which installs what its caller names and has no other caller.
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, matched as written
+		const NEWEST = "${{ needs.plan.outputs.latest }}";
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression, matched as written
+		const HANDED = "${{ inputs.omp }}";
+		const other: string[] = [];
+		const callers: string[] = [];
+		let uses = 0;
 		for (const file of fs.readdirSync(WORKFLOWS).filter(name => /\.ya?ml$/.test(name))) {
-			for (const line of fs.readFileSync(path.join(WORKFLOWS, file), "utf8").split("\n")) {
-				if (!/^\s*bun install -g\b.*@oh-my-pi\/pi-coding-agent/.test(line)) continue;
-				installs++;
-				expect(line, file).toContain("--minimum-release-age 0");
+			const text = fs.readFileSync(path.join(WORKFLOWS, file), "utf8");
+			expect(text, `${file} installs omp itself`).not.toMatch(
+				/bun (?:install|add) -g\b[^\n]*@oh-my-pi\/pi-coding-agent/,
+			);
+			const workflow = parse(text) as Workflow;
+			for (const [job, { uses: called, with: given, steps = [] }] of Object.entries(workflow.jobs ?? {})) {
+				if (called === "./.github/workflows/omp-vitest.yml") {
+					expect(given?.omp, `${file} › ${job}`).toBe(NEWEST);
+					callers.push(file);
+				}
+				for (const step of steps) {
+					if (step.uses !== "./.github/actions/install-omp") continue;
+					uses++;
+					const version = step.with?.version ?? "tested";
+					if (version === "tested") continue;
+					expect(version, `${file} › ${job}`).toBe(file === "omp-vitest.yml" ? HANDED : NEWEST);
+					other.push(file);
+				}
 			}
 		}
-		expect(installs).toBeGreaterThan(0);
+		expect(uses).toBeGreaterThan(0);
+		expect([...new Set(other)].sort()).toEqual(["omp-latest.yml", "omp-vitest.yml"]);
+		expect([...new Set(callers)]).toEqual(["omp-latest.yml"]);
+	});
+
+	it("the tested omp is one exact version the app accepts, and install-omp installs exactly it", () => {
+		const tested = JSON.parse(fs.readFileSync(path.join(ROOT, "src/shared/omp-tested.json"), "utf8")) as {
+			version: string;
+		};
+		expect(tested.version).toMatch(/^\d+\.\d+\.\d+$/);
+		const parts = (version: string) => version.split(".").map(Number);
+		const [a, b] = [parts(tested.version), parts(MIN_OMP_VERSION)];
+		const order = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+		expect(order, `tested ${tested.version} is older than MIN_OMP_VERSION ${MIN_OMP_VERSION}`).toBeGreaterThanOrEqual(
+			0,
+		);
+		const action = fs.readFileSync(path.join(ROOT, ".github/actions/install-omp/action.yml"), "utf8");
+		expect(action).toContain("@oh-my-pi/pi-coding-agent@$(jq -er .version src/shared/omp-tested.json)");
+		expect(action).toContain("--minimum-release-age 0");
 	});
 });

@@ -36,8 +36,8 @@ use super::text::{
     transcript_ending, transcript_page, waits,
 };
 use super::types::{
-    ControlTab, DeviceState, ListArgs, ReadArgs, ResultArgs, StoredSession, TabStatus, Target,
-    running_agent_count,
+    ControlTab, DeviceState, ListArgs, ReadArgs, ResultArgs, StoredSession, StoredWork, TabStatus,
+    Target, running_agent_count,
 };
 use super::util::join;
 
@@ -122,7 +122,8 @@ impl AgentControl {
         let wanted: Vec<&ControlTab> = tabs
             .iter()
             .filter(|tab| {
-                (app || tab.here)
+                // Mine is every session the caller opened, in whichever window it went to.
+                (app || mine || tab.here)
                     && match &device {
                         None => true,
                         Some(None) => tab.device.as_deref().is_none_or(str::is_empty),
@@ -384,7 +385,7 @@ impl AgentControl {
             .map_or_else(String::new, |last| {
                 format!("\n  last answer: {}", one_line(last, SUMMARY_CHARS))
             });
-        let kind = if waits(tab) {
+        let kind = if waits(tab) || tab.host_work() == Some(StoredWork::Waiting) {
             "waiting"
         } else if line.starts_with("running") || line.starts_with("starting") {
             "running"
@@ -413,8 +414,9 @@ impl AgentControl {
         {
             return fail("status filters open sessions; leave it out with scope stored.");
         }
+        let state = self.host.state();
         let opened: HashSet<String> = self
-            .opened_by(&self.host.state(), &caller.tab_id, tabs)
+            .opened_by(&state, &caller.tab_id, tabs)
             .into_iter()
             .collect();
         let held: HashSet<&str> = tabs
@@ -433,7 +435,11 @@ impl AgentControl {
             .into_iter()
             .filter(|row| {
                 folder.is_none_or(|folder| row.cwd.contains(folder))
-                    && (args.mine != Some(true) || held.contains(row.path.as_str()))
+                    // Mine: open in a tab the caller opened, or a child of its whose tab closed (the same rule as a
+                    // delete of its own needing no card).
+                    && (args.mine != Some(true)
+                        || held.contains(row.path.as_str())
+                        || self.own_closed(&state, caller, &row.path, row.device.as_deref()))
             })
             .collect();
         // Newest first; the sort is stable, as `Array.prototype.sort` is.
@@ -571,8 +577,14 @@ impl AgentControl {
         let session = self.session_state(tab).await;
         let state = self.host.state();
         let line = self.state_line(&state, tab, &session);
-        let settled =
-            line == "idle" || line.starts_with("stopped") || line.starts_with("not started");
+        // An asleep tab here on a session its paired host runs: settled as that host's tab is.
+        let host_work = tab.host_work();
+        let settled = match host_work {
+            Some(work) => matches!(work, StoredWork::Idle | StoredWork::Waiting),
+            None => {
+                line == "idle" || line.starts_with("stopped") || line.starts_with("not started")
+            }
+        };
         let todos = session
             .state
             .as_ref()
@@ -582,7 +594,23 @@ impl AgentControl {
         } else {
             ""
         };
-        let body = match session.last.as_deref().filter(|last| !last.is_empty()) {
+        let mut last = session.last.clone().filter(|last| !last.is_empty());
+        // No omp here to ask: once the host's tab settled, its saved file there says what it answered.
+        if last.is_none()
+            && settled
+            && host_work.is_some()
+            && let Some(path) = tab.session_path.as_deref().filter(|path| !path.is_empty())
+        {
+            let messages = self
+                .host
+                .stored_messages(&self.tab_row(tab, path))
+                .await
+                .unwrap_or_default();
+            last = transcript_ending(&messages)
+                .last
+                .filter(|last| !last.is_empty());
+        }
+        let body = match last.as_deref() {
             Some(last) => cut(last, per_answer),
             None => "(no answer yet)".to_owned(),
         };

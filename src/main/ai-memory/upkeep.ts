@@ -15,9 +15,8 @@
  * Only what a person typed is read: a subagent's or an agent-opened session carries an agent's words, and ai-memory's
  * server redacts secrets before they are stored.
  *
- * This file keeps the timers (each tick and each repair is one request to the core) and answers what the core asks of
- * main: in production the omp to run (`omp`); a test's fake client, model, rules and clock are asked for through
- * `core-asks.ts`.
+ * The native memory service schedules the repair and ticks. This client supplies the current settings and the
+ * launch-scoped repair claim (a replacement core must not repeat it). Tests can also run either operation directly.
  */
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,14 +26,11 @@ import { type AskHandler, answerAsks, type CoreSide, collatorLocale, coreSide, o
 import type { DistillMessage, ModelResult, OmpLaunch } from "./distill-model";
 import type { RetitleClient, RetitleReport } from "./retitle";
 
-export const UPKEEP_TICK_MS = 15 * 60_000;
 // The core's own schedule (engine.rs): the tests drive its clock with these.
 /** A conversation is read once its person has been quiet this long. */
 export const UPKEEP_IDLE_MS = 10 * 60_000;
 export const UPKEEP_MIN_GAP_MS = 60 * 60_000;
 export const UPKEEP_DAILY_MAX = 6;
-/** The first tick waits so the first tab and the wiring have the machine to themselves. */
-const FIRST_TICK_MS = 2 * 60_000;
 /** A tick is the model call (the core's 180 s limit) and the reads and writes around it; a repair reads every project. */
 const TICK_TIMEOUT_MS = 300_000;
 const REPAIR_TIMEOUT_MS = 600_000;
@@ -60,8 +56,6 @@ export interface UpkeepDeps {
 	rules?: (cwd: string) => Promise<string>;
 	/** The clock the core reads while a request runs (a test drives it); the system's without it. */
 	now?: () => number;
-	tickMs?: number;
-	firstTickMs?: number;
 }
 
 export type TickOutcome =
@@ -87,82 +81,43 @@ export type TickOutcome =
 
 export class MemoryUpkeep {
 	readonly #deps: UpkeepDeps;
-	readonly #service = serviceName();
+	readonly service = serviceName();
 	readonly #side: CoreSide;
-	#timer: NodeJS.Timeout | null = null;
-	#first: NodeJS.Timeout | null = null;
+	readonly #stopAsks: () => void;
+	readonly #stopLog: () => void;
 	#repaired = false;
-	#disposed = false;
-	/** Ends the answers of the core's asks and the log lines of this service; null before the first request. */
-	#unlisten: (() => void) | null = null;
 
 	constructor(deps: UpkeepDeps) {
 		this.#deps = deps;
 		const answers: Record<string, AskHandler> = {};
 		const { model, rules, omp } = deps;
+		answers.settings = () => this.#request("nativeServer");
+		answers.claimRepair = () => {
+			if (this.#repaired) return false;
+			this.#repaired = true;
+			return true;
+		};
 		if (model) answers.model = params => model((params as { message: DistillMessage }).message);
 		if (rules) answers.rules = params => rules((params as { cwd: string }).cwd);
 		if (omp) answers.omp = () => omp();
 		this.#side = coreSide(deps.client, answers);
-	}
-
-	/** The server answers: repair once per launch, then keep the schedule. */
-	ready(): void {
-		if (this.#disposed) return;
-		if (!this.#repaired) {
-			this.#repaired = true;
-			void this.repair();
-		}
-		if (this.#timer) return;
-		this.#first = setTimeout(() => void this.#safeTick(), this.#deps.firstTickMs ?? FIRST_TICK_MS);
-		this.#first.unref();
-		this.#timer = setInterval(() => void this.#safeTick(), this.#deps.tickMs ?? UPKEEP_TICK_MS);
-		this.#timer.unref();
-	}
-
-	/** The server is gone (Memory turned off, stopped): nothing runs until `ready()` again. */
-	pause(): void {
-		clearTimeout(this.#first ?? undefined);
-		clearInterval(this.#timer ?? undefined);
-		this.#first = null;
-		this.#timer = null;
+		this.#stopAsks = answerAsks(this.service, this.#side.handlers);
+		this.#stopLog = onLog(this.service, (message, details) => deps.log(message as UpkeepLogMessage, details));
 	}
 
 	dispose(): void {
-		this.#disposed = true;
-		this.pause();
-		if (!this.#unlisten) return;
-		this.#unlisten();
-		this.#unlisten = null;
-		// What the core remembered of this service goes with it; a core that is gone has nothing to forget.
-		void core()
-			.call("upkeep.close", { service: this.#service })
-			.catch(() => {});
-	}
-
-	async #safeTick(): Promise<void> {
-		try {
-			await this.tick();
-		} catch (error) {
-			this.#deps.log("failed", { step: "learn", detail: error instanceof Error ? error.message : String(error) });
-		}
+		this.#stopAsks();
+		this.#stopLog();
+		const host = core();
+		const generation = host.generation;
+		if (generation) void host.call("upkeep.close", { service: this.service }, { generation }).catch(() => {});
 	}
 
 	/** One request's members: the service, what main answers and the server, where the model runs, the files and the clock. */
-	#request(): Record<string, unknown> {
-		if (!this.#unlisten) {
-			const stopAsks = answerAsks(this.#service, this.#side.handlers);
-			const stopLog = onLog(this.#service, (message, details) =>
-				this.#deps.log(message as UpkeepLogMessage, details as UpkeepLogDetails),
-			);
-			this.#unlisten = () => {
-				stopAsks();
-				stopLog();
-			};
-		}
+	#request(nativeServer?: "nativeServer"): Record<string, unknown> {
 		return {
-			service: this.#service,
-			...this.#side.wire(),
+			service: this.service,
+			...this.#side.wire(nativeServer),
 			locale: collatorLocale(),
 			stateFile: this.#deps.stateFile,
 			modelCwd: this.#deps.modelCwd ?? join(tmpdir(), "ompdesk-memory-upkeep"),

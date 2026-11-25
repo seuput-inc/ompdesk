@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -7,8 +5,10 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDispatcher } from "../../resources/gui-bridge/stock-helper/dispatch";
+import type { TerminalOperation, TerminalShell, TerminalSnapshot } from "../shared/terminal-types";
 import { core } from "./core/process";
 import { StockHelper, type StockHelperOptions } from "./stock-helper";
+import { terminalTestHelper } from "./terminal/test-helper";
 
 let dir: string;
 const helpers: StockHelper[] = [];
@@ -34,8 +34,12 @@ import { createDispatcher } from ${JSON.stringify(dispatch)};
 appendFileSync(process.env.WORKER_PIDS, process.pid + "\\n");
 // slow takes real time; gated runs until the test writes "release", so a helper timeout cuts it short
 // whatever the machine's load does to either side's timers.
+const releaseOnCancel = Promise.withResolvers();
+let holdReplies = false;
 const methods = {
 	fast: () => "ok",
+	holdReplies: () => { holdReplies = true; },
+	untilCancel: () => releaseOnCancel.promise,
 	slow: async () => {
 		await new Promise(done => setTimeout(done, 300));
 		writeFileSync(${JSON.stringify(path.join(dir, "slow-done"))}, "");
@@ -48,33 +52,48 @@ const methods = {
 	},
 	mutate: params => { appendFileSync(${JSON.stringify(path.join(dir, "mutations"))}, params + "\\n"); return "mutated"; },
 	record: params => { appendFileSync(${JSON.stringify(path.join(dir, "order"))}, params + "\\n"); return params; },
+	// Loads a module of the omp under test, by its path, as the stock helper loads omp's own.
+	omp: async params => (await import(params)).version,
 	hang: () => new Promise(() => {}),
 };
 const input = createInterface({ input: process.stdin });
 input.on("close", () => process.exit(0));
-const dispatch = createDispatcher(methods, line => process.stdout.write(line + "\\n"), false);
-// Every withdrawal the worker read, so a test can release a gate only once the worker knows what to skip.
+const dispatch = createDispatcher(methods, line => {
+	if (!holdReplies) process.stdout.write(line + "\\n");
+}, false);
+// Release the head inside the worker, only after the dispatcher registered the queued request's cancellation.
 input.on("line", line => {
-	if (line.includes('"cancel"')) appendFileSync(${JSON.stringify(path.join(dir, "cancels"))}, line + "\\n");
+	const canceled = line.includes('"cancel"');
+	if (!canceled) appendFileSync(${JSON.stringify(path.join(dir, "handed"))}, JSON.parse(line).method + "\\n");
 	dispatch(line);
+	if (canceled) releaseOnCancel.resolve("released");
 });
 `,
 	);
 	return script;
 }
 
-async function helperOnWorker(requestTimeoutMs: number, options: Omit<StockHelperOptions, "launch"> = {}) {
+/** `ompRoot`: a fake omp package in a fake install, stamped as production stamps one; else one file stands for it. */
+async function helperOnWorker(
+	requestTimeoutMs: number,
+	options: Omit<StockHelperOptions, "launch"> = {},
+	ompRoot: string = dir,
+) {
 	const script = await workerScript();
 	const pids = path.join(dir, `pids-${helpers.length}`);
 	// What stands for omp's package.json: its time and size are what identifies the installed omp.
-	const stampFile = path.join(dir, "omp-package.json");
+	const stampFile = path.join(ompRoot, "package.json");
 	let installs = 0;
-	const install = (version: string) => fs.writeFile(stampFile, version + " ".repeat(++installs));
+	const install = (version: string) => fs.writeFile(stampFile, JSON.stringify({ version }) + " ".repeat(++installs));
 	await install("18.18.9");
 	const helper = new StockHelper(dir, {
 		requestTimeoutMs,
 		...options,
-		launch: async () => ({ bin: "bun", args: [script], env: { ...process.env, WORKER_PIDS: pids }, stampFile }),
+		launch: async () => ({
+			bin: "bun",
+			args: [script],
+			env: { ...process.env, WORKER_PIDS: pids, OMP_PACKAGE_ROOT: ompRoot },
+		}),
 	});
 	helpers.push(helper);
 	// Started before a test's timed part: a request's timeout runs through its worker's start, and a cold
@@ -119,31 +138,29 @@ describe("StockHelper request timeout", () => {
 	});
 
 	it("never runs a queued mutation whose caller already timed out, and its acknowledged withdrawal keeps the worker", async () => {
-		const { helper, workers } = await helperOnWorker(250, { recycleGraceMs: 2000 });
-		const gated = helper.request("gated", {});
-		const gatedTimedOut = expect(gated).rejects.toThrow("timed out");
-		const mutate = helper.request("mutate", "late");
+		const { helper, workers } = await helperOnWorker(30_000, { recycleGraceMs: 2000 });
+		const gated = helper.request("untilCancel", {});
+		const mutate = helper.request("mutate", "late", { timeoutMs: 250 });
 		await expect(mutate).rejects.toThrow("timed out");
-		await gatedTimedOut;
-		// Both withdrawals reach the worker through its stdin pipe, which on a loaded Windows runner arrives after
-		// the release file below (release run 39918441333 ran "late"): the gate opens once the worker has read them.
-		await vi.waitFor(
-			async () =>
-				expect(
-					(await fs.readFile(path.join(dir, "cancels"), "utf8").catch(() => "")).trim().split("\n"),
-				).toHaveLength(2),
-			{ timeout: 10_000 },
-		);
-		// The withdrawn mutation sits behind the gated request; once that ends it must be skipped. The lane is
-		// serial, so the fresh mutation is answered only after the late answer and the withdrawal.
-		await fs.writeFile(path.join(dir, "release"), "");
-		await expect(helper.request("mutate", "fresh", { timeoutMs: 30_000 })).resolves.toBe("mutated");
+		await expect(gated).resolves.toBe("released");
+		await expect(helper.request("mutate", "fresh")).resolves.toBe("mutated");
 		expect(await fs.readFile(path.join(dir, "mutations"), "utf8")).toBe("fresh\n");
-		// Past both graces: the skipped mutation was acknowledged, so nothing counts as hung. A real wait: the
-		// grace is the helper's own timer on a real worker process, which fake timers cannot drive.
+		// The real core's grace expires even if its test client is descheduled after receiving the timeout.
 		await sleep(2100);
 		expect(workers()).toHaveLength(1);
 		expect(gone(workers()[0])).toBe(false);
+	});
+
+	it("recycles for a queued timeout before the running request's own deadline", async () => {
+		const { helper, workers } = await helperOnWorker(30_000, { recycleGraceMs: 150 });
+		const running = helper.request("gated", {});
+		const queued = helper.request("mutate", "late", { timeoutMs: 150 });
+		await Promise.all([
+			expect(queued).rejects.toThrow("timed out"),
+			expect(running).rejects.toThrow('restarted: "mutate" hung'),
+		]);
+		await vi.waitFor(() => expect(gone(workers()[0])).toBe(true), { timeout: 10_000 });
+		await expect(fs.readFile(path.join(dir, "mutations"))).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
 	it("recycles the stock worker when a request hangs past its timeout plus the grace, and starts afresh lazily", async () => {
@@ -209,6 +226,28 @@ describe("StockHelper request timeout", () => {
 		await rejected;
 	});
 
+	it("stops with unread replies without undoing a completed mutation or starting one behind a blocked handler", async () => {
+		const { helper, workers } = await helperOnWorker(30_000);
+		const answers = Promise.allSettled([
+			helper.request("holdReplies", {}),
+			helper.request("mutate", "applied"),
+			helper.request("gated", {}),
+			helper.request("mutate", "still queued"),
+		]);
+		await vi.waitFor(
+			() => {
+				expect(readFileSync(path.join(dir, "gated-started"), "utf8")).toBe("gated\n");
+				expect(readFileSync(path.join(dir, "handed"), "utf8")).toMatch(/gated\nmutate\n$/);
+			},
+			{ timeout: 10_000 },
+		);
+		await helper.stop();
+		for (const answer of await answers)
+			expect(answer).toMatchObject({ status: "rejected", reason: { message: "Stock helper stopped" } });
+		await vi.waitFor(() => expect(gone(workers()[0])).toBe(true), { timeout: 10_000 });
+		expect(await fs.readFile(path.join(dir, "mutations"), "utf8")).toBe("applied\n");
+	});
+
 	it("ends an idle worker once every request it was sent is answered, and starts a fresh one on the next", async () => {
 		const { helper, workers } = await helperOnWorker(5000, { worker: "extensions", idleExitMs: 150 });
 		await vi.waitFor(() => expect(gone(workers()[0])).toBe(true), { timeout: 10_000 });
@@ -248,12 +287,55 @@ describe("StockHelper request timeout", () => {
 			expect(workers()).toHaveLength(2);
 			await install("18.19.1");
 			const queued = helper.request("fast", {});
+			// The core judges the change when the request reaches it: released before that, the gated answer can reach
+			// the core first, the queued request then finds the worker idle and starts a fresh one (run 43487785919).
+			// It reached the core once the worker it holds was handed it.
+			await vi.waitFor(() =>
+				expect(readFileSync(path.join(dir, "handed"), "utf8").trim().split("\n").slice(-2)).toEqual([
+					"gated",
+					"fast",
+				]),
+			);
 			await fs.writeFile(path.join(dir, "release"), "");
 			await expect(gated).resolves.toBe("gated");
 			await expect(queued).resolves.toBe("ok");
 			expect(workers()).toHaveLength(2);
 			await expect(helper.request("fast", {})).resolves.toBe("ok");
 			expect(workers()).toHaveLength(3);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("starts a fresh worker once an omp install it started in the middle of has finished", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			// bun install -g wrote omp's own package first, then its dependencies, then the install's lockfile
+			// (18 Nov 2026, 06:59:53-56: a worker started at 54.5 failed every session open after).
+			const install = path.join(dir, "install");
+			const scope = path.join(install, "node_modules", "@oh-my-pi");
+			const root = path.join(scope, "pi-coding-agent");
+			await fs.mkdir(root, { recursive: true });
+			await fs.writeFile(path.join(install, "package.json"), "{}");
+			await fs.writeFile(path.join(install, "bun.lock"), "old");
+			await fs.writeFile(
+				path.join(root, "index.ts"),
+				'import { version as ai } from "@oh-my-pi/pi-ai";\nexport const version = "agent+" + ai;\n',
+			);
+			const { helper, workers } = await helperOnWorker(30_000, {}, root);
+			const entry = path.join(root, "index.ts");
+			await expect(helper.request("omp", entry)).rejects.toThrow("Cannot find package '@oh-my-pi/pi-ai'");
+			// The install finishes: Bun remembers the failed resolution for the life of the process, so only a
+			// fresh worker sees the package.
+			await fs.mkdir(path.join(scope, "pi-ai"));
+			await fs.writeFile(path.join(scope, "pi-ai", "package.json"), '{"name":"@oh-my-pi/pi-ai","main":"index.ts"}');
+			await fs.writeFile(path.join(scope, "pi-ai", "index.ts"), 'export const version = "18.22.1";\n');
+			await fs.writeFile(path.join(install, "bun.lock"), "new lock");
+			await expect(helper.request("omp", entry)).resolves.toBe("agent+18.22.1");
+			expect(workers()).toHaveLength(2);
+			// Nothing moved since: the fresh worker stays.
+			await expect(helper.request("fast", {})).resolves.toBe("ok");
+			expect(workers()).toHaveLength(2);
 		} finally {
 			warn.mockRestore();
 		}
@@ -389,49 +471,97 @@ describe("createDispatcher", () => {
 });
 
 describe("stock helper terminals", () => {
+	let helper: StockHelper;
+	beforeEach(async () => {
+		helper = await terminalTestHelper(dir);
+		helpers.push(helper);
+	});
+	const request = (operation: TerminalOperation, owner = "a") =>
+		helper.request<TerminalSnapshot[]>("terminal.request", { owner, cwd: dir, operation });
+
 	it("builds one terminal service for overlapping first requests, so dispose reaches every PTY", async () => {
-		// A stand-in for stock's pi-natives: PtySession counts constructions and kills.
-		const natives = path.join(dir, "node_modules", "@oh-my-pi", "pi-natives");
-		await fs.mkdir(natives, { recursive: true });
-		await fs.writeFile(path.join(dir, "package.json"), "{}");
-		await fs.writeFile(
-			path.join(natives, "package.json"),
-			JSON.stringify({ name: "@oh-my-pi/pi-natives", version: "0.0.0", main: "index.js" }),
-		);
-		await fs.writeFile(
-			path.join(natives, "index.js"),
-			`globalThis.ptyKills = 0;
-export class PtySession {
-	startArgv() { return new Promise(() => {}); }
-	write() {}
-	resize() {}
-	kill() { globalThis.ptyKills++; }
-}
-`,
-		);
-		const script = path.join(dir, "terminals-race.ts");
-		const terminals = path.resolve("resources/gui-bridge/stock-helper/terminals.ts");
-		await fs.writeFile(
-			script,
-			`import { disposeTerminals, methods } from ${JSON.stringify(terminals)};
-const create = owner => methods["terminal.request"]({ owner, cwd: ${JSON.stringify(dir)}, operation: { action: "create", cols: 80, rows: 24 } });
-await Promise.all([create("a"), create("b")]);
-disposeTerminals();
-process.stdout.write(String(globalThis.ptyKills));
-`,
-		);
-		const child = spawn("bun", [script], { env: { ...process.env, OMP_PACKAGE_ROOT: dir } });
-		let out = "";
-		let err = "";
-		child.stdout.on("data", chunk => {
-			out += chunk;
-		});
-		child.stderr.on("data", chunk => {
-			err += chunk;
-		});
-		const [code] = await once(child, "close");
-		expect(err).toBe("");
-		expect(code).toBe(0);
-		expect(out).toBe("2");
+		await Promise.all(["a", "b"].map(owner => request({ action: "create", cols: 80, rows: 24 }, owner)));
+		await helper.stop();
+		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("xx");
+	});
+
+	it("closes a paired tab's first PTY when it is disposed during worker startup", async () => {
+		const owner = "peer:fixture:tab";
+		await Promise.all([
+			request({ action: "create", cols: 80, rows: 24 }, owner),
+			helper.request("terminal.dispose", { owner }),
+		]);
+		expect(await request({ action: "list" }, owner)).toEqual([]);
+		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("x");
+	});
+
+	it("orders named peer creates around disposal and selects only an exact listed shell path", async () => {
+		const { result: shells } = await core().call<TerminalShell[]>("terminal.shells");
+		const shell = shells[shells.length - 1];
+		expect(shell).toBeDefined();
+		const nearMatch = shell.path === shell.path.toUpperCase() ? shell.path.toLowerCase() : shell.path.toUpperCase();
+		expect(shells.map(entry => entry.path)).not.toContain(nearMatch);
+		const owner = { deviceId: "first", rtab: "shared-tab" };
+		const other = { ...owner, deviceId: "second" };
+		const launchLog = path.join(dir, "launches");
+		const create = (peer: typeof owner, shellPath: string, cols: number) =>
+			helper.request<TerminalSnapshot[]>("terminal.create", {
+				owner: peer,
+				operation: { action: "create", shell: shellPath, cols, rows: 31 },
+				cwd: dir,
+				env: { STOCK_TEST_LAUNCH_LOG: launchLog },
+			});
+		const peerRequest = (peer: typeof owner, operation: TerminalOperation) =>
+			helper.request<TerminalSnapshot[]>("terminal.peerRequest", { owner: peer, operation, cwd: dir, env: {} });
+
+		const [{ id: otherId }] = await create(other, shell.path, 81);
+		const [first, , later] = await Promise.all([
+			create(owner, shell.path, 82),
+			helper.request("terminal.peerDispose", { owner }),
+			create(owner, nearMatch, 83),
+		]);
+		expect(first).toMatchObject([{ cols: 82 }]);
+		expect(later).toMatchObject([{ cols: 83 }]);
+		const [{ id }] = later;
+		expect(id).not.toBe(first[0].id);
+		expect(await fs.readFile(path.join(dir, "kills"), "utf8")).toBe("x");
+		const launches = (await fs.readFile(launchLog, "utf8")).trimEnd().split("\n");
+		expect(launches.map(line => JSON.parse(line))).toEqual([
+			{ application: shell.path, args: shell.args, cwd: dir, cols: 81, rows: 31 },
+			{ application: shell.path, args: shell.args, cwd: dir, cols: 82, rows: 31 },
+			{
+				application: path.join(dir, "worker-default"),
+				args: process.platform === "win32" ? [] : ["-l"],
+				cwd: dir,
+				cols: 83,
+				rows: 31,
+			},
+		]);
+		await peerRequest(owner, { action: "write", id, data: "\ud800" });
+		expect(await peerRequest(owner, { action: "list" })).toMatchObject([{ id, output: "\ud800", offset: 1 }]);
+		expect(await peerRequest(other, { action: "list" })).toMatchObject([{ id: otherId, output: "", exited: false }]);
+	});
+
+	it("reads each viewer's UTF-16 budget across worker replies, restarts, clears and retention cuts", async () => {
+		const [{ id }] = await request({ action: "create", cols: 80, rows: 24 });
+		const list = (from: number, budget: number) => request({ action: "list", offsets: { [id]: from }, budget });
+		const waiting = request({ action: "list", offsets: { [id]: 0 }, budget: 3, waitMs: 1000 });
+		await request({ action: "write", id, data: "ab😀cd\ud800" });
+		expect(await waiting).toMatchObject([{ id, output: "ab", offset: 2 }]);
+		expect(await list(2, 3)).toMatchObject([{ output: "😀c", offset: 5 }]);
+		expect(await list(5, 4)).toMatchObject([{ output: "d\ud800", offset: 7 }]);
+		expect(await list(3, 1)).toMatchObject([{ output: "\ude00", offset: 4 }]);
+		expect(await list(400, 4)).toMatchObject([{ output: "", offset: 7 }]);
+		expect(await request({ action: "list", offsets: {} })).toMatchObject([{ output: "", offset: 7 }]);
+		expect(await request({ action: "list" }, "b")).toEqual([]);
+		await request({ action: "restart", id });
+		expect(await request({ action: "list" })).toMatchObject([{ output: "ab😀cd\ud800", offset: 7 }]);
+		await request({ action: "clear", id });
+		expect(await request({ action: "list" })).toMatchObject([{ output: "", offset: 7 }]);
+		await request({ action: "write", id, data: "😀" });
+		await request({ action: "write", id, data: "x".repeat(999_999) });
+		expect(await list(0, 2)).toMatchObject([{ output: "\ude00x", offset: 10 }]);
+		await helper.request("terminal.dispose", { owner: "a" });
+		expect(await request({ action: "list" })).toEqual([]);
 	});
 });

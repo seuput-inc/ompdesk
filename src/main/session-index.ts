@@ -4,11 +4,9 @@
  *
  * What reads the sessions tree by OMPdesk's own rules is in the core process (`native/ompdesk/crates/core/src/sessions`):
  * the one recursive watch of the tree with its settle, the legacy chat flag read from a session file's head once per
- * session id, and which rows of a list are kept (one per session id). This file keeps who asks: the call into stock
- * for the list, the tombstones, a window's folder filter (node's `path.resolve`), the shared numbered copy
- * (`SessionListShare`, whose order and diff are `src/shared` code the page runs too) and the content search.
+ * session id, which rows are kept, and search text and excerpts. Main asks stock for the list and applies tombstones
+ * and the window's folder filter. The shared numbered copy uses the same order and diff as the page.
  */
-import { open, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { codedError } from "../shared/ipc-error-codes";
@@ -16,25 +14,14 @@ import type { SessionContentMatch, SessionInfo, SessionKind } from "../shared/ip
 import type { AgentMessage } from "../shared/rpc-types";
 import { compareSessionRows, type SessionListDelta, type VersionedSessionList } from "../shared/session-list-delta";
 import { agentDir } from "./agent-paths";
+import { directoryExists } from "./canonical-cwd";
 import { core } from "./core/process";
 import { deletedSessions } from "./deleted-sessions";
 import { OmpUnavailableError } from "./omp-availability";
-import { StampedLru } from "./session-cache";
 import { SessionListShare } from "./session-list-share";
 import { type Pace, readPace } from "./session-pace";
-import { contentSnippet } from "./session-snippet";
 import { StockSessionStore } from "./session-store";
 
-/** Per-file cap for full-content search reads; larger sessions match on this prefix. */
-const SEARCH_READ_BYTES = 8 * 1024 * 1024;
-/**
- * Total bytes of cached search text. Counted, not entry-counted: one entry can be
- * the full read cap, so an entry-count ceiling alone would allow ~8 MB × entries
- * of resident strings.
- */
-const SEARCH_CACHE_BYTES = 64 * 1024 * 1024;
-/** Files read concurrently during a content search (bounds FD pressure). */
-const SEARCH_BATCH = 16;
 /**
  * The OS starts delivering a moment after the watch is made: a file written in that moment is never reported, so the
  * shared list (read once per change) is read once more this long after the watch starts.
@@ -58,22 +45,18 @@ export class SessionIndex {
 	#subscriptions: Array<() => void> = [];
 	/** Whether the core says the tree is watched now. */
 	#watching = false;
-	/** The core process the watch was asked of (a core that ends takes its watches with it); null: none, or the ask failed. */
+	/** The core (its generation) the watch was asked of (a core that ends takes its watches with it); null: none, or the ask failed. */
 	#watchCore: number | null = null;
 	/** Whether a watch was asked for since `start()`: a second ask means an earlier watch was lost. */
 	#asked = false;
 	/** Changes may have gone unseen between two watches: reported as "anything" once the tree is watched again. */
 	#missed = false;
-	/** Whether the core may hold anything of this index. */
-	#inCore = false;
-	#textCache = new StampedLru<{ raw: string; lower: string }>(
-		SEARCH_CACHE_BYTES,
-		text => text.raw.length + text.lower.length,
-	);
+	/** A core that restarted needs stock's list again before it can search those rows. */
+	#listedGeneration: number | null = null;
 	#sessionsDir: string;
 	#cwd: string;
-	/** GUI-side chat labels for sessions whose header carries no kind (stock omp writes none). */
-	#isChat: (sessionId: string) => boolean;
+	/** The record of the GUI's chat sessions (`session-kinds.ts`), which the core reads while it labels rows; null: none. */
+	#kindsFile: string | null;
 	#store: StockSessionStore;
 	/** The global list, read once per change while the tree is watched and shared by every asker. */
 	readonly #share = new SessionListShare(() => this.#readAll());
@@ -94,13 +77,13 @@ export class SessionIndex {
 	constructor(
 		sessionsDir: string | undefined,
 		cwd: string,
-		isChat: (sessionId: string) => boolean = () => false,
+		kindsFile: string | null = null,
 		bridgeDir = resolve("resources/gui-bridge"),
 	) {
 		this.#sessionsDir = sessionsDir ?? join(agentDir(), "sessions");
 		this.#cwd = resolve(cwd);
-		this.#isChat = isChat;
-		this.#store = new StockSessionStore(this.#sessionsDir, bridgeDir);
+		this.#kindsFile = kindsFile;
+		this.#store = new StockSessionStore(this.#sessionsDir, bridgeDir, this.#id);
 		this.#share.onChange = delta => this.onListChange?.(delta);
 	}
 
@@ -136,16 +119,15 @@ export class SessionIndex {
 		this.#missed ||= this.#asked;
 		this.#asked = true;
 		this.#watching = false;
-		this.#inCore = true;
 		const asked = core().call("sessions.watch", { index: this.#id, root: resolve(this.#sessionsDir) });
-		const pid = core().pid;
-		this.#watchCore = pid;
+		const generation = core().generation;
+		this.#watchCore = generation;
 		asked.catch((error: unknown) => {
 			console.warn(
 				`[session-index] not watching ${this.#sessionsDir}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			// Unwatched, so every ask reads; the next ask (or the next core) asks for the watch again.
-			if (this.#watchCore === pid) this.#watchCore = null;
+			if (this.#watchCore === generation) this.#watchCore = null;
 		});
 	}
 
@@ -155,7 +137,7 @@ export class SessionIndex {
 	 */
 	#watched(): boolean {
 		if (!this.#started) return false;
-		if (this.#watchCore === null || core().pid !== this.#watchCore) {
+		if (this.#watchCore === null || core().generation !== this.#watchCore) {
 			this.#watch();
 			return false;
 		}
@@ -197,11 +179,7 @@ export class SessionIndex {
 			this.#notifyChange();
 			return;
 		}
-		for (const name of names) {
-			const path = join(this.#sessionsDir, name);
-			if (path.endsWith(".jsonl")) this.#textCache.delete(path);
-			this.onChange?.(path);
-		}
+		for (const name of names) this.onChange?.(join(this.#sessionsDir, name));
 		this.#share.changed();
 	}
 
@@ -214,16 +192,15 @@ export class SessionIndex {
 		this.#asked = false;
 		this.#missed = false;
 		// Only a running core holds anything of this index: none is started to forget nothing.
-		if (this.#inCore && core().pid !== null) {
+		if (core().generation !== 0) {
 			core()
 				.call("sessions.close", { index: this.#id })
 				.catch(() => {
 					// A core that ended has forgotten it already.
 				});
 		}
-		this.#inCore = false;
 		this.#store.stop();
-		this.#textCache.clear();
+		this.#listedGeneration = null;
 	}
 
 	/**
@@ -244,12 +221,12 @@ export class SessionIndex {
 
 	#shown(sessions: readonly SessionInfo[], scope: "local" | "global", cwd?: string): SessionInfo[] {
 		const localCwd = cwd !== undefined ? resolve(cwd) : this.#cwd;
-		const deleted = deletedSessions();
-		// A file a stray writer put back after its session was deleted is not that session coming back.
-		return sessions.filter(
-			info =>
-				!deleted.has(info.path) && (scope === "global" || (info.cwd != null && resolve(info.cwd) === localCwd)),
+		const inScope = sessions.filter(
+			info => scope === "global" || (info.cwd != null && resolve(info.cwd) === localCwd),
 		);
+		// A file a stray writer put back after its session was deleted is not that session coming back.
+		const deleted = deletedSessions().which(inScope.map(info => info.path));
+		return inScope.filter((_, at) => !deleted[at]);
 	}
 
 	/**
@@ -281,35 +258,44 @@ export class SessionIndex {
 	 * file's legacy chat flag.
 	 */
 	async #readAll(): Promise<SessionInfo[]> {
-		const deleted = deletedSessions();
-		const infos = (await this.#store.list()).filter(info => !deleted.has(info.path));
-		if (infos.length === 0) return infos;
+		const stored = await this.#store.list();
+		const deleted = deletedSessions().which(stored.map(info => info.path));
+		const infos = stored.filter((_, at) => !deleted[at]);
+		if (infos.length === 0 && (this.#listedGeneration === null || core().generation === 0)) {
+			this.#listedGeneration = null;
+			return infos;
+		}
 		infos.sort(compareSessionRows);
-		this.#inCore = true;
-		const { result } = await core().call("sessions.listed", {
+		const { result, generation } = await core().call("sessions.listed", {
 			index: this.#id,
+			root: resolve(this.#sessionsDir),
 			rows: infos.map(info => ({ path: info.path, id: info.id })),
+			kinds: this.#kindsFile,
 		});
+		this.#listedGeneration = generation;
 		return listedAnswer.parse(result).listed.flatMap(({ row, chat }) => {
 			const info = infos[row];
 			if (!info) return [];
-			if (chat || this.#isChat(info.id)) info.kind = "chat";
+			if (chat) info.kind = "chat";
 			return [info];
 		});
 	}
 
 	/**
-	 * GUI chat labels are an overlay: stock sessions have no chat-kind concept. The legacy one is a flag in the file's
-	 * header that stock's listing deliberately does not expose; the core reads it. Only this presentation overlay is
-	 * read there, never stock metadata or lifecycle.
+	 * GUI chat labels are an overlay: stock sessions have no chat-kind concept. The core reads the GUI's record of chat
+	 * sessions and, for older files, the legacy flag in the header that stock's listing deliberately does not expose.
+	 * Only this presentation overlay is read there, never stock metadata or lifecycle.
 	 */
 	async kindFor(sessionPath: string): Promise<SessionKind> {
 		try {
 			const infos = await this.#store.listDirectory(sessionPath);
 			const info = infos.find(row => resolve(row.path) === resolve(sessionPath));
 			if (!info) return "agent";
-			if (this.#isChat(info.id)) return "chat";
-			const { result } = await core().call("sessions.kind", { path: resolve(sessionPath) });
+			const { result } = await core().call("sessions.kind", {
+				path: resolve(sessionPath),
+				id: info.id,
+				kinds: this.#kindsFile,
+			});
 			return kindAnswer.parse(result).chat === true ? "chat" : "agent";
 		} catch {
 			return "agent";
@@ -333,7 +319,7 @@ export class SessionIndex {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
 		await this.#store.delete(target);
-		this.#textCache.delete(target);
+		this.#forgetText([target]);
 		this.#notifyChange();
 	}
 
@@ -346,13 +332,13 @@ export class SessionIndex {
 		return this.#store.owned(target);
 	}
 
-	async readMessages(sessionPath: string): Promise<AgentMessage[]> {
+	async readMessages(sessionPath: string, imageRefs?: boolean): Promise<AgentMessage[]> {
 		const target = resolve(sessionPath);
 		const root = `${resolve(this.#sessionsDir)}${sep}`;
 		if (!target.startsWith(root) || !target.endsWith(".jsonl")) {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
-		return this.#store.messages(target);
+		return this.#store.messages(target, imageRefs);
 	}
 
 	/** The pace of a stored session's journal (session-pace.ts); undefined when it cannot be read. */
@@ -373,68 +359,38 @@ export class SessionIndex {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
 		const target = resolve(cwd);
-		const info = await stat(target).catch(() => null);
-		if (!info?.isDirectory()) throw codedError("not_a_directory", `Not a directory: ${target}`);
+		if (!(await directoryExists(target))) throw codedError("not_a_directory", `Not a directory: ${target}`);
 		const moved = await this.#store.move(source, target);
-		this.#textCache.delete(source);
-		this.#textCache.delete(moved);
+		this.#forgetText([source, moved]);
 		this.#notifyChange();
 		return moved;
 	}
 
-	/**
-	 * Full-content search: the given session files whose raw JSONL text
-	 * contains every query token (case-insensitive), each with an excerpt of
-	 * the conversation around the first token. The match is deliberately a raw
-	 * grep — no JSON parsing — because tokens are matched individually, so JSON
-	 * escaping rarely breaks them. File text is cached by mtime:size so
-	 * debounced keystrokes only re-read files that changed.
-	 */
-	async searchContent(query: string, candidatePaths: string[]): Promise<SessionContentMatch[]> {
-		const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-		if (tokens.length === 0 || candidatePaths.length === 0) return [];
-		const matches: SessionContentMatch[] = [];
-		for (let i = 0; i < candidatePaths.length; i += SEARCH_BATCH) {
-			const batch = await Promise.all(
-				candidatePaths.slice(i, i + SEARCH_BATCH).map(async (path): Promise<SessionContentMatch | null> => {
-					const text = await this.#searchText(path);
-					if (text === null) return null;
-					for (const token of tokens) {
-						if (!text.lower.includes(token)) return null;
-					}
-					const snippet = contentSnippet(text.raw, text.lower, tokens);
-					return snippet === undefined ? { path } : { path, snippet };
-				}),
-			);
-			for (const hit of batch) {
-				if (hit !== null) matches.push(hit);
-			}
-		}
-		return matches;
+	#forgetText(paths: string[]): void {
+		if (this.#listedGeneration !== null)
+			core().push("sessions.forgetText", { index: this.#id, paths }, undefined, this.#listedGeneration);
 	}
 
-	/** Session-file text and its lowercase twin (capped at SEARCH_READ_BYTES), LRU-cached by mtime:size. */
-	async #searchText(filePath: string): Promise<{ raw: string; lower: string } | null> {
-		try {
-			const fileStat = await stat(filePath);
-			const signature = `${fileStat.mtimeMs}:${fileStat.size}`;
-			const cached = this.#textCache.get(filePath, signature);
-			if (cached !== null) return cached;
-			const fh = await open(filePath, "r");
-			try {
-				const length = Math.min(fileStat.size, SEARCH_READ_BYTES);
-				const buffer = Buffer.alloc(length);
-				await fh.read(buffer, 0, length, 0);
-				const raw = buffer.toString("utf-8");
-				const text = { raw, lower: raw.toLowerCase() };
-				this.#textCache.set(filePath, signature, text);
-				return text;
-			} finally {
-				await fh.close();
-			}
-		} catch {
-			return null;
+	/** Search only the caller's subset of stock's listed rows; file text stays in the core. */
+	async searchContent(query: string, candidatePaths: string[]): Promise<SessionContentMatch[]> {
+		if (!query.trim() || !candidatePaths.length) return [];
+		if (this.#listedGeneration !== core().generation) {
+			this.#share.stale();
+			if (!(await this.listShared()).version) return [];
 		}
+		if (this.#listedGeneration === null) return [];
+		// The normal core JSON encoder replaces lone surrogates. A JS substring can match either half of a pair.
+		const wireQuery = query.isWellFormed()
+			? query
+			: Array.from({ length: query.length }, (_, i) => query.charCodeAt(i));
+		return (
+			await core().call<SessionContentMatch[]>(
+				"sessions.search",
+				{ index: this.#id, query: wireQuery, paths: candidatePaths },
+				// A search reads its batches to completion even on a large tree, not just until the usual RPC deadline.
+				{ generation: this.#listedGeneration, timeoutMs: 0x7fff_ffff },
+			)
+		).result;
 	}
 
 	/** Anything may have changed. */

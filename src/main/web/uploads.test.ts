@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CoreError, core } from "../core/process";
-import { attachHere, LOCAL_UPLOAD_DEVICE, type StoredUpload, UPLOAD_TTL_MS, UploadError, UploadStore } from "./uploads";
+import { type StoredUpload, UPLOAD_TTL_MS, UploadError, UploadStore } from "./uploads";
 
 let userData: string;
 let root: string;
@@ -98,9 +98,6 @@ describe("UploadStore", () => {
 			expect(statSync(stored.path).mode & 0o777).toBe(0o600);
 			expect(statSync(join(stored.path, "..")).mode & 0o777).toBe(0o700);
 		}
-		expect(uploads.owns("dev1", stored.path)).toBe(true);
-		expect(uploads.owns("dev2", stored.path)).toBe(false);
-		expect(uploads.owns("dev1", join(root, "dev1", "..", "dev2", "x"))).toBe(false);
 	});
 
 	it("never lets a file name leave its folder", async () => {
@@ -171,25 +168,42 @@ describe("UploadStore", () => {
 			status: 404,
 		});
 	});
+
+	it("names the attached files a prompt mentions that are gone, and nothing outside the store", async () => {
+		const uploads = store();
+		const kept = await uploads.receive("dev1", await request("kept.pdf", new Uint8Array([1])));
+		const taken = await uploads.receive("dev1", await request("계약서.docx", new Uint8Array([2])));
+		await uploads.take("dev1", taken.path);
+		const outside = join(userData, "notes.md");
+		const text = `@"${kept.path}" 와 @"${taken.path}" 그리고 @${outside} 를 비교해줘`;
+		expect(await uploads.goneIn(text, userData)).toEqual(["계약서.docx"]);
+		expect(await uploads.goneIn(`@"${kept.path}" only`, userData)).toEqual([]);
+		// No upload named: nothing is asked, so the caller never waits.
+		expect(uploads.goneIn("no mentions at all", userData)).toBeNull();
+		expect(uploads.goneIn(`@${outside}`, userData)).toBeNull();
+	});
 });
 
 describe("attachHere", () => {
 	it("keeps a pathless file of this computer's own tab in its own folder, and says why when it cannot", async () => {
 		const uploads = store();
-		const kept = await attachHere(uploads, "clip.bin", new Uint8Array([1, 0, 2]));
+		const kept = await uploads.attachHere("clip.bin", new Uint8Array([1, 0, 2]));
 		if (!kept.ok) throw new Error(kept.error);
-		expect(kept.path).toContain(join(root, LOCAL_UPLOAD_DEVICE));
+		expect(kept.path).toContain(join(root, "this-computer"));
 		expect([...readFileSync(kept.path)]).toEqual([1, 0, 2]);
 
-		expect(await attachHere(uploads, "big.bin", new Uint8Array(fileMaxBytes + 1))).toMatchObject({
+		expect(await uploads.attachHere("empty.bin", new Uint8Array())).toEqual({ ok: false, error: "empty file" });
+		expect(await uploads.attachHere("big.bin", new Uint8Array(fileMaxBytes + 1))).toEqual({
 			ok: false,
+			error: "file too large",
 			code: "file_too_large",
 		});
-		await attachHere(uploads, "a.bin", new Uint8Array(fileMaxBytes));
-		await attachHere(uploads, "b.bin", new Uint8Array(fileMaxBytes));
+		await uploads.attachHere("a.bin", new Uint8Array(fileMaxBytes));
+		await uploads.attachHere("b.bin", new Uint8Array(fileMaxBytes));
 		// The day's room is spent: the composer says so instead of a raw error.
-		expect(await attachHere(uploads, "c.bin", new Uint8Array(fileMaxBytes))).toMatchObject({
+		expect(await uploads.attachHere("c.bin", new Uint8Array(fileMaxBytes))).toEqual({
 			ok: false,
+			error: "daily upload limit reached",
 			code: "upload_refused",
 		});
 	});

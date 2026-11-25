@@ -18,7 +18,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { AgentControlViewEvent } from "../../shared/agent-control";
+import type { AgentCloseAnswer, AgentControlViewEvent } from "../../shared/agent-control";
 import type {
 	IpcSignIn,
 	IpcSpawnTabPayload,
@@ -47,12 +47,13 @@ import { useForkHandoffStore } from "./fork-handoff";
 import { type MessagesStore, useMessagesStore } from "./messages";
 import { useModelStore } from "./model";
 import { usePlanApprovalStore } from "./plan-approval";
-import { useQueueStore } from "./queue";
+import { type QueueStore, useQueueStore } from "./queue";
 import { type SessionStore, useSessionStore } from "./session";
 import { sessionRuntime, sessionRuntimeStore, setFocusedSessionRuntime } from "./session-runtime-context";
 import { useSubagentsStore } from "./subagents";
 import { READY_WAIT_CAP_MS, tabReady } from "./tab-ready-gate";
 import { ensureTabRuntime } from "./tab-runtime";
+import * as tabsModule from "./tabs";
 import {
 	endTabSignIn,
 	isTabClosed,
@@ -127,6 +128,7 @@ interface MockOmp {
 		setView: Mock<
 			(tabId: string, ids: string[], split?: SplitLayout, remembered?: SplitLayout[]) => Promise<boolean>
 		>;
+		answerAgentClose: Mock<(answer: AgentCloseAnswer) => Promise<void>>;
 	};
 	events: {
 		onTabStatus: Mock<(callback: (payload: IpcTabStatusPayload) => void) => () => void>;
@@ -153,6 +155,7 @@ function installMockOmp(): { omp: MockOmp; emitTabStatus: TabStatusHandler } {
 			close: vi.fn(async () => true),
 			setActive: vi.fn(async () => true),
 			setView: vi.fn(async () => true),
+			answerAgentClose: vi.fn(async () => {}),
 		},
 		events: {
 			onTabStatus: vi.fn((callback: TabStatusHandler) => {
@@ -299,6 +302,31 @@ describe("tabs store boot reconciliation", () => {
 		const tabs = useTabsStore.getState().tabs;
 		expect(tabs).toHaveLength(1);
 		expect(tabs[0]?.title).toBe("Alpha");
+	});
+
+	it("keeps a tab's ready status when a tab list asked before its ready push answers after it", async () => {
+		// Cold start: the window lists its tabs while tab 0's omp starts; the answer still says `starting` and no file.
+		const answer = Promise.withResolvers<IpcTabInfo[]>();
+		omp.tabs.list.mockReturnValueOnce(answer.promise);
+		const reconciled = useTabsStore.getState().reconcileTabs();
+		useTabsStore.getState().applyTabStatus({ kind: "agent", tabId: "t0", cwd: "/alpha", status: "starting" });
+		useTabsStore.getState().applyTabStatus({
+			kind: "agent",
+			tabId: "t0",
+			cwd: "/alpha",
+			status: "ready",
+			sessionId: "s-new",
+			sessionPath: "/sessions/new.jsonl",
+		});
+		const runtime = sessionRuntime("t0");
+		answer.resolve([{ ...tabInfo("t0", "/alpha", "starting"), sessionPath: null, active: true, viewerCount: 2 }]);
+		await reconciled;
+
+		expect(useTabsStore.getState().tabs).toEqual([
+			expect.objectContaining({ id: "t0", status: "ready", sessionPath: "/sessions/new.jsonl", viewerCount: 2 }),
+		]);
+		expect(sessionRuntime("t0")).toBe(runtime);
+		expect(sessionRuntimeStore<SessionStore>("t0", "session")?.getState().status).toBe("ready");
 	});
 
 	it("keeps renderer-known tabs the reply misses and re-converges active on reload", async () => {
@@ -1659,7 +1687,10 @@ describe("tabs store background tab signals", () => {
 		seedTabs();
 		const session = sessionRuntimeStore<SessionStore>("t1", "session")!;
 		const shown = { attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: "529", startedAt: 1 };
-		session.setState({ retryInfo: shown, compactionInfo: { reason: "threshold", action: "compacting" } });
+		session.setState({
+			retryInfo: shown,
+			compactionInfo: { reason: "threshold", action: "compacting", startedAt: 1 },
+		});
 		const saga = { ...shown, startedAt: 5 };
 		const status = (retrySaga?: typeof saga) =>
 			useTabsStore
@@ -1821,6 +1852,120 @@ describe("tabs store background tab signals", () => {
 		expect(pending("t2")).toEqual(["new"]);
 	});
 
+	it("keeps a tab and its queued message created while a resync list is in flight", async () => {
+		seedTabs();
+		const listed = Promise.withResolvers<IpcTabInfo[]>();
+		omp.tabs.list.mockReturnValueOnce(listed.promise);
+		const resync = useTabsStore.getState().reconcileTabs({ resync: true });
+		useTabsStore.getState().applyTabStatus({ kind: "agent", tabId: "late", cwd: "/late", status: "ready" });
+		ensureTabRuntime("late");
+		const runtime = sessionRuntime("late");
+		const queue = sessionRuntimeStore<QueueStore>("late", "queue");
+		queue?.setState({ steering: [{ id: "queued", text: "keep me", editable: true, timestamp: 1 }] });
+		listed.resolve([tabInfo("t0", "/alpha"), tabInfo("t1", "/beta"), tabInfo("t2", "/gamma")]);
+		await resync;
+		expect(sessionRuntime("late")).toBe(runtime);
+		expect(useTabsStore.getState().tabs.some(tab => tab.id === "late")).toBe(true);
+		expect(sessionRuntimeStore<QueueStore>("late", "queue")?.getState().steering[0]?.text).toBe("keep me");
+	});
+
+	it("does not discard a queued message when an authoritative list omits its tab", async () => {
+		seedTabs();
+		const queue = sessionRuntimeStore<QueueStore>("t1", "queue");
+		queue?.setState({ followUp: [{ id: "queued", text: "keep me", editable: true, timestamp: 1 }] });
+		const runtime = sessionRuntime("t1");
+		omp.tabs.list.mockResolvedValue([tabInfo("t0", "/alpha"), tabInfo("t2", "/gamma")]);
+		expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(false);
+		expect(sessionRuntime("t1")).toBe(runtime);
+		expect(queue?.getState().followUp[0]?.text).toBe("keep me");
+	});
+
+	it("keeps the split and does not route an older view when queue updates race its tab list", async () => {
+		seedTabs("t1");
+		const split: SplitLayout = {
+			axis: "columns",
+			ratio: 0.5,
+			first: { tabId: "t1" },
+			second: { tabId: "t2" },
+		};
+		useTabsStore.setState({ split });
+		const listed = Promise.withResolvers<IpcTabInfo[]>();
+		omp.tabs.list.mockReturnValueOnce(listed.promise);
+		const resync = useTabsStore.getState().reconcileTabs({ resync: true });
+		for (const tabId of ["t1", "t2"]) {
+			sessionRuntimeStore<QueueStore>(tabId, "queue")!
+				.getState()
+				.setFromFrame({
+					steering: [{ id: `queued-${tabId}`, text: "keep me", editable: true, timestamp: 1 }],
+					followUp: [],
+				});
+		}
+		listed.resolve([
+			tabInfo("t0", "/alpha"),
+			{ ...tabInfo("t1", "/beta"), active: true, visible: true, split },
+			{ ...tabInfo("t2", "/gamma"), visible: true, split },
+		]);
+		expect(await resync).toBe(false);
+		expect(useTabsStore.getState().split).toEqual(split);
+		expect(useTabsStore.getState().activeTabId).toBe("t1");
+		expect(omp.tabs.setView).not.toHaveBeenCalled();
+		expect(omp.tabs.setActive).not.toHaveBeenCalled();
+		for (const tabId of ["t1", "t2"])
+			expect(sessionRuntimeStore<QueueStore>(tabId, "queue")?.getState().steering[0]?.text).toBe("keep me");
+	});
+
+	it("recovers a local ask despite an offline host and preserves an ask received during the next snapshot", async () => {
+		seedTabs("t0");
+		const list = ["t0", "t1", "t2"].map((tabId, index) => ({
+			...tabInfo(tabId, ["/alpha", "/beta", "/gamma"][index], "error"),
+			active: tabId === "t0",
+			visible: tabId === "t0",
+		}));
+		omp.tabs.list.mockResolvedValue(list);
+		const missed: ExtensionUIRequest = { type: "extension_ui_request", id: "missed", method: "ask", questions: [] };
+		const late: ExtensionUIRequest = { type: "extension_ui_request", id: "late", method: "ask", questions: [] };
+		const open = [{ tabId: "t1", request: missed }];
+		const openRequests = vi.fn(async () => open);
+		Object.assign(window.omp, {
+			ui: { openRequests, shownState: async () => [] },
+			remote: { getState: async () => ({ hosts: [{ deviceId: "offline", state: "offline" }] }) },
+			sessions: {
+				held: async () => [],
+				remoteOpened: async () => [],
+				summaries: async () => ({ version: "e.1", sessions: [] }),
+			},
+		});
+		const { resyncPage } = await import("../web/resync-page");
+		expect(await resyncPage({ strict: true })).toBe(false);
+		const pending = () =>
+			sessionRuntimeStore<ExtensionUiStore>("t1", "extensionUi")
+				?.getState()
+				.pendingRequests.map(request => request.id);
+		expect(pending()).toEqual(["missed"]);
+		const held = Promise.withResolvers<typeof open>();
+		openRequests.mockReturnValueOnce(held.promise);
+		const recovery = resyncPage({ strict: true });
+		await vi.waitFor(() => expect(openRequests).toHaveBeenCalledTimes(2));
+		pushTabExtensionUiRequest("t1", late);
+		held.resolve(open);
+		expect(await recovery).toBe(false);
+		expect(pending()).toEqual(["missed", "late"]);
+	});
+
+	it("does not settle a new ask that arrived after the open-requests snapshot began", async () => {
+		seedTabs();
+		pushTabExtensionUiRequest("t1", { type: "extension_ui_request", id: "old", method: "ask", questions: [] });
+		const capture = Reflect.get(tabsModule, "captureTabExtensionUiRequests");
+		const captured = typeof capture === "function" ? capture() : undefined;
+		pushTabExtensionUiRequest("t1", { type: "extension_ui_request", id: "new", method: "ask", questions: [] });
+		Reflect.apply(settleTabExtensionUiRequests, undefined, [[], captured]);
+		expect(
+			sessionRuntimeStore<ExtensionUiStore>("t1", "extensionUi")
+				?.getState()
+				.pendingRequests.map(request => request.id),
+		).toEqual(["old", "new"]);
+	});
+
 	it("takes the host's list as the whole truth after a reconnect: a restarted host's old tab ids go", async () => {
 		seedTabs("t1");
 		omp.tabs.list.mockResolvedValue([{ ...tabInfo("n0", "/alpha"), active: true }, tabInfo("n1", "/beta")]);
@@ -1828,6 +1973,46 @@ describe("tabs store background tab signals", () => {
 		expect(useTabsStore.getState().tabs.map(tab => tab.id)).toEqual(["n0", "n1"]);
 		expect(useTabsStore.getState().activeTabId).toBe("n0");
 		expect(sessionRuntime("t1")).toBeNull();
+	});
+
+	it("recovers existing tabs' foreground turns from the host list without ending background work", async () => {
+		seedTabs();
+		for (const id of ["t0", "t1", "t2"]) {
+			useTabsStore.getState().applyTabStatus(tabInfo(id, "/work", "running"));
+			sessionRuntimeStore<SessionStore>(id, "session")!.setState({ awaitingModelSince: 123 });
+		}
+		omp.tabs.list.mockResolvedValue([
+			{ ...tabInfo("t0", "/work", "running"), settling: true, active: true },
+			tabInfo("t1", "/work", "running"),
+			tabInfo("t2", "/work", "exited"),
+		]);
+
+		expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(true);
+		const session = (id: string) => sessionRuntimeStore<SessionStore>(id, "session")!.getState();
+		expect(tabOf("t0")).toMatchObject({ status: "running", settling: true });
+		expect(session("t0")).toMatchObject({ isStreaming: false, awaitingModelSince: null });
+		expect(session("t1")).toMatchObject({ isStreaming: true, awaitingModelSince: 123 });
+		expect(session("t2")).toMatchObject({ status: "exited", isStreaming: false, awaitingModelSince: null });
+	});
+
+	describe.each([
+		{ name: "state refresh", read: refreshSessionState },
+		{ name: "transcript hydration", read: hydrateTabSession },
+	])("$name racing a host status", ({ read }) => {
+		it.each([false, true])("keeps the newer foreground state (previously live: %s)", async wasLive => {
+			seedTabs();
+			const info = tabInfo("t0", "/alpha", "running");
+			useTabsStore.getState().applyTabStatus(wasLive ? info : { ...info, settling: true });
+			const older = Promise.withResolvers<RpcResponse>();
+			omp.rpc.getState.mockReturnValueOnce(older.promise);
+			const reading = read("t0");
+			useTabsStore.getState().applyTabStatus(wasLive ? { ...info, settling: true } : info);
+			older.resolve(ok(serverState({ isStreaming: wasLive, sessionName: "From the snapshot" })));
+			await reading;
+
+			expect(tabOf("t0")?.status).toBe("running");
+			expect(useSessionStore.getState()).toMatchObject({ isStreaming: !wasLive, sessionName: "From the snapshot" });
+		});
 	});
 
 	it("gives a tab it learns only from the list the list's status (its TAB_STATUS went by before the page knew it)", async () => {
@@ -1840,6 +2025,68 @@ describe("tabs store background tab signals", () => {
 		const session = (id: string) => sessionRuntimeStore<SessionStore>(id, "session")?.getState();
 		expect(session("n0")).toMatchObject({ status: "ready", cwd: "/alpha", isStreaming: false });
 		expect(session("n1")).toMatchObject({ status: "ready", cwd: "/beta", isStreaming: true });
+	});
+
+	it.each(["ready", "running"] as const)(
+		"rejoins a host split with %s tabs when another page moved it outside this page's selection",
+		async status => {
+			webMode.on = true;
+			try {
+				seedTabs("t0");
+				const split: SplitLayout = {
+					axis: "columns",
+					ratio: 0.5,
+					first: { tabId: "t1" },
+					second: { tabId: "t2" },
+				};
+				omp.tabs.list.mockResolvedValue([
+					{ ...tabInfo("t0", "/alpha", status), shared: true },
+					{ ...tabInfo("t1", "/beta", status), shared: true, active: true, visible: true, split },
+					{ ...tabInfo("t2", "/gamma", status), shared: true, visible: true, split },
+				]);
+				// The host's set_tab_view rejects a focused tab outside its visible panes.
+				omp.tabs.setView.mockImplementation(async (focused, visible) => visible.includes(focused));
+
+				expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(true);
+				expect(useTabsStore.getState()).toMatchObject({ activeTabId: "t1", split });
+				expect(omp.tabs.setView).toHaveBeenCalledWith("t1", ["t1", "t2"], split, []);
+			} finally {
+				webMode.on = false;
+			}
+		},
+	);
+
+	it.each([
+		{ name: "keeps this page's selection inside the split", selected: "t2", host: "t1", split: true, want: "t2" },
+		{ name: "takes a fresh page's host selection", selected: null, host: "t2", split: true, want: "t2" },
+		{ name: "falls back to a pane without a host selection", selected: "t0", host: null, split: true, want: "t1" },
+		{ name: "rejects a host selection outside its split", selected: "t0", host: "t0", split: true, want: "t1" },
+		{ name: "keeps a single-pane page's selection", selected: "t0", host: "t1", split: false, want: "t0" },
+		{ name: "takes a fresh single-pane page's host selection", selected: null, host: "t1", split: false, want: "t1" },
+	] as const)("reconciles a host view: $name", async ({ selected, host, split: hasSplit, want }) => {
+		webMode.on = true;
+		try {
+			if (selected) seedTabs(selected);
+			const split: SplitLayout | undefined = hasSplit
+				? { axis: "columns", ratio: 0.5, first: { tabId: "t1" }, second: { tabId: "t2" } }
+				: undefined;
+			omp.tabs.list.mockResolvedValue(
+				["t0", "t1", "t2"].map(id => ({
+					...tabInfo(id, `/${id}`),
+					active: id === host,
+					visible: hasSplit ? id !== "t0" : id === host,
+					...(hasSplit && id !== "t0" ? { split } : {}),
+				})),
+			);
+			omp.tabs.setView.mockImplementation(async (focused, visible) => visible.includes(focused));
+
+			expect(await useTabsStore.getState().reconcileTabs({ resync: true })).toBe(true);
+			expect(useTabsStore.getState()).toMatchObject({ activeTabId: want, split: split ?? null });
+			if (split) expect(omp.tabs.setView).toHaveBeenCalledWith(want, ["t1", "t2"], split, []);
+			else expect(omp.tabs.setActive).toHaveBeenCalledWith(want);
+		} finally {
+			webMode.on = false;
+		}
 	});
 
 	describe("a provider sign-in's requests, restored", () => {
@@ -2865,12 +3112,66 @@ describe("agent control view requests", () => {
 		expect(useTabsStore.getState().split).toBeNull();
 	});
 
-	it("close closes the tab the way the user's close does", async () => {
+	it("close closes the tab the way the user's close does, and answers the close with what it did", async () => {
 		await bootWith("t0", "t1");
-		await useTabsStore.getState().applyAgentView({ tabId: "t1", how: "close" });
+		await useTabsStore.getState().applyAgentView({ tabId: "t1", how: "close", closeId: 7 });
 		expect(tabOf("t1")).toBeUndefined();
 		expect(omp.tabs.close).toHaveBeenCalledWith("t1");
 		expect(useTabsStore.getState().activeTabId).toBe("t0");
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 7, outcome: "closing" });
+	});
+
+	it("keeps the child visible and answers in-use when the pool refuses an outdated close", async () => {
+		await bootWith("t0", "t1");
+		const release = Promise.withResolvers<boolean>();
+		omp.tabs.close.mockReturnValueOnce(release.promise);
+		const expectedTurn = { pool: 1, entry: 2, turn: 3 };
+		const closing = useTabsStore
+			.getState()
+			.applyAgentView({ tabId: "t1", how: "close", auto: true, closeId: 7, expectedTurn });
+		expect(omp.tabs.close).toHaveBeenCalledWith("t1", expectedTurn);
+		expect(tabOf("t1")).toBeDefined();
+		release.resolve(false);
+		await closing;
+		expect(tabOf("t1")).toBeDefined();
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 7, outcome: "in-use" });
+	});
+
+	// 19 Nov 2026: an agent's close a window kept came back as "its last tab, or unsaved Files edits", whichever it was,
+	// and the same words when the window never heard it. The window says which of its rules kept the tab.
+	it("answers a close it refuses with its own reason and keeps the tab", async () => {
+		await bootWith("t0");
+		await useTabsStore.getState().applyAgentView({ tabId: "t0", how: "close", closeId: 8 });
+		expect(tabOf("t0")).toBeDefined();
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t0", closeId: 8, outcome: "last-tab" });
+
+		await bootWith("t0", "t1");
+		useUiStore.setState({ fileEditDirty: true, fileEditTabId: "t1", pendingFileSwitch: null });
+		try {
+			await useTabsStore.getState().applyAgentView({
+				tabId: "t1",
+				how: "close",
+				auto: true,
+				closeId: 11,
+				expectedTurn: { pool: 1, entry: 2, turn: 3 },
+			});
+			expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 11, outcome: "unsaved-edits" });
+			expect(useUiStore.getState().pendingFileSwitch).toBeNull();
+			await useTabsStore.getState().applyAgentView({ tabId: "t1", how: "close", closeId: 9 });
+			expect(tabOf("t1")).toBeDefined();
+			expect(omp.tabs.close).not.toHaveBeenCalledWith("t1");
+			expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "t1", closeId: 9, outcome: "unsaved-edits" });
+		} finally {
+			useUiStore.setState({
+				fileEditDirty: false,
+				fileEditTabId: null,
+				pendingFileSwitch: null,
+				discardedForTabClose: null,
+			});
+		}
+
+		await useTabsStore.getState().applyAgentView({ tabId: "gone", how: "close", closeId: 10 });
+		expect(omp.tabs.answerAgentClose).toHaveBeenCalledWith({ tabId: "gone", closeId: 10, outcome: "not-here" });
 	});
 
 	it("a tab main spawns in the background appears without switching the current view", async () => {

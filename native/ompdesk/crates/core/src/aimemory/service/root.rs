@@ -1,5 +1,5 @@
 //! OMPdesk's own ai-memory wiring for omp: an extension package root that the sessions OMPdesk spawns load with `-e`
-//! (`<userData>/ai-memory/omp-ext/`, like `resources/omp-builtin/rea`). omp reads a package root's `index.ts` as an
+//! (`<userData>/ai-memory/omp-ext/`). omp reads a package root's `index.ts` as an
 //! extension, its `.mcp.json` as MCP servers and its `skills/` as skills, so the root holds exactly what
 //! `ai-memory setup --agent omp` would put into omp's agent dir:
 //!

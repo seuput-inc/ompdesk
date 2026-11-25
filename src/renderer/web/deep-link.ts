@@ -27,7 +27,7 @@ export function parseOpenHash(hash: string): OpenTarget | null {
 	return null;
 }
 
-/** `omp://new` and `omp://session/<id>`, as main's deep-link.ts reads them; null for anything else. */
+/** `omp://new` and `omp://session/<id>`, as the desktop shell reads them (tauri-shell/src/entry.rs); null for anything else. */
 export function parseOmpUrl(url: string): DeepLinkPayload | null {
 	let parsed: URL;
 	try {

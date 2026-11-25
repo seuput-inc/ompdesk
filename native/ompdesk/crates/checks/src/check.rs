@@ -35,10 +35,13 @@ use crate::heavy::{self, now_ms};
 use crate::inputs::{self, InputSet, StatCache};
 use crate::runner::{self, Detected, Earlier, Kind, Record};
 use crate::store::{self, Plan, Run, State, Store};
+use crate::sys::child_command;
 use crate::watch::gb;
 
 /// Set for a check's command: a check started inside it runs as its child (no second runner, no second slot).
 pub const RUN_ENV: &str = "OMPDESK_CHECK_RUN";
+/// The tag OMPdesk gives everything a session's omp starts (`src/main/session-processes.ts`): who started a run.
+const SESSION_ENV: &str = "OMP_GUI_SESSION_TAG";
 
 /// Defaults that keep a check's browsers and reports off the person's screen; a variable already set is kept.
 /// Playwright already starts Chromium and Electron headless with `--use-mock-keychain` unless a config asks for a
@@ -58,13 +61,35 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn open_store() -> io::Result<Store> {
-    Store::open(store::store_dir(&env))
+pub fn checks_dir() -> PathBuf {
+    store::store_dir(&env)
+}
+
+/// Allocated bytes of idle input payloads unlinked by disk care. A missing store stays missing.
+pub fn prune_idle_inputs(dir: &Path, now: u64, cancelled: impl Fn() -> bool) -> u64 {
+    Store {
+        dir: dir.to_owned(),
+    }
+    .expire_inputs(now, &cancelled)
+}
+
+pub(crate) fn open_store() -> io::Result<Store> {
+    Store::open(checks_dir())
+}
+
+/// The OMPdesk session this process runs in; none in a plain terminal.
+pub(crate) fn session_tag() -> Option<String> {
+    env(SESSION_ENV).filter(|tag| !tag.is_empty())
+}
+
+/// A session cancels only the runs it started; a person (a plain terminal, no session) cancels any.
+fn may_cancel(owner: Option<&str>, caller: Option<&str>) -> bool {
+    caller.is_none() || owner == caller
 }
 
 /// A result that fails a verdict.
-fn failing(status: &str) -> bool {
-    !matches!(status, "passed" | "skipped" | "flaky")
+pub(crate) fn failing(status: &str) -> bool {
+    !matches!(status, "passed" | "skipped" | "unrun" | "flaky")
 }
 
 /// The check a command is: its checkout, its folder there, and its words.
@@ -186,10 +211,8 @@ pub fn start(opts: Start) -> i32 {
             &command_env(),
             detected.kind,
             &store,
-        )
-        .0
-        .digest();
-        let same_inputs = running.inputs.as_deref() == Some(now.as_str());
+        );
+        let same_inputs = now.is_ok_and(|set| running.inputs.as_ref() == Some(&set.digest()));
         if same_inputs && !opts.full && running.release == opts.release {
             eprintln!(
                 "ompdesk check: run {} of this check is already under way on the same inputs (started {}); following \
@@ -224,6 +247,7 @@ pub fn start(opts: Start) -> i32 {
         pid: 0,
         started: now_ms(),
         ended: None,
+        milestones: Some(store::Milestones::default()),
         exit_code: None,
         head: None,
         dirty: false,
@@ -246,6 +270,7 @@ pub fn start(opts: Start) -> i32 {
         light: opts.light,
         release: opts.release,
         summary: None,
+        session: session_tag(),
     };
     if let Err(e) = store.create(&run) {
         eprintln!("ompdesk check: cannot record the run: {e}");
@@ -261,7 +286,7 @@ pub fn start(opts: Start) -> i32 {
     let nested = env(RUN_ENV).is_some_and(|outer| store.runner_alive(&outer));
     let started = if nested {
         // Inside another check's command: a plain child, so cancelling the outer check ends this one too.
-        Command::new(&exe)
+        child_command(&exe)
             .args(["check", "--runner", &id])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -271,7 +296,7 @@ pub fn start(opts: Start) -> i32 {
     } else {
         // Through a middle process that exits at once, so the runner's parent is gone before anyone walks the
         // starter's process tree to end it.
-        Command::new(&exe)
+        child_command(&exe)
             .args(["check", "--spawn", &id])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -290,6 +315,7 @@ pub fn start(opts: Start) -> i32 {
         let mut run = run;
         run.state = State::Error;
         run.ended = Some(now_ms());
+        eprintln!("ompdesk check: {}", run.timing(now_ms()).report());
         let _ = store.write(&run);
         return 1;
     }
@@ -312,7 +338,7 @@ pub fn spawn_runner(id: &str) -> i32 {
     let args = vec!["check".to_string(), "--runner".to_string(), id.to_string()];
     #[cfg(unix)]
     let started = {
-        let mut command = Command::new(&exe);
+        let mut command = child_command(&exe);
         command
             .args(&args)
             .stdin(Stdio::null())
@@ -376,13 +402,23 @@ fn start_on_windows(exe: &Path, args: &[String], id: &str) -> io::Result<()> {
 
 /// Follows a run's log to its end; the run's exit code.
 fn attach_id(store: &Store, id: &str) -> i32 {
+    attach_to(store, id, &mut io::stdout())
+}
+
+/// How long a finished run's runner may still hold `alive` (it is writing its last lines, or ending) before the
+/// attached caller stops waiting for it.
+const RUNNER_LINGER: Duration = Duration::from_secs(5);
+
+/// `attach_id` into `out`. A run reads as finished the moment its runner saved the state, but the runner is only done
+/// with the log once it released `alive` (its process ended): returning earlier could leave out its last lines.
+pub(crate) fn attach_to(store: &Store, id: &str, out: &mut dyn Write) -> i32 {
     let Ok(mut log) = fs::File::open(store.file(id, "log")) else {
         eprintln!("ompdesk check: no run {id}");
         return 1;
     };
-    let mut stdout = io::stdout();
     let mut buf = vec![0u8; 64 * 1024];
     let begun = Instant::now();
+    let mut finished_at: Option<Instant> = None;
     loop {
         let mut read_any = false;
         while let Ok(n) = log.read(&mut buf) {
@@ -390,37 +426,42 @@ fn attach_id(store: &Store, id: &str) -> i32 {
                 break;
             }
             read_any = true;
-            let _ = stdout.write_all(&buf[..n]);
+            let _ = out.write_all(&buf[..n]);
         }
-        let _ = stdout.flush();
+        let _ = out.flush();
         let Some(run) = store.read(id) else {
             return 1;
         };
         if run.state.finished() {
-            let mut rest = Vec::new();
-            let _ = log.read_to_end(&mut rest);
-            let _ = stdout.write_all(&rest);
-            let _ = stdout.flush();
-            if run.state == State::Killed {
-                eprintln!(
-                    "ompdesk check {id}: its runner stopped before it finished (killed); what passed before stays \
-                     reusable, so running the check again runs only the rest."
-                );
+            let since = *finished_at.get_or_insert_with(Instant::now);
+            if !store.runner_alive(id) || since.elapsed() > RUNNER_LINGER {
+                let mut rest = Vec::new();
+                let _ = log.read_to_end(&mut rest);
+                let _ = out.write_all(&rest);
+                let _ = out.flush();
+                if run.state == State::Killed {
+                    eprintln!(
+                        "ompdesk check {id}: its runner stopped before it finished (killed); what passed before stays \
+                         reusable, so running the check again runs only the rest."
+                    );
+                    eprintln!("ompdesk check: {}", run.timing(now_ms()).report());
+                }
+                return exit_of(&run);
             }
-            return exit_of(&run);
-        }
-        if run.state == State::Starting && begun.elapsed() > Duration::from_secs(60) {
+        } else if run.state == State::Starting && begun.elapsed() > Duration::from_secs(60) {
             eprintln!("ompdesk check {id}: the runner never started");
             return 1;
         }
         if !read_any {
-            std::thread::sleep(Duration::from_millis(200));
+            let pause = if finished_at.is_some() { 20 } else { 200 };
+            std::thread::sleep(Duration::from_millis(pause));
         }
     }
 }
 
 fn exit_of(run: &Run) -> i32 {
     match run.state {
+        State::Passed if !run.changed_during.is_empty() => crate::board::EXIT_UNKNOWN,
         State::Passed => 0,
         State::Cancelled => 130,
         State::Failed => run.exit_code.filter(|c| *c != 0).unwrap_or(1),
@@ -428,7 +469,7 @@ fn exit_of(run: &Run) -> i32 {
     }
 }
 
-fn find_run(store: &Store, id: Option<&str>) -> Option<Run> {
+pub(crate) fn find_run(store: &Store, id: Option<&str>) -> Option<Run> {
     match id {
         Some(id) => store.read(id).or_else(|| {
             store
@@ -479,9 +520,23 @@ pub fn status(id: Option<&str>, all: bool, json: bool) -> i32 {
             .collect()
     };
     let mut out = io::stdout().lock();
+    let now = now_ms();
     if json {
-        let _ = writeln!(out, "{}", serde_json::to_string(&runs).unwrap_or_default());
-        return 0;
+        #[derive(Serialize)]
+        struct Status<'a> {
+            #[serde(flatten)]
+            run: &'a Run,
+            timing: store::Timing,
+        }
+        let rows = runs.iter().map(|run| Status {
+            run,
+            timing: run.timing(now),
+        });
+        let mut serializer = serde_json::Serializer::new(&mut out);
+        return i32::from(
+            serde::Serializer::collect_seq(&mut serializer, rows).is_err()
+                || writeln!(out).is_err(),
+        );
     }
     if runs.is_empty() {
         let _ = writeln!(
@@ -490,9 +545,8 @@ pub fn status(id: Option<&str>, all: bool, json: bool) -> i32 {
         );
         return 0;
     }
-    let now = now_ms();
     for r in &runs {
-        let took = store::duration(r.ended.unwrap_or(now).saturating_sub(r.started));
+        let timing = r.timing(now);
         let state = format!("{:?}", r.state).to_lowercase();
         let mode = if r.plan.mode.is_empty() {
             String::new()
@@ -501,10 +555,10 @@ pub fn status(id: Option<&str>, all: bool, json: bool) -> i32 {
         };
         let _ = writeln!(
             out,
-            "{}  {:<9} {:>7}  {}  {mode}{}",
+            "{}  {:<9}  {}  {}  {mode}{}",
             r.id,
             state,
-            took,
+            timing,
             r.argv.join(" "),
             r.summary.as_deref().unwrap_or("")
         );
@@ -538,6 +592,18 @@ pub fn cancel(id: &str) -> i32 {
         eprintln!("ompdesk check: run {} has already ended", run.id);
         return 0;
     }
+    if !may_cancel(run.session.as_deref(), session_tag().as_deref()) {
+        eprintln!(
+            "ompdesk check: run {} was started by {}, so this session does not cancel it",
+            run.id,
+            run.session
+                .as_deref()
+                .map_or("a person in a terminal".into(), |s| format!(
+                    "another session ({s})"
+                ))
+        );
+        return 1;
+    }
     let _ = fs::write(store.file(&run.id, "cancel"), "");
     stop_command(&store, &run);
     eprintln!("ompdesk check: cancelling run {}", run.id);
@@ -558,7 +624,7 @@ fn stop_command(store: &Store, run: &Run) {
 #[cfg(windows)]
 fn stop_command(store: &Store, run: &Run) {
     if let Ok(pid) = fs::read_to_string(store.file(&run.id, "child")) {
-        let _ = Command::new("taskkill")
+        let _ = child_command("taskkill")
             .args(["/T", "/F", "/PID", pid.trim()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -603,6 +669,15 @@ impl Runtime<'_> {
     fn save(&self) {
         let _ = self.store.write(&self.run);
     }
+    fn end_before_command(&mut self, state: State, summary: String) -> i32 {
+        let end = now_ms();
+        self.run.state = state;
+        self.run.ended = Some(end);
+        self.say(&format!("{summary}; {}", self.run.timing(end).report()));
+        self.run.summary = Some(summary);
+        self.save();
+        exit_of(&self.run)
+    }
 }
 
 /// The input set of the checkout now.
@@ -613,21 +688,29 @@ fn input_set(
     env: &BTreeMap<String, String>,
     kind: Kind,
     store: &Store,
-) -> (InputSet, Option<Vec<String>>) {
-    let ignored = inputs::ignored(root);
+) -> io::Result<InputSet> {
+    let boundary = inputs::Boundary::load(root, cwd, argv)?;
+    let ignored = boundary.is_none().then(|| inputs::ignored(root)).flatten();
     let mut cache = StatCache::load(&store.dir, root);
-    let files = inputs::snapshot(root, ignored.as_deref(), &mut cache);
+    let files = inputs::snapshot(root, ignored.as_deref(), boundary.as_ref(), &mut cache)?;
+    let outside =
+        InputSet::command_files(cwd, argv, env, root, boundary.as_ref(), &files, &mut cache)?;
     let _ = cache.save();
-    (
-        InputSet {
-            files,
-            outside: InputSet::outside_files(root, cwd, argv),
-            env: InputSet::env_hashes(env),
-            tools: inputs::tools(kind == Kind::Cargo),
-            argv: argv.to_vec(),
+    let mut tools = inputs::tools(kind == Kind::Cargo);
+    tools.insert(
+        "input-policy-v2".into(),
+        match boundary {
+            Some(b) => inputs::sha256_hex(&serde_json::to_vec(&b)?),
+            None => "default".into(),
         },
-        ignored,
-    )
+    );
+    Ok(InputSet {
+        files,
+        outside,
+        env: InputSet::env_hashes(env),
+        tools,
+        argv: argv.to_vec(),
+    })
 }
 
 struct Decision {
@@ -711,18 +794,17 @@ fn decide(
             r.id != run.id && r.state.finished() && r.state != State::Error && r.inputs.is_some()
         })
         .collect();
-    // A run on exactly these inputs first (an edit undone brings its results back), else the newest one.
-    let Some(prev) = earlier
-        .iter()
-        .find(|r| r.changed_during.is_empty() && r.inputs.as_deref() == Some(digest))
-        .or_else(|| {
-            earlier
-                .iter()
-                .find(|r| r.changed_during.is_empty() && store.file(&r.id, "inputs.tsv").exists())
-        })
+    // An exact digest needs no file list. Comparing different digests needs a list we actually read.
+    let stable = || earlier.iter().filter(|r| r.changed_during.is_empty());
+    let Some((prev, detail)) = stable()
+        .find(|r| r.inputs.as_deref() == Some(digest))
+        .map(|r| (r, None))
+        .or_else(|| stable().find_map(|r| store.input_detail(&r.id).map(|tsv| (r, Some(tsv)))))
     else {
         let mut evidence = Vec::new();
-        if let Some(last) = earlier.first() {
+        if stable().next().is_some() {
+            evidence.push("the previous input lists are unavailable; running in full".into());
+        } else if let Some(last) = earlier.first() {
             evidence.push(format!(
                 "run {} changed its own inputs while it ran ({}), so none of its results hold",
                 last.id,
@@ -748,11 +830,35 @@ fn decide(
     let records = merged(store, prev);
     let same = prev.inputs.as_deref() == Some(digest);
     let mut evidence = vec![format!("compared with {from}")];
+    let all_passed = !records.is_empty()
+        && records
+            .iter()
+            .all(|(r, _)| matches!(r.status.as_str(), "passed" | "skipped"));
+
+    if set.files.outputs != inputs::Outputs::Undeclared {
+        if !same || prev.state != State::Passed || !all_passed {
+            return full(
+                "the output-producing check needs a full run on these inputs".into(),
+                evidence,
+                plain(),
+            );
+        }
+        if !set
+            .files
+            .outputs
+            .matches_proof(&store.file(&prev.id, "outputs.sha256"))
+        {
+            return full(
+                "declared outputs are missing, changed, or have no previous fingerprint".into(),
+                evidence,
+                plain(),
+            );
+        }
+    }
 
     // What changed, and whether all of it is test files the runner can run on their own.
     let mut changed_tests: BTreeSet<PathBuf> = BTreeSet::new();
-    if !same {
-        let tsv = fs::read_to_string(store.file(&prev.id, "inputs.tsv")).unwrap_or_default();
+    if let Some(tsv) = detail {
         let diff = inputs::differences(&tsv, set, 12);
         evidence.extend(diff.iter().cloned());
         let only_files = !diff.is_empty()
@@ -829,9 +935,6 @@ fn decide(
 
     // Whole reuse only when every result of that run passed: a run can pass with a quarantined test failing, and that
     // test runs again, under `--release` too.
-    let all_passed = records
-        .iter()
-        .all(|(r, _)| matches!(r.status.as_str(), "passed" | "skipped"));
     if same && prev.state == State::Passed && all_passed {
         let reused: Vec<Reused> = records
             .iter()
@@ -1000,7 +1103,7 @@ fn jest_list(argv: &[String], cwd: &Path, detected: &Detected) -> Option<Vec<Str
         args.push("--".into());
     }
     args.extend(["--listTests".into(), "--json".into()]);
-    let out = Command::new(&argv[0])
+    let out = child_command(&argv[0])
         .args(&args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -1077,7 +1180,7 @@ pub fn run_runner(id: &str) -> i32 {
 /// macOS keychains in this user's search list (`security list-keychains`), to put back a list a check changed.
 #[cfg(target_os = "macos")]
 fn keychains() -> Option<Vec<String>> {
-    let out = Command::new("/usr/bin/security")
+    let out = child_command("/usr/bin/security")
         .args(["list-keychains", "-d", "user"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -1119,7 +1222,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
     ));
 
     let mut lease: Option<heavy::Lease> = None;
-    let mut decided: Option<(Decision, InputSet, Option<Vec<String>>, String)> = None;
+    let mut decided: Option<(Decision, InputSet, String)> = None;
     let held_by_parent = env
         .get(heavy::HELD_ENV)
         .and_then(|p| p.parse::<u32>().ok())
@@ -1127,7 +1230,15 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
     // Decide, take a slot, and decide again when the inputs changed while it waited.
     for _ in 0..3 {
         let hashing = Instant::now();
-        let (set, ignored) = input_set(&root, &cwd, &argv, &env, detected.kind, rt.store);
+        let set = match input_set(&root, &cwd, &argv, &env, detected.kind, rt.store) {
+            Ok(set) => set,
+            Err(e) => {
+                return rt.end_before_command(
+                    State::Error,
+                    format!("not started: cannot establish check inputs: {e}"),
+                );
+            }
+        };
         let digest = set.digest();
         rt.say(&format!(
             "inputs: {} files, {} variables, {} tools hashed in {} (digest {})",
@@ -1137,17 +1248,19 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             store::duration(hashing.elapsed().as_millis() as u64),
             &digest[..12]
         ));
-        if decided.as_ref().is_some_and(|d| d.3 == digest) {
+        if decided
+            .as_ref()
+            .is_some_and(|d| d.2 == digest && d.1.files.outputs == set.files.outputs)
+        {
             break;
         }
         let decision = decide(rt.store, &rt.run, &detected, &set, &digest, forced_full);
         let nothing_to_run = decision.plan.mode == "reused";
-        decided = Some((decision, set, ignored, digest));
+        decided = Some((decision, set, digest));
         if nothing_to_run || rt.run.light || lease.is_some() || held_by_parent {
             break;
         }
-        rt.run.state = State::Waiting;
-        rt.save();
+        let queued_at = now_ms();
         let lookup = |k: &str| env.get(k).cloned();
         let owner = heavy::Owner {
             pid: std::process::id(),
@@ -1158,8 +1271,9 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             cwd: cwd.display().to_string(),
             since: 0,
             weight: 1,
+            run_id: Some(rt.run.id.clone()),
+            session: rt.run.session.clone(),
         };
-        let log = &mut rt.log;
         let cancel_file = rt.store.file(&rt.run.id, "cancel");
         let taken = heavy::Pool::new(heavy::pool_dir(&lookup), heavy::machine_size(&lookup))
             .and_then(|mut pool| {
@@ -1167,7 +1281,13 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                 pool.acquire_unless(
                     1,
                     owner,
+                    rt.run.release,
                     |w| {
+                        if rt.run.state != State::Waiting {
+                            rt.run.state = State::Waiting;
+                            rt.run.milestones.get_or_insert_default().queued_at = Some(queued_at);
+                            rt.save();
+                        }
                         let line = if w.low_disk.is_empty() {
                             format!(
                                 "waiting for a heavy slot ({} ahead, {} in use)",
@@ -1192,14 +1312,20 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                                 disks.join(", ")
                             )
                         };
-                        let _ = writeln!(log, "ompdesk check: {line}");
+                        rt.say(&line);
                     },
                     &|| cancel_file.exists(),
                 )
             });
         match taken {
             Ok(l) => {
-                if l.waited.as_secs() >= 1 {
+                if !l.has_slots() && rt.run.state != State::Waiting {
+                    break;
+                }
+                let milestones = rt.run.milestones.get_or_insert_default();
+                milestones.queued_at = Some(queued_at);
+                milestones.acquired_at = Some(l.acquired_at);
+                if l.has_slots() && l.waited.as_secs() >= 1 {
                     let waited = store::duration(l.waited.as_millis() as u64);
                     rt.say(&format!("heavy slot taken after {waited}"));
                 }
@@ -1209,28 +1335,22 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
             // folder cannot be written) never lets the command start, or the disk rule is lost exactly when it matters.
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                 rt.say("cancelled while waiting for a heavy slot; the command never started");
-                rt.run.state = State::Cancelled;
-                rt.run.ended = Some(now_ms());
-                rt.run.summary = Some("cancelled before it started".into());
-                rt.save();
-                return 130;
+                return rt
+                    .end_before_command(State::Cancelled, "cancelled before it started".into());
             }
             Err(e) => {
                 rt.say(&format!(
                     "cannot take a heavy slot ({e}); the command does not start (free space, or the pool folder {}?)",
                     heavy::pool_dir(&lookup).display()
                 ));
-                rt.run.state = State::Error;
-                rt.run.ended = Some(now_ms());
-                rt.run.summary = Some(format!("not started: no heavy slot ({e})"));
-                rt.save();
-                return 1;
+                return rt
+                    .end_before_command(State::Error, format!("not started: no heavy slot ({e})"));
             }
         }
         rt.run.state = State::Running;
         rt.save();
     }
-    let Some((decision, start_set, ignored, digest)) = decided else {
+    let Some((decision, start_set, digest)) = decided else {
         return 1;
     };
     rt.run.plan = decision.plan.clone();
@@ -1251,11 +1371,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
 
     if rt.store.file(&rt.run.id, "cancel").exists() {
         rt.say("cancelled before the command started");
-        rt.run.state = State::Cancelled;
-        rt.run.ended = Some(now_ms());
-        rt.run.summary = Some("cancelled before it started".into());
-        rt.save();
-        return 130;
+        return rt.end_before_command(State::Cancelled, "cancelled before it started".into());
     }
     #[cfg(target_os = "macos")]
     let keychains_before = keychains();
@@ -1271,8 +1387,10 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
         cmd_env.extend(decision.rewrite.env.clone());
         cmd_env.insert(runner::RESULTS_ENV.into(), results.display().to_string());
         cmd_env.insert(RUN_ENV.into(), rt.run.id.clone());
-        if lease.is_some() {
+        if lease.as_ref().is_some_and(heavy::Lease::has_slots) {
             cmd_env.insert(heavy::HELD_ENV.into(), std::process::id().to_string());
+        } else if !held_by_parent {
+            cmd_env.remove(heavy::HELD_ENV);
         }
         if decision.rewrite.argv != argv {
             rt.say(&format!("running: {}", decision.rewrite.argv.join(" ")));
@@ -1286,7 +1404,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
         && before != after
     {
         {
-            let _ = Command::new("/usr/bin/security")
+            let _ = child_command("/usr/bin/security")
                 .args(["list-keychains", "-d", "user", "-s"])
                 .args(&before)
                 .status();
@@ -1304,14 +1422,33 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
     }
 
     // What changed while the command ran.
-    let (end_set, _) = input_set(&root, &cwd, &argv, &env, detected.kind, rt.store);
-    let changed: Vec<String> = inputs::changed_paths(&start_set.files, &end_set.files)
-        .into_iter()
-        .filter(|p| !inputs::is_ignored(ignored.as_deref(), p))
-        .collect();
+    let changed = match input_set(&root, &cwd, &argv, &env, detected.kind, rt.store) {
+        Ok(end_set) => {
+            let mut changed = start_set.changed_during(&end_set);
+            match &end_set.files.outputs {
+                inputs::Outputs::Undeclared => {}
+                inputs::Outputs::Missing => {
+                    changed.push("declared output missing after the check".into())
+                }
+                inputs::Outputs::Present(_)
+                    if decision.plan.mode == "reused"
+                        && start_set.files.outputs != end_set.files.outputs =>
+                {
+                    changed.push("declared outputs changed during cache reuse".into());
+                }
+                inputs::Outputs::Present(hash) => {
+                    if let Err(e) = fs::write(rt.store.file(&rt.run.id, "outputs.sha256"), hash) {
+                        changed.push(format!("could not record output fingerprint: {e}"));
+                    }
+                }
+            }
+            changed
+        }
+        Err(e) => vec![format!("could not verify final inputs: {e}")],
+    };
     if !changed.is_empty() {
         rt.say(&format!(
-            "{} files outside the ignored outputs changed while the check ran ({}{}): its results will not be reused",
+            "{} input changes or verification errors while the check ran ({}{}): its results will not be reused",
             changed.len(),
             changed
                 .iter()
@@ -1336,15 +1473,28 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                 }));
             }
         }
-        if detected.kind == Kind::Command
-            || (lines.is_empty() && runner::read_results(&results_path).0.is_empty())
-        {
-            lines.push(serde_json::json!({
-                "runner": "command",
-                "titles": [argv.join(" ")],
-                "status": if exit_code == 0 { "passed" } else { "failed" },
-                "ms": ran_for.as_millis() as u64,
-            }));
+        if lines.is_empty() {
+            let (reported, _) = runner::read_results(&results_path);
+            let wrapper_failed = detected.kind == Kind::Command && exit_code != 0;
+            let mut seen = BTreeSet::new();
+            if reported.is_empty()
+                || (wrapper_failed
+                    && !reported
+                        .iter()
+                        .rev()
+                        .any(|r| seen.insert(&r.key) && failing(&r.status)))
+            {
+                let error = if wrapper_failed && reported.is_empty() {
+                    runner::playwright_log_diagnostic(&rt.store.file(&rt.run.id, "log"), &cwd)
+                } else {
+                    None
+                };
+                lines.push(serde_json::json!({
+                    "runner": "command", "titles": ["command"],
+                    "status": if exit_code == 0 { "passed" } else { "failed" },
+                    "ms": ran_for.as_millis() as u64, "error": error,
+                }));
+            }
         }
         for line in lines {
             let _ = rt
@@ -1358,7 +1508,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
 
 #[cfg(unix)]
 fn command_for(argv: &[String], _env: &BTreeMap<String, String>) -> Command {
-    let mut command = Command::new(&argv[0]);
+    let mut command = child_command(&argv[0]);
     command.args(&argv[1..]);
     // A group of its own, so a cancel or a full disk ends what it started too.
     crate::sys::child_defaults(&mut command, true);
@@ -1374,17 +1524,17 @@ fn command_for(argv: &[String], env: &BTreeMap<String, String>) -> Command {
                 e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")
             }) =>
         {
-            let mut c = Command::new("cmd");
+            let mut c = child_command("cmd");
             c.arg("/d").arg("/s").arg("/c").arg(p).args(&argv[1..]);
             c
         }
         Some(p) => {
-            let mut c = Command::new(p);
+            let mut c = child_command(p);
             c.args(&argv[1..]);
             c
         }
         None => {
-            let mut c = Command::new(&argv[0]);
+            let mut c = child_command(&argv[0]);
             c.args(&argv[1..]);
             c
         }
@@ -1429,7 +1579,9 @@ fn run_command(
         }
     };
     let pid = child.id();
+    rt.run.milestones.get_or_insert_default().command_started_at = Some(now_ms());
     let _ = fs::write(rt.store.file(&rt.run.id, "child"), pid.to_string());
+    rt.save();
     let said = std::sync::Mutex::new(said);
     let watch = crate::watch::Watch::start(
         heavy::Volumes::of_work(cwd, argv, &|k| env.get(k).cloned()),
@@ -1463,6 +1615,10 @@ fn run_command(
     // What the command left running in its group goes with it.
     #[cfg(unix)]
     crate::sys::signal_group(pid, libc::SIGKILL);
+    if status.is_ok() {
+        rt.run.milestones.get_or_insert_default().command_ended_at = Some(now_ms());
+        rt.save();
+    }
     for pump in pumps {
         let _ = pump.join();
     }
@@ -1486,7 +1642,7 @@ fn run_command(
     status.ok().and_then(|s| s.code()).unwrap_or(1)
 }
 
-/// About how long the reused results took when they ran: each origin run's own wall time, shared out by its results'
+/// About how long the reused results took when they ran: each origin command's runtime, shared out by its results'
 /// durations (tests run side by side, so their durations add up to more than the run took).
 fn saved_ms(store: &Store, records: &[(Record, Origin)], own: &str) -> u64 {
     let mut by_origin: BTreeMap<&str, u64> = BTreeMap::new();
@@ -1500,8 +1656,9 @@ fn saved_ms(store: &Store, records: &[(Record, Origin)], own: &str) -> u64 {
         let Some(run) = store.read(origin) else {
             continue;
         };
-        let ended = run.ended.unwrap_or(run.started);
-        let wall = ended.saturating_sub(run.started);
+        let Some(wall) = run.timing(now_ms()).run_ms else {
+            continue;
+        };
         let (own_records, _) = runner::read_results(&store.file(origin, "results.jsonl"));
         let total: u64 = own_records
             .iter()
@@ -1527,9 +1684,9 @@ fn finish(
     let mut records = merged(rt.store, &rt.run);
     // A test the filter was meant to run again but that did not come back.
     for r in &decision.must_run {
-        let back = records
-            .iter()
-            .any(|(m, o)| m.key == r.key && o.run == own && m.status != "skipped");
+        let back = records.iter().any(|(m, o)| {
+            m.key == r.key && o.run == own && !matches!(m.status.as_str(), "skipped" | "unrun")
+        });
         if !back {
             records.retain(|(m, _)| m.key != r.key);
             let mut missing = r.clone();
@@ -1542,6 +1699,9 @@ fn finish(
     let mut book = Book::load(&rt.store.dir, &rt.run.key);
     let mut entered = Vec::new();
     for (r, o) in &records {
+        if !rt.run.changed_during.is_empty() {
+            break;
+        }
         if o.run != own || r.file_record || r.key.contains(" error|") {
             continue;
         }
@@ -1566,7 +1726,10 @@ fn finish(
         .collect();
     let release_blocked =
         rt.run.release && (!quarantined.is_empty() || !quarantined_flaky.is_empty());
-    let passed_now = now.iter().filter(|(r, _)| !failing(&r.status)).count();
+    let passed_now = now
+        .iter()
+        .filter(|(r, _)| matches!(r.status.as_str(), "passed" | "flaky"))
+        .count();
     rt.run.reused = reused;
     rt.run.ran = now.len();
     rt.run.failed = blocking.len();
@@ -1574,9 +1737,11 @@ fn finish(
     rt.run.flaky = entered.clone();
     rt.run.saved_ms = saved_ms(rt.store, &records, &own);
     rt.run.exit_code = Some(exit_code);
-    rt.run.ended = Some(now_ms());
     // The command's exit code fails the verdict unless every failure it reports is a quarantined test's.
-    let exit_explained = exit_code == 0 || (!quarantined.is_empty() && blocking.is_empty());
+    let exit_explained = exit_code == 0
+        || (rt.run.runner != Kind::Command.name()
+            && !quarantined.is_empty()
+            && blocking.is_empty());
     rt.run.state = if cancelled {
         State::Cancelled
     } else if rt.resource_stop.is_some() {
@@ -1654,12 +1819,16 @@ fn finish(
     }
     let verdict = rt.store.file(&own, "verdict.txt");
     let _ = fs::write(&verdict, &text);
+    let counted_keys: BTreeSet<&str> = counted.iter().map(|(r, _)| r.key.as_str()).collect();
+    // `counted` and `error` are what `ompdesk checks wait` answers from (`board.rs`).
     let json: Vec<serde_json::Value> = records
         .iter()
         .map(|(r, o)| {
             serde_json::json!({
                 "key": r.key, "name": display_name(r), "status": r.status, "ms": r.ms,
                 "quarantined": book.quarantined(&r.key),
+                "counted": counted_keys.contains(r.key.as_str()),
+                "error": r.error,
                 "origin": if o.run == own { serde_json::Value::Null } else { serde_json::to_value(o).unwrap_or_default() },
             })
         })
@@ -1690,7 +1859,9 @@ fn finish(
             "the command exited {exit_code} with no failed test recorded: the verdict is failed"
         ));
     }
-    let took = store::duration(rt.run.ended.unwrap_or(0).saturating_sub(rt.run.started));
+    let finished = now_ms();
+    rt.run.ended = Some(finished);
+    let timing = rt.run.timing(finished).report();
     let summary = format!(
         "{} results: {} reused, {} run now ({} passed, {} failed{})",
         counted.len(),
@@ -1705,7 +1876,6 @@ fn finish(
         }
     );
     rt.run.summary = Some(summary.clone());
-    rt.save();
     let note = if decision.plan.mode == "reused" {
         " (nothing had to run)"
     } else {
@@ -1713,12 +1883,14 @@ fn finish(
     };
     // OMPdesk's Pace line reads `reuse saved about … (<n> s)` from this line (`src/main/session-pace.ts`).
     rt.say(&format!(
-        "{own}: {state} in {took}{note} — {summary} — reuse saved about {} ({} s) — verdict {}",
+        "{own}: {state} in {timing}{note} — {summary} — reuse saved about {} ({} s) — verdict {}",
         store::duration(rt.run.saved_ms),
         rt.run.saved_ms / 1000,
         verdict.display()
     ));
-    rt.store.prune(&rt.run.key);
+    // The finished state goes last: `attach_id` stops reading the log once it reads the run as finished.
+    rt.save();
+    rt.store.prune(&rt.run.key, finished);
     exit_of(&rt.run)
 }
 
@@ -1737,6 +1909,16 @@ mod tests {
         assert_eq!(test_suffix(".eslintrc.js"), None);
     }
 
+    #[test]
+    fn a_session_cancels_only_its_own_runs_and_a_person_any() {
+        assert!(may_cancel(Some("tab-a"), Some("tab-a")));
+        assert!(!may_cancel(Some("tab-a"), Some("tab-b")));
+        // A run a person started in a terminal is never an agent's to cancel.
+        assert!(!may_cancel(None, Some("tab-b")));
+        assert!(may_cancel(Some("tab-a"), None));
+        assert!(may_cancel(None, None));
+    }
+
     fn earlier_run(store: &Store, id: &str, state: &str, digest: &str) -> Run {
         let run: Run = serde_json::from_value(serde_json::json!({
             "id": id, "key": "k", "root": "/r", "cwd": "/r", "argv": ["vitest", "run"], "runner": "vitest",
@@ -1747,6 +1929,259 @@ mod tests {
         .unwrap();
         store.create(&run).unwrap();
         run
+    }
+
+    const CACHE_NOW: u64 = 1_794_536_107_000;
+    const DAY: u64 = 86_400_000;
+
+    fn cache_store(name: &str) -> Store {
+        let dir = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "ompdesk-input-retention-{name}-{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&dir);
+        Store::open(dir).unwrap()
+    }
+
+    fn write_at(path: &Path, bytes: &str, ms: u64) {
+        let mut file = fs::File::create(path).unwrap();
+        file.write_all(bytes.as_bytes()).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_millis(ms))
+            .unwrap();
+    }
+
+    fn cached_run(store: &Store, n: u32, checkout: &str, state: &str, at: u64) -> Run {
+        let id = format!("20261108-000000-{n:04x}");
+        let hash = "a".repeat(64);
+        let mut run = earlier_run(store, &id, state, &hash);
+        run.root = store.dir.join(checkout).display().to_string();
+        run.cwd.clone_from(&run.root);
+        run.key = key_of(Path::new(&run.root), Path::new(&run.cwd), &run.argv);
+        run.started = at;
+        run.ended = run.state.finished().then_some(at);
+        store.write(&run).unwrap();
+        fs::File::create(store.file(&id, "alive")).unwrap();
+        write_at(
+            &store.file(&id, "inputs.tsv"),
+            &format!("F\ta\t{hash}\n"),
+            at,
+        );
+        write_at(
+            &inputs::stat_cache_path(&store.dir, &run.root),
+            &format!("a\t1\t2\t3\t4\t0\t{hash}\n"),
+            at,
+        );
+        run
+    }
+
+    #[test]
+    fn disk_care_expires_only_idle_input_payloads() {
+        let store = cache_store("expiry");
+        let old = CACHE_NOW - 4 * DAY;
+        let a = cached_run(&store, 1, "first", "passed", old);
+        let b = cached_run(&store, 2, "second", "failed", old);
+        let recent = cached_run(&store, 3, "recent", "passed", CACHE_NOW - DAY);
+        let queued = cached_run(&store, 4, "queued", "waiting", old);
+        let ancestor = cached_run(&store, 5, "queued", "passed", old);
+        let running = cached_run(&store, 6, "running", "running", old);
+        let bad = cached_run(&store, 7, "malformed-tsvs", "passed", old);
+        let next = cached_run(&store, 8, "starting", "starting", old);
+        let held = cached_run(&store, 9, "held", "passed", old);
+        let alive = fs::File::open(store.file(&held.id, "alive")).unwrap();
+        alive.lock().unwrap();
+        let detail = |run: &Run| store.file(&run.id, "inputs.tsv");
+        let cache = |run: &Run| inputs::stat_cache_path(&store.dir, &run.root);
+        let refreshed = cached_run(&store, 10, "refreshed", "passed", old);
+        for path in [detail(&refreshed), cache(&refreshed)] {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_millis(CACHE_NOW))
+                .unwrap();
+        }
+        write_at(&detail(&bad), "not input detail\n", old);
+        write_at(&cache(&bad), "not a stat cache\n", old);
+        let unknown = store.dir.join("inputs").join("0123456789abcdef.tsv");
+        write_at(&unknown, "personal file", old);
+        let flaky = store.dir.join("flaky").join(format!("{}.json", a.key));
+        fs::create_dir(store.dir.join("flaky")).unwrap();
+        write_at(&flaky, "quarantine", old);
+        let evidence = [
+            "log",
+            "results.jsonl",
+            "verdict.txt",
+            "outputs.sha256",
+            "reused.jsonl",
+        ];
+        for name in evidence {
+            write_at(&store.file(&a.id, name), "evidence", old);
+        }
+        let expected: u64 = [&a, &b]
+            .into_iter()
+            .flat_map(|run| [detail(run), cache(run)])
+            .map(|p| {
+                let meta = fs::metadata(p).unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    meta.blocks() * 512
+                }
+                #[cfg(windows)]
+                {
+                    meta.len()
+                }
+            })
+            .sum();
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || true), 0);
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || false), expected);
+        for run in [&a, &b] {
+            assert!(!detail(run).exists() && !cache(run).exists());
+            assert_eq!(store.read(&run.id).unwrap().state, run.state);
+        }
+        for run in [
+            &recent, &queued, &ancestor, &running, &bad, &next, &held, &refreshed,
+        ] {
+            assert!(
+                detail(run).is_file() && cache(run).is_file(),
+                "{}",
+                run.root
+            );
+        }
+        for name in evidence {
+            assert_eq!(fs::read(store.file(&a.id, name)).unwrap(), b"evidence");
+        }
+        assert_eq!(fs::read(unknown).unwrap(), b"personal file");
+        assert_eq!(fs::read(flaky).unwrap(), b"quarantine");
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || false), 0);
+        drop(alive);
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_journal_cannot_choose_a_cleanup_path_and_the_ten_run_limit_stays_local() {
+        let store = cache_store("journals");
+        let old = CACHE_NOW - 4 * DAY;
+        let a = cached_run(&store, 0, "history", "passed", old);
+        for i in 1..=10 {
+            cached_run(&store, i, "history", "passed", old + u64::from(i));
+        }
+        let other = cached_run(&store, 11, "other", "passed", old);
+        let forged = cached_run(&store, 12, "forged", "passed", old);
+        let journal = store.file(&forged.id, "run.json");
+        let mut spoof = forged.clone();
+        spoof.id = "../..".into();
+        fs::write(journal, serde_json::to_vec(&spoof).unwrap()).unwrap();
+        prune_idle_inputs(&store.dir, CACHE_NOW, || false);
+        assert!(store.file(&forged.id, "inputs.tsv").exists());
+        assert!(inputs::stat_cache_path(&store.dir, &other.root).exists());
+        store.prune(&a.key, CACHE_NOW);
+        assert!(!store.run_dir(&a.id).exists());
+        assert_eq!(store.of_key(&a.key).len(), 10);
+        assert!(store.file(&other.id, "run.json").is_file());
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn linked_cache_directories_do_not_authorize_their_targets() {
+        fn link(target: &Path, at: &Path) {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, at).unwrap();
+            #[cfg(windows)]
+            assert!(
+                child_command("cmd")
+                    .args(["/D", "/C", "mklink", "/J"])
+                    .arg(at)
+                    .arg(target)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let store = cache_store("links");
+        let old = CACHE_NOW - 4 * DAY;
+        let run = cached_run(&store, 1, "checkout", "passed", old);
+        let inputs = store.dir.join("inputs");
+        let personal = store.dir.join("elsewhere");
+        fs::rename(&inputs, &personal).unwrap();
+        link(&personal, &inputs);
+        #[cfg(unix)]
+        {
+            let detail = store.file(&run.id, "inputs.tsv");
+            let file = personal.join("input-list");
+            fs::rename(&detail, &file).unwrap();
+            std::os::unix::fs::symlink(&file, &detail).unwrap();
+        }
+        prune_idle_inputs(&store.dir, CACHE_NOW, || false);
+        assert!(inputs::stat_cache_path(&store.dir, &run.root).is_file());
+        #[cfg(unix)]
+        assert!(store.file(&run.id, "inputs.tsv").is_symlink());
+        let original = store.run_dir(&run.id);
+        let elsewhere = store.dir.join("other-run");
+        fs::rename(&original, &elsewhere).unwrap();
+        link(&elsewhere, &original);
+        let target = elsewhere.join("inputs.tsv");
+        #[cfg(unix)]
+        fs::remove_file(&target).unwrap();
+        write_at(&target, &format!("F\ta\t{}\n", "a".repeat(64)), old);
+        assert_eq!(prune_idle_inputs(&store.dir, CACHE_NOW, || false), 0);
+        assert!(target.is_file());
+        let absent = store.dir.join("absent");
+        assert_eq!(prune_idle_inputs(&absent, CACHE_NOW, || false), 0);
+        assert!(!absent.exists());
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn cancellation_after_one_unlink_leaves_the_other_payloads() {
+        let store = cache_store("cancel");
+        let old = CACHE_NOW - 4 * DAY;
+        let a = cached_run(&store, 1, "first", "passed", old);
+        let b = cached_run(&store, 2, "second", "passed", old);
+        let first = store.file(&a.id, "inputs.tsv");
+        let second = store.file(&b.id, "inputs.tsv");
+        prune_idle_inputs(&store.dir, CACHE_NOW, || {
+            !first.exists() || !second.exists()
+        });
+        assert_ne!(first.exists(), second.exists());
+        for run in [a, b] {
+            assert!(inputs::stat_cache_path(&store.dir, &run.root).is_file());
+        }
+        fs::remove_dir_all(store.dir).unwrap();
+    }
+
+    #[test]
+    fn missing_input_detail_runs_in_full_without_inventing_a_changed_file() {
+        let store = cache_store("missing");
+        let prev = earlier_run(&store, "0001", "passed", "old");
+        let now = earlier_run(&store, "0002", "running", "new");
+        let detected = Detected {
+            kind: Kind::Vitest,
+            needs_dashdash: false,
+            script: None,
+        };
+        let decision = decide(&store, &now, &detected, &InputSet::default(), "new", false);
+        assert_eq!(decision.plan.mode, "full");
+        assert!(
+            decision
+                .plan
+                .evidence
+                .iter()
+                .any(|line| line.contains("unavailable"))
+        );
+        assert!(decision.reused.is_empty());
+        let row = serde_json::json!({
+            "runner": "vitest", "kind": "test", "file": "a.test.ts", "titles": ["case"],
+            "status": "passed", "ms": 1
+        });
+        store
+            .append(&prev.id, "results.jsonl", &row.to_string())
+            .unwrap();
+        let same = decide(&store, &now, &detected, &InputSet::default(), "old", false);
+        assert_eq!(same.plan.mode, "reused");
+        fs::remove_dir_all(store.dir).unwrap();
     }
 
     #[test]
@@ -1777,6 +2212,81 @@ mod tests {
             !decision.reused.iter().any(|r| r.record.status == "failed"),
             "a failed result was carried over as reused"
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// What `attach_to` writes, and a signal when the first bytes arrive.
+    struct Tap<'a> {
+        seen: &'a std::sync::Mutex<Vec<u8>>,
+        first: Option<std::sync::mpsc::Sender<()>>,
+    }
+
+    impl Write for Tap<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.seen.lock().unwrap().extend_from_slice(bytes);
+            if let Some(first) = self.first.take() {
+                let _ = first.send(());
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A run reads as finished as soon as its runner saved the state, but the runner's last log line (the verdict
+    /// line `session-pace` and the caller read) may come after: an attached caller returns only once the runner let
+    /// go of `alive`, and then has every line.
+    #[test]
+    fn an_attached_caller_returns_only_after_the_runner_let_go_and_keeps_its_last_line() {
+        let dir = std::env::temp_dir().join(format!("ompdesk-attach-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = Store::open(dir.clone()).unwrap();
+        let mut run = earlier_run(&store, "0001", "passed", "same");
+        run.state = State::Passed;
+        store.write(&run).unwrap();
+        store
+            .append("0001", "log", "ompdesk check: running")
+            .unwrap();
+        let alive = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(store.file("0001", "alive"))
+            .unwrap();
+        alive.lock().unwrap();
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let (first, first_seen) = std::sync::mpsc::channel();
+        let (done, finished) = std::sync::mpsc::channel();
+        let code = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut tap = Tap {
+                    seen: &seen,
+                    first: Some(first),
+                };
+                let _ = done.send(attach_to(&store, "0001", &mut tap));
+            });
+            // The caller has read the log's first line, so it is attached; the state it reads is already finished.
+            first_seen.recv().unwrap();
+            assert!(
+                finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                "the caller returned while the runner still held alive"
+            );
+            store
+                .append(
+                    "0001",
+                    "log",
+                    "ompdesk check: 0001: passed — verdict /x/verdict.txt",
+                )
+                .unwrap();
+            drop(alive);
+            finished.recv().unwrap()
+        });
+        assert_eq!(code, 0);
+        let text = String::from_utf8(seen.into_inner().unwrap()).unwrap();
+        assert!(text.contains("passed — verdict /x/verdict.txt"), "{text}");
         let _ = fs::remove_dir_all(dir);
     }
 }

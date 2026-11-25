@@ -9,13 +9,15 @@ import { PassThrough } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MEMORY_HUB_ENTRY } from "../../../resources/gui-bridge/mcp-hub-contracts";
+import { isRenameBlocked } from "../../../resources/gui-bridge/rename-retry";
 import macSigning from "../../../scripts/mac-signing.json" with { type: "json" };
 import { AI_MEMORY_BINARIES, AI_MEMORY_VERSION, type AiMemoryState } from "../../shared/ai-memory";
-import { isRenameBlocked } from "../atomic-file";
-import type { SpawnSpec } from "../setup/plans";
+import { core } from "../core/process";
 import { SetupRunner, type SupervisedChild } from "../setup/runner";
-import { SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
+import { type SpawnSpec, SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
 import { RM_TEMP } from "../test-fake-omp";
+import { MemoryCare } from "./care";
+import { AiMemoryClient } from "./client";
 import {
 	AI_MEMORY_STEP_MAX_MS,
 	AiMemoryService,
@@ -24,6 +26,7 @@ import {
 	type ServiceControl,
 } from "./service";
 import { AI_MEMORY_REQUIREMENT, MAC_STAGE_KEY } from "./staging";
+import { MemoryUpkeep } from "./upkeep";
 
 /** ai-memory's own layout of omp's agent dir and of the extension root (the core's `terminal.rs` and `root.rs`). */
 const EXTENSION_FILE = join("extensions", "ai-memory-omp.ts");
@@ -124,6 +127,22 @@ async function memoryServer(health: World["health"]): Promise<Server> {
 				storage: { database_bytes: 2048 },
 			};
 			response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(status));
+			return;
+		}
+		if (request.url === "/api/v1/projects") {
+			response.writeHead(200).end(JSON.stringify([{ workspace_name: "w", project_name: "p" }]));
+			return;
+		}
+		if (request.url === "/api/v1/workspaces/w/projects/p/pages") {
+			response.writeHead(200).end("[]");
+			return;
+		}
+		if (request.url === "/api/v1/workspaces/w/projects/p/handoffs") {
+			response.writeHead(200).end('{"handoffs":[]}');
+			return;
+		}
+		if (request.url?.startsWith("/api/v1/workspaces/w/projects/p/sessions?")) {
+			response.writeHead(200).end('{"sessions":[]}');
 			return;
 		}
 		response.writeHead(404).end();
@@ -278,7 +297,10 @@ async function world(overrides: Partial<AiMemoryServiceDeps> = {}): Promise<Worl
 		onState: snapshot => states.push(snapshot),
 		runner: new SetupRunner(spawner),
 		healthWaitMs: 0,
-		pollMs: 10,
+		// No poll unless a test is about polling: every poll is a new loopback connection, and at 10 ms the file left
+		// ~1500 in TIME_WAIT per run, so a few runs inside Windows' TIME_WAIT window used up its ephemeral ports and the
+		// core could not reach the test's server for tens of seconds (flake-probe 45604394584).
+		pollMs: 3_600_000,
 		now: () => clock.now,
 		...overrides,
 	});
@@ -552,14 +574,20 @@ describe("AiMemoryService", () => {
 
 		it("the automatic re-runs are bounded: a refusal that never ends stays failed with its reason", async () => {
 			const lines: string[] = [];
+			// The phase each `failed` line was heard in: the line reports a state that is already visible.
+			const phases: string[] = [];
 			const { service, behavior, commands } = await make({
 				retryDelaysMs: [0, 0],
-				log: message => lines.push(message),
+				log: message => {
+					lines.push(message);
+					if (message === "failed") phases.push(service.state().phase);
+				},
 			});
 			behavior.setup = () => BOOTSTRAP_REFUSED;
 			await service.start();
 			// The third failure is logged before the (refused) schedule of a fourth pass, in the same turn.
 			await vi.waitFor(() => expect(lines.filter(message => message === "failed")).toHaveLength(3));
+			expect(phases).toEqual(["failed", "failed", "failed"]);
 			expect(lines.filter(message => message === "retry")).toHaveLength(2);
 			expect(commands().filter(command => command === SETUP)).toHaveLength(3);
 			expect(service.state()).toMatchObject({ phase: "failed" });
@@ -1130,7 +1158,7 @@ describe("AiMemoryService", () => {
 
 	describe("polling", () => {
 		it("down twice re-runs setup once, then the cooldown holds; after it, setup runs again", async () => {
-			const { service, health, commands, clock } = await make();
+			const { service, health, commands, clock } = await make({ pollMs: 10 });
 			await service.start();
 			const setups = () => commands().filter(command => command === SETUP).length;
 			expect(setups()).toBe(1);
@@ -1151,6 +1179,7 @@ describe("AiMemoryService", () => {
 			const back = Promise.withResolvers<void>();
 			let down = false;
 			const { service, health, commands } = await make({
+				pollMs: 10,
 				onState: snapshot => {
 					if (!down) return;
 					if (snapshot.phase === "unreachable") unreachable.resolve();
@@ -1173,6 +1202,7 @@ describe("AiMemoryService", () => {
 			let removed = false;
 			let sawGone = false;
 			const { service, rootDir, commands } = await make({
+				pollMs: 10,
 				onState: snapshot => {
 					if (!removed) return;
 					if (!snapshot.wiring.app) sawGone = true;
@@ -1209,7 +1239,7 @@ describe("AiMemoryService", () => {
 				for (let turn = 0; turn < 1000 && !holds(); turn++) await sleep(10);
 			};
 			try {
-				const { service, health } = await make();
+				const { service, health } = await make({ pollMs: 10 });
 				await service.start();
 				// start() answers when the pass ends; the core arms its poll timer a moment after, as a task of its own
 				// (`start_polling`), and main registers it when that event arrives. Advancing before then ticks nothing
@@ -1237,6 +1267,113 @@ describe("AiMemoryService", () => {
 			}
 		}, 30_000);
 	});
+
+	it("owns the quality timers while ready, finishes an admitted unit's undo record and repairs only once per launch", async () => {
+		let care: MemoryCare;
+		let upkeep: MemoryUpkeep;
+		const { service, clock, health, http, root } = await make({
+			quality: () => ({ care: care.service, upkeep: upkeep.service }),
+		});
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const restores: string[] = [];
+		let units = 0;
+		care = new MemoryCare({
+			version: "1",
+			stateFile: join(root, "care.json"),
+			now: () => clock.now,
+			log: () => {},
+			client: {
+				headCheckpoint: async () => "checkpoint",
+				page: async () => {
+					throw new Error("title unavailable");
+				},
+				feedback: async () => {},
+				retirePage: async () => "retired",
+				restorePage: async (_ref, rev) => {
+					restores.push(rev);
+				},
+			},
+			units: [
+				{
+					name: "fresh",
+					everyMs: null,
+					run: async store => {
+						await store.feedback({ workspace: "w", project: "p", path: `gotchas/${++units}.md` }, "stale");
+						started.resolve();
+						await release.promise;
+						return { done: false };
+					},
+				},
+			],
+		});
+		upkeep = new MemoryUpkeep({
+			// Scheduled work gets the *native service's* current address, not an address captured on open.
+			client: new AiMemoryClient({ url: () => null, dataDir: () => null }),
+			stateFile: join(root, "upkeep.json"),
+			log: () => {},
+			now: () => clock.now,
+		});
+		let repairs = 0;
+		let learns = 0;
+		http.on("request", request => {
+			if (request.url?.endsWith("/handoffs")) repairs++;
+			if (request.url?.includes("/sessions?")) learns++;
+		});
+		type Timer = { service: string; timer: number; ms: number; repeat: boolean };
+		const timers: Timer[] = [];
+		const off = core().on("aimemory.service.timer", data => {
+			const timer = data as Timer;
+			if ([120_000, 300_000, 900_000].includes(timer.ms)) timers.push(timer);
+		});
+		const fire = (ms: number, stretch: number) => {
+			const timer = timers.filter(t => t.ms === ms)[stretch];
+			if (!timer) throw new Error(`No ${ms} ms timer for ready stretch ${stretch}`);
+			expect(timer.repeat).toBe(ms === 900_000);
+			return core().call("aimemory.service.fire", { ...timer, now: clock.now });
+		};
+		const waitFor = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
+		try {
+			await service.start();
+			await waitFor(() => expect([timers.length, repairs]).toEqual([3, 1]));
+			await fire(120_000, 0);
+			await waitFor(() => expect(learns).toBe(1));
+			await fire(300_000, 0);
+			await started.promise;
+
+			health.up = false;
+			clock.now += 6_000;
+			await service.refresh();
+			expect(service.state().phase).toBe("unreachable");
+			release.resolve();
+			expect(await care.undo()).toBe(1);
+			expect(restores).toEqual(["checkpoint"]);
+			await fire(900_000, 0);
+
+			health.up = true;
+			clock.now += 6_000;
+			await service.refresh();
+			await waitFor(() => expect(timers).toHaveLength(6));
+			await fire(900_000, 0);
+			await fire(900_000, 1);
+			await waitFor(() => expect([units, learns, repairs]).toEqual([2, 2, 1]));
+			expect(await care.undo()).toBe(1);
+
+			core().abandon("replace the test's memory core");
+			await waitFor(() => expect(timers).toHaveLength(9));
+			await fire(120_000, 2);
+			await waitFor(() => expect([learns, repairs]).toEqual([3, 1]));
+			service.dispose();
+			await core().call("aimemory.service.closed", { service: timers[0]?.service });
+			await expect(fire(900_000, 2)).rejects.toMatchObject({ code: "memory_service_closed" });
+		} finally {
+			off();
+			release.resolve();
+			service.dispose();
+			care.dispose();
+			upkeep.dispose();
+		}
+	}, 60_000);
 
 	describe("state pushes", () => {
 		it("every push is a whole, independent snapshot", async () => {
@@ -1339,7 +1476,7 @@ describe("AiMemoryService", () => {
 
 	describe("refresh", () => {
 		it("re-reads stats at most every few seconds while ready", async () => {
-			const { service, clock, health } = await make({ pollMs: 3_600_000 });
+			const { service, clock, health } = await make();
 			await service.start();
 			const calls = () => health.healthCalls;
 			const before = calls();

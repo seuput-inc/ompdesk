@@ -4,38 +4,27 @@
 //! spawn PATH).
 //!
 //! Row keys are opaque handles, stable across scans: `marketplace:<name>`, `plugin:<id>:<scope>[:<project>]`,
-//! `skill:<id>:<scope>[:<project>]`, `skill:plugin`, `skill:local`, `mcp:<name>`. A project is a short hash of its
-//! folder that main hands in (`projects`), so no path is in a key; `detail` shows `user` or the folder's name.
+//! `skill:<id>:<scope>[:<project>]`, `skill:plugin`, `skill:local`, `mcp:<name>`. A project's key uses the
+//! first four bytes of the folder's SHA-1; `detail` shows `user` or the folder's name.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Number;
+use sha1::{Digest, Sha1};
 
 use super::mcp::{self, McpClass, Runner, Server, command_name};
 use crate::fs::order::{NameOrder, js_trim};
-use crate::server::Fault;
-
-/// The server name the built-in REA has in stock's MCP manager.
-const BUILTIN_MCP_NAME: &str = "rea";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Params {
     inventory: Inventory,
-    /// The built-in REA's root (a server whose source is under it is the built-in).
-    rea_root: Option<String>,
-    /// The built-in REA is on in this app: it is listed even though stock never reports it (it is an extension root).
-    rea_enabled: bool,
-    /// The REA version this OMPdesk release ships.
-    rea_version: String,
     /// The row kinds in display order (`EXTENSION_KINDS`, which the page shares).
     kinds: Vec<String>,
     /// The locale main's `localeCompare` resolves.
     locale: String,
-    /// Each project folder with its key (`projectHash`).
-    projects: Vec<(String, String)>,
     /// The resolved binary of each direct MCP command, by server name; null when it resolves to nothing.
     binaries: Vec<(String, Option<Binary>)>,
 }
@@ -176,20 +165,13 @@ pub fn is_exact_version(spec: &str) -> bool {
     tag(rest, '+').unwrap_or(rest).is_empty()
 }
 
-struct Projects(HashMap<String, String>);
-
-impl Projects {
-    /// `user`, or `project:<key>` for a project's folder.
-    fn scope_key(&self, scope: &str, cwd: Option<&str>) -> Result<String, Fault> {
-        let Some(cwd) = cwd.filter(|cwd| scope == "project" && !cwd.is_empty()) else {
-            return Ok(scope.to_owned());
-        };
-        let key = self
-            .0
-            .get(cwd)
-            .ok_or_else(|| Fault::new("invalid_params", "A project folder came without its key"))?;
-        Ok(format!("{scope}:{key}"))
-    }
+fn scoped_key(kind: &str, id: &str, scope: &str, cwd: Option<&str>) -> String {
+    let Some(cwd) = cwd.filter(|cwd| scope == "project" && !cwd.is_empty()) else {
+        return format!("{kind}:{id}:{scope}");
+    };
+    let hash = Sha1::digest(cwd.as_bytes());
+    let prefix = u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]);
+    format!("{kind}:{id}:{scope}:{prefix:08x}")
 }
 
 /// `user`, or the project folder's name.
@@ -223,32 +205,19 @@ fn plugin_method(channel: &str) -> Option<&'static str> {
     }
 }
 
-fn mcp_row(name: &str) -> Row {
-    Row {
-        key: format!("mcp:{name}"),
+fn mcp_seed(server: Server, binaries: &HashMap<String, Option<Binary>>) -> Seed {
+    let class = mcp::classify(&server);
+    let mut row = Row {
+        key: format!("mcp:{}", server.name),
         kind: MCP,
-        name: name.to_owned(),
+        name: server.name,
         detail: None,
         count: None,
         installed: None,
         method: None,
         skip: None,
-    }
-}
-
-fn mcp_seed(
-    server: Server,
-    rea_root: Option<&str>,
-    rea_version: &str,
-    binaries: &HashMap<String, Option<Binary>>,
-) -> Seed {
-    let mut row = mcp_row(&server.name);
-    let target = match mcp::classify(&server, rea_root) {
-        McpClass::Builtin => {
-            row.installed = Some(rea_version.to_owned());
-            row.skip = Some("builtin".into());
-            Target::None
-        }
+    };
+    let target = match class {
         // The URL can carry a token: it is never shown.
         McpClass::Remote => {
             row.skip = Some("remote".into());
@@ -286,7 +255,7 @@ fn mcp_seed(
         }
         McpClass::Direct { command } => {
             let name = command_name(&command);
-            match binaries.get(&server.name).and_then(Option::as_ref) {
+            match binaries.get(&row.name).and_then(Option::as_ref) {
                 None => {
                     row.detail = Some(name);
                     row.skip = Some("unknown-install".into());
@@ -343,18 +312,13 @@ fn positive(count: Option<Number>) -> Option<Number> {
     count.filter(|count| count.as_f64().is_some_and(|count| count > 0.0))
 }
 
-pub fn seeds(params: Params) -> Result<Vec<Seed>, Fault> {
+pub fn seeds(params: Params) -> Vec<Seed> {
     let Params {
         inventory,
-        rea_root,
-        rea_enabled,
-        rea_version,
         kinds,
         locale,
-        projects,
         binaries,
     } = params;
-    let projects = Projects(projects.into_iter().collect());
     let binaries: HashMap<_, _> = binaries.into_iter().collect();
     let mut seeds = Vec::new();
 
@@ -381,11 +345,7 @@ pub fn seeds(params: Params) -> Result<Vec<Seed>, Fault> {
         let linked = plugin.channel == "linked";
         seeds.push(Seed {
             row: Row {
-                key: format!(
-                    "plugin:{}:{}",
-                    plugin.id,
-                    projects.scope_key(&plugin.scope, cwd)?
-                ),
+                key: scoped_key(PLUGIN, &plugin.id, &plugin.scope, cwd),
                 kind: PLUGIN,
                 name: plugin.id.clone(),
                 detail: Some(scope_detail(&plugin.scope, cwd)),
@@ -422,11 +382,7 @@ pub fn seeds(params: Params) -> Result<Vec<Seed>, Fault> {
             .is_some_and(|range| !range.is_empty() && is_exact_version(range));
         seeds.push(Seed {
             row: Row {
-                key: format!(
-                    "skill:{}:{}",
-                    skill.id,
-                    projects.scope_key(&skill.scope, cwd)?
-                ),
+                key: scoped_key(SKILL, &skill.id, &skill.scope, cwd),
                 kind: SKILL,
                 name: skill.id.clone(),
                 detail: Some(scope_detail(&skill.scope, cwd)),
@@ -452,24 +408,8 @@ pub fn seeds(params: Params) -> Result<Vec<Seed>, Fault> {
         seeds.push(skill_group("local", count, "local"));
     }
 
-    let mut builtin_listed = false;
     for server in inventory.mcp_servers {
-        builtin_listed |= server.name == BUILTIN_MCP_NAME;
-        seeds.push(mcp_seed(
-            server,
-            rea_root.as_deref(),
-            &rea_version,
-            &binaries,
-        ));
-    }
-    if rea_enabled && !builtin_listed {
-        let mut row = mcp_row(BUILTIN_MCP_NAME);
-        row.installed = Some(rea_version);
-        row.skip = Some("builtin".into());
-        seeds.push(Seed {
-            row,
-            target: Target::None,
-        });
+        seeds.push(mcp_seed(server, &binaries));
     }
 
     // The first seed of a key stands; then kinds in display order, names and keys as `localeCompare` orders them.
@@ -483,7 +423,7 @@ pub fn seeds(params: Params) -> Result<Vec<Seed>, Fault> {
             .then_with(|| order.compare(&a.row.name, &b.row.name))
             .then_with(|| order.compare(&a.row.key, &b.row.key))
     });
-    Ok(seeds)
+    seeds
 }
 
 #[cfg(test)]
@@ -507,7 +447,7 @@ mod tests {
     fn seeds_rows_as_the_typescript_did() {
         for (at, row) in captured("seeds").into_iter().enumerate() {
             let params: Params = serde_json::from_value(row[0].clone()).unwrap();
-            let seeds = seeds(params).unwrap();
+            let seeds = seeds(params);
             assert_eq!(serde_json::to_value(seeds).unwrap(), row[1], "case {at}");
         }
     }
@@ -535,25 +475,18 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_project_folder_without_its_key() {
-        let params: Params = serde_json::from_value(serde_json::json!({
-            "inventory": {
-                "marketplaces": [],
-                "plugins": [{ "channel": "npm", "id": "p", "scope": "project", "cwd": "/w", "installed": null }],
-                "registrySkills": [],
-                "pluginSkills": 0,
-                "localSkills": 0,
-                "mcpServers": [],
-            },
-            "reaRoot": null,
-            "reaEnabled": false,
-            "reaVersion": "1.0.0",
-            "kinds": [],
-            "locale": "en-US",
-            "projects": [],
-            "binaries": [],
-        }))
-        .unwrap();
-        assert_eq!(seeds(params).err().unwrap().code, "invalid_params");
+    fn project_keys_match_the_node_utf8_digest() {
+        for (cwd, key) in [
+            ("/Users/u/work/my-app", "plugin:p:project:9fb32df3"),
+            (r"C:\work\other-app", "plugin:p:project:a2344a62"),
+            ("/작업/🪴", "plugin:p:project:fb943746"),
+            ("", "plugin:p:project"),
+        ] {
+            assert_eq!(scoped_key(PLUGIN, "p", "project", Some(cwd)), key);
+        }
+        assert_eq!(
+            scoped_key(PLUGIN, "p", "user", Some("/ignored")),
+            "plugin:p:user"
+        );
     }
 }

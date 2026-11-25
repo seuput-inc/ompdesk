@@ -6,17 +6,8 @@
  * launch continues (Continue interrupted work on; ⌘Q and the update restart alike).
  */
 
-import { describe, expect, it, vi } from "vitest";
-import { closeToTrayEnabled } from "../shared/desktop-prefs";
-import {
-	activateAction,
-	assessQuitRisk,
-	lastWindowCloseAction,
-	QuitLatch,
-	quitNeedsConfirmation,
-	updateRestartConfirmation,
-	type WindowTabFact,
-} from "./quit-guard";
+import { describe, expect, it } from "vitest";
+import { assessQuitRisk, quitNeedsConfirmation, updateRestartConfirmation, type WindowTabFact } from "./quit-guard";
 
 function fact(windowId: number, tabId: string, inFlight: boolean): WindowTabFact {
 	return { windowId, tabId, inFlight };
@@ -64,89 +55,5 @@ describe("an update restart a person starts", () => {
 		expect(updateRestartConfirmation(working, false, subagents)).toBe("running work");
 		expect(updateRestartConfirmation(working, false, none)).toBe("running work");
 		expect(updateRestartConfirmation(idle, false, none)).toBeNull();
-	});
-});
-
-describe("quit latch", () => {
-	it("refuses an unapproved quit without tearing anything down", () => {
-		const teardown = vi.fn();
-		const latch = new QuitLatch();
-
-		expect(latch.proceed(teardown)).toBe(false);
-		expect(latch.approved).toBe(false);
-		expect(teardown).not.toHaveBeenCalled();
-	});
-
-	it("tears down once per approved quit", () => {
-		const teardown = vi.fn();
-		const latch = new QuitLatch();
-		latch.approve();
-
-		expect(latch.proceed(teardown)).toBe(true);
-		expect(latch.proceed(teardown)).toBe(true);
-		expect(teardown).toHaveBeenCalledTimes(1);
-	});
-
-	it("runs the ⌘Q teardown when an update quits, before its windows close", () => {
-		const teardown = vi.fn();
-		const latch = new QuitLatch();
-
-		// quitAndInstall() emits before-quit-for-update, then closes every window,
-		// then emits before-quit: the teardown must already have run, and the
-		// later before-quit must neither ask again nor tear down twice.
-		latch.proceedForUpdate(teardown);
-		expect(teardown).toHaveBeenCalledTimes(1);
-		expect(latch.proceed(teardown)).toBe(true);
-		expect(teardown).toHaveBeenCalledTimes(1);
-	});
-});
-
-describe("closing the last shown window", () => {
-	const close = (platform: NodeJS.Platform, closeToTray: boolean, quitApproved = false) =>
-		lastWindowCloseAction({ platform, closeToTray, quitApproved });
-
-	it("on Windows quits through the quit guard before the window goes, so running turns are asked about and resume", () => {
-		// Closed first, the window's tabs would end as if their turns had finished (markers cleared),
-		// and window-all-closed would quit afterwards with neither the confirmation nor a resume.
-		expect(close("win32", false)).toBe("quit");
-	});
-
-	it("hides to the tray unless the user turned close-to-tray off", () => {
-		expect(close("win32", true)).toBe("hide");
-	});
-
-	it("just closes once a quit is approved", () => {
-		expect(close("win32", false, true)).toBe("close");
-		expect(close("win32", true, true)).toBe("close");
-		expect(close("darwin", false, true)).toBe("close");
-	});
-
-	it("hides on macOS whatever the pref, so tabs and omp keep running and the Dock brings it back", () => {
-		expect(close("darwin", false)).toBe("hide");
-		expect(close("darwin", true)).toBe("hide");
-	});
-
-	it("reads the close-to-tray pref as on unless explicitly false", () => {
-		expect(closeToTrayEnabled(undefined)).toBe(true);
-		expect(closeToTrayEnabled(true)).toBe(true);
-		expect(closeToTrayEnabled(false)).toBe(false);
-	});
-});
-
-describe("a Dock click (macOS activate)", () => {
-	const click = (windowCount: number, anyVisible: boolean, quitApproved = false) =>
-		activateAction({ windowCount, anyVisible, quitApproved });
-
-	it("opens a window when none is left, and brings a hidden one back", () => {
-		expect(click(0, false)).toBe("spawn");
-		expect(click(2, false)).toBe("show");
-		expect(click(2, true)).toBe("ignore");
-	});
-
-	it("never rebuilds a window once a quit is approved: its services are torn down, and a restore on them drops tabs from the saved layout", () => {
-		// 21 Oct 2026: an update restart tore the services down, the quit stalled, and a Dock click restored
-		// the layout again; a paired host's tab got no tab (its link was disposed) and left the saved layout.
-		expect(click(0, false, true)).toBe("ignore");
-		expect(click(2, false, true)).toBe("ignore");
 	});
 });

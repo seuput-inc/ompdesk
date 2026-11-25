@@ -1,4 +1,5 @@
 import { createECDH, createPublicKey, randomBytes, verify } from "node:crypto";
+import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
@@ -8,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WebPushPayload, WebPushSubscriptionJson } from "../../shared/web-push";
 import { CoreError } from "../core/process";
-import { coreTransport, PUSH_PAYLOAD_MAX_BYTES, type PushOptions, PushSender, type PushTransport } from "./push";
+import { coreTransport, type PushDelivery, type PushOptions, PushSender, type PushTransport } from "./push";
 import { loadVapid } from "./vapid-store";
 
 const require = createRequire(import.meta.url);
@@ -41,39 +42,23 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("PushSender", () => {
-	/** A fake push service answering `answers` in turn (the last one repeats); the retry's pause is recorded, not waited. */
-	function sender(
-		answers: number | Error | readonly (number | Error)[],
-		log: string[] = [],
-		beforeRetry?: () => Promise<void>,
-	) {
-		const queue = Array.isArray(answers) ? [...answers] : [answers];
+	function sender(error?: Error, log: string[] = []) {
 		const calls: Parameters<PushTransport["send"]>[] = [];
-		const waits: number[] = [];
 		const transport: PushTransport = {
 			send: async (...args) => {
 				calls.push(args);
-				const answer = (queue.length > 1 ? queue.shift() : queue[0]) as number | Error;
-				if (answer instanceof Error) throw answer;
-				return { statusCode: answer };
+				if (error) throw error;
+				return { outcome: "sent" };
 			},
 		};
-		const wait = async (ms: number) => {
-			waits.push(ms);
-			await beforeRetry?.();
-		};
 		return {
-			push: new PushSender({ userData: dir, transport, wait, log: message => log.push(message) }),
+			push: new PushSender({ userData: dir, transport, log: message => log.push(message), wait: async () => {} }),
 			calls,
-			waits,
 		};
 	}
 
-	it("sends the payload as JSON with the TTL and the urgency, and tells the public key the core signs with", async () => {
-		const { push, calls } = sender(201);
-		const { created } = await push.open();
-		expect(created).toBe(true);
-		expect((await loadVapid(dir)).publicKey).toBe(push.publicKey);
+	it("sends the payload as JSON with the TTL and the urgency", async () => {
+		const { push, calls } = sender();
 		const { subscription } = browser();
 		expect(await push.send(subscription, payload, { ttl: 21600, urgency: "high" })).toBe("sent");
 		const [sentTo, body, sentOptions] = calls[0] ?? [];
@@ -82,113 +67,130 @@ describe("PushSender", () => {
 		expect(sentOptions).toEqual({ ttl: 21600, urgency: "high", timeoutMs: 10_000 });
 	});
 
-	it("says `gone` for 404 and 410 so the caller forgets the subscription, logs nothing and does not retry", async () => {
+	it("says `gone` for 404 and 410 so the caller forgets the subscription, and logs nothing", async () => {
+		await loadVapid(dir);
 		for (const status of [404, 410]) {
 			const log: string[] = [];
-			const { push, calls, waits } = sender(status, log);
-			expect(await push.send(browser().subscription, payload, options)).toBe("gone");
-			expect(calls).toHaveLength(1);
-			expect(waits).toEqual([]);
+			const { endpoint } = await pushService(status);
+			const push = new PushSender({ userData: dir, log: message => log.push(message) });
+			expect(await push.send(browser(endpoint).subscription, payload, options)).toBe("gone");
 			expect(log).toEqual([]);
 		}
 	});
 
-	it("logs any other 4xx refusal and does not retry it", async () => {
-		for (const status of [400, 401, 413]) {
+	it("logs a refusal that is the subscriber's fault and makes one attempt only", async () => {
+		await loadVapid(dir);
+		for (const status of [300, 400, 401, 413]) {
 			const log: string[] = [];
-			const { push, calls, waits } = sender(status, log);
-			expect(await push.send(browser().subscription, payload, options)).toBe("failed");
-			expect(calls).toHaveLength(1);
-			expect(waits).toEqual([]);
+			const { endpoint, seen } = await pushService(status);
+			const push = new PushSender({ userData: dir, log: message => log.push(message), wait: async () => {} });
+			expect(await push.send(browser(endpoint).subscription, payload, options)).toBe("failed");
+			expect(seen.requests).toBe(1);
 			expect(log).toEqual([`web push refused with status ${status}`]);
 		}
 	});
 
-	it("retries a 5xx or 429 once after 2 s and resolves what the retry got", async () => {
-		const { push, calls, waits } = sender([500, 201]);
-		expect(await push.send(browser().subscription, payload, options)).toBe("sent");
-		expect(calls).toHaveLength(2);
-		expect(waits).toEqual([2_000]);
+	it("tries once more, 2 s later, when the push service faulted or rate limited", async () => {
+		await loadVapid(dir);
 		for (const status of [429, 500, 503]) {
 			const log: string[] = [];
-			const failing = sender(status, log);
-			expect(await failing.push.send(browser().subscription, payload, options)).toBe("failed");
-			expect(failing.calls).toHaveLength(2);
-			expect(failing.waits).toEqual([2_000]);
+			const waits: number[] = [];
+			const { endpoint, seen } = await pushService(status);
+			const wait = async (ms: number) => {
+				waits.push(ms);
+			};
+			const push = new PushSender({ userData: dir, log: message => log.push(message), wait });
+			expect(await push.send(browser(endpoint).subscription, payload, options)).toBe("failed");
+			expect(seen.requests).toBe(2);
+			expect(waits).toEqual([2000]);
 			expect(log).toEqual([`web push refused with status ${status}`]);
 		}
 	});
 
-	it("retries a send that got no answer once, logging instead of throwing", async () => {
+	it("delivers on the retry when the second attempt goes through", async () => {
+		const answers: PushDelivery[] = [
+			{ outcome: "failed", message: "web push refused with status 502", retry: true },
+			{ outcome: "sent" },
+		];
+		const transport: PushTransport = { send: async () => answers.shift() ?? { outcome: "sent" } };
+		const push = new PushSender({ userData: dir, transport, wait: async () => {} });
+		expect(await push.send(browser().subscription, payload, options)).toBe("sent");
+		expect(answers).toEqual([]);
+	});
+
+	it("drops the retry when a newer push with the same tag went out meanwhile (a clear stays a clear)", async () => {
 		const log: string[] = [];
-		const { push, calls, waits } = sender(new Error("getaddrinfo ENOTFOUND push.example.com"), log);
+		const bodies: string[] = [];
+		const gate = Promise.withResolvers<void>();
+		const transport: PushTransport = {
+			send: async (_subscription, body) => {
+				bodies.push(body);
+				return bodies.length === 1 ? { outcome: "failed", message: "boom", retry: true } : { outcome: "sent" };
+			},
+		};
+		const wait = () => gate.promise;
+		const push = new PushSender({ userData: dir, transport, wait, log: message => log.push(message) });
+		const { subscription } = browser();
+		const first = push.send(subscription, payload, options);
+		await new Promise(resolve => setImmediate(resolve));
+		const clear: WebPushPayload = { ...payload, kind: "clear", title: "", body: "", silent: true };
+		expect(await push.send(subscription, clear, options)).toBe("sent");
+		gate.resolve();
+		expect(await first).toBe("failed");
+		expect(bodies.map(body => (JSON.parse(body) as WebPushPayload).kind)).toEqual(["completion", "clear"]);
+		expect(log).toEqual(["boom; not retried: a newer push with its tag went out"]);
+	});
+
+	it("logs a network failure instead of throwing, after one retry", async () => {
+		const log: string[] = [];
+		const { push, calls } = sender(new Error("getaddrinfo ENOTFOUND push.example.com"), log);
 		expect(await push.send(browser().subscription, payload, options)).toBe("failed");
 		expect(calls).toHaveLength(2);
-		expect(waits).toEqual([2_000]);
 		expect(log).toEqual(["web push failed: getaddrinfo ENOTFOUND push.example.com"]);
-		const recovered = sender([new Error("socket hang up"), 201]);
-		expect(await recovered.push.send(browser().subscription, payload, options)).toBe("sent");
-	});
-
-	it("retries a `clear` by the same rule", async () => {
-		const clear: WebPushPayload = { v: 1, kind: "clear", title: "", body: "", tag: "tab:t1" };
-		const { push, calls } = sender([503, 201]);
-		expect(await push.send(browser().subscription, clear, options)).toBe("sent");
-		expect(calls.map(([, body]) => JSON.parse(body))).toEqual([clear, clear]);
-	});
-
-	it("drops the retry when a newer push with the same tag went out meanwhile, so an answered ask stays cleared", async () => {
-		const { subscription } = browser();
-		const clear: WebPushPayload = { v: 1, kind: "clear", title: "", body: "", tag: payload.tag };
-		const log: string[] = [];
-		let cleared: Promise<string> | undefined;
-		const { push, calls } = sender([500, 201], log, async () => {
-			cleared = push.send(subscription, clear, options);
-			await cleared;
-		});
-		expect(await push.send(subscription, payload, options)).toBe("failed");
-		expect(await cleared).toBe("sent");
-		expect(calls.map(([, body]) => JSON.parse(body).kind)).toEqual(["completion", "clear"]);
-		expect(log).toEqual(["web push retry dropped: a newer push with its tag went out"]);
 	});
 
 	it("does not send a payload a push service would refuse", async () => {
 		const log: string[] = [];
-		const { push, calls } = sender(201, log);
-		const big = { ...payload, body: "가".repeat(Math.ceil(PUSH_PAYLOAD_MAX_BYTES / 3) + 1) };
-		expect(await push.send(browser().subscription, big, options)).toBe("failed");
-		expect(calls).toHaveLength(0);
-		expect(log[0]).toMatch(/over the limit/);
+		const { endpoint, seen } = await pushService(201);
+		const { subscription } = browser(endpoint);
+		const push = new PushSender({ userData: dir, log: message => log.push(message) });
+		const exact = { ...payload, body: '가𝄞\n"' };
+		exact.body += "x".repeat(3800 - Buffer.byteLength(JSON.stringify(exact)));
+		expect(await push.send(subscription, { ...exact, body: `${exact.body}x` }, options)).toBe("failed");
+		expect(seen.requests).toBe(0);
+		expect(log).toEqual(["web push not sent: payload of 3801 bytes is over the limit"]);
+		await loadVapid(dir);
+		expect(await push.send(subscription, exact, options)).toBe("sent");
+		expect(seen.requests).toBe(1);
+		expect(log).toHaveLength(1);
 	});
 });
 
-describe("coreTransport (the real core, against a push service of its own on loopback)", () => {
-	const services: http.Server[] = [];
-	afterEach(() => {
-		for (const server of services.splice(0)) server.close();
-	});
+const services: http.Server[] = [];
+afterEach(() => {
+	for (const server of services.splice(0)) server.close();
+});
 
-	/** A push service on 127.0.0.1 that keeps the one request it gets and answers `statusCode`. */
-	async function pushService(statusCode: number) {
-		const seen: { method?: string; url?: string; headers: http.IncomingHttpHeaders; body: Buffer } = {
-			headers: {},
-			body: Buffer.alloc(0),
-		};
-		const server = http.createServer((request, response) => {
-			const chunks: Buffer[] = [];
-			request.on("data", (chunk: Buffer) => chunks.push(chunk));
-			request.on("end", () => {
-				Object.assign(seen, { method: request.method, url: request.url, headers: request.headers });
-				seen.body = Buffer.concat(chunks);
-				response.writeHead(statusCode).end();
-			});
+async function pushService(statusCode: number) {
+	const seen = { requests: 0, headers: {} as http.IncomingHttpHeaders, body: Buffer.alloc(0) };
+	const server = http.createServer((request, response) => {
+		seen.requests++;
+		const chunks: Buffer[] = [];
+		request.on("data", (chunk: Buffer) => chunks.push(chunk));
+		request.on("end", () => {
+			Object.assign(seen, { method: request.method, url: request.url, headers: request.headers });
+			seen.body = Buffer.concat(chunks);
+			response.writeHead(statusCode).end();
 		});
-		services.push(server);
-		await new Promise<void>(listening => server.listen(0, "127.0.0.1", listening));
-		const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-		return { seen, origin, endpoint: `${origin}/send/abc` };
-	}
+	});
+	services.push(server);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	return { seen, origin, endpoint: `${origin}/send/abc` };
+}
 
+describe("coreTransport (the real core, against a push service of its own on loopback)", () => {
 	const send = (subscription: WebPushSubscriptionJson, ttl = 3600, urgency: PushOptions["urgency"] = "high") =>
 		coreTransport(dir).send(subscription, JSON.stringify(payload), { ttl, urgency, timeoutMs: 10_000 });
 
@@ -197,7 +199,7 @@ describe("coreTransport (the real core, against a push service of its own on loo
 		const { publicKey, subject } = await loadVapid(dir);
 		const { ecdh, auth, subscription } = browser(endpoint);
 		const result = await send(subscription);
-		expect(result).toEqual({ statusCode: 201 });
+		expect(result).toEqual({ outcome: "sent" });
 		expect(seen).toMatchObject({ method: "POST", url: "/send/abc" });
 		const headers = seen.headers;
 		expect(Number(headers.ttl)).toBe(3600);
@@ -239,10 +241,10 @@ describe("coreTransport (the real core, against a push service of its own on loo
 		expect(JSON.parse(clear.toString("utf8"))).toEqual(payload);
 	});
 
-	it("returns a refusal's status instead of throwing", async () => {
+	it("returns a gone subscription instead of throwing", async () => {
 		const { endpoint } = await pushService(410);
 		await loadVapid(dir);
-		expect(await send(browser(endpoint).subscription, 60, "normal")).toEqual({ statusCode: 410 });
+		expect(await send(browser(endpoint).subscription, 60, "normal")).toEqual({ outcome: "gone" });
 	});
 
 	it("rejects with the core's fault when no push service answers, naming no endpoint", async () => {

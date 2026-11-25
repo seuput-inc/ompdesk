@@ -1,12 +1,26 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { expect } from "vitest";
-import { ompPackageRoot } from "./omp-runtime";
 
 /** Bun's launcher for the global omp (`omp.exe` on Windows); a stock-pinned test skips when it is not installed. */
 export const INSTALLED_OMP = join(homedir(), ".bun", "bin", process.platform === "win32" ? "omp.exe" : "omp");
+const stockScope = join(homedir(), ".bun", "install", "global", "node_modules", "@oh-my-pi");
+const stockCli = join(stockScope, "pi-coding-agent", "dist", "cli.js");
+
+/** The installed omp's `@oh-my-pi/<pkg>/src/<file>`, or null without omp or that file (a stock-pinned test skips). */
+export function stockSource(pkg: string, file: string): string | null {
+	const full = join(stockScope, pkg, "src", file);
+	return existsSync(full) ? full : null;
+}
+
+/** Runs `script` in Bun, which loads stock's TypeScript as omp does, and parses the JSON line it prints. */
+export function runStock<T>(script: string): T {
+	const ran = spawnSync("bun", ["-e", script], { encoding: "utf8", timeout: 60_000 });
+	if (ran.status !== 0) throw new Error(`stock probe failed: ${ran.stderr || ran.error}`);
+	return JSON.parse(ran.stdout) as T;
+}
 
 /**
  * What a test starts to run the installed omp: `spawn(OMP_COMMAND.file, [...OMP_COMMAND.args, ...omp's own args])`.
@@ -15,10 +29,10 @@ export const INSTALLED_OMP = join(homedir(), ".bun", "bin", process.platform ===
  * (a `session_exit` "normal" in the journal of a test that meant a crash) and keeps its folders open past the test's
  * cleanup. The product stops the whole tree (`taskkill /T`, sidecar.ts), so a test starts omp itself there.
  */
-export const OMP_COMMAND: { file: string; args: readonly string[] } = (() => {
-	const root = process.platform === "win32" ? ompPackageRoot(INSTALLED_OMP) : null;
-	return root ? { file: "bun", args: [join(root, "dist", "cli.js")] } : { file: INSTALLED_OMP, args: [] };
-})();
+export const OMP_COMMAND: { file: string; args: readonly string[] } =
+	process.platform === "win32" && existsSync(stockCli)
+		? { file: "bun", args: [stockCli] }
+		: { file: INSTALLED_OMP, args: [] };
 
 /**
  * `PI_CONFIG_DIR` naming `folder` for an omp whose home folder is `home`. Stock joins the value to the home folder
@@ -27,6 +41,65 @@ export const OMP_COMMAND: { file: string; args: readonly string[] } = (() => {
  */
 export function configDirName(folder: string, home = homedir()): string {
 	return relative(home, folder) || ".";
+}
+
+/** A stock fixture inherits the executable search path, not accounts, daemon endpoints or Bun caches. */
+export function stockFixtureEnv(home: string): NodeJS.ProcessEnv {
+	return {
+		PATH: process.env.PATH,
+		SystemRoot: process.env.SystemRoot,
+		ComSpec: process.env.ComSpec,
+		PATHEXT: process.env.PATHEXT,
+		HOME: home,
+		USERPROFILE: home,
+		APPDATA: join(home, "AppData", "Roaming"),
+		LOCALAPPDATA: join(home, "AppData", "Local"),
+		TMP: tmpdir(),
+		TEMP: tmpdir(),
+		TMPDIR: tmpdir(),
+		PI_CONFIG_DIR: ".",
+		PI_CODING_AGENT_DIR: join(home, "agent"),
+		OMP_DAEMON_DIR: join(home, "run", "daemon"),
+		OMP_DAEMON_IDLE_GRACE_MS: "0",
+		AWS_EC2_METADATA_DISABLED: "true",
+		OTEL_SDK_DISABLED: "true",
+	};
+}
+
+/**
+ * Ends the omp daemon a test's private config folder `folder` started, with what it runs. From omp 19 an omp starts
+ * one per config folder (`<folder>/run/daemon`); it inherits that omp's working folder (stock `resolveWorkerSpawnCmd`
+ * names none for the bundled entry), runs the session's units (bash services and the like) there and outlives it, so
+ * on Windows the test's folders stay busy (EBUSY) while they run. Older omps have none (`omp ps --json` names no
+ * daemon), and nothing is done.
+ */
+export function stopOmpDaemon(folder: string, privateEnv?: NodeJS.ProcessEnv): void {
+	const ps = spawnSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "ps", "--json"], {
+		env: {
+			...(privateEnv ?? process.env),
+			PI_CONFIG_DIR: configDirName(folder, privateEnv?.[process.platform === "win32" ? "USERPROFILE" : "HOME"]),
+		},
+		cwd: privateEnv ? folder : undefined,
+		encoding: "utf8",
+		timeout: 30_000,
+	});
+	let report: unknown;
+	try {
+		report = JSON.parse(ps.stdout);
+	} catch {
+		return;
+	}
+	const daemon = report && typeof report === "object" && "daemon" in report ? report.daemon : undefined;
+	const pid = daemon && typeof daemon === "object" && "pid" in daemon ? daemon.pid : undefined;
+	if (typeof pid !== "number") return;
+	if (process.platform === "win32") spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], { timeout: 30_000 });
+	else {
+		try {
+			process.kill(pid);
+		} catch {
+			// Already gone.
+		}
+	}
 }
 
 /**
@@ -94,7 +167,7 @@ export function runBridgeProbe(
 			{ env: spawnEnv, encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, input: "" },
 		);
 		const line = result.stderr.split("\n").find(value => value.startsWith(name));
-		expect(line, result.stderr.slice(-2500)).toMatch(new RegExp(`^${name}=`));
+		assert.match(line ?? "", new RegExp(`^${name}=`), result.stderr.slice(-2500));
 		return JSON.parse(line?.slice(name.length + 1) ?? "{}") as Record<string, unknown>;
 	} finally {
 		rmSync(isolated, { recursive: true, force: true });

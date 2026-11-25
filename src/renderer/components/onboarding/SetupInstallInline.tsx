@@ -1,6 +1,6 @@
 /**
  * One optional machine-setup item installing for a connection the user started
- * (the GitHub sign-in needs gh, the built-in REA server needs Node.js), shown
+ * (for example, GitHub sign-in needs gh), shown
  * inside that connection's own UI: "Installing GitHub CLI…" with its step,
  * bytes and clock while it runs, then, if it ended without the tool, the
  * reason and Retry. Main installs on its own (src/main/setup/); this only

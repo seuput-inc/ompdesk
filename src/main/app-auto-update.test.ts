@@ -378,6 +378,22 @@ describe("AutoInstallScheduler and a card nobody answers", () => {
 		expect(t.calls).toEqual([ANNOUNCE]);
 	});
 
+	it("waits for a session an agent is opening, before the countdown and at its end, then restarts", () => {
+		const t = setup({ busy: true, opening: true, focused: false, idleMs: 24 * HOUR, resumes: true });
+		t.advance(0);
+		t.advance(HOUR);
+		expect(t.calls).toEqual([]);
+		t.facts.opening = false;
+		t.advance(1000);
+		expect(t.calls).toEqual([ANNOUNCE]);
+		t.facts.opening = true;
+		t.advance(AUTO_INSTALL_COUNTDOWN_MS);
+		expect(t.calls).toEqual([ANNOUNCE]);
+		t.facts.opening = false;
+		t.advance(1000);
+		expect(t.calls).toEqual([ANNOUNCE, "install"]);
+	});
+
 	it("never gives way to a plan proposal, which a relaunch would lose, before the countdown or at its end", () => {
 		const t = setup({ asking: true, planWaiting: true, focused: false, idleMs: 24 * HOUR, resumes: true });
 		t.advance(0);

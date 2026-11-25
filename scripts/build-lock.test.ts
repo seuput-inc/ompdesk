@@ -2,11 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nativeBinPath } from "../src/main/native-bin";
 import { removeWhenFree } from "../src/main/test-folders";
 import { describeExit, run } from "./build-lock";
-import { ensureNative } from "./build-native";
 import { type LockLogEntry, readLockLog } from "./lock-log";
 import { HEAVY_HELD_ENV, type HeavyStatus } from "./lock-slots";
 
@@ -63,9 +62,6 @@ const nodeScript = (code: string) => {
 	return ["node", file];
 };
 
-beforeAll(() => {
-	ensureNative();
-}, 900_000);
 beforeEach(() => {
 	dir = fs.mkdtempSync(path.join(os.tmpdir(), "ompdesk-build-lock-"));
 });
@@ -256,10 +252,12 @@ describe("bun scripts/build-lock.ts", () => {
 
 	it("serializes two locked commands on a one-slot pool and shows the holder while one runs", async () => {
 		const sleeper = nodeScript("setTimeout(Function.prototype, 1500)");
+		const said: string[] = [];
 		const start = (owner: string) => {
 			const child = spawn("bun", [LOCK, "--kind", "other", "--", ...sleeper], {
 				env: env({ OMPDESK_LOCK_OWNER: owner }),
 			});
+			child.stderr.on("data", chunk => said.push(`${owner}: ${chunk}`));
 			return new Promise<number | null>(resolve => child.once("close", resolve));
 		};
 		const first = start("first@checkout");
@@ -268,7 +266,7 @@ describe("bun scripts/build-lock.ts", () => {
 			{ timeout: 20_000 },
 		);
 		const second = start("second@checkout");
-		expect(await Promise.all([first, second])).toEqual([0, 0]);
+		expect(await Promise.all([first, second]), said.join("")).toEqual([0, 0]);
 		const [one, two] = entries();
 		if (!one || !two) throw new Error("two holds expected");
 		expect([one.owner, two.owner]).toEqual(["first@checkout", "second@checkout"]);

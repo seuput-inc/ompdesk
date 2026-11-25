@@ -2,8 +2,17 @@ import { parseHTML } from "linkedom";
 import { act, type ReactElement } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { RpcResponse } from "../../../../shared/rpc-types";
+import type { RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
 import { I18nProvider, translate } from "../../../lib/i18n";
+import type { SessionStore } from "../../../stores/session";
+import {
+	deleteSessionRuntime,
+	SessionRuntimeProvider,
+	sessionRuntimeStore,
+	setFocusedSessionRuntime,
+} from "../../../stores/session-runtime-context";
+import { ensureTabRuntime } from "../../../stores/tab-runtime";
+import { useTabsStore } from "../../../stores/tabs";
 import { useToastStore } from "../../../stores/toast";
 import { useTodoStore } from "../../../stores/todo";
 import { useUiStore } from "../../../stores/ui";
@@ -115,6 +124,187 @@ describe("TodoDockCard", () => {
 		await mount();
 
 		expect(container.querySelector('[data-testid="dock-peek-todo"]')?.textContent).toBe("1/2Next: Run visual QA");
+	});
+
+	describe("how current the list is", () => {
+		const open = [
+			{
+				name: "Implementation",
+				tasks: [
+					{ content: "Sketch the peek", status: "completed" as const },
+					{ content: "Wire the peek into the header", status: "in_progress" as const },
+				],
+			},
+		];
+		const peekText = () => container.querySelector('[data-testid="dock-peek-todo"]')?.textContent;
+		const twelveMinutesAgo = () => Date.now() - 12 * 60_000 - 5000;
+		const NONE_RECEIVED = { received: [], receivedCount: 0 };
+		const twoReceived = (changedAt: number) => ({
+			received: [
+				{ at: changedAt + 60_000, text: "Also wire the footer" },
+				{ at: changedAt + 120_000, text: "And rename the peek to glance" },
+			],
+			receivedCount: 2,
+		});
+
+		it("counts the instructions since the list changed in the collapsed line, as news, with when it changed", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			const changedAt = twelveMinutesAgo();
+			useTodoStore.getState().setDrift({ changedAt, stale: null, ...twoReceived(changedAt) });
+			await mount();
+
+			expect(peekText()).toBe("1/2Wire the peek into the headerSince list change: 2Updated 12m ago");
+			// News, not a warning: the reading cannot tell whether the list already covers them.
+			expect(container.querySelector('[data-todo-freshness="received"] [data-status-dot="neutral"]')).not.toBeNull();
+			expect(container.querySelector('[data-todo-freshness="received"] svg')).toBeNull();
+			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).toContain(
+				"Whether the list already covers them is not checked",
+			);
+
+			// The opened list says it too, above its rows.
+			const toggle = container.querySelector<HTMLButtonElement>('section[aria-label="Todos"] button[aria-expanded]');
+			await act(async () => toggle?.click());
+			expect(peekText()).toBeUndefined();
+			expect(container.textContent).toContain("Since list change: 2Updated 12m ago");
+		});
+
+		it("says why a list went unchanged through a long run of work", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "drift", ...NONE_RECEIVED });
+			await mount();
+
+			// The peek holds one line: the short words, the full reason in the tooltip.
+			expect(peekText()).toBe("1/2Wire the peek into the headerList out of dateUpdated 12m ago");
+			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).toContain(
+				"Not updated while the agent kept working",
+			);
+		});
+
+		it("shows only when a list that follows the work last changed, with no mark", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: null, ...NONE_RECEIVED });
+			await mount();
+
+			expect(peekText()).toBe("1/2Wire the peek into the headerUpdated 12m ago");
+			expect(container.querySelector("[data-todo-freshness] svg")).toBeNull();
+		});
+
+		it("says nothing while the list's last change is unknown", async () => {
+			useUiStore.setState({ dockCollapsed: {} });
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt: null, stale: null, ...NONE_RECEIVED });
+			await mount();
+
+			expect(peekText()).toBe("1/2Wire the peek into the header");
+		});
+
+		it("clears the count the moment a person changes the list", async () => {
+			useTodoStore.getState().setPhases(open);
+			const changedAt = twelveMinutesAgo();
+			useTodoStore.getState().setDrift({ changedAt, stale: null, ...twoReceived(changedAt) });
+			await mount();
+			expect(container.textContent).toContain("Since list change: 2");
+
+			await act(async () => statusCycleButton().click());
+
+			expect(container.textContent).not.toContain("Since list change");
+			expect(container.textContent).toContain("Updated just now");
+		});
+
+		it("keeps the mark when the person's change was refused: the list did not change", async () => {
+			const behind = { changedAt: twelveMinutesAgo(), stale: "drift" as const, ...NONE_RECEIVED };
+			// The session refuses the write, then answers with the list as it was, still behind the work.
+			const commandForTab = vi.fn(
+				async (_tabId: string, command: RpcCommand): Promise<RpcResponse> =>
+					command.type === "set_todos"
+						? { type: "response", command: "set_todos", success: false, error: "session is read-only" }
+						: {
+								type: "response",
+								command: command.type,
+								success: true,
+								data: {
+									sessionId: "s1",
+									sessionName: null,
+									sessionFile: null,
+									cwd: "/w",
+									isStreaming: false,
+									isCompacting: false,
+									messageCount: 2,
+									queuedMessageCount: 0,
+									planModeEnabled: false,
+									todoPhases: open,
+									todoDrift: behind,
+								},
+							},
+			);
+			Object.assign(window.omp.rpc, { commandForTab });
+			useTabsStore.setState({
+				tabs: [{ kind: "agent", id: "t1", cwd: "/w", status: "ready", unreadDone: false }],
+				activeTabId: "t1",
+			});
+			const runtime = ensureTabRuntime("t1");
+			setFocusedSessionRuntime("t1");
+			sessionRuntimeStore<SessionStore>("t1", "session")?.setState({ sessionId: "s1", status: "ready" });
+			try {
+				useTodoStore.getState().setPhases(open);
+				useTodoStore.getState().setDrift(behind);
+				await mount(
+					<SessionRuntimeProvider runtime={runtime}>
+						<TodoDockCard />
+					</SessionRuntimeProvider>,
+				);
+
+				await act(async () => statusCycleButton().click());
+				await act(async () => {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					setTimeout(resolve, 0);
+					await promise;
+				});
+
+				expect(commandForTab).toHaveBeenCalledWith("t1", expect.objectContaining({ type: "set_todos" }), undefined);
+				expect(useTodoStore.getState().phases[0]?.tasks[0]?.status).toBe("completed");
+				expect(container.textContent).toContain("List out of dateUpdated 12m ago");
+			} finally {
+				await act(async () => root?.unmount());
+				setFocusedSessionRuntime(null);
+				deleteSessionRuntime("t1");
+				useTabsStore.getState().reset();
+				Reflect.deleteProperty(window.omp.rpc, "commandForTab");
+			}
+		});
+
+		it("lists the instructions received since the list last changed over the opened list", async () => {
+			const changedAt = twelveMinutesAgo();
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt, stale: null, ...twoReceived(changedAt) });
+			await mount();
+
+			const card = container.querySelector('section[aria-label="Todos"]');
+			expect(card?.querySelector("[data-todo-received]")?.textContent).toBe(
+				"Since last list change: 2 instructions",
+			);
+			const lines = [...(card?.querySelectorAll("[data-todo-received-line]") ?? [])];
+			expect(lines.map(line => line.textContent)).toEqual(["Also wire the footer", "And rename the peek to glance"]);
+			// Over the list: the received lines come before the first task.
+			const text = card?.textContent ?? "";
+			expect(text.indexOf("And rename the peek to glance")).toBeLessThan(text.indexOf("Sketch the peek"));
+
+			// A tap shows a line whole where its row would cut it, and a second tap cuts it again.
+			const first = () => card?.querySelector<HTMLButtonElement>("[data-todo-received-line]");
+			expect(first()?.getAttribute("aria-expanded")).toBe("false");
+			await act(async () => first()?.click());
+			expect(first()?.getAttribute("aria-expanded")).toBe("true");
+			await act(async () => first()?.click());
+			expect(first()?.getAttribute("aria-expanded")).toBe("false");
+
+			// A change to the list folds them: the lines go with the count.
+			await act(async () => statusCycleButton().click());
+			expect(container.querySelector("[data-todo-received]")).toBeNull();
+			expect(container.querySelector("[data-todo-received-line]")).toBeNull();
+		});
 	});
 
 	it("renders a single phase as a flat compact task list with live counts", async () => {

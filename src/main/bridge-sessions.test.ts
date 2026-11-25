@@ -15,6 +15,7 @@ describe.skipIf(!fs.existsSync(stockRoot))("stock session display adapter", () =
 		try {
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			fs.copyFileSync("resources/gui-bridge/session-display.ts", path.join(dir, "session-display.ts"));
+			fs.cpSync("resources/gui-bridge/omp", path.join(dir, "omp"), { recursive: true });
 			const script = `
 import assert from "node:assert/strict";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -38,7 +39,7 @@ const entries = [
  entry("l3", "l2", {type:"label", targetId:"u2"}),
 ];
 for(const item of entries) manager.ingestReplicatedEntry(item);
-const display=buildTranscript(manager);
+const display=await buildTranscript(manager);
 assert.deepEqual(display.messages.map(message=>message.entryId),["u1","c1","u3","c3","b1","x1"]);
 assert.equal(display.messages[3].summary,"rescue replacement");
 const stock=buildSessionContext(manager.getEntries(),manager.getLeafId(),undefined,{transcript:true}).messages;
@@ -52,21 +53,21 @@ assert.equal(tree.tree[1].label,undefined);
 assert.equal(tree.tree[1].onActiveBranch,false);
 assert.equal(tree.tree[2].isLeaf,true);
 const collision=[entry("a",null,{type:"message",message:user("one")}),entry("b","a",{type:"message",message:user("two")})];
-assert.equal(attachEntryIds([user("two")],collision)[0].entryId,"b");
-assert.equal(attachEntryIds([user("missing")],collision)[0].entryId,undefined);
+assert.equal((await attachEntryIds([user("two")],collision))[0].entryId,"b");
+assert.equal((await attachEntryIds([user("missing")],collision))[0].entryId,undefined);
 manager.branch("u2");
-assert.deepEqual(buildTranscript(manager).messages.map(message=>message.entryId),["u1","c1","u2"]);
+assert.deepEqual((await buildTranscript(manager)).messages.map(message=>message.entryId),["u1","c1","u2"]);
 assert.deepEqual(flattenSessionTree([],[]),{tree:[],activeLeafId:null});
 const duplicate = SessionManager.inMemory(process.cwd());
 duplicate.ingestReplicatedEntry(entry("d1",null,{type:"message",message:user("same")}));
 duplicate.ingestReplicatedEntry(entry("d2","d1",{type:"message",message:user("same")}));
 duplicate.ingestReplicatedEntry(entry("bash","d2",{type:"message",message:{role:"bashExecution",command:"true",output:"",exitCode:0,cancelled:false,truncated:false,timestamp:1}}));
-assert.deepEqual(buildTranscript(duplicate).messages.map(message=>message.entryId),["d1","d2","bash"]);
-assert.deepEqual(buildTranscript({getEntries:()=>duplicate.getEntries(),getLeafId:()=>null,getBranch:()=>{throw new Error("null leaf has no branch");}}).messages,[]);
+assert.deepEqual((await buildTranscript(duplicate)).messages.map(message=>message.entryId),["d1","d2","bash"]);
+assert.deepEqual((await buildTranscript({getEntries:()=>duplicate.getEntries(),getLeafId:()=>null,getBranch:()=>{throw new Error("null leaf has no branch");}})).messages,[]);
 const dangling = SessionManager.inMemory(process.cwd());
 dangling.ingestReplicatedEntry(entry("call",null,{type:"message",message:{role:"assistant",provider:"p",model:"m",stopReason:"stop",timestamp:2,content:[{type:"text",text:"calling"},{type:"toolCall",id:"paired",name:"read",arguments:{}},{type:"toolCall",id:"orphan",name:"read",arguments:{}}]}}));
 dangling.ingestReplicatedEntry(entry("result","call",{type:"message",message:{role:"toolResult",toolCallId:"paired",toolName:"read",content:[{type:"text",text:"ok"}],timestamp:3}}));
-const stripped=buildTranscript(dangling).messages[0];
+const stripped=(await buildTranscript(dangling)).messages[0];
 assert.equal(stripped.entryId,"call");
 assert.equal(stripped.strippedToolCalls,1);
 assert.deepEqual(stripped.content.map(block=>block.type),["text","toolCall"]);

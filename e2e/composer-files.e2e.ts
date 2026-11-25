@@ -1,7 +1,7 @@
 /**
  * Files into the composer and paths out of replies, on the fake omp. Picked
- * files of any type become `@path` mentions (relative inside the project,
- * quoted absolute outside it), a dropped file without a path goes in as its
+ * files of any type become `@path` mentions (the host's copy of the bytes: a
+ * WebView2 File has no path; quoted when the path has a space), a dropped file without a path goes in as its
  * text, the drop overlay names files and folders; bare path mentions in a
  * reply link only when the path exists, a file link opens the viewer and a
  * folder link the Files panel. Captures: light/dark × en/ko and a narrow window.
@@ -14,6 +14,8 @@ import { capture, exitApp, launchApp, variants } from "./harness";
 
 type Language = "en" | "ko";
 type Theme = "light" | "dark";
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 async function launch(
 	language: Language,
@@ -58,17 +60,23 @@ for (const language of variants(["en", "ko"] as const))
 				const input = page.locator("textarea").first();
 				const box = page.locator(".omp-composer-box").first();
 
-				// Picker: any file type; inside the project relative, outside quoted absolute, both in the host's
-				// separators (fileMentionFor keeps `docs\spec.pdf` on Windows).
-				await box
-					.locator('input[type="file"]')
-					.setInputFiles([
-						path.join(project, "docs", "spec.pdf"),
-						path.join(profile, "outside", "Quarter Report.xlsx"),
-					]);
-				await expect(input).toHaveValue(
-					`@${path.join("docs", "spec.pdf")} @"${path.join(profile, "outside", "Quarter Report.xlsx")}" `,
-				);
+				// Picker: any file type. A WebView2 File object carries bytes, never a path (`fs.pathForFile` is empty in
+				// the Tauri host), so each pick lands as a copy in the profile's web-uploads folder, named by its own
+				// name, and is mentioned by that absolute path (quoted when it holds a space).
+				const sources = [
+					path.join(project, "docs", "spec.pdf"),
+					path.join(profile, "outside", "Quarter Report.xlsx"),
+				];
+				await box.locator('input[type="file"]').setInputFiles(sources);
+				const uploads = path.join(profile, "desktop", "web-uploads");
+				const copy = (name: string) =>
+					`${escapeRegExp(path.join(uploads, "this-computer"))}${escapeRegExp(path.sep)}[0-9a-f-]{36}${escapeRegExp(path.sep)}${escapeRegExp(name)}`;
+				const picked = new RegExp(`^@(${copy("spec.pdf")}) @"(${copy("Quarter Report.xlsx")})" $`);
+				await expect(input).toHaveValue(picked);
+				const mentions = picked.exec(await input.inputValue());
+				if (!mentions) throw new Error("picked mentions missing");
+				expect(await fs.readFile(mentions[1] ?? "")).toEqual(await fs.readFile(sources[0] ?? ""));
+				expect(await fs.readFile(mentions[2] ?? "")).toEqual(await fs.readFile(sources[1] ?? ""));
 
 				// A dropped file without a path (a browser blob) goes in as its text.
 				await page.evaluate(() => {

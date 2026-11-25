@@ -39,7 +39,7 @@ use self::names::rename_ambiguous_projects;
 use self::retitle::retitle_session_pages;
 use self::store::Store;
 use crate::aimemory::client::Server;
-use crate::server::{Call, Fault, Registry, Reply};
+use crate::server::{Call, Events, Fault, Registry, Reply};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,8 +92,8 @@ impl Params {
     }
 
     /// The engine of a `tick` or a `repair`.
-    fn upkeep(&self, call: &Call) -> Result<Upkeep, Fault> {
-        let asker = self.asker(call);
+    fn upkeep(&self, events: &Events) -> Result<Upkeep, Fault> {
+        let asker = Asker::new(self.service.clone(), events.clone());
         let state_file = self
             .state_file
             .as_deref()
@@ -113,6 +113,24 @@ impl Params {
     }
 }
 
+pub(crate) async fn scheduled(
+    settings: &serde_json::Value,
+    server: Server,
+    events: &Events,
+    repair: bool,
+) -> Result<(), Fault> {
+    let mut params = Params::deserialize(settings)
+        .map_err(|error| Fault::new("invalid_params", error.to_string()))?;
+    params.server = Some(server);
+    let upkeep = params.upkeep(events)?;
+    if repair {
+        upkeep.repair().await;
+    } else {
+        upkeep.tick().await?;
+    }
+    Ok(())
+}
+
 /// A request that ends when its caller withdraws it.
 macro_rules! until_cancelled {
     ($call:expr, $work:expr) => {
@@ -125,14 +143,14 @@ macro_rules! until_cancelled {
 
 async fn tick(call: Call) -> Result<Reply, Fault> {
     let params: Params = call.params()?;
-    let upkeep = params.upkeep(&call)?;
+    let upkeep = params.upkeep(&call.events)?;
     let outcome = until_cancelled!(call, upkeep.tick())?;
     Reply::json(&outcome)
 }
 
 async fn repair(call: Call) -> Result<Reply, Fault> {
     let params: Params = call.params()?;
-    let upkeep = params.upkeep(&call)?;
+    let upkeep = params.upkeep(&call.events)?;
     let report = until_cancelled!(call, async { Ok::<_, Fault>(upkeep.repair().await) })?;
     Reply::json(&report)
 }

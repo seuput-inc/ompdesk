@@ -36,7 +36,12 @@ export const LOADING_PROBE = `(() => {
 	observe("layout-shift", e => {
 		if (e.hadRecentInput) return;
 		nl.cls += e.value;
-		nl.shifts.push([Math.round(e.startTime), Math.round(e.value * 10000) / 10000, (e.sources || []).map(s => s.node && (s.node.nodeName + "." + (s.node.className || "").toString().slice(0, 40))).filter(Boolean).slice(0, 2)]);
+		const rect = r => r ? Math.round(r.x) + "," + Math.round(r.y) + " " + Math.round(r.width) + "x" + Math.round(r.height) : "-";
+		// What moved even when its node is gone by now (a virtualised row, a skeleton): each source's rect before -> after, and
+		// the fonts' state, since a late face swaps the text under every paragraph (document.fonts, loaded of all faces).
+		const moved = (e.sources || []).slice(0, 3).map(s => (s.node ? s.node.nodeName : "gone") + " " + rect(s.previousRect) + " -> " + rect(s.currentRect));
+		const fonts = document.fonts ? document.fonts.status + " " + [...document.fonts].filter(f => f.status === "loaded").length + "/" + document.fonts.size : "no fonts api";
+		nl.shifts.push([Math.round(e.startTime), Math.round(e.value * 10000) / 10000, (e.sources || []).map(s => s.node && (s.node.nodeName + "." + (s.node.className || "").toString().slice(0, 40))).filter(Boolean).slice(0, 2), moved.join(" ; ") + " | fonts " + fonts]);
 	});
 	const shown = el => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== "hidden"; };
 	const anyShown = selector => { for (const el of document.querySelectorAll(selector)) if (shown(el)) return true; return false; };
@@ -121,7 +126,7 @@ export interface LoadingReading {
 	composerResponsiveAt: number | null;
 	rowAt: number | null;
 	cls: number;
-	shifts: Array<[number, number, string[]]>;
+	shifts: Array<[number, number, string[], string?]>;
 	spinnerMs: number;
 	spinnerFrames: number;
 	spinnerFirstAt: number | null;

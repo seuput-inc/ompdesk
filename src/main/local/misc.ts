@@ -1,90 +1,37 @@
 /**
- * Voice, debug console, security dashboard, SSH hosts, omp updates and the
- * plugin doctor.
- *
- * Session-bound commands go to the gui-bridge `misc` methods. `get_omp_update` drives the
- * system omp CLI directly: `omp update --check` reports the installed and latest versions
- * (honoring the user's channel and npm registry) with `ompUpdateEnv`, so stock checks this
- * omp's install, not another `omp` earlier on PATH. Installing is not here: a computer
- * updates its own omp through `OmpUpdater` (omp-updater.ts), a paired host's included
- * (`host.ompUpdate.now`).
- * `get_plugin_doctor` is stock `omp plugin doctor --json` (plugin directory,
- * manifest, node_modules, each plugin's version, tools, hooks and extensions).
+ * Session-bound commands use the gui-bridge. For plugin doctor and the update check, the core
+ * runs the resolved stock CLI. `ompUpdateEnv` points stock at this install and its registry.
+ * Installing stays with the computer's OmpUpdater, including on a paired host.
  */
-import type { RpcDoctorCheck } from "../../shared/rpc-types";
-import { clearAgentWorktrees, listAgentWorktrees } from "../agent-worktrees";
-import { ompUpdateEnv, parseUpdateCheck } from "../omp-runtime";
+import type { RpcOmpUpdateResult, RpcPluginDoctorResult } from "../../shared/rpc-types";
+import { clearAgentWorktrees, listAgentWorktrees, type OmpCliLaunch } from "../agent-worktrees";
+import { CoreError, core } from "../core/process";
+import { ompRunEnv, ompUpdateEnv } from "../omp-runtime";
 import { spawnPath } from "../shell-env";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
-const UPDATE_CHECK_TIMEOUT_MS = 60_000;
-/** Plain text from omp's chalk output, so the update report parses the same everywhere. */
-const PLAIN_ENV = { NO_COLOR: "1", FORCE_COLOR: "0" };
-
-function lastLines(text: string, count = 6): string {
-	return text.trim().split(/\r?\n/).slice(-count).join("\n");
+function ompLaunch({ omp }: LocalCommandContext, action: string, env?: Record<string, string>): OmpCliLaunch {
+	if (omp.basePath === undefined) throw new Error(`No resolved omp launcher for ${action}`);
+	return { bin: omp.bin, env: ompRunEnv(omp.bin, omp.basePath, env) };
 }
 
-const DOCTOR_TIMEOUT_MS = 60_000;
-const DOCTOR_STATUS: Record<string, RpcDoctorCheck["status"]> = { ok: "ok", warning: "warning", error: "error" };
-
-/** Stock's `DoctorCheck[]` (`extensibility/plugins/types.ts`), rows of another shape dropped. */
-export function parseDoctorChecks(stdout: string): RpcDoctorCheck[] | null {
-	let data: unknown;
+async function ompFact(method: "omp.pluginDoctor" | "omp.checkUpdate", ctx: LocalCommandContext) {
+	const env = method === "omp.checkUpdate" ? ompUpdateEnv(ctx.omp.bin, await spawnPath()) : undefined;
+	const launch = ompLaunch(ctx, method, env);
 	try {
-		data = JSON.parse(stdout);
-	} catch {
-		return null;
-	}
-	if (!Array.isArray(data)) return null;
-	const checks: RpcDoctorCheck[] = [];
-	for (const row of data) {
-		if (typeof row !== "object" || row === null) continue;
-		const { name, status, message } = row as Record<string, unknown>;
-		const known = typeof status === "string" ? DOCTOR_STATUS[status] : undefined;
-		if (typeof name !== "string" || !known) continue;
-		checks.push({ name, status: known, message: typeof message === "string" ? message : "" });
-	}
-	return checks;
-}
-
-async function pluginDoctor(ctx: LocalCommandContext) {
-	// `--json` exits 0 even with failing checks; a non-zero exit means the command itself failed.
-	const result = await ctx.omp.run(["plugin", "doctor", "--json"], {
-		cwd: ctx.cwd,
-		timeoutMs: DOCTOR_TIMEOUT_MS,
-		env: PLAIN_ENV,
-	});
-	const checks = result.code === 0 ? parseDoctorChecks(result.stdout) : null;
-	if (!checks) {
-		throw new LocalCommandError(
-			lastLines(result.stderr || result.stdout) || `omp plugin doctor exited with code ${result.code}`,
-			"doctor_failed",
+		// Stock has 60 seconds. Leave the core time to return its own timeout.
+		const { result } = await core().call<RpcOmpUpdateResult | RpcPluginDoctorResult>(
+			method,
+			{ ...launch, cwd: ctx.cwd },
+			{ timeoutMs: 70_000 },
 		);
+		return result;
+	} catch (error) {
+		if (error instanceof CoreError && (error.code === "doctor_failed" || error.code === "update_check_failed")) {
+			throw new LocalCommandError(error.message, error.code);
+		}
+		throw error;
 	}
-	return { checks, checkedAt: new Date().toISOString() };
-}
-
-async function checkOmpUpdate(ctx: LocalCommandContext) {
-	const result = await ctx.omp.run(["update", "--check"], {
-		cwd: ctx.cwd,
-		timeoutMs: UPDATE_CHECK_TIMEOUT_MS,
-		env: { ...PLAIN_ENV, ...ompUpdateEnv(ctx.omp.bin, await spawnPath()) },
-	});
-	const parsed = result.code === 0 ? parseUpdateCheck(result.stdout) : null;
-	if (!parsed) {
-		throw new LocalCommandError(
-			lastLines(result.stderr || result.stdout) || `omp update --check exited with code ${result.code}`,
-			"update_check_failed",
-		);
-	}
-	return {
-		...parsed,
-		updateAvailable: parsed.latestVersion !== parsed.currentVersion,
-		checkedAt: new Date().toISOString(),
-		distribution: "system" as const,
-		installStrategy: "omp-update" as const,
-	};
 }
 
 /** Forward to a gui-bridge method with the command's own fields as params. */
@@ -93,6 +40,7 @@ function viaBridge(method: string): LocalHandler {
 }
 
 export const handlers: Record<string, LocalHandler> = {
+	project_ask_form: viaBridge("project_ask_form"),
 	transcribe_audio: viaBridge("transcribe_audio"),
 	synthesize_speech: viaBridge("synthesize_speech"),
 	stt_prepare: viaBridge("stt_prepare"),
@@ -117,9 +65,9 @@ export const handlers: Record<string, LocalHandler> = {
 	get_ssh_hosts: viaBridge("ssh_hosts"),
 	ssh_manage: viaBridge("ssh_manage"),
 	ssh_test: viaBridge("ssh_test"),
-	get_omp_update: (_command, ctx) => checkOmpUpdate(ctx),
-	get_plugin_doctor: (_command, ctx) => pluginDoctor(ctx),
+	get_omp_update: (_command, ctx) => ompFact("omp.checkUpdate", ctx),
+	get_plugin_doctor: (_command, ctx) => ompFact("omp.pluginDoctor", ctx),
 	// Agent-managed worktrees under ~/.omp/wt (stock `omp worktree list|clear --json`, orphaned only).
-	get_agent_worktrees: async (_command, ctx) => ({ entries: await listAgentWorktrees(ctx.omp, ctx.cwd) }),
-	clear_agent_worktrees: (_command, ctx) => clearAgentWorktrees(ctx.omp, ctx.cwd),
+	get_agent_worktrees: (_command, ctx) => listAgentWorktrees(ompLaunch(ctx, "worktrees"), ctx.cwd),
+	clear_agent_worktrees: (_command, ctx) => clearAgentWorktrees(ompLaunch(ctx, "worktrees"), ctx.cwd),
 };

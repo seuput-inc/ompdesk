@@ -5,8 +5,6 @@
  * `WebHost`; Mobile web's service (src/main/tailscale/) starts and stops its server and tells it the published
  * address and the secret path of its serve handler.
  */
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { z } from "zod";
 import type { PeerLimits } from "../../shared/ipc-types";
 import {
@@ -26,17 +24,17 @@ import {
 	webDeviceTier,
 } from "../../shared/mobile-web";
 import type { UiLanguage } from "../../shared/ui-language";
-import { WEB_BUILD_META, WEB_PERMISSIONS, type WebFeatures } from "../../shared/web-protocol";
+import { WEB_PERMISSIONS, type WebFeatures } from "../../shared/web-protocol";
 import { readModelsText, writeModelsText } from "../models-config";
 import { PeerQuota } from "../remote/peer-quota";
 import type { TabActivity, TabFacts } from "../sidecar-pool";
 import { stockHelperRequest } from "../stock-helper";
 import type { TailnetPeer } from "../tailscale/whois";
-import { AssetArchive } from "./asset-archive";
 import { BlobStore } from "./blobs";
 import { WebBlocks } from "./blocks-store";
 import type { ClientWindow } from "./client-window";
 import { type WebDevice, WebDevices } from "./devices-store";
+import type { FileEditTarget } from "./file-edit-reports";
 import { createHostActions } from "./host-actions";
 import type { IpcRegistry } from "./ipc-registry";
 import { PairingConfirmations } from "./pairing";
@@ -52,8 +50,8 @@ import { CLOSE_REVOKED, type InlineImage, WsRouter } from "./ws-router";
 const UPLOAD_SWEEP_MS = 60 * 60_000;
 
 export interface WebHostDeps {
-	/** One socket of a paired page ended (the page's other sockets may remain; its window stays parked with its tabs). */
-	onPageConnectionEnded?: (connId: string) => void;
+	/** The core's router recorded a paired page's Files-edit report. */
+	onFileEditReport?: () => void;
 	ipc: Pick<IpcRegistry, "handle" | "invoke" | "send">;
 	userData: string;
 	/** The built renderer's folder (`web.html` and assets), null when the app has none (a dev run). */
@@ -75,7 +73,7 @@ export interface WebHostDeps {
 	shell: {
 		openPath(abs: string): Promise<unknown>;
 		reveal(abs: string): void;
-		openExternal(url: string): Promise<void>;
+		openPageExternal(url: string): Promise<void>;
 	};
 	/** Tailscale logins that may reach the page (Mobile web's service decides). */
 	allowedUsers: () => readonly string[];
@@ -123,14 +121,8 @@ export class WebHost {
 	readonly uploads: UploadStore;
 	readonly confirmations: PairingConfirmations;
 	readonly #deps: WebHostDeps;
-	readonly sender: PushSender;
 	readonly notifier: WebPushNotifier;
 	readonly #serveSecret: ServeSecretStore;
-	/** The previous builds' assets the server still serves (asset-archive.ts); filled once per launch at `start`. */
-	readonly assets: AssetArchive;
-	#archiving: Promise<void> | null = null;
-	/** The page build `web.html` names (`WEB_BUILD_META`), read at `start`: every `hello` tells a page which it is. */
-	#build: string | null = null;
 	/** The upload sweep in flight; one at a time, and `stop` waits for it. */
 	#sweeping: Promise<number> | null = null;
 	#sweeper: ReturnType<typeof setInterval> | undefined;
@@ -140,22 +132,15 @@ export class WebHost {
 		this.#deps = deps;
 		const now = deps.now ?? Date.now;
 		this.devices = new WebDevices(deps.userData);
-		this.sender = new PushSender({
-			userData: deps.userData,
-			transport: deps.pushTransport,
-			log: deps.log,
-		});
-		this.quota = new PeerQuota(this.devices, () => this.devices.notifyChanged());
+		this.quota = new PeerQuota("web", deps.userData, () => this.devices.notifyChanged());
 		this.blobs = new BlobStore({ userData: deps.userData, now });
 		this.uploads = new UploadStore({ userData: deps.userData, now });
 		this.blocks = new WebBlocks(deps.userData, now);
 		this.#serveSecret = new ServeSecretStore(deps.userData);
-		this.assets = new AssetArchive({ userData: deps.userData, now });
-		this.confirmations = new PairingConfirmations({
-			notify: request => this.#toDesktop(WEB_PAIRING_REQUEST, request),
-			now,
-		});
-		this.windows = new WebWindows((deviceId, channel, payload) => this.router.deliver(deviceId, channel, payload));
+		this.windows = new WebWindows(
+			(deviceId, channel, payload) => this.router.deliver(deviceId, channel, payload),
+			(win, alive) => this.router.noteWindow(win, alive),
+		);
 		this.router = new WsRouter({
 			registry: deps.ipc,
 			devices: this.devices,
@@ -163,29 +148,32 @@ export class WebHost {
 			quota: this.quota,
 			webChannels: createHostActions({
 				devices: this.devices,
-				uploads: this.uploads,
+				userData: deps.userData,
 				blobs: this.blobs,
 				cwdFor: (context, tabId) => deps.tabs.cwd(context.win, tabId),
 				openPath: deps.shell.openPath,
 				reveal: deps.shell.reveal,
-				openExternal: deps.shell.openExternal,
+				openPageExternal: deps.shell.openPageExternal,
 				models: { read: readModelsText, write: writeModelsText },
 			}),
 			// The phone's streamed Preview (preview-stream.ts) is built in; a host build without it passes `preview: false`.
 			features: () => ({ push: true, preview: true, upload: true, passkey: false, ...deps.features }),
-			build: () => this.#build,
 			activeTab: win => deps.tabs.activeTab(win),
 			blobs: this.blobs,
 			mediaOpen: deps.openMedia,
 			uploads: this.uploads,
 			toModelImage: image => stockHelperRequest<InlineImage>("image.toModel", image),
 			onConnectionsChanged: () => this.devices.notifyChanged(),
-			onConnectionEnded: (_deviceId, connId) => deps.onPageConnectionEnded?.(connId),
+			onFileEditReport: () => deps.onFileEditReport?.(),
 			onResync: deviceId => deps.tabs.resnapshot(this.windows.windowFor(deviceId)),
+		});
+		this.confirmations = new PairingConfirmations(this.router.host, {
+			notify: request => this.#toDesktop(WEB_PAIRING_REQUEST, request),
+			now,
 		});
 		this.notifier = new WebPushNotifier({
 			devices: this.devices,
-			sender: this.sender,
+			sender: new PushSender({ userData: deps.userData, transport: deps.pushTransport, log: deps.log }),
 			visible: deviceId => this.router.isDeviceVisible(deviceId),
 			tabFacts: deps.tabs.facts,
 			language: deps.language,
@@ -209,7 +197,8 @@ export class WebHost {
 			whois: deps.whois,
 			onDeviceConnected: device => this.#toDesktop(WEB_DEVICE_CONNECTED, device),
 			router: this.router,
-			staticRoot: () => this.#staticRoot(),
+			staticRoot: () => deps.staticRoot(),
+			now: deps.now,
 			onUnpairedAuth: deps.onUnpairedAuth,
 			...(deps.hooks ? { hooks: deps.hooks } : {}),
 			log: deps.log,
@@ -241,22 +230,11 @@ export class WebHost {
 
 	/** Start listening (the loopback port; 0 picks a free one) and the upload sweep. */
 	async start(options: { port?: number } = {}): Promise<{ port: number }> {
-		// A keypair made now (first run, or its file was lost) breaks every subscription made against the old one.
-		// Before the server answers a page that asks for the key.
-		if ((await this.sender.open()).created) this.devices.dropAllPushSubscriptions();
 		await this.ready();
-		const root = this.#staticRoot();
-		// Before the first connection: its `hello` names it.
-		if (root) this.#build = await servedBuild(root);
 		const started = await this.server.start(options);
 		// Until Mobile web confirms serve's handler, a request under this host's secret is answered 503, not 404.
 		this.server.configure({ publicPort: started.port, pendingPrefix: this.serveSecret() });
 		void this.keepUploadsSwept();
-		if (root) {
-			this.#archiving ??= this.assets
-				.retain(root)
-				.catch(error => this.#deps.log?.(`web assets: keeping this build's assets failed: ${String(error)}`));
-		}
 		return started;
 	}
 
@@ -267,7 +245,7 @@ export class WebHost {
 	 */
 	async stop(): Promise<void> {
 		this.notifier.dispose();
-		await Promise.all([this.server.stop(), this.#archiving, this.#sweeping]);
+		await Promise.all([this.server.stop(), this.#sweeping]);
 		// What the edge and this side changed is on disk before the app may quit.
 		await Promise.all([this.devices.flush(), this.blocks.flush()]).catch(() => {});
 	}
@@ -330,12 +308,19 @@ export class WebHost {
 		return device ? { deviceId: device.deviceId, name: device.name } : null;
 	}
 
+	/** Where the core keeps the Files-edit reports of web window `windowId`'s device; null for any other window. */
+	fileEditTarget(windowId: number): FileEditTarget | null {
+		const win = this.windows.all().find(candidate => candidate.webContents.id === windowId);
+		return win ? { host: this.router.host, device: win.deviceId } : null;
+	}
+
 	/** The paired devices as Settings lists them. */
 	list(): WebDeviceInfo[] {
 		return this.devices.list().map(device => this.#info(device));
 	}
 
 	#info(device: WebDevice): WebDeviceInfo {
+		const quota = this.quota.view(device.deviceId);
 		return {
 			id: device.deviceId,
 			name: device.name,
@@ -346,8 +331,8 @@ export class WebHost {
 			connected: this.router.isConnected(device.deviceId),
 			grants: device.grants,
 			tier: webDeviceTier(device.grants),
-			limits: device.limits ?? {},
-			usage: this.quota.usage(device),
+			limits: quota?.limits ?? {},
+			usage: quota?.usage ?? { requests: 0, tokens: 0 },
 			blockScope: device.nodeId ? "node" : "login",
 		};
 	}
@@ -382,15 +367,6 @@ export class WebHost {
 		void this.uploads.removeDevice(deviceId).catch(() => {});
 	}
 
-	/**
-	 * The built renderer as plain files: in a packaged app it is unpacked beside the asar (electron-builder's
-	 * `asarUnpack`), and the core, which reads it, knows no asar.
-	 */
-	#staticRoot(): string | null {
-		const root = this.#deps.staticRoot();
-		return root === null ? null : root.replace(/([\\/])app\.asar(?=[\\/]|$)/, "$1app.asar.unpacked");
-	}
-
 	#toDesktop(channel: string, payload: unknown): void {
 		for (const win of this.#deps.desktopWindows()) {
 			if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -423,14 +399,8 @@ export class WebHost {
 			this.devices.notifyChanged();
 			return this.list();
 		});
-		ipc.handle(WEB_PAIRING_RESPOND, (_caller, response: unknown) => {
-			this.confirmations.respond(PairingResponse.parse(response));
+		ipc.handle(WEB_PAIRING_RESPOND, async (_caller, response: unknown) => {
+			await this.confirmations.respond(PairingResponse.parse(response));
 		});
 	}
-}
-
-/** The page build `web.html` names (`WEB_BUILD_META`, scripts/pwa-plugin.ts); null when it names none (a dev run). */
-async function servedBuild(root: string): Promise<string | null> {
-	const page = await readFile(join(root, "web.html"), "utf8").catch(() => "");
-	return new RegExp(`<meta name="${WEB_BUILD_META}" content="([^"]+)"`).exec(page)?.[1] ?? null;
 }

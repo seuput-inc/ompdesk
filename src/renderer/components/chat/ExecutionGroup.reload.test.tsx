@@ -27,7 +27,7 @@ const { createRoot } = await import("react-dom/client");
 const { ExecutionGroup } = await import("./ExecutionGroup");
 const { FoldedReminders } = await import("./TodoReminderNote");
 const { MessageBubble } = await import("./MessageBubble");
-const { buildHistoryRows } = await import("./chat-stream-utils");
+const { buildHistoryRows, workTurns } = await import("./chat-stream-utils");
 const { workNarrative } = await import("./work/work-view");
 
 const realLocalStorage = (globalThis as Record<string, unknown>).localStorage;
@@ -434,6 +434,84 @@ describe("todo row after a reload", () => {
 		expect(
 			[...container.querySelectorAll(".omp-work-todo-list li")].map(item => item.getAttribute("data-status")),
 		).toEqual(["completed", "in_progress", "pending"]);
+	});
+
+	it.each([
+		["failed", "failed", "작업이 실패했어요"],
+		["interrupted", "stopped", "작업이 중단됐어요"],
+		["complete", "pending", "할 일이 남았어요"],
+	])("does not call a %s run complete because a todo phase says 완료", async (ending, mark, title) => {
+		setLanguage("ko");
+		const plan = (done: number, total: number) => ({
+			phases: [
+				{
+					name: "완료",
+					tasks: Array.from({ length: total }, (_, i) => ({
+						content: `브랜치 ${i + 1}`,
+						status: i < done ? "completed" : "pending",
+					})),
+				},
+			],
+		});
+		const messages: AgentMessage[] = [
+			user("브랜치를 분류해 줘", 1_000),
+			call("first", "todo", { op: "list" }, 2_000),
+			result("first", "todo", "", 2_100, plan(7, 17)),
+			...(ending === "failed"
+				? [
+						call("branches", "bash", { command: "git branch --merged" }, 3_000),
+						{
+							...result("branches", "bash", "fatal: not a git repository", 3_100, { exitCode: 128 }),
+							isError: true,
+						},
+					]
+				: []),
+			ending === "interrupted"
+				? {
+						role: "assistant",
+						content: [],
+						stopReason: "aborted",
+						errorMessage: "Request was aborted",
+						timestamp: 4_000,
+					}
+				: reply("브랜치를 분류할게요.", 4_000),
+			user("다음 목록을 정리해 줘", 5_000),
+			call("next", "todo", { op: "list" }, 6_000),
+			result("next", "todo", "", 6_100, plan(6, 6)),
+			reply("정리했어요.", 7_000),
+		];
+		useToolsStore.getState().hydrateMessages(messages);
+		const rows = buildHistoryRows(messages, "compact");
+		const turns = workTurns(rows, false);
+		const groups = rows.filter(row => row.kind === "process");
+		await mount(
+			<>
+				{groups.map(row => (
+					<ExecutionGroup
+						key={row.toolCallIds[0]}
+						expanded={false}
+						onExpandedChange={() => {}}
+						stepCount={row.stepCount}
+						toolCallIds={row.toolCallIds}
+						stoppedAt={row.stoppedAt}
+						turn={turns.get(row)?.turn}
+						endsTurn={turns.get(row)?.last}
+					>
+						<div />
+					</ExecutionGroup>
+				))}
+			</>,
+		);
+		const heads = [...container.querySelectorAll(".omp-execution-group")].map(card => [
+			card.getAttribute("data-state"),
+			card.querySelector(".omp-work-head [role='img']")?.getAttribute("data-state"),
+			card.querySelector(".omp-work-narrative")?.textContent,
+			card.querySelector(".omp-work-todo-count")?.textContent,
+		]);
+		expect(heads).toEqual([
+			[ending, mark, title, "7/17"],
+			["complete", "complete", "완료", "6/6"],
+		]);
 	});
 });
 

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, test } from "@playwright/test";
+import { chromium, expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import type { RpcSessionState } from "../src/shared/rpc-types";
 import { exitApp, openDestination } from "./harness";
@@ -182,24 +182,25 @@ test("system omp persists settings and sessions and serves every stats route", a
 		expect(evidence.changes.data).toMatchObject({ isRepo: false });
 		await fs.writeFile("test-results/real-core-contract.json", JSON.stringify(evidence, null, 2));
 		expect(JSON.stringify(evidence.transcript.data)).toContain("arm audit ok");
-		const exportWindow = app.waitForEvent("window");
-		await app.evaluate(
-			({ BrowserWindow }, url) => {
-				// A never-shown window does not paint on Windows, so screenshots hang;
-				// show it inactive like every headless window (transparent, unfocusable).
-				const win = new BrowserWindow({ width: 1100, height: 800, show: false, focusable: false });
-				win.showInactive();
-				void win.loadURL(url);
-			},
-			pathToFileURL(path.join(profile, "audit-export.html")).href,
-		);
-		const exportPage = await exportWindow;
-		// Stock's export viewer loads marked and highlight.js from a CDN before it draws #messages
-		// (export/html/template.html.txt): on a hosted runner that fetch outlasted the default 10 s (v0.89.0's release run,
-		// the page still at "Loading session viewer…"), so it gets the 30 s the real-omp waits here have.
-		await expect(exportPage.locator("#messages")).toContainText("arm audit ok", { timeout: 30_000 });
-		await exportPage.screenshot({ path: "test-results/exported-session.png", scale: "css", animations: "disabled" });
-		await exportPage.close();
+		// The export is a standalone page for a browser. The app's own windows load only the app origin (the shell
+		// refuses a file: page: "app windows cannot load remote pages"), so the file opens in Playwright's Chromium, as
+		// a person opens it from the folder.
+		const browser = await chromium.launch();
+		try {
+			const exportPage = await browser.newPage();
+			// Stock's export viewer loads marked and highlight.js from a CDN before it draws #messages
+			// (export/html/template.html.txt): on a hosted runner that fetch outlasted the default 10 s (v0.89.0's release
+			// run, the page still at "Loading session viewer…"), so it gets the 30 s the real-omp waits here have.
+			await exportPage.goto(pathToFileURL(path.join(profile, "audit-export.html")).href);
+			await expect(exportPage.locator("#messages")).toContainText("arm audit ok", { timeout: 30_000 });
+			await exportPage.screenshot({
+				path: "test-results/exported-session.png",
+				scale: "css",
+				animations: "disabled",
+			});
+		} finally {
+			await browser.close();
+		}
 		await page.screenshot({ path: "test-results/04-real-core.png", scale: "css", animations: "disabled" });
 		await expect(page.getByRole("dialog")).toHaveCount(0);
 		const original = evidence.saved.data as RpcSessionState;
@@ -325,14 +326,18 @@ test("system omp persists settings and sessions and serves every stats route", a
 		await expect(themes).toBeVisible();
 		await page.screenshot({ path: "test-results/05-packaged-ko.png", scale: "css", animations: "disabled" });
 		const backgrounds: string[] = [];
-		for (const theme of ["OMPdesk 라이트", "OMPdesk 다크"]) {
-			await themes.getByRole("radio", { name: theme }).click();
-			await expect(themes.getByRole("radio", { name: theme })).toHaveAttribute("aria-checked", "true");
+		// The OMPdesk set in its light and its dark mode (ThemePicker: the set's card, then the mode's segment).
+		await themes.locator('[data-theme-set="ompdesk"]').click();
+		await expect(themes.locator('[data-theme-set="ompdesk"]')).toHaveAttribute("aria-checked", "true");
+		for (const mode of ["light", "dark"]) {
+			const segment = settings.locator(`[data-theme-mode="${mode}"]`);
+			await segment.click();
+			await expect(segment).toHaveAttribute("aria-checked", "true");
 			backgrounds.push(
 				await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--omp-bg-primary")),
 			);
 			await page.screenshot({
-				path: `test-results/packaged-theme-${theme}.png`,
+				path: `test-results/packaged-theme-ompdesk-${mode}.png`,
 				scale: "css",
 				animations: "disabled",
 			});
@@ -361,9 +366,11 @@ test("system omp persists settings and sessions and serves every stats route", a
 		await page.keyboard.press("ControlOrMeta+Comma");
 		const freshSettings = page.locator("[data-settings-page]");
 		await freshSettings.locator('[data-settings-section="appearance"]').click();
-		const freshThemes = freshSettings.getByRole("radiogroup", { name: "테마" });
-		await freshThemes.getByRole("radio", { name: "OMPdesk 라이트" }).click();
-		await expect(freshThemes.getByRole("radio", { name: "OMPdesk 라이트" })).toHaveAttribute("aria-checked", "true");
+		// The OMPdesk set's light mode: the set's card, then the mode's segment.
+		await freshSettings.locator('[data-theme-set="ompdesk"]').click();
+		const freshLight = freshSettings.locator('[data-theme-mode="light"]');
+		await freshLight.click();
+		await expect(freshLight).toHaveAttribute("aria-checked", "true");
 		const chosenBackground = await page.evaluate(() =>
 			getComputedStyle(document.documentElement).getPropertyValue("--omp-bg-primary"),
 		);
@@ -394,7 +401,9 @@ test("system omp persists settings and sessions and serves every stats route", a
 	} finally {
 		await fs.writeFile("test-results/main-process.log", mainOutput.join(""));
 		await exitApp(app);
-		await fs.rm(profile, { recursive: true, force: true });
+		// exitApp returned once every process the app started is gone; Windows can still refuse a folder a process
+		// just released for a few hundred ms.
+		await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });
 
@@ -496,6 +505,8 @@ test("system omp's browser sign-in: loopback callback, default browser, cancel t
 		expect(errors).toEqual([]);
 	} finally {
 		await exitApp(app);
-		await fs.rm(profile, { recursive: true, force: true });
+		// As above: exitApp waited for every process the app started, and Windows can still refuse the project folder
+		// (the omp's working directory) for a few hundred ms after the last of them ended.
+		await fs.rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 	}
 });

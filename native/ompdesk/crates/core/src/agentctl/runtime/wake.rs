@@ -83,6 +83,12 @@ impl Runtime {
         text: &str,
         stopped_code: i64,
     ) -> R<()> {
+        // A paused bot is woken by nothing: the run fails with the same words a send to it gets.
+        if let Some(name) = self.control.paused_bot_of(session_path) {
+            return Err(crate::agentctl::service::fail::Fail::Tool(format!(
+                "The bot {name} is paused"
+            )));
+        }
         // Watched from before the delivery, so a turn that starts and ends at once is never missed.
         {
             let state = self.host().state();
@@ -134,9 +140,13 @@ impl Runtime {
                 id: id.clone(),
                 session_path: session_path.to_owned(),
                 device: None,
+                from: None,
+                from_device: None,
                 content: content.clone(),
                 details: details.clone(),
                 delivery,
+                attachments: None,
+                attachments_corrupt: false,
                 at: mail.at,
             });
         }

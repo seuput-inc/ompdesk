@@ -1,7 +1,6 @@
 import { type ComponentType, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { MenuAction, RunProgressState } from "../shared/ipc-types";
-import { ToastStack } from "./components/common";
-import { BtwDialog } from "./components/dialogs/BtwDialog";
+import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
 import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogDialog";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
 import { ModelRestoreDialog } from "./components/dialogs/ModelRestoreDialog";
@@ -43,6 +42,7 @@ import { chordFromEvent, compileKeymap, KEYMAP_ACTION_BY_ID, KEYMAP_ACTIONS, typ
 import { restoreQueuedMessages, stopFromEscape } from "./lib/messages";
 import { openNotifiedTab } from "./lib/notification-click";
 import { subscribeOmpUpdated } from "./lib/omp-update";
+import { loadOnDemandDialogs } from "./lib/on-demand-dialogs";
 import { installOutboxDelivery } from "./lib/outbox-delivery";
 import { type PaneDirection, paneInDirection, renderedPaneBoxes } from "./lib/pane-focus";
 import { watchPluginActivation } from "./lib/plugin-activation";
@@ -247,20 +247,24 @@ export function App() {
 	const importDialogOpen = useUiStore(s => s.importDialogOpen);
 	// The dialogs only the person opens (OnDemandDialogs.tsx), rendered from their loaded module, never through lazy()
 	// and its Suspense throttle: loaded at once on the desktop; on a paired web page in the first idle moment after its
-	// first render, or at the person's first touch or key if that comes sooner. A failed load closes what it would have
-	// shown and is tried again at the next touch or key (lib/deferred-chunk.ts).
+	// first render, or at the person's first touch or key if that comes sooner. A failed load closes ordinary
+	// dialogs and is tried again at the next touch or key (lib/deferred-chunk.ts); a /btw question is retained.
 	const [OnDemandDialogs, setOnDemandDialogs] = useState<ComponentType | null>(null);
 	const onDemandLoaded = useRef(false);
+	const [retryOnDemand, setRetryOnDemand] = useState<(() => void) | null>(null);
+	const btwRequest = useUiStore(s => s.btwRequest);
+	const closeBtw = useUiStore(s => s.closeBtw);
 	useEffect(
 		() =>
 			loadDeferredChunk({
-				load: () => loadChunk(() => import("./components/dialogs/OnDemandDialogs")),
+				load: () => loadChunk(loadOnDemandDialogs),
 				onLoaded: module => {
 					onDemandLoaded.current = true;
 					setOnDemandDialogs(() => module.OnDemandDialogs);
 				},
 				// What it would have shown closes, so nothing waits on a dialog that is not there (Esc, the chords).
-				onFailed: () =>
+				onFailed: retry => {
+					setRetryOnDemand(() => retry);
 					useUiStore.setState({
 						commandPaletteOpen: false,
 						modelPickerOpen: false,
@@ -268,7 +272,10 @@ export function App() {
 						branchPickerOpen: false,
 						quickOpenOpen: false,
 						tabOverviewOpen: false,
-					}),
+						projectPickerIntent: null,
+					});
+				},
+				canRetryOnInteraction: () => useUiStore.getState().btwRequest === null,
 				start: document.documentElement.dataset.platform === "web" ? "idle" : "now",
 			}),
 		[],
@@ -660,10 +667,16 @@ export function App() {
 					ui.sessionPickerOpen ||
 					ui.branchPickerOpen ||
 					ui.quickOpenOpen ||
-					ui.tabOverviewOpen);
+					ui.tabOverviewOpen ||
+					ui.projectPickerIntent !== null);
 			const overlayOpen =
 				onDemandOpen || ui.destination !== "session" || ui.benchmarkOpen || ui.modelSetupOpen || ui.tabSwitcherOpen;
 			if (event.key === "Escape") {
+				if (!onDemandLoaded.current && ui.btwRequest !== null) {
+					ui.closeBtw();
+					event.preventDefault();
+					return;
+				}
 				// Don't abort when an overlay/dropdown already consumed this Escape to
 				// dismiss itself (its handler ran first + preventDefault). With a draft in the
 				// field the first Esc only arms "Esc again to stop" (lib/messages.ts stopFromEscape).
@@ -903,11 +916,30 @@ export function App() {
 					</TabRuntimeProvider>
 				))}
 				<FirstRunGate />
-				{OnDemandDialogs ? <OnDemandDialogs /> : null}
+				{OnDemandDialogs && <OnDemandDialogs />}
+				{!OnDemandDialogs && retryOnDemand && btwRequest !== null && (
+					<Modal
+						open
+						onClose={closeBtw}
+						title={t("btw.title")}
+						footer={
+							<>
+								<Button onClick={closeBtw} variant="ghost">
+									{t("common.cancel")}
+								</Button>
+								<Button onClick={retryOnDemand} variant="primary">
+									{t("common.retry")}
+								</Button>
+							</>
+						}
+					>
+						<p className="whitespace-pre-wrap break-words text-sc-sm">{btwRequest}</p>
+						<InlineNotice live title={t("btw.dialogLoadFailed")} tone="danger" />
+					</Modal>
+				)}
 				<WorktreeLifecycleDialog />
 				<TabSwitcher />
 				<ModelRestoreDialog />
-				<BtwDialog />
 				{debugMounted ? (
 					<Suspense fallback={null}>
 						<DebugConsoleDialog />

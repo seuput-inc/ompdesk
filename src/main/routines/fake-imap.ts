@@ -3,7 +3,8 @@
  * commands the client sends (LOGIN, EXAMINE, UID SEARCH, UID FETCH, LOGOUT), answered as RFC 9051 servers do
  * (`n:*` includes the newest message even when it is below `n`). It records every command line it was sent.
  */
-import { connect, createServer, type Server, type Socket } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
+import type { ImapEndpoint } from "./imap";
 
 export interface FakeMail {
 	uid: number;
@@ -18,12 +19,13 @@ export interface FakeImap {
 	/** Changing it is what a recreated mailbox looks like to a client. */
 	state: { validity: number; user: string; password: string; mailbox: string; greeting: string };
 	commands: string[];
-	connect(): Promise<Socket>;
+	readonly connections: number;
+	endpoint: ImapEndpoint;
 	close(): Promise<void>;
 }
 
 export async function startFakeImap(): Promise<FakeImap> {
-	const fake: Omit<FakeImap, "port" | "connect" | "close"> = {
+	const fake: Pick<FakeImap, "mail" | "state" | "commands"> = {
 		mail: [],
 		state: {
 			validity: 7,
@@ -34,7 +36,11 @@ export async function startFakeImap(): Promise<FakeImap> {
 		},
 		commands: [],
 	};
-	const server: Server = createServer(socket => serve(socket, fake));
+	let connections = 0;
+	const server: Server = createServer(socket => {
+		connections++;
+		serve(socket, fake);
+	});
 	const listening = Promise.withResolvers<void>();
 	server.listen(0, "127.0.0.1", () => listening.resolve());
 	await listening.promise;
@@ -43,12 +49,10 @@ export async function startFakeImap(): Promise<FakeImap> {
 	return {
 		...fake,
 		port,
-		connect: () => {
-			const { promise, resolve, reject } = Promise.withResolvers<Socket>();
-			const socket = connect(port, "127.0.0.1", () => resolve(socket));
-			socket.once("error", reject);
-			return promise;
+		get connections() {
+			return connections;
 		},
+		endpoint: { host: "127.0.0.1", port, plainLoopback: true },
 		close: () => {
 			const { promise, resolve } = Promise.withResolvers<void>();
 			server.close(() => resolve());
@@ -66,7 +70,7 @@ function quoted(line: string): string[] {
 	return [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(match => unquote(`"${match[1] ?? ""}"`));
 }
 
-function serve(socket: Socket, fake: Omit<FakeImap, "port" | "connect" | "close">): void {
+function serve(socket: Socket, fake: Pick<FakeImap, "mail" | "state" | "commands">): void {
 	socket.write(`${fake.state.greeting}\r\n`);
 	let buffer = "";
 	let authed = false;

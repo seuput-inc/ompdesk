@@ -3,11 +3,12 @@
  * project names, the dragged project and session order, archived sessions, the footer shortcuts, the workspace MRU
  * clock, the sessions hidden from other agents and the projects whose notifications are muted.
  *
- * The stored value in main is the only owner of the blob. A window or a paired page never writes the whole of it
- * from its own copy (a copy read earlier would put an older order back over a newer one): it sends one
- * `SidebarChange`, main applies it to the value stored now (`src/main/sidebar-prefs.ts`) and tells every other
- * window and page, which read the blob again. The rules below are the same for both sides, so a page shows a change
- * at once and main stores exactly what the page showed.
+ * The core is the only owner of the stored blob. A window or a paired page never writes the whole of it from its own
+ * copy (a copy read earlier would put an older order back over a newer one): it sends one `SidebarChange`, the core
+ * applies it to the value stored now (`native/ompdesk/crates/core/src/prefs/sidebar.rs`) and main tells every other
+ * window and page, which read the blob again. The page applies the same rules to its copy, so it shows a change at
+ * once and the core stores exactly what the page showed: the core's copy of `readSidebarPrefs` and `sidebarPatch`
+ * is held to the rows these answered (`sidebar-captured.json`, `sidebar-prefs.test.ts`).
  */
 
 export const SIDEBAR_PREFS_KEY = "sidebar";
@@ -67,7 +68,7 @@ export type SidebarChange =
 	/** An empty or absent alias shows the folder's own name again. */
 	| { op: "set-group-alias"; cwd: string; alias: string | null }
 	| { op: "set-group-order"; order: string[] }
-	| { op: "set-session-order"; list: string; order: string[] }
+	| { op: "set-session-order"; list: string; order: string[]; move?: { path: string; over: string } }
 	| { op: "set-sessions-archived"; ids: string[]; archived: boolean }
 	| { op: "set-rail-pin"; pin: RailPin; pinned: boolean }
 	| { op: "touch-workspace"; cwd: string };

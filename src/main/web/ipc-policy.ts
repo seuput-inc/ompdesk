@@ -10,6 +10,8 @@
  * unchanged; `transform` = the host rewrites it for a web page; `client` = the page makes it itself.
  */
 import { AGENT_CONTROL_APP, AGENT_CONTROL_REVIEW, AGENT_CONTROL_VIEW } from "../../shared/agent-control";
+import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
+import { BRIDGE_HEALTH_GET } from "../../shared/bridge-health";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { MAIL_ACCOUNTS_COMMAND } from "../../shared/mail-accounts";
 import {
@@ -71,8 +73,11 @@ export type IpcChannel =
 	| typeof MAIL_ACCOUNTS_COMMAND
 	| typeof SCHEDULES_LOG
 	| typeof SCHEDULES_STATE
+	| typeof BOTS_COMMAND
+	| typeof BOTS_STATE
 	| typeof SIDEBAR_PROJECTS_COMMAND
 	| typeof SIDEBAR_PROJECTS_STATE
+	| typeof BRIDGE_HEALTH_GET
 	| typeof SSH_TOOLS_COMMAND
 	| typeof SSH_TOOLS_AGENT
 	| typeof SSH_TOOLS_PROMPTS
@@ -104,6 +109,8 @@ export type ChannelPolicy =
 	| { dir: RequestDirection; permission: WebPermission; mode: "pass" }
 	| { dir: RequestDirection; permission: WebPermission; mode: "web"; web: string }
 	| { dir: RequestDirection; permission: "pairing-admin"; mode: "boundary" }
+	/** The core's router answers it for a page itself (main registers no handler). */
+	| { dir: RequestDirection; permission: WebPermission; mode: "core" }
 	| { dir: "push"; mode: "pass" }
 	| { dir: "push"; mode: "transform" | "client"; web: string };
 
@@ -125,6 +132,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		web: "Restart or quit from a confirmation sheet that counts the running turns",
 	},
 	[C.BRIDGE_HEALTH_TAKE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[BRIDGE_HEALTH_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DISK_FULL_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 
 	// Sessions and their tabs.
@@ -140,6 +148,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SESSIONS_SEARCH]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_MESSAGES]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_MOVE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_TARGETS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_ARTWORK]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_DUMP_BUNDLE]: {
 		dir: "invoke",
 		permission: "workspace",
@@ -160,7 +170,10 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[C.SPAWN_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.CLOSE_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
-	[C.FILE_EDIT_REPORT]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	// The core's web router keeps each connection's report (`crates/core/src/web/file_edits.rs`); only a paired page
+	// reports (a desktop window closes its own tabs and guards its own edits).
+	[C.FILE_EDIT_REPORT]: { dir: "invoke", permission: "workspace", mode: "core" },
+	[C.AGENT_CLOSE_ANSWER]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SET_ACTIVE_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SET_TAB_VIEW]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.REORDER_TABS]: { dir: "invoke", permission: "workspace", mode: "pass" },
@@ -175,6 +188,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.PROJECT_ORIGINS_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.RESUME_CANCEL_WAIT]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.RESUME_STOP]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.RESUME_CONTINUE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.RESUME_DISMISS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.CONNECTIVITY_REPORT]: {
 		dir: "send",
 		permission: "workspace",
@@ -291,8 +306,6 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[C.ACCOUNT_ROTATION_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.ACCOUNT_ROTATION_SET]: { dir: "invoke", permission: "accounts-admin", mode: "pass" },
-	[C.BUILTIN_REA_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
-	[C.BUILTIN_REA_SET]: { dir: "invoke", permission: "settings-write", mode: "pass" },
 	[C.LOCAL_ENGINES_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.LOCAL_ENGINES_SET]: { dir: "invoke", permission: "settings-write", mode: "pass" },
 	[C.CREDIT_SPEND_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
@@ -455,6 +468,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.EXTENSION_UPDATE_GET_STATE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.EXTENSION_UPDATE_NOW]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	[SCHEDULES_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
+	// The owner's Bots page: this computer's bots and their items.
+	[BOTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Mail accounts for email routines: a password is sent to main only, never read back.
 	[MAIL_ACCOUNTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	[SCHEDULES_LOG]: { dir: "invoke", permission: "workspace", mode: "pass" },
@@ -485,6 +500,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 
 	// Desktop-to-desktop remote devices.
 	[C.REMOTE_GET_STATE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.REMOTE_SET_DEVICE_SECTION_ORDER]: { dir: "invoke", permission: "settings-write", mode: "pass" },
 	[C.REMOTE_SET_HOST_ENABLED]: {
 		dir: "invoke",
 		permission: "host-admin",
@@ -571,6 +587,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[PREVIEW_STATE]: { dir: "push", mode: "transform", web: "The streamed page's state for this device" },
 	[PREVIEW_VISUAL]: { dir: "push", mode: "pass" },
 	[SCHEDULES_STATE]: { dir: "push", mode: "pass" },
+	[BOTS_STATE]: { dir: "push", mode: "pass" },
 	[SSH_TOOLS_STATE]: { dir: "push", mode: "pass" },
 	[SSH_TOOLS_PROMPT]: { dir: "push", mode: "pass" },
 	[MOBILE_WEB_STATE]: { dir: "push", mode: "pass" },

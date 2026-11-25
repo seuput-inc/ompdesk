@@ -1,9 +1,8 @@
 /**
- * The idle recap on the fake omp (e2e/fixture/rpc-ui.ts): the fixture serves the bridge's `recap_draft` and sends
- * the `recap` custom message a real bridge's timer would (`OMP_GUI_TEST_RECAP`, rules pinned in
- * src/main/bridge-session-recap.test.ts and against stock in bridge-session-recap-stock.test.ts). Covers the quiet
- * recap card after a turn (en; ko with OMP_GUI_VARIANTS=1, captured). The draft holding the recap back is
- * unit-tested in bridge-session-recap.test.ts; a held default shown as a runtime override until the user's own
+ * The idle recap on the fake omp (e2e/fixture/rpc-ui.ts): the fixture serves the bridge's `idle_maintenance_draft` and
+ * sends the `recap` custom message the real bridge shows (`OMP_GUI_TEST_RECAP`; against stock, the recap, the draft
+ * holding it back and the context hook in bridge-idle-maintenance-stock.test.ts). Covers the quiet recap card after a
+ * turn (en; ko with OMP_GUI_VARIANTS=1, captured); a held default shown as a runtime override until the user's own
  * write makes it Global in SchemaSettingRow.test.tsx and, against stock, bridge-omp-defaults-stock.test.ts.
  */
 import * as fs from "node:fs/promises";

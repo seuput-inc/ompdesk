@@ -35,12 +35,13 @@ const HIDDEN = parseHidden(process.env.OMP_GUI_BRIDGE_PROBE_HIDE);
  * in sync with the table.
  */
 const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
-	"@oh-my-pi/pi-tui/tools/url-scheme-host": () => import("@oh-my-pi/pi-tui/tools/url-scheme-host"),
-	"@oh-my-pi/pi-tui/chat/image-loading": () => import("@oh-my-pi/pi-tui/chat/image-loading"),
+	"@oh-my-pi/pi-coding-agent/internal-urls/url-scheme": () =>
+		import("@oh-my-pi/pi-coding-agent/internal-urls/url-scheme"),
+	"@oh-my-pi/pi-coding-agent/utils/image-input": () => import("@oh-my-pi/pi-coding-agent/utils/image-input"),
 	"@oh-my-pi/pi-coding-agent/utils/image-resize": () => import("@oh-my-pi/pi-coding-agent/utils/image-resize"),
-	"@oh-my-pi/pi-tui/tools/read": () => import("@oh-my-pi/pi-tui/tools/read"),
-	"@oh-my-pi/pi-tui/html-form/parse": () => import("@oh-my-pi/pi-tui/html-form/parse"),
-	"@oh-my-pi/pi-tui/html-form/data": () => import("@oh-my-pi/pi-tui/html-form/data"),
+	"@oh-my-pi/pi-coding-agent/tools/details/read": () => import("@oh-my-pi/pi-coding-agent/tools/details/read"),
+	"@oh-my-pi/pi-coding-agent/tools/html-form/parse": () => import("@oh-my-pi/pi-coding-agent/tools/html-form/parse"),
+	"@oh-my-pi/pi-coding-agent/tools/html-form/data": () => import("@oh-my-pi/pi-coding-agent/tools/html-form/data"),
 	"@oh-my-pi/pi-agent-core": () => import("@oh-my-pi/pi-agent-core"),
 	"@oh-my-pi/pi-ai": () => import("@oh-my-pi/pi-ai"),
 	"@oh-my-pi/pi-ai/auth/blocks": () => import("@oh-my-pi/pi-ai/auth/blocks"),
@@ -49,8 +50,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-ai/oauth": () => import("@oh-my-pi/pi-ai/oauth"),
 	"@oh-my-pi/pi-ai/usage/registry": () => import("@oh-my-pi/pi-ai/usage/registry"),
 	"@oh-my-pi/pi-ai/utils/retry-after": () => import("@oh-my-pi/pi-ai/utils/retry-after"),
-	"@oh-my-pi/pi-catalog/compat/prompt-cache-persistent": () =>
-		import("@oh-my-pi/pi-catalog/compat/prompt-cache-persistent"),
 	"@oh-my-pi/pi-catalog/types": () => import("@oh-my-pi/pi-catalog/types"),
 	"@oh-my-pi/pi-coding-agent/autolearn/managed-skills": () =>
 		import("@oh-my-pi/pi-coding-agent/autolearn/managed-skills"),
@@ -61,6 +60,7 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/capability/hook": () => import("@oh-my-pi/pi-coding-agent/capability/hook"),
 	"@oh-my-pi/pi-coding-agent/capability/ssh": () => import("@oh-my-pi/pi-coding-agent/capability/ssh"),
 	"@oh-my-pi/pi-coding-agent/commands/settings": () => import("@oh-my-pi/pi-coding-agent/commands/settings"),
+	"@oh-my-pi/pi-coding-agent/commit/model-selection": () => import("@oh-my-pi/pi-coding-agent/commit/model-selection"),
 	"@oh-my-pi/pi-coding-agent/config": () => import("@oh-my-pi/pi-coding-agent/config"),
 	"@oh-my-pi/pi-coding-agent/config/all-settings": () => import("@oh-my-pi/pi-coding-agent/config/all-settings"),
 	"@oh-my-pi/pi-coding-agent/config/compaction-threshold": () =>
@@ -75,6 +75,8 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/config/settings": () => import("@oh-my-pi/pi-coding-agent/config/settings"),
 	"@oh-my-pi/pi-coding-agent/discovery": () => import("@oh-my-pi/pi-coding-agent/discovery"),
 	"@oh-my-pi/pi-coding-agent/discovery/helpers": () => import("@oh-my-pi/pi-coding-agent/discovery/helpers"),
+	"@oh-my-pi/pi-coding-agent/extensibility/extensions/runner": () =>
+		import("@oh-my-pi/pi-coding-agent/extensibility/extensions/runner"),
 	"@oh-my-pi/pi-coding-agent/export/share": () => import("@oh-my-pi/pi-coding-agent/export/share"),
 	"@oh-my-pi/pi-coding-agent/extensibility/plugins/loader": () =>
 		import("@oh-my-pi/pi-coding-agent/extensibility/plugins/loader"),
@@ -113,9 +115,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/modes/model-browser-source": () =>
 		import("@oh-my-pi/pi-coding-agent/modes/model-browser-source"),
 	"@oh-my-pi/pi-coding-agent/session/agent-storage": () => import("@oh-my-pi/pi-coding-agent/session/agent-storage"),
-	"@oh-my-pi/pi-coding-agent/session/context-settings": () =>
-		import("@oh-my-pi/pi-coding-agent/session/context-settings"),
-	"@oh-my-pi/pi-coding-agent/session/cache-warmer": () => import("@oh-my-pi/pi-coding-agent/session/cache-warmer"),
 	"@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents": () =>
 		import("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents"),
 	"@oh-my-pi/pi-coding-agent/modes/settings": () => import("@oh-my-pi/pi-coding-agent/modes/settings"),
@@ -183,7 +182,8 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/task/agents": () => import("@oh-my-pi/pi-coding-agent/task/agents"),
 	"@oh-my-pi/pi-coding-agent/task/restore": () => import("@oh-my-pi/pi-coding-agent/task/restore"),
 	"@oh-my-pi/pi-coding-agent/task/settings": () => import("@oh-my-pi/pi-coding-agent/task/settings"),
-	"@oh-my-pi/pi-coding-agent/tools/browser/attach": () => import("@oh-my-pi/pi-coding-agent/tools/browser/attach"),
+	"@oh-my-pi/pi-coding-agent/tools/browser/relay/bridge": () =>
+		import("@oh-my-pi/pi-coding-agent/tools/browser/relay/bridge"),
 	"@oh-my-pi/pi-coding-agent/tools/browser/relay/server": () =>
 		import("@oh-my-pi/pi-coding-agent/tools/browser/relay/server"),
 	"@oh-my-pi/pi-coding-agent/tools/browser/settings": () => import("@oh-my-pi/pi-coding-agent/tools/browser/settings"),
@@ -191,7 +191,9 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 		import("@oh-my-pi/pi-coding-agent/tools/computer/supervisor"),
 	"@oh-my-pi/pi-coding-agent/tools/builtin-names": () => import("@oh-my-pi/pi-coding-agent/tools/builtin-names"),
 	"@oh-my-pi/pi-coding-agent/tools/debug": () => import("@oh-my-pi/pi-coding-agent/tools/debug"),
+	"@oh-my-pi/pi-coding-agent/tools/gh-common": () => import("@oh-my-pi/pi-coding-agent/tools/gh-common"),
 	"@oh-my-pi/pi-coding-agent/tools/gh-pr-checkout": () => import("@oh-my-pi/pi-coding-agent/tools/gh-pr-checkout"),
+	"@oh-my-pi/pi-coding-agent/tools/gh-run-watch": () => import("@oh-my-pi/pi-coding-agent/tools/gh-run-watch"),
 	"@oh-my-pi/pi-coding-agent/tools/manage-skill": () => import("@oh-my-pi/pi-coding-agent/tools/manage-skill"),
 	"@oh-my-pi/pi-coding-agent/tools/path-utils": () => import("@oh-my-pi/pi-coding-agent/tools/path-utils"),
 	"@oh-my-pi/pi-coding-agent/tools/resolve": () => import("@oh-my-pi/pi-coding-agent/tools/resolve"),
@@ -202,18 +204,29 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/tts/tts-client": () => import("@oh-my-pi/pi-coding-agent/tts/tts-client"),
 	"@oh-my-pi/pi-coding-agent/tts/wav": () => import("@oh-my-pi/pi-coding-agent/tts/wav"),
 	"@oh-my-pi/pi-coding-agent/utils/atomic-file": () => import("@oh-my-pi/pi-coding-agent/utils/atomic-file"),
+	"@oh-my-pi/pi-coding-agent/utils/github": () => import("@oh-my-pi/pi-coding-agent/utils/github"),
 	"@oh-my-pi/pi-coding-agent/utils/tool-choice": () => import("@oh-my-pi/pi-coding-agent/utils/tool-choice"),
+	"@oh-my-pi/pi-natives": () => import("@oh-my-pi/pi-natives"),
 	"@oh-my-pi/pi-natives/vcs": () => import("@oh-my-pi/pi-natives/vcs"),
-	"@oh-my-pi/pi-tui/overlays/copy-targets": () => import("@oh-my-pi/pi-tui/overlays/copy-targets"),
-	"@oh-my-pi/pi-tui/overlays/job-tree": () => import("@oh-my-pi/pi-tui/overlays/job-tree"),
-	"@oh-my-pi/pi-tui/overlays/model-browser": () => import("@oh-my-pi/pi-tui/overlays/model-browser"),
-	"@oh-my-pi/pi-tui/overlays/settings-defs": () => import("@oh-my-pi/pi-tui/overlays/settings-defs"),
-	"@oh-my-pi/pi-tui/render/render-utils": () => import("@oh-my-pi/pi-tui/render/render-utils"),
-	"@oh-my-pi/pi-tui/theme": () => import("@oh-my-pi/pi-tui/theme"),
-	"@oh-my-pi/pi-tui/tools/resolve": () => import("@oh-my-pi/pi-tui/tools/resolve"),
-	"@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime": () => import("@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime"),
+	"@oh-my-pi/pi-coding-agent/exec/shell-process": () => import("@oh-my-pi/pi-coding-agent/exec/shell-process"),
+	"@oh-my-pi/pi-coding-agent/modes/view-model/overlays/copy-targets": () =>
+		import("@oh-my-pi/pi-coding-agent/modes/view-model/overlays/copy-targets"),
+	"@oh-my-pi/pi-tui/text/markdown/lexer": () => import("@oh-my-pi/pi-tui/text/markdown/lexer"),
+	"@oh-my-pi/pi-tui/term/render": () => import("@oh-my-pi/pi-tui/term/render"),
+	"@oh-my-pi/pi-tui/theme/plain": () => import("@oh-my-pi/pi-tui/theme/plain"),
+	"@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree": () =>
+		import("@oh-my-pi/pi-coding-agent/modes/view-model/overlays/job-tree"),
+	"@oh-my-pi/pi-coding-agent/modes/view-model/overlays/model-browser": () =>
+		import("@oh-my-pi/pi-coding-agent/modes/view-model/overlays/model-browser"),
+	"@oh-my-pi/pi-coding-agent/config/settings-defs": () => import("@oh-my-pi/pi-coding-agent/config/settings-defs"),
+	"@oh-my-pi/pi-coding-agent/ui/overlays/settings/pages": () =>
+		import("@oh-my-pi/pi-coding-agent/ui/overlays/settings/pages"),
+	"@oh-my-pi/pi-coding-agent/utils/render-utils": () => import("@oh-my-pi/pi-coding-agent/utils/render-utils"),
+	"@oh-my-pi/pi-coding-agent/extensibility/inventory/mcp-runtime": () =>
+		import("@oh-my-pi/pi-coding-agent/extensibility/inventory/mcp-runtime"),
 	"@oh-my-pi/pi-utils": () => import("@oh-my-pi/pi-utils"),
-	"@oh-my-pi/pi-tui/status-line/context-usage": () => import("@oh-my-pi/pi-tui/status-line/context-usage"),
+	"@oh-my-pi/pi-utils/ar": () => import("@oh-my-pi/pi-utils/ar"),
+	"@oh-my-pi/pi-coding-agent/session/context-usage": () => import("@oh-my-pi/pi-coding-agent/session/context-usage"),
 	"@oh-my-pi/pi-coding-agent/session/messages": () => import("@oh-my-pi/pi-coding-agent/session/messages"),
 	"@oh-my-pi/pi-coding-agent/utils/title-card": () => import("@oh-my-pi/pi-coding-agent/utils/title-card"),
 	"@oh-my-pi/pi-coding-agent/utils/title-settings": () => import("@oh-my-pi/pi-coding-agent/utils/title-settings"),

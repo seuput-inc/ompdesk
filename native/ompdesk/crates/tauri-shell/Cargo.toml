@@ -1,0 +1,101 @@
+[workspace]
+resolver = "3"
+
+[package]
+name = "ompdesk-tauri-shell"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "ompdesk-tauri-shell"
+path = "src/main.rs"
+
+[[bin]]
+name = "ompdesk-launcher"
+path = "../shell/src/launcher_main.rs"
+test = false
+
+[dependencies]
+tauri = { version = "=2.12.6", features = ["unstable", "devtools"] }
+serde = { version = "1", features = ["derive"] }
+# `preserve_order`: an object keeps its keys as written through the page's calls and Node's answers (the fallback
+# chains' key order is stock's precedence). Cargo unifies it onto `shell_core` and `shell_preview`'s serde_json.
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+getrandom = "0.4"
+tokio = { version = "1", features = ["time", "sync", "net", "io-util", "rt", "macros"] }
+sha2 = "0.11"
+shell_core = { package = "ompdesk-shell", path = "../shell", default-features = false }
+url = "2"
+# Diagnostic bundle names use the paired page's NFC and Unicode Letter/Number rules.
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+icu_properties = "2"
+# Tauri's own tray-icon: a second muda would define its Objective-C classes twice (fat LTO refuses to link that on macOS).
+tray-icon = "0.25"
+shell_preview = { package = "ompdesk-shell-preview", path = "../shell-preview" }
+cookie_store = { version = "=0.22.1", default-features = false }
+psl = "=2.1.256"
+base64 = "=0.23.1"
+httparse = "=1.10.1"
+tempfile = "3"
+time = { version = "0.3", features = ["large-dates", "parsing"] }
+hmac = "0.13"
+tauri-plugin-wdio-webdriver = { version = "=1.5.1", optional = true }
+
+[features]
+# A test build only: the embedded WebDriver server scripts/tauri-native-smoke.ts drives (bun scripts/build-tauri.ts --test-automation).
+# Released binaries never compile it (scripts/tauri-release-automation-check.ts proves that on the packaged app).
+test-automation = ["dep:tauri-plugin-wdio-webdriver", "shell_preview/test-automation"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+regex = "1"
+rustix = { version = "1", features = ["fs"] }
+libc = "0.2"
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-foundation = { version = "0.3.2", features = ["block2", "NSStream"] }
+block2 = "0.6"
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+  "std", "WKURLSchemeHandler", "WKURLSchemeTask", "WKWebView", "WKWebViewConfiguration",
+  "WKWebsiteDataStore", "objc2-app-kit",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "std", "block2", "objc2-core-foundation", "NSAccessibility", "NSAccessibilityConstants",
+  "NSAccessibilityElement", "NSAccessibilityProtocols", "NSApplication", "NSBitmapImageRep", "NSColor",
+  "NSCell", "NSControl", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep",
+  "NSImageView", "NSResponder", "NSScreen", "NSTextInputClient", "NSTextInputContext",
+  "NSTrackingArea", "NSView", "NSWindow",
+] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO",
+  "Win32_Foundation", "Win32_Networking_WinHttp", "Win32_Globalization", "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Input_Ime",
+  "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging",
+] }
+webview2-com = "0.39"
+windows = { version = "0.62", features = [
+  "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Imaging", "Win32_System_Com",
+  "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility",
+] }
+windows-core = "0.62"
+
+[build-dependencies]
+tauri-build = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["process", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+opt-level = "s"

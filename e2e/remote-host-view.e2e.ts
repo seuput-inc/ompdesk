@@ -62,7 +62,11 @@ test("the host's own window lists, views and works in a session its paired devic
 		expect(open.isError, open.text).toBe(false);
 		const [child] = openedSessions(open.text);
 		const done = await call("ompdesk_session_result", { session: child, wait: true, timeout_seconds: 60 });
-		expect(done.text).toContain("Local fixture reply");
+		expect(done.text).toContain(`[${child}]: idle`);
+		// Its last answer, whichever came last: the brief's reply, or its answer to main's request to report. Main asks a
+		// child that ended its turn with no Result line to report about a second after the turn, and the fake answers that
+		// note too, so a read that waited past the nudge sees the note's answer (`untilAnswered`, harness.ts).
+		expect(done.text).toMatch(/Last answer:\s*(Local fixture reply|Read the note report from \w+\.)/);
 		const deviceOmp = (await prompts()).find(prompt => prompt.message.includes("Run this on the other computer"))?.by;
 		expect(deviceOmp).toBeTruthy();
 

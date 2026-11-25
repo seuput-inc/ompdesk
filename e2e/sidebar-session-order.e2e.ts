@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Locator, Page } from "playwright";
-import { captureTo, exitApp, launchApp } from "./harness";
+import { captureTo, dragRowToRightEdge, exitApp, launchApp } from "./harness";
 
 const SHOTS = process.env.OMP_GUI_SESSION_ORDER;
 
@@ -23,7 +23,7 @@ test.afterEach(async () => {
 	root = "";
 });
 
-/** A stored session in the fake omp's journal format; `minutesAgo` sets where the default (newest first) order puts it. */
+/** A stored session in the fake omp's journal format; `minutesAgo` sets where the default (oldest first) order puts it. */
 async function seed(agent: string, id: string, cwd: string, title: string, minutesAgo: number): Promise<string> {
 	const file = path.join(agent, "sessions", "seeded", `${id}.jsonl`);
 	await fs.mkdir(path.dirname(file), { recursive: true });
@@ -79,7 +79,7 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
 
 	const rows = () => page.locator("[data-session-group] .omp-sidebar-session-row");
-	await expect.poll(() => titles(page)).toEqual(["Alpha plan", "Bravo plan", "Charlie plan"]);
+	await expect.poll(() => titles(page)).toEqual(["Charlie plan", "Bravo plan", "Alpha plan"]);
 	await captureTo(SHOTS, page, "before");
 
 	// The last row dropped on the first lands above it.
@@ -87,11 +87,12 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await expect(rows().nth(0)).toHaveAttribute("data-session-drop", "before");
 	await captureTo(SHOTS, page, "during");
 	await page.mouse.up();
-	await expect.poll(() => titles(page)).toEqual(["Charlie plan", "Alpha plan", "Bravo plan"]);
+	await expect.poll(() => titles(page)).toEqual(["Alpha plan", "Charlie plan", "Bravo plan"]);
 	await expect(page.locator("[data-session-drop]")).toHaveCount(0);
 	await captureTo(SHOTS, page, "after");
 
-	// The order is in the prefs file, and a relaunch draws it again: a session new since then is on top, the rest stay.
+	// The order is in the prefs file, and a relaunch draws it again: a session new since then is at the bottom, the rest
+	// stay.
 	await expect
 		.poll(async () => {
 			const prefs = JSON.parse(await fs.readFile(path.join(desktop, "prefs.json"), "utf8"));
@@ -105,37 +106,35 @@ test("a dragged session row keeps its new place across a relaunch, and still spl
 	await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1440, 900));
 	await page.waitForFunction(() => window.omp?.rpc != null);
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
-	await expect.poll(() => titles(page)).toEqual(["Delta plan", "Charlie plan", "Alpha plan", "Bravo plan"]);
+	await expect.poll(() => titles(page)).toEqual(["Alpha plan", "Charlie plan", "Bravo plan", "Delta plan"]);
 
 	// An open session that is not on screen still drags onto a pane's edge: the split, not a reorder.
-	await rows().filter({ hasText: "Charlie plan" }).locator("button").first().click();
-	await rows().filter({ hasText: "Alpha plan" }).locator("button").first().click();
+	const releaseCharlie = await page.evaluateHandle(() => {
+		const gate = Promise.withResolvers<void>();
+		const lookup = window.omp.tabs.getSessionOwner;
+		window.omp.tabs.getSessionOwner = async (...args) => {
+			if (args[0].endsWith("s-3.jsonl")) await gate.promise;
+			return lookup(...args);
+		};
+		return () => {
+			window.omp.tabs.getSessionOwner = lookup;
+			gate.resolve();
+		};
+	});
+	try {
+		await rows().filter({ hasText: "Charlie plan" }).locator("button").first().click();
+		await rows().filter({ hasText: "Alpha plan" }).locator("button").first().click();
+		await expect(page.locator('.omp-sidebar-session-row[data-active="true"]')).toContainText("Alpha plan");
+	} finally {
+		await releaseCharlie.evaluate(release => release());
+	}
 	const tabs = () => page.evaluate(() => window.omp.tabs.list());
-	await expect.poll(async () => (await tabs()).some(tab => tab.sessionPath?.endsWith("s-3.jsonl"))).toBe(true);
+	await expect
+		.poll(async () => (await tabs()).map(tab => tab.sessionPath?.split(/[\\/]/).at(-1)).sort())
+		.toEqual(["s-1.jsonl", "s-3.jsonl"]);
 	const order = await titles(page);
 	const charlie = rows().filter({ hasText: "Charlie plan" });
-	const workspace = await page.locator(".omp-split-workspace").boundingBox();
-	if (!workspace) throw new Error("expected the workspace box");
-	const ghost = page.locator("[data-split-ghost]");
-	// The sidebar redraws its rows while the opened sessions settle, and a row replaced between the press and the
-	// first move starts no drag: a drag that shows no ghost is released over the workspace and begun again.
-	await expect(async () => {
-		const rowBox = await charlie.boundingBox();
-		if (!rowBox) throw new Error("expected the row's box");
-		await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(rowBox.x + rowBox.width / 2 + 20, rowBox.y + rowBox.height / 2, { steps: 4 });
-		await page.mouse.move(workspace.x + workspace.width * 0.92 + 2, workspace.y + workspace.height * 0.5, {
-			steps: 10,
-		});
-		await page.mouse.move(workspace.x + workspace.width * 0.92, workspace.y + workspace.height * 0.5, { steps: 2 });
-		try {
-			await expect(ghost).toHaveAttribute("data-split-ghost", "right", { timeout: 1_500 });
-		} catch (error) {
-			await page.mouse.up();
-			throw error;
-		}
-	}).toPass({ timeout: 30_000 });
+	await dragRowToRightEdge(page, charlie);
 	await page.mouse.up();
 	await expect(page.locator(".omp-session-pane")).toHaveCount(2);
 	await expect(page.locator('.omp-sidebar-session-row[data-active="true"]')).toHaveCount(2);

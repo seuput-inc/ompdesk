@@ -78,13 +78,19 @@ export async function openPeer(target: PeerOpen): Promise<void> {
 	await tabs.openTab({ sessionPath: target.sessionPath, ...(target.device ? { device: target.device } : {}) });
 }
 
-/** A session this one's agent opened, shown by a tap on its row: its tab here, else its file where it runs. */
-export function openOpenedChild(row: OpenedChildRow): void {
-	if (row.tabId) void useTabsStore.getState().applyAgentView({ tabId: row.tabId, how: "focus" });
-	else if (row.sessionPath)
+/**
+ * How a tap on a session this one's agent opened shows it: its tab here, else its file where it runs. None while it has
+ * neither (a paired host's child still starting has no file yet, and the host's tab id is no tab here): its row is then
+ * no button, and the next review push names the file.
+ */
+export function openedChildOpener(row: OpenedChildRow): (() => void) | undefined {
+	const { tabId, sessionPath } = row;
+	if (tabId) return () => void useTabsStore.getState().applyAgentView({ tabId, how: "focus" });
+	if (!sessionPath) return undefined;
+	return () =>
 		void useTabsStore.getState().openTab({
 			cwd: row.cwd,
-			sessionPath: row.sessionPath,
+			sessionPath,
 			kind: "agent",
 			...(row.deviceId ? { device: row.deviceId } : {}),
 		});

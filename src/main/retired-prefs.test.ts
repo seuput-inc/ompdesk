@@ -1,205 +1,157 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { migrateRetiredPrefs, RETIRED_PREFS } from "./retired-prefs";
+import { afterAll, describe, expect, it } from "vitest";
+import { stopCore } from "./core/process";
+import { PrefsStore } from "./prefs-store";
 
-/** electron-store's semantics: a dotted key names a nested value. */
-function memoryStore(initial: Record<string, unknown>) {
-	const data: Record<string, unknown> = structuredClone(initial);
-	const parent = (key: string, create: boolean) => {
-		const parts = key.split(".");
-		let node: Record<string, unknown> | undefined = data;
-		for (const part of parts.slice(0, -1)) {
-			if (node[part] === undefined && create) node[part] = {};
-			node = node[part] as Record<string, unknown> | undefined;
-			if (!node || typeof node !== "object") return { node: undefined, last: parts.at(-1) ?? "" };
-		}
-		return { node, last: parts.at(-1) ?? "" };
-	};
-	return {
-		data,
-		has: (key: string) => {
-			const { node, last } = parent(key, false);
-			return node !== undefined && last in node;
-		},
-		get: (key: string) => parent(key, false).node?.[parent(key, false).last],
-		set: (key: string, value: unknown) => {
-			const { node, last } = parent(key, true);
-			if (node) node[last] = value;
-		},
-		delete: (key: string) => {
-			const { node, last } = parent(key, false);
-			if (node) delete node[last];
-		},
-	};
+// The migration runs in the core each time it reads prefs.json from disk (crates/core/src/prefs/retired.rs), before
+// any caller sees the store: what a launch reading this file would see.
+const root = mkdtempSync(join(tmpdir(), "retired-prefs-"));
+let count = 0;
+
+afterAll(async () => {
+	await stopCore();
+	rmSync(root, { recursive: true, force: true });
+});
+
+function profile(prefs: Record<string, unknown>): { dir: string; file: string; text: string } {
+	const dir = join(root, String(++count));
+	const file = join(dir, "prefs.json");
+	const text = JSON.stringify(prefs);
+	mkdirSync(dir);
+	writeFileSync(file, text);
+	return { dir, file, text };
 }
 
-describe("migrateRetiredPrefs", () => {
-	it.each(RETIRED_PREFS.map(entry => entry.key))("drops %s and keeps a live pref", key => {
-		const store = memoryStore({ language: "en" });
-		store.set(key, false);
-		migrateRetiredPrefs(store);
-		migrateRetiredPrefs(store);
-		expect(store.has(key)).toBe(false);
-		expect(store.get("language")).toBe("en");
-	});
+function migrated(prefs: Record<string, unknown>): Record<string, unknown> {
+	return new PrefsStore(profile(prefs).file).store;
+}
 
-	it("turns off wakes of the former bot's current conversations once, keeping every schedule and other session's wakes", () => {
-		const dir = mkdtempSync(join(tmpdir(), "retired-prefs-"));
-		try {
-			const file = join(dir, "schedules.json");
-			const store = memoryStore({
-				bot: "/s/main.jsonl",
-				botEnabled: false,
-				botConversations: {
-					current: { side: { path: "/s/side.jsonl" }, main: { path: "/s/current.jsonl" } },
-					past: [{ path: "/s/past.jsonl" }],
-				},
-				botRules: [],
-			});
-			const schedules = [
-				{ id: "main", wakeSession: "/s/main.jsonl", enabled: true },
-				{ id: "side", wakeSession: "/s/side.jsonl", enabled: true },
-				{ id: "current", wakeSession: "/s/current.jsonl", enabled: true },
-				{ id: "past", wakeSession: "/s/past.jsonl", enabled: true },
-				{ id: "self", wakeSession: "/s/ordinary.jsonl", enabled: true },
-				{ id: "fresh", enabled: true },
-			];
-			writeFileSync(file, JSON.stringify({ version: 1, schedules, runs: [] }));
-			migrateRetiredPrefs(store, file);
-			const migrated = JSON.parse(readFileSync(file, "utf8"));
-			expect(migrated.schedules).toEqual(
-				schedules.map((schedule, index) => (index < 3 ? { ...schedule, enabled: false } : schedule)),
-			);
-			expect(migrated.runs).toEqual([]);
-			expect(store.data).toEqual({});
-			migrated.schedules[0].enabled = true;
-			writeFileSync(file, JSON.stringify(migrated));
-			migrateRetiredPrefs(store, file);
-			expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(migrated);
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+describe("prefs a launch no longer reads", () => {
+	it("turns off wakes of the former bot's current conversations once, keeping every schedule and other session's wakes", async () => {
+		const { dir, file } = profile({
+			bot: "/s/main.jsonl",
+			botEnabled: false,
+			botConversations: {
+				current: { side: { path: "/s/side.jsonl" }, main: { path: "/s/current.jsonl" } },
+				past: [{ path: "/s/past.jsonl" }],
+			},
+			botRules: [],
+		});
+		const schedulesFile = join(dir, "schedules.json");
+		const schedules = [
+			{ id: "main", wakeSession: "/s/main.jsonl", enabled: true },
+			{ id: "side", wakeSession: "/s/side.jsonl", enabled: true },
+			{ id: "current", wakeSession: "/s/current.jsonl", enabled: true },
+			{ id: "past", wakeSession: "/s/past.jsonl", enabled: true },
+			{ id: "self", wakeSession: "/s/ordinary.jsonl", enabled: true },
+			{ id: "fresh", enabled: true },
+		];
+		writeFileSync(schedulesFile, JSON.stringify({ version: 1, schedules, runs: [] }));
+		const prefs = new PrefsStore(file);
+		expect(prefs.store).toEqual({});
+		const once = JSON.parse(readFileSync(schedulesFile, "utf8"));
+		expect(once.schedules).toEqual(
+			schedules.map((schedule, index) => (index < 3 ? { ...schedule, enabled: false } : schedule)),
+		);
+		expect(once.runs).toEqual([]);
+
+		// The next launch: the bot's keys are gone, so a schedule turned on again stays on.
+		await stopCore();
+		once.schedules[0].enabled = true;
+		writeFileSync(schedulesFile, JSON.stringify(once));
+		expect(prefs.store).toEqual({});
+		expect(JSON.parse(readFileSync(schedulesFile, "utf8"))).toEqual(once);
 	});
 
 	it("retires the stored memory and learning switches of an older version: a stored off no longer matters", () => {
-		const store = memoryStore({
-			aiMemory: false,
-			aiMemoryLearn: false,
-			aiMemoryServiceOwned: false,
-			aiMemoryTerminal: true,
-			language: "ko",
-		});
-		migrateRetiredPrefs(store);
-		expect(store.data).toEqual({ aiMemoryTerminal: true, language: "ko" });
+		expect(
+			migrated({
+				aiMemory: false,
+				aiMemoryLearn: false,
+				aiMemoryServiceOwned: false,
+				aiMemoryTerminal: true,
+				language: "ko",
+			}),
+		).toEqual({ aiMemoryTerminal: true, language: "ko" });
 	});
 
 	it("keeps tools up to date unless all three update switches were off", () => {
-		const allOff = memoryStore({ ompAutoUpdate: false, cliAutoUpdate: false, extensionAutoUpdate: false });
-		migrateRetiredPrefs(allOff);
-		expect(allOff.data).toEqual({ toolsAutoUpdate: false });
-
-		const oneOn = memoryStore({ ompAutoUpdate: false, cliAutoUpdate: true, extensionAutoUpdate: false });
-		migrateRetiredPrefs(oneOn);
-		expect(oneOn.data).toEqual({});
-
-		const twoOffOneUnset = memoryStore({ ompAutoUpdate: false, cliAutoUpdate: false });
-		migrateRetiredPrefs(twoOffOneUnset);
-		expect(twoOffOneUnset.data).toEqual({});
-
-		const chosen = memoryStore({
-			toolsAutoUpdate: true,
-			ompAutoUpdate: false,
-			cliAutoUpdate: false,
-			extensionAutoUpdate: false,
+		expect(migrated({ ompAutoUpdate: false, cliAutoUpdate: false, extensionAutoUpdate: false })).toEqual({
+			toolsAutoUpdate: false,
 		});
-		migrateRetiredPrefs(chosen);
-		expect(chosen.data).toEqual({ toolsAutoUpdate: true });
+		expect(migrated({ ompAutoUpdate: false, cliAutoUpdate: true, extensionAutoUpdate: false })).toEqual({});
+		expect(migrated({ ompAutoUpdate: false, cliAutoUpdate: false })).toEqual({});
+		expect(
+			migrated({ toolsAutoUpdate: true, ompAutoUpdate: false, cliAutoUpdate: false, extensionAutoUpdate: false }),
+		).toEqual({ toolsAutoUpdate: true });
 	});
 
 	it("asks before new devices when either approval switch was on", () => {
-		const remoteOn = memoryStore({ remote: { confirmNewDevices: true, keepAwake: false } });
-		migrateRetiredPrefs(remoteOn);
-		expect(remoteOn.data).toEqual({ remote: {}, mobileWeb: { confirmNewDevices: true } });
-
-		const webOn = memoryStore({ remote: { confirmNewDevices: false }, mobileWeb: { confirmNewDevices: true } });
-		migrateRetiredPrefs(webOn);
-		expect(webOn.data).toEqual({ remote: {}, mobileWeb: { confirmNewDevices: true } });
-
-		const bothOff = memoryStore({ remote: { confirmNewDevices: false } });
-		migrateRetiredPrefs(bothOff);
-		expect(bothOff.get("mobileWeb.confirmNewDevices")).toBeUndefined();
+		expect(migrated({ remote: { confirmNewDevices: true, keepAwake: false } })).toEqual({
+			remote: {},
+			mobileWeb: { confirmNewDevices: true },
+		});
+		expect(migrated({ remote: { confirmNewDevices: false }, mobileWeb: { confirmNewDevices: true } })).toEqual({
+			remote: {},
+			mobileWeb: { confirmNewDevices: true },
+		});
+		expect(migrated({ remote: { confirmNewDevices: false } })).toEqual({ remote: {} });
 	});
 
 	it("keeps one keep-awake switch: a stored host on turns a stored-off work switch on, an untouched host does not", () => {
-		const hostOn = memoryStore({ keepAwakeWhileWorking: false, remote: { keepAwake: true } });
-		migrateRetiredPrefs(hostOn);
-		expect(hostOn.data).toEqual({ keepAwakeWhileWorking: true, remote: {} });
-
-		const hostUntouched = memoryStore({ keepAwakeWhileWorking: false });
-		migrateRetiredPrefs(hostUntouched);
-		expect(hostUntouched.data).toEqual({ keepAwakeWhileWorking: false });
-
-		const hostOff = memoryStore({ remote: { keepAwake: false } });
-		migrateRetiredPrefs(hostOff);
-		expect(hostOff.get("keepAwakeWhileWorking")).toBeUndefined();
-
-		const bothOff = memoryStore({ keepAwakeWhileWorking: false, remote: { keepAwake: false } });
-		migrateRetiredPrefs(bothOff);
-		expect(bothOff.data).toEqual({ keepAwakeWhileWorking: false, remote: {} });
-		migrateRetiredPrefs(bothOff);
-		expect(bothOff.data).toEqual({ keepAwakeWhileWorking: false, remote: {} });
+		expect(migrated({ keepAwakeWhileWorking: false, remote: { keepAwake: true } })).toEqual({
+			keepAwakeWhileWorking: true,
+			remote: {},
+		});
+		expect(migrated({ keepAwakeWhileWorking: false })).toEqual({ keepAwakeWhileWorking: false });
+		expect(migrated({ remote: { keepAwake: false } })).toEqual({ remote: {} });
+		const bothOff = migrated({ keepAwakeWhileWorking: false, remote: { keepAwake: false } });
+		expect(bothOff).toEqual({ keepAwakeWhileWorking: false, remote: {} });
+		expect(migrated(bothOff)).toEqual(bothOff);
 	});
 
 	it("drops the run-state and progress switches and the work board switch, keeping other display preferences", () => {
-		const store = memoryStore({
-			workBoard: false,
-			displayPreferences: { titleState: false, showProgress: true, showTokenUsage: true },
-		});
-		migrateRetiredPrefs(store);
-		expect(store.data).toEqual({ displayPreferences: { showTokenUsage: true } });
+		expect(
+			migrated({
+				workBoard: false,
+				displayPreferences: { titleState: false, showProgress: true, showTokenUsage: true },
+			}),
+		).toEqual({ displayPreferences: { showTokenUsage: true } });
 	});
 
 	it("forgets a default side panel view and the shortcuts of the views the panel no longer holds", () => {
-		const store = memoryStore({
+		const once = migrated({
 			defaultPanelTab: "jobs",
 			keymapOverrides: { "panel.jobs": ["⌥1"], "panel.memory": ["⌥2"], "panel.terminal": ["⌥3"] },
 		});
-		migrateRetiredPrefs(store);
-		migrateRetiredPrefs(store);
-		expect(store.data).toEqual({ keymapOverrides: { "panel.terminal": ["⌥3"] } });
-		const kept = memoryStore({ defaultPanelTab: "files" });
-		migrateRetiredPrefs(kept);
-		expect(kept.data).toEqual({ defaultPanelTab: "files" });
+		expect(once).toEqual({ keymapOverrides: { "panel.terminal": ["⌥3"] } });
+		expect(migrated(once)).toEqual(once);
+		expect(migrated({ defaultPanelTab: "files" })).toEqual({ defaultPanelTab: "files" });
 	});
 
-	it("writes nothing to prefs that hold no retired key and an already merged value", () => {
-		// electron-store rewrites the whole prefs.json on every set and delete, present key or not (~74 ms for 14
-		// deletes on a 324 KB file), and this runs on every launch before the first window.
-		const store = memoryStore({
+	it("replaces a theme the app no longer ships with its successor before the first read", () => {
+		expect(migrated({ themeName: "sepia", systemLightTheme: "frost", systemDarkTheme: "hc-dark" })).toEqual({
+			themeName: "gruvbox-light",
+			systemLightTheme: "solarized-light",
+			systemDarkTheme: "hc-dark",
+		});
+		expect(migrated({ themeName: "system" })).toEqual({ themeName: "system" });
+	});
+
+	it("writes nothing to prefs that hold no retired key and an already merged value", async () => {
+		const clean = profile({
 			language: "en",
 			mobileWeb: { confirmNewDevices: true },
 			toolsAutoUpdate: false,
 			keymapOverrides: { "panel.terminal": ["⌥3"] },
 		});
-		let writes = 0;
-		const counted = {
-			...store,
-			set: (key: string, value: unknown) => {
-				writes++;
-				store.set(key, value);
-			},
-			delete: (key: string) => {
-				writes++;
-				store.delete(key);
-			},
-		};
-		migrateRetiredPrefs(counted);
-		expect(writes).toBe(0);
-		store.set("workBoard", false);
-		migrateRetiredPrefs(counted);
-		expect(writes).toBe(1);
-		expect(store.has("workBoard")).toBe(false);
+		const retired = profile({ language: "en", workBoard: false });
+		expect(new PrefsStore(clean.file).get("language")).toBe("en");
+		expect(new PrefsStore(retired.file).has("workBoard")).toBe(false);
+		await stopCore();
+		expect(readFileSync(clean.file, "utf8")).toBe(clean.text);
+		expect(JSON.parse(readFileSync(retired.file, "utf8"))).toEqual({ language: "en" });
 	});
 });

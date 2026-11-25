@@ -6,10 +6,11 @@
 //!
 //! Main hands over what it also spells for the page: the browsers in `auto` order with their names and relay ports
 //! (`src/shared/default-browser.ts`), where this machine keeps things (`systemBrowserPlaces`), and how it runs omp.
-//! It keeps finding `ego-browser` along the spawn PATH (`findOnPath`, which omp's lookup shares) and the
-//! once-per-launch answer every session reads.
+//! The core caches ego-browser's path and the status snapshot, including its automatic browser choice.
 
+mod ego;
 mod relay;
+mod status;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -102,8 +103,8 @@ impl Id {
 struct Named {
     id: Id,
     name: String,
-    /// Its own relay's loopback port.
-    port: u16,
+    /// Only older omp versions have a fixed port per browser.
+    port: Option<u16>,
 }
 
 /// Where the machine keeps things; a test points these at a temp folder.
@@ -142,12 +143,15 @@ struct Found {
 
 /// An installed browser with the state of its own relay extension copy.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
 #[serde(rename_all = "camelCase")]
 struct Installed {
     id: Id,
     name: String,
     relay_installed: bool,
     relay_connected: bool,
+    #[serde(skip_serializing)]
+    port: Option<u16>,
 }
 
 fn joined(root: &str, parts: &[&str]) -> PathBuf {
@@ -168,7 +172,7 @@ fn first_in(roots: &[String], parts: &[&str]) -> Option<PathBuf> {
         .find(|candidate| std::fs::metadata(candidate).is_ok())
 }
 
-fn find_one(named: &Named, places: &Places) -> Option<Found> {
+fn find_one(named: Named, places: &Places) -> Option<Found> {
     let definition = named.id.definition();
     let (app, data_dir) = match places.platform.as_str() {
         "darwin" => (
@@ -184,7 +188,7 @@ fn find_one(named: &Named, places: &Places) -> Option<Found> {
     };
     Some(Found {
         id: named.id,
-        name: named.name.clone(),
+        name: named.name,
         app: text(app),
         data_dir: text(data_dir),
         extensions_url: format!("{}://extensions", definition.scheme),
@@ -192,10 +196,10 @@ fn find_one(named: &Named, places: &Places) -> Option<Found> {
 }
 
 /// The installed browsers of `browsers`, in their order.
-fn find(params: &FindParams) -> Vec<Found> {
+fn find(params: FindParams) -> Vec<Found> {
     params
         .browsers
-        .iter()
+        .into_iter()
         .filter_map(|named| find_one(named, &params.places))
         .collect()
 }
@@ -241,19 +245,17 @@ async fn relay_connected(port: u16) -> bool {
 
 /// The installed browsers with the state of their own relay extension copy. The profiles are read first, then the
 /// relays of the installed copies are asked together.
-async fn status(params: FindParams) -> Result<Vec<Installed>, Fault> {
+async fn installed(params: FindParams, native_host: bool) -> Result<Vec<Installed>, Fault> {
     let read = blocking(move || {
-        find(&params)
+        params
+            .browsers
             .into_iter()
-            .map(|browser| {
+            .filter_map(|named| {
+                let port = if native_host { None } else { named.port };
+                let browser = find_one(named, &params.places)?;
                 let dir = text(relay::extension_dir(&params.places.home, browser.id));
                 let installed = relay::loaded_in(&browser.data_dir, &dir);
-                let port = params
-                    .browsers
-                    .iter()
-                    .find_map(|named| (named.id == browser.id).then_some(named.port))
-                    .unwrap_or_default();
-                (browser, installed, port)
+                Some((browser, installed, port))
             })
             .collect::<Vec<_>>()
     })
@@ -266,7 +268,11 @@ async fn status(params: FindParams) -> Result<Vec<Installed>, Fault> {
                     id: browser.id,
                     name: browser.name,
                     relay_installed,
-                    relay_connected: relay_installed && relay_connected(port).await,
+                    port,
+                    relay_connected: match port {
+                        Some(port) if relay_installed => relay_connected(port).await,
+                        _ => false,
+                    },
                 }
             })
         })
@@ -288,37 +294,9 @@ struct OpenParams {
     url: String,
 }
 
-/// Starts the browser's exe at `url`, detached as node's `spawn(…, { detached: true })` started it, and out of the
-/// job this process lives in (`sys.rs` `end_children_with_this_process`): a browser that was not running becomes the
-/// browser the person keeps, which must outlive OMPdesk. The only start in this process that leaves the job. A job
-/// around OMPdesk that forbids it fails the start as any other failed start, never runs the browser inside the job.
-/// Answered once it started, not when it ends.
 #[cfg(windows)]
 async fn open(params: OpenParams, _scope: Scope) -> Result<(), Fault> {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
-
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    // Its stdio is NUL (never this process's pipes, which std would otherwise duplicate for it), and nothing of main's
-    // pipes is inheritable when it starts: a browser outliving this process must not keep main from seeing it end.
-    static PIPES_KEPT: std::sync::Once = std::sync::Once::new();
-    PIPES_KEPT.call_once(crate::sys::stdio_not_inherited);
-    Command::new(&params.app)
-        .arg(&params.url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
-        .spawn()
-        .map(drop)
-        .map_err(|error| {
-            Fault::new(
-                "spawn_failed",
-                format!("spawn {} {}", params.app, crate::fs::error::uv_code(&error)),
-            )
-        })
+    crate::user_app::launch(std::process::Command::new(params.app).arg(params.url))
 }
 
 /// `open -a <app> <url>`, answered once `open` exits, as `execFile` answered it.
@@ -351,14 +329,15 @@ async fn open(params: OpenParams, scope: Scope) -> Result<(), Fault> {
 }
 
 pub fn register(registry: &mut Registry) {
+    ego::register(registry);
     registry.add("browsers.find", |call| {
         Box::pin(async move {
             let params: FindParams = call.params()?;
-            Reply::json(&blocking(move || find(&params)).await?)
+            Reply::json(&blocking(move || find(params)).await?)
         })
     });
     registry.add("browsers.status", |call| {
-        Box::pin(async move { Reply::json(&status(call.params()?).await?) })
+        Box::pin(async move { status::read(call.params()?).await })
     });
     registry.add("browsers.installRelay", |call| {
         Box::pin(async move { Reply::json(&relay::install(call.params()?, call.scope).await?) })

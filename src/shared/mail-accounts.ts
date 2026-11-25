@@ -1,6 +1,6 @@
 /**
  * Mailboxes the owner adds for email routines (Settings › Schedules › Email accounts): an IMAP server reached over TLS,
- * polled by this computer's email triggers (`src/main/routines/email.ts`). Main keeps them
+ * polled by this computer's Rust routine service. Main keeps them
  * (`src/main/mail-accounts.ts`): the account in `<userData>/mail-accounts.json`, its password encrypted with the OS
  * keystore (Electron `safeStorage`) beside it. A password goes one way: typed in Settings, sent to main once, never
  * read back by a window, an agent or a log. Each computer keeps its own (a paired host's are set on the host).
@@ -25,6 +25,12 @@ export interface MailAccount {
 	address: string;
 	/** A password is stored (it is never sent back). */
 	hasPassword: boolean;
+	/**
+	 * The stored password cannot be read on this computer this run because the macOS keychain would have asked for the
+	 * login password (`KEYCHAIN_WOULD_ASK`, native-rust › S › The keychain on macOS): its routines do not log in, the
+	 * window names the account in one notice, and the owner enters the password again. `hasPassword` is false then.
+	 */
+	needsReentry: boolean;
 }
 
 export interface MailAccountDraft {

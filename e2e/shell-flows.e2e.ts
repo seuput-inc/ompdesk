@@ -600,6 +600,21 @@ for (const [language, theme] of VARIANTS) {
 				const tabs = () => page.evaluate(() => window.omp.tabs.list());
 				const first = (await tabs()).find(tab => tab.active)?.tabId;
 				if (!first) throw new Error("No active tab");
+				const projectPicker = page.getByRole("dialog", {
+					name: language === "ko" ? "프로젝트" : "Projects",
+					exact: true,
+				});
+				await page.locator(".omp-titlebar-project").click();
+				await expect(projectPicker.getByRole("option").first()).toBeVisible();
+				const projectFilter = projectPicker.locator("input").first();
+				await projectFilter.fill("__no_such_project__");
+				await expect(projectPicker.getByRole("option")).toHaveCount(0);
+				await projectFilter.fill("");
+				await expect(projectPicker.getByRole("option").first()).toBeVisible();
+				await shoot("project-picker");
+				await page.keyboard.press("Escape");
+				await expect(projectPicker).toBeHidden();
+				expect((await tabs()).find(tab => tab.active)?.tabId).toBe(first);
 				await page.evaluate(
 					id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:title:Refactor auth flow" }),
 					first,

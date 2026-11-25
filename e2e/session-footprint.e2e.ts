@@ -45,11 +45,6 @@ async function profile(name: string) {
 		path.join(dirs.desktop, "prefs.json"),
 		JSON.stringify({ language: "en", firstRunComplete: true }),
 	);
-	// The steady state: REA starts at a session's first REA call once its answers are cached (builtin-packs.md › REA
-	// starts at first use). A fresh profile has no cache, so its first launch starts REA (~270 MB) with the session.
-	const reaCache = path.join(os.homedir(), "Library/Application Support/ompdesk/rea");
-	if (process.platform === "darwin")
-		await fs.cp(reaCache, path.join(dirs.desktop, "rea"), { recursive: true }).catch(() => undefined);
 	return dirs;
 }
 

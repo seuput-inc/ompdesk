@@ -1,0 +1,7 @@
+TLC (tla2tools release 1.8.0)  java 21 (cache)  spec TabListStatus.tla
+  TLC reports itself as version 2026.11.06.222357
+ok    guarded-2-reconciles: no violation  (3258 distinct states, 6110 generated, depth 13, 0.3s)
+ok    guarded-3-reconciles-5-changes: no violation  (968641 distinct states, 2312941 generated, depth 20, 4.0s)
+ok    unguarded-listing: invariant QuietAgrees (as expected)  (124 distinct states, 187 generated, depth 6, 0.3s)
+ok    late-answer-is-reachable: invariant NoLateAnswer (as expected)  (100 distinct states, 146 generated, depth 6, 0.3s)
+PASS  matrix: all 4 runs ended as expected

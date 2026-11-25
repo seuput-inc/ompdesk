@@ -66,6 +66,7 @@ async fn observe(
         .insert_observation(Sanitized::new(
             NewObservation {
                 occurred_at: None,
+                file_path: None,
                 session_id,
                 workspace_id: ws,
                 project_id: proj,

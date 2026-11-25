@@ -16,6 +16,7 @@ describe.skipIf(!fs.existsSync(stockRoot))("sessions.transcript imageRefs (gui-b
 		try {
 			fs.symlinkSync(stockModules, path.join(dir, "node_modules"), "junction");
 			fs.copyFileSync("resources/gui-bridge/image-refs.ts", path.join(dir, "image-refs.ts"));
+			fs.cpSync("resources/gui-bridge/omp", path.join(dir, "omp"), { recursive: true });
 			const picture = Buffer.alloc(4096, 7);
 			const base64 = picture.toString("base64");
 			const hash = createHash("sha256").update(picture).digest("hex");
@@ -33,8 +34,8 @@ const page = [
 	{ role: "assistant", content: [{ type: "text", text: "a ${"long ".repeat(300)}text with no picture" }] },
 ];
 const before = JSON.stringify(page);
-const shown = withImageRefs(page, store);
-const again = withImageRefs(page, store);
+const shown = await withImageRefs(page, store);
+const again = await withImageRefs(page, store);
 console.log(JSON.stringify({
 	shown,
 	untouched: JSON.stringify(page) === before,

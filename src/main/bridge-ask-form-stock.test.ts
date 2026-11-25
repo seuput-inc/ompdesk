@@ -1,20 +1,14 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { describe, expect, it } from "vitest";
-import type { ExtensionAskDialogQuestion } from "../shared/rpc-types";
-import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-probe";
+import type { ExtensionAskDialogQuestion, FormDataReply } from "../shared/rpc-types";
+import { OMP_COMMAND, INSTALLED_OMP as omp, stopOmpDaemon, withoutAwsCredentials } from "./test-bridge-probe";
 
-/**
- * Pins the bridge's ask form (resources/gui-bridge/ask-form.ts) to the installed omp: stock's own `ask` tool, run in
- * `--mode rpc-ui` through the session's real tool context with the host opted into the ask card (`set_ask_dialog`, as
- * sidecar.ts does), asks a form of pictures and a choice. Without the bridge stock walks the form field by field
- * (`select` "Pick one": A, B, C, Other), and the paragraph and pictures never leave omp (9 Nov 2026: an agent asked
- * the owner to choose among three pictures it had drawn, and the card showed none).
- */
+/** Real stock asks, parses the native `data` reply and returns it to the tool. No model turn is started. */
 
 const PIXEL =
 	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -32,19 +26,34 @@ const FORM = `<form>
     <label><input type="radio" name="logo" value="c"> C</label>
   </fieldset>
   <label>Notes <input type="text" name="notes" value="none"></label>
+  <label>Count <input type="number" name="count" min="2" value="3" required></label>
+  <input type="hidden" name="source" value="card">
 </form>`;
 
 const PROBE = `
+import { writeFileSync } from "node:fs";
 import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
-import { install } from "./ask-form";
+import { install, methods } from "./ask-form";
 export default function (pi) {
  pi.on("session_start", () => {
   setTimeout(async () => {
    try {
+    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
+    // The event handler's UI snapshots formDialog before install; the runner's context sees the live RPC UI.
+    const context = session.extensionRunner.createContext();
+    const native = typeof context.ui.formDialog === "function";
     install(pi);
-    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
-    const context = session.getToolByName("read").session.getToolContext();
-    const result = await new AskTool({ settings: session.settings, hasUI: true }).execute("ask-1", { html: process.env.PROBE_FORM }, undefined, undefined, context);
+    const html = process.env.PROBE_FORM;
+    const project = methods.project_ask_form;
+    const { questions } = await project({ html });
+    const answers = questions.map(q => ({
+      id: q.id, selectedOptions: q.formField.checked, customInput: q.formField.initialText
+    }));
+    answers[0].selectedOptions = ["B"];
+    const invalid = await project({ html, answers: answers.with(2, { ...answers[2], customInput: "1" }) });
+    const reply = await project({ html, answers });
+    writeFileSync(process.env.PROBE_PROJECTION, JSON.stringify({ native, questions, invalid, reply }));
+    const result = await new AskTool({ settings: session.settings, hasUI: true }).execute("ask-1", { html }, undefined, undefined, context);
     console.error("ASK_FORM_PROBE=" + JSON.stringify(result.content));
    } catch (err) {
     console.error("ASK_FORM_PROBE_ERROR=" + String(err && err.stack || err));
@@ -60,27 +69,43 @@ interface Frame {
 	id?: string;
 	method?: string;
 	title?: string;
+	html?: string;
 	options?: string[];
 	questions?: ExtensionAskDialogQuestion[];
 }
 
-/** Runs the probe; `answer` replies to each dialog frame omp sends. Resolves with those frames and the tool's text. */
-async function askForm(answer: (frame: Frame) => Record<string, unknown>): Promise<{ frames: Frame[]; text: string }> {
+interface Projection {
+	native: boolean;
+	questions: ExtensionAskDialogQuestion[];
+	invalid: { index: number; problem: string };
+	reply: FormDataReply;
+}
+
+async function askForm(): Promise<{ frames: Frame[]; text: string; projection: Projection }> {
 	const isolated = mkdtempSync(join(tmpdir(), "ompdesk-ask-form-"));
 	chmodSync(isolated, 0o700);
+	const env: NodeJS.ProcessEnv = {
+		PATH: process.env.PATH,
+		SystemRoot: process.env.SystemRoot,
+		HOME: isolated,
+		USERPROFILE: isolated,
+		TMPDIR: isolated,
+		TEMP: isolated,
+		TMP: isolated,
+		XDG_CACHE_HOME: isolated,
+		XDG_CONFIG_HOME: isolated,
+		PI_CODING_AGENT_DIR: isolated,
+		PI_CONFIG_DIR: ".",
+		OPENAI_API_KEY: "probe-not-a-real-key",
+		PROBE_PROJECTION: join(isolated, "projected.json"),
+		PROBE_FORM: FORM,
+	};
+	withoutAwsCredentials(env, isolated);
 	try {
 		cpSync(resolve("resources/gui-bridge"), join(isolated, "bridge"), { recursive: true });
 		const extension = join(isolated, "bridge", "ask-form-probe.ts");
 		writeFileSync(extension, PROBE);
-		const env: Record<string, string | undefined> = {
-			...process.env,
-			PI_CODING_AGENT_DIR: isolated,
-			PI_CONFIG_DIR: configDirName(isolated),
-			OMP_PROFILE: "",
-			PI_PROFILE: "",
-			OPENAI_API_KEY: "probe-not-a-real-key",
-			PROBE_FORM: FORM,
-		};
+		writeFileSync(join(isolated, "config.yml"), "ask:\n  notify: off\nspeech:\n  enabled: false\n");
 		const child = spawn(
 			OMP_COMMAND.file,
 			[
@@ -94,50 +119,62 @@ async function askForm(answer: (frame: Frame) => Record<string, unknown>): Promi
 				"-e",
 				extension,
 			],
-			{ cwd: isolated, env, stdio: ["pipe", "pipe", "pipe"] },
+			{ cwd: isolated, env, stdio: ["pipe", "pipe", "pipe"], timeout: 100_000, killSignal: "SIGKILL" },
 		);
 		const send = (frame: Record<string, unknown>) => child.stdin.write(`${JSON.stringify(frame)}\n`);
 		send({ type: "set_ask_dialog", enabled: true });
+		let unexpected: string | undefined;
 		const frames: Frame[] = [];
 		createInterface({ input: child.stdout }).on("line", line => {
 			const frame = JSON.parse(line) as Frame;
 			if (
 				frame.type !== "extension_ui_request" ||
-				!["ask", "select", "input", "editor"].includes(frame.method ?? "")
+				!["form", "ask", "select", "input", "editor"].includes(frame.method ?? "")
 			)
 				return;
+			if (!existsSync(join(isolated, "projected.json"))) {
+				unexpected = JSON.stringify({
+					method: frame.method,
+					title: frame.title,
+					requestedForm: frame.html === FORM,
+				});
+				child.kill("SIGKILL");
+				return;
+			}
 			frames.push(frame);
-			send({ type: "extension_ui_response", id: frame.id, ...answer(frame) });
+			const projection: Projection = JSON.parse(readFileSync(join(isolated, "projected.json"), "utf8"));
+			const answer =
+				frame.method === "form"
+					? projection.reply
+					: frame.method === "ask"
+						? { answers: frame.questions?.map((q, i) => ({ id: q.id, selectedOptions: i === 0 ? ["B"] : [] })) }
+						: { cancelled: true };
+			send({ type: "extension_ui_response", id: frame.id, ...answer });
 		});
 		let stderr = "";
 		child.stderr.on("data", chunk => {
 			stderr += String(chunk);
 		});
-		await once(child, "exit");
+		await once(child, "close");
+		expect(unexpected, `Dialog before the probe asked: ${unexpected}\n${stderr.slice(-2500)}`).toBeUndefined();
 		const line = stderr.split("\n").find(value => value.startsWith("ASK_FORM_PROBE="));
-		expect(line, stderr.slice(-2500)).toMatch(/^ASK_FORM_PROBE=/);
-		const content = JSON.parse(line?.slice("ASK_FORM_PROBE=".length) ?? "[]") as Array<{ text: string }>;
-		return { frames, text: content.map(block => block.text).join("\n") };
+		if (!line) throw new Error(`Stock ask probe returned no result:\n${stderr.slice(-2500)}`);
+		const content = JSON.parse(line.slice("ASK_FORM_PROBE=".length)) as Array<{ text: string }>;
+		const projection: Projection = JSON.parse(readFileSync(join(isolated, "projected.json"), "utf8"));
+		return { frames, text: content.map(block => block.text).join("\n"), projection };
 	} finally {
-		rmSync(isolated, { recursive: true, force: true });
+		stopOmpDaemon(isolated, env);
+		rmSync(isolated, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 }
 
 describe.skipIf(!existsSync(omp))("an ask form on stock omp", () => {
 	it("reaches the card whole, pictures above the question, and the answer comes back as the form's data", async () => {
-		const { frames, text } = await askForm(frame =>
-			frame.method === "ask"
-				? {
-						answers: (frame.questions ?? []).map((question, index) => ({
-							id: question.id,
-							selectedOptions: index === 0 ? ["B"] : [],
-						})),
-					}
-				: { value: frame.options?.[1] ?? "x" },
-		);
-		// One card, no field-by-field prompts.
-		expect(frames.map(frame => frame.method)).toEqual(["ask"]);
-		const [logo, notes] = frames[0]?.questions ?? [];
+		const { frames, text, projection } = await askForm();
+		expect(frames.map(frame => frame.method)).toEqual([projection.native ? "form" : "ask"]);
+		if (projection.native) expect(frames[0]?.html).toBe(FORM);
+		const [logo, notes] = projection.native ? projection.questions : (frames[0]?.questions ?? []);
+		expect(projection.invalid).toEqual({ index: 2, problem: "Must be at least 2" });
 		expect(logo).toMatchObject({
 			question: "Which logo should ship?",
 			header: "Logo",
@@ -150,7 +187,6 @@ describe.skipIf(!existsSync(omp))("an ask form on stock omp", () => {
 		expect(logo?.context).toMatch(/```svg\n<svg[^\n]*aria-label="C: drawn"/);
 		expect(notes).toMatchObject({ question: "Notes", options: [] });
 		expect(notes?.context).toBeUndefined();
-		// The untouched text field keeps the form's own value, as a submitted form does.
-		expect(JSON.parse(text.slice(text.indexOf("{")))).toEqual({ logo: "b", notes: "none" });
+		expect(JSON.parse(text.slice(text.indexOf("{")))).toEqual({ logo: "b", notes: "none", count: 3, source: "card" });
 	}, 150_000);
 });

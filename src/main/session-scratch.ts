@@ -14,7 +14,7 @@
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, normalize } from "node:path";
+import { isAbsolute, join, normalize, relative } from "node:path";
 import { z } from "zod";
 import { writeFileAtomicDeferred } from "./atomic-file";
 
@@ -52,7 +52,7 @@ export interface SessionScratchDeps {
 }
 
 /** A session file as a key: Windows names the same file in either case and with either slash. */
-function sessionKey(path: string): string {
+export function sessionKey(path: string): string {
 	const normal = normalize(path);
 	return process.platform === "win32" ? normal.toLowerCase() : normal;
 }
@@ -110,16 +110,29 @@ export class SessionScratch {
 	}
 
 	/**
-	 * `sessionPath` was deleted: no reply of it will be shown again. Answers the tags of the folders that served it
-	 * and now serve no session at all.
+	 * The sessions of the tab whose scratch folder `folder` is or lies in (none known: empty); null when `folder` is
+	 * outside every scratch folder.
 	 */
-	sessionDeleted(sessionPath: string): string[] {
+	sessionsOf(folder: string): string[] | null {
+		const inside = relative(this.root, folder);
+		const tag = inside.split(/[\\/]/)[0] ?? "";
+		if (!inside || isAbsolute(inside) || !SCRATCH_TAG.test(tag)) return null;
+		return [...(this.#records.get(tag)?.sessions ?? [])];
+	}
+
+	/**
+	 * `sessionPath` was deleted. Keep any moved copies in its place; return folders with no remaining session.
+	 */
+	sessionDeleted(sessionPath: string, moved: readonly string[]): string[] {
 		const key = sessionKey(sessionPath);
 		const emptied: string[] = [];
 		let changed = false;
 		for (const record of this.#records.values()) {
 			const left = record.sessions.filter(known => sessionKey(known) !== key);
 			if (left.length === record.sessions.length) continue;
+			for (const file of moved) {
+				if (!left.some(known => sessionKey(known) === sessionKey(file))) left.push(file);
+			}
 			record.sessions = left;
 			changed = true;
 			if (left.length === 0) emptied.push(record.tag);

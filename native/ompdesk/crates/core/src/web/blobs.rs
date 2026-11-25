@@ -10,7 +10,7 @@
 //! once: the page only learns it from a frame that is written after the push.
 //!
 //! Pushes (`register`): `web.blobs.add` `{userData, deviceId, token, kind: "file" | "bytes" | "media", mime, name,
-//! download?, abs?, url?, now}` (a `bytes` blob's bytes are the `bin`), `web.blobs.releaseDevice` `{userData,
+//! download?, abs?, url?, pictureTab?, now}` (a `bytes` blob's bytes are the `bin`), `web.blobs.releaseDevice` `{userData,
 //! deviceId}`. Methods: `web.blobs.release` `{userData, deviceId, url}` -> `{released}`, `web.blobs.mediaUrl`
 //! `{userData, deviceId, url, now}` -> `{url}`, `web.blobs.count` `{userData}` -> `{size}`, and `web.blobs.serve`
 //! `{userData, deviceId, target, method, range?, now}` -> `{status, headers: [[name, value]]}` + the body as `bin`
@@ -200,6 +200,7 @@ struct Entry {
     /// Insertion order, which settles which of two blobs added in the same millisecond is the oldest.
     seq: u64,
     device: String,
+    picture_tab: Option<Box<str>>,
     source: Source,
     mime: String,
     name: String,
@@ -210,6 +211,7 @@ struct Entry {
 /// A blob to register.
 pub struct NewBlob<'a> {
     pub device: &'a str,
+    pub picture_tab: Option<Box<str>>,
     pub source: Source,
     pub mime: &'a str,
     pub name: &'a str,
@@ -401,10 +403,21 @@ impl BlobStore {
         Some(entry)
     }
 
+    pub(super) fn tabs_changed(&self, device: &str, open: &std::collections::HashSet<String>) {
+        self.state().entries.retain(|_, entry| {
+            entry.device != device
+                || entry
+                    .picture_tab
+                    .as_deref()
+                    .is_none_or(|tab| open.contains(tab))
+        });
+    }
+
     /// Register a blob under a token main minted.
     pub fn add(&self, now: i64, token: &str, blob: NewBlob<'_>) {
         let NewBlob {
             device,
+            picture_tab,
             source,
             mime,
             name,
@@ -443,6 +456,8 @@ impl BlobStore {
             Entry {
                 seq,
                 device: device.to_owned(),
+                picture_tab: picture_tab
+                    .filter(|tab| !tab.is_empty() && matches!(source, Source::Bytes(_))),
                 source,
                 mime: mime.to_owned(),
                 name: name.to_owned(),
@@ -951,6 +966,7 @@ struct AddParams {
     user_data: PathBuf,
     device_id: String,
     token: String,
+    picture_tab: Option<Box<str>>,
     kind: Kind,
     mime: String,
     #[serde(default)]
@@ -979,6 +995,7 @@ fn add(push: PushCall) {
         &params.token,
         NewBlob {
             device: &params.device_id,
+            picture_tab: params.picture_tab,
             source,
             mime: &params.mime,
             name: &params.name,
@@ -1130,6 +1147,7 @@ mod tests {
             &token,
             NewBlob {
                 device,
+                picture_tab: None,
                 source: Source::Bytes(Bytes::from_static(DIGITS)),
                 mime,
                 name,
@@ -1146,6 +1164,7 @@ mod tests {
             &token,
             NewBlob {
                 device,
+                picture_tab: None,
                 source: Source::File(abs),
                 mime: "application/octet-stream",
                 name: "clip.bin",
@@ -1465,6 +1484,42 @@ mod tests {
     }
 
     #[test]
+    fn closing_tabs_releases_only_the_devices_live_tab_pictures() {
+        let store = store();
+        let add = |device: &str, tab: Option<&str>| {
+            let token = mint();
+            store.add(
+                NOW,
+                &token,
+                NewBlob {
+                    device,
+                    picture_tab: tab.map(Into::into),
+                    source: Source::Bytes(Bytes::from_static(DIGITS)),
+                    mime: "image/png",
+                    name: "picture",
+                    download: false,
+                },
+            );
+            format!("{URL_PREFIX}{token}")
+        };
+        let closed = add("dev1", Some("a"));
+        let kept = add("dev1", Some("b"));
+        let unowned = add("dev1", None);
+        let other = add("dev2", Some("a"));
+        let gone = add("dev1", Some("a"));
+        assert!(store.release("dev1", &gone));
+
+        let open = ["b".to_owned()].into_iter().collect();
+        store.tabs_changed("dev1", &open);
+        store.tabs_changed("dev1", &open);
+        assert!(!store.release("dev1", &closed));
+        assert!(store.release("dev1", &kept));
+        assert!(store.release("dev1", &unowned));
+        assert!(store.release("dev2", &other));
+        assert_eq!(store.count(), 0);
+    }
+
+    #[test]
     fn the_oldest_blob_is_the_one_pushed_out_even_when_added_in_the_same_millisecond() {
         let store = store();
         let first = add_bytes(&store, "dev1", "text/plain", "first");
@@ -1534,6 +1589,7 @@ mod tests {
             &token,
             NewBlob {
                 device: "dev1",
+                picture_tab: None,
                 source: Source::Media("omp-media://stream/t".to_owned()),
                 mime: "video/webm",
                 name: "media",
@@ -1585,6 +1641,7 @@ mod tests {
             &token,
             NewBlob {
                 device: "d",
+                picture_tab: None,
                 source: Source::Media("omp-media://stream/x".to_owned()),
                 mime: "video/webm",
                 name: "media",
@@ -1610,6 +1667,7 @@ mod tests {
             &token,
             NewBlob {
                 device: "dev1",
+                picture_tab: None,
                 source: Source::Media("omp-media://stream/s".to_owned()),
                 mime: "video/webm",
                 name: "media",
@@ -1687,6 +1745,7 @@ mod tests {
             &token,
             NewBlob {
                 device: "dev1",
+                picture_tab: None,
                 source: Source::Media("omp-media://stream/s".to_owned()),
                 mime: "video/webm",
                 name: "media",
@@ -1738,6 +1797,7 @@ mod tests {
             &token,
             NewBlob {
                 device: "dev1",
+                picture_tab: None,
                 source: Source::Media("omp-media://stream/s".to_owned()),
                 mime: "video/webm",
                 name: "media",

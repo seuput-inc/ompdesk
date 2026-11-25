@@ -6,7 +6,8 @@
  * gets the multi-viewer rules over one omp:
  *
  * - the omp's stream reaches the window, except its host tool calls and URI reads, which the device
- *   answers (a second answer from here would race it);
+ *   answers (a second answer from here would race it), unless the device is away and was never handed
+ *   one: LocalHostServices then hands it to a window's view (`carryOut`);
  * - the window's commands go to the same omp; a prompt, steer or follow-up typed here is journaled as
  *   the viewer's (`prompt_origin_set` with `promptOrigin`) unless a paired web page that views this
  *   window's tab named its own device first, and a transcript page is relabelled for the viewer
@@ -19,16 +20,17 @@
  *   computer's windows wins and the other's card closes as answered elsewhere (`answered:<id>`);
  * - a window that joins gets the asks open now and the session's identity (next microtask, once the
  *   pool's listeners are on), and the connection wait or scheduled retry that holds;
- * - the pool emits the window's tab's connection wait (`awaitingConnection`) and scheduled retry
- *   (`scheduledRetry`) on the view as they change, and the device's Cancel (`cancelHostWait`) reaches this
- *   computer's resume rules for the window's tab;
+ * - the pool emits the window's tab's connection wait (`awaitingConnection`), scheduled retry
+ *   (`scheduledRetry`) and cut-off row (`cutOff`) on the view as they change, and the device's Cancel
+ *   (`cancelHostWait`), Continue and Dismiss (`continueHostCut`, `dismissHostCut`) reach this computer's resume
+ *   rules for the window's tab;
  * - leaving (`dispose`) takes only the window's listeners; the device's close, delete or revoke ends
  *   the view (`VIEW_ENDED_EVENT`) before its omp goes.
  */
 import { EventEmitter } from "node:events";
 import type { PromptOrigin } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { codedError } from "../../shared/ipc-error-codes";
-import type { IpcScheduledRetry } from "../../shared/ipc-types";
+import type { IpcCutOff, IpcScheduledRetry } from "../../shared/ipc-types";
 import type {
 	ExtensionUIRequest,
 	RpcCommand,
@@ -43,7 +45,7 @@ import type { RunReading } from "../sidecar-run-state";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "../sidecar-types";
 import { STOP_COMMANDS } from "../turn-stop-log";
 
-/** The hosted omp's events a window shows. `hostToolCall` and `hostUriRequest` stay the device's to answer. */
+/** The hosted omp's events a window shows. `hostToolCall` and `hostUriRequest` stay the device's to answer (`carryOut`). */
 const VIEW_EVENTS = [
 	"status",
 	"events",
@@ -76,8 +78,12 @@ export interface HostedTabPort {
 	answer(frame: object): void;
 	/** The user pressed Stop here: nothing continues this turn after a crash. */
 	stopped(): void;
+	/** Fence the holder's automatic close before forwarding a window prompt; release it on rejection. */
+	prompting?(): ((error?: unknown) => void) | undefined;
 	/** The user's Cancel on the tab's "waiting for the connection" row, or on its scheduled retry. */
 	cancelWait(): void;
+	/** The device's Continue or Dismiss on the tab's cut-off row. */
+	cutOff(choice: "continue" | "dismiss"): void;
 	/** The asks open now, the session's identity, the connection wait, a scheduled retry and its run, for a party that just joined. */
 	snapshot(): {
 		asks: ExtensionUIRequest[];
@@ -86,6 +92,7 @@ export interface HostedTabPort {
 		autoTitle?: string;
 		awaitingConnection?: boolean;
 		scheduledRetry?: IpcScheduledRetry;
+		cutOff?: IpcCutOff;
 		run: RunReading;
 	};
 	/** The device asks for this subagent stream level; answers the level the tab's omp must hold for every viewer. */
@@ -117,7 +124,7 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		this.#client = { command: (command, timeoutMs) => this.#command(command, timeoutMs) };
 		queueMicrotask(() => {
 			if (this.#left) return;
-			const { asks, sessionId, title, autoTitle, awaitingConnection, scheduledRetry } = port.snapshot();
+			const { asks, sessionId, title, autoTitle, awaitingConnection, scheduledRetry, cutOff } = port.snapshot();
 			if (sessionId !== undefined || title !== undefined || autoTitle !== undefined) {
 				const frame: SessionInfoUpdateFrame = { type: "session_info_update" };
 				if (sessionId !== undefined) frame.sessionId = sessionId;
@@ -128,6 +135,7 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 			this.emit("openAsks", asks);
 			if (awaitingConnection) this.emit("awaitingConnection", true);
 			if (scheduledRetry) this.emit("scheduledRetry", scheduledRetry);
+			if (cutOff) this.emit("cutOff", cutOff);
 		});
 	}
 
@@ -183,6 +191,14 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		this.#port.cancelWait();
 	}
 
+	async continueHostCut(): Promise<void> {
+		this.#port.cutOff("continue");
+	}
+
+	async dismissHostCut(): Promise<void> {
+		this.#port.cutOff("dismiss");
+	}
+
 	// This computer's settings reach the hosted omp through LocalHostServices, once.
 	syncImageGeneration(): void {}
 	syncReplyLanguage(): void {}
@@ -210,11 +226,24 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		this.dispose();
 	}
 
+	/**
+	 * The device is away and was never handed this call of its omp's: the window this view is a tab of carries it out
+	 * as its own tab's (its pool's `hostToolCall`/`hostUriRequest` listener) and answers through `sendSideChannel`.
+	 * False while no window listens yet (the view is still being added): the call stays the host's to hand out.
+	 */
+	carryOut(name: "hostToolCall" | "hostUriRequest", request: { id: string }): boolean {
+		if (this.#left || this.listenerCount(name) === 0) return false;
+		this.emit(name, request);
+		return true;
+	}
+
 	async #command(command: RpcCommand, timeoutMs?: number): Promise<RpcResponse> {
 		const client = this.#port.sidecar.rpcClient;
 		if (!client) throw codedError("sidecar_not_connected", "Sidecar not connected");
+		let rejected: ((error?: unknown) => void) | undefined;
 		if (command.type === "prompt_origin_set") this.#namedOrigin = command.text;
 		else if (command.type === "prompt" || command.type === "steer" || command.type === "follow_up") {
+			rejected = this.#port.prompting?.();
 			const named = this.#namedOrigin === command.message;
 			this.#namedOrigin = undefined;
 			if (!named) {
@@ -228,7 +257,11 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 			command.type === "set_subagent_subscription"
 				? { ...command, level: this.#port.subagentLevel(command.level) }
 				: command;
-		const response = await client.command(sent, timeoutMs);
+		const response = await client.command(sent, timeoutMs).catch((error: unknown) => {
+			rejected?.(error);
+			throw error;
+		});
+		if (!response.success) rejected?.();
 		if (command.type !== "get_transcript_page" || !response.success) return response;
 		return { ...response, data: this.#port.labelTranscript(response.data) };
 	}

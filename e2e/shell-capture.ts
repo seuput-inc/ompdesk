@@ -23,7 +23,7 @@ export async function resize(app: ElectronApplication, width: number, height: nu
 export async function inspect(page: Page, shot: string): Promise<Finding[]> {
 	const found = await page.evaluate(() => {
 		const out: { kind: string; detail: string }[] = [];
-		const describe = (element: Element) => {
+		const domLabel = (element: Element) => {
 			const label = element.getAttribute("aria-label") ?? element.textContent?.trim().slice(0, 60) ?? "";
 			return `${element.tagName.toLowerCase()}${element.className && typeof element.className === "string" ? `.${element.className.split(" ").slice(0, 3).join(".")}` : ""} "${label}"`;
 		};
@@ -37,11 +37,11 @@ export async function inspect(page: Page, shot: string): Promise<Finding[]> {
 			if (box.right > innerWidth + 1 || box.left < -1)
 				out.push({
 					kind: "offscreen",
-					detail: `${describe(element)} x=${Math.round(box.left)}..${Math.round(box.right)}`,
+					detail: `${domLabel(element)} x=${Math.round(box.left)}..${Math.round(box.right)}`,
 				});
 			const overflowing = element.scrollWidth > element.clientWidth + 1 && element.clientWidth > 0;
 			if (overflowing && style.textOverflow !== "ellipsis" && style.overflowX === "hidden")
-				out.push({ kind: "clipped", detail: describe(element) });
+				out.push({ kind: "clipped", detail: domLabel(element) });
 		}
 		// Popups stay inside the window and never cover the control that opened them.
 		const trigger = document.querySelector('[aria-expanded="true"][aria-haspopup]');
@@ -53,13 +53,13 @@ export async function inspect(page: Page, shot: string): Promise<Finding[]> {
 			if (box.left < -1 || box.top < -1 || box.right > innerWidth + 1 || box.bottom > innerHeight + 1)
 				out.push({
 					kind: "popup-outside",
-					detail: `${describe(popup)} ${Math.round(box.left)},${Math.round(box.top)}..${Math.round(box.right)},${Math.round(box.bottom)} in ${innerWidth}x${innerHeight}`,
+					detail: `${domLabel(popup)} ${Math.round(box.left)},${Math.round(box.top)}..${Math.round(box.right)},${Math.round(box.bottom)} in ${innerWidth}x${innerHeight}`,
 				});
 			if (popup.getAttribute("role") !== "menu" || !trigger) continue;
 			const anchor = trigger.getBoundingClientRect();
 			const overlapX = Math.min(box.right, anchor.right) - Math.max(box.left, anchor.left);
 			const overlapY = Math.min(box.bottom, anchor.bottom) - Math.max(box.top, anchor.top);
-			if (overlapX > 2 && overlapY > 2) out.push({ kind: "menu-covers-trigger", detail: describe(trigger) });
+			if (overlapX > 2 && overlapY > 2) out.push({ kind: "menu-covers-trigger", detail: domLabel(trigger) });
 		}
 		// A short or empty text field never scrolls: a scrollbar there means its box is a pixel too small for its own line.
 		for (const area of document.querySelectorAll("textarea")) {
@@ -68,7 +68,7 @@ export async function inspect(page: Page, shot: string): Promise<Finding[]> {
 			if (area.scrollHeight > area.clientHeight + 1 && area.value.length < 80 && !area.value.includes("\n"))
 				out.push({
 					kind: "textarea-scrolls",
-					detail: `${describe(area)} scrollHeight ${area.scrollHeight} > clientHeight ${area.clientHeight} (${Math.round(box.width)}x${Math.round(box.height)})`,
+					detail: `${domLabel(area)} scrollHeight ${area.scrollHeight} > clientHeight ${area.clientHeight} (${Math.round(box.width)}x${Math.round(box.height)})`,
 				});
 		}
 		// Reduced motion: nothing animates longer than a frame.
@@ -80,7 +80,7 @@ export async function inspect(page: Page, shot: string): Promise<Finding[]> {
 					const target = animation.effect instanceof KeyframeEffect ? animation.effect.target : null;
 					out.push({
 						kind: "motion-under-reduce",
-						detail: `${target ? describe(target) : "?"} ${Math.round(duration)}ms ${animation instanceof CSSAnimation ? animation.animationName : animation instanceof CSSTransition ? animation.transitionProperty : ""}`,
+						detail: `${target ? domLabel(target) : "?"} ${Math.round(duration)}ms ${animation instanceof CSSAnimation ? animation.animationName : animation instanceof CSSTransition ? animation.transitionProperty : ""}`,
 					});
 				}
 			}

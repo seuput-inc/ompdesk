@@ -1,0 +1,40 @@
++     "cwd": "/alpha",
++     "device": undefined,
+      "id": "t0",
+-     "sessionPath": "/sessions/new.jsonl",
+-     "status": "ready",
++     "kind": "agent",
++     "lastRun": undefined,
++     "openedBy": undefined,
++     "openedBySession": undefined,
++     "pendingSessionPath": undefined,
++     "placeholder": undefined,
++     "sessionId": undefined,
++     "sessionPath": undefined,
++     "shared": undefined,
++     "status": "starting",
++     "task": undefined,
++     "title": undefined,
++     "unreadDone": false,
++     "unstarted": false,
+      "viewerCount": 2,
++     "worktree": undefined,
+    },
+  ]
+
+ ❯ src/renderer/stores/tabs.test.tsx:323:40
+    321|   await reconciled;
+    322| 
+    323|   expect(useTabsStore.getState().tabs).toEqual([
+       |                                        ^
+    324|    expect.objectContaining({ id: "t0", status: "ready", sessionPath: "…
+    325|   ]);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 169 skipped (170)
+   Start at  03:03:53
+   Duration  656ms (transform 472ms, setup 179ms, collect 346ms, tests 8ms, environment 0ms, prepare 28ms)
+

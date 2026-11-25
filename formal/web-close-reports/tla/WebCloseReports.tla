@@ -4,11 +4,12 @@
  *
  * Pages share ONE window (a device's up to four connections). Each page has a Files editor that holds unsaved edits
  * in at most one tab (`edit`), and a current connection; a reconnect is a fresh connection id. The page sends its
- * dirty tab on every change and right after its connection opens (`FileEditReporter`). Main keeps the latest report
- * per connection (`FileEditReports`), forgets a connection when it ends, and an agent's close reads that store
- * (`tab_close_step`): it keeps a tab some report names, releases any other.
+ * dirty tab on every change and right after its connection opens (`FileEditReporter`). The core's web router keeps
+ * the latest report per connection (`file_edits.rs`, under the lock that ends connections), forgets a connection when
+ * it ends, and an agent's close reads that store (`tab_close_step`): it keeps a tab some report names, releases any
+ * other; the pool's removal checks the store again under the router's lock (`release_entry`'s `unless_dirty`).
  *
- * Frames from page to main are FIFO per connection; frames of a connection that ended are refused.
+ * Frames from page to the router are FIFO per connection; frames of a connection that ended are refused.
  *)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -21,10 +22,13 @@ Dirty == Tabs \cup {None}
 
 \* Mutation switch: the report's handler runs in a later step than the frame's receive (an `await` in between).
 SplitDispatch == FALSE
+\* Mutation switch: the release's last check and the pool's removal are separate steps (main reads the store, then
+\* asks the pool to release), so a report can land between them.
+SplitRelease == FALSE
 
-\* @code src/main/web/file-edit-reports.ts:30-33 report: one connection's entry
+\* @code native/ompdesk/crates/core/src/web/file_edits.rs:52-56 report: one connection's entry
 Write(s, c, v) == [s EXCEPT ![c] = v]
-\* @code src/main/web/file-edit-reports.ts:36-38 forget: one connection's entry
+\* @code native/ompdesk/crates/core/src/web/file_edits.rs:59-61 forget: one connection's entry
 Forget(s, c) == [s EXCEPT ![c] = Absent]
 
 VARIABLES
@@ -32,17 +36,18 @@ VARIABLES
     conn,      \* page -> index of its current connection (0: never connected)
     live,      \* connections the router serves (attached, not ended)
     greeted,   \* connections whose page saw "open" (and sent its open report)
-    q,         \* connection -> report frames in flight, page to main
+    q,         \* connection -> report frames in flight, page to the router
     handoff,   \* connection -> frames received but not yet handled (only under SplitDispatch)
-    store,     \* connection -> its latest report in main, or Absent
+    store,     \* connection -> its latest report in the router, or Absent
     deciding,  \* tabs a close decided to release, release not done yet
+    passed,    \* tabs whose last check passed, removal not done yet (only under SplitRelease)
     released,  \* tabs released
     edits,     \* edit counter (bound)
     bad,       \* ghost: a close decided to release a tab a settled live page holds dirty
-    late,      \* ghost: a release went ahead while main's store already named the tab dirty
+    late,      \* ghost: a release went ahead while the store already named the tab dirty
     refused    \* ghost: a close kept a tab for its unsaved edits
 
-vars == <<edit, conn, live, greeted, q, handoff, store, deciding, released, edits, bad, late, refused>>
+vars == <<edit, conn, live, greeted, q, handoff, store, deciding, passed, released, edits, bad, late, refused>>
 
 Current(p) == <<p, conn[p]>>
 
@@ -55,6 +60,7 @@ TypeOK ==
     /\ handoff \in [ConnIds -> Seq(Dirty)]
     /\ store \in [ConnIds -> Dirty \cup {Absent}]
     /\ deciding \subseteq Tabs
+    /\ passed \subseteq Tabs
     /\ released \subseteq Tabs
 
 Init ==
@@ -66,14 +72,15 @@ Init ==
     /\ handoff = [c \in ConnIds |-> <<>>]
     /\ store = [c \in ConnIds |-> Absent]
     /\ deciding = {}
+    /\ passed = {}
     /\ released = {}
     /\ edits = 0
     /\ bad = FALSE
     /\ late = FALSE
     /\ refused = FALSE
 
-\* What main's store says about a tab of the window.
-\* @code src/main/web/file-edit-reports.ts:40-48 edits
+\* What the router's store says about a tab of the window.
+\* @code native/ompdesk/crates/core/src/web/file_edits.rs:63-76 edits
 Edits(t) ==
     LET reported == {c \in ConnIds : store[c] # Absent}
     IN IF \E c \in reported : store[c] = t THEN "dirty"
@@ -104,16 +111,16 @@ Edit(p, v) ==
     /\ q' = IF conn[p] # 0 /\ Current(p) \in greeted
                THEN [q EXCEPT ![Current(p)] = Append(@, v)]
                ELSE q
-    /\ UNCHANGED <<conn, live, greeted, handoff, store, deciding, released, bad, late, refused>>
+    /\ UNCHANGED <<conn, live, greeted, handoff, store, deciding, passed, released, bad, late, refused>>
 
 \* A fresh socket: the router serves a new connection (a new random id) for the page.
-\* @code native/ompdesk/crates/core/src/web/router.rs:720-761 attach_conn
+\* @code native/ompdesk/crates/core/src/web/router.rs:787-828 attach_conn
 Connect(p) ==
     /\ conn[p] < MaxConn
     /\ conn[p] = 0 \/ Current(p) \notin live
     /\ conn' = [conn EXCEPT ![p] = @ + 1]
     /\ live' = live \cup {<<p, conn[p] + 1>>}
-    /\ UNCHANGED <<edit, greeted, q, handoff, store, deciding, released, edits, bad, late, refused>>
+    /\ UNCHANGED <<edit, greeted, q, handoff, store, deciding, passed, released, edits, bad, late, refused>>
 
 \* The page hears its hello ("open") and sends its editor's dirty tab.
 \* @code src/renderer/web/FileEditReporter.tsx:26-28 onConnectionState("open") -> send
@@ -123,18 +130,20 @@ Greet(p) ==
     /\ Current(p) \notin greeted
     /\ greeted' = greeted \cup {Current(p)}
     /\ q' = [q EXCEPT ![Current(p)] = Append(@, edit[p])]
-    /\ UNCHANGED <<edit, conn, live, handoff, store, deciding, released, edits, bad, late, refused>>
+    /\ UNCHANGED <<edit, conn, live, handoff, store, deciding, passed, released, edits, bad, late, refused>>
 
-\* The socket ends (closed, timed out, retired, revoked): detach, onConnectionEnded, forget, in one synchronous run.
-\* @code native/ompdesk/crates/core/src/web/router.rs:825-862 finish -> web.conns end; src/main/web/ws-router.ts:383-394 connections -> onConnectionEnded; src/main/index.ts:2297 forget
+\* The socket ends (closed, timed out, retired, revoked): the router's finish ends it and forgets its report, under one lock.
+\* @code native/ompdesk/crates/core/src/web/router.rs:892-931 finish: the connection leaves, its report is forgotten
 Drop(c) ==
     /\ c \in live
     /\ live' = live \ {c}
     /\ store' = Forget(store, c)
-    /\ UNCHANGED <<edit, conn, greeted, q, handoff, deciding, released, edits, bad, late, refused>>
+    /\ UNCHANGED <<edit, conn, greeted, q, handoff, deciding, passed, released, edits, bad, late, refused>>
 
-\* A report frame reaches main: an ended connection refuses it; a live one hands it to the handler in the same run.
-\* @code native/ompdesk/crates/core/src/web/router.rs:1009-1018 receive (closed -> ignored); native/ompdesk/crates/core/src/web/router.rs:1140-1222 dispatch -> web.call; src/main/web/ws-router.ts:414-434 call -> #dispatch; ws-router.ts:476 registry.invoke; src/main/ipc.ts:1693-1697 FILE_EDIT_REPORT
+\* A report frame reaches the router: an ended connection refuses it; a live one records it in the same run.
+\* @code native/ompdesk/crates/core/src/web/router.rs:1118-1127 receive refuses an ended connection
+\* @code native/ompdesk/crates/core/src/web/router.rs:1249-1333 dispatch authorizes, then answers FILE_EDIT_REPORT itself
+\* @code native/ompdesk/crates/core/src/web/router.rs:1339-1358 file_edit_report: parse, record, answer
 Deliver(c) ==
     /\ q[c] # <<>>
     /\ q' = [q EXCEPT ![c] = Tail(@)]
@@ -143,7 +152,7 @@ Deliver(c) ==
                /\ UNCHANGED handoff
           ELSE /\ handoff' = IF c \in live THEN [handoff EXCEPT ![c] = Append(@, Head(q[c]))] ELSE handoff
                /\ UNCHANGED store
-    /\ UNCHANGED <<edit, conn, live, greeted, deciding, released, edits, bad, late, refused>>
+    /\ UNCHANGED <<edit, conn, live, greeted, deciding, passed, released, edits, bad, late, refused>>
 
 \* Only under SplitDispatch: the handler runs later, after whatever else happened meanwhile.
 Handle(c) ==
@@ -151,10 +160,10 @@ Handle(c) ==
     /\ handoff[c] # <<>>
     /\ store' = Write(store, c, Head(handoff[c]))
     /\ handoff' = [handoff EXCEPT ![c] = Tail(@)]
-    /\ UNCHANGED <<edit, conn, live, greeted, q, deciding, released, edits, bad, late, refused>>
+    /\ UNCHANGED <<edit, conn, live, greeted, q, deciding, passed, released, edits, bad, late, refused>>
 
 \* An agent's close reads the tab (its `webEdits` from the store) and decides.
-\* @code native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:138-177 close_tab: snapshot, tab_close_step, keep or start the release
+\* @code native/ompdesk/crates/core/src/agentctl/service/sessions/stop.rs:211-245 close_tab: snapshot, tab_close_step, keep or start the release
 CloseDecide(t) ==
     /\ t \notin released \cup deciding
     /\ IF CloseStep(t) = "release"
@@ -163,28 +172,42 @@ CloseDecide(t) ==
                /\ UNCHANGED refused
           ELSE /\ refused' = TRUE
                /\ UNCHANGED <<deciding, bad>>
-    /\ UNCHANGED <<edit, conn, live, greeted, q, handoff, store, released, edits, late>>
+    /\ UNCHANGED <<edit, conn, live, greeted, q, handoff, store, passed, released, edits, late>>
 
-\* The release lands after awaits (host.release, closeWindowTab's refreshExitPolicy); reports may arrive meanwhile.
-\* Right after the await, with no await before the release, the one rule decides again on what the store says now.
-\* @code src/main/tab-release.ts:38-41 refreshExitPolicy, stillClosable, closeTabTerminals, releaseTab
-\* @code src/main/agent-control/host.ts:1119-1126 release: the re-check reads the store's word then (`edits(...) !== "dirty"`)
+\* The release lands after awaits (exit policy and, on a paired owner, the host's close reply); reports may arrive
+\* meanwhile. The pool's removal asks the store again under the router's lock, in the step that removes the tab.
+\* @code src/main/tab-release.ts:30-64 refreshExitPolicy, the page's word before closeHostTurn, releaseTab with the guard
+\* @code src/main/agent-control/host.ts:1240-1247 release: the guard names the page's router and device
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:421-453 release_entry: removal inside unless_dirty
+\* @code native/ompdesk/crates/core/src/web/router.rs:652-671 unless_dirty: check and removal under the router's lock
 CloseRelease(t) ==
     /\ t \in deciding
     /\ deciding' = deciding \ {t}
     /\ IF CloseStep(t) = "release"
-          THEN /\ released' = released \cup {t}
-               /\ late' = (late \/ Edits(t) = "dirty")
-               /\ UNCHANGED refused
+          THEN IF SplitRelease
+                  THEN /\ passed' = passed \cup {t}
+                       /\ UNCHANGED <<released, late, refused>>
+                  ELSE /\ released' = released \cup {t}
+                       /\ late' = (late \/ Edits(t) = "dirty")
+                       /\ UNCHANGED <<refused, passed>>
           ELSE /\ refused' = TRUE
-               /\ UNCHANGED <<released, late>>
+               /\ UNCHANGED <<released, late, passed>>
     /\ UNCHANGED <<edit, conn, live, greeted, q, handoff, store, edits, bad>>
+
+\* Only under SplitRelease: the removal runs later, on whatever the store says by then, without asking it.
+CloseRemove(t) ==
+    /\ SplitRelease
+    /\ t \in passed
+    /\ passed' = passed \ {t}
+    /\ released' = released \cup {t}
+    /\ late' = (late \/ Edits(t) = "dirty")
+    /\ UNCHANGED <<edit, conn, live, greeted, q, handoff, store, deciding, edits, bad, refused>>
 
 Next ==
     \/ \E p \in Pages, v \in Dirty : Edit(p, v)
     \/ \E p \in Pages : Connect(p) \/ Greet(p)
     \/ \E c \in ConnIds : Drop(c) \/ Deliver(c) \/ Handle(c)
-    \/ \E t \in Tabs : CloseDecide(t) \/ CloseRelease(t)
+    \/ \E t \in Tabs : CloseDecide(t) \/ CloseRelease(t) \/ CloseRemove(t)
 
 Spec == Init /\ [][Next]_vars
 
@@ -199,7 +222,7 @@ QuiescentAgreement == \A p \in Pages : Settled(p) => store[Current(p)] = edit[p]
 \* P3: a close never decides to release a tab a settled live page holds unsaved edits in.
 NoReleaseOfKnownDirty == ~bad
 
-\* P4: a release never lets a tab go while main's store names it dirty (a report that landed during its awaits).
+\* P4: a release never lets a tab go while the store names it dirty (a report that landed during its awaits).
 NoLateDirtyRelease == ~late
 
 \* ========================= Sanity (each must be violated) =========================

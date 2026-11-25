@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import { createServer } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
-import { exitApp, launchApp, recordsOfType } from "./harness";
+import { exitApp, launchApp, readClipboardText, recordsOfType } from "./harness";
 
 let app: ElectronApplication;
 let page: Page;
@@ -95,24 +95,27 @@ test("stock session identity, cycling in both directions, and /copy stay usable"
 	const modal = page.getByRole("dialog");
 	await expect(modal.getByRole("button", { name: "Fixture copy target", exact: true })).toBeVisible();
 	await modal.getByRole("button", { name: "Copy", exact: true }).click();
-	await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe("Fixture copy target");
+	await expect.poll(() => readClipboardText(app)).toBe("Fixture copy target");
 	await expect(modal).toHaveCount(0);
 	expect(await recordsOfType(record, "composer.copy_targets")).toHaveLength(1);
 });
 
 test("Check for Updates… from the app menu reports in the sidebar without opening Settings", async () => {
-	await app.evaluate(({ Menu }) => {
-		const item = Menu.getApplicationMenu()
-			?.items.flatMap(top => top.submenu?.items ?? [])
-			.find(entry => entry.label === "Check for Updates…");
-		if (!item) throw new Error("Check for Updates… is missing from the app menu");
-		item.click();
+	// The shell's app menu (tauri-shell/src/app_menu.rs), chosen through main's test inspector as a person's click is.
+	await app.evaluate(async () => {
+		// What main defines under the test inspector (src/main/shell-host/electron/index.ts).
+		const menus: { click(menu: "app", label: string): Promise<unknown> } | undefined = Reflect.get(
+			globalThis,
+			"__ompdeskMenus",
+		);
+		if (!menus) throw new Error("main exposes no __ompdeskMenus");
+		await menus.click("app", "Check for Updates…");
 	});
 	const card = page.locator("[data-sidebar-update]");
 	await expect(card).toBeVisible();
 	await expect(page.locator("[data-settings-page]")).toHaveCount(0);
 	// The outcome depends on the runner's GitHub access; it settles past "checking" either way, a stalled connection
-	// included: `gh auth token` 5 s, the release lookup 15 s, the repository probe 10 s (update-provider.ts).
+	// included: `gh auth token` 5 s, the release lookup 15 s, the repository probe 10 s (update-release.ts).
 	await expect(card).not.toHaveAttribute("data-update-tone", "busy", { timeout: 45_000 });
 	await card.getByRole("button", { name: /Close|Later/ }).click();
 	await expect(card).toHaveCount(0);
@@ -183,11 +186,11 @@ test("all named themes apply with readable primary text and no stale scheme toke
 		"OMPdesk Light",
 		"GitHub Light",
 		"Solarized Light",
-		"Sepia",
+		"Gruvbox Light",
 		"High Contrast Light",
 		"OMPdesk Dark",
-		"Nord",
-		"Tokyo Night",
+		"GitHub Dark",
+		"Solarized Dark",
 		"Gruvbox Dark",
 		"High Contrast Dark",
 	];
@@ -381,10 +384,9 @@ test("narrow windows and 200 percent zoom keep settings and primary actions reac
 		const toggle = settings.locator("#setting-gui-compactDensity").getByRole("switch");
 		await toggle.scrollIntoViewIfNeeded();
 		await toggle.click();
-		const captured = await app.evaluate(async ({ BrowserWindow }) =>
-			(await BrowserWindow.getAllWindows()[0].capturePage()).toPNG().toString("base64"),
-		);
-		await fs.writeFile(`test-results/layout-${width}-${zoom}.png`, Buffer.from(captured, "base64"));
+		// The capture is an artifact for a failed run, not an assertion; the system WebView has no main-process
+		// `capturePage` (no DevTools session of the shell's own), so the page's own screenshot stands in for it.
+		await page.screenshot({ path: `test-results/layout-${width}-${zoom}.png` });
 		await page.keyboard.press("Escape");
 		await expect(settings).toHaveCount(0);
 		const input = page.locator("textarea").first();
@@ -430,8 +432,17 @@ test("settings search opens advanced controls", async () => {
 });
 
 test("workspace navigation cannot replace the trusted desktop with an untrusted document", async () => {
-	const documentPath = path.join(profile, "untrusted.html");
-	await fs.writeFile(documentPath, "<!doctype html><title>Untrusted document</title><h1>Untrusted document</h1>");
+	// A document from another origin. The system WebView refuses a `file:` link from the app's own `http://app.localhost`
+	// page before any navigation starts (so `will-navigate` has nothing to report), whereas a web page is a navigation
+	// it does start: the one this protection exists for.
+	const untrusted = createServer((_request, response) => {
+		response.setHeader("content-type", "text/html");
+		response.end("<!doctype html><title>Untrusted document</title><h1>Untrusted document</h1>");
+	});
+	await new Promise<void>(resolve => untrusted.listen(0, "127.0.0.1", resolve));
+	const address = untrusted.address();
+	if (!address || typeof address === "string") throw new Error("the untrusted document's server has no port");
+	const documentUrl = `http://127.0.0.1:${address.port}/untrusted.html`;
 	const trustedUrl = page.url();
 	await app.evaluate(({ BrowserWindow }) => {
 		BrowserWindow.getAllWindows()[0].webContents.once("will-navigate", event => {
@@ -445,7 +456,7 @@ test("workspace navigation cannot replace the trusted desktop with an untrusted 
 		document.body.append(link);
 		link.click();
 		link.remove();
-	}, pathToFileURL(documentPath).href);
+	}, documentUrl);
 	await expect.poll(() => app.evaluate(() => Reflect.get(globalThis, "auditNavigationPrevented"))).toBe(true);
 	// Read the live document directly: Playwright's locator waits for a native
 	// navigation which Electron has already cancelled outside the browser stack.
@@ -453,6 +464,12 @@ test("workspace navigation cannot replace the trusted desktop with an untrusted 
 	expect(page.url()).toBe(trustedUrl);
 	await page.reload();
 	await expect(page.locator("textarea").first()).toBeEditable();
+	// The system WebView may hold a connection to the document's server open (a preconnect, a kept-alive request) that
+	// the refused navigation never used: `close` alone waits for it until the test times out.
+	untrusted.closeAllConnections();
+	const closed = Promise.withResolvers<void>();
+	untrusted.close(() => closed.resolve());
+	await closed.promise;
 });
 
 test("failed preference writes retain edits and never allow a premature restart", async () => {
@@ -520,7 +537,7 @@ test("failed preference writes retain edits and never allow a premature restart"
 	await lineNumbers.click();
 	await expect(page.getByRole("alert").filter({ hasText: "audit appearance write refused" })).toBeVisible();
 	await expect(lineNumbers).toHaveAttribute("aria-checked", checked ?? "false");
-	await settings.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "OMPdesk Light" }).click();
+	await settings.locator('[data-theme-mode="light"]').click();
 	await expect(page.getByRole("alert").filter({ hasText: "audit appearance write refused" })).toBeVisible();
 	await page.keyboard.press("Escape");
 	expect(errors).toEqual([]);

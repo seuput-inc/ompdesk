@@ -280,6 +280,7 @@ export const WEB_BLOCKS: WebBlockedInfo[] = [
 // ── Remote devices (Settings › Devices & connections › Share this computer) ───────────────────────────────────
 export const REMOTE_STATE: RemoteState = {
 	tailnet: "ready",
+	deviceSectionOrder: [],
 	host: {
 		enabled: true,
 		name: "Studio Mac",
@@ -390,6 +391,7 @@ export const MAIL_STATE: MailAccountsState = {
 			mailbox: "INBOX",
 			address: "dev@example.com",
 			hasPassword: true,
+			needsReentry: false,
 		},
 		{
 			id: "mail-2",
@@ -400,6 +402,7 @@ export const MAIL_STATE: MailAccountsState = {
 			mailbox: "Alerts",
 			address: "ci-alerts@example.com",
 			hasPassword: true,
+			needsReentry: false,
 		},
 	],
 };

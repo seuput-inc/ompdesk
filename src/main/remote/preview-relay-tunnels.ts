@@ -53,10 +53,11 @@ export class PreviewRelayTunnels {
 	/** `browser_relay_start` answered `data` on the tab `key`: what its bridge returned is what a later open dials. */
 	remember(key: string, data: unknown): void {
 		this.close(key);
-		const reply = data && typeof data === "object" ? (data as { url?: unknown; token?: unknown }) : {};
+		const reply = data && typeof data === "object" ? data : {};
+		const url = "extensionUrl" in reply ? reply.extensionUrl : "url" in reply ? reply.url : undefined;
 		const target =
-			typeof reply.url === "string" && typeof reply.token === "string"
-				? relayExtensionUrl(reply.url, reply.token)
+			typeof url === "string" && "token" in reply && typeof reply.token === "string"
+				? relayExtensionUrl(url, reply.token)
 				: null;
 		if (target) this.#tunnels.set(key, { target });
 		else this.#tunnels.delete(key);

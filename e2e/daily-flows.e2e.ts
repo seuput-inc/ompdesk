@@ -93,9 +93,16 @@ async function flowAProfile(): Promise<FlowAProfile> {
 		OMP_GUI_OMP: await fixtureOmp(root),
 		OMP_GUI_TEST_SESSION_FILES: "1",
 		OMP_GUI_TEST_JOB_TREE: "1",
+		// The fake omp's holds (`holdFlowAResume`).
+		OMP_GUI_TEST_START_FILE: path.join(root, "start.json"),
 	});
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	return { root, desktop, agent, env };
+}
+
+/** Holds the relaunch's resumed turn (the fake omp's `holdResume`) while true, as interrupted-resume.e2e.ts does. */
+async function holdFlowAResume(profile: FlowAProfile, hold: boolean): Promise<void> {
+	await fs.writeFile(path.join(profile.root, "start.json"), JSON.stringify({ holdResume: hold }));
 }
 
 async function flowALaunch(profile: FlowAProfile, ready: boolean): Promise<{ app: ElectronApplication; page: Page }> {
@@ -214,6 +221,10 @@ test("daily flow a: a quit mid-turn with subagents and a background job resumes 
 		});
 
 		await test.step("relaunch: one resuming row, then the turn ends", async () => {
+			// The resumed turn waits until the window can show its "continuing" row: on a loaded runner the window
+			// mounted after the turn had ended (2 of 5 in flake-probe 45505336105, the probe installed 3.3 s after
+			// launch, the turn over at 3.1 s), so nothing could see the row it had shown.
+			await holdFlowAResume(profile, true);
 			const second = await flowALaunch(profile, false);
 			current = second.app;
 			const { page } = second;
@@ -226,6 +237,8 @@ test("daily flow a: a quit mid-turn with subagents and a background job resumes 
 				scan();
 				new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
 			});
+			await expect(page.locator("[data-resuming]")).toHaveCount(1, { timeout: 30_000 });
+			await holdFlowAResume(profile, false);
 			await expect(page.getByText("Continued after the interruption.")).toBeVisible({ timeout: 45_000 });
 			await expect(page.locator("[data-resuming]")).toHaveCount(0, { timeout: 15_000 });
 			const rows = await page.evaluate(
@@ -432,7 +445,9 @@ test("daily flow b: merge one worktree child, delete the other; nothing lingers,
 				.poll(async () => (await tabs()).some(tab => tab.tabId === mergedTab), { timeout: 60_000 })
 				.toBe(false);
 			await expect.poll(() => flowBExists(merged?.path ?? ""), { timeout: 30_000 }).toBe(false);
-			expect(flowBGit(project, "branch", "--list", merged?.branch ?? "")).toBe("");
+			await expect
+				.poll(() => flowBGit(project, "branch", "--list", merged?.branch ?? ""), { timeout: 30_000 })
+				.toBe("");
 			expect((await tabs()).some(tab => tab.tabId === deletedId)).toBe(false);
 			expect(await flowBExists(kept?.path ?? "")).toBe(true);
 			expect(flowBGit(project, "branch", "--list", kept?.branch ?? "")).toContain(kept?.branch);
@@ -816,9 +831,7 @@ test("daily flow d: a notification click opens its tab on the phone, a steer arr
 			await expect(send).toBeEnabled();
 			await send.click();
 			await expect(phone.getByRole("button", { name: /^(Stop|중지)$/ })).toBeVisible({ timeout: 30_000 });
-			await expect(phone.locator("[data-send-mode]")).toHaveAttribute("data-send-mode", "steer", {
-				timeout: 30_000,
-			});
+			await expect(phone.locator(".omp-composer-toolbar[data-turn-running]")).toBeVisible({ timeout: 30_000 });
 			await field.fill("steer from the phone");
 			await expect(send).toBeEnabled({ timeout: 30_000 });
 			await send.click();
@@ -1226,15 +1239,17 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 			await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
 		});
 
-		await test.step("Appearance: nord, then back to System", async () => {
+		await test.step("Appearance: GitHub kept dark, then back to OMPdesk following the OS", async () => {
 			const settings = await flowFOpenSettings(page, "appearance");
-			await settings.locator('[data-theme-option="nord"]').click();
-			await expect.poll(() => flowFThemeName(page)).toBe("nord");
-			await settings.locator('[data-theme-option="system"]').click();
-			await expect.poll(() => flowFThemeName(page)).not.toBe("nord");
+			await settings.locator('[data-theme-set="github"]').click();
+			await settings.locator('[data-theme-mode="dark"]').click();
+			await expect.poll(() => flowFThemeName(page)).toBe("github-dark");
+			await settings.locator('[data-theme-set="ompdesk"]').click();
+			await settings.locator('[data-theme-mode="system"]').click();
+			await expect.poll(() => flowFThemeName(page)).not.toBe("github-dark");
 			await expect.poll(() => page.evaluate(() => window.omp.prefs.get("themeName"))).toBe("system");
 			await flowFCloseSettings(page);
-			expect(await flowFThemeName(page)).not.toBe("nord");
+			expect(await flowFThemeName(page)).not.toBe("github-dark");
 		});
 
 		await test.step("General: Korean labels, no raw key, and back to English", async () => {
@@ -1266,8 +1281,8 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 			await dialog.getByRole("option", { name: /Sonnet 4\.5/ }).click();
 			await expect(dialog).toBeHidden();
 			// Beside the provider's mark the chip drops the brand word the mark draws (`chipModelName`).
-			await expect(page.locator("[data-model-chip]")).toContainText("Sonnet 4.5");
-			await expect(page.locator("[data-model-chip]")).toHaveAttribute("aria-label", /Claude Sonnet 4\.5/);
+			await expect(page.locator("[data-model-chip] .omp-composer-model-label")).toHaveText("Sonnet 4.5");
+			await expect(page.locator("[data-model-chip]")).toHaveAccessibleName(/Claude Sonnet 4\.5/);
 			await expect.poll(() => flowFModelId(page, tabId)).toBe("claude-sonnet-4-5");
 		});
 
@@ -1348,10 +1363,11 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 			for (const name of ["ask", "eval", "debug"]) expect(tools, name).toContain(name);
 		});
 
-		await test.step("nord and Korean are picked for the relaunch", async () => {
+		await test.step("GitHub Dark and Korean are picked for the relaunch", async () => {
 			let settings = await flowFOpenSettings(page, "appearance");
-			await settings.locator('[data-theme-option="nord"]').click();
-			await expect.poll(() => flowFThemeName(page)).toBe("nord");
+			await settings.locator('[data-theme-set="github"]').click();
+			await settings.locator('[data-theme-mode="dark"]').click();
+			await expect.poll(() => flowFThemeName(page)).toBe("github-dark");
 			settings = await flowFOpenSettings(page, "general");
 			await settings.locator("#setting-gui-language select").selectOption("ko");
 			await expect(settings.locator("#setting-gui-language")).toContainText("언어");
@@ -1363,7 +1379,7 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 
 		await test.step("after a relaunch the theme and the language stand", async () => {
 			({ app, page } = await launchAp(profile));
-			await expect.poll(() => flowFThemeName(page)).toBe("nord");
+			await expect.poll(() => flowFThemeName(page)).toBe("github-dark");
 			await expect(page.locator("[data-run-settings-trigger]").first()).toContainText("실행 설정");
 			const settings = await flowFOpenSettings(page, "general");
 			await expect(settings.locator('[data-settings-section="general"]')).toContainText("일반");

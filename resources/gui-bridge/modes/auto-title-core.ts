@@ -220,21 +220,15 @@ const CJK_FILLER: Readonly<Record<string, true>> = {
  * gets a Korean title whatever the reply language is; `language` (the reply language, undefined when off, unset or
  * English) decides only when the request shows none (code, names, a mix). Without it the line sets only the length
  * and form, and the title stays in the person's language. A title past the limits is asked for once more
- * ({@link titleFits}, {@link titleShorterLine}) and then fitted ({@link conciseTitle}).
+ * ({@link titleFits}, {@link TITLE_SHORTER_LINE}) and then fitted ({@link conciseTitle}).
  */
 export function titleLanguageLine(language: string | undefined): string {
 	const fallback = language ? `; when that is unclear (only code, names or a mix), write it in ${language}` : "";
 	return `Language, length and form (this overrides the 3-6 words and the imperative phrase above): write the title in the language the user writes in, even though the examples above are in English${fallback}. Make it a plain noun phrase that summarizes the task: 2-${TITLE_MAX_WORDS} words, never more, and at most ${TITLE_MAX_CJK_CHARS} characters in Korean, Chinese or Japanese or ${TITLE_MAX_CHARS} characters otherwise, spaces included. Keep the subject and the head noun; drop modifiers and generic words (화면, 메시지, 로직, 기능, "with …"), for example ${COMPRESSIONS.slice(0, 2).join(", ")}. The title is plain text: no punctuation, quotes or emoji, no filler words. Keep code identifiers, file names and proper nouns as the user wrote them.`;
 }
 
-/**
- * The line added for the one retry of a title past the limits: names the answer that was too long and shows how
- * long answers compress (modifiers and generic tails dropped, the subject and head noun kept; in Korean the head
- * noun comes last, which a cut from the end would lose).
- */
-export function titleShorterLine(tooLong: string): string {
-	return `Shorter: the title "${tooLong}" is too long. Write a shorter title for the same task: at most ${TITLE_MAX_CJK_CHARS} characters in Korean, Chinese or Japanese or ${TITLE_MAX_CHARS} characters otherwise, spaces included, 2-${TITLE_MAX_WORDS} words. Keep the subject and the head noun (in Korean usually the last word); drop modifiers and generic tails (화면, 메시지, 로직, 기능, 관련, "with …"). Examples: ${COMPRESSIONS.join(", ")}.`;
-}
+/** Appended to the first-pass rules: only the retry's extra guidance and examples. */
+export const TITLE_SHORTER_LINE = `Shorten the overlong title for the same task. The Korean head noun is usually the last word; 관련 is another generic tail to drop. More examples: ${COMPRESSIONS.slice(2).join(", ")}.`;
 
 const CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 /** English words a cut title must not end on (`CSV export empty with` → `CSV export empty`). */

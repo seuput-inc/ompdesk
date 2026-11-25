@@ -243,11 +243,18 @@ export function SettingsPage() {
 		if (!id || query) return;
 		const frame = requestAnimationFrame(() => {
 			const target = document.getElementById(id);
-			if (!target) return;
+			const content = contentRef.current;
+			if (!target || !content) return;
 			// A row folded under Advanced: open its disclosure first, or the scroll lands on nothing.
 			for (let node = target.parentElement; node; node = node.parentElement)
 				if (node.tagName === "DETAILS") node.setAttribute("open", "");
-			target.scrollIntoView({ block: focusRowId ? "center" : "start" });
+			// scrollIntoView also scrolls the overflow-hidden app root, lifting every pane off the bottom.
+			const box = target.getBoundingClientRect();
+			const top = content.scrollTop + box.top - content.getBoundingClientRect().top;
+			const offset = focusRowId
+				? (content.clientHeight - box.height) / 2
+				: Number.parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+			content.scrollTop = top - offset;
 			if (focusRowId) {
 				// The focus lands a frame later; if the user already started typing
 				// somewhere (a new search), taking focus would send their keystrokes

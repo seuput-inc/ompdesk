@@ -2,11 +2,12 @@
 //! (the sidecars, the windows, the hosted views and the full-channel forwarders; they cross as ids).
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use serde_json::{Map, Value, json};
 
+use super::AutoCloseTurn;
 use super::omap::OMap;
 use super::run::Tracking;
 use super::split::SplitLayout;
@@ -45,6 +46,8 @@ pub(super) struct Entry {
     /// Latest `setStatus` per key, `setWidget` per key and `setTitle` (keys `status:`, `widget:`, `title`).
     pub ui_state: Option<OMap<String, Value>>,
     pub hosted_view: bool,
+    /// The seed restored this handle while main was still waiting for its acquire to finish.
+    pub recovering_acquire: bool,
     /// Paired devices that view this tab through their own tab on this host (handle ids, in order).
     pub device_views: Vec<u64>,
     pub kind: String,
@@ -68,7 +71,11 @@ pub(super) struct Entry {
     pub failure: Option<Value>,
     pub start_wait: Option<StartWait>,
     pub plan_proposal: Option<(String, String)>,
+    /// Which proposal of the tab it is: bumped for every new one (stock rewrites one plan file for a revision).
+    pub plan_generation: u64,
     pub resuming: bool,
+    /// Why the tab's cut-off turn waits for the person's Continue (`off`, `crash-loop`, `failed`).
+    pub cut_off: Option<String>,
     pub unsaved_prompt: Option<String>,
     pub scheduled_retry: Option<Value>,
     pub touched: u64,
@@ -104,6 +111,7 @@ impl Entry {
             viewers: Vec::new(),
             ui_state: None,
             hosted_view: false,
+            recovering_acquire: false,
             device_views: Vec::new(),
             kind,
             placeholder: false,
@@ -125,7 +133,9 @@ impl Entry {
             failure: None,
             start_wait: None,
             plan_proposal: None,
+            plan_generation: 0,
             resuming: false,
+            cut_off: None,
             unsaved_prompt: None,
             scheduled_retry: None,
             touched: 0,
@@ -225,6 +235,7 @@ pub(super) struct StopWait {
 
 #[derive(Default)]
 pub(super) struct Pool {
+    pub epoch: u64,
     /// The clock of the call being served: main's `Date.now()`.
     pub now: i64,
     pub next_seq: u64,
@@ -237,6 +248,13 @@ pub(super) struct Pool {
     pub remembered_by_window: OMap<i64, Vec<SplitLayout>>,
     pub session_owners: OMap<String, Owner>,
     pub request_owners: OMap<String, u64>,
+    /// Questions an agent's answer holds while its attachments go in, by request id → the claim.
+    pub claims: HashMap<String, u64>,
+    /// Plans an agent's approval holds, by tab → (the proposal's generation, the claim).
+    pub plan_claims: HashMap<String, (u64, u64)>,
+    /// The last claim and the last plan generation handed out.
+    pub claim_serial: u64,
+    pub plan_serial: u64,
     pub request_bodies: OMap<String, Held>,
     pub sign_in_requests: HashSet<String>,
     pub answering: HashSet<String>,
@@ -335,8 +353,28 @@ impl Pool {
         wins
     }
 
+    pub(super) fn can_release(&self, entry: &Entry, expected: &AutoCloseTurn) -> bool {
+        self.epoch == expected.pool
+            && entry.seq == expected.entry
+            && entry.tracking.close_observation() == Some((expected.turn, expected.host.as_ref()))
+            && matches!(entry.status.as_str(), "ready" | "asleep")
+            && !entry.busy()
+            && !entry.resuming
+            && !entry.awaiting_connection
+            && entry.scheduled_retry.is_none()
+            && entry.tracking.retry.is_none()
+            && entry.plan_proposal.is_none()
+            && !self.request_owners.iter().any(|(id, owner)| {
+                *owner == entry.seq
+                    && self
+                        .request_bodies
+                        .get(id)
+                        .is_some_and(|ask| ask.kinds.blocking)
+            })
+    }
+
     /// `TAB_STATUS` push / `GET_TABS` item: the full tab snapshot including cached session meta (`tabStatusPayload`).
-    pub(super) fn tab_status(entry: &Entry, cwd: &str) -> Map<String, Value> {
+    pub(super) fn tab_status(&self, entry: &Entry, cwd: &str) -> Map<String, Value> {
         let run = &entry.tracking.run;
         let mut payload = Map::new();
         payload.insert("tabId".into(), Value::from(entry.tab_id.clone()));
@@ -401,8 +439,15 @@ impl Pool {
         if let Some(worktree) = &entry.worktree {
             payload.insert("worktree".into(), worktree.clone());
         }
-        if let Some(last) = &entry.tracking.last_run {
-            payload.insert("lastRun".into(), last.clone());
+        if let Some((turn, host)) = entry.tracking.close_observation() {
+            let mut fence = json!({"pool": self.epoch, "entry": entry.seq, "turn": turn});
+            if let Some(host) = host {
+                fence["host"] = json!(host);
+            }
+            payload.insert("closeTurn".into(), fence);
+        }
+        if let Some(last) = entry.tracking.numbered_outcome() {
+            payload.insert("lastRun".into(), last);
         }
         if entry.awaiting_connection {
             payload.insert("awaitingConnection".into(), Value::from(true));
@@ -441,6 +486,9 @@ impl Pool {
         }
         if entry.resuming {
             payload.insert("resuming".into(), Value::from(true));
+        }
+        if let Some(cut_off) = &entry.cut_off {
+            payload.insert("cutOff".into(), Value::from(cut_off.clone()));
         }
         if let Some(retry) = &entry.scheduled_retry {
             payload.insert("scheduledRetry".into(), retry.clone());
@@ -496,6 +544,8 @@ pub(super) fn highest_subagent_level<'a>(levels: impl Iterator<Item = &'a str>) 
 pub(super) struct Ctx {
     pub out: Out,
     pub pool: Rc<RefCell<Pool>>,
+    /// `IPC_EVENTS`: each channel's name by its key (`TAB_STATUS` → `rpc:tab-status`), for the pages' sender.
+    pub channels: Rc<HashMap<String, String>>,
 }
 
 impl Ctx {
@@ -508,10 +558,16 @@ impl Ctx {
     }
 
     /// A send to the windows `wins` (one object for all of them), as `forwardToWindow` did; main skips a destroyed one.
-    /// `channel` is the key of `IPC_EVENTS` (`TAB_STATUS`), which main resolves: the names stay spelled once.
+    /// `channel` is the key of `IPC_EVENTS` (`TAB_STATUS`), which main resolves: the names stay spelled once (main hands
+    /// the table at open for the pages' sender, `pages.rs`, which a parity test core runs beside main's sends).
     pub(super) fn send(&self, wins: Vec<i64>, channel: &str, data: Value) {
         if wins.is_empty() {
             return;
+        }
+        if crate::pages::shadow()
+            && let Some(name) = self.channels.get(channel)
+        {
+            crate::pages::send(&wins, name, &data);
         }
         self.push(&json!({"k": "send", "wins": wins, "channel": channel, "data": data}));
     }
@@ -554,7 +610,7 @@ impl Ctx {
         let cwd = self.cwd_of(tab_id).await?;
         self.with(|pool| {
             if let Some(entry) = pool.entry(tab_id) {
-                let payload = Value::Object(Pool::tab_status(entry, &cwd));
+                let payload = Value::Object(pool.tab_status(entry, &cwd));
                 let wins = Pool::windows_of(entry);
                 self.send(wins, "TAB_STATUS", payload);
             }

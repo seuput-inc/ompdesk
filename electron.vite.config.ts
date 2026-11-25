@@ -1,18 +1,86 @@
 import { dirname, resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { defineConfig } from "electron-vite";
 import { normalizePath, type Plugin, type Rollup } from "vite";
 import { precompressPlugin } from "./scripts/precompress-plugin";
 import { pwaPlugin } from "./scripts/pwa-plugin";
 
 /**
+ * Main runs under Node, as a child of the Rust shell (docs: native-rust › Ledger › S): the `electron` it imports, and
+ * the one electron-updater `require`, is `src/main/shell-host/electron`, which speaks the host
+ * protocol to the shell. It is bundled like any other module, so there is no `electron` left to resolve at runtime.
+ */
+const ELECTRON_SHIM = resolve(__dirname, "src/main/shell-host/electron/index.ts");
+
+/**
+ * electron-vite's main and preload presets list `electron` (and `electron/*`) as external; this drops them again so
+ * the alias to the shim wins (Rollup asks `external` before any resolver runs).
+ */
+function bundleElectronShim(): Plugin {
+	const isElectron = (entry: unknown): boolean =>
+		entry === "electron" || (entry instanceof RegExp && entry.source.startsWith("^electron"));
+	return {
+		name: "ompdesk:bundle-electron-shim",
+		enforce: "post",
+		config(config) {
+			const external = config.build?.rollupOptions?.external;
+			if (!Array.isArray(external) || !config.build?.rollupOptions) return;
+			config.build.rollupOptions.external = external.filter(entry => !isElectron(entry));
+		},
+	};
+}
+
+/** The classic-script wrapper every preload gets: an IIFE, so its top-level names never join the page's scope. */
+const PRELOAD_OUTPUT = { format: "cjs", banner: "(() => {", footer: "})();" } as const;
+
+/**
+ * Builds `src/preload/<name>.ts` into `out/preload/<name>.js` as a second, single-entry bundle once the main preload
+ * build is written. Rollup splits modules two entries share (`createOmpApi`, `describePreloadFailure`) into a chunk
+ * either entry would `require()`, and a page script cannot; one entry per bundle inlines everything. A watch build
+ * (`bun run dev`) also rebuilds when the entry changes: everything else it imports, the main preload imports too. It
+ * runs in `writeBundle`, so a failure is the watch build's own error; thrown from `closeBundle`, which Vite's watcher
+ * calls without awaiting, it ended the dev run.
+ */
+function separatePreload(name: string): Plugin {
+	let outDir = "";
+	return {
+		name: `ompdesk:separate-preload-${name}`,
+		apply: "build",
+		configResolved(config) {
+			outDir = config.build.outDir;
+		},
+		buildStart() {
+			this.addWatchFile(resolve(__dirname, `src/preload/${name}.ts`));
+		},
+		async writeBundle() {
+			const { build } = await import("vite");
+			await build({
+				configFile: false,
+				logLevel: "warn",
+				esbuild: KEEP_NAMES,
+				build: {
+					target: "es2022",
+					outDir,
+					emptyOutDir: false,
+					minify: "esbuild",
+					rollupOptions: {
+						input: { [name]: resolve(__dirname, `src/preload/${name}.ts`) },
+						output: { ...PRELOAD_OUTPUT, entryFileNames: "[name].js", inlineDynamicImports: true },
+					},
+				},
+			});
+		},
+	};
+}
+
+/**
  * Main-process packages bundled into out/main/index.js so packaged apps need no node_modules.
  * Anything the main entry imports that is NOT listed here stays a bare `import` in the
- * bundle, and the installed app only resolves it if electron-builder happened to collect
- * that package — in this nested checkout bun hoists most deps to the monorepo root, so the
+ * bundle, and the installed app only resolves it if the packaged app happened to carry
+ * that package — in this nested checkout bun hoists most deps to the monorepo root, so a
  * traversal misses them and the app dies at launch with ERR_MODULE_NOT_FOUND.
  */
-const MAIN_BUNDLED_DEPS = ["electron-store", "electron-updater", "jszip", "ws", "yaml", "zod"];
+const MAIN_BUNDLED_DEPS = ["jszip", "ws", "yaml", "zod"];
 
 /**
  * Optional native addons of bundled packages, switched off at build time. Vite resolves an optional peer
@@ -116,6 +184,7 @@ function idsBySource(info: Rollup.ModuleInfo): Map<string, string> | null {
 const reexportsOnly = (body: readonly ModuleNode[]): boolean =>
 	body.every(
 		node =>
+			(node.type === "ExpressionStatement" && "directive" in node && node.directive === "use strict") ||
 			node.type === "ImportDeclaration" ||
 			node.type === "ExportAllDeclaration" ||
 			(node.type === "ExportNamedDeclaration" && !node.declaration),
@@ -283,29 +352,33 @@ export default defineConfig({
 	main: {
 		esbuild: KEEP_NAMES,
 		define: MAIN_DEFINES,
-		plugins: [externalizeDepsPlugin({ exclude: MAIN_BUNDLED_DEPS })],
+		resolve: { alias: { electron: ELECTRON_SHIM } },
+		plugins: [bundleElectronShim()],
 		build: {
+			// Main also runs in Node during packaging checks, not in the installed Electron SDK.
+			target: "node22",
+			externalizeDeps: { exclude: MAIN_BUNDLED_DEPS },
 			minify: "esbuild",
 			rollupOptions: {
-				// hang-watchdog-worker is the main-thread hang watchdog's worker thread (src/main/hang-watchdog.ts).
-				input: {
-					index: resolve(__dirname, "src/main/index.ts"),
-					"hang-watchdog-worker": resolve(__dirname, "src/main/hang-watchdog-worker.ts"),
-				},
-				// original-fs: Electron's asar-unaware fs (updater.ts); a runtime builtin, never a package.
-				external: ["electron", "original-fs"],
+				input: { index: resolve(__dirname, "src/main/index.ts") },
 			},
 		},
 	},
+	// `window.omp` for the shell's pages: one classic script the shell injects before any page script, `shell.js`
+	// (src/preload/shell.ts) for the CEF shell and `tauri.js` (src/preload/tauri.ts) for the Tauri host. electron-vite
+	// accepts only `cjs` and `es` for a preload; a `cjs` bundle with no imports and no exports is a plain script, and
+	// the banner and footer make it an IIFE so its top-level names never join the page's global scope
+	// (scripts/check-main-bundle.ts checks both). One entry per bundle (separatePreload) keeps each self-contained.
 	preload: {
 		esbuild: KEEP_NAMES,
-		plugins: [externalizeDepsPlugin()],
+		plugins: [separatePreload("tauri")],
 		build: {
+			target: "node22",
+			externalizeDeps: false,
 			minify: "esbuild",
 			rollupOptions: {
-				input: { index: resolve(__dirname, "src/preload/index.ts") },
-				external: ["electron"],
-				output: { format: "cjs" },
+				input: { shell: resolve(__dirname, "src/preload/shell.ts") },
+				output: { ...PRELOAD_OUTPUT, entryFileNames: "[name].js", inlineDynamicImports: true },
 			},
 		},
 	},
@@ -318,7 +391,11 @@ export default defineConfig({
 		plugins: [
 			tailwindcss(),
 			woff2OnlyFonts(),
-			pwaPlugin({ entry: resolve(__dirname, "src/renderer/web/sw.ts"), sessionList: SESSION_LIST_MODULE }),
+			pwaPlugin({
+				entry: resolve(__dirname, "src/renderer/web/sw.ts"),
+				sessionList: SESSION_LIST_MODULE,
+				dialogs: resolve(__dirname, "src/renderer/components/dialogs/OnDemandDialogs.tsx"),
+			}),
 			precompressPlugin(),
 		],
 		resolve: {
@@ -328,6 +405,8 @@ export default defineConfig({
 			},
 		},
 		build: {
+			// WKWebView, WebView2 and the paired browser load this bundle, not Electron's Chromium.
+			target: "es2022",
 			minify: "esbuild",
 			rollupOptions: {
 				// `web` is the page a paired phone loads (src/renderer/web/); it shares every chunk with `index`.

@@ -7,9 +7,9 @@
  * own turn at once, so the composer sends the prompt as a steer that joins it, lib/composer-submit.ts). Any failure
  * means "none": the prompt must never be held up by this.
  */
-import type { AutoModeDecision } from "../../../resources/gui-bridge/modes/auto-mode-contracts";
+import { AUTO_MODE_TIMEOUT_MS, type AutoModeDecision } from "../../../resources/gui-bridge/modes/auto-mode-contracts";
 import { noDecision } from "../../../resources/gui-bridge/modes/auto-mode-core";
-import type { LocalHandler } from "./types";
+import { LocalCommandError, type LocalHandler } from "./types";
 
 function text(value: unknown): string {
 	return typeof value === "string" ? value : "";
@@ -19,11 +19,16 @@ export const handlers: Record<string, LocalHandler> = {
 	auto_mode_decide: async (command, ctx): Promise<AutoModeDecision> => {
 		let decision: AutoModeDecision;
 		try {
-			decision = await ctx.bridge.request<AutoModeDecision>("modes.auto_mode_decide", {
-				message: text(command.message),
-			});
-		} catch {
-			return noDecision("unavailable");
+			// Only the read may expire. Once stock starts a goal, the sender needs its acknowledgement.
+			decision = await ctx.bridge.request<AutoModeDecision>(
+				"modes.auto_mode_decide",
+				{ message: text(command.message) },
+				{ timeoutMs: AUTO_MODE_TIMEOUT_MS + 1000 },
+			);
+		} catch (error) {
+			return noDecision(
+				error instanceof LocalCommandError && error.code === "bridge_timeout" ? "timeout" : "unavailable",
+			);
 		}
 		try {
 			if (decision.mode === "plan") await ctx.bridge.request("modes.set_plan_mode", { enabled: true, auto: true });

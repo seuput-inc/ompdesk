@@ -33,8 +33,10 @@ export type { SplitAxis, SplitLayout, SplitPlacement } from "../../shared/split-
 
 import { useEffect } from "react";
 import { create, type StoreApi } from "zustand";
-import type { AgentControlViewEvent } from "../../shared/agent-control";
+import type { AgentCloseOutcome, AgentControlViewEvent } from "../../shared/agent-control";
 import type {
+	AutoCloseTurn,
+	IpcCutOff,
 	IpcOpenExtensionRequest,
 	IpcRetrySaga,
 	IpcScheduledRetry,
@@ -89,6 +91,7 @@ import {
 	type PlanApprovalSubmitState,
 	usePlanApprovalStore,
 } from "./plan-approval";
+import type { QueueStore } from "./queue";
 import { useRemoteStore } from "./remote";
 import { type SessionStore, useSessionStore } from "./session";
 import {
@@ -99,7 +102,6 @@ import {
 	setFocusedSessionRuntime,
 	useRuntimeTabId,
 } from "./session-runtime-context";
-import { useSidebarProjects } from "./sidebar-projects";
 import { installTabReadyGate, READY_WAIT_CAP_MS } from "./tab-ready-gate";
 import { ensureTabRuntime, replaceTabRuntime } from "./tab-runtime";
 import { toast, toastError } from "./toast";
@@ -159,6 +161,8 @@ export interface SessionTab {
 	queued?: true;
 	/** A relaunch continues the tab's interrupted work and its turn has not started yet (main's turn-resume). */
 	resuming?: boolean;
+	/** The tab's cut-off turn waits for the person's Continue or Dismiss (main's turn-resume): why it did not go on. */
+	cutOff?: IpcCutOff;
 	/** `status` is `running` only for stock's background work after the turn ended (main's `settling`). */
 	settling?: true;
 	/** While `running`: when its turn started (main's `runningSince`); the clock of a session another one opened. */
@@ -241,6 +245,26 @@ const closedTabIds = new Set<string>();
 export function isTabClosed(tabId: string): boolean {
 	return closedTabIds.has(tabId);
 }
+
+/**
+ * Why this window keeps tab `id` when asked to close it, or null when it closes it: a window keeps its last tab, a
+ * tab it does not hold (a ghost is a picture of last time's tab), and a tab whose Files editor holds unsaved edits.
+ * The one guard of the person's close and an agent's (`applyAgentView`, which tells the agent which it was).
+ */
+function closeRefusal(
+	state: { tabs: readonly SessionTab[] },
+	id: string,
+): Exclude<AgentCloseOutcome, "closing" | "in-use"> | null {
+	if (state.tabs.length <= 1) return "last-tab";
+	const tab = state.tabs.find(entry => entry.id === id);
+	if (!tab || tab.ghost) return "not-here";
+	const ui = useUiStore.getState();
+	return ui.fileEditDirty && ui.fileEditTabId === id ? "unsaved-edits" : null;
+}
+
+/** TAB_STATUS pushes applied in this window so far, and the count when each tab's latest one was applied. */
+let statusPushes = 0;
+const lastStatusPush = new Map<string, number>();
 
 /** Whether main holds remembered splits (it only learns the list through `setView`). */
 let mainRemembersSplits = false;
@@ -354,6 +378,7 @@ function projectSessionTab(
 		...(isSessionHeld(info) ? { sessionHeld: true as const } : {}),
 		...(info.status === "starting" && info.queued === true ? { queued: true as const } : {}),
 		...(info.resuming === true ? { resuming: true } : {}),
+		...(info.cutOff ? { cutOff: info.cutOff } : {}),
 		...(info.settling === true ? { settling: true as const } : {}),
 		...(info.status === "running" && info.runningSince !== undefined ? { runningSince: info.runningSince } : {}),
 		...(info.scheduledRetry ? { scheduledRetry: info.scheduledRetry } : {}),
@@ -374,6 +399,23 @@ export function sagaRetryInfo(
 ): SessionStore["retryInfo"] {
 	if (!saga) return null;
 	return shown?.attempt === saga.attempt ? shown : { ...saga };
+}
+
+function applyTabRun(session: StoreApi<SessionStore>, info: IpcTabInfo): void {
+	const state = session.getState();
+	const running = info.status === "running";
+	const isStreaming = running && !info.settling;
+	if (!running) resetRetryPending(info.tabId);
+	session.setState({
+		status: info.status === "running" ? "ready" : info.status,
+		cwd: info.cwd,
+		isStreaming,
+		runStatusVersion: state.runStatusVersion + 1,
+		...(isStreaming ? {} : { awaitingModelSince: null }),
+		retryInfo: running ? sagaRetryInfo(info.retrySaga, state.retryInfo) : null,
+		isCompacting: info.compacting ?? state.isCompacting,
+		...(info.compacting ? {} : { compactionInfo: null }),
+	});
 }
 
 /**
@@ -569,6 +611,13 @@ export function useResuming(): string | null {
 	});
 }
 
+/** The calling pane's tab id and why its cut-off turn waits for the person's Continue; null when it does not. */
+export function useCutOff(): { tabId: string; cutOff: IpcCutOff } | null {
+	const tabId = useRuntimeTabId();
+	const tab = useTabsStore(state => state.tabs.find(candidate => candidate.id === (tabId ?? state.activeTabId)));
+	return tab?.cutOff ? { tabId: tab.id, cutOff: tab.cutOff } : null;
+}
+
 /** The calling pane's tab id and its scheduled retry (main re-sends the failed turn at `at`); null when none is armed. */
 export function useScheduledRetry(): (IpcScheduledRetry & { tabId: string }) | null {
 	const tabId = useRuntimeTabId();
@@ -647,7 +696,7 @@ export interface TabsStore {
 	removePane: (tabId: string) => Promise<void>;
 	setSplitRatio: (ratio: number, path?: readonly ("first" | "second")[]) => void;
 	/** Close a tab (keeps ≥1). Closing the active tab activates its neighbor first. */
-	closeTab: (id: string) => Promise<void>;
+	closeTab: (id: string, expectedTurn?: AutoCloseTurn) => Promise<void>;
 	/**
 	 * `sessionPath` is being deleted: `tabId`, the tab showing it, closes as `closeTab` closes it (the
 	 * window's last tab gives way to the empty start tab first), and the closed-tab history forgets the
@@ -701,15 +750,76 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 	listed: false,
 
 	reconcileTabs: async options => {
+		const before = options?.resync
+			? new Map(
+					get().tabs.map(tab => {
+						const runtime = sessionRuntime(tab.id);
+						return [
+							tab.id,
+							{
+								tab,
+								runtime,
+								eventVersion: sessionRuntimeStore<SessionStore>(tab.id, "session")?.getState().eventVersion,
+								queue: runtime?.stores.get("queue")?.getState(),
+								composer: runtime?.stores.get("composer")?.getState(),
+								extensionUi: runtime?.stores.get("extensionUi")?.getState(),
+								plan: runtime?.stores.get("planApproval")?.getState(),
+							},
+						] as const;
+					}),
+				)
+			: null;
+		// A tab whose status push lands while the list is asked is newer than its listing: main pushes every change of
+		// a tab in order, so the answer, read before that push or after it, is never fresher than the pushes that follow.
+		const pushesBefore = statusPushes;
 		const listed = await window.omp.tabs.list().catch(() => null);
 		if (!listed) {
 			// Bridge down — the tab strip simply stays as it is and TAB_STATUS
 			// pushes rebuild it.
 			return false;
 		}
-		// A tab this window is closing is gone for it even while main still lists
-		// it (its release is in flight): reviving it would recreate its runtime.
+		const listedById = before ? new Map(listed.map(info => [info.tabId, info])) : null;
+		const cannotReconcile =
+			before &&
+			get().tabs.some(tab => {
+				const prior = before.get(tab.id);
+				const runtime = sessionRuntime(tab.id);
+				const composer = sessionRuntimeStore<ComposerStore>(tab.id, "composer")?.getState();
+				const queue = sessionRuntimeStore<QueueStore>(tab.id, "queue")?.getState();
+				const ui = sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState();
+				const plan = sessionRuntimeStore<PlanApprovalStore>(tab.id, "planApproval")?.getState();
+				const info = listedById?.get(tab.id);
+				const hasPending =
+					(!info || tabSessionChanged(tab, info)) &&
+					(Boolean(
+						composer?.draft ||
+							composer?.images.length ||
+							composer?.sending ||
+							composer?.submissionUncertain ||
+							composer?.cancelSubmit ||
+							composer?.restoredQueue.length ||
+							composer?.editingQueued ||
+							queue?.steering.length ||
+							queue?.followUp.length ||
+							plan?.pending,
+					) ||
+						ui?.pendingRequests.some(request => BLOCKING_UI_METHODS[request.method] === true));
+				return (
+					hasPending ||
+					!prior ||
+					prior.tab !== tab ||
+					prior.runtime !== runtime ||
+					prior.queue !== runtime?.stores.get("queue")?.getState() ||
+					prior.composer !== runtime?.stores.get("composer")?.getState() ||
+					prior.extensionUi !== runtime?.stores.get("extensionUi")?.getState() ||
+					prior.plan !== runtime?.stores.get("planApproval")?.getState()
+				);
+			});
+		if (cannotReconcile) return false;
 		const list = listed.filter(info => !isTabClosed(info.tabId));
+		const pushedSince = new Set(
+			list.filter(info => (lastStatusPush.get(info.tabId) ?? 0) > pushesBefore).map(info => info.tabId),
+		);
 		const resync = options?.resync === true;
 		if (resync) {
 			// Outside set(): dropping a runtime fires the focus listeners synchronously (see applyTabStatus).
@@ -738,14 +848,17 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		/** Tabs whose done mark came back from the page's storage: another window or page may have seen them since. */
 		const restoredMarks = new Set<string>();
 		const ghosts = get().tabs.filter(tab => tab.ghost);
-		/** Tabs whose runtime this reconcile created or replaced: they hold no status yet (see below). */
-		const fresh: IpcTabInfo[] = [];
+		const runReadings: IpcTabInfo[] = [];
 		set(state => {
 			const leftovers = new Map(state.tabs.filter(tab => !tab.ghost).map(tab => [tab.id, tab]));
 			const unclaimed = state.tabs.filter(tab => tab.ghost);
 			const adopted = new Map<string, string>();
 			const merged: SessionTab[] = list.map(info => {
 				let existing = leftovers.get(info.tabId);
+				if (existing && pushedSince.has(info.tabId)) {
+					leftovers.delete(info.tabId);
+					return { ...existing, ...viewerFields(info) };
+				}
 				// No runtime of this id held a status before (an adopted ghost's runtime is the ghost's, not this one).
 				const newRuntime = existing === undefined;
 				let ghostId: string | undefined;
@@ -764,7 +877,14 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				if (sessionChanged) {
 					replaceTabRuntime(info.tabId);
 				}
-				if (newRuntime || sessionChanged) fresh.push(info);
+				if (
+					newRuntime ||
+					sessionChanged ||
+					(resync &&
+						before?.get(info.tabId)?.eventVersion ===
+							sessionRuntimeStore<SessionStore>(info.tabId, "session")?.getState().eventVersion)
+				)
+					runReadings.push(info);
 				ensureTabRuntime(info.tabId);
 				if (ghostId) carryGhostComposer(ghostId, info.tabId);
 				const tab: SessionTab = {
@@ -791,7 +911,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				ghostSelected && mainActiveTabId
 					? mainActiveTabId
 					: (state.activeTabId && adopted.get(state.activeTabId)) || state.activeTabId;
-			const activeTabId =
+			let activeTabId =
 				wantedActive && tabs.some(tab => tab.id === wantedActive)
 					? wantedActive
 					: mainActiveTabId && tabs.some(tab => tab.id === mainActiveTabId)
@@ -805,6 +925,12 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			const split =
 				restoredSplit ??
 				(state.split && splitTabIds(state.split).every(id => mainVisible.includes(id)) ? state.split : null);
+			if (split) {
+				const panes = splitTabIds(split);
+				if (!activeTabId || !panes.includes(activeTabId)) {
+					activeTabId = mainActiveTabId && panes.includes(mainActiveTabId) ? mainActiveTabId : (panes[0] ?? null);
+				}
+			}
 			// Main's remembered splits win; without any, what this window already
 			// remembers stays (a failed route converges here), minus closed tabs.
 			const claimed = new Set(visibleTabIds({ activeTabId, split }));
@@ -831,19 +957,16 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					}));
 				})
 				.catch(() => undefined);
-		// A runtime made here missed the TAB_STATUS that told its status (a paired page that resyncs after the host
-		// restarted learns the new tab ids only from this list, after their `ready` went by): the list's status is it.
-		for (const info of fresh) {
+		// A new runtime missed its first status. On reconnect existing runtimes may have missed the turn's end too.
+		for (const info of runReadings) {
 			const session = sessionRuntimeStore<SessionStore>(info.tabId, "session");
-			if (!session) continue;
-			session.getState().setStatus(info.status === "running" ? "ready" : info.status, info.cwd);
-			session.setState({ isStreaming: info.status === "running" });
+			if (session) applyTabRun(session, info);
 		}
 		// Every tab's banner reason comes with the list too: a failure can come before any subscription exists (omp
 		// missing or too old at launch), or while the tab was not shown.
 		for (const info of list) {
 			const session = sessionRuntimeStore<SessionStore>(info.tabId, "session");
-			if (session) applyTabFailure(session, info, undefined);
+			if (session && !pushedSince.has(info.tabId)) applyTabFailure(session, info, undefined);
 		}
 		for (const tab of get().tabs) watchTabAwaitingInput(tab.id);
 		const activeTabId = get().activeTabId;
@@ -962,8 +1085,10 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				const resolvedCwd = result.cwd ?? cwd;
 				// A new session in a folder makes that folder a project of the sidebar (a worktree: its project), so it
 				// stays listed after the session goes. A reopened session's folder is listed already, or was removed.
-				if (kind === "agent" && !args?.sessionPath && !args?.work && !args?.placeholder)
-					useSidebarProjects.getState().add(device, resolvedCwd);
+				if (resolvedCwd && kind === "agent" && !args?.sessionPath && !args?.work && !args?.placeholder)
+					void window.omp.sidebarProjects
+						?.command({ action: "add", path: resolvedCwd }, device)
+						.catch(() => undefined);
 				// Attached as a viewer of a session another window holds: the tab is already running there, so its
 				// status, title and viewers come from the list rather than from a first ready push that never comes.
 				if (result.attached) await get().reconcileTabs();
@@ -1163,18 +1288,14 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		}, 250);
 	},
 
-	closeTab: async id => {
+	closeTab: async (id, expectedTurn) => {
 		const state = get();
-		if (state.tabs.length <= 1) return;
-		const index = state.tabs.findIndex(tab => tab.id === id);
-		if (index === -1 || state.tabs[index]?.ghost) return;
+		const refusal = closeRefusal(state, id);
 		// Unsaved Files edits belong to this tab: closing it would drop them, so the editor's discard confirm asks first
 		// and the side panel closes the tab once the user agrees.
-		const ui = useUiStore.getState();
-		if (ui.fileEditDirty && ui.fileEditTabId === id) {
-			ui.holdTabClose(id);
-			return;
-		}
+		if (refusal === "unsaved-edits") useUiStore.getState().holdTabClose(id);
+		if (refusal) return;
+		const index = state.tabs.findIndex(tab => tab.id === id);
 		if (state.split && splitTabIds(state.split).includes(id)) {
 			await get().removePane(id);
 		} else if (id === state.activeTabId) {
@@ -1185,31 +1306,37 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			if (neighbor) await get().switchTab(neighbor.id);
 		}
 		const closed = state.tabs[index];
-		set(current => {
-			const closedTabs = closed?.sessionPath
-				? [
-						...current.closedTabs.filter(entry => entry.sessionPath !== closed.sessionPath),
-						{
-							sessionPath: closed.sessionPath,
-							cwd: closed.cwd,
-							kind: closed.kind,
-							...(closed.device === undefined ? {} : { device: closed.device }),
-							...(closed.title ? { title: closed.title } : {}),
-						},
-					].slice(-CLOSED_TAB_LIMIT)
-				: current.closedTabs;
-			return {
-				tabs: current.tabs.filter(tab => tab.id !== id),
-				rememberedSplits: forgetSplitTab(current.rememberedSplits, id),
-				closedTabs,
-			};
-		});
-		closedTabIds.add(id);
+		const forget = () => {
+			set(current => {
+				const closedTabs = closed?.sessionPath
+					? [
+							...current.closedTabs.filter(entry => entry.sessionPath !== closed.sessionPath),
+							{
+								sessionPath: closed.sessionPath,
+								cwd: closed.cwd,
+								kind: closed.kind,
+								...(closed.device === undefined ? {} : { device: closed.device }),
+								...(closed.title ? { title: closed.title } : {}),
+							},
+						].slice(-CLOSED_TAB_LIMIT)
+					: current.closedTabs;
+				return {
+					tabs: current.tabs.filter(tab => tab.id !== id),
+					rememberedSplits: forgetSplitTab(current.rememberedSplits, id),
+					closedTabs,
+				};
+			});
+			closedTabIds.add(id);
+		};
+		if (expectedTurn === undefined) forget();
 		let failure: unknown = null;
-		let refused = false;
 		try {
-			refused = !(await window.omp.tabs.close(id));
-			if (refused) failure = new Error(`Tab ${id} was not released`);
+			if (expectedTurn !== undefined) {
+				if (!(await window.omp.tabs.close(id, expectedTurn))) return;
+				forget();
+			} else if (!(await window.omp.tabs.close(id))) {
+				failure = new Error(`Tab ${id} was not released`);
+			}
 		} catch (error) {
 			failure = error;
 		}
@@ -1302,6 +1429,8 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 
 	applyTabStatus: payload => {
 		if (isTabClosed(payload.tabId)) return;
+		statusPushes += 1;
+		lastStatusPush.set(payload.tabId, statusPushes);
 		const state = get();
 		const active = state.activeTabId === payload.tabId;
 		const previous = state.tabs.find(tab => tab.id === payload.tabId);
@@ -1335,35 +1464,14 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		});
 		watchTabAwaitingInput(payload.tabId);
 		const session = sessionRuntimeStore<SessionStore>(payload.tabId, "session");
+		const target = session ?? (active ? useSessionStore : null);
+		if (target) {
+			applyTabRun(target, payload);
+			applyTabFailure(target, payload, previous?.status);
+		} else if (payload.status !== "running") resetRetryPending(payload.tabId);
 		if (sessionChanged && (payload.status === "ready" || payload.status === "running")) {
 			void attachTabSession(payload.tabId);
 		}
-		// The end events that clear the retry/compaction rows and the retry gate
-		// only reach a visible tab; main's view of the run is authoritative. So is
-		// its retry saga: a tab shown after the saga started (a background tab, a
-		// view that joined later) heard no auto_retry_start, and the failed attempt
-		// then read as the turn's end (a failure card for the whole retried request).
-		const running = payload.status === "running";
-		const compacting = payload.compacting === true;
-		if (!running) resetRetryPending(payload.tabId);
-		const shownRetry = (session ? session.getState() : useSessionStore.getState()).retryInfo;
-		const settled = {
-			retryInfo: running ? sagaRetryInfo(payload.retrySaga, shownRetry) : null,
-			...(compacting ? {} : { compactionInfo: null }),
-		};
-		if (session) {
-			session.getState().setStatus(payload.status === "running" ? "ready" : payload.status, payload.cwd);
-			session.setState({
-				isStreaming: running,
-				isCompacting: payload.compacting ?? session.getState().isCompacting,
-				...settled,
-			});
-		} else if (active) {
-			useSessionStore.getState().setStatus(payload.status === "running" ? "ready" : payload.status, payload.cwd);
-			useSessionStore.setState({ isStreaming: running, ...settled });
-		}
-		const banner = session ?? (active ? useSessionStore : null);
-		if (banner) applyTabFailure(banner, payload, previous?.status);
 		if (completedInBackground && payload.lastRun) notifyRunEnd(payload.tabId, payload.lastRun);
 	},
 
@@ -1416,15 +1524,32 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		toast({ variant: "info", message: translate("tabs.openElsewhere", { device }) });
 	},
 
-	applyAgentView: async ({ tabId, how, auto }) => {
+	applyAgentView: async ({ tabId, how, auto, closeId, expectedTurn }) => {
 		// Main announces a tab it just spawned (TAB_LIST_CHANGED) and then asks to show it; the list may not
 		// have been applied yet, so an unknown tab is reconciled first. Still unknown afterwards: nothing to show.
 		if (!get().tabs.some(tab => tab.id === tabId)) await get().reconcileTabs();
 		const known = get().tabs.some(tab => tab.id === tabId);
-		if (!known || isTabClosed(tabId)) return;
+		if (how !== "close" && (!known || isTabClosed(tabId))) return;
 		if (how === "close") {
-			if (auto && autoCloseHeld(tabId, visibleTabIds(get()))) return;
-			await get().closeTab(tabId);
+			const outcome: AgentCloseOutcome =
+				!known || isTabClosed(tabId)
+					? "not-here"
+					: auto && autoCloseHeld(tabId, visibleTabIds(get()))
+						? "in-use"
+						: (closeRefusal(get(), tabId) ?? "closing");
+			const answer = (final: AgentCloseOutcome) => {
+				if (closeId !== undefined)
+					void window.omp.tabs.answerAgentClose({ tabId, closeId, outcome: final }).catch(() => undefined);
+			};
+			if (expectedTurn !== undefined && outcome === "closing") {
+				await get().closeTab(tabId, expectedTurn);
+				answer(get().tabs.some(tab => tab.id === tabId) ? "in-use" : "closing");
+			} else {
+				answer(outcome);
+				if (outcome === "closing" || (outcome === "unsaved-edits" && expectedTurn === undefined)) {
+					await get().closeTab(tabId);
+				}
+			}
 			return;
 		}
 		useUiStore.getState().closeDestination();
@@ -1607,13 +1732,37 @@ export function restoreTabExtensionUiRequests(open: readonly IpcOpenExtensionReq
 	for (const { tabId, request, signIn } of open) pushTabExtensionUiRequest(tabId, request, signIn);
 }
 
+export function captureTabExtensionUiRequests(): Map<
+	string,
+	{ runtime: SessionRuntime | null; state: ExtensionUiStore | undefined }
+> {
+	return new Map(
+		useTabsStore.getState().tabs.map(tab => [
+			tab.id,
+			{
+				runtime: sessionRuntime(tab.id),
+				state: sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState(),
+			},
+		]),
+	);
+}
+
 /**
  * A web page catching up after a reconnect (web/resync-page.ts): `open` is everything main still waits on for this
  * window. Shows what the page missed, and drops the cards of blocking asks (`BLOCKING_UI_METHODS`, the ones main
  * holds) answered or withdrawn meanwhile (their `cancel` frame was among the missed events), except a sign-in's own
  * requests, which end with the sign-in.
  */
-export function settleTabExtensionUiRequests(open: readonly IpcOpenExtensionRequest[]): void {
+export function settleTabExtensionUiRequests(
+	open: readonly IpcOpenExtensionRequest[],
+	before = captureTabExtensionUiRequests(),
+): boolean {
+	const current = captureTabExtensionUiRequests();
+	if (before.size !== current.size) return false;
+	for (const [tabId, prior] of before) {
+		const now = current.get(tabId);
+		if (!now || now.runtime !== prior.runtime || now.state !== prior.state) return false;
+	}
 	restoreTabExtensionUiRequests(open);
 	const stillOpen = new Set(open.map(entry => entry.request.id));
 	for (const tab of useTabsStore.getState().tabs) {
@@ -1628,6 +1777,7 @@ export function settleTabExtensionUiRequests(open: readonly IpcOpenExtensionRequ
 		for (const request of stale) state?.removeRequest(request.id);
 		watchTabAwaitingInput(tab.id);
 	}
+	return true;
 }
 
 /** Runtimes whose extension-UI and plan stores already feed their tab's `awaitingInput`. */

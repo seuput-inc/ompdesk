@@ -36,7 +36,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
-use super::journal::mail_outbox::{MailAnswer, OutboxMail, RedeliverDeps, redeliver_mail};
 use super::service::AgentControl;
 use super::service::host::Host;
 use super::service::types::ClosedChild;
@@ -96,9 +95,6 @@ struct Rt {
     children_sent: HashMap<String, String>,
     /// Debounce timers of the auto-close passes, per opener tab.
     sweep_timers: HashMap<String, JoinHandle<()>>,
-    redelivering: bool,
-    /// A pass was asked for while one ran: it runs once more when that one ends.
-    redeliver_again: bool,
     resending: bool,
     wakes: HashMap<String, wake::Wake>,
 }
@@ -118,6 +114,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// What no owed message names is swept from the attachment store this often.
+const ATTACHMENT_SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
+
 /// Starts the runtime of `control` (opened as port `port`): its timer runs until the port closes.
 pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Runtime> {
     let runtime = Arc::new(Runtime {
@@ -135,9 +134,18 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
             let period = Duration::from_millis(every);
             let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // What no owed message names any more goes: once now (a relaunch), then every hour.
+            let mut sweeps = tokio::time::interval(ATTACHMENT_SWEEP_EVERY);
+            sweeps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     () = &mut ended => break,
+                    _ = sweeps.tick() => {
+                        let control = control.clone();
+                        drop(tokio::task::spawn_blocking(move || {
+                            control.sweep_attachments()
+                        }));
+                    }
                     _ = ticks.tick() => {
                         // What the pass reads of main is main as it is at the tick, not as it last pushed.
                         let pass = timer.clone();
@@ -146,6 +154,7 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
                             pass.sweep_all();
                             pass.redeliver_mail();
                             pass.redeliver_sends();
+                            pass.control.bots_tick().await;
                         });
                     }
                 }
@@ -184,31 +193,11 @@ impl Runtime {
 
     // ---- redelivery -------------------------------------------------------------------------------------------------
 
-    /// Accepted reports whose receiver's journal does not hold them yet, sent again to its live tab (`#redeliverMail`).
+    /// Accepted reports whose receiver's journal does not hold them yet, sent again to its live tab (`#redeliverMail`):
+    /// the service's own pass, which a resumed bot runs too, so two passes never overlap.
     pub fn redeliver_mail(self: &Arc<Self>) {
-        let Some(outbox) = self.host().outbox().cloned() else {
-            return;
-        };
-        {
-            let mut rt = self.rt();
-            if rt.redelivering {
-                rt.redeliver_again = true;
-                return;
-            }
-            rt.redelivering = true;
-        }
         let me = self.clone();
-        tokio::spawn(async move {
-            loop {
-                redeliver_mail(&outbox, &MailTabs { host: me.host() }).await;
-                let mut rt = me.rt();
-                if !rt.redeliver_again {
-                    rt.redelivering = false;
-                    break;
-                }
-                rt.redeliver_again = false;
-            }
-        });
+        tokio::spawn(async move { me.control.redeliver_mail_now().await });
     }
 
     /// Messages an omp held and lost go to the omp that holds the receiver's session now (`#redeliverSends`).
@@ -298,32 +287,6 @@ impl Runtime {
         {
             eprintln!("[call-journal] acknowledge not saved: {error}");
         }
-    }
-}
-
-/// The live tab holding a receiver's session, and the receiver's bridge answer to a report again (`RedeliverDeps`).
-struct MailTabs<'a> {
-    host: &'a Host,
-}
-
-impl RedeliverDeps for MailTabs<'_> {
-    fn tab_of(&self, session_path: &str, device: Option<&str>) -> Option<String> {
-        let state = self.host.state();
-        state
-            .tabs
-            .iter()
-            .find(|tab| {
-                tab.session_path.as_deref() == Some(session_path) && tab.device.as_deref() == device
-            })
-            .map(|tab| tab.tab_id.clone())
-    }
-
-    async fn send(&self, tab_id: &str, mail: &OutboxMail) -> Option<MailAnswer> {
-        self.host
-            .send_mail(tab_id, &mail.content, &mail.details, mail.delivery)
-            .await
-            .ok()
-            .flatten()
     }
 }
 

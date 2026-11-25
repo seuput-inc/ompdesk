@@ -15,7 +15,7 @@ use super::events::Sink;
 use super::frame::Frame;
 use super::link::{Ask, Link, Push};
 use super::router::{self, Connection};
-use super::{Activity, Caller, SessionState, Tuning, View};
+use super::{Activity, Caller, SessionState, TabSnapshot, Tuning, View};
 use crate::fs::disk::make_temp_dir;
 
 /// A table of `captured.json`.
@@ -26,6 +26,49 @@ pub fn captured(table: &str) -> Vec<Value> {
 
 pub fn state_of(value: &Value) -> SessionState {
     serde_json::from_value(value.clone()).unwrap()
+}
+
+#[test]
+fn resolved_and_watched_states_match_the_control_backend() {
+    for (status, busy, resuming, ask, plan, expected) in [
+        ("ready", false, false, false, false, "idle"),
+        ("asleep", false, false, false, false, "idle"),
+        ("running", false, false, false, false, "idle"),
+        ("ready", true, false, false, false, "working"),
+        ("ready", false, true, false, false, "working"),
+        ("starting", true, false, false, false, "starting"),
+        ("restarting", false, false, false, false, "starting"),
+        ("waiting", false, true, false, false, "starting"),
+        ("error", true, false, false, false, "stopped"),
+        ("exited", false, true, false, false, "stopped"),
+        ("error", true, false, true, false, "blocked"),
+        ("starting", false, true, false, true, "blocked"),
+    ] {
+        let answer = json!({"session":"t", "title":"task title", "state":expected});
+        let mut raw = json!({
+            "tabId":"t", "title":"", "task":"task title", "status":status, "busy":busy, "resuming":resuming
+        });
+        if ask {
+            raw["asks"] = json!([{"id":"q", "request":{"title":"private question"}}]);
+        }
+        if plan {
+            raw["plan"] = json!({"planFilePath":"private path"});
+        }
+        let tab: super::ControlTab = serde_json::from_value(raw).unwrap();
+        assert_eq!(json!(View::from(tab)), answer);
+        let mut facts = json!({
+            "tabId":"t", "title":"task title", "status":status, "busy":busy, "resuming":resuming,
+            "hasAsk":ask, "hasPlan":plan, "hidden":false
+        });
+        let snapshot = |raw| {
+            serde_json::from_value::<TabSnapshot>(raw)
+                .unwrap()
+                .visible()
+        };
+        assert_eq!(json!(snapshot(facts.clone()).unwrap()), answer);
+        facts["hidden"] = json!(true);
+        assert!(snapshot(facts).is_none());
+    }
 }
 
 /// What main's fake backend was in the TypeScript's tests: sessions by name, in the order they were added.

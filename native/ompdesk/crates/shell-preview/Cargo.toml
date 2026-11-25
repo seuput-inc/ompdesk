@@ -1,0 +1,31 @@
+[package]
+name = "ompdesk-shell-preview"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[dependencies]
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "fs", "net"] }
+serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
+base64 = "=0.23.1"
+url = "=2.5.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+[dev-dependencies]
+tokio = { version = "=1.54.1", features = ["test-util"] }
+
+[features]
+# A test build only: OMP_GUI_TEST_PREVIEW_NET_LOG=<file> makes the Preview's Chromium write its net-log there (transport.rs).
+test-automation = []

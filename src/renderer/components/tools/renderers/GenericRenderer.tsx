@@ -7,7 +7,10 @@ import { JsonTree, parseJsonOutput } from "./JsonTree";
 import { metaTruncation, stripGeneratedOutputNotice, TruncationNote } from "./output-meta";
 import { ToolTextPreview } from "./ToolTextPreview";
 
-/** Argument keys stock never shows (pi-tui `tools/json-tree.ts` HIDDEN_ARG_KEYS): the intent and the streaming buffer. */
+/**
+ * Argument keys stock never shows (pi-coding-agent `ui/tools/args.ts` HIDDEN_KEYS): the intent and the streaming
+ * buffer.
+ */
 const HIDDEN_ARG_KEYS: Record<string, true> = { i: true, __partialJson: true };
 
 /** String past this length (or multiline) folds behind a disclosure row. */
@@ -109,8 +112,8 @@ function SectionLabel({ children, error }: { children: string; error?: boolean }
 
 /**
  * Fallback renderer for tools without their own card (checkpoint, rewind,
- * context notes, skills, extensions), after stock pi-tui
- * `tools/default-renderer.ts`: arguments without the intent, the result body
+ * context notes, skills, extensions), after stock pi-coding-agent
+ * `ui/tools/default.tsx`: arguments without the intent, the result body
  * (JSON tree / text / `(no output)`), the truncation notice from
  * `details.meta`. Stock hides `details`; here they fold one click down.
  */

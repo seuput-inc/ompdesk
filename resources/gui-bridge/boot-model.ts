@@ -9,15 +9,10 @@
  * authenticated models only, so the pick comes from the catalog's per-provider
  * defaults in whichever omp is installed.
  */
-import * as path from "node:path";
-
-const root = process.env.OMP_PACKAGE_ROOT;
-if (!root) throw new Error("OMP_PACKAGE_ROOT is not set");
+import { ompModuleFile } from "./omp-package";
 
 // Runtime-selected: the catalog lives in whichever omp install the GUI resolved.
-const catalog: unknown = await import(
-	Bun.resolveSync("@oh-my-pi/pi-catalog/provider-models", path.join(root, "package.json"))
-);
+const catalog: unknown = await import(ompModuleFile("pi-catalog/provider-models"));
 const defaults =
 	typeof catalog === "object" && catalog !== null && "DEFAULT_MODEL_PER_PROVIDER" in catalog
 		? catalog.DEFAULT_MODEL_PER_PROVIDER

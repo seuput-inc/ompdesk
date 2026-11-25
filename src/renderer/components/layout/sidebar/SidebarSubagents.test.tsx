@@ -399,7 +399,7 @@ describe("a session's family: open and closed", () => {
 		await mount(<Session />);
 		expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
 		expect(toggle()?.getAttribute("data-family-waiting")).toBe("1");
-		expect(toggle()?.className).toContain("text-(--sc-warning)");
+		expect(toggle()?.className).toContain("text-(--sc-attention)");
 		expect(toggle()?.getAttribute("aria-label")).toContain(translate("sidebar.family.waiting", { count: 1 }));
 		// One row under the folded parent: no running sibling, no finished one, not the expanded group.
 		expect(rowIds()).toEqual(["w1"]);

@@ -65,13 +65,20 @@ export function recordPhoneLoads(page: Page): { attach: (name: string) => Promis
 		container.addEventListener("controllerchange", () => note("controllerchange"));
 		const register = container.register.bind(container);
 		container.register = async (...args: Parameters<typeof register>) => {
-			const registered = await register(...args);
+			note(`register ${new URL(String(args[0]), location.href).pathname} scope=${args[1]?.scope}`);
+			const registered = await register(...args).catch((error: unknown) => {
+				note(`register rejected: ${String(error)}`);
+				throw error;
+			});
 			registration = registered;
 			note(`registered installing=${registered.installing?.state ?? "none"}`);
+			const installing = registered.installing;
+			installing?.addEventListener("statechange", () => note(`statechange ${installing.state}`));
 			registered.addEventListener("updatefound", () => {
 				const worker = registered.installing;
 				note("updatefound");
-				worker?.addEventListener("statechange", () => note(`statechange ${worker.state}`));
+				if (worker && worker !== installing)
+					worker.addEventListener("statechange", () => note(`statechange ${worker.state}`));
 			});
 			return registered;
 		};
@@ -374,7 +381,9 @@ export class ServeProxy {
 					headers: this.#headers(req),
 				},
 				answer => {
-					this.#note(`host answered ${answer.statusCode} ${asked}`);
+					const type = answer.headers["content-type"] ?? "-";
+					const encoding = answer.headers["content-encoding"] ?? "identity";
+					this.#note(`host answered ${answer.statusCode} ${asked} (${type}, ${encoding})`);
 					// The device cookie is `__Host-` and `Secure`; Chromium keeps it on `http://localhost`, WebKit does not.
 					const cookies = answer.headers["set-cookie"];
 					if (this.#plainCookie && cookies) {

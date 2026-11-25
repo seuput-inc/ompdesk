@@ -81,13 +81,8 @@ describe("autopilot_bridge", () => {
 	});
 });
 
-describe("get_autopilot / set_autopilot", () => {
-	it("get_autopilot is the bridge status; set_autopilot is the window's job", async () => {
-		const requests: Array<{ method: string; params: unknown }> = [];
-		expect(await handlers.get_autopilot?.({ type: "get_autopilot" }, context(requests))).toEqual({ active: false });
-		expect(requests[0]?.method).toBe("modes.autopilot_status");
-		await expect(handlers.set_autopilot?.({ type: "set_autopilot", action: "stop" }, context())).rejects.toThrow(
-			/OMPdesk window/,
-		);
-	});
+it("refuses to control Autopilot outside the local window", async () => {
+	await expect(handlers.set_autopilot?.({ type: "set_autopilot", action: "stop" }, context())).rejects.toThrow(
+		/OMPdesk window/,
+	);
 });

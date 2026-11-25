@@ -8,9 +8,10 @@
  * when the shards drift apart (a job's log ends each file's line with its milliseconds). A platform the run has no
  * job for (a pull request has no Windows job) keeps the costs it had.
  */
-import { spawnSync } from "node:child_process";
+
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { gh as ghRun } from "./gh-run";
 
 /** Shorter files are most of the count and little of the time; the sequencer gives them one flat cost. */
 const MIN_SECONDS = 2;
@@ -40,9 +41,9 @@ if (import.meta.main) {
 		process.exit(2);
 	}
 	const gh = (...args: string[]) => {
-		const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 512 << 20 });
-		if (result.status !== 0) throw new Error(`gh ${args.join(" ")} failed: ${result.stderr}`);
-		return result.stdout;
+		const result = ghRun(args, { maxBuffer: 512 << 20 });
+		if (!result.ok) throw new Error(`gh ${args.join(" ")} failed: ${result.err}`);
+		return result.out;
 	};
 	const jobs: Array<{ name: string; databaseId: number }> = JSON.parse(gh("run", "view", run, "--json", "jobs")).jobs;
 	const costs: Record<string, Record<string, number>> = JSON.parse(readFileSync(FILE, "utf8"));

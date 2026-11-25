@@ -99,7 +99,7 @@ export interface TerminalMount {
 		| "attachCustomKeyEventHandler"
 	> &
 		/** xterm always has them; a test double without one never paints predictions, draws another viewer's size or rings. */
-		Partial<Pick<Terminal, "buffer" | "resize" | "onBell">>;
+		Partial<Pick<Terminal, "buffer" | "resize" | "reset" | "onBell">>;
 	fit(): void;
 }
 export async function mountTerminal(element: HTMLElement): Promise<TerminalMount> {
@@ -161,6 +161,9 @@ export function TerminalViewport({
 	const fontChanged = useRef<(() => void) | null>(null);
 	const latest = useRef({ transform, fontSize, onLease, takeFocus });
 	latest.current = { transform, fontSize, onLease, takeFocus };
+	/** Bumped when xterm's parser stuck: the effect builds a new screen, which reads the kept scrollback again (U172). */
+	const [screen, setScreen] = useState(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: screen explicitly replaces a stuck xterm.
 	useEffect(() => {
 		if (!element.current) return;
 		const target = element.current;
@@ -293,6 +296,34 @@ export function TerminalViewport({
 					return promise;
 				},
 				onSnapshot,
+				// The answer starts past the kept scrollback's head: what is on screen has a hole after it (H139).
+				reset: () => view.terminal.reset?.(),
+				// A full-screen program whose first frame was cut leaves the screen blank: only then it is asked to draw
+				// again (H137); a screen with anything on it is left alone.
+				settled: () => {
+					const buffer = view.terminal.buffer?.active;
+					if (!buffer) return;
+					for (let row = 0; row < view.terminal.rows; row += 1)
+						if (
+							buffer
+								.getLine(buffer.viewportY + row)
+								?.translateToString(true)
+								.trim()
+						)
+							return;
+					void window.omp.terminal.request(tabId, { action: "redraw", id }).catch(() => {});
+				},
+				// xterm parses in order: an empty write behind a late one tells a lost callback from a stuck parser.
+				probe: () => {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					view.terminal.write("", resolve);
+					return promise;
+				},
+				hidden: () => document.visibilityState === "hidden",
+				// The PTY keeps running: only this screen is replaced, and the new one replays what the host kept.
+				wedged: () => {
+					if (!stopped) setScreen(count => count + 1);
+				},
 				stopped: () => stopped || failed,
 			});
 			cleanup = () => {
@@ -314,7 +345,7 @@ export function TerminalViewport({
 			stopped = true;
 			cleanup();
 		};
-	}, [tabId, id, mount, onStatus, onError, handle, predict]);
+	}, [tabId, id, mount, onStatus, onError, handle, predict, screen]);
 	useEffect(() => {
 		if (fontSize !== undefined) fontChanged.current?.();
 	}, [fontSize]);

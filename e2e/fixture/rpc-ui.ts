@@ -7,7 +7,7 @@ import * as os from "node:os";
 import * as nodePath from "node:path";
 import { createInterface } from "node:readline";
 import JSZip from "jszip";
-import { hasMailEntry, journaledMarks } from "../../resources/gui-bridge/agent-control-contracts";
+import { hasMailEntry, journaledMarks, sniffImageType } from "../../resources/gui-bridge/agent-control-contracts";
 import { DESKTOP_SLOT_STALE_NOTICE } from "../../resources/gui-bridge/desktop-slot-contracts";
 import type { ModelSetupFacts } from "../../resources/gui-bridge/model-setup-contracts";
 import {
@@ -38,6 +38,7 @@ import {
 	PROMPT_ORIGIN_ENTRY,
 	parsePromptOriginEnv,
 } from "../../resources/gui-bridge/prompt-origin-contracts";
+import { redactDiagnosticsFile } from "../../resources/gui-bridge/redactor";
 import {
 	interruptedJobs,
 	journalEnd,
@@ -48,7 +49,14 @@ import {
 	stoppedSubagents,
 } from "../../resources/gui-bridge/restart-core";
 import { type ForkEntry, forkCut } from "../../resources/gui-bridge/session-fork-core";
-import { transcriptPageMessages, transcriptRunStart } from "../../resources/gui-bridge/transcript-page";
+import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
+import {
+	latestTurnStart,
+	transcriptPageMessages,
+	transcriptRunStart,
+} from "../../resources/gui-bridge/transcript-page";
+import { GuiBridgeClient } from "../../src/main/bridge-client";
+import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
 import type {
 	AgentMessage,
@@ -91,7 +99,7 @@ export function runRpcUi(): void {
 	};
 	const BOOLEAN_FLAGS: Record<string, true> = { "--no-tools": true, "--no-session": true, "--no-title": true };
 	const flags: Record<string, string> = {};
-	/** Every `-e`/`--extension` value in order: the bridge entry, then OMPdesk's own roots (control tools, REA, pstack). */
+	/** Every `-e`/`--extension` value in order: the bridge entry, then OMPdesk's own roots. */
 	const extensionRoots: string[] = [];
 	for (let index = 2; index < process.argv.length; index++) {
 		const arg = process.argv[index];
@@ -124,7 +132,9 @@ export function runRpcUi(): void {
 		timestamp: string;
 		[key: string]: unknown;
 	}
-	const sessionId = `fixture-${process.pid}`;
+	// Unique per process, not only its pid: Windows reuses pids, and a record file spans every launch of a spec, so two
+	// omps of one spec could otherwise share an id (`fixtureSessionPid` reads the pid back).
+	const sessionId = `fixture-${process.pid}-${randomUUID().slice(0, 8)}`;
 	/** `OMP_GUI_PROMPT_ORIGIN`: the paired device a host runs this omp for (A85). */
 	const promptOrigin = parsePromptOriginEnv(process.env.OMP_GUI_PROMPT_ORIGIN);
 	const entries: Entry[] = [];
@@ -176,6 +186,34 @@ export function runRpcUi(): void {
 	 * cut off): stock's SessionManager keeps writing that file, under its own header, never a second one.
 	 */
 	let resumed: { id: string; file: string; created?: string; cwd?: string } | undefined;
+	/**
+	 * The journal is rewritten whole on every entry, so it goes through a temp file and a rename: stock appends, and a
+	 * reader (another omp opening the session across a relaunch) never sees an emptied file, which a plain truncating
+	 * write let it load as a session with no entries (send-outbox-remote, e2e run 44656382129: d1 erased). Windows
+	 * refuses the rename while a reader has the file open: retried briefly.
+	 */
+	const writeJournal = (file: string, text: string) => {
+		const temp = `${file}.${process.pid}.tmp`;
+		fs.writeFileSync(temp, text);
+		for (let attempt = 0; ; attempt++) {
+			try {
+				fs.renameSync(temp, file);
+				return;
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (attempt >= 50 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw error;
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+			}
+		}
+	};
+	/** Which process loaded or wrote which journal, with how many entries: a spec names a second writer with it. */
+	const journalTrace = (op: "load" | "exit", file: string) => {
+		if (process.env.OMP_GUI_TEST_RECORD)
+			fs.appendFileSync(
+				process.env.OMP_GUI_TEST_RECORD,
+				`${JSON.stringify({ type: "fixture.journal", op, file: nodePath.basename(file), entries: entries.length, at: Date.now(), recordedBy: sessionId })}\n`,
+			);
+	};
 	const persistSession = () => {
 		const file = fresh ? fresh.file : resumed && sessionFile ? resumed.file : sessionFile;
 		if (!file || entries.length === 0) return;
@@ -191,7 +229,7 @@ export function runRpcUi(): void {
 			...entries,
 		];
 		fs.mkdirSync(nodePath.dirname(file), { recursive: true });
-		fs.writeFileSync(file, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+		writeJournal(file, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
 	};
 	const append = (fields: { type: string; [key: string]: unknown }, time: number | string, persist = true) => {
 		entries.push({
@@ -239,6 +277,8 @@ export function runRpcUi(): void {
 			},
 			recordedAt,
 		);
+		const file = fresh ? fresh.file : resumed && sessionFile ? resumed.file : sessionFile;
+		if (file) journalTrace("exit", file);
 	};
 	const seedLongSession = () => {
 		entries.length = 0;
@@ -323,6 +363,7 @@ export function runRpcUi(): void {
 			});
 		}
 		activeLeafId = entries.at(-1)?.id ?? null;
+		journalTrace("load", file);
 		return header;
 	};
 	// A seeded session is a stock file from the start, as a real session with a transcript is: the index lists it.
@@ -407,6 +448,8 @@ export function runRpcUi(): void {
 	if (standIn) Object.assign(model, { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 SOL" });
 	const lanes: Record<"steering" | "followUp", string[]> = { steering: [], followUp: [] };
 	let isStreaming = false;
+	/** A `fixture flow` run's compaction is under way (`compact-start` until `compact-end` or the turn's end). */
+	let isCompacting = false;
 	/** The thinking selector and effort; `fixture reply actions` turns stock auto on and classifies the turn high. */
 	let thinking = { level: "medium", configured: "medium" };
 	/** `fixture usage limit` and `fixture rate limit` stop a turn on the provider's quota; its account resets at this time. */
@@ -447,12 +490,16 @@ export function runRpcUi(): void {
 	}
 	/** Stock `/btw` history, newest first. */
 	const btwRecords: object[] = [];
+	/** The session's todo list and the bridge's reading of it (todo-drift.ts), set by `fixture todo behind`. */
+	let todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
+	const noDrift: TodoDriftState = { changedAt: null, stale: null, received: [], receivedCount: 0 };
+	let todoDrift = noDrift;
 	// Stock `get_state`: cwd, plan mode and the pause gate come from the bridge's `composer.state`.
 	const state = () => ({
 		model,
 		thinkingLevel: thinking.level,
 		isStreaming,
-		isCompacting: false,
+		isCompacting,
 		steeringMode: "all",
 		followUpMode: "all",
 		interruptMode: "immediate",
@@ -473,7 +520,7 @@ export function runRpcUi(): void {
 		hasPendingAsyncWork: false,
 		isSettled: !isStreaming,
 		queuedMessages: { steering: [...lanes.steering], followUp: [...lanes.followUp] },
-		todoPhases: [],
+		todoPhases,
 		fastModeEnabled: false,
 		tokensPerSecond: null,
 		fastModeActive: false,
@@ -516,6 +563,8 @@ export function runRpcUi(): void {
 	 * replaces it.
 	 */
 	const ownerUsage = (): Array<Record<string, unknown>> | undefined => {
+		if (process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "blocked")
+			return blockedAccountUsage().map(report => ({ ...report }));
 		if (process.env.OMP_GUI_TEST_USAGE_ACCOUNTS !== "many") return undefined;
 		const now = Date.now();
 		const HOUR = 3_600_000;
@@ -683,6 +732,17 @@ export function runRpcUi(): void {
 	const leftoverLoginInputs = new Set<string>();
 	const values: Record<string, unknown> = {
 		"approval.mode": "ask",
+		"tools.approvalMode": "yolo",
+		hideThinkingBlock: false,
+		proseOnlyThinking: true,
+		omitThinking: false,
+		"display.showTokenUsage": false,
+		"display.collapseCompacted": true,
+		"goal.statusInFooter": true,
+		"speech.enabled": false,
+		"stt.enabled": false,
+		"paste.largeMenuThreshold": 100,
+		emojiAutocomplete: true,
 		"theme.dark": "dark",
 		"theme.light": "light",
 		"theme.mode": "dark",
@@ -735,9 +795,9 @@ export function runRpcUi(): void {
 	});
 
 	/**
-	 * `OMP_GUI_TEST_RECAP={"text": "...", "delayMs": 300}` stands in for the bridge's idle recap (resources/gui-bridge/
-	 * session-recap.ts, rules in session-recap-core.ts): after a turn ends, a `recap` custom message arrives once the
-	 * window has passed, unless the composer holds a draft; `recap_draft` reports the draft like the real bridge.
+	 * `OMP_GUI_TEST_RECAP={"text": "...", "delayMs": 300}` stands in for stock's idle recap as the bridge shows it
+	 * (resources/gui-bridge/idle-maintenance.ts): after a turn ends, a `recap` custom message arrives once the window has
+	 * passed, unless the composer holds a draft; `idle_maintenance_draft` reports the draft like the real bridge.
 	 * Unset: no recap.
 	 */
 	const recapScript = JSON.parse(process.env.OMP_GUI_TEST_RECAP ?? "null") as {
@@ -1658,8 +1718,21 @@ export function runRpcUi(): void {
 				];
 			});
 		});
-	/** Stock's relay server while a spec lets the agent into the preview (browser.relay_start). */
-	let relayServer: { server: { stop(): void }; url: string; token: string } | null = null;
+	/** The spec owns a private real stock session; only its relay methods cross this fixture boundary. */
+	const stockRelay = async (method: "browser.relay_start" | "browser.relay_stop") => {
+		const address = process.env.OMP_E2E_STOCK_RELAY;
+		if (!address) throw new Error("OMP_E2E_STOCK_RELAY is not set");
+		const client = new GuiBridgeClient(address);
+		try {
+			await client.connect();
+			const result = await client.request<{ url?: string }>(method);
+			if (result.url && process.env.OMP_E2E_RELAY_FILE)
+				fs.writeFileSync(process.env.OMP_E2E_RELAY_FILE, JSON.stringify({ url: result.url }));
+			return result;
+		} finally {
+			client.close();
+		}
+	};
 	/** `prompt_origin_set` calls whose prompt has not been sent yet. */
 	const pendingOrigins: Array<{ deviceId: string; name: string; text: string }> = [];
 	/**
@@ -1676,31 +1749,33 @@ export function runRpcUi(): void {
 	 * boots and leaves every `get_state` unanswered; the held ones are answered as usual once the file no longer says
 	 * so (a spec that writes another script, or removes the file, ends the wait). `{"holdExit": true}` makes an omp that is
 	 * stopped (SIGTERM, or its stdin ending) keep running, as one slow to wind down does, and exit as usual once the file
-	 * no longer says so; a stop that waits too long is SIGKILLed by main, as a real one is.
+	 * no longer says so; a stop that waits too long is SIGKILLed by main, as a real one is. `{"holdResume": true}` keeps
+	 * the turn `composer.restore_interrupted` continues from starting (the tab's "continuing" row stays up) until the
+	 * file no longer says so, so a spec sees the row however late its window mounts.
 	 */
 	const startFile = process.env.OMP_GUI_TEST_START_FILE;
-	const startHeld = (hold: "holdGetState" | "holdExit" = "holdGetState"): boolean => {
+	const startHeld = (hold: "holdGetState" | "holdExit" | "holdResume" = "holdGetState"): boolean => {
 		try {
 			return startFile ? JSON.parse(fs.readFileSync(startFile, "utf8"))[hold] === true : false;
 		} catch {
 			return false;
 		}
 	};
-	/** Runs `stop` now, or once the start file no longer holds the exit. */
-	const stopWhenReleased = (stop: () => void) => {
-		if (!startHeld("holdExit")) {
-			stop();
+	/** Runs `run` now, or once the start file no longer holds `hold`. */
+	const whenReleased = (hold: "holdExit" | "holdResume", run: () => void) => {
+		if (!startHeld(hold)) {
+			run();
 			return;
 		}
 		const timer = setInterval(() => {
-			if (startHeld("holdExit")) return;
+			if (startHeld(hold)) return;
 			clearInterval(timer);
-			stop();
+			run();
 		}, 100);
 	};
 	if (startFile) {
 		process.on("SIGTERM", () =>
-			stopWhenReleased(() => {
+			whenReleased("holdExit", () => {
 				process.removeAllListeners("SIGTERM");
 				process.kill(process.pid, "SIGTERM");
 			}),
@@ -1807,6 +1882,32 @@ export function runRpcUi(): void {
 		},
 		"agent_control.note": () => ({}),
 		"agent_control.worker": () => ({}),
+		// gui-bridge agent-control.ts `agent_control.attachment`: a file in this omp's folder, or its n-th newest picture.
+		"agent_control.attachment": params => {
+			const wire = (name: string, mimeType: string, bytes: Buffer) => ({
+				name,
+				mimeType,
+				dataBase64: bytes.toString("base64"),
+				sha256: createHash("sha256").update(bytes).digest("hex"),
+			});
+			if (typeof params.path === "string") {
+				const file = nodePath.resolve(process.cwd(), params.path);
+				const bytes = fs.readFileSync(file);
+				return wire(nodePath.basename(file), sniffImageType(bytes) ?? "application/octet-stream", bytes);
+			}
+			const pictures = entries
+				.flatMap(entry =>
+					entry.type === "message" ? ((entry.message as { content?: unknown }).content ?? []) : [],
+				)
+				.filter(
+					(block): block is { type: "image"; data: string; mimeType: string } =>
+						typeof block === "object" && block !== null && (block as { type?: unknown }).type === "image",
+				)
+				.reverse();
+			const picture = pictures[Number(params.image) - 1];
+			if (!picture) throw new Error(`this conversation holds ${pictures.length} pictures`);
+			return wire(`image-${params.image}.png`, picture.mimeType, Buffer.from(picture.data, "base64"));
+		},
 		"agent_control.turn": () => ({ person: personRun }),
 		// gui-bridge agent-control.ts: which markers of main's messages the journal holds, and this process. As stock,
 		// a follow-up queued while a turn runs lives only in this process (`lanes`): a quit loses it.
@@ -1814,6 +1915,14 @@ export function runRpcUi(): void {
 			instance: `${process.pid}-${Math.round(performance.timeOrigin)}`,
 			journaled: journaledMarks(entries, Array.isArray(params.marks) ? params.marks.map(String) : []),
 		}),
+		// gui-bridge agent-control.ts `agent_control.aside` → stock's aside: another session's message read at the next
+		// step with every other one waiting, never shown in the person's queue; an idle session gets nothing here and
+		// main sends it the prompt that starts its turn.
+		"agent_control.aside": params => {
+			if (!isStreaming) return { idle: true };
+			lanes.steering.push(String(params.message ?? ""));
+			return {};
+		},
 		// gui-bridge agent-control.ts `agent_control.mail` → stock `sendMessage`: the report becomes a displayed custom
 		// message in the journal; with `triggerTurn` an idle session takes a turn on it (the parent reacts by itself),
 		// a running one reads it at its next step (stock's `aside`), whatever its kind. The woken turn's reply names the
@@ -1918,39 +2027,8 @@ export function runRpcUi(): void {
 			reconnected: Array.isArray(params.names) ? params.names : [],
 			skipped: [],
 		}),
-		// gui-bridge browser-relay.ts: stock's own relay server, loaded from the installed omp
-		// only when a spec names it (OMP_E2E_STOCK_RELAY = stock's tools/browser/relay/server.ts).
-		// The endpoint lands in OMP_E2E_RELAY_FILE so the spec can connect puppeteer to it.
-		"browser.relay_start": (_params, reply) => {
-			void (async () => {
-				const modulePath = process.env.OMP_E2E_STOCK_RELAY;
-				if (!modulePath) throw new Error("OMP_E2E_STOCK_RELAY is not set");
-				if (!relayServer) {
-					const { startRelayServer } = await import(modulePath);
-					const probe = net.createServer();
-					const listening = Promise.withResolvers<void>();
-					probe.listen(0, "127.0.0.1", () => listening.resolve());
-					await listening.promise;
-					const address = probe.address();
-					const port = typeof address === "object" && address ? address.port : 0;
-					probe.close();
-					const token = createHash("sha256").update(String(Math.random())).digest("base64url");
-					relayServer = {
-						server: startRelayServer({ port, token, group: false }),
-						url: `http://127.0.0.1:${port}`,
-						token,
-					};
-					if (process.env.OMP_E2E_RELAY_FILE)
-						fs.writeFileSync(process.env.OMP_E2E_RELAY_FILE, JSON.stringify({ url: relayServer.url }));
-				}
-				reply({ url: relayServer.url, token: relayServer.token });
-			})();
-		},
-		"browser.relay_stop": () => {
-			relayServer?.server.stop();
-			relayServer = null;
-			return {};
-		},
+		"browser.relay_start": () => stockRelay("browser.relay_start"),
+		"browser.relay_stop": () => stockRelay("browser.relay_stop"),
 		read_image_blob: params => {
 			const hash = /^blob:sha256:([a-f0-9]{64})$/.exec(String(params.ref))?.[1];
 			if (!hash) throw new Error("Invalid image blob reference");
@@ -1967,6 +2045,7 @@ export function runRpcUi(): void {
 			return null;
 		},
 		model_choice: () => ({ chosen: standIn }),
+		"todoDrift.state": () => todoDrift,
 		"composer.state": () => ({
 			cwd: process.cwd(),
 			autoRetryEnabled: true,
@@ -2005,9 +2084,9 @@ export function runRpcUi(): void {
 				{ id: "tool:edit", category: "builtinTools", label: "edit", tokens: 1_650 },
 				{ id: "tool:mcp__docs__search", category: "mcpTools", label: "mcp__docs__search", tokens: 640 },
 				{
-					id: "deferred:mcp__rea__analyze_function",
+					id: "deferred:mcp__docs__lookup",
 					category: "mcpTools",
-					label: "mcp__rea__analyze_function",
+					label: "mcp__docs__lookup",
 					tokens: 0,
 					deferred: true,
 				},
@@ -2272,37 +2351,40 @@ export function runRpcUi(): void {
 			if (!cutOff && !followUp)
 				return { turn: false, subagents, jobs, followUp: false, cutBeforeRequest, journal: journalEnd(journal) };
 			// A model that is slow to start (the relaunch's spawn and first request): the tab's "continuing" row stays
-			// up for the whole wait, so a spec observes it instead of racing a resume that finishes in a frame.
-			setTimeout(
-				() => {
-					isStreaming = true;
-					write({ type: "agent_start" });
-					setTimeout(() => {
-						const answer: AgentMessage = {
-							role: "assistant",
-							// After a restart-job notice the answer is tall, so the transcript overflows and "stays at the bottom" means something.
-							content: [
-								{
-									type: "text",
-									text:
-										stopped.length > 0
-											? `Continued after the interruption.\n\n${Array.from({ length: 30 }, (_, index) => `- Checked item ${index + 1}`).join("\n")}`
-											: followUp
-												? "Watcher is still on the release build; I'll report when it is green."
-												: "Continued after the interruption.",
-								},
-							],
-							timestamp: Date.now(),
-							provider: model.provider,
-							model: model.id,
-							stopReason: "stop",
-						};
-						appendMessage(answer);
-						write({ type: "message_end", message: answer });
-						endTurn([answer]);
-					}, 600);
-				},
-				followUp ? 1500 : 0,
+			// up for the whole wait, so a spec observes it instead of racing a resume that finishes in a frame. A spec
+			// that must see the row holds the start with `holdResume` (a loaded runner mounts the window seconds late).
+			whenReleased("holdResume", () =>
+				setTimeout(
+					() => {
+						isStreaming = true;
+						write({ type: "agent_start" });
+						setTimeout(() => {
+							const answer: AgentMessage = {
+								role: "assistant",
+								// After a restart-job notice the answer is tall, so the transcript overflows and "stays at the bottom" means something.
+								content: [
+									{
+										type: "text",
+										text:
+											stopped.length > 0
+												? `Continued after the interruption.\n\n${Array.from({ length: 30 }, (_, index) => `- Checked item ${index + 1}`).join("\n")}`
+												: followUp
+													? "Watcher is still on the release build; I'll report when it is green."
+													: "Continued after the interruption.",
+									},
+								],
+								timestamp: Date.now(),
+								provider: model.provider,
+								model: model.id,
+								stopReason: "stop",
+							};
+							appendMessage(answer);
+							write({ type: "message_end", message: answer });
+							endTurn([answer]);
+						}, 600);
+					},
+					followUp ? 1500 : 0,
+				),
 			);
 			return { turn: cutOff, subagents, jobs, followUp: followUp !== undefined, cutBeforeRequest };
 		},
@@ -2490,6 +2572,7 @@ export function runRpcUi(): void {
 				leafId: activeLeafId,
 				total: messages.length,
 				startIndex: start,
+				...(params.turnStart === true ? { turnStart: latestTurnStart(messages) } : {}),
 				// The bridge's labels (gui-bridge/sessions.ts): prompts another device typed, for this omp's viewer.
 				messages: transcriptPageMessages(
 					labelPromptOrigins(
@@ -2678,34 +2761,30 @@ export function runRpcUi(): void {
 			const problem = judgeAssistEnabled ? (judgeAssistScript.preview ?? null) : null;
 			return { problem, judged: problem !== null };
 		},
-		// gui-bridge session-dump.ts: a real zip with stock's members in os.tmpdir(); null while the session has no messages.
-		session_dump: (params, reply) => {
+		session_dump_redacted: (params, reply) => {
+			const output = params.output;
+			if (typeof output !== "string") throw new Error("missing dump output");
 			const messages = activeBranch().flatMap(entry =>
 				entry.type === "message" ? [entry.message as AgentMessage] : [],
 			);
 			if (messages.length === 0) return null;
 			const anonymized = params.anonymized === true;
 			const zip = new JSZip();
+			const member = (name: string, text: string) => zip.file(name, redactDiagnosticsFile(name, text));
 			if (anonymized) {
-				zip.file(
-					"session.jsonl",
-					`${messages.map(message => JSON.stringify({ role: message.role })).join("\n")}\n`,
-				);
+				member("session.jsonl", `${messages.map(message => JSON.stringify({ role: message.role })).join("\n")}\n`);
 			} else {
-				zip.file(
+				member(
 					"session.md",
 					`${messages.map(message => `## ${message.role}\n\n${messageText(message, "\n")}`).join("\n\n")}\n`,
 				);
-				zip.file("llm-request.json", `${JSON.stringify({ messages: messages.length })}\n`);
+				member("llm-request.json", `${JSON.stringify({ messages: messages.length })}\n`);
 			}
-			const file = nodePath.join(
-				os.tmpdir(),
-				`omp-dump-${anonymized ? "anon-" : ""}${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`,
-			);
 			void zip.generateAsync({ type: "nodebuffer" }).then(bytes => {
-				fs.writeFileSync(file, bytes);
+				fs.writeFileSync(output, bytes, { flag: "r+" });
 				reply({
-					path: file,
+					path: output,
+					redacted: true,
 					files: anonymized ? ["session.jsonl"] : ["session.md", "llm-request.json"],
 					subagentCount: 0,
 					anonymized,
@@ -2719,12 +2798,12 @@ export function runRpcUi(): void {
 			setTimeout(() => reply({ title: nameAuto("regenerate") }), autoTitleLatency);
 			return undefined;
 		},
-		// gui-bridge session-recap.ts: the draft report that arms (or cancels) the idle recap.
-		recap_draft: params => {
+		// gui-bridge idle-maintenance.ts: the draft report that holds back (or lets go of) the idle recap.
+		idle_maintenance_draft: params => {
 			recapDraftEmpty = params.empty === true;
 			if (!recapDraftEmpty) cancelRecap();
 			else scheduleRecap();
-			return { armed: recapTimer !== undefined };
+			return { empty: recapDraftEmpty };
 		},
 		next_prompt_draft: params => {
 			nextPromptDraftEmpty = params.empty === true;
@@ -3005,7 +3084,8 @@ export function runRpcUi(): void {
 		}
 		try {
 			const result = handler(params, reply);
-			if (result !== undefined) reply(result);
+			if (result instanceof Promise) void result.then(reply, error => fail(String(error)));
+			else if (result !== undefined) reply(result);
 		} catch (error) {
 			fail(error instanceof Error ? error.message : String(error));
 		}
@@ -3572,9 +3652,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						role: "custom",
 						id: "work-view-irc",
 						customType: "irc:incoming",
-						content: "Workspace coordination from ReaMcp",
+						content: "Workspace coordination from DocsAgent",
 						details: {
-							from: "ReaMcp",
+							from: "DocsAgent",
 							message: "Workspace coordination is ready.\n**IRC details stay inside this work card.**",
 						},
 						timestamp: Date.now(),
@@ -3909,6 +3989,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 		};
 		const finish = (last: AgentMessage) => {
 			say(last);
+			isCompacting = false;
 			endTurn([...turn]);
 			flow = undefined;
 		};
@@ -3993,11 +4074,24 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						write({ type: "extension_ui_request", id: askId, method: "ask", questions });
 						return undefined;
 					}
-					// Stock's mid-turn maintenance: start, the compaction entry, end (the loop goes on).
+					// Stock's mid-turn maintenance: start, the compaction entry, end (the loop goes on). `skipped` ends it
+					// as stock's benign skip does: no entry, nothing said.
 					case "compact-start":
+						isCompacting = true;
 						write({ type: "auto_compaction_start", reason: "threshold", action: "context-full" });
 						return undefined;
 					case "compact-end": {
+						isCompacting = false;
+						if (spec.skipped === true) {
+							write({
+								type: "auto_compaction_end",
+								action: "context-full",
+								aborted: false,
+								willRetry: false,
+								skipped: true,
+							});
+							return undefined;
+						}
 						const kept = entries.find(entry => entry.message === user)?.id;
 						const compaction = {
 							summary: "Compacted the run so far.",
@@ -4413,7 +4507,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			appendMessage(result);
 			write({ type: "message_end", message: result });
 		});
-		pushBridgeEvent({ type: "desktop_slot_acquire", requestId: id });
+		pushBridgeEvent({ type: "desktop_slot_acquire", requestId: id, processId: process.pid });
 	};
 	const prompt = (message: string, respond: () => void, images: ImageContent[] = []) => {
 		respond();
@@ -4443,7 +4537,11 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 		write({ type: "agent_start" });
 		write({ type: "token_rate", rate: 64 });
 		write({ type: "message_end", message: user });
-		if (message === "fixture work view") {
+		if (message === "fixture crash") {
+			// The omp dies under the turn it just started (an uncaught exception): OMPdesk starts it again and continues the
+			// turn, at most three times in five minutes (interrupted-work.md › A turn that does not go on by itself).
+			setTimeout(() => process.exit(1), 300);
+		} else if (message === "fixture work view") {
 			startWorkView(user);
 		} else if (message === "fixture steer work") {
 			startSteerWork(user);
@@ -4453,7 +4551,8 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			startDesktopActing();
 		} else if (message === "fixture desktop done") {
 			// The holder's turn ends: the bridge let go itself, so main needs no revoke.
-			if (desktopHolding) pushBridgeEvent({ type: "desktop_slot_release", reason: "turn_end" });
+			if (desktopHolding)
+				pushBridgeEvent({ type: "desktop_slot_release", reason: "turn_end", processId: process.pid });
 			desktopHolding = false;
 			endTurn([user]);
 		} else if (message.startsWith("fixture blocking tool:")) {
@@ -5159,6 +5258,44 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					endTurn(turn);
 				}, 300);
 			}, 300);
+		} else if (message === "fixture ci note") {
+			// A push and the CI lines the bridge's CI watch delivers between turns (customType `ompdesk-ci`,
+			// resources/gui-bridge/modes/ci-watch-contracts.ts): one run passed, one failed (parity `reply-ci-note`).
+			const answer: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Pushed main." }],
+				timestamp: Date.now(),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+			};
+			const ci = (sha: string, outcome: "success" | "failure", failed: string[]): AgentMessage => ({
+				role: "custom",
+				customType: "ompdesk-ci",
+				content: `CI ${outcome === "success" ? "passed" : "failed"} for o/r@${sha.slice(0, 7)} (main).`,
+				display: true,
+				details: {
+					id: `ci-${sha}`,
+					host: "github.com",
+					repo: "o/r",
+					branch: "main",
+					sha,
+					outcome,
+					failed,
+					url: "https://github.com/o/r/actions/runs/101",
+				},
+				timestamp: Date.now(),
+			});
+			const passed = ci("a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "success", []);
+			const failed = ci("0f1e2d3c4b5a69788796a5b4c3d2e1f001234567", "failure", [
+				"check (node 1/2)",
+				"native (linux)",
+			]);
+			for (const entry of [answer, passed, failed]) {
+				appendMessage(entry);
+				write({ type: "message_end", message: entry });
+			}
+			endTurn([user, answer, passed, failed]);
 		} else if (message === "fixture advisor note") {
 			// A standalone advisor card (customType `advisor`, the shape stock files): prices that once drew as KaTeX, a
 			// bare URL and one long unbroken formula, all of which must stay inside the card (parity `reply-advisor-note`).
@@ -5483,9 +5620,13 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			for (const [name, from] of Object.entries(drafts)) fs.copyFileSync(from, nodePath.join(shots, name));
 			// Escaped as the bridge escapes a destination (a Windows path's backslashes).
 			const shot = (name: string) => nodePath.join(shots, name).replace(/[\\<>]/g, "\\$&");
+			// An id of its own, as stock gives every dialog (`Snowflake.next`, rpc-mode.ts `requestRpcDialog`). The parity
+			// sheet asks this three times in one session, once from each view, and under one id a view's close of the
+			// question before (its own answer still on its way, or "answered elsewhere") closed this one too: the card
+			// never showed there, and the host refused that view's later answers as already given.
 			write({
 				type: "extension_ui_request",
-				id: "fixture-ask-pictures",
+				id: `fixture-ask-pictures-${randomUUID()}`,
 				method: "ask",
 				questions: [
 					{
@@ -5757,6 +5898,50 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				Number(process.env.OMP_GUI_TEST_LATER_MS ?? 3000),
 			);
 		} else if (message !== "fixture running") {
+			if (message === "fixture todo behind") {
+				// A list with two instructions steered in since its last change (resources/gui-bridge/todo-drift.ts): the
+				// todo call 12 minutes ago, then the bridge's reading of it, pushed as the bridge pushes it (two are news,
+				// no warning: RECEIVED_WARN).
+				todoPhases = [
+					{
+						name: "Parser",
+						tasks: [
+							{ content: "Write the parser", status: "completed" },
+							{ content: "Test the parser", status: "in_progress" },
+							{ content: "Document the parser", status: "pending" },
+						],
+					},
+				];
+				const tool = { toolCallId: `todo-behind-${Date.now()}`, toolName: "todo" };
+				write({ type: "tool_execution_start", ...tool, args: { op: "init" } });
+				write({
+					type: "tool_execution_end",
+					...tool,
+					result: {
+						content: [{ type: "text", text: "todo updated" }],
+						details: { op: "init", phases: todoPhases },
+					},
+					isError: false,
+				});
+				const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
+				todoDrift = {
+					changedAt: minutesAgo(12),
+					stale: null,
+					received: [
+						{ at: minutesAgo(9), text: "Also fix the README typo on line 3" },
+						{ at: minutesAgo(4), text: "Then rename parse() to parseConfig() everywhere" },
+					],
+					receivedCount: 2,
+				};
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
+			if (message === "fixture todo clear") {
+				todoPhases = [];
+				todoDrift = noDrift;
+				const frame = `${JSON.stringify({ event: { type: "todo_drift", state: todoDrift } })}\n`;
+				for (const socket of bridgeClients) socket.write(frame);
+			}
 			if (message === "fixture reply actions") {
 				// Stock auto thinking names the effort it classified for this turn.
 				thinking = { level: "high", configured: "auto" };
@@ -5792,7 +5977,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 																		? ACTIONS_REPLY
 																		: message === "fixture documents"
 																			? DOCUMENTS_REPLY
-																			: `Local fixture reply${message.includes("fixture:result-ok") ? "\nResult: ok" : message.includes("fixture:result-problem") ? "\nResult: problem — tests failed" : ""}`,
+																			: message.startsWith("Parity turn ")
+																				? `Answer to ${message}`
+																				: `Local fixture reply${message.includes("fixture:result-ok") ? "\nResult: ok" : message.includes("fixture:result-problem") ? "\nResult: problem — tests failed" : ""}`,
 					},
 				],
 				timestamp: Date.now(),
@@ -6434,8 +6621,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					write({ type: "message_end", message: answer });
 					endTurn([answer]);
 					ok();
-					// As stock's agent loop: the follow-ups queued behind the turn run once it ends, in order.
-					const followUps = lanes.followUp.splice(0);
+					// As stock's agent loop: the asides it had not read and the follow-ups queued behind the turn run once
+					// it ends, in order.
+					const followUps = [...lanes.steering.splice(0), ...lanes.followUp.splice(0)];
 					if (followUps.length) emitQueue();
 					for (const text of followUps) prompt(text, () => {});
 					break;
@@ -6743,50 +6931,6 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						message: "",
 						timeout: 600_000,
 					});
-					ok();
-					break;
-				}
-				// Insights › Usage with the line saying why this session is on its account (the parity sheet's
-				// `usage-rotation`): two Claude accounts, the session's with the rotation's last decision.
-				if (line === "fixture:usage-rotation") {
-					const now = Date.now();
-					const windows = (used5: number, used7: number) => [
-						{
-							id: "anthropic:5h",
-							label: "Claude 5 Hour",
-							windowId: "5h",
-							usedFraction: used5,
-							resetsAt: now + 3 * 3_600_000,
-						},
-						{
-							id: "anthropic:7d",
-							label: "Claude 7 Day",
-							windowId: "7d",
-							usedFraction: used7,
-							resetsAt: now + 4 * 86_400_000,
-						},
-					];
-					usageAccounts = [
-						{
-							provider: "anthropic",
-							fetchedAt: now,
-							account: "work@example.com",
-							credentialId: 1,
-							active: true,
-							lastUsedAt: now - 30_000,
-							rotation: { why: "mid-turn", moved: false, phase: "mid-turn", at: now - 45_000 },
-							limits: windows(0.71, 0.38),
-						},
-						{
-							provider: "anthropic",
-							fetchedAt: now,
-							account: "side@example.com",
-							credentialId: 2,
-							active: false,
-							lastUsedAt: now - 3_600_000,
-							limits: windows(0.12, 0.2),
-						},
-					];
 					ok();
 					break;
 				}
@@ -7330,7 +7474,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			// Like stock rpc mode: the host closing stdin ends the process (a running stream timer would not), and a
 			// turn in flight is journaled aborted first.
 			.on("close", () =>
-				stopWhenReleased(() => {
+				whenReleased("holdExit", () => {
 					autopilot.hangUp();
 					recordSessionExit();
 					process.exit(0);

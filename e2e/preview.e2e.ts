@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { acceptLanguages } from "../src/main/system-languages";
 import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
+import { screenshotBitmap } from "./screenshot-bitmap";
 
 test("@smoke isolated Preview loads a local HTTP page without shell privileges", async () => {
 	test.setTimeout(120_000);
@@ -20,6 +21,11 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		}
 		if (request.url === "/error") {
 			response.destroy();
+			return;
+		}
+		if (request.url === "/edit") {
+			response.writeHead(200, { "Content-Type": "text/html" });
+			response.end('<!doctype html><title>Edit fixture</title><input id=field aria-label="Field">');
 			return;
 		}
 		response.writeHead(200, { "Content-Type": "text/html" });
@@ -85,7 +91,46 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 			return child.executeJavaScript("({ title: document.title, node: typeof require, ipc: typeof window.omp })");
 		});
 		expect(security).toEqual({ title: "Local preview fixture", node: "undefined", ipc: "undefined" });
-		expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false);
+		// Electron's isFocused is the window's own activation, not its focused webContents (`Widget::IsActive`,
+		// `-[NSWindow isKeyWindow]`): a test window (OMP_GUI_HEADLESS) is setFocusable(false) and shown inactive.
+		expect(
+			await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused()),
+			"the window was activated: the shell log's window.activation, window.inactive and window.webview_focus lines say by what",
+		).toBe(false);
+		// The application menu's edit commands (Cmd/Ctrl+A, C, V, X, Z) act on the Preview view that holds the window's
+		// native keyboard focus, as Electron's menu roles act on the focused webContents, not on the window's own page.
+		await page.getByRole("textbox", { name: "Preview URL" }).fill(`${url}edit`);
+		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
+		await expect(page.locator("[data-preview-status]")).toHaveText("Edit fixture");
+		// The Preview page is the shell's own Chromium page, not one of the app WebView's targets: Playwright cannot
+		// hold it, so the page is driven through its webContents in main (typed text and focus as the page receives them).
+		const onEditPage = (action: { run: "eval"; code: string } | { run: "text"; text: string } | { run: "focus" }) =>
+			app.evaluate(
+				async ({ webContents }, source) => {
+					const contents = webContents.getAllWebContents().find(item => item.getURL() === source.address);
+					if (!contents) throw new Error("No Preview page target");
+					if (source.action.run === "text") return contents.insertText(source.action.text);
+					if (source.action.run === "focus") {
+						contents.focus();
+						return undefined;
+					}
+					return contents.executeJavaScript(source.action.code, true);
+				},
+				{ address: `${url}edit`, action },
+			);
+		const fieldValue = () => onEditPage({ run: "eval", code: "document.getElementById('field').value" });
+		await onEditPage({ run: "eval", code: "document.getElementById('field').focus()" });
+		await onEditPage({ run: "text", text: "abc" });
+		await expect.poll(fieldValue).toBe("abc");
+		// The native view takes the keyboard focus: the window's focused page is the Preview page now.
+		await onEditPage({ run: "focus" });
+		// What the menu's Select All runs: the window's page is told to select all.
+		await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.selectAll());
+		await onEditPage({ run: "text", text: "x" });
+		await expect.poll(fieldValue).toBe("x");
+		await page.getByRole("textbox", { name: "Preview URL" }).fill(url);
+		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
+		await expect(page.locator("[data-preview-status]")).toHaveText("Local preview fixture");
 		const palette = page.getByRole("dialog").getByRole("combobox");
 		await pressShortcutUntilVisible(page, "ControlOrMeta+k", palette);
 		await palette.fill("Background tasks");
@@ -126,33 +171,26 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 			let nativeCapture = "";
 			await expect
 				.poll(async () => {
-					const captured = await app.evaluate(async ({ webContents }) => {
+					nativeCapture = await app.evaluate(async ({ webContents }) => {
 						const child = webContents
 							.getAllWebContents()
 							.find(contents => contents.getTitle() === "Local preview fixture");
 						if (!child) throw new Error("Missing native preview capture");
 						const image = await child.capturePage(undefined, { stayHidden: true });
-						const bitmap = image.toBitmap();
-						return {
-							painted: bitmap.some(
-								(alpha, index) =>
-									index % 4 === 3 &&
-									alpha > 0 &&
-									Math.min(bitmap[index - 3], bitmap[index - 2], bitmap[index - 1]) < 200,
-							),
-							png: image.toPNG().toString("base64"),
-						};
+						return image.toPNG().toString("base64");
 					});
-					nativeCapture = captured.png;
-					return captured.painted;
+					const bitmap = await screenshotBitmap(Buffer.from(nativeCapture, "base64"));
+					return bitmap.some(
+						(alpha, index) =>
+							index % 4 === 3 &&
+							alpha > 0 &&
+							Math.min(bitmap[index - 3], bitmap[index - 2], bitmap[index - 1]) < 200,
+					);
 				})
 				.toBe(true);
-			// Shell capture does not composite native child views; keep the observed painted child frame separately.
-			const shellCapture = await app.evaluate(async ({ BrowserWindow }) =>
-				(await BrowserWindow.getAllWindows()[0].capturePage(undefined, { stayHidden: true }))
-					.toPNG()
-					.toString("base64"),
-			);
+			// Capture the actual app WebView through its test driver, not the separate Preview CDP service.
+			// Native child pixels are checked and retained independently above.
+			const shellCapture = (await page.screenshot({ animations: "disabled" })).toString("base64");
 			await fs.mkdir(screenshotDir, { recursive: true });
 			await fs.writeFile(path.join(screenshotDir, `preview-${theme}.png`), Buffer.from(shellCapture, "base64"));
 			await fs.writeFile(

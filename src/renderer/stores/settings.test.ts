@@ -6,9 +6,9 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RpcResponse } from "../../shared/rpc-types";
+import type { RpcCommand, RpcResponse } from "../../shared/rpc-types";
 import { routeCommands } from "../test-support/route-commands";
-import { useSettingsStore } from "./settings";
+import { createSettingsStore, useSettingsStore } from "./settings";
 
 const getSettings = vi.fn<(paths?: string[]) => Promise<RpcResponse>>();
 
@@ -23,10 +23,37 @@ function success(values: Record<string, unknown>): Promise<RpcResponse> {
 
 afterEach(() => {
 	getSettings.mockReset();
+	Reflect.deleteProperty(ompGlobal.window.omp, "prefs");
 	useSettingsStore.getState().reset();
 });
 
 describe("settings store display sync", () => {
+	it("reads approval without migrating preferences during loss recovery", async () => {
+		const writes = vi.fn();
+		const prefs = { get: vi.fn(async () => "write"), set: vi.fn(async () => {}) };
+		Reflect.set(ompGlobal.window.omp, "prefs", prefs);
+		const command = async (request: RpcCommand): Promise<RpcResponse> => {
+			if (request.type === "set_setting") writes(request);
+			return {
+				type: "response",
+				command: request.type,
+				success: true,
+				data: { values: { "tools.approvalMode": "yolo" }, provenance: { "tools.approvalMode": { layers: [] } } },
+			};
+		};
+		const store = createSettingsStore(command);
+		expect(await Reflect.apply(store.getState().syncApproval, undefined, [{ readOnly: true }])).toBe(true);
+		expect(store.getState().approvalMode).toBe("yolo");
+		expect(writes).not.toHaveBeenCalled();
+		expect(prefs.set).not.toHaveBeenCalled();
+	});
+
+	it("does not report an incomplete display-settings read as fresh", async () => {
+		getSettings.mockReturnValue(success({ hideThinkingBlock: true }));
+		expect(await useSettingsStore.getState().syncDisplaySettings()).toBe(false);
+		expect(useSettingsStore.getState().hideThinkingBlock).toBe(true);
+	});
+
 	it("maps display.* and goal.statusInFooter onto store fields", async () => {
 		getSettings.mockResolvedValueOnce(
 			await success({

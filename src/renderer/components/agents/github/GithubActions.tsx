@@ -19,7 +19,7 @@ import {
 	Modal,
 	Select,
 } from "../../common";
-import { type GithubSectionProps, GithubToolbar, NeedsRepo, RunState, useGithubMutation } from "./shared";
+import { type GithubSectionProps, GithubToolbar, NeedsRepo, pausedNotice, RunState, useGithubMutation } from "./shared";
 
 type RunAction = { kind: "rerun"; failedOnly: boolean } | { kind: "cancel" };
 
@@ -131,7 +131,12 @@ export function RunDetail({
 			</section>
 			{log && (
 				<section aria-label={t(log.failedOnly ? "github.runs.failedLog" : "github.runs.log")}>
-					<AsyncSection error={logLoad.error} loading={logLoad.loading} onRetry={logLoad.reload}>
+					<AsyncSection
+						error={logLoad.error}
+						loading={logLoad.loading}
+						notice={pausedNotice(logLoad.pausedUntil)}
+						onRetry={logLoad.reload}
+					>
 						{logLoad.data && (
 							<>
 								{logLoad.data.truncated && (
@@ -239,6 +244,7 @@ export function GithubActions({ target, repoName, targetKey }: GithubSectionProp
 							error={detail.error}
 							hasData={detail.data !== null}
 							loading={detail.loading && !detail.data}
+							notice={pausedNotice(detail.pausedUntil)}
 							onRetry={detail.reload}
 						>
 							{detail.data && (
@@ -263,6 +269,7 @@ export function GithubActions({ target, repoName, targetKey }: GithubSectionProp
 						error={runs.error}
 						hasData={rows.length > 0}
 						loading={runs.loading && !runs.data}
+						notice={pausedNotice(runs.pausedUntil)}
 						onRetry={runs.reload}
 					>
 						<ul className="flex flex-col gap-0.5">

@@ -2,24 +2,26 @@
 //! and branch, its `worktree add` with the branch rolled back when the add fails, the checks before a removal and
 //! the removal itself, and a session worktree's snapshot and removal. Each method is one whole step: main runs the
 //! ones that change the repository under its lock (`withRepoLock`), so a stopped holder cancels the request and the
-//! lock's next holder starts once its gits exited. What main keeps: where worktrees go (omp's
-//! `git.worktree_location`), the folder checks and `mkdir` its fenced files make under the lock (`fenced-fs.ts`), the
-//! removal guard on main's own real paths (`removableWorktreePath`) and the exit policy. A refusal is a fault whose
-//! code is the `LocalCommandError` code the TypeScript threw; git's own failure keeps run's `git_exit`.
+//! lock's next holder starts once its gits and disk work have ended. Main gets the worktree root and repo hash
+//! from omp's `git.worktree_location`. A refusal carries the code the TypeScript caller exposes.
 
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::parse;
 use super::read::{self, blocking};
-use super::run::Git;
+use super::run::{Git, failure};
+use crate::disk::tree::live;
 use crate::fs::disk;
 use crate::fs::error::{Codes, NodeError};
 use crate::fs::order::js_trim;
-use crate::run::{Opts, Output};
-use crate::server::Fault;
+use crate::run::{Opts, Output, Runner};
+use crate::server::{Fault, Scope};
 
 fn refuse(code: &'static str, message: impl Into<String>) -> Fault {
     Fault::new(code, message)
@@ -62,44 +64,155 @@ async fn add_worktree(
     git.text_with(primary, args, opts).await.map(drop)
 }
 
-/// The main checkout a new worktree is cut from and the commit its branch starts at.
+/// A fetch of the remote default branch younger than this is not repeated (the dialog's prefetch, then its create).
+const FETCH_FRESH: Duration = Duration::from_secs(30);
+const FETCH_TIMEOUT_MS: u64 = 60_000;
+
+/// Per main checkout, when its default branch was last fetched. One fetch at a time per repository: a create that
+/// follows a prefetch still running waits for it, then skips its own.
+type LastFetch = Arc<tokio::sync::Mutex<Option<Instant>>>;
+static FETCHES: LazyLock<Mutex<HashMap<String, LastFetch>>> = LazyLock::new(Default::default);
+
+/// What fetching the remote default branch before a `default`-based worktree did: `behind` counts the commits the
+/// fetch brought, `subjects` the newest three of them; `fetched` is false when a fetch under 30 s old was reused or
+/// the fetch failed (`error`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseFetch {
+    #[serde(rename = "ref")]
+    reference: String,
+    fetched: bool,
+    behind: u32,
+    subjects: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// The remote's default branch as `origin/<name>`, none when `origin/HEAD` names none.
+async fn default_branch(git: &Git, primary: &str) -> Result<Option<String>, Fault> {
+    let output = git
+        .raw(
+            primary,
+            &[
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ],
+        )
+        .await?;
+    let text = output.text();
+    let name = js_trim(&text);
+    Ok((output.code == 0 && !name.is_empty()).then(|| name.to_owned()))
+}
+
+/// `git fetch origin <branch>` for the remote-tracking `reference` (`origin/main`): only that ref moves, never a
+/// local branch or a checkout. A failed or timed-out fetch is reported, never a fault.
+async fn fetch_base(git: &Git, primary: &str, reference: &str) -> Result<BaseFetch, Fault> {
+    let mut report = BaseFetch {
+        reference: reference.to_owned(),
+        fetched: false,
+        behind: 0,
+        subjects: Vec::new(),
+        error: None,
+    };
+    let Some(branch) = reference.strip_prefix("origin/") else {
+        return Ok(report);
+    };
+    let slot = FETCHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(primary.to_owned())
+        .or_default()
+        .clone();
+    let mut last = slot.lock().await;
+    if last.is_some_and(|at| at.elapsed() < FETCH_FRESH) {
+        return Ok(report);
+    }
+    let before = rev_parse(git, primary, reference).await?;
+    let args = ["fetch", "--quiet", "--no-tags", "origin", branch];
+    let opts = Opts {
+        timeout_ms: Some(FETCH_TIMEOUT_MS),
+        ..Opts::default()
+    };
+    match git.run(primary, &args, opts).await {
+        Ok(output) if output.code == 0 => {}
+        Ok(output) => {
+            report.error = Some(failure(&args, &output).message);
+            return Ok(report);
+        }
+        Err(fault) if fault == Fault::cancelled() => return Err(fault),
+        Err(fault) => {
+            report.error = Some(fault.message);
+            return Ok(report);
+        }
+    }
+    *last = Some(Instant::now());
+    report.fetched = true;
+    let after = rev_parse(git, primary, reference).await?;
+    if let (Some(old), Some(new)) = (before, after)
+        && old != new
+    {
+        let range = format!("{old}..{new}");
+        let count = git.text(primary, &["rev-list", "--count", &range]).await?;
+        report.behind = js_trim(&count).parse().unwrap_or(0);
+        report.subjects = git
+            .text(primary, &["log", "--format=%s", "-3", &range])
+            .await?
+            .lines()
+            .map(str::to_owned)
+            .collect();
+    }
+    Ok(report)
+}
+
+/// The worktree dialog's prefetch when it opens: the fetch `plan` makes for `default`, so the create that follows
+/// within 30 s skips its own. None outside a repository or without a remote default branch.
+pub async fn prefetch(git: &Git, cwd: &str) -> Result<Option<BaseFetch>, Fault> {
+    if read::repo_root(git, cwd).await?.is_none() {
+        return Ok(None);
+    }
+    let primary = read::primary_root(git, cwd).await?;
+    match default_branch(git, &primary).await? {
+        Some(reference) => fetch_base(git, &primary, &reference).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The main checkout a new worktree is cut from and the commit its branch starts at; `base` only for `default`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
     primary: String,
+    main_checkout: String,
     start_point: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base: Option<BaseFetch>,
 }
 
 /// Before a worktree is made: `cwd` is in a repository, its main checkout, and the start point `base_ref` names:
-/// `HEAD` (the default), `default` (the remote's default branch, else HEAD), or any branch, tag or commit the
-/// repository resolves. A ref that resolves to no commit, or reads as a git option, is refused.
-pub async fn plan(git: &Git, cwd: &str, base_ref: Option<&str>) -> Result<Plan, Fault> {
+/// `HEAD` (the default), `default` (the remote's default branch, fetched first, else HEAD), or any branch, tag or
+/// commit the repository resolves. A ref that resolves to no commit, or reads as a git option, is refused.
+pub async fn plan(
+    git: &Git,
+    cwd: &str,
+    checkout_spelling: String,
+    base_ref: Option<&str>,
+) -> Result<Plan, Fault> {
     if read::repo_root(git, cwd).await?.is_none() {
         return Err(refuse("not_a_repo", format!("Not a git repository: {cwd}")));
     }
     let primary = read::primary_root(git, cwd).await?;
+    let mut fetch = None;
     let start_point = match base_ref {
         None | Some("HEAD") => "HEAD".to_owned(),
-        Some("default") => {
-            let output = git
-                .raw(
-                    &primary,
-                    &[
-                        "symbolic-ref",
-                        "--quiet",
-                        "--short",
-                        "refs/remotes/origin/HEAD",
-                    ],
-                )
-                .await?;
-            let text = output.text();
-            let name = js_trim(&text);
-            if output.code == 0 && !name.is_empty() {
-                name.to_owned()
-            } else {
-                "HEAD".to_owned()
+        Some("default") => match default_branch(git, &primary).await? {
+            Some(name) => {
+                fetch = Some(fetch_base(git, &primary, &name).await?);
+                name
             }
-        }
+            None => "HEAD".to_owned(),
+        },
         Some(base) => {
             let resolves = !base.starts_with('-')
                 && rev_parse(git, cwd, &format!("{base}^{{commit}}"))
@@ -116,21 +229,123 @@ pub async fn plan(git: &Git, cwd: &str, base_ref: Option<&str>) -> Result<Plan, 
             base.to_owned()
         }
     };
+    // Node's path.resolve spelling is the identity held by tabs (notably a Windows 8.3 path).
+    let (given, main) = tokio::join!(disk::real(cwd), disk::real(&primary));
+    let same = match (given, main) {
+        (Some(a), Some(b)) if cfg!(windows) => {
+            a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        }
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    };
     Ok(Plan {
+        main_checkout: if same {
+            checkout_spelling
+        } else {
+            primary.clone()
+        },
         primary,
         start_point,
+        base: fetch,
     })
 }
 
-#[derive(Serialize)]
-pub struct Added {
-    taken: bool,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AddParams {
+    git: Runner,
+    primary: String,
+    base_cwd: String,
+    root: String,
+    hash: String,
+    slug: String,
+    branch_prefix: String,
+    start_point: String,
+    source: Option<Source>,
+    add_timeout_ms: u64,
 }
 
-/// A worktree at `target` on a new branch `branch` from `start_point`; `taken` when the branch already exists (the
-/// caller tries its next name). A failed `branch` or `worktree add` deletes the branch again, so a retry does not
-/// trip over a half-made ref.
-pub async fn add(
+#[derive(Serialize)]
+pub(super) struct Added {
+    path: String,
+    branch: String,
+}
+
+/// An existing folder (even empty) is occupied. Never start a mkdir or git after a cancelled disk wait.
+fn free_folder(scope: Scope, path: PathBuf) -> Result<Option<String>, Fault> {
+    live(&scope)?;
+    if path.exists() {
+        return Ok(None);
+    }
+    let parent = path.parent().expect("a candidate has a folder name");
+    live(&scope)?;
+    let parent_text = parent.to_string_lossy();
+    if parent_text.contains('\0') {
+        return Err(NodeError::nul_in_path("path", &parent_text).fault(Codes::None));
+    }
+    std::fs::create_dir_all(parent)
+        .map_err(|error| NodeError::new(&error, "mkdir", Some(&parent_text)).fault(Codes::None))?;
+    live(&scope)?;
+    Ok(Some(
+        path.into_os_string()
+            .into_string()
+            .expect("UTF-8 worktree location"),
+    ))
+}
+
+pub(super) async fn add(params: AddParams, scope: Scope) -> Result<Added, Fault> {
+    let git = Git::new(params.git, scope.clone());
+    let root = PathBuf::from(read::native(&params.root));
+    for suffix in 1..=100 {
+        let suffixed;
+        let candidate = if suffix == 1 {
+            &params.slug
+        } else {
+            suffixed = format!("{}-{suffix}", params.slug);
+            &suffixed
+        };
+        let path = root.join(format!("gui-{candidate}-{}", params.hash));
+        let held = scope.clone();
+        let Some(path) = blocking(move || free_folder(held, path)).await?? else {
+            continue;
+        };
+        let branch = if let Some(source) = params.source {
+            add_named(
+                &git,
+                &params.primary,
+                &params.base_cwd,
+                &path,
+                &source,
+                params.add_timeout_ms,
+            )
+            .await?;
+            source.name
+        } else {
+            let branch = format!("{}{candidate}", params.branch_prefix);
+            if branch_exists(&git, &params.primary, &branch).await? {
+                continue;
+            }
+            add_new(
+                &git,
+                &params.primary,
+                &params.base_cwd,
+                &path,
+                &branch,
+                &params.start_point,
+                params.add_timeout_ms,
+            )
+            .await?;
+            branch
+        };
+        return Ok(Added { path, branch });
+    }
+    Err(refuse(
+        "worktree_create_failed",
+        "No available worktree name after 100 attempts",
+    ))
+}
+
+async fn add_new(
     git: &Git,
     primary: &str,
     base_cwd: &str,
@@ -138,31 +353,26 @@ pub async fn add(
     branch: &str,
     start_point: &str,
     add_timeout_ms: u64,
-) -> Result<Added, Fault> {
-    if branch_exists(git, primary, branch).await? {
-        return Ok(Added { taken: true });
-    }
-    let made = async {
-        git.text(base_cwd, &["branch", "--no-track", branch, start_point])
-            .await?;
-        add_worktree(
-            git,
-            primary,
-            &["worktree", "add", target, branch],
-            add_timeout_ms,
-        )
-        .await
-    };
-    if let Err(error) = made.await {
+) -> Result<(), Fault> {
+    git.text(base_cwd, &["branch", "--no-track", branch, start_point])
+        .await?;
+    if let Err(error) = add_worktree(
+        git,
+        primary,
+        &["worktree", "add", target, branch],
+        add_timeout_ms,
+    )
+    .await
+    {
         let _ = git.raw(primary, &["branch", "-D", branch]).await;
         return Err(error);
     }
-    Ok(Added { taken: false })
+    Ok(())
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq)]
+#[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Mode {
+enum Mode {
     New,
     Local,
     Remote,
@@ -170,7 +380,7 @@ pub enum Mode {
 
 /// The branch a caller names (main checked its shape: `worktreeBranchSource`).
 #[derive(Deserialize)]
-pub struct Source {
+struct Source {
     name: String,
     mode: Mode,
     remote: Option<String>,
@@ -180,7 +390,7 @@ pub struct Source {
 /// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else HEAD), an existing
 /// local one, or a new local one tracking `<remote>/<name>`. The name is never changed: a taken, missing or invalid
 /// one is refused, and a new branch whose `worktree add` failed is deleted again.
-pub async fn add_named(
+async fn add_named(
     git: &Git,
     primary: &str,
     base_cwd: &str,
@@ -209,14 +419,7 @@ pub async fn add_named(
                 return Err(failed(format!("The branch {name} already exists.")));
             }
             let from = source.from.as_deref().unwrap_or("HEAD");
-            git.text(base_cwd, &["branch", "--no-track", name, from])
-                .await?;
-            let args = ["worktree", "add", target, name];
-            if let Err(error) = add_worktree(git, primary, &args, add_timeout_ms).await {
-                let _ = git.raw(primary, &["branch", "-D", name]).await;
-                return Err(error);
-            }
-            Ok(())
+            add_new(git, primary, base_cwd, target, name, from, add_timeout_ms).await
         }
         Mode::Local => {
             if !exists {
@@ -258,12 +461,26 @@ pub async fn add_named(
 #[derive(Serialize)]
 pub struct Removal {
     primary: String,
+    path: String,
 }
 
-/// Before `path` (a real path under the worktree root, main's guard) is removed: it is a checkout root, git lists it
-/// as a linked worktree of its repository (never the main checkout), and unless `force` nothing in it is uncommitted.
-/// Answers the main checkout, whose lock the removal takes.
-pub async fn removal(git: &Git, path: &str, force: bool) -> Result<Removal, Fault> {
+/// Both paths must resolve; a symlink in the root may not authorize removal of another checkout.
+async fn removable_path(root: &str, path: &str) -> Option<String> {
+    if !read::is_absolute(path) {
+        return None;
+    }
+    let (root, path) = tokio::join!(disk::real(root), disk::real(path));
+    let path = path?.into_os_string().into_string().ok()?;
+    super::orphans::inside(root?.to_str()?, &path).then_some(path)
+}
+
+/// The checked target and its repository lock: a linked checkout under `root`, clean unless forced.
+pub async fn removal(git: &Git, path: &str, root: &str, force: bool) -> Result<Removal, Fault> {
+    let target = removable_path(root, path).await.ok_or_else(|| {
+        let name = if path.is_empty() { "(no path)" } else { path };
+        refuse("worktree_outside_root", format!("Refusing to remove {name}: only registered linked worktrees under {root} can be removed (check worktree.base)."))
+    })?;
+    let path = target.as_str();
     let not_a_worktree = |what: &str| refuse("not_a_worktree", format!("{what}: {path}"));
     let checkout_root = read::repo_root(git, path).await.ok().flatten();
     let Some(checkout_root) = checkout_root else {
@@ -311,7 +528,112 @@ pub async fn removal(git: &Git, path: &str, force: bool) -> Result<Removal, Faul
             ));
         }
     }
-    Ok(Removal { primary })
+    Ok(Removal {
+        primary,
+        path: target,
+    })
+}
+
+/// omp's service broker keeps its project's folder as its working folder for 3 s after the project's last omp exits
+/// (stock launch/broker.ts `DEFAULT_IDLE_GRACE_MS`); a removal right after a tab closed waits that out, with room.
+#[cfg(windows)]
+const HELD_FOLDER_MS: u64 = 10_000;
+
+/// `git worktree remove <flags> <target>`, every removal of a session's checkout. On Windows git cannot delete a folder
+/// some process still has as its working folder (omp's service broker in the moments after its tab closed; omp 19's
+/// per-user daemon, which takes the folder of the session that first needed it, for as long as any omp is connected):
+/// it empties the folder, drops the worktree from its list ("there's no going back from here", builtin/worktree.c)
+/// and fails with `failed to delete '<folder>': Permission denied` after well under a second. The folder left behind,
+/// no longer a worktree, is then removed once its holder lets go (within `HELD_FOLDER_MS`), and the answer is git's
+/// success. A holder that stays past that leaves only an empty folder, written down for disk care's later pass
+/// (`left_behind.rs`), and the answer is success too; a folder with anything still in it, or one the core cannot
+/// write down, keeps git's failure. A worktree git still lists is never touched here.
+pub(crate) async fn git_remove(
+    git: &Git,
+    primary: &str,
+    flags: &[&str],
+    target: &str,
+    opts: Opts<'_>,
+) -> Result<Output, Fault> {
+    let mut args = vec!["worktree", "remove"];
+    args.extend_from_slice(flags);
+    args.push(target);
+    let output = git.run(primary, &args, opts).await?;
+    #[cfg(windows)]
+    if output.code != 0 && left_behind(git, primary, target).await? {
+        let succeeded = || Output {
+            code: 0,
+            stdout: Vec::new(),
+            stderr: String::new(),
+            truncated: false,
+        };
+        let folder = std::path::PathBuf::from(target);
+        let held = folder.clone();
+        if blocking(move || remove_when_free(&folder)).await? {
+            return Ok(succeeded());
+        }
+        if let Some(file) = super::left_behind::file()
+            && blocking(move || super::left_behind::is_empty_folder(&held)).await?
+        {
+            let entry = super::left_behind::Entry {
+                path: target.to_owned(),
+                primary: primary.to_owned(),
+            };
+            match super::left_behind::record(&file, entry) {
+                Ok(()) => {
+                    eprintln!(
+                        "[left-behind] {target}: removed for git; its empty folder is still some process's working folder and is left for disk care"
+                    );
+                    return Ok(succeeded());
+                }
+                Err(error) => eprintln!("[left-behind] {target} not written down: {error}"),
+            }
+        }
+    }
+    Ok(output)
+}
+
+/// `target` is still there and git no longer lists it as a worktree of `primary`.
+#[cfg(windows)]
+async fn left_behind(git: &Git, primary: &str, target: &str) -> Result<bool, Fault> {
+    let list = git
+        .raw(primary, &["worktree", "list", "--porcelain", "-z"])
+        .await?;
+    if list.code != 0 {
+        return Ok(false);
+    }
+    let listed: Vec<String> = parse::worktree_paths(&list.text())
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let target = target.to_owned();
+    blocking(move || {
+        let Ok(own) = real(&target) else {
+            return false;
+        };
+        !listed
+            .iter()
+            .any(|path| real(path).is_ok_and(|path| path == own))
+    })
+    .await
+}
+
+/// Removes `folder` (never following a link out of it) once no process holds it, trying until `HELD_FOLDER_MS` ran out:
+/// the holder's exit has no event to wait on.
+#[cfg(windows)]
+fn remove_when_free(folder: &Path) -> bool {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_millis(HELD_FOLDER_MS);
+    let scope = crate::server::Scope::detached();
+    loop {
+        if crate::disk::tree::remove(folder, false, &scope).is_ok() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// `worktree remove --force` with its own timeout, which a person sees refused with git's reason.
@@ -325,8 +647,7 @@ async fn remove_worktree(
         timeout_ms: Some(timeout_ms),
         ..Opts::default()
     };
-    git.run(primary, &["worktree", "remove", "--force", target], opts)
-        .await
+    git_remove(git, primary, &["--force"], target, opts).await
 }
 
 #[derive(Serialize)]
@@ -366,6 +687,7 @@ pub struct Lifecycle {
     branch: String,
     source_cwd: String,
     base_commit: String,
+    root: String,
 }
 
 /// Whether `dir` is itself a checkout root (a parent repository does not count).
@@ -389,8 +711,27 @@ pub struct State {
     off_branch: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExitPolicy {
+    Keep,
+    Ask,
+    Remove,
+}
+
+impl ExitPolicy {
+    fn action(self, state: &State) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Remove if !state.dirty && !state.moved && !state.off_branch => "remove",
+            Self::Ask | Self::Remove => "prompt",
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct Snapshot {
+    action: &'static str,
     state: State,
     fingerprint: String,
     present: bool,
@@ -409,7 +750,11 @@ fn hash_parts(parts: &[String]) -> String {
 /// The worktree's state at a session's exit (stock `snapshotSessionWorktree`) and a fingerprint that changes whenever
 /// any file, ref or `HEAD` in it does. A missing worktree is not dirty and not off its branch; a deleted branch has
 /// not moved; a missing source repository counts as moved, so the branch is never deleted.
-pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault> {
+pub async fn snapshot(
+    git: &Git,
+    worktree: &Lifecycle,
+    policy: ExitPolicy,
+) -> Result<Snapshot, Fault> {
     let mut moved = true;
     let mut tip = None;
     if read::repo_root(git, &worktree.source_cwd)
@@ -424,12 +769,14 @@ pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault
     }
     let tip = tip.unwrap_or_default();
     if !is_checkout_root(git, &worktree.path).await? {
+        let state = State {
+            dirty: false,
+            moved,
+            off_branch: false,
+        };
         return Ok(Snapshot {
-            state: State {
-                dirty: false,
-                moved,
-                off_branch: false,
-            },
+            action: policy.action(&state),
+            state,
             fingerprint: format!("missing\0{tip}"),
             present: false,
         });
@@ -483,6 +830,7 @@ pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault
     })
     .await?;
     Ok(Snapshot {
+        action: policy.action(&state),
         state,
         fingerprint: hash_parts(&parts),
         present: true,
@@ -492,15 +840,27 @@ pub async fn snapshot(git: &Git, worktree: &Lifecycle) -> Result<Snapshot, Fault
 #[derive(Serialize)]
 pub struct SessionRemoval {
     primary: String,
-    present: bool,
+    target: Option<String>,
 }
 
-/// Before a session worktree is removed: the main checkout of its source (whose lock the removal takes) and whether
-/// the worktree is still a checkout of its own.
+/// A present checkout must pass the same confinement check as a manual removal. A vanished one is only pruned.
 pub async fn session_removal(git: &Git, worktree: &Lifecycle) -> Result<SessionRemoval, Fault> {
     let primary = read::primary_root(git, &worktree.source_cwd).await?;
-    let present = is_checkout_root(git, &worktree.path).await?;
-    Ok(SessionRemoval { primary, present })
+    let target = if is_checkout_root(git, &worktree.path).await? {
+        let Some(target) = removable_path(&worktree.root, &worktree.path).await else {
+            return Err(refuse(
+                "worktree_outside_root",
+                format!(
+                    "Refusing to remove {}: only worktrees under {} can be removed.",
+                    worktree.path, worktree.root
+                ),
+            ));
+        };
+        Some(target)
+    } else {
+        None
+    };
+    Ok(SessionRemoval { primary, target })
 }
 
 /// Force-removes the session worktree at `target` (none when it already vanished: git's list is only pruned) and
@@ -532,4 +892,168 @@ pub async fn session_remove(
         )));
     }
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::git::run::tests::git;
+    use crate::git::scm::tests::{repo, sh};
+
+    /// omp's service broker takes its omp's working folder and stays about 3 s after the tab's omp exits, so a worktree
+    /// removed right after its tab closed is still some process's working folder. The holder here is that process:
+    /// its lifetime (`ping` for about 2 s) is the clock being modelled, nothing the test waits out on its own.
+    #[tokio::test]
+    async fn removes_a_worktree_a_process_still_holds_as_its_working_folder() {
+        let primary = repo("held-worktree");
+        let tree = primary.with_file_name(format!(
+            "{}-tree",
+            primary.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&tree);
+        sh(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "held",
+                tree.to_str().unwrap(),
+            ],
+        );
+        let mut holder = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 3 127.0.0.1 >NUL"])
+            .current_dir(&tree)
+            .spawn()
+            .unwrap();
+        let removed = remove(
+            &git(),
+            primary.to_str().unwrap(),
+            tree.to_str().unwrap(),
+            60_000,
+        )
+        .await;
+        let _ = holder.wait();
+        let listed = sh(&primary, &["worktree", "list", "--porcelain"]);
+        assert!(
+            removed.is_ok(),
+            "{:?}; folder left: {}; listed: {listed}",
+            removed.as_ref().err().map(|fault| &fault.message),
+            tree.exists()
+        );
+        assert!(!tree.exists());
+        assert!(!listed.contains("refs/heads/held"), "{listed}");
+        let _ = std::fs::remove_dir_all(&primary);
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use crate::git::run::tests::git;
+    use crate::git::scm::tests::{repo_at, sh};
+    use std::path::PathBuf;
+
+    /// A bare `origin`, a clone of it (so `origin/HEAD` names `origin/main`), and the repository that pushes to it.
+    fn remote_and_clone(name: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "ompdesk-core-wt-fetch-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pusher = dir.join("pusher");
+        repo_at(&pusher);
+        sh(&dir, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
+        sh(&pusher, &["remote", "add", "origin", "../origin.git"]);
+        sh(&pusher, &["push", "-q", "origin", "main"]);
+        sh(&dir, &["clone", "-q", "origin.git", "clone"]);
+        (pusher, dir.join("clone"))
+    }
+
+    fn push_commit(pusher: &Path, subject: &str) -> String {
+        sh(pusher, &["commit", "-q", "--allow-empty", "-m", subject]);
+        sh(pusher, &["push", "-q", "origin", "main"]);
+        sh(pusher, &["rev-parse", "HEAD"])
+    }
+
+    fn s(path: &Path) -> &str {
+        path.to_str().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_default_base_starts_at_the_freshly_fetched_tip_and_a_second_plan_reuses_the_fetch() {
+        let (pusher, clone) = remote_and_clone("default");
+        let fresh = push_commit(&pusher, "fresh work");
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        assert_eq!(made.start_point, "origin/main");
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), fresh);
+        let base = made.base.unwrap();
+        assert_eq!(
+            (base.reference.as_str(), base.fetched, base.behind),
+            ("origin/main", true, 1)
+        );
+        assert_eq!(base.subjects, ["fresh work"]);
+        assert!(base.error.is_none());
+        assert_ne!(
+            sh(&clone, &["rev-parse", "main"]),
+            fresh,
+            "the local branch stays where it was"
+        );
+
+        push_commit(&pusher, "later work");
+        let again = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        let base = again.base.unwrap();
+        assert_eq!((base.fetched, base.behind), (false, 0));
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), fresh);
+    }
+
+    #[tokio::test]
+    async fn a_prefetch_spares_the_create_that_follows_its_fetch() {
+        let (pusher, clone) = remote_and_clone("prefetch");
+        let fresh = push_commit(&pusher, "fresh work");
+        let fetched = prefetch(&git(), s(&clone)).await.unwrap().unwrap();
+        assert_eq!((fetched.fetched, fetched.behind), (true, 1));
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        let base = made.base.unwrap();
+        assert_eq!((base.fetched, base.behind), (false, 0));
+        assert_eq!(sh(&clone, &["rev-parse", made.start_point.as_str()]), fresh);
+    }
+
+    #[tokio::test]
+    async fn a_head_base_never_fetches() {
+        let (pusher, clone) = remote_and_clone("head");
+        let before = sh(&clone, &["rev-parse", "origin/main"]);
+        push_commit(&pusher, "fresh work");
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), None)
+            .await
+            .unwrap();
+        assert_eq!(made.start_point, "HEAD");
+        assert!(made.base.is_none());
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), before);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_origin_is_reported_and_the_plan_goes_on_from_the_local_ref() {
+        let (_pusher, clone) = remote_and_clone("unreachable");
+        let before = sh(&clone, &["rev-parse", "origin/main"]);
+        sh(
+            &clone,
+            &["remote", "set-url", "origin", "../no-such-origin.git"],
+        );
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), Some("default"))
+            .await
+            .unwrap();
+        assert_eq!(made.start_point, "origin/main");
+        let base = made.base.unwrap();
+        assert!(!base.fetched);
+        assert!(base.error.is_some_and(|error| !error.is_empty()));
+        assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), before);
+    }
 }

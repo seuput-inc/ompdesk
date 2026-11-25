@@ -120,8 +120,11 @@ for (const language of variants(["en", "ko"] as const))
 					const aside = page.locator("aside[data-docked]");
 					const view = aside.locator('[data-panel-subagent="sa-explore"]');
 					await expect(view).toBeVisible();
-					const asideBox = await aside.boundingBox();
-					expect(Math.abs((asideBox?.width ?? 0) - width)).toBeLessThanOrEqual(2);
+					// A fresh profile has no last read of the width, so the first open mounts at the default and the saved
+					// width lands as soon as the pref's read answers (a few ms; a host round trip on Windows).
+					await expect
+						.poll(async () => Math.abs(((await aside.boundingBox())?.width ?? 0) - width))
+						.toBeLessThanOrEqual(2);
 
 					// Header: one line, name and model mark left, status/tokens/clock/actions right.
 					const header = view.locator(".omp-subagent-header");

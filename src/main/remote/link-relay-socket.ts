@@ -17,7 +17,7 @@ export class LinkRelaySocket implements RelaySocket {
 	readonly #rtab: string;
 	readonly #ended: () => void;
 	readonly #messageListeners: Array<(data: string) => void> = [];
-	readonly #closeListeners: Array<() => void> = [];
+	readonly #closeListeners: Array<(lost: boolean) => void> = [];
 	readonly #opened = Promise.withResolvers<void>();
 	#open = false;
 	#closed = false;
@@ -59,7 +59,7 @@ export class LinkRelaySocket implements RelaySocket {
 		this.#messageListeners.push(listener);
 	}
 
-	onClose(listener: () => void): void {
+	onClose(listener: (lost: boolean) => void): void {
 		this.#closeListeners.push(listener);
 	}
 
@@ -70,18 +70,18 @@ export class LinkRelaySocket implements RelaySocket {
 		else this.#end(false, new Error("The browser relay closed"));
 	}
 
-	/** The link dropped: the host closes its end on the connection ending. */
+	/** The link dropped: the host closes its end on the connection ending; the relay there may still run. */
 	linkLost(): void {
-		this.#end(false, new Error("The link to the host dropped"));
+		this.#end(false, new Error("The link to the host dropped"), true);
 	}
 
-	#end(tellHost: boolean, reason: unknown): void {
+	#end(tellHost: boolean, reason: unknown, lost = false): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#open = false;
 		this.#opened.reject(reason);
 		if (tellHost) this.#link.request(PREVIEW_RELAY_METHODS.close, { rtab: this.#rtab }).catch(() => {});
-		for (const listener of this.#closeListeners) listener();
+		for (const listener of this.#closeListeners) listener(lost);
 		this.#ended();
 	}
 }

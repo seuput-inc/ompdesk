@@ -26,12 +26,11 @@ class FakeImage implements PaintImage {
 	getSize() {
 		return { width: this.width, height: this.height };
 	}
-	toJPEG(quality: number): Buffer {
+	async jpeg(options: { quality: number; width?: number }) {
 		FakeImage.encodes += 1;
-		return Buffer.alloc(Math.round(this.width * this.height * (quality / 1000)), 1);
-	}
-	resize(options: { width: number }): PaintImage {
-		return new FakeImage(options.width, Math.round((this.height * options.width) / this.width));
+		const width = options.width !== undefined && options.width < this.width ? options.width : this.width;
+		const height = Math.round((this.height * width) / this.width);
+		return { data: Buffer.alloc(Math.round(width * height * (options.quality / 1000)), 1), width, height };
 	}
 }
 
@@ -142,6 +141,66 @@ describe("PageStream", () => {
 		await vi.advanceTimersByTimeAsync(600);
 		expect(await held).toEqual({ frame: null, dialogs: [] });
 		expect(FakeImage.encodes).toBe(1);
+	});
+
+	/** An image whose encode waits for `release()`: the shell is still working on it. */
+	class SlowImage extends FakeImage {
+		readonly release: () => void;
+		readonly #gate: Promise<void>;
+		constructor(width: number, height: number) {
+			super(width, height);
+			const { promise, resolve } = Promise.withResolvers<void>();
+			this.#gate = promise;
+			this.release = resolve;
+		}
+		override async jpeg(options: { quality: number; width?: number }) {
+			await this.#gate;
+			return super.jpeg(options);
+		}
+	}
+
+	it("drops a frame whose page navigated while the shell was encoding it", async () => {
+		const { page, stream } = setup();
+		const stale = new SlowImage(780, 1688);
+		page.listener?.(stale);
+		const poll = stream.poll({ ack: null, wait: 5000 });
+		await vi.advanceTimersByTimeAsync(10);
+		stream.refresh();
+		stale.release();
+		await vi.advanceTimersByTimeAsync(10);
+		page.paint(390, 844);
+		await vi.advanceTimersByTimeAsync(100);
+		const { frame } = await poll;
+		expect(frame).toMatchObject({ seq: 1, width: 390, height: 844 });
+	});
+
+	it("hiding drops an in-flight encode and resizing the hidden page does not restart it", async () => {
+		const { page, stream } = setup();
+		const stale = new SlowImage(780, 1688);
+		page.listener?.(stale);
+		const poll = stream.poll({ ack: null, wait: 100 });
+		stream.setVisible(false);
+		stale.release();
+		await vi.advanceTimersByTimeAsync(101);
+		expect((await poll).frame).toBeNull();
+		stream.configure({ ...GEOMETRY, pixelWidth: 390 });
+		expect(page.invalidations).toBe(0);
+		stream.setVisible(true);
+		page.paint(390, 844);
+		expect((await stream.poll({ ack: null })).frame).toMatchObject({ width: 390, height: 844 });
+	});
+
+	it("keeps a frame whose poll left while it was being encoded for the next poll", async () => {
+		const { page, stream } = setup();
+		const image = new SlowImage(780, 1688);
+		page.listener?.(image);
+		const first = stream.poll({ ack: null, wait: 50 });
+		await vi.advanceTimersByTimeAsync(60);
+		expect(await first).toEqual({ frame: null, dialogs: [] });
+		image.release();
+		await vi.advanceTimersByTimeAsync(10);
+		const next = await stream.poll({ ack: null, wait: 50 });
+		expect(next.frame).toMatchObject({ seq: 1, width: 780 });
 	});
 
 	it("sends the next paint once the poll names the last frame", async () => {
@@ -323,6 +382,41 @@ describe("PageStream dialogs", () => {
 			accept: false,
 			text: null,
 		});
+	});
+
+	it("withdraws a dialog the page's browser ended before any poll carried it", async () => {
+		const { stream } = setup();
+		const ended = new AbortController();
+		const answer = stream.openDialog({ kind: "confirm", message: "Sure?", initial: null }, ended.signal);
+		ended.abort();
+		expect(await answer).toEqual({ accept: false, text: null });
+		const poll = stream.poll({ ack: null, wait: 50 });
+		await vi.advanceTimersByTimeAsync(60);
+		expect((await poll).dialogs).toEqual([]);
+	});
+
+	it("dismisses a dialog whose request was already withdrawn without showing it", async () => {
+		const { stream } = setup();
+		const answer = stream.openDialog({ kind: "alert", message: "Hi", initial: null }, AbortSignal.abort());
+		expect(await answer).toEqual({ accept: false, text: null });
+		const poll = stream.poll({ ack: null, wait: 50 });
+		await vi.advanceTimersByTimeAsync(60);
+		expect((await poll).dialogs).toEqual([]);
+	});
+
+	it("a viewer's answer ends the wait for the withdrawal, and a later withdrawal changes nothing", async () => {
+		const { stream } = setup();
+		const ended = new AbortController();
+		const answer = stream.openDialog({ kind: "confirm", message: "Sure?", initial: null }, ended.signal);
+		const { dialogs } = await stream.poll({ ack: null });
+		stream.answerDialog(dialogs[0]?.id ?? 0, { accept: true, text: null });
+		expect(await answer).toEqual({ accept: true, text: null });
+		ended.abort();
+		const next = stream.openDialog({ kind: "alert", message: "Next", initial: null });
+		const polled = await stream.poll({ ack: null });
+		expect(polled.dialogs.map(dialog => dialog.message)).toEqual(["Next"]);
+		stream.answerDialog(polled.dialogs[0]?.id ?? 0, { accept: true, text: null });
+		expect(await next).toEqual({ accept: true, text: null });
 	});
 
 	it("dismisses the rest of a flood unseen", async () => {

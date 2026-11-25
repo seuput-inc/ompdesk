@@ -9,17 +9,19 @@
 (* the state machine: a call's hook claims F with a fresh stamp, its      *)
 (* result settles it, an agent's run end settles that agent's calls, a     *)
 (* retire main sends drops a claim git no longer lists, a restart restores *)
-(* the journal under a new instance. Main (src/main/checkout-peers.ts)     *)
-(* reads A's status, asks git, judges, retires and tells B.                *)
+(* the journal under a new instance: the newest whole set and the deltas  *)
+(* after it. Main (src/main/checkout-peers.ts) reads A's status, asks git, *)
+(* judges, retires and tells B.                                            *)
 (***************************************************************************)
-EXTENDS Naturals, FiniteSets, TLC
+EXTENDS Naturals, Sequences, FiniteSets, TLC
 
 CONSTANTS
     Owners,       \* A's agents: the main agent and a subagent
     MaxCalls,     \* tool calls A's agents make in a behaviour
     MaxSeq,       \* bound on the ledger's stamp counter
     MaxRestarts,  \* omp restarts of A (update, relaunch)
-    MaxWorld      \* commits and B's own writes of F
+    MaxWorld,     \* commits and B's own writes of F
+    FullEvery     \* deltas the journal writes before a whole set is due (`CLAIMS_FULL_EVERY`)
 
 \* A file tool or a shell write claims F; a commit (`git commit -- F`) claims nothing and makes F clean when it succeeds.
 Kinds == {"file", "shell", "commit"}
@@ -55,13 +57,18 @@ VARIABLES
     bkey,      \* the claim B's view rests on
     shown,     \* ids of A's calls that were running when B was told F is A's
     released,  \* claims (<<inst, st>>) main judged committed
-    cleaned    \* claims (<<inst, st>>) A's own commit made committed
+    cleaned,   \* claims (<<inst, st>>) A's own commit made committed
+    \* A's journal of claims (the session file's `ompdesk.checkout-claims` entries)
+    jlog,      \* the entries from the newest whole set on: [kind |-> "whole" | "delta", held |-> F in it / F at the front]
+    jbase,     \* the writer's base (`journaledFiles`): F is in what the journal replays to
+    jdeltas    \* deltas since the newest whole set
 
 vars == <<stamp, seq, inst, calls, running, landed, commitIds, nextId, dirty, aWrote, world, restarts, phase, known, cache,
-          listing, committed, proposal, inflight, view, viewKey, bview, bkey, shown, released, cleaned>>
+          listing, committed, proposal, inflight, view, viewKey, bview, bkey, shown, released, cleaned, jlog, jbase, jdeltas>>
 ledgerVars == <<stamp, seq, inst, calls, running, nextId>>
 mainVars == <<phase, known, cache, listing, committed, proposal, view, viewKey>>
 bVars == <<bview, bkey, shown, released, cleaned>>
+journalVars == <<jlog, jbase, jdeltas>>
 
 NoKey == <<0, 0>>
 NoStatus == [held |-> FALSE, st |-> 0, pending |-> FALSE, inst |-> 0, fresh |-> FALSE]
@@ -74,6 +81,7 @@ Init ==
     /\ committed = {} /\ proposal = NoProposal /\ inflight = {}
     /\ view = FALSE /\ viewKey = NoKey
     /\ bview = FALSE /\ bkey = NoKey /\ shown = {} /\ released = {} /\ cleaned = {}
+    /\ jlog = <<>> /\ jbase = FALSE /\ jdeltas = FullEvery
 
 \* A call (or its job) writes F: a commit only reads it.
 Writing == \E c \in calls : c.kind # "commit"
@@ -94,7 +102,7 @@ Start(o, k, runs) ==
     /\ nextId' = nextId + 1
     /\ commitIds' = IF k = "commit" THEN commitIds \cup {nextId} ELSE commitIds
     /\ UNCHANGED <<inst, dirty, aWrote, landed, world, restarts>> /\ UNCHANGED mainVars
-    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars /\ UNCHANGED journalVars
 
 \* A's own commit runs: git records F as it is now.
 SelfCommit(c) ==
@@ -102,14 +110,14 @@ SelfCommit(c) ==
     /\ world < MaxWorld
     /\ dirty' = FALSE /\ aWrote' = FALSE /\ landed' = landed \cup {c.id} /\ world' = world + 1
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<restarts, commitIds>> /\ UNCHANGED mainVars
-    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars /\ UNCHANGED journalVars
 
 \* The tool's bytes land (environment: the command or file tool writes F).
 Land(id) ==
     /\ id \in running /\ id \notin commitIds
     /\ dirty' = TRUE /\ aWrote' = TRUE /\ landed' = landed \cup {id}
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<world, restarts, commitIds>> /\ UNCHANGED mainVars
-    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars /\ UNCHANGED journalVars
 
 \* The call wrote: F's stamp moves on (`#confirm`), so a retire main judged from a read taken while it ran matches nothing.
 Confirmed(s, q) == IF s # 0 THEN <<q + 1, q + 1>> ELSE <<s, q>>
@@ -143,7 +151,7 @@ End(c, ok) ==
                    ELSE LET r == Confirmed(stamp, seq) IN stamp' = r[1] /\ seq' = r[2]
               /\ UNCHANGED cleaned
     /\ UNCHANGED <<inst, nextId, dirty, aWrote, landed, commitIds, world, restarts>> /\ UNCHANGED mainVars
-    /\ UNCHANGED <<inflight, bview, bkey, shown, released>>
+    /\ UNCHANGED <<inflight, bview, bkey, shown, released>> /\ UNCHANGED journalVars
 
 \* @code resources/gui-bridge/modes/checkout-claims.ts:180-193 ClaimBook.agentEnded: agent_end settles that agent's calls only; stock ends a run once its calls ran, so those left never ran
 AgentEnd(o) ==
@@ -157,7 +165,7 @@ AgentEnd(o) ==
                ELSE IF c.kind = "commit" THEN UNCHANGED <<stamp, seq>>
                ELSE LET r == Confirmed(stamp, seq) IN stamp' = r[1] /\ seq' = r[2]
     /\ UNCHANGED <<inst, running, nextId, dirty, aWrote, landed, commitIds, world, restarts>> /\ UNCHANGED mainVars
-    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars /\ UNCHANGED journalVars
 
 \* @code resources/gui-bridge/modes/checkout-claims.ts:201-214 ClaimBook.retire: drops F only for this load's stamp, never while a call writes it; a running call that took over that claim reverts to none
 BridgeRetire(m) ==
@@ -170,15 +178,40 @@ BridgeRetire(m) ==
                   THEN {[c EXCEPT !.earlier = IF c.earlier = m.st THEN 0 ELSE c.earlier] : c \in calls}
                   ELSE calls
     /\ UNCHANGED <<seq, inst, running, nextId, dirty, aWrote, landed, commitIds, world, restarts>> /\ UNCHANGED mainVars
-    /\ UNCHANGED bVars
+    /\ UNCHANGED bVars /\ UNCHANGED journalVars
 
-\* @code resources/gui-bridge/modes/checkout-peers.ts:147-198 install: session_shutdown journals the claims; the next load restores them under a new instance, stamps from 1
+Held == stamp # 0
+
+\* @code resources/gui-bridge/modes/checkout-peers.ts:71-87 writeJournal: when the claims changed (agent_end, the 15 s interval, session_shutdown), the next entry nextClaimsEntry gives; nothing when F is where the journal has it
+\* @code resources/gui-bridge/modes/checkout-claims.ts:405-414 nextClaimsEntry: the change since the writer's base as a delta, or the whole set when one is due (a whole one may also come early: a change no smaller than the set)
+JournalWrite ==
+    \* Only a restart reads the journal: once none can come, its writes change nothing the properties see, and leaving
+    \* them out keeps the restart-free runs (MC_clean.cfg) the size they were.
+    /\ restarts < MaxRestarts
+    /\ Held # jbase
+    /\ \/ /\ jlog' = <<[kind |-> "whole", held |-> Held]>> /\ jdeltas' = 0
+       \/ /\ jdeltas < FullEvery
+          /\ jlog' = Append(jlog, [kind |-> "delta", held |-> Held]) /\ jdeltas' = jdeltas + 1
+    /\ jbase' = Held
+    /\ UNCHANGED ledgerVars /\ UNCHANGED <<landed, commitIds, dirty, aWrote, world, restarts>> /\ UNCHANGED mainVars
+    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars
+
+\* @code resources/gui-bridge/modes/checkout-claims.ts:435-463 replayClaims, journaledClaims: the newest whole set, then each delta after it in order (a delta with F in front adds it, one that removes it drops it)
+RECURSIVE ReplayFrom(_, _)
+ReplayFrom(log, has) == IF log = <<>> THEN has ELSE ReplayFrom(Tail(log), Head(log).held)
+Replayed == ReplayFrom(jlog, FALSE)
+
+\* @code resources/gui-bridge/modes/checkout-peers.ts:151-209 install: session_shutdown journals the claims; the next load restores them under a new instance, stamps from 1
+\* @code resources/gui-bridge/modes/checkout-peers.ts:110-126 restoreClaims, journalFrom: the load restores what the journal replays to, and the writer's next base is that, its next entry whole
 Restart ==
     /\ restarts < MaxRestarts
+    \* session_shutdown wrote the journal: it holds F exactly when the ledger does.
+    /\ Held = jbase
     /\ restarts' = restarts + 1
     /\ calls' = {} /\ running' = {} /\ inflight' = {}
     /\ inst' = inst + 1
-    /\ IF stamp # 0 THEN stamp' = 1 /\ seq' = 1 ELSE stamp' = 0 /\ seq' = 0
+    /\ IF Replayed THEN stamp' = 1 /\ seq' = 1 ELSE stamp' = 0 /\ seq' = 0
+    /\ jbase' = Replayed /\ jdeltas' = FullEvery /\ UNCHANGED jlog
     /\ UNCHANGED <<nextId, dirty, aWrote, landed, commitIds, world>> /\ UNCHANGED mainVars /\ UNCHANGED bVars
 
 \* ---------------------------------------------------------------- the world
@@ -188,14 +221,14 @@ Commit ==
     /\ world < MaxWorld /\ dirty
     /\ world' = world + 1 /\ dirty' = FALSE /\ aWrote' = FALSE /\ UNCHANGED <<landed, commitIds>>
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<restarts>> /\ UNCHANGED mainVars
-    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars /\ UNCHANGED journalVars
 
 \* B changes F itself (an edit the guard lets through).
 BWrite ==
     /\ world < MaxWorld /\ ~dirty
     /\ world' = world + 1 /\ dirty' = TRUE
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<aWrote, landed, commitIds, restarts>> /\ UNCHANGED mainVars
-    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED <<inflight>> /\ UNCHANGED bVars /\ UNCHANGED journalVars
 
 \* ---------------------------------------------------------------- main's pass
 
@@ -210,6 +243,7 @@ PassStatus ==
     /\ phase' = "git"
     /\ UNCHANGED <<listing, committed, proposal, view, viewKey>>
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<dirty, aWrote, landed, commitIds, world, restarts, inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED journalVars
 
 \* @code src/main/checkout-peers.ts:170-192 #pass: the core's presence verdict for the claimed paths, or a failure
 PassGit ==
@@ -219,6 +253,7 @@ PassGit ==
     /\ phase' = "judge"
     /\ UNCHANGED <<known, cache, committed, proposal, view, viewKey>>
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<dirty, aWrote, landed, commitIds, world, restarts, inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED journalVars
 
 \* @code resources/gui-bridge/modes/checkout-claims.ts:356-364 judgeClaim: kept, or committed (released and retired)
 Verdict(k, l, before) ==
@@ -248,7 +283,7 @@ PassJudge ==
                     /\ phase' = "send"
     /\ UNCHANGED <<known, cache, listing>>
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<dirty, aWrote, landed, commitIds, world, restarts>>
-    /\ UNCHANGED <<bview, bkey, shown, cleaned>>
+    /\ UNCHANGED <<bview, bkey, shown, cleaned>> /\ UNCHANGED journalVars
 
 \* @code src/main/checkout-peers.ts:324-336 #retire: the bridge answers its claims after the retire, which main keeps; no answer in time keeps what main had
 PassRetired ==
@@ -259,6 +294,7 @@ PassRetired ==
     /\ phase' = "send"
     /\ UNCHANGED <<known, listing, committed, proposal, view, viewKey>>
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<dirty, aWrote, landed, commitIds, world, restarts, inflight>> /\ UNCHANGED bVars
+    /\ UNCHANGED journalVars
 
 \* @code src/main/checkout-peers.ts:343-357 #send: B is told, unless its bridge does not answer
 PassSend ==
@@ -269,6 +305,7 @@ PassSend ==
     /\ phase' = "idle"
     /\ UNCHANGED <<known, cache, listing, committed, proposal, view, viewKey, released, cleaned>>
     /\ UNCHANGED ledgerVars /\ UNCHANGED <<dirty, aWrote, landed, commitIds, world, restarts, inflight>>
+    /\ UNCHANGED journalVars
 
 Next ==
     \/ \E o \in Owners, k \in Kinds, runs \in BOOLEAN : Start(o, k, runs)
@@ -277,7 +314,7 @@ Next ==
     \/ \E o \in Owners : AgentEnd(o)
     \/ \E m \in inflight : BridgeRetire(m)
     \/ \E c \in calls : SelfCommit(c)
-    \/ Restart \/ Commit \/ BWrite
+    \/ Restart \/ Commit \/ BWrite \/ JournalWrite
     \/ PassStatus \/ PassGit \/ PassJudge \/ PassRetired \/ PassSend
 
 Spec == Init /\ [][Next]_vars

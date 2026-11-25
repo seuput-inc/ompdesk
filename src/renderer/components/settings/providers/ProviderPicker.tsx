@@ -53,6 +53,7 @@ export function ProviderPicker({
 	const t = useT();
 	const [query, setQuery] = useState("");
 	const { providers, loading, loginReady } = catalog;
+	const canConnect = loginReady && !login.busy;
 	const searching = query.trim().length > 0;
 	const featured = searching ? [] : featuredCards(providers, showConnectedFeatured);
 	const featuredIds = new Set(featured.flatMap(card => [card.def.id, card.def.apiKeyId ?? ""]));
@@ -73,7 +74,7 @@ export function ProviderPicker({
 				onKeyDown={event => {
 					// A search that narrows to one provider: Enter signs in to it.
 					const only = available.length === 1 ? available[0] : undefined;
-					if (event.key === "Enter" && !isImeKeyEvent(event) && only && searching && loginReady)
+					if (event.key === "Enter" && !isImeKeyEvent(event) && only && searching && canConnect)
 						void login.start(only.id);
 				}}
 				label={t("providerList.search")}
@@ -120,7 +121,7 @@ export function ProviderPicker({
 										card={card}
 										key={card.def.id}
 										login={login}
-										loginReady={loginReady}
+										loginReady={canConnect}
 									/>
 								))}
 							</ul>
@@ -138,9 +139,7 @@ export function ProviderPicker({
 							data-provider-picker
 						>
 							{available.map(provider => {
-								const busy =
-									busyProvider === provider.id ||
-									(login.state.running && login.state.providerId === provider.id);
+								const busy = busyId(provider.id);
 								return (
 									<li key={provider.id}>
 										<ListRow
@@ -148,7 +147,7 @@ export function ProviderPicker({
 												"aria-label": t("providers.picker.connect", { provider: provider.name }),
 												"data-provider-connect": provider.id,
 											}}
-											disabled={!loginReady || busy}
+											disabled={!canConnect || busy}
 											leading={<ProviderMark provider={provider} />}
 											meta={busy ? <Spinner size="sm" spin /> : undefined}
 											onClick={() => void login.start(provider.id)}

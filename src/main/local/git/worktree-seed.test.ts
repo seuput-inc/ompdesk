@@ -1,12 +1,24 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as cores from "../../core/process";
+import { nativeBinPath } from "../../native-bin";
+import * as runtimeLog from "../../runtime-log";
+import { StepStalledError } from "../../serial-chain";
 import { itWithFileSymlinks } from "../../test-symlinks";
 import type { BridgeClient } from "../types";
+import * as exec from "./exec";
 import { gitSync, initRepo, pathExists } from "./test-repos";
 import { createWorktree } from "./worktree";
-import { runWorktreeHook, seedWorktree, WORKTREE_HOOK_SCRIPTS } from "./worktree-seed";
+import {
+	describePreparation,
+	prepareWorktree,
+	runWorktreeHook,
+	seedWorktree,
+	WORKTREE_HOOK_SCRIPTS,
+	type WorktreeHook,
+} from "./worktree-seed";
 
 /** The core's byte budget for a seed on a volume that cannot clone (`SEED_MAX_BYTES` in `git/seed.rs`). */
 const SEED_MAX_BYTES = 50 * 1024 * 1024;
@@ -263,6 +275,204 @@ describe("seedWorktree", () => {
 			expect(report?.skipped).toContainEqual({ path: "conf/.env", reason: "destination_outside" });
 		},
 	);
+});
+
+async function nodeHook(root: string, hook: WorktreeHook, source: string): Promise<void> {
+	const script = path.join(root, WORKTREE_HOOK_SCRIPTS[hook]);
+	const program = `${script}.cjs`;
+	await fs.mkdir(path.dirname(script), { recursive: true });
+	await fs.writeFile(program, source);
+	const command = `"${process.execPath}" "${program}"`;
+	await fs.writeFile(script, process.platform === "win32" ? `@${command}\r\n` : `exec ${command}\n`);
+}
+
+describe("the standalone worktree hook supervisor", () => {
+	it.each([
+		["setup", 0, true],
+		["pre-merge", 4, false],
+		["post-merge", 130, true],
+	] as const)("keeps the captured %s result, log and last 4096 UTF-16 units", async (hook, code, fromPrimary) => {
+		const primary = path.join(scratch, "fixture primary");
+		await fs.rename(repo, primary);
+		const worktree = path.join(scratch, "fixture worktree");
+		gitSync(primary, "worktree", "add", "-q", "-b", "fixture", worktree);
+		const cwd = hook === "post-merge" ? primary : worktree;
+		const where = { primary, worktree, cwd };
+		expect(await runWorktreeHook(hook, where)).toBeNull();
+		expect(describePreparation({})).toBeNull();
+		const source = `
+			const fs = require('node:fs');
+			fs.writeFileSync('seen.json', JSON.stringify([process.cwd(), process.env.OMPDESK_ROOT_PATH, process.env.OMPDESK_WORKTREE_PATH, process.env.OMPDESK_HOOK]));
+			fs.writeSync(1, 'x'.repeat(4096));
+			fs.writeSync(2, 'ERR');
+			process.exit(${code});
+		`;
+		if (!fromPrimary) await nodeHook(primary, hook, "process.exit(99)");
+		await nodeHook(fromPrimary ? primary : worktree, hook, source);
+		const report = await runWorktreeHook(hook, where);
+		const script = path.normalize(WORKTREE_HOOK_SCRIPTS[hook]);
+		const logPath = path.join(gitSync(worktree, "rev-parse", "--absolute-git-dir"), `ompdesk-worktree-${hook}.log`);
+		const exitCode = code === 130 ? null : code;
+		expect(report).toMatchObject({
+			script,
+			logPath,
+			exitCode,
+			ok: code === 0,
+			timedOut: false,
+			outputTail: `${"x".repeat(4093)}ERR`,
+		});
+		expect(await fs.readFile(logPath, "utf8")).toBe(`${"x".repeat(4096)}ERR`);
+		expect(JSON.parse(await fs.readFile(path.join(cwd, "seen.json"), "utf8"))).toEqual([
+			cwd,
+			primary,
+			worktree,
+			hook,
+		]);
+		if (!report) throw new Error("expected a hook result");
+		const description = describePreparation({ setup: report });
+		if (code === 0) expect(description).toBe(`${script} ran (${Math.round(report.durationMs / 1000)}s)`);
+		else expect(description).toBe(`${script} failed (exit ${exitCode}), log ${logPath}`);
+	});
+
+	it("reports the captured one-millisecond deadline as a failure", async () => {
+		const worktree = await freshWorktree("deadline");
+		await nodeHook(repo, "setup", "setTimeout(() => process.exit(0), 3000)");
+		expect(await runWorktreeHook("setup", { primary: repo, worktree, cwd: worktree, timeoutMs: 1 })).toMatchObject({
+			ok: false,
+			exitCode: null,
+			timedOut: true,
+		});
+	});
+
+	it("still runs setup after a seed refusal", async () => {
+		const target = await freshWorktree("refused");
+		await nodeHook(repo, "setup", "console.log('ready')");
+		const failSeed = vi.spyOn(exec, "coreGit").mockRejectedValueOnce(new Error("fixture refusal"));
+		try {
+			expect(await prepareWorktree(repo, target)).toMatchObject({
+				seed: { skipped: [{ path: ".worktreeinclude", reason: "fixture refusal" }] },
+				setup: { ok: true, exitCode: 0, timedOut: false },
+			});
+		} finally {
+			failSeed.mockRestore();
+		}
+	});
+
+	it("decodes invalid UTF-8, respects write order and keeps a split surrogate even with no writable log", async () => {
+		const worktree = await freshWorktree("encoding");
+		const log = path.join(gitSync(worktree, "rev-parse", "--absolute-git-dir"), "ompdesk-worktree-setup.log");
+		await nodeHook(
+			repo,
+			"setup",
+			`
+			const { writeSync } = require('node:fs');
+			writeSync(1, Buffer.from([255, 0xf0, 0x9f]));
+			writeSync(2, Buffer.from([0x98, 0x80]));
+			writeSync(1, 'x'.repeat(4095));
+			process.exit(3);
+		`,
+		);
+		const where = { primary: repo, worktree, cwd: worktree };
+		const expected = `�😀${"x".repeat(4095)}`;
+		expect(await runWorktreeHook("setup", where)).toMatchObject({ exitCode: 3, outputTail: expected.slice(-4096) });
+		expect(await fs.readFile(log, "utf8")).toBe(expected);
+		await fs.unlink(log);
+		await fs.mkdir(log);
+		expect(await runWorktreeHook("setup", where)).toMatchObject({ exitCode: 3, outputTail: expected.slice(-4096) });
+		expect((await fs.stat(log)).isDirectory()).toBe(true);
+	});
+
+	itWithFileSymlinks("publishes the new log only after exit, never through a repo-supplied symlink", async () => {
+		const worktree = await freshWorktree("log-link");
+		const log = path.join(gitSync(worktree, "rev-parse", "--absolute-git-dir"), "ompdesk-worktree-setup.log");
+		const elsewhere = path.join(scratch, "untouched");
+		await fs.writeFile(elsewhere, "previous");
+		await fs.symlink(elsewhere, log);
+		await nodeHook(
+			repo,
+			"setup",
+			`
+			const fs = require('node:fs');
+			fs.writeSync(2, 'new ');
+			fs.writeSync(1, fs.readFileSync(${JSON.stringify(log)}));
+			process.exit(4);
+		`,
+		);
+		expect(await runWorktreeHook("setup", { primary: repo, worktree, cwd: worktree })).toMatchObject({
+			exitCode: 4,
+			outputTail: "new previous",
+		});
+		expect(await fs.readFile(log, "utf8")).toBe("new previous");
+		expect(await fs.readFile(elsewhere, "utf8")).toBe("previous");
+	});
+
+	it("keeps the hook alive across its discovery core's restart, then drains it before the next repo holder", async () => {
+		const worktree = await freshWorktree("restarted");
+		const pidFile = path.join(worktree, "pid");
+		const release = path.join(worktree, "restarted");
+		const observed = path.join(worktree, "observed");
+		const log = path.join(gitSync(worktree, "rev-parse", "--absolute-git-dir"), "ompdesk-worktree-setup.log");
+		await nodeHook(
+			repo,
+			"setup",
+			`
+			const fs = require('node:fs');
+			process.on('SIGTERM', () => setTimeout(() => process.exit(0), 150));
+			fs.writeFileSync('pid', String(process.pid));
+			const timer = setInterval(() => {
+				if (!fs.existsSync('restarted')) return;
+				fs.writeSync(1, 'after restart');
+				fs.writeFileSync('observed', String(process.pid));
+				clearInterval(timer);
+			}, 20);
+			setTimeout(() => process.exit(91), 30000);
+		`,
+		);
+		const core = new cores.CoreProcess({ binary: () => nativeBinPath("ompdesk-core") });
+		const scoped = vi.spyOn(cores, "core").mockReturnValue(core);
+		const stallLog = vi.spyOn(runtimeLog, "writeRuntimeLog").mockImplementation(() => {});
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		let drained: Promise<unknown> | undefined;
+		const held = exec
+			.withRepoLock(repo, () => {
+				const running = runWorktreeHook("setup", { primary: repo, worktree, cwd: worktree });
+				drained = running.catch(() => null);
+				return running;
+			})
+			.catch(error => error);
+		try {
+			await vi.waitFor(async () => expect(Number(await fs.readFile(pidFile, "utf8"))).toBeGreaterThan(0), {
+				timeout: 15_000,
+			});
+			const pid = Number(await fs.readFile(pidFile, "utf8"));
+			const first = core.generation;
+			expect(first).toBeGreaterThan(0);
+			core.abandon("restart the disposable discovery core");
+			await core.stop();
+			expect((await core.call("core.echo", { value: 2 })).generation).not.toBe(first);
+			await fs.writeFile(release, "");
+			await vi.waitFor(async () => expect(await fs.readFile(observed, "utf8")).toBe(String(pid)), {
+				timeout: 15000,
+			});
+			await vi.advanceTimersByTimeAsync(exec.REPO_LOCK_HOLD_MS);
+			expect(await held).toBeInstanceOf(StepStalledError);
+			await exec.withRepoLock(repo, async () => {
+				expect(() => process.kill(pid, 0)).toThrow();
+				expect(await fs.readFile(log, "utf8")).toBe("after restart");
+			});
+		} finally {
+			try {
+				await vi.advanceTimersByTimeAsync(exec.REPO_LOCK_HOLD_MS);
+				await held;
+				await drained;
+			} finally {
+				vi.useRealTimers();
+				scoped.mockRestore();
+				stallLog.mockRestore();
+				await core.stop();
+			}
+		}
+	}, 60_000);
 });
 
 describe.skipIf(process.platform !== "win32")("worktree hook on Windows", () => {

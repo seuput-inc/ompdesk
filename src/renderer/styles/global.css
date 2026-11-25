@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "@fontsource-variable/inter";
+@import "@fontsource-variable/geist";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
 @import "@fontsource/jetbrains-mono/600.css";
@@ -119,7 +119,6 @@ body {
 	background: var(--sc-bg);
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
-	font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
 .font-display {
@@ -716,8 +715,8 @@ html[data-platform="darwin"] .omp-sidebar-search {
 	background-color: var(--sc-sidebar-row-selected);
 }
 
-/* On the selected row's wash the quiet text (an age, a mark) and a waiting title's warning fell under 4.5:1 (light
-   4.17 and 4.22, solarized-light and sepia lower): they read at secondary there, the warning a fifth toward the text
+/* On the selected row's wash the quiet text (an age, a mark) and a waiting title's attention colour fell under 4.5:1 (light
+   4.17 and 4.22, solarized-light lower): they read at secondary there, the attention colour a fifth toward the text
    color. Pinned by the "over sidebar selection" pairs of lib/theme-contrast.ts. */
 .omp-sidebar-session-row[data-active="true"] {
 	--sc-text-subtle: var(--sc-text-secondary);
@@ -725,7 +724,7 @@ html[data-platform="darwin"] .omp-sidebar-search {
 }
 
 .omp-sidebar-session-row[data-active="true"] .omp-live-text[data-working="waiting"] {
-	color: color-mix(in srgb, var(--sc-warning) 80%, var(--sc-text));
+	color: color-mix(in srgb, var(--sc-attention) 80%, var(--sc-text));
 }
 
 /* While a split shows several sessions, the pane that has focus carries the selection (its wash and the same accent
@@ -1138,6 +1137,33 @@ html[data-platform="darwin"] .omp-sidebar-search {
    fallback, a CI runner) paints every frame on the CPU. One-shot motion is instant through the tokens above; the
    loops (spinners, arcs, pulses, sweeps, carets) keep running, held to ten frames a second by lib/cue-clock.ts, the
    way an unfocused window shows them: a still cue read as the app having stopped (the owner, 4 Nov 2026). */
+
+/* A floating surface (a popover, a menu, Jump to latest): Orca's glass, the raised surface at
+   `--sc-floating-mix` (the theme's `floating`; lib/theme-contrast.ts holds its text to the floor over the page and the
+   thing behind it), the page blurred through it, a floating shadow and a hairline of light along its top edge.
+   Software compositing blurs on the CPU every frame under a streaming transcript, so there it is the plain raised
+   surface. In the components layer, so a caller's own background or shadow utility still wins. */
+@layer components {
+	.omp-floating {
+		background: color-mix(in srgb, var(--sc-elevated) var(--sc-floating-mix), transparent);
+		backdrop-filter: blur(24px) saturate(1.2);
+		box-shadow: var(--sc-shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.12);
+	}
+
+	html[data-gpu="software"] .omp-floating {
+		background: var(--sc-elevated);
+		backdrop-filter: none;
+	}
+}
+
+/* While a theme swaps (lib/themes.ts `holdTransitions`, two frames) no transition runs, so nothing eases from the old
+   palette's colors into the new one. */
+html[data-theme-switching],
+html[data-theme-switching] *,
+html[data-theme-switching] *::before,
+html[data-theme-switching] *::after {
+	transition: none !important;
+}
 
 /* GUI density changes conversation spacing without scaling text or scroll
    coordinates: it retunes the transcript spacing scale (components.css). */

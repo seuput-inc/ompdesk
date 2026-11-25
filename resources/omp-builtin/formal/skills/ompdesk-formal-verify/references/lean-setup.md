@@ -20,8 +20,8 @@ bun <skill-dir>/scripts/setup.ts lean --check    # report only, never downloads
 | any | `OMPDESK_FORMAL_CACHE=<dir>` overrides the folder |
 
 What it fetches (versions and SHA-256 hashes live in `assets/toolchain.json`):
-- **elan** 4.2.4, placed in `<cache>/elan` (`ELAN_HOME`).
-- **Lean `v4.35.0`**, a zip archive of about 0.9 GB, about 3.0 GB installed and about 4 GB of free disk needed at the peak while it unpacks, placed where elan keeps toolchains. No Mathlib.
+- **elan** 4.3.0 for a new install, placed in `<cache>/elan` (`ELAN_HOME`). Setup reuses an existing cached elan.
+- **Lean `v4.36.0`**, a zip archive of about 0.9 GB, about 3.0 GB installed and about 4 GB of free disk needed at the peak while it unpacks, placed where elan keeps toolchains. No Mathlib.
 
 The first install needs the network and takes a few minutes. Later runs find the files and download nothing.
 **Run the first `setup.ts lean` on its own, with a bash timeout of 1800 s (or async), before any parallel work**: the omp
@@ -61,7 +61,7 @@ bun <skill-dir>/scripts/new-lean.ts formal/queue/lean Queue     # UpperCamelCase
 bun <skill-dir>/scripts/lean-check.ts formal/queue/lean         # lake build + trust audit
 ```
 
-`new-lean.ts` copies `assets/lean-template/` (no dependencies, `lean-toolchain` = `leanprover/lean4:v4.35.0`) and
+`new-lean.ts` copies `assets/lean-template/` (no dependencies, with the pinned `lean-toolchain`) and
 refuses to overwrite an existing lakefile. `lean-check.ts` fails on `sorry`, `admit`, user `axiom`, `#exit`, `debug.skipKernelTC`,
 `native_decide` (unless `--allow-native`, which then makes `implemented_by` and `extern` blocking), and any theorem whose axioms go beyond `propext`, `Classical.choice` and `Quot.sound`. It re-checks the build with the toolchain's `leanchecker` (the kernel), builds and audits every module of the project's libs (not only what the root imports), and fails when it audited zero declarations.
 
@@ -77,8 +77,8 @@ refuses to overwrite an existing lakefile. `lean-check.ts` fails on `sorry`, `ad
 | `lake update` | refresh `lake-manifest.json` (only relevant once a `[[require]]` exists) |
 
 The `lean-toolchain` file pins the exact Lean version, and elan honors it. A project whose `lean-toolchain` names a
-different version makes elan try to install that version, which needs the network. Keep `leanprover/lean4:v4.35.0` in
-every project you scaffold. Toolchain drift is the most common source of friction in Lean work.
+different version makes elan try to install that version, which needs the network. Keep the template's
+`lean-toolchain` in every project you scaffold.
 
 ## No packages by default
 
@@ -109,5 +109,5 @@ If a model really needs a package (Mathlib for probability or algebra, for examp
 
 ## Toolchain version in this skill
 
-The template and every file in `assets/lean-patterns` were built with Lean `v4.35.0`. To move to another version, edit
-`assets/toolchain.json` and every `lean-toolchain` together, then rerun `lean-check.ts` on `assets/lean-patterns`.
+To update Lean, edit `assets/toolchain.json` and every `lean-toolchain` together, then rerun `lean-check.ts` on
+`assets/lean-patterns`.

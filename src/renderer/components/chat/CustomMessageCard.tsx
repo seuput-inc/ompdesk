@@ -433,7 +433,10 @@ function AdvisorCard({ message }: { message: AgentMessage }) {
 // async-result — completed background bash/task job rows
 // ---------------------------------------------------------------------------
 
-/** Stock's background job kinds (pi-tui `JobSnapshot["type"]`), named like the tool that started them. */
+/**
+ * Stock's background job kinds (pi-coding-agent tools/details/wait.ts `JobSnapshot["type"]`), named like the
+ * tool that started them.
+ */
 const JOB_KIND_LABELS: Record<string, string> = {
 	bash: "tools.label.bash",
 	task: "tools.label.task",
@@ -726,7 +729,7 @@ function HandoffCard({ message }: { message: AgentMessage }) {
 }
 
 /**
- * The idle recap (bridge `session-recap.ts`): one quiet muted line, not a bordered card, since it
+ * The idle recap (stock's, shown by bridge `idle-maintenance.ts`): one quiet muted line, not a bordered card, since it
  * only restates where things stand. Never part of a work run.
  */
 export function RecapCard({ message }: { message: AgentMessage }) {

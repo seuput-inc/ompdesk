@@ -1,127 +1,87 @@
 import { describe, expect, it } from "vitest";
-import type { TabActivity } from "../sidecar-pool";
-import { createSessionSource, type SessionPorts, type SessionTab } from "./sessions";
-import { fakeContext } from "./test-context";
+import { fixture, idle, type TestTab } from "./test-context";
 
-/** A pool whose tabs the test lists; `emit` is the tab activity the pool announces. */
-function fakePool(tabs: SessionTab[]) {
-	const observers = new Set<(activity: TabActivity) => void>();
-	const ports: SessionPorts = {
-		observeTabs: observer => {
-			observers.add(observer);
-			return () => observers.delete(observer);
-		},
-		tabs: () => tabs,
-	};
-	const emit = (activity: TabActivity) => {
-		for (const observer of observers) observer(activity);
-	};
-	return { ports, observers, emit };
-}
-
-const tab = (tabId: string, extra: Partial<SessionTab> = {}): SessionTab => ({
+const tab = (tabId: string, extra: Partial<TestTab> = {}): TestTab => ({
 	tabId,
 	sessionFile: `/s/${tabId}.jsonl`,
 	cwd: "/x/y",
 	title: "Refactor",
 	...extra,
 });
-const idle = (tabId: string, stopReason = "stop", errorMessage?: string): TabActivity => ({
-	type: "idle",
-	tabId,
-	outcome: { stopReason, ...(errorMessage ? { errorMessage } : {}) },
-});
 
-describe("session source", () => {
-	it("fires once when a session finishes a turn, naming its title and folder, and again after its next turn", () => {
-		const pool = fakePool([tab("a")]);
-		const { context, fired } = fakeContext();
-		createSessionSource({ events: ["done"], sessions: pool.ports, context });
-		pool.emit(idle("a"));
-		pool.emit(idle("a"));
-		expect(fired).toEqual(['Session "Refactor" in /x/y finished its turn']);
-		pool.emit({ type: "busy", tabId: "a" });
-		pool.emit(idle("a"));
-		expect(fired).toHaveLength(2);
+describe("the native session source on stock pool notices", () => {
+	it("fires once per completed turn; busy starts a new turn", async () => {
+		const f = await fixture();
+		f.tabs.push(tab("a"));
+		await f.add({ source: "session", events: ["done"] });
+		await f.emit(idle("a"));
+		await f.emit(idle("a"));
+		expect(f.fired).toEqual(['Session "Refactor" in /x/y finished its turn']);
+		await f.emit({ type: "busy", tabId: "a" });
+		await f.emit(idle("a"));
+		expect(f.fired).toHaveLength(2);
 	});
 
-	it("tells a failed turn with its error, a waiting session with its question, and only the kinds it follows", () => {
-		const pool = fakePool([tab("a")]);
-		const failed = fakeContext();
-		createSessionSource({ events: ["failed"], sessions: pool.ports, context: failed.context });
-		const waiting = fakeContext();
-		createSessionSource({ events: ["waiting"], sessions: pool.ports, context: waiting.context });
-		pool.emit(idle("a", "error", "Rate limited"));
-		pool.emit(idle("a", "stop"));
-		pool.emit({ type: "ask", tabId: "a", requestId: "r1", text: "Delete the file?" });
-		pool.emit({ type: "ask", tabId: "a", requestId: "r1", text: "Delete the file?" });
-		expect(failed.fired).toEqual(['Session "Refactor" in /x/y failed its turn: Rate limited']);
-		expect(waiting.fired).toEqual(['Session "Refactor" in /x/y is waiting for an answer: Delete the file?']);
+	it("separates failed turns and questions, and ignores stops, empty outcomes and missing sessions", async () => {
+		const f = await fixture();
+		f.tabs.push(tab("a"), tab("b", { sessionFile: undefined }));
+		await f.add({ source: "session", events: ["failed"] });
+		await f.add({ source: "session", events: ["waiting"] });
+		await f.add({ source: "session", events: ["done"] }, { enabled: false });
+		for (const activity of [idle("a", "aborted"), idle("a"), idle("b", "error"), idle("gone", "error")])
+			await f.emit(activity);
+		await f.emit({ type: "idle", tabId: "a", outcome: undefined });
+		await f.emit(idle("a", "error", "Rate limited"));
+		const ask = { type: "ask" as const, tabId: "a", requestId: "r1", text: "Delete the file?" };
+		await f.emit(ask);
+		await f.emit(ask);
+		expect(f.fired).toEqual([
+			'Session "Refactor" in /x/y failed its turn: Rate limited',
+			'Session "Refactor" in /x/y is waiting for an answer: Delete the file?',
+		]);
 	});
 
-	it("ignores a turn the person stopped, an idle with no outcome and a tab with no session", () => {
-		const pool = fakePool([tab("a"), tab("b", { sessionFile: undefined })]);
-		const { context, fired } = fakeContext();
-		createSessionSource({ events: ["done", "failed"], sessions: pool.ports, context });
-		pool.emit(idle("a", "aborted"));
-		pool.emit({ type: "idle", tabId: "a", outcome: undefined });
-		pool.emit(idle("b"));
-		pool.emit(idle("gone"));
-		expect(fired).toEqual([]);
-	});
-
-	it("never fires for the session a wake-up routine delivers into, what it opened (by tab or by file), what those opened, or a paired host's tab", () => {
-		const WAKE = "/s/wake.jsonl";
-		const pool = fakePool([
-			tab("wake", { sessionFile: WAKE }),
+	it("does not wake its own family or a paired tab, including when the opener closed", async () => {
+		const f = await fixture();
+		const wake = "/s/wake.jsonl";
+		f.tabs.push(
+			tab("wake"),
 			tab("kid", { openedBy: "wake" }),
 			tab("grandkid", { openedBy: "kid" }),
-			tab("relaunched", { openedBy: "stale-tab-id", openedBySession: WAKE }),
+			tab("relaunched", { openedBy: "stale-tab-id", openedBySession: wake }),
 			tab("remote", { device: "dev-1" }),
 			tab("own"),
-		]);
-		const { context, fired } = fakeContext();
-		createSessionSource({ events: ["done"], wakeSession: WAKE, sessions: pool.ports, context });
-		for (const id of ["wake", "kid", "grandkid", "relaunched", "remote"]) pool.emit(idle(id));
-		expect(fired).toEqual([]);
-		pool.emit(idle("own"));
-		expect(fired).toHaveLength(1);
+		);
+		await f.add({ source: "session", events: ["done"] }, { wakeSession: wake });
+		for (const id of ["wake", "kid", "grandkid", "remote"]) await f.emit(idle(id));
+		f.tabs.shift();
+		await f.emit(idle("relaunched"));
+		expect(f.fired).toEqual([]);
+		await f.emit(idle("own"));
+		expect(f.launched).toMatchObject([{ wake: true, schedule: { wakeSession: wake } }]);
 	});
 
-	it("follows every session when the routine wakes none", () => {
-		const pool = fakePool([tab("wake", { sessionFile: "/s/wake.jsonl" }), tab("wakeKid", { openedBy: "wake" })]);
-		const { context, fired } = fakeContext();
-		createSessionSource({ events: ["done"], sessions: pool.ports, context });
-		pool.emit(idle("wake"));
-		pool.emit(idle("wakeKid"));
-		expect(fired).toHaveLength(2);
-	});
-
-	it("filters by folder at path segments", () => {
-		const pool = fakePool([
+	it("follows the whole family when it wakes none and matches folders at path segments", async () => {
+		const f = await fixture();
+		f.tabs.push(
 			tab("in", { cwd: "/work/app/api" }),
 			tab("near", { cwd: "/work/application" }),
-			tab("win", { cwd: "C:\\Work\\App" }),
+			tab("win", { cwd: "C:\\Work\\App", openedBy: "in" }),
+		);
+		const id = await f.add({ source: "session", events: ["done"], folder: "/work/app" });
+		for (const tab of f.tabs) await f.emit(idle(tab.tabId));
+		expect(f.fired).toEqual([
+			'Session "Refactor" in /work/app/api finished its turn',
+			'Session "Refactor" in C:\\Work\\App finished its turn',
 		]);
-		const { context, fired } = fakeContext();
-		createSessionSource({ events: ["done"], folder: "/work/app", sessions: pool.ports, context });
-		pool.emit(idle("in"));
-		pool.emit(idle("near"));
-		expect(fired).toEqual(['Session "Refactor" in /work/app/api finished its turn']);
-
-		const win = fakeContext();
-		createSessionSource({ events: ["done"], folder: "work/app", sessions: pool.ports, context: win.context });
-		pool.emit(idle("win"));
-		expect(win.fired).toHaveLength(1);
-	});
-
-	it("listens no more after stop", () => {
-		const pool = fakePool([tab("a")]);
-		const { context, fired } = fakeContext();
-		const source = createSessionSource({ events: ["done"], sessions: pool.ports, context });
-		source.stop();
-		expect(pool.observers.size).toBe(0);
-		pool.emit(idle("a"));
-		expect(fired).toEqual([]);
+		const retired = [...f.observers][0]!;
+		await f.service.command({ action: "setEnabled", id, enabled: false });
+		expect(f.observers.size).toBe(0);
+		await f.service.command({ action: "setEnabled", id, enabled: true });
+		retired(idle("in"));
+		await f.service.command({ action: "get" });
+		expect(f.fired).toHaveLength(2);
+		await f.close();
+		expect(f.observers.size).toBe(0);
 	});
 });

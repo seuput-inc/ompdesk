@@ -9,6 +9,24 @@ function firstStringList(value: unknown): string {
 	return Array.isArray(value) && typeof value[0] === "string" ? value[0] : "";
 }
 
+function text(value: unknown): string {
+	return typeof value === "string" ? value : "";
+}
+
+/**
+ * What made the picture: `generate_image`'s provider and the model that ran, then the first picture's size and
+ * quality as the backend reported them (Codex picks quality itself and says which; nothing is asked for).
+ */
+function generatedBy(details: Record<string, unknown> | undefined, quality: (value: string) => string): string {
+	const first = Array.isArray(details?.images)
+		? (details.images[0] as Record<string, unknown> | undefined)
+		: undefined;
+	const reported = text(first?.quality);
+	return [text(details?.provider), text(details?.model), text(first?.size), reported && quality(reported)]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 /**
  * Image tools. `generate_image` returns its pictures as `{ data, mimeType }`
  * pairs under `details.images` plus the saved files in `details.imagePaths`,
@@ -25,6 +43,7 @@ export function ImageRenderer({ args, result, isError, isPartial, partialResult 
 	const prompt = typeof args.subject === "string" ? args.subject : typeof args.prompt === "string" ? args.prompt : "";
 	const images = inline ? [...extractImageDataUrls(effective), inline] : extractImageDataUrls(effective);
 	const caption = resultText(effective);
+	const info = images.length > 0 ? generatedBy(details, value => t("tools.image.quality", { quality: value })) : "";
 
 	return (
 		<div className="flex flex-col gap-1.5">
@@ -52,6 +71,7 @@ export function ImageRenderer({ args, result, isError, isPartial, partialResult 
 			) : (
 				caption && <ToolTextPreview text={caption} isError={isError} />
 			)}
+			{info && <div className="truncate font-mono text-omp-sm text-[var(--omp-dim)]">{info}</div>}
 			{isPartial && images.length === 0 && !caption && (
 				<div className="text-omp-sm italic text-[var(--omp-accent)]">{t("tools.image.generating")}</div>
 			)}

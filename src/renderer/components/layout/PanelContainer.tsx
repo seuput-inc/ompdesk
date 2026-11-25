@@ -7,6 +7,7 @@ import { lazyChunk } from "../../lib/chunk-load";
 import { cx } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { actionShortcut } from "../../lib/keymap";
+import { lastRead, rememberRead } from "../../lib/last-read";
 import { SessionRuntimeProvider, sessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { CLOSED_FILE_VIEW, type PanelTab, useUiStore } from "../../stores/ui";
@@ -44,8 +45,22 @@ const MAX_WIDTH = 840;
 /** Docked default range; dragging may widen it for diffs. */
 const DEFAULT_MAX_WIDTH = 460;
 const PANEL_WIDTH_PREF = "gui.panelWidth";
+/** `lib/last-read.ts` key of the width the pref last gave: the next mount paints it at its first frame. */
+const PANEL_WIDTH_READ = "panel-width";
 /** Share of the window an expanded file viewer takes (never narrower than the dragged width). */
 const EXPANDED_VIEWPORT_SHARE = 0.55;
+
+/** The width a saved value gives in this window: never under the minimum, never wider than the window leaves room for. */
+function fitPanelWidth(saved: number): number {
+	const viewportLimit = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - 56));
+	return Math.min(viewportLimit, Math.max(MIN_WIDTH, saved));
+}
+
+/** The panel opens at the width it last had, not at the default for a moment until the pref's read answers. */
+function initialPanelWidth(): number {
+	const known = lastRead<number>(undefined, PANEL_WIDTH_READ);
+	return typeof known === "number" && Number.isFinite(known) ? fitPanelWidth(Math.round(known)) : defaultPanelWidth();
+}
 
 function defaultPanelWidth(): number {
 	const viewportWidth = Number.isFinite(window.innerWidth) && window.innerWidth > 0 ? window.innerWidth : 1440;
@@ -208,7 +223,7 @@ export function PanelContainer({ closing = false }: { closing?: boolean }) {
 	const compact = useCompactShell();
 	const shellMode = useShellMode();
 
-	const [width, setWidth] = useState(defaultPanelWidth);
+	const [width, setWidth] = useState(initialPanelWidth);
 	const viewerExpanded = useUiStore(
 		s =>
 			(s.filePreviewExpanded && s.filePreviewPath !== null && s.panelTab === "files") ||
@@ -231,8 +246,8 @@ export function PanelContainer({ closing = false }: { closing?: boolean }) {
 				if (cancelled) return;
 				const saved = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null;
 				if (saved !== null) {
-					const viewportLimit = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - 56));
-					setWidth(Math.min(viewportLimit, Math.max(MIN_WIDTH, saved)));
+					rememberRead(undefined, PANEL_WIDTH_READ, saved);
+					setWidth(fitPanelWidth(saved));
 				}
 				setWidthHydrated(true);
 			})
@@ -247,6 +262,7 @@ export function PanelContainer({ closing = false }: { closing?: boolean }) {
 	useEffect(() => {
 		if (!widthHydrated || typeof window.omp?.prefs?.set !== "function") return;
 		const timer = window.setTimeout(() => {
+			rememberRead(undefined, PANEL_WIDTH_READ, Math.round(width));
 			void window.omp.prefs.set(PANEL_WIDTH_PREF, Math.round(width)).catch(() => {});
 		}, 150);
 		return () => window.clearTimeout(timer);

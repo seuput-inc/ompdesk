@@ -7,11 +7,12 @@
  * What reaches it late is modelled as a set it is taken from at any later moment: main's answer to a start it was
  * asked for (`answers`), a caller's timeout (`gaveups`), a worker's answer line (`lines`) and exit (`exits`), the
  * grace timer of a timed-out request (`graces`) and the idle timer (`idles`). A worker answers what it was sent, or
- * never does (a hang), and exits at any moment.
+ * never does (a hang), and exits at any moment. `probes` holds create IDs until their blocking tasks answer.
  *)
-EXTENDS Naturals, FiniteSets
+EXTENDS Naturals, FiniteSets, Sequences
 
 CONSTANTS Reqs, MaxWorkers, MaxLaunches, Kind
+ASSUME Kind = "terminals" => Reqs = 1 .. Cardinality(Reqs)
 
 None == 0
 Workers == 1 .. MaxWorkers
@@ -20,7 +21,9 @@ VARIABLES
     caller,      \* r -> "new" | "waiting" | "answered" | "failed" | "timedout": what the request's caller was told
     pending,     \* requests the lane still owes an answer
     sent,        \* r -> the worker it was written to, or None
-    waiting,     \* requests that wait for a worker to start
+    waiting,     \* unsent live requests, in the order the lane received them
+    probes,      \* terminal.create tasks whose ShellReady message has not been handled, including dropped requests
+    writes,      \* ghost: terminal request IDs in stdin send order; terminal IDs name arrival ranks
     launching,   \* the start main was asked for and has not answered, or None
     launches,    \* starts asked for so far (their numbers never repeat)
     answers,     \* starts main has yet to answer
@@ -43,14 +46,16 @@ VARIABLES
     staleStart,  \* ghost: a worker started from an answer to a start asked before a stop
     stopAt       \* ghost: the starts asked for before the last stop
 
-vars == <<caller, pending, sent, waiting, launching, launches, answers, running, made, life, unanswered, overdue,
+vars == <<caller, pending, sent, waiting, probes, writes, launching, launches, answers, running, made, life, unanswered, overdue,
           graces, idles, lines, wrote, gaveups, exits, changed, endedBy, read, cut, recycledFor, staleStart, stopAt>>
 
 TypeOK ==
     /\ caller \in [Reqs -> {"new", "waiting", "answered", "failed", "timedout"}]
     /\ pending \subseteq Reqs
     /\ sent \in [Reqs -> Workers \cup {None}]
-    /\ waiting \subseteq Reqs
+    /\ waiting \in Seq(Reqs)
+    /\ probes \subseteq Reqs
+    /\ writes \in Seq(Reqs)
     /\ launching \in 0 .. MaxLaunches
     /\ launches \in 0 .. MaxLaunches
     /\ answers \subseteq 1 .. MaxLaunches
@@ -77,7 +82,9 @@ Init ==
     /\ caller = [r \in Reqs |-> "new"]
     /\ pending = {}
     /\ sent = [r \in Reqs |-> None]
-    /\ waiting = {}
+    /\ waiting = <<>>
+    /\ probes = {}
+    /\ writes = <<>>
     /\ launching = None
     /\ launches = 0
     /\ answers = {}
@@ -101,20 +108,20 @@ Init ==
     /\ stopAt = 0
 
 \* Which kinds each rule applies to.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:591-604 Lane::outlived_its_omp the terminals worker is never let go for a changed omp
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:771-784 Lane::outlived_its_omp the terminals worker is never let go for a changed omp
 Retires == Kind # "terminals"
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:753-779 Lane::gave_up only the stock worker is replaced when its lane stays silent
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:940-970 Lane::gave_up only the stock worker is replaced when its lane stays silent
 Recycles == Kind = "stock"
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:813-831 Lane::arm_idle_exit only the extensions worker has an idle exit
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:1004-1022 Lane::arm_idle_exit only the extensions worker has an idle exit
 IdleExits == Kind = "extensions"
 
 \* omp was reinstalled while the lane's worker ran, and nothing is in flight on it: no request it was sent is
 \* unanswered and none but the asking one waits.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:591-604 Lane::outlived_its_omp
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:771-784 Lane::outlived_its_omp
 Outlived == running # None /\ Retires /\ changed /\ unanswered = {} /\ pending = {}
 
 \* The lane asks main how to start a worker.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:559-587 Lane::request the `stock.launch` event, named by a number never used before
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:738-766 Lane::request the `stock.launch` event, named by a number never used before
 Ask ==
     /\ launches < MaxLaunches
     /\ launches' = launches + 1
@@ -122,7 +129,7 @@ Ask ==
     /\ answers' = answers \cup {launches + 1}
 
 \* The lane ends its worker: closes its stdin (`closing`), or kills it when it hung.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:607-613 Lane::let_go
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:787-793 Lane::let_go
 LetGo(why) ==
     /\ life' = [life EXCEPT ![running] = IF why = "recycle" THEN "killed" ELSE "closing"]
     /\ endedBy' = [endedBy EXCEPT ![running] = why]
@@ -132,59 +139,89 @@ LetGo(why) ==
     /\ overdue' = {}
 
 \* Everything the lane still owes an answer fails.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:625-630 Lane::fail_pending
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:812-817 Lane::fail_pending
 Fail ==
     /\ caller' = [r \in Reqs |-> IF r \in pending /\ caller[r] = "waiting" THEN "failed" ELSE caller[r]]
     /\ pending' = {}
-    /\ waiting' = {}
+    /\ waiting' = <<>>
+
+Ids(q) == {q[i] : i \in DOMAIN q}
+
+RECURSIVE ReadyPrefix(_, _)
+ReadyPrefix(q, outstanding) ==
+    IF q = <<>> THEN <<>>
+    ELSE IF Head(q) \in outstanding THEN <<>>
+    ELSE <<Head(q)>> \o ReadyPrefix(Tail(q), outstanding)
+
+\* q omits IDs no longer in pending: flush skips those entries without writing them.
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:796-810 Lane::flush
+Flush(g, q, outstanding) ==
+    LET batch == IF g = None THEN <<>> ELSE ReadyPrefix(q, outstanding)
+        sending == Ids(batch)
+    IN /\ sent' = [r \in Reqs |-> IF r \in sending THEN g ELSE sent[r]]
+       /\ unanswered' = unanswered \cup sending
+       /\ waiting' = SelectSeq(q, LAMBDA r : r \notin sending)
+       /\ writes' = IF Kind = "terminals" THEN writes \o batch ELSE writes
 
 \* A request reaches the lane.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:559-587 Lane::request
-Request(r) ==
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:738-766 Lane::request
+Request(r, probe) ==
     /\ caller[r] = "new"
+    /\ IF Kind = "terminals" THEN r = 1 + Cardinality({x \in Reqs : caller[x] # "new"}) ELSE TRUE
+    /\ probes' = IF probe THEN probes \cup {r} ELSE probes
     /\ caller' = [caller EXCEPT ![r] = "waiting"]
     /\ pending' = pending \cup {r}
     /\ IF Outlived
          THEN /\ LetGo("retire")
-              /\ waiting' = waiting \cup {r}
+              /\ waiting' = Append(waiting, r)
               /\ Ask
-              /\ UNCHANGED sent
+              /\ UNCHANGED <<sent, writes>>
          ELSE IF running # None
-         THEN /\ sent' = [sent EXCEPT ![r] = running]
-              /\ unanswered' = unanswered \cup {r}
-              /\ UNCHANGED <<waiting, launching, launches, answers, running, life, overdue, endedBy, cut>>
-         ELSE /\ waiting' = waiting \cup {r}
+         THEN /\ Flush(running, Append(waiting, r), probes')
+              /\ UNCHANGED <<launching, launches, answers, running, life, overdue, endedBy, cut>>
+         ELSE /\ waiting' = Append(waiting, r)
               /\ IF launching = None THEN Ask ELSE UNCHANGED <<launching, launches, answers>>
-              /\ UNCHANGED <<sent, running, life, unanswered, overdue, endedBy, cut>>
+              /\ UNCHANGED <<sent, writes, running, life, unanswered, overdue, endedBy, cut>>
     /\ UNCHANGED <<made, graces, idles, lines, wrote, gaveups, exits, changed, read, recycledFor, staleStart, stopAt>>
 
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:648-736 Lane::start handles the blocking task's ShellReady(id, result)
+ShellReady(r, ok) ==
+    /\ r \in probes
+    /\ probes' = probes \ {r}
+    /\ IF ~ok /\ r \in pending
+         THEN /\ pending' = pending \ {r}
+              /\ caller' = [caller EXCEPT ![r] = IF @ = "waiting" THEN "failed" ELSE @]
+         ELSE UNCHANGED <<caller, pending>>
+    /\ Flush(running, SelectSeq(waiting, LAMBDA id : id \in pending'), probes')
+    /\ UNCHANGED <<launching, launches, answers>>
+    /\ UNCHANGED <<running, made, life, overdue, graces, idles, lines, wrote, gaveups, exits, changed, endedBy,
+                   read, cut, recycledFor, staleStart, stopAt>>
+
 \* Main's answer to a start reaches the lane: how to start the worker (`ok`), or why none can start.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:632-649 Lane::launched
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:819-834 Lane::launched
 Launched(l, ok) ==
     /\ l \in answers
     /\ answers' = answers \ {l}
     /\ IF launching # l
          THEN UNCHANGED <<caller, pending, sent, waiting, launching, running, made, life, unanswered, idles, changed,
-                          staleStart>>
+                          staleStart, writes>>
          ELSE /\ launching' = None
               /\ IF ok
                    THEN /\ made < MaxWorkers
                         /\ made' = made + 1
                         /\ running' = made + 1
                         /\ life' = [life EXCEPT ![made + 1] = "up"]
-                        /\ sent' = [r \in Reqs |-> IF r \in waiting \cap pending THEN made + 1 ELSE sent[r]]
-                        /\ unanswered' = waiting \cap pending
-                        /\ waiting' = {}
+                        /\ Flush(made + 1, waiting, probes)
                         /\ changed' = FALSE
-                        /\ idles' = IF IdleExits /\ waiting \cap pending = {} THEN idles \cup {made + 1} ELSE idles
+                        /\ idles' = IF IdleExits /\ unanswered' = {} THEN idles \cup {made + 1} ELSE idles
                         /\ staleStart' = (staleStart \/ l <= stopAt)
                         /\ UNCHANGED <<caller, pending>>
                    ELSE /\ Fail
-                        /\ UNCHANGED <<sent, running, made, life, unanswered, idles, changed, staleStart>>
-    /\ UNCHANGED <<launches, overdue, graces, lines, wrote, gaveups, exits, endedBy, read, cut, recycledFor, stopAt>>
+                        /\ UNCHANGED <<sent, running, made, life, unanswered, idles, changed, staleStart, writes>>
+    /\ UNCHANGED <<probes, launches, overdue, graces, lines, wrote, gaveups, exits, endedBy, read, cut, recycledFor, stopAt>>
 
 \* A request's timeout passes in its handler before the lane answered it: the caller is told at once.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:293-321 wait the select over the answer, the timer and the cancel
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:422-450 wait the select over the answer, the timer and the cancel
 TimerFires(r) ==
     /\ caller[r] = "waiting"
     /\ caller' = [caller EXCEPT ![r] = "timedout"]
@@ -193,18 +230,21 @@ TimerFires(r) ==
                    graces, idles, lines, wrote, exits, changed, endedBy, read, cut, recycledFor, staleStart, stopAt>>
 
 \* The lane hears that a request's caller gave up: the worker is told to skip it, and a stock worker gets a grace.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:753-779 Lane::gave_up
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:940-970 Lane::gave_up
 GaveUp(r) ==
     /\ r \in gaveups
     /\ gaveups' = gaveups \ {r}
     /\ IF r \notin pending
-         THEN UNCHANGED <<pending, overdue, graces>>
+         THEN UNCHANGED <<pending, overdue, graces, waiting, sent, unanswered, writes>>
          ELSE /\ pending' = pending \ {r}
-              /\ IF running # None /\ Recycles
+              /\ IF r \in unanswered
+                   THEN UNCHANGED <<waiting, sent, unanswered, writes>>
+                   ELSE Flush(running, SelectSeq(waiting, LAMBDA id : id # r), probes)
+              /\ IF running # None /\ r \in unanswered /\ Recycles
                    THEN /\ overdue' = overdue \cup {r}
                         /\ graces' = graces \cup {<<running, r>>}
                    ELSE UNCHANGED <<overdue, graces>>
-    /\ UNCHANGED <<caller, sent, waiting, launching, launches, answers, running, made, life, unanswered, idles, lines,
+    /\ UNCHANGED <<caller, probes, launching, launches, answers, running, made, life, idles, lines,
                    wrote, exits, changed, endedBy, read, cut, recycledFor, staleStart, stopAt>>
 
 \* A worker answers a request it was sent (its result, its error, or `withdrawn`).
@@ -218,7 +258,7 @@ WorkerAnswers(g, r) ==
                    overdue, graces, idles, gaveups, exits, changed, endedBy, read, cut, recycledFor, staleStart, stopAt>>
 
 \* The lane reads a worker's answer; one from a worker that is no longer its own is dropped.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:735-748 Lane::line
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:922-935 Lane::line
 ReadLine(g, r) ==
     /\ <<g, r>> \in lines
     /\ lines' = lines \ {<<g, r>>}
@@ -236,7 +276,7 @@ ReadLine(g, r) ==
                    changed, endedBy, cut, recycledFor, staleStart, stopAt>>
 
 \* The grace of a timed-out request passes: the worker it was armed for, still silent on it, is ended as hung.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:783-801 Lane::overdue
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:974-992 Lane::overdue
 Grace(g, r) ==
     /\ <<g, r>> \in graces
     /\ graces' = graces \ {<<g, r>>}
@@ -249,7 +289,7 @@ Grace(g, r) ==
                    staleStart, stopAt>>
 
 \* The idle timer is due: the worker it was armed for, with nothing unanswered, is let go.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:833-843 Lane::idle
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:1024-1034 Lane::idle
 Idle(g) ==
     /\ g \in idles
     /\ idles' = idles \ {g}
@@ -268,7 +308,7 @@ WorkerExits(g) ==
                    graces, idles, lines, wrote, gaveups, changed, endedBy, read, cut, recycledFor, staleStart, stopAt>>
 
 \* The lane hears of an exit; that of its own worker fails what waited on it.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:803-810 Lane::exited
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:994-1001 Lane::exited
 ReadExit(g) ==
     /\ g \in exits
     /\ exits' = exits \ {g}
@@ -291,7 +331,7 @@ OmpChanges ==
 
 \* `stock.stop`: what waits fails, the worker is let go, and a start asked for is forgotten. A later request finds a
 \* lane with nothing in it.
-\* @code native/ompdesk/crates/core/src/stock/mod.rs:846-852 Lane::stop
+\* @code native/ompdesk/crates/core/src/stock/mod.rs:1037-1043 Lane::stop
 Stop ==
     /\ Fail
     /\ launching' = None
@@ -301,12 +341,16 @@ Stop ==
                    recycledFor, staleStart>>
 
 Next ==
-    \/ \E r \in Reqs : Request(r) \/ TimerFires(r) \/ GaveUp(r)
+    \/ \E r \in Reqs, probe \in (IF Kind = "terminals" THEN BOOLEAN ELSE {FALSE}) : Request(r, probe)
+    \/ \E r \in Reqs, ok \in BOOLEAN : ShellReady(r, ok)
+    \/ \E r \in Reqs : GaveUp(r)
     \/ \E l \in 1 .. MaxLaunches, ok \in BOOLEAN : Launched(l, ok)
-    \/ \E g \in Workers, r \in Reqs : WorkerAnswers(g, r) \/ ReadLine(g, r) \/ Grace(g, r)
-    \/ \E g \in Workers : Idle(g) \/ WorkerExits(g) \/ ReadExit(g)
-    \/ OmpChanges
-    \/ Stop
+    \/ /\ UNCHANGED <<probes, writes>>
+       /\ \/ \E r \in Reqs : TimerFires(r)
+          \/ \E g \in Workers, r \in Reqs : WorkerAnswers(g, r) \/ ReadLine(g, r) \/ Grace(g, r)
+          \/ \E g \in Workers : Idle(g) \/ WorkerExits(g) \/ ReadExit(g)
+          \/ OmpChanges
+          \/ Stop
 
 Spec == Init /\ [][Next]_vars
 
@@ -325,11 +369,34 @@ OnlyTheStockWorkerIsRecycled == \A g \in Workers : endedBy[g] = "recycle" => Kin
 OnlyAStuckWorkerIsRecycled ==
     \A p \in recycledFor : sent[p[2]] = p[1] /\ caller[p[2]] = "timedout" /\ p \notin read
 
-\* A request the lane owes an answer waits for a start that was asked for, or is unanswered on the lane's worker.
+\* With a worker already running, the only unsent wait is for a live shell probe at the head of the terminal FIFO.
 NoRequestStranded ==
     \A r \in pending :
-        \/ (r \in waiting /\ launching # None /\ running = None)
+        \/ (r \in Ids(waiting) /\ launching # None /\ running = None)
         \/ (running # None /\ sent[r] = running /\ r \in unanswered)
+        \/ /\ Kind = "terminals" /\ running # None /\ launching = None
+           /\ r \in Ids(waiting) /\ sent[r] = None
+           /\ Head(waiting) \in pending \cap probes /\ sent[Head(waiting)] = None
+           /\ Head(waiting) <= r
+
+TerminalWritesInOrder ==
+    \A i \in DOMAIN writes :
+        /\ writes[i] \notin probes
+        /\ \A r \in pending : r < writes[i] => sent[r] # None
+        /\ \A j \in 1 .. (i - 1) : writes[j] < writes[i]
+
+\* Until GaveUp reaches the lane, a ready frame may still win the race with its caller's timeout.
+DroppedRequestsStayGone ==
+    [][\A r \in Reqs :
+        /\ ((caller'[r] = "failed" \/ (caller'[r] = "timedout" /\ r \notin gaveups'))
+            => (r \notin pending' /\ sent'[r] = sent[r]))
+        /\ ((caller[r] # "new" /\ r \notin pending) => (r \notin pending' /\ sent'[r] = sent[r]))]_vars
+
+\* A preparation result cannot request or spawn a worker. A result for a removed ID cannot change any live request.
+PreparationCannotRevive ==
+    [][probes \ probes' # {} =>
+        /\ UNCHANGED <<launches, made>>
+        /\ ((probes \ probes') \cap pending = {} => UNCHANGED <<caller, pending, waiting, sent, writes, launching, running>>)]_vars
 
 \* Every worker that runs with its stdin open is the lane's: none is left running that nothing will end.
 NoWorkerIsForgotten == \A g \in Workers : life[g] = "up" => g = running
@@ -344,4 +411,7 @@ NeverRecycles == \A g \in Workers : endedBy[g] # "recycle"
 NeverRetires == \A g \in Workers : endedBy[g] # "retire"
 NeverIdleExits == \A g \in Workers : endedBy[g] # "idle"
 NeverAnswersLate == \A r \in Reqs : ~(caller[r] = "timedout" /\ \E g \in Workers : <<g, r>> \in read)
+NeverWaitsBehindCreate ==
+    ~(running # None /\ Len(waiting) = 2 /\ waiting[1] \in probes \cap pending
+      /\ waiting[2] \in pending \ probes /\ sent[waiting[2]] = None)
 =============================================================================

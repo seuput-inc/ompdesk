@@ -81,7 +81,7 @@ export function ToastCard({
 	return (
 		<div
 			className={cx(
-				"flex items-start gap-2.5 rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-elevated) py-2 pr-2 pl-3 shadow-(--sc-shadow-md)",
+				"flex items-start gap-2.5 rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-elevated) py-2 pr-2 pl-3 shadow-(--sc-shadow-notice)",
 				className,
 			)}
 			data-flip-key={flipKey}

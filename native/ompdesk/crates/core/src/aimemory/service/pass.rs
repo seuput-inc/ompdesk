@@ -106,15 +106,18 @@ impl Service {
             Failure::Error { stack, .. } => stack.clone(),
             _ => None,
         };
-        self.log(
-            "failed",
-            json!({ "step": self.state().step, "detail": detail, "stack": stack }),
-        );
+        let mut step = None;
         self.patch(|state| {
+            step = state.step;
             state.phase = "failed";
             state.step = None;
             state.detail = Some(detail.clone());
         });
+        // After the state: whoever reads a `failed` line already sees the phase it reports.
+        self.log(
+            "failed",
+            json!({ "step": step, "detail": detail, "stack": stack }),
+        );
         self.stop_polling();
     }
 

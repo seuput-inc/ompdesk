@@ -45,7 +45,7 @@ class FakePorts implements AppPorts {
 	/** The paired host each caller tab runs on; a tab not listed runs on this computer. */
 	devices: Record<string, string> = {};
 	/** What a paired host's own machine services hold: the Settings UI reads and writes these through its device routes. */
-	host = { rotation: "quota", rea: true, desktopState: "idle" };
+	host = { rotation: "quota", desktopState: "idle" };
 
 	device = (tab: string): string | undefined => this.devices[tab];
 	getPref = (key: string): unknown => this.prefs[key];
@@ -83,11 +83,6 @@ class FakePorts implements AppPorts {
 		if (channel === IPC_COMMANDS.ACCOUNT_ROTATION_SET) {
 			this.host.rotation = String(args[0]);
 			return { mode: this.host.rotation, evenSupported: true };
-		}
-		if (channel === IPC_COMMANDS.BUILTIN_REA_GET) return { enabled: this.host.rea, available: true };
-		if (channel === IPC_COMMANDS.BUILTIN_REA_SET) {
-			this.host.rea = args[0] === true;
-			return { enabled: this.host.rea, available: true };
 		}
 		if (channel === IPC_COMMANDS.HOST_DESKTOP_GET || channel === IPC_COMMANDS.HOST_DESKTOP_UPDATE)
 			return { version: "9.9.9", update: { state: this.host.desktopState } };
@@ -167,14 +162,16 @@ describe("ompdesk_app tiers", () => {
 		const ports = new FakePorts();
 		const control = new AppControl(ports);
 		expect(await control.run(CALLER, "settings.get", { ids: ["theme"] })).toContain("theme: dark");
-		expect(await control.run(CALLER, "settings.theme", { value: "nord" })).toContain("Theme is now nord");
+		expect(await control.run(CALLER, "settings.theme", { value: "github-dark" })).toContain(
+			"Theme is now github-dark",
+		);
 		expect(ports.cards).toEqual([]);
-		expect(ports.prefs).toMatchObject({ themeName: "nord", theme: "dark" });
-		expect(ports.notes).toEqual(["Agent changed: Theme → nord"]);
-		expect(ports.events).toContainEqual({ kind: "pref", key: "themeName", value: "nord" });
+		expect(ports.prefs).toMatchObject({ themeName: "github-dark", theme: "dark" });
+		expect(ports.notes).toEqual(["Agent changed: Theme → github-dark"]);
+		expect(ports.events).toContainEqual({ kind: "pref", key: "themeName", value: "github-dark" });
 		expect(ports.events).toContainEqual({
 			kind: "toast",
-			message: "Agent changed: Theme → nord",
+			message: "Agent changed: Theme → github-dark",
 			undo: { kind: "pref", key: "themeName", value: "dark" },
 		});
 	});
@@ -354,7 +351,7 @@ describe("ompdesk_app tiers", () => {
 		const control = new AppControl(new FakePorts());
 		expect(await refusal(control.run(CALLER, "settings.theme", { value: "neon" }))).toContain("must be one of");
 		expect(await refusal(control.run(CALLER, "settings.fontSize", { value: 99 }))).toContain("at most");
-		expect(await refusal(control.run(CALLER, "settings.theme", { value: "nord", extra: 1 }))).toContain(
+		expect(await refusal(control.run(CALLER, "settings.theme", { value: "github-dark", extra: 1 }))).toContain(
 			"unknown argument",
 		);
 		expect(await refusal(control.run(CALLER, "settings.theme", {}))).toContain("required");
@@ -374,7 +371,7 @@ describe("undo", () => {
 	it("puts back the previous value of the last change, once", async () => {
 		const ports = new FakePorts();
 		const control = new AppControl(ports);
-		await control.run(CALLER, "settings.theme", { value: "nord" });
+		await control.run(CALLER, "settings.theme", { value: "github-dark" });
 		expect(await control.run(CALLER, "app.undo", {})).toContain("Restored Theme to dark");
 		expect(ports.prefs).toMatchObject({ themeName: "dark", theme: "dark" });
 		expect(await refusal(control.run(CALLER, "app.undo", {}))).toContain("Nothing to undo");
@@ -799,29 +796,11 @@ describe("a caller tab on a paired host", () => {
 		expect(ports.events.filter(event => event.kind === "pref")).toEqual([]);
 	});
 
-	it("turns the built-in REA tools on and off on that host", async () => {
-		const ports = onStudio();
-		const control = new AppControl(ports);
-		await control.run(HOSTED, "settings.builtinRea", { value: false });
-		expect(ports.host.rea).toBe(false);
-		expect(only(ports, IPC_COMMANDS.BUILTIN_REA_SET)).toEqual([
-			{ channel: IPC_COMMANDS.BUILTIN_REA_SET, args: [false, STUDIO] },
-		]);
-		expect(await control.run(HOSTED, "settings.get", { ids: ["builtinRea"] })).toContain("builtinRea: off");
-		await control.run(HOSTED, "app.undo", {});
-		expect(ports.host.rea).toBe(true);
-		expect(ports.writes).toEqual([]);
-	});
-
-	it("still writes a local caller's rotation and REA to this computer's prefs", async () => {
+	it("still writes a local caller's rotation to this computer's prefs", async () => {
 		const ports = onStudio();
 		const control = new AppControl(ports);
 		await control.run(CALLER, "settings.rotation", { value: "even" });
-		await control.run(CALLER, "settings.builtinRea", { value: false });
-		expect(ports.writes).toEqual([
-			{ key: "accountRotation", value: "even" },
-			{ key: "builtinMcp.rea", value: false },
-		]);
+		expect(ports.writes).toEqual([{ key: "accountRotation", value: "even" }]);
 		expect(ports.invoked).toEqual([]);
 	});
 
@@ -1155,6 +1134,106 @@ describe("usage.read", () => {
 		const text = await new AppControl(ports).run(CALLER, "usage.read", {});
 		expect(text).toContain("Week [x:1]: 10% used");
 		expect(text).toContain("Week [x:2]: 20% used");
+	});
+
+	it("limits an account only by what the reading omp would refuse, and says where, when and under which Credit use", async () => {
+		const ports = new FakePorts();
+		const week = Date.now() + 100 * HOUR;
+		const window = (id: string, label: string, usedFraction: number, status: string) => ({
+			id,
+			label,
+			usedFraction,
+			windowId: "7d",
+			resetsAt: week,
+			status,
+		});
+		const usage = {
+			creditSpend: true,
+			reports: [
+				{
+					// Only the model's own week is spent: Opus and Sonnet still run on this account.
+					provider: "anthropic",
+					account: "claude@example.test",
+					fetchedAt: Date.now() - 3 * 60_000,
+					resetAt: week,
+					limits: [
+						window("anthropic:7d", "Claude 7 Day", 0.94, "warning"),
+						window("anthropic:7d:fable", "Claude 7 Day (Fable)", 1, "exhausted"),
+					],
+				},
+				{
+					// The plan is used up and ChatGPT still allows requests; the report holds a balance, not a charge.
+					provider: "openai-codex",
+					account: "gpt@example.test (pro)",
+					fetchedAt: Date.now(),
+					planSpentUntil: week,
+					credits: { kind: "balance", limitId: "openai-codex:credits", remaining: 500, unit: "credits" },
+					limits: [window("openai-codex:secondary", "7 days", 1, "warning")],
+				},
+			],
+		};
+		ports.deviceData.Studio = { get_usage: usage };
+		const text = await new AppControl(ports).run(CALLER, "usage.read", { device: "Studio" });
+		const [header, claude] = text.split("\n");
+		expect(header).toMatch(/^Read by an omp on "Studio" at \d{4}-\d\d-\d\dT[\d:]+Z; Credit use on there/);
+		expect(claude).toContain("claude@example.test");
+		expect(claude).not.toContain("limited until");
+		expect(claude).toMatch(/read \d{4}-\d\d-\d\dT[\d:]+Z \(3m ago\)/);
+		expect(text).toContain("Claude 7 Day (Fable): 100% used");
+		const gpt = text.split("\n").find(line => line.includes("gpt@example.test"));
+		expect(gpt).toMatch(/plan used up until [\dT:-]+Z \(in 4d\dh\); requests still allowed/);
+		expect(gpt).toContain("credit balance: 500 credits");
+		expect(gpt).not.toContain("limited until");
+		expect(gpt).not.toMatch(/on credits|charged|spent/);
+	});
+
+	it("says a used-up plan the provider still allows is still allowed, with no word of what pays for it", async () => {
+		const ports = new FakePorts();
+		const week = Date.now() + 50 * HOUR;
+		// ChatGPT's explicit allow at 100 % with no credits block: stock writes `warning`.
+		ports.rpcData.get_usage = {
+			creditSpend: true,
+			reports: [
+				{
+					provider: "openai-codex",
+					account: "gpt@example.test (pro)",
+					fetchedAt: Date.now(),
+					planSpentUntil: week,
+					limits: [
+						{ id: "openai-codex:secondary", label: "7 days", usedFraction: 1, resetsAt: week, status: "warning" },
+					],
+				},
+			],
+		};
+		const text = await new AppControl(ports).run(CALLER, "usage.read", {});
+		const gpt = text.split("\n").find(line => line.includes("gpt@example.test"));
+		expect(gpt).toMatch(/plan used up until [\dT:-]+Z \(in 2d\dh\); requests still allowed/);
+		expect(gpt).not.toMatch(/credit|limited until/);
+	});
+
+	it("limits a used-up plan where Credit use is off, as that computer's omp refuses it", async () => {
+		const ports = new FakePorts();
+		const week = Date.now() + 30 * HOUR;
+		ports.rpcData.get_usage = {
+			creditSpend: false,
+			reports: [
+				{
+					provider: "openai-codex",
+					account: "gpt@example.test (pro)",
+					fetchedAt: Date.now(),
+					limitedUntil: week,
+					planSpentUntil: week,
+					limits: [{ id: "openai-codex:secondary", label: "7 days", usedFraction: 1, resetsAt: week }],
+				},
+			],
+		};
+		const text = await new AppControl(ports).run(CALLER, "usage.read", {});
+		expect(text).toContain("Read by an omp on your session's computer");
+		expect(text).toContain("Credit use off there");
+		expect(text).toMatch(/limited until [\dT:-]+Z \(in 1d\dh\)/);
+		expect(text).toMatch(
+			/plan used up until [\dT:-]+Z \(in 1d\dh\); Credit use is off here, so nothing is sent on it/,
+		);
 	});
 });
 

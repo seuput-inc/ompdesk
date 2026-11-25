@@ -31,10 +31,9 @@
  * a remote tab), exactly like an explicit `defaultWorkspace` request.
  */
 
-import { stat } from "node:fs/promises";
 import type { SavedWorktree } from "../shared/disk-care";
 import type { IpcSavedFolder, IpcSpawnTabPayload, IpcSpawnTabResult, SessionKind } from "../shared/ipc-types";
-import { canonicalCwd } from "./canonical-cwd";
+import { canonicalCwd, directoryExists } from "./canonical-cwd";
 import type { SessionIndex } from "./session-index";
 import type { SidecarPool } from "./sidecar-pool";
 import type { SidecarLike } from "./sidecar-types";
@@ -69,17 +68,12 @@ export async function sessionFolderState(
 ): Promise<SessionFolderState> {
 	const folder = await sources.recordedCwd(sessionPath);
 	if (!folder) return { folder: null, missing: false, saved: null };
-	const exists = () =>
-		stat(folder).then(
-			info => info.isDirectory(),
-			() => false,
-		);
-	if (await exists()) return { folder, missing: false, saved: null };
+	if (await directoryExists(folder)) return { folder, missing: false, saved: null };
 	// Not knowing whether disk care saved it (its store not read yet) still refuses: only the offer is missing.
 	const saved = (await sources.savedWorktrees?.find(folder).catch(() => null)) ?? null;
 	if (saved && restore) {
 		await sources.savedWorktrees?.restore(saved.id);
-		if (await exists()) return { folder, missing: false, saved: null };
+		if (await directoryExists(folder)) return { folder, missing: false, saved: null };
 	}
 	return {
 		folder,
@@ -105,9 +99,9 @@ export type SpawnTabDeps = {
 	 */
 	fallbackCwd: (device: string | undefined) => string | null;
 	/** The app's initial cwd, for a local spawn with no caller cwd. */
-	initialCwd: () => string;
+	initialCwd: () => string | Promise<string>;
 	/** GUI-owned Work workspace, created on demand. */
-	defaultWorkspace: () => string;
+	defaultWorkspace: () => string | Promise<string>;
 	remote: SpawnTabRemote;
 	/**
 	 * Test hook (env `OMP_GUI_TEST_VIEWER_WINDOWS=1`): any window, not only a paired web device's, views a
@@ -200,7 +194,9 @@ export async function spawnTabForWindow(
 		? neutral
 			? await deps.remote.defaultWorkspace(device)
 			: (requested ?? callerCwd ?? (await deps.remote.defaultWorkspace(device)))
-		: canonicalCwd(neutral ? deps.defaultWorkspace() : (home ?? requested ?? callerCwd ?? deps.initialCwd()));
+		: canonicalCwd(
+				neutral ? await deps.defaultWorkspace() : (home ?? requested ?? callerCwd ?? (await deps.initialCwd())),
+			);
 	const tabId = nextSnowflake();
 	// A no-path tab is an explicit New Tab action. It must start empty even
 	// when the CLI's persistent autoResume setting is enabled for the project.

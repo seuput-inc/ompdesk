@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::error::{LlmError, LlmResult};
 use crate::provider::LlmProvider;
-use crate::response::{provider_error_body, response_json_limited};
+use crate::response::{provider_error, response_json_limited};
 use crate::types::{ChatRequest, ChatResponse, ExtraHeaders, Role, Usage};
 
 /// Default Gemini API base.
@@ -41,7 +41,9 @@ impl GeminiProvider {
     /// # Errors
     /// Returns a `reqwest::Error` if the HTTP client cannot be built.
     pub fn new(api_key: SecretString, model: impl Into<String>) -> LlmResult<Self> {
-        let client = reqwest::Client::builder().build()?;
+        let client = reqwest::Client::builder()
+            .redirect(crate::redirect::same_origin_redirects())
+            .build()?;
         Ok(Self {
             client,
             api_key,
@@ -135,6 +137,8 @@ struct GeminiResponse {
 struct GeminiCandidate {
     #[serde(default)]
     content: Option<GeminiCandidateContent>,
+    #[serde(rename = "finishReason", default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +185,23 @@ impl LlmProvider for GeminiProvider {
         let prepared = prepare_schema_for_gemini(schema)?;
         let body = self.build_request(&request, Some(prepared));
         let response: GeminiResponse = self.post(&body).await?;
+        // MAX_TOKENS is an output-budget stop, even when the partial text
+        // happens to parse. Preserve it for callers that split the batch.
+        // https://ai.google.dev/api/generate-content#FinishReason
+        if response
+            .candidates
+            .first()
+            .and_then(|candidate| candidate.finish_reason.as_deref())
+            == Some("MAX_TOKENS")
+        {
+            return Err(LlmError::TruncatedResponse {
+                model: self.model.clone(),
+                completion_tokens: response
+                    .usage_metadata
+                    .as_ref()
+                    .map(|usage| usage.candidates_token_count),
+            });
+        }
         let text = first_text(&response).ok_or_else(|| {
             LlmError::UnexpectedShape("gemini response had no candidate text".into())
         })?;
@@ -251,13 +272,8 @@ impl GeminiProvider {
                 .header("content-type", "application/json"),
         );
         let resp = request.json(body).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = provider_error_body(resp).await;
-            return Err(LlmError::Provider {
-                status: status.as_u16(),
-                body,
-            });
+        if !resp.status().is_success() {
+            return Err(provider_error(resp).await);
         }
         response_json_limited::<R>(resp).await
     }

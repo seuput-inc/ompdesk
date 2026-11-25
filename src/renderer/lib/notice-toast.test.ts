@@ -58,6 +58,17 @@ describe("noticeToast", () => {
 		});
 	});
 
+	it("keeps tool roster changes quiet but reports a registration problem", () => {
+		const event = { type: "notice", source: "toolCommands" } as const;
+		expect(noticeToast({ ...event, level: "info", message: "Tool commands: added generate_image" })).toBeNull();
+		for (const level of ["warning", "error"] as const) {
+			expect(noticeToast({ ...event, level, message: "Registration failed" })).toMatchObject({
+				variant: level,
+				message: "Registration failed",
+			});
+		}
+	});
+
 	it("drops routine mount churn and lets an unknown advisor shape through untouched", () => {
 		expect(noticeToast({ type: "notice", level: "info", message: "mounted", source: "vision" })).toBeNull();
 		expect(

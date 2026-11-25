@@ -745,10 +745,10 @@
 	--omp-column-reading: 60rem;
 }
 
-/* Transcript + composer: a ~72ch reading column, narrower
+/* Transcript + composer: a ~70ch reading column (Orca's 46rem), narrower
    than the settings/management canvas. */
 .omp-workspace-main {
-	--omp-column-reading: 48rem;
+	--omp-column-reading: 46rem;
 }
 
 /* Work board (WorkBoard.tsx): a wide pane docks it in the right margin and shifts the transcript and composer
@@ -911,14 +911,6 @@
 	}
 }
 
-.omp-conversation-nav-stack.is-dense {
-	gap: 1px;
-}
-
-.omp-conversation-nav-stack.is-compact {
-	gap: 0;
-}
-
 .omp-conversation-nav-slot {
 	position: relative;
 	flex: 0 1 10px;
@@ -926,8 +918,40 @@
 	width: 100%;
 }
 
-.omp-conversation-nav-stack.is-compact .omp-conversation-nav-slot {
-	flex-basis: 6px;
+/* The top item of a windowed rail: how many turns lie above the ticks, one press of it moves the window a page up. */
+.omp-conversation-nav-earlier-slot {
+	position: relative;
+	flex: 0 0 auto;
+	width: 100%;
+	margin-bottom: var(--sc-space-1);
+}
+
+.omp-conversation-nav-earlier {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 1px;
+	width: 100%;
+	padding: 0 var(--sc-space-1) 0 0;
+	border: 0;
+	border-radius: var(--sc-radius-xs);
+	background: transparent;
+	color: var(--sc-text-subtle);
+	font-size: var(--sc-font-2xs);
+	font-variant-numeric: tabular-nums;
+	line-height: 1.5;
+	pointer-events: auto;
+	cursor: pointer;
+	transition: color var(--sc-duration-fast) var(--sc-ease-standard);
+}
+
+.omp-conversation-nav-earlier:hover,
+.omp-conversation-nav-earlier:focus-visible:where(:not(html[data-focus-modality="pointer"] *)) {
+	color: var(--sc-text);
+}
+
+.omp-conversation-nav-earlier:focus-visible:where(:not(html[data-focus-modality="pointer"] *)) {
+	outline: var(--sc-focus-width) solid var(--sc-focus-ring);
 }
 
 .omp-conversation-nav-marker {
@@ -1014,15 +1038,30 @@
 	animation: omp-fade-in var(--sc-duration-fast) var(--sc-ease-standard) both;
 }
 
-.omp-conversation-nav-slot:nth-child(-n + 5):not(:nth-last-child(-n + 5)) .omp-conversation-nav-preview {
+.omp-conversation-nav-slot:nth-child(-n + 5 of .omp-conversation-nav-slot):not(
+		:nth-last-child(-n + 5 of .omp-conversation-nav-slot)
+	)
+	.omp-conversation-nav-preview {
 	top: 0;
 	transform: none;
 }
 
-.omp-conversation-nav-slot:nth-last-child(-n + 5):not(:nth-child(-n + 5)) .omp-conversation-nav-preview {
+.omp-conversation-nav-slot:nth-last-child(-n + 5 of .omp-conversation-nav-slot):not(
+		:nth-child(-n + 5 of .omp-conversation-nav-slot)
+	)
+	.omp-conversation-nav-preview {
 	top: auto;
 	bottom: 0;
 	transform: none;
+}
+
+.omp-conversation-nav-preview-earlier {
+	width: max-content;
+	padding: var(--sc-space-1-5) var(--sc-space-3);
+	color: var(--sc-text-muted);
+	font-size: var(--sc-font-xs);
+	font-weight: 500;
+	white-space: nowrap;
 }
 
 .omp-conversation-nav-preview-kicker {
@@ -1070,15 +1109,17 @@
 	--omp-actions-reserve: calc(var(--sc-control-sm) + var(--sc-space-0-5));
 }
 
-/* The person's own prompt sits on a ground one step off the page. Dark pages sit between surface-1 and
-   surface-2, so there surface-2 was a few shades from the page and the bubble's edge vanished; it takes
-   surface-3 instead (inline code in it then reads as a darker inset). */
+/* The person's own prompt: Orca's bubble, a faint text-colored wash over the page with a hairline of the same kind
+   (4 % and 7 % of the text in a light theme, 7 % and 6 % in a dark one, where a page that dark needs the stronger wash
+   to show an edge at all). Washes of the text color, never a surface step, so every theme draws it the same way. */
 .omp-user-bubble {
-	background: var(--sc-surface-2);
+	background: color-mix(in srgb, var(--sc-text) 4%, var(--sc-bg));
+	border: 1px solid color-mix(in srgb, var(--sc-text) 7%, transparent);
 }
 
 :root[data-theme="dark"] .omp-user-bubble {
-	background: var(--sc-surface-3);
+	background: color-mix(in srgb, var(--sc-text) 7%, var(--sc-bg));
+	border-color: color-mix(in srgb, var(--sc-text) 6%, transparent);
 }
 
 /* User turn: a compact soft bubble on the right. Its actions sit at the bubble's bottom-left when the row has room
@@ -1094,8 +1135,35 @@
 	padding: var(--omp-turn-gap) var(--omp-editorial-edge) var(--omp-prompt-gap) var(--omp-editorial-inset) !important;
 }
 
+/* The "New" line (ChatStream `newRowKey`): where what arrived while the person was in another session starts, in
+   the unread color, a hairline and its word at the reading column's edges. It never moves a row: it sits inside the
+   first new row, which the virtualizer measures with it. */
+.omp-transcript-new {
+	display: flex;
+	align-items: center;
+	gap: var(--sc-space-2);
+	padding: var(--sc-space-2) var(--omp-editorial-edge) 0 var(--omp-editorial-inset);
+	font-size: var(--sc-font-xs);
+	font-weight: var(--sc-weight-semibold);
+	color: var(--sc-unread);
+}
+
+.omp-transcript-new::before {
+	content: "";
+	flex: 1;
+	border-top: 1px solid color-mix(in srgb, var(--sc-unread) 45%, transparent);
+}
+
 .omp-transcript-editorial .omp-user-bubble {
-	max-width: min(85%, 40rem);
+	max-width: min(80%, 40rem);
+}
+
+/* A turn under a mouse lifts by a faint wash (Orca's transcript row hover), so the eye keeps its place while a reply
+   streams; a finger has no hover and sees none. */
+@media (hover: hover) {
+	.omp-transcript-editorial :is(.omp-assistant-turn, .omp-user-turn):hover {
+		background: color-mix(in srgb, var(--sc-text) 2%, transparent);
+	}
 }
 
 .omp-transcript-editorial .omp-user-bubble .markdown-body {
@@ -1506,7 +1574,8 @@ html[data-input="touch"] [data-update-notice] {
 	transition: background-color var(--sc-duration-fast) var(--sc-ease-standard);
 }
 
-.omp-children-at-work-row:hover {
+/* Only a line that opens something answers the pointer: a paired host's child still starting is no button. */
+button.omp-children-at-work-row:hover {
 	background: var(--sc-hover);
 	color: var(--sc-text);
 }
@@ -1529,7 +1598,7 @@ html[data-input="touch"] [data-update-notice] {
 }
 
 .omp-children-at-work-dot[data-status="waiting"] {
-	background: var(--sc-warning);
+	background: var(--sc-attention);
 }
 
 .omp-children-at-work-title {
@@ -3056,12 +3125,13 @@ html[data-input="touch"] [data-update-notice] {
 	line-height: var(--sc-leading-normal);
 }
 
-/* Reading body: the answer is the most prominent thing on screen. */
+/* Reading body: the answer is the most prominent thing on screen, set a shade off the text color (Orca's chat body,
+   88 % of the text over the page; lib/theme-contrast.ts "chat body" holds it to the floor). */
 .omp-transcript-editorial .omp-assistant-turn .markdown-body,
 .omp-transcript-editorial .omp-assistant-turn .omp-streaming-tail {
 	font-size: var(--sc-font-lg);
 	line-height: var(--sc-leading-normal);
-	color: var(--sc-text);
+	color: var(--sc-chat-text);
 }
 
 /* Hangul paragraphs read better with a little more air. */
@@ -3641,8 +3711,8 @@ html[data-input="touch"] [data-update-notice] {
 	}
 }
 
-/* A very long draft is set in the system face: the bundled Inter Variable is shaped again for the whole text on
-   every keystroke (30k characters: ~16 ms of text layout per key against ~6 ms for a system face, measured). */
+/* A very long draft is set in the system face: the bundled Geist Variable is shaped again for the whole text on
+   every keystroke (30k characters, measured with Inter: ~16 ms of text layout per key against ~6 ms for a system face). */
 .omp-composer-input[data-long] {
 	font-family: "Apple SD Gothic Neo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 	font-feature-settings: normal;
@@ -3953,11 +4023,6 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 
 	.omp-queue-pill-count {
 		display: inline;
-	}
-
-	/* The lane chip is its icon alone while messages wait (its name, Send's name and the pill carry the rest). */
-	.omp-composer-send-cluster:has([data-queue-pill]) [data-send-mode] .omp-composer-control-label {
-		display: none;
 	}
 }
 
@@ -4300,7 +4365,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
    (`.omp-live-sweep`), at one pace: every sweep runs `--live-period` with a hold at each end, and `--live-delay`
    (set from the document clock when the work starts) puts every sweep on one shared phase.
    - States never retime: `turn` and `background` run the same animation; `background` only lowers the light's
-     contrast. `waiting` stops the sweep and holds a still warning colour (the title) or tint (the box).
+     contrast. `waiting` stops the sweep and holds a still attention colour (the title) or tint (the box).
    - Every light moves by transform alone, so the compositor draws each frame and nothing repaints (the title's light
      as a background position repainted its text every frame: +9 % of a GPU core with four panes streaming). The
      box's light is one band inside a clipped layer behind the box's content. A title's own glyphs turn transparent
@@ -4333,7 +4398,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 .omp-live-text[data-working="waiting"] {
-	color: var(--sc-warning);
+	color: var(--sc-attention);
 }
 
 /* The copy ends where the title's line does, so its ellipsis falls where the line's own does: a working title
@@ -4445,7 +4510,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 .omp-live-sweep[data-working="waiting"] {
-	background: color-mix(in srgb, var(--sc-warning) 7%, transparent);
+	background: color-mix(in srgb, var(--sc-attention) 7%, transparent);
 }
 
 .omp-live-sweep[data-working="waiting"]::before {
@@ -4496,7 +4561,7 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 /* Reduced motion: no sweep runs. A working title is still text with an accent cast (fainter for background work),
-   the box a still accent tint; waiting keeps its warning colour. Software compositing (`html[data-gpu="software"]`)
+   the box a still accent tint; waiting keeps its attention colour. Software compositing (`html[data-gpu="software"]`)
    keeps the sweep and the shine, held to ten frames a second by lib/cue-clock.ts. */
 @media (prefers-reduced-motion: reduce) {
 	.omp-live-sweep[data-working]::before,
@@ -4776,42 +4841,59 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 
 /* A device section's header color (lib/device-color.ts): a paired host's header wears its own hue so its rows are told
    from this computer's at a glance. The row takes a light wash of it and the device glyph the hue itself; the hues are
-   not status colors, and each is drawn per scheme so the glyph keeps 3:1 against the sidebar. */
-[data-device-color="blue"] {
+   not status colors, and each is drawn per scheme so the glyph keeps 3:1 against the sidebar. A repository's letter
+   mark (common/ProjectArtwork.tsx, `data-mark-hue`) wears the same hues. */
+:is([data-device-color="blue"], [data-mark-hue="blue"]) {
 	--device-color: oklch(0.55 0.15 255);
 }
-[data-device-color="teal"] {
+:is([data-device-color="teal"], [data-mark-hue="teal"]) {
 	--device-color: oklch(0.55 0.1 195);
 }
-[data-device-color="violet"] {
+:is([data-device-color="violet"], [data-mark-hue="violet"]) {
 	--device-color: oklch(0.55 0.17 300);
 }
-[data-device-color="amber"] {
+:is([data-device-color="amber"], [data-mark-hue="amber"]) {
 	--device-color: oklch(0.6 0.13 70);
 }
-[data-device-color="pink"] {
+:is([data-device-color="pink"], [data-mark-hue="pink"]) {
 	--device-color: oklch(0.57 0.17 355);
 }
-[data-device-color="green"] {
+:is([data-device-color="green"], [data-mark-hue="green"]) {
 	--device-color: oklch(0.55 0.13 150);
 }
-:root[data-theme="dark"] [data-device-color="blue"] {
+:root[data-theme="dark"] :is([data-device-color="blue"], [data-mark-hue="blue"]) {
 	--device-color: oklch(0.74 0.12 255);
 }
-:root[data-theme="dark"] [data-device-color="teal"] {
+:root[data-theme="dark"] :is([data-device-color="teal"], [data-mark-hue="teal"]) {
 	--device-color: oklch(0.76 0.1 195);
 }
-:root[data-theme="dark"] [data-device-color="violet"] {
+:root[data-theme="dark"] :is([data-device-color="violet"], [data-mark-hue="violet"]) {
 	--device-color: oklch(0.74 0.14 300);
 }
-:root[data-theme="dark"] [data-device-color="amber"] {
+:root[data-theme="dark"] :is([data-device-color="amber"], [data-mark-hue="amber"]) {
 	--device-color: oklch(0.8 0.12 75);
 }
-:root[data-theme="dark"] [data-device-color="pink"] {
+:root[data-theme="dark"] :is([data-device-color="pink"], [data-mark-hue="pink"]) {
 	--device-color: oklch(0.75 0.14 355);
 }
-:root[data-theme="dark"] [data-device-color="green"] {
+:root[data-theme="dark"] :is([data-device-color="green"], [data-mark-hue="green"]) {
 	--device-color: oklch(0.76 0.13 150);
+}
+
+/* The letter mark: the hue on its wash, in the row's weight; a picture fills the same box with a hairline edge. */
+.omp-project-artwork[data-project-artwork="letter"] {
+	background-color: color-mix(in oklab, var(--device-color) 16%, transparent);
+	color: var(--device-color);
+	font-weight: var(--sc-weight-semibold);
+	line-height: 1;
+}
+.omp-project-artwork[data-project-artwork="image"] {
+	box-shadow: inset 0 0 0 1px var(--sc-border-subtle);
+	background-color: var(--sc-surface-1);
+}
+.omp-project-artwork[data-project-artwork="icon"] {
+	background-color: var(--sc-surface-2);
+	color: var(--sc-text-muted);
 }
 
 .omp-device-header[data-device-color] {

@@ -11,6 +11,7 @@
  */
 
 import { type AutopilotRun, isOmpdeskWorktreeFolder, type WorktreeKind } from "./project-origin";
+import { readSidebarPrefs, type SidebarChange, type SidebarPrefs } from "./sidebar-prefs";
 
 export const SIDEBAR_PROJECTS_COMMAND = "sidebar-projects:command";
 /** Pushed on every change: an `IpcSidebarProjects` (`device` unset for this computer's own list). */
@@ -31,7 +32,19 @@ export interface SidebarProject {
 	by?: "sessions";
 }
 
+export type SidebarLayout = Pick<
+	SidebarPrefs,
+	"pinnedGroups" | "pinnedSessions" | "archivedSessions" | "groupOrder" | "sessionOrder"
+>;
+
+export type SidebarLayoutChange = Extract<
+	SidebarChange,
+	{ op: "set-group-pinned" | "set-session-pinned" | "set-sessions-archived" | "set-group-order" | "set-session-order" }
+>;
+
 export interface SidebarProjectsState {
+	/** This host's shareable arrangement, absent on a host without layout support. */
+	layout?: SidebarLayout;
 	projects: SidebarProject[];
 	/**
 	 * Folders the person removed: their sessions stay on disk but list under no project until the person opens the
@@ -68,7 +81,8 @@ export interface SidebarProjectsState {
 export type SidebarProjectsRequest =
 	| { action: "get" }
 	| { action: "add"; path: string }
-	| { action: "remove"; path: string };
+	| { action: "remove"; path: string }
+	| { action: "layout"; change: SidebarLayoutChange };
 
 export interface IpcSidebarProjects {
 	/** The paired host whose list this is; unset for this computer's. */
@@ -133,10 +147,22 @@ export function parseSidebarProjects(value: unknown): SidebarProjectsState {
 			if (cwd && typeof run?.run === "string" && run.run && typeof run.child === "boolean")
 				autopilotRuns[cwd] = { run: run.run, child: run.child };
 		}
+	const layout = record.layout && typeof record.layout === "object" ? readSidebarPrefs(record.layout) : null;
 	return {
 		projects,
 		removed,
 		worktrees,
+		...(layout
+			? {
+					layout: {
+						pinnedGroups: layout.pinnedGroups,
+						pinnedSessions: layout.pinnedSessions,
+						archivedSessions: layout.archivedSessions,
+						groupOrder: layout.groupOrder,
+						sessionOrder: layout.sessionOrder,
+					},
+				}
+			: {}),
 		...(Object.keys(worktreeKinds).length > 0 ? { worktreeKinds } : {}),
 		...(Object.keys(autopilotRuns).length > 0 ? { autopilotRuns } : {}),
 		...(gone.length > 0 ? { gone } : {}),

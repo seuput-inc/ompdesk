@@ -3,7 +3,7 @@
 # Lean pattern catalog
 
 All files are in `assets/lean-patterns/ProofPatterns/` (relative to the folder that holds this skill's `SKILL.md`). The
-project has no package dependencies. It builds with `lake build` on Lean `v4.35.0` with no `sorry`. To audit it the
+project has no package dependencies. Use its pinned toolchain and `lake build`. To audit it the
 same way you audit your own models, run:
 
 ```bash

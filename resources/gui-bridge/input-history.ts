@@ -6,9 +6,9 @@ import type { BridgeMethods } from "./types";
 
 export const methods: BridgeMethods = guard("inputHistory", {
 	history_record: async (params, env) => {
-		const { HistoryStorage } = await import("@oh-my-pi/pi-coding-agent/session/history-storage");
+		const { HistoryStorage } = await import("./omp/pi-coding-agent/session/history-storage");
 		const input = params as { prompt: string; cwd?: string };
-		const { shouldSkipHistory } = await import("@oh-my-pi/pi-coding-agent/modes/controllers/input-controller");
+		const { shouldSkipHistory } = await import("./omp/pi-coding-agent/modes/controllers/input-controller");
 		const skipped = shouldSkipHistory(input.prompt);
 		if (!skipped)
 			await HistoryStorage.open().add(input.prompt, input.cwd, env.session().sessionManager.getSessionId());

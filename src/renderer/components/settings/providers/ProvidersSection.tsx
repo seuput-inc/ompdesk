@@ -102,7 +102,7 @@ function ConnectedProviderRows({
 	if (accounts) {
 		return (
 			<ProviderAccountRows
-				adding={login.state.running}
+				adding={login.state.running || login.busy}
 				group={group}
 				layout={layout}
 				onAdd={() => void login.start(provider.id)}
@@ -124,7 +124,7 @@ function ConnectedProviderRows({
 						id: "credentials",
 						label: t("providers.updateCredentials", { provider: group.shortName }),
 						icon: KeyRound,
-						disabled: !sidecarReady,
+						disabled: !sidecarReady || login.busy,
 						onSelect: () => handlers.onConnect(provider),
 					},
 				]

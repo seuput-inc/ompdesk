@@ -1,37 +1,181 @@
 /**
  * Edit queued: the composer field takes a queued message over (`composer.editingQueued`). A banner says so
  * ("Edit queued · Saves as last in “After this turn” · Cancel"), the field holds the message, Send becomes a check that
- * saves, and Cancel or Esc puts the exact previous draft (text and pictures) back. Saving calls the queue's own edit
- * (stock re-queues the message at the end of its lane). If the message was delivered or removed meanwhile, the edit
- * ends by itself: the edited text goes ahead of the restored draft, nothing is lost and nothing is sent.
+ * saves, and Cancel or Esc puts the exact previous draft (text and pictures) back.
+ *
+ * While it is edited the message is held, so stock can never deliver it unedited (Orca's edit hold): Edit first has the
+ * core keep it (`queue_hold`, a 120 s lease this window renews every 30 s), then takes it out of stock's queue
+ * (`queue_remove`); one stock delivered meanwhile is not edited ("editGone"). Save queues the edited text, pictures
+ * kept, in the message's lane the way the composer sends (`prompt` with that lane's `streamingBehavior`: queued while a
+ * turn runs, a new turn once none does); Cancel queues the original back the same way while a turn runs, and holds it
+ * in the restored tray once none does. The core's hold goes only after that. A window or tab that goes mid-edit stops
+ * renewing: the original is handed to the core's held queue (never re-sent by itself), the lease lapses and the tab's
+ * restored tray takes it once (`takeHeldQueue`: when a tray mounts or the omp comes back, and again one lease later).
+ * A picture-only message stays not editable.
  */
 
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
+import type { StoreApi } from "zustand/vanilla";
+import type { RpcQueuedMessage } from "../../../../shared/rpc-types";
 import { cx } from "../../../lib/format";
-import { useT } from "../../../lib/i18n";
+import { translate, useT } from "../../../lib/i18n";
+import { restoreAbortedQueue } from "../../../lib/messages";
 import { expandPasteMarkers } from "../../../lib/paste-blobs";
-import { useComposerStore } from "../../../stores/composer";
-import { useQueuedMessages } from "../../../stores/queue";
-import { toast } from "../../../stores/toast";
+import { type TabRpc, useTabRpc } from "../../../lib/tab-rpc";
+import { type ComposerStore, type EditingQueued, useComposerStore } from "../../../stores/composer";
+import { type QueueLane, type QueueStore, useQueueStore } from "../../../stores/queue";
+import { type SessionStore, useSessionStore } from "../../../stores/session";
+import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
+import { toast, toastError } from "../../../stores/toast";
 import { Badge, Button } from "../../common";
-import { useQueueActions } from "../../panels/use-queue-actions";
 import { queueRowName } from "./queue-lane";
 import { useStableCallback } from "./use-stable-callback";
+
+/** The core's hold of an edited message lapses this long after its last renewal (`EDIT_LEASE_MS`, core `sidecar/held_queue.rs`). */
+export const HOLD_LEASE_MS = 120_000;
+/** How often an edit renews the core's hold. */
+const HOLD_RENEW_MS = 30_000;
+
+interface TabStores {
+	composer: Pick<StoreApi<ComposerStore>, "getState">;
+	queue: Pick<StoreApi<QueueStore>, "getState">;
+	session: Pick<StoreApi<SessionStore>, "getState">;
+}
+
+/** The tab's stores, bound before any await: the user may switch tabs meanwhile. */
+function tabStores(tabId: string | null): TabStores {
+	return {
+		composer: sessionRuntimeStore<ComposerStore>(tabId, "composer") ?? useComposerStore,
+		queue: sessionRuntimeStore<QueueStore>(tabId, "queue") ?? useQueueStore,
+		session: sessionRuntimeStore<SessionStore>(tabId, "session") ?? useSessionStore,
+	};
+}
+
+function letGo(rpc: TabRpc, token: string): void {
+	// shortcut: a release lost to a dropped link lets the lease lapse, and the original is offered once more in the
+	// restored tray (held, never sent); retry the release if that shows up.
+	rpc.command({ type: "queue_hold", token }).catch(() => {});
+}
+
+/**
+ * Queue `text` (the edit's or the original) in the edited message's lane, then let the core's hold go. `cancel`: no turn
+ * runs any more, so the original waits in the restored tray instead of starting one. A refused send holds it there too.
+ */
+async function requeue(
+	rpc: TabRpc,
+	stores: TabStores,
+	editing: EditingQueued,
+	text: string,
+	cancel: boolean,
+): Promise<void> {
+	const images = editing.images.length > 0 ? editing.images : undefined;
+	const hold = () => {
+		const entry = [{ text, images }];
+		restoreAbortedQueue(stores.composer.getState(), {
+			steering: editing.lane === "steering" ? entry : [],
+			followUp: editing.lane === "followUp" ? entry : [],
+		});
+	};
+	if (cancel && !stores.session.getState().isStreaming) hold();
+	else {
+		try {
+			if (images) stores.queue.getState().expectImages(text, images);
+			const response = await rpc.prompt(text, images, editing.lane === "steering" ? "steer" : "followUp");
+			if (!response.success) {
+				toastError({ title: translate("input.sendFailed"), error: response });
+				hold();
+			} else if (!cancel) {
+				// Stock queued it as the last of its lane (its frames come before the answer): the tray points at it.
+				const items = stores.queue.getState()[editing.lane];
+				const index = items.findLastIndex(entry => entry.text === text);
+				if (index !== -1)
+					stores.queue.getState().noteMoved({
+						id: items[index].id,
+						lane: editing.lane,
+						position: index + 1,
+						count: items.length,
+						kind: "edit",
+					});
+			}
+		} catch (error) {
+			toastError({ title: translate("input.sendFailed"), error });
+			hold();
+		}
+	}
+	letGo(rpc, editing.token);
+}
+
+/**
+ * Edit of a queued message (the queue row's Edit): hold it in the core, take it out of stock's queue, then hand the
+ * field over. True when the edit began.
+ */
+export function useBeginQueueEdit(): (item: RpcQueuedMessage, lane: QueueLane) => Promise<boolean> {
+	const t = useT();
+	const rpc = useTabRpc();
+	const tabId = useRuntimeTabId();
+	return useStableCallback(async (item: RpcQueuedMessage, lane: QueueLane): Promise<boolean> => {
+		const stores = tabStores(tabId);
+		const hold = {
+			token: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+			lane,
+			text: item.text,
+		};
+		try {
+			const held = await rpc.command({ type: "queue_hold", ...hold });
+			if (!held.success) {
+				toastError({ title: t("queuePanel.editFailed"), error: held });
+				return false;
+			}
+			const removed = await rpc.queueRemove(item.id).catch(() => null);
+			if (!removed?.success || (removed.data as { removed?: boolean } | undefined)?.removed === false) {
+				letGo(rpc, hold.token);
+				await stores.queue.getState().refresh();
+				const { steering, followUp } = stores.queue.getState();
+				if ([...steering, ...followUp].some(entry => entry.id === item.id))
+					toastError({ title: t("queuePanel.editFailed"), error: removed ?? undefined });
+				else toast({ variant: "info", message: t("composerQueue.editGone", { text: queueRowName(item.text) }) });
+				return false;
+			}
+		} catch (error) {
+			toastError({ title: t("queuePanel.editFailed"), error });
+			return false;
+		}
+		stores.composer
+			.getState()
+			.beginEditQueued({ id: item.id, lane, text: item.text, images: item.images, token: hold.token });
+		// Renewed while this tab's store still edits it; a window or tab that went stops, and the lease lapses.
+		const renew = setInterval(() => {
+			if (
+				tabStores(tabId).composer !== stores.composer ||
+				stores.composer.getState().editingQueued?.token !== hold.token
+			)
+				clearInterval(renew);
+			else rpc.command({ type: "queue_hold", ...hold }).catch(() => {});
+		}, HOLD_RENEW_MS);
+		return true;
+	});
+}
 
 /** Save and cancel of the queued message the field is editing; `editing` is null when none is. */
 export function useComposerQueueEdit() {
 	const editing = useComposerStore(state => state.editingQueued);
 	const endEdit = useComposerStore(state => state.endEditQueued);
-	const actions = useQueueActions();
+	const ready = useSessionStore(state => state.status) === "ready";
+	const rpc = useTabRpc();
+	const tabId = useRuntimeTabId();
 	/** Save `text` (the field's draft) as the queued message; true when the edit ended. */
 	const save = useStableCallback((text: string): boolean => {
 		const next = expandPasteMarkers(text).trim();
-		if (!editing || !actions.ready || next === "") return false;
-		if (next !== editing.original) actions.edit(editing.lane, editing.id, next);
+		if (!editing || !ready || next === "") return false;
 		endEdit();
+		void requeue(rpc, tabStores(tabId), editing, next, false);
 		return true;
 	});
-	const cancel = useCallback(() => endEdit(), [endEdit]);
+	const cancel = useCallback(() => {
+		if (!editing) return;
+		endEdit();
+		void requeue(rpc, tabStores(tabId), editing, editing.original, true);
+	}, [editing, endEdit, rpc, tabId]);
 	return { editing, save, cancel };
 }
 
@@ -39,19 +183,6 @@ export function useComposerQueueEdit() {
 export function ComposerEditBanner({ onCancel }: { onCancel: () => void }) {
 	const t = useT();
 	const editing = useComposerStore(state => state.editingQueued);
-	const draft = useComposerStore(state => state.draft);
-	const endEdit = useComposerStore(state => state.endEditQueued);
-	const { steering, followUp } = useQueuedMessages();
-	const present = editing !== null && [...steering, ...followUp].some(item => item.id === editing.id);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: only the message vanishing ends the edit, not each keystroke
-	useEffect(() => {
-		if (!editing || present) return;
-		toast({
-			variant: "info",
-			message: t("composerQueue.editGone", { text: queueRowName(editing.original) }),
-		});
-		endEdit(draft.trim() !== "" && draft !== editing.original ? draft : undefined);
-	}, [editing?.id, present]);
 	if (!editing) return null;
 	return (
 		<div

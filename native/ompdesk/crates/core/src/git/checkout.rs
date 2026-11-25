@@ -1,5 +1,5 @@
 //! Claimed-path presence and the folders watched for git fingerprints. Porcelain parsing, submodule reads and NFC
-//! comparisons stay here; main keeps the session claims and watcher state.
+//! comparisons stay here; main keeps the session claims.
 
 use std::collections::HashSet;
 use std::pin::Pin;

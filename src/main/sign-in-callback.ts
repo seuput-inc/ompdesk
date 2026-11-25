@@ -6,6 +6,7 @@
  * replays a device's browser callback to it (remote/host-services.ts), and the device listens on its port for the
  * browser (remote/sign-in-relay.ts).
  */
+import { core } from "./core/process";
 
 /** The callback hosts stock serves (`#launchUrlIfSafe` in callback-server.ts). */
 export const LOOPBACK_HOSTS: Readonly<Record<string, true>> = { localhost: true, "127.0.0.1": true, "[::1]": true };
@@ -44,13 +45,12 @@ export interface SignInCallbackPage {
  * own address (never one a caller names). Answers stock's page; throws when the server is gone.
  */
 export async function replaySignInCallback(callback: LoopbackCallback, query: string): Promise<SignInCallbackPage> {
-	const target = new URL(callback.url);
-	target.search = query;
-	const response = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
-	const type = response.headers.get("content-type") ?? "";
-	return {
-		status: response.status,
-		contentType: /^text\/(html|plain)\b/i.test(type) ? type.slice(0, 200) : "text/plain; charset=utf-8",
-		body: (await response.text()).slice(0, SIGN_IN_PAGE_MAX_CHARS),
-	};
+	const { result, bin } = await core().call<Omit<SignInCallbackPage, "body">>(
+		"remotebytes.signInReplay",
+		{ url: callback.url.href, query },
+		{ timeoutMs: 10_000 },
+	);
+	if (!bin) throw new Error("The sign-in's callback server did not answer");
+	// A JavaScript slice can end between surrogate halves. The binary tail preserves that last code unit.
+	return { ...result, body: Buffer.from(bin.buffer, bin.byteOffset, bin.byteLength).toString("utf16le") };
 }

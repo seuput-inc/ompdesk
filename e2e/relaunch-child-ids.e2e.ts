@@ -2,7 +2,7 @@
  * After a relaunch every restored tab has a new id, and a child an agent opened has no title of its own (stock names
  * only a person's first message; the GUI's `task` lived in memory). The opener's agent still holds the old id and
  * expects the child's name: `ompdesk_session_send` on the old id reaches the same session, and `ompdesk_sessions`
- * names it by the `Title:` line of its first message. A follow-up the child's omp still queued when the app quit is
+ * names it by the `Title:` line of its first message. A message the child's omp still held unread when the app quit is
  * handed to its next omp once (main's send outbox), and the done report of the turn it runs reaches the opener's new
  * tab. Fake omp with stock-shaped session files. Unit cases: service.test.ts ("after a relaunch", "messages that
  * outlive the omp"), host.test.ts, send-outbox.test.ts, sidecar-pool.test.ts ("earlier tab ids"), tab-layout.test.ts.
@@ -153,7 +153,7 @@ test("an opened child keeps its id and its name through a relaunch", async () =>
 	}
 });
 
-test("a busy child that reports learns of the follow-up queued behind its turn, and the next send steers", async () => {
+test("a busy child takes its opener's message as an aside, read at its next step", async () => {
 	test.setTimeout(180_000);
 	const profile = await makeProfile();
 	let current: ElectronApplication | undefined;
@@ -170,45 +170,30 @@ test("a busy child that reports learns of the follow-up queued behind its turn, 
 		// The child's next turn keeps running (the fake omp's long turn), as a worker's does while it works.
 		await busy(page, kid);
 
-		const queued = await call(profile, page, opener, "ompdesk_session_send", {
-			session: kid,
-			message: "Also do C",
-			delivery: "follow_up",
-		});
-		expect(queued.text).toContain("queued as a follow-up");
-		expect(queued.text).toContain("Dispatch d2");
-
-		// The child reports and would wait in the same turn: stock shows it no queued follow-up, so the report says so.
-		const report = await call(profile, page, kid, "ompdesk_report", { kind: "done", text: "A done", dispatch: "d2" });
-		expect(report.isError).toBe(false);
-		expect(report.text).toContain("(dispatch d2) waits for you");
-		expect(report.text).toContain("end your turn now");
-
-		const next = await call(profile, page, opener, "ompdesk_session_send", {
-			session: kid,
-			message: "And D",
-			delivery: "follow_up",
-		});
-		expect(next.text).toContain("delivered as steer (it already reported to you in this turn");
-		const prompts = (await readRecords(profile.record)).filter(
-			frame => frame.type === "prompt" && typeof frame.message === "string" && frame.message.includes("And D"),
+		const sent = await call(profile, page, opener, "ompdesk_session_send", { session: kid, message: "Also do C" });
+		expect(sent.text).toContain("delivered as steer (it reads it at its next step");
+		expect(sent.text).toContain("Dispatch d2");
+		// A working child takes it as stock's aside (gui-bridge `agent_control.aside`), never a queued steer or follow-up.
+		const frames = (await readRecords(profile.record)).filter(
+			frame => typeof frame.message === "string" && frame.message.includes("Also do C"),
 		);
-		expect(prompts.at(-1)?.streamingBehavior).toBe("steer");
+		expect(frames.map(frame => frame.type)).toEqual(["agent_control.aside"]);
 	} finally {
 		if (current) await exitApp(current);
 		await fs.rm(profile.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });
 
-test("a follow-up queued in a busy child survives a relaunch, its done report reaches the relaunched opener, and its old id takes the next message", async () => {
+test("a message a busy child had not read survives a relaunch, its done report reaches the relaunched opener, and its old id takes the next message", async () => {
 	test.setTimeout(240_000);
 	// Interrupted turns stay stopped, so the child's restored tab is idle and takes the message it lost at once.
 	const profile = await makeProfile({ resumeInterrupted: false });
 	profile.env.OMP_GUI_TEST_AGENT_SWEEP_MS = "500";
 	let current: ElectronApplication | undefined;
-	const marked = async (mark: string) =>
+	// `agent_control.aside` frames count the hand-overs: an idle omp answers one `{idle: true}`, then gets the prompt.
+	const marked = async (mark: string, type = "prompt") =>
 		(await readRecords(profile.record)).filter(
-			frame => frame.type === "prompt" && typeof frame.message === "string" && frame.message.includes(mark),
+			frame => frame.type === type && typeof frame.message === "string" && frame.message.includes(mark),
 		);
 	try {
 		const first = await launch(profile);
@@ -224,30 +209,57 @@ test("a follow-up queued in a busy child survives a relaunch, its done report re
 		await expect.poll(async () => (await child(first.page, oldId))?.status, { timeout: 60_000 }).toBe("running");
 		await expect.poll(async () => (await child(first.page, oldId))?.sessionPath ?? "").not.toBe("");
 		const childPath = (await child(first.page, oldId))?.sessionPath ?? "";
-		// The opener's next message waits in the child's omp's follow-up queue.
+		// The opener's next message waits in the child's omp, unread while its turn stands in a call.
 		const queued = await call(profile, first.page, opener, "ompdesk_session_send", {
 			session: oldId,
 			message: "Also do C fixture:result-ok",
-			delivery: "follow_up",
 		});
-		expect(queued.text).toContain("queued as a follow-up");
+		expect(queued.text).toContain("delivered as steer");
 		expect(queued.text).toContain("Dispatch d2");
 		await quit(first.app);
 		current = undefined;
+		const layoutAtQuit: unknown = await fs
+			.readFile(path.join(profile.desktop, "prefs.json"), "utf8")
+			.then(text => JSON.parse(text).tabLayouts ?? null)
+			.catch(error => ({ readError: String(error) }));
 
-		// The relaunch ends that omp and its queue: the message reaches the child's new omp, once.
+		// The relaunch ends that omp and what it held: the message reaches the child's new omp, once.
 		const second = await launch(profile);
 		current = second.app;
-		const boss = (await tabs(second.page)).find(tab => tab.active)?.tabId ?? "";
+		let lastTabs = await tabs(second.page);
+		const boss = lastTabs.find(tab => tab.active)?.tabId ?? "";
 		// The window lists its restored tabs as they come up; the child's is not necessarily there at the first read.
-		await expect
-			.poll(async () => (await tabs(second.page)).find(tab => tab.sessionPath === childPath)?.tabId ?? "", {
-				timeout: 30_000,
-			})
-			.not.toBe("");
+		try {
+			await expect
+				.poll(
+					async () => {
+						lastTabs = await tabs(second.page);
+						return lastTabs.find(tab => tab.sessionPath === childPath)?.tabId ?? "";
+					},
+					{ timeout: 30_000 },
+				)
+				.not.toBe("");
+		} catch (error) {
+			await test.info().attach("restored-child.json", {
+				contentType: "application/json",
+				body: JSON.stringify({
+					expectedPath: childPath,
+					tabs: lastTabs.map(({ tabId, status, sessionPath }) => ({
+						tabId,
+						status,
+						sessionPath: sessionPath ?? null,
+					})),
+					layoutAtQuit,
+				}),
+			});
+			throw error;
+		}
 		const kid = (await tabs(second.page)).find(tab => tab.sessionPath === childPath)?.tabId ?? "";
 		expect(kid).not.toBe(oldId);
-		await expect.poll(async () => (await marked("[ompdesk dispatch d2:")).length, { timeout: 60_000 }).toBe(2);
+		await expect
+			.poll(async () => (await marked("[ompdesk dispatch d2:", "agent_control.aside")).length, { timeout: 60_000 })
+			.toBe(2);
+		await expect.poll(async () => (await marked("[ompdesk dispatch d2:")).length, { timeout: 60_000 }).toBe(1);
 
 		// It finishes with Result: ok: main's done report reaches the opener's new tab.
 		const doneMails = async () => {
@@ -265,11 +277,30 @@ test("a follow-up queued in a busy child survives a relaunch, its done report re
 					message.details.dispatch === "d2",
 			);
 		};
-		await expect.poll(async () => (await doneMails()).length, { timeout: 60_000 }).toBe(1);
+		try {
+			await expect.poll(async () => (await doneMails()).length, { timeout: 60_000 }).toBe(1);
+		} catch (error) {
+			// Where the report stopped: sent by main to an omp (a `agent_control.mail` frame the fake recorded), in the
+			// opener's transcript under another shape, or never made (the tabs and their states say whose turn is where).
+			const frames = await readRecords(profile.record);
+			const mail = frames
+				.filter(frame => frame.type === "agent_control.mail")
+				.map(frame => JSON.stringify(frame.details ?? {}).slice(0, 160));
+			const states = (await tabs(second.page)).map(
+				tab => `${tab.tabId === boss ? "boss" : tab.tabId === kid ? "kid" : "?"}:${tab.status}`,
+			);
+			// The last frames the fake omps recorded, one short line each: what the kid ran after the relaunch, what was
+			// asked of main (host tool calls) and what reached the boss's omp.
+			const trail = frames.slice(-40).map(frame => JSON.stringify(frame).slice(0, 140));
+			throw new Error(
+				`${String(error)}\nmail frames: ${JSON.stringify(mail)}\ntabs: ${states.join(" ")}\nlast frames:\n${trail.join("\n")}`,
+			);
+		}
 
 		// Several more passes later, neither was handed over again.
 		await second.page.waitForTimeout(3_000);
-		expect(await marked("[ompdesk dispatch d2:")).toHaveLength(2);
+		expect(await marked("[ompdesk dispatch d2:", "agent_control.aside")).toHaveLength(2);
+		expect(await marked("[ompdesk dispatch d2:")).toHaveLength(1);
 		expect(await doneMails()).toHaveLength(1);
 
 		// The id the opener was given before the relaunch still takes its next message (its tab closed meanwhile or not).

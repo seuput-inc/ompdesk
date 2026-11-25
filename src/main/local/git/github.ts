@@ -104,7 +104,8 @@ export function parseGithubRequest(raw: unknown): GithubRequest {
 	return parsed.data;
 }
 
-export async function githubCommand(cwd: string, raw: unknown): Promise<GithubResults[GithubOp]> {
+/** `background`: an automatic re-read of the page, held behind GitHub's rate limit and pace (core `gh/gate.rs`). */
+export async function githubCommand(cwd: string, raw: unknown, background = false): Promise<GithubResults[GithubOp]> {
 	const request = parseGithubRequest(raw);
 	const destination = request.op === "repo_clone" ? path.resolve(request.destination) : null;
 	return ghRequest(
@@ -114,6 +115,7 @@ export async function githubCommand(cwd: string, raw: unknown): Promise<GithubRe
 			request: destination === null ? request : { ...request, destination, parent: path.dirname(destination) },
 			cloneTimeoutMs: CLONE_TIMEOUT_MS,
 			logTimeoutMs: LOG_TIMEOUT_MS,
+			...(background ? { background } : {}),
 		},
 		GITHUB_REPO_MS + CLONE_TIMEOUT_MS,
 	);

@@ -20,7 +20,7 @@ pub fn identity_file(user_data: &Path) -> PathBuf {
 }
 
 /// `^[0-9a-z]{26}$`.
-fn is_device_id(id: &str) -> bool {
+pub(super) fn is_device_id(id: &str) -> bool {
     id.len() == 26
         && id
             .bytes()

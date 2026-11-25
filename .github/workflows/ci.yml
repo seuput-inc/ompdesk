@@ -1,7 +1,7 @@
 # Pre-flight on every push to main (the blocking checks release.yml runs:
 # types, biome, surface policy, vitest, the build, Windows `test:platform`,
 # OMPdesk's Rust on Linux and Windows, all in parallel; the macOS checks
-# (@smoke, Rust on macOS, the parity vitest, the memory build) are mac-main.yml
+# (the native smoke, Rust on macOS, the parity vitest, the memory build) are mac-main.yml
 # beside it), so a release finds nothing red that a push did not already
 # show; a pull request (and a manual run) runs the Linux jobs
 # alone, `native`'s Linux leg among them. Windows packaging, the real-omp e2e
@@ -9,16 +9,16 @@
 #
 # The queue is managed by the workflow, not by whoever dispatches (.omp/rules/e2e-ci-windows.md › CI › The check
 # queue): a push to main has one run going and the newest waiting (`ci-main`), a dispatch replaces its own older run, `gate`
-# (queue-gate.yml) admits macOS only to main and MAC_REFS branches and cancels a commit's second identical run, and
-# every dispatched macOS job of the account shares one lane (`mac-dispatch`). A push's own macOS checks are
-# mac-main.yml, a queue of their own, so a long wait for a macOS runner never holds back this run's verdict.
+# (queue-gate.yml) cancels a commit's second identical run.
+# A push's macOS checks run separately in mac-main.yml so a runner wait does not delay the Linux and Windows verdict.
 #
 # Pull requests (including from forks) run only the Linux jobs with a read-only
 # token and no secrets; no job here uses `pull_request_target`. Every other job
 # is a manual dispatch.
 #
 # The full Playwright suite is manual here (`gh workflow run ci.yml -f e2e=true`):
-# it builds out/ on Linux and runs the five macOS shards of e2e-shards.yml,
+# it builds out/ on Linux and runs the Windows shards of e2e-shards.yml (Playwright
+# drives the Tauri host's page through WebView2; macOS's WKWebView has no DevTools port),
 # which e2e-nightly.yml also runs every night (a release does not).
 #
 # The real Windows install of the app's automatic setup is manual too
@@ -62,7 +62,7 @@ on:
         type: boolean
         default: false
       e2e:
-        description: "Also run the full Playwright e2e suite on macOS"
+        description: "Also run the full Playwright e2e suite on Windows"
         type: boolean
         default: false
       install_check:
@@ -86,9 +86,9 @@ on:
         type: boolean
         default: false
       legacy_tag:
-        description: "Release whose assisted-installer setup the installer check installs for all users first"
+        description: "All-users seed: fixture (v0.26.0 NSIS options) or an actual assisted-installer release tag"
         type: string
-        default: v0.26.0
+        default: fixture
       force:
         description: "Run even when this commit already has a green run with these inputs (otherwise the run cancels itself)"
         type: boolean
@@ -108,9 +108,8 @@ permissions:
   contents: read
 
 jobs:
-  # The queue's admission point (queue-gate.yml). A dispatch asking for macOS (`mac` or `e2e`) must come from main or a
-  # MAC_REFS branch, and a dispatch whose commit already has a green run with the same inputs cancels itself. Skipped on
-  # a push (nothing to admit), where the jobs below start at once. The jobs depend on it so a duplicate starts none.
+  # The queue gate cancels a dispatch whose commit already has a green run with the same inputs. Skipped on
+  # a push, where the jobs below start at once. The jobs depend on it so a duplicate starts none.
   gate:
     if: github.event_name == 'workflow_dispatch'
     permissions:
@@ -119,8 +118,6 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: ci.yml
-      mac: ${{ inputs.mac || inputs.e2e }}
-      mac-refs: ${{ vars.MAC_REFS }}
       force: ${{ inputs.force }}
 
   # Pre-flight: the same blocking checks release.yml runs (types, biome, surface
@@ -142,19 +139,26 @@ jobs:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           filter: blob:none
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
         with:
           electron: "false"
       - run: bun run check:types
-      - run: bunx biome check src e2e resources scripts
+      - run: bunx biome check --max-diagnostics=none src e2e resources scripts
       - run: node scripts/lint-surfaces.mjs
+      - name: All host and preload paths have a Rust migration disposition
+        run: bun scripts/rust-runtime-scope.ts --check-inventory
+      # The committed notices against node_modules and every Cargo.lock, never regenerated first: a lock changed without
+      # `bun scripts/gen-crate-notices.ts <workspace>` and `bun run gen:licenses` fails here (the Tauri list was stale on
+      # main for three commits because only mac-checks.yml ran this, and only when native/memory changed).
+      - name: Third-party notices match the lockfiles
+        run: bun run licenses:check
       # A pushed range whose base git cannot find (a new branch, a dispatch) checks the head commit alone.
       - name: Fix commits carry a test
         env:
@@ -197,18 +201,15 @@ jobs:
           - name: renderer 2/2
             args: --project=renderer --shard=2/2
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # Tests import electron, whose index.js throws without the binary: the shared install fetches it.
       - uses: ./.github/actions/install
-      - name: Install omp
-        run: |
-          # --minimum-release-age 0: the runner wants the newest omp, not bunfig.toml's 3-day hold.
-          bun install -g --minimum-release-age 0 @oh-my-pi/pi-coding-agent
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-          "$HOME/.bun/bin/omp" --version
+        with:
+          native: ${{ startsWith(matrix.args, '--project=renderer') && 'false' || 'true' }}
+      - uses: ./.github/actions/install-omp
       - run: bunx vitest run ${{ matrix.args }}
       # The work card's verdict over 254 real cards and its generated invariants, by name, even when the run above
       # failed elsewhere: a red here is a card that changed colour or a check that changed its word
@@ -232,8 +233,8 @@ jobs:
       contents: read
       actions: read # the failure report reads this run's jobs
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
@@ -264,7 +265,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(format('[{0}{1}]', '{"os":"ubuntu-latest","name":"linux"}', (github.event_name == 'push' || inputs.batch) && ',{"os":"windows-latest","name":"windows"}' || '')) }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/native-check
       - if: failure()
         shell: bash
@@ -290,8 +291,8 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # See release.yml's win job: bun's cache on the workspace volume.
@@ -320,17 +321,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # The dispatched macOS checks as one unit (mac-checks.yml: mac-smoke, mac-native, memory, `native` on macOS arm64; a push
-  # to main runs the same unit from mac-main.yml). macOS runners are the account's scarcest (5 at once), so a branch takes
-  # them once, at its landing gate (`mac=true`), with the gate's admission (main or a MAC_REFS branch) and the
-  # account-wide `mac-dispatch` lane: one holder, one waiting, a newer request replaces the waiting one
-  # (cancel-in-progress false), so branch work never has more than one unit's runners open.
+  # mac-main.yml calls the same checks on a push to main.
   mac:
     needs: gate
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.mac && needs.gate.outputs.mac_ok == 'true'"
-    concurrency:
-      group: mac-dispatch
-      cancel-in-progress: false
+    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.mac"
     permissions:
       contents: read
       actions: read # the failure reports read this run's jobs
@@ -341,32 +335,29 @@ jobs:
   # uploaded first, on Linux (the bundle is byte-identical on every OS).
   build-out:
     needs: gate
-    if: "!cancelled() && inputs.e2e && needs.gate.outputs.mac_ok == 'true'"
+    if: "!cancelled() && inputs.e2e && needs.gate.result == 'success'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
         with:
           electron: "false"
       - run: bun run build
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: out
           path: out/
           if-no-files-found: error
           retention-days: 1
 
-  # Launches the built app: the full suite, against the latest published omp
+  # Launches the built app on Windows (the Tauri host, WebView2): the full suite, against the latest published omp
   # (no provider credentials, each suite uses an isolated agent dir).
   e2e:
     needs: build-out
-    concurrency:
-      group: mac-dispatch
-      cancel-in-progress: false
     permissions:
       contents: read
     uses: ./.github/workflows/e2e-shards.yml
@@ -384,31 +375,44 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       - uses: ./.github/actions/install
       - run: bun scripts/setup-install-check.ts --hide-system-git
 
-  # The packaged one-click, per-user setup (electron-builder.win.yml +
-  # resources/installer.nsh) on a real Windows: scripts/windows-installer-check.ps1
-  # runs `setup /S`, then the setup as a double-click runs it (no arguments;
-  # it must finish with only a progress bar and start OMPdesk), then an
-  # all-users install from `legacy_tag`'s assisted installer that the new
-  # setup must remove. Each checks the install folder, the Start-menu and
-  # desktop shortcuts, the uninstall entry (HKCU only), the app's first
-  # window, and the uninstall. Captures land in the `installer-check` artifact.
-  installer-check:
+  installer-backup:
     needs: gate
     if: "!cancelled() && inputs.installer_check"
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
+        with:
+          toolchain: "1.95"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: native/memory
+      - name: Verify memory upgrade backups on Windows
+        working-directory: native/memory
+        run: cargo test --locked --release -p ai-memory-store --lib v85_backup::tests
+
+  installer-package:
+    needs: gate
+    if: "!cancelled() && inputs.installer_check"
+    runs-on: windows-latest
+    outputs:
+      attempt: ${{ github.run_attempt }}
+    env:
+      ELECTRON_BUILDER_COMPRESSION_LEVEL: "4" # Same NSIS payload compression as release.yml.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # See release.yml's win job: bun's cache on the workspace volume.
@@ -417,7 +421,14 @@ jobs:
         run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install
         with:
+          electron: "false"
+          native: "true"
           builder: "true"
+      # The Tauri host (system WebView) and the pinned Node for the package (the tauri-shell action: a cached build).
+      - uses: ./.github/actions/tauri-shell
+      # The pinned, signed Brave runtime Preview browses with (resources/preview-browser.json); packaging verifies it.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       - run: bun run build
       # The memory binary, built or restored from its cache and checked, as in release.yml's win job.
       - id: memory-cache
@@ -426,11 +437,11 @@ jobs:
           path: resources/ai-memory-bin
           key: ai-memory-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/memory/**', 'scripts/build-memory.ts', 'resources/gui-bridge/memory-prompt.ts', 'resources/gui-bridge/redactor.ts') }}
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
         with:
           toolchain: "1.95"
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/memory
       - if: steps.memory-cache.outputs.cache-hit != 'true'
@@ -448,37 +459,87 @@ jobs:
         run: bun run build:agent-desktop
       - name: Package
         run: bunx electron-builder --config electron-builder.win.yml --win --x64 --publish never
-      - name: Stage the setup under its release name and the assisted-installer release
+      - name: Stage the setup and an actual assisted NSIS seed
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        # Releases before v0.42.0 were removed from GitHub: without the assisted-installer release the
-        # all-users step is skipped with a warning instead of failing every other check.
+          LEGACY_TAG: ${{ inputs.legacy_tag }}
         run: |
           set -euo pipefail
           cp "dist/ompdesk-$(node -p 'require("./package.json").version')-setup.exe" ompdesk-windows-setup.exe
-          if gh release download "${{ inputs.legacy_tag }}" --pattern ompdesk-windows-setup.exe --output legacy-setup.exe; then
-            ls -l ompdesk-windows-setup.exe legacy-setup.exe
+          if [ "$LEGACY_TAG" = fixture ]; then
+            bunx electron-builder --config scripts/shell-move/assisted-installer.yml --prepackaged dist/win-unpacked --win --x64 --publish never
+            cp dist/assisted-fixture/legacy-assisted-fixture.exe legacy-setup.exe
+            echo "All-users seed: real candidate payload with v0.26.0 assisted NSIS options, not an old released application"
           else
-            echo "::warning::release ${{ inputs.legacy_tag }} not found: the all-users install step is skipped"
+            gh release download "$LEGACY_TAG" --pattern ompdesk-windows-setup.exe --output legacy-setup.exe
           fi
-      - name: Silent install
-        shell: pwsh
-        run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode silent
-      - name: Double-click install
-        shell: pwsh
-        run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode ui -Captures installer-captures
-      - name: Over an all-users install
-        if: hashFiles('legacy-setup.exe') != ''
-        shell: pwsh
-        run: ./scripts/windows-installer-check.ps1 -Setup ompdesk-windows-setup.exe -Mode legacy -LegacySetup legacy-setup.exe
-      - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          ls -l ompdesk-windows-setup.exe legacy-setup.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: installer-check
-          path: installer-captures/
-          if-no-files-found: ignore
+          name: candidate-setup-${{ github.run_attempt }}
+          path: ompdesk-windows-setup.exe
+          compression-level: 0
+          if-no-files-found: error
           retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: legacy-setup-${{ github.run_attempt }}
+          path: legacy-setup.exe
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  installer-proof:
+    needs: installer-package
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [silent, ui, legacy]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: candidate-setup-${{ needs.installer-package.outputs.attempt }}
+          path: installer-inputs
+      - if: matrix.mode == 'legacy'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: legacy-setup-${{ needs.installer-package.outputs.attempt }}
+          path: installer-inputs
+      - name: Install and uninstall (${{ matrix.mode }})
+        shell: pwsh
+        run: >-
+          ./scripts/windows-installer-check.ps1 -Setup installer-inputs/ompdesk-windows-setup.exe
+          -Mode ${{ matrix.mode }} -Captures installer-captures -LegacySetup installer-inputs/legacy-setup.exe
+      - if: always() && matrix.mode == 'ui'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ github.run_attempt == 1 && 'installer-check' || format('installer-check-{0}', github.run_attempt) }}
+          path: installer-captures/
+          if-no-files-found: error
+          retention-days: 7
+
+  installer-check:
+    needs: [installer-package, installer-backup, installer-proof]
+    if: "!cancelled() && inputs.installer_check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require packaging, backup and every install mode to pass
+        env:
+          PACKAGE: ${{ needs.installer-package.result }}
+          BACKUP: ${{ needs.installer-backup.result }}
+          PROOF: ${{ needs.installer-proof.result }}
+        run: |
+          printf 'Package: %s, backup: %s, install modes: %s\n' "$PACKAGE" "$BACKUP" "$PROOF"
+          test "$PACKAGE" = success && test "$BACKUP" = success && test "$PROOF" = success
 
   # Launches the built app on a real Windows desktop: the @smoke specs on the
   # fake omp (e2e/*.e2e.ts titles tagged @smoke) and, before them, the real
@@ -500,8 +561,8 @@ jobs:
       # e2e/real-ai-memory-windows.e2e.ts: the real ai-memory.exe and its HKCU logon entry on this (throwaway) runner.
       OMP_GUI_REAL_AI_MEMORY_SERVICE: "1"
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
       # See release.yml's win job: bun's cache on the workspace volume.
@@ -511,6 +572,17 @@ jobs:
       - uses: ./.github/actions/install
         with:
           builder: "true"
+      # The Tauri host (system WebView) and the pinned Node: the packaged app and every e2e launch them (the tauri-shell
+      # action: a cached build). Built with test-automation: Playwright attaches to WebView2's DevTools port, which only
+      # that build leaves open (a released host removes the WEBVIEW2_* variables). installer-check above stays on the
+      # release host: it installs and launches the app, attaching nothing.
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      # The pinned, signed Brave runtime Preview browses with; packaging verifies it, and the unpackaged host the e2e
+      # launches finds it under resources/preview-browser/<platform>-<arch>.
+      - name: Stage the Preview browser
+        run: bun scripts/stage-preview-browser.ts
       - run: bun run build
       # The memory binary, built or restored from its cache and checked, as in release.yml's win job.
       - id: memory-cache
@@ -519,11 +591,11 @@ jobs:
           path: resources/ai-memory-bin
           key: ai-memory-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/memory/**', 'scripts/build-memory.ts', 'resources/gui-bridge/memory-prompt.ts', 'resources/gui-bridge/redactor.ts') }}
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master (2026-11-15)
         with:
           toolchain: "1.95"
       - if: steps.memory-cache.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/memory
       - if: steps.memory-cache.outputs.cache-hit != 'true'
@@ -568,7 +640,7 @@ jobs:
       - name: Playwright e2e
         run: bunx playwright test --grep "$env:E2E_GREP"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-windows-captures
           path: |

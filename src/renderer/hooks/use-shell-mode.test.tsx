@@ -18,6 +18,7 @@ import {
 	currentShellMode,
 	maxSplitPanes,
 	resetShellModeForTests,
+	useCompactShell,
 	useDrawerMode,
 	useShellMode,
 } from "./use-shell-mode";
@@ -162,6 +163,44 @@ describe("useShellMode", () => {
 		const container = await mount(<Probe />);
 		expect(container.querySelector("span")?.getAttribute("data-mode")).toBe("none");
 		expect(document.documentElement.dataset.shell).toBeUndefined();
+	});
+});
+
+describe("useCompactShell", () => {
+	it("re-renders when an Electron window is made narrower than 1000 px, and wider again", async () => {
+		setPlatform("win32");
+		let width = 1200;
+		const changeListeners = new Set<() => void>();
+		Object.assign(window, {
+			matchMedia: (query: string) => ({
+				get matches() {
+					return query === TABLET_PORTRAIT_QUERY && width < 1000;
+				},
+				addEventListener: (_: string, listener: () => void) => changeListeners.add(listener),
+				removeEventListener: (_: string, listener: () => void) => changeListeners.delete(listener),
+			}),
+			location: { search: "" },
+		});
+		const resize = async (next: number) => {
+			width = next;
+			await act(async () => {
+				for (const listener of changeListeners) listener();
+			});
+		};
+		function CompactProbe() {
+			return <span data-compact={String(useCompactShell())} />;
+		}
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		const root = createRoot(container as unknown as Element);
+		await act(async () => root.render(<CompactProbe />));
+		const compact = () => container.querySelector("span")?.getAttribute("data-compact");
+		expect(compact()).toBe("false");
+		await resize(780);
+		expect(compact()).toBe("true");
+		await resize(1200);
+		expect(compact()).toBe("false");
+		await act(async () => root.unmount());
 	});
 });
 

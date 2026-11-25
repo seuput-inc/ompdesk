@@ -1,26 +1,46 @@
 //! What git says about a folder's checkout, for the project it belongs to (was `readOriginFacts` of
 //! `src/main/local/git/origin.ts`): the common git dir, the git dir, the branch, the top level, and the first listed
 //! checkout when the common dir is not `<main>/.git`. Every git gets main's short timeout, and any that fails counts
-//! as git not knowing. Main keeps the cache and the rule that makes a project of the facts (`deriveProjectOrigin`).
+//! as git not knowing. `project` caches the checkout identity; image discovery separately requires a non-bare root.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use super::parse;
 use super::read::resolve;
 use super::run::Git;
+use crate::fs::disk::real;
 use crate::fs::order::js_trim;
 use crate::run::Opts;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Facts {
-    common_dir: String,
-    git_dir: String,
-    branch: Option<String>,
-    toplevel: Option<String>,
-    primary: Option<String>,
+    pub(super) common_dir: String,
+    pub(super) git_dir: String,
+    pub(super) branch: Option<String>,
+    pub(super) toplevel: Option<String>,
+    pub(super) primary: Option<String>,
+}
+
+impl Facts {
+    pub(crate) fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
+    /// Use mainRoot's candidate, but require Git to identify a relocated checkout rather than its storage.
+    pub(crate) async fn project_root(&self, git: &Git, timeout_ms: u64) -> Option<PathBuf> {
+        let common = Path::new(&self.common_dir);
+        if common.file_name() == Some(std::ffi::OsStr::new(".git")) {
+            return real(common.parent()?).await;
+        }
+        let primary = self.primary.as_deref()?;
+        let checkout = out(git, primary, &["rev-parse", "--show-toplevel"], timeout_ms).await?;
+        let checkout = real(resolve(primary, &checkout)).await?;
+        let storage = real(common).await?;
+        (checkout != storage).then_some(checkout)
+    }
 }
 
 /// Trimmed stdout of a git that succeeded with some, else none.

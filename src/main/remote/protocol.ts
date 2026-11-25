@@ -1,7 +1,6 @@
 /**
- * Message shapes of the remote-device protocol that main reads: the device's hello and what it can read, requests,
- * answers and events on a link. The handshake's own messages (probe, auth-init, auth-resp, the host's hello) and
- * their versions are the core's (`crates/core/src/remote/handshake.rs`).
+ * Message shapes main reads after the core validates the hello and negotiates link capabilities:
+ * requests, answers and events on a link.
  *
  * Version 2 has no pairing: who may connect is the host's Tailscale check
  * (`tailscale whois` of the peer's tailnet address), and each side pins the
@@ -29,8 +28,6 @@ export const REFUSAL_CODES = [
 	"protocol",
 ] as const;
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
-
-const deviceName = z.string().max(256);
 
 /**
  * `slimEvents`: the device rebuilds slimmed `events` and `subagentFrame` messages (`link-events.ts`). It is a
@@ -112,35 +109,6 @@ const deviceName = z.string().max(256);
  * last sent, and a `sessions.list` read with `versioned` gets that version beside the rows. A device without it gets
  * a bare event and reads the whole list again (128 KB of JSON on this Mac, 30 Oct 2026, for each of its windows).
  */
-export const ClientHello = z.object({
-	t: z.literal("hello"),
-	protocol: z.number(),
-	appVersion: z.string().max(64),
-	name: deviceName,
-	slimEvents: z.boolean().optional(),
-	slimProgress: z.boolean().optional(),
-	slimAutopilot: z.boolean().optional(),
-	slimEnds: z.boolean().optional(),
-	slimReadGroups: z.boolean().optional(),
-	slimToolResults: z.boolean().optional(),
-	slimEndFields: z.boolean().optional(),
-	slimAutopilotReads: z.boolean().optional(),
-	slimListReads: z.boolean().optional(),
-	slimShiftedReads: z.boolean().optional(),
-	slimSettingsReads: z.boolean().optional(),
-	slimRosterReads: z.boolean().optional(),
-	slimJobsReads: z.boolean().optional(),
-	slimToolOutputs: z.boolean().optional(),
-	slimToolArgs: z.boolean().optional(),
-	deflate: z.boolean().optional(),
-	deflateContext: z.boolean().optional(),
-	slimSessionLists: z.boolean().optional(),
-});
-
-/**
- * What a connection's device reads beyond whole frames, from its hello (each flag above). A later capability counts
- * only with the ones it builds on: a device that dropped one gets whole frames for everything resting on it.
- */
 export interface LinkSlim {
 	events: boolean;
 	progress: boolean;
@@ -160,33 +128,6 @@ export interface LinkSlim {
 	deflate: boolean;
 	deflateContext: boolean;
 	sessionLists: boolean;
-}
-
-export function slimOf(hello: z.infer<typeof ClientHello>): LinkSlim {
-	const events = hello.slimEvents === true;
-	const ends = events && hello.slimEnds === true;
-	const autopilotReads = events && hello.slimAutopilot === true && hello.slimAutopilotReads === true;
-	const listReads = autopilotReads && hello.slimListReads === true;
-	return {
-		events,
-		progress: events && hello.slimProgress === true,
-		autopilot: events && hello.slimAutopilot === true,
-		ends,
-		readGroups: ends && hello.slimReadGroups === true,
-		toolResults: ends && hello.slimToolResults === true,
-		endFields: ends && hello.slimEndFields === true,
-		autopilotReads,
-		listReads,
-		shiftedReads: listReads && hello.slimShiftedReads === true,
-		settingsReads: listReads && hello.slimSettingsReads === true,
-		rosterReads: listReads && hello.slimRosterReads === true,
-		jobsReads: listReads && hello.slimJobsReads === true,
-		toolOutputs: events && hello.slimToolOutputs === true,
-		toolArgs: events && hello.slimToolArgs === true,
-		deflate: hello.deflate === true,
-		deflateContext: hello.deflate === true && hello.deflateContext === true,
-		sessionLists: hello.slimSessionLists === true,
-	};
 }
 
 /** Each capability's name in the host's `open` log line (`slim`). */

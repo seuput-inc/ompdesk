@@ -45,19 +45,23 @@ describe("prompt_origin_set", () => {
 });
 
 describe("noteTypedPrompt", () => {
+	const idle = () => false;
+	const running = () => true;
 	const client = () => {
 		const command = vi.fn(async (_command: unknown) => ({}));
 		return { client: { command }, command };
 	};
 
-	it("names a person's steer as one, a prompt or follow-up as none", async () => {
+	it("marks a conditional prompt as a steer only when it joins a running turn", async () => {
 		const { client: c, command } = client();
-		await noteTypedPrompt(c, { type: "steer", message: "how far?" });
-		await noteTypedPrompt(c, { type: "prompt", message: "join", streamingBehavior: "steer" });
-		await noteTypedPrompt(c, { type: "prompt", message: "later", streamingBehavior: "followUp" });
-		await noteTypedPrompt(c, { type: "follow_up", message: "after" });
-		await noteTypedPrompt(c, { type: "prompt", message: "fresh" });
+		await noteTypedPrompt(c, { type: "prompt", message: "start", streamingBehavior: "steer" }, idle);
+		await noteTypedPrompt(c, { type: "steer", message: "how far?" }, running);
+		await noteTypedPrompt(c, { type: "prompt", message: "join", streamingBehavior: "steer" }, running);
+		await noteTypedPrompt(c, { type: "prompt", message: "later", streamingBehavior: "followUp" }, running);
+		await noteTypedPrompt(c, { type: "follow_up", message: "after" }, running);
+		await noteTypedPrompt(c, { type: "prompt", message: "fresh" }, idle);
 		expect(command.mock.calls.map(([sent]) => sent)).toEqual([
+			{ type: "typed_prompt", text: "start", steer: false },
 			{ type: "typed_prompt", text: "how far?", steer: true },
 			{ type: "typed_prompt", text: "join", steer: true },
 			{ type: "typed_prompt", text: "later", steer: false },
@@ -68,12 +72,16 @@ describe("noteTypedPrompt", () => {
 
 	it("says nothing for an agent's wrapped message, a retry or a command without text", async () => {
 		const { client: c, command } = client();
-		await noteTypedPrompt(c, {
-			type: "steer",
-			message: '<ompdesk-agent-message from="worker">\nstatus?\n</ompdesk-agent-message>',
-		});
-		await noteTypedPrompt(c, { type: "abort_and_prompt", message: "again" });
-		await noteTypedPrompt(c, { type: "get_state" });
+		await noteTypedPrompt(
+			c,
+			{
+				type: "steer",
+				message: '<ompdesk-agent-message from="worker">\nstatus?\n</ompdesk-agent-message>',
+			},
+			running,
+		);
+		await noteTypedPrompt(c, { type: "abort_and_prompt", message: "again" }, running);
+		await noteTypedPrompt(c, { type: "get_state" }, idle);
 		expect(command).not.toHaveBeenCalled();
 	});
 
@@ -81,7 +89,7 @@ describe("noteTypedPrompt", () => {
 		vi.useFakeTimers();
 		try {
 			const never = vi.fn(() => new Promise<never>(() => {}));
-			const slow = noteTypedPrompt({ command: never }, { type: "steer", message: "x" });
+			const slow = noteTypedPrompt({ command: never }, { type: "steer", message: "x" }, running);
 			await vi.advanceTimersByTimeAsync(600);
 			await expect(slow).resolves.toBeUndefined();
 		} finally {
@@ -90,6 +98,8 @@ describe("noteTypedPrompt", () => {
 		const refusing = vi.fn(async () => {
 			throw new Error("Unknown bridge method: typed_prompt");
 		});
-		await expect(noteTypedPrompt({ command: refusing }, { type: "steer", message: "x" })).resolves.toBeUndefined();
+		await expect(
+			noteTypedPrompt({ command: refusing }, { type: "steer", message: "x" }, running),
+		).resolves.toBeUndefined();
 	});
 });

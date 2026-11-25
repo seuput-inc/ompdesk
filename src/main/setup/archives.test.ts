@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { reaNodeSupported } from "../../shared/builtin-mcp";
 import { resolveAgentDesktopRelease, resolveArchiveRelease, resolveTailscaleRelease } from "./archives";
 import { type Answer, type Mirror, startMirror } from "./test-mirror";
 
@@ -29,43 +28,19 @@ const nodePages = (index: unknown, version: string, listing: string): Record<str
 });
 
 describe("archive releases", () => {
-	it("picks the newest LTS that REA's engines accept", async () => {
-		const listing = `${SHA}  node-v24.11.0-darwin-arm64.tar.gz\n`;
+	it("picks the first stable LTS in the newest-first Node release index", async () => {
+		const listing = `${SHA}  node-v24.10.0-darwin-arm64.tar.gz\n`;
 		const index = [
 			{ version: "v26.11.1", lts: false },
 			{ version: "v24.10.0", lts: "Krypton" },
-			{ version: "v24.11.0", lts: "Krypton" },
+			{ version: "v22.19.0", lts: "Jod" },
 		];
-		const found = await resolveArchiveRelease("node", "arm64", await serve(nodePages(index, "v24.11.0", listing)));
-		expect(found.version).toBe("v24.11.0");
-		for (const unsupported of [[{ version: "v20.19.0", lts: "Iron" }], { not: "a list" }]) {
+		const found = await resolveArchiveRelease("node", "arm64", await serve(nodePages(index, "v24.10.0", listing)));
+		expect(found.version).toBe("v24.10.0");
+		for (const unsupported of [[{ version: "v24.11.0-rc.1", lts: "Krypton" }], { not: "a list" }]) {
 			await expect(
 				resolveArchiveRelease("node", "arm64", await serve({ [NODE_INDEX]: JSON.stringify(unsupported) })),
 			).rejects.toThrow(/no supported LTS/);
-		}
-	});
-
-	it("accepts the versions shared/builtin-mcp's reaNodeSupported accepts, and no others", async () => {
-		// The core spells REA's engines range itself (`archives.rs`); this holds it to the page's one spelling.
-		const versions = [
-			"v22.18.9",
-			"v22.19.0",
-			"v22.20.1",
-			"v23.9.0",
-			"v24.10.9",
-			"v24.11.0",
-			"v25.9.9",
-			"v26.0.0",
-			"v100.0.0",
-			"v021.19.0",
-		];
-		for (const version of versions) {
-			const pages = nodePages([{ version, lts: "x" }], version, `${SHA}  node-${version}-darwin-x64.tar.gz`);
-			const outcome = await resolveArchiveRelease("node", "x64", await serve(pages)).then(
-				release => release.version,
-				() => null,
-			);
-			expect(outcome, version).toBe(reaNodeSupported(version) ? version : null);
 		}
 	});
 

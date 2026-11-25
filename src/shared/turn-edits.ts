@@ -1,6 +1,6 @@
 /**
  * A session's current (or last) turn's file-changing calls, cut from its transcript on the computer it runs on
- * (`get_turn_edits`, local/sessions.ts; a closed session's saved file, agent-control/service.ts), and what the sessions
+ * (`sidecar.turnEdits` for a live session; the same core filter over a closed session's saved file), and what the sessions
  * one session opened changed (`agent_control_family_edits`). The opener's work board counts them with the work card's
  * own rule (`workOutcomes`), so a child's edits read as the child's card would, never through git.
  */
@@ -18,43 +18,6 @@ export interface RpcTurnEdits {
 	endedAt: number | null;
 	/** The turn's assistant messages cut to their file-changing calls, and those calls' results. */
 	messages: AgentMessage[];
-}
-
-/** A prompt that starts a turn; a steer joins the running one. */
-export function isTurnPrompt(message: AgentMessage): boolean {
-	return message.role === "user" && message.steering !== true;
-}
-
-function epochMs(timestamp: string | number | undefined): number | null {
-	const value = typeof timestamp === "string" ? Date.parse(timestamp) : timestamp;
-	return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-/** The newest turn of `messages` (from its last prompt, or all of them when none is there), cut to its edit calls. */
-export function turnEdits(messages: readonly AgentMessage[], cwd: string): RpcTurnEdits {
-	const at = messages.findLastIndex(isTurnPrompt);
-	const prompt = at >= 0 ? messages[at] : undefined;
-	const turn = messages.slice(at + 1);
-	const calls = new Set<string>();
-	const edits: AgentMessage[] = [];
-	for (const message of turn) {
-		if (message.role === "assistant" && Array.isArray(message.content)) {
-			const blocks = message.content.filter(
-				block => block.type === "toolCall" && TURN_EDIT_TOOLS.includes(block.name),
-			);
-			if (blocks.length === 0) continue;
-			for (const block of blocks) if (block.type === "toolCall") calls.add(block.id);
-			edits.push({ role: "assistant", content: blocks, timestamp: message.timestamp });
-		} else if (message.role === "toolResult" && message.toolCallId && calls.has(message.toolCallId)) {
-			edits.push(message);
-		}
-	}
-	return {
-		cwd,
-		startedAt: prompt ? epochMs(prompt.timestamp) : null,
-		endedAt: epochMs(turn.at(-1)?.timestamp ?? prompt?.timestamp),
-		messages: edits,
-	};
 }
 
 /** A `get_turn_edits` answer (anything else, from an older host, says nothing). */

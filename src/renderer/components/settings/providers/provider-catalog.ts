@@ -114,6 +114,22 @@ export function hasUsableModelProvider(
 	return servingProviderIds(providers, configs).size > 0;
 }
 
+/**
+ * Whether a provider can serve, from what is known: omp's catalog alone, or with models.yml's endpoints (`configs`,
+ * read through the stock helper, which may answer late). A signed-in provider with models serves whatever the configs
+ * say; with no provider holding a model nothing can serve, since a config only adds a catalog provider that has models.
+ * `unknown` only while a keyless provider with models waits for the configs that say whether it counts.
+ */
+export function servingVerdict(
+	providers: readonly ProviderInfo[],
+	configs?: readonly CustomProviderView[],
+): "serving" | "none" | "unknown" {
+	if (configs) return hasUsableModelProvider(providers, configs) ? "serving" : "none";
+	if (providers.some(provider => provider.authenticated && !provider.disabled && provider.modelCount > 0))
+		return "serving";
+	return providers.some(provider => !provider.disabled && provider.modelCount > 0) ? "unknown" : "none";
+}
+
 /** True when the model belongs to a serving provider and its window fits a coding session. */
 export function canServe(model: ModelInfo, serving: ReadonlySet<string>): boolean {
 	if (!serving.has(model.provider)) return false;

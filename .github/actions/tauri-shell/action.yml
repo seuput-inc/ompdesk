@@ -1,0 +1,56 @@
+name: OMPdesk's Tauri shell and Node
+description: Stage the actual system-WebView host, original rollback launcher and pinned Node services.
+
+inputs:
+  test-automation:
+    description: "'true' builds the host with the test-automation cargo feature (the embedded WebDriver server) for a test; a released build never has it."
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # The host's Windows version resource carries the app's version (tauri.conf.json reads package.json), so a new version
+    # is a new host.
+    - name: The app version
+      id: app
+      shell: bash
+      run: echo "version=$(jq -er .version package.json)" >> "$GITHUB_OUTPUT"
+    - name: Restore the staged Tauri shell
+      id: shell-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: resources/ompdesk-tauri
+        key: ompdesk-tauri-${{ runner.os }}-${{ runner.arch }}-${{ inputs.test-automation == 'true' && 'test-automation' || 'release' }}-v${{ steps.app.outputs.version }}-${{ hashFiles('native/ompdesk/rust-toolchain.toml', 'native/ompdesk/crates/core/src/owner.rs', 'native/ompdesk/Cargo.toml', 'native/ompdesk/crates/tauri-shell/**', '!native/ompdesk/crates/tauri-shell/target/**', 'native/ompdesk/crates/shell/**', '!native/ompdesk/crates/shell/target/**', 'native/ompdesk/crates/shell-preview/**', '!native/ompdesk/crates/shell-preview/target/**', 'native/ompdesk/crates/sysproxy/**', 'scripts/build-tauri.ts', 'scripts/cargo.ts', 'src/shared/app-compatibility.json', 'resources/brand/tray*.png') }}
+    - if: steps.shell-cache.outputs.cache-hit != 'true'
+      uses: ./.github/actions/native-toolchain
+      with:
+        workspaces: |
+          native/ompdesk/crates/tauri-shell
+          native/ompdesk/crates/shell-preview
+    - name: Build the Tauri shell and rollback launcher
+      if: steps.shell-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        TEST_AUTOMATION: ${{ inputs.test-automation }}
+      run: |
+        set -euo pipefail
+        FLAG=""
+        if [ "$TEST_AUTOMATION" = "true" ]; then FLAG="--test-automation"; fi
+        bun run build:tauri -- $FLAG
+    - if: steps.shell-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: resources/ompdesk-tauri
+        key: ${{ steps.shell-cache.outputs.cache-primary-key }}
+    - name: Verify staged host inputs and bytes
+      shell: bash
+      env:
+        TEST_AUTOMATION: ${{ inputs.test-automation }}
+      run: |
+        set -euo pipefail
+        FLAG=""
+        if [ "$TEST_AUTOMATION" = "true" ]; then FLAG="--test-automation"; fi
+        bun run build:tauri -- --check $FLAG
+    - name: Fetch the pinned Node
+      shell: bash
+      run: bun run build:node

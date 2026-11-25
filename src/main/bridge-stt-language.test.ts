@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	LANGUAGE_FALLBACK_STT_MODEL,
 	SttDictation,
@@ -8,6 +8,8 @@ import {
 	sttLanguageCode,
 	sttModelForLanguage,
 	sttModelSupports,
+	transcribeDeadlineMs,
+	transcribeWithin,
 } from "../../resources/gui-bridge/stt-language-core";
 
 // Stock's catalog entries (stt/models.ts), as the rule reads them.
@@ -134,7 +136,7 @@ describe("getting a model's weights", () => {
 
 	it("says a failed download once, then tries again", async () => {
 		const store = new FakeStore();
-		const models = new SttModels(store);
+		const models = new SttModels(store, []);
 		await models.prepare("whisper-large-v3-turbo");
 		store.fail("whisper-large-v3-turbo", "Failed to download speech model: offline");
 		await expect(models.ensure("whisper-large-v3-turbo")).rejects.toThrow("offline");
@@ -144,6 +146,42 @@ describe("getting a model's weights", () => {
 		});
 		expect(await models.prepare("whisper-large-v3-turbo")).toEqual({ state: "downloading", percent: 0 });
 		expect(store.downloads).toEqual(["whisper-large-v3-turbo", "whisper-large-v3-turbo"]);
+	});
+
+	it("tries a failed download again after 1, 2 and 4 s, keeping its progress, and reports only the last failure", async () => {
+		vi.useFakeTimers();
+		const key = "whisper-large-v3-turbo";
+		const store = new FakeStore();
+		const models = new SttModels(store);
+		await models.prepare(key);
+		store.progress(key, 500_000_000, 1_000_000_000);
+		store.fail(key, "429 Too Many Requests");
+		await vi.advanceTimersByTimeAsync(999);
+		expect(store.downloads).toHaveLength(1);
+		expect(await models.prepare(key)).toEqual({ state: "downloading", percent: 50 });
+		await vi.advanceTimersByTimeAsync(1);
+		expect(store.downloads).toHaveLength(2);
+		store.fail(key, "offline");
+		await vi.advanceTimersByTimeAsync(2_000);
+		store.fail(key, "offline");
+		await vi.advanceTimersByTimeAsync(4_000);
+		expect(store.downloads).toHaveLength(4);
+		store.fail(key, "offline at last");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(await models.prepare(key)).toEqual({ state: "failed", error: "offline at last" });
+	});
+
+	it("is ready when a retry lands", async () => {
+		vi.useFakeTimers();
+		const key = "whisper-large-v3-turbo";
+		const store = new FakeStore();
+		const models = new SttModels(store);
+		const waiting = models.ensure(key);
+		store.fail(key, "socket hang up");
+		await vi.advanceTimersByTimeAsync(1_000);
+		store.finish(key);
+		await waiting;
+		expect(await models.prepare(key)).toEqual({ state: "ready" });
 	});
 
 	it("lets a dictation wait for the download a call started, and never starts a second one", async () => {
@@ -156,6 +194,48 @@ describe("getting a model's weights", () => {
 		await waiting;
 		await models.ensure("whisper-large-v3-turbo");
 		expect(store.downloads).toEqual(["whisper-large-v3-turbo"]);
+	});
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+});
+
+describe("a clip's transcription", () => {
+	it("fails a take the worker never answers once a minute plus the clip has passed, and lets go of the worker", async () => {
+		vi.useFakeTimers();
+		let released = 0;
+		const take = transcribeWithin(
+			signal =>
+				new Promise<string>((_resolve, reject) =>
+					signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))),
+				),
+			transcribeDeadlineMs(4),
+			() => {
+				released += 1;
+			},
+		);
+		const outcome = expect(take).rejects.toThrow("did not finish within 64 s");
+		await vi.advanceTimersByTimeAsync(63_999);
+		expect(released).toBe(0);
+		await vi.advanceTimersByTimeAsync(1);
+		await outcome;
+		expect(released).toBe(1);
+	});
+
+	it("passes a worker's own failure through and keeps the worker", async () => {
+		let released = 0;
+		const failing = transcribeWithin(
+			async () => {
+				throw new Error("Unknown stt model: x");
+			},
+			1_000,
+			() => {
+				released += 1;
+			},
+		);
+		await expect(failing).rejects.toThrow("Unknown stt model: x");
+		expect(released).toBe(0);
 	});
 });
 
@@ -176,7 +256,7 @@ describe("dictation's model", () => {
 	let dictation: SttDictation<null>;
 	beforeEach(() => {
 		models = new FakeModels();
-		dictation = new SttDictation<null>(() => ({ selected: PARAKEET, language: "ko" }), models);
+		dictation = new SttDictation<null>(() => ({ selected: PARAKEET, language: "ko" }), models, []);
 	});
 
 	it("prepares the language's model: Korean downloads Whisper large-v3-turbo, English is ready on Parakeet", async () => {

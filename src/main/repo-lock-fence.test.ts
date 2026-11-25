@@ -1,6 +1,6 @@
 /**
- * What a repository-lock holder that ran past its bound can still do. Two cases, both on the fake clock only (the fs,
- * git and child processes are real):
+ * What a repository-lock holder that ran past its bound can still do. Only main's deadlines use a fake clock.
+ * The filesystem, core, and child processes are real:
  *  - an effect it has not started yet (its code resumes after a late answer that is not an fs call): fenced, it throws
  *    before it starts and never lands on what the next holder made;
  *  - an effect the OS already has (an fs call dispatched, a child still exiting): the caller hears of the stop at once,
@@ -14,13 +14,15 @@ import { promises } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { timeoutForCommand } from "../shared/rpc-client";
 import { SavedWorktreeStore } from "./disk/saved-worktrees";
 import { fs } from "./fenced-fs";
 import { primaryRoot, repoRoot } from "./local/git/changes";
-import { execBin, REPO_LOCK_HOLD_MS, withRepoLock } from "./local/git/exec";
+import { gh, REPO_LOCK_HOLD_MS, withRepoLock } from "./local/git/exec";
 import * as scm from "./local/git/scm";
 import { gitSync } from "./local/git/test-repos";
 import { createWorktree } from "./local/git/worktree";
+import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { ChainBusyError, SerialChain, STALLED_DRAIN_MAX_MS, StepStalledError, trackEffect } from "./serial-chain";
 import { DIES_WITH_TEST } from "./test-fake-omp";
 import { removeOrphanWorktree } from "./worktree-orphans";
@@ -274,20 +276,20 @@ describe("an effect the OS already has when the holder is stopped", () => {
 	});
 
 	it.skipIf(process.platform === "win32")(
-		"a git child that ignores SIGTERM: the next holder starts only after it exited",
+		"a gh child that ignores SIGTERM exits before the next holder starts",
 		async () => {
 			const pidFile = path.join(root, "pid");
-			const script = `${DIES_WITH_TEST} process.on("SIGTERM", () => {}); require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1e9)`;
+			const script = `${DIES_WITH_TEST}
+				const fs = require("node:fs");
+				process.on("SIGTERM", () => fs.writeFileSync("sigterm", "received"));
+				fs.writeFileSync(process.argv[1], String(process.pid));
+				setInterval(() => {}, 1e9);`;
 			const key = "/repo/sigterm";
-			let started = false;
 			const old = caught(
 				withRepoLock(key, () =>
-					execBin(process.execPath, ["-e", script, pidFile], { cwd: root, timeoutMs: 24 * 60 * 60_000 }),
+					gh(root, process.execPath, ["-e", script, pidFile], { timeoutMs: 24 * 60 * 60_000 }),
 				),
 			);
-			const next = withRepoLock(key, async () => {
-				started = true;
-			});
 			let pid = 0;
 			await vi.waitFor(
 				async () => {
@@ -296,18 +298,15 @@ describe("an effect the OS already has when the holder is stopped", () => {
 				},
 				{ timeout: 20_000, interval: 20 },
 			);
-			await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
+			const next = withRepoLock(key, async () => alive(pid));
+			vi.advanceTimersByTime(REPO_LOCK_HOLD_MS);
 			expect(await old).toBeInstanceOf(StepStalledError);
-			// SIGTERM was sent and ignored: it is still alive, and the lock is still held.
-			await settle();
 			expect(alive(pid)).toBe(true);
-			expect(started).toBe(false);
-			// The kill after the grace period ends it; only then the next holder starts.
-			await vi.advanceTimersByTimeAsync(2_000);
-			await next;
-			expect(started).toBe(true);
-			expect(alive(pid)).toBe(false);
+			// The core owns the kill grace. The queued holder observes the PID at handoff.
+			expect(await next).toBe(false);
+			expect(await read(root, "sigterm")).toBe("received");
 		},
+		SLOW,
 	);
 });
 
@@ -389,38 +388,127 @@ describe("every caller of withRepoLock that touches the disk", () => {
 		SLOW,
 	);
 
-	it("saved-worktree record: an update held at its read never writes saved.json under the next holder", async () => {
-		const dir = path.join(root, "saved");
-		await promises.mkdir(dir);
-		const store = new SavedWorktreeStore(dir);
-		const key = "/repo/fence-saved";
-		const held = hold("readFile", path.join(dir, "saved.json"));
-		const old = caught(withRepoLock(key, () => store.update(records => records)));
-		const next = withRepoLock(key, async () => {});
-		await held.reached;
-		await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
-		expect(await old).toBeInstanceOf(StepStalledError);
-		held.release();
-		await next;
-		await settle();
-		await expect(promises.stat(path.join(dir, "saved.json"))).rejects.toThrow();
+	const savedRecord = () => ({
+		id: "test-save",
+		path: path.join(root, "closed"),
+		repo,
+		branch: null,
+		head: "abc",
+		savedBranch: null,
+		removedAt: 1,
+		archivedFiles: 0,
+		archivedBytes: 0,
 	});
 
-	it(
-		"worktree create: a late mkdir never goes on to add the branch and the worktree",
+	it("a late removal proof cannot publish a saved record under the next holder", async () => {
+		const store = new SavedWorktreeStore(path.join(root, "saved"));
+		const key = "/repo/fence-saved";
+		const proof = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const attempted = Promise.withResolvers<void>();
+		const old = caught(
+			withRepoLock(key, async () => {
+				started.resolve();
+				await proof.promise;
+				try {
+					await store.settle(savedRecord(), true);
+				} finally {
+					attempted.resolve();
+				}
+			}),
+		);
+		await started.promise;
+		const next = withRepoLock(key, () => store.settle({ ...savedRecord(), id: "next" }, true));
+		await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
+		expect(await old).toBeInstanceOf(StepStalledError);
+		await next;
+		proof.resolve();
+		await attempted.promise;
+		expect((await store.list(repo)).map(row => row.id)).toEqual(["next"]);
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"a cancelled native saved-record read drains before handover and never renames",
 		async () => {
-			const held = hold("mkdir", wtRoot);
-			const key = await primaryRoot(repo);
-			const old = caught(createWorktree(repo, { name: "late" }, bridge));
-			const next = withRepoLock(key, async () => {});
-			await held.reached;
-			await vi.advanceTimersByTimeAsync(REPO_LOCK_HOLD_MS);
-			held.release();
+			const store = new SavedWorktreeStore(path.join(root, "saved"));
+			await promises.mkdir(store.dir);
+			const file = path.join(store.dir, "saved.json");
+			execFileSync("mkfifo", [file]);
+			const key = "/repo/fence-saved-read";
+			const caller = new SerialChain({ name: "caller", maxStepMs: 1_000, log: () => {} });
+			const old = caught(caller.run(() => withRepoLock(key, () => store.settle(savedRecord(), true))));
+			const writer = await promises.open(file, "w"); // The real Rust reader has opened its end.
+			let handedOver = false;
+			const next = withRepoLock(key, async () => {
+				handedOver = true;
+			});
+			try {
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(await old).toBeInstanceOf(StepStalledError);
+				// A later frame answered: the core has read the cancel but is still waiting on its OS read.
+				await new SavedWorktreeStore(path.join(root, "empty")).find({ id: "absent" });
+				expect(handedOver).toBe(false);
+				await writer.writeFile("[]");
+			} finally {
+				await writer.close();
+			}
 			await next;
-			expect(await old).toBeInstanceOf(Error);
-			await settle();
-			expect(gitSync(repo, "branch", "--list", "omp/gui/*")).toBe("");
-			expect(await promises.readdir(wtRoot)).toEqual([]);
+			expect((await promises.lstat(file)).isFIFO()).toBe(true);
+		},
+		SLOW,
+	);
+
+	it(
+		"worktree create: a stopped native add cannot create a branch or checkout under the next holder",
+		async () => {
+			const key = await primaryRoot(repo);
+			const branch = "omp/gui/late";
+			const refDir = path.join(repo, ".git", "refs", "heads", "omp", "gui");
+			const refLock = path.join(refDir, "late.lock");
+			await promises.mkdir(refDir, { recursive: true });
+			await promises.writeFile(refLock, "");
+			gitSync(repo, "config", "core.filesRefLockTimeout", "-1");
+			// The core recreates this root inside the held request. The competing ref lock stops git making the branch.
+			await promises.rmdir(wtRoot);
+			const requested = Promise.withResolvers<void>();
+			const location = Promise.withResolvers<void>();
+			const stopped = vi.fn();
+			const old = caught(
+				createWorktree(
+					repo,
+					{ name: "late" },
+					{
+						async request<T>(method: string) {
+							requested.resolve();
+							await location.promise;
+							return bridge.request<T>(method);
+						},
+					},
+				),
+			).then(stopped);
+			try {
+				const limit = timeoutForCommand({ type: "worktree_create", name: "late" });
+				if (limit === undefined) throw new Error("worktree_create has no RPC budget");
+				const createMs = limit - WORKTREE_PREPARE_BUDGET_MS;
+				const spentMs = 90_000;
+				await requested.promise;
+				await vi.advanceTimersByTimeAsync(spentMs);
+				location.resolve();
+				await vi.waitFor(() => promises.access(wtRoot), { timeout: 20_000, interval: 20 });
+				const next = withRepoLock(key, async () => {
+					await promises.unlink(refLock);
+					gitSync(repo, "branch", branch);
+				});
+				await vi.advanceTimersByTimeAsync(createMs - spentMs);
+				expect(stopped).toHaveBeenCalledWith(expect.any(StepStalledError));
+				await old;
+				await next;
+				expect(gitSync(repo, "rev-parse", branch)).toBe(gitSync(repo, "rev-parse", "HEAD"));
+				expect(await promises.readdir(wtRoot)).toEqual([]);
+			} finally {
+				location.resolve();
+				await promises.rm(refLock, { force: true });
+			}
 		},
 		SLOW,
 	);

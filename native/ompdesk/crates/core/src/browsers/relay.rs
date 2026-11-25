@@ -1,7 +1,5 @@
-//! The omp Browser Relay extension of one browser: whether a profile of the browser loaded its own copy (a loaded
-//! unpacked extension records its folder in the profile's preferences), and writing that copy, bound to the browser's
-//! own relay port. Stock's `omp browser-relay install` writes the extension; Chrome forbids installing it for the
-//! user.
+//! The omp relay extension of one browser: detect its unpacked folder in a profile and install with stock's CLI.
+//! A legacy copy has a dedicated port; the native host authorizes the ID of the final folder instead.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -149,6 +147,8 @@ pub struct InstallParams {
     home: String,
     /// The browser's own relay port.
     port: u16,
+    #[serde(default)]
+    native_host: bool,
 }
 
 /// A file system call's failure as node's `fs.promises` reported it.
@@ -170,11 +170,15 @@ fn remove(path: &Path) -> Result<(), Fault> {
     }
 }
 
-/// Writes `id`'s own copy of the extension, bound to its own port, and answers its folder. Stock writes the copy to a
-/// staging folder; it is bound there and only then put in place, so a stock asset this cannot bind never leaves an
-/// unbound extension behind.
+/// Installs the browser's copy without editing its profile. Legacy assets are bound in staging; the native host
+/// must register the final folder itself because its path determines the extension ID.
 pub async fn install(params: InstallParams, scope: Scope) -> Result<String, Fault> {
     let dir = extension_dir(&params.home, params.id);
+    if params.native_host {
+        // Native messaging authorizes the ID of the final path. Never stage or edit stock's signed-in profile choice.
+        stock(params.omp, scope, &dir, true).await?;
+        return Ok(dir.to_string_lossy().into_owned());
+    }
     let mut staging = dir.clone().into_os_string();
     staging.push(".new");
     let staging = PathBuf::from(staging);
@@ -183,7 +187,7 @@ pub async fn install(params: InstallParams, scope: Scope) -> Result<String, Faul
         move || remove(&staging)
     })
     .await?;
-    let installed = match stock(params.omp, scope, &staging).await {
+    let installed = match stock(params.omp, scope, &staging, false).await {
         Ok(()) => {
             blocking({
                 let (dir, staging) = (dir.clone(), staging.clone());
@@ -208,8 +212,8 @@ async fn blocking<T: Send + 'static>(
         .map_err(|_| Fault::new("internal", "The relay extension's file work panicked"))?
 }
 
-/// Stock's `omp browser-relay install --dir <staging>`.
-async fn stock(omp: Omp, scope: Scope, staging: &Path) -> Result<(), Fault> {
+/// Stock installs the asset; on native-host versions only the user may load it into a browser profile.
+async fn stock(omp: Omp, scope: Scope, dir: &Path, native_host: bool) -> Result<(), Fault> {
     let runner = Runner {
         bin: omp.bin,
         args: Vec::new(),
@@ -217,13 +221,17 @@ async fn stock(omp: Omp, scope: Scope, staging: &Path) -> Result<(), Fault> {
         timeout_ms: INSTALL_TIMEOUT_MS,
         max_bytes: OMP_OUTPUT_KEPT,
     };
-    let staging = staging.to_string_lossy();
+    let dir = dir.to_string_lossy();
+    let args = [
+        "browser-relay",
+        "install",
+        "--dir",
+        dir.as_ref(),
+        "--no-chrome",
+    ];
+    let args = if native_host { &args[..] } else { &args[..4] };
     let ended = Exec::new(runner, scope, "omp")
-        .run_kept(
-            ".",
-            &["browser-relay", "install", "--dir", &staging],
-            Opts::default(),
-        )
+        .run_kept(".", args, Opts::default())
         .await?;
     if ended.timed_out {
         return Err(Fault::new(

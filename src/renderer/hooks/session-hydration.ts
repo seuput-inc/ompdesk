@@ -108,8 +108,24 @@ export function applyUsageSnapshot(state: RpcSessionState, tabId: string): void 
 	withSessionRuntime(tabId, () => writeUsage(state));
 }
 
+/** A host run reading received during the request supersedes only the snapshot's foreground flag. */
+function withLatestRun(
+	wire: RpcSessionState,
+	current: SessionStore | undefined,
+	before: number | undefined,
+): RpcSessionState {
+	return current && current.runStatusVersion !== before && current.isStreaming !== wire.isStreaming
+		? { ...wire, isStreaming: current.isStreaming }
+		: wire;
+}
+
 /** Apply a get_state snapshot to every state-derived store. */
-export function applySessionState(state: RpcSessionState, fallbackName?: string, turnStartedAt?: number): void {
+export function applySessionState(
+	state: RpcSessionState,
+	fallbackName?: string,
+	turnStartedAt?: number,
+	options?: { readOnly?: boolean },
+): void {
 	const runtime = focusedSessionRuntime();
 	if (runtime) runtime.recovering = false;
 	if (useSessionStore.getState().sessionId !== state.sessionId) useSubagentGraphStore.getState().reset();
@@ -119,11 +135,13 @@ export function applySessionState(state: RpcSessionState, fallbackName?: string,
 	if (!state.sessionName && fallbackName) {
 		useSessionStore.setState({ sessionName: fallbackName });
 	}
-	useSettingsStore.getState().setFromState(state);
+	useSettingsStore.getState().setFromState(state, options);
 	// Turn first: a mid-run attach missed agent_start, and setPhases reads it.
 	const todo = useTodoStore.getState();
 	todo.setTurnActive(state.isStreaming, todo.turnSourceKnown ? undefined : turnStartedAt);
 	useTodoStore.getState().setPhases(state.todoPhases);
+	// After the phases: a list this snapshot changed read as fresh there, and the bridge's reading is the one to show.
+	useTodoStore.getState().setDrift(state.todoDrift ?? null);
 }
 
 /**
@@ -138,8 +156,8 @@ export async function refreshSessionState(tabId = useTabsStore.getState().active
 	// Live tabs may legitimately lack one yet (boot race) — create on demand.
 	const runtime = isTabClosed(tabId) ? sessionRuntime(tabId) : ensureTabRuntime(tabId);
 	if (!runtime) return;
-	const sessionId = sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().sessionId;
-	const eventVersion = sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().eventVersion;
+	const session = sessionRuntimeStore<SessionStore>(tabId, "session");
+	const before = session?.getState();
 	const selection = sessionRuntimeStore<ModelStore>(tabId, "model")?.getState();
 	const restarts = restartGenerations.get(runtime);
 	try {
@@ -147,17 +165,17 @@ export async function refreshSessionState(tabId = useTabsStore.getState().active
 		if (
 			sessionRuntime(tabId) !== runtime ||
 			restartGenerations.get(runtime) !== restarts ||
-			sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().sessionId !== sessionId ||
+			session?.getState().sessionId !== before?.sessionId ||
 			!res.success ||
 			res.data == null
 		)
 			return;
-		const state = res.data as RpcSessionState;
+		const state = withLatestRun(res.data as RpcSessionState, session?.getState(), before?.runStatusVersion);
 		// Events that landed during the round trip already updated the stores, so
 		// this snapshot is behind on everything they carry. Usage and the composer
 		// modes have no event carrier, so they stay the freshest reading either way;
 		// the model selection too, unless something wrote it meanwhile.
-		const churned = sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().eventVersion !== eventVersion;
+		const churned = session?.getState().eventVersion !== before?.eventVersion;
 		const current = sessionRuntimeStore<ModelStore>(tabId, "model")?.getState();
 		withSessionRuntime(tabId, () => {
 			if (churned)
@@ -235,20 +253,21 @@ export function applyModelInfo(model: unknown, tabId: string | null, options?: {
 type HydrationGuard = () => boolean;
 
 /** Fetch the live goal state (get_goal) into the session store; clears when no goal is active. */
-export async function syncGoal(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<void> {
+export async function syncGoal(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<boolean> {
 	const before = withSessionRuntime(tabId, () => useSessionStore.getState());
 	try {
 		const res = await command({ type: "get_goal" });
-		if (!isCurrent() || !res.success) return;
+		if (!isCurrent() || !res.success) return false;
 		const current = withSessionRuntime(tabId, () => useSessionStore.getState());
 		if (
 			current.eventVersion !== before.eventVersion ||
 			current.goal !== before.goal ||
 			current.goalState !== before.goalState
 		)
-			return;
+			return false;
 		// get_goal wire payload is RpcGoalState; `data` crosses the bridge as unknown.
 		const data = res.data as RpcGoalState | undefined;
+		if (!data || typeof data.enabled !== "boolean") return false;
 		withSessionRuntime(tabId, () => {
 			if (data?.enabled !== true) {
 				useSessionStore.setState({ goal: null, goalState: null });
@@ -259,8 +278,10 @@ export async function syncGoal(tabId: string, command: TabCommand, isCurrent: Hy
 				goalState: { status: data.status },
 			});
 		});
+		return true;
 	} catch {
 		// Transient — the next goal_updated event or hydration retries.
+		return false;
 	}
 }
 
@@ -268,16 +289,18 @@ export async function syncGoal(tabId: string, command: TabCommand, isCurrent: Hy
  * Fetch the tab's Autopilot run (`get_autopilot`) into its store; a session that is no run answers `{active: false}`.
  * `autopilot_update` frames keep it current afterwards, and one that lands while this read is in flight wins.
  */
-export async function syncAutopilot(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<void> {
+export async function syncAutopilot(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<boolean> {
 	const startedAt = withSessionRuntime(tabId, () => useAutopilotStore.getState().version);
 	try {
 		const res = await command({ type: "get_autopilot" });
-		if (!isCurrent() || !res.success) return;
+		if (!isCurrent() || !res.success) return false;
 		const status = res.data as AutopilotStatus | undefined;
-		if (!status || typeof status.active !== "boolean") return;
+		if (!status || typeof status.active !== "boolean") return false;
 		withSessionRuntime(tabId, () => useAutopilotStore.getState().hydrateIfCurrent(startedAt, status));
+		return true;
 	} catch {
 		// Transient — the next autopilot_update frame or hydration retries.
+		return false;
 	}
 }
 
@@ -285,19 +308,25 @@ export async function syncAutopilot(tabId: string, command: TabCommand, isCurren
  * Fetch the other sessions sharing the tab's checkout (`get_checkout_peers`); `checkout_peers` frames keep the value
  * current afterwards, and one that lands while this read is in flight wins. An omp without the method leaves it null.
  */
-export async function syncCheckoutPeers(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<void> {
+export async function syncCheckoutPeers(
+	tabId: string,
+	command: TabCommand,
+	isCurrent: HydrationGuard,
+): Promise<boolean> {
 	const before = withSessionRuntime(tabId, () => useSessionStore.getState().checkoutPeers);
 	try {
 		const res = await command({ type: "get_checkout_peers" });
-		if (!isCurrent() || !res.success) return;
-		const peers = (res.data as { peers?: CheckoutPeers | null } | undefined)?.peers;
-		if (peers === undefined) return;
-		withSessionRuntime(tabId, () => {
-			if (useSessionStore.getState().checkoutPeers !== before) return;
-			useSessionStore.setState({ checkoutPeers: peers });
-		});
+		if (!isCurrent() || !res.success) return false;
+		// The RPC boundary is untyped; get_checkout_peers returns this contract.
+		const data = res.data as { peers?: CheckoutPeers | null } | undefined;
+		const peers = data?.peers;
+		if (peers === undefined || withSessionRuntime(tabId, () => useSessionStore.getState().checkoutPeers) !== before)
+			return false;
+		withSessionRuntime(tabId, () => useSessionStore.setState({ checkoutPeers: peers }));
+		return true;
 	} catch {
 		// unsupported_omp or transient: the next checkout_peers frame carries the value.
+		return false;
 	}
 }
 
@@ -311,14 +340,28 @@ export function nextPromptPatch(state: NextPromptState): Pick<SessionStore, "nex
 
 /** Fetch the built-in prompt suggestions' state (get_next_prompt) into the session store; an omp without
  * the feature answers unsupported_omp and the field stays null (legacy widget path). next_prompt_config follows. */
-export async function syncNextPrompt(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<void> {
+export async function syncNextPrompt(
+	tabId: string,
+	command: TabCommand,
+	isCurrent: HydrationGuard,
+	strict = false,
+): Promise<boolean> {
 	const before = withSessionRuntime(tabId, () => useSessionStore.getState().nextPrompt);
 	const since = Date.now();
 	try {
 		const res = await command({ type: "get_next_prompt" });
-		if (!isCurrent() || !res.success || !res.data) return;
+		if (!isCurrent() || !res.success || !res.data) return false;
+		const state = res.data as NextPromptState;
+		if (
+			strict &&
+			(typeof state.suggestions !== "boolean" ||
+				typeof state.inline !== "boolean" ||
+				typeof state.legacyExtension !== "boolean" ||
+				!state.requests)
+		)
+			return false;
 		// The session's last suggestion: what this page missed while the frame could not reach it.
-		const last = (res.data as NextPromptState).last;
+		const last = state.last;
 		if (last)
 			withSessionRuntime(tabId, () => {
 				const session = useSessionStore.getState();
@@ -326,13 +369,15 @@ export async function syncNextPrompt(tabId: string, command: TabCommand, isCurre
 				if (key) useNextPromptStore.getState().recordLast(key, last, since);
 			});
 		// A next_prompt_config frame that landed meanwhile is fresher than this reply.
-		if (withSessionRuntime(tabId, () => useSessionStore.getState().nextPrompt) !== before) return;
+		if (withSessionRuntime(tabId, () => useSessionStore.getState().nextPrompt) !== before) return false;
 		// get_next_prompt wire payload is NextPromptState; `data` crosses the bridge as unknown.
 		withSessionRuntime(tabId, () => {
-			useSessionStore.setState(nextPromptPatch(res.data as NextPromptState));
+			useSessionStore.setState(nextPromptPatch(state));
 		});
+		return true;
 	} catch {
 		// unsupported_omp or transient — next_prompt_config or the next hydration retries.
+		return false;
 	}
 }
 
@@ -358,18 +403,28 @@ function isPlanProposal(value: unknown): value is PendingPlanProposal {
  * A proposal already on screen is left alone, keeping its feedback and
  * submit state.
  */
-export async function syncPlanProposal(tabId: string, command: TabCommand, isCurrent: HydrationGuard): Promise<void> {
+export async function syncPlanProposal(
+	tabId: string,
+	command: TabCommand,
+	isCurrent: HydrationGuard,
+): Promise<boolean> {
+	const plan = sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval");
+	const before = plan?.getState();
 	try {
 		const res = await command({ type: "get_plan_mode" });
-		if (!isCurrent() || !res.success) return;
-		const proposal = (res.data as { proposal?: unknown } | undefined)?.proposal;
-		const plan = sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval");
-		if (!plan || !isPlanProposal(proposal)) return;
+		if (!isCurrent() || !res.success || !plan || plan.getState() !== before) return false;
+		if (!res.data || typeof res.data !== "object") return false;
+		const proposal = "proposal" in res.data ? res.data.proposal : undefined;
+		if (proposal == null) return plan.getState().pending === null;
+		if (!isPlanProposal(proposal)) return false;
 		const shown = plan.getState().pending;
-		if (shown?.planFilePath === proposal.planFilePath && shown.planContent === proposal.planContent) return;
+		if (shown?.planFilePath === proposal.planFilePath && shown.planContent === proposal.planContent) return true;
+		if (shown) return false;
 		plan.getState().showProposal(proposal);
+		return true;
 	} catch {
 		// Transient — the next hydration retries.
+		return false;
 	}
 }
 
@@ -522,6 +577,7 @@ interface HydrationBaseline {
 	messages: AgentMessage[];
 	liveMessages: AgentMessage[];
 	eventVersion: number | undefined;
+	runStatusVersion: number | undefined;
 	toolsRevision: number | undefined;
 	selection: ModelSelection | undefined;
 }
@@ -532,6 +588,7 @@ function captureHydrationBaseline({ messages, session, tools, model }: Hydration
 		messages: transcript?.messages ?? [],
 		liveMessages: transcript?.liveMessages ?? [],
 		eventVersion: session?.getState().eventVersion,
+		runStatusVersion: session?.getState().runStatusVersion,
 		toolsRevision: tools?.getState().revision,
 		selection: model?.getState(),
 	};
@@ -545,6 +602,8 @@ interface HydrationCommit {
 	/** False when the snapshot was fetched for a pane the user switched away from meanwhile. */
 	focusUnchanged: boolean;
 	command: TabCommand;
+	/** A loss-recovery pass reads state only; ordinary attachment also subscribes. */
+	subscribe?: boolean;
 	applyState: (wire: RpcSessionState, turnStartedAt?: number) => void;
 	/** Lands the event-free part of a snapshot that events outdated in flight. */
 	applyEventlessState: (wire: RpcSessionState, selectionUntouched: boolean) => void;
@@ -558,6 +617,7 @@ function commitHydration({
 	messagesResult,
 	focusUnchanged,
 	command,
+	subscribe = true,
 	applyState,
 	applyEventlessState,
 }: HydrationCommit): void {
@@ -565,10 +625,11 @@ function commitHydration({
 	// `get_state` is the only witness to a live turn. A failed read counts as not
 	// live: a card left spinning never resolves, while a wrongly aborted card is
 	// repaired by the next execution event.
-	const wire =
+	const snapshot =
 		stateResult.status === "fulfilled" && stateResult.value.success
 			? (stateResult.value.data as RpcSessionState | null)
 			: null;
+	const wire = snapshot && withLatestRun(snapshot, session?.getState(), before.runStatusVersion);
 	const stateIsStreaming = wire?.isStreaming === true;
 	const stateIsIdle = wire != null && !stateIsStreaming;
 	const page =
@@ -603,7 +664,7 @@ function commitHydration({
 		// status handlers — this covers tabs that booted or settled in the
 		// background, whose frames would otherwise stay silent on return.
 		// Idempotent server-side. Best effort: a call a dropped link failed is asked again by the next hydrate.
-		void command({ type: "set_subagent_subscription", level: "progress" }).catch(() => undefined);
+		if (subscribe) void command({ type: "set_subagent_subscription", level: "progress" }).catch(() => undefined);
 	} else if (focusUnchanged && wire != null) {
 		const selection = model?.getState();
 		applyEventlessState(
@@ -752,15 +813,27 @@ export function attachTabSession(tabId: string): Promise<void> {
  * calls join it.
  */
 export function hydrateTabSession(tabId: string, fallbackName?: string): Promise<void> {
-	if (isTabClosed(tabId)) return Promise.resolve();
+	return startTabHydration(tabId, fallbackName).then(() => undefined);
+}
+
+type RequiredRecoveryReads = "core" | "all";
+
+/** Recover a missed event stream with reads only, reporting whether every required read succeeded. */
+export function recoverTabSession(tabId: string, required: RequiredRecoveryReads = "all"): Promise<boolean> {
+	return startTabHydration(tabId, undefined, required);
+}
+
+function startTabHydration(tabId: string, fallbackName?: string, required?: RequiredRecoveryReads): Promise<boolean> {
+	if (isTabClosed(tabId)) return Promise.resolve(false);
 	const runtime = ensureTabRuntime(tabId);
-	const entry = { target: hydrationTarget(tabId), promise: loadTabSession(tabId, runtime, fallbackName) };
+	const result = loadTabSession(tabId, runtime, fallbackName, required);
+	const entry = { target: hydrationTarget(tabId), promise: result.then(() => undefined) };
 	inFlightHydrations.set(runtime, entry);
 	const release = () => {
 		if (inFlightHydrations.get(runtime) === entry) inFlightHydrations.delete(runtime);
 	};
 	entry.promise.then(release, release);
-	return entry.promise;
+	return result;
 }
 
 /**
@@ -792,7 +865,7 @@ function runtimeStores(tabId: string): HydrationStores {
 }
 
 /** What names a tab's transcript in the snapshot cache: its file, a file it is about to open, or its id. */
-function snapshotIdentity(tab: SessionTab) {
+export function snapshotIdentity(tab: SessionTab) {
 	return { sessionPath: tab.sessionPath ?? tab.pendingSessionPath, sessionId: tab.sessionId, device: tab.device };
 }
 
@@ -805,10 +878,26 @@ function seedFromSnapshot(tabId: string, { messages, session, tools, model }: Hy
 	if (session && !session.getState().cwd && tab.cwd) session.setState({ cwd: tab.cwd });
 	if (model) seedModelStore(model, tab.device, transcriptKey(snapshotIdentity(tab)));
 	if (!messages) return;
-	const rows = seedTranscript(messages, snapshotIdentity(tab));
+	const identity = snapshotIdentity(tab);
+	const rows = seedTranscript(messages, identity);
+	const key = transcriptKey(identity);
+	if (key)
+		transcriptProbe.set(tabId, {
+			...transcriptProbe.get(tabId),
+			seeded: { key, found: rows !== null, at: Date.now() },
+		});
 	// The tool cards derive from the rows: rebuilt, none of them waits for a result that is already in the rows.
 	if (rows) tools?.getState().hydrateMessages(rows, { turnIsLive: false });
 }
+
+/**
+ * Per tab, the transcript snapshot key it was last seeded from (and whether rows were there) and last written under,
+ * for `empty-transcript-probe.ts`, which reads it only when a known session's pane shows no rows.
+ */
+export const transcriptProbe = new Map<
+	string,
+	{ seeded?: { key: string; found: boolean; at: number }; written?: { key: string; at: number } }
+>();
 
 /**
  * Seed every tab the store lists as soon as it (or its session file) is known, not when its omp is ready: a tab
@@ -852,13 +941,20 @@ function watchTranscript(tabId: string, runtime: SessionRuntime, { messages, mod
 		clearTimeout(timer);
 		timer = setTimeout(() => {
 			const tab = useTabsStore.getState().tabs.find(entry => entry.id === tabId);
-			if (tab && sessionRuntime(tabId) === runtime)
-				writeTranscriptSnapshot(snapshotIdentity(tab), messages.getState().messages);
+			if (!tab || sessionRuntime(tabId) !== runtime) return;
+			const key = writeTranscriptSnapshot(snapshotIdentity(tab), messages.getState().messages);
+			if (key) transcriptProbe.set(tabId, { ...transcriptProbe.get(tabId), written: { key, at: Date.now() } });
 		}, TRANSCRIPT_WRITE_DELAY_MS);
 	});
 }
 
-async function loadTabSession(tabId: string, runtime: SessionRuntime, fallbackName?: string): Promise<void> {
+async function loadTabSession(
+	tabId: string,
+	runtime: SessionRuntime,
+	fallbackName: string | undefined,
+	required?: RequiredRecoveryReads,
+): Promise<boolean> {
+	const readOnly = required !== undefined;
 	const version = (hydrationVersions.get(runtime) ?? 0) + 1;
 	hydrationVersions.set(runtime, version);
 	const isCurrent = (): boolean => hydrationVersions.get(runtime) === version && sessionRuntime(tabId) === runtime;
@@ -883,7 +979,7 @@ async function loadTabSession(tabId: string, runtime: SessionRuntime, fallbackNa
 		syncGoal(tabId, runtime.command, isCurrent),
 		syncAutopilot(tabId, runtime.command, isCurrent),
 		syncCheckoutPeers(tabId, runtime.command, isCurrent),
-		syncNextPrompt(tabId, runtime.command, isCurrent),
+		syncNextPrompt(tabId, runtime.command, isCurrent, required === "all"),
 		// Queue snapshot: queue_update frames keep it fresh afterwards;
 		// get_queue is only the hydrate fallback (boot/reconnect/session
 		// switch all land here). refresh() swallows its own failures.
@@ -893,10 +989,26 @@ async function loadTabSession(tabId: string, runtime: SessionRuntime, fallbackNa
 		// command channel), so re-read this tab's sidecar on every hydrate; both
 		// methods already reject stale out-of-order replies.
 		settings?.syncDisplaySettings(),
-		settings?.syncApproval(),
+		settings?.syncApproval({ readOnly }),
 	]);
 	const [stateResult, messagesResult] = await coreResult;
-	if (!isCurrent()) return;
+	if (!isCurrent()) return false;
+	const stateData =
+		stateResult.status === "fulfilled" && stateResult.value.success ? stateResult.value.data : undefined;
+	const pageData =
+		messagesResult.status === "fulfilled" && messagesResult.value.success ? messagesResult.value.data : undefined;
+	const coreOk =
+		!!stateData &&
+		typeof stateData === "object" &&
+		typeof (stateData as RpcSessionState).sessionId === "string" &&
+		!!pageData &&
+		typeof pageData === "object" &&
+		((pageData as MessagesPage).unchanged === true || Array.isArray((pageData as MessagesPage).messages));
+	if (readOnly && !coreOk) {
+		await subagentsResult;
+		await secondaryResult;
+		return false;
+	}
 	commitHydration({
 		stores,
 		before,
@@ -904,9 +1016,10 @@ async function loadTabSession(tabId: string, runtime: SessionRuntime, fallbackNa
 		messagesResult,
 		focusUnchanged: true,
 		command: runtime.command,
+		subscribe: !readOnly,
 		applyState: (wire, startedAt) => {
 			withSessionRuntime(tabId, () => {
-				applySessionState(wire, fallbackName, startedAt);
+				applySessionState(wire, fallbackName, startedAt, { readOnly });
 				// A view that joined after the retry saga started heard no auto_retry_start, and its status may have
 				// come before this runtime existed: main's status for the tab has the saga.
 				const saga = useTabsStore.getState().tabs.find(tab => tab.id === tabId)?.retrySaga;
@@ -927,7 +1040,17 @@ async function loadTabSession(tabId: string, runtime: SessionRuntime, fallbackNa
 		stateResult.status === "fulfilled" && stateResult.value.success
 			? (stateResult.value.data as RpcSessionState | null)
 			: null;
-	if (wire?.planModeEnabled) await syncPlanProposal(tabId, runtime.command, isCurrent);
-	await subagentsResult;
-	await secondaryResult;
+	const planOk = wire?.planModeEnabled
+		? await syncPlanProposal(tabId, runtime.command, isCurrent)
+		: !sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval")?.getState().pending;
+	const subagentsOk = await subagentsResult;
+	const secondary = await secondaryResult;
+	if (required === "core") return isCurrent() && coreOk;
+	return (
+		isCurrent() &&
+		coreOk &&
+		planOk &&
+		subagentsOk === true &&
+		secondary.every(result => result.status === "fulfilled" && result.value === true)
+	);
 }

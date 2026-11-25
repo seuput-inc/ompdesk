@@ -1,14 +1,14 @@
 /**
  * One Web Push message to one subscription: the core signs it with the host's VAPID key, encrypts it for the
  * subscription (RFC 8291) and POSTs it (`crates/core/src/web/push.rs`), behind an injectable transport so tests put a
- * fake push service where the network would be. A send that got no answer, a 5xx or a 429 is tried once more after
- * 2 s; a 404/410 means the browser dropped the subscription (the caller forgets it); any other failure is logged and
- * the notice is lost (a push is a courtesy; the page shows the state when opened).
+ * fake push service where the network would be. A send that got no answer, or a push service fault or rate limit
+ * (5xx, 429; the core marks it `retry`), is tried once more after 2 s unless a newer push with the same tag went out
+ * meanwhile; a 404/410 means the browser dropped the subscription (the caller forgets it); any other failure is logged
+ * and the notice is lost (a push is a courtesy; the page shows the state when opened).
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WebPushPayload, WebPushSubscriptionJson } from "../../shared/web-push";
 import { core } from "../core/process";
-import { loadVapid } from "./vapid-store";
 
 export type PushUrgency = "very-low" | "low" | "normal" | "high";
 
@@ -18,26 +18,27 @@ export interface PushOptions {
 	urgency: PushUrgency;
 }
 
+/** What one attempt came to: the core's classification, or this side's when the core gave no answer. */
+export type PushDelivery = { outcome: "sent" | "gone" } | { outcome: "failed"; message: string; retry?: boolean };
+export type PushResult = PushDelivery["outcome"];
+
 /** The wire: delivers `body` (UTF-8 JSON) to the push service behind `subscription`, encrypted and VAPID signed. */
 export interface PushTransport {
 	send(
 		subscription: WebPushSubscriptionJson,
 		body: string,
 		options: PushOptions & { timeoutMs: number },
-	): Promise<{ statusCode: number }>;
+	): Promise<PushDelivery>;
 }
 
 /** The core waits `timeoutMs` for the push service; this side waits a little longer for the core's answer. */
 const CORE_SLACK_MS = 5_000;
 
-/**
- * The real transport: the core over HTTPS. A non-2xx answer comes back as its status, not as an exception; a request
- * that got no answer (no connection, TLS, timeout) rejects with the core's coded fault.
- */
+/** The core classifies HTTP replies and oversized payloads. An attempt without an HTTP reply rejects. */
 export function coreTransport(userData: string): PushTransport {
 	return {
 		async send(subscription, body, options) {
-			const answer = await core().call<{ statusCode: number }>(
+			const answer = await core().call<PushDelivery>(
 				"push.send",
 				{
 					userData,
@@ -54,52 +55,30 @@ export function coreTransport(userData: string): PushTransport {
 	};
 }
 
-/** A push service accepts up to 4096 bytes after encryption (RFC 8291 spends 103 on its header and tag). */
-export const PUSH_PAYLOAD_MAX_BYTES = 3800;
 const SEND_TIMEOUT_MS = 10_000;
 export const PUSH_RETRY_DELAY_MS = 2_000;
-
-export type PushResult = "sent" | "gone" | "failed";
 
 export interface PushSenderDeps {
 	/** The folder the core keeps the VAPID keypair in (`web-push.json`). */
 	userData: string;
 	transport?: PushTransport | undefined;
+	log?: ((message: string) => void) | undefined;
 	/** The pause before the one retry; tests resolve it at once. */
 	wait?: ((ms: number) => Promise<void>) | undefined;
-	log?: ((message: string) => void) | undefined;
 }
 
 export class PushSender {
 	readonly #deps: PushSenderDeps;
 	readonly #transport: PushTransport;
 	readonly #wait: (ms: number) => Promise<void>;
-	#publicKey: string | null = null;
-	/** The newest send per subscription and tag, so a retry never lands over a newer push (a `clear` undone). */
+	/** The newest send per subscription and tag: a retry never lands over a newer push (a `clear` undone). */
 	readonly #latest = new Map<string, number>();
 	#sends = 0;
 
 	constructor(deps: PushSenderDeps) {
 		this.#deps = deps;
 		this.#transport = deps.transport ?? coreTransport(deps.userData);
-		this.#wait = deps.wait ?? sleep;
-	}
-
-	/**
-	 * Loads the VAPID keypair in the core (making one when the file is unusable), before the first page asks for the
-	 * public key or the first push goes out. `created` is true when every stored subscription was made against
-	 * another key: the caller drops them.
-	 */
-	async open(): Promise<{ created: boolean }> {
-		const { publicKey, created } = await loadVapid(this.#deps.userData);
-		this.#publicKey = publicKey;
-		return { created };
-	}
-
-	/** The public key a page subscribes against; only once `open` has answered. */
-	get publicKey(): string {
-		if (this.#publicKey === null) throw new Error("web push: the VAPID keypair is not loaded yet");
-		return this.#publicKey;
+		this.#wait = deps.wait ?? (ms => sleep(ms));
 	}
 
 	/** Never throws: `gone` (404/410) tells the caller to forget the subscription. */
@@ -109,47 +88,36 @@ export class PushSender {
 		options: PushOptions,
 	): Promise<PushResult> {
 		const body = JSON.stringify(payload);
-		if (Buffer.byteLength(body) > PUSH_PAYLOAD_MAX_BYTES) {
-			this.#deps.log?.(`web push not sent: payload of ${Buffer.byteLength(body)} bytes is over the limit`);
-			return "failed";
-		}
 		const key = `${subscription.endpoint}\n${payload.tag}`;
 		const mine = ++this.#sends;
 		this.#latest.set(key, mine);
 		try {
-			let answer = await this.#attempt(subscription, body, options);
-			// No answer (network, TLS, timeout), the push service's own fault or its rate limit: one more try.
-			if (answer instanceof Error || answer >= 500 || answer === 429) {
+			let result = await this.#attempt(subscription, body, options);
+			if (result.outcome === "failed" && result.retry) {
 				await this.#wait(PUSH_RETRY_DELAY_MS);
 				if (this.#latest.get(key) !== mine) {
-					this.#deps.log?.("web push retry dropped: a newer push with its tag went out");
+					this.#deps.log?.(`${result.message}; not retried: a newer push with its tag went out`);
 					return "failed";
 				}
-				answer = await this.#attempt(subscription, body, options);
+				result = await this.#attempt(subscription, body, options);
 			}
-			if (answer instanceof Error) {
-				this.#deps.log?.(`web push failed: ${answer.message}`);
-				return "failed";
-			}
-			if (answer >= 200 && answer < 300) return "sent";
-			if (answer === 404 || answer === 410) return "gone";
-			this.#deps.log?.(`web push refused with status ${answer}`);
-			return "failed";
+			if (result.outcome === "failed") this.#deps.log?.(result.message);
+			return result.outcome;
 		} finally {
 			if (this.#latest.get(key) === mine) this.#latest.delete(key);
 		}
 	}
 
-	/** One POST: the push service's status, or the fault when no answer came. */
-	async #attempt(subscription: WebPushSubscriptionJson, body: string, options: PushOptions): Promise<number | Error> {
+	/** One attempt; no answer at all (the core faulted, the network failed) is worth a retry too. */
+	async #attempt(subscription: WebPushSubscriptionJson, body: string, options: PushOptions): Promise<PushDelivery> {
 		try {
-			const { statusCode } = await this.#transport.send(subscription, body, {
-				...options,
-				timeoutMs: SEND_TIMEOUT_MS,
-			});
-			return statusCode;
+			return await this.#transport.send(subscription, body, { ...options, timeoutMs: SEND_TIMEOUT_MS });
 		} catch (error) {
-			return error instanceof Error ? error : new Error(String(error));
+			return {
+				outcome: "failed",
+				message: `web push failed: ${error instanceof Error ? error.message : String(error)}`,
+				retry: true,
+			};
 		}
 	}
 }

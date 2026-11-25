@@ -140,7 +140,8 @@ describe("the Run sheet is one line per row", () => {
 		const grids = Array.from(sheet.querySelectorAll("[data-switch-grid]"));
 		// Speed (Fast, Slow, Ultrafast) and Advanced (Auto-compact, Extended, Auto-retry, Prewalk, Steer, Interrupt).
 		expect(grids).toHaveLength(2);
-		for (const grid of grids) expect(grid.className).toContain("grid-cols-2");
+		// Two columns, the left a tenth wider so the Korean labels on Windows' face are not cut (RunSettings TILE_COLUMNS).
+		for (const grid of grids) expect(grid.className).toContain("grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]");
 		// Plus the Mode section's Plan and Auto mode, each a whole-row tile with its glyph like the others.
 		const tiles = Array.from(sheet.querySelectorAll("[data-switch-tile]"));
 		expect(tiles).toHaveLength(11);

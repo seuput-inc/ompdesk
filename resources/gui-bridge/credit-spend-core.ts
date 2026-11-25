@@ -22,6 +22,9 @@
 /** Spawn env: `1` lets accounts run on credits and extra usage (stock); anything else is off. */
 export const CREDIT_SPEND_ENV = "OMP_GUI_CREDIT_SPEND";
 
+/** Spawn env of a scheduled run's omp: the file its run extension writes the run's usage to when it ends. */
+export const RUN_USAGE_ENV = "OMP_GUI_RUN_USAGE";
+
 /** The providers whose accounts can serve past their plan: ChatGPT on credits, Claude on extra usage. */
 export const CREDIT_PROVIDERS = ["openai-codex", "anthropic"] as const;
 export type CreditProvider = (typeof CREDIT_PROVIDERS)[number];
@@ -57,6 +60,7 @@ export interface PlanLimitLike {
 export interface PlanReportLike {
 	limits: readonly PlanLimitLike[];
 	metadata?: Record<string, unknown>;
+	fetchedAt?: number;
 }
 
 /** Codex's plan windows (pi-ai usage/openai-codex.ts `buildUsageLimit`); its spend cap and extra meters are not plan. */
@@ -70,11 +74,13 @@ function isPlanLimit(provider: CreditProvider, limit: PlanLimitLike): boolean {
 	return provider === "openai-codex" ? Object.hasOwn(CODEX_PLAN_LIMITS, limit.id) : limit.scope.shared === true;
 }
 
+function usedFraction(limit: PlanLimitLike): number | undefined {
+	const { usedFraction: fraction, used, limit: cap } = limit.amount;
+	return fraction ?? (used !== undefined && cap !== undefined && cap > 0 ? used / cap : undefined);
+}
+
 function spent(limit: PlanLimitLike): boolean {
-	if (limit.status === "exhausted") return true;
-	const { usedFraction, used, limit: cap } = limit.amount;
-	const fraction = usedFraction ?? (used !== undefined && cap !== undefined && cap > 0 ? used / cap : undefined);
-	return fraction !== undefined && fraction >= 1;
+	return limit.status === "exhausted" || (usedFraction(limit) ?? 0) >= 1;
 }
 
 /** How long a plan Codex calls spent stays limited when no window names a reset: stock's own default block. */
@@ -84,11 +90,16 @@ export const UNTIMED_SPENT_MS = 30 * 60_000;
  * Until when the account's plan is spent, from its usage report: the latest reset among its plan windows at 100 %, or
  * (Codex) the plan verdict `limitReached` read without credits; `undefined` while the plan still serves. A window
  * whose reset has passed is not spent.
+ *
+ * `modelRows` are the windows stock counts for the request's model (Claude only: its Fable or Opus week). One of them
+ * spent stops that model before its first request, because Claude serves a model past its own week on extra usage
+ * while the shared windows still read under 100 %; without a reset time it stays limited for stock's default block.
  */
 export function planSpentUntil(
 	provider: CreditProvider,
 	report: PlanReportLike | null | undefined,
 	now: number,
+	modelRows: readonly PlanLimitLike[] = [],
 ): number | undefined {
 	if (!report) return undefined;
 	let until: number | undefined;
@@ -100,10 +111,94 @@ export function planSpentUntil(
 		nextReset = Math.min(nextReset ?? resetsAt, resetsAt);
 		if (spent(limit)) until = Math.max(until ?? resetsAt, resetsAt);
 	}
+	for (const limit of provider === "anthropic" ? modelRows : []) {
+		if (isPlanLimit(provider, limit) || !spent(limit)) continue;
+		const resetsAt = limit.window?.resetsAt ?? now + UNTIMED_SPENT_MS;
+		if (resetsAt > now) until = Math.max(until ?? resetsAt, resetsAt);
+	}
 	if (until !== undefined) return until;
 	if (provider === "openai-codex" && report.metadata?.limitReached === true)
 		return nextReset ?? now + UNTIMED_SPENT_MS;
 	return undefined;
+}
+
+/** On a ChatGPT report: its usage answer held credits (credit-spend.ts sets it; stock's parser never sees the block). */
+export const CREDITS_HELD = "ompdeskCreditsHeld";
+
+/** Whether a Codex `/wham/usage` answer holds credits a spent plan would go on running on. */
+export function holdsCredits(payload: unknown): boolean {
+	if (typeof payload !== "object" || payload === null || !("credits" in payload)) return false;
+	const { credits } = payload;
+	if (typeof credits !== "object" || credits === null) return false;
+	return (
+		("has_credits" in credits && credits.has_credits === true) ||
+		("unlimited" in credits && credits.unlimited === true)
+	);
+}
+
+/** Stock's report life (pi-ai `USAGE_REPORT_TTL_MS`): how old the report of an untouched plan may be. */
+export const REPORT_LIFE_MS = 5 * 60_000;
+
+/** From this share of a plan window on, one request can use up what is left: the report is read again before each. */
+export const NEAR_SPENT = 0.9;
+
+/** How old the report of a nearly spent plan may be while this omp sent nothing: another omp may have. */
+export const NEAR_SPENT_AGE_MS = 15_000;
+
+/** How long a request waits when the usage of a nearly spent plan cannot be read, before it is tried again. */
+export const UNREAD_HOLD_MS = 60_000;
+
+/**
+ * What the usage report of a ChatGPT account is still good for:
+ * - `current`: a request may go out on it.
+ * - `aging`: older than the plan it shows left allows; read again, and a read that fails changes nothing.
+ * - `unconfirmed`: the plan is within {@link NEAR_SPENT} of its end and a request went out since the read (`sentAt`,
+ *   this omp's), or {@link NEAR_SPENT_AGE_MS} passed (another omp's may have); nothing goes out until it is read again.
+ *
+ * Why: stock never hears what a served request's `x-codex-*` headers say (pi-ai providers/openai-codex-responses.ts
+ * calls no `onResponse`), so between two usage reports nothing tells it the plan ran out, and an account holding
+ * credits served from them for the rest of the report's life (about 5 minutes). An account without credits is left
+ * to stock: the provider itself refuses its spent plan.
+ */
+export function reportTrust(
+	report: PlanReportLike | null | undefined,
+	now: number,
+	sentAt?: number,
+): "current" | "aging" | "unconfirmed" {
+	if (report?.metadata?.[CREDITS_HELD] !== true || report.fetchedAt === undefined) return "current";
+	let used = 0;
+	for (const limit of report.limits) {
+		if (isPlanLimit("openai-codex", limit)) used = Math.max(used, usedFraction(limit) ?? 0);
+	}
+	const age = now - report.fetchedAt;
+	if (used >= NEAR_SPENT) {
+		const sentSince = sentAt !== undefined && sentAt >= report.fetchedAt;
+		return sentSince || age > NEAR_SPENT_AGE_MS ? "unconfirmed" : "current";
+	}
+	return age > (1 - used) * REPORT_LIFE_MS ? "aging" : "current";
+}
+
+/**
+ * What the providers' answers said is past its plan, and until when: `provider\0credentialId` for the whole account,
+ * `provider\0credentialId\0modelId` for a model's own window. Every OMPdesk omp of one agent directory shares it
+ * through one file, so the first request of a new session already knows what another session was told.
+ */
+export type LimitedLedger = Record<string, number>;
+
+/** The ledger file's contents without the entries whose time has passed; anything malformed reads as empty. */
+export function parseLimited(text: string, now: number): LimitedLedger {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(text);
+	} catch {
+		return {};
+	}
+	const ledger: LimitedLedger = {};
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return ledger;
+	for (const [key, until] of Object.entries(raw)) {
+		if (typeof until === "number" && Number.isFinite(until) && until > now) ledger[key] = until;
+	}
+	return ledger;
 }
 
 /** The plan windows every model of the account shares, by the claim Claude names, with the header of their reset. */
@@ -172,10 +267,20 @@ const PAID: Readonly<Record<CreditProvider, string>> = { "openai-codex": "credit
 /**
  * The error a refused request raises. Stock reads its wording as a usage limit (pi-ai error/rate-limit.ts
  * `USAGE_LIMIT_PATTERN`: `usage_limit_reached`), so it rotates or falls back; the caller appends stock's own
- * `retry-after-ms` hint so the block lasts until the reset.
+ * `retry-after-ms` hint so the block lasts until the reset. When nothing is left to switch to, the turn ends on this
+ * text: "usage limit" is what OMPdesk's limit wait takes up (`isLimitWording`, src/shared/quota-reset.ts, and its
+ * copy in the core), and "Credit use setting is off" is what the error card reads (`CREDIT_SPEND_OFF_WORDING`,
+ * src/shared/credit-spend.ts). No billing word: an account out of money is never waited for.
  */
 export function planSpentError(provider: CreditProvider, until: number, now: number): string {
 	const minutes = Math.max(1, Math.ceil((until - now) / 60_000));
 	const wait = minutes >= 120 ? `${Math.round(minutes / 60)} hours` : `${minutes} minutes`;
-	return `usage_limit_reached: this ${BRAND[provider]} account's plan limit is used up for about ${wait}, and OMPdesk's Credit use setting is off, so it does not run on ${PAID[provider]}.`;
+	return `usage_limit_reached: this ${BRAND[provider]} account reached its plan's usage limit, which resets in about ${wait}, and OMPdesk's Credit use setting is off, so it does not run on ${PAID[provider]}.`;
 }
+
+/**
+ * The refusal while a ChatGPT account close to its plan's end cannot have its usage read: the request waits
+ * {@link UNREAD_HOLD_MS} and is tried again (stock's own retry), worded for the same wait and card as the one above.
+ */
+export const UNREAD_USAGE_ERROR =
+	"usage_limit_reached: this ChatGPT account is close to its plan's usage limit and its usage could not be read just now, and OMPdesk's Credit use setting is off, so the request waits instead of running on credits.";

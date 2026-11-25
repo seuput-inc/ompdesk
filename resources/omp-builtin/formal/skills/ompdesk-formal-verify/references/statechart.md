@@ -19,7 +19,7 @@ stateDiagram-v2
 ```
 ````
 
-The inline Mermaid text is the primary output. When OMPdesk's `gui_visualize` tool exists, also open the PNGs (from `--png`) in the Preview panel. `--png` renders each chart with `npx -y @mermaid-js/mermaid-cli@11.12.0`, which needs Node with `npx` and a one-time Chromium download; when that fails the command exits 3 (the PNGs are not made) and keeps the `.mmd` files, so show those.
+The inline Mermaid text is the primary output. When OMPdesk's `gui_visualize` tool exists, also open the PNGs (from `--png`) in the Preview panel. `--png` renders each chart with the pinned `@mermaid-js/mermaid-cli` shown in `--help`. It needs Node with `npx` and a one-time Chromium download; when that fails the command exits 3 (the PNGs are not made) and keeps the `.mmd` files, so show those.
 
 ## Pick the direction
 

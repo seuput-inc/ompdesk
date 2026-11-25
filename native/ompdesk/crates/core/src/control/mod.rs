@@ -14,6 +14,7 @@
 //! news). A listener that is still up when the core's input ends is closed then (`close_all`), so the socket file and
 //! `endpoint.json` go even when main never asked.
 
+mod cli_install;
 pub(crate) mod conn;
 mod endpoint;
 mod events;
@@ -33,12 +34,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tokio::sync::watch;
 
+use crate::agentctl::service::text::{waits, waits_on_person};
+use crate::agentctl::service::types::{ControlTab, TabStatus};
 use crate::server::{Call, Events, Fault, Registry, Reply};
 use link::{Ask, Link, Push};
 use listen::Listening;
 
 /// A session as the waits see it. `blocked`: it waits on the person; `working`: a turn runs; `idle`: neither;
-/// `starting`: its omp is on its way; `stopped`: its omp exited or failed. Main decides which (`sessionState`).
+/// `starting`: its omp is on its way; `stopped`: its omp exited or failed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionState {
@@ -49,12 +52,69 @@ pub enum SessionState {
     Stopped,
 }
 
+impl SessionState {
+    fn of(status: TabStatus, working: bool, waiting: bool) -> Self {
+        if waiting {
+            return Self::Blocked;
+        }
+        match status {
+            TabStatus::Starting | TabStatus::Restarting | TabStatus::Waiting => Self::Starting,
+            TabStatus::Error | TabStatus::Exited => Self::Stopped,
+            TabStatus::Asleep | TabStatus::Ready | TabStatus::Running if working => Self::Working,
+            TabStatus::Asleep | TabStatus::Ready | TabStatus::Running => Self::Idle,
+        }
+    }
+}
+
 /// One open session agents may see.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct View {
     pub session: String,
     pub title: String,
     pub state: SessionState,
+}
+
+impl From<ControlTab> for View {
+    fn from(tab: ControlTab) -> Self {
+        let state = SessionState::of(tab.status, tab.busy || tab.resuming, waits(&tab));
+        Self {
+            session: tab.tab_id,
+            title: if tab.title.is_empty() {
+                tab.task.unwrap_or_default()
+            } else {
+                tab.title
+            },
+            state,
+        }
+    }
+}
+
+/// Pool facts captured with one push. No card, plan, prompt or caller payload is needed.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TabSnapshot {
+    tab_id: String,
+    title: String,
+    status: TabStatus,
+    busy: bool,
+    hidden: bool,
+    resuming: bool,
+    has_ask: bool,
+    has_plan: bool,
+}
+
+impl TabSnapshot {
+    fn visible(self) -> Option<View> {
+        (!self.hidden).then(|| View {
+            session: self.tab_id,
+            title: self.title,
+            state: SessionState::of(
+                self.status,
+                self.busy || self.resuming,
+                waits_on_person(self.has_ask, self.has_plan),
+            ),
+        })
+    }
 }
 
 /// What a tab did, as main's pool tells it (`TabActivity`): `busy`, `ask`, `idle`, `released`, and others that only
@@ -135,6 +195,9 @@ fn servers() -> MutexGuard<'static, HashMap<u64, Server>> {
 }
 
 pub fn register(registry: &mut Registry) {
+    registry.add("control.installCli", |call| {
+        Box::pin(cli_install::install(call))
+    });
     registry.add("control.prepareDir", |call| Box::pin(prepare_dir(call)));
     registry.add("control.token", |call| Box::pin(token(call)));
     registry.add("control.listen", |call| Box::pin(listen(call)));
@@ -452,12 +515,12 @@ pub async fn close_all(events: &Events) {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushParams {
     server: u64,
     seq: u64,
     kind: String,
-    views: Option<Vec<View>>,
+    tabs: Option<Vec<TabSnapshot>>,
     call: Option<u64>,
     began: Option<u64>,
     ok: Option<bool>,
@@ -501,7 +564,10 @@ async fn push(call: Call) -> Result<Reply, Fault> {
         .map(|server| Arc::clone(&server.link));
     // A push for a listener that closed meanwhile has nobody to tell.
     if let Some(link) = link {
-        link.push(params.seq, push, params.views).await?;
+        let views = params
+            .tabs
+            .map(|tabs| tabs.into_iter().filter_map(TabSnapshot::visible).collect());
+        link.push(params.seq, push, views).await?;
     }
     Reply::json(&serde_json::Map::new())
 }
