@@ -22,6 +22,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import aiMemorySource from "../native/memory/ompdesk.json" with { type: "json" };
 import cefPin from "../native/ompdesk/crates/shell/cef-pin.json" with { type: "json" };
+import interfacesPin from "../resources/omp-builtin/interfaces/interfaces-config.json" with { type: "json" };
 import ponytailPin from "../resources/omp-builtin/ponytail/ponytail-config.json" with { type: "json" };
 import agentDesktopPin from "./agent-desktop-pin.json" with { type: "json" };
 import { committedCrateList } from "./gen-crate-notices";
@@ -307,6 +308,13 @@ function vendoredSections(): string {
 			"Licensed under the MIT License (full text below and in LICENSES/MIT-ponytail.txt).",
 			"",
 			read("LICENSES/MIT-ponytail.txt"),
+		].join("\n"),
+		[
+			`Interface skills ${interfacesPin.version} by Jakub Krehel (https://github.com/${interfacesPin.repo}, commit ${interfacesPin.commit})`,
+			`${interfacesPin.curation.kept.length} unmodified skill folders (Markdown only) in resources/omp-builtin/interfaces/skills/, copied by scripts/sync-interfaces.ts. No plugin manifest or Codex metadata is bundled.`,
+			"Licensed under the MIT License (full text below and in LICENSES/MIT-interfaces.txt).",
+			"",
+			read("LICENSES/MIT-interfaces.txt"),
 		].join("\n"),
 		[
 			"dot-prop 10.2.0 (https://github.com/sindresorhus/dot-prop) and conf 16.0.0",

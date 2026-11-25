@@ -85,7 +85,7 @@ describe.skipIf(!packageRoot)("the formal-verification skill on the installed om
 	it("stays the one ompdesk-formal-verify beside every pack a bump rewrites, mounted as a spawn mounts them", () => {
 		// The roots `sidecar-factory.ts` mounts with every switch on, in its order.
 		const builtin = path.dirname(FORMAL);
-		const packs = ["skills", "pstack", "ecc", "ponytail"].map(name =>
+		const packs = ["skills", "pstack", "ecc", "interfaces", "ponytail"].map(name =>
 			name === "skills" ? builtin : path.join(builtin, name),
 		);
 		const all = probe([...packs, FORMAL]);

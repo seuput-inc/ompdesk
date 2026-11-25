@@ -425,6 +425,8 @@ describe("mac bundle configs", () => {
 				"ecc/skills/golang-patterns/SKILL.md",
 				"ecc/commands/code-review.md",
 				"ponytail/skills/ponytail/SKILL.md",
+				"interfaces/interfaces-config.json",
+				"interfaces/skills/better-interface/SKILL.md",
 				"skills/ompdesk/SKILL.md",
 				"formal/skills/ompdesk-formal-verify/SKILL.md",
 				"formal/skills/ompdesk-formal-verify/assets/toolchain.json",
@@ -463,7 +465,15 @@ describe("mac bundle configs", () => {
 
 	it("keeps OMPdesk's own extension root to its skill", () => {
 		const root = path.join(PACKAGE_ROOT, "resources/omp-builtin");
-		expect(fs.readdirSync(root).sort()).toEqual(["agent-desktop", "ecc", "formal", "ponytail", "pstack", "skills"]);
+		expect(fs.readdirSync(root).sort()).toEqual([
+			"agent-desktop",
+			"ecc",
+			"formal",
+			"interfaces",
+			"ponytail",
+			"pstack",
+			"skills",
+		]);
 		expect(fs.readdirSync(path.join(root, "skills"))).toEqual(["ompdesk"]);
 		const skill = fs.readFileSync(path.join(root, "skills/ompdesk/SKILL.md"), "utf8");
 		expect(skill).toMatch(/^---\nname: ompdesk\ndescription: \S/);
