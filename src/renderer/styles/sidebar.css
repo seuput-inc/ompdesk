@@ -144,6 +144,12 @@ html:not([data-shell]) .omp-session-sidebar {
 	opacity: 0.45;
 }
 
+/* A sidebar narrower than its 280 px default keeps the rows' width for their words: the lane would cut the branch
+   below its eight characters (the owner's decision of 25 Nov 2026 holds from the default width up). */
+.omp-session-sidebar[data-sidebar-narrow] .omp-status-lane {
+	display: none;
+}
+
 .omp-sidebar-session-rename-nested {
 	padding-left: var(--sc-space-3);
 }

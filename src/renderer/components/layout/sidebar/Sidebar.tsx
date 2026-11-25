@@ -2204,6 +2204,7 @@ export function Sidebar() {
 			<aside
 				aria-label={t("sidebar.label")}
 				className="omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-border-subtle) bg-(--sc-surface-1)"
+				data-sidebar-narrow={sidebarWidth < SIDEBAR_WIDTH.default ? "" : undefined}
 				style={{ width: sidebarWidth }}
 			>
 				{/* Traffic-light safe (global.css): on macOS the brand yields its

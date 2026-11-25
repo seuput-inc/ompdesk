@@ -238,6 +238,8 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		if (line.working) expect(line.arc, `${line.name}: arc stays`).toBe(true);
 		expect(line.endClear, `${line.name}: chip and ⋯ beside the line`).toBe(true);
 	}
+	// Below the sidebar's 280 px default the rows lead without the status lane, so the branch keeps its words.
+	if (surface.name === "narrow") await expect(list.locator("[data-status-lane]:visible")).toHaveCount(0);
 	const heads = await Promise.all(
 		(await list.locator("[data-session-head]:visible").all()).map(head => head.evaluate(readHeadIn)),
 	);
