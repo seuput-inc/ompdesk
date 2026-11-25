@@ -137,8 +137,7 @@ import { OMP_UPDATE_FAILURE_REASONS, type OmpUpdateState } from "../../shared/om
 import { BLOCKING_UI_METHODS, type ExtensionUIRequest } from "../../shared/rpc-types";
 import type { ScheduleCreated, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import { ScheduleFrequencySchema, ScheduleRunSchema } from "../../shared/schedules-schema";
-import type { SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
-import { SidebarLayoutChangeSchema } from "../sidebar-prefs";
+import type { SidebarLayoutChange, SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
 import { SIGN_IN_PAGE_MAX_CHARS } from "../sign-in-callback";
 
 /**
@@ -871,6 +870,21 @@ export const ScheduleCreatedSchema: z.ZodType<ScheduleCreated> = z.object({
 });
 
 const ProjectPath = z.string().min(1).max(4096);
+const ProjectOrder = z.array(ProjectPath);
+
+/** A layout change a device sends; the host's core checks it again as it applies it (`crates/core/src/prefs/sidebar.rs`). */
+const SidebarLayoutChangeSchema = z.discriminatedUnion("op", [
+	z.object({ op: z.literal("set-group-pinned"), cwd: ProjectPath, pinned: z.boolean() }),
+	z.object({ op: z.literal("set-session-pinned"), path: ProjectPath, pinned: z.boolean() }),
+	z.object({ op: z.literal("set-group-order"), order: ProjectOrder }),
+	z.object({
+		op: z.literal("set-session-order"),
+		list: ProjectPath,
+		order: ProjectOrder,
+		move: z.object({ path: ProjectPath, over: ProjectPath }).optional(),
+	}),
+	z.object({ op: z.literal("set-sessions-archived"), ids: ProjectOrder, archived: z.boolean() }),
+]) satisfies z.ZodType<SidebarLayoutChange>;
 
 /** `host.projects.command` params: the device's sidebar reads or edits the host's project list. */
 export const ProjectsCommandParams: z.ZodType<{ request: SidebarProjectsRequest }> = z.object({

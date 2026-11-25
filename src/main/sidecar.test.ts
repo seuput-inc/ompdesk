@@ -944,7 +944,7 @@ describe("SidecarManager", () => {
 		const sidecar = new SidecarManager({
 			omp: ompAt(binaryPath),
 			cwd: workspaceCwd,
-			launchProfiles: () => prefs.get("launchProfiles"),
+			launchFlags: cwd => prefs.launchFlags(cwd),
 		});
 		try {
 			// Written after construction: the profile is read at spawn.
@@ -954,8 +954,8 @@ describe("SidecarManager", () => {
 					noRules: true,
 					addDirs: ["/data/extra"],
 					tools: ["read", "bash"],
-					// Smuggled keys that could reach code-controlled flags —
-					// parseLaunchProfile drops them before the mapping.
+					// Smuggled keys that could reach code-controlled flags: the core's
+					// profile parse drops them before the mapping.
 					"--session": "hijack",
 					session: "hijack",
 				},

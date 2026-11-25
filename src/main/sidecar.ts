@@ -16,7 +16,6 @@ import type { UserProfile } from "../../resources/gui-bridge/modes/user-profile-
 import type { PromptOriginEnv } from "../../resources/gui-bridge/prompt-origin-contracts";
 import type { AccountRotationMode } from "../shared/account-rotation";
 import type { AgentBrowser } from "../shared/default-browser";
-import { parseLaunchProfile, profileToFlags } from "../shared/launch-profile";
 import { parseModelRestoreFailure } from "../shared/model-restore";
 import type {
 	AgentSessionEvent,
@@ -367,11 +366,10 @@ export interface SidecarOptions {
 	/** The OMPdesk model-role picks every local omp shares (`OMP_GUI_OMPDESK_ROLES`, ompdesk-role-contracts.ts). */
 	ompdeskRolesFile?: string;
 	/**
-	 * The stored per-workspace launch profiles (prefs `launchProfiles`), read at
-	 * every spawn and mapped to the tab cwd's agent flags. Absent: no profile
-	 * flags, and no prefs file is touched.
+	 * The flags the tab cwd's launch profile adds (`launchFlags` of the core's prefs), read at every spawn. Absent: no
+	 * profile flags, and no prefs file is touched.
 	 */
-	launchProfiles?: () => unknown;
+	launchFlags?: (cwd: string) => string[];
 	/** How long a closed tab's omp gets to end on its own (stdin closed) before its stop's SIGTERM; 0 or absent: none. */
 	gracefulStopMs?: () => number;
 	/**
@@ -471,17 +469,13 @@ export interface SidecarFailureReport {
 }
 
 /**
- * Map the workspace's launch profile (`launchProfiles.<cwd>`) to agent CLI
- * flags. Any failure — prefs unreadable, malformed JSON — degrades to no
- * flags, never a spawn block. Profile changes require a sidecar restart:
- * flags are spawn-time argv, there is no live apply.
+ * The workspace's launch profile flags. Any failure (prefs unreadable, the core away) degrades to no flags, never a
+ * spawn block. Profile changes require a sidecar restart: flags are spawn-time argv, there is no live apply.
  */
-function loadLaunchProfileFlags(read: (() => unknown) | undefined, cwd: string): string[] {
+function loadLaunchProfileFlags(read: ((cwd: string) => string[]) | undefined, cwd: string): string[] {
 	if (!read) return [];
 	try {
-		const profiles = read();
-		if (typeof profiles !== "object" || profiles === null) return [];
-		return profileToFlags(parseLaunchProfile((profiles as Record<string, unknown>)[cwd]));
+		return read(cwd);
 	} catch {
 		return [];
 	}
@@ -1504,7 +1498,7 @@ export class SidecarManager extends EventEmitter {
 				...(bridgeDir && ask.bridgeAddress ? { bridge: { dir: bridgeDir, address: ask.bridgeAddress } } : {}),
 				...(ask.model ? { model: ask.model } : {}),
 				builtin: this.#builtinMcp,
-				userFlags: [...(extraFlags ?? []), ...loadLaunchProfileFlags(this.#options.launchProfiles, cwd)],
+				userFlags: [...(extraFlags ?? []), ...loadLaunchProfileFlags(this.#options.launchFlags, cwd)],
 				settings: this.#settings(),
 				...(this.#options.promptOrigin ? { origin: this.#options.promptOrigin } : {}),
 				...(this.#processes ? { processTag: this.#processes.tag } : {}),

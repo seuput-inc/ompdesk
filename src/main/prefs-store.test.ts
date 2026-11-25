@@ -89,4 +89,27 @@ describe("the preference files the core owns", () => {
 		prefs.set("__proto__.polluted", true);
 		expect(prefs.store).toEqual({});
 	});
+
+	it("reads a key owner's change in the same tick, and its refusal keeps the page's error code", () => {
+		const prefs = new PrefsStore<Record<string, unknown>>(file);
+		const cwd = join(dir, "work");
+		expect(prefs.get("launchProfiles")).toBeUndefined();
+		expect(prefs.updateLaunchProfile(cwd, { noRules: true, profile: " p " })).toEqual({
+			noRules: true,
+			profile: "p",
+		});
+		expect(prefs.get("launchProfiles")).toEqual({ [cwd]: { noRules: true, profile: "p" } });
+		expect(prefs.launchFlags(cwd)).toEqual(["--no-rules", "--profile", "p"]);
+		expect(() => prefs.launchProfile("relative")).toThrow("[invalid_launch_profile] Invalid workspace");
+
+		expect(prefs.get("sidebar")).toBeUndefined();
+		const pinned = prefs.updateSidebar({ op: "set-session-pinned", path: "/s/1", pinned: true }, "window");
+		expect(pinned.change).toEqual({ op: "set-session-pinned", path: "/s/1", pinned: true });
+		expect(prefs.get("sidebar")).toMatchObject({ pinnedSessions: ["/s/1"] });
+		expect(prefs.moveSidebarPin("/s/1", "/s/2")).toBe(true);
+		expect(prefs.get("sidebar")).toMatchObject({ pinnedSessions: ["/s/2"] });
+		expect(() => prefs.updateSidebar({ op: "set-everything" }, "web")).toThrow(
+			"[invalid_preference_key] Invalid sidebar change",
+		);
+	});
 });

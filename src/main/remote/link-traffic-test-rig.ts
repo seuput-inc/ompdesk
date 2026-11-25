@@ -289,7 +289,7 @@ function hostServices(
 		},
 		renameStoredSession: async () => {},
 		defaultWorkspace: () => workDir,
-		launchProfiles: { get: () => undefined, set: () => {} },
+		launchProfiles: { launchProfile: () => ({}), updateLaunchProfile: () => ({}) },
 		machine: { abortBenchmark: async () => true, abortModelSetup: async () => true } as unknown as MachineServices,
 		localTabs: {
 			sessionOwner: () => null,

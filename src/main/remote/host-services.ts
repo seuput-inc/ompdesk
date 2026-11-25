@@ -81,7 +81,6 @@ import { deletedSessions } from "../deleted-sessions";
 import { deliverOnce } from "../delivery-ledger";
 import { discardOpenedWorktree, savedWorktreesForSpawn } from "../disk/saved-worktrees";
 import { type ExtensionApplyPlan, extensionApplyDecision, mergeApplyPlans } from "../extension-reload";
-import { type LaunchProfilePrefs, readLaunchProfile, updateLaunchProfile } from "../launch-profile-store";
 import { createWorktree, tablessWorktreeBridge } from "../local/git/worktree";
 import { noteTypedPrompt } from "../local/prompt-origin";
 import type { BridgeClient } from "../local/types";
@@ -89,6 +88,7 @@ import type { MachineServices } from "../machine-services";
 import type { ModelWaitTracker } from "../model-wait-count";
 import { noteOmpExit } from "../omp-exits";
 import { ompRestartDecision } from "../omp-restart";
+import type { PrefsStore } from "../prefs-store";
 import { RpcTimeoutError } from "../rpc-client";
 import type { SessionIndex } from "../session-index";
 import { SessionListShare } from "../session-list-share";
@@ -309,7 +309,8 @@ export interface HostServicesDeps {
 	renameStoredSession: (sessionPath: string, name: string) => Promise<void>;
 	/** The GUI-owned Work workspace, created on demand. */
 	defaultWorkspace: () => string | Promise<string>;
-	launchProfiles: LaunchProfilePrefs;
+	/** This machine's launch profiles: its spawns read them (the core's `launchProfile`/`updateLaunchProfile`). */
+	launchProfiles: Pick<PrefsStore, "launchProfile" | "updateLaunchProfile">;
 	/** This machine's models.yml, stats server and `omp bench`. */
 	machine: MachineServices;
 	/**
@@ -1562,10 +1563,10 @@ export class LocalHostServices implements HostServices {
 			case "workspace.default":
 				return this.#deps.defaultWorkspace();
 			case "launchProfile.get":
-				return readLaunchProfile(this.#deps.launchProfiles, parse(LaunchProfileGetParams, method, params).cwd);
+				return this.#deps.launchProfiles.launchProfile(parse(LaunchProfileGetParams, method, params).cwd);
 			case "launchProfile.update": {
 				const { cwd, patch } = parse(LaunchProfileUpdateParams, method, params);
-				return updateLaunchProfile(this.#deps.launchProfiles, cwd, patch);
+				return this.#deps.launchProfiles.updateLaunchProfile(cwd, patch);
 			}
 			case "host.models.list":
 				return this.#deps.machine.listProviders();

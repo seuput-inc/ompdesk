@@ -33,8 +33,8 @@ vi.mock("./i18n", () => ({ ompFailureText: (reason: string) => reason }));
 vi.mock("electron", () => ({ app: {} }));
 
 describe("localSidecarFactory", () => {
-	it("hands every tab it spawns, hosted ones included, the stored launch profiles", () => {
-		let stored: unknown = { "/w/alpha": { noRules: true } };
+	it("hands every tab it spawns, hosted ones included, the stored launch profile's flags", () => {
+		let stored: string[] = ["--no-rules"];
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
 			builtinDir: "/builtin",
@@ -49,7 +49,7 @@ describe("localSidecarFactory", () => {
 			judgeAssistPref: () => true,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => stored,
+			launchFlags: () => stored,
 		});
 
 		create("/w/alpha", "agent", false);
@@ -57,10 +57,10 @@ describe("localSidecarFactory", () => {
 		expect(created).toHaveLength(2);
 		for (const options of created) {
 			// Read per spawn, not captured at creation.
-			stored = { "/w/alpha": { noRules: true } };
-			expect(options.launchProfiles?.()).toEqual({ "/w/alpha": { noRules: true } });
-			stored = {};
-			expect(options.launchProfiles?.()).toEqual({});
+			stored = ["--no-rules"];
+			expect(options.launchFlags?.("/w/alpha")).toEqual(["--no-rules"]);
+			stored = [];
+			expect(options.launchFlags?.("/w/alpha")).toEqual([]);
 		}
 	});
 
@@ -81,7 +81,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 		});
 
 		create("/w/alpha", "agent", false);
@@ -112,7 +112,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 		});
 
 		create("/w/alpha", "agent", false);
@@ -143,7 +143,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 		});
 
 		create("/w/alpha", "agent", false);
@@ -173,7 +173,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 		});
 		setControlEndpoint({ socket: "/s/control.sock", dir: "/s" });
 		try {
@@ -211,7 +211,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 		});
 		create("/w/alpha", kind, false);
 		const mcp = await created[0]?.builtinMcp?.();
@@ -243,7 +243,7 @@ describe("localSidecarFactory", () => {
 				delegationPref: () => undefined,
 				accountRotationPref: () => undefined,
 				accountRotationLedger: "/ledger.json",
-				launchProfilesPref: () => undefined,
+				launchFlags: () => [],
 			});
 			create("/w/alpha", kind, false);
 			const mcp = await created[0]?.builtinMcp?.();
@@ -270,7 +270,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 			aiMemoryExtensionArgs: async cwd => {
 				asked.push(cwd);
 				return args;
@@ -311,7 +311,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 		});
 		create("/w/alpha", "agent", false);
 		const [options] = created;
@@ -345,7 +345,7 @@ describe("localSidecarFactory", () => {
 				delegationPref: () => undefined,
 				accountRotationPref: () => undefined,
 				accountRotationLedger: "/ledger.json",
-				launchProfilesPref: () => undefined,
+				launchFlags: () => [],
 				computerUse: { pref: () => pick, toolsDir: tools, bundleDir: bundle, platform: "darwin" },
 			});
 			created.length = 0;
@@ -400,7 +400,7 @@ describe("localSidecarFactory", () => {
 			delegationPref: () => undefined,
 			accountRotationPref: () => undefined,
 			accountRotationLedger: "/ledger.json",
-			launchProfilesPref: () => undefined,
+			launchFlags: () => [],
 			checkoutFiles: owner => wakes.push(owner === sidecars.at(-1) ? "pass" : "other"),
 		});
 		const emitFrame = (type: string) => {

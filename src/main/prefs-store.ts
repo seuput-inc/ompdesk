@@ -12,7 +12,12 @@
  */
 import { join } from "node:path";
 import { app } from "electron";
+import { codedError, isIpcErrorCode } from "../shared/ipc-error-codes";
+import type { LaunchProfile } from "../shared/launch-profile";
+import { SIDEBAR_PREFS_KEY, type SidebarChange } from "../shared/sidebar-prefs";
 import { hub } from "./core/hub";
+import { CoreError } from "./core/process";
+import type { RuntimeLogReport } from "./runtime-log-core";
 
 export interface AgentPowersReport {
 	/** Prefs that were stored off and are on again. */
@@ -21,6 +26,15 @@ export interface AgentPowersReport {
 	stock: string[];
 	/** Why config.yml was left alone (unreadable, malformed, not writable); the prefs part still ran. */
 	error?: string;
+}
+
+/** Where a sidebar change came from: a desktop window, a paired page, a paired computer. */
+export type SidebarChangeSource = "window" | "web" | "host";
+
+/** What a sidebar change did: the change as applied and its runtime-log line, both null when it moved nothing. */
+export interface SidebarApplied {
+	change: SidebarChange | null;
+	log: RuntimeLogReport | null;
 }
 
 interface Answers {
@@ -129,6 +143,34 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 		return this.#write(null, "migratePowers", { agentDir }) as AgentPowersReport | null;
 	}
 
+	/** The workspace's launch profile (`crates/core/src/prefs/launch_profile.rs`); a cwd not absolute is refused. */
+	launchProfile(cwd: unknown): LaunchProfile {
+		return coded(() => this.#call<LaunchProfile>("launchProfile", { cwd }));
+	}
+
+	/** Merges `patch` into the workspace's launch profile under the core's lock; the profile now stored. */
+	updateLaunchProfile(cwd: unknown, patch: unknown): LaunchProfile {
+		return coded(() => this.#write("launchProfiles", "updateLaunchProfile", { cwd, patch }) as LaunchProfile);
+	}
+
+	/** The flags a spawn in `cwd` appends from its launch profile. */
+	launchFlags(cwd: string): string[] {
+		return this.#call<string[]>("launchFlags", { cwd });
+	}
+
+	/**
+	 * Applies one `SidebarChange` a page sent (`crates/core/src/prefs/sidebar.rs`) to the blob stored now, from a
+	 * desktop window, a paired page or a paired computer. A payload that is not a change is refused.
+	 */
+	updateSidebar(change: unknown, from: SidebarChangeSource): SidebarApplied {
+		return coded(() => this.#write(SIDEBAR_PREFS_KEY, "updateSidebar", { change, from }) as SidebarApplied);
+	}
+
+	/** A peer moved the session file `from` to `to`: the host's pin moves along. Whether one did. */
+	moveSidebarPin(from: string, to: string): boolean {
+		return this.#write(SIDEBAR_PREFS_KEY, "moveSidebarPin", { from, to }) as boolean;
+	}
+
 	#answers(): Answers {
 		let cached = answers.get(this.path);
 		if (!cached) {
@@ -158,6 +200,16 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 
 	#call<R>(method: string, params: Record<string, unknown>): R {
 		return hub().callOnce<R>(instance, method, { file: this.path, ...params });
+	}
+}
+
+/** A refusal the page shows in its own words keeps its code (`[code] message`). */
+function coded<R>(call: () => R): R {
+	try {
+		return call();
+	} catch (error) {
+		if (error instanceof CoreError && isIpcErrorCode(error.code)) throw codedError(error.code, error.message);
+		throw error;
 	}
 }
 
