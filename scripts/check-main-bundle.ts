@@ -417,11 +417,13 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // run 45687946641), 3,139 bytes over. The budget is that measure plus 80 bytes.
 // With main's queued-edit requeue (8c6217faf, b99ecc9af: the composer store's `editsRequeueing`) merged: measured
 // 2,215,938 (branch run 45699393025). The budget is that measure plus 80 bytes.
-// An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2): `buildHistoryRows` cutting the call out of its
-// card, `MessageBubble` choosing the card for it, and the lazy wrappers that load the A2UI chunk (the engine and views
-// stay in that chunk): 346 bytes over the budget before it (2,212,625 in branch run 45698452559). With main at
-// 73923cfad merged: measured 2,217,200 (branch run 45706450189). The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_217_280;
+// An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2), all of it in `main-*.js` (the engine and views
+// stay in the A2UI chunk): `buildHistoryRows` cutting the call out of its card, `MessageBubble` choosing the card, the
+// one lazy loader and its Suspense, the tool's row label, and the preload list's seven new chunk names (the A2UI chunk
+// and what it shares with other lazy chunks: Slider, lib/chart, four lucide icons). Main at 73923cfad measured
+// 2,215,938 (run 45705643845); with this, 2,217,032 (branch run 45710193733), 1,094 bytes more. The budget is that
+// measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_217_112;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
