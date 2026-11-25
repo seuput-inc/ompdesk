@@ -9,7 +9,7 @@
  */
 import { MessageSquareText, MoreHorizontal, Pencil, Send, Trash2 } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
-import { composerTargetItems, handToComposer, useOtherSessionTargets } from "../../../lib/composer-handoff";
+import { handToComposer } from "../../../lib/composer-handoff";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { formatFileNote, noteLabel, reviewNotesMessage } from "../../../lib/review-notes";
@@ -29,6 +29,7 @@ import {
 	MenuButton,
 	TextArea,
 } from "../../common";
+import { composerTargetItems, useOtherSessionTargets } from "./composer-targets";
 
 /** The panel's session and its notes key; null owner while the panel has no tab. */
 export function useNotesOwner(): { tabId: string | null; owner: string | null } {

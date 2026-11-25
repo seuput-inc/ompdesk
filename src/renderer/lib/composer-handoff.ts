@@ -1,20 +1,17 @@
 /**
  * Hand text to a session's composer without sending it: review notes (`stores/review-notes.ts`), a quoted selection
  * (Orca's "Add to chat", `native-chat-workspace-selection.ts`: the quote is added, unsent, to the chat the person
- * picks, and that chat is shown), a failure for the agent to fix. The person picks the session: this one, another open
- * session of the window, or a new session in this one's folder (Orca's `ReviewNotesSendMenuContent` targets).
+ * picks, and that chat is shown), a failure for the agent to fix, into the session the person picks
+ * (`components/panels/notes/composer-targets.ts`).
  *
  * A session on screen takes the text through `omp:fill-composer` (its composer glows and takes focus); a hidden one's
  * draft takes it in its composer store, which the composer reads when its session shows.
  */
-import { MessageSquarePlus, MessageSquareText, SquarePen } from "lucide-react";
-import { useMemo } from "react";
 import type { ImageContent } from "../../shared/rpc-types";
-import type { ContextMenuItem } from "../components/common";
 import { appendToDraft, type ComposerStore, prependToDraft } from "../stores/composer";
 import { sessionRuntimeStore } from "../stores/session-runtime-context";
 import { ensureTabRuntime } from "../stores/tab-runtime";
-import { tabChipLabel, useTabsStore, visibleTabIds } from "../stores/tabs";
+import { useTabsStore, visibleTabIds } from "../stores/tabs";
 
 export interface ComposerHandOff {
 	text: string;
@@ -89,58 +86,4 @@ export async function handToComposer(target: ComposerTarget, message: ComposerHa
 	if (!tabId) return false;
 	handToTab(tabId, message);
 	return true;
-}
-
-export interface OpenSessionTarget {
-	tabId: string;
-	label: string;
-}
-
-/** The window's open sessions other than `currentTabId`, by their tab names, in the window's tab order. */
-export function useOtherSessionTargets(currentTabId: string | null): OpenSessionTarget[] {
-	const tabs = useTabsStore(state => state.tabs);
-	return useMemo(
-		() =>
-			tabs
-				.filter(tab => tab.id !== currentTabId && !tab.ghost)
-				.map(tab => ({ tabId: tab.id, label: tabChipLabel(tab, tabs) })),
-		[tabs, currentTabId],
-	);
-}
-
-type Translate = (key: string, params?: Record<string, string | number>) => string;
-
-/** The menu of where text goes: this session, each other open one, a new session in this one's folder. */
-export function composerTargetItems(
-	t: Translate,
-	currentTabId: string | null,
-	others: readonly OpenSessionTarget[],
-	pick: (target: ComposerTarget) => void,
-): ContextMenuItem[] {
-	const items: ContextMenuItem[] = [];
-	if (currentTabId)
-		items.push({
-			id: "this",
-			label: t("composerTarget.this"),
-			icon: SquarePen,
-			onSelect: () => pick({ tabId: currentTabId }),
-		});
-	others.forEach((other, index) => {
-		items.push({
-			id: `tab:${other.tabId}`,
-			label: other.label,
-			icon: MessageSquareText,
-			separatorBefore: index === 0 && items.length > 0,
-			onSelect: () => pick({ tabId: other.tabId }),
-		});
-	});
-	if (currentTabId)
-		items.push({
-			id: "new",
-			label: t("composerTarget.newSession"),
-			icon: MessageSquarePlus,
-			separatorBefore: true,
-			onSelect: () => pick({ newSessionFrom: currentTabId }),
-		});
-	return items;
 }

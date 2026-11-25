@@ -13,7 +13,18 @@ import {
 	Sparkles,
 	WifiOff,
 } from "lucide-react";
-import { memo, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	lazy,
+	memo,
+	type RefObject,
+	Suspense,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { AgentMessage, MessagesPage } from "../../../shared/rpc-types";
 import { hydrateTabSession, loadOlderTranscript } from "../../hooks/session-hydration";
 import { currentShellMode } from "../../hooks/use-shell-mode";
@@ -46,13 +57,11 @@ import {
 	DisclosureButton,
 	JumpToLatest,
 	Kbd,
-	SelectionActions,
 	SettingInfo,
 	Skeleton,
 	Spinner,
 } from "../common";
 import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot";
-import { useAddToChat } from "../panels/notes/AddToChat";
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
 import { ConversationNavigator } from "./ConversationNavigator";
@@ -107,6 +116,9 @@ import { REVEAL_STEP_EVENT, type RevealStepRequest, revealStep, type StepReveal 
 import { StepGroups } from "./work/StepGroups";
 import { messageTimestampMs } from "./work/work-turn";
 
+/** "Add to chat" over the transcript (Orca's selection quotes), loaded off the phone's first screen. */
+const TranscriptQuote = lazy(() => import("../panels/notes/TranscriptQuote"));
+
 // TanStack's end check needs one CSS pixel for fractional scrollTop rounding.
 // User intent is enforced separately by switching away from end anchoring.
 const LIVE_EDGE_THRESHOLD_PX = 1;
@@ -159,8 +171,6 @@ export function ChatStream() {
 function SessionTranscript() {
 	const t = useT();
 	const tabId = useRuntimeTabId();
-	// A passage of the transcript, quoted into a session's composer (Orca's selection quotes).
-	const addToChat = useAddToChat(tabId);
 	const messages = useMessagesStore(s => s.messages);
 	const liveMessages = useMessagesStore(s => s.liveMessages);
 	const prevCursor = useMessagesStore(s => s.prevCursor);
@@ -1244,8 +1254,9 @@ function SessionTranscript() {
 				</div>
 			</div>
 			<JumpToLatest className="bottom-5" onClick={jumpToLatest} pinned={pinned} />
-			<SelectionActions actions={[addToChat.action]} rootRef={parentRef} />
-			{addToChat.menu}
+			<Suspense fallback={null}>
+				<TranscriptQuote rootRef={parentRef} tabId={tabId} />
+			</Suspense>
 			<ConversationNavigator
 				activeIndex={activeConversationIndex}
 				anchors={conversationAnchors}

@@ -5,10 +5,11 @@
  */
 import { Quote } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { composerTargetItems, handToComposer, useOtherSessionTargets } from "../../../lib/composer-handoff";
+import { handToComposer } from "../../../lib/composer-handoff";
 import { useT } from "../../../lib/i18n";
 import { toast } from "../../../stores/toast";
 import { ContextMenu, MenuButton, type SelectionAction } from "../../common";
+import { composerTargetItems, useOtherSessionTargets } from "./composer-targets";
 
 /** The passage as a Markdown quote, a blank line after it for what the person types next (Orca's `formatNativeChatQuote`). */
 export function formatQuote(text: string): string {
