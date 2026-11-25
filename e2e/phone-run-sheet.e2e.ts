@@ -278,6 +278,9 @@ for (const width of WIDTHS) {
 					expect(height, "a segmented row is one line").toBeLessThanOrEqual(56);
 				// Taps: every switch and segment answers for itself (nothing steals its centre).
 				for (const control of await sheet.locator("[role=switch], [data-choice-row] [role=radio]").all()) {
+					// The sheet scrolls once its 44 px rows (the owner's decision, 25 Nov 2026) pass the screen: a finger
+					// scrolls to a control first, so does the check.
+					await control.scrollIntoViewIfNeeded();
 					// Name the control and what lies over the first of its points it lost, so a failure says who steals it.
 					const name = await control.evaluate(node => {
 						const box = node.getBoundingClientRect();

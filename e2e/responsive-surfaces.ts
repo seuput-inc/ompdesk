@@ -1322,6 +1322,10 @@ export const SURFACES: readonly Surface[] = [
 				.locator(":is([data-sidebar-group-new], [data-device-group-new]):visible")
 				.first()
 				.click({ force: true });
+			// A phone's drawer may stay over the new tab: pick its row, as a finger would.
+			const drawer = page.locator("[data-drawer]");
+			if (await drawer.isVisible())
+				await drawer.locator("button[data-roving-item]", { hasText: "New session" }).first().click();
 		},
 		ready: '[data-first-run-step="connect"] [role="progressbar"]',
 		// Parity only, and only over a host whose fake omp has no signed-in provider (`OMP_GUI_TEST_SIGNED_OUT=1`).
