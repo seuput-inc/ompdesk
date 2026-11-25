@@ -1848,6 +1848,8 @@ export function Sidebar() {
 						"data-switch-pending": switchPendingTo === session.id || undefined,
 						"data-session-kind": session.kind ?? "agent",
 						"data-signal": signal,
+						// An unseen finish also bolds the title (Orca's unread card).
+						"data-unseen": lane === "done" || undefined,
 						"data-session-path": session.path,
 						"data-folder-missing": folderMissing || undefined,
 						"data-session-run-child": runChild || undefined,

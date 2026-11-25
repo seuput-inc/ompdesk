@@ -1148,6 +1148,7 @@ function DeviceSessions({
 						"data-pane-focus": (current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-pane-shown": (active && !current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-folder-missing": folderMissing || undefined,
+						"data-unseen": lane === "done" || undefined,
 						"data-live": indexed ? undefined : true,
 					}}
 					selected={active}

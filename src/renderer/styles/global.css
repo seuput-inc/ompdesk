@@ -729,8 +729,43 @@ html[data-platform="darwin"] .omp-sidebar-search {
 	color: var(--sc-text);
 }
 
+/* Orca's card (the owner's decision, 25 Nov 2026): the current session a 9 % wash inside a hairline, a hovered row 4 %.
+   The hairline is an inset outline, not a shadow: a row paints only inside its box (`content-visibility`), and the
+   drop line and a split pane's ring are its box-shadow. */
 .omp-sidebar-session-row[data-active="true"] {
 	background-color: var(--sc-sidebar-row-selected);
+	outline: 1px solid color-mix(in srgb, var(--sc-text) 10%, transparent);
+	outline-offset: -1px;
+}
+
+.omp-sidebar-session-row:not([data-active="true"]):hover {
+	background-color: color-mix(in srgb, var(--sc-text) 4%, transparent);
+}
+
+.omp-sidebar-session-row:is([data-pane-shown="true"], [data-pane-focus="true"]) {
+	outline: none;
+}
+
+/* An unseen finish reads bold as well as by its ✓ (Orca's unread card). */
+.omp-sidebar-session-row[data-unseen] button[data-roving-item] {
+	font-weight: var(--sc-weight-semibold);
+}
+
+/* The search over every session is Orca's pill: a quiet wash, no border until it has focus. */
+.omp-session-sidebar input[data-sidebar-filter] {
+	border-radius: var(--sc-radius-full);
+	background-color: var(--sc-hover);
+	font-weight: var(--sc-weight-medium);
+}
+
+.omp-session-sidebar input[data-sidebar-filter]:not(:focus) {
+	border-color: transparent;
+	box-shadow: none;
+}
+
+/* The list's scrollbar thumb shows only under the pointer (Orca's slim scrollbar); its room stays reserved. */
+:where(html:not([data-input="touch"])) .omp-session-sidebar .omp-sidebar-list:not(:hover)::-webkit-scrollbar-thumb {
+	background-color: transparent;
 }
 
 /* On the selected row's wash the quiet text (an age, a mark) and a waiting title's attention colour fell under 4.5:1 (light

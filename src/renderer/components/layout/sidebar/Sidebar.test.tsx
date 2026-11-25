@@ -1006,6 +1006,9 @@ describe("Sidebar menus and pinned ordering", () => {
 		);
 		const finished = rowFor("Finished run");
 		expect(finished.querySelector("[data-sidebar-done]")).not.toBeNull();
+		// An unseen finish marks the row too, which bolds its title; a running row is not unseen.
+		expect(finished.hasAttribute("data-unseen")).toBe(true);
+		expect(rowFor("Background run").hasAttribute("data-unseen")).toBe(false);
 		expect(finished.textContent).toContain("Run completed");
 
 		// A tab's row with no file yet navigates and closes; file actions stay out of its menu, and diagnostics is one
