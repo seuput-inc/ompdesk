@@ -683,7 +683,7 @@ fn stack(rows: &[Value], number: u64) -> Vec<Value> {
             .filter(|row| json::text(row, "headRefName") == Some(base.as_str()))
             .filter(|row| numbered(row).is_some_and(|number| !seen.contains(&number)))
             .collect();
-        candidates.sort_by_key(|row| (open(*row), numbered(row)));
+        candidates.sort_by_key(|row| (open(row), numbered(row)));
         let Some(&next) = candidates.last() else {
             break;
         };
