@@ -62,7 +62,10 @@ export const getPluginsCacheDir = () => DIR + "/plugins-cache";
 export class MarketplaceManager {
 	async listMarketplaces() {
 		const state = read();
-		return [{ name: "mkt", sourceUri: state.marketplaceSource, updatedAt: state.refreshedAt }];
+		return [{ name: "mkt", sourceType: "local", sourceUri: state.marketplaceSource, catalogPath: DIR + "/catalog.json", updatedAt: state.refreshedAt }];
+	}
+	async listAvailablePlugins() {
+		return [{ name: "demo", version: read().catalog, source: "./demo" }];
 	}
 	async updateMarketplace(name) {
 		log("updateMarketplace", name);
@@ -72,7 +75,7 @@ export class MarketplaceManager {
 		return { name, updatedAt: state.refreshedAt };
 	}
 	async listInstalledPlugins() {
-		return [{ id: "demo@mkt", scope: "user", entries: [{ version: read().installed, enabled: true }] }];
+		return [{ id: "demo@mkt", scope: "user", entries: [{ version: read().installed, installPath: DIR + "/plugins/demo", enabled: true }] }];
 	}
 	async checkForUpdates() {
 		log("checkForUpdates");
@@ -88,6 +91,9 @@ export class MarketplaceManager {
 		return { version: state.installed };
 	}
 }
+// What an upgrade would install (the hold for new extensions, tools or hooks): a folder without a manifest, nothing new.
+export const parsePluginId = id => ({ name: id.split("@")[0], marketplace: id.split("@")[1] });
+export const resolvePluginSource = async () => ({ dir: DIR + "/plugins/demo" });
 export const clearPluginRootsAndCaches = () => {};
 export const resolveActiveProjectRegistryPath = async () => null;
 export class PluginManager {
@@ -208,6 +214,7 @@ async function launch(name: string, prefs: Record<string, unknown>, held: boolea
 			],
 		}),
 	);
+	await fs.writeFile(path.join(ext, "catalog.json"), "{}");
 
 	const omp = await fixtureOmp(root);
 	const stock = path.join(path.dirname(omp), "node_modules", "@oh-my-pi", "pi-coding-agent");
@@ -227,6 +234,7 @@ async function launch(name: string, prefs: Record<string, unknown>, held: boolea
 		path.join(utils, "index.ts"),
 		`export const getPluginsPackageJson = () => ${JSON.stringify(path.join(ext, "plugins-package.json"))};
 export const getMCPConfigPath = () => ${JSON.stringify(path.join(agent, "mcp.json"))};
+export const expandTilde = filePath => filePath;
 `,
 	);
 
