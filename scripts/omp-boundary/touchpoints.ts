@@ -621,7 +621,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "public",
 		summary:
-			"Own prompt sections through the public prompt hook and context (reply language, output style, user profile, memory recall, scratch folder, check runs, ECC and formal-verification hints); none depends on stock prompt templates.",
+			"Own prompt sections through the public prompt hook and context (reply language, output style, user profile, memory recall, scratch folder, check runs, ECC and formal-verification hints); the formal hint reads a `/skill:<name>` turn's prompt as stock's `prompts/skills/user-invocation.md` rendering and matches only its `User:` line.",
 		files: [
 			"resources/gui-bridge/modes/reply-language.ts",
 			"resources/gui-bridge/modes/output-style.ts",
@@ -631,13 +631,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"resources/gui-bridge/modes/check-runs.ts",
 			"resources/gui-bridge/modes/ecc-hint.ts",
 			"resources/gui-bridge/modes/formal-hint.ts",
+			"resources/gui-bridge/modes/formal-hint-core.ts",
 			"resources/gui-bridge/capabilities.ts",
 		],
-		stock: ["omp://extensions.md#before_agent_start"],
+		stock: ["omp://extensions.md#before_agent_start", "prompts/skills/user-invocation.md"],
 		tests: [
+			"src/main/bridge-formal-hint.test.ts",
 			"src/main/bridge-first-use-stock.test.ts",
 			"src/main/ecc/ecc-stock.test.ts",
 			"src/main/formal/formal-stock.test.ts",
+			"src/main/interfaces/interfaces-stock.test.ts",
 		],
 	},
 	{

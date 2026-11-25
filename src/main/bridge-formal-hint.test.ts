@@ -3,6 +3,8 @@
  * ordering or never-happens problem gets one section naming `ompdesk-formal-verify`; every other turn gets nothing,
  * and the match is made again on every turn (a subagent's assignment included).
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	FORMAL_HINT,
@@ -12,6 +14,10 @@ import {
 	isFormalRequest,
 } from "../../resources/gui-bridge/modes/formal-hint-core";
 import type { PromptSectionContext } from "../../resources/gui-bridge/prompt-sections";
+import { ompPackageRoot, systemOmp } from "./omp-runtime";
+
+const stock = await systemOmp();
+const packageRoot = stock.ok ? ompPackageRoot(stock.runtime.bin) : null;
 
 const POSITIVE = [
 	"Turn resume sometimes runs the interrupted prompt twice after a restart; find the race and fix it.",
@@ -59,6 +65,37 @@ describe("isFormalRequest", () => {
 				"Title: 경쟁 조건 수정\n\n# Target\nsrc/main/turn-resume.ts\n# Change\nFix the double-run race.",
 			),
 		).toBe(true);
+	});
+});
+
+describe("a /skill:<name> turn", () => {
+	// Stock's prompts/skills/user-invocation.md, rendered (pinned against the installed omp below).
+	const invoke = (name: string, body: string, args?: string) =>
+		[
+			`[IMPORTANT: User invoked the "${name}" skill; follow its instructions. Full skill below.]`,
+			"",
+			body,
+			"",
+			"---",
+			"",
+			`[Skill directory: /builtin/interfaces/skills/${name}]`,
+			"Resolve relative paths in this skill against this absolute directory.",
+			...(args ? [`User: ${args}`] : []),
+		].join("\n");
+	const body = "---\nname: state-machine\n---\n\n# State machine\n\nRender every state; a race in the mock is fine.";
+
+	it("reads only the person's words, never the skill's body", () => {
+		expect(isFormalRequest(invoke("state-machine", body))).toBe(false);
+		expect(isFormalRequest(invoke("state-machine", body, "the checkout card"))).toBe(false);
+		expect(isFormalRequest(invoke("state-machine", body, "fix the race in turn resume"))).toBe(true);
+	});
+
+	it.skipIf(!packageRoot)("matches the installed omp's invocation template", () => {
+		const template = readFileSync(path.join(packageRoot ?? "", "src/prompts/skills/user-invocation.md"), "utf8");
+		expect(template).toMatch(/^\[IMPORTANT: User invoked the "\{\{name\}\}" skill;[^\n]*\]\n\n\{\{body\}\}\n/);
+		expect(template).toMatch(
+			/\n\[Skill directory: \{\{baseDir\}\}\]\n[^\n]*\n\{\{#if userArgs\}\}\nUser: \{\{userArgs\}\}\n/,
+		);
 	});
 });
 
