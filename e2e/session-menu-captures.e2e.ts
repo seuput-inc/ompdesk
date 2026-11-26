@@ -154,6 +154,7 @@ for (const language of ["en", "ko"] as const)
 				text("sidebar.menu.mute"),
 				...edits.slice(2),
 				text("sidebar.menu.hideFromAgents"),
+				text("sidebar.menu.copyTitle"),
 				text("sidebar.menu.reveal"),
 				text("common.delete"),
 			]);
@@ -170,6 +171,7 @@ for (const language of ["en", "ko"] as const)
 				text("sidebar.menu.openSplit"),
 				text("sidebar.openInNewWindow"),
 				...edits,
+				text("sidebar.menu.copyTitle"),
 				text("common.delete"),
 			]);
 			await captureMenu(a, `host-stored-${language}`);
