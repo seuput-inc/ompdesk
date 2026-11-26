@@ -120,8 +120,14 @@ fn verdict(file: &Path, copy: &Path, own: &Path, bytes: &mut u64) -> Verdict {
     let Ok(meta) = std::fs::symlink_metadata(file) else {
         return Verdict::Unchecked;
     };
-    if !meta.is_file() {
+    // Removing a link deletes no content. Anything else that is no regular file (an ignored nested repository or a
+    // folder git lists as one entry, a file replaced by a folder since the listing) may hold the only copy of its
+    // contents, which this check does not walk: unchecked, never saved.
+    if meta.file_type().is_symlink() {
         return Verdict::Saved;
+    }
+    if !meta.is_file() {
+        return Verdict::Unchecked;
     }
     let resolved = match std::fs::canonicalize(copy) {
         Ok(resolved) => resolved,
@@ -207,5 +213,38 @@ mod tests {
         assert!(judged.paths.is_empty());
         assert!(!judged.complete);
         assert!(!judged.safe());
+    }
+
+    #[test]
+    fn an_ignored_folder_is_unchecked_never_safe() {
+        let worktree = tree(&[
+            ("nested/.git/HEAD", "ref"),
+            ("nested/only-here.txt", "mine"),
+        ]);
+        let main = tree(&[]);
+        let judged = judge(worktree.path(), main.path(), vec!["nested/".into()]);
+        assert!(judged.paths.is_empty());
+        assert!(!judged.complete);
+        assert!(!judged.safe());
+        assert_eq!(
+            judged.describe(),
+            "some files git ignores could not be checked for a copy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_saved_its_target_stays() {
+        let worktree = tree(&[("target.txt", "mine")]);
+        std::os::unix::fs::symlink("/nowhere/else", worktree.path().join("link")).unwrap();
+        let main = tree(&[]);
+        let judged = judge(worktree.path(), main.path(), vec!["link".into()]);
+        assert_eq!(
+            judged,
+            LocalFiles {
+                paths: vec![],
+                complete: true,
+            }
+        );
     }
 }
