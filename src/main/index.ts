@@ -65,9 +65,9 @@ import {
 	TOOLS_AUTO_UPDATE_PREF,
 } from "../shared/desktop-prefs";
 import { ECC_PREF } from "../shared/ecc";
-import { LAUNCH_INCIDENT_PREF, launchIncidentOf } from "../shared/feedback";
 import { IPC_COMMANDS, IPC_EVENTS, type IpcRemoveFromComputerResult, type SessionKind } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
+import { LAUNCH_INCIDENT_PREF, launchIncidentOf } from "../shared/launch-incident";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, MOBILE_WEB_PORT, MOBILE_WEB_STATE } from "../shared/mobile-web";
 import { MODEL_SETUP_RESEARCH_PICK_PREF } from "../shared/model-setup";

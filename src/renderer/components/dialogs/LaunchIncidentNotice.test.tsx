@@ -7,7 +7,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LAUNCH_INCIDENT_PREF, type LaunchIncident } from "../../../shared/feedback";
+import { LAUNCH_INCIDENT_PREF, type LaunchIncident } from "../../../shared/launch-incident";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { useToastStore } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";

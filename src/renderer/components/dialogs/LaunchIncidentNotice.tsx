@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { LAUNCH_INCIDENT_PREF, parseLaunchIncident } from "../../../shared/feedback";
+import { LAUNCH_INCIDENT_PREF, parseLaunchIncident } from "../../../shared/launch-incident";
 import { useT } from "../../lib/i18n";
 import { useMachineSetupStore } from "../../stores/machine-setup";
 import { toast } from "../../stores/toast";

@@ -5,8 +5,6 @@ import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
 import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogDialog";
 import { ChildAsks } from "./components/dialogs/ChildAsks";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
-import { LaunchIncidentNotice } from "./components/dialogs/LaunchIncidentNotice";
-import { MacosRequirementNotice } from "./components/dialogs/MacosRequirementNotice";
 import { ModelRestoreDialog } from "./components/dialogs/ModelRestoreDialog";
 import { PlanApprovalDialog } from "./components/dialogs/PlanApprovalDialog";
 import { TabSwitcher, useTabSwitcherStore } from "./components/dialogs/TabSwitcher";
@@ -18,7 +16,6 @@ import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
 import { SetupTakeoverHost } from "./components/onboarding/SetupTakeover";
 import { StarterTour } from "./components/onboarding/StarterTour";
-import { SurfaceTour } from "./components/onboarding/SurfaceTour";
 import { RemoteFolderPickerHost } from "./components/remote/RemoteFolderPicker";
 import { SshPromptDialog } from "./components/settings/SshPromptDialog";
 import { useExtensionUi } from "./hooks/use-extension-ui";
@@ -92,6 +89,7 @@ import { useRemoteStateSync } from "./stores/remote";
 import { useSessionStore } from "./stores/session";
 import { focusedRuntimeTabId } from "./stores/session-runtime-context";
 import { useSettingsStore } from "./stores/settings";
+import { useStarterGuideStore } from "./stores/starter-guide";
 import { steppingFromTabId, useActiveTabKind, useSessionTabs, useTabsStore, visibleTabIds } from "./stores/tabs";
 import { toast, toastError } from "./stores/toast";
 import { isSidebarDrawerMode, migrateDefaultPanelTab, useUiStore } from "./stores/ui";
@@ -111,8 +109,18 @@ const CapabilitiesSheet = lazyChunk(() =>
 const BenchmarkDialog = lazyChunk(() =>
 	import("./components/dialogs/BenchmarkDialog").then(m => ({ default: m.BenchmarkDialog })),
 );
-// Its own chunk: a desktop window loads it at start, a phone's page never does.
+// Their own chunks: a desktop window loads them at start, a phone's page never does (its first screen's budget).
 const PetOverlay = lazyChunk(() => import("./components/pet/PetOverlay").then(m => ({ default: m.PetOverlay })));
+const MacosRequirementNotice = lazyChunk(() =>
+	import("./components/dialogs/MacosRequirementNotice").then(m => ({ default: m.MacosRequirementNotice })),
+);
+const LaunchIncidentNotice = lazyChunk(() =>
+	import("./components/dialogs/LaunchIncidentNotice").then(m => ({ default: m.LaunchIncidentNotice })),
+);
+// Loaded when a first-visit tour starts.
+const SurfaceTour = lazyChunk(() =>
+	import("./components/onboarding/SurfaceTour").then(m => ({ default: m.SurfaceTour })),
+);
 const ModelSetupDialog = lazyChunk(() =>
 	import("./components/settings/model-setup/ModelSetupDialog").then(m => ({ default: m.ModelSetupDialog })),
 );
@@ -265,6 +273,7 @@ export function App() {
 	const capabilitiesOpen = useUiStore(s => s.capabilitiesOpen);
 	const [capabilitiesMounted, setCapabilitiesMounted] = useState(false);
 	if (capabilitiesOpen && !capabilitiesMounted) setCapabilitiesMounted(true);
+	const surfaceTouring = useStarterGuideStore(s => s.surfaceTour !== null);
 	// The quick terminal loads xterm: only on its first open, then stays mounted so its terminals keep their screens.
 	const quickTerminalOpen = useUiStore(s => s.quickTerminalOpen);
 	const [quickTerminalMounted, setQuickTerminalMounted] = useState(false);
@@ -994,15 +1003,19 @@ export function App() {
 				) : null}
 				<ChangelogDialog />
 				<WhatsNewNotice />
-				<MacosRequirementNotice />
-				<LaunchIncidentNotice />
 				{webRuntime() === null && (
 					<Suspense fallback={null}>
+						<MacosRequirementNotice />
+						<LaunchIncidentNotice />
 						<PetOverlay />
 					</Suspense>
 				)}
 				<StarterTour />
-				<SurfaceTour />
+				{surfaceTouring && (
+					<Suspense fallback={null}>
+						<SurfaceTour />
+					</Suspense>
+				)}
 				<RemoteFolderPickerHost />
 				<WebPairingDialog />
 				<WebDeviceNotice />

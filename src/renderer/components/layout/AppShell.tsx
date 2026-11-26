@@ -41,7 +41,6 @@ import { StatusBar } from "./status-bar/StatusBar";
 // The session list's look stays on the first screen, where the list's own chunk (sidebar-chunk.ts) is not: 7.6 KB,
 // one request less for a page that waits for the list, and the stylesheet keeps its place in the cascade.
 import "../../styles/sidebar.css";
-import { FeatureTipCard } from "./FeatureTipCard";
 import { MailReentryNoticeGate } from "./MailReentryNoticeGate";
 import { MissingFolderSheetHost } from "./MissingFolderSheetHost";
 import { SplitWorkspace } from "./SplitWorkspace";
@@ -55,6 +54,8 @@ import { WhatsNewCard } from "./WhatsNewCard";
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
 const BoardPage = lazyChunk(() => import("../board/BoardPage").then(m => ({ default: m.BoardPage })));
 const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
+// A tip row decides once per launch; its own chunk keeps it off a phone's first screen.
+const FeatureTipCard = lazyChunk(() => import("./FeatureTipCard").then(m => ({ default: m.FeatureTipCard })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
 const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
 /**
@@ -447,7 +448,9 @@ export function AppShell() {
 						<UpdateBanner />
 						<MailReentryNoticeGate />
 						<WhatsNewCard />
-						<FeatureTipCard />
+						<Suspense fallback={null}>
+							<FeatureTipCard />
+						</Suspense>
 						<SplitWorkspace />
 					</div>
 					{onPage && (
