@@ -510,6 +510,7 @@ function groupToggle(cwd: string): Element {
 
 describe("Sidebar menus and pinned ordering", () => {
 	it("leads with the nav rows (Bots only once the bots feature is available) and ends with Settings and a help menu", async () => {
+		useBotsFeature.setState({ available: false });
 		installMockOmp(LIST);
 		seedStores();
 		await mount(<Sidebar />);
@@ -520,7 +521,12 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
 		expect(navRows()).toEqual(["board", "agents", "schedules", "bots", "stats", "phone"]);
-		expect(container.querySelector("[data-sidebar-bots]")?.textContent).toContain("No bots yet");
+		// With no bot yet the section is one card that makes the first (Orca's SidebarBotsEmptyState).
+		const bots = container.querySelector("[data-sidebar-bots]");
+		expect(bots?.textContent).toContain("Your AI teammate");
+		expect([...(bots?.querySelectorAll("button") ?? [])].map(button => button.textContent)).toEqual(
+			expect.arrayContaining(["New bot", "Templates"]),
+		);
 		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("bots");
 		await act(async () => useBotsFeature.setState({ available: false }));

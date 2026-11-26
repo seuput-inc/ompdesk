@@ -1,5 +1,8 @@
+import { useBotsAvailable } from "../../lib/bots-source";
 import { type TabRpc, useTabRpc } from "../../lib/tab-rpc";
+import { useBotsStore } from "../../stores/bots";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
+import { botPaletteItems, botTemplatePaletteItems } from "../bots/bot-palette";
 /**
  * Cmd+K command palette: ranks the declarative command registry (exact >
  * prefix > word-prefix > substring > fuzzy, Hangul-aware, recents boosted)
@@ -11,6 +14,7 @@ import { useRuntimeTabId } from "../../stores/session-runtime-context";
 
 import {
 	Bot,
+	BotMessageSquare,
 	ChartColumn,
 	ChevronRight,
 	CircleHelp,
@@ -57,7 +61,7 @@ import {
 import { enterNeedsConfirm, matchCommand, normalizeQuery, rankCommands } from "../../lib/command-search";
 import { type InlineFailure, inlineFailure } from "../../lib/error-detail";
 import { cx } from "../../lib/format";
-import { useT } from "../../lib/i18n";
+import { useCurrentLang, useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { useModelStore } from "../../stores/model";
 import { useSessionStore } from "../../stores/session";
@@ -111,6 +115,7 @@ function saveRecent(names: string[]) {
 const CATEGORY_ICON: Record<CommandCategory, LucideIcon> = {
 	session: MessageSquare,
 	agents: Bot,
+	bots: BotMessageSquare,
 	insights: ChartColumn,
 	model: Cpu,
 	providers: Plug,
@@ -192,6 +197,7 @@ export function CommandPalette() {
 	const tabRpc = useTabRpc();
 	const tabId = useRuntimeTabId();
 	const t = useT();
+	const lang = useCurrentLang();
 	const open = useUiStore(state => state.commandPaletteOpen);
 	const close = useUiStore(state => state.closeCommandPalette);
 	const isStreaming = useSessionStore(s => s.isStreaming);
@@ -284,9 +290,11 @@ export function CommandPalette() {
 
 	// Rows backed by a shortcut show the user's remapped chord.
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
+	const botsAvailable = useBotsAvailable();
+	const bots = useBotsStore(state => state.state.bots);
 	const menuItems = useMemo(
-		() =>
-			buildCommandMenu(
+		() => [
+			...buildCommandMenu(
 				createCommandContext(
 					{
 						isStreaming,
@@ -306,7 +314,11 @@ export function CommandPalette() {
 					},
 				),
 			),
+			...(botsAvailable ? botPaletteItems(bots, t) : []),
+		],
 		[
+			botsAvailable,
+			bots,
 			t,
 			isStreaming,
 			fastModeEnabled,
@@ -322,10 +334,15 @@ export function CommandPalette() {
 		],
 	);
 
-	// The working set: submenu items when drilled in, else the full menu.
+	// The working set: submenu items when drilled in, else the full menu; a typed query also finds the bot templates.
 	const workingItems = useMemo(
-		() => (submenu?.affordance.kind === "submenu" ? submenu.affordance.items : menuItems),
-		[submenu, menuItems],
+		() =>
+			submenu?.affordance.kind === "submenu"
+				? submenu.affordance.items
+				: query.trim() && botsAvailable
+					? [...menuItems, ...botTemplatePaletteItems(t, lang)]
+					: menuItems,
+		[submenu, menuItems, query, botsAvailable, t, lang],
 	);
 
 	const results = useMemo(() => rankCommands(workingItems, query, recent), [workingItems, query, recent]);

@@ -4,6 +4,8 @@
  * first, then this project's other sessions. A pick writes the session's title and saved id into the message, the
  * address every `ompdesk_session_*` tool takes, so the agent can read it or write to it.
  */
+import { useBotsFeature } from "../../../lib/bots-source";
+import { ensureBots, useBotsStore } from "../../../stores/bots";
 import { sessionListFeed } from "../../../stores/session-list";
 import { useTabsStore } from "../../../stores/tabs";
 import type { CompletionItem } from "./use-completion-menu";
@@ -69,4 +71,32 @@ export function mentionSessions(cwd: string, tabId: string | null): MentionSessi
 		.sort((a, b) => b.modified.localeCompare(a.modified));
 	for (const row of rows) sessions.push({ id: row.id, title: row.title ?? row.id, child: false });
 	return sessions;
+}
+
+/** At most this many bots join the `@` menu. */
+const BOT_MENTION_LIMIT = 6;
+
+/**
+ * This computer's bots whose name or purpose holds `query`, as `@` menu rows above the files (Orca's bot mention
+ * targets, `use-bot-mention-targets.tsx:15-23`, and `use-bot-chat-composer-room.tsx:46-193`). A pick writes
+ * `bot “<name>” (bot:<name>) `, the address `ompdesk_session_send` and `ompdesk_report` take for its home chat; a
+ * paused bot is listed as paused (a send to it is refused). None while the bots feature is off.
+ */
+export function botMentionItems(query: string, labels: { paused: string; bot: string }): CompletionItem[] {
+	if (!useBotsFeature.getState().available) return [];
+	ensureBots();
+	const needle = query.replace(/^"/, "").toLocaleLowerCase();
+	const items: CompletionItem[] = [];
+	for (const bot of useBotsStore.getState().state.bots) {
+		const at = bot.name.toLocaleLowerCase().indexOf(needle);
+		if (at === -1 && !(needle && bot.specialty?.toLocaleLowerCase().includes(needle))) continue;
+		items.push({
+			value: `bot “${bot.name}” (bot:${bot.name}) `,
+			label: bot.name,
+			description: bot.paused ? labels.paused : (bot.specialty ?? labels.bot),
+			highlights: needle && at >= 0 ? [[at, at + needle.length]] : [],
+		});
+		if (items.length >= BOT_MENTION_LIMIT) break;
+	}
+	return items;
 }

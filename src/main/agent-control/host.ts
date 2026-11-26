@@ -39,7 +39,7 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
-import type { BotsRequest, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import type {
 	AutoCloseTurn,
@@ -403,7 +403,7 @@ export class AgentControlRuntime {
 	}
 
 	/** The owner's change to the bots or their items (`BOTS_COMMAND`): the state after it. */
-	bots(request: BotsRequest): Promise<BotsState> {
+	bots<C extends BotsCall>(request: C): Promise<BotsAnswer<C>> {
 		return this.control.bots(request);
 	}
 

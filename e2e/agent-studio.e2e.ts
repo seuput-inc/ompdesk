@@ -113,7 +113,8 @@ test("agent editor and template gallery write definitions omp discovers", async 
 		expect((await discovered("scout"))?.scope).toBeUndefined();
 
 		// --- Gallery → Customize → editor prefilled → create (user scope).
-		await page.getByRole("button", { name: "Templates", exact: true }).click();
+		// The page's own Templates: the sidebar's Bots card has one too.
+		await page.getByRole("main").getByRole("button", { name: "Templates", exact: true }).click();
 		const gallery = page.getByRole("dialog", { name: "Agent templates" });
 		await expect(gallery.getByRole("heading", { name: "Frontend engineer" })).toBeVisible();
 		await shoot(page, "gallery-en");
@@ -219,7 +220,7 @@ test("agent editor and template gallery write definitions omp discovers", async 
 		await expect(page.locator(".omp-toast-in, .omp-toast-out")).toHaveCount(0);
 
 		// --- Add all: every other template lands; frontend.md is left alone.
-		await page.getByRole("button", { name: "Templates", exact: true }).click();
+		await page.getByRole("main").getByRole("button", { name: "Templates", exact: true }).click();
 		await page
 			.getByRole("dialog", { name: "Agent templates" })
 			.getByRole("button", { name: `Add all (${AGENT_TEMPLATES.length})` })

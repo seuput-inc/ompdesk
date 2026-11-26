@@ -48,10 +48,24 @@ export interface Bot {
 	staleDays: number | null;
 	/** Its Look around routine (a schedule id in Settings › Schedules); null when off. */
 	lookAround: string | null;
+	/** Its memory upkeep routine (a schedule id); null when off. */
+	tidy: string | null;
+	/** Notification kinds turned off for its chats (`BOT_QUIET_KINDS`); empty = all on. */
+	quiet: BotQuietKind[];
 	/** The first paragraph of its SOUL.md that is not a heading, about 120 characters: what it is for. */
 	specialty?: string;
+	/** Its picture (`picture.png|jpg|webp` in its folder) as a data URI; absent = its drawn face. */
+	picture?: string;
 	createdAt: string;
 }
+
+/** What a bot's chats can notify (Orca's per-bot notification toggles): an approval or question, a finished turn, a failure. */
+export const BOT_QUIET_KINDS = ["permission", "done", "failed"] as const;
+export type BotQuietKind = (typeof BOT_QUIET_KINDS)[number];
+/** The longest purpose a new bot is given (Orca's `BOT_PURPOSE_MAX_LENGTH`; the core refuses a longer one). */
+export const BOT_PURPOSE_MAX = 200;
+/** The largest picture the core keeps (`bot_files.rs` `PICTURE_MAX`). */
+export const BOT_PICTURE_MAX_BYTES = 512 * 1024;
 
 export const ITEM_STATUSES = ["planned", "working", "waiting", "needs_you", "done", "canceled"] as const;
 /** `waiting`: on something outside the bot and its owner; `needs_you`: on the owner's answer. */
@@ -123,9 +137,25 @@ export interface BotsState {
 	items: Item[];
 }
 
+/** A skill a new bot starts with: written once as `.omp/skills/<name>/SKILL.md` in its folder. */
+export interface BotSeedSkill {
+	/** a-z, 0-9 and `-`. */
+	name: string;
+	content: string;
+}
+
 export type BotsRequest =
 	| { action: "get" }
-	| { action: "create"; name: string; folder?: string }
+	| {
+			action: "create";
+			name: string;
+			folder?: string;
+			/** What it is for, `BOT_PURPOSE_MAX` characters at most: its SOUL.md's first paragraph unless `soul` is given. */
+			purpose?: string;
+			/** Its whole SOUL.md (a template's seed). A file already in the folder is kept. */
+			soul?: string;
+			skills?: BotSeedSkill[];
+	  }
 	| {
 			action: "update";
 			id: string;
@@ -137,6 +167,11 @@ export type BotsRequest =
 			staleDays?: number | null;
 			/** Turn its Look around routine on (daily at `time`, local `HH:MM`, default 09:00) or off. */
 			lookAround?: { on: boolean; time?: string };
+			/** Turn its memory upkeep routine on (daily at `time`, default 03:00) or off. */
+			tidy?: { on: boolean; time?: string };
+			quiet?: BotQuietKind[];
+			/** A `data:image/(png|jpeg|webp);base64,…` picture, or null for its drawn face. */
+			picture?: string | null;
 	  }
 	| { action: "delete"; id: string }
 	/** The owner's change to an item: each one is mailed to the item's chat once. */
@@ -152,8 +187,50 @@ export type BotsRequest =
 	/** Hand a session to a bot: the bot's home chat becomes its opener and gets `text` as mail. */
 	| { action: "handTo"; id: string; session: string; text: string };
 
+/**
+ * One of a bot's own files (`SOUL.md`, `MEMORY.md`, `memory/<name>.md`, `memory/history/<name>.md`): read, or written
+ * when `content` is given. A write names the `expectedMtimeMs` it read; a file changed since is kept (`changed`).
+ */
+export interface BotFileRequest {
+	action: "file";
+	id: string;
+	file: string;
+	content?: string;
+	expectedMtimeMs?: number;
+	force?: boolean;
+}
+
+export interface BotFile {
+	exists: boolean;
+	content: string;
+	mtimeMs: number;
+	/** The `.md` files in its `memory/` folder (topic files and the archive). */
+	topics: string[];
+	/** The `.md` files in `memory/history/` (memory upkeep's copies and change lists), oldest first. */
+	history: string[];
+	/** A write found the file changed on disk since `expectedMtimeMs`: nothing was written; this is what is there. */
+	changed?: true;
+}
+
+/** A bot of another app on this computer an import can bring over (Orca's `bot-import-sources.ts`). */
+export interface BotImportSource {
+	app: "openclaw" | "hermes" | "openbot";
+	name: string;
+	folder: string;
+}
+
+/** Everything `BOTS_COMMAND` takes: a change to the state, a file, or the import sources. */
+export type BotsCall = BotsRequest | BotFileRequest | { action: "importSources" };
+export type BotsAnswer<C extends BotsCall> = C extends BotFileRequest
+	? BotFile
+	: C extends { action: "importSources" }
+		? { sources: BotImportSource[] }
+		: BotsState;
+
 export interface BotsApi {
 	command(request: BotsRequest): Promise<BotsState>;
+	file(request: Omit<BotFileRequest, "action">): Promise<BotFile>;
+	importSources(): Promise<{ sources: BotImportSource[] }>;
 	onState(callback: (state: BotsState) => void): () => void;
 }
 

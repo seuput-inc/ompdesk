@@ -17,7 +17,7 @@ import { CoreError } from "../../core/process";
 import { SerialChain } from "../../serial-chain";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
-import { primaryRoot } from "./changes";
+import { primaryRoot, repoRoot } from "./changes";
 import { coreGit, coreHeld, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
 import { worktreeSlug } from "./parse";
 import { archiveHookRefusal, prepareWorktree, SETUP_TIMEOUT_MS, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
@@ -153,12 +153,15 @@ export function setBranchRenamedListener(listener: (path: string, from: string, 
 /**
  * A new task's worktree branch named for its work (FS91): `from` becomes `to` (or `to-2`…) in the checkout at `cwd`
  * while it is still out there and never published; `branch` null when nothing was renamed (core `rename_unpushed`).
+ * It holds the lock the Changes panel's push takes in that checkout (`scm.ts` `mutate`, keyed by its root), so no push
+ * of ours runs between its checks and `git branch -m`; an agent's own push is caught by the core's check after it.
  * Every tab bound to that worktree on `from` then names the new branch.
  */
 export async function renameUnpushedBranch(cwd: string, from: string, to: string): Promise<{ branch: string | null }> {
-	const primary = await primaryRoot(cwd);
-	const renamed = await withRepoLock(primary, () =>
-		worktreeGit<{ branch: string | null }>("git.renameUnpushed", { cwd, from, to }, 8),
+	const root = (await repoRoot(cwd)) ?? cwd;
+	// Two `ls-remote` per remote at 30 s each (core `LS_REMOTE_MS`) beside a dozen local reads.
+	const renamed = await withRepoLock(root, () =>
+		worktreeGit<{ branch: string | null }>("git.renameUnpushed", { cwd, from, to }, 12, 60_000),
 	);
 	if (renamed.branch) branchRenamed(cwd, from, renamed.branch);
 	return renamed;
