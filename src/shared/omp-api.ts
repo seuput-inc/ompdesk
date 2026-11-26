@@ -141,6 +141,7 @@ import type { ModelSetupRequest, ModelSetupResearchPick, ModelSetupStatus } from
 import type { OmpUpdatedNotice, OmpUpdateState } from "./omp-update";
 import {
 	PREVIEW_COMMAND,
+	PREVIEW_HISTORY,
 	PREVIEW_PAGE,
 	PREVIEW_SAVE_PDF,
 	PREVIEW_STATE,
@@ -258,6 +259,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			onState: callback => subscribe<PreviewState>(PREVIEW_STATE, callback),
 			page: request => transport.invoke(PREVIEW_PAGE, request),
 			visuals: () => transport.invoke(PREVIEW_VISUALS),
+			history: request => transport.invoke(PREVIEW_HISTORY, request),
 			onVisual: callback => subscribe<PreviewVisualEvent>(PREVIEW_VISUAL, callback),
 			stream: {
 				poll: request => transport.invoke(PREVIEW_STREAM_POLL, request),

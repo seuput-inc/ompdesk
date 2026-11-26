@@ -515,6 +515,80 @@ describe("preview host", () => {
 		}
 	});
 
+	it("tries a dev server that refused the load again while the page shows, until it answers or the person moves on", async () => {
+		register();
+		const { ask, pages } = openWindow();
+		await ask({ action: "layout", bounds: { x: 0, y: 0, width: 400, height: 300 }, visible: true });
+		await ask({ action: "load", url: "http://localhost:3000/" });
+		const [page] = pages();
+		if (!page) throw new Error("no page");
+		const state = () => ask({ action: "clearProblems" });
+		const refuse = (url = "http://localhost:3000/") =>
+			page.emit("did-fail-load", {}, -102, "net::ERR_CONNECTION_REFUSED", url, true);
+		vi.useFakeTimers();
+		try {
+			refuse();
+			expect(await state()).toMatchObject({ retrying: true, error: "net::ERR_CONNECTION_REFUSED" });
+			await vi.advanceTimersByTimeAsync(999);
+			expect(page.loaded).toEqual(["http://localhost:3000/"]);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(page.loaded).toEqual(["http://localhost:3000/", "http://localhost:3000/"]);
+			// Each attempt keeps the failure on screen; Chromium's own error page is no answer.
+			page.emit("did-start-loading");
+			page.emit("did-navigate", {}, "chrome-error://chromewebdata/");
+			refuse();
+			expect(await state()).toMatchObject({ retrying: true, error: "net::ERR_CONNECTION_REFUSED" });
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(page.loaded).toHaveLength(3);
+			// The server answered.
+			page.emit("did-navigate", {}, "http://localhost:3000/");
+			expect(await state()).toMatchObject({ retrying: false, error: null });
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(page.loaded).toHaveLength(3);
+
+			// A site on the web that refused is not a dev server: it is not tried again.
+			refuse("https://example.com/");
+			expect(await state()).toMatchObject({ retrying: false });
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(page.loaded).toHaveLength(3);
+
+			// The person's own address replaces the retry.
+			refuse();
+			await ask({ action: "load", url: "https://example.org/" });
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(page.loaded.at(-1)).toBe("https://example.org/");
+			expect(page.loaded.filter(url => url === "http://localhost:3000/")).toHaveLength(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps each web page a tab committed in this computer's history, never a visual's", async () => {
+		const add = vi.fn(async () => true);
+		const ipc = new IpcRegistry({
+			handle: (channel, handler) => electron.handlers.set(channel, handler),
+			on: () => {},
+		});
+		const visuals = { parse: parseVisualUrl, view: () => null, url: () => null, list: async () => [] };
+		registerPreviewHost(ipc, () => false, visuals as never, undefined, undefined, {
+			add,
+			list: async () => [],
+			remove: async () => null,
+			clear: async () => null,
+		});
+		const { ask, pages } = openWindow();
+		await ask({ action: "load", url: "http://localhost:5173/" });
+		const [page] = pages();
+		if (!page) throw new Error("no page");
+		page.emit("did-navigate", {}, "http://localhost:5173/");
+		page.emit("did-stop-loading");
+		// A stop with no commit (a reload of the same document's resources) records nothing more.
+		page.emit("did-stop-loading");
+		page.emit("did-navigate", {}, "chrome-error://chromewebdata/");
+		page.emit("did-stop-loading");
+		expect(add.mock.calls).toEqual([["http://localhost:5173/", ""]]);
+	});
+
 	describe("Preview check", () => {
 		const BOUNDS = { x: 0, y: 0, width: 600, height: 400 };
 		const BEHIND = PREVIEW_CHECK_BEHIND_MS;

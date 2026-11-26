@@ -189,7 +189,7 @@ import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
 import { prefsFile } from "./prefs-store";
-import { registerPreviewHost } from "./preview/host";
+import { coreBrowsingHistory, registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
 import { runVisualizeTool, VISUALIZE_TOOL, VisualStore } from "./preview/visuals";
 import {
@@ -595,6 +595,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			const target = deps.sidecarPool.tabTarget(win, tabId);
 			return target?.device ? deps.remoteDevices.previewRelay(target.device, target.tabId) : null;
 		},
+		coreBrowsingHistory(app.getPath("userData")),
 	);
 	/** The paired host a window's running benchmark is on, so closing the window stops it there. */
 	const remoteBenchmarks = new Map<number, string>();

@@ -1,9 +1,12 @@
 /**
  * C137–C139/C143: the element picker, region select, comment pins, CSS
- * variable tweaks and the `data-choice` wait on a preview page. They run in an
- * isolated world (`PAGE_WORLD`), so the page's own scripts can neither read nor
- * call them, and they act only on trusted (real) input events; main adds the
- * gesture and agent checks on top (host.ts).
+ * variable tweaks and the `data-choice` wait on a preview page; find in page and
+ * the link under the pointer (Orca's `find/BrowserFind.tsx` and
+ * `feedback/browser-link-status-bubble.tsx`). They run in an isolated world
+ * (`PAGE_WORLD`), so the page's own scripts can neither read nor call them, and
+ * they act only on trusted (real) input events; main adds the gesture and agent
+ * checks on top (host.ts). Find and the link watch keep no state in the page:
+ * main says which match to show and which link it last saw.
  */
 
 /** Isolated world id for OMPdesk's page tools (any id other than 0, the page's own world). */
@@ -236,6 +239,71 @@ if (!globalThis.__ompdesk) {
 			for (const name of tweaked) document.documentElement.style.removeProperty(name);
 			tweaked.clear();
 			return null;
+		},
+		find(query, index) {
+			// shortcut: a match split across elements ("Hel<b>lo</b>") is not found; join text runs if it matters.
+			const needle = String(query).toLowerCase();
+			const ranges = [];
+			const root = document.body || document.documentElement;
+			if (needle && root) {
+				const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+					acceptNode(node) {
+						const parent = node.parentElement;
+						if (!parent || parent.closest("script,style,noscript,template")) return NodeFilter.FILTER_REJECT;
+						return parent.getClientRects().length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+					},
+				});
+				for (let node = walker.nextNode(); node && ranges.length < 1000; node = walker.nextNode()) {
+					const text = node.data.toLowerCase();
+					for (let at = text.indexOf(needle); at !== -1 && ranges.length < 1000; at = text.indexOf(needle, at + needle.length)) {
+						const range = document.createRange();
+						range.setStart(node, at);
+						range.setEnd(node, at + needle.length);
+						ranges.push(range);
+					}
+				}
+			}
+			const selection = getSelection();
+			if (!ranges.length) {
+				selection?.removeAllRanges();
+				return { active: 0, total: 0 };
+			}
+			const at = ((index % ranges.length) + ranges.length) % ranges.length;
+			const range = ranges[at];
+			selection?.removeAllRanges();
+			selection?.addRange(range);
+			range.startContainer.parentElement?.scrollIntoView({ block: "center", inline: "nearest" });
+			mount();
+			const outline = box();
+			requestAnimationFrame(() => place(outline, range.getBoundingClientRect()));
+			setTimeout(() => outline.remove(), 1200);
+			return { active: at + 1, total: ranges.length };
+		},
+		findStop() {
+			getSelection()?.removeAllRanges();
+			return null;
+		},
+		hoverLink(last) {
+			// Answers once the link under the pointer (or keyboard focus) is another than \`last\`: its address, "" for none.
+			return new Promise(resolve => {
+				const done = href => {
+					removeEventListener("mouseover", seen, true);
+					removeEventListener("focusin", seen, true);
+					removeEventListener("mouseout", left, true);
+					resolve(href);
+				};
+				const seen = event => {
+					const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+					const href = anchor ? String(anchor.href) : "";
+					if (href !== last) done(href);
+				};
+				const left = event => {
+					if (!event.relatedTarget && last !== "") done("");
+				};
+				addEventListener("mouseover", seen, true);
+				addEventListener("focusin", seen, true);
+				addEventListener("mouseout", left, true);
+			});
 		},
 		choose() {
 			if (endChoice) endChoice(null);

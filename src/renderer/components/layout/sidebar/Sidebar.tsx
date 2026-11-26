@@ -113,13 +113,7 @@ import { useQueueStore } from "../../../stores/queue";
 import { usePairedHosts, useRemoteStore } from "../../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
 import { useAllSessionLinks } from "../../../stores/session-links";
-import {
-	endSessionPort,
-	openSessionPort,
-	sessionPortsWords,
-	useSessionPortsPoll,
-	useSessionPortsStore,
-} from "../../../stores/session-ports";
+import { sessionPortsWords, useSessionPortsPoll, useSessionPortsStore } from "../../../stores/session-ports";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
@@ -1992,23 +1986,27 @@ export function Sidebar() {
 				...(targetTab
 					? {
 							openPort: port =>
-								then(
-									() =>
-										void openSessionPort(
-											targetTab.id,
-											port,
-											targetTab.worktree?.path ?? (projectName(session.cwd).worktree ? session.cwd : null),
-										),
-								)(),
+								then(() => {
+									const worktree =
+										targetTab.worktree?.path ?? (projectName(session.cwd).worktree ? session.cwd : null);
+									void import("../../../lib/session-port-actions")
+										.then(actions => actions.openSessionPort(targetTab.id, port, worktree))
+										.catch((error: unknown) => toastError({ title: t("sidebar.ports.openFailed"), error }));
+								})(),
 							stopPort: (process, port) =>
 								then(() => {
-									endSessionPort(targetTab.id, process).then(
-										ended =>
-											ended
-												? toast({ variant: "success", message: t("sidebar.ports.stopped", { port }) })
-												: toast({ variant: "warning", message: t("sidebar.ports.stopFailed", { port }) }),
-										error => toastError({ title: t("sidebar.ports.stopFailed", { port }), error }),
-									);
+									import("../../../lib/session-port-actions")
+										.then(actions => actions.endSessionPort(targetTab.id, process))
+										.then(
+											ended =>
+												toast(
+													ended
+														? { variant: "success", message: t("sidebar.ports.stopped", { port }) }
+														: { variant: "warning", message: t("sidebar.ports.stopFailed", { port }) },
+												),
+											(error: unknown) =>
+												toastError({ title: t("sidebar.ports.stopFailed", { port }), error }),
+										);
 								})(),
 						}
 					: {}),

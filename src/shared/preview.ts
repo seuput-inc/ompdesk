@@ -7,6 +7,8 @@ export const PREVIEW_PAGE = "preview:page";
 export const PREVIEW_VISUALS = "preview:visuals";
 /** Main → renderer: the agent showed (or updated) a visual for a tab (`PreviewVisualEvent`). */
 export const PREVIEW_VISUAL = "preview:visual";
+/** Renderer → main: the Preview's browsing history on this computer (core `previewHistory.*`). */
+export const PREVIEW_HISTORY = "preview:history";
 /**
  * Web viewers only (a paired phone or tablet): its page is an offscreen page on this computer streamed as JPEG
  * frames over the socket (main/web/preview-stream.ts). `POLL` acknowledges the last frame and holds until the
@@ -103,6 +105,15 @@ export interface PreviewState {
 	canGoBack: boolean;
 	canGoForward: boolean;
 	error: string | null;
+	/**
+	 * The page's dev server refused or dropped the load and main tries it again until it answers (Orca's load-failure
+	 * auto-retry): the failure shows meanwhile, saying so.
+	 */
+	retrying: boolean;
+	/** The `prefers-color-scheme` the page is shown with: the system's, or forced light or dark (Orca's page display). */
+	colorScheme: PreviewColorScheme;
+	/** The link under the pointer, shown in a status line at the panel's foot (Orca's link status bubble); "" for none. */
+	hoverUrl: string;
 	/** The page's renderer died; a reload restores it. */
 	crashed: boolean;
 	agent: PreviewAgentState | null;
@@ -136,6 +147,9 @@ export const EMPTY_PREVIEW_PAGE: PreviewPageState = {
 	canGoBack: false,
 	canGoForward: false,
 	error: null,
+	retrying: false,
+	colorScheme: "system",
+	hoverUrl: "",
 	crashed: false,
 	agent: null,
 	zoom: 1,
@@ -146,6 +160,7 @@ export const EMPTY_PREVIEW_PAGE: PreviewPageState = {
 	session: "web",
 };
 export const EMPTY_PREVIEW: PreviewState = { ...EMPTY_PREVIEW_PAGE, tabs: [], activeTab: "" };
+export type PreviewColorScheme = "system" | "light" | "dark";
 export type PreviewRequest =
 	/** `dpr`: a web viewer's device pixel ratio (its frames are capped at 2); an Electron window never sends it. */
 	| { action: "layout"; bounds: PreviewBounds; visible: boolean; dpr?: number }
@@ -169,7 +184,10 @@ export type PreviewRequest =
 	| { action: "restoreVisuals"; tabId: string; show: boolean }
 	/** Add a visual from "All visuals" to `tabId` and show it. */
 	| { action: "openVisual"; tabId: string; visualId: string }
-	| { action: "back" | "forward" | "reload" | "stop" | "dispose" };
+	| { action: "back" | "forward" | "reload" | "stop" | "dispose" }
+	/** Reload past the cache (Orca's hard reload). */
+	| { action: "hardReload" }
+	| { action: "colorScheme"; scheme: PreviewColorScheme };
 export interface PreviewApi {
 	command(request: PreviewRequest): Promise<PreviewState>;
 	/** Ask where to save, then print the page to that PDF: the saved path, or `null` when the user cancelled. */
@@ -179,10 +197,29 @@ export interface PreviewApi {
 	page<R extends PreviewPageRequest>(request: R): Promise<PreviewPageResults[R["action"]]>;
 	/** "All visuals" (C141), newest first. */
 	visuals(): Promise<PreviewVisualRecord[]>;
+	/** This computer's browsing history: address suggestions, recent sites, removing one, clearing all. */
+	history<R extends PreviewHistoryRequest>(request: R): Promise<PreviewHistoryResults[R["action"]]>;
 	/** The agent showed or updated a visual for a tab. */
 	onVisual(callback: (event: PreviewVisualEvent) => void): () => void;
 	/** A web viewer's streamed page (see `PREVIEW_STREAM_POLL`); a desktop window's calls are refused. */
 	stream: PreviewStreamApi;
+}
+
+/** One address the Preview committed on this computer (Orca's browser history; no cookies, no page content). */
+export interface PreviewHistoryEntry {
+	url: string;
+	title: string;
+	/** The last visit, epoch ms. */
+	at: number;
+	visits: number;
+}
+export type PreviewHistoryRequest =
+	/** Suggestions for `query` (the newest with none), at most `limit` (default 8). */
+	{ action: "list"; query: string; limit?: number } | { action: "remove"; url: string } | { action: "clear" };
+export interface PreviewHistoryResults {
+	list: PreviewHistoryEntry[];
+	remove: null;
+	clear: null;
 }
 
 /** One JPEG frame of the viewer's offscreen page. */
@@ -306,7 +343,19 @@ export type PreviewPageRequest =
 	/** The page's CSS custom properties on :root. */
 	| { action: "tweaks" }
 	| { action: "setVariable"; name: string; value: string }
-	| { action: "clearVariables" };
+	| { action: "clearVariables" }
+	/**
+	 * Find `query` in the page (Orca's find bar): `step` 1 the next match, -1 the previous, 0 the first from the top
+	 * (a new query). Matches select and scroll into view; case is ignored.
+	 */
+	| { action: "find"; query: string; step: -1 | 0 | 1 }
+	/** End the find: the page's selection is cleared. */
+	| { action: "findStop" };
+/** Where a find stands: the match shown (1-based, 0 for none) of how many. */
+export interface PreviewFindResult {
+	active: number;
+	total: number;
+}
 export interface PreviewPageResults {
 	pick: PreviewElement | null;
 	region: { image: string; elements: PreviewElement[] } | null;
@@ -317,6 +366,8 @@ export interface PreviewPageResults {
 	tweaks: PreviewCssVariable[];
 	setVariable: null;
 	clearVariables: null;
+	find: PreviewFindResult | null;
+	findStop: null;
 }
 export function previewUrl(value: string): string | null {
 	try {
