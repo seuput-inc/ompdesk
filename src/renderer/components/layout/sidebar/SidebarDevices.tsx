@@ -42,8 +42,9 @@ import { useSessionList } from "../../../hooks/use-session-list";
 import { useShellInput } from "../../../hooks/use-shell-mode";
 import { DEVICE_COLORS, type DeviceColorChoice, deviceColorOf } from "../../../lib/device-color";
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
-import { basename, formatClock } from "../../../lib/format";
+import { basename, copyText, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
+import { lastExchangeWords, readLastExchange } from "../../../lib/last-exchange";
 import { openExternal } from "../../../lib/open-external";
 import { moveInOrder, reorderProjects } from "../../../lib/project-order";
 import { laneState } from "../../../lib/session-lane";
@@ -941,6 +942,7 @@ function DeviceSessions({
 						}
 					: {}),
 				rename: () => startRename(session),
+				copyTitle: () => void copyText(sessionDisplayLabel(session, t("sidebar.untitled"))),
 				togglePin: editable
 					? () =>
 							void changeLayout({
@@ -1105,6 +1107,18 @@ function DeviceSessions({
 		const family = tab !== undefined || opened.length > 0 || (summary?.agents.length ?? 0) > 0;
 		// Its own key: two hosts may keep a session at the same path, and this computer's prune never sees host rows.
 		const familyKey = `device:${host.deviceId}:${session.path}`;
+		const rowTip = [
+			title,
+			target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
+			target?.head ? headWords(t, target.head).tip : null,
+			prWords,
+			openElsewhere && !working ? t("sidebar.row.open") : null,
+			folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
+			reason ?? null,
+			indexed ? formatClock(session.modified) : null,
+		]
+			.filter(Boolean)
+			.join("\n");
 		return (
 			<Fragment key={session.path}>
 				<ListRow
@@ -1117,6 +1131,16 @@ function DeviceSessions({
 					buttonProps={{
 						tabIndex: -1,
 						"data-roving-item": `device-session:${host.deviceId}:${session.path}`,
+						// As on this computer's rows (Sidebar.tsx): the last exchange joins the native tooltip on hover.
+						onPointerEnter: event => {
+							const exchange = readLastExchange({
+								tabId: tab?.id,
+								sessionPath: session.path,
+								device: host.deviceId,
+								stamp: session.modified,
+							});
+							if (exchange) event.currentTarget.title = `${rowTip}\n\n${lastExchangeWords(t, exchange)}`;
+						},
 						onKeyDown: event => {
 							// Alt+↑/↓ moves the row in its list, as on this computer's own rows.
 							if (
@@ -1201,18 +1225,7 @@ function DeviceSessions({
 							{prWords && <span className="sr-only">, {prWords}</span>}
 						</>
 					}
-					titleText={[
-						title,
-						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
-						target?.head ? headWords(t, target.head).tip : null,
-						prWords,
-						openElsewhere && !working ? t("sidebar.row.open") : null,
-						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
-						reason ?? null,
-						indexed ? formatClock(session.modified) : null,
-					]
-						.filter(Boolean)
-						.join("\n")}
+					titleText={rowTip}
 				/>
 				{family && (
 					<SidebarSubagents

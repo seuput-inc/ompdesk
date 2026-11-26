@@ -37,6 +37,7 @@ const every: SessionMenuActions = {
 	moveToProject: noop,
 	toggleArchive: noop,
 	toggleAgentHidden: noop,
+	copyTitle: noop,
 	reveal: noop,
 	saveBundle: noop,
 	remove: noop,
@@ -48,7 +49,7 @@ const ids = (facts: Partial<SessionMenuFacts>, actions?: SessionMenuActions) =>
 	build(facts, actions).map(item => item.id);
 
 describe("sessionMenuItems", () => {
-	it("lists a stored session no tab holds in groups: open, edit, show in folder, delete last", () => {
+	it("lists a stored session no tab holds in groups: open, edit, copy title and show in folder, delete last", () => {
 		const items = build({});
 		expect(items.map(item => item.id)).toEqual([
 			"session-open-split",
@@ -61,6 +62,7 @@ describe("sessionMenuItems", () => {
 			"session-move",
 			"session-archive",
 			"session-agent-hidden",
+			"session-copy-title",
 			"session-reveal",
 			"session-delete",
 		]);
@@ -68,7 +70,7 @@ describe("sessionMenuItems", () => {
 		expect(items.filter(item => item.separatorBefore).map(item => item.id)).toEqual([
 			"session-open-split",
 			"session-rename",
-			"session-reveal",
+			"session-copy-title",
 			"session-delete",
 		]);
 		expect(items.at(-1)?.danger).toBe(true);
@@ -94,6 +96,7 @@ describe("sessionMenuItems", () => {
 			"session-move-down",
 			"session-move",
 			"session-archive",
+			"session-copy-title",
 			"session-delete",
 		]);
 		expect(ids({}, { remove: noop })).toEqual(["session-delete"]);
@@ -115,6 +118,7 @@ describe("sessionMenuItems", () => {
 			"session-move",
 			"session-archive",
 			"session-agent-hidden",
+			"session-copy-title",
 			"session-reveal",
 			"session-dump-bundle",
 			"session-delete",
