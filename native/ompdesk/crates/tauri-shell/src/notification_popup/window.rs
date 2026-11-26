@@ -368,6 +368,11 @@ fn ensure_window() -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
+        // WKWebView answered no script on the window's first `about:blank` (macOS runner: no answer, no title), as if it
+        // had no document yet; an explicit load gives it one. App windows get theirs from Node's `loadURL`.
+        window
+            .navigate("about:blank".parse().map_err(|e| format!("{e}"))?)
+            .map_err(|e| e.to_string())?;
         let ns_window = window.ns_window().map_err(|e| e.to_string())? as isize;
         let panel = shell_core::sys_mac::popup_panel::adopt(ns_window)?;
         with(|state| state.panel = panel);
