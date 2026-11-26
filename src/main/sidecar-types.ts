@@ -44,6 +44,8 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	readonly processAlive: boolean;
 	/** Local sidecars: the running omp's pid (its process tree is measured for idle release). */
 	readonly pid?: number;
+	/** Local sidecars: the tab's process tag (`SessionProcesses`), once its first omp started. */
+	readonly processTag?: string;
 	/** Paired host deviceId the omp runs on; absent for a local sidecar. */
 	readonly device?: string;
 	/** True while a remote sidecar's link to its host is down (commands fail with `remote_offline`). */

@@ -5,10 +5,12 @@ import {
 	EMPTY_PREVIEW,
 	isLoopbackUrl,
 	PREVIEW_PROBLEM_LIMIT,
+	portAddress,
 	previewAddress,
 	previewProblemCount,
 	previewUrl,
 	reducePreviewState,
+	worktreeLocalhost,
 } from "../../../shared/preview";
 import { I18nProvider } from "../../lib/i18n";
 import { detectLocalPreviewUrls, latestBashPreviewUrl } from "../../lib/preview-browser";
@@ -104,11 +106,17 @@ describe("browser preview", () => {
 			expect(previewUrl(value)).toBeNull();
 		expect(previewUrl("https://example.com")).toBe("https://example.com/");
 		expect(isLoopbackUrl("http://[::1]:3000")).toBe(true);
+		// Chromium sends every *.localhost name and all of 127/8 to this computer: a paired host's tab may reach none.
+		for (const loop of ["http://app.localhost:3000", "http://127.0.0.2/", "http://0.0.0.0:80", "http://LOCALHOST./"])
+			expect(isLoopbackUrl(loop)).toBe(true);
+		for (const away of ["http://localhost.evil.test/", "http://128.0.0.1/", "https://example.com/"])
+			expect(isLoopbackUrl(away)).toBe(false);
 	});
 	it("reads the address bar as a URL, a host or a web search", () => {
 		expect(previewAddress("localhost:3000")).toBe("http://localhost:3000/");
 		expect(previewAddress("127.0.0.1:8080/app?x=1")).toBe("http://127.0.0.1:8080/app?x=1");
 		expect(previewAddress("[::1]:5173")).toBe("http://[::1]:5173/");
+		expect(previewAddress("feature-a.localhost:5173")).toBe("http://feature-a.localhost:5173/");
 		expect(previewAddress("example.com/docs")).toBe("https://example.com/docs");
 		expect(previewAddress("  https://example.org  ")).toBe("https://example.org/");
 		expect(previewAddress("react hooks")).toBe("https://www.google.com/search?q=react%20hooks");
@@ -128,5 +136,11 @@ describe("browser preview", () => {
 		expect(previewProblemCount(2)).toBe("2");
 		expect(previewProblemCount(PREVIEW_PROBLEM_LIMIT - 1)).toBe(String(PREVIEW_PROBLEM_LIMIT - 1));
 		expect(previewProblemCount(PREVIEW_PROBLEM_LIMIT)).toBe(`${PREVIEW_PROBLEM_LIMIT}+`);
+	});
+	it("names a linked worktree's dev server after its folder under .localhost", () => {
+		expect(portAddress(3000)).toBe("http://localhost:3000/");
+		expect(portAddress(5173, "/Users/me/.omp/wt/Feature_Login (v2)")).toBe("http://feature-login-v2.localhost:5173/");
+		expect(worktreeLocalhost("C:\\work\\wt\\--")).toBe("worktree.localhost");
+		expect(worktreeLocalhost(`/wt/${"a".repeat(60)}`)).toBe(`${"a".repeat(48)}.localhost`);
 	});
 });

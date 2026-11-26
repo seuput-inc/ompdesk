@@ -113,6 +113,13 @@ import { useQueueStore } from "../../../stores/queue";
 import { usePairedHosts, useRemoteStore } from "../../../stores/remote";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
 import { useAllSessionLinks } from "../../../stores/session-links";
+import {
+	endSessionPort,
+	openSessionPort,
+	sessionPortsWords,
+	useSessionPortsPoll,
+	useSessionPortsStore,
+} from "../../../stores/session-ports";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
@@ -550,6 +557,9 @@ export function Sidebar() {
 	const activeTabKind = activeTab?.kind;
 	// Remote tabs (a paired host's sessions) live in their device sections; this list is this device's.
 	const localTabs = useMemo(() => tabs.filter(tab => tab.device === undefined), [tabs]);
+	// What each open tab's processes listen on: its row's tooltip and menu (stores/session-ports.ts).
+	useSessionPortsPoll(localTabs.map(tab => tab.id));
+	const portsByTab = useSessionPortsStore(s => s.byTab);
 	const activeTabRemote = activeTab?.device !== undefined;
 	// What every row shows of the sessions this computer runs (its windows' tabs, and those it runs for paired devices),
 	// built once by main: a row's run state, prompt and subagents, whether or not a tab of this window holds it.
@@ -1875,6 +1885,7 @@ export function Sidebar() {
 				agentHidden: agentHidden.includes(session.path),
 				canMoveUp: canMoveWithin(list, session.path, -1),
 				canMoveDown: canMoveWithin(list, session.path, 1),
+				...(targetTab ? { ports: portsByTab[targetTab.id] ?? [] } : {}),
 			},
 			actions: {
 				openSplit: then(() => void openSessionInSplit(session)),
@@ -1978,6 +1989,29 @@ export function Sidebar() {
 							);
 					})(),
 				remove: then(() => setPendingDelete({ kind: "session", session })),
+				...(targetTab
+					? {
+							openPort: port =>
+								then(
+									() =>
+										void openSessionPort(
+											targetTab.id,
+											port,
+											targetTab.worktree?.path ?? (projectName(session.cwd).worktree ? session.cwd : null),
+										),
+								)(),
+							stopPort: (process, port) =>
+								then(() => {
+									endSessionPort(targetTab.id, process).then(
+										ended =>
+											ended
+												? toast({ variant: "success", message: t("sidebar.ports.stopped", { port }) })
+												: toast({ variant: "warning", message: t("sidebar.ports.stopFailed", { port }) }),
+										error => toastError({ title: t("sidebar.ports.stopFailed", { port }), error }),
+									);
+								})(),
+						}
+					: {}),
 			},
 			t,
 			altHint: !touchInput,
@@ -2094,6 +2128,7 @@ export function Sidebar() {
 		const prWords = pr ? branchPrWords(t, pr) : null;
 		const linkWords =
 			indexed && session.device === undefined ? sessionLinksWords(t, sessionLinks[session.path] ?? []) : null;
+		const portWords = openTabId ? sessionPortsWords(t, portsByTab[openTabId] ?? []) : null;
 		const folderMissing = missingFolders.has(session.path);
 		// The leading status lane (Orca's, the owner's decision of 25 Nov 2026): what needs the person, a failure, the
 		// working arc while the session or anything it started works, an unseen finish, its branch's pull request.
@@ -2134,6 +2169,7 @@ export function Sidebar() {
 			target?.head ? headWords(t, target.head).tip : null,
 			prWords,
 			linkWords,
+			portWords,
 			folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 			indexed ? formatClock(session.modified) : null,
 		]
@@ -2297,6 +2333,7 @@ export function Sidebar() {
 								{statusLabel && <span className="sr-only">, {statusLabel}</span>}
 								{prWords && <span className="sr-only">, {prWords}</span>}
 								{linkWords && <span className="sr-only">, {linkWords}</span>}
+								{portWords && <span className="sr-only">, {portWords}</span>}
 							</>
 						}
 						titleText={rowTip}

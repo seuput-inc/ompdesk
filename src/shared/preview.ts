@@ -337,18 +337,55 @@ export function previewAddress(input: string): string | null {
 	const host = /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[::1\]|[\w-]+(\.[\w-]+)*\.[a-z]{2,})(:\d+)?([/?#]\S*)?$/i.exec(
 		text,
 	);
-	if (host) {
-		const loopback = ["localhost", "[::1]"].includes(host[1].toLowerCase()) || host[1].startsWith("127.");
-		return previewUrl(`${loopback ? "http" : "https"}://${text}`);
-	}
+	if (host) return previewUrl(`${loopbackHost(host[1]) ? "http" : "https"}://${text}`);
 	return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
+}
+/**
+ * A host name this computer reaches on itself: `localhost` and any `*.localhost` (Chromium resolves those to
+ * loopback, RFC 6761), 127.0.0.0/8, `::1`, and the wildcard binds a server may print (`0.0.0.0`, `::`).
+ */
+function loopbackHost(hostname: string): boolean {
+	const host = hostname
+		.toLowerCase()
+		.replace(/^\[|\]$/g, "")
+		.replace(/\.$/, "");
+	return (
+		host === "localhost" ||
+		host.endsWith(".localhost") ||
+		/^127(\.\d{1,3}){3}$/.test(host) ||
+		host === "::1" ||
+		host === "0.0.0.0" ||
+		host === "::"
+	);
 }
 export function isLoopbackUrl(value: string): boolean {
 	try {
-		return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(value).hostname);
+		return loopbackHost(new URL(value).hostname);
 	} catch {
 		return false;
 	}
+}
+/**
+ * The host a worktree's dev server opens under in the Preview (Orca's localhost worktree labels,
+ * `shared/workspace/ports/localhost-worktree-labels.ts:67-88`, MIT): `<worktree>.localhost`, which Chromium sends to
+ * loopback, so each worktree's pages keep their own cookies and storage. Only a linked worktree gets one; the main
+ * checkout stays on `localhost`. Lowercase letters, digits and `-`, at most 48 characters.
+ */
+export function worktreeLocalhost(worktreeFolder: string): string {
+	const name = worktreeFolder.split(/[\\/]/).findLast(part => part.trim()) ?? worktreeFolder;
+	const slug = name
+		.trim()
+		.toLowerCase()
+		.replace(/['"]/g, "")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48)
+		.replace(/-+$/g, "");
+	return `${slug || "worktree"}.localhost`;
+}
+/** The address a port a session's process listens on opens at: `http://localhost:<port>/`, or its worktree's host. */
+export function portAddress(port: number, worktreeFolder?: string | null): string {
+	return `http://${worktreeFolder ? worktreeLocalhost(worktreeFolder) : "localhost"}:${port}/`;
 }
 export function reducePreviewState(state: PreviewState, patch: Partial<PreviewState>): PreviewState {
 	return { ...state, ...patch };

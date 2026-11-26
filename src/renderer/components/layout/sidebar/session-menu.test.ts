@@ -222,6 +222,32 @@ describe("sessionMenuItems", () => {
 		])
 			expect(ids({ hasTab: true, ...facts }, marking)).not.toContain("session-mark-unread");
 	});
+
+	it("opens and stops each port the open tab's processes listen on, lowest first, after the view group", () => {
+		const openPort = vi.fn();
+		const stopPort = vi.fn();
+		const vite = { pid: 7, startedMs: 100, name: "node", ports: [5173] };
+		const api = { pid: 9, name: "bun", ports: [3000] };
+		const items = build({ hasTab: true, ports: [vite, api] }, { ...every, openPort, stopPort });
+		const portIds = items.map(item => item.id).filter(id => id.startsWith("session-port"));
+		expect(portIds).toEqual([
+			"session-port-open-3000",
+			"session-port-stop-3000",
+			"session-port-open-5173",
+			"session-port-stop-5173",
+		]);
+		expect(items.find(item => item.id === "session-port-open-3000")?.separatorBefore).toBe(true);
+		// A process whose start nobody knows cannot be told from a later one with its id: it is not stopped from here.
+		expect(items.find(item => item.id === "session-port-stop-3000")?.disabled).toBe(true);
+		items.find(item => item.id === "session-port-open-5173")?.onSelect?.();
+		items.find(item => item.id === "session-port-stop-5173")?.onSelect?.();
+		expect(openPort).toHaveBeenCalledWith(5173);
+		expect(stopPort).toHaveBeenCalledWith(vite, 5173);
+		// A session no tab holds has no processes of its own to list.
+		expect(ids({ ports: [vite] }, { ...every, openPort, stopPort }).some(id => id.startsWith("session-port"))).toBe(
+			false,
+		);
+	});
 });
 
 describe("pickedMenuItems", () => {
