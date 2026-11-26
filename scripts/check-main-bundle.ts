@@ -507,7 +507,12 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // meanwhile), inside the quick terminal's budget, which stays.
 // The A2UI stack merged with main at b90e7549d: measured 2,254,932 (CI run 45868553036, omp/agent/a2ui-u4-2 at
 // 33356584c), 1,850 bytes over main's 2,253,082. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_255_012;
+// A bot's connectors (26 Nov 2026, orca-bots-connectors): `omp-api.ts`'s `botConnectors` member (its channel name in
+// `shared/bot-connector-channels.ts`, so the connector rules stay with a bot's page), the tool registry's lazy
+// `ompdesk_bot` card and the schedule words of the Slack, Linear and Google sources: 565 bytes (2,242,386 on CI run
+// 45825849277, omp/agent/orca-bots-connectors at 479259a12, against the 2,241,821 its base dbf19b611 measured in CI run
+// 45822927576), added to the budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_255_577;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
