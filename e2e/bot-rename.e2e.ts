@@ -28,7 +28,13 @@ test.beforeEach(async () => {
 		agent,
 		profile,
 		// The fake omp keeps stock session files, so the chat below is the bot's home chat with a file to move.
-		env: { OMP_GUI_HEADLESS: "1", OMP_GUI_TEST_SESSION_FILES: "1" },
+		env: {
+			HOME: profile,
+			USERPROFILE: profile,
+			PI_CONFIG_DIR: ".",
+			OMP_GUI_HEADLESS: "1",
+			OMP_GUI_TEST_SESSION_FILES: "1",
+		},
 	});
 	page = await app.firstWindow();
 	errors = [];
@@ -55,7 +61,7 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 	});
 	expect(path.basename(folder)).toBe("rex");
 	await fs.writeFile(path.join(folder, "notes.md"), "kept");
-	await page.evaluate(
+	const saved = await page.evaluate(
 		cwd =>
 			window.omp.schedules.command({
 				action: "save",
@@ -71,6 +77,8 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 			}),
 		folder,
 	);
+	const routineId = saved.schedules.find(row => row.name === "Rex: nightly")?.id;
+	expect(routineId).toBeTruthy();
 	// Its home chat is open and idle in its folder: the rename stops its omp, moves its session and starts it again there.
 	const chat = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId ?? "";
 	expect(chat).not.toBe("");
@@ -82,13 +90,12 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 		] as const);
 	const field = (data: unknown, key: string): unknown =>
 		data && typeof data === "object" && key in data ? Reflect.get(data, key) : undefined;
-	const asked = async () => {
-		const response = await page.evaluate(
-			id => window.omp.rpc.commandForTab(id, { type: "get_branch_messages" }),
+	const lastAnswer = async () => {
+		const reply = await page.evaluate(
+			id => window.omp.rpc.commandForTab(id, { type: "get_last_assistant_text" }),
 			chat,
 		);
-		const listed = field(response.data, "messages");
-		return Array.isArray(listed) ? listed.length : 0;
+		return field(reply.data, "text");
 	};
 	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
 	await ask("Who are you?");
@@ -111,10 +118,14 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 		.toBe(moved);
 	expect(await exists(folder)).toBe(false);
 	expect(await fs.readFile(path.join(moved, "notes.md"), "utf8")).toBe("kept");
-	const routine = await page.evaluate(async () =>
-		(await window.omp.schedules.command({ action: "get" })).schedules.find(row => row.cwd.length > 0),
-	);
-	expect(routine).toMatchObject({ name: "Ruby: nightly", cwd: moved });
+	await expect
+		.poll(() =>
+			page.evaluate(
+				async id => (await window.omp.schedules.command({ action: "get" })).schedules.find(row => row.id === id),
+				routineId,
+			),
+		)
+		.toMatchObject({ name: "Ruby: nightly", cwd: moved });
 	await expect(page.locator("[data-bot-pane-header]")).toContainText("Ruby");
 	await expect(page.locator("[data-sidebar-bots]")).toContainText("Ruby");
 
@@ -126,8 +137,11 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 	const sessionFile = String(field(state.data, "sessionFile") ?? "");
 	const header: unknown = JSON.parse((await fs.readFile(sessionFile, "utf8")).split("\n")[1] ?? "{}");
 	expect(field(header, "cwd")).toBe(moved);
-	const before = await asked();
-	await ask("Still there?");
-	await expect.poll(asked).toBe(before + 1);
+	const history = await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_branch_messages" }), chat);
+	expect(field(history.data, "messages")).toEqual(
+		expect.arrayContaining([expect.objectContaining({ text: "Who are you?" })]),
+	);
+	await ask("Still there? fixture:result-ok");
+	await expect.poll(lastAnswer).toContain("Result: ok");
 	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
 });
