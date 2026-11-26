@@ -1270,7 +1270,7 @@ export function registerPreviewHost(
 		return null;
 	});
 	// This computer's running mobile devices (Orca's emulator pane): the core runs `simctl`/`adb` on the login shell's
-	// PATH; nothing is booted here (the `mobile-emulator` skill does that).
+	// PATH; nothing is booted here (the `ompdesk-mobile-emulator` skill does that).
 	ipc.handle(PREVIEW_DEVICE, async (_caller, raw: unknown) => {
 		const request = deviceRequestSchema.parse(raw);
 		const path = await spawnPath();

@@ -1,7 +1,7 @@
 //! The Preview's device screen (Orca's emulator pane, `emulator-pane/**`; FT71, FL56): the iOS Simulators booted on
 //! this computer (`xcrun simctl`) and the Android devices `adb` sees, each one's screen as a PNG, and for Android a tap
 //! or a hardware key. This only reads and drives devices that already run: booting one is the agent's or the person's
-//! (the `mobile-emulator` skill), so nothing started here outlives the request. Main hands over the login shell's
+//! (the `ompdesk-mobile-emulator` skill), so nothing started here outlives the request. Main hands over the login shell's
 //! `PATH` (a GUI app's own lacks Homebrew and the Android SDK); the SDK's usual folders are tried after it.
 //!
 //! Methods: `emulator.devices {path}` → `{devices: [{platform, id, name}]}`; `emulator.screen {path, platform, id}` →

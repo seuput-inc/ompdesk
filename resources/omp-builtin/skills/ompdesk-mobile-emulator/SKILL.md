@@ -1,5 +1,5 @@
 ---
-name: mobile-emulator
+name: ompdesk-mobile-emulator
 description: Use when an app change needs an iOS Simulator or Android emulator: list, boot, install, launch, tap, type, screenshot, read the UI tree or logs, and shut it down again with xcrun simctl or adb.
 ---
 

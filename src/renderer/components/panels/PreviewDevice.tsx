@@ -3,7 +3,7 @@
  * core takes a picture every `SCREEN_MS` while the panel shows (`simctl io screenshot`, `adb exec-out screencap`). On
  * Android a click is a tap at that pixel and Back, Home and Recents are its keys; a Simulator takes touches only through
  * its own window, so its screen is shown, not driven. Nothing is booted here: the agent does that with the
- * `mobile-emulator` skill.
+ * `ompdesk-mobile-emulator` skill.
  */
 import { ArrowLeft, Circle, Square, X } from "lucide-react";
 import { type MouseEvent, useEffect, useState } from "react";
