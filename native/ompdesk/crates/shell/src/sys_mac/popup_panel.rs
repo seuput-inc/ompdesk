@@ -98,10 +98,39 @@ pub fn show_top_right(panel: isize, width: f64, height: f64, margin: f64) {
         ),
         NSSize::new(width, height),
     );
-    // SAFETY: a live panel of ours; AppKit's origin is the bottom-left, as `visibleFrame` gives it.
+    // SAFETY: a live panel of ours; AppKit's origin is the bottom-left, as `visibleFrame` gives it. The content view and
+    // the views in it (wry's parent view, the WKWebView) are given the new size too: they came from another window,
+    // and the macOS runner showed the panel's content staying at its first size.
     unsafe {
-        let _: () = msg_send![panel as *mut AnyObject, setFrame: frame, display: Bool::YES];
-        let _: () = msg_send![panel as *mut AnyObject, orderFrontRegardless];
+        let panel = panel as *mut AnyObject;
+        let _: () = msg_send![panel, setFrame: frame, display: Bool::NO];
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height));
+        let content: Option<Retained<AnyObject>> = msg_send![panel, contentView];
+        if let Some(content) = content {
+            let _: () = msg_send![&*content, setFrame: bounds];
+            let subviews: Retained<AnyObject> = msg_send![&*content, subviews];
+            let count: usize = msg_send![&*subviews, count];
+            for at in 0..count {
+                let view: *mut AnyObject = msg_send![&*subviews, objectAtIndex: at];
+                let _: () = msg_send![view, setFrame: bounds];
+            }
+        }
+        let _: () = msg_send![panel, display];
+        let _: () = msg_send![panel, orderFrontRegardless];
+    }
+}
+
+/// The panel's height and its content view's, in points (a check of `show_top_right`).
+pub fn heights(panel: isize) -> (f64, f64) {
+    // SAFETY: frame getters of a live panel of ours and its content view.
+    unsafe {
+        let frame: NSRect = msg_send![panel as *mut AnyObject, frame];
+        let content: Option<Retained<AnyObject>> = msg_send![panel as *mut AnyObject, contentView];
+        let inner = content.map_or(0.0, |content| {
+            let rect: NSRect = msg_send![&*content, frame];
+            rect.size.height
+        });
+        (frame.size.height, inner)
     }
 }
 
