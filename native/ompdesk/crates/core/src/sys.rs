@@ -780,7 +780,8 @@ pub fn close_inherited_handles() -> std::io::Result<usize> {
     // SAFETY: `GetStdHandle` takes one of the three constants and only reads this process's table.
     let stdio = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
         .map(|which| unsafe { GetStdHandle(which) });
-    let entries: Vec<&[usize]> = snapshot[2..].chunks_exact(5).take(snapshot[0]).collect();
+    let (entries, _) = snapshot[2..].as_chunks::<5>();
+    let entries = &entries[..snapshot[0].min(entries.len())];
     let Some(file_type) = entries
         .iter()
         .find(|entry| stdio.contains(&(entry[0] as Handle)))
