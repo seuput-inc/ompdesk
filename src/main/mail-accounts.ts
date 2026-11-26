@@ -1,17 +1,14 @@
 /**
  * The owner's mail accounts for email routines (contract `src/shared/mail-accounts.ts`). The accounts live in
  * `<userData>/mail-accounts.json` (no password in it); each password in `<userData>/mail-accounts/<id>.bin`, encrypted
- * by the OS keystore (`SecretBox`: Electron `safeStorage` in the app). A password is decrypted only to log in, kept in
- * memory after its first use (on macOS each keystore read can ask for the login password after an update, see
- * update-auth.ts), and never returned, logged or put in an error.
+ * by the OS keystore (`secret-files.ts`). A password is decrypted only to log in, kept in memory after its first use,
+ * and never returned, logged or put in an error.
  *
  * The private core pipe receives login parameters only when a poll is about to start.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { codedError } from "../shared/ipc-error-codes";
-import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import {
 	MAIL_DEFAULT_MAILBOX,
 	MAIL_DEFAULT_PORT,
@@ -23,18 +20,7 @@ import {
 } from "../shared/mail-accounts";
 import { writeFileAtomicSync } from "./atomic-file";
 import { type MailboxRead, type MailCursor, readMailbox } from "./routines/imap";
-
-/** The OS keystore as the store uses it. */
-export interface SecretBox {
-	available(): boolean;
-	/**
-	 * `KEYCHAIN_WOULD_ASK` when the keystore refused to open without asking the person (it stays so for the run); null
-	 * otherwise. Asking settles the keystore, so the store asks only when it holds a stored password it has not read.
-	 */
-	blocked?(): string | null;
-	encrypt(text: string): Buffer;
-	decrypt(data: Buffer): string;
-}
+import { type SecretBox, SecretFiles, SecretReadError } from "./secret-files";
 
 export interface MailAccountsOptions {
 	/** `<userData>`. */
@@ -56,47 +42,31 @@ type Stored = Omit<MailAccount, "hasPassword" | "address" | "needsReentry">;
 export class MailAccounts {
 	readonly #options: MailAccountsOptions;
 	#accounts: Stored[];
-	/** Passwords decrypted (or saved) this launch, by account id. */
-	readonly #passwords = new Map<string, string>();
-	/** `#blocked`'s answer once it was asked; undefined before. */
-	#blockedAnswer: boolean | undefined;
+	readonly #secrets: SecretFiles;
 
 	constructor(options: MailAccountsOptions) {
 		this.#options = options;
 		this.#accounts = this.#load();
+		this.#secrets = new SecretFiles({
+			dir: join(options.dir, "mail-accounts"),
+			box: options.box,
+			ids: () => this.#accounts.map(account => account.id),
+			...(options.rememberSaved === false ? { rememberSaved: false } : {}),
+		});
 	}
 
 	state(): MailAccountsState {
 		return {
 			accounts: this.#accounts.map(account => {
-				const needsReentry = this.#needsReentry(account.id);
+				const needsReentry = this.#secrets.needsReentry(account.id);
 				return {
 					...account,
 					address: account.username.includes("@") ? account.username : "",
-					hasPassword: !needsReentry && (this.#passwords.has(account.id) || this.#hasSecretFile(account.id)),
+					hasPassword: !needsReentry && this.#secrets.has(account.id),
 					needsReentry,
 				};
 			}),
 		};
-	}
-
-	/**
-	 * Whether the keystore refused to open without asking (`SecretBox.blocked`), asked once and only when a password is
-	 * stored that this run has not read: an account without one, or already read, never touches the keystore.
-	 */
-	#blocked(): boolean {
-		if (this.#blockedAnswer === undefined) {
-			const pending = this.#accounts.some(
-				account => !this.#passwords.has(account.id) && this.#hasSecretFile(account.id),
-			);
-			if (!pending) return false;
-			this.#blockedAnswer = this.#options.box.blocked?.() === KEYCHAIN_WOULD_ASK;
-		}
-		return this.#blockedAnswer;
-	}
-
-	#needsReentry(id: string): boolean {
-		return !this.#passwords.has(id) && this.#hasSecretFile(id) && this.#blocked();
 	}
 
 	/** Saves a new account (no `id`) or an edit; an edit without a password keeps the stored one. */
@@ -119,22 +89,7 @@ export class MailAccounts {
 		if (this.#accounts.some(account => account.id !== id && account.label.toLowerCase() === label))
 			throw new Error("Invalid mail account: label (another account has it)");
 		const accountId = existing?.id ?? randomUUID();
-		if (clean.password !== undefined) {
-			if (!this.#options.box.available()) {
-				if (this.#options.box.blocked?.() === KEYCHAIN_WOULD_ASK)
-					throw codedError("keychain_would_ask", "macOS would ask for the login password to open the keychain");
-				throw new Error("This computer cannot store a password safely");
-			}
-			writeFileAtomicSync(
-				this.#secretFile(accountId),
-				this.#options.box.encrypt(clean.password).toString("base64"),
-				{
-					mode: 0o600,
-					dirMode: 0o700,
-				},
-			);
-			if (this.#options.rememberSaved !== false) this.#passwords.set(accountId, clean.password);
-		}
+		if (clean.password !== undefined) this.#secrets.save(accountId, clean.password);
 		const stored: Stored = {
 			id: accountId,
 			label: clean.label,
@@ -153,8 +108,7 @@ export class MailAccounts {
 	remove(id: string): MailAccountsState {
 		this.#find(id);
 		this.#accounts = this.#accounts.filter(account => account.id !== id);
-		this.#passwords.delete(id);
-		rmSync(this.#secretFile(id), { force: true });
+		this.#secrets.remove(id);
 		this.#write();
 		return this.state();
 	}
@@ -207,38 +161,18 @@ export class MailAccounts {
 	}
 
 	#password(id: string): string {
-		const known = this.#passwords.get(id);
-		if (known !== undefined) return known;
-		let data: Buffer;
 		try {
-			data = Buffer.from(readFileSync(this.#secretFile(id), "utf8"), "base64");
-		} catch {
-			throw new Error("no password is stored for this account (Settings › Schedules › Email accounts)");
-		}
-		if (this.#blocked())
+			return this.#secrets.read(id);
+		} catch (error) {
+			if (!(error instanceof SecretReadError)) throw error;
 			throw new Error(
-				"its stored password cannot be read without macOS asking for your login password; enter it again in Settings › Schedules › Email accounts",
+				error.reason === "missing"
+					? "no password is stored for this account (Settings › Schedules › Email accounts)"
+					: error.reason === "blocked"
+						? "its stored password cannot be read without macOS asking for your login password; enter it again in Settings › Schedules › Email accounts"
+						: "its stored password could not be read on this computer; enter it again in Settings",
 			);
-		let password: string;
-		try {
-			password = this.#options.box.decrypt(data);
-		} catch {
-			throw new Error("its stored password could not be read on this computer; enter it again in Settings");
 		}
-		this.#passwords.set(id, password);
-		return password;
-	}
-
-	#secretsDir(): string {
-		return join(this.#options.dir, "mail-accounts");
-	}
-
-	#secretFile(id: string): string {
-		return join(this.#secretsDir(), `${id.replace(/[^\w-]/g, "")}.bin`);
-	}
-
-	#hasSecretFile(id: string): boolean {
-		return existsSync(this.#secretFile(id));
 	}
 
 	#file(): string {

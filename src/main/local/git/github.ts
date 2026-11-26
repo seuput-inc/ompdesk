@@ -153,6 +153,30 @@ const requestSchema = z
 				.refine(url => /^https:\/\/[a-z0-9.-]+\.githubusercontent\.com\//i.test(url)),
 		}),
 		z.object({ op: z.literal("pr_diffs"), number: id }),
+		z.object({ op: z.literal("project_list") }),
+		z.object({
+			op: z.literal("project_view"),
+			owner: z.string().regex(GITHUB_LOGIN_PATTERN),
+			ownerType: z.enum(["organization", "user"]),
+			number: id,
+			viewId: nodeId.optional(),
+			query: z.string().max(1024).optional(),
+		}),
+		z.object({
+			op: z.literal("project_field"),
+			projectId: nodeId,
+			itemId: nodeId,
+			fieldId: nodeId,
+			value: z
+				.discriminatedUnion("kind", [
+					z.object({ kind: z.literal("single-select"), optionId: z.string().min(1).max(200) }),
+					z.object({ kind: z.literal("iteration"), iterationId: z.string().min(1).max(200) }),
+					z.object({ kind: z.literal("text"), text: z.string().max(1024) }),
+					z.object({ kind: z.literal("number"), number: z.number().finite() }),
+					z.object({ kind: z.literal("date"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
+				])
+				.optional(),
+		}),
 	])
 	.and(
 		z.object({

@@ -17,7 +17,7 @@ import { retryNewTask, startNewTask, stepsFor, useNewTasksStore } from "../../st
 import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
 import { useToastStore } from "../../stores/toast";
-import { useUiStore } from "../../stores/ui";
+import { type NewTaskSheetContext, useUiStore } from "../../stores/ui";
 import { announcePreparation, WorktreeDialog } from "./WorktreeDialog";
 
 const { document, window, Event, CustomEvent, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -81,7 +81,7 @@ function fakeRpc(failCreates = 0) {
 	return { rpc, commands };
 }
 
-async function mount(prefix: unknown) {
+async function mount(prefix: unknown, context?: NewTaskSheetContext) {
 	const { rpc, commands } = fakeRpc();
 	Object.assign(window, {
 		omp: {
@@ -98,7 +98,7 @@ async function mount(prefix: unknown) {
 		openTab,
 	});
 	useSessionStore.setState({ status: "ready", cwd: "/home/u/app" });
-	useUiStore.getState().openWorktreeDialog();
+	useUiStore.getState().openWorktreeDialog(context);
 	container = document.createElement("div");
 	document.body.appendChild(container);
 	const mounted = createRoot(container);
@@ -165,6 +165,20 @@ describe("the new task sheet", () => {
 		const [create] = commands.filter(command => command.type === "worktree_create");
 		expect(create).toMatchObject({ type: "worktree_create", name: "Login" });
 		expect(create).not.toHaveProperty("branchPrefix");
+	});
+
+	it("cuts a work item's own branch as named, past the prefix, and shows it before the start", async () => {
+		const { commands } = await mount("alice/", { name: "LIN-12 Fix login", branch: "jin/lin-12-fix-login" });
+		expect(document.body.textContent).toContain(
+			translate("worktree.branchPreview", { branch: "jin/lin-12-fix-login" }),
+		);
+		await submit();
+		const [create] = commands.filter(command => command.type === "worktree_create");
+		expect(create).toMatchObject({
+			name: "lin-12-fix-login",
+			baseRef: "HEAD",
+			branch: { name: "jin/lin-12-fix-login", mode: "new" },
+		});
 	});
 
 	it("prefetches the folder's remote default branch when it opens", async () => {

@@ -189,6 +189,8 @@ import {
 	type SshPrompt,
 	type SshToolsState,
 } from "./ssh-tools";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "./tracker-channels";
+import type { TrackersApi } from "./trackers";
 
 /** How `window.omp` reaches main: Electron's `ipcRenderer`, or a web device's socket. */
 export interface OmpTransport {
@@ -279,6 +281,10 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			command: request => transport.invoke(MAIL_ACCOUNTS_COMMAND, request),
 			test: id => transport.invoke(MAIL_ACCOUNTS_COMMAND, { action: "test", id }),
 		} satisfies MailAccountsApi,
+		trackers: {
+			command: request => transport.invoke(TRACKERS_COMMAND, request),
+			accounts: request => transport.invoke(TRACKERS_ACCOUNTS, request),
+		} satisfies TrackersApi,
 		sidebarProjects: {
 			command: (request, device) => transport.invoke(SIDEBAR_PROJECTS_COMMAND, request, device),
 			onState: callback => subscribe<IpcSidebarProjects>(SIDEBAR_PROJECTS_STATE, callback),
@@ -550,7 +556,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		githubAuth: {
 			refresh: (force?: boolean) =>
 				transport.invoke(IPC_COMMANDS.GITHUB_AUTH_REFRESH, force === true) as Promise<GithubAuthState>,
-			startLogin: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_START) as Promise<GithubAuthState>,
+			startLogin: (scopes?: "project") =>
+				transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_START, scopes) as Promise<GithubAuthState>,
 			openLogin: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_OPEN) as Promise<GithubAuthState>,
 			cancelLogin: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_CANCEL) as Promise<GithubAuthState>,
 			logout: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGOUT) as Promise<GithubAuthState>,

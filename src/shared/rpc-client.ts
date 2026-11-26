@@ -99,6 +99,8 @@ export interface SessionRpcClient {
 			baseCwd?: string;
 			baseRef?: string;
 			branchPrefix?: string;
+			/** The exact branch instead of `<branchPrefix><name>` (`worktree_create.branch`). */
+			branch?: { name: string; mode: "new" | "local" | "remote"; remote?: string; from?: string };
 			requestId?: string;
 			sparse?: string;
 			prepare?: boolean;
@@ -398,6 +400,8 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	pr_edit: 180_000,
 	// A clone may take 10 minutes (GITHUB_COMMAND_BUDGET_MS); every other operation answers far sooner.
 	github: 730_000,
+	// Four glab runs of 30 s at most (src/main/local/git/gitlab.ts GITLAB_MS) and a slot's wait.
+	gitlab: 180_000,
 	// Source control (src/main/local/git/scm.ts SCM_COMMAND_BUDGETS_MS): hooks and network round trips.
 	git_stage: 70_000,
 	git_unstage: 70_000,
@@ -543,6 +547,7 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 				baseCwd: options?.baseCwd,
 				baseRef: options?.baseRef,
 				...(options?.branchPrefix ? { branchPrefix: options.branchPrefix } : {}),
+				...(options?.branch ? { branch: options.branch } : {}),
 				...(options?.requestId ? { requestId: options.requestId } : {}),
 				...(options?.sparse ? { sparse: options.sparse } : {}),
 				...(options?.prepare === false ? { prepare: false } : {}),

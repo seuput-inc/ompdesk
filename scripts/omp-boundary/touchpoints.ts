@@ -2599,4 +2599,19 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		stock: ["@oh-my-pi/pi-coding-agent/ui/overlays/pickers/copy-selector"],
 		tests: ["src/main/local/copy-targets.test.ts"],
 	},
+	{
+		id: "C21",
+		area: "copy",
+		contract: "internal",
+		disposition: {
+			kind: "open",
+			reason:
+				"Agents › GitHub › GitLab runs glab from the core with no omp to ask; stock's runner and host rule live in its `glab-mr` tool, which takes a session.",
+		},
+		summary:
+			"Copy of stock glab's non-interactive environment (`utils/gitlab.ts` `GLAB_SPEC`) and of `assertGitlabHostTrustedForEnvToken`, whose glab config hosts are read from `glab auth status`.",
+		files: ["src/main/local/git/exec.ts", "native/ompdesk/crates/core/src/glab/mod.rs"],
+		stock: ["@oh-my-pi/pi-coding-agent/utils/gitlab", "@oh-my-pi/pi-coding-agent/tools/glab-mr"],
+		tests: [],
+	},
 ];

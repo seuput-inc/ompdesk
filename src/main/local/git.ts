@@ -21,6 +21,7 @@ import {
 	repoRoot,
 } from "./git/changes";
 import { githubCommand } from "./git/github";
+import { gitlabCommand } from "./git/gitlab";
 import { getNestedRepos } from "./git/nested";
 import {
 	prCheckout,
@@ -148,6 +149,8 @@ export const handlers: Record<string, LocalHandler> = {
 	pr_repo: (_command, ctx) => prRepo(ctx.cwd),
 	// Agents › GitHub: issues, Actions, releases, notifications, repositories (request validated in github.ts).
 	github: (command, ctx) => githubCommand(ctx.cwd, command.request, command.background === true),
+	// Agents › GitHub › GitLab: merge requests over glab (request validated in gitlab.ts).
+	gitlab: (command, ctx) => gitlabCommand(ctx.cwd, command.request),
 	pr_list: (command, ctx) =>
 		prList(ctx.cwd, {
 			state: command.state as "open" | "closed" | "merged" | "all" | undefined,

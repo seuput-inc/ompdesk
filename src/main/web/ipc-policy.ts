@@ -52,6 +52,7 @@ import {
 	SSH_TOOLS_PROMPTS,
 	SSH_TOOLS_STATE,
 } from "../../shared/ssh-tools";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../../shared/tracker-channels";
 import type { WebPermission } from "../../shared/web-protocol";
 
 /** Every channel between a page and main. */
@@ -71,6 +72,8 @@ export type IpcChannel =
 	| typeof PREVIEW_VISUAL
 	| typeof SCHEDULES_COMMAND
 	| typeof MAIL_ACCOUNTS_COMMAND
+	| typeof TRACKERS_COMMAND
+	| typeof TRACKERS_ACCOUNTS
 	| typeof SCHEDULES_LOG
 	| typeof SCHEDULES_STATE
 	| typeof BOTS_COMMAND
@@ -501,6 +504,9 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[BOTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Mail accounts for email routines: a password is sent to main only, never read back.
 	[MAIL_ACCOUNTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
+	// Linear and Jira: a paired page reads the host's lists (its token stays on the host); connecting is an account's.
+	[TRACKERS_COMMAND]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[TRACKERS_ACCOUNTS]: { dir: "invoke", permission: "accounts-admin", mode: "pass" },
 	[SCHEDULES_LOG]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[SIDEBAR_PROJECTS_COMMAND]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[SSH_TOOLS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },

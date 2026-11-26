@@ -236,6 +236,7 @@ export function WorktreeDialog() {
 				name: name.trim(),
 				baseRef,
 				...(branchPrefix ? { branchPrefix } : {}),
+				...(dialog?.branch ? { branch: dialog.branch } : {}),
 				...(sparse ? { sparse } : {}),
 				prompt: prompt.trim(),
 				files,
@@ -442,10 +443,10 @@ export function WorktreeDialog() {
 								unavailableReason={prompt.trim() ? undefined : t("newTask.suggestNeedsPrompt")}
 							/>
 						</div>
-						{name.trim() && nameValid && (
-							<p className="text-sc-sm text-(--sc-text-muted)">
+						{(dialog?.branch || name.trim()) && nameValid && (
+							<p className="text-sc-sm text-(--sc-text-muted)" data-worktree-branch>
 								{t("worktree.branchPreview", {
-									branch: `${branchPrefix ?? GUI_WORKTREE_BRANCH_PREFIX}${slug}`,
+									branch: dialog?.branch || `${branchPrefix ?? GUI_WORKTREE_BRANCH_PREFIX}${slug}`,
 								})}
 							</p>
 						)}

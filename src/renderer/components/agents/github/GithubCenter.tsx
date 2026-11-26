@@ -28,11 +28,12 @@ import { GithubSignIn } from "../../onboarding/GithubSignIn";
 import { GithubActions } from "./GithubActions";
 import { GithubIssues } from "./GithubIssues";
 import { GithubNotifications } from "./GithubNotifications";
+import { GithubProjects } from "./GithubProjects";
 import { GithubQuota } from "./GithubQuota";
 import { GithubReleases } from "./GithubReleases";
 import { GithubRepos } from "./GithubRepos";
 
-const SECTIONS = ["issues", "actions", "releases", "notifications", "repos"] as const;
+const SECTIONS = ["issues", "projects", "actions", "releases", "notifications", "repos"] as const;
 type Section = (typeof SECTIONS)[number];
 const GH_INSTALL_URL = "https://cli.github.com";
 
@@ -243,6 +244,7 @@ export function GithubCenter() {
 				/>
 			</div>
 			{section === "issues" && <GithubIssues {...sectionProps} />}
+			{section === "projects" && <GithubProjects {...sectionProps} />}
 			{section === "actions" && <GithubActions {...sectionProps} />}
 			{section === "releases" && <GithubReleases {...sectionProps} />}
 			{section === "notifications" && <GithubNotifications target={target} targetKey={targetKey} />}

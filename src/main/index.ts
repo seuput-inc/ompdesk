@@ -172,6 +172,7 @@ import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
+import type { SecretBox } from "./secret-files";
 import { whenSessionFree } from "./session-free";
 import { SessionIndex } from "./session-index";
 import { SessionKindStore } from "./session-kinds";
@@ -229,6 +230,7 @@ import { configureTerminalHistory, saveTerminalsForQuit } from "./terminal/histo
 import { exitWithLauncher } from "./test-launcher-exit";
 import { ToolsClient } from "./tools/client";
 import { registerToolsIpc } from "./tools/ipc";
+import { TrackerAccounts } from "./tracker-accounts";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
 import { journalWait, TurnWaitWatch, WAIT_SWEEP_MS } from "./turn-wait-watch";
@@ -504,6 +506,8 @@ function firstWindowLoaded(): Promise<void> {
 }
 /** The owner's mail accounts for email routines (Settings › Schedules › Email accounts). */
 let mailAccounts: MailAccounts | null = null;
+/** This computer's Linear and Jira connections (tracker-accounts.ts). */
+let trackerAccounts: TrackerAccounts | null = null;
 /** Keep-awake while this computer's own tabs run a turn (Settings › General › Window). */
 let workAwakePolicy: KeepAwakePolicy | null = null;
 /** A charging laptop's lid close never stops work a keep-awake blocker holds (src/main/power/lid-awake.ts). */
@@ -2166,18 +2170,26 @@ app.whenReady().then(async () => {
 					};
 		},
 	});
+	const secretBox: SecretBox = {
+		available: () => safeStorage.isEncryptionAvailable(),
+		blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),
+		encrypt: text => safeStorage.encryptString(text),
+		decrypt: data => safeStorage.decryptString(data),
+	};
 	// The owner's mailboxes for email routines; each password is kept encrypted by the OS keystore (mail-accounts.ts).
 	mailAccounts = new MailAccounts({
 		dir: app.getPath("userData"),
 		...(keychainWouldAskForTests ? { rememberSaved: false } : {}),
 		// A test launch reaches its fake IMAP server over plain TCP on this computer; a real launch always uses TLS.
 		plainLoopback: Boolean(process.env.OMP_GUI_TEST_IMAP_PLAIN),
-		box: {
-			available: () => safeStorage.isEncryptionAvailable(),
-			blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),
-			encrypt: text => safeStorage.encryptString(text),
-			decrypt: data => safeStorage.decryptString(data),
-		},
+		box: secretBox,
+	});
+	// Linear and Jira connections (Agents › GitHub's source bar); their requests run in the core (trackers/).
+	trackerAccounts = new TrackerAccounts({
+		dir: app.getPath("userData"),
+		box: secretBox,
+		core: async (params, timeoutMs) => (await core().call("trackers.request", params, { timeoutMs })).result,
+		proxyPref: () => prefsStore().get("proxyUrl"),
 	});
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();
@@ -2603,6 +2615,7 @@ app.whenReady().then(async () => {
 		},
 		schedules: () => scheduleService,
 		mailAccounts: () => mailAccounts,
+		trackerAccounts: () => trackerAccounts,
 		sidebarProjects,
 		// `webHost` is created below: the prompt origins read it when a prompt is sent, never at registration.
 		promptOrigins: {
