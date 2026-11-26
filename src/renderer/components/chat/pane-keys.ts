@@ -38,6 +38,8 @@ export function installPaneKeys(
 		if (!(printable || editing || paste) || target.isContentEditable || target.closest("input, textarea, select"))
 			return;
 		if (composer.disabled) return;
+		// The key's own action would follow focus into the field: Backspace would delete there.
+		if (editing) event.preventDefault();
 		composer.focus({ preventScroll: true });
 	};
 	pane.addEventListener("keydown", onKeyDown, true);

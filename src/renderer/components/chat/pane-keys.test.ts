@@ -85,7 +85,7 @@ describe("installPaneKeys", () => {
 
 	it("focuses the composer on Backspace or Delete outside a field, deleting nothing", () => {
 		const { composer } = setup();
-		expect(press("#tool", { key: "Backspace" }).defaultPrevented).toBe(false);
+		expect(press("#tool", { key: "Backspace" }).defaultPrevented).toBe(true);
 		expect(composer.focused).toBe(true);
 		composer.focused = undefined;
 		press(".transcript", { key: "Delete" });
