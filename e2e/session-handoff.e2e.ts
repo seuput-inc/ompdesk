@@ -149,7 +149,9 @@ test("a session handed to a paired computer lives and runs there only", async ()
 		});
 
 		await test.step("a session of a folder B does not have is refused and stays here", async () => {
-			await fs.rm(gone, { recursive: true, force: true });
+			// Its tab's omp works in that folder, and Windows keeps a folder a process works in: close the tab first.
+			expect(await a.evaluate(id => window.omp.tabs.close(id), orphan.tabId)).toBe(true);
+			await fs.rm(gone, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
 			const refused = await call("ompdesk_app", {
 				action: "sessions.hand_off",
 				args: { sessionPath: orphan.file, to: "PC-B" },
