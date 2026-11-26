@@ -566,6 +566,19 @@ async function openUsage(page: Page, look: Look): Promise<void> {
 	await page.locator("[data-status-usage]").click({ timeout: 15_000 });
 }
 
+/** A session row's menu: the shown session's row where the list marks one, so every parity view opens the work
+ *  session's menu (a paired computer's window lists its own sessions above the host's), else the first row. */
+async function openRowMenu(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	const rows = page.locator(".omp-list-row:has([data-sidebar-row-menu])");
+	await rows.first().waitFor({ state: "attached", timeout: 15_000 });
+	const shown = rows.and(page.locator("[data-active='true']")).first();
+	const row = (await shown.count()) > 0 ? shown : rows.first();
+	// A mouse shows the row's ⋯ on hover; a finger always has it.
+	if ((look.device ?? "touch") !== "touch") await row.hover();
+	await row.locator("[data-sidebar-row-menu]").first().click();
+}
+
 /**
  * The menu of the project header the view's open session sits under: this computer's list, or the paired computer's
  * section for the host. A mouse right-clicks the header; a finger has no right click, so it taps the header's ⋯.
@@ -2922,18 +2935,7 @@ export const SURFACES: readonly Surface[] = [
 		id: "sidebar-row-menu",
 		area: "A",
 		title: "A session row's action menu",
-		open: async (page, look) => {
-			await openDrawer(page, look);
-			// The shown session's row where the list marks one, so every parity view opens the work session's menu (a
-			// paired computer's window lists its own sessions above the host's).
-			const rows = page.locator(".omp-list-row:has([data-sidebar-row-menu])");
-			await rows.first().waitFor({ state: "attached", timeout: 15_000 });
-			const shown = rows.and(page.locator("[data-active='true']")).first();
-			const row = (await shown.count()) > 0 ? shown : rows.first();
-			// A mouse shows the row's ⋯ on hover; a finger always has it.
-			if ((look.device ?? "touch") !== "touch") await row.hover();
-			await row.locator("[data-sidebar-row-menu]").first().click();
-		},
+		open: openRowMenu,
 		ready: "[role='menu'] [role='menuitem']",
 		parity: { session: "work", after: closeOverlay },
 	},
@@ -2951,15 +2953,7 @@ export const SURFACES: readonly Surface[] = [
 		id: "sidebar-session-menu",
 		area: "A",
 		title: "The shown session's row menu: Move to <computer> on this computer's rows while a paired computer is connected",
-		open: async (page, look) => {
-			await openDrawer(page, look);
-			const sessionPath = (await page.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.sessionPath;
-			if (!sessionPath) throw new Error("no open session to find its row by");
-			const file = JSON.stringify(sessionPath);
-			const row = page.locator(`[data-session-path=${file}], [data-device-session=${file}]`).first();
-			if ((look.device ?? "touch") !== "touch") await row.hover();
-			await row.locator("[data-sidebar-row-menu]").first().click();
-		},
+		open: openRowMenu,
 		ready: "[role='menu'] [role='menuitem']",
 		// Parity only: B also uses A, so B's own rows (its window, its phone) offer Move to PC-A; A's view of B's row is
 		// a host's, which has no such item. The audits' harness page pairs no computer.
