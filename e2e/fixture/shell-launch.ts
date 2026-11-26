@@ -655,6 +655,9 @@ export async function launchShell(options: ShellLaunchOptions = {}): Promise<She
 	if (!userData)
 		throw new Error("launchShell: pass --user-data-dir=<private dir>; the shell would use the real profile");
 	env.OMP_GUI_TEST_NODE_INSPECT = "1";
+	// The person is at the computer (shell-calls.ts `desktopAway`) unless a spec says otherwise: a runner has no input
+	// and reads away, which would show the banners a focused window keeps quiet.
+	env.OMP_GUI_TEST_DESKTOP_AWAY ??= "0";
 	const debugPort = await freePort();
 	// The host opens WebView2's DevTools port for its app webviews from this variable, in this child's environment only.
 	// WebView2's own loader variables are not used: a host's explicit data directory and arguments override them.

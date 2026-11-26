@@ -12,3 +12,6 @@ mod runner;
 mod store;
 mod sys;
 mod watch;
+
+/// Free and total bytes of a volume; the core's low-disk notice reads it too (`disk/low_space.rs`).
+pub use sys::disk_space;

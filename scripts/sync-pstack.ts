@@ -4,7 +4,7 @@
  * Claude names to omp and OMPdesk ones. Run after every pin bump:
  *
  *   bun run sync:pstack            copy + translate + regenerate (needs network, or PSTACK_SRC=<clone at the pin>)
- *   bun run sync:pstack -- --check pin vs the newest upstream past the 3-day hold (scripts/skill-packs.ts check pstack)
+ *   bun run sync:pstack -- --check pin vs the newest upstream (scripts/skill-packs.ts check pstack)
  *
  * Owned by OMPdesk and never touched here: `pstack-config.json` (the one version pin), `adapter.md`,
  * `agents/pstack-agent.md`, `README.md`. Everything else under the pack is generated; `pstack-manifest.json` holds its

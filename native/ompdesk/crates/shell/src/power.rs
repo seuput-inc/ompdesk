@@ -1,6 +1,15 @@
-//! `power.*`: suspend/resume/lock/battery events, idle time and the blockers (`powerSaveBlocker`).
+//! `power.*`: suspend/resume/lock/battery events, idle time, whether the person is away and the blockers
+//! (`powerSaveBlocker`).
+//!
+//! Away (was `src/main/presence.ts`' `readDesktopAway` over Electron's `getSystemIdleState`; after Orca's desktop-away
+//! state, stablyai/orca `src/main/notifications/desktop-away-state.ts`, MIT, re-implemented): the screen is locked, or
+//! no keyboard or mouse input for `DESKTOP_AWAY_SECONDS`; present with input within that time; unknown (null) when the
+//! idle time cannot be read, which never silences a phone. `power.desktopAway` answers it now and the event
+//! `power.desktopAway {away}` tells each change (read every 3 s with the network, `system.rs`), for the paired phones'
+//! pushes and the presence a paired computer reports to its hosts.
 
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::json;
 use shell_core::desk_state::{BlockerKind, Blockers, Msg};
@@ -8,14 +17,32 @@ use shell_core::desk_state::{BlockerKind, Blockers, Msg};
 use crate::host::{self, Call};
 use crate::system;
 
+/// Idle seconds after which a desktop counts as away (Orca's threshold).
+const DESKTOP_AWAY_SECONDS: u64 = 180;
+
 thread_local! {
     static BLOCKERS: RefCell<Blockers> = RefCell::new(Blockers::default());
     static ON_BATTERY: Cell<bool> = const { Cell::new(false) };
     static SUSPENDED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// The screen is locked (the hidden window's lock and unlock); read off the UI thread.
+static LOCKED: AtomicBool = AtomicBool::new(false);
+
 fn event(name: &str) {
     host::event("power.event", json!({ "name": name }));
+}
+
+fn away(locked: bool, idle_seconds: Option<u64>) -> Option<bool> {
+    if locked {
+        return Some(true);
+    }
+    idle_seconds.map(|idle| idle >= DESKTOP_AWAY_SECONDS)
+}
+
+/// Whether the person is away from this computer now; none when it cannot be told. Any thread.
+pub fn desktop_away() -> Option<bool> {
+    away(LOCKED.load(Ordering::Relaxed), system::idle_seconds())
 }
 
 /// UI thread.
@@ -36,8 +63,14 @@ pub fn message(msg: Msg) {
                 event("resume");
             }
         }
-        Msg::Lock => event("lock-screen"),
-        Msg::Unlock => event("unlock-screen"),
+        Msg::Lock => {
+            LOCKED.store(true, Ordering::Relaxed);
+            event("lock-screen");
+        }
+        Msg::Unlock => {
+            LOCKED.store(false, Ordering::Relaxed);
+            event("unlock-screen");
+        }
         Msg::Shutdown => event("shutdown"),
         Msg::PowerStatus => {
             let battery = system::on_battery();
@@ -55,9 +88,10 @@ pub fn message(msg: Msg) {
 pub fn handle(call: Call) {
     match call.method.as_str() {
         "power.idleTime" => {
-            let seconds = system::idle_seconds();
+            let seconds = system::idle_seconds().unwrap_or(0);
             call.ok(json!({ "seconds": seconds }));
         }
+        "power.desktopAway" => call.ok(json!({ "away": desktop_away() })),
         "power.blockerStart" => {
             let Some(id) = call.params.get("id").map(ToString::to_string) else {
                 return call.err("invalid", "power.blockerStart needs an id");
@@ -89,5 +123,20 @@ fn apply(call: Call) {
     match system::set_blockers(system_on, display) {
         Ok(()) => call.ok(json!({})),
         Err(message) => call.err("failed", message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn present_with_recent_input_away_when_locked_or_long_idle_unknown_when_unreadable() {
+        assert_eq!(away(false, Some(0)), Some(false));
+        assert_eq!(away(false, Some(DESKTOP_AWAY_SECONDS - 1)), Some(false));
+        assert_eq!(away(false, Some(DESKTOP_AWAY_SECONDS)), Some(true));
+        assert_eq!(away(true, Some(0)), Some(true));
+        assert_eq!(away(true, None), Some(true));
+        assert_eq!(away(false, None), None);
     }
 }

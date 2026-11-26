@@ -320,8 +320,9 @@ when no item has that label; any other run answers `unsupported`.
 | `shell.showItemInFolder` | Node | `{path}` | `{}` |
 | `shell.trashItem` | Node | `{path}` | `{}`; failure → `error.code "failed"` |
 | `shell.beep` | Node | `{}` | `{}` |
-| `notification.show` | Node | `{id, title, body, icon?, silent?, urgency?, timeoutType?}` | `{}` (Windows toast keyed on the AppUserModelID; macOS `UNUserNotificationCenter`) |
+| `notification.show` | Node | `{id, title, body, icon?, silent?, urgency?, timeoutType?, tab?}` | `{}` (Windows toast keyed on the AppUserModelID; macOS `UNUserNotificationCenter`). `tab`: a banner about that tab, kept until clicked, closed or failed |
 | `notification.close` | Node | `{id}` | `{}` |
+| `notification.closeTab` | Node | `{tab}` | `{}`: closes every banner still up about `tab` (the person looked at it); each one's `close` event follows |
 | `notification.event` (event) | shell→Node | `{id, name: "show"\|"click"\|"close"\|"failed", reason?}` | |
 
 ## 9. `screen.*`, `theme.*`, `power.*`, `shortcut.*`
@@ -334,6 +335,8 @@ when no item has that label; any other run answers `unsupported`.
 | `theme.changed` (event) | shell→Node | `{dark, highContrast, inverted, reducedMotion, system?}` | OS change or `setSource` effect; mirrors `nativeTheme.shouldUseDarkColors`, `systemPreferences.getAnimationSettings()`. `system?` is `{dark, highContrast, inverted}` as the OS itself reports (a forced source hides it from the effective facts): the shim answers `themeSource = "system"` from it at once. A shell that sends none is read as the OS's facts while the source is `system` |
 | `power.event` (event) | shell→Node | `{name: "suspend"\|"resume"\|"lock-screen"\|"unlock-screen"\|"on-ac"\|"on-battery"\|"shutdown", onBattery?: boolean}` | `on-ac`/`on-battery` update the mirrored `isOnBatteryPower()` |
 | `power.idleTime` | Node | `{}` | `{seconds}` — idle input time (`GetLastInputInfo` / `CGEventSourceSecondsSinceLastEventType`) |
+| `power.desktopAway` | Node | `{}` | `{away}`: `true` the screen locked or no input for 180 s, `false` input within that time, `null` when the idle time cannot be read |
+| `power.desktopAway` (event) | shell→Node | `{away}` | each change, read every 3 s with `net.online`; the shim's `powerMonitor.desktopAway()` (`null` reads `undefined`) |
 | `power.blockerStart` | Node | `{id, type: "prevent-app-suspension"\|"prevent-display-sleep"}` | `{}` — `id` is Node's (Electron's `start()` returns it at once) |
 | `power.blockerStop` | Node | `{id}` | `{}` |
 | `shortcut.register` | Node | `{accelerator}` | `{registered: boolean}` — CEF only; Node no longer asks. Tauri registers the window shortcut (`CommandOrControl+Shift+O`, `window.toggle`) itself at start and toggles the windows (`entry.rs`). |
@@ -345,6 +348,10 @@ The system-permission calls main makes on macOS (`systemPreferences.isTrustedAcc
 `getMediaAccessStatus("screen")`) are `system.accessibilityTrusted {prompt}` → `{trusted}` and
 `system.mediaAccessStatus {mediaType}` → `{status}`; both Node → shell, answered `{trusted: false}` /
 `{status: "not-determined"}` off macOS.
+
+`system.watchFolderPrompts {}` → `{}` starts reading the system log for the folder dialogs macOS shows on OMPdesk's
+account (Tauri shell, macOS only: `folder_prompts.rs`); each reaches Node as the event `system.folderPrompt {service,
+responsible}`. `system.unwatchFolderPrompts {}` → `{}` stops it.
 
 ## 10. `net.*` (Electron's `net`)
 

@@ -93,6 +93,11 @@ pub(super) struct Entry {
     /// Each window's last draft report per draft command (`noteDraft`).
     pub drafts: OMap<String, OMap<i64, bool>>,
     pub subagent_levels: Option<Vec<(LevelKey, String)>>,
+    /// When the person last looked at the tab (a focused window or a page in the foreground showed it; was
+    /// `src/main/tab-attention.ts`), and when its last run ended (`announce_run`): a phone page restoring its done
+    /// marks drops the mark of a tab seen since (`seenSinceRun`).
+    pub seen_at: Option<i64>,
+    pub settled_at: i64,
 }
 
 impl Entry {
@@ -151,6 +156,8 @@ impl Entry {
             full: None,
             drafts: OMap::default(),
             subagent_levels: None,
+            seen_at: None,
+            settled_at: 0,
         }
     }
 

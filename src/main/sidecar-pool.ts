@@ -1195,6 +1195,16 @@ export class SidecarPool {
 		return this.#call<PendingPlan | null>("pendingPlan", { tab: tabId });
 	}
 
+	/** The person looked at the tab: its entry keeps when, for the seen-since-run clock (`tab_seen`, pool/routes.rs). */
+	tabSeen(tabId: string): void {
+		this.#call("tabSeen", { tab: tabId });
+	}
+
+	/** The tabs the person looked at after their last run ended (a phone page restoring its done marks). */
+	seenSinceRun(): string[] {
+		return this.#call<string[]>("seenSinceRun");
+	}
+
 	/**
 	 * What an automatic update restart must wait for on this computer's tabs (app-auto-update.ts): a tab compacting its
 	 * context (a cut compaction does not resume), and a plan proposal waiting on the person (an approval card).

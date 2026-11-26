@@ -3,7 +3,7 @@
  * `resources/omp-builtin/ecc/ecc-config.json` into `resources/omp-builtin/ecc/`. Run after every pin bump:
  *
  *   bun run sync:ecc            copy + translate + regenerate (needs network, or ECC_SRC=<clone at the pin>)
- *   bun run sync:ecc -- --check pin vs the newest upstream past the 3-day hold (scripts/skill-packs.ts check ecc)
+ *   bun run sync:ecc -- --check pin vs the newest upstream (scripts/skill-packs.ts check ecc)
  *
  * What the copy changes (decisions and reasons live in the pin's `curation`):
  * - every skill is hidden from the model's skill list (`disable-model-invocation: true`, read as `skill://<name>`);

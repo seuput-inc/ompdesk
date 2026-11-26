@@ -133,7 +133,6 @@ import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ip
 import type { GithubAuthService } from "./github-auth/service";
 import { applyLaunchDecision, type LaunchDecision, softwareCompositing } from "./gpu-fallback";
 import { installHangWatchdog, markMainStep } from "./hang-watchdog";
-import { startLowDiskWatch } from "./health-watch";
 import { getMainLanguage, mainT } from "./i18n";
 import { canGiveBack } from "./idle-release";
 import { startupCwd } from "./initial-cwd";
@@ -151,7 +150,6 @@ import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
 import { MacPermissions } from "./mac-permissions";
-import { FOLDER_ACCESS_NOTICE_PREF, FULL_DISK_ACCESS_PANE, watchTccPrompts } from "./mac-tcc-watch";
 import { LocalMachine } from "./machine-services";
 import { MachineState } from "./machine-state";
 import { MailAccounts } from "./mail-accounts";
@@ -171,7 +169,7 @@ import { openLocalPath } from "./open-path";
 import type { LidAwake } from "./power/lid-awake";
 import { createLidAwake } from "./power/lid-awake-runtime";
 import { type PrefsStore, prefsFile, takeRecoveredPrefs } from "./prefs-store";
-import { DesktopPresence, PRESENCE_REPORT_MS, readDesktopAway } from "./presence";
+import { DesktopPresence, PRESENCE_REPORT_MS } from "./presence";
 import { decodeBinaryRead, HOST_FS_READ_BINARY_TIMEOUT_MS, SidebarProjectsStateSchema } from "./remote/app-protocol";
 import { RemoteDevices } from "./remote/devices";
 import { HOST_TAB_GRACE_MS, LocalHostServices } from "./remote/host-services";
@@ -198,6 +196,7 @@ import {
 	admitNotification,
 	appIconPath,
 	clipboard,
+	closeTabBanners,
 	consumeHangReports,
 	diagnosticBundleFileName,
 	onPairedPagePush,
@@ -212,10 +211,13 @@ import {
 	serveTray,
 	app as shellApp,
 	shellIpc,
+	watchFolderPrompts,
 } from "./shell-host/electron/index";
 import {
 	accessibilityTrusted,
 	defaultSessionCachePath,
+	desktopAway,
+	onDesktopAwayChange,
 	safeStorageUnavailableReason,
 	screenRecordingGranted,
 } from "./shell-host/shell-calls";
@@ -834,20 +836,29 @@ app.whenReady().then(async () => {
 				machineState.slowStep(details);
 			},
 		});
-		// The disk running low, told before writes fail (health-watch.ts).
-		startLowDiskWatch({
-			path: app.getPath("userData"),
-			lastNoticeAt: () => {
-				const at = prefsStore().get("lowDiskNoticeAt");
-				return typeof at === "number" ? at : undefined;
-			},
-			setLastNoticeAt: at => prefsStore().set("lowDiskNoticeAt", at),
-			notify: free => {
-				const gb = (free / 1024 ** 3).toFixed(1);
-				writeRuntimeLog({ source: "disk-care", message: "disk low", details: { freeGb: Number(gb) } });
-				new Notification({ title: mainT("diskLow.title"), body: mainT("diskLow.body", undefined, { gb }) }).show();
-			},
-		});
+		// The disk running low, told before writes fail: the core reads the volume and keeps the once-a-day rule
+		// (crates/core/src/disk/low_space.rs); main asks 2 minutes after launch and every 6 hours and shows the notice.
+		const checkLowDisk = () =>
+			void core()
+				.call<number | null>("disk.lowSpace", {
+					path: app.getPath("userData"),
+					prefs: prefsStore().path,
+					now: Date.now(),
+				})
+				.then(({ result: free }) => {
+					if (free === null) return;
+					const gb = (free / 1024 ** 3).toFixed(1);
+					writeRuntimeLog({ source: "disk-care", message: "disk low", details: { freeGb: Number(gb) } });
+					new Notification({
+						title: mainT("diskLow.title"),
+						body: mainT("diskLow.body", undefined, { gb }),
+					}).show();
+				})
+				.catch(() => undefined);
+		setTimeout(() => {
+			checkLowDisk();
+			setInterval(checkLowDisk, 6 * 60 * 60_000).unref();
+		}, 2 * 60_000).unref();
 		// The measurement of main's blocked waits on the core's hub (native-rust ledger, H2): one line a minute.
 		if (process.env.OMP_GUI_HUB_STATS === "1")
 			setInterval(() => {
@@ -1207,7 +1218,7 @@ app.whenReady().then(async () => {
 		},
 	});
 	// Whether the person is at this computer or at a paired one that says so (presence.ts): phones stay quiet then.
-	const presence = new DesktopPresence(() => readDesktopAway(powerMonitor));
+	const presence = new DesktopPresence(desktopAway);
 	/**
 	 * A tab of this computer whose session or project the person muted (a row's or a project's menu): no banner, no
 	 * phone push. A paired host's tab is the host's session, muted (or not) there.
@@ -1706,18 +1717,23 @@ app.whenReady().then(async () => {
 			app.on("browser-window-focus", () => void askMacPermissions());
 		});
 		// The first folder dialog macOS shows on OMPdesk's account (a session reading Documents, Desktop, Downloads)
-		// gets one notice that opens Full Disk Access, once ever (mac-tcc-watch.ts).
-		if (process.platform === "darwin" && prefsStore().get(FOLDER_ACCESS_NOTICE_PREF) !== true) {
-			const stopTccWatch = watchTccPrompts(prompt => {
-				if (prefsStore().get(FOLDER_ACCESS_NOTICE_PREF) === true) return;
-				prefsStore().set(FOLDER_ACCESS_NOTICE_PREF, true);
-				stopTccWatch();
+		// gets one notice that opens Full Disk Access, once ever (pref `folderAccessNoticeShown`). The shell watches
+		// the system log for them (tauri-shell folder_prompts.rs).
+		if (process.platform === "darwin" && prefsStore().get("folderAccessNoticeShown") !== true) {
+			const stopFolderPrompts = watchFolderPrompts(prompt => {
+				if (prefsStore().get("folderAccessNoticeShown") === true) return;
+				prefsStore().set("folderAccessNoticeShown", true);
+				stopFolderPrompts();
 				writeRuntimeLog({ source: "background-task", message: "mac-folder-prompt", details: { ...prompt } });
 				const notice = new Notification({ title: mainT("folderAccess.title"), body: mainT("folderAccess.body") });
-				notice.on("click", () => void shell.openExternal(FULL_DISK_ACCESS_PANE));
+				notice.on(
+					"click",
+					() =>
+						void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+				);
 				notice.show();
 			});
-			app.once("will-quit", stopTccWatch);
+			app.once("will-quit", stopFolderPrompts);
 		}
 	}
 
@@ -2510,16 +2526,16 @@ app.whenReady().then(async () => {
 		wakeSshTools();
 	});
 	// Every host this computer is connected to hears whether its person is at it (presence.ts), so a person here keeps
-	// the host's phones quiet; a link that comes up hears it at once, a lock or unlock without waiting for the next beat.
+	// the host's phones quiet; a link that comes up hears it at once, a change (a lock, input after a while) without
+	// waiting for the next beat.
 	const reportPresence = (hosts: readonly string[]) => {
 		// Unknown counts as away: it must not silence a phone.
-		const away = readDesktopAway(powerMonitor) ?? true;
+		const away = desktopAway() ?? true;
 		for (const host of hosts) void devices.request(host, "presence.report", { away }).catch(() => undefined);
 	};
 	setInterval(() => reportPresence(devices.onlineHosts()), PRESENCE_REPORT_MS).unref();
 	devices.onHostOnline(host => reportPresence([host]));
-	powerMonitor.on("lock-screen", () => reportPresence(devices.onlineHosts()));
-	powerMonitor.on("unlock-screen", () => reportPresence(devices.onlineHosts()));
+	onDesktopAwayChange(() => reportPresence(devices.onlineHosts()));
 	app.on("browser-window-focus", () => devices.wake("focus"));
 	// Chromium's own link state, sampled for changes the windows' events missed (a window may not exist).
 	connectivityPoll = setInterval(() => connectivity.poll(), 3000);
@@ -2644,8 +2660,9 @@ app.whenReady().then(async () => {
 		webTabNotice,
 		notifyMuted,
 		onTabSeen: tabId => webHost?.tabSeen(tabId),
+		closeTabBanners,
 		pageVisible: win => webHost?.pageVisible(win) ?? false,
-		desktopAway: () => readDesktopAway(powerMonitor),
+		desktopAway,
 		testPush: deviceId => webHost?.testPush(deviceId),
 		sessionWake,
 		sessionNote,

@@ -13,11 +13,6 @@ export interface SessionLink {
 	number?: number;
 }
 
-/** At most this many links per session (the oldest goes). */
-export const SESSION_LINKS_MAX = 20;
-/** At most this many sessions keep links (the least recently changed go). */
-export const SESSION_LINK_SESSIONS_MAX = 2000;
-
 /** One read or change of a computer's session links (`window.omp.sessions.links`; a paired host's `sessions.links`). */
 export type SessionLinksCommand =
 	| { type: "session_links"; sessionPath?: string }

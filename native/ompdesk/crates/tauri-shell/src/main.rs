@@ -11,6 +11,7 @@ mod core_pages;
 mod diagnostic_bundle_name;
 mod entry;
 mod evaluate;
+mod folder_prompts;
 mod gpu;
 mod js_date;
 mod labels;

@@ -35,13 +35,14 @@ export const MAIN_TEXT = {
 		en: "OMPdesk couldn't read {file} and had no good copy, so those settings start from the defaults.",
 		ko: "설정 파일 {file}을 읽을 수 없고 정상 사본도 없어서 해당 설정을 기본값으로 시작해요.",
 	},
-	// The volume with OMPdesk's data under 10 GB free (health-watch.ts): at most once a day.
+	// The volume with OMPdesk's data under 10 GB free (the core's disk/low_space.rs): at most once a day.
 	"diskLow.title": { en: "Disk is almost full", ko: "디스크 공간이 거의 없어요" },
 	"diskLow.body": {
 		en: "Only {gb} GB is free. Free up space before OMPdesk and your sessions can no longer save.",
 		ko: "남은 공간이 {gb} GB뿐이에요. OMPdesk와 세션이 저장하지 못하게 되기 전에 공간을 확보하세요.",
 	},
-	// macOS showed its folder dialog on OMPdesk's account (mac-tcc-watch.ts): once ever; a click opens Full Disk Access.
+	// macOS showed its folder dialog on OMPdesk's account (the shell's folder_prompts.rs): once ever; a click opens Full
+	// Disk Access.
 	"folderAccess.title": { en: "macOS keeps asking about folders", ko: "macOS가 폴더 접근을 계속 물어봐요" },
 	"folderAccess.body": {
 		en: "Sessions read your Documents, Desktop or Downloads, so macOS asks for OMPdesk each time. Click to turn on Full Disk Access for OMPdesk and stop the dialogs.",

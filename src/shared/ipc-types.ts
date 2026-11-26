@@ -316,7 +316,7 @@ export const IPC_COMMANDS = {
 	SYSTEM_OPEN_DIALOG: "system:open-dialog",
 	/** Show notification */
 	SYSTEM_NOTIFY: "system:notify",
-	/** Whether the person is away from this computer (presence.ts: locked, or no input for 3 min); null when unknown */
+	/** Whether the person is away from this computer (the shell's power.rs: locked, or no input for 3 min); null when unknown */
 	SYSTEM_DESKTOP_AWAY: "system:desktop-away",
 	/** Settings › General's test banner: what the system did with it (`IpcNotifyTestResult`). */
 	SYSTEM_NOTIFY_TEST: "system:notify-test",
@@ -433,7 +433,7 @@ export const IPC_COMMANDS = {
 	REORDER_TABS: "tab:reorder",
 	/** List the calling window's tabs (boot reconciliation) */
 	GET_TABS: "tab:get-all",
-	/** The tabs a person looked at after their last run ended (main's tab-attention.ts), for a page restoring its done marks */
+	/** The tabs a person looked at after their last run ended (the core pool's tab entries), for a page restoring its done marks */
 	TABS_SEEN_SINCE_RUN: "tab:seen-since-run",
 	/** Look up the tab/window currently attached to a session file (F-OWN double-attach guard) */
 	GET_SESSION_OWNER: "tab:get-session-owner",
@@ -2753,7 +2753,7 @@ export interface OmpApi {
 	tabs: {
 		/** The calling window's tabs in acquisition order (boot reconciliation). */
 		list(): Promise<IpcTabInfo[]>;
-		/** The tabs a person looked at after their last run ended (main's `TabAttention`). */
+		/** The tabs a person looked at after their last run ended (the core pool's `seenSinceRun`). */
 		seenSinceRun(): Promise<string[]>;
 		/**
 		 * Spawn a background tab bound to this window. Null when its sidecar cannot be created.
