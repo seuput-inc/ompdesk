@@ -1858,7 +1858,8 @@ describe("InputArea dictation", () => {
 		if (!button) throw new Error("mic button missing");
 		await click(button);
 		expect(phase()).toBe("starting");
-		expect(document.querySelector("button[data-dictation-send]")).toBeNull();
+		// Stop and send is offered from the press on (a stop while the mic opens ends the take once it has).
+		expect(document.querySelector("button[data-dictation-send]")).not.toBeNull();
 		opened.resolve(new FakeStream());
 		await flush();
 		expect(phase()).toBe("recording");

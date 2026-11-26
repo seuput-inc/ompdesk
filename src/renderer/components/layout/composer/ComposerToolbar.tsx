@@ -223,7 +223,8 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 				})
 			: null;
 	const slot = sendSlot({
-		recording: dictationPhase === "recording",
+		// From the press on, not from the mic's opening: the finger's own mousedown follows on this button.
+		recording: dictationPhase === "starting" || dictationPhase === "recording",
 		editingQueued,
 		stoppable,
 		hasDraft,

@@ -2,7 +2,7 @@
  * What the composer's one action button is: Send and Stop share a single slot, so nothing waits beside Send for a
  * turn to start. First match wins:
  *
- *   dictation recording        → `dictation` (stop the take and send it)
+ *   dictation take under way   → `dictation` (stop the take and send it; from the press, while the mic opens)
  *   editing a queued message   → `save` (a check)
  *   a turn runs, empty draft   → `stop` (■, the same Stop as Esc)
  *   phone dictation, no draft  → `mic`
@@ -16,7 +16,7 @@
 export type SendSlotState = "dictation" | "save" | "stop" | "mic" | "send";
 
 export interface SendSlotFacts {
-	/** A dictation take is recording. */
+	/** A dictation take is starting or recording. */
 	recording: boolean;
 	editingQueued: boolean;
 	/** Something Stop ends: the run, or a prompt not yet sent. */
